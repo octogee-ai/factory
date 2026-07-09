@@ -127,6 +127,15 @@ ENV HOME=/home/node
 # on whether the bundled `dist/extensions/mattermost` survived in the installed
 # openclaw. Pinned to ${OPENCLAW_VERSION} (the package publishes in lockstep) so a
 # mattermost-only npm bump can't drift past the host pluginApi.
+#
+# PREVIEW GAP: upstream sometimes cuts an OC preview tag before publishing its
+# scoped companion packages to npm (@openclaw/mattermost@2026.7.1-beta.3 was
+# missing when 6.11→7.1-beta.3 rolled). So the install prefers a fork-VENDORED
+# tarball at `vendor/openclaw-mattermost.tgz` (shipped inside the fork tarball,
+# built by pack-fork-tarball.sh from extensions/mattermost via upstream's own
+# plugin-npm-publish.sh) and falls back to npm only when it's absent. Once the
+# version publishes, the helper stops vendoring and this path uses npm again —
+# self-healing, no Dockerfile change needed per cycle.
 RUN set -e; \
     openclaw plugins install @openclaw/codex > /tmp/oc-plugin.log 2>&1 \
       || { echo "FATAL: @openclaw/codex install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
@@ -134,8 +143,13 @@ RUN set -e; \
     MM_STAGED=0; \
     if [ -d "$(npm root -g)/openclaw/dist/extensions/mattermost" ]; then \
       echo "mattermost: bundled dist extension present (<=6.10) — no external install"; \
+    elif [ -f "$(npm root -g)/openclaw/vendor/openclaw-mattermost.tgz" ]; then \
+      echo "mattermost: installing from vendored fork tarball (@${OPENCLAW_VERSION} not yet on npm — preview)"; \
+      openclaw plugins install "$(npm root -g)/openclaw/vendor/openclaw-mattermost.tgz" > /tmp/oc-plugin.log 2>&1 \
+        || { echo "FATAL: @openclaw/mattermost vendored install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+      tail -n 3 /tmp/oc-plugin.log; MM_STAGED=1; \
     else \
-      echo "mattermost: bundled dist absent (externalized, 6.11+) — installing @openclaw/mattermost@${OPENCLAW_VERSION}"; \
+      echo "mattermost: bundled dist absent (externalized, 6.11+) — installing @openclaw/mattermost@${OPENCLAW_VERSION} from npm"; \
       openclaw plugins install "@openclaw/mattermost@${OPENCLAW_VERSION}" > /tmp/oc-plugin.log 2>&1 \
         || { echo "FATAL: @openclaw/mattermost install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
       tail -n 3 /tmp/oc-plugin.log; MM_STAGED=1; \
@@ -143,12 +157,16 @@ RUN set -e; \
     rm -f /tmp/oc-plugin.log; \
     mkdir -p /opt/openclaw-codex-deps; \
     cp -a /home/node/.openclaw/npm /opt/openclaw-codex-deps/npm; \
+    if [ -d /home/node/.openclaw/extensions ]; then \
+      cp -a /home/node/.openclaw/extensions /opt/openclaw-codex-deps/extensions; \
+    fi; \
     chown -R node:node /opt/openclaw-codex-deps; \
     find /opt/openclaw-codex-deps/npm -type d -path '*/node_modules/@openclaw/codex' 2>/dev/null | grep -q . \
       || { echo "FATAL: @openclaw/codex missing from staged /opt tree"; exit 1; }; \
     if [ "$MM_STAGED" = "1" ]; then \
-      find /opt/openclaw-codex-deps/npm -type d -path '*/node_modules/@openclaw/mattermost' 2>/dev/null | grep -q . \
-        || { echo "FATAL: @openclaw/mattermost missing from staged /opt tree"; exit 1; }; \
+      { find /opt/openclaw-codex-deps/npm -type d -path '*/node_modules/@openclaw/mattermost' 2>/dev/null | grep -q . \
+        || [ -f /opt/openclaw-codex-deps/extensions/mattermost/openclaw.plugin.json ]; } \
+        || { echo "FATAL: @openclaw/mattermost missing from staged /opt tree (npm tree + extensions tree)"; exit 1; }; \
     fi
 
 # ── npm cache ownership (prevent EACCES in agent exec calls) ─────────────────

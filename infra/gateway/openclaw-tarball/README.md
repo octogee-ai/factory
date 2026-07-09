@@ -390,14 +390,41 @@ commit** (amend the stack). Do not pack a tarball over a red Step 6b.
 
 ### Step 7 — Pack the tarball
 
-▸
+▸ Use the pack helper — it does `npm pack --ignore-scripts` (⚠ NOT `pnpm pack`)
+**and** vendors any `workspace:*` root dependency into the tarball so it installs
+self-contained (see the [workspace-dep gotcha](#npm-pack-leaves-workspace-deps-unresolved)):
+
 ```bash
-mkdir -p /tmp/openclaw-fork
-npm pack --pack-destination /tmp/openclaw-fork --ignore-scripts   # ⚠ NOT pnpm pack
+infra/gateway/openclaw-tarball/pack-fork-tarball.sh \
+  ~/workspace/openclaw/openclaw /tmp/openclaw-fork
 ls -la /tmp/openclaw-fork/
 ```
 
-✓ A single `openclaw-<version>.tgz` file, ~20-25 MB, ~7-10k files.
+The script auto-detects `workspace:*` deps (currently `@openclaw/ai`), vendors each
+into `vendor/<name>/`, rewrites its spec to `file:vendor/<name>`, adds `vendor/` to
+`files`, packs, then restores the fork's `package.json`. It ALSO builds
+`@openclaw/mattermost` (the externalized channel plugin `Dockerfile.base` installs
+at build) into `vendor/openclaw-mattermost.tgz` **when that exact version isn't yet
+on npm** — see the [unpublished-companion gotcha](#unpublished-companion-packages-openclawmattermost--openclawai).
+With no workspace deps and a published MM (6.11, GA) it degrades to a plain
+`npm pack` — safe either way.
+
+✓ A single `openclaw-<version>.tgz` file, ~20-25 MB, ~10k files (the vendored
+`@openclaw/ai` adds ~60 files — do NOT expect a 2× jump; that was the discarded
+`bundleDependencies` approach, which dragged in a broken transitive closure).
+
+▸ **Verify it installs AND runs** before uploading — `openclaw --version` is NOT
+enough (it doesn't load the MCP runtime that the broken tarball crashed on). Run the
+exact Dockerfile Step 13 command against a throwaway install + HOME:
+```bash
+rm -rf /tmp/oc-verify /tmp/oc-verify-home
+npm install -g --prefix /tmp/oc-verify /tmp/openclaw-fork/openclaw-*.tgz
+test "$(find /tmp/oc-verify/lib/node_modules -type d -empty | wc -l)" -eq 0 || echo "⚠ empty dirs"
+HOME=/tmp/oc-verify-home /tmp/oc-verify/bin/openclaw plugins install @openclaw/codex
+```
+✓ `added N packages`, zero empty dirs, and codex prints `Installed plugin: codex`.
+A failure here is the workspace-dep gotcha (or a genuinely broken tarball) — this
+is exactly what a base build spends ~4 min discovering, catchable here in ~30s.
 
 ### Step 8 — Capture fork SHA
 
@@ -876,11 +903,94 @@ pegged. Stack samples identical.
 `O(files × exports × glob_negations)` and hits catastrophic regex
 backtracking.
 
-**Fix:** Always use `npm pack --ignore-scripts` (Step 7). It uses
-`npm-packlist` (different algorithm), finishes in ~5 seconds, produces a
+**Fix:** Always use `npm pack --ignore-scripts` (Step 7, via the pack helper).
+It uses `npm-packlist` (different algorithm), finishes in ~5 seconds, produces a
 file-content-identical tarball. The `--ignore-scripts` flag also skips
 the `prepack` lifecycle hook (`scripts/openclaw-prepack.ts`) which has
 the same regex-walk problem.
+
+### `npm pack` leaves `workspace:*` deps unresolved
+
+**Symptom:** The base build dies ~2 min in at Step 6
+(`RUN npm install -g /tmp/openclaw-fork.tgz`) with a bare
+`npm error ... returned a non-zero code: 1` and no useful detail in the Cloud
+Build log (the real reason only lands in `~/.npm/_logs/*-debug.log`, and even
+there npm exits mid-manifest-fetch without an explicit `ETARGET`). The current
+6.11 base built fine, so it looks build-specific.
+
+**Cause:** the trade we make in the gotcha above — `npm pack` instead of
+`pnpm pack` — has a second edge pnpm papers over: **`npm pack` does not rewrite
+`workspace:*` dependency specifiers.** From 2026.7.1-beta.3 upstream split the AI
+provider layer into a workspace package and the root `package.json` now declares
+`"@openclaw/ai": "workspace:*"`. That package is **not published to npm** (only a
+`0.0.0` squat exists), so `npm install -g` of a naive tarball can't resolve it.
+6.11 and earlier had all-concrete registry deps, so the shortcut was invisible.
+
+**Fix (already in place — `pack-fork-tarball.sh`, Step 7):** the pack helper
+vendors every `workspace:*` root dep into `vendor/<name>/` inside the tarball,
+rewrites its spec to `file:vendor/<name>`, and adds `vendor/` to `files`. On
+`npm install -g` npm copies it from the vendored path and resolves EVERYTHING
+ELSE — its transitive deps AND the shipped `npm-shrinkwrap.json`'s pinned tree —
+normally from the registry. If a future release adds more workspace deps, the
+helper handles them automatically (it scans, it doesn't hardcode `@openclaw/ai`).
+
+⚠ **Do NOT reach for `bundleDependencies` here** (the obvious first instinct).
+On a pnpm workspace it makes `npm pack` bundle the dep's ENTIRE transitive
+closure out of the pnpm `node_modules` symlink farm — ~57 packages, an
+inconsistent partial tree. The tarball then *installs* but leaves shared deps
+like `@modelcontextprotocol/sdk` **empty**, so the CLI crash-loops when it loads
+its MCP runtime (Dockerfile.base Step 13, `openclaw plugins install @openclaw/codex`,
+`Cannot find module '.../@modelcontextprotocol/sdk/client/index.js'`). This bit
+us once on beta.3 — the first (bundleDependencies) fix got past Step 6 only to
+die at Step 13. The `file:` vendor is surgical: it touches only the one
+unpublished package and leaves the shrinkwrap-pinned tree intact. This is exactly
+why the Step 7 verify runs `openclaw plugins install @openclaw/codex`, not just
+`--version` — the latter doesn't load the MCP runtime and gives a false green.
+
+### Unpublished companion packages (@openclaw/mattermost / @openclaw/ai)
+
+**Symptom:** the base build gets past Step 6 and the codex install, then dies at
+Step 13's mattermost install:
+`Package not found on npm: @openclaw/mattermost@<version>` /
+`ETARGET No matching version found`.
+
+**Cause:** upstream sometimes cuts an OC **preview** tag before publishing its
+scoped companion packages to npm. On the 6.11→7.1-beta.3 roll, neither
+`@openclaw/ai@2026.7.1-beta.3` nor `@openclaw/mattermost@2026.7.1-beta.3` was
+published (the `@openclaw/mattermost` `beta` dist-tag was still at beta.2). The
+core `openclaw` tarball we build ourselves, but these two are separate published
+packages we normally pull from npm — `@openclaw/ai` as a `workspace:*` runtime dep
+(see the gotcha above), `@openclaw/mattermost` via `Dockerfile.base`'s
+`openclaw plugins install @openclaw/mattermost@${OPENCLAW_VERSION}`.
+
+**Fix (already in place — `pack-fork-tarball.sh` + `Dockerfile.base`):**
+`@openclaw/ai` is vendored `file:` into the tarball (gotcha above).
+`@openclaw/mattermost` is **built from `extensions/mattermost` via upstream's own
+`scripts/plugin-npm-publish.sh --pack`** (which compiles + bundles it exactly like
+the published npm package) and shipped as `vendor/openclaw-mattermost.tgz` — but
+ONLY when the exact version isn't on npm. `Dockerfile.base` prefers that vendored
+tarball and falls back to npm. So once upstream publishes the version (or at GA),
+the helper stops vendoring and the base uses npm again — self-healing, zero
+per-cycle Dockerfile edits. The Step 7 verify installs the vendored MM tarball
+(`openclaw plugins install .../vendor/openclaw-mattermost.tgz`) so a broken MM
+build is caught in ~30s, not 4 min into a base build.
+
+⚠ **Runtime staging — the subtle part.** A vendored (local-tarball) plugin install
+lands in `~/.openclaw/**extensions**/<name>` (self-contained: dist + bundled
+node_modules), NOT the `~/.openclaw/**npm**` tree that a `@name@version` npm install
+uses. `~/.openclaw` is an emptyDir at runtime, so the build-time install is shadowed
+every boot — same problem the codex npm-tree symlink solves. So `Dockerfile.base`
+also stages `~/.openclaw/extensions` → `/opt/openclaw-codex-deps/extensions` (and the
+MM assertion accepts EITHER tree), and `entrypoint.sh` symlinks each staged extension
+back into `~/.openclaw/extensions/<name>` at boot. Both are guarded → **no-op on the
+current/GA base** (npm-tree MM leaves no staged extensions dir). The base build only
+proves the build-time staging; the runtime symlink+load is exercised at pod boot, so
+confirm it on the first gateway rolled onto a vendored-MM preview.
+
+⚠ If a FUTURE release externalizes yet another plugin the base installs by
+name@version (beyond codex/mattermost) and upstream lags its publish, extend the
+same block in `pack-fork-tarball.sh` + a matching `Dockerfile.base` branch. codex
+has always been published in lockstep so far, so it's not vendored.
 
 ### `pnpm run build:docker` produces an incomplete dist tree
 

@@ -376,6 +376,29 @@ else
   log "⚠ Codex plugin: /opt/openclaw-codex-deps absent — codex harness unavailable"
 fi
 
+# ── Restore staged plugin extensions installed at build time ────────────────
+# A VENDORED plugin (e.g. @openclaw/mattermost from an unpublished OC preview,
+# installed from a local tarball rather than npm) lands in
+# ~/.openclaw/extensions/<name> instead of the npm tree, so the codex npm symlink
+# above doesn't cover it. The base stages that dir to
+# /opt/openclaw-codex-deps/extensions; symlink each back into the
+# emptyDir-shadowed ~/.openclaw/extensions so the plugin loads at runtime. No-op
+# on bases whose plugins all came from npm (no staged extensions dir) — e.g. the
+# current/GA base, where @openclaw/mattermost installs from npm into the npm tree.
+if [ -d /opt/openclaw-codex-deps/extensions ]; then
+  mkdir -p "$OPENCLAW_DIR/extensions"
+  for staged_ext in /opt/openclaw-codex-deps/extensions/*/; do
+    [ -d "$staged_ext" ] || continue
+    ext_name=$(basename "$staged_ext")
+    target="$OPENCLAW_DIR/extensions/$ext_name"
+    if [ -e "$target" ] || [ -L "$target" ]; then
+      rm -rf "$target"
+    fi
+    ln -s "${staged_ext%/}" "$target"
+    log "Plugin extension restored from staged base image: $ext_name"
+  done
+fi
+
 # ── Pre-boot: sync env/runtime config into openclaw.json ─────────────────
 # Must run on db-less builder/operator gateways too: system_config restore can
 # bring back an old auth profile, but ANTHROPIC_BASE_URL is env-owned and is
