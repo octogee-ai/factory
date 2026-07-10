@@ -707,6 +707,54 @@ resolveUpgrade(undefined);
     stop();
   });
 
+  it("ensures the gateway KSA on every no-diff reconcile tick", async () => {
+    const snapCbs: Array<() => void> = [];
+    const desired = {
+      gatewayId: "default-green",
+      imageRepository: "repo",
+      imageTag: "abc",
+      desiredStatus: "running",
+      createdBy: "ci",
+    };
+    const helm = makeFakeHelm({
+      read: async () => ({
+        "default-green": {
+          enabled: true,
+          image: { repository: "repo", tag: "abc" },
+          gatewayId: "default-green",
+          replicas: 1,
+        },
+      }),
+    });
+    const ensureGatewayServiceAccount = vi.fn(async () => {});
+    const db = makeFakeDb({
+      glmGateways: [desired],
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+
+    const stop = startReconciler({
+      db,
+      helm,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log: vi.fn(),
+      ensureGatewayServiceAccount,
+      reconcileRetryMs: 5_000,
+    });
+
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+    await flush();
+
+    expect(helm.upsertInstance).not.toHaveBeenCalled();
+    expect(ensureGatewayServiceAccount).toHaveBeenCalledWith({
+      namespace: "octogee",
+      serviceAccountName: "octogee-gw-default-green",
+      annotations: undefined,
+    });
+    stop();
+  });
+
   it("schedules a retry when syncFleetIngress throws", async () => {
     const snapCbs: Array<() => void> = [];
     const log = vi.fn();

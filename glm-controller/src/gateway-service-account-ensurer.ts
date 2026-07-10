@@ -29,6 +29,10 @@ export function serviceAccountManifest(opts: {
   serviceAccountName: string;
   annotations?: Record<string, string>;
 }): string {
+  const annotations: Record<string, string> = {
+    ...opts.annotations,
+    "helm.sh/resource-policy": "keep",
+  };
   const lines = [
     "apiVersion: v1",
     "kind: ServiceAccount",
@@ -36,7 +40,6 @@ export function serviceAccountManifest(opts: {
     `  name: ${opts.serviceAccountName}`,
     `  namespace: ${opts.namespace}`,
   ];
-  const annotations = opts.annotations ?? {};
   const keys = Object.keys(annotations);
   if (keys.length > 0) {
     lines.push("  annotations:");

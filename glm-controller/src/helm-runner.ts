@@ -86,7 +86,9 @@ export interface HelmSubprocessRunnerDeps {
   }) => Promise<void>;
 
   /**
-   * Idempotent pre-install hook: ensure the gateway-scoped K8s ServiceAccount
+   * Idempotent hook: ensure the gateway-scoped K8s ServiceAccount before and
+   * after `helm upgrade`, because an older release may prune the now-external
+   * object while upgrading to a chart that no longer renders it.
    * (`octogee-gw-<gatewayId>`) exists before `helm upgrade` runs. KSA creation
    * moved OUT of the chart (GATEWAY-RELEASES-SPEC) so simultaneous revision
    * releases don't race on ownership. Wired in production via
@@ -105,7 +107,7 @@ const SHARED_PLATFORM_SA = "octogee-gateway";
 // Mirror the chart's octogee-gateway.serviceAccountName helper: an empty or the
 // legacy shared value resolves to the gateway-scoped KSA; anything else is used
 // verbatim. Cowboy must ensure exactly the name the Deployment will reference.
-function effectiveGatewayServiceAccountName(
+export function effectiveGatewayServiceAccountName(
   gatewayId: string,
   requested: string | undefined,
 ): string {
@@ -625,13 +627,16 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
         upgradeTimeout,
       });
 
-      if (deps.ensureServiceAccount) {
+      const ensureServiceAccount = async () => {
+        if (!deps.ensureServiceAccount) return;
         await deps.ensureServiceAccount({
           namespace,
           serviceAccountName: effectiveGatewayServiceAccountName(gatewayId, opts.serviceAccountName),
           annotations: opts.serviceAccount?.annotations,
         });
-      }
+      };
+
+      await ensureServiceAccount();
 
       if (deps.ensureAuthSecret) {
         await deps.ensureAuthSecret({ namespace, gatewayId });
@@ -652,23 +657,28 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
         deps.log(`[helm-runner] pre-flight recovery: ${recovered}`);
       }
 
-      let result = await deps.runHelm(args);
-      if (
-        result.code !== 0 &&
-        IN_PROGRESS_PATTERN.test(`${result.stderr}\n${result.stdout}`)
-      ) {
-        deps.log(
-          `[helm-runner] ⚠ ${release} stuck (another helm operation in progress) — attempting recovery`,
-        );
-        const recovered = await recoverStuckRelease(
-          deps,
-          namespace,
-          release,
-          upgradeTimeout,
-          uninstallTimeout,
-        );
-        deps.log(`[helm-runner] recovery: ${recovered} — retrying upgrade`);
+      let result: HelmSubprocessResult;
+      try {
         result = await deps.runHelm(args);
+        if (
+          result.code !== 0 &&
+          IN_PROGRESS_PATTERN.test(`${result.stderr}\n${result.stdout}`)
+        ) {
+          deps.log(
+            `[helm-runner] ⚠ ${release} stuck (another helm operation in progress) — attempting recovery`,
+          );
+          const recovered = await recoverStuckRelease(
+            deps,
+            namespace,
+            release,
+            upgradeTimeout,
+            uninstallTimeout,
+          );
+          deps.log(`[helm-runner] recovery: ${recovered} — retrying upgrade`);
+          result = await deps.runHelm(args);
+        }
+      } finally {
+        await ensureServiceAccount();
       }
       if (result.code !== 0) {
         throw new Error(

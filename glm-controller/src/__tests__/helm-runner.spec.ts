@@ -1305,6 +1305,47 @@ expect(calls.map((c) => c[0])).toEqual(["status"]);
   });
 });
 
+describe("createHelmSubprocessRunner — gateway ServiceAccount ownership", () => {
+  it("re-ensures the KSA after a failed Helm apply that pruned it", async () => {
+    const order: string[] = [];
+    const ensureServiceAccount = vi.fn(async () => {
+      order.push("ensure-ksa");
+    });
+    const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
+      if (args[0] === "status") {
+        return { stdout: "", stderr: "Error: release: not found", code: 1 };
+      }
+      if (args[0] === "upgrade") {
+        order.push("helm-upgrade");
+        return { stdout: "", stderr: "Deployment not ready", code: 1 };
+      }
+      throw new Error(`unexpected helm ${args[0]}`);
+    });
+    const runner = createHelmSubprocessRunner({
+      runHelm,
+      ensureServiceAccount,
+      log: vi.fn(),
+    });
+
+    await expect(
+      runner.upsertInstance({
+        namespace: "octogee-test",
+        gatewayId: "default-green",
+        imageRepository: REPO,
+        imageTag: "newtag",
+        chartPath: "/charts/octogee-gateway",
+      }),
+    ).rejects.toThrow(/Deployment not ready/);
+
+    expect(order).toEqual(["ensure-ksa", "helm-upgrade", "ensure-ksa"]);
+    expect(ensureServiceAccount).toHaveBeenLastCalledWith({
+      namespace: "octogee-test",
+      serviceAccountName: "octogee-gw-default-green",
+      annotations: undefined,
+    });
+  });
+});
+
 describe("createHelmSubprocessRunner — removeInstance", () => {
   it("runs `helm uninstall octogee-gw-<name> -n <ns> --wait`", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "release \"octogee-gw-default\" uninstalled" }]);

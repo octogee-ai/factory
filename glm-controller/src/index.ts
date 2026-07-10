@@ -36,6 +36,7 @@ import {
 import {
   createHelmSubprocessRunner,
   createLoggingHelmRunner,
+  effectiveGatewayServiceAccountName,
   spawnHelm,
   type HelmRunner,
 } from "./helm-runner.js";
@@ -355,6 +356,11 @@ interface ControllerDeps {
   ) => Promise<void>;
 
   ensureGatewayWorkloadIdentity?: (opts: { serviceAccountName: string }) => Promise<void>;
+  ensureGatewayServiceAccount?: (opts: {
+    namespace: string;
+    serviceAccountName: string;
+    annotations?: Record<string, string>;
+  }) => Promise<void>;
 
   // Additive converge-EMPTY pass (GATEWAY-RELEASES-SPEC). Gated to gateways that
   // carry the new gateways/{id} desired docs; dormant until the backfill creates
@@ -1074,6 +1080,37 @@ async function syncFleetIngressIfConfigured(
   }
 }
 
+async function syncGatewayServiceAccounts(
+  deps: ControllerDeps,
+  targetMap: HelmInstancesMap,
+): Promise<void> {
+  const ensure = deps.ensureGatewayServiceAccount;
+  if (!ensure) return;
+  const seen = new Set<string>();
+  for (const [instanceId, target] of Object.entries(targetMap).sort(([a], [b]) =>
+    a.localeCompare(b),
+  )) {
+    const gatewayId = target.gatewayId || instanceId;
+    const serviceAccountName = effectiveGatewayServiceAccountName(
+      gatewayId,
+      target.serviceAccountName,
+    );
+    const key = JSON.stringify([serviceAccountName, target.serviceAccount?.annotations ?? {}]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      await ensure({
+        namespace: NAMESPACE,
+        serviceAccountName,
+        annotations: target.serviceAccount?.annotations,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`(source=gateway-service-account) ${gatewayId}: ${message}`);
+    }
+  }
+}
+
 function fleetGatewaysFromTargetMap(targetMap: HelmInstancesMap): FleetGateway[] {
   return Object.keys(targetMap).map((gatewayId) => ({ gatewayId }));
 }
@@ -1255,6 +1292,7 @@ async function reconcileOnce(deps: ControllerDeps): Promise<void> {
     deps.chartFingerprint,
     apiServerEgressCidrs,
   );
+  await syncGatewayServiceAccounts(deps, targetMap);
   logPreservedDrift(deps, preservedDriftChanges(changes, targetMap), desired);
   const targetVsActual = diffInstancesMap(actualMap, targetMap, {
     compareChartFingerprint: AUTO_ROLL_ON_CHART_DRIFT,
@@ -2038,6 +2076,7 @@ async function main(): Promise<void> {
     log,
     syncFleetIngress: syncEdgeIngressForGateways,
     ensureGatewayWorkloadIdentity: gatewayWorkloadIdentityEnsurer,
+    ensureGatewayServiceAccount: serviceAccountEnsurer.ensureServiceAccount,
     convergeEmpty,
     convergeRoll,
     operatorReadyRefreshMs: OPERATOR_READY_REFRESH_MS_DEFAULT,

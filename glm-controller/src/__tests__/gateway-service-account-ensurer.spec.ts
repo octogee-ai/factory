@@ -10,12 +10,13 @@ function ok(stdout = ""): KubectlSubprocessResult {
 }
 
 describe("serviceAccountManifest", () => {
-  it("renders a gateway-scoped ServiceAccount with no annotations by default", () => {
+  it("always renders Helm's keep policy on the gateway-scoped ServiceAccount", () => {
     const m = serviceAccountManifest({ namespace: "octogee", serviceAccountName: "octogee-gw-default" });
     expect(m).toContain("kind: ServiceAccount");
     expect(m).toContain("name: octogee-gw-default");
     expect(m).toContain("namespace: octogee");
-    expect(m).not.toContain("annotations:");
+    expect(m).toContain("annotations:");
+    expect(m).toContain("helm.sh/resource-policy: keep");
   });
 
   it("renders the Workload Identity annotation for operator gateways", () => {
@@ -25,6 +26,7 @@ describe("serviceAccountManifest", () => {
       annotations: { "iam.gke.io/gcp-service-account": "gw@proj.iam.gserviceaccount.com" },
     });
     expect(m).toContain("iam.gke.io/gcp-service-account: gw@proj.iam.gserviceaccount.com");
+    expect(m).toContain("helm.sh/resource-policy: keep");
   });
 });
 
