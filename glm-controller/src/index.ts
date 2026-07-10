@@ -106,6 +106,10 @@ import { buildOperationCompletionUpdate } from "./operation-retry.js";
 import { completeOperatorReservationAfterMigration } from "./operator-reservation-completion.js";
 import { computeBootstrapWrites } from "./bootstrap.js";
 import {
+  collectKnownRevisionIds,
+  collectLiveManagedRevisionIds,
+} from "./managed-revision-ids.js";
+import {
   computeDefaultGatewayBootstrap,
   deriveDefaultGatewayIdFromNamespace,
 } from "./bootstrap-default-gateway.js";
@@ -173,7 +177,7 @@ import { workspaceSlugsForUser } from "@octogee/core/workspace-slugs";
 import { deleteAuthUserTolerantOfMissing } from "@octogee/core/firebase-auth-helpers";
 import { deleteHostingSitesForCustomer } from "@octogee/core/firebase-hosting";
 import { GoogleAuth } from "google-auth-library";
-import { startHttpServer } from "./http-server.js";
+import { startHttpServer, startMaintenanceHttpServer } from "./http-server.js";
 import { recordGatewayHealth, recordReconcile } from "./metrics.js";
 import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
@@ -200,6 +204,11 @@ import {
 } from "./release-retention-sweeper.js";
 import { computeChartFingerprint } from "./chart-fingerprint.js";
 import { createCachedApiServerEgressResolver } from "./apiserver-egress.js";
+import {
+  createFirestoreMaintenanceGate,
+  startMaintenanceRestartWatcher,
+  type ControllerMaintenanceGate,
+} from "./maintenance-gate.js";
 import type {
   FleetBrokerChannelBinding,
   FleetBrokerProjectRestore,
@@ -216,6 +225,7 @@ const WORKLOAD_IDENTITY_ANNOTATION = "iam.gke.io/gcp-service-account";
 const RECONCILE_DEBOUNCE_MS = 1_000;
 const RECONCILE_RETRY_MS_DEFAULT = 30_000;
 const OPERATOR_READY_REFRESH_MS_DEFAULT = 60_000;
+const MAINTENANCE_GATE_POLL_MS = 5_000;
 
 // Wall-clock budget for a converge-empty revision to become ready (Deployment
 // available + heartbeat version match) before it is marked failed instead of
@@ -350,6 +360,7 @@ interface ControllerDeps {
   ) => Promise<void>;
   handlers: OperationHandlers;
   log: (msg: string) => void;
+  maintenanceGate?: ControllerMaintenanceGate;
 
   syncFleetIngress?: (
     gateways: ReadonlyArray<{ gatewayId: string }>,
@@ -378,6 +389,38 @@ interface ControllerDeps {
   chartFingerprint?: string;
 
   resolveApiServerEgressCidrs?: () => Promise<string[]>;
+}
+
+function maintenanceFreezeReasonSuffix(reason: string | null): string {
+  return reason ? `: ${reason}` : "";
+}
+
+async function maintenanceGateFrozen(
+  gate: ControllerMaintenanceGate | undefined,
+  log: (msg: string) => void,
+  scope: string,
+): Promise<boolean> {
+  if (!gate) return false;
+  try {
+    const state = await gate.state();
+    if (!state.frozen) return false;
+    log(
+      `[glm-controller] maintenance freeze blocks ${scope}${maintenanceFreezeReasonSuffix(state.reason)}`,
+    );
+    return true;
+  } catch (err) {
+    log(
+      `[glm-controller] maintenance gate read failed; blocking ${scope}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return true;
+  }
+}
+
+async function controllerWorkFrozen(
+  deps: ControllerDeps,
+  scope: string,
+): Promise<boolean> {
+  return maintenanceGateFrozen(deps.maintenanceGate, deps.log, scope);
 }
 
 function deploymentNameForInstance(gatewayId: string): string {
@@ -915,12 +958,16 @@ type DriftChange = Extract<ReconcileChange, { kind: "drift" }>;
 
 interface ReconcileInputs {
   desired: GatewayDesiredState[];
+  managedRevisionIds: Set<string>;
   actualMap: HelmInstancesMap;
   mountedByGatewayId: Map<string, readonly string[]>;
 }
 
 async function readReconcileInputs(deps: ControllerDeps): Promise<ReconcileInputs> {
-  const snap = await deps.db.collection(GLM_GATEWAYS_COLLECTION).get();
+  const [snap, gatewaySnap] = await Promise.all([
+    deps.db.collection(GLM_GATEWAYS_COLLECTION).get(),
+    deps.db.collection(GATEWAYS_COLLECTION).get(),
+  ]);
   // glmGateways now holds two doc kinds during expand: legacy bare-id desired
   // docs (the legacy Helm targets) AND {gw}-rN revision-realization docs owned
   // by the converge arm. Filter the revision docs OUT so they never become
@@ -929,11 +976,15 @@ async function readReconcileInputs(deps: ControllerDeps): Promise<ReconcileInput
     .map((d) => d.data())
     .filter((data) => !isRevisionRealizationDoc(data))
     .map((data) => data as GatewayDesiredState);
+  const managedRevisionIds = collectLiveManagedRevisionIds({
+    revisionDocs: snap.docs.map((d) => d.data()),
+    gatewayDocs: gatewaySnap.docs.map((d) => d.data()),
+  });
   const actualMap = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
   const kubeOpsForRead = deps.kubeOps ?? createLoggingKubeOps(deps.log);
   await readLiveReplicasInto(actualMap, kubeOpsForRead, deps.log);
   const mountedByGatewayId = await readMountedByGatewayId(deps.db);
-  return { desired, actualMap, mountedByGatewayId };
+  return { desired, managedRevisionIds, actualMap, mountedByGatewayId };
 }
 
 async function syncGatewayModelKeySecrets(
@@ -1009,10 +1060,15 @@ function logPreservedDrift(
   deps: ControllerDeps,
   preservedDrift: DriftChange[],
   desired: GatewayDesiredState[],
+  managedRevisionIds: ReadonlySet<string>,
 ): void {
   const desiredGatewayIds = new Set(desired.map((d) => d.gatewayId));
-  const orphanDrift = preservedDrift.filter((c) => !desiredGatewayIds.has(c.current.gatewayId));
-  const draineeDrift = preservedDrift.filter((c) => desiredGatewayIds.has(c.current.gatewayId));
+  const orphanDrift = preservedDrift.filter(
+    (c) =>
+      !desiredGatewayIds.has(c.gatewayId) &&
+      !managedRevisionIds.has(c.gatewayId),
+  );
+  const draineeDrift = preservedDrift.filter((c) => desiredGatewayIds.has(c.gatewayId));
   if (orphanDrift.length > 0) {
     const formatted = orphanDrift.map((d) => d.gatewayId).join(", ");
     deps.log(
@@ -1266,7 +1322,8 @@ async function completeRecoveredOperatorAddGatewayOps(
 }
 
 async function reconcileOnce(deps: ControllerDeps): Promise<void> {
-  const { desired, actualMap, mountedByGatewayId } = await readReconcileInputs(deps);
+  if (await controllerWorkFrozen(deps, "reconcile")) return;
+  const { desired, managedRevisionIds, actualMap, mountedByGatewayId } = await readReconcileInputs(deps);
   if (deps.reconcileImagePins) {
     try {
       await deps.reconcileImagePins(PIN_ENV, desired, deps.log);
@@ -1293,7 +1350,12 @@ async function reconcileOnce(deps: ControllerDeps): Promise<void> {
     apiServerEgressCidrs,
   );
   await syncGatewayServiceAccounts(deps, targetMap);
-  logPreservedDrift(deps, preservedDriftChanges(changes, targetMap), desired);
+  logPreservedDrift(
+    deps,
+    preservedDriftChanges(changes, targetMap),
+    desired,
+    managedRevisionIds,
+  );
   const targetVsActual = diffInstancesMap(actualMap, targetMap, {
     compareChartFingerprint: AUTO_ROLL_ON_CHART_DRIFT,
   });
@@ -1516,6 +1578,10 @@ async function attemptClaimOrQueueOperation(
 ): Promise<{ outcome: "claimed" | "queued" | "skipped"; fresh?: Operation }> {
   try {
     return await deps.db.runTransaction(async (txn) => {
+      if (deps.maintenanceGate) {
+        const gate = await deps.maintenanceGate.stateInTransaction(txn);
+        if (gate.frozen) return { outcome: "skipped" as const };
+      }
       const fresh = await txn.get(ref);
       if (!fresh.exists) return { outcome: "skipped" as const };
       const data = fresh.data() as Operation | undefined;
@@ -1656,6 +1722,10 @@ async function reAdoptAndRunOperation(
   let adopted: Operation | null = null;
   try {
     adopted = await deps.db.runTransaction(async (txn) => {
+      if (deps.maintenanceGate) {
+        const gate = await deps.maintenanceGate.stateInTransaction(txn);
+        if (gate.frozen) return null;
+      }
       const fresh = await txn.get(ref);
       if (!fresh.exists) return null;
       const data = fresh.data() as Operation | undefined;
@@ -1690,6 +1760,7 @@ async function runClaimedOperation(
   ref: FirebaseFirestore.DocumentReference,
   deps: ControllerDeps,
 ): Promise<void> {
+  if (await controllerWorkFrozen(deps, `operation ${op.id}`)) return;
   const { ctx, steps } = createOperationContext({
     persist: async (next) => {
       await ref.update({ steps: next, lastProgressAt: Date.now() });
@@ -1944,12 +2015,40 @@ function createControllerShutdown(
   };
 }
 
-async function main(): Promise<void> {
-  initializeApp({
-    credential: applicationDefault(),
-    storageBucket: resolveDefaultStorageBucket(process.env.GOOGLE_CLOUD_PROJECT),
-  });
-  const db = getFirestore();
+function holdFrozenController(
+  maintenanceGate: ControllerMaintenanceGate,
+  log: (msg: string) => void,
+): void {
+  const shutdown = createControllerShutdown(
+    [
+      startMaintenanceHttpServer({ port: HTTP_PORT, log }),
+      startMaintenanceRestartWatcher({
+        gate: maintenanceGate,
+        log,
+        restart: () => {
+          log("[glm-controller] maintenance freeze cleared; restarting to resume startup safely");
+          process.exit(0);
+        },
+        restartWhenFrozen: false,
+        intervalMs: MAINTENANCE_GATE_POLL_MS,
+      }),
+    ],
+    log,
+  );
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+}
+
+interface ControllerRuntime {
+  deps: ControllerDeps;
+  fleetControllerPrivateKey: string;
+  chartFingerprint: string;
+}
+
+async function createControllerRuntime(
+  db: Firestore,
+  maintenanceGate: ControllerMaintenanceGate,
+): Promise<ControllerRuntime> {
   const runKubectl: KubectlSubprocess = (args, opts) => spawnKubectl(args, opts);
   const authSecretEnsurer = createAuthSecretEnsurer({
     runKubectl,
@@ -2116,6 +2215,7 @@ async function main(): Promise<void> {
     reconcileImagePins,
     handlers,
     log,
+    maintenanceGate,
     syncFleetIngress: syncEdgeIngressForGateways,
     ensureGatewayWorkloadIdentity: gatewayWorkloadIdentityEnsurer,
     ensureGatewayServiceAccount: serviceAccountEnsurer.ensureServiceAccount,
@@ -2126,12 +2226,36 @@ async function main(): Promise<void> {
     resolveApiServerEgressCidrs,
   };
 
+  return { deps, fleetControllerPrivateKey, chartFingerprint };
+}
+
+async function main(): Promise<void> {
+  initializeApp({
+    credential: applicationDefault(),
+    storageBucket: resolveDefaultStorageBucket(process.env.GOOGLE_CLOUD_PROJECT),
+  });
+  const db = getFirestore();
+  const maintenanceGate = createFirestoreMaintenanceGate(db);
+  if (await maintenanceGateFrozen(maintenanceGate, log, "startup")) {
+    holdFrozenController(maintenanceGate, log);
+    return;
+  }
+  const { deps, fleetControllerPrivateKey, chartFingerprint } = await createControllerRuntime(
+    db,
+    maintenanceGate,
+  );
+
   log(
     `[glm-controller] boot sha=${process.env.BUILD_SHA ?? "unknown"} oc=${process.env.OPENCLAW_VERSION ?? "n/a"} fork=${process.env.OPENCLAW_FORK_SHA ?? "n/a"} node=${process.version} — namespace=${NAMESPACE} gatewayChart=${GATEWAY_CHART} chartFingerprint=${chartFingerprint.slice(0, 12)} chartDriftAutoRoll=${AUTO_ROLL_ON_CHART_DRIFT} valuesFile=${GATEWAY_VALUES_FILE}`,
   );
 
   await bootstrapGlmGateways(deps);
   await bootstrapDefaultGateway(deps);
+
+  if (await controllerWorkFrozen(deps, "orphan-op resume")) {
+    holdFrozenController(maintenanceGate, log);
+    return;
+  }
 
   // Resume any op the previous instance left `running` when it exited mid-op (a
   // deploy/restart redeploys this single-replica controller routinely). Re-driving
@@ -2142,25 +2266,46 @@ async function main(): Promise<void> {
     db,
     log,
     resumableKinds: RESUMABLE_OP_KINDS,
-    redrive: (op, ref) => reAdoptAndRunOperation(op, ref, deps),
+    redrive: async (op, ref) => {
+      if (await controllerWorkFrozen(deps, "orphan-op resume")) return;
+      await reAdoptAndRunOperation(op, ref, deps);
+    },
   }).catch((err) =>
     log(
       `[glm-controller] ⚠ resume-orphaned-ops sweep failed: ${err instanceof Error ? err.message : String(err)}`,
     ),
   );
 
+  if (await controllerWorkFrozen(deps, "background startup")) {
+    holdFrozenController(maintenanceGate, log);
+    return;
+  }
+
   const stoppers = startControllerBackgroundTasks({
     db,
     deps,
-    helm,
+    helm: deps.helm,
     fleetControllerPrivateKey,
   });
+  stoppers.push(
+    startMaintenanceRestartWatcher({
+      gate: maintenanceGate,
+      log,
+      restart: () => {
+        log("[glm-controller] maintenance freeze observed; exiting fail-closed");
+        process.exit(0);
+      },
+      restartWhenFrozen: true,
+      intervalMs: MAINTENANCE_GATE_POLL_MS,
+    }),
+  );
   const shutdown = createControllerShutdown(stoppers, log);
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
 }
 
 export async function bootstrapGlmGateways(deps: ControllerDeps): Promise<void> {
+  if (await controllerWorkFrozen(deps, "glm gateway bootstrap")) return;
   let actualMap;
   try {
     actualMap = await deps.helm.readDeployedInstances({
@@ -2172,8 +2317,17 @@ export async function bootstrapGlmGateways(deps: ControllerDeps): Promise<void> 
     );
     return;
   }
-  const snap = await deps.db.collection(GLM_GATEWAYS_COLLECTION).get();
+  const [snap, gatewaySnap] = await Promise.all([
+    deps.db.collection(GLM_GATEWAYS_COLLECTION).get(),
+    deps.db.collection(GATEWAYS_COLLECTION).get(),
+  ]);
   const known = new Set(snap.docs.map((d) => d.id));
+  for (const revisionId of collectKnownRevisionIds({
+    revisionDocs: snap.docs.map((d) => d.data()),
+    gatewayDocs: gatewaySnap.docs.map((d) => d.data()),
+  })) {
+    known.add(revisionId);
+  }
   const writes = computeBootstrapWrites(actualMap, known);
   if (writes.length === 0) {
     deps.log(
@@ -2225,6 +2379,7 @@ async function resolveDefaultGatewayId(deps: ControllerDeps): Promise<string | n
 }
 
 export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<void> {
+  if (await controllerWorkFrozen(deps, "default gateway bootstrap")) return;
   if (process.env.BOOTSTRAP_DEFAULT_GATEWAY !== "true") {
     return;
   }

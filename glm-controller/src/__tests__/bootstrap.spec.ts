@@ -1,6 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { HelmInstancesMap } from "@octogee/shared/types/glm";
 import { computeBootstrapWrites } from "../bootstrap";
+import { bootstrapGlmGateways } from "../index";
 
 const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
 
@@ -74,6 +75,21 @@ describe("computeBootstrapWrites", () => {
     expect(writes[0]?.doc.gateway).toBe("default");
   });
 
+  it("never adopts an immutable revision release as a legacy desired gateway", () => {
+    const writes = computeBootstrapWrites(
+      {
+        "default-r4": {
+          enabled: true,
+          image: { repository: REPO, tag: "00750cf" },
+          gatewayId: "default",
+        },
+      },
+      new Set(),
+    );
+
+    expect(writes).toEqual([]);
+  });
+
   it("returns an empty list when every helm instance is already registered (no-op steady state)", () => {
     const writes = computeBootstrapWrites(actual, new Set(["default", "canary"]));
     expect(writes).toEqual([]);
@@ -97,5 +113,82 @@ describe("computeBootstrapWrites", () => {
       desiredStatus: "running",
       createdBy: "controller-bootstrap",
     });
+  });
+});
+
+describe("bootstrapGlmGateways", () => {
+  it("does not inspect or register Helm releases while maintenance is frozen", async () => {
+    const helm = {
+      readDeployedInstances: vi.fn(async () => actual),
+    } as unknown as Parameters<typeof bootstrapGlmGateways>[0]["helm"];
+    const db = {} as Parameters<typeof bootstrapGlmGateways>[0]["db"];
+
+    await bootstrapGlmGateways({
+      db,
+      helm,
+      handlers: {} as Parameters<typeof bootstrapGlmGateways>[0]["handlers"],
+      log: vi.fn(),
+      maintenanceGate: {
+        state: async () => ({ frozen: true, reason: "incident repair" }),
+        stateInTransaction: async () => ({ frozen: true, reason: "incident repair" }),
+      },
+    });
+
+    expect(helm.readDeployedInstances).not.toHaveBeenCalled();
+  });
+
+  it("does not create a bare legacy desired doc for a durable live revision", async () => {
+    const create = vi.fn(async () => undefined);
+    const db = {
+      collection: (name: string) => {
+        if (name === "glmGateways") {
+          return {
+            get: async () => ({ docs: [] }),
+            doc: () => ({ create }),
+          };
+        }
+        if (name === "gateways") {
+          return {
+            get: async () => ({
+              docs: [
+                {
+                  data: () => ({
+                    gatewayId: "default",
+                    latestRelease: 2,
+                    desiredRelease: 2,
+                    liveRelease: 2,
+                    liveRevisionId: "default-r2",
+                    trafficRevisionId: "default-r2",
+                    desiredStatus: "running",
+                    roll: null,
+                  }),
+                },
+              ],
+            }),
+          };
+        }
+        throw new Error(`unexpected collection ${name}`);
+      },
+    } as unknown as Parameters<typeof bootstrapGlmGateways>[0]["db"];
+    const helm = {
+      readDeployedInstances: vi.fn(async () => ({
+        "default-r2": {
+          enabled: true,
+          image: { repository: REPO, tag: "00750cf" },
+          gatewayId: "default",
+        },
+      })),
+    } as unknown as Parameters<typeof bootstrapGlmGateways>[0]["helm"];
+    const log = vi.fn();
+
+    await bootstrapGlmGateways({
+      db,
+      helm,
+      handlers: {} as Parameters<typeof bootstrapGlmGateways>[0]["handlers"],
+      log,
+    });
+
+    expect(create).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("no writes"));
   });
 });

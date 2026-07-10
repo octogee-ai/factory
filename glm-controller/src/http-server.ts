@@ -164,21 +164,29 @@ function addAdminFleetEventRoute(router: Router, deps: HttpServerDeps): void {
   });
 }
 
+function addHealthAndMetricsRoutes(app: Express): void {
+  app.get("/healthz", (_req, res) => {
+    res.json({ ok: true, service: "glm-controller" });
+  });
+
+  app.get("/metrics", (_req, res) => {
+    res.set("Content-Type", "text/plain; version=0.0.4");
+    res.end(renderMetrics());
+  });
+}
+
+export function createMaintenanceHttpServer(): Express {
+  const app = express();
+  addHealthAndMetricsRoutes(app);
+  return app;
+}
+
 export function createHttpServer(deps: HttpServerDeps): Express {
   const app = express();
   app.use(corsMiddleware);
   app.use(express.json());
 
-  app.get("/healthz", (_req, res) => {
-    res.json({ ok: true, service: "glm-controller" });
-  });
-
-  // Unauthenticated Prometheus scrape endpoint (ClusterIP-only). Scraped by GMP
-  // via the glm-controller ClusterPodMonitoring in helm/monitoring/gmp-podmonitorings.yaml.
-  app.get("/metrics", (_req, res) => {
-    res.set("Content-Type", "text/plain; version=0.0.4");
-    res.end(renderMetrics());
-  });
+  addHealthAndMetricsRoutes(app);
 
   const adminRouter = Router();
   adminRouter.use(
@@ -235,6 +243,19 @@ export function startHttpServer(
   const app = createHttpServer(deps);
   const server: Server = app.listen(deps.port, () => {
     deps.log(`[glm-controller] http server listening on :${deps.port}`);
+  });
+  return () => {
+    server.close();
+  };
+}
+
+export function startMaintenanceHttpServer(input: {
+  port: number;
+  log: (msg: string) => void;
+}): () => void {
+  const app = createMaintenanceHttpServer();
+  const server: Server = app.listen(input.port, () => {
+    input.log(`[glm-controller] maintenance http server listening on :${input.port}`);
   });
   return () => {
     server.close();

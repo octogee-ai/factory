@@ -1,6 +1,10 @@
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createHttpServer, type HttpServerDeps } from "../http-server";
+import {
+  createHttpServer,
+  createMaintenanceHttpServer,
+  type HttpServerDeps,
+} from "../http-server";
 import { OPERATOR_GATEWAY_RESERVATIONS_COLLECTION } from "@octogee/shared/types/glm";
 
 interface FakeStore {
@@ -695,4 +699,20 @@ it("mounts addAdminCustomerRoutes and returns 404 for unknown customer (factory 
     expect(res.body).toEqual({ error: "User not found" });
   });
 
+});
+
+describe("createMaintenanceHttpServer", () => {
+  it("keeps a frozen controller Ready without exposing admin operations", async () => {
+    const app = createMaintenanceHttpServer();
+
+    const health = await request(app).get("/healthz");
+    expect(health.status).toBe(200);
+    expect(health.body).toEqual({ ok: true, service: "glm-controller" });
+
+    const metrics = await request(app).get("/metrics");
+    expect(metrics.status).toBe(200);
+
+    const admin = await request(app).get("/api/admin/gateways");
+    expect(admin.status).toBe(404);
+  });
 });
