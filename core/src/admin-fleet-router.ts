@@ -39,6 +39,7 @@ import {
   GATEWAY_RELEASES_SUBCOLLECTION,
   commitPlacementAtomic,
   releasePayloadHash,
+  isRevisionRealizationDoc,
   type AssignmentDoc,
   type AssignmentState,
   type GatewayDoc,
@@ -1066,7 +1067,14 @@ function effectiveHeartbeatDoc(
   if (isPlainRecord(hb) && Object.keys(hb).length > 0) {
     return { id: gatewayId, data: () => ({ gatewayId, ...hb }) };
   }
-  return legacyDoc;
+  if (!legacyDoc) return undefined;
+  const legacy = legacyDoc.data();
+  const carriesHeartbeatTelemetry =
+    typeof legacy.status === "string" ||
+    Array.isArray(legacy.mountedCustomers) ||
+    legacy.lastHeartbeatAt != null ||
+    legacy.startedAt != null;
+  return carriesHeartbeatTelemetry ? legacyDoc : undefined;
 }
 
 function shouldProjectDesiredOnlyGateway(glmDoc: GlmDoc | undefined): boolean {
@@ -3154,6 +3162,7 @@ router.get(
         const gateways = await Promise.all(
           [...gatewayIds].flatMap((gatewayId) => {
             const glmDoc = glmByGatewayId.get(gatewayId);
+            if (isRevisionRealizationDoc(glmDoc) && glmDoc.lifecycle === "retired") return [];
             const doc = effectiveHeartbeatDoc(
               gatewayId,
               heartbeatByGatewayId.get(gatewayId),

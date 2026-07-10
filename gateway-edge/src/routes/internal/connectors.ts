@@ -10,6 +10,8 @@ import { logger } from "../../middleware/logging.js";
 import { requireBuilderShellInternalAuth } from "../../middleware/builder-shell-auth.js";
 
 const router = Router();
+const GATEWAY_OWNER_UNAVAILABLE = "gateway owner unavailable";
+const GATEWAY_OWNER_UNCONFIGURED = "gateway_owner_unconfigured";
 
 function nonBlank(value: string | undefined): string | null {
   const trimmed = value?.trim();
@@ -27,8 +29,18 @@ function stringField(data: Record<string, unknown> | undefined, key: string): st
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
-function isOwnerRuntimeGatewayDesiredState(data: Record<string, unknown> | undefined): boolean {
+function isOwnerRuntimeReleasePayload(data: Record<string, unknown> | undefined): boolean {
   return data?.gatewayClass === "builder" || data?.gatewayClass === "operator";
+}
+
+function recordField(
+  data: Record<string, unknown> | undefined,
+  key: string,
+): Record<string, unknown> | undefined {
+  const value = data?.[key];
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function paramString(value: unknown): string | null {
@@ -40,6 +52,26 @@ async function readDoc(path: string): Promise<Record<string, unknown> | undefine
   return snap.exists ? (snap.data() as Record<string, unknown> | undefined) : undefined;
 }
 
+async function readRuntimeReleasePayload(
+  gatewayId: string,
+  revisionId: string,
+): Promise<{ payload: Record<string, unknown> | undefined; release: number } | null> {
+  const revision = await readDoc(`glmGateways/${revisionId}`);
+  const release = revision?.release;
+  if (
+    revision?.docKind !== "revision" ||
+    stringField(revision, "revisionId") !== revisionId ||
+    stringField(revision, "gateway") !== gatewayId ||
+    typeof release !== "number" ||
+    !Number.isInteger(release) ||
+    release < 1
+  ) {
+    return null;
+  }
+  const releaseDoc = await readDoc(`gateways/${gatewayId}/releases/${release}`);
+  return { payload: recordField(releaseDoc, "payload"), release };
+}
+
 async function resolveOwnerRuntimeOwnerUid(
   res: Response,
 ): Promise<string | null> {
@@ -49,15 +81,17 @@ async function resolveOwnerRuntimeOwnerUid(
   }
 
   const gatewayId = nonBlank(process.env.GATEWAY_ID);
+  const revisionId = nonBlank(process.env.GATEWAY_REVISION_ID);
   const builderSlug = nonBlank(process.env.GATEWAY_BUILDER_SLUG);
-  if (!gatewayId || !builderSlug) {
+  if (!gatewayId || !revisionId || !builderSlug) {
     logger.error("[connectors/materialize] runtime gateway owner env is incomplete", {
       gatewayId: Boolean(gatewayId),
+      revisionId: Boolean(revisionId),
       builderSlug: Boolean(builderSlug),
     });
     res
       .status(503)
-      .json({ error: "gateway owner unavailable", code: "gateway_owner_unconfigured" });
+      .json({ error: GATEWAY_OWNER_UNAVAILABLE, code: GATEWAY_OWNER_UNCONFIGURED });
     return null;
   }
 
@@ -70,34 +104,60 @@ async function resolveOwnerRuntimeOwnerUid(
     });
     res
       .status(503)
-      .json({ error: "gateway owner unavailable", code: "gateway_owner_unconfigured" });
+      .json({ error: GATEWAY_OWNER_UNAVAILABLE, code: GATEWAY_OWNER_UNCONFIGURED });
     return null;
   }
 
-  const gateway = await readDoc(`glmGateways/${gatewayId}`);
-  if (!isOwnerRuntimeGatewayDesiredState(gateway)) {
+  const runtimeRelease = await readRuntimeReleasePayload(gatewayId, revisionId);
+  if (!runtimeRelease) {
+    logger.error("[connectors/materialize] runtime revision identity is invalid", {
+      gatewayId,
+      revisionId,
+    });
+    res
+      .status(503)
+      .json({ error: GATEWAY_OWNER_UNAVAILABLE, code: GATEWAY_OWNER_UNCONFIGURED });
+    return null;
+  }
+
+  const { payload, release: revisionRelease } = runtimeRelease;
+  if (!payload) {
+    logger.error("[connectors/materialize] runtime release payload is missing", {
+      gatewayId,
+      revisionId,
+      revisionRelease,
+    });
+    res
+      .status(503)
+      .json({ error: GATEWAY_OWNER_UNAVAILABLE, code: GATEWAY_OWNER_UNCONFIGURED });
+    return null;
+  }
+  if (!isOwnerRuntimeReleasePayload(payload)) {
     res.status(403).json({ error: "forbidden", code: "owner_runtime_gateway_required" });
     return null;
   }
 
-  const gatewayOwnerUid = stringField(gateway, "ownerUid");
-  if (!gatewayOwnerUid) {
-    logger.error("[connectors/materialize] runtime gateway desired state has no ownerUid", {
+  const releaseOwnerUid = stringField(payload, "ownerUid");
+  if (!releaseOwnerUid) {
+    logger.error("[connectors/materialize] runtime gateway release has no ownerUid", {
       gatewayId,
+      revisionId,
+      revisionRelease,
       builderSlug,
       ownerUid,
     });
     res
       .status(503)
-      .json({ error: "gateway owner unavailable", code: "gateway_owner_unconfigured" });
+      .json({ error: GATEWAY_OWNER_UNAVAILABLE, code: GATEWAY_OWNER_UNCONFIGURED });
     return null;
   }
-  if (gatewayOwnerUid !== ownerUid) {
+  if (releaseOwnerUid !== ownerUid) {
     logger.warn("[connectors/materialize] runtime gateway owner mismatch", {
       gatewayId,
+      revisionId,
       builderSlug,
       ownerUid,
-      gatewayOwnerUid,
+      releaseOwnerUid,
     });
     res.status(403).json({ error: "forbidden", code: "gateway_owner_mismatch" });
     return null;

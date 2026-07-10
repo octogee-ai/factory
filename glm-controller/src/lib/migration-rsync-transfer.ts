@@ -147,7 +147,7 @@ function postSignedJson<Resp>(
     resolveGatewayUrl: (gatewayId: string) => string;
   },
   opts: {
-    gatewayId: string;
+    transportId: string;
     path: string;
     migrationId: string;
     body: Record<string, unknown>;
@@ -155,7 +155,7 @@ function postSignedJson<Resp>(
 ): Promise<Resp> {
   const rawBody = JSON.stringify(opts.body);
   const signature = signFleetRequest(deps.privateKey, opts.migrationId, rawBody);
-  const url = `${deps.resolveGatewayUrl(opts.gatewayId)}${opts.path}`;
+  const url = `${deps.resolveGatewayUrl(opts.transportId)}${opts.path}`;
   return deps.fetchImpl(url, {
     method: "POST",
     headers: {
@@ -283,10 +283,10 @@ interface PodList {
 
 async function resolveRunningGatewayPod(params: {
   namespace: string;
-  gatewayId: string;
+  transportId: string;
   runCommand: CommandRunner;
 }): Promise<{ name: string; podIP: string }> {
-  const selector = `app=octogee-gateway,gateway-instance=${params.gatewayId}`;
+  const selector = `app=octogee-gateway,gateway-instance=${params.transportId}`;
   const result = await params.runCommand("kubectl", [
     "-n",
     params.namespace,
@@ -299,7 +299,7 @@ async function resolveRunningGatewayPod(params: {
   ]);
   if (result.code !== 0) {
     throw new Error(
-      `kubectl get pods gateway=${params.gatewayId} failed: ${result.stderr.trim() || result.stdout.trim()}`,
+      `kubectl get pods transport=${params.transportId} failed: ${result.stderr.trim() || result.stdout.trim()}`,
     );
   }
   const parsed = JSON.parse(result.stdout) as PodList;
@@ -312,7 +312,7 @@ async function resolveRunningGatewayPod(params: {
   });
   if (running.length !== 1) {
     throw new Error(
-      `expected exactly one running pod for gateway=${params.gatewayId}; found ${running.length}`,
+      `expected exactly one running pod for transport=${params.transportId}; found ${running.length}`,
     );
   }
   const item = running[0];
@@ -330,6 +330,7 @@ export function createRsyncMigrationTransfer(
   const log = deps.log ?? (() => undefined);
 
   const control = <Resp>(
+    transportId: string,
     gatewayId: string,
     pathSuffix: string,
     migrationId: string,
@@ -342,7 +343,7 @@ export function createRsyncMigrationTransfer(
         resolveGatewayUrl: deps.resolveGatewayUrl,
       },
       {
-        gatewayId,
+        transportId,
         path: `${pathSuffix}/${gatewayId}`,
         migrationId,
         body,
@@ -351,6 +352,8 @@ export function createRsyncMigrationTransfer(
 
   return async (input) => {
     const mode = input.mode ?? "pre";
+    const fromTransportId = input.fromTransportId ?? input.fromGatewayId;
+    const toTransportId = input.toTransportId ?? input.toGatewayId;
     const transferKey = randomBytes(32).toString("hex");
     const claimed = await claimTask(
       {
@@ -373,12 +376,12 @@ export function createRsyncMigrationTransfer(
       const [sourcePod, targetPod] = await Promise.all([
         resolveRunningGatewayPod({
           namespace: deps.namespace,
-          gatewayId: input.fromGatewayId,
+          transportId: fromTransportId,
           runCommand,
         }),
         resolveRunningGatewayPod({
           namespace: deps.namespace,
-          gatewayId: input.toGatewayId,
+          transportId: toTransportId,
           runCommand,
         }),
       ]);
@@ -392,6 +395,7 @@ export function createRsyncMigrationTransfer(
       };
       targetPrepareAttempted = true;
       const prepared = await control<PrepareRsyncImportResponse>(
+        toTransportId,
         input.toGatewayId,
         "/prepare-rsync-import",
         input.migrationId,
@@ -411,6 +415,7 @@ export function createRsyncMigrationTransfer(
         includeActivationManifest: input.includeActivationManifest,
       };
       await control<ImportResponse>(
+        fromTransportId,
         input.fromGatewayId,
         "/push-rsync-state",
         input.migrationId,
@@ -422,6 +427,7 @@ export function createRsyncMigrationTransfer(
         mode,
       };
       await control<ImportResponse>(
+        toTransportId,
         input.toGatewayId,
         "/finish-rsync-import",
         input.migrationId,
@@ -435,6 +441,7 @@ export function createRsyncMigrationTransfer(
     } catch (err) {
       if (targetPrepareAttempted) {
         await control<ImportResponse>(
+          toTransportId,
           input.toGatewayId,
           "/abort-rsync-import",
           input.migrationId,

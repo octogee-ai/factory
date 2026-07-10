@@ -140,6 +140,51 @@ describe("migrationTransferTaskId", () => {
 });
 
 describe("createRsyncMigrationTransfer", () => {
+  it("uses revision transport ids for same-gateway drain pod selection and control URLs", async () => {
+    const store: Store = {};
+    const fetchCalls: string[] = [];
+    const commandCalls: Array<{ command: string; args: string[] }> = [];
+    const runCommand: CommandRunner = async (command, args) => {
+      commandCalls.push({ command, args });
+      const selector = args[args.indexOf("-l") + 1] ?? "";
+      if (selector.includes("gateway-instance=default-r2")) {
+        return { stdout: await readyPod("gw-from-pod").text(), stderr: "", code: 0 };
+      }
+      if (selector.includes("gateway-instance=default-r3")) {
+        return { stdout: await readyPod("gw-to-pod").text(), stderr: "", code: 0 };
+      }
+      return { stdout: JSON.stringify({ items: [] }), stderr: "", code: 0 };
+    };
+    const transfer = createRsyncMigrationTransfer({
+      db: makeDb(store),
+      namespace: "octogee-test",
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      resolveGatewayUrl: (id) => `http://${id}`,
+      fetch: makeFetch(fetchCalls),
+      runCommand,
+    });
+
+    await transfer({
+      migrationId: "mig-drain",
+      fromGatewayId: "default",
+      toGatewayId: "default",
+      fromTransportId: "default-r2",
+      toTransportId: "default-r3",
+      slug: "alice",
+      mode: "initial",
+    });
+
+    expect(commandCalls.map((call) => call.args[call.args.indexOf("-l") + 1])).toEqual([
+      "app=octogee-gateway,gateway-instance=default-r2",
+      "app=octogee-gateway,gateway-instance=default-r3",
+    ]);
+    expect(fetchCalls).toEqual([
+      "http://default-r3/prepare-rsync-import/default",
+      "http://default-r2/push-rsync-state/default",
+      "http://default-r3/finish-rsync-import/default",
+    ]);
+  });
+
   it("runs prepare → source direct rsync push → finish and makes succeeded retry a no-op", async () => {
     const store: Store = {};
     const fetchCalls: string[] = [];

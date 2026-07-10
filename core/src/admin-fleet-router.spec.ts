@@ -208,6 +208,64 @@ function mkAdminFleetRouteApp(opts: {
   return { app, state };
 }
 
+describe("fleet gateway projection", () => {
+  it("does not render durable desired docs or retired compatibility aliases as pod revisions", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "default", overrides: {} },
+      users: {},
+      gateways: {
+        default: {
+          gatewayId: "default",
+          desiredStatus: "running",
+          desiredRelease: 2,
+          liveRevisionId: "default-r2",
+        },
+        bender: {
+          gatewayId: "bender",
+          desiredStatus: "running",
+          desiredRelease: 2,
+          liveRevisionId: "bender-r2",
+        },
+      },
+      glmGateways: {
+        bender: {
+          docKind: "revision",
+          revisionId: "bender-r1",
+          gateway: "bender",
+          release: 1,
+          lifecycle: "retired",
+          compatibilityPurpose: "connector-owner-auth",
+          heartbeat: {
+            status: "unknown",
+            mountedCustomers: [],
+            version: null,
+            lastHeartbeatAt: null,
+          },
+        },
+        "bender-r2": {
+          docKind: "revision",
+          gateway: "bender",
+          lifecycle: "serving",
+          heartbeat: { status: "ready", mountedCustomers: ["ceckert"] },
+        },
+        "default-r2": {
+          docKind: "revision",
+          gateway: "default",
+          lifecycle: "serving",
+          heartbeat: { status: "ready", mountedCustomers: ["alice"] },
+        },
+      },
+    });
+
+    const res = await request(app).get("/gateways").expect(200);
+
+    expect(res.body.gateways.map((gateway: { gatewayId: string }) => gateway.gatewayId).sort()).toEqual([
+      "bender-r2",
+      "default-r2",
+    ]);
+  });
+});
+
 describe("onboarding placement (post-cohorts)", () => {
   it("returns the placement config with default-gateway warnings", async () => {
     const { app } = mkAdminFleetRouteApp({
