@@ -248,14 +248,9 @@ export function buildRemoveCustomerPatch(
   slug: string,
   agentId: string,
 ): {
-  agents: { list: AgentEntry[] };
   bindings: AgentBinding[];
   channels: { mattermost: { accounts: Record<string, null> } };
 } {
-  const existingAgents = (current as { agents?: { list?: unknown } })?.agents?.list;
-  const currentAgents: AgentEntry[] = Array.isArray(existingAgents)
-    ? (existingAgents as AgentEntry[])
-    : [];
   const existing = (current as { bindings?: unknown })?.bindings;
   const currentBindings: AgentBinding[] = Array.isArray(existing)
     ? (existing as AgentBinding[])
@@ -269,19 +264,44 @@ export function buildRemoveCustomerPatch(
   for (const key of Object.keys(currentAccounts)) {
     if (key.startsWith(`${slug}-proj-`)) accounts[key] = null;
   }
-  const projectAgentPrefix = `octogee-${slug}-proj-`;
   return {
-    agents: {
-      list: currentAgents.filter(
-        (agent) => agent.id !== agentId && !agent.id.startsWith(projectAgentPrefix),
-      ),
-    },
     bindings: filterOutCustomerBindings(
       currentBindings.filter((b) => b?.agentId !== agentId),
       slug,
     ),
     channels: { mattermost: { accounts } },
   };
+}
+
+export function buildRemoveCustomerConfig(
+  current: OpenclawConfigShape & Record<string, unknown>,
+  slug: string,
+  agentId: string,
+): OpenclawConfigShape & Record<string, unknown> {
+  const config = structuredClone(current);
+  const projectAgentPrefix = `octogee-${slug}-proj-`;
+  const agents = config.agents?.list ?? [];
+  const bindings = config.bindings ?? [];
+
+  if (config.agents) {
+    config.agents.list = agents.filter(
+      (agent) => agent.id !== agentId && !agent.id.startsWith(projectAgentPrefix),
+    );
+  }
+  config.bindings = filterOutCustomerBindings(
+    bindings.filter((binding) => binding.agentId !== agentId),
+    slug,
+  );
+
+  const accounts = config.channels?.mattermost?.accounts;
+  if (accounts) {
+    delete accounts[`${slug}-coach`];
+    for (const accountId of Object.keys(accounts)) {
+      if (accountId.startsWith(`${slug}-proj-`)) delete accounts[accountId];
+    }
+  }
+
+  return config;
 }
 
 export async function provisionMattermost(

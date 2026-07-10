@@ -184,11 +184,9 @@ expect(Object.keys(patch.channels.mattermost.accounts)).toEqual([ACCOUNT_ID]);
     ]);
   });
 
-  it("emits the filtered full agent list for the caller's explicit replacePaths removal", () => {
+  it("does not construct a full agent list from the redacted config.get snapshot", () => {
     const patch = buildRemoveCustomerPatch(mkCurrent(), SLUG, AGENT_ID) as any;
-    expect(patch.agents.list).toEqual([
-      { id: SIBLING_AGENT, model: "anthropic/claude-sonnet-4-6" },
-    ]);
+    expect(patch).not.toHaveProperty("agents");
   });
 
   it("is pure — does not mutate `current`", () => {

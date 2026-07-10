@@ -111,6 +111,7 @@ export interface CronAddResult {
 
 export interface GatewayRpcClient {
   configGet(): Promise<ConfigGetResult>;
+  configApply(config: object, baseHash: string): Promise<ConfigPatchResult>;
   configPatch(
     patch: object,
     baseHash: string,
@@ -122,6 +123,45 @@ export interface GatewayRpcClient {
   cronAdd(spec: CronAddSpec): Promise<CronAddResult>;
   isGatewayUp(timeoutMs?: number): Promise<boolean>;
   close(): Promise<void>;
+}
+
+type GatewayRpcCall = (method: string, params: unknown) => Promise<unknown>;
+
+async function writeConfig(
+  call: GatewayRpcCall,
+  method: "config.apply" | "config.patch",
+  config: object,
+  baseHash: string,
+  replacePaths?: readonly string[],
+): Promise<ConfigPatchResult> {
+  try {
+    const payload = await call(method, {
+      raw: JSON.stringify(config),
+      baseHash,
+      ...(replacePaths && replacePaths.length > 0
+        ? { replacePaths: [...replacePaths] }
+        : {}),
+    });
+    if (!payload || typeof payload !== "object") {
+      throw new OpenclawWireError(INVALID_RESPONSE, `${method} returned non-object payload`);
+    }
+    const result = payload as ConfigPatchResult;
+    if (result.ok !== true) {
+      throw new OpenclawWireError(INVALID_RESPONSE, `${method} payload missing \`ok: true\``);
+    }
+    return result;
+  } catch (err) {
+    if (err instanceof OpenclawWireError && err.code === "rpc-error") {
+      const message = err.message.toLowerCase();
+      if (message.includes("config changed since last load") || message.includes("base hash")) {
+        throw new OpenclawWireError("hash-mismatch", err.message, err.details);
+      }
+      if (message.includes("invalid config")) {
+        throw new OpenclawWireError("invalid-patch", err.message, err.details);
+      }
+    }
+    throw err;
+  }
 }
 
 export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpcClient {
@@ -234,35 +274,12 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       return { config: snap.config, hash: snap.hash };
     },
 
+    async configApply(config, baseHash) {
+      return await writeConfig(call, "config.apply", config, baseHash);
+    },
+
     async configPatch(patch, baseHash, opts) {
-      try {
-        const payload = await call("config.patch", {
-          raw: JSON.stringify(patch),
-          baseHash,
-          ...(opts?.replacePaths && opts.replacePaths.length > 0
-            ? { replacePaths: [...opts.replacePaths] }
-            : {}),
-        });
-        if (!payload || typeof payload !== "object") {
-          throw new OpenclawWireError(INVALID_RESPONSE, "config.patch returned non-object payload");
-        }
-        const p = payload as ConfigPatchResult;
-        if (p.ok !== true) {
-          throw new OpenclawWireError(INVALID_RESPONSE, "config.patch payload missing `ok: true`");
-        }
-        return p;
-      } catch (err) {
-        if (err instanceof OpenclawWireError && err.code === "rpc-error") {
-          const msg = err.message.toLowerCase();
-          if (msg.includes("config changed since last load") || msg.includes("base hash")) {
-            throw new OpenclawWireError("hash-mismatch", err.message, err.details);
-          }
-          if (msg.includes("invalid config")) {
-            throw new OpenclawWireError("invalid-patch", err.message, err.details);
-          }
-        }
-        throw err;
-      }
+      return await writeConfig(call, "config.patch", patch, baseHash, opts?.replacePaths);
     },
 
     async channelsStatus() {

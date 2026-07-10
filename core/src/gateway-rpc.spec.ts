@@ -239,6 +239,46 @@ describe("gateway-rpc", () => {
     });
   });
 
+  describe("configApply", () => {
+    it("sends the complete config as raw JSON with its base hash", async () => {
+      let captured: any;
+      server.setHandler("config.apply", (params) => {
+        captured = params;
+        return { ok: true, payload: { ok: true, path: "/fake/openclaw.json" } };
+      });
+
+      const config = {
+        agents: {
+          list: [
+            { id: "octogee-bob-coach", memorySearch: { apiKey: { source: "env", id: "BOB" } } },
+          ],
+        },
+      };
+      const result = await client.configApply(config, "current-hash");
+
+      expect(captured).toEqual({ raw: JSON.stringify(config), baseHash: "current-hash" });
+      expect(result.ok).toBe(true);
+    });
+
+    it("maps stale base-hash and invalid-config errors to stable wire codes", async () => {
+      server.setHandler("config.apply", () => ({
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: "config changed since last load" },
+      }));
+      await expect(client.configApply({}, "stale")).rejects.toMatchObject({
+        code: "hash-mismatch",
+      });
+
+      server.setHandler("config.apply", () => ({
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: "invalid config: agents.list" },
+      }));
+      await expect(client.configApply({}, "current")).rejects.toMatchObject({
+        code: "invalid-patch",
+      });
+    });
+  });
+
   describe("gatewayRestartRequest", () => {
     it("requests a safe gateway restart through the OpenClaw RPC", async () => {
       let captured: any;
