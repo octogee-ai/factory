@@ -43,6 +43,7 @@ import {
   readAssignmentDocsForGateway,
 } from "@octogee/core/assignment-doc";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
+import { isGatewayDesiredDoc } from "@octogee/shared/types/gateway-releases";
 import { createCachedOwnerModelBrokerGrantResolver } from "../lib/model-broker-limits.js";
 import { createFirestoreModelBrokerUsageStore } from "../lib/model-broker-usage.js";
 import {
@@ -823,10 +824,15 @@ async function isAssignedToGateway(
 // (Deferred hardening: true revision-authenticated pod identity — vs the
 // self-reported GATEWAY_REVISION_ID env — is a later item, since it is not a
 // cross-tenant boundary today.)
+type RevisionGatewayState = {
+  liveRevisionId?: unknown;
+  roll?: { targetRevisionId?: unknown } | null;
+};
+
 export function isRequestedRevisionAllowed(
   gatewayId: string,
   revisionId: string,
-  gatewayDoc: Record<string, unknown> | undefined,
+  gatewayDoc: RevisionGatewayState | undefined,
 ): boolean {
   if (!revisionId) return true; // legacy pod: no filtering
   if (!revisionId.startsWith(`${gatewayId}-r`)) return false; // wrong gateway / malformed
@@ -848,7 +854,7 @@ export function isRequestedRevisionAllowed(
 export function isRevisionRosterRequestAllowed(input: {
   gatewayId: string;
   podRevisionId: string;
-  gatewayDoc: Record<string, unknown> | undefined;
+  gatewayDoc: RevisionGatewayState | undefined;
   hasAssignmentDocs: boolean;
 }): boolean {
   if (!input.podRevisionId) {
@@ -866,9 +872,8 @@ async function resolveAssignedUsersRevisionGate(
   podRevisionId: string,
 ): Promise<{ allowed: false } | { allowed: true; liveRevisionId: string | null }> {
   const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-  const gatewayDoc = gatewaySnap.exists
-    ? (gatewaySnap.data() as Record<string, unknown>)
-    : undefined;
+  const gatewayData = gatewaySnap.data();
+  const gatewayDoc = isGatewayDesiredDoc(gatewayData) ? gatewayData : undefined;
   const hasAssignmentDocs = podRevisionId
     ? false
     : (await readAssignmentDocsForGateway(db, gatewayId)).length > 0;
