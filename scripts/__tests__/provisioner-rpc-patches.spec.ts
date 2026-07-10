@@ -184,14 +184,17 @@ expect(Object.keys(patch.channels.mattermost.accounts)).toEqual([ACCOUNT_ID]);
     ]);
   });
 
-  it("does not emit agents.list — a filtered list is a no-op under mergeObjectArraysById", () => {
+  it("emits the filtered full agent list for the caller's explicit replacePaths removal", () => {
     const patch = buildRemoveCustomerPatch(mkCurrent(), SLUG, AGENT_ID) as any;
-    expect(patch.agents).toBeUndefined();
+    expect(patch.agents.list).toEqual([
+      { id: SIBLING_AGENT, model: "anthropic/claude-sonnet-4-6" },
+    ]);
   });
 
   it("is pure — does not mutate `current`", () => {
     const current = mkCurrent();
     buildRemoveCustomerPatch(current, SLUG, AGENT_ID);
+    expect(current.agents.list).toHaveLength(2);
     expect(current.bindings).toHaveLength(2);
     expect(Object.keys(current.channels.mattermost.accounts)).toEqual([
       ACCOUNT_ID,

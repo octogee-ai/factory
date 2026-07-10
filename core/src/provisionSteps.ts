@@ -248,9 +248,14 @@ export function buildRemoveCustomerPatch(
   slug: string,
   agentId: string,
 ): {
+  agents: { list: AgentEntry[] };
   bindings: AgentBinding[];
   channels: { mattermost: { accounts: Record<string, null> } };
 } {
+  const existingAgents = (current as { agents?: { list?: unknown } })?.agents?.list;
+  const currentAgents: AgentEntry[] = Array.isArray(existingAgents)
+    ? (existingAgents as AgentEntry[])
+    : [];
   const existing = (current as { bindings?: unknown })?.bindings;
   const currentBindings: AgentBinding[] = Array.isArray(existing)
     ? (existing as AgentBinding[])
@@ -264,7 +269,13 @@ export function buildRemoveCustomerPatch(
   for (const key of Object.keys(currentAccounts)) {
     if (key.startsWith(`${slug}-proj-`)) accounts[key] = null;
   }
+  const projectAgentPrefix = `octogee-${slug}-proj-`;
   return {
+    agents: {
+      list: currentAgents.filter(
+        (agent) => agent.id !== agentId && !agent.id.startsWith(projectAgentPrefix),
+      ),
+    },
     bindings: filterOutCustomerBindings(
       currentBindings.filter((b) => b?.agentId !== agentId),
       slug,

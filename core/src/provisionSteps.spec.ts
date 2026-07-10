@@ -3,6 +3,13 @@ import { buildRemoveCustomerPatch } from "./provisionSteps.js";
 
 describe("buildRemoveCustomerPatch", () => {
   const current = {
+    agents: {
+      list: [
+        { id: "octogee-alice-coach" },
+        { id: "octogee-alice-proj-orbit-coach" },
+        { id: "octogee-bob-coach" },
+      ],
+    },
     bindings: [
       { agentId: "octogee-alice-coach" },
       { agentId: "octogee-alice-proj-orbit-coach" },
@@ -20,9 +27,10 @@ describe("buildRemoveCustomerPatch", () => {
     },
   };
 
-  it("removes the customer's coach AND project-agent bindings and nulls all their accounts", () => {
+  it("removes the customer's coach and project agents before their directories are deleted", () => {
     const patch = buildRemoveCustomerPatch(current, "alice", "octogee-alice-coach");
 
+    expect(patch.agents.list.map((agent) => agent.id)).toEqual(["octogee-bob-coach"]);
     expect(patch.bindings.map((b) => b.agentId)).toEqual(["octogee-bob-coach"]);
     expect(patch.channels.mattermost.accounts).toEqual({
       "alice-coach": null,
