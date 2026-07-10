@@ -99,6 +99,16 @@ describe("isRequestedRevisionAllowed (P1 — same-gateway revision spoofing)", (
     expect(isRequestedRevisionAllowed("default", "default-r2", rollingGateway)).toBe(true);
   });
 
+  it("allows the desired revision while a durable gateway has no live revision yet", () => {
+    const firstRevision = {
+      desiredRelease: 1,
+      liveRevisionId: null,
+      roll: null,
+    };
+    expect(isRequestedRevisionAllowed("default", "default-r1", firstRevision)).toBe(true);
+    expect(isRequestedRevisionAllowed("default", "default-r2", firstRevision)).toBe(false);
+  });
+
   it("pre-backfill (no gateway doc): prefix is the only boundary", () => {
     expect(isRequestedRevisionAllowed("default", "default-r5", undefined)).toBe(true);
     expect(isRequestedRevisionAllowed("default", "other-gw-r5", undefined)).toBe(false);

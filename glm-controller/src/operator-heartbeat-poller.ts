@@ -21,6 +21,7 @@ export const EVICT_AFTER_STREAK = 2;
 
 export interface OperatorGatewayHealth {
   status: string;
+  version?: string;
   /** The pod's current process start (epoch ms). Persisted trusted-side so the
    *  shell reaper can detect a roll. Optional — omitted by a malformed /health. */
   startedAt?: number;
@@ -34,6 +35,7 @@ export interface OperatorGatewayHealth {
 export interface OperatorHeartbeatRecord {
   status: string;
   mountedCustomers: string[];
+  version?: string;
   /** Live pod-boot time (epoch ms) — lets reapGoneGatewayShells reap pre-roll shells. */
   startedAt?: number;
 }
@@ -96,6 +98,7 @@ export function parseHealthResponse(json: unknown): OperatorGatewayHealth | null
     status?: unknown;
     customers?: unknown;
     startedAt?: unknown;
+    version?: unknown;
     migratingIn?: unknown;
   };
   if (typeof body.status !== "string" || body.status.length === 0) return null;
@@ -104,6 +107,7 @@ export function parseHealthResponse(json: unknown): OperatorGatewayHealth | null
     (slug): slug is string => typeof slug === "string",
   );
   const health: OperatorGatewayHealth = { status: body.status, customers };
+  if (typeof body.version === "string") health.version = body.version;
   if (typeof body.startedAt === "number") health.startedAt = body.startedAt;
   if (Array.isArray(body.migratingIn)) {
     health.migratingIn = body.migratingIn.filter(
@@ -188,6 +192,7 @@ export async function pollOperatorHeartbeatsOnce(
         status: health.status,
         mountedCustomers: intersectMounted(health.customers, assigned),
       };
+      if (typeof health.version === "string") record.version = health.version;
       if (typeof health.startedAt === "number") record.startedAt = health.startedAt;
       await deps.writeHeartbeat(gatewayId, record);
       await evictDepartedForGateway(

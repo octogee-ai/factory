@@ -2,14 +2,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Firestore } from "firebase-admin/firestore";
 import { SIGNATURE_HEADER } from "@octogee/shared/types/fleet-controller";
 import { verifyFleetRequest } from "@octogee/core/fleet-signature";
-import { buildOperatorHeartbeatPollerDeps, callUnmountRpc } from "../index.js";
+import {
+  buildOperatorHeartbeatPollerDeps,
+  callUnmountRpc,
+  heartbeatPollInstanceIds,
+  heartbeatRosterTarget,
+} from "../index.js";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 
 function fakeDb(): Firestore {
   return {
     collection: vi.fn(() => ({
       doc: vi.fn(() => ({
-        get: vi.fn(async () => ({ exists: true })),
+        get: vi.fn(async () => ({
+          exists: true,
+          data: () => ({ gatewayId: "bender", desiredStatus: "running" }),
+        })),
       })),
     })),
   } as unknown as Firestore;
@@ -88,6 +96,9 @@ describe("buildOperatorHeartbeatPollerDeps", () => {
     const glmCall = setCalls.find((c) => c.collection === "glmGateways");
     expect(glmCall!.doc).toBe("bender");
     expect(glmCall!.data).toHaveProperty("heartbeat");
+    expect(glmCall!.data).toMatchObject({
+      heartbeat: { internalUrl: expect.stringContaining("octogee-gateway-bender") },
+    });
     expect(setCalls.some((c) => c.collection === "gateways")).toBe(false);
   });
 
@@ -115,5 +126,40 @@ describe("buildOperatorHeartbeatPollerDeps", () => {
     expect(
       verifyFleetRequest("gateway-token", body.migrationId, rawBody, signature),
     ).toBe(false);
+  });
+});
+
+describe("revision heartbeat polling", () => {
+  it("polls active revision realizations alongside legacy gateway instances", () => {
+    expect(
+      heartbeatPollInstanceIds([
+        {
+          id: "default-green",
+          data: () => ({
+            gatewayId: "default-green",
+            imageRepository: "repo",
+            imageTag: "abc1234",
+            desiredStatus: "running",
+            createdBy: "test",
+          }),
+        },
+        { id: "default-r2", data: () => ({ docKind: "revision", revisionId: "default-r2", gateway: "default", lifecycle: "provisioning" }) },
+        { id: "default-r1", data: () => ({ docKind: "revision", revisionId: "default-r1", gateway: "default", lifecycle: "retired" }) },
+      ]),
+    ).toEqual(["default-green", "default-r2"]);
+  });
+
+  it("resolves a revision instance to the bare gateway's revision-filtered roster", () => {
+    expect(
+      heartbeatRosterTarget("default-r2", {
+        docKind: "revision",
+        revisionId: "default-r2",
+        gateway: "default",
+        lifecycle: "warming",
+      }),
+    ).toEqual({ gatewayId: "default", revisionId: "default-r2" });
+    expect(heartbeatRosterTarget("default-green", { gatewayId: "default-green" })).toEqual({
+      gatewayId: "default-green",
+    });
   });
 });

@@ -1740,15 +1740,7 @@ export function buildOperatorHeartbeatPollerDeps(
   return {
     listGatewayIds: async () => {
       const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
-      // Skip {gw}-rN revision-realization docs — the poller polls legacy
-      // gateway instances by bare id; a revision doc has no gatewayId and would
-      // poll `octogee-gateway-undefined` and write heartbeat to glmGateways/undefined.
-      return snap.docs
-        .map((doc) => doc.data())
-        .filter((data) => !isRevisionRealizationDoc(data))
-        .map((data) => data as GatewayDesiredState)
-        .filter(isRunningGateway)
-        .map((gateway) => gateway.gatewayId);
+      return heartbeatPollInstanceIds(snap.docs);
     },
     fetchHealth: async (gatewayId) => {
       const url = `http://octogee-gateway-${gatewayId}.${NAMESPACE}.svc.cluster.local:${FLEET_CONTROLLER_PORT}/health`;
@@ -1764,7 +1756,13 @@ export function buildOperatorHeartbeatPollerDeps(
         clearTimeout(timer);
       }
     },
-    readAssignedSlugs: (gatewayId) => readAssignedSlugsForGateway(db, gatewayId),
+    readAssignedSlugs: async (instanceId) => {
+      const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(instanceId).get();
+      const target = heartbeatRosterTarget(instanceId, snap.data());
+      return readAssignedSlugsForGateway(db, target.gatewayId, {
+        ...(target.revisionId ? { revisionId: target.revisionId } : {}),
+      });
+    },
     writeHeartbeat: async (gatewayId, record) => {
       // Live telemetry lands only at glmGateways/{id}.heartbeat (the collision
       // fix). The legacy flat gateways/{id} dual-write is retired — a per-poll
@@ -1772,18 +1770,62 @@ export function buildOperatorHeartbeatPollerDeps(
       // on, blocking it forever. Out-of-lane readers read the heartbeat sub-doc.
       const lastHeartbeatAt = FieldValue.serverTimestamp();
       const batch = db.batch();
+      const merge = revisionHeartbeatMerge(record, lastHeartbeatAt);
+      merge.heartbeat.internalUrl = gatewayServiceInternalUrl(gatewayId);
       batch.set(
         db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId),
-        revisionHeartbeatMerge(record, lastHeartbeatAt),
+        merge,
         { merge: true },
       );
       await batch.commit();
     },
     evictSlug: async (gatewayId: string, slug: string) => {
+      const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
+      if (isRevisionRealizationDoc(snap.data())) return;
       await callUnmountRpc(db, { privateKey, gatewayId, slug, log, tag: "evict" });
     },
     log,
   };
+}
+
+interface HeartbeatPollDocLike {
+  id: string;
+  data(): Record<string, unknown> | undefined;
+}
+
+function isLegacyGatewayDesiredState(
+  data: Record<string, unknown>,
+): data is Record<string, unknown> & GatewayDesiredState {
+  return (
+    typeof data.gatewayId === "string" &&
+    typeof data.imageRepository === "string" &&
+    typeof data.imageTag === "string" &&
+    typeof data.desiredStatus === "string" &&
+    typeof data.createdBy === "string"
+  );
+}
+
+export function heartbeatPollInstanceIds(docs: HeartbeatPollDocLike[]): string[] {
+  const ids: string[] = [];
+  for (const doc of docs) {
+    const data = doc.data() ?? {};
+    if (isRevisionRealizationDoc(data)) {
+      if (data.lifecycle !== "retired" && data.lifecycle !== "failed") ids.push(data.revisionId);
+      continue;
+    }
+    if (isLegacyGatewayDesiredState(data) && isRunningGateway(data)) ids.push(doc.id);
+  }
+  return ids;
+}
+
+export function heartbeatRosterTarget(
+  instanceId: string,
+  data: Record<string, unknown> | undefined,
+): { gatewayId: string; revisionId?: string } {
+  if (isRevisionRealizationDoc(data)) {
+    return { gatewayId: data.gateway, revisionId: data.revisionId };
+  }
+  return { gatewayId: instanceId };
 }
 
 type ControllerStopper = () => void;
@@ -2195,13 +2237,22 @@ export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<voi
     );
     return;
   }
-  const snap = await deps.db.collection(GLM_GATEWAYS_COLLECTION).get();
+  const [snap, durableSnap] = await Promise.all([
+    deps.db.collection(GLM_GATEWAYS_COLLECTION).get(),
+    deps.db.collection(GATEWAYS_COLLECTION).get(),
+  ]);
   const existingGatewayIds = new Set(snap.docs.map((d) => d.id));
+  const durableGatewayIds = new Set(
+    durableSnap.docs
+      .filter((d) => isGatewayDesiredDoc(d.data()))
+      .map((d) => d.id),
+  );
   const defaultGatewayId = await resolveDefaultGatewayId(deps);
 
   const decision = computeDefaultGatewayBootstrap({
     actualMap,
     existingGatewayIds,
+    durableGatewayIds,
     defaultGatewayId,
     imageRepository:
       process.env.BOOTSTRAP_IMAGE_REPOSITORY ??

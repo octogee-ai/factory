@@ -2749,6 +2749,22 @@ async function recordRolloutRelease(
   return { release: appended.release, operationId: appended.operationId! };
 }
 
+async function readRolloutCurrentConfig(
+  db: Firestore,
+  gatewayId: string,
+): Promise<{
+  gateway: GatewayDoc | null;
+  data: Record<string, unknown> | undefined;
+} | null> {
+  const gateway = await readGatewayDoc(db, gatewayId);
+  const legacySnap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
+  if (legacySnap.exists) return { gateway, data: legacySnap.data() };
+  if (!gateway) return null;
+  const release = await readRelease(db, gatewayId, gateway.latestRelease);
+  if (!release) throw new Error(`gateway ${gatewayId} has no current release payload`);
+  return { gateway, data: release.payload as unknown as Record<string, unknown> };
+}
+
 // Mirrors a PATCH desiredStatus lifecycle change onto the new gateways/{id} doc.
 // Only the Step 2 lifecycle states (running/paused) mirror; "draining" is a
 // legacy-only status, and a gateway not yet on the new schema is left alone.
@@ -4529,17 +4545,14 @@ router.post(
         }
         const { imageTag, imageRepository, profile, gatewayClass, imageProfile } = validation.ok;
 
-        const ref = db.collection(GLM_GATEWAYS_COLLECTION).doc(id);
-        const snap = await ref.get();
-        if (!snap.exists) {
+        const current = await readRolloutCurrentConfig(db, id);
+        if (!current) {
           res
             .status(404)
             .json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
           return;
         }
-        // A retired gateway must never be rolled — refuse before queuing an op or
-        // recording a release. Legacy gateways (no GatewayDoc) fall through.
-        const rolloutGateway = await readGatewayDoc(db, id);
+        const rolloutGateway = current.gateway;
         if (rolloutGateway?.desiredStatus === "retired") {
           res.status(409).json({
             error: "cannot roll out a retired gateway",
@@ -4547,7 +4560,7 @@ router.post(
           });
           return;
         }
-        const data = snap.data() as
+        const data = current.data as
           | {
               imageTag?: string;
               imageRepository?: string;

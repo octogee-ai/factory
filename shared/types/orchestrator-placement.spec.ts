@@ -45,4 +45,14 @@ describe("rewritePlacementGatewayPointers (blue/green pointer moves)", () => {
     expect(result.changedPointers).toEqual([]);
     expect(result.config).toEqual(config);
   });
+
+  it("does not manufacture an undefined overrides field", () => {
+    const result = rewritePlacementGatewayPointers(
+      { defaultGatewayId: "default-blue" },
+      "default-blue",
+      "default",
+    );
+    expect(result.config).toEqual({ defaultGatewayId: "default" });
+    expect(Object.hasOwn(result.config, "overrides")).toBe(false);
+  });
 });

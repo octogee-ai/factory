@@ -42,6 +42,12 @@ describe("parseHealthResponse", () => {
     ).toEqual({ status: "ready", customers: [] });
   });
 
+  it("carries the running build version used by revision readiness", () => {
+    expect(
+      parseHealthResponse({ status: "ready", customers: [], version: "93073bd" }),
+    ).toEqual({ status: "ready", customers: [], version: "93073bd" });
+  });
+
   it("carries migratingIn (string entries only); omits it when absent or non-array", () => {
     expect(
       parseHealthResponse({ status: "ready", customers: ["a"], migratingIn: ["a", 1, "b"] }),
@@ -112,6 +118,22 @@ describe("pollOperatorHeartbeatsOnce", () => {
       status: "ready",
       mountedCustomers: ["ceckert"],
       startedAt: 1700000,
+    });
+  });
+
+  it("persists the build version from /health so a revision can become ready", async () => {
+    const deps = makeDeps({
+      fetchHealth: vi.fn(async () => ({
+        status: "ready",
+        customers: ["ceckert"],
+        version: "93073bd",
+      })),
+    });
+    await pollOperatorHeartbeatsOnce(deps);
+    expect(deps.writeHeartbeat).toHaveBeenCalledWith("bender", {
+      status: "ready",
+      mountedCustomers: ["ceckert"],
+      version: "93073bd",
     });
   });
 

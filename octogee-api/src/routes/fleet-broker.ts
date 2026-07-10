@@ -43,7 +43,10 @@ import {
   readAssignmentDocsForGateway,
 } from "@octogee/core/assignment-doc";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { isGatewayDesiredDoc } from "@octogee/shared/types/gateway-releases";
+import {
+  isGatewayDesiredDoc,
+  revisionIdForRelease,
+} from "@octogee/shared/types/gateway-releases";
 import { createCachedOwnerModelBrokerGrantResolver } from "../lib/model-broker-limits.js";
 import { createFirestoreModelBrokerUsageStore } from "../lib/model-broker-usage.js";
 import {
@@ -825,6 +828,7 @@ async function isAssignedToGateway(
 // self-reported GATEWAY_REVISION_ID env — is a later item, since it is not a
 // cross-tenant boundary today.)
 type RevisionGatewayState = {
+  desiredRelease?: unknown;
   liveRevisionId?: unknown;
   roll?: { targetRevisionId?: unknown } | null;
 };
@@ -840,7 +844,11 @@ export function isRequestedRevisionAllowed(
   const live = typeof gatewayDoc.liveRevisionId === "string" ? gatewayDoc.liveRevisionId : null;
   const roll = gatewayDoc.roll as { targetRevisionId?: unknown } | null | undefined;
   const target = typeof roll?.targetRevisionId === "string" ? roll.targetRevisionId : null;
-  return revisionId === live || revisionId === target;
+  const firstDesired =
+    live === null && typeof gatewayDoc.desiredRelease === "number"
+      ? revisionIdForRelease(gatewayId, gatewayDoc.desiredRelease)
+      : null;
+  return revisionId === live || revisionId === target || revisionId === firstDesired;
 }
 
 // The full revision-request gate for the /assigned-users mount driver. An

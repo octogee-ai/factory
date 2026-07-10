@@ -7,6 +7,7 @@
 export interface OnboardingOrchestratorConfig {
   defaultGatewayId: string;
   overrides?: Record<string, string>;
+  onboardingCohorts?: Record<string, { gatewayId?: string; [key: string]: unknown }>;
 }
 
 export type OnboardingPlacementDecision =
@@ -35,7 +36,17 @@ export function rewritePlacementGatewayPointers(
   const changedPointers: string[] = [];
   const next: OnboardingOrchestratorConfig = {
     ...config,
-    overrides: config.overrides ? { ...config.overrides } : undefined,
+    ...(config.overrides ? { overrides: { ...config.overrides } } : {}),
+    ...(config.onboardingCohorts
+      ? {
+          onboardingCohorts: Object.fromEntries(
+            Object.entries(config.onboardingCohorts).map(([name, cohort]) => [
+              name,
+              { ...cohort },
+            ]),
+          ),
+        }
+      : {}),
   };
 
   if (next.defaultGatewayId === sourceGatewayId) {
@@ -48,6 +59,14 @@ export function rewritePlacementGatewayPointers(
       if (gatewayId !== sourceGatewayId) continue;
       next.overrides[uid] = targetGatewayId;
       changedPointers.push(`overrides.${uid}`);
+    }
+  }
+
+  if (next.onboardingCohorts) {
+    for (const [name, cohort] of Object.entries(next.onboardingCohorts)) {
+      if (cohort.gatewayId !== sourceGatewayId) continue;
+      cohort.gatewayId = targetGatewayId;
+      changedPointers.push(`onboardingCohorts.${name}.gatewayId`);
     }
   }
 

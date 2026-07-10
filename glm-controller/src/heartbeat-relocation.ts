@@ -38,6 +38,7 @@ export interface PollerHeartbeatRecord {
   status: string;
   mountedCustomers: string[];
   startedAt?: number;
+  version?: string;
 }
 
 // glmGateways/{id} merge payload for the poller's live telemetry.
@@ -51,6 +52,7 @@ export function revisionHeartbeatMerge(
     lastHeartbeatAt,
   };
   if (typeof record.startedAt === "number") heartbeat.startedAt = record.startedAt;
+  if (typeof record.version === "string") heartbeat.version = record.version;
   return { [HEARTBEAT_FIELD]: heartbeat };
 }
 

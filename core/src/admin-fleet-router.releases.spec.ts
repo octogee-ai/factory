@@ -606,6 +606,24 @@ describe("POST /gateways/:id/rollout — compatibility wrapper (mounted-customer
     ).toBe("deadbee");
   });
 
+  it("cuts a release when the durable gateway has no legacy glm desired doc", async () => {
+    const seed = seedNewSchemaGateway("epsilon", sharedPayload());
+    delete seed[`${GLM_GATEWAYS_COLLECTION}/epsilon`];
+    const { app, store } = mkApp(seed);
+
+    const res = await request(app)
+      .post("/gateways/epsilon/rollout")
+      .send({ imageTag: "deadbee" })
+      .expect(202);
+
+    expect(res.body).toMatchObject({ gatewayId: "epsilon", release: 2 });
+    expect(opsIn(store, "rollout")).toHaveLength(1);
+    expect(
+      (store.get(`gateways/epsilon/${GATEWAY_RELEASES_SUBCOLLECTION}/2`)?.payload as ReleasePayload)
+        .imageTag,
+    ).toBe("deadbee");
+  });
+
   it("PATCH imageTag on a new-schema gateway is refused toward release-cutting (P1-2)", async () => {
     const { app } = mkApp(
       seedNewSchemaGateway("epsilon", sharedPayload(), {
