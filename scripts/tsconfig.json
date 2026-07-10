@@ -2,15 +2,14 @@
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
-    "moduleResolution": "node",
+    "moduleResolution": "Bundler",
     "esModuleInterop": true,
     "strict": true,
     "outDir": "dist",
     "rootDir": "..",
     "skipLibCheck": true,
-    "baseUrl": "..",
     "paths": {
-      "@shared/*": ["shared/*"]
+      "@shared/*": ["../shared/*"]
     }
   },
   "include": ["*.ts", "entrypoints/**/*.ts", "lib/**/*.ts", "ops/**/*.ts", "../shared/types/identity.ts"],
