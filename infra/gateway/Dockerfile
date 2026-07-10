@@ -6,7 +6,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # ── Octogee gateway image ────────────────────────────────────────────────────
 # Base image (octogee-gateway-base) already contains:
 #   - OpenClaw npm install
-#   - All apt packages (curl, jq, python3, chromium, git, sqlite3, etc.)
+#   - All apt packages (curl, jq, python3, git, sqlite3, etc.)
 #   - npm cache with correct ownership
 #
 # This image only adds NuCrew-specific code that changes per commit.
