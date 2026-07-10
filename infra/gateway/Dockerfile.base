@@ -102,7 +102,7 @@ ENV HOME=/home/node
 # never connects (restore then waits 120s and fails). So we install + stage it
 # alongside codex below — see the combined block.
 
-# ── OpenClaw externalized plugins: codex + mattermost ────────────────────────
+# ── OpenClaw externalized plugins: codex + mattermost + parallel ─────────────
 # codex registers the BYO-subscription (ChatGPT OAuth) agent harness for coaches
 # running openai/gpt-5.5; mattermost is the channel plugin upstream externalized
 # in 6.11 (see the block above). `openclaw plugins install` writes under
@@ -131,6 +131,9 @@ RUN set -e; \
     openclaw plugins install @openclaw/codex > /tmp/oc-plugin.log 2>&1 \
       || { echo "FATAL: @openclaw/codex install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
     tail -n 3 /tmp/oc-plugin.log; \
+    openclaw plugins install "@openclaw/parallel-plugin@${OPENCLAW_VERSION}" > /tmp/oc-plugin.log 2>&1 \
+      || { echo "FATAL: @openclaw/parallel-plugin install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+    tail -n 3 /tmp/oc-plugin.log; \
     MM_STAGED=0; \
     if [ -d "$(npm root -g)/openclaw/dist/extensions/mattermost" ]; then \
       echo "mattermost: bundled dist extension present (<=6.10) — no external install"; \
@@ -146,6 +149,8 @@ RUN set -e; \
     chown -R node:node /opt/openclaw-codex-deps; \
     find /opt/openclaw-codex-deps/npm -type d -path '*/node_modules/@openclaw/codex' 2>/dev/null | grep -q . \
       || { echo "FATAL: @openclaw/codex missing from staged /opt tree"; exit 1; }; \
+    find /opt/openclaw-codex-deps/npm -type d -path '*/node_modules/@openclaw/parallel-plugin' 2>/dev/null | grep -q . \
+      || { echo "FATAL: @openclaw/parallel-plugin missing from staged /opt tree"; exit 1; }; \
     if [ "$MM_STAGED" = "1" ]; then \
       find /opt/openclaw-codex-deps/npm -type d -path '*/node_modules/@openclaw/mattermost' 2>/dev/null | grep -q . \
         || { echo "FATAL: @openclaw/mattermost missing from staged /opt tree"; exit 1; }; \

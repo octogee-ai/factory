@@ -106,6 +106,8 @@ function app(opts: {
   a.post("/internal/connectors/access-token", enforcement, handler);
   a.post("/internal/byok/byosub-flow", enforcement, handler);
   a.post("/internal/byok/platform-embedding-key", enforcement, handler);
+  a.post("/internal/fleet/agent/web-search", enforcement, handler);
+  a.post("/internal/fleet/agent/web-extract", enforcement, handler);
   a.post("/internal/billing/check-trial-expiry", enforcement, handler);
   a.post("/internal/billing/run-auto-top-ups", enforcement, handler);
   a.get("/internal/gitea/user-pubkey", enforcement, handler);
@@ -172,6 +174,29 @@ describe("tenant enforcement middleware", () => {
 
     expect(owned.status).toBe(200);
     expect(foreign.status).toBe(403);
+  });
+
+  it("admits the exact web-extension body only when it claims the bound gateway", async () => {
+    const extensionBody = {
+      gatewayId: "bender",
+      agentId: "octogee-alice-coach",
+      requestId: "tool-1",
+      provider: "brave",
+      query: "octopus research",
+    };
+    const admitted = await request(app({ boundTenant: BENDER }))
+      .post("/internal/fleet/agent/web-search")
+      .send(extensionBody);
+    const missingGateway = await request(app({ boundTenant: BENDER }))
+      .post("/internal/fleet/agent/web-search")
+      .send({ ...extensionBody, gatewayId: undefined });
+    const foreignGateway = await request(app({ boundTenant: BENDER }))
+      .post("/internal/fleet/agent/web-extract")
+      .send({ ...extensionBody, gatewayId: "other", urls: ["https://example.com"] });
+
+    expect(admitted.status).toBe(200);
+    expect(missingGateway.status).toBe(403);
+    expect(foreignGateway.status).toBe(403);
   });
 
   it("allows a gateway-bound caller to target only users assigned to that gateway", async () => {

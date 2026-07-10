@@ -371,6 +371,24 @@ else
   ksecret octogee-brave --from-literal=key=""
 fi
 
+# ── 7b. Tavily API key ────────────────────────────────────────────────────
+info "octogee-tavily"
+set +u
+TAVILY_API_KEY="${TAVILY_API_KEY:-}"
+TAVILY_COST_PER_CREDIT_USD="${TAVILY_COST_PER_CREDIT_USD:-0.008}"
+set -u
+[[ -z "$TAVILY_API_KEY" ]] && TAVILY_API_KEY=$(sm_get TAVILY_API_KEY octogee 2>/dev/null || echo "")
+if [[ -n "$TAVILY_API_KEY" ]]; then
+  ksecret octogee-tavily \
+    --from-literal=api_key="$TAVILY_API_KEY" \
+    --from-literal=cost_per_credit_usd="$TAVILY_COST_PER_CREDIT_USD"
+else
+  warn "TAVILY_API_KEY not found — creating empty secret (optional)"
+  ksecret octogee-tavily \
+    --from-literal=api_key="" \
+    --from-literal=cost_per_credit_usd="$TAVILY_COST_PER_CREDIT_USD"
+fi
+
 # ── 8. Connector OAuth client secrets (octogee-api /api/connect/<provider>) ─
 # octogee-api reads client_id + client_secret from these K8s secrets to run the
 # Connections OAuth flow (helm wires them with optional:true). Sourced from the

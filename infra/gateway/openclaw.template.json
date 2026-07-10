@@ -114,10 +114,18 @@
       "preview_list",
       "octogee_publish",
       "workspace_commit",
+      "brave_search",
+      "tavily_search",
+      "tavily_extract",
       "octogee_chat_search",
       "octogee_chat_history",
       "octogee_chat_set_identity"
     ],
+    "web": {
+      "search": {
+        "provider": "parallel-free"
+      }
+    },
     "exec": {
       "mode": "deny"
     },
@@ -201,8 +209,10 @@
       "octogee-chat-tools",
       "octogee-preview-tools",
       "octogee-status-tools",
+      "octogee-web-tools",
       "octogee-workspace-tools",
       "octogee-publish-tools",
+      "parallel",
       "openai"
     ],
     "entries": {
@@ -236,6 +246,14 @@
           "gatewayClass": "${GATEWAY_CLASS}"
         }
       },
+      "octogee-web-tools": {
+        "enabled": true,
+        "config": {
+          "brokerUrl": "${FLEET_BROKER_URL}",
+          "gatewayId": "${GATEWAY_ID}",
+          "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}"
+        }
+      },
       "octogee-workspace-tools": {
         "enabled": true,
         "config": {}
@@ -243,6 +261,9 @@
       "octogee-publish-tools": {
         "enabled": true,
         "config": {}
+      },
+      "parallel": {
+        "enabled": true
       }
     }
   }

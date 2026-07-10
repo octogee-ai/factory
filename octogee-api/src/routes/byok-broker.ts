@@ -246,8 +246,8 @@ async function agentUsageStatusPayload(
     (configSnap.data() ?? {}) as Record<string, unknown>,
     gatewayClass,
   );
-  const windowCostUsd = financeNumber(windowSnap.data()?.costUsd);
-  const weekCostUsd = financeNumber(weekSnap.data()?.costUsd);
+  const windowCostUsd = financeNumber(windowSnap.data()?.chargeUsd ?? windowSnap.data()?.costUsd);
+  const weekCostUsd = financeNumber(weekSnap.data()?.chargeUsd ?? weekSnap.data()?.costUsd);
   const onOwnerCredential = credential.path === "byosub" || credential.path === "byok_api_key";
   const throttle = spendDegradeState({
     modelAccess: plan.modelAccess,

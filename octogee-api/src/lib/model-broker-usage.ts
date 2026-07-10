@@ -23,7 +23,12 @@ import {
   windowOwnerKey,
 } from "@octogee/shared/types/model-broker-usage";
 
-export type ModelBrokerUsageProvider = "anthropic" | "openrouter" | "openai";
+export type ModelBrokerUsageProvider =
+  | "anthropic"
+  | "openrouter"
+  | "openai"
+  | "brave"
+  | "tavily";
 export type AnthropicCacheWriteTtl = "5m" | "1h";
 
 export interface AnthropicTokenUsage {
@@ -33,7 +38,7 @@ export interface AnthropicTokenUsage {
   cacheReadInputTokens: number;
 }
 
-export type ModelBrokerCostSource = "estimated" | "openrouter_reported";
+export type ModelBrokerCostSource = "estimated" | "openrouter_reported" | "provider_reported";
 
 export interface ModelBrokerUsageCost {
   input: number;
@@ -75,6 +80,11 @@ export interface ModelBrokerUsageRecordInput {
   // The upstream's own USD accounting (OpenRouter `usage.cost`). Authoritative
   // over the static pricing table when present — the table is fallback only.
   reportedCostUsd?: number | null;
+  chargeUsd?: number;
+  usageKind?: "model" | "web_search" | "web_extract";
+  agentId?: string | null;
+  toolName?: string | null;
+  providerMetadata?: Record<string, unknown>;
 }
 
 export interface ModelBrokerUsageStore {
@@ -91,6 +101,7 @@ export interface ModelBrokerWeekSnapshot {
   requestCount: number;
   totalTokens: number;
   costUsd: number;
+  chargeUsd: number;
 }
 
 export interface ModelBrokerUsageWindowReadInput {
@@ -105,6 +116,7 @@ export interface ModelBrokerUsageWindowSnapshot {
   requestCount: number;
   totalTokens: number;
   costUsd: number;
+  chargeUsd: number;
 }
 
 export interface ModelBrokerRateWindowReserveInput {
@@ -302,6 +314,18 @@ export function estimateModelBrokerCost(
   cacheWriteTtl: AnthropicCacheWriteTtl = "5m",
 ): ModelBrokerUsageCost {
   if (provider === "anthropic") return estimateAnthropicCost(model, usage, cacheWriteTtl);
+  if (provider === "brave" || provider === "tavily") {
+    return {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+      pricingModel: model,
+      cacheWriteTtl,
+      source: "estimated",
+    };
+  }
   const prices = provider === "openai" ? openAiModelPricing(model) : openRouterModelPricing(model);
   const input = usd(usage.inputTokens + usage.cacheCreationInputTokens, prices.inputPerMTok);
   const output = usd(usage.outputTokens, prices.outputPerMTok);
@@ -340,8 +364,21 @@ export function resolveRecordedCost(
     total: reported,
     pricingModel: estimated.pricingModel,
     cacheWriteTtl,
-    source: "openrouter_reported",
+    source:
+      input.provider === "brave" || input.provider === "tavily"
+        ? "provider_reported"
+        : "openrouter_reported",
   };
+}
+
+function resolvedChargeUsd(
+  input: ModelBrokerUsageRecordInput,
+  cost: ModelBrokerUsageCost,
+): number {
+  const charge = input.chargeUsd;
+  return typeof charge === "number" && Number.isFinite(charge) && charge >= 0
+    ? charge
+    : cost.total;
 }
 
 export function isUnknownOpenRouterPricingModel(pricingModel: string): boolean {
@@ -368,10 +405,17 @@ function numberField(data: Record<string, unknown>, key: string): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+function chargeField(data: Record<string, unknown>): number {
+  return typeof data.chargeUsd === "number" && Number.isFinite(data.chargeUsd)
+    ? data.chargeUsd
+    : numberField(data, "costUsd");
+}
+
 function addUsageFields(
   existing: Record<string, unknown>,
   usage: AnthropicTokenUsage,
   cost: ModelBrokerUsageCost,
+  chargeUsd: number,
 ): Record<string, number> {
   const existingCost = asRecord(existing.costBreakdown);
   return {
@@ -384,6 +428,7 @@ function addUsageFields(
     cacheReadInputTokens:
       numberField(existing, "cacheReadInputTokens") + usage.cacheReadInputTokens,
     costUsd: numberField(existing, "costUsd") + cost.total,
+    chargeUsd: chargeField(existing) + chargeUsd,
     costInput: numberField(existingCost, "input") + cost.input,
     costOutput: numberField(existingCost, "output") + cost.output,
     costCacheRead: numberField(existingCost, "cacheRead") + cost.cacheRead,
@@ -395,8 +440,9 @@ function usageDocumentTotals(
   existing: Record<string, unknown>,
   usage: AnthropicTokenUsage,
   cost: ModelBrokerUsageCost,
+  chargeUsd: number,
 ): Record<string, unknown> {
-  const totals = addUsageFields(existing, usage, cost);
+  const totals = addUsageFields(existing, usage, cost, chargeUsd);
   return {
     requestCount: totals.requestCount,
     totalTokens: totals.totalTokens,
@@ -405,6 +451,7 @@ function usageDocumentTotals(
     cacheCreationInputTokens: totals.cacheCreationInputTokens,
     cacheReadInputTokens: totals.cacheReadInputTokens,
     costUsd: totals.costUsd,
+    chargeUsd: totals.chargeUsd,
     costBreakdown: {
       input: totals.costInput,
       output: totals.costOutput,
@@ -414,21 +461,23 @@ function usageDocumentTotals(
   };
 }
 
-function modelTotals(
-  existing: Record<string, unknown>,
-  modelKey: string,
-  model: string,
-  usage: AnthropicTokenUsage,
-  cost: ModelBrokerUsageCost,
-): Record<string, unknown> {
-  const models = asRecord(existing.models);
-  const current = asRecord(models[modelKey]);
+function modelTotals(input: {
+  existing: Record<string, unknown>;
+  modelKey: string;
+  model: string;
+  usage: AnthropicTokenUsage;
+  cost: ModelBrokerUsageCost;
+  chargeUsd: number;
+}): Record<string, unknown> {
+  const models = asRecord(input.existing.models);
+  const current = asRecord(models[input.modelKey]);
   return {
     ...models,
-    [modelKey]: {
-      model,
-      totalTokens: numberField(current, "totalTokens") + totalTokens(usage),
-      costUsd: numberField(current, "costUsd") + cost.total,
+    [input.modelKey]: {
+      model: input.model,
+      totalTokens: numberField(current, "totalTokens") + totalTokens(input.usage),
+      costUsd: numberField(current, "costUsd") + input.cost.total,
+      chargeUsd: chargeField(current) + input.chargeUsd,
       requestCount: numberField(current, "requestCount") + 1,
     },
   };
@@ -462,6 +511,7 @@ function eventDocument(
     now: number;
     cacheWriteTtl: AnthropicCacheWriteTtl;
     cost: ModelBrokerUsageCost;
+    chargeUsd: number;
     windowStartMs: number;
   },
 ): Record<string, unknown> {
@@ -472,6 +522,10 @@ function eventDocument(
     provider: input.provider,
     gatewayId: input.gatewayId,
     ownerUid: input.ownerUid,
+    usageKind: input.usageKind ?? "model",
+    agentId: input.agentId ?? null,
+    toolName: input.toolName ?? null,
+    providerMetadata: input.providerMetadata ?? {},
     ...traceFields(input),
     model: input.model,
     modelKey: modelRollupKey(input.model),
@@ -484,6 +538,7 @@ function eventDocument(
     usage: input.usage,
     totalTokens: totalTokens(input.usage),
     costUsd: input.cost.total,
+    chargeUsd: input.chargeUsd,
     costBreakdown: {
       input: input.cost.input,
       output: input.cost.output,
@@ -500,7 +555,7 @@ function eventDocument(
 
 export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
   readonly events: Array<Record<string, unknown>> = [];
-  readonly rollups = new Map<string, Record<string, unknown> & { totalTokens: number; costUsd: number; requestCount: number }>();
+  readonly rollups = new Map<string, Record<string, unknown> & { totalTokens: number; costUsd: number; chargeUsd: number; requestCount: number }>();
   readonly windows = new Map<string, ModelBrokerUsageWindowSnapshot & Record<string, unknown>>();
   readonly weekWindows = new Map<string, ModelBrokerWeekSnapshot & Record<string, unknown>>();
   readonly rateWindows = new Map<string, ModelBrokerRateWindowSnapshot>();
@@ -511,6 +566,7 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
     const now = input.now ?? Date.now();
     const cacheWriteTtl = input.cacheWriteTtl ?? "5m";
     const cost = resolveRecordedCost(input, cacheWriteTtl);
+    const chargeUsd = resolvedChargeUsd(input, cost);
     const eventId = input.eventId ?? crypto.randomUUID();
     if (this.eventIds.has(eventId)) return;
     this.eventIds.add(eventId);
@@ -523,17 +579,20 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
         now,
         cacheWriteTtl,
         cost,
+        chargeUsd,
         windowStartMs,
       }),
     );
     const existing = this.rollups.get(ownerKey) ?? {
       totalTokens: 0,
       costUsd: 0,
+      chargeUsd: 0,
       requestCount: 0,
     };
     this.rollups.set(ownerKey, {
       totalTokens: existing.totalTokens + totalTokens(input.usage),
       costUsd: existing.costUsd + cost.total,
+      chargeUsd: existing.chargeUsd + chargeUsd,
       requestCount: existing.requestCount + 1,
       ...latestTraceFields(input),
     });
@@ -544,6 +603,7 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
         windowStartMs,
         totalTokens: 0,
         costUsd: 0,
+        chargeUsd: 0,
         requestCount: 0,
       };
       this.windows.set(windowKey, {
@@ -551,6 +611,7 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
         windowStartMs,
         totalTokens: existingWindow.totalTokens + totalTokens(input.usage),
         costUsd: existingWindow.costUsd + cost.total,
+        chargeUsd: existingWindow.chargeUsd + chargeUsd,
         requestCount: existingWindow.requestCount + 1,
         ...latestTraceFields(input),
       });
@@ -561,6 +622,7 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
         weekStartMs,
         totalTokens: 0,
         costUsd: 0,
+        chargeUsd: 0,
         requestCount: 0,
       };
       this.weekWindows.set(weekKey, {
@@ -568,6 +630,7 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
         weekStartMs,
         totalTokens: existingWeek.totalTokens + totalTokens(input.usage),
         costUsd: existingWeek.costUsd + cost.total,
+        chargeUsd: existingWeek.chargeUsd + chargeUsd,
         requestCount: existingWeek.requestCount + 1,
         ...latestTraceFields(input),
       });
@@ -575,7 +638,7 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
     if (input.debitsCreditBalance === true && input.ownerUid) {
       this.creditBalances.set(
         input.ownerUid,
-        (this.creditBalances.get(input.ownerUid) ?? 0) - cost.total,
+        (this.creditBalances.get(input.ownerUid) ?? 0) - chargeUsd,
       );
     }
   }
@@ -595,6 +658,7 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
         requestCount: 0,
         totalTokens: 0,
         costUsd: 0,
+        chargeUsd: 0,
       }
     );
   }
@@ -610,6 +674,7 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
         requestCount: 0,
         totalTokens: 0,
         costUsd: 0,
+        chargeUsd: 0,
       }
     );
   }
@@ -633,6 +698,7 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
 interface UsageWriteArgs {
   input: ModelBrokerUsageRecordInput;
   cost: ModelBrokerUsageCost;
+  chargeUsd: number;
   now: number;
   eventId: string;
   cacheWriteTtl: AnthropicCacheWriteTtl;
@@ -660,7 +726,7 @@ interface UsageWriteArgs {
 // the reads-before-writes ordering the Firestore SDK requires is obvious, and so
 // neither half individually trips the size/complexity ratchet.
 function applyUsageWrites(t: Transaction, a: UsageWriteArgs): void {
-  const { input, cost, now, ownerKey, refs, snaps } = a;
+  const { input, cost, chargeUsd, now, ownerKey, refs, snaps } = a;
   t.set(
     refs.eventRef,
     eventDocument({
@@ -669,6 +735,7 @@ function applyUsageWrites(t: Transaction, a: UsageWriteArgs): void {
       now,
       cacheWriteTtl: a.cacheWriteTtl,
       cost,
+      chargeUsd,
       windowStartMs: a.windowStartMs,
     }),
   );
@@ -681,8 +748,15 @@ function applyUsageWrites(t: Transaction, a: UsageWriteArgs): void {
       provider: input.provider,
       updatedAt: now,
       ...latestTraceFields(input),
-      ...usageDocumentTotals(snaps.rollup, input.usage, cost),
-      models: modelTotals(snaps.rollup, a.modelKey, input.model, input.usage, cost),
+      ...usageDocumentTotals(snaps.rollup, input.usage, cost, chargeUsd),
+      models: modelTotals({
+        existing: snaps.rollup,
+        modelKey: a.modelKey,
+        model: input.model,
+        usage: input.usage,
+        cost,
+        chargeUsd,
+      }),
     },
     { merge: true },
   );
@@ -699,7 +773,7 @@ function applyUsageWrites(t: Transaction, a: UsageWriteArgs): void {
         updatedAt: now,
         expiresAt: expiresAt(now),
         ...latestTraceFields(input),
-        ...usageDocumentTotals(snaps.window, input.usage, cost),
+        ...usageDocumentTotals(snaps.window, input.usage, cost, chargeUsd),
       },
       { merge: true },
     );
@@ -715,7 +789,7 @@ function applyUsageWrites(t: Transaction, a: UsageWriteArgs): void {
         updatedAt: now,
         expiresAt: expiresAt(now),
         ...latestTraceFields(input),
-        ...usageDocumentTotals(snaps.week, input.usage, cost),
+        ...usageDocumentTotals(snaps.week, input.usage, cost, chargeUsd),
       },
       { merge: true },
     );
@@ -725,7 +799,7 @@ function applyUsageWrites(t: Transaction, a: UsageWriteArgs): void {
       refs.creditRef,
       {
         ownerUid: input.ownerUid,
-        balanceUsd: numberField(snaps.credit, "balanceUsd") - cost.total,
+        balanceUsd: numberField(snaps.credit, "balanceUsd") - chargeUsd,
         updatedAt: now,
       },
       { merge: true },
@@ -742,6 +816,7 @@ export function createFirestoreModelBrokerUsageStore(
       const eventId = input.eventId ?? crypto.randomUUID();
       const cacheWriteTtl = input.cacheWriteTtl ?? "5m";
       const cost = resolveRecordedCost(input, cacheWriteTtl);
+      const chargeUsd = resolvedChargeUsd(input, cost);
       const windowStartMs = usageWindowStartMs(now);
       const weekStartMs = weekWindowStartMs(now);
       const ownerKey = windowOwnerKey(input);
@@ -772,6 +847,7 @@ export function createFirestoreModelBrokerUsageStore(
         applyUsageWrites(t, {
           input,
           cost,
+          chargeUsd,
           now,
           eventId,
           cacheWriteTtl,
@@ -806,6 +882,7 @@ export function createFirestoreModelBrokerUsageStore(
         requestCount: numberField(data, "requestCount"),
         totalTokens: numberField(data, "totalTokens"),
         costUsd: numberField(data, "costUsd"),
+        chargeUsd: chargeField(data),
       };
     },
 
@@ -824,6 +901,7 @@ export function createFirestoreModelBrokerUsageStore(
         requestCount: numberField(data, "requestCount"),
         totalTokens: numberField(data, "totalTokens"),
         costUsd: numberField(data, "costUsd"),
+        chargeUsd: chargeField(data),
       };
     },
 

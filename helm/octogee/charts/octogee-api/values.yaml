@@ -54,6 +54,8 @@ env:
   # Model broker issuer defaults. Spend caps come from the owner tier unless
   # glmGateways/{gatewayId}.modelBrokerLimits.spendWindowUsd overrides them.
   MODEL_BROKER_REQUESTS_PER_MINUTE: "60"
+  BRAVE_SEARCH_COST_PER_REQUEST_USD: "0.005"
+  PLATFORM_WEB_MARKUP_MULTIPLIER: "1.25"
 
 # Mirrors gateway-edge's secret list — same routes, same secret needs.
 # When gateway-edge is later renamed gateway-edge and slimmed to ~3
@@ -145,6 +147,18 @@ secrets:
     secretName: gateway-model-key-issuer
     secretKey: bearer_token
     optional: false
+  - envName: BRAVE_API_KEY
+    secretName: octogee-brave
+    secretKey: key
+    optional: true
+  - envName: TAVILY_API_KEY
+    secretName: octogee-tavily
+    secretKey: api_key
+    optional: true
+  - envName: TAVILY_COST_PER_CREDIT_USD
+    secretName: octogee-tavily
+    secretKey: cost_per_credit_usd
+    optional: true
 
 resources:
   requests:

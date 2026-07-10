@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { Router, type Request, type Response } from "express";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 
@@ -42,6 +43,16 @@ import {
   readAssignmentDocsForGateway,
 } from "@octogee/core/assignment-doc";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
+import { createCachedOwnerModelBrokerGrantResolver } from "../lib/model-broker-limits.js";
+import { createFirestoreModelBrokerUsageStore } from "../lib/model-broker-usage.js";
+import {
+  WebResearchError,
+  createWebResearchService,
+  type WebResearchExtractInput,
+  type WebResearchSearchInput,
+} from "../lib/web-research-service.js";
+import { createBraveSearchClient, createTavilyClient } from "../lib/web-provider-clients.js";
+import { isPublicIp } from "../lib/link-unfurl.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -143,6 +154,7 @@ interface FleetBrokerRouteDeps {
   executeChatSearch?: ExecuteChatSearch;
   executeChatHistory?: ExecuteChatHistory;
   resolveChatIdentity?: ResolveChatIdentity;
+  webResearch?: Pick<ReturnType<typeof createWebResearchService>, "search" | "extract">;
 }
 
 const BLOB_SIGNED_URL_TTL_MS = 10 * 60 * 1000;
@@ -217,6 +229,48 @@ const defaultResolveChatIdentity: ResolveChatIdentity = async (db, input) => {
   );
   return resolveChatIdentity(db, input);
 };
+
+function positiveConfigNumber(raw: string | undefined, fallback: number, name: string): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} must be a positive number`);
+  }
+  return value;
+}
+
+function createDefaultWebResearch(db: Firestore) {
+  const braveKey = process.env.BRAVE_API_KEY?.trim();
+  const tavilyKey = process.env.TAVILY_API_KEY?.trim();
+  const brave = braveKey ? createBraveSearchClient({ apiKey: braveKey }) : null;
+  const tavily = tavilyKey ? createTavilyClient({ apiKey: tavilyKey }) : null;
+  return createWebResearchService({
+    usageStore: createFirestoreModelBrokerUsageStore(db),
+    resolveGrant: createCachedOwnerModelBrokerGrantResolver({
+      db,
+      log: (message, fields) => logger.info(message, fields),
+    }),
+    braveSearch: brave?.search,
+    tavilySearch: tavily?.search,
+    tavilyExtract: tavily?.extract,
+    braveCostPerRequestUsd: positiveConfigNumber(
+      process.env.BRAVE_SEARCH_COST_PER_REQUEST_USD,
+      0.005,
+      "BRAVE_SEARCH_COST_PER_REQUEST_USD",
+    ),
+    tavilyCostPerCreditUsd: positiveConfigNumber(
+      process.env.TAVILY_COST_PER_CREDIT_USD,
+      0.008,
+      "TAVILY_COST_PER_CREDIT_USD",
+    ),
+    markupMultiplier: positiveConfigNumber(
+      process.env.PLATFORM_WEB_MARKUP_MULTIPLIER,
+      1.25,
+      "PLATFORM_WEB_MARKUP_MULTIPLIER",
+    ),
+    onError: (error) => logger.error("web research usage recording failed", { error }),
+  });
+}
 
 const defaultRecordUsageEvent: RecordUsageEvent = async (input) => {
   const { extractRole, reportUsageForUid } = await import(
@@ -976,6 +1030,7 @@ type ResolvedFleetBrokerRouteDeps = {
   executeChatSearch: ExecuteChatSearch;
   executeChatHistory: ExecuteChatHistory;
   resolveChatIdentity: ResolveChatIdentity;
+  webResearch: Pick<ReturnType<typeof createWebResearchService>, "search" | "extract">;
 };
 
 function resolveFleetBrokerRouteDeps(
@@ -999,6 +1054,7 @@ function resolveFleetBrokerRouteDeps(
     executeChatSearch: opts.executeChatSearch ?? defaultExecuteChatSearch,
     executeChatHistory: opts.executeChatHistory ?? defaultExecuteChatHistory,
     resolveChatIdentity: opts.resolveChatIdentity ?? defaultResolveChatIdentity,
+    webResearch: opts.webResearch ?? createDefaultWebResearch(opts.db),
   };
 }
 
@@ -1504,6 +1560,180 @@ function optionalInt(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : undefined;
 }
 
+function boundedString(value: unknown, min: number, max: number): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length >= min && trimmed.length <= max ? trimmed : null;
+}
+
+function boundedInteger(value: unknown, min: number, max: number): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max
+    ? value
+    : undefined;
+}
+
+function enumValue<T extends string>(value: unknown, values: readonly T[]): T | undefined {
+  return typeof value === "string" && values.includes(value as T) ? (value as T) : undefined;
+}
+
+function stringList(value: unknown, maxItems: number, maxLength: number): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > maxItems) return undefined;
+  const items = value.map((item) => boundedString(item, 1, maxLength));
+  return items.every((item): item is string => item !== null) ? items : undefined;
+}
+
+function publicHttpUrl(value: unknown): string | null {
+  const raw = boundedString(value, 1, 4_096);
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password) {
+      return null;
+    }
+    const host = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    const internalName = host === "localhost" || host.endsWith(".localhost") || host.endsWith(".internal");
+    const nonPublicIp = isIP(host) !== 0 && !isPublicIp(host);
+    return internalName || nonPublicIp ? null : parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function httpUrls(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 20) return null;
+  const urls = value.map(publicHttpUrl);
+  return urls.every((url): url is string => url !== null) ? urls : null;
+}
+
+type WebAgentAttribution = {
+  gatewayId: string;
+  ownerUid: string;
+  agentId: string;
+  requestId: string;
+};
+
+type WebSearchInputResult =
+  | { input: WebResearchSearchInput }
+  | { error: "invalid_query" | "invalid_provider" | "invalid_search_options" };
+
+function optionalField<K extends string, V>(
+  key: K,
+  value: V | null | undefined,
+): Partial<Record<K, V>> {
+  return value === null || value === undefined ? {} : { [key]: value } as Record<K, V>;
+}
+
+function braveWebSearchInput(
+  body: Record<string, unknown>,
+  assigned: WebAgentAttribution,
+  query: string,
+): WebSearchInputResult {
+  const count = boundedInteger(body.count, 1, 10);
+  const country = boundedString(body.country, 2, 2);
+  const searchLang = boundedString(body.searchLang, 2, 10);
+  const uiLang = boundedString(body.uiLang, 2, 10);
+  const freshness = enumValue(body.freshness, ["day", "week", "month", "year"] as const);
+  const invalid =
+    (body.count !== undefined && count === undefined) ||
+    (body.country !== undefined && country === null) ||
+    (body.searchLang !== undefined && searchLang === null) ||
+    (body.uiLang !== undefined && uiLang === null) ||
+    (body.freshness !== undefined && freshness === undefined);
+  if (invalid) return { error: "invalid_search_options" };
+  return {
+    input: {
+      ...assigned,
+      provider: "brave",
+      query,
+      ...optionalField("count", count),
+      ...optionalField("country", country?.toUpperCase()),
+      ...optionalField("searchLang", searchLang),
+      ...optionalField("uiLang", uiLang),
+      ...optionalField("freshness", freshness),
+    },
+  };
+}
+
+function tavilyWebSearchInput(
+  body: Record<string, unknown>,
+  assigned: WebAgentAttribution,
+  query: string,
+): WebSearchInputResult {
+  const maxResults = boundedInteger(body.maxResults, 1, 20);
+  const includeDomains = stringList(body.includeDomains, 20, 253);
+  const excludeDomains = stringList(body.excludeDomains, 20, 253);
+  const invalid =
+    (body.maxResults !== undefined && maxResults === undefined) ||
+    (body.includeDomains !== undefined && includeDomains === undefined) ||
+    (body.excludeDomains !== undefined && excludeDomains === undefined);
+  if (invalid) return { error: "invalid_search_options" };
+  const searchDepth = enumValue(body.searchDepth, ["basic", "advanced"] as const);
+  const topic = enumValue(body.topic, ["general", "news", "finance"] as const);
+  const timeRange = enumValue(body.timeRange, ["day", "week", "month", "year"] as const);
+  return {
+    input: {
+      ...assigned,
+      provider: "tavily",
+      query,
+      ...optionalField("searchDepth", searchDepth),
+      ...optionalField("topic", topic),
+      ...optionalField("maxResults", maxResults),
+      ...optionalField("timeRange", timeRange),
+      ...optionalField("includeDomains", includeDomains),
+      ...optionalField("excludeDomains", excludeDomains),
+    },
+  };
+}
+
+function webSearchInput(
+  body: Record<string, unknown>,
+  assigned: WebAgentAttribution,
+): WebSearchInputResult {
+  const query = boundedString(body.query, 2, 500);
+  if (!query) return { error: "invalid_query" };
+  const provider = enumValue(body.provider, ["brave", "tavily"] as const);
+  if (!provider) return { error: "invalid_provider" };
+  return provider === "brave"
+    ? braveWebSearchInput(body, assigned, query)
+    : tavilyWebSearchInput(body, assigned, query);
+}
+
+async function assignedWebAgent(
+  db: Firestore,
+  req: Request,
+  res: Response,
+): Promise<WebAgentAttribution | null> {
+  const bound = boundGateway(req, res);
+  if (!bound) return null;
+  const body = objectBody(req);
+  const agentId = validAgentId(body.agentId);
+  const requestId = boundedString(body.requestId, 1, 200);
+  if (!agentId) {
+    res.status(400).json({ error: "invalid_agent_id" });
+    return null;
+  }
+  if (!requestId) {
+    res.status(400).json({ error: "invalid_request_id" });
+    return null;
+  }
+  const assigned = await findAssignedUserByAgentId(db, bound.gatewayId, agentId);
+  if (!assigned) {
+    res.status(403).json(FORBIDDEN);
+    return null;
+  }
+  return { gatewayId: bound.gatewayId, ownerUid: assigned.uid, agentId, requestId };
+}
+
+function respondWebResearchError(res: Response, error: unknown): void {
+  if (error instanceof WebResearchError) {
+    res.status(error.status).json({ error: error.message, code: error.code });
+    return;
+  }
+  logger.error("web research broker failed", { error });
+  res.status(502).json({ error: "Web research provider failed", code: "provider_error" });
+}
+
 function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
   const { db, renderAvatar, applyCoachIdentity } = deps;
 
@@ -1545,6 +1775,53 @@ function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps):
       res.json(payload);
     } catch (err) {
       await respondChatBrokerError(res, err);
+    }
+  });
+
+  router.post("/agent/web-search", async (req, res) => {
+    const assigned = await assignedWebAgent(db, req, res);
+    if (!assigned) return;
+    const parsed = webSearchInput(objectBody(req), assigned);
+    if ("error" in parsed) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    try {
+      res.json(await deps.webResearch.search(parsed.input));
+    } catch (error) {
+      respondWebResearchError(res, error);
+    }
+  });
+
+  router.post("/agent/web-extract", async (req, res) => {
+    const assigned = await assignedWebAgent(db, req, res);
+    if (!assigned) return;
+    const body = objectBody(req);
+    const urls = httpUrls(body.urls);
+    if (!urls) {
+      res.status(400).json({ error: "invalid_urls" });
+      return;
+    }
+    const query = body.query === undefined ? undefined : boundedString(body.query, 1, 500);
+    if (body.query !== undefined && !query) {
+      res.status(400).json({ error: "invalid_query" });
+      return;
+    }
+    const extractDepth = enumValue(body.extractDepth, ["basic", "advanced"] as const);
+    if (body.extractDepth !== undefined && !extractDepth) {
+      res.status(400).json({ error: "invalid_extract_depth" });
+      return;
+    }
+    const input: WebResearchExtractInput = {
+      ...assigned,
+      urls,
+      ...(query ? { query } : {}),
+      ...(extractDepth ? { extractDepth } : {}),
+    };
+    try {
+      res.json(await deps.webResearch.extract(input));
+    } catch (error) {
+      respondWebResearchError(res, error);
     }
   });
 

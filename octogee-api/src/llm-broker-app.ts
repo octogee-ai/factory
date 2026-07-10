@@ -35,6 +35,7 @@ import {
   usageWindowStartMs,
   weekWindowStartMs,
 } from "@octogee/shared/types/model-broker-usage";
+import { meterExhausted, readPlatformSpendState } from "./lib/platform-usage-allowance.js";
 
 export interface LlmBrokerAppDeps {
   store: Pick<ModelBrokerTokenStore, "lookupToken">;
@@ -641,19 +642,6 @@ interface PreflightGateInput {
   onMeteringError: (err: unknown) => void;
 }
 
-// A budget of null means "meter not enforced for this owner" — no read, no
-// exhaustion. The read thunk preserves the store's `this` binding.
-function readMeterCost(
-  budgetUsd: number | null,
-  read: () => Promise<{ costUsd: number }>,
-): Promise<number | null> {
-  return budgetUsd === null ? Promise.resolve(null) : read().then((usage) => usage.costUsd);
-}
-
-function meterExhausted(costUsd: number | null, budgetUsd: number | null): boolean {
-  return costUsd !== null && budgetUsd !== null && costUsd >= budgetUsd;
-}
-
 async function spendWindowGate(
   input: PreflightGateInput,
   spendWindowUsd: number | null,
@@ -661,26 +649,21 @@ async function spendWindowGate(
 ): Promise<
   { degrade: boolean; windowCostUsd: number | null; weekCostUsd: number | null } | GateDecisionDenied
 > {
-  const missingReader =
-    (spendWindowUsd !== null && !input.usageStore?.readWindowUsage) ||
-    (spendWeekUsd !== null && !input.usageStore?.readWeekUsage);
-  if (missingReader) {
-    return { allowed: false, status: 503, error: "model broker spend gate unavailable" };
-  }
-  const readInput = {
+  const state = await readPlatformSpendState({
+    usageStore: input.usageStore,
     gatewayId: input.record.gatewayId,
     ownerUid: input.record.ownerUid,
     now: input.now(),
-  };
-  const [windowCostUsd, weekCostUsd] = await Promise.all([
-    readMeterCost(spendWindowUsd, () => input.usageStore!.readWindowUsage!(readInput)),
-    readMeterCost(spendWeekUsd, () => input.usageStore!.readWeekUsage!(readInput)),
-  ]);
-  // The week is the defining limit; the 4h window only smooths bursts.
+    spendWindowUsd,
+    spendWeekUsd,
+  });
+  if (!state.available) {
+    return { allowed: false, status: 503, error: "model broker spend gate unavailable" };
+  }
   return {
-    degrade: meterExhausted(weekCostUsd, spendWeekUsd) || meterExhausted(windowCostUsd, spendWindowUsd),
-    windowCostUsd,
-    weekCostUsd,
+    degrade: state.exhausted,
+    windowCostUsd: state.windowChargeUsd,
+    weekCostUsd: state.weekChargeUsd,
   };
 }
 

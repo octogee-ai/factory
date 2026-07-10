@@ -88,6 +88,13 @@ describe("resolveScope — ownership", () => {
     );
   });
 
+  it("octogee-web-tools resolves to its own job", () => {
+    expectJobs(
+      ["infra/gateway/extensions/octogee-web-tools/web-client.ts"],
+      ["octogee-web-tools"],
+    );
+  });
+
   it("app changes run the app gate", () => {
     expectJobs(
       ["app/src/routes/appRoutes.ts"],

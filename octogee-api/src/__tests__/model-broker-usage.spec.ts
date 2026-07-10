@@ -243,6 +243,70 @@ describe("reported upstream cost", () => {
   });
 });
 
+describe("platform web usage charges", () => {
+  it("stores actual provider cost separately from the marked-up customer charge", async () => {
+    const store = new InMemoryModelBrokerUsageStore();
+    await store.recordUsage({
+      ...baseRecord,
+      eventId: "web-brave-1",
+      ownerUid: "uid-a",
+      provider: "brave",
+      model: "brave/web-search",
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+      },
+      reportedCostUsd: 0.005,
+      chargeUsd: 0.00625,
+      usageKind: "web_search",
+      agentId: "octogee-a-coach",
+    });
+
+    expect(store.events[0]).toMatchObject({
+      provider: "brave",
+      costUsd: 0.005,
+      chargeUsd: 0.00625,
+      usageKind: "web_search",
+      agentId: "octogee-a-coach",
+    });
+    await expect(
+      store.readWindowUsage({ gatewayId: "shared-blue", ownerUid: "uid-a", now: 10_000 }),
+    ).resolves.toMatchObject({ costUsd: 0.005, chargeUsd: 0.00625 });
+  });
+
+  it("defaults model charges to actual cost and debits prepaid credit by charge", async () => {
+    const store = new InMemoryModelBrokerUsageStore();
+    store.creditBalances.set("uid-a", 1);
+    await store.recordUsage({
+      ...baseRecord,
+      eventId: "model-default-charge",
+      ownerUid: "uid-a",
+    });
+    expect(store.events[0].chargeUsd).toBe(store.events[0].costUsd);
+
+    await store.recordUsage({
+      ...baseRecord,
+      eventId: "web-tavily-1",
+      ownerUid: "uid-a",
+      provider: "tavily",
+      model: "tavily/search-basic",
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+      },
+      reportedCostUsd: 0.008,
+      chargeUsd: 0.01,
+      debitsCreditBalance: true,
+      countsTowardSpendWindow: false,
+    });
+    expect(await store.readCreditBalance("uid-a")).toBeCloseTo(0.99);
+  });
+});
+
 describe("weekly spend ledger", () => {
   it("meters countable traffic into the epoch-aligned week window", async () => {
     const store = new InMemoryModelBrokerUsageStore();
@@ -363,4 +427,3 @@ describe("prepaid credit debits", () => {
     expect(await store.readCreditBalance("uid-builder")).toBeLessThan(0);
   });
 });
-

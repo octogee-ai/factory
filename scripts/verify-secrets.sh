@@ -147,6 +147,7 @@ done
 OPTIONAL_SECRETS=(
   "mattermost-cloud-sql"
   "octogee-brave"
+  "octogee-tavily"
   "octogee-github"
   "gitea-admin"
   "gitea-credentials"
