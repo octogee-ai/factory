@@ -15,6 +15,10 @@ import {
   type OnboardingOrchestratorConfig,
   type OnboardingPlacementDecision,
 } from "../../shared/types/orchestrator-placement.js";
+import {
+  commitPlacementAtomic,
+  type PlacementFirestore,
+} from "../../shared/types/gateway-releases.js";
 
 const ORCHESTRATOR_CONFIG_DOC = "config/orchestrator";
 
@@ -132,12 +136,25 @@ async function assignOne(
     };
   }
   if (!opts.dryRun) {
-    await userRef.update({
-      "provisioning.openclaw.gatewayId": target,
-      "provisioning.openclaw.gatewayProfile": targetProfile,
-      "provisioning.openclaw.shellsEnabled": false,
-      ...modelMetadataPatch(openclaw),
+    // Mirror AND revision assignment doc commit together so an operator-placed
+    // customer is never a gap user on a backfilled gateway mid-roll; a legacy
+    // gateway keeps the mirror-only write byte-for-byte.
+    const committed = await commitPlacementAtomic(db as unknown as PlacementFirestore, {
+      uid,
+      slug,
+      gatewayId: target,
+      source: "onboarding",
+      now: Date.now(),
+      mirrorPatch: {
+        "provisioning.openclaw.gatewayId": target,
+        "provisioning.openclaw.gatewayProfile": targetProfile,
+        "provisioning.openclaw.shellsEnabled": false,
+        ...modelMetadataPatch(openclaw),
+      },
     });
+    if (committed.kind === "rejected") {
+      return { kind: "not-ready", uid, slug, reason: `placement-${committed.reason}` };
+    }
   }
   return {
     kind: "assigned",

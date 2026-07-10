@@ -37,14 +37,14 @@ describe("findSerialConflict — rollout (global scope)", () => {
     expect(conflict).toBeNull();
   });
 
-  it("flags a conflict against another running rollout and describes the source/target sibling pair", () => {
+  it("flags a conflict against another running rollout and names the rolling gateway", () => {
     const conflict = findSerialConflict(
       { id: "op-2", kind: "rollout" },
       [{ id: "op-1", kind: "rollout", input: { gatewayId: "bender-blue" } }],
     );
     expect(conflict).toEqual({
       conflictingOpId: "op-1",
-      waitingOn: "bender-blue → bender-green",
+      waitingOn: "roll bender-blue",
     });
   });
 
@@ -176,7 +176,7 @@ describe("decideOperationClaim", () => {
     });
     expect(decision).toEqual({
       outcome: "queue",
-      waitingOn: "bender-blue → bender-green",
+      waitingOn: "roll bender-blue",
     });
   });
 
@@ -241,7 +241,7 @@ describe("decideOperationClaim — FIFO per scope (an older pending op blocks a 
     });
     expect(decision).toEqual({
       outcome: "queue",
-      waitingOn: "bender-blue → bender-green",
+      waitingOn: "roll bender-blue",
     });
   });
 

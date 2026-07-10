@@ -60,6 +60,37 @@ describe("buildOperatorHeartbeatPollerDeps", () => {
     vi.restoreAllMocks();
   });
 
+  it("writeHeartbeat writes ONLY glmGateways/{id}.heartbeat — never the flat gateways/{id} doc", async () => {
+    const setCalls: Array<{ collection: string; doc: string; data: Record<string, unknown> }> = [];
+    let committed = false;
+    const batchDb = {
+      collection: (name: string) => ({
+        doc: (id: string) => ({ _collection: name, _doc: id }),
+      }),
+      batch: () => ({
+        set: (
+          ref: { _collection: string; _doc: string },
+          data: Record<string, unknown>,
+        ) => {
+          setCalls.push({ collection: ref._collection, doc: ref._doc, data });
+        },
+        commit: async () => {
+          committed = true;
+        },
+      }),
+    } as unknown as Firestore;
+
+    const deps = buildOperatorHeartbeatPollerDeps(batchDb, vi.fn(), FLEET_KEY_PAIR.privateKey);
+    await deps.writeHeartbeat("bender", { status: "ready", mountedCustomers: ["ceckert"], startedAt: 42 });
+
+    expect(committed).toBe(true);
+    expect(setCalls.map((c) => c.collection)).toEqual(["glmGateways"]);
+    const glmCall = setCalls.find((c) => c.collection === "glmGateways");
+    expect(glmCall!.doc).toBe("bender");
+    expect(glmCall!.data).toHaveProperty("heartbeat");
+    expect(setCalls.some((c) => c.collection === "gateways")).toBe(false);
+  });
+
   it("signs operator eviction with the fleet controller private key", async () => {
     let capturedInit: RequestInit | undefined;
     vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {

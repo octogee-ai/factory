@@ -16,8 +16,9 @@ describe("fleet-controller entrypoint config", () => {
       FLEET_CONTROLLER_PORT: "3999",
       FLEET_CONTROLLER_PUBLIC_KEY: "pub",
       GATEWAY_BUILDER_SLUG: " alice ",
-    }, { gatewayId: "local" })).toEqual({
+    }, { gatewayId: "local", revisionId: "default-r5" })).toEqual({
       gatewayId: "default",
+      revisionId: "default-r5",
       builderSlug: "alice",
       port: 3999,
       publicKey: "pub",
@@ -28,11 +29,18 @@ describe("fleet-controller entrypoint config", () => {
   it("uses production defaults for unset optional values", () => {
     expect(resolveFleetControllerEntrypointConfig({}, { gatewayId: "gw-1" })).toEqual({
       gatewayId: "gw-1",
+      revisionId: "",
       builderSlug: "",
       port: 3003,
       publicKey: "",
       version: "unknown",
     });
+  });
+
+  it("threads GATEWAY_REVISION_ID onto the config so the pod writes the revision-keyed heartbeat", () => {
+    expect(
+      resolveFleetControllerEntrypointConfig({}, { gatewayId: "bender", revisionId: "bender-r2" }).revisionId,
+    ).toBe("bender-r2");
   });
 });
 

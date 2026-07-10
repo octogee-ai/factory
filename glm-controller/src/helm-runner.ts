@@ -15,13 +15,15 @@ readDeployedInstances(opts: { namespace: string }): Promise<HelmInstancesMap>;
 upsertInstance(opts: {
     namespace: string;
     gatewayId: string;
+    // Disposable revision instance id ({gatewayId}-r{n}). Names the Helm release
+    // + per-instance resources; defaults to gatewayId (legacy single-revision).
+    revisionId?: string;
     builderSlug?: string;
     imageRepository: string;
     imageTag: string;
     serviceAccountName?: string;
     serviceAccount?: HelmInstancesMap[string]["serviceAccount"];
     gatewayContainerSecurityContext?: Record<string, unknown>;
-    persistence?: HelmInstancesMap[string]["persistence"];
     operatorAccess?: HelmInstancesMap[string]["operatorAccess"];
     computeClassOverride?: string;
     chartPath: string;
@@ -82,9 +84,36 @@ export interface HelmSubprocessRunnerDeps {
     namespace: string;
     gatewayId: string;
   }) => Promise<void>;
+
+  /**
+   * Idempotent pre-install hook: ensure the gateway-scoped K8s ServiceAccount
+   * (`octogee-gw-<gatewayId>`) exists before `helm upgrade` runs. KSA creation
+   * moved OUT of the chart (GATEWAY-RELEASES-SPEC) so simultaneous revision
+   * releases don't race on ownership. Wired in production via
+   * `createGatewayServiceAccountEnsurer`. Tests that don't care leave it undefined.
+   */
+  ensureServiceAccount?: (opts: {
+    namespace: string;
+    serviceAccountName: string;
+    annotations?: Record<string, string>;
+  }) => Promise<void>;
 }
 
 const RELEASE_PREFIX = "octogee-gw-";
+const SHARED_PLATFORM_SA = "octogee-gateway";
+
+// Mirror the chart's octogee-gateway.serviceAccountName helper: an empty or the
+// legacy shared value resolves to the gateway-scoped KSA; anything else is used
+// verbatim. Cowboy must ensure exactly the name the Deployment will reference.
+function effectiveGatewayServiceAccountName(
+  gatewayId: string,
+  requested: string | undefined,
+): string {
+  if (!requested || requested === SHARED_PLATFORM_SA) {
+    return `${RELEASE_PREFIX}${gatewayId}`;
+  }
+  return requested;
+}
 
 const NOT_FOUND_PATTERNS = [
   /release:\s*not found/i,
@@ -120,7 +149,6 @@ interface PerReleaseValues {
   serviceAccountName?: unknown;
   serviceAccount?: unknown;
   gatewayContainerSecurityContext?: unknown;
-  persistence?: unknown;
   operatorAccess?: unknown;
   computeClassOverride?: unknown;
   profile?: unknown;
@@ -238,7 +266,6 @@ const PERSONAL_KNOB_READERS: PersonalKnobReader[] = [
   (v) => knob("gatewayContainerSecurityContext", plainObjectKnob<Record<string, unknown>>(
     v.gatewayContainerSecurityContext,
   )),
-  (v) => knob("persistence", plainObjectKnob<HelmInstancesMap[string]["persistence"]>(v.persistence)),
   (v) => knob("operatorAccess", plainObjectKnob<HelmInstancesMap[string]["operatorAccess"]>(v.operatorAccess)),
   (v) => knob("computeClassOverride", nonEmptyString(v.computeClassOverride)),
   (v) => knob("profile", enumString(v.profile, PROFILE_VALUES)),
@@ -271,6 +298,7 @@ export interface BuildUpgradeArgsOpts {
   chartPath: string;
   namespace: string;
   gatewayId: string;
+  revisionId?: string;
   builderSlug?: string;
   imageTag: string;
   imageRepository: string;
@@ -284,7 +312,6 @@ export interface BuildUpgradeArgsOpts {
   serviceAccountName?: string;
   serviceAccount?: HelmInstancesMap[string]["serviceAccount"];
   gatewayContainerSecurityContext?: Record<string, unknown>;
-  persistence?: HelmInstancesMap[string]["persistence"];
   operatorAccess?: HelmInstancesMap[string]["operatorAccess"];
   computeClassOverride?: string;
   gcpProject?: string;
@@ -310,7 +337,7 @@ type UpgradeStringOption = {
 type UpgradeJsonOption = {
   option: keyof Pick<
     BuildUpgradeArgsOpts,
-    "serviceAccount" | "gatewayContainerSecurityContext" | "persistence" | "operatorAccess"
+    "serviceAccount" | "gatewayContainerSecurityContext" | "operatorAccess"
   >;
   key: string;
 };
@@ -330,12 +357,11 @@ const UPGRADE_STRING_OPTIONS: UpgradeStringOption[] = [
 const UPGRADE_JSON_OPTIONS: UpgradeJsonOption[] = [
   { option: "serviceAccount", key: "serviceAccount" },
   { option: "gatewayContainerSecurityContext", key: "gatewayContainerSecurityContext" },
-  { option: "persistence", key: "persistence" },
   { option: "operatorAccess", key: "operatorAccess" },
 ];
 
 function baseUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
-  return [
+  const args = [
     "upgrade",
     "--install",
     opts.release,
@@ -349,6 +375,13 @@ function baseUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
     HELM_SET_STRING,
     `image.repository=${opts.imageRepository}`,
   ];
+  // Revision-aware render: pass the disposable revision id so per-instance
+  // resource names key off it. Omitted → chart defaults revisionId to gatewayId
+  // (legacy single-revision render is unchanged).
+  if (opts.revisionId) {
+    args.push(HELM_SET_STRING, `revisionId=${opts.revisionId}`);
+  }
+  return args;
 }
 
 function appendOptionalStringArgs(args: string[], opts: BuildUpgradeArgsOpts): void {
@@ -582,12 +615,23 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
 
     async upsertInstance(opts) {
       const { namespace, gatewayId, imageTag, chartFingerprint } = opts;
-      const release = releaseNameForGateway(gatewayId);
+      // The Helm release + per-instance resources key off the revision id
+      // (octogee-gw-{revisionId}); legacy callers omit revisionId → gatewayId.
+      const revisionId = opts.revisionId ?? gatewayId;
+      const release = releaseNameForGateway(revisionId);
       const args = buildUpgradeArgs({
         ...opts,
         release,
         upgradeTimeout,
       });
+
+      if (deps.ensureServiceAccount) {
+        await deps.ensureServiceAccount({
+          namespace,
+          serviceAccountName: effectiveGatewayServiceAccountName(gatewayId, opts.serviceAccountName),
+          annotations: opts.serviceAccount?.annotations,
+        });
+      }
 
       if (deps.ensureAuthSecret) {
         await deps.ensureAuthSecret({ namespace, gatewayId });

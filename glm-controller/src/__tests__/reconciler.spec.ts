@@ -1,6 +1,57 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { startReconciler } from "../index";
+import { startReconciler, snapshotHasReconcileRelevantChange } from "../index";
 import type { HelmInstancesMap } from "@octogee/shared/types/glm";
+
+describe("snapshotHasReconcileRelevantChange — ignore heartbeat-only writes", () => {
+  it("added/removed docs are always relevant", () => {
+    const fp = new Map<string, string>();
+    expect(
+      snapshotHasReconcileRelevantChange(
+        [{ type: "added", doc: { id: "a", data: () => ({ gatewayId: "a", imageTag: "x" }) } }],
+        fp,
+      ),
+    ).toBe(true);
+    expect(
+      snapshotHasReconcileRelevantChange([{ type: "removed", doc: { id: "a", data: () => ({}) } }], fp),
+    ).toBe(true);
+  });
+
+  it("a heartbeat-ONLY modification does NOT count as relevant (no reconcile churn)", () => {
+    const fp = new Map<string, string>();
+    snapshotHasReconcileRelevantChange(
+      [{ type: "added", doc: { id: "a", data: () => ({ gatewayId: "a", imageTag: "x" }) } }],
+      fp,
+    );
+    expect(
+      snapshotHasReconcileRelevantChange(
+        [
+          {
+            type: "modified",
+            doc: {
+              id: "a",
+              data: () => ({ gatewayId: "a", imageTag: "x", heartbeat: { lastHeartbeatAt: 999 } }),
+            },
+          },
+        ],
+        fp,
+      ),
+    ).toBe(false);
+  });
+
+  it("a desired-field modification IS relevant", () => {
+    const fp = new Map<string, string>();
+    snapshotHasReconcileRelevantChange(
+      [{ type: "added", doc: { id: "a", data: () => ({ gatewayId: "a", imageTag: "x" }) } }],
+      fp,
+    );
+    expect(
+      snapshotHasReconcileRelevantChange(
+        [{ type: "modified", doc: { id: "a", data: () => ({ gatewayId: "a", imageTag: "y" }) } }],
+        fp,
+      ),
+    ).toBe(true);
+  });
+});
 
 const TEST_GATEWAY_GSA = "octogee-gateway@octogee.iam.gserviceaccount.com";
 
@@ -24,10 +75,37 @@ function makeFakeDb(args: {
   glmGateways: Array<Record<string, unknown>>;
   gatewayDocs?: Record<string, Record<string, unknown>>;
   glmOperations?: Record<string, Record<string, unknown>>;
+  glmHeartbeatOverlay?: Record<string, Record<string, unknown>>;
   onSnapshot: { register: (cb: () => void) => void };
 }) {
   const gatewayDocs = args.gatewayDocs ?? {};
   const glmOperations = args.glmOperations ?? {};
+  // glmGateways is now BOTH the desired-doc source (get, read LIVE from
+  // args.glmGateways so tests can mutate desired between ticks) AND the
+  // heartbeat target (doc(id).heartbeat) — the collision fix relocates
+  // heartbeat writes here. A separate overlay holds heartbeat sub-docs; tests
+  // may pass their own object to assert the relocated writes.
+  const glmHeartbeatOverlay: Record<string, Record<string, unknown>> =
+    args.glmHeartbeatOverlay ?? {};
+  const glmIdOf = (d: Record<string, unknown>): string =>
+    typeof d.gatewayId === "string" ? d.gatewayId : String(d.gateway ?? "");
+  const glmDesiredById = (id: string): Record<string, unknown> | undefined =>
+    args.glmGateways.find((d) => glmIdOf(d) === id);
+  const glmDoc = (id: string) => ({
+    get: async () => {
+      const desired = glmDesiredById(id);
+      const exists = desired !== undefined || Object.prototype.hasOwnProperty.call(glmHeartbeatOverlay, id);
+      return { exists, data: () => ({ ...(desired ?? {}), ...(glmHeartbeatOverlay[id] ?? {}) }) };
+    },
+    set: async (data: Record<string, unknown>, options?: { merge?: boolean }) => {
+      glmHeartbeatOverlay[id] = options?.merge
+        ? { ...(glmHeartbeatOverlay[id] ?? {}), ...data }
+        : data;
+    },
+    update: async (data: Record<string, unknown>) => {
+      glmHeartbeatOverlay[id] = { ...(glmHeartbeatOverlay[id] ?? {}), ...data };
+    },
+  });
   function makeDocRef(store: Record<string, Record<string, unknown>>, id: string) {
     return {
       get: async () => ({
@@ -47,8 +125,16 @@ function makeFakeDb(args: {
       if (name === "glmGateways") {
         return {
           get: async (): Promise<FakeSnapshot> => ({
-            docs: args.glmGateways.map((d) => ({ data: () => d })),
+            docs: args.glmGateways.map((d) => {
+              const id = glmIdOf(d);
+              return {
+                id,
+                ref: glmDoc(id),
+                data: () => ({ ...d, ...(glmHeartbeatOverlay[id] ?? {}) }),
+              };
+            }),
           }),
+          doc: (id: string) => glmDoc(id),
           onSnapshot: (cb: () => void) => {
             args.onSnapshot.register(cb);
             return () => {};
@@ -726,6 +812,49 @@ await vi.advanceTimersByTimeAsync(120_000);
   });
 });
 
+describe("startReconciler — glmGateways holds two doc kinds during expand", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("filters {gw}-rN revision-realization docs out of the legacy Helm targets (no undefined drift)", async () => {
+    const restore = setGatewayServiceAccountEnv();
+    const snapCbs: Array<() => void> = [];
+    const helm = makeFakeHelm({ upsertInstance: async () => undefined });
+    const db = makeFakeDb({
+      glmGateways: [
+        { gatewayId: "default", imageRepository: "repo", imageTag: "abc", desiredStatus: "running", createdBy: "ci" },
+        // A converge-arm revision doc — must NOT become a legacy Helm target.
+        {
+          docKind: "revision",
+          revisionId: "default-r1",
+          gateway: "default",
+          release: 1,
+          lifecycle: "provisioning",
+        },
+      ],
+      onSnapshot: { register: (cb) => snapCbs.push(cb) },
+    });
+    const stop = startReconciler({
+      db,
+      helm,
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      log: vi.fn(),
+    });
+    snapCbs[0]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Only the legacy bare gateway is upserted; the revision doc is not a target.
+    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
+    expect(helm.upsertInstance).toHaveBeenCalledWith(
+      expect.objectContaining({ gatewayId: "default" }),
+    );
+    stop();
+    restore();
+  });
+});
+
 describe("startReconciler — issue #997: a PROD platform release must not roll customer gateways", () => {
 
 beforeEach(() => {
@@ -1286,6 +1415,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
     const restoreGatewayServiceAccount = setGatewayServiceAccountEnv();
     const snapCbs: Array<() => void> = [];
     const gatewayDocs: Record<string, Record<string, unknown>> = {};
+    const glmHeartbeatOverlay: Record<string, Record<string, unknown>> = {};
     const helm = makeFakeHelm({
       read: async () => ({
         "op-canary": {
@@ -1313,6 +1443,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
         },
       ],
       gatewayDocs,
+      glmHeartbeatOverlay,
       onSnapshot: { register: (cb) => snapCbs.push(cb) },
     });
 
@@ -1335,14 +1466,16 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
       namespace: expect.any(String),
       name: "octogee-gateway-op-canary",
     });
-    expect(gatewayDocs["op-canary"]).toMatchObject({
-      gatewayId: "op-canary",
+    // Every field the flat dual-write used to publish now lands ONLY on the
+    // relocated glmGateways/{id}.heartbeat sub-doc — no flat gateways/{id} write.
+    expect(glmHeartbeatOverlay["op-canary"]?.heartbeat).toMatchObject({
       status: "ready",
       version: "abc",
       mountedCustomers: [],
       internalUrl: expect.stringContaining("octogee-gateway-op-canary"),
     });
-    expect(gatewayDocs["op-canary"]).not.toHaveProperty("lastHeartbeatAt");
+    expect(glmHeartbeatOverlay["op-canary"]?.heartbeat).not.toHaveProperty("lastHeartbeatAt");
+    expect(gatewayDocs["op-canary"]).toBeUndefined();
     stop();
     restoreGatewayServiceAccount();
   });
@@ -1350,6 +1483,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
   it("also refreshes the ready record (live SHA) for available STANDARD gateways", async () => {
     const snapCbs: Array<() => void> = [];
     const gatewayDocs: Record<string, Record<string, unknown>> = {};
+    const glmHeartbeatOverlay: Record<string, Record<string, unknown>> = {};
     const helm = makeFakeHelm({
       read: async () => ({
         default: {
@@ -1377,6 +1511,7 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
         },
       ],
       gatewayDocs,
+      glmHeartbeatOverlay,
       onSnapshot: { register: (cb) => snapCbs.push(cb) },
     });
 
@@ -1398,11 +1533,13 @@ describe("startReconciler — kubectl scale shortcut for replicas-only diffs", (
       namespace: expect.any(String),
       name: "octogee-gateway-default",
     });
-    expect(gatewayDocs["default"]).toMatchObject({
-      gatewayId: "default",
+    // Readiness telemetry lands ONLY at glmGateways/{id}.heartbeat — the flat
+    // gateways/{id} dual-write is contracted (cutover step 2).
+    expect(glmHeartbeatOverlay["default"]?.heartbeat).toMatchObject({
       status: "ready",
       version: "abc",
     });
+    expect(gatewayDocs["default"]).toBeUndefined();
     stop();
   });
 

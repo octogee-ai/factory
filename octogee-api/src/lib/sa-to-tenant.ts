@@ -1,4 +1,8 @@
 import type { Firestore } from "firebase-admin/firestore";
+import {
+  GATEWAY_RELEASES_SUBCOLLECTION,
+  isGatewayDesiredDoc,
+} from "@octogee/shared/types/gateway-releases";
 
 export type BoundTenant =
   | { kind: "gateway"; gatewayId: string; ownerUid?: string }
@@ -62,20 +66,11 @@ function platformActorFromSa(saName: string): PlatformActor | null {
   return null;
 }
 
-async function bindGatewaySa(
-  db: Pick<Firestore, "collection">,
-  suffix: string,
+function attachGateway(
+  gatewayId: string,
+  ownerUid: string | null,
   result: "ok" | "ok_legacy_operator",
-): Promise<SaToTenantResult> {
-  const gatewayId = gatewayIdFromSaSuffix(suffix);
-  if (!gatewayId) return { attached: false, result: "malformed_sa" };
-
-  const snap = await db.collection("glmGateways").doc(gatewayId).get();
-  if (!snap.exists) {
-    return { attached: false, result: "unknown_tenant" };
-  }
-  const data = snap.data();
-  const ownerUid = typeof data?.ownerUid === "string" && data.ownerUid ? data.ownerUid : null;
+): SaToTenantResult {
   return {
     attached: true,
     result,
@@ -85,6 +80,64 @@ async function bindGatewaySa(
       ...(ownerUid ? { ownerUid } : {}),
     },
   };
+}
+
+// New model: ownerUid lives on the live release payload, not the gateway doc.
+// Resolve from liveRelease (the currently serving release) and fall back to
+// desiredRelease when the gateway has not converged onto a live release yet.
+async function ownerUidFromLiveRelease(
+  db: Pick<Firestore, "collection">,
+  gatewayId: string,
+  desired: { liveRelease?: number | null; desiredRelease: number },
+): Promise<string | null> {
+  const release =
+    typeof desired.liveRelease === "number" ? desired.liveRelease : desired.desiredRelease;
+  if (typeof release !== "number") return null;
+  const relSnap = await db
+    .collection("gateways")
+    .doc(gatewayId)
+    .collection(GATEWAY_RELEASES_SUBCOLLECTION)
+    .doc(String(release))
+    .get();
+  const payload = relSnap.data()?.payload as Record<string, unknown> | undefined;
+  const ownerUid = payload?.ownerUid;
+  return typeof ownerUid === "string" && ownerUid ? ownerUid : null;
+}
+
+// Tenant identity split (GATEWAY-RELEASES-SPEC): the gateway-scoped KSA maps to
+// the NEW gateways/{gatewayId} durable desired doc when present, else the legacy
+// glmGateways/{gatewayId} desired doc. Dual-read keeps the switch
+// behavior-preserving during expand — a gateway that only exists in glmGateways
+// (pre-backfill) still resolves under the same bare id. The bare id is
+// unchanged, so broker authorization (fleet-broker.ts) is untouched.
+async function bindGatewaySa(
+  db: Pick<Firestore, "collection">,
+  suffix: string,
+  result: "ok" | "ok_legacy_operator",
+): Promise<SaToTenantResult> {
+  const gatewayId = gatewayIdFromSaSuffix(suffix);
+  if (!gatewayId) return { attached: false, result: "malformed_sa" };
+
+  const desiredSnap = await db.collection("gateways").doc(gatewayId).get();
+  const desired = desiredSnap.exists ? desiredSnap.data() : undefined;
+  if (isGatewayDesiredDoc(desired)) {
+    if (desired.desiredStatus === "retired") {
+      return { attached: false, result: "unknown_tenant" };
+    }
+    const ownerUid = await ownerUidFromLiveRelease(db, gatewayId, desired);
+    return attachGateway(gatewayId, ownerUid, result);
+  }
+
+  const snap = await db.collection("glmGateways").doc(gatewayId).get();
+  if (!snap.exists) {
+    return { attached: false, result: "unknown_tenant" };
+  }
+  const data = snap.data();
+  if (data?.desiredStatus === "retired") {
+    return { attached: false, result: "unknown_tenant" };
+  }
+  const ownerUid = typeof data?.ownerUid === "string" && data.ownerUid ? data.ownerUid : null;
+  return attachGateway(gatewayId, ownerUid, result);
 }
 
 export async function mapSaToTenant(

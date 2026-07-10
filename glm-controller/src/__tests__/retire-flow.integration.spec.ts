@@ -101,6 +101,12 @@ function makeRetireDeps(state: SharedState, helm: ReturnType<typeof makeHelm>) {
       if (!hb) return null;
       return { mountedCustomers: hb.mountedCustomers };
     },
+    // Legacy bare-id gateways: no assignment docs, no revision docs — the
+    // full-gateway retire drain reads empty and the flow is byte-identical.
+    readAssignmentsForGateway: async () => [],
+    readNonRetiredRevisions: async () => [],
+    helmUninstallRevision: vi.fn(async () => {}),
+    retireRevisionDoc: vi.fn(async () => {}),
     readGlmGatewayId: async (gatewayId: string) =>
       state.glmGateways.has(gatewayId) ? gatewayId : null,
     deleteGlmGateway: async (gatewayId: string) => {
@@ -114,6 +120,10 @@ function makeRetireDeps(state: SharedState, helm: ReturnType<typeof makeHelm>) {
     deleteGatewayPersistentVolumeClaim: vi.fn(async () => {}),
     deleteGatewayKubeSecret: vi.fn(async () => {}),
     deleteAuthTokenSecret: vi.fn(async () => {}),
+    deleteGatewayServiceAccount: vi.fn(async () => {}),
+    deleteGatewayEdgeService: vi.fn(async () => {}),
+    deleteGatewayModelKeyKubeSecret: vi.fn(async () => {}),
+    deleteGatewayModelKeySource: vi.fn(async () => {}),
     teardownGatewayServiceAccount: vi.fn(async () => {}),
     syncFleetIngress: vi.fn(async () => {}),
     helmUninstallTimeoutMs: 30_000,
@@ -191,6 +201,14 @@ const stepFlow = ctx.reported.map((s) => `${s.name}:${s.status}`);
       "delete-kube-secret:done",
       "delete-sm-secret:running",
       "delete-sm-secret:done",
+      "delete-ksa:running",
+      "delete-ksa:done",
+      "delete-edge-service:running",
+      "delete-edge-service:done",
+      "delete-model-key-kube-secret:running",
+      "delete-model-key-kube-secret:done",
+      "delete-model-key-source:running",
+      "delete-model-key-source:done",
       "teardown-gsa:running",
       "teardown-gsa:done",
       "cleanup:running",

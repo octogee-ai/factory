@@ -1,9 +1,11 @@
 import { Router, type Request, type Response } from "express";
-import type { Firestore } from "firebase-admin/firestore";
+import type { Firestore, Transaction } from "firebase-admin/firestore";
 
 import { isValidUsername, parseAgentId } from "@octogee/shared/types/identity";
+import { isGatewayDesiredDoc } from "@octogee/shared/types/gateway-releases";
 import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
 import { readAssignedSlugsForGateway } from "@octogee/core/assigned-roster";
+import { parseAssignmentDoc } from "@octogee/core/assignment-doc";
 import { deriveExpectedAgentId } from "../../../gateway-edge/src/chat-proxy/openclaw/frame-filter.js";
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -357,6 +359,99 @@ async function approvalAssigned(
   return !!slug && assignedHere(db, gatewayId, slug);
 }
 
+// Resolve the customer's serving revision for WS redemption. A BACKFILLED
+// gateway (Step 2) carries its durable identity in gateways/{id} with NO
+// internalUrl; the serving URL lives on the revision realization doc. Resolution
+// is scoped entirely to the bound gateway: the assignment doc is read from
+// gateways/{boundGatewayId}/assignments/{uid} and liveRevisionId from the bound
+// gateway doc — never from request content — so this cannot widen tenant access.
+export function resolveServingRevisionId(input: {
+  gatewayData: Record<string, unknown>;
+  assignmentData: Record<string, unknown> | undefined;
+  uid: string;
+}): string | null {
+  const assignment = parseAssignmentDoc(input.uid, input.assignmentData);
+  if (assignment && assignment.revisionId.length > 0) return assignment.revisionId;
+  const live = input.gatewayData.liveRevisionId;
+  return typeof live === "string" && live.length > 0 ? live : null;
+}
+
+// Read the revision's serving internalUrl, failing LOUD rather than dialing a
+// wrong revision: the revision doc must belong to the bound gateway and must
+// carry a non-empty heartbeat.internalUrl.
+export function readRevisionInternalUrl(input: {
+  revisionData: Record<string, unknown> | undefined;
+  expectedGatewayId: string;
+  revisionId: string;
+}): { url: string } | { error: string } {
+  const data = input.revisionData;
+  if (!data) return { error: `revision ${input.revisionId} not found` };
+  if (data.gateway !== input.expectedGatewayId) {
+    return {
+      error: `revision ${input.revisionId} belongs to gateway ${String(data.gateway)}, not ${input.expectedGatewayId}`,
+    };
+  }
+  // Never dial a corpse: a retired/failed revision may still carry a stale
+  // heartbeat.internalUrl, but the pod is gone (or unhealthy). Reject BEFORE the
+  // caller consumes the one-time ticket so the client can retry once the roll
+  // settles onto a live revision.
+  if (data.lifecycle === "retired" || data.lifecycle === "failed") {
+    return { error: `revision ${input.revisionId} is ${String(data.lifecycle)} — not serving` };
+  }
+  if (data.retiredAt != null) {
+    return { error: `revision ${input.revisionId} is retired (retiredAt set) — not serving` };
+  }
+  const url = readPath(data, "heartbeat.internalUrl");
+  if (typeof url !== "string" || url.length === 0) {
+    return { error: `revision ${input.revisionId} has no serving internalUrl` };
+  }
+  return { url };
+}
+
+// Resolve the serving gateway URL for a WS redemption inside the redeem
+// transaction: legacy internalUrl passthrough, else revision-scoped resolution.
+export async function resolveRedeemGatewayUrl(input: {
+  tx: Transaction;
+  db: Firestore;
+  gatewayId: string;
+  uid: string;
+  gatewayData: Record<string, unknown>;
+}): Promise<{ url: string } | { error: string }> {
+  // Un-backfilled path, byte-identical to legacy: a genuine pre-backfill
+  // gateways/{id} heartbeat doc carries its own flat internalUrl → use it. A
+  // BACKFILLED GatewayDoc must NEVER honor a flat internalUrl even if one is
+  // still contaminating the doc (a stale heartbeat dual-write) — that flat URL
+  // pins whichever revision heartbeat'd last, silently bypassing assignment /
+  // live-revision resolution and attaching the customer to the WRONG revision.
+  // A GatewayDoc always goes through revision resolution below.
+  const legacyUrl = input.gatewayData.internalUrl;
+  if (
+    !isGatewayDesiredDoc(input.gatewayData) &&
+    typeof legacyUrl === "string" &&
+    legacyUrl.length > 0
+  ) {
+    return { url: legacyUrl };
+  }
+
+  // Backfilled desired doc: resolve the customer's serving revision and read its
+  // heartbeat.internalUrl. Fail loud rather than dial the wrong revision.
+  const assignmentSnap = await input.tx.get(
+    input.db.doc(`gateways/${input.gatewayId}/assignments/${input.uid}`),
+  );
+  const revisionId = resolveServingRevisionId({
+    gatewayData: input.gatewayData,
+    assignmentData: assignmentSnap.data(),
+    uid: input.uid,
+  });
+  if (!revisionId) return { error: "gateway-url-unresolved" };
+  const revSnap = await input.tx.get(input.db.doc(`glmGateways/${revisionId}`));
+  return readRevisionInternalUrl({
+    revisionData: revSnap.data(),
+    expectedGatewayId: input.gatewayId,
+    revisionId,
+  });
+}
+
 function mountUserAndWsRoutes(router: Router, db: Firestore): void {
   router.post("/users/gateway-id", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -407,10 +502,17 @@ function mountUserAndWsRoutes(router: Router, db: Firestore): void {
       }
       const gwRef = db.doc(`gateways/${bound.gatewayId}`);
       const gwSnap = await tx.get(gwRef);
-      const gatewayUrl = gwSnap.data()?.internalUrl;
-      if (typeof gatewayUrl !== "string" || gatewayUrl.length === 0) {
+      const urlResult = await resolveRedeemGatewayUrl({
+        tx,
+        db,
+        gatewayId: bound.gatewayId,
+        uid,
+        gatewayData: gwSnap.data() ?? {},
+      });
+      if ("error" in urlResult) {
         return { status: 502, body: { error: "gateway-url-unresolved" } };
       }
+      const gatewayUrl = urlResult.url;
       let expectedAgentId: string;
       try {
         expectedAgentId = deriveExpectedAgentId(uid, userData);

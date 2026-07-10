@@ -76,12 +76,15 @@ export interface FleetBrokerClient {
   }): Promise<FleetBrokerBlobSignedUrl>;
 }
 
-export function createFleetBrokerClient(gatewayId: string): FleetBrokerClient {
+// `revisionId` ({gw}-r{n}) makes the roster (mount driver) revision-aware: the
+// broker filters the assigned-users set to this pod's revision so two revisions
+// of one rolling gateway never both mount the full roster. Empty on legacy pods.
+export function createFleetBrokerClient(gatewayId: string, revisionId = ""): FleetBrokerClient {
   return {
     async assignedUsers(opts = {}) {
       const data = await postJson<{ users: FleetBrokerUserSnapshot[] }>(
         "/internal/fleet/assigned-users",
-        { gatewayId, completeOnly: opts.completeOnly === true },
+        { gatewayId, revisionId, completeOnly: opts.completeOnly === true },
       );
       return data.users;
     },

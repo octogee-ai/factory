@@ -4,8 +4,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  buildFleetHeartbeatSnapshot,
+  gatewayRevisionServiceName,
   getEvictObservedSlugs,
   getMountObservedSlugs,
+  pathGatewayIdMatchesPod,
   readMountedCustomersFromAssignedState,
   resolveFleetCapabilities,
 } from "../lib/fleet-provisioner.js";
@@ -133,6 +136,63 @@ describe("observed split — evict keys off raw presence, mount off completion",
       customerMigratingIn: () => true,
     });
     expect(getMountObservedSlugs(a)).toEqual(["migrated"]);
+  });
+});
+
+describe("in-pod revision-keyed heartbeat (PR3 dependency)", () => {
+  it("carries revisionId onto the heartbeat snapshot so glmGateways/{revisionId}.heartbeat gets written", () => {
+    const snap = buildFleetHeartbeatSnapshot({
+      gatewayId: "default",
+      revisionId: "default-r2",
+      status: "ready",
+      version: "sha-1",
+      openclawVersion: "2026.7.1",
+      mountedCustomers: ["alice"],
+      internalUrl: "http://octogee-gateway-default-r2.ns.svc.cluster.local:18789",
+      startedAt: 42,
+    });
+    expect(snap).toMatchObject({ gatewayId: "default", revisionId: "default-r2", status: "ready" });
+  });
+
+  it("omits revisionId for a legacy pod (no GATEWAY_REVISION_ID)", () => {
+    const snap = buildFleetHeartbeatSnapshot({
+      gatewayId: "default",
+      revisionId: "",
+      status: "booting",
+      version: "v",
+      openclawVersion: "v",
+      mountedCustomers: [],
+      internalUrl: "http://gw",
+      startedAt: 1,
+    });
+    expect(snap.revisionId).toBeUndefined();
+  });
+
+  it("points the heartbeat internalUrl at the revision Service when a revision id is set", () => {
+    expect(gatewayRevisionServiceName({ gatewayId: "default", revisionId: "default-r2" })).toBe(
+      "octogee-gateway-default-r2",
+    );
+  });
+
+  it("falls back to the bare gateway Service name for a legacy pod", () => {
+    expect(gatewayRevisionServiceName({ gatewayId: "default", revisionId: "" })).toBe(
+      "octogee-gateway-default",
+    );
+  });
+});
+
+describe("in-pod migration path guard (transport/tenant split)", () => {
+  it("accepts the bare gateway id that matches the pod's GATEWAY_ID", () => {
+    expect(pathGatewayIdMatchesPod("default", "default")).toBe(true);
+  });
+
+  it("REJECTS a revision id in the path — transport is addressed by Service, not the tenant path", () => {
+    expect(pathGatewayIdMatchesPod("default-r2", "default")).toBe(false);
+  });
+
+  it("rejects a mismatched gateway id and an absent path param", () => {
+    expect(pathGatewayIdMatchesPod("other", "default")).toBe(false);
+    expect(pathGatewayIdMatchesPod(undefined, "default")).toBe(false);
   });
 });
 

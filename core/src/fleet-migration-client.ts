@@ -37,10 +37,18 @@ export interface MigrationClientDeps {
 
 }
 
+// Transport/tenant split (GATEWAY-RELEASES-SPEC): `gatewayId` is the TENANT path
+// id — bare, put in the in-pod URL path and matched by the pod's GATEWAY_ID
+// guard. `transportId` is the TRANSPORT target — the revision service name
+// ({gw}-r{n}) resolveGatewayUrl maps to a K8s Service URL. When transportId is
+// omitted it defaults to gatewayId (legacy single-revision behavior). During a
+// same-gateway roll both revisions share the bare gatewayId but differ by
+// transportId, so source and target resolve to distinct URLs.
 export interface MigrationClient {
   quiesce(opts: {
     migrationId: string;
     gatewayId: string;
+    transportId?: string;
     slug: string;
     timeoutMs?: number;
   }): Promise<QuiesceResponse>;
@@ -48,6 +56,7 @@ export interface MigrationClient {
   flushGateway(opts: {
     migrationId: string;
     gatewayId: string;
+    transportId?: string;
     slug: string;
     reason: string;
   }): Promise<FlushGatewayResponse>;
@@ -55,6 +64,7 @@ export interface MigrationClient {
   restoreTarget(opts: {
     migrationId: string;
     gatewayId: string;
+    transportId?: string;
     uid: string;
     slug: string;
     snapshot: FleetBrokerUserSnapshot;
@@ -64,6 +74,8 @@ export interface MigrationClient {
     migrationId: string;
     fromGatewayId: string;
     toGatewayId: string;
+    fromTransportId?: string;
+    toTransportId?: string;
     slug: string;
     mode?: MigrationSyncMode;
     includeActivationManifest?: boolean;
@@ -72,6 +84,7 @@ export interface MigrationClient {
   verifyTarget(opts: {
     migrationId: string;
     gatewayId: string;
+    transportId?: string;
     slug: string;
     timeoutMs?: number;
   }): Promise<VerifyMigrationResponse>;
@@ -79,6 +92,7 @@ export interface MigrationClient {
   unmount(opts: {
     migrationId: string;
     gatewayId: string;
+    transportId?: string;
     slug: string;
   }): Promise<UnmountResponse>;
 }
@@ -115,8 +129,10 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
     }
   };
 
+  // `transportId` resolves the K8s Service URL (revision); `path` already
+  // carries the bare tenant gatewayId — the two are deliberately independent.
   const postSignedJson = async <Resp>(
-    gatewayId: string,
+    transportId: string,
     path: string,
     migrationId: string,
     body: Record<string, unknown>,
@@ -124,7 +140,7 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
   ): Promise<Resp> => {
     const rawBody = JSON.stringify(body);
     const signature = signFleetRequest(deps.privateKey, migrationId, rawBody);
-    const url = `${deps.resolveGatewayUrl(gatewayId)}${path}`;
+    const url = `${deps.resolveGatewayUrl(transportId)}${path}`;
     const res = await fetchWithTimeout(
       path,
       url,
@@ -146,9 +162,9 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
   };
 
   return {
-    async restoreTarget({ migrationId, gatewayId, uid, slug, snapshot }) {
+    async restoreTarget({ migrationId, gatewayId, transportId, uid, slug, snapshot }) {
       const res = await postSignedJson<RestoreMigrationResponse>(
-        gatewayId,
+        transportId ?? gatewayId,
         `/restore/${gatewayId}`,
         migrationId,
         { migrationId, uid, slug, snapshot },
@@ -160,9 +176,9 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       return res;
     },
 
-    async quiesce({ migrationId, gatewayId, slug, timeoutMs }) {
+    async quiesce({ migrationId, gatewayId, transportId, slug, timeoutMs }) {
       const res = await postSignedJson<QuiesceResponse>(
-        gatewayId,
+        transportId ?? gatewayId,
         `/quiesce/${gatewayId}`,
         migrationId,
         timeoutMs == null ? { migrationId, slug } : { migrationId, slug, timeoutMs },
@@ -177,9 +193,9 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       return res;
     },
 
-    async flushGateway({ migrationId, gatewayId, slug, reason }) {
+    async flushGateway({ migrationId, gatewayId, transportId, slug, reason }) {
       const res = await postSignedJson<FlushGatewayResponse>(
-        gatewayId,
+        transportId ?? gatewayId,
         `/flush/${gatewayId}`,
         migrationId,
         { migrationId, slug, reason },
@@ -191,9 +207,9 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       return res;
     },
 
-    async unmount({ migrationId, gatewayId, slug }) {
+    async unmount({ migrationId, gatewayId, transportId, slug }) {
       const res = await postSignedJson<UnmountResponse>(
-        gatewayId,
+        transportId ?? gatewayId,
         `/unmount/${gatewayId}`,
         migrationId,
         { migrationId, slug },
@@ -205,11 +221,11 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       return res;
     },
 
-    async transferState({ migrationId, fromGatewayId, toGatewayId, slug, mode, includeActivationManifest }) {
-      const targetUrl = deps.resolveGatewayUrl(toGatewayId);
+    async transferState({ migrationId, fromGatewayId, toGatewayId, fromTransportId, toTransportId, slug, mode, includeActivationManifest }) {
+      const targetUrl = deps.resolveGatewayUrl(toTransportId ?? toGatewayId);
       const targetImportSignature = signFleetRequest(deps.privateKey, migrationId, slug);
       const parsed = await postSignedJson<ImportResponse>(
-        fromGatewayId,
+        fromTransportId ?? fromGatewayId,
         `/push-state/${fromGatewayId}`,
         migrationId,
         {
@@ -229,11 +245,11 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       return parsed;
     },
 
-    async verifyTarget({ migrationId, gatewayId, slug, timeoutMs }) {
+    async verifyTarget({ migrationId, gatewayId, transportId, slug, timeoutMs }) {
       const requestTimeoutMs =
         timeoutMs == null ? verifyMs : Math.max(verifyMs, timeoutMs + 30_000);
       const res = await postSignedJson<VerifyMigrationResponse>(
-        gatewayId,
+        transportId ?? gatewayId,
         `/verify/${gatewayId}`,
         migrationId,
         timeoutMs == null ? { migrationId, slug } : { migrationId, slug, timeoutMs },

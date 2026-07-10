@@ -84,13 +84,15 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(dep).not.toBeNull();
   });
 
-  it("standard profile derives a per-gateway ServiceAccount instead of the shared platform KSA", () => {
+  it("standard profile references the gateway-scoped KSA but never renders a ServiceAccount (Cowboy owns it)", () => {
+    // KSA creation moved OUT of the chart to Cowboy: a gateway-scoped KSA
+    // (octogee-gw-<gatewayId>) is created once and referenced by each revision
+    // Helm release, so simultaneous revisions never race on ownership. The
+    // Deployment still references it; the chart no longer creates it.
     const out = helmTemplate();
-    const sa = findDoc(out, "ServiceAccount", "octogee-gw-default");
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
 
-    expect(sa).not.toBeNull();
-    expect(sa).not.toMatch(/iam\.gke\.io\/gcp-service-account/);
+    expect(findDoc(out, "ServiceAccount", "octogee-gw-default")).toBeNull();
     expect(dep).toMatch(/serviceAccountName:\s*octogee-gw-default/);
     expect(dep).not.toMatch(/serviceAccountName:\s*octogee-gateway\b/);
   });
@@ -105,18 +107,20 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
 
     expect(dep).toMatch(/serviceAccountName:\s*octogee-gw-bender/);
     expect(dep).not.toMatch(/serviceAccountName:\s*octogee-gateway\b/);
-    expect(findDoc(out, "ServiceAccount", "octogee-gw-bender")).not.toBeNull();
+    // KSA is Cowboy-owned now — the chart renders no ServiceAccount object.
+    expect(findDoc(out, "ServiceAccount", "octogee-gw-bender")).toBeNull();
   });
 
-  it("can render the generated per-operator ServiceAccount without a Workload Identity annotation", () => {
+  it("operator profile references its per-gateway KSA and renders no ServiceAccount object", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
       profile: "operator",
       "serviceAccount.create": "true",
     });
-    const sa = findDoc(out, "ServiceAccount", "octogee-gw-bender");
-    expect(sa).not.toBeNull();
-    expect(sa).not.toMatch(/iam\.gke\.io\/gcp-service-account/);
+    // Even with serviceAccount.create=true (a legacy value), the chart no
+    // longer owns the KSA — Cowboy creates it with any Workload Identity
+    // annotation. The Deployment still references the gateway-scoped name.
+    expect(findDoc(out, "ServiceAccount", "octogee-gw-bender")).toBeNull();
     const dep = findDoc(out, "Deployment", "octogee-gateway-bender") ?? "";
     expect(dep).toMatch(/serviceAccountName:\s*octogee-gw-bender/);
   });
@@ -986,34 +990,27 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
     ).toBeNull();
   });
 
-  it("persistence.enabled renders a PVC that survives `helm uninstall` (legacy explicit volume must not be reclaimed)", () => {
+  it("never renders a PVC even if a stale persistence.enabled value is passed (PVC path deleted, Spot + emptyDir only)", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
       "persistence.enabled": "true",
     });
-    const pvc = findDoc(out, "PersistentVolumeClaim", "octogee-gateway-bender-data");
-    expect(pvc).not.toBeNull();
-    expect(pvc).toMatch(/helm\.sh\/resource-policy"?:\s*"?keep/);
+    expect(findDoc(out, "PersistentVolumeClaim", "octogee-gateway-bender-data")).toBeNull();
     const dep = findDoc(out, "Deployment", "octogee-gateway-bender") ?? "";
-    expect(dep).toMatch(
-      /persistentVolumeClaim:\s*\n\s*claimName:\s*"?octogee-gateway-bender-data/,
-    );
+    expect(dep).not.toMatch(/persistentVolumeClaim:/);
+    expect(dep).toMatch(/emptyDir:\s*\{\}/);
   });
 
-  // Operator/persistent gateways must NOT carry
-  // cluster-autoscaler.kubernetes.io/safe-to-evict:"false". GKE Autopilot maps it
-  // to the extended-duration-pods feature, which it refuses to grant to Pods that
-  // target a custom compute class (our nodeSelector pins
+  // Gateways must NOT carry cluster-autoscaler.kubernetes.io/safe-to-evict:"false".
+  // GKE Autopilot maps it to the extended-duration-pods feature, which it refuses
+  // to grant to Pods that target a custom compute class (our nodeSelector pins
   // cloud.google.com/compute-class) — so it warned on every deploy and the 7-day
   // pin never took. It was a dead no-op: the real voluntary-disruption guard is
-  // the minAvailable:1 PDB (replicas:1 => disruptionsAllowed:0), unchanged here,
-  // which also already blocks the ComputeClass's activeMigration on a single-
-  // replica gateway. Resilience comes from the durable PVC + boot-sync. See
-  // DECISIONS.md "Operator gateways don't pin themselves with safe-to-evict".
-  it("persistent/operator gateway sets no safe-to-evict (extended-duration is unsupported under the CCC and would defeat right-sizing)", () => {
+  // the maxUnavailable:1 PDB, unchanged here. All gateways are Spot + emptyDir.
+  it("operator gateway sets no safe-to-evict (extended-duration is unsupported under the CCC and would defeat right-sizing)", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
-      "persistence.enabled": "true",
+      profile: "operator",
     });
     const dep = findDoc(out, "Deployment", "octogee-gateway-bender") ?? "";
     expect(dep).not.toMatch(/cluster-autoscaler\.kubernetes\.io\/safe-to-evict/);

@@ -69,20 +69,42 @@ interface ReportedStep {
   error?: string;
 }
 
+interface CutoverCommitCall {
+  uid: string;
+  slug: string;
+  toGatewayId: string;
+  fromGatewayId: string;
+  flipMirror: boolean;
+  revision: { revisionId: string; release: number } | null;
+}
+
 function makeDeps(client: MigrationClient & { calls: string[] }) {
+  // Records every atomic cutover commit; a mirror-flipping commit also lands in
+  // client.calls so the flow-order assertions still see the cutover step.
+  const commitCalls: CutoverCommitCall[] = [];
+  // Mirror flips only (flipMirror=true) — the analogue of the old cutoverCalls.
   const cutoverCalls: Array<{ uid: string; toGatewayId: string; slug: string }> = [];
   const logCalls: string[] = [];
   const reportedSteps: ReportedStep[] = [];
   return {
     client,
-    cutoverFirestore: vi.fn(async (uid: string, toGatewayId: string, slug: string) => {
-      client.calls.push(`cutover:${uid}->${toGatewayId}`);
-      cutoverCalls.push({ uid, toGatewayId, slug });
+    commitCutover: vi.fn(async (c: CutoverCommitCall) => {
+      commitCalls.push(c);
+      if (c.flipMirror) {
+        client.calls.push(`cutover:${c.uid}->${c.toGatewayId}`);
+        cutoverCalls.push({ uid: c.uid, toGatewayId: c.toGatewayId, slug: c.slug });
+      }
     }),
+    setAssignmentState: vi.fn(
+      async (args: { gatewayId: string; uid: string; state: string }) => {
+        client.calls.push(`roster-state:${args.gatewayId}:${args.state}`);
+      },
+    ),
     log: (msg: string) => logCalls.push(msg),
     reportStep: vi.fn(async (step: ReportedStep) => {
       reportedSteps.push(step);
     }),
+    commitCalls,
     cutoverCalls,
     logCalls,
     reportedSteps,
@@ -155,6 +177,90 @@ describe("runMigration — happy path", () => {
   });
 });
 
+describe("runMigration — cutover is ONE atomic commit (P0)", () => {
+  it("same-gateway drain: one commit with the assignment and NO mirror flip; unmount comes AFTER", async () => {
+    const order: string[] = [];
+    const client = happyClient();
+    client.unmount = vi.fn(async ({ slug }) => {
+      order.push("unmount");
+      return { migrationId: "m1", slug, unmounted: true };
+    }) as MigrationClient["unmount"];
+    const deps = makeDeps(client);
+    deps.commitCutover = vi.fn(async (c: CutoverCommitCall) => {
+      order.push("commit");
+      deps.commitCalls.push(c);
+    });
+
+    const res = await runMigration(
+      {
+        ...INPUT,
+        fromGatewayId: "default",
+        toGatewayId: "default",
+        fromTransportId: "default-r1",
+        toTransportId: "default-r2",
+        toRevision: { revisionId: "default-r2", release: 2 },
+        crossGateway: false,
+      },
+      deps,
+    );
+
+    expect(res.success).toBe(true);
+    expect(deps.commitCalls).toHaveLength(1);
+    expect(deps.commitCalls[0]).toMatchObject({
+      uid: "uid-alice",
+      toGatewayId: "default",
+      flipMirror: false, // mirror stays bare
+      revision: { revisionId: "default-r2", release: 2 },
+    });
+    expect(order).toEqual(["commit", "unmount"]);
+  });
+
+  it("cross-pool forward cutover: one commit flips the mirror AND writes the target revision", async () => {
+    const deps = makeDeps(happyClient());
+    const res = await runMigration(
+      { ...INPUT, toRevision: { revisionId: "gw-green-r1", release: 1 }, fromRevision: { revisionId: "gw-blue-r1", release: 1 } },
+      deps,
+    );
+    expect(res.success).toBe(true);
+    expect(deps.commitCalls).toHaveLength(1);
+    expect(deps.commitCalls[0]).toMatchObject({
+      toGatewayId: "gw-green",
+      fromGatewayId: "gw-blue",
+      flipMirror: true,
+      revision: { revisionId: "gw-green-r1" },
+    });
+  });
+
+  it("cross-gateway rollback restores mirror + source assignment in a single reverse commit", async () => {
+    const client = happyClient();
+    let firstUnmount = true;
+    client.unmount = vi.fn(async ({ slug, gatewayId }) => {
+      if (firstUnmount && gatewayId === "gw-blue") {
+        firstUnmount = false;
+        throw new Error("unmount-source failed");
+      }
+      return { migrationId: "m1", slug, unmounted: true };
+    }) as MigrationClient["unmount"];
+    const deps = makeDeps(client);
+
+    const res = await runMigration(
+      { ...INPUT, toRevision: { revisionId: "gw-green-r1", release: 1 }, fromRevision: { revisionId: "gw-blue-r1", release: 1 } },
+      deps,
+    );
+
+    expect(res.rolledBack).toBe(true);
+    // Forward commit → target (mirror + gw-green-r1); rollback commit → source
+    // (mirror back + gw-blue-r1). Each is one atomic commit, so the mirror never
+    // points at the removed target with a stale assignment.
+    expect(
+      deps.commitCalls.map((c) => ({ to: c.toGatewayId, flip: c.flipMirror, rev: c.revision?.revisionId })),
+    ).toEqual([
+      { to: "gw-green", flip: true, rev: "gw-green-r1" },
+      { to: "gw-blue", flip: true, rev: "gw-blue-r1" },
+    ]);
+  });
+});
+
 describe("runMigration — failures", () => {
   it("cleans up the pre-synced target when quiesce fails — source still owns", async () => {
     const client = happyClient();
@@ -168,7 +274,7 @@ describe("runMigration — failures", () => {
     expect(res.errorAt?.phase).toBe("pre-synced");
     expect(res.errorAt?.error).toMatch(/did not drain/);
     expect(res.rolledBack).toBe(true);
-    expect(deps.cutoverFirestore).not.toHaveBeenCalled();
+    expect(deps.commitCutover).not.toHaveBeenCalled();
     expect(client.unmount).toHaveBeenCalledWith(
       expect.objectContaining({ gatewayId: "gw-green", slug: "alice" }),
     );
@@ -189,7 +295,7 @@ describe("runMigration — failures", () => {
     expect(res.errorAt?.phase).toBe("source-quiesced");
     expect(res.rolledBack).toBe(true);
 
-    expect(deps.cutoverFirestore).not.toHaveBeenCalled();
+    expect(deps.commitCutover).not.toHaveBeenCalled();
     expect(client.unmount).toHaveBeenCalledWith(
       expect.objectContaining({ gatewayId: "gw-green", slug: "alice" }),
     );
@@ -256,76 +362,121 @@ const client = happyClient();
   });
 });
 
-describe("runMigration — disposable source (blue/green roll): source-side steps degrade, never veto", () => {
-  it("unmount-source failure does NOT roll back — the customer is already cut over to the target", async () => {
+// The sourceDisposable best-effort degradation is DELETED (PR7): under identity
+// routing the roster flip is GATED on a real quiesce — a source that cannot be
+// quiesced must HOLD the roll, never be skipped past (the customer would keep
+// writing to a revision the roster is about to abandon).
+describe("runMigration — gated quiesce (revision drains, PR7)", () => {
+  const DRAIN_INPUT = {
+    ...INPUT,
+    fromGatewayId: "default",
+    toGatewayId: "default",
+    fromTransportId: "default-r1",
+    toTransportId: "default-r2",
+    fromRevision: { revisionId: "default-r1", release: 1 },
+    toRevision: { revisionId: "default-r2", release: 2 },
+    crossGateway: false,
+  };
+
+  const drainDeps = makeDeps;
+
+  it("marks the assignment quiescing BEFORE the source quiesce RPC — source serving is blocked before the target ever serves", async () => {
     const client = happyClient();
-    client.unmount = vi.fn(async () => {
-      throw new Error("rate limit exceeded for config.patch; retry after 16s");
-    }) as MigrationClient["unmount"];
-    const deps = makeDeps(client);
-
-    const res = await runMigration({ ...INPUT, sourceDisposable: true }, deps);
-
+    const deps = drainDeps(client);
+    const res = await runMigration(DRAIN_INPUT, deps);
     expect(res.success).toBe(true);
-    expect(res.rolledBack).toBe(false);
-    // cutover committed and NOT undone
-    expect(client.calls).toContain("cutover:uid-alice->gw-green");
-    expect(deps.reportedSteps).toContainEqual(
-      expect.objectContaining({
-        name: "unmount-source",
-        status: "skipped",
-        error: expect.stringContaining("rate limit exceeded"),
-      }),
-    );
-    expect(
-      deps.logCalls.some((l) => l.includes("best-effort") && l.includes("disposable source")),
-    ).toBe(true);
+    const quiesceMark = client.calls.indexOf("roster-state:default:quiescing");
+    const quiesceRpc = client.calls.indexOf("quiesce:alice");
+    expect(quiesceMark).toBeGreaterThanOrEqual(0);
+    expect(quiesceRpc).toBeGreaterThan(quiesceMark);
   });
 
-  it("a source step failure pre-cutover (quiesce-source) degrades to the substrate baseline and still cuts over", async () => {
+  it("quiesce failure FAILS the migration (roll holds): rollback runs, no cutover commit, assignment restored to serving", async () => {
     const client = happyClient();
     client.quiesce = vi.fn(async () => {
-      throw new Error("quiesce: source pod already gone");
+      throw new Error("quiesce did not drain: 2 still running");
     }) as MigrationClient["quiesce"];
-    const deps = makeDeps(client);
+    const deps = drainDeps(client);
 
-    const res = await runMigration({ ...INPUT, sourceDisposable: true }, deps);
+    const res = await runMigration(DRAIN_INPUT, deps);
 
-    expect(res.success).toBe(true);
-    expect(res.rolledBack).toBe(false);
-    expect(client.calls).toContain("verify:alice"); // strict target steps still ran
-    expect(client.calls).toContain("cutover:uid-alice->gw-green");
-    expect(deps.reportedSteps).toContainEqual(
-      expect.objectContaining({
-        name: "quiesce-source",
-        status: "skipped",
-        error: expect.stringContaining("source pod already gone"),
-      }),
+    expect(res.success).toBe(false);
+    expect(res.rolledBack).toBe(true);
+    expect(deps.commitCutover).not.toHaveBeenCalled();
+    // The quiescing mark is reverted so the customer keeps serving on source.
+    expect(client.calls).toContain("roster-state:default:serving");
+    expect(client.calls.indexOf("roster-state:default:serving")).toBeGreaterThan(
+      client.calls.indexOf("roster-state:default:quiescing"),
     );
   });
 
-  it("a TARGET step (restore-target) still fails strictly — never cut over to a target we couldn't set up", async () => {
+  it("a post-quiesce pre-cutover failure (final sync) also restores the assignment to serving on rollback", async () => {
     const client = happyClient();
-    client.restoreTarget = vi.fn(async () => {
-      throw new Error("restore failed: gitea-broker 403");
-    }) as MigrationClient["restoreTarget"];
-    const deps = makeDeps(client);
+    let transferCount = 0;
+    client.transferState = vi.fn(async ({ migrationId, slug }) => {
+      transferCount++;
+      if (transferCount === 3) throw new Error("export: 503 upstream draining");
+      return { migrationId, slug, imported: true };
+    }) as MigrationClient["transferState"];
+    const deps = drainDeps(client);
 
-    const res = await runMigration({ ...INPUT, sourceDisposable: true }, deps);
+    const res = await runMigration(DRAIN_INPUT, deps);
 
     expect(res.success).toBe(false);
-    expect(client.calls).not.toContain("cutover:uid-alice->gw-green");
+    expect(res.rolledBack).toBe(true);
+    expect(deps.commitCutover).not.toHaveBeenCalled();
+    expect(client.calls).toContain("roster-state:default:serving");
   });
 
-  it("WITHOUT sourceDisposable (cross-pool migrate, source survives), an unmount-source failure still rolls back — strict contract preserved", async () => {
+  it("post-cutover rollback (unmount-source failure) does NOT re-mark serving — the reverse cutover commit already restored the source roster entry", async () => {
     const client = happyClient();
-    client.unmount = vi.fn(async () => {
-      throw new Error("unmount failed");
+    client.unmount = vi.fn(async ({ slug, gatewayId }) => {
+      // First unmount call is unmount-source on the drain (same bare gateway) —
+      // fail it; rollback then unmounts the target.
+      if ((client.unmount as ReturnType<typeof vi.fn>).mock.calls.length === 1) {
+        throw new Error("unmount-source failed");
+      }
+      return { migrationId: "m1", slug: slug ?? "alice", unmounted: true, gatewayId };
     }) as MigrationClient["unmount"];
-    const deps = makeDeps(client);
+    const deps = drainDeps(client);
 
-    const res = await runMigration(INPUT, deps); // no sourceDisposable
+    const res = await runMigration(DRAIN_INPUT, deps);
 
     expect(res.success).toBe(false);
+    expect(res.rolledBack).toBe(true);
+    // Forward commit + reverse commit — the reverse commit restores the source
+    // revision (serving, epoch bumped). No bare setAssignmentState(serving).
+    expect(deps.commitCalls.map((c) => c.revision?.revisionId)).toEqual([
+      "default-r2",
+      "default-r1",
+    ]);
+    expect(client.calls).not.toContain("roster-state:default:serving");
+  });
+
+  it("legacy migration (no fromRevision): no roster-state writes at all", async () => {
+    const client = happyClient();
+    const deps = drainDeps(client);
+    const res = await runMigration(INPUT, deps);
+    expect(res.success).toBe(true);
+    expect(client.calls.filter((c) => c.startsWith("roster-state:"))).toEqual([]);
+  });
+
+  it("unmount-source failure on a drain rolls back strictly — the deleted best-effort degradation never resurfaces", async () => {
+    const client = happyClient();
+    let first = true;
+    client.unmount = vi.fn(async ({ slug }) => {
+      if (first) {
+        first = false;
+        throw new Error("rate limit exceeded for config.patch; retry after 16s");
+      }
+      return { migrationId: "m1", slug, unmounted: true };
+    }) as MigrationClient["unmount"];
+    const deps = drainDeps(client);
+
+    const res = await runMigration(DRAIN_INPUT, deps);
+
+    expect(res.success).toBe(false);
+    expect(res.rolledBack).toBe(true);
+    expect(deps.reportedSteps.map((s) => s.status)).not.toContain("skipped");
   });
 });

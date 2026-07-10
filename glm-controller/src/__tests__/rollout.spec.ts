@@ -1,570 +1,300 @@
 import { describe, it, expect, vi } from "vitest";
-import type { Operation, OperationStep } from "@octogee/shared/types/glm";
-import { createRolloutHandler } from "../handlers/rollout";
-import type { RolloutDeps, CurrentGatewaySpec } from "../handlers/rollout";
-import type { OperationContext } from "../operation-router";
+import { createRolloutHandler, type RolloutDeps } from "../handlers/rollout.js";
+import type { Operation } from "@octogee/shared/types/glm";
+import type { GatewayDoc, ReleasePayload } from "@octogee/shared/types/gateway-releases";
+import type { OperationContext } from "../operation-router.js";
 
-const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
-const OPERATOR_REPO =
-  "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator";
+// The rollout op is now a THIN release-roll driver: it validates that the
+// gateway is on the Step 2 identity schema (refusing with the backfill tool
+// otherwise), confirms the desired release carries the requested image, kicks a
+// reconcile tick, and awaits the reconciler roll arm's level-triggered
+// convergence. All actual roll work lives in converge-roll.ts.
 
-function mkOp(overrides: Partial<Operation> = {}): Operation {
+function mkPayload(overrides: Partial<ReleasePayload> = {}): ReleasePayload {
   return {
-    id: "op-r-1",
+    imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+    imageTag: "cafe123-ocbeta2",
+    profile: null,
+    gatewayClass: "shared",
+    imageProfile: "standard",
+    sizingTier: null,
+    computeClass: null,
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: null,
+    serviceAccount: null,
+    operatorAccess: null,
+    ownerUid: null,
+    coOwnerUids: [],
+    builderSlug: null,
+    openclawOverrides: null,
+    byosub: null,
+    modelBrokerLimits: null,
+    preemption: null,
+    ...overrides,
+  };
+}
+
+function mkGateway(overrides: Partial<GatewayDoc> = {}): GatewayDoc {
+  return {
+    gatewayId: "default",
+    createdAt: 1,
+    createdBy: "ci",
+    updatedAt: 1,
+    updatedBy: "ci",
+    latestRelease: 2,
+    desiredRelease: 2,
+    liveRelease: 1,
+    liveRevisionId: "default-r1",
+    trafficRevisionId: "default-r1",
+    desiredStatus: "running",
+    roll: null,
+    ...overrides,
+  };
+}
+
+function mkOp(input: Record<string, unknown>): Operation {
+  return {
+    id: "op-1",
     kind: "rollout",
-    status: "pending",
-    createdBy: "admin@octogee.com",
+    status: "running",
+    createdBy: "test",
     createdAt: 0,
-    startedAt: null,
+    startedAt: 0,
     completedAt: null,
-    input: { gatewayId: "default", imageTag: "newSha" },
+    input,
     steps: [],
-    ...overrides,
   };
 }
 
-function makeCtx(): OperationContext & { reported: OperationStep[] } {
-  const reported: OperationStep[] = [];
-  return {
-    reportStep: vi.fn(async (s: OperationStep) => {
-      reported.push(s);
-    }),
-    reported,
-  };
-}
+const ctx: OperationContext = { reportStep: vi.fn(async () => undefined) };
 
-interface FakeState {
-  
-  specs: Map<string, CurrentGatewaySpec>;
-  
-  helmInstances: Map<string, { repository: string; tag: string }>;
-  
-  heartbeats: Map<string, { version: string | null; lastHeartbeatAt: number }>;
-}
-
-function makeDeps(state: FakeState, overrides: Partial<RolloutDeps> = {}): RolloutDeps {
-  let virtualClock = 0;
+function mkDeps(overrides: Partial<RolloutDeps> = {}): RolloutDeps & { logs: string[] } {
+  const logs: string[] = [];
+  let now = 0;
   return {
-    helm: {
-      readDeployedInstances: vi.fn(async () => {
-        const m: Record<string, { enabled: boolean; image: { repository: string; tag: string }; gatewayId: string }> = {};
-        for (const [name, image] of state.helmInstances) {
-          m[name] = { enabled: true, image, gatewayId: name };
-        }
-        return m;
-      }),
-    },
-    readCurrentSpec: vi.fn(async (gatewayId: string) => state.specs.get(gatewayId) ?? null),
-    updateGlmGatewayImage: vi.fn(async ({
-      gatewayId,
-      imageRepository,
-      imageTag,
-      profile,
-      persistence,
-      serviceAccountName,
-      serviceAccount,
-      operatorAccess,
-    }) => {
-      const cur = state.specs.get(gatewayId);
-      if (cur)
-        state.specs.set(gatewayId, {
-          ...cur,
-          imageRepository,
-          imageTag,
-          ...(profile ? { profile } : {}),
-          ...(persistence ? { persistence } : {}),
-          ...(serviceAccountName ? { serviceAccountName } : {}),
-          ...(serviceAccount ? { serviceAccount } : {}),
-          ...(operatorAccess ? { operatorAccess } : {}),
-        });
-    }),
-    readGatewayHeartbeat: vi.fn(async (gatewayId) => state.heartbeats.get(gatewayId) ?? null),
-    // Default: no active BuilderShell → rolls proceed (no defer).
-    readShellActivity: vi.fn(async () => ({ hasActiveSession: false })),
-    deferRollout: vi.fn(async () => undefined),
-    // Default: no mounted customers → the in-place path these tests exercise.
-    readMountedCustomers: vi.fn(async () => []),
-    runBlueGreen: vi.fn(async () => ({ steps: [], success: true })),
-    helmRenderTimeoutMs: 60_000,
-    heartbeatTimeoutMs: 60_000,
+    readGatewayDoc: async () => mkGateway(),
+    readReleasePayload: async () => mkPayload(),
+    requestReconcileTick: vi.fn(),
+    releaseRecordTimeoutMs: 10_000,
+    convergeTimeoutMs: 100_000,
     pollIntervalMs: 1_000,
-    now: () => virtualClock,
-    wait: vi.fn(async (ms: number) => {
-      virtualClock += ms;
-    }),
-    log: vi.fn(),
+    now: () => now,
+    wait: async () => {
+      now += 1_000;
+    },
+    log: (msg: string) => logs.push(msg),
+    logs,
     ...overrides,
   };
 }
 
-describe("createRolloutHandler — happy path", () => {
-  it("updates glmGateways spec, then waits for helm + heartbeat to converge on the new tag", async () => {
-    const state: FakeState = {
-      specs: new Map([
-        ["default", { gatewayId: "default", imageRepository: REPO, imageTag: "oldSha" }],
-      ]),
-      helmInstances: new Map([["default", { repository: REPO, tag: "oldSha" }]]),
-      heartbeats: new Map([["default", { version: "oldSha", lastHeartbeatAt: 0 }]]),
-    };
+describe("rollout op — un-backfilled refusal (replaces all dual machinery)", () => {
+  it("refuses a gateway with no durable gateways/{id} desired doc, naming the backfill tool", async () => {
+    const deps = mkDeps({ readGatewayDoc: async () => null });
+    const handler = createRolloutHandler(deps);
+    const res = await handler(mkOp({ gatewayId: "legacy-gw", imageTag: "cafe123-ocbeta2" }), ctx);
+    expect(res.success).toBe(false);
+    expect(res.error).toContain("legacy-gw");
+    expect(res.error).toContain("scripts/ops/backfill-gateway-identity.ts");
+  });
 
-    let pollsToFlipHelm = 2;
-    let pollsToFlipHeartbeat = 4;
-    const deps = makeDeps(state, {
-      wait: vi.fn(async (_ms: number) => {
-        if (--pollsToFlipHelm === 0) {
-          state.helmInstances.set("default", { repository: REPO, tag: "newSha" });
-        }
-        if (--pollsToFlipHeartbeat === 0) {
-          state.heartbeats.set("default", { version: "newSha", lastHeartbeatAt: 100 });
-        }
-      }),
+  it("fails on missing gatewayId / imageTag inputs", async () => {
+    const handler = createRolloutHandler(mkDeps());
+    expect((await handler(mkOp({ imageTag: "t" }), ctx)).error).toContain("gatewayId");
+    expect((await handler(mkOp({ gatewayId: "g" }), ctx)).error).toContain("imageTag");
+  });
+
+  it("refuses a retired gateway", async () => {
+    const deps = mkDeps({
+      readGatewayDoc: async () => mkGateway({ desiredStatus: "retired" }),
     });
-
-    const ctx = makeCtx();
-    const result = await createRolloutHandler(deps)(mkOp(), ctx);
-
-    expect(result.success).toBe(true);
-    expect(state.specs.get("default")?.imageTag).toBe("newSha");
-    expect(ctx.reported.map((s) => `${s.name}:${s.status}`)).toEqual([
-      "update-spec:running",
-      "update-spec:done",
-      "helm-render:running",
-      "helm-render:done",
-      "heartbeat-fresh:running",
-      "heartbeat-fresh:done",
-    ]);
-  });
-
-  it("succeeds idempotently when helm already shows the new tag at start (spec-not-yet-updated path)", async () => {
-    const state: FakeState = {
-
-specs: new Map([
-        ["default", { gatewayId: "default", imageRepository: REPO, imageTag: "oldSha" }],
-      ]),
-      helmInstances: new Map([["default", { repository: REPO, tag: "newSha" }]]),
-      heartbeats: new Map([["default", { version: "newSha", lastHeartbeatAt: 100 }]]),
-    };
-    const deps = makeDeps(state);
-    const result = await createRolloutHandler(deps)(mkOp(), makeCtx());
-    expect(result.success).toBe(true);
-
-expect(state.specs.get("default")?.imageTag).toBe("newSha");
-  });
-
-  it("accepts a short build-sha heartbeat for pinned OpenClaw bundle image tags", async () => {
-    const imageTag = "47e30b8-oc2026.5.28";
-    const state: FakeState = {
-      specs: new Map([
-        ["default", { gatewayId: "default", imageRepository: REPO, imageTag: "oldSha" }],
-      ]),
-      helmInstances: new Map([["default", { repository: REPO, tag: imageTag }]]),
-      heartbeats: new Map([["default", { version: "47e30b8", lastHeartbeatAt: 100 }]]),
-    };
-
-    const deps = makeDeps(state);
-    const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "default", imageTag } }),
-      makeCtx(),
+    const res = await createRolloutHandler(deps)(
+      mkOp({ gatewayId: "default", imageTag: "cafe123-ocbeta2" }),
+      ctx,
     );
-
-    expect(result.success).toBe(true);
-    expect(state.specs.get("default")?.imageTag).toBe(imageTag);
-  });
-
-  it("accepts an imageRepository override (e.g., switching repos)", async () => {
-    const ALT_REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-alt";
-    const state: FakeState = {
-      specs: new Map([
-        ["default", { gatewayId: "default", imageRepository: REPO, imageTag: "oldSha" }],
-      ]),
-      helmInstances: new Map([["default", { repository: ALT_REPO, tag: "newSha" }]]),
-      heartbeats: new Map([["default", { version: "newSha", lastHeartbeatAt: 100 }]]),
-    };
-    const deps = makeDeps(state);
-    const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "default", imageTag: "newSha", imageRepository: ALT_REPO } }),
-      makeCtx(),
-    );
-    expect(result.success).toBe(true);
-    expect(state.specs.get("default")?.imageRepository).toBe(ALT_REPO);
+    expect(res.success).toBe(false);
+    expect(res.error).toContain("retired");
   });
 });
 
-describe("createRolloutHandler — refusals + edge cases", () => {
-  it("refuses when op.input is missing gatewayId", async () => {
-    const deps = makeDeps({ specs: new Map(), helmInstances: new Map(), heartbeats: new Map() });
-    const result = await createRolloutHandler(deps)(mkOp({ input: { imageTag: "x" } }), makeCtx());
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/gatewayId/);
-  });
-
-  it("refuses when op.input is missing imageTag", async () => {
-    const deps = makeDeps({ specs: new Map(), helmInstances: new Map(), heartbeats: new Map() });
-    const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "default" } }),
-      makeCtx(),
-    );
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/imageTag/);
-  });
-
-  it("refuses when glmGateways doc is missing", async () => {
-    const deps = makeDeps({ specs: new Map(), helmInstances: new Map(), heartbeats: new Map() });
-    const result = await createRolloutHandler(deps)(mkOp(), makeCtx());
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/not found/);
-  });
-
-  it("refuses when the requested image is identical to current (no-op)", async () => {
-    const state: FakeState = {
-      specs: new Map([
-        ["default", { gatewayId: "default", imageRepository: REPO, imageTag: "sameSha" }],
-      ]),
-      helmInstances: new Map([["default", { repository: REPO, tag: "sameSha" }]]),
-      heartbeats: new Map([["default", { version: "sameSha", lastHeartbeatAt: 0 }]]),
-    };
-    const deps = makeDeps(state);
-    const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "default", imageTag: "sameSha" } }),
-      makeCtx(),
-    );
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/no-op|already on/i);
-    
-    expect(state.specs.get("default")?.imageTag).toBe("sameSha");
-  });
-
-it("does NOT refuse no-op when Firestore desired matches request but actual deployed differs (drift)", async () => {
-    let helmReadCount = 0;
-    const state: FakeState = {
-      specs: new Map([
-
-["default", { gatewayId: "default", imageRepository: REPO, imageTag: "newSha" }],
-      ]),
-
-helmInstances: new Map([["default", { repository: REPO, tag: "oldSha" }]]),
-      heartbeats: new Map([["default", { version: "oldSha", lastHeartbeatAt: 0 }]]),
-    };
-    const deps = makeDeps(state, {
-
-helm: {
-        readDeployedInstances: vi.fn(async () => {
-          helmReadCount++;
-          const tag = helmReadCount === 1 ? "oldSha" : "newSha";
-          return {
-            default: {
-              enabled: true,
-              image: { repository: REPO, tag },
-              gatewayId: "default",
-            },
-          };
-        }),
+describe("rollout op — awaits the roll arm's convergence", () => {
+  it("kicks a reconcile tick and succeeds once liveRelease reaches desiredRelease with no roll block", async () => {
+    let converged = false;
+    const deps = mkDeps({
+      readGatewayDoc: async () =>
+        converged
+          ? mkGateway({ liveRelease: 2, liveRevisionId: "default-r2", trafficRevisionId: "default-r2" })
+          : mkGateway({
+              roll: {
+                operationId: "roll-x",
+                status: "migrating",
+                fromRelease: 1,
+                toRelease: 2,
+                sourceRevisionId: "default-r1",
+                targetRevisionId: "default-r2",
+                acceptingNewAssignments: true,
+                startedAt: 0,
+                updatedAt: 0,
+                error: null,
+                flippedAt: null,
+              },
+            }),
+      wait: async () => {
+        converged = true;
       },
-      readGatewayHeartbeat: vi.fn(async (gatewayId) =>
-        
-        helmReadCount >= 2
-          ? { version: "newSha", lastHeartbeatAt: 0 }
-          : state.heartbeats.get(gatewayId) ?? null,
-      ),
     });
-    const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "default", imageTag: "newSha" } }),
-      makeCtx(),
+    const res = await createRolloutHandler(deps)(
+      mkOp({ gatewayId: "default", imageTag: "cafe123-ocbeta2" }),
+      ctx,
     );
-
-expect(result.error ?? "").not.toMatch(/no-op|already on/i);
-    expect(result.success).toBe(true);
+    expect(res.success).toBe(true);
+    expect(deps.requestReconcileTick).toHaveBeenCalled();
   });
 
-  it("STILL refuses no-op when desired matches request AND actual deployed matches request (true no-op)", async () => {
-
-const state: FakeState = {
-      specs: new Map([
-        ["default", { gatewayId: "default", imageRepository: REPO, imageTag: "sameSha" }],
-      ]),
-      helmInstances: new Map([["default", { repository: REPO, tag: "sameSha" }]]),
-      heartbeats: new Map([["default", { version: "sameSha", lastHeartbeatAt: 0 }]]),
-    };
-    const deps = makeDeps(state);
-    const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "default", imageTag: "sameSha" } }),
-      makeCtx(),
-    );
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/no-op|already on/i);
-    expect(deps.updateGlmGatewayImage).not.toHaveBeenCalled();
-  });
-});
-
-describe("createRolloutHandler — failures", () => {
-  it("times out helm-render when helm never renders the new tag", async () => {
-    const state: FakeState = {
-      specs: new Map([
-        ["default", { gatewayId: "default", imageRepository: REPO, imageTag: "oldSha" }],
-      ]),
-      helmInstances: new Map([["default", { repository: REPO, tag: "oldSha" }]]),
-      heartbeats: new Map([["default", { version: "oldSha", lastHeartbeatAt: 0 }]]),
-    };
-    const deps = makeDeps(state, { helmRenderTimeoutMs: 5_000, pollIntervalMs: 1_000 });
-    const ctx = makeCtx();
-    const result = await createRolloutHandler(deps)(mkOp(), ctx);
-
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/helm did not render|within 5000ms/);
-    const failed = ctx.reported.find((s) => s.status === "failed");
-    expect(failed?.name).toBe("helm-render");
-  });
-
-  it("times out heartbeat-fresh when the new pod never publishes the new version", async () => {
-    const state: FakeState = {
-      specs: new Map([
-        ["default", { gatewayId: "default", imageRepository: REPO, imageTag: "oldSha" }],
-      ]),
-      
-      helmInstances: new Map([["default", { repository: REPO, tag: "newSha" }]]),
-      heartbeats: new Map([["default", { version: "oldSha", lastHeartbeatAt: 0 }]]),
-    };
-    const deps = makeDeps(state, { helmRenderTimeoutMs: 60_000, heartbeatTimeoutMs: 5_000 });
-    const ctx = makeCtx();
-    const result = await createRolloutHandler(deps)(mkOp(), ctx);
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/heartbeat with version=newSha/);
-    const failed = ctx.reported.find((s) => s.status === "failed");
-    expect(failed?.name).toBe("heartbeat-fresh");
-  });
-});
-
-describe("createRolloutHandler — capability profile", () => {
-  it("a profile flip at the SAME sha is not a no-op: writes profile and waits on the RESOLVED operator repo", async () => {
-    const state: FakeState = {
-      specs: new Map([
-        
-        ["bender", { gatewayId: "bender", imageRepository: REPO, imageTag: "sha1" }],
-      ]),
-      helmInstances: new Map([["bender", { repository: REPO, tag: "sha1" }]]),
-      heartbeats: new Map([["bender", { version: "sha1", lastHeartbeatAt: 0 }]]),
-    };
-    let polls = 2;
-    const deps = makeDeps(state, {
-      wait: vi.fn(async (_ms: number) => {
-        if (--polls === 0) {
-
-state.helmInstances.set("bender", { repository: OPERATOR_REPO, tag: "sha1" });
-        }
+  it("narrates roll status transitions into the op log", async () => {
+    const states: GatewayDoc[] = [
+      mkGateway({
+        roll: {
+          operationId: "roll-x",
+          status: "warming",
+          fromRelease: 1,
+          toRelease: 2,
+          sourceRevisionId: "default-r1",
+          targetRevisionId: "default-r2",
+          acceptingNewAssignments: false,
+          startedAt: 0,
+          updatedAt: 0,
+          error: null,
+          flippedAt: null,
+        },
       }),
-    });
-    const ctx = makeCtx();
-    const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "bender", imageTag: "sha1", profile: "operator" } }),
-      ctx,
-    );
-
-    expect(result.success).toBe(true);
-    expect(state.specs.get("bender")?.profile).toBe("operator");
-    expect(state.specs.get("bender")?.persistence).toBeUndefined();
-    expect(state.specs.get("bender")?.serviceAccountName).toBe("octogee-gw-bender");
-    expect(state.specs.get("bender")?.serviceAccount).toMatchObject({ create: true });
-    expect(state.specs.get("bender")?.operatorAccess).toMatchObject({
-      shellsEnabled: false,
-    });
-
-expect(state.specs.get("bender")?.imageRepository).toBe(REPO);
-  });
-
-  it("same sha AND same profile is still a no-op (boundary not over-broadened)", async () => {
-    const state: FakeState = {
-      specs: new Map([
-        [
-          "bender",
-          {
-            gatewayId: "bender",
-            imageRepository: REPO,
-            imageTag: "sha1",
-            profile: "operator",
-            persistence: {
-              enabled: true,
-              storageClassName: "premium-rwo",
-              size: "20Gi",
-              accessModes: ["ReadWriteOnce"],
-            },
-            serviceAccountName: "octogee-gw-bender",
-            serviceAccount: { create: true },
-            operatorAccess: {
-              shellsEnabled: false,
-              reason: "runtime-trust-boundary-not-provisioned",
-            },
-          },
-        ],
-      ]),
-      helmInstances: new Map([["bender", { repository: OPERATOR_REPO, tag: "sha1" }]]),
-      heartbeats: new Map([["bender", { version: "sha1", lastHeartbeatAt: 0 }]]),
-    };
-    const deps = makeDeps(state);
-    const ctx = makeCtx();
-    const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "bender", imageTag: "sha1", profile: "operator" } }),
-      ctx,
-    );
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/no-op/);
-    expect(deps.updateGlmGatewayImage).not.toHaveBeenCalled();
-  });
-
-  it("same sha/profile still converges missing operator safety defaults instead of no-oping", async () => {
-    const state: FakeState = {
-      specs: new Map([
-        [
-          "bender",
-          {
-            gatewayId: "bender",
-            imageRepository: REPO,
-            imageTag: "sha1",
-            profile: "operator",
-          },
-        ],
-      ]),
-      helmInstances: new Map([["bender", { repository: OPERATOR_REPO, tag: "sha1" }]]),
-      heartbeats: new Map([["bender", { version: "sha1", lastHeartbeatAt: 0 }]]),
-    };
-    const deps = makeDeps(state);
-    const ctx = makeCtx();
-    const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "bender", imageTag: "sha1", profile: "operator" } }),
-      ctx,
-    );
-    expect(result.success).toBe(true);
-    expect(deps.updateGlmGatewayImage).toHaveBeenCalled();
-    expect(state.specs.get("bender")?.serviceAccountName).toBe("octogee-gw-bender");
-    expect(state.specs.get("bender")?.serviceAccount).toMatchObject({ create: true });
-    expect(state.specs.get("bender")?.operatorAccess).toMatchObject({
-      shellsEnabled: false,
-      reason: "runtime-trust-boundary-not-provisioned",
-    });
-  });
-
-  it("same sha/class still converges missing builder runtime access without operator ServiceAccount defaults", async () => {
-    const state: FakeState = {
-      specs: new Map([
-        [
-          "jack",
-          {
-            gatewayId: "jack",
-            imageRepository: REPO,
-            imageTag: "sha1",
-            gatewayClass: "builder",
-            ownerUid: "uid-jack",
-          },
-        ],
-      ]),
-      helmInstances: new Map([["jack", { repository: REPO, tag: "sha1" }]]),
-      heartbeats: new Map([["jack", { version: "sha1", lastHeartbeatAt: 0 }]]),
-    };
-    const deps = makeDeps(state);
-    const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "jack", imageTag: "sha1", gatewayClass: "builder" } }),
-      makeCtx(),
-    );
-    expect(result.success).toBe(true);
-    expect(deps.updateGlmGatewayImage).toHaveBeenCalled();
-    expect(state.specs.get("jack")?.operatorAccess).toMatchObject({
-      shellsEnabled: true,
-      reason: "owned-runtime-gateway",
-    });
-    expect(state.specs.get("jack")?.serviceAccountName).toBeUndefined();
-    expect(state.specs.get("jack")?.serviceAccount).toBeUndefined();
-  });
-});
-
-describe("createRolloutHandler — mounted gateways route to blue/green", () => {
-  it("delegates to runBlueGreen and NEVER updates the source spec in place when customers are mounted", async () => {
-    const state: FakeState = {
-      specs: new Map([
-        ["builder1", { gatewayId: "builder1", imageRepository: REPO, imageTag: "oldSha" }],
-      ]),
-      helmInstances: new Map([["builder1", { repository: REPO, tag: "oldSha" }]]),
-      heartbeats: new Map([["builder1", { version: "oldSha", lastHeartbeatAt: 0 }]]),
-    };
-    const runBlueGreen = vi.fn(async () => ({ steps: [], success: true }));
-    const deps = makeDeps(state, {
-      readMountedCustomers: vi.fn(async () => ["uidA"]),
-      runBlueGreen,
-    });
-
-    const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "builder1", imageTag: "newSha" } }),
-      makeCtx(),
-    );
-
-    expect(result.success).toBe(true);
-    expect(runBlueGreen).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sourceGatewayId: "builder1",
-        targetImageTag: "newSha",
+      mkGateway({
+        roll: {
+          operationId: "roll-x",
+          status: "migrating",
+          fromRelease: 1,
+          toRelease: 2,
+          sourceRevisionId: "default-r1",
+          targetRevisionId: "default-r2",
+          acceptingNewAssignments: true,
+          startedAt: 0,
+          updatedAt: 0,
+          error: null,
+          flippedAt: null,
+        },
       }),
-      expect.anything(),
-    );
-    // The in-place path must not run: source imageTag stays old, no spec write.
-    expect(deps.updateGlmGatewayImage).not.toHaveBeenCalled();
-    expect(state.specs.get("builder1")?.imageTag).toBe("oldSha");
-  });
-
-  it("defers (does NOT roll) when a BuilderShell is active — parks the request, no blue/green, no in-place", async () => {
-    const state: FakeState = {
-      specs: new Map([
-        ["bender", { gatewayId: "bender", imageRepository: OPERATOR_REPO, imageTag: "oldSha", profile: "operator" }],
-      ]),
-      helmInstances: new Map([["bender", { repository: OPERATOR_REPO, tag: "oldSha" }]]),
-      heartbeats: new Map([["bender", { version: "oldSha", lastHeartbeatAt: 0 }]]),
-    };
-    const deferRollout = vi.fn(async () => undefined);
-    const runBlueGreen = vi.fn(async () => ({ steps: [], success: true }));
-    const deps = makeDeps(state, {
-      readShellActivity: vi.fn(async () => ({ hasActiveSession: true })),
-      readMountedCustomers: vi.fn(async () => ["ownerUid"]),
-      deferRollout,
-      runBlueGreen,
+      mkGateway({ liveRelease: 2, liveRevisionId: "default-r2" }),
+    ];
+    let i = 0;
+    const deps = mkDeps({
+      readGatewayDoc: async () => states[Math.min(i, states.length - 1)],
+      wait: async () => {
+        i += 1;
+      },
     });
-
-    const ctx = makeCtx();
-    const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "bender", imageTag: "newSha", profile: "operator" } }),
+    const res = await createRolloutHandler(deps)(
+      mkOp({ gatewayId: "default", imageTag: "cafe123-ocbeta2" }),
       ctx,
     );
-
-    expect(result.success).toBe(true);
-    expect(deferRollout).toHaveBeenCalledWith(
-      "bender",
-      expect.objectContaining({ imageTag: "newSha", gatewayClass: "operator" }),
-    );
-    expect(runBlueGreen).not.toHaveBeenCalled();
-    expect(deps.updateGlmGatewayImage).not.toHaveBeenCalled();
-    expect(ctx.reported.map((s) => `${s.name}:${s.status}`)).toEqual([
-      "defer-active-shell:running",
-      "defer-active-shell:done",
-    ]);
+    expect(res.success).toBe(true);
+    expect(deps.logs.some((l) => l.includes("warming"))).toBe(true);
+    expect(deps.logs.some((l) => l.includes("migrating"))).toBe(true);
   });
 
-  it("a no-op (already on the requested image) is still refused before any blue/green", async () => {
-    const state: FakeState = {
-      specs: new Map([
-        ["builder1", { gatewayId: "builder1", imageRepository: REPO, imageTag: "sameSha" }],
-      ]),
-      helmInstances: new Map([["builder1", { repository: REPO, tag: "sameSha" }]]),
-      heartbeats: new Map([["builder1", { version: "sameSha", lastHeartbeatAt: 0 }]]),
-    };
-    const runBlueGreen = vi.fn(async () => ({ steps: [], success: true }));
-    const deps = makeDeps(state, {
-      readMountedCustomers: vi.fn(async () => ["uidA"]),
-      runBlueGreen,
+  it("fails with the roll's durable error when the roll arm marks the roll failed", async () => {
+    const deps = mkDeps({
+      readGatewayDoc: async () =>
+        mkGateway({
+          roll: {
+            operationId: "roll-x",
+            status: "failed",
+            fromRelease: 1,
+            toRelease: 2,
+            sourceRevisionId: "default-r1",
+            targetRevisionId: "default-r2",
+            acceptingNewAssignments: false,
+            startedAt: 0,
+            updatedAt: 0,
+            error: "target default-r2 did not become ready within 300000ms",
+            flippedAt: null,
+          },
+        }),
     });
-
-    const result = await createRolloutHandler(deps)(
-      mkOp({ input: { gatewayId: "builder1", imageTag: "sameSha" } }),
-      makeCtx(),
+    const res = await createRolloutHandler(deps)(
+      mkOp({ gatewayId: "default", imageTag: "cafe123-ocbeta2" }),
+      ctx,
     );
+    expect(res.success).toBe(false);
+    expect(res.error).toContain("did not become ready");
+  });
 
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/no-op|already on/i);
-    expect(runBlueGreen).not.toHaveBeenCalled();
+  it("fails when the desired release payload never matches the requested image (superseded or the release cut failed)", async () => {
+    const deps = mkDeps({
+      readReleasePayload: async () => mkPayload({ imageTag: "other-tag" }),
+      releaseRecordTimeoutMs: 3_000,
+    });
+    const res = await createRolloutHandler(deps)(
+      mkOp({ gatewayId: "default", imageTag: "cafe123-ocbeta2" }),
+      ctx,
+    );
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/superseded|release/i);
+  });
+
+  it("tolerates the admin wrapper's release write landing shortly AFTER the op is claimed (record race)", async () => {
+    let recorded = false;
+    const deps = mkDeps({
+      readReleasePayload: async () => (recorded ? mkPayload() : mkPayload({ imageTag: "stale" })),
+      readGatewayDoc: async () =>
+        recorded ? mkGateway({ liveRelease: 2, liveRevisionId: "default-r2" }) : mkGateway(),
+      wait: async () => {
+        recorded = true;
+      },
+    });
+    const res = await createRolloutHandler(deps)(
+      mkOp({ gatewayId: "default", imageTag: "cafe123-ocbeta2" }),
+      ctx,
+    );
+    expect(res.success).toBe(true);
+  });
+
+  it("times out with the last observed roll state when convergence never happens", async () => {
+    const deps = mkDeps({
+      convergeTimeoutMs: 5_000,
+      readGatewayDoc: async () =>
+        mkGateway({
+          roll: {
+            operationId: "roll-x",
+            status: "migrating",
+            fromRelease: 1,
+            toRelease: 2,
+            sourceRevisionId: "default-r1",
+            targetRevisionId: "default-r2",
+            acceptingNewAssignments: false,
+            startedAt: 0,
+            updatedAt: 0,
+            error: "migration for u1 failed: quiesce did not drain",
+            flippedAt: null,
+          },
+        }),
+    });
+    const res = await createRolloutHandler(deps)(
+      mkOp({ gatewayId: "default", imageTag: "cafe123-ocbeta2" }),
+      ctx,
+    );
+    expect(res.success).toBe(false);
+    expect(res.error).toContain("quiesce did not drain");
+  });
+
+  it("no-op rollout (already live on the requested release, no roll) succeeds immediately", async () => {
+    const deps = mkDeps({
+      readGatewayDoc: async () => mkGateway({ liveRelease: 2, liveRevisionId: "default-r2" }),
+    });
+    const res = await createRolloutHandler(deps)(
+      mkOp({ gatewayId: "default", imageTag: "cafe123-ocbeta2" }),
+      ctx,
+    );
+    expect(res.success).toBe(true);
   });
 });

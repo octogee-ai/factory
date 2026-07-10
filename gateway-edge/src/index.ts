@@ -1,4 +1,4 @@
-import express, { Express, Request, Response, Router } from "express";
+import express, { Express, Request, RequestHandler, Response, Router } from "express";
 import http from "node:http";
 import { Registry, collectDefaultMetrics, Counter, Histogram } from "prom-client";
 import { corsMiddleware } from "./middleware/cors.js";
@@ -28,6 +28,19 @@ import internalByotSyncRoutes from "./routes/internal/byot-sync.js";
 import internalConnectorRoutes from "./routes/internal/connectors.js";
 import { mountClusterRoutes } from "./routes/mount-cluster-routes.js";
 import { createGatewayRouter } from "./public-router.js";
+import {
+  createRollRosterGate,
+  createRollRosterStore,
+  createRollRosterUpgradeGate,
+  type RollRosterStore,
+  type RollRosterUpgradeGate,
+} from "./roll-roster.js";
+import { createRevisionTombstoneStore } from "./revision-tombstone-store.js";
+import {
+  REVISION_TOMBSTONES_COLLECTION,
+  isRevisionTombstone,
+  type RevisionTombstone,
+} from "@octogee/shared/types/gateway-releases";
 
 import { chatProxyOwnsHttpPath } from "./chat-proxy/http-paths.js";
 import { stripGatewayPrefix } from "./chat-proxy/gateway-prefix.js";
@@ -48,6 +61,14 @@ async function loadChatProxyModule(): Promise<ChatProxyModule> {
 }
 
 export type GatewayEdgeSurface = "sidecar" | "cluster";
+
+// Filled once on revision-pod boot (installRollRosterGate); null everywhere
+// else (legacy pods, cluster surface, tests) — the slot then passes through.
+let activeRollRosterGate: RequestHandler | null = null;
+
+export function installRollRosterGate(gate: RequestHandler): void {
+  activeRollRosterGate = gate;
+}
 
 export interface CreateAppOptions {
   surface?: GatewayEdgeSurface;
@@ -118,6 +139,15 @@ const healthHandler = (_req: Request, res: Response) => {
 };
 app.get("/health", healthHandler);
 app.get("/api/health", healthHandler);
+
+// Mid-roll per-customer routing gate (roll-roster.ts). The slot sits after
+// health/metrics (probes never 503 on roster load) and before every
+// customer-state surface; production boot installs the real gate on revision
+// pods only. Chat-proxy paths bypass Express by design — they proxy to the
+// shared Mattermost service, which carries no per-revision customer state.
+app.use((req, res, next) =>
+  activeRollRosterGate ? activeRollRosterGate(req, res, next) : next(),
+);
 
 // builder-shell has two caller shapes: redeem is pod-local (the in-pod bridge,
 // bare path), kill is cross-pod (octogee-api → the owner pod via the
@@ -220,9 +250,23 @@ if (process.env.NODE_ENV !== "test") {
       logger.error("FATAL: GATEWAY_ROUTER_PREVIEW_HOST is required in gateway-router mode");
       process.exit(1);
     }
+    // Tombstone reads are lazy: Firestore is only touched on the first pinned
+    // MISS (a `/g/<gw>/r/<n>/…` request), so router boot stays lookup-free and
+    // the service-addressed hot path never initializes the client at all.
+    const tombstoneStore = createRevisionTombstoneStore({
+      readTombstone: async (revisionId): Promise<RevisionTombstone | null> => {
+        const { db } = await import("./lib/db.js");
+        const snap = await db.collection(REVISION_TOMBSTONES_COLLECTION).doc(revisionId).get();
+        if (!snap.exists) return null;
+        const data = snap.data();
+        return isRevisionTombstone(data) ? data : null;
+      },
+    });
     const server = createGatewayRouter({
       namespace: process.env.K8S_NAMESPACE || "default",
       previewHost: process.env.GATEWAY_ROUTER_PREVIEW_HOST,
+      revisionTombstoneLookup: tombstoneStore.lookup,
+      revisionTombstoneRecheck: tombstoneStore.recheck,
       log: (message, meta) => logger.error(message, meta),
     });
     server.listen(PORT, () => {
@@ -252,12 +296,67 @@ if (process.env.NODE_ENV !== "test") {
     process.exit(1);
   }
 
+  // Revision pods gate service-addressed traffic on the durable roll roster.
+  // The gate installs SYNCHRONOUSLY with a not-yet-loaded store facade, so an
+  // edge booting mid-roll answers 503 + Retry-After until the roster snapshot
+  // lands — it never defaults to serve-local (council-resolved). The roster
+  // read is scoped to this pod's own gateway and is read-only (Cowboy is the
+  // sole roster writer).
+  const selfRevisionId = process.env.GATEWAY_REVISION_ID ?? "";
+  const rosterGatewayId = process.env.GATEWAY_ID ?? "";
+  let rollRosterUpgradeGate: RollRosterUpgradeGate | null = null;
+  if (selfRevisionId && rosterGatewayId) {
+    let rosterStore: RollRosterStore | null = null;
+    const storeFacade = {
+      loaded: () => rosterStore?.loaded() ?? false,
+      get: (uid: string) => rosterStore?.get(uid),
+    };
+    installRollRosterGate(
+      createRollRosterGate({
+        store: storeFacade,
+        gatewayId: rosterGatewayId,
+        selfRevisionId,
+        namespace: process.env.K8S_NAMESPACE || "octogee",
+        log: (msg) => logger.warn(msg),
+      }),
+    );
+    // WS upgrades bypass Express — the SAME roster/boot checks run at the
+    // upgrade path (chat-proxy shared handler + builder-shell redeem).
+    rollRosterUpgradeGate = createRollRosterUpgradeGate({
+      store: storeFacade,
+      gatewayId: rosterGatewayId,
+      selfRevisionId,
+      log: (msg) => logger.warn(msg),
+    });
+    import("./lib/db.js")
+      .then(({ db }) => {
+        rosterStore = createRollRosterStore({
+          subscribe: (onDocs, onError) =>
+            db
+              .collection("gateways")
+              .doc(rosterGatewayId)
+              .collection("assignments")
+              .onSnapshot(
+                (snap) => onDocs(snap.docs),
+                (err) => onError(err instanceof Error ? err : new Error(String(err))),
+              ),
+          log: (msg) => logger.warn(msg),
+        });
+      })
+      .catch((err) => {
+        // Fail CLOSED: the gate keeps answering 503 until the roster loads.
+        logger.error("[roll-roster] Firestore init failed — service traffic stays 503", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
+  }
+
   const server = http.createServer((req, res) =>
     dispatchGatewayEdgeRequest(req, res, app),
   );
   loadChatProxyModule().then((chatProxy) => {
-    chatProxy.attachChatProxyWsUpgrade(server);
-    chatProxy.attachBuilderShellRoute(server).catch((err) => {
+    chatProxy.attachChatProxyWsUpgrade(server, { upgradeGate: rollRosterUpgradeGate });
+    chatProxy.attachBuilderShellRoute(server, { upgradeGate: rollRosterUpgradeGate }).catch((err) => {
       logger.error("[builder-shell] route attach failed — WS route disabled", {
         err: err instanceof Error ? err.message : String(err),
       });

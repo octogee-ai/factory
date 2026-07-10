@@ -5,7 +5,6 @@ import {
   operatorGatewayServiceAccountName,
   resolveGatewayClass,
   resolveGatewayImageProfile,
-  resolveGatewayPersistence,
   type GatewayDesiredState,
   type HelmInstanceValue,
   type HelmInstancesMap,
@@ -184,7 +183,6 @@ interface OptionalHelmFields {
   chartFingerprint?: string;
   serviceAccountName?: string;
   serviceAccount?: HelmInstanceValue["serviceAccount"];
-  persistence?: HelmInstanceValue["persistence"];
   operatorAccess?: HelmInstanceValue["operatorAccess"];
   gatewayClass: ReturnType<typeof resolveGatewayClass>;
   imageProfile: ReturnType<typeof resolveGatewayImageProfile>;
@@ -206,7 +204,6 @@ function withOptionalHelmFields(
   if (fields.d.gatewayContainerSecurityContext) {
     out.gatewayContainerSecurityContext = fields.d.gatewayContainerSecurityContext;
   }
-  if (fields.persistence) out.persistence = fields.persistence;
   if (fields.operatorAccess) out.operatorAccess = fields.operatorAccess;
   if (fields.gatewayClass !== "shared") out.gatewayClass = fields.gatewayClass;
   if (fields.imageProfile !== "standard") {
@@ -227,7 +224,6 @@ function buildHelmInstanceValue(
 ): HelmInstanceValue {
   const gatewayClass = resolveGatewayClass(d);
   const imageProfile = resolveGatewayImageProfile(d);
-  const persistence = resolveGatewayPersistence(imageProfile, d.persistence);
   const {
     serviceAccountName,
     serviceAccount: resolvedServiceAccount,
@@ -250,7 +246,6 @@ function buildHelmInstanceValue(
       chartFingerprint,
       serviceAccountName,
       serviceAccount: resolvedServiceAccount,
-      persistence,
       operatorAccess,
       gatewayClass,
       imageProfile,
@@ -312,7 +307,6 @@ function instanceEqual(
   const objects: ReadonlyArray<[unknown, unknown]> = [
     [a.gatewayContainerSecurityContext, b.gatewayContainerSecurityContext],
     [effectiveServiceAccount(a), effectiveServiceAccount(b)],
-    [a.persistence, b.persistence],
     [a.operatorAccess, b.operatorAccess],
   ];
   for (const [x, y] of objects) {
@@ -352,7 +346,6 @@ export function isReplicasOnlyUpdate(c: ReconcileChange): boolean {
   const objects: ReadonlyArray<[unknown, unknown]> = [
     [c.from.gatewayContainerSecurityContext, c.to.gatewayContainerSecurityContext],
     [effectiveServiceAccount(c.from), effectiveServiceAccount(c.to)],
-    [c.from.persistence, c.to.persistence],
     [c.from.operatorAccess, c.to.operatorAccess],
   ];
   for (const [x, y] of objects) {

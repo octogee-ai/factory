@@ -7,7 +7,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
-  type GatewayState,
   type GatewayStatus,
   GATEWAYS_COLLECTION,
 } from "../../shared/types/fleet-controller.js";
@@ -333,11 +332,28 @@ async function readGatewayProfile(gatewayId: string): Promise<GatewayProfile> {
   return normalizeGatewayProfile(snap.exists ? snap.data()?.profile : undefined);
 }
 
-type GatewayDoc =
-  & Omit<GatewayState, "lastHeartbeatAt">
-  & {
-    lastHeartbeatAt: FirestoreTs;
-  };
+// Live telemetry rides glmGateways/{id}.heartbeat now (the flat gateways/{id}
+// dual-write is retired). Diagnostics read the heartbeat sub-document — the flat
+// gateways/{id} fields are stale.
+interface GatewayHeartbeatView {
+  status?: string;
+  version?: string;
+  openclawVersion?: string;
+  internalUrl?: string;
+  mountedCustomers?: string[];
+  lastHeartbeatAt?: FirestoreTs;
+  lastError?: { message?: string; slug?: string; at?: unknown } | null;
+}
+
+function heartbeatView(glmData: Record<string, unknown> | undefined): GatewayHeartbeatView {
+  const hb = glmData?.heartbeat;
+  return hb && typeof hb === "object" ? (hb as GatewayHeartbeatView) : {};
+}
+
+async function readHeartbeatView(gatewayId: string): Promise<GatewayHeartbeatView> {
+  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
+  return heartbeatView(snap.exists ? (snap.data() as Record<string, unknown>) : undefined);
+}
 
 interface UserDoc {
   username?: string;
@@ -447,9 +463,9 @@ async function findUserBySlug(slug: string): Promise<
 }
 
 async function lsGateways(): Promise<void> {
-  const snap = await db.collection(GATEWAYS_COLLECTION).get();
+  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
   const rows = snap.docs.map((d) => {
-    const gw = d.data() as GatewayDoc;
+    const hb = heartbeatView(d.data() as Record<string, unknown>);
 
 const pods = allGatewayPods();
     const podSummary = pods.length === 0
@@ -459,10 +475,10 @@ const pods = allGatewayPods();
         : `${pods.length} pods (${pods.filter((p) => p.phase === "Running").length} running)`;
     return {
       gatewayId: d.id,
-      status: gw.status ?? "?",
-      version: (gw.version ?? "-").slice(0, 12),
-      mounted: (gw.mountedCustomers ?? []).length,
-      heartbeat: ts(gw.lastHeartbeatAt),
+      status: hb.status ?? "?",
+      version: (hb.version ?? "-").slice(0, 12),
+      mounted: (hb.mountedCustomers ?? []).length,
+      heartbeat: ts(hb.lastHeartbeatAt),
       pods: podSummary,
     };
   });
@@ -472,11 +488,11 @@ const pods = allGatewayPods();
 async function lsCustomers(): Promise<void> {
   const filter = typeof args.flags.gateway === "string" ? args.flags.gateway : null;
 
-const gwSnap = await db.collection(GATEWAYS_COLLECTION).get();
+const gwSnap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
   const gwMounted: Record<string, Set<string>> = {};
   for (const d of gwSnap.docs) {
-    const gw = d.data() as GatewayDoc;
-    gwMounted[d.id] = new Set(gw.mountedCustomers ?? []);
+    const hb = heartbeatView(d.data() as Record<string, unknown>);
+    gwMounted[d.id] = new Set(hb.mountedCustomers ?? []);
   }
 
 let q: FirebaseFirestore.Query = db.collection("users").where("approved", "==", true);
@@ -577,7 +593,7 @@ async function inspectCustomer(slug: string): Promise<void> {
     console.log("\n" + red(`${CROSS} gateways/${oc.gatewayId} does not exist — assigned to a gateway that isn't registered.`));
     return;
   }
-  const gw = gwSnap.data() as GatewayDoc;
+  const gw = await readHeartbeatView(oc.gatewayId);
   const mounted = (gw.mountedCustomers ?? []).includes(slug);
   const lastErrorForSlug =
     gw.lastError && gw.lastError.slug === slug ? gw.lastError : null;
@@ -612,7 +628,7 @@ async function inspectGateway(gatewayId: string): Promise<void> {
     console.error(red(`${CROSS} No gateway doc at gateways/${gatewayId}.`));
     process.exit(1);
   }
-  const gw = gwSnap.data() as GatewayDoc;
+  const gw = await readHeartbeatView(gatewayId);
   console.log(bold(`GATEWAY ${gatewayId}`));
   console.log(table([
     { field: "status", value: gw.status ?? "-" },
@@ -664,7 +680,7 @@ async function addCustomer(slug: string, gatewayId: string, apply: boolean): Pro
     console.error(dim(`  Run \`fleet --env=${args.env} ls gateways\` to see registered gateways.`));
     process.exit(1);
   }
-  const gw = gwSnap.data() as GatewayDoc;
+  const gw = await readHeartbeatView(gatewayId);
   const gatewayProfile = await readGatewayProfile(gatewayId);
   if (gw.status === "unreachable") {
     console.error(red(`${CROSS} Gateway '${gatewayId}' is in 'unreachable' status.`));
@@ -744,7 +760,7 @@ async function migrateCustomerPlan(
     console.error(red(`${CROSS} Target gateway 'gateways/${toGatewayId}' does not exist.`));
     process.exit(1);
   }
-  const target = targetSnap.data() as GatewayDoc;
+  const target = await readHeartbeatView(toGatewayId);
   if (target.status !== "ready") {
     console.error(red(`${CROSS} Target gateway '${toGatewayId}' is in status '${target.status}'.`));
     console.error(dim(`  Refusing to migrate to a non-ready gateway.`));

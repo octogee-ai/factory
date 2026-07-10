@@ -6,6 +6,55 @@ import {
   runtimeBrokerBaseUrlFromEnv,
 } from "../runtime-broker.js";
 
+function brokerWithRedeemStatus(
+  status: number,
+  body: Record<string, unknown>,
+): ReturnType<typeof createOpenClawRuntimeBroker> {
+  const fetchImpl: typeof fetch = vi.fn(async () =>
+    new Response(JSON.stringify(body), {
+      headers: { "content-type": "application/json" },
+      status,
+    }),
+  );
+  return createOpenClawRuntimeBroker({
+    baseUrl: "http://octogee-api:3001/",
+    gatewayId: "default",
+    fetchImpl,
+  });
+}
+
+describe("redeemOpenClawWs outcome", () => {
+  it("200 → redeemed", async () => {
+    const broker = brokerWithRedeemStatus(200, {
+      uid: "uid-bob",
+      gatewayId: "default",
+      gatewayUrl: "ws://gw",
+      expectedAgentId: "octogee-bob-coach",
+    });
+    const outcome = await broker.redeemOpenClawWs("ticket");
+    expect(outcome).toEqual({
+      kind: "redeemed",
+      redeemed: {
+        uid: "uid-bob",
+        gatewayId: "default",
+        gatewayUrl: "ws://gw",
+        expectedAgentId: "octogee-bob-coach",
+      },
+    });
+  });
+
+  it("401 → unauthorized", async () => {
+    const broker = brokerWithRedeemStatus(401, { error: "unauthorized" });
+    expect(await broker.redeemOpenClawWs("ticket")).toEqual({ kind: "unauthorized" });
+  });
+
+  it("502 gateway-url-unresolved → revision-unavailable (expected, distinguishable, not a throw)", async () => {
+    const broker = brokerWithRedeemStatus(502, { error: "gateway-url-unresolved" });
+    const outcome = await broker.redeemOpenClawWs("ticket");
+    expect(outcome).toEqual({ kind: "revision-unavailable", reason: "gateway-url-unresolved" });
+  });
+});
+
 describe("OpenClaw runtime broker env", () => {
   it("requires OPENCLAW_RUNTIME_BROKER_URL", () => {
     expect(() => runtimeBrokerBaseUrlFromEnv({ GATEWAY_ID: "default" })).toThrow(

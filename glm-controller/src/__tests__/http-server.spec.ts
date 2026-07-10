@@ -594,11 +594,8 @@ describe("createHttpServer — admin gateway routes", () => {
       builderSlug: "alice",
       gatewayClass: "builder",
       desiredStatus: "running",
-    };
-    store.gateways["gw-alice"] = {
-      gatewayId: "gw-alice",
-      status: "ready",
-      mountedCustomers: [],
+      // Readiness relocated to glmGateways/{id}.heartbeat (cutover step 2).
+      heartbeat: { status: "ready", mountedCustomers: [] },
     };
 
     const app = createHttpServer(buildDeps(store));

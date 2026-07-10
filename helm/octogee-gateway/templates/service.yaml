@@ -2,13 +2,13 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: octogee-gateway-{{ .Values.gatewayId }}
+  name: octogee-gateway-{{ include "octogee-gateway.revisionId" . }}
   labels:
     {{- include "octogee-gateway.labels" . | nindent 4 }}
 spec:
   selector:
     app: octogee-gateway
-    gateway-instance: {{ .Values.gatewayId }}
+    gateway-instance: {{ include "octogee-gateway.revisionId" . }}
   ports:
     - name: http
       port: 18789
@@ -35,14 +35,14 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: gateway-edge-{{ .Values.gatewayId }}
+  name: gateway-edge-{{ include "octogee-gateway.revisionId" . }}
   labels:
     {{- include "octogee-gateway.labels" . | nindent 4 }}
     app.kubernetes.io/name: gateway-edge
 spec:
   selector:
     app: octogee-gateway
-    gateway-instance: {{ .Values.gatewayId }}
+    gateway-instance: {{ include "octogee-gateway.revisionId" . }}
   ports:
     - name: http
       port: {{ .Values.gatewayEdge.port }}

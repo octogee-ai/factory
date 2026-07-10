@@ -2,8 +2,10 @@ import { describe, it, expect, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import type { WebSocket } from "ws";
 import {
+  MM_WS_RECONNECT_CLOSE_CODE,
   attachMmWsBridge,
   buildAckIfUserPost,
+  isAuthChallengeFrame,
   maybeCaptureMmTokenForAuth,
 } from "../mm-proxy/ws.js";
 
@@ -12,18 +14,21 @@ const FIXED_NOW = () => 1_700_000_000_000;
 interface FakeWs extends EventEmitter {
   readyState: 0 | 1 | 2 | 3;
   sent: Array<string | Buffer>;
+  closeCalls: Array<{ code?: number; reason?: string }>;
   send: (data: unknown) => void;
-  close: () => void;
+  close: (code?: number, reason?: string) => void;
 }
 
 function makeFakeWs(initialState: 0 | 1 = 1): FakeWs {
   const ee = new EventEmitter() as FakeWs;
   ee.readyState = initialState;
   ee.sent = [];
+  ee.closeCalls = [];
   ee.send = (data: unknown) => {
     ee.sent.push(data as string | Buffer);
   };
-  ee.close = () => {
+  ee.close = (code?: number, reason?: string) => {
+    ee.closeCalls.push({ code, reason });
     if (ee.readyState !== 3) {
       ee.readyState = 3;
       ee.emit("close");
@@ -36,6 +41,22 @@ const tick = () => new Promise<void>((r) => setImmediate(r));
 const tickN = async (n: number) => {
   for (let i = 0; i < n; i++) await tick();
 };
+
+const AUTH_FRAME = JSON.stringify({
+  seq: 1,
+  action: "authentication_challenge",
+  data: { token: "tok-xyz" },
+});
+
+// The bridge dials the MM upstream only after the first auth challenge passes
+// the roster verdict — tests drive that dance explicitly.
+async function authAndOpen(browser: FakeWs, upstream: FakeWs, frame: string = AUTH_FRAME) {
+  browser.emit("message", frame);
+  await tickN(5);
+  upstream.readyState = 1;
+  upstream.emit("open");
+  await tickN(2);
+}
 
 describe("buildAckIfUserPost", () => {
   it("returns null when mmUserId is unknown", () => {
@@ -92,10 +113,230 @@ describe("buildAckIfUserPost", () => {
   });
 });
 
+describe("isAuthChallengeFrame", () => {
+  it("recognizes authentication_challenge frames (string and Buffer)", () => {
+    expect(isAuthChallengeFrame(AUTH_FRAME)).toBe(true);
+    expect(isAuthChallengeFrame(Buffer.from(AUTH_FRAME))).toBe(true);
+  });
+
+  it("rejects other frames and junk", () => {
+    expect(isAuthChallengeFrame(JSON.stringify({ action: "get_statuses" }))).toBe(false);
+    expect(isAuthChallengeFrame("not-json")).toBe(false);
+    expect(isAuthChallengeFrame("")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Roll roster verdict at authentication (Codex P0): the upstream MM socket is
+// dialed only AFTER the first auth challenge resolves the MM user and the
+// shared roster verdict allows — a moved/quiescing customer is closed with the
+// reconnect-signaling code and NEVER reaches a stale revision's upstream.
+// ---------------------------------------------------------------------------
+
+describe("attachMmWsBridge — roll roster verdict at authentication (Codex P0)", () => {
+  function mkBridge(opts: {
+    verdict?: (
+      mmUserId: string | null,
+    ) =>
+      | Promise<{ allow: true } | { allow: false; reason: string }>
+      | { allow: true }
+      | { allow: false; reason: string };
+    resolveMmUserId?: (token: string) => Promise<string | null>;
+  }) {
+    const browser = makeFakeWs(1);
+    const upstream = makeFakeWs(0);
+    const openUpstream = vi.fn(() => upstream as unknown as WebSocket);
+    const log = vi.fn();
+    attachMmWsBridge(
+      {
+        mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
+        log,
+        resolveMmUserId: opts.resolveMmUserId ?? (async () => "mm-u1"),
+        openUpstream,
+        ...(opts.verdict ? { rosterVerdict: opts.verdict } : {}),
+      },
+      browser as unknown as WebSocket,
+    );
+    return { browser, upstream, openUpstream, log };
+  }
+
+  it("upgrade attaches (uid unknowable), but the upstream is NOT dialed before the first auth frame", async () => {
+    const h = mkBridge({ verdict: () => ({ allow: true as const }) });
+    h.browser.emit("message", JSON.stringify({ seq: 0, action: "get_statuses" }));
+    await tickN(3);
+    expect(h.openUpstream).not.toHaveBeenCalled();
+  });
+
+  it("moved/quiescing customer: first auth frame → verdict → client closed with the reconnect code; upstream NEVER dialed", async () => {
+    const h = mkBridge({
+      verdict: () => ({ allow: false as const, reason: "serving-elsewhere" }),
+    });
+    h.browser.emit("message", AUTH_FRAME);
+    await tickN(5);
+    expect(h.openUpstream).not.toHaveBeenCalled();
+    expect(h.browser.readyState).toBe(3);
+    expect(h.browser.closeCalls[0]).toMatchObject({
+      code: MM_WS_RECONNECT_CLOSE_CODE,
+      reason: expect.stringContaining("serving-elsewhere"),
+    });
+    expect(h.log).toHaveBeenCalledWith(expect.stringContaining("serving-elsewhere"));
+  });
+
+  it("roster-loading at auth time → closed with the reconnect code (retry semantics), no dial", async () => {
+    const h = mkBridge({
+      verdict: () => ({ allow: false as const, reason: "roster-loading" }),
+    });
+    h.browser.emit("message", AUTH_FRAME);
+    await tickN(5);
+    expect(h.openUpstream).not.toHaveBeenCalled();
+    expect(h.browser.closeCalls[0]).toMatchObject({
+      code: MM_WS_RECONNECT_CLOSE_CODE,
+      reason: expect.stringContaining("roster-loading"),
+    });
+  });
+
+  it("serving customer: auth frame → verdict → upstream dialed and frames flow (steady-state regression pin)", async () => {
+    const verdict = vi.fn(async (mmUserId: string | null) => {
+      expect(mmUserId).toBe("mm-u1"); // verdict sees the RESOLVED user
+      return { allow: true as const };
+    });
+    const h = mkBridge({ verdict });
+    await authAndOpen(h.browser, h.upstream);
+    expect(h.openUpstream).toHaveBeenCalledTimes(1);
+    // The buffered auth frame reached MM first, then live frames flow.
+    expect(h.upstream.sent).toEqual([AUTH_FRAME]);
+    const statuses = JSON.stringify({ seq: 2, action: "get_statuses" });
+    h.browser.emit("message", statuses);
+    expect(h.upstream.sent).toEqual([AUTH_FRAME, statuses]);
+  });
+
+  it("the verdict COMPLETES before the dial — never fire-and-forget", async () => {
+    let resolveVerdict: (v: { allow: true }) => void = (_v) => undefined;
+    const h = mkBridge({
+      verdict: () => new Promise<{ allow: true }>((r) => (resolveVerdict = r)),
+    });
+    h.browser.emit("message", AUTH_FRAME);
+    await tickN(5);
+    expect(h.openUpstream).not.toHaveBeenCalled(); // verdict still pending
+    resolveVerdict({ allow: true });
+    await tickN(3);
+    expect(h.openUpstream).toHaveBeenCalledTimes(1);
+  });
+
+  it("a throwing verdict fails CLOSED (client closed with retry semantics, no dial)", async () => {
+    const h = mkBridge({
+      verdict: () => {
+        throw new Error("firestore unavailable");
+      },
+    });
+    h.browser.emit("message", AUTH_FRAME);
+    await tickN(5);
+    expect(h.openUpstream).not.toHaveBeenCalled();
+    expect(h.browser.closeCalls[0]).toMatchObject({ code: MM_WS_RECONNECT_CLOSE_CODE });
+  });
+
+  it("pre-auth frames keep the existing buffered shape: queued in order, flushed after admission + open", async () => {
+    const h = mkBridge({ verdict: () => ({ allow: true as const }) });
+    const statuses = JSON.stringify({ seq: 0, action: "get_statuses" });
+    h.browser.emit("message", statuses);
+    await tickN(2);
+    expect(h.openUpstream).not.toHaveBeenCalled();
+    await authAndOpen(h.browser, h.upstream);
+    expect(h.upstream.sent).toEqual([statuses, AUTH_FRAME]);
+  });
+
+  it("no rosterVerdict configured (legacy pod / cluster surface): auth admits unconditionally", async () => {
+    const h = mkBridge({});
+    await authAndOpen(h.browser, h.upstream);
+    expect(h.openUpstream).toHaveBeenCalledTimes(1);
+    expect(h.upstream.sent).toEqual([AUTH_FRAME]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pre-auth DoS bounds (arc security review): the auth-late bridge holds the
+// upstream dial until the first authentication_challenge. Without bounds an
+// unauthenticated client could stream non-auth frames forever, buffering to
+// memory pressure. A deadline closes a never-authenticating socket; frame-count
+// and byte caps bound the pre-open queue. All use the standard reconnect close.
+// ---------------------------------------------------------------------------
+
+describe("attachMmWsBridge — pre-auth DoS bounds", () => {
+  const realDelay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  function mkBridge(deps: {
+    preAuthDeadlineMs?: number;
+    maxPreAuthFrames?: number;
+    maxPreAuthBytes?: number;
+  }) {
+    const browser = makeFakeWs(1);
+    const upstream = makeFakeWs(0);
+    const openUpstream = vi.fn(() => upstream as unknown as WebSocket);
+    const log = vi.fn();
+    attachMmWsBridge(
+      {
+        mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
+        log,
+        resolveMmUserId: async () => "mm-u1",
+        openUpstream,
+        ...deps,
+      },
+      browser as unknown as WebSocket,
+    );
+    return { browser, upstream, openUpstream, log };
+  }
+
+  it("no auth challenge within the deadline → closed with the reconnect code; upstream NEVER dialed", async () => {
+    const h = mkBridge({ preAuthDeadlineMs: 20 });
+    h.browser.emit("message", JSON.stringify({ seq: 0, action: "get_statuses" }));
+    await realDelay(50);
+    expect(h.openUpstream).not.toHaveBeenCalled();
+    expect(h.browser.readyState).toBe(3);
+    expect(h.browser.closeCalls[0]).toMatchObject({ code: MM_WS_RECONNECT_CLOSE_CODE });
+  });
+
+  it("pre-auth frame-count cap exceeded → closed; upstream NEVER dialed", async () => {
+    const h = mkBridge({ maxPreAuthFrames: 3, preAuthDeadlineMs: 10_000 });
+    for (let i = 0; i < 4; i++) {
+      h.browser.emit("message", JSON.stringify({ seq: i, action: "get_statuses" }));
+    }
+    await tickN(2);
+    expect(h.openUpstream).not.toHaveBeenCalled();
+    expect(h.browser.readyState).toBe(3);
+    expect(h.browser.closeCalls[0]).toMatchObject({ code: MM_WS_RECONNECT_CLOSE_CODE });
+  });
+
+  it("pre-auth byte cap exceeded → closed; upstream NEVER dialed", async () => {
+    const h = mkBridge({ maxPreAuthBytes: 100, maxPreAuthFrames: 1_000, preAuthDeadlineMs: 10_000 });
+    h.browser.emit(
+      "message",
+      JSON.stringify({ seq: 0, action: "get_statuses", pad: "x".repeat(200) }),
+    );
+    await tickN(2);
+    expect(h.openUpstream).not.toHaveBeenCalled();
+    expect(h.browser.readyState).toBe(3);
+    expect(h.browser.closeCalls[0]).toMatchObject({ code: MM_WS_RECONNECT_CLOSE_CODE });
+  });
+
+  it("normal client (auth challenge first): admitted, buffered frame flushes, and neither cap nor deadline closes it (regression pin)", async () => {
+    const h = mkBridge({ preAuthDeadlineMs: 30, maxPreAuthFrames: 3, maxPreAuthBytes: 1_000 });
+    await authAndOpen(h.browser, h.upstream);
+    expect(h.openUpstream).toHaveBeenCalledTimes(1);
+    expect(h.upstream.sent).toEqual([AUTH_FRAME]);
+    // Past the deadline — but admission started, so the deadline was disarmed.
+    await realDelay(60);
+    expect(h.browser.readyState).toBe(1);
+    expect(h.browser.closeCalls).toHaveLength(0);
+    const statuses = JSON.stringify({ seq: 2, action: "get_statuses" });
+    h.browser.emit("message", statuses);
+    expect(h.upstream.sent).toEqual([AUTH_FRAME, statuses]);
+  });
+});
+
 describe("attachMmWsBridge — buffering + mmUserId race", () => {
   it("buffers browser→upstream frames until upstream emits 'open' (auth_challenge race)", async () => {
     const browser = makeFakeWs(1);
-    const upstream = makeFakeWs(0); 
+    const upstream = makeFakeWs(0);
     const log = vi.fn();
 
     attachMmWsBridge(
@@ -108,25 +349,20 @@ describe("attachMmWsBridge — buffering + mmUserId race", () => {
       browser as unknown as WebSocket,
     );
 
-    const authFrame = JSON.stringify({
-      seq: 1,
-      action: "authentication_challenge",
-      data: { token: "tok-xyz" },
-    });
-    browser.emit("message", authFrame);
+    browser.emit("message", AUTH_FRAME);
+    await tickN(5); // admission ran; upstream dialed but not yet open
 
     expect(upstream.sent).toEqual([]);
 
     upstream.readyState = 1;
     upstream.emit("open");
 
-    expect(upstream.sent).toEqual([authFrame]);
+    expect(upstream.sent).toEqual([AUTH_FRAME]);
   });
 
-  it("forwards directly when upstream is already open", () => {
+  it("forwards directly once authenticated and the upstream is open", async () => {
     const browser = makeFakeWs(1);
-    const upstream = makeFakeWs(1);
-    upstream.readyState = 1;
+    const upstream = makeFakeWs(0);
 
     attachMmWsBridge(
       {
@@ -137,47 +373,49 @@ describe("attachMmWsBridge — buffering + mmUserId race", () => {
       },
       browser as unknown as WebSocket,
     );
-    upstream.emit("open");
+    await authAndOpen(browser, upstream);
 
-    const frame = JSON.stringify({ seq: 1, action: "get_statuses" });
+    const frame = JSON.stringify({ seq: 2, action: "get_statuses" });
     browser.emit("message", frame);
 
-    expect(upstream.sent).toEqual([frame]);
+    expect(upstream.sent).toEqual([AUTH_FRAME, frame]);
   });
 
-  it("awaits mmUserId resolution before deciding ack on inbound posted (no silent no-op)", async () => {
+  it("awaits mmUserId resolution before deciding ack on inbound posted (re-auth race, no silent no-op)", async () => {
     const browser = makeFakeWs(1);
-    const upstream = makeFakeWs(1);
-    upstream.readyState = 1;
+    const upstream = makeFakeWs(0);
 
     let resolveAuth: (id: string | null) => void = (_id) => undefined;
-    const slowResolveMmUserId = vi.fn(
-      (_token: string): Promise<string | null> =>
-        new Promise<string | null>((resolve) => {
-          resolveAuth = resolve;
-        }),
-    );
+    const resolveMmUserId = vi.fn((token: string): Promise<string | null> => {
+      if (token === "tok-first") return Promise.resolve(null); // failed first auth
+      return new Promise<string | null>((resolve) => {
+        resolveAuth = resolve;
+      });
+    });
 
     attachMmWsBridge(
       {
         mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
         log: vi.fn(),
-        resolveMmUserId: slowResolveMmUserId,
+        resolveMmUserId,
         openUpstream: () => upstream as unknown as WebSocket,
         ackResolutionTimeoutMs: 1_000,
         now: FIXED_NOW,
       },
       browser as unknown as WebSocket,
     );
-    upstream.emit("open");
+    // First auth attempt fails token resolution → bridge still admits (MM
+    // enforces auth itself) and dials.
+    await authAndOpen(
+      browser,
+      upstream,
+      JSON.stringify({ seq: 1, action: "authentication_challenge", data: { token: "tok-first" } }),
+    );
 
+    // Client retries auth; resolution is slow while a posted event races in.
     browser.emit(
       "message",
-      JSON.stringify({
-        seq: 1,
-        action: "authentication_challenge",
-        data: { token: "tok-xyz" },
-      }),
+      JSON.stringify({ seq: 2, action: "authentication_challenge", data: { token: "tok-xyz" } }),
     );
 
     const postedFrame = JSON.stringify({
@@ -201,48 +439,46 @@ describe("attachMmWsBridge — buffering + mmUserId race", () => {
   });
 
   it("times out the ack-resolution wait and still forwards the frame (best-effort)", async () => {
-    vi.useFakeTimers();
-    try {
-      const browser = makeFakeWs(1);
-      const upstream = makeFakeWs(1);
-      upstream.readyState = 1;
+    const browser = makeFakeWs(1);
+    const upstream = makeFakeWs(0);
 
-      attachMmWsBridge(
-        {
-          mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
-          log: vi.fn(),
-          resolveMmUserId: () => new Promise<string | null>(() => undefined),
-          openUpstream: () => upstream as unknown as WebSocket,
-          ackResolutionTimeoutMs: 50,
-          now: FIXED_NOW,
-        },
-        browser as unknown as WebSocket,
-      );
-      upstream.emit("open");
+    const resolveMmUserId = vi.fn((token: string): Promise<string | null> => {
+      if (token === "tok-first") return Promise.resolve(null);
+      return new Promise<string | null>(() => undefined); // stuck forever
+    });
 
-      browser.emit(
-        "message",
-        JSON.stringify({
-          seq: 1,
-          action: "authentication_challenge",
-          data: { token: "tok-stuck" },
-        }),
-      );
+    attachMmWsBridge(
+      {
+        mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
+        log: vi.fn(),
+        resolveMmUserId,
+        openUpstream: () => upstream as unknown as WebSocket,
+        ackResolutionTimeoutMs: 50,
+        now: FIXED_NOW,
+      },
+      browser as unknown as WebSocket,
+    );
+    await authAndOpen(
+      browser,
+      upstream,
+      JSON.stringify({ seq: 1, action: "authentication_challenge", data: { token: "tok-first" } }),
+    );
 
-      const postedFrame = JSON.stringify({
-        event: "posted",
-        data: { post: JSON.stringify({ id: "p2", user_id: "u-target", channel_id: "c2" }) },
-      });
-      upstream.emit("message", postedFrame);
+    browser.emit(
+      "message",
+      JSON.stringify({ seq: 2, action: "authentication_challenge", data: { token: "tok-stuck" } }),
+    );
 
-      vi.useRealTimers();
-      await tickN(10);
-      await new Promise<void>((r) => setTimeout(r, 80));
+    const postedFrame = JSON.stringify({
+      event: "posted",
+      data: { post: JSON.stringify({ id: "p2", user_id: "u-target", channel_id: "c2" }) },
+    });
+    upstream.emit("message", postedFrame);
 
-      expect(browser.sent).toEqual([postedFrame]);
-    } finally {
-      vi.useRealTimers();
-    }
+    await tickN(10);
+    await new Promise<void>((r) => setTimeout(r, 80));
+
+    expect(browser.sent).toEqual([postedFrame]);
   });
 });
 
@@ -269,10 +505,22 @@ function makeOptWs(state: 0 | 1 = 1): OptWs {
   return ee;
 }
 
+async function authAndOpenOpt(browser: OptWs, upstream: OptWs, frame: Buffer | string) {
+  browser.emit("message", frame, false);
+  await tickN(5);
+  upstream.readyState = 1;
+  upstream.emit("open");
+  await tickN(2);
+}
+
+const AUTH_BUFFER = Buffer.from(
+  JSON.stringify({ seq: 1, action: "authentication_challenge", data: { token: "t" } }),
+);
+
 describe("attachMmWsBridge — frame opcode preservation (MM rejects pre-auth binary)", () => {
-  it("forwards a browser TEXT frame (Buffer in, isBinary=false) to upstream as text", () => {
+  it("forwards the browser TEXT auth frame (Buffer in, isBinary=false) to upstream as text", async () => {
     const browser = makeOptWs(1);
-    const upstream = makeOptWs(1);
+    const upstream = makeOptWs(0);
     attachMmWsBridge(
       {
         mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
@@ -282,19 +530,14 @@ describe("attachMmWsBridge — frame opcode preservation (MM rejects pre-auth bi
       },
       browser as unknown as WebSocket,
     );
-    upstream.emit("open");
+    await authAndOpenOpt(browser, upstream, AUTH_BUFFER);
 
-const auth = Buffer.from(
-      JSON.stringify({ seq: 1, action: "authentication_challenge", data: { token: "t" } }),
-    );
-    browser.emit("message", auth, false);
-
-    expect(upstream.frames).toEqual([{ data: auth, binary: false }]);
+    expect(upstream.frames).toEqual([{ data: AUTH_BUFFER, binary: false }]);
   });
 
-  it("preserves a genuinely binary browser frame as binary", () => {
+  it("preserves a genuinely binary browser frame as binary once admitted", async () => {
     const browser = makeOptWs(1);
-    const upstream = makeOptWs(1);
+    const upstream = makeOptWs(0);
     attachMmWsBridge(
       {
         mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
@@ -304,17 +547,20 @@ const auth = Buffer.from(
       },
       browser as unknown as WebSocket,
     );
-    upstream.emit("open");
+    await authAndOpenOpt(browser, upstream, AUTH_BUFFER);
 
     const bin = Buffer.from([0x01, 0x02, 0x03]);
     browser.emit("message", bin, true);
 
-    expect(upstream.frames).toEqual([{ data: bin, binary: true }]);
+    expect(upstream.frames).toEqual([
+      { data: AUTH_BUFFER, binary: false },
+      { data: bin, binary: true },
+    ]);
   });
 
-  it("preserves opcode for frames buffered before upstream 'open' (auth_challenge race)", () => {
+  it("preserves opcode for frames buffered before upstream 'open' (auth_challenge race)", async () => {
     const browser = makeOptWs(1);
-    const upstream = makeOptWs(0); 
+    const upstream = makeOptWs(0);
     attachMmWsBridge(
       {
         mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
@@ -325,21 +571,19 @@ const auth = Buffer.from(
       browser as unknown as WebSocket,
     );
 
-    const auth = Buffer.from(
-      JSON.stringify({ seq: 1, action: "authentication_challenge", data: { token: "t" } }),
-    );
-    browser.emit("message", auth, false);
+    browser.emit("message", AUTH_BUFFER, false);
+    await tickN(5);
     expect(upstream.frames).toEqual([]);
 
     upstream.readyState = 1;
     upstream.emit("open");
 
-    expect(upstream.frames).toEqual([{ data: auth, binary: false }]);
+    expect(upstream.frames).toEqual([{ data: AUTH_BUFFER, binary: false }]);
   });
 
   it("forwards upstream→browser frames preserving the text opcode", async () => {
     const browser = makeOptWs(1);
-    const upstream = makeOptWs(1);
+    const upstream = makeOptWs(0);
     attachMmWsBridge(
       {
         mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
@@ -349,7 +593,7 @@ const auth = Buffer.from(
       },
       browser as unknown as WebSocket,
     );
-    upstream.emit("open");
+    await authAndOpenOpt(browser, upstream, AUTH_BUFFER);
 
     const evt = Buffer.from(JSON.stringify({ event: "hello", data: {} }));
     upstream.emit("message", evt, false);
@@ -360,13 +604,15 @@ const auth = Buffer.from(
 });
 
 describe("attachMmWsBridge — connection lifecycle logging", () => {
-  const authFrame = JSON.stringify({
+  // Auth token that resolves to NO user: the bridge still admits (MM enforces
+  // auth itself) without the "authenticated" log line.
+  const anonAuth = JSON.stringify({
     seq: 1,
     action: "authentication_challenge",
-    data: { token: "tok-xyz" },
+    data: { token: "tok-anon" },
   });
 
-  it("logs upstream open", () => {
+  it("logs upstream open", async () => {
     const browser = makeFakeWs(1);
     const upstream = makeFakeWs(0);
     const log = vi.fn();
@@ -379,15 +625,13 @@ describe("attachMmWsBridge — connection lifecycle logging", () => {
       },
       browser as unknown as WebSocket,
     );
-    upstream.readyState = 1;
-    upstream.emit("open");
+    await authAndOpen(browser, upstream);
     expect(log).toHaveBeenCalledWith(expect.stringContaining("upstream open"));
   });
 
   it("logs the resolved mmUserId exactly once (not per frame)", async () => {
     const browser = makeFakeWs(1);
-    const upstream = makeFakeWs(1);
-    upstream.readyState = 1;
+    const upstream = makeFakeWs(0);
     const log = vi.fn();
     attachMmWsBridge(
       {
@@ -398,10 +642,7 @@ describe("attachMmWsBridge — connection lifecycle logging", () => {
       },
       browser as unknown as WebSocket,
     );
-    upstream.emit("open");
-
-    browser.emit("message", authFrame);
-    await tickN(5);
+    await authAndOpen(browser, upstream);
     browser.emit("message", JSON.stringify({ seq: 2, action: "get_statuses" }));
     browser.emit("message", JSON.stringify({ seq: 3, action: "get_statuses" }));
     await tickN(5);
@@ -414,8 +655,7 @@ describe("attachMmWsBridge — connection lifecycle logging", () => {
 
   it("logs non-Error auth resolution rejections with the rejection reason", async () => {
     const browser = makeFakeWs(1);
-    const upstream = makeFakeWs(1);
-    upstream.readyState = 1;
+    const upstream = makeFakeWs(0);
     const log = vi.fn();
     attachMmWsBridge(
       {
@@ -428,9 +668,7 @@ describe("attachMmWsBridge — connection lifecycle logging", () => {
       },
       browser as unknown as WebSocket,
     );
-    upstream.emit("open");
-
-    browser.emit("message", authFrame);
+    browser.emit("message", AUTH_FRAME);
     await tickN(5);
 
     expect(log).toHaveBeenCalledWith(
@@ -438,21 +676,20 @@ describe("attachMmWsBridge — connection lifecycle logging", () => {
     );
   });
 
-  it("logs upstream close with code + reason + mmUserId (the flap signal)", () => {
+  it("logs upstream close with code + reason + mmUserId=unknown when the token never resolved", async () => {
     const browser = makeFakeWs(1);
-    const upstream = makeFakeWs(1);
-    upstream.readyState = 1;
+    const upstream = makeFakeWs(0);
     const log = vi.fn();
     attachMmWsBridge(
       {
         mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
         log,
-        resolveMmUserId: async () => "u1",
+        resolveMmUserId: async () => null,
         openUpstream: () => upstream as unknown as WebSocket,
       },
       browser as unknown as WebSocket,
     );
-    upstream.emit("open");
+    await authAndOpen(browser, upstream, anonAuth);
 
     upstream.readyState = 3;
     upstream.emit("close", 1000, Buffer.from("UnauthBinary"));
@@ -465,10 +702,9 @@ describe("attachMmWsBridge — connection lifecycle logging", () => {
     );
   });
 
-  it("logs browser close with code + reason", () => {
+  it("logs browser close with code + reason (even before any upstream exists)", () => {
     const browser = makeFakeWs(1);
-    const upstream = makeFakeWs(1);
-    upstream.readyState = 1;
+    const upstream = makeFakeWs(0);
     const log = vi.fn();
     attachMmWsBridge(
       {
@@ -479,7 +715,6 @@ describe("attachMmWsBridge — connection lifecycle logging", () => {
       },
       browser as unknown as WebSocket,
     );
-    upstream.emit("open");
 
     browser.readyState = 3;
     browser.emit("close", 1006, Buffer.from("abnormal"));
@@ -491,8 +726,7 @@ describe("attachMmWsBridge — connection lifecycle logging", () => {
 
   it("attributes a close to the authenticated user once known", async () => {
     const browser = makeFakeWs(1);
-    const upstream = makeFakeWs(1);
-    upstream.readyState = 1;
+    const upstream = makeFakeWs(0);
     const log = vi.fn();
     attachMmWsBridge(
       {
@@ -503,9 +737,7 @@ describe("attachMmWsBridge — connection lifecycle logging", () => {
       },
       browser as unknown as WebSocket,
     );
-    upstream.emit("open");
-    browser.emit("message", authFrame);
-    await tickN(5);
+    await authAndOpen(browser, upstream);
 
     upstream.readyState = 3;
     upstream.emit("close", 1011, Buffer.from("x"));
@@ -517,19 +749,18 @@ describe("attachMmWsBridge — connection lifecycle logging", () => {
 
   it("does not log per forwarded frame (one line per lifecycle transition, not per message)", async () => {
     const browser = makeFakeWs(1);
-    const upstream = makeFakeWs(1);
-    upstream.readyState = 1;
+    const upstream = makeFakeWs(0);
     const log = vi.fn();
     attachMmWsBridge(
       {
         mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
         log,
-        resolveMmUserId: async () => "u1",
+        resolveMmUserId: async () => null, // no "authenticated" line
         openUpstream: () => upstream as unknown as WebSocket,
       },
       browser as unknown as WebSocket,
     );
-    upstream.emit("open"); 
+    await authAndOpen(browser, upstream, anonAuth);
 
     for (let i = 0; i < 5; i++) {
       browser.emit("message", JSON.stringify({ seq: i, action: "get_statuses" }));
@@ -537,27 +768,26 @@ describe("attachMmWsBridge — connection lifecycle logging", () => {
     }
     await tickN(5);
 
-expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledTimes(1);
     expect(log).toHaveBeenCalledWith(expect.stringContaining("upstream open"));
   });
 
-  it("logs exactly one close line per teardown (induced other-side close is suppressed, not a phantom)", () => {
+  it("logs exactly one close line per teardown (induced other-side close is suppressed, not a phantom)", async () => {
     const browser = makeFakeWs(1);
-    const upstream = makeFakeWs(1);
-    upstream.readyState = 1;
+    const upstream = makeFakeWs(0);
     const log = vi.fn();
     attachMmWsBridge(
       {
         mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
         log,
-        resolveMmUserId: async () => "u1",
+        resolveMmUserId: async () => null,
         openUpstream: () => upstream as unknown as WebSocket,
       },
       browser as unknown as WebSocket,
     );
-    upstream.emit("open");
+    await authAndOpen(browser, upstream, anonAuth);
 
-upstream.readyState = 3;
+    upstream.readyState = 3;
     upstream.emit("close", 1000, Buffer.from("UnauthBinary"));
 
     const closeLines = log.mock.calls

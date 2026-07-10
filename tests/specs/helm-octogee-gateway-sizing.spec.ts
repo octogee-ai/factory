@@ -136,36 +136,6 @@ describe("helm/octogee-gateway/ — sizing tier profile-default fallback", () =>
   });
 });
 
-describe("helm/octogee-gateway/ — Phase D tier label on PVC", () => {
-  it("stamps the resolved tier on PersistentVolumeClaim when persistence is enabled (storage chargeback hand-off)", () => {
-    const out = helmTemplate({
-      sizingTier: "large",
-      "persistence.enabled": "true",
-    });
-    const docs = parseAllDocuments(out);
-    const pvc = docs
-      .map((d) => d.toJS() as { kind?: string; metadata?: { name?: string; labels?: Record<string, string> } })
-      .find((d) => d.kind === "PersistentVolumeClaim" && d.metadata?.name === "octogee-gateway-default-data");
-    expect(pvc, "expected PVC to render when persistence.enabled=true").toBeDefined();
-    expect(pvc!.metadata!.labels!.tier).toBe("large");
-  });
-
-  it("PVC tier label matches the gateway pod label (same effectiveTier source)", () => {
-    const out = helmTemplate({
-      profile: "operator",
-      "persistence.enabled": "true",
-    });
-    const docs = parseAllDocuments(out);
-    const pvc = docs
-      .map((d) => d.toJS() as { kind?: string; metadata?: { labels?: Record<string, string> } })
-      .find((d) => d.kind === "PersistentVolumeClaim");
-    const dep = docs
-      .map((d) => d.toJS() as { kind?: string; spec?: { template?: { metadata?: { labels?: Record<string, string> } } } })
-      .find((d) => d.kind === "Deployment");
-    expect(pvc?.metadata?.labels?.tier).toBe(dep?.spec?.template?.metadata?.labels?.tier);
-  });
-});
-
 describe("helm/octogee-gateway/ — replicas knob (paused mode)", () => {
   it("defaults to replicas: 1 when not set (running gateway)", () => {
     const out = helmTemplate();

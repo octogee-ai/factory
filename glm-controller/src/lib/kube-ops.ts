@@ -28,6 +28,14 @@ export interface KubeOps {
     namespace: string;
     name: string;
   }): Promise<void>;
+  deleteServiceAccount(opts: {
+    namespace: string;
+    name: string;
+  }): Promise<void>;
+  deleteService(opts: {
+    namespace: string;
+    name: string;
+  }): Promise<void>;
 }
 
 export type GatewayPodDiagnosticsStatus = "ready" | "not-ready" | "missing" | "unknown";
@@ -64,6 +72,28 @@ export interface KubeOpsRunnerDeps {
   runKubectl: KubectlSubprocess;
   log: (msg: string) => void;
   now?: () => number;
+}
+
+async function deleteKubeResource(
+  deps: KubeOpsRunnerDeps,
+  resource: "pvc" | "secret" | "serviceaccount" | "service",
+  opts: { namespace: string; name: string },
+): Promise<void> {
+  const result = await deps.runKubectl([
+    "-n",
+    opts.namespace,
+    "delete",
+    `${resource}/${opts.name}`,
+    "--ignore-not-found=true",
+  ]);
+  if (result.code !== 0) {
+    throw new Error(
+      `kubectl delete ${resource}/${opts.name} ns=${opts.namespace} failed (code=${result.code}): ${
+        result.stderr.trim() || result.stdout.trim()
+      }`,
+    );
+  }
+  deps.log(`[kube-ops] deleted ${resource}/${opts.name} ns=${opts.namespace}`);
 }
 
 const NOT_FOUND_PATTERN = /\(NotFound\)/;
@@ -331,41 +361,19 @@ export function createKubeSubprocessRunner(deps: KubeOpsRunnerDeps): KubeOps {
     },
 
     async deletePersistentVolumeClaim({ namespace, name }) {
-      const args = [
-        "-n",
-        namespace,
-        "delete",
-        `pvc/${name}`,
-        "--ignore-not-found=true",
-      ];
-      const result = await deps.runKubectl(args);
-      if (result.code !== 0) {
-        throw new Error(
-          `kubectl delete pvc/${name} ns=${namespace} failed (code=${result.code}): ${
-            result.stderr.trim() || result.stdout.trim()
-          }`,
-        );
-      }
-      deps.log(`[kube-ops] deleted pvc/${name} ns=${namespace}`);
+      await deleteKubeResource(deps, "pvc", { namespace, name });
     },
 
     async deleteSecret({ namespace, name }) {
-      const args = [
-        "-n",
-        namespace,
-        "delete",
-        `secret/${name}`,
-        "--ignore-not-found=true",
-      ];
-      const result = await deps.runKubectl(args);
-      if (result.code !== 0) {
-        throw new Error(
-          `kubectl delete secret/${name} ns=${namespace} failed (code=${result.code}): ${
-            result.stderr.trim() || result.stdout.trim()
-          }`,
-        );
-      }
-      deps.log(`[kube-ops] deleted secret/${name} ns=${namespace}`);
+      await deleteKubeResource(deps, "secret", { namespace, name });
+    },
+
+    async deleteServiceAccount({ namespace, name }) {
+      await deleteKubeResource(deps, "serviceaccount", { namespace, name });
+    },
+
+    async deleteService({ namespace, name }) {
+      await deleteKubeResource(deps, "service", { namespace, name });
     },
   };
 }
@@ -395,6 +403,12 @@ export function createLoggingKubeOps(log: (msg: string) => void): KubeOps {
     },
     deleteSecret: async ({ namespace, name }) => {
       log(`[kube-ops:stub] delete secret ns=${namespace} ${name} — no exec`);
+    },
+    deleteServiceAccount: async ({ namespace, name }) => {
+      log(`[kube-ops:stub] delete serviceaccount ns=${namespace} ${name} — no exec`);
+    },
+    deleteService: async ({ namespace, name }) => {
+      log(`[kube-ops:stub] delete service ns=${namespace} ${name} — no exec`);
     },
   };
 }

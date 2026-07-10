@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FieldValue } from "firebase-admin/firestore";
 import { GLM_OPERATIONS_COLLECTION, type Operation } from "@octogee/shared/types/glm";
 import {
-  abandonPendingOperation,
   drainPendingOperationsOnce,
   processOperation,
   startOperationQueueDrain,
@@ -203,7 +202,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
 
     const queued = store.get("op-default");
     expect(queued?.status).toBe("pending");
-    expect(queued?.waitingOn).toBe("bender-blue → bender-green");
+    expect(queued?.waitingOn).toBe("roll bender-blue");
     expect(queued?.error).toBeUndefined();
 
     releaseFirst();
@@ -306,7 +305,7 @@ describe("gateway operation queue — FIFO per scope across the fast path", () =
 
     expect(rolloutHandler).not.toHaveBeenCalled();
     expect(store.get("op-new")?.status).toBe("pending");
-    expect(store.get("op-new")?.waitingOn).toBe("bender-blue → bender-green");
+    expect(store.get("op-new")?.waitingOn).toBe("roll bender-blue");
 
     await drainPendingOperationsOnce(deps);
 
@@ -518,21 +517,3 @@ describe("queued op bookkeeping is write-quiet", () => {
   });
 });
 
-describe("abandonPendingOperation", () => {
-  it("terminally fails a pending op and leaves a running one untouched", async () => {
-    const { db, store } = createFakeGlmOperationsDb({
-      "op-p": baseOp({ id: "op-p", kind: "migrate-customer", nextAttemptAt: 999 }),
-      "op-run": baseOp({ id: "op-run", kind: "migrate-customer", status: "running" }),
-    });
-    await expect(
-      abandonPendingOperation(db as unknown as Parameters<typeof abandonPendingOperation>[0], "op-p", "parent rollout timed out"),
-    ).resolves.toBe(true);
-    expect(store.get("op-p")?.status).toBe("failed");
-    expect(String(store.get("op-p")?.error)).toMatch(/parent rollout timed out/);
-    expect(store.get("op-p")?.nextAttemptAt).toBeUndefined();
-    await expect(
-      abandonPendingOperation(db as unknown as Parameters<typeof abandonPendingOperation>[0], "op-run", "x"),
-    ).resolves.toBe(false);
-    expect(store.get("op-run")?.status).toBe("running");
-  });
-});

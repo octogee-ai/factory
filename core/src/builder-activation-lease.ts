@@ -275,10 +275,9 @@ export async function requestBuilderActivationLease(opts: {
   const { db, uid } = opts;
   const now = opts.now ?? Date.now();
   const userRef = db.collection("users").doc(uid);
-  const [userSnap, glmSnap, hbSnap, pendingOpsSnap] = await Promise.all([
+  const [userSnap, glmSnap, pendingOpsSnap] = await Promise.all([
     userRef.get(),
     db.collection(GLM_GATEWAYS_COLLECTION).get(),
-    db.collection("gateways").get(),
     db
       .collection(GLM_OPERATIONS_COLLECTION)
       .where("status", "in", ["pending", "running"])
@@ -310,9 +309,16 @@ export async function requestBuilderActivationLease(opts: {
     };
   }
 
+  // Readiness telemetry relocated to glmGateways/{id}.heartbeat (cutover step 2);
+  // the legacy flat gateways/{id} status writer is contracted, so source the
+  // heartbeat sub-doc off the glm docs already fetched.
   const gatewayHeartbeats = new Map<string, Record<string, unknown>>();
-  for (const doc of hbSnap.docs) {
-    gatewayHeartbeats.set(doc.id, doc.data() as Record<string, unknown>);
+  for (const doc of glmSnap.docs) {
+    const data = doc.data() as Record<string, unknown>;
+    const hb = data.heartbeat;
+    if (hb && typeof hb === "object" && !Array.isArray(hb)) {
+      gatewayHeartbeats.set(doc.id, hb as Record<string, unknown>);
+    }
   }
   const plan = resolveBuilderActivationPlan({
     uid,

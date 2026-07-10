@@ -37,6 +37,11 @@ import {
   hasRunningInboundMigrationForUid,
   slugFromAssignedUser,
 } from "@octogee/core/assigned-roster";
+import {
+  mountsOnRevision,
+  readAssignmentDocsForGateway,
+} from "@octogee/core/assignment-doc";
+import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -756,6 +761,92 @@ async function isAssignedToGateway(
   return stringAt(userData, OPENCLAW_GATEWAY_ID_FIELD) === gatewayId ? userData : null;
 }
 
+// Defense-in-depth against same-gateway revision spoofing (PR5 review P1). The
+// KSA binds the BARE gateway, but the revisionId is self-reported, so a pod
+// bound as `default` could otherwise request `default-r2` while running r1 and
+// double-mount during a roll. This is NOT a cross-tenant boundary (both revisions
+// serve the same tenant); it rejects an out-of-family or non-active revision.
+// (Deferred hardening: true revision-authenticated pod identity — vs the
+// self-reported GATEWAY_REVISION_ID env — is a later item, since it is not a
+// cross-tenant boundary today.)
+export function isRequestedRevisionAllowed(
+  gatewayId: string,
+  revisionId: string,
+  gatewayDoc: Record<string, unknown> | undefined,
+): boolean {
+  if (!revisionId) return true; // legacy pod: no filtering
+  if (!revisionId.startsWith(`${gatewayId}-r`)) return false; // wrong gateway / malformed
+  if (!gatewayDoc) return true; // pre-backfill: prefix is the only boundary
+  const live = typeof gatewayDoc.liveRevisionId === "string" ? gatewayDoc.liveRevisionId : null;
+  const roll = gatewayDoc.roll as { targetRevisionId?: unknown } | null | undefined;
+  const target = typeof roll?.targetRevisionId === "string" ? roll.targetRevisionId : null;
+  return revisionId === live || revisionId === target;
+}
+
+// The full revision-request gate for the /assigned-users mount driver. An
+// empty/absent revisionId is the legacy escape hatch (mount everyone) — but it is
+// permitted ONLY when the bound gateway is genuinely pre-backfill: no
+// gateways/{gw} desired doc AND no assignment docs. A backfilled gateway that
+// omits its revision would otherwise downgrade the revision-filtered roster to
+// the FULL roster and double-mount during a roll, so it is rejected (the pod must
+// report its GATEWAY_REVISION_ID). Non-empty revisions keep the existing
+// same-gateway spoofing validation.
+export function isRevisionRosterRequestAllowed(input: {
+  gatewayId: string;
+  podRevisionId: string;
+  gatewayDoc: Record<string, unknown> | undefined;
+  hasAssignmentDocs: boolean;
+}): boolean {
+  if (!input.podRevisionId) {
+    return !input.gatewayDoc && !input.hasAssignmentDocs;
+  }
+  return isRequestedRevisionAllowed(input.gatewayId, input.podRevisionId, input.gatewayDoc);
+}
+
+// Reads the gateway's desired doc (and, for an omitted revision, its assignment
+// docs) and applies the revision-request gate. Returns the live revision for the
+// mount filter when allowed, else { allowed: false } → the route answers 400.
+async function resolveAssignedUsersRevisionGate(
+  db: Firestore,
+  gatewayId: string,
+  podRevisionId: string,
+): Promise<{ allowed: false } | { allowed: true; liveRevisionId: string | null }> {
+  const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+  const gatewayDoc = gatewaySnap.exists
+    ? (gatewaySnap.data() as Record<string, unknown>)
+    : undefined;
+  const hasAssignmentDocs = podRevisionId
+    ? false
+    : (await readAssignmentDocsForGateway(db, gatewayId)).length > 0;
+  if (!isRevisionRosterRequestAllowed({ gatewayId, podRevisionId, gatewayDoc, hasAssignmentDocs })) {
+    return { allowed: false };
+  }
+  const liveRevisionId =
+    typeof gatewayDoc?.liveRevisionId === "string" ? gatewayDoc.liveRevisionId : null;
+  return { allowed: true, liveRevisionId };
+}
+
+// The roster (mount driver) predicate for one revision pod: an approved,
+// bare-assigned user mounts on the pod's revision iff mountsOnRevision says so
+// (assignment doc → its revision; gap user → the live revision). Legacy pods
+// (empty revisionId) load nothing and mount everyone — byte-identical to today.
+export async function buildRosterRevisionFilter(
+  db: Firestore,
+  gatewayId: string,
+  podRevisionId: string,
+  liveRevisionId: string | null,
+): Promise<(uid: string) => boolean> {
+  if (!podRevisionId) return () => true;
+  const assignments = await readAssignmentDocsForGateway(db, gatewayId);
+  const assignmentRevisionByUid = new Map(assignments.map((a) => [a.uid, a.revisionId]));
+  return (uid: string) =>
+    mountsOnRevision({
+      podRevisionId,
+      liveRevisionId,
+      assignmentRevisionId: assignmentRevisionByUid.get(uid) ?? null,
+    });
+}
+
 function snapshotProvisioningStatus(data: Record<string, unknown>): FleetBrokerProvisioningStatus {
   const status = stringAt(data, "provisioning.openclaw.status");
   return status === "provisioning" || status === "complete" ? status : "";
@@ -921,6 +1012,26 @@ function installSnapshotRoutes(
     const bound = boundGateway(req, res);
     if (!bound) return;
     const completeOnly = req.body?.completeOnly === true;
+    // The pod self-reports its revision ({gw}-r{n}). It's scoped to the bound
+    // (bare) tenant by the KSA, but we still validate the requested revision
+    // belongs to this gateway and is an active revision (defense-in-depth against
+    // same-gateway revision spoofing). Empty is legal only on a pre-backfill pod.
+    const podRevisionId = typeof req.body?.revisionId === "string" ? req.body.revisionId : "";
+    const gate = await resolveAssignedUsersRevisionGate(db, bound.gatewayId, podRevisionId);
+    if (!gate.allowed) {
+      res.status(400).json({
+        error: "invalid_revision",
+        gatewayId: bound.gatewayId,
+        revisionId: podRevisionId,
+      });
+      return;
+    }
+    const revisionFilter = await buildRosterRevisionFilter(
+      db,
+      bound.gatewayId,
+      podRevisionId,
+      gate.liveRevisionId,
+    );
     const snap = await db
       .collection("users")
       .where(OPENCLAW_GATEWAY_ID_FIELD, "==", bound.gatewayId)
@@ -930,6 +1041,10 @@ function installSnapshotRoutes(
     for (const doc of snap.docs) {
       const data = await isAssignedToGateway(db, bound.gatewayId, doc.id, doc.data() as Record<string, unknown>);
       if (!data) continue;
+      // Revision-aware mount driver (GATEWAY-RELEASES-SPEC): during a same-gateway
+      // roll both revision pods hit this with the SAME bare tenant — the filter
+      // keeps each pod to its own revision so both never mount the full roster.
+      if (!revisionFilter(doc.id)) continue;
       if (completeOnly && stringAt(data, "provisioning.openclaw.status") !== "complete") {
         continue;
       }

@@ -1,4 +1,20 @@
 import type { RawData, WebSocket } from "ws";
+import type { UpgradeGateVerdict } from "../../roll-roster.js";
+
+// Close code signalling the client to reconnect (same signal the OC WS bridge
+// uses for gatewayId changes); on reconnect the flipped Service selector /
+// roster resolves the client to the current serving revision.
+export const MM_WS_RECONNECT_CLOSE_CODE = 1001;
+
+// Pre-admission DoS bounds. The bridge holds the upstream dial until the first
+// authentication_challenge; without these an unauthenticated client could stream
+// non-auth frames forever, buffering to memory pressure. The deadline closes a
+// socket that never authenticates; the frame/byte caps bound the pre-open queue
+// (worst-case memory ≈ MAX_PREAUTH_BYTES). MM's web client sends the auth
+// challenge as its first frame, so legitimate traffic stays far under these.
+export const PRE_AUTH_DEADLINE_MS = 10_000;
+export const MAX_PREAUTH_FRAMES = 64;
+export const MAX_PREAUTH_BYTES = 1_048_576;
 
 export interface MmWsProxyDeps {
   
@@ -9,10 +25,26 @@ resolveMmUserId: (mmToken: string) => Promise<string | null>;
   
   openUpstream: (url: string) => WebSocket;
 
+  // Roll-roster verdict for the authenticated MM user (Codex P0 — the
+  // auth-late seam). MM identity only exists once the first
+  // authentication_challenge frame resolves, so the upstream MM socket is NOT
+  // dialed at attach: the bridge holds, resolves the token → MM user, awaits
+  // this verdict (the SAME shared upgrade-gate policy — no MM-specific fork),
+  // and only then dials — or closes the client with the reconnect code.
+  // Absent → always allow (legacy pods, cluster surface).
+  rosterVerdict?: (mmUserId: string | null) => Promise<UpgradeGateVerdict> | UpgradeGateVerdict;
+
 registry?: MmWsRegistry;
   now?: () => number;
 
 ackResolutionTimeoutMs?: number;
+
+  // Pre-admission DoS bounds (default to the module constants). A socket that
+  // sends no authentication_challenge within preAuthDeadlineMs is closed; the
+  // pre-open queue is capped at maxPreAuthFrames frames / maxPreAuthBytes bytes.
+  preAuthDeadlineMs?: number;
+  maxPreAuthFrames?: number;
+  maxPreAuthBytes?: number;
 }
 
 export interface MmWsBridge {
@@ -72,12 +104,19 @@ export function attachMmWsBridge(
 ): MmWsBridge {
   const now = deps.now ?? Date.now;
   const ackResolutionTimeoutMs = deps.ackResolutionTimeoutMs ?? 2_000;
-  const upstream = deps.openUpstream(deps.mmInternalWsUrl);
+  const preAuthDeadlineMs = deps.preAuthDeadlineMs ?? PRE_AUTH_DEADLINE_MS;
+  const maxPreAuthFrames = deps.maxPreAuthFrames ?? MAX_PREAUTH_FRAMES;
+  const maxPreAuthBytes = deps.maxPreAuthBytes ?? MAX_PREAUTH_BYTES;
+  // Dialed only after the roster verdict admits the authenticated user.
+  let upstream: WebSocket | null = null;
   let mmUserId: string | null = null;
   let pendingMmUserId: Promise<string | null> | null = null;
   let closed = false;
   let upstreamOpen = false;
+  let admissionStarted = false;
   const browserOutbox: Array<{ frame: RawData; binary: boolean }> = [];
+  let queuedBytes = 0;
+  let authDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
   let inboundChain: Promise<void> = Promise.resolve();
 
   const unregister = deps.registry?.add(
@@ -88,13 +127,52 @@ export function attachMmWsBridge(
     () => mmUserId,
   );
 
+  const clearAuthDeadline = () => {
+    if (authDeadlineTimer) {
+      clearTimeout(authDeadlineTimer);
+      authDeadlineTimer = null;
+    }
+  };
+
   const close = () => {
     if (closed) return;
     closed = true;
+    clearAuthDeadline();
     unregister?.();
     safeClose(browserWs);
-    safeClose(upstream);
+    if (upstream) safeClose(upstream);
   };
+
+  // The single pre-admission refusal: signal the client to reconnect (the SAME
+  // code the roster refusal uses) and tear down.
+  const closeWithReconnect = (reason: string) => {
+    if (closed) return;
+    deps.log(`[mm-proxy/ws] ${reason} (mmUserId=${mmUserId ?? "unknown"}) — closing`);
+    try {
+      browserWs.close(MM_WS_RECONNECT_CLOSE_CODE, reason);
+    } catch {
+      /* close() below tears down regardless */
+    }
+    close();
+  };
+
+  // Enqueue a pre-open frame, enforcing the DoS caps. Trips (and closes) when
+  // either the frame count or the byte total exceeds its bound.
+  const queuePreOpen = (frame: RawData, binary: boolean): void => {
+    browserOutbox.push({ frame, binary });
+    queuedBytes += frameByteLength(frame);
+    if (browserOutbox.length > maxPreAuthFrames) {
+      closeWithReconnect("preauth_frame_cap_exceeded");
+    } else if (queuedBytes > maxPreAuthBytes) {
+      closeWithReconnect("preauth_byte_cap_exceeded");
+    }
+  };
+
+  authDeadlineTimer = setTimeout(() => {
+    if (closed || admissionStarted) return;
+    closeWithReconnect("auth_deadline_exceeded");
+  }, preAuthDeadlineMs);
+  authDeadlineTimer.unref?.();
 
 const logClose = (side: "browser" | "upstream", code: number, reason: unknown) => {
     if (closed) return;
@@ -104,10 +182,11 @@ const logClose = (side: "browser" | "upstream", code: number, reason: unknown) =
   };
 
   const flushOutbox = () => {
-    if (!upstreamOpen) return;
+    if (!upstreamOpen || !upstream) return;
     while (browserOutbox.length > 0) {
       const queued = browserOutbox.shift();
       if (queued === undefined) break;
+      queuedBytes -= frameByteLength(queued.frame);
       try {
         upstream.send(queued.frame, { binary: queued.binary });
       } catch (err) {
@@ -117,14 +196,83 @@ const logClose = (side: "browser" | "upstream", code: number, reason: unknown) =
     }
   };
 
-  upstream.on("open", () => {
-    upstreamOpen = true;
-    deps.log(`[mm-proxy/ws] upstream open (mmUserId=${mmUserId ?? "unknown"})`);
-    flushOutbox();
-  });
+  const dialUpstream = () => {
+    const up = deps.openUpstream(deps.mmInternalWsUrl);
+    upstream = up;
+    up.on("open", () => {
+      upstreamOpen = true;
+      deps.log(`[mm-proxy/ws] upstream open (mmUserId=${mmUserId ?? "unknown"})`);
+      flushOutbox();
+    });
+    up.on("message", (data: RawData, isBinary: boolean) => {
+      inboundChain = inboundChain.then(async () => {
+        let effectiveUserId = mmUserId;
+        if (!effectiveUserId && pendingMmUserId) {
+          effectiveUserId = await resolvePendingMmUserId(pendingMmUserId, ackResolutionTimeoutMs);
+        }
+        if (closed || browserWs.readyState !== 1) return;
+        const ack = buildAckIfUserPost(data, effectiveUserId ?? mmUserId, now);
+        if (ack) {
+          try {
+            browserWs.send(JSON.stringify(ack));
+          } catch (err) {
+            deps.log(`[mm-proxy/ws] ack inject failed: ${(err as Error).message}`);
+          }
+        }
+        try {
+          browserWs.send(data, { binary: isBinary });
+        } catch (err) {
+          deps.log(`[mm-proxy/ws] downstream forward failed: ${(err as Error).message}`);
+        }
+      });
+    });
+    up.on("close", (code: number, reason: unknown) => {
+      logClose("upstream", code, reason);
+      close();
+    });
+    up.on("error", (err: Error) =>
+      deps.log(`[mm-proxy/ws] upstream error: ${err.message}`),
+    );
+  };
+
+  // Runs once, on the first authentication_challenge: await the token→user
+  // resolution, then the roster verdict, THEN dial — never fire-and-forget. A
+  // refusal closes the client with the reconnect code; the retrying client
+  // resolves to the serving revision.
+  const runAdmission = async () => {
+    if (pendingMmUserId) await pendingMmUserId;
+    if (closed || upstream) return;
+    let verdict: UpgradeGateVerdict = { allow: true };
+    if (deps.rosterVerdict) {
+      try {
+        verdict = await deps.rosterVerdict(mmUserId);
+      } catch (err) {
+        deps.log(`[mm-proxy/ws] roster verdict failed (failing CLOSED): ${errorToStr(err)}`);
+        verdict = { allow: false, reason: "roster-verdict-failed" };
+      }
+    }
+    if (closed || upstream) return;
+    if (!verdict.allow) {
+      deps.log(
+        `[mm-proxy/ws] roll roster refused MM WS (mmUserId=${mmUserId ?? "unknown"}): ${verdict.reason}`,
+      );
+      try {
+        browserWs.close(
+          MM_WS_RECONNECT_CLOSE_CODE,
+          `gateway_revision_unavailable:${verdict.reason}`,
+        );
+      } catch {
+        /* close() below tears down regardless */
+      }
+      close();
+      return;
+    }
+    dialUpstream();
+  };
 
 browserWs.on("message", (data: RawData, isBinary: boolean) => {
-    if (!mmUserId && !pendingMmUserId) {
+    const isAuth = isAuthChallengeFrame(data);
+    if (isAuth && !mmUserId && !pendingMmUserId) {
       pendingMmUserId = maybeCaptureMmTokenForAuth(data, deps.resolveMmUserId)
         .then((resolvedId) => {
           if (resolvedId && !mmUserId) {
@@ -141,52 +289,50 @@ browserWs.on("message", (data: RawData, isBinary: boolean) => {
           pendingMmUserId = null;
         });
     }
+    if (!upstream) {
+      // Pre-admission: everything queues (the auth frame included) exactly as
+      // pre-open frames always have; the flush preserves order + opcode. The
+      // caps bound the queue against a client that never authenticates.
+      queuePreOpen(data, isBinary);
+      if (isAuth && !admissionStarted && !closed) {
+        admissionStarted = true;
+        clearAuthDeadline();
+        void runAdmission();
+      }
+      return;
+    }
     if (upstreamOpen && upstream.readyState === 1 ) {
       upstream.send(data, { binary: isBinary });
     } else {
-      browserOutbox.push({ frame: data, binary: isBinary });
+      queuePreOpen(data, isBinary);
     }
-  });
-
-  upstream.on("message", (data: RawData, isBinary: boolean) => {
-    inboundChain = inboundChain.then(async () => {
-      let effectiveUserId = mmUserId;
-      if (!effectiveUserId && pendingMmUserId) {
-        effectiveUserId = await resolvePendingMmUserId(pendingMmUserId, ackResolutionTimeoutMs);
-      }
-      if (closed || browserWs.readyState !== 1) return;
-      const ack = buildAckIfUserPost(data, effectiveUserId ?? mmUserId, now);
-      if (ack) {
-        try {
-          browserWs.send(JSON.stringify(ack));
-        } catch (err) {
-          deps.log(`[mm-proxy/ws] ack inject failed: ${(err as Error).message}`);
-        }
-      }
-      try {
-        browserWs.send(data, { binary: isBinary });
-      } catch (err) {
-        deps.log(`[mm-proxy/ws] downstream forward failed: ${(err as Error).message}`);
-      }
-    });
   });
 
   browserWs.on("close", (code: number, reason: unknown) => {
     logClose("browser", code, reason);
     close();
   });
-  upstream.on("close", (code: number, reason: unknown) => {
-    logClose("upstream", code, reason);
-    close();
-  });
   browserWs.on("error", (err: Error) =>
     deps.log(`[mm-proxy/ws] browser error: ${err.message}`),
   );
-  upstream.on("error", (err: Error) =>
-    deps.log(`[mm-proxy/ws] upstream error: ${err.message}`),
-  );
 
   return { close };
+}
+
+function frameByteLength(frame: RawData): number {
+  if (typeof frame === "string") return Buffer.byteLength(frame);
+  if (Buffer.isBuffer(frame)) return frame.length;
+  if (Array.isArray(frame)) {
+    let total = 0;
+    for (const chunk of frame) total += chunk.length;
+    return total;
+  }
+  return (frame as ArrayBuffer).byteLength;
+}
+
+export function isAuthChallengeFrame(data: RawData | string): boolean {
+  const frame = parseJsonFrame(data);
+  return frame?.action === "authentication_challenge";
 }
 
 export async function maybeCaptureMmTokenForAuth(

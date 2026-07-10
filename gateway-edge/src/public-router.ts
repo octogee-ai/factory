@@ -3,14 +3,53 @@ import https from "node:https";
 import { Duplex } from "node:stream";
 import { URL } from "node:url";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
+import {
+  INTERNAL_ROUTING_HEADERS,
+  gatewayEdgeServiceName,
+  gatewayPodServiceName,
+  revisionIdForRelease,
+} from "@octogee/shared/types/gateway-releases";
 
 export type GatewayRouterSurface = "api" | "preview";
 
 export interface GatewaySurfaceTarget {
   gatewayId: string;
+  // null for the service-addressed form (`/g/<gw>/…` → per-gateway Service);
+  // a positive integer for the revision-pinned form (`/g/<gw>/r/<n>/…`).
+  revision: number | null;
   surface: GatewayRouterSurface;
   origin: string;
   path: string;
+}
+
+// A `/g/<gw>/r…` that is not a valid `/r/<positive-int>/…`. The entire `r`
+// segment namespace is reserved: a malformed pinned URL is a hard 400, never a
+// fall-through to the service-addressed path (which would silently follow the
+// live selector and send a pinned session to the wrong pod).
+export interface InvalidRevisionResolution {
+  invalidRevision: true;
+}
+
+export type GatewaySurfaceResolution = GatewaySurfaceTarget | InvalidRevisionResolution;
+
+function isInvalidRevision(
+  resolution: GatewaySurfaceResolution,
+): resolution is InvalidRevisionResolution {
+  return "invalidRevision" in resolution;
+}
+
+// The gateway-router's ONE state read: whether a pinned revision has retired.
+// Returns `tombstoned: true` (+ current-revision pointer) so the router answers
+// a retired /r/{n} with a typed revision_gone 404 instead of dialing a dead pod.
+export type RevisionTombstoneLookup = (
+  gatewayId: string,
+  revision: number,
+) => Promise<{ tombstoned: boolean; currentRevisionId?: string | null }>;
+
+// Resolve the DNS host id for the surface target: the bare gateway id addresses
+// the Cowboy-flipped per-gateway Service; a pinned revision addresses its own.
+function serviceIdFor(gatewayId: string, revision: number | null): string {
+  return revision === null ? gatewayId : revisionIdForRelease(gatewayId, revision);
 }
 
 export interface GatewaySurfaceTargetOptions {
@@ -18,13 +57,18 @@ export interface GatewaySurfaceTargetOptions {
   host?: string | null;
   previewHost?: string;
   namespace: string;
-  targetOriginForGateway?: (surface: GatewayRouterSurface, gatewayId: string) => string;
+  targetOriginForGateway?: (surface: GatewayRouterSurface, serviceId: string) => string;
 }
 
 export interface CreateGatewayRouterOptions {
   namespace: string;
   previewHost?: string;
-  targetOriginForGateway?: (surface: GatewayRouterSurface, gatewayId: string) => string;
+  targetOriginForGateway?: (surface: GatewayRouterSurface, serviceId: string) => string;
+  revisionTombstoneLookup?: RevisionTombstoneLookup;
+  // Cache-bypassing tombstone read, used to recover from a pinned upstream proxy
+  // FAILURE (a connection-refused to a likely-gone revision) into a controlled
+  // revision_gone rather than a bare 502.
+  revisionTombstoneRecheck?: RevisionTombstoneLookup;
   log: (message: string, meta?: Record<string, unknown>) => void;
 }
 
@@ -39,11 +83,21 @@ const HOP_BY_HOP_HEADERS = new Set([
   "upgrade",
 ]);
 
-function defaultOrigin(surface: GatewayRouterSurface, gatewayId: string, namespace: string): string {
+// The router is THE public trust boundary for /g/* traffic: the intra-family
+// loop-guard/epoch headers are internal-only (set by a gateway-edge forwarding
+// hop), so any inbound value is forged — strip them on both the HTTP and the
+// upgrade path before proxying. A public client can therefore never influence
+// the edge's single-hop guard or epoch handling.
+const STRIPPED_PUBLIC_HEADERS = new Set<string>([
+  ...HOP_BY_HOP_HEADERS,
+  ...INTERNAL_ROUTING_HEADERS,
+]);
+
+function defaultOrigin(surface: GatewayRouterSurface, serviceId: string, namespace: string): string {
   if (surface === "preview") {
-    return `http://octogee-gateway-${gatewayId}.${namespace}.svc.cluster.local:9080`;
+    return `http://${gatewayPodServiceName(serviceId)}.${namespace}.svc.cluster.local:9080`;
   }
-  return `http://gateway-edge-${gatewayId}.${namespace}.svc.cluster.local:3001`;
+  return `http://${gatewayEdgeServiceName(serviceId)}.${namespace}.svc.cluster.local:3001`;
 }
 
 function normalizedHost(host: string | null | undefined): string {
@@ -54,7 +108,20 @@ function surfaceForHost(host: string | null | undefined, previewHost?: string): 
   return previewHost && normalizedHost(host) === normalizedHost(previewHost) ? "preview" : "api";
 }
 
-function parseGatewayPath(url: string): { gatewayId: string; remainder: string; search: string } | null {
+// A revision segment is `r/<n>` where n is a positive integer with no leading
+// zero. Anything else after the gateway id (including a bare `r`) is an ordinary
+// service-form remainder, so the pinned form is opt-in and unambiguous.
+function parseRevisionSegment(parts: string[]): number | null {
+  if (parts[0] !== "r" || parts.length < 2) return null;
+  if (!/^[1-9]\d*$/.test(parts[1])) return null;
+  return Number(parts[1]);
+}
+
+type ParsedGatewayPath =
+  | { gatewayId: string; revision: number | null; remainder: string; search: string }
+  | InvalidRevisionResolution;
+
+function parseGatewayPath(url: string): ParsedGatewayPath | null {
   const parsed = new URL(url, "https://gateway-router.local");
   const parts = parsed.pathname.split("/");
   if (parts[1] !== "g" || parts.length < 3) return null;
@@ -65,20 +132,37 @@ function parseGatewayPath(url: string): { gatewayId: string; remainder: string; 
     return null;
   }
   if (!isValidGatewayId(gatewayId)) return null;
-  const remainder = parts.length > 3 ? `/${parts.slice(3).join("/")}` : "";
-  return { gatewayId, remainder, search: parsed.search };
+  const afterGateway = parts.slice(3);
+  const revision = parseRevisionSegment(afterGateway);
+  // Reserve the entire `r` first-segment namespace: an exact `r` segment that is
+  // not a valid `r/<positive-int>/…` is a hard reject (invalidRevision → 400),
+  // never a fall-through to the service form. Segments that merely start with r
+  // (`reports`) are ordinary service-form remainders.
+  if (afterGateway[0] === "r" && revision === null) {
+    return { invalidRevision: true };
+  }
+  const tail = revision === null ? afterGateway : afterGateway.slice(2);
+  const remainder = tail.length > 0 ? `/${tail.join("/")}` : "";
+  return { gatewayId, revision, remainder, search: parsed.search };
 }
 
-export function gatewaySurfaceTarget(opts: GatewaySurfaceTargetOptions): GatewaySurfaceTarget | null {
+export function gatewaySurfaceTarget(opts: GatewaySurfaceTargetOptions): GatewaySurfaceResolution | null {
   const parsed = parseGatewayPath(opts.url);
   if (!parsed) return null;
+  if ("invalidRevision" in parsed) return parsed;
   const surface = surfaceForHost(opts.host, opts.previewHost);
+  const serviceId = serviceIdFor(parsed.gatewayId, parsed.revision);
   const origin =
-    opts.targetOriginForGateway?.(surface, parsed.gatewayId) ??
-    defaultOrigin(surface, parsed.gatewayId, opts.namespace);
+    opts.targetOriginForGateway?.(surface, serviceId) ??
+    defaultOrigin(surface, serviceId, opts.namespace);
+  // The /r/<n> is a ROUTING directive consumed to select the revision target
+  // (origin = the revision's Service); the revision pod is revision-agnostic in
+  // its own routing, so it receives the BARE /api/g/<gw>/… (or /g/<gw>/… preview)
+  // path its routes actually mount. Stripping /r/<n> here is P0.
   const pathPrefix = surface === "api" ? `/api/g/${parsed.gatewayId}` : `/g/${parsed.gatewayId}`;
   return {
     gatewayId: parsed.gatewayId,
+    revision: parsed.revision,
     surface,
     origin,
     path: `${pathPrefix}${parsed.remainder}${parsed.search}`,
@@ -88,18 +172,24 @@ export function gatewaySurfaceTarget(opts: GatewaySurfaceTargetOptions): Gateway
 function requestHeaders(req: http.IncomingMessage, origin: URL): http.OutgoingHttpHeaders {
   const headers: http.OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(req.headers)) {
-    if (HOP_BY_HOP_HEADERS.has(name.toLowerCase())) continue;
+    if (STRIPPED_PUBLIC_HEADERS.has(name.toLowerCase())) continue;
     headers[name] = value;
   }
   headers.host = origin.host;
   return headers;
 }
 
+// For a pinned request only: re-check the tombstone (cache-bypass) after the
+// upstream proxy fails. Resolves to the retired-revision verdict, or null to
+// fall back to a plain 502.
+type PinnedUpstreamRecovery = () => Promise<{ currentRevisionId: string | null } | null>;
+
 function proxyHttp(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   target: GatewaySurfaceTarget,
   log: CreateGatewayRouterOptions["log"],
+  pinnedRecovery?: PinnedUpstreamRecovery,
 ): void {
   const origin = new URL(target.origin);
   const proxyReq = (origin.protocol === "https:" ? https : http).request({
@@ -121,6 +211,11 @@ function proxyHttp(
     res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
     proxyRes.pipe(res);
   });
+  const writeUpstreamUnavailable = (): void => {
+    if (res.headersSent) return;
+    res.writeHead(502, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "gateway upstream unavailable" }));
+  };
   proxyReq.on("error", (err) => {
     log("[gateway-router] upstream HTTP proxy failed", {
       gatewayId: target.gatewayId,
@@ -134,8 +229,24 @@ function proxyHttp(
       res.destroy();
       return;
     }
-    res.writeHead(502, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: "gateway upstream unavailable" }));
+    if (!pinnedRecovery) {
+      writeUpstreamUnavailable();
+      return;
+    }
+    // A pinned upstream failure likely means the revision retired between the
+    // cached "not tombstoned" verdict and this dial. Re-check (cache-bypass): if
+    // it is now tombstoned, answer with the controlled revision_gone; otherwise
+    // a plain 502.
+    pinnedRecovery()
+      .then((gone) => {
+        if (res.headersSent) return;
+        if (gone) {
+          writeRevisionGone(res, target, gone.currentRevisionId);
+          return;
+        }
+        writeUpstreamUnavailable();
+      })
+      .catch(() => writeUpstreamUnavailable());
   });
   req.on("error", (err) => {
     log("[gateway-router] client request socket error", {
@@ -160,6 +271,53 @@ function proxyHttp(
 function writeNotFound(res: http.ServerResponse): void {
   res.writeHead(404, { "content-type": "application/json" });
   res.end(JSON.stringify({ error: "gateway route not found" }));
+}
+
+function writeInvalidRevision(res: http.ServerResponse): void {
+  res.writeHead(400, { "content-type": "application/json" });
+  res.end(JSON.stringify({ error: "invalid_revision" }));
+}
+
+function writeRevisionGone(
+  res: http.ServerResponse,
+  target: GatewaySurfaceTarget,
+  currentRevisionId: string | null,
+): void {
+  res.writeHead(404, { "content-type": "application/json" });
+  res.end(
+    JSON.stringify({
+      error: "revision_gone",
+      gatewayId: target.gatewayId,
+      revision: target.revision,
+      currentRevisionId,
+    }),
+  );
+}
+
+// The tombstone is consulted ONLY for a pinned target and ONLY here — the
+// service-addressed hot path never reaches this. Returns the retired-revision
+// verdict, or null when the request should proxy through.
+async function tombstoneVerdict(
+  target: GatewaySurfaceTarget,
+  lookup: RevisionTombstoneLookup | undefined,
+  log: CreateGatewayRouterOptions["log"],
+): Promise<{ currentRevisionId: string | null } | null> {
+  if (target.revision === null || !lookup) return null;
+  try {
+    const result = await lookup(target.gatewayId, target.revision);
+    if (result.tombstoned) {
+      return { currentRevisionId: result.currentRevisionId ?? null };
+    }
+  } catch (err) {
+    // A tombstone read failure must not synthesize a false revision_gone; fall
+    // through to proxy and let the revision's own pod answer (or fail) honestly.
+    log("[gateway-router] revision tombstone lookup failed", {
+      gatewayId: target.gatewayId,
+      revision: target.revision,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return null;
 }
 
 function proxyUpgrade(
@@ -233,36 +391,87 @@ export function createGatewayRouter(opts: CreateGatewayRouterOptions): http.Serv
       res.end(JSON.stringify({ status: "ok", service: "gateway-router" }));
       return;
     }
-    const target = gatewaySurfaceTarget({
+    const resolved = gatewaySurfaceTarget({
       url: req.url ?? "/",
       host: req.headers.host,
       previewHost: opts.previewHost,
       namespace: opts.namespace,
       targetOriginForGateway: opts.targetOriginForGateway,
     });
-    if (!target) {
+    if (!resolved) {
       writeNotFound(res);
       return;
     }
-    proxyHttp(req, res, target, opts.log);
+    if (isInvalidRevision(resolved)) {
+      writeInvalidRevision(res);
+      return;
+    }
+    const target = resolved;
+    tombstoneVerdict(target, opts.revisionTombstoneLookup, opts.log)
+      .then((gone) => {
+        if (gone) {
+          writeRevisionGone(res, target, gone.currentRevisionId);
+          return;
+        }
+        const pinnedRecovery =
+          target.revision !== null && opts.revisionTombstoneRecheck
+            ? () => tombstoneVerdict(target, opts.revisionTombstoneRecheck, opts.log)
+            : undefined;
+        proxyHttp(req, res, target, opts.log, pinnedRecovery);
+      })
+      .catch((err) => {
+        opts.log("[gateway-router] request routing failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        if (!res.headersSent) {
+          res.writeHead(502, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "gateway routing error" }));
+        }
+      });
   });
 
   server.on("upgrade", (req, socket, head) => {
-    const target = gatewaySurfaceTarget({
+    const resolved = gatewaySurfaceTarget({
       url: req.url ?? "/",
       host: req.headers.host,
       previewHost: opts.previewHost,
       namespace: opts.namespace,
       targetOriginForGateway: opts.targetOriginForGateway,
     });
-    if (!target) {
+    if (!resolved) {
       socket.on("error", (err) => {
         opts.log("[gateway-router] websocket reject socket error", { error: err.message });
       });
       socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
       return;
     }
-    proxyUpgrade(req, socket, head, target, opts.log);
+    if (isInvalidRevision(resolved)) {
+      socket.on("error", (err) => {
+        opts.log("[gateway-router] invalid_revision WS reject socket error", { error: err.message });
+      });
+      socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+      return;
+    }
+    const target = resolved;
+    tombstoneVerdict(target, opts.revisionTombstoneLookup, opts.log)
+      .then((gone) => {
+        if (gone) {
+          socket.on("error", (err) => {
+            opts.log("[gateway-router] revision_gone WS reject socket error", { error: err.message });
+          });
+          socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+          return;
+        }
+        proxyUpgrade(req, socket, head, target, opts.log);
+      })
+      .catch((err) => {
+        opts.log("[gateway-router] websocket routing failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        if (!socket.destroyed) {
+          socket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
+        }
+      });
   });
 
   return server;

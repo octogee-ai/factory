@@ -46,8 +46,6 @@ export interface GatewayDesiredState {
 
   gatewayContainerSecurityContext?: Record<string, unknown>;
 
-  persistence?: GatewayPersistenceSpec;
-
   operatorAccess?: OperatorGatewayAccessSpec;
 
   operatorReservation?: OperatorGatewayReservationSpec;
@@ -93,14 +91,6 @@ export interface GatewayPreemptionHandoffSpec {
   operationId?: string;
   flushCompletedAt?: unknown;
   flushOk?: boolean;
-}
-
-export interface GatewayPersistenceSpec {
-  enabled: boolean;
-  existingClaim?: string;
-  storageClassName?: string;
-  size?: string;
-  accessModes?: string[];
 }
 
 export interface GatewayServiceAccountSpec {
@@ -183,13 +173,6 @@ export interface OperatorGatewayReservationRequestResponse {
   reservation: OperatorGatewayReservationRequest | null;
 }
 
-export const OPERATOR_GATEWAY_DEFAULT_PERSISTENCE: GatewayPersistenceSpec = {
-  enabled: true,
-  storageClassName: "premium-rwo",
-  size: "20Gi",
-  accessModes: ["ReadWriteOnce"],
-};
-
 export const OPERATOR_GATEWAY_LOCKED_ACCESS: OperatorGatewayAccessSpec = {
   shellsEnabled: false,
   reason: "runtime-trust-boundary-not-provisioned",
@@ -266,13 +249,6 @@ export function deriveGatewayIdentity(
 
 export function operatorGatewayServiceAccountName(gatewayId: string): string {
   return `${OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX}${gatewayId}`;
-}
-
-export function resolveGatewayPersistence(
-  _profile: GatewayProfile | undefined,
-  persistence: GatewayPersistenceSpec | undefined,
-): GatewayPersistenceSpec | undefined {
-  return persistence;
 }
 
 export function isOperatorGatewayShellAccessEnabled(
@@ -414,7 +390,6 @@ export interface HelmInstanceValue {
   serviceAccountName?: string;
   serviceAccount?: GatewayServiceAccountSpec;
   gatewayContainerSecurityContext?: Record<string, unknown>;
-  persistence?: GatewayPersistenceSpec;
   operatorAccess?: OperatorGatewayAccessSpec;
 
   profile?: GatewayProfile;

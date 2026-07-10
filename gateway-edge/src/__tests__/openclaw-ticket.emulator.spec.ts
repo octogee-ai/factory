@@ -107,11 +107,10 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
       gatewayClass: "builder",
       desiredStatus: "running",
     });
-    await db.doc("gateways/gw-alice").set({
-      gatewayId: "gw-alice",
-      status: "ready",
-      mountedCustomers: [],
-    });
+    await db.doc("glmGateways/gw-alice").set(
+      { heartbeat: { status: "ready", mountedCustomers: [] } },
+      { merge: true },
+    );
 
     const token = await getIdTokenForUid("caller-uid");
     const res = await request(buildApp())
@@ -191,11 +190,10 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
       imageProfile: "operator",
       desiredStatus: "running",
     });
-    await db.doc("gateways/bender").set({
-      gatewayId: "bender",
-      status: "ready",
-      mountedCustomers: [],
-    });
+    await db.doc("glmGateways/bender").set(
+      { heartbeat: { status: "ready", mountedCustomers: [] } },
+      { merge: true },
+    );
 
     const token = await getIdTokenForUid("caller-uid");
     const res = await request(buildApp())

@@ -157,11 +157,16 @@ function mkAdminFleetRouteApp(opts: {
   users: Record<string, Record<string, unknown>>;
   glmGateways?: Record<string, Record<string, unknown>>;
   gateways?: Record<string, Record<string, unknown>>;
+  // gateways/{gatewayId}/assignments/{uid} durable roster docs (PR7).
+  assignments?: Record<string, Record<string, Record<string, unknown>>>;
 }) {
   const state = {
     config: { ...opts.config },
     users: { ...opts.users },
   };
+  const assignmentDocs = Object.values(opts.assignments ?? {}).flatMap((byUid) =>
+    Object.entries(byUid).map(([uid, data]) => ({ id: uid, data: () => data })),
+  );
   const db = {
     doc: vi.fn((path: string) => {
       expect(path).toBe("config/orchestrator");
@@ -182,6 +187,12 @@ function mkAdminFleetRouteApp(opts: {
       if (name === GLM_OPERATIONS_COLLECTION) return mkCollection({});
       return mkCollection({});
     }),
+    collectionGroup: vi.fn((name: string) => ({
+      get: vi.fn(async () => ({
+        docs: name === "assignments" ? assignmentDocs : [],
+        size: name === "assignments" ? assignmentDocs.length : 0,
+      })),
+    })),
   } as unknown as Firestore;
 
   const app = express();
@@ -219,6 +230,66 @@ describe("onboarding placement (post-cohorts)", () => {
       (g: { gatewayId: string }) => g.gatewayId === "gw-shared",
     );
     expect(shared).toMatchObject({ assignableAsDefault: true, defaultTarget: false });
+  });
+
+  it("surfaces the DURABLE roster state + revision + epoch from the assignment doc", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "default", overrides: {} },
+      users: {
+        "uid-a": {
+          approved: true,
+          username: "alice",
+          email: "alice@example.com",
+          provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
+        },
+      },
+      glmGateways: { default: { gatewayClass: "shared", desiredStatus: "running" } },
+      assignments: {
+        default: {
+          "uid-a": {
+            uid: "uid-a",
+            slug: "alice",
+            gatewayId: "default",
+            revisionId: "default-r2",
+            release: 2,
+            source: "rollout",
+            state: "quiescing",
+            epoch: 5,
+          },
+        },
+      },
+    });
+
+    const res = await request(app).get("/onboarding-placement").expect(200);
+    const customer = res.body.customers.find((c: { uid: string }) => c.uid === "uid-a");
+    expect(customer).toMatchObject({
+      rosterState: "quiescing",
+      rosterRevisionId: "default-r2",
+      rosterEpoch: 5,
+    });
+  });
+
+  it("reports null roster fields for a customer with no assignment doc (legacy/un-backfilled)", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "default", overrides: {} },
+      users: {
+        "uid-a": {
+          approved: true,
+          username: "alice",
+          email: "alice@example.com",
+          provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
+        },
+      },
+      glmGateways: { default: { gatewayClass: "shared", desiredStatus: "running" } },
+    });
+
+    const res = await request(app).get("/onboarding-placement").expect(200);
+    const customer = res.body.customers.find((c: { uid: string }) => c.uid === "uid-a");
+    expect(customer).toMatchObject({
+      rosterState: null,
+      rosterRevisionId: null,
+      rosterEpoch: null,
+    });
   });
 
   it("PATCH validates the default gateway is a live shared gateway", async () => {
@@ -301,13 +372,9 @@ describe("onboarding placement (post-cohorts)", () => {
           desiredStatus: "running",
           ownerUid: "uid-ceckert",
           builderSlug: "ceckert",
-        },
-      },
-      gateways: {
-        "bender-blue": {
-          gatewayId: "bender-blue",
-          status: "ready",
-          mountedCustomers: ["ceckert"],
+          // Readiness/mounted telemetry relocated to glmGateways/{id}.heartbeat
+          // (cutover step 2); the flat gateways/{id} writer is contracted.
+          heartbeat: { status: "ready", mountedCustomers: ["ceckert"] },
         },
       },
     });

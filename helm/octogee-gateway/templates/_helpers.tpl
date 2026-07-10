@@ -1,16 +1,32 @@
 {{/*
+Resolve the revision id for this render.
+
+`revisionId` ({gatewayId}-r{n}) is the disposable instance dimension: every
+per-instance K8s resource NAME and the `gateway-instance` selector key off it so
+two simultaneous revisions of one gateway never collide. Legacy renders that
+pass only `gatewayId` (e.g. `default-blue`) get revisionId == gatewayId, so their
+resource names are unchanged. Tenant identity (KSA, secrets, GATEWAY_ID) stays
+gateway-scoped on `.Values.gatewayId` — see serviceAccountName / GATEWAY_ID.
+*/}}
+{{- define "octogee-gateway.revisionId" -}}
+{{- $gateway := required "gatewayId is required (Cowboy must pass --set gatewayId=<id>)" .Values.gatewayId -}}
+{{- .Values.revisionId | default $gateway -}}
+{{- end }}
+
+{{/*
 Common labels for the gateway pod's resources.
 
-`gateway-instance` is the per-release identity that selects this gateway's
-per-instance Services. The shared public gateway-router forwards `/g/<id>/*`
-traffic to these internal Services by name.
+`gateway-instance` is the per-revision instance identity that selects this
+revision's per-instance Services. The shared public gateway-router forwards
+`/g/<id>/*` traffic to the gateway-scoped Service, whose selector Cowboy points
+at the serving revision.
 */}}
 {{- define "octogee-gateway.labels" -}}
 helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 app.kubernetes.io/name: octogee-gateway
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
-gateway-instance: {{ required "gatewayId is required" .Values.gatewayId }}
+gateway-instance: {{ include "octogee-gateway.revisionId" . }}
 {{- end }}
 
 {{/*

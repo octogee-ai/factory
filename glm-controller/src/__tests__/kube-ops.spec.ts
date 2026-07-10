@@ -474,3 +474,27 @@ describe("createKubeSubprocessRunner — deleteSecret", () => {
     ).rejects.toThrow(/Forbidden/);
   });
 });
+
+describe("createKubeSubprocessRunner — delete gateway-owned identity and service", () => {
+  it("deletes a ServiceAccount and Service idempotently", async () => {
+    const { runKubectl, calls } = mockSubprocess([{}, {}]);
+    const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
+
+    await kube.deleteServiceAccount({ namespace: "octogee-test", name: "octogee-gw-bender" });
+    await kube.deleteService({ namespace: "octogee-test", name: "gateway-edge-bender" });
+
+    expect(calls).toEqual([
+      ["-n", "octogee-test", "delete", "serviceaccount/octogee-gw-bender", "--ignore-not-found=true"],
+      ["-n", "octogee-test", "delete", "service/gateway-edge-bender", "--ignore-not-found=true"],
+    ]);
+  });
+
+  it("surfaces deletion failures", async () => {
+    const { runKubectl } = mockSubprocess([{ stderr: "Forbidden", code: 1 }]);
+    const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
+
+    await expect(
+      kube.deleteServiceAccount({ namespace: "octogee-test", name: "octogee-gw-bender" }),
+    ).rejects.toThrow(/Forbidden/);
+  });
+});

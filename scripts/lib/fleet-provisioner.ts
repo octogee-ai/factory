@@ -89,6 +89,12 @@ export interface StartFleetOptions {
   rpc: GatewayRpcClient;
   adapter?: CustomerLifecycleAdapter;
   gatewayId: string;
+  // The revision this pod realizes ({gatewayId}-r{n}, from GATEWAY_REVISION_ID).
+  // Threaded onto the heartbeat so it also lands at
+  // glmGateways/{revisionId}.heartbeat (Cowboy's converge-empty readiness key)
+  // and onto the roster read so a rolling gateway's two revisions split their
+  // assigned customers. Empty/absent on legacy pods.
+  revisionId?: string;
   log: (msg: string) => void;
   port: number;
   publicKey: string;
@@ -197,6 +203,54 @@ export async function readMountedCustomersFromAssignedState(
     mounted.add(slug);
   }
   return [...mounted].sort((a, b) => a.localeCompare(b));
+}
+
+// In-pod migration RPC path guard (GATEWAY-RELEASES-SPEC transport/tenant
+// split): the path carries the BARE tenant gatewayId and must equal the pod's
+// GATEWAY_ID. A revision id ({gw}-r{n}) in the path is REJECTED — transport is
+// addressed by the K8s Service (revision), never smuggled into the tenant path.
+export function pathGatewayIdMatchesPod(
+  pathGatewayId: string | string[] | undefined,
+  podGatewayId: string,
+): boolean {
+  return pathGatewayId === podGatewayId;
+}
+
+// The K8s Service name a revision pod publishes as its heartbeat internalUrl.
+// Resource names key off the revision ({gatewayId}-r{n}); a legacy pod with no
+// revision id falls back to the bare gateway Service.
+export function gatewayRevisionServiceName(input: {
+  gatewayId: string;
+  revisionId?: string;
+}): string {
+  return `octogee-gateway-${input.revisionId || input.gatewayId}`;
+}
+
+// Build the heartbeat snapshot for a fleet tick. `revisionId` is included only
+// when set, so writeGatewayHeartbeat writes glmGateways/{revisionId}.heartbeat
+// (the converge-empty readiness key) for revision pods and stays bare-only for
+// legacy pods.
+export function buildFleetHeartbeatSnapshot(input: {
+  gatewayId: string;
+  revisionId?: string;
+  status: HeartbeatSnapshot["status"];
+  version: string;
+  openclawVersion: string;
+  mountedCustomers: string[];
+  internalUrl: string;
+  startedAt: number;
+}): HeartbeatSnapshot {
+  const snapshot: HeartbeatSnapshot = {
+    gatewayId: input.gatewayId,
+    status: input.status,
+    version: input.version,
+    openclawVersion: input.openclawVersion,
+    mountedCustomers: input.mountedCustomers,
+    internalUrl: input.internalUrl,
+    startedAt: input.startedAt,
+  };
+  if (input.revisionId) snapshot.revisionId = input.revisionId;
+  return snapshot;
 }
 
 interface FleetRuntime {
@@ -317,7 +371,8 @@ function startMaybeReconcileLoop(params: {
   } else if (opts.readDesiredSlugs) {
     readDesired = opts.readDesiredSlugs;
   } else if (opts.db) {
-    readDesired = () => readAssignedSlugsForGateway(opts.db!, opts.gatewayId);
+    readDesired = () =>
+      readAssignedSlugsForGateway(opts.db!, opts.gatewayId, { revisionId: opts.revisionId });
   }
   if (!provision || !readDesired) return () => undefined;
 
@@ -497,20 +552,28 @@ export async function startFleetController(
   const namespace = resolveK8sNamespace();
   const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || "18789";
 
-const serviceName = `octogee-gateway-${opts.gatewayId}`;
+const serviceName = gatewayRevisionServiceName({
+    gatewayId: opts.gatewayId,
+    revisionId: opts.revisionId,
+  });
   const internalUrl = `http://${serviceName}.${namespace}.svc.cluster.local:${gatewayPort}`;
 
   const emitHeartbeat = async (status: HeartbeatSnapshot["status"]) => {
     if (!stateDeps) return;
     try {
-      await writeGatewayHeartbeat(stateDeps, {
-        gatewayId: opts.gatewayId,
-        status,
-        version: opts.version,
-        openclawVersion: opts.openclawVersion,
-        mountedCustomers: runtime.mountedCustomers,
-        internalUrl, startedAt: PROCESS_STARTED_AT_MS,
-      });
+      await writeGatewayHeartbeat(
+        stateDeps,
+        buildFleetHeartbeatSnapshot({
+          gatewayId: opts.gatewayId,
+          revisionId: opts.revisionId,
+          status,
+          version: opts.version,
+          openclawVersion: opts.openclawVersion,
+          mountedCustomers: runtime.mountedCustomers,
+          internalUrl,
+          startedAt: PROCESS_STARTED_AT_MS,
+        }),
+      );
     } catch (err) {
       opts.log(
         `[fleet] ⚠ heartbeat write failed: ${String(err)} — will retry next tick`,
@@ -592,7 +655,7 @@ const waitForGatewayReady = async (): Promise<void> => {
     : null;
 
   const gatewayIdGuard: express.RequestHandler = (req, res, next) => {
-    if (req.params.gatewayId !== opts.gatewayId) {
+    if (!pathGatewayIdMatchesPod(req.params.gatewayId, opts.gatewayId)) {
       opts.log(
         `[fleet-http] ⚠ path gatewayId=${req.params.gatewayId} does not match this pod's gatewayId=${opts.gatewayId} — rejecting`,
       );

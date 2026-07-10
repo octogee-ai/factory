@@ -5,6 +5,7 @@ import {
   GATEWAY_CLASS,
   GATEWAY_ID,
   GATEWAY_PROFILE,
+  GATEWAY_REVISION_ID,
   GIT_SYNC_INTERVAL_MS,
   isOperatorGateway,
   log,
@@ -29,6 +30,8 @@ import { pathToFileURL } from "node:url";
 export interface FleetControllerEntrypointConfig {
   builderSlug: string;
   gatewayId: string;
+  // The revision this pod realizes ({gatewayId}-r{n}); empty on legacy pods.
+  revisionId: string;
   port: number;
   publicKey: string;
   version: string;
@@ -36,11 +39,15 @@ export interface FleetControllerEntrypointConfig {
 
 export function resolveFleetControllerEntrypointConfig(
   env: NodeJS.ProcessEnv = process.env,
-  runtime: { gatewayId?: string } = { gatewayId: GATEWAY_ID },
+  runtime: { gatewayId?: string; revisionId?: string } = {
+    gatewayId: GATEWAY_ID,
+    revisionId: GATEWAY_REVISION_ID,
+  },
 ): FleetControllerEntrypointConfig {
   const rawGatewayId = runtime.gatewayId ?? "local";
   return {
     gatewayId: rawGatewayId === "local" ? "default" : rawGatewayId,
+    revisionId: runtime.revisionId ?? "",
     builderSlug: env.GATEWAY_BUILDER_SLUG?.trim() ?? "",
     port: parseInt(env.FLEET_CONTROLLER_PORT ?? "3003", 10),
     publicKey: env.FLEET_CONTROLLER_PUBLIC_KEY || "",
@@ -62,7 +69,10 @@ async function main(): Promise<void> {
     throw new Error("fleet controller public key unavailable: expected FLEET_CONTROLLER_PUBLIC_KEY");
   }
   const operator = isOperatorGateway();
-  const brokerClient = createFleetBrokerClient(entrypointConfig.gatewayId);
+  const brokerClient = createFleetBrokerClient(
+    entrypointConfig.gatewayId,
+    entrypointConfig.revisionId,
+  );
   const adapter = buildBrokeredLifecycleAdapter({
     client: brokerClient,
     rpc,
@@ -74,6 +84,7 @@ async function main(): Promise<void> {
     rpc,
     adapter,
     gatewayId: entrypointConfig.gatewayId,
+    revisionId: entrypointConfig.revisionId,
     log,
     port: entrypointConfig.port,
     publicKey: entrypointConfig.publicKey,

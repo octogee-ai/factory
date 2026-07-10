@@ -42,7 +42,6 @@ describe("helm-runner helpers", () => {
       serviceAccountName: "octogee-gateway-bender",
       serviceAccount: { annotations: { "iam.gke.io/gcp-service-account": "gw@example.iam.gserviceaccount.com" } },
       gatewayContainerSecurityContext: { allowPrivilegeEscalation: false },
-      persistence: { enabled: true, size: "20Gi" },
       operatorAccess: { enabled: true, audiences: ["octogee-api"] },
       computeClassOverride: "octogee-gateway-spot",
       profile: "operator",
@@ -54,7 +53,6 @@ describe("helm-runner helpers", () => {
       serviceAccountName: "octogee-gateway-bender",
       serviceAccount: { annotations: { "iam.gke.io/gcp-service-account": "gw@example.iam.gserviceaccount.com" } },
       gatewayContainerSecurityContext: { allowPrivilegeEscalation: false },
-      persistence: { enabled: true, size: "20Gi" },
       operatorAccess: { enabled: true, audiences: ["octogee-api"] },
       computeClassOverride: "octogee-gateway-spot",
       profile: "operator",
@@ -95,7 +93,6 @@ describe("helm-runner helpers", () => {
       serviceAccountName: "octogee-gateway-bender",
       serviceAccount: { annotations: { "iam.gke.io/gcp-service-account": "gw@example.iam.gserviceaccount.com" } },
       gatewayContainerSecurityContext: { allowPrivilegeEscalation: false },
-      persistence: { enabled: true, size: "20Gi" },
       operatorAccess: { enabled: true },
       computeClassOverride: "octogee-gateway-spot",
       gcpProject: "builder-bender",
@@ -237,12 +234,6 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
             allowPrivilegeEscalation: true,
             capabilities: { drop: ["ALL"] },
           },
-          persistence: {
-            enabled: true,
-            storageClassName: "premium-rwo",
-            size: "20Gi",
-            accessModes: ["ReadWriteOnce"],
-          },
         }),
       },
     ]);
@@ -253,10 +244,6 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
       serviceAccountName: "octogee-gateway-bender",
       gatewayContainerSecurityContext: {
         allowPrivilegeEscalation: true,
-      },
-      persistence: {
-        enabled: true,
-        size: "20Gi",
       },
     });
   });
@@ -506,12 +493,6 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
         allowPrivilegeEscalation: true,
         capabilities: { drop: ["ALL"] },
       },
-      persistence: {
-        enabled: true,
-        storageClassName: "premium-rwo",
-        size: "20Gi",
-        accessModes: ["ReadWriteOnce"],
-      },
     });
 
     const args = calls[0];
@@ -519,9 +500,6 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     expect(args).toContain("--set-json");
     expect(args).toContain(
       'gatewayContainerSecurityContext={"allowPrivilegeEscalation":true,"capabilities":{"drop":["ALL"]}}',
-    );
-    expect(args).toContain(
-      'persistence={"enabled":true,"storageClassName":"premium-rwo","size":"20Gi","accessModes":["ReadWriteOnce"]}',
     );
   });
 

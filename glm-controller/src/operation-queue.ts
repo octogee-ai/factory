@@ -1,5 +1,3 @@
-import { siblingInstanceId } from "./handlers/rollout-bluegreen.js";
-
 // Op kinds with a serial invariant: at most one RUNNING op sharing the same
 // scope key (conflictScopeKey below) at a time. A conflicting pending op is
 // queued (left pending, never failed) until the running one clears — see
@@ -56,7 +54,10 @@ export function findSerialConflict(
 function describeWaitingOn(op: OperationRef): string {
   if (op.kind === "rollout") {
     const gatewayId = typeof op.input?.gatewayId === "string" ? op.input.gatewayId : undefined;
-    if (gatewayId) return `${gatewayId} → ${siblingInstanceId(gatewayId)}`;
+    const imageTag = typeof op.input?.imageTag === "string" ? op.input.imageTag : undefined;
+    if (gatewayId) {
+      return imageTag ? `roll ${gatewayId} → ${imageTag}` : `roll ${gatewayId}`;
+    }
   }
   if (op.kind === "migrate-customer") {
     const toGatewayId = typeof op.input?.toGatewayId === "string" ? op.input.toGatewayId : undefined;

@@ -65,6 +65,10 @@
       "types": "./dist/types/fleet-controller.d.ts",
       "default": "./dist/types/fleet-controller.js"
     },
+    "./types/gateway-releases": {
+      "types": "./dist/types/gateway-releases.d.ts",
+      "default": "./dist/types/gateway-releases.js"
+    },
     "./types/glm": {
       "types": "./dist/types/glm.d.ts",
       "default": "./dist/types/glm.js"
@@ -186,6 +190,9 @@
       ],
       "types/fleet-controller": [
         "dist/types/fleet-controller.d.ts"
+      ],
+      "types/gateway-releases": [
+        "dist/types/gateway-releases.d.ts"
       ],
       "types/glm": [
         "dist/types/glm.d.ts"

@@ -21,9 +21,25 @@ function fakeDb(opts: {
   users: Record<string, UserDoc>;
   flows?: Record<string, FlowDoc>;
   operations?: Record<string, OperationDoc>;
+  // gateways/{gatewayId}/assignments/{uid} — the Step 2 roster layer. Empty by
+  // default: the roster then falls back to the approved user mirror (legacy).
+  assignments?: Record<string, Record<string, Record<string, unknown>>>;
 }): Pick<Firestore, "collection"> {
   return {
     collection: (name: string) => {
+      if (name === "gateways") {
+        return {
+          doc: (gatewayId: string) => ({
+            collection: (_sub: string) => ({
+              get: async () => ({
+                docs: Object.entries(opts.assignments?.[gatewayId] ?? {}).map(
+                  ([uid, data]) => ({ id: uid, data: () => data }),
+                ),
+              }),
+            }),
+          }),
+        };
+      }
       const records =
         name === "byosubFlows"
           ? (opts.flows ?? {})

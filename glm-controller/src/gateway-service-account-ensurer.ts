@@ -1,0 +1,80 @@
+import type { KubectlSubprocess } from "./fleet-ingress.js";
+
+// Re-export so callers (and tests) can import the type from the ensurer
+// without also reaching into fleet-ingress for an unrelated dep.
+export type { KubectlSubprocess } from "./fleet-ingress.js";
+
+export interface ServiceAccountEnsurer {
+  ensureServiceAccount(opts: {
+    namespace: string;
+    serviceAccountName: string;
+    annotations?: Record<string, string>;
+  }): Promise<void>;
+}
+
+export interface ServiceAccountEnsurerDeps {
+  runKubectl: KubectlSubprocess;
+  log: (msg: string) => void;
+}
+
+/**
+ * Render the gateway-scoped ServiceAccount manifest. The KSA
+ * (`octogee-gw-<gatewayId>`) is gateway-scoped, NOT revision-scoped: it is
+ * created once by Cowboy and referenced by every revision Helm release, so two
+ * simultaneous revisions never race on ownership metadata. Operator gateways
+ * carry the Workload Identity annotation binding the KSA to the gateway GSA.
+ */
+export function serviceAccountManifest(opts: {
+  namespace: string;
+  serviceAccountName: string;
+  annotations?: Record<string, string>;
+}): string {
+  const lines = [
+    "apiVersion: v1",
+    "kind: ServiceAccount",
+    "metadata:",
+    `  name: ${opts.serviceAccountName}`,
+    `  namespace: ${opts.namespace}`,
+  ];
+  const annotations = opts.annotations ?? {};
+  const keys = Object.keys(annotations);
+  if (keys.length > 0) {
+    lines.push("  annotations:");
+    for (const key of keys.sort()) {
+      lines.push(`    ${key}: ${annotations[key]}`);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
+/**
+ * Ensures the gateway-scoped K8s ServiceAccount exists before `helm upgrade`
+ * runs. KSA creation moved OUT of the chart (GATEWAY-RELEASES-SPEC): the chart
+ * rendered it per Helm release, so two simultaneous revision releases would race
+ * or fail on ownership metadata. Cowboy owns it once, gateway-scoped.
+ *
+ * `kubectl apply -f -` is idempotent create-or-update: it converges the KSA
+ * (including the Workload Identity annotation) without churning ownership on an
+ * existing object, and never deletes one a per-revision release does not own.
+ */
+export function createGatewayServiceAccountEnsurer(
+  deps: ServiceAccountEnsurerDeps,
+): ServiceAccountEnsurer {
+  return {
+    async ensureServiceAccount({ namespace, serviceAccountName, annotations }) {
+      const manifest = serviceAccountManifest({ namespace, serviceAccountName, annotations });
+      const result = await deps.runKubectl(["apply", "-n", namespace, "-f", "-"], {
+        stdin: manifest,
+      });
+      if (result.code !== 0) {
+        throw new Error(
+          `kubectl apply serviceaccount ${serviceAccountName} (ns=${namespace}) failed (code=${result.code}): ${result.stderr.trim() || result.stdout.trim()}`,
+        );
+      }
+      deps.log(
+        `[gateway-service-account-ensurer] applied ${serviceAccountName} in ns=${namespace}` +
+          (annotations && Object.keys(annotations).length > 0 ? " (with Workload Identity annotation)" : ""),
+      );
+    },
+  };
+}

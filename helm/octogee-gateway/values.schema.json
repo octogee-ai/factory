@@ -10,7 +10,13 @@
       "pattern": "^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$",
       "minLength": 1,
       "maxLength": 32,
-      "description": "Bare logical gateway identity (e.g. `default`, `bender`). Used in Firestore heartbeats, the per-gateway K8s auth-token secret name, and as the DNS-friendly suffix for per-instance K8s resource names (Deployment, Service, PVC)."
+      "description": "Bare logical gateway identity (e.g. `default`, `bender`). Tenant-scoped: names the K8s auth-token/model-key secrets, the gateway KSA, and the GATEWAY_ID pod env. Also the /g/<id>/* public path segment."
+    },
+    "revisionId": {
+      "type": "string",
+      "pattern": "^(?:|[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)$",
+      "maxLength": 64,
+      "description": "Disposable revision instance id ({gatewayId}-r{n}). Every per-instance resource NAME (Deployment, Services, PDB, NetworkPolicies) and the gateway-instance selector derive from it. Empty defaults to gatewayId (legacy single-revision render)."
     },
     "builderSlug": {
       "type": "string",
@@ -153,16 +159,6 @@
     "preview": {
       "type": "object",
       "additionalProperties": true
-    },
-    "persistence": {
-      "type": "object",
-      "properties": {
-        "enabled": { "type": "boolean" },
-        "existingClaim": { "type": "string" },
-        "storageClassName": { "type": "string" },
-        "accessModes": { "type": "array", "items": { "type": "string" } },
-        "size": { "type": "string" }
-      }
     },
     "probes": {
       "type": "object",

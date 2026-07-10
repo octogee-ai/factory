@@ -14,8 +14,19 @@ export interface RedeemedOpenClawWs {
   expectedAgentId: string;
 }
 
+// Redeem is a three-way outcome, not a nullable success. `revision-unavailable`
+// is the octogee-api 502 (gateway-url-unresolved / dead-revision): an EXPECTED,
+// distinguishable, retryable signal — the serving revision is not resolvable yet
+// (mid-roll or just-retired), so the client must retry after the roll settles,
+// NOT see an opaque 500. `unauthorized` folds 401/403/404 (bad/expired ticket,
+// wrong gateway) into the 401 the upgrade surface already returns.
+export type RedeemOpenClawWsOutcome =
+  | { kind: "redeemed"; redeemed: RedeemedOpenClawWs }
+  | { kind: "unauthorized" }
+  | { kind: "revision-unavailable"; reason: string };
+
 export interface OpenClawRuntimeBroker {
-  redeemOpenClawWs(ticketId: string): Promise<RedeemedOpenClawWs | null>;
+  redeemOpenClawWs(ticketId: string): Promise<RedeemOpenClawWsOutcome>;
   getUserGatewayId(uid: string): Promise<string | null>;
   resolveAgentIdentity(agentId: string): Promise<AgentIdentity | null>;
   resolveChannelPair(primaryChannelId: string): Promise<ChannelPair | null>;
@@ -155,15 +166,23 @@ export function createOpenClawRuntimeBroker(opts: {
   };
 
   return {
-    async redeemOpenClawWs(ticketId: string): Promise<RedeemedOpenClawWs | null> {
+    async redeemOpenClawWs(ticketId: string): Promise<RedeemOpenClawWsOutcome> {
+      // 502 is EXPECTED (revision unresolvable / dead), not a thrown error — the
+      // upgrade surface turns it into a retryable roll-in-progress signal.
       const res = await post(
         "/internal/openclaw/ws/redeem",
         { ticketId },
-        new Set([200, 401, 403, 404]),
+        new Set([200, 401, 403, 404, 502]),
       );
-      if (res.status !== 200) return null;
+      if (res.status === 502) {
+        const body = await readJsonOrNull(res);
+        return {
+          kind: "revision-unavailable",
+          reason: stringField(body, "error") ?? "gateway-url-unresolved",
+        };
+      }
+      if (res.status !== 200) return { kind: "unauthorized" };
       const body = await readJsonOrNull(res);
-      if (!body) return null;
       const uid = stringField(body, "uid");
       const redeemedGatewayId = stringField(body, "gatewayId");
       const gatewayUrl = stringField(body, "gatewayUrl");
@@ -171,7 +190,10 @@ export function createOpenClawRuntimeBroker(opts: {
       if (!uid || !redeemedGatewayId || !gatewayUrl || !expectedAgentId) {
         throw new OpenClawRuntimeBrokerError(502, "malformed redeem response");
       }
-      return { uid, gatewayId: redeemedGatewayId, gatewayUrl, expectedAgentId };
+      return {
+        kind: "redeemed",
+        redeemed: { uid, gatewayId: redeemedGatewayId, gatewayUrl, expectedAgentId },
+      };
     },
     async getUserGatewayId(uid: string): Promise<string | null> {
       const body = await postJson(

@@ -1,4 +1,5 @@
 {{- include "octogee-gateway.requireIdentity" . -}}
+{{- $revision := include "octogee-gateway.revisionId" . -}}
 {{- $tier := include "octogee-gateway.effectiveTier" . -}}
 {{- $preset := index .Values.tiers $tier -}}
 {{- $gatewayClass := include "octogee-gateway.gatewayClass" . -}}
@@ -10,7 +11,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: octogee-gateway-{{ .Values.gatewayId }}
+  name: octogee-gateway-{{ $revision }}
   labels:
     app: octogee-gateway
     gateway-class: {{ $gatewayClass | quote }}
@@ -25,12 +26,12 @@ spec:
   selector:
     matchLabels:
       app: octogee-gateway
-      gateway-instance: {{ .Values.gatewayId }}
+      gateway-instance: {{ $revision }}
   template:
     metadata:
       labels:
         app: octogee-gateway
-        gateway-instance: {{ .Values.gatewayId }}
+        gateway-instance: {{ $revision }}
         gateway-class: {{ $gatewayClass | quote }}
         # Profile label lets the umbrella gateway-edge alias Service
         # safely exclude operator pods in a follow-up rollout after every
@@ -131,6 +132,11 @@ spec:
           env:
             - name: GATEWAY_ID
               value: {{ .Values.gatewayId | quote }}
+            # Disposable instance identity ({gatewayId}-r{n}). GATEWAY_ID stays
+            # the bare tenant identity for path guards + broker calls; the pod
+            # reports both so Cowboy can key revision heartbeats.
+            - name: GATEWAY_REVISION_ID
+              value: {{ $revision | quote }}
             - name: GATEWAY_BUILDER_SLUG
               value: {{ .Values.builderSlug | quote }}
             - name: MM_URL
@@ -138,7 +144,7 @@ spec:
             - name: MM_SITE_URL
               value: {{ .Values.env.mmSiteUrl | default .Values.env.mmUrl | default (printf "http://mattermost.%s.svc.cluster.local:8065" .Release.Namespace) | quote }}
             - name: MM_INTERACTIONS_CALLBACK_BASE_URL
-              value: {{ .Values.env.mmInteractionsCallbackBaseUrl | default (printf "http://octogee-gateway-%s.%s.svc.cluster.local:18789" .Values.gatewayId .Release.Namespace) | quote }}
+              value: {{ .Values.env.mmInteractionsCallbackBaseUrl | default (printf "http://octogee-gateway-%s.%s.svc.cluster.local:18789" $revision .Release.Namespace) | quote }}
             - name: MM_INTERACTIONS_ALLOWED_SOURCE_IPS
               value: {{ .Values.env.mmInteractionsAllowedSourceIps | quote }}
             - name: FLEET_BROKER_URL
@@ -208,6 +214,11 @@ spec:
               value: {{ .Values.env.agentPrefix | quote }}
             - name: GATEWAY_ID
               value: {{ .Values.gatewayId | quote }}
+            # Disposable instance identity ({gatewayId}-r{n}). GATEWAY_ID stays
+            # the bare tenant identity for path guards + broker calls; the pod
+            # reports both so Cowboy can key revision heartbeats.
+            - name: GATEWAY_REVISION_ID
+              value: {{ $revision | quote }}
             - name: GATEWAY_BUILDER_SLUG
               value: {{ .Values.builderSlug | quote }}
             # Image profile (standard vs operator) — read by
@@ -287,7 +298,7 @@ spec:
             - name: MM_SITE_URL
               value: {{ .Values.env.mmSiteUrl | default .Values.env.mmUrl | default (printf "http://mattermost.%s.svc.cluster.local:8065" .Release.Namespace) | quote }}
             - name: MM_INTERACTIONS_CALLBACK_BASE_URL
-              value: {{ .Values.env.mmInteractionsCallbackBaseUrl | default (printf "http://octogee-gateway-%s.%s.svc.cluster.local:18789" .Values.gatewayId .Release.Namespace) | quote }}
+              value: {{ .Values.env.mmInteractionsCallbackBaseUrl | default (printf "http://octogee-gateway-%s.%s.svc.cluster.local:18789" $revision .Release.Namespace) | quote }}
             - name: MM_INTERACTIONS_ALLOWED_SOURCE_IPS
               value: {{ .Values.env.mmInteractionsAllowedSourceIps | quote }}
             - name: GIT_API_URL
@@ -421,6 +432,11 @@ spec:
               value: "/var/run/octogee/openclaw-device-auth/token"
             - name: GATEWAY_ID
               value: {{ .Values.gatewayId | quote }}
+            # Disposable instance identity ({gatewayId}-r{n}). GATEWAY_ID stays
+            # the bare tenant identity for path guards + broker calls; the pod
+            # reports both so Cowboy can key revision heartbeats.
+            - name: GATEWAY_REVISION_ID
+              value: {{ $revision | quote }}
             - name: GATEWAY_BUILDER_SLUG
               value: {{ .Values.builderSlug | quote }}
             - name: GATEWAY_PROFILE
@@ -517,13 +533,11 @@ spec:
             periodSeconds: 30
         {{- end }}
       volumes:
+        # Gateways are Spot + emptyDir only (#1932). Pod-local state is
+        # disposable; customers/<slug>/ rehydrates from Gitea post-boot. The
+        # persistence path (PVC) was deleted end-to-end (GATEWAY-RELEASES-SPEC).
         - name: data
-          {{- if .Values.persistence.enabled }}
-          persistentVolumeClaim:
-            claimName: {{ .Values.persistence.existingClaim | default (printf "octogee-gateway-%s-data" .Values.gatewayId) | quote }}
-          {{- else }}
           emptyDir: {}
-          {{- end }}
         - name: octogee-api-sa-token
           projected:
             sources:

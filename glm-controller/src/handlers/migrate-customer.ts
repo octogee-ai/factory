@@ -6,8 +6,11 @@ import type {
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
+import type { PlacementResolution } from "@octogee/core/assignment-doc";
 import {
   runMigration,
+  type CutoverCommit,
+  type MigrationRunnerDeps,
   type ReportedStep,
 } from "@octogee/core/fleet-migration-runner";
 
@@ -22,20 +25,50 @@ export interface UserGatewayInfo {
   currentGatewayId: string;
 }
 
+export interface SourceRevision {
+  revisionId: string;
+  release: number;
+}
+
 export interface MigrateCustomerDeps {
-  
+
   readUser: (uid: string) => Promise<UserGatewayInfo | null>;
 
   readUserSnapshot: (uid: string) => Promise<FleetBrokerUserSnapshot | null>;
 
-  cutoverFirestore: (uid: string, toGatewayId: string, slug: string) => Promise<void>;
+  // The ATOMIC cutover: mirror move (when the bare gateway changed) AND the
+  // assignment revision commit as one Firestore transaction, inside the runner's
+  // cutover step, before unmount-source. A crash leaves neither.
+  commitCutover: (commit: CutoverCommit) => Promise<void>;
 
-resolveGatewayUrl: (gatewayId: string) => Promise<string>;
+  // resolveGatewayUrl resolves a K8s Service URL from a TRANSPORT id — the bare
+  // gateway id in the legacy path, or the revision id ({gw}-r{n}) once the
+  // gateway is on the Step 2 assignment layer.
+  resolveGatewayUrl: (gatewayId: string) => Promise<string>;
 
 buildClient: (resolveSync: (gatewayId: string) => string) => MigrationClient;
-  
+
+  // Step 2 revision resolution (all optional — absent = legacy bare-gateway
+  // migration). resolveFromRevision reads the customer's current assignment doc,
+  // falling back to the source gateway's live revision when the customer has no
+  // assignment doc yet (so a same-gateway drain still RUNS instead of no-op'ing).
+  // resolvePlacement applies the placement rule to the destination gateway (null =
+  // the gateway is not on the assignment layer yet). At claim time Cowboy resolves
+  // both, so idle/preemption/reservation sweepers keep enqueuing bare targets.
+  resolveFromRevision?: (uid: string, currentGatewayId: string) => Promise<SourceRevision | null>;
+  resolvePlacement?: (toGatewayId: string) => Promise<PlacementResolution | null>;
+
+  // Roster quiesce gate (PR7): the runner writes "quiescing" on the source
+  // assignment before the quiesce RPC and restores "serving" on a pre-cutover
+  // rollback. Required for any revision-aware migration.
+  setAssignmentState?: (input: {
+    gatewayId: string;
+    uid: string;
+    state: "serving" | "quiescing" | "migrating";
+  }) => Promise<void>;
+
   genMigrationId: () => string;
-  
+
   now: () => number;
   log: (msg: string) => void;
 }
@@ -43,12 +76,7 @@ buildClient: (resolveSync: (gatewayId: string) => string) => MigrationClient;
 interface MigrateCustomerInput {
   uid?: unknown;
   toGatewayId?: unknown;
-  // Set by the blue/green orchestrator. A "rollout-bluegreen" migrate retires the
-  // SOURCE, so its source-side steps are best-effort (the source can't veto the roll).
-  source?: unknown;
 }
-
-const ROLLOUT_BLUEGREEN_SOURCE = "rollout-bluegreen";
 
 function reportedStatusToStepStatus(reported: ReportedStep["status"]): StepStatus {
   if (reported === "running") return "running";
@@ -66,12 +94,106 @@ function reportedToOperationStep(rep: ReportedStep, now: number): OperationStep 
   return step;
 }
 
+// Resolved revision targeting for one migration. Transport ids resolve the K8s
+// Service (revision when known, else bare gateway); the tenant/path stays bare.
+interface MigrationTargets {
+  toRevisionId: string | null;
+  toRelease: number | null;
+  fromRevisionId: string | null;
+  fromRelease: number | null;
+  fromTransportId: string;
+  toTransportId: string;
+}
+
+// The "already on target" rule: when both revisions resolve, compare REVISION
+// ids (otherwise every same-gateway drain — the roll mechanism — is a no-op);
+// else fall back to the bare gateway comparison (legacy).
+function alreadyOnTargetError(
+  fromRevisionId: string | null,
+  toRevisionId: string | null,
+  currentGatewayId: string,
+  toGatewayId: string,
+): string | null {
+  if (fromRevisionId && toRevisionId) {
+    return fromRevisionId === toRevisionId ? `customer already on ${toRevisionId}` : null;
+  }
+  return currentGatewayId === toGatewayId ? `customer already on ${toGatewayId}` : null;
+}
+
+// Apply the placement rule to the destination gateway. { error } on a
+// not-ready/no-live-revision rejection; null revision = legacy (gateway not on
+// the assignment layer).
+async function resolveToRevision(
+  deps: MigrateCustomerDeps,
+  toGatewayId: string,
+): Promise<{ revisionId: string | null; release: number | null } | { error: string }> {
+  const placement: PlacementResolution | null = deps.resolvePlacement
+    ? await deps.resolvePlacement(toGatewayId)
+    : null;
+  if (placement && placement.ok === false) {
+    return { error: `placement rejected for ${toGatewayId}: ${placement.reason}` };
+  }
+  const ok = placement !== null && placement.ok;
+  return {
+    revisionId: ok ? placement.revisionId : null,
+    release: ok ? placement.release : null,
+  };
+}
+
+// Resolve from/to revisions and apply the "already on target" rule. Absent
+// resolvers = legacy bare-gateway migration. Resolver throws propagate to the
+// caller; business rejections come back as { error }.
+async function resolveMigrationTargets(
+  deps: MigrateCustomerDeps,
+  uid: string,
+  user: UserGatewayInfo,
+  toGatewayId: string,
+): Promise<{ targets: MigrationTargets } | { error: string }> {
+  const fromRevision = deps.resolveFromRevision
+    ? await deps.resolveFromRevision(uid, user.currentGatewayId)
+    : null;
+  const to = await resolveToRevision(deps, toGatewayId);
+  if ("error" in to) return { error: to.error };
+  const fromRevisionId = fromRevision?.revisionId ?? null;
+
+  const rejected = alreadyOnTargetError(fromRevisionId, to.revisionId, user.currentGatewayId, toGatewayId);
+  if (rejected) return { error: rejected };
+
+  return {
+    targets: {
+      toRevisionId: to.revisionId,
+      toRelease: to.release,
+      fromRevisionId,
+      fromRelease: fromRevision?.release ?? null,
+      fromTransportId: fromRevisionId ?? user.currentGatewayId,
+      toTransportId: to.revisionId ?? toGatewayId,
+    },
+  };
+}
+
+function buildRunnerDeps(
+  deps: MigrateCustomerDeps,
+  client: MigrationClient,
+  ctx: OperationContext,
+): MigrationRunnerDeps {
+  const runnerDeps: MigrationRunnerDeps = {
+    client,
+    commitCutover: deps.commitCutover,
+    log: deps.log,
+    reportStep: async (rep: ReportedStep) => {
+      const step = reportedToOperationStep(rep, deps.now());
+      await ctx.reportStep(step);
+    },
+  };
+  if (deps.setAssignmentState) runnerDeps.setAssignmentState = deps.setAssignmentState;
+  return runnerDeps;
+}
+
 export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): OperationHandler {
   return async (op: Operation, ctx: OperationContext): Promise<OperationResult> => {
     const input = op.input as MigrateCustomerInput;
     const uid = typeof input.uid === "string" ? input.uid : undefined;
     const toGatewayId = typeof input.toGatewayId === "string" ? input.toGatewayId : undefined;
-    const sourceDisposable = input.source === ROLLOUT_BLUEGREEN_SOURCE;
 
     if (!uid) {
       return { steps: [], success: false, error: "missing uid in op.input" };
@@ -84,21 +206,19 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
     if (!user) {
       return { steps: [], success: false, error: `user not found: ${uid}` };
     }
-    if (user.currentGatewayId === toGatewayId) {
-      return {
-        steps: [],
-        success: false,
-        error: `customer already on ${toGatewayId}`,
-      };
-    }
 
     const migrationId = deps.genMigrationId();
-    let fromUrl: string;
-    let toUrl: string;
+    let targets: MigrationTargets;
     let restoreSnapshot: FleetBrokerUserSnapshot | null;
+    const urls = new Map<string, string>();
     try {
-      fromUrl = await deps.resolveGatewayUrl(user.currentGatewayId);
-      toUrl = await deps.resolveGatewayUrl(toGatewayId);
+      const resolved = await resolveMigrationTargets(deps, uid, user, toGatewayId);
+      if ("error" in resolved) {
+        return { steps: [], success: false, error: resolved.error };
+      }
+      targets = resolved.targets;
+      urls.set(targets.fromTransportId, await deps.resolveGatewayUrl(targets.fromTransportId));
+      urls.set(targets.toTransportId, await deps.resolveGatewayUrl(targets.toTransportId));
       restoreSnapshot = await deps.readUserSnapshot(uid);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -107,15 +227,11 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
     if (!restoreSnapshot) {
       return { steps: [], success: false, error: `durable snapshot not found for ${uid}` };
     }
-    const urls = new Map<string, string>([
-      [user.currentGatewayId, fromUrl],
-      [toGatewayId, toUrl],
-    ]);
-    const client = deps.buildClient((gatewayId) => {
-      const url = urls.get(gatewayId);
+    const client = deps.buildClient((transportId) => {
+      const url = urls.get(transportId);
       if (!url) {
         throw new Error(
-          `migration client called with unexpected gatewayId: ${gatewayId}`,
+          `migration client called with unexpected gatewayId: ${transportId}`,
         );
       }
       return url;
@@ -128,21 +244,23 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
         slug: user.slug,
         fromGatewayId: user.currentGatewayId,
         toGatewayId,
+        fromTransportId: targets.fromTransportId,
+        toTransportId: targets.toTransportId,
+        // The runner flips the mirror only when the bare gateway changed and
+        // commits the assignment doc INSIDE the cutover step (atomic, before
+        // unmount-source). Forward commits the target revision; rollback restores
+        // the source revision.
+        crossGateway: user.currentGatewayId !== toGatewayId,
+        toRevision: targets.toRevisionId
+          ? { revisionId: targets.toRevisionId, release: targets.toRelease ?? 0 }
+          : null,
+        fromRevision: targets.fromRevisionId
+          ? { revisionId: targets.fromRevisionId, release: targets.fromRelease ?? 0 }
+          : null,
         restoreSnapshot,
         includeActivationManifest: true,
-        sourceDisposable,
       },
-      {
-        client,
-        cutoverFirestore: async (uid, toGatewayId, slug) => {
-          await deps.cutoverFirestore(uid, toGatewayId, slug);
-        },
-        log: deps.log,
-        reportStep: async (rep: ReportedStep) => {
-          const step = reportedToOperationStep(rep, deps.now());
-          await ctx.reportStep(step);
-        },
-      },
+      buildRunnerDeps(deps, client, ctx),
     );
 
     return {

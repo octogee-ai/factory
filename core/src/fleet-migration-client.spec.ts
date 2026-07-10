@@ -125,6 +125,106 @@ describe("MigrationClient.quiesce", () => {
   });
 });
 
+// Transport/tenant split (GATEWAY-RELEASES-SPEC "Placement and migration
+// targeting"): the URL resolves from the revision service ({gw}-r{n}) while the
+// in-pod path/body still carries the bare gatewayId (the pod's GATEWAY_ID and
+// path guard stay bare). Same bare gateway, two revisions → two URLs.
+describe("MigrationClient — transport/tenant split", () => {
+  it("quiesce: URL uses transportId (revision service), path uses bare gatewayId", async () => {
+    const { calls, fakeFetch } = captureFetch(() =>
+      new Response(
+        JSON.stringify({ migrationId: "m1", slug: "alice", drained: true, runningCount: 0 }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: (id) =>
+        id === "default-r1" ? "https://rev1.example.com" : `https://${id}.example.com`,
+      fetch: fakeFetch,
+    });
+    await client.quiesce({
+      migrationId: "m1",
+      gatewayId: "default",
+      transportId: "default-r1",
+      slug: "alice",
+    });
+    expect(calls[0].url).toBe("https://rev1.example.com/quiesce/default");
+  });
+
+  it("verifyTarget + restoreTarget + unmount: transport for URL, bare for path", async () => {
+    const { calls, fakeFetch } = captureFetch((call) => {
+      if (call.url.includes("/verify/")) {
+        return new Response(
+          JSON.stringify({
+            migrationId: "m1",
+            slug: "alice",
+            ready: true,
+            checks: { customerDir: true, coachWired: true, mountMarked: true, accountHealthy: true },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (call.url.includes("/restore/")) {
+        return new Response(
+          JSON.stringify({ migrationId: "m1", slug: "alice", restored: true, steps: [] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ migrationId: "m1", slug: "alice", unmounted: true }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: (id) => `https://${id}.example.com`,
+      fetch: fakeFetch,
+    });
+    await client.verifyTarget({ migrationId: "m1", gatewayId: "default", transportId: "default-r2", slug: "alice" });
+    await client.restoreTarget({
+      migrationId: "m1",
+      gatewayId: "default",
+      transportId: "default-r2",
+      uid: "uid-alice",
+      slug: "alice",
+      snapshot: SNAPSHOT,
+    });
+    await client.unmount({ migrationId: "m1", gatewayId: "default", transportId: "default-r1", slug: "alice" });
+    expect(calls[0].url).toBe("https://default-r2.example.com/verify/default");
+    expect(calls[1].url).toBe("https://default-r2.example.com/restore/default");
+    expect(calls[2].url).toBe("https://default-r1.example.com/unmount/default");
+  });
+
+  it("transferState: source URL from fromTransportId, targetUrl from toTransportId, body ids bare", async () => {
+    const { calls, fakeFetch } = captureFetch(() =>
+      new Response(
+        JSON.stringify({ migrationId: "m1", slug: "alice", imported: true }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: (id) => `https://${id}.example.com`,
+      fetch: fakeFetch,
+    });
+    await client.transferState({
+      migrationId: "m1",
+      fromGatewayId: "default",
+      toGatewayId: "default",
+      fromTransportId: "default-r1",
+      toTransportId: "default-r2",
+      slug: "alice",
+    });
+    expect(calls[0].url).toBe("https://default-r1.example.com/push-state/default");
+    const parsed = JSON.parse(calls[0].body!);
+    expect(parsed).toMatchObject({
+      targetGatewayId: "default",
+      targetUrl: "https://default-r2.example.com",
+    });
+  });
+});
+
 describe("MigrationClient.unmount", () => {
   it("POSTs JSON to /unmount/{gatewayId} signed identically to quiesce", async () => {
     const { calls, fakeFetch } = captureFetch(() =>

@@ -36,6 +36,12 @@ interface FakeState {
   deletedGlm: Set<string>;
   deletedHeartbeat: Set<string>;
   heartbeatPresentAfterDelete?: Set<string>;
+  // Step 2 full-gateway retire inputs.
+  assignments: Array<{ uid: string; slug: string }>;
+  revisions: Array<{ revisionId: string; release: number; lifecycle: string }>;
+  helmUninstalledRevisions: string[];
+  retiredRevisionDocs: string[];
+  tombstonedRevisions: string[];
 }
 
 function baseState(overrides: Partial<FakeState> = {}): FakeState {
@@ -45,6 +51,11 @@ function baseState(overrides: Partial<FakeState> = {}): FakeState {
     glmGatewayIds: new Map([["canary", "canary"]]),
     deletedGlm: new Set(),
     deletedHeartbeat: new Set(),
+    assignments: [],
+    revisions: [],
+    helmUninstalledRevisions: [],
+    retiredRevisionDocs: [],
+    tombstonedRevisions: [],
     ...overrides,
   };
 }
@@ -69,6 +80,20 @@ function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}):
       if (!live) return null;
       return { mountedCustomers: live.mounted };
     }),
+    readAssignmentsForGateway: vi.fn(async () => state.assignments),
+    readNonRetiredRevisions: vi.fn(async () =>
+      state.revisions
+        .filter((r) => r.lifecycle !== "retired")
+        .map((r) => ({ revisionId: r.revisionId, release: r.release })),
+    ),
+    helmUninstallRevision: vi.fn(async (revisionId: string) => {
+      state.helmUninstalledRevisions.push(revisionId);
+    }),
+    retireRevisionDoc: vi.fn(async (revisionId: string) => {
+      state.retiredRevisionDocs.push(revisionId);
+      const rev = state.revisions.find((r) => r.revisionId === revisionId);
+      if (rev) rev.lifecycle = "retired";
+    }),
     readGlmGatewayId: vi.fn(async (gatewayId: string) => state.glmGatewayIds.get(gatewayId) ?? null),
     deleteGlmGateway: vi.fn(async (gatewayId: string) => {
       state.deletedGlm.add(gatewayId);
@@ -82,6 +107,10 @@ function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}):
     deleteGatewayPersistentVolumeClaim: vi.fn(async () => {}),
     deleteGatewayKubeSecret: vi.fn(async () => {}),
     deleteAuthTokenSecret: vi.fn(async () => {}),
+    deleteGatewayServiceAccount: vi.fn(async () => {}),
+    deleteGatewayEdgeService: vi.fn(async () => {}),
+    deleteGatewayModelKeyKubeSecret: vi.fn(async () => {}),
+    deleteGatewayModelKeySource: vi.fn(async () => {}),
     teardownGatewayServiceAccount: vi.fn(async () => {}),
     syncFleetIngress: vi.fn(async () => {}),
     helmUninstallTimeoutMs: 60_000,
@@ -96,7 +125,7 @@ function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}):
 }
 
 describe("createRetireGatewayHandler — teardown completeness (happy path)", () => {
-  it("uninstalls, then deletes PVC + K8s secret + SM secret + GSA by default, then records + ingress", async () => {
+  it("deletes every gateway-scoped runtime resource before records and ingress", async () => {
     const state = baseState();
     const deps = makeDeps(state);
     const ctx = makeCtx();
@@ -107,6 +136,10 @@ describe("createRetireGatewayHandler — teardown completeness (happy path)", ()
     expect(deps.deleteGatewayPersistentVolumeClaim).toHaveBeenCalledWith("canary");
     expect(deps.deleteGatewayKubeSecret).toHaveBeenCalledWith("canary");
     expect(deps.deleteAuthTokenSecret).toHaveBeenCalledWith("canary");
+    expect(deps.deleteGatewayServiceAccount).toHaveBeenCalledWith("canary");
+    expect(deps.deleteGatewayEdgeService).toHaveBeenCalledWith("canary");
+    expect(deps.deleteGatewayModelKeyKubeSecret).toHaveBeenCalledWith("canary");
+    expect(deps.deleteGatewayModelKeySource).toHaveBeenCalledWith("canary");
     expect(deps.teardownGatewayServiceAccount).toHaveBeenCalledWith("canary");
     expect(state.deletedGlm.has("canary")).toBe(true);
     expect(state.deletedHeartbeat.has("canary")).toBe(true);
@@ -119,6 +152,14 @@ describe("createRetireGatewayHandler — teardown completeness (happy path)", ()
       "delete-kube-secret:done",
       "delete-sm-secret:running",
       "delete-sm-secret:done",
+      "delete-ksa:running",
+      "delete-ksa:done",
+      "delete-edge-service:running",
+      "delete-edge-service:done",
+      "delete-model-key-kube-secret:running",
+      "delete-model-key-kube-secret:done",
+      "delete-model-key-source:running",
+      "delete-model-key-source:done",
       "teardown-gsa:running",
       "teardown-gsa:done",
       "cleanup:running",
@@ -168,6 +209,42 @@ describe("createRetireGatewayHandler — teardown completeness (happy path)", ()
     expect(result.success).toBe(true);
     expect(sync).toHaveBeenCalledTimes(1);
   });
+
+  it("writes the revision_gone tombstone during teardown, before the glm doc is deleted", async () => {
+    const state = baseState();
+    const order: string[] = [];
+    const writeRevisionTombstone = vi.fn(async () => {
+      order.push("tombstone");
+    });
+    const deps = makeDeps(state, {
+      writeRevisionTombstone,
+      deleteGlmGateway: vi.fn(async (gatewayId: string) => {
+        order.push("delete-glm");
+        state.deletedGlm.add(gatewayId);
+      }),
+    });
+
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(result.success).toBe(true);
+    expect(writeRevisionTombstone).toHaveBeenCalledWith("canary");
+    // Ordering matters: the writer must read the still-present revision doc.
+    expect(order).toEqual(["tombstone", "delete-glm"]);
+  });
+
+  it("fails the op (records preserved for retry) when the tombstone write throws", async () => {
+    const state = baseState();
+    const deps = makeDeps(state, {
+      writeRevisionTombstone: vi.fn(async () => {
+        throw new Error("firestore down");
+      }),
+    });
+
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(result.success).toBe(false);
+    expect(state.deletedGlm.has("canary")).toBe(false);
+  });
 });
 
 describe("createRetireGatewayHandler — independent best-effort teardown (D4)", () => {
@@ -188,6 +265,10 @@ describe("createRetireGatewayHandler — independent best-effort teardown (D4)",
     // Every other teardown step is still attempted — one failure does not abort the rest.
     expect(deps.deleteGatewayPersistentVolumeClaim).toHaveBeenCalled();
     expect(deps.deleteAuthTokenSecret).toHaveBeenCalled();
+    expect(deps.deleteGatewayServiceAccount).toHaveBeenCalled();
+    expect(deps.deleteGatewayEdgeService).toHaveBeenCalled();
+    expect(deps.deleteGatewayModelKeyKubeSecret).toHaveBeenCalled();
+    expect(deps.deleteGatewayModelKeySource).toHaveBeenCalled();
     expect(deps.teardownGatewayServiceAccount).toHaveBeenCalled();
     // Records preserved so the operation stays re-drivable.
     expect(state.deletedGlm.size).toBe(0);
@@ -205,6 +286,9 @@ describe("createRetireGatewayHandler — independent best-effort teardown (D4)",
       deleteAuthTokenSecret: vi.fn(async () => {
         throw new Error("sm denied");
       }),
+      deleteGatewayEdgeService: vi.fn(async () => {
+        throw new Error("service stuck");
+      }),
     });
 
     const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
@@ -212,6 +296,7 @@ describe("createRetireGatewayHandler — independent best-effort teardown (D4)",
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/pvc stuck/);
     expect(result.error).toMatch(/sm denied/);
+    expect(result.error).toMatch(/service stuck/);
   });
 
   it("GSA teardown failure aggregate-gates the op — a stranded IAM principal is not silently OK", async () => {
@@ -330,6 +415,14 @@ describe("createRetireGatewayHandler — refusals + edge cases", () => {
       "delete-kube-secret:done",
       "delete-sm-secret:running",
       "delete-sm-secret:done",
+      "delete-ksa:running",
+      "delete-ksa:done",
+      "delete-edge-service:running",
+      "delete-edge-service:done",
+      "delete-model-key-kube-secret:running",
+      "delete-model-key-kube-secret:done",
+      "delete-model-key-source:running",
+      "delete-model-key-source:done",
       "teardown-gsa:running",
       "teardown-gsa:done",
       "cleanup:running",
@@ -385,6 +478,147 @@ describe("createRetireGatewayHandler — refusals + edge cases", () => {
     const result = await createRetireGatewayHandler(deps)(mkOp({ input: {} }), makeCtx());
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/gatewayId/);
+  });
+});
+
+describe("createRetireGatewayHandler — full-gateway revision-aware retire (Step 2)", () => {
+  const trackTombstone = (state: FakeState) =>
+    vi.fn(async (rid: string) => {
+      state.tombstonedRevisions.push(rid);
+    });
+
+  it("refuses while assignment docs exist, naming the slugs sorted — nothing torn down", async () => {
+    const state = baseState({
+      assignments: [
+        { uid: "u2", slug: "beta" },
+        { uid: "u1", slug: "alpha" },
+      ],
+      revisions: [{ revisionId: "canary-r1", release: 1, lifecycle: "serving" }],
+    });
+    const deps = makeDeps(state);
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/still has 2 assigned/);
+    expect(result.error).toMatch(/alpha, beta/); // slugs sorted, migration hint
+    expect(deps.helmUninstallRevision).not.toHaveBeenCalled();
+    expect(deps.deleteAuthTokenSecret).not.toHaveBeenCalled();
+    expect(deps.deleteGatewayPersistentVolumeClaim).not.toHaveBeenCalled();
+    expect(state.retiredRevisionDocs).toEqual([]);
+  });
+
+  it("retires EVERY revision (uninstall + tombstone + retire doc) BEFORE any gateway-scoped teardown", async () => {
+    const state = baseState({
+      glmGatewayIds: new Map(), // new-model gateway: no bare glmGateways/{id} doc
+      live: new Map(),
+      revisions: [
+        { revisionId: "canary-r1", release: 1, lifecycle: "serving" },
+        { revisionId: "canary-r2", release: 2, lifecycle: "draining" },
+      ],
+    });
+    let revisionsRetiredAtGatewayTeardown: string[] | null = null;
+    const deps = makeDeps(state, {
+      writeRevisionTombstone: trackTombstone(state),
+      deleteGatewayPersistentVolumeClaim: vi.fn(async () => {
+        // First gateway-scoped teardown step: snapshot revision retirement state.
+        revisionsRetiredAtGatewayTeardown = [...state.retiredRevisionDocs];
+      }),
+    });
+    const ctx = makeCtx();
+
+    const result = await createRetireGatewayHandler(deps)(mkOp(), ctx);
+
+    expect(result.success).toBe(true);
+    expect(state.helmUninstalledRevisions).toEqual(["canary-r1", "canary-r2"]);
+    // Each revision is tombstoned during its own teardown (the trailing bare-id
+    // cleanup tombstone is a production no-op — no `canary` revision doc exists).
+    expect(state.tombstonedRevisions.filter((t) => /-r\d+$/.test(t))).toEqual([
+      "canary-r1",
+      "canary-r2",
+    ]);
+    expect(state.retiredRevisionDocs).toEqual(["canary-r1", "canary-r2"]);
+    // Both revisions were already retired at the first gateway-scoped teardown.
+    expect(revisionsRetiredAtGatewayTeardown).toEqual(["canary-r1", "canary-r2"]);
+    const names = ctx.reported.map((s) => s.name);
+    expect(names.indexOf("retire-revision:canary-r2")).toBeLessThan(names.indexOf("delete-pvc"));
+    // Gateway-scoped teardown DID run last (this is a full gateway retire).
+    expect(deps.deleteAuthTokenSecret).toHaveBeenCalledWith("canary");
+    expect(state.deletedHeartbeat.has("canary")).toBe(true);
+  });
+
+  it("NEVER runs gateway-scoped teardown while a revision is still non-retired (uninstall fails)", async () => {
+    const state = baseState({
+      glmGatewayIds: new Map(),
+      live: new Map(),
+      revisions: [
+        { revisionId: "canary-r1", release: 1, lifecycle: "serving" },
+        { revisionId: "canary-r2", release: 2, lifecycle: "serving" },
+      ],
+    });
+    const deps = makeDeps(state, {
+      writeRevisionTombstone: trackTombstone(state),
+      helmUninstallRevision: vi.fn(async (rid: string) => {
+        if (rid === "canary-r2") throw new Error("kubectl down");
+        state.helmUninstalledRevisions.push(rid);
+      }),
+    });
+
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/revision teardown incomplete/);
+    expect(result.error).toMatch(/canary-r2/);
+    // r1 retired, r2 not — and NO gateway-scoped teardown, no record deletion.
+    expect(state.retiredRevisionDocs).toEqual(["canary-r1"]);
+    expect(deps.deleteAuthTokenSecret).not.toHaveBeenCalled();
+    expect(deps.deleteGatewayPersistentVolumeClaim).not.toHaveBeenCalled();
+    expect(state.deletedGlm.size).toBe(0);
+  });
+
+  it("crash after revision-1 teardown converges next tick: revision-2 + gateway-scoped teardown finish", async () => {
+    const state = baseState({
+      glmGatewayIds: new Map(),
+      live: new Map(),
+      revisions: [
+        { revisionId: "canary-r1", release: 1, lifecycle: "serving" },
+        { revisionId: "canary-r2", release: 2, lifecycle: "serving" },
+      ],
+    });
+
+    // Pass 1: r1 fully retires, then the controller dies on r2's uninstall.
+    const crashing = makeDeps(state, {
+      writeRevisionTombstone: trackTombstone(state),
+      helmUninstallRevision: vi.fn(async (rid: string) => {
+        if (rid === "canary-r2") throw new Error("controller died");
+        state.helmUninstalledRevisions.push(rid);
+      }),
+    });
+    const pass1 = await createRetireGatewayHandler(crashing)(mkOp(), makeCtx());
+    expect(pass1.success).toBe(false);
+    expect(state.retiredRevisionDocs).toEqual(["canary-r1"]);
+    expect(crashing.deleteAuthTokenSecret).not.toHaveBeenCalled();
+
+    // Pass 2: fresh controller over the same durable state — r1 already retired
+    // drops out of the enumeration, r2 finishes, then gateway-scoped teardown.
+    const healthy = makeDeps(state, { writeRevisionTombstone: trackTombstone(state) });
+    const pass2 = await createRetireGatewayHandler(healthy)(mkOp(), makeCtx());
+    expect(pass2.success).toBe(true);
+    expect(healthy.helmUninstallRevision).toHaveBeenCalledTimes(1); // only r2 this pass
+    expect(state.retiredRevisionDocs).toEqual(["canary-r1", "canary-r2"]);
+    expect(healthy.deleteAuthTokenSecret).toHaveBeenCalledWith("canary");
+  });
+
+  it("legacy bare-id gateway (no assignments, no revisions) retires exactly as before — no revision teardown", async () => {
+    const state = baseState(); // glmGatewayIds has canary, revisions empty
+    const deps = makeDeps(state);
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(result.success).toBe(true);
+    expect(deps.helmUninstallRevision).not.toHaveBeenCalled();
+    expect(state.retiredRevisionDocs).toEqual([]);
+    expect(state.tombstonedRevisions).toEqual([]);
+    expect(deps.deleteAuthTokenSecret).toHaveBeenCalledWith("canary");
+    expect(state.deletedGlm.has("canary")).toBe(true);
   });
 });
 

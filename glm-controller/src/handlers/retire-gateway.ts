@@ -18,21 +18,51 @@ export interface RetireGatewayDeps {
 
   deleteGatewayHeartbeat: (gatewayId: string) => Promise<void>;
 
+  // Write the revision_gone tombstone for a revision being torn down, so a
+  // subsequent revision-pinned `/g/<gw>/r/<n>/…` request answers with the typed
+  // revision_gone 404 instead of dialing the now-dead pod. Called with the
+  // glmGateways doc id (== revisionId in the new model) BEFORE the doc is
+  // deleted; a no-op for a legacy bare gateway that has no /r/<n> addressing.
+  // (The roll source-drain retire in PR7 uses the same writer.)
+  writeRevisionTombstone?: (revisionId: string) => Promise<void>;
+
   readGatewayHeartbeatExists?: (gatewayId: string) => Promise<boolean>;
 
-  // Teardown of the per-gateway runtime resources. All three are REQUIRED —
-  // the teardown-completeness invariant is structural: a retire handler that
-  // forgets to remove the PVC or either auth-token secret cannot be
-  // constructed. (Mirror of provisioning: provisionGatewayAuthSecret +
-  // ensureAuthSecret + the chart PVC created these; decommission removes them.)
+  // Teardown of the per-gateway runtime resources is structurally required.
   deleteGatewayPersistentVolumeClaim: (gatewayId: string) => Promise<void>;
   deleteGatewayKubeSecret: (gatewayId: string) => Promise<void>;
   deleteAuthTokenSecret: (gatewayId: string) => Promise<void>;
+  deleteGatewayServiceAccount: (gatewayId: string) => Promise<void>;
+  deleteGatewayEdgeService: (gatewayId: string) => Promise<void>;
+  deleteGatewayModelKeyKubeSecret: (gatewayId: string) => Promise<void>;
+  deleteGatewayModelKeySource: (gatewayId: string) => Promise<void>;
 
   // Optional, operator-only, best-effort: delete the per-gateway GSA (deleting
   // the service account also removes its Workload-Identity binding). No-op when
   // no GSA exists for the gateway (cattle gateways never have one).
   teardownGatewayServiceAccount?: (gatewayId: string) => Promise<void>;
+
+  // Full-gateway retirement drains every revision before scoped teardown.
+
+  // Assignment docs for the gateway (gateways/{id}/assignments/*). Retirement
+  // refuses while any exists — customers must be migrated off first.
+  readAssignmentsForGateway: (
+    gatewayId: string,
+  ) => Promise<Array<{ uid: string; slug: string }>>;
+
+  // Every non-retired revision realization doc for the gateway (glmGateways
+  // where gateway == id, lifecycle != retired).
+  readNonRetiredRevisions: (
+    gatewayId: string,
+  ) => Promise<Array<{ revisionId: string; release: number }>>;
+
+  // Revision-scoped Helm uninstall (octogee-gw-{revisionId}) — must tolerate an
+  // already-absent release so a crashed retire re-drives cleanly.
+  helmUninstallRevision: (revisionId: string) => Promise<void>;
+
+  // Mark the revision doc retired (lifecycle retired + retiredAt + retireReason).
+  // The doc is RETAINED (never deleted), matching the roll's source retirement.
+  retireRevisionDoc: (revisionId: string, reason: string) => Promise<void>;
 
   readGlmGatewayId: (gatewayId: string) => Promise<string | null>;
 
@@ -62,6 +92,12 @@ interface StepResult {
 
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
 
+function compareStrings(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
 function shouldRetainData(input: RetireGatewayInput): boolean {
   return input.retainData === true;
 }
@@ -85,8 +121,21 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
     const retainData = shouldRetainData(input);
     const retainServiceAccount = shouldRetainServiceAccount(input);
 
+    // Refuse while any customer is still assigned — the operator must migrate
+    // them off first. Naming the slugs makes the next action obvious.
+    const assignmentFailure = await assertNoAssignments(deps, gatewayId);
+    if (assignmentFailure) return assignmentFailure;
+
     const liveFailure = await assertGatewayRetirable(deps, gatewayId);
     if (liveFailure) return liveFailure;
+
+    // Drain every non-retired revision (uninstall octogee-gw-{revisionId} +
+    // tombstone + retire the revision doc) BEFORE any gateway-scoped teardown.
+    // Level-triggered: a crash after some revisions retire converges on the next
+    // tick (already-retired revisions drop out of the enumeration); the
+    // gateway-scoped teardown below is UNREACHABLE while any revision lives.
+    const revisionFailure = await drainRevisions(ctx, deps, gatewayId);
+    if (revisionFailure) return revisionFailure;
 
     let resolvedGatewayId = await deps.readGlmGatewayId(gatewayId);
     if (!resolvedGatewayId) {
@@ -175,21 +224,33 @@ async function teardownResources(
   if (retainData) {
     deps.log(`[retire-gateway] retainData set — preserving PVC for ${gatewayId}`);
   } else {
-    const r = await runReportedStep(ctx, deps, "delete-pvc", () =>
+    await collectTeardownError(ctx, deps, errors, "delete-pvc", () =>
       deps.deleteGatewayPersistentVolumeClaim(gatewayId),
     );
-    if (!r.ok) errors.push(`delete-pvc: ${r.error ?? UNKNOWN_ERROR}`);
   }
 
-  const kube = await runReportedStep(ctx, deps, "delete-kube-secret", () =>
+  await collectTeardownError(ctx, deps, errors, "delete-kube-secret", () =>
     deps.deleteGatewayKubeSecret(gatewayId),
   );
-  if (!kube.ok) errors.push(`delete-kube-secret: ${kube.error ?? UNKNOWN_ERROR}`);
-
-  const sm = await runReportedStep(ctx, deps, "delete-sm-secret", () =>
+  await collectTeardownError(ctx, deps, errors, "delete-sm-secret", () =>
     deps.deleteAuthTokenSecret(gatewayId),
   );
-  if (!sm.ok) errors.push(`delete-sm-secret: ${sm.error ?? UNKNOWN_ERROR}`);
+  await collectTeardownError(ctx, deps, errors, "delete-ksa", () =>
+    deps.deleteGatewayServiceAccount(gatewayId),
+  );
+  await collectTeardownError(ctx, deps, errors, "delete-edge-service", () =>
+    deps.deleteGatewayEdgeService(gatewayId),
+  );
+  await collectTeardownError(
+    ctx,
+    deps,
+    errors,
+    "delete-model-key-kube-secret",
+    () => deps.deleteGatewayModelKeyKubeSecret(gatewayId),
+  );
+  await collectTeardownError(ctx, deps, errors, "delete-model-key-source", () =>
+    deps.deleteGatewayModelKeySource(gatewayId),
+  );
 
   // GSA teardown: a non-404 failure means a per-gateway GSA (a standing IAM
   // principal — the exact thing decommission must remove) is still live, so it
@@ -203,11 +264,77 @@ async function teardownResources(
       `[retire-gateway] retainServiceAccount set — leaving the per-gateway GSA in place for ${gatewayId}`,
     );
   } else if (teardownGsa) {
-    const gsa = await runReportedStep(ctx, deps, "teardown-gsa", () => teardownGsa(gatewayId));
-    if (!gsa.ok) errors.push(`teardown-gsa: ${gsa.error ?? UNKNOWN_ERROR}`);
+    await collectTeardownError(ctx, deps, errors, "teardown-gsa", () =>
+      teardownGsa(gatewayId),
+    );
   }
 
   return errors;
+}
+
+async function collectTeardownError(
+  ctx: OperationContext,
+  deps: RetireGatewayDeps,
+  errors: string[],
+  stepName: string,
+  action: () => Promise<void>,
+): Promise<void> {
+  const result = await runReportedStep(ctx, deps, stepName, action);
+  if (!result.ok) errors.push(`${stepName}: ${result.error ?? UNKNOWN_ERROR}`);
+}
+
+async function assertNoAssignments(
+  deps: RetireGatewayDeps,
+  gatewayId: string,
+): Promise<OperationResult | null> {
+  const assignments = await deps.readAssignmentsForGateway(gatewayId);
+  if (assignments.length === 0) return null;
+  const slugs = assignments.map((a) => a.slug).sort(compareStrings);
+  return failure(
+    `gateway ${gatewayId} still has ${assignments.length} assigned customer(s): ` +
+      `${slugs.join(", ")} — migrate them off before retiring`,
+  );
+}
+
+// Retire every non-retired revision before any gateway-scoped teardown. Each
+// revision's teardown (helm uninstall → tombstone → retire doc) is one reported
+// step, aggregate-gated like resource teardown: a failure preserves the revision
+// for retry and short-circuits BEFORE gateway-scoped teardown. After the loop we
+// re-read: any revision still live (a fresh doc written mid-retire, or a step
+// that silently no-op'd) blocks the gateway-scoped phase, converging next tick.
+async function drainRevisions(
+  ctx: OperationContext,
+  deps: RetireGatewayDeps,
+  gatewayId: string,
+): Promise<OperationResult | null> {
+  const revisions = await deps.readNonRetiredRevisions(gatewayId);
+  const sorted = [...revisions].sort((a, b) => compareStrings(a.revisionId, b.revisionId));
+  const errors: string[] = [];
+  for (const rev of sorted) {
+    const r = await runReportedStep(ctx, deps, `retire-revision:${rev.revisionId}`, async () => {
+      // Tolerates an already-absent Helm release (crash-resume) by contract.
+      await deps.helmUninstallRevision(rev.revisionId);
+      // Tombstone while the revision doc is still non-retired, so the writer can
+      // read its release/gateway to key the revision_gone 404.
+      await deps.writeRevisionTombstone?.(rev.revisionId);
+      await deps.retireRevisionDoc(rev.revisionId, "gateway-retire");
+    });
+    if (!r.ok) errors.push(`${rev.revisionId}: ${r.error ?? UNKNOWN_ERROR}`);
+  }
+  if (errors.length > 0) {
+    return failure(
+      `revision teardown incomplete (gateway-scoped resources preserved): ${errors.join("; ")}`,
+    );
+  }
+  const remaining = await deps.readNonRetiredRevisions(gatewayId);
+  if (remaining.length > 0) {
+    return failure(
+      `revisions still non-retired after drain: ${remaining
+        .map((r) => r.revisionId)
+        .join(", ")} — converging next tick before gateway-scoped teardown`,
+    );
+  }
+  return null;
 }
 
 async function assertGatewayRetirable(
@@ -230,6 +357,10 @@ async function cleanupGatewayRecords(
   gatewayId: string,
 ): Promise<OperationResult | null> {
   const result = await runReportedStep(ctx, deps, "cleanup", async () => {
+    // Tombstone BEFORE the revision doc is deleted, so the writer can still read
+    // its release/gateway to key the tombstone and resolve the current-revision
+    // pointer.
+    await deps.writeRevisionTombstone?.(gatewayId);
     await deps.deleteGlmGateway(gatewayId);
     await deps.deleteGatewayHeartbeat(gatewayId);
   });

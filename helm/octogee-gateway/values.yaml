@@ -13,6 +13,14 @@
 # DNS-safe id that fits every rendered suffix.
 gatewayId: ""
 
+# Disposable revision instance id ({gatewayId}-r{n}). Cowboy sets it per
+# revision Helm release; every per-instance K8s resource NAME and the
+# `gateway-instance` selector derive from it so two simultaneous revisions of
+# one gateway never collide. Empty → defaults to gatewayId (legacy single-
+# revision renders are unchanged). Tenant identity (KSA, secrets, GATEWAY_ID)
+# stays gateway-scoped on gatewayId, never revisionId.
+revisionId: ""
+
 # Dedicated builder/operator owner slug. Shared gateways leave this empty.
 # When present on builder/operator classes, the gateway restores durable
 # openclaw.json from that builder's Gitea system_config repo before OpenClaw
@@ -170,17 +178,10 @@ env:
 preview:
   host: "preview.octogee.com"
 
-# Gateway storage defaults to emptyDir. Pod-local state is disposable;
-# customers/<slug>/ rehydrates from Gitea post-boot. Personal dogfood
-# gateways may opt into a PVC per instance until their full durable
-# restore path is proven.
-persistence:
-  enabled: false
-  existingClaim: ""
-  storageClassName: premium-rwo
-  accessModes:
-    - ReadWriteOnce
-  size: 20Gi
+# Gateway storage is emptyDir only — all gateways are Spot + emptyDir (#1932).
+# Pod-local state is disposable; customers/<slug>/ rehydrates from Gitea
+# post-boot. The PVC path (persistence.*) was deleted end-to-end
+# (GATEWAY-RELEASES-SPEC): PVC-backed gateways are incompatible with Spot.
 
 # Per-pod sizing tier. Operator-facing enum that maps to the matching
 # .Values.tiers entry below — drives resources + node-runtime tuning

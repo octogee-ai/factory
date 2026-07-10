@@ -17,10 +17,40 @@ export interface ReportedStep {
   error?: string;
 }
 
+export interface CutoverAssignmentRevision {
+  revisionId: string;
+  release: number;
+}
+
+// The single cutover commit the runner drives. The implementation MUST write the
+// mirror move (flipMirror) AND the assignment (revision) as ONE atomic Firestore
+// operation — a crash leaves NEITHER, so there is never a half-state the rollback
+// would have to reverse (GATEWAY-RELEASES-SPEC, PR5 review P0).
+export interface CutoverCommit {
+  uid: string;
+  slug: string;
+  toGatewayId: string;
+  fromGatewayId: string;
+  flipMirror: boolean;
+  revision: CutoverAssignmentRevision | null;
+}
+
 export interface MigrationRunnerDeps {
   client: MigrationClient;
-  
-  cutoverFirestore: (uid: string, toGatewayId: string, slug: string) => Promise<void>;
+
+  commitCutover: (commit: CutoverCommit) => Promise<void>;
+
+  // Roster-state gate for revision-aware migrations (PR7). Written to
+  // "quiescing" on the SOURCE assignment before the quiesce RPC — blocking the
+  // source edge from serving this customer BEFORE the target ever does — and
+  // restored to "serving" when a pre-cutover failure rolls the migration back.
+  // Required whenever the input carries a fromRevision.
+  setAssignmentState?: (input: {
+    gatewayId: string;
+    uid: string;
+    state: "serving" | "quiescing" | "migrating";
+  }) => Promise<void>;
+
   log: (msg: string) => void;
 
 reportStep?: (step: ReportedStep) => Promise<void> | void;
@@ -32,35 +62,28 @@ export interface MigrationRunnerInput {
   slug: string;
   fromGatewayId: string;
   toGatewayId: string;
+  // Transport targets for URL resolution (revision service names {gw}-r{n}).
+  // Default to the bare gateway ids — legacy single-revision behavior. In a
+  // same-gateway roll the tenant ids match but the transports differ, so source
+  // and target resolve to distinct Service URLs (GATEWAY-RELEASES-SPEC).
+  fromTransportId?: string;
+  toTransportId?: string;
+  // Assignment revisions written at cutover: forward cutover commits the target
+  // revision; rollback restores the source revision. Absent = legacy migration
+  // (no assignment write). The mirror flip is gated by crossGateway below —
+  // false for a same-gateway revision drain, so only the assignment doc moves.
+  toRevision?: CutoverAssignmentRevision | null;
+  fromRevision?: CutoverAssignmentRevision | null;
+  crossGateway?: boolean;
   restoreSnapshot: FleetBrokerUserSnapshot;
   includeActivationManifest?: boolean;
-  /**
-   * The source instance is being RETIRED (a blue/green roll), so it must never be
-   * able to veto the migration. With this set, a SOURCE-side step that fails
-   * (quiesce-source, sync-state, unmount-source) degrades — log + continue toward
-   * cutover — instead of rolling back. The customer's durable baseline already
-   * lives on the target via restore-target (substrate), and the source is
-   * disposable cattle; live-state transfer from it is a best-effort optimization.
-   * TARGET/commit steps (restore-target, verify-target, cutover-firestore) stay
-   * strict — we never cut over to a target we couldn't set up. Cross-pool
-   * migrations (source survives) leave this unset and keep the strict contract.
-   */
-  sourceDisposable?: boolean;
 }
 
-// A step that operates on / pulls from the SOURCE. On a disposable source these
-// degrade instead of rolling back the roll. Target/commit steps are excluded.
-function isBestEffortSourceStep(step: MigrationStep): boolean {
-  switch (step.action) {
-    case "quiesce-source":
-    case "sync-state":
-      return true;
-    case "unmount-gateway":
-      return step.role === "source";
-    default:
-      return false;
-  }
-}
+// NOTE: the old `sourceDisposable` best-effort degradation (log-and-continue on
+// a failed source quiesce) is deliberately GONE. It was safe only under
+// instance addressing, where the client re-derived its base URL; under identity
+// routing the roster flip is gated on a real quiesce, so a quiesce failure must
+// fail the migration and HOLD the roll (level-triggered retry), never skip.
 
 export interface MigrationRunnerResult {
   success: boolean;
@@ -76,6 +99,15 @@ async function executeStep(params: {
   slug: string;
   restoreSnapshot: FleetBrokerUserSnapshot | null;
   includeActivationManifest: boolean | undefined;
+  // Transport targets keyed by role. The step's gateway id is the bare TENANT id
+  // (in-pod path); these resolve the revision Service URL.
+  fromTransportId: string;
+  toTransportId: string;
+  // Cutover context: forward commits the target revision, rollback restores the
+  // source. crossGateway gates the mirror flip (false = same-gateway drain).
+  direction: "forward" | "rollback";
+  crossGateway: boolean;
+  cutoverRevision: CutoverAssignmentRevision | null;
 }): Promise<void> {
   const {
     step,
@@ -84,6 +116,10 @@ async function executeStep(params: {
     slug,
     restoreSnapshot,
     includeActivationManifest,
+    fromTransportId,
+    toTransportId,
+    crossGateway,
+    cutoverRevision,
   } = params;
   switch (step.action) {
     case "restore-target":
@@ -93,6 +129,7 @@ async function executeStep(params: {
       await deps.client.restoreTarget({
         migrationId,
         gatewayId: step.gateway,
+        transportId: toTransportId,
         uid: step.uid,
         slug: step.slug,
         snapshot: restoreSnapshot,
@@ -102,6 +139,7 @@ async function executeStep(params: {
       await deps.client.quiesce({
         migrationId,
         gatewayId: step.gateway,
+        transportId: fromTransportId,
         slug: step.slug,
       });
       return;
@@ -110,6 +148,8 @@ async function executeStep(params: {
         migrationId,
         fromGatewayId: step.from,
         toGatewayId: step.to,
+        fromTransportId,
+        toTransportId,
         slug: step.slug,
         mode: step.mode,
         includeActivationManifest,
@@ -119,16 +159,28 @@ async function executeStep(params: {
       await deps.client.verifyTarget({
         migrationId,
         gatewayId: step.gateway,
+        transportId: toTransportId,
         slug: step.slug,
       });
       return;
     case "cutover-firestore":
-      await deps.cutoverFirestore(step.uid, step.to, slug);
+      // ONE atomic commit — mirror move (when the bare gateway changed) AND the
+      // assignment revision, before unmount-source. If it throws, neither lands,
+      // so the rollback from target-verified has no half-state to reverse.
+      await deps.commitCutover({
+        uid: step.uid,
+        slug,
+        toGatewayId: step.to,
+        fromGatewayId: step.from,
+        flipMirror: crossGateway,
+        revision: cutoverRevision,
+      });
       return;
     case "unmount-gateway":
       await deps.client.unmount({
         migrationId,
         gatewayId: step.gateway,
+        transportId: step.role === "source" ? fromTransportId : toTransportId,
         slug: step.slug,
       });
       return;
@@ -147,6 +199,12 @@ export async function runMigration(
   input: MigrationRunnerInput,
   deps: MigrationRunnerDeps,
 ): Promise<MigrationRunnerResult> {
+  const fromTransportId = input.fromTransportId ?? input.fromGatewayId;
+  const toTransportId = input.toTransportId ?? input.toGatewayId;
+  const crossGateway = input.crossGateway ?? input.fromGatewayId !== input.toGatewayId;
+  const toRevision = input.toRevision ?? null;
+  const fromRevision = input.fromRevision ?? null;
+  let quiescingMarked = false;
   let state: MigrationState = {
     phase: "initial",
     slug: input.slug,
@@ -163,6 +221,23 @@ export async function runMigration(
     const name = reportName(step);
     await report(deps, { name, status: "running" });
     try {
+      // Gated quiesce (PR7): block the source edge from serving this customer
+      // BEFORE the source pod is quiesced, so there is never a window where the
+      // target serves while the source still accepts writes. Durable (roster
+      // write), and reverted on any pre-cutover rollback below.
+      if (step.action === "quiesce-source" && fromRevision) {
+        if (!deps.setAssignmentState) {
+          throw new Error(
+            "revision drain requires deps.setAssignmentState (roster quiesce gate)",
+          );
+        }
+        await deps.setAssignmentState({
+          gatewayId: input.fromGatewayId,
+          uid: input.uid,
+          state: "quiescing",
+        });
+        quiescingMarked = true;
+      }
       await executeStep({
         step,
         deps,
@@ -170,6 +245,11 @@ export async function runMigration(
         slug: input.slug,
         restoreSnapshot: input.restoreSnapshot,
         includeActivationManifest: input.includeActivationManifest,
+        fromTransportId,
+        toTransportId,
+        direction: "forward",
+        crossGateway,
+        cutoverRevision: toRevision,
       });
       await report(deps, { name, status: "done" });
       deps.log(
@@ -178,21 +258,24 @@ export async function runMigration(
       state = { ...state, phase: advancePhase(state.phase) };
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      if (input.sourceDisposable && isBestEffortSourceStep(step)) {
-        await report(deps, { name, status: "skipped", error: errMsg });
-        deps.log(
-          `[migration-runner] ⚠ ${name} is best-effort on a disposable source (blue/green roll) — ` +
-            `degrading to the target's substrate baseline + continuing, NOT rolling back ` +
-            `(migrationId=${input.migrationId} slug=${input.slug}; reason=${errMsg})`,
-        );
-        state = { ...state, phase: advancePhase(state.phase) };
-        continue;
-      }
       await report(deps, { name, status: "failed", error: errMsg });
       deps.log(
         `[migration-runner] ❌ ${name} failed at phase=${phaseAtStart}: ${errMsg}`,
       );
-      const rolledBack = await tryRollback(state, deps, input.migrationId);
+      const rolledBack = await tryRollback(state, deps, input.migrationId, {
+        fromTransportId,
+        toTransportId,
+        crossGateway,
+        fromRevision,
+        // A pre-cutover rollback must un-block the source: restore its roster
+        // entry to serving. Post-cutover, the reverse cutover commit itself
+        // restores the source assignment (serving, epoch bumped) — no bare
+        // state write on top of it.
+        restoreServing:
+          quiescingMarked && state.phase !== "cutover-done"
+            ? { gatewayId: input.fromGatewayId, uid: input.uid }
+            : null,
+      });
       return {
         success: false,
         finalPhase: state.phase,
@@ -212,6 +295,13 @@ async function tryRollback(
   state: MigrationState,
   deps: MigrationRunnerDeps,
   migrationId: string,
+  transports: {
+    fromTransportId: string;
+    toTransportId: string;
+    crossGateway: boolean;
+    fromRevision: CutoverAssignmentRevision | null;
+    restoreServing: { gatewayId: string; uid: string } | null;
+  },
 ): Promise<boolean> {
   let plan: MigrationStep[];
   try {
@@ -224,6 +314,7 @@ async function tryRollback(
     return false;
   }
   if (plan.length === 0) {
+    await restoreSourceServing(deps, transports.restoreServing);
     deps.log(
       `[migration-runner] no rollback needed at phase=${state.phase} (source still owns)`,
     );
@@ -240,6 +331,13 @@ async function tryRollback(
         slug: state.slug,
         restoreSnapshot: null,
         includeActivationManifest: undefined,
+        fromTransportId: transports.fromTransportId,
+        toTransportId: transports.toTransportId,
+        // Rollback's cutover-firestore restores the SOURCE: flip the mirror back
+        // (when cross-gateway) and restore the assignment to the source revision.
+        direction: "rollback",
+        crossGateway: transports.crossGateway,
+        cutoverRevision: transports.fromRevision,
       });
       await report(deps, { name: rbName, status: "done" });
       deps.log(`[migration-runner] rollback ${step.action} ok`);
@@ -249,7 +347,28 @@ async function tryRollback(
       deps.log(`[migration-runner] ⚠ rollback warn: ${step.action} failed: ${msg}`);
     }
   }
+  await restoreSourceServing(deps, transports.restoreServing);
   return true;
+}
+
+// Revert the pre-quiesce "quiescing" roster mark so the customer keeps serving
+// on the source after a pre-cutover rollback. Failure here is LOUD (the edge
+// keeps 503ing the customer until the roll's level-triggered retry re-drives
+// the migration or the operator repairs the assignment).
+async function restoreSourceServing(
+  deps: MigrationRunnerDeps,
+  target: { gatewayId: string; uid: string } | null,
+): Promise<void> {
+  if (!target || !deps.setAssignmentState) return;
+  try {
+    await deps.setAssignmentState({ ...target, state: "serving" });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    deps.log(
+      `[migration-runner] ❌ FAILED to restore assignment serving for uid=${target.uid} on ${target.gatewayId}: ${msg} — ` +
+        `the customer stays quiescing (edge answers 503) until the next roll retry or an operator repair`,
+    );
+  }
 }
 
 async function report(

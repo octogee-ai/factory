@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   activationLeaseMissCanMintTicket,
   findPendingActivationOperation,
+  requestBuilderActivationLease,
   resolveBuilderActivationPlan,
   type FirestoreDocLike,
 } from "./builder-activation-lease.js";
@@ -170,5 +171,76 @@ describe("activationLeaseMissCanMintTicket", () => {
         body: { code: "builder-activation-already-running" },
       }),
     ).toBe(false);
+  });
+});
+
+describe("requestBuilderActivationLease — heartbeat source (cutover step 2)", () => {
+  function fakeDb(state: {
+    users: Record<string, Record<string, unknown>>;
+    glmGateways: Record<string, Record<string, unknown>>;
+    gateways?: Record<string, Record<string, unknown>>;
+  }) {
+    const accessed = new Set<string>();
+    const updates: Array<{ id: string; patch: Record<string, unknown> }> = [];
+    const db = {
+      collection(name: string) {
+        accessed.add(name);
+        return {
+          doc: (id?: string) => ({
+            id: id ?? "op-1",
+            get: async () => ({
+              exists: !!(state as Record<string, Record<string, unknown>>)[name]?.[id ?? ""],
+              data: () => (state as Record<string, Record<string, unknown>>)[name]?.[id ?? ""],
+            }),
+            update: async (patch: Record<string, unknown>) => {
+              updates.push({ id: id ?? "", patch });
+            },
+          }),
+          get: async () => ({
+            docs: Object.entries(
+              (state as Record<string, Record<string, Record<string, unknown>>>)[name] ?? {},
+            ).map(([id, data]) => ({ id, data: () => data })),
+          }),
+          where: () => ({ get: async () => ({ docs: [] }) }),
+        };
+      },
+    };
+    return { db, accessed, updates };
+  }
+
+  it("sources readiness from glmGateways/{id}.heartbeat, never the flat gateways collection", async () => {
+    const { db, accessed } = fakeDb({
+      users: {
+        "u-1": {
+          approved: true,
+          username: "mira",
+          provisioning: { openclaw: { gatewayId: "gw-builder" } },
+        },
+      },
+      glmGateways: {
+        "gw-builder": {
+          ownerUid: "u-1",
+          gatewayClass: "builder",
+          desiredStatus: "running",
+          builderSlug: "mira",
+          heartbeat: { status: "ready" },
+        },
+      },
+      // A stale flat doc says "starting" — reading it would return "wake" (202).
+      gateways: { "gw-builder": { status: "starting" } },
+    });
+
+    const result = await requestBuilderActivationLease({
+      db: db as never,
+      uid: "u-1",
+      createdBy: "u-1",
+      workspaceSlugsForUser: () => ["mira"],
+      now: 1_000,
+    });
+
+    // glm heartbeat "ready" + current gateway == target ⇒ already-active (200).
+    expect(result.statusCode).toBe(200);
+    expect(result.body).toMatchObject({ alreadyActive: true, gatewayId: "gw-builder" });
+    expect(accessed.has("gateways")).toBe(false);
   });
 });

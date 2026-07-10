@@ -26,6 +26,14 @@ import {
 import { isAllowedWsOrigin, warnIfWsOriginsMisconfigured } from "./openclaw/ws-origin.js";
 import { applyGatewayPrefixStripInPlace, stripGatewayPrefix } from "./gateway-prefix.js";
 import { resolveBuilderShellInternalAuthSecret } from "../lib/builder-shell-internal-auth.js";
+import {
+  guardUpgradeRequest,
+  mmRosterVerdictFor,
+  revisionUnavailableUpgradeResponse,
+  wrapRedeemWithRosterGate,
+  type RollRosterUpgradeGate,
+  type UpgradeGateVerdict,
+} from "../roll-roster.js";
 import { logger } from "../middleware/logging.js";
 import {
   listLocalCoachWiredSlugs,
@@ -306,6 +314,10 @@ let approvalCallbackHandler:
   | null = null;
 
 const FRAME_DROP_LOG_WINDOW_MS = 60_000;
+// Retry-After hint for a WS upgrade refused because the serving revision is not
+// resolvable yet (mirrors the roll-roster gate's default). The client reconnects
+// after the roll settles rather than seeing an opaque failure.
+const WS_REVISION_UNAVAILABLE_RETRY_SECONDS = 2;
 const lastFrameDropLogByUid = new Map<string, number>();
 const filteredFrameCountByUid = new Map<string, Map<string, number>>();
 
@@ -602,6 +614,7 @@ function handleOpenClawWsUpgrade(
   req: http.IncomingMessage,
   socket: Duplex,
   head: Buffer,
+  upgradeGate: RollRosterUpgradeGate | null = null,
 ): void {
   const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
   if (!isAllowedWsOrigin(origin)) {
@@ -626,16 +639,46 @@ function handleOpenClawWsUpgrade(
   (async () => {
     try {
       const runtimeBroker = getOpenClawRuntimeBroker();
-      const redeemed = await runtimeBroker.redeemOpenClawWs(ticket);
-      if (!redeemed) {
+      const redeemOutcome = await runtimeBroker.redeemOpenClawWs(ticket);
+      if (redeemOutcome.kind === "unauthorized") {
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
         socket.destroy();
         return;
       }
+      if (redeemOutcome.kind === "revision-unavailable") {
+        // The broker could not resolve a LIVE serving revision (mid-roll or a
+        // just-retired revision). Surface the SAME retryable roll-in-progress
+        // signal as a roster refusal — never a generic 500 — so the client
+        // reconnects once the roll settles instead of hard-failing.
+        console.warn(
+          `[proxy] OC WS: revision unavailable (${redeemOutcome.reason}) — refusing with retryable 503`,
+        );
+        socket.write(
+          revisionUnavailableUpgradeResponse(
+            WS_REVISION_UNAVAILABLE_RETRY_SECONDS,
+            redeemOutcome.reason,
+          ),
+        );
+        socket.destroy();
+        return;
+      }
+      const redeemed = redeemOutcome.redeemed;
       const uid = redeemed.uid;
       const gatewayUrl = redeemed.gatewayUrl;
       const gatewayId = redeemed.gatewayId;
       const expectedAgentId = redeemed.expectedAgentId;
+
+      // Post-auth roster verdict (the ticket just resolved the customer): a
+      // quiescing customer or one serving on another revision must never
+      // attach here — refuse so the client reconnects via the serving
+      // revision.
+      if (upgradeGate) {
+        const verdict = upgradeGate.checkUid(uid);
+        if (!verdict.allow) {
+          upgradeGate.refuse(socket, verdict);
+          return;
+        }
+      }
 
       const outcome = await establishUpstreamWithRotation(gatewayId, gatewayUrl);
       if (!outcome.ok) {
@@ -743,6 +786,7 @@ function handleOpenClawWsUpgrade(
 
 export function _clearCaches(): void {
   mmUserIdCache.clear();
+  firebaseUidByMmUserId.clear();
   openclawRuntimeBroker = undefined;
 }
 
@@ -752,18 +796,62 @@ export function gatewayHealthUrl(
   return `${base}/healthz`;
 }
 
-export function attachChatProxyWsUpgrade(server: http.Server) {
+export interface AttachChatProxyWsUpgradeOptions {
+  // Roll-roster gate for revision pods (Codex P0): upgrades bypass Express, so
+  // the SAME roster/boot checks the HTTP middleware runs must run here, at the
+  // one shared upgrade handler — BEFORE any dispatch, so every current and
+  // future upgrade route is covered by construction.
+  upgradeGate?: RollRosterUpgradeGate | null;
+}
+
+// mmUserId → Firebase uid for the roll-roster verdict. The mapping is written
+// once at provisioning (users/{uid}.mattermost.userId), so positive lookups
+// cache forever; misses are re-queried per auth. A lookup that resolves to
+// nothing (missing/stale mapping) is REFUSED — never served locally during a
+// roll; a lookup that throws fails CLOSED (the client reconnects, retry
+// semantics), it never attaches ungated.
+const firebaseUidByMmUserId = new Map<string, string>();
+
+async function uidForMmUserId(mmUserId: string): Promise<string | null> {
+  const snap = await db
+    .collection("users")
+    .where("mattermost.userId", "==", mmUserId)
+    .limit(1)
+    .get();
+  return snap.empty ? null : snap.docs[0].id;
+}
+
+export function buildMmRosterVerdict(
+  gate: RollRosterUpgradeGate,
+  lookupUid: (mmUserId: string) => Promise<string | null> = uidForMmUserId,
+): (mmUserId: string | null) => Promise<UpgradeGateVerdict> {
+  return (mmUserId) =>
+    mmRosterVerdictFor(gate, mmUserId, async (id) => {
+      const cached = firebaseUidByMmUserId.get(id);
+      if (cached !== undefined) return cached;
+      const uid = await lookupUid(id);
+      if (uid !== null) firebaseUidByMmUserId.set(id, uid);
+      return uid;
+    });
+}
+
+export function attachChatProxyWsUpgrade(
+  server: http.Server,
+  opts: AttachChatProxyWsUpgradeOptions = {},
+) {
   const wss = new WebSocketServer({ noServer: true });
   const mmWss = new WebSocketServer({ noServer: true });
 
   const wsRouter = new WsUpgradeRouter();
+  const upgradeGate = opts.upgradeGate ?? null;
 
   server.on("upgrade", (req, socket, head) => {
+    if (guardUpgradeRequest(upgradeGate, req, socket)) return;
     const originalUrl = req.url ?? "(none)";
 
     const urlPath = applyGatewayPrefixStripInPlace(req);
     if (urlPath.startsWith("/api/openclaw/ws/")) {
-      handleOpenClawWsUpgrade(wss, req, socket, head);
+      handleOpenClawWsUpgrade(wss, req, socket, head, upgradeGate);
       return;
     }
     if (urlPath === "/api/v4/websocket") {
@@ -783,6 +871,10 @@ export function attachChatProxyWsUpgrade(server: http.Server) {
             resolveMmUserId,
             openUpstream: (url) => new WebSocket(url),
             registry: mmWsRegistry,
+            // Auth-late roster enforcement (Codex P0): MM identity resolves
+            // from the first auth frame, so the bridge holds the upstream dial
+            // until this verdict — the shared upgrade-gate policy — admits.
+            ...(upgradeGate ? { rosterVerdict: buildMmRosterVerdict(upgradeGate) } : {}),
           },
           browserWs,
         );
@@ -802,7 +894,14 @@ export function attachChatProxyWsUpgrade(server: http.Server) {
   (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter = wsRouter;
 }
 
-export async function attachBuilderShellRoute(server: http.Server): Promise<void> {
+export interface AttachBuilderShellRouteOptions {
+  upgradeGate?: RollRosterUpgradeGate | null;
+}
+
+export async function attachBuilderShellRoute(
+  server: http.Server,
+  routeOpts: AttachBuilderShellRouteOptions = {},
+): Promise<void> {
   const gatewayEdgeUrl = process.env.GATEWAY_EDGE_INTERNAL_URL;
   const internalAuth = resolveBuilderShellInternalAuthSecret(process.env);
   const namespace = process.env.K8S_NAMESPACE || "octogee";
@@ -836,10 +935,16 @@ export async function attachBuilderShellRoute(server: http.Server): Promise<void
     internalAuth.headerName === "x-internal-service-key" ? internalAuth.value : undefined;
   attachBuilderShellUpgrade(server, {
     router,
-    redeem: buildRedeemFetcher({
-      baseUrl: gatewayEdgeUrl,
-      ...redeemAuth,
-    }),
+    // The roster gate rides the redeem (the point where the customer resolves):
+    // a quiescing / elsewhere-serving customer's redeem throws and the bridge
+    // closes the WS with its standard retry semantics.
+    redeem: wrapRedeemWithRosterGate(
+      buildRedeemFetcher({
+        baseUrl: gatewayEdgeUrl,
+        ...redeemAuth,
+      }),
+      routeOpts.upgradeGate ?? null,
+    ),
     connectUpstream: buildConnectUpstream({
       namespace,
       internalServiceKey: upstreamInternalServiceKey,

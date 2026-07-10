@@ -16,6 +16,12 @@ const calls: FirestoreCall[] = [];
 let glmOperationsDocs: Array<{ id: string; data: Record<string, unknown> }> = [];
 let glmGatewaysDocs: Record<string, Record<string, unknown>> = {};
 let gatewaysDocs: Record<string, Record<string, unknown>> = {};
+// Step 2 release docs live at gateways/{id}/releases/{n}; keyed here by
+// `${gatewayId}/${release}` so the fake can serve subcollection reads/writes.
+let gatewayReleasesDocs: Record<string, Record<string, unknown>> = {};
+// PR7 durable roster docs at gateways/{id}/assignments/{uid}; keyed by
+// `${gatewayId}/${uid}` so the fake can serve subcollection + collectionGroup.
+let gatewayAssignmentsDocs: Record<string, Record<string, unknown>> = {};
 let usersDocs: Record<string, Record<string, unknown>> = {};
 let configDocs: Record<string, Record<string, unknown>> = {};
 let operatorGatewayReservationsDocs: Record<string, Record<string, unknown>> = {};
@@ -117,6 +123,11 @@ vi.mock("../lib/db", () => {
         if (name === "users") usersDocs[docId] = data;
         if (name === "config") configDocs[docId] = options?.merge ? { ...(configDocs[docId] ?? {}), ...data } : data;
         if (name === "operatorGatewayReservations") operatorGatewayReservationsDocs[docId] = data;
+        if (name === "gateways") {
+          gatewaysDocs[docId] = options?.merge
+            ? { ...(gatewaysDocs[docId] ?? {}), ...data }
+            : data;
+        }
       },
       update: async (data: Record<string, unknown>) => {
         calls.push({ collection: name, op: "doc.update", docId, data });
@@ -132,6 +143,76 @@ vi.mock("../lib/db", () => {
         if (name === "operatorGatewayReservations" && operatorGatewayReservationsDocs[docId]) {
           operatorGatewayReservationsDocs[docId] = { ...operatorGatewayReservationsDocs[docId], ...data };
         }
+        if (name === "gateways" && gatewaysDocs[docId]) {
+          gatewaysDocs[docId] = { ...gatewaysDocs[docId], ...data };
+        }
+      },
+      // Step 2 subcollections: gateways/{id}/releases/{n} (release records) and
+      // gateways/{id}/assignments/{uid} (PR7 durable roster docs).
+      collection: (subName: string) => {
+        const key = (rid: string) => `${docId}/${rid}`;
+        if (subName === "assignments") {
+          return {
+            doc: (uid: string) => ({
+              id: uid,
+              __isDoc: true,
+              get: async () => {
+                const d = gatewayAssignmentsDocs[key(uid)];
+                return { id: uid, exists: d !== undefined, data: () => d };
+              },
+              set: async (data: Record<string, unknown>) => {
+                calls.push({ collection: `${name}/${docId}/assignments`, op: "doc.set", docId: uid, data });
+                gatewayAssignmentsDocs[key(uid)] = data;
+              },
+              update: async (data: Record<string, unknown>) => {
+                calls.push({ collection: `${name}/${docId}/assignments`, op: "doc.update", docId: uid, data });
+                if (gatewayAssignmentsDocs[key(uid)]) {
+                  gatewayAssignmentsDocs[key(uid)] = { ...gatewayAssignmentsDocs[key(uid)], ...data };
+                }
+              },
+              delete: async () => {
+                calls.push({ collection: `${name}/${docId}/assignments`, op: "doc.delete", docId: uid });
+                delete gatewayAssignmentsDocs[key(uid)];
+              },
+            }),
+            // Retire enumerates the gateway's assignments to refuse while
+            // customers are still assigned.
+            get: async () => {
+              const prefix = `${docId}/`;
+              const docs = Object.entries(gatewayAssignmentsDocs)
+                .filter(([k]) => k.startsWith(prefix))
+                .map(([k, d]) => ({ id: k.slice(prefix.length), exists: true, data: () => d }));
+              return { empty: docs.length === 0, size: docs.length, docs };
+            },
+          };
+        }
+        return {
+          doc: (rid: string) => ({
+            id: rid,
+            get: async () => {
+              const d = gatewayReleasesDocs[key(rid)];
+              return { id: rid, exists: d !== undefined, data: () => d };
+            },
+            set: async (data: Record<string, unknown>) => {
+              calls.push({ collection: `${name}/${docId}/${subName}`, op: "doc.set", docId: rid, data });
+              gatewayReleasesDocs[key(rid)] = data;
+            },
+          }),
+          orderBy: (field: string, dir = "asc") => ({
+            get: async () => {
+              const docs = Object.entries(gatewayReleasesDocs)
+                .filter(([k]) => k.startsWith(`${docId}/`))
+                .map(([k, data]) => ({ id: k.split("/")[1], data: () => data }));
+              docs.sort((a, b) => {
+                const av = (a.data() as Record<string, number>)[field];
+                const bv = (b.data() as Record<string, number>)[field];
+                const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+                return dir === "desc" ? -cmp : cmp;
+              });
+              return { docs, size: docs.length };
+            },
+          }),
+        };
       },
     };
   }
@@ -216,6 +297,38 @@ function makeBatch() {
   return {
     db: {
       collection,
+      collectionGroup: (name: string) => ({
+        get: async () => {
+          if (name === "assignments") {
+            const docs = Object.entries(gatewayAssignmentsDocs).map(([k, data]) => ({
+              id: k.split("/")[1],
+              data: () => data,
+            }));
+            return { docs, size: docs.length };
+          }
+          return { docs: [], size: 0 };
+        },
+      }),
+      // Buffered transaction over the existing ref methods (Firestore
+      // all-or-nothing): writes apply only after the body resolves.
+      runTransaction: async (body: (txn: any) => Promise<unknown>) => {
+        const pending: Array<() => Promise<void>> = [];
+        const txn = {
+          get: (refOrQuery: any) => refOrQuery.get(),
+          update: (ref: any, data: Record<string, unknown>) => {
+            pending.push(() => ref.update(data));
+          },
+          set: (ref: any, data: Record<string, unknown>, options?: Record<string, unknown>) => {
+            pending.push(() => ref.set(data, options));
+          },
+          delete: (ref: any) => {
+            pending.push(() => ref.delete());
+          },
+        };
+        const result = await body(txn);
+        for (const fn of pending) await fn();
+        return result;
+      },
       batch: () => makeBatch(),
       doc: (path: string) => {
         const [coll, id] = path.split("/");
@@ -223,7 +336,7 @@ function makeBatch() {
       },
       getAll: async () => [],
     },
-    FieldValue: { serverTimestamp: () => "now" },
+    FieldValue: { serverTimestamp: () => "now", delete: () => ({ __delete: true }) },
     Timestamp: { now: () => ({ toDate: () => new Date() }) },
   };
 });
@@ -301,6 +414,8 @@ beforeEach(() => {
   glmOperationsDocs = [];
   glmGatewaysDocs = {};
   gatewaysDocs = { "canary": { gatewayId: "canary", status: "ready" } };
+  gatewayReleasesDocs = {};
+  gatewayAssignmentsDocs = {};
   usersDocs = {};
   configDocs = {};
   operatorGatewayReservationsDocs = {};
@@ -471,6 +586,25 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
       status: "pending",
       createdBy: "admin-user",
       gatewayId: "canary",
+    });
+
+    // Step 2 dual-write, end-to-end through gateway-edge: the durable
+    // gateways/{id} identity + immutable release 1 land alongside the legacy
+    // glmGateways desired doc above.
+    expect(gatewaysDocs.canary).toMatchObject({
+      gatewayId: "canary",
+      latestRelease: 1,
+      desiredRelease: 1,
+      desiredStatus: "running",
+    });
+    const releaseWrite = calls.find(
+      (c) => c.collection === "gateways/canary/releases" && c.op === "doc.set",
+    );
+    expect(releaseWrite?.docId).toBe("1");
+    expect(releaseWrite?.data).toMatchObject({
+      release: 1,
+      sourceRelease: null,
+      payload: { imageTag: "abc1234" },
     });
   });
 
@@ -1312,7 +1446,7 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     expect(res.body.stats.fleetCost.monthlyUsd).toBe(running.sizing.monthlyCostUsd.compute);
   });
 
-  it("projects PVC storage and the PROD operator Spot reservation default", async () => {
+  it("drops any legacy persistence to emptyDir and keeps the PROD operator Spot reservation default", async () => {
     for (const k of Object.keys(gatewaysDocs)) delete gatewaysDocs[k];
     gatewaysDocs["bender"] = { gatewayId: "bender", status: "ready", mountedCustomers: [] };
     glmGatewaysDocs["bender"] = {
@@ -1320,6 +1454,8 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
       gatewayClass: "operator",
       sizingTier: "nano",
       desiredStatus: "running",
+      // A stale persistence field from a pre-Step-2 doc must be ignored:
+      // PVC-backed gateways are dropped (Spot + emptyDir only).
       persistence: {
         enabled: true,
         storageClassName: "premium-rwo",
@@ -1330,13 +1466,7 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
     const bender = res.body.gateways.find((g: any) => g.gatewayId === "bender");
-    expect(bender.storage).toEqual({
-      mode: "pvc",
-      pvcName: "octogee-gateway-bender-data",
-      size: "20Gi",
-      storageClassName: "premium-rwo",
-      accessModes: ["ReadWriteOnce"],
-    });
+    expect(bender.storage).toMatchObject({ mode: "emptyDir", pvcName: null });
     expect(bender.reservation).toMatchObject({
       type: "spot",
       computeClass: "octogee-gateway-spot",

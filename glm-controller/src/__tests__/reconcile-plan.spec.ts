@@ -147,22 +147,12 @@ describe("buildInstancesMap", () => {
           allowPrivilegeEscalation: true,
           capabilities: { drop: ["ALL"] },
         },
-        persistence: {
-          enabled: true,
-          storageClassName: "premium-rwo",
-          size: "20Gi",
-          accessModes: ["ReadWriteOnce"],
-        },
       }),
     ]);
     expect(map.bender).toMatchObject({
       serviceAccountName: "octogee-gateway-bender",
       gatewayContainerSecurityContext: {
         allowPrivilegeEscalation: true,
-      },
-      persistence: {
-        enabled: true,
-        size: "20Gi",
       },
     });
   });
@@ -377,22 +367,11 @@ describe("buildInstancesMap", () => {
     expect(map.default.serviceAccount).toEqual({ create: true });
   });
 
-  it("does not default operator-profile gateways to PVC persistence", () => {
+  it("never carries a persistence knob in helm values (Spot + emptyDir only)", () => {
     const map = buildInstancesMap([
       mkDesired({ gatewayId: "bender", profile: "operator" }),
     ]);
-    expect(map.bender.persistence).toBeUndefined();
-  });
-
-  it("preserves an explicit persistence override on operator-profile gateways", () => {
-    const map = buildInstancesMap([
-      mkDesired({
-        gatewayId: "scratch",
-        profile: "operator",
-        persistence: { enabled: false },
-      }),
-    ]);
-    expect(map.scratch.persistence).toEqual({ enabled: false });
+    expect("persistence" in map.bender).toBe(false);
   });
 
   it("omits default shared/standard class/profile fields from helm values", () => {
@@ -498,7 +477,7 @@ describe("diffInstancesMap", () => {
       bender: {
         ...actual.bender,
         serviceAccountName: "octogee-gateway-bender",
-        persistence: { enabled: true, size: "20Gi" },
+        gatewayContainerSecurityContext: { allowPrivilegeEscalation: true },
       },
     };
     const changes = diffInstancesMap(actual, desired);
@@ -517,7 +496,6 @@ describe("diffInstancesMap", () => {
           allowPrivilegeEscalation: true,
           capabilities: { drop: ["ALL"] },
         },
-        persistence: { enabled: true, size: "20Gi", storageClassName: "premium-rwo" },
       },
     };
 
@@ -526,7 +504,6 @@ const desired: HelmInstancesMap = {
         enabled: true,
         gatewayId: "bender",
         image: { tag: "abc", repository: REPO },
-        persistence: { storageClassName: "premium-rwo", size: "20Gi", enabled: true },
         gatewayContainerSecurityContext: {
           capabilities: { drop: ["ALL"] },
           allowPrivilegeEscalation: true,
@@ -812,12 +789,12 @@ describe("isReplicasOnlyUpdate", () => {
     expect(isReplicasOnlyUpdate(change)).toBe(false);
   });
 
-  it("returns false when persistence differs (object diff)", () => {
+  it("returns false when a helm-knob object differs (object diff)", () => {
     const change: ReconcileChange = {
       kind: "update",
       gatewayId: "bender",
-      from: { ...base(), persistence: { enabled: true, size: "20Gi" }, replicas: 1 },
-      to: { ...base(), persistence: { enabled: true, size: "40Gi" }, replicas: 0 },
+      from: { ...base(), gatewayContainerSecurityContext: { allowPrivilegeEscalation: false }, replicas: 1 },
+      to: { ...base(), gatewayContainerSecurityContext: { allowPrivilegeEscalation: true }, replicas: 0 },
     };
     expect(isReplicasOnlyUpdate(change)).toBe(false);
   });
