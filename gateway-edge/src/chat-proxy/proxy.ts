@@ -48,6 +48,8 @@ import {
   OpenClawRuntimeBrokerError,
   type OpenClawRuntimeBroker,
 } from "./openclaw/runtime-broker.js";
+import type { ActivityBridgeHandle } from "./openclaw/activity-bridge.js";
+import type { MmCoachEventListenerManager } from "./openclaw/mm-event-listener.js";
 export { chatProxyOwnsHttpPath } from "./http-paths.js";
 
 if (process.env.NODE_ENV !== "test") {
@@ -965,10 +967,25 @@ function buildMountedCustomersReader(
   };
 }
 
+function wireCoachEventListeners(
+  handle: ActivityBridgeHandle,
+  listeners: MmCoachEventListenerManager,
+): void {
+  handle.onCoachTurnCompleted(listeners.completeCoachTurn);
+  for (const coach of handle.getTrackedCoaches?.() ?? []) {
+    listeners.addCoach(coach);
+  }
+  handle.onActivityChannelTracked?.((coach) => {
+    listeners.addCoach(coach);
+  });
+  handle.onActivityChannelUntracked?.((coach) => {
+    listeners.removeCoach(coach.coachMmUserId);
+  });
+}
+
 export async function startChatProxyBackground(): Promise<void> {
   warnIfWsOriginsMisconfigured(console.warn);
   console.log(`[chat-proxy] MM internal URL (data path): ${MM_INTERNAL_URL}`);
-
   void (async () => {
     const gatewayIdResult = resolveBridgeGatewayId(process.env);
     const reconcileGatewayId = gatewayIdResult.ok ? gatewayIdResult.gatewayId : null;
@@ -1109,21 +1126,7 @@ export async function startChatProxyBackground(): Promise<void> {
         log: bridgeLog,
       }),
     });
-    // One MM WebSocket per tracked coach, each auth'd with that coach's own
-    // token (no admin PAT): 1 WS on an operator gateway (single coach), N on a
-    // shared gateway. Seed with any coach already tracked, then add each new one
-    // as the bridge tracks it.
-    for (const coach of wired.handle.getTrackedCoaches?.() ?? []) {
-      coachListeners.addCoach(coach);
-    }
-    wired.handle.onActivityChannelTracked?.((coach) => {
-      coachListeners.addCoach(coach);
-    });
-    // Symmetric prune: when the bridge drops a coach whose customer unmounted,
-    // close its WS so the per-coach socket set shrinks with the mounted set.
-    wired.handle.onActivityChannelUntracked?.((coach) => {
-      coachListeners.removeCoach(coach.coachMmUserId);
-    });
+    wireCoachEventListeners(wired.handle, coachListeners);
     console.log('[chat-proxy] MM coach event listeners started (per-coach WS: reactions + reply-as-steer)');
 
     const healthUrl = gatewayHealthUrl();
