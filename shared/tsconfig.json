@@ -9,7 +9,8 @@
     "rootDir": ".",
     "strict": true,
     "esModuleInterop": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "types": ["node"]
   },
   "include": ["types/**/*.ts"],
   "exclude": ["node_modules", "dist", "**/*.spec.ts", "**/fixtures/**"]
