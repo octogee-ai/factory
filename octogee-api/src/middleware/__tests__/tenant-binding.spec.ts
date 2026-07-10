@@ -83,6 +83,8 @@ describe("tenant binding middleware", () => {
         namespace: "octogee",
         saName: "octogee-gw-bender",
         audiences: ["octogee-api"],
+        podName: "octogee-gateway-bender-r7-5bc5949d46-p946t",
+        podUid: "b0de5f4c-2d38-4dc9-9bb7-3f20a0d7beef",
       }),
     });
 
@@ -96,8 +98,33 @@ describe("tenant binding middleware", () => {
       kind: "gateway",
       gatewayId: "bender",
       ownerUid: "uid-bender",
+      podName: "octogee-gateway-bender-r7-5bc5949d46-p946t",
+      podUid: "b0de5f4c-2d38-4dc9-9bb7-3f20a0d7beef",
     });
     await expect(registry.metrics()).resolves.toContain('result="ok"');
+  });
+
+  it("does not fabricate pod identity when TokenReview did not verify both claims", async () => {
+    const { app } = buildApp({
+      reviewer: async () => ({
+        authenticated: true,
+        namespace: "octogee",
+        saName: "octogee-gw-bender",
+        audiences: ["octogee-api"],
+      }),
+    });
+
+    const res = await request(app)
+      .post("/internal/probe")
+      .set(K8S_SA_TOKEN_HEADER, "caller-jwt")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.boundTenant).toEqual({
+      kind: "gateway",
+      gatewayId: "bender",
+      ownerUid: "uid-bender",
+    });
   });
 
   it("binds the platform cron service-account token to a platform tenant", async () => {

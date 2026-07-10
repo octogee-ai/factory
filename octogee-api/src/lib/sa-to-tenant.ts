@@ -5,7 +5,13 @@ import {
 } from "@octogee/shared/types/gateway-releases";
 
 export type BoundTenant =
-  | { kind: "gateway"; gatewayId: string; ownerUid?: string }
+  | {
+      kind: "gateway";
+      gatewayId: string;
+      ownerUid?: string;
+      podName?: string;
+      podUid?: string;
+    }
   | { kind: "platform"; actor: "glm-controller" | "octogee-api" | "cron" };
 type PlatformActor = Extract<BoundTenant, { kind: "platform" }>["actor"];
 

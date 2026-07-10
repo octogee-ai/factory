@@ -75,6 +75,7 @@ function mkClient(overrides: Partial<FleetBrokerClient> = {}): FleetBrokerClient
     notifySignup: vi.fn(async () => undefined),
     macOpsToken: vi.fn(async () => ({
       gatewayId: "gw",
+      revisionId: "gw",
       username: "tester10",
       mmUserId: "mm-user",
       token: "token",

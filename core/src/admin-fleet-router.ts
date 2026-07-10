@@ -37,8 +37,10 @@ import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
   GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
   GATEWAY_RELEASES_SUBCOLLECTION,
+  CURRENT_MAC_OPS_TOKEN_PROTOCOL,
   commitPlacementAtomic,
   releasePayloadHash,
+  releaseMacOpsTokenProtocol,
   isRevisionRealizationDoc,
   type AssignmentDoc,
   type AssignmentState,
@@ -2851,6 +2853,131 @@ async function findConflictingGatewayOp(
   };
 }
 
+type RollbackReleaseResolution =
+  | { error: RolloutBodyError }
+  | {
+      ok: {
+        gateway: GatewayDoc;
+        target: ReleaseDoc;
+        previous: ReleaseDoc;
+        release: number;
+        note: string;
+      };
+    };
+
+async function resolveRollbackRelease(args: {
+  db: Firestore;
+  gatewayId: string;
+  requestedRelease: string | string[] | undefined;
+  body: Record<string, unknown>;
+}): Promise<RollbackReleaseResolution> {
+  const release = Number(args.requestedRelease);
+  if (
+    typeof args.requestedRelease !== "string" ||
+    !Number.isInteger(release) ||
+    release < 1
+  ) {
+    return {
+      error: {
+        status: 400,
+        body: { error: "release must be a positive integer", got: args.requestedRelease },
+      },
+    };
+  }
+  const gateway = await readGatewayDoc(args.db, args.gatewayId);
+  if (!gateway) {
+    return {
+      error: {
+        status: 404,
+        body: { error: ERR_GATEWAY_NOT_FOUND, gatewayId: args.gatewayId },
+      },
+    };
+  }
+  if (gateway.desiredStatus === "retired") {
+    return {
+      error: {
+        status: 409,
+        body: {
+          error: "cannot cut a release for a retired gateway",
+          gatewayId: args.gatewayId,
+        },
+      },
+    };
+  }
+  const target = await readRelease(args.db, args.gatewayId, release);
+  if (!target) {
+    return {
+      error: {
+        status: 404,
+        body: { error: "release not found", gatewayId: args.gatewayId, release },
+      },
+    };
+  }
+  if (releaseMacOpsTokenProtocol(target.payload) !== CURRENT_MAC_OPS_TOKEN_PROTOCOL) {
+    return {
+      error: {
+        status: 409,
+        body: {
+          error: "cannot roll back to a release using legacy MAC token protocol",
+          gatewayId: args.gatewayId,
+          release,
+        },
+      },
+    };
+  }
+  const previous = await readRelease(args.db, args.gatewayId, gateway.latestRelease);
+  if (!previous) {
+    return {
+      error: {
+        status: 409,
+        body: {
+          error: "gateway has no current release payload",
+          gatewayId: args.gatewayId,
+          latestRelease: gateway.latestRelease,
+        },
+      },
+    };
+  }
+  if (releasePayloadHash(target.payload) === previous.payloadHash) {
+    return {
+      error: {
+        status: 409,
+        body: {
+          error: "gateway is already on release payload — no-op rollback",
+          gatewayId: args.gatewayId,
+          release: gateway.latestRelease,
+        },
+      },
+    };
+  }
+  const conflicting = await findConflictingGatewayOp(args.db, args.gatewayId);
+  if (conflicting) {
+    return {
+      error: {
+        status: 409,
+        body: {
+          error: "another operation is already pending or running for this gateway",
+          gatewayId: args.gatewayId,
+          operationId: conflicting.id,
+          kind: conflicting.kind,
+        },
+      },
+    };
+  }
+  return {
+    ok: {
+      gateway,
+      target,
+      previous,
+      release,
+      note:
+        typeof args.body.note === "string"
+          ? args.body.note
+          : `rollback to release ${release}`,
+    },
+  };
+}
+
 async function ensureGatewayCreateIsUnique(
   db: Firestore,
   body: Pick<AddGatewayCreate, "gatewayId">,
@@ -4798,74 +4925,30 @@ router.post(
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const id = req.params.id as string;
-        const n = Number(req.params.n);
         const actor = req as ActorRequest;
         const createdBy = actor.uid ?? "unknown";
         const now = Date.now();
         const body = (req.body ?? {}) as Record<string, unknown>;
-
-        if (!Number.isInteger(n) || n < 1) {
-          res.status(400).json({ error: "release must be a positive integer", got: req.params.n });
+        const resolved = await resolveRollbackRelease({
+          db,
+          gatewayId: id,
+          requestedRelease: req.params.n,
+          body,
+        });
+        if ("error" in resolved) {
+          res.status(resolved.error.status).json(resolved.error.body);
           return;
         }
-        const gateway = await readGatewayDoc(db, id);
-        if (!gateway) {
-          res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
-          return;
-        }
-        if (gateway.desiredStatus === "retired") {
-          res.status(409).json({
-            error: "cannot cut a release for a retired gateway",
-            gatewayId: id,
-          });
-          return;
-        }
-        const target = await readRelease(db, id, n);
-        if (!target) {
-          res.status(404).json({ error: "release not found", gatewayId: id, release: n });
-          return;
-        }
-        const prev = await readRelease(db, id, gateway.latestRelease);
-        if (!prev) {
-          res.status(409).json({
-            error: "gateway has no current release payload",
-            gatewayId: id,
-            latestRelease: gateway.latestRelease,
-          });
-          return;
-        }
-        // Rollback never rewrites history: it cuts a NEW release whose payload
-        // equals release n. Reject if the current release already carries that
-        // payload.
-        if (releasePayloadHash(target.payload) === prev.payloadHash) {
-          res.status(409).json({
-            error: "gateway is already on release payload — no-op rollback",
-            gatewayId: id,
-            release: gateway.latestRelease,
-          });
-          return;
-        }
-        const conflicting = await findConflictingGatewayOp(db, id);
-        if (conflicting) {
-          res.status(409).json({
-            error: "another operation is already pending or running for this gateway",
-            gatewayId: id,
-            operationId: conflicting.id,
-            kind: conflicting.kind,
-          });
-          return;
-        }
-        const note =
-          typeof body.note === "string" ? body.note : `rollback to release ${n}`;
+        const { gateway, target, previous, release, note } = resolved.ok;
         let appended: { release: number; operationId: string | null };
         try {
           appended = await appendGatewayRelease(db, {
             gateway,
             payload: target.payload,
-            createRolloutOperation: imagePayloadChanged(prev.payload, target.payload),
+            createRolloutOperation: imagePayloadChanged(previous.payload, target.payload),
             createdBy,
             now,
-            sourceRelease: n,
+            sourceRelease: release,
             note,
           });
         } catch (e) {
@@ -4882,7 +4965,7 @@ router.post(
         }
         res
           .status(202)
-          .json({ gatewayId: id, ...appended, rolledBackFrom: n });
+          .json({ gatewayId: id, ...appended, rolledBackFrom: release });
       } catch (e) {
         next(e);
       }

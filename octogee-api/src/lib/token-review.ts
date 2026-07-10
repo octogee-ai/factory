@@ -16,6 +16,8 @@ export type ReviewResult =
       saName: string;
       namespace: string;
       audiences: string[];
+      podName?: string;
+      podUid?: string;
     };
 
 export type Reviewer = (jwt: string) => Promise<ReviewResult>;
@@ -76,6 +78,14 @@ function parseAudiences(value: unknown): string[] {
     : [];
 }
 
+function tokenReviewExtraString(extra: unknown, key: string): string | null {
+  if (!extra || typeof extra !== "object" || Array.isArray(extra)) return null;
+  const values = (extra as Record<string, unknown>)[key];
+  if (!Array.isArray(values) || values.length !== 1) return null;
+  const value = values[0];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
 function parseTokenReview(body: unknown): ReviewResult {
   const status = body && typeof body === "object"
     ? (body as { status?: Record<string, unknown> }).status
@@ -93,11 +103,21 @@ function parseTokenReview(body: unknown): ReviewResult {
     (status.user as { username?: unknown } | undefined)?.username,
   );
   if (!parsed) return { authenticated: false };
+  const extra = (status.user as { extra?: unknown } | undefined)?.extra;
+  const podName = tokenReviewExtraString(
+    extra,
+    "authentication.kubernetes.io/pod-name",
+  );
+  const podUid = tokenReviewExtraString(
+    extra,
+    "authentication.kubernetes.io/pod-uid",
+  );
   return {
     authenticated: true,
     namespace: parsed.namespace,
     saName: parsed.saName,
     audiences,
+    ...(podName && podUid ? { podName, podUid } : {}),
   };
 }
 

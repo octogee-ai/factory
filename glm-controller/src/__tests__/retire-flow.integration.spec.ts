@@ -106,6 +106,8 @@ function makeRetireDeps(state: SharedState, helm: ReturnType<typeof makeHelm>) {
     readAssignmentsForGateway: async () => [],
     readNonRetiredRevisions: async () => [],
     helmUninstallRevision: vi.fn(async () => {}),
+    revokeRevisionMacOpsTokens: vi.fn(async () => {}),
+    revokeGatewayLegacyMacOpsTokens: vi.fn(async () => {}),
     retireRevisionDoc: vi.fn(async () => {}),
     readGlmGatewayId: async (gatewayId: string) =>
       state.glmGateways.has(gatewayId) ? gatewayId : null,
@@ -195,6 +197,8 @@ const stepFlow = ctx.reported.map((s) => `${s.name}:${s.status}`);
     expect(stepFlow).toEqual([
       "helm-uninstall:running",
       "helm-uninstall:done",
+      "revoke-legacy-mac-ops-token:running",
+      "revoke-legacy-mac-ops-token:done",
       "delete-pvc:running",
       "delete-pvc:done",
       "delete-kube-secret:running",

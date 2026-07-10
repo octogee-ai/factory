@@ -30,13 +30,19 @@ function authenticatedBody(
     status: {
       authenticated: true,
       audiences,
-      user: { username: `system:serviceaccount:octogee:${saName}` },
+      user: {
+        username: `system:serviceaccount:octogee:${saName}`,
+        extra: {
+          "authentication.kubernetes.io/pod-name": ["octogee-gateway-bender-r7-5bc5949d46-p946t"],
+          "authentication.kubernetes.io/pod-uid": ["b0de5f4c-2d38-4dc9-9bb7-3f20a0d7beef"],
+        },
+      },
     },
   };
 }
 
 describe("createKubernetesTokenReviewer", () => {
-  it("submits TokenReview with octogee-api audience and parses the SA identity", async () => {
+  it("submits TokenReview with octogee-api audience and parses the verified pod identity", async () => {
     const reviewerTokenPath = await tempFile("reviewer-token", "reviewer-jwt\n");
     const caPath = await tempFile("ca.crt", "ca-data");
     const calls: TokenReviewHttpRequest[] = [];
@@ -56,6 +62,8 @@ describe("createKubernetesTokenReviewer", () => {
       namespace: "octogee",
       saName: "octogee-gw-bender",
       audiences: [TENANT_BINDING_AUDIENCE],
+      podName: "octogee-gateway-bender-r7-5bc5949d46-p946t",
+      podUid: "b0de5f4c-2d38-4dc9-9bb7-3f20a0d7beef",
     });
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe(
@@ -85,6 +93,38 @@ describe("createKubernetesTokenReviewer", () => {
     await expect(reviewer("one")).resolves.toEqual({ authenticated: false });
     await expect(reviewer("two")).resolves.toEqual({ authenticated: false });
     await expect(reviewer("three")).resolves.toEqual({ authenticated: false });
+  });
+
+  it("does not treat malformed private pod claims as a pod identity", async () => {
+    const reviewerTokenPath = await tempFile("reviewer-token", "reviewer-jwt");
+    const caPath = await tempFile("ca.crt", "ca-data");
+    const reviewer = createKubernetesTokenReviewer({
+      reviewerTokenPath,
+      caPath,
+      transport: async () => ({
+        status: 200,
+        body: {
+          status: {
+            authenticated: true,
+            audiences: [TENANT_BINDING_AUDIENCE],
+            user: {
+              username: "system:serviceaccount:octogee:octogee-gw-bender",
+              extra: {
+                "authentication.kubernetes.io/pod-name": ["one", "two"],
+                "authentication.kubernetes.io/pod-uid": "not-an-array",
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    await expect(reviewer("caller-jwt")).resolves.toEqual({
+      authenticated: true,
+      namespace: "octogee",
+      saName: "octogee-gw-bender",
+      audiences: [TENANT_BINDING_AUDIENCE],
+    });
   });
 
   it("throws on TokenReview HTTP errors", async () => {

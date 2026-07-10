@@ -54,6 +54,7 @@ function mkClient(snapshot: FleetBrokerUserSnapshot): FleetBrokerClient {
     notifySignup: vi.fn(async () => undefined),
     macOpsToken: vi.fn(async () => ({
       gatewayId: "default-blue",
+      revisionId: "default-blue",
       username: "alice",
       mmUserId: "mm-user",
       token: "token",

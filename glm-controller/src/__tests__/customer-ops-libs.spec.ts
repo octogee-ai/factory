@@ -149,6 +149,55 @@ describe("createMmCleanupClient", () => {
     const { client } = setup([{ status: 500, body: "down" }]);
     await expect(client.destroyUser("u1")).rejects.toThrow(/500.*down/);
   });
+
+  it("revokes only the matching PATs for a resolved bot username", async () => {
+    const { client, calls } = setup([
+      { status: 200, body: JSON.stringify({ id: "mac-user" }) },
+      {
+        status: 200,
+        body: JSON.stringify([
+          { id: "other", description: "another token" },
+          { id: "r3-a", description: "revision default-r3" },
+          { id: "r3-b", description: "revision default-r3" },
+        ]),
+      },
+      { status: 200 },
+      { status: 404 },
+    ]);
+
+    await client.revokeTokensForUsernameByDescription("mac-default", "revision default-r3");
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://mm.test/api/v4/users/username/mac-default",
+      "https://mm.test/api/v4/users/mac-user/tokens",
+      "https://mm.test/api/v4/users/tokens/revoke",
+      "https://mm.test/api/v4/users/tokens/revoke",
+    ]);
+    expect(calls[0].init.headers).toEqual({ Authorization: "Bearer tok-admin" });
+    expect(calls[2].init.method).toBe("POST");
+    expect(JSON.parse(String(calls[2].init.body))).toEqual({ token_id: "r3-a" });
+    expect(JSON.parse(String(calls[3].init.body))).toEqual({ token_id: "r3-b" });
+  });
+
+  it("treats a missing Mac bot as an idempotent no-op", async () => {
+    const { client, calls } = setup([{ status: 404 }]);
+
+    await expect(
+      client.revokeTokensForUsernameByDescription("mac-default", "revision default-r3"),
+    ).resolves.toBeUndefined();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("surfaces a failed token lookup instead of marking revision retirement complete", async () => {
+    const { client } = setup([
+      { status: 200, body: JSON.stringify({ id: "mac-user" }) },
+      { status: 500, body: "unavailable" },
+    ]);
+
+    await expect(
+      client.revokeTokensForUsernameByDescription("mac-default", "revision default-r3"),
+    ).rejects.toThrow(/500.*unavailable/);
+  });
 });
 
 describe("deleteAvatarObjects", () => {

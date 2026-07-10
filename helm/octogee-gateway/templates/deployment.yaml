@@ -128,7 +128,7 @@ spec:
                 envsubst < /octogee/infra/gateway/openclaw.template.json > "$OPENCLAW_DIR/openclaw.json"
                 chmod 600 "$OPENCLAW_DIR/openclaw.json"
               fi
-              node /octogee/scripts/bootstrap-mac-ops.mjs || true
+              node /octogee/scripts/bootstrap-mac-ops.mjs
           env:
             - name: GATEWAY_ID
               value: {{ .Values.gatewayId | quote }}

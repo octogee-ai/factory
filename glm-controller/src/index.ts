@@ -134,6 +134,10 @@ import { loadCustomerCleanupContext } from "./lib/customer-ops/cleanup-context.j
 import { createGiteaCleanupClient } from "./lib/customer-ops/gitea.js";
 import { createMmCleanupClient } from "./lib/customer-ops/mattermost.js";
 import { createUnmountFromGateway } from "./lib/customer-ops/unmount-gateway.js";
+import {
+  createRevisionMacOpsTokenRevoker,
+  type RevisionMacOpsTokenRevoker,
+} from "./revision-mac-ops-token-revoker.js";
 import { resolveDefaultStorageBucket } from "./gcp-project.js";
 import { signFleetRequest } from "@octogee/core/fleet-signature";
 import {
@@ -825,10 +829,19 @@ function buildRollPassDeps(args: {
   helm: HelmRunner;
   kubeOps: KubeOps;
   gatewayEdgeServiceEnsurer: GatewayEdgeServiceEnsurer;
+  revisionMacOpsTokenRevoker: RevisionMacOpsTokenRevoker;
   chartFingerprint?: string;
   log: (msg: string) => void;
 }): RollPassDeps {
-  const { db, helm, kubeOps, gatewayEdgeServiceEnsurer, chartFingerprint, log } = args;
+  const {
+    db,
+    helm,
+    kubeOps,
+    gatewayEdgeServiceEnsurer,
+    revisionMacOpsTokenRevoker,
+    chartFingerprint,
+    log,
+  } = args;
   const tombstoneWriter = createRevisionTombstoneWriter({
     db,
     now: () => Date.now(),
@@ -869,6 +882,10 @@ function buildRollPassDeps(args: {
     helmUninstallRevision: async (revisionId) => {
       await helm.removeInstance({ namespace: NAMESPACE, gatewayId: revisionId });
     },
+    revokeRevisionMacOpsTokens: (input) =>
+      revisionMacOpsTokenRevoker.revokeRevisionMacOpsTokens(input),
+    revokeGatewayLegacyMacOpsTokens: (input) =>
+      revisionMacOpsTokenRevoker.revokeGatewayLegacyMacOpsTokens(input),
     deleteRevisionDoc: async (revisionId) => {
       await db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId).delete();
     },
@@ -2168,6 +2185,16 @@ async function createControllerRuntime(
     "FLEET_CONTROLLER_PRIVATE_KEY",
     "migrate-customer, deprovision-customer, and operator eviction RPCs require the controller signing key",
   );
+  const revisionMacOpsTokenRevoker = createRevisionMacOpsTokenRevoker(
+    createMmCleanupClient({
+      baseUrl: requireEnv("MM_URL", "revision-scoped Mac ops PAT retirement requires it"),
+      adminToken: requireEnv(
+        "MM_ADMIN_TOKEN",
+        "revision-scoped Mac ops PAT retirement requires it",
+      ),
+      log,
+    }),
+  );
 
   const handlers = await buildHandlers(
     db,
@@ -2178,6 +2205,7 @@ async function createControllerRuntime(
       syncFleetIngress: handlerSyncFleetIngress,
       privateKey: fleetControllerPrivateKey,
       modelKeySourceIssuer,
+      revisionMacOpsTokenRevoker,
     },
   );
 
@@ -2200,6 +2228,7 @@ async function createControllerRuntime(
         helm,
         kubeOps,
         gatewayEdgeServiceEnsurer,
+        revisionMacOpsTokenRevoker,
         chartFingerprint,
         log,
       }),
@@ -2590,9 +2619,10 @@ async function buildHandlers(
     syncFleetIngress: () => Promise<void>;
     privateKey: string;
     modelKeySourceIssuer: GatewayModelKeySourceIssuer;
+    revisionMacOpsTokenRevoker: RevisionMacOpsTokenRevoker;
   },
 ): Promise<OperationHandlers> {
-  const { privateKey, modelKeySourceIssuer } = fleetOps;
+  const { privateKey, modelKeySourceIssuer, revisionMacOpsTokenRevoker } = fleetOps;
   if (!privateKey) {
     throw new Error(
       "FLEET_CONTROLLER_PRIVATE_KEY is not set — required for migrate-customer. Refusing to start with stub handlers.",
@@ -2742,6 +2772,10 @@ async function buildHandlers(
     helmUninstallRevision: async (revisionId) => {
       await helm.removeInstance({ namespace: NAMESPACE, gatewayId: revisionId });
     },
+    revokeRevisionMacOpsTokens: (input) =>
+      revisionMacOpsTokenRevoker.revokeRevisionMacOpsTokens(input),
+    revokeGatewayLegacyMacOpsTokens: (input) =>
+      revisionMacOpsTokenRevoker.revokeGatewayLegacyMacOpsTokens(input),
     retireRevisionDoc: async (revisionId, reason) => {
       await db
         .collection(GLM_GATEWAYS_COLLECTION)

@@ -164,8 +164,9 @@ export function createFleetBrokerClient(gatewayId: string, revisionId = ""): Fle
       return postNoContent("/internal/fleet/notify-signup", { gatewayId, uid });
     },
     macOpsToken() {
-      return postJson<FleetBrokerMacOpsToken>("/internal/fleet/mac-ops-token", {
+      return postJson<FleetBrokerMacOpsToken>("/internal/fleet/mac-ops-token/v2", {
         gatewayId,
+        revisionId: revisionId || gatewayId,
       });
     },
     recordUsageEvent(input) {

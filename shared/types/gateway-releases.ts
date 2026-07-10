@@ -104,6 +104,7 @@ export interface GatewayDoc {
 // Immutable release payload. Omits persistence entirely by construction —
 // GatewayPersistenceSpec and the chart PVC path are deleted in PR3.
 export interface ReleasePayload {
+  macOpsTokenProtocol?: MacOpsTokenProtocol;
   imageRepository: string;
   imageTag: string;
   profile: GatewayProfile | null;
@@ -123,6 +124,17 @@ export interface ReleasePayload {
   byosub: Record<string, ByosubRef> | null;
   modelBrokerLimits: GatewayModelBrokerLimits | null;
   preemption: GatewayPreemptionSpec | null;
+}
+
+export type MacOpsTokenProtocol = 1 | 2;
+
+export const CURRENT_MAC_OPS_TOKEN_PROTOCOL: MacOpsTokenProtocol = 2;
+
+export function releaseMacOpsTokenProtocol(payload: unknown): MacOpsTokenProtocol | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const protocol = (payload as { macOpsTokenProtocol?: unknown }).macOpsTokenProtocol;
+  if (protocol === undefined || protocol === 1) return 1;
+  return protocol === 2 ? 2 : null;
 }
 
 // gateways/{gatewayId}/releases/{n} — append-only. Rollback cuts a NEW release

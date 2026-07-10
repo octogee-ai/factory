@@ -646,9 +646,15 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
   });
 
   it("uses a brokered init container for per-gateway Mattermost bot bootstrap, with no admin PAT in the pod", () => {
-    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const dep = findDoc(
+      helmTemplate("octogee-gw-default-r5", { revisionId: "default-r5" }),
+      "Deployment",
+      "octogee-gateway-default-r5",
+    ) ?? "";
     const bootstrap = containerBlock(dep, "mac-ops-bootstrap");
     expect(bootstrap).toMatch(/node \/octogee\/scripts\/bootstrap-mac-ops\.mjs/);
+    expect(bootstrap).not.toMatch(/bootstrap-mac-ops\.mjs\s*\|\|\s*true/);
+    expect(bootstrap).toMatch(/name:\s*GATEWAY_REVISION_ID\s*\n\s*value:\s*"default-r5"/);
     expect(bootstrap).toMatch(/name:\s*FLEET_BROKER_URL\b/);
     expect(bootstrap).toMatch(/name:\s*OCTOGEE_API_SA_TOKEN_PATH\b/);
     expect(bootstrap).toMatch(/name:\s*gateway-broker-sa-token[\s\S]*?mountPath:\s*\/var\/run\/secrets\/octogee-gateway-broker/);

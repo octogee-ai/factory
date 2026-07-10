@@ -22,6 +22,7 @@ import type {
   FleetBrokerUsageData,
   FleetBrokerUserSnapshot,
 } from "@octogee/shared/types/fleet-broker";
+import { macOpsPatDescription } from "@octogee/shared/types/fleet-broker";
 import {
   GLM_GATEWAYS_COLLECTION,
   isGatewayClass,
@@ -44,7 +45,9 @@ import {
 } from "@octogee/core/assignment-doc";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
+  GATEWAY_RELEASES_SUBCOLLECTION,
   isGatewayDesiredDoc,
+  releaseMacOpsTokenProtocol,
   revisionIdForRelease,
 } from "@octogee/shared/types/gateway-releases";
 import { createCachedOwnerModelBrokerGrantResolver } from "../lib/model-broker-limits.js";
@@ -79,6 +82,7 @@ type CreateBlobSignedUrl = (input: {
 
 type MintMacOpsToken = (input: {
   gatewayId: string;
+  revisionId: string;
 }) => Promise<FleetBrokerMacOpsToken>;
 
 type RenderAvatar = (bytes: Buffer) => Promise<Buffer>;
@@ -163,7 +167,6 @@ interface FleetBrokerRouteDeps {
 
 const BLOB_SIGNED_URL_TTL_MS = 10 * 60 * 1000;
 const BLOB_SYNC_MAX_SIZE = 100 * 1024 * 1024;
-const MAC_OPS_PAT_DESCRIPTION = "Octogee Mac ops agent (OpenClaw)";
 
 async function defaultProvisionMattermost(input: {
   uid: string;
@@ -365,31 +368,38 @@ async function provisionMacOpsBot(gatewayId: string): Promise<{
   throw new Error(`Mac ops bot ${username} not found or created`);
 }
 
-async function revokeStaleMacOpsTokens(mmUserId: string): Promise<void> {
+export function macOpsTokenIdsForDescription(
+  tokens: ReadonlyArray<Record<string, unknown>>,
+  description: string,
+): string[] {
+  return tokens.flatMap((token) =>
+    token.description === description && typeof token.id === "string" && token.id.length > 0
+      ? [token.id]
+      : [],
+  );
+}
+
+async function revokeStaleMacOpsTokens(mmUserId: string, description: string): Promise<void> {
   const existing = await mmAdminCall("GET", `/users/${mmUserId}/tokens`);
   if (!Array.isArray(existing)) return;
-  for (const token of existing) {
-    if (
-      token.description === MAC_OPS_PAT_DESCRIPTION &&
-      typeof token.id === "string" &&
-      token.id.length > 0
-    ) {
-      await mmAdminCall("POST", "/users/tokens/revoke", { token_id: token.id });
-    }
+  for (const tokenId of macOpsTokenIdsForDescription(existing, description)) {
+    await mmAdminCall("POST", "/users/tokens/revoke", { token_id: tokenId });
   }
 }
 
-const defaultMintMacOpsToken: MintMacOpsToken = async ({ gatewayId }) => {
+const defaultMintMacOpsToken: MintMacOpsToken = async ({ gatewayId, revisionId }) => {
   const bot = await provisionMacOpsBot(gatewayId);
-  await revokeStaleMacOpsTokens(bot.mmUserId);
+  const description = macOpsPatDescription(gatewayId, revisionId);
+  await revokeStaleMacOpsTokens(bot.mmUserId, description);
   const minted = await mmAdminCall("POST", `/users/${bot.mmUserId}/tokens`, {
-    description: MAC_OPS_PAT_DESCRIPTION,
+    description,
   });
   if (Array.isArray(minted) || typeof minted?.token !== "string" || !minted.token) {
     throw new Error(`Mac ops token mint failed for ${bot.username}`);
   }
   return {
     gatewayId,
+    revisionId,
     username: bot.username,
     mmUserId: bot.mmUserId,
     token: minted.token,
@@ -408,6 +418,37 @@ function boundGateway(req: Request, res: Response): GatewayBinding | null {
     return null;
   }
   return bound;
+}
+
+export function revisionIdFromGatewayPodName(
+  gatewayId: string,
+  podName: string | undefined,
+): string | null {
+  if (!podName) return null;
+  const prefix = `octogee-gateway-${gatewayId}-r`;
+  if (!podName.startsWith(prefix)) return null;
+  const suffix = podName.slice(prefix.length);
+  const separator = suffix.indexOf("-");
+  if (separator <= 0) return null;
+  const release = suffix.slice(0, separator);
+  const generatedSuffix = suffix.slice(separator + 1);
+  if (!/^[1-9]\d*$/.test(release)) return null;
+  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(generatedSuffix)) return null;
+  return `${gatewayId}-r${release}`;
+}
+
+function macOpsRevisionId(gatewayId: string, raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const prefix = `${gatewayId}-r`;
+  const release = raw.startsWith(prefix) ? raw.slice(prefix.length) : "";
+  return /^[1-9]\d*$/.test(release) ? raw : null;
+}
+
+function macOpsRevisionRelease(gatewayId: string, revisionId: string): number | null {
+  const normalized = macOpsRevisionId(gatewayId, revisionId);
+  if (!normalized) return null;
+  const release = Number(normalized.slice(`${gatewayId}-r`.length));
+  return Number.isSafeInteger(release) ? release : null;
 }
 
 function readPath(obj: Record<string, unknown> | undefined, dotted: string): unknown {
@@ -829,8 +870,9 @@ async function isAssignedToGateway(
 // cross-tenant boundary today.)
 type RevisionGatewayState = {
   desiredRelease?: unknown;
+  liveRelease?: unknown;
   liveRevisionId?: unknown;
-  roll?: { targetRevisionId?: unknown } | null;
+  roll?: { sourceRevisionId?: unknown; targetRevisionId?: unknown } | null;
 };
 
 export function isRequestedRevisionAllowed(
@@ -849,6 +891,27 @@ export function isRequestedRevisionAllowed(
       ? revisionIdForRelease(gatewayId, gatewayDoc.desiredRelease)
       : null;
   return revisionId === live || revisionId === target || revisionId === firstDesired;
+}
+
+export function isMacOpsRevisionAllowed(
+  gatewayId: string,
+  revisionId: string,
+  gatewayDoc: RevisionGatewayState | undefined,
+): boolean {
+  if (!macOpsRevisionId(gatewayId, revisionId)) return false;
+  if (!gatewayDoc) return false;
+  const live = typeof gatewayDoc.liveRevisionId === "string" ? gatewayDoc.liveRevisionId : null;
+  const roll = gatewayDoc.roll as
+    | { sourceRevisionId?: unknown; targetRevisionId?: unknown }
+    | null
+    | undefined;
+  const source = typeof roll?.sourceRevisionId === "string" ? roll.sourceRevisionId : null;
+  const target = typeof roll?.targetRevisionId === "string" ? roll.targetRevisionId : null;
+  const desired =
+    typeof gatewayDoc.desiredRelease === "number"
+      ? revisionIdForRelease(gatewayId, gatewayDoc.desiredRelease)
+      : null;
+  return revisionId === live || revisionId === source || revisionId === target || revisionId === desired;
 }
 
 // The full revision-request gate for the /assigned-users mount driver. An
@@ -891,6 +954,55 @@ async function resolveAssignedUsersRevisionGate(
   const liveRevisionId =
     typeof gatewayDoc?.liveRevisionId === "string" ? gatewayDoc.liveRevisionId : null;
   return { allowed: true, liveRevisionId };
+}
+
+async function resolveMacOpsRevisionId(
+  db: Firestore,
+  bound: GatewayBinding,
+  rawRevisionId: unknown,
+): Promise<string | null> {
+  const revisionId = macOpsRevisionId(bound.gatewayId, rawRevisionId);
+  const trustedRevisionId = revisionIdFromGatewayPodName(
+    bound.gatewayId,
+    bound.podName,
+  );
+  if (!bound.podUid || !revisionId || trustedRevisionId !== revisionId) return null;
+  const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get();
+  const gatewayDoc = isGatewayDesiredDoc(gatewaySnap.data()) ? gatewaySnap.data() : undefined;
+  return isMacOpsRevisionAllowed(bound.gatewayId, revisionId, gatewayDoc) ? revisionId : null;
+}
+
+async function legacyMacOpsTokenAllowed(
+  db: Firestore,
+  bound: GatewayBinding,
+): Promise<boolean> {
+  const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get();
+  const gatewayDoc = isGatewayDesiredDoc(gatewaySnap.data()) ? gatewaySnap.data() : undefined;
+  if (!gatewayDoc) return true;
+  const trustedRevisionId = revisionIdFromGatewayPodName(bound.gatewayId, bound.podName);
+  const liveRevisionId =
+    typeof gatewayDoc.liveRevisionId === "string" ? gatewayDoc.liveRevisionId : null;
+  const roll = gatewayDoc.roll as { sourceRevisionId?: unknown } | null | undefined;
+  const sourceRevisionId =
+    typeof roll?.sourceRevisionId === "string" ? roll.sourceRevisionId : null;
+  const revisionRelease =
+    trustedRevisionId && macOpsRevisionRelease(bound.gatewayId, trustedRevisionId);
+  if (
+    !bound.podUid ||
+    !trustedRevisionId ||
+    revisionRelease === null ||
+    (trustedRevisionId !== liveRevisionId && trustedRevisionId !== sourceRevisionId)
+  ) {
+    return false;
+  }
+  const releaseSnap = await db
+    .collection(GATEWAYS_COLLECTION)
+    .doc(bound.gatewayId)
+    .collection(GATEWAY_RELEASES_SUBCOLLECTION)
+    .doc(String(revisionRelease))
+    .get();
+  if (!releaseSnap.exists) return false;
+  return releaseMacOpsTokenProtocol(releaseSnap.data()?.payload) === 1;
 }
 
 // The roster (mount driver) predicate for one revision pod: an approved,
@@ -1340,7 +1452,36 @@ function installGatewayOpsRoutes(
     const bound = boundGateway(req, res);
     if (!bound) return;
     await runBrokered(res, async () => {
-      const token = await mintMacOpsToken({ gatewayId: bound.gatewayId });
+      if (!(await legacyMacOpsTokenAllowed(db, bound))) {
+        res.status(400).json({
+          error: "revision_identity_required",
+          gatewayId: bound.gatewayId,
+        });
+        return;
+      }
+      const token = await mintMacOpsToken({
+        gatewayId: bound.gatewayId,
+        revisionId: bound.gatewayId,
+      });
+      res.json(token);
+    });
+  });
+
+  router.post("/mac-ops-token/v2", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const body = objectBody(req);
+    const revisionId = await resolveMacOpsRevisionId(db, bound, body.revisionId);
+    if (!revisionId) {
+      res.status(400).json({
+        error: "invalid_revision",
+        gatewayId: bound.gatewayId,
+        revisionId: typeof body.revisionId === "string" ? body.revisionId : "",
+      });
+      return;
+    }
+    await runBrokered(res, async () => {
+      const token = await mintMacOpsToken({ gatewayId: bound.gatewayId, revisionId });
       res.json(token);
     });
   });

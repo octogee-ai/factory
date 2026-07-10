@@ -73,9 +73,17 @@ export interface FleetBrokerUsageEvent {
 
 export interface FleetBrokerMacOpsToken {
   gatewayId: string;
+  revisionId: string;
   username: string;
   mmUserId: string;
   token: string;
+}
+
+export const MAC_OPS_PAT_DESCRIPTION = "Octogee Mac ops agent (OpenClaw)";
+
+export function macOpsPatDescription(gatewayId: string, revisionId: string): string {
+  if (revisionId === gatewayId) return MAC_OPS_PAT_DESCRIPTION;
+  return `${MAC_OPS_PAT_DESCRIPTION} [revision=${revisionId}]`;
 }
 
 export interface FleetBrokerBlobSignedUrl {

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   revisionIdForRelease,
   releasePayloadHash,
+  releaseMacOpsTokenProtocol,
   classifyGatewayField,
   isRevisionRealizationDoc,
   isGatewayDesiredDoc,
@@ -197,6 +198,18 @@ describe("releasePayloadHash", () => {
     const base = releasePayloadHash(samplePayload({ coOwnerUids: ["alice", "bob"] }));
     expect(releasePayloadHash(samplePayload({ coOwnerUids: ["alice", "carol"] }))).not.toBe(base);
     expect(releasePayloadHash(samplePayload({ coOwnerUids: ["alice"] }))).not.toBe(base);
+  });
+});
+
+describe("releaseMacOpsTokenProtocol", () => {
+  it("treats an omitted protocol on an otherwise-valid historical release as v1", () => {
+    expect(releaseMacOpsTokenProtocol({ imageTag: "abc1234" })).toBe(1);
+  });
+
+  it("accepts only the known immutable token protocol versions", () => {
+    expect(releaseMacOpsTokenProtocol({ macOpsTokenProtocol: 2 })).toBe(2);
+    expect(releaseMacOpsTokenProtocol({ macOpsTokenProtocol: 3 })).toBeNull();
+    expect(releaseMacOpsTokenProtocol(null)).toBeNull();
   });
 });
 

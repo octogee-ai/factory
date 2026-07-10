@@ -464,10 +464,61 @@ describe("POST /gateways/:id/releases/:n/rollback — cut a NEW release from rel
     expect(res.status).toBe(409);
   });
 
+  it("refuses a rollback to a legacy v1 token release before it can strand its target pod", async () => {
+    const legacyPayload = { ...sharedPayload({ imageTag: "abc1234" }), macOpsTokenProtocol: 1 };
+    const currentPayload = sharedPayload({ imageTag: "deadbee" });
+    const seed = seedNewSchemaGateway("gamma", currentPayload);
+    seed["gateways/gamma"].latestRelease = 2;
+    seed["gateways/gamma"].desiredRelease = 2;
+    seed[`gateways/gamma/${GATEWAY_RELEASES_SUBCOLLECTION}/1`] = {
+      gatewayId: "gamma",
+      release: 1,
+      sourceRelease: null,
+      note: null,
+      payloadHash: releasePayloadHash(legacyPayload),
+      payload: legacyPayload,
+    };
+    seed[`gateways/gamma/${GATEWAY_RELEASES_SUBCOLLECTION}/2`] = {
+      gatewayId: "gamma",
+      release: 2,
+      sourceRelease: 1,
+      note: null,
+      payloadHash: releasePayloadHash(currentPayload),
+      payload: currentPayload,
+    };
+    const { app, store } = mkApp(seed);
+
+    const res = await request(app).post("/gateways/gamma/releases/1/rollback").send({});
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({
+      error: "cannot roll back to a release using legacy MAC token protocol",
+      gatewayId: "gamma",
+      release: 1,
+    });
+    expect(store.get(`gateways/gamma/${GATEWAY_RELEASES_SUBCOLLECTION}/3`)).toBeUndefined();
+  });
+
   it("404s for an unknown release number", async () => {
     const { app } = mkApp(seedNewSchemaGateway("gamma", sharedPayload()));
     const res = await request(app).post("/gateways/gamma/releases/9/rollback").send({});
     expect(res.status).toBe(404);
+  });
+});
+
+describe("POST /gateways/:id/releases — protocol transition", () => {
+  it("upgrades a legacy release to v2 and queues a fresh revision even when its image is unchanged", async () => {
+    const legacyPayload = { ...sharedPayload(), macOpsTokenProtocol: 1 };
+    const { app, store } = mkApp(seedNewSchemaGateway("legacy", legacyPayload));
+
+    const res = await request(app)
+      .post("/gateways/legacy/releases")
+      .send({ modelBrokerLimits: { spendWindowUsd: 5 } });
+
+    expect(res.status).toBe(202);
+    const release = store.get(`gateways/legacy/${GATEWAY_RELEASES_SUBCOLLECTION}/2`);
+    expect((release?.payload as ReleasePayload).macOpsTokenProtocol).toBe(2);
+    expect(opsIn(store, "rollout")).toHaveLength(1);
   });
 });
 
