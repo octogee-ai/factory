@@ -214,7 +214,7 @@ function projectedRunStatus(envelope: AgentActivityEnvelopeV1): AgentRunStatus {
 function projectedActivityKind(envelope: AgentActivityEnvelopeV1): string {
   if (envelope.type === "turn.started") return "activity.run-root";
   if (envelope.type === ITEM_COMPLETED) return `activity.${envelope.item.kind}`;
-  return "activity.control";
+  throw new ActivitySinkIntegrityError("control transitions cannot create Activity posts");
 }
 
 function octogeeProps(
