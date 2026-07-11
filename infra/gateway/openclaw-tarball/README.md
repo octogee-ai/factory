@@ -390,14 +390,44 @@ commit** (amend the stack). Do not pack a tarball over a red Step 6b.
 
 ### Step 7 — Pack the tarball
 
+Since 7.1, root `package.json` carries `"@openclaw/ai": "workspace:*"` — a
+pnpm-workspace spec that `npm pack` never resolves (upstream's own npm
+release locks it via `prepare-openclaw-npm-shrinkwrap.ts` at publish time;
+a plain pack ships it verbatim and the base image's `npm install -g` dies
+on it, ~2 min in, with an opaque npm error). Rewrite it to the concrete
+published version for the pack, then restore:
+
 ▸
 ```bash
+node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('package.json','utf8'));
+  if (p.dependencies['@openclaw/ai']!=='workspace:*') throw new Error('spec drifted: '+p.dependencies['@openclaw/ai']);
+  p.dependencies['@openclaw/ai']='${NEW_TAG#v}'; fs.writeFileSync('package.json', JSON.stringify(p,null,2)+'\n');"
 mkdir -p /tmp/openclaw-fork
 npm pack --pack-destination /tmp/openclaw-fork --ignore-scripts   # ⚠ NOT pnpm pack
+git checkout -- package.json
 ls -la /tmp/openclaw-fork/
+# Confirm the tarball carries the concrete spec (not workspace:*):
+tar -xzOf /tmp/openclaw-fork/openclaw-*.tgz package/package.json | grep '"@openclaw/ai"'
 ```
 
-✓ A single `openclaw-<version>.tgz` file, ~20-25 MB, ~7-10k files.
+Pre-flight for the version: every companion the base image installs must be
+published at `${NEW_TAG#v}` (previews can lag — the beta.3 saga):
+
+```bash
+for p in @openclaw/codex @openclaw/mattermost @openclaw/ai; do
+  npm view "$p@${NEW_TAG#v}" version || echo "❌ $p NOT PUBLISHED — stop; see gateway/openclaw-companion-vendoring branch"
+done
+```
+
+✓ A single `openclaw-<version>.tgz` file, ~20-25 MB, ~7-10k files, with the
+concrete `@openclaw/ai` version inside; working tree restored to `workspace:*`.
+
+> ⚠ **Verify with a real plugin install, not `--version`.** After Step 9's
+> upload (or before, locally): `npm install -g` the tarball into a scratch
+> prefix and run `HOME=<scratch> openclaw plugins install
+> @openclaw/codex@${NEW_TAG#v}` — the exact Dockerfile command. `openclaw
+> --version` does NOT load the MCP runtime and once passed on a tarball
+> whose `@modelcontextprotocol/sdk` was empty (cost a base-build cycle).
 
 ### Step 8 — Capture fork SHA
 
