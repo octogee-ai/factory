@@ -332,8 +332,13 @@ function verifyScanEvidence(evidence: unknown, errors: string[], now: Date): voi
 
 function verifyException(exception: unknown, evidenceBytes: Uint8Array, errors: string[]): void {
   expectValue(errors, "exception id", at(exception, "id"), "release/mattermost-silent-post");
-  expectValue(errors, "exception reference path", at(exception, "reference", "path"), "helm/octogee/values.yaml");
-  expectValue(errors, "exception reference key", at(exception, "reference", "key"), "repository:64");
+  expectValue(
+    errors,
+    "exception reference path",
+    at(exception, "reference", "path"),
+    "infra/candidates/values.mattermost-silent-post.yaml",
+  );
+  expectValue(errors, "exception reference key", at(exception, "reference", "key"), "repository:2");
   expectValue(errors, "exception package", at(exception, "reference", "packageName"), MATTERMOST_CAPABILITY_ARTIFACT.repository);
   expectValue(
     errors,

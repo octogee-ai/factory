@@ -121,7 +121,7 @@ describe("Mattermost capability artifact evidence", () => {
   it("keeps inventory and the exception bound to the full repository/tag/digest identity", () => {
     const inventory = inventoryRepository(repoRoot);
     const reference = inventory.references.find(({ path: pathname, packageName }) =>
-      pathname === "helm/octogee/values.yaml" &&
+      pathname === "infra/candidates/values.mattermost-silent-post.yaml" &&
       packageName === MATTERMOST_CAPABILITY_ARTIFACT.repository,
     );
     const exception = mattermostException();
