@@ -83,8 +83,6 @@ import {
   replaceCandidateRuntimeSnapshot,
   resolveCandidateActivityBinding,
 } from "./openclaw/candidate-activity-runtime.js";
-import { createCandidateConversationRuntime } from "./openclaw/candidate-conversation-runtime.js";
-import { createAgentControlBridgeRuntime } from "./openclaw/agent-control-bridge-runtime.js";
 export { chatProxyOwnsHttpPath } from "./http-paths.js";
 
 if (process.env.NODE_ENV !== "test") {
@@ -1230,8 +1228,13 @@ async function startRunLiveProjectionBackground(
     );
     return;
   }
-  const { createRunLiveBridge } = await import('./openclaw/run-live-bridge.js');
+  const { createControlledRunLiveProjection } = await import(
+    './openclaw/run-live-control-projection.js'
+  );
   const { connectRunLiveBridgeUpstream } = await import('./openclaw/run-live-bridge-boot.js');
+  const namespace = process.env.K8S_NAMESPACE || 'octogee';
+  const controlKey = process.env.OCTOGEE_AGENT_CONTROL_SIGNING_SECRET ?? '';
+  const routerKey = process.env.AGENT_CONTROL_ROUTER_KEY ?? '';
   const activityMmClientFor = createActivityMmClientFactory({ baseUrl: MM_INTERNAL_URL });
   const receiptDb = db as unknown as ActivityReceiptFirestoreLike;
   const receiptsFor = (binding: { channelDocPath: string }) =>
@@ -1258,45 +1261,35 @@ async function startRunLiveProjectionBackground(
     mmClientFor: activityMmClientFor,
     leaseOwner,
   });
-  const gatewayId = gatewayIdResult.gatewayId;
-  const namespace = process.env.K8S_NAMESPACE || 'octogee';
-  const controlKey = process.env.OCTOGEE_AGENT_CONTROL_SIGNING_SECRET ?? '';
-  const routerKey = process.env.AGENT_CONTROL_ROUTER_KEY ?? '';
-  const candidate = createCandidateConversationRuntime({
-    registry: activityRuntimeRegistry,
-    createControls: ({ getRpc, runtimeRegistry }) =>
-      createAgentControlBridgeRuntime({
-        gatewayId,
-        namespace,
-        registry: runtimeBroker.agentControlRegistry,
-        getRpc,
-        runtimeRegistry,
-        receiptsFor,
-        mmClientFor: activityMmClientFor,
-        resolveCoachToken,
-        triggerVerifier: createMattermostTriggerVerifier({
-          source: createMattermostSigningKeySource({ baseUrl: MM_INTERNAL_URL }),
-        }),
-        controlKey,
-        routerKey,
-        leaseOwnerId: () => leaseOwner,
-        claimToken: randomUUID,
-        leaseOwner,
-        createRetryMarker: retryMarker,
-        log: (message, meta) => logger.error(message, meta),
-      }),
+  const controlled = createControlledRunLiveProjection({
+    gatewayId: gatewayIdResult.gatewayId,
+    namespace,
+    registry: runtimeBroker.agentControlRegistry,
+    runtimeRegistry: activityRuntimeRegistry,
+    receiptsFor,
+    mmClientFor: activityMmClientFor,
+    resolveCoachToken,
+    triggerVerifier: createMattermostTriggerVerifier({
+      source: createMattermostSigningKeySource({ baseUrl: MM_INTERNAL_URL }),
+    }),
+    controlKey,
+    routerKey,
+    leaseOwnerId: () => leaseOwner,
+    claimToken: randomUUID,
+    leaseOwner,
+    createRetryMarker: retryMarker,
+    resolveChannelPair: (conversationId) => runtimeBroker.resolveChannelPair(conversationId),
+    resolveAgentIdentity: (agentId) => runtimeBroker.resolveAgentIdentity(agentId),
     replaceRuntimeSnapshot: (snapshot) =>
       replaceCandidateRuntimeSnapshot(activityRuntimeRegistry, snapshot, bindingDeps),
-  });
-  installAgentControlCallbackHandler(candidate.controls.callbackHandler);
-  installProductionActivityIntake(candidate.controls.w2Controls);
-  const liveBridge = createRunLiveBridge({
-    resolveChannelPair: (conversationId) => runtimeBroker.resolveChannelPair(conversationId),
     writeLiveDoc: (path, doc) => runtimeBroker.writeRunLiveDoc(path, doc),
     deleteLiveDoc: (path) => runtimeBroker.deleteRunLiveDoc(path),
-    beginRuntimeSynchronization: candidate.beginRuntimeSynchronization,
-    replaceRuntimeSnapshot: candidate.replaceRuntimeSnapshot,
+    log: (message, meta) => logger.error(message, meta),
   });
+  installAgentControlCallbackHandler(controlled.callbackHandler);
+  installProductionActivityIntake(controlled.activityControls);
+  const liveBridge = controlled.bridge;
+  const gatewayId = gatewayIdResult.gatewayId;
   const healthUrl = gatewayHealthUrl();
   startBridgeUpstreamReconnectLoop({
     probeReady: () => probeGatewayReady(healthUrl),
@@ -1330,9 +1323,8 @@ async function startRunLiveProjectionBackground(
       await connectRunLiveBridgeUpstream(liveBridge, {
         ws,
         log: bridgeLog,
-        onRpcConnected: candidate.onRpcConnected,
-        onRpcDisconnected: candidate.onRpcDisconnected,
-        observeUpstreamFrame: candidate.observeUpstreamFrame,
+        onRpcChange: controlled.setRpc,
+        observeUpstreamFrame: controlled.observeUpstreamFrame,
       });
       return {
         onClose(handler: () => void) {
@@ -1386,12 +1378,9 @@ export async function startChatProxyBackground(): Promise<void> {
     if (bridgeSelection.startRunLiveBridge) {
       try {
         await startRunLiveProjectionBackground(gatewayIdResult, runtimeBroker);
-      } catch (error) {
-        console.error(
-          `[chat-proxy] FATAL: candidate conversation runtime failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[chat-proxy] FATAL: run-live bridge wire failed: ${message}`);
         process.exit(1);
       }
       return;
