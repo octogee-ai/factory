@@ -8,9 +8,13 @@ import {
 import {
   activityPayloadDigest,
   createActivitySink,
+  ActivitySinkInvalidAttachmentError,
   ActivitySinkIntegrityError,
 } from "../activity-sink.js";
-import { InMemoryActivityWriteReceiptStore } from "../activity-write-receipts.js";
+import {
+  InMemoryActivityWriteReceiptStore,
+  type ActivityWriteReceiptStore,
+} from "../activity-write-receipts.js";
 import type { ActivityMattermostClient } from "../mm-client.js";
 
 function envelope(
@@ -83,7 +87,23 @@ function mmClient(): ActivityMattermostClient {
 const binding = {
   activityChannelId: "activity-1",
   channelCreateAt: 100,
+  attentionMention: "@builder",
 };
+
+function journalProps(
+  value: AgentActivityEnvelopeV1,
+  rootId?: string,
+): Record<string, unknown> {
+  return {
+    octogee: {
+      eventKey: value.eventKey,
+      runId: value.ref.runId,
+      itemId: value.ref.itemId,
+      activityChannelId: binding.activityChannelId,
+      ...(rootId ? { activityRootPostId: rootId } : {}),
+    },
+  };
+}
 
 describe("attention-aware Activity sink", () => {
   it("creates one silent run root and returns the same post on concurrent replay", async () => {
@@ -127,7 +147,7 @@ describe("attention-aware Activity sink", () => {
     if (claim.outcome !== "claimed") throw new Error("expected claim");
     vi.mocked(mm.listChannelPosts)
       .mockResolvedValueOnce({
-        posts: [{ id: "created-before-crash", channelId: "activity-1", rootId: "", props: { octogee: { eventKey: started.eventKey } }, fileIds: [] }],
+        posts: [{ id: "created-before-crash", channelId: "activity-1", rootId: "", props: journalProps(started), fileIds: [] }],
         reachedEnd: false,
         nextBefore: "created-before-crash",
       })
@@ -166,6 +186,79 @@ describe("attention-aware Activity sink", () => {
     expect(mm.createActivityPost).not.toHaveBeenCalled();
   });
 
+  it("pages backward without a cap until the stored anchor, then safely creates", async () => {
+    const mm = mmClient();
+    const receipts = new InMemoryActivityWriteReceiptStore();
+    const started = envelope("turn.started");
+    await receipts.claim({
+      eventKey: started.eventKey,
+      payloadDigest: activityPayloadDigest(started),
+      historyAnchorPostId: "anchor-1",
+      leaseOwner: "crashed-worker",
+      now: 0,
+      leaseMs: 1,
+    });
+    vi.mocked(mm.listChannelPosts)
+      .mockResolvedValueOnce({
+        posts: [{ id: "newer-2", channelId: "activity-1", rootId: "", props: {}, fileIds: [] }],
+        reachedEnd: false,
+        nextBefore: "newer-2",
+      })
+      .mockResolvedValueOnce({
+        posts: [{ id: "newer-1", channelId: "activity-1", rootId: "", props: {}, fileIds: [] }],
+        reachedEnd: false,
+        nextBefore: "newer-1",
+      })
+      .mockResolvedValueOnce({
+        posts: [{ id: "anchor-1", channelId: "activity-1", rootId: "", props: {}, fileIds: [] }],
+        reachedEnd: false,
+        nextBefore: "anchor-1",
+      });
+    const sink = createActivitySink({ mm, receipts, leaseOwner: "worker-2", now: () => 10 });
+
+    const result = await sink.append({ envelope: started, binding });
+
+    expect(result.outcome).toBe("persisted");
+    expect(mm.listChannelPosts).toHaveBeenCalledTimes(3);
+    expect(mm.createActivityPost).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["foreign-activity", "", "foreign-post"],
+    ["activity-1", "foreign-root", "foreign-post"],
+    ["activity-1", "", "different-returned-post"],
+  ])("rejects a recovered receipt post outside its exact channel/root/id (%s, %s, %s)", async (
+    channelId,
+    rootId,
+    returnedPostId,
+  ) => {
+    const mm = mmClient();
+    const receipts = new InMemoryActivityWriteReceiptStore();
+    const started = envelope("turn.started");
+    const claim = await receipts.claim({
+      eventKey: started.eventKey,
+      payloadDigest: activityPayloadDigest(started),
+      historyAnchorPostId: "anchor-1",
+      leaseOwner: "crashed-worker",
+      now: 0,
+      leaseMs: 1,
+    });
+    if (claim.outcome !== "claimed") throw new Error("expected claim");
+    await receipts.markPosted(started.eventKey, claim.receipt.leaseToken, "foreign-post", 0);
+    vi.mocked(mm.getPost).mockResolvedValue({
+      id: returnedPostId,
+      channelId,
+      rootId,
+      props: journalProps(started),
+      fileIds: [],
+    });
+    const sink = createActivitySink({ mm, receipts, leaseOwner: "worker-2", now: () => 10 });
+
+    await expect(sink.append({ envelope: started, binding })).rejects.toBeInstanceOf(
+      ActivitySinkIntegrityError,
+    );
+  });
+
   it("redacts inline detail again before persistence", async () => {
     const mm = mmClient();
     const sink = createActivitySink({
@@ -190,6 +283,159 @@ describe("attention-aware Activity sink", () => {
       message: expect.not.stringContaining("secret-token"),
     }));
   });
+
+  it("targets waiting approvals once and edits their first terminal decision", async () => {
+    const mm = mmClient();
+    const receipts = new InMemoryActivityWriteReceiptStore();
+    const sink = createActivitySink({ mm, receipts, leaseOwner: "worker-1", now: () => 1_000 });
+    await sink.append({ envelope: envelope("turn.started"), binding });
+    const approval = envelope("item.completed", {
+      item: { kind: "approval", status: "waiting", summary: "Approve deployment?" },
+    });
+    approval.ref.itemId = "octogee:approval:approval-1";
+    approval.eventKey = createHash("sha256")
+      .update(agentActivityCanonicalKey(approval.ref))
+      .digest("hex");
+    const created = await sink.append({ envelope: approval, binding });
+    const approvalPostId = created.postIds[0];
+    vi.mocked(mm.getPost).mockResolvedValue({
+      id: approvalPostId,
+      channelId: "activity-1",
+      rootId: "post-1",
+      props: journalProps(approval, "post-1"),
+      fileIds: [],
+    });
+    const transitionRef = { ...approval.ref, semanticVersion: 2 };
+    const transition: AgentActivityEnvelopeV1 = {
+      schemaVersion: 1,
+      eventKey: createHash("sha256").update(agentActivityCanonicalKey(transitionRef)).digest("hex"),
+      emittedAt: "2026-07-11T15:01:00.000Z",
+      ref: transitionRef,
+      redaction: { policy: "octogee-v1", appliedAt: "producer" },
+      type: "control.transition",
+      control: { from: "waiting", to: "approved", actorId: "mm-user-1" },
+    };
+
+    await sink.append({ envelope: transition, binding });
+    const replay = await sink.append({ envelope: transition, binding });
+
+    expect(mm.createActivityPost).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      message: "@builder Approve deployment?",
+      silent: false,
+    }));
+    expect(mm.editPost).toHaveBeenCalledTimes(1);
+    expect(replay).toEqual({ outcome: "duplicate", postIds: [approvalPostId] });
+  });
+
+  it.each([
+    ["id", "foreign-post"],
+    ["channelId", "main-1"],
+    ["rootId", "foreign-root"],
+    ["eventKey", "f".repeat(64)],
+    ["runId", "foreign-run"],
+    ["itemId", "octogee:approval:foreign"],
+    ["activityChannelId", "foreign-activity"],
+    ["activityRootPostId", "foreign-root"],
+  ])("never edits a control target with mismatched %s", async (field, value) => {
+    const mm = mmClient();
+    const receipts = new InMemoryActivityWriteReceiptStore();
+    const sink = createActivitySink({ mm, receipts, leaseOwner: "worker-1", now: () => 1_000 });
+    await sink.append({ envelope: envelope("turn.started"), binding });
+    const approval = envelope("item.completed", {
+      item: { kind: "approval", status: "waiting", summary: "Approve deployment?" },
+    });
+    approval.ref.itemId = "octogee:approval:approval-1";
+    approval.eventKey = createHash("sha256")
+      .update(agentActivityCanonicalKey(approval.ref))
+      .digest("hex");
+    const created = await sink.append({ envelope: approval, binding });
+    const post = {
+      id: created.postIds[0],
+      channelId: "activity-1",
+      rootId: "post-1",
+      props: journalProps(approval, "post-1"),
+      fileIds: [],
+    };
+    if (field === "id" || field === "channelId" || field === "rootId") {
+      post[field] = value;
+    } else {
+      (post.props.octogee as Record<string, unknown>)[field] = value;
+    }
+    vi.mocked(mm.getPost).mockResolvedValue(post);
+    const transitionRef = { ...approval.ref, semanticVersion: 2 };
+    const transition: AgentActivityEnvelopeV1 = {
+      schemaVersion: 1,
+      eventKey: createHash("sha256").update(agentActivityCanonicalKey(transitionRef)).digest("hex"),
+      emittedAt: "2026-07-11T15:01:00.000Z",
+      ref: transitionRef,
+      redaction: { policy: "octogee-v1", appliedAt: "producer" },
+      type: "control.transition",
+      control: { from: "waiting", to: "approved", actorId: "mm-user-1" },
+    };
+
+    await expect(sink.append({ envelope: transition, binding })).rejects.toBeInstanceOf(
+      ActivitySinkIntegrityError,
+    );
+    expect(mm.editPost).not.toHaveBeenCalled();
+  });
+
+  it.each(["session-created", "uploading"] as const)(
+    "resumes from a durable %s upload receipt without creating a second session",
+    async (state) => {
+      const mm = mmClient();
+      const receipts = new InMemoryActivityWriteReceiptStore();
+      const initial = createActivitySink({ mm, receipts, leaseOwner: "worker-1", now: () => 0, leaseMs: 1 });
+      await initial.append({ envelope: envelope("turn.started"), binding });
+      const bytes = Buffer.from("12345678");
+      const completed = envelope("item.completed", {
+        item: {
+          kind: "tool",
+          status: "completed",
+          summary: "Large output",
+          attachment: {
+            filename: "tool.txt",
+            mediaType: "text/plain",
+            byteLength: bytes.byteLength,
+            sha256: createHash("sha256").update(bytes).digest("hex"),
+            multipartField: "detail",
+          },
+        },
+      });
+      const claim = await receipts.claim({
+        eventKey: completed.eventKey,
+        payloadDigest: activityPayloadDigest(completed, bytes),
+        historyAnchorPostId: "anchor-1",
+        leaseOwner: "crashed-worker",
+        now: 0,
+        leaseMs: 1,
+      });
+      if (claim.outcome !== "claimed") throw new Error("expected claim");
+      await receipts.updateAttachment(completed.eventKey, claim.receipt.leaseToken, {
+        state,
+        uploadId: "upload-1",
+        fileOffset: state === "session-created" ? 0 : 2,
+        filename: "tool.txt",
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        byteLength: bytes.byteLength,
+      }, 0);
+      vi.mocked(mm.getUploadSession).mockResolvedValue({ id: "upload-1", fileOffset: 4 });
+      vi.mocked(mm.uploadData).mockResolvedValue({ outcome: "complete", fileId: "file-1" });
+      vi.mocked(mm.getFileInfo).mockResolvedValue({ id: "file-1", size: 8 });
+      vi.mocked(mm.getPostFiles).mockResolvedValue([{ id: "file-1", size: 8 }]);
+      vi.mocked(mm.listChannelPosts).mockResolvedValue({
+        posts: [{ id: "anchor-1", channelId: "activity-1", rootId: "", props: {}, fileIds: [] }],
+        reachedEnd: false,
+        nextBefore: "anchor-1",
+      });
+      const recovered = createActivitySink({ mm, receipts, leaseOwner: "worker-2", now: () => 10 });
+
+      await recovered.append({ envelope: completed, attachment: bytes, binding });
+
+      expect(mm.createUploadSession).not.toHaveBeenCalled();
+      const uploaded = vi.mocked(mm.uploadData).mock.calls[0][1];
+      expect(Buffer.from(uploaded).toString("utf8")).toBe("5678");
+    },
+  );
 
   it("attaches large detail once and records a lost final response without reuploading", async () => {
     const mm = mmClient();
@@ -227,6 +473,184 @@ describe("attention-aware Activity sink", () => {
       fileIds: undefined,
       message: expect.stringContaining("attachment unavailable"),
     }));
+  });
+
+  it("re-runs redaction over a bounded attachment source before any Mattermost upload", async () => {
+    const mm = mmClient();
+    vi.mocked(mm.uploadData).mockRejectedValueOnce(new Error("lost final response"));
+    vi.mocked(mm.getUploadSession).mockResolvedValueOnce(null);
+    const sink = createActivitySink({
+      mm,
+      receipts: new InMemoryActivityWriteReceiptStore(),
+      leaseOwner: "worker-1",
+      now: () => 1_000,
+    });
+    await sink.append({ envelope: envelope("turn.started"), binding });
+    const bytes = new TextEncoder().encode(
+      `tool output Bearer secret-token-${"1".repeat(80)} trailing text`,
+    );
+    const readLengths: number[] = [];
+    const source = {
+      byteLength: bytes.byteLength,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      async read(offset: number, length: number) {
+        readLengths.push(length);
+        return bytes.slice(offset, Math.min(offset + length, bytes.byteLength));
+      },
+    };
+    const completed = envelope("item.completed", {
+      item: {
+        kind: "tool",
+        status: "completed",
+        summary: "Large output",
+        attachment: {
+          filename: "tool.txt",
+          mediaType: "text/plain",
+          byteLength: source.byteLength,
+          sha256: source.sha256,
+          multipartField: "detail",
+        },
+      },
+    });
+
+    await sink.append({ envelope: completed, attachment: source, binding });
+
+    const uploadedBytes = vi.mocked(mm.uploadData).mock.calls[0][1];
+    expect(new TextDecoder().decode(uploadedBytes)).toBe(
+      "[redacted: attachment contained secret material]",
+    );
+    expect(Math.max(...readLengths)).toBeLessThanOrEqual(5 * 1024 * 1024);
+    expect(mm.createActivityPost).toHaveBeenLastCalledWith(expect.objectContaining({
+      message: expect.not.stringContaining("secret-token"),
+    }));
+  });
+
+  it("rejects invalid UTF-8 attachment detail deterministically before upload", async () => {
+    const mm = mmClient();
+    const sink = createActivitySink({
+      mm,
+      receipts: new InMemoryActivityWriteReceiptStore(),
+      leaseOwner: "worker-1",
+      now: () => 1_000,
+    });
+    await sink.append({ envelope: envelope("turn.started"), binding });
+    const bytes = Uint8Array.from([0xc3, 0x28]);
+    const completed = envelope("item.completed", {
+      item: {
+        kind: "tool",
+        status: "completed",
+        summary: "Invalid detail",
+        attachment: {
+          filename: "tool.txt",
+          mediaType: "text/plain",
+          byteLength: bytes.byteLength,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          multipartField: "detail",
+        },
+      },
+    });
+
+    await expect(sink.append({ envelope: completed, attachment: bytes, binding }))
+      .rejects.toBeInstanceOf(ActivitySinkInvalidAttachmentError);
+    expect(mm.createUploadSession).not.toHaveBeenCalled();
+  });
+
+  it("continues UTF-8 validation after detecting a secret and still rejects malformed trailing bytes", async () => {
+    const mm = mmClient();
+    const sink = createActivitySink({
+      mm,
+      receipts: new InMemoryActivityWriteReceiptStore(),
+      leaseOwner: "worker-1",
+      now: () => 1_000,
+    });
+    await sink.append({ envelope: envelope("turn.started"), binding });
+    const prefix = new TextEncoder().encode("Bearer secret-token-12345678901234567890 trailing");
+    const bytes = Uint8Array.from([...prefix, 0xc3, 0x28]);
+    const source = {
+      byteLength: bytes.byteLength,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      async read(offset: number) {
+        return bytes.slice(offset, Math.min(offset + 8, bytes.byteLength));
+      },
+    };
+    const completed = envelope("item.completed", {
+      item: {
+        kind: "tool",
+        status: "completed",
+        summary: "Invalid secret detail",
+        attachment: {
+          filename: "tool.txt",
+          mediaType: "text/plain",
+          byteLength: bytes.byteLength,
+          sha256: source.sha256,
+          multipartField: "detail",
+        },
+      },
+    });
+
+    await expect(sink.append({ envelope: completed, attachment: source, binding }))
+      .rejects.toBeInstanceOf(ActivitySinkInvalidAttachmentError);
+    expect(mm.createUploadSession).not.toHaveBeenCalled();
+  });
+
+  it("recovers a crash after post attachment without another post or physical upload", async () => {
+    const mm = mmClient();
+    const delegate = new InMemoryActivityWriteReceiptStore();
+    let crashCommit = false;
+    const receipts: ActivityWriteReceiptStore = {
+      claim: (input) => delegate.claim(input),
+      read: (eventKey) => delegate.read(eventKey),
+      markPosted: (eventKey, token, postId, now) => delegate.markPosted(eventKey, token, postId, now),
+      updateAttachment: (eventKey, token, attachment, now) =>
+        delegate.updateAttachment(eventKey, token, attachment, now),
+      async commit(eventKey, token, now) {
+        if (crashCommit) {
+          crashCommit = false;
+          throw new Error("process crashed before commit");
+        }
+        await delegate.commit(eventKey, token, now);
+      },
+    };
+    const bytes = Buffer.from("12345678");
+    vi.mocked(mm.getFileInfo).mockResolvedValue({ id: "file-1", size: 8 });
+    vi.mocked(mm.getPostFiles).mockResolvedValue([{ id: "file-1", size: 8 }]);
+    const first = createActivitySink({ mm, receipts, leaseOwner: "worker-1", now: () => 0, leaseMs: 1 });
+    await first.append({ envelope: envelope("turn.started"), binding });
+    const completed = envelope("item.completed", {
+      item: {
+        kind: "tool",
+        status: "completed",
+        summary: "Large output",
+        attachment: {
+          filename: "tool.txt",
+          mediaType: "text/plain",
+          byteLength: bytes.byteLength,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          multipartField: "detail",
+        },
+      },
+    });
+    crashCommit = true;
+    await expect(first.append({ envelope: completed, attachment: bytes, binding })).rejects.toThrow(
+      "process crashed before commit",
+    );
+    const posted = await delegate.read(completed.eventKey);
+    if (!posted?.postId) throw new Error("expected posted receipt");
+    vi.mocked(mm.getPost).mockResolvedValue({
+      id: posted.postId,
+      channelId: "activity-1",
+      rootId: "post-1",
+      props: journalProps(completed, "post-1"),
+      fileIds: ["file-1"],
+    });
+    const recovered = createActivitySink({ mm, receipts, leaseOwner: "worker-2", now: () => 10, leaseMs: 1 });
+
+    const result = await recovered.append({ envelope: completed, attachment: bytes, binding });
+
+    expect(result).toEqual({ outcome: "duplicate", postIds: [posted.postId] });
+    expect(mm.createUploadSession).toHaveBeenCalledTimes(1);
+    expect(mm.uploadData).toHaveBeenCalledTimes(1);
+    expect(mm.createActivityPost).toHaveBeenCalledTimes(2);
   });
 
   it("finalization commits an empty post list and never duplicates the final answer", async () => {

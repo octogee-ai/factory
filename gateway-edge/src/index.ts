@@ -229,7 +229,7 @@ export function dispatchGatewayEdgeRequest(
   app: (req: http.IncomingMessage, res: http.ServerResponse) => void,
 ): void {
   const rawPath = (req.url || "").split("?")[0];
-  if (chatProxyOwnsHttpPath(stripGatewayPrefix(rawPath))) {
+  if (chatProxyOwnsHttpPath(stripGatewayPrefix(rawPath), rawPath)) {
     loadChatProxyModule().then((chatProxy) => chatProxy.chatProxyHandleRequest(req, res)).catch((err) => {
       logger.error("[chat-proxy] request handler failed", {
         path: rawPath,

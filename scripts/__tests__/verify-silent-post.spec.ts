@@ -34,10 +34,9 @@ describe("Mattermost silent-post capability verifier", () => {
       mentionUnchanged: true,
       ordinaryFinalNotifies: true,
       humanSilentRejected: true,
-      forceOverridesSilent: true,
       persistentSilentRejected: true,
     });
-    expect(waitForWebsocketPost).toHaveBeenCalledWith("silent-1");
+    expect(waitForWebsocketPost.mock.calls).toEqual([["silent-1"], ["final-1"]]);
     expect(createPost.mock.calls.map(([request]) => request)).toEqual([
       { actor: "bot", message: expect.any(String), silent: true, persistentNotification: false },
       { actor: "bot", message: expect.any(String), silent: false, persistentNotification: false },

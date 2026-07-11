@@ -10,6 +10,7 @@ import {
   installActivityIntakeHandler,
 } from "../proxy.js";
 import { createActivityIntakeHttpHandler } from "../openclaw/activity-intake.js";
+import type { ActivityAttachmentSource } from "../openclaw/activity-sink.js";
 
 function envelopeWithAttachment(bytes?: Uint8Array): AgentActivityEnvelopeV1 {
   const ref = {
@@ -69,6 +70,19 @@ async function withServer(run: (baseUrl: string) => Promise<void>): Promise<void
 afterEach(() => installActivityIntakeHandler(null));
 
 describe("POST /internal/openclaw/activity/v1/events", () => {
+  it("fails retryably while the local runtime registry/handler is not installed", async () => {
+    installActivityIntakeHandler(null);
+    await withServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/internal/openclaw/activity/v1/events`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toEqual({ error: "runtime_unsynchronized", retryable: true });
+    });
+  });
+
   it("owns the bare loopback JSON route and returns the normalized 201 response", async () => {
     const append = vi.fn(async () => ({ outcome: "persisted" as const, postIds: ["post-1"] }));
     const envelope = envelopeWithAttachment();
@@ -81,6 +95,7 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
           channelDocPath: "workspaces/acme/channels/build",
           channelCreateAt: 1,
           coachToken: "token",
+          attentionMention: "@builder",
         })),
       },
       sinkFor: () => ({ append }),
@@ -110,6 +125,7 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
           channelDocPath: "workspaces/acme/channels/build",
           channelCreateAt: 1,
           coachToken: "token",
+          attentionMention: "@builder",
         })),
       },
       sinkFor: () => ({ append }),
@@ -127,6 +143,92 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
       await expect(response.json()).resolves.toEqual({ error: "attachment_too_large", retryable: false });
       expect(append).not.toHaveBeenCalled();
     });
+  });
+
+  it("spools multipart detail to a bounded source, validates transport metadata, and cleans it up", async () => {
+    const bytes = Buffer.from("streamed detail");
+    const envelope = envelopeWithAttachment(bytes);
+    let source: ActivityAttachmentSource | undefined;
+    const append = vi.fn(async (input: { attachment?: Uint8Array | ActivityAttachmentSource }) => {
+      expect(input.attachment).not.toBeInstanceOf(Uint8Array);
+      source = input.attachment as ActivityAttachmentSource;
+      expect(source.byteLength).toBe(bytes.byteLength);
+      expect(Buffer.from(await source.read(0, 8)).toString("utf8")).toBe("streamed");
+      return { outcome: "persisted" as const, postIds: ["post-1"] };
+    });
+    installActivityIntakeHandler(createActivityIntakeHttpHandler({
+      registry: {
+        readiness: () => "ready",
+        resolve: vi.fn(async () => ({
+          ...envelope.ref,
+          activityChannelId: "activity-1",
+          channelDocPath: "workspaces/acme/channels/build",
+          channelCreateAt: 1,
+          coachToken: "token",
+          attentionMention: "@builder",
+        })),
+      },
+      sinkFor: () => ({ append }),
+    }, { maxAttachmentBytes: 1024 }));
+
+    await withServer(async (baseUrl) => {
+      const form = new FormData();
+      form.set("envelope", JSON.stringify(envelope));
+      form.set("detail", new Blob([bytes], { type: "text/plain" }), "tool.txt");
+      const response = await fetch(`${baseUrl}/internal/openclaw/activity/v1/events`, {
+        method: "POST",
+        body: form,
+      });
+      expect(response.status).toBe(201);
+    });
+    await expect(source?.read(0, 1)).rejects.toThrow();
+  });
+
+  it("returns JSON 413 before parsing a declared oversized body", async () => {
+    installActivityIntakeHandler(createActivityIntakeHttpHandler({
+      registry: { readiness: () => "ready", resolve: vi.fn() },
+      sinkFor: vi.fn(),
+    }));
+    await withServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/internal/openclaw/activity/v1/events`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ padding: "x".repeat(256 * 1024) }),
+      });
+      expect(response.status).toBe(413);
+      await expect(response.json()).resolves.toEqual({ error: "json_too_large", retryable: false });
+    });
+  });
+
+  it("logs the original unexpected intake error before returning a generic retryable response", async () => {
+    const log = vi.fn();
+    const envelope = envelopeWithAttachment();
+    installActivityIntakeHandler(createActivityIntakeHttpHandler({
+      registry: {
+        readiness: () => "ready",
+        resolve: vi.fn(async () => {
+          throw new Error("runtime database exploded");
+        }),
+      },
+      sinkFor: vi.fn(),
+      log,
+    }));
+
+    await withServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/internal/openclaw/activity/v1/events`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(envelope),
+      });
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toEqual({
+        error: "activity_intake_unavailable",
+        retryable: true,
+      });
+    });
+    expect(log).toHaveBeenCalledWith("activity_intake_error", expect.objectContaining({
+      error: "runtime database exploded",
+    }));
   });
 
   it("does not expose the route through a fleet-prefixed public path", async () => {

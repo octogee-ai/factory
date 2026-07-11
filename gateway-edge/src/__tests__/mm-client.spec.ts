@@ -191,4 +191,18 @@ describe("createActivityMmClientFactory", () => {
     const client = createActivityMmClientFactory({ baseUrl: "https://mm.test" })("bot-token");
     await expect(client.getUploadSession("completed-upload")).resolves.toBeNull();
   });
+
+  it("rejects unsafe upload offsets and file sizes from Mattermost", async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "upload-1", file_offset: -1 }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "file-1", size: 1.5 }), { status: 200 }));
+    const client = createActivityMmClientFactory({ baseUrl: "https://mm.test" })("bot-token");
+
+    await expect(client.createUploadSession("activity-1", "tool.txt", 8)).rejects.toThrow(
+      "MM createUploadSession returned malformed session",
+    );
+    await expect(client.getFileInfo("file-1")).rejects.toThrow(
+      "MM getFileInfo returned malformed file info",
+    );
+  });
 });

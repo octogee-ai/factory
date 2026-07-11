@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ActivityReceiptConflictError,
   ActivityReceiptLeaseError,
+  ActivityReceiptUnavailableError,
   FirestoreActivityWriteReceiptStore,
   InMemoryActivityWriteReceiptStore,
   receiptDocumentId,
@@ -10,6 +11,15 @@ import {
 
 const eventKey = "a".repeat(64);
 const digest = "b".repeat(64);
+
+function firestoreStoreReturning(data: Record<string, unknown>) {
+  return new FirestoreActivityWriteReceiptStore({
+    doc: () => ({
+      get: async () => ({ exists: true, data: () => data }),
+    }),
+    runTransaction: vi.fn(),
+  } as never, "workspaces/acme/channels/build");
+}
 
 describe("Activity write receipts", () => {
   it("freezes the payload digest and returns committed duplicates", async () => {
@@ -181,5 +191,66 @@ describe("Activity write receipts", () => {
       now: 4,
       leaseMs: 100,
     })).rejects.toBeInstanceOf(ActivityReceiptConflictError);
+  });
+
+  it("rejects every malformed persisted attachment union state", async () => {
+    const base = {
+      eventKey,
+      payloadDigest: digest,
+      state: "claimed",
+      historyAnchorPostId: "anchor-1",
+      leaseOwner: "pod-1",
+      leaseToken: "lease-1",
+      leaseExpiresAt: 100,
+      updatedAt: 1,
+    };
+    const malformedAttachments = [
+      {
+        state: "uploading",
+        uploadId: "upload-1",
+        fileOffset: Number.MAX_SAFE_INTEGER + 1,
+        filename: "tool.txt",
+        sha256: digest,
+        byteLength: 8,
+      },
+      { state: "none", uploadId: "smuggled-upload" },
+      {
+        state: "uploaded",
+        uploadId: "upload-1",
+        fileId: "",
+        filename: "tool.txt",
+        sha256: digest,
+        byteLength: 8,
+      },
+      {
+        state: "upload-result-unknown",
+        uploadId: "upload-1",
+        filename: "tool.txt",
+        sha256: digest,
+        byteLength: 8,
+        reason: "   ",
+      },
+    ];
+
+    for (const attachment of malformedAttachments) {
+      await expect(firestoreStoreReturning({ ...base, attachment }).read(eventKey))
+        .rejects.toBeInstanceOf(ActivityReceiptUnavailableError);
+    }
+  });
+
+  it("rejects a receipt whose stored event key does not match the requested document", async () => {
+    const store = firestoreStoreReturning({
+      eventKey: "c".repeat(64),
+      payloadDigest: digest,
+      state: "committed",
+      historyAnchorPostId: "anchor-1",
+      leaseOwner: "pod-1",
+      leaseToken: "lease-1",
+      leaseExpiresAt: 100,
+      attachment: { state: "none" },
+      updatedAt: 1,
+    });
+
+    await expect(store.read(eventKey)).rejects.toBeInstanceOf(ActivityReceiptUnavailableError);
   });
 });

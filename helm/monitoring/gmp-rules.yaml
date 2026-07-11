@@ -70,6 +70,40 @@ spec:
           annotations:
             summary: "Mattermost pod not ready for 3m"
             description: "Pod {{ $labels.pod }} in {{ $labels.namespace }} has been not-ready for 3 minutes."
+    - name: octogee.activity
+      rules:
+        - alert: ActivityFinalMissing
+          expr: sum(increase(octogee_activity_missing_final_total[10m])) > 0
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: "An agent run ended without a durable final response"
+            description: "The Activity journal reached a terminal run state but the primary Mattermost conversation has no final answer or failure notice."
+        - alert: ActivityRoutineDeliveredNormally
+          expr: sum(increase(octogee_activity_routine_normal_delivery_total[10m])) > 0
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Routine Activity created ordinary Mattermost attention"
+            description: "A routine journal post was delivered without silent semantics. Disable Activity intake and verify the exact Mattermost capability artifact."
+        - alert: ActivityOrphansSustained
+          expr: sum(increase(octogee_activity_orphan_total[15m])) > 2
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Activity items are arriving without committed run roots"
+            description: "Multiple normalized Activity events could not resolve their run root. Check producer ordering, receipt health, and pair integrity."
+        - alert: ActivityAttachmentResultUnknown
+          expr: sum(increase(octogee_activity_attachment_unknown_total[10m])) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "A Mattermost upload completed with an unknown file id"
+            description: "The summary post is durable, but attachment detail is intentionally lossy and will not be uploaded again automatically."
     - name: octogee.cloudsql
       rules:
         - alert: CloudSQLProxyDown

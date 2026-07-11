@@ -16,6 +16,7 @@
     "pretest:emulator:one": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "test:emulator:one": "node ops/run-emulator-vitest.mjs --only firestore --project octogee-test --firebase-config ../firebase.json --config vitest.emulator.config.ts --env GCLOUD_PROJECT=octogee-test",
     "audit-coverage": "tsx ops/audit-coverage.ts",
+    "verify-silent-post": "tsx ops/verify-silent-post.ts",
     "scope": "tsx ops/scope.ts"
   },
   "dependencies": {

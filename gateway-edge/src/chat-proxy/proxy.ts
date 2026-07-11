@@ -58,6 +58,13 @@ import {
 } from "./openclaw/runtime-broker.js";
 import type { ActivityBridgeHandle } from "./openclaw/activity-bridge.js";
 import type { MmCoachEventListenerManager } from "./openclaw/mm-event-listener.js";
+import {
+  createProductionActivityIntakeHandler,
+  MutableActivityRuntimeRegistry,
+} from "./openclaw/activity-intake.js";
+import type { ActivityReceiptFirestoreLike } from "./openclaw/activity-write-receipts.js";
+import { createActivityMmClientFactory } from "./openclaw/mm-client.js";
+import { ACTIVITY_INTAKE_PATH } from "./http-paths.js";
 export { chatProxyOwnsHttpPath } from "./http-paths.js";
 
 if (process.env.NODE_ENV !== "test") {
@@ -177,6 +184,45 @@ const builderShellRejectedTotal = new Counter({
   labelNames: ['reason'] as const,
   registers: [metricsRegistry],
 });
+
+const activityMissingFinalTotal = new Counter({
+  name: "octogee_activity_missing_final_total",
+  help: "Agent runs that reached a terminal state without a durable primary-channel final",
+  registers: [metricsRegistry],
+});
+
+const activityRoutineNormalDeliveryTotal = new Counter({
+  name: "octogee_activity_routine_normal_delivery_total",
+  help: "Routine Activity posts observed without silent delivery",
+  registers: [metricsRegistry],
+});
+
+const activityOrphanTotal = new Counter({
+  name: "octogee_activity_orphan_total",
+  help: "Activity items whose committed run root could not be resolved",
+  registers: [metricsRegistry],
+});
+
+const activityAttachmentUnknownTotal = new Counter({
+  name: "octogee_activity_attachment_unknown_total",
+  help: "Mattermost uploads whose final response could not be mapped to a durable file id",
+  registers: [metricsRegistry],
+});
+
+export const activityRuntimeRegistry = new MutableActivityRuntimeRegistry();
+export const MATTERMOST_SILENT_CAPABILITY_SENTINEL = "octogee:mattermost-silent-post:v1";
+
+export function recordActivityMissingFinal(): void {
+  activityMissingFinalTotal.inc();
+}
+
+export function recordRoutineActivityNormalDelivery(): void {
+  activityRoutineNormalDeliveryTotal.inc();
+}
+
+export function recordActivityOrphan(): void {
+  activityOrphanTotal.inc();
+}
 
 const ocWsHandshakeTotal = new Counter({
   name: 'chat_proxy_openclaw_ws_handshakes_total',
@@ -312,6 +358,16 @@ const bridgeBootStatus = createBridgeBootStatus({
 let approvalCallbackHandler:
   | ((req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>)
   | null = null;
+
+let activityIntakeHandler:
+  | ((req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>)
+  | null = null;
+
+export function installActivityIntakeHandler(
+  handler: ((req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>) | null,
+): void {
+  activityIntakeHandler = handler;
+}
 
 const FRAME_DROP_LOG_WINDOW_MS = 60_000;
 // Retry-After hint for a WS upgrade refused because the serving revision is not
@@ -464,6 +520,16 @@ export async function chatProxyHandleRequest(
   req: http.IncomingMessage,
   res: http.ServerResponse
 ): Promise<void> {
+  const originalPath = (req.url || "").split("?")[0];
+  if (originalPath === ACTIVITY_INTAKE_PATH) {
+    if (!activityIntakeHandler) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "runtime_unsynchronized", retryable: true }));
+      return;
+    }
+    return activityIntakeHandler(req, res);
+  }
+
   setCors(req, res);
 
   if (req.method === "OPTIONS") {
@@ -1088,6 +1154,32 @@ function wireCoachEventListeners(
   });
 }
 
+function installProductionActivityIntake(): void {
+  if (
+    process.env.MATTERMOST_SILENT_CAPABILITY_SENTINEL !==
+    MATTERMOST_SILENT_CAPABILITY_SENTINEL
+  ) {
+    console.warn(
+      "[chat-proxy] Activity intake disabled — Mattermost silent capability sentinel is absent",
+    );
+    return;
+  }
+  const mmClientFor = createActivityMmClientFactory({ baseUrl: MM_INTERNAL_URL });
+  installActivityIntakeHandler(createProductionActivityIntakeHandler({
+    registry: activityRuntimeRegistry,
+    db: db as unknown as ActivityReceiptFirestoreLike,
+    mmClientFor,
+    leaseOwner: `${process.env.HOSTNAME ?? "gateway-edge"}:${process.pid}`,
+    alerts: {
+      attachmentUnknown: () => activityAttachmentUnknownTotal.inc(),
+      integrityFailure: ({ reason }) => {
+        if (reason === "activity-root-missing") activityOrphanTotal.inc();
+      },
+    },
+    log: (event, meta) => logger.info(`[${event}]`, meta),
+  }));
+}
+
 export async function startChatProxyBackground(): Promise<void> {
   warnIfWsOriginsMisconfigured(console.warn);
   console.log(`[chat-proxy] MM internal URL (data path): ${MM_INTERNAL_URL}`);
@@ -1105,6 +1197,7 @@ export async function startChatProxyBackground(): Promise<void> {
       process.exit(1);
     }
     console.log('[chat-proxy] OpenClaw runtime Firestore broker enabled');
+    installProductionActivityIntake();
     // One forced-reconnect cooldown floor for the bridge's whole life: it must outlive
     // any single WS so SEQ_GAP_COOLDOWN_MS actually spaces the reconnects it triggers
     // (a forced close resets the per-connection window, but not this).
