@@ -98,6 +98,79 @@ async function seedCaller(): Promise<void> {
     .set({ role: "user" });
 }
 
+function mockProjectPairMattermost(): void {
+  const channels = new Map<string, {
+    id: string;
+    name: string;
+    team_id: string;
+    type: "P" | "O";
+    delete_at: number;
+    members: Set<string>;
+  }>();
+  const notFound = (path: string) => {
+    const error = new Error(`MM API 404: ${path} not found`) as Error & { status: number };
+    error.status = 404;
+    return error;
+  };
+
+  mockMmApi.mockImplementation(async (
+    path: string,
+    method?: string,
+    body?: Record<string, unknown>,
+  ) => {
+    const verb = method ?? "GET";
+    if (verb === "POST" && path === "/channels") {
+      if (
+        typeof body?.name !== "string"
+        || typeof body.team_id !== "string"
+        || (body.type !== "P" && body.type !== "O")
+      ) {
+        throw new Error("Mattermost channel fixture requires name, team_id, and type");
+      }
+      const id = body.name.endsWith("-activity") ? "ch-test-activity" : "ch-test-123";
+      const created = {
+        id,
+        name: body.name,
+        team_id: body.team_id,
+        type: body.type,
+        delete_at: 0,
+        members: new Set<string>(),
+      };
+      channels.set(id, created);
+      return created;
+    }
+    const channelRead = /^\/channels\/([^/?]+)$/.exec(path);
+    if (verb === "GET" && channelRead) {
+      const found = channels.get(channelRead[1]);
+      if (!found) throw notFound(path);
+      return found;
+    }
+    const channelLookup = /^\/teams\/([^/]+)\/channels\/name\/(.+)$/.exec(path);
+    if (verb === "GET" && channelLookup) {
+      const found = [...channels.values()].find((channel) =>
+        channel.team_id === channelLookup[1] && channel.name === channelLookup[2]
+      );
+      if (!found) throw notFound(path);
+      return found;
+    }
+    const memberList = /^\/channels\/([^/]+)\/members\?page=0&per_page=200$/.exec(path);
+    if (verb === "GET" && memberList) {
+      const found = channels.get(memberList[1]);
+      if (!found) throw notFound(path);
+      return [...found.members].map((userId) => ({ user_id: userId }));
+    }
+    const memberAdd = /^\/channels\/([^/]+)\/members$/.exec(path);
+    if (verb === "POST" && memberAdd) {
+      const found = channels.get(memberAdd[1]);
+      if (!found) throw notFound(path);
+      if (typeof body?.user_id !== "string") throw new Error("Mattermost member user_id is required");
+      found.members.add(body.user_id);
+      return { user_id: body.user_id, channel_id: found.id, roles: "channel_user" };
+    }
+    throw new Error(`Unexpected MM call: ${verb} ${path}`);
+  });
+}
+
 function mockMmContextOk() {
   mockGetWorkspaceMmContext.mockResolvedValue({
     ownerUid: CALLER_UID,
@@ -110,7 +183,7 @@ function mockMmContextOk() {
     generalChannelId: null,
     adminChannelId: null,
   });
-  mockMmApi.mockResolvedValue({ id: "ch-test-123" });
+  mockProjectPairMattermost();
 }
 
 let token = "";
