@@ -48,6 +48,8 @@ interface MmUser {
 interface RemovalTarget {
   ownerUid: string;
   mmChannelId: string;
+  channelDocPath: string;
+  workspaceId: string;
   projectRef?: FirebaseFirestore.DocumentReference;
 }
 
@@ -307,7 +309,12 @@ async function resolveWorkspaceRemovalTarget(id: string, callerUid: string): Pro
   const ownerCtx = await getWorkspaceMmContext(ownerUid, id);
   const mmChannelId = ownerCtx?.generalChannelId;
   if (!mmChannelId) return routeError(422, { error: "Workspace has no general channel yet" });
-  return { ownerUid, mmChannelId };
+  return {
+    ownerUid,
+    mmChannelId,
+    channelDocPath: `workspaces/${id}/channels/general`,
+    workspaceId: id,
+  };
 }
 
 async function resolveProjectRemovalTarget(id: string, callerUid: string): Promise<RemovalTarget | RouteError> {
@@ -324,7 +331,13 @@ async function resolveProjectRemovalTarget(id: string, callerUid: string): Promi
   const generalChan = await readChannel(projectRef.collection("channels").doc("general"));
   const mmChannelId = generalChan?.mattermost?.channelId;
   if (!mmChannelId) return routeError(422, { error: "Project has no channel yet" });
-  return { ownerUid: project.ownerUid, mmChannelId, projectRef };
+  return {
+    ownerUid: project.ownerUid,
+    mmChannelId,
+    channelDocPath: `${projectRef.path}/channels/general`,
+    workspaceId: parts.wid,
+    projectRef,
+  };
 }
 
 async function resolveRemovalTarget(
@@ -344,19 +357,6 @@ async function ownerRemovalError(ownerUid: string, mmUserId: string): Promise<Ro
     : null;
 }
 
-async function deleteMattermostMember(mmChannelId: string, mmUserId: string): Promise<void> {
-  try {
-    await mmApi(`/channels/${mmChannelId}/members/${mmUserId}`, "DELETE");
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("404")) {
-      logger.info(`[entities] ${mmUserId} already absent from ${mmChannelId}`);
-      return;
-    }
-    throw err;
-  }
-}
-
 async function uidForMattermostUser(mmUserId: string): Promise<string | null> {
   const targetSnap = await db
     .collection("users")
@@ -366,23 +366,26 @@ async function uidForMattermostUser(mmUserId: string): Promise<string | null> {
   return targetSnap.empty ? null : targetSnap.docs[0].id;
 }
 
-async function removeProjectMemberDocument(
-  projectRef: FirebaseFirestore.DocumentReference | undefined,
+async function removeMemberDocument(
+  target: RemovalTarget,
   mmUserId: string,
 ): Promise<void> {
-  if (!projectRef) return;
   const targetUid = await uidForMattermostUser(mmUserId);
   if (!targetUid) return;
 
-  const memberRef = projectRef.collection("members").doc(targetUid);
+  const memberRef = target.projectRef
+    ? target.projectRef.collection("members").doc(targetUid)
+    : db.doc(`workspaces/${target.workspaceId}/members/${targetUid}`);
   const memberDoc = await memberRef.get();
   if (!memberDoc.exists) return;
 
   await memberRef.delete();
-  await projectRef.update({
-    memberCount: FieldValue.increment(-1),
-    updatedAt: FieldValue.serverTimestamp(),
-  });
+  if (target.projectRef) {
+    await target.projectRef.update({
+      memberCount: FieldValue.increment(-1),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  }
 }
 
 router.delete("/:kind/:id/members/:mmUserId", async (req: Request, res: Response) => {
@@ -411,8 +414,9 @@ router.delete("/:kind/:id/members/:mmUserId", async (req: Request, res: Response
       return;
     }
 
-    await deleteMattermostMember(target.mmChannelId, mmUserId);
-    await removeProjectMemberDocument(target.projectRef, mmUserId);
+    const { removeActivityPairMember } = await import("../lib/activityPair.js");
+    await removeActivityPairMember(target.channelDocPath, mmUserId);
+    await removeMemberDocument(target, mmUserId);
 
     logger.info(`[entities] ${callerUid} removed mmUser ${mmUserId} from ${kind}/${id}`);
     res.json({ success: true });

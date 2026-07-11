@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   getWorkspaceMmContext: vi.fn(),
   readChannel: vi.fn(),
   readProject: vi.fn(),
+  removeActivityPairMember: vi.fn(),
   logger: {
     info: vi.fn(),
     warn: vi.fn(),
@@ -131,6 +132,10 @@ vi.mock("../middleware/logging.js", () => ({
   logger: h.logger,
 }));
 
+vi.mock("../lib/activityPair.js", () => ({
+  removeActivityPairMember: (...args: unknown[]) => h.removeActivityPairMember(...args),
+}));
+
 const { default: entitiesRoutes } = await import("../routes/entities.js");
 
 function app() {
@@ -150,6 +155,7 @@ describe("entities routes", () => {
     h.getWorkspaceMmContext.mockReset();
     h.readChannel.mockReset();
     h.readProject.mockReset();
+    h.removeActivityPairMember.mockReset().mockResolvedValue(undefined);
     h.logger.info.mockReset();
     h.logger.warn.mockReset();
     h.logger.error.mockReset();
@@ -287,7 +293,10 @@ describe("entities routes", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true });
-    expect(h.mmApi).toHaveBeenCalledWith("/channels/project-ch/members/mmmember", "DELETE");
+    expect(h.removeActivityPairMember).toHaveBeenCalledWith(
+      "workspaces/acme/projects/project/channels/general",
+      "mmmember",
+    );
     expect(h.writes).toContainEqual({
       method: "delete",
       path: "workspaces/acme/projects/project/members/member-1",

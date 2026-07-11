@@ -7,18 +7,12 @@ import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming.js";
 import { logger } from "../../middleware/logging.js";
 import { getWorkspaceMmContext } from "../../lib/mattermost-context.js";
 import { withProject, type ProjectCtx } from "../../lib/withProject.js";
-import { readChannel } from "../../lib/firestoreReads.js";
 
 const router = Router();
 
 interface ProjectActor {
   mmUserId: string | undefined;
   giteaUser: string | null;
-}
-
-interface ProjectChannels {
-  mmChannelId: string | undefined;
-  activityChannelId: string | undefined;
 }
 
 function errorIncludes(err: unknown, expected: string): boolean {
@@ -33,14 +27,6 @@ async function readProjectActor(uid: string): Promise<ProjectActor> {
   return {
     mmUserId: data?.mattermost?.userId,
     giteaUser: username ? `ws-${username}` : null,
-  };
-}
-
-async function readProjectChannels(projectRef: FirebaseFirestore.DocumentReference): Promise<ProjectChannels> {
-  const generalChan = await readChannel(projectRef.collection("channels").doc("general"));
-  return {
-    mmChannelId: generalChan?.mattermost?.channelId,
-    activityChannelId: generalChan?.mattermost?.activityChannelId,
   };
 }
 
@@ -99,7 +85,10 @@ async function ensureProjectJoinerTeamMember(
 ): Promise<boolean> {
   const ownerCtx = await getWorkspaceMmContext(ctx.project.ownerUid, ctx.wid);
   const teamId = ownerCtx?.teamId;
-  if (!teamId || !actor.mmUserId) return true;
+  if (!teamId || !actor.mmUserId) {
+    res.status(422).json({ error: "Project chat membership is not provisioned" });
+    return false;
+  }
   return addMattermostTeamMember(teamId, actor.mmUserId, res);
 }
 
@@ -116,29 +105,6 @@ async function writeProjectJoin(
     memberCount: FieldValue.increment(1),
     updatedAt: FieldValue.serverTimestamp(),
   });
-}
-
-async function addMattermostChannelMember(channels: ProjectChannels, mmUserId: string | undefined): Promise<void> {
-  if (!channels.mmChannelId || !mmUserId) return;
-  try {
-    await mmApi(`/channels/${channels.mmChannelId}/members`, "POST", {
-      user_id: mmUserId,
-    });
-  } catch (err) {
-    if (!errorIncludes(err, "409")) {
-      logger.warn(`[projects] MM channel join failed:`, { err });
-    }
-  }
-}
-
-async function addActivityChannelMember(channels: ProjectChannels, mmUserId: string | undefined): Promise<void> {
-  if (!channels.activityChannelId || !mmUserId) return;
-  try {
-    const { syncActivityMembershipAdd } = await import("../../lib/activityPair.js");
-    await syncActivityMembershipAdd(channels.activityChannelId, mmUserId);
-  } catch (err) {
-    logger.warn(`[projects] activity-channel join failed:`, { err });
-  }
 }
 
 async function grantProjectGiteaAccess(ctx: ProjectCtx, actor: ProjectActor): Promise<void> {
@@ -162,10 +128,9 @@ async function joinProject(ctx: ProjectCtx, res: Response): Promise<void> {
   const actor = await readProjectActor(ctx.uid);
   if (!(await ensureProjectJoinerTeamMember(ctx, actor, res))) return;
 
+  const { addActivityPairMember } = await import("../../lib/activityPair.js");
+  await addActivityPairMember(`${ctx.projectRef.path}/channels/general`, actor.mmUserId!);
   await writeProjectJoin(ctx, memberRef);
-  const channels = await readProjectChannels(ctx.projectRef);
-  await addMattermostChannelMember(channels, actor.mmUserId);
-  await addActivityChannelMember(channels, actor.mmUserId);
   await grantProjectGiteaAccess(ctx, actor);
 
   logger.info(`[projects] ${ctx.uid} joined ${ctx.wid}/${ctx.pid}`);
@@ -210,27 +175,6 @@ async function writeProjectLeave(
   });
 }
 
-async function removeMattermostChannelMember(channels: ProjectChannels, mmUserId: string | undefined): Promise<void> {
-  if (!channels.mmChannelId || !mmUserId) return;
-  try {
-    await mmApi(`/channels/${channels.mmChannelId}/members/${mmUserId}`, "DELETE");
-  } catch (err) {
-    if (!errorIncludes(err, "404")) {
-      logger.warn(`[projects] MM channel leave failed:`, { err });
-    }
-  }
-}
-
-async function removeActivityChannelMember(channels: ProjectChannels, mmUserId: string | undefined): Promise<void> {
-  if (!channels.activityChannelId || !mmUserId) return;
-  try {
-    const { syncActivityMembershipRemove } = await import("../../lib/activityPair.js");
-    await syncActivityMembershipRemove(channels.activityChannelId, mmUserId);
-  } catch (err) {
-    logger.warn(`[projects] activity-channel leave failed:`, { err });
-  }
-}
-
 async function revokeProjectGiteaAccess(ctx: ProjectCtx, actor: ProjectActor): Promise<void> {
   if (!ctx.project.giteaRepoName || !actor.giteaUser) return;
   try {
@@ -248,11 +192,12 @@ async function leaveProject(ctx: ProjectCtx, res: Response): Promise<void> {
   const memberRef = await leaveMemberRef(ctx, res);
   if (!memberRef) return;
 
-  await writeProjectLeave(ctx, memberRef);
   const actor = await readProjectActor(ctx.uid);
-  const channels = await readProjectChannels(ctx.projectRef);
-  await removeMattermostChannelMember(channels, actor.mmUserId);
-  await removeActivityChannelMember(channels, actor.mmUserId);
+  if (actor.mmUserId) {
+    const { removeActivityPairMember } = await import("../../lib/activityPair.js");
+    await removeActivityPairMember(`${ctx.projectRef.path}/channels/general`, actor.mmUserId);
+  }
+  await writeProjectLeave(ctx, memberRef);
   await revokeProjectGiteaAccess(ctx, actor);
 
   logger.info(`[projects] ${ctx.uid} left ${ctx.wid}/${ctx.pid}`);

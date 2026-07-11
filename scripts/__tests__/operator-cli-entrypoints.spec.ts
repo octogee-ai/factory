@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  parseBackfillActivityPairsArgs,
-} from "../ops/backfill-activity-pairs.js";
+  parseActivityPairReportArgs,
+} from "../ops/activity-pair-report.js";
 import {
   parsePurgeRestoreJobsArgs,
   VESTIGIAL_GATEWAY_FIELDS,
@@ -71,13 +71,13 @@ describe("one-shot operator CLI parsers", () => {
     ]);
   });
 
-  it("parses activity-pair backfills with help as data", () => {
-    expect(parseBackfillActivityPairsArgs([
-      "--dry-run",
+  it("parses the report-only activity-pair inventory", () => {
+    expect(parseActivityPairReportArgs([
       "--workspace",
       "octogee",
-    ])).toEqual({ dryRun: true, workspaceSlug: "octogee", help: false });
-    expect(parseBackfillActivityPairsArgs(["--help"])).toEqual({ dryRun: false, help: true });
+    ])).toEqual({ workspaceSlug: "octogee", help: false });
+    expect(parseActivityPairReportArgs(["--help"])).toEqual({ help: true });
+    expect(() => parseActivityPairReportArgs(["--apply"])).toThrow("unknown argument");
   });
 
   it("parses GitHub project seeding and rejects incomplete create requests", () => {

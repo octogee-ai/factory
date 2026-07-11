@@ -10,13 +10,6 @@ const admin = adminMod.default;
 if (admin.apps.length === 0) admin.initializeApp({ projectId: "octogee-test" });
 const db = admin.firestore();
 
-vi.mock("../lib/mattermost/provisionWorkspaceActivityPairs.js", () => ({
-  persistWorkspaceChannelsWithActivityPairs: vi
-    .fn()
-    .mockResolvedValue({ successes: [], failures: [] }),
-  provisionWorkspaceActivityPair: vi.fn(),
-}));
-
 const { markProvisioningComplete } = await import("../lib/provisionSteps.js");
 
 let seq = 0;
