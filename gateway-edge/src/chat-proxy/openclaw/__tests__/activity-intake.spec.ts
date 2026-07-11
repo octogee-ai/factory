@@ -179,6 +179,7 @@ describe("normalized Activity intake", () => {
     const registry = new MutableActivityRuntimeRegistry();
     registry.replaceSnapshot([binding]);
     const resolved = await registry.resolve(validEnvelope().ref);
+    await expect(registry.resolveRun("run-1")).resolves.toBe(resolved);
     expect(resolved).not.toBeNull();
     expect(Object.isFrozen(resolved)).toBe(true);
     expect(() => {
