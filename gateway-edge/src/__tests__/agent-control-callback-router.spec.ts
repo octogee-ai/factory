@@ -54,6 +54,56 @@ describe("private Mattermost callback router", () => {
     expect(response.headers.get("proxy-authenticate")).toBeNull();
   });
 
+  it("bounds upstream latency and response size before writing downstream headers", async () => {
+    const oversized = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("x".repeat(65 * 1024));
+    });
+    servers.push(oversized);
+    await new Promise<void>((resolve) => oversized.listen(0, "127.0.0.1", resolve));
+    const oversizedAddress = oversized.address();
+    if (!oversizedAddress || typeof oversizedAddress === "string") throw new Error("missing address");
+    const router = createAgentControlCallbackRouter({
+      namespace: "octogee-test",
+      hmacKey: "router-secret",
+      targetOrigin: () => `http://127.0.0.1:${oversizedAddress.port}`,
+      upstreamTimeoutMs: 50,
+      maxResponseBytes: 64 * 1024,
+      log: () => undefined,
+    });
+    servers.push(router);
+    await new Promise<void>((resolve) => router.listen(0, "127.0.0.1", resolve));
+    const address = router.address();
+    if (!address || typeof address === "string") throw new Error("missing address");
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/internal/openclaw/agent-control/bender/callback`,
+      { method: "POST", body: "{}" },
+    );
+    expect(response.status).toBe(502);
+
+    const hanging = createServer(() => undefined);
+    servers.push(hanging);
+    await new Promise<void>((resolve) => hanging.listen(0, "127.0.0.1", resolve));
+    const hangingAddress = hanging.address();
+    if (!hangingAddress || typeof hangingAddress === "string") throw new Error("missing address");
+    const timeoutRouter = createAgentControlCallbackRouter({
+      namespace: "octogee-test",
+      hmacKey: "router-secret",
+      targetOrigin: () => `http://127.0.0.1:${hangingAddress.port}`,
+      upstreamTimeoutMs: 20,
+      log: () => undefined,
+    });
+    servers.push(timeoutRouter);
+    await new Promise<void>((resolve) => timeoutRouter.listen(0, "127.0.0.1", resolve));
+    const timeoutAddress = timeoutRouter.address();
+    if (!timeoutAddress || typeof timeoutAddress === "string") throw new Error("missing address");
+    const timedOut = await fetch(
+      `http://127.0.0.1:${timeoutAddress.port}/internal/openclaw/agent-control/bender/callback`,
+      { method: "POST", body: "{}" },
+    );
+    expect(timedOut.status).toBe(502);
+  });
+
   it("rejects unknown/public paths and verifies the router proof within 30 seconds", async () => {
     const router = createAgentControlCallbackRouter({
       namespace: "octogee-test",
