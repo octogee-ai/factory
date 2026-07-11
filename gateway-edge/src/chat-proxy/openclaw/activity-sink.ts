@@ -57,6 +57,38 @@ interface NormalizedActivitySinkAppendInput extends Omit<ActivitySinkAppendInput
 export interface ActivitySinkResult {
   outcome: "persisted" | "duplicate";
   postIds: string[];
+  receipt: {
+    eventKey: string;
+    postId?: string;
+    activityChannelId: string;
+    activityRootPostId: string;
+  };
+}
+
+export interface ActivitySinkPreparedControl {
+  receipt: {
+    controlId: string;
+    eventKey: string;
+    controlChannelId: string;
+    resourceDigest: string;
+    actionDigests: Record<string, string>;
+  };
+  post: {
+    channelId: string;
+    message: string;
+    props: Record<string, unknown>;
+    attachments: Array<Record<string, unknown>>;
+  };
+}
+
+export interface ActivitySinkControlLifecycle {
+  prepare(input: {
+    envelope: Extract<AgentActivityEnvelopeV1, { type: "item.completed" }>;
+    binding: ActivitySinkBinding;
+    activityRootPostId: string;
+    message: string;
+  }): Promise<ActivitySinkPreparedControl>;
+  attachReceipt(receipt: ActivitySinkPreparedControl["receipt"] & { postId: string }): Promise<void>;
 }
 
 export interface ActivitySinkAlerts {
@@ -77,6 +109,7 @@ export interface ActivitySinkDeps {
   uploadChunkBytes?: number;
   historyPageSize?: number;
   alerts?: ActivitySinkAlerts;
+  controls?: ActivitySinkControlLifecycle;
 }
 
 export class ActivitySinkConflictError extends Error {
@@ -346,7 +379,7 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
   async function waitForConcurrentReplay(
     eventKey: string,
     payloadDigest: string,
-  ): Promise<ActivitySinkResult | null> {
+  ): Promise<Pick<ActivitySinkResult, "outcome" | "postIds"> | null> {
     for (let attempt = 0; attempt < CONCURRENT_REPLAY_POLLS; attempt += 1) {
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
       const receipt = await deps.receipts.read(eventKey);
@@ -659,7 +692,7 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     envelope: AgentActivityEnvelopeV1,
     receipt: ActivityWriteReceiptV1,
     post: ActivityMattermostPost,
-  ): Promise<ActivitySinkResult> {
+  ): Promise<Pick<ActivitySinkResult, "outcome" | "postIds">> {
     if (!receipt.postId) {
       await deps.receipts.markPosted(envelope.eventKey, receipt.leaseToken, post.id, now());
     }
@@ -688,7 +721,7 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     envelope: Extract<AgentActivityEnvelopeV1, { type: "control.transition" }>,
     receipt: ActivityWriteReceiptV1,
     binding: ActivitySinkBinding,
-  ): Promise<ActivitySinkResult> {
+  ): Promise<Pick<ActivitySinkResult, "outcome" | "postIds">> {
     const createEventKey = approvalCreateEventKey(envelope.ref);
     const createReceipt = await deps.receipts.read(createEventKey);
     if (
@@ -792,9 +825,11 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
   async function createJournalPost(
     input: NormalizedActivitySinkAppendInput,
     receipt: ActivityWriteReceiptV1,
-  ): Promise<ActivitySinkResult> {
+    activityRootPostId: string | undefined,
+    preparedControl: ActivitySinkPreparedControl | null,
+  ): Promise<Pick<ActivitySinkResult, "outcome" | "postIds">> {
     const { envelope, binding, attachment } = input;
-    const rootId = envelope.type === "turn.started" ? undefined : await rootPostId(envelope);
+    const rootId = envelope.type === "turn.started" ? undefined : activityRootPostId;
     const policy = activityAttentionPolicy(envelope);
     let fileId: string | undefined;
     let attachmentState = receipt.attachment;
@@ -807,11 +842,30 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     if (attachmentState.state === UPLOAD_RESULT_UNKNOWN) {
       message += `\n\n_attachment unavailable: expected ${attachmentState.sha256} (${attachmentState.byteLength} bytes)_`;
     }
+    const baseOctogee = octogeeProps(envelope, binding, rootId, policy.attention);
+    const controlOctogee = preparedControl?.post.props.octogee;
+    const preparedOctogee = controlOctogee && typeof controlOctogee === "object" && !Array.isArray(controlOctogee)
+      ? controlOctogee as Record<string, unknown>
+      : {};
+    const props = preparedControl
+      ? {
+          ...preparedControl.post.props,
+          octogee: {
+            ...baseOctogee,
+            ...preparedOctogee,
+            eventKey: envelope.eventKey,
+            controlId: preparedControl.receipt.controlId,
+            controlResourceDigest: preparedControl.receipt.resourceDigest,
+            controlActionDigests: preparedControl.receipt.actionDigests,
+          },
+          attachments: preparedControl.post.attachments,
+        }
+      : { octogee: baseOctogee };
     const created = await deps.mm.createActivityPost({
       channelId: binding.activityChannelId,
       rootId,
       message,
-      props: { octogee: octogeeProps(envelope, binding, rootId, policy.attention) },
+      props,
       pendingPostId: envelope.eventKey,
       fileIds: fileId ? [fileId] : undefined,
       silent: policy.silent ?? false,
@@ -826,7 +880,9 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     input: NormalizedActivitySinkAppendInput,
     receipt: ActivityWriteReceiptV1,
     recoveredClaim: boolean,
-  ): Promise<ActivitySinkResult> {
+    activityRootPostId: string | undefined,
+    preparedControl: ActivitySinkPreparedControl | null,
+  ): Promise<Pick<ActivitySinkResult, "outcome" | "postIds">> {
     const { envelope, binding } = input;
     if (recoveredClaim) {
       const recovered = await recoverExistingPost(envelope, receipt, binding);
@@ -837,7 +893,36 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
       return { outcome: "persisted", postIds: [] };
     }
     if (envelope.type === "control.transition") return handleControl(envelope, receipt, binding);
-    return createJournalPost(input, receipt);
+    return createJournalPost(input, receipt, activityRootPostId, preparedControl);
+  }
+
+  function isWaitingApproval(
+    envelope: AgentActivityEnvelopeV1,
+  ): envelope is Extract<AgentActivityEnvelopeV1, { type: "item.completed" }> {
+    return envelope.type === ITEM_COMPLETED &&
+      envelope.item.kind === "approval" &&
+      envelope.item.status === "waiting";
+  }
+
+  function assertPreparedControl(
+    prepared: ActivitySinkPreparedControl,
+    envelope: Extract<AgentActivityEnvelopeV1, { type: "item.completed" }>,
+    binding: ActivitySinkBinding,
+    message: string,
+  ): void {
+    const actionIds = Object.keys(prepared.receipt.actionDigests).sort();
+    if (
+      prepared.receipt.eventKey !== envelope.eventKey ||
+      prepared.receipt.controlChannelId !== binding.activityChannelId ||
+      prepared.post.channelId !== binding.activityChannelId ||
+      prepared.post.message !== message ||
+      prepared.post.attachments.length === 0 ||
+      actionIds.length === 0 ||
+      !/^[a-f0-9]{64}$/.test(prepared.receipt.resourceDigest) ||
+      actionIds.some((id) => !/^[a-f0-9]{64}$/.test(prepared.receipt.actionDigests[id] ?? ""))
+    ) {
+      throw new ActivitySinkIntegrityError("prepared agent control does not match the Activity post");
+    }
   }
 
   async function append(rawInput: ActivitySinkAppendInput): Promise<ActivitySinkResult> {
@@ -848,16 +933,61 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     assertAttachmentPayload(normalized);
     const input = await sanitizeInput(normalized);
     const { envelope, binding, attachment } = input;
+    const activityRootPostId = envelope.type === "turn.started"
+      ? undefined
+      : await rootPostId(envelope);
+    let preparedControl: ActivitySinkPreparedControl | null = null;
+    if (deps.controls && isWaitingApproval(envelope)) {
+      if (!activityRootPostId) {
+        throw new ActivitySinkIntegrityError("approval control is missing its Activity root");
+      }
+      const message = messageFor(envelope, binding);
+      preparedControl = await deps.controls.prepare({
+        envelope,
+        binding,
+        activityRootPostId,
+        message,
+      });
+      assertPreparedControl(preparedControl, envelope, binding, message);
+    }
     const digest = await activityPayloadDigestFromSource(envelope, attachment);
     const claim = await claimEvent(envelope, binding, digest);
-    if ("postIds" in claim) return claim;
-    if (claim.outcome === "duplicate") {
-      return {
+    let bare: Pick<ActivitySinkResult, "outcome" | "postIds">;
+    if ("postIds" in claim) {
+      bare = claim;
+    } else if (claim.outcome === "duplicate") {
+      bare = {
         outcome: "duplicate",
         postIds: claim.receipt.postId ? [claim.receipt.postId] : [],
       };
+    } else {
+      bare = await appendClaimed(
+        input,
+        claim.receipt,
+        claim.recovered,
+        activityRootPostId,
+        preparedControl,
+      );
     }
-    return appendClaimed(input, claim.receipt, claim.recovered);
+    const resolvedRootPostId = envelope.type === "turn.started"
+      ? bare.postIds[0]
+      : activityRootPostId;
+    if (!resolvedRootPostId || (envelope.type === "turn.started" && bare.postIds.length !== 1)) {
+      throw new ActivitySinkIntegrityError("Activity acknowledgement has no unique run root");
+    }
+    const receipt = {
+      eventKey: envelope.eventKey,
+      ...(bare.postIds[0] ? { postId: bare.postIds[0] } : {}),
+      activityChannelId: binding.activityChannelId,
+      activityRootPostId: resolvedRootPostId,
+    };
+    if (preparedControl) {
+      if (!receipt.postId || bare.postIds.length !== 1) {
+        throw new ActivitySinkIntegrityError("agent control acknowledgement has no unique post");
+      }
+      await deps.controls!.attachReceipt({ ...preparedControl.receipt, postId: receipt.postId });
+    }
+    return { ...bare, receipt };
   }
 
   return { append };

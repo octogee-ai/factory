@@ -69,7 +69,16 @@ describe("normalized Activity intake", () => {
   });
 
   it("accepts only loopback requests with an exact active runtime binding", async () => {
-    const append = vi.fn(async () => ({ outcome: "persisted" as const, postIds: ["post-1"] }));
+    const append = vi.fn(async () => ({
+      outcome: "persisted" as const,
+      postIds: ["post-1"],
+      receipt: {
+        eventKey: validEnvelope().eventKey,
+        postId: "post-1",
+        activityChannelId: "activity-1",
+        activityRootPostId: "activity-root-1",
+      },
+    }));
     const envelope = validEnvelope();
     const result = await processActivityIntake(
       { remoteAddress: "::ffff:127.0.0.1", envelope },
@@ -85,6 +94,7 @@ describe("normalized Activity intake", () => {
         outcome: "persisted",
         postIds: ["post-1"],
         activityChannelId: "activity-1",
+        activityRootPostId: "activity-root-1",
       },
     });
     expect(append).toHaveBeenCalledWith({ envelope, binding, attachment: undefined });
@@ -96,7 +106,16 @@ describe("normalized Activity intake", () => {
       {
         registry: { readiness: () => "ready", resolve: vi.fn(async () => binding) },
         sinkFor: vi.fn(() => ({
-          append: vi.fn(async () => ({ outcome: "duplicate" as const, postIds: ["post-1"] })),
+          append: vi.fn(async () => ({
+            outcome: "duplicate" as const,
+            postIds: ["post-1"],
+            receipt: {
+              eventKey: validEnvelope().eventKey,
+              postId: "post-1",
+              activityChannelId: "activity-1",
+              activityRootPostId: "activity-root-1",
+            },
+          })),
         })),
       },
     );
@@ -107,6 +126,7 @@ describe("normalized Activity intake", () => {
         outcome: "duplicate",
         postIds: ["post-1"],
         activityChannelId: "activity-1",
+        activityRootPostId: "activity-root-1",
       },
     });
   });

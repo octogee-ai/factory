@@ -210,6 +210,7 @@ export interface ActivityIntakeResponse {
     outcome: "persisted" | "duplicate";
     postIds: string[];
     activityChannelId: string;
+    activityRootPostId: string;
   };
 }
 
@@ -650,11 +651,25 @@ export async function processActivityIntake(
       runId: envelope.ref.runId,
       itemId: envelope.ref.itemId,
     });
+    if (
+      result.receipt.eventKey !== envelope.eventKey ||
+      result.receipt.activityChannelId !== frozenBinding.activityChannelId ||
+      !result.receipt.activityRootPostId ||
+      (envelope.type === "turn.started" && (
+        result.postIds.length !== 1 ||
+        result.receipt.postId !== result.postIds[0] ||
+        result.receipt.activityRootPostId !== result.postIds[0]
+      ))
+    ) {
+      throw new ActivitySinkIntegrityError("Activity acknowledgement failed exact root/channel verification");
+    }
     return {
       status: result.outcome === "persisted" ? 201 : 200,
       body: {
-        ...result,
+        outcome: result.outcome,
+        postIds: result.postIds,
         activityChannelId: frozenBinding.activityChannelId,
+        activityRootPostId: result.receipt.activityRootPostId,
       },
     };
   } catch (error) {

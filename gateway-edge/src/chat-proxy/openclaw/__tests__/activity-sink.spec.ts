@@ -109,19 +109,19 @@ describe("attention-aware Activity sink", () => {
   it("registers an approval control before Mattermost create and attaches only the committed receipt", async () => {
     const order: string[] = [];
     const mm = mmClient();
-    const prepare = vi.fn(async () => {
+    const prepare = vi.fn(async (input: { envelope: AgentActivityEnvelopeV1; message: string }) => {
       order.push("control-prepare");
       return {
         receipt: {
           controlId: "approval-control-1",
-          eventKey: "a".repeat(64),
+          eventKey: input.envelope.eventKey,
           controlChannelId: "activity-1",
           resourceDigest: "b".repeat(64),
           actionDigests: { ocapprove: "c".repeat(64), ocdeny: "d".repeat(64) },
         },
         post: {
           channelId: "activity-1",
-          message: "Approve deployment?",
+          message: input.message,
           props: { octogee: { controlId: "approval-control-1" } },
           attachments: [{ actions: [{ id: "ocapprove" }, { id: "ocdeny" }] }],
         },
@@ -235,7 +235,7 @@ describe("attention-aware Activity sink", () => {
 
     const result = await sink.append({ envelope: started, binding });
 
-    expect(result).toEqual({ outcome: "duplicate", postIds: ["created-before-crash"] });
+    expect(result).toMatchObject({ outcome: "duplicate", postIds: ["created-before-crash"] });
     expect(mm.createActivityPost).not.toHaveBeenCalled();
     expect(mm.listChannelPosts).toHaveBeenCalledTimes(1);
   });
@@ -399,7 +399,7 @@ describe("attention-aware Activity sink", () => {
       silent: false,
     }));
     expect(mm.editPost).toHaveBeenCalledTimes(1);
-    expect(replay).toEqual({ outcome: "duplicate", postIds: [approvalPostId] });
+    expect(replay).toMatchObject({ outcome: "duplicate", postIds: [approvalPostId] });
   });
 
   it.each([
@@ -722,7 +722,7 @@ describe("attention-aware Activity sink", () => {
 
     const result = await recovered.append({ envelope: completed, attachment: bytes, binding });
 
-    expect(result).toEqual({ outcome: "duplicate", postIds: [posted.postId] });
+    expect(result).toMatchObject({ outcome: "duplicate", postIds: [posted.postId] });
     expect(mm.createUploadSession).toHaveBeenCalledTimes(1);
     expect(mm.uploadData).toHaveBeenCalledTimes(1);
     expect(mm.createActivityPost).toHaveBeenCalledTimes(2);
@@ -731,9 +731,10 @@ describe("attention-aware Activity sink", () => {
   it("finalization commits an empty post list and never duplicates the final answer", async () => {
     const mm = mmClient();
     const sink = createActivitySink({ mm, receipts: new InMemoryActivityWriteReceiptStore(), leaseOwner: "worker-1" });
+    await sink.append({ envelope: envelope("turn.started"), binding });
     const result = await sink.append({ envelope: envelope("turn.finalized"), binding });
 
-    expect(result).toEqual({ outcome: "persisted", postIds: [] });
-    expect(mm.createActivityPost).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ outcome: "persisted", postIds: [] });
+    expect(mm.createActivityPost).toHaveBeenCalledTimes(1);
   });
 });

@@ -115,8 +115,17 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
   });
 
   it("owns the bare loopback JSON route and returns the normalized 201 response", async () => {
-    const append = vi.fn(async () => ({ outcome: "persisted" as const, postIds: ["post-1"] }));
     const envelope = envelopeWithAttachment();
+    const append = vi.fn(async () => ({
+      outcome: "persisted" as const,
+      postIds: ["post-1"],
+      receipt: {
+        eventKey: envelope.eventKey,
+        postId: "post-1",
+        activityChannelId: "activity-1",
+        activityRootPostId: "activity-root-1",
+      },
+    }));
     installActivityIntakeHandler(createActivityIntakeHttpHandler({
       registry: {
         readiness: () => "ready",
@@ -143,14 +152,24 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
         outcome: "persisted",
         postIds: ["post-1"],
         activityChannelId: "activity-1",
+        activityRootPostId: "activity-root-1",
       });
     });
   });
 
   it("parses the one-envelope/one-detail multipart contract and enforces its file limit", async () => {
-    const append = vi.fn(async () => ({ outcome: "persisted" as const, postIds: ["post-1"] }));
     const bytes = Buffer.from("eight-bytes");
     const envelope = envelopeWithAttachment(bytes);
+    const append = vi.fn(async () => ({
+      outcome: "persisted" as const,
+      postIds: ["post-1"],
+      receipt: {
+        eventKey: envelope.eventKey,
+        postId: "post-1",
+        activityChannelId: "activity-1",
+        activityRootPostId: "activity-root-1",
+      },
+    }));
     installActivityIntakeHandler(createActivityIntakeHttpHandler({
       registry: {
         readiness: () => "ready",
@@ -189,7 +208,16 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
       source = input.attachment as ActivityAttachmentSource;
       expect(source.byteLength).toBe(bytes.byteLength);
       expect(Buffer.from(await source.read(0, 8)).toString("utf8")).toBe("streamed");
-      return { outcome: "persisted" as const, postIds: ["post-1"] };
+      return {
+        outcome: "persisted" as const,
+        postIds: ["post-1"],
+        receipt: {
+          eventKey: envelope.eventKey,
+          postId: "post-1",
+          activityChannelId: "activity-1",
+          activityRootPostId: "activity-root-1",
+        },
+      };
     });
     installActivityIntakeHandler(createActivityIntakeHttpHandler({
       registry: {
