@@ -453,6 +453,12 @@ spec:
               value: {{ required "env.mmInternalUrl is required (in-cluster MM URL — the folded chat-proxy WS bridge + activity bridge use it)" .Values.env.mmInternalUrl | quote }}
             - name: MM_PUBLIC_URL
               value: {{ .Values.env.mmInternalUrl | quote }}
+            - name: MATTERMOST_SILENT_CAPABILITY_SENTINEL
+              valueFrom:
+                configMapKeyRef:
+                  name: mattermost-silent-capability
+                  key: MATTERMOST_SILENT_CAPABILITY_SENTINEL
+                  optional: true
             - name: FIREBASE_PROJECT
               value: {{ .Values.env.firebaseProjectId | quote }}
             - name: OPENCLAW_RUNTIME_BROKER_URL

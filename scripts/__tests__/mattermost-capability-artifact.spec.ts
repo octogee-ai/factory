@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { inventoryRepository } from "../lib/dependency-inventory.js";
 import {
@@ -16,6 +17,10 @@ const evidencePath = path.join(
   repoRoot,
   ".github/evidence/mattermost/mattermost-cce485f-evidence.json",
 );
+const trivyArchivePath = path.join(
+  repoRoot,
+  ".github/evidence/mattermost/mattermost-cce485f-trivy-0.71.1.json.gz",
+);
 const exceptionsPath = path.join(repoRoot, ".github/dependency-exceptions.json");
 
 function json(pathname: string): unknown {
@@ -31,10 +36,14 @@ function verify(
   provenance: Uint8Array = readFileSync(provenancePath),
   evidence: unknown = json(evidencePath),
   exception: unknown = mattermostException(),
+  trivyReport: Uint8Array = gunzipSync(readFileSync(trivyArchivePath)),
 ): string[] {
   return verifyMattermostCapabilityEvidence({
     provenance,
     evidence,
+    evidenceBytes: readFileSync(evidencePath),
+    trivyArchive: readFileSync(trivyArchivePath),
+    trivyReport,
     exception,
     now: new Date("2026-07-11T17:30:00Z"),
   });
@@ -85,6 +94,16 @@ describe("Mattermost capability artifact evidence", () => {
     recordAt(unaccepted, "vulnerabilityScan", "disposition").acceptedFindings = [];
     expect(verify(undefined, unaccepted)).toContainEqual(
       expect.stringContaining("HIGH finding disposition"),
+    );
+  });
+
+  it("rejects a byte change in the stored full Trivy report", () => {
+    const changed = Buffer.concat([
+      gunzipSync(readFileSync(trivyArchivePath)),
+      Buffer.from("\n"),
+    ]);
+    expect(verify(undefined, undefined, undefined, changed)).toContainEqual(
+      expect.stringContaining("Trivy raw report sha256"),
     );
   });
 

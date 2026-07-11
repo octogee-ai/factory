@@ -62,8 +62,9 @@ cloud-sql-proxy:
 mattermost:
   enabled: true
   image:
-    repository: mattermost/mattermost-team-edition
-    tag: "11.8.1"
+    repository: mattermostdevelopment/mattermost-team-edition
+    tag: "cce485f"
+    digest: "sha256:ae8c456735a4709deb473cbf37d246e02511ee47b8b6684fadc6980a61d9bfd3"
   db:
     user: mattermost
     name: mattermost_prod

@@ -1,3 +1,6 @@
+{{- $imageRepository := required "mattermost.image.repository is required" .Values.image.repository -}}
+{{- $imageTag := required "mattermost.image.tag is required" .Values.image.tag -}}
+{{- $imageDigest := required "mattermost.image.digest is required" .Values.image.digest -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,12 +20,14 @@ spec:
       labels:
         app: mattermost
     spec:
+      nodeSelector:
+        kubernetes.io/arch: amd64
       serviceAccountName: {{ .Values.serviceAccountName }}
       securityContext:
         fsGroup: 2000
       containers:
         - name: mattermost
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ $imageRepository }}:{{ $imageTag }}@{{ $imageDigest }}"
           ports:
             - containerPort: 8065
               name: http
