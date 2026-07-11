@@ -1,16 +1,147 @@
 
 
 import { afterAll, describe, expect, it, vi } from "vitest";
+import {
+  workspaceAdminChannelName,
+  workspaceCoachChannelName,
+  workspaceGeneralChannelName,
+} from "@octogee/shared/types/identity";
 
 process.env.FIRESTORE_EMULATOR_HOST ??= "127.0.0.1:8088";
 process.env.FIREBASE_PROJECT_ID ??= "octogee-test";
+const originalMmUrl = process.env.MM_URL;
+const originalMmAdminToken = process.env.MM_ADMIN_TOKEN;
+const originalFetch = globalThis.fetch;
+process.env.MM_URL = "http://mattermost.test";
+process.env.MM_ADMIN_TOKEN = "test-admin-token";
 
 const adminMod = await import("firebase-admin");
 const admin = adminMod.default;
 if (admin.apps.length === 0) admin.initializeApp({ projectId: "octogee-test" });
 const db = admin.firestore();
 
-const { markProvisioningComplete } = await import("../lib/provisionSteps.js");
+const { markProvisioningComplete: markProvisioningCompleteImpl } = await import("../lib/provisionSteps.js");
+
+interface MattermostChannelFixture {
+  id: string;
+  name: string;
+  team_id: string;
+  type: "P" | "O";
+  delete_at: number;
+  members: Set<string>;
+}
+
+function mockMattermostActivityPairs(slug: string, mmUpdate: Record<string, unknown>): void {
+  const teamId = typeof mmUpdate["mattermost.teamId"] === "string"
+    ? mmUpdate["mattermost.teamId"]
+    : "";
+  const memberIds = [
+    mmUpdate["mattermost.userId"],
+    mmUpdate["mattermost.coachUserId"],
+  ].filter((value): value is string => typeof value === "string" && value.length > 0);
+  const plans = [
+    {
+      id: mmUpdate["mattermost.generalChannelId"],
+      name: workspaceGeneralChannelName(slug),
+    },
+    {
+      id: mmUpdate["mattermost.channelId"],
+      name: typeof mmUpdate["mattermost.channelName"] === "string"
+        ? mmUpdate["mattermost.channelName"]
+        : workspaceCoachChannelName(slug),
+    },
+    {
+      id: mmUpdate["mattermost.adminChannelId"],
+      name: workspaceAdminChannelName(slug),
+    },
+  ];
+  const channels = new Map<string, MattermostChannelFixture>();
+  for (const plan of plans) {
+    if (typeof plan.id !== "string" || !plan.id) continue;
+    channels.set(plan.id, {
+      id: plan.id,
+      name: plan.name,
+      team_id: teamId,
+      type: "P",
+      delete_at: 0,
+      members: new Set(memberIds),
+    });
+  }
+
+  const response = (status: number, body: unknown): Response => ({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  }) as Response;
+
+  globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const path = url.pathname.replace(/^\/api\/v4/, "");
+    const method = init?.method ?? "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+    const channelRead = /^\/channels\/([^/]+)$/.exec(path);
+    if (method === "GET" && channelRead) {
+      const channel = channels.get(channelRead[1]);
+      return channel
+        ? response(200, channel)
+        : response(404, { message: `${path} not found` });
+    }
+    const channelLookup = /^\/teams\/([^/]+)\/channels\/name\/(.+)$/.exec(path);
+    if (method === "GET" && channelLookup) {
+      const channel = [...channels.values()].find((candidate) =>
+        candidate.team_id === channelLookup[1] && candidate.name === channelLookup[2]
+      );
+      return channel
+        ? response(200, channel)
+        : response(404, { message: `${path} not found` });
+    }
+    if (method === "POST" && path === "/channels") {
+      if (
+        typeof body?.name !== "string"
+        || typeof body.team_id !== "string"
+        || (body.type !== "P" && body.type !== "O")
+      ) {
+        return response(400, { message: "invalid channel create" });
+      }
+      const primary = [...channels.values()].find((candidate) =>
+        `${candidate.name}-activity` === body.name
+      );
+      if (!primary) return response(400, { message: `no primary for ${body.name}` });
+      const created: MattermostChannelFixture = {
+        id: `${primary.id}-activity`,
+        name: body.name,
+        team_id: body.team_id,
+        type: body.type,
+        delete_at: 0,
+        members: new Set(),
+      };
+      channels.set(created.id, created);
+      return response(201, created);
+    }
+    const memberList = /^\/channels\/([^/]+)\/members$/.exec(path);
+    if (method === "GET" && memberList) {
+      const channel = channels.get(memberList[1]);
+      if (!channel) return response(404, { message: `${path} not found` });
+      return response(200, [...channel.members].map((userId) => ({ user_id: userId })));
+    }
+    if (method === "POST" && memberList) {
+      const channel = channels.get(memberList[1]);
+      if (!channel) return response(404, { message: `${path} not found` });
+      if (typeof body?.user_id !== "string") return response(400, { message: "user_id required" });
+      channel.members.add(body.user_id);
+      return response(201, { user_id: body.user_id, channel_id: channel.id });
+    }
+    return response(500, { message: `unexpected Mattermost call: ${method} ${path}` });
+  }) as typeof fetch;
+}
+
+async function markProvisioningComplete(
+  ...args: Parameters<typeof markProvisioningCompleteImpl>
+): Promise<void> {
+  mockMattermostActivityPairs(args[0].slug, args[1] as Record<string, unknown>);
+  await markProvisioningCompleteImpl(...args);
+}
 
 let seq = 0;
 const freshIds = () => {
@@ -29,6 +160,11 @@ async function readDoc(path: string) {
 }
 
 afterAll(async () => {
+  globalThis.fetch = originalFetch;
+  if (originalMmUrl === undefined) delete process.env.MM_URL;
+  else process.env.MM_URL = originalMmUrl;
+  if (originalMmAdminToken === undefined) delete process.env.MM_ADMIN_TOKEN;
+  else process.env.MM_ADMIN_TOKEN = originalMmAdminToken;
   await admin.app().delete();
 });
 
@@ -236,11 +372,11 @@ describe("markProvisioningComplete — workspace doc + channels + members", () =
     expect(adminCh).toMatchObject({ id: "admin", kind: "admin", name: "admin", mattermost: { channelId: `mm-admin-${slug}` } });
   });
 
-  it("skips per-channel writes when the corresponding mattermost id is absent (partial mmUpdate)", async () => {
+  it("persists only supplied channels but rejects completion when required pair primaries are absent", async () => {
     const { uid, slug } = freshIds();
     await seedUser(uid, { username: slug });
 
-await markProvisioningComplete(
+    await expect(markProvisioningComplete(
       baseCtx(uid, slug),
       {
         "mattermost.teamId": `mm-team-${slug}`,
@@ -249,9 +385,14 @@ await markProvisioningComplete(
         "mattermost.coachUserId": `mm-coach-${slug}`,
       },
       [],
-    );
+    )).rejects.toThrow(/coach-dm=primary channel is missing.*admin=primary channel is missing/);
 
-    expect(await readDoc(`workspaces/${slug}/channels/general`)).not.toBeNull();
+    expect(await readDoc(`workspaces/${slug}/channels/general`)).toMatchObject({
+      mattermost: {
+        channelId: `mm-general-${slug}`,
+        activityChannelId: `mm-general-${slug}-activity`,
+      },
+    });
     expect(await readDoc(`workspaces/${slug}/channels/coach-dm`)).toBeNull();
     expect(await readDoc(`workspaces/${slug}/channels/admin`)).toBeNull();
   });
@@ -289,15 +430,14 @@ describe("markProvisioningComplete — agents/{uid} doc", () => {
     const { uid, slug } = freshIds();
     await seedUser(uid, { username: slug });
 
-    await markProvisioningComplete(
+    await expect(markProvisioningComplete(
       baseCtx(uid, slug),
       {
         "mattermost.teamId": `mm-team-${slug}`,
         "mattermost.userId": `mm-user-${slug}`,
-        // no coachUserId
       },
       [],
-    );
+    )).rejects.toThrow(/general=primary channel is missing.*coach-dm=primary channel is missing.*admin=primary channel is missing/);
 
     expect(await readDoc(`agents/${uid}`)).toBeNull();
   });
