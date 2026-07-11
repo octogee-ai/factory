@@ -29,8 +29,24 @@ function unquote(value: string): string {
 }
 
 function scalar(line: string, key: string): string | undefined {
-  const match = line.match(new RegExp(`^\\s*(?:-\\s*)?${key}:\\s*(.+?)\\s*$`));
-  return match ? unquote(match[1].replace(/\s+#.*$/, "")) : undefined;
+  const content = line.trimStart().replace(/^-[ \t]*/, "");
+  const prefix = `${key}:`;
+  if (!content.startsWith(prefix)) return undefined;
+  const value = content.slice(prefix.length).trim();
+  const comment = value.indexOf(" #");
+  return unquote(comment === -1 ? value : value.slice(0, comment));
+}
+
+function indentation(line: string): number {
+  let length = 0;
+  while (line[length] === " ") length += 1;
+  return length;
+}
+
+function yamlKey(line: string): string | undefined {
+  const content = line.trimStart().replace(/^-[ \t]*/, "");
+  const separator = content.indexOf(":");
+  return separator === -1 ? undefined : content.slice(0, separator);
 }
 
 function stringArray(value: string): string[] {
@@ -39,47 +55,68 @@ function stringArray(value: string): string[] {
   return trimmed.slice(1, -1).split(",").map((entry) => unquote(entry)).filter(Boolean);
 }
 
+interface DependabotParseState {
+  updates: DependabotUpdate[];
+  current?: DependabotUpdate;
+  currentIgnore?: DependabotIgnore;
+  inIgnore: boolean;
+}
+
+function beginUpdate(state: DependabotParseState, ecosystem: string): void {
+  if (state.current) state.updates.push(state.current);
+  state.current = { ecosystem, directory: "", ignores: [] };
+  state.currentIgnore = undefined;
+  state.inIgnore = false;
+}
+
+function parseScheduleLine(current: DependabotUpdate, line: string, indent: number): void {
+  if (indent < 6) return;
+  for (const key of ["interval", "day", "time", "timezone"] as const) {
+    const value = scalar(line, key);
+    if (value) current[key] = value;
+  }
+}
+
+function parseIgnoreLine(state: DependabotParseState, line: string): void {
+  const dependencyName = scalar(line, "dependency-name");
+  if (dependencyName) {
+    state.currentIgnore = { dependencyName, updateTypes: [] };
+    state.current?.ignores.push(state.currentIgnore);
+  }
+  const updateTypes = scalar(line, "update-types");
+  if (updateTypes && state.currentIgnore) {
+    state.currentIgnore.updateTypes = stringArray(updateTypes);
+  }
+}
+
+function parseUpdateLine(state: DependabotParseState, line: string): void {
+  const current = state.current;
+  if (!current) return;
+  const indent = indentation(line);
+  const key = yamlKey(line);
+  if (indent <= 4 && key === "ignore") {
+    state.inIgnore = true;
+    return;
+  }
+  if (indent <= 4 && key && !["directory", "schedule"].includes(key)) {
+    state.inIgnore = false;
+    state.currentIgnore = undefined;
+  }
+  const directory = scalar(line, "directory");
+  if (directory && indent === 4) current.directory = directory;
+  if (state.inIgnore) parseIgnoreLine(state, line);
+  else parseScheduleLine(current, line, indent);
+}
+
 export function parseDependabotConfig(source: string): DependabotUpdate[] {
-  const updates: DependabotUpdate[] = [];
-  let current: DependabotUpdate | undefined;
-  let inIgnore = false;
-  let currentIgnore: DependabotIgnore | undefined;
+  const state: DependabotParseState = { updates: [], inIgnore: false };
   for (const line of source.split(/\r?\n/)) {
     const ecosystem = scalar(line, "package-ecosystem");
-    if (ecosystem) {
-      if (current) updates.push(current);
-      current = { ecosystem, directory: "", ignores: [] };
-      inIgnore = false;
-      currentIgnore = undefined;
-      continue;
-    }
-    if (!current) continue;
-    const indent = line.match(/^\s*/)?.[0].length ?? 0;
-    if (indent <= 4 && /^\s*ignore:\s*$/.test(line)) {
-      inIgnore = true;
-      continue;
-    }
-    if (indent <= 4 && /^\s*[A-Za-z-]+:/.test(line) && !/^\s*(directory|schedule):/.test(line)) {
-      inIgnore = false;
-      currentIgnore = undefined;
-    }
-    const directory = scalar(line, "directory");
-    if (directory && indent === 4) current.directory = directory;
-    for (const key of ["interval", "day", "time", "timezone"] as const) {
-      const value = scalar(line, key);
-      if (value && indent >= 6 && !inIgnore) current[key] = value;
-    }
-    if (inIgnore) {
-      const dependencyName = scalar(line, "dependency-name");
-      if (dependencyName) {
-        currentIgnore = { dependencyName, updateTypes: [] };
-        current.ignores.push(currentIgnore);
-      }
-      const updateTypes = scalar(line, "update-types");
-      if (updateTypes && currentIgnore) currentIgnore.updateTypes = stringArray(updateTypes);
-    }
+    if (ecosystem) beginUpdate(state, ecosystem);
+    else parseUpdateLine(state, line);
   }
-  if (current) updates.push(current);
+  if (state.current) state.updates.push(state.current);
+  const updates = state.updates;
   for (const update of updates) {
     if (!update.directory) throw new Error(`Dependabot ${update.ecosystem} update has no directory`);
   }
@@ -91,12 +128,73 @@ function dependencyDirectory(reference: DependencyReferenceIdentity): string {
   return directory === "." ? "/" : `/${directory}`;
 }
 
-export function auditDependabotCoverage(input: {
+interface DependabotAuditInput {
   inventory: DependencyInventory;
   updates: DependabotUpdate[];
   exceptions: DependencyException[];
   now?: Date;
-}): { errors: string[]; managedReferences: DependencyReferenceIdentity[] } {
+}
+
+function exactExceptions(
+  input: DependabotAuditInput,
+  reference: DependencyReferenceIdentity,
+  kind: "compatibility" | "coverage",
+): DependencyException[] {
+  return input.exceptions.filter((exception) =>
+    exception.kind === kind &&
+    (kind !== "coverage" || exception.manager === "dependabot") &&
+    exception.references?.some((candidate) => matchesExactReference(reference, candidate)),
+  );
+}
+
+function auditReference(
+  input: DependabotAuditInput,
+  npmUpdates: DependabotUpdate[],
+  reference: DependencyReferenceIdentity,
+  errors: string[],
+  managedReferences: DependencyReferenceIdentity[],
+): void {
+  const matchingUpdates = npmUpdates.filter(
+    (update) => update.directory === dependencyDirectory(reference),
+  );
+  const matchingExceptions = exactExceptions(input, reference, "coverage");
+  if (matchingUpdates.length > 1) {
+    errors.push(`${reference.path}: duplicate Dependabot npm entries`);
+  }
+  if (matchingUpdates.length === 1) managedReferences.push(reference);
+  else if (matchingExceptions.length !== 1) {
+    errors.push(`npm-lockfile ${reference.path}: no Dependabot entry or exact exception`);
+  }
+}
+
+function auditIgnore(
+  input: DependabotAuditInput,
+  update: DependabotUpdate,
+  ignore: DependabotIgnore,
+  errors: string[],
+): void {
+  const references = input.inventory.references.filter((reference) =>
+    reference.referenceKind === "npm" &&
+    dependencyDirectory(reference) === update.directory &&
+    reference.packageName === ignore.dependencyName,
+  );
+  if (references.length === 0) {
+    errors.push(`${update.directory}:${ignore.dependencyName}: ignore matches no direct dependency`);
+  }
+  for (const reference of references) {
+    const matching = exactExceptions(input, reference, "compatibility");
+    if (matching.length !== 1) {
+      errors.push(
+        `${reference.path}:${reference.packageName}: expected one exact compatibility exception, found ${matching.length}`,
+      );
+    }
+  }
+}
+
+export function auditDependabotCoverage(input: DependabotAuditInput): {
+  errors: string[];
+  managedReferences: DependencyReferenceIdentity[];
+} {
   const errors: string[] = [];
   const managedReferences: DependencyReferenceIdentity[] = [];
   const npmUpdates = input.updates.filter(({ ecosystem }) => ecosystem === "npm");
@@ -106,37 +204,13 @@ export function auditDependabotCoverage(input: {
   );
   for (const reference of input.inventory.references.filter(({ referenceKind }) =>
     referenceKind === "npm" || referenceKind === "npm-lockfile")) {
-    const directory = dependencyDirectory(reference);
-    const matchingUpdates = npmUpdates.filter((update) => update.directory === directory);
-    const matchingExceptions = input.exceptions.filter((exception) =>
-      exception.kind === "coverage" && exception.manager === "dependabot" &&
-      exception.references?.some((candidate) => matchesExactReference(reference, candidate)),
-    );
-    if (matchingUpdates.length > 1) errors.push(`${reference.path}: duplicate Dependabot npm entries`);
-    if (matchingUpdates.length === 1) managedReferences.push(reference);
-    else if (matchingExceptions.length !== 1) errors.push(`npm-lockfile ${reference.path}: no Dependabot entry or exact exception`);
+    auditReference(input, npmUpdates, reference, errors, managedReferences);
   }
   for (const update of npmUpdates) {
     if (update.interval !== "daily" && !scheduleException) {
       errors.push(`${update.directory}: npm discovery is ${update.interval ?? "unset"}, not weekday`);
     }
-    for (const ignore of update.ignores) {
-      const ignoredReferences = input.inventory.references.filter((reference) =>
-        reference.referenceKind === "npm" && dependencyDirectory(reference) === update.directory &&
-        reference.packageName === ignore.dependencyName,
-      );
-      if (ignoredReferences.length === 0) {
-        errors.push(`${update.directory}:${ignore.dependencyName}: ignore matches no direct dependency`);
-      }
-      for (const reference of ignoredReferences) {
-        const matching = input.exceptions.filter((exception) =>
-          exception.kind === "compatibility" && exception.references?.some((candidate) => matchesExactReference(reference, candidate)),
-        );
-        if (matching.length !== 1) {
-          errors.push(`${reference.path}:${reference.packageName}: expected one exact compatibility exception, found ${matching.length}`);
-        }
-      }
-    }
+    for (const ignore of update.ignores) auditIgnore(input, update, ignore, errors);
   }
   return { errors, managedReferences };
 }
