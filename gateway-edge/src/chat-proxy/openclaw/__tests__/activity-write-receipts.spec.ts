@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ActivityReceiptConflictError,
   ActivityReceiptLeaseError,
+  FirestoreActivityWriteReceiptStore,
   InMemoryActivityWriteReceiptStore,
   receiptDocumentId,
   type ActivityAttachmentReceiptV1,
@@ -113,5 +114,72 @@ describe("Activity write receipts", () => {
     expect(receiptDocumentId(eventKey)).toBe(
       "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb",
     );
+  });
+
+  it("uses a production transaction beneath the channel doc for claim, post, and commit fencing", async () => {
+    const documents = new Map<string, Record<string, unknown>>();
+    const writes: string[] = [];
+    const db = {
+      doc(path: string) {
+        return {
+          path,
+          async get() {
+            const value = documents.get(path);
+            return { exists: Boolean(value), data: () => value };
+          },
+        };
+      },
+      async runTransaction<T>(fn: (transaction: {
+        get(ref: { path: string }): Promise<{ exists: boolean; data(): Record<string, unknown> | undefined }>;
+        set(ref: { path: string }, data: Record<string, unknown>): void;
+      }) => Promise<T>): Promise<T> {
+        const staged = new Map<string, Record<string, unknown>>();
+        const result = await fn({
+          async get(ref) {
+            const value = documents.get(ref.path);
+            return { exists: Boolean(value), data: () => value };
+          },
+          set(ref, data) {
+            staged.set(ref.path, structuredClone(data));
+          },
+        });
+        for (const [path, data] of staged) {
+          writes.push(path);
+          documents.set(path, data);
+        }
+        return result;
+      },
+    };
+    const store = new FirestoreActivityWriteReceiptStore(
+      db as never,
+      "workspaces/acme/channels/build",
+    );
+    const claim = await store.claim({
+      eventKey,
+      payloadDigest: digest,
+      historyAnchorPostId: "anchor-1",
+      leaseOwner: "pod-1",
+      now: 1,
+      leaseMs: 100,
+    });
+    if (claim.outcome !== "claimed") throw new Error("expected claim");
+    await store.markPosted(eventKey, claim.receipt.leaseToken, "post-1", 2);
+    await store.commit(eventKey, claim.receipt.leaseToken, 3);
+
+    const expectedPath = `workspaces/acme/channels/build/activityWriteReceipts/${receiptDocumentId(eventKey)}`;
+    expect(new Set(writes)).toEqual(new Set([expectedPath]));
+    expect(await store.read(eventKey)).toMatchObject({
+      state: "committed",
+      postId: "post-1",
+      historyAnchorPostId: "anchor-1",
+    });
+    await expect(store.claim({
+      eventKey,
+      payloadDigest: "c".repeat(64),
+      historyAnchorPostId: "other",
+      leaseOwner: "pod-2",
+      now: 4,
+      leaseMs: 100,
+    })).rejects.toBeInstanceOf(ActivityReceiptConflictError);
   });
 });
