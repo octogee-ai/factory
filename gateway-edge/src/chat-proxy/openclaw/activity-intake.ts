@@ -35,6 +35,7 @@ import type { ActivityMattermostClient } from "./mm-client.js";
 const MAX_JSON_BYTES = 256 * 1024;
 const MAX_INLINE_DETAIL_BYTES = 48 * 1024;
 const DEFAULT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
+const DEFAULT_BODY_TIMEOUT_MS = 10_000;
 const EVENT_KEY = /^[a-f0-9]{64}$/;
 const MATTERMOST_MENTION = /^@[a-z0-9._-]{1,64}$/;
 const CHANNEL_DOC_PATH = /^workspaces\/[a-z0-9][a-z0-9-]{0,62}\/(?:channels\/[a-z0-9][a-z0-9-]{0,127}|projects\/[a-z0-9][a-z0-9-]{0,62}\/channels\/[a-z0-9][a-z0-9-]{0,127})$/;
@@ -654,26 +655,51 @@ export async function processActivityIntake(
   }
 }
 
-function readJsonBody(req: IncomingMessage): Promise<unknown> {
+function readJsonBody(req: IncomingMessage, timeoutMs: number): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
-    req.on("data", (chunk: Buffer) => {
+    let settled = false;
+    const cleanup = (): void => {
+      clearTimeout(timeout);
+      req.off("data", onData);
+      req.off("end", onEnd);
+      req.off("error", onError);
+    };
+    const fail = (error: unknown): void => {
+      if (settled) return;
+      settled = true;
+      chunks.length = 0;
+      cleanup();
+      req.resume();
+      reject(error);
+    };
+    const onData = (chunk: Buffer): void => {
       size += chunk.byteLength;
       if (size > MAX_JSON_BYTES) {
-        reject(new ActivityIntakeError(413, "json_too_large", false));
+        fail(new ActivityIntakeError(413, "json_too_large", false));
         return;
       }
       chunks.push(chunk);
-    });
-    req.on("end", () => {
+    };
+    const onEnd = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
       try {
         resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown);
       } catch {
         reject(new ActivityIntakeError(422, "invalid_json", false));
       }
-    });
-    req.on("error", reject);
+    };
+    const onError = (error: Error): void => fail(error);
+    const timeout = setTimeout(() => {
+      fail(new ActivityIntakeError(503, "body_read_timeout", true));
+    }, timeoutMs);
+    timeout.unref?.();
+    req.on("data", onData);
+    req.on("end", onEnd);
+    req.on("error", onError);
   });
 }
 
@@ -743,18 +769,13 @@ function spoolActivityAttachment(stream: Readable, filePath: string): Promise<Ac
 function readMultipartBody(
   req: IncomingMessage,
   maxAttachmentBytes: number,
+  timeoutMs: number,
 ): Promise<MultipartActivityBody> {
   return new Promise((resolve, reject) => {
     let envelopeText: string | undefined;
     let attachmentPromise: Promise<ActivityAttachmentSource> | undefined;
     let transportFilename: string | undefined;
     let transportMediaType: string | undefined;
-    let rejected = false;
-    const fail = (error: Error): void => {
-      if (rejected) return;
-      rejected = true;
-      reject(error);
-    };
     let parser;
     try {
       parser = Busboy({
@@ -767,9 +788,23 @@ function readMultipartBody(
         },
       });
     } catch {
-      fail(new ActivityIntakeError(422, "invalid_multipart", false));
+      reject(new ActivityIntakeError(422, "invalid_multipart", false));
       return;
     }
+    let rejected = false;
+    const fail = (error: Error): void => {
+      if (rejected) return;
+      rejected = true;
+      clearTimeout(timeout);
+      reject(error);
+    };
+    const timeout = setTimeout(() => {
+      fail(new ActivityIntakeError(503, "body_read_timeout", true));
+      req.unpipe(parser);
+      parser.destroy(new Error("body_read_timeout"));
+      req.resume();
+    }, timeoutMs);
+    timeout.unref?.();
     parser.on("field", (name, value, info) => {
       if (name !== "envelope" || info.valueTruncated) {
         fail(new ActivityIntakeError(info.valueTruncated ? 413 : 422, "invalid_multipart_envelope", false));
@@ -793,6 +828,7 @@ function readMultipartBody(
     parser.on("fieldsLimit", () => fail(new ActivityIntakeError(413, "too_many_fields", false)));
     parser.on("error", () => fail(new ActivityIntakeError(422, "invalid_multipart", false)));
     parser.on("close", () => {
+      clearTimeout(timeout);
       const finalize = async (): Promise<void> => {
         const attachment = attachmentPromise ? await attachmentPromise : undefined;
         if (rejected) {
@@ -826,6 +862,7 @@ function readMultipartBody(
 
 export interface ActivityIntakeHttpOptions {
   maxAttachmentBytes?: number;
+  bodyTimeoutMs?: number;
 }
 
 export interface ProductionActivityIntakeOptions extends ActivityIntakeHttpOptions {
@@ -857,6 +894,7 @@ export function createProductionActivityIntakeHandler(
 
 function rejectUnsupportedHttpRequest(req: IncomingMessage, res: ServerResponse): boolean {
   if (req.method === "POST") return false;
+  req.resume();
   res.writeHead(405, { "Content-Type": "application/json", Allow: "POST" });
   res.end(JSON.stringify({ error: "method_not_allowed", retryable: false }));
   return true;
@@ -865,6 +903,7 @@ function rejectUnsupportedHttpRequest(req: IncomingMessage, res: ServerResponse)
 async function parseHttpActivityBody(
   req: IncomingMessage,
   maxAttachmentBytes: number,
+  bodyTimeoutMs: number,
 ): Promise<MultipartActivityBody> {
   const contentType = req.headers["content-type"] ?? "";
   const contentLength = Number(req.headers["content-length"] ?? 0);
@@ -877,11 +916,12 @@ async function parseHttpActivityBody(
     throw new ActivityIntakeError(413, "json_too_large", false);
   }
   if (contentType.startsWith("application/json")) {
-    return { envelope: await readJsonBody(req) };
+    return { envelope: await readJsonBody(req, bodyTimeoutMs) };
   }
   if (contentType.startsWith("multipart/form-data")) {
-    return readMultipartBody(req, maxAttachmentBytes);
+    return readMultipartBody(req, maxAttachmentBytes, bodyTimeoutMs);
   }
+  req.resume();
   throw new ActivityIntakeError(422, "unsupported_content_type", false);
 }
 
@@ -919,17 +959,22 @@ export function createActivityIntakeHttpHandler(
   options: ActivityIntakeHttpOptions = {},
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const maxAttachmentBytes = options.maxAttachmentBytes ?? DEFAULT_MAX_ATTACHMENT_BYTES;
+  const bodyTimeoutMs = options.bodyTimeoutMs ?? DEFAULT_BODY_TIMEOUT_MS;
   if (!Number.isSafeInteger(maxAttachmentBytes) || maxAttachmentBytes <= 0) {
     throw new Error("maxAttachmentBytes must be a positive safe integer");
+  }
+  if (!Number.isSafeInteger(bodyTimeoutMs) || bodyTimeoutMs <= 0) {
+    throw new Error("bodyTimeoutMs must be a positive safe integer");
   }
   return async (req, res) => {
     let parsed: MultipartActivityBody | undefined;
     try {
       if (rejectUnsupportedHttpRequest(req, res)) return;
       if (!isLoopback(req.socket.remoteAddress)) {
+        req.resume();
         throw new ActivityIntakeError(401, "non_loopback", false);
       }
-      parsed = await parseHttpActivityBody(req, maxAttachmentBytes);
+      parsed = await parseHttpActivityBody(req, maxAttachmentBytes, bodyTimeoutMs);
       const result = await processActivityIntake(
         {
           remoteAddress: req.socket.remoteAddress,

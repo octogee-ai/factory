@@ -67,6 +67,37 @@ async function withServer(run: (baseUrl: string) => Promise<void>): Promise<void
   }
 }
 
+async function sendIncompleteBody(
+  baseUrl: string,
+  contentType: string,
+  chunk: string,
+): Promise<{ status: number; body: unknown } | "no-response"> {
+  let request: http.ClientRequest | undefined;
+  const response = new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+    request = http.request(`${baseUrl}/internal/openclaw/activity/v1/events`, {
+      method: "POST",
+      headers: { "content-type": contentType },
+    }, (incoming) => {
+      const chunks: Buffer[] = [];
+      incoming.on("data", (responseChunk: Buffer) => chunks.push(responseChunk));
+      incoming.on("end", () => {
+        resolve({
+          status: incoming.statusCode ?? 0,
+          body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown,
+        });
+      });
+    });
+    request.on("error", reject);
+    request.write(chunk);
+  });
+  const outcome = await Promise.race([
+    response,
+    new Promise<"no-response">((resolve) => setTimeout(() => resolve("no-response"), 150)),
+  ]);
+  request?.destroy();
+  return outcome;
+}
+
 afterEach(() => installActivityIntakeHandler(null));
 
 describe("POST /internal/openclaw/activity/v1/events", () => {
@@ -197,6 +228,40 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
       });
       expect(response.status).toBe(413);
       await expect(response.json()).resolves.toEqual({ error: "json_too_large", retryable: false });
+    });
+  });
+
+  it("bounds an incomplete JSON body with a retryable read timeout", async () => {
+    installActivityIntakeHandler(createActivityIntakeHttpHandler({
+      registry: { readiness: () => "ready", resolve: vi.fn() },
+      sinkFor: vi.fn(),
+    }, { bodyTimeoutMs: 20 }));
+
+    await withServer(async (baseUrl) => {
+      const outcome = await sendIncompleteBody(baseUrl, "application/json", "{");
+      expect(outcome).toEqual({
+        status: 503,
+        body: { error: "body_read_timeout", retryable: true },
+      });
+    });
+  });
+
+  it("bounds an incomplete multipart body with the same retryable read timeout", async () => {
+    installActivityIntakeHandler(createActivityIntakeHttpHandler({
+      registry: { readiness: () => "ready", resolve: vi.fn() },
+      sinkFor: vi.fn(),
+    }, { bodyTimeoutMs: 20 }));
+
+    await withServer(async (baseUrl) => {
+      const outcome = await sendIncompleteBody(
+        baseUrl,
+        "multipart/form-data; boundary=octogee",
+        '--octogee\r\nContent-Disposition: form-data; name="envelope"\r\n\r\n{',
+      );
+      expect(outcome).toEqual({
+        status: 503,
+        body: { error: "body_read_timeout", retryable: true },
+      });
     });
   });
 
