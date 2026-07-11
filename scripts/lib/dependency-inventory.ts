@@ -415,7 +415,13 @@ function scanAnnotations(root: string, files: string[], references: DependencyRe
 }
 
 export function dependencyReferenceId(reference: DependencyReferenceIdentity): string {
-  return [reference.referenceKind, reference.path, reference.key, reference.packageName, reference.currentValue].join(":");
+  return JSON.stringify([
+    reference.referenceKind,
+    reference.path,
+    reference.key,
+    reference.packageName,
+    reference.currentValue,
+  ]);
 }
 
 export function matchesExactReference(left: DependencyReferenceIdentity, right: DependencyReferenceIdentity): boolean {
@@ -581,9 +587,12 @@ export function auditDependencyCoverage(input: {
     const extractedBy = [dependabot.has(id) ? "dependabot" : undefined, renovate.has(id) ? "renovate" : undefined].filter(Boolean);
     if (extractedBy.length > 1) errors.push(`${id}: overlapping bot ownership`);
     const matching = exceptions.filter(({ reference: candidate }) => matchesExactReference(reference, candidate));
-    if (extractedBy.length === 1 && extractedBy[0] === rules[0].manager) {
+    if (extractedBy.length === 1) {
+      if (extractedBy[0] !== rules[0].manager) {
+        errors.push(`${id}: wrong manager ${String(extractedBy[0])}; expected ${rules[0].manager}`);
+      }
       if (matching.length > 0) errors.push(`${id}: both manager extraction and coverage exception apply`);
-    } else if (matching.length !== 1) {
+    } else if (extractedBy.length === 0 && matching.length !== 1) {
       errors.push(`${id}: expected manager extraction or one exact coverage exception, found ${matching.length}`);
     }
   }
