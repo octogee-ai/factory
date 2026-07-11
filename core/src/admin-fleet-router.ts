@@ -4879,6 +4879,72 @@ router.post(
     },
   );
 
+  async function guardedRetireRefusal(
+    firestore: Firestore,
+    id: string,
+    revisionId: string,
+    revisionData: RevisionRealizationDoc,
+  ): Promise<{ status: number; body: Record<string, unknown> } | null> {
+    if (revisionData.lifecycle === "retired") {
+      return {
+        status: 409,
+        body: { error: "revision is already retired", gatewayId: id, revisionId },
+      };
+    }
+    const mounted = [
+      ...readMountedSlugs(
+        isPlainRecord(revisionData.heartbeat) ? revisionData.heartbeat : undefined,
+      ),
+    ];
+    if (mounted.length > 0) {
+      return {
+        status: 409,
+        body: {
+          error: "revision still reports mounted customers",
+          gatewayId: id,
+          revisionId,
+          mounted,
+        },
+      };
+    }
+    const assignments = await readAssignmentDocsForGateway(firestore, id);
+    const uids = assignments
+      .filter((assignment) => assignment.revisionId === revisionId)
+      .map((assignment) => assignment.uid);
+    if (uids.length > 0) {
+      return {
+        status: 409,
+        body: {
+          error:
+            "assignments still reference this revision — reset them to pending placement (or migrate them) first",
+          gatewayId: id,
+          revisionId,
+          uids,
+        },
+      };
+    }
+    const pendingOps = await firestore
+      .collection(GLM_OPERATIONS_COLLECTION)
+      .where("status", "in", ["pending", "running"])
+      .get();
+    const conflicting = pendingOps.docs.find((d) => {
+      const opData = d.data() as { input?: { gatewayId?: string } } | undefined;
+      return opData?.input?.gatewayId === id;
+    });
+    if (conflicting) {
+      return {
+        status: 409,
+        body: {
+          error: ERR_GATEWAY_OPERATION_IN_FLIGHT,
+          gatewayId: id,
+          operationId: conflicting.id,
+          kind: (conflicting.data() as { kind?: string } | undefined)?.kind ?? null,
+        },
+      };
+    }
+    return null;
+  }
+
   // Recovery-only, revision-scoped retire of a TRUE ORPHAN (r4 class): a
   // revision the durable root no longer references with zero assignments and
   // zero mounts. Enqueues a retire-revision op; Cowboy's handler re-validates
@@ -4891,6 +4957,11 @@ router.post(
       try {
         const id = req.params.id as string;
         const revisionId = req.params.revisionId as string;
+        // Operator break-glass: skip the referenced/mounted/assignment/in-flight
+        // guards. The handler nukes a still-referenced revision (helm uninstall
+        // only — the renderer re-creates it) and fully retires an unreferenced one.
+        const breakGlass =
+          (req.body as { breakGlass?: unknown } | undefined)?.breakGlass === true;
         const releaseSuffix = revisionId.startsWith(`${id}-r`)
           ? revisionId.slice(id.length + 2)
           : "";
@@ -4914,7 +4985,7 @@ router.post(
           });
           return;
         }
-        if (rootReferencedRevisionIds(gateway).has(revisionId)) {
+        if (!breakGlass && rootReferencedRevisionIds(gateway).has(revisionId)) {
           res.status(409).json({
             error: "revision is referenced by the durable root (live/traffic/roll/desired)",
             gatewayId: id,
@@ -4940,70 +5011,25 @@ router.post(
           });
           return;
         }
-        if (revisionData.lifecycle === "retired") {
-          res.status(409).json({
-            error: "revision is already retired",
-            gatewayId: id,
-            revisionId,
-          });
-          return;
-        }
-        const mounted = [
-          ...readMountedSlugs(
-            isPlainRecord(revisionData.heartbeat) ? revisionData.heartbeat : undefined,
-          ),
-        ];
-        if (mounted.length > 0) {
-          res.status(409).json({
-            error: "revision still reports mounted customers",
-            gatewayId: id,
-            revisionId,
-            mounted,
-          });
-          return;
-        }
-        const assignments = await readAssignmentDocsForGateway(db, id);
-        const uids = assignments
-          .filter((assignment) => assignment.revisionId === revisionId)
-          .map((assignment) => assignment.uid);
-        if (uids.length > 0) {
-          res.status(409).json({
-            error:
-              "assignments still reference this revision — reset them to pending placement (or migrate them) first",
-            gatewayId: id,
-            revisionId,
-            uids,
-          });
-          return;
-        }
-        const pendingOps = await db
-          .collection(GLM_OPERATIONS_COLLECTION)
-          .where("status", "in", ["pending", "running"])
-          .get();
-        const conflicting = pendingOps.docs.find((d) => {
-          const opData = d.data() as
-            | { input?: { gatewayId?: string } }
-            | undefined;
-          return opData?.input?.gatewayId === id;
-        });
-        if (conflicting) {
-          res.status(409).json({
-            error: ERR_GATEWAY_OPERATION_IN_FLIGHT,
-            gatewayId: id,
-            operationId: conflicting.id,
-            kind:
-              (conflicting.data() as { kind?: string } | undefined)?.kind ??
-              null,
-          });
-          return;
+        if (!breakGlass) {
+          const refusal = await guardedRetireRefusal(db, id, revisionId, revisionData);
+          if (refusal) {
+            res.status(refusal.status).json(refusal.body);
+            return;
+          }
         }
         const actor = req as ActorRequest;
         const operationId = await createOperation(db, {
           kind: "retire-revision",
           createdBy: actor.uid ?? "unknown",
-          input: { gatewayId: id, revisionId },
+          input: { gatewayId: id, revisionId, ...(breakGlass ? { breakGlass: true } : {}) },
         });
-        res.status(202).json({ gatewayId: id, revisionId, operationId });
+        res.status(202).json({
+          gatewayId: id,
+          revisionId,
+          operationId,
+          ...(breakGlass ? { breakGlass: true } : {}),
+        });
       } catch (e) {
         next(e);
       }
