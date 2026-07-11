@@ -68,6 +68,8 @@ export interface CoverageValidationResult extends ValidationResult {
   };
 }
 
+type DependencyProbe = NonNullable<CoverageValidationResult["probe"]>;
+
 const skippedDirectories = new Set([
   ".git",
   ".astro",
@@ -133,6 +135,30 @@ function stripQuotes(value: string): string {
   return trimmed;
 }
 
+function stripInlineComment(value: string): string {
+  const comment = value.indexOf(" #");
+  return (comment === -1 ? value : value.slice(0, comment)).trim();
+}
+
+function yamlScalar(line: string, key: string): string | undefined {
+  const content = line.trimStart().replace(/^-[ \t]*/, "");
+  const prefix = `${key}:`;
+  if (!content.startsWith(prefix)) return undefined;
+  const value = stripInlineComment(content.slice(prefix.length));
+  if (!value) return undefined;
+  const unquoted = stripQuotes(value);
+  const whitespace = unquoted.search(/\s/);
+  return whitespace === -1 ? unquoted : unquoted.slice(0, whitespace);
+}
+
+function firstYamlScalar(lines: string[], key: string): string | undefined {
+  for (const line of lines) {
+    const value = yamlScalar(line, key);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
 function isInternalImage(value: string): boolean {
   return value.startsWith("us-central1-docker.pkg.dev/octogee/octogee/") ||
     value.includes("gcr.io/$PROJECT_ID/") || value.includes("${_REGION}-docker.pkg.dev/$PROJECT_ID/");
@@ -168,21 +194,20 @@ function imageIdentity(value: string): { packageName: string; currentValue: stri
 }
 
 function pushImage(
-  references: DependencyReferenceIdentity[],
-  exclusions: DependencyExclusion[],
+  sink: Pick<DependencyInventory, "references" | "exclusions">,
   referenceKind: string,
   relativePath: string,
   key: string,
   rawValue: string,
 ): void {
-  const value = stripQuotes(rawValue).replace(/\s+#.*$/, "").trim();
+  const value = stripInlineComment(stripQuotes(rawValue));
   const reason = classifyReference(value);
   if (reason) {
-    exclusions.push({ referenceKind, path: relativePath, key, rawValue: value, reason });
+    sink.exclusions.push({ referenceKind, path: relativePath, key, rawValue: value, reason });
     return;
   }
   const identity = imageIdentity(value);
-  references.push({ referenceKind, path: relativePath, key, ...identity });
+  sink.references.push({ referenceKind, path: relativePath, key, ...identity });
 }
 
 function scanNpm(
@@ -251,7 +276,7 @@ function scanDockerfiles(
     for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
       const match = line.match(/^\s*FROM(?:\s+--\S+)*\s+(\S+)/i);
       if (!match) continue;
-      pushImage(references, exclusions, "dockerfile", relativePath, `from:${index}`, match[1]);
+      pushImage({ references, exclusions }, "dockerfile", relativePath, `from:${index}`, match[1]);
       index += 1;
     }
   }
@@ -273,51 +298,125 @@ function balancedBlock(source: string, openingBrace: number): string {
   throw new Error("Unbalanced configuration block");
 }
 
+function hclQuotedAttribute(source: string, key: string): string | undefined {
+  for (const line of source.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith(key)) continue;
+    const assignment = trimmed.slice(key.length).trimStart();
+    if (!assignment.startsWith("=")) continue;
+    const value = assignment.slice(1).trimStart();
+    const quote = value[0];
+    if (quote !== '"' && quote !== "'") continue;
+    const end = value.indexOf(quote, 1);
+    if (end > 0) return value.slice(1, end);
+  }
+  return undefined;
+}
+
+function hclBraceDelta(line: string): number {
+  let delta = 0;
+  let quote: string | undefined;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (quote) {
+      if (char === quote && line[index - 1] !== "\\") quote = undefined;
+      continue;
+    }
+    if (char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === "{") delta += 1;
+    else if (char === "}") delta -= 1;
+  }
+  return delta;
+}
+
+function topLevelHclAssignment(line: string, offset: number): { name: string; opening: number } | undefined {
+  const leading = line.length - line.trimStart().length;
+  const content = line.slice(leading);
+  let nameEnd = 0;
+  while (/[A-Za-z0-9_-]/.test(content[nameEnd] ?? "")) nameEnd += 1;
+  if (nameEnd === 0) return undefined;
+  let cursor = nameEnd;
+  while (content[cursor] === " " || content[cursor] === "\t") cursor += 1;
+  if (content[cursor] !== "=") return undefined;
+  cursor += 1;
+  while (content[cursor] === " " || content[cursor] === "\t") cursor += 1;
+  if (content[cursor] !== "{") return undefined;
+  return { name: content.slice(0, nameEnd), opening: offset + leading + cursor };
+}
+
+function topLevelHclAssignments(source: string): Array<{ name: string; opening: number }> {
+  const assignments: Array<{ name: string; opening: number }> = [];
+  let depth = 0;
+  let offset = 0;
+  for (const line of source.split("\n")) {
+    if (depth === 0) {
+      const assignment = topLevelHclAssignment(line, offset);
+      if (assignment) assignments.push(assignment);
+    }
+    depth += hclBraceDelta(line);
+    offset += line.length + 1;
+  }
+  return assignments;
+}
+
+function scanTerraformProviders(
+  relativePath: string,
+  source: string,
+  references: DependencyReferenceIdentity[],
+): void {
+  for (const required of source.matchAll(/required_providers\s*\{/g)) {
+    const opening = (required.index ?? 0) + required[0].lastIndexOf("{");
+    const block = balancedBlock(source, opening);
+    for (const provider of topLevelHclAssignments(block)) {
+      const providerBlock = balancedBlock(block, provider.opening);
+      const providerSource = hclQuotedAttribute(providerBlock, "source");
+      if (!providerSource) continue;
+      references.push({
+        referenceKind: "terraform-provider",
+        path: relativePath,
+        key: `provider:${provider.name}`,
+        packageName: providerSource,
+        currentValue: hclQuotedAttribute(providerBlock, "version") ?? "unconstrained",
+      });
+    }
+  }
+}
+
+function scanTerraformModules(
+  relativePath: string,
+  source: string,
+  references: DependencyReferenceIdentity[],
+): void {
+  for (const moduleMatch of source.matchAll(/module\s+["']([^"']+)["']\s*\{/g)) {
+    const opening = (moduleMatch.index ?? 0) + moduleMatch[0].lastIndexOf("{");
+    let block: string;
+    try {
+      block = balancedBlock(source, opening);
+    } catch (error) {
+      throw new Error(`${relativePath}:module:${moduleMatch[1]}: ${String(error)}`);
+    }
+    const moduleSource = hclQuotedAttribute(block, "source");
+    if (!moduleSource || moduleSource.startsWith(".")) continue;
+    const ref = new URLSearchParams(moduleSource.split("?")[1] ?? "").get("ref");
+    references.push({
+      referenceKind: "terraform-module",
+      path: relativePath,
+      key: `module:${moduleMatch[1]}`,
+      packageName: moduleSource.split("?")[0],
+      currentValue: hclQuotedAttribute(block, "version") ?? ref ?? "unpinned",
+    });
+  }
+}
+
 function scanTerraform(root: string, files: string[], references: DependencyReferenceIdentity[]): void {
   for (const file of files.filter((candidate) => path.extname(candidate) === ".tf")) {
     const relativePath = posixPath(path.relative(root, file));
     const source = readFileSync(file, "utf8");
-    const requiredPattern = /required_providers\s*\{/g;
-    for (const required of source.matchAll(requiredPattern)) {
-      const opening = (required.index ?? 0) + required[0].lastIndexOf("{");
-      const block = balancedBlock(source, opening);
-      const providerPattern = /([A-Za-z0-9_-]+)\s*=\s*\{/g;
-      for (const provider of block.matchAll(providerPattern)) {
-        const providerOpening = (provider.index ?? 0) + provider[0].lastIndexOf("{");
-        const providerBlock = balancedBlock(block, providerOpening);
-        const providerSource = providerBlock.match(/\bsource\s*=\s*["']([^"']+)["']/)?.[1];
-        if (!providerSource) continue;
-        const version = providerBlock.match(/\bversion\s*=\s*["']([^"']+)["']/)?.[1] ?? "unconstrained";
-        references.push({
-          referenceKind: "terraform-provider",
-          path: relativePath,
-          key: `provider:${provider[1]}`,
-          packageName: providerSource,
-          currentValue: version,
-        });
-      }
-    }
-    const modulePattern = /module\s+["']([^"']+)["']\s*\{/g;
-    for (const moduleMatch of source.matchAll(modulePattern)) {
-      const opening = (moduleMatch.index ?? 0) + moduleMatch[0].lastIndexOf("{");
-      let block: string;
-      try {
-        block = balancedBlock(source, opening);
-      } catch (error) {
-        throw new Error(`${relativePath}:module:${moduleMatch[1]}: ${String(error)}`);
-      }
-      const moduleSource = block.match(/\bsource\s*=\s*["']([^"']+)["']/)?.[1];
-      if (!moduleSource || moduleSource.startsWith(".")) continue;
-      const version = block.match(/\bversion\s*=\s*["']([^"']+)["']/)?.[1] ??
-        new URLSearchParams(moduleSource.split("?")[1] ?? "").get("ref") ?? "unpinned";
-      references.push({
-        referenceKind: "terraform-module",
-        path: relativePath,
-        key: `module:${moduleMatch[1]}`,
-        packageName: moduleSource.split("?")[0],
-        currentValue: version,
-      });
-    }
+    scanTerraformProviders(relativePath, source, references);
+    scanTerraformModules(relativePath, source, references);
   }
 }
 
@@ -326,11 +425,12 @@ function scanHelmCharts(root: string, files: string[], references: DependencyRef
     const relativePath = posixPath(path.relative(root, file));
     const lines = readFileSync(file, "utf8").split(/\r?\n/);
     for (let index = 0; index < lines.length; index += 1) {
-      const name = lines[index].match(/^\s*-\s*name:\s*["']?([^"'#\s]+)["']?/i)?.[1];
+      if (!lines[index].trimStart().startsWith("-")) continue;
+      const name = yamlScalar(lines[index], "name");
       if (!name) continue;
-      const block = lines.slice(index, index + 8).join("\n");
-      const version = block.match(/^\s+version:\s*["']?([^"'#\s]+)["']?/m)?.[1];
-      const repository = block.match(/^\s+repository:\s*["']?([^"'#\s]+)["']?/m)?.[1];
+      const block = lines.slice(index, index + 8);
+      const version = firstYamlScalar(block, "version");
+      const repository = firstYamlScalar(block, "repository");
       if (!version || !repository) continue;
       const reason = classifyReference(repository);
       if (reason) {
@@ -342,58 +442,95 @@ function scanHelmCharts(root: string, files: string[], references: DependencyRef
   }
 }
 
+interface Counter {
+  value: number;
+}
+
+function scanGithubActions(
+  relativePath: string,
+  lines: string[],
+  references: DependencyReferenceIdentity[],
+): void {
+  let actionIndex = 0;
+  for (const line of lines) {
+    const uses = yamlScalar(line, "uses");
+    if (!uses || uses.startsWith("./")) continue;
+    const at = uses.lastIndexOf("@");
+    if (at <= 0) continue;
+    references.push({
+      referenceKind: "github-action",
+      path: relativePath,
+      key: `uses:${actionIndex}`,
+      packageName: uses.slice(0, at),
+      currentValue: uses.slice(at + 1),
+    });
+    actionIndex += 1;
+  }
+}
+
+function scanLiteralImages(
+  relativePath: string,
+  lines: string[],
+  sink: Pick<DependencyInventory, "references" | "exclusions">,
+  imageIndex: Counter,
+): void {
+  for (const line of lines) {
+    const image = yamlScalar(line, "image");
+    if (!image) continue;
+    pushImage(sink, "container-image", relativePath, `image:${imageIndex.value}`, image);
+    imageIndex.value += 1;
+  }
+}
+
+function scanCloudBuildImages(
+  relativePath: string,
+  lines: string[],
+  sink: Pick<DependencyInventory, "references" | "exclusions">,
+  imageIndex: Counter,
+): void {
+  for (const line of lines) {
+    if (!line.trimStart().startsWith("-")) continue;
+    const builder = yamlScalar(line, "name");
+    if (!builder) continue;
+    pushImage(sink, "container-image", relativePath, `image:${imageIndex.value}`, builder);
+    imageIndex.value += 1;
+  }
+}
+
+function scanValuesImages(
+  relativePath: string,
+  lines: string[],
+  sink: Pick<DependencyInventory, "references" | "exclusions">,
+): void {
+  for (let index = 0; index < lines.length; index += 1) {
+    const repository = yamlScalar(lines[index], "repository");
+    if (!repository) continue;
+    const nearby = lines.slice(index + 1, index + 6);
+    const tag = firstYamlScalar(nearby, "tag") || "latest";
+    const digest = firstYamlScalar(nearby, "digest");
+    const digestSuffix = digest ? `@${digest}` : "";
+    pushImage(
+      sink,
+      "container-image",
+      relativePath,
+      `repository:${index}`,
+      `${repository}:${tag}${digestSuffix}`,
+    );
+  }
+}
+
 function scanYaml(root: string, files: string[], references: DependencyReferenceIdentity[], exclusions: DependencyExclusion[]): void {
-  const yamlFiles = files.filter((file) => [".yml", ".yaml"].includes(path.extname(file)));
-  for (const file of yamlFiles) {
+  for (const file of files.filter((candidate) => [".yml", ".yaml"].includes(path.extname(candidate)))) {
     const relativePath = posixPath(path.relative(root, file));
     const lines = readFileSync(file, "utf8").split(/\r?\n/);
-    let imageIndex = 0;
-    let actionIndex = 0;
-    for (const line of lines) {
-      const uses = line.match(/^\s*(?:-\s*)?uses:\s*["']?([^"'#\s]+)["']?/i)?.[1];
-      if (uses && !uses.startsWith("./")) {
-        const at = uses.lastIndexOf("@");
-        if (at > 0) {
-          references.push({
-            referenceKind: "github-action",
-            path: relativePath,
-            key: `uses:${actionIndex}`,
-            packageName: uses.slice(0, at),
-            currentValue: uses.slice(at + 1),
-          });
-          actionIndex += 1;
-        }
-      }
-      const image = line.match(/^\s*(?:-\s*)?image:\s*["']?([^"'#\s]+)["']?/i)?.[1];
-      if (image) {
-        pushImage(references, exclusions, "container-image", relativePath, `image:${imageIndex}`, image);
-        imageIndex += 1;
-      }
-      if (path.basename(file).startsWith("cloudbuild")) {
-        const builder = line.match(/^\s*-\s*name:\s*["']([^"']+)["']/i)?.[1];
-        if (builder) {
-          pushImage(references, exclusions, "container-image", relativePath, `image:${imageIndex}`, builder);
-          imageIndex += 1;
-        }
-      }
+    const sink = { references, exclusions };
+    const imageIndex = { value: 0 };
+    scanGithubActions(relativePath, lines, references);
+    scanLiteralImages(relativePath, lines, sink, imageIndex);
+    if (path.basename(file).startsWith("cloudbuild")) {
+      scanCloudBuildImages(relativePath, lines, sink, imageIndex);
     }
-    if (path.basename(file).startsWith("values")) {
-      for (let index = 0; index < lines.length; index += 1) {
-        const repository = lines[index].match(/^\s*repository:\s*["']?([^"'#\s]+)["']?/i)?.[1];
-        if (!repository) continue;
-        const nearby = lines.slice(index + 1, index + 6).join("\n");
-        const tag = nearby.match(/^\s*tag:\s*["']?([^"'#\s]*)["']?/m)?.[1] || "latest";
-        const digest = nearby.match(/^\s*digest:\s*["']?([^"'#\s]+)["']?/m)?.[1];
-        pushImage(
-          references,
-          exclusions,
-          "container-image",
-          relativePath,
-          `repository:${index}`,
-          `${repository}:${tag}${digest ? `@${digest}` : ""}`,
-        );
-      }
-    }
+    if (path.basename(file).startsWith("values")) scanValuesImages(relativePath, lines, sink);
   }
 }
 
@@ -461,144 +598,328 @@ function validEvidence(value: unknown): boolean {
     typeof value.observedAt === "string" && !Number.isNaN(Date.parse(value.observedAt));
 }
 
+interface ExceptionValidationContext extends ExceptionValidationResult {
+  coverageOwners: Map<string, string>;
+  ids: Set<string>;
+  now: Date;
+}
+
+const REQUIRED_EXCEPTION_FIELDS = [
+  "owner",
+  "reason",
+  "openedAt",
+  "reviewAfter",
+  "expiresAt",
+  "removalWorkstream",
+  "removalTest",
+] as const;
+
+function validateExceptionFields(
+  exception: DependencyException,
+  context: ExceptionValidationContext,
+): void {
+  if (typeof exception.id !== "string" || context.ids.has(exception.id)) {
+    context.errors.push(`duplicate or missing exception id ${String(exception.id)}`);
+  } else {
+    context.ids.add(exception.id);
+  }
+  for (const field of REQUIRED_EXCEPTION_FIELDS) {
+    if (typeof exception[field] !== "string" || exception[field].length === 0) {
+      context.errors.push(`${exception.id}: missing ${field}`);
+    }
+  }
+  const expiresAt = Date.parse(exception.expiresAt);
+  if (Number.isNaN(expiresAt)) context.errors.push(`${exception.id}: invalid expiresAt`);
+  else if (expiresAt <= context.now.getTime()) {
+    context.errors.push(`${exception.id}: expired at ${exception.expiresAt}`);
+  }
+}
+
+function exceptionReferences(
+  exception: DependencyException,
+  errors: string[],
+): DependencyReferenceIdentity[] {
+  const raw = exception.references ?? (exception.reference ? [exception.reference] : []);
+  if (!Array.isArray(raw) || raw.length === 0 || raw.some((reference) => !validReference(reference))) {
+    errors.push(`${exception.id}: exact references are required`);
+  }
+  return Array.isArray(raw) ? raw.filter(validReference) : [];
+}
+
+function validateExceptionReferences(
+  exception: DependencyException,
+  references: DependencyReferenceIdentity[],
+  context: ExceptionValidationContext,
+): void {
+  const local = new Set<string>();
+  for (const reference of references) {
+    const id = dependencyReferenceId(reference);
+    if (local.has(id)) context.errors.push(`${exception.id}: duplicate reference ${id}`);
+    local.add(id);
+    if (exception.kind !== "coverage") continue;
+    const previous = context.coverageOwners.get(id);
+    if (previous) context.errors.push(`${exception.id}: coverage overlaps ${previous} for ${id}`);
+    context.coverageOwners.set(id, exception.id);
+  }
+}
+
+function validateExceptionEvidence(
+  exception: DependencyException,
+  errors: string[],
+): void {
+  if (!["coverage", "immutability", "compatibility"].includes(exception.kind)) return;
+  if (!Array.isArray(exception.evidence) ||
+      exception.evidence.length === 0 ||
+      !exception.evidence.every(validEvidence)) {
+    errors.push(`${exception.id}: valid evidence is required`);
+  }
+}
+
+function validateExceptionRecord(raw: unknown, context: ExceptionValidationContext): void {
+  if (!isRecord(raw)) {
+    context.errors.push("exception is not an object");
+    return;
+  }
+  const exception = raw as DependencyException;
+  context.exceptions.push(exception);
+  validateExceptionFields(exception, context);
+  validateExceptionReferences(exception, exceptionReferences(exception, context.errors), context);
+  validateExceptionEvidence(exception, context.errors);
+  if (exception.kind === "coverage") context.coverageExceptions.push(exception);
+}
+
 export function validateExceptionFile(value: unknown, now = new Date()): ExceptionValidationResult {
-  const errors: string[] = [];
-  const exceptions: DependencyException[] = [];
-  const coverageExceptions: DependencyException[] = [];
+  const empty: ExceptionValidationResult = { errors: [], exceptions: [], coverageExceptions: [] };
   if (!isRecord(value) || value.schemaVersion !== 1 || !Array.isArray(value.exceptions)) {
-    return { errors: ["dependency exceptions must have schemaVersion 1 and an exceptions array"], exceptions, coverageExceptions };
+    empty.errors.push("dependency exceptions must have schemaVersion 1 and an exceptions array");
+    return empty;
   }
-  const coverageOwners = new Map<string, string>();
-  const ids = new Set<string>();
-  for (const raw of value.exceptions) {
-    if (!isRecord(raw)) {
-      errors.push("exception is not an object");
-      continue;
-    }
-    const exception = raw as DependencyException;
-    exceptions.push(exception);
-    if (typeof exception.id !== "string" || ids.has(exception.id)) errors.push(`duplicate or missing exception id ${String(exception.id)}`);
-    else ids.add(exception.id);
-    for (const field of ["owner", "reason", "openedAt", "reviewAfter", "expiresAt", "removalWorkstream", "removalTest"]) {
-      if (typeof exception[field] !== "string" || exception[field].length === 0) errors.push(`${exception.id}: missing ${field}`);
-    }
-    const expiresAt = Date.parse(exception.expiresAt);
-    if (Number.isNaN(expiresAt)) errors.push(`${exception.id}: invalid expiresAt`);
-    else if (expiresAt <= now.getTime()) errors.push(`${exception.id}: expired at ${exception.expiresAt}`);
-    const references = exception.references ?? (exception.reference ? [exception.reference] : []);
-    if (references.length === 0 || references.some((reference) => !validReference(reference))) {
-      errors.push(`${exception.id}: exact references are required`);
-    }
-    const local = new Set<string>();
-    for (const reference of references.filter(validReference)) {
-      const id = dependencyReferenceId(reference);
-      if (local.has(id)) errors.push(`${exception.id}: duplicate reference ${id}`);
-      local.add(id);
-      if (exception.kind === "coverage") {
-        const previous = coverageOwners.get(id);
-        if (previous) errors.push(`${exception.id}: coverage overlaps ${previous} for ${id}`);
-        coverageOwners.set(id, exception.id);
-      }
-    }
-    if (["coverage", "immutability", "compatibility"].includes(exception.kind)) {
-      if (!Array.isArray(exception.evidence) || exception.evidence.length === 0 || !exception.evidence.every(validEvidence)) {
-        errors.push(`${exception.id}: valid evidence is required`);
-      }
-    }
-    if (exception.kind === "coverage") coverageExceptions.push(exception);
+  const context: ExceptionValidationContext = {
+    ...empty,
+    coverageOwners: new Map(),
+    ids: new Set(),
+    now,
+  };
+  for (const raw of value.exceptions) validateExceptionRecord(raw, context);
+  return {
+    errors: context.errors,
+    exceptions: context.exceptions,
+    coverageExceptions: context.coverageExceptions,
+  };
+}
+
+function validateRenovatePin(value: unknown, errors: string[]): void {
+  if (!isRecord(value) ||
+      value.image !== "renovate/renovate" ||
+      value.version !== "43.259.0" ||
+      value.digest !== "sha256:f9a2ea77df854f3ceb94833b7345715a024bed4f33995d7c957db2707e9275c5" ||
+      value.config !== ".github/renovate.json5") {
+    errors.push("Renovate local extraction pin is not exact");
   }
-  return { errors, exceptions, coverageExceptions };
+}
+
+const REQUIRED_PROBE_FIELDS = ["directory", "packageName", "introducedByPrUrl", "expiresAt"] as const;
+const PROBE_TTL_MS = 72 * 60 * 60 * 1000;
+
+function validateProbeFields(value: Record<string, unknown>, errors: string[]): void {
+  if (value.phase !== "default-branch-pending") {
+    errors.push("R1a requires one default-branch-pending probe");
+  }
+  for (const field of REQUIRED_PROBE_FIELDS) {
+    if (typeof value[field] !== "string" || value[field].length === 0) {
+      errors.push(`npmProbe.${field} is required`);
+    }
+  }
+  if (typeof value.introducedByPrUrl === "string" && value.introducedByPrUrl.includes("PENDING")) {
+    errors.push("npmProbe.introducedByPrUrl is still PENDING");
+  }
+}
+
+function validateProbeExpiry(value: Record<string, unknown>, now: Date, errors: string[]): void {
+  const expiry = Date.parse(String(value.expiresAt));
+  const remaining = expiry - now.getTime();
+  if (Number.isNaN(expiry) || remaining <= 0 || remaining > PROBE_TTL_MS) {
+    errors.push("npmProbe expiry must be in the next 72 hours");
+  }
+}
+
+function parseDependabotProbe(value: unknown, now: Date, errors: string[]): DependencyProbe | undefined {
+  if (!isRecord(value) || value.config !== ".github/dependabot.yml" || !isRecord(value.npmProbe)) {
+    errors.push("Dependabot config and npmProbe are required");
+    return undefined;
+  }
+  validateProbeFields(value.npmProbe, errors);
+  validateProbeExpiry(value.npmProbe, now, errors);
+  return value.npmProbe as unknown as DependencyProbe;
+}
+
+function isOwnershipRule(value: unknown): value is DependencyOwnershipRule {
+  return isRecord(value) &&
+    typeof value.referenceKind === "string" &&
+    ["dependabot", "renovate"].includes(String(value.manager)) &&
+    Array.isArray(value.pathPatterns) &&
+    value.pathPatterns.length > 0 &&
+    value.pathPatterns.every((pattern) => typeof pattern === "string" && pattern.length > 0);
+}
+
+function parseOwnership(value: unknown, errors: string[]): DependencyOwnershipRule[] {
+  if (!Array.isArray(value)) {
+    errors.push("ownership must be an array");
+    return [];
+  }
+  const ownership: DependencyOwnershipRule[] = [];
+  for (const rule of value) {
+    if (isOwnershipRule(rule)) ownership.push(rule);
+    else errors.push("malformed ownership rule");
+  }
+  return ownership;
 }
 
 export function validateCoverageFile(value: unknown, now = new Date()): CoverageValidationResult {
+  if (!isRecord(value) || value.schemaVersion !== 1) {
+    return { errors: ["dependency coverage schemaVersion must be 1"], ownership: [] };
+  }
   const errors: string[] = [];
-  const ownership: DependencyOwnershipRule[] = [];
-  if (!isRecord(value) || value.schemaVersion !== 1) return { errors: ["dependency coverage schemaVersion must be 1"], ownership };
-  const renovate = value.renovate;
-  if (!isRecord(renovate) || renovate.image !== "renovate/renovate" || renovate.version !== "43.259.0" ||
-      renovate.digest !== "sha256:f9a2ea77df854f3ceb94833b7345715a024bed4f33995d7c957db2707e9275c5" ||
-      renovate.config !== ".github/renovate.json5") {
-    errors.push("Renovate local extraction pin is not exact");
-  }
-  const dependabot = value.dependabot;
-  let probe: CoverageValidationResult["probe"];
-  if (!isRecord(dependabot) || dependabot.config !== ".github/dependabot.yml" || !isRecord(dependabot.npmProbe)) {
-    errors.push("Dependabot config and npmProbe are required");
-  } else {
-    const rawProbe = dependabot.npmProbe;
-    if (rawProbe.phase !== "default-branch-pending") errors.push("R1a requires one default-branch-pending probe");
-    for (const field of ["directory", "packageName", "introducedByPrUrl", "expiresAt"]) {
-      if (typeof rawProbe[field] !== "string" || rawProbe[field].length === 0) errors.push(`npmProbe.${field} is required`);
-    }
-    if (typeof rawProbe.introducedByPrUrl === "string" && rawProbe.introducedByPrUrl.includes("PENDING")) {
-      errors.push("npmProbe.introducedByPrUrl is still PENDING");
-    }
-    const expiry = Date.parse(String(rawProbe.expiresAt));
-    if (Number.isNaN(expiry) || expiry <= now.getTime() || expiry - now.getTime() > 72 * 60 * 60 * 1000) {
-      errors.push("npmProbe expiry must be in the next 72 hours");
-    }
-    probe = rawProbe as unknown as NonNullable<CoverageValidationResult["probe"]>;
-  }
-  if (!Array.isArray(value.ownership)) errors.push("ownership must be an array");
-  else {
-    for (const rawRule of value.ownership) {
-      if (!isRecord(rawRule) || typeof rawRule.referenceKind !== "string" ||
-          !["dependabot", "renovate"].includes(String(rawRule.manager)) ||
-          !Array.isArray(rawRule.pathPatterns) || rawRule.pathPatterns.length === 0 ||
-          !rawRule.pathPatterns.every((pattern) => typeof pattern === "string" && pattern.length > 0)) {
-        errors.push("malformed ownership rule");
-      } else {
-        ownership.push(rawRule as unknown as DependencyOwnershipRule);
-      }
-    }
-  }
+  validateRenovatePin(value.renovate, errors);
+  const probe = parseDependabotProbe(value.dependabot, now, errors);
+  const ownership = parseOwnership(value.ownership, errors);
   return { errors, ownership, probe };
 }
 
-function globMatches(pattern: string, value: string): boolean {
-  if (pattern === "**") return true;
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*/g, "\0").replace(/\*/g, "[^/]*").replace(/\0/g, ".*");
-  return new RegExp(`^${escaped}$`).test(value);
+function segmentMatches(pattern: string, value: string): boolean {
+  let reachable = new Array<boolean>(value.length + 1).fill(false);
+  reachable[0] = true;
+  for (const character of pattern) {
+    const next = new Array<boolean>(value.length + 1).fill(false);
+    if (character === "*") next[0] = reachable[0];
+    for (let index = 1; index <= value.length; index += 1) {
+      next[index] = character === "*"
+        ? next[index - 1] || reachable[index]
+        : reachable[index - 1] && character === value[index - 1];
+    }
+    reachable = next;
+  }
+  return reachable[value.length];
 }
 
-export function auditDependencyCoverage(input: {
+function globMatches(pattern: string, value: string): boolean {
+  const patterns = pattern.split("/");
+  const values = value.split("/");
+  const reachable = Array.from(
+    { length: patterns.length + 1 },
+    () => new Array<boolean>(values.length + 1).fill(false),
+  );
+  reachable[0][0] = true;
+  for (let patternIndex = 1; patternIndex <= patterns.length; patternIndex += 1) {
+    const segment = patterns[patternIndex - 1];
+    if (segment === "**") reachable[patternIndex][0] = reachable[patternIndex - 1][0];
+    for (let valueIndex = 1; valueIndex <= values.length; valueIndex += 1) {
+      reachable[patternIndex][valueIndex] = segment === "**"
+        ? reachable[patternIndex - 1][valueIndex] || reachable[patternIndex][valueIndex - 1]
+        : reachable[patternIndex - 1][valueIndex - 1] && segmentMatches(segment, values[valueIndex - 1]);
+    }
+  }
+  return reachable[patterns.length][values.length];
+}
+
+interface CoverageAuditInput {
   inventory: DependencyInventory;
   ownership: DependencyOwnershipRule[];
   dependabotReferences: DependencyReferenceIdentity[];
   renovateReferences: DependencyReferenceIdentity[];
   exceptions: DependencyException[];
   now?: Date;
-}): ValidationResult {
-  const errors: string[] = [];
-  const dependabot = new Set(input.dependabotReferences.map(dependencyReferenceId));
-  const renovate = new Set(input.renovateReferences.map(dependencyReferenceId));
-  const exceptions = input.exceptions.flatMap((exception) => (exception.references ?? []).map((reference) => ({ exception, reference })));
-  const inventoryIds = new Set(input.inventory.references.map(dependencyReferenceId));
+}
+
+interface ExceptionReference {
+  exception: DependencyException;
+  reference: DependencyReferenceIdentity;
+}
+
+interface CoverageAuditContext {
+  input: CoverageAuditInput;
+  errors: string[];
+  dependabot: Set<string>;
+  renovate: Set<string>;
+  exceptions: ExceptionReference[];
+}
+
+function ownershipRules(
+  input: CoverageAuditInput,
+  reference: DependencyReferenceIdentity,
+): DependencyOwnershipRule[] {
+  return input.ownership.filter((rule) =>
+    (rule.referenceKind === "*" || rule.referenceKind === reference.referenceKind) &&
+    rule.pathPatterns.some((pattern) => globMatches(pattern, reference.path)),
+  );
+}
+
+function extractedManagers(context: CoverageAuditContext, id: string): Array<"dependabot" | "renovate"> {
+  const managers: Array<"dependabot" | "renovate"> = [];
+  if (context.dependabot.has(id)) managers.push("dependabot");
+  if (context.renovate.has(id)) managers.push("renovate");
+  return managers;
+}
+
+function matchingExceptions(
+  context: CoverageAuditContext,
+  reference: DependencyReferenceIdentity,
+): ExceptionReference[] {
+  return context.exceptions.filter(({ reference: candidate }) => matchesExactReference(reference, candidate));
+}
+
+function auditReference(context: CoverageAuditContext, reference: DependencyReferenceIdentity): void {
+  const id = dependencyReferenceId(reference);
+  const rules = ownershipRules(context.input, reference);
+  if (rules.length !== 1) {
+    context.errors.push(`${id}: expected exactly one ownership rule, found ${rules.length}`);
+    return;
+  }
+  const managers = extractedManagers(context, id);
+  if (managers.length > 1) {
+    context.errors.push(`${id}: overlapping bot ownership`);
+    return;
+  }
+  const exceptions = matchingExceptions(context, reference);
+  if (managers.length === 0) {
+    if (exceptions.length !== 1) {
+      context.errors.push(`${id}: expected manager extraction or one exact coverage exception, found ${exceptions.length}`);
+    }
+    return;
+  }
+  if (managers[0] !== rules[0].manager) {
+    context.errors.push(`${id}: wrong manager ${managers[0]}; expected ${rules[0].manager}`);
+  }
+  if (exceptions.length > 0) {
+    context.errors.push(`${id}: both manager extraction and coverage exception apply`);
+  }
+}
+
+function auditStaleExceptions(context: CoverageAuditContext): void {
+  const inventoryIds = new Set(context.input.inventory.references.map(dependencyReferenceId));
+  for (const { exception, reference } of context.exceptions) {
+    const id = dependencyReferenceId(reference);
+    if (!inventoryIds.has(id)) context.errors.push(`${exception.id}: stale or broad reference ${id}`);
+  }
+}
+
+function exceptionReferencesForAudit(exceptions: DependencyException[]): ExceptionReference[] {
+  return exceptions.flatMap((exception) =>
+    (exception.references ?? []).map((reference) => ({ exception, reference })),
+  );
+}
+
+export function auditDependencyCoverage(input: CoverageAuditInput): ValidationResult {
+  const context: CoverageAuditContext = {
+    input,
+    errors: [],
+    dependabot: new Set(input.dependabotReferences.map(dependencyReferenceId)),
+    renovate: new Set(input.renovateReferences.map(dependencyReferenceId)),
+    exceptions: exceptionReferencesForAudit(input.exceptions),
+  };
   for (const reference of input.inventory.references) {
-    const id = dependencyReferenceId(reference);
-    const rules = input.ownership.filter((rule) =>
-      (rule.referenceKind === "*" || rule.referenceKind === reference.referenceKind) &&
-      rule.pathPatterns.some((pattern) => globMatches(pattern, reference.path)),
-    );
-    if (rules.length !== 1) {
-      errors.push(`${id}: expected exactly one ownership rule, found ${rules.length}`);
-      continue;
-    }
-    const extractedBy = [dependabot.has(id) ? "dependabot" : undefined, renovate.has(id) ? "renovate" : undefined].filter(Boolean);
-    if (extractedBy.length > 1) errors.push(`${id}: overlapping bot ownership`);
-    const matching = exceptions.filter(({ reference: candidate }) => matchesExactReference(reference, candidate));
-    if (extractedBy.length === 1) {
-      if (extractedBy[0] !== rules[0].manager) {
-        errors.push(`${id}: wrong manager ${String(extractedBy[0])}; expected ${rules[0].manager}`);
-      }
-      if (matching.length > 0) errors.push(`${id}: both manager extraction and coverage exception apply`);
-    } else if (extractedBy.length === 0 && matching.length !== 1) {
-      errors.push(`${id}: expected manager extraction or one exact coverage exception, found ${matching.length}`);
-    }
+    auditReference(context, reference);
   }
-  for (const { exception, reference } of exceptions) {
-    const id = dependencyReferenceId(reference);
-    if (!inventoryIds.has(id)) errors.push(`${exception.id}: stale or broad reference ${id}`);
-  }
-  return { errors };
+  auditStaleExceptions(context);
+  return { errors: context.errors };
 }
