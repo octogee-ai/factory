@@ -43,6 +43,7 @@ function operatorOpts(port: number): StartFleetOptions {
     rpc: {} as GatewayRpcClient,
     adapter: {} as CustomerLifecycleAdapter,
     gatewayId: "bender-test",
+    revisionId: "bender-test-r1",
     log: () => undefined,
     port,
     publicKey: "pk",

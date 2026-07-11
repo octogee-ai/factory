@@ -10,34 +10,96 @@ vi.mock("../lib/db", () => {
     },
   };
 
-  const gateways: Record<string, any> = {
-    "gw-test-blue": {
-      gatewayId: "gw-test-blue",
+  function durableRoot(gatewayId: string, revisionId: string) {
+    return {
+      gatewayId,
+      createdAt: 1,
+      createdBy: "test",
+      updatedAt: 1,
+      updatedBy: "test",
+      latestRelease: 1,
+      desiredRelease: 1,
+      liveRelease: 1,
+      liveRevisionId: revisionId,
+      trafficRevisionId: revisionId,
+      desiredStatus: "running",
+      roll: null,
+      configSchemaVersion: 1,
+      profile: "standard",
+      gatewayClass: "shared",
+      imageProfile: "standard",
+      sizingTier: null,
+      computeClass: null,
+      gcpProject: null,
+      gatewayContainerSecurityContext: null,
+      serviceAccountName: null,
+      serviceAccount: null,
+      operatorAccess: null,
+      ownerUid: null,
+      coOwnerUids: [],
+      builderSlug: null,
+      openclawOverrides: null,
+      modelBrokerLimits: null,
+      preemption: null,
+    };
+  }
+
+  function servingRevision(
+    gatewayId: string,
+    revisionId: string,
+    heartbeat: Record<string, unknown>,
+    lastError: Record<string, unknown> = { message: null, at: null },
+  ) {
+    return {
+      docKind: "revision",
+      revisionId,
+      gateway: gatewayId,
+      release: 1,
+      rollRole: "serving",
+      lifecycle: "serving",
+      createdAt: 1,
+      createdByOperationId: null,
+      retiredAt: null,
+      retireReason: null,
+      helm: {},
+      heartbeat,
+      lastError,
+    };
+  }
+
+  const gatewayRoots: Record<string, any> = {
+    "gw-test-primary": durableRoot("gw-test-primary", "gw-test-primary-r1"),
+    "gw-test-secondary": durableRoot("gw-test-secondary", "gw-test-secondary-r1"),
+    "gw-test-stale": durableRoot("gw-test-stale", "gw-test-stale-r1"),
+  };
+
+  const gatewayRevisions: Record<string, any> = {
+    "gw-test-primary-r1": servingRevision("gw-test-primary", "gw-test-primary-r1", {
       status: "ready",
       version: "abc1234",
       openclawVersion: "v1.2.3",
       mountedCustomers: ["alice", "bob", "christopher"],
       lastHeartbeatAt: { toDate: () => new Date(Date.now() - 2_000) },
-      lastError: null,
-    },
-    "gw-test-green": {
-      gatewayId: "gw-test-green",
+    }),
+    "gw-test-secondary-r1": servingRevision("gw-test-secondary", "gw-test-secondary-r1", {
       status: "ready",
       version: "def5678",
       openclawVersion: "v1.2.3",
       mountedCustomers: ["dana"],
       lastHeartbeatAt: { toDate: () => new Date(Date.now() - 5_000) },
-      lastError: null,
-    },
-    "gw-test-stale": {
-      gatewayId: "gw-test-stale",
-      status: "unreachable",
-      version: "ghi9012",
-      openclawVersion: "v1.2.3",
-      mountedCustomers: [],
-      lastHeartbeatAt: { toDate: () => new Date(Date.now() - 5 * 60_000) },
-      lastError: { slug: "frodo", message: "git clone timeout", at: { toDate: () => new Date() } },
-    },
+    }),
+    "gw-test-stale-r1": servingRevision(
+      "gw-test-stale",
+      "gw-test-stale-r1",
+      {
+        status: "ready",
+        version: "ghi9012",
+        openclawVersion: "v1.2.3",
+        mountedCustomers: [],
+        lastHeartbeatAt: { toDate: () => new Date(Date.now() - 5 * 60_000) },
+      },
+      { slug: "frodo", message: "git clone timeout", at: { toDate: () => new Date() } },
+    ),
   };
 
   function makeQuery(docs: Array<{ id: string; data: () => any }>) {
@@ -64,7 +126,11 @@ vi.mock("../lib/db", () => {
       };
     }
     if (path === "gateways") {
-      const docs = Object.keys(gateways).map((id) => ({ id, data: () => gateways[id] }));
+      const docs = Object.keys(gatewayRoots).map((id) => ({ id, data: () => gatewayRoots[id] }));
+      return makeQuery(docs);
+    }
+    if (path === "glmGateways") {
+      const docs = Object.keys(gatewayRevisions).map((id) => ({ id, data: () => gatewayRevisions[id] }));
       return makeQuery(docs);
     }
     return makeQuery([]);
@@ -118,31 +184,28 @@ describe("GET /api/admin/gateways", () => {
     expect(Array.isArray(res.body.gateways)).toBe(true);
     expect(res.body.gateways).toHaveLength(3);
 
-    const blue = res.body.gateways.find((g: any) => g.gatewayId === "gw-test-blue");
-    expect(blue).toMatchObject({
-      gatewayId: "gw-test-blue",
+    const primary = res.body.gateways.find((g: any) => g.gatewayId === "gw-test-primary");
+    expect(primary).toMatchObject({
+      gatewayId: "gw-test-primary",
       status: "ready",
       imageTag: "abc1234",
       mountedCustomers: ["alice", "bob", "christopher"],
     });
-    expect(blue.heartbeatAgeMs).toBeGreaterThanOrEqual(0);
-    expect(blue.heartbeatAgeMs).toBeLessThan(5_000);
+    expect(primary.heartbeatAgeMs).toBeGreaterThanOrEqual(0);
+    expect(primary.heartbeatAgeMs).toBeLessThan(5_000);
   });
 
-  it("projects the durable gateway identity, convention-derived when no glmGateways doc carries the field yet", async () => {
+  it("projects durable gateway identities from roots and exact serving revisions", async () => {
     const res = await request(app).get("/api/admin/gateways");
-    const blue = res.body.gateways.find((g: any) => g.gatewayId === "gw-test-blue");
-    const green = res.body.gateways.find((g: any) => g.gatewayId === "gw-test-green");
+    const primary = res.body.gateways.find((g: any) => g.gatewayId === "gw-test-primary");
+    const secondary = res.body.gateways.find((g: any) => g.gatewayId === "gw-test-secondary");
     const stale = res.body.gateways.find((g: any) => g.gatewayId === "gw-test-stale");
-    // Blue/green siblings share one gateway identity by convention-parse.
-    expect(blue.gateway).toBe("gw-test");
-    expect(green.gateway).toBe("gw-test");
-    // An id without a roll-role suffix is its own bare identity.
+    expect(primary.gateway).toBe("gw-test-primary");
+    expect(secondary.gateway).toBe("gw-test-secondary");
     expect(stale.gateway).toBe("gw-test-stale");
   });
 
   it("rolls up gateway counts including derived unreachable, and customers mounted", async () => {
-    // unreachable is derived from heartbeat age (gw-test-stale is 5m stale), not a written status.
     const res = await request(app).get("/api/admin/gateways");
     expect(res.status).toBe(200);
     expect(res.body.stats).toMatchObject({

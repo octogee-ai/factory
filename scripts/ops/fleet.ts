@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 
 import { applicationDefault, cert, initializeApp } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, type Firestore } from "firebase-admin/firestore";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -10,10 +10,11 @@ import {
   type GatewayStatus,
   GATEWAYS_COLLECTION,
 } from "../../shared/types/fleet-controller.js";
+import { type GatewayProfile } from "../../shared/types/glm.js";
 import {
-  GLM_GATEWAYS_COLLECTION,
-  type GatewayProfile,
-} from "../../shared/types/glm.js";
+  readGatewayAuthorization,
+  readGatewayLiveRevisionHeartbeat,
+} from "@octogee/core/gateway-live-release";
 import {
   type MigrationState,
   fullPlan,
@@ -327,15 +328,7 @@ function normalizeGatewayProfile(profile: unknown): GatewayProfile {
   return profile === "operator" ? "operator" : "standard";
 }
 
-async function readGatewayProfile(gatewayId: string): Promise<GatewayProfile> {
-  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-  return normalizeGatewayProfile(snap.exists ? snap.data()?.profile : undefined);
-}
-
-// Live telemetry rides glmGateways/{id}.heartbeat now (the flat gateways/{id}
-// dual-write is retired). Diagnostics read the heartbeat sub-document — the flat
-// gateways/{id} fields are stale.
-interface GatewayHeartbeatView {
+export interface GatewayHeartbeatView {
   status?: string;
   version?: string;
   openclawVersion?: string;
@@ -345,14 +338,45 @@ interface GatewayHeartbeatView {
   lastError?: { message?: string; slug?: string; at?: unknown } | null;
 }
 
-function heartbeatView(glmData: Record<string, unknown> | undefined): GatewayHeartbeatView {
-  const hb = glmData?.heartbeat;
-  return hb && typeof hb === "object" ? (hb as GatewayHeartbeatView) : {};
+function heartbeatView(heartbeat: Record<string, unknown> | undefined): GatewayHeartbeatView {
+  return heartbeat ? (heartbeat as GatewayHeartbeatView) : {};
 }
 
-async function readHeartbeatView(gatewayId: string): Promise<GatewayHeartbeatView> {
-  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-  return heartbeatView(snap.exists ? (snap.data() as Record<string, unknown>) : undefined);
+export interface FleetGatewayRuntime {
+  gatewayId: string;
+  desiredStatus: "running" | "paused" | "retired";
+  profile: GatewayProfile;
+  heartbeat: GatewayHeartbeatView;
+}
+
+export interface FleetGatewayRuntimeEntry {
+  gatewayId: string;
+  runtime: FleetGatewayRuntime | null;
+}
+
+export async function readFleetGatewayRuntime(
+  reader: Pick<Firestore, "doc">,
+  gatewayId: string,
+): Promise<FleetGatewayRuntime | null> {
+  const authorization = await readGatewayAuthorization(reader, gatewayId);
+  if (!authorization) return null;
+  const heartbeat = await readGatewayLiveRevisionHeartbeat(reader, authorization.gateway);
+  return {
+    gatewayId,
+    desiredStatus: authorization.gateway.desiredStatus,
+    profile: normalizeGatewayProfile(authorization.config.profile),
+    heartbeat: heartbeatView(heartbeat ?? undefined),
+  };
+}
+
+export async function listFleetGatewayRuntimes(
+  reader: Pick<Firestore, "collection" | "doc">,
+): Promise<FleetGatewayRuntimeEntry[]> {
+  const roots = await reader.collection(GATEWAYS_COLLECTION).get();
+  return Promise.all(roots.docs.map(async (root) => ({
+    gatewayId: root.id,
+    runtime: await readFleetGatewayRuntime(reader, root.id),
+  })));
 }
 
 interface UserDoc {
@@ -463,19 +487,18 @@ async function findUserBySlug(slug: string): Promise<
 }
 
 async function lsGateways(): Promise<void> {
-  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
-  const rows = snap.docs.map((d) => {
-    const hb = heartbeatView(d.data() as Record<string, unknown>);
-
-const pods = allGatewayPods();
-    const podSummary = pods.length === 0
-      ? "?"
-      : pods.length === 1
-        ? `${pods[0].ready} ${pods[0].phase} (${ageHuman(pods[0].ageS)})`
-        : `${pods.length} pods (${pods.filter((p) => p.phase === "Running").length} running)`;
+  const gateways = await listFleetGatewayRuntimes(db);
+  const pods = allGatewayPods();
+  const podSummary = pods.length === 0
+    ? "?"
+    : pods.length === 1
+      ? `${pods[0].ready} ${pods[0].phase} (${ageHuman(pods[0].ageS)})`
+      : `${pods.length} pods (${pods.filter((p) => p.phase === "Running").length} running)`;
+  const rows = gateways.map(({ gatewayId, runtime }) => {
+    const hb = runtime?.heartbeat ?? {};
     return {
-      gatewayId: d.id,
-      status: hb.status ?? "?",
+      gatewayId,
+      status: runtime ? hb.status ?? "?" : "invalid-root",
       version: (hb.version ?? "-").slice(0, 12),
       mounted: (hb.mountedCustomers ?? []).length,
       heartbeat: ts(hb.lastHeartbeatAt),
@@ -487,15 +510,15 @@ const pods = allGatewayPods();
 
 async function lsCustomers(): Promise<void> {
   const filter = typeof args.flags.gateway === "string" ? args.flags.gateway : null;
-
-const gwSnap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
+  const gateways = await listFleetGatewayRuntimes(db);
   const gwMounted: Record<string, Set<string>> = {};
-  for (const d of gwSnap.docs) {
-    const hb = heartbeatView(d.data() as Record<string, unknown>);
-    gwMounted[d.id] = new Set(hb.mountedCustomers ?? []);
+  for (const { gatewayId, runtime } of gateways) {
+    if (runtime) {
+      gwMounted[gatewayId] = new Set(runtime.heartbeat.mountedCustomers ?? []);
+    }
   }
 
-let q: FirebaseFirestore.Query = db.collection("users").where("approved", "==", true);
+  let q: FirebaseFirestore.Query = db.collection("users").where("approved", "==", true);
   if (filter) {
     q = q.where("provisioning.openclaw.gatewayId", "==", filter);
   }
@@ -527,7 +550,7 @@ let q: FirebaseFirestore.Query = db.collection("users").where("approved", "==", 
 
   console.log(table(rows));
 
-const orphans: Array<{ gatewayId: string; slug: string }> = [];
+  const orphans: Array<{ gatewayId: string; slug: string }> = [];
   for (const [gwId, mountedSet] of Object.entries(gwMounted)) {
     if (filter && gwId !== filter) continue;
     if (mountedSet.size === 0) continue;
@@ -588,12 +611,12 @@ async function inspectCustomer(slug: string): Promise<void> {
     return;
   }
 
-  const gwSnap = await db.collection(GATEWAYS_COLLECTION).doc(oc.gatewayId).get();
-  if (!gwSnap.exists) {
-    console.log("\n" + red(`${CROSS} gateways/${oc.gatewayId} does not exist — assigned to a gateway that isn't registered.`));
+  const runtime = await readFleetGatewayRuntime(db, oc.gatewayId);
+  if (!runtime) {
+    console.log("\n" + red(`${CROSS} gateways/${oc.gatewayId} has no valid durable root configuration.`));
     return;
   }
-  const gw = await readHeartbeatView(oc.gatewayId);
+  const gw = runtime.heartbeat;
   const mounted = (gw.mountedCustomers ?? []).includes(slug);
   const lastErrorForSlug =
     gw.lastError && gw.lastError.slug === slug ? gw.lastError : null;
@@ -623,12 +646,12 @@ console.log("\n" + bold("DRIFT"));
 }
 
 async function inspectGateway(gatewayId: string): Promise<void> {
-  const gwSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-  if (!gwSnap.exists) {
-    console.error(red(`${CROSS} No gateway doc at gateways/${gatewayId}.`));
+  const runtime = await readFleetGatewayRuntime(db, gatewayId);
+  if (!runtime) {
+    console.error(red(`${CROSS} Gateway '${gatewayId}' has no valid durable root configuration.`));
     process.exit(1);
   }
-  const gw = await readHeartbeatView(gatewayId);
+  const gw = runtime.heartbeat;
   console.log(bold(`GATEWAY ${gatewayId}`));
   console.log(table([
     { field: "status", value: gw.status ?? "-" },
@@ -674,14 +697,18 @@ async function addCustomer(slug: string, gatewayId: string, apply: boolean): Pro
     console.error(red(`${CROSS} User '${slug}' is not approved=true. Refusing to assign.`));
     process.exit(1);
   }
-  const gwSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-  if (!gwSnap.exists) {
-    console.error(red(`${CROSS} Gateway doc gateways/${gatewayId} doesn't exist.`));
-    console.error(dim(`  Run \`fleet --env=${args.env} ls gateways\` to see registered gateways.`));
+  const runtime = await readFleetGatewayRuntime(db, gatewayId);
+  if (!runtime) {
+    console.error(red(`${CROSS} Gateway '${gatewayId}' has no valid durable root configuration.`));
     process.exit(1);
   }
-  const gw = await readHeartbeatView(gatewayId);
-  const gatewayProfile = await readGatewayProfile(gatewayId);
+  const gw = runtime.heartbeat;
+  const gatewayProfile = runtime.profile;
+  if (runtime.desiredStatus !== "running") {
+    console.error(red(`${CROSS} Gateway '${gatewayId}' is ${runtime.desiredStatus}, not running.`));
+    console.error(dim(`  Refusing to assign — the customer would not be mounted.`));
+    process.exit(1);
+  }
   if (gw.status === "unreachable") {
     console.error(red(`${CROSS} Gateway '${gatewayId}' is in 'unreachable' status.`));
     console.error(dim(`  Refusing to assign — the customer would never get mounted.`));
@@ -755,14 +782,17 @@ async function migrateCustomerPlan(
     console.log(yellow(`'${slug}' is already on '${toGatewayId}'. Nothing to migrate.`));
     return;
   }
-  const targetSnap = await db.collection(GATEWAYS_COLLECTION).doc(toGatewayId).get();
-  if (!targetSnap.exists) {
-    console.error(red(`${CROSS} Target gateway 'gateways/${toGatewayId}' does not exist.`));
+  const targetRuntime = await readFleetGatewayRuntime(db, toGatewayId);
+  if (!targetRuntime) {
+    console.error(red(`${CROSS} Target gateway '${toGatewayId}' has no valid durable root configuration.`));
     process.exit(1);
   }
-  const target = await readHeartbeatView(toGatewayId);
-  if (target.status !== "ready") {
-    console.error(red(`${CROSS} Target gateway '${toGatewayId}' is in status '${target.status}'.`));
+  const target = targetRuntime.heartbeat;
+  if (targetRuntime.desiredStatus !== "running" || target.status !== "ready") {
+    const status = targetRuntime.desiredStatus === "running"
+      ? target.status ?? "unknown"
+      : targetRuntime.desiredStatus;
+    console.error(red(`${CROSS} Target gateway '${toGatewayId}' is in status '${status}'.`));
     console.error(dim(`  Refusing to migrate to a non-ready gateway.`));
     process.exit(1);
   }

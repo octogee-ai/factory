@@ -94,6 +94,15 @@ function makeDeps(
     readUserSnapshot: vi.fn(async () => SNAPSHOT),
     commitCutover: vi.fn(async () => undefined),
     setAssignmentState: vi.fn(async () => undefined),
+    resolveFromRevision: vi.fn(async (_uid: string, gatewayId: string) => ({
+      revisionId: `${gatewayId}-r1`,
+      release: 1,
+    })),
+    resolvePlacement: vi.fn(async (gatewayId: string) => ({
+      ok: true as const,
+      revisionId: `${gatewayId}-r1`,
+      release: 1,
+    })),
     resolveGatewayUrl: vi.fn(async (gw: string) => `http://test/${gw}`),
     buildClient: vi.fn((_resolveSync: (gw: string) => string) => client),
     genMigrationId: () => "mig-test-1",
@@ -224,8 +233,8 @@ describe("createMigrateCustomerHandler — happy path", () => {
     const handler = createMigrateCustomerHandler(deps);
     await handler(mkOp({ input: { uid: "uid-alice", toGatewayId: "gw-green" } }), makeCtx());
 
-    expect(resolveGatewayUrl).toHaveBeenCalledWith("gw-blue");
-    expect(resolveGatewayUrl).toHaveBeenCalledWith("gw-green");
+    expect(resolveGatewayUrl).toHaveBeenCalledWith("gw-blue-r1");
+    expect(resolveGatewayUrl).toHaveBeenCalledWith("gw-green-r1");
     expect(deps.buildClient).toHaveBeenCalledTimes(1);
   });
 
@@ -443,24 +452,41 @@ describe("createMigrateCustomerHandler — revision-targeted (same-gateway drain
     expect(client.quiesce).not.toHaveBeenCalled();
   });
 
-  it("cross-gateway migration still flips the mirror and resolves transport by bare gateway when no revisions exist", async () => {
+  it("rejects a migration when the destination has no durable root placement", async () => {
     const commitCutover = vi.fn(async () => undefined);
     const resolveGatewayUrl = vi.fn(async (id: string) => `http://test/${id}`);
     const { deps } = makeDeps({
       commitCutover,
       resolveGatewayUrl,
-      resolveFromRevision: vi.fn(async () => null),
+      resolveFromRevision: vi.fn(async () => ({ revisionId: "gw-blue-r1", release: 1 })),
       resolvePlacement: vi.fn(async () => null),
     });
     const handler = createMigrateCustomerHandler(deps);
     const result = await handler(mkOp({ input: { uid: "uid-alice", toGatewayId: "gw-green" } }), makeCtx());
-    expect(result.success).toBe(true);
-    expect(resolveGatewayUrl).toHaveBeenCalledWith("gw-blue");
-    expect(resolveGatewayUrl).toHaveBeenCalledWith("gw-green");
-    // Legacy migration: mirror flips (cross-gateway), no assignment revision.
-    expect(commitCutover).toHaveBeenCalledWith(
-      expect.objectContaining({ toGatewayId: "gw-green", flipMirror: true, revision: null }),
-    );
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/target gateway .* no durable placement/i);
+    expect(resolveGatewayUrl).not.toHaveBeenCalled();
+    expect(commitCutover).not.toHaveBeenCalled();
+  });
+
+  it("rejects a migration when the source has no durable revision", async () => {
+    const resolveGatewayUrl = vi.fn(async (id: string) => `http://test/${id}`);
+    const { deps, client } = makeDeps({
+      resolveGatewayUrl,
+      resolveFromRevision: vi.fn(async () => null),
+      resolvePlacement: vi.fn(async () => ({
+        ok: true as const,
+        revisionId: "gw-green-r1",
+        release: 1,
+      })),
+    });
+    const handler = createMigrateCustomerHandler(deps);
+    const result = await handler(mkOp({ input: { uid: "uid-alice", toGatewayId: "gw-green" } }), makeCtx());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/source gateway .* no durable revision/i);
+    expect(resolveGatewayUrl).not.toHaveBeenCalled();
+    expect(client.quiesce).not.toHaveBeenCalled();
   });
 });
 

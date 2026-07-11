@@ -1,9 +1,9 @@
 import type {
-  GatewayDesiredStatus,
   Operation,
   OperationStep,
   StepStatus,
 } from "@octogee/shared/types/glm";
+import type { GatewayLifecycleStatus } from "@octogee/shared/types/gateway-releases";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 
 // recycle-gateway — a REAL pod reroll, distinct from restart-gateway (which is
@@ -23,9 +23,10 @@ import type { OperationContext, OperationHandler, OperationResult } from "../ope
 // gateway is never left wedged offline.
 
 export interface RecycleGatewayDeps {
-  readDesiredStatus: (gatewayId: string) => Promise<GatewayDesiredStatus | null>;
-  setDesiredStatus: (gatewayId: string, status: GatewayDesiredStatus) => Promise<void>;
-  readAvailableReplicas: (gatewayId: string) => Promise<number | null>;
+  readDesiredStatus: (gatewayId: string) => Promise<GatewayLifecycleStatus | null>;
+  setDesiredStatus: (gatewayId: string, status: GatewayLifecycleStatus) => Promise<void>;
+  readServingRevisionId: (gatewayId: string) => Promise<string | null>;
+  readAvailableReplicas: (revisionId: string) => Promise<number | null>;
   now: () => number;
   wait: (ms: number) => Promise<void>;
   log: (msg: string) => void;
@@ -54,6 +55,14 @@ export function createRecycleGatewayHandler(deps: RecycleGatewayDeps): Operation
         error: `gateway ${gatewayId} is ${prior ?? "absent"}, not running — only a running gateway can be recycled`,
       };
     }
+    const revisionId = await deps.readServingRevisionId(gatewayId);
+    if (!revisionId) {
+      return {
+        steps: [],
+        success: false,
+        error: `gateway ${gatewayId} has no validated serving revision`,
+      };
+    }
 
     try {
       await deps.setDesiredStatus(gatewayId, "paused");
@@ -63,6 +72,7 @@ export function createRecycleGatewayHandler(deps: RecycleGatewayDeps): Operation
         ctx,
         stepName: "drain",
         gatewayId,
+        revisionId,
         timeoutMs: deps.drainTimeoutMs,
         ready: (available) => available === 0,
         timeoutMessage: `gateway ${gatewayId} did not drain to 0 replicas`,
@@ -79,6 +89,7 @@ export function createRecycleGatewayHandler(deps: RecycleGatewayDeps): Operation
         ctx,
         stepName: "restore",
         gatewayId,
+        revisionId,
         timeoutMs: deps.readyTimeoutMs,
         ready: (available) => available !== null && available >= 1,
         timeoutMessage: `gateway ${gatewayId} did not become ready after reroll`,
@@ -119,17 +130,18 @@ async function pollStep(args: {
   ctx: OperationContext;
   stepName: string;
   gatewayId: string;
+  revisionId: string;
   timeoutMs: number;
   ready: (available: number | null) => boolean;
   timeoutMessage: string;
 }): Promise<PollResult> {
-  const { deps, ctx, stepName, gatewayId, timeoutMs, ready, timeoutMessage } = args;
+  const { deps, ctx, stepName, revisionId, timeoutMs, ready, timeoutMessage } = args;
   const startedAt = deps.now();
   await reportStep(ctx, { name: stepName, status: "running", startedAt });
 
   const deadline = startedAt + timeoutMs;
   for (;;) {
-    if (ready(await deps.readAvailableReplicas(gatewayId))) {
+    if (ready(await deps.readAvailableReplicas(revisionId))) {
       await reportStep(ctx, { name: stepName, status: "done", startedAt, completedAt: deps.now() });
       return { ok: true };
     }

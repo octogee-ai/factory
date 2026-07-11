@@ -409,11 +409,100 @@ function buildOperatorFlowApp() {
   return app;
 }
 
+const GATEWAY_REPOSITORY =
+  "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
+
+function seedDurableGateway(
+  gatewayId: string,
+  options: {
+    imageTag?: string;
+    heartbeat?: Record<string, unknown>;
+    root?: Record<string, unknown>;
+  } = {},
+) {
+  const imageTag = options.imageTag ?? "abc1234";
+  gatewaysDocs[gatewayId] = {
+    gatewayId,
+    createdAt: 1,
+    createdBy: "test",
+    updatedAt: 1,
+    updatedBy: "test",
+    latestRelease: 1,
+    desiredRelease: 1,
+    liveRelease: null,
+    liveRevisionId: null,
+    trafficRevisionId: null,
+    desiredStatus: "running",
+    roll: null,
+    configSchemaVersion: 1,
+    profile: "standard",
+    gatewayClass: "shared",
+    imageProfile: "standard",
+    sizingTier: null,
+    computeClass: null,
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: null,
+    serviceAccount: null,
+    operatorAccess: null,
+    ownerUid: null,
+    coOwnerUids: [],
+    builderSlug: null,
+    openclawOverrides: null,
+    modelBrokerLimits: null,
+    preemption: null,
+    ...options.root,
+  };
+  gatewayReleasesDocs[`${gatewayId}/1`] = {
+    gatewayId,
+    release: 1,
+    createdAt: 1,
+    createdBy: "test",
+    sourceRelease: null,
+    note: null,
+    payloadHash: "0".repeat(64),
+    payload: {
+      imageRepository: GATEWAY_REPOSITORY,
+      imageTag,
+      macOpsTokenProtocol: 2,
+    },
+  };
+  if (options.heartbeat) markGatewayServing(gatewayId, options.heartbeat);
+}
+
+function markGatewayServing(
+  gatewayId: string,
+  heartbeat: Record<string, unknown>,
+) {
+  const revisionId = `${gatewayId}-r1`;
+  gatewaysDocs[gatewayId] = {
+    ...gatewaysDocs[gatewayId],
+    liveRelease: 1,
+    liveRevisionId: revisionId,
+    trafficRevisionId: revisionId,
+  };
+  glmGatewaysDocs[revisionId] = {
+    docKind: "revision",
+    revisionId,
+    gateway: gatewayId,
+    release: 1,
+    rollRole: "serving",
+    lifecycle: "serving",
+    createdAt: 1,
+    createdByOperationId: null,
+    retiredAt: null,
+    retireReason: null,
+    helm: {},
+    heartbeat,
+    lastError: { message: null, at: null },
+  };
+}
+
 beforeEach(() => {
   calls.length = 0;
   glmOperationsDocs = [];
   glmGatewaysDocs = {};
-  gatewaysDocs = { "canary": { gatewayId: "canary", status: "ready" } };
+  gatewaysDocs = {};
   gatewayReleasesDocs = {};
   gatewayAssignmentsDocs = {};
   usersDocs = {};
@@ -431,35 +520,17 @@ beforeEach(() => {
 describe("Admin onboarding placement", () => {
   it("projects policy target, assigned gateway, mounted gateway, and pointer drift separately", async () => {
     configDocs.orchestrator = {
-      defaultGatewayId: "gw-blue",
+      defaultGatewayId: "gw-target",
       overrides: {},
     };
-    glmGatewaysDocs = {
-      "gw-green": {
-        gatewayId: "gw-green",
-        gatewayClass: "shared",
-        desiredStatus: "running",
-        imageTag: "oldsha1",
-      },
-      "gw-blue": {
-        gatewayId: "gw-blue",
-        gatewayClass: "shared",
-        desiredStatus: "running",
-        imageTag: "newsha1",
-      },
-    };
-    gatewaysDocs = {
-      "gw-green": {
-        gatewayId: "gw-green",
-        status: "ready",
-        mountedCustomers: ["alice"],
-      },
-      "gw-blue": {
-        gatewayId: "gw-blue",
-        status: "ready",
-        mountedCustomers: [],
-      },
-    };
+    seedDurableGateway("gw-source", {
+      imageTag: "oldsha1",
+      heartbeat: { status: "ready", mountedCustomers: ["alice"] },
+    });
+    seedDurableGateway("gw-target", {
+      imageTag: "newsha1",
+      heartbeat: { status: "ready", mountedCustomers: [] },
+    });
     usersDocs = {
       "uid-alice": {
         approved: true,
@@ -467,7 +538,7 @@ describe("Admin onboarding placement", () => {
         provisioning: {
           openclaw: {
             slug: "alice",
-            gatewayId: "gw-green",
+            gatewayId: "gw-source",
           },
         },
       },
@@ -476,29 +547,29 @@ describe("Admin onboarding placement", () => {
     const res = await request(buildApp()).get("/api/admin/onboarding-placement");
 
     expect(res.status).toBe(200);
-    expect(res.body.config).toEqual({ defaultGatewayId: "gw-blue", overrides: {} });
+    expect(res.body.config).toEqual({ defaultGatewayId: "gw-target", overrides: {} });
     expect(res.body.driftSummary["pointer-drift"]).toBe(1);
     expect(res.body.customers).toEqual([
       expect.objectContaining({
         uid: "uid-alice",
         slug: "alice",
-        policyTargetGatewayId: "gw-blue",
-        assignedGatewayId: "gw-green",
-        mountedGatewayId: "gw-green",
+        policyTargetGatewayId: "gw-target",
+        assignedGatewayId: "gw-source",
+        mountedGatewayId: "gw-source",
         driftState: "pointer-drift",
       }),
     ]);
     expect(res.body.gateways).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          gatewayId: "gw-blue",
+          gatewayId: "gw-target",
           defaultTarget: true,
           assignedCount: 0,
           mountedCount: 0,
           driftCount: 1,
         }),
         expect.objectContaining({
-          gatewayId: "gw-green",
+          gatewayId: "gw-source",
           defaultTarget: false,
           assignedCount: 1,
           mountedCount: 1,
@@ -510,9 +581,7 @@ describe("Admin onboarding placement", () => {
 
   it("persists a validated default gateway and per-uid overrides", async () => {
     configDocs.orchestrator = { defaultGatewayId: "gw-old", overrides: {} };
-    glmGatewaysDocs = {
-      "gw-new": { gatewayId: "gw-new", gatewayClass: "shared", desiredStatus: "running" },
-    };
+    seedDurableGateway("gw-new");
     usersDocs = {
       "uid-alice": {
         approved: true,
@@ -542,9 +611,13 @@ describe("Admin onboarding placement", () => {
 
   it("rejects a default gateway pointed at a dedicated (non-shared) gateway", async () => {
     configDocs.orchestrator = { defaultGatewayId: "gw-old", overrides: {} };
-    glmGatewaysDocs = {
-      "gw-builder": { gatewayId: "gw-builder", gatewayClass: "builder", desiredStatus: "running" },
-    };
+    seedDurableGateway("gw-builder", {
+      root: {
+        gatewayClass: "builder",
+        ownerUid: "uid-builder",
+        builderSlug: "builder",
+      },
+    });
 
     const res = await request(buildApp())
       .patch("/api/admin/onboarding-placement")
@@ -555,50 +628,47 @@ describe("Admin onboarding placement", () => {
   });
 });
 
-describe("POST /api/admin/gateways — create desired state + op", () => {
-  it("writes a glmGateways doc and creates an add-gateway operation", async () => {
+describe("POST /api/admin/gateways — create durable state + op", () => {
+  it("writes a durable gateway root and immutable release with an add-gateway operation", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "canary",
+      gatewayId: "created-canary",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
     });
     expect(res.status).toBe(202);
-    expect(res.body).toMatchObject({ gatewayId: "canary" });
+    expect(res.body).toMatchObject({ gatewayId: "created-canary" });
     expect(res.body.operationId).toBeTruthy();
 
     const gwWrite = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+      (c) => c.collection === "gateways" && c.op === "doc.set",
     );
-    expect(gwWrite?.docId).toBe("canary");
+    expect(gwWrite?.docId).toBe("created-canary");
     expect(gwWrite?.data).toMatchObject({
-      gatewayId: "canary",
-      gateway: "canary",
-      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-      imageTag: "abc1234",
+      gatewayId: "created-canary",
       desiredStatus: "running",
       createdBy: "admin-user",
+      latestRelease: 1,
+      desiredRelease: 1,
     });
+    expect(glmGatewaysDocs["created-canary"]).toBeUndefined();
 
     const opWrite = calls.find((c) => c.collection === "glmOperations");
     expect(opWrite?.data).toMatchObject({
       kind: "add-gateway",
       status: "pending",
       createdBy: "admin-user",
-      gatewayId: "canary",
+      gatewayId: "created-canary",
     });
 
-    // Step 2 dual-write, end-to-end through gateway-edge: the durable
-    // gateways/{id} identity + immutable release 1 land alongside the legacy
-    // glmGateways desired doc above.
-    expect(gatewaysDocs.canary).toMatchObject({
-      gatewayId: "canary",
+    expect(gatewaysDocs["created-canary"]).toMatchObject({
+      gatewayId: "created-canary",
       latestRelease: 1,
       desiredRelease: 1,
       desiredStatus: "running",
     });
     const releaseWrite = calls.find(
-      (c) => c.collection === "gateways/canary/releases" && c.op === "doc.set",
+      (c) => c.collection === "gateways/created-canary/releases" && c.op === "doc.set",
     );
     expect(releaseWrite?.docId).toBe("1");
     expect(releaseWrite?.data).toMatchObject({
@@ -633,7 +703,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
   it("persists sizingTier and profile when supplied in the body", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "canary",
+      gatewayId: "created-operator",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
       profile: "operator",
@@ -641,7 +711,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     });
     expect(res.status).toBe(202);
     const gwWrite = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+      (c) => c.collection === "gateways" && c.op === "doc.set",
     );
     expect(gwWrite?.data).toMatchObject({
       profile: "operator",
@@ -652,7 +722,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
         shellsEnabled: false,
         reason: "runtime-trust-boundary-not-provisioned",
       },
-      serviceAccountName: "octogee-gw-canary",
+      serviceAccountName: "octogee-gw-created-operator",
       serviceAccount: {
         create: true,
       },
@@ -675,7 +745,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     expect(res.status).toBe(202);
 
     const gwWrite = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+      (c) => c.collection === "gateways" && c.op === "doc.set",
     );
     expect(gwWrite?.data).toMatchObject({
       gatewayId: "jack",
@@ -686,14 +756,8 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
         shellsEnabled: true,
         reason: "owned-runtime-gateway",
       },
-      operatorReservation: {
-        status: "reserved",
-        reservedBy: "admin-user",
-        billingStatus: "manual",
-      },
     });
-    expect(typeof gwWrite?.data?.operatorReservation).toBe("object");
-    expect(typeof (gwWrite?.data?.operatorReservation as { reservedAt?: unknown }).reservedAt).toBe("number");
+    expect(gwWrite?.data).not.toHaveProperty("operatorReservation");
 
     const opWrite = calls.find((c) => c.collection === "glmOperations");
     expect(opWrite?.data?.input).toMatchObject({
@@ -720,7 +784,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     expect(res.status).toBe(202);
 
     const gwWrite = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+      (c) => c.collection === "gateways" && c.op === "doc.set",
     );
     expect(gwWrite?.data).toMatchObject({
       gatewayId: "jack",
@@ -732,8 +796,10 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
         reason: "owned-runtime-gateway",
       },
     });
-    expect(gwWrite?.data).not.toHaveProperty("imageProfile");
-    expect(gwWrite?.data).not.toHaveProperty("serviceAccountName");
+    expect(gwWrite?.data).toMatchObject({
+      imageProfile: "standard",
+      serviceAccountName: null,
+    });
     expect(gwWrite?.data).not.toHaveProperty("operatorReservation");
 
     const opWrite = calls.find((c) => c.collection === "glmOperations");
@@ -757,7 +823,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     expect(res.body.error).toMatch(/ownerUid/);
     expect(provisionerCalls).toEqual([]);
     const gwWrite = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+      (c) => c.collection === "gateways" && c.op === "doc.set",
     );
     expect(gwWrite).toBeUndefined();
   });
@@ -765,7 +831,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
   it("rejects owner fields on shared gateways before side effects", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "canary",
+      gatewayId: "shared-with-owner",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
       ownerUid: "uid-jack",
@@ -774,7 +840,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     expect(res.body.error).toMatch(/gatewayClass=builder or gatewayClass=operator/);
     expect(provisionerCalls).toEqual([]);
     const gwWrite = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+      (c) => c.collection === "gateways" && c.op === "doc.set",
     );
     expect(gwWrite).toBeUndefined();
   });
@@ -792,7 +858,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     expect(res.body.error).toMatch(/owner user/i);
     expect(provisionerCalls).toEqual([]);
     const gwWrite = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+      (c) => c.collection === "gateways" && c.op === "doc.set",
     );
     expect(gwWrite).toBeUndefined();
   });
@@ -800,7 +866,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
   it("rejects unknown sizingTier values on create with 400", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "canary",
+      gatewayId: "invalid-tier",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
       sizingTier: "bogus-tier",
@@ -808,38 +874,38 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/sizingTier/);
     const gwWrite = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+      (c) => c.collection === "gateways" && c.op === "doc.set",
     );
     expect(gwWrite).toBeUndefined();
   });
 
-  it("provisions the gateway-auth-token Secret Manager shell (+ IAM) before writing the glmGateways doc", async () => {
+  it("provisions the gateway-auth-token Secret Manager shell before writing the durable root", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "canary",
+      gatewayId: "secret-ready",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
     });
     expect(res.status).toBe(202);
     expect(provisionerCalls).toEqual([
       {
-        gatewayId: "canary",
+        gatewayId: "secret-ready",
         gatewayServiceAccount: "octogee-gateway@octogee-test.iam.gserviceaccount.com",
       },
     ]);
   });
 
-  it("does NOT write the glmGateways doc if SM provisioning fails — operator gets 502 with detail", async () => {
+  it("does NOT write the durable root if SM provisioning fails — operator gets 502 with detail", async () => {
     provisionerNextError = new Error("PERMISSION_DENIED on secretmanager.secrets.create");
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "canary",
+      gatewayId: "secret-failure",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
     });
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/auth-token/);
-    const gwWrite = calls.find((c) => c.collection === "glmGateways" && c.op === "doc.set");
+    const gwWrite = calls.find((c) => c.collection === "gateways" && c.op === "doc.set");
     expect(gwWrite).toBeUndefined();
   });
 
@@ -847,7 +913,7 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
     delete process.env.GATEWAY_SERVICE_ACCOUNT;
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "canary",
+      gatewayId: "missing-service-account",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
     });
@@ -867,69 +933,53 @@ describe("POST /api/admin/gateways — create desired state + op", () => {
   });
 
   it("returns 409 when the gatewayId already exists", async () => {
-    glmGatewaysDocs["gw-existing"] = {
-      gatewayId: "gw-existing",
-    };
+    seedDurableGateway("gw-existing");
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "gw-existing",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-      imageTag: "v1",
+      imageTag: "abc1234",
     });
     expect(res.status).toBe(409);
   });
 
 });
 
-describe("PATCH /api/admin/gateways/:id — direct imageTag write is gated on mounted gateways", () => {
-  it("rejects an imageTag write when the gateway has mounted customers (409 → use the rollout op)", async () => {
-    glmGatewaysDocs["default"] = {
-      gatewayId: "default",
-      imageRepository: "repo",
-      imageTag: "old",
-      desiredStatus: "running",
-    };
-    gatewaysDocs["default"] = { gatewayId: "default", mountedCustomers: ["u1", "u2"] };
+describe("PATCH /api/admin/gateways/:id — durable config only", () => {
+  it("rejects an imageTag write when the gateway has mounted customers", async () => {
+    seedDurableGateway("default", {
+      heartbeat: { status: "ready", mountedCustomers: ["u1", "u2"] },
+    });
     const app = buildApp();
 
     const res = await request(app).patch("/api/admin/gateways/default").send({ imageTag: "new" });
 
     expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/rollout/i);
-    // No wedge: desired imageTag is left untouched.
-    expect(glmGatewaysDocs["default"].imageTag).toBe("old");
+    expect(res.body.error).toMatch(/immutable releases/i);
+    expect(gatewaysDocs["default"].latestRelease).toBe(1);
   });
 
-  it("allows an imageTag write on an EMPTY gateway (the in-place fast path)", async () => {
-    glmGatewaysDocs["canary"] = {
-      gatewayId: "canary",
-      imageRepository: "repo",
-      imageTag: "old",
-      desiredStatus: "running",
-    };
-    gatewaysDocs["canary"] = { gatewayId: "canary", mountedCustomers: [] };
+  it("rejects an imageTag write on an empty gateway", async () => {
+    seedDurableGateway("canary");
     const app = buildApp();
 
     const res = await request(app).patch("/api/admin/gateways/canary").send({ imageTag: "new" });
 
-    expect(res.status).toBe(202);
-    expect(glmGatewaysDocs["canary"].imageTag).toBe("new");
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/immutable releases/i);
+    expect(gatewayReleasesDocs["canary/1"].payload).toMatchObject({ imageTag: "abc1234" });
   });
 
   it("allows a non-image PATCH (desiredStatus) on a mounted gateway", async () => {
-    glmGatewaysDocs["default"] = {
-      gatewayId: "default",
-      imageRepository: "repo",
-      imageTag: "old",
-      desiredStatus: "running",
-    };
-    gatewaysDocs["default"] = { gatewayId: "default", mountedCustomers: ["u1"] };
+    seedDurableGateway("default", {
+      heartbeat: { status: "ready", mountedCustomers: ["u1"] },
+    });
     const app = buildApp();
 
     const res = await request(app).patch("/api/admin/gateways/default").send({ desiredStatus: "paused" });
 
     expect(res.status).toBe(202);
-    expect(glmGatewaysDocs["default"].desiredStatus).toBe("paused");
+    expect(gatewaysDocs["default"].desiredStatus).toBe("paused");
   });
 });
 
@@ -1158,7 +1208,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
     });
 
     const gwWrite = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+      (c) => c.collection === "gateways" && c.op === "doc.set",
     );
     expect(gwWrite?.data).toMatchObject({
       gatewayId: "alice",
@@ -1192,11 +1242,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
       "provisioning.openclaw.shellsEnabled",
     );
 
-    gatewaysDocs["alice"] = {
-      gatewayId: "alice",
-      status: "ready",
-      mountedCustomers: [],
-    };
+    markGatewayServing("alice", { status: "ready", mountedCustomers: [] });
     const activateRes = await request(app)
       .post("/api/admin/operator-gateway-reservations/admin-user/activate")
       .send({});
@@ -1283,12 +1329,11 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
     ]);
 
     const gwWrite = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+      (c) => c.collection === "gateways" && c.op === "doc.set",
     );
     expect(gwWrite?.docId).toBe("alice");
     expect(gwWrite?.data).toMatchObject({
       gatewayId: "alice",
-      imageTag: "abc1234",
       desiredStatus: "running",
       profile: "operator",
       gatewayClass: "operator",
@@ -1302,14 +1347,9 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
       },
       serviceAccountName: "octogee-gw-alice",
       serviceAccount: { create: true },
-      operatorReservation: {
-        status: "provisioning",
-        reservedAt: 1_234,
-        reservedBy: "uid-alice",
-        billingStatus: "active",
-      },
     });
-    expect(typeof (gwWrite?.data?.operatorReservation as { billingVerifiedAt?: unknown }).billingVerifiedAt).toBe("number");
+    expect(gwWrite?.data).not.toHaveProperty("operatorReservation");
+    expect(gatewayReleasesDocs["alice/1"]?.payload).toMatchObject({ imageTag: "abc1234" });
 
     const reservationUpdate = calls.find(
       (c) => c.collection === "operatorGatewayReservations" && c.op === "doc.update",
@@ -1366,7 +1406,7 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
     expect(res.body.error).toMatch(/not ready/i);
     expect(provisionerCalls).toEqual([]);
     const gwWrite = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.set",
+      (c) => c.collection === "gateways" && c.op === "doc.set",
     );
     expect(gwWrite).toBeUndefined();
   });
@@ -1404,9 +1444,18 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
 });
 
 describe("GET /api/admin/gateways — sizing enrichment", () => {
-  it("attaches sizing.tier from glmGateways.sizingTier (explicit) and sizing.resolvedFrom='explicit'", async () => {
-    gatewaysDocs["bender"] = { gatewayId: "bender", status: "ready", mountedCustomers: ["alice"] };
-    glmGatewaysDocs["bender"] = { gatewayId: "bender", sizingTier: "large", profile: "operator", desiredStatus: "running" };
+  it("attaches sizing.tier from the durable root and marks it explicit", async () => {
+    seedDurableGateway("bender", {
+      heartbeat: { status: "ready", mountedCustomers: ["alice"] },
+      root: {
+        sizingTier: "large",
+        profile: "operator",
+        gatewayClass: "operator",
+        imageProfile: "operator",
+        ownerUid: "uid-bender",
+        builderSlug: "bender",
+      },
+    });
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
     expect(res.status).toBe(200);
@@ -1419,8 +1468,16 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
   });
 
   it("falls back to class-default tier when sizingTier is unset (resolvedFrom='class-default')", async () => {
-    gatewaysDocs["default"] = { gatewayId: "default", status: "ready", mountedCustomers: [] };
-    glmGatewaysDocs["default"] = { gatewayId: "default", profile: "operator", desiredStatus: "running" };
+    seedDurableGateway("default", {
+      heartbeat: { status: "ready", mountedCustomers: [] },
+      root: {
+        profile: "operator",
+        gatewayClass: "operator",
+        imageProfile: "operator",
+        ownerUid: "uid-default",
+        builderSlug: "default",
+      },
+    });
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
     const g = res.body.gateways.find((x: any) => x.gatewayId === "default");
@@ -1429,40 +1486,43 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
   });
 
   it("reports compute=0 for paused gateways (no replicas → no node consumption)", async () => {
-    for (const k of Object.keys(gatewaysDocs)) delete gatewaysDocs[k];
-    gatewaysDocs["paused"] = { gatewayId: "paused", status: "ready", mountedCustomers: [] };
-    gatewaysDocs["running"] = { gatewayId: "running", status: "ready", mountedCustomers: [] };
-    glmGatewaysDocs["paused"] = { gatewayId: "paused", sizingTier: "large", desiredStatus: "paused" };
-    glmGatewaysDocs["running"] = { gatewayId: "running", sizingTier: "large", desiredStatus: "running" };
+    seedDurableGateway("paused", {
+      heartbeat: { status: "ready", mountedCustomers: [] },
+      root: { sizingTier: "large", desiredStatus: "paused" },
+    });
+    seedDurableGateway("running", {
+      heartbeat: { status: "ready", mountedCustomers: [] },
+      root: { sizingTier: "large" },
+    });
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
     const paused = res.body.gateways.find((g: any) => g.gatewayId === "paused");
     const running = res.body.gateways.find((g: any) => g.gatewayId === "running");
-    expect(paused.sizing.tier).toBe("large"); // tier preserved for nameplate display
+    expect(paused.sizing.tier).toBe("large");
     expect(paused.sizing.monthlyCostUsd.compute).toBe(0);
     expect(paused.sizing.monthlyCostUsd.perBuilderAtTarget).toBe(0);
     expect(running.sizing.monthlyCostUsd.compute).toBeGreaterThan(0);
-    // Fleet roll-up only counts the running gateway's compute.
     expect(res.body.stats.fleetCost.monthlyUsd).toBe(running.sizing.monthlyCostUsd.compute);
   });
 
   it("drops any legacy persistence to emptyDir and keeps the PROD operator Spot reservation default", async () => {
-    for (const k of Object.keys(gatewaysDocs)) delete gatewaysDocs[k];
-    gatewaysDocs["bender"] = { gatewayId: "bender", status: "ready", mountedCustomers: [] };
-    glmGatewaysDocs["bender"] = {
-      gatewayId: "bender",
-      gatewayClass: "operator",
-      sizingTier: "nano",
-      desiredStatus: "running",
-      // A stale persistence field from a pre-Step-2 doc must be ignored:
-      // PVC-backed gateways are dropped (Spot + emptyDir only).
-      persistence: {
-        enabled: true,
-        storageClassName: "premium-rwo",
-        size: "20Gi",
-        accessModes: ["ReadWriteOnce"],
+    seedDurableGateway("bender", {
+      heartbeat: { status: "ready", mountedCustomers: [] },
+      root: {
+        gatewayClass: "operator",
+        profile: "operator",
+        imageProfile: "operator",
+        ownerUid: "uid-bender",
+        builderSlug: "bender",
+        sizingTier: "nano",
+        persistence: {
+          enabled: true,
+          storageClassName: "premium-rwo",
+          size: "20Gi",
+          accessModes: ["ReadWriteOnce"],
+        },
       },
-    };
+    });
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
     const bender = res.body.gateways.find((g: any) => g.gatewayId === "bender");
@@ -1478,14 +1538,10 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
   });
 
   it("keeps on-demand pricing when a gateway is explicitly on the on-demand compute class", async () => {
-    for (const k of Object.keys(gatewaysDocs)) delete gatewaysDocs[k];
-    gatewaysDocs["dedicated"] = { gatewayId: "dedicated", status: "ready", mountedCustomers: [] };
-    glmGatewaysDocs["dedicated"] = {
-      gatewayId: "dedicated",
-      sizingTier: "nano",
-      desiredStatus: "running",
-      computeClass: "octogee-gateway",
-    };
+    seedDurableGateway("dedicated", {
+      heartbeat: { status: "ready", mountedCustomers: [] },
+      root: { sizingTier: "nano", computeClass: "octogee-gateway" },
+    });
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
     const dedicated = res.body.gateways.find((g: any) => g.gatewayId === "dedicated");
@@ -1501,14 +1557,10 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
   });
 
   it("defaults shared gateways to Spot pricing", async () => {
-    for (const k of Object.keys(gatewaysDocs)) delete gatewaysDocs[k];
-    gatewaysDocs["shared"] = { gatewayId: "shared", status: "ready", mountedCustomers: [] };
-    glmGatewaysDocs["shared"] = {
-      gatewayId: "shared",
-      sizingTier: "nano",
-      desiredStatus: "running",
-      gatewayClass: "shared",
-    };
+    seedDurableGateway("shared", {
+      heartbeat: { status: "ready", mountedCustomers: [] },
+      root: { sizingTier: "nano" },
+    });
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
     const shared = res.body.gateways.find((g: any) => g.gatewayId === "shared");
@@ -1523,12 +1575,14 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
   });
 
   it("rolls up stats.fleetCost.byTier and stats.fleetCost.monthlyUsd across the fleet", async () => {
-    // Reset the beforeEach seed so we exercise exactly the two fixtures we set up below.
-    for (const k of Object.keys(gatewaysDocs)) delete gatewaysDocs[k];
-    gatewaysDocs["bender"] = { gatewayId: "bender", status: "ready", mountedCustomers: [] };
-    gatewaysDocs["default"] = { gatewayId: "default", status: "ready", mountedCustomers: [] };
-    glmGatewaysDocs["bender"] = { gatewayId: "bender", sizingTier: "large", desiredStatus: "running" };
-    glmGatewaysDocs["default"] = { gatewayId: "default", sizingTier: "medium", desiredStatus: "running" };
+    seedDurableGateway("bender", {
+      heartbeat: { status: "ready", mountedCustomers: [] },
+      root: { sizingTier: "large" },
+    });
+    seedDurableGateway("default", {
+      heartbeat: { status: "ready", mountedCustomers: [] },
+      root: { sizingTier: "medium" },
+    });
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
     const fc = res.body.stats.fleetCost;
@@ -1540,17 +1594,15 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
 });
 
 describe("PATCH /api/admin/gateways/:id — update desired state", () => {
-  it("updates the imageTag field on an existing desired state doc", async () => {
-    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
+  it("rejects an imageTag field on an existing durable root", async () => {
+    seedDurableGateway("canary");
     const app = buildApp();
     const res = await request(app)
       .patch("/api/admin/gateways/canary")
       .send({ imageTag: "def5678" });
-    expect(res.status).toBe(202);
-    const update = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.update",
-    );
-    expect(update?.data).toMatchObject({ imageTag: "def5678" });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/immutable releases/i);
+    expect(gatewayReleasesDocs["canary/1"].payload).toMatchObject({ imageTag: "abc1234" });
   });
 
   it("returns 404 when the gateway does not exist", async () => {
@@ -1562,7 +1614,7 @@ describe("PATCH /api/admin/gateways/:id — update desired state", () => {
   });
 
   it("rejects unknown desiredStatus enum values with 400 (does not write garbage to Firestore)", async () => {
-    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
+    seedDurableGateway("canary");
     const app = buildApp();
     const res = await request(app)
       .patch("/api/admin/gateways/canary")
@@ -1570,13 +1622,13 @@ describe("PATCH /api/admin/gateways/:id — update desired state", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/desiredStatus/);
     const update = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.update",
+      (c) => c.collection === "gateways" && c.op === "doc.update",
     );
     expect(update).toBeUndefined();
   });
 
   it("rejects desiredStatus=retired — retirement must go through DELETE for full teardown", async () => {
-    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
+    seedDurableGateway("canary");
     const app = buildApp();
     const res = await request(app)
       .patch("/api/admin/gateways/canary")
@@ -1584,47 +1636,47 @@ describe("PATCH /api/admin/gateways/:id — update desired state", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/DELETE \/gateways\/:id/);
     const update = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.update",
+      (c) => c.collection === "gateways" && c.op === "doc.update",
     );
     expect(update).toBeUndefined();
   });
 
   it("accepts desiredStatus=paused for the pause/resume flow", async () => {
-    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
+    seedDurableGateway("canary");
     const app = buildApp();
     const res = await request(app)
       .patch("/api/admin/gateways/canary")
       .send({ desiredStatus: "paused" });
     expect(res.status).toBe(202);
     const update = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.update",
+      (c) => c.collection === "gateways" && c.op === "doc.update",
     );
     expect(update?.data).toMatchObject({ desiredStatus: "paused" });
   });
 
   it("updates the sizingTier field when a valid tier is supplied", async () => {
-    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
+    seedDurableGateway("canary");
     const app = buildApp();
     const res = await request(app)
       .patch("/api/admin/gateways/canary")
       .send({ sizingTier: "large" });
     expect(res.status).toBe(202);
     const update = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.update",
+      (c) => c.collection === "gateways" && c.op === "doc.update",
     );
     expect(update?.data).toMatchObject({ sizingTier: "large" });
   });
 
   it("rejects unknown sizingTier values with 400 (does not write garbage to Firestore)", async () => {
-    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
+    seedDurableGateway("canary");
     const app = buildApp();
     const res = await request(app)
       .patch("/api/admin/gateways/canary")
       .send({ sizingTier: "bogus-tier" });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/sizingTier/);
+    expect(res.body.error).toMatch(/durable gateway configuration/);
     const update = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.update",
+      (c) => c.collection === "gateways" && c.op === "doc.update",
     );
     expect(update).toBeUndefined();
   });
@@ -1688,13 +1740,12 @@ describe("POST /api/admin/rollouts — body type guards", () => {
 
 describe("DELETE /api/admin/gateways/:id — retire", () => {
   it("sets desiredStatus=retired and creates a retire-gateway op when no customers are mounted", async () => {
-    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
-    gatewaysDocs["canary"] = { gatewayId: "canary", status: "ready", mountedCustomers: [] };
+    seedDurableGateway("canary");
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/canary");
     expect(res.status).toBe(202);
     const update = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.update",
+      (c) => c.collection === "gateways" && c.op === "doc.update",
     );
     expect(update?.data).toMatchObject({ desiredStatus: "retired" });
     const op = calls.find((c) => c.collection === "glmOperations");
@@ -1702,8 +1753,7 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
   });
 
   it("defaults to full teardown — no retain flags on the retire-gateway op", async () => {
-    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
-    gatewaysDocs["canary"] = { gatewayId: "canary", status: "ready", mountedCustomers: [] };
+    seedDurableGateway("canary");
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/canary");
     expect(res.status).toBe(202);
@@ -1716,8 +1766,7 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
   });
 
   it("passes retainData + retainServiceAccount through to the retire-gateway operation", async () => {
-    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
-    gatewaysDocs["canary"] = { gatewayId: "canary", status: "ready", mountedCustomers: [] };
+    seedDurableGateway("canary");
     const app = buildApp();
     const res = await request(app)
       .delete("/api/admin/gateways/canary")
@@ -1740,30 +1789,27 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
   });
 
   it("returns 409 with the customer list when the gateway still has mounted customers", async () => {
-    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
-    gatewaysDocs["canary"] = {
-      gatewayId: "canary",
-      status: "ready",
-      mountedCustomers: ["alice", "bob"],
-    };
+    seedDurableGateway("canary", {
+      heartbeat: { status: "ready", mountedCustomers: ["alice", "bob"] },
+    });
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/canary");
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/still has mounted customers/i);
     expect(res.body.mountedCustomers).toEqual(["alice", "bob"]);
     const update = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.update",
+      (c) => c.collection === "gateways" && c.op === "doc.update",
     );
     expect(update).toBeUndefined();
   });
 
   it("proceeds with retire when the gateway has no heartbeat doc (stranded crash-loop case)", async () => {
-    glmGatewaysDocs["orphan"] = { gatewayId: "orphan" };
+    seedDurableGateway("orphan");
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/orphan");
     expect(res.status).toBe(202);
     const update = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.update",
+      (c) => c.collection === "gateways" && c.op === "doc.update",
     );
     expect(update?.data).toMatchObject({ desiredStatus: "retired" });
     const op = calls.find((c) => c.collection === "glmOperations");
@@ -1771,14 +1817,13 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
   });
 
   it("commits desiredStatus + op create as one atomic batch (P3 audit follow-up)", async () => {
-    glmGatewaysDocs["canary"] = { gatewayId: "canary" };
-    gatewaysDocs["canary"] = { gatewayId: "canary", status: "ready", mountedCustomers: [] };
+    seedDurableGateway("canary");
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/canary");
     expect(res.status).toBe(202);
 
 const updateIdx = calls.findIndex(
-      (c) => c.collection === "glmGateways" && c.op === "doc.update",
+      (c) => c.collection === "gateways" && c.op === "doc.update",
     );
     const opIdx = calls.findIndex((c) => c.collection === "glmOperations");
     const commitIdx = calls.findIndex((c) => c.op === "batch.commit");
@@ -1789,28 +1834,21 @@ const updateIdx = calls.findIndex(
   });
 
   it("rolls back BOTH writes if the batch commit fails (atomicity)", async () => {
-    glmGatewaysDocs["canary"] = { gatewayId: "canary", desiredStatus: "running" };
-    gatewaysDocs["canary"] = { gatewayId: "canary", status: "ready", mountedCustomers: [] };
+    seedDurableGateway("canary");
     batchCommitFailures = 1;
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/canary");
     expect(res.status).toBe(500);
     
-    expect(glmGatewaysDocs["canary"]).toMatchObject({ desiredStatus: "running" });
+    expect(gatewaysDocs["canary"]).toMatchObject({ desiredStatus: "running" });
     expect(glmOperationsDocs.find((d) => d.data.kind === "retire-gateway")).toBeUndefined();
   });
 
 });
 
 describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
-  const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
-
   it("creates a rollout op with the new imageTag (and inherited repo)", async () => {
-    glmGatewaysDocs["default"] = {
-      gatewayId: "default",
-      imageRepository: REPO,
-      imageTag: "oldSha",
-    };
+    seedDurableGateway("default", { imageTag: "abcdef0" });
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/gateways/default/rollout")
@@ -1822,49 +1860,37 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
       input: { gatewayId: "default", imageTag: "abcdef1" },
       createdBy: "admin-user",
     });
+    expect(gatewaysDocs.default).toMatchObject({ latestRelease: 2, desiredRelease: 2 });
+    expect(gatewayReleasesDocs["default/2"]?.payload).toMatchObject({ imageTag: "abcdef1" });
   });
 
-  it("profile-only flip at the SAME sha is NOT a no-op — creates a rollout op carrying profile", async () => {
-    glmGatewaysDocs["bender"] = {
-      gatewayId: "bender",
-      imageRepository: REPO,
-      imageTag: "abcdef1",
-      // no profile field → cattle/standard today
-    };
+  it("rejects profile updates on rollout because configuration belongs on PATCH", async () => {
+    seedDurableGateway("bender", { imageTag: "abcdef1" });
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/gateways/bender/rollout")
       .send({ imageTag: "abcdef1", profile: "operator" });
-    expect(res.status).toBe(202);
-    const op = calls.find((c) => c.collection === "glmOperations");
-    expect(op?.data).toMatchObject({
-      kind: "rollout",
-      input: { gatewayId: "bender", imageTag: "abcdef1", profile: "operator" },
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/configuration is mutable/i);
+    expect(calls.find((c) => c.collection === "glmOperations")).toBeUndefined();
+  });
+
+  it("rejects a profile rollout before checking the image no-op boundary", async () => {
+    seedDurableGateway("bender", {
+      imageTag: "abcdef1",
+      root: { profile: "operator", gatewayClass: "operator", ownerUid: "uid-bender" },
     });
-  });
-
-  it("same sha AND same profile is still a 409 no-op (boundary not over-broadened)", async () => {
-    glmGatewaysDocs["bender"] = {
-      gatewayId: "bender",
-      imageRepository: REPO,
-      imageTag: "abcdef1",
-      profile: "operator",
-    };
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/gateways/bender/rollout")
       .send({ imageTag: "abcdef1", profile: "operator" });
-    expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/no-op/);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/configuration is mutable/i);
     expect(calls.find((c) => c.collection === "glmOperations")).toBeUndefined();
   });
 
   it("rejects an unknown profile with 400 (no op written)", async () => {
-    glmGatewaysDocs["default"] = {
-      gatewayId: "default",
-      imageRepository: REPO,
-      imageTag: "oldSha",
-    };
+    seedDurableGateway("default", { imageTag: "abcdef0" });
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/gateways/default/rollout")
@@ -1875,11 +1901,7 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
   });
 
   it("returns 400 when imageTag is not a SHA-style hex string (e.g. 'latest', 'v1.2.3')", async () => {
-    glmGatewaysDocs["default"] = {
-      gatewayId: "default",
-      imageRepository: REPO,
-      imageTag: "oldSha1",
-    };
+    seedDurableGateway("default", { imageTag: "abcdef0" });
     const app = buildApp();
     for (const bad of ["latest", "v1.2.3", "ABC123def", "abc"]) {
       const res = await request(app)
@@ -1892,11 +1914,7 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
   });
 
   it("returns 409 when another op is already pending or running for this gateway", async () => {
-    glmGatewaysDocs["default"] = {
-      gatewayId: "default",
-      imageRepository: REPO,
-      imageTag: "oldSha1",
-    };
+    seedDurableGateway("default", { imageTag: "abcdef0" });
     glmOperationsDocs.push({
       id: "op-running-1",
       data: {
@@ -1916,11 +1934,7 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
   });
 
   it("returns 400 when imageTag is missing", async () => {
-    glmGatewaysDocs["default"] = {
-      gatewayId: "default",
-      imageRepository: REPO,
-      imageTag: "oldSha",
-    };
+    seedDurableGateway("default", { imageTag: "abcdef0" });
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways/default/rollout").send({});
     expect(res.status).toBe(400);
@@ -1928,11 +1942,7 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
   });
 
   it("returns 400 when imageRepository is not the canonical Octogee AR repo", async () => {
-    glmGatewaysDocs["default"] = {
-      gatewayId: "default",
-      imageRepository: REPO,
-      imageTag: "oldSha",
-    };
+    seedDurableGateway("default", { imageTag: "abcdef0" });
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/gateways/default/rollout")
@@ -1950,11 +1960,7 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
   });
 
   it("returns 409 when the gateway is already on the requested image (no-op)", async () => {
-    glmGatewaysDocs["default"] = {
-      gatewayId: "default",
-      imageRepository: REPO,
-      imageTag: "1234567",
-    };
+    seedDurableGateway("default", { imageTag: "1234567" });
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/gateways/default/rollout")
@@ -1968,14 +1974,8 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
 });
 
 describe("POST /api/admin/gateways/:id/restart — rotate the pod via kubectl rollout restart", () => {
-  const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
-
   it("creates a restart-gateway operation (kind carried in input)", async () => {
-    glmGatewaysDocs["bender"] = {
-      gatewayId: "bender",
-      imageRepository: REPO,
-      imageTag: "abcdef1",
-    };
+    seedDurableGateway("bender", { imageTag: "abcdef1" });
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/gateways/bender/restart")
@@ -1999,16 +1999,10 @@ describe("POST /api/admin/gateways/:id/restart — rotate the pod via kubectl ro
   });
 
   it("does NOT gate on mountedCustomers — restart is operator intent", async () => {
-    glmGatewaysDocs["bender"] = {
-      gatewayId: "bender",
-      imageRepository: REPO,
+    seedDurableGateway("bender", {
       imageTag: "abcdef1",
-    };
-    gatewaysDocs["bender"] = {
-      gatewayId: "bender",
-      status: "ready",
-      mountedCustomers: ["alice", "bob"],
-    };
+      heartbeat: { status: "ready", mountedCustomers: ["alice", "bob"] },
+    });
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/gateways/bender/restart")
@@ -2017,11 +2011,7 @@ describe("POST /api/admin/gateways/:id/restart — rotate the pod via kubectl ro
   });
 
   it("returns 409 when another op is already pending or running for this gateway", async () => {
-    glmGatewaysDocs["bender"] = {
-      gatewayId: "bender",
-      imageRepository: REPO,
-      imageTag: "abcdef1",
-    };
+    seedDurableGateway("bender", { imageTag: "abcdef1" });
     glmOperationsDocs.push({
       id: "op-running-99",
       data: {
@@ -2043,6 +2033,9 @@ describe("POST /api/admin/gateways/:id/restart — rotate the pod via kubectl ro
 
 describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
   it("creates a migrate-customer operation", async () => {
+    seedDurableGateway("canary", {
+      heartbeat: { status: "ready", mountedCustomers: [] },
+    });
     usersDocs["uid-alice"] = {
       username: "alice",
       provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
@@ -2083,7 +2076,9 @@ describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
   });
 
   it("returns 409 when the target gateway is registered but not ready", async () => {
-    gatewaysDocs["gw-booting"] = { gatewayId: "gw-booting", status: "booting" };
+    seedDurableGateway("gw-booting", {
+      heartbeat: { status: "booting", mountedCustomers: [] },
+    });
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/customers/uid-alice/migrate")
@@ -2092,6 +2087,9 @@ describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
   });
 
   it("returns 409 when the target equals the customer's current gateway (migrate-to-self)", async () => {
+    seedDurableGateway("canary", {
+      heartbeat: { status: "ready", mountedCustomers: [] },
+    });
     usersDocs["uid-alice"] = {
       provisioning: { openclaw: { slug: "alice", gatewayId: "canary" } },
     };
@@ -2248,9 +2246,9 @@ describe("GET /api/admin/customers/by-slug/:slug — slug→uid lookup", () => {
 
 describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
   it("buckets approved users into mounted / assigned-not-mounted / unassigned", async () => {
-    gatewaysDocs = {
-      "default": { status: "ready", mountedCustomers: ["alice", "bob"] },
-    };
+    seedDurableGateway("default", {
+      heartbeat: { status: "ready", mountedCustomers: ["alice", "bob"] },
+    });
     usersDocs = {
       "uid-alice": {
         approved: true,
@@ -2311,9 +2309,9 @@ describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
   });
 
   it("flags users whose gateway no longer exists with reason='gateway-gone'", async () => {
-    gatewaysDocs = {
-      "default": { status: "ready", mountedCustomers: [] },
-    };
+    seedDurableGateway("default", {
+      heartbeat: { status: "ready", mountedCustomers: [] },
+    });
     usersDocs = {
       "uid-orphan": {
         approved: true,
@@ -2334,9 +2332,9 @@ describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
   });
 
   it("returns empty buckets when no approved users exist", async () => {
-    gatewaysDocs = {
-      "default": { status: "ready", mountedCustomers: [] },
-    };
+    seedDurableGateway("default", {
+      heartbeat: { status: "ready", mountedCustomers: [] },
+    });
     usersDocs = {};
     const app = buildApp();
     const res = await request(app).get("/api/admin/customer-distribution");
@@ -2353,9 +2351,9 @@ describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
 
 describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
   it("writes provisioning.openclaw.gatewayId on the user doc", async () => {
-    gatewaysDocs = {
-      "default": { status: "ready", mountedCustomers: [] },
-    };
+    seedDurableGateway("default", {
+      heartbeat: { status: "ready", mountedCustomers: [] },
+    });
     usersDocs = {
       "uid-dave": { approved: true, username: "dave", email: "dave@example.com" },
     };
@@ -2374,12 +2372,20 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
   });
 
   it("does not grant shell access when assigning to an operator-profile gateway", async () => {
-    gatewaysDocs = {
-      "gw-operator": { status: "ready", mountedCustomers: [] },
-    };
-    glmGatewaysDocs = {
-      "gw-operator": { gatewayId: "gw-operator", profile: "operator" },
-    };
+    seedDurableGateway("gw-operator", {
+      heartbeat: { status: "ready", mountedCustomers: [] },
+      root: {
+        profile: "operator",
+        gatewayClass: "operator",
+        imageProfile: "operator",
+        ownerUid: "uid-owner",
+        builderSlug: "owner",
+        operatorAccess: {
+          shellsEnabled: true,
+          reason: "owned-runtime-gateway",
+        },
+      },
+    });
     usersDocs = {
       "uid-dave": { approved: true, username: "dave", email: "dave@example.com" },
     };
@@ -2445,7 +2451,9 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
   });
 
   it("returns 409 when the target gateway is not ready (booting/unreachable/draining)", async () => {
-    gatewaysDocs = { "default": { status: "booting" } };
+    seedDurableGateway("default", {
+      heartbeat: { status: "booting", mountedCustomers: [] },
+    });
     usersDocs = { "uid-dave": { approved: true } };
     const app = buildApp();
     const res = await request(app)
@@ -2456,7 +2464,9 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
   });
 
   it("returns 409 when the user is already assigned to that gateway (no-op)", async () => {
-    gatewaysDocs = { "default": { status: "ready" } };
+    seedDurableGateway("default", {
+      heartbeat: { status: "ready", mountedCustomers: [] },
+    });
     usersDocs = {
       "uid-alice": {
         approved: true,
@@ -2474,16 +2484,10 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
 
 describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
   it("returns mounted-customer details + recent ops for the gateway", async () => {
-    glmGatewaysDocs = {
-      "default": { gatewayId: "default", imageTag: "abc1234" },
-    };
-    gatewaysDocs = {
-      "default": {
-        gatewayId: "default",
-        status: "ready",
-        mountedCustomers: ["alice", "bob"],
-      },
-    };
+    seedDurableGateway("default", {
+      imageTag: "abc1234",
+      heartbeat: { status: "ready", mountedCustomers: ["alice", "bob"] },
+    });
     usersDocs = {
       "uid-alice": {
         approved: true,
@@ -2552,10 +2556,9 @@ describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
   });
 
   it("returns empty mountedCustomers when the gateway heartbeat doc has no mounts", async () => {
-    glmGatewaysDocs = { "gw-empty": { gatewayId: "gw-empty" } };
-    gatewaysDocs = {
-      "gw-empty": { gatewayId: "gw-empty", status: "ready", mountedCustomers: [] },
-    };
+    seedDurableGateway("gw-empty", {
+      heartbeat: { status: "ready", mountedCustomers: [] },
+    });
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways/gw-empty/details");
     expect(res.status).toBe(200);
@@ -2572,8 +2575,7 @@ describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
   });
 
   it("survives a missing heartbeat doc when the desired-state record exists", async () => {
-    glmGatewaysDocs = { "gw-booting": { gatewayId: "gw-booting" } };
-    gatewaysDocs = {};
+    seedDurableGateway("gw-booting");
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways/gw-booting/details");
     expect(res.status).toBe(200);
@@ -2581,10 +2583,7 @@ describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
   });
 
   it("only returns operations whose input.gatewayId matches the path id", async () => {
-    glmGatewaysDocs = { "default": { gatewayId: "default" } };
-    gatewaysDocs = {
-      "default": { gatewayId: "default", status: "ready", mountedCustomers: [] },
-    };
+    seedDurableGateway("default");
     glmOperationsDocs = [
       {
         id: "op-a",

@@ -1,11 +1,17 @@
 export type UnmountOutcome = "unmounted" | "skipped-no-live-pod";
 
+export interface GatewayUnmountTarget {
+  gatewayId: string;
+  revisionId: string;
+  profile: "standard" | "operator";
+}
+
 export interface UnmountFromGatewayDeps {
-  readGatewayProfile: (gatewayId: string) => Promise<"standard" | "operator" | null>;
+  resolveGatewayUnmountTarget: (gatewayId: string) => Promise<GatewayUnmountTarget | null>;
 
-  readAvailableReplicas: (gatewayId: string) => Promise<number | null>;
+  readAvailableReplicas: (revisionId: string) => Promise<number | null>;
 
-  unmountRpc: (opts: { gatewayId: string; slug: string }) => Promise<void>;
+  unmountRpc: (opts: { gatewayId: string; revisionId: string; slug: string }) => Promise<void>;
 
   wait: (ms: number) => Promise<void>;
   now: () => number;
@@ -46,35 +52,35 @@ export function createUnmountFromGateway(
   const retryIntervalMs = deps.retryIntervalMs ?? DEFAULT_RETRY_INTERVAL_MS;
 
   return async (gatewayId, slug) => {
-    const profile = await deps.readGatewayProfile(gatewayId);
-    if (!profile) {
-      throw new Error(`gateway not registered in glmGateways: ${gatewayId}`);
+    const target = await deps.resolveGatewayUnmountTarget(gatewayId);
+    if (!target || target.gatewayId !== gatewayId) {
+      throw new Error(`gateway ${gatewayId} has no validated serving revision`);
     }
 
     const deadline = deps.now() + retryDeadlineMs;
     let attempts = 0;
     for (;;) {
-      const available = await deps.readAvailableReplicas(gatewayId);
+      const available = await deps.readAvailableReplicas(target.revisionId);
       if (available == null || available < 1) {
         deps.log(
-          `[deprovision] unmount skipped for ${slug}: gateway ${gatewayId} has no live pod (availableReplicas=${available ?? "deployment-missing"})`,
+          `[deprovision] unmount skipped for ${slug}: gateway ${gatewayId} revision ${target.revisionId} has no live pod (availableReplicas=${available ?? "deployment-missing"})`,
         );
         return "skipped-no-live-pod";
       }
 
       attempts += 1;
       try {
-        await deps.unmountRpc({ gatewayId, slug });
+        await deps.unmountRpc({ gatewayId, revisionId: target.revisionId, slug });
         return "unmounted";
       } catch (err) {
         if (!isConnectionFailure(err)) throw err;
         if (deps.now() + retryIntervalMs > deadline) {
           throw new Error(
-            `unmount unreachable after ${attempts} attempts over ${retryDeadlineMs}ms gatewayId=${gatewayId} slug=${slug}: ${describeFailure(err)}`,
+            `unmount unreachable after ${attempts} attempts over ${retryDeadlineMs}ms gatewayId=${gatewayId} revisionId=${target.revisionId} slug=${slug}: ${describeFailure(err)}`,
           );
         }
         deps.log(
-          `[deprovision] unmount attempt ${attempts} unreachable for ${slug} on ${gatewayId}: ${describeFailure(err)} — retrying in ${retryIntervalMs}ms`,
+          `[deprovision] unmount attempt ${attempts} unreachable for ${slug} on ${gatewayId}/${target.revisionId}: ${describeFailure(err)} — retrying in ${retryIntervalMs}ms`,
         );
         await deps.wait(retryIntervalMs);
       }

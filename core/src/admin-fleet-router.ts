@@ -6,7 +6,7 @@ import {
   type Response,
   type NextFunction,
 } from "express";
-import { FieldValue, type Firestore } from "firebase-admin/firestore";
+import { FieldValue, type Firestore, type Transaction } from "firebase-admin/firestore";
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
@@ -39,8 +39,10 @@ import {
   GATEWAY_RELEASES_SUBCOLLECTION,
   CURRENT_MAC_OPS_TOKEN_PROTOCOL,
   commitPlacementAtomic,
+  isReleasePayload,
   releasePayloadHash,
   releaseMacOpsTokenProtocol,
+  isGatewayDesiredDoc,
   isRevisionRealizationDoc,
   type AssignmentDoc,
   type AssignmentState,
@@ -49,16 +51,16 @@ import {
   type PlacementFirestore,
   type ReleaseDoc,
   type ReleasePayload,
+  type RevisionRealizationDoc,
 } from "@octogee/shared/types/gateway-releases";
 import { parseAssignmentDoc, readAssignmentDocsForGateway } from "./assignment-doc.js";
 import {
-  applyReleasePatch,
-  imagePayloadChanged,
-  rejectPersistenceInBody,
-  releasePayloadFromCreate,
-  validateReleasePayload,
-  type ReleasePatchInput,
-} from "./gateway-release-cut.js";
+  GATEWAY_CONFIG_SCHEMA_VERSION,
+  gatewayArtifactFromReleasePayload,
+  isGatewayMutableConfigForGateway,
+  type GatewayArtifact,
+  type GatewayMutableConfig,
+} from "./gateway-live-release.js";
 import { projectReleaseHistory } from "./gateway-release-history.js";
 import {
   resolveOnboardingPlacementForUid,
@@ -91,6 +93,20 @@ export interface FleetLogger {
 }
 
 export type GatewayPodDiagnosticsStatus = "ready" | "not-ready" | "missing" | "unknown";
+
+function rejectPersistenceInBody(body: Record<string, unknown>): {
+  status: number;
+  body: Record<string, string>;
+} | null {
+  if (body.persistence === undefined) return null;
+  return {
+    status: 400,
+    body: {
+      error:
+        "persistence specs are rejected — all gateways are Spot + emptyDir; PVC-backed gateways are dropped",
+    },
+  };
+}
 
 export interface GatewayPodDiagnostic {
   name: string;
@@ -235,6 +251,13 @@ export function resolveFleetNamespace(env: NodeJS.ProcessEnv = process.env): str
 
 type GlmDoc = Record<string, unknown>;
 interface FirestoreDocLike { id: string; data(): GlmDoc }
+type DurableGatewayRoot = GatewayDoc & GatewayMutableConfig;
+
+interface DurableGatewayRuntime {
+  root: DurableGatewayRoot;
+  revision: RevisionRealizationDoc | null;
+  heartbeat: GlmDoc | null;
+}
 
 const FLEET_RUNTIME_CONFIG_DOC_PATH = "config/orchestrator";
 export const DEDICATED_GATEWAY_IDLE_DEFAULT_MS = 30 * 60 * 1000;
@@ -438,22 +461,22 @@ async function readOnboardingRuntimeConfig(
 
 function validatePlacementGateway(
   gatewayId: string,
-  glmByGatewayId: Map<string, GlmDoc>,
+  gatewaysById: ReadonlyMap<string, DurableGatewayRoot>,
 ): { status: number; body: { error: string; gatewayId: string } } | null {
-  const glmDoc = glmByGatewayId.get(gatewayId);
-  if (!glmDoc) {
+  const gateway = gatewaysById.get(gatewayId);
+  if (!gateway) {
     return {
       status: 400,
       body: { error: "placement gateway desired state not found", gatewayId },
     };
   }
-  if (projectDesiredStatus(glmDoc) === "retired") {
+  if (gateway.desiredStatus === "retired") {
     return {
       status: 400,
       body: { error: "placement gateway must not be retired", gatewayId },
     };
   }
-  if (normalizeGatewayClass(glmDoc) !== "shared") {
+  if (gateway.gatewayClass !== "shared") {
     return {
       status: 400,
       body: { error: "placement gateway must be a shared gateway", gatewayId },
@@ -464,7 +487,7 @@ function validatePlacementGateway(
 
 function parsePlacementPatch(
   body: Record<string, unknown>,
-  glmByGatewayId: Map<string, GlmDoc>,
+  gatewaysById: ReadonlyMap<string, DurableGatewayRoot>,
 ):
   | { ok: { defaultGatewayId: string } }
   | { error: { status: number; body: Record<string, unknown> } } {
@@ -472,7 +495,7 @@ function parsePlacementPatch(
   if (!defaultGatewayId) {
     return { error: { status: 400, body: { error: "defaultGatewayId is required" } } };
   }
-  const gatewayError = validatePlacementGateway(defaultGatewayId, glmByGatewayId);
+  const gatewayError = validatePlacementGateway(defaultGatewayId, gatewaysById);
   if (gatewayError) return { error: gatewayError };
   return { ok: { defaultGatewayId } };
 }
@@ -536,21 +559,12 @@ function isInFlightOperation(operation: AdminOnboardingLatestOperation | null): 
   return operation?.status === "pending" || operation?.status === "running";
 }
 
-// Mounted telemetry relocated to glmGateways/{id}.heartbeat (cutover step 2);
-// prefer that sub-doc, fall back to the legacy flat gateways/{id} doc during
-// expand, so a contracted flat writer never blanks the mounted set.
 function mountedGatewayBySlug(
-  glmByGatewayId: ReadonlyMap<string, GlmDoc>,
-  legacyByGatewayId: ReadonlyMap<string, FirestoreDocLike>,
+  gatewayById: ReadonlyMap<string, GlmDoc>,
 ): Map<string, string> {
   const out = new Map<string, string>();
-  const gatewayIds = new Set([...glmByGatewayId.keys(), ...legacyByGatewayId.keys()]);
-  for (const gatewayId of gatewayIds) {
-    const hb = effectiveHeartbeatDoc(
-      gatewayId,
-      legacyByGatewayId.get(gatewayId),
-      glmByGatewayId.get(gatewayId),
-    )?.data();
+  for (const [gatewayId, runtime] of gatewayById) {
+    const hb = effectiveHeartbeatDoc(gatewayId, runtime)?.data();
     if (!hb) continue;
     for (const slug of readMountedSlugs(hb)) {
       out.set(slug, gatewayId);
@@ -763,7 +777,10 @@ function buildOnboardingPlacementResponse(opts: {
   operationDocs: ReadonlyArray<FirestoreDocLike>;
   assignmentDocs: ReadonlyArray<FirestoreDocLike>;
 }): AdminOnboardingPlacementResponse {
-  const glmByGatewayId = indexGlmDocs(opts.glmDocs);
+  const glmByGatewayId = indexAdminGatewayRuntimeDocs({
+    gatewayDocs: opts.gatewayDocs,
+    glmDocs: opts.glmDocs,
+  });
   const heartbeatByGatewayId = indexFirestoreDocs(opts.gatewayDocs);
   const usersById = indexFirestoreDocs(opts.userDocs);
   const assignmentByUid = indexAssignmentDocs(opts.assignmentDocs);
@@ -771,7 +788,7 @@ function buildOnboardingPlacementResponse(opts: {
   const operations = opts.operationDocs.map((doc) =>
     shapeOnboardingOperation(doc.id, doc.data()),
   );
-  const mountedBySlug = mountedGatewayBySlug(glmByGatewayId, heartbeatByGatewayId);
+  const mountedBySlug = mountedGatewayBySlug(glmByGatewayId);
   const customers = opts.userDocs
     .filter((doc) =>
       shouldIncludeOnboardingCustomer({
@@ -839,11 +856,7 @@ function buildOnboardingPlacementResponse(opts: {
   ]);
   const gateways = [...gatewayIds].sort().map((gatewayId) => {
     const glmDoc = glmByGatewayId.get(gatewayId);
-    const heartbeat = effectiveHeartbeatDoc(
-      gatewayId,
-      heartbeatByGatewayId.get(gatewayId),
-      glmDoc,
-    )?.data();
+    const heartbeat = effectiveHeartbeatDoc(gatewayId, glmDoc)?.data();
     const desiredStatus = projectDesiredStatus(glmDoc);
     const gatewayClass = normalizeGatewayClass(glmDoc);
     const warnings = customers
@@ -1008,6 +1021,56 @@ function indexFirestoreDocs(docs: ReadonlyArray<FirestoreDocLike>): Map<string, 
   return out;
 }
 
+function indexDurableGatewayRoots(
+  docs: ReadonlyArray<FirestoreDocLike>,
+): Map<string, DurableGatewayRoot> {
+  const out = new Map<string, DurableGatewayRoot>();
+  for (const doc of docs) {
+    const root = asDurableGatewayRoot(doc.data(), doc.id);
+    if (root) out.set(doc.id, root);
+  }
+  return out;
+}
+
+function projectDurableGatewayRuntime(
+  root: DurableGatewayRoot,
+  revision: RevisionRealizationDoc | null,
+): GlmDoc {
+  if (!revision) return { ...root, gateway: root.gatewayId };
+  return {
+    ...root,
+    gateway: root.gatewayId,
+    imageRepository: revision.helm.imageRepository,
+    imageTag: revision.helm.imageTag,
+    heartbeat: revision.heartbeat,
+    lastError: revision.lastError,
+  };
+}
+
+// The admin surface is addressed by the durable gateway identity. Runtime
+// observations belong only to the root's exact live revision; legacy bare GLM
+// docs remain a display fallback solely while a root is genuinely absent.
+function indexAdminGatewayRuntimeDocs(input: {
+  gatewayDocs: ReadonlyArray<FirestoreDocLike>;
+  glmDocs: ReadonlyArray<FirestoreDocLike>;
+}): Map<string, GlmDoc> {
+  const rawGlmById = indexGlmDocs(input.glmDocs);
+  const rootsById = indexDurableGatewayRoots(input.gatewayDocs);
+  const gatewayDocIds = new Set(input.gatewayDocs.map((doc) => doc.id));
+  const out = new Map<string, GlmDoc>();
+  for (const [gatewayId, root] of rootsById) {
+    const revision = root.liveRevisionId
+      ? exactLiveRevision(root, rawGlmById.get(root.liveRevisionId))
+      : null;
+    out.set(gatewayId, projectDurableGatewayRuntime(root, revision));
+  }
+  for (const [gatewayId, glmDoc] of rawGlmById) {
+    if (gatewayDocIds.has(gatewayId) || isRevisionRealizationDoc(glmDoc)) continue;
+    out.set(gatewayId, glmDoc);
+  }
+  return out;
+}
+
 function projectLastError(raw: unknown):
   | { slug?: string; message?: string; at: string | null }
   | null {
@@ -1055,28 +1118,19 @@ function syntheticGatewayDoc(id: string): FirestoreDocLike {
   return { id, data: () => ({ gatewayId: id }) };
 }
 
-// Heartbeat/readiness telemetry relocated to glmGateways/{id}.heartbeat
-// (GATEWAY-RELEASES-SPEC cutover step 2). The fleet summary dual-reads: prefer
-// the glm heartbeat sub-doc, fall back to the legacy flat gateways/{id} doc
-// during expand. Returns a heartbeat FirestoreDocLike (flat field shape the
-// projection expects), or undefined when neither location carries telemetry.
 function effectiveHeartbeatDoc(
   gatewayId: string,
-  legacyDoc: FirestoreDocLike | undefined,
   glmDoc: GlmDoc | undefined,
 ): FirestoreDocLike | undefined {
   const hb = glmDoc?.heartbeat;
   if (isPlainRecord(hb) && Object.keys(hb).length > 0) {
-    return { id: gatewayId, data: () => ({ gatewayId, ...hb }) };
+    const lastError = isPlainRecord(glmDoc?.lastError) ? glmDoc.lastError : undefined;
+    return {
+      id: gatewayId,
+      data: () => ({ gatewayId, ...hb, ...(lastError ? { lastError } : {}) }),
+    };
   }
-  if (!legacyDoc) return undefined;
-  const legacy = legacyDoc.data();
-  const carriesHeartbeatTelemetry =
-    typeof legacy.status === "string" ||
-    Array.isArray(legacy.mountedCustomers) ||
-    legacy.lastHeartbeatAt != null ||
-    legacy.startedAt != null;
-  return carriesHeartbeatTelemetry ? legacyDoc : undefined;
+  return undefined;
 }
 
 function shouldProjectDesiredOnlyGateway(glmDoc: GlmDoc | undefined): boolean {
@@ -1084,52 +1138,87 @@ function shouldProjectDesiredOnlyGateway(glmDoc: GlmDoc | undefined): boolean {
   return desiredStatus !== null && desiredStatus !== "retired";
 }
 
-// Single-gateway readiness/mounted lookup for the admin routes that gate on a
-// gateway being "ready" or read its mounted set. Heartbeat telemetry relocated
-// to glmGateways/{id}.heartbeat (cutover step 2); this dual-reads glm-first,
-// legacy-fallback, so a contracted flat writer never blanks the reading.
-async function readEffectiveGatewayHeartbeat(
-  db: Firestore,
-  gatewayId: string,
-): Promise<Record<string, unknown> | undefined> {
-  const [glmSnap, legacySnap] = await Promise.all([
-    db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get(),
-    db.collection("gateways").doc(gatewayId).get(),
-  ]);
-  const glmDoc = glmSnap.exists ? (glmSnap.data() as GlmDoc) : undefined;
-  const legacyDoc: FirestoreDocLike | undefined = legacySnap.exists
-    ? { id: gatewayId, data: () => legacySnap.data() as Record<string, unknown> }
-    : undefined;
-  return effectiveHeartbeatDoc(gatewayId, legacyDoc, glmDoc)?.data();
+function isPlainRecord(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
-// Registration (either gateways/{id} OR glmGateways/{id} exists) plus the
-// relocated readiness status (glmGateways/{id}.heartbeat.status, legacy flat
-// fallback). The placement/migration routes gate on both.
+function asDurableGatewayRoot(
+  data: unknown,
+  gatewayId: string,
+): DurableGatewayRoot | null {
+  if (
+    !isGatewayDesiredDoc(data) ||
+    data.gatewayId !== gatewayId ||
+    !isGatewayMutableConfigForGateway(data, gatewayId)
+  ) {
+    return null;
+  }
+  return data as DurableGatewayRoot;
+}
+
+function hasDurableGatewayRootMarkers(data: unknown): boolean {
+  if (!isPlainRecord(data)) return false;
+  return [
+    "latestRelease",
+    "desiredRelease",
+    "liveRelease",
+    "liveRevisionId",
+    "trafficRevisionId",
+    "configSchemaVersion",
+  ].some((field) => Object.prototype.hasOwnProperty.call(data, field));
+}
+
+function exactLiveRevision(
+  root: DurableGatewayRoot,
+  data: unknown,
+): RevisionRealizationDoc | null {
+  if (
+    !root.liveRevisionId ||
+    typeof root.liveRelease !== "number" ||
+    !isRevisionRealizationDoc(data) ||
+    data.revisionId !== root.liveRevisionId ||
+    data.gateway !== root.gatewayId ||
+    data.release !== root.liveRelease
+  ) {
+    return null;
+  }
+  return data;
+}
+
+function runtimeHeartbeat(revision: RevisionRealizationDoc | null): GlmDoc | null {
+  return revision && isPlainRecord(revision.heartbeat) ? revision.heartbeat : null;
+}
+
+async function readDurableGatewayRuntime(
+  db: Firestore,
+  gatewayId: string,
+): Promise<DurableGatewayRuntime | null> {
+  const rootSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+  const root = rootSnap.exists ? asDurableGatewayRoot(rootSnap.data(), gatewayId) : null;
+  if (!root) return null;
+  if (!root.liveRevisionId || typeof root.liveRelease !== "number") {
+    return { root, revision: null, heartbeat: null };
+  }
+  const revisionSnap = await db
+    .collection(GLM_GATEWAYS_COLLECTION)
+    .doc(root.liveRevisionId)
+    .get();
+  const revision = revisionSnap.exists ? exactLiveRevision(root, revisionSnap.data()) : null;
+  return { root, revision, heartbeat: runtimeHeartbeat(revision) };
+}
+
 async function readGatewayRegistrationReadiness(
   db: Firestore,
   gatewayId: string,
 ): Promise<{ registered: boolean; status: string | null }> {
-  const [legacySnap, glmSnap] = await Promise.all([
-    db.collection("gateways").doc(gatewayId).get(),
-    db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get(),
-  ]);
-  const legacyDoc: FirestoreDocLike | undefined = legacySnap.exists
-    ? { id: gatewayId, data: () => legacySnap.data() as Record<string, unknown> }
-    : undefined;
-  const hb = effectiveHeartbeatDoc(
-    gatewayId,
-    legacyDoc,
-    glmSnap.exists ? (glmSnap.data() as GlmDoc) : undefined,
-  )?.data();
+  const runtime = await readDurableGatewayRuntime(db, gatewayId);
   return {
-    registered: legacySnap.exists || glmSnap.exists,
-    status: asStringOrNull(hb?.status),
+    registered: runtime !== null,
+    status:
+      runtime?.root.desiredStatus === "running"
+        ? asStringOrNull(runtime.heartbeat?.status)
+        : null,
   };
-}
-
-function isPlainRecord(v: unknown): v is Record<string, unknown> {
-  return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
 type ProjectedGatewayStorage = {
@@ -1298,6 +1387,7 @@ function rollupFleetStats(
 }
 
 const ERR_GATEWAY_NOT_FOUND = "gateway not found";
+const ERR_OWNER_USER_NOT_FOUND = "owner user not found";
 const OP_KIND_MIGRATE_CUSTOMER = "migrate-customer";
 const GATEWAY_IMAGE_REPO_PREFIX =
   "us-central1-docker.pkg.dev/octogee/octogee/";
@@ -1800,23 +1890,6 @@ function validateAddGatewayOwnerFields(
   };
 }
 
-function validateAddGatewayRepository(
-  imageRepository: string,
-): RolloutBodyError | null {
-  if (!isValidGatewayImageRepository(imageRepository)) {
-    return {
-      status: 400,
-      body: {
-        error:
-          "imageRepository must be the canonical Octogee Artifact Registry repo",
-        expectedPrefix: GATEWAY_IMAGE_REPO_PREFIX,
-        got: imageRepository,
-      },
-    };
-  }
-  return null;
-}
-
 function validateAddGatewayBody(
   body: Partial<AddGatewayBody>,
 ): { error: RolloutBodyError } | { ok: AddGatewayCreate } {
@@ -1832,8 +1905,8 @@ function validateAddGatewayBody(
     gatewayClass,
   );
   if ("error" in owner) return owner;
-  const repoError = validateAddGatewayRepository(required.ok.imageRepository);
-  if (repoError) return { error: repoError };
+  const artifactError = validateArtifact(required.ok);
+  if (artifactError) return { error: artifactError };
   return {
     ok: {
       ...required.ok,
@@ -1851,8 +1924,8 @@ function validateFulfillOperatorReservationBody(
 ): { error: RolloutBodyError } | { ok: FulfillOperatorReservationBody } {
   const required = validateAddGatewayRequiredFields(body);
   if ("error" in required) return required;
-  const repoError = validateAddGatewayRepository(required.ok.imageRepository);
-  if (repoError) return { error: repoError };
+  const artifactError = validateArtifact(required.ok);
+  if (artifactError) return { error: artifactError };
   return { ok: required.ok };
 }
 
@@ -2338,11 +2411,6 @@ async function projectGatewaySummaryWithDiagnostics(
   }
 }
 
-async function readMountedCustomers(db: Firestore, gatewayId: string): Promise<string[]> {
-  const hb = await readEffectiveGatewayHeartbeat(db, gatewayId);
-  return [...readMountedSlugs(hb)];
-}
-
 function operationGatewayId(input: Record<string, unknown>): string | null {
   for (const field of ["gatewayId", "toGatewayId", "fromGatewayId"]) {
     const value = input[field];
@@ -2382,38 +2450,13 @@ function operationDoc(
   };
 }
 
-// Distinguishes a Step 2 GatewayDoc (durable desired identity, carries a numeric
-// latestRelease) from a legacy heartbeat-only `gateways/{id}` doc written by the
-// operator-heartbeat poller. The two co-locate at gateways/{id} during the
-// expand window (the poller merges heartbeat fields; admin owns release
-// bookkeeping), so "is this gateway on the new schema yet?" is decided by the
-// presence of latestRelease, never by doc existence.
-function isGatewayDoc(data: Record<string, unknown> | undefined): boolean {
-  return typeof data?.latestRelease === "number";
-}
-
-// Mounted-customer telemetry relocated to glmGateways/{id}.heartbeat (collision
-// fix); the dual-read prefers it and falls back to the legacy flat gateways/{id}
-// doc during expand.
-function retireMountedCustomers(
-  glmData: Record<string, unknown> | undefined,
-  gatewayDocData: Record<string, unknown> | undefined,
-): string[] {
-  const glmHb = isPlainRecord(glmData?.heartbeat) ? glmData!.heartbeat : undefined;
-  const hbData = glmHb ?? (gatewayDocData as { mountedCustomers?: unknown } | undefined);
-  return Array.isArray(hbData?.mountedCustomers)
-    ? (hbData!.mountedCustomers as unknown[]).filter((s): s is string => typeof s === "string")
-    : [];
-}
-
 async function readGatewayDoc(
   db: Firestore,
   gatewayId: string,
 ): Promise<GatewayDoc | null> {
   const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
   if (!snap.exists) return null;
-  const data = snap.data() as Record<string, unknown> | undefined;
-  return isGatewayDoc(data) ? (data as unknown as GatewayDoc) : null;
+  return asDurableGatewayRoot(snap.data(), gatewayId);
 }
 
 async function readRelease(
@@ -2431,25 +2474,50 @@ async function readRelease(
   return snap.data() as ReleaseDoc;
 }
 
-// Writes gateways/{id} (GatewayDoc, merge so it coexists with poller heartbeat
-// fields) + gateways/{id}/releases/1 in ONE transaction. Called from POST
-// /gateways alongside the legacy glmGateways dual-write. The two writes commit
-// together, so a crash never leaves a GatewayDoc without its release 1 (or vice
-// versa); release 1 is created only if absent, keeping history immutable against
-// a duplicate/retried create.
-async function writeInitialGatewayRelease(
-  db: Firestore,
-  args: {
-    gatewayId: string;
-    payload: ReleasePayload;
-    createdBy: string;
-    now: number;
-    desiredStatus: GatewayLifecycleStatus;
-  },
-): Promise<void> {
-  const gwRef = db.collection(GATEWAYS_COLLECTION).doc(args.gatewayId);
-  const relRef = gwRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc("1");
-  const gatewayDoc: GatewayDoc = {
+function asReleaseArtifactPayload(artifact: GatewayArtifact): ReleasePayload {
+  return { ...artifact } as ReleasePayload;
+}
+
+function artifactFromRelease(release: ReleaseDoc): GatewayArtifact | null {
+  if (!isReleasePayload(release.payload)) return null;
+  return gatewayArtifactFromReleasePayload(release.payload);
+}
+
+function currentArtifactPatch(
+  artifact: GatewayArtifact,
+  patch: ArtifactPatchInput,
+): GatewayArtifact {
+  return {
+    imageRepository: patch.imageRepository ?? artifact.imageRepository,
+    imageTag: patch.imageTag ?? artifact.imageTag,
+    macOpsTokenProtocol: CURRENT_MAC_OPS_TOKEN_PROTOCOL,
+  };
+}
+
+function sameArtifact(left: GatewayArtifact, right: GatewayArtifact): boolean {
+  return (
+    left.imageRepository === right.imageRepository &&
+    left.imageTag === right.imageTag &&
+    (left.macOpsTokenProtocol ?? 1) === (right.macOpsTokenProtocol ?? 1)
+  );
+}
+
+interface InitialGatewayReleaseArgs {
+  gatewayId: string;
+  config: GatewayMutableConfig;
+  artifact: GatewayArtifact;
+  createdBy: string;
+  now: number;
+  desiredStatus: GatewayLifecycleStatus;
+  validateAdditional?: (transaction: Transaction) => Promise<void>;
+  writeAdditional?: (transaction: Transaction) => void;
+}
+
+function initialGatewayReleaseDocuments(args: InitialGatewayReleaseArgs): {
+  gatewayDoc: GatewayDoc & GatewayMutableConfig;
+  releaseDoc: ReleaseDoc;
+} {
+  const gatewayDoc: GatewayDoc & GatewayMutableConfig = {
     gatewayId: args.gatewayId,
     createdAt: args.now,
     createdBy: args.createdBy,
@@ -2462,7 +2530,10 @@ async function writeInitialGatewayRelease(
     trafficRevisionId: null,
     desiredStatus: args.desiredStatus,
     roll: null,
+    legacyBackfill: null,
+    ...args.config,
   };
+  const payload = asReleaseArtifactPayload(args.artifact);
   const releaseDoc: ReleaseDoc = {
     gatewayId: args.gatewayId,
     release: 1,
@@ -2470,24 +2541,44 @@ async function writeInitialGatewayRelease(
     createdBy: args.createdBy,
     sourceRelease: null,
     note: null,
-    payloadHash: releasePayloadHash(args.payload),
-    payload: args.payload,
+    payloadHash: releasePayloadHash(payload),
+    payload,
   };
+  return { gatewayDoc, releaseDoc };
+}
+
+class InitialGatewayReleaseConflictError extends Error {
+  constructor(readonly gatewayId: string) {
+    super(`gateway ${gatewayId} already exists`);
+  }
+}
+
+class InitialGatewayReleaseRequestError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: Record<string, unknown>,
+  ) {
+    super(typeof body.error === "string" ? body.error : "initial gateway release rejected");
+  }
+}
+
+async function writeInitialGatewayRelease(
+  db: Firestore,
+  args: InitialGatewayReleaseArgs,
+): Promise<void> {
+  const gwRef = db.collection(GATEWAYS_COLLECTION).doc(args.gatewayId);
+  const relRef = gwRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc("1");
+  const { gatewayDoc, releaseDoc } = initialGatewayReleaseDocuments(args);
   await db.runTransaction(async (txn) => {
     const existing = await txn.get(gwRef);
-    if (isGatewayDoc(existing.data())) {
-      throw new Error(
-        `writeInitialGatewayRelease: gateways/${args.gatewayId} already has a GatewayDoc`,
-      );
-    }
     const relExisting = await txn.get(relRef);
-    if (relExisting.exists) {
-      throw new Error(
-        `writeInitialGatewayRelease: gateways/${args.gatewayId}/releases/1 already exists`,
-      );
+    await args.validateAdditional?.(txn);
+    if (existing.exists || relExisting.exists) {
+      throw new InitialGatewayReleaseConflictError(args.gatewayId);
     }
     txn.set(gwRef, gatewayDoc as unknown as Record<string, unknown>, { merge: true });
     txn.set(relRef, releaseDoc as unknown as Record<string, unknown>);
+    args.writeAdditional?.(txn);
   });
 }
 
@@ -2495,28 +2586,21 @@ async function appendGatewayRelease(
   db: Firestore,
   args: {
     gateway: GatewayDoc;
-    payload: ReleasePayload;
+    artifact: GatewayArtifact;
     createdBy: string;
     now: number;
     sourceRelease: number | null;
     note: string | null;
-    createRolloutOperation: boolean;
   },
 ): Promise<{ release: number; operationId: string | null }> {
   const gwRef = db.collection(GATEWAYS_COLLECTION).doc(args.gateway.gatewayId);
-  const legacyRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(args.gateway.gatewayId);
-  const operationRef = args.createRolloutOperation
-    ? db.collection(GLM_OPERATIONS_COLLECTION).doc()
-    : null;
+  const operationRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
   return db.runTransaction(async (txn) => {
     const snap = await txn.get(gwRef);
-    const data = snap.data();
-    if (!isGatewayDoc(data)) {
-      throw new Error(
-        `appendGatewayRelease: gateways/${args.gateway.gatewayId} has no GatewayDoc`,
-      );
+    const current = asDurableGatewayRoot(snap.data(), args.gateway.gatewayId);
+    if (!current) {
+      throw new InvalidGatewayRootError(args.gateway.gatewayId);
     }
-    const current = data as unknown as GatewayDoc;
     if (current.latestRelease !== args.gateway.latestRelease) {
       throw new StaleGatewayReleaseError(
         args.gateway.gatewayId,
@@ -2526,15 +2610,13 @@ async function appendGatewayRelease(
     }
     const release = current.latestRelease + 1;
     const relRef = gwRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc(String(release));
-    const [relExisting, legacySnap] = await Promise.all([
-      txn.get(relRef),
-      txn.get(legacyRef),
-    ]);
+    const relExisting = await txn.get(relRef);
     if (relExisting.exists) {
       throw new Error(
         `appendGatewayRelease: gateways/${args.gateway.gatewayId}/releases/${release} already exists — refusing to overwrite immutable history`,
       );
     }
+    const payload = asReleaseArtifactPayload(args.artifact);
     const releaseDoc: ReleaseDoc = {
       gatewayId: args.gateway.gatewayId,
       release,
@@ -2542,8 +2624,8 @@ async function appendGatewayRelease(
       createdBy: args.createdBy,
       sourceRelease: args.sourceRelease,
       note: args.note,
-      payloadHash: releasePayloadHash(args.payload),
-      payload: args.payload,
+      payloadHash: releasePayloadHash(payload),
+      payload,
     };
     txn.set(relRef, releaseDoc as unknown as Record<string, unknown>);
     txn.update(gwRef, {
@@ -2552,23 +2634,18 @@ async function appendGatewayRelease(
       updatedAt: args.now,
       updatedBy: args.createdBy,
     });
-    if (legacySnap.exists) {
-      txn.update(legacyRef, completeLegacyMirror(args.payload));
-    }
-    if (operationRef) {
-      txn.set(
-        operationRef,
-        operationDoc(
-          {
-            kind: "rollout",
-            createdBy: args.createdBy,
-            input: rolloutOpInputFromPayload(args.gateway.gatewayId, args.payload),
-          },
-          args.now,
-        ),
-      );
-    }
-    return { release, operationId: operationRef?.id ?? null };
+    txn.set(
+      operationRef,
+      operationDoc(
+        {
+          kind: "rollout",
+          createdBy: args.createdBy,
+          input: rolloutOpInputFromArtifact(args.gateway.gatewayId, args.artifact),
+        },
+        args.now,
+      ),
+    );
+    return { release, operationId: operationRef.id };
   });
 }
 
@@ -2585,116 +2662,177 @@ class StaleGatewayReleaseError extends Error {
   }
 }
 
-// The rollout operation is Cowboy's existing legacy converge for an image
-// change (a release roll when customers are mounted). A release that changes only
-// non-image payload fields mirrors those fields onto the legacy glmGateways
-// desired doc instead, so legacy Cowboy converges them in place — no rollout op,
-// no imageTag poisoning of desired state.
-function rolloutOpInputFromPayload(
+class InvalidGatewayRootError extends Error {
+  constructor(readonly gatewayId: string) {
+    super(`gateway ${gatewayId} durable root is invalid`);
+  }
+}
+
+function respondReleaseWriteConflict(res: Response, error: unknown): boolean {
+  if (error instanceof InvalidGatewayRootError) {
+    res.status(409).json({ error: error.message, gatewayId: error.gatewayId });
+    return true;
+  }
+  if (error instanceof StaleGatewayReleaseError) {
+    res.status(409).json({
+      error: error.message,
+      gatewayId: error.gatewayId,
+      expectedRelease: error.expectedRelease,
+      actualRelease: error.actualRelease,
+    });
+    return true;
+  }
+  return false;
+}
+
+function rolloutOpInputFromArtifact(
   gatewayId: string,
-  payload: ReleasePayload,
+  artifact: GatewayArtifact,
 ): Record<string, unknown> {
   return {
     gatewayId,
-    imageTag: payload.imageTag,
-    imageRepository: payload.imageRepository,
-    ...(payload.profile ? { profile: payload.profile } : {}),
-    gatewayClass: payload.gatewayClass,
-    imageProfile: payload.imageProfile,
+    imageTag: artifact.imageTag,
+    imageRepository: artifact.imageRepository,
   };
 }
 
-// COMPLETE mirror of every release-payload field that has a legacy glmGateways
-// desired-doc equivalent, including explicit null-clears — because Cowboy reads
-// legacy during PR2-6, a release that half-applies leaves live state diverged.
-// Image identity (imageRepository/imageTag) is intentionally excluded: it rides
-// the rollout op so a mounted gateway rolls by revision instead of dropping sessions.
-function completeLegacyMirror(payload: ReleasePayload): Record<string, unknown> {
-  return {
-    gatewayClass: payload.gatewayClass,
-    imageProfile: payload.imageProfile,
-    profile: payload.profile,
-    sizingTier: payload.sizingTier,
-    computeClass: payload.computeClass,
-    gcpProject: payload.gcpProject,
-    gatewayContainerSecurityContext: payload.gatewayContainerSecurityContext,
-    serviceAccountName: payload.serviceAccountName,
-    serviceAccount: payload.serviceAccount,
-    operatorAccess: payload.operatorAccess,
-    ownerUid: payload.ownerUid,
-    coOwnerUids: payload.coOwnerUids,
-    builderSlug: payload.builderSlug,
-    openclawOverrides: payload.openclawOverrides,
-    byosub: payload.byosub,
-    modelBrokerLimits: payload.modelBrokerLimits,
-    preemption: payload.preemption,
-  };
-}
+const GATEWAY_MUTABLE_CONFIG_FIELDS = [
+  "profile",
+  "gatewayClass",
+  "imageProfile",
+  "sizingTier",
+  "computeClass",
+  "gcpProject",
+  "gatewayContainerSecurityContext",
+  "serviceAccountName",
+  "serviceAccount",
+  "operatorAccess",
+  "ownerUid",
+  "coOwnerUids",
+  "builderSlug",
+  "openclawOverrides",
+  "modelBrokerLimits",
+  "preemption",
+] as const satisfies ReadonlyArray<keyof Omit<GatewayMutableConfig, "configSchemaVersion">>;
 
-// Picks the release-payload patch fields present on the request body. Presence
-// (hasOwnProperty), not truthiness, so a nullable field can be explicitly
-// cleared to null.
-function releasePatchFromBody(body: Record<string, unknown>): ReleasePatchInput {
+type ArtifactPatchInput = Partial<Pick<GatewayArtifact, "imageRepository" | "imageTag">>;
+
+function mutableConfigPatchFromBody(body: Record<string, unknown>): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
-  const fields: Array<keyof ReleasePatchInput> = [
-    "imageRepository",
-    "imageTag",
-    "profile",
-    "gatewayClass",
-    "imageProfile",
-    "sizingTier",
-    "computeClass",
-    "gcpProject",
-    "gatewayContainerSecurityContext",
-    "serviceAccountName",
-    "serviceAccount",
-    "operatorAccess",
-    "ownerUid",
-    "coOwnerUids",
-    "builderSlug",
-    "openclawOverrides",
-    "byosub",
-    "modelBrokerLimits",
-    "preemption",
-  ];
-  for (const field of fields) {
-    if (Object.prototype.hasOwnProperty.call(body, field)) {
-      patch[field] = body[field];
-    }
+  for (const field of GATEWAY_MUTABLE_CONFIG_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(body, field)) patch[field] = body[field];
   }
-  return patch as ReleasePatchInput;
+  return patch;
 }
 
-// Owner/co-owner uids must exist for builder/operator gateways (spec Validation
-// list). Only re-checks a uid the release actually introduces or changes, so a
-// broker-limits-only release does not re-read the user doc.
-async function validateReleaseOwner(
+function artifactPatchFromBody(
+  body: Record<string, unknown>,
+): { error: RolloutBodyError } | { ok: ArtifactPatchInput } {
+  const configFields = GATEWAY_MUTABLE_CONFIG_FIELDS.filter((field) =>
+    Object.prototype.hasOwnProperty.call(body, field),
+  );
+  if (configFields.length > 0) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          error: "gateway configuration is mutable; update it with PATCH /api/admin/gateways/:id",
+          fields: configFields,
+        },
+      },
+    };
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "byosub")) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          error: "byosub credentials are user-scoped and cannot be stored in a release",
+          fields: ["byosub"],
+        },
+      },
+    };
+  }
+  const unsupportedFields = Object.keys(body).filter(
+    (field) => field !== "imageRepository" && field !== "imageTag",
+  );
+  if (unsupportedFields.length > 0) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          error: "release accepts only imageRepository and imageTag",
+          fields: unsupportedFields,
+        },
+      },
+    };
+  }
+  if (body.imageRepository === undefined && body.imageTag === undefined) {
+    return { error: { status: 400, body: { error: "release requires imageRepository or imageTag" } } };
+  }
+  if (body.imageRepository !== undefined && typeof body.imageRepository !== "string") {
+    return { error: { status: 400, body: { error: "imageRepository must be a string" } } };
+  }
+  if (body.imageTag !== undefined && typeof body.imageTag !== "string") {
+    return { error: { status: 400, body: { error: "imageTag must be a string" } } };
+  }
+  return {
+    ok: {
+      ...(typeof body.imageRepository === "string" ? { imageRepository: body.imageRepository } : {}),
+      ...(typeof body.imageTag === "string" ? { imageTag: body.imageTag } : {}),
+    },
+  };
+}
+
+function validateArtifact(artifact: GatewayArtifact): RolloutBodyError | null {
+  if (!isValidGatewayImageRepository(artifact.imageRepository)) {
+    return {
+      status: 400,
+      body: {
+        error: "imageRepository must be the canonical Octogee Artifact Registry repo",
+        expectedPrefix: GATEWAY_IMAGE_REPO_PREFIX,
+        got: artifact.imageRepository,
+      },
+    };
+  }
+  if (!IMAGE_TAG_PATTERN.test(artifact.imageTag)) {
+    return {
+      status: 400,
+      body: {
+        error:
+          "imageTag must be a lowercase hex SHA (7–40 chars) or pinned bundle (e.g. abc1234-oc2026.5.2)",
+        got: artifact.imageTag,
+      },
+    };
+  }
+  return null;
+}
+
+async function validateGatewayConfigOwner(
   db: Firestore,
-  prevPayload: ReleasePayload,
-  newPayload: ReleasePayload,
+  previous: GatewayMutableConfig,
+  next: GatewayMutableConfig,
 ): Promise<RolloutBodyError | null> {
-  if (newPayload.gatewayClass !== "builder" && newPayload.gatewayClass !== "operator") {
+  if (next.gatewayClass !== "builder" && next.gatewayClass !== "operator") {
     return null;
   }
   const candidates = new Set<string>();
-  if (newPayload.ownerUid && newPayload.ownerUid !== prevPayload.ownerUid) {
-    candidates.add(newPayload.ownerUid);
+  if (next.ownerUid && next.ownerUid !== previous.ownerUid) {
+    candidates.add(next.ownerUid);
   }
-  for (const uid of newPayload.coOwnerUids) {
-    if (!prevPayload.coOwnerUids.includes(uid)) candidates.add(uid);
+  for (const uid of next.coOwnerUids) {
+    if (!previous.coOwnerUids.includes(uid)) candidates.add(uid);
   }
   for (const uid of candidates) {
     const snap = await db.collection("users").doc(uid).get();
     if (!snap.exists) {
-      return { status: 404, body: { error: "owner user not found", ownerUid: uid } };
+      return { status: 404, body: { error: ERR_OWNER_USER_NOT_FOUND, ownerUid: uid } };
     }
   }
   return null;
 }
 
-// Assembles release 1's payload from the resolved create inputs. Extracted from
-// the create route so its optional-field spreads don't inflate the handler.
-function buildCreateReleasePayload(args: {
+function buildCreateGatewayConfig(args: {
   body: AddGatewayCreate;
   gatewayClass: GatewayClass;
   imageProfile: GatewayImageProfile;
@@ -2703,54 +2841,62 @@ function buildCreateReleasePayload(args: {
   operatorAccess?: OperatorGatewayAccessSpec;
   serviceAccountName?: string;
   serviceAccount?: GatewayServiceAccountSpec;
-}): ReleasePayload {
-  return releasePayloadFromCreate({
-    imageRepository: args.body.imageRepository,
-    imageTag: args.body.imageTag,
+}): GatewayMutableConfig {
+  return {
+    configSchemaVersion: GATEWAY_CONFIG_SCHEMA_VERSION,
+    profile: args.body.profile ?? null,
     gatewayClass: args.gatewayClass,
     imageProfile: args.imageProfile,
-    ...(args.body.profile ? { profile: args.body.profile } : {}),
-    ...(args.body.sizingTier ? { sizingTier: args.body.sizingTier } : {}),
-    ...(args.ownerUid ? { ownerUid: args.ownerUid } : {}),
-    ...(args.builderSlug ? { builderSlug: args.builderSlug } : {}),
-    ...(args.operatorAccess ? { operatorAccess: args.operatorAccess } : {}),
-    ...(args.serviceAccountName ? { serviceAccountName: args.serviceAccountName } : {}),
-    ...(args.serviceAccount ? { serviceAccount: args.serviceAccount } : {}),
-  });
+    sizingTier: args.body.sizingTier ?? null,
+    computeClass: null,
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: args.serviceAccountName ?? null,
+    serviceAccount: args.serviceAccount ?? null,
+    operatorAccess: args.operatorAccess ?? null,
+    ownerUid: args.ownerUid ?? null,
+    coOwnerUids: [],
+    builderSlug: args.builderSlug ?? null,
+    openclawOverrides: null,
+    modelBrokerLimits: null,
+    preemption: null,
+  };
+}
+
+function buildCreateArtifact(body: AddGatewayCreate): GatewayArtifact {
+  return {
+    imageRepository: body.imageRepository,
+    imageTag: body.imageTag,
+    macOpsTokenProtocol: CURRENT_MAC_OPS_TOKEN_PROTOCOL,
+  };
 }
 
 async function recordRolloutRelease(
   db: Firestore,
-  args: { gatewayId: string; patch: ReleasePatchInput; createdBy: string },
+  args: { gateway: GatewayDoc; patch: ArtifactPatchInput; createdBy: string },
 ): Promise<{ release?: number; operationId: string }> {
-  const gateway = await readGatewayDoc(db, args.gatewayId);
-  if (!gateway) {
-    return {
-      operationId: await createOperation(db, {
-        kind: "rollout",
-        createdBy: args.createdBy,
-        input: { gatewayId: args.gatewayId, ...args.patch },
-      }),
-    };
-  }
-  const prev = await readRelease(db, args.gatewayId, gateway.latestRelease);
+  const { gateway } = args;
+  const prev = await readRelease(db, gateway.gatewayId, gateway.latestRelease);
   if (!prev) {
-    throw new Error(`gateway ${args.gatewayId} has no current release payload`);
+    throw new Error(`gateway ${gateway.gatewayId} has no current release payload`);
   }
-  const newPayload = applyReleasePatch(prev.payload, args.patch);
-  if (releasePayloadHash(newPayload) === prev.payloadHash) {
+  const previousArtifact = artifactFromRelease(prev);
+  if (!previousArtifact) {
+    throw new Error(`gateway ${gateway.gatewayId} has an invalid current release artifact`);
+  }
+  const artifact = currentArtifactPatch(previousArtifact, args.patch);
+  if (sameArtifact(previousArtifact, artifact)) {
     return {
       operationId: await createOperation(db, {
         kind: "rollout",
         createdBy: args.createdBy,
-        input: rolloutOpInputFromPayload(args.gatewayId, newPayload),
+        input: rolloutOpInputFromArtifact(gateway.gatewayId, artifact),
       }),
     };
   }
   const appended = await appendGatewayRelease(db, {
     gateway,
-    payload: newPayload,
-    createRolloutOperation: true,
+    artifact,
     createdBy: args.createdBy,
     now: Date.now(),
     sourceRelease: gateway.latestRelease,
@@ -2763,75 +2909,77 @@ async function readRolloutCurrentConfig(
   db: Firestore,
   gatewayId: string,
 ): Promise<{
-  gateway: GatewayDoc | null;
-  data: Record<string, unknown> | undefined;
+  gateway: GatewayDoc;
+  artifact: GatewayArtifact;
 } | null> {
   const gateway = await readGatewayDoc(db, gatewayId);
-  const legacySnap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-  if (legacySnap.exists) return { gateway, data: legacySnap.data() };
   if (!gateway) return null;
   const release = await readRelease(db, gatewayId, gateway.latestRelease);
-  if (!release) throw new Error(`gateway ${gatewayId} has no current release payload`);
-  return { gateway, data: release.payload as unknown as Record<string, unknown> };
+  const artifact = release ? artifactFromRelease(release) : null;
+  if (!artifact) throw new Error(`gateway ${gatewayId} has no current release artifact`);
+  return { gateway, artifact };
 }
 
-// Mirrors a PATCH desiredStatus lifecycle change onto the new gateways/{id} doc.
-// Only the Step 2 lifecycle states (running/paused) mirror; "draining" is a
-// legacy-only status, and a gateway not yet on the new schema is left alone.
-// Builds the legacy glmGateways PATCH update from a lifecycle body, validating
-// desiredStatus + sizingTier. Extracted so the PATCH route stays flat.
-function buildGatewayLifecyclePatch(
-  body: Partial<{
-    imageTag: string;
-    desiredStatus: AdminGatewayDesiredStatus;
-    sizingTier: string;
-  }>,
-):
-  | { error: { status: number; body: Record<string, unknown> } }
-  | { ok: Record<string, unknown> } {
-  const update: Record<string, unknown> = {};
-  if (typeof body.imageTag === "string" && body.imageTag.length > 0) {
-    update.imageTag = body.imageTag;
+function buildDurableGatewayPatch(args: {
+  gatewayId: string;
+  current: GatewayMutableConfig;
+  body: Record<string, unknown>;
+}):
+  | { error: RolloutBodyError }
+  | { ok: { patch: Record<string, unknown>; config: GatewayMutableConfig } } {
+  const artifactFields = ["imageRepository", "imageTag"].filter((field) =>
+    Object.prototype.hasOwnProperty.call(args.body, field),
+  );
+  if (artifactFields.length > 0) {
+    return {
+      error: {
+        status: 409,
+        body: {
+          error: "image artifacts are immutable releases; use POST /api/admin/gateways/:id/releases",
+          fields: artifactFields,
+        },
+      },
+    };
   }
-  if (body.desiredStatus !== undefined) {
-    const v = validateDesiredStatusPatch(body.desiredStatus);
-    if ("error" in v) return { error: v.error };
-    update.desiredStatus = v.ok;
+  if (Object.prototype.hasOwnProperty.call(args.body, "byosub")) {
+    return {
+      error: {
+        status: 400,
+        body: { error: "gateway credential references are user-scoped and cannot be patched here" },
+      },
+    };
   }
-  if (body.sizingTier !== undefined) {
-    if (!(SIZING_TIERS as readonly string[]).includes(body.sizingTier)) {
+  const configPatch = mutableConfigPatchFromBody(args.body);
+  const patch: Record<string, unknown> = { ...configPatch };
+  if (args.body.desiredStatus !== undefined) {
+    if (typeof args.body.desiredStatus !== "string") {
+      return { error: { status: 400, body: { error: "desiredStatus must be a string" } } };
+    }
+    const desired = validateDesiredStatusPatch(args.body.desiredStatus);
+    if ("error" in desired) return { error: desired.error };
+    if (desired.ok === "draining") {
       return {
         error: {
           status: 400,
-          body: {
-            error: `sizingTier must be one of: ${SIZING_TIERS.join(", ")}`,
-            got: body.sizingTier,
-          },
+          body: { error: "durable gateway desiredStatus must be running or paused" },
         },
       };
     }
-    update.sizingTier = body.sizingTier;
+    patch.desiredStatus = desired.ok;
   }
-  if (Object.keys(update).length === 0) {
+  if (Object.keys(patch).length === 0) {
     return { error: { status: 400, body: { error: "no updatable fields provided" } } };
   }
-  return { ok: update };
-}
-
-async function mirrorDesiredStatusToGatewayDoc(
-  db: Firestore,
-  gatewayId: string,
-  desiredStatus: unknown,
-  updatedBy: string,
-): Promise<void> {
-  if (desiredStatus !== "running" && desiredStatus !== "paused") return;
-  const gateway = await readGatewayDoc(db, gatewayId);
-  if (!gateway) return;
-  await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).update({
-    desiredStatus,
-    updatedAt: Date.now(),
-    updatedBy,
-  });
+  const config = { ...args.current, ...configPatch } as GatewayMutableConfig;
+  if (!isGatewayMutableConfigForGateway(config, args.gatewayId)) {
+    return {
+      error: {
+        status: 400,
+        body: { error: "invalid durable gateway configuration", gatewayId: args.gatewayId },
+      },
+    };
+  }
+  return { ok: { patch, config } };
 }
 
 async function findConflictingGatewayOp(
@@ -2859,7 +3007,7 @@ type RollbackReleaseResolution =
       ok: {
         gateway: GatewayDoc;
         target: ReleaseDoc;
-        previous: ReleaseDoc;
+        artifact: GatewayArtifact;
         release: number;
         note: string;
       };
@@ -2931,19 +3079,32 @@ async function resolveRollbackRelease(args: {
       error: {
         status: 409,
         body: {
-          error: "gateway has no current release payload",
+          error: "gateway has no current release artifact",
           gatewayId: args.gatewayId,
           latestRelease: gateway.latestRelease,
         },
       },
     };
   }
-  if (releasePayloadHash(target.payload) === previous.payloadHash) {
+  const artifact = artifactFromRelease(target);
+  const previousArtifact = artifactFromRelease(previous);
+  if (!artifact || !previousArtifact) {
     return {
       error: {
         status: 409,
         body: {
-          error: "gateway is already on release payload — no-op rollback",
+          error: "gateway release artifact is malformed",
+          gatewayId: args.gatewayId,
+        },
+      },
+    };
+  }
+  if (sameArtifact(artifact, previousArtifact)) {
+    return {
+      error: {
+        status: 409,
+        body: {
+          error: "gateway is already on release artifact — no-op rollback",
           gatewayId: args.gatewayId,
           release: gateway.latestRelease,
         },
@@ -2968,7 +3129,7 @@ async function resolveRollbackRelease(args: {
     ok: {
       gateway,
       target,
-      previous,
+      artifact,
       release,
       note:
         typeof args.body.note === "string"
@@ -2982,11 +3143,11 @@ async function ensureGatewayCreateIsUnique(
   db: Firestore,
   body: Pick<AddGatewayCreate, "gatewayId">,
 ): Promise<{ error: RolloutBodyError } | { ok: true }> {
-  const existing = await db
-    .collection(GLM_GATEWAYS_COLLECTION)
-    .doc(body.gatewayId)
-    .get();
-  if (existing.exists) {
+  const [legacy, durable] = await Promise.all([
+    db.collection(GLM_GATEWAYS_COLLECTION).doc(body.gatewayId).get(),
+    db.collection(GATEWAYS_COLLECTION).doc(body.gatewayId).get(),
+  ]);
+  if (legacy.exists || durable.exists) {
     return {
       error: {
         status: 409,
@@ -3032,7 +3193,7 @@ async function resolveDedicatedGatewayOwner(opts: {
       error: {
         status: 404,
         body: {
-          error: "owner user not found",
+          error: ERR_OWNER_USER_NOT_FOUND,
           ownerUid: body.ownerUid,
         },
       },
@@ -3073,38 +3234,41 @@ async function resolveDedicatedGatewayOwner(opts: {
   };
 }
 
-function operatorGatewayDesiredStateFromReservation(opts: {
+function operatorGatewayInitialReleaseFromReservation(opts: {
   body: FulfillOperatorReservationBody;
   reservation: FulfillableOperatorReservation;
   createdBy: string;
   now: number;
-}): Record<string, unknown> {
-  const profile: GatewayProfile = "operator";
-  const gatewayClass: GatewayClass = "operator";
-  const imageProfile: GatewayImageProfile = "operator";
+}): InitialGatewayReleaseArgs {
   return {
     gatewayId: opts.body.gatewayId,
-    imageRepository: opts.body.imageRepository,
-    imageTag: opts.body.imageTag,
-    desiredStatus: "running",
     createdBy: opts.createdBy,
-    createdAt: opts.now,
-    profile,
-    gatewayClass,
-    imageProfile,
-    operatorAccess: defaultOperatorGatewayAccess(opts.reservation.uid),
-    serviceAccountName: operatorGatewayServiceAccountName(opts.body.gatewayId),
-    serviceAccount: OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
-    ownerUid: opts.reservation.uid,
-    builderSlug: opts.reservation.builderSlug,
-    sizingTier: opts.reservation.requestedSizingTier,
-    operatorReservation: {
-      status: "provisioning",
-      reservedAt: opts.reservation.requestedAt,
-      reservedBy: opts.reservation.uid,
-      billingStatus: "active",
-      billingVerifiedAt: opts.now,
-    } satisfies OperatorGatewayReservationSpec,
+    now: opts.now,
+    desiredStatus: "running",
+    artifact: {
+      imageRepository: opts.body.imageRepository,
+      imageTag: opts.body.imageTag,
+      macOpsTokenProtocol: CURRENT_MAC_OPS_TOKEN_PROTOCOL,
+    },
+    config: {
+      configSchemaVersion: GATEWAY_CONFIG_SCHEMA_VERSION,
+      profile: "operator",
+      gatewayClass: "operator",
+      imageProfile: "operator",
+      sizingTier: opts.reservation.requestedSizingTier,
+      computeClass: null,
+      gcpProject: null,
+      gatewayContainerSecurityContext: null,
+      serviceAccountName: operatorGatewayServiceAccountName(opts.body.gatewayId),
+      serviceAccount: OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
+      operatorAccess: defaultOperatorGatewayAccess(opts.reservation.uid),
+      ownerUid: opts.reservation.uid,
+      coOwnerUids: [],
+      builderSlug: opts.reservation.builderSlug,
+      openclawOverrides: null,
+      modelBrokerLimits: null,
+      preemption: null,
+    },
   };
 }
 
@@ -3143,26 +3307,21 @@ interface BuilderCandidateDoc {
   data: () => Record<string, unknown>;
 }
 
-// A builder is "assigned" — and therefore excluded from the operator-gateway picker —
-// when any of three signals say a pet gateway already belongs to them:
-//   1. they are the ownerUid (or a coOwnerUid) on a glmGateways desired-state doc,
-//   2. an operatorGatewayReservations doc (id === uid) has a non-released status, or
-//   3. their own user doc carries an operatorGatewayReservation with a non-released status.
-// `released` is the only reservation status that frees the builder back up.
 export function buildBuilderCandidates(opts: {
   approvedUsers: BuilderCandidateDoc[];
-  glmGateways: BuilderCandidateDoc[];
+  gatewayRoots: BuilderCandidateDoc[];
   reservations: BuilderCandidateDoc[];
   workspaceSlugsForUser: FleetRouterDeps["workspaceSlugsForUser"];
 }): BuilderCandidate[] {
   const assigned = new Set<string>();
 
-  for (const doc of opts.glmGateways) {
-    const data = doc.data();
-    const ownerUid = asStringOrNull(data.ownerUid);
+  for (const doc of opts.gatewayRoots) {
+    const root = asDurableGatewayRoot(doc.data(), doc.id);
+    if (!root) continue;
+    const ownerUid = asStringOrNull(root.ownerUid);
     if (ownerUid) assigned.add(ownerUid);
-    if (Array.isArray(data.coOwnerUids)) {
-      for (const co of data.coOwnerUids) {
+    if (Array.isArray(root.coOwnerUids)) {
+      for (const co of root.coOwnerUids) {
         if (typeof co === "string" && co.length > 0) assigned.add(co);
       }
     }
@@ -3279,22 +3438,17 @@ router.get(
           db.collection(GLM_GATEWAYS_COLLECTION).get(),
           readFleetRuntimeSettings(deps),
         ]);
-        const glmByGatewayId = indexGlmDocs(glmSnap.docs);
-        const heartbeatByGatewayId = indexFirestoreDocs(gwSnap.docs);
-        const gatewayIds = new Set([
-          ...heartbeatByGatewayId.keys(),
-          ...glmByGatewayId.keys(),
-        ]);
+        const glmByGatewayId = indexAdminGatewayRuntimeDocs({
+          gatewayDocs: gwSnap.docs,
+          glmDocs: glmSnap.docs,
+        });
+        const gatewayIds = new Set(glmByGatewayId.keys());
         const now = Date.now();
         const gateways = await Promise.all(
           [...gatewayIds].flatMap((gatewayId) => {
             const glmDoc = glmByGatewayId.get(gatewayId);
-            if (isRevisionRealizationDoc(glmDoc) && glmDoc.lifecycle === "retired") return [];
-            const doc = effectiveHeartbeatDoc(
-              gatewayId,
-              heartbeatByGatewayId.get(gatewayId),
-              glmDoc,
-            );
+            if (projectDesiredStatus(glmDoc) === "retired") return [];
+            const doc = effectiveHeartbeatDoc(gatewayId, glmDoc);
             if (!doc && !shouldProjectDesiredOnlyGateway(glmDoc)) return [];
             return [
               projectGatewaySummaryWithDiagnostics(
@@ -3359,10 +3513,10 @@ router.patch(
     "/onboarding-placement",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const glmSnap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
+        const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).get();
         const parsed = parsePlacementPatch(
           req.body as Record<string, unknown>,
-          indexGlmDocs(glmSnap.docs),
+          indexDurableGatewayRoots(gatewaySnap.docs),
         );
         if ("error" in parsed) {
           res.status(parsed.error.status).json(parsed.error.body);
@@ -3394,8 +3548,11 @@ router.put(
           res.status(400).json({ error: "gatewayId is required" });
           return;
         }
-        const glmSnap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
-        const gatewayError = validatePlacementGateway(gatewayId, indexGlmDocs(glmSnap.docs));
+        const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).get();
+        const gatewayError = validatePlacementGateway(
+          gatewayId,
+          indexDurableGatewayRoots(gatewaySnap.docs),
+        );
         if (gatewayError) {
           res.status(gatewayError.status).json(gatewayError.body);
           return;
@@ -3432,12 +3589,15 @@ router.put(
           res.status(400).json({ error: "gatewayId is required" });
           return;
         }
-        const [glmSnap, userSnap, config] = await Promise.all([
-          db.collection(GLM_GATEWAYS_COLLECTION).get(),
+        const [gatewaySnap, userSnap, config] = await Promise.all([
+          db.collection(GATEWAYS_COLLECTION).get(),
           db.collection("users").doc(uid).get(),
           readOnboardingRuntimeConfig(deps),
         ]);
-        const gatewayError = validatePlacementGateway(gatewayId, indexGlmDocs(glmSnap.docs));
+        const gatewayError = validatePlacementGateway(
+          gatewayId,
+          indexDurableGatewayRoots(gatewaySnap.docs),
+        );
         if (gatewayError) {
           res.status(gatewayError.status).json(gatewayError.body);
           return;
@@ -3607,10 +3767,11 @@ router.get(
           db.collection("users").where("approved", "==", true).get(),
         ]);
 
-        // Readiness/mounted telemetry relocated to glmGateways/{id}.heartbeat
-        // (cutover step 2); dual-read glm-first, legacy flat fallback.
         const legacyById = indexFirestoreDocs(gwSnap.docs);
-        const glmById = indexGlmDocs(glmSnap.docs);
+        const glmById = indexAdminGatewayRuntimeDocs({
+          gatewayDocs: gwSnap.docs,
+          glmDocs: glmSnap.docs,
+        });
         const gateways = new Map<
           string,
           {
@@ -3620,11 +3781,7 @@ router.get(
           }
         >();
         for (const gatewayId of new Set([...glmById.keys(), ...legacyById.keys()])) {
-          const hb = effectiveHeartbeatDoc(
-            gatewayId,
-            legacyById.get(gatewayId),
-            glmById.get(gatewayId),
-          )?.data();
+          const hb = effectiveHeartbeatDoc(gatewayId, glmById.get(gatewayId))?.data();
           const mounted = [...readMountedSlugs(hb)];
           gateways.set(gatewayId, {
             status: typeof hb?.status === "string" ? hb.status : "unknown",
@@ -3699,9 +3856,8 @@ router.get(
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const id = req.params.id as string;
-        const [glmSnap, hbSnap, usersSnap, opsSnap] = await Promise.all([
-          db.collection(GLM_GATEWAYS_COLLECTION).doc(id).get(),
-          db.collection("gateways").doc(id).get(),
+        const [runtime, usersSnap, opsSnap] = await Promise.all([
+          readDurableGatewayRuntime(db, id),
           db.collection("users").where("approved", "==", true).get(),
           db
             .collection(GLM_OPERATIONS_COLLECTION)
@@ -3709,23 +3865,13 @@ router.get(
             .limit(50)
             .get(),
         ]);
-        if (!glmSnap.exists && !hbSnap.exists) {
+        if (!runtime) {
           res
             .status(404)
             .json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
           return;
         }
-        // Mounted telemetry relocated to glmGateways/{id}.heartbeat (cutover
-        // step 2); prefer it, fall back to the legacy flat doc during expand.
-        const legacyHbDoc: FirestoreDocLike | undefined = hbSnap.exists
-          ? { id, data: () => hbSnap.data() as Record<string, unknown> }
-          : undefined;
-        const hbData = effectiveHeartbeatDoc(
-          id,
-          legacyHbDoc,
-          glmSnap.exists ? (glmSnap.data() as GlmDoc) : undefined,
-        )?.data();
-        const mountedSlugs = readMountedSlugs(hbData);
+        const mountedSlugs = readMountedSlugs(runtime.heartbeat ?? {});
 
         const mountedCustomers: DrawerMountedCustomer[] = [];
         for (const doc of usersSnap.docs) {
@@ -3758,14 +3904,14 @@ router.get(
     "/builder-candidates",
     async (_req: Request, res: Response, next: NextFunction) => {
       try {
-        const [usersSnap, glmSnap, reservationsSnap] = await Promise.all([
+        const [usersSnap, gatewaySnap, reservationsSnap] = await Promise.all([
           db.collection("users").where("approved", "==", true).get(),
-          db.collection(GLM_GATEWAYS_COLLECTION).get(),
+          db.collection(GATEWAYS_COLLECTION).get(),
           db.collection(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION).get(),
         ]);
         const candidates = buildBuilderCandidates({
           approvedUsers: usersSnap.docs,
-          glmGateways: glmSnap.docs,
+          gatewayRoots: gatewaySnap.docs,
           reservations: reservationsSnap.docs,
           workspaceSlugsForUser: deps.workspaceSlugsForUser,
         });
@@ -3809,9 +3955,10 @@ router.post(
         const reservationRef = db
           .collection(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION)
           .doc(uid);
+        const userRef = db.collection("users").doc(uid);
         const [reservationSnap, userSnap] = await Promise.all([
           reservationRef.get(),
-          db.collection("users").doc(uid).get(),
+          userRef.get(),
         ]);
         if (!reservationSnap.exists) {
           res.status(404).json({
@@ -3821,7 +3968,7 @@ router.post(
           return;
         }
         if (!userSnap.exists) {
-          res.status(404).json({ error: "owner user not found", uid });
+          res.status(404).json({ error: ERR_OWNER_USER_NOT_FOUND, uid });
           return;
         }
 
@@ -3850,19 +3997,14 @@ router.post(
           return;
         }
 
-        const [targetDesiredSnap, targetHeartbeatSnap, pendingOpsSnap] =
-          await Promise.all([
-            db
-              .collection(GLM_GATEWAYS_COLLECTION)
-              .doc(reservation.ok.gatewayId)
-              .get(),
-            db.collection("gateways").doc(reservation.ok.gatewayId).get(),
-            db
-              .collection(GLM_OPERATIONS_COLLECTION)
-              .where("status", "in", ["pending", "running"])
-              .get(),
-          ]);
-        if (!targetDesiredSnap.exists) {
+        const [target, pendingOpsSnap] = await Promise.all([
+          readDurableGatewayRuntime(db, reservation.ok.gatewayId),
+          db
+            .collection(GLM_OPERATIONS_COLLECTION)
+            .where("status", "in", ["pending", "running"])
+            .get(),
+        ]);
+        if (!target) {
           res.status(404).json({
             error: "reserved gateway desired state not found",
             gatewayId: reservation.ok.gatewayId,
@@ -3872,22 +4014,20 @@ router.post(
         const ownershipError = validateOperatorGatewayOwnership({
           uid,
           reservation: reservation.ok,
-          gatewayData: targetDesiredSnap.data() as Record<string, unknown>,
+          gatewayData: target.root as unknown as Record<string, unknown>,
         });
         if (ownershipError) {
           res.status(ownershipError.status).json(ownershipError.body);
           return;
         }
-        // Readiness relocated to glmGateways/{id}.heartbeat (cutover step 2);
-        // targetDesiredSnap (the glm doc) carries it, with the legacy flat doc
-        // as the expand fallback.
-        const reservedHb = effectiveHeartbeatDoc(
-          reservation.ok.gatewayId,
-          targetHeartbeatSnap.exists
-            ? { id: reservation.ok.gatewayId, data: () => targetHeartbeatSnap.data() as Record<string, unknown> }
-            : undefined,
-          targetDesiredSnap.data() as GlmDoc,
-        )?.data();
+        if (target.root.desiredStatus === "retired") {
+          res.status(409).json({
+            error: "reserved gateway is retired",
+            gatewayId: reservation.ok.gatewayId,
+          });
+          return;
+        }
+        const reservedHb = target.heartbeat;
         if (!reservedHb) {
           res.status(409).json({
             error: "reserved gateway has not reported ready yet",
@@ -3968,7 +4108,6 @@ router.post(
           activationStartedBy: createdBy,
           updatedAt: now,
         };
-
         const batch = db.batch();
         batch.set(opRef, {
           kind: OP_KIND_MIGRATE_CUSTOMER,
@@ -4029,28 +4168,41 @@ router.post(
           res.status(409).json({ error: "user is not approved", uid });
           return;
         }
-        // Registration is either doc; readiness comes from the relocated
-        // glmGateways/{id}.heartbeat (cutover step 2).
-        const target = await readGatewayRegistrationReadiness(db, body.gatewayId);
-        if (!target.registered) {
+        const target = await readDurableGatewayRuntime(db, body.gatewayId);
+        if (!target) {
           res.status(404).json({
             error: ERR_GATEWAY_NOT_FOUND,
             gatewayId: body.gatewayId,
           });
           return;
         }
-        if (target.status !== "ready") {
+        if (target.root.desiredStatus !== "running") {
           res.status(409).json({
             error: "target gateway not ready",
             gatewayId: body.gatewayId,
-            status: target.status ?? "unknown",
+            status: target.root.desiredStatus,
+          });
+          return;
+        }
+        const targetStatus = asStringOrNull(target.heartbeat?.status);
+        if (targetStatus !== "ready") {
+          res.status(409).json({
+            error: "target gateway not ready",
+            gatewayId: body.gatewayId,
+            status: targetStatus ?? "unknown",
           });
           return;
         }
         const currentGid = userData.provisioning?.openclaw?.gatewayId;
-        const glmSnap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(body.gatewayId).get();
         const shellState = resolveUserGatewayShellState(
-          glmSnap.exists ? glmSnap.data() : undefined,
+          {
+            gatewayClass: target.root.gatewayClass,
+            profile: target.root.profile ?? undefined,
+            imageProfile: target.root.imageProfile,
+            ownerUid: target.root.ownerUid ?? undefined,
+            coOwnerUids: target.root.coOwnerUids,
+            operatorAccess: target.root.operatorAccess ?? undefined,
+          },
           uid,
         );
         const gatewayProfile = shellState.gatewayProfile;
@@ -4175,9 +4327,10 @@ router.post(
         const reservationRef = db
           .collection(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION)
           .doc(uid);
+        const userRef = db.collection("users").doc(uid);
         const [reservationSnap, userSnap] = await Promise.all([
           reservationRef.get(),
-          db.collection("users").doc(uid).get(),
+          userRef.get(),
         ]);
         if (!reservationSnap.exists) {
           res.status(404).json({
@@ -4187,7 +4340,7 @@ router.post(
           return;
         }
         if (!userSnap.exists) {
-          res.status(404).json({ error: "owner user not found", uid });
+          res.status(404).json({ error: ERR_OWNER_USER_NOT_FOUND, uid });
           return;
         }
 
@@ -4250,35 +4403,87 @@ router.post(
           provisioningStartedBy: createdBy,
           updatedAt: now,
         };
-
-        const batch = db.batch();
-        batch.set(
-          db.collection(GLM_GATEWAYS_COLLECTION).doc(body.gatewayId),
-          operatorGatewayDesiredStateFromReservation({
-            body,
-            reservation: reservation.ok,
-            createdBy,
-            now,
-          }),
-        );
-        batch.set(
-          opRef,
-          addGatewayOperationRecord({
-            createdBy,
-            now,
-            input: operationInput,
-          }),
-        );
-        batch.update(reservationRef, reservationUpdate);
-        batch.update(db.collection("users").doc(uid), {
-          "operatorGatewayReservation.status": "provisioning",
-          "operatorGatewayReservation.gatewayId": body.gatewayId,
-          "operatorGatewayReservation.operationId": operationId,
-          "operatorGatewayReservation.provisioningStartedAt": now,
-          "operatorGatewayReservation.provisioningStartedBy": createdBy,
-          "operatorGatewayReservation.updatedAt": now,
+        const initial = operatorGatewayInitialReleaseFromReservation({
+          body,
+          reservation: reservation.ok,
+          createdBy,
+          now,
         });
-        await batch.commit();
+        try {
+          await writeInitialGatewayRelease(db, {
+            ...initial,
+            validateAdditional: async (transaction) => {
+              const [currentReservationSnap, currentUserSnap] = await Promise.all([
+                transaction.get(reservationRef),
+                transaction.get(userRef),
+              ]);
+              if (!currentReservationSnap.exists) {
+                throw new InitialGatewayReleaseRequestError(404, {
+                  error: "operator gateway reservation not found",
+                  uid,
+                });
+              }
+              if (!currentUserSnap.exists) {
+                throw new InitialGatewayReleaseRequestError(404, {
+                  error: ERR_OWNER_USER_NOT_FOUND,
+                  uid,
+                });
+              }
+              const currentReservation = validateFulfillableOperatorReservation(
+                uid,
+                currentReservationSnap.data() as Record<string, unknown>,
+              );
+              if ("error" in currentReservation) {
+                throw new InitialGatewayReleaseRequestError(
+                  currentReservation.error.status,
+                  currentReservation.error.body,
+                );
+              }
+              if (
+                currentReservation.ok.builderSlug !== reservation.ok.builderSlug ||
+                currentReservation.ok.requestedSizingTier !== reservation.ok.requestedSizingTier ||
+                currentReservation.ok.requestedAt !== reservation.ok.requestedAt
+              ) {
+                throw new InitialGatewayReleaseRequestError(409, {
+                  error: "operator gateway reservation changed during fulfillment",
+                  uid,
+                });
+              }
+            },
+            writeAdditional: (transaction) => {
+              transaction.set(
+                opRef,
+                addGatewayOperationRecord({
+                  createdBy,
+                  now,
+                  input: operationInput,
+                }),
+              );
+              transaction.update(reservationRef, reservationUpdate);
+              transaction.update(userRef, {
+                "operatorGatewayReservation.status": "provisioning",
+                "operatorGatewayReservation.gatewayId": body.gatewayId,
+                "operatorGatewayReservation.operationId": operationId,
+                "operatorGatewayReservation.provisioningStartedAt": now,
+                "operatorGatewayReservation.provisioningStartedBy": createdBy,
+                "operatorGatewayReservation.updatedAt": now,
+              });
+            },
+          });
+        } catch (e) {
+          if (e instanceof InitialGatewayReleaseConflictError) {
+            res.status(409).json({
+              error: "gateway already exists",
+              gatewayId: e.gatewayId,
+            });
+            return;
+          }
+          if (e instanceof InitialGatewayReleaseRequestError) {
+            res.status(e.status).json(e.body);
+            return;
+          }
+          throw e;
+        }
 
         res.status(202).json({
           uid,
@@ -4306,6 +4511,12 @@ router.post(
         );
         if (persistenceError) {
           res.status(persistenceError.status).json(persistenceError.body);
+          return;
+        }
+        if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "byosub")) {
+          res.status(400).json({
+            error: "gateway credential references are user-scoped and cannot be created here",
+          });
           return;
         }
 
@@ -4374,44 +4585,34 @@ router.post(
                 serviceAccount: OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
               }
             : {};
-        await db
-          .collection(GLM_GATEWAYS_COLLECTION)
-          .doc(body.gatewayId)
-          .set({
+        try {
+          await writeInitialGatewayRelease(db, {
             gatewayId: body.gatewayId,
-            gateway: body.gatewayId,
-            imageRepository: body.imageRepository,
-            imageTag: body.imageTag,
-            desiredStatus: "running",
             createdBy,
-            createdAt: now,
-            ...(body.profile ? { profile: body.profile } : {}),
-            gatewayClass,
-            ...(imageProfile !== "standard" ? { imageProfile } : {}),
-            ...ownerRuntimeDefaults,
-            ...operatorDefaults,
-            ...owner.ok,
-            ...(body.sizingTier ? { sizingTier: body.sizingTier } : {}),
+            now,
+            desiredStatus: "running",
+            config: buildCreateGatewayConfig({
+              body,
+              gatewayClass,
+              imageProfile,
+              ownerUid: owner.ok.ownerUid,
+              builderSlug: owner.ok.builderSlug,
+              operatorAccess: ownerRuntimeDefaults.operatorAccess,
+              serviceAccountName: operatorDefaults.serviceAccountName,
+              serviceAccount: operatorDefaults.serviceAccount,
+            }),
+            artifact: buildCreateArtifact(body),
           });
-        // Step 2 dual-write: the durable gateways/{id} identity + immutable
-        // release 1, alongside the legacy glmGateways desired doc above (which
-        // Cowboy still reconciles until PR3 switches its inputs).
-        await writeInitialGatewayRelease(db, {
-          gatewayId: body.gatewayId,
-          createdBy,
-          now,
-          desiredStatus: "running",
-          payload: buildCreateReleasePayload({
-            body,
-            gatewayClass,
-            imageProfile,
-            ownerUid: owner.ok.ownerUid,
-            builderSlug: owner.ok.builderSlug,
-            operatorAccess: ownerRuntimeDefaults.operatorAccess,
-            serviceAccountName: operatorDefaults.serviceAccountName,
-            serviceAccount: operatorDefaults.serviceAccount,
-          }),
-        });
+        } catch (e) {
+          if (e instanceof InitialGatewayReleaseConflictError) {
+            res.status(409).json({
+              error: "gateway already exists",
+              gatewayId: e.gatewayId,
+            });
+            return;
+          }
+          throw e;
+        }
         const operationId = await createOperation(db, {
           kind: "add-gateway",
           createdBy,
@@ -4440,76 +4641,48 @@ router.post(
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const id = req.params.id as string;
-        const built = buildGatewayLifecyclePatch(
-          req.body as Partial<{
-            imageTag: string;
-            desiredStatus: AdminGatewayDesiredStatus;
-            sizingTier: string;
-          }>,
-        );
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        const rootRef = db.collection(GATEWAYS_COLLECTION).doc(id);
+        const rootSnap = await rootRef.get();
+        const rootData = rootSnap.exists
+          ? (rootSnap.data() as Record<string, unknown> | undefined)
+          : undefined;
+        if (!rootSnap.exists) {
+          res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
+          return;
+        }
+        const root = asDurableGatewayRoot(rootData, id);
+        if (!root) {
+          const invalidRoot = hasDurableGatewayRootMarkers(rootData);
+          res
+            .status(invalidRoot ? 409 : 404)
+            .json({
+              error: invalidRoot ? "gateway durable root is invalid" : ERR_GATEWAY_NOT_FOUND,
+              gatewayId: id,
+            });
+          return;
+        }
+        const built = buildDurableGatewayPatch({
+          gatewayId: id,
+          current: root,
+          body,
+        });
         if ("error" in built) {
           res.status(built.error.status).json(built.error.body);
           return;
         }
-        const update = built.ok;
-        const ref = db.collection(GLM_GATEWAYS_COLLECTION).doc(id);
-        const snap = await ref.get();
-        if (!snap.exists) {
-          res
-            .status(404)
-            .json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
+        const ownerError = await validateGatewayConfigOwner(db, root, built.ok.config);
+        if (ownerError) {
+          res.status(ownerError.status).json(ownerError.body);
           return;
         }
-        // A gateway on the new schema must not have its legacy desired doc
-        // diverge from its latest release: a payload-affecting PATCH
-        // (imageTag/sizingTier) is refused toward the release-cutting endpoint.
-        // Legacy-only gateways (no GatewayDoc yet) keep the direct-PATCH path so
-        // the live ChangeTierModal keeps working until the backfill (PR6).
-        if (update.imageTag !== undefined || update.sizingTier !== undefined) {
-          const gatewayDoc = await readGatewayDoc(db, id);
-          if (gatewayDoc) {
-            res.status(409).json({
-              error:
-                "imageTag/sizingTier change a release payload — cut a release via POST /api/admin/gateways/:id/releases, not PATCH",
-              gatewayId: id,
-              fields: Object.keys(update).filter(
-                (k) => k === "imageTag" || k === "sizingTier",
-              ),
-            });
-            return;
-          }
-        }
-        // A direct imageTag write on a MOUNTED gateway is refused by the
-        // reconciler (it would drop live sessions), but it still poisons desired
-        // state so a later rollout no-ops. Route image changes through the
-        // release-roll rollout op instead. Empty gateways may still be set directly.
-        if (update.imageTag !== undefined) {
-          const mounted = await readMountedCustomers(db, id);
-          if (mounted.length > 0) {
-            res.status(409).json({
-              error:
-                "cannot set imageTag directly on a gateway with mounted customers — roll it via POST /api/admin/gateways/:id/rollout (release roll)",
-              gatewayId: id,
-              mountedCustomers: mounted,
-            });
-            return;
-          }
-        }
-        await ref.update(update);
-        // Step 2 lifecycle mirror: desiredStatus is a gateway-mutable field (no
-        // release payload change). Reflect it onto the new gateways/{id} doc when
-        // the gateway is on the new schema; imageTag/sizingTier remain a legacy
-        // glmGateways concern until the release-cutting UI lands (PR8) and the
-        // backfill (PR6) gives every gateway a GatewayDoc.
-        await mirrorDesiredStatusToGatewayDoc(
-          db,
-          id,
-          update.desiredStatus,
-          (req as ActorRequest).uid ?? "unknown",
-        );
-        res
-          .status(202)
-          .json({ gatewayId: id, updated: Object.keys(update) });
+        const updatedBy = (req as ActorRequest).uid ?? "unknown";
+        await rootRef.update({
+          ...built.ok.patch,
+          updatedAt: Date.now(),
+          updatedBy,
+        });
+        res.status(202).json({ gatewayId: id, updated: Object.keys(built.ok.patch) });
       } catch (e) {
         next(e);
       }
@@ -4525,21 +4698,19 @@ router.post(
         const createdBy = actor.uid ?? "unknown";
         const retainData = isTruthyQueryFlag(req.query.retainData);
         const retainServiceAccount = isTruthyQueryFlag(req.query.retainServiceAccount);
-        const ref = db.collection(GLM_GATEWAYS_COLLECTION).doc(id);
-        const [snap, gatewayDocSnap] = await Promise.all([
-          ref.get(),
-          db.collection(GATEWAYS_COLLECTION).doc(id).get(),
-        ]);
-        const gatewayDocData = gatewayDocSnap.exists
-          ? (gatewayDocSnap.data() as Record<string, unknown> | undefined)
-          : undefined;
-        const hasGatewayDoc = isGatewayDoc(gatewayDocData);
-        // A backfilled/new-schema gateway exists as gateways/{id} even without a
-        // bare glmGateways/{id} desired doc — 404 only when NEITHER is present.
-        if (!snap.exists && !hasGatewayDoc) {
+        const runtime = await readDurableGatewayRuntime(db, id);
+        if (!runtime) {
           res
             .status(404)
             .json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
+          return;
+        }
+        if (runtime.root.liveRevisionId && !runtime.revision) {
+          res.status(409).json({
+            error: "gateway live revision telemetry is unavailable",
+            gatewayId: id,
+            revisionId: runtime.root.liveRevisionId,
+          });
           return;
         }
         // Refuse synchronously while any customer is still assigned — the
@@ -4555,10 +4726,7 @@ router.post(
           });
           return;
         }
-        const mounted = retireMountedCustomers(
-          snap.exists ? snap.data() : undefined,
-          gatewayDocData,
-        );
+        const mounted = [...readMountedSlugs(runtime.heartbeat ?? undefined)];
         if (mounted.length > 0) {
           res.status(409).json({
             error:
@@ -4572,21 +4740,11 @@ router.post(
         const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
         const operationId = opRef.id;
         const batch = db.batch();
-        // A backfilled gateway may have no bare glmGateways/{id} doc; only flip
-        // its desired state when the legacy mirror actually exists.
-        if (snap.exists) {
-          batch.update(ref, { desiredStatus: "retired" });
-        }
-        // Mark the durable GatewayDoc retired (Step 2 terminal state) and RETAIN
-        // its release history — retire never deletes the new docs. The physical
-        // gateways/{id} teardown lives in the glm-controller retire handler (PR3).
-        if (isGatewayDoc(gatewayDocData)) {
-          batch.update(db.collection(GATEWAYS_COLLECTION).doc(id), {
-            desiredStatus: "retired",
-            updatedAt: Date.now(),
-            updatedBy: createdBy,
-          });
-        }
+        batch.update(db.collection(GATEWAYS_COLLECTION).doc(id), {
+          desiredStatus: "retired",
+          updatedAt: Date.now(),
+          updatedBy: createdBy,
+        });
         batch.set(opRef, {
           kind: "retire-gateway",
           status: "pending",
@@ -4615,12 +4773,15 @@ router.post(
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const id = req.params.id as string;
-        const ref = db.collection(GLM_GATEWAYS_COLLECTION).doc(id);
-        const snap = await ref.get();
-        if (!snap.exists) {
+        const gateway = await readGatewayDoc(db, id);
+        if (!gateway) {
           res
             .status(404)
             .json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
+          return;
+        }
+        if (gateway.desiredStatus === "retired") {
+          res.status(409).json({ error: "cannot restart a retired gateway", gatewayId: id });
           return;
         }
 
@@ -4680,6 +4841,17 @@ router.post(
           return;
         }
         const { imageTag, imageRepository, profile, gatewayClass, imageProfile } = validation.ok;
+        if (profile || gatewayClass || imageProfile) {
+          res.status(400).json({
+            error: "gateway configuration is mutable; update it with PATCH /api/admin/gateways/:id",
+            fields: [
+              ...(profile ? ["profile"] : []),
+              ...(gatewayClass ? ["gatewayClass"] : []),
+              ...(imageProfile ? ["imageProfile"] : []),
+            ],
+          });
+          return;
+        }
 
         const current = await readRolloutCurrentConfig(db, id);
         if (!current) {
@@ -4696,37 +4868,16 @@ router.post(
           });
           return;
         }
-        const data = current.data as
-          | {
-              imageTag?: string;
-              imageRepository?: string;
-              profile?: string;
-              gatewayClass?: string;
-              imageProfile?: string;
-            }
-          | undefined;
-        const targetRepo = imageRepository ?? data?.imageRepository ?? "";
-        const currentProfile = isGatewayProfile(data?.profile) ? data.profile : "standard";
-        const currentGatewayClass = normalizeGatewayClass(data);
-        const currentImageProfile = normalizeGatewayImageProfile(data);
-        const targetProfile = profile ?? currentProfile;
-        const targetGatewayClass = gatewayClass ?? currentGatewayClass;
-        const targetImageProfile = imageProfile ?? profile ?? currentImageProfile;
-        if (
-          data?.imageTag === imageTag &&
-          data.imageRepository === targetRepo &&
-          targetProfile === currentProfile &&
-          targetGatewayClass === currentGatewayClass &&
-          targetImageProfile === currentImageProfile
-        ) {
+        const artifact = currentArtifactPatch(current.artifact, {
+          imageTag,
+          ...(imageRepository ? { imageRepository } : {}),
+        });
+        if (sameArtifact(current.artifact, artifact)) {
           res.status(409).json({
             error: "gateway already on requested image — no-op rollout",
             gatewayId: id,
             imageTag,
-            imageRepository: targetRepo,
-            profile: targetProfile,
-            gatewayClass: targetGatewayClass,
-            imageProfile: targetImageProfile,
+            imageRepository: artifact.imageRepository,
           });
           return;
         }
@@ -4755,28 +4906,17 @@ router.post(
         }
 
         const actor = req as ActorRequest;
-        const patch: ReleasePatchInput = { imageTag };
+        const patch: ArtifactPatchInput = { imageTag };
         if (imageRepository) patch.imageRepository = imageRepository;
-        if (profile) patch.profile = profile;
-        if (gatewayClass) patch.gatewayClass = gatewayClass;
-        if (imageProfile) patch.imageProfile = imageProfile;
         let recorded: { release?: number; operationId: string };
         try {
           recorded = await recordRolloutRelease(db, {
-            gatewayId: id,
+            gateway: rolloutGateway,
             patch,
             createdBy: actor.uid ?? "unknown",
           });
         } catch (e) {
-          if (e instanceof StaleGatewayReleaseError) {
-            res.status(409).json({
-              error: e.message,
-              gatewayId: e.gatewayId,
-              expectedRelease: e.expectedRelease,
-              actualRelease: e.actualRelease,
-            });
-            return;
-          }
+          if (respondReleaseWriteConflict(res, e)) return;
           throw e;
         }
         res
@@ -4826,6 +4966,7 @@ router.post(
 
   router.post(
     "/gateways/:id/releases",
+    // eslint-disable-next-line complexity
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const id = req.params.id as string;
@@ -4851,29 +4992,38 @@ router.post(
           res.status(persistenceError.status).json(persistenceError.body);
           return;
         }
+        const patch = artifactPatchFromBody(body);
+        if ("error" in patch) {
+          res.status(patch.error.status).json(patch.error.body);
+          return;
+        }
         const prev = await readRelease(db, id, gateway.latestRelease);
         if (!prev) {
           res.status(409).json({
-            error: "gateway has no release payload to base a new release on",
+            error: "gateway has no release artifact to base a new release on",
             gatewayId: id,
             latestRelease: gateway.latestRelease,
           });
           return;
         }
-        const newPayload = applyReleasePatch(prev.payload, releasePatchFromBody(body));
-        const validation = validateReleasePayload(newPayload, { gatewayId: id });
-        if ("error" in validation) {
-          res.status(validation.error.status).json(validation.error.body);
-          return;
-        }
-        const ownerError = await validateReleaseOwner(db, prev.payload, newPayload);
-        if (ownerError) {
-          res.status(ownerError.status).json(ownerError.body);
-          return;
-        }
-        if (releasePayloadHash(newPayload) === prev.payloadHash) {
+        const previousArtifact = artifactFromRelease(prev);
+        if (!previousArtifact) {
           res.status(409).json({
-            error: "release payload is identical to the current release — no-op",
+            error: "gateway has an invalid current release artifact",
+            gatewayId: id,
+            latestRelease: gateway.latestRelease,
+          });
+          return;
+        }
+        const artifact = currentArtifactPatch(previousArtifact, patch.ok);
+        const validation = validateArtifact(artifact);
+        if (validation) {
+          res.status(validation.status).json(validation.body);
+          return;
+        }
+        if (sameArtifact(previousArtifact, artifact)) {
+          res.status(409).json({
+            error: "release artifact is identical to the current release — no-op",
             gatewayId: id,
             release: gateway.latestRelease,
           });
@@ -4894,23 +5044,14 @@ router.post(
         try {
           appended = await appendGatewayRelease(db, {
             gateway,
-            payload: newPayload,
-            createRolloutOperation: imagePayloadChanged(prev.payload, newPayload),
+            artifact,
             createdBy,
             now,
             sourceRelease: gateway.latestRelease,
             note,
           });
         } catch (e) {
-          if (e instanceof StaleGatewayReleaseError) {
-            res.status(409).json({
-              error: e.message,
-              gatewayId: e.gatewayId,
-              expectedRelease: e.expectedRelease,
-              actualRelease: e.actualRelease,
-            });
-            return;
-          }
+          if (respondReleaseWriteConflict(res, e)) return;
           throw e;
         }
         res.status(202).json({ gatewayId: id, ...appended });
@@ -4939,28 +5080,19 @@ router.post(
           res.status(resolved.error.status).json(resolved.error.body);
           return;
         }
-        const { gateway, target, previous, release, note } = resolved.ok;
+        const { gateway, artifact, release, note } = resolved.ok;
         let appended: { release: number; operationId: string | null };
         try {
           appended = await appendGatewayRelease(db, {
             gateway,
-            payload: target.payload,
-            createRolloutOperation: imagePayloadChanged(previous.payload, target.payload),
+            artifact,
             createdBy,
             now,
             sourceRelease: release,
             note,
           });
         } catch (e) {
-          if (e instanceof StaleGatewayReleaseError) {
-            res.status(409).json({
-              error: e.message,
-              gatewayId: e.gatewayId,
-              expectedRelease: e.expectedRelease,
-              actualRelease: e.actualRelease,
-            });
-            return;
-          }
+          if (respondReleaseWriteConflict(res, e)) return;
           throw e;
         }
         res

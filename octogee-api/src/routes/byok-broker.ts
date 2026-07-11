@@ -3,11 +3,13 @@ import type { Firestore } from "firebase-admin/firestore";
 import {
   MODEL_CREDENTIAL_STATIC_PROVIDER_IDS,
   modelCredentialOAuthEntryBySubscriptionProvider,
+  resolveUserByosubCredentialRefs,
 } from "@octogee/shared/types/model-credentials";
 
 import { readSecret } from "@octogee/core/secret-manager";
 import { isSafeAgentId } from "@octogee/core/byosub-restore";
 import { readAssignedSlugsForGateway } from "@octogee/core/assigned-roster";
+import { readGatewayAuthorization } from "@octogee/core/gateway-live-release";
 import {
   resolveEffectivePlan,
   spendDegradeState,
@@ -39,13 +41,6 @@ type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" 
 const FORBIDDEN = { error: "forbidden" } as const;
 const VALID_AGENT_ID_REQUIRED = { error: "valid agentId required" } as const;
 const UNSUPPORTED_PROVIDER = { error: "unsupported provider" } as const;
-// This broker materializes ONLY byosub OAuth credentials. A byosub secret id is
-// `byosub-<uid>-<provider>` (gateway-edge/src/lib/byosub.ts byosubSecretName) —
-// the raw mixed-case Firebase uid plus exactly the two OAuth-sub providers.
-// Pinning that shape, and matching the stored provider suffix below, stops a
-// corrupted glmGateways.byosub ref from steering readSecret onto an unrelated
-// Secret Manager secret (e.g. gateway-auth-token-*) and leaking it to the pod.
-const BYOSUB_SECRET_RE = /^byosub-[A-Za-z0-9_-]+-(?:openai|anthropic)$/;
 export const BYOK_API_KEY_PROVIDER_IDS = [...MODEL_CREDENTIAL_STATIC_PROVIDER_IDS];
 const BYOK_API_KEY_RE = /^byok-(?<body>[a-z0-9][a-z0-9-]{0,128})(?:\/(?<version>[a-zA-Z0-9-]{1,32}))?$/;
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -94,53 +89,14 @@ function boundGateway(req: Request, res: Response): GatewayBinding | null {
   return bound;
 }
 
-interface ByosubRef {
-  providers?: unknown;
-}
-
-type ByosubProvider = "openai" | "anthropic";
-const BYOSUB_PROVIDERS: ByosubProvider[] = ["openai", "anthropic"];
-const BYOSUB_PROVIDER_SET = new Set<string>(BYOSUB_PROVIDERS);
-
-function providerRefs(ref: ByosubRef | undefined): {
-  malformed: boolean;
-  refs: { provider: ByosubProvider; secretName: string }[];
-  skipped: string[];
-} {
-  if (!ref) return { malformed: false, refs: [], skipped: [] };
-  if (!ref.providers || typeof ref.providers !== "object") {
-    return { malformed: true, refs: [], skipped: ["providers: malformed provider set"] };
-  }
-  const providers = ref.providers as Record<string, unknown>;
-  const skipped: string[] = [];
-  for (const provider of Object.keys(providers)) {
-    if (!BYOSUB_PROVIDER_SET.has(provider)) skipped.push(`${provider}: unknown provider`);
-  }
-  const refs = BYOSUB_PROVIDERS.flatMap((provider) => {
-    const raw = providers[provider];
-    if (raw === undefined) return [];
-    if (
-      !raw ||
-      typeof raw !== "object" ||
-      (raw as { provider?: unknown }).provider !== provider ||
-      typeof (raw as { secretName?: unknown }).secretName !== "string" ||
-      !(raw as { secretName?: string }).secretName
-    ) {
-      skipped.push(`${provider}: malformed provider leaf`);
-      return [];
-    }
-    return [{ provider, secretName: (raw as { secretName: string }).secretName }];
-  });
-  return { malformed: refs.length === 0 && skipped.length > 0, refs, skipped };
-}
-
-function warnSkippedByosubRefs(input: {
+function warnSkippedUserByosubProviders(input: {
   gatewayId: string;
   agentId: string;
+  uid: string;
   skipped: string[];
 }): void {
   if (input.skipped.length === 0) return;
-  console.warn("[byok-broker] skipped malformed byosub provider ref", input);
+  console.warn("[byok-broker] skipped malformed user byosub provider", input);
 }
 
 function assignedOwnerSlug(data: Record<string, unknown>): string | null {
@@ -223,9 +179,9 @@ async function agentUsageStatusPayload(
 ): Promise<Record<string, unknown>> {
   const windowStartMs = usageWindowStartMs(nowMs);
   const weekStartMs = weekWindowStartMs(nowMs);
-  const [gatewaySnap, configSnap, windowSnap, weekSnap, creditSnap] =
+  const [authorization, configSnap, windowSnap, weekSnap, creditSnap] =
     await Promise.all([
-      db.collection("glmGateways").doc(gatewayId).get(),
+      readGatewayAuthorization(db, gatewayId),
       db.collection("users").doc(assigned.uid).collection("system").doc("config").get(),
       db
         .collection(MODEL_BROKER_USAGE_WINDOWS_COLLECTION)
@@ -240,7 +196,10 @@ async function agentUsageStatusPayload(
 
   const userData = assigned.data;
   const plan = resolveEffectivePlan(userData, new Date(nowMs));
-  const gatewayClass = stringOrNull(gatewaySnap.data()?.gatewayClass) ?? "unknown";
+  if (!authorization) {
+    throw new Error(`durable root config unavailable for gateways/${gatewayId}`);
+  }
+  const gatewayClass = authorization.config.gatewayClass;
   const credential = credentialPathFor(
     userData,
     (configSnap.data() ?? {}) as Record<string, unknown>,
@@ -305,37 +264,46 @@ async function handleByosubCred(
   agentId: string,
   res: Response,
 ): Promise<void> {
-  const snap = await db.collection("glmGateways").doc(gatewayId).get();
-  const byosub = (snap.data() as { byosub?: Record<string, ByosubRef> } | undefined)?.byosub;
-  const ref = byosub?.[agentId];
-  const parsed = providerRefs(ref);
-  if (parsed.malformed) {
-    warnSkippedByosubRefs({ gatewayId, agentId, skipped: parsed.skipped });
-    res.status(500).json({ error: "malformed byosub ref" });
+  const assigned = await findAssignedOrInboundMigratingUserByAgentId(db, gatewayId, agentId);
+  if (!assigned) {
+    res.status(403).json(FORBIDDEN);
     return;
   }
+
+  const snap = await db
+    .collection("users")
+    .doc(assigned.uid)
+    .collection("integrations")
+    .doc("byosub")
+    .get();
+  const parsed = resolveUserByosubCredentialRefs(assigned.uid, snap.data());
   if (parsed.refs.length === 0) {
+    warnSkippedUserByosubProviders({
+      gatewayId,
+      agentId,
+      uid: assigned.uid,
+      skipped: parsed.skipped,
+    });
+    if (parsed.skipped.length > 0) {
+      res.status(500).json({ error: "malformed user byosub integration" });
+      return;
+    }
     res.status(404).json({ error: "not_found" });
     return;
   }
 
   const credentials = [];
-  const skipped = [...parsed.skipped];
   for (const { provider, secretName } of parsed.refs) {
-    if (!BYOSUB_SECRET_RE.test(secretName) || !secretName.endsWith(`-${provider}`)) {
-      skipped.push(`${provider}: malformed secret ref`);
-      continue;
-    }
     credentials.push({ provider, secretName, credential: await readSecret(secretName) });
   }
-  if (credentials.length === 0) {
-    warnSkippedByosubRefs({ gatewayId, agentId, skipped });
-    res.status(500).json({ error: skipped.length > 0 ? "malformed secret ref" : "not_found" });
-    return;
-  }
-  warnSkippedByosubRefs({ gatewayId, agentId, skipped });
+  warnSkippedUserByosubProviders({
+    gatewayId,
+    agentId,
+    uid: assigned.uid,
+    skipped: parsed.skipped,
+  });
 
-  res.json({ credentials, ...(skipped.length > 0 ? { skipped } : {}) });
+  res.json({ credentials, ...(parsed.skipped.length > 0 ? { skipped: parsed.skipped } : {}) });
 }
 
 async function handlePlatformEmbeddingKey(
@@ -393,10 +361,9 @@ export function createByokBrokerRoutes(opts: {
 
   // Materialize a byosub OAuth credential (ChatGPT/codex or Claude/claude-cli)
   // for a gateway that cannot reach Secret Manager directly (cattle pods are
-  // egress-blocked from the GCP metadata server). Scoped to
-  // glmGateways/{gatewayId}.byosub: a gateway only gets credentials referenced
-  // on its OWN doc — no cross-gateway or cross-tenant read. KSA-authed via the
-  // tenant-binding middleware (boundTenant.kind === "gateway").
+  // egress-blocked from the GCP metadata server). The bound gateway must first
+  // prove the agent's assigned user; that user's integration state and derived
+  // `byosub-<uid>-<provider>` secret name are the sole authority.
   router.post("/byosub-cred", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;

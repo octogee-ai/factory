@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   applyAnthropicBaseUrlPatch,
+  applyGatewayRootConfig,
   applyPreBootPatches,
   applyGatewayOverrides,
-  applyByosubRuntimeAllowlist,
   shouldMaterializeAnthropicBrokerProfiles,
   applyMattermostPreBootPatches,
   buildGitconfigContent,
@@ -453,6 +453,35 @@ describe("preBootFirestoreEnabled", () => {
   });
 });
 
+describe("applyGatewayRootConfig", () => {
+  it("applies only durable root overrides and refuses a revision id as a config selector", async () => {
+    const config: any = {};
+    const readAuthorization = vi.fn(async () => ({
+      config: { openclawOverrides: { session: { dmScope: "per-channel-peer" } } },
+    }));
+
+    await expect(
+      applyGatewayRootConfig(config, {
+        gatewayId: "default",
+        readAuthorization,
+      }),
+    ).resolves.toBe(true);
+    expect(config.session).toEqual({ dmScope: "per-channel-peer" });
+    expect(readAuthorization).toHaveBeenCalledWith("default");
+
+    const revisionRead = vi.fn(async () => ({
+      config: { openclawOverrides: { session: { dmScope: "wrong" } } },
+    }));
+    await expect(
+      applyGatewayRootConfig({}, {
+        gatewayId: "default-r7",
+        readAuthorization: revisionRead,
+      }),
+    ).resolves.toBe(false);
+    expect(revisionRead).not.toHaveBeenCalled();
+  });
+});
+
 describe("shouldMaterializeAnthropicBrokerProfiles", () => {
   it.each(["shared", "builder", "operator"])(
     "materializes per-agent broker-token profiles for %s gateways",
@@ -633,106 +662,6 @@ describe("applyGatewayOverrides + applyPreBootPatches — precedence (policy win
     applyPreBootPatches(config, {});
     expect(config.tools.profile).toBe("coding");
     expect(config.channels.mattermost.commands.native).toBe(false);
-  });
-});
-
-describe("applyByosubRuntimeAllowlist", () => {
-  it("allowlists every BYOSUB runtime model for mounted agents without selecting a primary", () => {
-    const logs: string[] = [];
-    const config: any = {
-      agents: {
-        list: [{ id: "octogee-tester5-coach", model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] } }],
-        defaults: { models: { "anthropic/claude-haiku-4-5": {} } },
-      },
-    };
-
-    const changed = applyByosubRuntimeAllowlist(
-      config,
-      {
-        "octogee-tester5-coach": {
-          providers: {
-            openai: { provider: "openai", secretName: "byosub-u-openai" },
-            anthropic: { provider: "anthropic", secretName: "byosub-u-anthropic", status: "needs_reauth" },
-          },
-        },
-      },
-      ["octogee-tester5-coach"],
-      (msg) => logs.push(msg),
-    );
-
-    expect(changed).toBe(true);
-    expect(config.agents.list[0].model.primary).toBe("anthropic/claude-sonnet-4-6");
-    expect(config.agents.defaults.models).toMatchObject({
-      "anthropic/claude-haiku-4-5": {},
-      "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-      "claude-cli/claude-opus-4-8": {},
-    });
-    expect(config.plugins.entries.codex).toEqual({
-      enabled: true,
-      config: { appServer: { sandbox: "workspace-write", approvalPolicy: "never" } },
-    });
-    expect(logs.join("\n")).toMatch(/BYOSUB runtime models allowlisted/);
-  });
-
-  it("preserves an operator Codex sandbox while adding BYOSUB runtime models", () => {
-    const config: any = {
-      agents: {
-        list: [{ id: "octogee-tester5-coach" }],
-        defaults: { models: {} },
-      },
-      plugins: {
-        entries: {
-          codex: {
-            enabled: true,
-            config: {
-              appServer: {
-                sandbox: "danger-full-access",
-                approvalPolicy: "never",
-              },
-            },
-          },
-        },
-      },
-    };
-
-    const changed = applyByosubRuntimeAllowlist(
-      config,
-      {
-        "octogee-tester5-coach": {
-          providers: {
-            openai: { provider: "openai", secretName: "byosub-u-openai" },
-          },
-        },
-      },
-      ["octogee-tester5-coach"],
-    );
-
-    expect(changed).toBe(true);
-    expect(config.agents.defaults.models).toMatchObject({
-      "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-    });
-    expect(config.plugins.entries.codex.config.appServer).toEqual({
-      sandbox: "danger-full-access",
-      approvalPolicy: "never",
-    });
-  });
-
-  it("ignores byosub refs for agents that are not mounted in this gateway config", () => {
-    const config: any = { agents: { list: [{ id: "octogee-tester5-coach" }] } };
-    const changed = applyByosubRuntimeAllowlist(
-      config,
-      {
-        "octogee-other-coach": {
-          providers: {
-            anthropic: { provider: "anthropic", secretName: "byosub-other-anthropic" },
-          },
-        },
-      },
-      ["octogee-tester5-coach"],
-    );
-
-    expect(changed).toBe(false);
-    expect(config.agents.defaults).toBeUndefined();
   });
 });
 

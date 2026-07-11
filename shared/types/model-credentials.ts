@@ -437,6 +437,71 @@ export const MODEL_CREDENTIAL_SUBSCRIPTION_PROVIDER_IDS = [
   'anthropic',
 ] as const satisfies readonly ModelCredentialSubscriptionProviderId[];
 
+const SAFE_BYOSUB_UID = /^[A-Za-z0-9_-]+$/;
+
+export interface UserByosubCredentialRef {
+  provider: ModelCredentialSubscriptionProviderId;
+  secretName: string;
+}
+
+export interface UserByosubCredentialRefs {
+  refs: UserByosubCredentialRef[];
+  skipped: string[];
+}
+
+export function byosubSecretNameForUser(
+  uid: string,
+  provider: ModelCredentialSubscriptionProviderId,
+): string | null {
+  return SAFE_BYOSUB_UID.test(uid) ? `byosub-${uid}-${provider}` : null;
+}
+
+// eslint-disable-next-line complexity
+export function resolveUserByosubCredentialRefs(
+  uid: string,
+  integration: unknown,
+): UserByosubCredentialRefs {
+  const providers =
+    integration && typeof integration === 'object' && !Array.isArray(integration)
+      ? (integration as { providers?: unknown }).providers
+      : undefined;
+  if (!providers || typeof providers !== 'object' || Array.isArray(providers)) {
+    return { refs: [], skipped: [] };
+  }
+
+  const providerSet = providers as Record<string, unknown>;
+  const refs: UserByosubCredentialRef[] = [];
+  const skipped: string[] = [];
+  for (const provider of MODEL_CREDENTIAL_SUBSCRIPTION_PROVIDER_IDS) {
+    const raw = providerSet[provider];
+    if (raw === undefined) continue;
+    if (
+      !raw ||
+      typeof raw !== 'object' ||
+      Array.isArray(raw) ||
+      (raw as { provider?: unknown }).provider !== provider
+    ) {
+      skipped.push(`${provider}: malformed provider leaf`);
+      continue;
+    }
+    const leaf = raw as { connected?: unknown; status?: unknown };
+    if (leaf.connected === false && (leaf.status === 'needs_reauth' || leaf.status === 'disconnected' || leaf.status === 'pending')) {
+      continue;
+    }
+    if (leaf.connected !== true || leaf.status !== 'connected') {
+      skipped.push(`${provider}: malformed provider leaf`);
+      continue;
+    }
+    const secretName = byosubSecretNameForUser(uid, provider);
+    if (!secretName) {
+      skipped.push(`${provider}: unsafe user id`);
+      continue;
+    }
+    refs.push({ provider, secretName });
+  }
+  return { refs, skipped };
+}
+
 export function modelCredentialEntryById(
   id: ModelCredentialProviderId,
 ): ModelCredentialCatalogEntry {

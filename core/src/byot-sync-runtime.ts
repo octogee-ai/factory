@@ -19,9 +19,10 @@ import {
   isModelCredentialOauthProvider,
 } from "./model-credential-materializer.js";
 import {
-  restoreByosubForAgents,
+  codexAuthJsonPath,
+  restoreByosubCredentials,
   type ByosubProvider,
-  type ByosubRef,
+  type ByosubRestorePlanItem,
 } from "./byosub-restore.js";
 import { applyConfigPatch, fullAgentListReplacePaths } from "./apply-config-patch.js";
 import {
@@ -393,18 +394,6 @@ export interface OauthStoreRestoreResult {
   providers?: ByosubProvider[];
 }
 
-export function markerProvidersForSlot(
-  byosub: Record<string, ByosubRef> | undefined,
-  agentId: string,
-): Array<"claude-cli" | "openai-codex"> {
-  const providers = byosub?.[agentId]?.providers;
-  if (!providers) return [];
-  return [
-    ...(providers.openai ? (["openai-codex"] as const) : []),
-    ...(providers.anthropic ? (["claude-cli"] as const) : []),
-  ];
-}
-
 export interface ByosubCred {
   provider: ByosubProvider;
   secretName: string;
@@ -416,9 +405,9 @@ function claudeCliNativeHomeDirForGateway(): string | undefined {
 }
 
 // Cattle gateways are egress-blocked from the GCP metadata server, so they
-// cannot read Firestore (the byosub ref) or Secret Manager (the credential)
-// directly. octogee-api brokers both — KSA-tenant-bound to this gateway and
-// scoped to its own glmGateways.byosub. internalFetch attaches the projected
+// cannot read user integration state or Secret Manager directly. octogee-api
+// proves the assigned user for the KSA-bound gateway, then derives the user's
+// BYOSUB secret name from that integration. internalFetch attaches the projected
 // octogee-api KSA token the broker authorizes on.
 function byokBrokerBaseUrl(): string {
   const configured = process.env.FLEET_BROKER_URL || process.env.OCTOGEE_API_URL;
@@ -491,22 +480,17 @@ export async function restoreOauthStoreForSlug(
       return { restored: false, present: false, providers: [] };
     }
     const providers = Array.from(new Set(creds.map((cred) => cred.provider)));
-    const byosub: Record<string, ByosubRef> = {
-      [agentId]: {
-        providers: Object.fromEntries(
-          creds.map((cred) => [
-            cred.provider,
-            { provider: cred.provider, secretName: cred.secretName },
-          ]),
-        ),
-      },
-    };
+    const plan: ByosubRestorePlanItem[] = creds.map((cred) => ({
+      agentId,
+      provider: cred.provider,
+      secretName: cred.secretName,
+      openclawDir: ocDir,
+      ...(cred.provider === "openai" ? { targetPath: codexAuthJsonPath(ocDir, agentId) } : {}),
+    }));
     const claudeCliNativeHomeDir =
       deps?.claudeCliNativeHomeDir ?? claudeCliNativeHomeDirForGateway();
-    const r = await restoreByosubForAgents({
-      agentIds: [agentId],
-      byosub,
-      openclawDir: ocDir,
+    const r = await restoreByosubCredentials({
+      plan,
       fetchSecret: async (secretName) => {
         const cred = creds.find((candidate) => candidate.secretName === secretName);
         if (!cred) throw new Error(`broker response omitted ${secretName}`);

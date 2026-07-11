@@ -2,7 +2,11 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { agentIdsFromConfig, planByosubRestores } from "../lib/byosub-restore.js";
+import {
+  agentIdsFromConfig,
+  codexAuthJsonPath,
+  isSafeAgentId,
+} from "../lib/byosub-restore.js";
 import {
   syncBackSweep,
   type AuthFingerprint,
@@ -29,42 +33,9 @@ async function loadTargets(): Promise<SyncBackTarget[]> {
   } catch {
     return [];
   }
-  const gatewayId = process.env.GATEWAY_ID;
-  if (!gatewayId) return [];
-  let byosub:
-    | Record<
-        string,
-        {
-          providers: Partial<
-            Record<
-              "openai" | "anthropic",
-              { provider: "openai" | "anthropic"; secretName: string }
-            >
-          >;
-        }
-      >
-    | undefined;
-  try {
-    const { db } = await import("../lib/firebase.js");
-    const snap = await db.collection("glmGateways").doc(gatewayId).get();
-    byosub = snap.exists
-      ? (snap.data() as { byosub?: typeof byosub } | undefined)?.byosub
-      : undefined;
-  } catch (e) {
-    log(`WARN: glmGateways fetch failed — ${(e as Error).message}`);
-    return [];
-  }
-  return planByosubRestores({
-    agentIds: agentIdsFromConfig(config),
-    byosub,
-    openclawDir: OPENCLAW_DIR,
-    logFn: log,
-  })
-    // Only codex has a rotating on-disk auth.json (targetPath) to observe + sync
-    // back. claude-cli's setup-token is a static bearer with no targetPath —
-    // nothing to watch.
-    .filter((p): p is typeof p & { targetPath: string } => typeof p.targetPath === "string")
-    .map((p) => ({ agentId: p.agentId, authPath: p.targetPath }));
+  return agentIdsFromConfig(config)
+    .filter(isSafeAgentId)
+    .map((agentId) => ({ agentId, authPath: codexAuthJsonPath(OPENCLAW_DIR, agentId) }));
 }
 
 async function main(): Promise<void> {

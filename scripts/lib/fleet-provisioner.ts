@@ -89,12 +89,7 @@ export interface StartFleetOptions {
   rpc: GatewayRpcClient;
   adapter?: CustomerLifecycleAdapter;
   gatewayId: string;
-  // The revision this pod realizes ({gatewayId}-r{n}, from GATEWAY_REVISION_ID).
-  // Threaded onto the heartbeat so it also lands at
-  // glmGateways/{revisionId}.heartbeat (Cowboy's converge-empty readiness key)
-  // and onto the roster read so a rolling gateway's two revisions split their
-  // assigned customers. Empty/absent on legacy pods.
-  revisionId?: string;
+  revisionId: string;
   log: (msg: string) => void;
   port: number;
   publicKey: string;
@@ -217,22 +212,18 @@ export function pathGatewayIdMatchesPod(
 }
 
 // The K8s Service name a revision pod publishes as its heartbeat internalUrl.
-// Resource names key off the revision ({gatewayId}-r{n}); a legacy pod with no
-// revision id falls back to the bare gateway Service.
 export function gatewayRevisionServiceName(input: {
   gatewayId: string;
-  revisionId?: string;
+  revisionId: string;
 }): string {
-  return `octogee-gateway-${input.revisionId || input.gatewayId}`;
+  if (!input.revisionId) throw new Error("revisionId is required for gateway service addressing");
+  return `octogee-gateway-${input.revisionId}`;
 }
 
-// Build the heartbeat snapshot for a fleet tick. `revisionId` is included only
-// when set, so writeGatewayHeartbeat writes glmGateways/{revisionId}.heartbeat
-// (the converge-empty readiness key) for revision pods and stays bare-only for
-// legacy pods.
+// Build the heartbeat snapshot for a fleet tick.
 export function buildFleetHeartbeatSnapshot(input: {
   gatewayId: string;
-  revisionId?: string;
+  revisionId: string;
   status: HeartbeatSnapshot["status"];
   version: string;
   openclawVersion: string;
@@ -240,8 +231,12 @@ export function buildFleetHeartbeatSnapshot(input: {
   internalUrl: string;
   startedAt: number;
 }): HeartbeatSnapshot {
-  const snapshot: HeartbeatSnapshot = {
+  if (!input.revisionId) {
+    throw new Error("revisionId is required for revision-scoped gateway heartbeat");
+  }
+  return {
     gatewayId: input.gatewayId,
+    revisionId: input.revisionId,
     status: input.status,
     version: input.version,
     openclawVersion: input.openclawVersion,
@@ -249,8 +244,6 @@ export function buildFleetHeartbeatSnapshot(input: {
     internalUrl: input.internalUrl,
     startedAt: input.startedAt,
   };
-  if (input.revisionId) snapshot.revisionId = input.revisionId;
-  return snapshot;
 }
 
 interface FleetRuntime {

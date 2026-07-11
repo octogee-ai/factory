@@ -69,6 +69,10 @@
       "types": "./dist/types/gateway-releases.d.ts",
       "default": "./dist/types/gateway-releases.js"
     },
+    "./types/gateway-mutable-config": {
+      "types": "./dist/types/gateway-mutable-config.d.ts",
+      "default": "./dist/types/gateway-mutable-config.js"
+    },
     "./types/glm": {
       "types": "./dist/types/glm.d.ts",
       "default": "./dist/types/glm.js"
@@ -193,6 +197,9 @@
       ],
       "types/gateway-releases": [
         "dist/types/gateway-releases.d.ts"
+      ],
+      "types/gateway-mutable-config": [
+        "dist/types/gateway-mutable-config.d.ts"
       ],
       "types/glm": [
         "dist/types/glm.d.ts"

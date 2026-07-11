@@ -9,16 +9,11 @@ import {
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
-  isGatewayClass,
-  isGatewayProfile,
+  deriveGatewayIdentity,
   operatorGatewayServiceAccountName,
-  resolveGatewayClass,
-  resolveGatewayImageProfile,
-  type GatewayDesiredState,
-  type HelmInstanceValue,
-  type HelmInstancesMap,
+  type GatewayClass,
+  type GatewayProfile,
   type Operation,
-  type OperationStep,
 } from "@octogee/shared/types/glm";
 import {
   parseHealthResponse,
@@ -26,17 +21,8 @@ import {
   type OperatorHeartbeatPollerDeps,
 } from "./operator-heartbeat-poller.js";
 import {
-  buildHelmTargetMap,
-  buildInstancesMap,
-  diffInstancesMap,
-  isImageRoll,
-  isReplicasOnlyUpdate,
-  type ReconcileChange,
-} from "./reconcile-plan.js";
-import {
   createHelmSubprocessRunner,
   createLoggingHelmRunner,
-  effectiveGatewayServiceAccountName,
   spawnHelm,
   type HelmRunner,
 } from "./helm-runner.js";
@@ -63,15 +49,27 @@ import {
 } from "./heartbeat-relocation.js";
 import {
   runConvergeEmptyPass,
+  type GatewayRuntimeRoot,
   type ConvergeEmptyDeps,
 } from "./converge-empty.js";
 import {
-  GATEWAY_RELEASES_SUBCOLLECTION,
+  DurableRootDirtyTracker,
+  isDurableRootConfigDoc,
+  runDurableRootRenderPass,
+  type DurableRootRenderDeps,
+  type DurableRootRenderRequest,
+  type DurableRootRenderResult,
+} from "./durable-root-config-renderer.js";
+import { prepareGatewayConfigWithWorkloadIdentity } from "./gateway-workload-identity-config.js";
+import {
   gatewayEdgeServiceName,
   isGatewayDesiredDoc,
+  isGatewayLegacyBackfill,
   isRevisionRealizationDoc,
+  revisionIdForRelease,
   type GatewayDoc,
   type ReleasePayload,
+  type RevisionRealizationDoc,
 } from "@octogee/shared/types/gateway-releases";
 import { createRevisionTombstoneWriter } from "./revision-tombstone-writer.js";
 import {
@@ -104,15 +102,6 @@ import {
 } from "./operation-queue.js";
 import { buildOperationCompletionUpdate } from "./operation-retry.js";
 import { completeOperatorReservationAfterMigration } from "./operator-reservation-completion.js";
-import { computeBootstrapWrites } from "./bootstrap.js";
-import {
-  collectKnownRevisionIds,
-  collectLiveManagedRevisionIds,
-} from "./managed-revision-ids.js";
-import {
-  computeDefaultGatewayBootstrap,
-  deriveDefaultGatewayIdFromNamespace,
-} from "./bootstrap-default-gateway.js";
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
@@ -160,6 +149,9 @@ import {
   MIGRATION_UNMOUNT_TIMEOUT_MS,
   SIGNATURE_HEADER,
 } from "@octogee/shared/types/fleet-controller";
+import {
+  readGatewayArtifact,
+} from "@octogee/core/gateway-live-release";
 import { getStorage } from "firebase-admin/storage";
 import { getAuth } from "firebase-admin/auth";
 import { createMigrationClient } from "@octogee/core/fleet-migration-client";
@@ -182,7 +174,7 @@ import { deleteAuthUserTolerantOfMissing } from "@octogee/core/firebase-auth-hel
 import { deleteHostingSitesForCustomer } from "@octogee/core/firebase-hosting";
 import { GoogleAuth } from "google-auth-library";
 import { startHttpServer, startMaintenanceHttpServer } from "./http-server.js";
-import { recordGatewayHealth, recordReconcile } from "./metrics.js";
+import { recordReconcile } from "./metrics.js";
 import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
 import { startStuckOpReaper } from "./stuck-op-reaper.js";
@@ -224,8 +216,6 @@ const logger = createLogger({
   debug: process.env.DEBUG != null,
 });
 const log = (msg: string) => logger.legacy(msg);
-const WORKLOAD_IDENTITY_ANNOTATION = "iam.gke.io/gcp-service-account";
-
 const RECONCILE_DEBOUNCE_MS = 1_000;
 const RECONCILE_RETRY_MS_DEFAULT = 30_000;
 const OPERATOR_READY_REFRESH_MS_DEFAULT = 60_000;
@@ -333,9 +323,9 @@ function createGatewayPersistentVolumeClaimDeleter(
 function createGatewayDeploymentRestarter(
   runKubectl: KubectlSubprocess,
   logFn: (msg: string) => void,
-): (gatewayId: string) => Promise<void> {
-  return async (gatewayId) => {
-    const name = deploymentNameForInstance(gatewayId);
+): (revisionId: string) => Promise<void> {
+  return async (revisionId) => {
+    const name = deploymentNameForInstance(revisionId);
     const result = await runKubectl([
       "-n",
       NAMESPACE,
@@ -356,7 +346,7 @@ interface ControllerDeps {
   kubeOps?: KubeOps;
   modelKeySourceIssuer?: GatewayModelKeySourceIssuer;
   modelKeySecretEnsurer?: GatewayModelKeySecretEnsurer;
-  restartGatewayDeployment?: (gatewayId: string) => Promise<void>;
+  restartGatewayDeployment?: (revisionId: string) => Promise<void>;
   reconcileImagePins?: (
     env: string,
     instances: ReadonlyArray<{ imageRepository: string; imageTag: string }>,
@@ -370,21 +360,18 @@ interface ControllerDeps {
     gateways: ReadonlyArray<{ gatewayId: string }>,
   ) => Promise<void>;
 
-  ensureGatewayWorkloadIdentity?: (opts: { serviceAccountName: string }) => Promise<void>;
-  ensureGatewayServiceAccount?: (opts: {
-    namespace: string;
-    serviceAccountName: string;
-    annotations?: Record<string, string>;
-  }) => Promise<void>;
-
   // Additive converge-EMPTY pass (GATEWAY-RELEASES-SPEC). Gated to gateways that
   // carry the new gateways/{id} desired docs; dormant until the backfill creates
   // them. Runs after the legacy reconcile and never alters the legacy path.
-  convergeEmpty?: () => Promise<void>;
+  convergeEmpty?: (gatewayIds?: readonly string[]) => Promise<void>;
 
   // The release-roll arm (converge-roll.ts) — runs after convergeEmpty each
   // tick, deriving all progress from durable state.
   convergeRoll?: () => Promise<void>;
+
+  renderDurableRootConfigs?: (
+    request: DurableRootRenderRequest,
+  ) => Promise<DurableRootRenderResult>;
 
   reconcileRetryMs?: number;
 
@@ -427,6 +414,20 @@ async function controllerWorkFrozen(
   return maintenanceGateFrozen(deps.maintenanceGate, deps.log, scope);
 }
 
+function hasLegacyBackfillMarker(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value as Record<string, unknown>).legacyBackfill != null
+  );
+}
+
+async function legacyBackfillRecoveryActive(db: Firestore): Promise<boolean> {
+  const roots = await db.collection(GATEWAYS_COLLECTION).get();
+  return roots.docs.some((root) => hasLegacyBackfillMarker(root.data()));
+}
+
 function deploymentNameForInstance(gatewayId: string): string {
   return `octogee-gateway-${gatewayId}`;
 }
@@ -457,31 +458,11 @@ async function readDedicatedGatewayIdleMs(db: Firestore): Promise<number> {
     : DEDICATED_GATEWAY_IDLE_MS;
 }
 
-function isRunningGateway(gateway: GatewayDesiredState): boolean {
-  return gateway.desiredStatus !== "paused" && gateway.desiredStatus !== "retired";
-}
-
-function configuredGatewayServiceAccount(): string | null {
-  const serviceAccount = process.env.GATEWAY_SERVICE_ACCOUNT?.trim();
-  return serviceAccount && serviceAccount.length > 0 ? serviceAccount : null;
-}
-
-function generatedWorkloadIdentityBindingTarget(
-  target: HelmInstanceValue,
-): { serviceAccountName: string } | null {
-  const configuredGatewayGsa = configuredGatewayServiceAccount();
-  if (!configuredGatewayGsa || !target.serviceAccountName || target.serviceAccount?.create !== true) {
-    return null;
-  }
-  const annotatedGsa = target.serviceAccount.annotations?.[WORKLOAD_IDENTITY_ANNOTATION];
-  if (annotatedGsa !== configuredGatewayGsa) return null;
-  return { serviceAccountName: target.serviceAccountName };
-}
-
 async function publishPlatformGatewayReady(
   db: Firestore,
   input: {
     gatewayId: string;
+    revisionId: string;
     imageTag?: string;
     now: number;
   },
@@ -493,18 +474,35 @@ async function publishPlatformGatewayReady(
   // unsatisfiable on a real fleet. Preserved fields (startedAt, openclawVersion,
   // mountedCustomers, lastError) are read from — and written back to — the
   // relocated heartbeat sub-doc.
-  const glmRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId);
+  const rootRef = db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId);
+  const glmRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(input.revisionId);
+  // eslint-disable-next-line complexity
   await db.runTransaction(async (txn) => {
+    const rootSnap = await txn.get(rootRef);
+    const root = rootSnap.exists ? rootSnap.data() : undefined;
+    if (!isDurableRootConfigDoc(root, input.gatewayId)) {
+      throw new Error(`cannot publish readiness: gateways/${input.gatewayId} is not a valid durable root`);
+    }
     const glmSnap = await txn.get(glmRef);
     const glmData = glmSnap.exists ? (glmSnap.data() as Record<string, unknown> | undefined) : undefined;
+    if (
+      !isRevisionRealizationDoc(glmData) ||
+      glmData.gateway !== input.gatewayId ||
+      glmData.revisionId !== input.revisionId ||
+      input.revisionId !== revisionIdForRelease(input.gatewayId, glmData.release)
+    ) {
+      throw new Error(
+        `cannot publish readiness: glmGateways/${input.revisionId} is not ${input.gatewayId}'s revision`,
+      );
+    }
     const existingHb =
       glmData?.heartbeat && typeof glmData.heartbeat === "object" && !Array.isArray(glmData.heartbeat)
-        ? (glmData.heartbeat as Record<string, unknown>)
+        ? (glmData.heartbeat as unknown as Record<string, unknown>)
         : undefined;
     const patch: Record<string, unknown> = {
       status: "ready",
       version: versionFromImageTag(input.imageTag),
-      internalUrl: gatewayServiceInternalUrl(input.gatewayId),
+      internalUrl: gatewayServiceInternalUrl(input.revisionId),
       startedAt: typeof existingHb?.startedAt === "number" ? existingHb.startedAt : input.now,
       openclawVersion:
         typeof existingHb?.openclawVersion === "string" ? existingHb.openclawVersion : "unknown",
@@ -521,138 +519,172 @@ async function publishPlatformGatewayReady(
 
 async function readGatewayHeartbeatFromFirestore(
   db: Firestore,
-  gatewayId: string,
+  revisionId: string,
 ): Promise<{ lastHeartbeatAt: number; version?: string | null } | null> {
-  // Prefer glmGateways/{id}.heartbeat (collision fix); fall back to the legacy
-  // flat gateways/{id} doc during expand.
-  const [glmSnap, legacySnap] = await Promise.all([
-    db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get(),
-    db.collection("gateways").doc(gatewayId).get(),
-  ]);
-  return readHeartbeatLiveness(
-    glmSnap.exists ? (glmSnap.data() as Record<string, unknown>) : undefined,
-    legacySnap.exists ? (legacySnap.data() as Record<string, unknown>) : undefined,
-  );
-}
-
-async function applyChanges(
-  changes: ReconcileChange[],
-  deps: ControllerDeps,
-  mountedByGatewayId: Map<string, readonly string[]>,
-): Promise<void> {
-  const kubeOps = deps.kubeOps ?? createLoggingKubeOps(deps.log);
-  for (const change of changes) {
-    if (change.kind === "drift") {
-      await deps.helm.removeInstance({
-        namespace: NAMESPACE,
-        gatewayId: change.gatewayId,
-      });
-      continue;
-    }
-    if (isReplicasOnlyUpdate(change)) {
-      const replicas = change.to.replicas ?? 1;
-      await kubeOps.scaleDeployment({
-        namespace: NAMESPACE,
-        name: deploymentNameForInstance(change.gatewayId),
-        replicas,
-      });
-      continue;
-    }
-
-    // Invariant: NEVER in-place-roll a gateway's image while customers are
-    // mounted — that drops every live session (the builder1 outage). Such a roll
-    // must go through the blue/green orchestrator (rollout op). A stray direct
-    // imageTag write lands here; refuse it loudly rather than cut a live pod.
-    const mountedCount = mountedByGatewayId.get(change.gatewayId)?.length ?? 0;
-    if (isImageRoll(change) && mountedCount > 0) {
-      deps.log(
-        `[glm-controller] ⛔ REFUSED in-place image roll of ${change.gatewayId} ` +
-          `(${change.from.image.repository}:${change.from.image.tag} → ` +
-          `${change.to.image.repository}:${change.to.image.tag}) — ${mountedCount} customer(s) mounted. ` +
-          `Roll it via the blue/green rollout operation, not a direct imageTag write.`,
-      );
-      continue;
-    }
-
-    const workloadIdentityTarget = generatedWorkloadIdentityBindingTarget(change.to);
-    if (workloadIdentityTarget) {
-      if (!deps.ensureGatewayWorkloadIdentity) {
-        throw new Error("gateway Workload Identity ensurer is not configured");
-      }
-      await deps.ensureGatewayWorkloadIdentity(workloadIdentityTarget);
-    }
-
-    await deps.helm.upsertInstance({
-      namespace: NAMESPACE,
-      gatewayId: change.to.gatewayId,
-      builderSlug: change.to.builderSlug,
-      imageRepository: change.to.image.repository,
-      imageTag: change.to.image.tag,
-      serviceAccountName: change.to.serviceAccountName,
-      serviceAccount: change.to.serviceAccount,
-      gatewayContainerSecurityContext: change.to.gatewayContainerSecurityContext,
-      operatorAccess: change.to.operatorAccess,
-      computeClassOverride: change.to.computeClassOverride,
-      profile: change.to.profile,
-      gatewayClass: change.to.gatewayClass,
-      imageProfile: change.to.imageProfile,
-      sizingTier: change.to.sizingTier,
-      replicas: change.to.replicas,
-      chartPath: GATEWAY_CHART,
-      valuesFile: GATEWAY_VALUES_FILE,
-      chartFingerprint: deps.chartFingerprint,
-    });
+  const glmSnap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId).get();
+  const revision = glmSnap.exists ? glmSnap.data() : undefined;
+  if (
+    !isRevisionRealizationDoc(revision) ||
+    revision.revisionId !== revisionId ||
+    revisionId !== revisionIdForRelease(revision.gateway, revision.release)
+  ) {
+    return null;
   }
+  return readHeartbeatLiveness(revision as unknown as Record<string, unknown>, undefined);
 }
 
-async function readLiveReplicasInto(
-  actualMap: Record<string, { replicas?: number }>,
-  kubeOps: KubeOps,
-  log: (msg: string) => void,
-): Promise<void> {
-  const names = Object.keys(actualMap);
-  await Promise.all(
-    names.map(async (gatewayId) => {
-      try {
-        const live = await kubeOps.readDeployedReplicas({
-          namespace: NAMESPACE,
-          name: deploymentNameForInstance(gatewayId),
-        });
-        if (live !== null) {
-          actualMap[gatewayId] = { ...actualMap[gatewayId], replicas: live };
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        log(
-          `[glm-controller] ⚠ kube readReplicas failed for ${gatewayId}: ${msg} — keeping helm-stored value`,
-        );
-      }
-    }),
-  );
+interface DurableGatewayRevision {
+  gatewayId: string;
+  revisionId: string;
+  imageTag: string;
+  gatewayClass: GatewayClass;
+  profile: GatewayProfile;
 }
 
-async function readMountedByGatewayId(
+async function readDurableGatewayRevision(
   db: Firestore,
-): Promise<Map<string, readonly string[]>> {
-  // Mounted-customer telemetry now rides glmGateways/{id}.heartbeat (collision
-  // fix). Dual-read during expand: prefer the glm heartbeat sub-doc, fall back
-  // to the legacy flat gateways/{id}.mountedCustomers.
-  const [glmSnap, legacySnap] = await Promise.all([
-    db.collection(GLM_GATEWAYS_COLLECTION).get(),
-    db.collection("gateways").get(),
-  ]);
-  const legacyById = new Map<string, Record<string, unknown>>();
-  for (const doc of legacySnap.docs) legacyById.set(doc.id, doc.data() as Record<string, unknown>);
-  const out = new Map<string, readonly string[]>();
-  const seen = new Set<string>();
-  for (const doc of glmSnap.docs) {
-    seen.add(doc.id);
-    out.set(doc.id, readMountedCustomers(doc.data() as Record<string, unknown>, legacyById.get(doc.id)));
+  gatewayId: string,
+  purpose: "desired" | "serving",
+): Promise<DurableGatewayRevision | null> {
+  const rootSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+  const root = rootSnap.exists ? rootSnap.data() : undefined;
+  if (!isDurableRootConfigDoc(root, gatewayId)) return null;
+  const revisionId =
+    purpose === "desired"
+      ? revisionIdForRelease(gatewayId, root.desiredRelease)
+      : root.trafficRevisionId ?? root.liveRevisionId;
+  if (!revisionId) return null;
+  const revisionSnap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId).get();
+  const revision = revisionSnap.exists ? revisionSnap.data() : undefined;
+  if (
+    !isRevisionRealizationDoc(revision) ||
+    revision.gateway !== gatewayId ||
+    revision.revisionId !== revisionId ||
+    revisionId !== revisionIdForRelease(gatewayId, revision.release) ||
+    (purpose === "serving" && revision.lifecycle !== "serving") ||
+    !revision.helm.imageTag
+  ) {
+    return null;
   }
-  for (const [id, data] of legacyById) {
-    if (!seen.has(id)) out.set(id, readMountedCustomers(undefined, data));
+  return {
+    gatewayId,
+    revisionId,
+    imageTag: revision.helm.imageTag,
+    gatewayClass: root.gatewayClass,
+    profile: root.imageProfile,
+  };
+}
+
+export async function isRecoverableHelmRevision(
+  db: Firestore,
+  revisionId: string,
+): Promise<boolean> {
+  const revisionSnap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId).get();
+  const revision = revisionSnap.exists ? revisionSnap.data() : undefined;
+  if (
+    !isRevisionRealizationDoc(revision) ||
+    revision.revisionId !== revisionId ||
+    revision.lifecycle === "retired" ||
+    revision.lifecycle === "failed" ||
+    revisionId !== revisionIdForRelease(revision.gateway, revision.release)
+  ) {
+    return false;
   }
-  return out;
+  const rootSnap = await db.collection(GATEWAYS_COLLECTION).doc(revision.gateway).get();
+  const root = rootSnap.exists ? rootSnap.data() : undefined;
+  return isDurableRootConfigDoc(root, revision.gateway) && root.desiredStatus === "running";
+}
+
+type FailedBridgeRevisionReopenInput = Parameters<
+  ConvergeEmptyDeps["reopenFailedBridgeRevision"]
+>[0];
+
+function bridgeMetadataMatchesRecoveryPlan(
+  bridge: unknown,
+  expected: FailedBridgeRevisionReopenInput["legacyBackfill"],
+): boolean {
+  if (!isGatewayLegacyBackfill(bridge)) return false;
+  if (bridge.startedAt !== expected.startedAt) return false;
+  if (bridge.sourceGlmGatewayIds.length !== expected.sourceGlmGatewayIds.length) return false;
+  return !bridge.sourceGlmGatewayIds.some(
+    (sourceId) => !expected.sourceGlmGatewayIds.includes(sourceId),
+  );
+}
+
+function durableRootMatchesFailedBridgeRevisionReopen(
+  gateway: GatewayRuntimeRoot,
+  input: FailedBridgeRevisionReopenInput,
+): boolean {
+  const rootStateMatches = [
+    gateway.desiredStatus === "running",
+    gateway.desiredRelease === input.release,
+    gateway.liveRevisionId == null,
+    gateway.trafficRevisionId == null,
+    gateway.liveRelease == null,
+    gateway.roll == null,
+  ].every(Boolean);
+  if (!rootStateMatches) return false;
+  return bridgeMetadataMatchesRecoveryPlan(gateway.legacyBackfill, input.legacyBackfill);
+}
+
+function assertFailedBridgeRevisionReopenRoot(
+  gateway: unknown,
+  input: FailedBridgeRevisionReopenInput,
+): asserts gateway is GatewayRuntimeRoot {
+  if (!isDurableRootConfigDoc(gateway, input.gatewayId)) {
+    throw new Error(`cannot reopen ${input.revisionId}: durable root is missing or invalid`);
+  }
+  if (!durableRootMatchesFailedBridgeRevisionReopen(gateway, input)) {
+    throw new Error(
+      `cannot reopen ${input.revisionId}: bridge root no longer matches recovery plan`,
+    );
+  }
+}
+
+function revisionMatchesFailedBridgeRevisionReopen(
+  revision: unknown,
+  input: FailedBridgeRevisionReopenInput,
+): boolean {
+  if (!isRevisionRealizationDoc(revision)) return false;
+  return [
+    revision.gateway === input.gatewayId,
+    revision.revisionId === input.revisionId,
+    revision.release === input.release,
+    input.revisionId === revisionIdForRelease(input.gatewayId, input.release),
+    revision.lifecycle === "failed",
+    revision.retiredAt == null,
+  ].every(Boolean);
+}
+
+async function reopenFailedBridgeRevision(
+  db: Firestore,
+  input: FailedBridgeRevisionReopenInput,
+): Promise<void> {
+  const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId);
+  const revisionRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(input.revisionId);
+  await db.runTransaction(async (txn) => {
+    const [gatewaySnap, revisionSnap] = await Promise.all([
+      txn.get(gatewayRef),
+      txn.get(revisionRef),
+    ]);
+    const gateway = gatewaySnap.exists ? gatewaySnap.data() : undefined;
+    assertFailedBridgeRevisionReopenRoot(gateway, input);
+    const revision = revisionSnap.exists ? revisionSnap.data() : undefined;
+    if (!revisionMatchesFailedBridgeRevisionReopen(revision, input)) {
+      throw new Error(
+        `cannot reopen ${input.revisionId}: failed revision no longer matches recovery plan`,
+      );
+    }
+    txn.set(
+      revisionRef,
+      {
+        lifecycle: "provisioning",
+        helm: { lastAppliedAt: null },
+        lastError: { message: null, at: null },
+      },
+      { merge: true },
+    );
+  });
 }
 
 // Production wiring for the converge-EMPTY pass. Gated on gateways/{id} docs
@@ -665,43 +697,73 @@ function buildConvergeEmptyDeps(args: {
   kubeOps: KubeOps;
   gatewayEdgeServiceEnsurer: GatewayEdgeServiceEnsurer;
   chartFingerprint?: string;
+  gatewayServiceAccount: string;
+  ensureGatewayWorkloadIdentity: (opts: { serviceAccountName: string }) => Promise<void>;
   log: (msg: string) => void;
-}): ConvergeEmptyDeps {
-  const { db, helm, kubeOps, gatewayEdgeServiceEnsurer, chartFingerprint, log } = args;
+}, gatewayIds?: readonly string[]): ConvergeEmptyDeps {
+  const {
+    db,
+    helm,
+    kubeOps,
+    gatewayEdgeServiceEnsurer,
+    chartFingerprint,
+    gatewayServiceAccount,
+    ensureGatewayWorkloadIdentity,
+    log,
+  } = args;
+  const selectedGatewayIds = gatewayIds ? new Set(gatewayIds) : null;
   return {
     namespace: NAMESPACE,
     chartPath: GATEWAY_CHART,
     valuesFile: GATEWAY_VALUES_FILE,
     chartFingerprint,
+    prepareGatewayConfig: (config) =>
+      prepareGatewayConfigWithWorkloadIdentity(
+        { gatewayServiceAccount, ensureGatewayWorkloadIdentity },
+        config,
+        config.gatewayId,
+      ),
     readinessTimeoutMs: CONVERGE_EMPTY_READINESS_TIMEOUT_MS,
     log,
     now: () => Date.now(),
     readGatewayDesiredDocs: async () => {
-      const snap = await db.collection("gateways").get();
-      return snap.docs.map((d) => d.data()).filter(isGatewayDesiredDoc);
+      const snap = await db.collection(GATEWAYS_COLLECTION).get();
+      return snap.docs.flatMap((doc) => {
+        if (selectedGatewayIds && !selectedGatewayIds.has(doc.id)) return [];
+        const data = doc.data();
+        return isDurableRootConfigDoc(data, doc.id) ? [data] : [];
+      });
     },
     readReleasePayload: (gatewayId, release) =>
       readReleasePayloadFromFirestore(db, gatewayId, release),
-    servingRevisionExists: async (gatewayId) => {
+    readServingRevisions: async (gateway) => {
       const snap = await db
         .collection(GLM_GATEWAYS_COLLECTION)
-        .where("gateway", "==", gatewayId)
+        .where("gateway", "==", gateway.gatewayId)
         .get();
-      return snap.docs.some((d) => {
-        const data = d.data();
-        if (!isRevisionRealizationDoc(data)) return false;
-        return data.lifecycle === "serving" && data.retiredAt == null;
-      });
+      return servingRevisionsForGatewayQuery(snap.docs, gateway).map((revision) => ({
+        gatewayId: revision.gateway,
+        revisionId: revision.revisionId,
+        release: revision.release,
+      }));
     },
     readExistingRevision: async (revisionId) => {
       const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId).get();
       if (!doc.exists) return null;
       const data = doc.data();
       if (!isRevisionRealizationDoc(data)) return null;
+      if (
+        data.revisionId !== revisionId ||
+        revisionId !== revisionIdForRelease(data.gateway, data.release)
+      ) {
+        throw new Error(`glmGateways/${revisionId} has an invalid revision identity`);
+      }
       return {
         createdAt: typeof data.createdAt === "number" ? data.createdAt : 0,
         lifecycle: data.lifecycle,
         helmApplied: data.helm.lastAppliedAt != null,
+        helmAppliedAt:
+          typeof data.helm.lastAppliedAt === "number" ? data.helm.lastAppliedAt : null,
       };
     },
     createRevisionDoc: async (doc) => {
@@ -747,6 +809,7 @@ function buildConvergeEmptyDeps(args: {
           { merge: true },
         );
     },
+    reopenFailedBridgeRevision: (input) => reopenFailedBridgeRevision(db, input),
     writeConvergeCompletion: async (gatewayId, patch) => {
       await db
         .collection("gateways")
@@ -772,15 +835,130 @@ async function readReleasePayloadFromFirestore(
   gatewayId: string,
   release: number,
 ): Promise<ReleasePayload | null> {
-  const doc = await db
-    .collection(GATEWAYS_COLLECTION)
-    .doc(gatewayId)
-    .collection(GATEWAY_RELEASES_SUBCOLLECTION)
-    .doc(String(release))
-    .get();
-  if (!doc.exists) return null;
-  const payload = (doc.data() as { payload?: unknown } | undefined)?.payload;
-  return payload && typeof payload === "object" ? (payload as ReleasePayload) : null;
+  return readGatewayArtifact(db, gatewayId, release);
+}
+
+function readCanonicalRevisionForGatewayQuery(
+  doc: { id: string; data(): unknown },
+  gatewayId: string,
+): RevisionRealizationDoc {
+  const data = doc.data();
+  if (!isRevisionRealizationDoc(data)) {
+    throw new Error(
+      `glmGateways/${doc.id} returned by ${gatewayId} revision query is not a revision realization`,
+    );
+  }
+  if (data.gateway !== gatewayId) {
+    throw new Error(
+      `glmGateways/${doc.id} returned by ${gatewayId} revision query belongs to ${data.gateway}`,
+    );
+  }
+  if (
+    data.lifecycle !== "retired" &&
+    (doc.id !== data.revisionId ||
+      data.revisionId !== revisionIdForRelease(gatewayId, data.release))
+  ) {
+    throw new Error(
+      `glmGateways/${doc.id} has invalid non-retired revision identity ${data.revisionId}`,
+    );
+  }
+  return data;
+}
+
+function isMarkerAuthorizedLegacySourceForGatewayQuery(
+  doc: { id: string; data(): unknown },
+  gateway: GatewayRuntimeRoot,
+): boolean {
+  const bridge = gateway.legacyBackfill;
+  return (
+    isGatewayLegacyBackfill(bridge) &&
+    bridge.sourceGlmGatewayIds.includes(doc.id) &&
+    isLegacyBackfillSource(doc.data(), doc.id, gateway.gatewayId)
+  );
+}
+
+export function servingRevisionExistsForGatewayQuery(
+  docs: ReadonlyArray<{ id: string; data(): unknown }>,
+  gateway: GatewayRuntimeRoot,
+): boolean {
+  return servingRevisionsForGatewayQuery(docs, gateway).length > 0;
+}
+
+export function servingRevisionsForGatewayQuery(
+  docs: ReadonlyArray<{ id: string; data(): unknown }>,
+  gateway: GatewayRuntimeRoot,
+): RevisionRealizationDoc[] {
+  const serving: RevisionRealizationDoc[] = [];
+  for (const doc of docs) {
+    if (isMarkerAuthorizedLegacySourceForGatewayQuery(doc, gateway)) continue;
+    const revision = readCanonicalRevisionForGatewayQuery(doc, gateway.gatewayId);
+    if (revision.lifecycle === "serving" && revision.retiredAt == null) serving.push(revision);
+  }
+  return serving;
+}
+
+function buildDurableRootRenderDeps(args: {
+  db: Firestore;
+  helm: HelmRunner;
+  chartFingerprint?: string;
+  gatewayServiceAccount: string;
+  ensureGatewayWorkloadIdentity: (opts: { serviceAccountName: string }) => Promise<void>;
+  log: (msg: string) => void;
+}): DurableRootRenderDeps {
+  const {
+    db,
+    helm,
+    chartFingerprint,
+    gatewayServiceAccount,
+    ensureGatewayWorkloadIdentity,
+    log,
+  } = args;
+  return {
+    namespace: NAMESPACE,
+    chartPath: GATEWAY_CHART,
+    valuesFile: GATEWAY_VALUES_FILE,
+    chartFingerprint,
+    gatewayServiceAccount,
+    ensureGatewayWorkloadIdentity,
+    listGatewayIds: async () => {
+      const snap = await db.collection(GATEWAYS_COLLECTION).get();
+      return snap.docs
+        .flatMap((doc) => (isDurableRootConfigDoc(doc.data(), doc.id) ? [doc.id] : []))
+        .sort();
+    },
+    readGateway: async (gatewayId) => {
+      const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+      return snap.exists ? snap.data() : null;
+    },
+    readRevisions: async (gatewayId) => {
+      const snap = await db
+        .collection(GLM_GATEWAYS_COLLECTION)
+        .where("gateway", "==", gatewayId)
+        .get();
+      return snap.docs
+        .map((doc) => ({
+          id: doc.id,
+          revision: readCanonicalRevisionForGatewayQuery(doc, gatewayId),
+        }))
+        .sort((left, right) =>
+          left.revision.release === right.revision.release
+            ? left.revision.revisionId.localeCompare(right.revision.revisionId)
+            : left.revision.release - right.revision.release,
+        );
+    },
+    readArtifact: (gatewayId, release) => readGatewayArtifact(db, gatewayId, release),
+    helmUpsertRevision: async (opts) => {
+      await helm.upsertInstance({ ...opts, chartFingerprint });
+    },
+    markRevisionHelmApplied: async (revisionId, at) => {
+      await db
+        .collection(GLM_GATEWAYS_COLLECTION)
+        .doc(revisionId)
+        .set({ helm: { lastAppliedAt: at } }, { merge: true });
+    },
+    now: () => Date.now(),
+    log,
+  };
 }
 
 const ROLL_MIGRATE_STATUSES = new Set([
@@ -857,7 +1035,10 @@ function buildRollPassDeps(args: {
     migrateRetryBackoffMs: ROLL_MIGRATE_RETRY_BACKOFF_MS,
     readGatewayDesiredDocs: async () => {
       const snap = await db.collection(GATEWAYS_COLLECTION).get();
-      return snap.docs.map((d) => d.data()).filter(isGatewayDesiredDoc);
+      return snap.docs.flatMap((doc) => {
+        const data = doc.data();
+        return isDurableRootConfigDoc(data, doc.id) ? [data] : [];
+      });
     },
     readReleasePayload: (gatewayId, release) =>
       readReleasePayloadFromFirestore(db, gatewayId, release),
@@ -865,7 +1046,14 @@ function buildRollPassDeps(args: {
       const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId).get();
       if (!doc.exists) return null;
       const data = doc.data();
-      return isRevisionRealizationDoc(data) ? data : null;
+      if (!isRevisionRealizationDoc(data)) return null;
+      if (
+        data.revisionId !== revisionId ||
+        revisionId !== revisionIdForRelease(data.gateway, data.release)
+      ) {
+        throw new Error(`glmGateways/${revisionId} has an invalid revision identity`);
+      }
+      return data;
     },
     createRevisionDoc: async (doc) => {
       await guardedCreateRevisionDoc(db, doc);
@@ -971,51 +1159,17 @@ function clearedHeartbeatFieldsPatch(): Record<string, unknown> {
   return out;
 }
 
-type DriftChange = Extract<ReconcileChange, { kind: "drift" }>;
-
-interface ReconcileInputs {
-  desired: GatewayDesiredState[];
-  managedRevisionIds: Set<string>;
-  actualMap: HelmInstancesMap;
-  mountedByGatewayId: Map<string, readonly string[]>;
-}
-
-async function readReconcileInputs(deps: ControllerDeps): Promise<ReconcileInputs> {
-  const [snap, gatewaySnap] = await Promise.all([
-    deps.db.collection(GLM_GATEWAYS_COLLECTION).get(),
-    deps.db.collection(GATEWAYS_COLLECTION).get(),
-  ]);
-  // glmGateways now holds two doc kinds during expand: legacy bare-id desired
-  // docs (the legacy Helm targets) AND {gw}-rN revision-realization docs owned
-  // by the converge arm. Filter the revision docs OUT so they never become
-  // undefined legacy Helm targets (and get reaped as drift).
-  const desired = snap.docs
-    .map((d) => d.data())
-    .filter((data) => !isRevisionRealizationDoc(data))
-    .map((data) => data as GatewayDesiredState);
-  const managedRevisionIds = collectLiveManagedRevisionIds({
-    revisionDocs: snap.docs.map((d) => d.data()),
-    gatewayDocs: gatewaySnap.docs.map((d) => d.data()),
-  });
-  const actualMap = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
-  const kubeOpsForRead = deps.kubeOps ?? createLoggingKubeOps(deps.log);
-  await readLiveReplicasInto(actualMap, kubeOpsForRead, deps.log);
-  const mountedByGatewayId = await readMountedByGatewayId(deps.db);
-  return { desired, managedRevisionIds, actualMap, mountedByGatewayId };
-}
-
 async function syncGatewayModelKeySecrets(
   deps: ControllerDeps,
-  desired: GatewayDesiredState[],
+  gateways: readonly GatewayRuntimeRoot[],
 ): Promise<Set<string>> {
   const ensurer = deps.modelKeySecretEnsurer;
   const changedBrokerGateways = new Set<string>();
   if (!ensurer) return changedBrokerGateways;
 
-  for (const gateway of desired) {
-    if (!gateway.gatewayId) continue;
+  for (const gateway of gateways) {
     const gatewayClass =
-      gateway.desiredStatus === "retired" ? "shared" : resolveGatewayClass(gateway);
+      gateway.desiredStatus === "retired" ? "shared" : gateway.gatewayClass;
     try {
       const result = await ensurer.syncGatewayModelKeySecret({
         namespace: NAMESPACE,
@@ -1040,20 +1194,19 @@ async function syncGatewayModelKeySecrets(
 
 async function syncGatewayModelKeySources(
   deps: ControllerDeps,
-  desired: GatewayDesiredState[],
+  gateways: readonly GatewayRuntimeRoot[],
 ): Promise<void> {
   const issuer = deps.modelKeySourceIssuer;
   if (!issuer) return;
 
-  for (const gateway of desired) {
-    if (!gateway.gatewayId) continue;
-    const gatewayClass = resolveGatewayClass(gateway);
+  for (const gateway of gateways) {
+    const gatewayClass = gateway.gatewayClass;
     try {
       await issuer.syncGatewayModelKeySource({
         gatewayId: gateway.gatewayId,
         gatewayClass,
         desiredStatus: gateway.desiredStatus,
-        ownerUid: gateway.ownerUid,
+        ownerUid: gateway.ownerUid ?? undefined,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1062,344 +1215,331 @@ async function syncGatewayModelKeySources(
   }
 }
 
-function preservedDriftChanges(
-  changes: ReconcileChange[],
-  targetMap: HelmInstancesMap,
-): DriftChange[] {
-  return changes.filter(
-    (c): c is DriftChange =>
-      c.kind === "drift" &&
-      Object.prototype.hasOwnProperty.call(targetMap, c.gatewayId),
-  );
-}
-
-function logPreservedDrift(
-  deps: ControllerDeps,
-  preservedDrift: DriftChange[],
-  desired: GatewayDesiredState[],
-  managedRevisionIds: ReadonlySet<string>,
-): void {
-  const desiredGatewayIds = new Set(desired.map((d) => d.gatewayId));
-  const orphanDrift = preservedDrift.filter(
-    (c) =>
-      !desiredGatewayIds.has(c.gatewayId) &&
-      !managedRevisionIds.has(c.gatewayId),
-  );
-  const draineeDrift = preservedDrift.filter((c) => desiredGatewayIds.has(c.gatewayId));
-  if (orphanDrift.length > 0) {
-    const formatted = orphanDrift.map((d) => d.gatewayId).join(", ");
-    deps.log(
-      `[glm-controller] ⚠ 🧟 orphan helm release(s) — no matching glmGateways doc: ${formatted} (manual \`helm uninstall octogee-gw-<gatewayId>\` required to remove)`,
-    );
-  }
-  if (draineeDrift.length > 0) {
-    deps.log(
-      `[glm-controller] drift detected (preserved, not removed): ${draineeDrift.map((d) => d.gatewayId).join(", ")}`,
-    );
-  }
-}
-
-async function applyTargetChanges(
-  deps: ControllerDeps,
-  targetVsActual: ReconcileChange[],
-  desiredCount: number,
-  actualCount: number,
-  mountedByGatewayId: Map<string, readonly string[]>,
-): Promise<void> {
-  if (targetVsActual.length === 0) {
-    deps.log(`[glm-controller] reconcile tick: no changes (${desiredCount} desired, ${actualCount} actual)`);
-    return;
-  }
-  const summary = targetVsActual
-    .map((c) => `${c.kind === "drift" ? "remove" : c.kind}:${c.gatewayId}`)
-    .join(", ");
-  deps.log(`[glm-controller] reconcile tick: ${targetVsActual.length} change(s) — ${summary}`);
-  await applyChanges(targetVsActual, deps, mountedByGatewayId);
-}
-
 async function restartGatewayDeploymentsForModelKeyChanges(
   deps: ControllerDeps,
+  gateways: readonly GatewayRuntimeRoot[],
   changedGatewayIds: Set<string>,
-  targetVsActual: ReconcileChange[],
 ): Promise<void> {
   if (!deps.restartGatewayDeployment || changedGatewayIds.size === 0) return;
-  const helmTouchedGatewayIds = new Set(
-    targetVsActual
-      .filter((change) => change.kind !== "drift")
-      .map((change) => change.gatewayId),
-  );
+  const roots = new Map(gateways.map((gateway) => [gateway.gatewayId, gateway]));
   for (const gatewayId of changedGatewayIds) {
-    if (helmTouchedGatewayIds.has(gatewayId)) continue;
+    const root = roots.get(gatewayId);
+    const revisionId = root?.trafficRevisionId ?? root?.liveRevisionId;
+    if (!revisionId) {
+      deps.log(
+        `[glm-controller] model-key secret changed for ${gatewayId}, but no serving revision exists yet`,
+      );
+      continue;
+    }
     try {
-      await deps.restartGatewayDeployment(gatewayId);
+      await deps.restartGatewayDeployment(revisionId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      throw new Error(`(source=model-key-secret) ${gatewayId}: rollout restart failed: ${message}`);
+      throw new Error(`(source=model-key-secret) ${gatewayId}/${revisionId}: rollout restart failed: ${message}`);
     }
   }
 }
 
 async function syncFleetIngressIfConfigured(
   deps: ControllerDeps,
-  targetMap: HelmInstancesMap,
 ): Promise<void> {
   const syncFleetIngress = deps.syncFleetIngress;
   if (!syncFleetIngress) return;
   try {
-    await syncFleetIngress(fleetGatewaysFromTargetMap(targetMap));
+    await syncFleetIngress(await readDurableServingFleetGateways(deps.db));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`(source=fleet-ingress) ${message}`);
   }
 }
 
-async function syncGatewayServiceAccounts(
-  deps: ControllerDeps,
-  targetMap: HelmInstancesMap,
-): Promise<void> {
-  const ensure = deps.ensureGatewayServiceAccount;
-  if (!ensure) return;
-  const seen = new Set<string>();
-  for (const [instanceId, target] of Object.entries(targetMap).sort(([a], [b]) =>
-    a.localeCompare(b),
-  )) {
-    const gatewayId = target.gatewayId || instanceId;
-    const serviceAccountName = effectiveGatewayServiceAccountName(
-      gatewayId,
-      target.serviceAccountName,
-    );
-    const key = JSON.stringify([serviceAccountName, target.serviceAccount?.annotations ?? {}]);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    try {
-      await ensure({
-        namespace: NAMESPACE,
-        serviceAccountName,
-        annotations: target.serviceAccount?.annotations,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      throw new Error(`(source=gateway-service-account) ${gatewayId}: ${message}`);
+interface DurableRuntimeState {
+  gateways: GatewayRuntimeRoot[];
+  revisions: RevisionRealizationDoc[];
+  invalidRootIds: string[];
+  legacyBackfillGatewayIds: string[];
+  missingLegacyBackfillSourceIds: string[];
+  legacyGlmDocIds: string[];
+  unsafeRevisionIds: string[];
+}
+
+function isLegacyBackfillSource(
+  data: unknown,
+  documentId: string,
+  gatewayId: string,
+): boolean {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  const source = data as Record<string, unknown>;
+  return (
+    source.gatewayId === documentId &&
+    deriveGatewayIdentity(documentId, source.gateway) === gatewayId &&
+    typeof source.imageRepository === "string" &&
+    source.imageRepository.length > 0 &&
+    typeof source.imageTag === "string" &&
+    source.imageTag.length > 0 &&
+    typeof source.createdBy === "string" &&
+    (source.desiredStatus === "running" ||
+      source.desiredStatus === "paused" ||
+      source.desiredStatus === "draining" ||
+      source.desiredStatus === "retired")
+  );
+}
+
+interface RuntimeQueryDoc {
+  id: string;
+  data(): unknown;
+}
+
+function collectDurableRuntimeRoots(docs: ReadonlyArray<RuntimeQueryDoc>): {
+  gateways: GatewayRuntimeRoot[];
+  invalidRootIds: string[];
+} {
+  const gateways: GatewayRuntimeRoot[] = [];
+  const invalidRootIds: string[] = [];
+  for (const doc of docs) {
+    const data = doc.data();
+    if (isDurableRootConfigDoc(data, doc.id)) {
+      gateways.push(data);
+    } else {
+      invalidRootIds.push(doc.id);
     }
   }
+  return { gateways, invalidRootIds };
 }
 
-function fleetGatewaysFromTargetMap(targetMap: HelmInstancesMap): FleetGateway[] {
-  return Object.keys(targetMap).map((gatewayId) => ({ gatewayId }));
-}
-
-interface ReadyGateway {
-  gatewayId: string;
-  imageTag: string;
-}
-
-async function refreshGatewayReadiness(
-  deps: ControllerDeps,
-  desired: GatewayDesiredState[],
-): Promise<ReadyGateway[]> {
-  const kubeOps = deps.kubeOps;
-  if (!kubeOps) return [];
-  const results = await Promise.all(
-    desired.filter(isRunningGateway).map(async (gateway) => {
-      if (!gateway.gatewayId) return null;
-      try {
-        const available = await kubeOps.readAvailableReplicas({
-          namespace: NAMESPACE,
-          name: deploymentNameForInstance(gateway.gatewayId),
-        });
-        const availableReplicas = available ?? 0;
-        if (availableReplicas < 1) {
-          return {
-            ready: null,
-            health: { gatewayId: gateway.gatewayId, availableReplicas },
-          };
-        }
-        await publishPlatformGatewayReady(deps.db, {
-          gatewayId: gateway.gatewayId,
-          imageTag: gateway.imageTag,
-          now: Date.now(),
-        });
-        return {
-          ready: {
-            gatewayId: gateway.gatewayId,
-            imageTag: gateway.imageTag,
-          },
-          health: { gatewayId: gateway.gatewayId, availableReplicas },
-        };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        deps.log(
-          `[glm-controller] ⚠ readiness refresh failed for ${gateway.gatewayId}: ${msg}`,
-        );
-        return {
-          ready: null,
-          health: { gatewayId: gateway.gatewayId, availableReplicas: 0 },
-        };
-      }
-    }),
-  );
-  recordGatewayHealth(
-    results
-      .map((result) => result?.health ?? null)
-      .filter((sample): sample is { gatewayId: string; availableReplicas: number } => sample != null),
-  );
-  return results
-    .map((result) => result?.ready ?? null)
-    .filter((gateway): gateway is ReadyGateway => gateway != null);
-}
-
-function markStepDone(
-  steps: OperationStep[],
-  name: string,
-  now: number,
-): OperationStep[] {
-  const idx = steps.findIndex((step) => step.name === name);
-  if (idx === -1) {
-    return [...steps, { name, status: "done", startedAt: now, completedAt: now }];
+function legacyBackfillSourceOwners(
+  gateways: readonly GatewayRuntimeRoot[],
+): Map<string, string | null> {
+  const owners = new Map<string, string | null>();
+  for (const gateway of gateways) {
+    if (!isGatewayLegacyBackfill(gateway.legacyBackfill)) continue;
+    for (const sourceId of gateway.legacyBackfill.sourceGlmGatewayIds) {
+      const owner = owners.get(sourceId);
+      owners.set(sourceId, owner === undefined ? gateway.gatewayId : null);
+    }
   }
-
-  return steps.map((step, stepIdx) => {
-    if (stepIdx !== idx) return step;
-    return {
-      name: step.name,
-      status: "done",
-      startedAt: step.startedAt ?? now,
-      completedAt: step.completedAt ?? now,
-    };
-  });
+  return owners;
 }
 
-function recoveredAddGatewaySteps(steps: OperationStep[] | undefined, now: number): OperationStep[] {
-  return [
-    "helm-render",
-    "deployment-ready",
-    "platform-ready-record",
-    "fleet-ingress",
-    "reconciler-recovery",
-  ].reduce((next, name) => markStepDone(next, name, now), steps ?? []);
-}
-
-function isRecoverableOperatorAddGatewayOperation(
-  op: Operation | undefined,
-  gatewayId: string,
-): op is Operation {
-  if (!op) return false;
-  if (op.kind !== "add-gateway" || op.status !== "running") return false;
-  if (op.input?.gatewayId !== gatewayId) return false;
-  return resolveGatewayClass({
-    gatewayClass: isGatewayClass(op.input?.gatewayClass)
-      ? op.input.gatewayClass
-      : undefined,
-    profile: isGatewayProfile(op.input?.profile) ? op.input.profile : undefined,
-    imageProfile: isGatewayProfile(op.input?.imageProfile)
-      ? op.input.imageProfile
-      : undefined,
-  }) === "operator";
-}
-
-async function completeRecoveredOperatorAddGatewayOps(
-  deps: ControllerDeps,
-  readyGateways: ReadyGateway[],
-): Promise<void> {
-  if (readyGateways.length === 0) return;
-  const readyGatewayIds = new Set(readyGateways.map((gateway) => gateway.gatewayId));
-  const snap = await deps.db
-    .collection(GLM_OPERATIONS_COLLECTION)
-    .where("status", "==", "running")
-    .get();
-  const now = Date.now();
-
-  await Promise.all(
-    snap.docs.map(async (doc) => {
-      const data = doc.data() as Operation | undefined;
-      const gatewayId =
-        typeof data?.input?.gatewayId === "string" ? data.input.gatewayId : null;
-      if (!gatewayId || !readyGatewayIds.has(gatewayId)) return;
-
-      const recovered = await deps.db.runTransaction(async (txn) => {
-        const fresh = await txn.get(doc.ref);
-        const op = fresh.exists ? (fresh.data() as Operation | undefined) : undefined;
-        if (!isRecoverableOperatorAddGatewayOperation(op, gatewayId)) return false;
-        txn.update(doc.ref, {
-          status: "succeeded",
-          completedAt: now,
-          steps: recoveredAddGatewaySteps(op.steps, now),
-          error: FieldValue.delete(),
-          rolledBack: false,
-        });
-        return true;
-      });
-      if (recovered) {
-        deps.log(
-          `[glm-controller] op=${doc.id} → succeeded (recovered operator add-gateway from ready deployment)`,
-        );
-      }
-    }),
+function classifyDurableRuntimeGlmDocs(
+  docs: ReadonlyArray<RuntimeQueryDoc>,
+  gateways: readonly GatewayRuntimeRoot[],
+): {
+  revisions: RevisionRealizationDoc[];
+  legacyBackfillGatewayIds: string[];
+  missingLegacyBackfillSourceIds: string[];
+  legacyGlmDocIds: string[];
+  unsafeRevisionIds: string[];
+} {
+  const revisions: RevisionRealizationDoc[] = [];
+  const bridgeGateways = gateways.filter((gateway) =>
+    isGatewayLegacyBackfill(gateway.legacyBackfill),
   );
+  const legacyGlmDocIds: string[] = [];
+  const unsafeRevisionIds: string[] = [];
+  const recognizedLegacyBackfillSourceIds = new Set<string>();
+  const gatewaysById = new Map(gateways.map((gateway) => [gateway.gatewayId, gateway]));
+  const legacySourceOwners = legacyBackfillSourceOwners(bridgeGateways);
+  for (const doc of docs) {
+    const data = doc.data();
+    if (isRevisionRealizationDoc(data)) {
+      revisions.push(data);
+      const canonical =
+        doc.id === data.revisionId &&
+        gatewaysById.has(data.gateway) &&
+        data.revisionId === revisionIdForRelease(data.gateway, data.release);
+      if (data.lifecycle !== "retired" && !canonical) unsafeRevisionIds.push(doc.id);
+      continue;
+    }
+    const owner = legacySourceOwners.get(doc.id);
+    if (owner !== undefined && owner !== null && isLegacyBackfillSource(data, doc.id, owner)) {
+      recognizedLegacyBackfillSourceIds.add(doc.id);
+    } else {
+      legacyGlmDocIds.push(doc.id);
+    }
+  }
+  const missingLegacyBackfillSourceIds = bridgeGateways.flatMap((gateway) => {
+    const bridge = gateway.legacyBackfill;
+    if (!isGatewayLegacyBackfill(bridge)) return [];
+    return bridge.sourceGlmGatewayIds
+      .filter((sourceId) => !recognizedLegacyBackfillSourceIds.has(sourceId))
+      .map((sourceId) => `${gateway.gatewayId}/${sourceId}`);
+  });
+  return {
+    revisions,
+    legacyBackfillGatewayIds: bridgeGateways.map((gateway) => gateway.gatewayId).sort(),
+    missingLegacyBackfillSourceIds: missingLegacyBackfillSourceIds.sort(),
+    legacyGlmDocIds,
+    unsafeRevisionIds,
+  };
+}
+
+async function readDurableRuntimeGateways(db: Firestore): Promise<DurableRuntimeState> {
+  const [rootSnap, glmSnap] = await Promise.all([
+    db.collection(GATEWAYS_COLLECTION).get(),
+    db.collection(GLM_GATEWAYS_COLLECTION).get(),
+  ]);
+  const roots = collectDurableRuntimeRoots(rootSnap.docs);
+  const glm = classifyDurableRuntimeGlmDocs(glmSnap.docs, roots.gateways);
+  return {
+    ...roots,
+    ...glm,
+  };
+}
+
+function assertDurableRuntimeState(
+  state: DurableRuntimeState,
+  allowLegacyBackfill = false,
+): void {
+  if (state.invalidRootIds.length > 0) {
+    throw new Error(
+      `invalid durable root document(s): ${state.invalidRootIds.slice().sort().join(", ")}; refusing fleet mutation`,
+    );
+  }
+  if (state.missingLegacyBackfillSourceIds.length > 0) {
+    throw new Error(
+      `legacy backfill bridge source document(s) missing or invalid: ${state.missingLegacyBackfillSourceIds.join(", ")}; refusing fleet mutation`,
+    );
+  }
+  if (state.legacyGlmDocIds.length > 0) {
+    throw new Error(
+      `legacy glmGateway document(s): ${state.legacyGlmDocIds.slice().sort().join(", ")}; refusing fleet mutation until compaction`,
+    );
+  }
+  if (!allowLegacyBackfill && state.legacyBackfillGatewayIds.length > 0) {
+    throw new Error(
+      `legacy backfill bridge active for gateway(s): ${state.legacyBackfillGatewayIds.join(", ")}; refusing normal fleet mutation until guarded compaction`,
+    );
+  }
+  if (state.unsafeRevisionIds.length > 0) {
+    throw new Error(
+      `non-retired revision(s) without a valid durable root: ${state.unsafeRevisionIds.slice().sort().join(", ")}; refusing fleet mutation`,
+    );
+  }
+}
+
+function exactRuntimeRevision(
+  gateway: GatewayRuntimeRoot,
+  revision: RevisionRealizationDoc | undefined,
+): RevisionRealizationDoc {
+  const revisionId = gateway.liveRevisionId;
+  if (!revisionId || gateway.liveRelease === null || !revision) {
+    throw new Error(`gateway ${gateway.gatewayId} has no exact live serving revision`);
+  }
+  if (
+    revision.gateway !== gateway.gatewayId ||
+    revision.revisionId !== revisionId ||
+    revision.revisionId !== revisionIdForRelease(gateway.gatewayId, revision.release) ||
+    revision.release !== gateway.liveRelease ||
+    revision.lifecycle !== "serving"
+  ) {
+    throw new Error(`gateway ${gateway.gatewayId} has an invalid live revision ${revisionId}`);
+  }
+  return revision;
+}
+
+async function readDurableServingFleetGateways(db: Firestore): Promise<FleetGateway[]> {
+  const state = await readDurableRuntimeGateways(db);
+  assertDurableRuntimeState(state);
+  const revisions = new Map(state.revisions.map((revision) => [revision.revisionId, revision]));
+  const serving: FleetGateway[] = [];
+  for (const gateway of state.gateways) {
+    if (gateway.desiredStatus === "retired" || gateway.liveRevisionId === null) continue;
+    exactRuntimeRevision(gateway, revisions.get(gateway.liveRevisionId));
+    serving.push({ gatewayId: gateway.gatewayId });
+  }
+  return serving;
+}
+
+async function readDurableRevisionArtifacts(
+  db: Firestore,
+  state: DurableRuntimeState,
+): Promise<Array<{ imageRepository: string; imageTag: string }>> {
+  const gateways = new Map(state.gateways.map((gateway) => [gateway.gatewayId, gateway]));
+  const artifacts: Array<{ imageRepository: string; imageTag: string }> = [];
+  for (const revision of state.revisions) {
+    if (revision.lifecycle === "retired") continue;
+    const gateway = gateways.get(revision.gateway);
+    if (
+      !gateway ||
+      revision.revisionId !== revisionIdForRelease(revision.gateway, revision.release)
+    ) {
+      throw new Error(`revision ${revision.revisionId} has no valid durable gateway identity`);
+    }
+    const artifact = await readGatewayArtifact(db, revision.gateway, revision.release);
+    if (!artifact) {
+      throw new Error(`revision ${revision.revisionId} has no valid release artifact`);
+    }
+    artifacts.push(artifact);
+  }
+  return artifacts;
+}
+
+async function syncDurableImagePins(
+  deps: ControllerDeps,
+  state: DurableRuntimeState,
+): Promise<void> {
+  if (!deps.reconcileImagePins) return;
+  let artifacts: Array<{ imageRepository: string; imageTag: string }>;
+  try {
+    artifacts = await readDurableRevisionArtifacts(deps.db, state);
+  } catch (err) {
+    deps.log(
+      `[image-pins] ⚠ preserved existing pins: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return;
+  }
+  try {
+    await deps.reconcileImagePins(PIN_ENV, artifacts, deps.log);
+  } catch (err) {
+    deps.log(`[image-pins] ⚠ reconcile failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function syncDurableRuntimeDependencies(
+  deps: ControllerDeps,
+  gateways: readonly GatewayRuntimeRoot[],
+): Promise<void> {
+  await syncGatewayModelKeySources(deps, gateways);
+  const changedModelKeyGateways = await syncGatewayModelKeySecrets(deps, gateways);
+  await restartGatewayDeploymentsForModelKeyChanges(deps, gateways, changedModelKeyGateways);
+}
+
+async function convergeEmptyIfConfigured(
+  deps: ControllerDeps,
+  gatewayIds?: readonly string[],
+): Promise<void> {
+  if (!deps.convergeEmpty) return;
+  try {
+    if (gatewayIds) {
+      await deps.convergeEmpty(gatewayIds);
+    } else {
+      await deps.convergeEmpty();
+    }
+  } catch (err) {
+    deps.log(`[converge-empty] ⚠ pass failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 async function reconcileOnce(deps: ControllerDeps): Promise<void> {
   if (await controllerWorkFrozen(deps, "reconcile")) return;
-  const { desired, managedRevisionIds, actualMap, mountedByGatewayId } = await readReconcileInputs(deps);
-  if (deps.reconcileImagePins) {
-    try {
-      await deps.reconcileImagePins(PIN_ENV, desired, deps.log);
-    } catch (err) {
-      deps.log(`[image-pins] ⚠ reconcile failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
+  const runtime = await readDurableRuntimeGateways(deps.db);
+  assertDurableRuntimeState(runtime, true);
+  if (runtime.legacyBackfillGatewayIds.length > 0) {
+    deps.log(
+      `[legacy-backfill] materializing canonical revisions for ${runtime.legacyBackfillGatewayIds.join(", ")}; normal fleet mutations remain held until guarded compaction`,
+    );
+    const bridgeGatewayIds = new Set(runtime.legacyBackfillGatewayIds);
+    const bridgeGateways = runtime.gateways.filter((gateway) =>
+      bridgeGatewayIds.has(gateway.gatewayId),
+    );
+    await syncDurableRuntimeDependencies(deps, bridgeGateways);
+    await convergeEmptyIfConfigured(deps, runtime.legacyBackfillGatewayIds);
+    return;
   }
-  await syncGatewayModelKeySources(deps, desired);
-  const modelKeyChangedGatewayIds = await syncGatewayModelKeySecrets(deps, desired);
-  const apiServerEgressCidrs = (await deps.resolveApiServerEgressCidrs?.()) ?? [];
-  const desiredMap = buildInstancesMap(
-    desired,
-    deps.chartFingerprint,
-    apiServerEgressCidrs,
-  );
-  const changes = diffInstancesMap(actualMap, desiredMap, {
-    compareChartFingerprint: AUTO_ROLL_ON_CHART_DRIFT,
-  });
-  const targetMap = buildHelmTargetMap(
-    desired,
-    actualMap,
-    mountedByGatewayId,
-    deps.chartFingerprint,
-    apiServerEgressCidrs,
-  );
-  await syncGatewayServiceAccounts(deps, targetMap);
-  logPreservedDrift(
-    deps,
-    preservedDriftChanges(changes, targetMap),
-    desired,
-    managedRevisionIds,
-  );
-  const targetVsActual = diffInstancesMap(actualMap, targetMap, {
-    compareChartFingerprint: AUTO_ROLL_ON_CHART_DRIFT,
-  });
-  await applyTargetChanges(
-    deps,
-    targetVsActual,
-    desired.length,
-    Object.keys(actualMap).length,
-    mountedByGatewayId,
-  );
-  await restartGatewayDeploymentsForModelKeyChanges(
-    deps,
-    modelKeyChangedGatewayIds,
-    targetVsActual,
-  );
-  const readyGateways = await refreshGatewayReadiness(deps, desired);
-  await syncFleetIngressIfConfigured(deps, targetMap);
-  await completeRecoveredOperatorAddGatewayOps(deps, readyGateways);
-  // Additive, gated, dormant until the backfill creates gateways/{id} desired
-  // docs. Runs last so it never perturbs the legacy reconcile above.
-  if (deps.convergeEmpty) {
-    try {
-      await deps.convergeEmpty();
-    } catch (err) {
-      deps.log(`[converge-empty] ⚠ pass failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
+  await syncDurableImagePins(deps, runtime);
+  await syncDurableRuntimeDependencies(deps, runtime.gateways);
+  await convergeEmptyIfConfigured(deps);
   // The roll arm derives from the same desired docs; after convergeEmpty so a
   // fresh gateway lands its first revision before any roll is considered.
   if (deps.convergeRoll) {
@@ -1409,6 +1549,7 @@ async function reconcileOnce(deps: ControllerDeps): Promise<void> {
       deps.log(`[converge-roll] ⚠ pass failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
+  await syncFleetIngressIfConfigured(deps);
 }
 
 function clearTimer(timer: NodeJS.Timeout | null): null {
@@ -1472,6 +1613,71 @@ export function snapshotHasReconcileRelevantChange(
   return relevant;
 }
 
+function durableRootRenderFingerprint(
+  gatewayId: string,
+  data: Record<string, unknown>,
+): string {
+  if (!isDurableRootConfigDoc(data, gatewayId)) {
+    return `invalid:${reconcileFingerprintStableStringify(data)}`;
+  }
+  return `valid:${reconcileFingerprintStableStringify({
+    desiredStatus: data.desiredStatus,
+    desiredRelease: data.desiredRelease,
+    legacyBackfill: data.legacyBackfill,
+    configSchemaVersion: data.configSchemaVersion,
+    profile: data.profile,
+    gatewayClass: data.gatewayClass,
+    imageProfile: data.imageProfile,
+    sizingTier: data.sizingTier,
+    computeClass: data.computeClass,
+    gcpProject: data.gcpProject,
+    gatewayContainerSecurityContext: data.gatewayContainerSecurityContext,
+    serviceAccountName: data.serviceAccountName,
+    serviceAccount: data.serviceAccount,
+    operatorAccess: data.operatorAccess,
+    ownerUid: data.ownerUid,
+    coOwnerUids: data.coOwnerUids,
+    builderSlug: data.builderSlug,
+    openclawOverrides: data.openclawOverrides,
+    modelBrokerLimits: data.modelBrokerLimits,
+    preemption: data.preemption,
+  })}`;
+}
+
+export interface DurableRootRenderSnapshotChanges {
+  shouldSchedule: boolean;
+  gatewayIds: string[];
+}
+
+export function durableRootRenderSnapshotChanges(
+  changes: ReadonlyArray<ReconcileSnapshotDocChange>,
+  fingerprints: Map<string, string>,
+): DurableRootRenderSnapshotChanges {
+  let shouldSchedule = false;
+  const gatewayIds = new Set<string>();
+  for (const change of changes) {
+    if (change.type === "removed") {
+      fingerprints.delete(change.doc.id);
+      shouldSchedule = true;
+      continue;
+    }
+    const fingerprint = durableRootRenderFingerprint(change.doc.id, change.doc.data());
+    if (fingerprints.get(change.doc.id) !== fingerprint) {
+      shouldSchedule = true;
+      gatewayIds.add(change.doc.id);
+    }
+    fingerprints.set(change.doc.id, fingerprint);
+  }
+  return { shouldSchedule, gatewayIds: [...gatewayIds].sort(compareFingerprintKeys) };
+}
+
+export function snapshotHasDurableRootRenderChange(
+  changes: ReadonlyArray<ReconcileSnapshotDocChange>,
+  fingerprints: Map<string, string>,
+): boolean {
+  return durableRootRenderSnapshotChanges(changes, fingerprints).shouldSchedule;
+}
+
 export function startReconciler(deps: ControllerDeps): () => void {
   let debounceTimer: NodeJS.Timeout | null = null;
   let retryTimer: NodeJS.Timeout | null = null;
@@ -1480,12 +1686,57 @@ export function startReconciler(deps: ControllerDeps): () => void {
   let pendingTick = false;
   let stopped = false;
   const retryMs = deps.reconcileRetryMs ?? RECONCILE_RETRY_MS_DEFAULT;
+  const durableRootDirty = new DurableRootDirtyTracker();
+
+  const scheduleRetryTick = () => {
+    if (stopped || retryTimer) return;
+    retryTimer = setTimeout(() => void tick(), retryMs);
+  };
 
   const scheduleDebouncedTick = () => {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => void tick(), RECONCILE_DEBOUNCE_MS);
   };
   requestReconcileTickRef.fire = scheduleDebouncedTick;
+
+  const renderDirtyDurableRoots = async () => {
+    if (!deps.renderDurableRootConfigs) return;
+    const request = durableRootDirty.take();
+    if (!request) return;
+    if (await controllerWorkFrozen(deps, "durable root render")) {
+      durableRootDirty.markAllDirty();
+      scheduleRetryTick();
+      return;
+    }
+    try {
+      if (await legacyBackfillRecoveryActive(deps.db)) {
+        durableRootDirty.markAllDirty();
+        return;
+      }
+    } catch (err) {
+      durableRootDirty.markAllDirty();
+      deps.log(
+        `[durable-root-render] legacy backfill recovery gate read failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      scheduleRetryTick();
+      return;
+    }
+    try {
+      const result = await deps.renderDurableRootConfigs(request);
+      durableRootDirty.retry(result.failedGatewayIds);
+      if (result.failedGatewayIds.length > 0) scheduleRetryTick();
+    } catch (err) {
+      if (request.all) {
+        durableRootDirty.markAllDirty();
+      } else {
+        durableRootDirty.retry(request.gatewayIds);
+      }
+      deps.log(
+        `[durable-root-render] ⚠ pass failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      scheduleRetryTick();
+    }
+  };
 
   const tick = async () => {
     if (inFlight) {
@@ -1495,6 +1746,7 @@ export function startReconciler(deps: ControllerDeps): () => void {
     debounceTimer = clearTimer(debounceTimer);
     retryTimer = clearTimer(retryTimer);
     inFlight = true;
+    await renderDirtyDurableRoots();
     try {
       await reconcileOnce(deps);
       recordReconcile("ok");
@@ -1505,9 +1757,7 @@ export function startReconciler(deps: ControllerDeps): () => void {
       deps.log(
         `[glm-controller] ⚠ reconcile tick failed: ${source}${message} — retry in ${retryMs}ms`,
       );
-      if (!stopped) {
-        retryTimer = setTimeout(() => void tick(), retryMs);
-      }
+      scheduleRetryTick();
     } finally {
       inFlight = false;
       if (!stopped && pendingTick) {
@@ -1519,6 +1769,7 @@ export function startReconciler(deps: ControllerDeps): () => void {
   };
 
   const reconcileFingerprints = new Map<string, string>();
+  const rootFingerprints = new Map<string, string>();
   const unsub = deps.db.collection(GLM_GATEWAYS_COLLECTION).onSnapshot(
     (snap?: { docChanges?: () => ReconcileSnapshotDocChange[] }) => {
       if (stopped) return;
@@ -1533,6 +1784,32 @@ export function startReconciler(deps: ControllerDeps): () => void {
     (err) => deps.log(`[glm-controller] ⚠ gateways snapshot error: ${String(err)}`),
   );
 
+  const rootUnsub = deps.renderDurableRootConfigs
+    ? deps.db.collection(GATEWAYS_COLLECTION).onSnapshot(
+        (snap?: { docChanges?: () => ReconcileSnapshotDocChange[] }) => {
+          if (stopped) return;
+          const changes = snap?.docChanges?.();
+          if (!changes) {
+            durableRootDirty.markAllDirty();
+            scheduleDebouncedTick();
+            return;
+          }
+          const rootChanges = durableRootRenderSnapshotChanges(changes, rootFingerprints);
+          if (rootChanges.shouldSchedule) {
+            for (const gatewayId of rootChanges.gatewayIds) {
+              durableRootDirty.markGatewayDirty(gatewayId);
+            }
+            scheduleDebouncedTick();
+          }
+        },
+        (err) => {
+          durableRootDirty.markAllDirty();
+          deps.log(`[durable-root-render] ⚠ gateways snapshot error: ${String(err)}`);
+          scheduleDebouncedTick();
+        },
+      )
+    : undefined;
+
   if (deps.operatorReadyRefreshMs && deps.operatorReadyRefreshMs > 0) {
     refreshTimer = setInterval(() => void tick(), deps.operatorReadyRefreshMs);
   }
@@ -1540,6 +1817,7 @@ export function startReconciler(deps: ControllerDeps): () => void {
   return () => {
     stopped = true;
     unsub();
+    rootUnsub?.();
     if (requestReconcileTickRef.fire === scheduleDebouncedTick) {
       requestReconcileTickRef.fire = undefined;
     }
@@ -1820,16 +2098,13 @@ async function runClaimedOperation(
   deps.log(`[glm-controller] op=${op.id} → failed (${result.error})`);
 }
 
-export function buildOperatorHeartbeatPollerDeps(
+function buildHeartbeatPollerCoreDeps(
   db: Firestore,
   log: (msg: string) => void,
-  privateKey: string,
-): OperatorHeartbeatPollerDeps {
+  listGatewayIds: () => Promise<string[]>,
+): Omit<OperatorHeartbeatPollerDeps, "evictSlug"> {
   return {
-    listGatewayIds: async () => {
-      const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
-      return heartbeatPollInstanceIds(snap.docs);
-    },
+    listGatewayIds,
     fetchHealth: async (gatewayId) => {
       const url = `http://octogee-gateway-${gatewayId}.${NAMESPACE}.svc.cluster.local:${FLEET_CONTROLLER_PORT}/health`;
       const controller = new AbortController();
@@ -1847,8 +2122,9 @@ export function buildOperatorHeartbeatPollerDeps(
     readAssignedSlugs: async (instanceId) => {
       const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(instanceId).get();
       const target = heartbeatRosterTarget(instanceId, snap.data());
+      if (!target) return [];
       return readAssignedSlugsForGateway(db, target.gatewayId, {
-        ...(target.revisionId ? { revisionId: target.revisionId } : {}),
+        revisionId: target.revisionId,
       });
     },
     writeHeartbeat: async (gatewayId, record) => {
@@ -1867,12 +2143,39 @@ export function buildOperatorHeartbeatPollerDeps(
       );
       await batch.commit();
     },
+    log,
+  };
+}
+
+export function buildOperatorHeartbeatPollerDeps(
+  db: Firestore,
+  log: (msg: string) => void,
+  privateKey: string,
+): OperatorHeartbeatPollerDeps {
+  return {
+    ...buildHeartbeatPollerCoreDeps(db, log, async () => {
+      const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
+      return heartbeatPollInstanceIds(snap.docs);
+    }),
     evictSlug: async (gatewayId: string, slug: string) => {
       const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-      if (isRevisionRealizationDoc(snap.data())) return;
-      await callUnmountRpc(db, { privateKey, gatewayId, slug, log, tag: "evict" });
+      const revision = snap.exists ? snap.data() : undefined;
+      if (
+        !isRevisionRealizationDoc(revision) ||
+        revision.revisionId !== gatewayId ||
+        gatewayId !== revisionIdForRelease(revision.gateway, revision.release)
+      ) {
+        return;
+      }
+      await callUnmountRpc(db, {
+        privateKey,
+        gatewayId: revision.gateway,
+        revisionId: revision.revisionId,
+        slug,
+        log,
+        tag: "evict",
+      });
     },
-    log,
   };
 }
 
@@ -1881,42 +2184,103 @@ interface HeartbeatPollDocLike {
   data(): Record<string, unknown> | undefined;
 }
 
-function isLegacyGatewayDesiredState(
-  data: Record<string, unknown>,
-): data is Record<string, unknown> & GatewayDesiredState {
-  return (
-    typeof data.gatewayId === "string" &&
-    typeof data.imageRepository === "string" &&
-    typeof data.imageTag === "string" &&
-    typeof data.desiredStatus === "string" &&
-    typeof data.createdBy === "string"
-  );
-}
-
 export function heartbeatPollInstanceIds(docs: HeartbeatPollDocLike[]): string[] {
   const ids: string[] = [];
   for (const doc of docs) {
     const data = doc.data() ?? {};
-    if (isRevisionRealizationDoc(data)) {
-      if (data.lifecycle !== "retired" && data.lifecycle !== "failed") ids.push(data.revisionId);
-      continue;
+    if (
+      isRevisionRealizationDoc(data) &&
+      doc.id === data.revisionId &&
+      data.revisionId === revisionIdForRelease(data.gateway, data.release) &&
+      data.lifecycle !== "retired" &&
+      data.lifecycle !== "failed"
+    ) {
+      ids.push(data.revisionId);
     }
-    if (isLegacyGatewayDesiredState(data) && isRunningGateway(data)) ids.push(doc.id);
   }
   return ids;
+}
+
+export function legacyBackfillRecoveryHeartbeatInstanceIds(
+  roots: HeartbeatPollDocLike[],
+  runtimeDocs: HeartbeatPollDocLike[],
+): string[] {
+  const bridgeRevisionIds = new Set<string>();
+  for (const rootDoc of roots) {
+    const root = rootDoc.data();
+    if (
+      !isGatewayDesiredDoc(root) ||
+      root.gatewayId !== rootDoc.id ||
+      root.desiredStatus !== "running" ||
+      !isGatewayLegacyBackfill(root.legacyBackfill)
+    ) {
+      continue;
+    }
+    bridgeRevisionIds.add(revisionIdForRelease(root.gatewayId, root.desiredRelease));
+  }
+  return heartbeatPollInstanceIds(runtimeDocs).filter((revisionId) =>
+    bridgeRevisionIds.has(revisionId),
+  );
+}
+
+export function buildLegacyBackfillRecoveryHeartbeatPollerDeps(
+  db: Firestore,
+  log: (msg: string) => void,
+): OperatorHeartbeatPollerDeps {
+  return buildHeartbeatPollerCoreDeps(db, log, async () => {
+    const [roots, runtime] = await Promise.all([
+      db.collection(GATEWAYS_COLLECTION).get(),
+      db.collection(GLM_GATEWAYS_COLLECTION).get(),
+    ]);
+    return legacyBackfillRecoveryHeartbeatInstanceIds(roots.docs, runtime.docs);
+  });
+}
+
+export function startLegacyBackfillRecoveryHeartbeatPoller(
+  db: Firestore,
+  log: (msg: string) => void,
+): ControllerStopper {
+  return startOperatorHeartbeatPoller(
+    buildLegacyBackfillRecoveryHeartbeatPollerDeps(db, log),
+    OPERATOR_HEARTBEAT_POLL_MS,
+  );
 }
 
 export function heartbeatRosterTarget(
   instanceId: string,
   data: Record<string, unknown> | undefined,
-): { gatewayId: string; revisionId?: string } {
-  if (isRevisionRealizationDoc(data)) {
+): { gatewayId: string; revisionId: string } | null {
+  if (
+    isRevisionRealizationDoc(data) &&
+    data.revisionId === instanceId &&
+    instanceId === revisionIdForRelease(data.gateway, data.release)
+  ) {
     return { gatewayId: data.gateway, revisionId: data.revisionId };
   }
-  return { gatewayId: instanceId };
+  return null;
 }
 
 type ControllerStopper = () => void;
+
+export interface LegacyBackfillRecoveryTaskStarters {
+  startReconciler: () => ControllerStopper;
+  startHeartbeatPoller: () => ControllerStopper;
+  startHttp: () => ControllerStopper;
+  stopRecoveryWatcher: ControllerStopper;
+  startRestartWatcher: () => ControllerStopper;
+}
+
+export function startLegacyBackfillRecoveryTasks(
+  starters: LegacyBackfillRecoveryTaskStarters,
+): ControllerStopper[] {
+  return [
+    starters.startReconciler(),
+    starters.startHeartbeatPoller(),
+    starters.startHttp(),
+    starters.stopRecoveryWatcher,
+    starters.startRestartWatcher(),
+  ];
+}
 
 interface ControllerBackgroundTasksDeps {
   db: Firestore;
@@ -1954,7 +2318,8 @@ function startControllerBackgroundTasks({
   });
   const stopHelmRecoverySweeper = startHelmRecoverySweeper({
     listPending: () => helm.listPendingReleases({ namespace: NAMESPACE }),
-    recover: (gatewayId) => helm.recoverRelease({ namespace: NAMESPACE, gatewayId }),
+    isRecoverableRevision: (revisionId) => isRecoverableHelmRevision(db, revisionId),
+    recover: (revisionId) => helm.recoverRelease({ namespace: NAMESPACE, gatewayId: revisionId }),
     now: () => Date.now(),
     staleMs: HELM_RECOVERY_STALE_MS,
     intervalMs: HELM_RECOVERY_SWEEP_MS,
@@ -2056,6 +2421,59 @@ function holdFrozenController(
   process.on("SIGINT", shutdown);
 }
 
+function holdLegacyBackfillRecoveryController(
+  deps: ControllerDeps,
+  db: Firestore,
+  maintenanceGate: ControllerMaintenanceGate,
+  log: (msg: string) => void,
+): void {
+  let stopped = false;
+  let checking = false;
+  const checkForCompletion = async () => {
+    if (stopped || checking) return;
+    checking = true;
+    try {
+      if (!await legacyBackfillRecoveryActive(db)) {
+        log("[glm-controller] guarded legacy backfill compaction completed; restarting into normal controller mode");
+        process.exit(0);
+      }
+    } catch (err) {
+      log(
+        `[glm-controller] legacy backfill recovery gate read failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      checking = false;
+    }
+  };
+  const recoveryTimer = setInterval(() => void checkForCompletion(), MAINTENANCE_GATE_POLL_MS);
+  const stopRecoveryWatcher = () => {
+    stopped = true;
+    clearInterval(recoveryTimer);
+  };
+  const shutdown = createControllerShutdown(
+    startLegacyBackfillRecoveryTasks({
+      startReconciler: () => startReconciler(deps),
+      startHeartbeatPoller: () => startLegacyBackfillRecoveryHeartbeatPoller(db, log),
+      startHttp: () => startMaintenanceHttpServer({ port: HTTP_PORT, log }),
+      stopRecoveryWatcher,
+      startRestartWatcher: () =>
+        startMaintenanceRestartWatcher({
+          gate: maintenanceGate,
+          log,
+          restart: () => {
+            log("[glm-controller] maintenance freeze observed during legacy backfill recovery; exiting fail-closed");
+            process.exit(0);
+          },
+          restartWhenFrozen: true,
+          intervalMs: MAINTENANCE_GATE_POLL_MS,
+        }),
+    }),
+    log,
+  );
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+}
+
 interface ControllerRuntime {
   deps: ControllerDeps;
   fleetControllerPrivateKey: string;
@@ -2124,11 +2542,12 @@ async function createControllerRuntime(
   const workloadIdentityAuth = new GoogleAuth({
     scopes: ["https://www.googleapis.com/auth/cloud-platform"],
   });
+  const gatewayServiceAccount = requireEnv(
+    "GATEWAY_SERVICE_ACCOUNT",
+    "generated operator gateway KSAs must bind to the gateway pod GSA",
+  );
   const gatewayWorkloadIdentityEnsurer = createGatewayWorkloadIdentityEnsurer({
-    gatewayServiceAccount: requireEnv(
-      "GATEWAY_SERVICE_ACCOUNT",
-      "generated operator gateway KSAs must bind to the gateway pod GSA",
-    ),
+    gatewayServiceAccount,
     workloadIdentityProject: requireEnv(
       "GKE_WORKLOAD_IDENTITY_PROJECT",
       "generated operator gateway KSA IAM members must target the GKE Workload Identity pool project",
@@ -2163,22 +2582,7 @@ async function createControllerRuntime(
   );
 
   const handlerSyncFleetIngress = async () => {
-    const { desired, actualMap, mountedByGatewayId } = await readReconcileInputs({
-      db,
-      helm,
-      kubeOps,
-      handlers: {} as OperationHandlers,
-      log,
-    });
-    const apiServerEgressCidrs = await resolveApiServerEgressCidrs();
-    const targetMap = buildHelmTargetMap(
-      desired,
-      actualMap,
-      mountedByGatewayId,
-      chartFingerprint,
-      apiServerEgressCidrs,
-    );
-    await syncEdgeIngressForGateways(fleetGatewaysFromTargetMap(targetMap));
+    await syncEdgeIngressForGateways(await readDurableServingFleetGateways(db));
   };
 
   const fleetControllerPrivateKey = requireEnv(
@@ -2209,7 +2613,7 @@ async function createControllerRuntime(
     },
   );
 
-  const convergeEmpty = () =>
+  const convergeEmpty = (gatewayIds?: readonly string[]) =>
     runConvergeEmptyPass(
       buildConvergeEmptyDeps({
         db,
@@ -2217,8 +2621,10 @@ async function createControllerRuntime(
         kubeOps,
         gatewayEdgeServiceEnsurer,
         chartFingerprint,
+        gatewayServiceAccount,
+        ensureGatewayWorkloadIdentity: gatewayWorkloadIdentityEnsurer,
         log,
-      }),
+      }, gatewayIds),
     );
 
   const convergeRoll = () =>
@@ -2234,6 +2640,17 @@ async function createControllerRuntime(
       }),
     );
 
+  const durableRootRenderDeps = buildDurableRootRenderDeps({
+    db,
+    helm,
+    chartFingerprint,
+    gatewayServiceAccount,
+    ensureGatewayWorkloadIdentity: gatewayWorkloadIdentityEnsurer,
+    log,
+  });
+  const renderDurableRootConfigs = (request: DurableRootRenderRequest) =>
+    runDurableRootRenderPass(durableRootRenderDeps, request);
+
   const deps: ControllerDeps = {
     db,
     helm,
@@ -2246,10 +2663,9 @@ async function createControllerRuntime(
     log,
     maintenanceGate,
     syncFleetIngress: syncEdgeIngressForGateways,
-    ensureGatewayWorkloadIdentity: gatewayWorkloadIdentityEnsurer,
-    ensureGatewayServiceAccount: serviceAccountEnsurer.ensureServiceAccount,
     convergeEmpty,
     convergeRoll,
+    renderDurableRootConfigs,
     operatorReadyRefreshMs: OPERATOR_READY_REFRESH_MS_DEFAULT,
     chartFingerprint,
     resolveApiServerEgressCidrs,
@@ -2277,6 +2693,12 @@ async function main(): Promise<void> {
   log(
     `[glm-controller] boot sha=${process.env.BUILD_SHA ?? "unknown"} oc=${process.env.OPENCLAW_VERSION ?? "n/a"} fork=${process.env.OPENCLAW_FORK_SHA ?? "n/a"} node=${process.version} — namespace=${NAMESPACE} gatewayChart=${GATEWAY_CHART} chartFingerprint=${chartFingerprint.slice(0, 12)} chartDriftAutoRoll=${AUTO_ROLL_ON_CHART_DRIFT} valuesFile=${GATEWAY_VALUES_FILE}`,
   );
+
+  if (await legacyBackfillRecoveryActive(db)) {
+    log("[glm-controller] explicit legacy backfill bridge detected; starting recovery-only controller mode");
+    holdLegacyBackfillRecoveryController(deps, db, maintenanceGate, log);
+    return;
+  }
 
   await bootstrapGlmGateways(deps);
   await bootstrapDefaultGateway(deps);
@@ -2335,132 +2757,12 @@ async function main(): Promise<void> {
 
 export async function bootstrapGlmGateways(deps: ControllerDeps): Promise<void> {
   if (await controllerWorkFrozen(deps, "glm gateway bootstrap")) return;
-  let actualMap;
-  try {
-    actualMap = await deps.helm.readDeployedInstances({
-      namespace: NAMESPACE,
-    });
-  } catch (err) {
-    deps.log(
-      `[glm-controller] ⚠ bootstrap skipped — failed to read helm state: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    return;
-  }
-  const [snap, gatewaySnap] = await Promise.all([
-    deps.db.collection(GLM_GATEWAYS_COLLECTION).get(),
-    deps.db.collection(GATEWAYS_COLLECTION).get(),
-  ]);
-  const known = new Set(snap.docs.map((d) => d.id));
-  for (const revisionId of collectKnownRevisionIds({
-    revisionDocs: snap.docs.map((d) => d.data()),
-    gatewayDocs: gatewaySnap.docs.map((d) => d.data()),
-  })) {
-    known.add(revisionId);
-  }
-  const writes = computeBootstrapWrites(actualMap, known);
-  if (writes.length === 0) {
-    deps.log(
-      `[glm-controller] bootstrap: ${Object.keys(actualMap).length} helm instance(s) already registered, no writes`,
-    );
-    return;
-  }
-  for (const w of writes) {
-    try {
-      await deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(w.gatewayId).create(w.doc);
-      deps.log(
-        `[glm-controller] bootstrap: registering existing release as glmGateways/${w.gatewayId}`,
-      );
-    } catch (err) {
-      if ((err as { code?: number })?.code === 6) {
-        deps.log(
-          `[glm-controller] bootstrap: skip ${w.gatewayId} — operator wrote a doc between snapshot and create`,
-        );
-        continue;
-      }
-      throw err;
-    }
-  }
-}
-
-async function resolveDefaultGatewayId(deps: ControllerDeps): Promise<string | null> {
-  const orchSnap = await deps.db.doc(ORCHESTRATOR_CONFIG_DOC_PATH).get();
-  const existing = (orchSnap.data() as { defaultGatewayId?: unknown } | undefined)
-    ?.defaultGatewayId;
-  if (typeof existing === "string") return existing;
-
-  const derived = deriveDefaultGatewayIdFromNamespace(NAMESPACE);
-  if (derived === null) return null;
-
-  try {
-    await deps.db
-      .doc(ORCHESTRATOR_CONFIG_DOC_PATH)
-      .set({ defaultGatewayId: derived }, { merge: true });
-    deps.log(
-      `[glm-controller] default-gateway bootstrap: self-seeded config/orchestrator.defaultGatewayId=${derived} (derived from namespace=${NAMESPACE})`,
-    );
-    return derived;
-  } catch (err) {
-    deps.log(
-      `[glm-controller] ⚠ default-gateway bootstrap: self-seed failed (namespace=${NAMESPACE}): ${err instanceof Error ? err.message : String(err)}`,
-    );
-    return null;
-  }
+  deps.log("[glm-controller] legacy Helm bootstrap disabled; durable roots and revisions own recovery");
 }
 
 export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<void> {
   if (await controllerWorkFrozen(deps, "default gateway bootstrap")) return;
-  if (process.env.BOOTSTRAP_DEFAULT_GATEWAY !== "true") {
-    return;
-  }
-  let actualMap;
-  try {
-    actualMap = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
-  } catch (err) {
-    deps.log(
-      `[glm-controller] ⚠ default-gateway bootstrap skipped — failed to read helm state: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    return;
-  }
-  const [snap, durableSnap] = await Promise.all([
-    deps.db.collection(GLM_GATEWAYS_COLLECTION).get(),
-    deps.db.collection(GATEWAYS_COLLECTION).get(),
-  ]);
-  const existingGatewayIds = new Set(snap.docs.map((d) => d.id));
-  const durableGatewayIds = new Set(
-    durableSnap.docs
-      .filter((d) => isGatewayDesiredDoc(d.data()))
-      .map((d) => d.id),
-  );
-  const defaultGatewayId = await resolveDefaultGatewayId(deps);
-
-  const decision = computeDefaultGatewayBootstrap({
-    actualMap,
-    existingGatewayIds,
-    durableGatewayIds,
-    defaultGatewayId,
-    imageRepository:
-      process.env.BOOTSTRAP_IMAGE_REPOSITORY ??
-      "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-    imageTag: process.env.BOOTSTRAP_IMAGE_TAG ?? "latest",
-  });
-  if (decision.kind === "skip") {
-    deps.log(`[glm-controller] default-gateway bootstrap: skip — ${decision.reason}`);
-    return;
-  }
-  try {
-    await deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(decision.gatewayId).create(decision.doc);
-    deps.log(
-      `[glm-controller] default-gateway bootstrap: created glmGateways/${decision.gatewayId} (imageTag=${decision.doc.imageTag})`,
-    );
-  } catch (err) {
-    if ((err as { code?: number })?.code === 6) {
-      deps.log(
-        `[glm-controller] default-gateway bootstrap: ${decision.gatewayId} doc created concurrently — skipping`,
-      );
-      return;
-    }
-    throw err;
-  }
+  deps.log("[glm-controller] legacy default gateway bootstrap disabled; create a durable root explicitly");
 }
 
 function createMigrationClientBuilder(
@@ -2638,16 +2940,20 @@ async function buildHandlers(
   const addGateway = createAddGatewayHandler({
     helm,
     kubeOps,
-    readGatewayHeartbeat: (gatewayId) =>
-      readGatewayHeartbeatFromFirestore(db, gatewayId),
-    publishGatewayReady: async ({ gatewayId, imageTag }) => {
+    resolveGatewayRevision: (gatewayId) =>
+      readDurableGatewayRevision(db, gatewayId, "desired"),
+    readGatewayHeartbeat: (revisionId) =>
+      readGatewayHeartbeatFromFirestore(db, revisionId),
+    publishGatewayReady: async ({ gatewayId, revisionId, imageTag }) => {
       await publishPlatformGatewayReady(db, {
         gatewayId,
+        revisionId,
         imageTag,
         now: Date.now(),
       });
     },
     syncFleetIngress: fleetOps.syncFleetIngress,
+    revisionMaterializationTimeoutMs: 120_000,
     helmRenderTimeoutMs: 600_000,
     deploymentReadyTimeoutMs: 600_000,
     heartbeatTimeoutMs: 240_000,
@@ -2671,10 +2977,6 @@ async function buildHandlers(
       return { slug, currentGatewayId };
     },
     readUserSnapshot: (uid) => readMigrationUserSnapshot(db, uid),
-    // The ATOMIC cutover: mirror move (flipMirror) + assignment revision commit
-    // in ONE Firestore transaction (commitCutoverAtomic), so a crash leaves
-    // neither — never a mirror→target / assignment→source half-state. A legacy
-    // migration (revision == null) still flips only the mirror.
     commitCutover: async (commit) => {
       await commitCutoverAtomic(
         {
@@ -2705,17 +3007,8 @@ async function buildHandlers(
       privateKey,
       logFn,
     ),
-    // Step 2 revision resolution at claim time. resolveFromRevision reads the
-    // customer's assignment doc, falling back to the source gateway's live
-    // revision when there is none (so a same-gateway drain RUNS instead of
-    // no-op'ing); resolvePlacement applies the placement rule to the destination
-    // gateway. Both no-op (null) until the backfill (PR6) puts gateways on the
-    // assignment layer — the legacy path stays live.
-    resolveFromRevision: async (uid, currentGatewayId) => {
-      const assignment = await readAssignmentDoc(db, currentGatewayId, uid);
-      if (assignment) return { revisionId: assignment.revisionId, release: assignment.release };
-      return resolveLiveRevisionAsSource(db, currentGatewayId);
-    },
+    resolveFromRevision: (uid, currentGatewayId) =>
+      resolveSourceRevisionFromFirestore(db, uid, currentGatewayId),
     resolvePlacement: (toGatewayId) => resolvePlacementFromFirestore(db, toGatewayId),
     // The roster quiesce gate: written "quiescing" before the source quiesce
     // RPC, restored "serving" on a pre-cutover rollback (fleet-migration-runner).
@@ -2735,21 +3028,29 @@ async function buildHandlers(
   });
 
   const retireGateway = createRetireGatewayHandler({
-    helm,
     readGatewayLiveState: async (gatewayId) => {
-      // Mounted-customer telemetry relocated to glmGateways/{id}.heartbeat; the
-      // retire "refuse if mounted" guard must read the LIVE location, not the
-      // stale legacy flat doc. Dual-read prefers glm during expand.
-      const [glmSnap, legacySnap] = await Promise.all([
-        db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get(),
-        db.collection("gateways").doc(gatewayId).get(),
-      ]);
-      if (!glmSnap.exists && !legacySnap.exists) return null;
-      const mounted = readMountedCustomers(
-        glmSnap.exists ? (glmSnap.data() as Record<string, unknown>) : undefined,
-        legacySnap.exists ? (legacySnap.data() as Record<string, unknown>) : undefined,
-      );
-      return { mountedCustomers: mounted };
+      const rootSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+      const root = rootSnap.exists ? rootSnap.data() : undefined;
+      if (!isDurableRootConfigDoc(root, gatewayId)) return null;
+      const revisionId = root.trafficRevisionId ?? root.liveRevisionId;
+      if (!revisionId) return null;
+      const revisionSnap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId).get();
+      const revision = revisionSnap.exists ? revisionSnap.data() : undefined;
+      if (
+        !isRevisionRealizationDoc(revision) ||
+        revision.gateway !== gatewayId ||
+        revision.revisionId !== revisionId ||
+        revisionId !== revisionIdForRelease(gatewayId, revision.release)
+      ) {
+        return null;
+      }
+      return {
+        mountedCustomers: readMountedCustomers(
+          revision as unknown as Record<string, unknown>,
+          undefined,
+        ),
+        desiredStatus: root.desiredStatus,
+      };
     },
     readAssignmentsForGateway: async (gatewayId) => {
       const assignments = await readAssignmentDocsForGateway(db, gatewayId);
@@ -2760,12 +3061,22 @@ async function buildHandlers(
         .collection(GLM_GATEWAYS_COLLECTION)
         .where("gateway", "==", gatewayId)
         .get();
-      const out: Array<{ revisionId: string; release: number }> = [];
+      const out: Array<{
+        revisionId: string;
+        release: number;
+        mountedCustomers: string[];
+      }> = [];
       for (const d of snap.docs) {
-        const data = d.data();
-        if (!isRevisionRealizationDoc(data)) continue;
-        if (data.lifecycle === "retired") continue;
-        out.push({ revisionId: data.revisionId, release: data.release });
+        const revision = readCanonicalRevisionForGatewayQuery(d, gatewayId);
+        if (revision.lifecycle === "retired") continue;
+        out.push({
+          revisionId: revision.revisionId,
+          release: revision.release,
+          mountedCustomers: readMountedCustomers(
+            revision as unknown as Record<string, unknown>,
+            undefined,
+          ),
+        });
       }
       return out;
     },
@@ -2785,21 +3096,23 @@ async function buildHandlers(
           { merge: true },
         );
     },
-    readGlmGatewayId: async (gatewayId) => {
-      const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-      if (!doc.exists) return null;
-      const data = doc.data() as GatewayDesiredState | undefined;
-      return data?.gatewayId ?? null;
-    },
     writeRevisionTombstone: async (revisionId) => {
       // Only a new-model revision doc carries the release/gateway needed to key a
       // tombstone; a legacy bare gateway has no /r/<n> addressing, so no-op.
       const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId).get();
       const data = snap.data();
       if (!isRevisionRealizationDoc(data)) return;
+      if (
+        data.revisionId !== revisionId ||
+        revisionId !== revisionIdForRelease(data.gateway, data.release)
+      ) {
+        throw new Error(`glmGateways/${revisionId} has an invalid revision identity`);
+      }
       const gwSnap = await db.collection("gateways").doc(data.gateway).get();
-      const gwData = gwSnap.exists ? (gwSnap.data() as GatewayDoc) : undefined;
-      const live = gwData && isGatewayDesiredDoc(gwData) ? gwData.liveRevisionId ?? null : null;
+      const gwData = gwSnap.exists ? gwSnap.data() : undefined;
+      const live = isDurableRootConfigDoc(gwData, data.gateway)
+        ? gwData.liveRevisionId ?? null
+        : null;
       // Never point a retired revision at itself; a full gateway retire may still
       // list this revision as live.
       const currentRevisionId = live === revisionId ? null : live;
@@ -2870,7 +3183,6 @@ async function buildHandlers(
       },
     }),
     syncFleetIngress: fleetOps.syncFleetIngress,
-    helmUninstallTimeoutMs: 90_000,
     pollIntervalMs: 5_000,
     now: () => Date.now(),
     wait: (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -2881,8 +3193,7 @@ async function buildHandlers(
     readGatewayDoc: async (gatewayId) => {
       const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
       if (!snap.exists) return null;
-      const data = snap.data();
-      return isGatewayDesiredDoc(data) ? data : null;
+      return durableRolloutGateway(snap.data(), gatewayId);
     },
     readReleasePayload: (gatewayId, release) =>
       readReleasePayloadFromFirestore(db, gatewayId, release),
@@ -2905,27 +3216,30 @@ async function buildHandlers(
   const restartGateway = createRestartGatewayHandler({
     kubeOps,
     namespace: NAMESPACE,
+    resolveLiveRevisionId: async (gatewayId) =>
+      (await readDurableGatewayRevision(db, gatewayId, "serving"))?.revisionId ?? null,
     now: () => Date.now(),
     log: logFn,
   });
 
   const recycleGateway = createRecycleGatewayHandler({
     readDesiredStatus: async (gatewayId) => {
-      const v = (
-        await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get()
-      ).data()?.desiredStatus;
-      return v === "running" || v === "paused" || v === "draining" || v === "retired" ? v : null;
+      const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+      const root = snap.exists ? snap.data() : undefined;
+      return isDurableRootConfigDoc(root, gatewayId) ? root.desiredStatus : null;
     },
     setDesiredStatus: async (gatewayId, status) => {
       await db
-        .collection(GLM_GATEWAYS_COLLECTION)
+        .collection(GATEWAYS_COLLECTION)
         .doc(gatewayId)
         .set({ desiredStatus: status }, { merge: true });
     },
-    readAvailableReplicas: (gatewayId) =>
+    readServingRevisionId: async (gatewayId) =>
+      (await readDurableGatewayRevision(db, gatewayId, "serving"))?.revisionId ?? null,
+    readAvailableReplicas: (revisionId) =>
       kubeOps.readAvailableReplicas({
         namespace: NAMESPACE,
-        name: `octogee-gateway-${gatewayId}`,
+        name: deploymentNameForInstance(revisionId),
       }),
     now: () => Date.now(),
     wait: (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -2976,19 +3290,22 @@ function buildDeprovisionCustomerHandler(
   return createDeprovisionCustomerHandler({
     loadCleanupContext: (uid) => loadCustomerCleanupContext({ db }, uid),
     unmountFromGateway: createUnmountFromGateway({
-      readGatewayProfile: async (gatewayId) => {
-        const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-        if (!doc.exists) return null;
-        const data = doc.data() as GatewayDesiredState | undefined;
-        return resolveGatewayImageProfile(data ?? {}) === "operator" ? "operator" : "standard";
+      resolveGatewayUnmountTarget: async (gatewayId) => {
+        const target = await readDurableGatewayRevision(db, gatewayId, "serving");
+        if (!target) return null;
+        return {
+          gatewayId: target.gatewayId,
+          revisionId: target.revisionId,
+          profile: target.profile,
+        };
       },
-      readAvailableReplicas: (gatewayId) =>
+      readAvailableReplicas: (revisionId) =>
         kubeOps.readAvailableReplicas({
           namespace: NAMESPACE,
-          name: deploymentNameForInstance(gatewayId),
+          name: deploymentNameForInstance(revisionId),
         }),
-      unmountRpc: ({ gatewayId, slug }) =>
-        callUnmountRpc(db, { privateKey, gatewayId, slug, log: logFn }),
+      unmountRpc: ({ gatewayId, revisionId, slug }) =>
+        callUnmountRpc(db, { privateKey, gatewayId, revisionId, slug, log: logFn }),
       wait: (ms) => new Promise((r) => setTimeout(r, ms)),
       now: () => Date.now(),
       log: logFn,
@@ -3057,6 +3374,7 @@ export async function callUnmountRpc(
   opts: {
     privateKey: string;
     gatewayId: string;
+    revisionId: string;
     slug: string;
     log: (msg: string) => void;
     tag?: string;
@@ -3066,13 +3384,14 @@ export async function callUnmountRpc(
   const {
     privateKey,
     gatewayId,
+    revisionId,
     slug,
     log,
     tag = "deprov",
     timeoutMs = MIGRATION_UNMOUNT_TIMEOUT_MS,
   } = opts;
 
-  const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
+  const url = await resolveGatewayUrlFromFirestore(db, revisionId);
   const migrationId = `${tag}-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const body = JSON.stringify({ migrationId, slug });
   const signature = signFleetRequest(privateKey, migrationId, body);
@@ -3096,7 +3415,7 @@ export async function callUnmountRpc(
   } catch (err) {
     if (didTimeout) {
       throw new Error(
-        `unmount timed out after ${timeoutMs}ms gatewayId=${gatewayId} slug=${slug}`,
+        `unmount timed out after ${timeoutMs}ms gatewayId=${gatewayId} revisionId=${revisionId} slug=${slug}`,
       );
     }
     throw err;
@@ -3107,66 +3426,150 @@ export async function callUnmountRpc(
     const text = await resp.text().catch(() => "<no body>");
     throw new Error(`unmount failed: ${resp.status} ${text.slice(0, 200)}`);
   }
-  log(`[${tag}] unmount RPC ok gatewayId=${gatewayId} slug=${slug}`);
+  log(`[${tag}] unmount RPC ok gatewayId=${gatewayId} revisionId=${revisionId} slug=${slug}`);
 }
 
 async function resolveGatewayUrlFromFirestore(
   db: Firestore,
-  gatewayId: string,
+  revisionId: string,
 ): Promise<string> {
-  const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-  if (!doc.exists) {
-    throw new Error(`gateway not registered in glmGateways: ${gatewayId}`);
+  const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId).get();
+  const revision = doc.exists ? doc.data() : undefined;
+  if (
+    !isRevisionRealizationDoc(revision) ||
+    revision.revisionId !== revisionId ||
+    revisionId !== revisionIdForRelease(revision.gateway, revision.release)
+  ) {
+    throw new Error(`revision not registered in glmGateways: ${revisionId}`);
   }
-  return `http://octogee-gateway-${gatewayId}.${NAMESPACE}.svc.cluster.local:${FLEET_CONTROLLER_PORT}`;
+  return `http://octogee-gateway-${revisionId}.${NAMESPACE}.svc.cluster.local:${FLEET_CONTROLLER_PORT}`;
 }
 
-// A revision is placement-ready once its realization doc reports lifecycle
-// "serving" (Cowboy sets this after Deployment availability + heartbeat match).
-async function isRevisionServing(db: Firestore, revisionId: string): Promise<boolean> {
+function revisionForGateway(input: {
+  value: unknown;
+  gatewayId: string;
+  revisionId: string;
+  release: number;
+}): RevisionRealizationDoc | null {
+  const { value, gatewayId, revisionId, release } = input;
+  if (
+    isRevisionRealizationDoc(value) &&
+    value.revisionId === revisionId &&
+    value.gateway === gatewayId &&
+    value.release === release &&
+    revisionId === revisionIdForRelease(gatewayId, release)
+  ) {
+    return value;
+  }
+  return null;
+}
+
+async function isServingRevisionForGateway(
+  db: Firestore,
+  gatewayId: string,
+  revisionId: string,
+  release: number,
+): Promise<boolean> {
   const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId).get();
-  if (!snap.exists) return false;
-  const data = snap.data() as { lifecycle?: unknown } | undefined;
-  return data?.lifecycle === "serving";
+  const value = snap.exists ? snap.data() : undefined;
+  return revisionForGateway({ value, gatewayId, revisionId, release })?.lifecycle === "serving";
 }
 
-// Placement resolution at migration CLAIM time (GATEWAY-RELEASES-SPEC). Returns
-// null when the destination gateway is not yet on the Step 2 assignment layer
-// (no durable gateways/{id} desired doc) — the migration then runs the legacy
-// bare-gateway path. Otherwise it applies the placement rule against the live
-// revision (or the roll target once it is accepting) and its readiness.
-async function resolvePlacementFromFirestore(
+export function durableRolloutGateway(
+  value: unknown,
+  gatewayId: string,
+): GatewayDoc | null {
+  return isDurableRootConfigDoc(value, gatewayId) ? value : null;
+}
+
+export async function resolvePlacementFromFirestore(
   db: Firestore,
   toGatewayId: string,
 ): Promise<PlacementResolution | null> {
   const snap = await db.collection(GATEWAYS_COLLECTION).doc(toGatewayId).get();
   if (!snap.exists) return null;
   const gateway = snap.data();
-  if (!isGatewayDesiredDoc(gateway)) return null;
+  if (!isDurableRootConfigDoc(gateway, toGatewayId)) return null;
+  if (gateway.desiredStatus !== "running") {
+    return { ok: false, reason: "revision-not-ready" };
+  }
   const candidate =
     gateway.roll && gateway.roll.acceptingNewAssignments
       ? gateway.roll.targetRevisionId
       : gateway.liveRevisionId;
-  const ready = candidate ? await isRevisionServing(db, candidate) : false;
+  const release =
+    gateway.roll && gateway.roll.acceptingNewAssignments
+      ? gateway.roll.toRelease
+      : gateway.liveRelease;
+  const ready =
+    candidate && typeof release === "number"
+      ? await isServingRevisionForGateway(db, toGatewayId, candidate, release)
+      : false;
   return resolvePlacementRevision({
     gateway,
     isRevisionReady: (revisionId) => revisionId === candidate && ready,
   });
 }
 
-// The source revision for a customer with no assignment doc: the gateway's live
-// revision (P1-3 — so a same-gateway drain runs instead of no-op'ing as "already
-// on target"). Null when the gateway is not on the assignment layer (legacy),
-// preserving the bare-gateway comparison.
-async function resolveLiveRevisionAsSource(
+export async function resolveLiveRevisionAsSource(
   db: Firestore,
   gatewayId: string,
 ): Promise<{ revisionId: string; release: number } | null> {
   const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
   if (!snap.exists) return null;
   const gateway = snap.data();
-  if (!isGatewayDesiredDoc(gateway) || !gateway.liveRevisionId) return null;
-  return { revisionId: gateway.liveRevisionId, release: gateway.liveRelease ?? 0 };
+  if (
+    !isDurableRootConfigDoc(gateway, gatewayId) ||
+    gateway.desiredStatus !== "running" ||
+    !gateway.liveRevisionId ||
+    typeof gateway.liveRelease !== "number"
+  ) {
+    return null;
+  }
+  const ready = await isServingRevisionForGateway(
+    db,
+    gatewayId,
+    gateway.liveRevisionId,
+    gateway.liveRelease,
+  );
+  return ready
+    ? { revisionId: gateway.liveRevisionId, release: gateway.liveRelease }
+    : null;
+}
+
+export async function resolveSourceRevisionFromFirestore(
+  db: Firestore,
+  uid: string,
+  gatewayId: string,
+): Promise<{ revisionId: string; release: number } | null> {
+  const assignment = await readAssignmentDoc(db, gatewayId, uid);
+  if (!assignment) return resolveLiveRevisionAsSource(db, gatewayId);
+  const rootSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+  const root = rootSnap.exists ? rootSnap.data() : undefined;
+  if (
+    !isDurableRootConfigDoc(root, gatewayId) ||
+    root.desiredStatus !== "running" ||
+    assignment.gatewayId !== gatewayId
+  ) {
+    return null;
+  }
+  const revisionSnap = await db
+    .collection(GLM_GATEWAYS_COLLECTION)
+    .doc(assignment.revisionId)
+    .get();
+  const revision = revisionForGateway({
+    value: revisionSnap.exists ? revisionSnap.data() : undefined,
+    gatewayId,
+    revisionId: assignment.revisionId,
+    release: assignment.release,
+  });
+  if (
+    !revision ||
+    (revision.lifecycle !== "serving" && revision.lifecycle !== "draining")
+  ) {
+    return null;
+  }
+  return { revisionId: assignment.revisionId, release: assignment.release };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

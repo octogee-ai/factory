@@ -65,7 +65,6 @@ import {
   requestGatewayRestartForRuntimeChange,
   syncByotForCustomer,
   applyAgentModelOverrides,
-  markerProvidersForSlot,
 } from "./byot-sync-runtime";
 import { internalFetch } from "./internal-fetch.js";
 import { codexAuthJsonPath, codexAgentDir } from "./byosub-restore.js";
@@ -315,27 +314,6 @@ describe("requestGatewayRestartForRuntimeChange — in-process RPC, no subproces
     gatewayRestartRequestSpy.mockRejectedValueOnce(new Error("restart disabled"));
     await expect(requestGatewayRestartForRuntimeChange()).resolves.toBe(false);
     expect(closeSpy).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("markerProvidersForSlot — byosub provider set → PROVIDERS-registry oauth providers", () => {
-  const agentId = "octogee-a-coach";
-  it("maps connected subscription providers and returns [] when absent", () => {
-    expect(
-      markerProvidersForSlot(
-        {
-          [agentId]: {
-            providers: {
-              anthropic: { provider: "anthropic", secretName: "s-a" },
-              openai: { provider: "openai", secretName: "s-o" },
-            },
-          },
-        },
-        agentId,
-      ),
-    ).toEqual(["openai-codex", "claude-cli"]);
-    expect(markerProvidersForSlot(undefined, agentId)).toEqual([]);
-    expect(markerProvidersForSlot({}, agentId)).toEqual([]);
   });
 });
 

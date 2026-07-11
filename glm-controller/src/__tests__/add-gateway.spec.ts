@@ -61,6 +61,12 @@ function makeDeps(
         return state.availableReplicas.get(name) ?? null;
       }),
     },
+    resolveGatewayRevision: vi.fn(async (gatewayId: string) => ({
+      gatewayId,
+      revisionId: gatewayId,
+      imageTag: state.helmImageTags?.get(gatewayId) ?? "abc1234",
+      gatewayClass: "shared" as const,
+    })),
     readGatewayHeartbeat: vi.fn(async (gatewayId: string) => {
       const ts = state.heartbeats.get(gatewayId);
       return typeof ts === "number" ? { lastHeartbeatAt: ts, version: "abc1234" } : ts ?? null;
@@ -69,6 +75,7 @@ function makeDeps(
       state.platformReady.add(gatewayId);
     }),
     syncFleetIngress: vi.fn(async () => {}),
+    revisionMaterializationTimeoutMs: 60_000,
     helmRenderTimeoutMs: 60_000,
     deploymentReadyTimeoutMs: 240_000,
     heartbeatTimeoutMs: 240_000,
@@ -146,6 +153,34 @@ describe("createAddGatewayHandler — happy path", () => {
     expect(result.success).toBe(true);
   });
 
+  it("waits for the durable root renderer to materialize the desired revision", async () => {
+    const state: FakeState = {
+      helmInstances: new Set(["canary-r1"]),
+      availableReplicas: new Map([["octogee-gateway-canary-r1", 1]]),
+      heartbeats: new Map([["canary-r1", 1]]),
+      platformReady: new Set(),
+    };
+    let revisionReads = 0;
+    const deps = makeDeps(state, {
+      resolveGatewayRevision: vi.fn(async (gatewayId: string) => {
+        revisionReads++;
+        if (revisionReads < 3) return null;
+        return {
+          gatewayId,
+          revisionId: "canary-r1",
+          imageTag: "abc1234",
+          gatewayClass: "shared" as const,
+        };
+      }),
+    });
+
+    const result = await createAddGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(result.success).toBe(true);
+    expect(revisionReads).toBe(3);
+    expect(deps.wait).toHaveBeenCalledTimes(2);
+  });
+
   it("waits for the requested image tag when reusing an existing sibling release", async () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
@@ -156,6 +191,12 @@ describe("createAddGatewayHandler — happy path", () => {
     };
     let polls = 0;
     const deps = makeDeps(state, {
+      resolveGatewayRevision: vi.fn(async () => ({
+        gatewayId: "canary",
+        revisionId: "canary",
+        imageTag: "new",
+        gatewayClass: "shared" as const,
+      })),
       wait: vi.fn(async () => {
         polls++;
         if (polls === 2) {
@@ -209,7 +250,14 @@ describe("createAddGatewayHandler — happy path", () => {
       heartbeats: new Map(),
       platformReady: new Set(),
     };
-    const deps = makeDeps(state);
+    const deps = makeDeps(state, {
+      resolveGatewayRevision: vi.fn(async () => ({
+        gatewayId: "canary",
+        revisionId: "canary",
+        imageTag: "abc1234",
+        gatewayClass: "operator" as const,
+      })),
+    });
     const ctx = makeCtx();
 
     const result = await createAddGatewayHandler(deps)(
@@ -239,7 +287,14 @@ describe("createAddGatewayHandler — happy path", () => {
       heartbeats: new Map([["canary", 1]]),
       platformReady: new Set(),
     };
-    const deps = makeDeps(state);
+    const deps = makeDeps(state, {
+      resolveGatewayRevision: vi.fn(async () => ({
+        gatewayId: "canary",
+        revisionId: "canary",
+        imageTag: "abc1234",
+        gatewayClass: "builder" as const,
+      })),
+    });
     const ctx = makeCtx();
 
     const result = await createAddGatewayHandler(deps)(
@@ -287,6 +342,32 @@ describe("createAddGatewayHandler — happy path", () => {
 
     expect(result.success).toBe(true);
     expect(deps.readGatewayHeartbeat).toHaveBeenCalledTimes(3);
+  });
+
+  it("uses the durable revision id for Helm, deployment, and heartbeat checks", async () => {
+    const state: FakeState = {
+      helmInstances: new Set(["canary-r7"]),
+      availableReplicas: new Map([["octogee-gateway-canary-r7", 1]]),
+      heartbeats: new Map([["canary-r7", 1]]),
+      platformReady: new Set(),
+    };
+    const deps = makeDeps(state, {
+      resolveGatewayRevision: vi.fn(async () => ({
+        gatewayId: "canary",
+        revisionId: "canary-r7",
+        imageTag: "abc1234",
+        gatewayClass: "shared" as const,
+      })),
+    });
+
+    const result = await createAddGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(result.success).toBe(true);
+    expect(deps.kubeOps.readAvailableReplicas).toHaveBeenCalledWith({
+      namespace: "octogee",
+      name: "octogee-gateway-canary-r7",
+    });
+    expect(deps.readGatewayHeartbeat).toHaveBeenCalledWith("canary-r7");
   });
 });
 

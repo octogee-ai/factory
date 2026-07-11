@@ -1,108 +1,42 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
+
 import {
-  gatewayByosubPatch,
   parseCaptureArgs,
-  secretNameFor,
-  validateCredentialPayload,
+  userByosubIntegrationPatch,
 } from "../ops/capture-byosub-credential.js";
 
-const ok = [
-  "--env=prod",
-  "--gateway=gw-bender",
-  "--agent=octogee-ceckert-coach",
-  "--provider=openai",
-  "--uid=Abc123Uid",
-  "--file=/tmp/auth.json",
-];
-
-describe("parseCaptureArgs", () => {
-  it("parses a valid invocation", () => {
-    expect(parseCaptureArgs(ok)).toEqual({
-      env: "prod",
-      gateway: "gw-bender",
-      agent: "octogee-ceckert-coach",
-      provider: "openai",
-      uid: "Abc123Uid",
-      file: "/tmp/auth.json",
-    });
+describe("capture-byosub-credential", () => {
+  it("accepts only owner-scoped capture arguments", () => {
+    expect(
+      parseCaptureArgs([
+        "--env=test",
+        "--provider=openai",
+        "--uid=uid-1",
+        "--file=/tmp/auth.json",
+      ]),
+    ).toEqual({ env: "test", provider: "openai", uid: "uid-1", file: "/tmp/auth.json" });
+    expect(() =>
+      parseCaptureArgs([
+        "--env=test",
+        "--gateway=default-r7",
+        "--provider=openai",
+        "--uid=uid-1",
+        "--file=/tmp/auth.json",
+      ]),
+    ).toThrow(/Unknown arg/);
   });
 
-  it("rejects missing/invalid --env", () => {
-    expect(() => parseCaptureArgs(ok.filter((a) => !a.startsWith("--env")))).toThrow(/--env/);
-    expect(() =>
-      parseCaptureArgs(ok.map((a) => (a.startsWith("--env") ? "--env=stage" : a))),
-    ).toThrow(/--env/);
-  });
-
-  it("rejects an unsafe --gateway / --agent (filesystem + secret-id safety)", () => {
-    expect(() =>
-      parseCaptureArgs(ok.map((a) => (a.startsWith("--gateway") ? "--gateway=GW/Bender" : a))),
-    ).toThrow(/gateway/i);
-    expect(() =>
-      parseCaptureArgs(ok.map((a) => (a.startsWith("--agent") ? "--agent=../etc" : a))),
-    ).toThrow(/agent/i);
-  });
-
-  it("routes Anthropic subscription capture through the product SSO flow; rejects unknown providers", () => {
-    expect(() =>
-      parseCaptureArgs(ok.map((a) => (a.startsWith("--provider") ? "--provider=anthropic" : a))),
-    ).toThrow(/Claude SSO|OpenAI auth\.json/i);
-    expect(() =>
-      parseCaptureArgs(ok.map((a) => (a.startsWith("--provider") ? "--provider=grok" : a))),
-    ).toThrow(/provider/i);
-  });
-
-  it("rejects missing/unsafe --uid and missing --file", () => {
-    expect(() => parseCaptureArgs(ok.filter((a) => !a.startsWith("--uid")))).toThrow(/uid/i);
-    expect(() =>
-      parseCaptureArgs(ok.map((a) => (a.startsWith("--uid") ? "--uid=a/b c" : a))),
-    ).toThrow(/uid/i);
-    expect(() => parseCaptureArgs(ok.filter((a) => !a.startsWith("--file")))).toThrow(/--file/);
-  });
-});
-
-describe("secretNameFor", () => {
-  it("is owner-scoped and provider-suffixed", () => {
-    expect(secretNameFor("Abc123Uid", "openai")).toBe("byosub-Abc123Uid-openai");
-  });
-});
-
-describe("gatewayByosubPatch", () => {
-  it("writes the provider-set ref for the captured provider", () => {
-    expect(gatewayByosubPatch("octogee-ceckert-coach", "openai", "byosub-Abc123Uid-openai")).toEqual({
-      byosub: {
-        "octogee-ceckert-coach": {
-          providers: {
-            openai: {
-              provider: "openai",
-              secretName: "byosub-Abc123Uid-openai",
-              status: "connected",
-              modelCredentialProvider: "openai-codex",
-            },
-          },
+  it("writes only the user integration authority, never a gateway credential ref", () => {
+    expect(userByosubIntegrationPatch("openai")).toEqual({
+      connected: true,
+      providers: {
+        openai: {
+          provider: "openai",
+          modelCredentialProvider: "openai-codex",
+          status: "connected",
+          connected: true,
         },
       },
     });
-  });
-});
-
-describe("validateCredentialPayload", () => {
-  it("accepts a plausible codex auth.json", () => {
-    expect(
-      validateCredentialPayload(
-        "openai",
-        '{"auth_mode":"chatgpt","tokens":{"refresh_token":"r"}}',
-      ).ok,
-    ).toBe(true);
-    expect(validateCredentialPayload("openai", '{"tokens":{"refresh_token":"r"}}').ok).toBe(true);
-  });
-
-  it("rejects empty / non-JSON / structurally-wrong payloads (no junk in Secret Manager)", () => {
-    expect(validateCredentialPayload("openai", "").ok).toBe(false);
-    expect(validateCredentialPayload("openai", "not json").ok).toBe(false);
-    expect(validateCredentialPayload("openai", '{"hello":1}').ok).toBe(false);
-    
-    expect(validateCredentialPayload("openai", '{"auth_mode":"chatgpt"}').ok).toBe(false);
-    expect(validateCredentialPayload("openai", '{"tokens":"notobj"}').ok).toBe(false);
   });
 });

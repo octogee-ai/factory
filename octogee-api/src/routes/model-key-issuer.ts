@@ -13,11 +13,11 @@ import {
 import type { Firestore } from "firebase-admin/firestore";
 import {
   GATEWAY_ID_REQUIREMENT,
-  isValidGatewayId,
 } from "@octogee/shared/types/glm";
+import { isBareGatewayId } from "@octogee/core/gateway-live-release";
 
 export interface ModelKeyIssuerRouteDeps {
-  db?: Pick<Firestore, "collection">;
+  db?: Pick<Firestore, "collection" | "doc">;
   store?: ModelBrokerTokenStore;
   bearerToken?: string;
   ttlSeconds?: number | null;
@@ -85,7 +85,7 @@ function validIssueBody(body: IssueBody):
   const gatewayId = stringBody(body, "gatewayId");
   const secretName = stringBody(body, "secretName");
   const ownerUid = stringBody(body, "ownerUid");
-  if (!isValidGatewayId(gatewayId)) {
+  if (!isBareGatewayId(gatewayId)) {
     return { error: GATEWAY_ID_REQUIREMENT };
   }
   if (!safeDocId(ownerUid)) {

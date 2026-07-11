@@ -70,6 +70,29 @@ function app() {
   return a;
 }
 
+function rootConfig(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    configSchemaVersion: 1,
+    profile: "operator",
+    gatewayClass: "operator",
+    imageProfile: "operator",
+    sizingTier: null,
+    computeClass: null,
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: null,
+    serviceAccount: null,
+    operatorAccess: { shellsEnabled: true },
+    ownerUid: "uid-owner",
+    coOwnerUids: [],
+    builderSlug: "acme",
+    openclawOverrides: null,
+    modelBrokerLimits: null,
+    preemption: null,
+    ...overrides,
+  };
+}
+
 describe("internal connector materialize route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -80,20 +103,21 @@ describe("internal connector materialize route", () => {
     process.env.GATEWAY_REVISION_ID = "bender-r2";
     process.env.GATEWAY_BUILDER_SLUG = "acme";
     mocks.docs["workspaces/acme"] = { ownerUid: "uid-owner" };
+    mocks.docs["gateways/bender"] = {
+      gatewayId: "bender",
+      latestRelease: 2,
+      desiredRelease: 2,
+      liveRelease: 2,
+      liveRevisionId: "bender-r2",
+      desiredStatus: "running",
+      ...rootConfig(),
+    };
     mocks.docs["glmGateways/bender-r2"] = {
       docKind: "revision",
       revisionId: "bender-r2",
       gateway: "bender",
       release: 2,
       lifecycle: "serving",
-    };
-    mocks.docs["gateways/bender/releases/2"] = {
-      gatewayId: "bender",
-      release: 2,
-      payload: {
-        ownerUid: "uid-owner",
-        gatewayClass: "operator",
-      },
     };
   });
 
@@ -129,7 +153,21 @@ describe("internal connector materialize route", () => {
     });
   });
 
-  it("authorizes a revision runtime from its immutable durable release without a bare glm alias", async () => {
+  it("authorizes a revision runtime from durable root config without a bare glm alias", async () => {
+    vi.mocked(readConnectorAccessToken).mockResolvedValue("gho_secret");
+
+    const res = await request(app()).get("/internal/connectors/github/materialize");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ status: "connected", accessToken: "gho_secret" });
+  });
+
+  it("does not let stale bare glm gateway config override durable root config", async () => {
+    mocks.docs["glmGateways/bender"] = {
+      gatewayId: "bender",
+      ownerUid: "uid-someone-else",
+      gatewayClass: "shared",
+    };
     vi.mocked(readConnectorAccessToken).mockResolvedValue("gho_secret");
 
     const res = await request(app()).get("/internal/connectors/github/materialize");
@@ -169,7 +207,7 @@ describe("internal connector materialize route", () => {
   it("allows builder-class gateways because they are isolated exec-capable runtimes", async () => {
     process.env.GATEWAY_CLASS = "builder";
     process.env.GATEWAY_PROFILE = "standard";
-    (mocks.docs["gateways/bender/releases/2"].payload as Record<string, unknown>).gatewayClass = "builder";
+    mocks.docs["gateways/bender"].gatewayClass = "builder";
     vi.mocked(readConnectorAccessToken).mockResolvedValue("cf_secret");
 
     const res = await request(app()).get("/internal/connectors/cloudflare/materialize");
@@ -189,8 +227,8 @@ describe("internal connector materialize route", () => {
     expect(readConnectorAccessToken).not.toHaveBeenCalled();
   });
 
-  it("returns 503 when the revision's release doc is missing instead of misreporting gateway class", async () => {
-    delete mocks.docs["gateways/bender/releases/2"];
+  it("returns 503 when the durable root config marker is missing", async () => {
+    delete mocks.docs["gateways/bender"].configSchemaVersion;
 
     const res = await request(app()).get("/internal/connectors/cloudflare/materialize");
 
@@ -199,8 +237,8 @@ describe("internal connector materialize route", () => {
     expect(readConnectorAccessToken).not.toHaveBeenCalled();
   });
 
-  it("returns 503 when the release payload is not a record", async () => {
-    (mocks.docs["gateways/bender/releases/2"] as Record<string, unknown>).payload = "corrupt";
+  it("returns 503 when the root config is malformed", async () => {
+    mocks.docs["gateways/bender"].operatorAccess = "corrupt";
 
     const res = await request(app()).get("/internal/connectors/cloudflare/materialize");
 
@@ -210,7 +248,7 @@ describe("internal connector materialize route", () => {
   });
 
   it("rejects a shared desired-state gateway even when the pod env says owner-runtime", async () => {
-    (mocks.docs["gateways/bender/releases/2"].payload as Record<string, unknown>).gatewayClass = "shared";
+    mocks.docs["gateways/bender"].gatewayClass = "shared";
 
     const res = await request(app()).get("/internal/connectors/cloudflare/materialize");
 
@@ -220,7 +258,7 @@ describe("internal connector materialize route", () => {
   });
 
   it("rejects a gateway whose desired owner does not match the mounted workspace owner", async () => {
-    (mocks.docs["gateways/bender/releases/2"].payload as Record<string, unknown>).ownerUid = "uid-someone-else";
+    mocks.docs["gateways/bender"].ownerUid = "uid-someone-else";
 
     const res = await request(app()).get("/internal/connectors/cloudflare/materialize");
 

@@ -8,6 +8,7 @@ import {
 } from "../../../gateway-edge/src/lib/connectors/index.js";
 import { getFreshAccessTokenFromDb } from "../../../gateway-edge/src/lib/connector-tokens.js";
 import { decryptSecret } from "../../../gateway-edge/src/lib/kms.js";
+import { readServingGatewayAuthorization } from "@octogee/core/gateway-live-release";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -108,20 +109,20 @@ async function accessAuthorized(
   access: ConnectorAccessContext | null,
 ): Promise<boolean> {
   if (!safeDocId(uid) || !bound.ownerUid) return false;
+  const authorization = await readServingGatewayAuthorization(db, bound.gatewayId);
+  if (!authorization || authorization.config.ownerUid !== bound.ownerUid) return false;
   if (access?.kind === OWNER_RUNTIME_ACCESS_KIND) {
-    return uid === bound.ownerUid && (await gatewayHasOwnerRuntimeClass(db, bound.gatewayId));
+    return (
+      uid === bound.ownerUid &&
+      (authorization.config.gatewayClass === "builder" ||
+        authorization.config.gatewayClass === "operator")
+    );
   }
   if (uid === bound.ownerUid) return true;
 
   if (!access) return false;
   if (access.requestingUid !== bound.ownerUid) return false;
   return projectAccessAuthorized(db, uid, connectorId, access);
-}
-
-async function gatewayHasOwnerRuntimeClass(db: Firestore, gatewayId: string): Promise<boolean> {
-  const snap = await db.doc(`glmGateways/${gatewayId}`).get();
-  const data = snap.data() as Record<string, unknown> | undefined;
-  return data?.gatewayClass === "builder" || data?.gatewayClass === "operator";
 }
 
 function connectorAllowedForAccess(

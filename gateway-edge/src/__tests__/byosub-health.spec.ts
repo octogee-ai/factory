@@ -304,20 +304,20 @@ describe("GET /byosub/health route glue", () => {
     expect(stateRead).not.toHaveBeenCalled();
   });
 
-  it("passes the resolved gateway + coach agent id through to the ref read", async () => {
-    let seen: { gatewayId: string; agentId: string } | null = null;
+  it("passes the authenticated user id through to the integration read", async () => {
+    let seen: string | null = null;
     await request(
       appWith(
         fakeDeps({
           resolveUserGateway: async () => ({ slug: "smile-wring-011b", gatewayId: "operator-1" }),
           localGatewayId: () => "operator-1",
-          readRefProvider: async (gatewayId, agentId) => {
-            seen = { gatewayId, agentId };
+          readRefProvider: async (uid) => {
+            seen = uid;
             return "openai";
           },
         }),
       ),
     ).get(healthPath("operator-1"));
-    expect(seen).toEqual({ gatewayId: "operator-1", agentId: "octogee-smile-wring-011b-coach" });
+    expect(seen).toBe("uid-1");
   });
 });

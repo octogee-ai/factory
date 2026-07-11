@@ -1,8 +1,12 @@
 export interface SweepStuckReleasesDeps {
-  // gatewayIds whose helm release is currently in a pending-* state.
+  // Revision ids whose Helm release is currently in a pending-* state.
   listPending: () => Promise<string[]>;
-  // Recover one stuck release (rollback-to-last-good / uninstall-stuck-first-install).
-  recover: (gatewayId: string) => Promise<string>;
+  // A pending release is eligible only when it is a canonical, non-retired
+  // revision with a valid, non-retired durable root. Bare legacy ids are
+  // intentionally excluded: the explicit legacy cleanup owns those releases.
+  isRecoverableRevision: (revisionId: string) => Promise<boolean>;
+  // Recover one stuck revision release (rollback-to-last-good / uninstall-stuck-first-install).
+  recover: (revisionId: string) => Promise<string>;
   now: () => number;
   // A release must be CONTINUOUSLY pending for this long before we recover it.
   // Set comfortably > the helm `--wait` upgrade timeout so a legitimately
@@ -14,6 +18,7 @@ export interface SweepStuckReleasesDeps {
 export interface SweepStuckReleasesResult {
   pending: number;
   recovered: number;
+  skipped: number;
 }
 
 // Heal orphaned helm wedges: a release left `pending-*` by an interrupted
@@ -24,6 +29,7 @@ export interface SweepStuckReleasesResult {
 // before we touch it. The map is in-memory, so a controller restart resets the clock
 // — intentionally: it makes the sweeper wait for stability rather than fight a
 // deploy storm mid-burst.
+// eslint-disable-next-line sonarjs/cognitive-complexity
 export async function sweepStuckReleasesOnce(
   deps: SweepStuckReleasesDeps,
   firstSeenPending: Map<string, number>,
@@ -35,10 +41,30 @@ export async function sweepStuckReleasesOnce(
     deps.log(
       `[helm-recovery-sweeper] ⚠ listPending failed — ${err instanceof Error ? err.message : String(err)}`,
     );
-    return { pending: 0, recovered: 0 };
+    return { pending: 0, recovered: 0, skipped: 0 };
   }
 
-  const pendingSet = new Set(pending);
+  const recoverablePending: string[] = [];
+  let skipped = 0;
+  for (const revisionId of pending) {
+    try {
+      if (await deps.isRecoverableRevision(revisionId)) {
+        recoverablePending.push(revisionId);
+      } else {
+        skipped += 1;
+        deps.log(
+          `[helm-recovery-sweeper] skipping unmanaged pending release ${revisionId}; legacy cleanup owns bare releases`,
+        );
+      }
+    } catch (err) {
+      skipped += 1;
+      deps.log(
+        `[helm-recovery-sweeper] cannot validate pending release ${revisionId} — ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  const pendingSet = new Set(recoverablePending);
   // Releases that recovered/settled on their own: drop them so their clock resets.
   for (const gw of [...firstSeenPending.keys()]) {
     if (!pendingSet.has(gw)) firstSeenPending.delete(gw);
@@ -46,30 +72,30 @@ export async function sweepStuckReleasesOnce(
 
   const now = deps.now();
   let recovered = 0;
-  for (const gw of pending) {
-    const firstSeen = firstSeenPending.get(gw);
+  for (const revisionId of recoverablePending) {
+    const firstSeen = firstSeenPending.get(revisionId);
     if (firstSeen === undefined) {
-      firstSeenPending.set(gw, now); // first sighting — start the staleness clock
+      firstSeenPending.set(revisionId, now); // first sighting — start the staleness clock
       continue;
     }
     if (now - firstSeen < deps.staleMs) continue; // pending, but not long enough yet
 
     deps.log(
-      `[helm-recovery-sweeper] ${gw} stuck pending for ${Math.round((now - firstSeen) / 60_000)}m (no op re-upserting it) — recovering`,
+      `[helm-recovery-sweeper] ${revisionId} stuck pending for ${Math.round((now - firstSeen) / 60_000)}m (no op re-upserting it) — recovering`,
     );
     try {
-      const action = await deps.recover(gw);
-      deps.log(`[helm-recovery-sweeper] ✅ recovered ${gw}: ${action}`);
+      const action = await deps.recover(revisionId);
+      deps.log(`[helm-recovery-sweeper] ✅ recovered ${revisionId}: ${action}`);
       recovered += 1;
-      firstSeenPending.delete(gw);
+      firstSeenPending.delete(revisionId);
     } catch (err) {
       deps.log(
-        `[helm-recovery-sweeper] ⚠ recover ${gw} failed — ${err instanceof Error ? err.message : String(err)} (retrying after staleMs)`,
+        `[helm-recovery-sweeper] ⚠ recover ${revisionId} failed — ${err instanceof Error ? err.message : String(err)} (retrying after staleMs)`,
       );
-      firstSeenPending.set(gw, now); // back off a full staleMs before the next attempt
+      firstSeenPending.set(revisionId, now); // back off a full staleMs before the next attempt
     }
   }
-  return { pending: pending.length, recovered };
+  return { pending: recoverablePending.length, recovered, skipped };
 }
 
 export interface StartHelmRecoverySweeperDeps extends SweepStuckReleasesDeps {

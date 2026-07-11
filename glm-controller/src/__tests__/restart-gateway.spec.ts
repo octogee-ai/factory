@@ -38,6 +38,7 @@ function mkDeps(overrides: Partial<RestartGatewayDeps> = {}): RestartGatewayDeps
       deletePersistentVolumeClaim: vi.fn(async () => undefined),
     },
     namespace: "octogee-test",
+    resolveLiveRevisionId: vi.fn(async (gatewayId: string) => `${gatewayId}-r7`),
     now: () => 1000,
     log: vi.fn(),
     ...overrides,
@@ -45,7 +46,7 @@ function mkDeps(overrides: Partial<RestartGatewayDeps> = {}): RestartGatewayDeps
 }
 
 describe("createRestartGatewayHandler", () => {
-  it("calls kubeOps.restartOpenClawInPlace with the deployment derived from gatewayId", async () => {
+  it("calls kubeOps.restartOpenClawInPlace with the deployment derived from the serving revision", async () => {
     const deps = mkDeps();
     const handler = createRestartGatewayHandler(deps);
     const { ctx } = mkCtx();
@@ -55,7 +56,7 @@ describe("createRestartGatewayHandler", () => {
     expect(deps.kubeOps.restartOpenClawInPlace).toHaveBeenCalledTimes(1);
     expect(deps.kubeOps.restartOpenClawInPlace).toHaveBeenCalledWith({
       namespace: "octogee-test",
-      name: "octogee-gateway-bender",
+      name: "octogee-gateway-bender-r7",
     });
     expect(result.success).toBe(true);
   });
@@ -85,6 +86,16 @@ describe("createRestartGatewayHandler", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/gatewayId/);
+  });
+
+  it("fails closed when the durable root has no serving revision", async () => {
+    const deps = mkDeps({ resolveLiveRevisionId: vi.fn(async () => null) });
+
+    const result = await createRestartGatewayHandler(deps)(mkOp(), mkCtx().ctx);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/serving revision/i);
+    expect(deps.kubeOps.restartOpenClawInPlace).not.toHaveBeenCalled();
   });
 
   it("reports the openclaw-restart step failed when kubeOps throws, surfacing the error message", async () => {

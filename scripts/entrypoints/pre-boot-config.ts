@@ -1,22 +1,20 @@
 import * as fs from "fs";
 import * as path from "path";
-import {
-  restoreByosubForAgents,
-  agentIdsFromConfig,
-} from "../lib/byosub-restore.js";
+import { agentIdsFromConfig } from "../lib/byosub-restore.js";
 import {
   materializeBrokerProfilesForAgents,
   openAiCatalogInputForBaseUrl,
   openRouterCatalogInputForBaseUrl,
 } from "../lib/agent-model-token-materializer.js";
 import {
-  claudeCliRuntimeConfig,
-  codexRuntimeConfig,
-} from "../lib/model-credential-materializer.js";
-import {
   platformOpenAiEmbeddingMemorySearch,
   platformOpenAiEmbeddingsEnabled,
 } from "../lib/openclaw-config-builders.js";
+import {
+  isBareGatewayId,
+  readGatewayAuthorization,
+  type GatewayAuthorization,
+} from "@octogee/core/gateway-live-release";
 
 const OPENCLAW_DIR = process.env.HOME
   ? path.join(process.env.HOME, ".openclaw")
@@ -26,15 +24,6 @@ const CONFIG_PATH = path.join(OPENCLAW_DIR, "openclaw.json");
 function log(msg: string): void {
   const ts = new Date().toISOString().replace("Z", "+00:00");
   console.log(`${ts} [pre-boot] ${msg}`);
-}
-
-function claudeCliNativeHomeDirForGateway(): string | undefined {
-  const gatewayClass = process.env.GATEWAY_CLASS ?? "";
-  const profile = process.env.GATEWAY_PROFILE ?? "";
-  if (gatewayClass === "builder" || gatewayClass === "operator" || profile === "operator") {
-    return process.env.HOME ?? "/home/node";
-  }
-  return undefined;
 }
 
 export function shouldMaterializeAnthropicBrokerProfiles(
@@ -67,7 +56,6 @@ export function platformBrokerCatalogOpts(env: NodeJS.ProcessEnv): {
 }
 
 type OpenClawConfig = Record<string, unknown>;
-type ByosubProvider = "openai" | "anthropic";
 
 const MAC_PLATFORM_ANTHROPIC_MODEL_REF = "anthropic/claude-sonnet-4-6";
 const MAC_PLATFORM_ANTHROPIC_MODEL_CONFIG = {
@@ -77,17 +65,6 @@ const MAC_PLATFORM_ANTHROPIC_MODEL_CONFIG = {
 const MAC_AGENT_ID_TEMPLATE = "${OPERATOR_AGENT_ID}";
 const MAC_AGENT_ID_RE = /^octogee-ops-[a-z0-9][a-z0-9-]{0,62}$/;
 const COACH_AGENT_ID_RE = /^octogee-[a-z0-9][a-z0-9-]{0,62}-coach$/;
-
-interface ByosubProviderRef {
-  provider?: unknown;
-  secretName?: unknown;
-}
-
-interface ByosubAgentRef {
-  providers?: Partial<Record<ByosubProvider, ByosubProviderRef>>;
-}
-
-type GatewayByosubRefs = Record<string, ByosubAgentRef>;
 
 function objectProperty(
   parent: Record<string, unknown> | null,
@@ -445,93 +422,6 @@ export function applyGatewayOverrides(
   return deepMergeInto(config, sanitized);
 }
 
-const STANDARD_CODEX_APP_SERVER = {
-  sandbox: "workspace-write",
-  approvalPolicy: "never",
-};
-
-function configuredByosubProviders(
-  byosub: GatewayByosubRefs | undefined,
-  agentIds: readonly string[],
-): Set<ByosubProvider> {
-  const out = new Set<ByosubProvider>();
-  for (const agentId of agentIds) {
-    const providers = byosub?.[agentId]?.providers;
-    if (!providers) continue;
-    for (const provider of ["openai", "anthropic"] as const) {
-      const ref = providers[provider];
-      if (ref?.provider === provider && typeof ref.secretName === "string" && ref.secretName) {
-        out.add(provider);
-      }
-    }
-  }
-  return out;
-}
-
-function applyRuntimeModelDef(
-  config: Record<string, unknown>,
-  modelDef: Record<string, unknown>,
-): boolean {
-  const agents = ensureNullishObjectProperty(config, "agents");
-  const defaults = agents ? ensureNullishObjectProperty(agents, "defaults") : null;
-  const models = defaults ? ensureNullishObjectProperty(defaults, "models") : null;
-  if (!models) return false;
-  return deepMergeInto(models, modelDef);
-}
-
-function applyCodexRuntimePlugin(config: Record<string, unknown>): boolean {
-  const plugins = ensureNullishObjectProperty(config, "plugins");
-  const entries = plugins ? ensureNullishObjectProperty(plugins, "entries") : null;
-  const codex = entries ? ensureNullishObjectProperty(entries, "codex") : null;
-  const codexConfig = codex ? ensureNullishObjectProperty(codex, "config") : null;
-  const appServer = codexConfig ? ensureNullishObjectProperty(codexConfig, "appServer") : null;
-  if (!codex || !appServer) return false;
-  let changed = false;
-  if (codex.enabled !== true) {
-    codex.enabled = true;
-    changed = true;
-  }
-  if (
-    appServer.sandbox === undefined &&
-    !valueEqual(appServer.sandbox, STANDARD_CODEX_APP_SERVER.sandbox)
-  ) {
-    appServer.sandbox = STANDARD_CODEX_APP_SERVER.sandbox;
-    changed = true;
-  }
-  if (
-    appServer.approvalPolicy === undefined &&
-    !valueEqual(appServer.approvalPolicy, STANDARD_CODEX_APP_SERVER.approvalPolicy)
-  ) {
-    appServer.approvalPolicy = STANDARD_CODEX_APP_SERVER.approvalPolicy;
-    changed = true;
-  }
-  return changed;
-}
-
-export function applyByosubRuntimeAllowlist(
-  config: Record<string, unknown>,
-  byosub: GatewayByosubRefs | undefined,
-  agentIds: readonly string[],
-  logFn: (msg: string) => void = () => {},
-): boolean {
-  const providers = configuredByosubProviders(byosub, agentIds);
-  let changed = false;
-
-  if (providers.has("openai")) {
-    if (applyRuntimeModelDef(config, codexRuntimeConfig().modelsDef)) changed = true;
-    if (applyCodexRuntimePlugin(config)) changed = true;
-  }
-  if (providers.has("anthropic")) {
-    if (applyRuntimeModelDef(config, claudeCliRuntimeConfig().modelsDef)) changed = true;
-  }
-  if (changed) {
-    logFn(
-      `BYOSUB runtime models allowlisted for ${[...providers].sort().join(", ")}`,
-    );
-  }
-  return changed;
-}
-
 const FALLBACK_NAME = "Octogee Builder";
 const FALLBACK_EMAIL_DOMAIN = "users.noreply.octogee.com";
 const FALLBACK_GENERIC_LOCAL = "builder";
@@ -670,62 +560,55 @@ export function preBootFirestoreEnabled(
   });
 }
 
-async function applyGlmDesiredState(
+export async function applyGatewayRootConfig(
+  config: Record<string, unknown>,
+  deps: {
+    gatewayId: string | undefined;
+    readAuthorization: (gatewayId: string) => Promise<GatewayAuthorization | null>;
+    logFn?: (msg: string) => void;
+  },
+): Promise<boolean> {
+  const logFn = deps.logFn ?? (() => undefined);
+  const gatewayId = deps.gatewayId;
+  if (!isBareGatewayId(gatewayId)) {
+    logFn(`WARN: refusing non-bare gateway config selector ${String(gatewayId)}`);
+    return false;
+  }
+  const authorization = await deps.readAuthorization(gatewayId);
+  if (!authorization) {
+    logFn(`WARN: durable root config unavailable for gateways/${gatewayId}`);
+    return false;
+  }
+  if (!authorization.config.openclawOverrides) return false;
+  const overridesChanged = applyGatewayOverrides(
+    config,
+    authorization.config.openclawOverrides,
+    logFn,
+  );
+  if (overridesChanged) {
+    logFn(`applied openclawOverrides from gateways/${gatewayId}`);
+  }
+  return overridesChanged;
+}
+
+async function applyGatewayRootConfigFromFirestore(
   config: Record<string, unknown>,
   logFn: (msg: string) => void,
 ): Promise<boolean> {
   const gatewayId = process.env.GATEWAY_ID;
-  if (!gatewayId) return false;
-  let overridesChanged = false;
   try {
     const { db } = await import("../lib/firebase.js");
-    const snap = await withTimeout(
-      db.collection("glmGateways").doc(gatewayId).get(),
-      4000,
-    );
-    const data = snap.exists
-      ? (snap.data() as { openclawOverrides?: unknown; byosub?: GatewayByosubRefs } | undefined)
-      : undefined;
-    if (data?.openclawOverrides) {
-      overridesChanged = applyGatewayOverrides(
-        config,
-        data.openclawOverrides,
-        logFn,
-      );
-      if (overridesChanged) {
-        logFn(`applied openclawOverrides from glmGateways/${gatewayId}`);
-      }
-    }
-    const { readSecret } = await import("../lib/secret-manager.js");
-
-    const agentIds = agentIdsFromConfig(config);
-    const allowlistChanged = applyByosubRuntimeAllowlist(
-      config,
-      data?.byosub,
-      agentIds,
+    return await applyGatewayRootConfig(config, {
+      gatewayId,
+      readAuthorization: (id) => withTimeout(readGatewayAuthorization(db, id), 4000),
       logFn,
-    );
-    const claudeCliNativeHomeDir = claudeCliNativeHomeDirForGateway();
-    const r = await restoreByosubForAgents({
-      agentIds,
-      byosub: data?.byosub,
-      openclawDir: OPENCLAW_DIR,
-      fetchSecret: (name) => withTimeout(readSecret(name), 4000),
-      logFn,
-      ...(claudeCliNativeHomeDir ? { claudeCliNativeHomeDir } : {}),
     });
-    if (r.planned > 0) {
-      logFn(
-        `byosub: restore complete for glmGateways/${gatewayId} — ${r.restored} restored, ${r.failed} failed`,
-      );
-    }
-    if (allowlistChanged) overridesChanged = true;
   } catch (e) {
     logFn(
-      `WARN: could not fetch/apply glmGateways/${gatewayId} openclawOverrides/byosub — booting on template + policy only: ${(e as Error).message}`,
+      `WARN: could not fetch/apply gateways/${String(gatewayId)} root config — booting on template + policy only: ${(e as Error).message}`,
     );
+    return false;
   }
-  return overridesChanged;
 }
 
 async function main(): Promise<void> {
@@ -744,7 +627,7 @@ let configRaw: string;
 
   const firestoreEnabled = preBootFirestoreEnabled(process.env);
   const overridesChanged = firestoreEnabled
-    ? await applyGlmDesiredState(config, log)
+    ? await applyGatewayRootConfigFromFirestore(config, log)
     : false;
   if (!firestoreEnabled) {
     log("Firestore-backed pre-boot state skipped (db-less gateway); applying env/runtime patches only");

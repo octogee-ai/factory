@@ -1,20 +1,17 @@
 
 
 import { initializeApp, cert } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import * as fs from "fs";
 import * as path from "path";
 
 const ENVS = new Set(["test", "prod"]);
-const SAFE_ID = /^[a-z0-9-]+$/; 
-const SAFE_UID = /^[A-Za-z0-9_-]+$/; 
+const SAFE_UID = /^[A-Za-z0-9_-]+$/;
 const USAGE =
-  "Usage: tsx scripts/ops/capture-byosub-credential.ts --env=test|prod --gateway=<id> --agent=<agentId> --provider=openai --uid=<uid> --file=<path>";
+  "Usage: tsx scripts/ops/capture-byosub-credential.ts --env=test|prod --provider=openai --uid=<uid> --file=<path>";
 
 export interface CaptureArgs {
   env: "test" | "prod";
-  gateway: string;
-  agent: string;
   provider: "openai";
   uid: string;
   file: string;
@@ -22,27 +19,17 @@ export interface CaptureArgs {
 
 export function parseCaptureArgs(argv: string[]): CaptureArgs {
   let env = "";
-  let gateway = "";
-  let agent = "";
   let provider = "";
   let uid = "";
   let file = "";
   for (const a of argv) {
     if (a.startsWith("--env=")) env = a.slice("--env=".length);
-    else if (a.startsWith("--gateway=")) gateway = a.slice("--gateway=".length);
-    else if (a.startsWith("--agent=")) agent = a.slice("--agent=".length);
     else if (a.startsWith("--provider=")) provider = a.slice("--provider=".length);
     else if (a.startsWith("--uid=")) uid = a.slice("--uid=".length);
     else if (a.startsWith("--file=")) file = a.slice("--file=".length);
     else throw new Error(`Unknown arg: ${a}\n${USAGE}`);
   }
   if (!ENVS.has(env)) throw new Error(`--env must be test|prod (got: '${env}')\n${USAGE}`);
-  if (!SAFE_ID.test(gateway)) {
-    throw new Error(`--gateway must match [a-z0-9-]+ (got: '${gateway}')\n${USAGE}`);
-  }
-  if (!SAFE_ID.test(agent)) {
-    throw new Error(`--agent must match [a-z0-9-]+ — path-safe (got: '${agent}')\n${USAGE}`);
-  }
   if (provider === "anthropic") {
     throw new Error(
       `--provider=anthropic uses the product Claude SSO flow; this tool captures only OpenAI auth.json\n${USAGE}`,
@@ -55,31 +42,33 @@ export function parseCaptureArgs(argv: string[]): CaptureArgs {
     throw new Error(`--uid is required and must match [A-Za-z0-9_-]+\n${USAGE}`);
   }
   if (!file) throw new Error(`--file is required\n${USAGE}`);
-  return { env: env as "test" | "prod", gateway, agent, provider: "openai", uid, file };
+  return { env: env as "test" | "prod", provider: "openai", uid, file };
 }
 
 export function secretNameFor(uid: string, provider: string): string {
   return `byosub-${uid}-${provider}`;
 }
 
-export function gatewayByosubPatch(
-  agent: string,
+export function userByosubIntegrationPatch(
   provider: "openai",
-  secretName: string,
 ): Record<string, unknown> {
   return {
-    byosub: {
-      [agent]: {
-        providers: {
-          [provider]: {
-            provider,
-            secretName,
-            status: "connected",
-            modelCredentialProvider: "openai-codex",
-          },
-        },
+    connected: true,
+    providers: {
+      [provider]: {
+        provider,
+        status: "connected",
+        connected: true,
+        modelCredentialProvider: "openai-codex",
       },
     },
+  };
+}
+
+function userByosubIntegrationWrite(provider: "openai"): Record<string, unknown> {
+  return {
+    ...userByosubIntegrationPatch(provider),
+    updatedAt: FieldValue.serverTimestamp(),
   };
 }
 
@@ -146,6 +135,10 @@ async function main(): Promise<void> {
     projectId: project,
   });
   const db = getFirestore();
+  const userRef = db.collection("users").doc(args.uid);
+  if (!(await userRef.get()).exists) {
+    throw new Error(`users/${args.uid} does not exist`);
+  }
 
   const secretName = secretNameFor(args.uid, args.provider);
   const { writeSecret } = await import("../lib/secret-manager.js");
@@ -155,13 +148,13 @@ async function main(): Promise<void> {
     labels: { byosub: "true", provider: args.provider },
   });
 
-  await db
-    .collection("glmGateways")
-    .doc(args.gateway)
-    .set(gatewayByosubPatch(args.agent, args.provider, secretName), { merge: true });
+  await userRef
+    .collection("integrations")
+    .doc("byosub")
+    .set(userByosubIntegrationWrite(args.provider), { merge: true });
 
   console.log(
-    `[capture-byosub] stored ${secretName} (${versionName}) + glmGateways/${args.gateway}.byosub[${args.agent}] → ${args.provider}`,
+    `[capture-byosub] stored ${secretName} (${versionName}) + users/${args.uid}/integrations/byosub → ${args.provider}`,
   );
 }
 

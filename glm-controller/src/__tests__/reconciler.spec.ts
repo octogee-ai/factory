@@ -1,1794 +1,717 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { startReconciler, snapshotHasReconcileRelevantChange } from "../index";
-import type { HelmInstancesMap } from "@octogee/shared/types/glm";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  durableRootRenderSnapshotChanges,
+  servingRevisionExistsForGatewayQuery,
+  snapshotHasDurableRootRenderChange,
+  snapshotHasReconcileRelevantChange,
+  startReconciler,
+} from "../index";
 
-describe("snapshotHasReconcileRelevantChange — ignore heartbeat-only writes", () => {
-  it("added/removed docs are always relevant", () => {
-    const fp = new Map<string, string>();
-    expect(
-      snapshotHasReconcileRelevantChange(
-        [{ type: "added", doc: { id: "a", data: () => ({ gatewayId: "a", imageTag: "x" }) } }],
-        fp,
-      ),
-    ).toBe(true);
-    expect(
-      snapshotHasReconcileRelevantChange([{ type: "removed", doc: { id: "a", data: () => ({}) } }], fp),
-    ).toBe(true);
+function durableRoot(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    gatewayId: "default",
+    createdAt: 1,
+    createdBy: "test",
+    updatedAt: 1,
+    updatedBy: "test",
+    latestRelease: 2,
+    desiredRelease: 2,
+    liveRelease: 2,
+    liveRevisionId: "default-r2",
+    trafficRevisionId: "default-r2",
+    desiredStatus: "running",
+    roll: null,
+    configSchemaVersion: 1,
+    profile: "standard",
+    gatewayClass: "shared",
+    imageProfile: "standard",
+    sizingTier: "medium",
+    computeClass: "test-spot",
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: null,
+    serviceAccount: null,
+    operatorAccess: null,
+    ownerUid: null,
+    coOwnerUids: [],
+    builderSlug: null,
+    openclawOverrides: null,
+    modelBrokerLimits: null,
+    preemption: null,
+    ...overrides,
+  };
+}
+
+function servingRevision(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    docKind: "revision",
+    revisionId: "default-r2",
+    gateway: "default",
+    release: 2,
+    lifecycle: "serving",
+    helm: { imageTag: "abc1234" },
+    ...overrides,
+  };
+}
+
+interface SnapshotCallbacks {
+  glm?: (snapshot?: { docChanges?: () => SnapshotChange[] }) => void;
+  roots?: (snapshot?: { docChanges?: () => SnapshotChange[] }) => void;
+}
+
+interface SnapshotChange {
+  type: string;
+  doc: { id: string; data(): Record<string, unknown> };
+}
+
+function makeDb(input: {
+  roots?: Record<string, Record<string, unknown>>;
+  revisions?: Record<string, Record<string, unknown>>;
+  releases?: Record<string, Record<number, Record<string, unknown>>>;
+  callbacks: SnapshotCallbacks;
+}) {
+  const roots = input.roots ?? {};
+  const revisions = input.revisions ?? {};
+  const releases = input.releases ?? {};
+  const snapshot = (store: Record<string, Record<string, unknown>>) => ({
+    docs: Object.entries(store).map(([id, data]) => ({ id, data: () => data })),
   });
+  const document = (store: Record<string, Record<string, unknown>>, id: string) => ({
+    get: async () => ({
+      exists: Object.prototype.hasOwnProperty.call(store, id),
+      data: () => store[id],
+    }),
+  });
+  return {
+    doc: (path: string) => {
+      const match = /^gateways\/([^/]+)\/releases\/(\d+)$/u.exec(path);
+      if (!match) throw new Error(`unexpected document ${path}`);
+      const data = releases[match[1]]?.[Number(match[2])];
+      return {
+        get: async () => ({
+          exists: data !== undefined,
+          data: () => data,
+        }),
+      };
+    },
+    collection: (name: string) => {
+      if (name === "gateways") {
+        return {
+          get: async () => snapshot(roots),
+          doc: (id: string) => document(roots, id),
+          onSnapshot: (callback: (snapshot?: { docChanges?: () => SnapshotChange[] }) => void) => {
+            input.callbacks.roots = callback;
+            return () => {};
+          },
+        };
+      }
+      if (name === "glmGateways") {
+        return {
+          get: async () => snapshot(revisions),
+          doc: (id: string) => document(revisions, id),
+          onSnapshot: (callback: (snapshot?: { docChanges?: () => SnapshotChange[] }) => void) => {
+            input.callbacks.glm = callback;
+            return () => {};
+          },
+        };
+      }
+      throw new Error(`unexpected collection ${name}`);
+    },
+  } as unknown as Parameters<typeof startReconciler>[0]["db"];
+}
 
-  it("a heartbeat-ONLY modification does NOT count as relevant (no reconcile churn)", () => {
-    const fp = new Map<string, string>();
+function releaseArtifact(
+  gatewayId: string,
+  release: number,
+  imageTag: string,
+): Record<string, unknown> {
+  return {
+    gatewayId,
+    release,
+    payload: {
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+      imageTag,
+    },
+  };
+}
+
+async function runTick(callbacks: SnapshotCallbacks): Promise<void> {
+  callbacks.glm?.();
+  callbacks.roots?.();
+  await vi.advanceTimersByTimeAsync(1_000);
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+describe("snapshot reconciliation filters", () => {
+  it("ignores a heartbeat-only runtime revision change", () => {
+    const fingerprints = new Map<string, string>();
     snapshotHasReconcileRelevantChange(
-      [{ type: "added", doc: { id: "a", data: () => ({ gatewayId: "a", imageTag: "x" }) } }],
-      fp,
+      [{ type: "added", doc: { id: "default-r2", data: () => servingRevision() } }],
+      fingerprints,
     );
+
     expect(
       snapshotHasReconcileRelevantChange(
         [
           {
             type: "modified",
             doc: {
-              id: "a",
-              data: () => ({ gatewayId: "a", imageTag: "x", heartbeat: { lastHeartbeatAt: 999 } }),
+              id: "default-r2",
+              data: () => ({ ...servingRevision(), heartbeat: { lastHeartbeatAt: 2 } }),
             },
           },
         ],
-        fp,
+        fingerprints,
       ),
     ).toBe(false);
   });
 
-  it("a desired-field modification IS relevant", () => {
-    const fp = new Map<string, string>();
-    snapshotHasReconcileRelevantChange(
-      [{ type: "added", doc: { id: "a", data: () => ({ gatewayId: "a", imageTag: "x" }) } }],
-      fp,
-    );
+  it("marks valid and invalid durable roots dirty for rendering", () => {
+    const fingerprints = new Map<string, string>();
     expect(
-      snapshotHasReconcileRelevantChange(
-        [{ type: "modified", doc: { id: "a", data: () => ({ gatewayId: "a", imageTag: "y" }) } }],
-        fp,
+      snapshotHasDurableRootRenderChange(
+        [{ type: "added", doc: { id: "default", data: () => durableRoot() } }],
+        fingerprints,
+      ),
+    ).toBe(true);
+    expect(
+      snapshotHasDurableRootRenderChange(
+        [{ type: "added", doc: { id: "legacy", data: () => ({ gatewayId: "legacy" }) } }],
+        fingerprints,
       ),
     ).toBe(true);
   });
-});
 
-const TEST_GATEWAY_GSA = "octogee-gateway@octogee.iam.gserviceaccount.com";
-
-interface FakeSnapshot {
-  docs: Array<{ id?: string; data: () => unknown }>;
-}
-
-function setGatewayServiceAccountEnv(): () => void {
-  const original = process.env.GATEWAY_SERVICE_ACCOUNT;
-  process.env.GATEWAY_SERVICE_ACCOUNT = TEST_GATEWAY_GSA;
-  return () => {
-    if (original === undefined) {
-      delete process.env.GATEWAY_SERVICE_ACCOUNT;
-    } else {
-      process.env.GATEWAY_SERVICE_ACCOUNT = original;
-    }
-  };
-}
-
-function makeFakeDb(args: {
-  glmGateways: Array<Record<string, unknown>>;
-  gatewayDocs?: Record<string, Record<string, unknown>>;
-  glmOperations?: Record<string, Record<string, unknown>>;
-  glmHeartbeatOverlay?: Record<string, Record<string, unknown>>;
-  onSnapshot: { register: (cb: () => void) => void };
-}) {
-  const gatewayDocs = args.gatewayDocs ?? {};
-  const glmOperations = args.glmOperations ?? {};
-  // glmGateways is now BOTH the desired-doc source (get, read LIVE from
-  // args.glmGateways so tests can mutate desired between ticks) AND the
-  // heartbeat target (doc(id).heartbeat) — the collision fix relocates
-  // heartbeat writes here. A separate overlay holds heartbeat sub-docs; tests
-  // may pass their own object to assert the relocated writes.
-  const glmHeartbeatOverlay: Record<string, Record<string, unknown>> =
-    args.glmHeartbeatOverlay ?? {};
-  const glmIdOf = (d: Record<string, unknown>): string =>
-    typeof d.gatewayId === "string" ? d.gatewayId : String(d.gateway ?? "");
-  const glmDesiredById = (id: string): Record<string, unknown> | undefined =>
-    args.glmGateways.find((d) => glmIdOf(d) === id);
-  const glmDoc = (id: string) => ({
-    get: async () => {
-      const desired = glmDesiredById(id);
-      const exists = desired !== undefined || Object.prototype.hasOwnProperty.call(glmHeartbeatOverlay, id);
-      return { exists, data: () => ({ ...(desired ?? {}), ...(glmHeartbeatOverlay[id] ?? {}) }) };
-    },
-    set: async (data: Record<string, unknown>, options?: { merge?: boolean }) => {
-      glmHeartbeatOverlay[id] = options?.merge
-        ? { ...(glmHeartbeatOverlay[id] ?? {}), ...data }
-        : data;
-    },
-    update: async (data: Record<string, unknown>) => {
-      glmHeartbeatOverlay[id] = { ...(glmHeartbeatOverlay[id] ?? {}), ...data };
-    },
-  });
-  function makeDocRef(store: Record<string, Record<string, unknown>>, id: string) {
-    return {
-      get: async () => ({
-        exists: Object.prototype.hasOwnProperty.call(store, id),
-        data: () => store[id],
-      }),
-      set: async (data: Record<string, unknown>, options?: { merge?: boolean }) => {
-        store[id] = options?.merge ? { ...(store[id] ?? {}), ...data } : data;
-      },
-      update: async (data: Record<string, unknown>) => {
-        store[id] = { ...(store[id] ?? {}), ...data };
-      },
-    };
-  }
-  return {
-    collection: (name: string) => {
-      if (name === "glmGateways") {
-        return {
-          get: async (): Promise<FakeSnapshot> => ({
-            docs: args.glmGateways.map((d) => {
-              const id = glmIdOf(d);
-              return {
-                id,
-                ref: glmDoc(id),
-                data: () => ({ ...d, ...(glmHeartbeatOverlay[id] ?? {}) }),
-              };
-            }),
-          }),
-          doc: (id: string) => glmDoc(id),
-          onSnapshot: (cb: () => void) => {
-            args.onSnapshot.register(cb);
-            return () => {};
-          },
-        };
-      }
-      if (name === "gateways") {
-        return {
-          get: async (): Promise<FakeSnapshot> => ({
-            docs: Object.entries(gatewayDocs).map(([id, data]) => ({
-              id,
-              ref: makeDocRef(gatewayDocs, id),
-              data: () => data,
-            })),
-          }),
-          doc: (id: string) => makeDocRef(gatewayDocs, id),
-        };
-      }
-      if (name === "glmOperations") {
-        const collection = {
-          where: (field: string, op: string, value: unknown) => {
-            if (op !== "==") throw new Error(`unexpected where op: ${op}`);
-            return {
-              get: async (): Promise<FakeSnapshot> => ({
-                docs: Object.entries(glmOperations)
-                  .filter(([, data]) => data[field] === value)
-                  .map(([id, data]) => ({
-                    id,
-                    ref: makeDocRef(glmOperations, id),
-                    data: () => data,
-                  })),
-              }),
-            };
-          },
-          doc: (id: string) => makeDocRef(glmOperations, id),
-        };
-        return collection;
-      }
-      throw new Error(`unexpected collection: ${name}`);
-    },
-    runTransaction: async <T,>(body: (txn: {
-      get: (ref: { get: () => Promise<unknown> }) => Promise<unknown>;
-      set: (
-        ref: { set: (data: Record<string, unknown>, options?: { merge?: boolean }) => Promise<void> },
-        data: Record<string, unknown>,
-        options?: { merge?: boolean },
-      ) => void;
-      update: (
-        ref: { update: (data: Record<string, unknown>) => Promise<void> },
-        data: Record<string, unknown>,
-      ) => void;
-    }) => Promise<T>) => {
-      const writes: Array<() => Promise<void>> = [];
-      const result = await body({
-        get: async (ref) => ref.get(),
-        set: (ref, data, options) => {
-          writes.push(() => ref.set(data, options));
-        },
-        update: (ref, data) => {
-          writes.push(() => ref.update(data));
-        },
-      });
-      await Promise.all(writes.map((write) => write()));
-      return result;
-    },
-  } as unknown as Parameters<typeof startReconciler>[0]["db"];
-}
-
-function makeFakeHelm(behavior: {
-  read?: () => Promise<HelmInstancesMap>;
-  upsertInstance?: () => Promise<void>;
-  removeInstance?: () => Promise<void>;
-}) {
-  return {
-    readDeployedInstances: vi.fn(behavior.read ?? (async () => ({}))),
-    upsertInstance: vi.fn(behavior.upsertInstance ?? (async () => undefined)),
-    removeInstance: vi.fn(behavior.removeInstance ?? (async () => undefined)),
-  } as unknown as Parameters<typeof startReconciler>[0]["helm"];
-}
-
-describe("startReconciler — periodic retry after failed tick", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  async function flush() {
-
-await Promise.resolve();
-    await Promise.resolve();
-  }
-
-  it("schedules a retry when a tick fails, then succeeds on the retry", async () => {
-    const snapCbs: Array<() => void> = [];
-    const log = vi.fn();
-    const helm = makeFakeHelm({
-      
-      upsertInstance: vi
-        .fn()
-        .mockRejectedValueOnce(new Error("another operation in progress"))
-        .mockResolvedValue(undefined) as unknown as () => Promise<void>,
-    });
-    const db = makeFakeDb({
-      glmGateways: [
-        {
-          gatewayId: "default",
-          imageRepository: "repo",
-          imageTag: "abc",
-          desiredStatus: "running",
-          createdBy: "ci",
-        },
+  it("queues changed valid and invalid roots but not a removed root for rendering", () => {
+    const fingerprints = new Map<string, string>();
+    durableRootRenderSnapshotChanges(
+      [
+        { type: "added", doc: { id: "default", data: () => durableRoot() } },
+        { type: "added", doc: { id: "malformed", data: () => ({ gatewayId: "malformed" }) } },
+        { type: "added", doc: { id: "gone", data: () => durableRoot({ gatewayId: "gone" }) } },
       ],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log,
-      reconcileRetryMs: 5_000,
-    });
-
-snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000); 
-    await flush();
-    await flush();
-
-    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
-    const failureLog = log.mock.calls.find(
-      ([msg]: [string]) => typeof msg === "string" && msg.includes("retry in 5000ms"),
+      fingerprints,
     );
-    expect(failureLog).toBeDefined();
 
-await vi.advanceTimersByTimeAsync(5_000);
-    await flush();
-    await flush();
-
-    expect(helm.upsertInstance).toHaveBeenCalledTimes(2);
-    stop();
-  });
-
-  it("invokes reconcileImagePins with the prod/test env label (not the raw namespace) and the desired instances each tick", async () => {
-    const snapCbs: Array<() => void> = [];
-    const log = vi.fn();
-    const helm = makeFakeHelm({ upsertInstance: async () => undefined });
-    const pinSpy = vi.fn(async () => {});
-    const db = makeFakeDb({
-      glmGateways: [
-        { gatewayId: "default", imageRepository: "repo", imageTag: "abc", desiredStatus: "running", createdBy: "ci" },
-      ],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-    const stop = startReconciler({
-      db,
-      helm,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log,
-      reconcileImagePins: pinSpy,
-      reconcileRetryMs: 5_000,
-    });
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-    expect(pinSpy).toHaveBeenCalled();
-    expect(pinSpy.mock.calls[0][0]).toBe("prod");
-    expect(pinSpy.mock.calls[0][1]).toContainEqual(
-      expect.objectContaining({ imageRepository: "repo", imageTag: "abc" }),
-    );
-    stop();
-  });
-
-  it("a throwing reconcileImagePins does not break the fleet reconcile", async () => {
-    const snapCbs: Array<() => void> = [];
-    const log = vi.fn();
-    const helm = makeFakeHelm({ upsertInstance: async () => undefined });
-    const db = makeFakeDb({
-      glmGateways: [
-        { gatewayId: "default", imageRepository: "repo", imageTag: "abc", desiredStatus: "running", createdBy: "ci" },
-      ],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-    const stop = startReconciler({
-      db,
-      helm,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log,
-      reconcileImagePins: vi.fn(async () => {
-        throw new Error("boom");
-      }),
-      reconcileRetryMs: 5_000,
-    });
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-    expect(helm.upsertInstance).toHaveBeenCalled();
     expect(
-      log.mock.calls.some(([m]: [string]) => typeof m === "string" && m.includes("image-pins")),
-    ).toBe(true);
-    stop();
+      durableRootRenderSnapshotChanges(
+        [
+          {
+            type: "modified",
+            doc: { id: "default", data: () => durableRoot({ desiredRelease: 3 }) },
+          },
+          {
+            type: "modified",
+            doc: { id: "malformed", data: () => ({ gatewayId: "malformed", changed: true }) },
+          },
+          { type: "removed", doc: { id: "gone", data: () => ({}) } },
+        ],
+        fingerprints,
+      ),
+    ).toEqual({ shouldSchedule: true, gatewayIds: ["default", "malformed"] });
   });
 
-  it("does NOT schedule a retry when a tick succeeds", async () => {
-    const snapCbs: Array<() => void> = [];
-    const log = vi.fn();
-    const helm = makeFakeHelm({
-      upsertInstance: async () => undefined,
-    });
-    const db = makeFakeDb({
-      glmGateways: [
+  it("re-renders a root when guarded compaction clears its legacy bridge", () => {
+    const fingerprints = new Map<string, string>();
+    durableRootRenderSnapshotChanges(
+      [
         {
-          gatewayId: "default",
-          imageRepository: "repo",
-          imageTag: "abc",
-          desiredStatus: "running",
-          createdBy: "ci",
+          type: "added",
+          doc: {
+            id: "default",
+            data: () => durableRoot({
+              legacyBackfill: { sourceGlmGatewayIds: ["default-blue"], startedAt: 1 },
+            }),
+          },
         },
       ],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log,
-      reconcileRetryMs: 5_000,
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-
-    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
-
-await vi.advanceTimersByTimeAsync(20_000);
-    await flush();
-
-    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
-    stop();
-  });
-
-  it("passes builderSlug from desired state through to helm upsert", async () => {
-    const restoreGatewayServiceAccount = setGatewayServiceAccountEnv();
-    const snapCbs: Array<() => void> = [];
-    const log = vi.fn();
-    const helm = makeFakeHelm({
-      upsertInstance: async () => undefined,
-    });
-    const db = makeFakeDb({
-      glmGateways: [
-        {
-          gatewayId: "eggman",
-          imageRepository: "repo",
-          imageTag: "abc",
-          desiredStatus: "running",
-          createdBy: "ci",
-          gatewayClass: "operator",
-          imageProfile: "operator",
-          profile: "operator",
-          builderSlug: "eggman",
-        },
-      ],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log,
-      reconcileRetryMs: 5_000,
-      ensureGatewayWorkloadIdentity: vi.fn(async () => undefined),
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-
-    expect(helm.upsertInstance).toHaveBeenCalledWith(
-      expect.objectContaining({ builderSlug: "eggman" }),
+      fingerprints,
     );
-    stop();
-    restoreGatewayServiceAccount();
-  });
 
-  it("runs a follow-up tick when desired state changes during an in-flight reconcile", async () => {
-    const snapCbs: Array<() => void> = [];
-    const log = vi.fn();
-    let resolveFirstUpgrade: () => void = () => {};
-    const upsertInstance = vi
-      .fn()
-      .mockImplementationOnce(
-        () =>
-          new Promise<void>((resolve) => {
-            resolveFirstUpgrade = resolve;
-          }),
-      )
-      .mockResolvedValue(undefined);
-    const desired = [
-      {
-        gatewayId: "default",
-        imageRepository: "repo",
-        imageTag: "abc",
-        desiredStatus: "running",
-        createdBy: "ci",
-      },
-    ];
-    const helm = makeFakeHelm({
-      upsertInstance: upsertInstance as unknown as () => Promise<void>,
-    });
-    const db = makeFakeDb({
-      glmGateways: desired,
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log,
-      reconcileRetryMs: 5_000,
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
-
-    desired[0] = { ...desired[0], imageTag: "def" };
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
-
-    resolveFirstUpgrade();
-    await flush();
-    await flush();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-
-    expect(helm.upsertInstance).toHaveBeenCalledTimes(2);
-    expect(helm.upsertInstance).toHaveBeenLastCalledWith(
-      expect.objectContaining({ imageTag: "def" }),
-    );
-    stop();
-  });
-
-  it("does NOT schedule a retry after stop() has been called (no post-stop fires)", async () => {
-    const snapCbs: Array<() => void> = [];
-    const log = vi.fn();
-    let resolveUpgrade: (v: unknown) => void = () => {};
-    const helm = makeFakeHelm({
-      upsertInstance: () =>
-        new Promise<void>((_, reject) => {
-          resolveUpgrade = (() => reject(new Error("boom"))) as typeof resolveUpgrade;
-        }),
-    });
-    const db = makeFakeDb({
-      glmGateways: [
-        {
-          gatewayId: "default",
-          imageRepository: "repo",
-          imageTag: "abc",
-          desiredStatus: "running",
-          createdBy: "ci",
-        },
-      ],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log,
-      reconcileRetryMs: 5_000,
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-
-stop();
-
-resolveUpgrade(undefined);
-    await flush();
-    await flush();
-
-    await vi.advanceTimersByTimeAsync(60_000);
-    await flush();
-    
-    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
-  });
-
-  it("calls syncFleetIngress after applyChanges with the gatewayId of every targeted gateway", async () => {
-    const snapCbs: Array<() => void> = [];
-    const log = vi.fn();
-    const helm = makeFakeHelm({
-      upsertInstance: async () => undefined,
-    });
-    const syncFleetIngress = vi.fn(async () => {});
-    const db = makeFakeDb({
-      glmGateways: [
-        {
-          gatewayId: "default",
-          imageRepository: "repo",
-          imageTag: "abc",
-          desiredStatus: "running",
-          createdBy: "ci",
-        },
-        {
-          gatewayId: "canary",
-          imageRepository: "repo",
-          imageTag: "abc",
-          desiredStatus: "running",
-          createdBy: "ci",
-        },
-        {
-          gatewayId: "retired-stale",
-          imageRepository: "repo",
-          imageTag: "abc",
-          desiredStatus: "retired",
-          createdBy: "ci",
-        },
-      ],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log,
-      syncFleetIngress,
-      reconcileRetryMs: 5_000,
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-
-    expect(syncFleetIngress).toHaveBeenCalledTimes(1);
-    const arg = (syncFleetIngress.mock.calls[0] ?? [])[0] as
-      | ReadonlyArray<{ gatewayId: string }>
-      | undefined;
-    expect(arg).toBeDefined();
-    expect(arg!.map((g) => g.gatewayId).sort()).toEqual(["canary", "default"]);
-    stop();
-  });
-
-  it("syncs the model-key source before mirroring the K8s model-key secret", async () => {
-    const snapCbs: Array<() => void> = [];
-    const log = vi.fn();
-    const order: string[] = [];
-    const helm = makeFakeHelm({
-      upsertInstance: async () => undefined,
-    });
-    const modelKeySourceIssuer = {
-      syncGatewayModelKeySource: vi.fn(async () => {
-        order.push("source");
-        return {
-          gatewayId: "jack",
-          secretName: "gateway-model-key-jack",
-          changed: true,
-          action: "issued" as const,
-        };
-      }),
-    };
-    const modelKeySecretEnsurer = {
-      syncGatewayModelKeySecret: vi.fn(async () => {
-        order.push("secret");
-        return {
-          gatewayId: "jack",
-          secretName: "gateway-model-key-jack",
-          changed: true,
-          action: "upserted" as const,
-        };
-      }),
-    };
-    const restartGatewayDeployment = vi.fn(async () => {});
-    const db = makeFakeDb({
-      glmGateways: [
-        {
-          gatewayId: "jack",
-          gatewayClass: "builder",
-          imageRepository: "repo",
-          imageTag: "abc",
-          desiredStatus: "running",
-          createdBy: "ci",
-        },
-      ],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      modelKeySourceIssuer,
-      modelKeySecretEnsurer,
-      restartGatewayDeployment,
-      log,
-      reconcileRetryMs: 5_000,
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-
-    expect(order).toEqual(["source", "secret"]);
-    expect(restartGatewayDeployment).not.toHaveBeenCalled();
-    stop();
-  });
-
-  it("calls syncFleetIngress even when there are no helm changes — keeps the Ingress in sync after Helm clobbers", async () => {
-    const snapCbs: Array<() => void> = [];
-    const log = vi.fn();
-    const desired = {
-      gatewayId: "default",
-      imageRepository: "repo",
-      imageTag: "abc",
-      desiredStatus: "running",
-      createdBy: "ci",
-    };
-    const helm = makeFakeHelm({
-      
-      read: async () => ({
-        default: {
-          enabled: true,
-          image: { repository: "repo", tag: "abc" },
-          gatewayId: "default",
-          replicas: 1,
-        },
-      }),
-    });
-    const syncFleetIngress = vi.fn(async () => {});
-    const db = makeFakeDb({
-      glmGateways: [desired],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log,
-      syncFleetIngress,
-      reconcileRetryMs: 5_000,
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-
-    expect(helm.upsertInstance).not.toHaveBeenCalled();
-    expect(syncFleetIngress).toHaveBeenCalledTimes(1);
-    stop();
-  });
-
-  it("ensures the gateway KSA on every no-diff reconcile tick", async () => {
-    const snapCbs: Array<() => void> = [];
-    const desired = {
-      gatewayId: "default-green",
-      imageRepository: "repo",
-      imageTag: "abc",
-      desiredStatus: "running",
-      createdBy: "ci",
-    };
-    const helm = makeFakeHelm({
-      read: async () => ({
-        "default-green": {
-          enabled: true,
-          image: { repository: "repo", tag: "abc" },
-          gatewayId: "default-green",
-          replicas: 1,
-        },
-      }),
-    });
-    const ensureGatewayServiceAccount = vi.fn(async () => {});
-    const db = makeFakeDb({
-      glmGateways: [desired],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log: vi.fn(),
-      ensureGatewayServiceAccount,
-      reconcileRetryMs: 5_000,
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-
-    expect(helm.upsertInstance).not.toHaveBeenCalled();
-    expect(ensureGatewayServiceAccount).toHaveBeenCalledWith({
-      namespace: "octogee",
-      serviceAccountName: "octogee-gw-default-green",
-      annotations: undefined,
-    });
-    stop();
-  });
-
-  it("schedules a retry when syncFleetIngress throws", async () => {
-    const snapCbs: Array<() => void> = [];
-    const log = vi.fn();
-    const helm = makeFakeHelm({});
-    const syncFleetIngress = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("kubectl exec failed"))
-      .mockResolvedValue(undefined);
-    const db = makeFakeDb({
-      glmGateways: [
-        {
-          gatewayId: "default",
-          imageRepository: "repo",
-          imageTag: "abc",
-          desiredStatus: "running",
-          createdBy: "ci",
-        },
-      ],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log,
-      syncFleetIngress,
-      reconcileRetryMs: 5_000,
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-    expect(syncFleetIngress).toHaveBeenCalledTimes(1);
-    const failureLog = log.mock.calls.find(
-      ([msg]: [string]) => typeof msg === "string" && msg.includes("retry in 5000ms"),
-    );
-    expect(failureLog).toBeDefined();
-
-    await vi.advanceTimersByTimeAsync(5_000);
-    await flush();
-    await flush();
-    expect(syncFleetIngress).toHaveBeenCalledTimes(2);
-    stop();
-  });
-
-  it("a fresh snapshot during a pending retry cancels the retry and runs a debounced tick", async () => {
-    const snapCbs: Array<() => void> = [];
-    const log = vi.fn();
-    const upgradeCalls: number[] = [];
-    let upgradeCounter = 0;
-    const helm = makeFakeHelm({
-      upsertInstance: vi
-        .fn()
-        .mockImplementationOnce(async () => {
-          upgradeCounter++;
-          upgradeCalls.push(upgradeCounter);
-          throw new Error("boom");
-        })
-        .mockImplementation(async () => {
-          upgradeCounter++;
-          upgradeCalls.push(upgradeCounter);
-        }) as unknown as () => Promise<void>,
-    });
-    const db = makeFakeDb({
-      glmGateways: [
-        {
-          gatewayId: "default",
-          imageRepository: "repo",
-          imageTag: "abc",
-          desiredStatus: "running",
-          createdBy: "ci",
-        },
-      ],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log,
-      reconcileRetryMs: 60_000, // long retry — we'll preempt with a snapshot
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-    expect(helm.upsertInstance).toHaveBeenCalledTimes(1); 
-
-snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-    expect(helm.upsertInstance).toHaveBeenCalledTimes(2); 
-
-await vi.advanceTimersByTimeAsync(120_000);
-    await flush();
-    expect(helm.upsertInstance).toHaveBeenCalledTimes(2);
-    stop();
+    expect(
+      durableRootRenderSnapshotChanges(
+        [{ type: "modified", doc: { id: "default", data: () => durableRoot({ legacyBackfill: null }) } }],
+        fingerprints,
+      ),
+    ).toEqual({ shouldSchedule: true, gatewayIds: ["default"] });
   });
 });
 
-describe("startReconciler — glmGateways holds two doc kinds during expand", () => {
+describe("servingRevisionExistsForGatewayQuery", () => {
+  const legacyBridgeSource = () => ({
+    gatewayId: "default-blue",
+    gateway: "default",
+    desiredStatus: "running",
+    imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+    imageTag: "abc1234",
+    createdBy: "legacy-controller",
+  });
+
+  it("skips only the marker-authorized bridge source while checking canonical revisions", () => {
+    const root = durableRoot({
+      latestRelease: 1,
+      desiredRelease: 1,
+      liveRelease: null,
+      liveRevisionId: null,
+      trafficRevisionId: null,
+      legacyBackfill: { sourceGlmGatewayIds: ["default-blue"], startedAt: 1 },
+    });
+
+    expect(
+      servingRevisionExistsForGatewayQuery(
+        [
+          { id: "default-blue", data: legacyBridgeSource },
+          { id: "default-r2", data: servingRevision },
+        ],
+        root,
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects an unlisted or malformed non-revision query result", () => {
+    const root = durableRoot({
+      latestRelease: 1,
+      desiredRelease: 1,
+      liveRelease: null,
+      liveRevisionId: null,
+      trafficRevisionId: null,
+      legacyBackfill: { sourceGlmGatewayIds: ["default-blue"], startedAt: 1 },
+    });
+
+    expect(() =>
+      servingRevisionExistsForGatewayQuery(
+        [
+          { id: "default-r2", data: servingRevision },
+          { id: "default-green", data: legacyBridgeSource },
+        ],
+        root,
+      ),
+    ).toThrow(/not a revision realization/u);
+    expect(() =>
+      servingRevisionExistsForGatewayQuery(
+        [{ id: "default-blue", data: () => ({ ...legacyBridgeSource(), createdBy: undefined }) }],
+        root,
+      ),
+    ).toThrow(/not a revision realization/u);
+  });
+});
+
+describe("startReconciler — durable root authority", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it("filters {gw}-rN revision-realization docs out of the legacy Helm targets (no undefined drift)", async () => {
-    const restore = setGatewayServiceAccountEnv();
-    const snapCbs: Array<() => void> = [];
-    const helm = makeFakeHelm({ upsertInstance: async () => undefined });
-    const db = makeFakeDb({
-      glmGateways: [
-        { gatewayId: "default", imageRepository: "repo", imageTag: "abc", desiredStatus: "running", createdBy: "ci" },
-        // A converge-arm revision doc — must NOT become a legacy Helm target.
-        {
-          docKind: "revision",
-          revisionId: "default-r1",
-          gateway: "default",
-          release: 1,
-          lifecycle: "provisioning",
-        },
-      ],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
+  it("does not treat a bare glmGateways document as deployable desired state", async () => {
+    const callbacks: SnapshotCallbacks = {};
+    const syncFleetIngress = vi.fn(async () => {});
+    const log = vi.fn();
+    const modelKeySourceIssuer = { syncGatewayModelKeySource: vi.fn(async () => ({ changed: false })) };
+    const modelKeySecretEnsurer = { syncGatewayModelKeySecret: vi.fn(async () => ({ changed: false })) };
+    const convergeEmpty = vi.fn(async () => {});
     const stop = startReconciler({
-      db,
-      helm,
+      db: makeDb({
+        callbacks,
+        revisions: {
+          legacy: {
+            gatewayId: "legacy",
+            desiredStatus: "running",
+            imageRepository: "repo",
+            imageTag: "abc1234",
+          },
+        },
+      }),
+      helm: {} as Parameters<typeof startReconciler>[0]["helm"],
       handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      modelKeySourceIssuer,
+      modelKeySecretEnsurer,
+      convergeEmpty,
+      syncFleetIngress,
+      log,
+    });
+
+    await runTick(callbacks);
+
+    expect(modelKeySourceIssuer.syncGatewayModelKeySource).not.toHaveBeenCalled();
+    expect(modelKeySecretEnsurer.syncGatewayModelKeySecret).not.toHaveBeenCalled();
+    expect(syncFleetIngress).not.toHaveBeenCalled();
+    expect(convergeEmpty).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/legacy glmGateway document.*legacy/u));
+    stop();
+  });
+
+  it("materializes only an explicitly backfilled legacy bridge while holding normal fleet mutations", async () => {
+    const callbacks: SnapshotCallbacks = {};
+    const syncFleetIngress = vi.fn(async () => {});
+    const convergeEmpty = vi.fn(async () => {});
+    const convergeRoll = vi.fn(async () => {});
+    const renderDurableRootConfigs = vi.fn(async () => ({ failedGatewayIds: [] }));
+    const modelKeySourceIssuer = { syncGatewayModelKeySource: vi.fn(async () => ({ changed: false })) };
+    const modelKeySecretEnsurer = { syncGatewayModelKeySecret: vi.fn(async () => ({ changed: false })) };
+    const stop = startReconciler({
+      db: makeDb({
+        callbacks,
+        roots: {
+          default: durableRoot({
+            latestRelease: 1,
+            desiredRelease: 1,
+            liveRelease: null,
+            liveRevisionId: null,
+            trafficRevisionId: null,
+            legacyBackfill: { sourceGlmGatewayIds: ["default-blue"], startedAt: 1 },
+          }),
+          bender: durableRoot({ gatewayId: "bender" }),
+        },
+        revisions: {
+          "default-blue": {
+            gatewayId: "default-blue",
+            desiredStatus: "running",
+            imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+            imageTag: "abc1234",
+            createdBy: "legacy-controller",
+          },
+        },
+      }),
+      helm: {} as Parameters<typeof startReconciler>[0]["helm"],
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      modelKeySourceIssuer,
+      modelKeySecretEnsurer,
+      convergeEmpty,
+      convergeRoll,
+      renderDurableRootConfigs,
+      syncFleetIngress,
       log: vi.fn(),
     });
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await Promise.resolve();
-    await Promise.resolve();
 
-    // Only the legacy bare gateway is upserted; the revision doc is not a target.
-    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
-    expect(helm.upsertInstance).toHaveBeenCalledWith(
+    await runTick(callbacks);
+
+    expect(modelKeySourceIssuer.syncGatewayModelKeySource).toHaveBeenCalledTimes(1);
+    expect(modelKeySecretEnsurer.syncGatewayModelKeySecret).toHaveBeenCalledTimes(1);
+    expect(modelKeySourceIssuer.syncGatewayModelKeySource).toHaveBeenCalledWith(
       expect.objectContaining({ gatewayId: "default" }),
     );
-    stop();
-    restore();
-  });
-});
-
-describe("startReconciler — issue #997: a PROD platform release must not roll customer gateways", () => {
-
-beforeEach(() => {
-    vi.useFakeTimers();
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  async function flush() {
-    await Promise.resolve();
-    await Promise.resolve();
-  }
-
-  it("does NOT upsert (roll) an existing customer gateway when only the baked-in chart fingerprint changed", async () => {
-    const snapCbs: Array<() => void> = [];
-    const log = vi.fn();
-    const helm = makeFakeHelm({
-      read: async () => ({
-        default: {
-          enabled: true,
-          image: { repository: "repo", tag: "sha-prod" },
-          gatewayId: "default",
-          chartFingerprint: "fp-OLD",
-          replicas: 1,
-        },
-      }),
-    });
-    const db = makeFakeDb({
-      glmGateways: [
-        {
-          gatewayId: "default",
-          imageRepository: "repo",
-          imageTag: "sha-prod",
-          desiredStatus: "running",
-          createdBy: "operator",
-        },
-      ],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log,
-      
-      chartFingerprint: "fp-NEW",
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-
-    expect(helm.upsertInstance).not.toHaveBeenCalled();
-    const noChange = log.mock.calls.find(
-      ([msg]: [string]) => typeof msg === "string" && msg.includes("no changes"),
+    expect(modelKeySecretEnsurer.syncGatewayModelKeySecret).toHaveBeenCalledWith(
+      expect.objectContaining({ gatewayId: "default" }),
     );
-    expect(noChange).toBeDefined();
+    expect(convergeEmpty).toHaveBeenCalledWith(["default"]);
+    expect(renderDurableRootConfigs).not.toHaveBeenCalled();
+    expect(convergeRoll).not.toHaveBeenCalled();
+    expect(syncFleetIngress).not.toHaveBeenCalled();
     stop();
   });
 
-  it("STILL upserts on a fresh PROD cluster — empty actual is a `create`, never gated by the chart-fingerprint policy", async () => {
-    const snapCbs: Array<() => void> = [];
+  it("fails closed when a bridge marker loses its listed legacy source", async () => {
+    const callbacks: SnapshotCallbacks = {};
+    const syncFleetIngress = vi.fn(async () => {});
+    const convergeEmpty = vi.fn(async () => {});
+    const convergeRoll = vi.fn(async () => {});
+    const modelKeySourceIssuer = { syncGatewayModelKeySource: vi.fn(async () => ({ changed: false })) };
+    const modelKeySecretEnsurer = { syncGatewayModelKeySecret: vi.fn(async () => ({ changed: false })) };
     const log = vi.fn();
-    const helm = makeFakeHelm({
-      read: async () => ({}), // fresh cluster: no deployed gateway releases
-    });
-    const db = makeFakeDb({
-      glmGateways: [
-        {
-          gatewayId: "default",
-          imageRepository: "repo",
-          imageTag: "sha-prod",
-          desiredStatus: "running",
-          createdBy: "controller-default-bootstrap",
-        },
-      ],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
     const stop = startReconciler({
-      db,
-      helm,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log,
-      chartFingerprint: "fp-NEW",
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-
-    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
-    stop();
-  });
-
-  it("ensures generated operator KSA Workload Identity before helm upsert", async () => {
-    const restoreGatewayServiceAccount = setGatewayServiceAccountEnv();
-    const snapCbs: Array<() => void> = [];
-    const log = vi.fn();
-    const ensureGatewayWorkloadIdentity = vi.fn(async () => undefined);
-    const helm = makeFakeHelm({
-      upsertInstance: async () => undefined,
-    });
-    const db = makeFakeDb({
-      glmGateways: [
-        {
-          gatewayId: "bender-green",
-          imageRepository: "repo",
-          imageTag: "abc",
-          desiredStatus: "running",
-          createdBy: "ci",
-          profile: "operator",
-          ownerUid: "uid-chris",
-          serviceAccountName: "octogee-gw-bender-green",
-          serviceAccount: { create: true },
-        },
-      ],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log,
-      reconcileRetryMs: 5_000,
-      ensureGatewayWorkloadIdentity,
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-
-    expect(ensureGatewayWorkloadIdentity).toHaveBeenCalledWith({
-      serviceAccountName: "octogee-gw-bender-green",
-    });
-    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
-    expect(ensureGatewayWorkloadIdentity.mock.invocationCallOrder[0]).toBeLessThan(
-      helm.upsertInstance.mock.invocationCallOrder[0],
-    );
-    stop();
-    restoreGatewayServiceAccount();
-  });
-
-  it("STILL upserts when the operator changes the desired imageTag (operator-driven PROD rollout via promote-gateway.ts)", async () => {
-    const snapCbs: Array<() => void> = [];
-    const log = vi.fn();
-    const helm = makeFakeHelm({
-      read: async () => ({
-        default: {
-          enabled: true,
-          image: { repository: "repo", tag: "sha-OLD" },
-          gatewayId: "default",
-          chartFingerprint: "fp-OLD",
+      db: makeDb({
+        callbacks,
+        roots: {
+          default: durableRoot({
+            latestRelease: 1,
+            desiredRelease: 1,
+            liveRelease: null,
+            liveRevisionId: null,
+            trafficRevisionId: null,
+            legacyBackfill: { sourceGlmGatewayIds: ["default-blue"], startedAt: 1 },
+          }),
         },
       }),
-    });
-    const db = makeFakeDb({
-      glmGateways: [
-        {
-          gatewayId: "default",
-          imageRepository: "repo",
-          imageTag: "sha-NEW",
-          desiredStatus: "running",
-          createdBy: "operator",
-        },
-      ],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
+      helm: {} as Parameters<typeof startReconciler>[0]["helm"],
       handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log,
-      chartFingerprint: "fp-NEW",
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-
-    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
-    stop();
-  });
-});
-
-describe("startReconciler — orphan vs drainee drift classification", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  async function flush() {
-    await Promise.resolve();
-    await Promise.resolve();
-  }
-
-  it("logs a 🧟 warn line when a helm release has no matching glmGateways doc (orphan)", async () => {
-    const snapCbs: Array<() => void> = [];
-    const log = vi.fn();
-    const helm = makeFakeHelm({
-
-read: async () => ({
-        orphan: {
-          enabled: true,
-          image: { repository: "repo", tag: "abc1234" },
-          gatewayId: "orphan",
-        },
-      }),
-    });
-    const db = makeFakeDb({
-      glmGateways: [], // intentionally empty — no doc matches orphan
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log,
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-
-    const orphanWarn = log.mock.calls.find(
-      ([msg]: [string]) =>
-        typeof msg === "string" && msg.includes("⚠") && msg.includes("🧟"),
-    );
-    expect(orphanWarn).toBeDefined();
-    expect(orphanWarn?.[0]).toContain("orphan");
-    expect(orphanWarn?.[0]).toContain("orphan");
-    stop();
-  });
-
-  it("does NOT use the orphan glyph for retired-with-customers drainees (legitimate preserve-drift)", async () => {
-    const snapCbs: Array<() => void> = [];
-    const log = vi.fn();
-    const helm = makeFakeHelm({
-      read: async () => ({
-        draining: {
-          enabled: true,
-          image: { repository: "repo", tag: "abc1234" },
-          gatewayId: "draining",
-        },
-      }),
-    });
-
-const db = {
-      collection: (name: string) => {
-        if (name === "glmGateways") {
-          return {
-            get: async () => ({
-              docs: [
-                {
-                  data: () => ({
-                    gatewayId: "draining",
-                    imageRepository: "repo",
-                    imageTag: "abc1234",
-                    desiredStatus: "retired",
-                    createdBy: "ci",
-                  }),
-                },
-              ],
-            }),
-            onSnapshot: (cb: () => void) => {
-              snapCbs.push(cb);
-              return () => {};
-            },
-          };
-        }
-        if (name === "gateways") {
-          return {
-            get: async () => ({
-              docs: [
-                {
-                  id: "draining",
-                  data: () => ({ mountedCustomers: ["cust-1", "cust-2"] }),
-                },
-              ],
-            }),
-          };
-        }
-        throw new Error(`unexpected: ${name}`);
-      },
-    } as unknown as Parameters<typeof startReconciler>[0]["db"];
-
-    const stop = startReconciler({
-      db,
-      helm,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log,
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-
-    const orphanWarn = log.mock.calls.find(
-      ([msg]: [string]) =>
-        typeof msg === "string" && msg.includes("🧟"),
-    );
-    expect(orphanWarn).toBeUndefined();
-    const drainNote = log.mock.calls.find(
-      ([msg]: [string]) =>
-        typeof msg === "string" && msg.includes("draining") && msg.includes("preserved"),
-    );
-    expect(drainNote).toBeDefined();
-    stop();
-  });
-});
-
-function makeFakeKubeOps(behavior: {
-  scale?: () => Promise<void>;
-  restart?: () => Promise<void>;
-  readReplicas?: () => Promise<number | null>;
-  readAvailableReplicas?: () => Promise<number | null>;
-} = {}) {
-  return {
-    scaleDeployment: vi.fn(behavior.scale ?? (async () => undefined)),
-    restartOpenClawInPlace: vi.fn(behavior.restart ?? (async () => undefined)),
-    readDeployedReplicas: vi.fn(behavior.readReplicas ?? (async () => null)),
-    readAvailableReplicas: vi.fn(behavior.readAvailableReplicas ?? (async () => null)),
-    deletePersistentVolumeClaim: vi.fn(async () => undefined),
-  } as unknown as Parameters<typeof startReconciler>[0]["kubeOps"];
-}
-
-describe("startReconciler — kubectl scale shortcut for replicas-only diffs", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  async function flush() {
-    await Promise.resolve();
-    await Promise.resolve();
-  }
-
-  it("paused desired-state on a running release calls kubeOps.scaleDeployment(replicas=0), not helm.upsertInstance", async () => {
-    const snapCbs: Array<() => void> = [];
-    const helm = makeFakeHelm({
-      read: async () => ({
-        default: {
-          enabled: true,
-          image: { repository: "repo", tag: "abc" },
-          gatewayId: "default",
-          replicas: 1,
-        },
-      }),
-    });
-    const kubeOps = makeFakeKubeOps({
-      readReplicas: async () => 1,
-    });
-    const db = makeFakeDb({
-      glmGateways: [
-        {
-          gatewayId: "default",
-          imageRepository: "repo",
-          imageTag: "abc",
-          desiredStatus: "paused",
-          createdBy: "ci",
-        },
-      ],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      kubeOps,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log: vi.fn(),
-      reconcileRetryMs: 5_000,
-      ensureGatewayWorkloadIdentity: vi.fn(async () => undefined),
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-
-    expect(kubeOps!.scaleDeployment).toHaveBeenCalledTimes(1);
-    expect(kubeOps!.scaleDeployment).toHaveBeenCalledWith({
-      namespace: expect.any(String),
-      name: "octogee-gateway-default",
-      replicas: 0,
-    });
-    expect(helm.upsertInstance).not.toHaveBeenCalled();
-    stop();
-  });
-
-  it("resume (paused → running) calls kubeOps.scaleDeployment(replicas=1), not helm.upsertInstance", async () => {
-    const snapCbs: Array<() => void> = [];
-    const helm = makeFakeHelm({
-      read: async () => ({
-        bender: {
-          enabled: true,
-          image: { repository: "repo", tag: "abc" },
-          gatewayId: "bender",
-          replicas: 0,
-        },
-      }),
-    });
-    const kubeOps = makeFakeKubeOps({
-      readReplicas: async () => 0,
-    });
-    const db = makeFakeDb({
-      glmGateways: [
-        {
-          gatewayId: "bender",
-          imageRepository: "repo",
-          imageTag: "abc",
-          desiredStatus: "running",
-          createdBy: "ci",
-        },
-      ],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      kubeOps,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log: vi.fn(),
-      reconcileRetryMs: 5_000,
-      ensureGatewayWorkloadIdentity: vi.fn(async () => undefined),
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-
-    expect(kubeOps!.scaleDeployment).toHaveBeenCalledWith({
-      namespace: expect.any(String),
-      name: "octogee-gateway-bender",
-      replicas: 1,
-    });
-    expect(helm.upsertInstance).not.toHaveBeenCalled();
-    stop();
-  });
-
-  it("chart-shape change (image tag + replicas flip) still goes through helm.upsertInstance, NOT kubectl scale", async () => {
-    const snapCbs: Array<() => void> = [];
-    const helm = makeFakeHelm({
-      read: async () => ({
-        default: {
-          enabled: true,
-          image: { repository: "repo", tag: "old-tag" },
-          gatewayId: "default",
-          replicas: 1,
-        },
-      }),
-    });
-    const kubeOps = makeFakeKubeOps({
-      readReplicas: async () => 1,
-    });
-    const db = makeFakeDb({
-      glmGateways: [
-        {
-          gatewayId: "default",
-          imageRepository: "repo",
-          imageTag: "new-tag",
-          desiredStatus: "paused",
-          createdBy: "ci",
-        },
-      ],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      kubeOps,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log: vi.fn(),
-      reconcileRetryMs: 5_000,
-      ensureGatewayWorkloadIdentity: vi.fn(async () => undefined),
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-
-    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
-    expect(kubeOps!.scaleDeployment).not.toHaveBeenCalled();
-    stop();
-  });
-
-  it("reads live replicas from kube to compute actual.replicas (helm-stored value is overridden)", async () => {
-    const snapCbs: Array<() => void> = [];
-    const helm = makeFakeHelm({
-      read: async () => ({
-        default: {
-          enabled: true,
-          image: { repository: "repo", tag: "abc" },
-          gatewayId: "default",
-          replicas: 1,
-        },
-      }),
-    });
-    const kubeOps = makeFakeKubeOps({
-      readReplicas: async () => 0,
-    });
-    const db = makeFakeDb({
-      glmGateways: [
-        {
-          gatewayId: "default",
-          imageRepository: "repo",
-          imageTag: "abc",
-          desiredStatus: "paused",
-          createdBy: "ci",
-        },
-      ],
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      kubeOps,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log: vi.fn(),
-      reconcileRetryMs: 5_000,
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-
-    expect(kubeOps!.readDeployedReplicas).toHaveBeenCalledWith({
-      namespace: expect.any(String),
-      name: "octogee-gateway-default",
-    });
-    expect(helm.upsertInstance).not.toHaveBeenCalled();
-    expect(kubeOps!.scaleDeployment).not.toHaveBeenCalled();
-    stop();
-  });
-
-  it("refreshes a platform-owned ready record for available operator gateways", async () => {
-    const restoreGatewayServiceAccount = setGatewayServiceAccountEnv();
-    const snapCbs: Array<() => void> = [];
-    const gatewayDocs: Record<string, Record<string, unknown>> = {};
-    const glmHeartbeatOverlay: Record<string, Record<string, unknown>> = {};
-    const helm = makeFakeHelm({
-      read: async () => ({
-        "op-canary": {
-          enabled: true,
-          image: { repository: "repo", tag: "abc-oc2026.5.28" },
-          gatewayId: "op-canary",
-          profile: "operator",
-          replicas: 1,
-        },
-      }),
-    });
-    const kubeOps = makeFakeKubeOps({
-      readReplicas: async () => 1,
-      readAvailableReplicas: async () => 1,
-    });
-    const db = makeFakeDb({
-      glmGateways: [
-        {
-          gatewayId: "op-canary",
-          imageRepository: "repo",
-          imageTag: "abc-oc2026.5.28",
-          profile: "operator",
-          desiredStatus: "running",
-          createdBy: "ci",
-        },
-      ],
-      gatewayDocs,
-      glmHeartbeatOverlay,
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      kubeOps,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log: vi.fn(),
-      reconcileRetryMs: 5_000,
-      ensureGatewayWorkloadIdentity: vi.fn(async () => undefined),
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-
-    expect(kubeOps!.readAvailableReplicas).toHaveBeenCalledWith({
-      namespace: expect.any(String),
-      name: "octogee-gateway-op-canary",
-    });
-    // Every field the flat dual-write used to publish now lands ONLY on the
-    // relocated glmGateways/{id}.heartbeat sub-doc — no flat gateways/{id} write.
-    expect(glmHeartbeatOverlay["op-canary"]?.heartbeat).toMatchObject({
-      status: "ready",
-      version: "abc",
-      mountedCustomers: [],
-      internalUrl: expect.stringContaining("octogee-gateway-op-canary"),
-    });
-    expect(glmHeartbeatOverlay["op-canary"]?.heartbeat).not.toHaveProperty("lastHeartbeatAt");
-    expect(gatewayDocs["op-canary"]).toBeUndefined();
-    stop();
-    restoreGatewayServiceAccount();
-  });
-
-  it("also refreshes the ready record (live SHA) for available STANDARD gateways", async () => {
-    const snapCbs: Array<() => void> = [];
-    const gatewayDocs: Record<string, Record<string, unknown>> = {};
-    const glmHeartbeatOverlay: Record<string, Record<string, unknown>> = {};
-    const helm = makeFakeHelm({
-      read: async () => ({
-        default: {
-          enabled: true,
-          image: { repository: "repo", tag: "abc-oc2026.5.28" },
-          gatewayId: "default",
-          profile: "standard",
-          replicas: 1,
-        },
-      }),
-    });
-    const kubeOps = makeFakeKubeOps({
-      readReplicas: async () => 1,
-      readAvailableReplicas: async () => 1,
-    });
-    const db = makeFakeDb({
-      glmGateways: [
-        {
-          gatewayId: "default",
-          imageRepository: "repo",
-          imageTag: "abc-oc2026.5.28",
-          profile: "standard",
-          desiredStatus: "running",
-          createdBy: "ci",
-        },
-      ],
-      gatewayDocs,
-      glmHeartbeatOverlay,
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      kubeOps,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log: vi.fn(),
-      reconcileRetryMs: 5_000,
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-
-    expect(kubeOps!.readAvailableReplicas).toHaveBeenCalledWith({
-      namespace: expect.any(String),
-      name: "octogee-gateway-default",
-    });
-    // Readiness telemetry lands ONLY at glmGateways/{id}.heartbeat — the flat
-    // gateways/{id} dual-write is contracted (cutover step 2).
-    expect(glmHeartbeatOverlay["default"]?.heartbeat).toMatchObject({
-      status: "ready",
-      version: "abc",
-    });
-    expect(gatewayDocs["default"]).toBeUndefined();
-    stop();
-  });
-
-  it("recovers a running operator add-gateway op once the reconciler sees the deployment ready", async () => {
-    const restoreGatewayServiceAccount = setGatewayServiceAccountEnv();
-    const snapCbs: Array<() => void> = [];
-    const gatewayDocs: Record<string, Record<string, unknown>> = {};
-    const glmOperations: Record<string, Record<string, unknown>> = {
-      op1: {
-        id: "op1",
-        kind: "add-gateway",
-        status: "running",
-        createdBy: "ci",
-        createdAt: 100,
-        startedAt: 200,
-        completedAt: null,
-        input: {
-          gatewayId: "op-canary",
-          profile: "operator",
-        },
-        steps: [{ name: "helm-render", status: "running", startedAt: 200 }],
-        error: "controller exited mid-install",
-      },
-    };
-    const log = vi.fn();
-    const syncFleetIngress = vi.fn(async () => undefined);
-    const helm = makeFakeHelm({
-      read: async () => ({
-        "op-canary": {
-          enabled: true,
-          image: { repository: "repo", tag: "abc-oc2026.5.28" },
-          gatewayId: "op-canary",
-          profile: "operator",
-          replicas: 1,
-        },
-      }),
-    });
-    const kubeOps = makeFakeKubeOps({
-      readReplicas: async () => 1,
-      readAvailableReplicas: async () => 1,
-    });
-    const db = makeFakeDb({
-      glmGateways: [
-        {
-          gatewayId: "op-canary",
-          imageRepository: "repo",
-          imageTag: "abc-oc2026.5.28",
-          profile: "operator",
-          desiredStatus: "running",
-          createdBy: "ci",
-        },
-      ],
-      gatewayDocs,
-      glmOperations,
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      kubeOps,
+      modelKeySourceIssuer,
+      modelKeySecretEnsurer,
+      convergeEmpty,
+      convergeRoll,
       syncFleetIngress,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
       log,
-      reconcileRetryMs: 5_000,
-      ensureGatewayWorkloadIdentity: vi.fn(async () => undefined),
     });
 
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
+    await runTick(callbacks);
 
-    expect(syncFleetIngress).toHaveBeenCalledTimes(1);
-    expect(glmOperations.op1).toMatchObject({
-      status: "succeeded",
-      completedAt: expect.any(Number),
-      rolledBack: false,
-    });
-    expect(glmOperations.op1.steps).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ name: "helm-render", status: "done" }),
-        expect.objectContaining({ name: "deployment-ready", status: "done" }),
-        expect.objectContaining({ name: "platform-ready-record", status: "done" }),
-        expect.objectContaining({ name: "fleet-ingress", status: "done" }),
-        expect.objectContaining({ name: "reconciler-recovery", status: "done" }),
-      ]),
-    );
-    expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("recovered operator add-gateway from ready deployment"),
-    );
-    stop();
-    restoreGatewayServiceAccount();
-  });
-});
-
-describe("startReconciler — never in-place-roll a mounted gateway (the builder1 outage guard)", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  async function flush() {
-    await Promise.resolve();
-    await Promise.resolve();
-  }
-
-  it("REFUSES an in-place image upgrade when the gateway has mounted customers, and logs it loudly", async () => {
-    const snapCbs: Array<() => void> = [];
-    const log = vi.fn();
-    const helm = makeFakeHelm({
-      read: async () => ({
-        default: {
-          enabled: true,
-          image: { repository: "repo", tag: "old-sha" },
-          gatewayId: "default",
-          replicas: 1,
-        },
-      }),
-    });
-    const db = makeFakeDb({
-      glmGateways: [
-        {
-          gatewayId: "default",
-          imageRepository: "repo",
-          imageTag: "new-sha",
-          desiredStatus: "running",
-          createdBy: "ci",
-        },
-      ],
-      gatewayDocs: { default: { mountedCustomers: ["cust-1", "cust-2"] } },
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
-    });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log,
-      reconcileRetryMs: 5_000,
-    });
-
-    snapCbs[0]();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
-
-    expect(helm.upsertInstance).not.toHaveBeenCalled();
-    const refused = log.mock.calls.find(
-      ([msg]: [string]) =>
-        typeof msg === "string" && msg.includes("REFUSED in-place image roll"),
-    );
-    expect(refused).toBeDefined();
-    expect(refused?.[0]).toContain("default");
-    expect(refused?.[0]).toContain("2 customer(s)");
+    expect(modelKeySourceIssuer.syncGatewayModelKeySource).not.toHaveBeenCalled();
+    expect(modelKeySecretEnsurer.syncGatewayModelKeySecret).not.toHaveBeenCalled();
+    expect(convergeEmpty).not.toHaveBeenCalled();
+    expect(convergeRoll).not.toHaveBeenCalled();
+    expect(syncFleetIngress).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/missing.*default-blue/u));
     stop();
   });
 
-  it("STILL upgrades in place when the SAME image change targets a gateway with NO mounted customers (fast path)", async () => {
-    const snapCbs: Array<() => void> = [];
+  it("uses a validated serving revision to publish the fleet ingress", async () => {
+    const callbacks: SnapshotCallbacks = {};
+    const syncFleetIngress = vi.fn(async () => {});
+    const stop = startReconciler({
+      db: makeDb({
+        callbacks,
+        roots: { default: durableRoot() },
+        revisions: { "default-r2": servingRevision() },
+      }),
+      helm: {} as Parameters<typeof startReconciler>[0]["helm"],
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      syncFleetIngress,
+      log: vi.fn(),
+    });
+
+    await runTick(callbacks);
+
+    expect(syncFleetIngress).toHaveBeenCalledWith([{ gatewayId: "default" }]);
+    stop();
+  });
+
+  it("preserves ingress and image pins when a non-retired revision shadows a canonical id", async () => {
+    const callbacks: SnapshotCallbacks = {};
+    const syncFleetIngress = vi.fn(async () => {});
+    const reconcileImagePins = vi.fn(async () => {});
     const log = vi.fn();
-    const helm = makeFakeHelm({
-      read: async () => ({
-        canary: {
-          enabled: true,
-          image: { repository: "repo", tag: "old-sha" },
-          gatewayId: "canary",
-          replicas: 1,
+    const stop = startReconciler({
+      db: makeDb({
+        callbacks,
+        roots: { default: durableRoot() },
+        revisions: {
+          "default-r2": servingRevision(),
+          "default-r2-shadow": servingRevision(),
         },
       }),
+      helm: {} as Parameters<typeof startReconciler>[0]["helm"],
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      reconcileImagePins,
+      syncFleetIngress,
+      log,
     });
-    const db = makeFakeDb({
-      glmGateways: [
+
+    await runTick(callbacks);
+
+    expect(syncFleetIngress).not.toHaveBeenCalled();
+    expect(reconcileImagePins).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/without a valid durable root.*default-r2-shadow/u));
+    stop();
+  });
+
+  it("pins every active durable revision artifact", async () => {
+    const callbacks: SnapshotCallbacks = {};
+    const reconcileImagePins = vi.fn(async () => {});
+    const stop = startReconciler({
+      db: makeDb({
+        callbacks,
+        roots: { default: durableRoot() },
+        revisions: { "default-r2": servingRevision() },
+        releases: {
+          default: {
+            2: releaseArtifact("default", 2, "abc1234"),
+          },
+        },
+      }),
+      helm: {} as Parameters<typeof startReconciler>[0]["helm"],
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      reconcileImagePins,
+      log: vi.fn(),
+    });
+
+    await runTick(callbacks);
+
+    expect(reconcileImagePins).toHaveBeenCalledWith(
+      "prod",
+      [{
+        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+        imageTag: "abc1234",
+      }],
+      expect.any(Function),
+    );
+    stop();
+  });
+
+  it("preserves ingress and image pins when any durable root is invalid", async () => {
+    const callbacks: SnapshotCallbacks = {};
+    const syncFleetIngress = vi.fn(async () => {});
+    const reconcileImagePins = vi.fn(async () => {});
+    const log = vi.fn();
+    const stop = startReconciler({
+      db: makeDb({
+        callbacks,
+        roots: {
+          default: durableRoot(),
+          malformed: { gatewayId: "malformed" },
+        },
+        revisions: { "default-r2": servingRevision() },
+      }),
+      helm: {} as Parameters<typeof startReconciler>[0]["helm"],
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      reconcileImagePins,
+      syncFleetIngress,
+      log,
+    });
+
+    await runTick(callbacks);
+
+    expect(syncFleetIngress).not.toHaveBeenCalled();
+    expect(reconcileImagePins).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/invalid durable root.*malformed/u));
+    stop();
+  });
+
+  it("preserves ingress and image pins when a live revision has no durable root", async () => {
+    const callbacks: SnapshotCallbacks = {};
+    const syncFleetIngress = vi.fn(async () => {});
+    const reconcileImagePins = vi.fn(async () => {});
+    const log = vi.fn();
+    const stop = startReconciler({
+      db: makeDb({
+        callbacks,
+        revisions: { "default-r2": servingRevision() },
+      }),
+      helm: {} as Parameters<typeof startReconciler>[0]["helm"],
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      reconcileImagePins,
+      syncFleetIngress,
+      log,
+    });
+
+    await runTick(callbacks);
+
+    expect(syncFleetIngress).not.toHaveBeenCalled();
+    expect(reconcileImagePins).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/without a valid durable root.*default-r2/u));
+    stop();
+  });
+
+  it("restarts the traffic revision, never the bare gateway deployment, after a model-key change", async () => {
+    const callbacks: SnapshotCallbacks = {};
+    const restartGatewayDeployment = vi.fn(async () => {});
+    const stop = startReconciler({
+      db: makeDb({
+        callbacks,
+        roots: {
+          default: durableRoot({ gatewayClass: "builder", ownerUid: "owner-1" }),
+        },
+        revisions: { "default-r2": servingRevision() },
+      }),
+      helm: {} as Parameters<typeof startReconciler>[0]["helm"],
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      modelKeySourceIssuer: {
+        syncGatewayModelKeySource: vi.fn(async () => ({ changed: true })),
+      },
+      modelKeySecretEnsurer: {
+        syncGatewayModelKeySecret: vi.fn(async () => ({ changed: true })),
+      },
+      restartGatewayDeployment,
+      log: vi.fn(),
+    });
+
+    await runTick(callbacks);
+
+    expect(restartGatewayDeployment).toHaveBeenCalledWith("default-r2");
+    expect(restartGatewayDeployment).not.toHaveBeenCalledWith("default");
+    stop();
+  });
+
+  it("renders only durable roots after a root snapshot", async () => {
+    const callbacks: SnapshotCallbacks = {};
+    const renderDurableRootConfigs = vi.fn(async () => ({ failedGatewayIds: [] }));
+    const stop = startReconciler({
+      db: makeDb({
+        callbacks,
+        roots: {
+          default: durableRoot(),
+          legacy: { gatewayId: "legacy", desiredStatus: "running" },
+        },
+      }),
+      helm: {} as Parameters<typeof startReconciler>[0]["helm"],
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      renderDurableRootConfigs,
+      log: vi.fn(),
+    });
+
+    await runTick(callbacks);
+
+    expect(renderDurableRootConfigs).toHaveBeenCalledWith({ all: true, gatewayIds: [] });
+    stop();
+  });
+
+  it("requeues only a targeted renderer exception", async () => {
+    const callbacks: SnapshotCallbacks = {};
+    let failTargetedRender = true;
+    const renderDurableRootConfigs = vi.fn(async (request: { all: boolean; gatewayIds: string[] }) => {
+      if (!request.all && failTargetedRender) {
+        failTargetedRender = false;
+        throw new Error("targeted render failure");
+      }
+      return { failedGatewayIds: [] };
+    });
+    const stop = startReconciler({
+      db: makeDb({
+        callbacks,
+        roots: { default: durableRoot() },
+        revisions: { "default-r2": servingRevision() },
+        releases: { default: { 2: releaseArtifact("default", 2, "abc1234") } },
+      }),
+      helm: {} as Parameters<typeof startReconciler>[0]["helm"],
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      renderDurableRootConfigs,
+      reconcileRetryMs: 10,
+      log: vi.fn(),
+    });
+
+    await runTick(callbacks);
+    renderDurableRootConfigs.mockClear();
+    callbacks.roots?.({
+      docChanges: () => [
         {
-          gatewayId: "canary",
-          imageRepository: "repo",
-          imageTag: "new-sha",
-          desiredStatus: "running",
-          createdBy: "ci",
+          type: "modified",
+          doc: { id: "default", data: () => durableRoot({ desiredRelease: 3 }) },
         },
       ],
-      gatewayDocs: { canary: { mountedCustomers: [] } },
-      onSnapshot: { register: (cb) => snapCbs.push(cb) },
     });
-
-    const stop = startReconciler({
-      db,
-      helm,
-      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
-      log,
-      reconcileRetryMs: 5_000,
-    });
-
-    snapCbs[0]();
     await vi.advanceTimersByTimeAsync(1_000);
-    await flush();
-    await flush();
+    await vi.advanceTimersByTimeAsync(10);
 
-    expect(helm.upsertInstance).toHaveBeenCalledTimes(1);
+    expect(renderDurableRootConfigs).toHaveBeenNthCalledWith(1, {
+      all: false,
+      gatewayIds: ["default"],
+    });
+    expect(renderDurableRootConfigs).toHaveBeenNthCalledWith(2, {
+      all: false,
+      gatewayIds: ["default"],
+    });
+    expect(renderDurableRootConfigs).not.toHaveBeenCalledWith({ all: true, gatewayIds: [] });
+    stop();
+  });
+
+  it("reconciles a removed root without scheduling a render for it", async () => {
+    const callbacks: SnapshotCallbacks = {};
+    const roots = { default: durableRoot() };
+    const revisions = { "default-r2": servingRevision() };
+    const syncFleetIngress = vi.fn(async () => {});
+    const renderDurableRootConfigs = vi.fn(async () => ({ failedGatewayIds: [] }));
+    const stop = startReconciler({
+      db: makeDb({
+        callbacks,
+        roots,
+        revisions,
+        releases: { default: { 2: releaseArtifact("default", 2, "abc1234") } },
+      }),
+      helm: {} as Parameters<typeof startReconciler>[0]["helm"],
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      renderDurableRootConfigs,
+      syncFleetIngress,
+      log: vi.fn(),
+    });
+
+    await runTick(callbacks);
+    renderDurableRootConfigs.mockClear();
+    delete roots.default;
+    delete revisions["default-r2"];
+    callbacks.roots?.({
+      docChanges: () => [{ type: "removed", doc: { id: "default", data: () => ({}) } }],
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(renderDurableRootConfigs).not.toHaveBeenCalled();
+    expect(syncFleetIngress).toHaveBeenLastCalledWith([]);
     stop();
   });
 });

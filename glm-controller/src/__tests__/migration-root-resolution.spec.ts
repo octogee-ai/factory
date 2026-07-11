@@ -1,0 +1,185 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  durableRolloutGateway,
+  isRecoverableHelmRevision,
+  resolveLiveRevisionAsSource,
+  resolvePlacementFromFirestore,
+  resolveSourceRevisionFromFirestore,
+} from "../index.js";
+
+type Docs = Record<string, Record<string, unknown>>;
+
+function database(docs: Docs) {
+  function document(path: string) {
+    const data = docs[path];
+    return {
+      get: async () => ({ exists: data !== undefined, data: () => data }),
+      collection(name: string) {
+        return {
+          doc(id: string) {
+            return document(`${path}/${name}/${id}`);
+          },
+        };
+      },
+    };
+  }
+
+  return {
+    collection(name: string) {
+      return {
+        doc(id: string) {
+          return document(`${name}/${id}`);
+        },
+      };
+    },
+  };
+}
+
+function durableGateway(
+  gatewayId: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    gatewayId,
+    createdAt: 1,
+    createdBy: "test",
+    updatedAt: 1,
+    updatedBy: "test",
+    latestRelease: 1,
+    desiredRelease: 1,
+    liveRelease: 1,
+    liveRevisionId: `${gatewayId}-r1`,
+    trafficRevisionId: `${gatewayId}-r1`,
+    desiredStatus: "running",
+    roll: null,
+    configSchemaVersion: 1,
+    profile: null,
+    gatewayClass: "shared",
+    imageProfile: "standard",
+    sizingTier: null,
+    computeClass: null,
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: null,
+    serviceAccount: null,
+    operatorAccess: null,
+    ownerUid: null,
+    coOwnerUids: [],
+    builderSlug: null,
+    openclawOverrides: null,
+    modelBrokerLimits: null,
+    preemption: null,
+    ...overrides,
+  };
+}
+
+function servingRevision(
+  gatewayId: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    docKind: "revision",
+    revisionId: `${gatewayId}-r1`,
+    gateway: gatewayId,
+    release: 1,
+    lifecycle: "serving",
+    ...overrides,
+  };
+}
+
+describe("durable migration root resolution", () => {
+  it("does not recover a pending Helm revision for a paused durable root", async () => {
+    const db = database({
+      "gateways/default": durableGateway("default", { desiredStatus: "paused" }),
+      "glmGateways/default-r1": servingRevision("default"),
+    });
+
+    await expect(isRecoverableHelmRevision(db as never, "default-r1")).resolves.toBe(false);
+  });
+
+  it("does not recover a pending Helm revision marked failed", async () => {
+    const db = database({
+      "gateways/default": durableGateway("default"),
+      "glmGateways/default-r1": servingRevision("default", { lifecycle: "failed" }),
+    });
+
+    await expect(isRecoverableHelmRevision(db as never, "default-r1")).resolves.toBe(false);
+  });
+
+  it("rejects a gateway-shaped root before a rollout can consume it", () => {
+    expect(
+      durableRolloutGateway(
+        {
+          gatewayId: "target",
+          latestRelease: 1,
+          desiredRelease: 1,
+          desiredStatus: "running",
+        },
+        "target",
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects a destination that has only a gateway-shaped legacy root", async () => {
+    const db = database({
+      "gateways/target": {
+        gatewayId: "target",
+        latestRelease: 1,
+        desiredRelease: 1,
+        liveRelease: 1,
+        liveRevisionId: "target-r1",
+        desiredStatus: "running",
+      },
+      "glmGateways/target-r1": servingRevision("target"),
+    });
+
+    await expect(resolvePlacementFromFirestore(db as never, "target")).resolves.toBeNull();
+  });
+
+  it("rejects a source that has only a gateway-shaped legacy root", async () => {
+    const db = database({
+      "gateways/source": {
+        gatewayId: "source",
+        latestRelease: 1,
+        desiredRelease: 1,
+        liveRelease: 1,
+        liveRevisionId: "source-r1",
+        desiredStatus: "running",
+      },
+      "glmGateways/source-r1": servingRevision("source"),
+    });
+
+    await expect(resolveLiveRevisionAsSource(db as never, "source")).resolves.toBeNull();
+  });
+
+  it("refuses a destination revision whose identity does not match its durable root", async () => {
+    const db = database({
+      "gateways/target": durableGateway("target"),
+      "glmGateways/target-r1": servingRevision("other"),
+    });
+
+    await expect(resolvePlacementFromFirestore(db as never, "target")).resolves.toEqual({
+      ok: false,
+      reason: "revision-not-ready",
+    });
+  });
+
+  it("refuses an assigned source whose revision identity does not match its durable root", async () => {
+    const db = database({
+      "gateways/source": durableGateway("source"),
+      "gateways/source/assignments/uid-alice": {
+        slug: "alice",
+        gatewayId: "source",
+        revisionId: "source-r1",
+        release: 1,
+        source: "rollout",
+      },
+      "glmGateways/source-r1": servingRevision("other"),
+    });
+
+    await expect(
+      resolveSourceRevisionFromFirestore(db as never, "uid-alice", "source"),
+    ).resolves.toBeNull();
+  });
+});

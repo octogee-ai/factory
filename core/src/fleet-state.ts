@@ -44,11 +44,9 @@ export interface FleetStateFirestore {
 
 export interface HeartbeatSnapshot {
   gatewayId: string;
-  // Set from the pod's GATEWAY_REVISION_ID (PR3 env). When present the heartbeat
-  // is ALSO written to glmGateways/{revisionId}.heartbeat — the readiness key
-  // Cowboy's converge-empty arm matches (glm-controller/src/converge-empty.ts).
-  // Absent on legacy pods that predate the revision env.
-  revisionId?: string;
+  // Every pod realizes one disposable revision. Telemetry belongs only on that
+  // realization, never on a bare gateway identity record.
+  revisionId: string;
   status: GatewayStatus;
   version: string;
   openclawVersion: string;
@@ -67,15 +65,9 @@ export async function writeGatewayHeartbeat(
   deps: FleetStateDeps,
   snapshot: HeartbeatSnapshot,
 ): Promise<void> {
-  // Heartbeat/readiness telemetry lives only at glmGateways/{id}.heartbeat
-  // (GATEWAY-RELEASES-SPEC cutover step 2 — the collision fix that frees
-  // gateways/{id} to become the desired-doc collection). The legacy flat
-  // gateways/{id} dual-write is retired: a per-tick flat write recreates the
-  // heartbeat fields the identity backfill refuses on, so it could never run.
-  //
-  // The lastKnownBuilders billing mirror runs FIRST so its orphan guard checks
-  // the desired-doc state BEFORE this heartbeat merges the revision doc.
-  await mirrorMountedCustomersToGlm(deps, snapshot);
+  if (!snapshot.revisionId) {
+    throw new Error("revisionId is required for revision-scoped gateway heartbeat");
+  }
 
   const heartbeat = {
     status: snapshot.status,
@@ -88,77 +80,8 @@ export async function writeGatewayHeartbeat(
   };
   await deps.db
     .collection(GLM_GATEWAYS_COLLECTION)
-    .doc(snapshot.gatewayId)
+    .doc(snapshot.revisionId)
     .set({ heartbeat }, { merge: true });
-
-  // Revision-keyed heartbeat (GATEWAY-RELEASES-SPEC): converge-empty's readiness
-  // check matches glmGateways/{revisionId}.heartbeat.version, so a revision-only
-  // gateway can only go live once this write lands. Skip when the revision id is
-  // absent (legacy pod) or already equal to the bare gateway id.
-  if (snapshot.revisionId && snapshot.revisionId !== snapshot.gatewayId) {
-    await deps.db
-      .collection(GLM_GATEWAYS_COLLECTION)
-      .doc(snapshot.revisionId)
-      .set({ heartbeat }, { merge: true });
-  }
-}
-
-// Phase D hand-off for GATEWAY-PLATFORM-SPEC §5a billing: mirror the live
-// mounted set onto the desired-state doc so chargeback roll-ups read a
-// static snapshot next to sizingTier. Best-effort — failures here MUST
-// NOT propagate, otherwise a transient Firestore hiccup marks the
-// heartbeat as failed and the gateway looks dead.
-//
-// CRITICAL: this writes to glmGateways, which is exactly the collection
-// the reconciler watches. Writing every 15s would trigger a full
-// reconcile tick (helm list + ingress sync) on every heartbeat. So we
-// read first, diff against the live mounted set, and only write when it
-// actually changed. Steady-state heartbeats then cost 1 read + 0
-// writes per gateway. The reconciler only ticks when membership
-// genuinely shifts (provision, deprovision, migrate).
-async function mirrorMountedCustomersToGlm(
-  deps: FleetStateDeps,
-  snapshot: HeartbeatSnapshot,
-): Promise<void> {
-  try {
-    const ref = deps.db
-      .collection(GLM_GATEWAYS_COLLECTION)
-      .doc(snapshot.gatewayId);
-    const existing = await ref.get();
-    if (!existing.exists) {
-      deps.log?.(
-        `[fleet-state] glmGateways/${snapshot.gatewayId} not found — skipping lastKnownBuilders mirror (Cowboy owns desired-state doc creation)`,
-      );
-      return;
-    }
-    const prev = existing.data();
-    const prevBuilders = Array.isArray(prev?.lastKnownBuilders)
-      ? (prev!.lastKnownBuilders as string[])
-      : null;
-    if (mountedSetEqual(prevBuilders, snapshot.mountedCustomers)) {
-      // No-op — avoids the reconciler-thrash that a per-heartbeat write
-      // would cause on the watched glmGateways collection.
-      return;
-    }
-    await ref.update({
-      lastKnownBuilders: snapshot.mountedCustomers,
-      lastKnownBuildersAt: deps.serverTimestamp(),
-    });
-  } catch (err) {
-    deps.log?.(
-      `[fleet-state] lastKnownBuilders mirror failed for ${snapshot.gatewayId} — eventual-consistency catches up on next heartbeat: ${(err as Error).message}`,
-    );
-  }
-}
-
-function mountedSetEqual(a: readonly string[] | null, b: readonly string[]): boolean {
-  if (a === null) return false;
-  if (a.length !== b.length) return false;
-  const aSet = new Set(a);
-  for (const slug of b) {
-    if (!aSet.has(slug)) return false;
-  }
-  return true;
 }
 
 // Migration cutover: move the customer's DESIRED assignment to the target gateway.
@@ -174,7 +97,7 @@ export async function cutoverUserGatewayAndMarkMounted(
   const userRef = deps.db.collection("users").doc(params.uid);
   await deps.db.runTransaction(async (txn) => {
     const snap = await txn.get(
-      deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(params.toGatewayId),
+      deps.db.collection(GATEWAYS_COLLECTION).doc(params.toGatewayId),
     );
     const shellState = resolveUserGatewayShellState(
       snap.exists ? snap.data() : undefined,
@@ -234,11 +157,11 @@ export async function commitCutoverAtomic(
       priorEpoch = typeof rawEpoch === "number" && rawEpoch >= 0 ? rawEpoch : 0;
     }
     if (params.flipMirror) {
-      const glmSnap = await txn.get(
-        deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(params.toGatewayId),
+      const gatewaySnap = await txn.get(
+        deps.db.collection(GATEWAYS_COLLECTION).doc(params.toGatewayId),
       );
       const shellState = resolveUserGatewayShellState(
-        glmSnap.exists ? glmSnap.data() : undefined,
+        gatewaySnap.exists ? gatewaySnap.data() : undefined,
         params.uid,
       );
       txn.update(deps.db.collection("users").doc(params.uid), {

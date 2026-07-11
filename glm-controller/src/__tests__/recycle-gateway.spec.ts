@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import type { GatewayDesiredStatus, Operation, OperationStep } from "@octogee/shared/types/glm";
+import type { Operation, OperationStep } from "@octogee/shared/types/glm";
+import type { GatewayLifecycleStatus } from "@octogee/shared/types/gateway-releases";
 import { createRecycleGatewayHandler } from "../handlers/recycle-gateway";
 import type { RecycleGatewayDeps } from "../handlers/recycle-gateway";
 import type { OperationContext } from "../operation-router";
@@ -36,8 +37,9 @@ function scriptedReplicas(seq: number[]): () => Promise<number | null> {
 
 function mkDeps(overrides: Partial<RecycleGatewayDeps> = {}): RecycleGatewayDeps {
   return {
-    readDesiredStatus: vi.fn(async () => "running" as GatewayDesiredStatus),
+    readDesiredStatus: vi.fn(async () => "running" as GatewayLifecycleStatus),
     setDesiredStatus: vi.fn(async () => undefined),
+    readServingRevisionId: vi.fn(async (gatewayId: string) => `${gatewayId}-r7`),
     readAvailableReplicas: vi.fn(scriptedReplicas([0, 1])),
     now: (() => {
       let t = 0;
@@ -65,6 +67,7 @@ describe("createRecycleGatewayHandler — desired-state recycle (reconciler does
     expect(deps.setDesiredStatus).toHaveBeenNthCalledWith(2, "default", "running");
     // never touches replicas directly — that's the reconciler's job (no race)
     expect(deps).not.toHaveProperty("scaleDeployment");
+    expect(deps.readAvailableReplicas).toHaveBeenCalledWith("default-r7");
   });
 
   it("reports drain then restore steps, each running → done", async () => {
@@ -90,7 +93,7 @@ describe("createRecycleGatewayHandler — desired-state recycle (reconciler does
   });
 
   it("refuses to recycle a gateway that is not running (paused/draining/retired)", async () => {
-    const deps = mkDeps({ readDesiredStatus: vi.fn(async () => "paused" as GatewayDesiredStatus) });
+    const deps = mkDeps({ readDesiredStatus: vi.fn(async () => "paused" as GatewayLifecycleStatus) });
     const handler = createRecycleGatewayHandler(deps);
     const { ctx } = mkCtx();
     const result = await handler(mkOp(), ctx);
@@ -133,7 +136,7 @@ describe("createRecycleGatewayHandler — desired-state recycle (reconciler does
 
   it("restores running and surfaces the error if a desiredStatus write throws mid-recycle", async () => {
     const setDesiredStatus = vi
-      .fn<(id: string, s: GatewayDesiredStatus) => Promise<void>>()
+      .fn<(id: string, s: GatewayLifecycleStatus) => Promise<void>>()
       .mockResolvedValueOnce(undefined) // paused ok
       .mockRejectedValueOnce(new Error("firestore unavailable")) // restore throws
       .mockResolvedValue(undefined); // best-effort un-pause
@@ -155,5 +158,14 @@ describe("createRecycleGatewayHandler — desired-state recycle (reconciler does
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/gatewayId/);
     expect(deps.setDesiredStatus).not.toHaveBeenCalled();
+  });
+
+  it("reads replicas from the serving revision and fails closed when it is absent", async () => {
+    const deps = mkDeps({ readServingRevisionId: vi.fn(async () => null) });
+    const result = await createRecycleGatewayHandler(deps)(mkOp(), mkCtx().ctx);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/serving revision/i);
+    expect(deps.readAvailableReplicas).not.toHaveBeenCalled();
   });
 });

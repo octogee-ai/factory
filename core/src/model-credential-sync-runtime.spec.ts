@@ -6,7 +6,6 @@ const h = vi.hoisted(() => ({
   applyModelCredentialState: vi.fn(),
   applyCoachModelPatch: vi.fn(),
   brokerFetchByosubCreds: vi.fn(),
-  markerProvidersForSlot: vi.fn(),
   restoreOauthStoreForSlug: vi.fn(),
   triggerSecretsReload: vi.fn(),
 }));
@@ -15,7 +14,6 @@ vi.mock("./byot-sync-runtime.js", () => ({
   syncByotForCustomer: h.syncByotForCustomer,
   applyCoachModelPatch: h.applyCoachModelPatch,
   brokerFetchByosubCreds: h.brokerFetchByosubCreds,
-  markerProvidersForSlot: h.markerProvidersForSlot,
   restoreOauthStoreForSlug: h.restoreOauthStoreForSlug,
   triggerSecretsReload: h.triggerSecretsReload,
 }));
@@ -28,7 +26,6 @@ vi.mock("./model-credential-sync.js", () => ({
 import {
   applyModelCredentialCoachPatch,
   brokerFetchModelCredentialOauthCreds,
-  markerProvidersForModelCredentialOauthSlot,
   restoreModelCredentialOauthStoreForSlug,
   syncModelCredentialsForCustomer,
   triggerModelCredentialSecretsReload,
@@ -61,7 +58,6 @@ describe("syncModelCredentialsForCustomer", () => {
   it("re-exports model credential names for the legacy runtime helpers", () => {
     expect(applyModelCredentialCoachPatch).toBe(h.applyCoachModelPatch);
     expect(brokerFetchModelCredentialOauthCreds).toBe(h.brokerFetchByosubCreds);
-    expect(markerProvidersForModelCredentialOauthSlot).toBe(h.markerProvidersForSlot);
     expect(restoreModelCredentialOauthStoreForSlug).toBe(h.restoreOauthStoreForSlug);
     expect(triggerModelCredentialSecretsReload).toBe(h.triggerSecretsReload);
   });

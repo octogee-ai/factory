@@ -19,6 +19,9 @@ describe("classifyOperationFailure", () => {
     expect(classifyOperationFailure("request failed with status 503")).toBe("transient");
     expect(classifyOperationFailure("context deadline exceeded")).toBe("transient");
     expect(classifyOperationFailure("instance preempted mid-warm")).toBe("transient");
+    expect(
+      classifyOperationFailure("gateway bender durable desired revision did not materialize within 120000ms"),
+    ).toBe("transient");
   });
 
   it("classifies validation and the #2137 fail-fast target-state guard as terminal", () => {

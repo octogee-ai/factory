@@ -43,4 +43,42 @@ describe("byosub-syncback-runner loadTargets", () => {
     await expect(loadTargets()).resolves.toEqual([]);
     expect(firebaseImport).not.toHaveBeenCalled();
   });
+
+  it("observes only local, path-safe agent auth files without Firestore discovery", async () => {
+    const home = mkHome({
+      agents: {
+        list: [
+          { id: "octogee-tester19-coach" },
+          { id: "../../not-an-agent" },
+        ],
+      },
+    });
+    process.env.HOME = home;
+    process.env.GATEWAY_ID = "operator-tester19";
+    process.env.GATEWAY_CLASS = "builder";
+
+    const firebaseImport = vi.fn();
+    vi.doMock("../lib/firebase.js", () => {
+      firebaseImport();
+      throw new Error("sync-back must not import firebase");
+    });
+
+    const { loadTargets } = await import("../entrypoints/byosub-syncback-runner.js");
+
+    await expect(loadTargets()).resolves.toEqual([
+      {
+        agentId: "octogee-tester19-coach",
+        authPath: path.join(
+          home,
+          ".openclaw",
+          "agents",
+          "octogee-tester19-coach",
+          "agent",
+          "codex-home",
+          "auth.json",
+        ),
+      },
+    ]);
+    expect(firebaseImport).not.toHaveBeenCalled();
+  });
 });

@@ -10,7 +10,11 @@ function connectionError(): TypeError {
 
 function mkDeps(overrides: Partial<UnmountFromGatewayDeps> = {}): UnmountFromGatewayDeps {
   return {
-    readGatewayProfile: vi.fn(async () => "standard" as const),
+    resolveGatewayUnmountTarget: vi.fn(async (gatewayId: string) => ({
+      gatewayId,
+      revisionId: `${gatewayId}-r7`,
+      profile: "standard" as const,
+    })),
     readAvailableReplicas: vi.fn(async () => 1),
     unmountRpc: vi.fn(async () => undefined),
     wait: vi.fn(async () => undefined),
@@ -20,12 +24,12 @@ function mkDeps(overrides: Partial<UnmountFromGatewayDeps> = {}): UnmountFromGat
   };
 }
 
-describe("createUnmountFromGateway — gateway registration", () => {
-  it("throws when the gateway is not registered in glmGateways", async () => {
-    const deps = mkDeps({ readGatewayProfile: vi.fn(async () => null) });
+describe("createUnmountFromGateway — durable runtime resolution", () => {
+  it("throws when the gateway has no validated serving revision", async () => {
+    const deps = mkDeps({ resolveGatewayUnmountTarget: vi.fn(async () => null) });
     const unmount = createUnmountFromGateway(deps);
     await expect(unmount("ghost-gw", "alice")).rejects.toThrow(
-      /gateway not registered in glmGateways: ghost-gw/,
+      /gateway ghost-gw has no validated serving revision/,
     );
     expect(deps.unmountRpc).not.toHaveBeenCalled();
   });
@@ -54,16 +58,24 @@ describe("createUnmountFromGateway — live pod unmount", () => {
     await expect(unmount("default", "alice")).resolves.toBe("unmounted");
     expect(deps.unmountRpc).toHaveBeenCalledWith({
       gatewayId: "default",
+      revisionId: "default-r7",
       slug: "alice",
     });
   });
 
   it("uses the same platform-signed unmount RPC for operator gateways", async () => {
-    const deps = mkDeps({ readGatewayProfile: vi.fn(async () => "operator" as const) });
+    const deps = mkDeps({
+      resolveGatewayUnmountTarget: vi.fn(async () => ({
+        gatewayId: "bender",
+        revisionId: "bender-r7",
+        profile: "operator" as const,
+      })),
+    });
     const unmount = createUnmountFromGateway(deps);
     await expect(unmount("bender", "theo")).resolves.toBe("unmounted");
     expect(deps.unmountRpc).toHaveBeenCalledWith({
       gatewayId: "bender",
+      revisionId: "bender-r7",
       slug: "theo",
     });
   });
@@ -126,7 +138,7 @@ describe("createUnmountFromGateway — connection-error retry", () => {
     });
     const unmount = createUnmountFromGateway(deps);
     await expect(unmount("default", "alice")).rejects.toThrow(
-      /unmount unreachable after 3 attempts.*gatewayId=default slug=alice.*fetch failed \(ECONNREFUSED\)/,
+      /unmount unreachable after 3 attempts.*gatewayId=default revisionId=default-r7 slug=alice.*fetch failed \(ECONNREFUSED\)/,
     );
   });
 
@@ -156,7 +168,11 @@ describe("createUnmountFromGateway — connection-error retry", () => {
 
   it("does not call the unmount RPC when an operator gateway has no live pod", async () => {
     const deps = mkDeps({
-      readGatewayProfile: vi.fn(async () => "operator" as const),
+      resolveGatewayUnmountTarget: vi.fn(async () => ({
+        gatewayId: "bender",
+        revisionId: "bender-r7",
+        profile: "operator" as const,
+      })),
       readAvailableReplicas: vi.fn(async () => 0),
     });
     const unmount = createUnmountFromGateway(deps);

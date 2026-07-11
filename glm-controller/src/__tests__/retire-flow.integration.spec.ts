@@ -93,13 +93,22 @@ function adminDeleteGateway(
   return { status: 202, operationId };
 }
 
-function makeRetireDeps(state: SharedState, helm: ReturnType<typeof makeHelm>) {
+function makeRetireDeps(state: SharedState) {
   return {
-    helm,
     readGatewayLiveState: async (gatewayId: string) => {
+      const desiredStatus = state.glmGateways.get(gatewayId)?.desiredStatus;
+      if (
+        desiredStatus !== "running" &&
+        desiredStatus !== "paused" &&
+        desiredStatus !== "retired"
+      ) {
+        return null;
+      }
       const hb = state.gateways.get(gatewayId);
-      if (!hb) return null;
-      return { mountedCustomers: hb.mountedCustomers };
+      return {
+        mountedCustomers: hb?.mountedCustomers ?? [],
+        desiredStatus,
+      };
     },
     // Legacy bare-id gateways: no assignment docs, no revision docs — the
     // full-gateway retire drain reads empty and the flow is byte-identical.
@@ -109,8 +118,6 @@ function makeRetireDeps(state: SharedState, helm: ReturnType<typeof makeHelm>) {
     revokeRevisionMacOpsTokens: vi.fn(async () => {}),
     revokeGatewayLegacyMacOpsTokens: vi.fn(async () => {}),
     retireRevisionDoc: vi.fn(async () => {}),
-    readGlmGatewayId: async (gatewayId: string) =>
-      state.glmGateways.has(gatewayId) ? gatewayId : null,
     deleteGlmGateway: async (gatewayId: string) => {
       state.glmGateways.delete(gatewayId);
     },
@@ -128,7 +135,6 @@ function makeRetireDeps(state: SharedState, helm: ReturnType<typeof makeHelm>) {
     deleteGatewayModelKeySource: vi.fn(async () => {}),
     teardownGatewayServiceAccount: vi.fn(async () => {}),
     syncFleetIngress: vi.fn(async () => {}),
-    helmUninstallTimeoutMs: 30_000,
     pollIntervalMs: 10,
     now: () => Date.now(),
     wait: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
@@ -184,7 +190,7 @@ const changes = await reconcilerTick(state, helm);
 
 const op = state.operations.get(adminRes.operationId!);
     expect(op).toBeDefined();
-    const handler = createRetireGatewayHandler(makeRetireDeps(state, helm));
+    const handler = createRetireGatewayHandler(makeRetireDeps(state));
     const ctx = makeCtx();
     const result = await handler(op!, ctx);
     expect(result.success).toBe(true);
@@ -195,8 +201,6 @@ expect(state.helmReleases.size).toBe(0);
 
 const stepFlow = ctx.reported.map((s) => `${s.name}:${s.status}`);
     expect(stepFlow).toEqual([
-      "helm-uninstall:running",
-      "helm-uninstall:done",
       "revoke-legacy-mac-ops-token:running",
       "revoke-legacy-mac-ops-token:done",
       "delete-pvc:running",
@@ -301,7 +305,7 @@ await reconcilerTick(state, helm);
     await reconcilerTick(state, helm);
     expect(state.helmReleases.size).toBe(0);
 
-    const handler = createRetireGatewayHandler(makeRetireDeps(state, helm));
+    const handler = createRetireGatewayHandler(makeRetireDeps(state));
     const result = await handler(state.operations.get(adminRes.operationId!)!, makeCtx());
     expect(result.success).toBe(true);
     expect(state.glmGateways.size).toBe(0);
@@ -346,7 +350,7 @@ imageTag: "9778420",
     await reconcilerTick(state, helm);
     expect(state.helmReleases.size).toBe(0);
 
-    const handler = createRetireGatewayHandler(makeRetireDeps(state, helm));
+    const handler = createRetireGatewayHandler(makeRetireDeps(state));
     const result = await handler(state.operations.get(adminRes.operationId!)!, makeCtx());
     expect(result.success).toBe(true);
     expect(state.glmGateways.size).toBe(0);

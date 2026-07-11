@@ -120,6 +120,10 @@
       "types": "./dist/gateway-release-projection.d.ts",
       "default": "./dist/gateway-release-projection.js"
     },
+    "./gateway-live-release": {
+      "types": "./dist/gateway-live-release.d.ts",
+      "default": "./dist/gateway-live-release.js"
+    },
     "./gateway-rpc": {
       "types": "./dist/gateway-rpc.d.ts",
       "default": "./dist/gateway-rpc.js"
@@ -363,6 +367,9 @@
       ],
       "gateway-device-identity": [
         "dist/gateway-device-identity.d.ts"
+      ],
+      "gateway-live-release": [
+        "dist/gateway-live-release.d.ts"
       ],
       "gateway-rpc": [
         "dist/gateway-rpc.d.ts"

@@ -1,12 +1,21 @@
 import type { Firestore } from "firebase-admin/firestore";
 
 import {
-  GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
   isGatewayClass,
   isGatewayProfile,
   resolveGatewayClass,
 } from "@octogee/shared/types/glm";
+import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
+import {
+  isGatewayMutableConfigForGateway,
+  type GatewayMutableConfig,
+} from "@octogee/shared/types/gateway-mutable-config";
+import {
+  isGatewayDesiredDoc,
+  type GatewayDoc,
+} from "@octogee/shared/types/gateway-releases";
+import { readGatewayLiveRevisionHeartbeat } from "./gateway-live-release.js";
 
 export type ActivationGatewayClass = "builder" | "operator";
 
@@ -42,6 +51,7 @@ export type BuilderActivationLeaseResult = {
 };
 
 type WorkspaceSlugsForUser = (data: { username?: string | null }) => string[];
+type DurableActivationGateway = GatewayDoc & GatewayMutableConfig;
 
 function asStringOrNull(v: unknown): string | null {
   return typeof v === "string" && v.length > 0 ? v : null;
@@ -56,7 +66,7 @@ function readUserGatewayId(data: Record<string, unknown> | undefined): string | 
 }
 
 function projectDesiredStatus(
-  data: Record<string, unknown> | undefined,
+  data: { desiredStatus?: unknown } | undefined,
 ): "running" | "paused" | "draining" | "retired" | null {
   const v = data?.desiredStatus;
   if (v === "running" || v === "paused" || v === "draining" || v === "retired") return v;
@@ -104,13 +114,31 @@ export function findPendingActivationOperation(
 }
 
 function gatewayActivationClass(
-  data: Record<string, unknown>,
+  data: {
+    gatewayClass?: unknown;
+    profile?: unknown;
+    imageProfile?: unknown;
+  },
 ): ActivationGatewayClass | "shared" {
   return resolveGatewayClass({
     gatewayClass: isGatewayClass(data.gatewayClass) ? data.gatewayClass : undefined,
     profile: isGatewayProfile(data.profile) ? data.profile : undefined,
     imageProfile: isGatewayProfile(data.imageProfile) ? data.imageProfile : undefined,
   });
+}
+
+function durableActivationGateway(
+  doc: FirestoreDocLike,
+): DurableActivationGateway | null {
+  const data = doc.data();
+  if (
+    !isGatewayDesiredDoc(data) ||
+    data.gatewayId !== doc.id ||
+    !isGatewayMutableConfigForGateway(data, doc.id)
+  ) {
+    return null;
+  }
+  return data as DurableActivationGateway;
 }
 
 function isInactiveDedicatedStatus(
@@ -124,7 +152,7 @@ export function resolveBuilderActivationPlan(opts: {
   builderSlug: string;
   currentGatewayId: string | null;
   requestedGatewayClass?: ActivationGatewayClass;
-  glmGateways: ReadonlyArray<FirestoreDocLike>;
+  gateways: ReadonlyArray<FirestoreDocLike>;
   gatewayHeartbeats: ReadonlyMap<string, Record<string, unknown>>;
   pendingOps: ReadonlyArray<FirestoreDocLike>;
 }): BuilderActivationPlan {
@@ -141,9 +169,10 @@ export function resolveBuilderActivationPlan(opts: {
     };
   }
 
-  const ownedClassGateways = opts.glmGateways
+  const ownedClassGateways = opts.gateways
     .map((doc): BuilderActivationTarget | null => {
-      const data = doc.data();
+      const data = durableActivationGateway(doc);
+      if (!data) return null;
       if (data.ownerUid !== opts.uid) return null;
       const gatewayClass = gatewayActivationClass(data);
       if (gatewayClass === "shared") return null;
@@ -275,9 +304,9 @@ export async function requestBuilderActivationLease(opts: {
   const { db, uid } = opts;
   const now = opts.now ?? Date.now();
   const userRef = db.collection("users").doc(uid);
-  const [userSnap, glmSnap, pendingOpsSnap] = await Promise.all([
+  const [userSnap, gatewaySnap, pendingOpsSnap] = await Promise.all([
     userRef.get(),
-    db.collection(GLM_GATEWAYS_COLLECTION).get(),
+    db.collection(GATEWAYS_COLLECTION).get(),
     db
       .collection(GLM_OPERATIONS_COLLECTION)
       .where("status", "in", ["pending", "running"])
@@ -309,23 +338,27 @@ export async function requestBuilderActivationLease(opts: {
     };
   }
 
-  // Readiness telemetry relocated to glmGateways/{id}.heartbeat (cutover step 2);
-  // the legacy flat gateways/{id} status writer is contracted, so source the
-  // heartbeat sub-doc off the glm docs already fetched.
+  const gatewayRoots = gatewaySnap.docs
+    .map((doc) => ({ doc: doc as FirestoreDocLike, root: durableActivationGateway(doc) }))
+    .filter((entry): entry is { doc: FirestoreDocLike; root: DurableActivationGateway } =>
+      entry.root !== null,
+    );
   const gatewayHeartbeats = new Map<string, Record<string, unknown>>();
-  for (const doc of glmSnap.docs) {
-    const data = doc.data() as Record<string, unknown>;
-    const hb = data.heartbeat;
-    if (hb && typeof hb === "object" && !Array.isArray(hb)) {
-      gatewayHeartbeats.set(doc.id, hb as Record<string, unknown>);
-    }
+  const liveHeartbeats = await Promise.all(
+    gatewayRoots.map(async ({ root }) => ({
+      gatewayId: root.gatewayId,
+      heartbeat: await readGatewayLiveRevisionHeartbeat(db, root),
+    })),
+  );
+  for (const { gatewayId, heartbeat } of liveHeartbeats) {
+    if (heartbeat) gatewayHeartbeats.set(gatewayId, heartbeat);
   }
   const plan = resolveBuilderActivationPlan({
     uid,
     builderSlug,
     currentGatewayId,
     requestedGatewayClass: opts.requestedGatewayClass,
-    glmGateways: glmSnap.docs as ReadonlyArray<FirestoreDocLike>,
+    gateways: gatewayRoots.map(({ doc }) => doc),
     gatewayHeartbeats,
     pendingOps: pendingOpsSnap.docs as ReadonlyArray<FirestoreDocLike>,
   });
@@ -367,7 +400,7 @@ export async function requestBuilderActivationLease(opts: {
     };
   }
 
-  const targetRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(target.gatewayId);
+  const targetRef = db.collection(GATEWAYS_COLLECTION).doc(target.gatewayId);
   if (plan.ok.action === "wake") {
     const batch = db.batch();
     batch.update(targetRef, { desiredStatus: "running" });

@@ -16,7 +16,6 @@ import {
   coachAgentId,
   byosubConnectionView,
   isSafeGatewayId,
-  modelCredentialProviderForByosubProvider,
   type ByosubProvider,
 } from "../lib/byosub.js";
 import { resolveUserGateway } from "../lib/user-gateway.js";
@@ -41,6 +40,7 @@ import {
   modelCredentialOAuthState,
   modelCredentialOAuthEntryByProviderId,
   modelCredentialOAuthEntryBySubscriptionProvider,
+  resolveUserByosubCredentialRefs,
   type ModelCredentialOAuthCatalogEntry,
   type ModelCredentialOAuthProviderId,
 } from "@octogee/shared/types/model-credentials";
@@ -48,64 +48,25 @@ import {
 const router = Router();
 const BYOSUB_PROVIDER_ORDER: ByosubProvider[] = ["openai", "anthropic"];
 
-function byosubProviderRef(
-  provider: ByosubProvider,
-  secretName: string,
-  status: "connected" | "needs_reauth" = "connected",
-) {
-  return {
-    provider,
-    secretName,
-    status,
-    modelCredentialProvider: modelCredentialProviderForByosubProvider(provider),
-  };
-}
-
-function byosubProviderPatch(
-  agentId: string,
-  provider: ByosubProvider,
-  secretName: string,
-  status: "connected" | "needs_reauth" = "connected",
-) {
-  return {
-    byosub: {
-      [agentId]: {
-        providers: {
-          [provider]: byosubProviderRef(provider, secretName, status),
-        },
-      },
-    },
-  };
-}
-
 function providerEntryFromSubscriptionProvider(provider: unknown): ModelCredentialOAuthCatalogEntry | null {
   return typeof provider === "string"
     ? modelCredentialOAuthEntryBySubscriptionProvider(provider)
     : null;
 }
 
-function providerSetFromGatewayData(
-  data: unknown,
-  agentId: string,
-): Record<string, unknown> | null {
-  const byosub = (data as { byosub?: unknown } | null | undefined)?.byosub;
-  if (!byosub || typeof byosub !== "object") return null;
-  const ref = (byosub as Record<string, unknown>)[agentId];
-  if (!ref || typeof ref !== "object") return null;
-  const providers = (ref as { providers?: unknown }).providers;
+function providerSetFromUserIntegration(data: unknown): Record<string, unknown> | null {
+  const providers = (data as { providers?: unknown } | null | undefined)?.providers;
   return providers && typeof providers === "object" ? (providers as Record<string, unknown>) : null;
 }
 
-function providerRefFromSet(
+function isConnectedProvider(
   providers: Record<string, unknown>,
   provider: ByosubProvider,
-): { secretName: string; status?: unknown } | null {
+): boolean {
   const raw = providers[provider];
-  if (!raw || typeof raw !== "object") return null;
+  if (!raw || typeof raw !== "object") return false;
   const ref = raw as Record<string, unknown>;
-  return typeof ref.secretName === "string" && ref.secretName
-    ? { secretName: ref.secretName, status: ref.status }
-    : null;
+  return ref.provider === provider && ref.connected === true && ref.status === "connected";
 }
 
 function firstRemainingConnectedProvider(
@@ -114,48 +75,32 @@ function firstRemainingConnectedProvider(
 ): {
   provider: ByosubProvider;
   entry: ModelCredentialOAuthCatalogEntry;
-  secretName: string;
 } | null {
   if (!providers) return null;
   for (const provider of BYOSUB_PROVIDER_ORDER) {
     if (provider === removedProvider) continue;
-    const ref = providerRefFromSet(providers, provider);
-    if (!ref || ref.status === "needs_reauth") continue;
+    if (!isConnectedProvider(providers, provider)) continue;
     const entry = modelCredentialOAuthEntryBySubscriptionProvider(provider);
     if (!entry) continue;
-    return { provider, entry, secretName: ref.secretName };
+    return { provider, entry };
   }
   return null;
 }
 
-function uidFromByosubSecretName(
-  provider: ByosubProvider,
-  secretName: string,
-): string | null {
-  const prefix = "byosub-";
-  const suffix = `-${provider}`;
-  if (!secretName.startsWith(prefix) || !secretName.endsWith(suffix)) return null;
-  const uid = secretName.slice(prefix.length, -suffix.length);
-  return uid || null;
-}
-
-function isOwnerScopedByosubSecretName(
-  provider: ByosubProvider,
-  secretName: string,
-): boolean {
-  const uid = uidFromByosubSecretName(provider, secretName);
-  return Boolean(uid && /^[A-Za-z0-9_-]+$/.test(uid));
-}
-
-function openaiSyncBackRef(raw: unknown): { secretName: string } | null {
-  if (!raw || typeof raw !== "object") return null;
-  const ref = raw as Record<string, unknown>;
-  if (ref.provider !== "openai") return null;
-  const secretName = ref.secretName;
-  if (typeof secretName !== "string" || !isOwnerScopedByosubSecretName("openai", secretName)) {
-    return null;
+function userIntegrationConnectionView(data: unknown) {
+  const providers = providerSetFromUserIntegration(data);
+  if (!providers) return byosubConnectionView(undefined);
+  const visible: Record<string, unknown> = {};
+  for (const provider of BYOSUB_PROVIDER_ORDER) {
+    const raw = providers[provider];
+    if (!raw || typeof raw !== "object") continue;
+    const ref = raw as Record<string, unknown>;
+    if (ref.provider !== provider) continue;
+    if (ref.status === "needs_reauth" || (ref.status === "connected" && ref.connected === true)) {
+      visible[provider] = ref;
+    }
   }
-  return { secretName };
+  return byosubConnectionView({ providers: visible });
 }
 
 interface FlowDoc {
@@ -172,6 +117,41 @@ async function readFlow(flowId: string): Promise<FlowDoc | null> {
   const snap = await db.collection("byosubFlows").doc(flowId).get();
   if (!snap.exists) return null;
   return (snap.data() || null) as FlowDoc | null;
+}
+
+function agentBelongsToUser(data: Record<string, unknown>, agentId: string): boolean {
+  const provisioning =
+    data.provisioning && typeof data.provisioning === "object"
+      ? (data.provisioning as Record<string, unknown>)
+      : null;
+  const openclaw =
+    provisioning?.openclaw && typeof provisioning.openclaw === "object"
+      ? (provisioning.openclaw as Record<string, unknown>)
+      : null;
+  if (!openclaw) return false;
+  if (openclaw.agentId === agentId) return true;
+  if (Array.isArray(openclaw.agentIds) && openclaw.agentIds.includes(agentId)) return true;
+  return typeof openclaw.slug === "string" && coachAgentId(openclaw.slug) === agentId;
+}
+
+async function findGatewayUserByAgentId(
+  gatewayId: string,
+  agentId: string,
+): Promise<{ uid: string; data: Record<string, unknown> } | null> {
+  const snap = await db
+    .collection("users")
+    .where("provisioning.openclaw.gatewayId", "==", gatewayId)
+    .get();
+  for (const doc of snap.docs) {
+    const data = doc.data() as Record<string, unknown> | undefined;
+    if (data && agentBelongsToUser(data, agentId)) return { uid: doc.id, data };
+  }
+  return null;
+}
+
+function requestGatewayMatchesBinding(req: Request, gatewayId: string): boolean {
+  const bound = (req as Request & { boundTenant?: { kind?: unknown; gatewayId?: unknown } }).boundTenant;
+  return bound?.kind === "gateway" && bound.gatewayId === gatewayId;
 }
 
 function oauthEntryFromFlow(flow: FlowDoc): ModelCredentialOAuthCatalogEntry | null {
@@ -207,17 +187,15 @@ router.get(
         return;
       }
       const snap = await db
-        .collection("glmGateways")
-        .doc(resolved.gatewayId)
+        .collection("users")
+        .doc(req.uid!)
+        .collection("integrations")
+        .doc("byosub")
         .get();
-      const data = (snap.data() || {}) as {
-        byosub?: Record<string, { providers?: unknown } | undefined>;
-      };
-      const ref = data.byosub?.[coachAgentId(resolved.slug)];
 
       // gatewayId lets the client target the sidecar locality seam
       // (/api/g/<gatewayId>/byosub/*) for the connect/status/submit flow.
-      res.json({ ...byosubConnectionView(ref), gatewayId: resolved.gatewayId });
+      res.json({ ...userIntegrationConnectionView(snap.data()), gatewayId: resolved.gatewayId });
     } catch (e) {
       next(e);
     }
@@ -368,39 +346,25 @@ interface ResolvedUserGateway {
 }
 
 interface RemainingByosubProvider {
+  provider: ByosubProvider;
   entry: ModelCredentialOAuthCatalogEntry;
-  secretName: string;
 }
 
-async function disconnectProviderFromGateway(
-  resolved: ResolvedUserGateway | null,
+async function disconnectProviderFromUserIntegration(
+  uid: string,
   provider: ByosubProvider,
 ): Promise<{ clearUserSignal: boolean; remainingProvider: RemainingByosubProvider | null }> {
-  if (!resolved) return { clearUserSignal: true, remainingProvider: null };
-  const agentId = coachAgentId(resolved.slug);
-  try {
-    const gatewayRef = db.collection("glmGateways").doc(resolved.gatewayId);
-    const snap = await gatewayRef.get();
-    const providers = providerSetFromGatewayData(snap.data(), agentId);
-    const remaining = firstRemainingConnectedProvider(providers, provider);
-    const clearUserSignal = !remaining;
-    if (providers && Object.prototype.hasOwnProperty.call(providers, provider)) {
-      await gatewayRef.update({
-        [clearUserSignal
-          ? `byosub.${agentId}`
-          : `byosub.${agentId}.providers.${provider}`]: FieldValue.delete(),
-      });
-    }
-    return {
-      clearUserSignal,
-      remainingProvider: remaining
-        ? { entry: remaining.entry, secretName: remaining.secretName }
-        : null,
-    };
-  } catch (err) {
-    if ((err as { code?: number } | null)?.code !== 5) throw err;
-    return { clearUserSignal: true, remainingProvider: null };
-  }
+  const snap = await db
+    .collection("users")
+    .doc(uid)
+    .collection("integrations")
+    .doc("byosub")
+    .get();
+  const remaining = firstRemainingConnectedProvider(providerSetFromUserIntegration(snap.data()), provider);
+  return {
+    clearUserSignal: !remaining,
+    remainingProvider: remaining ? { provider: remaining.provider, entry: remaining.entry } : null,
+  };
 }
 
 async function clearUserByosubSignal(uid: string): Promise<void> {
@@ -427,7 +391,7 @@ async function applyRemainingByosubSignal(
   await flipUnifiedByosSignal(
     uid,
     remainingProvider.entry.id,
-    remainingProvider.secretName,
+    byosubSecretName(uid, remainingProvider.provider),
   );
   triggerUnifiedByosSync({
     gatewayId: resolved.gatewayId,
@@ -480,7 +444,7 @@ function cleanupGeneratedByosubCredentialsBestEffort(
 }
 
 // #1141 — let the Builder clear a connected BYOS credential. The inverse
-// of /capture's unified-signal flip + glmGateways.byosub ref-write. The
+// of /capture's unified-signal flip + user integration write. The
 // Secret Manager secret is intentionally NOT destroyed (disconnect-only,
 // not full-wipe); a future re-Connect rewrites a fresh version under the
 // same owner-scoped name, so no orphan secret and no doubled-up cred.
@@ -499,10 +463,7 @@ router.post(
       }
       const provider = entry.oauth.secretProvider as ByosubProvider;
       const resolved = await resolveUserGateway(uid);
-      const { clearUserSignal, remainingProvider } = await disconnectProviderFromGateway(
-        resolved,
-        provider,
-      );
+      const { clearUserSignal, remainingProvider } = await disconnectProviderFromUserIntegration(uid, provider);
       if (resolved) {
         cleanupGeneratedByosubCredentialsBestEffort(provider, coachAgentId(resolved.slug));
       }
@@ -532,7 +493,7 @@ router.post(
 
 // Claude SUBSCRIPTION capture — paste-token, no device-auth ceremony. The Builder
 // runs `claude setup-token` themselves and pastes the bearer here; we validate,
-// store it owner-scoped in Secret Manager, write the glmGateways ref, and flip the
+// store it owner-scoped in Secret Manager, write the user integration, and flip the
 // unified BYOS signal to claude-cli. The pod's byot-sync watcher reacts to the
 // signal: materializes the per-agent claude-cli store from SM and patches the
 // coach model to Opus 4.8 on the customer's own subscription. User-authed (the
@@ -567,20 +528,12 @@ router.post(
         res.status(400).json({ error: "No provisioned workspace/gateway for this user" });
         return;
       }
-      const agentId = coachAgentId(resolved.slug);
       const secretName = byosubSecretName(uid, entry.oauth.secretProvider);
       await writeSecret({
         name: secretName,
         value: b.token.trim(),
         labels: { byosub: "true", provider: entry.oauth.secretProvider },
       });
-      await db
-        .collection("glmGateways")
-        .doc(resolved.gatewayId)
-        .set(
-          byosubProviderPatch(agentId, entry.oauth.secretProvider as ByosubProvider, secretName),
-          { merge: true },
-        );
       await flipUnifiedByosSignal(uid, entry.id, secretName);
       await writeByosubIntegration({
         uid,
@@ -653,14 +606,6 @@ router.post(
         value: b.credential,
         labels: { byosub: "true", provider: secretProvider },
       });
-      await db
-        .collection("glmGateways")
-        .doc(flow.gatewayId)
-        .set(
-          byosubProviderPatch(flow.agentId, secretProvider as ByosubProvider, secretName),
-          { merge: true },
-        );
-
       await flipUnifiedByosSignal(flow.uid, signalProvider, secretName);
       await writeByosubIntegration({
         uid: flow.uid,
@@ -709,54 +654,40 @@ router.post(
         });
         return;
       }
+      if (!requestGatewayMatchesBinding(req, b.gatewayId)) {
+        res.status(403).json({ error: "forbidden" });
+        return;
+      }
       const provider = entry.oauth.secretProvider as ByosubProvider;
-      const snap = await db.collection("glmGateways").doc(b.gatewayId).get();
-      const providers = providerSetFromGatewayData(snap.data(), b.agentId);
-      if (
-        !providers ||
-        !Object.prototype.hasOwnProperty.call(providers, provider)
-      ) {
+      const assigned = await findGatewayUserByAgentId(b.gatewayId, b.agentId);
+      if (!assigned) {
         res.json({ ok: true, noop: true });
         return;
       }
-      await db
-        .collection("glmGateways")
-        .doc(b.gatewayId)
-        .set(
-          {
-            byosub: {
-              [b.agentId]: {
-                providers: {
-                  [provider]: { status: "needs_reauth" },
-                },
-              },
-            },
-          },
-          { merge: true },
-        );
-      const ref = providerRefFromSet(providers, provider);
-      if (ref) {
-        const uid = uidFromByosubSecretName(provider, ref.secretName);
-        if (uid) {
-          const updatedProviders = {
-            ...providers,
-            [provider]: { ...(providers[provider] as Record<string, unknown>), status: "needs_reauth" },
-          };
-          await writeByosubIntegration({
-            uid,
-            provider,
-            modelCredentialProvider: entry.id,
-            status: "needs_reauth",
-            connected: false,
-            summaryConnected: byosubConnectionView({ providers: updatedProviders }).connected,
-            gatewayId: b.gatewayId,
-          });
-        } else {
-          logger.warn(
-            `[byosub] auth-state could not derive owner uid from secretName=${ref.secretName} provider=${provider}`,
-          );
-        }
+      const integrationSnap = await db
+        .collection("users")
+        .doc(assigned.uid)
+        .collection("integrations")
+        .doc("byosub")
+        .get();
+      const providers = providerSetFromUserIntegration(integrationSnap.data());
+      if (!providers || !isConnectedProvider(providers, provider)) {
+        res.json({ ok: true, noop: true });
+        return;
       }
+      const updatedProviders = {
+        ...providers,
+        [provider]: { ...(providers[provider] as Record<string, unknown>), status: "needs_reauth", connected: false },
+      };
+      await writeByosubIntegration({
+        uid: assigned.uid,
+        provider,
+        modelCredentialProvider: entry.id,
+        status: "needs_reauth",
+        connected: false,
+        summaryConnected: userIntegrationConnectionView({ providers: updatedProviders }).connected,
+        gatewayId: b.gatewayId,
+      });
       res.json({ ok: true });
     } catch (e) {
       next(e);
@@ -793,9 +724,24 @@ router.post(
         res.status(400).json({ error: `invalid credential: ${v.reason}` });
         return;
       }
-      const snap = await db.collection("glmGateways").doc(b.gatewayId).get();
-      const providers = providerSetFromGatewayData(snap.data(), b.agentId);
-      const ref = openaiSyncBackRef(providers?.openai);
+      if (!requestGatewayMatchesBinding(req, b.gatewayId)) {
+        res.status(403).json({ error: "forbidden" });
+        return;
+      }
+      const assigned = await findGatewayUserByAgentId(b.gatewayId, b.agentId);
+      if (!assigned) {
+        res.json({ ok: true, noop: true });
+        return;
+      }
+      const integrationSnap = await db
+        .collection("users")
+        .doc(assigned.uid)
+        .collection("integrations")
+        .doc("byosub")
+        .get();
+      const ref = resolveUserByosubCredentialRefs(assigned.uid, integrationSnap.data()).refs.find(
+        (candidate) => candidate.provider === "openai",
+      );
       if (!ref) {
         res.json({ ok: true, noop: true });
         return;

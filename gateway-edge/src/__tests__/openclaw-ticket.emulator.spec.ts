@@ -8,6 +8,7 @@ import {
   getIdTokenForUid,
   setupEmulatorTest,
 } from "@octogee/test-helpers/firestore-emulator";
+import { releasePayloadHash } from "@octogee/shared/types/gateway-releases";
 
 setupEmulatorTest({
   env: { API_PUBLIC_URL: "https://chat-proxy.test.octogee.com" },
@@ -18,6 +19,103 @@ function buildApp() {
   app.use(express.json());
   app.use("/api/openclaw", openclawRouter);
   return app;
+}
+
+async function seedDedicatedGateway({
+  gatewayId,
+  gatewayClass,
+  desiredStatus,
+  heartbeatStatus,
+}: {
+  gatewayId: string;
+  gatewayClass: "builder" | "operator";
+  desiredStatus: "running" | "paused";
+  heartbeatStatus: "ready" | "unknown";
+}): Promise<void> {
+  const revisionId = `${gatewayId}-r1`;
+  const isOperator = gatewayClass === "operator";
+  const replicas = desiredStatus === "running" ? 1 : 0;
+  await db.doc(`gateways/${gatewayId}`).set({
+    gatewayId,
+    createdAt: 1,
+    createdBy: "test",
+    updatedAt: 1,
+    updatedBy: "test",
+    latestRelease: 1,
+    desiredRelease: 1,
+    liveRelease: 1,
+    liveRevisionId: revisionId,
+    trafficRevisionId: revisionId,
+    desiredStatus,
+    roll: null,
+    configSchemaVersion: 1,
+    profile: isOperator ? "operator" : null,
+    gatewayClass,
+    imageProfile: isOperator ? "operator" : "standard",
+    sizingTier: null,
+    computeClass: null,
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: null,
+    serviceAccount: null,
+    operatorAccess: null,
+    ownerUid: "caller-uid",
+    coOwnerUids: [],
+    builderSlug: "alice",
+    openclawOverrides: null,
+    modelBrokerLimits: null,
+    preemption: null,
+  });
+  const payload = {
+    imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
+    imageTag: "abc1234",
+    macOpsTokenProtocol: 2 as const,
+  };
+  await db.doc(`gateways/${gatewayId}/releases/1`).set({
+    gatewayId,
+    release: 1,
+    createdAt: 1,
+    createdBy: "test",
+    sourceRelease: null,
+    note: null,
+    payloadHash: releasePayloadHash(payload),
+    payload,
+  });
+  await db.doc(`glmGateways/${revisionId}`).set({
+    docKind: "revision",
+    revisionId,
+    gateway: gatewayId,
+    release: 1,
+    rollRole: null,
+    lifecycle: "serving",
+    createdAt: 1,
+    createdByOperationId: null,
+    retiredAt: null,
+    retireReason: null,
+    helm: {
+      releaseName: `octogee-gw-${revisionId}`,
+      deploymentName: `octogee-gateway-${revisionId}`,
+      gatewayServiceName: `octogee-gateway-${revisionId}`,
+      gatewayEdgeServiceName: `gateway-edge-${revisionId}`,
+      serviceAccountName: `octogee-gw-${gatewayId}`,
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
+      imageTag: "abc1234",
+      replicas,
+      availableReplicas: replicas,
+      lastAppliedAt: 1,
+    },
+    heartbeat: {
+      status: heartbeatStatus,
+      lastHeartbeatAt: 1,
+      version: "abc1234",
+      openclawVersion: null,
+      internalUrl: null,
+      startedAt: 1,
+      mountedCustomers: [],
+      migratingIn: [],
+    },
+    lastError: { message: null, at: null },
+  });
 }
 
 describe("POST /api/openclaw/ticket — real Firebase Auth + Firestore (emulators)", () => {
@@ -101,16 +199,12 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
       username: "alice",
       provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
     });
-    await db.doc("glmGateways/gw-alice").set({
-      ownerUid: "caller-uid",
-      builderSlug: "alice",
+    await seedDedicatedGateway({
+      gatewayId: "gw-alice",
       gatewayClass: "builder",
       desiredStatus: "running",
+      heartbeatStatus: "ready",
     });
-    await db.doc("glmGateways/gw-alice").set(
-      { heartbeat: { status: "ready", mountedCustomers: [] } },
-      { merge: true },
-    );
 
     const token = await getIdTokenForUid("caller-uid");
     const res = await request(buildApp())
@@ -144,17 +238,17 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
     });
   });
 
-  it("wakes a sleeping dedicated gateway and waits to mint until the next retry", async () => {
+  it("wakes a paused dedicated gateway and waits to mint until it reports ready", async () => {
     await db.doc("users/caller-uid").set({
       approved: true,
       username: "alice",
       provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
     });
-    await db.doc("glmGateways/gw-alice").set({
-      ownerUid: "caller-uid",
-      builderSlug: "alice",
+    await seedDedicatedGateway({
+      gatewayId: "gw-alice",
       gatewayClass: "builder",
       desiredStatus: "paused",
+      heartbeatStatus: "unknown",
     });
 
     const token = await getIdTokenForUid("caller-uid");
@@ -165,13 +259,13 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
     expect(res.status).toBe(202);
     expect(res.body).toMatchObject({
       status: "waking",
-      targetStatus: "missing",
+      targetStatus: "unknown",
       gatewayId: "gw-alice",
       openclawTicketDeferred: true,
     });
     expect(res.body.wsTicket).toBeUndefined();
 
-    const target = await db.doc("glmGateways/gw-alice").get();
+    const target = await db.doc("gateways/gw-alice").get();
     expect(target.data()?.desiredStatus).toBe("running");
     const ops = await db.collection("glmOperations").get();
     expect(ops.empty).toBe(true);
@@ -183,17 +277,12 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
       username: "alice",
       provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
     });
-    await db.doc("glmGateways/bender").set({
-      ownerUid: "caller-uid",
-      builderSlug: "alice",
+    await seedDedicatedGateway({
+      gatewayId: "bender",
       gatewayClass: "operator",
-      imageProfile: "operator",
       desiredStatus: "running",
+      heartbeatStatus: "ready",
     });
-    await db.doc("glmGateways/bender").set(
-      { heartbeat: { status: "ready", mountedCustomers: [] } },
-      { merge: true },
-    );
 
     const token = await getIdTokenForUid("caller-uid");
     const res = await request(buildApp())

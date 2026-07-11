@@ -704,7 +704,7 @@ async function restoreByos(
   if (!result.restored) {
     return { ...result, steps: [] };
   }
-  adapter.log(`[add:${slug}] BYOS oauth activated from glmGateways ref`);
+  adapter.log(`[add:${slug}] BYOS oauth activated from user integration broker`);
   return { ...result, steps: ["byosub-restore"] };
 }
 

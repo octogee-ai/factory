@@ -15,19 +15,6 @@ import { deriveCodexAuthHealth } from "./codex-auth-health.js";
 
 export type ByosubProvider = "openai" | "anthropic";
 
-const BYOSUB_PROVIDERS: ByosubProvider[] = ["openai", "anthropic"];
-
-export interface ByosubProviderRef {
-  provider: ByosubProvider;
-  secretName: string;
-  status?: string;
-  modelCredentialProvider?: string;
-}
-
-export interface ByosubRef {
-  providers?: Record<string, unknown>;
-}
-
 export interface ByosubRestorePlanItem {
   agentId: string;
   provider: ByosubProvider;
@@ -143,76 +130,6 @@ export function shouldRestoreCodexCredential(opts: {
   return "skip";
 }
 
-function byosubProviderFromString(provider: string): ByosubProvider | null {
-  if (provider === "openai" || provider === "anthropic") return provider;
-  return null;
-}
-
-function providerMapFromRef(ref: ByosubRef): Record<string, unknown> | null {
-  return ref &&
-    typeof ref === "object" &&
-    ref.providers &&
-    typeof ref.providers === "object"
-    ? (ref.providers as Record<string, unknown>)
-    : null;
-}
-
-function validProviderRef(
-  agentId: string,
-  provider: ByosubProvider,
-  raw: unknown,
-  log: (m: string) => void,
-): ByosubProviderRef | null {
-  if (
-    !raw ||
-    typeof raw !== "object" ||
-    (raw as { provider?: unknown }).provider !== provider ||
-    typeof (raw as { secretName?: unknown }).secretName !== "string" ||
-    !(raw as { secretName?: string }).secretName
-  ) {
-    log(`byosub: ${agentId} has a malformed ${provider} ref — skipping`);
-    return null;
-  }
-  return raw as ByosubProviderRef;
-}
-
-function providerRestoreRefs(
-  agentId: string,
-  providers: Record<string, unknown>,
-  log: (m: string) => void,
-): Partial<Record<ByosubProvider, ByosubProviderRef>> {
-  const refs: Partial<Record<ByosubProvider, ByosubProviderRef>> = {};
-  for (const [providerKey, raw] of Object.entries(providers)) {
-    const provider = byosubProviderFromString(providerKey);
-    if (!provider) {
-      log(
-        `byosub: ${agentId} unknown provider ${JSON.stringify(providerKey)} — skipping`,
-      );
-      continue;
-    }
-    const ref = validProviderRef(agentId, provider, raw, log);
-    if (ref) refs[provider] = ref;
-  }
-  return refs;
-}
-
-function planItemForProvider(
-  agentId: string,
-  provider: ByosubProvider,
-  ref: ByosubProviderRef,
-  openclawDir: string,
-): ByosubRestorePlanItem {
-  return {
-    agentId,
-    provider,
-    secretName: ref.secretName,
-    ...(provider === "openai"
-      ? { targetPath: codexAuthJsonPath(openclawDir, agentId) }
-      : {}),
-    openclawDir,
-  };
-}
-
 function removeTempFile(tmp: string | undefined): void {
   if (!tmp) return;
   try {
@@ -305,43 +222,6 @@ function restoreCodexCredential(item: ByosubRestorePlanItem, payload: string, ag
   }
 }
 
-export function planByosubRestores(opts: {
-  agentIds: string[];
-  byosub: Record<string, ByosubRef> | undefined;
-  openclawDir: string;
-  logFn?: (m: string) => void;
-}): ByosubRestorePlanItem[] {
-  const log = opts.logFn ?? (() => {});
-  if (!opts.byosub || typeof opts.byosub !== "object") return [];
-  const present = new Set(opts.agentIds);
-  const plan: ByosubRestorePlanItem[] = [];
-  for (const [agentId, ref] of Object.entries(opts.byosub)) {
-    if (!isSafeAgentId(agentId)) {
-      log(`byosub: skipping unsafe/invalid agent id ${JSON.stringify(agentId)}`);
-      continue;
-    }
-    if (!present.has(agentId)) {
-      log(`byosub: ${agentId} not present on this gateway — skipping`);
-      continue;
-    }
-    const providers = providerMapFromRef(ref);
-    if (!providers) {
-      log(`byosub: ${agentId} has a malformed ref — skipping`);
-      continue;
-    }
-    const refs = providerRestoreRefs(agentId, providers, log);
-    for (const provider of BYOSUB_PROVIDERS) {
-      const providerRef = refs[provider];
-      if (providerRef) {
-        plan.push(
-          planItemForProvider(agentId, provider, providerRef, opts.openclawDir),
-        );
-      }
-    }
-  }
-  return plan;
-}
-
 export async function restoreByosubCredentials(opts: {
   plan: ByosubRestorePlanItem[];
   fetchSecret: (secretName: string) => Promise<string>;
@@ -405,34 +285,4 @@ export async function restoreByosubCredentials(opts: {
     }
   }
   return { restored, failed, skipped };
-}
-
-export async function restoreByosubForAgents(opts: {
-  agentIds: string[];
-  byosub: Record<string, ByosubRef> | undefined;
-  openclawDir: string;
-  fetchSecret: (secretName: string) => Promise<string>;
-  logFn?: (m: string) => void;
-  claudeCliNativeHomeDir?: string;
-}): Promise<{
-  restored: number;
-  failed: number;
-  skipped: number;
-  planned: number;
-}> {
-  const plan = planByosubRestores({
-    agentIds: opts.agentIds,
-    byosub: opts.byosub,
-    openclawDir: opts.openclawDir,
-    logFn: opts.logFn,
-  });
-  if (plan.length === 0)
-    return { restored: 0, failed: 0, skipped: 0, planned: 0 };
-  const r = await restoreByosubCredentials({
-    plan,
-    fetchSecret: opts.fetchSecret,
-    logFn: opts.logFn,
-    ...(opts.claudeCliNativeHomeDir ? { claudeCliNativeHomeDir: opts.claudeCliNativeHomeDir } : {}),
-  });
-  return { ...r, planned: plan.length };
 }

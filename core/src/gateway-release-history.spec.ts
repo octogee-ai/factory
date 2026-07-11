@@ -7,23 +7,6 @@ function payload(imageTag: string): ReleasePayload {
   return {
     imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
     imageTag,
-    profile: null,
-    gatewayClass: "shared",
-    imageProfile: "standard",
-    sizingTier: null,
-    computeClass: null,
-    gcpProject: null,
-    gatewayContainerSecurityContext: null,
-    serviceAccountName: null,
-    serviceAccount: null,
-    operatorAccess: null,
-    ownerUid: null,
-    coOwnerUids: [],
-    builderSlug: null,
-    openclawOverrides: null,
-    byosub: null,
-    modelBrokerLimits: null,
-    preemption: null,
   };
 }
 

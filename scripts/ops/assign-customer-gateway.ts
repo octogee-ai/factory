@@ -6,10 +6,10 @@ import * as fs from "fs";
 import * as path from "path";
 import { pathToFileURL } from "node:url";
 import {
-  GLM_GATEWAYS_COLLECTION,
   isValidGatewayId,
   type GatewayProfile,
 } from "../../shared/types/glm.js";
+import { readGatewayAuthorization } from "@octogee/core/gateway-live-release";
 import {
   resolveOnboardingPlacementForUid,
   type OnboardingOrchestratorConfig,
@@ -51,9 +51,13 @@ function normalizeGatewayProfile(profile: unknown): GatewayProfile {
   return profile === "operator" ? "operator" : "standard";
 }
 
-async function readGatewayProfile(db: Firestore, gatewayId: string): Promise<GatewayProfile> {
-  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-  return normalizeGatewayProfile(snap.exists ? snap.data()?.profile : undefined);
+export async function readGatewayProfile(
+  db: Firestore,
+  gatewayId: string,
+): Promise<GatewayProfile | null> {
+  const authorization = await readGatewayAuthorization(db, gatewayId);
+  if (!authorization || authorization.gateway.desiredStatus === "retired") return null;
+  return normalizeGatewayProfile(authorization.config.profile);
 }
 
 export type OpsAssignmentTarget = OnboardingPlacementDecision;
@@ -117,6 +121,9 @@ async function assignOne(
   const placement = resolveOnboardingPlacementForUid(uid, config);
   const target = placement.gatewayId;
   const targetProfile = await readGatewayProfile(db, target);
+  if (targetProfile === null) {
+    return { kind: "not-ready", uid, slug, reason: "gateway-config-missing" };
+  }
   const current: string | null = typeof openclaw?.gatewayId === "string" ? openclaw.gatewayId : null;
   const currentProfile = normalizeGatewayProfile(openclaw?.gatewayProfile);
   if (current === target) {

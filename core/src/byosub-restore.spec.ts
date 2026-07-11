@@ -3,9 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import {
-  planByosubRestores,
   restoreByosubCredentials,
-  restoreByosubForAgents,
   agentIdsFromConfig,
   codexHomeDir,
   codexAuthJsonPath,
@@ -16,7 +14,6 @@ import {
   shouldRestoreCodexCredential,
   isSafeAgentId,
   readCodexAuthStateText,
-  type ByosubProvider,
 } from "./byosub-restore.js";
 import * as authProfileSqlite from "./auth-profile-sqlite.js";
 const {
@@ -40,10 +37,6 @@ afterEach(() => {
 const OC = "/home/node/.openclaw";
 const codexAuth = (agentId: string) =>
   `${OC}/agents/${agentId}/agent/codex-home/auth.json`;
-const byosubRef = (provider: ByosubProvider, secretName: string) => ({
-  providers: { [provider]: { provider, secretName } },
-});
-
 const jwt = (claims: Record<string, unknown>) =>
   "e30." + Buffer.from(JSON.stringify(claims)).toString("base64url") + ".s";
 const codexBlob = () =>
@@ -61,16 +54,6 @@ const codexBlob = () =>
     },
     last_refresh: "2026-05-18T00:11:06Z",
   });
-const claudeSsoBlob = () =>
-  JSON.stringify({
-    claudeAiOauth: {
-      accessToken: "claude-access-1",
-      refreshToken: "claude-refresh-1",
-      expiresAt: Date.now() + 24 * 60 * 60 * 1000,
-      subscriptionType: "max",
-    },
-  });
-
 const apReadFor = (oc: string, agentId: string): unknown =>
   readAuthProfileStore(codexAgentDir(oc, agentId));
 
@@ -138,131 +121,6 @@ describe("codexHomeDir / codexAuthJsonPath (shared codex-home path atom)", () =>
     );
   });
 
-  it("is exactly the path planByosubRestores writes to (no drift between writer + restorer)", () => {
-    const [item] = planByosubRestores({
-      agentIds: ["octogee-a-coach"],
-      byosub: { "octogee-a-coach": byosubRef("openai", "s") },
-      openclawDir: OC,
-    });
-    expect(item.targetPath).toBe(codexAuthJsonPath(OC, "octogee-a-coach"));
-  });
-});
-
-describe("planByosubRestores", () => {
-  it("returns [] for undefined/empty byosub", () => {
-    expect(
-      planByosubRestores({ agentIds: ["octogee-a-coach"], byosub: undefined, openclawDir: OC }),
-    ).toEqual([]);
-    expect(
-      planByosubRestores({ agentIds: ["octogee-a-coach"], byosub: {}, openclawDir: OC }),
-    ).toEqual([]);
-  });
-
-  it("plans an openai restore into the per-agent codex-home (not ~/.codex)", () => {
-    const plan = planByosubRestores({
-      agentIds: ["octogee-ceckert-coach", "octogee-ops-gw-bender"],
-      byosub: {
-        "octogee-ceckert-coach": byosubRef("openai", "byosub-uid1-openai"),
-      },
-      openclawDir: OC,
-    });
-    expect(plan).toEqual([
-      {
-        agentId: "octogee-ceckert-coach",
-        provider: "openai",
-        secretName: "byosub-uid1-openai",
-        targetPath: codexAuth("octogee-ceckert-coach"),
-        openclawDir: OC,
-      },
-    ]);
-  });
-
-  it("plans independently for many customers on one shared gateway", () => {
-    const plan = planByosubRestores({
-      agentIds: ["octogee-a-coach", "octogee-b-coach", "octogee-ops-x"],
-      byosub: {
-        "octogee-a-coach": byosubRef("openai", "byosub-a-openai"),
-        "octogee-b-coach": byosubRef("openai", "byosub-b-openai"),
-      },
-      openclawDir: OC,
-    });
-    expect(plan.map((p) => p.agentId).sort()).toEqual([
-      "octogee-a-coach",
-      "octogee-b-coach",
-    ]);
-    expect(plan.find((p) => p.agentId === "octogee-b-coach")!.targetPath).toBe(
-      codexAuth("octogee-b-coach"),
-    );
-  });
-
-  it("skips + logs a ref whose agent is not present on this gateway", () => {
-    const logs: string[] = [];
-    const plan = planByosubRestores({
-      agentIds: ["octogee-a-coach"],
-      byosub: { "octogee-ghost-coach": byosubRef("openai", "s") },
-      openclawDir: OC,
-      logFn: (m) => logs.push(m),
-    });
-    expect(plan).toEqual([]);
-    expect(logs.join("\n")).toMatch(/octogee-ghost-coach.*not present|not on this gateway/i);
-  });
-
-  it("plans anthropic as a claude-cli SQLite-store restore (no auth.json file — openclaw's claude-cli runtime reads the store)", () => {
-    const plan = planByosubRestores({
-      agentIds: ["octogee-a-coach"],
-      byosub: { "octogee-a-coach": byosubRef("anthropic", "byosub-a-anthropic") },
-      openclawDir: OC,
-    });
-    expect(plan).toEqual([
-      {
-        agentId: "octogee-a-coach",
-        provider: "anthropic",
-        secretName: "byosub-a-anthropic",
-        openclawDir: OC,
-      },
-    ]);
-  });
-
-  it("skips + logs an unknown provider", () => {
-    const logs: string[] = [];
-    const plan = planByosubRestores({
-      agentIds: ["octogee-a-coach"],
-      byosub: {
-        "octogee-a-coach": {
-          providers: { grok: { provider: "grok" as never, secretName: "s" } },
-        },
-      },
-      openclawDir: OC,
-      logFn: (m) => logs.push(m),
-    });
-    expect(plan).toEqual([]);
-    expect(logs.join("\n")).toMatch(/unknown provider|grok/i);
-  });
-
-  it("rejects path-traversal / unsafe agent ids (Firestore-sourced keys)", () => {
-    const logs: string[] = [];
-    const longId = "x".repeat(200);
-
-    const byosub = JSON.parse(
-      `{"../../etc":{"providers":{"openai":{"provider":"openai","secretName":"s1"}}},` +
-        `"a/b":{"providers":{"openai":{"provider":"openai","secretName":"s2"}}},` +
-        `"foo bar":{"providers":{"openai":{"provider":"openai","secretName":"s3"}}},` +
-        `"Up$er":{"providers":{"openai":{"provider":"openai","secretName":"s4"}}},` +
-        `"${longId}":{"providers":{"openai":{"provider":"openai","secretName":"s5"}}},` +
-        `"__proto__":{"providers":{"openai":{"provider":"openai","secretName":"s6"}}}}`,
-    );
-    const plan = planByosubRestores({
-      agentIds: ["../../etc", "a/b", "foo bar", "Up$er", longId, "__proto__"],
-      byosub,
-      openclawDir: OC,
-      logFn: (m) => logs.push(m),
-    });
-    
-    expect(plan).toEqual([]);
-    expect(logs.join("\n")).toMatch(/unsafe|invalid agent id/i);
-    
-    expect(({} as Record<string, unknown>).secretName).toBeUndefined();
-  });
 });
 
 describe("shouldRestoreCodexCredential — conservative-restore keystone", () => {
@@ -805,129 +663,5 @@ describe("agentIdsFromConfig", () => {
         },
       }),
     ).toEqual(["octogee-ceckert-coach", "octogee-ops-gw-bender"]);
-  });
-});
-
-describe("restoreByosubForAgents (shared plan+restore composition)", () => {
-  it("no-op when nothing to plan → {restored:0,failed:0,planned:0}, no fs", async () => {
-    const oc = mkTmp();
-    let fetched = false;
-    const r = await restoreByosubForAgents({
-      agentIds: ["octogee-a-coach"],
-      byosub: undefined,
-      openclawDir: oc,
-      fetchSecret: async () => {
-        fetched = true;
-        return "x";
-      },
-    });
-    expect(r).toEqual({ restored: 0, failed: 0, skipped: 0, planned: 0 });
-    expect(fetched).toBe(false);
-  });
-
-  it("plans + restores the per-agent codex-home for a present oauth agent", async () => {
-    const oc = mkTmp();
-    const r = await restoreByosubForAgents({
-      agentIds: ["octogee-tester-70-coach"],
-      byosub: {
-        "octogee-tester-70-coach": byosubRef("openai", "byosub-uid-openai"),
-      },
-      openclawDir: oc,
-      fetchSecret: async () => codexBlob(),
-    });
-    expect(r).toEqual({ restored: 1, failed: 0, skipped: 0, planned: 1 });
-    expect(
-      JSON.parse(fs.readFileSync(codexAuthJsonPath(oc, "octogee-tester-70-coach"), "utf-8"))
-        .auth_mode,
-    ).toBe("chatgpt");
-
-    const store = apReadFor(oc, "octogee-tester-70-coach") as {
-      profiles: Record<string, { provider?: string }>;
-    };
-    expect(store.profiles["openai-codex:default"].provider).toBe("openai-codex");
-  });
-
-  it("plans every connected provider under an agent provider set", () => {
-    const plan = planByosubRestores({
-      agentIds: ["octogee-tester-70-coach"],
-      byosub: {
-        "octogee-tester-70-coach": {
-          providers: {
-            openai: { provider: "openai", secretName: "byosub-uid-openai" },
-            anthropic: { provider: "anthropic", secretName: "byosub-uid-anthropic" },
-          },
-        },
-      },
-      openclawDir: OC,
-    });
-
-    expect(plan).toEqual([
-      {
-        agentId: "octogee-tester-70-coach",
-        provider: "openai",
-        secretName: "byosub-uid-openai",
-        targetPath: codexAuth("octogee-tester-70-coach"),
-        openclawDir: OC,
-      },
-      {
-        agentId: "octogee-tester-70-coach",
-        provider: "anthropic",
-        secretName: "byosub-uid-anthropic",
-        openclawDir: OC,
-      },
-    ]);
-  });
-
-  it("restores multiple provider-set credentials without dropping either OAuth profile", async () => {
-    const oc = mkTmp();
-    const home = mkTmp();
-    const agentId = "octogee-tester-70-coach";
-    const r = await restoreByosubForAgents({
-      agentIds: [agentId],
-      byosub: {
-        [agentId]: {
-          providers: {
-            openai: { provider: "openai", secretName: "byosub-uid-openai" },
-            anthropic: { provider: "anthropic", secretName: "byosub-uid-anthropic" },
-          },
-        },
-      },
-      openclawDir: oc,
-      claudeCliNativeHomeDir: home,
-      fetchSecret: async (secretName) =>
-        secretName.endsWith("-openai") ? codexBlob() : claudeSsoBlob(),
-    });
-
-    expect(r).toEqual({ restored: 2, failed: 0, skipped: 0, planned: 2 });
-    expect(JSON.parse(fs.readFileSync(codexAuthJsonPath(oc, agentId), "utf-8")).auth_mode).toBe(
-      "chatgpt",
-    );
-    expect(fs.existsSync(path.join(home, ".claude", ".credentials.json"))).toBe(true);
-    const store = apReadFor(oc, agentId) as {
-      profiles: Record<string, { provider?: string; access?: string }>;
-    };
-    expect(store.profiles["openai-codex:default"]).toMatchObject({
-      provider: "openai-codex",
-      access: "acc-1",
-    });
-    expect(store.profiles["anthropic:claude-cli"]).toMatchObject({
-      provider: "claude-cli",
-      access: "claude-access-1",
-    });
-  });
-
-  it("never throws on a bad secret — {failed:1, planned:1}", async () => {
-    const oc = mkTmp();
-    const r = await restoreByosubForAgents({
-      agentIds: ["octogee-tester-70-coach"],
-      byosub: {
-        "octogee-tester-70-coach": byosubRef("openai", "boom"),
-      },
-      openclawDir: oc,
-      fetchSecret: async () => {
-        throw new Error("secret denied");
-      },
-    });
-    expect(r).toEqual({ restored: 0, failed: 1, skipped: 0, planned: 1 });
   });
 });

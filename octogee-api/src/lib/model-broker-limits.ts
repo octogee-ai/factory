@@ -2,6 +2,10 @@ import type { Firestore } from "firebase-admin/firestore";
 
 import { resolveBillingProfile, type BillingRail } from "@octogee/shared/types/billing";
 import {
+  readGatewayAuthorization,
+  type GatewayAuthorization,
+} from "@octogee/core/gateway-live-release";
+import {
   normalizeModelBrokerTokenLimits,
   normalizeModelBrokerTokenPolicy,
   type ModelBrokerTokenLimits,
@@ -20,6 +24,8 @@ export interface OwnerModelBrokerGrant {
   // ride prepaid_credits (their credit balance is the gate, not a window).
   rail: BillingRail;
 }
+
+type ModelBrokerFirestore = Pick<Firestore, "collection" | "doc">;
 
 function finiteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
@@ -42,7 +48,7 @@ export function envDefaultModelBrokerLimits(
 }
 
 async function readOwnerTier(
-  db: Pick<Firestore, "collection"> | undefined,
+  db: ModelBrokerFirestore | undefined,
   ownerUid: string | undefined,
   now: number,
 ): Promise<{
@@ -70,18 +76,16 @@ async function readOwnerTier(
 }
 
 async function readGatewayLimitOverrides(
-  db: Pick<Firestore, "collection"> | undefined,
+  db: ModelBrokerFirestore | undefined,
   gatewayId: string,
+  authorization?: GatewayAuthorization,
 ): Promise<Partial<ModelBrokerTokenLimits>> {
   if (!db) return {};
-  const snap = await db.collection("glmGateways").doc(gatewayId).get();
-  const data = snap.data() as Record<string, unknown> | undefined;
-  const raw =
-    data?.modelBrokerLimits &&
-    typeof data.modelBrokerLimits === "object" &&
-    !Array.isArray(data.modelBrokerLimits)
-      ? (data.modelBrokerLimits as Record<string, unknown>)
-      : {};
+  const resolved = authorization ?? await readGatewayAuthorization(db, gatewayId);
+  if (!resolved) {
+    throw new Error(`durable root config unavailable for gateways/${gatewayId}`);
+  }
+  const raw = resolved.config.modelBrokerLimits ?? {};
   const spendWindowUsd = finiteNumber(raw.spendWindowUsd);
   const spendWeekUsd = finiteNumber(raw.spendWeekUsd);
   const requestsPerMinute = finiteNumber(raw.requestsPerMinute);
@@ -93,14 +97,19 @@ async function readGatewayLimitOverrides(
 }
 
 export async function resolveOwnerModelBrokerGrant(input: {
-  db?: Pick<Firestore, "collection">;
+  db?: ModelBrokerFirestore;
   gatewayId: string;
   ownerUid?: string;
   now: number;
   defaults?: Partial<ModelBrokerTokenLimits> | null;
+  gatewayAuthorization?: GatewayAuthorization;
 }): Promise<OwnerModelBrokerGrant> {
   const tier = await readOwnerTier(input.db, input.ownerUid, input.now);
-  const overrides = await readGatewayLimitOverrides(input.db, input.gatewayId);
+  const overrides = await readGatewayLimitOverrides(
+    input.db,
+    input.gatewayId,
+    input.gatewayAuthorization,
+  );
   const rail: BillingRail = tier?.rail ?? "subscription";
   const limits = normalizeModelBrokerTokenLimits({
     ...(input.defaults ?? {}),
@@ -130,12 +139,23 @@ export type LiveOwnerGrantResolver = (
 const DEFAULT_GRANT_CACHE_TTL_MS = 60_000;
 const DEFAULT_GRANT_CACHE_MAX_ENTRIES = 10_000;
 
+function mutableLimitFingerprint(authorization: GatewayAuthorization): string {
+  const limits = authorization.config.modelBrokerLimits;
+  return [
+    authorization.gateway.updatedAt,
+    authorization.config.configSchemaVersion,
+    limits?.spendWindowUsd ?? null,
+    limits?.spendWeekUsd ?? null,
+    limits?.requestsPerMinute ?? null,
+  ].join(":");
+}
+
 // The gate resolves the owner grant live on every call so tier changes and the
 // trial daily decay take effect within one TTL — broker tokens carry identity,
 // not limits. The cache bounds Firestore reads on the hot path; the cap +
 // expired-entry sweep bounds memory under owner churn on a long-lived broker.
 export function createCachedOwnerModelBrokerGrantResolver(opts: {
-  db: Pick<Firestore, "collection">;
+  db: ModelBrokerFirestore;
   defaults?: Partial<ModelBrokerTokenLimits> | null;
   ttlMs?: number;
   maxEntries?: number;
@@ -166,7 +186,11 @@ export function createCachedOwnerModelBrokerGrantResolver(opts: {
   };
 
   return async ({ gatewayId, ownerUid, now }) => {
-    const key = `${gatewayId}:${ownerUid ?? ""}`;
+    const authorization = await readGatewayAuthorization(opts.db, gatewayId);
+    if (!authorization) {
+      throw new Error(`durable root config unavailable for gateways/${gatewayId}`);
+    }
+    const key = `${gatewayId}:${mutableLimitFingerprint(authorization)}:${ownerUid ?? ""}`;
     const cached = cache.get(key);
     if (cached && now - cached.resolvedAt < ttlMs) return cached.grant;
     if (cached) cache.delete(key);
@@ -178,6 +202,7 @@ export function createCachedOwnerModelBrokerGrantResolver(opts: {
       ownerUid: ownerUid ?? undefined,
       now,
       defaults: opts.defaults,
+      gatewayAuthorization: authorization,
     });
     cache.set(key, { grant, resolvedAt: now });
     opts.log?.("llm-broker grant resolved", {

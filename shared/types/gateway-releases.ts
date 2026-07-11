@@ -1,17 +1,13 @@
 import { createHash } from "node:crypto";
 import { GATEWAYS_COLLECTION } from "./fleet-controller.js";
+import {
+  isGatewayMutableConfigForGateway,
+  type GatewayMutableConfig,
+} from "./gateway-mutable-config.js";
+import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 import { GLM_GATEWAYS_COLLECTION } from "./glm.js";
-import type { SizingTier } from "./sizing.js";
 import type {
-  ByosubRef,
-  GatewayClass,
-  GatewayImageProfile,
-  GatewayModelBrokerLimits,
   GatewayPreemptionHandoffSpec,
-  GatewayPreemptionSpec,
-  GatewayProfile,
-  GatewayServiceAccountSpec,
-  OperatorGatewayAccessSpec,
 } from "./glm.js";
 
 // Step 2 release/revision model (GATEWAY-RELEASES-SPEC). These types describe
@@ -80,6 +76,11 @@ export interface GatewayIdleSleepState {
   targetGatewayId?: string;
 }
 
+export interface GatewayLegacyBackfill {
+  sourceGlmGatewayIds: string[];
+  startedAt: number;
+}
+
 // gateways/{gatewayId} — durable desired gateway identity. No reservation
 // mirror (operatorGatewayReservations is the sole durable reservation source)
 // and no persistence (all gateways are Spot + emptyDir).
@@ -99,31 +100,52 @@ export interface GatewayDoc {
   idleSleep?: GatewayIdleSleepState | null;
   preemptionHandoff?: GatewayPreemptionHandoffSpec | null;
   retireAfter?: number | null;
+  legacyBackfill?: GatewayLegacyBackfill | null;
 }
 
-// Immutable release payload. Omits persistence entirely by construction —
-// GatewayPersistenceSpec and the chart PVC path are deleted in PR3.
+// Immutable release payload: the build artifact only. Gateway policy lives
+// exclusively on gateways/{gatewayId}, never in a release or revision.
 export interface ReleasePayload {
   macOpsTokenProtocol?: MacOpsTokenProtocol;
   imageRepository: string;
   imageTag: string;
-  profile: GatewayProfile | null;
-  gatewayClass: GatewayClass;
-  imageProfile: GatewayImageProfile;
-  sizingTier: SizingTier | null;
-  computeClass: string | null;
-  gcpProject: string | null;
-  gatewayContainerSecurityContext: Record<string, unknown> | null;
-  serviceAccountName: string | null;
-  serviceAccount: GatewayServiceAccountSpec | null;
-  operatorAccess: OperatorGatewayAccessSpec | null;
-  ownerUid: string | null;
-  coOwnerUids: string[];
-  builderSlug: string | null;
-  openclawOverrides: Record<string, unknown> | null;
-  byosub: Record<string, ByosubRef> | null;
-  modelBrokerLimits: GatewayModelBrokerLimits | null;
-  preemption: GatewayPreemptionSpec | null;
+}
+
+const RELEASE_PAYLOAD_FIELD_NAMES = new Set<string>([
+  "macOpsTokenProtocol",
+  "imageRepository",
+  "imageTag",
+]);
+
+const RELEASE_PAYLOAD_REQUIRED_FIELDS = [
+  "imageRepository",
+  "imageTag",
+] as const;
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function isReleasePayload(value: unknown): value is ReleasePayload {
+  if (!isPlainRecord(value)) return false;
+  if (
+    Object.keys(value).some((field) => !RELEASE_PAYLOAD_FIELD_NAMES.has(field)) ||
+    RELEASE_PAYLOAD_REQUIRED_FIELDS.some(
+      (field) => !Object.prototype.hasOwnProperty.call(value, field),
+    )
+  ) {
+    return false;
+  }
+  return (
+    (value.macOpsTokenProtocol === undefined ||
+      value.macOpsTokenProtocol === 1 ||
+      value.macOpsTokenProtocol === 2) &&
+    typeof value.imageRepository === "string" &&
+    value.imageRepository.length > 0 &&
+    typeof value.imageTag === "string" &&
+    value.imageTag.length > 0 &&
+    IMAGE_TAG_PATTERN.test(value.imageTag)
+  );
 }
 
 export type MacOpsTokenProtocol = 1 | 2;
@@ -278,6 +300,19 @@ export function isRevisionRealizationDoc(data: unknown): data is RevisionRealiza
   );
 }
 
+export function isGatewayLegacyBackfill(value: unknown): value is GatewayLegacyBackfill {
+  if (!isPlainRecord(value) || !Array.isArray(value.sourceGlmGatewayIds)) return false;
+  const sourceGlmGatewayIds = value.sourceGlmGatewayIds;
+  return (
+    sourceGlmGatewayIds.length > 0 &&
+    sourceGlmGatewayIds.every((id) => typeof id === "string" && id.length > 0) &&
+    new Set(sourceGlmGatewayIds).size === sourceGlmGatewayIds.length &&
+    typeof value.startedAt === "number" &&
+    Number.isFinite(value.startedAt) &&
+    value.startedAt >= 0
+  );
+}
+
 // A new gateways/{id} durable desired doc (GatewayDoc). Distinct from a legacy
 // GatewayDesiredState (no desiredRelease/latestRelease) and a revision doc.
 export function isGatewayDesiredDoc(data: unknown): data is GatewayDoc {
@@ -287,7 +322,10 @@ export function isGatewayDesiredDoc(data: unknown): data is GatewayDoc {
     typeof d.gatewayId === "string" &&
     typeof d.desiredRelease === "number" &&
     typeof d.latestRelease === "number" &&
-    (d.desiredStatus === "running" || d.desiredStatus === "paused" || d.desiredStatus === "retired")
+    (d.desiredStatus === "running" || d.desiredStatus === "paused" || d.desiredStatus === "retired") &&
+    (d.legacyBackfill === undefined ||
+      d.legacyBackfill === null ||
+      isGatewayLegacyBackfill(d.legacyBackfill))
   );
 }
 
@@ -350,16 +388,8 @@ export function isRevisionTombstone(data: unknown): data is RevisionTombstone {
 // only contract is: same normalized value → same hash, any change → different.
 export function releasePayloadHash(payload: ReleasePayload): string {
   return createHash("sha256")
-    .update(canonicalJson(normalizeReleasePayloadForHash(payload)))
+    .update(canonicalJson(payload))
     .digest("hex");
-}
-
-// Normalize set-like payload arrays whose element ORDER is not semantically
-// meaningful, so a no-op reorder does not change the hash — otherwise it cuts a
-// spurious release and rolls the fleet (customer-visible pod churn). coOwnerUids
-// is the only such field today; add any future set-like array to this spread.
-function normalizeReleasePayloadForHash(payload: ReleasePayload): ReleasePayload {
-  return { ...payload, coOwnerUids: [...payload.coOwnerUids].sort(compareKeys) };
 }
 
 function canonicalJson(value: unknown): string {
@@ -394,6 +424,19 @@ export type GatewayFieldClassification =
 export const RELEASE_NEW_REVISION_FIELDS = [
   "imageRepository",
   "imageTag",
+  "macOpsTokenProtocol",
+] as const;
+
+// Release-payload fields that are release-audited but may reconcile IN PLACE on
+// the live revision (broker-consumed after request time; no pod restart).
+export const RELEASE_IN_PLACE_FIELDS: readonly string[] = [];
+
+// gateways/{gatewayId} DOC fields that mutate without cutting a release. The
+// spec's "gateway mutable without release" list also names assignment docs,
+// revision heartbeat, and revision lastError — those live in SEPARATE
+// collections (gateways/{id}/assignments/{uid}, glmGateways/{revisionId}), not
+// as gateway-doc field names, so they are not enumerated here.
+export const GATEWAY_MUTABLE_FIELDS = [
   "profile",
   "gatewayClass",
   "imageProfile",
@@ -408,22 +451,8 @@ export const RELEASE_NEW_REVISION_FIELDS = [
   "coOwnerUids",
   "builderSlug",
   "openclawOverrides",
-  "byosub",
-] as const;
-
-// Release-payload fields that are release-audited but may reconcile IN PLACE on
-// the live revision (broker-consumed after request time; no pod restart).
-export const RELEASE_IN_PLACE_FIELDS = [
   "modelBrokerLimits",
   "preemption",
-] as const;
-
-// gateways/{gatewayId} DOC fields that mutate without cutting a release. The
-// spec's "gateway mutable without release" list also names assignment docs,
-// revision heartbeat, and revision lastError — those live in SEPARATE
-// collections (gateways/{id}/assignments/{uid}, glmGateways/{revisionId}), not
-// as gateway-doc field names, so they are not enumerated here.
-export const GATEWAY_MUTABLE_FIELDS = [
   "desiredStatus",
   "roll",
   "idleSleep",
@@ -510,17 +539,61 @@ export interface CommitPlacementParams {
   updatedByOperationId?: string | null;
 }
 
-export type PlacementRejectReason = "no-live-revision" | "revision-not-ready";
+export type PlacementRejectReason =
+  | "gateway-root-invalid"
+  | "gateway-not-running"
+  | "no-live-revision"
+  | "revision-identity-invalid"
+  | "revision-not-ready";
 
 export type CommitPlacementResult =
   | { kind: "mirror-only" }
   | { kind: "assigned"; revisionId: string; release: number | null }
   | { kind: "rejected"; reason: PlacementRejectReason };
 
-// A revision is placeable iff its runtime realization doc reports it serving —
-// the same signal Cowboy's placement resolver uses (isRevisionServing).
-function isRevisionPlaceable(snap: PlacementDocSnap): boolean {
-  return snap.exists && snap.data()?.lifecycle === "serving";
+type DurablePlacementRoot = GatewayDoc & GatewayMutableConfig;
+
+function isDurablePlacementRoot(
+  value: unknown,
+  gatewayId: string,
+): value is DurablePlacementRoot {
+  return (
+    isGatewayDesiredDoc(value) &&
+    value.gatewayId === gatewayId &&
+    isGatewayMutableConfigForGateway(value, gatewayId)
+  );
+}
+
+function hasCanonicalPlacementRevision(
+  gatewayId: string,
+  revisionId: unknown,
+  release: unknown,
+): revisionId is string {
+  return (
+    typeof revisionId === "string" &&
+    typeof release === "number" &&
+    Number.isInteger(release) &&
+    release > 0 &&
+    revisionId === revisionIdForRelease(gatewayId, release)
+  );
+}
+
+function placementRevisionRejectReason(
+  snap: PlacementDocSnap,
+  gatewayId: string,
+  revisionId: string,
+  release: number,
+): PlacementRejectReason | null {
+  const data = snap.exists ? snap.data() : undefined;
+  if (
+    !isRevisionRealizationDoc(data) ||
+    data.revisionId !== revisionId ||
+    data.gateway !== gatewayId ||
+    data.release !== release
+  ) {
+    return "revision-identity-invalid";
+  }
+  return data.lifecycle === "serving" ? null : "revision-not-ready";
 }
 
 export async function commitPlacementAtomic(
@@ -533,10 +606,15 @@ export async function commitPlacementAtomic(
     const gatewaySnap = await txn.get(gatewayRef);
     const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
 
-    // Legacy / un-backfilled gateway: no assignment layer yet — mirror only.
-    if (!isGatewayDesiredDoc(gatewayData)) {
+    if (!gatewaySnap.exists) {
       txn.update(userRef, params.mirrorPatch);
       return { kind: "mirror-only" };
+    }
+    if (!isDurablePlacementRoot(gatewayData, params.gatewayId)) {
+      return { kind: "rejected", reason: "gateway-root-invalid" };
+    }
+    if (gatewayData.desiredStatus !== "running") {
+      return { kind: "rejected", reason: "gateway-not-running" };
     }
 
     const roll = gatewayData.roll;
@@ -544,14 +622,23 @@ export async function commitPlacementAtomic(
       roll && roll.acceptingNewAssignments ? roll.targetRevisionId : gatewayData.liveRevisionId;
     const release =
       roll && roll.acceptingNewAssignments ? roll.toRelease : gatewayData.liveRelease;
-    if (!revisionId) {
+    if (revisionId === null || release === null) {
       return { kind: "rejected", reason: "no-live-revision" };
+    }
+    if (!hasCanonicalPlacementRevision(params.gatewayId, revisionId, release)) {
+      return { kind: "rejected", reason: "revision-identity-invalid" };
     }
     const revisionSnap = await txn.get(
       db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId),
     );
-    if (!isRevisionPlaceable(revisionSnap)) {
-      return { kind: "rejected", reason: "revision-not-ready" };
+    const revisionRejectReason = placementRevisionRejectReason(
+      revisionSnap,
+      params.gatewayId,
+      revisionId,
+      release,
+    );
+    if (revisionRejectReason) {
+      return { kind: "rejected", reason: revisionRejectReason };
     }
 
     // Mirror + assignment are all-or-nothing: a serving assignment at epoch 0
@@ -562,7 +649,7 @@ export async function commitPlacementAtomic(
       slug: params.slug,
       gatewayId: params.gatewayId,
       revisionId,
-      release: release ?? 0,
+      release,
       source: params.source,
       state: "serving",
       epoch: 0,

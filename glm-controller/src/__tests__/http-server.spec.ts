@@ -25,6 +25,123 @@ function emptyStore(): FakeStore {
   };
 }
 
+function durableBuilderGateway(
+  gatewayId: string,
+  desiredStatus: "running" | "paused",
+): Record<string, unknown> {
+  return {
+    gatewayId,
+    createdAt: 1,
+    createdBy: "test",
+    updatedAt: 1,
+    updatedBy: "test",
+    latestRelease: 1,
+    desiredRelease: 1,
+    liveRelease: 1,
+    liveRevisionId: `${gatewayId}-r1`,
+    trafficRevisionId: `${gatewayId}-r1`,
+    desiredStatus,
+    roll: null,
+    configSchemaVersion: 1,
+    profile: "standard",
+    gatewayClass: "builder",
+    imageProfile: "standard",
+    sizingTier: "medium",
+    computeClass: "test-spot",
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: null,
+    serviceAccount: null,
+    operatorAccess: null,
+    ownerUid: "uid-alice",
+    coOwnerUids: [],
+    builderSlug: "alice",
+    openclawOverrides: null,
+    modelBrokerLimits: null,
+    preemption: null,
+  };
+}
+
+function durableSharedGateway(gatewayId: string): Record<string, unknown> {
+  return {
+    gatewayId,
+    createdAt: 1,
+    createdBy: "test",
+    updatedAt: 1,
+    updatedBy: "test",
+    latestRelease: 1,
+    desiredRelease: 1,
+    liveRelease: 1,
+    liveRevisionId: `${gatewayId}-r1`,
+    trafficRevisionId: `${gatewayId}-r1`,
+    desiredStatus: "running",
+    roll: null,
+    configSchemaVersion: 1,
+    profile: "standard",
+    gatewayClass: "shared",
+    imageProfile: "standard",
+    sizingTier: "medium",
+    computeClass: "test-spot",
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: null,
+    serviceAccount: null,
+    operatorAccess: null,
+    ownerUid: null,
+    coOwnerUids: [],
+    builderSlug: null,
+    openclawOverrides: null,
+    modelBrokerLimits: null,
+    preemption: null,
+  };
+}
+
+function servingRevision(
+  gatewayId: string,
+  opts: {
+    imageTag?: string;
+    heartbeat?: Record<string, unknown>;
+  } = {},
+): Record<string, unknown> {
+  const imageTag = opts.imageTag ?? "abc1234";
+  return {
+    docKind: "revision",
+    revisionId: `${gatewayId}-r1`,
+    gateway: gatewayId,
+    release: 1,
+    rollRole: null,
+    lifecycle: "serving",
+    createdAt: 1,
+    createdByOperationId: null,
+    retiredAt: null,
+    retireReason: null,
+    helm: {
+      releaseName: `octogee-gw-${gatewayId}-r1`,
+      deploymentName: `octogee-gateway-${gatewayId}-r1`,
+      gatewayServiceName: `gateway-${gatewayId}-r1`,
+      gatewayEdgeServiceName: `gateway-edge-${gatewayId}-r1`,
+      serviceAccountName: `octogee-gw-${gatewayId}`,
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
+      imageTag,
+      replicas: 1,
+      availableReplicas: 1,
+      lastAppliedAt: 1,
+    },
+    heartbeat: {
+      status: "ready",
+      lastHeartbeatAt: null,
+      version: null,
+      openclawVersion: null,
+      internalUrl: null,
+      startedAt: null,
+      mountedCustomers: [],
+      migratingIn: [],
+      ...opts.heartbeat,
+    },
+    lastError: { message: null, at: null },
+  };
+}
+
 function applyPatch(
   target: Record<string, unknown>,
   patch: Record<string, unknown>,
@@ -138,7 +255,13 @@ function buildDb(store: FakeStore) {
     },
     doc: (path: string) => ({
       get: async () => {
-        const data = store.configs[path];
+        const [collection, id] = path.split("/");
+        const data =
+          collection === "gateways" && id
+            ? store.gateways[id]
+            : collection === "glmGateways" && id
+              ? store.glmGateways[id]
+              : store.configs[path];
         return { exists: data !== undefined, data: () => data };
       },
       set: async (data: Record<string, unknown>, opts?: { merge?: boolean }) => {
@@ -410,20 +533,24 @@ describe("createHttpServer — admin gateway routes", () => {
   });
 
   it("serves /api/admin/gateways with populated fleet stats", async () => {
-    store.gateways["gw-blue"] = {
-      gatewayId: "gw-blue",
-      status: "ready",
-      version: "abc1234",
-      mountedCustomers: ["alice", "bob"],
-      lastHeartbeatAt: Date.now() - 2_000,
-    };
-    store.gateways["gw-stale"] = {
-      gatewayId: "gw-stale",
-      status: "unreachable",
-      version: "def5678",
-      mountedCustomers: [],
-      lastHeartbeatAt: Date.now() - 5 * 60_000,
-    };
+    store.gateways["gw-blue"] = durableSharedGateway("gw-blue");
+    store.glmGateways["gw-blue-r1"] = servingRevision("gw-blue", {
+      heartbeat: {
+        status: "ready",
+        version: "abc1234",
+        mountedCustomers: ["alice", "bob"],
+        lastHeartbeatAt: Date.now() - 2_000,
+      },
+    });
+    store.gateways["gw-stale"] = durableSharedGateway("gw-stale");
+    store.glmGateways["gw-stale-r1"] = servingRevision("gw-stale", {
+      heartbeat: {
+        status: "unreachable",
+        version: "def5678",
+        mountedCustomers: [],
+        lastHeartbeatAt: Date.now() - 5 * 60_000,
+      },
+    });
     const app = createHttpServer(buildDeps(store));
     const res = await request(app)
       .get("/api/admin/gateways")
@@ -439,13 +566,15 @@ describe("createHttpServer — admin gateway routes", () => {
   });
 
   it("includes Cowboy pod diagnostics in the gateway summaries when available", async () => {
-    store.gateways["bender"] = {
-      gatewayId: "bender",
-      status: "ready",
-      version: "8507a63",
-      mountedCustomers: [],
-      lastHeartbeatAt: Date.now(),
-    };
+    store.gateways["bender"] = durableSharedGateway("bender");
+    store.glmGateways["bender-r1"] = servingRevision("bender", {
+      heartbeat: {
+        status: "ready",
+        version: "8507a63",
+        mountedCustomers: [],
+        lastHeartbeatAt: Date.now(),
+      },
+    });
     const readGatewayPodDiagnostics = vi.fn(async (_gatewayId: string) => ({
       status: "ready" as const,
       totalPods: 1,
@@ -471,6 +600,7 @@ describe("createHttpServer — admin gateway routes", () => {
       .set("Authorization", "Bearer admin-token");
 
     expect(res.status).toBe(200);
+    expect(res.body.gateways).toHaveLength(1);
     expect(readGatewayPodDiagnostics).toHaveBeenCalledWith("bender");
     expect(res.body.gateways[0].podDiagnostics).toMatchObject({
       status: "ready",
@@ -537,19 +667,17 @@ describe("createHttpServer — admin gateway routes", () => {
   });
 
   it("derives OpenClaw from Cowboy image tags when heartbeat reports unknown", async () => {
-    store.gateways["bender"] = {
-      gatewayId: "bender",
-      status: "ready",
-      version: "5b287cb",
-      openclawVersion: "unknown",
-      mountedCustomers: [],
-      lastHeartbeatAt: Date.now(),
-    };
-    store.glmGateways["bender"] = {
-      gatewayId: "bender",
-      desiredStatus: "running",
+    store.gateways["bender"] = durableSharedGateway("bender");
+    store.glmGateways["bender-r1"] = servingRevision("bender", {
       imageTag: "5b287cb-oc2026.6.10",
-    };
+      heartbeat: {
+        status: "ready",
+        version: "5b287cb",
+        openclawVersion: "unknown",
+        mountedCustomers: [],
+        lastHeartbeatAt: Date.now(),
+      },
+    });
     const app = createHttpServer(buildDeps(store));
 
     const res = await request(app)
@@ -593,12 +721,13 @@ describe("createHttpServer — admin gateway routes", () => {
       username: "alice",
       provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
     };
-    store.glmGateways["gw-alice"] = {
-      ownerUid: "uid-alice",
-      builderSlug: "alice",
-      gatewayClass: "builder",
-      desiredStatus: "running",
-      // Readiness relocated to glmGateways/{id}.heartbeat (cutover step 2).
+    store.gateways["gw-alice"] = durableBuilderGateway("gw-alice", "running");
+    store.glmGateways["gw-alice-r1"] = {
+      docKind: "revision",
+      revisionId: "gw-alice-r1",
+      gateway: "gw-alice",
+      release: 1,
+      lifecycle: "serving",
       heartbeat: { status: "ready", mountedCustomers: [] },
     };
 
@@ -654,12 +783,7 @@ describe("createHttpServer — admin gateway routes", () => {
       username: "alice",
       provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
     };
-    store.glmGateways["gw-alice"] = {
-      ownerUid: "uid-alice",
-      builderSlug: "alice",
-      gatewayClass: "builder",
-      desiredStatus: "paused",
-    };
+    store.gateways["gw-alice"] = durableBuilderGateway("gw-alice", "paused");
 
     const app = createHttpServer(buildDeps(store));
     const res = await request(app)
@@ -675,7 +799,7 @@ describe("createHttpServer — admin gateway routes", () => {
       targetStatus: "missing",
       retryAfterMs: 15_000,
     });
-    expect(store.glmGateways["gw-alice"].desiredStatus).toBe("running");
+    expect(store.gateways["gw-alice"].desiredStatus).toBe("running");
     expect(store.glmOperations).toHaveLength(0);
     expect(store.users["uid-alice"].provisioning).toMatchObject({
       openclaw: {

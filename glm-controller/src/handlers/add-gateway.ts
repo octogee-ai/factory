@@ -16,19 +16,31 @@ export interface GatewayHeartbeat {
   version?: string | null;
 }
 
+export interface GatewayRevisionTarget {
+  gatewayId: string;
+  revisionId: string;
+  imageTag: string;
+  gatewayClass: GatewayClass;
+}
+
 export interface AddGatewayDeps {
   helm: Pick<HelmRunner, "readDeployedInstances">;
 
   kubeOps: Pick<KubeOps, "readAvailableReplicas">;
 
-  readGatewayHeartbeat: (gatewayId: string) => Promise<GatewayHeartbeat | null>;
+  resolveGatewayRevision: (gatewayId: string) => Promise<GatewayRevisionTarget | null>;
+
+  readGatewayHeartbeat: (revisionId: string) => Promise<GatewayHeartbeat | null>;
 
   publishGatewayReady: (input: {
     gatewayId: string;
+    revisionId: string;
     imageTag?: string;
   }) => Promise<void>;
 
   syncFleetIngress: () => Promise<void>;
+
+  revisionMaterializationTimeoutMs: number;
 
   helmRenderTimeoutMs: number;
 
@@ -56,6 +68,11 @@ interface AddGatewayPlan {
   gatewayId: string;
   imageTag?: string;
   gatewayClass: GatewayClass;
+}
+
+interface RevisionAddGatewayPlan extends AddGatewayPlan {
+  revisionId: string;
+  imageTag: string;
 }
 
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
@@ -99,19 +116,53 @@ async function handleAddGateway(
   const plan = parseAddGatewayPlan(op.input as AddGatewayInput);
   if (!plan) return failure("missing gatewayId in op.input");
 
-  const renderResult = await waitForHelmRender(plan, ctx, deps);
+  const target = await waitForGatewayRevision(plan.gatewayId, deps);
+  if (!target) {
+    return failure(
+      `gateway ${plan.gatewayId} durable desired revision did not materialize within ${deps.revisionMaterializationTimeoutMs}ms`,
+    );
+  }
+  if (target.gatewayId !== plan.gatewayId) {
+    return failure(`gateway ${plan.gatewayId} resolved a revision for ${target.gatewayId}`);
+  }
+  if (plan.imageTag && plan.imageTag !== target.imageTag) {
+    return failure(
+      `gateway ${plan.gatewayId} operation imageTag=${plan.imageTag} does not match durable revision ${target.revisionId} imageTag=${target.imageTag}`,
+    );
+  }
+  const revisionPlan: RevisionAddGatewayPlan = {
+    ...plan,
+    revisionId: target.revisionId,
+    imageTag: target.imageTag,
+    gatewayClass: target.gatewayClass,
+  };
+
+  const renderResult = await waitForHelmRender(revisionPlan, ctx, deps);
   if (!renderResult.ok) return failure(renderResult.error);
 
-  const deploymentResult = await waitForDeployment(plan.gatewayId, ctx, deps);
+  const deploymentResult = await waitForDeployment(revisionPlan.revisionId, ctx, deps);
   if (!deploymentResult.ok) return failure(deploymentResult.error);
 
-  const readyResult = await waitForReadySignal(plan, ctx, deps);
+  const readyResult = await waitForReadySignal(revisionPlan, ctx, deps);
   if (!readyResult.ok) return failure(readyResult.error);
 
   const ingressResult = await syncFleetIngress(ctx, deps);
   if (!ingressResult.ok) return failure(ingressResult.error);
 
   return { steps: [], success: true };
+}
+
+async function waitForGatewayRevision(
+  gatewayId: string,
+  deps: AddGatewayDeps,
+): Promise<GatewayRevisionTarget | null> {
+  const startedAt = deps.now();
+  for (;;) {
+    const target = await deps.resolveGatewayRevision(gatewayId);
+    if (target) return target;
+    if (deps.now() - startedAt >= deps.revisionMaterializationTimeoutMs) return null;
+    await deps.wait(deps.pollIntervalMs);
+  }
 }
 
 function parseAddGatewayPlan(input: AddGatewayInput): AddGatewayPlan | null {
@@ -132,7 +183,7 @@ function parseAddGatewayPlan(input: AddGatewayInput): AddGatewayPlan | null {
 }
 
 async function waitForHelmRender(
-  plan: AddGatewayPlan,
+  plan: RevisionAddGatewayPlan,
   ctx: OperationContext,
   deps: AddGatewayDeps,
 ): Promise<StepResult> {
@@ -143,21 +194,19 @@ async function waitForHelmRender(
     deps,
     check: async () => {
       const map = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
-      const instance = map[plan.gatewayId];
-      return instance != null && (!plan.imageTag || instance.image.tag === plan.imageTag);
+      const instance = map[plan.revisionId];
+      return instance != null && instance.image.tag === plan.imageTag;
     },
-    timeoutMessage: plan.imageTag
-      ? `helm did not render instance "${plan.gatewayId}" with imageTag=${plan.imageTag} within ${deps.helmRenderTimeoutMs}ms`
-      : `helm did not render instance "${plan.gatewayId}" within ${deps.helmRenderTimeoutMs}ms`,
+    timeoutMessage: `helm did not render revision "${plan.revisionId}" with imageTag=${plan.imageTag} within ${deps.helmRenderTimeoutMs}ms`,
   });
 }
 
 async function waitForDeployment(
-  gatewayId: string,
+  revisionId: string,
   ctx: OperationContext,
   deps: AddGatewayDeps,
 ): Promise<StepResult> {
-  const deploymentName = deploymentNameForGateway(gatewayId);
+  const deploymentName = deploymentNameForGateway(revisionId);
   return pollUntil({
     stepName: "deployment-ready",
     timeoutMs: deps.deploymentReadyTimeoutMs,
@@ -175,7 +224,7 @@ async function waitForDeployment(
 }
 
 async function waitForReadySignal(
-  plan: AddGatewayPlan,
+  plan: RevisionAddGatewayPlan,
   ctx: OperationContext,
   deps: AddGatewayDeps,
 ): Promise<StepResult> {
@@ -187,7 +236,7 @@ async function waitForReadySignal(
 }
 
 async function publishPlatformReadyRecord(
-  plan: AddGatewayPlan,
+  plan: RevisionAddGatewayPlan,
   ctx: OperationContext,
   deps: AddGatewayDeps,
 ): Promise<StepResult> {
@@ -195,12 +244,17 @@ async function publishPlatformReadyRecord(
     stepName: "platform-ready-record",
     ctx,
     deps,
-    action: () => deps.publishGatewayReady({ gatewayId: plan.gatewayId, imageTag: plan.imageTag }),
+    action: () =>
+      deps.publishGatewayReady({
+        gatewayId: plan.gatewayId,
+        revisionId: plan.revisionId,
+        imageTag: plan.imageTag,
+      }),
   });
 }
 
 async function waitForGatewayHeartbeat(
-  plan: AddGatewayPlan,
+  plan: RevisionAddGatewayPlan,
   ctx: OperationContext,
   deps: AddGatewayDeps,
 ): Promise<StepResult> {
@@ -210,12 +264,10 @@ async function waitForGatewayHeartbeat(
     ctx,
     deps,
     check: async () => {
-      const hb = await deps.readGatewayHeartbeat(plan.gatewayId);
+      const hb = await deps.readGatewayHeartbeat(plan.revisionId);
       return hb != null && heartbeatMatchesImageTag(hb.version, plan.imageTag);
     },
-    timeoutMessage: plan.imageTag
-      ? `gateway "${plan.gatewayId}" never published a heartbeat with version=${plan.imageTag} within ${deps.heartbeatTimeoutMs}ms`
-      : `gateway "${plan.gatewayId}" never published a heartbeat within ${deps.heartbeatTimeoutMs}ms`,
+    timeoutMessage: `gateway revision "${plan.revisionId}" never published a heartbeat with version=${plan.imageTag} within ${deps.heartbeatTimeoutMs}ms`,
   });
 }
 

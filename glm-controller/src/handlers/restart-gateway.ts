@@ -5,6 +5,7 @@ import type { KubeOps } from "../lib/kube-ops.js";
 export interface RestartGatewayDeps {
   kubeOps: KubeOps;
   namespace: string;
+  resolveLiveRevisionId: (gatewayId: string) => Promise<string | null>;
   now: () => number;
   log: (msg: string) => void;
 }
@@ -29,6 +30,15 @@ export function createRestartGatewayHandler(
       return { steps: [], success: false, error: "missing gatewayId in op.input" };
     }
 
+    const revisionId = await deps.resolveLiveRevisionId(gatewayId);
+    if (!revisionId) {
+      return {
+        steps: [],
+        success: false,
+        error: `gateway ${gatewayId} has no validated serving revision`,
+      };
+    }
+
     const startedAt = deps.now();
     await reportStep(ctx, {
       name: "openclaw-restart",
@@ -39,7 +49,7 @@ export function createRestartGatewayHandler(
     try {
       await deps.kubeOps.restartOpenClawInPlace({
         namespace: deps.namespace,
-        name: deploymentNameForGateway(gatewayId),
+        name: deploymentNameForGateway(revisionId),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

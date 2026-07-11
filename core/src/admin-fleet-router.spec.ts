@@ -208,24 +208,190 @@ function mkAdminFleetRouteApp(opts: {
   return { app, state };
 }
 
+function durableGatewayRoot(
+  gatewayId: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    gatewayId,
+    createdAt: 1,
+    createdBy: "test",
+    updatedAt: 1,
+    updatedBy: "test",
+    latestRelease: 1,
+    desiredRelease: 1,
+    liveRelease: null,
+    liveRevisionId: null,
+    trafficRevisionId: null,
+    desiredStatus: "running",
+    roll: null,
+    configSchemaVersion: 1,
+    profile: null,
+    gatewayClass: "shared",
+    imageProfile: "standard",
+    sizingTier: null,
+    computeClass: null,
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: null,
+    serviceAccount: null,
+    operatorAccess: null,
+    ownerUid: null,
+    coOwnerUids: [],
+    builderSlug: null,
+    openclawOverrides: null,
+    modelBrokerLimits: null,
+    preemption: null,
+    ...overrides,
+  };
+}
+
 describe("fleet gateway projection", () => {
+  it("does not revive stale bare runtime state when an existing root is malformed", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "default", overrides: {} },
+      users: {
+        "uid-alice": {
+          approved: true,
+          username: "alice",
+          email: "alice@example.com",
+          provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
+        },
+      },
+      gateways: {
+        default: {
+          gatewayId: "default",
+          latestRelease: 1,
+          desiredRelease: 1,
+          desiredStatus: "running",
+          status: "ready",
+          mountedCustomers: ["alice"],
+        },
+      },
+      glmGateways: {
+        default: {
+          gatewayId: "default",
+          desiredStatus: "running",
+          gatewayClass: "shared",
+          heartbeat: { status: "ready", mountedCustomers: ["alice"] },
+        },
+      },
+    });
+
+    const fleet = await request(app).get("/gateways").expect(200);
+    expect(fleet.body.gateways).toEqual([]);
+
+    const onboarding = await request(app).get("/onboarding-placement").expect(200);
+    expect(onboarding.body.warnings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "default-gateway-missing" })]),
+    );
+    expect(onboarding.body.customers).toEqual([
+      expect.objectContaining({
+        uid: "uid-alice",
+        mountedGatewayId: null,
+        driftState: "missing-gateway",
+      }),
+    ]);
+  });
+
+  it("keeps the durable gateway ID while reading telemetry from its exact live revision", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "default", overrides: {} },
+      users: {
+        "uid-alice": {
+          approved: true,
+          username: "alice",
+          email: "alice@example.com",
+          provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
+        },
+      },
+      gateways: {
+        default: durableGatewayRoot("default", {
+          liveRelease: 1,
+          liveRevisionId: "default-r1",
+          trafficRevisionId: "default-r1",
+        }),
+      },
+      glmGateways: {
+        "default-r1": {
+          docKind: "revision",
+          revisionId: "default-r1",
+          gateway: "default",
+          release: 1,
+          lifecycle: "serving",
+          helm: {
+            imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
+            imageTag: "1234567",
+          },
+          heartbeat: {
+            status: "ready",
+            mountedCustomers: ["alice"],
+            version: "1234567",
+            lastHeartbeatAt: 1_000,
+            startedAt: 500,
+          },
+          lastError: { message: null, at: null },
+        },
+      },
+    });
+
+    const fleet = await request(app).get("/gateways").expect(200);
+    expect(fleet.body.gateways).toEqual([
+      expect.objectContaining({
+        gatewayId: "default",
+        status: "ready",
+        mountedCustomers: ["alice"],
+      }),
+    ]);
+
+    const onboarding = await request(app).get("/onboarding-placement").expect(200);
+    expect(onboarding.body.warnings).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "default-gateway-missing" })]),
+    );
+    expect(onboarding.body.customers).toEqual([
+      expect.objectContaining({
+        uid: "uid-alice",
+        assignedGatewayId: "default",
+        mountedGatewayId: "default",
+        driftState: "healthy",
+      }),
+    ]);
+
+    const distribution = await request(app).get("/customer-distribution").expect(200);
+    expect(distribution.body.perGateway).toEqual([
+      expect.objectContaining({
+        gatewayId: "default",
+        status: "ready",
+        assignedCount: 1,
+        mountedCount: 1,
+      }),
+    ]);
+
+    const details = await request(app).get("/gateways/default/details").expect(200);
+    expect(details.body.mountedCustomers).toEqual([
+      expect.objectContaining({ uid: "uid-alice", slug: "alice" }),
+    ]);
+  });
+
   it("does not render durable desired docs or retired compatibility aliases as pod revisions", async () => {
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "default", overrides: {} },
       users: {},
       gateways: {
-        default: {
-          gatewayId: "default",
-          desiredStatus: "running",
+        default: durableGatewayRoot("default", {
+          latestRelease: 2,
           desiredRelease: 2,
+          liveRelease: 2,
           liveRevisionId: "default-r2",
-        },
-        bender: {
-          gatewayId: "bender",
-          desiredStatus: "running",
+          trafficRevisionId: "default-r2",
+        }),
+        bender: durableGatewayRoot("bender", {
+          latestRelease: 2,
           desiredRelease: 2,
+          liveRelease: 2,
           liveRevisionId: "bender-r2",
-        },
+          trafficRevisionId: "bender-r2",
+        }),
       },
       glmGateways: {
         bender: {
@@ -244,15 +410,29 @@ describe("fleet gateway projection", () => {
         },
         "bender-r2": {
           docKind: "revision",
+          revisionId: "bender-r2",
           gateway: "bender",
+          release: 2,
           lifecycle: "serving",
+          helm: {
+            imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
+            imageTag: "1234567",
+          },
           heartbeat: { status: "ready", mountedCustomers: ["ceckert"] },
+          lastError: { message: null, at: null },
         },
         "default-r2": {
           docKind: "revision",
+          revisionId: "default-r2",
           gateway: "default",
+          release: 2,
           lifecycle: "serving",
+          helm: {
+            imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
+            imageTag: "1234567",
+          },
           heartbeat: { status: "ready", mountedCustomers: ["alice"] },
+          lastError: { message: null, at: null },
         },
       },
     });
@@ -260,8 +440,8 @@ describe("fleet gateway projection", () => {
     const res = await request(app).get("/gateways").expect(200);
 
     expect(res.body.gateways.map((gateway: { gatewayId: string }) => gateway.gatewayId).sort()).toEqual([
-      "bender-r2",
-      "default-r2",
+      "bender",
+      "default",
     ]);
   });
 });
@@ -350,13 +530,19 @@ describe("onboarding placement (post-cohorts)", () => {
     });
   });
 
-  it("PATCH validates the default gateway is a live shared gateway", async () => {
+  it("PATCH accepts only a strict durable shared root, never a bare glm desired doc", async () => {
     const { app, state } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "gw-old", overrides: {} },
       users: {},
       glmGateways: {
-        "gw-new": { gatewayClass: "shared", desiredStatus: "running" },
-        "gw-builder": { gatewayClass: "builder", desiredStatus: "running" },
+        "gw-bare": { gatewayClass: "shared", desiredStatus: "running" },
+      },
+      gateways: {
+        "gw-new": durableGatewayRoot("gw-new"),
+        "gw-builder": durableGatewayRoot("gw-builder", {
+          gatewayClass: "builder",
+          ownerUid: "uid-builder",
+        }),
       },
     });
 
@@ -365,6 +551,12 @@ describe("onboarding placement (post-cohorts)", () => {
       .send({ defaultGatewayId: "gw-builder" })
       .expect(400);
     expect(rejected.body.error).toContain("shared gateway");
+
+    const bare = await request(app)
+      .patch("/onboarding-placement")
+      .send({ defaultGatewayId: "gw-bare" })
+      .expect(400);
+    expect(bare.body.error).toContain("desired state not found");
 
     await request(app)
       .patch("/onboarding-placement")
@@ -383,9 +575,9 @@ describe("onboarding placement (post-cohorts)", () => {
           provisioning: { openclaw: { slug: "alice" } },
         },
       },
-      glmGateways: {
-        "gw-default": { gatewayClass: "shared", desiredStatus: "running" },
-        "gw-canary": { gatewayClass: "shared", desiredStatus: "running" },
+      gateways: {
+        "gw-default": durableGatewayRoot("gw-default"),
+        "gw-canary": durableGatewayRoot("gw-canary"),
       },
     });
 

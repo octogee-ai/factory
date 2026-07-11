@@ -5,6 +5,7 @@ import {
 import {
   ASSIGN_CUSTOMER_GATEWAY_USAGE,
   parseAssignCustomerGatewayArgs,
+  readGatewayProfile,
   resolveOpsAssignmentTarget,
 } from "../ops/assign-customer-gateway.js";
 import { parseFleetArgs, resolveFleetCredentialMode } from "../ops/fleet.js";
@@ -82,6 +83,65 @@ describe("assign-customer-gateway args", () => {
       kind: "gateway-override",
       gatewayId: "glm-shared",
     });
+  });
+});
+
+describe("assign-customer-gateway root config", () => {
+  function gatewayRoot(profile: "standard" | "operator" = "standard") {
+    return {
+      gatewayId: "default",
+      createdAt: 1,
+      createdBy: "test",
+      updatedAt: 1,
+      updatedBy: "test",
+      latestRelease: 1,
+      desiredRelease: 1,
+      liveRelease: 1,
+      liveRevisionId: "default-r1",
+      trafficRevisionId: "default-r1",
+      desiredStatus: "running",
+      roll: null,
+      configSchemaVersion: 1,
+      profile,
+      gatewayClass: "shared",
+      imageProfile: "standard",
+      sizingTier: null,
+      computeClass: null,
+      gcpProject: null,
+      gatewayContainerSecurityContext: null,
+      serviceAccountName: null,
+      serviceAccount: null,
+      operatorAccess: null,
+      ownerUid: null,
+      coOwnerUids: [],
+      builderSlug: null,
+      openclawOverrides: null,
+      modelBrokerLimits: null,
+      preemption: null,
+    };
+  }
+
+  function db(docs: Record<string, Record<string, unknown>>) {
+    return {
+      doc: (path: string) => ({
+        get: async () => ({
+          exists: docs[path] !== undefined,
+          data: () => docs[path],
+        }),
+      }),
+    };
+  }
+
+  it("reads the profile from a validated durable root only", async () => {
+    await expect(
+      readGatewayProfile(db({ "gateways/default": gatewayRoot("operator") }) as never, "default"),
+    ).resolves.toBe("operator");
+    await expect(
+      readGatewayProfile(
+        db({ "glmGateways/default": { profile: "operator" } }) as never,
+        "default",
+      ),
+    ).resolves.toBeNull();
   });
 });
 

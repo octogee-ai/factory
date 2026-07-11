@@ -141,6 +141,23 @@ function desiredDoc(extra: Record<string, unknown> = {}): Record<string, unknown
     latestRelease: 7,
     desiredStatus: "running",
     liveRevisionId: "default-r7",
+    configSchemaVersion: 1,
+    profile: "standard",
+    gatewayClass: "shared",
+    imageProfile: "standard",
+    sizingTier: null,
+    computeClass: null,
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: null,
+    serviceAccount: null,
+    operatorAccess: null,
+    ownerUid: null,
+    coOwnerUids: [],
+    builderSlug: null,
+    openclawOverrides: null,
+    modelBrokerLimits: null,
+    preemption: null,
     ...extra,
   };
 }
@@ -169,6 +186,7 @@ describe("resolveRedeemGatewayUrl — broker discriminates a real legacy doc", (
       db,
       gatewayId: "default",
       uid: "u1",
+      gatewayExists: false,
       gatewayData: { internalUrl: LEGACY_URL },
     });
     expect(result).toEqual({ url: LEGACY_URL });
@@ -189,6 +207,7 @@ describe("resolveRedeemGatewayUrl — broker discriminates a real legacy doc", (
       db,
       gatewayId: "default",
       uid: "u1",
+      gatewayExists: true,
       // Contaminated: a desired doc that ALSO carries a stale flat internalUrl.
       gatewayData: desiredDoc({ internalUrl: LEGACY_URL }),
     });
@@ -209,6 +228,7 @@ describe("resolveRedeemGatewayUrl — broker discriminates a real legacy doc", (
       db,
       gatewayId: "default",
       uid: "u1",
+      gatewayExists: true,
       gatewayData: desiredDoc({ internalUrl: LEGACY_URL }),
     });
     expect(result).toEqual({ url: REV_URL });
@@ -221,9 +241,30 @@ describe("resolveRedeemGatewayUrl — broker discriminates a real legacy doc", (
       db,
       gatewayId: "default",
       uid: "u1",
+      gatewayExists: true,
       // Desired doc, no liveRevisionId, no assignment → unresolved, never the flat URL.
       gatewayData: desiredDoc({ internalUrl: LEGACY_URL, liveRevisionId: null }),
     });
     expect("error" in result).toBe(true);
+  });
+
+  it("rejects an existing incomplete root instead of treating its flat URL as legacy", async () => {
+    const { tx, db } = fakeRedeemDeps({});
+    const result = await resolveRedeemGatewayUrl({
+      tx,
+      db,
+      gatewayId: "default",
+      uid: "u1",
+      gatewayExists: true,
+      gatewayData: {
+        gatewayId: "default",
+        desiredRelease: 7,
+        latestRelease: 7,
+        desiredStatus: "running",
+        internalUrl: LEGACY_URL,
+      },
+    });
+
+    expect(result).toEqual({ error: "gateway-root-invalid" });
   });
 });

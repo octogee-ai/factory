@@ -1,7 +1,6 @@
 import {
   applyCoachModelPatch,
   brokerFetchByosubCreds,
-  markerProvidersForSlot,
   restoreOauthStoreForSlug,
   syncByotForCustomer,
   triggerSecretsReload,
@@ -41,7 +40,6 @@ export async function syncModelCredentialsForCustomer(
 export {
   applyCoachModelPatch as applyModelCredentialCoachPatch,
   brokerFetchByosubCreds as brokerFetchModelCredentialOauthCreds,
-  markerProvidersForSlot as markerProvidersForModelCredentialOauthSlot,
   restoreOauthStoreForSlug as restoreModelCredentialOauthStoreForSlug,
   triggerSecretsReload as triggerModelCredentialSecretsReload,
 };

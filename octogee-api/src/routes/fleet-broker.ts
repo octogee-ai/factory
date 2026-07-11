@@ -24,12 +24,6 @@ import type {
 } from "@octogee/shared/types/fleet-broker";
 import { macOpsPatDescription } from "@octogee/shared/types/fleet-broker";
 import {
-  GLM_GATEWAYS_COLLECTION,
-  isGatewayClass,
-  isGatewayProfile,
-  resolveGatewayClass,
-} from "@octogee/shared/types/glm";
-import {
   byotSnapshotProjectionFromSystemConfig,
   collectProjectAgentStates,
   mapProjectChannelDoc,
@@ -49,7 +43,12 @@ import {
   isGatewayDesiredDoc,
   releaseMacOpsTokenProtocol,
   revisionIdForRelease,
+  type GatewayDoc,
 } from "@octogee/shared/types/gateway-releases";
+import {
+  isGatewayMutableConfigForGateway,
+  type GatewayMutableConfig,
+} from "@octogee/core/gateway-live-release";
 import { createCachedOwnerModelBrokerGrantResolver } from "../lib/model-broker-limits.js";
 import { createFirestoreModelBrokerUsageStore } from "../lib/model-broker-usage.js";
 import {
@@ -526,23 +525,21 @@ function validPreStopFlushEvent(
   };
 }
 
-function gatewayClassFromGlmDoc(data: Record<string, unknown> | undefined): string {
-  if (!data) return "shared";
-  return resolveGatewayClass({
-    gatewayClass: isGatewayClass(data.gatewayClass) ? data.gatewayClass : undefined,
-    profile: isGatewayProfile(data.profile) ? data.profile : undefined,
-    imageProfile: isGatewayProfile(data.imageProfile) ? data.imageProfile : undefined,
-  });
+function isDurableGatewayRoot(
+  data: unknown,
+  gatewayId: string,
+): data is GatewayDoc & GatewayMutableConfig {
+  return (
+    isGatewayDesiredDoc(data) &&
+    data.gatewayId === gatewayId &&
+    isGatewayMutableConfigForGateway(data, gatewayId)
+  );
 }
 
-function warmTargetGatewayId(data: Record<string, unknown> | undefined): string | null {
-  const preemption =
-    data?.preemption && typeof data.preemption === "object"
-      ? (data.preemption as Record<string, unknown>)
-      : {};
-  return typeof preemption.warmTargetGatewayId === "string" &&
-    preemption.warmTargetGatewayId.length > 0
-    ? preemption.warmTargetGatewayId
+function warmTargetGatewayId(data: GatewayMutableConfig): string | null {
+  const warmTargetGatewayId = data.preemption?.warmTargetGatewayId;
+  return typeof warmTargetGatewayId === "string" && warmTargetGatewayId.length > 0
+    ? warmTargetGatewayId
     : null;
 }
 
@@ -937,14 +934,17 @@ export function isRevisionRosterRequestAllowed(input: {
 // Reads the gateway's desired doc (and, for an omitted revision, its assignment
 // docs) and applies the revision-request gate. Returns the live revision for the
 // mount filter when allowed, else { allowed: false } → the route answers 400.
-async function resolveAssignedUsersRevisionGate(
+export async function resolveAssignedUsersRevisionGate(
   db: Firestore,
   gatewayId: string,
   podRevisionId: string,
 ): Promise<{ allowed: false } | { allowed: true; liveRevisionId: string | null }> {
   const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
   const gatewayData = gatewaySnap.data();
-  const gatewayDoc = isGatewayDesiredDoc(gatewayData) ? gatewayData : undefined;
+  if (gatewaySnap.exists && !isDurableGatewayRoot(gatewayData, gatewayId)) {
+    return { allowed: false };
+  }
+  const gatewayDoc = gatewaySnap.exists ? gatewayData : undefined;
   const hasAssignmentDocs = podRevisionId
     ? false
     : (await readAssignmentDocsForGateway(db, gatewayId)).length > 0;
@@ -968,17 +968,20 @@ async function resolveMacOpsRevisionId(
   );
   if (!bound.podUid || !revisionId || trustedRevisionId !== revisionId) return null;
   const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get();
-  const gatewayDoc = isGatewayDesiredDoc(gatewaySnap.data()) ? gatewaySnap.data() : undefined;
-  return isMacOpsRevisionAllowed(bound.gatewayId, revisionId, gatewayDoc) ? revisionId : null;
+  const gatewayData = gatewaySnap.data();
+  if (!gatewaySnap.exists || !isDurableGatewayRoot(gatewayData, bound.gatewayId)) return null;
+  return isMacOpsRevisionAllowed(bound.gatewayId, revisionId, gatewayData) ? revisionId : null;
 }
 
-async function legacyMacOpsTokenAllowed(
+export async function legacyMacOpsTokenAllowed(
   db: Firestore,
   bound: GatewayBinding,
 ): Promise<boolean> {
   const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get();
-  const gatewayDoc = isGatewayDesiredDoc(gatewaySnap.data()) ? gatewaySnap.data() : undefined;
-  if (!gatewayDoc) return true;
+  if (!gatewaySnap.exists) return true;
+  const gatewayData = gatewaySnap.data();
+  if (!isDurableGatewayRoot(gatewayData, bound.gatewayId)) return false;
+  const gatewayDoc = gatewayData;
   const trustedRevisionId = revisionIdFromGatewayPodName(bound.gatewayId, bound.podName);
   const liveRevisionId =
     typeof gatewayDoc.liveRevisionId === "string" ? gatewayDoc.liveRevisionId : null;
@@ -1496,12 +1499,10 @@ function installGatewayOpsRoutes(
     }
     await runBrokered(res, async () => {
       const gatewayRef = db.collection("gateways").doc(bound.gatewayId);
-      const glmRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(bound.gatewayId);
-      await db.runTransaction(async (txn) => {
-        const glmSnap = await txn.get(glmRef);
-        const glmData = glmSnap.exists
-          ? (glmSnap.data() as Record<string, unknown> | undefined)
-          : undefined;
+      const accepted = await db.runTransaction(async (txn) => {
+        const gatewaySnap = await txn.get(gatewayRef);
+        const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
+        if (!isDurableGatewayRoot(gatewayData, bound.gatewayId)) return false;
         txn.set(
           gatewayRef,
           {
@@ -1513,16 +1514,15 @@ function installGatewayOpsRoutes(
           { merge: true },
         );
 
-        if (!glmSnap.exists) return;
-        const gatewayClass = gatewayClassFromGlmDoc(glmData);
-        const targetGatewayId = warmTargetGatewayId(glmData);
+        const gatewayClass = gatewayData.gatewayClass;
+        const targetGatewayId = warmTargetGatewayId(gatewayData);
         if (
           event.phase === "started" &&
           (gatewayClass === "builder" || gatewayClass === "operator") &&
           targetGatewayId
         ) {
           txn.set(
-            glmRef,
+            gatewayRef,
             {
               preemptionHandoff: {
                 status: "requested",
@@ -1537,10 +1537,10 @@ function installGatewayOpsRoutes(
           );
         }
         const hasExistingHandoff =
-          typeof readPath(glmData, "preemptionHandoff.status") === "string";
+          typeof gatewayData.preemptionHandoff?.status === "string";
         if (event.phase === "completed" && (targetGatewayId || hasExistingHandoff)) {
           txn.set(
-            glmRef,
+            gatewayRef,
             {
               preemptionHandoff: {
                 flushCompletedAt: FieldValue.serverTimestamp(),
@@ -1550,7 +1550,12 @@ function installGatewayOpsRoutes(
             { merge: true },
           );
         }
+        return true;
       });
+      if (!accepted) {
+        res.status(409).json({ error: "gateway_config_missing", gatewayId: bound.gatewayId });
+        return;
+      }
       res.status(204).end();
     });
   });

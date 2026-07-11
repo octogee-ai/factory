@@ -12,19 +12,52 @@ function doc(id: string, data: Record<string, unknown>): FirestoreDocLike {
   return { id, data: () => data };
 }
 
-const builderGateway = doc("gw-builder", {
-  ownerUid: "u-1",
-  gatewayClass: "builder",
-  desiredStatus: "running",
-  builderSlug: "mira",
-});
+function durableGateway(
+  id: string,
+  overrides: Record<string, unknown> = {},
+): FirestoreDocLike {
+  return doc(id, {
+    gatewayId: id,
+    createdAt: 1,
+    createdBy: "test",
+    updatedAt: 1,
+    updatedBy: "test",
+    latestRelease: 1,
+    desiredRelease: 1,
+    liveRelease: null,
+    liveRevisionId: null,
+    trafficRevisionId: null,
+    desiredStatus: "running",
+    roll: null,
+    configSchemaVersion: 1,
+    profile: null,
+    gatewayClass: "builder",
+    imageProfile: "standard",
+    sizingTier: null,
+    computeClass: null,
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: null,
+    serviceAccount: null,
+    operatorAccess: null,
+    ownerUid: "u-1",
+    coOwnerUids: [],
+    builderSlug: "mira",
+    openclawOverrides: null,
+    modelBrokerLimits: null,
+    preemption: null,
+    ...overrides,
+  });
+}
+
+const builderGateway = durableGateway("gw-builder");
 
 function plan(overrides: Partial<Parameters<typeof resolveBuilderActivationPlan>[0]> = {}) {
   return resolveBuilderActivationPlan({
     uid: "u-1",
     builderSlug: "mira",
     currentGatewayId: "gw-shared",
-    glmGateways: [builderGateway],
+    gateways: [builderGateway],
     gatewayHeartbeats: new Map([["gw-builder", { status: "ready" }]]),
     pendingOps: [],
     ...overrides,
@@ -74,13 +107,8 @@ describe("resolveBuilderActivationPlan", () => {
   it("rejects owned gateways whose builder slug belongs to a different builder", () => {
     expect(
       plan({
-        glmGateways: [
-          doc("gw-other", {
-            ownerUid: "u-1",
-            gatewayClass: "builder",
-            desiredStatus: "running",
-            builderSlug: "other",
-          }),
+        gateways: [
+          durableGateway("gw-other", { builderSlug: "other" }),
         ],
       }),
     ).toEqual({
@@ -151,6 +179,27 @@ describe("resolveBuilderActivationPlan", () => {
       ok: { action: "migrate", target: expect.objectContaining({ gatewayId: "gw-builder" }) },
     });
   });
+
+  it("ignores a bare gateway-shaped doc even when it claims owned builder policy", () => {
+    expect(
+      plan({
+        gateways: [
+          doc("legacy", {
+            gatewayId: "legacy",
+            ownerUid: "u-1",
+            gatewayClass: "builder",
+            desiredStatus: "running",
+            builderSlug: "mira",
+          }),
+        ],
+      }),
+    ).toEqual({
+      error: {
+        status: 404,
+        body: expect.objectContaining({ code: "no-owned-dedicated-activation-gateway" }),
+      },
+    });
+  });
 });
 
 describe("activationLeaseMissCanMintTicket", () => {
@@ -174,7 +223,7 @@ describe("activationLeaseMissCanMintTicket", () => {
   });
 });
 
-describe("requestBuilderActivationLease — heartbeat source (cutover step 2)", () => {
+describe("requestBuilderActivationLease — durable root policy + revision telemetry", () => {
   function fakeDb(state: {
     users: Record<string, Record<string, unknown>>;
     glmGateways: Record<string, Record<string, unknown>>;
@@ -183,6 +232,13 @@ describe("requestBuilderActivationLease — heartbeat source (cutover step 2)", 
     const accessed = new Set<string>();
     const updates: Array<{ id: string; patch: Record<string, unknown> }> = [];
     const db = {
+      doc(path: string) {
+        const [name, id] = path.split("/");
+        const data = (state as Record<string, Record<string, Record<string, unknown>>>)[name]?.[id];
+        return {
+          get: async () => ({ exists: data !== undefined, data: () => data }),
+        };
+      },
       collection(name: string) {
         accessed.add(name);
         return {
@@ -208,7 +264,7 @@ describe("requestBuilderActivationLease — heartbeat source (cutover step 2)", 
     return { db, accessed, updates };
   }
 
-  it("sources readiness from glmGateways/{id}.heartbeat, never the flat gateways collection", async () => {
+  it("uses durable root ownership/class and the live revision heartbeat", async () => {
     const { db, accessed } = fakeDb({
       users: {
         "u-1": {
@@ -217,17 +273,49 @@ describe("requestBuilderActivationLease — heartbeat source (cutover step 2)", 
           provisioning: { openclaw: { gatewayId: "gw-builder" } },
         },
       },
-      glmGateways: {
+      gateways: {
         "gw-builder": {
+          gatewayId: "gw-builder",
+          createdAt: 1,
+          createdBy: "test",
+          updatedAt: 1,
+          updatedBy: "test",
+          latestRelease: 2,
+          desiredRelease: 2,
           ownerUid: "u-1",
           gatewayClass: "builder",
+          configSchemaVersion: 1,
+          profile: null,
+          imageProfile: "standard",
+          sizingTier: null,
+          computeClass: null,
+          gcpProject: null,
+          gatewayContainerSecurityContext: null,
+          serviceAccountName: null,
+          serviceAccount: null,
+          operatorAccess: null,
+          coOwnerUids: [],
           desiredStatus: "running",
           builderSlug: "mira",
+          liveRevisionId: "gw-builder-r2",
+          liveRelease: 2,
+          trafficRevisionId: "gw-builder-r2",
+          roll: null,
+          openclawOverrides: null,
+          modelBrokerLimits: null,
+          preemption: null,
+        },
+      },
+      glmGateways: {
+        "gw-builder-r2": {
+          docKind: "revision",
+          revisionId: "gw-builder-r2",
+          gateway: "gw-builder",
+          release: 2,
+          lifecycle: "serving",
           heartbeat: { status: "ready" },
         },
       },
-      // A stale flat doc says "starting" — reading it would return "wake" (202).
-      gateways: { "gw-builder": { status: "starting" } },
     });
 
     const result = await requestBuilderActivationLease({
@@ -238,9 +326,54 @@ describe("requestBuilderActivationLease — heartbeat source (cutover step 2)", 
       now: 1_000,
     });
 
-    // glm heartbeat "ready" + current gateway == target ⇒ already-active (200).
+    // Root config + live revision heartbeat "ready" + current gateway == target ⇒ already-active (200).
     expect(result.statusCode).toBe(200);
     expect(result.body).toMatchObject({ alreadyActive: true, gatewayId: "gw-builder" });
-    expect(accessed.has("gateways")).toBe(false);
+    expect(accessed.has("gateways")).toBe(true);
+  });
+
+  it("fails closed when only a legacy gateway doc claims an owned ready target", async () => {
+    const { db } = fakeDb({
+      users: {
+        "u-1": {
+          approved: true,
+          username: "mira",
+          provisioning: { openclaw: { gatewayId: "gw-shared" } },
+        },
+      },
+      gateways: {
+        legacy: {
+          gatewayId: "legacy",
+          ownerUid: "u-1",
+          gatewayClass: "builder",
+          desiredStatus: "running",
+          builderSlug: "mira",
+          liveRevisionId: "legacy-r1",
+          liveRelease: 1,
+        },
+      },
+      glmGateways: {
+        "legacy-r1": {
+          docKind: "revision",
+          revisionId: "legacy-r1",
+          gateway: "legacy",
+          release: 1,
+          heartbeat: { status: "ready" },
+        },
+      },
+    });
+
+    const result = await requestBuilderActivationLease({
+      db: db as never,
+      uid: "u-1",
+      createdBy: "u-1",
+      workspaceSlugsForUser: () => ["mira"],
+      now: 1_000,
+    });
+
+    expect(result).toMatchObject({
+      statusCode: 404,
+      body: { code: "no-owned-dedicated-activation-gateway" },
+    });
   });
 });

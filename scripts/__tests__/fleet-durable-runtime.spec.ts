@@ -1,0 +1,149 @@
+import { describe, expect, it } from "vitest";
+import {
+  listFleetGatewayRuntimes,
+  readFleetGatewayRuntime,
+} from "../ops/fleet.js";
+
+type Docs = Record<string, Record<string, unknown>>;
+
+function gatewayRoot(
+  gatewayId: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    gatewayId,
+    createdAt: 1,
+    createdBy: "test",
+    updatedAt: 1,
+    updatedBy: "test",
+    latestRelease: 2,
+    desiredRelease: 2,
+    liveRelease: 2,
+    liveRevisionId: `${gatewayId}-r2`,
+    trafficRevisionId: `${gatewayId}-r2`,
+    desiredStatus: "running",
+    roll: null,
+    configSchemaVersion: 1,
+    profile: null,
+    gatewayClass: "shared",
+    imageProfile: "standard",
+    sizingTier: null,
+    computeClass: null,
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: null,
+    serviceAccount: null,
+    operatorAccess: null,
+    ownerUid: null,
+    coOwnerUids: [],
+    builderSlug: null,
+    openclawOverrides: null,
+    modelBrokerLimits: null,
+    preemption: null,
+    ...overrides,
+  };
+}
+
+function revision(
+  gatewayId: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    docKind: "revision",
+    revisionId: `${gatewayId}-r2`,
+    gateway: gatewayId,
+    release: 2,
+    lifecycle: "serving",
+    heartbeat: {
+      status: "ready",
+      mountedCustomers: ["alice"],
+    },
+    ...overrides,
+  };
+}
+
+function database(docs: Docs, gatewayIds: readonly string[] = []): {
+  doc(path: string): { get(): Promise<{ exists: boolean; data(): Record<string, unknown> | undefined }> };
+  collection(name: string): {
+    get(): Promise<{ docs: Array<{ id: string; data(): Record<string, unknown> | undefined }> }>;
+  };
+} {
+  return {
+    doc(path) {
+      return {
+        get: async () => ({
+          exists: docs[path] !== undefined,
+          data: () => docs[path],
+        }),
+      };
+    },
+    collection(name) {
+      if (name !== "gateways") throw new Error(`unexpected collection ${name}`);
+      return {
+        get: async () => ({
+          docs: gatewayIds.map((id) => ({ id, data: () => docs[`gateways/${id}`] })),
+        }),
+      };
+    },
+  };
+}
+
+describe("fleet durable gateway runtime", () => {
+  it("reads the exact live revision heartbeat while retaining the bare gateway id", async () => {
+    const db = database({
+      "gateways/default": gatewayRoot("default"),
+      "glmGateways/default-r2": revision("default"),
+      "glmGateways/default": {
+        heartbeat: { status: "unreachable", mountedCustomers: ["stale"] },
+      },
+    });
+
+    await expect(readFleetGatewayRuntime(db as never, "default")).resolves.toEqual({
+      gatewayId: "default",
+      desiredStatus: "running",
+      profile: "standard",
+      heartbeat: {
+        status: "ready",
+        mountedCustomers: ["alice"],
+      },
+    });
+  });
+
+  it("fails closed for an existing malformed root instead of reading its bare glm doc", async () => {
+    const db = database({
+      "gateways/default": { gatewayId: "default" },
+      "glmGateways/default": {
+        heartbeat: { status: "ready", mountedCustomers: ["alice"] },
+      },
+    });
+
+    await expect(readFleetGatewayRuntime(db as never, "default")).resolves.toBeNull();
+  });
+
+  it("lists durable root identities and never turns runtime revisions into gateway rows", async () => {
+    const db = database({
+      "gateways/default": gatewayRoot("default"),
+      "glmGateways/default-r2": revision("default"),
+      "glmGateways/default-r3": revision("default", {
+        revisionId: "default-r3",
+        release: 3,
+        heartbeat: { status: "ready", mountedCustomers: ["bob"] },
+      }),
+    }, ["default"]);
+
+    await expect(listFleetGatewayRuntimes(db as never)).resolves.toEqual([
+      {
+        gatewayId: "default",
+        runtime: {
+          gatewayId: "default",
+          desiredStatus: "running",
+          profile: "standard",
+          heartbeat: {
+            status: "ready",
+            mountedCustomers: ["alice"],
+          },
+        },
+      },
+    ]);
+  });
+});

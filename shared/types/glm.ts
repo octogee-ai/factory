@@ -54,8 +54,6 @@ export interface GatewayDesiredState {
 
   openclawOverrides?: Record<string, unknown>;
 
-  byosub?: Record<string, ByosubRef>;
-
   ownerUid?: string;
 
   coOwnerUids?: string[];
@@ -74,6 +72,7 @@ export interface GatewayDesiredState {
 
 export interface GatewayModelBrokerLimits {
   spendWindowUsd?: number | null;
+  spendWeekUsd?: number | null;
   requestsPerMinute?: number | null;
 }
 
@@ -296,21 +295,6 @@ export function resolveUserGatewayShellState(
     gatewayProfile: gatewayClass === "operator" ? "operator" : "standard",
     shellsEnabled: userOwns && isGatewayClassShellAccessEnabled(gatewayClass, data?.operatorAccess),
   };
-}
-
-export type ByosubProvider = "openai" | "anthropic";
-
-export type ByosubStatus = "pending" | "connected" | "needs_reauth";
-
-export interface ByosubProviderRef {
-  provider: ByosubProvider;
-  secretName: string;
-  status?: ByosubStatus;
-  modelCredentialProvider?: "openai-codex" | "claude-cli";
-}
-
-export interface ByosubRef {
-  providers: Partial<Record<ByosubProvider, ByosubProviderRef>>;
 }
 
 export type OperationKind =

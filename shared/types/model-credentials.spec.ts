@@ -6,11 +6,13 @@ import {
   MODEL_CREDENTIAL_OAUTH_PROVIDER_IDS,
   MODEL_CREDENTIAL_SUBSCRIPTION_PROVIDER_IDS,
   MODEL_CREDENTIAL_STATIC_PROVIDER_IDS,
+  byosubSecretNameForUser,
   modelCredentialApiKeyState,
   modelCredentialOAuthState,
   modelCredentialOAuthEntryByProviderId,
   modelCredentialOAuthEntryBySubscriptionProvider,
   modelCredentialEntryById,
+  resolveUserByosubCredentialRefs,
 } from "./model-credentials.js";
 
 describe("MODEL_CREDENTIAL_CATALOG", () => {
@@ -222,5 +224,54 @@ describe("MODEL_CREDENTIAL_CATALOG", () => {
         secretRefAllowed: false,
       },
     });
+  });
+});
+
+describe("user-scoped BYOSUB credential authority", () => {
+  it("derives provider secret names from the authenticated user integration, never a stored ref", () => {
+    expect(
+      resolveUserByosubCredentialRefs("uid_ABC", {
+        providers: {
+          openai: {
+            provider: "openai",
+            connected: true,
+            status: "connected",
+            secretName: "someone-elses-secret",
+          },
+          anthropic: {
+            provider: "anthropic",
+            connected: true,
+            status: "connected",
+          },
+        },
+      }),
+    ).toEqual({
+      refs: [
+        { provider: "openai", secretName: "byosub-uid_ABC-openai" },
+        { provider: "anthropic", secretName: "byosub-uid_ABC-anthropic" },
+      ],
+      skipped: [],
+    });
+  });
+
+  it("fails closed for missing, disconnected, malformed, or unsafe user integration leaves", () => {
+    expect(resolveUserByosubCredentialRefs("uid-1", undefined)).toEqual({
+      refs: [],
+      skipped: [],
+    });
+    expect(
+      resolveUserByosubCredentialRefs("uid-1", {
+        providers: {
+          openai: { provider: "openai", connected: false, status: "disconnected" },
+          anthropic: { provider: "anthropic", connected: false, status: "needs_reauth" },
+        },
+      }),
+    ).toEqual({ refs: [], skipped: [] });
+    expect(
+      resolveUserByosubCredentialRefs("uid-1", {
+        providers: { openai: { provider: "anthropic", connected: true, status: "connected" } },
+      }),
+    ).toEqual({ refs: [], skipped: ["openai: malformed provider leaf"] });
+    expect(byosubSecretNameForUser("not/a-uid", "openai")).toBeNull();
   });
 });

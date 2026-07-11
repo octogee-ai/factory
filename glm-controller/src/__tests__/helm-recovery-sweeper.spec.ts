@@ -9,6 +9,7 @@ const STALE = 15 * 60_000;
 function makeDeps(over: Partial<SweepStuckReleasesDeps> = {}): SweepStuckReleasesDeps {
   return {
     listPending: vi.fn(async () => [] as string[]),
+    isRecoverableRevision: vi.fn(async () => true),
     recover: vi.fn(async (gw: string) => `rolled back ${gw} to revision 1`),
     now: () => 0,
     staleMs: STALE,
@@ -22,7 +23,7 @@ describe("sweepStuckReleasesOnce", () => {
     const deps = makeDeps({ listPending: vi.fn(async () => ["default-blue"]), now: () => 1000 });
     const state = new Map<string, number>();
     const res = await sweepStuckReleasesOnce(deps, state);
-    expect(res).toEqual({ pending: 1, recovered: 0 });
+    expect(res).toEqual({ pending: 1, recovered: 0, skipped: 0 });
     expect(deps.recover).not.toHaveBeenCalled();
     expect(state.get("default-blue")).toBe(1000);
   });
@@ -34,7 +35,7 @@ describe("sweepStuckReleasesOnce", () => {
     });
     const state = new Map<string, number>([["default-blue", 1000]]);
     const res = await sweepStuckReleasesOnce(deps, state);
-    expect(res).toEqual({ pending: 1, recovered: 1 });
+    expect(res).toEqual({ pending: 1, recovered: 1, skipped: 0 });
     expect(deps.recover).toHaveBeenCalledWith("default-blue");
     expect(state.has("default-blue")).toBe(false); // cleared after a successful recover
   });
@@ -85,6 +86,26 @@ describe("sweepStuckReleasesOnce", () => {
     expect(state.get("new")).toBe(STALE + 5000);
   });
 
+  it("never recovers a stale bare release, clearing any old retry clock", async () => {
+    const deps = makeDeps({
+      listPending: vi.fn(async () => ["default", "default-r42"]),
+      isRecoverableRevision: vi.fn(async (revisionId: string) => revisionId === "default-r42"),
+      now: () => 1000 + STALE,
+    });
+    const state = new Map<string, number>([
+      ["default", 1000],
+      ["default-r42", 1000],
+    ]);
+
+    const res = await sweepStuckReleasesOnce(deps, state);
+
+    expect(res).toEqual({ pending: 1, recovered: 1, skipped: 1 });
+    expect(deps.recover).toHaveBeenCalledWith("default-r42");
+    expect(deps.recover).not.toHaveBeenCalledWith("default");
+    expect(state.has("default")).toBe(false);
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("skipping unmanaged pending release default"));
+  });
+
   it("returns zero and logs when listing pending releases fails", async () => {
     const deps = makeDeps({
       listPending: vi.fn(async () => {
@@ -92,7 +113,7 @@ describe("sweepStuckReleasesOnce", () => {
       }),
     });
     const res = await sweepStuckReleasesOnce(deps, new Map());
-    expect(res).toEqual({ pending: 0, recovered: 0 });
+    expect(res).toEqual({ pending: 0, recovered: 0, skipped: 0 });
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("listPending failed"));
   });
 });

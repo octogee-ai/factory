@@ -154,18 +154,19 @@ describe("in-pod revision-keyed heartbeat (PR3 dependency)", () => {
     expect(snap).toMatchObject({ gatewayId: "default", revisionId: "default-r2", status: "ready" });
   });
 
-  it("omits revisionId for a legacy pod (no GATEWAY_REVISION_ID)", () => {
-    const snap = buildFleetHeartbeatSnapshot({
-      gatewayId: "default",
-      revisionId: "",
-      status: "booting",
-      version: "v",
-      openclawVersion: "v",
-      mountedCustomers: [],
-      internalUrl: "http://gw",
-      startedAt: 1,
-    });
-    expect(snap.revisionId).toBeUndefined();
+  it("refuses an empty revision id so a legacy pod cannot write bare telemetry", () => {
+    expect(() =>
+      buildFleetHeartbeatSnapshot({
+        gatewayId: "default",
+        revisionId: "",
+        status: "booting",
+        version: "v",
+        openclawVersion: "v",
+        mountedCustomers: [],
+        internalUrl: "http://gw",
+        startedAt: 1,
+      }),
+    ).toThrow("revisionId is required");
   });
 
   it("points the heartbeat internalUrl at the revision Service when a revision id is set", () => {
@@ -174,9 +175,9 @@ describe("in-pod revision-keyed heartbeat (PR3 dependency)", () => {
     );
   });
 
-  it("falls back to the bare gateway Service name for a legacy pod", () => {
-    expect(gatewayRevisionServiceName({ gatewayId: "default", revisionId: "" })).toBe(
-      "octogee-gateway-default",
+  it("refuses bare service addressing", () => {
+    expect(() => gatewayRevisionServiceName({ gatewayId: "default", revisionId: "" })).toThrow(
+      "revisionId is required",
     );
   });
 });

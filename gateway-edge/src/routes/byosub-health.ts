@@ -5,7 +5,6 @@ import { db } from "../lib/db.js";
 import {
   coachAgentId,
   deriveByosubHealth,
-  byosubConnectionView,
   isSafeGatewayId,
 } from "../lib/byosub.js";
 import { resolveUserGateway, type ResolvedGateway } from "../lib/user-gateway.js";
@@ -19,11 +18,12 @@ import {
   CLAUDE_CLI_DEFAULT_PROFILE_ID,
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "@octogee/core/model-credential-materializer";
+import { resolveUserByosubCredentialRefs } from "@octogee/shared/types/model-credentials";
 
 // GET /api/g/<gatewayId>/byosub/health — the DEEP byosub durability check.
 //
-// /api/model-credentials/subscription/connection (cluster) reads only the glmGateways.byosub Firestore
-// ref, which survives a reroll/relocation regardless of whether the destination
+// /api/model-credentials/subscription/connection (cluster) reads only the user integration
+// authority, which survives a reroll/relocation regardless of whether the destination
 // pod re-materialized a working credential. This route runs ON the customer's
 // own pod (locality seam) and crosses that expectation with pod reality — is the
 // auth-profile store actually present, and does codex consider it alive — so a
@@ -35,7 +35,7 @@ export interface ByosubHealthDeps {
   resolveUserGateway: (uid: string) => Promise<ResolvedGateway | null>;
   localGatewayId: () => string | null;
   isMounted: (slug: string) => boolean;
-  readRefProvider: (gatewayId: string, agentId: string) => Promise<string | null>;
+  readRefProvider: (uid: string) => Promise<string | null>;
   readStorePresent: (agentId: string, profileId: string) => boolean;
   readProfileExpiresAt: (agentId: string, profileId: string) => number | null;
   readAuthStateText: (agentId: string) => string | null;
@@ -86,7 +86,7 @@ export function createByosubHealthRouter(deps: ByosubHealthDeps): Router {
           return;
         }
         const mountedHere = deps.isMounted(resolved.slug);
-        const refProvider = await deps.readRefProvider(pathGatewayId, agentId);
+        const refProvider = await deps.readRefProvider(req.uid!);
         const profileId =
           refProvider === "anthropic"
             ? CLAUDE_CLI_DEFAULT_PROFILE_ID
@@ -130,19 +130,16 @@ export function createByosubHealthRouter(deps: ByosubHealthDeps): Router {
 const CUSTOMERS_DIR = process.env.CUSTOMERS_DIR ?? "/home/node/.openclaw/customers";
 const OPENCLAW_DIR = process.env.OPENCLAW_DIR ?? path.dirname(CUSTOMERS_DIR);
 
-async function readRefProvider(
-  gatewayId: string,
-  agentId: string,
-): Promise<string | null> {
-  const snap = await db.collection("glmGateways").doc(gatewayId).get();
-  const ref = (
-    (snap.data() || {}) as {
-      byosub?: Record<string, { providers?: unknown } | undefined>;
-    }
-  ).byosub?.[agentId];
-  const view = byosubConnectionView(ref).providers;
-  if (view.openai) return "openai";
-  if (view.anthropic) return "anthropic";
+async function readRefProvider(uid: string): Promise<string | null> {
+  const snap = await db
+    .collection("users")
+    .doc(uid)
+    .collection("integrations")
+    .doc("byosub")
+    .get();
+  const refs = resolveUserByosubCredentialRefs(uid, snap.data()).refs;
+  if (refs.some((ref) => ref.provider === "openai")) return "openai";
+  if (refs.some((ref) => ref.provider === "anthropic")) return "anthropic";
   return null;
 }
 

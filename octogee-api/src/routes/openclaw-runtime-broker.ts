@@ -2,7 +2,14 @@ import { Router, type Request, type Response } from "express";
 import type { Firestore, Transaction } from "firebase-admin/firestore";
 
 import { isValidUsername, parseAgentId } from "@octogee/shared/types/identity";
-import { isGatewayDesiredDoc } from "@octogee/shared/types/gateway-releases";
+import {
+  isGatewayDesiredDoc,
+  type GatewayDoc,
+} from "@octogee/shared/types/gateway-releases";
+import {
+  isGatewayMutableConfigForGateway,
+  type GatewayMutableConfig,
+} from "@octogee/core/gateway-live-release";
 import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
 import { readAssignedSlugsForGateway } from "@octogee/core/assigned-roster";
 import { parseAssignmentDoc } from "@octogee/core/assignment-doc";
@@ -48,6 +55,17 @@ type MarkDispatchedResult =
 const TICKETS = "gatewayTickets";
 const APPROVALS = "ocApprovals";
 const FORBIDDEN = { error: "forbidden" } as const;
+
+function isDurableGatewayRoot(
+  data: unknown,
+  gatewayId: string,
+): data is GatewayDoc & GatewayMutableConfig {
+  return (
+    isGatewayDesiredDoc(data) &&
+    data.gatewayId === gatewayId &&
+    isGatewayMutableConfigForGateway(data, gatewayId)
+  );
+}
 
 function boundGateway(req: Request, res: Response): GatewayBinding | null {
   const bound = req.boundTenant;
@@ -415,6 +433,7 @@ export async function resolveRedeemGatewayUrl(input: {
   db: Firestore;
   gatewayId: string;
   uid: string;
+  gatewayExists: boolean;
   gatewayData: Record<string, unknown>;
 }): Promise<{ url: string } | { error: string }> {
   // Un-backfilled path, byte-identical to legacy: a genuine pre-backfill
@@ -426,11 +445,14 @@ export async function resolveRedeemGatewayUrl(input: {
   // A GatewayDoc always goes through revision resolution below.
   const legacyUrl = input.gatewayData.internalUrl;
   if (
-    !isGatewayDesiredDoc(input.gatewayData) &&
+    !input.gatewayExists &&
     typeof legacyUrl === "string" &&
     legacyUrl.length > 0
   ) {
     return { url: legacyUrl };
+  }
+  if (input.gatewayExists && !isDurableGatewayRoot(input.gatewayData, input.gatewayId)) {
+    return { error: "gateway-root-invalid" };
   }
 
   // Backfilled desired doc: resolve the customer's serving revision and read its
@@ -507,10 +529,19 @@ function mountUserAndWsRoutes(router: Router, db: Firestore): void {
         db,
         gatewayId: bound.gatewayId,
         uid,
+        gatewayExists: gwSnap.exists,
         gatewayData: gwSnap.data() ?? {},
       });
       if ("error" in urlResult) {
-        return { status: 502, body: { error: "gateway-url-unresolved" } };
+        return {
+          status: 502,
+          body: {
+            error:
+              urlResult.error === "gateway-root-invalid"
+                ? "gateway-root-invalid"
+                : "gateway-url-unresolved",
+          },
+        };
       }
       const gatewayUrl = urlResult.url;
       let expectedAgentId: string;

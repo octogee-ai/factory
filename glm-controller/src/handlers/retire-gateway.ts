@@ -1,17 +1,22 @@
 import type { Operation, OperationStep, StepStatus } from "@octogee/shared/types/glm";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
+import type { GatewayLifecycleStatus } from "@octogee/shared/types/gateway-releases";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
-import type { HelmRunner } from "../helm-runner.js";
 
 const UNKNOWN_ERROR = "unknown error";
 
 export interface GatewayLiveState {
   mountedCustomers: string[];
+  desiredStatus?: GatewayLifecycleStatus;
+}
+
+interface NonRetiredGatewayRevision {
+  revisionId: string;
+  release: number;
+  mountedCustomers: string[];
 }
 
 export interface RetireGatewayDeps {
-  helm: Pick<HelmRunner, "readDeployedInstances">;
-
   readGatewayLiveState: (gatewayId: string) => Promise<GatewayLiveState | null>;
 
   deleteGlmGateway: (gatewayId: string) => Promise<void>;
@@ -54,7 +59,7 @@ export interface RetireGatewayDeps {
   // where gateway == id, lifecycle != retired).
   readNonRetiredRevisions: (
     gatewayId: string,
-  ) => Promise<Array<{ revisionId: string; release: number }>>;
+  ) => Promise<NonRetiredGatewayRevision[]>;
 
   // Revision-scoped Helm uninstall (octogee-gw-{revisionId}) — must tolerate an
   // already-absent release so a crashed retire re-drives cleanly.
@@ -71,10 +76,7 @@ export interface RetireGatewayDeps {
   // The doc is RETAINED (never deleted), matching the roll's source retirement.
   retireRevisionDoc: (revisionId: string, reason: string) => Promise<void>;
 
-  readGlmGatewayId: (gatewayId: string) => Promise<string | null>;
-
   syncFleetIngress: () => Promise<void>;
-  helmUninstallTimeoutMs: number;
   pollIntervalMs: number;
   now: () => number;
   wait: (ms: number) => Promise<void>;
@@ -95,17 +97,10 @@ type RetireGatewayRequest =
       retainServiceAccount: boolean;
     };
 
-interface PollResult {
-  ok: boolean;
-  errorMsg?: string;
-}
-
 interface StepResult {
   ok: boolean;
   error?: string;
 }
-
-const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
 
 function compareStrings(a: string, b: string): number {
   if (a < b) return -1;
@@ -160,45 +155,6 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
     const revisionFailure = await drainRevisions(ctx, deps, gatewayId);
     if (revisionFailure) return revisionFailure;
 
-    let resolvedGatewayId = await deps.readGlmGatewayId(gatewayId);
-    if (!resolvedGatewayId) {
-      if (await helmHasInstance(deps, gatewayId)) {
-        return failure(
-          `glmGateways/${gatewayId} not found and helm release still exists — cannot retire safely`,
-        );
-      }
-      deps.log(
-        `[retire-gateway] glmGateways/${gatewayId} already deleted and helm release is absent — finishing cleanup from operation input`,
-      );
-      resolvedGatewayId = gatewayId;
-    }
-    // Teardown targets resources named from resolvedGatewayId but removes
-    // records by the input gatewayId — they must be the same gateway, or a
-    // mismatched doc would delete one gateway's records while clearing
-    // another's resources.
-    if (resolvedGatewayId !== gatewayId) {
-      return failure(
-        `glmGateways/${gatewayId}.gatewayId is "${resolvedGatewayId}" — refusing teardown under a mismatched id`,
-      );
-    }
-
-    // 1. Stop the workload first — nothing must be holding the PVC / secrets /
-    //    service account when we delete them.
-    const helmResult = await pollUntil({
-      stepName: "helm-uninstall",
-      timeoutMs: deps.helmUninstallTimeoutMs,
-      ctx,
-      deps,
-      check: async () => {
-        const map = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
-        return !Object.prototype.hasOwnProperty.call(map, resolvedGatewayId);
-      },
-      timeoutMessage: `helm did not uninstall instance "${resolvedGatewayId}" within ${deps.helmUninstallTimeoutMs}ms`,
-    });
-    if (!helmResult.ok) {
-      return failure(helmResult.errorMsg ?? "helm uninstall failed");
-    }
-
     const legacyTokenFailure = await revokeLegacyMacOpsTokens(ctx, deps, gatewayId);
     if (legacyTokenFailure) return legacyTokenFailure;
 
@@ -210,7 +166,7 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
     const teardownErrors = await teardownResources(
       ctx,
       deps,
-      resolvedGatewayId,
+      gatewayId,
       retainData,
       retainServiceAccount,
     );
@@ -231,11 +187,6 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
 
     return { steps: [], success: true };
   };
-}
-
-async function helmHasInstance(deps: RetireGatewayDeps, gatewayId: string): Promise<boolean> {
-  const map = await deps.helm.readDeployedInstances({ namespace: NAMESPACE });
-  return Object.prototype.hasOwnProperty.call(map, gatewayId);
 }
 
 async function teardownResources(
@@ -333,7 +284,18 @@ async function drainRevisions(
   deps: RetireGatewayDeps,
   gatewayId: string,
 ): Promise<OperationResult | null> {
-  const revisions = await deps.readNonRetiredRevisions(gatewayId);
+  let revisions: NonRetiredGatewayRevision[];
+  try {
+    revisions = await deps.readNonRetiredRevisions(gatewayId);
+  } catch (error) {
+    return failure(
+      `gateway ${gatewayId} durable revision retirement state unreadable: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const mountedFailure = mountedRevisionFailure(gatewayId, revisions);
+  if (mountedFailure) return mountedFailure;
   const sorted = [...revisions].sort((a, b) => compareStrings(a.revisionId, b.revisionId));
   const errors: string[] = [];
   for (const rev of sorted) {
@@ -356,7 +318,18 @@ async function drainRevisions(
       `revision teardown incomplete (gateway-scoped resources preserved): ${errors.join("; ")}`,
     );
   }
-  const remaining = await deps.readNonRetiredRevisions(gatewayId);
+  let remaining: NonRetiredGatewayRevision[];
+  try {
+    remaining = await deps.readNonRetiredRevisions(gatewayId);
+  } catch (error) {
+    return failure(
+      `gateway ${gatewayId} durable revision retirement state unreadable: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const remainingMountedFailure = mountedRevisionFailure(gatewayId, remaining);
+  if (remainingMountedFailure) return remainingMountedFailure;
   if (remaining.length > 0) {
     return failure(
       `revisions still non-retired after drain: ${remaining
@@ -365,6 +338,26 @@ async function drainRevisions(
     );
   }
   return null;
+}
+
+function mountedRevisionFailure(
+  gatewayId: string,
+  revisions: ReadonlyArray<NonRetiredGatewayRevision>,
+): OperationResult | null {
+  const mounted = revisions
+    .filter((revision) => revision.mountedCustomers.length > 0)
+    .sort((left, right) => compareStrings(left.revisionId, right.revisionId));
+  if (mounted.length === 0) return null;
+  const mountCount = mounted.reduce(
+    (count, revision) => count + revision.mountedCustomers.length,
+    0,
+  );
+  const descriptions = mounted.map(
+    (revision) => `${revision.revisionId}: ${[...revision.mountedCustomers].sort(compareStrings).join(", ")}`,
+  );
+  return failure(
+    `gateway ${gatewayId} still has ${mountCount} mounted customer(s) on non-retired revision(s): ${descriptions.join("; ")}`,
+  );
 }
 
 async function revokeLegacyMacOpsTokens(
@@ -384,8 +377,24 @@ async function assertGatewayRetirable(
   deps: RetireGatewayDeps,
   gatewayId: string,
 ): Promise<OperationResult | null> {
-  const live = await deps.readGatewayLiveState(gatewayId);
-  if (live == null) return null;
+  let live: GatewayLiveState | null;
+  try {
+    live = await deps.readGatewayLiveState(gatewayId);
+  } catch (error) {
+    return failure(
+      `gateway ${gatewayId} durable retirement state unreadable: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  if (live == null) {
+    return failure(`gateway ${gatewayId} durable retirement state unreadable`);
+  }
+  if (live.desiredStatus !== "retired") {
+    return failure(
+      `gateway ${gatewayId} desiredStatus is no longer retired; refusing retirement`,
+    );
+  }
   if (live.mountedCustomers.length > 0) {
     return failure(
       `gateway ${gatewayId} still has ${live.mountedCustomers.length} mounted customer(s): ${live.mountedCustomers.join(", ")}`,
@@ -472,43 +481,6 @@ async function runReportedStep(
       error: msg,
     });
     return { ok: false, error: msg };
-  }
-}
-
-async function pollUntil(args: {
-  stepName: string;
-  timeoutMs: number;
-  ctx: OperationContext;
-  deps: RetireGatewayDeps;
-  check: () => Promise<boolean>;
-  timeoutMessage: string;
-}): Promise<PollResult> {
-  const { stepName, timeoutMs, ctx, deps, check, timeoutMessage } = args;
-  const startedAt = deps.now();
-  await reportStep(ctx, { name: stepName, status: "running", startedAt });
-
-  const deadline = startedAt + timeoutMs;
-  while (true) {
-    if (await check()) {
-      await reportStep(ctx, {
-        name: stepName,
-        status: "done",
-        startedAt,
-        completedAt: deps.now(),
-      });
-      return { ok: true };
-    }
-    if (deps.now() >= deadline) {
-      await reportStep(ctx, {
-        name: stepName,
-        status: "failed",
-        startedAt,
-        completedAt: deps.now(),
-        error: timeoutMessage,
-      });
-      return { ok: false, errorMsg: timeoutMessage };
-    }
-    await deps.wait(deps.pollIntervalMs);
   }
 }
 

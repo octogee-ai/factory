@@ -1,8 +1,9 @@
 import type { Firestore } from "firebase-admin/firestore";
+import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
-  GATEWAY_RELEASES_SUBCOLLECTION,
-  isGatewayDesiredDoc,
-} from "@octogee/shared/types/gateway-releases";
+  effectiveGatewayServiceAccountNameForGateway,
+  readGatewayAuthorization,
+} from "@octogee/core/gateway-live-release";
 
 export type BoundTenant =
   | {
@@ -47,6 +48,7 @@ export interface ServiceAccountIdentity {
 const GATEWAY_SA_PREFIX = "octogee-gw-";
 const LEGACY_OPERATOR_GATEWAY_SA_PREFIX = "octogee-gateway-";
 const SHARED_GATEWAY_SA_NAME = "octogee-gateway";
+type GatewayRootFirestore = Pick<Firestore, "doc" | "collection">;
 
 function isDnsLabel(value: string): boolean {
   if (value.length < 1 || value.length > 63) return false;
@@ -88,66 +90,58 @@ function attachGateway(
   };
 }
 
-// New model: ownerUid lives on the live release payload, not the gateway doc.
-// Resolve from liveRelease (the currently serving release) and fall back to
-// desiredRelease when the gateway has not converged onto a live release yet.
-async function ownerUidFromLiveRelease(
-  db: Pick<Firestore, "collection">,
-  gatewayId: string,
-  desired: { liveRelease?: number | null; desiredRelease: number },
-): Promise<string | null> {
-  const release =
-    typeof desired.liveRelease === "number" ? desired.liveRelease : desired.desiredRelease;
-  if (typeof release !== "number") return null;
-  const relSnap = await db
-    .collection("gateways")
-    .doc(gatewayId)
-    .collection(GATEWAY_RELEASES_SUBCOLLECTION)
-    .doc(String(release))
-    .get();
-  const payload = relSnap.data()?.payload as Record<string, unknown> | undefined;
-  const ownerUid = payload?.ownerUid;
-  return typeof ownerUid === "string" && ownerUid ? ownerUid : null;
-}
-
-// Tenant identity split (GATEWAY-RELEASES-SPEC): the gateway-scoped KSA maps to
-// the NEW gateways/{gatewayId} durable desired doc when present, else the legacy
-// glmGateways/{gatewayId} desired doc. Dual-read keeps the switch
-// behavior-preserving during expand — a gateway that only exists in glmGateways
-// (pre-backfill) still resolves under the same bare id. The bare id is
-// unchanged, so broker authorization (fleet-broker.ts) is untouched.
 async function bindGatewaySa(
-  db: Pick<Firestore, "collection">,
+  db: GatewayRootFirestore,
+  saName: string,
   suffix: string,
   result: "ok" | "ok_legacy_operator",
 ): Promise<SaToTenantResult> {
   const gatewayId = gatewayIdFromSaSuffix(suffix);
   if (!gatewayId) return { attached: false, result: "malformed_sa" };
 
-  const desiredSnap = await db.collection("gateways").doc(gatewayId).get();
-  const desired = desiredSnap.exists ? desiredSnap.data() : undefined;
-  if (isGatewayDesiredDoc(desired)) {
-    if (desired.desiredStatus === "retired") {
-      return { attached: false, result: "unknown_tenant" };
-    }
-    const ownerUid = await ownerUidFromLiveRelease(db, gatewayId, desired);
-    return attachGateway(gatewayId, ownerUid, result);
+  const authorization = await readGatewayAuthorization(db, gatewayId);
+  if (!authorization || authorization.gateway.desiredStatus === "retired") {
+    return { attached: false, result: "unknown_tenant" };
   }
+  if (
+    effectiveGatewayServiceAccountNameForGateway(authorization.config, gatewayId) !== saName
+  ) {
+    return { attached: false, result: "unknown_tenant" };
+  }
+  return attachGateway(gatewayId, authorization.config.ownerUid, result);
+}
 
-  const snap = await db.collection("glmGateways").doc(gatewayId).get();
-  if (!snap.exists) {
+async function bindCustomGatewaySa(
+  db: GatewayRootFirestore,
+  saName: string,
+): Promise<SaToTenantResult> {
+  const roots = await db
+    .collection(GATEWAYS_COLLECTION)
+    .where("serviceAccountName", "==", saName)
+    .get();
+  if (roots.docs.length !== 1) return { attached: false, result: "unknown_tenant" };
+  const root = roots.docs[0];
+  const authorization = await readGatewayAuthorization(db, root.id);
+  if (!authorization || authorization.gateway.desiredStatus === "retired") {
     return { attached: false, result: "unknown_tenant" };
   }
-  const data = snap.data();
-  if (data?.desiredStatus === "retired") {
+  if (
+    effectiveGatewayServiceAccountNameForGateway(
+      authorization.config,
+      authorization.gateway.gatewayId,
+    ) !== saName
+  ) {
     return { attached: false, result: "unknown_tenant" };
   }
-  const ownerUid = typeof data?.ownerUid === "string" && data.ownerUid ? data.ownerUid : null;
-  return attachGateway(gatewayId, ownerUid, result);
+  return attachGateway(
+    authorization.gateway.gatewayId,
+    authorization.config.ownerUid,
+    "ok",
+  );
 }
 
 export async function mapSaToTenant(
-  db: Pick<Firestore, "collection">,
+  db: GatewayRootFirestore,
   identity: ServiceAccountIdentity,
   expectedNamespace = process.env.K8S_NAMESPACE ?? "octogee",
 ): Promise<SaToTenantResult> {
@@ -159,18 +153,6 @@ export async function mapSaToTenant(
     return { attached: false, result: "shared_gateway" };
   }
 
-  if (identity.saName.startsWith(GATEWAY_SA_PREFIX)) {
-    return bindGatewaySa(db, identity.saName.slice(GATEWAY_SA_PREFIX.length), "ok");
-  }
-
-  if (identity.saName.startsWith(LEGACY_OPERATOR_GATEWAY_SA_PREFIX)) {
-    return bindGatewaySa(
-      db,
-      identity.saName.slice(LEGACY_OPERATOR_GATEWAY_SA_PREFIX.length),
-      "ok_legacy_operator",
-    );
-  }
-
   const actor = platformActorFromSa(identity.saName);
   if (actor) {
     return {
@@ -180,5 +162,24 @@ export async function mapSaToTenant(
     };
   }
 
-  return { attached: false, result: "unknown_sa" };
+  if (identity.saName.startsWith(GATEWAY_SA_PREFIX)) {
+    return bindGatewaySa(
+      db,
+      identity.saName,
+      identity.saName.slice(GATEWAY_SA_PREFIX.length),
+      "ok",
+    );
+  }
+
+  if (identity.saName.startsWith(LEGACY_OPERATOR_GATEWAY_SA_PREFIX)) {
+    return bindGatewaySa(
+      db,
+      identity.saName,
+      identity.saName.slice(LEGACY_OPERATOR_GATEWAY_SA_PREFIX.length),
+      "ok_legacy_operator",
+    );
+  }
+
+  if (!isDnsLabel(identity.saName)) return { attached: false, result: "unknown_sa" };
+  return bindCustomGatewaySa(db, identity.saName);
 }

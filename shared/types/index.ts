@@ -261,6 +261,15 @@ export {
   classifyGatewayField,
 } from './gateway-releases.js';
 
+export type { GatewayMutableConfig } from './gateway-mutable-config.js';
+export {
+  GATEWAY_CONFIG_SCHEMA_VERSION,
+  effectiveGatewayServiceAccountNameForGateway,
+  isBareGatewayId,
+  isGatewayMutableConfig,
+  isGatewayMutableConfigForGateway,
+} from './gateway-mutable-config.js';
+
 export type {
   SizingTier,
   SizingTierPreset,

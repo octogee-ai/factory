@@ -2,9 +2,30 @@ import { describe, expect, it } from "vitest";
 
 import {
   isMacOpsRevisionAllowed,
+  legacyMacOpsTokenAllowed,
   macOpsTokenIdsForDescription,
+  resolveAssignedUsersRevisionGate,
   revisionIdFromGatewayPodName,
 } from "./fleet-broker.js";
+
+function gatewayStateDb(data: Record<string, unknown> | undefined) {
+  return {
+    collection: (name: string) => {
+      if (name !== "gateways") throw new Error(`unexpected collection ${name}`);
+      return {
+        doc: () => ({
+          get: async () => ({ exists: data !== undefined, data: () => data }),
+          collection: (subcollection: string) => {
+            if (subcollection !== "assignments") {
+              throw new Error(`unexpected subcollection ${subcollection}`);
+            }
+            return { get: async () => ({ docs: [] }) };
+          },
+        }),
+      };
+    },
+  };
+}
 
 describe("revisionIdFromGatewayPodName", () => {
   it("derives the immutable revision from the authenticated Deployment pod name", () => {
@@ -67,5 +88,32 @@ describe("isMacOpsRevisionAllowed", () => {
     expect(isMacOpsRevisionAllowed("default", "default-r2", gateway)).toBe(true);
     expect(isMacOpsRevisionAllowed("default", "default-r6", gateway)).toBe(true);
     expect(isMacOpsRevisionAllowed("default", "default-r5", gateway)).toBe(false);
+  });
+});
+
+describe("fleet broker durable root boundary", () => {
+  const incompleteRoot = { gatewayId: "default", internalUrl: "http://legacy-should-not-run" };
+
+  it("permits the empty-revision legacy roster path only when the root is absent", async () => {
+    await expect(
+      resolveAssignedUsersRevisionGate(gatewayStateDb(undefined) as never, "default", ""),
+    ).resolves.toEqual({ allowed: true, liveRevisionId: null });
+    await expect(
+      resolveAssignedUsersRevisionGate(gatewayStateDb(incompleteRoot) as never, "default", ""),
+    ).resolves.toEqual({ allowed: false });
+  });
+
+  it("does not mint a legacy MAC token when an invalid root already exists", async () => {
+    const allowed = await legacyMacOpsTokenAllowed(
+      gatewayStateDb(incompleteRoot) as never,
+      {
+        kind: "gateway",
+        gatewayId: "default",
+        podName: "octogee-gateway-default-123",
+        podUid: "pod-uid",
+      } as never,
+    );
+
+    expect(allowed).toBe(false);
   });
 });

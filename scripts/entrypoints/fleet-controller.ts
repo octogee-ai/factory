@@ -30,7 +30,6 @@ import { pathToFileURL } from "node:url";
 export interface FleetControllerEntrypointConfig {
   builderSlug: string;
   gatewayId: string;
-  // The revision this pod realizes ({gatewayId}-r{n}); empty on legacy pods.
   revisionId: string;
   port: number;
   publicKey: string;

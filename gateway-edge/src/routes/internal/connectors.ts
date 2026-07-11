@@ -8,6 +8,7 @@ import {
 import { db } from "../../lib/db.js";
 import { logger } from "../../middleware/logging.js";
 import { requireBuilderShellInternalAuth } from "../../middleware/builder-shell-auth.js";
+import { readServingGatewayAuthorization } from "@octogee/core/gateway-live-release";
 
 const router = Router();
 const GATEWAY_OWNER_UNAVAILABLE = "gateway owner unavailable";
@@ -33,16 +34,6 @@ function isOwnerRuntimeReleasePayload(data: Record<string, unknown> | undefined)
   return data?.gatewayClass === "builder" || data?.gatewayClass === "operator";
 }
 
-function recordField(
-  data: Record<string, unknown> | undefined,
-  key: string,
-): Record<string, unknown> | undefined {
-  const value = data?.[key];
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function paramString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
@@ -56,20 +47,15 @@ async function readRuntimeReleasePayload(
   gatewayId: string,
   revisionId: string,
 ): Promise<{ payload: Record<string, unknown> | undefined; release: number } | null> {
-  const revision = await readDoc(`glmGateways/${revisionId}`);
-  const release = revision?.release;
-  if (
-    revision?.docKind !== "revision" ||
-    stringField(revision, "revisionId") !== revisionId ||
-    stringField(revision, "gateway") !== gatewayId ||
-    typeof release !== "number" ||
-    !Number.isInteger(release) ||
-    release < 1
-  ) {
-    return null;
-  }
-  const releaseDoc = await readDoc(`gateways/${gatewayId}/releases/${release}`);
-  return { payload: recordField(releaseDoc, "payload"), release };
+  const authorization = await readServingGatewayAuthorization(db, gatewayId);
+  if (!authorization) return null;
+  if (authorization.gateway.liveRevisionId !== revisionId) return null;
+  const release = authorization.gateway.liveRelease;
+  if (typeof release !== "number") return null;
+  return {
+    payload: authorization.config as unknown as Record<string, unknown>,
+    release,
+  };
 }
 
 async function resolveOwnerRuntimeOwnerUid(

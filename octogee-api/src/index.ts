@@ -182,7 +182,7 @@ export function createApp(opts: CreateAppOptions = {}) {
   // so cattle pods do not need Firestore or KMS access to user secrets.
   app.use("/internal/connectors", createConnectorTokenBrokerRoutes({ db }));
   // octogee-api-only: materialize BYOK creds for cattle gateways that can't reach
-  // Secret Manager — byosub OAuth (scoped to the caller's glmGateways.byosub) and
+  // Secret Manager — BYOSUB OAuth (scoped to the caller's user integration) and
   // byok-* API keys (roster-scoped to the gateway's assigned slugs).
   app.use("/internal/byok", createByokBrokerRoutes({ db }));
   // octogee-api-only: broker BuilderShell ticket, presence, and audit

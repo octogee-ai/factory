@@ -10,7 +10,7 @@ import {
 } from "../tenant-binding.js";
 import type { Reviewer } from "../../lib/token-review.js";
 
-function fakeDb(docs: Record<string, Record<string, unknown>>): Pick<Firestore, "collection"> {
+function fakeDb(docs: Record<string, Record<string, unknown>>): Pick<Firestore, "collection" | "doc"> {
   return {
     collection: () => ({
       doc: (id: string) => ({
@@ -19,8 +19,58 @@ function fakeDb(docs: Record<string, Record<string, unknown>>): Pick<Firestore, 
           data: () => docs[id],
         }),
       }),
+      where: (field: string, operator: string, value: unknown) => ({
+        get: async () => ({
+          docs: Object.entries(docs)
+            .filter(([, data]) => operator === "==" && data[field] === value)
+            .map(([id, data]) => ({ id, data: () => data })),
+        }),
+      }),
     }),
-  } as unknown as Pick<Firestore, "collection">;
+    doc: (path: string) => {
+      const id = path.split("/").at(-1) ?? "";
+      return {
+        get: async () => ({
+          exists: Object.prototype.hasOwnProperty.call(docs, id),
+          data: () => docs[id],
+        }),
+      };
+    },
+  } as unknown as Pick<Firestore, "collection" | "doc">;
+}
+
+function gatewayRoot(serviceAccountName: string | null = null): Record<string, unknown> {
+  return {
+    gatewayId: "bender",
+    createdAt: 1,
+    createdBy: "test",
+    updatedAt: 1,
+    updatedBy: "test",
+    latestRelease: 1,
+    desiredRelease: 1,
+    liveRelease: 1,
+    liveRevisionId: "bender-r1",
+    trafficRevisionId: "bender-r1",
+    desiredStatus: "running",
+    roll: null,
+    configSchemaVersion: 1,
+    profile: "operator",
+    gatewayClass: "operator",
+    imageProfile: "operator",
+    sizingTier: null,
+    computeClass: null,
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName,
+    serviceAccount: null,
+    operatorAccess: null,
+    ownerUid: "uid-bender",
+    coOwnerUids: [],
+    builderSlug: "bender",
+    openclawOverrides: null,
+    modelBrokerLimits: null,
+    preemption: null,
+  };
 }
 
 function buildApp(opts: {
@@ -38,9 +88,7 @@ function buildApp(opts: {
       reviewer: opts.reviewer,
       db: fakeDb(
         opts.docs ?? {
-          bender: {
-            ownerUid: "uid-bender",
-          },
+          bender: gatewayRoot(),
         },
       ),
       namespace: "octogee",
@@ -172,6 +220,7 @@ describe("tenant binding middleware", () => {
 
   it("binds a grandfathered operator gateway service-account token", async () => {
     const { app, registry } = buildApp({
+      docs: { bender: gatewayRoot("octogee-gateway-bender") },
       reviewer: async () => ({
         authenticated: true,
         namespace: "octogee",

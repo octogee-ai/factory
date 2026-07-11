@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   revisionIdForRelease,
   releasePayloadHash,
+  isReleasePayload,
   releaseMacOpsTokenProtocol,
   classifyGatewayField,
   isRevisionRealizationDoc,
@@ -68,32 +69,46 @@ describe("glmGateways doc-kind discriminators", () => {
     expect(isGatewayDesiredDoc(revisionDoc)).toBe(false);
     expect(isGatewayDesiredDoc(null)).toBe(false);
   });
+
+  it("accepts only a well-formed explicit legacy backfill bridge", () => {
+    expect(
+      isGatewayDesiredDoc({
+        ...gatewayDoc,
+        legacyBackfill: {
+          sourceGlmGatewayIds: ["default-blue", "default-green"],
+          startedAt: 1,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isGatewayDesiredDoc({
+        ...gatewayDoc,
+        legacyBackfill: { sourceGlmGatewayIds: ["default-blue", "default-blue"], startedAt: 1 },
+      }),
+    ).toBe(false);
+    expect(
+      isGatewayDesiredDoc({ ...gatewayDoc, legacyBackfill: { sourceGlmGatewayIds: [], startedAt: 1 } }),
+    ).toBe(false);
+  });
 });
 
 function samplePayload(overrides: Partial<ReleasePayload> = {}): ReleasePayload {
   return {
     imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
     imageTag: "abc1234",
-    profile: "standard",
-    gatewayClass: "shared",
-    imageProfile: "standard",
-    sizingTier: "small",
-    computeClass: null,
-    gcpProject: null,
-    gatewayContainerSecurityContext: null,
-    serviceAccountName: null,
-    serviceAccount: null,
-    operatorAccess: null,
-    ownerUid: null,
-    coOwnerUids: [],
-    builderSlug: null,
-    openclawOverrides: null,
-    byosub: null,
-    modelBrokerLimits: null,
-    preemption: null,
     ...overrides,
   };
 }
+
+describe("isReleasePayload", () => {
+  it("accepts the artifact schema and rejects mutable policy or credential state", () => {
+    expect(isReleasePayload(samplePayload())).toBe(true);
+    expect(isReleasePayload({ ...samplePayload(), gatewayClass: "shared" })).toBe(false);
+    expect(isReleasePayload({ ...samplePayload(), byosub: { stale: true } })).toBe(false);
+    expect(isReleasePayload({ ...samplePayload(), coOwnerUids: [] })).toBe(false);
+    expect(isReleasePayload({ ...samplePayload(), imageTag: "latest" })).toBe(false);
+  });
+});
 
 describe("revisionIdForRelease", () => {
   it("derives the {gatewayId}-r{n} revision id convention", () => {
@@ -145,23 +160,6 @@ describe("releasePayloadHash", () => {
   it("is deterministic regardless of key insertion order", () => {
     const a = samplePayload();
     const b: ReleasePayload = {
-      preemption: null,
-      modelBrokerLimits: null,
-      byosub: null,
-      openclawOverrides: null,
-      builderSlug: null,
-      coOwnerUids: [],
-      ownerUid: null,
-      operatorAccess: null,
-      serviceAccount: null,
-      serviceAccountName: null,
-      gatewayContainerSecurityContext: null,
-      gcpProject: null,
-      computeClass: null,
-      sizingTier: "small",
-      imageProfile: "standard",
-      gatewayClass: "shared",
-      profile: "standard",
       imageTag: "abc1234",
       imageRepository:
         "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
@@ -172,32 +170,9 @@ describe("releasePayloadHash", () => {
   it("changes when any payload value changes", () => {
     const base = releasePayloadHash(samplePayload());
     expect(releasePayloadHash(samplePayload({ imageTag: "def5678" }))).not.toBe(base);
-    expect(releasePayloadHash(samplePayload({ sizingTier: "medium" }))).not.toBe(base);
     expect(
-      releasePayloadHash(samplePayload({ modelBrokerLimits: { spendWindowUsd: 5 } })),
+      releasePayloadHash(samplePayload({ macOpsTokenProtocol: 2 })),
     ).not.toBe(base);
-  });
-
-  it("is stable across nested-object key order", () => {
-    const a = samplePayload({
-      gatewayContainerSecurityContext: { runAsUser: 1000, runAsNonRoot: true },
-    });
-    const b = samplePayload({
-      gatewayContainerSecurityContext: { runAsNonRoot: true, runAsUser: 1000 },
-    });
-    expect(releasePayloadHash(a)).toBe(releasePayloadHash(b));
-  });
-
-  it("normalizes set-like coOwnerUids order so a reorder is not a new release", () => {
-    const a = samplePayload({ coOwnerUids: ["alice", "bob", "carol"] });
-    const b = samplePayload({ coOwnerUids: ["carol", "alice", "bob"] });
-    expect(releasePayloadHash(a)).toBe(releasePayloadHash(b));
-  });
-
-  it("still changes when the coOwnerUids set membership actually changes", () => {
-    const base = releasePayloadHash(samplePayload({ coOwnerUids: ["alice", "bob"] }));
-    expect(releasePayloadHash(samplePayload({ coOwnerUids: ["alice", "carol"] }))).not.toBe(base);
-    expect(releasePayloadHash(samplePayload({ coOwnerUids: ["alice"] }))).not.toBe(base);
   });
 });
 
@@ -225,12 +200,10 @@ describe("classifyGatewayField", () => {
     }
   });
 
-  it("classifies release-audit-but-in-place-safe fields as in-place", () => {
+  it("has no in-place release fields", () => {
     for (const field of RELEASE_IN_PLACE_FIELDS) {
       expect(classifyGatewayField(field)).toBe("in-place");
     }
-    expect(classifyGatewayField("modelBrokerLimits")).toBe("in-place");
-    expect(classifyGatewayField("preemption")).toBe("in-place");
   });
 
   it("classifies gateway-doc fields mutable without a release as gateway-mutable", () => {
@@ -256,10 +229,9 @@ describe("classifyGatewayField", () => {
     }
   });
 
-  it("keeps operatorAccess and openclawOverrides on the conservative new-revision default", () => {
-    expect(classifyGatewayField("operatorAccess")).toBe("new-revision");
-    expect(classifyGatewayField("openclawOverrides")).toBe("new-revision");
-    expect(classifyGatewayField("byosub")).toBe("new-revision");
+  it("classifies all former release policy fields as gateway-mutable", () => {
+    expect(classifyGatewayField("operatorAccess")).toBe("gateway-mutable");
+    expect(classifyGatewayField("openclawOverrides")).toBe("gateway-mutable");
   });
 });
 
@@ -355,7 +327,10 @@ describe("commitPlacementAtomic", () => {
   // Path-keyed store + a serialized/buffered runTransaction mirroring Firestore's
   // all-or-nothing commit. Reads see live store; writes buffer until the body
   // completes (a throw leaves the store untouched).
-  function mkDb(seed: Record<string, Record<string, unknown>> = {}) {
+  function mkDb(
+    seed: Record<string, Record<string, unknown>> = {},
+    beforeTransaction?: (store: Map<string, Record<string, unknown>>) => void,
+  ) {
     const store = new Map<string, Record<string, unknown>>(Object.entries(seed));
     function docRef(path: string): PlacementDocRef {
       return {
@@ -373,6 +348,7 @@ describe("commitPlacementAtomic", () => {
     const db: PlacementFirestore = {
       collection: (name) => ({ doc: (id) => docRef(`${name}/${id}`) }),
       runTransaction: async (body) => {
+        beforeTransaction?.(store);
         const writes: Array<() => Promise<void>> = [];
         const txn: PlacementTxn = {
           get: (ref) => ref.get(),
@@ -393,13 +369,47 @@ describe("commitPlacementAtomic", () => {
 
   const backfilled = (overrides: Record<string, unknown> = {}) => ({
     gatewayId: "default",
+    createdAt: 1,
+    createdBy: "test",
+    updatedAt: 1,
+    updatedBy: "test",
     latestRelease: 3,
     desiredRelease: 3,
     liveRelease: 3,
     liveRevisionId: "default-r3",
+    trafficRevisionId: "default-r3",
     desiredStatus: "running",
     roll: null,
+    configSchemaVersion: 1,
+    profile: null,
+    gatewayClass: "shared",
+    imageProfile: "standard",
+    sizingTier: null,
+    computeClass: null,
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: null,
+    serviceAccount: null,
+    operatorAccess: null,
+    ownerUid: null,
+    coOwnerUids: [],
+    builderSlug: null,
+    openclawOverrides: null,
+    modelBrokerLimits: null,
+    preemption: null,
     ...overrides,
+  });
+
+  const runtimeRevision = (
+    revisionId = "default-r3",
+    release = 3,
+    lifecycle = "serving",
+  ) => ({
+    docKind: "revision",
+    revisionId,
+    gateway: "default",
+    release,
+    lifecycle,
   });
 
   const mirror = { "provisioning.openclaw.gatewayId": "default", "provisioning.openclaw.shellsEnabled": false };
@@ -407,7 +417,6 @@ describe("commitPlacementAtomic", () => {
   it("un-backfilled gateway (no GatewayDoc): writes ONLY the mirror, byte-identical to today", async () => {
     const { db, store } = mkDb({
       "users/u1": { approved: true },
-      "gateways/default": { gatewayId: "default", status: "ready" }, // legacy heartbeat doc, not a GatewayDoc
     });
     const res = await commitPlacementAtomic(db, {
       uid: "u1", slug: "s1", gatewayId: "default", source: "onboarding", now: 100, mirrorPatch: mirror,
@@ -418,11 +427,66 @@ describe("commitPlacementAtomic", () => {
     expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
   });
 
+  it("rejects an existing malformed root instead of falling back to a mirror-only legacy write", async () => {
+    const { db, store } = mkDb({
+      "users/u1": { approved: true },
+      "gateways/default": { gatewayId: "default", status: "ready" },
+    });
+
+    const res = await commitPlacementAtomic(db, {
+      uid: "u1", slug: "s1", gatewayId: "default", source: "onboarding", now: 100, mirrorPatch: mirror,
+    });
+
+    expect(res).toEqual({ kind: "rejected", reason: "gateway-root-invalid" });
+    expect(store.get("users/u1")).toEqual({ approved: true });
+    expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
+  });
+
+  it.each(["paused", "retired"] as const)(
+    "rejects a %s durable root without writing a mirror or assignment",
+    async (desiredStatus) => {
+      const { db, store } = mkDb({
+        "users/u1": { approved: true },
+        "gateways/default": backfilled({ desiredStatus }),
+        "glmGateways/default-r3": runtimeRevision(),
+      });
+
+      const res = await commitPlacementAtomic(db, {
+        uid: "u1", slug: "s1", gatewayId: "default", source: "onboarding", now: 100, mirrorPatch: mirror,
+      });
+
+      expect(res).toEqual({ kind: "rejected", reason: "gateway-not-running" });
+      expect(store.get("users/u1")).toEqual({ approved: true });
+      expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
+    },
+  );
+
+  it("reads desiredStatus from the transaction snapshot before writing placement", async () => {
+    const { db, store } = mkDb(
+      {
+        "users/u1": { approved: true },
+        "gateways/default": backfilled(),
+        "glmGateways/default-r3": runtimeRevision(),
+      },
+      (transactionStore) => {
+        transactionStore.set("gateways/default", backfilled({ desiredStatus: "paused" }));
+      },
+    );
+
+    const res = await commitPlacementAtomic(db, {
+      uid: "u1", slug: "s1", gatewayId: "default", source: "onboarding", now: 100, mirrorPatch: mirror,
+    });
+
+    expect(res).toEqual({ kind: "rejected", reason: "gateway-not-running" });
+    expect(store.get("users/u1")).toEqual({ approved: true });
+    expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
+  });
+
   it("steady backfilled gateway: writes mirror + assignment at the LIVE revision (serving, epoch 0)", async () => {
     const { db, store } = mkDb({
       "users/u1": { approved: true },
       "gateways/default": backfilled(),
-      "glmGateways/default-r3": { lifecycle: "serving" },
+      "glmGateways/default-r3": runtimeRevision(),
     });
     const res = await commitPlacementAtomic(db, {
       uid: "u1", slug: "s1", gatewayId: "default", source: "onboarding", now: 100, mirrorPatch: mirror,
@@ -447,7 +511,7 @@ describe("commitPlacementAtomic", () => {
           acceptingNewAssignments: true, startedAt: 1, updatedAt: 2, error: null, flippedAt: null,
         },
       }),
-      "glmGateways/default-r4": { lifecycle: "serving" },
+      "glmGateways/default-r4": runtimeRevision("default-r4", 4),
     });
     const res = await commitPlacementAtomic(db, {
       uid: "u1", slug: "s1", gatewayId: "default", source: "onboarding", now: 100, mirrorPatch: mirror,
@@ -460,13 +524,51 @@ describe("commitPlacementAtomic", () => {
     const { db, store } = mkDb({
       "users/u1": { approved: true },
       "gateways/default": backfilled(),
-      "glmGateways/default-r3": { lifecycle: "warming" },
+      "glmGateways/default-r3": runtimeRevision("default-r3", 3, "warming"),
     });
     const res = await commitPlacementAtomic(db, {
       uid: "u1", slug: "s1", gatewayId: "default", source: "onboarding", now: 100, mirrorPatch: mirror,
     });
     expect(res).toEqual({ kind: "rejected", reason: "revision-not-ready" });
     expect(store.get("users/u1")).toEqual({ approved: true }); // mirror untouched
+    expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
+  });
+
+  it("rejects a serving target whose revision identity or release is not canonical", async () => {
+    const { db, store } = mkDb({
+      "users/u1": { approved: true },
+      "gateways/default": backfilled({ liveRevisionId: "default-r4", liveRelease: 3 }),
+      "glmGateways/default-r4": {
+        docKind: "revision",
+        revisionId: "default-r4",
+        gateway: "default",
+        release: 4,
+        lifecycle: "serving",
+      },
+    });
+
+    const res = await commitPlacementAtomic(db, {
+      uid: "u1", slug: "s1", gatewayId: "default", source: "onboarding", now: 100, mirrorPatch: mirror,
+    });
+
+    expect(res).toEqual({ kind: "rejected", reason: "revision-identity-invalid" });
+    expect(store.get("users/u1")).toEqual({ approved: true });
+    expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
+  });
+
+  it("rejects a serving realization that does not match the canonical target identity", async () => {
+    const { db, store } = mkDb({
+      "users/u1": { approved: true },
+      "gateways/default": backfilled(),
+      "glmGateways/default-r3": runtimeRevision("default-r3", 4),
+    });
+
+    const res = await commitPlacementAtomic(db, {
+      uid: "u1", slug: "s1", gatewayId: "default", source: "onboarding", now: 100, mirrorPatch: mirror,
+    });
+
+    expect(res).toEqual({ kind: "rejected", reason: "revision-identity-invalid" });
+    expect(store.get("users/u1")).toEqual({ approved: true });
     expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
   });
 
@@ -485,7 +587,7 @@ describe("commitPlacementAtomic", () => {
     const { db, store } = mkDb({
       "users/u1": { approved: true },
       "gateways/default": backfilled(),
-      "glmGateways/default-r3": { lifecycle: "serving" },
+      "glmGateways/default-r3": runtimeRevision(),
     });
     // Force the assignment write to throw, and model Firestore's atomic commit
     // (snapshot → apply all → restore on any failure) so a mid-commit throw
