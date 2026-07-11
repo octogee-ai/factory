@@ -1,4 +1,13 @@
 {{- $gatewayEdge := index .Values "gateway-edge" -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mattermost-callback-router
+  labels:
+    app: mattermost-callback-router
+    {{- include "octogee.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,7 +25,7 @@ spec:
       labels:
         app: mattermost-callback-router
     spec:
-      serviceAccountName: octogee-gateway
+      serviceAccountName: mattermost-callback-router
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
