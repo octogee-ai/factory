@@ -1,0 +1,188 @@
+{
+  "primaryPosts": [
+    {
+      "id": "main-answer-1",
+      "channel_id": "main-1",
+      "root_id": "turn-1",
+      "props": {
+        "octogee": {
+          "schemaVersion": 3,
+          "projectionKind": "run",
+          "conversationId": "main-1",
+          "turnId": "turn-1",
+          "runId": "run-1",
+          "origin": "human",
+          "status": "completed",
+          "mainChannelId": "main-1",
+          "mainRootPostId": "turn-1",
+          "inputPostId": "turn-1",
+          "activityChannelId": "activity-1",
+          "activityRootPostId": "activity-root-1",
+          "attention": "routine",
+          "kind": "agent.final"
+        }
+      }
+    },
+    {
+      "id": "admission-receipt-2",
+      "channel_id": "main-1",
+      "root_id": "input-2",
+      "props": {
+        "octogee": {
+          "schemaVersion": 3,
+          "projectionKind": "admission",
+          "conversationId": "main-1",
+          "turnId": "input-2",
+          "mainChannelId": "main-1",
+          "activityChannelId": "activity-1",
+          "inputPostId": "input-2",
+          "origin": "followup",
+          "status": "queued",
+          "queuePosition": 1,
+          "attention": "routine",
+          "kind": "agent.admission"
+        }
+      }
+    },
+    {
+      "id": "admission-receipt-3",
+      "channel_id": "main-1",
+      "root_id": "input-3",
+      "props": {
+        "octogee": {
+          "schemaVersion": 3,
+          "projectionKind": "admission",
+          "conversationId": "main-1",
+          "turnId": "input-3",
+          "mainChannelId": "main-1",
+          "activityChannelId": "activity-1",
+          "inputPostId": "input-3",
+          "origin": "human",
+          "status": "blocked",
+          "queuePosition": 2,
+          "attention": "routine",
+          "kind": "agent.admission"
+        }
+      }
+    }
+  ],
+  "activityPosts": [
+    {
+      "id": "activity-root-1",
+      "channel_id": "activity-1",
+      "root_id": "",
+      "props": {
+        "octogee": {
+          "schemaVersion": 3,
+          "projectionKind": "run",
+          "conversationId": "main-1",
+          "turnId": "turn-1",
+          "runId": "run-1",
+          "origin": "human",
+          "status": "running",
+          "mainChannelId": "main-1",
+          "mainRootPostId": "turn-1",
+          "inputPostId": "turn-1",
+          "activityChannelId": "activity-1",
+          "itemId": "octogee:run-root",
+          "ordinal": 0,
+          "semanticVersion": 1,
+          "attention": "routine",
+          "kind": "activity.run-root",
+          "eventKey": "cae3d59579a3d6f06c228e3d1a7e4601f0956aac9578b2befee2e3c6f8923cfe"
+        }
+      }
+    },
+    {
+      "id": "activity-tool-1",
+      "channel_id": "activity-1",
+      "root_id": "activity-root-1",
+      "props": {
+        "octogee": {
+          "schemaVersion": 3,
+          "projectionKind": "run",
+          "conversationId": "main-1",
+          "turnId": "turn-1",
+          "runId": "run-1",
+          "origin": "human",
+          "status": "running",
+          "mainChannelId": "main-1",
+          "mainRootPostId": "turn-1",
+          "inputPostId": "turn-1",
+          "activityChannelId": "activity-1",
+          "activityRootPostId": "activity-root-1",
+          "itemId": "tool-1",
+          "toolCallId": "call-1",
+          "ordinal": 2,
+          "semanticVersion": 1,
+          "attention": "routine",
+          "kind": "activity.tool",
+          "eventKey": "866f366de54c63b3c9ae70afcbbfe83baad2a404f554adf5969684b82496f8c1"
+        }
+      }
+    }
+  ],
+  "liveRuns": [
+    {
+      "path": "workspaces/acme/channels/build/liveRuns/run-1",
+      "document": {
+        "schemaVersion": 3,
+        "projectionKind": "run",
+        "conversationId": "main-1",
+        "turnId": "turn-1",
+        "runId": "run-1",
+        "origin": "human",
+        "status": "running",
+        "mainChannelId": "main-1",
+        "mainRootPostId": "turn-1",
+        "inputPostId": "turn-1",
+        "activityChannelId": "activity-1",
+        "activityRootPostId": "activity-root-1",
+        "attention": "routine",
+        "phase": "tool",
+        "elapsedMs": 1200
+      }
+    },
+    {
+      "path": "workspaces/acme/channels/build/liveRuns/admission-input-2",
+      "document": {
+        "schemaVersion": 3,
+        "projectionKind": "admission",
+        "conversationId": "main-1",
+        "turnId": "input-2",
+        "mainChannelId": "main-1",
+        "activityChannelId": "activity-1",
+        "inputPostId": "input-2",
+        "origin": "followup",
+        "status": "queued",
+        "queuePosition": 1,
+        "attention": "routine"
+      }
+    },
+    {
+      "path": "workspaces/acme/channels/build/liveRuns/admission-input-3",
+      "document": {
+        "schemaVersion": 3,
+        "projectionKind": "admission",
+        "conversationId": "main-1",
+        "turnId": "input-3",
+        "mainChannelId": "main-1",
+        "activityChannelId": "activity-1",
+        "inputPostId": "input-3",
+        "origin": "human",
+        "status": "blocked",
+        "queuePosition": 2,
+        "attention": "routine"
+      }
+    }
+  ],
+  "expected": {
+    "rootDerivations": [
+      {
+        "postId": "activity-root-1",
+        "normalizedActivityRootPostId": "activity-root-1",
+        "updateCount": 0
+      }
+    ]
+  }
+}

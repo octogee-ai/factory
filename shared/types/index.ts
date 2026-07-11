@@ -344,3 +344,30 @@ export {
   startConnectChallengeTracker,
   sendWsRequest,
 } from './openclaw-wire-core.js';
+
+export type {
+  AgentRunOrigin,
+  AgentRunStatus,
+  AgentAttention,
+  AgentRunRef,
+  AgentAdmissionOrigin,
+  AgentAdmissionStatus,
+  AgentAdmissionRef,
+  ConversationProjectionRef,
+  ActivityCreateRef,
+  AgentActivityKind,
+  AgentActivityIngressRef,
+  AgentActivityDetail,
+  AgentActivityAttachment,
+  AgentActivityCompletedItem,
+  AgentActivityControlTransition,
+  AgentActivityEnvelopeBaseV1,
+  AgentActivityEnvelopeV1,
+} from './agent-conversation.js';
+export {
+  AGENT_CONVERSATION_SCHEMA_VERSION,
+  AGENT_ACTIVITY_ENVELOPE_SCHEMA_VERSION,
+  AGENT_ACTIVITY_RESERVED_ITEM_IDS,
+  agentActivityCanonicalKey,
+  agentActivityEventKey,
+} from './agent-conversation.js';
