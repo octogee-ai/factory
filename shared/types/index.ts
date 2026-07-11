@@ -369,5 +369,4 @@ export {
   AGENT_ACTIVITY_ENVELOPE_SCHEMA_VERSION,
   AGENT_ACTIVITY_RESERVED_ITEM_IDS,
   agentActivityCanonicalKey,
-  agentActivityEventKey,
 } from './agent-conversation.js';
