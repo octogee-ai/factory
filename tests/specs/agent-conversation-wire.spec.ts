@@ -7,7 +7,6 @@ import {
   AGENT_ACTIVITY_RESERVED_ITEM_IDS,
   AGENT_CONVERSATION_SCHEMA_VERSION,
   agentActivityCanonicalKey,
-  agentActivityEventKey,
   type AgentActivityEnvelopeV1,
   type AgentAdmissionRef,
   type AgentRunRef,
@@ -87,6 +86,19 @@ describe("agent conversation v3 type contract", () => {
     expect(packageJson.typesVersions["*"]["types/agent-conversation"]).toEqual([
       "dist/types/agent-conversation.d.ts",
     ]);
+  });
+
+  it("keeps the shared contract browser-neutral", () => {
+    const source = readFileSync(
+      path.resolve(__dirname, "../../shared/types/agent-conversation.ts"),
+      "utf8",
+    );
+    expect(source).not.toContain("node:crypto");
+    expect(source).not.toContain("createHash");
+    expect(source).not.toContain("agentActivityEventKey");
+    expect(readFileSync(path.resolve(__dirname, "../../shared/types/index.ts"), "utf8")).not.toContain(
+      "agentActivityEventKey",
+    );
   });
 });
 
@@ -185,6 +197,21 @@ describe("agent activity envelope v1 fixtures", () => {
     expect(new Set(transitions.map(({ control }) => control.to))).toEqual(
       new Set(["approved", "denied", "expired"]),
     );
+    const approvalCreates = items.filter(({ item }) => item.kind === "approval");
+    const waitingApprovals = new Set(
+      approvalCreates.map(({ ref }) => `${ref.runId}:${ref.itemId}`),
+    );
+    expect(approvalCreates).toHaveLength(3);
+    expect(new Set(transitions.map(({ ref }) => `${ref.runId}:${ref.itemId}`)).size).toBe(3);
+    for (const create of approvalCreates) {
+      expect(create.ref.semanticVersion).toBe(1);
+      expect(create.item.status).toBe("waiting");
+    }
+    for (const transition of transitions) {
+      expect(transition.ref.semanticVersion).toBe(2);
+      expect(transition.control.from).toBe("waiting");
+      expect(waitingApprovals).toContain(`${transition.ref.runId}:${transition.ref.itemId}`);
+    }
 
     const finalizations = activity.envelopes.filter(
       (value): value is Extract<AgentActivityEnvelopeV1, { type: "turn.finalized" }> =>
@@ -205,12 +232,25 @@ describe("agent activity envelope v1 fixtures", () => {
     for (const envelope of activity.envelopes) {
       const canonical = `v1\n${envelope.ref.conversationId}\n${envelope.ref.runId}\n${envelope.ref.itemId}\n${envelope.ref.semanticVersion}`;
       expect(agentActivityCanonicalKey(envelope.ref)).toBe(canonical);
-      expect(agentActivityEventKey(envelope.ref)).toBe(
+      expect(envelope.eventKey).toBe(
         createHash("sha256").update(canonical, "utf8").digest("hex"),
       );
-      expect(envelope.eventKey).toBe(agentActivityEventKey(envelope.ref));
       expect(envelope.eventKey).toMatch(/^[a-f0-9]{64}$/);
       expect(envelope.ref).not.toHaveProperty("activityChannelId");
+    }
+
+    const reserved = (itemId: string) =>
+      itemId === AGENT_ACTIVITY_RESERVED_ITEM_IDS.runRoot ||
+      itemId === AGENT_ACTIVITY_RESERVED_ITEM_IDS.turnFinalized ||
+      itemId === AGENT_ACTIVITY_RESERVED_ITEM_IDS.terminalError ||
+      itemId.startsWith(AGENT_ACTIVITY_RESERVED_ITEM_IDS.approvalPrefix);
+    for (const { ref } of activity.envelopes) {
+      expect(ref.itemId.startsWith("octogee:") ? reserved(ref.itemId) : true).toBe(true);
+    }
+    for (const envelope of activity.envelopes) {
+      if (envelope.type !== "item.completed") continue;
+      if (envelope.item.kind === "approval" || envelope.item.kind === "error") continue;
+      expect(envelope.ref.itemId).not.toMatch(/^octogee:/);
     }
   });
 
@@ -243,7 +283,7 @@ describe("headless conversation behavior fixtures", () => {
   it("captures the pinned ClickClack commentary/tool preamble reference turn", () => {
     const reference = fixture<ReferenceTurnFixture>("clickclack-reference-turn.json");
     expect(reference.source.repository).toBe("openclaw/clickclack");
-    expect(reference.source.commit).toMatch(/^[a-f0-9]{40}$/);
+    expect(reference.source.commit).toBe("f441a9c6e05b871e3a8cf7de810d23cc1292ecae");
     expect(reference.rows.map(({ itemId }) => itemId)).toEqual(reference.expected.orderedItemIds);
     expect(reference.rows.map(({ type }) => type)).toEqual(["commentary", "tool"]);
     expect(reference.expected.complete).toBe(true);

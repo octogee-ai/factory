@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 export const AGENT_CONVERSATION_SCHEMA_VERSION = 3 as const;
 export const AGENT_ACTIVITY_ENVELOPE_SCHEMA_VERSION = 1 as const;
 
@@ -153,8 +151,4 @@ type AgentActivityEventKeyRef = Pick<
 
 export function agentActivityCanonicalKey(ref: AgentActivityEventKeyRef): string {
   return `v1\n${ref.conversationId}\n${ref.runId}\n${ref.itemId}\n${ref.semanticVersion}`;
-}
-
-export function agentActivityEventKey(ref: AgentActivityEventKeyRef): string {
-  return createHash("sha256").update(agentActivityCanonicalKey(ref), "utf8").digest("hex");
 }
