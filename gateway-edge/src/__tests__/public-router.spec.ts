@@ -88,6 +88,8 @@ describe("gatewaySurfaceTarget", () => {
     expect(gatewaySurfaceTarget({ host: "api.octogee.com", url: "/g/Bender/byosub/health", namespace: "octogee" })).toBeNull();
     expect(gatewaySurfaceTarget({ host: "preview.octogee.com", url: "/g/../token", namespace: "octogee" })).toBeNull();
     expect(gatewaySurfaceTarget({ host: "api.octogee.com", url: "/g/%ZZ/byosub/health", namespace: "octogee" })).toBeNull();
+    expect(gatewaySurfaceTarget({ host: "api.octogee.com", url: "/g/bender/internal/openclaw/agent-control/callback", namespace: "octogee" })).toBeNull();
+    expect(gatewaySurfaceTarget({ host: "api.octogee.com", url: "/g/bender/r/3/internal/openclaw/agent-control/callback", namespace: "octogee" })).toBeNull();
   });
 
   it("defaults unmatched or missing hosts to the api surface", () => {
