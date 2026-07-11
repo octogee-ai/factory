@@ -50,8 +50,7 @@ export interface RosterDocSnapshot {
 }
 
 export interface CreateRollRosterStoreOptions {
-  // Snapshot subscription over gateways/{GATEWAY_ID}/assignments. Each callback
-  // delivers the FULL current assignment set (Firestore onSnapshot semantics).
+  // Each callback delivers the full current assignment set.
   subscribe: (
     onDocs: (docs: RosterDocSnapshot[]) => void,
     onError: (err: Error) => void,
@@ -83,12 +82,10 @@ function parseRosterEntry(id: string, data: Record<string, unknown> | undefined)
 // answers 503 + Retry-After — an edge booting mid-roll must never default to
 // serve-local (council-resolved).
 //
-// A terminal listener error is ALSO fail-closed: Firestore has torn the listener
-// down, so a source edge that then misses a quiescing/cutover update would keep
-// admitting a customer after the target begins serving — defeating no-double-
-// serve. On error we drop readiness (loaded → false, so the gate 503s), release
-// the dead subscription, and re-subscribe with backoff. A detached stale roster
-// must never remain authoritative.
+// A terminal roster-source error is ALSO fail-closed: a source edge that misses
+// a quiescing/cutover update could keep admitting a customer after the target
+// begins serving. On error readiness drops, the detached roster is discarded,
+// and the source reconnects with backoff.
 export function createRollRosterStore(opts: CreateRollRosterStoreOptions): RollRosterStore {
   let loaded = false;
   let entries = new Map<string, RosterEntry>();

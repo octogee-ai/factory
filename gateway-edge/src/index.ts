@@ -35,6 +35,7 @@ import {
   type RollRosterStore,
   type RollRosterUpgradeGate,
 } from "./roll-roster.js";
+import { createBrokerRollRosterSubscription } from "./broker-roll-roster.js";
 import { createRevisionTombstoneStore } from "./revision-tombstone-store.js";
 import {
   REVISION_TOMBSTONES_COLLECTION,
@@ -328,27 +329,17 @@ if (process.env.NODE_ENV !== "test") {
       selfRevisionId,
       log: (msg) => logger.warn(msg),
     });
-    import("./lib/db.js")
-      .then(({ db }) => {
-        rosterStore = createRollRosterStore({
-          subscribe: (onDocs, onError) =>
-            db
-              .collection("gateways")
-              .doc(rosterGatewayId)
-              .collection("assignments")
-              .onSnapshot(
-                (snap) => onDocs(snap.docs),
-                (err) => onError(err instanceof Error ? err : new Error(String(err))),
-              ),
-          log: (msg) => logger.warn(msg),
-        });
-      })
-      .catch((err) => {
-        // Fail CLOSED: the gate keeps answering 503 until the roster loads.
-        logger.error("[roll-roster] Firestore init failed — service traffic stays 503", {
-          err: err instanceof Error ? err.message : String(err),
-        });
-      });
+    rosterStore = createRollRosterStore({
+      subscribe: createBrokerRollRosterSubscription({
+        brokerUrl:
+          process.env.FLEET_BROKER_URL ??
+          process.env.OCTOGEE_API_URL ??
+          `http://octogee-api.${process.env.K8S_NAMESPACE || "octogee"}.svc.cluster.local:3001`,
+        gatewayId: rosterGatewayId,
+        revisionId: selfRevisionId,
+      }),
+      log: (msg) => logger.warn(msg),
+    });
   }
 
   const server = http.createServer((req, res) =>

@@ -73,4 +73,9 @@ describe("roll-roster upgrade gate wiring (Codex P0)", () => {
     expect(indexSource).toMatch(/attachChatProxyWsUpgrade\(server, \{ upgradeGate/);
     expect(indexSource).toMatch(/attachBuilderShellRoute\(server, \{ upgradeGate/);
   });
+
+  it("loads the revision roster through the tenant-bound broker, never directly from Firestore", () => {
+    expect(indexSource).toContain("createBrokerRollRosterSubscription(");
+    expect(indexSource).not.toMatch(/collection\("gateways"\)[\s\S]*collection\("assignments"\)/u);
+  });
 });

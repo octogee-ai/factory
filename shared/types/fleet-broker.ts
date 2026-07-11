@@ -1,3 +1,5 @@
+import type { AssignmentState } from "./gateway-releases.js";
+
 export type FleetBrokerProvisioningStatus = "" | "provisioning" | "complete";
 export type FleetBrokerMattermostUpdate = Record<string, unknown>;
 export type FleetBrokerGreetingResult =
@@ -15,6 +17,13 @@ export interface FleetBrokerProjectRestore {
   projectSlug: string;
   giteaRepoName: string | null;
   provisioningState?: string;
+}
+
+export interface FleetBrokerAssignmentRosterEntry {
+  uid: string;
+  revisionId: string;
+  state: AssignmentState;
+  epoch: number;
 }
 
 // Vegas: per-project agent state as served to gateways. `token`/`mmUserId`

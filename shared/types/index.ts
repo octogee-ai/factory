@@ -186,6 +186,7 @@ export type {
   FleetBrokerGreetingResult,
   FleetBrokerChannelBinding,
   FleetBrokerProjectRestore,
+  FleetBrokerAssignmentRosterEntry,
   FleetBrokerCoachIdentity,
   FleetBrokerUserSnapshot,
 } from './fleet-broker.js';

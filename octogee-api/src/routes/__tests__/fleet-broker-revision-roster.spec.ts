@@ -99,6 +99,15 @@ describe("isRequestedRevisionAllowed (P1 — same-gateway revision spoofing)", (
     expect(isRequestedRevisionAllowed("default", "default-r2", rollingGateway)).toBe(true);
   });
 
+  it("allows the draining source after traffic has flipped to the target", () => {
+    const drainingGateway = {
+      liveRevisionId: "default-r2",
+      roll: { sourceRevisionId: "default-r1", targetRevisionId: "default-r2" },
+    };
+
+    expect(isRequestedRevisionAllowed("default", "default-r1", drainingGateway)).toBe(true);
+  });
+
   it("allows the desired revision while a durable gateway has no live revision yet", () => {
     const firstRevision = {
       desiredRelease: 1,

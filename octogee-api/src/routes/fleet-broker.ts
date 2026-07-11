@@ -11,6 +11,7 @@ import {
 } from "../lib/platform-model-config.js";
 import type {
   FleetBrokerBlobSignedUrl,
+  FleetBrokerAssignmentRosterEntry,
   FleetBrokerChannelBinding,
   FleetBrokerGreetingResult,
   FleetBrokerMacOpsToken,
@@ -35,11 +36,14 @@ import {
 } from "@octogee/core/assigned-roster";
 import {
   mountsOnRevision,
+  parseAssignmentDoc,
   readAssignmentDocsForGateway,
 } from "@octogee/core/assignment-doc";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
+  GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
   GATEWAY_RELEASES_SUBCOLLECTION,
+  isAssignmentState,
   isGatewayDesiredDoc,
   releaseMacOpsTokenProtocol,
   revisionIdForRelease,
@@ -881,13 +885,22 @@ export function isRequestedRevisionAllowed(
   if (!revisionId.startsWith(`${gatewayId}-r`)) return false; // wrong gateway / malformed
   if (!gatewayDoc) return true; // pre-backfill: prefix is the only boundary
   const live = typeof gatewayDoc.liveRevisionId === "string" ? gatewayDoc.liveRevisionId : null;
-  const roll = gatewayDoc.roll as { targetRevisionId?: unknown } | null | undefined;
+  const roll = gatewayDoc.roll as
+    | { sourceRevisionId?: unknown; targetRevisionId?: unknown }
+    | null
+    | undefined;
+  const source = typeof roll?.sourceRevisionId === "string" ? roll.sourceRevisionId : null;
   const target = typeof roll?.targetRevisionId === "string" ? roll.targetRevisionId : null;
   const firstDesired =
     live === null && typeof gatewayDoc.desiredRelease === "number"
       ? revisionIdForRelease(gatewayId, gatewayDoc.desiredRelease)
       : null;
-  return revisionId === live || revisionId === target || revisionId === firstDesired;
+  return (
+    revisionId === live ||
+    revisionId === source ||
+    revisionId === target ||
+    revisionId === firstDesired
+  );
 }
 
 export function isMacOpsRevisionAllowed(
@@ -938,10 +951,14 @@ export async function resolveAssignedUsersRevisionGate(
   db: Firestore,
   gatewayId: string,
   podRevisionId: string,
+  options: { requireDurableRoot?: boolean } = {},
 ): Promise<{ allowed: false } | { allowed: true; liveRevisionId: string | null }> {
   const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
   const gatewayData = gatewaySnap.data();
-  if (gatewaySnap.exists && !isDurableGatewayRoot(gatewayData, gatewayId)) {
+  if (
+    (options.requireDurableRoot && (!gatewaySnap.exists || !podRevisionId)) ||
+    (gatewaySnap.exists && !isDurableGatewayRoot(gatewayData, gatewayId))
+  ) {
     return { allowed: false };
   }
   const gatewayDoc = gatewaySnap.exists ? gatewayData : undefined;
@@ -954,6 +971,47 @@ export async function resolveAssignedUsersRevisionGate(
   const liveRevisionId =
     typeof gatewayDoc?.liveRevisionId === "string" ? gatewayDoc.liveRevisionId : null;
   return { allowed: true, liveRevisionId };
+}
+
+function respondInvalidRevision(res: Response, gatewayId: string, revisionId: string): void {
+  res.status(400).json({ error: "invalid_revision", gatewayId, revisionId });
+}
+
+async function readAssignmentRosterForGateway(
+  db: Firestore,
+  gatewayId: string,
+): Promise<FleetBrokerAssignmentRosterEntry[] | null> {
+  const snap = await db
+    .collection(GATEWAYS_COLLECTION)
+    .doc(gatewayId)
+    .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
+    .get();
+  const assignments: FleetBrokerAssignmentRosterEntry[] = [];
+  for (const doc of snap.docs) {
+    const raw = doc.data() as Record<string, unknown>;
+    const assignment = parseAssignmentDoc(doc.id, raw);
+    if (
+      !assignment ||
+      assignment.gatewayId !== gatewayId ||
+      !Number.isSafeInteger(assignment.release) ||
+      assignment.release < 1 ||
+      assignment.revisionId !== revisionIdForRelease(gatewayId, assignment.release) ||
+      (raw.state !== undefined && !isAssignmentState(raw.state)) ||
+      (raw.epoch !== undefined &&
+        (typeof raw.epoch !== "number" ||
+          !Number.isSafeInteger(raw.epoch) ||
+          raw.epoch < 0))
+    ) {
+      return null;
+    }
+    assignments.push({
+      uid: assignment.uid,
+      revisionId: assignment.revisionId,
+      state: assignment.state,
+      epoch: assignment.epoch,
+    });
+  }
+  return assignments;
 }
 
 async function resolveMacOpsRevisionId(
@@ -1192,6 +1250,39 @@ function installSnapshotRoutes(
 ): void {
   const { db } = deps;
 
+  router.post("/assignment-roster", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const podRevisionId = typeof req.body?.revisionId === "string" ? req.body.revisionId : "";
+    const authenticatedRevisionId = revisionIdFromGatewayPodName(
+      bound.gatewayId,
+      bound.podName,
+    );
+    if (!authenticatedRevisionId || authenticatedRevisionId !== podRevisionId) {
+      respondInvalidRevision(res, bound.gatewayId, podRevisionId);
+      return;
+    }
+    const gate = await resolveAssignedUsersRevisionGate(
+      db,
+      bound.gatewayId,
+      podRevisionId,
+      { requireDurableRoot: true },
+    );
+    if (!gate.allowed) {
+      respondInvalidRevision(res, bound.gatewayId, podRevisionId);
+      return;
+    }
+    const assignments = await readAssignmentRosterForGateway(db, bound.gatewayId);
+    if (!assignments) {
+      logger.error("fleet broker rejected invalid assignment roster", {
+        gatewayId: bound.gatewayId,
+      });
+      res.status(502).json({ error: "invalid_assignment_roster", gatewayId: bound.gatewayId });
+      return;
+    }
+    res.json({ assignments });
+  });
+
   router.post("/assigned-users", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
@@ -1203,11 +1294,7 @@ function installSnapshotRoutes(
     const podRevisionId = typeof req.body?.revisionId === "string" ? req.body.revisionId : "";
     const gate = await resolveAssignedUsersRevisionGate(db, bound.gatewayId, podRevisionId);
     if (!gate.allowed) {
-      res.status(400).json({
-        error: "invalid_revision",
-        gatewayId: bound.gatewayId,
-        revisionId: podRevisionId,
-      });
+      respondInvalidRevision(res, bound.gatewayId, podRevisionId);
       return;
     }
     const revisionFilter = await buildRosterRevisionFilter(

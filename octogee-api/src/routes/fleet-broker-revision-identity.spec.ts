@@ -103,6 +103,17 @@ describe("fleet broker durable root boundary", () => {
     ).resolves.toEqual({ allowed: false });
   });
 
+  it("requires a durable root when a routing roster is requested", async () => {
+    await expect(
+      resolveAssignedUsersRevisionGate(
+        gatewayStateDb(undefined) as never,
+        "default",
+        "default-r1",
+        { requireDurableRoot: true },
+      ),
+    ).resolves.toEqual({ allowed: false });
+  });
+
   it("does not mint a legacy MAC token when an invalid root already exists", async () => {
     const allowed = await legacyMacOpsTokenAllowed(
       gatewayStateDb(incompleteRoot) as never,
