@@ -246,7 +246,22 @@ export function dispatchGatewayEdgeRequest(
 }
 
 if (process.env.NODE_ENV !== "test") {
-  if (process.env.GATEWAY_EDGE_MODE === "router") {
+  if (process.env.GATEWAY_EDGE_MODE === "agent-control-router") {
+    const { createAgentControlCallbackRouter } = await import("./agent-control-callback-router.js");
+    const namespace = process.env.K8S_NAMESPACE || "default";
+    const router = createAgentControlCallbackRouter({
+      namespace,
+      hmacKey: process.env.AGENT_CONTROL_ROUTER_KEY ?? "",
+      log: (message, meta) => logger.error(message, meta),
+    });
+    router.listen(PORT, () => {
+      logger.info(`mattermost-callback-router boot — listening on port ${PORT}`, {
+        port: PORT,
+        namespace,
+        sha: process.env.BUILD_SHA || "unknown",
+      });
+    });
+  } else if (process.env.GATEWAY_EDGE_MODE === "router") {
     if (!process.env.GATEWAY_ROUTER_PREVIEW_HOST) {
       logger.error("FATAL: GATEWAY_ROUTER_PREVIEW_HOST is required in gateway-router mode");
       process.exit(1);

@@ -14,6 +14,17 @@ import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent"
 import { readAssignedSlugsForGateway } from "@octogee/core/assigned-roster";
 import { parseAssignmentDoc } from "@octogee/core/assignment-doc";
 import { deriveExpectedAgentId } from "../../../gateway-edge/src/chat-proxy/openclaw/frame-filter.js";
+import type { AgentControlRecordV1 } from "../../../gateway-edge/src/chat-proxy/openclaw/agent-control-service.js";
+import {
+  createAgentControlRegistry,
+  createFirestoreAgentControlStore,
+} from "./agent-control-registry.js";
+import { createAgentControlRoutes } from "./agent-control-routes.js";
+import {
+  createAgentControlActorFactsResolver,
+  createMattermostAgentControlPostDeleter,
+  type MattermostAgentControlActorFacts,
+} from "./agent-control-actor-facts.js";
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
 interface AgentIdentity {
@@ -321,6 +332,58 @@ async function resolveUidByMmUser(
   const slug = typeof data.username === "string" ? data.username : "";
   if (!slug || !(await assignedHere(db, gatewayId, slug))) return "forbidden";
   return uid;
+}
+
+async function resolveControlActorUid(
+  db: Firestore,
+  mmUserId: string,
+): Promise<string | null> {
+  if (!mmUserId) return null;
+  const snap = await db.collection("users").where("mattermost.userId", "==", mmUserId).get();
+  return snap.docs[0]?.id ?? null;
+}
+
+async function controlBelongsToGateway(
+  db: Firestore,
+  record: AgentControlRecordV1,
+  gatewayId: string,
+): Promise<boolean> {
+  if (record.gatewayId !== gatewayId) return false;
+  const slug = usernameFromAgentId(record.correlation.agentId);
+  return !!slug && assignedHere(db, gatewayId, slug);
+}
+
+async function resolveControlActorFacts(
+  db: Firestore,
+  record: AgentControlRecordV1,
+  actorMmUserId: string,
+  gatewayId: string,
+  resolveMattermostFacts: (
+    record: AgentControlRecordV1,
+    actorMmUserId: string,
+  ) => Promise<MattermostAgentControlActorFacts>,
+): Promise<{
+  actorUid: string;
+  isCurrentMember: boolean;
+  isAgentOrBot: boolean;
+  isInputAuthor: boolean;
+  isChannelOwner: boolean;
+  isSystemAdmin: boolean;
+} | null> {
+  const actorUid = await resolveControlActorUid(db, actorMmUserId);
+  if (!actorUid) return null;
+  const [ownerUid, systemConfig, mattermostFacts] = await Promise.all([
+    resolveChannelOwnerUid(db, gatewayId, record.primaryChannelId),
+    db.doc(`users/${actorUid}/system/config`).get(),
+    resolveMattermostFacts(record, actorMmUserId),
+  ]);
+  if (ownerUid === "forbidden") return null;
+  return {
+    actorUid,
+    ...mattermostFacts,
+    isChannelOwner: ownerUid === actorUid,
+    isSystemAdmin: systemConfig.data()?.role === "admin",
+  };
 }
 
 function requiredString(value: unknown): string | null {
@@ -756,11 +819,53 @@ function mountApprovalRoutes(router: Router, db: Firestore): void {
   });
 }
 
-export function createOpenClawRuntimeBrokerRoutes(opts: { db: Firestore }): Router {
+export function createOpenClawRuntimeBrokerRoutes(opts: {
+  db: Firestore;
+  resolveMattermostActorFacts?: (
+    record: AgentControlRecordV1,
+    actorMmUserId: string,
+  ) => Promise<MattermostAgentControlActorFacts>;
+  deleteMattermostInputPost?: (postId: string) => Promise<void>;
+}): Router {
   const router = Router();
   const { db } = opts;
+  const agentControlRegistry = createAgentControlRegistry({
+    store: createFirestoreAgentControlStore(db as never),
+  });
+  let mattermostActorFacts = opts.resolveMattermostActorFacts;
+  const resolveMattermostActorFacts = (
+    record: AgentControlRecordV1,
+    actorMmUserId: string,
+  ): Promise<MattermostAgentControlActorFacts> => {
+    mattermostActorFacts ??= createAgentControlActorFactsResolver({
+      mattermostBaseUrl: process.env.MM_INTERNAL_URL ?? "",
+      adminToken: process.env.MM_ADMIN_TOKEN ?? "",
+    });
+    return mattermostActorFacts(record, actorMmUserId);
+  };
+  let deleteMattermostInputPost = opts.deleteMattermostInputPost;
+  const deleteInputPost = (postId: string): Promise<void> => {
+    deleteMattermostInputPost ??= createMattermostAgentControlPostDeleter({
+      mattermostBaseUrl: process.env.MM_INTERNAL_URL ?? "",
+      adminToken: process.env.MM_ADMIN_TOKEN ?? "",
+    });
+    return deleteMattermostInputPost(postId);
+  };
   mountUserAndWsRoutes(router, db);
   mountActivityRoutes(router, db);
   mountApprovalRoutes(router, db);
+  router.use("/agent-control", createAgentControlRoutes({
+    registry: agentControlRegistry,
+    belongsToGateway: (record, gatewayId) => controlBelongsToGateway(db, record, gatewayId),
+    resolveActorFacts: (record, actorMmUserId, gatewayId) =>
+      resolveControlActorFacts(
+        db,
+        record,
+        actorMmUserId,
+        gatewayId,
+        resolveMattermostActorFacts,
+      ),
+    deleteInputPost,
+  }));
   return router;
 }

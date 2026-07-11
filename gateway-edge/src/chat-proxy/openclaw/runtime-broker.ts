@@ -6,6 +6,10 @@ import type {
   MarkDispatchedResult,
 } from "./approval-registry.js";
 import type { RunLiveDoc } from "./run-live-doc.js";
+import {
+  createAgentControlRegistryClient,
+  type AgentControlRegistryClient,
+} from "./agent-control-registry-client.js";
 
 export interface RedeemedOpenClawWs {
   uid: string;
@@ -35,6 +39,7 @@ export interface OpenClawRuntimeBroker {
   resolveChannelOwnerUid(channelId: string): Promise<string | null>;
   resolveOctogeeUidByMmUser(mmUserId: string): Promise<string | null>;
   approvalRegistry: ApprovalRegistry;
+  agentControlRegistry: AgentControlRegistryClient;
 }
 
 export class OpenClawRuntimeBrokerError extends Error {
@@ -164,6 +169,11 @@ export function createOpenClawRuntimeBroker(opts: {
       );
     },
   };
+  const agentControlRegistry = createAgentControlRegistryClient({
+    baseUrl,
+    gatewayId,
+    fetchImpl: opts.fetchImpl,
+  });
 
   return {
     async redeemOpenClawWs(ticketId: string): Promise<RedeemOpenClawWsOutcome> {
@@ -250,6 +260,7 @@ export function createOpenClawRuntimeBroker(opts: {
       return stringField(body, "uid");
     },
     approvalRegistry,
+    agentControlRegistry,
   };
 }
 

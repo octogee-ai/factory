@@ -301,7 +301,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(edge).not.toMatch(/name:\s*OCTOGEE_API_URL\b/);
   });
 
-  it("operator profile still wires OCTOGEE_APPROVAL_SIGNING_SECRET on gateway-edge without MM_ADMIN_PAT", () => {
+  it("operator profile still wires OCTOGEE_AGENT_CONTROL_SIGNING_SECRET on gateway-edge without MM_ADMIN_PAT", () => {
     const dep =
       findDoc(
         helmTemplate("octogee-gw-bender", {
@@ -312,22 +312,22 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
         "octogee-gateway-bender",
       ) ?? "";
     const edge = containerBlock(dep, "gateway-edge");
-    // wireActivityBridge() requires OCTOGEE_APPROVAL_SIGNING_SECRET (approval-callback
-    // HMAC) on every gateway. It must remain explicit while MM_ADMIN_PAT stays absent.
     expect(edge).toMatch(
-      /name:\s*OCTOGEE_APPROVAL_SIGNING_SECRET\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*name:\s*approval-signing\s*\n\s*key:\s*secret/,
+      /name:\s*OCTOGEE_AGENT_CONTROL_SIGNING_SECRET\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*name:\s*agent-control-signing\s*\n\s*key:\s*secret/,
     );
     // The platform admin PAT is not rendered into gateway pods.
     expect(edge).not.toMatch(/name:\s*MM_ADMIN_PAT/);
+    expect(edge).not.toContain("OCTOGEE_APPROVAL_SIGNING_SECRET");
+    expect(edge).not.toContain("approval-signing");
   });
 
-  it("standard profile omits MM_ADMIN_PAT but still wires OCTOGEE_APPROVAL_SIGNING_SECRET on gateway-edge", () => {
+  it("standard profile omits MM_ADMIN_PAT but still wires OCTOGEE_AGENT_CONTROL_SIGNING_SECRET on gateway-edge", () => {
     const edge = containerBlock(
       findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "",
       "gateway-edge",
     );
     expect(edge).not.toMatch(/name:\s*MM_ADMIN_PAT/);
-    expect(edge).toMatch(/name:\s*OCTOGEE_APPROVAL_SIGNING_SECRET/);
+    expect(edge).toMatch(/name:\s*OCTOGEE_AGENT_CONTROL_SIGNING_SECRET/);
   });
 
   it("wires the activity-bridge broadcast env vars on the gateway container (Appendix A anti-recurrence: the env var was the silent killer)", () => {
@@ -614,18 +614,18 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     expect(gw).toMatch(/- name:\s*APP_URL[\s\S]*?value:\s*"https:\/\/app-octogee-test\.web\.app"/);
   });
 
-  it("emits MM_INTERACTIONS_CALLBACK_BASE_URL pointing at the per-instance Service DNS", () => {
+  it("emits MM_INTERACTIONS_CALLBACK_BASE_URL pointing at the stable private router", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     expect(dep).toMatch(
-      /- name:\s*MM_INTERACTIONS_CALLBACK_BASE_URL[\s\S]*?value:[^\n]*octogee-gateway-default\.octogee-test\.svc\.cluster\.local:18789/,
+      /- name:\s*MM_INTERACTIONS_CALLBACK_BASE_URL[\s\S]*?value:[^\n]*mattermost-callback-router\.octogee-test\.svc\.cluster\.local:3001\/internal\/openclaw\/mattermost\/default/,
     );
   });
 
-  it("emits the MM_INTERACTIONS_ALLOWED_SOURCE_IPS pod CIDR allowlist", () => {
+  it("allows only the loopback interaction proxy into OpenClaw", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
-    expect(dep).toMatch(/- name:\s*MM_INTERACTIONS_ALLOWED_SOURCE_IPS[\s\S]*?value:\s*"10\.117\.0\.0\/17"/);
+    expect(dep).toMatch(/- name:\s*MM_INTERACTIONS_ALLOWED_SOURCE_IPS[\s\S]*?value:\s*"127\.0\.0\.1"/);
   });
 
   it("sets CLOUDSDK_CORE_PROJECT on the gateway container so gcloud cannot inherit the cluster host project", () => {

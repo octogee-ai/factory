@@ -6,6 +6,7 @@ describe("chatProxyOwnsHttpPath", () => {
     expect(chatProxyOwnsHttpPath("/healthz")).toBe(true);
     expect(chatProxyOwnsHttpPath("/healthz/bridge")).toBe(true);
     expect(chatProxyOwnsHttpPath("/internal/openclaw/agent-control/callback")).toBe(true);
+    expect(chatProxyOwnsHttpPath("/internal/openclaw/mattermost/interactions/default")).toBe(true);
     expect(chatProxyOwnsHttpPath("/internal/openclaw/activity/v1/events")).toBe(true);
     expect(chatProxyOwnsHttpPath(
       "/internal/openclaw/activity/v1/events",

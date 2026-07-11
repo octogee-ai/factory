@@ -65,6 +65,7 @@ import {
 import type { ActivityReceiptFirestoreLike } from "./openclaw/activity-write-receipts.js";
 import { createActivityMmClientFactory } from "./openclaw/mm-client.js";
 import { ACTIVITY_INTAKE_PATH } from "./http-paths.js";
+import { createMattermostInteractionProxyHandler } from "./openclaw/mattermost-interaction-proxy.js";
 export { chatProxyOwnsHttpPath } from "./http-paths.js";
 
 if (process.env.NODE_ENV !== "test") {
@@ -355,9 +356,18 @@ const bridgeBootStatus = createBridgeBootStatus({
   log: bridgeLog,
 });
 
-let approvalCallbackHandler:
+let mattermostInteractionProxyHandler:
   | ((req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>)
   | null = null;
+let agentControlCallbackHandler:
+  | ((req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>)
+  | null = null;
+
+export function installAgentControlCallbackHandler(
+  handler: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>,
+): void {
+  agentControlCallbackHandler = handler;
+}
 
 let activityIntakeHandler:
   | ((req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>)
@@ -552,15 +562,22 @@ export async function chatProxyHandleRequest(
     return;
   }
 
-  if (urlPath === "/api/openclaw/approval/callback") {
-    if (!approvalCallbackHandler) {
+  if (/^\/internal\/openclaw\/mattermost\/interactions\/[A-Za-z0-9_-]{1,128}$/.test(urlPath)) {
+    if (!mattermostInteractionProxyHandler) {
       res.writeHead(503, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({ error: "service_unavailable", reason: "approval handler not initialized" }),
-      );
+      res.end(JSON.stringify({ error: "service_unavailable", reason: "interaction proxy not initialized" }));
       return;
     }
-    return approvalCallbackHandler(req, res);
+    return mattermostInteractionProxyHandler(req, res);
+  }
+
+  if (urlPath === "/internal/openclaw/agent-control/callback") {
+    if (!agentControlCallbackHandler) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "service_unavailable", reason: "agent control handler not initialized" }));
+      return;
+    }
+    return agentControlCallbackHandler(req, res);
   }
 
   req.resume();
@@ -1187,6 +1204,18 @@ export async function startChatProxyBackground(): Promise<void> {
     const gatewayIdResult = resolveBridgeGatewayId(process.env);
     const reconcileGatewayId = gatewayIdResult.ok ? gatewayIdResult.gatewayId : null;
     const getMountedCustomers = buildMountedCustomersReader(reconcileGatewayId);
+    if (gatewayIdResult.ok) {
+      const routerKey = process.env.AGENT_CONTROL_ROUTER_KEY ?? "";
+      if (!routerKey) {
+        console.error("[chat-proxy] FATAL: AGENT_CONTROL_ROUTER_KEY is required");
+        process.exit(1);
+      }
+      mattermostInteractionProxyHandler = createMattermostInteractionProxyHandler({
+        gatewayId: gatewayIdResult.gatewayId,
+        routerKey,
+        log: (message, meta) => logger.error(message, meta),
+      });
+    }
     const { wireActivityBridge, connectBridgeUpstream, createResyncFloor } = await import('./openclaw/bridge-boot.js');
     let runtimeBroker: OpenClawRuntimeBroker;
     try {
@@ -1222,8 +1251,6 @@ export async function startChatProxyBackground(): Promise<void> {
       console.error(`[chat-proxy] FATAL: activity bridge wire failed: ${msg}`);
       process.exit(1);
     }
-    approvalCallbackHandler = wired.approvalCallbackHandler;
-
     if (!gatewayIdResult.ok) {
       console.error(
         `[chat-proxy] activity bridge boot aborted — ${gatewayIdResult.reason}. ` +

@@ -4,6 +4,7 @@ import { signAgentControlRouterRequest } from "../../../agent-control-callback-r
 import { createMattermostInteractionProxyHandler } from "../mattermost-interaction-proxy.js";
 
 const servers: http.Server[] = [];
+const ROUTER_KEY = "r".repeat(32);
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
 });
@@ -24,7 +25,7 @@ describe("stable Mattermost interaction proxy", () => {
     const body = Buffer.from('{"context":{}}');
     const handler = createMattermostInteractionProxyHandler({
       gatewayId: "bender",
-      routerKey: "router-secret",
+      routerKey: ROUTER_KEY,
       now: () => now,
       targetOrigin: `http://127.0.0.1:${upstreamAddress.port}`,
       log: () => undefined,
@@ -34,7 +35,7 @@ describe("stable Mattermost interaction proxy", () => {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("missing address");
-    const signature = signAgentControlRouterRequest(body, "bender", String(now), "router-secret");
+    const signature = signAgentControlRouterRequest(body, "bender", String(now), ROUTER_KEY);
 
     const response = await fetch(`http://127.0.0.1:${address.port}/internal/openclaw/mattermost/interactions/default`, {
       method: "POST",
@@ -62,7 +63,7 @@ describe("stable Mattermost interaction proxy", () => {
     const body = Buffer.from("{}");
     const handler = createMattermostInteractionProxyHandler({
       gatewayId: "bender",
-      routerKey: "router-secret",
+      routerKey: ROUTER_KEY,
       now: () => now,
       targetOrigin: `http://127.0.0.1:${upstreamAddress.port}`,
       maxResponseBytes: 64 * 1024,
@@ -73,7 +74,7 @@ describe("stable Mattermost interaction proxy", () => {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("missing address");
-    const signature = signAgentControlRouterRequest(body, "bender", String(now), "router-secret");
+    const signature = signAgentControlRouterRequest(body, "bender", String(now), ROUTER_KEY);
     const response = await fetch(
       `http://127.0.0.1:${address.port}/internal/openclaw/mattermost/interactions/default`,
       {

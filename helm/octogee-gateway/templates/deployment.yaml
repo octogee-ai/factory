@@ -144,9 +144,9 @@ spec:
             - name: MM_SITE_URL
               value: {{ .Values.env.mmSiteUrl | default .Values.env.mmUrl | default (printf "http://mattermost.%s.svc.cluster.local:8065" .Release.Namespace) | quote }}
             - name: MM_INTERACTIONS_CALLBACK_BASE_URL
-              value: {{ .Values.env.mmInteractionsCallbackBaseUrl | default (printf "http://octogee-gateway-%s.%s.svc.cluster.local:18789" $revision .Release.Namespace) | quote }}
+              value: {{ .Values.env.mmInteractionsCallbackBaseUrl | default (printf "http://mattermost-callback-router.%s.svc.cluster.local:3001/internal/openclaw/mattermost/%s" .Release.Namespace .Values.gatewayId) | quote }}
             - name: MM_INTERACTIONS_ALLOWED_SOURCE_IPS
-              value: {{ .Values.env.mmInteractionsAllowedSourceIps | quote }}
+              value: "127.0.0.1"
             - name: FLEET_BROKER_URL
               value: {{ .Values.fleetBrokerUrl | default (printf "http://octogee-api.%s.svc.cluster.local:3001" .Release.Namespace) | quote }}
             - name: OCTOGEE_API_SA_TOKEN_PATH
@@ -298,9 +298,9 @@ spec:
             - name: MM_SITE_URL
               value: {{ .Values.env.mmSiteUrl | default .Values.env.mmUrl | default (printf "http://mattermost.%s.svc.cluster.local:8065" .Release.Namespace) | quote }}
             - name: MM_INTERACTIONS_CALLBACK_BASE_URL
-              value: {{ .Values.env.mmInteractionsCallbackBaseUrl | default (printf "http://octogee-gateway-%s.%s.svc.cluster.local:18789" $revision .Release.Namespace) | quote }}
+              value: {{ .Values.env.mmInteractionsCallbackBaseUrl | default (printf "http://mattermost-callback-router.%s.svc.cluster.local:3001/internal/openclaw/mattermost/%s" .Release.Namespace .Values.gatewayId) | quote }}
             - name: MM_INTERACTIONS_ALLOWED_SOURCE_IPS
-              value: {{ .Values.env.mmInteractionsAllowedSourceIps | quote }}
+              value: "127.0.0.1"
             - name: GIT_API_URL
               value: {{ .Values.env.gitApiUrl | default (printf "http://octogee-gitea-http.%s.svc.cluster.local:3000/api/v1" .Release.Namespace) | quote }}
             - name: GIT_SSH_HOST
@@ -470,12 +470,17 @@ spec:
               value: {{ .Values.env.giteaPublicBaseUrl | quote }}
             {{- end }}
             # Every gateway needs this: wireActivityBridge() requires it for
-            # approval-callback HMAC. It is not a Mattermost admin token; keep it
+            # durable control HMAC. It is not a Mattermost admin token; keep it
             # explicit even though gateway pods no longer render MM_ADMIN_PAT.
-            - name: OCTOGEE_APPROVAL_SIGNING_SECRET
+            - name: OCTOGEE_AGENT_CONTROL_SIGNING_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: approval-signing
+                  name: agent-control-signing
+                  key: secret
+            - name: AGENT_CONTROL_ROUTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agent-control-router
                   key: secret
             - name: BYOT_SYNC_INTERNAL_SIGNING_SECRET
               valueFrom:

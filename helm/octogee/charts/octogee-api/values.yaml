@@ -80,7 +80,7 @@ secrets:
   - envName: MM_ADMIN_TOKEN
     secretName: mattermost-gateway
     secretKey: admin_token
-    optional: true
+    optional: false
   - envName: GOOGLE_CLIENT_ID
     secretName: google-oauth
     secretKey: client_id

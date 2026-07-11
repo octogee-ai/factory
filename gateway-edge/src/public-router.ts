@@ -142,6 +142,16 @@ function parseGatewayPath(url: string): ParsedGatewayPath | null {
     return { invalidRevision: true };
   }
   const tail = revision === null ? afterGateway : afterGateway.slice(2);
+  if (tail.length > 0) {
+    if (tail[0].includes("%")) return null;
+    let firstSegment: string;
+    try {
+      firstSegment = decodeURIComponent(tail[0]);
+    } catch {
+      return null;
+    }
+    if (firstSegment === "internal") return null;
+  }
   const remainder = tail.length > 0 ? `/${tail.join("/")}` : "";
   return { gatewayId, revision, remainder, search: parsed.search };
 }

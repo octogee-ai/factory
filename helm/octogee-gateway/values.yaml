@@ -153,7 +153,7 @@ env:
   octogeeApiUrl: ""  # internal octogee-api DNS; auto-computed from release namespace if empty
   mmSiteUrl: ""
   mmInteractionsCallbackBaseUrl: ""  # auto-computed per-instance if empty
-  mmInteractionsAllowedSourceIps: "10.117.0.0/17"  # GKE pod CIDR
+  mmInteractionsAllowedSourceIps: "127.0.0.1"
   apiPublicUrl: "https://api.octogee.com"
   # Comma-separated list of allowed Origin headers on the chat-proxy
   # browser→OpenClaw WebSocket upgrade. Empty = chat-proxy falls back to
