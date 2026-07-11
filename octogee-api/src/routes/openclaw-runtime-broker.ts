@@ -50,26 +50,7 @@ interface ChannelPair {
   channelDocPath: string;
 }
 
-interface ApprovalRecord {
-  approvalId: string;
-  kind: "exec" | "plugin";
-  channelId: string;
-  runId: string;
-  expiresAt: number;
-  nonce: string;
-  agentId: string;
-  postId: string;
-  dispatched: boolean;
-  createdAt: number;
-}
-
-type MarkDispatchedResult =
-  | { outcome: "dispatched" }
-  | { outcome: "already-dispatched" }
-  | { outcome: "not-found" };
-
 const TICKETS = "gatewayTickets";
-const APPROVALS = "ocApprovals";
 const FORBIDDEN = { error: "forbidden" } as const;
 
 function isDurableGatewayRoot(
@@ -460,60 +441,6 @@ async function resolveControlActorFacts(
   };
 }
 
-function requiredString(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function optionalString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function finiteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function approvalKind(value: unknown): ApprovalRecord["kind"] | null {
-  return value === "exec" || value === "plugin" ? value : null;
-}
-
-function approvalRecordFromBody(body: Record<string, unknown>): ApprovalRecord | null {
-  const record = body.record;
-  if (!record || typeof record !== "object") return null;
-  const r = record as Record<string, unknown>;
-  const approvalId = requiredString(r.approvalId);
-  const kind = approvalKind(r.kind);
-  const channelId = requiredString(r.channelId);
-  const runId = requiredString(r.runId);
-  const expiresAt = finiteNumber(r.expiresAt);
-  const nonce = requiredString(r.nonce);
-  const agentId = requiredString(r.agentId);
-  const createdAt = finiteNumber(r.createdAt);
-  if (!approvalId || !kind || !channelId || !runId || expiresAt === null || !nonce || !agentId || createdAt === null) {
-    return null;
-  }
-  return {
-    approvalId,
-    kind,
-    channelId,
-    runId,
-    expiresAt,
-    nonce,
-    agentId,
-    postId: optionalString(r.postId),
-    dispatched: r.dispatched === true,
-    createdAt,
-  };
-}
-
-async function approvalAssigned(
-  db: Firestore,
-  gatewayId: string,
-  record: ApprovalRecord,
-): Promise<boolean> {
-  const slug = usernameFromAgentId(record.agentId);
-  return !!slug && assignedHere(db, gatewayId, slug);
-}
-
 // Resolve the customer's serving revision for WS redemption. A BACKFILLED
 // gateway (Step 2) carries its durable identity in gateways/{id} with NO
 // internalUrl; the serving URL lives on the revision realization doc. Resolution
@@ -792,107 +719,6 @@ function mountActivityRoutes(router: Router, db: Firestore): void {
   });
 }
 
-function mountApprovalRoutes(router: Router, db: Firestore): void {
-  router.post("/activity/approval/register", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const record = approvalRecordFromBody((req.body ?? {}) as Record<string, unknown>);
-    if (!record) {
-      res.status(400).json({ error: "invalid_approval_record" });
-      return;
-    }
-    if (!(await approvalAssigned(db, bound.gatewayId, record))) {
-      forbidden(res);
-      return;
-    }
-    await db.runTransaction(async (tx) => {
-      const ref = db.doc(`${APPROVALS}/${record.approvalId}`);
-      const snap = await tx.get(ref);
-      if (!snap.exists) tx.set(ref, record as unknown as Record<string, unknown>);
-    });
-    res.status(204).end();
-  });
-
-  router.post("/activity/approval/lookup", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const approvalId = stringBody(req, "approvalId");
-    const snap = approvalId ? await db.doc(`${APPROVALS}/${approvalId}`).get() : null;
-    if (!snap?.exists) {
-      res.status(404).json({ error: "not_found" });
-      return;
-    }
-    const record = snap.data() as unknown as ApprovalRecord;
-    if (!(await approvalAssigned(db, bound.gatewayId, record))) {
-      forbidden(res);
-      return;
-    }
-    res.json({ record });
-  });
-
-  router.post("/activity/approval/attach-post", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const approvalId = stringBody(req, "approvalId");
-    const postId = stringBody(req, "postId");
-    const ref = db.doc(`${APPROVALS}/${approvalId}`);
-    const snap = approvalId ? await ref.get() : null;
-    if (!snap?.exists || !postId) {
-      res.status(404).json({ error: "not_found" });
-      return;
-    }
-    if (!(await approvalAssigned(db, bound.gatewayId, snap.data() as unknown as ApprovalRecord))) {
-      forbidden(res);
-      return;
-    }
-    await ref.update({ postId });
-    res.status(204).end();
-  });
-
-  router.post("/activity/approval/mark-dispatched", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const approvalId = stringBody(req, "approvalId");
-    const ref = db.doc(`${APPROVALS}/${approvalId}`);
-    const snap = approvalId ? await ref.get() : null;
-    if (!snap?.exists) {
-      res.json({ outcome: "not-found" satisfies MarkDispatchedResult["outcome"] });
-      return;
-    }
-    if (!(await approvalAssigned(db, bound.gatewayId, snap.data() as unknown as ApprovalRecord))) {
-      forbidden(res);
-      return;
-    }
-    const result = await db.runTransaction<MarkDispatchedResult>(async (tx) => {
-      const txSnap = await tx.get(ref);
-      if (!txSnap.exists) return { outcome: "not-found" };
-      const data = txSnap.data() ?? {};
-      if (data.dispatched === true) return { outcome: "already-dispatched" };
-      tx.update(ref, { dispatched: true });
-      return { outcome: "dispatched" };
-    });
-    res.json(result);
-  });
-
-  router.post("/activity/approval/reset-dispatched", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const approvalId = stringBody(req, "approvalId");
-    const ref = db.doc(`${APPROVALS}/${approvalId}`);
-    const snap = approvalId ? await ref.get() : null;
-    if (!snap?.exists) {
-      res.status(404).json({ error: "not_found" });
-      return;
-    }
-    if (!(await approvalAssigned(db, bound.gatewayId, snap.data() as unknown as ApprovalRecord))) {
-      forbidden(res);
-      return;
-    }
-    await ref.update({ dispatched: false });
-    res.status(204).end();
-  });
-}
-
 export function createOpenClawRuntimeBrokerRoutes(opts: {
   db: Firestore;
   resolveMattermostActorFacts?: (
@@ -927,7 +753,6 @@ export function createOpenClawRuntimeBrokerRoutes(opts: {
   };
   mountUserAndWsRoutes(router, db);
   mountActivityRoutes(router, db);
-  mountApprovalRoutes(router, db);
   router.use("/agent-control", createAgentControlRoutes({
     registry: agentControlRegistry,
     belongsToGateway: (record, gatewayId) => controlBelongsToGateway(db, record, gatewayId),

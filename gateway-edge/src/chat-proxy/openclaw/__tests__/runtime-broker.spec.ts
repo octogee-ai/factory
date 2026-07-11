@@ -83,7 +83,7 @@ describe("OpenClaw runtime broker env", () => {
       expect.objectContaining({
         redeemOpenClawWs: expect.any(Function),
         getUserGatewayId: expect.any(Function),
-        approvalRegistry: expect.any(Object),
+        agentControlRegistry: expect.any(Object),
       }),
     );
   });
