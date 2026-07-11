@@ -83,6 +83,99 @@ async function getProjectChannel(
   return snap.data();
 }
 
+interface ProjectPairMattermostFixture {
+  primaryId: string;
+  primaryName: string;
+  activityId?: string;
+  existingPrimary?: boolean;
+  primaryType?: "P" | "O";
+  teamId?: string;
+}
+
+function mockProjectPairMattermost(options: ProjectPairMattermostFixture): void {
+  const teamId = options.teamId ?? "team-abc";
+  const activityId = options.activityId ?? `${options.primaryId}-activity`;
+  const activityName = `${options.primaryName}-activity`;
+  const primaryMembers = new Set<string>();
+  const activityMembers = new Set<string>();
+  let primaryExists = options.existingPrimary ?? false;
+  let primaryType = options.primaryType ?? "P";
+  let activityExists = false;
+
+  const channel = (id: string, name: string, type: "P" | "O") => ({
+    id,
+    name,
+    team_id: teamId,
+    type,
+    delete_at: 0,
+  });
+  const notFound = (path: string) => {
+    const error = new Error(`MM API 404: ${path} not found`) as Error & { status: number };
+    error.status = 404;
+    return error;
+  };
+
+  mockMmApi.mockImplementation(async (
+    path: string,
+    method?: string,
+    body?: Record<string, unknown>,
+  ) => {
+    const verb = method ?? "GET";
+    if (verb === "GET" && path === `/teams/${teamId}/channels/name/${options.primaryName}`) {
+      if (!primaryExists) throw notFound(path);
+      return channel(options.primaryId, options.primaryName, primaryType);
+    }
+    if (verb === "GET" && path === `/teams/${teamId}/channels/name/${activityName}`) {
+      if (!activityExists) throw notFound(path);
+      return channel(activityId, activityName, primaryType);
+    }
+    if (verb === "GET" && path === `/channels/${options.primaryId}`) {
+      if (!primaryExists) throw notFound(path);
+      return channel(options.primaryId, options.primaryName, primaryType);
+    }
+    if (verb === "GET" && path === `/channels/${activityId}`) {
+      if (!activityExists) throw notFound(path);
+      return channel(activityId, activityName, primaryType);
+    }
+    if (verb === "GET" && path === `/channels/${options.primaryId}/members?page=0&per_page=200`) {
+      return [...primaryMembers].map((userId) => ({ user_id: userId }));
+    }
+    if (verb === "GET" && path === `/channels/${activityId}/members?page=0&per_page=200`) {
+      return [...activityMembers].map((userId) => ({ user_id: userId }));
+    }
+    if (verb === "POST" && path === "/channels") {
+      if (body?.name === options.primaryName && !primaryExists) {
+        primaryExists = true;
+        primaryType = body.type === "O" ? "O" : "P";
+        return channel(options.primaryId, options.primaryName, primaryType);
+      }
+      if (body?.name === activityName && !activityExists) {
+        activityExists = true;
+        return channel(activityId, activityName, primaryType);
+      }
+    }
+    if (
+      verb === "PUT"
+      && path === `/channels/${options.primaryId}/privacy`
+      && body?.privacy === "P"
+    ) {
+      primaryType = "P";
+      return channel(options.primaryId, options.primaryName, primaryType);
+    }
+    if (verb === "POST" && path === `/channels/${options.primaryId}/members`) {
+      if (typeof body?.user_id !== "string") throw new Error("primary member user_id is required");
+      primaryMembers.add(body.user_id);
+      return { user_id: body.user_id, channel_id: options.primaryId, roles: "channel_user" };
+    }
+    if (verb === "POST" && path === `/channels/${activityId}/members`) {
+      if (typeof body?.user_id !== "string") throw new Error("activity member user_id is required");
+      activityMembers.add(body.user_id);
+      return { user_id: body.user_id, channel_id: activityId, roles: "channel_user" };
+    }
+    throw new Error(`Unexpected MM call: ${verb} ${path}`);
+  });
+}
+
 setupEmulatorTest();
 beforeEach(async () => {
   mockMmApi.mockReset();
@@ -649,7 +742,10 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    mockMmApi.mockResolvedValue({ id: "ch-new-123" });
+    mockProjectPairMattermost({
+      primaryId: "ch-new-123",
+      primaryName: "alice-proj-mygame-general",
+    });
 
     const app = createApp();
     const res = await request(app)
@@ -717,7 +813,10 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    mockMmApi.mockResolvedValue({ id: "ch-new-123" });
+    mockProjectPairMattermost({
+      primaryId: "ch-new-123",
+      primaryName: "alice-proj-mygame-general",
+    });
 
     const app = createApp();
     const res = await request(app)
@@ -831,7 +930,10 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       userId: "mock-mm-user", username: "alice-mm", coachUserId: "mock-mm-coach",
       coachDmChannelId: null, generalChannelId: null, adminChannelId: null,
     });
-    mockMmApi.mockResolvedValue({ id: "ch-priv-1" });
+    mockProjectPairMattermost({
+      primaryId: "ch-priv-1",
+      primaryName: "alice-proj-privthing-general",
+    });
 
     const app = createApp();
     const res = await request(app)
@@ -856,7 +958,10 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       userId: "mock-mm-user", username: "alice-mm", coachUserId: "mock-mm-coach",
       coachDmChannelId: null, generalChannelId: null, adminChannelId: null,
     });
-    mockMmApi.mockResolvedValue({ id: "ch-new-999" });
+    mockProjectPairMattermost({
+      primaryId: "ch-new-999",
+      primaryName: "alice-proj-mygame-general",
+    });
     mockCreateProjectGiteaRepo.mockRejectedValue(new Error("Gitea down"));
 
     const app = createApp();
@@ -913,19 +1018,9 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    mockMmApi.mockImplementation(async (path: string, method?: string) => {
-      if ((method ?? "GET") === "GET" && path.startsWith("/teams/team-abc/channels/name/")) {
-        const err = new Error("MM API 404: channel not found") as Error & { status: number };
-        err.status = 404;
-        throw err;
-      }
-      if (method === "POST" && path === "/channels") {
-        return { id: "ch-retry-456" };
-      }
-      if (method === "POST" && /^\/channels\/[^/]+\/members$/.test(path)) {
-        return { user_id: "ok", channel_id: "ch-retry-456", roles: "channel_user" };
-      }
-      throw new Error(`Unexpected MM call: ${method} ${path}`);
+    mockProjectPairMattermost({
+      primaryId: "ch-retry-456",
+      primaryName: "alice-proj-mygame-general",
     });
 
     const app = createApp();
@@ -989,11 +1084,9 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       userId: "mock-mm-user", username: "alice-mm", coachUserId: "mock-mm-coach",
       coachDmChannelId: null, generalChannelId: null, adminChannelId: null,
     });
-    mockMmApi.mockImplementation(async (_path: string, method?: string) => {
-      if (method === "POST") return { id: "ch-retry-gitea-fail" };
-      const err = new Error("MM API 404: not found") as Error & { status: number };
-      err.status = 404;
-      throw err;
+    mockProjectPairMattermost({
+      primaryId: "ch-retry-gitea-fail",
+      primaryName: "alice-proj-mygame-general",
     });
     mockCreateProjectGiteaRepo.mockRejectedValue(new Error("Gitea unreachable"));
 
@@ -1032,17 +1125,11 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    mockMmApi.mockImplementation(async (path: string, method?: string, body?: { name?: string }) => {
-      if ((method ?? "GET") === "GET" && path.startsWith("/teams/team-abc/channels/name/")) {
-        return { id: "ch-existing-999", type: "P" };
-      }
-      if (method === "POST" && /^\/channels\/[^/]+\/members$/.test(path)) {
-        return { user_id: "ok", channel_id: "ch-existing-999", roles: "channel_user" };
-      }
-      if (method === "POST" && path === "/channels") {
-        return { id: "ch-activity-existing-999", type: "P", name: body?.name };
-      }
-      throw new Error(`Unexpected MM call: ${method} ${path}`);
+    mockProjectPairMattermost({
+      primaryId: "ch-existing-999",
+      primaryName: "alice-proj-mygame-general",
+      activityId: "ch-activity-existing-999",
+      existingPrimary: true,
     });
 
     const app = createApp();
@@ -1099,20 +1186,12 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    mockMmApi.mockImplementation(async (path: string, method?: string, body?: { name?: string }) => {
-      if ((method ?? "GET") === "GET" && path.startsWith("/teams/team-abc/channels/name/")) {
-        return { id: "ch-legacy-O", type: "O" };
-      }
-      if (method === "PUT" && /^\/channels\/[^/]+\/privacy$/.test(path)) {
-        return { ok: true };
-      }
-      if (method === "POST" && /^\/channels\/[^/]+\/members$/.test(path)) {
-        return { user_id: "ok" };
-      }
-      if (method === "POST" && path === "/channels") {
-        return { id: "ch-activity-legacy", type: "P", name: body?.name };
-      }
-      throw new Error(`Unexpected MM call: ${method} ${path}`);
+    mockProjectPairMattermost({
+      primaryId: "ch-legacy-O",
+      primaryName: "alice-proj-mygame-general",
+      activityId: "ch-activity-legacy",
+      existingPrimary: true,
+      primaryType: "O",
     });
 
     const app = createApp();
@@ -1286,7 +1365,11 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    mockMmApi.mockResolvedValue({ id: "ch-repair-789" });
+    mockProjectPairMattermost({
+      primaryId: "ch-repair-789",
+      primaryName: "alice-proj-mygame-general",
+      existingPrimary: true,
+    });
 
     const app = createApp();
     const res = await request(app)
