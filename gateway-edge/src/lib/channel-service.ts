@@ -40,7 +40,11 @@ export interface SessionChannelResult {
 interface SessionChannelDoc {
   kind?: unknown;
   archivedAt?: unknown;
-  mattermost?: { channelId?: unknown };
+  mattermost?: {
+    channelId?: unknown;
+    activityChannelId?: unknown;
+    activityPair?: { status?: unknown };
+  };
 }
 
 export function sessionChannelNameAvailability(
@@ -130,9 +134,25 @@ async function createSessionChannelImpl(
   const existing = await docRef.get();
   if (existing.exists) {
     const data = existing.data() as SessionChannelDoc | undefined;
-    return data?.archivedAt
-      ? bad(409, "A session with this name was archived; channel names cannot be reused")
-      : bad(409, "A channel with this name already exists in your workspace");
+    if (data?.archivedAt) {
+      return bad(409, "A session with this name was archived; channel names cannot be reused");
+    }
+    const channelId = data?.mattermost?.channelId;
+    if (
+      typeof channelId === "string"
+      && channelId.length > 0
+      && data?.mattermost?.activityPair?.status !== "active"
+    ) {
+      try {
+        const { reconcileStoredActivityPair } = await import("./activityPair.js");
+        await reconcileStoredActivityPair(docRef.path);
+      } catch (err) {
+        logger.error(`[channels] Activity pair retry failed for ${scope}:`, { err });
+        return bad(502, "Channel creation failed - could not create activity channel");
+      }
+      return { status: 200, body: { success: true, channelId, name } };
+    }
+    return bad(409, "A channel with this name already exists in your workspace");
   }
 
   const ctx = await getWorkspaceMmContext(actor.uid, workspaceId, actor.userData);
@@ -167,6 +187,20 @@ async function createSessionChannelImpl(
     createdBy: actor.uid,
     createdAt: FieldValue.serverTimestamp(),
   });
+  try {
+    const { reconcileActivityPair } = await import("./activityPair.js");
+    await reconcileActivityPair({
+      channelDocPath: docRef.path,
+      primaryName: channelName,
+      primaryChannelId: channelId,
+      teamId: ctx.teamId,
+      type: "P",
+      kind: "custom",
+    });
+  } catch (err) {
+    logger.error(`[channels] Activity pair creation failed for ${scope}:`, { err });
+    return bad(502, "Channel creation failed - could not create activity channel");
+  }
   logger.info(`[channels] Created session channel ${scope}`, { uid: actor.uid });
 
   return { status: 200, body: { success: true, channelId, name } };
@@ -365,10 +399,21 @@ async function archiveSessionChannelImpl(
   const bindingFailure = await verifyChannelBinding(actor.workspaceId, project, name, found.channelId);
   if (bindingFailure) return bindingFailure;
 
+  const ctx = await getWorkspaceMmContext(actor.uid, actor.workspaceId, actor.userData);
+  if (!ctx?.teamId) return bad(502, "Channel archive failed - workspace chat is not ready");
   try {
-    await mmApi(`/channels/${found.channelId}`, "DELETE");
+    const { reconcileActivityPair } = await import("./activityPair.js");
+    await reconcileActivityPair({
+      channelDocPath: found.docRef.path,
+      primaryName: laneChannelName(actor.workspaceId, project, name),
+      primaryChannelId: found.channelId,
+      teamId: ctx.teamId,
+      type: "P",
+      kind: "custom",
+      desired: "archived",
+    });
   } catch (err) {
-    logger.error(`[channels] MM channel archive failed for ${scope}:`, { err });
+    logger.error(`[channels] Activity pair archive failed for ${scope}:`, { err });
     return bad(502, "Channel archive failed");
   }
 

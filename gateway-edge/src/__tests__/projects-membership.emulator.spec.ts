@@ -25,6 +25,13 @@ vi.mock("../lib/gitea", () => ({
   giteaWriteFile: vi.fn(),
 }));
 
+const mockAddActivityPairMember = vi.fn();
+const mockRemoveActivityPairMember = vi.fn();
+vi.mock("../lib/activityPair", () => ({
+  addActivityPairMember: (...args: unknown[]) => mockAddActivityPairMember(...args),
+  removeActivityPairMember: (...args: unknown[]) => mockRemoveActivityPairMember(...args),
+}));
+
 import { createApp } from "../index.js";
 import projectJoinLeaveRoutes from "../routes/projects/join-leave.js";
 import projectMembersRoutes from "../routes/projects/members.js";
@@ -159,6 +166,8 @@ beforeEach(async () => {
   mockMmApi.mockReset();
   mockGiteaApi.mockReset();
   mockGetWorkspaceMmContext.mockReset();
+  mockAddActivityPairMember.mockReset().mockResolvedValue(undefined);
+  mockRemoveActivityPairMember.mockReset().mockResolvedValue(undefined);
   mockGetWorkspaceMmContext.mockResolvedValue({ teamId: "team-alice" });
   await seedCaller(CALLER_UID);
 });
@@ -285,10 +294,9 @@ describe("POST /api/projects/:wid/:pid/join", () => {
       .send({});
 
     expect(res.status).toBe(200);
-    expect(mockMmApi).toHaveBeenCalledWith(
-      "/channels/ch-alice-game-activity/members",
-      "POST",
-      { user_id: "mm-bob" },
+    expect(mockAddActivityPairMember).toHaveBeenCalledWith(
+      "workspaces/alice/projects/game/channels/general",
+      "mm-bob",
     );
   });
 });
@@ -356,9 +364,9 @@ describe("POST /api/projects/:wid/:pid/leave", () => {
     expect(res.body.success).toBe(true);
     expect(await getMemberDoc(CALLER_UID)).toBeUndefined();
     expect((await getProjectDoc())?.memberCount).toBe(1);
-    expect(mockMmApi).toHaveBeenCalledWith(
-      "/channels/ch-alice-game/members/mm-bob",
-      "DELETE",
+    expect(mockRemoveActivityPairMember).toHaveBeenCalledWith(
+      "workspaces/alice/projects/game/channels/general",
+      "mm-bob",
     );
     expect(mockGiteaApi).toHaveBeenCalledWith(
       "alice",
@@ -388,9 +396,9 @@ describe("POST /api/projects/:wid/:pid/leave", () => {
       .send({});
 
     expect(res.status).toBe(200);
-    expect(mockMmApi).toHaveBeenCalledWith(
-      "/channels/ch-alice-game-activity/members/mm-bob",
-      "DELETE",
+    expect(mockRemoveActivityPairMember).toHaveBeenCalledWith(
+      "workspaces/alice/projects/game/channels/general",
+      "mm-bob",
     );
   });
 });
@@ -529,9 +537,9 @@ describe("DELETE /api/projects/:wid/:pid/members/:guestUid", () => {
     expect(res.body.success).toBe(true);
     expect(await getMemberDoc("guest-uid")).toBeUndefined();
     expect((await getProjectDoc())?.memberCount).toBe(1);
-    expect(mockMmApi).toHaveBeenCalledWith(
-      "/channels/ch-alice-game/members/mm-guest",
-      "DELETE",
+    expect(mockRemoveActivityPairMember).toHaveBeenCalledWith(
+      "workspaces/alice/projects/game/channels/general",
+      "mm-guest",
     );
     expect(mockGiteaApi).toHaveBeenCalledWith(
       "alice",
@@ -564,9 +572,9 @@ describe("DELETE /api/projects/:wid/:pid/members/:guestUid", () => {
       .set(await authHeader());
 
     expect(res.status).toBe(200);
-    expect(mockMmApi).toHaveBeenCalledWith(
-      "/channels/ch-alice-game-activity/members/mm-guest",
-      "DELETE",
+    expect(mockRemoveActivityPairMember).toHaveBeenCalledWith(
+      "workspaces/alice/projects/game/channels/general",
+      "mm-guest",
     );
   });
 });

@@ -17,6 +17,8 @@ const h = vi.hoisted(() => ({
   updates: [] as Update[],
   getWorkspaceMmContext: vi.fn(),
   mmApi: vi.fn(),
+  reconcileActivityPair: vi.fn(),
+  reconcileStoredActivityPair: vi.fn(),
   logger: {
     error: vi.fn(),
     info: vi.fn(),
@@ -25,6 +27,7 @@ const h = vi.hoisted(() => ({
 
 function docRef(path: string) {
   return {
+    path,
     get: async () => {
       const data = h.docs.get(path);
       return { exists: data !== undefined, data: () => data };
@@ -57,6 +60,11 @@ vi.mock("../lib/mattermost.js", () => ({
 
 vi.mock("../lib/mattermost-context.js", () => ({
   getWorkspaceMmContext: (...args: unknown[]) => h.getWorkspaceMmContext(...args),
+}));
+
+vi.mock("../lib/activityPair.js", () => ({
+  reconcileActivityPair: (...args: unknown[]) => h.reconcileActivityPair(...args),
+  reconcileStoredActivityPair: (...args: unknown[]) => h.reconcileStoredActivityPair(...args),
 }));
 
 const {
@@ -101,7 +109,10 @@ function seedSessionDoc(extra: Record<string, unknown> = {}) {
     id: "patchroll",
     kind: "session",
     name: "patchroll",
-    mattermost: { channelId: "channel-1" },
+    mattermost: {
+      channelId: "channel-1",
+      activityPair: { generation: 1, desired: "active", status: "active" },
+    },
     ...extra,
   });
 }
@@ -120,6 +131,8 @@ beforeEach(() => {
     if (method === "POST" && path === "/channels/channel-1/members") return { ok: true };
     throw new Error(`unexpected Mattermost call: ${method ?? "GET"} ${path}`);
   });
+  h.reconcileActivityPair.mockReset().mockResolvedValue({ activityChannelId: "activity-1" });
+  h.reconcileStoredActivityPair.mockReset().mockResolvedValue({ activityChannelId: "activity-1" });
   h.logger.error.mockReset();
   h.logger.info.mockReset();
 });
@@ -155,6 +168,27 @@ describe("sessionChannelNameAvailability", () => {
 });
 
 describe("createSessionChannel", () => {
+  it("resumes a failed pair saga instead of treating the durable primary as a duplicate", async () => {
+    seedSessionDoc({
+      mattermost: {
+        channelId: "channel-1",
+        activityPair: { generation: 1, desired: "active", status: "failed" },
+      },
+    });
+
+    const result = await createSessionChannel(actor(), {
+      name: "patchroll",
+      displayName: "Patch Roll",
+    });
+
+    expect(result).toEqual({
+      status: 200,
+      body: { success: true, channelId: "channel-1", name: "patchroll" },
+    });
+    expect(h.reconcileStoredActivityPair).toHaveBeenCalledWith(DOC_PATH);
+    expect(h.mmApi).not.toHaveBeenCalled();
+  });
+
   const input = { name: "patchroll", displayName: "OpenClaw Patch Upgrade", purpose: "Roll OC patches" };
 
   it("rejects missing workspace before any writes", async () => {
@@ -462,7 +496,13 @@ describe("archiveSessionChannel", () => {
     const result = await archiveSessionChannel(actor(), "patchroll");
 
     expect(result).toEqual({ status: 200, body: { success: true } });
-    expect(h.mmApi).toHaveBeenCalledWith("/channels/channel-1", "DELETE");
+    expect(h.reconcileActivityPair).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelDocPath: DOC_PATH,
+        primaryChannelId: "channel-1",
+        desired: "archived",
+      }),
+    );
     expect(h.updates).toEqual([
       { path: DOC_PATH, data: { archivedAt: "SERVER_TS" } },
     ]);
@@ -474,13 +514,15 @@ describe("archiveSessionChannel", () => {
     const result = await archiveSessionChannel(actor(), "patchroll");
 
     expect(result).toEqual({ status: 200, body: { success: true } });
+    expect(h.reconcileActivityPair).not.toHaveBeenCalled();
     expect(h.mmApi).not.toHaveBeenCalled();
     expect(h.updates).toEqual([]);
   });
 
   it("surfaces MM archive failures as 502", async () => {
     seedSessionDoc();
-    mockVerifiedMmChannel({ "/channels/channel-1": new Error("MM down") });
+    mockVerifiedMmChannel({ "/channels/channel-1": { status: "OK" } });
+    h.reconcileActivityPair.mockRejectedValueOnce(new Error("MM down"));
 
     const result = await archiveSessionChannel(actor(), "patchroll");
 
@@ -504,7 +546,10 @@ function seedProjectSessionDoc(extra: Record<string, unknown> = {}) {
     id: "patchroll",
     kind: "session",
     name: "patchroll",
-    mattermost: { channelId: "channel-1" },
+    mattermost: {
+      channelId: "channel-1",
+      activityPair: { generation: 1, desired: "active", status: "active" },
+    },
     ...extra,
   });
 }
@@ -630,6 +675,12 @@ describe("archiveProjectSessionChannel", () => {
     const result = await archiveProjectSessionChannel(actor(), "orbit", "patchroll");
 
     expect(result).toEqual({ status: 200, body: { success: true } });
+    expect(h.reconcileActivityPair).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelDocPath: PROJECT_CHANNEL_DOC_PATH,
+        desired: "archived",
+      }),
+    );
     expect(h.updates).toEqual([
       { path: PROJECT_CHANNEL_DOC_PATH, data: { archivedAt: "SERVER_TS" } },
     ]);

@@ -401,20 +401,14 @@ async function provisionProjectActivityPair(
   channel: { teamId: string; mmChannelId: string; memberAdds: MattermostMemberAdd[] },
 ): Promise<{ ok: true } | { ok: false; result: ProjectCreateResult }> {
   try {
-    const { provisionActivityPair } = await import("./activityPair.js");
-    await provisionActivityPair({
+    const { reconcileActivityPair } = await import("./activityPair.js");
+    await reconcileActivityPair({
+      channelDocPath: `${projectRef.path}/channels/general`,
       primaryName: projectGeneralChannelName(plan.workspaceId, plan.slug),
       primaryChannelId: channel.mmChannelId,
       teamId: channel.teamId,
       type: "P",
       kind: "project",
-      members: channel.memberAdds.map((m) => m.id),
-      recordActivityChannelId: async (activityChannelId) => {
-        await projectRef
-          .collection("channels")
-          .doc("general")
-          .set({ mattermost: { activityChannelId } }, { merge: true });
-      },
     });
     return { ok: true };
   } catch (err) {
