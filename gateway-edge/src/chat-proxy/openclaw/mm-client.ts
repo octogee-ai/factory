@@ -23,6 +23,7 @@ export interface ActivityMattermostPost {
   id: string;
   channelId: string;
   rootId: string;
+  message?: string;
   props: Record<string, unknown>;
   fileIds: string[];
 }
@@ -73,6 +74,7 @@ interface MmPostResponse {
   root_id?: unknown;
   props?: unknown;
   file_ids?: unknown;
+  message?: unknown;
 }
 
 function safeNonNegativeInteger(value: unknown): value is number {
@@ -85,6 +87,7 @@ function postFromResponse(value: MmPostResponse): ActivityMattermostPost | null 
     id: value.id,
     channelId: value.channel_id,
     rootId: typeof value.root_id === "string" ? value.root_id : "",
+    ...(typeof value.message === "string" ? { message: value.message } : {}),
     props:
       value.props && typeof value.props === "object"
         ? (value.props as Record<string, unknown>)

@@ -231,6 +231,8 @@ function octogeeProps(
     conversationId: envelope.ref.conversationId,
     turnId: envelope.ref.turnId,
     runId: envelope.ref.runId,
+    agentId: envelope.ref.agentId,
+    sessionKey: envelope.ref.sessionKey,
     ...(envelope.ref.parentRunId ? { parentRunId: envelope.ref.parentRunId } : {}),
     ...(envelope.ref.retryOfRunId ? { retryOfRunId: envelope.ref.retryOfRunId } : {}),
     origin: envelope.ref.origin,
@@ -762,9 +764,11 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
         actorId: envelope.control.actorId,
       },
     };
+    const retainedProps = { ...original.props };
+    delete retainedProps.attachments;
     await deps.mm.editPost(original.id, {
-      message: `Approval ${envelope.control.to} by ${envelope.control.actorId}.`,
-      props: { ...original.props, octogee: nextOctogee },
+      message: original.message ?? "",
+      props: { ...retainedProps, octogee: nextOctogee },
     });
     await deps.receipts.markPosted(envelope.eventKey, receipt.leaseToken, original.id, now());
     await deps.receipts.commit(envelope.eventKey, receipt.leaseToken, now());
