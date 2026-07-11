@@ -102,6 +102,7 @@ export interface ActiveActivityRunBinding {
 export interface ActivityRuntimeRegistry {
   readiness(): "unsynchronized" | "ready";
   resolve(ref: AgentActivityIngressRef): Promise<ActiveActivityRunBinding | null>;
+  resolveRun(runId: string): Promise<ActiveActivityRunBinding | null>;
 }
 
 export class MutableActivityRuntimeRegistry implements ActivityRuntimeRegistry {
@@ -114,6 +115,10 @@ export class MutableActivityRuntimeRegistry implements ActivityRuntimeRegistry {
 
   async resolve(ref: AgentActivityIngressRef): Promise<ActiveActivityRunBinding | null> {
     return this.bindings.get(ref.runId) ?? null;
+  }
+
+  async resolveRun(runId: string): Promise<ActiveActivityRunBinding | null> {
+    return this.bindings.get(runId) ?? null;
   }
 
   beginSynchronization(): void {
