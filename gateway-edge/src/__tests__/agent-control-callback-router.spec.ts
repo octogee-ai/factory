@@ -17,7 +17,11 @@ describe("private Mattermost callback router", () => {
       expect(req.url).toBe("/api/g/bender/internal/openclaw/agent-control/callback");
       expect(req.headers["x-octogee-forged"]).toBeUndefined();
       expect(req.headers["x-octogee-agent-control-signature"]).toBeTypeOf("string");
-      res.writeHead(200, { "content-type": "application/json" });
+      res.writeHead(200, {
+        "content-type": "application/json",
+        connection: "close",
+        "proxy-authenticate": "forged",
+      });
       res.end('{"ok":true}');
     });
     servers.push(upstream);
@@ -47,6 +51,7 @@ describe("private Mattermost callback router", () => {
     );
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
+    expect(response.headers.get("proxy-authenticate")).toBeNull();
   });
 
   it("rejects unknown/public paths and verifies the router proof within 30 seconds", async () => {
