@@ -1,7 +1,12 @@
 import { Router, type Request, type Response } from "express";
 import type { Firestore, Transaction } from "firebase-admin/firestore";
 
-import { isValidUsername, parseAgentId } from "@octogee/shared/types/identity";
+import {
+  isValidCustomChannelName,
+  isValidProjectId,
+  isValidUsername,
+  parseAgentId,
+} from "@octogee/shared/types/identity";
 import {
   isGatewayDesiredDoc,
   type GatewayDoc,
@@ -128,6 +133,61 @@ function workspaceSlugFromChannelPath(path: string | null): string | null {
   return isValidUsername(parts[1]) ? parts[1] : null;
 }
 
+interface BoundChannelPath {
+  workspaceSlug: string;
+  ownerPath: string;
+  channelName: string;
+  lane: "workspace" | "project";
+}
+
+function boundChannelPath(path: string | null): BoundChannelPath | null {
+  if (!path) return null;
+  const parts = path.split("/");
+  if (parts.some((part) => !part) || parts[0] !== "workspaces" || !isValidUsername(parts[1])) {
+    return null;
+  }
+  if (parts.length === 4 && parts[2] === "channels") {
+    const channelName = parts[3];
+    if (
+      channelName !== "general" &&
+      channelName !== "coach-dm" &&
+      channelName !== "admin" &&
+      !isValidCustomChannelName(channelName)
+    ) {
+      return null;
+    }
+    return {
+      workspaceSlug: parts[1],
+      ownerPath: `workspaces/${parts[1]}`,
+      channelName,
+      lane: "workspace",
+    };
+  }
+  if (
+    parts.length === 6 &&
+    parts[2] === "projects" &&
+    isValidProjectId(parts[3]) &&
+    parts[4] === "channels" &&
+    (parts[5] === "general" || isValidCustomChannelName(parts[5]))
+  ) {
+    return {
+      workspaceSlug: parts[1],
+      ownerPath: `workspaces/${parts[1]}/projects/${parts[3]}`,
+      channelName: parts[5],
+      lane: "project",
+    };
+  }
+  return null;
+}
+
+function ordinaryChannelKind(binding: BoundChannelPath): string | null {
+  if (binding.lane === "project") return binding.channelName === "general" ? "general" : null;
+  if (binding.channelName === "general") return "general";
+  if (binding.channelName === "coach-dm") return "coach-dm";
+  if (binding.channelName === "admin") return "admin";
+  return null;
+}
+
 // Workspace username for ANY of the customer's agents — coach or project
 // agent (approvals and run-live writes authorize by assigned slug).
 function usernameFromAgentId(agentId: string): string | null {
@@ -158,8 +218,8 @@ function forbidden(res: Response): void {
 }
 
 async function resolveUidBySlug(db: Firestore, slug: string): Promise<string | null> {
-  const snap = await db.collection("users").where("username", "==", slug).get();
-  return snap.docs[0]?.id ?? null;
+  const snap = await db.collection("users").where("username", "==", slug).limit(2).get();
+  return snap.docs.length === 1 ? snap.docs[0].id : null;
 }
 
 interface CoachSecret {
@@ -260,13 +320,15 @@ async function resolveChannelPair(
   const snap = await db
     .collectionGroup("channels")
     .where("mattermost.channelId", "==", primaryChannelId)
+    .limit(2)
     .get();
+  if (snap.docs.length > 1) return "forbidden";
   const doc = snap.docs[0];
   if (!doc) return null;
   const channelDocPath = extractRefPath((doc as { ref?: unknown }).ref);
-  const slug = workspaceSlugFromChannelPath(channelDocPath);
-  if (!slug) return null;
-  if (!(await assignedHere(db, gatewayId, slug))) return "forbidden";
+  const binding = boundChannelPath(channelDocPath);
+  if (!binding) return null;
+  if (!(await assignedHere(db, gatewayId, binding.workspaceSlug))) return "forbidden";
   const data = doc.data() ?? {};
   const activityChannelId = readPath(data, "mattermost.activityChannelId");
   if (typeof activityChannelId !== "string" || !activityChannelId) return null;
@@ -301,21 +363,31 @@ async function resolveChannelOwnerUid(
   gatewayId: string,
   channelId: string,
 ): Promise<string | null | "forbidden"> {
+  const docs = new Map<string, { data(): Record<string, unknown> | undefined; ref?: unknown }>();
   for (const field of ["mattermost.channelId", "mattermost.activityChannelId"]) {
-    const snap = await db.collectionGroup("channels").where(field, "==", channelId).get();
-    const doc = snap.docs[0];
-    if (!doc) continue;
-    const channelPath = extractRefPath((doc as { ref?: unknown }).ref);
-    const slug = workspaceSlugFromChannelPath(channelPath);
-    if (!slug) return null;
-    if (!(await assignedHere(db, gatewayId, slug))) return "forbidden";
-    const ownerPath = channelPath?.slice(0, channelPath.lastIndexOf("/channels/"));
-    if (!ownerPath) return null;
-    const ownerSnap = await db.doc(ownerPath).get();
-    const ownerUid = ownerSnap.data()?.ownerUid;
-    return typeof ownerUid === "string" && ownerUid ? ownerUid : null;
+    const snap = await db.collectionGroup("channels").where(field, "==", channelId).limit(2).get();
+    for (const doc of snap.docs) {
+      const path = extractRefPath((doc as { ref?: unknown }).ref);
+      if (!path) return "forbidden";
+      docs.set(path, doc as unknown as { data(): Record<string, unknown> | undefined; ref?: unknown });
+    }
   }
-  return null;
+  if (docs.size === 0) return null;
+  if (docs.size !== 1) return "forbidden";
+  const [channelPath, doc] = [...docs.entries()][0];
+  const binding = boundChannelPath(channelPath);
+  if (!binding) return "forbidden";
+  if (!(await assignedHere(db, gatewayId, binding.workspaceSlug))) return "forbidden";
+  const data = doc.data() ?? {};
+  if (data.kind === "session") {
+    if (ordinaryChannelKind(binding) !== null) return "forbidden";
+    const createdBy = data.createdBy;
+    return typeof createdBy === "string" && createdBy ? createdBy : null;
+  }
+  if (data.kind !== ordinaryChannelKind(binding)) return "forbidden";
+  const ownerSnap = await db.doc(binding.ownerPath).get();
+  const ownerUid = ownerSnap.data()?.ownerUid;
+  return typeof ownerUid === "string" && ownerUid ? ownerUid : null;
 }
 
 async function resolveUidByMmUser(
@@ -324,7 +396,8 @@ async function resolveUidByMmUser(
   mmUserId: string,
 ): Promise<string | null | "forbidden"> {
   if (!mmUserId) return null;
-  const snap = await db.collection("users").where("mattermost.userId", "==", mmUserId).get();
+  const snap = await db.collection("users").where("mattermost.userId", "==", mmUserId).limit(2).get();
+  if (snap.docs.length > 1) return "forbidden";
   const doc = snap.docs[0];
   if (!doc) return null;
   const uid = doc.id;
@@ -337,9 +410,10 @@ async function resolveUidByMmUser(
 async function resolveControlActorUid(
   db: Firestore,
   mmUserId: string,
-): Promise<string | null> {
+): Promise<string | null | "forbidden"> {
   if (!mmUserId) return null;
-  const snap = await db.collection("users").where("mattermost.userId", "==", mmUserId).get();
+  const snap = await db.collection("users").where("mattermost.userId", "==", mmUserId).limit(2).get();
+  if (snap.docs.length > 1) return "forbidden";
   return snap.docs[0]?.id ?? null;
 }
 
@@ -371,7 +445,7 @@ async function resolveControlActorFacts(
   isSystemAdmin: boolean;
 } | null> {
   const actorUid = await resolveControlActorUid(db, actorMmUserId);
-  if (!actorUid) return null;
+  if (!actorUid || actorUid === "forbidden") return null;
   const [ownerUid, systemConfig, mattermostFacts] = await Promise.all([
     resolveChannelOwnerUid(db, gatewayId, record.primaryChannelId),
     db.doc(`users/${actorUid}/system/config`).get(),
