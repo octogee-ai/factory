@@ -898,6 +898,7 @@ export interface ProductionActivityIntakeOptions extends ActivityIntakeHttpOptio
   mmClientFor(token: string): ActivityMattermostClient;
   leaseOwner: string;
   alerts?: Parameters<typeof createActivitySink>[0]['alerts'];
+  controls?: Parameters<typeof createActivitySink>[0]['controls'];
   log?: ActivityIntakeDeps['log'];
 }
 
@@ -912,6 +913,7 @@ export function createProductionActivityIntakeHandler(
         receipts: new FirestoreActivityWriteReceiptStore(options.db, binding.channelDocPath),
         leaseOwner: options.leaseOwner,
         alerts: options.alerts,
+        controls: options.controls,
       }),
       log: options.log,
     },

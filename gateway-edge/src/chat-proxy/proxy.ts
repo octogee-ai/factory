@@ -1,4 +1,5 @@
 import http from "node:http";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
@@ -62,8 +63,17 @@ import {
   createProductionActivityIntakeHandler,
   MutableActivityRuntimeRegistry,
 } from "./openclaw/activity-intake.js";
-import type { ActivityReceiptFirestoreLike } from "./openclaw/activity-write-receipts.js";
+import {
+  FirestoreActivityWriteReceiptStore,
+  type ActivityReceiptFirestoreLike,
+} from "./openclaw/activity-write-receipts.js";
 import { createActivityMmClientFactory } from "./openclaw/mm-client.js";
+import { createReceiptBackedRetryMarker } from "./openclaw/agent-control-retry-marker.js";
+import {
+  createMattermostSigningKeySource,
+  createMattermostTriggerVerifier,
+} from "./openclaw/mattermost-trigger.js";
+import type { ActivitySinkControlLifecycle } from "./openclaw/activity-sink.js";
 import { ACTIVITY_INTAKE_PATH } from "./http-paths.js";
 import { createMattermostInteractionProxyHandler } from "./openclaw/mattermost-interaction-proxy.js";
 export { chatProxyOwnsHttpPath } from "./http-paths.js";
@@ -1171,7 +1181,7 @@ function wireCoachEventListeners(
   });
 }
 
-function installProductionActivityIntake(): void {
+function installProductionActivityIntake(controls: ActivitySinkControlLifecycle): void {
   if (
     process.env.MATTERMOST_SILENT_CAPABILITY_SENTINEL !==
     MATTERMOST_SILENT_CAPABILITY_SENTINEL
@@ -1193,6 +1203,7 @@ function installProductionActivityIntake(): void {
         if (reason === "activity-root-missing") activityOrphanTotal.inc();
       },
     },
+    controls,
     log: (event, meta) => logger.info(`[${event}]`, meta),
   }));
 }
@@ -1204,18 +1215,22 @@ export async function startChatProxyBackground(): Promise<void> {
     const gatewayIdResult = resolveBridgeGatewayId(process.env);
     const reconcileGatewayId = gatewayIdResult.ok ? gatewayIdResult.gatewayId : null;
     const getMountedCustomers = buildMountedCustomersReader(reconcileGatewayId);
-    if (gatewayIdResult.ok) {
-      const routerKey = process.env.AGENT_CONTROL_ROUTER_KEY ?? "";
-      if (!routerKey) {
-        console.error("[chat-proxy] FATAL: AGENT_CONTROL_ROUTER_KEY is required");
-        process.exit(1);
-      }
-      mattermostInteractionProxyHandler = createMattermostInteractionProxyHandler({
-        gatewayId: gatewayIdResult.gatewayId,
-        routerKey,
-        log: (message, meta) => logger.error(message, meta),
-      });
+    if (!gatewayIdResult.ok) {
+      console.error(
+        `[chat-proxy] activity bridge boot aborted — ${gatewayIdResult.reason}. ` +
+        'Set GATEWAY_ID env var on the chat-proxy sidecar (helm chart values.env.gatewayId). ' +
+        'See docs/ACTIVITY-STREAM-SPEC.md Appendix A.1.',
+      );
+      bridgeBootStatus.set('gateway-id-missing');
+      return;
     }
+    const gatewayId = gatewayIdResult.gatewayId;
+    const routerKey = process.env.AGENT_CONTROL_ROUTER_KEY ?? "";
+    mattermostInteractionProxyHandler = createMattermostInteractionProxyHandler({
+      gatewayId,
+      routerKey,
+      log: (message, meta) => logger.error(message, meta),
+    });
     const { wireActivityBridge, connectBridgeUpstream, createResyncFloor } = await import('./openclaw/bridge-boot.js');
     let runtimeBroker: OpenClawRuntimeBroker;
     try {
@@ -1226,13 +1241,28 @@ export async function startChatProxyBackground(): Promise<void> {
       process.exit(1);
     }
     console.log('[chat-proxy] OpenClaw runtime Firestore broker enabled');
-    installProductionActivityIntake();
     // One forced-reconnect cooldown floor for the bridge's whole life: it must outlive
     // any single WS so SEQ_GAP_COOLDOWN_MS actually spaces the reconnects it triggers
     // (a forced close resets the per-connection window, but not this).
     const resyncFloor = createResyncFloor();
     let wired: Awaited<ReturnType<typeof wireActivityBridge>>;
     try {
+      const namespace = process.env.K8S_NAMESPACE || 'octogee';
+      const controlKey = process.env.OCTOGEE_AGENT_CONTROL_SIGNING_SECRET ?? '';
+      const activityMmClientFor = createActivityMmClientFactory({ baseUrl: MM_INTERNAL_URL });
+      const receiptDb = db as unknown as ActivityReceiptFirestoreLike;
+      const receiptsFor = (binding: { channelDocPath: string }) =>
+        new FirestoreActivityWriteReceiptStore(receiptDb, binding.channelDocPath);
+      const resolveCoachToken = async (agentId: string): Promise<string | null> =>
+        (await runtimeBroker.resolveAgentIdentity(agentId))?.coachToken ?? null;
+      const leaseOwner = `${process.env.HOSTNAME ?? 'gateway-edge'}:${process.pid}`;
+      const retryMarker = createReceiptBackedRetryMarker({
+        runtimeRegistry: activityRuntimeRegistry,
+        receiptsFor,
+        resolveCoachToken,
+        mmClientFor: activityMmClientFor,
+        leaseOwner,
+      });
       wired = wireActivityBridge({
         db: db as unknown as Parameters<typeof wireActivityBridge>[0]['db'],
         runtimeBroker,
@@ -1245,22 +1275,38 @@ export async function startChatProxyBackground(): Promise<void> {
         debugLog: (msg, meta) => logger.debug(msg, meta),
         editDiffFetcher: await buildEditDiffFetcher(),
         getMountedCustomers,
+        agentControl: {
+          gatewayId,
+          namespace,
+          registry: runtimeBroker.agentControlRegistry,
+          runtimeRegistry: activityRuntimeRegistry,
+          receiptsFor,
+          mmClientFor: activityMmClientFor,
+          resolveCoachToken,
+          triggerVerifier: createMattermostTriggerVerifier({
+            source: createMattermostSigningKeySource({ baseUrl: MM_INTERNAL_URL }),
+          }),
+          controlKey,
+          routerKey,
+          leaseOwnerId: () => leaseOwner,
+          claimToken: randomUUID,
+          leaseOwner,
+          createRetryMarker: retryMarker,
+          log: (message, meta) => logger.error(message, meta),
+        },
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[chat-proxy] FATAL: activity bridge wire failed: ${msg}`);
       process.exit(1);
     }
-    if (!gatewayIdResult.ok) {
-      console.error(
-        `[chat-proxy] activity bridge boot aborted — ${gatewayIdResult.reason}. ` +
-        'Set GATEWAY_ID env var on the chat-proxy sidecar (helm chart values.env.gatewayId). ' +
-        'See docs/ACTIVITY-STREAM-SPEC.md Appendix A.1.',
-      );
-      bridgeBootStatus.set('gateway-id-missing');
-      return;
+    if (!wired.agentControlCallbackHandler || !wired.activityControls) {
+      await wired.stop();
+      console.error('[chat-proxy] FATAL: agent control substrate was not installed');
+      process.exit(1);
     }
-    const gatewayId = gatewayIdResult.gatewayId;
+    installAgentControlCallbackHandler(wired.agentControlCallbackHandler);
+    installProductionActivityIntake(wired.activityControls);
 
     const mmWsUrl = MM_PUBLIC_URL.replace(/^http/, 'ws') + '/api/v4/websocket';
     const { startMmCoachEventListeners } = await import('./openclaw/mm-event-listener.js');
