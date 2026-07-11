@@ -22,7 +22,7 @@ import {
   persistWorkspaceChannelsWithActivityPairs,
   provisionWorkspaceActivityPair,
 } from "./mattermost/provisionWorkspaceActivityPairs.js";
-import { mmApiCall as mmApiCallDefault } from "./mattermost/client.js";
+import { mmApiCallStrict as mmApiCallDefault } from "./mattermost/client.js";
 import {
   log, OPENCLAW_DIR, CUSTOMERS_DIR,
   agentExists,

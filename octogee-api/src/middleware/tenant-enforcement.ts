@@ -21,6 +21,7 @@ const PLATFORM_INTERNAL_ROUTES = new Set([
   "/internal/billing/check-trial-expiry",
   "/internal/billing/run-auto-top-ups",
   "/internal/notifications/digest",
+  "/internal/activity-pairs/report",
 ]);
 
 const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
