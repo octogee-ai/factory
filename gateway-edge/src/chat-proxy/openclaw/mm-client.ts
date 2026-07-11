@@ -149,6 +149,7 @@ export function createActivityMmClientFactory(
         channel_id: input.channelId,
         ...(input.rootId ? { root_id: input.rootId } : {}),
         message: input.message,
+        ...(input.pendingPostId ? { pending_post_id: input.pendingPostId } : {}),
         ...(input.props ? { props: input.props } : {}),
       };
       const res = await fetchAs(token, "/posts", {
