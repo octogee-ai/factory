@@ -59,10 +59,7 @@ import {
 } from "./openclaw/runtime-broker.js";
 import type { ActivityBridgeHandle } from "./openclaw/activity-bridge.js";
 import type { MmCoachEventListenerManager } from "./openclaw/mm-event-listener.js";
-import {
-  createProductionActivityIntakeHandler,
-  MutableActivityRuntimeRegistry,
-} from "./openclaw/activity-intake.js";
+import { createProductionActivityIntakeHandler } from "./openclaw/activity-intake.js";
 import {
   FirestoreActivityWriteReceiptStore,
   type ActivityReceiptFirestoreLike,
@@ -80,6 +77,14 @@ import {
   resolveActivityBridgeMode,
   resolveActivityBridgeSelection,
 } from "./openclaw/activity-bridge-selection.js";
+import {
+  CandidateActivityRuntimeRegistry,
+  readMattermostChannelCreateAt,
+  replaceCandidateRuntimeSnapshot,
+  resolveCandidateActivityBinding,
+} from "./openclaw/candidate-activity-runtime.js";
+import { createCandidateConversationRuntime } from "./openclaw/candidate-conversation-runtime.js";
+import { createAgentControlBridgeRuntime } from "./openclaw/agent-control-bridge-runtime.js";
 export { chatProxyOwnsHttpPath } from "./http-paths.js";
 
 if (process.env.NODE_ENV !== "test") {
@@ -225,7 +230,7 @@ const activityAttachmentUnknownTotal = new Counter({
   registers: [metricsRegistry],
 });
 
-export const activityRuntimeRegistry = new MutableActivityRuntimeRegistry();
+export const activityRuntimeRegistry = new CandidateActivityRuntimeRegistry();
 export const MATTERMOST_SILENT_CAPABILITY_SENTINEL = "octogee:mattermost-silent-post:v1";
 
 export function recordActivityMissingFinal(): void {
@@ -1227,12 +1232,71 @@ async function startRunLiveProjectionBackground(
   }
   const { createRunLiveBridge } = await import('./openclaw/run-live-bridge.js');
   const { connectRunLiveBridgeUpstream } = await import('./openclaw/run-live-bridge-boot.js');
+  const activityMmClientFor = createActivityMmClientFactory({ baseUrl: MM_INTERNAL_URL });
+  const receiptDb = db as unknown as ActivityReceiptFirestoreLike;
+  const receiptsFor = (binding: { channelDocPath: string }) =>
+    new FirestoreActivityWriteReceiptStore(receiptDb, binding.channelDocPath);
+  const resolveCoachToken = async (agentId: string): Promise<string | null> =>
+    (await runtimeBroker.resolveAgentIdentity(agentId))?.coachToken ?? null;
+  const leaseOwner = `${process.env.HOSTNAME ?? 'gateway-edge'}:${process.pid}`;
+  const bindingDeps = {
+    resolveAgentIdentity: (agentId: string) => runtimeBroker.resolveAgentIdentity(agentId),
+    readActivityChannelCreateAt: (channelId: string, token: string) =>
+      readMattermostChannelCreateAt({
+        baseUrl: MM_INTERNAL_URL,
+        channelId,
+        token,
+      }),
+  };
+  activityRuntimeRegistry.configureResolver((run) =>
+    resolveCandidateActivityBinding(run, bindingDeps),
+  );
+  const retryMarker = createReceiptBackedRetryMarker({
+    runtimeRegistry: activityRuntimeRegistry,
+    receiptsFor,
+    resolveCoachToken,
+    mmClientFor: activityMmClientFor,
+    leaseOwner,
+  });
+  const gatewayId = gatewayIdResult.gatewayId;
+  const namespace = process.env.K8S_NAMESPACE || 'octogee';
+  const controlKey = process.env.OCTOGEE_AGENT_CONTROL_SIGNING_SECRET ?? '';
+  const routerKey = process.env.AGENT_CONTROL_ROUTER_KEY ?? '';
+  const candidate = createCandidateConversationRuntime({
+    registry: activityRuntimeRegistry,
+    createControls: ({ getRpc, runtimeRegistry }) =>
+      createAgentControlBridgeRuntime({
+        gatewayId,
+        namespace,
+        registry: runtimeBroker.agentControlRegistry,
+        getRpc,
+        runtimeRegistry,
+        receiptsFor,
+        mmClientFor: activityMmClientFor,
+        resolveCoachToken,
+        triggerVerifier: createMattermostTriggerVerifier({
+          source: createMattermostSigningKeySource({ baseUrl: MM_INTERNAL_URL }),
+        }),
+        controlKey,
+        routerKey,
+        leaseOwnerId: () => leaseOwner,
+        claimToken: randomUUID,
+        leaseOwner,
+        createRetryMarker: retryMarker,
+        log: (message, meta) => logger.error(message, meta),
+      }),
+    replaceRuntimeSnapshot: (snapshot) =>
+      replaceCandidateRuntimeSnapshot(activityRuntimeRegistry, snapshot, bindingDeps),
+  });
+  installAgentControlCallbackHandler(candidate.controls.callbackHandler);
+  installProductionActivityIntake(candidate.controls.w2Controls);
   const liveBridge = createRunLiveBridge({
     resolveChannelPair: (conversationId) => runtimeBroker.resolveChannelPair(conversationId),
     writeLiveDoc: (path, doc) => runtimeBroker.writeRunLiveDoc(path, doc),
     deleteLiveDoc: (path) => runtimeBroker.deleteRunLiveDoc(path),
+    beginRuntimeSynchronization: candidate.beginRuntimeSynchronization,
+    replaceRuntimeSnapshot: candidate.replaceRuntimeSnapshot,
   });
-  const gatewayId = gatewayIdResult.gatewayId;
   const healthUrl = gatewayHealthUrl();
   startBridgeUpstreamReconnectLoop({
     probeReady: () => probeGatewayReady(healthUrl),
@@ -1263,7 +1327,13 @@ async function startRunLiveProjectionBackground(
         bridgeBootStatus.set(BRIDGE_UNSYNCHRONIZED);
         onClose?.();
       });
-      await connectRunLiveBridgeUpstream(liveBridge, { ws, log: bridgeLog });
+      await connectRunLiveBridgeUpstream(liveBridge, {
+        ws,
+        log: bridgeLog,
+        onRpcConnected: candidate.onRpcConnected,
+        onRpcDisconnected: candidate.onRpcDisconnected,
+        observeUpstreamFrame: candidate.observeUpstreamFrame,
+      });
       return {
         onClose(handler: () => void) {
           if (closed) handler();
@@ -1314,7 +1384,16 @@ export async function startChatProxyBackground(): Promise<void> {
     }
     console.log('[chat-proxy] OpenClaw runtime Firestore broker enabled');
     if (bridgeSelection.startRunLiveBridge) {
-      await startRunLiveProjectionBackground(gatewayIdResult, runtimeBroker);
+      try {
+        await startRunLiveProjectionBackground(gatewayIdResult, runtimeBroker);
+      } catch (error) {
+        console.error(
+          `[chat-proxy] FATAL: candidate conversation runtime failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        process.exit(1);
+      }
       return;
     }
     const { wireActivityBridge, connectBridgeUpstream, createResyncFloor } = await import('./openclaw/bridge-boot.js');
