@@ -45,6 +45,45 @@ export function platformOpenAiEmbeddingsEnabled(
   return /^(1|true|yes|on)$/iu.test(env.OPENAI_EMBEDDINGS_ENABLED ?? "");
 }
 
+const PLATFORM_EMBEDDING_SECRET_PREFIX = "platform-openai-embedding-";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+// A platform embedding SecretRef is DERIVED from its agent id, never carried:
+// OpenClaw's config.get→patch round-trip can shift redacted array entries, so a
+// full agents.list rebuilt from `current` may hand one coach another coach's
+// ref (the r2 unmount wedge). Every full-list write runs through this rebind so
+// a corrupted ref self-heals instead of round-tripping. BYO refs (non-platform
+// ids) pass through untouched.
+export function rebindPlatformEmbeddingRefs(agents: readonly unknown[]): unknown[] {
+  return agents.map((entry) => {
+    if (!isRecord(entry) || typeof entry.id !== "string" || entry.id.length === 0) return entry;
+    const memorySearch = entry.memorySearch;
+    if (!isRecord(memorySearch)) return entry;
+    const remote = memorySearch.remote;
+    if (!isRecord(remote)) return entry;
+    const apiKey = remote.apiKey;
+    if (
+      !isRecord(apiKey) ||
+      typeof apiKey.id !== "string" ||
+      !apiKey.id.startsWith(PLATFORM_EMBEDDING_SECRET_PREFIX)
+    ) {
+      return entry;
+    }
+    const expected = platformOpenAiEmbeddingSecretId(entry.id);
+    if (apiKey.id === expected) return entry;
+    return {
+      ...entry,
+      memorySearch: {
+        ...memorySearch,
+        remote: { ...remote, apiKey: { ...apiKey, id: expected } },
+      },
+    };
+  });
+}
+
 export interface ProjectRestoreInput {
   customerSlug: string;
   projectSlug: string;

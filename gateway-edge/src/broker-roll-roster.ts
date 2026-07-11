@@ -104,16 +104,22 @@ export async function readBrokerRollRoster(opts: BrokerRollRosterOptions): Promi
   }
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | null = null;
+  const deadlineError = new Error(
+    `fleet broker assignment roster request timed out after ${requestTimeoutMs}ms`,
+  );
   const deadline = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
-      reject(new Error(`fleet broker assignment roster request timed out after ${requestTimeoutMs}ms`));
+      reject(deadlineError);
       controller.abort();
     }, requestTimeoutMs);
     if (typeof timer.unref === "function") timer.unref();
   });
-  let response: Response;
+  // The deadline must survive until the BODY is parsed, not just the headers: a
+  // read that black-holes mid-body would otherwise neither resolve nor error,
+  // leaving the last roster authoritative forever (no-double-serve hazard).
+  let body: unknown;
   try {
-    response = await Promise.race([
+    const response = await Promise.race([
       fetcher(`${brokerUrl}/internal/fleet/assignment-roster`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -122,17 +128,17 @@ export async function readBrokerRollRoster(opts: BrokerRollRosterOptions): Promi
       }),
       deadline,
     ]);
+    if (!response.ok) {
+      throw new Error(`fleet broker assignment roster returned ${response.status}`);
+    }
+    try {
+      body = await Promise.race([response.json(), deadline]);
+    } catch (error) {
+      if (error === deadlineError) throw error;
+      throw malformedRoster();
+    }
   } finally {
     if (timer) clearTimeout(timer);
-  }
-  if (!response.ok) {
-    throw new Error(`fleet broker assignment roster returned ${response.status}`);
-  }
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    throw malformedRoster();
   }
   return rosterDocs(body, opts.gatewayId);
 }

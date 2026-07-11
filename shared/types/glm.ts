@@ -301,6 +301,7 @@ export type OperationKind =
   | "add-gateway"
   | "migrate-customer"
   | "retire-gateway"
+  | "retire-revision"
   | "restart-gateway"
   | "recycle-gateway"
   | "rollout"

@@ -43,7 +43,10 @@ import {
   releasePayloadHash,
   releaseMacOpsTokenProtocol,
   isGatewayDesiredDoc,
+  isGatewayLegacyBackfill,
   isRevisionRealizationDoc,
+  revisionIdForRelease,
+  rootReferencedRevisionIds,
   type AssignmentDoc,
   type AssignmentState,
   type GatewayDoc,
@@ -1387,6 +1390,8 @@ function rollupFleetStats(
 }
 
 const ERR_GATEWAY_NOT_FOUND = "gateway not found";
+const ERR_GATEWAY_OPERATION_IN_FLIGHT =
+  "another operation is already pending or running for this gateway";
 const ERR_OWNER_USER_NOT_FOUND = "owner user not found";
 const OP_KIND_MIGRATE_CUSTOMER = "migrate-customer";
 const GATEWAY_IMAGE_REPO_PREFIX =
@@ -1445,6 +1450,7 @@ interface NewOperationInput {
     | "add-gateway"
     | typeof OP_KIND_MIGRATE_CUSTOMER
     | "retire-gateway"
+    | "retire-revision"
     | "restart-gateway"
     | "rollout"
     | "deprovision-customer";
@@ -3117,7 +3123,7 @@ async function resolveRollbackRelease(args: {
       error: {
         status: 409,
         body: {
-          error: "another operation is already pending or running for this gateway",
+          error: ERR_GATEWAY_OPERATION_IN_FLIGHT,
           gatewayId: args.gatewayId,
           operationId: conflicting.id,
           kind: conflicting.kind,
@@ -4797,8 +4803,7 @@ router.post(
         });
         if (conflicting) {
           res.status(409).json({
-            error:
-              "another operation is already pending or running for this gateway",
+            error: ERR_GATEWAY_OPERATION_IN_FLIGHT,
             gatewayId: id,
             operationId: conflicting.id,
             kind:
@@ -4815,6 +4820,190 @@ router.post(
           input: { gatewayId: id },
         });
         res.status(202).json({ gatewayId: id, operationId });
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+  // Recovery visibility: every assignment pointing at a revision the durable
+  // root no longer references (live/traffic/roll/desired). Such customers can
+  // never be settled by a roll — they are reset to pending placement via
+  // /customers/:uid/unassign, which recognizes the same stranded condition.
+  router.get(
+    "/gateways/:id/stranded-assignments",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const id = req.params.id as string;
+        const gateway = await readGatewayDoc(db, id);
+        if (!gateway) {
+          res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
+          return;
+        }
+        const referenced = rootReferencedRevisionIds(gateway);
+        const snap = await db
+          .collection(GATEWAYS_COLLECTION)
+          .doc(id)
+          .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
+          .get();
+        const stranded: Array<{
+          uid: string;
+          slug: string;
+          revisionId: string;
+          state: AssignmentState;
+          epoch: number;
+        }> = [];
+        const malformed: string[] = [];
+        for (const doc of snap.docs) {
+          const assignment = parseAssignmentDoc(
+            doc.id,
+            doc.data() as Record<string, unknown> | undefined,
+          );
+          if (!assignment || assignment.gatewayId !== id) {
+            malformed.push(doc.id);
+            continue;
+          }
+          if (referenced.has(assignment.revisionId)) continue;
+          stranded.push({
+            uid: assignment.uid,
+            slug: assignment.slug,
+            revisionId: assignment.revisionId,
+            state: assignment.state,
+            epoch: assignment.epoch,
+          });
+        }
+        res.json({ gatewayId: id, stranded, malformed });
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+  // Recovery-only, revision-scoped retire of a TRUE ORPHAN (r4 class): a
+  // revision the durable root no longer references with zero assignments and
+  // zero mounts. Enqueues a retire-revision op; Cowboy's handler re-validates
+  // every guard at claim time and performs the helm uninstall + tombstone +
+  // revision-doc retire. Never touches the gateway root or other revisions.
+  router.post(
+    "/gateways/:id/revisions/:revisionId/retire",
+    // eslint-disable-next-line complexity -- linear guard ladder; each refusal returns its own operator-facing response.
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const id = req.params.id as string;
+        const revisionId = req.params.revisionId as string;
+        const releaseSuffix = revisionId.startsWith(`${id}-r`)
+          ? revisionId.slice(id.length + 2)
+          : "";
+        if (!/^[1-9]\d*$/u.test(releaseSuffix)) {
+          res.status(400).json({
+            error: "revisionId is not a revision of this gateway",
+            gatewayId: id,
+            revisionId,
+          });
+          return;
+        }
+        const gateway = await readGatewayDoc(db, id);
+        if (!gateway) {
+          res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
+          return;
+        }
+        if (isGatewayLegacyBackfill(gateway.legacyBackfill)) {
+          res.status(409).json({
+            error: "legacy backfill bridge is active — resolve it before revision recovery",
+            gatewayId: id,
+          });
+          return;
+        }
+        if (rootReferencedRevisionIds(gateway).has(revisionId)) {
+          res.status(409).json({
+            error: "revision is referenced by the durable root (live/traffic/roll/desired)",
+            gatewayId: id,
+            revisionId,
+          });
+          return;
+        }
+        const revisionSnap = await db
+          .collection(GLM_GATEWAYS_COLLECTION)
+          .doc(revisionId)
+          .get();
+        const revisionData = revisionSnap.exists ? revisionSnap.data() : undefined;
+        if (
+          !isRevisionRealizationDoc(revisionData) ||
+          revisionData.gateway !== id ||
+          revisionData.revisionId !== revisionId ||
+          revisionId !== revisionIdForRelease(id, revisionData.release)
+        ) {
+          res.status(404).json({
+            error: "revision not found for this gateway",
+            gatewayId: id,
+            revisionId,
+          });
+          return;
+        }
+        if (revisionData.lifecycle === "retired") {
+          res.status(409).json({
+            error: "revision is already retired",
+            gatewayId: id,
+            revisionId,
+          });
+          return;
+        }
+        const mounted = [
+          ...readMountedSlugs(
+            isPlainRecord(revisionData.heartbeat) ? revisionData.heartbeat : undefined,
+          ),
+        ];
+        if (mounted.length > 0) {
+          res.status(409).json({
+            error: "revision still reports mounted customers",
+            gatewayId: id,
+            revisionId,
+            mounted,
+          });
+          return;
+        }
+        const assignments = await readAssignmentDocsForGateway(db, id);
+        const uids = assignments
+          .filter((assignment) => assignment.revisionId === revisionId)
+          .map((assignment) => assignment.uid);
+        if (uids.length > 0) {
+          res.status(409).json({
+            error:
+              "assignments still reference this revision — reset them to pending placement (or migrate them) first",
+            gatewayId: id,
+            revisionId,
+            uids,
+          });
+          return;
+        }
+        const pendingOps = await db
+          .collection(GLM_OPERATIONS_COLLECTION)
+          .where("status", "in", ["pending", "running"])
+          .get();
+        const conflicting = pendingOps.docs.find((d) => {
+          const opData = d.data() as
+            | { input?: { gatewayId?: string } }
+            | undefined;
+          return opData?.input?.gatewayId === id;
+        });
+        if (conflicting) {
+          res.status(409).json({
+            error: ERR_GATEWAY_OPERATION_IN_FLIGHT,
+            gatewayId: id,
+            operationId: conflicting.id,
+            kind:
+              (conflicting.data() as { kind?: string } | undefined)?.kind ??
+              null,
+          });
+          return;
+        }
+        const actor = req as ActorRequest;
+        const operationId = await createOperation(db, {
+          kind: "retire-revision",
+          createdBy: actor.uid ?? "unknown",
+          input: { gatewayId: id, revisionId },
+        });
+        res.status(202).json({ gatewayId: id, revisionId, operationId });
       } catch (e) {
         next(e);
       }
@@ -4894,8 +5083,7 @@ router.post(
         });
         if (conflicting) {
           res.status(409).json({
-            error:
-              "another operation is already pending or running for this gateway",
+            error: ERR_GATEWAY_OPERATION_IN_FLIGHT,
             gatewayId: id,
             operationId: conflicting.id,
             kind:
@@ -5032,7 +5220,7 @@ router.post(
         const conflicting = await findConflictingGatewayOp(db, id);
         if (conflicting) {
           res.status(409).json({
-            error: "another operation is already pending or running for this gateway",
+            error: ERR_GATEWAY_OPERATION_IN_FLIGHT,
             gatewayId: id,
             operationId: conflicting.id,
             kind: conflicting.kind,
@@ -5285,15 +5473,30 @@ router.get(
             uid,
             assignmentSnap.exists ? assignmentSnap.data() : undefined,
           );
+          let stranded: { revisionId: string; state: AssignmentState } | null = null;
           if (assignment && assignment.state !== "serving") {
-            return {
-              status: 409,
-              body: {
-                error: `customer is mid-migration (roster state ${assignment.state}) — cannot unassign until the roll settles`,
-                uid,
-                state: assignment.state,
-              },
-            };
+            // A non-serving assignment normally means a roll is settling this
+            // customer. But when its revision is one the durable root no longer
+            // references, no roll can EVER settle it — the customer is STRANDED
+            // (the r5 class) and resetting to pending placement IS the recovery.
+            const rootSnap = await txn.get(
+              db.collection(GATEWAYS_COLLECTION).doc(currentGatewayId),
+            );
+            const root = asDurableGatewayRoot(
+              rootSnap.exists ? rootSnap.data() : undefined,
+              currentGatewayId,
+            );
+            if (!root || rootReferencedRevisionIds(root).has(assignment.revisionId)) {
+              return {
+                status: 409,
+                body: {
+                  error: `customer is mid-migration (roster state ${assignment.state}) — cannot unassign until the roll settles`,
+                  uid,
+                  state: assignment.state,
+                },
+              };
+            }
+            stranded = { revisionId: assignment.revisionId, state: assignment.state };
           }
           // Drop the durable assignment AND the mirror together, so no stale
           // roster entry outlives the placement (a later roll reads assignment
@@ -5308,7 +5511,12 @@ router.get(
           });
           return {
             status: 200,
-            body: { unassigned: true, uid, from: currentGatewayId },
+            body: {
+              unassigned: true,
+              uid,
+              from: currentGatewayId,
+              ...(stranded ? { stranded } : {}),
+            },
             from: currentGatewayId,
           };
         });

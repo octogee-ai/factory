@@ -69,6 +69,7 @@ import {
   buildProjectAgents,
   platformOpenAiEmbeddingMemorySearch,
   platformOpenAiEmbeddingsEnabled,
+  rebindPlatformEmbeddingRefs,
   resolveCoachIdentity,
 } from "./openclaw-config-builders.js";
 import { scheduleBootGreetingCron as scheduleBootGreetingCronImpl } from "./boot-greeting-cron.js";
@@ -124,13 +125,15 @@ function buildRemoveCustomerPatchLocal(
   const currentBindings = Array.isArray(bindings) ? bindings : [];
   return {
     agents: {
-      list: currentAgents.filter(
-        (agent) =>
-          !(
-            agent &&
-            typeof agent === "object" &&
-            (agent as { id?: unknown }).id === agentId
-          ),
+      list: rebindPlatformEmbeddingRefs(
+        currentAgents.filter(
+          (agent) =>
+            !(
+              agent &&
+              typeof agent === "object" &&
+              (agent as { id?: unknown }).id === agentId
+            ),
+        ),
       ),
     },
     bindings: currentBindings.filter(
@@ -304,10 +307,12 @@ async function applyAddCustomerConfigPatch(
         );
         return {
           agents: {
-            list: replaceCustomerAgentsInFullAgentList(current, snapshot.slug, [
-              agentEntry,
-              ...projectAgentEntries,
-            ]),
+            list: rebindPlatformEmbeddingRefs(
+              replaceCustomerAgentsInFullAgentList(current, snapshot.slug, [
+                agentEntry,
+                ...projectAgentEntries,
+              ]),
+            ),
           },
           bindings: [...existingBindings, ...bindings],
           channels: {

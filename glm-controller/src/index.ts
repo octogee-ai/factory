@@ -105,6 +105,7 @@ import { completeOperatorReservationAfterMigration } from "./operator-reservatio
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
+import { createRetireRevisionHandler } from "./handlers/retire-revision.js";
 import { createGatewayServiceAccountTeardown } from "./lib/gateway-gsa.js";
 import { createGatewayWorkloadIdentityEnsurer } from "./lib/gateway-workload-identity.js";
 import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
@@ -3027,6 +3028,77 @@ async function buildHandlers(
     log: logFn,
   });
 
+  const retireRevisionDocByMerge = async (revisionId: string, reason: string): Promise<void> => {
+    await db
+      .collection(GLM_GATEWAYS_COLLECTION)
+      .doc(revisionId)
+      .set(
+        { lifecycle: "retired", retiredAt: Date.now(), retireReason: reason },
+        { merge: true },
+      );
+  };
+  // Only a new-model revision doc carries the release/gateway needed to key a
+  // tombstone; a legacy bare gateway has no /r/<n> addressing, so no-op.
+  const writeRevisionTombstoneFromDoc = async (revisionId: string): Promise<void> => {
+    const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId).get();
+    const data = snap.data();
+    if (!isRevisionRealizationDoc(data)) return;
+    if (
+      data.revisionId !== revisionId ||
+      revisionId !== revisionIdForRelease(data.gateway, data.release)
+    ) {
+      throw new Error(`glmGateways/${revisionId} has an invalid revision identity`);
+    }
+    const gwSnap = await db.collection("gateways").doc(data.gateway).get();
+    const gwData = gwSnap.exists ? gwSnap.data() : undefined;
+    const live = isDurableRootConfigDoc(gwData, data.gateway)
+      ? gwData.liveRevisionId ?? null
+      : null;
+    // Never point a retired revision at itself; a full gateway retire may still
+    // list this revision as live.
+    const currentRevisionId = live === revisionId ? null : live;
+    await revisionTombstoneWriter.writeTombstone({
+      gatewayId: data.gateway,
+      revision: data.release,
+      currentRevisionId,
+    });
+  };
+
+  const retireRevision = createRetireRevisionHandler({
+    readGatewayRoot: async (gatewayId) => {
+      const rootSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+      const root = rootSnap.exists ? rootSnap.data() : undefined;
+      return isDurableRootConfigDoc(root, gatewayId) ? root : null;
+    },
+    readRevisionRealization: async (revisionId) => {
+      const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId).get();
+      const data = snap.exists ? snap.data() : undefined;
+      if (!isRevisionRealizationDoc(data)) return null;
+      return {
+        revisionId: data.revisionId,
+        gateway: data.gateway,
+        release: data.release,
+        lifecycle: data.lifecycle,
+        mountedCustomers: readMountedCustomers(
+          data as unknown as Record<string, unknown>,
+          undefined,
+        ),
+      };
+    },
+    readAssignmentUidsOnRevision: async (gatewayId, revisionId) => {
+      const assignments = await readAssignmentDocsForGateway(db, gatewayId);
+      return assignments.filter((a) => a.revisionId === revisionId).map((a) => a.uid);
+    },
+    helmUninstallRevision: async (revisionId) => {
+      await helm.removeInstance({ namespace: NAMESPACE, gatewayId: revisionId });
+    },
+    revokeRevisionMacOpsTokens: (input) =>
+      revisionMacOpsTokenRevoker.revokeRevisionMacOpsTokens(input),
+    writeRevisionTombstone: writeRevisionTombstoneFromDoc,
+    retireRevisionDoc: retireRevisionDocByMerge,
+    log: logFn,
+  });
+
   const retireGateway = createRetireGatewayHandler({
     readGatewayLiveState: async (gatewayId) => {
       const rootSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
@@ -3087,41 +3159,8 @@ async function buildHandlers(
       revisionMacOpsTokenRevoker.revokeRevisionMacOpsTokens(input),
     revokeGatewayLegacyMacOpsTokens: (input) =>
       revisionMacOpsTokenRevoker.revokeGatewayLegacyMacOpsTokens(input),
-    retireRevisionDoc: async (revisionId, reason) => {
-      await db
-        .collection(GLM_GATEWAYS_COLLECTION)
-        .doc(revisionId)
-        .set(
-          { lifecycle: "retired", retiredAt: Date.now(), retireReason: reason },
-          { merge: true },
-        );
-    },
-    writeRevisionTombstone: async (revisionId) => {
-      // Only a new-model revision doc carries the release/gateway needed to key a
-      // tombstone; a legacy bare gateway has no /r/<n> addressing, so no-op.
-      const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId).get();
-      const data = snap.data();
-      if (!isRevisionRealizationDoc(data)) return;
-      if (
-        data.revisionId !== revisionId ||
-        revisionId !== revisionIdForRelease(data.gateway, data.release)
-      ) {
-        throw new Error(`glmGateways/${revisionId} has an invalid revision identity`);
-      }
-      const gwSnap = await db.collection("gateways").doc(data.gateway).get();
-      const gwData = gwSnap.exists ? gwSnap.data() : undefined;
-      const live = isDurableRootConfigDoc(gwData, data.gateway)
-        ? gwData.liveRevisionId ?? null
-        : null;
-      // Never point a retired revision at itself; a full gateway retire may still
-      // list this revision as live.
-      const currentRevisionId = live === revisionId ? null : live;
-      await revisionTombstoneWriter.writeTombstone({
-        gatewayId: data.gateway,
-        revision: data.release,
-        currentRevisionId,
-      });
-    },
+    retireRevisionDoc: retireRevisionDocByMerge,
+    writeRevisionTombstone: writeRevisionTombstoneFromDoc,
     deleteGlmGateway: async (gatewayId) => {
       await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).delete();
     },
@@ -3253,6 +3292,7 @@ async function buildHandlers(
     "add-gateway": addGateway,
     "migrate-customer": migrateCustomer,
     "retire-gateway": retireGateway,
+    "retire-revision": retireRevision,
     "restart-gateway": restartGateway,
     "recycle-gateway": recycleGateway,
     rollout,

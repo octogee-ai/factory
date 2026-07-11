@@ -10,6 +10,10 @@ import {
   applyConfigPatch,
   customerConfigFullAgentListReplacePaths,
 } from "../lib/apply-config-patch.js";
+import {
+  platformOpenAiEmbeddingMemorySearch,
+  platformOpenAiEmbeddingSecretId,
+} from "../lib/openclaw-config-builders.js";
 import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
 
 const mocks = vi.hoisted(() => ({
@@ -302,6 +306,62 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
       customerConfigFullAgentListReplacePaths(current, "alice"),
     );
   });
+
+  it("self-heals a surviving coach's shifted platform embedding ref on removal — sequential removes leave no stale ref (r2 wedge)", async () => {
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
+    });
+    type RemovePatchArgs = {
+      buildPatch: (current: unknown) => {
+        agents: { list: Array<{ id?: string; memorySearch?: { remote?: { apiKey?: { id?: string } } } }> };
+        bindings: unknown[];
+        channels: { mattermost: { accounts: Record<string, null> } };
+      };
+    };
+
+    await adapter.applyRemoveCustomerConfigPatch("tester5", "octogee-tester5-coach");
+    const first = vi.mocked(applyConfigPatch).mock.calls.at(-1)![0] as RemovePatchArgs;
+    const current = {
+      agents: {
+        list: [
+          { id: "octogee-ops-eggman" },
+          {
+            id: "octogee-tester5-coach",
+            memorySearch: platformOpenAiEmbeddingMemorySearch("octogee-tester5-coach"),
+          },
+          {
+            id: "octogee-livefixture-coach",
+            memorySearch: platformOpenAiEmbeddingMemorySearch("octogee-tester5-coach"),
+          },
+        ],
+      },
+      bindings: [],
+      channels: { mattermost: { accounts: {} } },
+    };
+
+    const afterFirst = first.buildPatch(current);
+    expect(afterFirst.agents.list.map((agent) => agent.id)).toEqual([
+      "octogee-ops-eggman",
+      "octogee-livefixture-coach",
+    ]);
+    expect(
+      afterFirst.agents.list.find((agent) => agent.id === "octogee-livefixture-coach")
+        ?.memorySearch?.remote?.apiKey?.id,
+    ).toBe(platformOpenAiEmbeddingSecretId("octogee-livefixture-coach"));
+    expect(JSON.stringify(afterFirst.agents.list)).not.toContain("tester5");
+
+    await adapter.applyRemoveCustomerConfigPatch("livefixture", "octogee-livefixture-coach");
+    const second = vi.mocked(applyConfigPatch).mock.calls.at(-1)![0] as RemovePatchArgs;
+    const afterSecond = second.buildPatch({
+      agents: { list: afterFirst.agents.list },
+      bindings: [],
+      channels: { mattermost: { accounts: {} } },
+    });
+    expect(afterSecond.agents.list.map((agent) => agent.id)).toEqual(["octogee-ops-eggman"]);
+    expect(JSON.stringify(afterSecond.agents.list)).not.toMatch(/tester5|livefixture/u);
+  });
 });
 
 describe("buildBrokeredLifecycleAdapter add config patch", () => {
@@ -385,6 +445,63 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     });
     expect(args.buildReplacePaths?.(current)).toEqual(
       customerConfigFullAgentListReplacePaths(current, "alice"),
+    );
+  });
+
+  it("rebinds carried-forward coaches' shifted platform embedding refs to their OWN agent ids on mount", async () => {
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
+    });
+    const snapshot: FleetBrokerUserSnapshot = {
+      uid: "uid-alice",
+      slug: "alice",
+      tier: "standard",
+      gatewayId: "default",
+      status: "",
+      agentIds: [],
+      repoUrl: "",
+      mattermostUserId: "mm-alice",
+      customerMmUserId: "mm-alice",
+      greetingPosted: false,
+      channels: [],
+      projects: [],
+      ownerName: "Alice",
+      coachToken: "pat-1",
+      coachMmUserId: "mm-alice-coach",
+    };
+
+    await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" });
+
+    const call = vi.mocked(applyConfigPatch).mock.calls.at(-1)!;
+    const args = call[0] as {
+      buildPatch: (current: unknown) => {
+        agents: { list: Array<{ id?: string; memorySearch?: { remote?: { apiKey?: { id?: string } } } }> };
+      };
+    };
+    const current = {
+      agents: {
+        list: [
+          { id: "octogee-mac-default" },
+          {
+            id: "octogee-bob-coach",
+            memorySearch: platformOpenAiEmbeddingMemorySearch("octogee-tester5-coach"),
+          },
+        ],
+      },
+      bindings: [],
+      channels: { mattermost: { accounts: {} } },
+    };
+
+    const patch = args.buildPatch(current);
+    const bob = patch.agents.list.find((agent) => agent.id === "octogee-bob-coach");
+    expect(bob?.memorySearch?.remote?.apiKey?.id).toBe(
+      platformOpenAiEmbeddingSecretId("octogee-bob-coach"),
+    );
+    const alice = patch.agents.list.find((agent) => agent.id === "octogee-alice-coach");
+    expect(alice?.memorySearch?.remote?.apiKey?.id).toBe(
+      platformOpenAiEmbeddingSecretId("octogee-alice-coach"),
     );
   });
 });

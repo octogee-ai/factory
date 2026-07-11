@@ -95,10 +95,38 @@ describe("broker roll roster", () => {
         revisionId: "default-r2",
         fetcher,
         requestTimeoutMs: 10,
-      } as Parameters<typeof createBrokerRollRosterSubscription>[0] & { requestTimeoutMs: number })(
-        onDocs,
-        onError,
-      );
+      })(onDocs, onError);
+
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(onDocs).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringMatching(/timed out/u) }));
+      expect(fetcher.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+      unsubscribe();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("times out a broker read whose BODY black-holes after headers, instead of retaining the stale roster", async () => {
+    vi.useFakeTimers();
+    try {
+      const onDocs = vi.fn();
+      const onError = vi.fn();
+      const fetcher = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+        if (!init?.signal) throw new Error("broker request must carry an AbortSignal");
+        return new Response(new ReadableStream({ start: () => undefined }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      });
+      const unsubscribe = createBrokerRollRosterSubscription({
+        brokerUrl,
+        gatewayId: "default",
+        revisionId: "default-r2",
+        fetcher,
+        requestTimeoutMs: 10,
+      })(onDocs, onError);
 
       await vi.advanceTimersByTimeAsync(10);
 

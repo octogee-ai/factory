@@ -335,6 +335,24 @@ export function revisionIdForRelease(gatewayId: string, release: number): string
   return `${gatewayId}-r${release}`;
 }
 
+// Every revision the durable root references or intends to realize: live +
+// traffic + the desired release + BOTH endpoints of any recorded roll — a
+// parked failed roll still owns its revisions until an operator resolves it.
+// Recovery primitives (orphan-revision retire, stranded-assignment reset)
+// refuse to touch a referenced revision; this is deliberately WIDER than the
+// renderer's selection, which excludes failed rolls and desired-only releases.
+export function rootReferencedRevisionIds(root: GatewayDoc): ReadonlySet<string> {
+  const ids = new Set<string>();
+  if (root.liveRevisionId) ids.add(root.liveRevisionId);
+  if (root.trafficRevisionId) ids.add(root.trafficRevisionId);
+  ids.add(revisionIdForRelease(root.gatewayId, root.desiredRelease));
+  if (root.roll) {
+    if (root.roll.sourceRevisionId) ids.add(root.roll.sourceRevisionId);
+    ids.add(root.roll.targetRevisionId);
+  }
+  return ids;
+}
+
 export function helmReleaseNameForRevision(revisionId: string): string {
   return `octogee-gw-${revisionId}`;
 }

@@ -20,7 +20,9 @@ import {
   ASSIGNMENT_EPOCH_HEADER,
   INTERNAL_ROUTING_HEADERS,
   commitPlacementAtomic,
+  rootReferencedRevisionIds,
   type AssignmentDoc,
+  type GatewayDoc,
   type GatewayRollState,
   type GatewayIdleSleepState,
   type PlacementDocRef,
@@ -288,6 +290,81 @@ describe("assignment roster state + epoch (PR7 mid-roll routing)", () => {
     };
     expect(doc.state).toBe("serving");
     expect(doc.epoch).toBe(3);
+  });
+});
+
+describe("rootReferencedRevisionIds (recovery guards)", () => {
+  const root = (overrides: Partial<GatewayDoc> = {}): GatewayDoc => ({
+    gatewayId: "default",
+    createdAt: 1,
+    createdBy: "op",
+    updatedAt: 1,
+    updatedBy: "op",
+    latestRelease: 2,
+    desiredRelease: 2,
+    liveRelease: 2,
+    liveRevisionId: "default-r2",
+    trafficRevisionId: "default-r2",
+    desiredStatus: "running",
+    roll: null,
+    ...overrides,
+  });
+  const roll = (overrides: Partial<GatewayRollState> = {}): GatewayRollState => ({
+    operationId: "roll-op",
+    status: "migrating",
+    fromRelease: 2,
+    toRelease: 7,
+    sourceRevisionId: "default-r2",
+    targetRevisionId: "default-r7",
+    acceptingNewAssignments: false,
+    startedAt: 1,
+    updatedAt: 2,
+    error: null,
+    flippedAt: null,
+    ...overrides,
+  });
+
+  it("references live, traffic, and the desired release", () => {
+    const ids = rootReferencedRevisionIds(
+      root({ liveRevisionId: "default-r2", trafficRevisionId: "default-r3", desiredRelease: 8 }),
+    );
+    expect(ids.has("default-r2")).toBe(true);
+    expect(ids.has("default-r3")).toBe(true);
+    expect(ids.has("default-r8")).toBe(true);
+  });
+
+  it("keeps BOTH roll endpoints referenced for any roll status, including a parked failed roll", () => {
+    for (const status of ["warming", "routing", "migrating", "retiring-source", "failed"] as const) {
+      const ids = rootReferencedRevisionIds(root({ roll: roll({ status }) }));
+      expect(ids.has("default-r2")).toBe(true);
+      expect(ids.has("default-r7")).toBe(true);
+    }
+  });
+
+  it("references the first desired revision before any live revision exists", () => {
+    const ids = rootReferencedRevisionIds(
+      root({ liveRelease: null, liveRevisionId: null, trafficRevisionId: null, desiredRelease: 1 }),
+    );
+    expect(ids).toEqual(new Set(["default-r1"]));
+  });
+
+  it("handles a first roll whose source revision is null", () => {
+    const ids = rootReferencedRevisionIds(
+      root({
+        liveRelease: null,
+        liveRevisionId: null,
+        trafficRevisionId: null,
+        desiredRelease: 1,
+        roll: roll({ fromRelease: null, sourceRevisionId: null, toRelease: 1, targetRevisionId: "default-r1" }),
+      }),
+    );
+    expect(ids).toEqual(new Set(["default-r1"]));
+  });
+
+  it("leaves true orphans unreferenced so recovery may retire them", () => {
+    const ids = rootReferencedRevisionIds(root());
+    expect(ids.has("default-r4")).toBe(false);
+    expect(ids.has("default-r5")).toBe(false);
   });
 });
 
