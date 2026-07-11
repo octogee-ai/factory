@@ -76,6 +76,10 @@ import {
 import type { ActivitySinkControlLifecycle } from "./openclaw/activity-sink.js";
 import { ACTIVITY_INTAKE_PATH } from "./http-paths.js";
 import { createMattermostInteractionProxyHandler } from "./openclaw/mattermost-interaction-proxy.js";
+import {
+  resolveActivityBridgeMode,
+  resolveActivityBridgeSelection,
+} from "./openclaw/activity-bridge-selection.js";
 export { chatProxyOwnsHttpPath } from "./http-paths.js";
 
 if (process.env.NODE_ENV !== "test") {
@@ -95,6 +99,7 @@ const bridgeLog = (msg: string): void =>
   console.warn(`${new Date().toISOString()} ${msg}`);
 
 const MM_PUBLIC_URL = MM_INTERNAL_URL;
+const BRIDGE_UNSYNCHRONIZED = 'unsynchronized' as const;
 
 const MM_INTERNAL_WS_URL = MM_INTERNAL_URL.replace(/^http/, "ws") + "/api/v4/websocket";
 
@@ -1208,9 +1213,77 @@ function installProductionActivityIntake(controls: ActivitySinkControlLifecycle)
   }));
 }
 
+async function startRunLiveProjectionBackground(
+  gatewayIdResult: ReturnType<typeof resolveBridgeGatewayId>,
+  runtimeBroker: OpenClawRuntimeBroker,
+): Promise<void> {
+  bridgeBootStatus.set(BRIDGE_UNSYNCHRONIZED);
+  if (!gatewayIdResult.ok) {
+    bridgeBootStatus.set('gateway-id-missing');
+    console.error(
+      `[chat-proxy] run-live bridge boot aborted — ${gatewayIdResult.reason}. Set GATEWAY_ID on the gateway-edge sidecar.`,
+    );
+    return;
+  }
+  const { createRunLiveBridge } = await import('./openclaw/run-live-bridge.js');
+  const { connectRunLiveBridgeUpstream } = await import('./openclaw/run-live-bridge-boot.js');
+  const liveBridge = createRunLiveBridge({
+    resolveChannelPair: (conversationId) => runtimeBroker.resolveChannelPair(conversationId),
+    writeLiveDoc: (path, doc) => runtimeBroker.writeRunLiveDoc(path, doc),
+    deleteLiveDoc: (path) => runtimeBroker.deleteRunLiveDoc(path),
+  });
+  const gatewayId = gatewayIdResult.gatewayId;
+  const healthUrl = gatewayHealthUrl();
+  startBridgeUpstreamReconnectLoop({
+    probeReady: () => probeGatewayReady(healthUrl),
+    probeIntervalMs: 500,
+    openOnce: async () => {
+      bridgeBootStatus.set(BRIDGE_UNSYNCHRONIZED);
+      let ws: Awaited<ReturnType<typeof openUpstream>>;
+      try {
+        const auth = await fetchGatewayAuth({ gatewayId, allowLegacyFallback: true });
+        ws = await openUpstream({
+          url: process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
+          token: auth.token,
+          deviceToken: auth.deviceToken,
+          identity: getOpenClawIdentity(),
+          onDeviceToken: async (issued) => {
+            await persistGatewayDeviceToken({ token: issued.deviceToken });
+          },
+        });
+      } catch (error) {
+        const code = error instanceof OpenclawWireError ? error.code : undefined;
+        bridgeBootStatus.set(code === 'auth-failed' ? 'auth-failed' : 'unreachable');
+        throw error;
+      }
+      let closed = false;
+      let onClose: (() => void) | undefined;
+      ws.on('close', () => {
+        closed = true;
+        bridgeBootStatus.set(BRIDGE_UNSYNCHRONIZED);
+        onClose?.();
+      });
+      await connectRunLiveBridgeUpstream(liveBridge, { ws, log: bridgeLog });
+      return {
+        onClose(handler: () => void) {
+          if (closed) handler();
+          else onClose = handler;
+        },
+      };
+    },
+    log: bridgeLog,
+    onConnected: () => {
+      bridgeBootStatus.set('connected');
+      console.log('[chat-proxy] run-live projection synchronized');
+    },
+  });
+}
+
 export async function startChatProxyBackground(): Promise<void> {
   warnIfWsOriginsMisconfigured(console.warn);
   console.log(`[chat-proxy] MM internal URL (data path): ${MM_INTERNAL_URL}`);
+  const bridgeSelection = resolveActivityBridgeSelection(resolveActivityBridgeMode(process.env));
+  console.log(`[chat-proxy] Activity bridge mode: ${bridgeSelection.mode}`);
   void (async () => {
     const gatewayIdResult = resolveBridgeGatewayId(process.env);
     const reconcileGatewayId = gatewayIdResult.ok ? gatewayIdResult.gatewayId : null;
@@ -1231,7 +1304,6 @@ export async function startChatProxyBackground(): Promise<void> {
       routerKey,
       log: (message, meta) => logger.error(message, meta),
     });
-    const { wireActivityBridge, connectBridgeUpstream, createResyncFloor } = await import('./openclaw/bridge-boot.js');
     let runtimeBroker: OpenClawRuntimeBroker;
     try {
       runtimeBroker = getOpenClawRuntimeBroker();
@@ -1241,6 +1313,11 @@ export async function startChatProxyBackground(): Promise<void> {
       process.exit(1);
     }
     console.log('[chat-proxy] OpenClaw runtime Firestore broker enabled');
+    if (bridgeSelection.startRunLiveBridge) {
+      await startRunLiveProjectionBackground(gatewayIdResult, runtimeBroker);
+      return;
+    }
+    const { wireActivityBridge, connectBridgeUpstream, createResyncFloor } = await import('./openclaw/bridge-boot.js');
     // One forced-reconnect cooldown floor for the bridge's whole life: it must outlive
     // any single WS so SEQ_GAP_COOLDOWN_MS actually spaces the reconnects it triggers
     // (a forced close resets the per-connection window, but not this).

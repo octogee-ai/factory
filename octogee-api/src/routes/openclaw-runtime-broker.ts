@@ -316,19 +316,69 @@ async function resolveChannelPair(
   return { primaryChannelId, activityChannelId, channelDocPath: channelDocPath! };
 }
 
-function validateRunLiveWrite(
+function runLivePathIdentity(path: string): {
+  slug: string;
+  channelPath: string;
+  documentId: string;
+} | null {
+  const marker = "/liveRuns/";
+  const markerIndex = path.indexOf(marker);
+  if (markerIndex <= 0 || markerIndex !== path.lastIndexOf(marker)) return null;
+  const channelPath = path.slice(0, markerIndex);
+  const documentId = path.slice(markerIndex + marker.length);
+  const slug = workspaceSlugFromChannelPath(channelPath);
+  if (!slug || !documentId || documentId.includes("/")) return null;
+  return { slug, channelPath, documentId };
+}
+
+function validRunLiveV3(
+  doc: Record<string, unknown>,
+  identity: ReturnType<typeof runLivePathIdentity> & {},
+): boolean {
+  const conversationId = typeof doc.conversationId === "string" ? doc.conversationId : "";
+  const mainChannelId = typeof doc.mainChannelId === "string" ? doc.mainChannelId : "";
+  const activityChannelId = typeof doc.activityChannelId === "string" ? doc.activityChannelId : "";
+  if (!conversationId || conversationId !== mainChannelId || !activityChannelId) return false;
+  if (doc.projectionKind === "run") {
+    const runId = typeof doc.runId === "string" ? doc.runId : "";
+    return Boolean(runId) && identity.documentId === runId;
+  }
+  if (doc.projectionKind === "admission") {
+    const inputPostId = typeof doc.inputPostId === "string" ? doc.inputPostId : "";
+    return Boolean(inputPostId) && identity.documentId === `admission-${inputPostId}`;
+  }
+  return false;
+}
+
+function validRunLiveV2(
+  path: string,
+  slug: string,
+  doc: Record<string, unknown>,
+): boolean {
+  const runId = typeof doc.runId === "string" ? doc.runId : "";
+  const workspaceId = typeof doc.workspaceId === "string" ? doc.workspaceId : "";
+  const channelPath = typeof doc.channelPath === "string" ? doc.channelPath : "";
+  return (
+    Boolean(runId) &&
+    workspaceId === slug &&
+    channelPath.startsWith(`workspaces/${slug}/`) &&
+    path === `${trimTrailingSlashes(channelPath)}/liveRuns/${runId}`
+  );
+}
+
+export function validateRunLiveWrite(
   body: Record<string, unknown>,
 ): { path: string; slug: string; doc: Record<string, unknown> } | null {
   const path = typeof body.path === "string" ? body.path : "";
   const doc = body.doc && typeof body.doc === "object" ? body.doc as Record<string, unknown> : null;
   const slug = typeof body.workspaceSlug === "string" ? body.workspaceSlug : "";
   if (!path || !doc || !isValidUsername(slug)) return null;
-  const runId = typeof doc.runId === "string" ? doc.runId : "";
-  const workspaceId = typeof doc.workspaceId === "string" ? doc.workspaceId : "";
-  const channelPath = typeof doc.channelPath === "string" ? doc.channelPath : "";
-  if (!runId || workspaceId !== slug || !channelPath.startsWith(`workspaces/${slug}/`)) return null;
-  if (path !== `${trimTrailingSlashes(channelPath)}/liveRuns/${runId}`) return null;
-  return { path, slug, doc };
+  const identity = runLivePathIdentity(path);
+  if (!identity || identity.slug !== slug) return null;
+  if (doc.schemaVersion === 3) {
+    return validRunLiveV3(doc, identity) ? { path, slug, doc } : null;
+  }
+  return validRunLiveV2(path, slug, doc) ? { path, slug, doc } : null;
 }
 
 function slugFromRunLivePath(path: string): string | null {

@@ -78,6 +78,42 @@ function selectorBlock(doc: string): string {
 }
 
 describe("helm/octogee-gateway/ — single-instance rendering", () => {
+  it("keeps the broad durable writer selected by default and enables only the bounded candidate pair", () => {
+    const defaultDeployment =
+      findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const defaultGateway = containerBlock(defaultDeployment, "gateway");
+    const defaultEdge = containerBlock(defaultDeployment, "gateway-edge");
+    expect(defaultGateway).toMatch(
+      /name:\s*OCTOGEE_ACTIVITY_BRIDGE_MODE[\s\S]*?value:\s*"broad"/,
+    );
+    expect(defaultEdge).toMatch(
+      /name:\s*OCTOGEE_ACTIVITY_BRIDGE_MODE[\s\S]*?value:\s*"broad"/,
+    );
+
+    const candidateDeployment =
+      findDoc(
+        helmTemplate("octogee-gw-default", {
+          "conversationExperiment.mode": "publisher-live",
+        }),
+        "Deployment",
+        "octogee-gateway-default",
+      ) ?? "";
+    const candidateGateway = containerBlock(candidateDeployment, "gateway");
+    const candidateEdge = containerBlock(candidateDeployment, "gateway-edge");
+    expect(candidateGateway).toMatch(
+      /name:\s*OCTOGEE_ACTIVITY_BRIDGE_MODE[\s\S]*?value:\s*"publisher-live"/,
+    );
+    expect(candidateEdge).toMatch(
+      /name:\s*OCTOGEE_ACTIVITY_BRIDGE_MODE[\s\S]*?value:\s*"publisher-live"/,
+    );
+  });
+
+  it("rejects an Activity bridge mode that could bypass durable-writer mutual exclusion", () => {
+    expect(() =>
+      helmTemplate("octogee-gw-default", { "conversationExperiment.mode": "both" }),
+    ).toThrow(/conversationExperiment\.mode/);
+  });
+
   it("renders one Deployment named octogee-gateway-<gatewayId>", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default");

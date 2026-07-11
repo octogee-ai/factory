@@ -144,6 +144,9 @@ machineFamily: ""
 # unchanged — free no-op rolls, not a correctness issue.
 chartFingerprint: ""
 
+conversationExperiment:
+  mode: "broad"
+
 env:
   gcloudProject: "octogee"
   firebaseProjectId: "octogee"

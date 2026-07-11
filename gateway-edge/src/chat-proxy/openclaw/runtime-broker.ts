@@ -1,6 +1,6 @@
 import { internalFetch } from "../../lib/internal-fetch.js";
 import type { AgentIdentity, ChannelPair } from "./activity-bridge.js";
-import type { RunLiveDoc } from "./run-live-doc.js";
+import type { ConversationRunLiveDocV3, RunLiveDoc } from "./run-live-doc.js";
 import {
   createAgentControlRegistryClient,
   type AgentControlRegistryClient,
@@ -29,7 +29,7 @@ export interface OpenClawRuntimeBroker {
   getUserGatewayId(uid: string): Promise<string | null>;
   resolveAgentIdentity(agentId: string): Promise<AgentIdentity | null>;
   resolveChannelPair(primaryChannelId: string): Promise<ChannelPair | null>;
-  writeRunLiveDoc(path: string, doc: RunLiveDoc): Promise<void>;
+  writeRunLiveDoc(path: string, doc: RunLiveDoc | ConversationRunLiveDocV3): Promise<void>;
   deleteRunLiveDoc(path: string): Promise<void>;
   resolveChannelOwnerUid(channelId: string): Promise<string | null>;
   resolveOctogeeUidByMmUser(mmUserId: string): Promise<string | null>;
@@ -56,6 +56,14 @@ function trimBaseUrl(baseUrl: string): string {
 function nonBlank(value: string | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+function workspaceSlugFromRunLivePath(path: string): string {
+  const parts = path.split("/");
+  if (parts[0] !== "workspaces" || !parts[1] || !parts.includes("liveRuns")) {
+    throw new OpenClawRuntimeBrokerError(400, "malformed run-live path");
+  }
+  return parts[1];
 }
 
 export function runtimeBrokerBaseUrlFromEnv(
@@ -180,10 +188,13 @@ export function createOpenClawRuntimeBroker(opts: {
       );
       return (body?.pair as ChannelPair | undefined) ?? null;
     },
-    async writeRunLiveDoc(path: string, doc: RunLiveDoc): Promise<void> {
+    async writeRunLiveDoc(
+      path: string,
+      doc: RunLiveDoc | ConversationRunLiveDocV3,
+    ): Promise<void> {
       await post(
         "/internal/openclaw/activity/run-live",
-        { workspaceSlug: doc.workspaceId, path, doc },
+        { workspaceSlug: workspaceSlugFromRunLivePath(path), path, doc },
         new Set([204]),
       );
     },

@@ -4,7 +4,11 @@
 {{- $preset := index .Values.tiers $tier -}}
 {{- $gatewayClass := include "octogee-gateway.gatewayClass" . -}}
 {{- $imageProfile := include "octogee-gateway.imageProfile" . -}}
+{{- $conversationMode := .Values.conversationExperiment.mode | default "broad" -}}
 {{- $operatorShellsEnabled := and (ne $gatewayClass "shared") (.Values.operatorAccess.shellsEnabled | default false) -}}
+{{- if and (ne $conversationMode "broad") (ne $conversationMode "publisher-live") -}}
+{{- fail (printf "octogee-gateway: conversationExperiment.mode must be broad or publisher-live, got %q" $conversationMode) -}}
+{{- end -}}
 {{- if not $preset -}}
 {{- fail (printf "octogee-gateway: no preset defined for sizingTier=%q (add it under .Values.tiers in values.yaml)" $tier) -}}
 {{- end -}}
@@ -301,6 +305,8 @@ spec:
               value: {{ .Values.env.mmInteractionsCallbackBaseUrl | default (printf "http://mattermost-callback-router.%s.svc.cluster.local:3001/internal/openclaw/mattermost/%s" .Release.Namespace .Values.gatewayId) | quote }}
             - name: MM_INTERACTIONS_ALLOWED_SOURCE_IPS
               value: "127.0.0.1"
+            - name: OCTOGEE_ACTIVITY_BRIDGE_MODE
+              value: {{ $conversationMode | quote }}
             - name: GIT_API_URL
               value: {{ .Values.env.gitApiUrl | default (printf "http://octogee-gitea-http.%s.svc.cluster.local:3000/api/v1" .Release.Namespace) | quote }}
             - name: GIT_SSH_HOST
@@ -451,6 +457,8 @@ spec:
               value: {{ .Values.env.firebaseProjectId | quote }}
             - name: OPENCLAW_RUNTIME_BROKER_URL
               value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
+            - name: OCTOGEE_ACTIVITY_BRIDGE_MODE
+              value: {{ $conversationMode | quote }}
             - name: CONNECTOR_TOKEN_BROKER_URL
               value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
             - name: BUILDER_SHELL_BROKER_URL

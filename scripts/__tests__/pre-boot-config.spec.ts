@@ -224,6 +224,24 @@ describe("applyPreBootPatches — MM env sync", () => {
   });
 });
 
+describe("applyPreBootPatches — conversation experiment", () => {
+  it("materializes the bounded publisher config from the shared Helm mode", () => {
+    const config: any = {
+      channels: { mattermost: { accounts: { default: {} } } },
+    };
+
+    applyPreBootPatches(config, {
+      OCTOGEE_ACTIVITY_BRIDGE_MODE: "publisher-live",
+    });
+
+    expect(config.channels.mattermost.accounts.default).toMatchObject({
+      replyToMode: "all",
+      threadSessionScope: "channel",
+      agentActivity: true,
+    });
+  });
+});
+
 describe("applyPreBootPatches — Anthropic broker base URL", () => {
   it("syncs ANTHROPIC_BASE_URL into the Anthropic model provider config", () => {
     const config: any = {
