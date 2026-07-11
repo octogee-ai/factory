@@ -206,7 +206,11 @@ export interface ActivityIntakeRequest {
 
 export interface ActivityIntakeResponse {
   status: 200 | 201;
-  body: { outcome: "persisted" | "duplicate"; postIds: string[] };
+  body: {
+    outcome: "persisted" | "duplicate";
+    postIds: string[];
+    activityChannelId: string;
+  };
 }
 
 export class ActivityIntakeError extends Error {
@@ -648,7 +652,10 @@ export async function processActivityIntake(
     });
     return {
       status: result.outcome === "persisted" ? 201 : 200,
-      body: result,
+      body: {
+        ...result,
+        activityChannelId: frozenBinding.activityChannelId,
+      },
     };
   } catch (error) {
     return mapSinkError(error);

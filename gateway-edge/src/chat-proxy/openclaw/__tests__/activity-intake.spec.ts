@@ -79,8 +79,36 @@ describe("normalized Activity intake", () => {
       },
     );
 
-    expect(result).toEqual({ status: 201, body: { outcome: "persisted", postIds: ["post-1"] } });
+    expect(result).toEqual({
+      status: 201,
+      body: {
+        outcome: "persisted",
+        postIds: ["post-1"],
+        activityChannelId: "activity-1",
+      },
+    });
     expect(append).toHaveBeenCalledWith({ envelope, binding, attachment: undefined });
+  });
+
+  it("returns the same authoritative Activity sibling on a duplicate acknowledgement", async () => {
+    const result = await processActivityIntake(
+      { remoteAddress: "127.0.0.1", envelope: validEnvelope() },
+      {
+        registry: { readiness: () => "ready", resolve: vi.fn(async () => binding) },
+        sinkFor: vi.fn(() => ({
+          append: vi.fn(async () => ({ outcome: "duplicate" as const, postIds: ["post-1"] })),
+        })),
+      },
+    );
+
+    expect(result).toEqual({
+      status: 200,
+      body: {
+        outcome: "duplicate",
+        postIds: ["post-1"],
+        activityChannelId: "activity-1",
+      },
+    });
   });
 
   it("returns 401 for non-loopback sockets without consulting the registry", async () => {

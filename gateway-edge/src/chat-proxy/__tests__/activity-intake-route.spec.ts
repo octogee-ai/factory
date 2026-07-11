@@ -139,7 +139,11 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
         body: JSON.stringify(envelope),
       });
       expect(response.status).toBe(201);
-      await expect(response.json()).resolves.toEqual({ outcome: "persisted", postIds: ["post-1"] });
+      await expect(response.json()).resolves.toEqual({
+        outcome: "persisted",
+        postIds: ["post-1"],
+        activityChannelId: "activity-1",
+      });
     });
   });
 
