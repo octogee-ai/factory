@@ -106,6 +106,81 @@ function journalProps(
 }
 
 describe("attention-aware Activity sink", () => {
+  it("registers an approval control before Mattermost create and attaches only the committed receipt", async () => {
+    const order: string[] = [];
+    const mm = mmClient();
+    const prepare = vi.fn(async () => {
+      order.push("control-prepare");
+      return {
+        receipt: {
+          controlId: "approval-control-1",
+          eventKey: "a".repeat(64),
+          controlChannelId: "activity-1",
+          resourceDigest: "b".repeat(64),
+          actionDigests: { ocapprove: "c".repeat(64), ocdeny: "d".repeat(64) },
+        },
+        post: {
+          channelId: "activity-1",
+          message: "Approve deployment?",
+          props: { octogee: { controlId: "approval-control-1" } },
+          attachments: [{ actions: [{ id: "ocapprove" }, { id: "ocdeny" }] }],
+        },
+      };
+    });
+    const attachReceipt = vi.fn(async (receipt: { postId: string }) => {
+      order.push("control-attach");
+      expect(receipt.postId).toBe("approval-post-1");
+    });
+    const sink = createActivitySink({
+      mm,
+      receipts: new InMemoryActivityWriteReceiptStore(),
+      leaseOwner: "worker-1",
+      now: () => 1_000,
+      controls: { prepare, attachReceipt },
+    });
+    await sink.append({ envelope: envelope("turn.started"), binding });
+    vi.mocked(mm.createActivityPost).mockImplementationOnce(async () => {
+      order.push("mattermost-create");
+      return { id: "approval-post-1" };
+    });
+    order.length = 0;
+    const approval = envelope("item.completed", {
+      item: { kind: "approval", status: "waiting", summary: "Approve deployment?" },
+    });
+    approval.ref.itemId = "octogee:approval:approval-1";
+    approval.eventKey = createHash("sha256")
+      .update(agentActivityCanonicalKey(approval.ref))
+      .digest("hex");
+
+    const result = await sink.append({ envelope: approval, binding });
+
+    expect(order).toEqual(["control-prepare", "mattermost-create", "control-attach"]);
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({
+      envelope: approval,
+      activityRootPostId: "post-1",
+      message: "@builder Approve deployment?",
+    }));
+    expect(mm.createActivityPost).toHaveBeenCalledWith(expect.objectContaining({
+      props: expect.objectContaining({
+        attachments: [{ actions: [{ id: "ocapprove" }, { id: "ocdeny" }] }],
+        octogee: expect.objectContaining({
+          controlId: "approval-control-1",
+          controlResourceDigest: "b".repeat(64),
+        }),
+      }),
+    }));
+    expect(result).toMatchObject({
+      outcome: "persisted",
+      postIds: ["approval-post-1"],
+      receipt: {
+        eventKey: approval.eventKey,
+        postId: "approval-post-1",
+        activityChannelId: "activity-1",
+        activityRootPostId: "post-1",
+      },
+    });
+  });
+
   it("creates one silent run root and returns the same post on concurrent replay", async () => {
     const mm = mmClient();
     const sink = createActivitySink({
