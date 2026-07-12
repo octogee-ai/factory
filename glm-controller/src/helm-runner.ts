@@ -7,6 +7,11 @@ import type {
 } from "@octogee/shared/types/glm";
 import type { SizingTier } from "@octogee/shared/types/sizing";
 import { SIZING_TIERS } from "@octogee/shared/types/sizing";
+import {
+  isW9TestPublisherLiveExperiment,
+  type W9TestPublisherLiveExperiment,
+} from "@octogee/shared/types/gateway-releases";
+import { isW9CandidateImageTag } from "@octogee/shared/types/image-tag";
 
 export interface HelmRunner {
 
@@ -21,6 +26,8 @@ upsertInstance(opts: {
     builderSlug?: string;
     imageRepository: string;
     imageTag: string;
+    conversationExperimentMode?: "publisher-live";
+    testExperiment?: W9TestPublisherLiveExperiment;
     serviceAccountName?: string;
     serviceAccount?: HelmInstancesMap[string]["serviceAccount"];
     gatewayContainerSecurityContext?: Record<string, unknown>;
@@ -304,6 +311,8 @@ export interface BuildUpgradeArgsOpts {
   builderSlug?: string;
   imageTag: string;
   imageRepository: string;
+  conversationExperimentMode?: "publisher-live";
+  testExperiment?: W9TestPublisherLiveExperiment;
   upgradeTimeout: string;
   chartFingerprint?: string;
   profile?: string;
@@ -332,6 +341,7 @@ type UpgradeStringOption = {
     | "serviceAccountName"
     | "computeClassOverride"
     | "gcpProject"
+    | "conversationExperimentMode"
   >;
   key: string;
 };
@@ -354,6 +364,7 @@ const UPGRADE_STRING_OPTIONS: UpgradeStringOption[] = [
   { option: "serviceAccountName", key: "serviceAccountName" },
   { option: "computeClassOverride", key: "computeClassOverride" },
   { option: "gcpProject", key: "gatewayEdge.env.GCP_PROJECT_ID" },
+  { option: "conversationExperimentMode", key: "conversationExperiment.mode" },
 ];
 
 const UPGRADE_JSON_OPTIONS: UpgradeJsonOption[] = [
@@ -419,6 +430,25 @@ function appendUpgradeApplyArgs(args: string[], opts: BuildUpgradeArgsOpts): voi
   args.push("--wait", `--timeout=${opts.upgradeTimeout}`);
 }
 
+function validateW9TestExperimentRender(opts: BuildUpgradeArgsOpts): void {
+  const testExperiment = opts.testExperiment;
+  const mode = opts.conversationExperimentMode;
+  if (testExperiment === undefined && mode === undefined) {
+    if (isW9CandidateImageTag(opts.imageTag)) {
+      throw new Error("digest-bound W9 candidate image requires its W9 test experiment");
+    }
+    return;
+  }
+  if (
+    opts.namespace !== "octogee-test" ||
+    mode !== "publisher-live" ||
+    !isW9CandidateImageTag(opts.imageTag) ||
+    !isW9TestPublisherLiveExperiment(testExperiment)
+  ) {
+    throw new Error("publisher-live is TEST-only and requires its digest-bound W9 candidate handoff");
+  }
+}
+
 /**
  * Builds the `helm upgrade --install` argv. Extracted from upsertInstance
  * so the per-knob conditionals don't push the orchestrator over the
@@ -438,6 +468,7 @@ export function buildUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
   // imageTag carried just digits and every reconcile failed with
   // "at '/imageTag': got number, want string". Numeric fields (replicas)
   // still use `--set` — they want number semantics.
+  validateW9TestExperimentRender(opts);
   const args = baseUpgradeArgs(opts);
   appendOptionalStringArgs(args, opts);
   appendOptionalNumberArgs(args, opts);

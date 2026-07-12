@@ -110,6 +110,47 @@ describe("isReleasePayload", () => {
     expect(isReleasePayload({ ...samplePayload(), coOwnerUids: [] })).toBe(false);
     expect(isReleasePayload({ ...samplePayload(), imageTag: "latest" })).toBe(false);
   });
+
+  it("accepts publisher-live only as the immutable TEST W9 candidate contract", () => {
+    const candidate = {
+      ...samplePayload(),
+      imageTag: `agent-conversation-w9a-8c356bb1@sha256:${"a".repeat(64)}`,
+      testExperiment: {
+        kind: "w9-agent-conversation",
+        mode: "publisher-live",
+        candidateManifest: {
+          path: "infra/gateway/openclaw-candidates/agent-conversation.json",
+          sha256: "b".repeat(64),
+        },
+        mattermostOverlay: {
+          valuesPath: "infra/candidates/values.mattermost-silent-post.yaml",
+          imageReference:
+            `mattermostdevelopment/mattermost-team-edition:cce485f@sha256:${"c".repeat(64)}`,
+        },
+      },
+    };
+
+    expect(isReleasePayload(candidate)).toBe(true);
+    expect(isReleasePayload({
+      ...candidate,
+      imageTag: "agent-conversation-w9a-8c356bb1",
+    })).toBe(false);
+    expect(isReleasePayload({
+      ...candidate,
+      testExperiment: { ...candidate.testExperiment, mode: "broad" },
+    })).toBe(false);
+    expect(isReleasePayload({
+      ...candidate,
+      testExperiment: {
+        ...candidate.testExperiment,
+        candidateManifest: { ...candidate.testExperiment.candidateManifest, path: "elsewhere.json" },
+      },
+    })).toBe(false);
+    expect(isReleasePayload({
+      ...samplePayload(),
+      testExperiment: candidate.testExperiment,
+    })).toBe(false);
+  });
 });
 
 describe("revisionIdForRelease", () => {

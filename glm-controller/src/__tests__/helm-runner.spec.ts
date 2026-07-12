@@ -137,6 +137,47 @@ describe("helm-runner helpers", () => {
     });
     expect(args).toContain("--take-ownership");
   });
+
+  it("renders publisher-live only with the digest-bound TEST W9 candidate handoff", () => {
+    const testExperiment = {
+      kind: "w9-agent-conversation",
+      mode: "publisher-live",
+      candidateManifest: {
+        path: "infra/gateway/openclaw-candidates/agent-conversation.json",
+        sha256: "b".repeat(64),
+      },
+      mattermostOverlay: {
+        valuesPath: "infra/candidates/values.mattermost-silent-post.yaml",
+        imageReference:
+          `mattermostdevelopment/mattermost-team-edition:cce485f@sha256:${"c".repeat(64)}`,
+      },
+    };
+    const candidateTag = `agent-conversation-w9a-8c356bb1@sha256:${"a".repeat(64)}`;
+    const base = {
+      release: "octogee-gw-default-r2",
+      chartPath: "/charts/octogee-gateway",
+      gatewayId: "default",
+      imageTag: candidateTag,
+      imageRepository: REPO,
+      upgradeTimeout: "10m",
+      conversationExperimentMode: "publisher-live",
+      testExperiment,
+    } as never;
+
+    const args = buildUpgradeArgs({ ...base, namespace: "octogee-test" });
+    expect(args).toContain("conversationExperiment.mode=publisher-live");
+    expect(() => buildUpgradeArgs({ ...base, namespace: "octogee" })).toThrow(/TEST-only/);
+    expect(() => buildUpgradeArgs({
+      ...base,
+      namespace: "octogee-test",
+      imageTag: "abc1234",
+    })).toThrow(/digest-bound W9 candidate/);
+    expect(() => buildUpgradeArgs({
+      ...base,
+      namespace: "octogee-test",
+      testExperiment: undefined,
+    })).toThrow(/requires.*W9/i);
+  });
 });
 
 describe("createHelmSubprocessRunner — readDeployedInstances", () => {

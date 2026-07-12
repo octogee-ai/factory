@@ -4,7 +4,10 @@ import {
   isGatewayMutableConfigForGateway,
   type GatewayMutableConfig,
 } from "./gateway-mutable-config.js";
-import { IMAGE_TAG_PATTERN } from "./image-tag.js";
+import {
+  IMAGE_TAG_PATTERN,
+  isW9CandidateImageTag,
+} from "./image-tag.js";
 import { GLM_GATEWAYS_COLLECTION } from "./glm.js";
 import type {
   GatewayPreemptionHandoffSpec,
@@ -103,18 +106,63 @@ export interface GatewayDoc {
   legacyBackfill?: GatewayLegacyBackfill | null;
 }
 
-// Immutable release payload: the build artifact only. Gateway policy lives
-// exclusively on gateways/{gatewayId}, never in a release or revision.
+export const W9_CANDIDATE_MANIFEST_PATH =
+  "infra/gateway/openclaw-candidates/agent-conversation.json";
+export const W9_MATTERMOST_OVERLAY_VALUES_PATH =
+  "infra/candidates/values.mattermost-silent-post.yaml";
+
+export interface W9TestPublisherLiveExperiment {
+  kind: "w9-agent-conversation";
+  mode: "publisher-live";
+  candidateManifest: {
+    path: typeof W9_CANDIDATE_MANIFEST_PATH;
+    sha256: string;
+  };
+  mattermostOverlay: {
+    valuesPath: typeof W9_MATTERMOST_OVERLAY_VALUES_PATH;
+    imageReference: string;
+  };
+}
+
+const SHA256_PATTERN = /^[a-f0-9]{64}$/;
+const DIGEST_BOUND_IMAGE_REFERENCE_PATTERN =
+  /^[a-z0-9][a-z0-9./_-]*:[a-z0-9][a-z0-9._-]*@sha256:[a-f0-9]{64}$/;
+
+export function isW9TestPublisherLiveExperiment(
+  value: unknown,
+): value is W9TestPublisherLiveExperiment {
+  if (!isPlainRecord(value) || value.kind !== "w9-agent-conversation" || value.mode !== "publisher-live") {
+    return false;
+  }
+  const candidateManifest = value.candidateManifest;
+  const mattermostOverlay = value.mattermostOverlay;
+  return (
+    isPlainRecord(candidateManifest) &&
+    candidateManifest.path === W9_CANDIDATE_MANIFEST_PATH &&
+    typeof candidateManifest.sha256 === "string" &&
+    SHA256_PATTERN.test(candidateManifest.sha256) &&
+    isPlainRecord(mattermostOverlay) &&
+    mattermostOverlay.valuesPath === W9_MATTERMOST_OVERLAY_VALUES_PATH &&
+    typeof mattermostOverlay.imageReference === "string" &&
+    DIGEST_BOUND_IMAGE_REFERENCE_PATTERN.test(mattermostOverlay.imageReference)
+  );
+}
+
+// Immutable release payload: the build artifact plus its bounded W9 TEST
+// experiment contract. Gateway policy lives exclusively on gateways/{gatewayId},
+// never in a release or revision.
 export interface ReleasePayload {
   macOpsTokenProtocol?: MacOpsTokenProtocol;
   imageRepository: string;
   imageTag: string;
+  testExperiment?: W9TestPublisherLiveExperiment;
 }
 
 const RELEASE_PAYLOAD_FIELD_NAMES = new Set<string>([
   "macOpsTokenProtocol",
   "imageRepository",
   "imageTag",
+  "testExperiment",
 ]);
 
 const RELEASE_PAYLOAD_REQUIRED_FIELDS = [
@@ -144,7 +192,11 @@ export function isReleasePayload(value: unknown): value is ReleasePayload {
     value.imageRepository.length > 0 &&
     typeof value.imageTag === "string" &&
     value.imageTag.length > 0 &&
-    IMAGE_TAG_PATTERN.test(value.imageTag)
+    IMAGE_TAG_PATTERN.test(value.imageTag) &&
+    (value.testExperiment === undefined
+      ? !isW9CandidateImageTag(value.imageTag)
+      : isW9CandidateImageTag(value.imageTag) &&
+        isW9TestPublisherLiveExperiment(value.testExperiment))
   );
 }
 
@@ -443,6 +495,7 @@ export const RELEASE_NEW_REVISION_FIELDS = [
   "imageRepository",
   "imageTag",
   "macOpsTokenProtocol",
+  "testExperiment",
 ] as const;
 
 // Release-payload fields that are release-audited but may reconcile IN PLACE on
