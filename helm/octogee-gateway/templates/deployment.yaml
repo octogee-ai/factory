@@ -492,6 +492,11 @@ spec:
                 secretKeyRef:
                   name: agent-control-signing
                   key: secret
+            - name: OCTOGEE_APPROVAL_SIGNING_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: approval-signing
+                  key: secret
             - name: AGENT_CONTROL_ROUTER_KEY
               valueFrom:
                 secretKeyRef:
