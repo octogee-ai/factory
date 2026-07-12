@@ -114,6 +114,17 @@ function fileInfoFromResponse(value: Record<string, unknown>): MattermostFileInf
   return { id: value.id, size: value.size };
 }
 
+async function requireOk(response: Response, operation: string): Promise<void> {
+  if (response.ok) return;
+  const body = await response.text();
+  throw new Error(`MM ${operation} ${response.status}: ${body.slice(0, 200)}`);
+}
+
+async function requireJson<T>(response: Response, operation: string): Promise<T> {
+  await requireOk(response, operation);
+  return response.json() as Promise<T>;
+}
+
 export function createActivityMmClientFactory(
   options: MmClientFactoryOptions,
 ): (token: string) => ActivityMattermostClient {
@@ -130,17 +141,6 @@ export function createActivityMmClientFactory(
       headers.set("Content-Type", "application/json");
     }
     return fetchImpl(url, { ...init, headers });
-  };
-
-  const requireOk = async (response: Response, operation: string): Promise<void> => {
-    if (response.ok) return;
-    const body = await response.text();
-    throw new Error(`MM ${operation} ${response.status}: ${body.slice(0, 200)}`);
-  };
-
-  const requireJson = async <T>(response: Response, operation: string): Promise<T> => {
-    await requireOk(response, operation);
-    return response.json() as Promise<T>;
   };
 
   const buildClient = (token: string): ActivityMattermostClient => ({

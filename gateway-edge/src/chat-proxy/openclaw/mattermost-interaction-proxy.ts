@@ -102,7 +102,7 @@ function writeJson(res: ServerResponse, status: number, body: Record<string, unk
   res.end(JSON.stringify(body));
 }
 
-export function createMattermostInteractionProxyHandler(input: {
+interface MattermostInteractionProxyInput {
   gatewayId: string;
   routerKey: string;
   targetOrigin?: string;
@@ -110,12 +110,20 @@ export function createMattermostInteractionProxyHandler(input: {
   maxResponseBytes?: number;
   now?: () => number;
   log: (message: string, meta?: Record<string, unknown>) => void;
-}): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
-  if (Buffer.byteLength(input.routerKey) < 32 || containsAsciiControlCharacter(input.routerKey)) {
-    throw new Error("AGENT_CONTROL_ROUTER_KEY must be at least 32 bytes");
-  }
-  const now = input.now ?? Date.now;
-  const target = new URL(input.targetOrigin ?? DEFAULT_LOOPBACK_ORIGIN);
+}
+
+interface MattermostInteractionProxyConfig {
+  gatewayId: string;
+  routerKey: string;
+  target: URL;
+  upstreamTimeoutMs: number;
+  maxResponseBytes: number;
+  now: () => number;
+  log: MattermostInteractionProxyInput["log"];
+}
+
+function validateTargetOrigin(targetOrigin: string | undefined): URL {
+  const target = new URL(targetOrigin ?? DEFAULT_LOOPBACK_ORIGIN);
   if (
     target.protocol !== LOOPBACK_PROTOCOL ||
     target.hostname !== LOOPBACK_HOST ||
@@ -127,6 +135,13 @@ export function createMattermostInteractionProxyHandler(input: {
   ) {
     throw new Error("invalid Mattermost interaction targetOrigin");
   }
+  return target;
+}
+
+function interactionProxyConfig(input: MattermostInteractionProxyInput): MattermostInteractionProxyConfig {
+  if (Buffer.byteLength(input.routerKey) < 32 || containsAsciiControlCharacter(input.routerKey)) {
+    throw new Error("AGENT_CONTROL_ROUTER_KEY must be at least 32 bytes");
+  }
   const upstreamTimeoutMs = input.upstreamTimeoutMs ?? UPSTREAM_TIMEOUT_MS;
   const maxResponseBytes = input.maxResponseBytes ?? MAX_RESPONSE_BYTES;
   if (!Number.isSafeInteger(upstreamTimeoutMs) || upstreamTimeoutMs < 1) {
@@ -135,6 +150,20 @@ export function createMattermostInteractionProxyHandler(input: {
   if (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes < 1) {
     throw new Error("invalid Mattermost interaction maxResponseBytes");
   }
+  return {
+    gatewayId: input.gatewayId,
+    routerKey: input.routerKey,
+    target: validateTargetOrigin(input.targetOrigin),
+    upstreamTimeoutMs,
+    maxResponseBytes,
+    now: input.now ?? Date.now,
+    log: input.log,
+  };
+}
+
+function createInteractionRequestHandler(
+  config: MattermostInteractionProxyConfig,
+): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   return async (req, res) => {
     if (req.method !== "POST") {
       req.resume();
@@ -163,8 +192,8 @@ export function createMattermostInteractionProxyHandler(input: {
       signature: header(req, "x-octogee-agent-control-signature"),
     };
     if (
-      proof.gatewayId !== input.gatewayId ||
-      !verifyAgentControlRouterRequest(body, proof, input.routerKey, now())
+      proof.gatewayId !== config.gatewayId ||
+      !verifyAgentControlRouterRequest(body, proof, config.routerKey, config.now())
     ) {
       writeJson(res, 401, { error: "unauthorized" });
       return;
@@ -175,7 +204,7 @@ export function createMattermostInteractionProxyHandler(input: {
     };
     let responded = false;
     const fail = (error: Error): void => {
-      input.log("[mattermost-interaction-proxy] OpenClaw request failed", {
+      config.log("[mattermost-interaction-proxy] OpenClaw request failed", {
         accountId: match[1],
         error: error.message,
       });
@@ -184,15 +213,15 @@ export function createMattermostInteractionProxyHandler(input: {
       writeJson(res, 502, { error: "openclaw_unavailable" });
     };
     const proxy = http.request({
-      protocol: target.protocol,
-      hostname: target.hostname,
-      port: target.port,
+      protocol: config.target.protocol,
+      hostname: config.target.hostname,
+      port: config.target.port,
       method: "POST",
       path: `/mattermost/interactions/${match[1]}`,
       headers,
     }, async (upstream) => {
       try {
-        const upstreamBody = await readUpstreamBody(upstream, maxResponseBytes);
+        const upstreamBody = await readUpstreamBody(upstream, config.maxResponseBytes);
         if (responded) return;
         responded = true;
         res.writeHead(
@@ -204,8 +233,14 @@ export function createMattermostInteractionProxyHandler(input: {
         fail(error instanceof Error ? error : new Error(String(error)));
       }
     });
-    proxy.setTimeout(upstreamTimeoutMs, () => proxy.destroy(new Error("upstream_timeout")));
+    proxy.setTimeout(config.upstreamTimeoutMs, () => proxy.destroy(new Error("upstream_timeout")));
     proxy.on("error", fail);
     proxy.end(body);
   };
+}
+
+export function createMattermostInteractionProxyHandler(
+  input: MattermostInteractionProxyInput,
+): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
+  return createInteractionRequestHandler(interactionProxyConfig(input));
 }

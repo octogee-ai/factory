@@ -103,6 +103,7 @@ const bridgeLog = (msg: string): void =>
 
 const MM_PUBLIC_URL = MM_INTERNAL_URL;
 const BRIDGE_UNSYNCHRONIZED = 'unsynchronized' as const;
+const AUTH_FAILED = 'auth-failed' as const;
 
 const MM_INTERNAL_WS_URL = MM_INTERNAL_URL.replace(/^http/, "ws") + "/api/v4/websocket";
 
@@ -624,7 +625,7 @@ export async function establishUpstreamWithRotation(
 
   const first = await tryOpenGatewayUpstream(gatewayUrl, auth.auth);
   if (first.ok) return acceptUpstreamHandshake(first.upstream);
-  if (first.code !== "auth-failed") return rejectUpstreamHandshake(first.code);
+  if (first.code !== AUTH_FAILED) return rejectUpstreamHandshake(first.code);
 
   await clearStaleGatewayAuth(gatewayId, auth.auth);
   const fresh = await fetchGatewayAuthAfterRotation(gatewayId);
@@ -1310,7 +1311,7 @@ async function startRunLiveProjectionBackground(
         });
       } catch (error) {
         const code = error instanceof OpenclawWireError ? error.code : undefined;
-        bridgeBootStatus.set(code === 'auth-failed' ? 'auth-failed' : 'unreachable');
+        bridgeBootStatus.set(code === AUTH_FAILED ? AUTH_FAILED : 'unreachable');
         throw error;
       }
       let closed = false;
@@ -1341,40 +1342,157 @@ async function startRunLiveProjectionBackground(
   });
 }
 
+interface ActivityBridgeRpcClient {
+  call(method: string, params: Record<string, unknown>): Promise<unknown>;
+}
+
+interface PublisherLiveBridge {
+  handle: ActivityBridgeHandle;
+  __getRpcClient?: () => ActivityBridgeRpcClient | null;
+}
+
+async function startPublisherLiveCoachListeners(input: {
+  gatewayId: string;
+  runtimeBroker: OpenClawRuntimeBroker;
+  wired: PublisherLiveBridge;
+}): Promise<void> {
+  const mmWsUrl = MM_PUBLIC_URL.replace(/^http/, 'ws') + '/api/v4/websocket';
+  const { startMmCoachEventListeners } = await import('./openclaw/mm-event-listener.js');
+  const { handleReactionAdded } = await import('./openclaw/reaction-handler.js');
+  const { handleReplyAsSteer } = await import('./openclaw/reply-handler.js');
+  const { makeCoachDmHandler } = await import('../notifications/chat-notifier.js');
+  const {
+    createBrokeredFanOutNotification,
+    notificationBrokerBaseUrlFromEnv,
+  } = await import('../notifications/broker.js');
+  const fanOutNotification = createBrokeredFanOutNotification({
+    baseUrl: notificationBrokerBaseUrlFromEnv(),
+    gatewayId: input.gatewayId,
+  });
+  const getRpcClient = (): ActivityBridgeRpcClient | null => input.wired.__getRpcClient?.() ?? null;
+  const ownerOf = (channelId: string) => input.runtimeBroker.resolveChannelOwnerUid(channelId);
+  const uidOf = (mmUserId: string) => input.runtimeBroker.resolveOctogeeUidByMmUser(mmUserId);
+  const coachListeners = startMmCoachEventListeners({
+    mmWsUrl,
+    log: bridgeLog,
+    openWebSocket: () => new WebSocket(mmWsUrl),
+    isTrackedChannel: (channelId) =>
+      input.wired.handle.isTrackedActivityChannel?.(channelId) ?? false,
+    resolveRunForRootPost: (postId) =>
+      input.wired.handle.getRunStateByRootPostId?.(postId) ?? null,
+    onReply: async (reply) => {
+      const rpc = getRpcClient();
+      if (!rpc) {
+        console.warn(
+          `[mm-event-listener] reply-as-steer skipped — no upstream RPC client for session ${reply.sessionKey}`,
+        );
+        return;
+      }
+      await handleReplyAsSteer(reply, {
+        resolveChannelOwnerUid: ownerOf,
+        resolveOctogeeUidByMmUser: uidOf,
+        dispatchSteer: async ({ sessionKey, message, idempotencyKey }) => {
+          await rpc.call('chat.send', {
+            sessionKey,
+            message,
+            deliver: false,
+            idempotencyKey,
+          });
+        },
+        log: bridgeLog,
+      });
+    },
+    onReaction: async (reaction) => {
+      await handleReactionAdded(reaction, {
+        resolveRunForRootPost: (postId) =>
+          input.wired.handle.getRunStateByRootPostId?.(postId) ?? null,
+        resolveChannelOwnerUid: ownerOf,
+        resolveOctogeeUidByMmUser: uidOf,
+        effects: {
+          dispatchAbort: async (sessionKey) => {
+            const rpc = getRpcClient();
+            if (!rpc) {
+              console.warn(
+                `[reaction-handler] abort dispatch skipped — no upstream RPC client for session ${sessionKey}`,
+              );
+              return;
+            }
+            await rpc.call('chat.abort', { sessionKey });
+          },
+        },
+        log: bridgeLog,
+        metrics: {
+          reactionDispatchMs: bridgeMetrics.reactionDispatchMs,
+          reactionDropped: new Counter({
+            name: 'octogee_bridge_reaction_dropped_total',
+            help: 'Reaction-handler drops with reason',
+            labelNames: ['reason'] as const,
+            registers: [metricsRegistry],
+          }),
+        },
+      });
+    },
+    onCoachDm: makeCoachDmHandler({
+      resolveOwnerUid: ownerOf,
+      fanOut: fanOutNotification,
+      log: bridgeLog,
+    }),
+  });
+  wireCoachEventListeners(input.wired.handle, coachListeners);
+  console.log('[chat-proxy] MM coach event listeners started (per-coach WS: reactions + reply-as-steer)');
+}
+
+type ResolvedBridgeGatewayId = Extract<ReturnType<typeof resolveBridgeGatewayId>, { ok: true }>;
+
+interface PublisherLiveBootstrap {
+  gatewayIdResult: ResolvedBridgeGatewayId;
+  getMountedCustomers: ReturnType<typeof buildMountedCustomersReader>;
+  gatewayId: string;
+  routerKey: string;
+  runtimeBroker: OpenClawRuntimeBroker;
+}
+
+function bootstrapPublisherLive(): PublisherLiveBootstrap | null {
+  const gatewayIdResult = resolveBridgeGatewayId(process.env);
+  const getMountedCustomers = buildMountedCustomersReader(
+    gatewayIdResult.ok ? gatewayIdResult.gatewayId : null,
+  );
+  if (!gatewayIdResult.ok) {
+    console.error(
+      `[chat-proxy] activity bridge boot aborted — ${gatewayIdResult.reason}. ` +
+      'Set GATEWAY_ID env var on the chat-proxy sidecar (helm chart values.env.gatewayId). ' +
+      'See the current Activity design documentation.',
+    );
+    bridgeBootStatus.set('gateway-id-missing');
+    return null;
+  }
+  const gatewayId = gatewayIdResult.gatewayId;
+  const routerKey = process.env.AGENT_CONTROL_ROUTER_KEY ?? '';
+  mattermostInteractionProxyHandler = createMattermostInteractionProxyHandler({
+    gatewayId,
+    routerKey,
+    log: (message, meta) => logger.error(message, meta),
+  });
+  try {
+    const runtimeBroker = getOpenClawRuntimeBroker();
+    console.log('[chat-proxy] OpenClaw runtime Firestore broker enabled');
+    return { gatewayIdResult, getMountedCustomers, gatewayId, routerKey, runtimeBroker };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[chat-proxy] FATAL: OpenClaw runtime broker misconfigured: ${msg}`);
+    process.exit(1);
+  }
+}
+
 export async function startChatProxyBackground(): Promise<void> {
   warnIfWsOriginsMisconfigured(console.warn);
   console.log(`[chat-proxy] MM internal URL (data path): ${MM_INTERNAL_URL}`);
   const bridgeSelection = resolveActivityBridgeSelection(resolveActivityBridgeMode(process.env));
   console.log(`[chat-proxy] Activity bridge mode: ${bridgeSelection.mode}`);
   void (async () => {
-    const gatewayIdResult = resolveBridgeGatewayId(process.env);
-    const reconcileGatewayId = gatewayIdResult.ok ? gatewayIdResult.gatewayId : null;
-    const getMountedCustomers = buildMountedCustomersReader(reconcileGatewayId);
-    if (!gatewayIdResult.ok) {
-      console.error(
-        `[chat-proxy] activity bridge boot aborted — ${gatewayIdResult.reason}. ` +
-        'Set GATEWAY_ID env var on the chat-proxy sidecar (helm chart values.env.gatewayId). ' +
-        'See the current Activity design documentation.',
-      );
-      bridgeBootStatus.set('gateway-id-missing');
-      return;
-    }
-    const gatewayId = gatewayIdResult.gatewayId;
-    const routerKey = process.env.AGENT_CONTROL_ROUTER_KEY ?? "";
-    mattermostInteractionProxyHandler = createMattermostInteractionProxyHandler({
-      gatewayId,
-      routerKey,
-      log: (message, meta) => logger.error(message, meta),
-    });
-    let runtimeBroker: OpenClawRuntimeBroker;
-    try {
-      runtimeBroker = getOpenClawRuntimeBroker();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[chat-proxy] FATAL: OpenClaw runtime broker misconfigured: ${msg}`);
-      process.exit(1);
-    }
-    console.log('[chat-proxy] OpenClaw runtime Firestore broker enabled');
+    const bootstrap = bootstrapPublisherLive();
+    if (!bootstrap) return;
+    const { gatewayIdResult, getMountedCustomers, gatewayId, routerKey, runtimeBroker } = bootstrap;
     if (bridgeSelection.startRunLiveBridge) {
       try {
         await startRunLiveProjectionBackground(gatewayIdResult, runtimeBroker);
@@ -1453,97 +1571,7 @@ export async function startChatProxyBackground(): Promise<void> {
     installAgentControlCallbackHandler(wired.agentControlCallbackHandler);
     installProductionActivityIntake(wired.activityControls);
 
-    const mmWsUrl = MM_PUBLIC_URL.replace(/^http/, 'ws') + '/api/v4/websocket';
-    const { startMmCoachEventListeners } = await import('./openclaw/mm-event-listener.js');
-    const { handleReactionAdded } = await import('./openclaw/reaction-handler.js');
-    const { handleReplyAsSteer } = await import('./openclaw/reply-handler.js');
-    const { makeCoachDmHandler } = await import('../notifications/chat-notifier.js');
-    const {
-      createBrokeredFanOutNotification,
-      notificationBrokerBaseUrlFromEnv,
-    } = await import('../notifications/broker.js');
-    const fanOutNotification = createBrokeredFanOutNotification({
-      baseUrl: notificationBrokerBaseUrlFromEnv(),
-      gatewayId,
-    });
-    const getRpcClient = (): { call: (m: string, p: Record<string, unknown>) => Promise<unknown> } | null => {
-      const wiredAny = wired as unknown as {
-        __getRpcClient?: () => { call: (m: string, p: Record<string, unknown>) => Promise<unknown> } | null;
-      };
-      return wiredAny.__getRpcClient?.() ?? null;
-    };
-    // Owner/uid resolvers, hoisted so both onReply and onReaction share them
-    // (and stay out of the deep callback nesting).
-    const ownerOf = (channelId: string) => runtimeBroker.resolveChannelOwnerUid(channelId);
-    const uidOf = (mmUserId: string) => runtimeBroker.resolveOctogeeUidByMmUser(mmUserId);
-    const coachListeners = startMmCoachEventListeners({
-      mmWsUrl,
-      log: bridgeLog,
-      openWebSocket: () => new WebSocket(mmWsUrl),
-      isTrackedChannel: (channelId) =>
-        wired.handle.isTrackedActivityChannel?.(channelId) ?? false,
-      resolveRunForRootPost: (postId) =>
-        wired.handle.getRunStateByRootPostId?.(postId) ?? null,
-      onReply: async (reply) => {
-        const rpc = getRpcClient();
-        if (!rpc) {
-          console.warn(
-            `[mm-event-listener] reply-as-steer skipped — no upstream RPC client for session ${reply.sessionKey}`,
-          );
-          return;
-        }
-        await handleReplyAsSteer(reply, {
-          resolveChannelOwnerUid: ownerOf,
-          resolveOctogeeUidByMmUser: uidOf,
-          dispatchSteer: async ({ sessionKey, message, idempotencyKey }) => {
-            await rpc.call('chat.send', {
-              sessionKey,
-              message,
-              deliver: false,
-              idempotencyKey,
-            });
-          },
-          log: bridgeLog,
-        });
-      },
-      onReaction: async (reaction) => {
-        await handleReactionAdded(reaction, {
-          resolveRunForRootPost: (postId) =>
-            wired.handle.getRunStateByRootPostId?.(postId) ?? null,
-          resolveChannelOwnerUid: ownerOf,
-          resolveOctogeeUidByMmUser: uidOf,
-          effects: {
-            dispatchAbort: async (sessionKey) => {
-              const rpc = getRpcClient();
-              if (!rpc) {
-                console.warn(
-                  `[reaction-handler] abort dispatch skipped — no upstream RPC client for session ${sessionKey}`,
-                );
-                return;
-              }
-              await rpc.call('chat.abort', { sessionKey });
-            },
-          },
-          log: bridgeLog,
-          metrics: {
-            reactionDispatchMs: bridgeMetrics.reactionDispatchMs,
-            reactionDropped: new Counter({
-              name: 'octogee_bridge_reaction_dropped_total',
-              help: 'Reaction-handler drops with reason',
-              labelNames: ['reason'] as const,
-              registers: [metricsRegistry],
-            }),
-          },
-        });
-      },
-      onCoachDm: makeCoachDmHandler({
-        resolveOwnerUid: ownerOf,
-        fanOut: fanOutNotification,
-        log: bridgeLog,
-      }),
-    });
-    wireCoachEventListeners(wired.handle, coachListeners);
-    console.log('[chat-proxy] MM coach event listeners started (per-coach WS: reactions + reply-as-steer)');
+    await startPublisherLiveCoachListeners({ gatewayId, runtimeBroker, wired });
 
     const healthUrl = gatewayHealthUrl();
     startBridgeUpstreamReconnectLoop({
@@ -1565,7 +1593,7 @@ export async function startChatProxyBackground(): Promise<void> {
           });
         } catch (err) {
           const code = err instanceof OpenclawWireError ? err.code : undefined;
-          bridgeBootStatus.set(code === 'auth-failed' ? 'auth-failed' : 'unreachable');
+          bridgeBootStatus.set(code === AUTH_FAILED ? AUTH_FAILED : 'unreachable');
           throw err;
         }
         let closed = false;

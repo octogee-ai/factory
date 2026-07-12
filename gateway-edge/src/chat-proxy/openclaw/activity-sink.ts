@@ -29,6 +29,9 @@ const CONCURRENT_REPLAY_POLLS = 100;
 const ATTACHMENT_SCAN_CHUNK_BYTES = 256 * 1024;
 const ATTACHMENT_SCAN_OVERLAP_CHARS = 8 * 1024;
 const ITEM_COMPLETED = "item.completed" as const;
+const TURN_STARTED = "turn.started" as const;
+const ACTIVITY_RUN_ROOT_KIND = "activity.run-root" as const;
+const ACTIVITY_ITEM_KIND_PREFIX = "activity." as const;
 const UPLOAD_RESULT_UNKNOWN = "upload-result-unknown" as const;
 
 export interface ActivitySinkBinding {
@@ -212,8 +215,8 @@ function projectedRunStatus(envelope: AgentActivityEnvelopeV1): AgentRunStatus {
 }
 
 function projectedActivityKind(envelope: AgentActivityEnvelopeV1): string {
-  if (envelope.type === "turn.started") return "activity.run-root";
-  if (envelope.type === ITEM_COMPLETED) return `activity.${envelope.item.kind}`;
+  if (envelope.type === TURN_STARTED) return ACTIVITY_RUN_ROOT_KIND;
+  if (envelope.type === ITEM_COMPLETED) return `${ACTIVITY_ITEM_KIND_PREFIX}${envelope.item.kind}`;
   throw new ActivitySinkIntegrityError("control transitions cannot create Activity posts");
 }
 
@@ -255,7 +258,7 @@ function messageFor(
   envelope: AgentActivityEnvelopeV1,
   binding: ActivitySinkBinding,
 ): string {
-  if (envelope.type === "turn.started") return "**Agent run started**";
+  if (envelope.type === TURN_STARTED) return "**Agent run started**";
   if (envelope.type !== ITEM_COMPLETED) return "";
   const detail = envelope.item.detail?.text;
   const summary =
@@ -367,21 +370,34 @@ function isEmptyAnchor(anchor: string): boolean {
   return anchor.startsWith("empty:");
 }
 
-export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
-  const now = deps.now ?? Date.now;
-  const leaseMs = deps.leaseMs ?? DEFAULT_LEASE_MS;
-  const uploadChunkBytes = deps.uploadChunkBytes ?? DEFAULT_UPLOAD_CHUNK_BYTES;
-  const historyPageSize = deps.historyPageSize ?? DEFAULT_HISTORY_PAGE_SIZE;
+type ProgressReceipt = Extract<
+  ActivityAttachmentReceiptV1,
+  { state: "session-created" | "uploading" }
+>;
+type ResolvedAttachment = { fileId?: string; attachment: ActivityAttachmentReceiptV1 };
 
-  async function historyAnchor(binding: ActivitySinkBinding): Promise<string> {
+interface ActivitySinkRuntime {
+  deps: ActivitySinkDeps;
+  now: () => number;
+  leaseMs: number;
+  uploadChunkBytes: number;
+  historyPageSize: number;
+}
+
+class ActivitySinkWriter implements ActivitySink {
+  constructor(private readonly runtime: ActivitySinkRuntime) {}
+
+  private async historyAnchor(binding: ActivitySinkBinding): Promise<string> {
+    const { deps } = this.runtime;
     const page = await deps.mm.listChannelPosts(binding.activityChannelId, undefined, 1);
     return page.posts[0]?.id ?? emptyAnchor(binding);
   }
 
-  async function waitForConcurrentReplay(
+  private async waitForConcurrentReplay(
     eventKey: string,
     payloadDigest: string,
   ): Promise<Pick<ActivitySinkResult, "outcome" | "postIds"> | null> {
+    const { deps } = this.runtime;
     for (let attempt = 0; attempt < CONCURRENT_REPLAY_POLLS; attempt += 1) {
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
       const receipt = await deps.receipts.read(eventKey);
@@ -399,11 +415,12 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     return null;
   }
 
-  async function scanUncertainSuffix(
+  private async scanUncertainSuffix(
     eventKey: string,
     binding: ActivitySinkBinding,
     anchor: string,
   ): Promise<ActivityMattermostPost | null> {
+    const { deps, historyPageSize } = this.runtime;
     let before: string | undefined;
     const visited = new Set<string>();
     while (true) {
@@ -432,7 +449,8 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     }
   }
 
-  async function rootPostId(envelope: AgentActivityEnvelopeV1): Promise<string> {
+  private async rootPostId(envelope: AgentActivityEnvelopeV1): Promise<string> {
+    const { deps } = this.runtime;
     const expectedEventKey = runRootEventKey(envelope.ref);
     const root = await deps.receipts.read(expectedEventKey);
     if (
@@ -450,7 +468,7 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     return root.postId;
   }
 
-  function activityPostProps(post: ActivityMattermostPost): Record<string, unknown> {
+  private activityPostProps(post: ActivityMattermostPost): Record<string, unknown> {
     const value = post.props.octogee;
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new ActivitySinkIntegrityError("Activity post is missing exact Octogee props");
@@ -458,14 +476,14 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     return value as Record<string, unknown>;
   }
 
-  async function assertActivityPostTarget(
+  private async assertActivityPostTarget(
     post: ActivityMattermostPost,
     envelope: AgentActivityEnvelopeV1,
     binding: ActivitySinkBinding,
     expectedEventKey: string,
   ): Promise<Record<string, unknown>> {
-    const expectedRootId = envelope.type === "turn.started" ? "" : await rootPostId(envelope);
-    const props = activityPostProps(post);
+    const expectedRootId = envelope.type === TURN_STARTED ? "" : await this.rootPostId(envelope);
+    const props = this.activityPostProps(post);
     if (
       post.channelId !== binding.activityChannelId ||
       post.rootId !== expectedRootId ||
@@ -482,7 +500,7 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     return props;
   }
 
-  async function assertRecoveredPostTarget(
+  private async assertRecoveredPostTarget(
     post: ActivityMattermostPost,
     envelope: AgentActivityEnvelopeV1,
     binding: ActivitySinkBinding,
@@ -494,7 +512,7 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
       envelope.type === "control.transition"
         ? approvalCreateEventKey(envelope.ref)
         : envelope.eventKey;
-    const props = await assertActivityPostTarget(post, envelope, binding, expectedEventKey);
+    const props = await this.assertActivityPostTarget(post, envelope, binding, expectedEventKey);
     if (
       envelope.type === "control.transition" &&
       props.transitionEventKey !== envelope.eventKey
@@ -503,18 +521,13 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     }
   }
 
-  type ProgressReceipt = Extract<
-    ActivityAttachmentReceiptV1,
-    { state: "session-created" | "uploading" }
-  >;
-  type ResolvedAttachment = { fileId?: string; attachment: ActivityAttachmentReceiptV1 };
-
-  async function recordUnknownUpload(
+  private async recordUnknownUpload(
     envelope: AgentActivityEnvelopeV1,
     leaseToken: string,
     progress: ProgressReceipt,
     reason: string,
   ): Promise<ResolvedAttachment> {
+    const { deps, now } = this.runtime;
     const unknown: ActivityAttachmentReceiptV1 = {
       state: UPLOAD_RESULT_UNKNOWN,
       uploadId: progress.uploadId,
@@ -528,9 +541,10 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     return { attachment: unknown };
   }
 
-  async function verifyUploadedAttachment(
+  private async verifyUploadedAttachment(
     state: Extract<ActivityAttachmentReceiptV1, { state: "uploaded" }>,
   ): Promise<ResolvedAttachment> {
+    const { deps } = this.runtime;
     const info = await deps.mm.getFileInfo(state.fileId);
     if (!info || info.size !== state.byteLength) {
       throw new ActivitySinkIntegrityError("uploaded Mattermost file failed verification");
@@ -538,12 +552,13 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     return { fileId: state.fileId, attachment: state };
   }
 
-  async function uploadOneChunk(params: {
+  private async uploadOneChunk(params: {
     envelope: Extract<AgentActivityEnvelopeV1, { type: "item.completed" }>;
     attachment: ActivityAttachmentSource;
     leaseToken: string;
     session: MattermostUploadSession;
   }): Promise<ResolvedAttachment | MattermostUploadSession> {
+    const { deps, now, uploadChunkBytes } = this.runtime;
     const expected = params.envelope.item.attachment!;
     const { session } = params;
     if (session.fileOffset < 0 || session.fileOffset > params.attachment.byteLength) {
@@ -574,7 +589,7 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
       const observed = await deps.mm.getUploadSession(session.id);
       if (observed) return observed;
       const reason = error instanceof Error ? error.message : "upload result unknown";
-      return recordUnknownUpload(params.envelope, params.leaseToken, progress, reason);
+      return this.recordUnknownUpload(params.envelope, params.leaseToken, progress, reason);
     }
     if (result.outcome === "complete") {
       const uploaded: Extract<ActivityAttachmentReceiptV1, { state: "uploaded" }> = {
@@ -591,11 +606,11 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
         uploaded,
         now(),
       );
-      return verifyUploadedAttachment(uploaded);
+      return this.verifyUploadedAttachment(uploaded);
     }
     const observed = await deps.mm.getUploadSession(session.id);
     if (!observed) {
-      return recordUnknownUpload(
+      return this.recordUnknownUpload(
         params.envelope,
         params.leaseToken,
         progress,
@@ -608,13 +623,13 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     return observed;
   }
 
-  function isResolvedAttachment(
+  private isResolvedAttachment(
     value: ResolvedAttachment | MattermostUploadSession,
   ): value is ResolvedAttachment {
     return "attachment" in value;
   }
 
-  async function continueUpload(params: {
+  private async continueUpload(params: {
     envelope: Extract<AgentActivityEnvelopeV1, { type: "item.completed" }>;
     attachment: ActivityAttachmentSource;
     leaseToken: string;
@@ -622,19 +637,20 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
   }): Promise<ResolvedAttachment> {
     let session = params.session;
     while (session.fileOffset < params.attachment.byteLength) {
-      const result = await uploadOneChunk({ ...params, session });
-      if (isResolvedAttachment(result)) return result;
+      const result = await this.uploadOneChunk({ ...params, session });
+      if (this.isResolvedAttachment(result)) return result;
       session = result;
     }
     throw new ActivitySinkIntegrityError("Mattermost upload completed without a file id");
   }
 
-  async function resolveUploadedFile(
+  private async resolveUploadedFile(
     envelope: Extract<AgentActivityEnvelopeV1, { type: "item.completed" }>,
     attachment: ActivityAttachmentSource,
     receipt: ActivityWriteReceiptV1,
     binding: ActivitySinkBinding,
   ): Promise<ResolvedAttachment> {
+    const { deps, now } = this.runtime;
     const expected = envelope.item.attachment;
     if (!expected) return { attachment: { state: "none" } };
     const token = receipt.leaseToken;
@@ -658,24 +674,25 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     }
     if (state.state === UPLOAD_RESULT_UNKNOWN) return { attachment: state };
     if (state.state === "attached") return { fileId: state.fileId, attachment: state };
-    if (state.state === "uploaded") return verifyUploadedAttachment(state);
+    if (state.state === "uploaded") return this.verifyUploadedAttachment(state);
     session ??= await deps.mm.getUploadSession(state.uploadId);
     if (!session) {
-      return recordUnknownUpload(
+      return this.recordUnknownUpload(
         envelope,
         token,
         state,
         "upload session disappeared before a durable file id was observed",
       );
     }
-    return continueUpload({ envelope, attachment, leaseToken: token, session });
+    return this.continueUpload({ envelope, attachment, leaseToken: token, session });
   }
 
-  async function recoverExistingPost(
+  private async recoverExistingPost(
     envelope: AgentActivityEnvelopeV1,
     receipt: ActivityWriteReceiptV1,
     binding: ActivitySinkBinding,
   ): Promise<ActivityMattermostPost | null> {
+    const { deps } = this.runtime;
     let post: ActivityMattermostPost | null;
     if (receipt.postId) {
       post = await deps.mm.getPost(receipt.postId);
@@ -684,17 +701,22 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
         throw new ActivitySinkIntegrityError("receipt post id does not match Mattermost");
       }
     } else {
-      post = await scanUncertainSuffix(envelope.eventKey, binding, receipt.historyAnchorPostId);
+      post = await this.scanUncertainSuffix(
+        envelope.eventKey,
+        binding,
+        receipt.historyAnchorPostId,
+      );
     }
-    if (post) await assertRecoveredPostTarget(post, envelope, binding);
+    if (post) await this.assertRecoveredPostTarget(post, envelope, binding);
     return post;
   }
 
-  async function commitRecovered(
+  private async commitRecovered(
     envelope: AgentActivityEnvelopeV1,
     receipt: ActivityWriteReceiptV1,
     post: ActivityMattermostPost,
   ): Promise<Pick<ActivitySinkResult, "outcome" | "postIds">> {
+    const { deps, now } = this.runtime;
     if (!receipt.postId) {
       await deps.receipts.markPosted(envelope.eventKey, receipt.leaseToken, post.id, now());
     }
@@ -719,11 +741,12 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     return { outcome: "duplicate", postIds: [post.id] };
   }
 
-  async function handleControl(
+  private async handleControl(
     envelope: Extract<AgentActivityEnvelopeV1, { type: "control.transition" }>,
     receipt: ActivityWriteReceiptV1,
     binding: ActivitySinkBinding,
   ): Promise<Pick<ActivitySinkResult, "outcome" | "postIds">> {
+    const { deps, now } = this.runtime;
     const createEventKey = approvalCreateEventKey(envelope.ref);
     const createReceipt = await deps.receipts.read(createEventKey);
     if (
@@ -738,7 +761,7 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     if (original.id !== createReceipt.postId) {
       throw new ActivitySinkIntegrityError("approval receipt post id does not match Mattermost");
     }
-    const originalProps = await assertActivityPostTarget(
+    const originalProps = await this.assertActivityPostTarget(
       original,
       envelope,
       binding,
@@ -775,17 +798,18 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     return { outcome: "persisted", postIds: [original.id] };
   }
 
-  async function claimEvent(
+  private async claimEvent(
     envelope: AgentActivityEnvelopeV1,
     binding: ActivitySinkBinding,
     digest: string,
   ) {
+    const { deps, now, leaseMs } = this.runtime;
     const existing = await deps.receipts.read(envelope.eventKey);
     try {
       return await deps.receipts.claim({
         eventKey: envelope.eventKey,
         payloadDigest: digest,
-        historyAnchorPostId: existing?.historyAnchorPostId ?? await historyAnchor(binding),
+        historyAnchorPostId: existing?.historyAnchorPostId ?? await this.historyAnchor(binding),
         leaseOwner: deps.leaseOwner,
         now: now(),
         leaseMs,
@@ -795,19 +819,20 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
         throw new ActivitySinkConflictError(error.message);
       }
       if (!(error instanceof ActivityReceiptLeaseError)) throw error;
-      const replay = await waitForConcurrentReplay(envelope.eventKey, digest);
+      const replay = await this.waitForConcurrentReplay(envelope.eventKey, digest);
       if (replay) return replay;
       throw new ActivitySinkUnavailableError(error.message);
     }
   }
 
-  async function attachCreatedFile(
+  private async attachCreatedFile(
     envelope: AgentActivityEnvelopeV1,
     receipt: ActivityWriteReceiptV1,
     postId: string,
     fileId: string | undefined,
     attachment: ActivityAttachmentReceiptV1,
   ): Promise<void> {
+    const { deps, now } = this.runtime;
     if (!fileId || attachment.state !== "uploaded") return;
     const files = await deps.mm.getPostFiles(postId);
     if (files.length !== 1 || files[0].id !== fileId || files[0].size !== attachment.byteLength) {
@@ -826,19 +851,20 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     );
   }
 
-  async function createJournalPost(
+  private async createJournalPost(
     input: NormalizedActivitySinkAppendInput,
     receipt: ActivityWriteReceiptV1,
     activityRootPostId: string | undefined,
     preparedControl: ActivitySinkPreparedControl | null,
   ): Promise<Pick<ActivitySinkResult, "outcome" | "postIds">> {
+    const { deps, now } = this.runtime;
     const { envelope, binding, attachment } = input;
-    const rootId = envelope.type === "turn.started" ? undefined : activityRootPostId;
+    const rootId = envelope.type === TURN_STARTED ? undefined : activityRootPostId;
     const policy = activityAttentionPolicy(envelope);
     let fileId: string | undefined;
     let attachmentState = receipt.attachment;
     if (envelope.type === ITEM_COMPLETED && envelope.item.attachment && attachment) {
-      const uploaded = await resolveUploadedFile(envelope, attachment, receipt, binding);
+      const uploaded = await this.resolveUploadedFile(envelope, attachment, receipt, binding);
       fileId = uploaded.fileId;
       attachmentState = uploaded.attachment;
     }
@@ -875,12 +901,12 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
       silent: policy.silent ?? false,
     });
     await deps.receipts.markPosted(envelope.eventKey, receipt.leaseToken, created.id, now());
-    await attachCreatedFile(envelope, receipt, created.id, fileId, attachmentState);
+    await this.attachCreatedFile(envelope, receipt, created.id, fileId, attachmentState);
     await deps.receipts.commit(envelope.eventKey, receipt.leaseToken, now());
     return { outcome: "persisted", postIds: [created.id] };
   }
 
-  async function appendClaimed(
+  private async appendClaimed(
     input: NormalizedActivitySinkAppendInput,
     receipt: ActivityWriteReceiptV1,
     recoveredClaim: boolean,
@@ -889,18 +915,22 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
   ): Promise<Pick<ActivitySinkResult, "outcome" | "postIds">> {
     const { envelope, binding } = input;
     if (recoveredClaim) {
-      const recovered = await recoverExistingPost(envelope, receipt, binding);
-      if (recovered) return commitRecovered(envelope, receipt, recovered);
+      const recovered = await this.recoverExistingPost(envelope, receipt, binding);
+      if (recovered) return this.commitRecovered(envelope, receipt, recovered);
     }
     if (envelope.type === "turn.finalized") {
-      await deps.receipts.commit(envelope.eventKey, receipt.leaseToken, now());
+      await this.runtime.deps.receipts.commit(
+        envelope.eventKey,
+        receipt.leaseToken,
+        this.runtime.now(),
+      );
       return { outcome: "persisted", postIds: [] };
     }
-    if (envelope.type === "control.transition") return handleControl(envelope, receipt, binding);
-    return createJournalPost(input, receipt, activityRootPostId, preparedControl);
+    if (envelope.type === "control.transition") return this.handleControl(envelope, receipt, binding);
+    return this.createJournalPost(input, receipt, activityRootPostId, preparedControl);
   }
 
-  function isWaitingApproval(
+  private isWaitingApproval(
     envelope: AgentActivityEnvelopeV1,
   ): envelope is Extract<AgentActivityEnvelopeV1, { type: "item.completed" }> {
     return envelope.type === ITEM_COMPLETED &&
@@ -908,7 +938,7 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
       envelope.item.status === "waiting";
   }
 
-  function assertPreparedControl(
+  private assertPreparedControl(
     prepared: ActivitySinkPreparedControl,
     envelope: Extract<AgentActivityEnvelopeV1, { type: "item.completed" }>,
     binding: ActivitySinkBinding,
@@ -929,7 +959,28 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     }
   }
 
-  async function append(rawInput: ActivitySinkAppendInput): Promise<ActivitySinkResult> {
+  private async prepareControl(
+    envelope: AgentActivityEnvelopeV1,
+    binding: ActivitySinkBinding,
+    activityRootPostId: string | undefined,
+  ): Promise<ActivitySinkPreparedControl | null> {
+    const { controls } = this.runtime.deps;
+    if (!controls || !this.isWaitingApproval(envelope)) return null;
+    if (!activityRootPostId) {
+      throw new ActivitySinkIntegrityError("approval control is missing its Activity root");
+    }
+    const message = messageFor(envelope, binding);
+    const prepared = await controls.prepare({
+      envelope,
+      binding,
+      activityRootPostId,
+      message,
+    });
+    this.assertPreparedControl(prepared, envelope, binding, message);
+    return prepared;
+  }
+
+  async append(rawInput: ActivitySinkAppendInput): Promise<ActivitySinkResult> {
     const normalized: NormalizedActivitySinkAppendInput = {
       ...rawInput,
       attachment: normalizeAttachment(rawInput.attachment),
@@ -937,25 +988,12 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
     assertAttachmentPayload(normalized);
     const input = await sanitizeInput(normalized);
     const { envelope, binding, attachment } = input;
-    const activityRootPostId = envelope.type === "turn.started"
+    const activityRootPostId = envelope.type === TURN_STARTED
       ? undefined
-      : await rootPostId(envelope);
-    let preparedControl: ActivitySinkPreparedControl | null = null;
-    if (deps.controls && isWaitingApproval(envelope)) {
-      if (!activityRootPostId) {
-        throw new ActivitySinkIntegrityError("approval control is missing its Activity root");
-      }
-      const message = messageFor(envelope, binding);
-      preparedControl = await deps.controls.prepare({
-        envelope,
-        binding,
-        activityRootPostId,
-        message,
-      });
-      assertPreparedControl(preparedControl, envelope, binding, message);
-    }
+      : await this.rootPostId(envelope);
+    const preparedControl = await this.prepareControl(envelope, binding, activityRootPostId);
     const digest = await activityPayloadDigestFromSource(envelope, attachment);
-    const claim = await claimEvent(envelope, binding, digest);
+    const claim = await this.claimEvent(envelope, binding, digest);
     let bare: Pick<ActivitySinkResult, "outcome" | "postIds">;
     if ("postIds" in claim) {
       bare = claim;
@@ -965,7 +1003,7 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
         postIds: claim.receipt.postId ? [claim.receipt.postId] : [],
       };
     } else {
-      bare = await appendClaimed(
+      bare = await this.appendClaimed(
         input,
         claim.receipt,
         claim.recovered,
@@ -973,10 +1011,10 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
         preparedControl,
       );
     }
-    const resolvedRootPostId = envelope.type === "turn.started"
+    const resolvedRootPostId = envelope.type === TURN_STARTED
       ? bare.postIds[0]
       : activityRootPostId;
-    if (!resolvedRootPostId || (envelope.type === "turn.started" && bare.postIds.length !== 1)) {
+    if (!resolvedRootPostId || (envelope.type === TURN_STARTED && bare.postIds.length !== 1)) {
       throw new ActivitySinkIntegrityError("Activity acknowledgement has no unique run root");
     }
     const receipt = {
@@ -989,10 +1027,22 @@ export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
       if (!receipt.postId || bare.postIds.length !== 1) {
         throw new ActivitySinkIntegrityError("agent control acknowledgement has no unique post");
       }
-      await deps.controls!.attachReceipt({ ...preparedControl.receipt, postId: receipt.postId });
+      await this.runtime.deps.controls!.attachReceipt({
+        ...preparedControl.receipt,
+        postId: receipt.postId,
+      });
     }
     return { ...bare, receipt };
   }
 
-  return { append };
+}
+
+export function createActivitySink(deps: ActivitySinkDeps): ActivitySink {
+  return new ActivitySinkWriter({
+    deps,
+    now: deps.now ?? Date.now,
+    leaseMs: deps.leaseMs ?? DEFAULT_LEASE_MS,
+    uploadChunkBytes: deps.uploadChunkBytes ?? DEFAULT_UPLOAD_CHUNK_BYTES,
+    historyPageSize: deps.historyPageSize ?? DEFAULT_HISTORY_PAGE_SIZE,
+  });
 }

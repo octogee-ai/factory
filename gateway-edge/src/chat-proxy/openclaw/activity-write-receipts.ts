@@ -283,38 +283,32 @@ function validAttachmentIdentity(data: Record<string, unknown>): boolean {
   );
 }
 
-function validAttachmentReceipt(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const data = value as Record<string, unknown>;
-  if (data.state === "none") return exactKeys(data, ["state"]);
-  if (!validAttachmentIdentity(data)) return false;
-  if (data.state === "attached") {
-    return (
-      exactKeys(data, ["state", "fileId", "sha256", "byteLength"]) &&
-      nonBlankString(data.fileId)
-    );
-  }
-  if (
-    !nonBlankString(data.uploadId) ||
-    !nonBlankString(data.filename)
-  ) return false;
-  if (data.state === "uploaded") {
-    return (
-      exactKeys(data, [
-        "state", "uploadId", "fileId", "filename", "sha256", "byteLength",
-      ]) &&
-      nonBlankString(data.fileId)
-    );
-  }
-  if (data.state === "upload-result-unknown") {
-    return (
-      exactKeys(data, [
-        "state", "uploadId", "filename", "sha256", "byteLength", "reason",
-      ]) &&
-      nonBlankString(data.reason)
-    );
-  }
-  if (data.state !== "session-created" && data.state !== "uploading") return false;
+function validAttachedAttachmentReceipt(data: Record<string, unknown>): boolean {
+  return (
+    exactKeys(data, ["state", "fileId", "sha256", "byteLength"]) &&
+    nonBlankString(data.fileId)
+  );
+}
+
+function validUploadedAttachmentReceipt(data: Record<string, unknown>): boolean {
+  return (
+    exactKeys(data, [
+      "state", "uploadId", "fileId", "filename", "sha256", "byteLength",
+    ]) &&
+    nonBlankString(data.fileId)
+  );
+}
+
+function validUnknownAttachmentReceipt(data: Record<string, unknown>): boolean {
+  return (
+    exactKeys(data, [
+      "state", "uploadId", "filename", "sha256", "byteLength", "reason",
+    ]) &&
+    nonBlankString(data.reason)
+  );
+}
+
+function validUploadProgressReceipt(data: Record<string, unknown>): boolean {
   return (
     exactKeys(data, [
       "state", "uploadId", "fileOffset", "filename", "sha256", "byteLength",
@@ -322,6 +316,19 @@ function validAttachmentReceipt(value: unknown): boolean {
     safeNonNegativeInteger(data.fileOffset) &&
     data.fileOffset <= (data.byteLength as number)
   );
+}
+
+function validAttachmentReceipt(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const data = value as Record<string, unknown>;
+  if (data.state === "none") return exactKeys(data, ["state"]);
+  if (!validAttachmentIdentity(data)) return false;
+  if (data.state === "attached") return validAttachedAttachmentReceipt(data);
+  if (!nonBlankString(data.uploadId) || !nonBlankString(data.filename)) return false;
+  if (data.state === "uploaded") return validUploadedAttachmentReceipt(data);
+  if (data.state === "upload-result-unknown") return validUnknownAttachmentReceipt(data);
+  return (data.state === "session-created" || data.state === "uploading") &&
+    validUploadProgressReceipt(data);
 }
 
 function validReceiptMetadata(data: Record<string, unknown>): boolean {
