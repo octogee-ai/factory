@@ -707,9 +707,9 @@ fi
 # missing the trigger returns `not-ready` with reason: "config-missing" and
 # the customer's gatewayId never gets set. This bit PROD on 2026-04-28 (first
 # setup, never seeded) and 2026-04-29 (--full teardown wiped Firestore, the
-# manual rebuild path forgot to reseed). bootstrap-env.sh now seeds it as
-# Step 4, but verify-env confirms it independently — so a manual rebuild
-# that bypasses bootstrap-env.sh (per RUNBOOK ops flow) still gets caught.
+# manual rebuild path forgot to reseed). glm-controller now self-seeds it, but
+# verify-env confirms it independently so setup drift is caught before a
+# builder is assigned.
 #
 # Probes via the seed script's --dry-run, which already encodes the right
 # defaultGatewayId per env and surfaces drift vs. missing distinctly.

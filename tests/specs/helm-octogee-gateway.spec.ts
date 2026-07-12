@@ -363,7 +363,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(edge).not.toMatch(/name:\s*OCTOGEE_API_URL\b/);
   });
 
-  it("operator profile still wires OCTOGEE_AGENT_CONTROL_SIGNING_SECRET on gateway-edge without MM_ADMIN_PAT", () => {
+  it("operator profile wires the durable-control signing secrets on gateway-edge without MM_ADMIN_PAT", () => {
     const dep =
       findDoc(
         helmTemplate("octogee-gw-bender", {
@@ -377,19 +377,21 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(edge).toMatch(
       /name:\s*OCTOGEE_AGENT_CONTROL_SIGNING_SECRET\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*name:\s*agent-control-signing\s*\n\s*key:\s*secret/,
     );
+    expect(edge).toMatch(
+      /name:\s*OCTOGEE_APPROVAL_SIGNING_SECRET\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*name:\s*approval-signing\s*\n\s*key:\s*secret/,
+    );
     // The platform admin PAT is not rendered into gateway pods.
     expect(edge).not.toMatch(/name:\s*MM_ADMIN_PAT/);
-    expect(edge).not.toContain("OCTOGEE_APPROVAL_SIGNING_SECRET");
-    expect(edge).not.toContain("approval-signing");
   });
 
-  it("standard profile omits MM_ADMIN_PAT but still wires OCTOGEE_AGENT_CONTROL_SIGNING_SECRET on gateway-edge", () => {
+  it("standard profile omits MM_ADMIN_PAT but wires the durable-control signing secrets on gateway-edge", () => {
     const edge = containerBlock(
       findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "",
       "gateway-edge",
     );
     expect(edge).not.toMatch(/name:\s*MM_ADMIN_PAT/);
     expect(edge).toMatch(/name:\s*OCTOGEE_AGENT_CONTROL_SIGNING_SECRET/);
+    expect(edge).toMatch(/name:\s*OCTOGEE_APPROVAL_SIGNING_SECRET/);
   });
 
   it("wires the activity-bridge broadcast env vars on the gateway container (Appendix A anti-recurrence: the env var was the silent killer)", () => {

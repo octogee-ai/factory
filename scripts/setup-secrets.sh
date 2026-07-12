@@ -180,17 +180,15 @@ ksecret mattermost-cloud-sql --from-literal=password="$MM_DB_PASSWORD"
 # ── 2. Mattermost gateway creds ───────────────────────────────────────────
 info "mattermost-gateway"
 set +u
-MM_BOT_TOKEN="${MM_BOT_TOKEN:-}"
+MM_BOT_TOKEN="${MM_BOT_TOKEN:-$(ksecret_key mattermost-gateway bot_token)}"
+MM_ADMIN_USER="${MM_ADMIN_USER:-$(ksecret_key mattermost-gateway admin_user)}"
 MM_ADMIN_USER="${MM_ADMIN_USER:-octogee-admin}"
-MM_ADMIN_PASS="${MM_ADMIN_PASS:-}"
-MM_ADMIN_TOKEN="${MM_ADMIN_TOKEN:-}"
-MM_TEAM_ID="${MM_TEAM_ID:-}"
-MM_BOT_USER_ID="${MM_BOT_USER_ID:-}"
-MM_ADMIN_USER_ID="${MM_ADMIN_USER_ID:-}"
+MM_ADMIN_PASS="${MM_ADMIN_PASS:-$(ksecret_key mattermost-gateway admin_pass)}"
+MM_ADMIN_TOKEN="${MM_ADMIN_TOKEN:-$(ksecret_key mattermost-gateway admin_token)}"
+MM_TEAM_ID="${MM_TEAM_ID:-$(ksecret_key mattermost-gateway team_id)}"
+MM_BOT_USER_ID="${MM_BOT_USER_ID:-$(ksecret_key mattermost-gateway bot_user_id)}"
+MM_ADMIN_USER_ID="${MM_ADMIN_USER_ID:-$(ksecret_key mattermost-gateway admin_user_id)}"
 set -u
-# Create even if empty — but operationally, empty values are usually a smell.
-# chat-proxy/gateway-edge may partially work and then fail in confusing ways.
-# If bot/admin/team fields are blank, run setup-mattermost.sh to repair app/bootstrap state.
 ksecret mattermost-gateway \
   --from-literal=bot_token="$MM_BOT_TOKEN" \
   --from-literal=admin_user="$MM_ADMIN_USER" \
@@ -203,6 +201,13 @@ ksecret mattermost-gateway \
 if [[ -z "$MM_BOT_TOKEN" || -z "$MM_TEAM_ID" || -z "$MM_BOT_USER_ID" || -z "$MM_ADMIN_USER_ID" ]]; then
   warn "mattermost-gateway contains blank bootstrap values. Run ./scripts/setup-mattermost.sh --env=$ENV before trusting this environment."
 fi
+
+info "approval-signing"
+APPROVAL_SIGNING_SECRET=$(ksecret_key approval-signing secret)
+if [[ -z "$APPROVAL_SIGNING_SECRET" ]]; then
+  APPROVAL_SIGNING_SECRET=$(openssl rand -hex 32)
+fi
+ksecret approval-signing --from-literal=secret="$APPROVAL_SIGNING_SECRET"
 
 # ── 2b. OpenClaw agent-control signing secret ────────────────────────────
 # HMAC secret for durable control context binding. Must NOT rotate during
