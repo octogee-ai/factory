@@ -377,7 +377,7 @@ function scanTerraformProviders(
       references.push({
         referenceKind: "terraform-provider",
         path: relativePath,
-        key: `provider:${provider.name}`,
+        key: `provider:${providerSource.split("/").at(-1)}`,
         packageName: providerSource,
         currentValue: hclQuotedAttribute(providerBlock, "version") ?? "unconstrained",
       });
@@ -639,11 +639,15 @@ function exceptionReferences(
   exception: DependencyException,
   errors: string[],
 ): DependencyReferenceIdentity[] {
-  const raw = exception.references ?? (exception.reference ? [exception.reference] : []);
+  const raw = normalizedExceptionReferences(exception);
   if (!Array.isArray(raw) || raw.length === 0 || raw.some((reference) => !validReference(reference))) {
     errors.push(`${exception.id}: exact references are required`);
   }
   return Array.isArray(raw) ? raw.filter(validReference) : [];
+}
+
+function normalizedExceptionReferences(exception: DependencyException): DependencyReferenceIdentity[] {
+  return exception.references ?? (exception.reference ? [exception.reference] : []);
 }
 
 function validateExceptionReferences(
@@ -905,7 +909,7 @@ function auditStaleExceptions(context: CoverageAuditContext): void {
 
 function exceptionReferencesForAudit(exceptions: DependencyException[]): ExceptionReference[] {
   return exceptions.flatMap((exception) =>
-    (exception.references ?? []).map((reference) => ({ exception, reference })),
+    normalizedExceptionReferences(exception).map((reference) => ({ exception, reference })),
   );
 }
 
