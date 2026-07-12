@@ -227,14 +227,14 @@ describe("applyPreBootPatches — MM env sync", () => {
 describe("applyPreBootPatches — conversation experiment", () => {
   it("materializes the bounded publisher config from the shared Helm mode", () => {
     const config: any = {
-      channels: { mattermost: { accounts: { default: {} } } },
+      channels: { mattermost: { accounts: { default: {}, "chris-coach": {} } } },
     };
 
     applyPreBootPatches(config, {
       OCTOGEE_ACTIVITY_BRIDGE_MODE: "publisher-live",
     });
 
-    expect(config.channels.mattermost.accounts.default).toMatchObject({
+    expect(config.channels.mattermost).toMatchObject({
       replyToMode: "all",
       threadSessionScope: "channel",
       agentActivity: true,
