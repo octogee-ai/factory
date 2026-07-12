@@ -46,17 +46,23 @@ export function platformOpenAiEmbeddingsEnabled(
 }
 
 const PLATFORM_EMBEDDING_SECRET_PREFIX = "platform-openai-embedding-";
+const OPENCLAW_REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-// A platform embedding SecretRef is DERIVED from its agent id, never carried:
-// OpenClaw's config.get→patch round-trip can shift redacted array entries, so a
-// full agents.list rebuilt from `current` may hand one coach another coach's
-// ref (the r2 unmount wedge). Every full-list write runs through this rebind so
-// a corrupted ref self-heals instead of round-tripping. BYO refs (non-platform
-// ids) pass through untouched.
+// A platform embedding SecretRef is DERIVED from its agent id, never carried.
+// Two corruption vectors make carrying fatal: (1) a full agents.list rebuilt
+// from a shifted `current` hands one coach another coach's ref, and (2) —
+// the live r9 wedge — config.get REDACTS the id to __OPENCLAW_REDACTED__ and
+// the server back-substitutes sentinels BY ARRAY INDEX on patch-apply, so any
+// removal shifts every survivor. Rewriting sentinels to the derived id here
+// means our patches carry real values and the server has nothing to
+// substitute. Safe because buildCustomerAgent is the only writer of
+// exec/gcp-secret-manager embedding refs on gateway pods — a future BYO
+// embedding ref must use a distinguishable source/provider shape. Non-platform
+// (BYO-shaped) ids pass through untouched.
 export function rebindPlatformEmbeddingRefs(agents: readonly unknown[]): unknown[] {
   return agents.map((entry) => {
     if (!isRecord(entry) || typeof entry.id !== "string" || entry.id.length === 0) return entry;
@@ -65,13 +71,13 @@ export function rebindPlatformEmbeddingRefs(agents: readonly unknown[]): unknown
     const remote = memorySearch.remote;
     if (!isRecord(remote)) return entry;
     const apiKey = remote.apiKey;
-    if (
-      !isRecord(apiKey) ||
-      typeof apiKey.id !== "string" ||
-      !apiKey.id.startsWith(PLATFORM_EMBEDDING_SECRET_PREFIX)
-    ) {
-      return entry;
-    }
+    if (!isRecord(apiKey) || typeof apiKey.id !== "string") return entry;
+    const platformShaped =
+      apiKey.id.startsWith(PLATFORM_EMBEDDING_SECRET_PREFIX) ||
+      (apiKey.id === OPENCLAW_REDACTED_SENTINEL &&
+        apiKey.source === "exec" &&
+        apiKey.provider === "gcp-secret-manager");
+    if (!platformShaped) return entry;
     const expected = platformOpenAiEmbeddingSecretId(entry.id);
     if (apiKey.id === expected) return entry;
     return {

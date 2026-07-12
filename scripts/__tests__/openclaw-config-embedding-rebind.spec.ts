@@ -83,6 +83,35 @@ describe("rebindPlatformEmbeddingRefs (redacted-array round-trip self-heal)", ()
     expect(out[0]).toBe(byo);
   });
 
+  it("rebinds a REDACTED platform-shaped ref to the agent's own id — config.get sentinels are what the server shifts by index (2026-07-12 r9 wedge)", () => {
+    const redacted = coach("octogee-livefixture-coach", {
+      provider: "openai-compatible",
+      remote: {
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: { source: "exec", provider: "gcp-secret-manager", id: "__OPENCLAW_REDACTED__" },
+      },
+      model: "text-embedding-3-small",
+    });
+
+    const out = rebindPlatformEmbeddingRefs([redacted]);
+
+    expect(
+      (out[0] as { memorySearch: { remote: { apiKey: { id: string } } } }).memorySearch.remote
+        .apiKey.id,
+    ).toBe(platformOpenAiEmbeddingSecretId("octogee-livefixture-coach"));
+  });
+
+  it("leaves a redacted ref of a DIFFERENT provider/source shape untouched", () => {
+    const foreign = coach("octogee-alice-coach", {
+      provider: "openai-compatible",
+      remote: { baseUrl: "https://api.example.com", apiKey: { source: "env", id: "__OPENCLAW_REDACTED__" } },
+    });
+
+    const out = rebindPlatformEmbeddingRefs([foreign]);
+
+    expect(out[0]).toBe(foreign);
+  });
+
   it("rebinds a project agent's platform ref to the project agent's own id", () => {
     const projectAgent = coach("octogee-alice-proj-p1-coach", platformRef("octogee-alice-coach"));
 
