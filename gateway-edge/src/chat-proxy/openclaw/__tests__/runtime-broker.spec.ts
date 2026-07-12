@@ -65,6 +65,47 @@ describe("OpenClaw runtime broker env", () => {
     );
   });
 
+  it("derives the workspace binding for a root-level liveRuns v3 admission", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const broker = createOpenClawRuntimeBroker({
+      baseUrl: "http://octogee-api:3001/",
+      gatewayId: "gw-bender",
+      fetchImpl: vi.fn(async (_input, init) => {
+        calls.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(null, { status: 204 });
+      }),
+    });
+    const doc = {
+      schemaVersion: 3 as const,
+      projectionKind: "admission" as const,
+      conversationId: "main-1",
+      turnId: "input-1",
+      mainChannelId: "main-1",
+      activityChannelId: "activity-1",
+      inputPostId: "input-1",
+      origin: "followup" as const,
+      status: "queued" as const,
+      attention: "routine" as const,
+      revision: 2,
+      updatedAt: 10,
+      expiresAt: 20,
+    };
+
+    await broker.writeRunLiveDoc(
+      "workspaces/acme/channels/build/liveRuns/admission-input-1",
+      doc,
+    );
+
+    expect(calls).toEqual([
+      {
+        gatewayId: "gw-bender",
+        workspaceSlug: "acme",
+        path: "workspaces/acme/channels/build/liveRuns/admission-input-1",
+        doc,
+      },
+    ]);
+  });
+
   it("requires GATEWAY_ID when the broker URL is configured", () => {
     expect(() =>
       createOpenClawRuntimeBrokerFromEnv({
@@ -83,7 +124,7 @@ describe("OpenClaw runtime broker env", () => {
       expect.objectContaining({
         redeemOpenClawWs: expect.any(Function),
         getUserGatewayId: expect.any(Function),
-        approvalRegistry: expect.any(Object),
+        agentControlRegistry: expect.any(Object),
       }),
     );
   });

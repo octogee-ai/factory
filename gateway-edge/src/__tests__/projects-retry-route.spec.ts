@@ -26,7 +26,7 @@ const h = vi.hoisted(() => ({
   } as ProjectUpdate | null,
   mmApi: vi.fn(),
   provisionProjectRepo: vi.fn(),
-  provisionActivityPair: vi.fn(),
+  reconcileActivityPair: vi.fn(),
   logger: {
     error: vi.fn(),
     info: vi.fn(),
@@ -35,6 +35,7 @@ const h = vi.hoisted(() => ({
 
 function projectRef() {
   return {
+    path: `workspaces/${h.wid}/projects/${h.pid}`,
     update: async (data: ProjectUpdate) => {
       h.projectUpdates.push(data);
     },
@@ -103,7 +104,7 @@ vi.mock("../routes/projects/provisioning.js", () => ({
 }));
 
 vi.mock("../lib/activityPair.js", () => ({
-  provisionActivityPair: (...args: unknown[]) => h.provisionActivityPair(...args),
+  reconcileActivityPair: (...args: unknown[]) => h.reconcileActivityPair(...args),
 }));
 
 vi.mock("../middleware/logging.js", () => ({
@@ -151,17 +152,17 @@ beforeEach(() => {
     throw new Error(`unexpected Mattermost call: ${method ?? "GET"} ${path}`);
   });
   h.provisionProjectRepo.mockReset().mockResolvedValue(null);
-  h.provisionActivityPair.mockReset().mockImplementation(async (input: {
-    recordActivityChannelId: (activityChannelId: string) => Promise<void>;
-  }) => {
-    await input.recordActivityChannelId("activity-1");
-  });
+  h.reconcileActivityPair.mockReset().mockResolvedValue({ activityChannelId: "activity-1" });
   h.logger.error.mockReset();
   h.logger.info.mockReset();
 });
 
 describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
   it("recreates project chat, provisions activity, reconciles repo, and activates the project", async () => {
+    h.reconcileActivityPair.mockImplementationOnce(async () => {
+      expect(h.channelWrites).toHaveLength(1);
+      return { activityChannelId: "activity-1" };
+    });
     const res = await request(app())
       .post("/api/projects/mira/orbit/retry-provisioning")
       .expect(200);
@@ -176,13 +177,13 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     });
     expect(h.mmApi).toHaveBeenCalledWith("/channels/channel-1/members", "POST", { user_id: "owner-mm" });
     expect(h.mmApi).toHaveBeenCalledWith("/channels/channel-1/members", "POST", { user_id: "agent-mm" });
-    expect(h.provisionActivityPair).toHaveBeenCalledWith(
+    expect(h.reconcileActivityPair).toHaveBeenCalledWith(
       expect.objectContaining({
+        channelDocPath: "workspaces/mira/projects/orbit/channels/general",
         primaryName: "mira-proj-orbit-general",
         primaryChannelId: "channel-1",
         teamId: "team-1",
         kind: "project",
-        members: ["owner-mm", "agent-mm"],
       }),
     );
     expect(h.provisionProjectRepo).toHaveBeenCalledWith({
@@ -194,11 +195,6 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       visibility: "public",
     });
     expect(h.channelWrites).toEqual([
-      {
-        path: "channels/general",
-        data: { mattermost: { activityChannelId: "activity-1" } },
-        options: { merge: true },
-      },
       {
         path: "channels/general",
         data: {

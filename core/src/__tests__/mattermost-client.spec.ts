@@ -88,6 +88,22 @@ describe("mmApiCall — error log routing", () => {
   });
 });
 
+describe("mmApiCallStrict", () => {
+  it("throws a status-bearing error instead of converting Mattermost failure into absence", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      text: () => Promise.resolve('{"id":"temporary","message":"unavailable"}'),
+    } as Response);
+
+    const { mmApiCallStrict } = await import("../mattermost/client.js");
+    await expect(mmApiCallStrict("GET", "/channels/channel-1")).rejects.toMatchObject({
+      status: 503,
+      message: expect.stringContaining("unavailable"),
+    });
+  });
+});
+
 describe("assertMattermostConfigured — fail loud when MM is not wired", () => {
   beforeEach(() => {
     delete process.env.MM_URL;

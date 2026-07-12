@@ -21,6 +21,10 @@
       "types": "./dist/types/agent.d.ts",
       "default": "./dist/types/agent.js"
     },
+    "./types/agent-conversation": {
+      "types": "./dist/types/agent-conversation.d.ts",
+      "default": "./dist/types/agent-conversation.js"
+    },
     "./types/billing": {
       "types": "./dist/types/billing.d.ts",
       "default": "./dist/types/billing.js"
@@ -161,6 +165,9 @@
       ],
       "types/agent": [
         "dist/types/agent.d.ts"
+      ],
+      "types/agent-conversation": [
+        "dist/types/agent-conversation.d.ts"
       ],
       "types/billing": [
         "dist/types/billing.d.ts"

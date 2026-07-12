@@ -1,3 +1,6 @@
+{{- $imageRepository := required "mattermost.image.repository is required" .Values.image.repository -}}
+{{- $imageTag := required "mattermost.image.tag is required" .Values.image.tag -}}
+{{- $imageDigest := required "mattermost.image.digest is required" .Values.image.digest -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,12 +20,14 @@ spec:
       labels:
         app: mattermost
     spec:
+      nodeSelector:
+        kubernetes.io/arch: amd64
       serviceAccountName: {{ .Values.serviceAccountName }}
       securityContext:
         fsGroup: 2000
       containers:
         - name: mattermost
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ $imageRepository }}:{{ $imageTag }}@{{ $imageDigest }}"
           ports:
             - containerPort: 8065
               name: http
@@ -73,7 +78,7 @@ spec:
             - name: MM_EMAILSETTINGS_REQUIREEMAILVERIFICATION
               value: "false"
             - name: MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS
-              value: {{ .Values.allowedInternalConnections | quote }}
+              value: {{ printf "mattermost-callback-router.%s.svc.cluster.local" .Release.Namespace | quote }}
             # Browser-direct access (Option C migration): the app at
             # app.octogee.com talks to mattermost.octogee.com directly. MM's
             # REST responses + WebSocket handshake reject cross-origin

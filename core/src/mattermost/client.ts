@@ -83,6 +83,33 @@ export async function mmApiCall(method: string, endpoint: string, body?: unknown
   return resp.json();
 }
 
+export async function mmApiCallStrict(
+  method: string,
+  endpoint: string,
+  body?: unknown,
+): Promise<unknown | null> {
+  const url = process.env.MM_URL;
+  const token = await getMmAdminToken();
+  if (!url || !token) throw new Error("Mattermost strict API is not configured");
+  const response = await fetch(`${url}/api/v4${endpoint}`, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    redirect: "error",
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    const error = new Error(
+      `MM API ${response.status}: ${detail.slice(0, 200)}`,
+    ) as Error & { status: number };
+    error.status = response.status;
+    throw error;
+  }
+  if (response.status === 204) return null;
+  return await response.json();
+}
+
 function isIdempotentMmError(body: string): boolean {
   for (const id of IDEMPOTENT_MM_ERROR_IDS) {
     if (body.includes(`"id":"${id}"`)) return true;

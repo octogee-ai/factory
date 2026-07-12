@@ -4,7 +4,10 @@ import {
   isGatewayMutableConfigForGateway,
   type GatewayMutableConfig,
 } from "./gateway-mutable-config.js";
-import { IMAGE_TAG_PATTERN } from "./image-tag.js";
+import {
+  IMAGE_TAG_PATTERN,
+  isW9CandidateImageTag,
+} from "./image-tag.js";
 import { GLM_GATEWAYS_COLLECTION } from "./glm.js";
 import type {
   GatewayPreemptionHandoffSpec,
@@ -103,18 +106,72 @@ export interface GatewayDoc {
   legacyBackfill?: GatewayLegacyBackfill | null;
 }
 
-// Immutable release payload: the build artifact only. Gateway policy lives
-// exclusively on gateways/{gatewayId}, never in a release or revision.
+export const W9_CANDIDATE_MANIFEST_PATH =
+  "infra/gateway/openclaw-candidates/agent-conversation.json";
+export const W9_MATTERMOST_OVERLAY_VALUES_PATH =
+  "infra/candidates/values.mattermost-silent-post.yaml";
+export const W9_GATEWAY_EDGE_IMAGE_REPOSITORY =
+  "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge";
+
+export interface W9GatewayEdgeImage {
+  imageRepository: typeof W9_GATEWAY_EDGE_IMAGE_REPOSITORY;
+  imageTag: string;
+}
+
+export interface W9TestPublisherLiveExperiment {
+  kind: "w9-agent-conversation";
+  mode: "publisher-live";
+  candidateManifest: {
+    path: typeof W9_CANDIDATE_MANIFEST_PATH;
+    sha256: string;
+  };
+  mattermostOverlay: {
+    valuesPath: typeof W9_MATTERMOST_OVERLAY_VALUES_PATH;
+    imageReference: string;
+  };
+}
+
+const SHA256_PATTERN = /^[a-f0-9]{64}$/;
+const DIGEST_BOUND_IMAGE_REFERENCE_PATTERN =
+  /^[a-z0-9][a-z0-9./_-]*:[a-z0-9][a-z0-9._-]*@sha256:[a-f0-9]{64}$/;
+
+export function isW9TestPublisherLiveExperiment(
+  value: unknown,
+): value is W9TestPublisherLiveExperiment {
+  if (!isPlainRecord(value) || value.kind !== "w9-agent-conversation" || value.mode !== "publisher-live") {
+    return false;
+  }
+  const candidateManifest = value.candidateManifest;
+  const mattermostOverlay = value.mattermostOverlay;
+  return (
+    isPlainRecord(candidateManifest) &&
+    candidateManifest.path === W9_CANDIDATE_MANIFEST_PATH &&
+    typeof candidateManifest.sha256 === "string" &&
+    SHA256_PATTERN.test(candidateManifest.sha256) &&
+    isPlainRecord(mattermostOverlay) &&
+    mattermostOverlay.valuesPath === W9_MATTERMOST_OVERLAY_VALUES_PATH &&
+    typeof mattermostOverlay.imageReference === "string" &&
+    DIGEST_BOUND_IMAGE_REFERENCE_PATTERN.test(mattermostOverlay.imageReference)
+  );
+}
+
+// Immutable release payload: the build artifact plus its bounded W9 TEST
+// experiment contract. Gateway policy lives exclusively on gateways/{gatewayId},
+// never in a release or revision.
 export interface ReleasePayload {
   macOpsTokenProtocol?: MacOpsTokenProtocol;
   imageRepository: string;
   imageTag: string;
+  gatewayEdgeImage?: W9GatewayEdgeImage;
+  testExperiment?: W9TestPublisherLiveExperiment;
 }
 
 const RELEASE_PAYLOAD_FIELD_NAMES = new Set<string>([
   "macOpsTokenProtocol",
   "imageRepository",
   "imageTag",
+  "gatewayEdgeImage",
+  "testExperiment",
 ]);
 
 const RELEASE_PAYLOAD_REQUIRED_FIELDS = [
@@ -128,14 +185,27 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 
 export function isReleasePayload(value: unknown): value is ReleasePayload {
   if (!isPlainRecord(value)) return false;
-  if (
+  if (!hasReleasePayloadShape(value) || !hasReleasePayloadIdentity(value)) return false;
+  if (value.testExperiment === undefined) {
+    return !isW9CandidateImageTag(value.imageTag) && value.gatewayEdgeImage === undefined;
+  }
+  return (
+    isW9CandidateImageTag(value.imageTag) &&
+    isW9TestPublisherLiveExperiment(value.testExperiment) &&
+    isW9GatewayEdgeImage(value.gatewayEdgeImage, value.imageTag)
+  );
+}
+
+function hasReleasePayloadShape(value: Record<string, unknown>): boolean {
+  return !(
     Object.keys(value).some((field) => !RELEASE_PAYLOAD_FIELD_NAMES.has(field)) ||
     RELEASE_PAYLOAD_REQUIRED_FIELDS.some(
       (field) => !Object.prototype.hasOwnProperty.call(value, field),
     )
-  ) {
-    return false;
-  }
+  );
+}
+
+function hasReleasePayloadIdentity(value: Record<string, unknown>): boolean {
   return (
     (value.macOpsTokenProtocol === undefined ||
       value.macOpsTokenProtocol === 1 ||
@@ -145,6 +215,24 @@ export function isReleasePayload(value: unknown): value is ReleasePayload {
     typeof value.imageTag === "string" &&
     value.imageTag.length > 0 &&
     IMAGE_TAG_PATTERN.test(value.imageTag)
+  );
+}
+
+function w9CandidateImageName(imageTag: string): string {
+  return imageTag.slice(0, imageTag.indexOf("@"));
+}
+
+export function isW9GatewayEdgeImage(
+  value: unknown,
+  gatewayImageTag: string,
+): value is W9GatewayEdgeImage {
+  return (
+    isPlainRecord(value) &&
+    value.imageRepository === W9_GATEWAY_EDGE_IMAGE_REPOSITORY &&
+    typeof value.imageTag === "string" &&
+    isW9CandidateImageTag(value.imageTag) &&
+    isW9CandidateImageTag(gatewayImageTag) &&
+    w9CandidateImageName(value.imageTag) === w9CandidateImageName(gatewayImageTag)
   );
 }
 
@@ -443,6 +531,7 @@ export const RELEASE_NEW_REVISION_FIELDS = [
   "imageRepository",
   "imageTag",
   "macOpsTokenProtocol",
+  "testExperiment",
 ] as const;
 
 // Release-payload fields that are release-audited but may reconcile IN PLACE on

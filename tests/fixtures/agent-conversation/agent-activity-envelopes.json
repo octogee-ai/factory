@@ -1,0 +1,564 @@
+{
+  "envelopes": [
+    {
+      "schemaVersion": 1,
+      "eventKey": "cae3d59579a3d6f06c228e3d1a7e4601f0956aac9578b2befee2e3c6f8923cfe",
+      "emittedAt": "2026-07-11T15:00:00.000Z",
+      "ref": {
+        "conversationId": "main-1",
+        "turnId": "turn-1",
+        "runId": "run-1",
+        "agentId": "agent-1",
+        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
+        "origin": "human",
+        "mainChannelId": "main-1",
+        "mainRootPostId": "turn-1",
+        "inputPostId": "turn-1",
+        "itemId": "octogee:run-root",
+        "ordinal": 0,
+        "semanticVersion": 1
+      },
+      "redaction": {
+        "policy": "octogee-v1",
+        "appliedAt": "producer"
+      },
+      "type": "turn.started"
+    },
+    {
+      "schemaVersion": 1,
+      "eventKey": "02d2ea281dca0e30f5bbc6b635556f450003393279486cc40b7455b6b26c8bed",
+      "emittedAt": "2026-07-11T15:01:00.000Z",
+      "ref": {
+        "conversationId": "main-1",
+        "turnId": "turn-1",
+        "runId": "run-1",
+        "agentId": "agent-1",
+        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
+        "origin": "human",
+        "mainChannelId": "main-1",
+        "mainRootPostId": "turn-1",
+        "inputPostId": "turn-1",
+        "itemId": "commentary-1",
+        "ordinal": 1,
+        "semanticVersion": 1
+      },
+      "redaction": {
+        "policy": "octogee-v1",
+        "appliedAt": "producer"
+      },
+      "type": "item.completed",
+      "item": {
+        "kind": "commentary",
+        "status": "completed",
+        "summary": "Checked the deployment boundary.",
+        "detail": {
+          "format": "markdown",
+          "text": "The boundary is healthy."
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventKey": "866f366de54c63b3c9ae70afcbbfe83baad2a404f554adf5969684b82496f8c1",
+      "emittedAt": "2026-07-11T15:02:00.000Z",
+      "ref": {
+        "conversationId": "main-1",
+        "turnId": "turn-1",
+        "runId": "run-1",
+        "agentId": "agent-1",
+        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
+        "origin": "human",
+        "mainChannelId": "main-1",
+        "mainRootPostId": "turn-1",
+        "inputPostId": "turn-1",
+        "itemId": "tool-1",
+        "ordinal": 2,
+        "semanticVersion": 1
+      },
+      "redaction": {
+        "policy": "octogee-v1",
+        "appliedAt": "producer"
+      },
+      "type": "item.completed",
+      "item": {
+        "kind": "tool",
+        "status": "completed",
+        "summary": "Ran gateway inspection.",
+        "attachment": {
+          "filename": "tool-1.txt",
+          "mediaType": "text/plain",
+          "byteLength": 65536,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "multipartField": "detail"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventKey": "c2f9762a8351bfd4d9b764aeef6a1dc48c2598e1cf82912c0f4a73c2b79f07f3",
+      "emittedAt": "2026-07-11T15:03:00.000Z",
+      "ref": {
+        "conversationId": "main-1",
+        "turnId": "turn-1",
+        "runId": "run-1",
+        "agentId": "agent-1",
+        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
+        "origin": "human",
+        "mainChannelId": "main-1",
+        "mainRootPostId": "turn-1",
+        "inputPostId": "turn-1",
+        "itemId": "plan-1",
+        "ordinal": 3,
+        "semanticVersion": 1
+      },
+      "redaction": {
+        "policy": "octogee-v1",
+        "appliedAt": "producer"
+      },
+      "type": "item.completed",
+      "item": {
+        "kind": "plan",
+        "status": "completed",
+        "summary": "Prepared the delivery plan.",
+        "detail": {
+          "format": "json",
+          "text": "{\"steps\":3}"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventKey": "0e64b2d505074487578a8004eb9715ffe1690a32b0424fb01f1db43784828cea",
+      "emittedAt": "2026-07-11T15:04:00.000Z",
+      "ref": {
+        "conversationId": "main-1",
+        "turnId": "turn-1",
+        "runId": "run-1",
+        "agentId": "agent-1",
+        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
+        "origin": "human",
+        "mainChannelId": "main-1",
+        "mainRootPostId": "turn-1",
+        "inputPostId": "turn-1",
+        "itemId": "patch-1",
+        "ordinal": 4,
+        "semanticVersion": 1
+      },
+      "redaction": {
+        "policy": "octogee-v1",
+        "appliedAt": "producer"
+      },
+      "type": "item.completed",
+      "item": {
+        "kind": "patch",
+        "status": "completed",
+        "summary": "Applied the contract patch.",
+        "detail": {
+          "format": "text",
+          "text": "2 files changed"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventKey": "fd6c5acab126d72f64df7624dd15984776dc4d922d8c2522541c2b2648add922",
+      "emittedAt": "2026-07-11T15:05:00.000Z",
+      "ref": {
+        "conversationId": "main-1",
+        "turnId": "turn-1",
+        "runId": "run-1",
+        "agentId": "agent-1",
+        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
+        "origin": "human",
+        "mainChannelId": "main-1",
+        "mainRootPostId": "turn-1",
+        "inputPostId": "turn-1",
+        "itemId": "checkpoint-1",
+        "ordinal": 5,
+        "semanticVersion": 1
+      },
+      "redaction": {
+        "policy": "octogee-v1",
+        "appliedAt": "producer"
+      },
+      "type": "item.completed",
+      "item": {
+        "kind": "checkpoint",
+        "status": "completed",
+        "summary": "Tests reached the checkpoint."
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventKey": "b9697da3fe50166d98f77822ffb0bb8d8cd127bc09805b3063bf2ac45ce6a30b",
+      "emittedAt": "2026-07-11T15:06:00.000Z",
+      "ref": {
+        "conversationId": "main-1",
+        "turnId": "turn-1",
+        "runId": "run-1",
+        "agentId": "agent-1",
+        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
+        "origin": "human",
+        "mainChannelId": "main-1",
+        "mainRootPostId": "turn-1",
+        "inputPostId": "turn-1",
+        "itemId": "compaction-1",
+        "ordinal": 6,
+        "semanticVersion": 1
+      },
+      "redaction": {
+        "policy": "octogee-v1",
+        "appliedAt": "producer"
+      },
+      "type": "item.completed",
+      "item": {
+        "kind": "compaction",
+        "status": "completed",
+        "summary": "Compacted released context."
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventKey": "96173c6b821e9bbf015fd106b26ec3a670ff7de6cbf01ca8859836f9c97816b2",
+      "emittedAt": "2026-07-11T15:07:00.000Z",
+      "ref": {
+        "conversationId": "main-1",
+        "turnId": "turn-1",
+        "runId": "run-1",
+        "agentId": "agent-1",
+        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
+        "origin": "human",
+        "mainChannelId": "main-1",
+        "mainRootPostId": "turn-1",
+        "inputPostId": "turn-1",
+        "itemId": "fallback-1",
+        "ordinal": 7,
+        "semanticVersion": 1
+      },
+      "redaction": {
+        "policy": "octogee-v1",
+        "appliedAt": "producer"
+      },
+      "type": "item.completed",
+      "item": {
+        "kind": "fallback",
+        "status": "completed",
+        "summary": "Changed to the fallback model."
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventKey": "258df1901f3898e3c6ad1c1a6799685a05ecdb2a831e5d5f044fbe3142089650",
+      "emittedAt": "2026-07-11T15:08:00.000Z",
+      "ref": {
+        "conversationId": "main-1",
+        "turnId": "turn-1",
+        "runId": "run-approval-approved",
+        "agentId": "agent-1",
+        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
+        "origin": "human",
+        "mainChannelId": "main-1",
+        "mainRootPostId": "turn-1",
+        "inputPostId": "turn-1",
+        "itemId": "octogee:approval:approval-approved",
+        "ordinal": 1,
+        "semanticVersion": 1
+      },
+      "redaction": {
+        "policy": "octogee-v1",
+        "appliedAt": "producer"
+      },
+      "type": "item.completed",
+      "item": {
+        "kind": "approval",
+        "status": "waiting",
+        "summary": "Approval awaiting approved decision."
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventKey": "2ba3ec8106eac2b75fc22e6c79167254f19af66f536b3eb6dd5992eea58aa7d0",
+      "emittedAt": "2026-07-11T15:09:00.000Z",
+      "ref": {
+        "conversationId": "main-1",
+        "turnId": "turn-1",
+        "runId": "run-approval-approved",
+        "agentId": "agent-1",
+        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
+        "origin": "human",
+        "mainChannelId": "main-1",
+        "mainRootPostId": "turn-1",
+        "inputPostId": "turn-1",
+        "itemId": "octogee:approval:approval-approved",
+        "ordinal": 1,
+        "semanticVersion": 2
+      },
+      "redaction": {
+        "policy": "octogee-v1",
+        "appliedAt": "producer"
+      },
+      "type": "control.transition",
+      "control": {
+        "from": "waiting",
+        "to": "approved",
+        "actorId": "mm-user-1"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventKey": "1ad93bd6d8fe4e65e3193ab4aeb8a918927987d3408ee400444fa0a4f7acf7f0",
+      "emittedAt": "2026-07-11T15:10:00.000Z",
+      "ref": {
+        "conversationId": "main-1",
+        "turnId": "turn-1",
+        "runId": "run-approval-denied",
+        "agentId": "agent-1",
+        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
+        "origin": "human",
+        "mainChannelId": "main-1",
+        "mainRootPostId": "turn-1",
+        "inputPostId": "turn-1",
+        "itemId": "octogee:approval:approval-denied",
+        "ordinal": 1,
+        "semanticVersion": 1
+      },
+      "redaction": {
+        "policy": "octogee-v1",
+        "appliedAt": "producer"
+      },
+      "type": "item.completed",
+      "item": {
+        "kind": "approval",
+        "status": "waiting",
+        "summary": "Approval awaiting denied decision."
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventKey": "9fba80c0c1f1ae25fe6d741cdb2ff7058bc54be096820ec25595172ed715d7f1",
+      "emittedAt": "2026-07-11T15:11:00.000Z",
+      "ref": {
+        "conversationId": "main-1",
+        "turnId": "turn-1",
+        "runId": "run-approval-denied",
+        "agentId": "agent-1",
+        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
+        "origin": "human",
+        "mainChannelId": "main-1",
+        "mainRootPostId": "turn-1",
+        "inputPostId": "turn-1",
+        "itemId": "octogee:approval:approval-denied",
+        "ordinal": 1,
+        "semanticVersion": 2
+      },
+      "redaction": {
+        "policy": "octogee-v1",
+        "appliedAt": "producer"
+      },
+      "type": "control.transition",
+      "control": {
+        "from": "waiting",
+        "to": "denied",
+        "actorId": "mm-user-2"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventKey": "349036e173c90cfb7237754c9b29a779a39a2a9a8910371f108c851a732fdc3b",
+      "emittedAt": "2026-07-11T15:12:00.000Z",
+      "ref": {
+        "conversationId": "main-1",
+        "turnId": "turn-1",
+        "runId": "run-approval-expired",
+        "agentId": "agent-1",
+        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
+        "origin": "human",
+        "mainChannelId": "main-1",
+        "mainRootPostId": "turn-1",
+        "inputPostId": "turn-1",
+        "itemId": "octogee:approval:approval-expired",
+        "ordinal": 1,
+        "semanticVersion": 1
+      },
+      "redaction": {
+        "policy": "octogee-v1",
+        "appliedAt": "producer"
+      },
+      "type": "item.completed",
+      "item": {
+        "kind": "approval",
+        "status": "waiting",
+        "summary": "Approval awaiting expired decision."
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventKey": "531c6fe86336fb60f7715126f76bb0956418c7c79a1c1c8b92dca7a3bc0195e6",
+      "emittedAt": "2026-07-11T15:13:00.000Z",
+      "ref": {
+        "conversationId": "main-1",
+        "turnId": "turn-1",
+        "runId": "run-approval-expired",
+        "agentId": "agent-1",
+        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
+        "origin": "human",
+        "mainChannelId": "main-1",
+        "mainRootPostId": "turn-1",
+        "inputPostId": "turn-1",
+        "itemId": "octogee:approval:approval-expired",
+        "ordinal": 1,
+        "semanticVersion": 2
+      },
+      "redaction": {
+        "policy": "octogee-v1",
+        "appliedAt": "producer"
+      },
+      "type": "control.transition",
+      "control": {
+        "from": "waiting",
+        "to": "expired",
+        "actorId": "system"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventKey": "0797e2030acfefe660f617bdb160551b7536891c1645f149b1f2cedcdc4a421b",
+      "emittedAt": "2026-07-11T15:14:00.000Z",
+      "ref": {
+        "conversationId": "main-1",
+        "turnId": "turn-1",
+        "runId": "run-1",
+        "agentId": "agent-1",
+        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
+        "origin": "human",
+        "mainChannelId": "main-1",
+        "mainRootPostId": "turn-1",
+        "inputPostId": "turn-1",
+        "itemId": "octogee:terminal-error",
+        "ordinal": 8,
+        "semanticVersion": 1
+      },
+      "redaction": {
+        "policy": "octogee-v1",
+        "appliedAt": "producer"
+      },
+      "type": "item.completed",
+      "item": {
+        "kind": "error",
+        "status": "failed",
+        "summary": "The run failed."
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventKey": "5fb9c15017ef8d3505b608ed37e65cdef0253b56e2a4bb61c6d45e83876e6ad9",
+      "emittedAt": "2026-07-11T15:15:00.000Z",
+      "ref": {
+        "conversationId": "main-1",
+        "turnId": "turn-1",
+        "runId": "run-1",
+        "agentId": "agent-1",
+        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
+        "origin": "human",
+        "mainChannelId": "main-1",
+        "mainRootPostId": "turn-1",
+        "inputPostId": "turn-1",
+        "itemId": "octogee:turn-finalized",
+        "ordinal": 9,
+        "semanticVersion": 1
+      },
+      "redaction": {
+        "policy": "octogee-v1",
+        "appliedAt": "producer"
+      },
+      "type": "turn.finalized",
+      "outcome": "completed"
+    },
+    {
+      "schemaVersion": 1,
+      "eventKey": "38222382878ded8bbf84eeab5aa864da45111a0d2ba56dc157928b70cfe9181e",
+      "emittedAt": "2026-07-11T15:16:00.000Z",
+      "ref": {
+        "conversationId": "main-1",
+        "turnId": "turn-1",
+        "runId": "run-2",
+        "agentId": "agent-1",
+        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
+        "origin": "human",
+        "mainChannelId": "main-1",
+        "mainRootPostId": "turn-1",
+        "inputPostId": "turn-1",
+        "itemId": "octogee:turn-finalized",
+        "ordinal": 10,
+        "semanticVersion": 1
+      },
+      "redaction": {
+        "policy": "octogee-v1",
+        "appliedAt": "producer"
+      },
+      "type": "turn.finalized",
+      "outcome": "failed"
+    },
+    {
+      "schemaVersion": 1,
+      "eventKey": "4f922e6a3e204eb80e44712526b7c6f3de9a07c34df38ee8c89d602b3f03fa35",
+      "emittedAt": "2026-07-11T15:17:00.000Z",
+      "ref": {
+        "conversationId": "main-1",
+        "turnId": "turn-1",
+        "runId": "run-3",
+        "agentId": "agent-1",
+        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
+        "origin": "human",
+        "mainChannelId": "main-1",
+        "mainRootPostId": "turn-1",
+        "inputPostId": "turn-1",
+        "itemId": "octogee:turn-finalized",
+        "ordinal": 10,
+        "semanticVersion": 1
+      },
+      "redaction": {
+        "policy": "octogee-v1",
+        "appliedAt": "producer"
+      },
+      "type": "turn.finalized",
+      "outcome": "stopped"
+    }
+  ],
+  "transportResponses": {
+    "persisted": {
+      "status": 201,
+      "outcome": "persisted",
+      "retryable": false
+    },
+    "duplicate": {
+      "status": 200,
+      "outcome": "duplicate",
+      "retryable": false
+    },
+    "conflict": {
+      "status": 409,
+      "retryable": false
+    },
+    "unauthenticated": {
+      "status": 401,
+      "retryable": false
+    },
+    "forbidden": {
+      "status": 403,
+      "retryable": false
+    },
+    "tooLarge": {
+      "status": 413,
+      "retryable": false
+    },
+    "invalid": {
+      "status": 422,
+      "retryable": false
+    },
+    "unavailable": {
+      "status": 503,
+      "retryable": true
+    }
+  }
+}

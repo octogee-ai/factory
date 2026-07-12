@@ -1,0 +1,1 @@
+{"level":20,"msg":"packageFiles with updates","packageFiles":{"dockerfile":[{"packageFile":"Dockerfile","deps":[{"depName":"node","currentValue":"22-slim","datasource":"docker","depType":"stage","managerData":{"lineNumber":0}}]}]}}

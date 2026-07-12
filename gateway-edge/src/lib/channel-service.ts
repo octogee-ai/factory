@@ -40,7 +40,11 @@ export interface SessionChannelResult {
 interface SessionChannelDoc {
   kind?: unknown;
   archivedAt?: unknown;
-  mattermost?: { channelId?: unknown };
+  mattermost?: {
+    channelId?: unknown;
+    activityChannelId?: unknown;
+    activityPair?: { status?: unknown };
+  };
 }
 
 export function sessionChannelNameAvailability(
@@ -109,31 +113,16 @@ async function createSessionChannelImpl(
   input: SessionChannelCreateInput,
   project: string | null,
 ): Promise<SessionChannelResult> {
-  const name = stringValue(input.name).trim();
-  const displayName = stringValue(input.displayName).trim();
-  const purpose = stringValue(input.purpose).trim();
-
-  const availability = sessionChannelNameAvailability(name);
-  if (!availability.ok) return bad(400, availability.reason);
-  if (displayName.length === 0) return bad(400, "Channel display name is required");
-  if (displayName.length > MM_DISPLAY_NAME_MAX_LENGTH) {
-    return bad(400, `Channel display name must be at most ${MM_DISPLAY_NAME_MAX_LENGTH} characters`);
-  }
-  if (purpose.length > MM_PURPOSE_MAX_LENGTH) {
-    return bad(400, `Channel purpose must be at most ${MM_PURPOSE_MAX_LENGTH} characters`);
-  }
+  const normalized = normalizeSessionChannelCreateInput(input);
+  const invalidInput = invalidSessionChannelCreateInput(normalized);
+  if (invalidInput) return invalidInput;
   if (!actor.workspaceId) return bad(422, "Workspace not provisioned");
   const workspaceId = actor.workspaceId;
-  const scope = laneScope(workspaceId, project, name);
+  const scope = laneScope(workspaceId, project, normalized.name);
 
-  const docRef = db.doc(channelDocPath(workspaceId, project, name));
-  const existing = await docRef.get();
-  if (existing.exists) {
-    const data = existing.data() as SessionChannelDoc | undefined;
-    return data?.archivedAt
-      ? bad(409, "A session with this name was archived; channel names cannot be reused")
-      : bad(409, "A channel with this name already exists in your workspace");
-  }
+  const docRef = db.doc(channelDocPath(workspaceId, project, normalized.name));
+  const existingResult = await existingSessionChannelResult(docRef, scope, normalized.name);
+  if (existingResult) return existingResult;
 
   const ctx = await getWorkspaceMmContext(actor.uid, workspaceId, actor.userData);
   if (!ctx?.teamId) {
@@ -141,14 +130,9 @@ async function createSessionChannelImpl(
     return bad(502, "Channel creation failed - workspace chat is not ready");
   }
 
-  const channelName = laneChannelName(workspaceId, project, name);
-  let channelId: string;
-  try {
-    channelId = await createOrAdoptMmChannel(ctx.teamId, channelName, displayName, purpose);
-  } catch (err) {
-    logger.error(`[channels] MM channel creation failed for ${scope}:`, { err });
-    return bad(502, "Channel creation failed - could not create chat channel");
-  }
+  const channelName = laneChannelName(workspaceId, project, normalized.name);
+  const channelId = await createPrimarySessionChannel(ctx.teamId, channelName, normalized, scope);
+  if (!channelId) return bad(502, "Channel creation failed - could not create chat channel");
 
   const memberFailure = await addChannelMembers(channelId, [
     { id: ctx.userId, label: "owner" },
@@ -160,16 +144,124 @@ async function createSessionChannelImpl(
   }
 
   await docRef.set({
-    id: name,
+    id: normalized.name,
     kind: "session",
-    name,
+    name: normalized.name,
     mattermost: { channelId },
     createdBy: actor.uid,
     createdAt: FieldValue.serverTimestamp(),
   });
+  const activityReady = await createSessionActivityPair(
+    docRef.path,
+    channelName,
+    channelId,
+    ctx.teamId,
+    scope,
+  );
+  if (!activityReady) {
+    return bad(502, "Channel creation failed - could not create activity channel");
+  }
   logger.info(`[channels] Created session channel ${scope}`, { uid: actor.uid });
 
+  return { status: 200, body: { success: true, channelId, name: normalized.name } };
+}
+
+interface NormalizedSessionChannelCreateInput {
+  name: string;
+  displayName: string;
+  purpose: string;
+}
+
+function normalizeSessionChannelCreateInput(
+  input: SessionChannelCreateInput,
+): NormalizedSessionChannelCreateInput {
+  return {
+    name: stringValue(input.name).trim(),
+    displayName: stringValue(input.displayName).trim(),
+    purpose: stringValue(input.purpose).trim(),
+  };
+}
+
+function invalidSessionChannelCreateInput(
+  input: NormalizedSessionChannelCreateInput,
+): SessionChannelResult | null {
+  const availability = sessionChannelNameAvailability(input.name);
+  if (!availability.ok) return bad(400, availability.reason);
+  if (input.displayName.length === 0) return bad(400, "Channel display name is required");
+  if (input.displayName.length > MM_DISPLAY_NAME_MAX_LENGTH) {
+    return bad(400, `Channel display name must be at most ${MM_DISPLAY_NAME_MAX_LENGTH} characters`);
+  }
+  if (input.purpose.length > MM_PURPOSE_MAX_LENGTH) {
+    return bad(400, `Channel purpose must be at most ${MM_PURPOSE_MAX_LENGTH} characters`);
+  }
+  return null;
+}
+
+async function existingSessionChannelResult(
+  docRef: FirebaseFirestore.DocumentReference,
+  scope: string,
+  name: string,
+): Promise<SessionChannelResult | null> {
+  const existing = await docRef.get();
+  if (!existing.exists) return null;
+  const data = existing.data() as SessionChannelDoc | undefined;
+  if (data?.archivedAt) {
+    return bad(409, "A session with this name was archived; channel names cannot be reused");
+  }
+  const channelId = data?.mattermost?.channelId;
+  if (
+    typeof channelId !== "string"
+    || channelId.length === 0
+    || data?.mattermost?.activityPair?.status === "active"
+  ) {
+    return bad(409, "A channel with this name already exists in your workspace");
+  }
+  try {
+    const { reconcileStoredActivityPair } = await import("./activityPair.js");
+    await reconcileStoredActivityPair(docRef.path);
+  } catch (err) {
+    logger.error(`[channels] Activity pair retry failed for ${scope}:`, { err });
+    return bad(502, "Channel creation failed - could not create activity channel");
+  }
   return { status: 200, body: { success: true, channelId, name } };
+}
+
+async function createPrimarySessionChannel(
+  teamId: string,
+  channelName: string,
+  input: NormalizedSessionChannelCreateInput,
+  scope: string,
+): Promise<string | null> {
+  try {
+    return await createOrAdoptMmChannel(teamId, channelName, input.displayName, input.purpose);
+  } catch (err) {
+    logger.error(`[channels] MM channel creation failed for ${scope}:`, { err });
+    return null;
+  }
+}
+
+async function createSessionActivityPair(
+  channelDocPath: string,
+  primaryName: string,
+  primaryChannelId: string,
+  teamId: string,
+  scope: string,
+): Promise<boolean> {
+  try {
+    const { reconcileActivityPair } = await import("./activityPair.js");
+    await reconcileActivityPair({
+      channelDocPath,
+      primaryName,
+      primaryChannelId,
+      teamId,
+      type: "P",
+      kind: "custom",
+    });
+    return true;
+  } catch (err) {
+    logger.error(`[channels] Activity pair creation failed for ${scope}:`, { err });
+    return false;
+  }
 }
 
 async function createOrAdoptMmChannel(
@@ -365,10 +457,21 @@ async function archiveSessionChannelImpl(
   const bindingFailure = await verifyChannelBinding(actor.workspaceId, project, name, found.channelId);
   if (bindingFailure) return bindingFailure;
 
+  const ctx = await getWorkspaceMmContext(actor.uid, actor.workspaceId, actor.userData);
+  if (!ctx?.teamId) return bad(502, "Channel archive failed - workspace chat is not ready");
   try {
-    await mmApi(`/channels/${found.channelId}`, "DELETE");
+    const { reconcileActivityPair } = await import("./activityPair.js");
+    await reconcileActivityPair({
+      channelDocPath: found.docRef.path,
+      primaryName: laneChannelName(actor.workspaceId, project, name),
+      primaryChannelId: found.channelId,
+      teamId: ctx.teamId,
+      type: "P",
+      kind: "custom",
+      desired: "archived",
+    });
   } catch (err) {
-    logger.error(`[channels] MM channel archive failed for ${scope}:`, { err });
+    logger.error(`[channels] Activity pair archive failed for ${scope}:`, { err });
     return bad(502, "Channel archive failed");
   }
 

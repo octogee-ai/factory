@@ -1,11 +1,10 @@
 import { internalFetch } from "../../lib/internal-fetch.js";
 import type { AgentIdentity, ChannelPair } from "./activity-bridge.js";
-import type {
-  ApprovalRecord,
-  ApprovalRegistry,
-  MarkDispatchedResult,
-} from "./approval-registry.js";
-import type { RunLiveDoc } from "./run-live-doc.js";
+import type { ConversationRunLiveDocV3, RunLiveDoc } from "./run-live-doc.js";
+import {
+  createAgentControlRegistryClient,
+  type AgentControlRegistryClient,
+} from "./agent-control-registry-client.js";
 
 export interface RedeemedOpenClawWs {
   uid: string;
@@ -30,11 +29,11 @@ export interface OpenClawRuntimeBroker {
   getUserGatewayId(uid: string): Promise<string | null>;
   resolveAgentIdentity(agentId: string): Promise<AgentIdentity | null>;
   resolveChannelPair(primaryChannelId: string): Promise<ChannelPair | null>;
-  writeRunLiveDoc(path: string, doc: RunLiveDoc): Promise<void>;
+  writeRunLiveDoc(path: string, doc: RunLiveDoc | ConversationRunLiveDocV3): Promise<void>;
   deleteRunLiveDoc(path: string): Promise<void>;
   resolveChannelOwnerUid(channelId: string): Promise<string | null>;
   resolveOctogeeUidByMmUser(mmUserId: string): Promise<string | null>;
-  approvalRegistry: ApprovalRegistry;
+  agentControlRegistry: AgentControlRegistryClient;
 }
 
 export class OpenClawRuntimeBrokerError extends Error {
@@ -57,6 +56,14 @@ function trimBaseUrl(baseUrl: string): string {
 function nonBlank(value: string | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+function workspaceSlugFromRunLivePath(path: string): string {
+  const parts = path.split("/");
+  if (parts[0] !== "workspaces" || !parts[1] || !parts.includes("liveRuns")) {
+    throw new OpenClawRuntimeBrokerError(400, "malformed run-live path");
+  }
+  return parts[1];
 }
 
 export function runtimeBrokerBaseUrlFromEnv(
@@ -121,49 +128,11 @@ export function createOpenClawRuntimeBroker(opts: {
     return readJsonOrNull(res);
   };
 
-  const approvalRegistry: ApprovalRegistry = {
-    async register(record: ApprovalRecord): Promise<void> {
-      await post("/internal/openclaw/activity/approval/register", { record }, new Set([204]));
-    },
-    async lookup(approvalId: string): Promise<ApprovalRecord | null> {
-      const body = await postJson(
-        "/internal/openclaw/activity/approval/lookup",
-        { approvalId },
-        new Set([200, 404]),
-      );
-      return (body?.record as ApprovalRecord | undefined) ?? null;
-    },
-    async attachPostId(approvalId: string, postId: string): Promise<void> {
-      await post(
-        "/internal/openclaw/activity/approval/attach-post",
-        { approvalId, postId },
-        new Set([204]),
-      );
-    },
-    async markDispatched(approvalId: string): Promise<MarkDispatchedResult> {
-      const body = await postJson(
-        "/internal/openclaw/activity/approval/mark-dispatched",
-        { approvalId },
-        new Set([200]),
-      );
-      const outcome = body?.outcome;
-      if (
-        outcome === "dispatched" ||
-        outcome === "already-dispatched" ||
-        outcome === "not-found"
-      ) {
-        return { outcome };
-      }
-      throw new OpenClawRuntimeBrokerError(502, "malformed approval dispatch response");
-    },
-    async resetDispatched(approvalId: string): Promise<void> {
-      await post(
-        "/internal/openclaw/activity/approval/reset-dispatched",
-        { approvalId },
-        new Set([204]),
-      );
-    },
-  };
+  const agentControlRegistry = createAgentControlRegistryClient({
+    baseUrl,
+    gatewayId,
+    fetchImpl: opts.fetchImpl,
+  });
 
   return {
     async redeemOpenClawWs(ticketId: string): Promise<RedeemOpenClawWsOutcome> {
@@ -219,10 +188,13 @@ export function createOpenClawRuntimeBroker(opts: {
       );
       return (body?.pair as ChannelPair | undefined) ?? null;
     },
-    async writeRunLiveDoc(path: string, doc: RunLiveDoc): Promise<void> {
+    async writeRunLiveDoc(
+      path: string,
+      doc: RunLiveDoc | ConversationRunLiveDocV3,
+    ): Promise<void> {
       await post(
         "/internal/openclaw/activity/run-live",
-        { workspaceSlug: doc.workspaceId, path, doc },
+        { workspaceSlug: workspaceSlugFromRunLivePath(path), path, doc },
         new Set([204]),
       );
     },
@@ -249,7 +221,7 @@ export function createOpenClawRuntimeBroker(opts: {
       );
       return stringField(body, "uid");
     },
-    approvalRegistry,
+    agentControlRegistry,
   };
 }
 

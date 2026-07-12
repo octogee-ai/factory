@@ -2,6 +2,7 @@
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as path from "node:path";
 import * as fs from "node:fs";
 
@@ -77,7 +78,49 @@ function selectorBlock(doc: string): string {
   return doc.match(/^\s*selector:\s*\n([\s\S]*?)(?=^\s*(?:ports|type):)/m)?.[0] ?? "";
 }
 
+function gatewayImageLabel(dep: string): string {
+  const match = dep.match(/^ {8}gateway-image:\s*"?([^"\n]+)"?\s*$/m);
+  if (!match) throw new Error("gateway-image label not found");
+  return match[1];
+}
+
 describe("helm/octogee-gateway/ — single-instance rendering", () => {
+  it("keeps the broad durable writer selected by default and enables only the bounded candidate pair", () => {
+    const defaultDeployment =
+      findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const defaultGateway = containerBlock(defaultDeployment, "gateway");
+    const defaultEdge = containerBlock(defaultDeployment, "gateway-edge");
+    expect(defaultGateway).toMatch(
+      /name:\s*OCTOGEE_ACTIVITY_BRIDGE_MODE[\s\S]*?value:\s*"broad"/,
+    );
+    expect(defaultEdge).toMatch(
+      /name:\s*OCTOGEE_ACTIVITY_BRIDGE_MODE[\s\S]*?value:\s*"broad"/,
+    );
+
+    const candidateDeployment =
+      findDoc(
+        helmTemplate("octogee-gw-default", {
+          "conversationExperiment.mode": "publisher-live",
+        }),
+        "Deployment",
+        "octogee-gateway-default",
+      ) ?? "";
+    const candidateGateway = containerBlock(candidateDeployment, "gateway");
+    const candidateEdge = containerBlock(candidateDeployment, "gateway-edge");
+    expect(candidateGateway).toMatch(
+      /name:\s*OCTOGEE_ACTIVITY_BRIDGE_MODE[\s\S]*?value:\s*"publisher-live"/,
+    );
+    expect(candidateEdge).toMatch(
+      /name:\s*OCTOGEE_ACTIVITY_BRIDGE_MODE[\s\S]*?value:\s*"publisher-live"/,
+    );
+  });
+
+  it("rejects an Activity bridge mode that could bypass durable-writer mutual exclusion", () => {
+    expect(() =>
+      helmTemplate("octogee-gw-default", { "conversationExperiment.mode": "both" }),
+    ).toThrow(/conversationExperiment\.mode/);
+  });
+
   it("renders one Deployment named octogee-gateway-<gatewayId>", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default");
@@ -172,6 +215,25 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
       "octogee-gateway-bender",
     ) ?? "";
     expect(dep).toMatch(/gateway-image:\s*"?deadbee1"?/);
+  });
+
+  it("keeps a digest-pinned candidate image intact while deriving an API-valid gateway-image label", () => {
+    const candidateTag = `w9-agent-conversation@sha256:${"a".repeat(64)}`;
+    const dep = findDoc(
+      helmTemplate("octogee-gw-default", { imageTag: candidateTag }),
+      "Deployment",
+      "octogee-gateway-default",
+    ) ?? "";
+    const label = gatewayImageLabel(dep);
+
+    expect(dep).toContain(
+      `image: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway:${candidateTag}"`,
+    );
+    expect(label).toBe(
+      `sha256-${createHash("sha256").update(candidateTag).digest("hex").slice(0, 56)}`,
+    );
+    expect(label).toHaveLength(63);
+    expect(label).toMatch(/^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$/);
   });
 
   it("standard profile mounts tenant-bound projected tokens for broker calls without exposing platform secrets", () => {
@@ -301,7 +363,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(edge).not.toMatch(/name:\s*OCTOGEE_API_URL\b/);
   });
 
-  it("operator profile still wires OCTOGEE_APPROVAL_SIGNING_SECRET on gateway-edge without MM_ADMIN_PAT", () => {
+  it("operator profile still wires OCTOGEE_AGENT_CONTROL_SIGNING_SECRET on gateway-edge without MM_ADMIN_PAT", () => {
     const dep =
       findDoc(
         helmTemplate("octogee-gw-bender", {
@@ -312,22 +374,22 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
         "octogee-gateway-bender",
       ) ?? "";
     const edge = containerBlock(dep, "gateway-edge");
-    // wireActivityBridge() requires OCTOGEE_APPROVAL_SIGNING_SECRET (approval-callback
-    // HMAC) on every gateway. It must remain explicit while MM_ADMIN_PAT stays absent.
     expect(edge).toMatch(
-      /name:\s*OCTOGEE_APPROVAL_SIGNING_SECRET\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*name:\s*approval-signing\s*\n\s*key:\s*secret/,
+      /name:\s*OCTOGEE_AGENT_CONTROL_SIGNING_SECRET\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*name:\s*agent-control-signing\s*\n\s*key:\s*secret/,
     );
     // The platform admin PAT is not rendered into gateway pods.
     expect(edge).not.toMatch(/name:\s*MM_ADMIN_PAT/);
+    expect(edge).not.toContain("OCTOGEE_APPROVAL_SIGNING_SECRET");
+    expect(edge).not.toContain("approval-signing");
   });
 
-  it("standard profile omits MM_ADMIN_PAT but still wires OCTOGEE_APPROVAL_SIGNING_SECRET on gateway-edge", () => {
+  it("standard profile omits MM_ADMIN_PAT but still wires OCTOGEE_AGENT_CONTROL_SIGNING_SECRET on gateway-edge", () => {
     const edge = containerBlock(
       findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "",
       "gateway-edge",
     );
     expect(edge).not.toMatch(/name:\s*MM_ADMIN_PAT/);
-    expect(edge).toMatch(/name:\s*OCTOGEE_APPROVAL_SIGNING_SECRET/);
+    expect(edge).toMatch(/name:\s*OCTOGEE_AGENT_CONTROL_SIGNING_SECRET/);
   });
 
   it("wires the activity-bridge broadcast env vars on the gateway container (Appendix A anti-recurrence: the env var was the silent killer)", () => {
@@ -512,6 +574,19 @@ describe("helm/octogee-gateway/ — bundle image-tag inheritance", () => {
     const gw = containerBlock(dep, "gateway");
     expect(gw).toMatch(/image:\s*"[^"]*octogee-gateway:abc1234"/);
   });
+
+  it("uses a separately digest-bound candidate gateway-edge image when explicitly set", () => {
+    const gatewayTag = `agent-conversation-w9a-8c356bb1@sha256:${"a".repeat(64)}`;
+    const edgeTag = `agent-conversation-w9a-8c356bb1@sha256:${"d".repeat(64)}`;
+    const out = helmTemplate("octogee-gw-default", {
+      imageTag: gatewayTag,
+      "gatewayEdge.image.tag": edgeTag,
+    });
+    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+    const ge = containerBlock(dep, "gateway-edge");
+    expect(ge).toMatch(new RegExp(`gateway-edge:${edgeTag.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}`));
+    expect(ge).not.toContain(gatewayTag);
+  });
 });
 
 describe("helm/octogee-gateway/ — gateway-edge sidecar (chat-proxy folded in)", () => {
@@ -614,18 +689,18 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     expect(gw).toMatch(/- name:\s*APP_URL[\s\S]*?value:\s*"https:\/\/app-octogee-test\.web\.app"/);
   });
 
-  it("emits MM_INTERACTIONS_CALLBACK_BASE_URL pointing at the per-instance Service DNS", () => {
+  it("emits MM_INTERACTIONS_CALLBACK_BASE_URL pointing at the stable private router", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     expect(dep).toMatch(
-      /- name:\s*MM_INTERACTIONS_CALLBACK_BASE_URL[\s\S]*?value:[^\n]*octogee-gateway-default\.octogee-test\.svc\.cluster\.local:18789/,
+      /- name:\s*MM_INTERACTIONS_CALLBACK_BASE_URL[\s\S]*?value:[^\n]*mattermost-callback-router\.octogee-test\.svc\.cluster\.local:3001\/internal\/openclaw\/mattermost\/default/,
     );
   });
 
-  it("emits the MM_INTERACTIONS_ALLOWED_SOURCE_IPS pod CIDR allowlist", () => {
+  it("allows only the loopback interaction proxy into OpenClaw", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
-    expect(dep).toMatch(/- name:\s*MM_INTERACTIONS_ALLOWED_SOURCE_IPS[\s\S]*?value:\s*"10\.117\.0\.0\/17"/);
+    expect(dep).toMatch(/- name:\s*MM_INTERACTIONS_ALLOWED_SOURCE_IPS[\s\S]*?value:\s*"127\.0\.0\.1"/);
   });
 
   it("sets CLOUDSDK_CORE_PROJECT on the gateway container so gcloud cannot inherit the cluster host project", () => {

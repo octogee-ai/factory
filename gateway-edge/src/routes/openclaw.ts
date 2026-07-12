@@ -111,6 +111,10 @@ router.get(
         res.status(404).json({ error: "not_live_activity_channel", channelKind });
         return;
       }
+      if (channelKind === "workspace-admin" && req.isAdmin !== true) {
+        res.status(403).json({ error: "admin_access_required" });
+        return;
+      }
       res.json({
         activityChannelId,
         channelKind,
@@ -151,7 +155,10 @@ export function inferChannelKind(
 }
 
 export function isLiveActivityChannelKind(kind: OpenClawActivityChannelKind): boolean {
-  return kind === "coach-dm" || kind === "workspace" || kind === "project";
+  return kind === "coach-dm"
+    || kind === "workspace-admin"
+    || kind === "workspace"
+    || kind === "project";
 }
 
 export function extractRefPath(ref: unknown): string | null {

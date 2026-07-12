@@ -204,32 +204,52 @@ if [[ -z "$MM_BOT_TOKEN" || -z "$MM_TEAM_ID" || -z "$MM_BOT_USER_ID" || -z "$MM_
   warn "mattermost-gateway contains blank bootstrap values. Run ./scripts/setup-mattermost.sh --env=$ENV before trusting this environment."
 fi
 
-# ── 2b. OpenClaw approval signing secret ─────────────────────────────────
-# HMAC secret for approval-button context binding. Must NOT rotate during
-# the lifetime of any pending approval (5min TTL) — rotating mid-flight
-# invalidates the buttons users haven't clicked yet. First install:
+# ── 2b. OpenClaw agent-control signing secret ────────────────────────────
+# HMAC secret for durable control context binding. Must NOT rotate during
+# the lifetime of any pending control — rotating mid-flight invalidates
+# buttons users haven't clicked yet. First install:
 # generate. Re-run: reuse what's already in Secret Manager.
-info "approval-signing"
-APPROVAL_SIGNING_SM_KEY="approval-signing-${ENV}"
-[[ "$ENV" == "custom" ]] && APPROVAL_SIGNING_SM_KEY="approval-signing-custom-${CUSTOM_NS}"
-APPROVAL_SIGNING_SECRET=$(sm_get "$APPROVAL_SIGNING_SM_KEY" octogee 2>/dev/null || echo "")
-if [[ -z "$APPROVAL_SIGNING_SECRET" ]]; then
-  APPROVAL_SIGNING_SECRET=$(openssl rand -hex 32)
-  info "  Generated new approval-signing secret — saving to Secret Manager..."
-  if echo -n "$APPROVAL_SIGNING_SECRET" | gcloud secrets create "$APPROVAL_SIGNING_SM_KEY" \
+info "agent-control-signing"
+AGENT_CONTROL_SIGNING_SM_KEY="agent-control-signing-${ENV}"
+[[ "$ENV" == "custom" ]] && AGENT_CONTROL_SIGNING_SM_KEY="agent-control-signing-custom-${CUSTOM_NS}"
+AGENT_CONTROL_SIGNING_SECRET=$(sm_get "$AGENT_CONTROL_SIGNING_SM_KEY" octogee 2>/dev/null || echo "")
+if [[ -z "$AGENT_CONTROL_SIGNING_SECRET" ]]; then
+  AGENT_CONTROL_SIGNING_SECRET=$(openssl rand -hex 32)
+  info "  Generated new agent-control-signing secret — saving to Secret Manager..."
+  if echo -n "$AGENT_CONTROL_SIGNING_SECRET" | gcloud secrets create "$AGENT_CONTROL_SIGNING_SM_KEY" \
        --data-file=- --project=octogee \
        --replication-policy=user-managed --locations=us-central1 2>/dev/null; then
     :
   else
     # Already exists — add a new version so we can read it back next run.
-    echo -n "$APPROVAL_SIGNING_SECRET" | gcloud secrets versions add "$APPROVAL_SIGNING_SM_KEY" \
+    echo -n "$AGENT_CONTROL_SIGNING_SECRET" | gcloud secrets versions add "$AGENT_CONTROL_SIGNING_SM_KEY" \
       --data-file=- --project=octogee \
-      || fail "Could not persist approval-signing secret to Secret Manager (key=${APPROVAL_SIGNING_SM_KEY}). Refusing to materialize a K8s secret that exists nowhere else."
+      || fail "Could not persist agent-control-signing secret to Secret Manager (key=${AGENT_CONTROL_SIGNING_SM_KEY}). Refusing to materialize a K8s secret that exists nowhere else."
   fi
 fi
-ksecret approval-signing --from-literal=secret="$APPROVAL_SIGNING_SECRET"
+ksecret agent-control-signing --from-literal=secret="$AGENT_CONTROL_SIGNING_SECRET"
 
-# ── 2c. BYOT sync internal signing secret ─────────────────────────────────
+# ── 2c. Mattermost callback router signing secret ─────────────────────────
+info "agent-control-router"
+AGENT_CONTROL_ROUTER_SM_KEY="agent-control-router-${ENV}"
+[[ "$ENV" == "custom" ]] && AGENT_CONTROL_ROUTER_SM_KEY="agent-control-router-custom-${CUSTOM_NS}"
+AGENT_CONTROL_ROUTER_SECRET=$(sm_get "$AGENT_CONTROL_ROUTER_SM_KEY" octogee 2>/dev/null || echo "")
+if [[ -z "$AGENT_CONTROL_ROUTER_SECRET" ]]; then
+  AGENT_CONTROL_ROUTER_SECRET=$(openssl rand -hex 32)
+  info "  Generated new agent-control-router secret — saving to Secret Manager..."
+  if echo -n "$AGENT_CONTROL_ROUTER_SECRET" | gcloud secrets create "$AGENT_CONTROL_ROUTER_SM_KEY" \
+       --data-file=- --project=octogee \
+       --replication-policy=user-managed --locations=us-central1 2>/dev/null; then
+    :
+  else
+    echo -n "$AGENT_CONTROL_ROUTER_SECRET" | gcloud secrets versions add "$AGENT_CONTROL_ROUTER_SM_KEY" \
+      --data-file=- --project=octogee \
+      || fail "Could not persist agent-control-router secret to Secret Manager (key=${AGENT_CONTROL_ROUTER_SM_KEY})."
+  fi
+fi
+ksecret agent-control-router --from-literal=secret="$AGENT_CONTROL_ROUTER_SECRET"
+
+# ── 2d. BYOT sync internal signing secret ─────────────────────────────────
 info "byot-sync-internal"
 BYOT_SYNC_INTERNAL_SM_KEY="byot-sync-internal-${ENV}"
 [[ "$ENV" == "custom" ]] && BYOT_SYNC_INTERNAL_SM_KEY="byot-sync-internal-custom-${CUSTOM_NS}"

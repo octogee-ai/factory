@@ -1,23 +1,16 @@
 import { Router, Request, Response } from "express";
 import { strictRateLimit } from "../../middleware/security.js";
 import { db, FieldValue } from "../../lib/db.js";
-import { mmApi } from "../../lib/mattermost.js";
 import { giteaApi } from "../../lib/gitea.js";
 import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming.js";
 import { logger } from "../../middleware/logging.js";
 import { withProject, type ProjectCtx } from "../../lib/withProject.js";
-import { readChannel } from "../../lib/firestoreReads.js";
 
 const router = Router();
 
 interface GuestActor {
   mmUserId: string | undefined;
   giteaUser: string | null;
-}
-
-interface ProjectChannels {
-  mmChannelId: string | undefined;
-  activityChannelId: string | undefined;
 }
 
 async function removableGuestMemberRef(
@@ -61,33 +54,6 @@ async function readGuestActor(guestUid: string): Promise<GuestActor> {
   };
 }
 
-async function readProjectChannels(projectRef: FirebaseFirestore.DocumentReference): Promise<ProjectChannels> {
-  const generalChan = await readChannel(projectRef.collection("channels").doc("general"));
-  return {
-    mmChannelId: generalChan?.mattermost?.channelId,
-    activityChannelId: generalChan?.mattermost?.activityChannelId,
-  };
-}
-
-async function removePrimaryChannelMember(channels: ProjectChannels, mmUserId: string | undefined): Promise<void> {
-  if (!channels.mmChannelId || !mmUserId) return;
-  try {
-    await mmApi(`/channels/${channels.mmChannelId}/members/${mmUserId}`, "DELETE");
-  } catch (err) {
-    logger.warn(`[projects] MM channel removal failed:`, { err });
-  }
-}
-
-async function removeActivityChannelMember(channels: ProjectChannels, mmUserId: string | undefined): Promise<void> {
-  if (!channels.activityChannelId || !mmUserId) return;
-  try {
-    const { syncActivityMembershipRemove } = await import("../../lib/activityPair.js");
-    await syncActivityMembershipRemove(channels.activityChannelId, mmUserId);
-  } catch (err) {
-    logger.warn(`[projects] activity-channel removal failed:`, { err });
-  }
-}
-
 async function revokeGuestGiteaAccess(ctx: ProjectCtx, guest: GuestActor): Promise<void> {
   if (!ctx.project.giteaRepoName || !guest.giteaUser) return;
   try {
@@ -105,11 +71,12 @@ async function removeProjectGuest(ctx: ProjectCtx, guestUid: string, res: Respon
   const memberRef = await removableGuestMemberRef(ctx, guestUid, res);
   if (!memberRef) return;
 
-  await removeGuestMember(ctx, memberRef);
   const guest = await readGuestActor(guestUid);
-  const channels = await readProjectChannels(ctx.projectRef);
-  await removePrimaryChannelMember(channels, guest.mmUserId);
-  await removeActivityChannelMember(channels, guest.mmUserId);
+  if (guest.mmUserId) {
+    const { removeActivityPairMember } = await import("../../lib/activityPair.js");
+    await removeActivityPairMember(`${ctx.projectRef.path}/channels/general`, guest.mmUserId);
+  }
+  await removeGuestMember(ctx, memberRef);
   await revokeGuestGiteaAccess(ctx, guest);
 
   logger.info(`[projects] ${ctx.uid} removed ${guestUid} from ${ctx.wid}/${ctx.pid}`);

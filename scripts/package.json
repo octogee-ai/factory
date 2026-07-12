@@ -9,6 +9,7 @@
     "fleet": "tsx ops/fleet.ts",
     "backfill-gateway-field": "tsx ops/backfill-gateway-field.ts",
     "backfill-gateway-mutable-config": "tsx ops/backfill-gateway-mutable-config.ts",
+    "verify:openclaw-candidate": "tsx ops/verify-openclaw-candidate.ts",
     "pretest": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "test": "npx vitest run __tests__",
     "pretest:emulator": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
@@ -16,6 +17,8 @@
     "pretest:emulator:one": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "test:emulator:one": "node ops/run-emulator-vitest.mjs --only firestore --project octogee-test --firebase-config ../firebase.json --config vitest.emulator.config.ts --env GCLOUD_PROJECT=octogee-test",
     "audit-coverage": "tsx ops/audit-coverage.ts",
+    "verify-silent-post": "tsx ops/verify-silent-post.ts",
+    "verify:mattermost-capability": "tsx ops/verify-mattermost-capability-artifact.ts",
     "scope": "tsx ops/scope.ts"
   },
   "dependencies": {

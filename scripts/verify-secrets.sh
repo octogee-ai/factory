@@ -76,7 +76,8 @@ REQUIRED_SECRETS=(
   "mattermost-gateway"      # octogee-api + glm-controller; gateway pods do not mount admin_token
   "stripe-secrets"          # gateway-edge: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
   "gitea-token"             # octogee-api + glm-controller
-  "approval-signing"        # chat-proxy: OCTOGEE_APPROVAL_SIGNING_SECRET (HMAC for approval buttons)
+  "agent-control-signing"        # chat-proxy: OCTOGEE_AGENT_CONTROL_SIGNING_SECRET (HMAC for controls)
+  "agent-control-router"    # private Mattermost callback-router → gateway-edge HMAC
   "byot-sync-internal"      # octogee-api → gateway-edge BYOT sync HMAC
 )
 
@@ -98,7 +99,8 @@ REQUIRED_KEYS=(
   "gateway-model-key-issuer:bearer_token:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "social-notification-bearer:bearer-token:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "octogee-anthropic:api_key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
-  "approval-signing:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+  "agent-control-signing:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+  "agent-control-router:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "byot-sync-internal:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
 )
 

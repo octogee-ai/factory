@@ -10,6 +10,7 @@ import { requireAuth } from "./middleware/auth.js";
 import { installBodyParsers } from "./middleware/body-parsers.js";
 import { createEmailMetrics, setEmailMetrics } from "./lib/email-metrics.js";
 import { createNotificationMetrics, setNotificationMetrics } from "./lib/notification-metrics.js";
+import { createActivityPairMetrics, setActivityPairMetrics } from "./lib/activity-pair-metrics.js";
 
 import { mountApi } from "./routes/mount-api.js";
 import gitRoutes from "./routes/workspace/git.js";
@@ -103,6 +104,7 @@ const httpRequestTotal = new Counter({
 
 setEmailMetrics(createEmailMetrics(metricsRegistry));
 setNotificationMetrics(createNotificationMetrics(metricsRegistry));
+setActivityPairMetrics(createActivityPairMetrics(metricsRegistry));
 
 app.use(helmetMiddleware);
 app.use(corsMiddleware);
@@ -229,7 +231,7 @@ export function dispatchGatewayEdgeRequest(
   app: (req: http.IncomingMessage, res: http.ServerResponse) => void,
 ): void {
   const rawPath = (req.url || "").split("?")[0];
-  if (chatProxyOwnsHttpPath(stripGatewayPrefix(rawPath))) {
+  if (chatProxyOwnsHttpPath(stripGatewayPrefix(rawPath), rawPath)) {
     loadChatProxyModule().then((chatProxy) => chatProxy.chatProxyHandleRequest(req, res)).catch((err) => {
       logger.error("[chat-proxy] request handler failed", {
         path: rawPath,
@@ -246,7 +248,22 @@ export function dispatchGatewayEdgeRequest(
 }
 
 if (process.env.NODE_ENV !== "test") {
-  if (process.env.GATEWAY_EDGE_MODE === "router") {
+  if (process.env.GATEWAY_EDGE_MODE === "agent-control-router") {
+    const { createAgentControlCallbackRouter } = await import("./agent-control-callback-router.js");
+    const namespace = process.env.K8S_NAMESPACE || "default";
+    const router = createAgentControlCallbackRouter({
+      namespace,
+      hmacKey: process.env.AGENT_CONTROL_ROUTER_KEY ?? "",
+      log: (message, meta) => logger.error(message, meta),
+    });
+    router.listen(PORT, () => {
+      logger.info(`mattermost-callback-router boot — listening on port ${PORT}`, {
+        port: PORT,
+        namespace,
+        sha: process.env.BUILD_SHA || "unknown",
+      });
+    });
+  } else if (process.env.GATEWAY_EDGE_MODE === "router") {
     if (!process.env.GATEWAY_ROUTER_PREVIEW_HOST) {
       logger.error("FATAL: GATEWAY_ROUTER_PREVIEW_HOST is required in gateway-router mode");
       process.exit(1);

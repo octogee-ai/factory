@@ -1,7 +1,12 @@
 import { Router, type Request, type Response } from "express";
 import type { Firestore, Transaction } from "firebase-admin/firestore";
 
-import { isValidUsername, parseAgentId } from "@octogee/shared/types/identity";
+import {
+  isValidCustomChannelName,
+  isValidProjectId,
+  isValidUsername,
+  parseAgentId,
+} from "@octogee/shared/types/identity";
 import {
   isGatewayDesiredDoc,
   type GatewayDoc,
@@ -14,6 +19,17 @@ import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent"
 import { readAssignedSlugsForGateway } from "@octogee/core/assigned-roster";
 import { parseAssignmentDoc } from "@octogee/core/assignment-doc";
 import { deriveExpectedAgentId } from "../../../gateway-edge/src/chat-proxy/openclaw/frame-filter.js";
+import type { AgentControlRecordV1 } from "../../../gateway-edge/src/chat-proxy/openclaw/agent-control-service.js";
+import {
+  createAgentControlRegistry,
+  createFirestoreAgentControlStore,
+} from "./agent-control-registry.js";
+import { createAgentControlRoutes } from "./agent-control-routes.js";
+import {
+  createAgentControlActorFactsResolver,
+  createMattermostAgentControlPostDeleter,
+  type MattermostAgentControlActorFacts,
+} from "./agent-control-actor-facts.js";
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
 interface AgentIdentity {
@@ -34,26 +50,7 @@ interface ChannelPair {
   channelDocPath: string;
 }
 
-interface ApprovalRecord {
-  approvalId: string;
-  kind: "exec" | "plugin";
-  channelId: string;
-  runId: string;
-  expiresAt: number;
-  nonce: string;
-  agentId: string;
-  postId: string;
-  dispatched: boolean;
-  createdAt: number;
-}
-
-type MarkDispatchedResult =
-  | { outcome: "dispatched" }
-  | { outcome: "already-dispatched" }
-  | { outcome: "not-found" };
-
 const TICKETS = "gatewayTickets";
-const APPROVALS = "ocApprovals";
 const FORBIDDEN = { error: "forbidden" } as const;
 
 function isDurableGatewayRoot(
@@ -117,6 +114,75 @@ function workspaceSlugFromChannelPath(path: string | null): string | null {
   return isValidUsername(parts[1]) ? parts[1] : null;
 }
 
+interface BoundChannelPath {
+  workspaceSlug: string;
+  ownerPath: string;
+  channelName: string;
+  lane: "workspace" | "project";
+}
+
+type ChannelLookupDocument = {
+  data(): Record<string, unknown> | undefined;
+  ref?: unknown;
+};
+type ChannelOwnerLookupResult = string | null | "forbidden";
+type ChannelDocumentMatches = Map<string, ChannelLookupDocument> | "forbidden";
+
+function boundChannelPath(path: string | null): BoundChannelPath | null {
+  if (!path) return null;
+  const parts = path.split("/");
+  if (!isWorkspacePath(parts)) return null;
+  return workspaceChannelBinding(parts) ?? projectChannelBinding(parts);
+}
+
+function isWorkspacePath(parts: string[]): boolean {
+  return !parts.some((part) => !part) &&
+    parts[0] === "workspaces" &&
+    isValidUsername(parts[1]);
+}
+
+function workspaceChannelBinding(parts: string[]): BoundChannelPath | null {
+  if (parts.length !== 4 || parts[2] !== "channels") return null;
+  const channelName = parts[3];
+  const allowed = channelName === "general" ||
+    channelName === "coach-dm" ||
+    channelName === "admin" ||
+    isValidCustomChannelName(channelName);
+  return allowed
+    ? {
+        workspaceSlug: parts[1],
+        ownerPath: `workspaces/${parts[1]}`,
+        channelName,
+        lane: "workspace",
+      }
+    : null;
+}
+
+function projectChannelBinding(parts: string[]): BoundChannelPath | null {
+  if (
+    parts.length !== 6 ||
+    parts[2] !== "projects" ||
+    !isValidProjectId(parts[3]) ||
+    parts[4] !== "channels"
+  ) return null;
+  const channelName = parts[5];
+  if (channelName !== "general" && !isValidCustomChannelName(channelName)) return null;
+  return {
+    workspaceSlug: parts[1],
+    ownerPath: `workspaces/${parts[1]}/projects/${parts[3]}`,
+    channelName,
+    lane: "project",
+  };
+}
+
+function ordinaryChannelKind(binding: BoundChannelPath): string | null {
+  if (binding.lane === "project") return binding.channelName === "general" ? "general" : null;
+  if (binding.channelName === "general") return "general";
+  if (binding.channelName === "coach-dm") return "coach-dm";
+  if (binding.channelName === "admin") return "admin";
+  return null;
+}
+
 // Workspace username for ANY of the customer's agents — coach or project
 // agent (approvals and run-live writes authorize by assigned slug).
 function usernameFromAgentId(agentId: string): string | null {
@@ -147,8 +213,8 @@ function forbidden(res: Response): void {
 }
 
 async function resolveUidBySlug(db: Firestore, slug: string): Promise<string | null> {
-  const snap = await db.collection("users").where("username", "==", slug).get();
-  return snap.docs[0]?.id ?? null;
+  const snap = await db.collection("users").where("username", "==", slug).limit(2).get();
+  return snap.docs.length === 1 ? snap.docs[0].id : null;
 }
 
 interface CoachSecret {
@@ -249,32 +315,84 @@ async function resolveChannelPair(
   const snap = await db
     .collectionGroup("channels")
     .where("mattermost.channelId", "==", primaryChannelId)
+    .limit(2)
     .get();
+  if (snap.docs.length > 1) return "forbidden";
   const doc = snap.docs[0];
   if (!doc) return null;
   const channelDocPath = extractRefPath((doc as { ref?: unknown }).ref);
-  const slug = workspaceSlugFromChannelPath(channelDocPath);
-  if (!slug) return null;
-  if (!(await assignedHere(db, gatewayId, slug))) return "forbidden";
+  const binding = boundChannelPath(channelDocPath);
+  if (!binding) return null;
+  if (!(await assignedHere(db, gatewayId, binding.workspaceSlug))) return "forbidden";
   const data = doc.data() ?? {};
   const activityChannelId = readPath(data, "mattermost.activityChannelId");
   if (typeof activityChannelId !== "string" || !activityChannelId) return null;
   return { primaryChannelId, activityChannelId, channelDocPath: channelDocPath! };
 }
 
-function validateRunLiveWrite(
+function runLivePathIdentity(path: string): {
+  slug: string;
+  channelPath: string;
+  documentId: string;
+} | null {
+  const marker = "/liveRuns/";
+  const markerIndex = path.indexOf(marker);
+  if (markerIndex <= 0 || markerIndex !== path.lastIndexOf(marker)) return null;
+  const channelPath = path.slice(0, markerIndex);
+  const documentId = path.slice(markerIndex + marker.length);
+  const slug = workspaceSlugFromChannelPath(channelPath);
+  if (!slug || !documentId || documentId.includes("/")) return null;
+  return { slug, channelPath, documentId };
+}
+
+function validRunLiveV3(
+  doc: Record<string, unknown>,
+  identity: ReturnType<typeof runLivePathIdentity> & {},
+): boolean {
+  const conversationId = typeof doc.conversationId === "string" ? doc.conversationId : "";
+  const mainChannelId = typeof doc.mainChannelId === "string" ? doc.mainChannelId : "";
+  const activityChannelId = typeof doc.activityChannelId === "string" ? doc.activityChannelId : "";
+  if (!conversationId || conversationId !== mainChannelId || !activityChannelId) return false;
+  if (doc.projectionKind === "run") {
+    const runId = typeof doc.runId === "string" ? doc.runId : "";
+    return Boolean(runId) && identity.documentId === runId;
+  }
+  if (doc.projectionKind === "admission") {
+    const inputPostId = typeof doc.inputPostId === "string" ? doc.inputPostId : "";
+    return Boolean(inputPostId) && identity.documentId === `admission-${inputPostId}`;
+  }
+  return false;
+}
+
+function validRunLiveV2(
+  path: string,
+  slug: string,
+  doc: Record<string, unknown>,
+): boolean {
+  const runId = typeof doc.runId === "string" ? doc.runId : "";
+  const workspaceId = typeof doc.workspaceId === "string" ? doc.workspaceId : "";
+  const channelPath = typeof doc.channelPath === "string" ? doc.channelPath : "";
+  return (
+    Boolean(runId) &&
+    workspaceId === slug &&
+    channelPath.startsWith(`workspaces/${slug}/`) &&
+    path === `${trimTrailingSlashes(channelPath)}/liveRuns/${runId}`
+  );
+}
+
+export function validateRunLiveWrite(
   body: Record<string, unknown>,
 ): { path: string; slug: string; doc: Record<string, unknown> } | null {
   const path = typeof body.path === "string" ? body.path : "";
   const doc = body.doc && typeof body.doc === "object" ? body.doc as Record<string, unknown> : null;
   const slug = typeof body.workspaceSlug === "string" ? body.workspaceSlug : "";
   if (!path || !doc || !isValidUsername(slug)) return null;
-  const runId = typeof doc.runId === "string" ? doc.runId : "";
-  const workspaceId = typeof doc.workspaceId === "string" ? doc.workspaceId : "";
-  const channelPath = typeof doc.channelPath === "string" ? doc.channelPath : "";
-  if (!runId || workspaceId !== slug || !channelPath.startsWith(`workspaces/${slug}/`)) return null;
-  if (path !== `${trimTrailingSlashes(channelPath)}/liveRuns/${runId}`) return null;
-  return { path, slug, doc };
+  const identity = runLivePathIdentity(path);
+  if (!identity || identity.slug !== slug) return null;
+  if (doc.schemaVersion === 3) {
+    return validRunLiveV3(doc, identity) ? { path, slug, doc } : null;
+  }
+  return validRunLiveV2(path, slug, doc) ? { path, slug, doc } : null;
 }
 
 function slugFromRunLivePath(path: string): string | null {
@@ -289,22 +407,48 @@ async function resolveChannelOwnerUid(
   db: Firestore,
   gatewayId: string,
   channelId: string,
-): Promise<string | null | "forbidden"> {
+): Promise<ChannelOwnerLookupResult> {
+  const docs = await matchingChannelDocuments(db, channelId);
+  if (docs === "forbidden") return docs;
+  if (docs.size === 0) return null;
+  if (docs.size !== 1) return "forbidden";
+  const [channelPath, doc] = [...docs.entries()][0];
+  const binding = boundChannelPath(channelPath);
+  if (!binding || !(await assignedHere(db, gatewayId, binding.workspaceSlug))) return "forbidden";
+  const data = doc.data() ?? {};
+  if (data.kind === "session") return sessionChannelOwner(data, binding);
+  if (data.kind !== ordinaryChannelKind(binding)) return "forbidden";
+  const ownerSnap = await db.doc(binding.ownerPath).get();
+  const ownerUid = ownerSnap.data()?.ownerUid;
+  return typeof ownerUid === "string" && ownerUid ? ownerUid : null;
+}
+
+async function matchingChannelDocuments(
+  db: Firestore,
+  channelId: string,
+): Promise<ChannelDocumentMatches> {
+  const docs = new Map<string, ChannelLookupDocument>();
   for (const field of ["mattermost.channelId", "mattermost.activityChannelId"]) {
-    const snap = await db.collectionGroup("channels").where(field, "==", channelId).get();
-    const doc = snap.docs[0];
-    if (!doc) continue;
-    const channelPath = extractRefPath((doc as { ref?: unknown }).ref);
-    const slug = workspaceSlugFromChannelPath(channelPath);
-    if (!slug) return null;
-    if (!(await assignedHere(db, gatewayId, slug))) return "forbidden";
-    const ownerPath = channelPath?.slice(0, channelPath.lastIndexOf("/channels/"));
-    if (!ownerPath) return null;
-    const ownerSnap = await db.doc(ownerPath).get();
-    const ownerUid = ownerSnap.data()?.ownerUid;
-    return typeof ownerUid === "string" && ownerUid ? ownerUid : null;
+    const snap = await db.collectionGroup("channels").where(field, "==", channelId).limit(2).get();
+    for (const doc of snap.docs) {
+      const path = extractRefPath((doc as { ref?: unknown }).ref);
+      if (!path) return "forbidden";
+      docs.set(path, doc as unknown as ChannelLookupDocument);
+    }
   }
-  return null;
+  return docs;
+}
+
+function sessionChannelOwner(
+  data: Record<string, unknown>,
+  binding: BoundChannelPath,
+): ChannelOwnerLookupResult {
+  if (data.kind === "session") {
+    if (ordinaryChannelKind(binding) !== null) return "forbidden";
+    const createdBy = data.createdBy;
+    return typeof createdBy === "string" && createdBy ? createdBy : null;
+  }
+  return "forbidden";
 }
 
 async function resolveUidByMmUser(
@@ -313,7 +457,8 @@ async function resolveUidByMmUser(
   mmUserId: string,
 ): Promise<string | null | "forbidden"> {
   if (!mmUserId) return null;
-  const snap = await db.collection("users").where("mattermost.userId", "==", mmUserId).get();
+  const snap = await db.collection("users").where("mattermost.userId", "==", mmUserId).limit(2).get();
+  if (snap.docs.length > 1) return "forbidden";
   const doc = snap.docs[0];
   if (!doc) return null;
   const uid = doc.id;
@@ -323,58 +468,57 @@ async function resolveUidByMmUser(
   return uid;
 }
 
-function requiredString(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function optionalString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function finiteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function approvalKind(value: unknown): ApprovalRecord["kind"] | null {
-  return value === "exec" || value === "plugin" ? value : null;
-}
-
-function approvalRecordFromBody(body: Record<string, unknown>): ApprovalRecord | null {
-  const record = body.record;
-  if (!record || typeof record !== "object") return null;
-  const r = record as Record<string, unknown>;
-  const approvalId = requiredString(r.approvalId);
-  const kind = approvalKind(r.kind);
-  const channelId = requiredString(r.channelId);
-  const runId = requiredString(r.runId);
-  const expiresAt = finiteNumber(r.expiresAt);
-  const nonce = requiredString(r.nonce);
-  const agentId = requiredString(r.agentId);
-  const createdAt = finiteNumber(r.createdAt);
-  if (!approvalId || !kind || !channelId || !runId || expiresAt === null || !nonce || !agentId || createdAt === null) {
-    return null;
-  }
-  return {
-    approvalId,
-    kind,
-    channelId,
-    runId,
-    expiresAt,
-    nonce,
-    agentId,
-    postId: optionalString(r.postId),
-    dispatched: r.dispatched === true,
-    createdAt,
-  };
-}
-
-async function approvalAssigned(
+async function resolveControlActorUid(
   db: Firestore,
+  mmUserId: string,
+): Promise<string | null | "forbidden"> {
+  if (!mmUserId) return null;
+  const snap = await db.collection("users").where("mattermost.userId", "==", mmUserId).limit(2).get();
+  if (snap.docs.length > 1) return "forbidden";
+  return snap.docs[0]?.id ?? null;
+}
+
+async function controlBelongsToGateway(
+  db: Firestore,
+  record: AgentControlRecordV1,
   gatewayId: string,
-  record: ApprovalRecord,
 ): Promise<boolean> {
-  const slug = usernameFromAgentId(record.agentId);
+  if (record.gatewayId !== gatewayId) return false;
+  const slug = usernameFromAgentId(record.correlation.agentId);
   return !!slug && assignedHere(db, gatewayId, slug);
+}
+
+async function resolveControlActorFacts(
+  db: Firestore,
+  record: AgentControlRecordV1,
+  actorMmUserId: string,
+  gatewayId: string,
+  resolveMattermostFacts: (
+    record: AgentControlRecordV1,
+    actorMmUserId: string,
+  ) => Promise<MattermostAgentControlActorFacts>,
+): Promise<{
+  actorUid: string;
+  isCurrentMember: boolean;
+  isAgentOrBot: boolean;
+  isInputAuthor: boolean;
+  isChannelOwner: boolean;
+  isSystemAdmin: boolean;
+} | null> {
+  const actorUid = await resolveControlActorUid(db, actorMmUserId);
+  if (!actorUid || actorUid === "forbidden") return null;
+  const [ownerUid, systemConfig, mattermostFacts] = await Promise.all([
+    resolveChannelOwnerUid(db, gatewayId, record.primaryChannelId),
+    db.doc(`users/${actorUid}/system/config`).get(),
+    resolveMattermostFacts(record, actorMmUserId),
+  ]);
+  if (ownerUid === "forbidden") return null;
+  return {
+    actorUid,
+    ...mattermostFacts,
+    isChannelOwner: ownerUid === actorUid,
+    isSystemAdmin: systemConfig.data()?.role === "admin",
+  };
 }
 
 // Resolve the customer's serving revision for WS redemption. A BACKFILLED
@@ -655,112 +799,52 @@ function mountActivityRoutes(router: Router, db: Firestore): void {
   });
 }
 
-function mountApprovalRoutes(router: Router, db: Firestore): void {
-  router.post("/activity/approval/register", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const record = approvalRecordFromBody((req.body ?? {}) as Record<string, unknown>);
-    if (!record) {
-      res.status(400).json({ error: "invalid_approval_record" });
-      return;
-    }
-    if (!(await approvalAssigned(db, bound.gatewayId, record))) {
-      forbidden(res);
-      return;
-    }
-    await db.runTransaction(async (tx) => {
-      const ref = db.doc(`${APPROVALS}/${record.approvalId}`);
-      const snap = await tx.get(ref);
-      if (!snap.exists) tx.set(ref, record as unknown as Record<string, unknown>);
-    });
-    res.status(204).end();
-  });
-
-  router.post("/activity/approval/lookup", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const approvalId = stringBody(req, "approvalId");
-    const snap = approvalId ? await db.doc(`${APPROVALS}/${approvalId}`).get() : null;
-    if (!snap?.exists) {
-      res.status(404).json({ error: "not_found" });
-      return;
-    }
-    const record = snap.data() as unknown as ApprovalRecord;
-    if (!(await approvalAssigned(db, bound.gatewayId, record))) {
-      forbidden(res);
-      return;
-    }
-    res.json({ record });
-  });
-
-  router.post("/activity/approval/attach-post", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const approvalId = stringBody(req, "approvalId");
-    const postId = stringBody(req, "postId");
-    const ref = db.doc(`${APPROVALS}/${approvalId}`);
-    const snap = approvalId ? await ref.get() : null;
-    if (!snap?.exists || !postId) {
-      res.status(404).json({ error: "not_found" });
-      return;
-    }
-    if (!(await approvalAssigned(db, bound.gatewayId, snap.data() as unknown as ApprovalRecord))) {
-      forbidden(res);
-      return;
-    }
-    await ref.update({ postId });
-    res.status(204).end();
-  });
-
-  router.post("/activity/approval/mark-dispatched", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const approvalId = stringBody(req, "approvalId");
-    const ref = db.doc(`${APPROVALS}/${approvalId}`);
-    const snap = approvalId ? await ref.get() : null;
-    if (!snap?.exists) {
-      res.json({ outcome: "not-found" satisfies MarkDispatchedResult["outcome"] });
-      return;
-    }
-    if (!(await approvalAssigned(db, bound.gatewayId, snap.data() as unknown as ApprovalRecord))) {
-      forbidden(res);
-      return;
-    }
-    const result = await db.runTransaction<MarkDispatchedResult>(async (tx) => {
-      const txSnap = await tx.get(ref);
-      if (!txSnap.exists) return { outcome: "not-found" };
-      const data = txSnap.data() ?? {};
-      if (data.dispatched === true) return { outcome: "already-dispatched" };
-      tx.update(ref, { dispatched: true });
-      return { outcome: "dispatched" };
-    });
-    res.json(result);
-  });
-
-  router.post("/activity/approval/reset-dispatched", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const approvalId = stringBody(req, "approvalId");
-    const ref = db.doc(`${APPROVALS}/${approvalId}`);
-    const snap = approvalId ? await ref.get() : null;
-    if (!snap?.exists) {
-      res.status(404).json({ error: "not_found" });
-      return;
-    }
-    if (!(await approvalAssigned(db, bound.gatewayId, snap.data() as unknown as ApprovalRecord))) {
-      forbidden(res);
-      return;
-    }
-    await ref.update({ dispatched: false });
-    res.status(204).end();
-  });
-}
-
-export function createOpenClawRuntimeBrokerRoutes(opts: { db: Firestore }): Router {
+export function createOpenClawRuntimeBrokerRoutes(opts: {
+  db: Firestore;
+  resolveMattermostActorFacts?: (
+    record: AgentControlRecordV1,
+    actorMmUserId: string,
+  ) => Promise<MattermostAgentControlActorFacts>;
+  deleteMattermostInputPost?: (postId: string) => Promise<void>;
+}): Router {
   const router = Router();
   const { db } = opts;
+  const agentControlRegistry = createAgentControlRegistry({
+    store: createFirestoreAgentControlStore(db as never),
+  });
+  let mattermostActorFacts = opts.resolveMattermostActorFacts;
+  const resolveMattermostActorFacts = (
+    record: AgentControlRecordV1,
+    actorMmUserId: string,
+  ): Promise<MattermostAgentControlActorFacts> => {
+    mattermostActorFacts ??= createAgentControlActorFactsResolver({
+      mattermostBaseUrl: process.env.MM_INTERNAL_URL ?? "",
+      adminToken: process.env.MM_ADMIN_TOKEN ?? "",
+    });
+    return mattermostActorFacts(record, actorMmUserId);
+  };
+  let deleteMattermostInputPost = opts.deleteMattermostInputPost;
+  const deleteInputPost = (postId: string): Promise<void> => {
+    deleteMattermostInputPost ??= createMattermostAgentControlPostDeleter({
+      mattermostBaseUrl: process.env.MM_INTERNAL_URL ?? "",
+      adminToken: process.env.MM_ADMIN_TOKEN ?? "",
+    });
+    return deleteMattermostInputPost(postId);
+  };
   mountUserAndWsRoutes(router, db);
   mountActivityRoutes(router, db);
-  mountApprovalRoutes(router, db);
+  router.use("/agent-control", createAgentControlRoutes({
+    registry: agentControlRegistry,
+    belongsToGateway: (record, gatewayId) => controlBelongsToGateway(db, record, gatewayId),
+    resolveActorFacts: (record, actorMmUserId, gatewayId) =>
+      resolveControlActorFacts(
+        db,
+        record,
+        actorMmUserId,
+        gatewayId,
+        resolveMattermostActorFacts,
+      ),
+    deleteInputPost,
+  }));
   return router;
 }

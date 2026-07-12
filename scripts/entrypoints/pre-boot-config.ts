@@ -10,6 +10,7 @@ import {
   platformOpenAiEmbeddingMemorySearch,
   platformOpenAiEmbeddingsEnabled,
 } from "../lib/openclaw-config-builders.js";
+import { applyOpenClawConversationExperiment } from "../lib/openclaw-conversation-experiment.js";
 import {
   isBareGatewayId,
   readGatewayAuthorization,
@@ -327,6 +328,7 @@ export function applyPreBootPatches(
   return [
     applyToolsProfilePatch(config, logFn),
     applyMattermostPreBootPatches(config, env, logFn),
+    applyOpenClawConversationExperiment(config, env.OCTOGEE_ACTIVITY_BRIDGE_MODE),
     applyMacPlatformAnthropicPin(config, env, logFn),
     applyAnthropicBaseUrlPatch(config, env, logFn),
     applyMemorySearchPlatformEmbeddingsPatch(config, env, logFn),

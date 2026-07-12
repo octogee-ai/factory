@@ -118,6 +118,10 @@ describe("shared runtime constants", () => {
   it("accepts generated image tags and rejects unsafe tags", () => {
     expect(IMAGE_TAG_PATTERN.test("60535e46")).toBe(true);
     expect(IMAGE_TAG_PATTERN.test("60535e46-ocgw1.2")).toBe(true);
+    expect(IMAGE_TAG_PATTERN.test(`60535e46-ocgw1.2@sha256:${"a".repeat(64)}`)).toBe(true);
+    expect(IMAGE_TAG_PATTERN.test(`agent-conversation-w9a-8c356bb1@sha256:${"a".repeat(64)}`)).toBe(true);
+    expect(IMAGE_TAG_PATTERN.test("agent-conversation-w9a-8c356bb1")).toBe(false);
+    expect(IMAGE_TAG_PATTERN.test("agent-conversation-w9a-8c356bb1@sha256:short")).toBe(false);
     expect(IMAGE_TAG_PATTERN.test("latest")).toBe(false);
     expect(IMAGE_TAG_PATTERN.test("60535e46_OC")).toBe(false);
   });

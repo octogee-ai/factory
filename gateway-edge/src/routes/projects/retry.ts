@@ -25,7 +25,6 @@ interface RetryActivityInput {
   teamId: string;
   channelName: string;
   mmChannelId: string;
-  members: RetryMember[];
 }
 
 function errorMessage(err: unknown): string {
@@ -138,28 +137,21 @@ async function provisionRetryActivity(
   teamId: string,
   channelName: string,
   mmChannelId: string,
-  members: RetryMember[],
 ): Promise<void> {
-  const { provisionActivityPair } = await import("../../lib/activityPair.js");
-  await provisionActivityPair({
+  const { reconcileActivityPair } = await import("../../lib/activityPair.js");
+  await reconcileActivityPair({
+    channelDocPath: `${ctx.projectRef.path}/channels/general`,
     primaryName: channelName,
     primaryChannelId: mmChannelId,
     teamId,
     type: "P",
     kind: "project",
-    members: members.map((member) => member.id),
-    recordActivityChannelId: async (activityChannelId) => {
-      await ctx.projectRef
-        .collection("channels")
-        .doc("general")
-        .set({ mattermost: { activityChannelId } }, { merge: true });
-    },
   });
 }
 
 async function provisionRetryActivityOrFail(input: RetryActivityInput): Promise<boolean> {
   try {
-    await provisionRetryActivity(input.ctx, input.teamId, input.channelName, input.mmChannelId, input.members);
+    await provisionRetryActivity(input.ctx, input.teamId, input.channelName, input.mmChannelId);
     return true;
   } catch (err) {
     const message = errorMessage(err);
@@ -223,16 +215,15 @@ async function retryProjectProvisioning(ctx: ProjectCtx, res: Response): Promise
 
   const members = retryMembers(callerCtx);
   if (!(await addRetryMembersOrFail(ctx, res, mmChannelId, members))) return;
+  await writeRetryGeneralChannel(ctx, mmChannelId);
   if (!(await provisionRetryActivityOrFail({
     ctx,
     res,
     teamId: callerCtx.teamId,
     channelName,
     mmChannelId,
-    members,
   }))) return;
 
-  await writeRetryGeneralChannel(ctx, mmChannelId);
   const visibility = restoredVisibility(ctx);
   if (!(await reconcileRetryRepoOrFail(ctx, res, visibility))) return;
   await activateRetriedProject(ctx, visibility);

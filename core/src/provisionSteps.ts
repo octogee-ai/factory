@@ -13,6 +13,8 @@ import * as path from "path";
 import {
   isValidUsername,
   usernameValidationError,
+  workspaceAdminChannelName,
+  workspaceCoachChannelName,
   workspaceGeneralChannelName,
 } from "@octogee/shared/types/identity";
 import type { MmUpdate } from "./customer-lifecycle.js";
@@ -20,7 +22,7 @@ import {
   persistWorkspaceChannelsWithActivityPairs,
   provisionWorkspaceActivityPair,
 } from "./mattermost/provisionWorkspaceActivityPairs.js";
-import { mmApiCall as mmApiCallDefault } from "./mattermost/client.js";
+import { mmApiCallStrict as mmApiCallDefault } from "./mattermost/client.js";
 import {
   log, OPENCLAW_DIR, CUSTOMERS_DIR,
   agentExists,
@@ -555,21 +557,15 @@ async function provisionActivityPairsForWorkspace(
 ): Promise<void> {
   const generalChannelId = mmUpdate["mattermost.generalChannelId"] as string | undefined;
   const coachDmChannelId = mmUpdate["mattermost.channelId"] as string | undefined;
+  const adminChannelId = mmUpdate["mattermost.adminChannelId"] as string | undefined;
   const apTeamId = (mmUpdate["mattermost.teamId"] as string | undefined) ?? "";
-  const apCustomerMmUserId = mmUpdate["mattermost.userId"] as string | undefined;
-  const apCoachMmUserId = mmUpdate["mattermost.coachUserId"] as string | undefined;
-  const apAdminMmUserIdEnv = process.env.MM_ADMIN_USER_ID || null;
-
   const mmApiCall = mmApiCallDefault;
-  if (!(apTeamId && apCustomerMmUserId && apCoachMmUserId)) return;
+  if (!apTeamId) throw new Error(`activity-pair provisioning failed for ${ctx.slug}: Mattermost team is missing`);
 
   const activityResult = await persistWorkspaceChannelsWithActivityPairs(
     {
       workspaceSlug: ctx.slug,
       teamId: apTeamId,
-      customerMmUserId: apCustomerMmUserId,
-      coachMmUserId: apCoachMmUserId,
-      adminMmUserId: apAdminMmUserIdEnv,
       generalChannel: generalChannelId
         ? { id: generalChannelId, name: workspaceGeneralChannelName(ctx.slug) }
         : null,
@@ -578,8 +574,11 @@ async function provisionActivityPairsForWorkspace(
             id: coachDmChannelId,
             name:
               (mmUpdate["mattermost.channelName"] as string | undefined) ||
-              `octogee-${ctx.slug}-coach`,
+              workspaceCoachChannelName(ctx.slug),
           }
+        : null,
+      adminChannel: adminChannelId
+        ? { id: adminChannelId, name: workspaceAdminChannelName(ctx.slug) }
         : null,
     },
     {
@@ -591,8 +590,9 @@ async function provisionActivityPairsForWorkspace(
   if (activityResult.failures.length > 0) {
     const failureSummary = activityResult.failures.map((f) => `${f.kind}=${f.error}`).join("; ");
     log(
-      `[provisioner] ⚠ ${activityResult.failures.length} activity-pair(s) failed for ${ctx.slug}: ${failureSummary}`,
+      `[provisioner] ❌ ${activityResult.failures.length} activity-pair(s) failed for ${ctx.slug}: ${failureSummary}`,
     );
+    throw new Error(`activity-pair provisioning failed for ${ctx.slug}: ${failureSummary}`);
   }
   if (activityResult.successes.length > 0) {
     log(

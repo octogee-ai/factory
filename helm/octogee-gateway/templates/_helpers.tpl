@@ -154,3 +154,12 @@ tier isn't declared in `.Values.tiers`.
 {{- end -}}
 {{- $preset | toYaml -}}
 {{- end }}
+
+{{- define "octogee-gateway.imageLabel" -}}
+{{- $imageTag := .Values.image.tag | default .Values.imageTag -}}
+{{- if and (le (len $imageTag) 63) (regexMatch "^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$" $imageTag) -}}
+{{- $imageTag -}}
+{{- else -}}
+{{- printf "sha256-%s" (trunc 56 (sha256sum $imageTag)) -}}
+{{- end -}}
+{{- end -}}
