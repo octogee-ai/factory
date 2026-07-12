@@ -2,6 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import http, { type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from "node:http";
 import { URL } from "node:url";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
+import { containsAsciiControlCharacter } from "./lib/text-validation.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const BODY_TIMEOUT_MS = 10_000;
@@ -16,7 +17,7 @@ export interface AgentControlRouterProof {
 }
 
 function validRouterKey(key: string): boolean {
-  return Buffer.byteLength(key) >= 32 && !/[\u0000-\u001f\u007f]/.test(key);
+  return Buffer.byteLength(key) >= 32 && !containsAsciiControlCharacter(key);
 }
 
 function bodySha256(body: Buffer): string {
@@ -57,7 +58,9 @@ type CallbackRoute =
   | { kind: "mattermost-interaction"; gatewayId: string; accountId: string };
 
 function parseRoute(url: string): CallbackRoute | null {
-  const path = new URL(url, "http://callback-router.local").pathname;
+  if (!url.startsWith("/")) return null;
+  const queryStart = url.indexOf("?");
+  const path = queryStart === -1 ? url : url.slice(0, queryStart);
   const control = /^\/internal\/openclaw\/agent-control\/([^/]+)\/callback$/.exec(path);
   if (control && isValidGatewayId(control[1])) {
     return { kind: "agent-control", gatewayId: control[1] };

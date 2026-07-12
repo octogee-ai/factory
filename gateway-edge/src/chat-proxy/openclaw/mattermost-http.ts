@@ -1,3 +1,5 @@
+import { containsAsciiControlCharacter } from "../../lib/text-validation.js";
+
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024;
 const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/;
@@ -49,7 +51,7 @@ function tokenValue(value: string | undefined, required: boolean): string | unde
     typeof value !== "string" ||
     value.length < 16 ||
     value.length > 4_096 ||
-    /[\u0000-\u0020\u007f]/.test(value)
+    containsAsciiControlCharacter(value) || value.includes(" ")
   ) {
     throw new Error("invalid Mattermost internal token");
   }
@@ -68,7 +70,7 @@ function requestUrl(
 ): string {
   if (
     segments.length === 0 ||
-    segments.some((segment) => !segment || segment.length > 256 || /[\u0000-\u001f\u007f]/.test(segment))
+    segments.some((segment) => !segment || segment.length > 256 || containsAsciiControlCharacter(segment))
   ) {
     throw new Error("invalid Mattermost request path");
   }

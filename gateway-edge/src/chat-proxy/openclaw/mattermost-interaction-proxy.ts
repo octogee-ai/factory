@@ -1,11 +1,15 @@
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { URL } from "node:url";
 import { verifyAgentControlRouterRequest } from "../../agent-control-callback-router.js";
+import { containsAsciiControlCharacter } from "../../lib/text-validation.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const BODY_TIMEOUT_MS = 10_000;
 const UPSTREAM_TIMEOUT_MS = 10_000;
+const LOOPBACK_PROTOCOL = "http:";
+const LOOPBACK_HOST = "127.0.0.1";
+const DEFAULT_LOOPBACK_ORIGIN = `${LOOPBACK_PROTOCOL}${LOOPBACK_HOST}:18789`;
 const HOP_HEADERS = new Set([
   "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
   "te", "trailer", "transfer-encoding", "upgrade",
@@ -87,6 +91,12 @@ function header(req: IncomingMessage, name: string): string {
   return typeof value === "string" ? value : "";
 }
 
+function originFormPath(url: string): string | null {
+  if (!url.startsWith("/")) return null;
+  const queryStart = url.indexOf("?");
+  return queryStart === -1 ? url : url.slice(0, queryStart);
+}
+
 function writeJson(res: ServerResponse, status: number, body: Record<string, unknown>): void {
   res.writeHead(status, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
@@ -101,11 +111,22 @@ export function createMattermostInteractionProxyHandler(input: {
   now?: () => number;
   log: (message: string, meta?: Record<string, unknown>) => void;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
-  if (Buffer.byteLength(input.routerKey) < 32 || /[\u0000-\u001f\u007f]/.test(input.routerKey)) {
+  if (Buffer.byteLength(input.routerKey) < 32 || containsAsciiControlCharacter(input.routerKey)) {
     throw new Error("AGENT_CONTROL_ROUTER_KEY must be at least 32 bytes");
   }
   const now = input.now ?? Date.now;
-  const target = new URL(input.targetOrigin ?? "http://127.0.0.1:18789");
+  const target = new URL(input.targetOrigin ?? DEFAULT_LOOPBACK_ORIGIN);
+  if (
+    target.protocol !== LOOPBACK_PROTOCOL ||
+    target.hostname !== LOOPBACK_HOST ||
+    target.username ||
+    target.password ||
+    target.pathname !== "/" ||
+    target.search ||
+    target.hash
+  ) {
+    throw new Error("invalid Mattermost interaction targetOrigin");
+  }
   const upstreamTimeoutMs = input.upstreamTimeoutMs ?? UPSTREAM_TIMEOUT_MS;
   const maxResponseBytes = input.maxResponseBytes ?? MAX_RESPONSE_BYTES;
   if (!Number.isSafeInteger(upstreamTimeoutMs) || upstreamTimeoutMs < 1) {
@@ -120,9 +141,8 @@ export function createMattermostInteractionProxyHandler(input: {
       writeJson(res, 405, { error: "method_not_allowed" });
       return;
     }
-    const match = /^\/internal\/openclaw\/mattermost\/interactions\/([A-Za-z0-9_-]{1,128})$/.exec(
-      new URL(req.url ?? "", "http://gateway-edge.local").pathname,
-    );
+    const path = originFormPath(req.url ?? "");
+    const match = path && /^\/internal\/openclaw\/mattermost\/interactions\/([A-Za-z0-9_-]{1,128})$/.exec(path);
     if (!match) {
       req.resume();
       writeJson(res, 404, { error: "not_found" });
