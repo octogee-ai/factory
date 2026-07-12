@@ -54,6 +54,26 @@ describe("Mattermost silent-post capability verifier", () => {
     })).rejects.toThrow("Mattermost silent capability artifact is not approved");
   });
 
+  it("accepts a server rejection when persistent notifications are unavailable in the edition", async () => {
+    const unread = [
+      { msgCount: 0, mentionCount: 0 },
+      { msgCount: 0, mentionCount: 0 },
+      { msgCount: 1, mentionCount: 1 },
+    ];
+    const report = await verifySilentPostCapability({
+      sourceCapabilitySentinel: SILENT_POST_CAPABILITY_SENTINEL,
+      readUnread: vi.fn(async () => unread.shift()!),
+      createPost: vi.fn()
+        .mockResolvedValueOnce({ status: 201, id: "silent-1", props: { silent_notification: true } })
+        .mockResolvedValueOnce({ status: 201, id: "final-1", props: {} })
+        .mockResolvedValueOnce({ status: 403 })
+        .mockResolvedValueOnce({ status: 501 }),
+      waitForWebsocketPost: vi.fn(async () => undefined),
+    });
+
+    expect(report.persistentSilentRejected).toBe(true);
+  });
+
   it("parses a runnable TEST/prod-neutral operator entrypoint without defaulting credentials", () => {
     expect(parseSilentPostProbeArgs([
       "--base-url=https://mattermost.example",
