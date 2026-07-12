@@ -53,6 +53,7 @@ export interface LlmBrokerAppDeps {
   // degrades keep the per-provider house model.
   resolveFreeTierModel?: () => Promise<ResolvedFreeTierModel | null>;
   fetchImpl?: typeof fetch;
+  upstreamHeaderTimeoutMs?: number;
   now?: () => number;
   bodyLimit?: string;
   onMeteringError?: (err: unknown) => void;
@@ -72,7 +73,15 @@ const DEFAULT_HOUSE_MODEL = "claude-haiku-4-5";
 const DEFAULT_OPENROUTER_HOUSE_MODEL = "z-ai/glm-5.2";
 const DEFAULT_OPENAI_HOUSE_MODEL = "gpt-5.4-mini";
 const DEFAULT_BODY_LIMIT = "32mb";
+const DEFAULT_UPSTREAM_HEADER_TIMEOUT_MS = 120_000;
 const MAX_SSE_METERING_BUFFER_CHARS = 1_000_000;
+
+class UpstreamHeaderTimeoutError extends Error {
+  constructor() {
+    super("llm broker upstream timed out");
+    this.name = "UpstreamHeaderTimeoutError";
+  }
+}
 
 const ALLOWED_ANTHROPIC_ENDPOINTS = new Set([
   "GET /v1/models",
@@ -1013,8 +1022,10 @@ async function logAndForwardAllowed(args: {
   logGate: GateLogger;
   rail: OwnerModelBrokerGrant["rail"];
   usageStore?: ModelBrokerUsageStore;
+  upstreamHeaderTimeoutMs: number;
   now: () => number;
   onMeteringError: (err: unknown) => void;
+  log?: (msg: string, fields?: Record<string, unknown>) => void;
 }): Promise<void> {
   const { gate, record } = args;
   const houseModel = await effectiveHouseModel({
@@ -1047,8 +1058,10 @@ async function forwardAllowed(args: {
   houseModel: string;
   rail: OwnerModelBrokerGrant["rail"];
   usageStore?: ModelBrokerUsageStore;
+  upstreamHeaderTimeoutMs: number;
   now: () => number;
   onMeteringError: (err: unknown) => void;
+  log?: (msg: string, fields?: Record<string, unknown>) => void;
 }): Promise<void> {
   const { req, res, url, record, providerKey, gate } = args;
   const prepaid = args.rail === "prepaid_credits" && Boolean(record.ownerUid);
@@ -1067,11 +1080,26 @@ async function forwardAllowed(args: {
       : (effectiveBody as unknown as BodyInit);
   const requestMetadata = readRequestMetadata(effectiveBody);
   const requestId = crypto.randomUUID();
-  const upstream = await args.fetchImpl(`${args.upstreamBaseUrl}${url.pathname}${url.search}`, {
-    method: req.method,
-    headers: Object.fromEntries(upstreamHeaders(req, providerKey.apiKey, record.provider).entries()),
-    body,
-    redirect: "manual",
+  const upstream = await fetchAndLogUpstream({
+    fetchImpl: args.fetchImpl,
+    url: `${args.upstreamBaseUrl}${url.pathname}${url.search}`,
+    init: {
+      method: req.method,
+      headers: Object.fromEntries(upstreamHeaders(req, providerKey.apiKey, record.provider).entries()),
+      body,
+      redirect: "manual",
+    },
+    timeoutMs: args.upstreamHeaderTimeoutMs,
+    now: args.now,
+    log: args.log,
+    fields: {
+      gatewayId: record.gatewayId,
+      ownerUid: record.ownerUid,
+      provider: record.provider,
+      path: url.pathname,
+      requestId,
+      requestModel: requestMetadata.model,
+    },
   });
   const metering: MeteringContext | undefined = shouldMeter(record.provider, req, url, upstream)
     ? {
@@ -1099,6 +1127,62 @@ async function forwardAllowed(args: {
       }
     : undefined;
   await writeUpstreamResponse(upstream, res, metering);
+}
+
+async function fetchAndLogUpstream(args: {
+  fetchImpl: typeof fetch;
+  url: string;
+  init: RequestInit;
+  timeoutMs: number;
+  now: () => number;
+  log?: (msg: string, fields?: Record<string, unknown>) => void;
+  fields: Record<string, unknown>;
+}): Promise<globalThis.Response> {
+  const startedAt = args.now();
+  args.log?.("llm-broker upstream request", args.fields);
+  try {
+    const upstream = await fetchUpstreamHeaders(args);
+    args.log?.("llm-broker upstream headers", {
+      ...args.fields,
+      upstreamStatus: upstream.status,
+      durationMs: args.now() - startedAt,
+    });
+    return upstream;
+  } catch (err) {
+    if (err instanceof UpstreamHeaderTimeoutError) {
+      args.log?.("llm-broker upstream timeout", {
+        ...args.fields,
+        timeoutMs: args.timeoutMs,
+        durationMs: args.now() - startedAt,
+      });
+    }
+    throw err;
+  }
+}
+
+async function fetchUpstreamHeaders(args: {
+  fetchImpl: typeof fetch;
+  url: string;
+  init: RequestInit;
+  timeoutMs: number;
+}): Promise<globalThis.Response> {
+  const controller = new AbortController();
+  const timeoutError = new UpstreamHeaderTimeoutError();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, args.timeoutMs);
+  });
+  try {
+    return await Promise.race([
+      args.fetchImpl(args.url, { ...args.init, signal: controller.signal }),
+      deadline,
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
@@ -1141,6 +1225,8 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
     ),
   };
   const now = deps.now ?? Date.now;
+  const upstreamHeaderTimeoutMs =
+    deps.upstreamHeaderTimeoutMs ?? DEFAULT_UPSTREAM_HEADER_TIMEOUT_MS;
 
   app.disable("x-powered-by");
 
@@ -1240,8 +1326,10 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
           logGate,
           rail: grant.rail,
           usageStore: deps.usageStore,
+          upstreamHeaderTimeoutMs,
           now,
           onMeteringError: deps.onMeteringError ?? (() => undefined),
+          log: deps.log,
         });
       } catch (err) {
         next(err);
@@ -1251,6 +1339,10 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
 
   app.use((err: Error, _req: Request, res: ExpressResponse, _next: NextFunction) => {
     if (res.headersSent) return;
+    if (err instanceof UpstreamHeaderTimeoutError) {
+      res.status(504).json({ error: err.message });
+      return;
+    }
     res.status(502).json({ error: "llm broker upstream failure", message: err.message });
   });
 
