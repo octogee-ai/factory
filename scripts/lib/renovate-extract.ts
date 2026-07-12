@@ -66,6 +66,29 @@ function referenceKind(manager: string): string {
   return manager;
 }
 
+function fallbackKey(
+  manager: string,
+  packageFile: string,
+  kind: string,
+  packageName: string,
+  index: number,
+  managerData: Record<string, unknown>,
+): string {
+  if (kind === "dockerfile") return `from:${index}`;
+  if (kind === "github-action") return `uses:${index}`;
+  if (kind === "helm-chart") return `dependency:${packageName}`;
+  if (kind === "terraform-provider") return `provider:${packageName.split("/").at(-1)}`;
+  if (kind === "container-image" && manager === "helm-values") {
+    const lineNumber = managerData.lineNumber;
+    if (!Number.isInteger(lineNumber) || Number(lineNumber) < 0) {
+      throw new Error(`${packageName} in ${manager} ${packageFile} is missing a non-negative managerData.lineNumber`);
+    }
+    return `repository:${lineNumber}`;
+  }
+  if (kind === "container-image") return `image:${index}`;
+  return `${kind}:${index}`;
+}
+
 function parseOutputLines(source: string): unknown[] {
   const values: unknown[] = [];
   for (const [index, line] of source.split(/\r?\n/).entries()) {
@@ -91,13 +114,10 @@ function dependencyReference(
   const managerData = isRecord(raw.managerData) ? raw.managerData : {};
   const explicitKey = typeof raw.octogeeKey === "string" ? raw.octogeeKey : undefined;
   const kind = referenceKind(group.manager);
-  const fallbackKey = kind === "dockerfile"
-    ? `from:${String(managerData.lineNumber ?? index)}`
-    : `${kind}:${index}`;
   return {
     referenceKind: kind,
     path: group.packageFile,
-    key: explicitKey ?? fallbackKey,
+    key: explicitKey ?? fallbackKey(group.manager, group.packageFile, kind, packageName, index, managerData),
     packageName,
     currentValue,
   };
