@@ -17,10 +17,8 @@ export const MATTERMOST_CAPABILITY_ARTIFACT = {
 export interface MattermostCapabilityVerificationInput {
   provenance: Uint8Array;
   evidence: unknown;
-  evidenceBytes: Uint8Array;
   trivyArchive: Uint8Array;
   trivyReport: Uint8Array;
-  exception: unknown;
   now?: Date;
 }
 
@@ -54,7 +52,7 @@ function expectValue(
   errors: string[],
   label: string,
   actual: unknown,
-  expected: string | number,
+  expected: string | number | boolean,
 ): void {
   if (actual !== expected) errors.push(`${label} must equal ${expected}`);
 }
@@ -330,41 +328,18 @@ function verifyScanEvidence(evidence: unknown, errors: string[], now: Date): voi
   }
 }
 
-function verifyException(exception: unknown, evidenceBytes: Uint8Array, errors: string[]): void {
-  expectValue(errors, "exception id", at(exception, "id"), "release/mattermost-silent-post");
+function verifyCandidateIsolation(evidence: unknown, errors: string[]): void {
   expectValue(
     errors,
-    "exception reference path",
-    at(exception, "reference", "path"),
-    "infra/candidates/values.mattermost-silent-post.yaml",
+    "candidate release class",
+    at(evidence, "candidate", "releaseClass"),
+    "unpublished-11.10-source-snapshot",
   );
-  expectValue(errors, "exception reference key", at(exception, "reference", "key"), "repository:2");
-  expectValue(errors, "exception package", at(exception, "reference", "packageName"), MATTERMOST_CAPABILITY_ARTIFACT.repository);
-  expectValue(
-    errors,
-    "exception current value",
-    at(exception, "reference", "currentValue"),
-    `${MATTERMOST_CAPABILITY_ARTIFACT.tag}@${MATTERMOST_CAPABILITY_ARTIFACT.digest}`,
-  );
-  expectValue(errors, "exception artifact digest", at(exception, "artifact", "digest"), MATTERMOST_CAPABILITY_ARTIFACT.digest);
-  expectValue(
-    errors,
-    "exception provenance sha256",
-    at(exception, "artifact", "provenance", "sha256"),
-    MATTERMOST_CAPABILITY_ARTIFACT.provenanceDigest,
-  );
-  expectValue(errors, "exception vulnerability scanner", at(exception, "vulnerabilityScan", "scanner"), "trivy");
-  expectValue(errors, "exception vulnerability status", at(exception, "vulnerabilityScan", "status"), "accepted");
-  expectValue(
-    errors,
-    "exception vulnerability evidence sha256",
-    at(exception, "vulnerabilityScan", "evidence", "sha256"),
-    sha256(evidenceBytes),
-  );
-  if (at(exception, "testRestore", "status") !== "pending") {
-    errors.push("TEST/restore must remain pending until exact environment evidence exists");
+  expectValue(errors, "candidate deployable", at(evidence, "candidate", "deployable"), false);
+  const defaultEnvironments = at(evidence, "candidate", "defaultEnvironments");
+  if (!Array.isArray(defaultEnvironments) || defaultEnvironments.length !== 0) {
+    errors.push("candidate default environments must be empty");
   }
-  expectValue(errors, "exception signature disposition", at(exception, "signature", "disposition"), "not-supplied");
 }
 
 export function verifyMattermostCapabilityEvidence(
@@ -376,6 +351,6 @@ export function verifyMattermostCapabilityEvidence(
   verifyArtifactEvidence(input.evidence, errors);
   verifyTrivyReport(input.evidence, input.trivyReport, input.trivyArchive, errors);
   verifyScanEvidence(input.evidence, errors, input.now ?? new Date());
-  verifyException(input.exception, input.evidenceBytes, errors);
+  verifyCandidateIsolation(input.evidence, errors);
   return errors;
 }

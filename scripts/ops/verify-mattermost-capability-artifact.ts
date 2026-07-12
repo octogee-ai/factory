@@ -14,11 +14,6 @@ export function runVerifyMattermostCapabilityArtifact(
   repoRoot = path.resolve(import.meta.dirname, "../.."),
 ): number {
   const evidenceDirectory = path.join(repoRoot, ".github/evidence/mattermost");
-  const exceptions = json(path.join(repoRoot, ".github/dependency-exceptions.json")) as {
-    exceptions?: Array<{ id?: unknown }>;
-  };
-  const exception = exceptions.exceptions?.find(({ id }) =>
-    id === "release/mattermost-silent-post");
   const evidencePath = path.join(evidenceDirectory, "mattermost-cce485f-evidence.json");
   const trivyArchive = readFileSync(path.join(
     evidenceDirectory,
@@ -27,10 +22,8 @@ export function runVerifyMattermostCapabilityArtifact(
   const errors = verifyMattermostCapabilityEvidence({
     provenance: readFileSync(path.join(evidenceDirectory, "mattermost-cce485f-slsa.json")),
     evidence: json(evidencePath),
-    evidenceBytes: readFileSync(evidencePath),
     trivyArchive,
     trivyReport: gunzipSync(trivyArchive),
-    exception,
   });
   if (errors.length > 0) {
     for (const error of errors) console.error(`Mattermost capability evidence: ${error}`);

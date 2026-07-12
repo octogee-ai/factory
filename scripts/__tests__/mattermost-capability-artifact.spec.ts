@@ -2,9 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
-import { inventoryRepository } from "../lib/dependency-inventory.js";
 import {
-  MATTERMOST_CAPABILITY_ARTIFACT,
   verifyMattermostCapabilityEvidence,
 } from "../lib/mattermost-capability-artifact.js";
 
@@ -21,30 +19,20 @@ const trivyArchivePath = path.join(
   repoRoot,
   ".github/evidence/mattermost/mattermost-cce485f-trivy-0.71.1.json.gz",
 );
-const exceptionsPath = path.join(repoRoot, ".github/dependency-exceptions.json");
-
 function json(pathname: string): unknown {
   return JSON.parse(readFileSync(pathname, "utf8")) as unknown;
-}
-
-function mattermostException(): unknown {
-  const file = json(exceptionsPath) as { exceptions: Array<{ id?: unknown }> };
-  return file.exceptions.find(({ id }) => id === "release/mattermost-silent-post");
 }
 
 function verify(
   provenance: Uint8Array = readFileSync(provenancePath),
   evidence: unknown = json(evidencePath),
-  exception: unknown = mattermostException(),
   trivyReport: Uint8Array = gunzipSync(readFileSync(trivyArchivePath)),
 ): string[] {
   return verifyMattermostCapabilityEvidence({
     provenance,
     evidence,
-    evidenceBytes: readFileSync(evidencePath),
     trivyArchive: readFileSync(trivyArchivePath),
     trivyReport,
-    exception,
     now: new Date("2026-07-11T17:30:00Z"),
   });
 }
@@ -102,32 +90,21 @@ describe("Mattermost capability artifact evidence", () => {
       gunzipSync(readFileSync(trivyArchivePath)),
       Buffer.from("\n"),
     ]);
-    expect(verify(undefined, undefined, undefined, changed)).toContainEqual(
+    expect(verify(undefined, undefined, changed)).toContainEqual(
       expect.stringContaining("Trivy raw report sha256"),
     );
   });
 
-  it("keeps TEST/restore pending and rejects a false passed claim", () => {
-    const exception = mattermostException();
-    expect(recordAt(exception, "testRestore").status).toBe("pending");
+  it("rejects an unpublished source snapshot that claims promotion readiness", () => {
+    const promoted = structuredClone(json(evidencePath)) as Record<string, unknown>;
+    promoted.candidate = {
+      releaseClass: "unpublished-11.10-source-snapshot",
+      deployable: true,
+      defaultEnvironments: [],
+    };
 
-    const falseClaim = structuredClone(exception);
-    recordAt(falseClaim, "testRestore").status = "passed";
-    expect(verify(undefined, undefined, falseClaim)).toContainEqual(
-      expect.stringContaining("TEST/restore must remain pending"),
-    );
-  });
-
-  it("keeps inventory and the exception bound to the full repository/tag/digest identity", () => {
-    const inventory = inventoryRepository(repoRoot);
-    const reference = inventory.references.find(({ path: pathname, packageName }) =>
-      pathname === "infra/candidates/values.mattermost-silent-post.yaml" &&
-      packageName === MATTERMOST_CAPABILITY_ARTIFACT.repository,
-    );
-    const exception = mattermostException();
-    expect(reference).toEqual(recordAt(exception, "reference"));
-    expect(reference?.currentValue).toBe(
-      `${MATTERMOST_CAPABILITY_ARTIFACT.tag}@${MATTERMOST_CAPABILITY_ARTIFACT.digest}`,
+    expect(verify(undefined, promoted)).toContainEqual(
+      expect.stringContaining("candidate deployable must equal false"),
     );
   });
 });
