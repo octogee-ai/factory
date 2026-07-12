@@ -60,10 +60,6 @@ import {
 import type { ActivityBridgeHandle } from "./openclaw/activity-bridge.js";
 import type { MmCoachEventListenerManager } from "./openclaw/mm-event-listener.js";
 import { createProductionActivityIntakeHandler } from "./openclaw/activity-intake.js";
-import {
-  FirestoreActivityWriteReceiptStore,
-  type ActivityReceiptFirestoreLike,
-} from "./openclaw/activity-write-receipts.js";
 import { createActivityMmClientFactory } from "./openclaw/mm-client.js";
 import { createReceiptBackedRetryMarker } from "./openclaw/agent-control-retry-marker.js";
 import {
@@ -1190,7 +1186,10 @@ function wireCoachEventListeners(
   });
 }
 
-function installProductionActivityIntake(controls: ActivitySinkControlLifecycle): void {
+function installProductionActivityIntake(
+  controls: ActivitySinkControlLifecycle,
+  runtimeBroker: OpenClawRuntimeBroker,
+): void {
   if (
     process.env.MATTERMOST_SILENT_CAPABILITY_SENTINEL !==
     MATTERMOST_SILENT_CAPABILITY_SENTINEL
@@ -1203,7 +1202,7 @@ function installProductionActivityIntake(controls: ActivitySinkControlLifecycle)
   const mmClientFor = createActivityMmClientFactory({ baseUrl: MM_INTERNAL_URL });
   installActivityIntakeHandler(createProductionActivityIntakeHandler({
     registry: activityRuntimeRegistry,
-    db: db as unknown as ActivityReceiptFirestoreLike,
+    receiptsFor: (binding) => runtimeBroker.activityWriteReceiptsFor(binding.channelDocPath),
     mmClientFor,
     leaseOwner: `${process.env.HOSTNAME ?? "gateway-edge"}:${process.pid}`,
     alerts: {
@@ -1237,9 +1236,8 @@ async function startRunLiveProjectionBackground(
   const controlKey = process.env.OCTOGEE_AGENT_CONTROL_SIGNING_SECRET ?? '';
   const routerKey = process.env.AGENT_CONTROL_ROUTER_KEY ?? '';
   const activityMmClientFor = createActivityMmClientFactory({ baseUrl: MM_INTERNAL_URL });
-  const receiptDb = db as unknown as ActivityReceiptFirestoreLike;
   const receiptsFor = (binding: { channelDocPath: string }) =>
-    new FirestoreActivityWriteReceiptStore(receiptDb, binding.channelDocPath);
+    runtimeBroker.activityWriteReceiptsFor(binding.channelDocPath);
   const resolveCoachToken = async (agentId: string): Promise<string | null> =>
     (await runtimeBroker.resolveAgentIdentity(agentId))?.coachToken ?? null;
   const leaseOwner = `${process.env.HOSTNAME ?? 'gateway-edge'}:${process.pid}`;
@@ -1288,7 +1286,7 @@ async function startRunLiveProjectionBackground(
     log: (message, meta) => logger.error(message, meta),
   });
   installAgentControlCallbackHandler(controlled.callbackHandler);
-  installProductionActivityIntake(controlled.activityControls);
+  installProductionActivityIntake(controlled.activityControls, runtimeBroker);
   const liveBridge = controlled.bridge;
   const gatewayId = gatewayIdResult.gatewayId;
   const healthUrl = gatewayHealthUrl();
@@ -1513,9 +1511,8 @@ export async function startChatProxyBackground(): Promise<void> {
       const namespace = process.env.K8S_NAMESPACE || 'octogee';
       const controlKey = process.env.OCTOGEE_AGENT_CONTROL_SIGNING_SECRET ?? '';
       const activityMmClientFor = createActivityMmClientFactory({ baseUrl: MM_INTERNAL_URL });
-      const receiptDb = db as unknown as ActivityReceiptFirestoreLike;
       const receiptsFor = (binding: { channelDocPath: string }) =>
-        new FirestoreActivityWriteReceiptStore(receiptDb, binding.channelDocPath);
+        runtimeBroker.activityWriteReceiptsFor(binding.channelDocPath);
       const resolveCoachToken = async (agentId: string): Promise<string | null> =>
         (await runtimeBroker.resolveAgentIdentity(agentId))?.coachToken ?? null;
       const leaseOwner = `${process.env.HOSTNAME ?? 'gateway-edge'}:${process.pid}`;
@@ -1569,7 +1566,7 @@ export async function startChatProxyBackground(): Promise<void> {
       process.exit(1);
     }
     installAgentControlCallbackHandler(wired.agentControlCallbackHandler);
-    installProductionActivityIntake(wired.activityControls);
+    installProductionActivityIntake(wired.activityControls, runtimeBroker);
 
     await startPublisherLiveCoachListeners({ gatewayId, runtimeBroker, wired });
 

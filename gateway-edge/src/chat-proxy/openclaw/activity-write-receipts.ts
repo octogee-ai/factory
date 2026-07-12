@@ -318,7 +318,9 @@ function validUploadProgressReceipt(data: Record<string, unknown>): boolean {
   );
 }
 
-function validAttachmentReceipt(value: unknown): boolean {
+export function isValidActivityAttachmentReceipt(
+  value: unknown,
+): value is ActivityAttachmentReceiptV1 {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const data = value as Record<string, unknown>;
   if (data.state === "none") return exactKeys(data, ["state"]);
@@ -335,7 +337,7 @@ function validReceiptMetadata(data: Record<string, unknown>): boolean {
   return (
     safeNonNegativeInteger(data.leaseExpiresAt) &&
     safeNonNegativeInteger(data.updatedAt) &&
-    validAttachmentReceipt(data.attachment)
+    isValidActivityAttachmentReceipt(data.attachment)
   );
 }
 

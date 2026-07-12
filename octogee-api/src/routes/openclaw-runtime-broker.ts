@@ -19,6 +19,15 @@ import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent"
 import { readAssignedSlugsForGateway } from "@octogee/core/assigned-roster";
 import { parseAssignmentDoc } from "@octogee/core/assignment-doc";
 import { deriveExpectedAgentId } from "../../../gateway-edge/src/chat-proxy/openclaw/frame-filter.js";
+import {
+  ActivityReceiptConflictError,
+  ActivityReceiptLeaseError,
+  ActivityReceiptUnavailableError,
+  FirestoreActivityWriteReceiptStore,
+  isValidActivityAttachmentReceipt,
+  type ActivityReceiptClaimInput,
+  type ActivityReceiptFirestoreLike,
+} from "../../../gateway-edge/src/chat-proxy/openclaw/activity-write-receipts.js";
 import type { AgentControlRecordV1 } from "../../../gateway-edge/src/chat-proxy/openclaw/agent-control-service.js";
 import {
   createAgentControlRegistry,
@@ -52,6 +61,7 @@ interface ChannelPair {
 
 const TICKETS = "gatewayTickets";
 const FORBIDDEN = { error: "forbidden" } as const;
+const RECEIPT_MAX_LEASE_MS = 60_000;
 
 function isDurableGatewayRoot(
   data: unknown,
@@ -401,6 +411,103 @@ function slugFromRunLivePath(path: string): string | null {
   if (!isValidUsername(parts[1])) return null;
   if (!parts.includes("liveRuns")) return null;
   return parts[1];
+}
+
+function receiptBody(req: Request): Record<string, unknown> {
+  const body = req.body;
+  return body && typeof body === "object" && !Array.isArray(body)
+    ? body as Record<string, unknown>
+    : {};
+}
+
+function receiptString(body: Record<string, unknown>, key: string): string | null {
+  const value = body[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function receiptTimestamp(value: unknown): number | null {
+  return Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : null;
+}
+
+function receiptEventKey(value: unknown): string | null {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value) ? value : null;
+}
+
+function receiptClaimInput(body: Record<string, unknown>): ActivityReceiptClaimInput | null {
+  const raw = body.input;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const input = raw as Record<string, unknown>;
+  const eventKey = receiptEventKey(input.eventKey);
+  const payloadDigest = receiptEventKey(input.payloadDigest);
+  const historyAnchorPostId = receiptString(input, "historyAnchorPostId");
+  const leaseOwner = receiptString(input, "leaseOwner");
+  const now = receiptTimestamp(input.now);
+  const leaseMs = receiptTimestamp(input.leaseMs);
+  if (
+    !eventKey ||
+    !payloadDigest ||
+    !historyAnchorPostId ||
+    !leaseOwner ||
+    now === null ||
+    leaseMs === null ||
+    leaseMs === 0 ||
+    leaseMs > RECEIPT_MAX_LEASE_MS ||
+    !Number.isSafeInteger(now + leaseMs)
+  ) {
+    return null;
+  }
+  return { eventKey, payloadDigest, historyAnchorPostId, leaseOwner, now, leaseMs };
+}
+
+function receiptMutation(
+  body: Record<string, unknown>,
+): { eventKey: string; leaseToken: string; now: number } | null {
+  const eventKey = receiptEventKey(body.eventKey);
+  const leaseToken = receiptString(body, "leaseToken");
+  const now = receiptTimestamp(body.now);
+  return eventKey && leaseToken && now !== null ? { eventKey, leaseToken, now } : null;
+}
+
+async function receiptStoreFor(
+  req: Request,
+  res: Response,
+  db: Firestore,
+  bound: GatewayBinding,
+): Promise<FirestoreActivityWriteReceiptStore | null> {
+  const channelDocPath = receiptString(receiptBody(req), "channelDocPath");
+  const binding = boundChannelPath(channelDocPath);
+  if (!binding) {
+    res.status(400).json({ error: "invalid_receipt_channel_path" });
+    return null;
+  }
+  if (!(await assignedHere(db, bound.gatewayId, binding.workspaceSlug))) {
+    forbidden(res);
+    return null;
+  }
+  if (!(await db.doc(channelDocPath!).get()).exists) {
+    res.status(404).json({ error: "receipt_channel_not_found" });
+    return null;
+  }
+  return new FirestoreActivityWriteReceiptStore(
+    db as unknown as ActivityReceiptFirestoreLike,
+    channelDocPath!,
+  );
+}
+
+function respondReceiptStoreError(res: Response, error: unknown): void {
+  if (error instanceof ActivityReceiptConflictError) {
+    res.status(409).json({ error: "receipt_conflict" });
+    return;
+  }
+  if (error instanceof ActivityReceiptLeaseError) {
+    res.status(409).json({ error: "receipt_leased" });
+    return;
+  }
+  if (error instanceof ActivityReceiptUnavailableError) {
+    res.status(422).json({ error: "receipt_unavailable" });
+    return;
+  }
+  throw error;
 }
 
 async function resolveChannelOwnerUid(
@@ -766,6 +873,108 @@ function mountActivityRoutes(router: Router, db: Firestore): void {
     }
     await db.doc(path).delete();
     res.status(204).end();
+  });
+
+  router.post("/activity/write-receipts/claim", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const input = receiptClaimInput(receiptBody(req));
+    if (!input) {
+      res.status(400).json({ error: "invalid_receipt_claim" });
+      return;
+    }
+    const store = await receiptStoreFor(req, res, db, bound);
+    if (!store) return;
+    try {
+      const claim = await store.claim(input);
+      res.json(claim);
+    } catch (error) {
+      respondReceiptStoreError(res, error);
+    }
+  });
+
+  router.post("/activity/write-receipts/read", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const eventKey = receiptEventKey(receiptBody(req).eventKey);
+    if (!eventKey) {
+      res.status(400).json({ error: "invalid_receipt_event_key" });
+      return;
+    }
+    const store = await receiptStoreFor(req, res, db, bound);
+    if (!store) return;
+    try {
+      const receipt = await store.read(eventKey);
+      if (!receipt) {
+        res.status(404).json({ error: "receipt_not_found" });
+        return;
+      }
+      res.json({ receipt });
+    } catch (error) {
+      respondReceiptStoreError(res, error);
+    }
+  });
+
+  router.post("/activity/write-receipts/mark-posted", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const body = receiptBody(req);
+    const mutation = receiptMutation(body);
+    const postId = receiptString(body, "postId");
+    if (!mutation || !postId) {
+      res.status(400).json({ error: "invalid_receipt_mark_posted" });
+      return;
+    }
+    const store = await receiptStoreFor(req, res, db, bound);
+    if (!store) return;
+    try {
+      await store.markPosted(mutation.eventKey, mutation.leaseToken, postId, mutation.now);
+      res.status(204).end();
+    } catch (error) {
+      respondReceiptStoreError(res, error);
+    }
+  });
+
+  router.post("/activity/write-receipts/attachment", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const body = receiptBody(req);
+    const mutation = receiptMutation(body);
+    if (!mutation || !isValidActivityAttachmentReceipt(body.attachment)) {
+      res.status(400).json({ error: "invalid_receipt_attachment" });
+      return;
+    }
+    const store = await receiptStoreFor(req, res, db, bound);
+    if (!store) return;
+    try {
+      await store.updateAttachment(
+        mutation.eventKey,
+        mutation.leaseToken,
+        body.attachment,
+        mutation.now,
+      );
+      res.status(204).end();
+    } catch (error) {
+      respondReceiptStoreError(res, error);
+    }
+  });
+
+  router.post("/activity/write-receipts/commit", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const mutation = receiptMutation(receiptBody(req));
+    if (!mutation) {
+      res.status(400).json({ error: "invalid_receipt_commit" });
+      return;
+    }
+    const store = await receiptStoreFor(req, res, db, bound);
+    if (!store) return;
+    try {
+      await store.commit(mutation.eventKey, mutation.leaseToken, mutation.now);
+      res.status(204).end();
+    } catch (error) {
+      respondReceiptStoreError(res, error);
+    }
   });
 
   router.post("/activity/channel-owner", async (req, res) => {

@@ -27,8 +27,7 @@ import {
   type ActivitySink,
 } from "./activity-sink.js";
 import {
-  FirestoreActivityWriteReceiptStore,
-  type ActivityReceiptFirestoreLike,
+  type ActivityWriteReceiptStore,
 } from "./activity-write-receipts.js";
 import type { ActivityMattermostClient } from "./mm-client.js";
 
@@ -894,7 +893,7 @@ export interface ActivityIntakeHttpOptions {
 
 export interface ProductionActivityIntakeOptions extends ActivityIntakeHttpOptions {
   registry: ActivityRuntimeRegistry;
-  db: ActivityReceiptFirestoreLike;
+  receiptsFor(binding: ActiveActivityRunBinding): ActivityWriteReceiptStore;
   mmClientFor(token: string): ActivityMattermostClient;
   leaseOwner: string;
   alerts?: Parameters<typeof createActivitySink>[0]['alerts'];
@@ -910,7 +909,7 @@ export function createProductionActivityIntakeHandler(
       registry: options.registry,
       sinkFor: (binding) => createActivitySink({
         mm: options.mmClientFor(binding.coachToken),
-        receipts: new FirestoreActivityWriteReceiptStore(options.db, binding.channelDocPath),
+        receipts: options.receiptsFor(binding),
         leaseOwner: options.leaseOwner,
         alerts: options.alerts,
         controls: options.controls,

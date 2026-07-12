@@ -5,6 +5,10 @@ import {
   createOpenClawRuntimeBrokerFromEnv,
   runtimeBrokerBaseUrlFromEnv,
 } from "../runtime-broker.js";
+import {
+  ActivityReceiptConflictError,
+  ActivityReceiptLeaseError,
+} from "../activity-write-receipts.js";
 
 function brokerWithRedeemStatus(
   status: number,
@@ -170,5 +174,153 @@ describe("OpenClaw runtime broker env", () => {
         body: { gatewayId: "gw-bender", mmUserId: "mm-user" },
       },
     ]);
+  });
+});
+
+describe("activity write receipts", () => {
+  it("brokers every receipt transition with the bound gateway and channel path", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const eventKey = "a".repeat(64);
+    const digest = "b".repeat(64);
+    const receipt = {
+      eventKey,
+      payloadDigest: digest,
+      state: "claimed",
+      historyAnchorPostId: "anchor-1",
+      leaseOwner: "pod-1",
+      leaseToken: "lease-1",
+      leaseExpiresAt: 1_100,
+      attachment: { state: "none" },
+      updatedAt: 100,
+    };
+    const fetchImpl: typeof fetch = vi.fn(async (input, init) => {
+      const url = String(input);
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      calls.push({ url, body });
+      if (url.endsWith("/activity/write-receipts/claim")) {
+        return new Response(JSON.stringify({ outcome: "claimed", receipt, recovered: false }), {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/activity/write-receipts/read")) {
+        return new Response(JSON.stringify({ receipt }), {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        });
+      }
+      return new Response(null, { status: 204 });
+    });
+    const broker = createOpenClawRuntimeBroker({
+      baseUrl: "http://octogee-api:3001/",
+      gatewayId: "gw-bender",
+      fetchImpl,
+    });
+    const store = broker.activityWriteReceiptsFor("workspaces/bob/channels/coach-dm");
+
+    await expect(store.claim({
+      eventKey,
+      payloadDigest: digest,
+      historyAnchorPostId: "anchor-1",
+      leaseOwner: "pod-1",
+      now: 100,
+      leaseMs: 1_000,
+    })).resolves.toEqual({ outcome: "claimed", receipt, recovered: false });
+    await expect(store.read(eventKey)).resolves.toEqual(receipt);
+    await store.markPosted(eventKey, "lease-1", "post-1", 101);
+    await store.updateAttachment(eventKey, "lease-1", {
+      state: "attached",
+      fileId: "file-1",
+      sha256: digest,
+      byteLength: 8,
+    }, 102);
+    await store.commit(eventKey, "lease-1", 103);
+
+    expect(calls.map(({ url, body }) => ({
+      path: new URL(url).pathname,
+      body,
+    }))).toEqual([
+      {
+        path: "/internal/openclaw/activity/write-receipts/claim",
+        body: {
+          gatewayId: "gw-bender",
+          channelDocPath: "workspaces/bob/channels/coach-dm",
+          input: {
+            eventKey,
+            payloadDigest: digest,
+            historyAnchorPostId: "anchor-1",
+            leaseOwner: "pod-1",
+            now: 100,
+            leaseMs: 1_000,
+          },
+        },
+      },
+      {
+        path: "/internal/openclaw/activity/write-receipts/read",
+        body: { gatewayId: "gw-bender", channelDocPath: "workspaces/bob/channels/coach-dm", eventKey },
+      },
+      {
+        path: "/internal/openclaw/activity/write-receipts/mark-posted",
+        body: {
+          gatewayId: "gw-bender",
+          channelDocPath: "workspaces/bob/channels/coach-dm",
+          eventKey,
+          leaseToken: "lease-1",
+          postId: "post-1",
+          now: 101,
+        },
+      },
+      {
+        path: "/internal/openclaw/activity/write-receipts/attachment",
+        body: {
+          gatewayId: "gw-bender",
+          channelDocPath: "workspaces/bob/channels/coach-dm",
+          eventKey,
+          leaseToken: "lease-1",
+          attachment: {
+            state: "attached",
+            fileId: "file-1",
+            sha256: digest,
+            byteLength: 8,
+          },
+          now: 102,
+        },
+      },
+      {
+        path: "/internal/openclaw/activity/write-receipts/commit",
+        body: {
+          gatewayId: "gw-bender",
+          channelDocPath: "workspaces/bob/channels/coach-dm",
+          eventKey,
+          leaseToken: "lease-1",
+          now: 103,
+        },
+      },
+    ]);
+  });
+
+  it("preserves receipt conflict and lease semantics across the broker", async () => {
+    const broker = createOpenClawRuntimeBroker({
+      baseUrl: "http://octogee-api:3001/",
+      gatewayId: "gw-bender",
+      fetchImpl: vi.fn(async (input) => new Response(
+        JSON.stringify({
+          error: String(input).endsWith("/claim") ? "receipt_conflict" : "receipt_leased",
+        }),
+        { headers: { "content-type": "application/json" }, status: 409 },
+      )),
+    });
+    const store = broker.activityWriteReceiptsFor("workspaces/bob/channels/coach-dm");
+
+    await expect(store.claim({
+      eventKey: "a".repeat(64),
+      payloadDigest: "b".repeat(64),
+      historyAnchorPostId: "anchor-1",
+      leaseOwner: "pod-1",
+      now: 100,
+      leaseMs: 1_000,
+    })).rejects.toBeInstanceOf(ActivityReceiptConflictError);
+    await expect(store.commit("a".repeat(64), "lease-1", 101))
+      .rejects.toBeInstanceOf(ActivityReceiptLeaseError);
   });
 });

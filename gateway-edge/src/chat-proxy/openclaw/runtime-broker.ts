@@ -2,6 +2,20 @@ import { internalFetch } from "../../lib/internal-fetch.js";
 import type { AgentIdentity, ChannelPair } from "./activity-bridge.js";
 import type { ConversationRunLiveDocV3, RunLiveDoc } from "./run-live-doc.js";
 import {
+  ActivityReceiptConflictError,
+  ActivityReceiptLeaseError,
+  ActivityReceiptUnavailableError,
+  type ActivityAttachmentReceiptV1,
+  type ActivityReceiptClaim,
+  type ActivityReceiptClaimInput,
+  type ActivityWriteReceiptStore,
+  type ActivityWriteReceiptV1,
+} from "./activity-write-receipts.js";
+import {
+  BrokeredActivityWriteReceiptStore,
+  type ActivityWriteReceiptBrokerPort,
+} from "./activity-write-receipt-broker.js";
+import {
   createAgentControlRegistryClient,
   type AgentControlRegistryClient,
 } from "./agent-control-registry-client.js";
@@ -31,6 +45,7 @@ export interface OpenClawRuntimeBroker {
   resolveChannelPair(primaryChannelId: string): Promise<ChannelPair | null>;
   writeRunLiveDoc(path: string, doc: RunLiveDoc | ConversationRunLiveDocV3): Promise<void>;
   deleteRunLiveDoc(path: string): Promise<void>;
+  activityWriteReceiptsFor(channelDocPath: string): ActivityWriteReceiptStore;
   resolveChannelOwnerUid(channelId: string): Promise<string | null>;
   resolveOctogeeUidByMmUser(mmUserId: string): Promise<string | null>;
   agentControlRegistry: AgentControlRegistryClient;
@@ -88,6 +103,125 @@ function stringField(body: Record<string, unknown> | null, name: string): string
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function objectField(body: Record<string, unknown> | null, name: string): Record<string, unknown> | null {
+  const value = body?.[name];
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function readReceipt(body: Record<string, unknown> | null): ActivityWriteReceiptV1 {
+  const receipt = objectField(body, "receipt");
+  if (!receipt) throw new OpenClawRuntimeBrokerError(502, "malformed receipt response");
+  return receipt as unknown as ActivityWriteReceiptV1;
+}
+
+function readReceiptClaim(body: Record<string, unknown> | null): ActivityReceiptClaim {
+  const outcome = stringField(body, "outcome");
+  const receipt = readReceipt(body);
+  if (outcome === "duplicate") return { outcome, receipt };
+  if (outcome === "claimed" && typeof body?.recovered === "boolean") {
+    return { outcome, receipt, recovered: body.recovered };
+  }
+  throw new OpenClawRuntimeBrokerError(502, "malformed receipt claim response");
+}
+
+function receiptBrokerError(error: string | null): Error {
+  if (error === "receipt_conflict") {
+    return new ActivityReceiptConflictError("event-key payload digest conflict");
+  }
+  if (error === "receipt_leased") {
+    return new ActivityReceiptLeaseError("Activity receipt is leased by another writer");
+  }
+  return new ActivityReceiptUnavailableError("Activity receipt broker request failed");
+}
+
+type BrokerPost = (
+  path: string,
+  body: Record<string, unknown>,
+  expected: ReadonlySet<number>,
+) => Promise<Response>;
+
+function createActivityWriteReceiptBrokerPort(post: BrokerPost): ActivityWriteReceiptBrokerPort {
+  const receiptRequest = async (
+    path: string,
+    body: Record<string, unknown>,
+    success: ReadonlySet<number>,
+  ): Promise<Response> => {
+    const res = await post(
+      path,
+      body,
+      new Set([...success, 400, 403, 404, 409, 422]),
+    );
+    if (success.has(res.status)) return res;
+    throw receiptBrokerError(stringField(await readJsonOrNull(res), "error"));
+  };
+
+  return {
+    async claimActivityWriteReceipt(
+      channelDocPath: string,
+      input: ActivityReceiptClaimInput,
+    ): Promise<ActivityReceiptClaim> {
+      const body = await readJsonOrNull(await receiptRequest(
+        "/internal/openclaw/activity/write-receipts/claim",
+        { channelDocPath, input },
+        new Set([200]),
+      ));
+      return readReceiptClaim(body);
+    },
+    async readActivityWriteReceipt(
+      channelDocPath: string,
+      eventKey: string,
+    ): Promise<ActivityWriteReceiptV1 | null> {
+      const res = await receiptRequest(
+        "/internal/openclaw/activity/write-receipts/read",
+        { channelDocPath, eventKey },
+        new Set([200, 404]),
+      );
+      if (res.status === 404) return null;
+      return readReceipt(await readJsonOrNull(res));
+    },
+    async markActivityWriteReceiptPosted(
+      channelDocPath: string,
+      eventKey: string,
+      leaseToken: string,
+      postId: string,
+      now: number,
+    ): Promise<void> {
+      await receiptRequest(
+        "/internal/openclaw/activity/write-receipts/mark-posted",
+        { channelDocPath, eventKey, leaseToken, postId, now },
+        new Set([204]),
+      );
+    },
+    async updateActivityWriteReceiptAttachment(
+      channelDocPath: string,
+      eventKey: string,
+      leaseToken: string,
+      attachment: ActivityAttachmentReceiptV1,
+      now: number,
+    ): Promise<void> {
+      await receiptRequest(
+        "/internal/openclaw/activity/write-receipts/attachment",
+        { channelDocPath, eventKey, leaseToken, attachment, now },
+        new Set([204]),
+      );
+    },
+    async commitActivityWriteReceipt(
+      channelDocPath: string,
+      eventKey: string,
+      leaseToken: string,
+      now: number,
+    ): Promise<void> {
+      await receiptRequest(
+        "/internal/openclaw/activity/write-receipts/commit",
+        { channelDocPath, eventKey, leaseToken, now },
+        new Set([204]),
+      );
+    },
+  };
+}
+
 export function createOpenClawRuntimeBroker(opts: {
   baseUrl: string;
   gatewayId: string;
@@ -133,6 +267,8 @@ export function createOpenClawRuntimeBroker(opts: {
     gatewayId,
     fetchImpl: opts.fetchImpl,
   });
+
+  const receiptPort = createActivityWriteReceiptBrokerPort(post);
 
   return {
     async redeemOpenClawWs(ticketId: string): Promise<RedeemOpenClawWsOutcome> {
@@ -204,6 +340,9 @@ export function createOpenClawRuntimeBroker(opts: {
         { path },
         new Set([204]),
       );
+    },
+    activityWriteReceiptsFor(channelDocPath: string): ActivityWriteReceiptStore {
+      return new BrokeredActivityWriteReceiptStore(receiptPort, channelDocPath);
     },
     async resolveChannelOwnerUid(channelId: string): Promise<string | null> {
       const body = await postJson(
