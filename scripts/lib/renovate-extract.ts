@@ -66,14 +66,23 @@ function referenceKind(manager: string): string {
   return manager;
 }
 
-function fallbackKey(
-  manager: string,
-  packageFile: string,
-  kind: string,
-  packageName: string,
-  index: number,
-  managerData: Record<string, unknown>,
-): string {
+interface FallbackKeyInput {
+  manager: string;
+  packageFile: string;
+  kind: string;
+  packageName: string;
+  index: number;
+  managerData: Record<string, unknown>;
+}
+
+function fallbackKey({
+  manager,
+  packageFile,
+  kind,
+  packageName,
+  index,
+  managerData,
+}: FallbackKeyInput): string {
   if (kind === "dockerfile") return `from:${index}`;
   if (kind === "github-action") return `uses:${index}`;
   if (kind === "helm-chart") return `dependency:${packageName}`;
@@ -117,7 +126,14 @@ function dependencyReference(
   return {
     referenceKind: kind,
     path: group.packageFile,
-    key: explicitKey ?? fallbackKey(group.manager, group.packageFile, kind, packageName, index, managerData),
+    key: explicitKey ?? fallbackKey({
+      manager: group.manager,
+      packageFile: group.packageFile,
+      kind,
+      packageName,
+      index,
+      managerData,
+    }),
     packageName,
     currentValue,
   };
