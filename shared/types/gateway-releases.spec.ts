@@ -115,6 +115,10 @@ describe("isReleasePayload", () => {
     const candidate = {
       ...samplePayload(),
       imageTag: `agent-conversation-w9a-8c356bb1@sha256:${"a".repeat(64)}`,
+      gatewayEdgeImage: {
+        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
+        imageTag: `agent-conversation-w9a-8c356bb1@sha256:${"d".repeat(64)}`,
+      },
       testExperiment: {
         kind: "w9-agent-conversation",
         mode: "publisher-live",
@@ -131,6 +135,21 @@ describe("isReleasePayload", () => {
     };
 
     expect(isReleasePayload(candidate)).toBe(true);
+    expect(isReleasePayload({
+      ...candidate,
+      gatewayEdgeImage: undefined,
+    })).toBe(false);
+    expect(isReleasePayload({
+      ...candidate,
+      gatewayEdgeImage: {
+        ...candidate.gatewayEdgeImage,
+        imageTag: `agent-conversation-w9a-deadbeef@sha256:${"d".repeat(64)}`,
+      },
+    })).toBe(false);
+    expect(isReleasePayload({
+      ...samplePayload(),
+      gatewayEdgeImage: candidate.gatewayEdgeImage,
+    })).toBe(false);
     expect(isReleasePayload({
       ...candidate,
       imageTag: "agent-conversation-w9a-8c356bb1",

@@ -574,6 +574,19 @@ describe("helm/octogee-gateway/ — bundle image-tag inheritance", () => {
     const gw = containerBlock(dep, "gateway");
     expect(gw).toMatch(/image:\s*"[^"]*octogee-gateway:abc1234"/);
   });
+
+  it("uses a separately digest-bound candidate gateway-edge image when explicitly set", () => {
+    const gatewayTag = `agent-conversation-w9a-8c356bb1@sha256:${"a".repeat(64)}`;
+    const edgeTag = `agent-conversation-w9a-8c356bb1@sha256:${"d".repeat(64)}`;
+    const out = helmTemplate("octogee-gw-default", {
+      imageTag: gatewayTag,
+      "gatewayEdge.image.tag": edgeTag,
+    });
+    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+    const ge = containerBlock(dep, "gateway-edge");
+    expect(ge).toMatch(new RegExp(`gateway-edge:${edgeTag.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}`));
+    expect(ge).not.toContain(gatewayTag);
+  });
 });
 
 describe("helm/octogee-gateway/ — gateway-edge sidecar (chat-proxy folded in)", () => {

@@ -8,6 +8,7 @@ import type {
 import type { SizingTier } from "@octogee/shared/types/sizing";
 import { SIZING_TIERS } from "@octogee/shared/types/sizing";
 import {
+  isW9GatewayEdgeImage,
   isW9TestPublisherLiveExperiment,
   type W9TestPublisherLiveExperiment,
 } from "@octogee/shared/types/gateway-releases";
@@ -26,6 +27,8 @@ upsertInstance(opts: {
     builderSlug?: string;
     imageRepository: string;
     imageTag: string;
+    gatewayEdgeImageRepository?: string;
+    gatewayEdgeImageTag?: string;
     conversationExperimentMode?: "publisher-live";
     testExperiment?: W9TestPublisherLiveExperiment;
     serviceAccountName?: string;
@@ -311,6 +314,8 @@ export interface BuildUpgradeArgsOpts {
   builderSlug?: string;
   imageTag: string;
   imageRepository: string;
+  gatewayEdgeImageRepository?: string;
+  gatewayEdgeImageTag?: string;
   conversationExperimentMode?: "publisher-live";
   testExperiment?: W9TestPublisherLiveExperiment;
   upgradeTimeout: string;
@@ -342,6 +347,8 @@ type UpgradeStringOption = {
     | "computeClassOverride"
     | "gcpProject"
     | "conversationExperimentMode"
+    | "gatewayEdgeImageRepository"
+    | "gatewayEdgeImageTag"
   >;
   key: string;
 };
@@ -365,6 +372,8 @@ const UPGRADE_STRING_OPTIONS: UpgradeStringOption[] = [
   { option: "computeClassOverride", key: "computeClassOverride" },
   { option: "gcpProject", key: "gatewayEdge.env.GCP_PROJECT_ID" },
   { option: "conversationExperimentMode", key: "conversationExperiment.mode" },
+  { option: "gatewayEdgeImageRepository", key: "gatewayEdge.image.repository" },
+  { option: "gatewayEdgeImageTag", key: "gatewayEdge.image.tag" },
 ];
 
 const UPGRADE_JSON_OPTIONS: UpgradeJsonOption[] = [
@@ -434,7 +443,11 @@ function validateW9TestExperimentRender(opts: BuildUpgradeArgsOpts): void {
   const testExperiment = opts.testExperiment;
   const mode = opts.conversationExperimentMode;
   if (testExperiment === undefined && mode === undefined) {
-    if (isW9CandidateImageTag(opts.imageTag)) {
+    if (
+      isW9CandidateImageTag(opts.imageTag) ||
+      opts.gatewayEdgeImageRepository !== undefined ||
+      opts.gatewayEdgeImageTag !== undefined
+    ) {
       throw new Error("digest-bound W9 candidate image requires its W9 test experiment");
     }
     return;
@@ -443,9 +456,18 @@ function validateW9TestExperimentRender(opts: BuildUpgradeArgsOpts): void {
     opts.namespace !== "octogee-test" ||
     mode !== "publisher-live" ||
     !isW9CandidateImageTag(opts.imageTag) ||
+    !isW9GatewayEdgeImage(
+      opts.gatewayEdgeImageRepository === undefined || opts.gatewayEdgeImageTag === undefined
+        ? undefined
+        : {
+            imageRepository: opts.gatewayEdgeImageRepository,
+            imageTag: opts.gatewayEdgeImageTag,
+          },
+      opts.imageTag,
+    ) ||
     !isW9TestPublisherLiveExperiment(testExperiment)
   ) {
-    throw new Error("publisher-live is TEST-only and requires its digest-bound W9 candidate handoff");
+    throw new Error("publisher-live is TEST-only and requires its digest-bound W9 gateway and gateway-edge candidate handoff");
   }
 }
 

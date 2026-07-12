@@ -153,12 +153,15 @@ describe("helm-runner helpers", () => {
       },
     };
     const candidateTag = `agent-conversation-w9a-8c356bb1@sha256:${"a".repeat(64)}`;
+    const candidateEdgeTag = `agent-conversation-w9a-8c356bb1@sha256:${"d".repeat(64)}`;
     const base = {
       release: "octogee-gw-default-r2",
       chartPath: "/charts/octogee-gateway",
       gatewayId: "default",
       imageTag: candidateTag,
       imageRepository: REPO,
+      gatewayEdgeImageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
+      gatewayEdgeImageTag: candidateEdgeTag,
       upgradeTimeout: "10m",
       conversationExperimentMode: "publisher-live",
       testExperiment,
@@ -166,17 +169,26 @@ describe("helm-runner helpers", () => {
 
     const args = buildUpgradeArgs({ ...base, namespace: "octogee-test" });
     expect(args).toContain("conversationExperiment.mode=publisher-live");
+    expect(args).toContain(
+      "gatewayEdge.image.repository=us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
+    );
+    expect(args).toContain(`gatewayEdge.image.tag=${candidateEdgeTag}`);
     expect(() => buildUpgradeArgs({ ...base, namespace: "octogee" })).toThrow(/TEST-only/);
     expect(() => buildUpgradeArgs({
       ...base,
       namespace: "octogee-test",
       imageTag: "abc1234",
-    })).toThrow(/digest-bound W9 candidate/);
+    })).toThrow(/gateway and gateway-edge candidate/);
     expect(() => buildUpgradeArgs({
       ...base,
       namespace: "octogee-test",
       testExperiment: undefined,
     })).toThrow(/requires.*W9/i);
+    expect(() => buildUpgradeArgs({
+      ...base,
+      namespace: "octogee-test",
+      gatewayEdgeImageTag: undefined,
+    })).toThrow(/gateway-edge/i);
   });
 });
 

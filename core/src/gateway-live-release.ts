@@ -18,6 +18,7 @@ import {
   type GatewayDoc,
   type MacOpsTokenProtocol,
   type ReleasePayload,
+  type W9GatewayEdgeImage,
   type W9TestPublisherLiveExperiment,
 } from "@octogee/shared/types/gateway-releases";
 
@@ -36,6 +37,7 @@ export interface GatewayArtifact {
   imageRepository: string;
   imageTag: string;
   macOpsTokenProtocol?: MacOpsTokenProtocol;
+  gatewayEdgeImage?: W9GatewayEdgeImage;
   testExperiment?: W9TestPublisherLiveExperiment;
 }
 
@@ -77,6 +79,9 @@ export function gatewayArtifactFromReleasePayload(payload: ReleasePayload): Gate
     ...(payload.macOpsTokenProtocol === undefined
       ? {}
       : { macOpsTokenProtocol: payload.macOpsTokenProtocol }),
+    ...(payload.gatewayEdgeImage === undefined
+      ? {}
+      : { gatewayEdgeImage: payload.gatewayEdgeImage }),
     ...(payload.testExperiment === undefined
       ? {}
       : { testExperiment: payload.testExperiment }),

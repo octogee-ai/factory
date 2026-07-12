@@ -373,6 +373,44 @@ describe("gateway durable configuration authorization", () => {
     });
   });
 
+  it("preserves the paired W9 gateway-edge digest with the TEST candidate artifact", async () => {
+    const gatewayTag = `agent-conversation-w9a-8c356bb1@sha256:${"a".repeat(64)}`;
+    const gatewayEdgeImage = {
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
+      imageTag: `agent-conversation-w9a-8c356bb1@sha256:${"d".repeat(64)}`,
+    };
+    const testExperiment = {
+      kind: "w9-agent-conversation",
+      mode: "publisher-live",
+      candidateManifest: {
+        path: "infra/gateway/openclaw-candidates/agent-conversation.json",
+        sha256: "b".repeat(64),
+      },
+      mattermostOverlay: {
+        valuesPath: "infra/candidates/values.mattermost-silent-post.yaml",
+        imageReference: `mattermostdevelopment/mattermost-team-edition:cce485f@sha256:${"c".repeat(64)}`,
+      },
+    };
+    const docs: Docs = {
+      "gateways/bender/releases/2": {
+        gatewayId: "bender",
+        release: 2,
+        payload: {
+          imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+          imageTag: gatewayTag,
+          gatewayEdgeImage,
+          testExperiment,
+        },
+      },
+    };
+
+    await expect(readGatewayArtifact(database(docs) as never, "bender", 2)).resolves.toMatchObject({
+      imageTag: gatewayTag,
+      gatewayEdgeImage,
+      testExperiment,
+    });
+  });
+
   it("refuses a release payload that still carries mutable policy or credential state", async () => {
     const docs: Docs = {
       "gateways/bender/releases/2": {

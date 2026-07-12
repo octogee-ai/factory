@@ -110,6 +110,13 @@ export const W9_CANDIDATE_MANIFEST_PATH =
   "infra/gateway/openclaw-candidates/agent-conversation.json";
 export const W9_MATTERMOST_OVERLAY_VALUES_PATH =
   "infra/candidates/values.mattermost-silent-post.yaml";
+export const W9_GATEWAY_EDGE_IMAGE_REPOSITORY =
+  "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge";
+
+export interface W9GatewayEdgeImage {
+  imageRepository: typeof W9_GATEWAY_EDGE_IMAGE_REPOSITORY;
+  imageTag: string;
+}
 
 export interface W9TestPublisherLiveExperiment {
   kind: "w9-agent-conversation";
@@ -155,6 +162,7 @@ export interface ReleasePayload {
   macOpsTokenProtocol?: MacOpsTokenProtocol;
   imageRepository: string;
   imageTag: string;
+  gatewayEdgeImage?: W9GatewayEdgeImage;
   testExperiment?: W9TestPublisherLiveExperiment;
 }
 
@@ -162,6 +170,7 @@ const RELEASE_PAYLOAD_FIELD_NAMES = new Set<string>([
   "macOpsTokenProtocol",
   "imageRepository",
   "imageTag",
+  "gatewayEdgeImage",
   "testExperiment",
 ]);
 
@@ -184,19 +193,45 @@ export function isReleasePayload(value: unknown): value is ReleasePayload {
   ) {
     return false;
   }
+  if (
+    !(
+      (value.macOpsTokenProtocol === undefined ||
+        value.macOpsTokenProtocol === 1 ||
+        value.macOpsTokenProtocol === 2) &&
+      typeof value.imageRepository === "string" &&
+      value.imageRepository.length > 0 &&
+      typeof value.imageTag === "string" &&
+      value.imageTag.length > 0 &&
+      IMAGE_TAG_PATTERN.test(value.imageTag)
+    )
+  ) {
+    return false;
+  }
+  if (value.testExperiment === undefined) {
+    return !isW9CandidateImageTag(value.imageTag) && value.gatewayEdgeImage === undefined;
+  }
   return (
-    (value.macOpsTokenProtocol === undefined ||
-      value.macOpsTokenProtocol === 1 ||
-      value.macOpsTokenProtocol === 2) &&
-    typeof value.imageRepository === "string" &&
-    value.imageRepository.length > 0 &&
+    isW9CandidateImageTag(value.imageTag) &&
+    isW9TestPublisherLiveExperiment(value.testExperiment) &&
+    isW9GatewayEdgeImage(value.gatewayEdgeImage, value.imageTag)
+  );
+}
+
+function w9CandidateImageName(imageTag: string): string {
+  return imageTag.slice(0, imageTag.indexOf("@"));
+}
+
+export function isW9GatewayEdgeImage(
+  value: unknown,
+  gatewayImageTag: string,
+): value is W9GatewayEdgeImage {
+  return (
+    isPlainRecord(value) &&
+    value.imageRepository === W9_GATEWAY_EDGE_IMAGE_REPOSITORY &&
     typeof value.imageTag === "string" &&
-    value.imageTag.length > 0 &&
-    IMAGE_TAG_PATTERN.test(value.imageTag) &&
-    (value.testExperiment === undefined
-      ? !isW9CandidateImageTag(value.imageTag)
-      : isW9CandidateImageTag(value.imageTag) &&
-        isW9TestPublisherLiveExperiment(value.testExperiment))
+    isW9CandidateImageTag(value.imageTag) &&
+    isW9CandidateImageTag(gatewayImageTag) &&
+    w9CandidateImageName(value.imageTag) === w9CandidateImageName(gatewayImageTag)
   );
 }
 
