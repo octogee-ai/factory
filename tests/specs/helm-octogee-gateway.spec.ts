@@ -79,7 +79,7 @@ function selectorBlock(doc: string): string {
 }
 
 function gatewayImageLabel(dep: string): string {
-  const match = dep.match(/^        gateway-image:\s*"?([^"\n]+)"?\s*$/m);
+  const match = dep.match(/^ {8}gateway-image:\s*"?([^"\n]+)"?\s*$/m);
   if (!match) throw new Error("gateway-image label not found");
   return match[1];
 }
