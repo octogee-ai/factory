@@ -185,28 +185,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 
 export function isReleasePayload(value: unknown): value is ReleasePayload {
   if (!isPlainRecord(value)) return false;
-  if (
-    Object.keys(value).some((field) => !RELEASE_PAYLOAD_FIELD_NAMES.has(field)) ||
-    RELEASE_PAYLOAD_REQUIRED_FIELDS.some(
-      (field) => !Object.prototype.hasOwnProperty.call(value, field),
-    )
-  ) {
-    return false;
-  }
-  if (
-    !(
-      (value.macOpsTokenProtocol === undefined ||
-        value.macOpsTokenProtocol === 1 ||
-        value.macOpsTokenProtocol === 2) &&
-      typeof value.imageRepository === "string" &&
-      value.imageRepository.length > 0 &&
-      typeof value.imageTag === "string" &&
-      value.imageTag.length > 0 &&
-      IMAGE_TAG_PATTERN.test(value.imageTag)
-    )
-  ) {
-    return false;
-  }
+  if (!hasReleasePayloadShape(value) || !hasReleasePayloadIdentity(value)) return false;
   if (value.testExperiment === undefined) {
     return !isW9CandidateImageTag(value.imageTag) && value.gatewayEdgeImage === undefined;
   }
@@ -214,6 +193,28 @@ export function isReleasePayload(value: unknown): value is ReleasePayload {
     isW9CandidateImageTag(value.imageTag) &&
     isW9TestPublisherLiveExperiment(value.testExperiment) &&
     isW9GatewayEdgeImage(value.gatewayEdgeImage, value.imageTag)
+  );
+}
+
+function hasReleasePayloadShape(value: Record<string, unknown>): boolean {
+  return !(
+    Object.keys(value).some((field) => !RELEASE_PAYLOAD_FIELD_NAMES.has(field)) ||
+    RELEASE_PAYLOAD_REQUIRED_FIELDS.some(
+      (field) => !Object.prototype.hasOwnProperty.call(value, field),
+    )
+  );
+}
+
+function hasReleasePayloadIdentity(value: Record<string, unknown>): boolean {
+  return (
+    (value.macOpsTokenProtocol === undefined ||
+      value.macOpsTokenProtocol === 1 ||
+      value.macOpsTokenProtocol === 2) &&
+    typeof value.imageRepository === "string" &&
+    value.imageRepository.length > 0 &&
+    typeof value.imageTag === "string" &&
+    value.imageTag.length > 0 &&
+    IMAGE_TAG_PATTERN.test(value.imageTag)
   );
 }
 

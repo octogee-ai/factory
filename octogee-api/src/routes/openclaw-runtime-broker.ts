@@ -121,44 +121,58 @@ interface BoundChannelPath {
   lane: "workspace" | "project";
 }
 
+type ChannelLookupDocument = {
+  data(): Record<string, unknown> | undefined;
+  ref?: unknown;
+};
+type ChannelOwnerLookupResult = string | null | "forbidden";
+type ChannelDocumentMatches = Map<string, ChannelLookupDocument> | "forbidden";
+
 function boundChannelPath(path: string | null): BoundChannelPath | null {
   if (!path) return null;
   const parts = path.split("/");
-  if (parts.some((part) => !part) || parts[0] !== "workspaces" || !isValidUsername(parts[1])) {
-    return null;
-  }
-  if (parts.length === 4 && parts[2] === "channels") {
-    const channelName = parts[3];
-    if (
-      channelName !== "general" &&
-      channelName !== "coach-dm" &&
-      channelName !== "admin" &&
-      !isValidCustomChannelName(channelName)
-    ) {
-      return null;
-    }
-    return {
-      workspaceSlug: parts[1],
-      ownerPath: `workspaces/${parts[1]}`,
-      channelName,
-      lane: "workspace",
-    };
-  }
+  if (!isWorkspacePath(parts)) return null;
+  return workspaceChannelBinding(parts) ?? projectChannelBinding(parts);
+}
+
+function isWorkspacePath(parts: string[]): boolean {
+  return !parts.some((part) => !part) &&
+    parts[0] === "workspaces" &&
+    isValidUsername(parts[1]);
+}
+
+function workspaceChannelBinding(parts: string[]): BoundChannelPath | null {
+  if (parts.length !== 4 || parts[2] !== "channels") return null;
+  const channelName = parts[3];
+  const allowed = channelName === "general" ||
+    channelName === "coach-dm" ||
+    channelName === "admin" ||
+    isValidCustomChannelName(channelName);
+  return allowed
+    ? {
+        workspaceSlug: parts[1],
+        ownerPath: `workspaces/${parts[1]}`,
+        channelName,
+        lane: "workspace",
+      }
+    : null;
+}
+
+function projectChannelBinding(parts: string[]): BoundChannelPath | null {
   if (
-    parts.length === 6 &&
-    parts[2] === "projects" &&
-    isValidProjectId(parts[3]) &&
-    parts[4] === "channels" &&
-    (parts[5] === "general" || isValidCustomChannelName(parts[5]))
-  ) {
-    return {
-      workspaceSlug: parts[1],
-      ownerPath: `workspaces/${parts[1]}/projects/${parts[3]}`,
-      channelName: parts[5],
-      lane: "project",
-    };
-  }
-  return null;
+    parts.length !== 6 ||
+    parts[2] !== "projects" ||
+    !isValidProjectId(parts[3]) ||
+    parts[4] !== "channels"
+  ) return null;
+  const channelName = parts[5];
+  if (channelName !== "general" && !isValidCustomChannelName(channelName)) return null;
+  return {
+    workspaceSlug: parts[1],
+    ownerPath: `workspaces/${parts[1]}/projects/${parts[3]}`,
+    channelName,
+    lane: "project",
+  };
 }
 
 function ordinaryChannelKind(binding: BoundChannelPath): string | null {
@@ -393,32 +407,48 @@ async function resolveChannelOwnerUid(
   db: Firestore,
   gatewayId: string,
   channelId: string,
-): Promise<string | null | "forbidden"> {
-  const docs = new Map<string, { data(): Record<string, unknown> | undefined; ref?: unknown }>();
+): Promise<ChannelOwnerLookupResult> {
+  const docs = await matchingChannelDocuments(db, channelId);
+  if (docs === "forbidden") return docs;
+  if (docs.size === 0) return null;
+  if (docs.size !== 1) return "forbidden";
+  const [channelPath, doc] = [...docs.entries()][0];
+  const binding = boundChannelPath(channelPath);
+  if (!binding || !(await assignedHere(db, gatewayId, binding.workspaceSlug))) return "forbidden";
+  const data = doc.data() ?? {};
+  if (data.kind === "session") return sessionChannelOwner(data, binding);
+  if (data.kind !== ordinaryChannelKind(binding)) return "forbidden";
+  const ownerSnap = await db.doc(binding.ownerPath).get();
+  const ownerUid = ownerSnap.data()?.ownerUid;
+  return typeof ownerUid === "string" && ownerUid ? ownerUid : null;
+}
+
+async function matchingChannelDocuments(
+  db: Firestore,
+  channelId: string,
+): Promise<ChannelDocumentMatches> {
+  const docs = new Map<string, ChannelLookupDocument>();
   for (const field of ["mattermost.channelId", "mattermost.activityChannelId"]) {
     const snap = await db.collectionGroup("channels").where(field, "==", channelId).limit(2).get();
     for (const doc of snap.docs) {
       const path = extractRefPath((doc as { ref?: unknown }).ref);
       if (!path) return "forbidden";
-      docs.set(path, doc as unknown as { data(): Record<string, unknown> | undefined; ref?: unknown });
+      docs.set(path, doc as unknown as ChannelLookupDocument);
     }
   }
-  if (docs.size === 0) return null;
-  if (docs.size !== 1) return "forbidden";
-  const [channelPath, doc] = [...docs.entries()][0];
-  const binding = boundChannelPath(channelPath);
-  if (!binding) return "forbidden";
-  if (!(await assignedHere(db, gatewayId, binding.workspaceSlug))) return "forbidden";
-  const data = doc.data() ?? {};
+  return docs;
+}
+
+function sessionChannelOwner(
+  data: Record<string, unknown>,
+  binding: BoundChannelPath,
+): ChannelOwnerLookupResult {
   if (data.kind === "session") {
     if (ordinaryChannelKind(binding) !== null) return "forbidden";
     const createdBy = data.createdBy;
     return typeof createdBy === "string" && createdBy ? createdBy : null;
   }
-  if (data.kind !== ordinaryChannelKind(binding)) return "forbidden";
-  const ownerSnap = await db.doc(binding.ownerPath).get();
-  const ownerUid = ownerSnap.data()?.ownerUid;
-  return typeof ownerUid === "string" && ownerUid ? ownerUid : null;
+  return "forbidden";
 }
 
 async function resolveUidByMmUser(
