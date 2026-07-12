@@ -20,6 +20,4 @@ export function isGatewayImageTag(value: string): boolean {
   );
 }
 
-export const IMAGE_TAG_PATTERN = new RegExp(
-  `(?:${LEGACY_IMAGE_TAG_PATTERN.source}|${W9_CANDIDATE_IMAGE_TAG_PATTERN.source})`,
-);
+export const IMAGE_TAG_PATTERN = { test: isGatewayImageTag };

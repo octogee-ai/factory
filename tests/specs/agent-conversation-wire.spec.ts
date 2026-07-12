@@ -363,9 +363,11 @@ describe("agent conversation fixture corpus", () => {
   it("contains only the frozen JSON conformance files", () => {
     expect(readdirSync(FIXTURES).sort()).toEqual([
       "agent-activity-envelopes.json",
+      "chatgpt-claude-conversation-reference.json",
       "clickclack-reference-turn.json",
       "cumulative-stream.json",
       "identity-scenarios.json",
+      "openclaw-control-ui-reference.json",
       "projection-placement.json",
     ]);
   });

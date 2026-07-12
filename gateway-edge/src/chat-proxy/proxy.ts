@@ -349,7 +349,7 @@ const bridgeMetrics = {
   }),
   seqGap: new Counter({
     name: 'octogee_bridge_seq_gap_total',
-    help: 'Bridge upstream broadcast seq-gap handling (tolerated|forced-reconnect); count is missed frames (§4.6.1)',
+    help: 'Bridge upstream broadcast seq-gap handling (tolerated|forced-reconnect); count is missed frames',
     labelNames: ['outcome'] as const,
     registers: [metricsRegistry],
   }),
@@ -1354,7 +1354,7 @@ export async function startChatProxyBackground(): Promise<void> {
       console.error(
         `[chat-proxy] activity bridge boot aborted — ${gatewayIdResult.reason}. ` +
         'Set GATEWAY_ID env var on the chat-proxy sidecar (helm chart values.env.gatewayId). ' +
-        'See docs/ACTIVITY-STREAM-SPEC.md Appendix A.1.',
+        'See the current Activity design documentation.',
       );
       bridgeBootStatus.set('gateway-id-missing');
       return;
