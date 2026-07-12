@@ -4,6 +4,7 @@
 {{- $preset := index .Values.tiers $tier -}}
 {{- $gatewayClass := include "octogee-gateway.gatewayClass" . -}}
 {{- $imageProfile := include "octogee-gateway.imageProfile" . -}}
+{{- $gatewayImageLabel := include "octogee-gateway.imageLabel" . -}}
 {{- $conversationMode := .Values.conversationExperiment.mode | default "broad" -}}
 {{- $operatorShellsEnabled := and (ne $gatewayClass "shared") (.Values.operatorAccess.shellsEnabled | default false) -}}
 {{- if and (ne $conversationMode "broad") (ne $conversationMode "publisher-live") -}}
@@ -50,7 +51,7 @@ spec:
         # pod-template-hash already changes per image but isn't readable back to
         # a SHA). Pod-template label ONLY, never the selector — selectors must
         # stay stable across rolls.
-        gateway-image: {{ .Values.image.tag | default .Values.imageTag | quote }}
+        gateway-image: {{ $gatewayImageLabel | quote }}
     spec:
       terminationGracePeriodSeconds: {{ .Values.preStopFlush.terminationGracePeriodSeconds | default 30 }}
       nodeSelector:

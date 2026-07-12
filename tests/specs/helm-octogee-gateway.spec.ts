@@ -2,6 +2,7 @@
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as path from "node:path";
 import * as fs from "node:fs";
 
@@ -75,6 +76,12 @@ function containerBlock(dep: string, name: string): string {
 
 function selectorBlock(doc: string): string {
   return doc.match(/^\s*selector:\s*\n([\s\S]*?)(?=^\s*(?:ports|type):)/m)?.[0] ?? "";
+}
+
+function gatewayImageLabel(dep: string): string {
+  const match = dep.match(/^        gateway-image:\s*"?([^"\n]+)"?\s*$/m);
+  if (!match) throw new Error("gateway-image label not found");
+  return match[1];
 }
 
 describe("helm/octogee-gateway/ — single-instance rendering", () => {
@@ -208,6 +215,25 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
       "octogee-gateway-bender",
     ) ?? "";
     expect(dep).toMatch(/gateway-image:\s*"?deadbee1"?/);
+  });
+
+  it("keeps a digest-pinned candidate image intact while deriving an API-valid gateway-image label", () => {
+    const candidateTag = `w9-agent-conversation@sha256:${"a".repeat(64)}`;
+    const dep = findDoc(
+      helmTemplate("octogee-gw-default", { imageTag: candidateTag }),
+      "Deployment",
+      "octogee-gateway-default",
+    ) ?? "";
+    const label = gatewayImageLabel(dep);
+
+    expect(dep).toContain(
+      `image: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway:${candidateTag}"`,
+    );
+    expect(label).toBe(
+      `sha256-${createHash("sha256").update(candidateTag).digest("hex").slice(0, 56)}`,
+    );
+    expect(label).toHaveLength(63);
+    expect(label).toMatch(/^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$/);
   });
 
   it("standard profile mounts tenant-bound projected tokens for broker calls without exposing platform secrets", () => {
