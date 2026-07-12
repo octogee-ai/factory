@@ -225,9 +225,34 @@ describe("applyPreBootPatches — MM env sync", () => {
 });
 
 describe("applyPreBootPatches — conversation experiment", () => {
-  it("materializes the bounded publisher config from the shared Helm mode", () => {
+  it("creates the Mattermost root settings before the fleet mounts a coach account", () => {
+    const config: any = {};
+
+    applyPreBootPatches(config, {
+      OCTOGEE_ACTIVITY_BRIDGE_MODE: "publisher-live",
+    });
+
+    expect(config.channels.mattermost).toMatchObject({
+      replyToMode: "all",
+      threadSessionScope: "channel",
+    });
+  });
+
+  it("keeps Mattermost delivery native while enabling the external publisher", () => {
     const config: any = {
-      channels: { mattermost: { accounts: { default: {}, "chris-coach": {} } } },
+      channels: {
+        mattermost: {
+          agentActivity: true,
+          accounts: {
+            default: {
+              agentActivity: true,
+              replyToMode: "all",
+              threadSessionScope: "channel",
+            },
+            "chris-coach": {},
+          },
+        },
+      },
     };
 
     applyPreBootPatches(config, {
@@ -237,8 +262,11 @@ describe("applyPreBootPatches — conversation experiment", () => {
     expect(config.channels.mattermost).toMatchObject({
       replyToMode: "all",
       threadSessionScope: "channel",
-      agentActivity: true,
     });
+    expect(config.channels.mattermost).not.toHaveProperty("agentActivity");
+    expect(config.channels.mattermost.accounts.default).not.toHaveProperty("agentActivity");
+    expect(config.channels.mattermost.accounts.default).not.toHaveProperty("replyToMode");
+    expect(config.channels.mattermost.accounts.default).not.toHaveProperty("threadSessionScope");
   });
 });
 
