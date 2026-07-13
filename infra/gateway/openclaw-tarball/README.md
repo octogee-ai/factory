@@ -429,6 +429,36 @@ concrete `@openclaw/ai` version inside; working tree restored to `workspace:*`.
 > --version` does NOT load the MCP runtime and once passed on a tarball
 > whose `@modelcontextprotocol/sdk` was empty (cost a base-build cycle).
 
+### Step 7b — Pack the Mattermost artifact (6.11+, externalized MM)
+
+The base image installs our patched `@openclaw/mattermost` from the fork
+bucket. A raw `npm pack` of `extensions/mattermost` ships TypeScript source
+with **no `dist/`** — the plugin installer fails closed at image build
+("requires compiled runtime output"). Pack through the fork's own plugin
+pipeline, which builds the runtime and rewrites the manifest:
+
+▸
+```bash
+OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR=/tmp/openclaw-fork \
+  bash scripts/plugin-npm-publish.sh --pack extensions/mattermost
+tar -tzf /tmp/openclaw-fork/openclaw-mattermost-*.tgz | grep -q 'dist/index.js'
+```
+
+✓ Tarball contains `package/dist/index.js` (~900KB compiled, not ~200KB
+source-only).
+
+> ⚠ **Verify BOTH artifacts with real installs before upload** — the exact
+> Dockerfile commands:
+> ```bash
+> SCRATCH=$(mktemp -d)
+> npm install -g --prefix "$SCRATCH" /tmp/openclaw-fork/openclaw-*.tgz
+> HOME="$SCRATCH" "$SCRATCH/bin/openclaw" plugins install @openclaw/codex@${NEW_TAG#v}
+> HOME="$SCRATCH" "$SCRATCH/bin/openclaw" plugins install "npm-pack:/tmp/openclaw-fork/openclaw-mattermost-*.tgz"
+> ```
+> The 2026.7.1-beta.6 roll skipped the second install and cost a base-build
+> cycle. The Mattermost pin is content-addressed: first 8 of the tgz's
+> sha256 names `openclaw-mattermost-<pin>.tgz` and `_OPENCLAW_MATTERMOST_FORK_SHA`.
+
 ### Step 8 — Capture fork SHA
 
 ▸
@@ -1054,7 +1084,7 @@ Reassess next OC upgrade."*). Update it every cycle.
 
 ## Current patches
 
-Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.7.1-beta.6 (current, fork `d1956ecc`, patched Mattermost artifact `d1956ecc`) the fork carries **18 commits: 8 scaling patches + the ✅ MM connect marker + 7 W9 conversation-pipeline commits + 2 roll fixups**. The ✅ marker RETURNED this cycle (operator ruling 2026-07-13: we bundle a patched `@openclaw/mattermost` artifact every roll again, so the marker rides free — "it brings me joy"). The W9 seven are the durable agent-activity pipeline proven in the TEST experiment (publisher, session identity, admission, snapshot, receipts, control preservation, fail-open sink). Surgical-reload was re-derived to the plugin-registry shape (upstream adopted per-account stop/start natively; the fork now contributes the `channels.{kind}.accounts.` reload rule per registered plugin; upstream #99312 still open). recoverStaleClaims was dropped — upstream adopted it verbatim. Base = published beta.6; the v2026.7.1 GA tag was unpublished on npm at roll time (exception `release/openclaw-ga-npm-lag`; a GA re-cut supersedes this cycle).
+Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.7.1-beta.6 (current, fork `d1956ecc`, patched Mattermost artifact `c6007936` (content-addressed sha256/8)) the fork carries **18 commits: 8 scaling patches + the ✅ MM connect marker + 7 W9 conversation-pipeline commits + 2 roll fixups**. The ✅ marker RETURNED this cycle (operator ruling 2026-07-13: we bundle a patched `@openclaw/mattermost` artifact every roll again, so the marker rides free — "it brings me joy"). The W9 seven are the durable agent-activity pipeline proven in the TEST experiment (publisher, session identity, admission, snapshot, receipts, control preservation, fail-open sink). Surgical-reload was re-derived to the plugin-registry shape (upstream adopted per-account stop/start natively; the fork now contributes the `channels.{kind}.accounts.` reload rule per registered plugin; upstream #99312 still open). recoverStaleClaims was dropped — upstream adopted it verbatim. Base = published beta.6; the v2026.7.1 GA tag was unpublished on npm at roll time (exception `release/openclaw-ga-npm-lag`; a GA re-cut supersedes this cycle).
 
 Live short SHAs at v2026.6.11 GA (top of current's integration branch is `652ba8cf`) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
 - `652ba8cf` — bundled Mattermost plugin metadata for channel-scoped thread sessions
