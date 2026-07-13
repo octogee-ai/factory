@@ -6,7 +6,7 @@ import {
   isTextFile,
   resolveCommitAuthor,
   targetGiteaApi,
-  validateWorkspacePath,
+  validateEditableWorkspacePath,
 } from "./helpers.js";
 import { logger } from "../../middleware/logging.js";
 import { invalidateWorkspaceFileResponseCache } from "./file-response-cache.js";
@@ -48,7 +48,7 @@ export function validatedSaveRequest(body: unknown): ValidatedSaveRequest {
   if (!savePath) return { ok: false, status: 400, error: "Missing path" };
   if (saveContent === null) return { ok: false, status: 400, error: "Missing content" };
 
-  const pathError = validateWorkspacePath(savePath);
+  const pathError = validateEditableWorkspacePath(savePath);
   if (pathError) return { ok: false, status: 400, error: pathError };
   if (!isTextFile(savePath)) {
     return { ok: false, status: 400, error: "Only text files can be saved", code: "NOT_TEXT" };
