@@ -19,6 +19,7 @@ vi.mock("../lib/fileTarget", () => ({
 vi.mock("../routes/workspace/helpers", () => ({
   HIDDEN: new Set([".git"]),
   giteaSudoUser: vi.fn(() => "ws-alice"),
+  isCanvasDashboardDocumentPath: vi.fn((path: string) => path === ".octogee/canvas.json"),
   isTargetPathWritable: vi.fn(),
   pathHasReservedOrHiddenSegment: vi.fn((path: string) => path.startsWith(".") ? "Access denied" : null),
   repoContentsApi: vi.fn(),
@@ -238,6 +239,23 @@ describe("workspace file list helpers", () => {
     vi.mocked(repoContentsApi).mockRejectedValueOnce(new Error("Gitea API 404"));
 
     await expect(workspaceFileResponse(giteaTarget, "README.md")).resolves.toBeNull();
+  });
+
+  it("reloads a file when a caller bypasses the response cache", async () => {
+    vi.mocked(repoContentsApi)
+      .mockResolvedValueOnce({ content: Buffer.from("before").toString("base64"), sha: "one" })
+      .mockResolvedValueOnce({ content: Buffer.from("after").toString("base64"), sha: "two" });
+
+    await expect(workspaceFileResponse(githubTarget, ".octogee/canvas.json")).resolves.toMatchObject({
+      content: "before",
+      sha: "one",
+    });
+    await expect(workspaceFileResponse(githubTarget, ".octogee/canvas.json", undefined, true)).resolves.toMatchObject({
+      content: "after",
+      sha: "two",
+    });
+
+    expect(repoContentsApi).toHaveBeenCalledTimes(2);
   });
 
   it("serves manifest-backed blobs from GCS without asking the repo contents API", async () => {

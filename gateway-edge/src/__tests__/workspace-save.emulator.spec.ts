@@ -273,6 +273,24 @@ describe("POST /api/workspace/save — github targets (brokered, allowlisted)", 
     expect(body.message).toBe("canvas: edit docs/home.md — Alice A via Octogee Canvas");
   });
 
+  it("saves the Canvas dashboard document through the brokered GitHub token", async () => {
+    mockGithubGet.mockRejectedValue(new Error("GitHub API 404"));
+    mockGithubPut.mockResolvedValue({ content: { sha: "dashboard-sha" } });
+
+    const res = await request(app)
+      .post("/api/workspace/save")
+      .set(await authHeader(BOB_UID))
+      .send({
+        slug: "alice",
+        project: "octogee",
+        path: ".octogee/canvas.json",
+        content: '{"version":1,"mode":"dashboard","dashboard":{"title":"Launch","widgets":[]}}',
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockGithubPut.mock.calls[0][2]).toBe(".octogee/canvas.json");
+  });
+
   it("403s any path outside notes/*.md + canvasFile (code writes stay merge-gated)", async () => {
     const res = await request(app)
       .post("/api/workspace/save")
@@ -532,5 +550,20 @@ describe("GET /api/workspace/file — the writable signal", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.writable).toBe(false);
+  });
+
+  it("reads the Canvas dashboard document as writable through the brokered GitHub token", async () => {
+    mockGithubGet.mockResolvedValue({
+      content: Buffer.from('{"version":1}', "utf8").toString("base64"),
+      sha: "dashboard-sha",
+    });
+
+    const res = await request(app)
+      .get("/api/workspace/file?slug=alice&project=octogee&path=.octogee%2Fcanvas.json")
+      .set(await authHeader(BOB_UID));
+
+    expect(res.status).toBe(200);
+    expect(res.body.content).toBe('{"version":1}');
+    expect(res.body.writable).toBe(true);
   });
 });

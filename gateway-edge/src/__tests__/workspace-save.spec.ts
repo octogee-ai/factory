@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { isBrokeredWritablePath } from "../routes/workspace/helpers.js";
 import { validatedSaveRequest } from "../routes/workspace/save.js";
 
 describe("workspace save helpers", () => {
@@ -43,5 +44,15 @@ describe("workspace save helpers", () => {
       error: "Content too large",
       code: "TOO_LARGE",
     });
+  });
+
+  it("accepts the Canvas dashboard document as the only writable hidden path", () => {
+    expect(validatedSaveRequest({ path: ".octogee/canvas.json", content: "{}" })).toEqual({
+      ok: true,
+      path: ".octogee/canvas.json",
+      content: "{}",
+    });
+    expect(isBrokeredWritablePath(".octogee/canvas.json", "README.md")).toBe(true);
+    expect(isBrokeredWritablePath(".octogee/other.json", "README.md")).toBe(false);
   });
 });

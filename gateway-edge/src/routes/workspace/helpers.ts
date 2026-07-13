@@ -12,9 +12,16 @@ import type { CommitAuthor } from "../../lib/workspace-git.js";
 import { validateFilePath } from "../../lib/path-validation.js";
 
 const FLAT_NOTE_RE = /^notes\/[^/]+\.md$/;
+export const CANVAS_DASHBOARD_DOCUMENT_PATH = ".octogee/canvas.json";
+
+export function isCanvasDashboardDocumentPath(path: string): boolean {
+  return path === CANVAS_DASHBOARD_DOCUMENT_PATH;
+}
 
 export function isBrokeredWritablePath(path: string, canvasFile: string | undefined): boolean {
-  return FLAT_NOTE_RE.test(path) || path === (canvasFile || "README.md");
+  return FLAT_NOTE_RE.test(path)
+    || isCanvasDashboardDocumentPath(path)
+    || path === (canvasFile || "README.md");
 }
 
 export function isTargetPathWritable(target: FileTarget, path: string): boolean {
@@ -190,6 +197,11 @@ export function validateWorkspacePath(filePath: string): string | null {
   const pathError = validateFilePath(filePath);
   if (pathError) return pathError;
   return pathHasReservedOrHiddenSegment(filePath);
+}
+
+export function validateEditableWorkspacePath(filePath: string): string | null {
+  if (isCanvasDashboardDocumentPath(filePath)) return validateFilePath(filePath);
+  return validateWorkspacePath(filePath);
 }
 
 export const EDITABLE_EXTENSIONS = new Set([

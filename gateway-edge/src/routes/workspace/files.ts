@@ -9,6 +9,7 @@ import { logger } from "../../middleware/logging.js";
 import {
   giteaSudoUser,
   HIDDEN,
+  isCanvasDashboardDocumentPath,
   isTargetPathWritable,
   pathHasReservedOrHiddenSegment,
   repoBranchesApi,
@@ -420,11 +421,13 @@ export async function workspaceFileResponse(
   target: Parameters<typeof repoContentsApi>[0],
   path: string,
   ref?: string,
+  bustCache = false,
 ): Promise<WorkspaceFileResponse | null> {
   return cachedWorkspaceFileResponse(
     workspaceFileCacheKey("file", target, path, ref),
     FILE_CONTENT_CACHE_TTL_MS,
     () => loadWorkspaceFileResponse(target, path, ref),
+    bustCache,
   );
 }
 
@@ -513,16 +516,17 @@ router.get("/file", withFileTarget(async (req, res, _next, target) => {
   const path = req.query.path as string;
   if (!path) { res.status(400).json({ error: "Missing path" }); return; }
   const ref = refFromReq(req);
+  const bustCache = req.query.nocache === "1";
 
   const pathError = validateFilePath(path);
   if (pathError) { res.status(400).json({ error: pathError }); return; }
 
-  if (pathHasReservedOrHiddenSegment(path)) {
+  if (pathHasReservedOrHiddenSegment(path) && !isCanvasDashboardDocumentPath(path)) {
     res.status(403).json({ error: "Access denied" });
     return;
   }
 
-  const response = await workspaceFileResponse(target, path, ref);
+  const response = await workspaceFileResponse(target, path, ref, bustCache);
   if (!response) {
     res.status(404).json({ error: "File not found" });
     return;
