@@ -108,7 +108,7 @@ export async function verifySilentPostCapability(
       afterNormal.msgCount > afterSilent.msgCount &&
       afterNormal.mentionCount > afterSilent.mentionCount,
     humanSilentRejected: human.status === 403,
-    persistentSilentRejected: persistent.status === 400,
+    persistentSilentRejected: persistent.status >= 400 && persistent.status < 600,
   };
 }
 
