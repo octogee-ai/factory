@@ -13,6 +13,7 @@ import { createNotificationMetrics, setNotificationMetrics } from "./lib/notific
 import { createActivityPairMetrics, setActivityPairMetrics } from "./lib/activity-pair-metrics.js";
 
 import { mountApi } from "./routes/mount-api.js";
+import automationsRoutes from "./routes/automations.js";
 import gitRoutes from "./routes/workspace/git.js";
 import githubReposRoutes from "./routes/workspace/github-repos.js";
 import publishRoutes from "./routes/projects/publish.js";
@@ -215,6 +216,10 @@ function mountSidecarLocalitySurface(app: Express): void {
   byosubLocality.use("/health", requireAuth);
   byosubLocality.use(byosubHealthRoutes);
   mountApi(app, "/byosub", byosubLocality);
+  const automationsLocality = Router({ mergeParams: true });
+  automationsLocality.use(requireAuth);
+  automationsLocality.use(automationsRoutes);
+  mountApi(app, "/automations", automationsLocality);
   // connect/status/sso-submit run HERE (the customer's own pod) so the in-pod
   // claude-sso/device-auth managers accept the pod's OPENCLAW_GATEWAY_TOKEN —
   // octogee-api can't hold a per-gateway token. The flow write brokers back.
