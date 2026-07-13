@@ -231,7 +231,7 @@ describe("runMigration — cutover is ONE atomic commit (P0)", () => {
     });
   });
 
-  it("cross-gateway rollback restores mirror + source assignment in a single reverse commit", async () => {
+  it("cross-gateway source cleanup failure preserves the verified target assignment", async () => {
     const client = happyClient();
     let firstUnmount = true;
     client.unmount = vi.fn(async ({ slug, gatewayId }) => {
@@ -248,15 +248,11 @@ describe("runMigration — cutover is ONE atomic commit (P0)", () => {
       deps,
     );
 
-    expect(res.rolledBack).toBe(true);
-    // Forward commit → target (mirror + gw-green-r1); rollback commit → source
-    // (mirror back + gw-blue-r1). Each is one atomic commit, so the mirror never
-    // points at the removed target with a stale assignment.
+    expect(res).toMatchObject({ success: true, rolledBack: false, finalPhase: "done" });
     expect(
       deps.commitCalls.map((c) => ({ to: c.toGatewayId, flip: c.flipMirror, rev: c.revision?.revisionId })),
     ).toEqual([
       { to: "gw-green", flip: true, rev: "gw-green-r1" },
-      { to: "gw-blue", flip: true, rev: "gw-blue-r1" },
     ]);
   });
 });
@@ -309,7 +305,7 @@ const failed = deps.reportedSteps.find((s) => s.status === "failed");
     expect(rollbackNames).toContain("rollback:unmount-target");
   });
 
-  it("rolls back the Firestore cutover and unmounts the destination when unmount-source fails", async () => {
+  it("keeps the durable target cutover when post-cutover source cleanup fails", async () => {
     const client = happyClient();
     client.unmount = vi.fn(async () => {
       throw new Error("unmount: 500 config.patch failed");
@@ -317,16 +313,23 @@ const failed = deps.reportedSteps.find((s) => s.status === "failed");
 
     const deps = makeDeps(client);
     const res = await runMigration(INPUT, deps);
-    expect(res.success).toBe(false);
-    
-    expect(res.errorAt?.phase).toBe("cutover-done");
-    expect(res.rolledBack).toBe(true);
-    
-    expect(deps.cutoverCalls.at(-1)).toMatchObject({
+    expect(res).toMatchObject({
+      success: true,
+      finalPhase: "done",
+      rolledBack: false,
+    });
+    expect(deps.cutoverCalls).toHaveLength(1);
+    expect(deps.cutoverCalls[0]).toMatchObject({
       uid: "uid-alice",
-      toGatewayId: "gw-blue",
+      toGatewayId: "gw-green",
       slug: "alice",
     });
+    expect(deps.reportedSteps).toContainEqual({
+      name: "unmount-source",
+      status: "skipped",
+      error: "unmount: 500 config.patch failed",
+    });
+    expect(deps.logCalls.some((line) => line.includes("cleanup failed after durable cutover"))).toBe(true);
   });
 
   it("does NOT roll back when the rollback would itself destroy data (post source-unmounted)", async () => {
@@ -362,10 +365,6 @@ const client = happyClient();
   });
 });
 
-// The sourceDisposable best-effort degradation is DELETED (PR7): under identity
-// routing the roster flip is GATED on a real quiesce — a source that cannot be
-// quiesced must HOLD the roll, never be skipped past (the customer would keep
-// writing to a revision the roster is about to abandon).
 describe("runMigration — gated quiesce (revision drains, PR7)", () => {
   const DRAIN_INPUT = {
     ...INPUT,
@@ -428,11 +427,10 @@ describe("runMigration — gated quiesce (revision drains, PR7)", () => {
     expect(client.calls).toContain("roster-state:default:serving");
   });
 
-  it("post-cutover rollback (unmount-source failure) does NOT re-mark serving — the reverse cutover commit already restored the source roster entry", async () => {
+  it("keeps the target revision serving when source cleanup fails after same-gateway cutover", async () => {
     const client = happyClient();
     client.unmount = vi.fn(async ({ slug, gatewayId }) => {
-      // First unmount call is unmount-source on the drain (same bare gateway) —
-      // fail it; rollback then unmounts the target.
+      // First unmount call is unmount-source on the drain (same bare gateway).
       if ((client.unmount as ReturnType<typeof vi.fn>).mock.calls.length === 1) {
         throw new Error("unmount-source failed");
       }
@@ -442,15 +440,15 @@ describe("runMigration — gated quiesce (revision drains, PR7)", () => {
 
     const res = await runMigration(DRAIN_INPUT, deps);
 
-    expect(res.success).toBe(false);
-    expect(res.rolledBack).toBe(true);
-    // Forward commit + reverse commit — the reverse commit restores the source
-    // revision (serving, epoch bumped). No bare setAssignmentState(serving).
+    expect(res.success).toBe(true);
+    expect(res.rolledBack).toBe(false);
     expect(deps.commitCalls.map((c) => c.revision?.revisionId)).toEqual([
       "default-r2",
-      "default-r1",
     ]);
     expect(client.calls).not.toContain("roster-state:default:serving");
+    expect(deps.reportedSteps).toContainEqual(
+      expect.objectContaining({ name: "unmount-source", status: "skipped" }),
+    );
   });
 
   it("legacy migration (no fromRevision): no roster-state writes at all", async () => {
@@ -461,7 +459,7 @@ describe("runMigration — gated quiesce (revision drains, PR7)", () => {
     expect(client.calls.filter((c) => c.startsWith("roster-state:"))).toEqual([]);
   });
 
-  it("unmount-source failure on a drain rolls back strictly — the deleted best-effort degradation never resurfaces", async () => {
+  it("does not report cleanup failure as a migration failure after a verified drain cutover", async () => {
     const client = happyClient();
     let first = true;
     client.unmount = vi.fn(async ({ slug }) => {
@@ -475,8 +473,10 @@ describe("runMigration — gated quiesce (revision drains, PR7)", () => {
 
     const res = await runMigration(DRAIN_INPUT, deps);
 
-    expect(res.success).toBe(false);
-    expect(res.rolledBack).toBe(true);
-    expect(deps.reportedSteps.map((s) => s.status)).not.toContain("skipped");
+    expect(res.success).toBe(true);
+    expect(res.rolledBack).toBe(false);
+    expect(deps.reportedSteps).toContainEqual(
+      expect.objectContaining({ name: "unmount-source", status: "skipped" }),
+    );
   });
 });

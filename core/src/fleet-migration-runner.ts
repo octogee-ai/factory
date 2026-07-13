@@ -79,12 +79,6 @@ export interface MigrationRunnerInput {
   includeActivationManifest?: boolean;
 }
 
-// NOTE: the old `sourceDisposable` best-effort degradation (log-and-continue on
-// a failed source quiesce) is deliberately GONE. It was safe only under
-// instance addressing, where the client re-derived its base URL; under identity
-// routing the roster flip is gated on a real quiesce, so a quiesce failure must
-// fail the migration and HOLD the roll (level-triggered retry), never skip.
-
 export interface MigrationRunnerResult {
   success: boolean;
   finalPhase: MigrationPhase;
@@ -195,6 +189,17 @@ function reportName(step: MigrationStep): string {
   return step.action;
 }
 
+function isPostCutoverSourceCleanup(
+  state: MigrationState,
+  step: MigrationStep,
+): boolean {
+  return (
+    state.phase === "cutover-done" &&
+    step.action === "unmount-gateway" &&
+    step.role === "source"
+  );
+}
+
 export async function runMigration(
   input: MigrationRunnerInput,
   deps: MigrationRunnerDeps,
@@ -258,6 +263,14 @@ export async function runMigration(
       state = { ...state, phase: advancePhase(state.phase) };
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
+      if (isPostCutoverSourceCleanup(state, step)) {
+        await report(deps, { name, status: "skipped", error: errMsg });
+        deps.log(
+          `[migration-runner] ⚠ ${name} cleanup failed after durable cutover migrationId=${input.migrationId} slug=${input.slug}: ${errMsg} — target remains serving`,
+        );
+        state = { ...state, phase: advancePhase(state.phase) };
+        continue;
+      }
       await report(deps, { name, status: "failed", error: errMsg });
       deps.log(
         `[migration-runner] ❌ ${name} failed at phase=${phaseAtStart}: ${errMsg}`,
@@ -268,13 +281,11 @@ export async function runMigration(
         crossGateway,
         fromRevision,
         // A pre-cutover rollback must un-block the source: restore its roster
-        // entry to serving. Post-cutover, the reverse cutover commit itself
-        // restores the source assignment (serving, epoch bumped) — no bare
-        // state write on top of it.
-        restoreServing:
-          quiescingMarked && state.phase !== "cutover-done"
-            ? { gatewayId: input.fromGatewayId, uid: input.uid }
-            : null,
+        // entry to serving. (Post-cutover failures never reach this rollback —
+        // the source-cleanup skip path above completes the migration instead.)
+        restoreServing: quiescingMarked
+          ? { gatewayId: input.fromGatewayId, uid: input.uid }
+          : null,
       });
       return {
         success: false,

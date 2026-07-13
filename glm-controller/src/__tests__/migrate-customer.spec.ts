@@ -518,8 +518,8 @@ describe("createMigrateCustomerHandler — failures + rollback", () => {
   });
 });
 
-describe("createMigrateCustomerHandler — the sourceDisposable degradation is DELETED (PR7)", () => {
-  it("a failed unmount-source rolls back and FAILS even for a roll-tagged migration — never log-and-continue", async () => {
+describe("createMigrateCustomerHandler — post-cutover source cleanup", () => {
+  it("keeps the verified target cutover and reports source cleanup as skipped", async () => {
     const client = happyClient();
     client.unmount = vi.fn(async ({ migrationId, slug, gatewayId }) => {
       if ((client.unmount as ReturnType<typeof vi.fn>).mock.calls.length === 1) {
@@ -529,14 +529,25 @@ describe("createMigrateCustomerHandler — the sourceDisposable degradation is D
     }) as MigrationClient["unmount"];
     const { deps } = makeDeps({}, client);
     const handler = createMigrateCustomerHandler(deps);
+    const ctx = makeCtx();
 
     const res = await handler(
       mkOp({ input: { uid: "uid-alice", toGatewayId: "gw-green", source: "release-roll" } }),
-      makeCtx(),
+      ctx,
     );
 
-    expect(res.success).toBe(false);
-    expect(res.rolledBack).toBe(true);
+    expect(res.success).toBe(true);
+    expect(res.rolledBack).toBe(false);
+    expect(ctx.reported).toContainEqual(
+      expect.objectContaining({
+        name: "unmount-source",
+        status: "skipped",
+        error: "rate limit exceeded for config.patch; retry after 16s",
+      }),
+    );
+    expect(deps.log).toHaveBeenCalledWith(
+      expect.stringContaining("cleanup failed after durable cutover"),
+    );
   });
 
   it("a revision drain marks the assignment quiescing BEFORE the quiesce RPC (threads setAssignmentState)", async () => {
