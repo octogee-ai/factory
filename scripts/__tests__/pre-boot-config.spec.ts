@@ -234,6 +234,7 @@ describe("applyPreBootPatches — conversation experiment", () => {
 
     expect(config.channels.mattermost).toMatchObject({
       replyToMode: "all",
+      threadDirectMessages: true,
       threadSessionScope: "channel",
     });
   });
@@ -247,6 +248,7 @@ describe("applyPreBootPatches — conversation experiment", () => {
             default: {
               agentActivity: true,
               replyToMode: "all",
+              threadDirectMessages: true,
               threadSessionScope: "channel",
             },
             "chris-coach": {},
@@ -261,11 +263,13 @@ describe("applyPreBootPatches — conversation experiment", () => {
 
     expect(config.channels.mattermost).toMatchObject({
       replyToMode: "all",
+      threadDirectMessages: true,
       threadSessionScope: "channel",
     });
     expect(config.channels.mattermost).not.toHaveProperty("agentActivity");
     expect(config.channels.mattermost.accounts.default).not.toHaveProperty("agentActivity");
     expect(config.channels.mattermost.accounts.default).not.toHaveProperty("replyToMode");
+    expect(config.channels.mattermost.accounts.default).not.toHaveProperty("threadDirectMessages");
     expect(config.channels.mattermost.accounts.default).not.toHaveProperty("threadSessionScope");
   });
 });
