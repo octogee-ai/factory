@@ -8,7 +8,10 @@ import {
   revisionIdFromGatewayPodName,
 } from "./fleet-broker.js";
 
-function gatewayStateDb(data: Record<string, unknown> | undefined) {
+function gatewayStateDb(
+  data: Record<string, unknown> | undefined,
+  assignments: Array<{ uid: string; data: Record<string, unknown> }> = [],
+) {
   return {
     collection: (name: string) => {
       if (name !== "gateways") throw new Error(`unexpected collection ${name}`);
@@ -19,11 +22,65 @@ function gatewayStateDb(data: Record<string, unknown> | undefined) {
             if (subcollection !== "assignments") {
               throw new Error(`unexpected subcollection ${subcollection}`);
             }
-            return { get: async () => ({ docs: [] }) };
+            return {
+              get: async () => ({
+                docs: assignments.map((assignment) => ({
+                  id: assignment.uid,
+                  data: () => assignment.data,
+                })),
+              }),
+            };
           },
         }),
       };
     },
+  };
+}
+
+function durableGatewayState(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    gatewayId: "default",
+    createdAt: 1,
+    createdBy: "test",
+    updatedAt: 1,
+    updatedBy: "test",
+    latestRelease: 14,
+    desiredRelease: 14,
+    liveRelease: 12,
+    desiredStatus: "running",
+    liveRevisionId: "default-r12",
+    trafficRevisionId: "default-r12",
+    roll: {
+      operationId: "roll-default-r14",
+      status: "migrating",
+      fromRelease: 12,
+      toRelease: 14,
+      sourceRevisionId: "default-r12",
+      targetRevisionId: "default-r14",
+      acceptingNewAssignments: true,
+      startedAt: 1,
+      updatedAt: 1,
+      error: null,
+      flippedAt: null,
+    },
+    configSchemaVersion: 1,
+    profile: null,
+    gatewayClass: "shared",
+    imageProfile: "standard",
+    sizingTier: null,
+    computeClass: null,
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: null,
+    serviceAccount: null,
+    operatorAccess: null,
+    ownerUid: null,
+    coOwnerUids: [],
+    builderSlug: null,
+    openclawOverrides: null,
+    modelBrokerLimits: null,
+    preemption: null,
+    ...overrides,
   };
 }
 
@@ -109,6 +166,50 @@ describe("fleet broker durable root boundary", () => {
         gatewayStateDb(undefined) as never,
         "default",
         "default-r1",
+        { requireDurableRoot: true },
+      ),
+    ).resolves.toEqual({ allowed: false });
+  });
+
+  it("keeps a superseded assigned revision authorized for both roster mounts until it drains", async () => {
+    const supersededTargetAssignment = {
+      uid: "uid-builder",
+      data: {
+        slug: "builder",
+        gatewayId: "default",
+        revisionId: "default-r13",
+        release: 13,
+        source: "rollout",
+        state: "serving",
+        epoch: 2,
+        updatedAt: 1,
+        updatedByOperationId: "roll-default-r13",
+      },
+    };
+    const root = durableGatewayState();
+
+    await expect(
+      resolveAssignedUsersRevisionGate(
+        gatewayStateDb(root, [supersededTargetAssignment]) as never,
+        "default",
+        "default-r13",
+        { requireDurableRoot: true },
+      ),
+    ).resolves.toEqual({ allowed: true, liveRevisionId: "default-r12" });
+
+    await expect(
+      resolveAssignedUsersRevisionGate(
+        gatewayStateDb(root, [supersededTargetAssignment]) as never,
+        "default",
+        "default-r13",
+      ),
+    ).resolves.toEqual({ allowed: true, liveRevisionId: "default-r12" });
+
+    await expect(
+      resolveAssignedUsersRevisionGate(
+        gatewayStateDb(root) as never,
+        "default",
+        "default-r13",
         { requireDurableRoot: true },
       ),
     ).resolves.toEqual({ allowed: false });

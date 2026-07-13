@@ -944,6 +944,17 @@ export function isRevisionRosterRequestAllowed(input: {
   return isRequestedRevisionAllowed(input.gatewayId, input.podRevisionId, input.gatewayDoc);
 }
 
+async function isAssignedSupersededRevision(
+  db: Firestore,
+  gatewayId: string,
+  podRevisionId: string,
+): Promise<boolean> {
+  if (!podRevisionId) return false;
+  return (await readAssignmentRosterForGateway(db, gatewayId))?.some(
+    (assignment) => assignment.revisionId === podRevisionId,
+  ) === true;
+}
+
 // Reads the gateway's desired doc (and, for an omitted revision, its assignment
 // docs) and applies the revision-request gate. Returns the live revision for the
 // mount filter when allowed, else { allowed: false } → the route answers 400.
@@ -965,7 +976,13 @@ export async function resolveAssignedUsersRevisionGate(
   const hasAssignmentDocs = podRevisionId
     ? false
     : (await readAssignmentDocsForGateway(db, gatewayId)).length > 0;
-  if (!isRevisionRosterRequestAllowed({ gatewayId, podRevisionId, gatewayDoc, hasAssignmentDocs })) {
+  const activeRevision = isRevisionRosterRequestAllowed({
+    gatewayId,
+    podRevisionId,
+    gatewayDoc,
+    hasAssignmentDocs,
+  });
+  if (!activeRevision && !(await isAssignedSupersededRevision(db, gatewayId, podRevisionId))) {
     return { allowed: false };
   }
   const liveRevisionId =
