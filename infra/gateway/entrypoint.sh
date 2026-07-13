@@ -388,7 +388,7 @@ fi
 
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   log "Pre-boot: hydrating native GitHub CLI auth from connector state..."
-  "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts || log "github-cli-auth-hydrate: non-fatal failure"
+  timeout -k 5s 20s "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts || log "github-cli-auth-hydrate: non-fatal failure"
 fi
 
 # ── Pre-boot: per-gateway Mac ops MM identity (#998/#1482) ───────────────
