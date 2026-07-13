@@ -125,7 +125,7 @@ function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}):
     deleteGatewayKubeSecret: vi.fn(async () => {}),
     deleteAuthTokenSecret: vi.fn(async () => {}),
     deleteGatewayServiceAccount: vi.fn(async () => {}),
-    deleteGatewayEdgeService: vi.fn(async () => {}),
+    deleteGatewayAliasServices: vi.fn(async () => {}),
     deleteGatewayModelKeyKubeSecret: vi.fn(async () => {}),
     deleteGatewayModelKeySource: vi.fn(async () => {}),
     teardownGatewayServiceAccount: vi.fn(async () => {}),
@@ -153,7 +153,7 @@ describe("createRetireGatewayHandler — teardown completeness (happy path)", ()
     expect(deps.deleteGatewayKubeSecret).toHaveBeenCalledWith("canary");
     expect(deps.deleteAuthTokenSecret).toHaveBeenCalledWith("canary");
     expect(deps.deleteGatewayServiceAccount).toHaveBeenCalledWith("canary");
-    expect(deps.deleteGatewayEdgeService).toHaveBeenCalledWith("canary");
+    expect(deps.deleteGatewayAliasServices).toHaveBeenCalledWith("canary");
     expect(deps.deleteGatewayModelKeyKubeSecret).toHaveBeenCalledWith("canary");
     expect(deps.deleteGatewayModelKeySource).toHaveBeenCalledWith("canary");
     expect(deps.teardownGatewayServiceAccount).toHaveBeenCalledWith("canary");
@@ -170,8 +170,8 @@ describe("createRetireGatewayHandler — teardown completeness (happy path)", ()
       "delete-sm-secret:done",
       "delete-ksa:running",
       "delete-ksa:done",
-      "delete-edge-service:running",
-      "delete-edge-service:done",
+      "delete-alias-services:running",
+      "delete-alias-services:done",
       "delete-model-key-kube-secret:running",
       "delete-model-key-kube-secret:done",
       "delete-model-key-source:running",
@@ -314,7 +314,7 @@ describe("createRetireGatewayHandler — independent best-effort teardown (D4)",
     expect(deps.deleteGatewayPersistentVolumeClaim).toHaveBeenCalled();
     expect(deps.deleteAuthTokenSecret).toHaveBeenCalled();
     expect(deps.deleteGatewayServiceAccount).toHaveBeenCalled();
-    expect(deps.deleteGatewayEdgeService).toHaveBeenCalled();
+    expect(deps.deleteGatewayAliasServices).toHaveBeenCalled();
     expect(deps.deleteGatewayModelKeyKubeSecret).toHaveBeenCalled();
     expect(deps.deleteGatewayModelKeySource).toHaveBeenCalled();
     expect(deps.teardownGatewayServiceAccount).toHaveBeenCalled();
@@ -334,7 +334,7 @@ describe("createRetireGatewayHandler — independent best-effort teardown (D4)",
       deleteAuthTokenSecret: vi.fn(async () => {
         throw new Error("sm denied");
       }),
-      deleteGatewayEdgeService: vi.fn(async () => {
+      deleteGatewayAliasServices: vi.fn(async () => {
         throw new Error("service stuck");
       }),
     });
@@ -525,8 +525,8 @@ describe("createRetireGatewayHandler — refusals + edge cases", () => {
       "delete-sm-secret:done",
       "delete-ksa:running",
       "delete-ksa:done",
-      "delete-edge-service:running",
-      "delete-edge-service:done",
+      "delete-alias-services:running",
+      "delete-alias-services:done",
       "delete-model-key-kube-secret:running",
       "delete-model-key-kube-secret:done",
       "delete-model-key-source:running",

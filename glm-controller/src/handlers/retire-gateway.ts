@@ -38,7 +38,7 @@ export interface RetireGatewayDeps {
   deleteGatewayKubeSecret: (gatewayId: string) => Promise<void>;
   deleteAuthTokenSecret: (gatewayId: string) => Promise<void>;
   deleteGatewayServiceAccount: (gatewayId: string) => Promise<void>;
-  deleteGatewayEdgeService: (gatewayId: string) => Promise<void>;
+  deleteGatewayAliasServices: (gatewayId: string) => Promise<void>;
   deleteGatewayModelKeyKubeSecret: (gatewayId: string) => Promise<void>;
   deleteGatewayModelKeySource: (gatewayId: string) => Promise<void>;
 
@@ -215,8 +215,8 @@ async function teardownResources(
   await collectTeardownError(ctx, deps, errors, "delete-ksa", () =>
     deps.deleteGatewayServiceAccount(gatewayId),
   );
-  await collectTeardownError(ctx, deps, errors, "delete-edge-service", () =>
-    deps.deleteGatewayEdgeService(gatewayId),
+  await collectTeardownError(ctx, deps, errors, "delete-alias-services", () =>
+    deps.deleteGatewayAliasServices(gatewayId),
   );
   await collectTeardownError(
     ctx,
