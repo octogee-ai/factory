@@ -59,6 +59,89 @@ describe("automations locality broker", () => {
     });
   });
 
+  it("projects cron listing responses to A2-safe agent-turn jobs", async () => {
+    const safeJob = {
+      id: "daily-digest",
+      agentId: "octogee-alice-coach",
+      name: "Daily digest",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "Summarize the day." },
+      delivery: { mode: "webhook", to: "https://secret.example/hook" },
+      state: { nextRunAtMs: 1_783_820_800_000, lastRunStatus: "ok" },
+    };
+    const { app } = appForTest({
+      invoke: vi.fn(async (method: string) => {
+        if (method === "cron.list") {
+          return {
+            jobs: [
+              safeJob,
+              { ...safeJob, id: "legacy-command", payload: { kind: "command", argv: ["env"] } },
+            ],
+            deliveryPreviews: { "daily-digest": { detail: "https://secret.example/hook" } },
+          };
+        }
+        return { jobs: [] };
+      }),
+    });
+
+    const response = await request(app)
+      .post("/api/g/gw-alice/automations/rpc")
+      .send({ method: "cron.list" });
+
+    expect(response.body).toEqual({
+      result: {
+        jobs: [{
+          id: "daily-digest",
+          name: "Daily digest",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "Summarize the day." },
+          delivery: { mode: "none" },
+          state: { nextRunAtMs: 1_783_820_800_000, lastRunStatus: "ok" },
+        }],
+      },
+    });
+  });
+
+  it("does not return a raw cron job from an A2 get request", async () => {
+    const rawJob = {
+      id: "daily-digest",
+      agentId: "octogee-alice-coach",
+      name: "Daily digest",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "Summarize the day." },
+      delivery: { mode: "webhook", to: "https://secret.example/hook" },
+    };
+    const { app } = appForTest({
+      invoke: vi.fn(async (method: string) => method === "cron.get" ? rawJob : { jobs: [] }),
+    });
+
+    const response = await request(app)
+      .post("/api/g/gw-alice/automations/rpc")
+      .send({ method: "cron.get", params: { id: "daily-digest" } });
+
+    expect(response.body).toEqual({
+      result: {
+        id: "daily-digest",
+        name: "Daily digest",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "Summarize the day." },
+        delivery: { mode: "none" },
+      },
+    });
+  });
+
   it("rejects command payloads instead of lending the gateway's operator authority", async () => {
     const { app, invoke } = appForTest();
 

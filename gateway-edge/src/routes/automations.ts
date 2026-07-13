@@ -114,16 +114,17 @@ export function sanitizeHeartbeat(value: unknown): AutomationHeartbeat | null {
   const heartbeat = record(value);
   if (!heartbeat || typeof heartbeat.every !== "string" || !heartbeat.every.trim()) return null;
   for (const [key, entry] of Object.entries(heartbeat)) {
-    if (!HEARTBEAT_FIELDS.has(key)) return null;
-    if (HEARTBEAT_STRING_FIELDS.has(key) && typeof entry !== "string") return null;
-    if (HEARTBEAT_BOOLEAN_FIELDS.has(key) && typeof entry !== "boolean") return null;
-    if (
-      HEARTBEAT_NUMBER_FIELDS.has(key) &&
-      (typeof entry !== "number" || !Number.isInteger(entry) || entry < 0)
-    ) return null;
-    if (key === "activeHours" && !validActiveHours(entry)) return null;
+    if (!validHeartbeatField(key, entry)) return null;
   }
   return heartbeat as unknown as AutomationHeartbeat;
+}
+
+function validHeartbeatField(key: string, value: unknown): boolean {
+  if (!HEARTBEAT_FIELDS.has(key)) return false;
+  if (HEARTBEAT_STRING_FIELDS.has(key)) return typeof value === "string";
+  if (HEARTBEAT_BOOLEAN_FIELDS.has(key)) return typeof value === "boolean";
+  if (HEARTBEAT_NUMBER_FIELDS.has(key)) return typeof value === "number" && Number.isInteger(value) && value >= 0;
+  return key !== "activeHours" || validActiveHours(value);
 }
 
 function coachAgentId(slug: string): string {
@@ -134,34 +135,35 @@ function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): b
   return Object.keys(value).every((key) => keys.includes(key));
 }
 
+function everyCronSchedule(schedule: Record<string, unknown>): Record<string, unknown> | null {
+  const everyMs = schedule.everyMs;
+  if (!hasOnlyKeys(schedule, ["kind", "everyMs"]) || typeof everyMs !== "number" || !Number.isInteger(everyMs)) return null;
+  return everyMs >= 60_000 && everyMs <= MAX_CRON_INTERVAL_MS ? { kind: "every", everyMs } : null;
+}
+
+function expressionCronSchedule(schedule: Record<string, unknown>): Record<string, unknown> | null {
+  const expr = nonEmptyString(schedule.expr);
+  if (!hasOnlyKeys(schedule, ["kind", "expr", "tz"]) || !expr || expr.length > 200) return null;
+  if (schedule.tz !== undefined && (typeof schedule.tz !== "string" || schedule.tz.length > 100)) return null;
+  return { kind: "cron", expr, ...(schedule.tz ? { tz: schedule.tz } : {}) };
+}
+
+function atCronSchedule(schedule: Record<string, unknown>): Record<string, unknown> | null {
+  const at = nonEmptyString(schedule.at);
+  if (!hasOnlyKeys(schedule, ["kind", "at"]) || !at || Number.isNaN(Date.parse(at))) return null;
+  return { kind: "at", at };
+}
+
+const CRON_SCHEDULES: Record<string, (schedule: Record<string, unknown>) => Record<string, unknown> | null> = {
+  every: everyCronSchedule,
+  cron: expressionCronSchedule,
+  at: atCronSchedule,
+};
+
 function cronSchedule(value: unknown): Record<string, unknown> | null {
   const schedule = record(value);
   if (!schedule || typeof schedule.kind !== "string") return null;
-  if (schedule.kind === "every") {
-    if (!hasOnlyKeys(schedule, ["kind", "everyMs"])) return null;
-    const everyMs = schedule.everyMs;
-    if (
-      typeof everyMs !== "number" ||
-      !Number.isInteger(everyMs) ||
-      everyMs < 60_000 ||
-      everyMs > MAX_CRON_INTERVAL_MS
-    ) return null;
-    return { kind: "every", everyMs };
-  }
-  if (schedule.kind === "cron") {
-    if (!hasOnlyKeys(schedule, ["kind", "expr", "tz"])) return null;
-    const expr = nonEmptyString(schedule.expr);
-    if (!expr || expr.length > 200) return null;
-    if (schedule.tz !== undefined && (typeof schedule.tz !== "string" || schedule.tz.length > 100)) return null;
-    return { kind: "cron", expr, ...(schedule.tz ? { tz: schedule.tz } : {}) };
-  }
-  if (schedule.kind === "at") {
-    if (!hasOnlyKeys(schedule, ["kind", "at"])) return null;
-    const at = nonEmptyString(schedule.at);
-    if (!at || Number.isNaN(Date.parse(at))) return null;
-    return { kind: "at", at };
-  }
-  return null;
+  return CRON_SCHEDULES[schedule.kind]?.(schedule) ?? null;
 }
 
 function cronPayload(value: unknown): Record<string, unknown> | null {
@@ -181,6 +183,42 @@ function cronDelivery(value: unknown): Record<string, unknown> | null {
     return { mode: "announce", channel: "mattermost", to: "channel:coach" };
   }
   return null;
+}
+
+function cronState(value: unknown): Record<string, unknown> | null {
+  const state = record(value);
+  if (!state) return null;
+  const next: Record<string, unknown> = {};
+  if (typeof state.nextRunAtMs === "number") next.nextRunAtMs = state.nextRunAtMs;
+  if (state.lastRunStatus === "ok" || state.lastRunStatus === "error" || state.lastRunStatus === "skipped") {
+    next.lastRunStatus = state.lastRunStatus;
+  }
+  if (typeof state.lastError === "string") next.lastError = state.lastError;
+  return Object.keys(next).length > 0 ? next : null;
+}
+
+function automationJob(value: unknown, agentId: string): Record<string, unknown> | null {
+  const job = record(value);
+  const id = nonEmptyString(job?.id);
+  const name = nonEmptyString(job?.name);
+  const schedule = cronSchedule(job?.schedule);
+  const payload = cronPayload(job?.payload);
+  if (!job || job.agentId !== agentId || !id || !name || typeof job.enabled !== "boolean" || !schedule || !payload) {
+    return null;
+  }
+  const state = cronState(job.state);
+  return {
+    id,
+    name,
+    ...(typeof job.description === "string" ? { description: job.description } : {}),
+    enabled: job.enabled,
+    schedule,
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload,
+    delivery: cronDelivery(job.delivery) ?? { mode: "none" },
+    ...(state ? { state } : {}),
+  };
 }
 
 function cronDefinition(value: unknown, agentId: string): Record<string, unknown> | null {
@@ -208,39 +246,68 @@ function cronDefinition(value: unknown, agentId: string): Record<string, unknown
   };
 }
 
+type CronPatchWriter = (patch: Record<string, unknown>, next: Record<string, unknown>) => boolean;
+
+function writeNamePatch(patch: Record<string, unknown>, next: Record<string, unknown>): boolean {
+  if (!Object.hasOwn(patch, "name")) return true;
+  const name = nonEmptyString(patch.name);
+  if (!name || name.length > MAX_CRON_NAME_LENGTH) return false;
+  next.name = name;
+  return true;
+}
+
+function writeDescriptionPatch(patch: Record<string, unknown>, next: Record<string, unknown>): boolean {
+  if (!Object.hasOwn(patch, "description")) return true;
+  if (patch.description !== null && (typeof patch.description !== "string" || patch.description.length > MAX_CRON_PROMPT_LENGTH)) return false;
+  next.description = patch.description;
+  return true;
+}
+
+function writeEnabledPatch(patch: Record<string, unknown>, next: Record<string, unknown>): boolean {
+  if (!Object.hasOwn(patch, "enabled")) return true;
+  if (typeof patch.enabled !== "boolean") return false;
+  next.enabled = patch.enabled;
+  return true;
+}
+
+function writeSchedulePatch(patch: Record<string, unknown>, next: Record<string, unknown>): boolean {
+  if (!Object.hasOwn(patch, "schedule")) return true;
+  const schedule = cronSchedule(patch.schedule);
+  if (!schedule) return false;
+  next.schedule = schedule;
+  return true;
+}
+
+function writePayloadPatch(patch: Record<string, unknown>, next: Record<string, unknown>): boolean {
+  if (!Object.hasOwn(patch, "payload")) return true;
+  const payload = cronPayload(patch.payload);
+  if (!payload) return false;
+  next.payload = payload;
+  return true;
+}
+
+function writeDeliveryPatch(patch: Record<string, unknown>, next: Record<string, unknown>): boolean {
+  if (!Object.hasOwn(patch, "delivery")) return true;
+  const delivery = cronDelivery(patch.delivery);
+  if (!delivery) return false;
+  next.delivery = delivery;
+  return true;
+}
+
+const CRON_PATCH_WRITERS: CronPatchWriter[] = [
+  writeNamePatch,
+  writeDescriptionPatch,
+  writeEnabledPatch,
+  writeSchedulePatch,
+  writePayloadPatch,
+  writeDeliveryPatch,
+];
+
 function cronPatch(value: unknown): Record<string, unknown> | null {
   const patch = record(value);
   if (!patch || !hasOnlyKeys(patch, ["name", "description", "enabled", "schedule", "payload", "delivery"])) return null;
   const next: Record<string, unknown> = {};
-  if (Object.hasOwn(patch, "name")) {
-    const name = nonEmptyString(patch.name);
-    if (!name || name.length > MAX_CRON_NAME_LENGTH) return null;
-    next.name = name;
-  }
-  if (Object.hasOwn(patch, "description")) {
-    if (patch.description !== null && (typeof patch.description !== "string" || patch.description.length > MAX_CRON_PROMPT_LENGTH)) return null;
-    next.description = patch.description;
-  }
-  if (Object.hasOwn(patch, "enabled")) {
-    if (typeof patch.enabled !== "boolean") return null;
-    next.enabled = patch.enabled;
-  }
-  if (Object.hasOwn(patch, "schedule")) {
-    const schedule = cronSchedule(patch.schedule);
-    if (!schedule) return null;
-    next.schedule = schedule;
-  }
-  if (Object.hasOwn(patch, "payload")) {
-    const payload = cronPayload(patch.payload);
-    if (!payload) return null;
-    next.payload = payload;
-  }
-  if (Object.hasOwn(patch, "delivery")) {
-    const delivery = cronDelivery(patch.delivery);
-    if (!delivery) return null;
-    next.delivery = delivery;
-  }
-  return Object.keys(next).length > 0 ? next : null;
+  return CRON_PATCH_WRITERS.every((writer) => writer(patch, next)) && Object.keys(next).length > 0 ? next : null;
 }
 
 function cronId(params: Record<string, unknown>): string | null {
@@ -258,10 +325,9 @@ async function callerJob(
   deps: Pick<AutomationsRouterDeps, "invoke">,
   id: string,
   agentId: string,
-): Promise<{ result: unknown; job: Record<string, unknown> } | null> {
+): Promise<Record<string, unknown> | null> {
   const result = await deps.invoke("cron.get", { id });
-  const job = jobFromResult(result);
-  return job?.agentId === agentId && cronPayload(job.payload) ? { result, job } : null;
+  return automationJob(jobFromResult(result), agentId);
 }
 
 async function authorize(
@@ -282,6 +348,111 @@ async function authorize(
   return resolved;
 }
 
+interface BrokerResponse {
+  status: number;
+  body: Record<string, unknown>;
+}
+
+function brokerResult(result: unknown): BrokerResponse {
+  return { status: 200, body: { result } };
+}
+
+function brokerError(status: number, error: string): BrokerResponse {
+  return { status, body: { error } };
+}
+
+function cronJobOperation(method: string): boolean {
+  return ["cron.get", "cron.update", "cron.remove", "cron.run", "cron.runs"].includes(method);
+}
+
+async function listCronJobs(deps: AutomationsRouterDeps, agentId: string): Promise<BrokerResponse> {
+  const result = record(await deps.invoke("cron.list", {
+    agentId,
+    includeDisabled: true,
+    limit: 200,
+    sortBy: "updatedAtMs",
+    sortDir: "desc",
+  }));
+  const jobs = (Array.isArray(result?.jobs) ? result.jobs : [])
+    .map((job) => automationJob(job, agentId))
+    .filter((job): job is Record<string, unknown> => job !== null);
+  return brokerResult({ jobs });
+}
+
+async function addCronJob(
+  deps: AutomationsRouterDeps,
+  params: Record<string, unknown> | null,
+  agentId: string,
+): Promise<BrokerResponse> {
+  const definition = cronDefinition(params, agentId);
+  return definition
+    ? brokerResult(await deps.invoke("cron.add", definition))
+    : brokerError(400, "invalid automation definition");
+}
+
+async function existingCronJobOperation(
+  deps: AutomationsRouterDeps,
+  method: string,
+  params: Record<string, unknown> | null,
+  agentId: string,
+): Promise<BrokerResponse> {
+  const id = params ? cronId(params) : null;
+  if (!params || !id) return brokerError(400, "invalid automation id");
+  const current = await callerJob(deps, id, agentId);
+  if (!current) return brokerError(404, "not_found");
+  if (method === "cron.get") return brokerResult(current);
+  if (method === "cron.update") return updateCronJob(deps, id, params);
+  if (method === "cron.remove") return brokerResult(await deps.invoke("cron.remove", { id }));
+  if (method === "cron.run") return brokerResult(await deps.invoke("cron.run", { id, mode: "force" }));
+  return brokerResult(await deps.invoke("cron.runs", { id, limit: 20, sortDir: "desc" }));
+}
+
+async function updateCronJob(
+  deps: AutomationsRouterDeps,
+  id: string,
+  params: Record<string, unknown>,
+): Promise<BrokerResponse> {
+  const patch = cronPatch(params.patch);
+  return patch
+    ? brokerResult(await deps.invoke("cron.update", { id, patch }))
+    : brokerError(400, "invalid automation update");
+}
+
+async function heartbeatGet(deps: AutomationsRouterDeps, agentId: string): Promise<BrokerResponse> {
+  const configResult = record(await deps.invoke("config.get", {}));
+  const hash = nonEmptyString(configResult?.hash);
+  if (!configResult || !hash) throw new Error("config.get returned no config hash");
+  return brokerResult({ hash, heartbeat: heartbeatFromConfig(configResult.config, agentId) });
+}
+
+async function heartbeatUpdate(
+  deps: AutomationsRouterDeps,
+  body: Record<string, unknown>,
+  agentId: string,
+): Promise<BrokerResponse> {
+  const baseHash = nonEmptyString(body.baseHash);
+  const heartbeat = sanitizeHeartbeat(body.heartbeat);
+  if (!baseHash || !heartbeat) return brokerError(400, "invalid heartbeat update");
+  const patch = { agents: { list: [{ id: agentId, heartbeat }] } };
+  return brokerResult(await deps.invoke("config.patch", { raw: JSON.stringify(patch), baseHash }));
+}
+
+async function automationResponse(
+  body: Record<string, unknown>,
+  resolved: ResolvedGateway,
+  deps: AutomationsRouterDeps,
+): Promise<BrokerResponse> {
+  const method = typeof body.method === "string" ? body.method : "";
+  const agentId = coachAgentId(resolved.slug);
+  if (method === "cron.list") return listCronJobs(deps, agentId);
+  const params = record(body.params);
+  if (method === "cron.add") return addCronJob(deps, params, agentId);
+  if (cronJobOperation(method)) return existingCronJobOperation(deps, method, params, agentId);
+  if (method === "heartbeat.get") return heartbeatGet(deps, agentId);
+  if (method === "heartbeat.update") return heartbeatUpdate(deps, body, agentId);
+  return brokerError(400, "unsupported automation operation");
+}
+
 export function createAutomationsRouter(deps: AutomationsRouterDeps): Router {
   const router = Router({ mergeParams: true });
 
@@ -294,104 +465,8 @@ export function createAutomationsRouter(deps: AutomationsRouterDeps): Router {
         res.status(400).json({ error: "invalid automation request" });
         return;
       }
-      const agentId = coachAgentId(resolved.slug);
-      if (body.method === "cron.list") {
-        res.json({
-          result: await deps.invoke("cron.list", {
-            agentId,
-            includeDisabled: true,
-            limit: 200,
-            sortBy: "updatedAtMs",
-            sortDir: "desc",
-          }),
-        });
-        return;
-      }
-      const cronParams = record(body.params);
-      if (body.method === "cron.add") {
-        const definition = cronDefinition(cronParams, agentId);
-        if (!definition) {
-          res.status(400).json({ error: "invalid automation definition" });
-          return;
-        }
-        res.json({ result: await deps.invoke("cron.add", definition) });
-        return;
-      }
-      if (
-        body.method === "cron.get" ||
-        body.method === "cron.update" ||
-        body.method === "cron.remove" ||
-        body.method === "cron.run" ||
-        body.method === "cron.runs"
-      ) {
-        const id = cronParams ? cronId(cronParams) : null;
-        if (!cronParams || !id) {
-          res.status(400).json({ error: "invalid automation id" });
-          return;
-        }
-        const current = await callerJob(deps, id, agentId);
-        if (!current) {
-          res.status(404).json({ error: "not_found" });
-          return;
-        }
-        if (body.method === "cron.get") {
-          res.json({ result: current.result });
-          return;
-        }
-        if (body.method === "cron.update") {
-          const patch = cronPatch(cronParams.patch);
-          if (!patch) {
-            res.status(400).json({ error: "invalid automation update" });
-            return;
-          }
-          res.json({ result: await deps.invoke("cron.update", { id, patch }) });
-          return;
-        }
-        if (body.method === "cron.remove") {
-          res.json({ result: await deps.invoke("cron.remove", { id }) });
-          return;
-        }
-        if (body.method === "cron.run") {
-          res.json({ result: await deps.invoke("cron.run", { id, mode: "force" }) });
-          return;
-        }
-        res.json({
-          result: await deps.invoke("cron.runs", { id, limit: 20, sortDir: "desc" }),
-        });
-        return;
-      }
-      if (body.method === "heartbeat.get") {
-        const configResult = record(await deps.invoke("config.get", {}));
-        const hash = nonEmptyString(configResult?.hash);
-        if (!configResult || !hash) {
-          throw new Error("config.get returned no config hash");
-        }
-        res.json({
-          result: {
-            hash,
-            heartbeat: heartbeatFromConfig(configResult.config, agentId),
-          },
-        });
-        return;
-      }
-      if (body.method === "heartbeat.update") {
-        const baseHash = nonEmptyString(body.baseHash);
-        const heartbeat = sanitizeHeartbeat(body.heartbeat);
-        if (!baseHash || !heartbeat) {
-          res.status(400).json({ error: "invalid heartbeat update" });
-          return;
-        }
-        const patch = {
-          agents: {
-            list: [{ id: agentId, heartbeat }],
-          },
-        };
-        res.json({
-          result: await deps.invoke("config.patch", { raw: JSON.stringify(patch), baseHash }),
-        });
-        return;
-      }
-      res.status(400).json({ error: "unsupported automation operation" });
+      const response = await automationResponse(body, resolved, deps);
+      res.status(response.status).json(response.body);
     } catch (error) {
       next(error);
     }
