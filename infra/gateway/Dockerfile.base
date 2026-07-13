@@ -57,7 +57,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # `gcloud storage cp` the same object manually (see the README).
 # When our patches land upstream, swap back to `npm install -g openclaw@${OPENCLAW_VERSION}`.
 ARG OPENCLAW_VERSION=latest
+ARG OPENCLAW_MATTERMOST_FORK_SHA=""
 COPY infra/gateway/openclaw-tarball/openclaw-fork.tgz /tmp/openclaw-fork.tgz
+COPY infra/gateway/openclaw-tarball/openclaw-mattermost-fork.tgz /tmp/openclaw-mattermost-fork.tgz
 RUN npm install -g /tmp/openclaw-fork.tgz && openclaw --version && rm /tmp/openclaw-fork.tgz
 
 # ── GitHub CLI ───────────────────────────────────────────────────────────────
@@ -126,7 +128,9 @@ ENV HOME=/home/node
 # at that version exists on npm). So mattermost install is version-ADAPTIVE — keyed
 # on whether the bundled `dist/extensions/mattermost` survived in the installed
 # openclaw. Pinned to ${OPENCLAW_VERSION} (the package publishes in lockstep) so a
-# mattermost-only npm bump can't drift past the host pluginApi.
+# mattermost-only npm bump can't drift past the host pluginApi. The canonical
+# fork can pin a compiled local Mattermost artifact while matrix slots without
+# a channel patch keep the published package.
 RUN set -e; \
     openclaw plugins install @openclaw/codex > /tmp/oc-plugin.log 2>&1 \
       || { echo "FATAL: @openclaw/codex install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
@@ -138,12 +142,24 @@ RUN set -e; \
     if [ -d "$(npm root -g)/openclaw/dist/extensions/mattermost" ]; then \
       echo "mattermost: bundled dist extension present (<=6.10) — no external install"; \
     else \
-      echo "mattermost: bundled dist absent (externalized, 6.11+) — installing @openclaw/mattermost@${OPENCLAW_VERSION}"; \
-      openclaw plugins install "@openclaw/mattermost@${OPENCLAW_VERSION}" > /tmp/oc-plugin.log 2>&1 \
-        || { echo "FATAL: @openclaw/mattermost install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+      if [ -n "${OPENCLAW_MATTERMOST_FORK_SHA}" ]; then \
+        test -s /tmp/openclaw-mattermost-fork.tgz; \
+        echo "mattermost: installing local fork ${OPENCLAW_MATTERMOST_FORK_SHA}"; \
+        openclaw plugins install "npm-pack:/tmp/openclaw-mattermost-fork.tgz" > /tmp/oc-plugin.log 2>&1 \
+          || { echo "FATAL: fork @openclaw/mattermost install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+        printf '%s\n' '{"channels":{"mattermost":{"replyToMode":"all","threadSessionScope":"channel"}}}' \
+          | openclaw config patch --stdin > /tmp/oc-plugin.log 2>&1 \
+          || { echo "FATAL: fork @openclaw/mattermost rejected channel-scoped sessions"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+        openclaw config validate > /tmp/oc-plugin.log 2>&1 \
+          || { echo "FATAL: fork @openclaw/mattermost config validation failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+      else \
+        echo "mattermost: bundled dist absent (externalized, 6.11+) — installing @openclaw/mattermost@${OPENCLAW_VERSION}"; \
+        openclaw plugins install "@openclaw/mattermost@${OPENCLAW_VERSION}" > /tmp/oc-plugin.log 2>&1 \
+          || { echo "FATAL: @openclaw/mattermost install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+      fi; \
       tail -n 3 /tmp/oc-plugin.log; MM_STAGED=1; \
     fi; \
-    rm -f /tmp/oc-plugin.log; \
+    rm -f /tmp/oc-plugin.log /tmp/openclaw-mattermost-fork.tgz; \
     mkdir -p /opt/openclaw-codex-deps; \
     cp -a /home/node/.openclaw/npm /opt/openclaw-codex-deps/npm; \
     chown -R node:node /opt/openclaw-codex-deps; \
