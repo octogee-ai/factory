@@ -525,6 +525,70 @@ describe("startReconciler — durable root authority", () => {
     stop();
   });
 
+  it("pins the W9 gateway-edge candidate artifact alongside the gateway image", async () => {
+    const gatewayImageTag = `agent-conversation-w9a-8c356bb1@sha256:${"a".repeat(64)}`;
+    const gatewayEdgeImageTag = `agent-conversation-w9a-8c356bb1@sha256:${"b".repeat(64)}`;
+    const callbacks: SnapshotCallbacks = {};
+    const reconcileImagePins = vi.fn(async () => {});
+    const stop = startReconciler({
+      db: makeDb({
+        callbacks,
+        roots: { default: durableRoot() },
+        revisions: { "default-r2": servingRevision() },
+        releases: {
+          default: {
+            2: {
+              gatewayId: "default",
+              release: 2,
+              payload: {
+                imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+                imageTag: gatewayImageTag,
+                gatewayEdgeImage: {
+                  imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
+                  imageTag: gatewayEdgeImageTag,
+                },
+                testExperiment: {
+                  kind: "w9-agent-conversation",
+                  mode: "publisher-live",
+                  candidateManifest: {
+                    path: "infra/gateway/openclaw-candidates/agent-conversation.json",
+                    sha256: "c".repeat(64),
+                  },
+                  mattermostOverlay: {
+                    valuesPath: "infra/candidates/values.mattermost-silent-post.yaml",
+                    imageReference: `us-central1-docker.pkg.dev/octogee/octogee/mattermost:agent-conversation-w9a-8c356bb1@sha256:${"d".repeat(64)}`,
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+      helm: {} as Parameters<typeof startReconciler>[0]["helm"],
+      handlers: {} as Parameters<typeof startReconciler>[0]["handlers"],
+      reconcileImagePins,
+      log: vi.fn(),
+    });
+
+    await runTick(callbacks);
+
+    expect(reconcileImagePins).toHaveBeenCalledWith(
+      "prod",
+      [
+        {
+          imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+          imageTag: gatewayImageTag,
+        },
+        {
+          imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
+          imageTag: gatewayEdgeImageTag,
+        },
+      ],
+      expect.any(Function),
+    );
+    stop();
+  });
+
   it("preserves ingress and image pins when any durable root is invalid", async () => {
     const callbacks: SnapshotCallbacks = {};
     const syncFleetIngress = vi.fn(async () => {});

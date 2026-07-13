@@ -1472,7 +1472,13 @@ async function readDurableRevisionArtifacts(
     if (!artifact) {
       throw new Error(`revision ${revision.revisionId} has no valid release artifact`);
     }
-    artifacts.push(artifact);
+    artifacts.push({ imageRepository: artifact.imageRepository, imageTag: artifact.imageTag });
+    if (artifact.gatewayEdgeImage) {
+      artifacts.push({
+        imageRepository: artifact.gatewayEdgeImage.imageRepository,
+        imageTag: artifact.gatewayEdgeImage.imageTag,
+      });
+    }
   }
   return artifacts;
 }
