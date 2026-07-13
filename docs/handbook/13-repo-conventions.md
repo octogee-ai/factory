@@ -4,8 +4,8 @@ slug: 13-repo-conventions
 order: 13
 part: Dev Workflow
 audience: [agent]
-description: No npm workspaces, per-package build, the lint ratchet, fix-code-not-rules, CI per-workspace installs, dependency currency (Dependabot/Renovate split), and GHAS-via-UI.
-updated: 2026-07-08
+description: No npm workspaces, per-package build, the lint ratchet, fix-code-not-rules, CI per-workspace installs, verified open-source release currency, and GHAS-via-UI.
+updated: 2026-07-11
 ---
 
 # Repo Conventions
@@ -46,27 +46,27 @@ Consequences to keep in mind:
 Every package is named `@octogee/<name>` (consistent scope, no NuCrew-era
 leftovers).
 
-## Dependency currency — two bots, fenced so they never overlap
+## Dependency currency — verified coverage, not configured intent
 
-- **Dependabot** (`.github/dependabot.yml`) — npm (every workspace),
-  github-actions, Dockerfile `FROM`. Grouped weekly; majors as individual PRs.
-- **Renovate** (`.github/renovate.json5`) — ONLY the third-party versions
-  pinned in **Helm values**, which Dependabot can't see
-  (`enabledManagers: [helm-values, helmv3]`, hard-fenced so it never fights
-  Dependabot). Allowlisted by exception: Mattermost (image) + Gitea (chart
-  dep) only, `X.Y.Z` exact versions (no `latest`/`-rc` tags).
-- **Stateful pets (Mattermost, Gitea) are human-merge, never auto-merge or a
-  rolling tag.** Both run one-way DB migrations on startup and deploy to PROD
-  on merge — recovery is Cloud SQL PITR, not a tag revert. Renovate does
-  discovery + opens the PR; a human reads release notes before merging. This
-  is the deliberate exception to "ride latest, fail loud" ([10 — Engineering
-  Principles](10-engineering-principles.md)): still ride latest, but the
-  merge step stays manual because the rollback path is backup-restore, not
-  revert.
-- **Gitea's version is a single knob.** Don't pin `gitea.image.tag` — it
-  defaults to the chart's `appVersion`, so the Gitea chart dependency version
-  in `helm/octogee/Chart.yaml` is the only place that needs bumping; Renovate
-  tracks it like any other chart dep.
+The target is the newest published stable major/minor/patch for every directly
+controlled open-source component, with weekday discovery, immediate security work,
+immutable artifacts, human promotion, and an explicit TEST gate for dependency and
+stateful upgrades. The implementation contract is
+[`OSS-RELEASE-CURRENCY-SPEC.md`](../specs/OSS-RELEASE-CURRENCY-SPEC.md).
+
+The current tools do **not** yet provide full coverage:
+
+- Dependabot handles most npm packages and GitHub Actions, but misses eight tracked
+  npm lockfile directories, four Dockerfile directories, and all Terraform providers.
+- Renovate is configured for only Mattermost/Gitea Helm pins and has not yet passed its
+  activation probe. Configuration without a Dependency Dashboard/test PR is not coverage.
+- OSV scans every committed npm lockfile and Trivy scans images/IaC, but detection alone
+  does not create or safely promote every update.
+
+Until the companion spec lands, do not describe the repository as fully update-managed.
+Stateful services remain isolated, human-reviewed changes because rollback requires a
+database restore, not a tag revert. A Gitea update will move as one verified pin group:
+chart/archive, explicit chart-appVersion image tag, and the matching rootless image digest.
 
 ## Lint is the moat — fix the code, not the rule
 
