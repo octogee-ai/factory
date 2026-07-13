@@ -644,6 +644,7 @@ export interface CommitPlacementParams {
   // preserves each entry point's field set byte-for-byte.
   mirrorPatch: Record<string, unknown>;
   updatedByOperationId?: string | null;
+  assignmentWrite?: "upsert" | "create-if-missing";
 }
 
 export type PlacementRejectReason =
@@ -655,6 +656,7 @@ export type PlacementRejectReason =
 
 export type CommitPlacementResult =
   | { kind: "mirror-only" }
+  | { kind: "assignment-preserved" }
   | { kind: "assigned"; revisionId: string; release: number | null }
   | { kind: "rejected"; reason: PlacementRejectReason };
 
@@ -703,12 +705,28 @@ function placementRevisionRejectReason(
   return data.lifecycle === "serving" ? null : "revision-not-ready";
 }
 
+async function preserveExistingAssignment(
+  txn: PlacementTxn,
+  assignmentRef: PlacementDocRef,
+  userRef: PlacementDocRef,
+  params: CommitPlacementParams,
+): Promise<boolean> {
+  if (params.assignmentWrite !== "create-if-missing") return false;
+  const assignmentSnap = await txn.get(assignmentRef);
+  if (!assignmentSnap.exists) return false;
+  txn.update(userRef, params.mirrorPatch);
+  return true;
+}
+
 export async function commitPlacementAtomic(
   db: PlacementFirestore,
   params: CommitPlacementParams,
 ): Promise<CommitPlacementResult> {
   const userRef = db.collection("users").doc(params.uid);
   const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(params.gatewayId);
+  const assignmentRef = gatewayRef
+    .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
+    .doc(params.uid);
   return db.runTransaction<CommitPlacementResult>(async (txn) => {
     const gatewaySnap = await txn.get(gatewayRef);
     const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
@@ -722,6 +740,9 @@ export async function commitPlacementAtomic(
     }
     if (gatewayData.desiredStatus !== "running") {
       return { kind: "rejected", reason: "gateway-not-running" };
+    }
+    if (await preserveExistingAssignment(txn, assignmentRef, userRef, params)) {
+      return { kind: "assignment-preserved" };
     }
 
     const roll = gatewayData.roll;
@@ -763,10 +784,7 @@ export async function commitPlacementAtomic(
       updatedAt: params.now,
       updatedByOperationId: params.updatedByOperationId ?? null,
     };
-    txn.set(
-      gatewayRef.collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(params.uid),
-      assignmentDoc as unknown as Record<string, unknown>,
-    );
+    txn.set(assignmentRef, assignmentDoc as unknown as Record<string, unknown>);
     return { kind: "assigned", revisionId, release };
   });
 }

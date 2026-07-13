@@ -122,7 +122,7 @@ export async function deleteAssignmentDoc(
 }
 
 // gateways/{gatewayId}.liveRevisionId — the revision serving traffic, used as the
-// gap-user placement fallback (an approved user with no assignment doc mounts on
+// gap-user placement fallback (an assigned builder with no assignment doc mounts on
 // the live revision). Null pre-backfill (no desired doc yet) — callers must treat
 // null as "unknown", never as an exclusion.
 interface GatewayDocReader {
@@ -139,7 +139,7 @@ export async function readLiveRevisionId(
   return typeof live === "string" ? live : null;
 }
 
-// The revision-aware mount decision (GATEWAY-RELEASES-SPEC). An approved user
+// The revision-aware mount decision (GATEWAY-RELEASES-SPEC). An assigned builder
 // mounts on the pod's revision iff:
 //   - the pod has NO revision (legacy pod) → mount (byte-identical to today); or
 //   - the user has an assignment doc → only on that assignment's revision; or
@@ -147,8 +147,8 @@ export async function readLiveRevisionId(
 //     (never on both revisions of a rolling gateway). When the live revision is
 //     unknown (pre-backfill), a gap user still mounts — the safe default that
 //     preserves today's single-revision behavior.
-// Approval is decided by the caller from the user mirror; this predicate never
-// re-decides approval.
+// Builder placement is decided by the caller from the user mirror; this predicate
+// only resolves the serving revision.
 export function mountsOnRevision(input: {
   podRevisionId: string;
   liveRevisionId: string | null;

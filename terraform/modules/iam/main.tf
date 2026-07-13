@@ -202,9 +202,9 @@ resource "google_service_account_iam_member" "glm_controller_gateway_sa_policy_b
 # Firestore triggers run as the project's default compute SA, which carries
 # datastore.user but no Firebase Auth reach. onUserComplete re-checks the
 # Firebase Auth `emailVerified` flag (getAuth().getUser()) as the signup
-# approval gate — the client-side onboarding AuthGuard is bypassable, so the
+# email-verification gate — the client-side onboarding AuthGuard is bypassable, so the
 # server is the authority. Without this read grant that lookup throws before the
-# trigger writes `approved`, and every new signup stalls unprovisioned. Viewer
+# trigger starts provisioning, and every new signup stalls unprovisioned. Viewer
 # is the least privilege that satisfies firebaseauth.users.get.
 data "google_project" "this" {
   project_id = var.project_id

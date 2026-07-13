@@ -4,6 +4,7 @@ import {
 } from "../entrypoints/fleet-controller.js";
 import {
   ASSIGN_CUSTOMER_GATEWAY_USAGE,
+  isBulkAssignmentCandidate,
   parseAssignCustomerGatewayArgs,
   readGatewayProfile,
   resolveOpsAssignmentTarget,
@@ -46,6 +47,20 @@ describe("fleet-controller entrypoint config", () => {
 });
 
 describe("assign-customer-gateway args", () => {
+  it("bulk-selects only identity-complete builders whose provisioning has started", () => {
+    expect(isBulkAssignmentCandidate({
+      username: "alice",
+      onboardingStep: "complete",
+      provisioning: { status: "in_progress", openclaw: {} },
+    })).toBe(true);
+    expect(isBulkAssignmentCandidate({ username: "partial" })).toBe(false);
+    expect(isBulkAssignmentCandidate({
+      username: "service",
+      onboardingStep: "complete",
+      provisioning: { status: "queued", openclaw: {} },
+    })).toBe(false);
+  });
+
   it("accepts uid-targeted dry runs", () => {
     expect(parseAssignCustomerGatewayArgs([
       "--env=prod",

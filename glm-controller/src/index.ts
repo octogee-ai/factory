@@ -2865,7 +2865,7 @@ export async function readMigrationUserSnapshot(
 ): Promise<FleetBrokerUserSnapshot | null> {
   const userSnap = await db.collection("users").doc(uid).get();
   const data = userSnap.data() as Record<string, unknown> | undefined;
-  if (!userSnap.exists || !data || data.approved !== true) return null;
+  if (!userSnap.exists || !data) return null;
   const slug = slugFromAssignedUser(data);
   if (!slug) return null;
   const workspaceRef = db.collection("workspaces").doc(slug);

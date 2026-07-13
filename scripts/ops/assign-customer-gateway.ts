@@ -11,6 +11,7 @@ import {
 } from "../../shared/types/glm.js";
 import { readGatewayAuthorization } from "@octogee/core/gateway-live-release";
 import {
+  resolveOnboardingPlacementEligibility,
   resolveOnboardingPlacementForUid,
   type OnboardingOrchestratorConfig,
   type OnboardingPlacementDecision,
@@ -62,6 +63,14 @@ export async function readGatewayProfile(
 
 export type OpsAssignmentTarget = OnboardingPlacementDecision;
 
+export function isBulkAssignmentCandidate(data: Record<string, unknown>): boolean {
+  const eligibility = resolveOnboardingPlacementEligibility(data);
+  if (!eligibility.eligible) return false;
+  const provisioning = data.provisioning as Record<string, unknown>;
+  const openclaw = provisioning.openclaw as Record<string, unknown> | undefined;
+  return typeof openclaw?.gatewayId !== "string";
+}
+
 export function resolveOpsAssignmentTarget(
   uid: string,
   config: OnboardingOrchestratorConfig,
@@ -87,17 +96,7 @@ function modelMetadataPatch(
   return patch;
 }
 
-function metadataNeedsRepair(openclaw: Record<string, unknown> | undefined): boolean {
-  return Boolean(
-    openclaw &&
-      ("onboardingCohortId" in openclaw ||
-        "initialModelProvider" in openclaw ||
-        "initialModel" in openclaw ||
-        "initialModelReasoningEffort" in openclaw),
-  );
-}
-
-async function assignOne(
+export async function assignOne(
   db: Firestore,
   uid: string,
   opts: { dryRun: boolean },
@@ -109,11 +108,12 @@ async function assignOne(
   }
   const data = snap.data() ?? {};
   const openclaw = data.provisioning?.openclaw as Record<string, unknown> | undefined;
-  const slug = typeof openclaw?.slug === "string" ? openclaw.slug : "?";
-
-  if (data.approved !== true) {
-    return { kind: "not-ready", uid, slug, reason: "not-approved" };
+  const eligibility = resolveOnboardingPlacementEligibility(data);
+  if (!eligibility.eligible) {
+    return { kind: "not-ready", uid, slug: "?", reason: `builder-not-eligible:${eligibility.reason}` };
   }
+  const slug = eligibility.slug;
+
   const config = await readOrchestratorConfig(db);
   if (config === null) {
     return { kind: "not-ready", uid, slug, reason: "config-missing" };
@@ -125,14 +125,24 @@ async function assignOne(
     return { kind: "not-ready", uid, slug, reason: "gateway-config-missing" };
   }
   const current: string | null = typeof openclaw?.gatewayId === "string" ? openclaw.gatewayId : null;
-  const currentProfile = normalizeGatewayProfile(openclaw?.gatewayProfile);
   if (current === target) {
-    if (!opts.dryRun && (currentProfile !== targetProfile || metadataNeedsRepair(openclaw))) {
-      await userRef.update({
-        "provisioning.openclaw.gatewayProfile": targetProfile,
-        "provisioning.openclaw.shellsEnabled": false,
-        ...modelMetadataPatch(openclaw),
+    if (!opts.dryRun) {
+      const committed = await commitPlacementAtomic(db as unknown as PlacementFirestore, {
+        uid,
+        slug,
+        gatewayId: target,
+        source: "repair",
+        now: Date.now(),
+        assignmentWrite: "create-if-missing",
+        mirrorPatch: {
+          "provisioning.openclaw.gatewayProfile": targetProfile,
+          "provisioning.openclaw.shellsEnabled": false,
+          ...modelMetadataPatch(openclaw),
+        },
       });
+      if (committed.kind === "rejected") {
+        return { kind: "not-ready", uid, slug, reason: `placement-${committed.reason}` };
+      }
     }
     return {
       kind: "already-assigned",
@@ -275,17 +285,13 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     }
     uids.push(q.docs[0].id);
   } else if (opts.all) {
-
-const q = await db
-      .collection("users")
-      .where("approved", "==", true)
-      .get();
+    const q = await db.collection("users").get();
     for (const d of q.docs) {
-      if (!d.data().provisioning?.openclaw?.gatewayId) {
+      if (isBulkAssignmentCandidate(d.data())) {
         uids.push(d.id);
       }
     }
-     
+
     console.log(`Found ${uids.length} unassigned-complete user(s)`);
   }
 

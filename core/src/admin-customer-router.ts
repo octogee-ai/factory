@@ -654,7 +654,6 @@ router.get(
           ),
           modelCosts,
           createdAt: toISODate(d.createdAt),
-          approved: d.approved || false,
         });
       } catch (e) { next(e); }
     },

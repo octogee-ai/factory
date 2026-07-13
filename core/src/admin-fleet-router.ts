@@ -582,7 +582,7 @@ function shouldIncludeOnboardingCustomer(input: {
   config: OnboardingOrchestratorConfig;
 }): boolean {
   return (
-    input.data.approved === true ||
+    asStringOrNull(input.data.username) !== null ||
     readUserGatewayId(input.data) !== null ||
     Boolean(input.config.overrides?.[input.uid])
   );
@@ -2245,7 +2245,6 @@ interface PendingPlacement {
   email: string;
   currentGatewayId: string | null;
   reason: "never-assigned" | "gateway-gone";
-  approvedAt: string | null;
 }
 
 interface UserPlacement {
@@ -2263,12 +2262,11 @@ function classifyUserPlacement(
     (data.provisioning as Record<string, unknown> | undefined) ?? {};
   const openclaw =
     (provisioning.openclaw as Record<string, unknown> | undefined) ?? {};
-  const slug = typeof openclaw.slug === "string" ? openclaw.slug : null;
+  const slug = userSlug(data) || null;
   const gid =
     typeof openclaw.gatewayId === "string" ? openclaw.gatewayId : null;
   const username = typeof data.username === "string" ? data.username : "";
   const email = typeof data.email === "string" ? data.email : "";
-  const approvedAt = toIso(data.approvedAt);
 
   if (!gid) {
     return {
@@ -2280,7 +2278,6 @@ function classifyUserPlacement(
         email,
         currentGatewayId: null,
         reason: "never-assigned",
-        approvedAt,
       },
     };
   }
@@ -2295,7 +2292,6 @@ function classifyUserPlacement(
         email,
         currentGatewayId: gid,
         reason: "gateway-gone",
-        approvedAt,
       },
     };
   }
@@ -2336,7 +2332,8 @@ function userSlug(data: Record<string, unknown>): string {
     (data.provisioning as Record<string, unknown> | undefined) ?? {};
   const openclaw =
     (provisioning.openclaw as Record<string, unknown> | undefined) ?? {};
-  return typeof openclaw.slug === "string" ? openclaw.slug : "";
+  if (typeof openclaw.slug === "string") return openclaw.slug;
+  return typeof data.username === "string" ? data.username : "";
 }
 
 function shapeDrawerOperation(
@@ -3314,7 +3311,7 @@ interface BuilderCandidateDoc {
 }
 
 export function buildBuilderCandidates(opts: {
-  approvedUsers: BuilderCandidateDoc[];
+  users: BuilderCandidateDoc[];
   gatewayRoots: BuilderCandidateDoc[];
   reservations: BuilderCandidateDoc[];
   workspaceSlugsForUser: FleetRouterDeps["workspaceSlugsForUser"];
@@ -3338,7 +3335,7 @@ export function buildBuilderCandidates(opts: {
     if (status !== "released") assigned.add(doc.id);
   }
 
-  const candidates = opts.approvedUsers.map((doc) => {
+  const candidates = opts.users.map((doc) => {
     const data = doc.data();
     const ownReservation =
       data.operatorGatewayReservation &&
@@ -3770,7 +3767,7 @@ router.get(
         const [gwSnap, glmSnap, usersSnap] = await Promise.all([
           db.collection("gateways").get(),
           db.collection(GLM_GATEWAYS_COLLECTION).get(),
-          db.collection("users").where("approved", "==", true).get(),
+          db.collection("users").get(),
         ]);
 
         const legacyById = indexFirestoreDocs(gwSnap.docs);
@@ -3799,16 +3796,18 @@ router.get(
         const assignedByGateway = new Map<string, number>();
         const mountedByGateway = new Map<string, number>();
         const pendingPlacements: PendingPlacement[] = [];
-        let totalApproved = 0;
+        let totalBuilders = 0;
         let assigned = 0;
         let unassigned = 0;
         let mounted = 0;
 
         for (const doc of usersSnap.docs) {
-          totalApproved++;
+          const data = doc.data() as Record<string, unknown>;
+          if (!userSlug(data)) continue;
+          totalBuilders++;
           const placement = classifyUserPlacement(
             doc.id,
-            doc.data() as Record<string, unknown>,
+            data,
             gateways,
           );
           if (placement.pending) pendingPlacements.push(placement.pending);
@@ -3841,7 +3840,7 @@ router.get(
 
         res.json({
           stats: {
-            totalApproved,
+            totalBuilders,
             assigned,
             unassigned,
             mounted,
@@ -3864,7 +3863,7 @@ router.get(
         const id = req.params.id as string;
         const [runtime, usersSnap, opsSnap] = await Promise.all([
           readDurableGatewayRuntime(db, id),
-          db.collection("users").where("approved", "==", true).get(),
+          db.collection("users").get(),
           db
             .collection(GLM_OPERATIONS_COLLECTION)
             .where("gatewayId", "==", id)
@@ -3911,12 +3910,12 @@ router.get(
     async (_req: Request, res: Response, next: NextFunction) => {
       try {
         const [usersSnap, gatewaySnap, reservationsSnap] = await Promise.all([
-          db.collection("users").where("approved", "==", true).get(),
+          db.collection("users").get(),
           db.collection(GATEWAYS_COLLECTION).get(),
           db.collection(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION).get(),
         ]);
         const candidates = buildBuilderCandidates({
-          approvedUsers: usersSnap.docs,
+          users: usersSnap.docs,
           gatewayRoots: gatewaySnap.docs,
           reservations: reservationsSnap.docs,
           workspaceSlugsForUser: deps.workspaceSlugsForUser,
@@ -4164,16 +4163,9 @@ router.post(
           res.status(404).json({ error: "user not found", uid });
           return;
         }
-        const userData = userSnap.data() as
-          | {
-              approved?: boolean;
-              provisioning?: { openclaw?: { gatewayId?: string; gatewayProfile?: unknown } };
-            }
-          | undefined;
-        if (!userData?.approved) {
-          res.status(409).json({ error: "user is not approved", uid });
-          return;
-        }
+        const userData = (userSnap.data() ?? {}) as {
+          provisioning?: { openclaw?: { gatewayId?: string; gatewayProfile?: unknown } };
+        };
         const target = await readDurableGatewayRuntime(db, body.gatewayId);
         if (!target) {
           res.status(404).json({
@@ -4212,38 +4204,26 @@ router.post(
           uid,
         );
         const gatewayProfile = shellState.gatewayProfile;
-        if (currentGid === body.gatewayId) {
-          if (normalizeGatewayProfile(userData.provisioning?.openclaw?.gatewayProfile) !== gatewayProfile) {
-            await db
-              .collection("users")
-              .doc(uid)
-              .update({
-                "provisioning.openclaw.gatewayProfile": gatewayProfile,
-                "provisioning.openclaw.shellsEnabled": shellState.shellsEnabled,
-              });
-            res.status(200).json({ uid, gatewayId: body.gatewayId, gatewayProfile, repaired: true });
-            return;
-          }
-          res.status(409).json({
-            error: "user already assigned to that gateway — no-op",
-            uid,
-            gatewayId: body.gatewayId,
-            gatewayProfile,
-          });
-          return;
-        }
         // Mirror AND the revision assignment doc commit together
         // (commitPlacementAtomic): on a backfilled gateway the customer gets a
         // serving assignment on the resolved revision instead of being left a
         // gap user; a legacy gateway keeps the mirror-only update byte-for-byte.
         const slug =
-          resolveCustomerSlug(userData as Record<string, unknown>, deps.workspaceSlugsForUser) ?? "";
+          resolveCustomerSlug(userData as Record<string, unknown>, deps.workspaceSlugsForUser);
+        if (!slug) {
+          res.status(409).json({
+            error: "customer has no canonical slug",
+            uid,
+          });
+          return;
+        }
         const placement = await commitPlacementAtomic(db as unknown as PlacementFirestore, {
           uid,
           slug,
           gatewayId: body.gatewayId,
           source: "repair",
           now: Date.now(),
+          assignmentWrite: currentGid === body.gatewayId ? "create-if-missing" : "upsert",
           mirrorPatch: {
             "provisioning.openclaw.gatewayId": body.gatewayId,
             "provisioning.openclaw.gatewayProfile": gatewayProfile,
@@ -4258,7 +4238,12 @@ router.post(
           });
           return;
         }
-        res.status(202).json({ uid, gatewayId: body.gatewayId, gatewayProfile });
+        res.status(currentGid === body.gatewayId ? 200 : 202).json({
+          uid,
+          gatewayId: body.gatewayId,
+          gatewayProfile,
+          ...(currentGid === body.gatewayId ? { repaired: true } : {}),
+        });
       } catch (e) {
         next(e);
       }

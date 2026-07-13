@@ -320,12 +320,6 @@ export async function requestBuilderActivationLease(opts: {
   }
   const userData = userSnap.data() as Record<string, unknown>;
   const currentGatewayId = readUserGatewayId(userData);
-  if (userData.approved !== true) {
-    return {
-      statusCode: 409,
-      body: { code: "user-not-approved", error: "user is not approved", uid },
-    };
-  }
   const builderSlug = resolveCustomerSlug(userData, opts.workspaceSlugsForUser);
   if (!builderSlug) {
     return {
@@ -479,7 +473,6 @@ export function activationLeaseMissCanMintTicket(result: BuilderActivationLeaseR
     code === "no-current-gateway-assignment" ||
     code === "no-owned-dedicated-activation-gateway" ||
     code === "multiple-owned-activation-gateways" ||
-    code === "user-not-approved" ||
     code === "no-resolvable-builder-slug"
   );
 }

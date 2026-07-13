@@ -207,7 +207,6 @@ describe("markProvisioningComplete — system/config (privilege fields only)", (
     expect(cfg?.updatedAt).toBeDefined();
     expect(cfg?.provisioning).toBeUndefined();
     expect(cfg?.mattermost).toBeUndefined();
-    expect(cfg?.approved).toBeUndefined();
     expect(cfg?.tier).toBeUndefined();
     expect(cfg?.selectedTier).toBeUndefined();
   });

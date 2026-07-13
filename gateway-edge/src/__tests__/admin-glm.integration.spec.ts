@@ -533,7 +533,6 @@ describe("Admin onboarding placement", () => {
     });
     usersDocs = {
       "uid-alice": {
-        approved: true,
         username: "alice",
         provisioning: {
           openclaw: {
@@ -584,7 +583,6 @@ describe("Admin onboarding placement", () => {
     seedDurableGateway("gw-new");
     usersDocs = {
       "uid-alice": {
-        approved: true,
         username: "alice",
         provisioning: { openclaw: { slug: "alice", gatewayId: "gw-new" } },
       },
@@ -2245,37 +2243,32 @@ describe("GET /api/admin/customers/by-slug/:slug — slug→uid lookup", () => {
 });
 
 describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
-  it("buckets approved users into mounted / assigned-not-mounted / unassigned", async () => {
+  it("buckets every builder into mounted / assigned-not-mounted / unassigned", async () => {
     seedDurableGateway("default", {
       heartbeat: { status: "ready", mountedCustomers: ["alice", "bob"] },
     });
     usersDocs = {
       "uid-alice": {
-        approved: true,
         username: "alice",
         email: "alice@example.com",
         provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
       },
       "uid-bob": {
-        approved: true,
         username: "bob",
         email: "bob@example.com",
         provisioning: { openclaw: { slug: "bob", gatewayId: "default" } },
       },
       "uid-carol": {
-        approved: true,
         username: "carol",
         email: "carol@example.com",
         provisioning: { openclaw: { slug: "carol", gatewayId: "default" } },
       },
       "uid-dave": {
-        approved: true,
         username: "dave",
         email: "dave@example.com",
         provisioning: {},
       },
       "uid-eve": {
-        approved: false,
         username: "eve",
         email: "eve@example.com",
         provisioning: { openclaw: { slug: "eve", gatewayId: "default" } },
@@ -2285,11 +2278,11 @@ describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
     const res = await request(app).get("/api/admin/customer-distribution");
     expect(res.status).toBe(200);
     expect(res.body.stats).toMatchObject({
-      totalApproved: 4,
-      assigned: 3,
+      totalBuilders: 5,
+      assigned: 4,
       unassigned: 1,
       mounted: 2,
-      assignedNotMounted: 1,
+      assignedNotMounted: 2,
     });
     expect(res.body.pendingPlacements).toHaveLength(1);
     expect(res.body.pendingPlacements[0]).toMatchObject({
@@ -2302,7 +2295,7 @@ describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
       expect.objectContaining({
         gatewayId: "default",
         status: "ready",
-        assignedCount: 3,
+        assignedCount: 4,
         mountedCount: 2,
       }),
     ]);
@@ -2314,7 +2307,6 @@ describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
     });
     usersDocs = {
       "uid-orphan": {
-        approved: true,
         username: "orphan",
         email: "orphan@example.com",
         provisioning: { openclaw: { slug: "orphan", gatewayId: "gw-deleted" } },
@@ -2331,7 +2323,7 @@ describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
     });
   });
 
-  it("returns empty buckets when no approved users exist", async () => {
+  it("returns empty buckets when no builders exist", async () => {
     seedDurableGateway("default", {
       heartbeat: { status: "ready", mountedCustomers: [] },
     });
@@ -2340,7 +2332,7 @@ describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
     const res = await request(app).get("/api/admin/customer-distribution");
     expect(res.status).toBe(200);
     expect(res.body.stats).toMatchObject({
-      totalApproved: 0,
+      totalBuilders: 0,
       assigned: 0,
       unassigned: 0,
       mounted: 0,
@@ -2350,12 +2342,12 @@ describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
 });
 
 describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
-  it("writes provisioning.openclaw.gatewayId on the user doc", async () => {
+  it("writes placement without a separate eligibility field", async () => {
     seedDurableGateway("default", {
       heartbeat: { status: "ready", mountedCustomers: [] },
     });
     usersDocs = {
-      "uid-dave": { approved: true, username: "dave", email: "dave@example.com" },
+      "uid-dave": { username: "dave", email: "dave@example.com" },
     };
     const app = buildApp();
     const res = await request(app)
@@ -2387,7 +2379,7 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
       },
     });
     usersDocs = {
-      "uid-dave": { approved: true, username: "dave", email: "dave@example.com" },
+      "uid-dave": { username: "dave", email: "dave@example.com" },
     };
     const app = buildApp();
     const res = await request(app)
@@ -2427,21 +2419,8 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
     expect(res.body.error).toMatch(/user not found/);
   });
 
-  it("returns 409 when the user is not approved", async () => {
-    gatewaysDocs = { "default": { status: "ready" } };
-    usersDocs = {
-      "uid-pending": { approved: false, username: "pending", email: "pending@example.com" },
-    };
-    const app = buildApp();
-    const res = await request(app)
-      .post("/api/admin/customers/uid-pending/assign")
-      .send({ gatewayId: "default" });
-    expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/not approved/);
-  });
-
   it("returns 404 when the target gateway is not registered", async () => {
-    usersDocs = { "uid-dave": { approved: true } };
+    usersDocs = { "uid-dave": { username: "dave" } };
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/customers/uid-dave/assign")
@@ -2454,7 +2433,7 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
     seedDurableGateway("default", {
       heartbeat: { status: "booting", mountedCustomers: [] },
     });
-    usersDocs = { "uid-dave": { approved: true } };
+    usersDocs = { "uid-dave": { username: "dave" } };
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/customers/uid-dave/assign")
@@ -2463,22 +2442,88 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
     expect(res.body.error).toMatch(/not ready/);
   });
 
-  it("returns 409 when the user is already assigned to that gateway (no-op)", async () => {
+  it("repairs a missing durable assignment when the mirror already targets that gateway", async () => {
     seedDurableGateway("default", {
       heartbeat: { status: "ready", mountedCustomers: [] },
     });
     usersDocs = {
       "uid-alice": {
-        approved: true,
-        provisioning: { openclaw: { gatewayId: "default" } },
+        username: "alice",
+        provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
       },
     };
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/customers/uid-alice/assign")
       .send({ gatewayId: "default" });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body).toMatchObject({ repaired: true, gatewayId: "default" });
+    expect(calls).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        collection: "gateways/default/assignments",
+        op: "doc.set",
+        docId: "uid-alice",
+        data: expect.objectContaining({ source: "repair", slug: "alice" }),
+      }),
+    ]));
+  });
+
+  it("preserves an in-flight assignment when same-target repair races a roll", async () => {
+    seedDurableGateway("default", {
+      heartbeat: { status: "ready", mountedCustomers: [] },
+    });
+    usersDocs = {
+      "uid-alice": {
+        username: "alice",
+        provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
+      },
+    };
+    const existing = {
+      uid: "uid-alice",
+      slug: "alice",
+      gatewayId: "default",
+      revisionId: "default-r1",
+      release: 1,
+      source: "migration",
+      state: "quiescing",
+      epoch: 7,
+      updatedAt: 90,
+      updatedByOperationId: "roll-default-r2",
+    };
+    gatewayAssignmentsDocs["default/uid-alice"] = existing;
+
+    const res = await request(buildApp())
+      .post("/api/admin/customers/uid-alice/assign")
+      .send({ gatewayId: "default" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(gatewayAssignmentsDocs["default/uid-alice"]).toEqual(existing);
+    expect(calls).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        collection: "gateways/default/assignments",
+        op: "doc.set",
+        docId: "uid-alice",
+      }),
+    ]));
+  });
+
+  it("rejects assignment when the builder has no canonical slug", async () => {
+    seedDurableGateway("default", {
+      heartbeat: { status: "ready", mountedCustomers: [] },
+    });
+    usersDocs = {
+      "uid-orphan": {
+        provisioning: { openclaw: { gatewayId: "default" } },
+      },
+    };
+
+    const res = await request(buildApp())
+      .post("/api/admin/customers/uid-orphan/assign")
+      .send({ gatewayId: "default" });
+
     expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/already assigned/);
+    expect(res.body.error).toMatch(/canonical slug/i);
+    expect(gatewayAssignmentsDocs["default/uid-orphan"]).toBeUndefined();
   });
 });
 
@@ -2490,7 +2535,6 @@ describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
     });
     usersDocs = {
       "uid-alice": {
-        approved: true,
         username: "alice",
         email: "alice@octogee.com",
         throttleLevel: 0,
@@ -2498,7 +2542,6 @@ describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
         provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
       },
       "uid-bob": {
-        approved: true,
         username: "bob",
         email: "bob@octogee.com",
         throttleLevel: 2,
@@ -2506,7 +2549,6 @@ describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
         provisioning: { openclaw: { slug: "bob", gatewayId: "default" } },
       },
       "uid-carol": {
-        approved: true,
         username: "carol",
         email: "carol@octogee.com",
         provisioning: { openclaw: { slug: "carol", gatewayId: "gw-other" } },

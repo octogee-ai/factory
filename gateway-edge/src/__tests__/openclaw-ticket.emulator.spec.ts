@@ -195,7 +195,6 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
 
   it("defers the ticket and queues an activation migration when the owned builder gateway is ready", async () => {
     await db.doc("users/caller-uid").set({
-      approved: true,
       username: "alice",
       provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
     });
@@ -240,7 +239,6 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
 
   it("wakes a paused dedicated gateway and waits to mint until it reports ready", async () => {
     await db.doc("users/caller-uid").set({
-      approved: true,
       username: "alice",
       provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
     });
@@ -273,7 +271,6 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
 
   it("auto-activates an owned operator gateway when it is the only dedicated target", async () => {
     await db.doc("users/caller-uid").set({
-      approved: true,
       username: "alice",
       provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
     });

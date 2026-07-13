@@ -553,7 +553,7 @@ describe("commitPlacementAtomic", () => {
 
   it("un-backfilled gateway (no GatewayDoc): writes ONLY the mirror, byte-identical to today", async () => {
     const { db, store } = mkDb({
-      "users/u1": { approved: true },
+      "users/u1": { tier: "trial" },
     });
     const res = await commitPlacementAtomic(db, {
       uid: "u1", slug: "s1", gatewayId: "default", source: "onboarding", now: 100, mirrorPatch: mirror,
@@ -566,7 +566,7 @@ describe("commitPlacementAtomic", () => {
 
   it("rejects an existing malformed root instead of falling back to a mirror-only legacy write", async () => {
     const { db, store } = mkDb({
-      "users/u1": { approved: true },
+      "users/u1": { tier: "trial" },
       "gateways/default": { gatewayId: "default", status: "ready" },
     });
 
@@ -575,7 +575,7 @@ describe("commitPlacementAtomic", () => {
     });
 
     expect(res).toEqual({ kind: "rejected", reason: "gateway-root-invalid" });
-    expect(store.get("users/u1")).toEqual({ approved: true });
+    expect(store.get("users/u1")).toEqual({ tier: "trial" });
     expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
   });
 
@@ -583,7 +583,7 @@ describe("commitPlacementAtomic", () => {
     "rejects a %s durable root without writing a mirror or assignment",
     async (desiredStatus) => {
       const { db, store } = mkDb({
-        "users/u1": { approved: true },
+        "users/u1": { tier: "trial" },
         "gateways/default": backfilled({ desiredStatus }),
         "glmGateways/default-r3": runtimeRevision(),
       });
@@ -593,7 +593,7 @@ describe("commitPlacementAtomic", () => {
       });
 
       expect(res).toEqual({ kind: "rejected", reason: "gateway-not-running" });
-      expect(store.get("users/u1")).toEqual({ approved: true });
+      expect(store.get("users/u1")).toEqual({ tier: "trial" });
       expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
     },
   );
@@ -601,7 +601,7 @@ describe("commitPlacementAtomic", () => {
   it("reads desiredStatus from the transaction snapshot before writing placement", async () => {
     const { db, store } = mkDb(
       {
-        "users/u1": { approved: true },
+        "users/u1": { tier: "trial" },
         "gateways/default": backfilled(),
         "glmGateways/default-r3": runtimeRevision(),
       },
@@ -615,13 +615,13 @@ describe("commitPlacementAtomic", () => {
     });
 
     expect(res).toEqual({ kind: "rejected", reason: "gateway-not-running" });
-    expect(store.get("users/u1")).toEqual({ approved: true });
+    expect(store.get("users/u1")).toEqual({ tier: "trial" });
     expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
   });
 
   it("steady backfilled gateway: writes mirror + assignment at the LIVE revision (serving, epoch 0)", async () => {
     const { db, store } = mkDb({
-      "users/u1": { approved: true },
+      "users/u1": { tier: "trial" },
       "gateways/default": backfilled(),
       "glmGateways/default-r3": runtimeRevision(),
     });
@@ -636,9 +636,44 @@ describe("commitPlacementAtomic", () => {
     expect(store.get("users/u1")).toMatchObject({ "provisioning.openclaw.gatewayId": "default" });
   });
 
+  it("create-if-missing repair preserves an existing in-flight assignment byte-for-byte", async () => {
+    const existing = {
+      uid: "u1",
+      slug: "s1",
+      gatewayId: "default",
+      revisionId: "default-r3",
+      release: 3,
+      source: "migration",
+      state: "quiescing",
+      epoch: 7,
+      updatedAt: 90,
+      updatedByOperationId: "roll-default-r4",
+    };
+    const { db, store } = mkDb({
+      "users/u1": { tier: "trial" },
+      "gateways/default": backfilled(),
+      "gateways/default/assignments/u1": existing,
+      "glmGateways/default-r3": runtimeRevision(),
+    });
+
+    const res = await commitPlacementAtomic(db, {
+      uid: "u1",
+      slug: "s1",
+      gatewayId: "default",
+      source: "repair",
+      now: 100,
+      mirrorPatch: mirror,
+      assignmentWrite: "create-if-missing",
+    });
+
+    expect(res).toEqual({ kind: "assignment-preserved" });
+    expect(store.get("gateways/default/assignments/u1")).toEqual(existing);
+    expect(store.get("users/u1")).toMatchObject({ "provisioning.openclaw.gatewayId": "default" });
+  });
+
   it("roll accepting new assignments: places on the TARGET revision, not the live one", async () => {
     const { db, store } = mkDb({
-      "users/u1": { approved: true },
+      "users/u1": { tier: "trial" },
       "gateways/default": backfilled({
         liveRevisionId: "default-r3",
         liveRelease: 3,
@@ -659,7 +694,7 @@ describe("commitPlacementAtomic", () => {
 
   it("rejects when the resolved revision is not serving (revision-not-ready) and writes NOTHING", async () => {
     const { db, store } = mkDb({
-      "users/u1": { approved: true },
+      "users/u1": { tier: "trial" },
       "gateways/default": backfilled(),
       "glmGateways/default-r3": runtimeRevision("default-r3", 3, "warming"),
     });
@@ -667,13 +702,13 @@ describe("commitPlacementAtomic", () => {
       uid: "u1", slug: "s1", gatewayId: "default", source: "onboarding", now: 100, mirrorPatch: mirror,
     });
     expect(res).toEqual({ kind: "rejected", reason: "revision-not-ready" });
-    expect(store.get("users/u1")).toEqual({ approved: true }); // mirror untouched
+    expect(store.get("users/u1")).toEqual({ tier: "trial" }); // mirror untouched
     expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
   });
 
   it("rejects a serving target whose revision identity or release is not canonical", async () => {
     const { db, store } = mkDb({
-      "users/u1": { approved: true },
+      "users/u1": { tier: "trial" },
       "gateways/default": backfilled({ liveRevisionId: "default-r4", liveRelease: 3 }),
       "glmGateways/default-r4": {
         docKind: "revision",
@@ -689,13 +724,13 @@ describe("commitPlacementAtomic", () => {
     });
 
     expect(res).toEqual({ kind: "rejected", reason: "revision-identity-invalid" });
-    expect(store.get("users/u1")).toEqual({ approved: true });
+    expect(store.get("users/u1")).toEqual({ tier: "trial" });
     expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
   });
 
   it("rejects a serving realization that does not match the canonical target identity", async () => {
     const { db, store } = mkDb({
-      "users/u1": { approved: true },
+      "users/u1": { tier: "trial" },
       "gateways/default": backfilled(),
       "glmGateways/default-r3": runtimeRevision("default-r3", 4),
     });
@@ -705,13 +740,13 @@ describe("commitPlacementAtomic", () => {
     });
 
     expect(res).toEqual({ kind: "rejected", reason: "revision-identity-invalid" });
-    expect(store.get("users/u1")).toEqual({ approved: true });
+    expect(store.get("users/u1")).toEqual({ tier: "trial" });
     expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
   });
 
   it("rejects when a backfilled gateway has no live revision (no-live-revision)", async () => {
     const { db } = mkDb({
-      "users/u1": { approved: true },
+      "users/u1": { tier: "trial" },
       "gateways/default": backfilled({ liveRevisionId: null, liveRelease: null }),
     });
     const res = await commitPlacementAtomic(db, {
@@ -722,7 +757,7 @@ describe("commitPlacementAtomic", () => {
 
   it("mirror and assignment are all-or-nothing: neither lands if the commit throws", async () => {
     const { db, store } = mkDb({
-      "users/u1": { approved: true },
+      "users/u1": { tier: "trial" },
       "gateways/default": backfilled(),
       "glmGateways/default-r3": runtimeRevision(),
     });
@@ -761,7 +796,7 @@ describe("commitPlacementAtomic", () => {
       }),
     ).rejects.toThrow(/assignment write failed/);
     // Mirror update was committed with the assignment or not at all — never alone.
-    expect(store.get("users/u1")).toEqual({ approved: true });
+    expect(store.get("users/u1")).toEqual({ tier: "trial" });
     expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
   });
 });

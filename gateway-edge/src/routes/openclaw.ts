@@ -20,7 +20,14 @@ async function maybeRequestActivationBeforeTicket(
   uid: string,
   userData: Record<string, unknown> | undefined,
 ): Promise<{ statusCode: number; body: Record<string, unknown> } | null> {
-  if (userData?.approved !== true) return null;
+  const provisioning = userData?.provisioning as
+    | { openclaw?: { gatewayId?: unknown; slug?: unknown } }
+    | undefined;
+  const hasGateway = isValidGatewayId(provisioning?.openclaw?.gatewayId);
+  const hasSlug =
+    typeof provisioning?.openclaw?.slug === "string" ||
+    typeof userData?.username === "string";
+  if (!hasGateway || !hasSlug) return null;
   const result = await requestBuilderActivationLease({
     db,
     uid,

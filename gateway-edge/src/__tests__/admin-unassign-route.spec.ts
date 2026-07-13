@@ -129,7 +129,6 @@ function buildApp() {
 
 function seedMountedUser(uid: string, gatewayId: string) {
   state.store[`users/${uid}`] = {
-    approved: true,
     provisioning: { openclaw: { gatewayId, gatewayProfile: "shared", shellsEnabled: true } },
   };
 }
@@ -226,7 +225,7 @@ describe("POST /api/admin/customers/:uid/unassign", () => {
   });
 
   it("returns 409 when the customer is already unassigned", async () => {
-    state.store["users/u-none"] = { approved: true, provisioning: { openclaw: {} } };
+    state.store["users/u-none"] = { provisioning: { openclaw: {} } };
     const res = await request(app).post("/api/admin/customers/u-none/unassign");
     expect(res.status).toBe(409);
   });

@@ -717,7 +717,6 @@ describe("createHttpServer — admin gateway routes", () => {
 
   it("queues a builder activation lease migration when the owned builder gateway is ready", async () => {
     store.users["uid-alice"] = {
-      approved: true,
       username: "alice",
       provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
     };
@@ -779,7 +778,6 @@ describe("createHttpServer — admin gateway routes", () => {
 
   it("wakes a paused builder gateway without queuing migration until it is ready", async () => {
     store.users["uid-alice"] = {
-      approved: true,
       username: "alice",
       provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
     };

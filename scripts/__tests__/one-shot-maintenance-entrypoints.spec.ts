@@ -62,9 +62,12 @@ describe("cleanup-stale-smoke-docs helpers", () => {
     const oldCreatedAt = { toMillis: () => nowMs - STALE_SMOKE_DOC_AGE_MS - 1 };
     const freshCreatedAt = { toMillis: () => nowMs - STALE_SMOKE_DOC_AGE_MS + 1 };
 
-    expect(isStaleSmokeDoc({ createdAt: oldCreatedAt }, nowMs)).toBe(true);
-    expect(isStaleSmokeDoc({ createdAt: freshCreatedAt }, nowMs)).toBe(false);
+    expect(isStaleSmokeDoc({ createdAt: oldCreatedAt }, nowMs)).toBe(false);
+    expect(isStaleSmokeDoc({ acceptanceSmoke: true, createdAt: oldCreatedAt }, nowMs)).toBe(true);
+    expect(isStaleSmokeDoc({ acceptanceSmoke: true, createdAt: freshCreatedAt }, nowMs)).toBe(false);
+    expect(isStaleSmokeDoc({ acceptanceSmoke: true }, nowMs)).toBe(false);
     expect(isStaleSmokeDoc({
+      acceptanceSmoke: true,
       createdAt: oldCreatedAt,
       provisioning: { openclaw: { status: "complete" } },
     }, nowMs)).toBe(false);

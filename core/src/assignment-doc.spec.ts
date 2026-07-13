@@ -220,7 +220,7 @@ describe("resolvePlacementRevision", () => {
 });
 
 describe("mountsOnRevision", () => {
-  it("legacy pod (no revision env) mounts every approved user — byte-identical to today", () => {
+  it("legacy pod (no revision env) mounts every assigned user — byte-identical to today", () => {
     expect(mountsOnRevision({ podRevisionId: "", liveRevisionId: null, assignmentRevisionId: null })).toBe(true);
     expect(mountsOnRevision({ podRevisionId: "", liveRevisionId: "default-r1", assignmentRevisionId: "default-r9" })).toBe(true);
   });

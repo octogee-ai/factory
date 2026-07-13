@@ -559,7 +559,7 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
 describe("admin target resolution", () => {
   it("rejects manual assignment when only a bare glm desired doc claims readiness", async () => {
     const { app } = mkApp({
-      "users/uid-alice": { approved: true, username: "alice" },
+      "users/uid-alice": { username: "alice" },
       [`${GLM_GATEWAYS_COLLECTION}/legacy`]: {
         gatewayId: "legacy",
         desiredStatus: "running",
@@ -588,7 +588,7 @@ describe("admin target resolution", () => {
           operatorAccess: { shellsEnabled: true, reason: "owned-runtime-gateway" },
         },
       ),
-      "users/uid-alice": { approved: true, username: "alice" },
+      "users/uid-alice": { username: "alice" },
     });
 
     const res = await request(app)
@@ -615,7 +615,7 @@ describe("admin target resolution", () => {
       gatewayId: "target",
       heartbeat: { status: "ready" },
     };
-    seed["users/uid-alice"] = { approved: true, username: "alice" };
+    seed["users/uid-alice"] = { username: "alice" };
     const { app } = mkApp(seed);
 
     const res = await request(app)
@@ -628,7 +628,7 @@ describe("admin target resolution", () => {
 
   it("rejects operator activation when only a bare glm desired doc exists", async () => {
     const { app } = mkApp({
-      "users/uid-alice": { approved: true, username: "alice" },
+      "users/uid-alice": { username: "alice" },
       "operatorGatewayReservations/uid-alice": {
         uid: "uid-alice",
         builderSlug: "alice",

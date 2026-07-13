@@ -667,7 +667,7 @@ export async function findAssignedUserByAgentId(
     .get();
   for (const doc of snap.docs) {
     const data = doc.data() as Record<string, unknown> | undefined;
-    if (!data || data.approved !== true) continue;
+    if (!data) continue;
     if (agentBelongsToAssignedWorkspace(data, agentId)) {
       return { uid: doc.id, data };
     }
@@ -675,7 +675,7 @@ export async function findAssignedUserByAgentId(
   return null;
 }
 
-async function findApprovedUsersByAgentId(
+async function findUsersByAgentId(
   db: Firestore,
   agentId: string,
 ): Promise<Array<{ uid: string; data: Record<string, unknown> }>> {
@@ -692,7 +692,7 @@ async function findApprovedUsersByAgentId(
     for (const doc of snap.docs) {
       if (seen.has(doc.id)) continue;
       const data = doc.data() as Record<string, unknown> | undefined;
-      if (!data || data.approved !== true || !agentBelongsToAssignedWorkspace(data, agentId)) {
+      if (!data || !agentBelongsToAssignedWorkspace(data, agentId)) {
         continue;
       }
       seen.add(doc.id);
@@ -710,7 +710,7 @@ export async function findAssignedOrInboundMigratingUserByAgentId(
   const assigned = await findAssignedUserByAgentId(db, gatewayId, agentId);
   if (assigned) return assigned;
 
-  const candidates = await findApprovedUsersByAgentId(db, agentId);
+  const candidates = await findUsersByAgentId(db, agentId);
   for (const candidate of candidates) {
     if (await hasRunningInboundMigrationForUid(db, gatewayId, candidate.uid)) {
       return candidate;
@@ -857,7 +857,7 @@ async function isAssignedToGateway(
   const userData =
     data ??
     ((await db.collection("users").doc(uid).get()).data() as Record<string, unknown> | undefined);
-  if (!userData || userData.approved !== true) return null;
+  if (!userData) return null;
   return stringAt(userData, OPENCLAW_GATEWAY_ID_FIELD) === gatewayId ? userData : null;
 }
 
@@ -1083,8 +1083,8 @@ export async function legacyMacOpsTokenAllowed(
   return releaseMacOpsTokenProtocol(releaseSnap.data()?.payload) === 1;
 }
 
-// The roster (mount driver) predicate for one revision pod: an approved,
-// bare-assigned user mounts on the pod's revision iff mountsOnRevision says so
+// The roster (mount driver) predicate for one revision pod: a bare-assigned
+// user mounts on the pod's revision iff mountsOnRevision says so
 // (assignment doc → its revision; gap user → the live revision). Legacy pods
 // (empty revisionId) load nothing and mount everyone — byte-identical to today.
 export async function buildRosterRevisionFilter(
@@ -1213,7 +1213,7 @@ async function findAssignedUidBySlug(
     .get();
   for (const doc of snap.docs) {
     const data = doc.data() as Record<string, unknown> | undefined;
-    if (data?.approved !== true) continue;
+    if (!data) continue;
     if (slugFromAssignedUser(data) === slug) return doc.id;
   }
   return null;

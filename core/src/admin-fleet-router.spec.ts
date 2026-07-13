@@ -252,7 +252,6 @@ describe("fleet gateway projection", () => {
       config: { defaultGatewayId: "default", overrides: {} },
       users: {
         "uid-alice": {
-          approved: true,
           username: "alice",
           email: "alice@example.com",
           provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
@@ -299,7 +298,6 @@ describe("fleet gateway projection", () => {
       config: { defaultGatewayId: "default", overrides: {} },
       users: {
         "uid-alice": {
-          approved: true,
           username: "alice",
           email: "alice@example.com",
           provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
@@ -475,7 +473,6 @@ describe("onboarding placement (post-cohorts)", () => {
       config: { defaultGatewayId: "default", overrides: {} },
       users: {
         "uid-a": {
-          approved: true,
           username: "alice",
           email: "alice@example.com",
           provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
@@ -512,7 +509,6 @@ describe("onboarding placement (post-cohorts)", () => {
       config: { defaultGatewayId: "default", overrides: {} },
       users: {
         "uid-a": {
-          approved: true,
           username: "alice",
           email: "alice@example.com",
           provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
@@ -598,7 +594,6 @@ describe("onboarding placement (post-cohorts)", () => {
       config: { defaultGatewayId: "default-blue", overrides: {} },
       users: {
         "uid-ceckert": {
-          approved: true,
           username: "ceckert",
           email: "ceckert@example.com",
           provisioning: {

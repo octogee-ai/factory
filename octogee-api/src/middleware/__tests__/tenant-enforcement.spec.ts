@@ -22,7 +22,7 @@ function fakeDb(opts: {
   flows?: Record<string, FlowDoc>;
   operations?: Record<string, OperationDoc>;
   // gateways/{gatewayId}/assignments/{uid} — the Step 2 roster layer. Empty by
-  // default: the roster then falls back to the approved user mirror (legacy).
+  // default: the roster then falls back to the assigned user mirror (legacy).
   assignments?: Record<string, Record<string, Record<string, unknown>>>;
 }): Pick<Firestore, "collection"> {
   return {
@@ -86,12 +86,10 @@ function app(opts: {
       users:
         opts.users ?? {
           alice: {
-            approved: true,
             username: "alice",
             provisioning: { openclaw: { slug: "alice", gatewayId: "bender" } },
           },
           victim: {
-            approved: true,
             username: "victim",
             provisioning: { openclaw: { slug: "victim", gatewayId: "other" } },
           },

@@ -207,7 +207,6 @@ describe("activationLeaseMissCanMintTicket", () => {
     "no-current-gateway-assignment",
     "no-owned-dedicated-activation-gateway",
     "multiple-owned-activation-gateways",
-    "user-not-approved",
     "no-resolvable-builder-slug",
   ])("allows ticket minting for %s", (code) => {
     expect(activationLeaseMissCanMintTicket({ statusCode: 409, body: { code } })).toBe(true);
@@ -268,7 +267,6 @@ describe("requestBuilderActivationLease — durable root policy + revision telem
     const { db, accessed } = fakeDb({
       users: {
         "u-1": {
-          approved: true,
           username: "mira",
           provisioning: { openclaw: { gatewayId: "gw-builder" } },
         },
@@ -336,7 +334,6 @@ describe("requestBuilderActivationLease — durable root policy + revision telem
     const { db } = fakeDb({
       users: {
         "u-1": {
-          approved: true,
           username: "mira",
           provisioning: { openclaw: { gatewayId: "gw-shared" } },
         },

@@ -382,7 +382,6 @@ export async function listFleetGatewayRuntimes(
 interface UserDoc {
   username?: string;
   email?: string;
-  approved?: boolean;
   provisioning?: {
     openclaw?: {
       slug?: string;
@@ -518,7 +517,7 @@ async function lsCustomers(): Promise<void> {
     }
   }
 
-  let q: FirebaseFirestore.Query = db.collection("users").where("approved", "==", true);
+  let q: FirebaseFirestore.Query = db.collection("users");
   if (filter) {
     q = q.where("provisioning.openclaw.gatewayId", "==", filter);
   }
@@ -591,10 +590,6 @@ async function inspectCustomer(slug: string): Promise<void> {
     {
       field: "email",
       value: user.data.email ?? "-",
-    },
-    {
-      field: "approved",
-      value: user.data.approved === true ? "true" : "false",
     },
     {
       field: "openclaw.status",
@@ -691,10 +686,6 @@ async function addCustomer(slug: string, gatewayId: string, apply: boolean): Pro
   const user = await findUserBySlug(slug);
   if (!user) {
     console.error(red(`${CROSS} No user found with slug or username '${slug}'.`));
-    process.exit(1);
-  }
-  if (user.data.approved !== true) {
-    console.error(red(`${CROSS} User '${slug}' is not approved=true. Refusing to assign.`));
     process.exit(1);
   }
   const runtime = await readFleetGatewayRuntime(db, gatewayId);
