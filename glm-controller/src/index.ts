@@ -63,6 +63,7 @@ import {
 import { prepareGatewayConfigWithWorkloadIdentity } from "./gateway-workload-identity-config.js";
 import {
   gatewayEdgeServiceName,
+  gatewayPodServiceName,
   isGatewayDesiredDoc,
   isGatewayLegacyBackfill,
   isRevisionRealizationDoc,
@@ -3195,8 +3196,10 @@ async function buildHandlers(
         namespace: NAMESPACE,
         name: operatorGatewayServiceAccountName(gatewayId),
       }),
-    deleteGatewayEdgeService: async (gatewayId) =>
-      kubeOps.deleteService({ namespace: NAMESPACE, name: gatewayEdgeServiceName(gatewayId) }),
+    deleteGatewayAliasServices: async (gatewayId) => {
+      await kubeOps.deleteService({ namespace: NAMESPACE, name: gatewayEdgeServiceName(gatewayId) });
+      await kubeOps.deleteService({ namespace: NAMESPACE, name: gatewayPodServiceName(gatewayId) });
+    },
     deleteGatewayModelKeyKubeSecret: async (gatewayId) =>
       kubeOps.deleteSecret({ namespace: NAMESPACE, name: gatewayModelKeySecretName(gatewayId) }),
     deleteGatewayModelKeySource: async (gatewayId) => {
