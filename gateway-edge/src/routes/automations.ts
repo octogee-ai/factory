@@ -7,6 +7,7 @@ import { attachUpstreamRpcClient } from "../chat-proxy/openclaw/bridge-upstream-
 import { fetchGatewayAuth, persistGatewayDeviceToken } from "../chat-proxy/openclaw/gateway-token.js";
 import { openUpstream } from "../chat-proxy/openclaw/upstream.js";
 import { resolveUserGateway, type ResolvedGateway } from "../lib/user-gateway.js";
+import { resolveWorkspaceUid } from "../lib/workspace-resolution.js";
 
 const MAX_CRON_NAME_LENGTH = 160;
 const MAX_CRON_PROMPT_LENGTH = 20_000;
@@ -70,6 +71,7 @@ export interface AutomationHeartbeat {
 
 export interface AutomationsRouterDeps {
   resolveUserGateway(uid: string): Promise<ResolvedGateway | null>;
+  resolveWorkspaceOwnerUid(slug: string): Promise<string | null>;
   localGatewayId(): string | null;
   invoke(method: string, params: Record<string, unknown>): Promise<unknown>;
 }
@@ -333,7 +335,7 @@ async function callerJob(
 async function authorize(
   req: Request,
   res: Response,
-  deps: Pick<AutomationsRouterDeps, "resolveUserGateway" | "localGatewayId">,
+  deps: Pick<AutomationsRouterDeps, "resolveUserGateway" | "resolveWorkspaceOwnerUid" | "localGatewayId">,
 ): Promise<ResolvedGateway | null> {
   const gatewayId = requestedGatewayId(req);
   if (!gatewayId || deps.localGatewayId() !== gatewayId) {
@@ -343,6 +345,10 @@ async function authorize(
   const resolved = await deps.resolveUserGateway(req.uid!);
   if (!resolved || resolved.gatewayId !== gatewayId) {
     res.status(404).json({ error: "not_found" });
+    return null;
+  }
+  if (await deps.resolveWorkspaceOwnerUid(resolved.slug) !== req.uid) {
+    res.status(403).json({ error: "forbidden" });
     return null;
   }
   return resolved;
@@ -361,8 +367,18 @@ function brokerError(status: number, error: string): BrokerResponse {
   return { status, body: { error } };
 }
 
+const AUTOMATION_METHODS = new Set([
+  "cron.list",
+  "cron.runs",
+  "cron.add",
+  "cron.update",
+  "cron.run",
+  "heartbeat.get",
+  "heartbeat.update",
+]);
+
 function cronJobOperation(method: string): boolean {
-  return ["cron.get", "cron.update", "cron.remove", "cron.run", "cron.runs"].includes(method);
+  return ["cron.update", "cron.run", "cron.runs"].includes(method);
 }
 
 async function listCronJobs(deps: AutomationsRouterDeps, agentId: string): Promise<BrokerResponse> {
@@ -400,9 +416,7 @@ async function existingCronJobOperation(
   if (!params || !id) return brokerError(400, "invalid automation id");
   const current = await callerJob(deps, id, agentId);
   if (!current) return brokerError(404, "not_found");
-  if (method === "cron.get") return brokerResult(current);
   if (method === "cron.update") return updateCronJob(deps, id, params);
-  if (method === "cron.remove") return brokerResult(await deps.invoke("cron.remove", { id }));
   if (method === "cron.run") return brokerResult(await deps.invoke("cron.run", { id, mode: "force" }));
   return brokerResult(await deps.invoke("cron.runs", { id, limit: 20, sortDir: "desc" }));
 }
@@ -443,6 +457,7 @@ async function automationResponse(
   deps: AutomationsRouterDeps,
 ): Promise<BrokerResponse> {
   const method = typeof body.method === "string" ? body.method : "";
+  if (!AUTOMATION_METHODS.has(method)) return brokerError(400, "unsupported automation operation");
   const agentId = coachAgentId(resolved.slug);
   if (method === "cron.list") return listCronJobs(deps, agentId);
   const params = record(body.params);
@@ -506,6 +521,7 @@ async function invokeLocalOpenClaw(method: string, params: Record<string, unknow
 
 const automationsRouter = createAutomationsRouter({
   resolveUserGateway,
+  resolveWorkspaceOwnerUid: resolveWorkspaceUid,
   localGatewayId: () => process.env.GATEWAY_ID ?? null,
   invoke: invokeLocalOpenClaw,
 });

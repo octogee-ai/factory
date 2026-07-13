@@ -32,6 +32,7 @@ function appForTest(overrides: Partial<Parameters<typeof createAutomationsRouter
     "/api/g/:gatewayId/automations",
     createAutomationsRouter({
       resolveUserGateway: async () => ({ slug: "alice", gatewayId: "gw-alice" }),
+      resolveWorkspaceOwnerUid: async () => "builder-uid",
       localGatewayId: () => "gw-alice",
       invoke,
       ...overrides,
@@ -108,38 +109,16 @@ describe("automations locality broker", () => {
     });
   });
 
-  it("does not return a raw cron job from an A2 get request", async () => {
-    const rawJob = {
-      id: "daily-digest",
-      agentId: "octogee-alice-coach",
-      name: "Daily digest",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "Summarize the day." },
-      delivery: { mode: "webhook", to: "https://secret.example/hook" },
-    };
-    const { app } = appForTest({
-      invoke: vi.fn(async (method: string) => method === "cron.get" ? rawJob : { jobs: [] }),
-    });
+  it.each(["cron.get", "cron.remove"])("rejects unsupported browser operation %s without invoking OpenClaw", async (method) => {
+    const { app, invoke } = appForTest();
 
     const response = await request(app)
       .post("/api/g/gw-alice/automations/rpc")
-      .send({ method: "cron.get", params: { id: "daily-digest" } });
+      .send({ method, params: { id: "daily-digest" } });
 
-    expect(response.body).toEqual({
-      result: {
-        id: "daily-digest",
-        name: "Daily digest",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        wakeMode: "now",
-        payload: { kind: "agentTurn", message: "Summarize the day." },
-        delivery: { mode: "none" },
-      },
-    });
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: "unsupported automation operation" });
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("rejects command payloads instead of lending the gateway's operator authority", async () => {
