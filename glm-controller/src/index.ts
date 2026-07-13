@@ -37,9 +37,9 @@ import {
 } from "./auth-secret-ensurer.js";
 import { createGatewayServiceAccountEnsurer } from "./gateway-service-account-ensurer.js";
 import {
-  createGatewayEdgeServiceEnsurer,
-  type GatewayEdgeServiceEnsurer,
-} from "./gateway-edge-service-ensurer.js";
+  createGatewayAliasServiceEnsurer,
+  type GatewayAliasServiceEnsurer,
+} from "./gateway-alias-service-ensurer.js";
 import {
   revisionHeartbeatMerge,
   readHeartbeatLiveness,
@@ -63,6 +63,7 @@ import {
 import { prepareGatewayConfigWithWorkloadIdentity } from "./gateway-workload-identity-config.js";
 import {
   gatewayEdgeServiceName,
+  gatewayPodServiceName,
   isGatewayDesiredDoc,
   isGatewayLegacyBackfill,
   isRevisionRealizationDoc,
@@ -696,7 +697,7 @@ function buildConvergeEmptyDeps(args: {
   db: Firestore;
   helm: HelmRunner;
   kubeOps: KubeOps;
-  gatewayEdgeServiceEnsurer: GatewayEdgeServiceEnsurer;
+  gatewayAliasServiceEnsurer: GatewayAliasServiceEnsurer;
   chartFingerprint?: string;
   gatewayServiceAccount: string;
   ensureGatewayWorkloadIdentity: (opts: { serviceAccountName: string }) => Promise<void>;
@@ -706,7 +707,7 @@ function buildConvergeEmptyDeps(args: {
     db,
     helm,
     kubeOps,
-    gatewayEdgeServiceEnsurer,
+    gatewayAliasServiceEnsurer,
     chartFingerprint,
     gatewayServiceAccount,
     ensureGatewayWorkloadIdentity,
@@ -794,8 +795,8 @@ function buildConvergeEmptyDeps(args: {
         .doc(revisionId)
         .set({ lifecycle: "serving" }, { merge: true });
     },
-    ensurePerGatewayEdgeService: async ({ gatewayId, revisionId }) => {
-      await gatewayEdgeServiceEnsurer.ensurePerGatewayEdgeService({
+    ensurePerGatewayAliasServices: async ({ gatewayId, revisionId }) => {
+      await gatewayAliasServiceEnsurer.ensurePerGatewayAliasServices({
         namespace: NAMESPACE,
         gatewayId,
         revisionId,
@@ -1007,7 +1008,7 @@ function buildRollPassDeps(args: {
   db: Firestore;
   helm: HelmRunner;
   kubeOps: KubeOps;
-  gatewayEdgeServiceEnsurer: GatewayEdgeServiceEnsurer;
+  gatewayAliasServiceEnsurer: GatewayAliasServiceEnsurer;
   revisionMacOpsTokenRevoker: RevisionMacOpsTokenRevoker;
   chartFingerprint?: string;
   log: (msg: string) => void;
@@ -1016,7 +1017,7 @@ function buildRollPassDeps(args: {
     db,
     helm,
     kubeOps,
-    gatewayEdgeServiceEnsurer,
+    gatewayAliasServiceEnsurer,
     revisionMacOpsTokenRevoker,
     chartFingerprint,
     log,
@@ -1130,8 +1131,8 @@ function buildRollPassDeps(args: {
     },
     hasActiveShell: async (gatewayId) =>
       (await readShellLiveness(db, gatewayId, Date.now())).reallyActive,
-    ensurePerGatewayEdgeService: async ({ gatewayId, revisionId }) => {
-      await gatewayEdgeServiceEnsurer.ensurePerGatewayEdgeService({
+    ensurePerGatewayAliasServices: async ({ gatewayId, revisionId }) => {
+      await gatewayAliasServiceEnsurer.ensurePerGatewayAliasServices({
         namespace: NAMESPACE,
         gatewayId,
         revisionId,
@@ -2495,7 +2496,7 @@ async function createControllerRuntime(
     runKubectl,
     log,
   });
-  const gatewayEdgeServiceEnsurer = createGatewayEdgeServiceEnsurer({
+  const gatewayAliasServiceEnsurer = createGatewayAliasServiceEnsurer({
     runKubectl,
     log,
   });
@@ -2620,7 +2621,7 @@ async function createControllerRuntime(
         db,
         helm,
         kubeOps,
-        gatewayEdgeServiceEnsurer,
+        gatewayAliasServiceEnsurer,
         chartFingerprint,
         gatewayServiceAccount,
         ensureGatewayWorkloadIdentity: gatewayWorkloadIdentityEnsurer,
@@ -2634,7 +2635,7 @@ async function createControllerRuntime(
         db,
         helm,
         kubeOps,
-        gatewayEdgeServiceEnsurer,
+        gatewayAliasServiceEnsurer,
         revisionMacOpsTokenRevoker,
         chartFingerprint,
         log,
@@ -3195,8 +3196,10 @@ async function buildHandlers(
         namespace: NAMESPACE,
         name: operatorGatewayServiceAccountName(gatewayId),
       }),
-    deleteGatewayEdgeService: async (gatewayId) =>
-      kubeOps.deleteService({ namespace: NAMESPACE, name: gatewayEdgeServiceName(gatewayId) }),
+    deleteGatewayAliasServices: async (gatewayId) => {
+      await kubeOps.deleteService({ namespace: NAMESPACE, name: gatewayEdgeServiceName(gatewayId) });
+      await kubeOps.deleteService({ namespace: NAMESPACE, name: gatewayPodServiceName(gatewayId) });
+    },
     deleteGatewayModelKeyKubeSecret: async (gatewayId) =>
       kubeOps.deleteSecret({ namespace: NAMESPACE, name: gatewayModelKeySecretName(gatewayId) }),
     deleteGatewayModelKeySource: async (gatewayId) => {
