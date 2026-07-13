@@ -147,9 +147,9 @@ RUN set -e; \
         echo "mattermost: installing local fork ${OPENCLAW_MATTERMOST_FORK_SHA}"; \
         openclaw plugins install "npm-pack:/tmp/openclaw-mattermost-fork.tgz" > /tmp/oc-plugin.log 2>&1 \
           || { echo "FATAL: fork @openclaw/mattermost install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
-        printf '%s\n' '{"channels":{"mattermost":{"replyToMode":"all","threadSessionScope":"channel"}}}' \
+        printf '%s\n' '{"channels":{"mattermost":{"replyToMode":"all","threadDirectMessages":true,"threadSessionScope":"channel"}}}' \
           | openclaw config patch --stdin > /tmp/oc-plugin.log 2>&1 \
-          || { echo "FATAL: fork @openclaw/mattermost rejected channel-scoped sessions"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+          || { echo "FATAL: fork @openclaw/mattermost rejected durable run threads"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
         openclaw config validate > /tmp/oc-plugin.log 2>&1 \
           || { echo "FATAL: fork @openclaw/mattermost config validation failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
       else \

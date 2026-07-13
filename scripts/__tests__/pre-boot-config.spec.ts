@@ -203,7 +203,12 @@ describe("applyPreBootPatches — MM env sync", () => {
   it("does not flag changed when env token already matches on-disk value", () => {
     const config: any = {
       channels: {
-        mattermost: { accounts: { default: { botToken: "same-tok" } } },
+        mattermost: {
+          replyToMode: "all",
+          threadDirectMessages: true,
+          threadSessionScope: "channel",
+          accounts: { default: { botToken: "same-tok" } },
+        },
       },
     };
     config.tools = { profile: "coding" };
@@ -225,8 +230,22 @@ describe("applyPreBootPatches — MM env sync", () => {
 });
 
 describe("applyPreBootPatches — conversation experiment", () => {
+  it("enables durable Mattermost run threads in the standard broad mode", () => {
+    const config: any = { channels: { mattermost: {} } };
+
+    applyPreBootPatches(config, {
+      OCTOGEE_ACTIVITY_BRIDGE_MODE: "broad",
+    });
+
+    expect(config.channels.mattermost).toMatchObject({
+      replyToMode: "all",
+      threadDirectMessages: true,
+      threadSessionScope: "channel",
+    });
+  });
+
   it("creates the Mattermost root settings before the fleet mounts a coach account", () => {
-    const config: any = {};
+    const config: any = { channels: { mattermost: {} } };
 
     applyPreBootPatches(config, {
       OCTOGEE_ACTIVITY_BRIDGE_MODE: "publisher-live",
@@ -461,6 +480,9 @@ describe("applyMattermostPreBootPatches — non-object preservation", () => {
     const config: any = {
       channels: {
         mattermost: {
+          replyToMode: "all",
+          threadDirectMessages: true,
+          threadSessionScope: "channel",
           baseUrl: "https://mm.example",
           commands: "legacy-commands",
           accounts: {
@@ -576,6 +598,9 @@ describe("applyPreBootPatches — no-change reporting", () => {
       tools: { profile: "coding" },
       channels: {
         mattermost: {
+          replyToMode: "all",
+          threadDirectMessages: true,
+          threadSessionScope: "channel",
           baseUrl: "https://mm.example",
           commands: { native: false },
           accounts: {
