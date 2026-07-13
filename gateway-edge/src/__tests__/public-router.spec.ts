@@ -385,7 +385,7 @@ describe("createGatewayRouter", () => {
   it("proxies preview HTTP requests to the selected gateway preview port without rewriting the preview path", async () => {
     const upstreamSeen = vi.fn();
     const upstream = http.createServer((req, res) => {
-      upstreamSeen({ method: req.method, url: req.url });
+      upstreamSeen({ method: req.method, url: req.url, host: req.headers.host });
       res.writeHead(200, { "content-type": "text/plain" });
       res.end("preview");
     });
@@ -407,6 +407,7 @@ describe("createGatewayRouter", () => {
     expect(upstreamSeen).toHaveBeenCalledWith({
       method: "GET",
       url: "/g/bender-blue/ticket123/",
+      host: "preview.octogee.com",
     });
   });
 

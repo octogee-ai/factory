@@ -179,13 +179,18 @@ export function gatewaySurfaceTarget(opts: GatewaySurfaceTargetOptions): Gateway
   };
 }
 
-function requestHeaders(req: http.IncomingMessage, origin: URL): http.OutgoingHttpHeaders {
+function requestHeaders(
+  req: http.IncomingMessage,
+  origin: URL,
+  target: GatewaySurfaceTarget,
+  previewHost: string,
+): http.OutgoingHttpHeaders {
   const headers: http.OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(req.headers)) {
     if (STRIPPED_PUBLIC_HEADERS.has(name.toLowerCase())) continue;
     headers[name] = value;
   }
-  headers.host = origin.host;
+  headers.host = target.surface === "preview" ? previewHost : origin.host;
   return headers;
 }
 
@@ -194,13 +199,19 @@ function requestHeaders(req: http.IncomingMessage, origin: URL): http.OutgoingHt
 // fall back to a plain 502.
 type PinnedUpstreamRecovery = () => Promise<{ currentRevisionId: string | null } | null>;
 
+interface GatewayProxyContext {
+  target: GatewaySurfaceTarget;
+  previewHost: string;
+  log: CreateGatewayRouterOptions["log"];
+}
+
 function proxyHttp(
   req: http.IncomingMessage,
   res: http.ServerResponse,
-  target: GatewaySurfaceTarget,
-  log: CreateGatewayRouterOptions["log"],
+  context: GatewayProxyContext,
   pinnedRecovery?: PinnedUpstreamRecovery,
 ): void {
+  const { target, previewHost, log } = context;
   const origin = new URL(target.origin);
   const proxyReq = (origin.protocol === "https:" ? https : http).request({
     protocol: origin.protocol,
@@ -208,7 +219,7 @@ function proxyHttp(
     port: origin.port,
     method: req.method,
     path: target.path,
-    headers: requestHeaders(req, origin),
+    headers: requestHeaders(req, origin, target, previewHost),
   }, (proxyRes) => {
     proxyRes.on("error", (err) => {
       log("[gateway-router] upstream response socket error", {
@@ -334,9 +345,9 @@ function proxyUpgrade(
   req: http.IncomingMessage,
   socket: Duplex,
   head: Buffer,
-  target: GatewaySurfaceTarget,
-  log: CreateGatewayRouterOptions["log"],
+  context: GatewayProxyContext,
 ): void {
+  const { target, previewHost, log } = context;
   const origin = new URL(target.origin);
   const logSocketError = (side: "client" | "upstream") => (err: Error) => {
     log("[gateway-router] websocket proxy socket error", {
@@ -354,7 +365,7 @@ function proxyUpgrade(
     method: req.method,
     path: target.path,
     headers: {
-      ...requestHeaders(req, origin),
+      ...requestHeaders(req, origin, target, previewHost),
       connection: "upgrade",
       upgrade: req.headers.upgrade ?? "websocket",
     },
@@ -395,6 +406,7 @@ export function createGatewayRouter(opts: CreateGatewayRouterOptions): http.Serv
   if (!opts.previewHost) {
     throw new Error("gateway-router preview host is required");
   }
+  const previewHost = opts.previewHost;
   const server = http.createServer((req, res) => {
     if ((req.url ?? "").split("?")[0] === "/health") {
       res.writeHead(200, { "content-type": "application/json" });
@@ -427,7 +439,7 @@ export function createGatewayRouter(opts: CreateGatewayRouterOptions): http.Serv
           target.revision !== null && opts.revisionTombstoneRecheck
             ? () => tombstoneVerdict(target, opts.revisionTombstoneRecheck, opts.log)
             : undefined;
-        proxyHttp(req, res, target, opts.log, pinnedRecovery);
+        proxyHttp(req, res, { target, previewHost, log: opts.log }, pinnedRecovery);
       })
       .catch((err) => {
         opts.log("[gateway-router] request routing failed", {
@@ -472,7 +484,7 @@ export function createGatewayRouter(opts: CreateGatewayRouterOptions): http.Serv
           socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
           return;
         }
-        proxyUpgrade(req, socket, head, target, opts.log);
+        proxyUpgrade(req, socket, head, { target, previewHost, log: opts.log });
       })
       .catch((err) => {
         opts.log("[gateway-router] websocket routing failed", {
