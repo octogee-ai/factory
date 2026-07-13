@@ -86,6 +86,8 @@ function heartbeatMatchesImageTag(version: string | null | undefined, imageTag: 
   if (!imageTag) return true;
   if (!version) return false;
   if (version === imageTag) return true;
+  const at = imageTag.indexOf("@");
+  if (at > 0 && version === imageTag.slice(0, at)) return true;
   const marker = imageTag.indexOf(PINNED_OC_MARKER);
   if (marker < 7 || marker > 40) return false;
   const buildSha = imageTag.slice(0, marker);

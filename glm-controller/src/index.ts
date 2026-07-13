@@ -438,10 +438,11 @@ function gatewayServiceInternalUrl(gatewayId: string): string {
   return `http://${deploymentNameForInstance(gatewayId)}.${NAMESPACE}.svc.cluster.local:18789`;
 }
 
-function versionFromImageTag(imageTag: string | undefined): string {
+export function versionFromImageTag(imageTag: string | undefined): string {
   if (!imageTag) return "unknown";
-  const [buildSha] = imageTag.split("-oc");
-  return buildSha || imageTag;
+  const [reference] = imageTag.split("@", 1);
+  const [buildSha] = reference.split("-oc");
+  return buildSha || reference;
 }
 
 function parseNonNegativeInt(raw: string | undefined, fallback: number): number {
@@ -822,13 +823,16 @@ function buildConvergeEmptyDeps(args: {
 }
 
 // The revision heartbeat reports the build SHA (version); the release image tag
-// is `<sha>-oc<ocVersion>`. Match either the full tag or its SHA prefix.
-function convergeHeartbeatMatchesImageTag(
+// is `<sha>-oc<ocVersion>`, optionally digest-pinned with `@sha256:<digest>`.
+// Match the full tag, the digest-stripped tag name, or the SHA prefix.
+export function convergeHeartbeatMatchesImageTag(
   version: string | null,
   imageTag: string,
 ): boolean {
   if (!version) return false;
   if (version === imageTag) return true;
+  const at = imageTag.indexOf("@");
+  if (at > 0 && version === imageTag.slice(0, at)) return true;
   return version === versionFromImageTag(imageTag);
 }
 
