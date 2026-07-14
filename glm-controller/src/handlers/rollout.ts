@@ -70,7 +70,13 @@ export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
     const startedAt = deps.now();
     await reportStep(ctx, { name: "release-roll", status: "running", startedAt });
 
-    const outcome = await awaitConvergence(deps, gatewayId, imageTag, startedAt);
+    const outcome = await awaitConvergence(
+      deps,
+      gatewayId,
+      imageTag,
+      startedAt,
+      () => reportStep(ctx, { name: "release-roll", status: "running", startedAt }),
+    );
     await reportStep(ctx, {
       name: "release-roll",
       status: outcome.success ? "done" : "failed",
@@ -92,6 +98,7 @@ async function awaitConvergence(
   gatewayId: string,
   imageTag: string,
   startedAt: number,
+  refreshLiveness: () => Promise<void>,
 ): Promise<{ success: boolean; error?: string }> {
   const narration: RollNarration = { lastStatus: null, lastError: null };
   for (;;) {
@@ -120,6 +127,7 @@ async function awaitConvergence(
       };
     }
     await deps.wait(deps.pollIntervalMs);
+    await refreshLiveness();
   }
 }
 

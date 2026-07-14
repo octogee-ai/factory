@@ -38,6 +38,17 @@ describe("createOperationContext", () => {
     ]);
   });
 
+  it("refreshes a matching running step without growing the operation step history", async () => {
+    const deps = makeDeps();
+    const { ctx, steps } = createOperationContext(deps);
+
+    await ctx.reportStep({ name: "release-roll", status: "running", startedAt: 100 });
+    await ctx.reportStep({ name: "release-roll", status: "running", startedAt: 100 });
+
+    expect(steps).toEqual([{ name: "release-roll", status: "running", startedAt: 100 }]);
+    expect(deps.persistedSnapshots).toHaveLength(2);
+  });
+
   it("collapses a matching failed event onto the running step and preserves the error", async () => {
     const deps = makeDeps();
     const { ctx, steps } = createOperationContext(deps);

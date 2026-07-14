@@ -11,6 +11,7 @@ import {
 } from "@octogee/shared/types/glm";
 import { resolveGatewayImageRepository } from "./gateway-profiles.js";
 import { isSizingTier } from "@octogee/shared/types/sizing";
+import { isDedicatedGatewayServiceAccount } from "./gateway-workload-identity-config.js";
 
 export type ReconcileChange =
   | { kind: "create"; gatewayId: string; to: HelmInstanceValue }
@@ -95,49 +96,8 @@ function resolveGatewayHelmKnobs(d: GatewayDesiredState): Pick<
       : d.operatorAccess;
   return {
     serviceAccountName,
-    serviceAccount: withGeneratedOperatorWorkloadIdentity(
-      d,
-      gatewayClass,
-      serviceAccountName,
-      serviceAccount,
-    ),
+    serviceAccount,
     operatorAccess,
-  };
-}
-
-function configuredGatewayServiceAccount(): string {
-  const serviceAccount = process.env.GATEWAY_SERVICE_ACCOUNT?.trim();
-  if (!serviceAccount) {
-    throw new Error(
-      "GATEWAY_SERVICE_ACCOUNT is required to render generated operator gateway Workload Identity",
-    );
-  }
-  return serviceAccount;
-}
-
-function withGeneratedOperatorWorkloadIdentity(
-  d: GatewayDesiredState,
-  gatewayClass: ReturnType<typeof resolveGatewayClass>,
-  serviceAccountName: string | undefined,
-  serviceAccount: HelmInstanceValue["serviceAccount"],
-): HelmInstanceValue["serviceAccount"] {
-  if (
-    gatewayClass !== "operator" ||
-    serviceAccountName !== operatorGatewayServiceAccountName(d.gatewayId) ||
-    serviceAccount?.create !== true
-  ) {
-    return serviceAccount;
-  }
-  const existing = serviceAccount.annotations?.[WORKLOAD_IDENTITY_ANNOTATION];
-  if (typeof existing === "string" && existing.length > 0) {
-    return serviceAccount;
-  }
-  return {
-    ...serviceAccount,
-    annotations: {
-      ...serviceAccount.annotations,
-      [WORKLOAD_IDENTITY_ANNOTATION]: configuredGatewayServiceAccount(),
-    },
   };
 }
 
@@ -155,7 +115,7 @@ function injectApiServerEgress(
   return { ...operatorAccess, kubeApiServerEgressCidrs: [...apiServerEgressCidrs] };
 }
 
-function generatedServiceAccountHasWorkloadIdentity(
+function generatedServiceAccountHasDedicatedWorkloadIdentity(
   d: GatewayDesiredState,
   serviceAccountName: string | undefined,
   serviceAccount: HelmInstanceValue["serviceAccount"],
@@ -164,7 +124,10 @@ function generatedServiceAccountHasWorkloadIdentity(
     serviceAccountName === operatorGatewayServiceAccountName(d.gatewayId) &&
     serviceAccount?.create === true &&
     typeof serviceAccount.annotations?.[WORKLOAD_IDENTITY_ANNOTATION] === "string" &&
-    serviceAccount.annotations[WORKLOAD_IDENTITY_ANNOTATION].length > 0
+    isDedicatedGatewayServiceAccount(
+      serviceAccountName,
+      serviceAccount.annotations[WORKLOAD_IDENTITY_ANNOTATION],
+    )
   );
 }
 
@@ -229,10 +192,21 @@ function buildHelmInstanceValue(
     serviceAccount: resolvedServiceAccount,
     operatorAccess: baseAccess,
   } = resolveGatewayHelmKnobs(d);
+  const dedicatedWorkloadIdentity =
+    gatewayClass === "operator" &&
+    generatedServiceAccountHasDedicatedWorkloadIdentity(
+      d,
+      serviceAccountName,
+      resolvedServiceAccount,
+    );
+  if (gatewayClass === "operator" && baseAccess?.platformMetadataEgress === true && !dedicatedWorkloadIdentity) {
+    throw new Error(
+      `operator metadata egress requires a dedicated Workload Identity GSA matching ${serviceAccountName}`,
+    );
+  }
   const operatorAccess = injectPlatformMetadataEgress(
     injectApiServerEgress(baseAccess, apiServerEgressCidrs),
-    gatewayClass === "operator" &&
-      generatedServiceAccountHasWorkloadIdentity(d, serviceAccountName, resolvedServiceAccount),
+    dedicatedWorkloadIdentity,
   );
   return withOptionalHelmFields(
     {

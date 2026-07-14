@@ -109,7 +109,6 @@ import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
 import { createRetireRevisionHandler } from "./handlers/retire-revision.js";
 import { createGatewayServiceAccountTeardown } from "./lib/gateway-gsa.js";
-import { createGatewayWorkloadIdentityEnsurer } from "./lib/gateway-workload-identity.js";
 import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
 import { createRecycleGatewayHandler } from "./handlers/recycle-gateway.js";
 import { createRolloutHandler } from "./handlers/rollout.js";
@@ -701,8 +700,6 @@ function buildConvergeEmptyDeps(args: {
   kubeOps: KubeOps;
   gatewayAliasServiceEnsurer: GatewayAliasServiceEnsurer;
   chartFingerprint?: string;
-  gatewayServiceAccount: string;
-  ensureGatewayWorkloadIdentity: (opts: { serviceAccountName: string }) => Promise<void>;
   log: (msg: string) => void;
 }, gatewayIds?: readonly string[]): ConvergeEmptyDeps {
   const {
@@ -711,8 +708,6 @@ function buildConvergeEmptyDeps(args: {
     kubeOps,
     gatewayAliasServiceEnsurer,
     chartFingerprint,
-    gatewayServiceAccount,
-    ensureGatewayWorkloadIdentity,
     log,
   } = args;
   const selectedGatewayIds = gatewayIds ? new Set(gatewayIds) : null;
@@ -722,11 +717,7 @@ function buildConvergeEmptyDeps(args: {
     valuesFile: GATEWAY_VALUES_FILE,
     chartFingerprint,
     prepareGatewayConfig: (config) =>
-      prepareGatewayConfigWithWorkloadIdentity(
-        { gatewayServiceAccount, ensureGatewayWorkloadIdentity },
-        config,
-        config.gatewayId,
-      ),
+      prepareGatewayConfigWithWorkloadIdentity(config, config.gatewayId),
     readinessTimeoutMs: CONVERGE_EMPTY_READINESS_TIMEOUT_MS,
     log,
     now: () => Date.now(),
@@ -908,16 +899,12 @@ function buildDurableRootRenderDeps(args: {
   db: Firestore;
   helm: HelmRunner;
   chartFingerprint?: string;
-  gatewayServiceAccount: string;
-  ensureGatewayWorkloadIdentity: (opts: { serviceAccountName: string }) => Promise<void>;
   log: (msg: string) => void;
 }): DurableRootRenderDeps {
   const {
     db,
     helm,
     chartFingerprint,
-    gatewayServiceAccount,
-    ensureGatewayWorkloadIdentity,
     log,
   } = args;
   return {
@@ -925,8 +912,6 @@ function buildDurableRootRenderDeps(args: {
     chartPath: GATEWAY_CHART,
     valuesFile: GATEWAY_VALUES_FILE,
     chartFingerprint,
-    gatewayServiceAccount,
-    ensureGatewayWorkloadIdentity,
     listGatewayIds: async () => {
       const snap = await db.collection(GATEWAYS_COLLECTION).get();
       return snap.docs
@@ -2557,27 +2542,6 @@ async function createControllerRuntime(
     process.env.KUBE_OPS_MODE === "stub"
       ? createLoggingKubeOps(log)
       : createKubeSubprocessRunner({ runKubectl, log });
-  const workloadIdentityAuth = new GoogleAuth({
-    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
-  });
-  const gatewayServiceAccount = requireEnv(
-    "GATEWAY_SERVICE_ACCOUNT",
-    "generated operator gateway KSAs must bind to the gateway pod GSA",
-  );
-  const gatewayWorkloadIdentityEnsurer = createGatewayWorkloadIdentityEnsurer({
-    gatewayServiceAccount,
-    workloadIdentityProject: requireEnv(
-      "GKE_WORKLOAD_IDENTITY_PROJECT",
-      "generated operator gateway KSA IAM members must target the GKE Workload Identity pool project",
-    ),
-    namespace: NAMESPACE,
-    log,
-    request: async ({ url, method, data }) => {
-      const client = await workloadIdentityAuth.getClient();
-      const res = await client.request<unknown>({ url, method, data });
-      return { status: res.status, data: res.data };
-    },
-  });
   const syncEdgeIngressForGateways = (gateways: ReadonlyArray<FleetGateway>) =>
     syncEdgeIngress({
       runKubectl,
@@ -2639,8 +2603,6 @@ async function createControllerRuntime(
         kubeOps,
         gatewayAliasServiceEnsurer,
         chartFingerprint,
-        gatewayServiceAccount,
-        ensureGatewayWorkloadIdentity: gatewayWorkloadIdentityEnsurer,
         log,
       }, gatewayIds),
     );
@@ -2662,8 +2624,6 @@ async function createControllerRuntime(
     db,
     helm,
     chartFingerprint,
-    gatewayServiceAccount,
-    ensureGatewayWorkloadIdentity: gatewayWorkloadIdentityEnsurer,
     log,
   });
   const renderDurableRootConfigs = (request: DurableRootRenderRequest) =>

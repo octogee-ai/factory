@@ -118,6 +118,44 @@ describe("rollout op — un-backfilled refusal (replaces all dual machinery)", (
 });
 
 describe("rollout op — awaits the roll arm's convergence", () => {
+  it("refreshes operation liveness on every convergence poll", async () => {
+    let polls = 0;
+    const reportStep = vi.fn(async () => undefined);
+    const deps = mkDeps({
+      readGatewayDoc: async () =>
+        polls >= 3
+          ? mkGateway({ liveRelease: 2, liveRevisionId: "default-r2" })
+          : mkGateway({
+              roll: {
+                operationId: "roll-x",
+                status: "migrating",
+                fromRelease: 1,
+                toRelease: 2,
+                sourceRevisionId: "default-r1",
+                targetRevisionId: "default-r2",
+                acceptingNewAssignments: true,
+                startedAt: 0,
+                updatedAt: 0,
+                error: null,
+                flippedAt: null,
+              },
+            }),
+      wait: async () => {
+        polls += 1;
+      },
+    });
+
+    const res = await createRolloutHandler(deps)(
+      mkOp({ gatewayId: "default", imageTag: "cafe123-ocbeta2" }),
+      { reportStep },
+    );
+
+    expect(res.success).toBe(true);
+    expect(
+      reportStep.mock.calls.filter((call) => call[0].status === "running"),
+    ).toHaveLength(4);
+  });
+
   it("kicks a reconcile tick and succeeds once liveRelease reaches desiredRelease with no roll block", async () => {
     let converged = false;
     const deps = mkDeps({

@@ -177,27 +177,6 @@ resource "google_project_iam_member" "glm_controller_gateway_sa_teardown" {
   member  = "serviceAccount:${google_service_account.glm_controller.email}"
 }
 
-# Resource-scoped policy mutation for the one shared gateway pod GSA. Cowboy
-# appends Workload Identity members for generated operator KSAs here before
-# Helm creates a pod, without getting setIamPolicy on octogee-api,
-# firebase-deployer, glm-controller, or any other project service account.
-resource "google_project_iam_custom_role" "gateway_sa_policy_binding" {
-  role_id     = "octogeeGatewayServiceAccountPolicyBinding"
-  title       = "Octogee Gateway Service Account Policy Binding"
-  description = "Manage Workload Identity bindings on the gateway pod GSA only (Cowboy)."
-  project     = var.project_id
-  permissions = [
-    "iam.serviceAccounts.getIamPolicy",
-    "iam.serviceAccounts.setIamPolicy",
-  ]
-}
-
-resource "google_service_account_iam_member" "glm_controller_gateway_sa_policy_binding" {
-  service_account_id = google_service_account.gateway.name
-  role               = google_project_iam_custom_role.gateway_sa_policy_binding.id
-  member             = "serviceAccount:${google_service_account.glm_controller.email}"
-}
-
 # ── Cloud Functions runtime SA: Firebase Auth read ──────────────────────────
 # Firestore triggers run as the project's default compute SA, which carries
 # datastore.user but no Firebase Auth reach. onUserComplete re-checks the

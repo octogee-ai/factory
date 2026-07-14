@@ -24,9 +24,8 @@ export function createOperationContext(deps: CreateOperationContextDeps): {
       const idx = steps.findIndex(
         (s) => s.name === step.name && (s.status === "running" || s.status === "pending"),
       );
-      if (idx >= 0 && (step.status === "done" || step.status === "failed")) {
-
-const existing = steps.at(idx) ?? step;
+      if (idx >= 0) {
+        const existing = steps.at(idx) ?? step;
         steps.splice(idx, 1, { ...existing, ...step });
       } else {
         steps.push(step);
