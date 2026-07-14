@@ -1,6 +1,7 @@
-import { createProjectGiteaRepo, giteaWriteFile } from "../../lib/gitea.js";
+import { createProjectGiteaRepo, giteaWriteFile, giteaWriteFiles } from "../../lib/gitea.js";
 import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming.js";
 import { renderReadmeTemplate } from "@octogee/core/templates/project-readmes";
+import { notesWelcomeSeed, projectPlaybookSeeds } from "@octogee/core/templates/project-seeds";
 
 export async function ensureProjectGiteaRepo(input: {
   workspaceId: string;
@@ -50,6 +51,15 @@ export async function ensureProjectGiteaRepo(input: {
     "project.json",
     `${JSON.stringify(projectJson, null, 2)}\n`,
     "auto: seed project metadata",
+  );
+
+  const today = new Date().toISOString().slice(0, 10);
+  const seeds = [...projectPlaybookSeeds(input.name, today), notesWelcomeSeed(input.name)];
+  await giteaWriteFiles(
+    org,
+    repoName,
+    seeds.map((seed) => ({ path: seed.relPath, content: seed.content })),
+    "auto: seed project playbook",
   );
 }
 

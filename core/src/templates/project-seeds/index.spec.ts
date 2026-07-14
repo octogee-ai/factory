@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { notesWelcomeSeed, projectPlaybookSeeds } from "../lib/projects/playbook-seeds.js";
+import { notesWelcomeSeed, projectPlaybookSeeds } from "./index.js";
 
 describe("projectPlaybookSeeds", () => {
   const seeds = () => projectPlaybookSeeds("Wild Card", "2026-06-12");
@@ -41,7 +41,7 @@ describe("projectPlaybookSeeds", () => {
     expect(shipping.content).toMatch(/Octogee/i);
     expect(shipping.content).toMatch(/Google Cloud|GCP/i);
     expect(shipping.content).toMatch(/Firebase Hosting/i);
-    expect(shipping.content).toContain("{workspaceSlug}-{projectSlug}.web.app");
+    expect(shipping.content).toContain("octogee-{workspaceSlug}-{projectSlug}.web.app");
     expect(shipping.content).toMatch(/Every merge ships/i);
     expect(shipping.content).toMatch(/preview/i);
     expect(shipping.content).toMatch(/secrets/i);

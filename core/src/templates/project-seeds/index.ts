@@ -94,7 +94,7 @@ decisions log says otherwise.
 - Every merge ships. Main is not a storage shelf.
 - Preview before prod when the change changes behavior, copy, data, or layout.
 - The default public shape is Firebase Hosting on
-  {workspaceSlug}-{projectSlug}.web.app.
+  octogee-{workspaceSlug}-{projectSlug}.web.app.
 - Secrets belong in the Octogee platform, never in the repo, screenshots, or chat.
 - If this project needs another GCP target, ask Octo to propose the smallest
   option and record the decision before wiring it.

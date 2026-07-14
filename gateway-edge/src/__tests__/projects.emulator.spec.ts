@@ -20,11 +20,13 @@ vi.mock("../lib/mattermost-context", () => ({
 
 const mockCreateProjectGiteaRepo = vi.fn();
 const mockGiteaWriteFile = vi.fn();
+const mockGiteaWriteFiles = vi.fn();
 const mockGiteaApi = vi.fn();
 vi.mock("../lib/gitea", () => ({
   giteaApi: (...args: unknown[]) => mockGiteaApi(...args),
   createProjectGiteaRepo: (...args: unknown[]) => mockCreateProjectGiteaRepo(...args),
   giteaWriteFile: (...args: unknown[]) => mockGiteaWriteFile(...args),
+  giteaWriteFiles: (...args: unknown[]) => mockGiteaWriteFiles(...args),
 }));
 
 import { createApp } from "../index.js";
@@ -184,6 +186,8 @@ beforeEach(async () => {
   mockCreateProjectGiteaRepo.mockResolvedValue(undefined);
   mockGiteaWriteFile.mockReset();
   mockGiteaWriteFile.mockResolvedValue(undefined);
+  mockGiteaWriteFiles.mockReset();
+  mockGiteaWriteFiles.mockResolvedValue(undefined);
   mockGiteaApi.mockReset();
 });
 

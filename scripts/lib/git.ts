@@ -25,7 +25,7 @@ import {
   workspaceGiteaOrg, workspaceRepoName, projectRepoName,
 } from "./gitea-naming.js";
 import * as giteaBroker from "./gitea-admin-broker-client.js";
-import { notesWelcomeSeed } from "./projects/playbook-seeds.js";
+import { notesWelcomeSeed } from "@octogee/core/templates/project-seeds";
 
 export function errMessage(err: unknown): string {
   if (err instanceof Error) return err.message;

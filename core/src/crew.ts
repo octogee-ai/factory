@@ -18,14 +18,6 @@ export const TIER_CREW_ACCESS: Record<string, CrewRole[]> = {
   max:   ["coach"],
 };
 
-export const TIER_PROJECT_LIMITS: Record<string, number> = {
-  free:  0,
-  trial: 1,
-  hobby: 1,
-  pro:   5,
-  max:   10,
-};
-
 export const TIER_COLLABORATOR_LIMITS: Record<string, number> = {
   free:  0,
   trial: 3,

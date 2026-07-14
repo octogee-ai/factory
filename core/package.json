@@ -196,6 +196,10 @@
       "types": "./dist/templates/project-readmes/index.d.ts",
       "default": "./dist/templates/project-readmes/index.js"
     },
+    "./templates/project-seeds": {
+      "types": "./dist/templates/project-seeds/index.d.ts",
+      "default": "./dist/templates/project-seeds/index.js"
+    },
     "./provisionSteps": {
       "types": "./dist/provisionSteps.d.ts",
       "default": "./dist/provisionSteps.js"
@@ -432,6 +436,9 @@
       ],
       "templates/project-readmes": [
         "dist/templates/project-readmes/index.d.ts"
+      ],
+      "templates/project-seeds": [
+        "dist/templates/project-seeds/index.d.ts"
       ],
       "provisionSteps": [
         "dist/provisionSteps.d.ts"

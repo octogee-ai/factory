@@ -200,3 +200,27 @@ export async function giteaWriteFile(
     branch: "main",
   }, false);
 }
+
+export async function giteaWriteFiles(
+  org: string,
+  repoName: string,
+  files: ReadonlyArray<{ path: string; content: string }>,
+  commitMessage: string,
+): Promise<void> {
+  const contentsUrl = `${GITEA_URL}/api/v1/repos/${org}/${repoName}/contents`;
+  const absent: Array<{ path: string; content: string }> = [];
+  for (const file of files) {
+    const existing = await giteaAdminFetch("GET", `${contentsUrl}/${file.path}`, undefined, true);
+    if (existing === null) absent.push(file);
+  }
+  if (absent.length === 0) return;
+  await giteaAdminFetch("POST", contentsUrl, {
+    message: commitMessage,
+    branch: "main",
+    files: absent.map((file) => ({
+      operation: "create",
+      path: file.path,
+      content: Buffer.from(file.content, "utf-8").toString("base64"),
+    })),
+  }, false);
+}

@@ -18,11 +18,13 @@ vi.mock("../lib/mattermost-context", () => ({
 
 const mockCreateProjectGiteaRepo = vi.fn();
 const mockGiteaWriteFile = vi.fn();
+const mockGiteaWriteFiles = vi.fn();
 const mockGiteaApi = vi.fn();
 vi.mock("../lib/gitea", () => ({
   giteaApi: (...args: unknown[]) => mockGiteaApi(...args),
   createProjectGiteaRepo: (...args: unknown[]) => mockCreateProjectGiteaRepo(...args),
   giteaWriteFile: (...args: unknown[]) => mockGiteaWriteFile(...args),
+  giteaWriteFiles: (...args: unknown[]) => mockGiteaWriteFiles(...args),
 }));
 
 import { createApp } from "../index.js";
@@ -33,8 +35,9 @@ setupEmulatorTest();
 // SSR reader logic — must mirror
 // site/src/pages/[workspaceSlug]/[projectSlug].astro (the workspace
 // lookup → project lookup → visibility gate flow). Replicated here so
-// a rename on either side (writer in projects/create.ts, reader inline
-// in the Astro page) fails this spec at PR time, not at deploy time.
+// a rename on either side (writer in lib/project-create-service.ts
+// `createProjectForActor`, reader inline in the Astro page) fails this
+// spec at PR time, not at deploy time.
 interface ProjectReadOutcome {
   found: boolean;
   visibility?: string;
@@ -194,6 +197,8 @@ beforeEach(async () => {
   mockCreateProjectGiteaRepo.mockResolvedValue(undefined);
   mockGiteaWriteFile.mockReset();
   mockGiteaWriteFile.mockResolvedValue(undefined);
+  mockGiteaWriteFiles.mockReset();
+  mockGiteaWriteFiles.mockResolvedValue(undefined);
   mockGiteaApi.mockReset();
   await seedCaller();
   token = await getIdTokenForUid(CALLER_UID);

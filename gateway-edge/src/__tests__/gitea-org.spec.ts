@@ -65,4 +65,84 @@ describe("gateway-edge gitea client — per-workspace org", () => {
     const mod = await import("../lib/gitea.js");
     expect("GITEA_ORG" in mod).toBe(false);
   });
+
+  it("giteaWriteFiles probes each path, then batch-creates only the absent ones in one commit", async () => {
+    fetchMock
+      .mockResolvedValueOnce(res(200, { path: "README.md" }))
+      .mockResolvedValueOnce(res(404))
+      .mockResolvedValueOnce(res(404))
+      .mockResolvedValueOnce(res(201, {}));
+
+    const { giteaWriteFiles } = await import("../lib/gitea.js");
+    await giteaWriteFiles(
+      "alice",
+      "my-game",
+      [
+        { path: "README.md", content: "# already here" },
+        { path: "DECISIONS.md", content: "# Decisions\n" },
+        { path: "runbook/how-we-build.md", content: "# How\n" },
+      ],
+      "auto: seed project playbook",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://gitea.test:3000/api/v1/repos/alice/my-game/contents/README.md",
+    );
+    expect(fetchMock.mock.calls[2][0]).toBe(
+      "http://gitea.test:3000/api/v1/repos/alice/my-game/contents/runbook/how-we-build.md",
+    );
+
+    const [url, init] = fetchMock.mock.calls[3];
+    expect(url).toBe("http://gitea.test:3000/api/v1/repos/alice/my-game/contents");
+    expect(init.method).toBe("POST");
+
+    const body = JSON.parse(init.body as string);
+    expect(body.message).toBe("auto: seed project playbook");
+    expect(body.branch).toBe("main");
+    expect(body.files).toEqual([
+      {
+        operation: "create",
+        path: "DECISIONS.md",
+        content: Buffer.from("# Decisions\n", "utf-8").toString("base64"),
+      },
+      {
+        operation: "create",
+        path: "runbook/how-we-build.md",
+        content: Buffer.from("# How\n", "utf-8").toString("base64"),
+      },
+    ]);
+  });
+
+  it("giteaWriteFiles issues no commit when every file already exists (retry is a no-op)", async () => {
+    // A fresh Response per call: one instance cannot have its body read twice.
+    fetchMock.mockImplementation(() => Promise.resolve(res(200, { path: "x" })));
+
+    const { giteaWriteFiles } = await import("../lib/gitea.js");
+    await giteaWriteFiles(
+      "alice",
+      "my-game",
+      [
+        { path: "DECISIONS.md", content: "a" },
+        { path: "notes/welcome.md", content: "b" },
+      ],
+      "auto: seed project playbook",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init.method).toBe("GET");
+    }
+  });
+
+  it("giteaWriteFiles throws when the batch commit is rejected — seeds are not best-effort", async () => {
+    fetchMock
+      .mockResolvedValueOnce(res(404))
+      .mockResolvedValueOnce(res(422, { message: "already exists" }));
+
+    const { giteaWriteFiles } = await import("../lib/gitea.js");
+    await expect(
+      giteaWriteFiles("alice", "my-game", [{ path: "DECISIONS.md", content: "a" }], "auto: seed"),
+    ).rejects.toThrow(/422/);
+  });
 });

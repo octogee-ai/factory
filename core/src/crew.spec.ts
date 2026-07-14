@@ -4,7 +4,6 @@ import {
   CREW_ROLES,
   TIER_COLLABORATOR_LIMITS,
   TIER_CREW_ACCESS,
-  TIER_PROJECT_LIMITS,
   TIERS,
   getProvisioning,
 } from "./crew.js";
@@ -18,7 +17,6 @@ describe("crew constants", () => {
     for (const tier of TIERS) {
       expect(TIER_CREW_ACCESS[tier]).toEqual(["coach"]);
     }
-    expect(TIER_PROJECT_LIMITS).toMatchObject({ free: 0, trial: 1, pro: 5, max: 10 });
     expect(TIER_COLLABORATOR_LIMITS.max).toBe(Infinity);
   });
 });

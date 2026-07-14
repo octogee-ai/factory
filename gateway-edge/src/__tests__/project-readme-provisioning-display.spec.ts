@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   giteaApi: vi.fn(),
   createProjectGiteaRepo: vi.fn(),
   giteaWriteFile: vi.fn(),
+  giteaWriteFiles: vi.fn(),
   readProject: vi.fn(),
   renderReadmeTemplate: vi.fn(),
   readWorkspace: vi.fn(),
@@ -26,6 +27,7 @@ vi.mock("../lib/gitea.js", () => ({
   giteaApi: (...args: unknown[]) => h.giteaApi(...args),
   createProjectGiteaRepo: (...args: unknown[]) => h.createProjectGiteaRepo(...args),
   giteaWriteFile: (...args: unknown[]) => h.giteaWriteFile(...args),
+  giteaWriteFiles: (...args: unknown[]) => h.giteaWriteFiles(...args),
 }));
 
 vi.mock("../lib/firestoreReads.js", () => ({
@@ -79,6 +81,7 @@ beforeEach(() => {
   h.giteaApi.mockReset();
   h.createProjectGiteaRepo.mockReset().mockResolvedValue(undefined);
   h.giteaWriteFile.mockReset().mockResolvedValue(undefined);
+  h.giteaWriteFiles.mockReset().mockResolvedValue(undefined);
   h.readProject.mockReset();
   h.renderReadmeTemplate.mockReset().mockReturnValue("# Orbit\n");
   h.readWorkspace.mockReset();
@@ -209,6 +212,53 @@ describe("project provisioning helpers", () => {
       runtime: { recipe: "astro-static" },
       collaborators: [],
     });
+  });
+
+  it("seeds the playbook and welcome note as one commit, from the shared core seeds", async () => {
+    await ensureProjectGiteaRepo({
+      workspaceId: "mira",
+      slug: "orbit",
+      name: "Orbit",
+      tagline: "Ship it",
+      projectType: "web",
+      visibility: "public",
+    });
+
+    expect(h.giteaWriteFiles).toHaveBeenCalledTimes(1);
+    const [org, repo, files, message] = h.giteaWriteFiles.mock.calls[0] as [
+      string,
+      string,
+      ReadonlyArray<{ path: string; content: string }>,
+      string,
+    ];
+    expect(org).toBe("mira");
+    expect(repo).toBe("orbit");
+    expect(message).toBe("auto: seed project playbook");
+    expect(files.map((f) => f.path).sort()).toEqual([
+      "DECISIONS.md",
+      "notes/welcome.md",
+      "runbook/how-we-build.md",
+      "runbook/shipping-on-gcp.md",
+      "runbook/what-done-means.md",
+      "runbook/working-with-your-agent.md",
+    ]);
+    expect(files.find((f) => f.path === "DECISIONS.md")?.content).toContain("Orbit");
+    expect(files.find((f) => f.path === "notes/welcome.md")?.content).toContain("Orbit");
+  });
+
+  it("fails provisioning when a seed write fails — the playbook is not best-effort", async () => {
+    h.giteaWriteFiles.mockRejectedValueOnce(new Error("gitea 500"));
+
+    await expect(
+      provisionProjectRepo({
+        workspaceId: "mira",
+        slug: "orbit",
+        name: "Orbit",
+        tagline: "",
+        projectType: null,
+        visibility: "private",
+      }),
+    ).resolves.toBe("gitea 500");
   });
 
   it("returns null on successful provisioning and an error string on failure", async () => {

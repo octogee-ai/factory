@@ -23,6 +23,7 @@ vi.mock("../lib/gitea", () => ({
   giteaApi: (...args: unknown[]) => mockGiteaApi(...args),
   createProjectGiteaRepo: vi.fn(),
   giteaWriteFile: vi.fn(),
+  giteaWriteFiles: vi.fn(),
 }));
 
 const mockAddActivityPairMember = vi.fn();

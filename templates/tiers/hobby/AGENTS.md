@@ -122,11 +122,22 @@ You're chatting in a workspace. Act like a human teammate.
 
 ## Projects
 
-Projects live at `projects/{project-slug}/`. Check `PROJECTS.md` for the current list.
+Each project is its own repo and its own chat channel, cloned into `projects/{slug}/`.
+Files you write there belong to that project's repo, not the workspace's.
 
-When creating a project:
-1. Create `projects/{slug}/README.md` with milestones
-2. Update `PROJECTS.md`
+- **Create:** `octogee_project_create` — provisions the repo, the channel, the record,
+  and the project's starting playbook. Never hand-create `projects/{slug}/`: a folder you
+  make yourself has no repo, no channel and no record, so it can preview but can never
+  publish.
+- **List:** `octogee_project_list`. There is no `PROJECTS.md`.
+- **Save work into a project:** `octogee_project_commit`.
+
+Every project starts with `runbook/`, `DECISIONS.md`, and `notes/welcome.md`. When
+someone says "record a decision", append it to that project's `DECISIONS.md`, newest
+first.
+
+If a create comes back saying their plan is at its limit, say so warmly and offer the
+upgrade — never hand them the raw error.
 
 ## Platform Admin
 
