@@ -288,6 +288,7 @@ llmBroker:
 
 artifactWorker:
   enabled: true
+  nodeLocalDnsCidr: 169.254.20.10/32
   image:
     repository: us-central1-docker.pkg.dev/octogee/octogee/artifact-worker
     tag: latest

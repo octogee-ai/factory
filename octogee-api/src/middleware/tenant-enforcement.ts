@@ -8,6 +8,7 @@ import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
 import { normalizeTenantPolicyPath } from "../lib/tenant-route-policy.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
+type PlatformBinding = Extract<Express.Request["boundTenant"], { kind: "platform" }>;
 
 export interface TenantEnforcementOptions {
   db?: Pick<Firestore, "collection">;
@@ -23,6 +24,13 @@ const PLATFORM_INTERNAL_ROUTES = new Set([
   "/internal/notifications/digest",
   "/internal/activity-pairs/report",
 ]);
+
+function platformBindingAuthorized(bound: PlatformBinding, path: string): boolean {
+  if (bound.actor === "artifact-worker") {
+    return path === "/internal/chat-artifacts" || path.startsWith("/internal/chat-artifacts/");
+  }
+  return PLATFORM_INTERNAL_ROUTES.has(path);
+}
 
 const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/connectors/access-token",
@@ -220,7 +228,7 @@ export function createTenantEnforcementMiddleware(
   return (req, res, next) => {
     const bound = req.boundTenant;
     if (bound?.kind === "platform") {
-      if (PLATFORM_INTERNAL_ROUTES.has(req.path)) {
+      if (platformBindingAuthorized(bound, req.path)) {
         next();
       } else {
         res.status(403).json(FORBIDDEN);

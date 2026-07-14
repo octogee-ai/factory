@@ -129,6 +129,8 @@ spec:
   egress:
     - to:
         - namespaceSelector: {}
+        - ipBlock:
+            cidr: {{ .Values.artifactWorker.nodeLocalDnsCidr }}
       ports:
         - protocol: UDP
           port: 53

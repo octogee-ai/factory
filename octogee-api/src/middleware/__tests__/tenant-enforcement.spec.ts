@@ -109,6 +109,8 @@ function app(opts: {
   a.post("/internal/billing/check-trial-expiry", enforcement, handler);
   a.post("/internal/billing/run-auto-top-ups", enforcement, handler);
   a.post("/internal/activity-pairs/report", enforcement, handler);
+  a.post("/internal/chat-artifacts/claim", enforcement, handler);
+  a.post("/internal/chat-artifacts/:artifactId/lease", enforcement, handler);
   a.get("/internal/gitea/user-pubkey", enforcement, handler);
   return a;
 }
@@ -150,6 +152,27 @@ describe("tenant enforcement middleware", () => {
       .send({});
 
     expect(res.status).toBe(403);
+  });
+
+  it("allows the artifact worker only on artifact worker routes", async () => {
+    const worker = { kind: "platform", actor: "artifact-worker" } as const;
+    const claim = await request(app({ boundTenant: worker }))
+      .post("/internal/chat-artifacts/claim")
+      .send({ workerId: "artifact-worker-1" });
+    const lease = await request(app({ boundTenant: worker }))
+      .post(`/internal/chat-artifacts/${"a".repeat(64)}/lease`)
+      .send({});
+    const billing = await request(app({ boundTenant: worker }))
+      .post("/internal/billing/check-trial-expiry")
+      .send({});
+    const cronClaim = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
+      .post("/internal/chat-artifacts/claim")
+      .send({ workerId: "cron" });
+
+    expect(claim.status).toBe(200);
+    expect(lease.status).toBe(200);
+    expect(billing.status).toBe(403);
+    expect(cronClaim.status).toBe(403);
   });
 
   it("does not honor a legacy X-Internal-Service-Key", async () => {
