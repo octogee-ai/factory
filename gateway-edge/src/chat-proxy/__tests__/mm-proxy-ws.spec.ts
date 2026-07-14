@@ -333,6 +333,92 @@ describe("attachMmWsBridge — pre-auth DoS bounds", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Admission deadline (no-silent-failures): the bridge awaits the roster verdict
+// before dialing. A verdict (or token→user resolution) that never settles must
+// NEVER hold the browser socket open silently — it fails CLOSED with the
+// reconnect code + a log line, well before the client's own handshake timeout,
+// so the client retries against the serving revision instead of looping on a
+// silent 15s timeout.
+// ---------------------------------------------------------------------------
+
+describe("attachMmWsBridge — admission deadline (no silent hang)", () => {
+  const realDelay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  function mkBridge(opts: {
+    verdict?: (
+      mmUserId: string | null,
+    ) =>
+      | Promise<{ allow: true } | { allow: false; reason: string }>
+      | { allow: true }
+      | { allow: false; reason: string };
+    resolveMmUserId?: (token: string) => Promise<string | null>;
+    admissionDeadlineMs?: number;
+  }) {
+    const browser = makeFakeWs(1);
+    const upstream = makeFakeWs(0);
+    const openUpstream = vi.fn(() => upstream as unknown as WebSocket);
+    const log = vi.fn();
+    attachMmWsBridge(
+      {
+        mmInternalWsUrl: "ws://mm.internal/api/v4/websocket",
+        log,
+        resolveMmUserId: opts.resolveMmUserId ?? (async () => "mm-u1"),
+        openUpstream,
+        ...(opts.verdict ? { rosterVerdict: opts.verdict } : {}),
+        ...(opts.admissionDeadlineMs !== undefined
+          ? { admissionDeadlineMs: opts.admissionDeadlineMs }
+          : {}),
+      },
+      browser as unknown as WebSocket,
+    );
+    return { browser, upstream, openUpstream, log };
+  }
+
+  it("a verdict that never settles → closed with the reconnect code after the deadline; upstream NEVER dialed", async () => {
+    const h = mkBridge({
+      admissionDeadlineMs: 20,
+      verdict: () => new Promise(() => undefined), // wedged roster: never resolves
+    });
+    h.browser.emit("message", AUTH_FRAME);
+    await realDelay(60);
+    expect(h.openUpstream).not.toHaveBeenCalled();
+    expect(h.browser.readyState).toBe(3);
+    expect(h.browser.closeCalls[0]).toMatchObject({ code: MM_WS_RECONNECT_CLOSE_CODE });
+    expect(h.log).toHaveBeenCalledWith(
+      expect.stringContaining("admission_deadline_exceeded"),
+    );
+  });
+
+  it("a hung token→mmUserId resolution is ALSO bounded by the deadline (the whole admission, not just the verdict)", async () => {
+    const h = mkBridge({
+      admissionDeadlineMs: 20,
+      resolveMmUserId: () => new Promise<string | null>(() => undefined), // stuck
+      verdict: () => ({ allow: true as const }),
+    });
+    h.browser.emit("message", AUTH_FRAME);
+    await realDelay(60);
+    expect(h.openUpstream).not.toHaveBeenCalled();
+    expect(h.browser.closeCalls[0]).toMatchObject({ code: MM_WS_RECONNECT_CLOSE_CODE });
+    expect(h.log).toHaveBeenCalledWith(
+      expect.stringContaining("admission_deadline_exceeded"),
+    );
+  });
+
+  it("a verdict that settles before the deadline dials normally; the deadline never fires (regression pin)", async () => {
+    const h = mkBridge({ admissionDeadlineMs: 10_000, verdict: () => ({ allow: true as const }) });
+    await authAndOpen(h.browser, h.upstream);
+    expect(h.openUpstream).toHaveBeenCalledTimes(1);
+    expect(h.upstream.sent).toEqual([AUTH_FRAME]);
+    await realDelay(30);
+    expect(h.browser.readyState).toBe(1);
+    expect(h.browser.closeCalls).toHaveLength(0);
+    expect(h.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("admission_deadline_exceeded"),
+    );
+  });
+});
+
 describe("attachMmWsBridge — buffering + mmUserId race", () => {
   it("buffers browser→upstream frames until upstream emits 'open' (auth_challenge race)", async () => {
     const browser = makeFakeWs(1);

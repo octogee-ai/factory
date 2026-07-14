@@ -910,18 +910,9 @@ export interface AttachChatProxyWsUpgradeOptions {
 // semantics), it never attaches ungated.
 const firebaseUidByMmUserId = new Map<string, string>();
 
-async function uidForMmUserId(mmUserId: string): Promise<string | null> {
-  const snap = await db
-    .collection("users")
-    .where("mattermost.userId", "==", mmUserId)
-    .limit(1)
-    .get();
-  return snap.empty ? null : snap.docs[0].id;
-}
-
 export function buildMmRosterVerdict(
   gate: RollRosterUpgradeGate,
-  lookupUid: (mmUserId: string) => Promise<string | null> = uidForMmUserId,
+  lookupUid: (mmUserId: string) => Promise<string | null>,
 ): (mmUserId: string | null) => Promise<UpgradeGateVerdict> {
   return (mmUserId) =>
     mmRosterVerdictFor(gate, mmUserId, async (id) => {
@@ -971,8 +962,18 @@ export function attachChatProxyWsUpgrade(
             registry: mmWsRegistry,
             // Auth-late roster enforcement (Codex P0): MM identity resolves
             // from the first auth frame, so the bridge holds the upstream dial
-            // until this verdict — the shared upgrade-gate policy — admits.
-            ...(upgradeGate ? { rosterVerdict: buildMmRosterVerdict(upgradeGate) } : {}),
+            // until this verdict — the shared upgrade-gate policy — admits. The
+            // mmUser→uid step routes through the tenant-bound runtime broker,
+            // like every other resolution on this creds-less pod — a direct
+            // Firestore read has no credentials here and would hang admission
+            // forever (the client-reconnect-loop regression from #2161).
+            ...(upgradeGate
+              ? {
+                  rosterVerdict: buildMmRosterVerdict(upgradeGate, (mmUserId) =>
+                    getOpenClawRuntimeBroker().resolveOctogeeUidByMmUser(mmUserId),
+                  ),
+                }
+              : {}),
           },
           browserWs,
         );

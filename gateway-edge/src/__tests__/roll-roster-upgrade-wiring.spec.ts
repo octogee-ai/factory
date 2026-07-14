@@ -36,12 +36,18 @@ describe("roll-roster upgrade gate wiring (Codex P0)", () => {
     expect(proxySource).toContain("wrapRedeemWithRosterGate(");
   });
 
-  it("the MM WS bridge gates at the auth-late seam: rosterVerdict threaded from the SAME shared gate (checkUid), no MM-specific fork", () => {
+  it("the MM WS bridge gates at the auth-late seam: rosterVerdict threaded from the SAME shared gate (checkUid), resolving mmUser→uid through the BROKER not direct Firestore", () => {
     // Verdict wired into the bridge deps at the attach call…
     const attach = proxySource.indexOf("attachMmWsBridge(");
-    const verdictWire = proxySource.indexOf("rosterVerdict: buildMmRosterVerdict(upgradeGate)");
+    const verdictWire = proxySource.indexOf("rosterVerdict: buildMmRosterVerdict(upgradeGate,");
     expect(attach).toBeGreaterThan(-1);
     expect(verdictWire).toBeGreaterThan(attach);
+    // …resolving mmUser→uid through the tenant-bound runtime broker, like every
+    // other resolution on this creds-less pod. The direct-Firestore uid query
+    // (uidForMmUserId) that hung admission forever on the gateway pod is gone.
+    expect(proxySource).toContain("resolveOctogeeUidByMmUser(mmUserId)");
+    expect(proxySource).not.toContain("uidForMmUserId");
+    expect(proxySource).not.toMatch(/\.where\("mattermost\.userId"/u);
     // …and the verdict is the shared gate policy (mmRosterVerdictFor routes an
     // unresolved lookup to checkUnmappedIdentity, a resolved one to checkUid).
     const helper = proxySource.slice(
@@ -51,21 +57,28 @@ describe("roll-roster upgrade gate wiring (Codex P0)", () => {
     expect(helper).toContain("mmRosterVerdictFor(gate");
   });
 
-  it("the MM bridge itself defers the upstream dial behind the verdict (no dial at attach)", () => {
+  it("the MM bridge defers the upstream dial behind a deadline-bounded verdict (no dial at attach, no silent hang)", () => {
     const wsSource = readFileSync(
       path.join(repoRoot, "gateway-edge/src/chat-proxy/mm-proxy/ws.ts"),
       "utf8",
     );
     // The only openUpstream call lives inside dialUpstream, invoked from
-    // runAdmission AFTER the awaited verdict.
+    // runAdmission AFTER the resolved verdict.
     expect(wsSource.match(/deps\.openUpstream\(/g)).toHaveLength(1);
+    // The verdict resolution reads the shared roster verdict…
+    expect(wsSource).toContain("deps.rosterVerdict(mmUserId)");
     const admission = wsSource.slice(
       wsSource.indexOf("const runAdmission"),
       wsSource.indexOf('browserWs.on("message"'),
     );
-    expect(admission).toContain("await deps.rosterVerdict(mmUserId)");
+    // …raced against a deadline that fails CLOSED, dialing only after a settled,
+    // allowed verdict.
+    expect(admission).toContain("resolveVerdict()");
+    expect(admission).toContain("admission_deadline_exceeded");
     expect(admission).toContain("dialUpstream()");
-    expect(admission.indexOf("rosterVerdict")).toBeLessThan(admission.indexOf("dialUpstream()"));
+    expect(admission.indexOf("resolveVerdict()")).toBeLessThan(
+      admission.indexOf("dialUpstream()"),
+    );
   });
 
   it("index boot installs ONE shared upgrade gate over the same roster store and threads it to both attach calls", () => {

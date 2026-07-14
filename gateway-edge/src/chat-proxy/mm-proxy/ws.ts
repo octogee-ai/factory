@@ -16,6 +16,16 @@ export const PRE_AUTH_DEADLINE_MS = 10_000;
 export const MAX_PREAUTH_FRAMES = 64;
 export const MAX_PREAUTH_BYTES = 1_048_576;
 
+// Post-auth admission bound. Once the first authentication_challenge resolves
+// the MM user, the bridge awaits the roster verdict before dialing. That await
+// must be bounded: a verdict (or token→user resolution) that never settles must
+// fail CLOSED here, not hold the socket open until the client's own handshake
+// timeout. Shorter than the PWA's 15s handshake window so the client gets the
+// reconnect signal and retries against the serving revision instead of looping.
+export const ADMISSION_DEADLINE_MS = 5_000;
+
+const ADMISSION_TIMEOUT: unique symbol = Symbol("mm-ws-admission-timeout");
+
 export interface MmWsProxyDeps {
   
   mmInternalWsUrl: string;
@@ -38,6 +48,10 @@ registry?: MmWsRegistry;
   now?: () => number;
 
 ackResolutionTimeoutMs?: number;
+
+  // Deadline for the post-auth admission (token→user + roster verdict) before
+  // failing CLOSED. Defaults to ADMISSION_DEADLINE_MS.
+  admissionDeadlineMs?: number;
 
   // Pre-admission DoS bounds (default to the module constants). A socket that
   // sends no authentication_challenge within preAuthDeadlineMs is closed; the
@@ -104,6 +118,7 @@ export function attachMmWsBridge(
 ): MmWsBridge {
   const now = deps.now ?? Date.now;
   const ackResolutionTimeoutMs = deps.ackResolutionTimeoutMs ?? 2_000;
+  const admissionDeadlineMs = deps.admissionDeadlineMs ?? ADMISSION_DEADLINE_MS;
   const preAuthDeadlineMs = deps.preAuthDeadlineMs ?? PRE_AUTH_DEADLINE_MS;
   const maxPreAuthFrames = deps.maxPreAuthFrames ?? MAX_PREAUTH_FRAMES;
   const maxPreAuthBytes = deps.maxPreAuthBytes ?? MAX_PREAUTH_BYTES;
@@ -235,32 +250,40 @@ const logClose = (side: "browser" | "upstream", code: number, reason: unknown) =
     );
   };
 
-  // Runs once, on the first authentication_challenge: await the token→user
-  // resolution, then the roster verdict, THEN dial — never fire-and-forget. A
-  // refusal closes the client with the reconnect code; the retrying client
-  // resolves to the serving revision.
-  const runAdmission = async () => {
+  // Await the token→user resolution, then the roster verdict. Absent verdict
+  // (legacy pod / cluster surface) admits unconditionally.
+  const resolveVerdict = async (): Promise<UpgradeGateVerdict> => {
     if (pendingMmUserId) await pendingMmUserId;
-    if (closed || upstream) return;
-    let verdict: UpgradeGateVerdict = { allow: true };
-    if (deps.rosterVerdict) {
-      try {
-        verdict = await deps.rosterVerdict(mmUserId);
-      } catch (err) {
-        deps.log(`[mm-proxy/ws] roster verdict failed (failing CLOSED): ${errorToStr(err)}`);
-        verdict = { allow: false, reason: "roster-verdict-failed" };
-      }
+    if (closed || upstream || !deps.rosterVerdict) return { allow: true };
+    return deps.rosterVerdict(mmUserId);
+  };
+
+  // Runs once, on the first authentication_challenge: resolve the verdict, THEN
+  // dial — never fire-and-forget. The resolution is raced against a deadline: a
+  // verdict (or token→user resolution) that never settles fails CLOSED here
+  // rather than holding the socket silently (no-silent-failures). Every refusal
+  // closes the client with the reconnect code; the retrying client resolves to
+  // the serving revision.
+  const runAdmission = async () => {
+    const deadline = makeAdmissionDeadline(admissionDeadlineMs);
+    let outcome: UpgradeGateVerdict | typeof ADMISSION_TIMEOUT;
+    try {
+      outcome = await Promise.race([resolveVerdict(), deadline.promise]);
+    } catch (err) {
+      deps.log(`[mm-proxy/ws] roster verdict failed (failing CLOSED): ${errorToStr(err)}`);
+      outcome = { allow: false, reason: "roster-verdict-failed" };
+    } finally {
+      deadline.cancel();
     }
     if (closed || upstream) return;
-    if (!verdict.allow) {
-      deps.log(
-        `[mm-proxy/ws] roll roster refused MM WS (mmUserId=${mmUserId ?? "unknown"}): ${verdict.reason}`,
-      );
+    if (outcome === ADMISSION_TIMEOUT) {
+      closeWithReconnect("admission_deadline_exceeded");
+      return;
+    }
+    if (!outcome.allow) {
+      deps.log(`[mm-proxy/ws] roll roster refused MM WS (mmUserId=${mmUserId ?? "unknown"}): ${outcome.reason}`);
       try {
-        browserWs.close(
-          MM_WS_RECONNECT_CLOSE_CODE,
-          `gateway_revision_unavailable:${verdict.reason}`,
-        );
+        browserWs.close(MM_WS_RECONNECT_CLOSE_CODE, `gateway_revision_unavailable:${outcome.reason}`);
       } catch {
         /* close() below tears down regardless */
       }
@@ -431,6 +454,26 @@ function timeoutWithNull(timeoutMs: number): Promise<null> {
   return new Promise<null>((resolve) => {
     setTimeout(() => resolve(null), timeoutMs);
   });
+}
+
+// A cancelable deadline that resolves to the ADMISSION_TIMEOUT sentinel. Raced
+// against the verdict resolution; cancel() clears the timer once the race
+// settles so a healthy admission leaves no dangling timer.
+function makeAdmissionDeadline(timeoutMs: number): {
+  promise: Promise<typeof ADMISSION_TIMEOUT>;
+  cancel: () => void;
+} {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const promise = new Promise<typeof ADMISSION_TIMEOUT>((resolve) => {
+    timer = setTimeout(() => resolve(ADMISSION_TIMEOUT), timeoutMs);
+    timer.unref?.();
+  });
+  return {
+    promise,
+    cancel: () => {
+      if (timer) clearTimeout(timer);
+    },
+  };
 }
 
 function parsePostField(eventData: unknown): MmPostShape | null {
