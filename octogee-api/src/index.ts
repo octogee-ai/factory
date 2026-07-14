@@ -22,7 +22,19 @@ import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
 import { createBuilderShellBrokerRoutes } from "./routes/builder-shell-broker.js";
 import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
 import { createLinkPreviewRoutes } from "./routes/link-preview.js";
-import { db } from "../../gateway-edge/src/lib/db.js";
+import {
+  createChatArtifactRoutes,
+  createChatArtifactWorkerRoutes,
+  requireArtifactWorkerAuth,
+} from "./routes/chat-artifacts.js";
+import { ArtifactRegistry, createFirestoreArtifactJobStore } from "./lib/chat-artifact-registry.js";
+import {
+  createGcsArtifactBlobStore,
+  createMattermostArtifactAccess,
+  createMattermostArtifactSourceReader,
+} from "./lib/chat-artifact-adapters.js";
+import { db, storage } from "../../gateway-edge/src/lib/db.js";
+import { requireAuth } from "../../gateway-edge/src/middleware/auth.js";
 import { createKubernetesTokenReviewer } from "./lib/token-review.js";
 import {
   createTenantBindingHealthState,
@@ -53,6 +65,55 @@ export interface CreateAppOptions {
   modelKeyTokenStore?: ModelBrokerTokenStore;
   modelKeyIssuerBearerToken?: string;
   modelKeyIssuerTtlSeconds?: number | null;
+}
+
+function defaultChatArtifactRoutes() {
+  const registry = new ArtifactRegistry(createFirestoreArtifactJobStore(db));
+  let blobs: ReturnType<typeof createGcsArtifactBlobStore> | undefined;
+  const blobStore = {
+    put(input: Parameters<ReturnType<typeof createGcsArtifactBlobStore>["put"]>[0]) {
+      blobs ??= createGcsArtifactBlobStore(storage.bucket());
+      return blobs.put(input);
+    },
+    open(output: Parameters<ReturnType<typeof createGcsArtifactBlobStore>["open"]>[0]) {
+      blobs ??= createGcsArtifactBlobStore(storage.bucket());
+      return blobs.open(output);
+    },
+  };
+  let access: ReturnType<typeof createMattermostArtifactAccess> | undefined;
+  let source: ReturnType<typeof createMattermostArtifactSourceReader> | undefined;
+  const mattermostOptions = () => ({
+    mattermostBaseUrl: process.env.MM_INTERNAL_URL ?? "",
+    adminToken: process.env.MM_ADMIN_TOKEN ?? "",
+  });
+  return {
+    public: createChatArtifactRoutes({
+      registry,
+      blobs: blobStore,
+      auth: requireAuth,
+      access: {
+        authorizeRequest(userId, request) {
+          access ??= createMattermostArtifactAccess(mattermostOptions());
+          return access.authorizeRequest(userId, request);
+        },
+        assertChannelMember(userId, channelId) {
+          access ??= createMattermostArtifactAccess(mattermostOptions());
+          return access.assertChannelMember(userId, channelId);
+        },
+      },
+    }),
+    worker: createChatArtifactWorkerRoutes({
+      registry,
+      blobs: blobStore,
+      auth: requireArtifactWorkerAuth,
+      source: {
+        open(fileId) {
+          source ??= createMattermostArtifactSourceReader(mattermostOptions());
+          return source.open(fileId);
+        },
+      },
+    }),
+  };
 }
 
 export function shouldAttemptTenantBinding(path: string): boolean {
@@ -163,6 +224,8 @@ export function createApp(opts: CreateAppOptions = {}) {
     mmRestProxyHandler,
     mattermostMintRoutes,
   });
+  const chatArtifacts = defaultChatArtifactRoutes();
+  app.use("/api/chat/artifacts", chatArtifacts.public);
   // App-facing, Firebase-authed: Codex-style link unfurl (SSRF-guarded). Lives
   // here rather than the cluster bundle so it can reuse octogee-api's undici dep.
   app.use("/api/link-preview", createLinkPreviewRoutes());
@@ -173,6 +236,7 @@ export function createApp(opts: CreateAppOptions = {}) {
   // their projected gateway KSA token; octogee-api holds the Gitea admin token.
   app.use("/internal/gitea", internalGiteaAdminRoutes);
   app.use("/internal/activity-pairs", createDefaultActivityPairReportRoutes(db));
+  app.use("/internal/chat-artifacts", chatArtifacts.worker);
   // octogee-api-only: broker the gateway-edge OpenClaw runtime Firestore
   // dependencies so cattle pods do not need ADC/datastore reach.
   app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({ db }));

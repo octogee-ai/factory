@@ -13,7 +13,7 @@ export type BoundTenant =
       podName?: string;
       podUid?: string;
     }
-  | { kind: "platform"; actor: "glm-controller" | "octogee-api" | "cron" };
+  | { kind: "platform"; actor: "glm-controller" | "octogee-api" | "artifact-worker" | "cron" };
 type PlatformActor = Extract<BoundTenant, { kind: "platform" }>["actor"];
 
 export type TenantBindingResult =
@@ -70,6 +70,7 @@ function gatewayIdFromSaSuffix(suffix: string): string | null {
 function platformActorFromSa(saName: string): PlatformActor | null {
   if (saName === "octogee-glm-controller") return "glm-controller";
   if (saName === "octogee-api") return "octogee-api";
+  if (saName === "octogee-artifact-worker") return "artifact-worker";
   if (saName === "octogee-cron") return "cron";
   return null;
 }

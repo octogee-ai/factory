@@ -1,0 +1,144 @@
+{{- if .Values.artifactWorker.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.artifactWorker.serviceAccountName }}
+  labels:
+    app: octogee-artifact-worker
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: octogee-artifact-worker
+  labels:
+    app: octogee-artifact-worker
+spec:
+  replicas: {{ .Values.artifactWorker.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: octogee-artifact-worker
+  template:
+    metadata:
+      labels:
+        app: octogee-artifact-worker
+    spec:
+      automountServiceAccountToken: false
+      shareProcessNamespace: false
+      serviceAccountName: {{ .Values.artifactWorker.serviceAccountName }}
+      terminationGracePeriodSeconds: 30
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: artifact-worker
+          image: "{{ .Values.artifactWorker.image.repository }}:{{ .Values.artifactWorker.image.tag }}"
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: OCTOGEE_API_URL
+              value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
+            - name: ARTIFACT_WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: OCTOGEE_API_TOKEN_PATH
+              value: /var/run/secrets/octogee-api/token
+            - name: ARTIFACT_PARSER_SOCKET
+              value: /ipc/parser.sock
+          resources:
+            {{- toYaml .Values.artifactWorker.supervisorResources | nindent 12 }}
+          volumeMounts:
+            - name: parser-ipc
+              mountPath: /ipc
+            - name: octogee-api-sa-token
+              mountPath: /var/run/secrets/octogee-api
+              readOnly: true
+        - name: artifact-parser
+          image: "{{ .Values.artifactWorker.image.repository }}:{{ .Values.artifactWorker.image.tag }}"
+          imagePullPolicy: Always
+          command: ["node", "dist/parser-main.js"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: ARTIFACT_PARSER_SOCKET
+              value: /ipc/parser.sock
+            - name: ARTIFACT_WORK_ROOT
+              value: /work
+            - name: PDFIUM_LIBRARY_PATH
+              value: /usr/lib/libpdfium.so
+            - name: PDFIUM_RENDERER_PATH
+              value: /usr/local/bin/octogee-pdfium-renderer
+            - name: PDF_INSPECTOR_SANDBOX_PATH
+              value: /usr/local/bin/octogee-pdf-sandbox
+          resources:
+            {{- toYaml .Values.artifactWorker.parserResources | nindent 12 }}
+          volumeMounts:
+            - name: parser-ipc
+              mountPath: /ipc
+            - name: work
+              mountPath: /work
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: parser-ipc
+          emptyDir:
+            sizeLimit: 1Mi
+        - name: work
+          emptyDir:
+            sizeLimit: 512Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: octogee-api-sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: octogee-api
+                  expirationSeconds: 3600
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: octogee-artifact-worker-egress
+spec:
+  podSelector:
+    matchLabels:
+      app: octogee-artifact-worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app: octogee-api
+      ports:
+        - protocol: TCP
+          port: 3001
+{{- end }}

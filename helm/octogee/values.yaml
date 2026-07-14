@@ -286,6 +286,32 @@ llmBroker:
       cpu: 500m
       memory: 512Mi
 
+artifactWorker:
+  enabled: true
+  image:
+    repository: us-central1-docker.pkg.dev/octogee/octogee/artifact-worker
+    tag: latest
+  replicas: 1
+  serviceAccountName: octogee-artifact-worker
+  supervisorResources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+      ephemeral-storage: 64Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+      ephemeral-storage: 128Mi
+  parserResources:
+    requests:
+      cpu: 500m
+      memory: 768Mi
+      ephemeral-storage: 512Mi
+    limits:
+      cpu: "2"
+      memory: 1536Mi
+      ephemeral-storage: 1Gi
+
 # ── Service Account ──────────────────────────────────────────────────────────
 serviceAccount:
   gcpServiceAccount: "octogee-gateway@octogee.iam.gserviceaccount.com"

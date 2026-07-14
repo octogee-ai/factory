@@ -302,5 +302,12 @@ describe("mapSaToTenant", () => {
       result: "ok_platform",
       tenant: { kind: "platform", actor: "octogee-api" },
     });
+    await expect(
+      mapSaToTenant(fakeDb({}), { namespace: "octogee", saName: "octogee-artifact-worker" }, "octogee"),
+    ).resolves.toEqual({
+      attached: true,
+      result: "ok_platform",
+      tenant: { kind: "platform", actor: "artifact-worker" },
+    });
   });
 });
