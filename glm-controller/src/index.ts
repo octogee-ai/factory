@@ -60,7 +60,7 @@ import {
   type DurableRootRenderRequest,
   type DurableRootRenderResult,
 } from "./durable-root-config-renderer.js";
-import { prepareGatewayConfigWithWorkloadIdentity } from "./gateway-workload-identity-config.js";
+import { createGatewayRuntimeConfigPreparer } from "./gateway-runtime-config.js";
 import {
   gatewayEdgeServiceName,
   gatewayPodServiceName,
@@ -380,8 +380,6 @@ interface ControllerDeps {
   operatorReadyRefreshMs?: number;
 
   chartFingerprint?: string;
-
-  resolveApiServerEgressCidrs?: () => Promise<string[]>;
 }
 
 function maintenanceFreezeReasonSuffix(reason: string | null): string {
@@ -700,6 +698,7 @@ function buildConvergeEmptyDeps(args: {
   kubeOps: KubeOps;
   gatewayAliasServiceEnsurer: GatewayAliasServiceEnsurer;
   chartFingerprint?: string;
+  prepareGatewayConfig: (config: GatewayRuntimeRoot) => Promise<GatewayRuntimeRoot>;
   log: (msg: string) => void;
 }, gatewayIds?: readonly string[]): ConvergeEmptyDeps {
   const {
@@ -708,6 +707,7 @@ function buildConvergeEmptyDeps(args: {
     kubeOps,
     gatewayAliasServiceEnsurer,
     chartFingerprint,
+    prepareGatewayConfig,
     log,
   } = args;
   const selectedGatewayIds = gatewayIds ? new Set(gatewayIds) : null;
@@ -716,8 +716,7 @@ function buildConvergeEmptyDeps(args: {
     chartPath: GATEWAY_CHART,
     valuesFile: GATEWAY_VALUES_FILE,
     chartFingerprint,
-    prepareGatewayConfig: (config) =>
-      prepareGatewayConfigWithWorkloadIdentity(config, config.gatewayId),
+    prepareGatewayConfig,
     readinessTimeoutMs: CONVERGE_EMPTY_READINESS_TIMEOUT_MS,
     log,
     now: () => Date.now(),
@@ -899,12 +898,14 @@ function buildDurableRootRenderDeps(args: {
   db: Firestore;
   helm: HelmRunner;
   chartFingerprint?: string;
+  prepareGatewayConfig: (config: GatewayRuntimeRoot) => Promise<GatewayRuntimeRoot>;
   log: (msg: string) => void;
 }): DurableRootRenderDeps {
   const {
     db,
     helm,
     chartFingerprint,
+    prepareGatewayConfig,
     log,
   } = args;
   return {
@@ -912,6 +913,7 @@ function buildDurableRootRenderDeps(args: {
     chartPath: GATEWAY_CHART,
     valuesFile: GATEWAY_VALUES_FILE,
     chartFingerprint,
+    prepareGatewayConfig,
     listGatewayIds: async () => {
       const snap = await db.collection(GATEWAYS_COLLECTION).get();
       return snap.docs
@@ -1001,6 +1003,7 @@ function buildRollPassDeps(args: {
   gatewayAliasServiceEnsurer: GatewayAliasServiceEnsurer;
   revisionMacOpsTokenRevoker: RevisionMacOpsTokenRevoker;
   chartFingerprint?: string;
+  prepareGatewayConfig: (config: GatewayRuntimeRoot) => Promise<GatewayRuntimeRoot>;
   log: (msg: string) => void;
 }): RollPassDeps {
   const {
@@ -1010,6 +1013,7 @@ function buildRollPassDeps(args: {
     gatewayAliasServiceEnsurer,
     revisionMacOpsTokenRevoker,
     chartFingerprint,
+    prepareGatewayConfig,
     log,
   } = args;
   const tombstoneWriter = createRevisionTombstoneWriter({
@@ -1022,6 +1026,7 @@ function buildRollPassDeps(args: {
     chartPath: GATEWAY_CHART,
     valuesFile: GATEWAY_VALUES_FILE,
     chartFingerprint,
+    prepareGatewayConfig,
     readinessTimeoutMs: CONVERGE_EMPTY_READINESS_TIMEOUT_MS,
     sourceForwarderTtlMs: ROLL_SOURCE_FORWARDER_TTL_MS,
     migrateRetryBackoffMs: ROLL_MIGRATE_RETRY_BACKOFF_MS,
@@ -2562,6 +2567,8 @@ async function createControllerRuntime(
     (args) => spawnKubectl(args),
     log,
   );
+  const prepareGatewayConfig =
+    createGatewayRuntimeConfigPreparer(resolveApiServerEgressCidrs);
 
   const handlerSyncFleetIngress = async () => {
     await syncEdgeIngressForGateways(await readDurableServingFleetGateways(db));
@@ -2603,6 +2610,7 @@ async function createControllerRuntime(
         kubeOps,
         gatewayAliasServiceEnsurer,
         chartFingerprint,
+        prepareGatewayConfig,
         log,
       }, gatewayIds),
     );
@@ -2616,6 +2624,7 @@ async function createControllerRuntime(
         gatewayAliasServiceEnsurer,
         revisionMacOpsTokenRevoker,
         chartFingerprint,
+        prepareGatewayConfig,
         log,
       }),
     );
@@ -2624,6 +2633,7 @@ async function createControllerRuntime(
     db,
     helm,
     chartFingerprint,
+    prepareGatewayConfig,
     log,
   });
   const renderDurableRootConfigs = (request: DurableRootRenderRequest) =>
@@ -2646,7 +2656,6 @@ async function createControllerRuntime(
     renderDurableRootConfigs,
     operatorReadyRefreshMs: OPERATOR_READY_REFRESH_MS_DEFAULT,
     chartFingerprint,
-    resolveApiServerEgressCidrs,
   };
 
   return { deps, fleetControllerPrivateKey, chartFingerprint };
