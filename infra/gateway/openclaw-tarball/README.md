@@ -1084,22 +1084,22 @@ Reassess next OC upgrade."*). Update it every cycle.
 
 ## Current patches
 
-Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.7.1 (GA — current, fork `29a82fc3`, patched Mattermost artifact `29a82fc3` (same source SHA)) the fork carries **22 commits: 8 scaling patches + the ✅ MM connect marker + the 4 production MM thread/schema commits + 7 W9 conversation-pipeline commits + 1 conformance fixup + the warm-terminal-fallback patch** (failed terminal runs finalize the streamed draft in place with warm Octo copy — no "(message deleted)" tombstone, no raw `⚠️ <tool> failed` on the coach surface; receipts half = octogee PR #2263). The ✅ marker RETURNED this cycle (operator ruling 2026-07-13: we bundle a patched `@openclaw/mattermost` artifact every roll again, so the marker rides free — "it brings me joy"). The W9 seven are the durable agent-activity pipeline proven in the TEST experiment (publisher, session identity, admission, snapshot, receipts, control preservation, fail-open sink). Surgical-reload was re-derived to the plugin-registry shape (upstream adopted per-account stop/start natively; the fork now contributes the `channels.{kind}.accounts.` reload rule per registered plugin; upstream #99312 still open). recoverStaleClaims was dropped — upstream adopted it verbatim. The GA re-cut (2026-07-13) CLOSED exception `release/openclaw-ga-npm-lag` — GA is fully published on npm (openclaw + @openclaw/codex + @openclaw/ai @2026.7.1). The re-cut also restored the optional-with-default `restartChannelAccounts` shape in the surgical patch (the beta.6 re-derivation had it required + unguarded, crashing 16 upstream reload tests — caught by the promotion full-test gate; runtime-safe since the builder always emits the map). Known-red on the pristine GA tag (NOT ours; verified in fresh worktrees): entry-freshness daily-freshness, plugin-registry-snapshot load-path precedence, sdk-alias ×2.
+Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.7.1 (GA — current, fork `5e38a689`, patched Mattermost artifact `5e38a689` (same source SHA)) the fork carries the **RE-AUTHORED 13-commit stack** (2026-07-14): **8 classic scaling patches + the warm-terminal-fallback patch + 3 consolidated agent-conversation patches + 1 durable-activity-capture patch**. The tree is PROVEN identical to the superseded 22-commit GA cut (`29a82fc3`, preserved on ceckert as `...-v2026.7.1-29a82fc3`): the capture commit is an exact tree restore from `29a82fc35ed`, so the full diff between the two cuts is the retired ✅ connect-log marker (operator FINAL ruling 2026-07-14: gone for good) plus three oxfmt whitespace rewraps. Same behavior on the pod; the smaller re-authored surface exists to make Step-5 conflict archaeology cheap. The agent-conversation trio = channel/DM thread sessions (config surface the image config probe writes) · the live `agent.activity.snapshot` pipeline (runs/admissions/queue the gateway-edge run-live bridge reads) · monitor admission wiring. The capture patch = core publisher + per-account outbox spool with exactly-once receipts + HTTPS intake transport + fail-open handling — the ACTIVITY-STREAM-SPEC §4 durability floor; its projection target (paired channel today → run-root thread at Phase 1) lives octogee-side in gateway-edge, so retargeting never needs a fork roll. Warm-terminal-fallback: failed terminal runs finalize the streamed draft in place with warm Octo copy — no "(message deleted)" tombstone, no raw `⚠️ <tool> failed` on the coach surface (receipts half = octogee PR #2263). Surgical-reload stays in the upstream-PR form (#99312, still open; optional-with-default `restartChannelAccounts`). Known-red on the pristine GA tag (NOT ours; verified in fresh worktrees): entry-freshness daily-freshness, plugin-registry-snapshot load-path precedence, sdk-alias ×2.
 
-Live short SHAs at v2026.7.1 GA (top of current's integration branch is `29a82fc3`) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
-- `2b3ba521aee` — bundled Mattermost plugin metadata for channel-scoped thread sessions
-- `bf2e67cb5b1` — Mattermost thread-session scope: one durable channel session while preserving per-turn reply roots
-- `a507505e346` — Mattermost plugin: opt-in native direct-message run threads
-- `42902845bf3` — Mattermost plugin: declare host channel configuration for direct-message run threads
-- `fd45314df41` — exempt trusted control-plane (`usesSharedGatewayAuth`) from the config.patch write rate-limit
-- `a508bcae24e` — device-token self-pairing lockdown (narrows local-backend bypass to `authMethod === "device-token"`)
-- `018e0d1a3b4` — Hunk A allowlist extension: adopt 5.22 message-lifecycle + turn-start events
-- `1b06d1a69a8` — mattermost connect log: ✅ marker for operator visibility on GW startup
-- `c88bb331b25` — activity harness-signal Hunk B: session-correlated execution-phase
-- `66b847952a8` — activity harness-signal Hunk A: env-gated diagnostic-event broadcast
-- `26e72246` — env-gated isControlUiVisible override
-- `5550c4ac` — config.patch returns post-write hash
-- `81b903ff` — per-account surgical channel reload
+Live short SHAs at v2026.7.1 GA (top of current's integration branch is `5e38a689`) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
+- `5e38a689390` — restore durable activity capture (publisher + outbox spool + intake transport)
+- `0ebb5cf9391` — wire run admission + live snapshot into the monitor
+- `4ce2c9972f2` — live agent-activity snapshot pipeline (`agent.activity.snapshot`)
+- `48ee39977e5` — channel-scoped + DM run-thread sessions (config surface)
+- `f6bfa129d69` — warm terminal fallback for failed runs; finalize draft in place
+- `4a44603e8d5` — exempt trusted control-plane (`usesSharedGatewayAuth`) from the config.patch write rate-limit
+- `22455700862` — device-token self-pairing lockdown (narrows local-backend bypass to `authMethod === "device-token"`)
+- `93392a54cce` — Hunk A allowlist extension: adopt 5.22 message-lifecycle + turn-start events
+- `9516b738f66` — activity harness-signal Hunk B: session-correlated execution-phase
+- `95b942ee313` — activity harness-signal Hunk A: env-gated diagnostic-event broadcast
+- `3a9c129af3e` — env-gated isControlUiVisible override
+- `c0ed1ea07e2` — config.patch returns post-write hash
+- `59b7431514f` — per-account surgical channel reload (upstream #99312 form)
 
 As of the 6.11 line, the Hunk A diagnostic-broadcast + Hunk B execution-phase patches require a manual conflict re-resolve each cherry-pick: upstream `#89912` renamed `onSessionTranscriptUpdate`→`onInternalSessionTranscriptUpdate` (adjacent to Hunk A in `server-runtime-subscriptions.ts`) and `#90439` "embedded run session target seam" rebuilt the `params` construction Hunk B's `onExecutionPhase` wrap follows (`embedded-agent-runner/run.ts`). Both resolve mechanically (keep our block + take upstream's rename; keep upstream's `resolveAgentRunSessionTarget` build + re-anchor our wrap after it) — see the per-cycle note in `cloudbuild-base.yaml`. WATCH (6.9, no movement through 6.11): upstream's `security.event` diagnostic type (`DiagnosticSecurityEvent`, emitted from our own `message-handler.ts`) — adjacent to the device-token + rate-limit patches but **not** session-correlated and not UI-landed, so left un-adopted; a session-correlated variant would be a Hunk-B-style adopt candidate for a PWA security feed.
 
@@ -1107,7 +1107,7 @@ Per-slot top SHAs:
 
 | Slot | Version | Fork SHA |
 |---|---|---|
-| current | 2026.7.1 (GA) | `29a82fc3` |
+| current | 2026.7.1 (GA) | `5e38a689` |
 | previous | 2026.6.11 (GA) | `652ba8cf` |
 | preview | _(empty)_ | — |
 
