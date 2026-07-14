@@ -10,6 +10,25 @@ import {
 
 const router = Router();
 
+export type ActivityHistoryMode = "channel" | "run-threads";
+
+export function resolveActivityHistoryTarget(
+  data: Record<string, unknown>,
+  requestedChannelId: string,
+): { activityChannelId: string; historyMode: ActivityHistoryMode } | null {
+  const mattermost = (data.mattermost ?? {}) as {
+    channelId?: unknown;
+    activityChannelId?: unknown;
+  };
+  const primaryChannelId = typeof mattermost.channelId === "string" ? mattermost.channelId : "";
+  if (data.kind === "session" && requestedChannelId === primaryChannelId) {
+    return { activityChannelId: primaryChannelId, historyMode: "run-threads" };
+  }
+  const activityChannelId =
+    typeof mattermost.activityChannelId === "string" ? mattermost.activityChannelId : "";
+  return activityChannelId ? { activityChannelId, historyMode: "channel" } : null;
+}
+
 function workspaceSlugsForUser(data: { username?: string | null }): string[] {
   return typeof data.username === "string" && data.username.length > 0
     ? [data.username]
@@ -78,7 +97,7 @@ router.get(
   requireAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const channelId = req.params.channelId;
+      const channelId = typeof req.params.channelId === "string" ? req.params.channelId : "";
       if (!channelId) {
         res.status(400).json({ error: "channelId required" });
         return;
@@ -101,13 +120,8 @@ router.get(
         res.status(404).json({ error: "not_found" });
         return;
       }
-      const mm = (matched.data.mattermost ?? {}) as {
-        channelId?: unknown;
-        activityChannelId?: unknown;
-      };
-      const activityChannelId =
-        typeof mm.activityChannelId === "string" ? mm.activityChannelId : "";
-      if (!activityChannelId) {
+      const historyTarget = resolveActivityHistoryTarget(matched.data, channelId);
+      if (!historyTarget) {
         res.status(404).json({ error: "not_paired_yet" });
         return;
       }
@@ -123,7 +137,7 @@ router.get(
         return;
       }
       res.json({
-        activityChannelId,
+        ...historyTarget,
         channelKind,
         channelPath,
       });
