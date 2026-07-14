@@ -1084,19 +1084,19 @@ Reassess next OC upgrade."*). Update it every cycle.
 
 ## Current patches
 
-Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.7.1-beta.6 (current, fork `ca976f8c`, patched Mattermost artifact `ca976f8c` (same source SHA)) the fork carries **21 commits: 8 scaling patches + the ✅ MM connect marker + the 4 production MM thread/schema commits + 7 W9 conversation-pipeline commits + 1 conformance fixup**. The ✅ marker RETURNED this cycle (operator ruling 2026-07-13: we bundle a patched `@openclaw/mattermost` artifact every roll again, so the marker rides free — "it brings me joy"). The W9 seven are the durable agent-activity pipeline proven in the TEST experiment (publisher, session identity, admission, snapshot, receipts, control preservation, fail-open sink). Surgical-reload was re-derived to the plugin-registry shape (upstream adopted per-account stop/start natively; the fork now contributes the `channels.{kind}.accounts.` reload rule per registered plugin; upstream #99312 still open). recoverStaleClaims was dropped — upstream adopted it verbatim. Base = published beta.6; the v2026.7.1 GA tag was unpublished on npm at roll time (exception `release/openclaw-ga-npm-lag`; a GA re-cut supersedes this cycle).
+Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.7.1 (GA — current, fork `29a82fc3`, patched Mattermost artifact `29a82fc3` (same source SHA)) the fork carries **22 commits: 8 scaling patches + the ✅ MM connect marker + the 4 production MM thread/schema commits + 7 W9 conversation-pipeline commits + 1 conformance fixup + the warm-terminal-fallback patch** (failed terminal runs finalize the streamed draft in place with warm Octo copy — no "(message deleted)" tombstone, no raw `⚠️ <tool> failed` on the coach surface; receipts half = octogee PR #2263). The ✅ marker RETURNED this cycle (operator ruling 2026-07-13: we bundle a patched `@openclaw/mattermost` artifact every roll again, so the marker rides free — "it brings me joy"). The W9 seven are the durable agent-activity pipeline proven in the TEST experiment (publisher, session identity, admission, snapshot, receipts, control preservation, fail-open sink). Surgical-reload was re-derived to the plugin-registry shape (upstream adopted per-account stop/start natively; the fork now contributes the `channels.{kind}.accounts.` reload rule per registered plugin; upstream #99312 still open). recoverStaleClaims was dropped — upstream adopted it verbatim. The GA re-cut (2026-07-13) CLOSED exception `release/openclaw-ga-npm-lag` — GA is fully published on npm (openclaw + @openclaw/codex + @openclaw/ai @2026.7.1). The re-cut also restored the optional-with-default `restartChannelAccounts` shape in the surgical patch (the beta.6 re-derivation had it required + unguarded, crashing 16 upstream reload tests — caught by the promotion full-test gate; runtime-safe since the builder always emits the map). Known-red on the pristine GA tag (NOT ours; verified in fresh worktrees): entry-freshness daily-freshness, plugin-registry-snapshot load-path precedence, sdk-alias ×2.
 
-Live short SHAs at v2026.6.11 GA (top of current's integration branch is `652ba8cf`) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
-- `652ba8cf` — bundled Mattermost plugin metadata for channel-scoped thread sessions
-- `39f322cc7e2` — Mattermost thread-session scope: one durable channel session while preserving per-turn reply roots
-- `64543cf9` — Mattermost plugin: opt-in native direct-message run threads
-- `2e77b1a1` — Mattermost plugin: declare host channel configuration for direct-message run threads
-- `8a0ea697` — exempt trusted control-plane (`usesSharedGatewayAuth`) from the config.patch write rate-limit
-- `cbe81a3e` — device-token self-pairing lockdown (narrows local-backend bypass to `authMethod === "device-token"`)
-- `cc761582` — Hunk A allowlist extension: adopt 5.22 message-lifecycle + turn-start events
-- `5070c316` — mattermost connect log: ✅ marker for operator visibility on GW startup
-- `e84bb863` — activity harness-signal Hunk B: session-correlated execution-phase
-- `632d54ce` — activity harness-signal Hunk A: env-gated diagnostic-event broadcast
+Live short SHAs at v2026.7.1 GA (top of current's integration branch is `29a82fc3`) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
+- `2b3ba521aee` — bundled Mattermost plugin metadata for channel-scoped thread sessions
+- `bf2e67cb5b1` — Mattermost thread-session scope: one durable channel session while preserving per-turn reply roots
+- `a507505e346` — Mattermost plugin: opt-in native direct-message run threads
+- `42902845bf3` — Mattermost plugin: declare host channel configuration for direct-message run threads
+- `fd45314df41` — exempt trusted control-plane (`usesSharedGatewayAuth`) from the config.patch write rate-limit
+- `a508bcae24e` — device-token self-pairing lockdown (narrows local-backend bypass to `authMethod === "device-token"`)
+- `018e0d1a3b4` — Hunk A allowlist extension: adopt 5.22 message-lifecycle + turn-start events
+- `1b06d1a69a8` — mattermost connect log: ✅ marker for operator visibility on GW startup
+- `c88bb331b25` — activity harness-signal Hunk B: session-correlated execution-phase
+- `66b847952a8` — activity harness-signal Hunk A: env-gated diagnostic-event broadcast
 - `26e72246` — env-gated isControlUiVisible override
 - `5550c4ac` — config.patch returns post-write hash
 - `81b903ff` — per-account surgical channel reload
@@ -1107,8 +1107,8 @@ Per-slot top SHAs:
 
 | Slot | Version | Fork SHA |
 |---|---|---|
-| current | 2026.6.11 (GA) | `652ba8cf` |
-| previous | 2026.6.10 (GA) | `681045f9` |
+| current | 2026.7.1 (GA) | `29a82fc3` |
+| previous | 2026.6.11 (GA) | `652ba8cf` |
 | preview | _(empty)_ | — |
 
 **Essential:**
