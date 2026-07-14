@@ -657,3 +657,120 @@ describe("createGatewayRouter — internal routing headers are stripped at the P
     expect(upstreamSeen).toHaveBeenCalledWith({ hop: null, epoch: null, kept: "kept" });
   });
 });
+
+describe("createGatewayRouter — a non-101 upstream upgrade response is forwarded (no silent dead air)", () => {
+  // The gateway-edge sidecar rejects a disallowed WS upgrade by writing a raw
+  // `HTTP/1.1 403 Forbidden` and destroying the socket — NOT a 101. Node
+  // surfaces that on the router's proxy request as "response", not "upgrade".
+  // If the router only handles "upgrade", the client socket is left hanging in
+  // CONNECTING forever: silent dead air that mimics an LB outage. The router
+  // must forward the rejection so the client fails fast.
+  function rejectingUpstream(rawResponse: string): http.Server {
+    const upstream = http.createServer();
+    upstream.on("upgrade", (_req, socket) => {
+      socket.on("error", () => undefined);
+      socket.write(rawResponse);
+      socket.destroy();
+    });
+    return upstream;
+  }
+
+  interface ForwardedResponse {
+    status: number;
+    headers: http.IncomingHttpHeaders;
+    body: string;
+  }
+
+  async function expectHandshake(
+    upstream: http.Server,
+    { timeoutMs = 2_000 }: { timeoutMs?: number } = {},
+  ): Promise<ForwardedResponse> {
+    const upstreamPort = await listen(upstream);
+    const router = createGatewayRouter({
+      namespace: "octogee",
+      previewHost: "preview.octogee.com",
+      targetOriginForGateway: () => `http://127.0.0.1:${upstreamPort}`,
+      log: () => undefined,
+    });
+    const routerPort = await listen(router);
+
+    const ws = new WebSocket(`ws://127.0.0.1:${routerPort}/g/bender-blue/mm/websocket`, {
+      headers: { host: "api.octogee.com" },
+    });
+    try {
+      return await new Promise<ForwardedResponse>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error("router hung: upstream rejection was never propagated to the client")),
+          timeoutMs,
+        );
+        ws.on("unexpected-response", (_req, incoming) => {
+          let body = "";
+          incoming.setEncoding("utf8");
+          incoming.on("data", (chunk) => {
+            body += chunk;
+          });
+          incoming.on("end", () => {
+            clearTimeout(timer);
+            resolve({ status: incoming.statusCode ?? 0, headers: incoming.headers, body });
+          });
+          incoming.on("error", (err) => {
+            clearTimeout(timer);
+            reject(err);
+          });
+        });
+        ws.on("open", () => {
+          clearTimeout(timer);
+          reject(new Error("client unexpectedly upgraded — upstream rejected the handshake"));
+        });
+        ws.on("error", (err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+      });
+    } finally {
+      ws.terminate();
+    }
+  }
+
+  it("forwards the upstream 403 (origin-allowlist reject) to the client instead of hanging", async () => {
+    const res = await expectHandshake(rejectingUpstream("HTTP/1.1 403 Forbidden\r\n\r\n"));
+    expect(res.status).toBe(403);
+  });
+
+  it("forwards a non-101 upstream response with headers and body intact", async () => {
+    const body = '{"error":"nope"}';
+    const res = await expectHandshake(
+      rejectingUpstream(
+        `HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\ncontent-length: ${body.length}\r\n\r\n${body}`,
+      ),
+    );
+    expect(res.status).toBe(401);
+    expect(res.headers["content-type"]).toBe("application/json");
+    expect(res.body).toBe(body);
+  });
+
+  it("strips transfer-encoding from a chunked upstream reply so the dechunked body is well-framed", async () => {
+    // Node's client dechunks the upstream body before the router pipes it, so a
+    // forwarded `transfer-encoding: chunked` header would leave the client
+    // framing raw bytes as chunks. The router must strip it and close-delimit.
+    const res = await expectHandshake(
+      rejectingUpstream(
+        "HTTP/1.1 502 Bad Gateway\r\ntransfer-encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n",
+      ),
+    );
+    expect(res.status).toBe(502);
+    expect(res.headers["transfer-encoding"]).toBeUndefined();
+    expect(res.headers.connection).toBe("close");
+    expect(res.body).toBe("hello");
+  });
+
+  it("does not leak internal routing headers from the upstream reply back to the public client", async () => {
+    const res = await expectHandshake(
+      rejectingUpstream(
+        `HTTP/1.1 503 Service Unavailable\r\n${INTRA_FAMILY_HOP_HEADER}: default-r9\r\ncontent-length: 0\r\n\r\n`,
+      ),
+    );
+    expect(res.status).toBe(503);
+    expect(res.headers[INTRA_FAMILY_HOP_HEADER]).toBeUndefined();
+  });
+});

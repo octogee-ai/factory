@@ -341,6 +341,25 @@ async function tombstoneVerdict(
   return null;
 }
 
+// Serialize an upstream reply's status line + headers back onto the raw client
+// socket (the upgrade path bypasses ServerResponse). `strip` drops headers by
+// lowercased name; `extra` appends forced ones. The trailing ["", ""] yields the
+// header/body separator — correct for the empty-header case too.
+function serializeResponseHead(
+  res: http.IncomingMessage,
+  opts: { strip?: ReadonlySet<string>; extra?: Record<string, string> } = {},
+): string {
+  const headerLines = Object.entries(res.headers)
+    .flatMap(([key, value]) => (Array.isArray(value) ? value.map((v) => [key, v]) : [[key, value]]))
+    .filter(([key, value]) => value !== undefined && !opts.strip?.has(String(key).toLowerCase()))
+    .map(([key, value]) => `${key}: ${value}`);
+  for (const [key, value] of Object.entries(opts.extra ?? {})) {
+    headerLines.push(`${key}: ${value}`);
+  }
+  const statusLine = `HTTP/${res.httpVersion} ${res.statusCode} ${res.statusMessage}`;
+  return [statusLine, ...headerLines, "", ""].join("\r\n");
+}
+
 function proxyUpgrade(
   req: http.IncomingMessage,
   socket: Duplex,
@@ -358,6 +377,9 @@ function proxyUpgrade(
     });
   };
   socket.on("error", logSocketError("client"));
+  // Once any status line has reached the client, the fallback 502 below must
+  // not glue a second response on top — tear down instead.
+  let clientResponded = false;
   const proxyReq = http.request({
     protocol: "http:",
     hostname: origin.hostname,
@@ -375,19 +397,38 @@ function proxyUpgrade(
     proxySocket.on("error", logSocketError("upstream"));
     proxySocket.on("close", () => socket.destroy());
     socket.on("close", () => proxySocket.destroy());
-    socket.write(
-      `HTTP/${proxyRes.httpVersion} ${proxyRes.statusCode} ${proxyRes.statusMessage}\r\n` +
-        Object.entries(proxyRes.headers)
-          .flatMap(([key, value]) => (Array.isArray(value) ? value.map((v) => [key, v]) : [[key, value]]))
-          .filter(([, value]) => value !== undefined)
-          .map(([key, value]) => `${key}: ${value}`)
-          .join("\r\n") +
-        "\r\n\r\n",
-    );
+    clientResponded = true;
+    // A 101 forwards its handshake headers verbatim (Connection: Upgrade,
+    // Sec-WebSocket-Accept, …) — do not strip.
+    socket.write(serializeResponseHead(proxyRes));
     if (proxyHead.length > 0) socket.write(proxyHead);
     if (head.length > 0) proxySocket.write(head);
     proxySocket.pipe(socket);
     socket.pipe(proxySocket);
+  });
+  proxyReq.on("response", (proxyRes) => {
+    // Node routes a non-101 upstream reply (edge origin-allowlist 403, roster
+    // 503, MM 502) to "response", not "upgrade". Forward it — hop-by-hop and
+    // internal-routing headers stripped at the public boundary, body close-
+    // delimited — or the socket hangs in CONNECTING forever: the silent dead
+    // air that mimics an LB outage. `proxyRes` is already dechunked, so its
+    // transfer-encoding must not survive onto the client stream.
+    if (socket.destroyed) {
+      proxyRes.destroy();
+      return;
+    }
+    clientResponded = true;
+    proxyRes.on("error", (err) => {
+      logSocketError("upstream")(err);
+      socket.destroy();
+    });
+    socket.write(
+      serializeResponseHead(proxyRes, {
+        strip: STRIPPED_PUBLIC_HEADERS,
+        extra: { Connection: "close" },
+      }),
+    );
+    proxyRes.pipe(socket);
   });
   proxyReq.on("error", (err) => {
     log("[gateway-router] upstream WebSocket proxy failed", {
@@ -395,6 +436,10 @@ function proxyUpgrade(
       surface: target.surface,
       error: err instanceof Error ? err.message : String(err),
     });
+    if (clientResponded) {
+      socket.destroy();
+      return;
+    }
     if (!socket.destroyed) {
       socket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
     }
