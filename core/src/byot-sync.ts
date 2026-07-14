@@ -99,6 +99,9 @@ export const FREE_TIER_COACH_TOOLS: FreeTierCoachToolsBlock = {
     "preview_stop",
     "preview_list",
     "octogee_publish",
+    "octogee_project_create",
+    "octogee_project_commit",
+    "octogee_project_list",
   ],
 };
 

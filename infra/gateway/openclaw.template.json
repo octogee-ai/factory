@@ -113,6 +113,9 @@
       "preview_stop",
       "preview_list",
       "octogee_publish",
+      "octogee_project_create",
+      "octogee_project_commit",
+      "octogee_project_list",
       "workspace_commit",
       "brave_search",
       "tavily_search",
@@ -208,6 +211,7 @@
       "memory-core",
       "octogee-chat-tools",
       "octogee-preview-tools",
+      "octogee-project-tools",
       "octogee-status-tools",
       "octogee-web-tools",
       "octogee-workspace-tools",
@@ -237,6 +241,13 @@
       "octogee-preview-tools": {
         "enabled": true,
         "config": {}
+      },
+      "octogee-project-tools": {
+        "enabled": true,
+        "config": {
+          "brokerUrl": "${FLEET_BROKER_URL}",
+          "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}"
+        }
       },
       "octogee-status-tools": {
         "enabled": true,

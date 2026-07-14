@@ -119,6 +119,11 @@ WORKDIR /octogee/extensions/octogee-status-tools
 RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
     && chown -R node:node /octogee/extensions/octogee-status-tools/node_modules
 
+# octogee-project-tools runtime deps
+WORKDIR /octogee/extensions/octogee-project-tools
+RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
+    && chown -R node:node /octogee/extensions/octogee-project-tools/node_modules
+
 # octogee-web-tools runtime deps
 WORKDIR /octogee/extensions/octogee-web-tools
 RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \

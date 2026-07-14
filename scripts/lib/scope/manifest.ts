@@ -15,6 +15,7 @@ export const JOBS = {
   octogeeChatTools: "octogee-chat-tools",
   octogeePublishTools: "octogee-publish-tools",
   octogeeConnectorTools: "octogee-connector-tools",
+  octogeeProjectTools: "octogee-project-tools",
   octogeeWebTools: "octogee-web-tools",
   functions: "functions",
   site: "site",
@@ -82,6 +83,11 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
     typecheck: 'echo "octogee-connector-tools — no tsconfig; vitest is the gate"',
   },
   {
+    name: JOBS.octogeeProjectTools,
+    dir: "infra/gateway/extensions/octogee-project-tools",
+    typecheck: 'echo "octogee-project-tools — no tsconfig; vitest is the gate"',
+  },
+  {
     name: JOBS.octogeeWebTools,
     dir: "infra/gateway/extensions/octogee-web-tools",
     typecheck: 'echo "octogee-web-tools — no tsconfig; vitest is the gate"',
@@ -131,6 +137,10 @@ export const OWNERSHIP: readonly Ownership[] = [
   {
     dir: "infra/gateway/extensions/octogee-connector-tools/",
     jobs: [JOBS.octogeeConnectorTools],
+  },
+  {
+    dir: "infra/gateway/extensions/octogee-project-tools/",
+    jobs: [JOBS.octogeeProjectTools],
   },
   {
     dir: "infra/gateway/extensions/octogee-web-tools/",

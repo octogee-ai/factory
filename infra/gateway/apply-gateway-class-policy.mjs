@@ -11,12 +11,16 @@ const OCTOGEE_WORKFLOW_TOOLS = [
   "preview_stop",
   "preview_list",
   "octogee_publish",
+  "octogee_project_create",
+  "octogee_project_commit",
+  "octogee_project_list",
   "workspace_commit",
   "octogee_chat_search",
   "octogee_chat_history",
   "octogee_chat_set_identity",
 ];
 const CONNECTOR_TOOLS_PLUGIN = "octogee-connector-tools";
+const PROJECT_TOOLS_PLUGIN = "octogee-project-tools";
 const CODEX_MODEL = "openai/gpt-5.5";
 const CODEX_PROFILE = "openai-codex:default";
 const RUNTIME_CODEX_SANDBOX = "danger-full-access";
@@ -103,6 +107,17 @@ function enableConnectorTools(config) {
   config.plugins.entries[CONNECTOR_TOOLS_PLUGIN].config ??= {};
 }
 
+// Preserved/restored configs predate the plugin; converge it at boot so both
+// shared and builder classes gain project CRUD without waiting for a fresh
+// template render. The client resolves brokerUrl/tokenPath from env when the
+// entry config is empty.
+function enableProjectTools(config) {
+  allowPlugin(config, PROJECT_TOOLS_PLUGIN);
+  config.plugins.entries[PROJECT_TOOLS_PLUGIN] ??= {};
+  config.plugins.entries[PROJECT_TOOLS_PLUGIN].enabled = true;
+  config.plugins.entries[PROJECT_TOOLS_PLUGIN].config ??= {};
+}
+
 function enableRuntimePlugins(config) {
   ensureCodexAuthProfile(config);
   ensureCodexRuntimeModel(config);
@@ -145,6 +160,7 @@ function applySharedPolicy(config) {
   ]);
   removeSharedSubagentDefaults(config);
   allowOctogeeWorkflowTools(config);
+  enableProjectTools(config);
   sandboxCodex(config);
   disableConnectorTools(config);
 }
@@ -157,6 +173,7 @@ function applyBuilderPolicy(config) {
   config.tools.subagents.tools ??= {};
   config.tools.subagents.tools.deny = removeDeniedTools(config.tools.subagents.tools.deny, EXEC_TOOLS);
   allowOctogeeWorkflowTools(config);
+  enableProjectTools(config);
   enableRuntimePlugins(config);
 }
 

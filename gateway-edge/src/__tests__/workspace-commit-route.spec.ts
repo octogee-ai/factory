@@ -98,6 +98,7 @@ describe("internal workspace commit route", () => {
     expect(h.commitAndPushWorkspace).toHaveBeenCalledWith("/customers/acme", {
       message: "checkpoint work",
       author: { name: "Octogee Agent", email: "agent@octogee.test" },
+      excludePathspecs: ["projects"],
     });
     expect(res.body).toEqual({ committed: true, pushed: true, nothingToCommit: false });
     expect(h.info).toHaveBeenCalledWith(expect.stringContaining("internal/workspace/commit slug=acme"));
@@ -152,6 +153,8 @@ describe("internal workspace commit route — Vegas project lane", () => {
       "/customers/acme/projects/orbit",
       expect.objectContaining({ message: "checkpoint" }),
     );
+    const options = h.commitAndPushWorkspace.mock.calls[0][1] as { excludePathspecs?: string[] };
+    expect(options.excludePathspecs).toBeUndefined();
   });
 
   it("rejects malformed project ids before touching the tree", async () => {

@@ -309,11 +309,35 @@ const cfg = spawnSync("git", ["config", "user.email"], { cwd: repo, encoding: "u
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.result.empty).toBe(false);
-    
+
     const status = await gitStatus(repo);
     expect(status.ok).toBe(true);
     if (!status.ok) return;
     expect(status.entries).toEqual([]);
+  });
+
+  it("excludePathspecs keeps nested project clones out of workspace-lane commits", async () => {
+    const projectDir = path.join(repo, "projects", "blog");
+    await fs.mkdir(projectDir, { recursive: true });
+    git(projectDir, ["init", "--initial-branch=main"]);
+    await fs.writeFile(path.join(projectDir, "index.html"), "<h1>hi</h1>\n");
+    await fs.writeFile(path.join(repo, "notes.md"), "workspace change\n");
+
+    const r = await gitCommit(repo, {
+      message: "workspace lane",
+      author: { name: "Bob", email: "b@x" },
+      excludePathspecs: ["projects"],
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.result.empty).toBe(false);
+
+    const tracked = spawnSync("git", ["ls-files"], { cwd: repo, encoding: "utf-8" });
+    expect(tracked.stdout).toContain("notes.md");
+    expect(tracked.stdout).not.toContain("projects/blog");
+
+    const status = spawnSync("git", ["status", "--porcelain"], { cwd: repo, encoding: "utf-8" });
+    expect(status.stdout).toContain("projects/");
   });
 });
 

@@ -293,7 +293,7 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   return repoUrlDisplay;
 }
 
-function workspaceGitignore(): string {
+export function workspaceGitignore(): string {
   return [
     "# Octogee workspace — track user-visible files, exclude system/build artifacts",
     "",
@@ -313,13 +313,15 @@ function workspaceGitignore(): string {
     "# Inbound media (ephemeral, 7-day retention)",
     "media/",
     "",
+    "# Project repos are their own Gitea clones — committed via their own",
+    "# commit path (octogee_project_commit), never swept by workspace commits",
+    "projects/",
+    "",
     "# Build artifacts",
-    "projects/*/preview/",
-    "projects/*/src/node_modules/",
     "node_modules/",
     "",
     "# User-visible files are tracked:",
-    "# AGENTS.md, TOOLS.md, SOUL.md, USER.md, MEMORY.md, memory/*, projects/*/src/",
+    "# AGENTS.md, TOOLS.md, SOUL.md, USER.md, MEMORY.md, memory/*",
   ].join("\n") + "\n";
 }
 

@@ -80,7 +80,15 @@ router.post("/commit", async (req: Request, res: Response) => {
   }
 
   const author = resolveCommitAuthor(undefined, slug);
-  const r = await commitAndPushWorkspace(dir, { message, author });
+  // Workspace-lane commits must never sweep the nested project clones — each
+  // project repo has its own commit path (octogee_project_commit). The
+  // exclusion is enforced here, not just .gitignore, so workspaces seeded
+  // before projects/ was ignored are covered too.
+  const r = await commitAndPushWorkspace(dir, {
+    message,
+    author,
+    ...(project ? {} : { excludePathspecs: ["projects"] }),
+  });
   if (!r.ok) {
     logger.warn(`internal/workspace/commit: git error slug=${slug} code=${r.error.code}`);
     res.status(500).json({ error: "git command failed", code: r.error.code });

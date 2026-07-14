@@ -18,6 +18,7 @@ import { mattermostMintRoutes, mmRestProxyHandler } from "./routes/mattermost-pr
 import { createOpenClawRuntimeBrokerRoutes } from "./routes/openclaw-runtime-broker.js";
 import { createConnectorTokenBrokerRoutes } from "./routes/connector-token-broker.js";
 import { createByokBrokerRoutes } from "./routes/byok-broker.js";
+import { createAgentProjectRoutes } from "./routes/agent-projects.js";
 import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
 import { createBuilderShellBrokerRoutes } from "./routes/builder-shell-broker.js";
 import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
@@ -251,6 +252,10 @@ export function createApp(opts: CreateAppOptions = {}) {
   // Secret Manager — BYOSUB OAuth (scoped to the caller's user integration) and
   // byok-* API keys (roster-scoped to the gateway's assigned slugs).
   app.use("/internal/byok", createByokBrokerRoutes({ db }));
+  // octogee-api-only: agent project CRUD — roster-scoped like /internal/byok;
+  // the owner + workspace derive from the pod's assignment, and plan
+  // entitlements are enforced by the same service the UI create uses.
+  app.use("/internal/agent-projects", createAgentProjectRoutes({ db }));
   // octogee-api-only: broker BuilderShell ticket, presence, and audit
   // Firestore writes so operator gateway pods can stay datastore.viewer-only.
   app.use("/internal/builder-shell", createBuilderShellBrokerRoutes());
