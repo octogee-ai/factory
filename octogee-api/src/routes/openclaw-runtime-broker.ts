@@ -335,6 +335,9 @@ async function resolveChannelPair(
   if (!binding) return null;
   if (!(await assignedHere(db, gatewayId, binding.workspaceSlug))) return "forbidden";
   const data = doc.data() ?? {};
+  if (data.kind === "session") {
+    return { primaryChannelId, activityChannelId: primaryChannelId, channelDocPath: channelDocPath! };
+  }
   const activityChannelId = readPath(data, "mattermost.activityChannelId");
   if (typeof activityChannelId !== "string" || !activityChannelId) return null;
   return { primaryChannelId, activityChannelId, channelDocPath: channelDocPath! };
