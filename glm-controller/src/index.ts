@@ -68,6 +68,7 @@ import {
   isGatewayLegacyBackfill,
   isRevisionRealizationDoc,
   revisionIdForRelease,
+  W9_GATEWAY_EDGE_IMAGE_REPOSITORY,
   type GatewayDoc,
   type ReleasePayload,
   type RevisionRealizationDoc,
@@ -1477,12 +1478,17 @@ async function readDurableRevisionArtifacts(
       throw new Error(`revision ${revision.revisionId} has no valid release artifact`);
     }
     artifacts.push({ imageRepository: artifact.imageRepository, imageTag: artifact.imageTag });
-    if (artifact.gatewayEdgeImage) {
-      artifacts.push({
-        imageRepository: artifact.gatewayEdgeImage.imageRepository,
-        imageTag: artifact.gatewayEdgeImage.imageTag,
-      });
-    }
+    // The chart always renders the gateway-edge sidecar (tag defaults to the
+    // gateway imageTag), so its image must be pinned even when the release
+    // payload carries no explicit gatewayEdgeImage.
+    const gatewayEdgeImage = artifact.gatewayEdgeImage ?? {
+      imageRepository: W9_GATEWAY_EDGE_IMAGE_REPOSITORY,
+      imageTag: artifact.imageTag,
+    };
+    artifacts.push({
+      imageRepository: gatewayEdgeImage.imageRepository,
+      imageTag: gatewayEdgeImage.imageTag,
+    });
   }
   return artifacts;
 }

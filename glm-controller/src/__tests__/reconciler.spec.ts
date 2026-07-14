@@ -492,7 +492,7 @@ describe("startReconciler — durable root authority", () => {
     stop();
   });
 
-  it("pins every active durable revision artifact", async () => {
+  it("pins the derived gateway-edge sidecar alongside every plain release artifact", async () => {
     const callbacks: SnapshotCallbacks = {};
     const reconcileImagePins = vi.fn(async () => {});
     const stop = startReconciler({
@@ -516,10 +516,16 @@ describe("startReconciler — durable root authority", () => {
 
     expect(reconcileImagePins).toHaveBeenCalledWith(
       "prod",
-      [{
-        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-        imageTag: "abc1234",
-      }],
+      [
+        {
+          imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+          imageTag: "abc1234",
+        },
+        {
+          imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
+          imageTag: "abc1234",
+        },
+      ],
       expect.any(Function),
     );
     stop();
