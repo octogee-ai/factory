@@ -21,6 +21,28 @@ function emptyConfig(): any {
 const GLM_MODEL_REF = "platform-openrouter/z-ai/glm-5.2";
 const MAC_MODEL_REF = "anthropic/claude-sonnet-4-6";
 
+describe("applyPreBootPatches — platform model catalog", () => {
+  it("allowlists every broker-backed platform model for an operator gateway", () => {
+    const config: any = { agents: { defaults: { models: {} } } };
+
+    const changed = applyPreBootPatches(config, {
+      GATEWAY_CLASS: "operator",
+      OPENROUTER_BASE_URL: "http://llm-broker/v1",
+      PLATFORM_OPENAI_BASE_URL: "http://llm-broker/v1",
+    });
+
+    expect(changed).toBe(true);
+    expect(config.agents.defaults.models).toMatchObject({
+      "anthropic/claude-sonnet-4-6": {},
+      "anthropic/claude-haiku-4-5": {},
+      "platform-openrouter/z-ai/glm-5.2": {},
+      "platform-openrouter/minimax/minimax-m3": {},
+      "platform-openrouter/deepseek/deepseek-v4-pro": {},
+      "platform-openai/gpt-5.4-mini": {},
+    });
+  });
+});
+
 describe("applyPreBootPatches — tools.profile (new)", () => {
   it("sets tools.profile=coding on a config with no tools field", () => {
     const config = emptyConfig();

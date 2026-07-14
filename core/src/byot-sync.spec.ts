@@ -65,6 +65,7 @@ import {
   requestGatewayRestartForRuntimeChange,
   syncByotForCustomer,
   applyAgentModelOverrides,
+  agentIdsForSlug,
 } from "./byot-sync-runtime";
 import { internalFetch } from "./internal-fetch.js";
 import { codexAuthJsonPath, codexAgentDir } from "./byosub-restore.js";
@@ -1544,20 +1545,32 @@ describe("standard gateway — BYOS materialization", () => {
 
 describe("shared gateway — per-customer broker-token materialization", () => {
   const PRESERVE = { preserveAuthProfileStore: true };
-  const baseDeps = (overrides: Record<string, unknown>) => ({
-    isSharedGateway: () => true,
-    isOperatorGateway: () => false,
-    applyCoachModelPatch: vi.fn(async () => false),
-    applyCoachToolsConvergence: vi.fn(async () => false),
-    triggerSecretsReload: vi.fn(async () => {}),
-    ...overrides,
-  });
+  const baseDeps = (overrides: Record<string, unknown>) => {
+    let restartPending = false;
+    return {
+      isSharedGateway: () => true,
+      isOperatorGateway: () => false,
+      applyCoachModelPatch: vi.fn(async () => false),
+      applyCoachToolsConvergence: vi.fn(async () => false),
+      requestGatewayRestart: vi.fn(async () => false),
+      triggerSecretsReload: vi.fn(async () => {}),
+      hasPendingPlatformCatalogRestart: () => restartPending,
+      markPlatformCatalogRestartPending: () => {
+        restartPending = true;
+      },
+      clearPlatformCatalogRestartPending: () => {
+        restartPending = false;
+      },
+      ...overrides,
+    };
+  };
 
-  it("platform (non-BYOK) customer: materializes the anthropic broker profile, PRESERVES the store, reloads", async () => {
+  it("platform customer restarts after materializing the model catalog on a shared gateway", async () => {
     const applyByotStateFn = vi.fn(() => false);
     const materializeFn = vi.fn(() => true);
     const restoreOauthFn = vi.fn(async () => ({ restored: false, present: true }));
     const reloadFn = vi.fn(async () => {});
+    const requestGatewayRestartFn = vi.fn(async () => true);
 
     await syncByotForCustomer(
       { byotActive: false, username: "tester-70", provisioning: { openclaw: { status: "complete" } } },
@@ -1566,13 +1579,15 @@ describe("shared gateway — per-customer broker-token materialization", () => {
         materializeAnthropicBroker: materializeFn,
         restoreOauthStoreForSlug: restoreOauthFn,
         triggerSecretsReload: reloadFn,
+        requestGatewayRestart: requestGatewayRestartFn,
       }),
     );
 
     expect(materializeFn).toHaveBeenCalledWith("tester-70");
     expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, PRESERVE);
     expect(restoreOauthFn).not.toHaveBeenCalled();
-    expect(reloadFn).toHaveBeenCalledTimes(1);
+    expect(requestGatewayRestartFn).toHaveBeenCalledWith("platform-model-catalog");
+    expect(reloadFn).not.toHaveBeenCalled();
   });
 
   it("anthropic BYOK: no local key (broker resolves per-owner), but the broker profile is still materialized", async () => {
@@ -1762,6 +1777,99 @@ describe("operator gateway — runtime sync stays narrow", () => {
     expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
   });
 
+  it("syncByotForCustomer: materializes the platform catalog for an operator customer without OAuth", async () => {
+    let restartPending = false;
+    const materializeBrokerFn = vi.fn(() => true);
+    const requestGatewayRestartFn = vi.fn(async () => true);
+    const triggerSecretsReloadFn = vi.fn(async () => {});
+
+    await syncByotForCustomer(
+      {
+        username: "tester-70",
+        selectedTier: "personal",
+        provisioning: { openclaw: { status: "complete" } },
+      },
+      {
+        isOperatorGateway: () => true,
+        materializeAnthropicBroker: materializeBrokerFn,
+        requestGatewayRestart: requestGatewayRestartFn,
+        triggerSecretsReload: triggerSecretsReloadFn,
+        hasPendingPlatformCatalogRestart: () => restartPending,
+        markPlatformCatalogRestartPending: () => {
+          restartPending = true;
+        },
+        clearPlatformCatalogRestartPending: () => {
+          restartPending = false;
+        },
+      },
+    );
+
+    expect(materializeBrokerFn).toHaveBeenCalledWith("tester-70");
+    expect(requestGatewayRestartFn).toHaveBeenCalledWith("platform-model-catalog");
+    expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
+  });
+
+  it("syncByotForCustomer: retries a rejected platform-catalog restart after transitioning to the standard path", async () => {
+    let restartPending = false;
+    let operatorGateway = true;
+    const materializeBrokerFn = vi.fn()
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+    const requestGatewayRestartFn = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const triggerSecretsReloadFn = vi.fn(async () => {});
+    const deps = {
+      isOperatorGateway: () => operatorGateway,
+      applyByotState: vi.fn(() => false),
+      applyCoachModelPatch: vi.fn(async () => false),
+      applyCoachToolsConvergence: vi.fn(async () => false),
+      materializeAnthropicBroker: materializeBrokerFn,
+      requestGatewayRestart: requestGatewayRestartFn,
+      triggerSecretsReload: triggerSecretsReloadFn,
+      hasPendingPlatformCatalogRestart: () => restartPending,
+      markPlatformCatalogRestartPending: () => {
+        restartPending = true;
+      },
+      clearPlatformCatalogRestartPending: () => {
+        restartPending = false;
+      },
+    };
+    const user = {
+      username: "tester-70",
+      selectedTier: "personal" as const,
+      provisioning: { openclaw: { status: "complete" as const } },
+    };
+
+    await syncByotForCustomer(user, deps);
+    expect(restartPending).toBe(true);
+    expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
+
+    operatorGateway = false;
+    await syncByotForCustomer(user, deps);
+    expect(requestGatewayRestartFn).toHaveBeenCalledTimes(2);
+    expect(restartPending).toBe(false);
+    expect(materializeBrokerFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("agentIdsForSlug includes every mounted project coach and excludes foreign agents", () => {
+    expect(agentIdsForSlug("tester-70", {
+      agents: {
+        list: [
+          { id: "octogee-tester-70-coach" },
+          { id: "octogee-tester-70-proj-web-coach" },
+          { id: "octogee-tester-70-proj-api-coach" },
+          { id: "octogee-other-coach" },
+          { name: "missing-id" },
+        ],
+      },
+    })).toEqual([
+      "octogee-tester-70-coach",
+      "octogee-tester-70-proj-web-coach",
+      "octogee-tester-70-proj-api-coach",
+    ]);
+  });
+
   it("syncByotForCustomer: preserves an operator Codex danger-full-access sandbox through the full restore and coach patch cycle", async () => {
     const currentConfig = {
       agents: {
@@ -1861,10 +1969,13 @@ describe("operator gateway — runtime sync stays narrow", () => {
   });
 
   it("anthropic BYOT cleanup still runs on operator broker-token gateways", async () => {
+    let restartPending = false;
     const applyByotStateFn = vi.fn(() => true);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
     const applyCoachModelPatchFn = vi.fn(async () => true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
+    const materializeBrokerFn = vi.fn(() => true);
+    const requestGatewayRestartFn = vi.fn(async () => true);
 
     await syncByotForCustomer(
       {
@@ -1880,14 +1991,24 @@ describe("operator gateway — runtime sync stays narrow", () => {
         restoreOauthStoreForSlug: restoreOauthFn,
         applyCoachModelPatch: applyCoachModelPatchFn,
         applyCoachToolsConvergence: vi.fn(async () => false),
+        materializeAnthropicBroker: materializeBrokerFn,
+        requestGatewayRestart: requestGatewayRestartFn,
         triggerSecretsReload: triggerSecretsReloadFn,
+        hasPendingPlatformCatalogRestart: () => restartPending,
+        markPlatformCatalogRestartPending: () => {
+          restartPending = true;
+        },
+        clearPlatformCatalogRestartPending: () => {
+          restartPending = false;
+        },
       },
     );
 
     expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null);
     expect(restoreOauthFn).not.toHaveBeenCalled();
     expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
-    expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
+    expect(requestGatewayRestartFn).toHaveBeenCalledWith("platform-model-catalog");
+    expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
   });
 });
 

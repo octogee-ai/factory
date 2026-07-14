@@ -1,5 +1,6 @@
 import * as path from "path";
 import * as os from "os";
+import * as fs from "fs";
 import {
   applyByotState,
   byosCoachConfigPatch,
@@ -32,6 +33,7 @@ import {
   isOperatorGateway,
   isSharedGateway,
   log,
+  readOpenClawConfig,
   usesLlmBrokerToken,
 } from "./config.js";
 import {
@@ -50,6 +52,23 @@ import { resolveBillingProfile } from "@octogee/shared/types/billing";
 // coach-attach verify's runtime-readiness budget); permanent errors still fail
 // fast inside applyConfigPatch.
 const BYOT_RUNTIME_BOOT_PATIENCE_MS = 120_000;
+const PLATFORM_CATALOG_RESTART_MARKER = path.join(
+  OPENCLAW_DIR,
+  ".platform-model-catalog-restart-required",
+);
+
+function hasPendingPlatformCatalogRestart(): boolean {
+  return fs.existsSync(PLATFORM_CATALOG_RESTART_MARKER);
+}
+
+function markPlatformCatalogRestartPending(): void {
+  fs.mkdirSync(OPENCLAW_DIR, { recursive: true });
+  fs.writeFileSync(PLATFORM_CATALOG_RESTART_MARKER, "pending\n", "utf-8");
+}
+
+function clearPlatformCatalogRestartPending(): void {
+  fs.rmSync(PLATFORM_CATALOG_RESTART_MARKER, { force: true });
+}
 
 function currentCodexAppServerConfig(current: unknown): typeof STANDARD_CODEX_APP_SERVER {
   const appServer = (current as {
@@ -521,6 +540,9 @@ export interface SyncByotForCustomerDeps {
   triggerSecretsReload?: typeof triggerSecretsReload;
   materializeAnthropicBroker?: (slug: string) => boolean;
   applyAgentModelOverrides?: typeof applyAgentModelOverrides;
+  hasPendingPlatformCatalogRestart?: () => boolean;
+  markPlatformCatalogRestartPending?: () => void;
+  clearPlatformCatalogRestartPending?: () => void;
 }
 
 type DesiredByotState = ReturnType<typeof deriveDesiredByotState>;
@@ -536,25 +558,54 @@ interface SyncByotActions {
   triggerSecretsReload: typeof triggerSecretsReload;
   materializeAnthropicBroker: (slug: string) => boolean;
   applyAgentModelOverrides: typeof applyAgentModelOverrides;
+  hasPendingPlatformCatalogRestart: () => boolean;
+  markPlatformCatalogRestartPending: () => void;
+  clearPlatformCatalogRestartPending: () => void;
 }
 
 // Model-readiness: every customer-agent gets BOTH broker provider surfaces —
 // the anthropic:default profile and the full OpenRouter catalog — so "/models
 // switch to <any catalog model>" is a pure agents.list flip. Plan policy gates
 // at the broker, so pre-wiring every provider on every agent is safe.
+export function agentIdsForSlug(slug: string, config: unknown): string[] {
+  const list = (config as { agents?: { list?: unknown } } | null)?.agents?.list;
+  if (!Array.isArray(list)) return [];
+  return Array.from(new Set(list.flatMap((entry) => {
+    const agentId = (entry as { id?: unknown } | null)?.id;
+    return typeof agentId === "string" && agentIdBelongsToSlug(agentId, slug) ? [agentId] : [];
+  })));
+}
+
+function mountedAgentIdsForSlug(slug: string): string[] {
+  try {
+    const mounted = agentIdsForSlug(slug, readOpenClawConfig());
+    return mounted.length > 0 ? mounted : [`octogee-${slug}-coach`];
+  } catch (error) {
+    log(`⚠ [byot-sync] failed to enumerate mounted agents for ${slug}: ${(error as Error).message}`);
+    return [`octogee-${slug}-coach`];
+  }
+}
+
 function materializeAnthropicBroker(slug: string): boolean {
-  const agentId = `octogee-${slug}-coach`;
-  const agentHome = path.join(AGENTS_DIR, agentId, "agent");
-  const wroteProfile = upsertAnthropicBrokerProfile(agentHome, agentId);
   const baseUrl = configuredOpenRouterBaseUrl();
-  const wroteCatalog = baseUrl
-    ? upsertOpenRouterBrokerCatalog(agentHome, agentId, openRouterCatalogInputForBaseUrl(baseUrl))
-    : false;
   const openAiBaseUrl = configuredPlatformOpenAiBaseUrl();
-  const wroteOpenAi = openAiBaseUrl
-    ? upsertOpenAiBrokerCatalog(agentHome, agentId, openAiCatalogInputForBaseUrl(openAiBaseUrl))
-    : false;
-  return wroteProfile || wroteCatalog || wroteOpenAi;
+  let changed = false;
+  for (const agentId of mountedAgentIdsForSlug(slug)) {
+    try {
+      const agentHome = path.join(AGENTS_DIR, agentId, "agent");
+      const wroteProfile = upsertAnthropicBrokerProfile(agentHome, agentId);
+      const wroteCatalog = baseUrl
+        ? upsertOpenRouterBrokerCatalog(agentHome, agentId, openRouterCatalogInputForBaseUrl(baseUrl))
+        : false;
+      const wroteOpenAi = openAiBaseUrl
+        ? upsertOpenAiBrokerCatalog(agentHome, agentId, openAiCatalogInputForBaseUrl(openAiBaseUrl))
+        : false;
+      changed = wroteProfile || wroteCatalog || wroteOpenAi || changed;
+    } catch (error) {
+      log(`⚠ [byot-sync] model catalog materialization failed for ${agentId}: ${(error as Error).message}`);
+    }
+  }
+  return changed;
 }
 
 function configuredOpenRouterBaseUrl(): string | null {
@@ -583,6 +634,12 @@ function syncActions(deps?: SyncByotForCustomerDeps): SyncByotActions {
     triggerSecretsReload: deps?.triggerSecretsReload ?? triggerSecretsReload,
     materializeAnthropicBroker: deps?.materializeAnthropicBroker ?? materializeAnthropicBroker,
     applyAgentModelOverrides: deps?.applyAgentModelOverrides ?? applyAgentModelOverrides,
+    hasPendingPlatformCatalogRestart:
+      deps?.hasPendingPlatformCatalogRestart ?? hasPendingPlatformCatalogRestart,
+    markPlatformCatalogRestartPending:
+      deps?.markPlatformCatalogRestartPending ?? markPlatformCatalogRestartPending,
+    clearPlatformCatalogRestartPending:
+      deps?.clearPlatformCatalogRestartPending ?? clearPlatformCatalogRestartPending,
   };
 }
 
@@ -597,9 +654,29 @@ async function applyRestoredOauthRuntimeAllowlist(
 async function requestRestartIfRequired(
   runtimePatch: OauthRuntimeModelAllowlistResult,
   actions: SyncByotActions,
+  reason?: string,
+  platformCatalogRestartPending = false,
 ): Promise<boolean> {
-  if (!runtimePatch.restartRequired) return false;
-  return actions.requestGatewayRestart();
+  if (!runtimePatch.restartRequired && !platformCatalogRestartPending) return false;
+  const requested = await actions.requestGatewayRestart(
+    platformCatalogRestartPending ? "platform-model-catalog" : reason,
+  );
+  if (requested && platformCatalogRestartPending) {
+    actions.clearPlatformCatalogRestartPending();
+  }
+  return requested;
+}
+
+function materializePlatformCatalog(
+  slug: string,
+  actions: SyncByotActions,
+): { changed: boolean; restartPending: boolean } {
+  const changed = actions.materializeAnthropicBroker(slug);
+  if (changed) actions.markPlatformCatalogRestartPending();
+  return {
+    changed,
+    restartPending: changed || actions.hasPendingPlatformCatalogRestart(),
+  };
 }
 
 function isBrokerResolvedAnthropic(
@@ -614,11 +691,19 @@ async function clearBrokerResolvedAnthropic(
   actions: SyncByotActions,
 ): Promise<void> {
   const changed = actions.applyByotState(slug, null);
-  const materialized = actions.materializeAnthropicBroker(slug);
+  const catalog = materializePlatformCatalog(slug, actions);
   log(
     `[byot-sync] ${slug}: anthropic BYOT is broker-resolved; local provider-key refs removed`,
   );
-  if (changed || materialized) await actions.triggerSecretsReload();
+  const restartRequested = await requestRestartIfRequired(
+    { patched: false, changed: false, restartRequired: false },
+    actions,
+    undefined,
+    catalog.restartPending,
+  );
+  if ((changed || catalog.changed || catalog.restartPending) && !restartRequested) {
+    await actions.triggerSecretsReload();
+  }
 }
 
 async function restoreOauthIfNeeded(
@@ -644,9 +729,18 @@ async function syncStandardByotState(
   const patched = restore.present && desired.coachModelInput
     ? await actions.applyCoachModelPatch(desired.coachModelInput)
     : false;
-  const restartRequested = await requestRestartIfRequired(runtimePatched, actions);
+  const catalogRestartPending = actions.hasPendingPlatformCatalogRestart();
+  const restartRequested = await requestRestartIfRequired(
+    runtimePatched,
+    actions,
+    undefined,
+    catalogRestartPending,
+  );
 
-  if ((changed || restore.restored || runtimePatched.patched || patched) && !restartRequested) {
+  if (
+    (changed || restore.restored || runtimePatched.patched || patched || catalogRestartPending) &&
+    !restartRequested
+  ) {
     await actions.triggerSecretsReload();
   }
 }
@@ -657,12 +751,21 @@ async function syncOperatorByotState(
   actions: SyncByotActions,
 ): Promise<void> {
   const restore = await restoreOauthIfNeeded(slug, desired, actions);
+  const catalog = materializePlatformCatalog(slug, actions);
   const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
   const patched = restore.present && desired.coachModelInput
     ? await actions.applyCoachModelPatch(desired.coachModelInput)
     : false;
-  const restartRequested = await requestRestartIfRequired(runtimePatched, actions);
-  if ((restore.restored || runtimePatched.patched || patched) && !restartRequested) {
+  const restartRequested = await requestRestartIfRequired(
+    runtimePatched,
+    actions,
+    undefined,
+    catalog.restartPending,
+  );
+  if (
+    (restore.restored || catalog.changed || catalog.restartPending || runtimePatched.patched || patched) &&
+    !restartRequested
+  ) {
     await actions.triggerSecretsReload();
   }
 }
@@ -729,16 +832,21 @@ async function syncSharedBrokerByotState(
     { preserveAuthProfileStore: opts?.purgeAuthProfileStore !== true },
   );
 
-  const materialized = actions.materializeAnthropicBroker(slug);
+  const catalog = materializePlatformCatalog(slug, actions);
   const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
 
   const patched = restore.present && desired.coachModelInput
     ? await actions.applyCoachModelPatch(desired.coachModelInput)
     : false;
-  const restartRequested = await requestRestartIfRequired(runtimePatched, actions);
+  const restartRequested = await requestRestartIfRequired(
+    runtimePatched,
+    actions,
+    undefined,
+    catalog.restartPending,
+  );
 
   if (
-    (changed || restore.restored || materialized || runtimePatched.patched || patched) &&
+    (changed || restore.restored || catalog.changed || catalog.restartPending || runtimePatched.patched || patched) &&
     !restartRequested
   ) {
     await actions.triggerSecretsReload();

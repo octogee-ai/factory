@@ -16,6 +16,11 @@ import {
   readGatewayAuthorization,
   type GatewayAuthorization,
 } from "@octogee/core/gateway-live-release";
+import {
+  OPENAI_PLATFORM_PROVIDER_ID,
+  OPENROUTER_PLATFORM_PROVIDER_ID,
+  platformModelRefs,
+} from "@octogee/shared/types/agent-models";
 
 const OPENCLAW_DIR = process.env.HOME
   ? path.join(process.env.HOME, ".openclaw")
@@ -320,6 +325,25 @@ export function applyMemorySearchPlatformEmbeddingsPatch(
   return true;
 }
 
+function applyPlatformModelAllowlist(config: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  if (!shouldMaterializeAnthropicBrokerProfiles(env)) return false;
+  const agents = objectProperty(config, "agents");
+  const defaults = agents ? ensureNullishObjectProperty(agents, "defaults") : null;
+  const models = defaults ? ensureNullishObjectProperty(defaults, "models") : null;
+  if (!models) return false;
+  const refs = platformModelRefs().filter((ref) =>
+    (!ref.startsWith(`${OPENROUTER_PLATFORM_PROVIDER_ID}/`) || Boolean(env.OPENROUTER_BASE_URL?.trim())) &&
+    (!ref.startsWith(`${OPENAI_PLATFORM_PROVIDER_ID}/`) || Boolean(env.PLATFORM_OPENAI_BASE_URL?.trim())),
+  );
+  let changed = false;
+  for (const ref of refs) {
+    if (models[ref] !== undefined) continue;
+    models[ref] = {};
+    changed = true;
+  }
+  return changed;
+}
+
 export function applyPreBootPatches(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -331,6 +355,7 @@ export function applyPreBootPatches(
     applyOpenClawConversationExperiment(config, env.OCTOGEE_ACTIVITY_BRIDGE_MODE),
     applyMacPlatformAnthropicPin(config, env, logFn),
     applyAnthropicBaseUrlPatch(config, env, logFn),
+    applyPlatformModelAllowlist(config, env),
     applyMemorySearchPlatformEmbeddingsPatch(config, env, logFn),
   ].some(Boolean);
 }
