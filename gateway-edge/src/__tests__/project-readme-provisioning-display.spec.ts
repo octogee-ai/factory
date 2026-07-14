@@ -179,6 +179,38 @@ describe("project provisioning helpers", () => {
     );
   });
 
+  it("seeds project.json with the default static recipe beside the README", async () => {
+    await ensureProjectGiteaRepo({
+      workspaceId: "mira",
+      slug: "orbit",
+      name: "Orbit",
+      tagline: "Ship it",
+      projectType: "web",
+      visibility: "public",
+    });
+
+    const call = h.giteaWriteFile.mock.calls.find((args) => args[2] === "project.json");
+    expect(call).toBeDefined();
+    expect(call?.[0]).toBe("mira");
+    expect(call?.[1]).toBe("orbit");
+    expect(call?.[4]).toBe("auto: seed project metadata");
+    expect(JSON.parse(call?.[3] as string)).toMatchObject({
+      version: 1,
+      name: "Orbit",
+      slug: "orbit",
+      ownerSlug: "mira",
+      status: "active",
+      visibility: "public",
+      hosting: {
+        enabled: true,
+        siteId: "octogee-mira-orbit",
+        url: "https://octogee-mira-orbit.web.app",
+      },
+      runtime: { recipe: "astro-static" },
+      collaborators: [],
+    });
+  });
+
   it("returns null on successful provisioning and an error string on failure", async () => {
     await expect(
       provisionProjectRepo({

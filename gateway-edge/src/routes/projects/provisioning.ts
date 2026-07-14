@@ -26,6 +26,31 @@ export async function ensureProjectGiteaRepo(input: {
     projectSlug: input.slug,
   });
   await giteaWriteFile(org, repoName, "README.md", body, "auto: seed project README");
+
+  const hostingSiteId = `octogee-${input.workspaceId}-${input.slug}`;
+  const projectJson = {
+    version: 1,
+    name: input.name,
+    slug: input.slug,
+    ownerSlug: input.workspaceId,
+    status: "active",
+    visibility: input.visibility,
+    hosting: {
+      enabled: true,
+      siteId: hostingSiteId,
+      url: `https://${hostingSiteId}.web.app`,
+    },
+    runtime: { recipe: "astro-static" },
+    collaborators: [],
+    createdAt: new Date().toISOString(),
+  };
+  await giteaWriteFile(
+    org,
+    repoName,
+    "project.json",
+    `${JSON.stringify(projectJson, null, 2)}\n`,
+    "auto: seed project metadata",
+  );
 }
 
 export async function provisionProjectRepo(
