@@ -4,8 +4,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  CLONE_RETRY_DELAYS_MS,
   buildFleetHeartbeatSnapshot,
+  cloneRetryDelayMs,
+  cloneRetryReady,
   gatewayRevisionServiceName,
+  settleConvergence,
   getEvictObservedSlugs,
   getMountObservedSlugs,
   pathGatewayIdMatchesPod,
@@ -37,6 +41,78 @@ function mkDb(rows: Array<Record<string, unknown>>): Firestore {
     collection: vi.fn(() => query),
   } as unknown as Firestore;
 }
+
+describe("settleConvergence — the applied-fingerprint gate", () => {
+  const hooks = () => ({
+    recordApplied: vi.fn(),
+    rememberRetry: vi.fn(),
+    forgetRetry: vi.fn(),
+  });
+
+  const pending = (slugs: string[]) => ({
+    now: 1_000,
+    slug: "alice",
+    desiredFingerprint: "fp1",
+    prior: undefined,
+    result: { pendingProjectClones: slugs },
+  });
+
+  it("records the fingerprint and drops any backoff once every checkout has landed", () => {
+    const h = hooks();
+    settleConvergence(
+      {
+        now: 1_000,
+        slug: "alice",
+        desiredFingerprint: "fp1",
+        prior: { attempts: 3, nextAt: 0, fingerprint: "fp1" },
+        result: { pendingProjectClones: [] },
+      },
+      h,
+    );
+    expect(h.recordApplied).toHaveBeenCalledWith("alice");
+    expect(h.forgetRetry).toHaveBeenCalledWith("alice");
+    expect(h.rememberRetry).not.toHaveBeenCalled();
+  });
+
+  it("THROWS while a checkout is absent — returning normally would fire the loop's onEnsureSuccess, which clears the very lastError an operator needs to see", () => {
+    const h = hooks();
+    expect(() => settleConvergence(pending(["camp"]), h)).toThrow(/camp/);
+  });
+
+  it("withholds the fingerprint and schedules a backed-off retry while a checkout is absent", () => {
+    const h = hooks();
+    expect(() => settleConvergence(pending(["camp"]), h)).toThrow();
+    expect(h.recordApplied).not.toHaveBeenCalled();
+    expect(h.rememberRetry).toHaveBeenCalledWith("alice", {
+      attempts: 1,
+      nextAt: 1_000 + cloneRetryDelayMs(1),
+      fingerprint: "fp1",
+    });
+  });
+
+  it("lengthens the backoff on repeat and caps it — never abandons, never hot-loops", () => {
+    expect(cloneRetryDelayMs(1)).toBeLessThan(cloneRetryDelayMs(2));
+    expect(cloneRetryDelayMs(2)).toBeLessThan(cloneRetryDelayMs(3));
+    expect(cloneRetryDelayMs(99)).toBe(cloneRetryDelayMs(CLONE_RETRY_DELAYS_MS.length));
+  });
+});
+
+describe("cloneRetryReady — holds a stranded slug off the hot path between attempts", () => {
+  it("is ready when nothing is pending", () => {
+    expect(cloneRetryReady(undefined, "fp1", 1_000)).toBe(true);
+  });
+
+  it("waits out the backoff, so a wedged checkout cannot re-ensure the customer every 15s", () => {
+    const prior = { attempts: 2, nextAt: 5_000, fingerprint: "fp1" };
+    expect(cloneRetryReady(prior, "fp1", 4_999)).toBe(false);
+    expect(cloneRetryReady(prior, "fp1", 5_000)).toBe(true);
+  });
+
+  it("converges IMMEDIATELY on genuine drift — a new project must never wait out a backoff earned by an unrelated stranded one", () => {
+    const prior = { attempts: 5, nextAt: 9_000_000, fingerprint: "fp1" };
+    expect(cloneRetryReady(prior, "fp2", 1_000)).toBe(true);
+  });
+});
 
 describe("readMountedCustomersFromAssignedState", () => {
   it("seeds assigned complete customers only when local state is present and wired", async () => {

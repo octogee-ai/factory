@@ -133,6 +133,68 @@ describe("snapshotConfigFingerprint", () => {
     ).not.toBe(base);
   });
 
+  it("changes when a project flips provisioning→active — the clone only ever runs for active projects", () => {
+    const provisioning = snap({
+      projects: [{ projectSlug: "camp", giteaRepoName: "alice-camp", provisioningState: "provisioning" }],
+    });
+    const active = snap({
+      projects: [{ projectSlug: "camp", giteaRepoName: "alice-camp", provisioningState: "active" }],
+    });
+    expect(snapshotConfigFingerprint(active)).not.toBe(snapshotConfigFingerprint(provisioning));
+  });
+
+  it("changes when a project appears — a new project must converge its pod checkout", () => {
+    const base = snapshotConfigFingerprint(snap({ projects: [] }));
+    expect(
+      snapshotConfigFingerprint(
+        snap({
+          projects: [{ projectSlug: "camp", giteaRepoName: "alice-camp", provisioningState: "active" }],
+        }),
+      ),
+    ).not.toBe(base);
+  });
+
+  it("changes when a project's repo is first provisioned — no repo name means nothing to clone", () => {
+    const noRepo = snap({
+      projects: [{ projectSlug: "camp", giteaRepoName: null, provisioningState: "active" }],
+    });
+    const withRepo = snap({
+      projects: [{ projectSlug: "camp", giteaRepoName: "alice-camp", provisioningState: "active" }],
+    });
+    expect(snapshotConfigFingerprint(withRepo)).not.toBe(snapshotConfigFingerprint(noRepo));
+  });
+
+  it("does NOT change when a project fails — a failed project is never cloned, so it is not drift", () => {
+    const provisioning = snap({
+      projects: [{ projectSlug: "camp", giteaRepoName: "alice-camp", provisioningState: "provisioning" }],
+    });
+    const failed = snap({
+      projects: [{ projectSlug: "camp", giteaRepoName: "alice-camp", provisioningState: "failed" }],
+    });
+    expect(snapshotConfigFingerprint(failed)).toBe(snapshotConfigFingerprint(provisioning));
+  });
+
+  it("does NOT change on a repo rename — cloneProjectRepo skips any path that already has .git, so calling it drift would only stamp a fresh fingerprint over a stale checkout", () => {
+    const before = snap({
+      projects: [{ projectSlug: "camp", giteaRepoName: "alice-camp", provisioningState: "active" }],
+    });
+    const renamed = snap({
+      projects: [{ projectSlug: "camp", giteaRepoName: "alice-camp-v2", provisioningState: "active" }],
+    });
+    expect(snapshotConfigFingerprint(renamed)).toBe(snapshotConfigFingerprint(before));
+  });
+
+  it("is order-independent for projects", () => {
+    const p = (slug: string) => ({
+      projectSlug: slug,
+      giteaRepoName: `alice-${slug}`,
+      provisioningState: "active",
+    });
+    const a = snap({ projects: [p("camp"), p("dune")] });
+    const b = snap({ projects: [p("dune"), p("camp")] });
+    expect(snapshotConfigFingerprint(a)).toBe(snapshotConfigFingerprint(b));
+  });
+
   it("changes when the coach identity, token, or model config changes", () => {
     const base = snapshotConfigFingerprint(snap());
     expect(snapshotConfigFingerprint(snap({ coachIdentity: { name: "Buddy", emoji: "🐶" } }))).not.toBe(base);

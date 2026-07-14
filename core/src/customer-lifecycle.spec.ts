@@ -48,7 +48,9 @@ giteaReadShouldThrow: boolean;
   lastConfigPatchByosActive?: boolean;
   healthy: boolean;
   pendingProjects: Array<{ projectSlug: string; giteaRepoName: string }>;
-  
+  cloneProjectThrows?: boolean;
+  cloneProjectLands?: boolean;
+
   lastGreetingCronParams: unknown;
   
   greetingCronShouldFail: boolean;
@@ -162,9 +164,14 @@ state.giteaRegisteredPubKey = pubKey;
       if (state.reassertContextFilesShouldFail) throw new Error("context-file reassert failed");
     },
 
-    listProjectsNeedingClone: async () => state.pendingProjects,
-    cloneProjectRepo: async () => {
+    listProjectsNeedingClone: async () => [...state.pendingProjects],
+    cloneProjectRepo: async (_slug: string, projectSlug: string) => {
       record("cloneProjectRepo");
+      if (state.cloneProjectThrows) throw new Error("gitea unreachable");
+      if (state.cloneProjectLands === false) return false;
+      // A landed clone leaves a .git behind, so the project no longer needs cloning —
+      // listProjectsNeedingClone is an on-disk probe, not a static list.
+      state.pendingProjects = state.pendingProjects.filter((p) => p.projectSlug !== projectSlug);
       return true;
     },
 
@@ -1007,6 +1014,43 @@ const state = makeState(
     const cloneCalls = state.calls.filter((c) => c === "cloneProjectRepo");
     expect(cloneCalls).toHaveLength(2);
     expect(result.steps.filter((s) => s === "project-clone")).toHaveLength(2);
+    expect(result.pendingProjectClones).toEqual([]);
+  });
+
+  it("surfaces a project whose clone did not land as pending — a swallowed failure must not read as converged", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user",
+        greetingPosted: true,
+      }),
+      { ...emptyDisk(), customerDir: true, workspaceGitDir: true, gitRemote: true, sshKey: true },
+    );
+    state.pendingProjects = [{ projectSlug: "camp", giteaRepoName: "test-camp" }];
+    state.cloneProjectLands = false;
+
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    expect(result.pendingProjectClones).toEqual(["camp"]);
+  });
+
+  it("surfaces a clone that throws as pending, so the next reconcile retries instead of stranding the checkout", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user",
+        greetingPosted: true,
+      }),
+      { ...emptyDisk(), customerDir: true, workspaceGitDir: true, gitRemote: true, sshKey: true },
+    );
+    state.pendingProjects = [{ projectSlug: "camp", giteaRepoName: "test-camp" }];
+    state.cloneProjectThrows = true;
+
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    expect(result.pendingProjectClones).toEqual(["camp"]);
   });
 
   it("throws when verify times out — restores must NOT silently succeed on a broken mount", async () => {

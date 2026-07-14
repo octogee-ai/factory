@@ -34,7 +34,7 @@ import {
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 import { buildProductionLifecycleAdapter } from "./customer-lifecycle-prod-adapter.js";
 import { addCustomerToGateway, removeCustomerFromGateway } from "./customer-lifecycle.js";
-import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
+import type { AddCustomerResult, CustomerLifecycleAdapter } from "./customer-lifecycle.js";
 import { startReconcileLoop } from "./reconcile-loop.js";
 import { selectStale } from "./content-convergence.js";
 import { loadAppliedFingerprints, saveAppliedFingerprints } from "./applied-fingerprint-store.js";
@@ -48,6 +48,79 @@ import { mountClaudeSsoAuth } from "./claude-sso-auth-http.js";
 const RECONCILE_LOOP_INTERVAL_MS = 15 * 1000;
 
 const PROCESS_STARTED_AT_MS = Date.now() - Math.round(process.uptime() * 1000);
+
+export interface CloneRetryState {
+  attempts: number;
+  nextAt: number;
+  fingerprint: string;
+}
+
+// Backoff for a project checkout that has not landed. It never abandons — a Gitea repo
+// restored an hour later is still picked up — but it must not retry on the hot path either:
+// selectStale re-flags a stale customer every tick, reconcile-loop has no backoff of its own,
+// and mounts are serial (maxConcurrent: 1). Retrying a checkout that can never land (repo gone
+// upstream, key missing) would re-run that customer's whole converge — blob sync,
+// config-patch RPC, channel verify — every 15s and starve every other customer on the pod.
+// Capped at 15m: ~4 converges/hour instead of 240.
+export const CLONE_RETRY_DELAYS_MS = [15_000, 30_000, 60_000, 300_000, 900_000];
+
+export function cloneRetryDelayMs(attempts: number): number {
+  const index = Math.min(Math.max(attempts, 1), CLONE_RETRY_DELAYS_MS.length) - 1;
+  return CLONE_RETRY_DELAYS_MS[index]!;
+}
+
+export function cloneRetryReady(
+  prior: CloneRetryState | undefined,
+  desiredFingerprint: string | undefined,
+  now: number,
+): boolean {
+  if (!prior) return true;
+  // A genuine desired change converges immediately: a new project must never wait out a
+  // backoff earned by an unrelated stranded one.
+  if ((desiredFingerprint ?? "") !== prior.fingerprint) return true;
+  return now >= prior.nextAt;
+}
+
+export interface ConvergenceHooks {
+  recordApplied: (slug: string) => void;
+  rememberRetry: (slug: string, state: CloneRetryState) => void;
+  forgetRetry: (slug: string) => void;
+}
+
+export interface SettleConvergenceInput {
+  now: number;
+  slug: string;
+  desiredFingerprint: string | undefined;
+  prior: CloneRetryState | undefined;
+  result: Pick<AddCustomerResult, "pendingProjectClones">;
+}
+
+// A converge that left a project checkout absent has NOT reached desired state, so its
+// fingerprint must not be recorded: that marks the customer clean and strands the checkout —
+// and with it the project agent's whole workspace, which is rooted in it — until unrelated
+// drift moves the fingerprint again.
+//
+// It THROWS rather than returning, and that is load-bearing. reconcile-loop fires
+// onEnsureSuccess on a normal return, which clears gateways/{id}.lastError — erasing the very
+// error an operator needs to see. Throwing routes it to onEnsureError instead, where it
+// persists until a later converge lands the clone and clears it naturally.
+export function settleConvergence(input: SettleConvergenceInput, hooks: ConvergenceHooks): void {
+  const { now, slug, desiredFingerprint, prior, result } = input;
+  if (result.pendingProjectClones.length === 0) {
+    hooks.forgetRetry(slug);
+    hooks.recordApplied(slug);
+    return;
+  }
+  const attempts = (prior?.attempts ?? 0) + 1;
+  hooks.rememberRetry(slug, {
+    attempts,
+    nextAt: now + cloneRetryDelayMs(attempts),
+    fingerprint: desiredFingerprint ?? "",
+  });
+  throw new Error(
+    `project checkout still absent after ${attempts} converge(s): ${result.pendingProjectClones.join(", ")}`,
+  );
+}
 
 export function registerByosubDeviceAuth(
   app: express.Express,
@@ -344,6 +417,9 @@ function startMaybeReconcileLoop(params: {
       ? path.join(opts.openclawDir, "applied-fingerprints.json")
       : null;
   const appliedFp = appliedFpFile ? loadAppliedFingerprints(appliedFpFile) : new Map<string, string>();
+  // Backoff state for slugs whose project checkout has not landed. Process-local on purpose:
+  // a pod restart is itself a fresh chance for the clone to land.
+  const cloneRetry = new Map<string, CloneRetryState>();
   const persistAppliedFp = (): void => {
     if (!appliedFpFile) return;
     try {
@@ -370,7 +446,15 @@ function startMaybeReconcileLoop(params: {
   if (!provision || !readDesired) return () => undefined;
 
   const getContentStale = fingerprintSource
-    ? (): string[] => selectStale(getMountObservedSlugs(wrappedAdapter), desiredFp, appliedFp)
+    ? (): string[] => {
+        const now = Date.now();
+        // A slug whose checkout has not landed stays stale forever (we never record its
+        // fingerprint), so it must be held off the hot path between backed-off attempts —
+        // otherwise it re-ensures every 15s and starves the pod's serial mount slot.
+        return selectStale(getMountObservedSlugs(wrappedAdapter), desiredFp, appliedFp).filter(
+          (slug) => cloneRetryReady(cloneRetry.get(slug), desiredFp.get(slug), now),
+        );
+      }
     : undefined;
   return startReconcileLoop({
     gatewayId: opts.gatewayId,
@@ -402,15 +486,29 @@ function startMaybeReconcileLoop(params: {
       // completion marker so mount-observed now includes this slug. Until it lands, a
       // coach-wired-but-incomplete mount stays in toMount and is re-ensured.
       wrappedAdapter.writeMountMarker?.(slug);
-      // Record the fingerprint that is now applied on disk so this customer is no longer
-      // reported stale — until its desired fingerprint next changes.
-      if (fingerprintSource) {
-        const fp = desiredFp.get(slug);
-        if (fp !== undefined) {
-          appliedFp.set(slug, fp);
-          persistAppliedFp();
-        }
-      }
+      // Records the fingerprint that is now applied on disk, so this customer is no longer
+      // reported stale until its desired fingerprint next changes — and THROWS instead when a
+      // project checkout is still absent, so the loop's own onEnsureError surfaces it. A
+      // normal return would fire onEnsureSuccess, which clears that very error.
+      settleConvergence({
+        now: Date.now(),
+        slug,
+        desiredFingerprint: desiredFp.get(slug),
+        prior: cloneRetry.get(slug),
+        result,
+      }, {
+        recordApplied: (s) => {
+          if (!fingerprintSource) return;
+          const fp = desiredFp.get(s);
+          if (fp !== undefined) {
+            appliedFp.set(s, fp);
+            persistAppliedFp();
+          }
+        },
+        rememberRetry: (s, state) => cloneRetry.set(s, state),
+        forgetRetry: (s) => cloneRetry.delete(s),
+      });
+
       return result.newCustomer ? "mounted" : "noop";
     },
     onEnsureError: (slug, message) => recordReconcileError(opts, slug, message),
@@ -420,6 +518,7 @@ function startMaybeReconcileLoop(params: {
       if (uid) {
         const result = await removeCustomerFromGateway(wrappedAdapter, uid);
         await stampMounted(uid, false);
+        cloneRetry.delete(slug);
         if (appliedFp.delete(slug)) persistAppliedFp();
         return result.wasMounted ? "drained" : "noop";
       }
@@ -431,6 +530,7 @@ function startMaybeReconcileLoop(params: {
           await wrappedAdapter.deleteCustomerDir(slug);
         }
         wrappedAdapter.onUnmounted?.(slug);
+        cloneRetry.delete(slug);
         if (appliedFp.delete(slug)) persistAppliedFp();
         return "deleted-user";
       } catch (err) {

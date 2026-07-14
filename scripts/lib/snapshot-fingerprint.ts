@@ -1,13 +1,26 @@
 import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
 
-// A stable fingerprint of the fields of a customer snapshot that actually shape the
-// generated OpenClaw config (agents.list, channels.mattermost.accounts, bindings). The
+// A stable fingerprint of the fields of a customer snapshot that shape what an ensure
+// applies on disk — the generated OpenClaw config (agents.list,
+// channels.mattermost.accounts, bindings) AND the project checkouts the ensure clones. The
 // reconcile compares a mounted customer's desired fingerprint against the one applied at
-// its last successful ensure; a mismatch means the on-disk config is stale and the
+// its last successful ensure; a mismatch means the on-disk state is stale and the
 // customer must be re-ensured even though its mounted membership is unchanged. This is
 // what makes a project-agent toggle converge on the next tick instead of only on remount.
 //
-// Deliberately EXCLUDES fields the config build never reads (status, greeting, repoUrl,
+// `projectCloneSet` is fingerprinted because the clone only ever runs for an ACTIVE project
+// (listProjectsNeedingClone skips the rest), while project create writes the MM channel
+// BEFORE it flips provisioningState to active. Without it, a reconcile landing in that
+// window skips the clone and then records itself as applied — and the later
+// provisioning→active flip moves nothing, so the checkout is never cloned.
+//
+// It hashes the SET the ensure would actually clone — repo present AND active (or legacy
+// undefined), mirroring listProjectsNeedingClone's own filter — rather than raw project
+// state. So provisioning→active is drift, while provisioning→failed (never cloned) is not,
+// and a repo RENAME is not: cloneProjectRepo skips any path that already has a .git, so
+// calling a rename "drift" would only record a fresh fingerprint over a stale checkout.
+//
+// Deliberately EXCLUDES fields the ensure never reads (status, greeting, repoUrl,
 // email, ownerName, …) so routine snapshot churn does not trigger needless re-ensures.
 
 function compareStrings(a: string, b: string): number {
@@ -76,6 +89,14 @@ export function snapshotConfigFingerprint(snapshot: FleetBrokerUserSnapshot): st
     projectAgents: [...(snapshot.projectAgents ?? [])]
       .map((p) => ({ projectId: p.projectId, enabled: p.enabled, mmUserId: p.mmUserId, token: p.token }))
       .sort((a, b) => compareStrings(a.projectId, b.projectId)),
+    projectCloneSet: [...(snapshot.projects ?? [])]
+      .filter(
+        (p) =>
+          !!p.giteaRepoName
+          && (p.provisioningState === undefined || p.provisioningState === "active"),
+      )
+      .map((p) => p.projectSlug)
+      .sort(compareStrings),
     coachIdentity: snapshot.coachIdentity ?? null,
     coachToken: snapshot.coachToken,
     coachMmUserId: snapshot.coachMmUserId,

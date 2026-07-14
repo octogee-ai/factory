@@ -246,6 +246,11 @@ export type AddCustomerStep =
 export interface AddCustomerResult {
   newCustomer: boolean;
   steps: AddCustomerStep[];
+  // Active projects whose pod checkout is STILL absent after this converge. Non-empty means
+  // the converge did not reach desired state, so the caller must not record its fingerprint
+  // as applied: doing so marks the customer clean and strands the checkout — and with it the
+  // project agent's whole workspace — until unrelated drift moves the fingerprint again.
+  pendingProjectClones: string[];
 }
 
 export interface RestoreCustomerRuntimeResult {
@@ -488,7 +493,9 @@ async function addCustomerToGatewayInner(
     // the non-short-circuit path which calls onMounted after config.patch.
     if (adapter.onMounted) adapter.onMounted(slug);
     steps.push("verify-channel-ready");
-    return { newCustomer: false, steps };
+    // This short-circuit never reaches cloneMissingProjects, so it makes no claim about
+    // project checkouts — reporting them pending here would re-ensure forever.
+    return { newCustomer: false, steps, pendingProjectClones: [] };
   }
 
   if (snapshot.status !== "complete") {
@@ -509,7 +516,8 @@ async function addCustomerToGatewayInner(
   steps.push(...byos.steps);
   throwIfAborted(signal, uid);
 
-  steps.push(...(await cloneMissingProjects(adapter, slug)));
+  const projectClones = await cloneMissingProjects(adapter, slug);
+  steps.push(...projectClones.steps);
   throwIfAborted(signal, uid);
 
   const mm = await provisionMattermostIfMissing(adapter, uid, snapshot, ctx);
@@ -536,7 +544,7 @@ async function addCustomerToGatewayInner(
   steps.push(...(await markCompleteIfNeeded(adapter, uid, snapshot, newCustomer)));
   steps.push(...(await notifyOpsIfNew(adapter, ctx, newCustomer)));
 
-  return { newCustomer, steps };
+  return { newCustomer, steps, pendingProjectClones: projectClones.pending };
 }
 
 async function loadAndPrepareForMount(
@@ -793,10 +801,10 @@ async function reassertConvergedState(
 async function cloneMissingProjects(
   adapter: CustomerLifecycleAdapter,
   slug: string,
-): Promise<AddCustomerStep[]> {
-  const pending = await adapter.listProjectsNeedingClone(slug);
+): Promise<{ steps: AddCustomerStep[]; pending: string[] }> {
+  const toClone = await adapter.listProjectsNeedingClone(slug);
   const steps: AddCustomerStep[] = [];
-  for (const p of pending) {
+  for (const p of toClone) {
     try {
       const ok = await adapter.cloneProjectRepo(slug, p.projectSlug, p.giteaRepoName);
       if (ok) {
@@ -804,12 +812,21 @@ async function cloneMissingProjects(
         adapter.log(`[add:${slug}/${p.projectSlug}] cloned from Gitea`);
       }
     } catch (err) {
-      adapter.log(
-        `[add:${slug}/${p.projectSlug}] ⚠ project clone failed (non-fatal): ${String(err)}`,
-      );
+      adapter.log(`[add:${slug}/${p.projectSlug}] ✖ project clone failed: ${String(err)}`);
     }
   }
-  return steps;
+
+  // On-disk truth, not cloneProjectRepo's boolean: it returns false for several non-error
+  // reasons (repo absent upstream, no SSH key), so only a re-probe can say whether the
+  // checkout actually landed.
+  const remaining = await adapter.listProjectsNeedingClone(slug);
+  const pending = remaining.map((p) => p.projectSlug).sort();
+  if (pending.length > 0) {
+    adapter.log(
+      `[add:${slug}] ✖ project checkout still absent after converge: ${pending.join(", ")} — leaving this customer stale so the next reconcile retries`,
+    );
+  }
+  return { steps, pending };
 }
 
 async function provisionMattermostIfMissing(
