@@ -88,8 +88,10 @@ export type {
   GatewayState,
   GatewayLastError,
   CustomerSnapshot,
+  SystemConfigMigrationMode,
 } from './fleet-controller.js';
 export {
+  systemConfigMigrationMode,
   GATEWAY_HEARTBEAT_INTERVAL_MS,
   GATEWAY_UNREACHABLE_AFTER_MS,
   VERIFY_ACCOUNT_TIMEOUT_MS,

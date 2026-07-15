@@ -1,3 +1,8 @@
+export function systemConfigMigrationMode(sourceClass, targetClass) {
+    if (sourceClass === "shared")
+        return "none";
+    return targetClass === "shared" ? "checkpoint-only" : "checkpoint-and-restore";
+}
 export const GATEWAY_HEARTBEAT_INTERVAL_MS = 15_000;
 export const GATEWAY_UNREACHABLE_AFTER_MS = 3 * 60_000;
 export const VERIFY_ACCOUNT_TIMEOUT_MS = 120_000;

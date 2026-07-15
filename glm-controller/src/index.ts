@@ -155,6 +155,7 @@ import {
   GATEWAYS_COLLECTION,
   MIGRATION_UNMOUNT_TIMEOUT_MS,
   SIGNATURE_HEADER,
+  systemConfigMigrationMode,
 } from "@octogee/shared/types/fleet-controller";
 import {
   readGatewayArtifact,
@@ -1112,7 +1113,13 @@ function buildRollPassDeps(args: {
       }
       return newest?.snap ?? null;
     },
-    enqueueRollMigration: async ({ uid, slug, gatewayId, rollOperationId, configFence }) => {
+    enqueueRollMigration: async ({
+      uid,
+      slug,
+      gatewayId,
+      rollOperationId,
+      systemConfigMigrationMode,
+    }) => {
       const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
       await opRef.set(
         buildRollMigrateOpDoc({
@@ -1121,7 +1128,7 @@ function buildRollPassDeps(args: {
           gatewayId,
           rollOperationId,
           createdAt: Date.now(),
-          configFence,
+          systemConfigMigrationMode,
         }),
       );
       return opRef.id;
@@ -3147,14 +3154,28 @@ async function buildHandlers(
       });
     },
     recordConfigRollMetric: recordConfigRoll,
-    requiresConfigFence: async (fromGatewayId) => {
-      const source = await db.collection(GATEWAYS_COLLECTION).doc(fromGatewayId).get();
-      const data = source.data();
-      return isDurableRootConfigDoc(data, fromGatewayId) && resolveGatewayClass({
+    resolveSystemConfigMigrationMode: async (fromGatewayId, toGatewayId) => {
+      const [source, target] = await Promise.all([
+        db.collection(GATEWAYS_COLLECTION).doc(fromGatewayId).get(),
+        db.collection(GATEWAYS_COLLECTION).doc(toGatewayId).get(),
+      ]);
+      const sourceData = source.data();
+      const targetData = target.data();
+      if (!isDurableRootConfigDoc(sourceData, fromGatewayId)) {
+        throw new Error(`source gateway ${fromGatewayId} has no durable root`);
+      }
+      if (!isDurableRootConfigDoc(targetData, toGatewayId)) {
+        throw new Error(`target gateway ${toGatewayId} has no durable root`);
+      }
+      const gatewayClass = (data: typeof sourceData) => resolveGatewayClass({
         gatewayClass: data.gatewayClass ?? undefined,
         profile: data.profile ?? undefined,
         imageProfile: data.imageProfile ?? undefined,
-      }) !== "shared";
+      });
+      return systemConfigMigrationMode(
+        gatewayClass(sourceData),
+        gatewayClass(targetData),
+      );
     },
     genMigrationId: (operationId) => `mig-${operationId}`,
     now: () => Date.now(),

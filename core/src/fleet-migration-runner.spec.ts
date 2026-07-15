@@ -227,7 +227,7 @@ describe("runMigration — durable config roll fence", () => {
     fromRevision: { revisionId: "default-r1", release: 1 },
     toRevision: { revisionId: "default-r2", release: 2 },
     crossGateway: false,
-    configFence: true,
+    systemConfigMigrationMode: "checkpoint-and-restore" as const,
     rollFence: {
       uid: "uid-alice",
       gatewayId: "default",
@@ -309,7 +309,7 @@ describe("runMigration — durable config roll fence", () => {
     expect(client.unfreezeConfig).not.toHaveBeenCalled();
   });
 
-  it("unfreezes a cross-gateway migration after its atomic mirror and assignment traffic cutover", async () => {
+  it("checkpoints an isolated source without applying its config to a shared target", async () => {
     const client = happyClient();
     const deps = makeDeps(client);
 
@@ -317,10 +317,17 @@ describe("runMigration — durable config roll fence", () => {
       ...INPUT,
       fromRevision: { revisionId: "gw-blue-r1", release: 1 },
       toRevision: { revisionId: "gw-green-r1", release: 1 },
-      configFence: true,
+      systemConfigMigrationMode: "checkpoint-only",
     }, deps);
 
     expect(result.success).toBe(true);
+    expect(result.configCheckpoint).toEqual({
+      checkpointCommit: "a".repeat(40),
+      configHash: "b".repeat(64),
+    });
+    expect(result.configProof).toBeUndefined();
+    expect(client.proveConfigRestore).not.toHaveBeenCalled();
+    expect(deps.acceptConfigProof).not.toHaveBeenCalled();
     expect(client.calls.indexOf("cutover:uid-alice->gw-green")).toBeLessThan(
       client.calls.indexOf("config-unfreeze:alice"),
     );
@@ -344,7 +351,7 @@ describe("runMigration — durable config roll fence", () => {
       toTransportId: "gw-green-r1",
       fromRevision: { revisionId: "gw-blue-r1", release: 1 },
       toRevision: { revisionId: "gw-green-r1", release: 1 },
-      configFence: true,
+      systemConfigMigrationMode: "checkpoint-only",
     }, deps);
 
     expect(result).toMatchObject({

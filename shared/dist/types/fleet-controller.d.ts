@@ -1,4 +1,7 @@
 import type { FleetBrokerUserSnapshot } from "./fleet-broker.js";
+import type { GatewayClass } from "./glm.js";
+export type SystemConfigMigrationMode = "none" | "checkpoint-only" | "checkpoint-and-restore";
+export declare function systemConfigMigrationMode(sourceClass: GatewayClass, targetClass: GatewayClass): SystemConfigMigrationMode;
 export type GatewayStatus = "booting" | "ready" | "draining" | "unreachable";
 export interface GatewayLastError {
     slug: string;

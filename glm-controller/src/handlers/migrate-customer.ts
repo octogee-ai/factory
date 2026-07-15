@@ -8,6 +8,7 @@ import type { OperationContext, OperationHandler, OperationResult } from "../ope
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
 import type { PlacementResolution } from "@octogee/core/assignment-doc";
 import type { RevisionSystemConfigObservation } from "@octogee/shared/types/gateway-releases";
+import type { SystemConfigMigrationMode } from "@octogee/shared/types/fleet-controller";
 import {
   runMigration,
   type ConfigCleanupObligation,
@@ -70,10 +71,10 @@ export interface MigrateCustomerDeps {
     revisionId: string;
   }) => void;
 
-  requiresConfigFence: (
+  resolveSystemConfigMigrationMode: (
     fromGatewayId: string,
     toGatewayId: string,
-  ) => Promise<boolean>;
+  ) => Promise<SystemConfigMigrationMode>;
 
   genMigrationId: (operationId: string) => string;
 
@@ -84,9 +85,23 @@ export interface MigrateCustomerDeps {
 interface MigrateCustomerInput {
   uid?: unknown;
   toGatewayId?: unknown;
-  configFence?: unknown;
+  systemConfigMigrationMode?: unknown;
   source?: unknown;
   rollOperationId?: unknown;
+}
+
+function requestedSystemConfigMigrationMode(
+  value: unknown,
+): SystemConfigMigrationMode | null {
+  if (value === undefined) return null;
+  if (
+    value === "none" ||
+    value === "checkpoint-only" ||
+    value === "checkpoint-and-restore"
+  ) {
+    return value;
+  }
+  throw new Error("invalid systemConfigMigrationMode in op.input");
 }
 
 function optionalCleanupRecord<T>(value: unknown): T | undefined {
@@ -415,7 +430,7 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
     const migrationId = deps.genMigrationId(op.id);
     let targets: MigrationTargets;
     let restoreSnapshot: FleetBrokerUserSnapshot | null;
-    let configFence: boolean;
+    let systemConfigMigrationMode: SystemConfigMigrationMode;
     let rollFence: MigrationRollFence | null = null;
     const urls = new Map<string, string>();
     try {
@@ -469,8 +484,16 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
           };
         }
       }
-      configFence = input.configFence === true ||
-        await deps.requiresConfigFence(user.currentGatewayId, toGatewayId);
+      systemConfigMigrationMode = await deps.resolveSystemConfigMigrationMode(
+        user.currentGatewayId,
+        toGatewayId,
+      );
+      const requestedMode = requestedSystemConfigMigrationMode(input.systemConfigMigrationMode);
+      if (requestedMode && requestedMode !== systemConfigMigrationMode) {
+        throw new Error(
+          `system config migration mode changed: requested=${requestedMode} resolved=${systemConfigMigrationMode}`,
+        );
+      }
       urls.set(targets.fromTransportId, await deps.resolveGatewayUrl(targets.fromTransportId));
       urls.set(targets.toTransportId, await deps.resolveGatewayUrl(targets.toTransportId));
       restoreSnapshot = await deps.readUserSnapshot(uid);
@@ -505,7 +528,7 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
         fromRevision: { revisionId: targets.fromRevisionId, release: targets.fromRelease },
         restoreSnapshot,
         includeActivationManifest: true,
-        configFence,
+        systemConfigMigrationMode,
         ...(rollFence ? { rollFence } : {}),
       },
       buildRunnerDeps(deps, client, ctx, targets.toRevisionId, deps.now, targets, rollFence),

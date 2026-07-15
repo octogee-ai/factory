@@ -1,6 +1,20 @@
 
 
 import type { FleetBrokerUserSnapshot } from "./fleet-broker.js";
+import type { GatewayClass } from "./glm.js";
+
+export type SystemConfigMigrationMode =
+  | "none"
+  | "checkpoint-only"
+  | "checkpoint-and-restore";
+
+export function systemConfigMigrationMode(
+  sourceClass: GatewayClass,
+  targetClass: GatewayClass,
+): SystemConfigMigrationMode {
+  if (sourceClass === "shared") return "none";
+  return targetClass === "shared" ? "checkpoint-only" : "checkpoint-and-restore";
+}
 
 export type GatewayStatus = "booting" | "ready" | "draining" | "unreachable";
 

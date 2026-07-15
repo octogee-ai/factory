@@ -121,7 +121,7 @@ function makeDeps(
     assertRollFence: vi.fn(async () => undefined),
     recordConfigProof: vi.fn(async () => undefined),
     recordConfigRollMetric: vi.fn(),
-    requiresConfigFence: vi.fn(async () => false),
+    resolveSystemConfigMigrationMode: vi.fn(async () => "none"),
     resolveFromRevision: vi.fn(async (_uid: string, gatewayId: string) => ({
       revisionId: `${gatewayId}-r1`,
       release: 1,
@@ -476,12 +476,12 @@ describe("createMigrateCustomerHandler — input validation", () => {
 });
 
 describe("createMigrateCustomerHandler — revision-targeted (same-gateway drain)", () => {
-  it("enables config fencing for an isolated source even when the operation producer omitted the hint", async () => {
+  it("restores and proves config when an isolated source migrates to an isolated target", async () => {
     const { deps, client } = makeDeps({
       readUser: vi.fn(async () => ({ slug: "alice", currentGatewayId: "bender" })),
       resolveFromRevision: vi.fn(async () => ({ revisionId: "bender-r1", release: 1 })),
       resolvePlacement: vi.fn(async () => ({ ok: true as const, revisionId: "bender-r2", release: 2 })),
-      requiresConfigFence: vi.fn(async () => true),
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
     });
     const handler = createMigrateCustomerHandler(deps);
 
@@ -494,6 +494,63 @@ describe("createMigrateCustomerHandler — revision-targeted (same-gateway drain
 
     expect(result.success).toBe(true);
     expect(client.freezeConfig).toHaveBeenCalledOnce();
+    expect(client.proveConfigRestore).toHaveBeenCalledOnce();
+  });
+
+  it("checkpoints an idle isolated gateway return without restoring config on the shared target", async () => {
+    const { deps, client } = makeDeps({
+      readUser: vi.fn(async () => ({ slug: "alice", currentGatewayId: "bender" })),
+      resolveFromRevision: vi.fn(async () => ({ revisionId: "bender-r1", release: 1 })),
+      resolvePlacement: vi.fn(async () => ({
+        ok: true as const,
+        revisionId: "default-r3",
+        release: 3,
+      })),
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-only"),
+    });
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({ input: {
+      uid: "uid-alice",
+      toGatewayId: "default",
+      source: "dedicated-idle-return",
+      systemConfigMigrationMode: "checkpoint-only",
+    } }), makeCtx());
+
+    expect(result).toMatchObject({
+      success: true,
+      output: {
+        configCheckpoint: {
+          checkpointCommit: "a".repeat(40),
+          configHash: "b".repeat(64),
+        },
+      },
+    });
+    expect(result.output).not.toHaveProperty("configProof");
+    expect(client.freezeConfig).toHaveBeenCalledOnce();
+    expect(client.proveConfigRestore).not.toHaveBeenCalled();
+    expect(deps.recordConfigProof).not.toHaveBeenCalled();
+    expect(client.unfreezeConfig).toHaveBeenCalledOnce();
+  });
+
+  it("fails before transfer when the queued mode no longer matches the gateway classes", async () => {
+    const { deps, client } = makeDeps({
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-only"),
+    });
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({ input: {
+      uid: "uid-alice",
+      toGatewayId: "gw-green",
+      systemConfigMigrationMode: "checkpoint-and-restore",
+    } }), makeCtx());
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringMatching(/mode changed/i),
+    });
+    expect(client.freezeConfig).not.toHaveBeenCalled();
+    expect(client.transferState).not.toHaveBeenCalled();
   });
 
   it("persists the planned-roll checkpoint and target proof as operation output", async () => {
@@ -501,6 +558,7 @@ describe("createMigrateCustomerHandler — revision-targeted (same-gateway drain
       readUser: vi.fn(async () => ({ slug: "alice", currentGatewayId: "default" })),
       resolveFromRevision: vi.fn(async () => ({ revisionId: "default-r1", release: 1, epoch: 0 })),
       resolvePlacement: vi.fn(async () => ({ ok: true as const, revisionId: "default-r2", release: 2 })),
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
     });
     const handler = createMigrateCustomerHandler(deps);
 
@@ -509,7 +567,7 @@ describe("createMigrateCustomerHandler — revision-targeted (same-gateway drain
       toGatewayId: "default",
       source: "release-roll",
       rollOperationId: "roll-default-r2-1",
-      configFence: true,
+      systemConfigMigrationMode: "checkpoint-and-restore",
     } }), makeCtx());
 
     expect(result.success).toBe(true);
@@ -593,7 +651,7 @@ describe("createMigrateCustomerHandler — revision-targeted (same-gateway drain
       toGatewayId: "default",
       source: "release-roll",
       rollOperationId: "roll-old",
-      configFence: true,
+      systemConfigMigrationMode: "checkpoint-and-restore",
     } }), makeCtx());
 
     expect(result).toMatchObject({ success: false, error: expect.stringMatching(/stale release-roll/i) });

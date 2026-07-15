@@ -1,7 +1,7 @@
 import { type MigrationPhase } from "./fleet-migration.js";
 import type { MigrationClient } from "./fleet-migration-client.js";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
-import type { ConfigFreezeResponse, ConfigRestoreProofResponse } from "@octogee/shared/types/fleet-controller";
+import type { ConfigFreezeResponse, ConfigRestoreProofResponse, SystemConfigMigrationMode } from "@octogee/shared/types/fleet-controller";
 export interface ReportedStep {
     name: string;
     status: "running" | "done" | "failed" | "skipped";
@@ -67,7 +67,7 @@ export interface MigrationRunnerInput {
     crossGateway?: boolean;
     restoreSnapshot: FleetBrokerUserSnapshot;
     includeActivationManifest?: boolean;
-    configFence?: boolean;
+    systemConfigMigrationMode?: SystemConfigMigrationMode;
     rollFence?: MigrationRollFence;
 }
 export interface ConfigCleanupObligation {

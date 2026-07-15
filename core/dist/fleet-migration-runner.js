@@ -121,6 +121,7 @@ export async function runMigration(input, deps) {
     const crossGateway = input.crossGateway ?? input.fromGatewayId !== input.toGatewayId;
     const toRevision = input.toRevision ?? null;
     const fromRevision = input.fromRevision ?? null;
+    const systemConfigMigrationMode = input.systemConfigMigrationMode ?? "none";
     let quiescingMarked = false;
     let configFrozen = false;
     let configCheckpoint;
@@ -133,14 +134,15 @@ export async function runMigration(input, deps) {
         fromGatewayId: input.fromGatewayId,
         toGatewayId: input.toGatewayId,
     };
-    if (input.configFence) {
-        if (!input.fromRevision || !input.toRevision || !deps.acceptConfigProof) {
+    if (systemConfigMigrationMode !== "none") {
+        if (systemConfigMigrationMode === "checkpoint-and-restore" &&
+            (!input.fromRevision || !input.toRevision || !deps.acceptConfigProof)) {
             return {
                 success: false,
                 finalPhase: "initial",
                 errorAt: {
                     phase: "initial",
-                    error: "config fence requires source/target revisions and revision status persistence",
+                    error: "checkpoint-and-restore requires source/target revisions and revision status persistence",
                 },
                 rolledBack: false,
             };
@@ -223,7 +225,9 @@ export async function runMigration(input, deps) {
                 rollFence: cutoverRollFence,
             });
             await report(deps, { name, status: "done" });
-            if (step.action === "restore-target" && configCheckpoint) {
+            if (step.action === "restore-target" &&
+                configCheckpoint &&
+                systemConfigMigrationMode === "checkpoint-and-restore") {
                 activeReportName = "prove-config-restore";
                 await report(deps, { name: activeReportName, status: "running" });
                 const proof = await deps.client.proveConfigRestore({
@@ -278,7 +282,9 @@ export async function runMigration(input, deps) {
                 });
                 await report(deps, { name: activeReportName, status: "done" });
             }
-            if (step.action === "cutover-firestore" && configFrozen && crossGateway) {
+            if (step.action === "cutover-firestore" &&
+                configFrozen &&
+                (crossGateway || systemConfigMigrationMode === "checkpoint-only")) {
                 const released = await releaseConfigFreeze(input, deps);
                 if (!released) {
                     const error = cleanupPendingError();
