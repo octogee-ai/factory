@@ -300,12 +300,89 @@ describe("createMigrateCustomerHandler — ordinary isolated protocol V2", () =>
     expect(client.freezeConfigV2).not.toHaveBeenCalled();
   });
 
-  it("retries raw Firestore UNAVAILABLE while resuming before setup can reach the driver", async () => {
+  it("resumes from durable identity without re-reading a deleted user after checkpoint", async () => {
+    const readUser = vi.fn(async () => {
+      throw new Error("user document was deleted");
+    });
+    const { deps } = makeDeps({ readUser });
+
+    const result = await createMigrateCustomerHandler(deps)(
+      mkOp({ customerMigrationV2: durableV2State("checkpointed") }),
+      makeCtx(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(readUser).not.toHaveBeenCalled();
+  });
+
+  it("durably aborts when the restore snapshot is terminally unavailable at the restore phase", async () => {
     const client = happyClient();
     const { deps } = makeDeps({
-      readUser: vi.fn(async () => {
-        throw Object.assign(new Error("14 UNAVAILABLE: Firestore read failed"), { code: 14 });
-      }),
+      readUserSnapshot: vi.fn(async () => null),
+    }, client);
+    const ctx = makeCtx();
+
+    const result = await createMigrateCustomerHandler(deps)(
+      mkOp({ customerMigrationV2: durableV2State("keysSynced") }),
+      ctx,
+    );
+
+    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(ctx.persistedV2.map((entry) => entry.phase)).toEqual([
+      "abortIntent",
+      "abortPublished",
+      "abortTargetUnmounted",
+      "abortContextCleared",
+      "aborted",
+    ]);
+    expect(client.abortConfigV2).toHaveBeenCalledOnce();
+    expect(client.restoreTarget).not.toHaveBeenCalled();
+  });
+
+  it("persists abort progress when a target URL disappears after source quiesce", async () => {
+    const resolveGatewayUrl = vi.fn(async (revisionId: string) => {
+      if (revisionId === "gw-green-r1") throw new Error("target revision was deleted");
+      return `http://test/${revisionId}`;
+    });
+    const { deps, client } = makeDeps({ resolveGatewayUrl });
+    const ctx = makeCtx();
+
+    const result = await createMigrateCustomerHandler(deps)(
+      mkOp({ customerMigrationV2: durableV2State("sourceQuiesced") }),
+      ctx,
+    );
+
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.error).toMatch(/retry pending.*abort cleanup blocked.*target revision was deleted/i);
+    expect(ctx.persistedV2.map((entry) => entry.phase)).toEqual(["abortIntent", "abortPublished"]);
+    expect(client.abortConfigV2).toHaveBeenCalledOnce();
+  });
+
+  it("routes a terminal cancellation-read failure through durable pre-intent abort", async () => {
+    const { deps, client } = makeDeps();
+    const ctx = makeCtx();
+    ctx.cancellationRequested = vi.fn(async () => {
+      throw new Error("cancellation record is corrupt");
+    });
+
+    const result = await createMigrateCustomerHandler(deps)(
+      mkOp({ customerMigrationV2: durableV2State("checkpointed") }),
+      ctx,
+    );
+
+    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(ctx.persistedV2.map((entry) => entry.phase)).toContain("abortIntent");
+    expect(ctx.persistedV2.at(-1)?.phase).toBe("aborted");
+    expect(client.abortConfigV2).toHaveBeenCalledOnce();
+  });
+
+  it("does not require the mutable user document while resuming from durable scope", async () => {
+    const client = happyClient();
+    const readUser = vi.fn(async () => {
+      throw Object.assign(new Error("14 UNAVAILABLE: Firestore read failed"), { code: 14 });
+    });
+    const { deps } = makeDeps({
+      readUser,
     }, client);
 
     const result = await createMigrateCustomerHandler(deps)(
@@ -313,7 +390,8 @@ describe("createMigrateCustomerHandler — ordinary isolated protocol V2", () =>
       makeCtx(),
     );
 
-    expect(result.error).toMatch(/V2 retry pending.*UNAVAILABLE/i);
+    expect(result.success).toBe(true);
+    expect(readUser).not.toHaveBeenCalled();
     expect(client.abortConfigV2).not.toHaveBeenCalled();
   });
 
@@ -334,6 +412,36 @@ describe("createMigrateCustomerHandler — ordinary isolated protocol V2", () =>
 
     expect(result.error).toMatch(/V2 retry pending.*fetch failed/i);
     expect(result.rolledBack).toBe(false);
+  });
+
+  it("keeps abort cleanup retryable through a terminal source URL error", async () => {
+    const readUserSnapshot = vi.fn(async () => {
+      throw new Error("snapshot must not be read during abort");
+    });
+    const { deps, client } = makeDeps({
+      readUserSnapshot,
+      resolveGatewayUrl: vi.fn(async (revisionId: string) => {
+        if (revisionId === "gw-blue-r1") throw new Error("source revision was deleted");
+        return `http://test/${revisionId}`;
+      }),
+    });
+    const ctx = makeCtx();
+
+    const result = await createMigrateCustomerHandler(deps)(
+      mkOp({ customerMigrationV2: {
+        ...durableV2State("abortIntent"),
+        abortFromPhase: "checkpointed",
+        abortReason: "candidate conflict",
+        abortIntentAt: 4_999,
+      } }),
+      ctx,
+    );
+
+    expect(result.error).toMatch(/retry pending.*abort cleanup blocked.*source revision was deleted/i);
+    expect(result.rolledBack).toBe(false);
+    expect(ctx.persistedV2).toEqual([]);
+    expect(readUserSnapshot).not.toHaveBeenCalled();
+    expect(client.abortConfigV2).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -581,6 +689,65 @@ describe("createMigrateCustomerHandler — ordinary isolated protocol V2", () =>
       error: expect.stringMatching(/retry pending.*roll-forward blocked.*main moved/i),
     });
     expect(client.abortConfigV2).not.toHaveBeenCalled();
+  });
+
+  it.each(["promotionIntent", "promoted"] as const)(
+    "keeps %s roll-forward durable when the target URL disappears",
+    async (phase) => {
+      const { deps, client } = makeDeps({
+        resolveGatewayUrl: vi.fn(async (revisionId: string) => {
+          if (revisionId === "gw-green-r1") throw new Error("target revision was deleted");
+          return `http://test/${revisionId}`;
+        }),
+      });
+      const candidateProof = await client.proveConfigCandidate({
+        migrationId: "mig-test-1",
+        gatewayId: "gw-green",
+        slug: "alice",
+        sourceRevisionId: "gw-blue-r1",
+        targetRevisionId: "gw-green-r1",
+        checkpointCommit: "1".repeat(40),
+        freezeObject: "3".repeat(40),
+      });
+      const state = {
+        ...durableV2State(phase),
+        candidateProof,
+        promotionIntentAt: 4_999,
+        ...(phase === "promoted" ? { promotedAt: 5_000 } : {}),
+      };
+      const ctx = makeCtx();
+
+      const result = await createMigrateCustomerHandler(deps)(
+        mkOp({ customerMigrationV2: state }),
+        ctx,
+      );
+
+      expect(result).toMatchObject({ success: false, rolledBack: false });
+      expect(result.error).toMatch(/retry pending.*roll-forward blocked.*target revision was deleted/i);
+      expect(ctx.persistedV2).toEqual([]);
+      expect(client.abortConfigV2).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a stale declared source before persisting or freezing V2 state", async () => {
+    const { deps, client } = makeDeps({
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
+    });
+    const ctx = makeCtx();
+
+    const result = await createMigrateCustomerHandler(deps)(
+      mkOp({ input: {
+        uid: "uid-alice",
+        fromGatewayId: "gw-stale",
+        toGatewayId: "gw-green",
+      } }),
+      ctx,
+    );
+
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.error).toMatch(/declared source gw-stale.*resolved source gw-blue/i);
+    expect(ctx.persistedV2).toEqual([]);
+    expect(client.freezeConfigV2).not.toHaveBeenCalled();
   });
 });
 

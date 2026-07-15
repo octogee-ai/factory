@@ -21,7 +21,11 @@ import {
   readGatewayProfile,
   resolveOpsAssignmentTarget,
 } from "../ops/assign-customer-gateway.js";
-import { parseFleetArgs, resolveFleetCredentialMode } from "../ops/fleet.js";
+import {
+  buildFleetMigrateOperationInput,
+  parseFleetArgs,
+  resolveFleetCredentialMode,
+} from "../ops/fleet.js";
 
 describe("fleet-controller entrypoint config", () => {
   const rollEnv = {
@@ -534,6 +538,14 @@ describe("assign-customer-gateway root config", () => {
 });
 
 describe("fleet CLI args", () => {
+  it("binds migration operations to the source and target gateways before enqueue", () => {
+    expect(buildFleetMigrateOperationInput("uid-alice", "bender", "operator-green")).toEqual({
+      uid: "uid-alice",
+      fromGatewayId: "bender",
+      toGatewayId: "operator-green",
+    });
+  });
+
   it("parses value flags in both equals and split forms", () => {
     expect(parseFleetArgs([
       "--env=prod",

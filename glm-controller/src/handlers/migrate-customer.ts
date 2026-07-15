@@ -180,10 +180,8 @@ async function runOrdinaryMigrationV2(input: {
   uid: string;
   slug: string;
   migrationId: string;
-  restoreSnapshot: FleetBrokerUserSnapshot;
-  client: MigrationClient;
 }): Promise<OperationResult> {
-  const { op, ctx, deps, targets, uid, slug, migrationId, restoreSnapshot, client } = input;
+  const { op, ctx, deps, targets, uid, slug, migrationId } = input;
   if (targets.toRelease === null) {
     return { steps: [], success: false, error: "customer migration V2 target has no release" };
   }
@@ -217,38 +215,10 @@ async function runOrdinaryMigrationV2(input: {
     };
     await persistV2(ctx, state);
   }
-  if (state.phase === "initialized") {
-    const [source, target] = await Promise.all([
-      deps.resolveFromRevision(state.uid, state.sourceGatewayId),
-      deps.resolvePlacement(state.targetGatewayId),
-    ]);
-    const sourceIsExact = source !== null &&
-      source.revisionId === state.sourceRevisionId &&
-      source.release === state.sourceRelease &&
-      (source.epoch ?? 0) === state.sourceEpoch &&
-      (source.assignmentMode ?? "assigned") === state.sourceAssignmentMode &&
-      source.rootUpdatedAt === state.sourceRootUpdatedAt;
-    if (!sourceIsExact) {
-      return {
-        steps: [],
-        success: false,
-        error: "customer migration V2 source placement changed before freeze",
-        rolledBack: false,
-      };
-    }
-    const targetIsExact = target?.ok === true &&
-      target.revisionId === state.targetRevisionId &&
-      target.release === state.targetRelease;
-    if (!targetIsExact) {
-      return {
-        steps: [],
-        success: false,
-        error: "customer migration V2 target placement changed before freeze",
-        rolledBack: false,
-      };
-    }
-  }
-  if (
+  const declaredSourceGatewayId = typeof op.input.fromGatewayId === "string"
+    ? op.input.fromGatewayId
+    : null;
+  const scopeChanged = (
     state.operationId !== op.id ||
     state.migrationId !== migrationId ||
     state.uid !== uid ||
@@ -261,49 +231,30 @@ async function runOrdinaryMigrationV2(input: {
     state.sourceRootUpdatedAt !== targets.sourceRootUpdatedAt ||
     state.targetGatewayId !== targets.toGatewayId ||
     state.targetRevisionId !== targets.toRevisionId ||
-    state.targetRelease !== targets.toRelease
-  ) {
-    return { steps: [], success: false, error: "durable customer migration V2 scope changed" };
-  }
-
-  const driverDeps = {
-    client,
-    restoreSnapshot,
-    installTargetContext: (context: CustomerMigrationV2TargetContext) =>
-      deps.installTargetSystemConfigContext(state!.targetRevisionId, context),
-    clearTargetContext: () => deps.clearTargetSystemConfigContext(state!.targetRevisionId),
-    assertCandidateProofCurrent: (proof: ConfigCandidateProofResponse) =>
-      deps.assertCandidateProofCurrent(state!.targetRevisionId, state!.targetImageTag, proof),
-    setSourceAssignmentState: (assignmentState: "serving" | "quiescing") =>
-      deps.setAssignmentState({
-        gatewayId: state!.sourceGatewayId,
-        uid: state!.uid,
-        state: assignmentState,
-        slug: state!.slug,
-        revisionId: state!.sourceRevisionId,
-        release: state!.sourceRelease,
-        epoch: state!.sourceEpoch,
-        updatedByOperationId: state!.operationId,
-        createIfMissing: state!.sourceAssignmentMode === "unassigned-live",
-      }),
-    commitCutover: (fence: CustomerMigrationV2CutoverFence) =>
-      deps.commitV2Cutover({ ...fence, uid: state!.uid, slug: state!.slug }),
-    now: deps.now,
-  };
+    state.targetRelease !== targets.toRelease ||
+    declaredSourceGatewayId !== null && declaredSourceGatewayId !== state.sourceGatewayId
+  );
 
   while (state.phase !== "complete" && state.phase !== "aborted") {
-    if (
-      !isAbortPhase(state.phase) &&
-      !isCustomerMigrationV2PostIntent(state) &&
-      await ctx.cancellationRequested?.()
-    ) {
-      if (state.phase === "initialized") {
-        return { steps: [], success: false, error: "customer migration cancelled before freeze" };
-      }
-      state = beginCustomerMigrationV2Abort(state, "customer migration superseded", deps.now());
-      await persistV2(ctx, state);
-    }
     try {
+      if (
+        !isAbortPhase(state.phase) &&
+        !isCustomerMigrationV2PostIntent(state) &&
+        await ctx.cancellationRequested?.()
+      ) {
+        if (state.phase === "initialized") {
+          return { steps: [], success: false, error: "customer migration cancelled before freeze" };
+        }
+        state = beginCustomerMigrationV2Abort(state, "customer migration superseded", deps.now());
+        await persistV2(ctx, state);
+      }
+      if (scopeChanged && !isAbortPhase(state.phase)) {
+        throw new Error("durable customer migration V2 scope changed");
+      }
+      if (state.phase === "initialized") {
+        await assertV2InitialBindings(state, deps);
+      }
+      const driverDeps = await buildV2DriverDeps(state, deps);
       const next = await advanceCustomerMigrationV2(state, driverDeps);
       if (next === state) break;
       state = next;
@@ -317,7 +268,7 @@ async function runOrdinaryMigrationV2(input: {
         return {
           steps: [],
           success: false,
-          error: `customer migration V2 abort terminal: ${message}`,
+          error: `customer migration V2 retry pending: status 503: abort cleanup blocked: ${message}`,
           rolledBack: false,
         };
       }
@@ -348,8 +299,119 @@ async function runOrdinaryMigrationV2(input: {
   return { steps: [], success: true, rolledBack: false };
 }
 
+async function assertV2InitialBindings(
+  state: CustomerMigrationV2State,
+  deps: MigrateCustomerDeps,
+): Promise<void> {
+  await deps.assertSystemConfigProtocolReady({
+    mode: "checkpoint-and-restore",
+    sourceGatewayId: state.sourceGatewayId,
+    sourceRevisionId: state.sourceRevisionId,
+    targetGatewayId: state.targetGatewayId,
+    targetRevisionId: state.targetRevisionId,
+  });
+  const [source, target] = await Promise.all([
+    deps.resolveFromRevision(state.uid, state.sourceGatewayId),
+    deps.resolvePlacement(state.targetGatewayId),
+  ]);
+  const sourceIsExact = source !== null &&
+    source.revisionId === state.sourceRevisionId &&
+    source.release === state.sourceRelease &&
+    (source.epoch ?? 0) === state.sourceEpoch &&
+    (source.assignmentMode ?? "assigned") === state.sourceAssignmentMode &&
+    source.rootUpdatedAt === state.sourceRootUpdatedAt;
+  if (!sourceIsExact) {
+    throw new Error("customer migration V2 source placement changed before freeze");
+  }
+  const targetIsExact = target?.ok === true &&
+    target.revisionId === state.targetRevisionId &&
+    target.release === state.targetRelease;
+  if (!targetIsExact) {
+    throw new Error("customer migration V2 target placement changed before freeze");
+  }
+}
+
+function v2PhaseTransportIds(state: CustomerMigrationV2State): string[] {
+  switch (state.phase) {
+    case "initialized":
+    case "preSynced":
+    case "cutover":
+    case "abortIntent":
+      return [state.sourceRevisionId];
+    case "targetPrepared":
+    case "candidateProven":
+    case "sourceQuiesced":
+      return [state.sourceRevisionId, state.targetRevisionId];
+    case "keysSynced":
+    case "targetRestored":
+    case "finalSynced":
+    case "targetVerified":
+    case "promotionIntent":
+    case "promoted":
+    case "sourceRetired":
+    case "abortPublished":
+      return [state.targetRevisionId];
+    case "checkpointed":
+    case "finalized":
+    case "abortTargetUnmounted":
+    case "abortContextCleared":
+    case "complete":
+    case "aborted":
+      return [];
+  }
+}
+
+async function buildV2DriverDeps(
+  state: CustomerMigrationV2State,
+  deps: MigrateCustomerDeps,
+) {
+  const transportIds = v2PhaseTransportIds(state);
+  const urls = new Map<string, string>();
+  await Promise.all(transportIds.map(async (transportId) => {
+    urls.set(transportId, await deps.resolveGatewayUrl(transportId));
+  }));
+  const client = deps.buildClient((transportId) => {
+    const url = urls.get(transportId);
+    if (!url) {
+      throw new Error(`migration client called with unexpected gatewayId: ${transportId}`);
+    }
+    return url;
+  });
+  const restoreSnapshot = state.phase === "keysSynced"
+    ? await deps.readUserSnapshot(state.uid)
+    : undefined;
+  if (state.phase === "keysSynced" && !restoreSnapshot) {
+    throw new Error(`durable snapshot not found for ${state.uid}`);
+  }
+  return {
+    client,
+    ...(restoreSnapshot ? { restoreSnapshot } : {}),
+    installTargetContext: (context: CustomerMigrationV2TargetContext) =>
+      deps.installTargetSystemConfigContext(state.targetRevisionId, context),
+    clearTargetContext: () => deps.clearTargetSystemConfigContext(state.targetRevisionId),
+    assertCandidateProofCurrent: (proof: ConfigCandidateProofResponse) =>
+      deps.assertCandidateProofCurrent(state.targetRevisionId, state.targetImageTag, proof),
+    setSourceAssignmentState: (assignmentState: "serving" | "quiescing") =>
+      deps.setAssignmentState({
+        gatewayId: state.sourceGatewayId,
+        uid: state.uid,
+        state: assignmentState,
+        slug: state.slug,
+        revisionId: state.sourceRevisionId,
+        release: state.sourceRelease,
+        epoch: state.sourceEpoch,
+        updatedByOperationId: state.operationId,
+        createIfMissing: state.sourceAssignmentMode === "unassigned-live",
+      }),
+    commitCutover: (fence: CustomerMigrationV2CutoverFence) =>
+      deps.commitV2Cutover({ ...fence, uid: state.uid, slug: state.slug }),
+    now: deps.now,
+  };
+}
+
 interface MigrateCustomerInput {
   uid?: unknown;
+  fromGatewayId?: unknown;
   toGatewayId?: unknown;
   systemConfigMigrationMode?: unknown;
   source?: unknown;
@@ -781,7 +843,9 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
         durableV2.operationId !== op.id ||
         durableV2.migrationId !== deps.genMigrationId(op.id) ||
         durableV2.uid !== uid ||
-        durableV2.targetGatewayId !== toGatewayId
+        durableV2.targetGatewayId !== toGatewayId ||
+        typeof input.fromGatewayId === "string" &&
+          input.fromGatewayId !== durableV2.sourceGatewayId
       ) {
         return { steps: [], success: false, error: "durable customer migration V2 input changed" };
       }
@@ -793,6 +857,33 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
             error: durableV2.abortReason ?? "customer migration V2 aborted",
             rolledBack: true,
           };
+    }
+
+    if (durableV2) {
+      const targets: MigrationTargets = {
+        toGatewayId: durableV2.targetGatewayId,
+        fromGatewayId: durableV2.sourceGatewayId,
+        toRevisionId: durableV2.targetRevisionId,
+        toRelease: durableV2.targetRelease,
+        fromRevisionId: durableV2.sourceRevisionId,
+        fromRelease: durableV2.sourceRelease,
+        fromEpoch: durableV2.sourceEpoch,
+        sourceAssignmentMode: durableV2.sourceAssignmentMode,
+        ...(durableV2.sourceRootUpdatedAt !== undefined
+          ? { sourceRootUpdatedAt: durableV2.sourceRootUpdatedAt }
+          : {}),
+        fromTransportId: durableV2.sourceRevisionId,
+        toTransportId: durableV2.targetRevisionId,
+      };
+      return runOrdinaryMigrationV2({
+        op,
+        ctx,
+        deps,
+        targets,
+        uid: durableV2.uid,
+        slug: durableV2.slug,
+        migrationId: durableV2.migrationId,
+      });
     }
 
     let user: UserGatewayInfo | null;
@@ -814,43 +905,29 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
 
     const migrationId = deps.genMigrationId(op.id);
     let targets: MigrationTargets;
-    let restoreSnapshot: FleetBrokerUserSnapshot | null;
+    let restoreSnapshot: FleetBrokerUserSnapshot | null = null;
     let systemConfigMigrationMode: SystemConfigMigrationMode;
+    let ordinaryV2 = false;
     let preAcquiredConfigCheckpoint: PreAcquiredConfigCheckpoint | null;
     let rollFence: MigrationRollFence | null = null;
     const urls = new Map<string, string>();
     try {
-      if (op.customerMigrationV2) {
-        const durable = op.customerMigrationV2;
-        if (
-          durable.operationId !== op.id ||
-          durable.uid !== uid ||
-          durable.slug !== user.slug ||
-          durable.targetGatewayId !== toGatewayId
-        ) {
-          return { steps: [], success: false, error: "durable customer migration V2 input changed" };
-        }
-        targets = {
-          toGatewayId: durable.targetGatewayId,
-          fromGatewayId: durable.sourceGatewayId,
-          toRevisionId: durable.targetRevisionId,
-          toRelease: durable.targetRelease,
-          fromRevisionId: durable.sourceRevisionId,
-          fromRelease: durable.sourceRelease,
-          fromEpoch: durable.sourceEpoch,
-          sourceAssignmentMode: durable.sourceAssignmentMode,
-          ...(durable.sourceRootUpdatedAt !== undefined
-            ? { sourceRootUpdatedAt: durable.sourceRootUpdatedAt }
-            : {}),
-          fromTransportId: durable.sourceRevisionId,
-          toTransportId: durable.targetRevisionId,
+      const resolved = await resolveMigrationTargets(deps, uid, user, toGatewayId);
+      if ("error" in resolved) {
+        return { steps: [], success: false, error: resolved.error };
+      }
+      targets = resolved.targets;
+      if (
+        typeof input.fromGatewayId === "string" &&
+        input.fromGatewayId !== targets.fromGatewayId
+      ) {
+        return {
+          steps: [],
+          success: false,
+          error:
+            `declared source ${input.fromGatewayId} does not match resolved source ${targets.fromGatewayId}`,
+          rolledBack: false,
         };
-      } else {
-        const resolved = await resolveMigrationTargets(deps, uid, user, toGatewayId);
-        if ("error" in resolved) {
-          return { steps: [], success: false, error: resolved.error };
-        }
-        targets = resolved.targets;
       }
       preAcquiredConfigCheckpoint = requestedPreAcquiredConfigCheckpoint(
         input.preAcquiredConfigCheckpoint,
@@ -890,15 +967,15 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
           };
         }
       }
-      systemConfigMigrationMode = op.customerMigrationV2
-        ? "checkpoint-and-restore"
-        : await resolveRequestedSystemConfigMigrationMode({
-            deps,
-            migrationInput: input,
-            sourceGatewayId: user.currentGatewayId,
-            targetGatewayId: toGatewayId,
-          });
-      if (!op.customerMigrationV2 || op.customerMigrationV2.phase === "initialized") {
+      systemConfigMigrationMode = await resolveRequestedSystemConfigMigrationMode({
+        deps,
+        migrationInput: input,
+        sourceGatewayId: user.currentGatewayId,
+        targetGatewayId: toGatewayId,
+      });
+      ordinaryV2 = systemConfigMigrationMode === "checkpoint-and-restore" &&
+        input.source !== "release-roll";
+      if (!ordinaryV2) {
         await deps.assertSystemConfigProtocolReady({
           mode: systemConfigMigrationMode,
           sourceGatewayId: targets.fromGatewayId,
@@ -906,10 +983,10 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
           targetGatewayId: targets.toGatewayId,
           targetRevisionId: targets.toRevisionId,
         });
+        urls.set(targets.fromTransportId, await deps.resolveGatewayUrl(targets.fromTransportId));
+        urls.set(targets.toTransportId, await deps.resolveGatewayUrl(targets.toTransportId));
+        restoreSnapshot = await deps.readUserSnapshot(uid);
       }
-      urls.set(targets.fromTransportId, await deps.resolveGatewayUrl(targets.fromTransportId));
-      urls.set(targets.toTransportId, await deps.resolveGatewayUrl(targets.toTransportId));
-      restoreSnapshot = await deps.readUserSnapshot(uid);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (op.customerMigrationV2 && classifyCustomerMigrationV2Error(err) === "retry") {
@@ -917,23 +994,7 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
       }
       return { steps: [], success: false, error: message };
     }
-    if (!restoreSnapshot) {
-      return { steps: [], success: false, error: `durable snapshot not found for ${uid}` };
-    }
-    const client = deps.buildClient((transportId) => {
-      const url = urls.get(transportId);
-      if (!url) {
-        throw new Error(
-          `migration client called with unexpected gatewayId: ${transportId}`,
-        );
-      }
-      return url;
-    });
-
-    if (
-      op.customerMigrationV2 ||
-      (systemConfigMigrationMode === "checkpoint-and-restore" && input.source !== "release-roll")
-    ) {
+    if (ordinaryV2) {
       if (targets.toRelease === null) {
         return { steps: [], success: false, error: "customer migration V2 target has no release" };
       }
@@ -946,8 +1007,6 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
           uid,
           slug: user.slug,
           migrationId,
-          restoreSnapshot,
-          client,
         });
       } catch (error) {
         if (classifyCustomerMigrationV2Error(error) === "retry") {
@@ -961,6 +1020,19 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
         };
       }
     }
+
+    if (!restoreSnapshot) {
+      return { steps: [], success: false, error: `durable snapshot not found for ${uid}` };
+    }
+    const client = deps.buildClient((transportId) => {
+      const url = urls.get(transportId);
+      if (!url) {
+        throw new Error(
+          `migration client called with unexpected gatewayId: ${transportId}`,
+        );
+      }
+      return url;
+    });
 
     const result = await runMigration(
       {

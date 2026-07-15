@@ -708,6 +708,25 @@ describe("POST /gateways/:id/releases — cut release n+1 from prev + patch", ()
     },
   );
 
+  it("refuses a source release while a pending migration is still pre-initialization", async () => {
+    const seed = seedNewSchemaGateway("source", sharedPayload());
+    seed[`${GLM_OPERATIONS_COLLECTION}/migration-pending`] = {
+      kind: "migrate-customer",
+      status: "pending",
+      input: { fromGatewayId: "source", toGatewayId: "target" },
+    };
+    const { app, store } = mkApp(seed);
+
+    await request(app)
+      .post("/gateways/source/releases")
+      .send({ imageTag: "deadbee" })
+      .expect(409);
+
+    expect(store.get("gateways/source")).toMatchObject({ latestRelease: 1, desiredRelease: 1 });
+    expect(store.get(`gateways/source/${GATEWAY_RELEASES_SUBCOLLECTION}/2`)).toBeUndefined();
+    expect(opsIn(store, "rollout")).toHaveLength(0);
+  });
+
   it("refuses a release while a durable unassigned-live migration owns the gateway", async () => {
     const seed = seedNewSchemaGateway("source", sharedPayload());
     seed[`${GLM_OPERATIONS_COLLECTION}/migration-live`] = {

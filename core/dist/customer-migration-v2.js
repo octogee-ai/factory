@@ -69,6 +69,9 @@ export async function advanceCustomerMigrationV2(state, deps) {
             });
             return { ...state, phase: "keysSynced" };
         case "keysSynced":
+            if (!deps.restoreSnapshot) {
+                throw new Error("customer migration V2 restore phase lacks its durable snapshot");
+            }
             await deps.client.restoreTarget({
                 migrationId: state.migrationId,
                 gatewayId: state.targetGatewayId,

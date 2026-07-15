@@ -159,6 +159,23 @@ describe("advanceCustomerMigrationV2", () => {
     expect(d.client.freezeConfigV2).toHaveBeenCalledTimes(2);
   });
 
+  it("fails the restore phase explicitly when its phase-scoped snapshot was not loaded", async () => {
+    const d = deps();
+    d.restoreSnapshot = undefined;
+    const current = {
+      ...state("keysSynced"),
+      checkpointCommit: CHECKPOINT,
+      configHash: HASH,
+      freezeRef: "refs/octogee/system-config/freeze/source-r1",
+      freezeObject: FREEZE_OBJECT,
+    };
+
+    await expect(advanceCustomerMigrationV2(current, d)).rejects.toThrow(
+      /restore phase lacks its durable snapshot/i,
+    );
+    expect(d.client.restoreTarget).not.toHaveBeenCalled();
+  });
+
   it("re-proves immediately before persisting promotion intent", async () => {
     const d = deps();
     const proven = proof();

@@ -38,6 +38,7 @@ describe("buildMigrateOperation", () => {
     const op = buildMigrateOperation({
       id: "dur-migrate-xyz",
       uid: "u-fixture",
+      fromGatewayId: "default",
       toGatewayId: "operator-1",
       createdBy: "durability-harness",
       now: 1_700_000_000_000,
@@ -50,20 +51,21 @@ describe("buildMigrateOperation", () => {
       createdAt: 1_700_000_000_000,
       startedAt: null,
       completedAt: null,
-      input: { uid: "u-fixture", toGatewayId: "operator-1" },
+      input: { uid: "u-fixture", fromGatewayId: "default", toGatewayId: "operator-1" },
     });
     expect(op.steps).toEqual([]);
   });
 
-  it("carries only uid + toGatewayId in input — no credential material", () => {
+  it("carries only uid + source/target gateway ids in input — no credential material", () => {
     const op = buildMigrateOperation({
       id: "x",
       uid: "u",
+      fromGatewayId: "operator-1",
       toGatewayId: "default",
       createdBy: "h",
       now: 0,
     });
-    expect(Object.keys(op.input).sort()).toEqual(["toGatewayId", "uid"]);
+    expect(Object.keys(op.input).sort()).toEqual(["fromGatewayId", "toGatewayId", "uid"]);
   });
 });
 
