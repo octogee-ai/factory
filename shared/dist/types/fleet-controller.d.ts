@@ -71,6 +71,29 @@ export interface OpenClawDashboardBridgeCapability extends OpenClawDashboardBrid
     instanceId: string;
     observedAt: string;
 }
+export type SystemConfigBootRole = "normal" | "source-frozen" | "target-candidate";
+export interface GatewayConfigControlOwner {
+    migrationId: string;
+    sourceRevisionId: string;
+    targetRevisionId: string;
+}
+export interface GatewayConfigStatus {
+    controlProtocol: DurableOpenClawConfigControlProtocol;
+    observedAt?: unknown;
+    freezeState?: "unfrozen" | "freezing" | "frozen";
+    bootRole?: SystemConfigBootRole;
+    controlOwner?: GatewayConfigControlOwner;
+    checkpointCommit?: string;
+    configHash?: string;
+    candidateCommit?: string;
+    candidateHash?: string;
+    openclawVersion?: string;
+    openclawForkSha?: string;
+    dashboardControlState?: "ready" | "missing" | "stale" | "invalid";
+    dashboardControlProtocol?: OpenClawDashboardBridgeProtocol;
+    dashboardControlObservedAt?: string;
+}
+export declare function hasDurableOpenClawConfigControlProtocol(value: unknown): value is GatewayConfigStatus;
 export declare const GATEWAYS_COLLECTION = "gateways";
 export interface MigrationRequestBody {
     migrationId: string;

@@ -1206,6 +1206,99 @@ function buildRollPassDeps(args: {
         configHash: checkpoint.configHash,
       };
     },
+    checkpointConfigFreezeV2: async ({
+      gatewayId,
+      sourceRevisionId,
+      targetRevisionId,
+      migrationId,
+      slug,
+    }) => {
+      const sourceUrl = await resolveGatewayUrlFromFirestore(db, sourceRevisionId);
+      const client = createMigrationClient({
+        privateKey,
+        resolveGatewayUrl: () => sourceUrl,
+        log,
+      });
+      return client.freezeConfigV2({
+        migrationId,
+        gatewayId,
+        transportId: sourceRevisionId,
+        slug,
+        sourceRevisionId,
+        targetRevisionId,
+      });
+    },
+    proveConfigCandidate: async ({ gatewayId, state }) => {
+      const targetUrl = await resolveGatewayUrlFromFirestore(db, state.targetRevisionId);
+      const client = createMigrationClient({
+        privateKey,
+        resolveGatewayUrl: () => targetUrl,
+        log,
+      });
+      return client.proveConfigCandidate({
+        migrationId: state.migrationId,
+        gatewayId,
+        transportId: state.targetRevisionId,
+        slug: state.builderSlug,
+        sourceRevisionId: state.sourceRevisionId,
+        targetRevisionId: state.targetRevisionId,
+        checkpointCommit: state.checkpointCommit,
+        freezeObject: state.freezeObject,
+      });
+    },
+    promoteConfigCandidate: async ({ gatewayId, state }) => {
+      if (!state.candidateCommit || !state.candidateHash) {
+        throw new Error("protocol-v2 promotion state lacks candidate bindings");
+      }
+      const targetUrl = await resolveGatewayUrlFromFirestore(db, state.targetRevisionId);
+      const client = createMigrationClient({ privateKey, resolveGatewayUrl: () => targetUrl, log });
+      await client.promoteConfigCandidate({
+        migrationId: state.migrationId,
+        gatewayId,
+        transportId: state.targetRevisionId,
+        slug: state.builderSlug,
+        sourceRevisionId: state.sourceRevisionId,
+        targetRevisionId: state.targetRevisionId,
+        checkpointCommit: state.checkpointCommit,
+        candidateCommit: state.candidateCommit,
+        candidateHash: state.candidateHash,
+        freezeObject: state.freezeObject,
+      });
+    },
+    abortConfigV2: async ({ gatewayId, state }) => {
+      const sourceUrl = await resolveGatewayUrlFromFirestore(db, state.sourceRevisionId);
+      const client = createMigrationClient({ privateKey, resolveGatewayUrl: () => sourceUrl, log });
+      await client.abortConfigV2({
+        migrationId: state.migrationId,
+        gatewayId,
+        transportId: state.sourceRevisionId,
+        slug: state.builderSlug,
+        sourceRevisionId: state.sourceRevisionId,
+        targetRevisionId: state.targetRevisionId,
+        checkpointCommit: state.checkpointCommit,
+        candidateCommit: state.candidateCommit ?? null,
+        freezeObject: state.freezeObject,
+      });
+    },
+    finalizeConfigV2: async ({ gatewayId, state }) => {
+      if (!state.candidateCommit || !state.candidateHash) {
+        throw new Error("protocol-v2 finalize state lacks candidate bindings");
+      }
+      const targetUrl = await resolveGatewayUrlFromFirestore(db, state.targetRevisionId);
+      const client = createMigrationClient({ privateKey, resolveGatewayUrl: () => targetUrl, log });
+      await client.finalizeConfigV2({
+        migrationId: state.migrationId,
+        gatewayId,
+        transportId: state.targetRevisionId,
+        slug: state.builderSlug,
+        sourceRevisionId: state.sourceRevisionId,
+        targetRevisionId: state.targetRevisionId,
+        checkpointCommit: state.checkpointCommit,
+        candidateCommit: state.candidateCommit,
+        candidateHash: state.candidateHash,
+        freezeObject: state.freezeObject,
+      });
+    },
     recoverConfigFreezeOwner: async ({
       ownerMigrationId,
       requestedMigrationId,

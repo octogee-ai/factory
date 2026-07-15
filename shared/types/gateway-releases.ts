@@ -51,6 +51,44 @@ export interface GatewayRollSystemConfigCheckpoint {
   sourceUnfrozenAt: number | null;
 }
 
+export type GatewayRollSystemConfigPhase =
+  | "checkpointed"
+  | "candidateProven"
+  | "promotionIntent"
+  | "promoted"
+  | "cutover"
+  | "sourceRetired"
+  | "finalized";
+
+export interface GatewayRollSystemConfigState {
+  phase: GatewayRollSystemConfigPhase;
+  migrationId: string;
+  builderSlug: string;
+  sourceRevisionId: string;
+  targetRevisionId: string;
+  checkpointCommit: string;
+  configHash: string;
+  freezeRef: string;
+  freezeObject: string;
+  checkpointedAt: number;
+  candidateCommit?: string;
+  candidateHash?: string;
+  candidateRef?: string;
+  runtimeConfigHash?: string;
+  observedRevisionId?: string;
+  targetStartedAt?: number;
+  imageTag?: string;
+  buildSha?: string;
+  openclawVersion?: string;
+  provenAt?: number;
+  promotionIntentAt?: number;
+  promotedCommit?: string;
+  promotedAt?: number;
+  cutoverAt?: number;
+  sourceRetiredAt?: number;
+  finalizedAt?: number;
+}
+
 export interface GatewayRollState {
   operationId: string;
   status: GatewayRollStatus;
@@ -63,6 +101,7 @@ export interface GatewayRollState {
   updatedAt: number;
   error: string | null;
   systemConfigCheckpoint?: GatewayRollSystemConfigCheckpoint | null;
+  systemConfigRoll?: GatewayRollSystemConfigState | null;
   // Selector-flip wall-clock. The source revision survives as a forwarder for a
   // drain TTL measured from this durable timestamp, so a controller crash never
   // loses the retire deadline. Null until the flip step runs.

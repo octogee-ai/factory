@@ -381,6 +381,162 @@ describe("MigrationClient system config fencing", () => {
   });
 });
 
+describe("MigrationClient protocol-v2 config control", () => {
+  const common = {
+    migrationId: "roll-config:roll-1",
+    gatewayId: "bender",
+    slug: "alice",
+    sourceRevisionId: "bender-r1",
+    targetRevisionId: "bender-r2",
+  };
+  const checkpointCommit = "1".repeat(40);
+  const configHash = "a".repeat(64);
+  const freezeObject = "2".repeat(40);
+  const candidateCommit = "3".repeat(40);
+  const candidateHash = "b".repeat(64);
+
+  it("signs all five exact v2 actions with both revision bindings", async () => {
+    const { calls, fakeFetch } = captureFetch((call) => {
+      const request = JSON.parse(call.body!);
+      const binding = {
+        migrationId: common.migrationId,
+        slug: common.slug,
+        sourceRevisionId: common.sourceRevisionId,
+        targetRevisionId: common.targetRevisionId,
+      };
+      const responses: Record<string, object> = {
+        "freeze-v2": {
+          ...binding,
+          frozen: true,
+          checkpointCommit,
+          configHash,
+          freezeRef: `refs/octogee/system-config/freeze/${common.sourceRevisionId}`,
+          freezeObject,
+        },
+        "candidate-proof": {
+          ...binding,
+          checkpointCommit,
+          candidateCommit,
+          candidateHash,
+          candidateRef: `refs/octogee/system-config/candidate/${common.targetRevisionId}`,
+          freezeObject,
+          runtimeConfigHash: "runtime-hash",
+          observedRevisionId: common.targetRevisionId,
+          targetStartedAt: 100,
+          imageTag: "image-1",
+          buildSha: "build-1",
+          openclawVersion: "oc-1",
+          configReady: true,
+          provenAt: 101,
+        },
+        "promote-candidate": { ...binding, promoted: true, promotedCommit: candidateCommit },
+        "abort-v2": { ...binding, aborted: true },
+        "finalize-v2": { ...binding, finalized: true },
+      };
+      return new Response(JSON.stringify(responses[request.action]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: (id) => `https://${id}.example.com`,
+      fetch: fakeFetch,
+    });
+
+    await client.freezeConfigV2({ ...common, transportId: common.sourceRevisionId });
+    await client.proveConfigCandidate({
+      ...common,
+      transportId: common.targetRevisionId,
+      checkpointCommit,
+      freezeObject,
+    });
+    await client.promoteConfigCandidate({
+      ...common,
+      transportId: common.targetRevisionId,
+      checkpointCommit,
+      candidateCommit,
+      candidateHash,
+      freezeObject,
+    });
+    await client.abortConfigV2({
+      ...common,
+      transportId: common.sourceRevisionId,
+      checkpointCommit,
+      candidateCommit,
+      freezeObject,
+    });
+    await client.finalizeConfigV2({
+      ...common,
+      transportId: common.targetRevisionId,
+      checkpointCommit,
+      candidateCommit,
+      candidateHash,
+      freezeObject,
+    });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://bender-r1.example.com/config-freeze-v2/bender",
+      "https://bender-r2.example.com/config-candidate-proof/bender",
+      "https://bender-r2.example.com/config-promote-candidate/bender",
+      "https://bender-r1.example.com/config-abort-v2/bender",
+      "https://bender-r2.example.com/config-finalize-v2/bender",
+    ]);
+    expect(calls.map((call) => JSON.parse(call.body!).action)).toEqual([
+      "freeze-v2",
+      "candidate-proof",
+      "promote-candidate",
+      "abort-v2",
+      "finalize-v2",
+    ]);
+    for (const call of calls) {
+      const request = JSON.parse(call.body!);
+      expect(request).toMatchObject({
+        migrationId: common.migrationId,
+        slug: common.slug,
+        sourceRevisionId: common.sourceRevisionId,
+        targetRevisionId: common.targetRevisionId,
+      });
+      expect(call.headers[SIGNATURE_HEADER.toLowerCase()]).toBe(
+        signFleetRequest(PRIVATE_KEY, common.migrationId, call.body!),
+      );
+    }
+  });
+
+  it("rejects a candidate proof observed from another target process", async () => {
+    const { fakeFetch } = captureFetch(() => new Response(JSON.stringify({
+      migrationId: common.migrationId,
+      slug: common.slug,
+      sourceRevisionId: common.sourceRevisionId,
+      targetRevisionId: common.targetRevisionId,
+      checkpointCommit,
+      candidateCommit,
+      candidateHash,
+      candidateRef: `refs/octogee/system-config/candidate/${common.targetRevisionId}`,
+      freezeObject,
+      runtimeConfigHash: "runtime-hash",
+      observedRevisionId: "bender-r9",
+      targetStartedAt: 100,
+      imageTag: "image-1",
+      buildSha: "build-1",
+      openclawVersion: "oc-1",
+      configReady: true,
+      provenAt: 101,
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://target.example.com",
+      fetch: fakeFetch,
+    });
+
+    await expect(client.proveConfigCandidate({
+      ...common,
+      checkpointCommit,
+      freezeObject,
+    })).rejects.toThrow(/candidate proof/i);
+  });
+});
+
 // Transport/tenant split (GATEWAY-RELEASES-SPEC "Placement and migration
 // targeting"): the URL resolves from the revision service ({gw}-r{n}) while the
 // in-pod path/body still carries the bare gatewayId (the pod's GATEWAY_ID and

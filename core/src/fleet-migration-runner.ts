@@ -13,14 +13,12 @@ import {
   isDefinitiveFreezeRejection,
   isFreezeOwnerConflict,
   MigrationRpcError,
+  type LegacyConfigFreezeResponse,
+  type LegacyConfigRestoreProofResponse,
   type MigrationClient,
 } from "./fleet-migration-client.js";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
-import type {
-  ConfigFreezeResponse,
-  ConfigRestoreProofResponse,
-  SystemConfigMigrationMode,
-} from "@octogee/shared/types/fleet-controller";
+import type { SystemConfigMigrationMode } from "@octogee/shared/types/fleet-controller";
 
 export interface ReportedStep {
   name: string;
@@ -89,20 +87,9 @@ export interface MigrationRunnerDeps {
     slug: string;
     sourceRevisionId: string;
     targetRevisionId: string;
-    checkpoint: Pick<ConfigFreezeResponse, "checkpointCommit" | "configHash">;
-    proof: Pick<
-      ConfigRestoreProofResponse,
-      | "restoredCommit"
-      | "acceptedCommit"
-      | "configHash"
-      | "configReady"
-      | "observedRevisionId"
-      | "restoreProvenAt"
-      | "configReadyAt"
-      | "runtimeConfigHash"
-    >;
+    checkpoint: Pick<LegacyConfigFreezeResponse, "checkpointCommit" | "configHash">;
+    proof: Omit<LegacyConfigRestoreProofResponse, "migrationId" | "slug">;
   }) => Promise<void>;
-
   recoverConfigFreezeOwner?: (input: {
     ownerMigrationId: string;
     requestedMigrationId: string;
@@ -160,18 +147,8 @@ export interface ConfigCleanupObligation {
     success: boolean;
     rolledBack: boolean;
     error?: string;
-    configCheckpoint?: Pick<ConfigFreezeResponse, "checkpointCommit" | "configHash">;
-    configProof?: Pick<
-      ConfigRestoreProofResponse,
-      | "restoredCommit"
-      | "acceptedCommit"
-      | "configHash"
-      | "configReady"
-      | "observedRevisionId"
-      | "restoreProvenAt"
-      | "configReadyAt"
-      | "runtimeConfigHash"
-    >;
+    configCheckpoint?: Pick<LegacyConfigFreezeResponse, "checkpointCommit" | "configHash">;
+    configProof?: Omit<LegacyConfigRestoreProofResponse, "migrationId" | "slug">;
   };
 }
 
@@ -180,18 +157,8 @@ export interface MigrationRunnerResult {
   finalPhase: MigrationPhase;
   errorAt?: { phase: MigrationPhase; error: string };
   rolledBack: boolean;
-  configCheckpoint?: Pick<ConfigFreezeResponse, "checkpointCommit" | "configHash">;
-  configProof?: Pick<
-    ConfigRestoreProofResponse,
-    | "restoredCommit"
-    | "acceptedCommit"
-    | "configHash"
-    | "configReady"
-    | "observedRevisionId"
-    | "restoreProvenAt"
-    | "configReadyAt"
-    | "runtimeConfigHash"
-  >;
+  configCheckpoint?: Pick<LegacyConfigFreezeResponse, "checkpointCommit" | "configHash">;
+  configProof?: Omit<LegacyConfigRestoreProofResponse, "migrationId" | "slug">;
   configCleanup?: ConfigCleanupObligation;
 }
 
@@ -206,19 +173,17 @@ async function releaseConfigFreeze(
 ): Promise<ConfigFreezeReleaseResult> {
   await report(deps, { name: "unfreeze-config", status: "running" });
   try {
-    const response = await deps.client.unfreezeConfig({
+    await deps.client.unfreezeConfig({
       migrationId: input.migrationId,
       gatewayId: input.fromGatewayId,
       transportId: input.fromTransportId ?? input.fromGatewayId,
       slug: input.slug,
     });
-    if (response.unfrozen !== true) throw new Error("config unfreeze was not confirmed");
     await report(deps, { name: "unfreeze-config", status: "done" });
     return { kind: "released" };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await report(deps, { name: "unfreeze-config", status: "skipped", error: message });
-    deps.log(`[migration-runner] config unfreeze failed migrationId=${input.migrationId}: ${message}`);
     return isDefinitiveConfigRpcRejection(error)
       ? { kind: "definitive-rejection", error: message }
       : { kind: "ambiguous", error: message };
@@ -430,7 +395,7 @@ export async function runMigration(
     } else {
       await report(deps, { name: "freeze-config", status: "running" });
       try {
-        let checkpoint: ConfigFreezeResponse;
+        let checkpoint: LegacyConfigFreezeResponse;
         try {
           checkpoint = await deps.client.freezeConfig({
             migrationId: input.migrationId,

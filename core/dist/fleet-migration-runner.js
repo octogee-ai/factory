@@ -3,21 +3,18 @@ import { isDefinitiveConfigRpcRejection, isDefinitiveFreezeRejection, isFreezeOw
 async function releaseConfigFreeze(input, deps) {
     await report(deps, { name: "unfreeze-config", status: "running" });
     try {
-        const response = await deps.client.unfreezeConfig({
+        await deps.client.unfreezeConfig({
             migrationId: input.migrationId,
             gatewayId: input.fromGatewayId,
             transportId: input.fromTransportId ?? input.fromGatewayId,
             slug: input.slug,
         });
-        if (response.unfrozen !== true)
-            throw new Error("config unfreeze was not confirmed");
         await report(deps, { name: "unfreeze-config", status: "done" });
         return { kind: "released" };
     }
     catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         await report(deps, { name: "unfreeze-config", status: "skipped", error: message });
-        deps.log(`[migration-runner] config unfreeze failed migrationId=${input.migrationId}: ${message}`);
         return isDefinitiveConfigRpcRejection(error)
             ? { kind: "definitive-rejection", error: message }
             : { kind: "ambiguous", error: message };

@@ -13,6 +13,35 @@ export interface GatewayRollSystemConfigCheckpoint {
     checkpointedAt: number | null;
     sourceUnfrozenAt: number | null;
 }
+export type GatewayRollSystemConfigPhase = "checkpointed" | "candidateProven" | "promotionIntent" | "promoted" | "cutover" | "sourceRetired" | "finalized";
+export interface GatewayRollSystemConfigState {
+    phase: GatewayRollSystemConfigPhase;
+    migrationId: string;
+    builderSlug: string;
+    sourceRevisionId: string;
+    targetRevisionId: string;
+    checkpointCommit: string;
+    configHash: string;
+    freezeRef: string;
+    freezeObject: string;
+    checkpointedAt: number;
+    candidateCommit?: string;
+    candidateHash?: string;
+    candidateRef?: string;
+    runtimeConfigHash?: string;
+    observedRevisionId?: string;
+    targetStartedAt?: number;
+    imageTag?: string;
+    buildSha?: string;
+    openclawVersion?: string;
+    provenAt?: number;
+    promotionIntentAt?: number;
+    promotedCommit?: string;
+    promotedAt?: number;
+    cutoverAt?: number;
+    sourceRetiredAt?: number;
+    finalizedAt?: number;
+}
 export interface GatewayRollState {
     operationId: string;
     status: GatewayRollStatus;
@@ -25,6 +54,7 @@ export interface GatewayRollState {
     updatedAt: number;
     error: string | null;
     systemConfigCheckpoint?: GatewayRollSystemConfigCheckpoint | null;
+    systemConfigRoll?: GatewayRollSystemConfigState | null;
     flippedAt: number | null;
 }
 export type GatewayIdleSleepStatus = "paused" | "empty-waiting" | "returning-to-shared";

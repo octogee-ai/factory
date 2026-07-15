@@ -1,4 +1,4 @@
-import { type FlushGatewayResponse, type ConfigFreezeResponse, type ConfigRestoreProofResponse, type ConfigUnfreezeResponse, type ImportResponse, type QuiesceResponse, type RestoreMigrationResponse, type UnmountResponse, type VerifyMigrationResponse } from "@octogee/shared/types/fleet-controller";
+import { type FlushGatewayResponse, type ConfigFreezeV2Response, type ConfigCandidateProofResponse, type ConfigPromoteCandidateResponse, type ConfigAbortV2Response, type ConfigFinalizeV2Response, type ImportResponse, type QuiesceResponse, type RestoreMigrationResponse, type UnmountResponse, type VerifyMigrationResponse } from "@octogee/shared/types/fleet-controller";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { MigrationSyncMode } from "./fleet-migration.js";
 export interface MigrationClientTimeouts {
@@ -17,32 +17,36 @@ export interface MigrationClientDeps {
     genRequestId?: () => string;
 }
 export interface MigrationClient {
-    freezeConfig(opts: {
-        migrationId: string;
-        gatewayId: string;
-        transportId?: string;
-        slug: string;
-    }): Promise<ConfigFreezeResponse>;
-    proveConfigRestore(opts: {
-        migrationId: string;
-        gatewayId: string;
-        transportId?: string;
-        slug: string;
+    freezeConfig(opts: LegacyConfigControlOpts): Promise<LegacyConfigFreezeResponse>;
+    proveConfigRestore(opts: LegacyConfigControlOpts & {
         checkpointCommit: string;
-    }): Promise<ConfigRestoreProofResponse>;
-    reproveConfigRestore(opts: {
-        migrationId: string;
-        gatewayId: string;
-        transportId?: string;
-        slug: string;
+    }): Promise<LegacyConfigRestoreProofResponse>;
+    reproveConfigRestore(opts: LegacyConfigControlOpts & {
         checkpointCommit: string;
-    }): Promise<ConfigRestoreProofResponse>;
-    unfreezeConfig(opts: {
-        migrationId: string;
-        gatewayId: string;
-        transportId?: string;
-        slug: string;
-    }): Promise<ConfigUnfreezeResponse>;
+    }): Promise<LegacyConfigRestoreProofResponse>;
+    unfreezeConfig(opts: LegacyConfigControlOpts): Promise<LegacyConfigUnfreezeResponse>;
+    freezeConfigV2(opts: ConfigControlOpts): Promise<ConfigFreezeV2Response>;
+    proveConfigCandidate(opts: ConfigControlOpts & {
+        checkpointCommit: string;
+        freezeObject: string;
+    }): Promise<ConfigCandidateProofResponse>;
+    promoteConfigCandidate(opts: ConfigControlOpts & {
+        checkpointCommit: string;
+        candidateCommit: string;
+        candidateHash: string;
+        freezeObject: string;
+    }): Promise<ConfigPromoteCandidateResponse>;
+    abortConfigV2(opts: ConfigControlOpts & {
+        checkpointCommit: string;
+        candidateCommit: string | null;
+        freezeObject: string;
+    }): Promise<ConfigAbortV2Response>;
+    finalizeConfigV2(opts: ConfigControlOpts & {
+        checkpointCommit: string;
+        candidateCommit: string;
+        candidateHash: string;
+        freezeObject: string;
+    }): Promise<ConfigFinalizeV2Response>;
     quiesce(opts: {
         migrationId: string;
         gatewayId: string;
@@ -88,6 +92,44 @@ export interface MigrationClient {
         transportId?: string;
         slug: string;
     }): Promise<UnmountResponse>;
+}
+export interface LegacyConfigControlOpts {
+    migrationId: string;
+    gatewayId: string;
+    transportId?: string;
+    slug: string;
+}
+export interface LegacyConfigFreezeResponse {
+    migrationId: string;
+    slug: string;
+    frozen: true;
+    checkpointCommit: string;
+    configHash: string;
+}
+export interface LegacyConfigRestoreProofResponse {
+    migrationId: string;
+    slug: string;
+    restoredCommit: string;
+    acceptedCommit: string;
+    configHash: string;
+    configReady: true;
+    observedRevisionId: string;
+    restoreProvenAt: number;
+    configReadyAt: number;
+    runtimeConfigHash: string;
+}
+export interface LegacyConfigUnfreezeResponse {
+    migrationId: string;
+    slug: string;
+    unfrozen: true;
+}
+export interface ConfigControlOpts {
+    migrationId: string;
+    gatewayId: string;
+    transportId?: string;
+    slug: string;
+    sourceRevisionId: string;
+    targetRevisionId: string;
 }
 export interface MigrationRpcErrorOptions {
     status?: number;

@@ -1,7 +1,7 @@
 import { type MigrationPhase } from "./fleet-migration.js";
-import { type MigrationClient } from "./fleet-migration-client.js";
+import { type LegacyConfigFreezeResponse, type LegacyConfigRestoreProofResponse, type MigrationClient } from "./fleet-migration-client.js";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
-import type { ConfigFreezeResponse, ConfigRestoreProofResponse, SystemConfigMigrationMode } from "@octogee/shared/types/fleet-controller";
+import type { SystemConfigMigrationMode } from "@octogee/shared/types/fleet-controller";
 export interface ReportedStep {
     name: string;
     status: "running" | "done" | "failed" | "skipped";
@@ -53,8 +53,8 @@ export interface MigrationRunnerDeps {
         slug: string;
         sourceRevisionId: string;
         targetRevisionId: string;
-        checkpoint: Pick<ConfigFreezeResponse, "checkpointCommit" | "configHash">;
-        proof: Pick<ConfigRestoreProofResponse, "restoredCommit" | "acceptedCommit" | "configHash" | "configReady" | "observedRevisionId" | "restoreProvenAt" | "configReadyAt" | "runtimeConfigHash">;
+        checkpoint: Pick<LegacyConfigFreezeResponse, "checkpointCommit" | "configHash">;
+        proof: Omit<LegacyConfigRestoreProofResponse, "migrationId" | "slug">;
     }) => Promise<void>;
     recoverConfigFreezeOwner?: (input: {
         ownerMigrationId: string;
@@ -101,8 +101,8 @@ export interface ConfigCleanupObligation {
         success: boolean;
         rolledBack: boolean;
         error?: string;
-        configCheckpoint?: Pick<ConfigFreezeResponse, "checkpointCommit" | "configHash">;
-        configProof?: Pick<ConfigRestoreProofResponse, "restoredCommit" | "acceptedCommit" | "configHash" | "configReady" | "observedRevisionId" | "restoreProvenAt" | "configReadyAt" | "runtimeConfigHash">;
+        configCheckpoint?: Pick<LegacyConfigFreezeResponse, "checkpointCommit" | "configHash">;
+        configProof?: Omit<LegacyConfigRestoreProofResponse, "migrationId" | "slug">;
     };
 }
 export interface MigrationRunnerResult {
@@ -113,8 +113,8 @@ export interface MigrationRunnerResult {
         error: string;
     };
     rolledBack: boolean;
-    configCheckpoint?: Pick<ConfigFreezeResponse, "checkpointCommit" | "configHash">;
-    configProof?: Pick<ConfigRestoreProofResponse, "restoredCommit" | "acceptedCommit" | "configHash" | "configReady" | "observedRevisionId" | "restoreProvenAt" | "configReadyAt" | "runtimeConfigHash">;
+    configCheckpoint?: Pick<LegacyConfigFreezeResponse, "checkpointCommit" | "configHash">;
+    configProof?: Omit<LegacyConfigRestoreProofResponse, "migrationId" | "slug">;
     configCleanup?: ConfigCleanupObligation;
 }
 export declare function runMigration(input: MigrationRunnerInput, deps: MigrationRunnerDeps): Promise<MigrationRunnerResult>;
