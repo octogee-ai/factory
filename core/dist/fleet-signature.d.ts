@@ -1,0 +1,3 @@
+export declare function canonicalPayload(jobId: string, rawBody: string): string;
+export declare function signFleetRequest(privateKeyPem: string, jobId: string, rawBody: string): string;
+export declare function verifyFleetRequest(publicKeyPem: string, jobId: string, rawBody: string, headerValue: string | undefined): boolean;

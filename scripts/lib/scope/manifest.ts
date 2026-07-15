@@ -30,6 +30,8 @@ export const JOBS = {
 export type JobKey = (typeof JOBS)[keyof typeof JOBS];
 
 const TYPECHECK = "npm run typecheck";
+const COMMITTED_DIST_TYPECHECK =
+  "npm run typecheck && npm run build && node ../scripts/ops/verify-committed-dist.mjs && npm run verify:tarball";
 
 export interface UnitPackage {
   name: JobKey;
@@ -39,27 +41,20 @@ export interface UnitPackage {
 
 // The dynamic `test` matrix entries. `typecheck` runs after `npm ci`, before `npm test`.
 export const UNIT_PACKAGES: readonly UnitPackage[] = [
-  // core ships a committed tarball (octogee-core.tgz); verify:tarball fails if it
-  // drifts from a fresh build of core/src (npm can't build a file: dependency).
   {
     name: JOBS.core,
     dir: "core",
-    typecheck: "npm run typecheck && npm run verify:tarball",
+    typecheck: COMMITTED_DIST_TYPECHECK,
   },
-  // shared ships a committed tarball (octogee-shared.tgz) too; same guard. A shared/
-  // change still fails open to every consumer (it's the type substrate); this entry
-  // just makes the shared job exist so its freshness + lock guard runs in CI.
   {
     name: JOBS.shared,
     dir: "shared",
-    typecheck: "npm run typecheck && npm run verify:tarball",
+    typecheck: COMMITTED_DIST_TYPECHECK,
   },
-  // test-helpers ships a committed tarball (octogee-test-helpers.tgz) too — shared
-  // test infra (firestore-emulator) for the emulator suites. Same freshness + lock guard.
   {
     name: JOBS.testHelpers,
     dir: "test-helpers",
-    typecheck: "npm run typecheck && npm run verify:tarball",
+    typecheck: COMMITTED_DIST_TYPECHECK,
   },
   { name: JOBS.gatewayEdge, dir: "gateway-edge", typecheck: TYPECHECK },
   { name: JOBS.octogeeApi, dir: "octogee-api", typecheck: TYPECHECK },

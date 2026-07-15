@@ -1,0 +1,183 @@
+import { GoogleAuth } from "google-auth-library";
+import { IMAGE_TAG_PATTERN } from "./image-tag.js";
+const DEFAULT_LIMIT = 30;
+const PAGE_SIZE = 200;
+let cachedAuth = null;
+function getAuth() {
+    if (!cachedAuth) {
+        cachedAuth = new GoogleAuth({
+            scopes: ["https://www.googleapis.com/auth/cloud-platform.read-only"],
+        });
+    }
+    return cachedAuth;
+}
+async function getAccessToken() {
+    const client = await getAuth().getClient();
+    const result = await client.getAccessToken();
+    const token = typeof result === "string" ? result : result?.token;
+    if (!token)
+        throw new Error("artifact-registry: failed to obtain access token");
+    return token;
+}
+function extractBuildsForService(items, service) {
+    const servicePrefix = `/dockerImages/${service}@`;
+    const seen = new Map();
+    for (const item of items) {
+        if (!item.name.includes(servicePrefix))
+            continue;
+        const digest = item.name.split(servicePrefix)[1];
+        if (!digest)
+            continue;
+        const pushedAt = item.uploadTime ?? "";
+        for (const tag of item.tags ?? []) {
+            if (!IMAGE_TAG_PATTERN.test(tag))
+                continue;
+            const existing = seen.get(tag);
+            if (!existing || existing.pushedAt < pushedAt) {
+                seen.set(tag, { tag, pushedAt, digest });
+            }
+        }
+    }
+    return seen;
+}
+const MAX_PAGES = 10;
+async function fetchDockerImagesPage(project, location, repository, token, pageToken) {
+    const params = new URLSearchParams({
+        pageSize: String(PAGE_SIZE),
+        orderBy: "update_time desc",
+    });
+    if (pageToken)
+        params.set("pageToken", pageToken);
+    const url = `https://artifactregistry.googleapis.com/v1` +
+        `/projects/${project}/locations/${location}/repositories/${repository}/dockerImages` +
+        `?${params.toString()}`;
+    const resp = await fetch(url, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) {
+        const detail = await resp.text().catch(() => "");
+        const suffix = detail ? ` — ${detail.slice(0, 200)}` : "";
+        throw new Error(`artifact-registry list failed: ${resp.status} ${resp.statusText}${suffix}`);
+    }
+    return (await resp.json());
+}
+function mergeNewerBuilds(accumulated, pageMap) {
+    for (const [tag, build] of pageMap) {
+        const existing = accumulated.get(tag);
+        if (!existing || existing.pushedAt < build.pushedAt) {
+            accumulated.set(tag, build);
+        }
+    }
+}
+export async function listGatewayBuilds(opts) {
+    const project = opts.project ?? process.env.GCP_PROJECT ?? "octogee";
+    const location = opts.location ?? process.env.GAR_LOCATION ?? "us-central1";
+    const repository = opts.repository ?? process.env.GAR_REPO ?? "octogee";
+    const limit = opts.limit ?? DEFAULT_LIMIT;
+    const enoughDeduped = limit * 3;
+    const token = await getAccessToken();
+    const accumulated = new Map();
+    let pageToken = null;
+    for (let page = 0; page < MAX_PAGES; page++) {
+        const result = await fetchDockerImagesPage(project, location, repository, token, pageToken);
+        mergeNewerBuilds(accumulated, extractBuildsForService(result.dockerImages ?? [], opts.service));
+        pageToken = result.nextPageToken ?? null;
+        if (!pageToken)
+            break;
+        if (accumulated.size >= enoughDeduped)
+            break;
+    }
+    return [...accumulated.values()]
+        .sort((a, b) => b.pushedAt.localeCompare(a.pushedAt))
+        .slice(0, limit);
+}
+let cachedWriteAuth = null;
+function getWriteAuth() {
+    if (!cachedWriteAuth) {
+        cachedWriteAuth = new GoogleAuth({
+            scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+        });
+    }
+    return cachedWriteAuth;
+}
+async function getWriteToken() {
+    const client = await getWriteAuth().getClient();
+    const result = await client.getAccessToken();
+    const token = typeof result === "string" ? result : result?.token;
+    if (!token)
+        throw new Error("artifact-registry: failed to obtain write access token");
+    return token;
+}
+function packagesBase(c) {
+    const project = c.project ?? process.env.GCP_PROJECT ?? "octogee";
+    const location = c.location ?? process.env.GAR_LOCATION ?? "us-central1";
+    const repository = c.repository ?? process.env.GAR_REPO ?? "octogee";
+    return (`https://artifactregistry.googleapis.com/v1` +
+        `/projects/${project}/locations/${location}/repositories/${repository}/packages`);
+}
+function arFetch(url, method, token, body) {
+    const headers = { Authorization: `Bearer ${token}` };
+    if (body !== undefined)
+        headers["Content-Type"] = "application/json";
+    return fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+}
+/** Pin the image behind `service:tag` with a `keep-<env>-<tag>` tag so the
+ *  cleanup policy retains it while a gateway references it. Idempotent. */
+export async function ensureKeepTag(opts) {
+    const base = `${packagesBase(opts)}/${opts.service}`;
+    const keepTag = `keep-${opts.env}-${opts.tag}`;
+    const token = await getWriteToken();
+    const getResp = await arFetch(`${base}/tags/${encodeURIComponent(opts.tag)}`, "GET", token);
+    if (!getResp.ok) {
+        throw new Error(`artifact-registry: cannot resolve ${opts.service}:${opts.tag} (${getResp.status})`);
+    }
+    const { version } = (await getResp.json());
+    if (!version)
+        throw new Error(`artifact-registry: ${opts.service}:${opts.tag} has no version`);
+    const postResp = await arFetch(`${base}/tags?tagId=${encodeURIComponent(keepTag)}`, "POST", token, { version });
+    if (!postResp.ok && postResp.status !== 409) {
+        const detail = await postResp.text().catch(() => "");
+        throw new Error(`artifact-registry: pin ${keepTag} failed: ${postResp.status} ${detail.slice(0, 200)}`);
+    }
+}
+/** Release a `keep-<env>-<tag>` pin (image becomes eligible for the time-based
+ *  cleanup once no env still pins it). Idempotent — 404 is already-gone. */
+export async function removeKeepTag(opts) {
+    const base = `${packagesBase(opts)}/${opts.service}`;
+    const keepTag = `keep-${opts.env}-${opts.tag}`;
+    const token = await getWriteToken();
+    const resp = await arFetch(`${base}/tags/${encodeURIComponent(keepTag)}`, "DELETE", token);
+    if (!resp.ok && resp.status !== 404) {
+        const detail = await resp.text().catch(() => "");
+        throw new Error(`artifact-registry: unpin ${keepTag} failed: ${resp.status} ${detail.slice(0, 200)}`);
+    }
+}
+/** The referenced tags this env currently pins for `service` (keep-<env>- stripped). */
+export async function listKeepTags(opts) {
+    const base = `${packagesBase(opts)}/${opts.service}`;
+    const prefix = `keep-${opts.env}-`;
+    const token = await getWriteToken();
+    const out = [];
+    let pageToken = null;
+    for (let page = 0; page < MAX_PAGES; page++) {
+        const params = new URLSearchParams({ pageSize: String(PAGE_SIZE) });
+        if (pageToken)
+            params.set("pageToken", pageToken);
+        const resp = await arFetch(`${base}/tags?${params.toString()}`, "GET", token);
+        if (!resp.ok) {
+            const detail = await resp.text().catch(() => "");
+            throw new Error(`artifact-registry: list tags failed: ${resp.status} ${detail.slice(0, 200)}`);
+        }
+        const data = (await resp.json());
+        for (const t of data.tags ?? []) {
+            const tagId = t.name.split("/tags/")[1];
+            if (tagId && tagId.startsWith(prefix))
+                out.push(tagId.slice(prefix.length));
+        }
+        pageToken = data.nextPageToken ?? null;
+        if (!pageToken)
+            break;
+    }
+    return out;
+}

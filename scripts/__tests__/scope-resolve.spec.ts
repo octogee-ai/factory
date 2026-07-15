@@ -112,6 +112,19 @@ describe("resolveScope — ownership", () => {
   });
 });
 
+describe("unit package gates", () => {
+  it.each(["core", "shared", "test-helpers"])(
+    "%s rebuilds committed dist before retaining tarball verification",
+    (packageName) => {
+      const unitPackage = UNIT_PACKAGES.find(({ name }) => name === packageName);
+
+      expect(unitPackage?.typecheck).toBe(
+        "npm run typecheck && npm run build && node ../scripts/ops/verify-committed-dist.mjs && npm run verify:tarball",
+      );
+    },
+  );
+});
+
 describe("resolveScope — cross-package hazard edges", () => {
   it("core/ change runs the core job + every consumer (they compile its re-export shims)", () => {
     // @octogee/core is consumed (via scripts/lib shims today) by scripts +

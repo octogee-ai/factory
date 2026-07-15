@@ -1,0 +1,343 @@
+import { parseAgentId } from "@octogee/shared/types/identity";
+import { log as defaultLog } from "./config.js";
+import { OpenclawWireError, createGatewayRpc, } from "./gateway-rpc.js";
+const RETRY_AFTER_PATTERN = /\brate limit exceeded\b.*?\bretry after (\d+)s\b/i;
+function parseRetryAfterMs(message) {
+    const match = RETRY_AFTER_PATTERN.exec(message);
+    if (!match)
+        return null;
+    const seconds = Number.parseInt(match[1], 10);
+    if (!Number.isFinite(seconds) || seconds < 0)
+        return null;
+    return seconds * 1000;
+}
+export function configPatchRetryPlan(err, currentBackoffMs, remainingMs) {
+    const serverHintMs = parseRetryAfterMs(err.message);
+    const source = serverHintMs != null ? "server retry-after" : "exp backoff";
+    const candidateBackoff = serverHintMs ?? currentBackoffMs;
+    return {
+        delayMs: Math.min(candidateBackoff, Math.max(0, remainingMs)),
+        missingRetryAfterHint: err.code === "rpc-error" && serverHintMs == null && /retry/i.test(err.message),
+        source,
+    };
+}
+function seedCacheFromFetch(cache, config, hash) {
+    if (!cache)
+        return;
+    cache.current = config;
+    cache.hash = hash;
+}
+function updateCacheAfterPatch(cache, patchResult) {
+    if (!cache)
+        return;
+    if (typeof patchResult.hash === "string" && patchResult.hash.length > 0) {
+        cache.hash = patchResult.hash;
+        cache.current = patchResult.config ?? cache.current;
+        return;
+    }
+    cache.hash = "";
+}
+function invalidateCacheForHashMismatch(cache) {
+    if (!cache)
+        return;
+    cache.hash = "";
+    cache.current = undefined;
+}
+function createAbortableSleep(signal, providedSleep) {
+    return (providedSleep ??
+        ((ms) => new Promise((resolve) => {
+            const t = setTimeout(resolve, ms);
+            signal?.addEventListener("abort", () => {
+                clearTimeout(t);
+                resolve();
+            }, { once: true });
+        })));
+}
+function throwIfConfigPatchAborted(signal, prefix) {
+    if (!signal?.aborted)
+        return;
+    const reason = signal.reason;
+    throw reason instanceof Error
+        ? reason
+        : new Error(`${prefix}config.patch aborted: ${String(reason ?? "signal aborted")}`);
+}
+function configPatchReplacePathOptions(replacePaths) {
+    return replacePaths && replacePaths.length > 0 ? { replacePaths } : undefined;
+}
+async function readConfigForPatch(rpc, cache, now) {
+    if (cache && cache.hash !== "" && cache.current !== undefined) {
+        return { config: cache.current, hash: cache.hash, getMs: 0 };
+    }
+    const getStart = now();
+    const fetched = await rpc.configGet();
+    seedCacheFromFetch(cache, fetched.config, fetched.hash);
+    return { config: fetched.config, hash: fetched.hash, getMs: now() - getStart };
+}
+function handleHashMismatch(err, ctx) {
+    if (ctx.attempts >= ctx.maxRetries) {
+        ctx.log(`⚠ ${ctx.prefix}config.patch hash-mismatch exhausted after attempts=${ctx.attempts} — bubbling`);
+        throw err;
+    }
+    if (ctx.remainingMs() <= 0) {
+        throw new Error(`${ctx.prefix}config.patch totalDeadlineMs=${ctx.totalDeadlineMs}ms exceeded after attempts=${ctx.attempts} (last error: hash-mismatch)`);
+    }
+    invalidateCacheForHashMismatch(ctx.cache);
+    ctx.log(`${ctx.prefix}config.patch attempt=${ctx.attempts} hash-mismatch after ${ctx.elapsed}ms — re-fetching hash and retrying immediately`);
+}
+async function runConfigPatchAttempt(args, ctx) {
+    const { config, hash, getMs } = await readConfigForPatch(ctx.rpc, ctx.cache, ctx.now);
+    const patch = args.buildPatch(config);
+    const replacePaths = args.buildReplacePaths?.(config);
+    const patchStart = ctx.now();
+    const patchResult = await ctx.rpc.configPatch(patch, hash, configPatchReplacePathOptions(replacePaths));
+    const patchMs = ctx.now() - patchStart;
+    updateCacheAfterPatch(ctx.cache, patchResult);
+    ctx.log(`${ctx.prefix}config.patch OK attempt=${ctx.attempts} configGet=${getMs}ms configPatch=${patchMs}ms totalMs=${ctx.now() - ctx.startedAt}`);
+    return {
+        mode: "rpc",
+        attempts: ctx.attempts,
+        ...(patchResult.noop === true ? { noop: true } : {}),
+    };
+}
+function isPermanentConfigPatchError(err) {
+    return (err.code === "auth-failed" ||
+        err.code === "invalid-patch" ||
+        err.code === "invalid-response");
+}
+function isDestructiveArrayGuardError(err) {
+    return err.code === "rpc-error" && /would remove entries from array path/i.test(err.message);
+}
+function throwIfPermanentConfigPatchFailure(err, ctx) {
+    if (isPermanentConfigPatchError(err)) {
+        ctx.log(`⚠ ${ctx.prefix}config.patch ${err.code} (permanent) after ${ctx.elapsed}ms — giving up: ${err.message}`);
+        throw err;
+    }
+    if (isDestructiveArrayGuardError(err)) {
+        ctx.log(`⚠ ${ctx.prefix}config.patch rejected by the destructive-array guard (permanent — identical retries cannot pass). ` +
+            `The caller's buildReplacePaths must confirm every shrunk array path: ${err.message}`);
+        throw err;
+    }
+}
+function throwIfConfigPatchRetryUnavailable(err, ctx) {
+    if (ctx.attempts >= ctx.maxRetries) {
+        ctx.log(`⚠ ${ctx.prefix}config.patch retry exhausted (${err.code} x${ctx.attempts}: ${err.message}) totalMs=${ctx.now() - ctx.startedAt} — bubbling`);
+        throw err;
+    }
+    if (ctx.remainingMs() <= 0) {
+        throw new Error(`${ctx.prefix}config.patch totalDeadlineMs=${ctx.totalDeadlineMs}ms exceeded after attempts=${ctx.attempts} (last error: ${err.code}: ${err.message})`);
+    }
+}
+async function handleConfigPatchFailure(err, ctx) {
+    const elapsed = ctx.now() - ctx.attemptStartedAt;
+    throwIfPermanentConfigPatchFailure(err, { elapsed, log: ctx.log, prefix: ctx.prefix });
+    if (err.code === "hash-mismatch") {
+        handleHashMismatch(err, { ...ctx, elapsed });
+        return ctx.currentBackoff;
+    }
+    throwIfConfigPatchRetryUnavailable(err, ctx);
+    const retryPlan = configPatchRetryPlan(err, ctx.currentBackoff, ctx.remainingMs());
+    if (retryPlan.missingRetryAfterHint) {
+        ctx.log(`⚠ ${ctx.prefix}config.patch rpc-error mentions "retry" but no parsed hint — server wording may have drifted (msg: ${err.message})`);
+    }
+    if (retryPlan.delayMs <= 0) {
+        throw new Error(`${ctx.prefix}config.patch totalDeadlineMs=${ctx.totalDeadlineMs}ms exceeded — no time left for backoff after attempts=${ctx.attempts} (last error: ${err.code}: ${err.message})`);
+    }
+    ctx.log(`🟡 ${ctx.prefix}config.patch attempt=${ctx.attempts} failed (${err.code}: ${err.message}) after ${elapsed}ms — retrying in ${retryPlan.delayMs}ms (${retryPlan.source})`);
+    await ctx.sleep(retryPlan.delayMs);
+    ctx.throwIfAborted();
+    return Math.min(ctx.currentBackoff * 2, ctx.maxBackoff);
+}
+export async function applyConfigPatch(args, opts = {}) {
+    const log = opts.log ?? defaultLog;
+    const prefix = args.logPrefix ? `${args.logPrefix} ` : "";
+    const initialBackoff = opts.retryBackoffInitialMs ?? 2_000;
+    const maxBackoff = opts.retryBackoffMaxMs ?? 30_000;
+    const maxRetries = opts.maxRetries ?? Number.POSITIVE_INFINITY;
+    const totalDeadlineMs = opts.totalDeadlineMs ?? Number.POSITIVE_INFINITY;
+    const now = opts.now ?? Date.now;
+    const signal = opts.signal;
+    const sleep = createAbortableSleep(signal, opts.sleep);
+    const rpc = opts.rpc ?? createGatewayRpc({
+        allowLegacyGatewayTokenFallback: true,
+    });
+    const ownsRpc = !opts.rpc;
+    const startedAt = now();
+    let attempts = 0;
+    let currentBackoff = initialBackoff;
+    const remainingMs = () => totalDeadlineMs - (now() - startedAt);
+    const cache = opts.cache;
+    const throwIfAborted = () => throwIfConfigPatchAborted(signal, prefix);
+    try {
+        throwIfAborted();
+        while (true) {
+            attempts++;
+            const attemptStartedAt = now();
+            try {
+                return await runConfigPatchAttempt(args, {
+                    attempts,
+                    cache,
+                    log,
+                    now,
+                    prefix,
+                    rpc,
+                    startedAt,
+                });
+            }
+            catch (err) {
+                if (!(err instanceof OpenclawWireError)) {
+                    throw err;
+                }
+                currentBackoff = await handleConfigPatchFailure(err, {
+                    attemptStartedAt,
+                    attempts,
+                    cache,
+                    currentBackoff,
+                    log,
+                    maxBackoff,
+                    maxRetries,
+                    now,
+                    prefix,
+                    remainingMs,
+                    sleep,
+                    startedAt,
+                    throwIfAborted,
+                    totalDeadlineMs,
+                });
+            }
+        }
+    }
+    finally {
+        if (ownsRpc) {
+            try {
+                await rpc.close();
+            }
+            catch { }
+        }
+    }
+}
+function isPlainObject(value) {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+export function upsertAgentInFullAgentList(current, agentId, agentEntry) {
+    const list = current?.agents?.list;
+    const currentAgents = Array.isArray(list) ? list : [];
+    return [
+        ...currentAgents.filter((agent) => !(isPlainObject(agent) && agent.id === agentId)),
+        agentEntry,
+    ];
+}
+function isCustomerAgentId(value, slug) {
+    if (typeof value !== "string")
+        return false;
+    const parsed = parseAgentId(value);
+    return parsed.kind !== "unknown" && parsed.username === slug;
+}
+// Vegas: a customer owns a SET of agents (coach + project agents). Rebuilding
+// the customer's slice of the agent list must drop stale project agents too —
+// a per-id upsert would leave a retired project agent behind forever.
+export function replaceCustomerAgentsInFullAgentList(current, slug, agentEntries) {
+    const list = current?.agents?.list;
+    const currentAgents = Array.isArray(list) ? list : [];
+    const next = [];
+    let inserted = false;
+    for (const agent of currentAgents) {
+        const customerOwned = isPlainObject(agent) && isCustomerAgentId(agent.id, slug);
+        if (customerOwned) {
+            if (!inserted) {
+                next.push(...agentEntries);
+                inserted = true;
+            }
+            continue;
+        }
+        next.push(agent);
+    }
+    if (!inserted)
+        next.push(...agentEntries);
+    return next;
+}
+export function filterOutCustomerBindings(bindings, slug) {
+    return bindings.filter((b) => !isCustomerAgentId(b?.agentId, slug));
+}
+// config.patch merges: omitting a retired project-agent account keeps it
+// alive on a revoked token. Every account rebuild must null the customer's
+// `{slug}-proj-*` keys that are no longer active. The prefix is cross-tenant
+// safe because `proj` is a reserved username segment.
+export function staleProjectAgentAccountNulls(current, slug, keepAccountIds) {
+    const accounts = current
+        ?.channels?.mattermost?.accounts ?? {};
+    const keep = new Set(keepAccountIds);
+    const out = {};
+    for (const key of Object.keys(accounts)) {
+        if (key.startsWith(`${slug}-proj-`) && !keep.has(key))
+            out[key] = null;
+    }
+    return out;
+}
+// Mirrors the gateway's collectBaseArrayPaths (openclaw src/gateway/server-methods/config.ts):
+// null-deleting an object via config.patch trips the destructive-array guard for EVERY array
+// anywhere under the deleted object, each named by exact dot-path. Arrays are terminal — the
+// guard does not recurse into their elements — and prototype-pollution keys are skipped,
+// exactly as upstream's isBlockedObjectKey does.
+const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+function collectArrayPathsUnder(value, prefix) {
+    if (Array.isArray(value))
+        return [prefix];
+    if (!isPlainObject(value))
+        return [];
+    const paths = [];
+    for (const [key, child] of Object.entries(value)) {
+        if (BLOCKED_OBJECT_KEYS.has(key))
+            continue;
+        paths.push(...collectArrayPathsUnder(child, `${prefix}.${key}`));
+    }
+    return paths;
+}
+function customerMattermostAccountArrayPaths(current, slug) {
+    const accountId = `${slug}-coach`;
+    const accounts = current?.channels?.mattermost?.accounts;
+    const account = isPlainObject(accounts) ? accounts[accountId] : undefined;
+    return collectArrayPathsUnder(account, `channels.mattermost.accounts.${accountId}`);
+}
+/**
+ * The replacePaths set for customer config patches that rebuild non-id arrays:
+ * `bindings` plus every array under the slug's MM account. Add/re-ensure patches
+ * intentionally omit `agents.list` so a one-agent upsert stays an id-keyed merge
+ * instead of becoming whole-list replacement.
+ */
+export function customerConfigReplacePaths(current, slug) {
+    return [
+        "bindings",
+        ...customerMattermostAccountArrayPaths(current, slug),
+    ];
+}
+/**
+ * The guard confirmation set for any patch that ships the full `agents.list`.
+ * `agents.list` alone is NOT enough: the gateway's destructive-array guard
+ * descends INTO id-keyed array entries and reports a shrunk nested array as its
+ * own `agents.list[].<field>` path, filtered against replacePaths individually
+ * (openclaw server-methods/config.ts, collectDestructiveIdKeyedArrayEntryPatchPaths).
+ * The per-entry arrays the platform itself rewrites: `model.fallbacks` shrinks on
+ * the BYOK-override → house-pin transition ({primary, fallbacks: [house]} →
+ * {primary: house, fallbacks: []}) and whenever a string model replaces an object
+ * one; `tools.alsoAllow` shrinks when the free-tier trim overwrites a different
+ * existing block. Observed live 2026-07-09: every reconcile tick refused with
+ * "would remove entries from array path(s): agents.list[].model.fallbacks".
+ */
+export function fullAgentListReplacePaths() {
+    return [
+        "agents.list",
+        "agents.list[].model.fallbacks",
+        "agents.list[].tools.alsoAllow",
+    ];
+}
+/**
+ * The replacePaths set for customer config patches that intentionally ship the full
+ * post-filter `agents.list` from the current config. Only use this when the patch's
+ * `agents.list` is a complete replacement candidate, not a single-agent upsert.
+ */
+export function customerConfigFullAgentListReplacePaths(current, slug) {
+    return [
+        ...fullAgentListReplacePaths(),
+        ...customerConfigReplacePaths(current, slug),
+    ];
+}
