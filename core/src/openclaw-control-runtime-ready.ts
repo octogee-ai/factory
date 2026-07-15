@@ -6,10 +6,14 @@ import {
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
 } from "@octogee/shared/types/fleet-controller";
+import {
+  CANONICAL_OPENCLAW_FORK_SHA,
+  CANONICAL_OPENCLAW_VERSION,
+} from "@octogee/shared/types/openclaw-release";
 
 export const OPENCLAW_CONTROL_RUNTIME_FRESH_MS = GATEWAY_HEARTBEAT_INTERVAL_MS * 4;
-export const OPENCLAW_CONTROL_OPENCLAW_VERSION = "2026.7.1";
-export const OPENCLAW_CONTROL_OPENCLAW_FORK_SHA = "5e38a689";
+export const OPENCLAW_CONTROL_OPENCLAW_VERSION = CANONICAL_OPENCLAW_VERSION;
+export const OPENCLAW_CONTROL_OPENCLAW_FORK_SHA = CANONICAL_OPENCLAW_FORK_SHA;
 const MAX_CLOCK_SKEW_MS = 5_000;
 
 function record(value: unknown): Record<string, unknown> | null {

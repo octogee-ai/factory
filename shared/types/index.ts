@@ -92,6 +92,12 @@ export type {
 } from './fleet-controller.js';
 export {
   systemConfigMigrationMode,
+} from './fleet-controller.js';
+export {
+  CANONICAL_OPENCLAW_FORK_SHA,
+  CANONICAL_OPENCLAW_VERSION,
+} from './openclaw-release.js';
+export {
   GATEWAY_HEARTBEAT_INTERVAL_MS,
   GATEWAY_UNREACHABLE_AFTER_MS,
   VERIFY_ACCOUNT_TIMEOUT_MS,

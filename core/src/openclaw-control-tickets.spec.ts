@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   OPENCLAW_CONTROL_TICKET_TTL_MS,
   createOpenClawControlTicket,
+  inspectOpenClawControlTicket,
   openClawControlTicketHash,
   redeemableOpenClawControlTicket,
 } from "./openclaw-control-tickets.js";
@@ -59,5 +60,50 @@ describe("OpenClaw Control tickets", () => {
       revisionId: "bender-r7",
       now: 19_999,
     })).toBeNull();
+  });
+
+  it("classifies replay, expiry, and scope mismatch without exposing ticket material", () => {
+    const document = {
+      uid: "uid-owner",
+      gatewayId: "bender",
+      revisionId: "bender-r7",
+      expiresAt: 20_000,
+    };
+    expect(inspectOpenClawControlTicket({
+      document,
+      gatewayId: "bender",
+      revisionId: "bender-r7",
+      now: 19_999,
+    })).toMatchObject({ kind: "redeemable", uid: "uid-owner" });
+    expect(inspectOpenClawControlTicket({
+      document: { ...document, redeemedAt: 19_000 },
+      gatewayId: "bender",
+      revisionId: "bender-r7",
+      now: 19_999,
+    })).toMatchObject({ kind: "rejected", reason: "ticket_replay", uid: "uid-owner" });
+    expect(inspectOpenClawControlTicket({
+      document,
+      gatewayId: "other",
+      revisionId: "other-r7",
+      now: 19_999,
+    })).toMatchObject({ kind: "rejected", reason: "gateway_mismatch", uid: "uid-owner" });
+    expect(inspectOpenClawControlTicket({
+      document,
+      gatewayId: "bender",
+      revisionId: "bender-r8",
+      now: 19_999,
+    })).toMatchObject({ kind: "rejected", reason: "revision_mismatch", uid: "uid-owner" });
+    expect(inspectOpenClawControlTicket({
+      document,
+      gatewayId: "bender",
+      revisionId: "bender-r7",
+      now: 20_000,
+    })).toMatchObject({ kind: "rejected", reason: "ticket_expired", uid: "uid-owner" });
+    expect(inspectOpenClawControlTicket({
+      document: undefined,
+      gatewayId: "bender",
+      revisionId: "bender-r7",
+      now: 19_999,
+    })).toEqual({ kind: "rejected", reason: "ticket_invalid" });
   });
 });

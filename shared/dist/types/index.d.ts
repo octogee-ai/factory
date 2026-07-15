@@ -11,7 +11,9 @@ export { WINDOW_LENGTH_HOURS, WINDOWS_PER_DAY, WINDOWS_PER_WEEK, WINDOW_BURST_MU
 export type { BillingRail, EffectivePlan } from './billing.js';
 export type { NotificationCategory, DeliveryChannel, NotificationAction, InboxDocument, } from './notifications.js';
 export type { GatewayStatus, GatewayState, GatewayLastError, CustomerSnapshot, SystemConfigMigrationMode, } from './fleet-controller.js';
-export { systemConfigMigrationMode, GATEWAY_HEARTBEAT_INTERVAL_MS, GATEWAY_UNREACHABLE_AFTER_MS, VERIFY_ACCOUNT_TIMEOUT_MS, CONFIG_PATCH_DEADLINE_MS, ADD_CUSTOMER_DEADLINE_MS, MIGRATION_QUIESCE_TIMEOUT_MS, MIGRATION_TRANSFER_TIMEOUT_MS, MIGRATION_UNMOUNT_TIMEOUT_MS, MIGRATING_IN_PIN_TTL_MS, SIGNATURE_HEADER, GATEWAYS_COLLECTION, } from './fleet-controller.js';
+export { systemConfigMigrationMode, } from './fleet-controller.js';
+export { CANONICAL_OPENCLAW_FORK_SHA, CANONICAL_OPENCLAW_VERSION, } from './openclaw-release.js';
+export { GATEWAY_HEARTBEAT_INTERVAL_MS, GATEWAY_UNREACHABLE_AFTER_MS, VERIFY_ACCOUNT_TIMEOUT_MS, CONFIG_PATCH_DEADLINE_MS, ADD_CUSTOMER_DEADLINE_MS, MIGRATION_QUIESCE_TIMEOUT_MS, MIGRATION_TRANSFER_TIMEOUT_MS, MIGRATION_UNMOUNT_TIMEOUT_MS, MIGRATING_IN_PIN_TTL_MS, SIGNATURE_HEADER, GATEWAYS_COLLECTION, } from './fleet-controller.js';
 export type { OnboardingOrchestratorConfig, OnboardingPlacementDecision, PlacementPointerRewriteResult, } from './orchestrator-placement.js';
 export { resolveOnboardingPlacementForUid, rewritePlacementGatewayPointers, } from './orchestrator-placement.js';
 export type { ModelCatalogProvider, ModelCatalogSource, ModelCatalogEntry, ModelReasoningEffort, } from './model-catalog.js';

@@ -133,6 +133,10 @@
       "types": "./dist/types/openclaw-wire-core.d.ts",
       "default": "./dist/types/openclaw-wire-core.js"
     },
+    "./types/openclaw-release": {
+      "types": "./dist/types/openclaw-release.d.ts",
+      "default": "./dist/types/openclaw-release.js"
+    },
     "./types/post": {
       "types": "./dist/types/post.d.ts",
       "default": "./dist/types/post.js"
@@ -246,6 +250,9 @@
       ],
       "types/openclaw-wire-core": [
         "dist/types/openclaw-wire-core.d.ts"
+      ],
+      "types/openclaw-release": [
+        "dist/types/openclaw-release.d.ts"
       ],
       "types/post": [
         "dist/types/post.d.ts"

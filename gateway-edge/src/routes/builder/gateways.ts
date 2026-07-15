@@ -22,9 +22,11 @@ import {
 } from "@octogee/core/gateway-live-release";
 import { projectOpenClawConfigStatus } from "../../lib/openclaw-config-status.js";
 import {
+  OPENCLAW_CONTROL_AUDIT_COLLECTION,
   OPENCLAW_CONTROL_TICKETS_COLLECTION,
   createOpenClawControlTicket,
 } from "@octogee/core/openclaw-control-tickets";
+import { userAssignmentMatchesGateway } from "@octogee/core/assigned-roster";
 import { isOpenClawControlRevisionRuntimeReady } from "../../openclaw-control/runtime-ready.js";
 
 const router = Router();
@@ -185,6 +187,20 @@ router.post(
         )) {
           return { kind: "capability-disabled" as const };
         }
+        const ownerUid = serving.config.ownerUid;
+        const ownerAssignmentSnap = typeof ownerUid === "string"
+          ? await tx.get(db.collection("users").doc(ownerUid))
+          : null;
+        if (
+          !ownerAssignmentSnap?.exists ||
+          !userAssignmentMatchesGateway(
+            ownerAssignmentSnap.data(),
+            gatewayId,
+            serving.config.builderSlug,
+          )
+        ) {
+          return { kind: "not-found" as const };
+        }
         const revisionId = serving.gateway.liveRevisionId;
         if (
           serving.gateway.desiredStatus !== "running" ||
@@ -208,6 +224,15 @@ router.post(
           ...minted.document,
           createdAt: FieldValue.serverTimestamp(),
           expireAt: Timestamp.fromMillis(minted.document.expiresAt),
+        });
+        tx.set(db.collection(OPENCLAW_CONTROL_AUDIT_COLLECTION).doc(), {
+          gatewayId,
+          revisionId,
+          uid,
+          event: "ticket_mint",
+          outcome: "ok",
+          reason: "none",
+          createdAt: FieldValue.serverTimestamp(),
         });
         return { kind: "minted" as const, minted };
       });

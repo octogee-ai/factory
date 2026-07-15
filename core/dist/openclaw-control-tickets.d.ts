@@ -1,4 +1,5 @@
 export declare const OPENCLAW_CONTROL_TICKETS_COLLECTION = "openclawControlTickets";
+export declare const OPENCLAW_CONTROL_AUDIT_COLLECTION = "openclawControlAudit";
 export declare const OPENCLAW_CONTROL_TICKET_TTL_MS = 30000;
 export interface OpenClawControlTicketDocument {
     uid: string;
@@ -6,6 +7,7 @@ export interface OpenClawControlTicketDocument {
     revisionId: string;
     expiresAt: number;
     createdAt: unknown;
+    redeemedAt?: number;
 }
 export interface OpenClawControlRedemption {
     uid: string;
@@ -13,6 +15,14 @@ export interface OpenClawControlRedemption {
     revisionId: string;
     expiresAt: number;
 }
+export type OpenClawControlTicketRejectionReason = "ticket_invalid" | "gateway_mismatch" | "revision_mismatch" | "ticket_replay" | "ticket_expired";
+export type OpenClawControlTicketInspection = ({
+    kind: "redeemable";
+} & OpenClawControlRedemption) | {
+    kind: "rejected";
+    reason: OpenClawControlTicketRejectionReason;
+    uid?: string;
+};
 export declare function openClawControlTicketHash(ticket: string): string;
 export declare function createOpenClawControlTicket(args: {
     uid: string;
@@ -31,3 +41,9 @@ export declare function redeemableOpenClawControlTicket(args: {
     revisionId: string;
     now?: number;
 }): OpenClawControlRedemption | null;
+export declare function inspectOpenClawControlTicket(args: {
+    document: Record<string, unknown> | undefined;
+    gatewayId: string;
+    revisionId: string;
+    now?: number;
+}): OpenClawControlTicketInspection;

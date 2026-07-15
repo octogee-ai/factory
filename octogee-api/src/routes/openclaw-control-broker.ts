@@ -2,11 +2,14 @@ import { createHash } from "node:crypto";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { Timestamp, type Firestore, type Transaction } from "firebase-admin/firestore";
 
+import { userAssignmentMatchesGateway } from "@octogee/core/assigned-roster";
 import { gatewayAuthorizationFromRootDocument } from "@octogee/core/gateway-live-release";
 import {
+  OPENCLAW_CONTROL_AUDIT_COLLECTION,
   OPENCLAW_CONTROL_TICKETS_COLLECTION,
+  inspectOpenClawControlTicket,
   openClawControlTicketHash,
-  redeemableOpenClawControlTicket,
+  type OpenClawControlTicketRejectionReason,
 } from "@octogee/core/openclaw-control-tickets";
 import { isOpenClawControlRevisionRuntimeReady } from "@octogee/core/openclaw-control-runtime-ready";
 import { isGatewayDesiredDoc, isRevisionRealizationDoc } from "@octogee/shared/types/gateway-releases";
@@ -16,14 +19,12 @@ import { revisionIdFromGatewayPodName } from "../lib/gateway-pod-revision.js";
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
 export const OPENCLAW_CONTROL_SESSIONS_COLLECTION = "openclawControlSessions";
-export const OPENCLAW_CONTROL_AUDIT_COLLECTION = "openclawControlAudit";
+export { OPENCLAW_CONTROL_AUDIT_COLLECTION } from "@octogee/core/openclaw-control-tickets";
 export const OPENCLAW_CONTROL_SESSION_TTL_MS = 60 * 60_000;
 export const OPENCLAW_CONTROL_AUDIT_MAX_BATCH = 32;
 export const OPENCLAW_CONTROL_REQUEST_MAX_BYTES = 16 * 1024;
 
 const CONTROL_EVENTS = new Set([
-  "ticket_mint",
-  "ticket_redeem",
   "session_open",
   "session_close",
   "rpc_allow",
@@ -56,6 +57,10 @@ const REASONS = new Set([
   "rate_limited",
   "upstream_unavailable",
   "protocol_invalid",
+  "ticket_invalid",
+  "gateway_mismatch",
+  "assignment_missing",
+  "gateway_not_ready",
 ]);
 const RPC_EVENTS = new Set(["rpc_allow", "rpc_deny", "rpc_result"]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -80,6 +85,7 @@ type SessionAccess =
   | { kind: "allowed"; session: ControlSession }
   | { kind: "session-invalid" }
   | { kind: "capability-disabled" }
+  | { kind: "assignment-missing" }
   | { kind: "not-ready" };
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -108,38 +114,44 @@ function requestFits(req: Request): boolean {
   return Buffer.byteLength(encoded, "utf8") <= OPENCLAW_CONTROL_REQUEST_MAX_BYTES;
 }
 
-function boundGateway(req: Request, res: Response): GatewayBinding | null {
-  const body = record(req.body);
+function authenticatedGateway(req: Request): { bound: GatewayBinding; revisionId: string } | null {
   const bound = req.boundTenant;
-  const claimedGateway = boundedString(body?.gatewayId, 32);
-  const claimedRevision = boundedString(body?.revisionId, 64);
-  const authenticatedRevision = bound?.kind === "gateway"
+  const revisionId = bound?.kind === "gateway"
     ? revisionIdFromGatewayPodName(bound.gatewayId, bound.podName)
     : null;
+  return bound?.kind === "gateway" && revisionId ? { bound, revisionId } : null;
+}
+
+function boundGateway(req: Request, res: Response): GatewayBinding | null {
+  const body = record(req.body);
+  const authenticated = authenticatedGateway(req);
+  const claimedGateway = boundedString(body?.gatewayId, 32);
+  const claimedRevision = boundedString(body?.revisionId, 64);
   if (
-    !bound ||
-    bound.kind !== "gateway" ||
-    claimedGateway !== bound.gatewayId ||
+    !authenticated ||
+    claimedGateway !== authenticated.bound.gatewayId ||
     !claimedRevision ||
-    claimedRevision !== authenticatedRevision
+    claimedRevision !== authenticated.revisionId
   ) {
     res.status(403).json({ error: "forbidden" });
     return null;
   }
-  return bound;
+  return authenticated.bound;
 }
 
-function hasControlUiAccess(root: unknown, gatewayId: string, uid: string): boolean {
+function controlUiAuthorization(root: unknown, gatewayId: string, uid: string) {
   const authorization = gatewayAuthorizationFromRootDocument(root, gatewayId);
-  if (!authorization) return false;
+  if (!authorization) return null;
   const config = authorization.config;
-  if (config.ownerUid !== uid && !config.coOwnerUids.includes(uid)) return false;
+  if (config.ownerUid !== uid && !config.coOwnerUids.includes(uid)) return null;
   const gatewayClass = resolveGatewayClass({
     gatewayClass: config.gatewayClass,
     profile: config.profile ?? undefined,
     imageProfile: config.imageProfile,
   });
-  return isGatewayClassControlUiAccessEnabled(gatewayClass, config.operatorAccess ?? undefined);
+  return isGatewayClassControlUiAccessEnabled(gatewayClass, config.operatorAccess ?? undefined)
+    ? authorization
+    : null;
 }
 
 function isReadyLiveServingRevision(
@@ -243,7 +255,7 @@ class FixedWindowLimiter {
   }
 }
 
-function sessionAccessInTransaction(args: {
+async function sessionAccessInTransaction(args: {
   db: Firestore;
   tx: Transaction;
   gatewayId: string;
@@ -251,33 +263,41 @@ function sessionAccessInTransaction(args: {
   sessionHash: string;
   now: number;
 }): Promise<SessionAccess> {
-  return Promise.all([
+  const [rootSnap, revisionSnap, sessionSnap] = await Promise.all([
     args.tx.get(args.db.doc(`gateways/${args.gatewayId}`)),
     args.tx.get(args.db.doc(`glmGateways/${args.revisionId}`)),
     args.tx.get(args.db.doc(`${OPENCLAW_CONTROL_SESSIONS_COLLECTION}/${args.sessionHash}`)),
-  ]).then(([rootSnap, revisionSnap, sessionSnap]) => {
-    const session = parseSession(
-      sessionSnap.exists ? sessionSnap.data() : undefined,
-      args.gatewayId,
-      args.revisionId,
-      args.now,
-    );
-    if (!session) return { kind: "session-invalid" };
-    const root = rootSnap.data();
-    if (!hasControlUiAccess(root, args.gatewayId, session.uid)) {
-      return { kind: CAPABILITY_DISABLED };
-    }
-    if (!isReadyLiveServingRevision(
-      root,
-      revisionSnap.data(),
-      args.gatewayId,
-      args.revisionId,
-      args.now,
-    )) {
-      return { kind: "not-ready" };
-    }
-    return { kind: "allowed", session };
-  });
+  ]);
+  const session = parseSession(
+    sessionSnap.exists ? sessionSnap.data() : undefined,
+    args.gatewayId,
+    args.revisionId,
+    args.now,
+  );
+  if (!session) return { kind: "session-invalid" };
+  const root = rootSnap.data();
+  const authorization = controlUiAuthorization(root, args.gatewayId, session.uid);
+  if (!authorization) return { kind: CAPABILITY_DISABLED };
+  const ownerUid = authorization.config.ownerUid;
+  if (typeof ownerUid !== "string") return { kind: "assignment-missing" };
+  const ownerAssignmentSnap = await args.tx.get(args.db.doc(`users/${ownerUid}`));
+  if (!userAssignmentMatchesGateway(
+    ownerAssignmentSnap.exists ? ownerAssignmentSnap.data() : undefined,
+    args.gatewayId,
+    authorization.config.builderSlug,
+  )) {
+    return { kind: "assignment-missing" };
+  }
+  if (!isReadyLiveServingRevision(
+    root,
+    revisionSnap.data(),
+    args.gatewayId,
+    args.revisionId,
+    args.now,
+  )) {
+    return { kind: "not-ready" };
+  }
+  return { kind: "allowed", session };
 }
 
 function sendSessionAccessFailure(result: Exclude<SessionAccess, { kind: "allowed" }>, res: Response): void {
@@ -285,6 +305,8 @@ function sendSessionAccessFailure(result: Exclude<SessionAccess, { kind: "allowe
     res.status(404).json({ error: "session-invalid" });
   } else if (result.kind === CAPABILITY_DISABLED) {
     res.status(403).json({ error: CAPABILITY_DISABLED });
+  } else if (result.kind === "assignment-missing") {
+    res.status(403).json({ error: "assignment-missing" });
   } else {
     res.status(409).json({ error: "gateway-not-ready", retryable: true });
   }
@@ -297,40 +319,138 @@ interface BrokerContext {
   gatewayAuditLimiter: FixedWindowLimiter;
 }
 
+interface RedeemAuditInput {
+  gatewayId: string;
+  revisionId: string;
+  outcome: "ok" | "denied" | "error" | "expired";
+  reason:
+    | OpenClawControlTicketRejectionReason
+    | "none"
+    | "protocol_invalid"
+    | "entitlement_missing"
+    | "assignment_missing"
+    | "gateway_not_ready";
+  createdAt: number;
+  uid?: string;
+  sessionHash?: string;
+  ticketHash?: string;
+}
+
+function redeemAuditDocument(input: RedeemAuditInput): Record<string, unknown> {
+  return {
+    gatewayId: input.gatewayId,
+    revisionId: input.revisionId,
+    ...(input.uid ? { uid: input.uid } : {}),
+    ...(input.sessionHash ? { sessionHash: input.sessionHash } : {}),
+    ...(input.ticketHash ? { ticketHash: input.ticketHash } : {}),
+    event: "ticket_redeem",
+    outcome: input.outcome,
+    reason: input.reason,
+    createdAt: input.createdAt,
+  };
+}
+
+function setRedeemAudit(
+  context: BrokerContext,
+  tx: Transaction,
+  input: RedeemAuditInput,
+): void {
+  tx.set(
+    context.db.collection(OPENCLAW_CONTROL_AUDIT_COLLECTION).doc(),
+    redeemAuditDocument(input),
+  );
+}
+
+async function addRedeemAudit(
+  context: BrokerContext,
+  input: RedeemAuditInput,
+): Promise<void> {
+  await context.db.collection(OPENCLAW_CONTROL_AUDIT_COLLECTION).add(
+    redeemAuditDocument(input),
+  );
+}
+
 async function redeemControlTicket(
   context: BrokerContext,
   req: Request,
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  if (!requestFits(req)) {
-    res.status(413).json({ error: "request-too-large" });
-    return;
-  }
-  const bound = boundGateway(req, res);
-  if (!bound) return;
-  const body = record(req.body);
-  if (
-    !body ||
-    !exactKeys(body, ["gatewayId", "revisionId", "sessionId", "ticket"]) ||
-    !validSessionId(body.sessionId)
-  ) {
-    res.status(400).json({ error: INVALID_REQUEST });
-    return;
-  }
-  const ticket = boundedString(body.ticket, 256);
-  const revisionId = boundedString(body.revisionId, 64);
-  if (!ticket || !revisionId) {
-    res.status(400).json({ error: INVALID_REQUEST });
-    return;
-  }
-  const sessionHash = openClawControlSessionHash(body.sessionId);
   try {
+    const authenticated = authenticatedGateway(req);
+    if (!authenticated) {
+      res.status(403).json({ error: "forbidden" });
+      return;
+    }
+    const body = record(req.body);
+    const claimedGateway = boundedString(body?.gatewayId, 32);
+    const claimedRevision = boundedString(body?.revisionId, 64);
+    const ticket = boundedString(body?.ticket, 256);
+    const ticketHash = ticket ? openClawControlTicketHash(ticket) : undefined;
+    const attemptAt = context.now();
+    const baseAudit = {
+      gatewayId: authenticated.bound.gatewayId,
+      revisionId: authenticated.revisionId,
+      createdAt: attemptAt,
+      ...(ticketHash ? { ticketHash } : {}),
+    };
+    if (!requestFits(req)) {
+      await addRedeemAudit(context, {
+        ...baseAudit,
+        outcome: "denied",
+        reason: "protocol_invalid",
+      });
+      res.status(413).json({ error: "request-too-large" });
+      return;
+    }
+    if (!claimedGateway || !claimedRevision) {
+      await addRedeemAudit(context, {
+        ...baseAudit,
+        outcome: "denied",
+        reason: "protocol_invalid",
+      });
+      res.status(403).json({ error: "forbidden" });
+      return;
+    }
+    if (claimedGateway !== authenticated.bound.gatewayId) {
+      await addRedeemAudit(context, {
+        ...baseAudit,
+        outcome: "denied",
+        reason: "gateway_mismatch",
+      });
+      res.status(403).json({ error: "forbidden" });
+      return;
+    }
+    if (claimedRevision !== authenticated.revisionId) {
+      await addRedeemAudit(context, {
+        ...baseAudit,
+        outcome: "denied",
+        reason: "revision_mismatch",
+      });
+      res.status(403).json({ error: "forbidden" });
+      return;
+    }
+    if (
+      !body ||
+      !exactKeys(body, ["gatewayId", "revisionId", "sessionId", "ticket"]) ||
+      !validSessionId(body.sessionId) ||
+      !ticket
+    ) {
+      await addRedeemAudit(context, {
+        ...baseAudit,
+        outcome: "denied",
+        reason: "protocol_invalid",
+      });
+      res.status(400).json({ error: INVALID_REQUEST });
+      return;
+    }
+    const revisionId = authenticated.revisionId;
+    const sessionHash = openClawControlSessionHash(body.sessionId);
     const result = await context.db.runTransaction(async (tx) => {
-      const rootRef = context.db.doc(`gateways/${bound.gatewayId}`);
+      const rootRef = context.db.doc(`gateways/${authenticated.bound.gatewayId}`);
       const revisionRef = context.db.doc(`glmGateways/${revisionId}`);
       const ticketRef = context.db.doc(
-        `${OPENCLAW_CONTROL_TICKETS_COLLECTION}/${openClawControlTicketHash(ticket)}`,
+        `${OPENCLAW_CONTROL_TICKETS_COLLECTION}/${ticketHash}`,
       );
       const sessionRef = context.db.doc(`${OPENCLAW_CONTROL_SESSIONS_COLLECTION}/${sessionHash}`);
       const [rootSnap, revisionSnap, ticketSnap, sessionSnap] = await Promise.all([
@@ -339,48 +459,99 @@ async function redeemControlTicket(
         tx.get(ticketRef),
         tx.get(sessionRef),
       ]);
-      const redeemed = redeemableOpenClawControlTicket({
+      const inspected = inspectOpenClawControlTicket({
         document: ticketSnap.exists ? ticketSnap.data() : undefined,
-        gatewayId: bound.gatewayId,
+        gatewayId: authenticated.bound.gatewayId,
         revisionId,
-        now: context.now(),
+        now: attemptAt,
       });
-      if (!redeemed) return { kind: "ticket-invalid" as const };
-      if (sessionSnap.exists) return { kind: "session-conflict" as const };
+      if (inspected.kind === "rejected") {
+        setRedeemAudit(context, tx, {
+          ...baseAudit,
+          ...(inspected.uid ? { uid: inspected.uid } : {}),
+          outcome: inspected.reason === "ticket_expired" ? "expired" : "denied",
+          reason: inspected.reason,
+        });
+        return { kind: "ticket-invalid" as const };
+      }
+      if (sessionSnap.exists) {
+        setRedeemAudit(context, tx, {
+          ...baseAudit,
+          uid: inspected.uid,
+          sessionHash,
+          outcome: "denied",
+          reason: "protocol_invalid",
+        });
+        return { kind: "session-conflict" as const };
+      }
       const root = rootSnap.data();
-      if (!hasControlUiAccess(root, bound.gatewayId, redeemed.uid)) {
+      const authorization = controlUiAuthorization(
+        root,
+        authenticated.bound.gatewayId,
+        inspected.uid,
+      );
+      if (!authorization) {
+        setRedeemAudit(context, tx, {
+          ...baseAudit,
+          uid: inspected.uid,
+          outcome: "denied",
+          reason: "entitlement_missing",
+        });
         return { kind: CAPABILITY_DISABLED };
+      }
+      const ownerUid = authorization.config.ownerUid;
+      const ownerAssignmentSnap = typeof ownerUid === "string"
+        ? await tx.get(context.db.doc(`users/${ownerUid}`))
+        : null;
+      if (
+        !ownerAssignmentSnap?.exists ||
+        !userAssignmentMatchesGateway(
+          ownerAssignmentSnap.data(),
+          authenticated.bound.gatewayId,
+          authorization.config.builderSlug,
+        )
+      ) {
+        setRedeemAudit(context, tx, {
+          ...baseAudit,
+          uid: inspected.uid,
+          outcome: "denied",
+          reason: "assignment_missing",
+        });
+        return { kind: "assignment-missing" as const };
       }
       if (!isReadyLiveServingRevision(
         root,
         revisionSnap.data(),
-        bound.gatewayId,
+        authenticated.bound.gatewayId,
         revisionId,
-        context.now(),
+        attemptAt,
       )) {
+        setRedeemAudit(context, tx, {
+          ...baseAudit,
+          uid: inspected.uid,
+          outcome: "error",
+          reason: "gateway_not_ready",
+        });
         return { kind: "not-ready" as const };
       }
-      const expiresAt = context.now() + OPENCLAW_CONTROL_SESSION_TTL_MS;
-      tx.delete(ticketRef);
+      const expiresAt = attemptAt + OPENCLAW_CONTROL_SESSION_TTL_MS;
+      tx.update(ticketRef, { redeemedAt: attemptAt });
       tx.set(sessionRef, {
-        uid: redeemed.uid,
-        gatewayId: bound.gatewayId,
+        uid: inspected.uid,
+        gatewayId: authenticated.bound.gatewayId,
         revisionId,
-        createdAt: context.now(),
+        createdAt: attemptAt,
         expiresAt,
         expireAt: Timestamp.fromMillis(expiresAt),
       });
-      tx.set(context.db.collection(OPENCLAW_CONTROL_AUDIT_COLLECTION).doc(), {
-        gatewayId: bound.gatewayId,
-        revisionId,
-        uid: redeemed.uid,
+      setRedeemAudit(context, tx, {
+        ...baseAudit,
+        uid: inspected.uid,
         sessionHash,
-        event: "ticket_redeem",
         outcome: "ok",
         reason: "none",
-        createdAt: context.now(),
       });
-      return { kind: "redeemed" as const, redeemed, expiresAt };
+      return { kind: "redeemed" as const, redeemed: inspected, expiresAt };
     });
     if (result.kind === "not-ready") {
       res.status(409).json({ error: "gateway-not-ready", retryable: true });
@@ -389,7 +560,8 @@ async function redeemControlTicket(
     if (
       result.kind === "ticket-invalid" ||
       result.kind === "session-conflict" ||
-      result.kind === CAPABILITY_DISABLED
+      result.kind === CAPABILITY_DISABLED ||
+      result.kind === "assignment-missing"
     ) {
       res.status(404).json({ error: "ticket-invalid" });
       return;
