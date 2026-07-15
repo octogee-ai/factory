@@ -135,6 +135,11 @@ export interface CutoverCommitParams {
     targetRelease: number;
     sourceRevisionId: string;
     sourceEpoch: number;
+    sourceConfigCheckpoint?: {
+      migrationId: string;
+      checkpointCommit: string;
+      configHash: string;
+    };
     configReady?: {
       observedRevisionId: string;
       acceptedCommit: string;
@@ -185,6 +190,18 @@ export async function commitCutoverAtomic(
         params.assignment?.revisionId === params.rollFence.targetRevisionId;
       if (!current) {
         throw new Error("stale release-roll fence refused cutover");
+      }
+      if (params.rollFence.sourceConfigCheckpoint) {
+        const checkpoint = roll?.systemConfigCheckpoint as Record<string, unknown> | undefined;
+        const expected = params.rollFence.sourceConfigCheckpoint;
+        if (
+          checkpoint?.migrationId !== expected.migrationId ||
+          checkpoint.checkpointCommit !== expected.checkpointCommit ||
+          checkpoint.configHash !== expected.configHash ||
+          checkpoint.sourceUnfrozenAt !== null
+        ) {
+          throw new Error("source config checkpoint changed before release-roll cutover");
+        }
       }
       const sourceAssignmentIsCurrent =
         priorRevisionId === params.rollFence.sourceRevisionId &&

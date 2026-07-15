@@ -242,6 +242,73 @@ describe("runMigration — durable config roll fence", () => {
     },
   };
 
+  it("uses the roll's pre-acquired source checkpoint and accepts a target boot descendant without reopening the fence", async () => {
+    const client = happyClient();
+    const deps = makeDeps(client);
+    const checkpointCommit = "1".repeat(40);
+    client.proveConfigRestore = vi.fn(async ({ migrationId, slug, checkpointCommit: requested, transportId }) => {
+      client.calls.push(`config-proof:${slug}:${requested}`);
+      return {
+        migrationId,
+        slug,
+        restoredCommit: requested,
+        acceptedCommit: "2".repeat(40),
+        configHash: "d".repeat(64),
+        configReady: true,
+        observedRevisionId: transportId!,
+        restoreProvenAt: 100,
+        configReadyAt: 101,
+        runtimeConfigHash: "runtime-after-doctor",
+      };
+    }) as MigrationClient["proveConfigRestore"];
+
+    const result = await runMigration({
+      ...FENCED_INPUT,
+      preAcquiredConfigCheckpoint: {
+        migrationId: "roll-config:roll-1",
+        checkpointCommit,
+        configHash: "a".repeat(64),
+      },
+    }, deps);
+
+    expect(result.success).toBe(true);
+    expect(result.configProof).toMatchObject({
+      restoredCommit: checkpointCommit,
+      acceptedCommit: "2".repeat(40),
+    });
+    expect(client.freezeConfig).not.toHaveBeenCalled();
+    expect(client.unfreezeConfig).not.toHaveBeenCalled();
+    expect(client.proveConfigRestore).toHaveBeenCalledWith(expect.objectContaining({
+      migrationId: "roll-config:roll-1",
+      checkpointCommit,
+    }));
+    expect(deps.acceptConfigProof).toHaveBeenCalledWith(expect.objectContaining({
+      migrationId: "roll-config:roll-1",
+    }));
+  });
+
+  it("leaves a pre-acquired roll checkpoint frozen when a drain attempt rolls back", async () => {
+    const client = happyClient();
+    client.verifyTarget = vi.fn(async () => {
+      throw new Error("target verification failed");
+    }) as MigrationClient["verifyTarget"];
+    const deps = makeDeps(client);
+
+    const result = await runMigration({
+      ...FENCED_INPUT,
+      preAcquiredConfigCheckpoint: {
+        migrationId: "roll-config:roll-1",
+        checkpointCommit: "1".repeat(40),
+        configHash: "a".repeat(64),
+      },
+    }, deps);
+
+    expect(result.success).toBe(false);
+    expect(client.freezeConfig).not.toHaveBeenCalled();
+    expect(client.unfreezeConfig).not.toHaveBeenCalled();
+    expect(result.configCleanup).toBeUndefined();
+  });
+
   it("keeps the source frozen after assignment cutover until the roll commits the authoritative traffic flip", async () => {
     const client = happyClient();
     const deps = makeDeps(client);

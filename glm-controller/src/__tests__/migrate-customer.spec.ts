@@ -536,6 +536,73 @@ describe("createMigrateCustomerHandler — input validation", () => {
 });
 
 describe("createMigrateCustomerHandler — revision-targeted (same-gateway drain)", () => {
+  it("uses the release roll checkpoint lease instead of reacquiring or releasing the source fence", async () => {
+    const { deps, client } = makeDeps({
+      readUser: vi.fn(async () => ({ slug: "alice", currentGatewayId: "bender" })),
+      resolveFromRevision: vi.fn(async () => ({ revisionId: "bender-r1", release: 1 })),
+      resolvePlacement: vi.fn(async () => ({ ok: true as const, revisionId: "bender-r2", release: 2 })),
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
+    });
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({ input: {
+      uid: "uid-alice",
+      builderSlug: "alice",
+      toGatewayId: "bender",
+      source: "release-roll",
+      rollOperationId: "roll-1",
+      systemConfigMigrationMode: "checkpoint-and-restore",
+      preAcquiredConfigCheckpoint: {
+        migrationId: "roll-config:roll-1",
+        checkpointCommit: "1".repeat(40),
+        configHash: "a".repeat(64),
+      },
+    } }), makeCtx());
+
+    expect(result.success).toBe(true);
+    expect(client.freezeConfig).not.toHaveBeenCalled();
+    expect(client.unfreezeConfig).not.toHaveBeenCalled();
+    expect(client.proveConfigRestore).toHaveBeenCalledWith(expect.objectContaining({
+      migrationId: "roll-config:roll-1",
+      checkpointCommit: "1".repeat(40),
+    }));
+    expect(deps.recordConfigProof).toHaveBeenCalledWith(
+      "bender-r2",
+      expect.objectContaining({ migrationId: "roll-config:roll-1" }),
+      expect.objectContaining({ rollOperationId: "roll-1" }),
+    );
+  });
+
+  it("rejects a malformed pre-acquired roll checkpoint before source transfer", async () => {
+    const { deps, client } = makeDeps({
+      readUser: vi.fn(async () => ({ slug: "alice", currentGatewayId: "bender" })),
+      resolveFromRevision: vi.fn(async () => ({ revisionId: "bender-r1", release: 1 })),
+      resolvePlacement: vi.fn(async () => ({ ok: true as const, revisionId: "bender-r2", release: 2 })),
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
+    });
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({ input: {
+      uid: "uid-alice",
+      toGatewayId: "bender",
+      source: "release-roll",
+      rollOperationId: "roll-1",
+      systemConfigMigrationMode: "checkpoint-and-restore",
+      preAcquiredConfigCheckpoint: {
+        migrationId: "roll-config:roll-1",
+        checkpointCommit: "not-a-commit",
+        configHash: "a".repeat(64),
+      },
+    } }), makeCtx());
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringMatching(/invalid preAcquiredConfigCheckpoint/),
+    });
+    expect(client.freezeConfig).not.toHaveBeenCalled();
+    expect(client.transferState).not.toHaveBeenCalled();
+  });
+
   it("restores and proves config when an isolated source migrates to an isolated target", async () => {
     const { deps, client } = makeDeps({
       readUser: vi.fn(async () => ({ slug: "alice", currentGatewayId: "bender" })),

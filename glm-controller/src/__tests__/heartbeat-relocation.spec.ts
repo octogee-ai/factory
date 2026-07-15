@@ -33,8 +33,31 @@ describe("revisionHeartbeatMerge — writer targets glmGateways/{id}.heartbeat",
       1000,
     );
     expect(merge).toEqual({
-      heartbeat: { status: "ready", mountedCustomers: ["a", "b"], lastHeartbeatAt: 1000, startedAt: 42 },
+      heartbeat: {
+        status: "ready",
+        mountedCustomers: ["a", "b"],
+        lastHeartbeatAt: 1000,
+        startedAt: 42,
+        configStatus: null,
+      },
     });
+  });
+
+  it("timestamps each accepted config marker and clears an omitted marker", () => {
+    const timestamp = { toMillis: () => 1000 };
+    const controlProtocol = { protocol: "durable-openclaw-config" as const, version: 1 as const };
+    expect(revisionHeartbeatMerge({
+      status: "ready",
+      mountedCustomers: [],
+      configStatus: { controlProtocol },
+    }, timestamp).heartbeat.configStatus).toEqual({
+      controlProtocol,
+      observedAt: timestamp,
+    });
+    expect(revisionHeartbeatMerge({
+      status: "ready",
+      mountedCustomers: [],
+    }, timestamp).heartbeat.configStatus).toBeNull();
   });
 
   it("omits startedAt when the poll did not report it", () => {

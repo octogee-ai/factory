@@ -19,6 +19,11 @@ export interface MigrationRollFence {
     targetRelease: number;
     sourceRevisionId: string;
     sourceEpoch: number;
+    sourceConfigCheckpoint?: {
+        migrationId: string;
+        checkpointCommit: string;
+        configHash: string;
+    };
     configReady?: {
         observedRevisionId: string;
         acceptedCommit: string;
@@ -79,6 +84,11 @@ export interface MigrationRunnerInput {
     restoreSnapshot: FleetBrokerUserSnapshot;
     includeActivationManifest?: boolean;
     systemConfigMigrationMode?: SystemConfigMigrationMode;
+    preAcquiredConfigCheckpoint?: {
+        migrationId: string;
+        checkpointCommit: string;
+        configHash: string;
+    };
     rollFence?: MigrationRollFence;
 }
 export interface ConfigCleanupObligation {

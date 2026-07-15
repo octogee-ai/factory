@@ -298,7 +298,7 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
         transportId ?? gatewayId,
         `/config-freeze/${gatewayId}`,
         migrationId,
-        configMutationBody({ migrationId, slug }),
+        configMutationBody({ action: "freeze", migrationId, slug }),
         transferMs,
       );
       assertConfigResponseBinding(response, migrationId, slug);
@@ -320,7 +320,12 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
         transportId ?? gatewayId,
         `/config-restore-proof/${gatewayId}`,
         migrationId,
-        configMutationBody({ migrationId, slug, checkpointCommit }),
+        configMutationBody({
+          action: "restore-proof",
+          migrationId,
+          slug,
+          checkpointCommit,
+        }),
         transferMs,
       );
       assertConfigResponseBinding(response, migrationId, slug);
@@ -349,7 +354,13 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
         transportId ?? gatewayId,
         `/config-restore-proof/${gatewayId}`,
         migrationId,
-        configMutationBody({ migrationId, slug, checkpointCommit, proofOnly: true }),
+        configMutationBody({
+          action: "restore-proof",
+          migrationId,
+          slug,
+          checkpointCommit,
+          proofOnly: true,
+        }),
         transferMs,
       );
       assertConfigResponseBinding(response, migrationId, slug);
@@ -378,7 +389,7 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
         transportId ?? gatewayId,
         `/config-unfreeze/${gatewayId}`,
         migrationId,
-        configMutationBody({ migrationId, slug }),
+        configMutationBody({ action: "unfreeze", migrationId, slug }),
         transferMs,
       );
       assertConfigResponseBinding(response, migrationId, slug);

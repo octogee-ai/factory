@@ -148,8 +148,8 @@ describe("MigrationClient system config fencing", () => {
     await client.freezeConfig({ migrationId: "m1", gatewayId: "bender", slug: "alice" });
 
     expect(calls.map((call) => JSON.parse(call.body!))).toEqual([
-      expect.objectContaining({ issuedAt: 1_000, expiresAt: 31_000, requestId: "request:id.0001" }),
-      expect.objectContaining({ issuedAt: 2_000, expiresAt: 32_000, requestId: "request:id.0002" }),
+      expect.objectContaining({ action: "freeze", issuedAt: 1_000, expiresAt: 31_000, requestId: "request:id.0001" }),
+      expect.objectContaining({ action: "freeze", issuedAt: 2_000, expiresAt: 32_000, requestId: "request:id.0002" }),
     ]);
     expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()])
       .not.toBe(calls[1].headers[SIGNATURE_HEADER.toLowerCase()]);
@@ -209,7 +209,10 @@ describe("MigrationClient system config fencing", () => {
       checkpointCommit,
     });
 
-    expect(JSON.parse(calls[0].body!)).toMatchObject({ proofOnly: true });
+    expect(JSON.parse(calls[0].body!)).toMatchObject({
+      action: "restore-proof",
+      proofOnly: true,
+    });
   });
 
   it("freezes/checkpoints the source, proves the target ancestor, and unfreezes by revision transport", async () => {
@@ -276,6 +279,11 @@ describe("MigrationClient system config fencing", () => {
       "https://default-r1.example.com/config-unfreeze/default",
     ]);
     expect(JSON.parse(calls[1].body!)).toMatchObject({ checkpointCommit });
+    expect(calls.map((call) => JSON.parse(call.body!).action)).toEqual([
+      "freeze",
+      "restore-proof",
+      "unfreeze",
+    ]);
     for (const call of calls) {
       expect(call.headers[SIGNATURE_HEADER.toLowerCase()]).toBe(
         signFleetRequest(PRIVATE_KEY, "m1", call.body!),

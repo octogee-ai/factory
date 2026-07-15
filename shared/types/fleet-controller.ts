@@ -118,6 +118,43 @@ export interface OpenClawDashboardBridgeCapability extends OpenClawDashboardBrid
   observedAt: string;
 }
 
+export type SystemConfigBootRole = "normal" | "source-frozen" | "target-candidate";
+
+export interface GatewayConfigControlOwner {
+  migrationId: string;
+  sourceRevisionId: string;
+  targetRevisionId: string;
+}
+
+export interface GatewayConfigStatus {
+  controlProtocol: DurableOpenClawConfigControlProtocol;
+  observedAt?: unknown;
+  freezeState?: "unfrozen" | "freezing" | "frozen";
+  bootRole?: SystemConfigBootRole;
+  controlOwner?: GatewayConfigControlOwner;
+  checkpointCommit?: string;
+  configHash?: string;
+  candidateCommit?: string;
+  candidateHash?: string;
+  openclawVersion?: string;
+  openclawForkSha?: string;
+  dashboardControlState?: "ready" | "missing" | "stale" | "invalid";
+  dashboardControlProtocol?: OpenClawDashboardBridgeProtocol;
+  dashboardControlObservedAt?: string;
+}
+
+export function hasDurableOpenClawConfigControlProtocol(
+  value: unknown,
+): value is GatewayConfigStatus {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const controlProtocol = (value as { controlProtocol?: unknown }).controlProtocol;
+  if (!controlProtocol || typeof controlProtocol !== "object" || Array.isArray(controlProtocol)) {
+    return false;
+  }
+  const marker = controlProtocol as { protocol?: unknown; version?: unknown };
+  return marker.protocol === DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL &&
+    marker.version === DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION;
+}
 export const GATEWAYS_COLLECTION = "gateways";
 
 export interface MigrationRequestBody {

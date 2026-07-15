@@ -72,6 +72,16 @@ export async function commitCutoverAtomic(deps, params) {
             if (!current) {
                 throw new Error("stale release-roll fence refused cutover");
             }
+            if (params.rollFence.sourceConfigCheckpoint) {
+                const checkpoint = roll?.systemConfigCheckpoint;
+                const expected = params.rollFence.sourceConfigCheckpoint;
+                if (checkpoint?.migrationId !== expected.migrationId ||
+                    checkpoint.checkpointCommit !== expected.checkpointCommit ||
+                    checkpoint.configHash !== expected.configHash ||
+                    checkpoint.sourceUnfrozenAt !== null) {
+                    throw new Error("source config checkpoint changed before release-roll cutover");
+                }
+            }
             const sourceAssignmentIsCurrent = priorRevisionId === params.rollFence.sourceRevisionId &&
                 priorEpoch === params.rollFence.sourceEpoch;
             const sourceIsUnassignedLiveRevision = priorRevisionId === undefined &&

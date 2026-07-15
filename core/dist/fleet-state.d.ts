@@ -71,6 +71,11 @@ export interface CutoverCommitParams {
         targetRelease: number;
         sourceRevisionId: string;
         sourceEpoch: number;
+        sourceConfigCheckpoint?: {
+            migrationId: string;
+            checkpointCommit: string;
+            configHash: string;
+        };
         configReady?: {
             observedRevisionId: string;
             acceptedCommit: string;

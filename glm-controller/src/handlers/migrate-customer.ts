@@ -111,6 +111,38 @@ interface MigrateCustomerInput {
   systemConfigMigrationMode?: unknown;
   source?: unknown;
   rollOperationId?: unknown;
+  preAcquiredConfigCheckpoint?: unknown;
+}
+
+interface PreAcquiredConfigCheckpoint {
+  migrationId: string;
+  checkpointCommit: string;
+  configHash: string;
+}
+
+function requestedPreAcquiredConfigCheckpoint(
+  value: unknown,
+): PreAcquiredConfigCheckpoint | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("invalid preAcquiredConfigCheckpoint in op.input");
+  }
+  const checkpoint = value as Record<string, unknown>;
+  if (
+    typeof checkpoint.migrationId !== "string" ||
+    checkpoint.migrationId.length === 0 ||
+    typeof checkpoint.checkpointCommit !== "string" ||
+    !/^[0-9a-f]{40}$/.test(checkpoint.checkpointCommit) ||
+    typeof checkpoint.configHash !== "string" ||
+    !/^[0-9a-f]{64}$/.test(checkpoint.configHash)
+  ) {
+    throw new Error("invalid preAcquiredConfigCheckpoint in op.input");
+  }
+  return {
+    migrationId: checkpoint.migrationId,
+    checkpointCommit: checkpoint.checkpointCommit,
+    configHash: checkpoint.configHash,
+  };
 }
 
 function requestedSystemConfigMigrationMode(
@@ -479,6 +511,7 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
     let targets: MigrationTargets;
     let restoreSnapshot: FleetBrokerUserSnapshot | null;
     let systemConfigMigrationMode: SystemConfigMigrationMode;
+    let preAcquiredConfigCheckpoint: PreAcquiredConfigCheckpoint | null;
     let rollFence: MigrationRollFence | null = null;
     const urls = new Map<string, string>();
     try {
@@ -487,6 +520,9 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
         return { steps: [], success: false, error: resolved.error };
       }
       targets = resolved.targets;
+      preAcquiredConfigCheckpoint = requestedPreAcquiredConfigCheckpoint(
+        input.preAcquiredConfigCheckpoint,
+      );
       if (input.source === "release-roll") {
         if (typeof input.rollOperationId !== "string" || input.rollOperationId.length === 0) {
           return {
@@ -506,6 +542,9 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
           targetRelease: targets.toRelease,
           sourceRevisionId: targets.fromRevisionId,
           sourceEpoch: targets.fromEpoch,
+          ...(preAcquiredConfigCheckpoint
+            ? { sourceConfigCheckpoint: preAcquiredConfigCheckpoint }
+            : {}),
         };
         try {
           await deps.assertRollFence(rollFence);
@@ -571,6 +610,7 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
         restoreSnapshot,
         includeActivationManifest: true,
         systemConfigMigrationMode,
+        ...(preAcquiredConfigCheckpoint ? { preAcquiredConfigCheckpoint } : {}),
         ...(rollFence ? { rollFence } : {}),
       },
       buildRunnerDeps(deps, client, ctx, targets.toRevisionId, deps.now, targets, rollFence),

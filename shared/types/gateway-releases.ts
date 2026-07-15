@@ -41,6 +41,16 @@ export type GatewayRollStatus =
   | "retiring-source"
   | "failed";
 
+export interface GatewayRollSystemConfigCheckpoint {
+  migrationId: string;
+  builderSlug: string;
+  sourceRevisionId: string;
+  checkpointCommit: string | null;
+  configHash: string | null;
+  checkpointedAt: number | null;
+  sourceUnfrozenAt: number | null;
+}
+
 export interface GatewayRollState {
   operationId: string;
   status: GatewayRollStatus;
@@ -52,6 +62,7 @@ export interface GatewayRollState {
   startedAt: number;
   updatedAt: number;
   error: string | null;
+  systemConfigCheckpoint?: GatewayRollSystemConfigCheckpoint | null;
   // Selector-flip wall-clock. The source revision survives as a forwarder for a
   // drain TTL measured from this durable timestamp, so a controller crash never
   // loses the retire deadline. Null until the flip step runs.

@@ -123,7 +123,7 @@ export function createMigrationClient(deps) {
     };
     return {
         async freezeConfig({ migrationId, gatewayId, transportId, slug }) {
-            const response = await postSignedJson(transportId ?? gatewayId, `/config-freeze/${gatewayId}`, migrationId, configMutationBody({ migrationId, slug }), transferMs);
+            const response = await postSignedJson(transportId ?? gatewayId, `/config-freeze/${gatewayId}`, migrationId, configMutationBody({ action: "freeze", migrationId, slug }), transferMs);
             assertConfigResponseBinding(response, migrationId, slug);
             if (response.frozen !== true ||
                 !/^[0-9a-f]{40}$/.test(response.checkpointCommit) ||
@@ -134,7 +134,12 @@ export function createMigrationClient(deps) {
             return response;
         },
         async proveConfigRestore({ migrationId, gatewayId, transportId, slug, checkpointCommit }) {
-            const response = await postSignedJson(transportId ?? gatewayId, `/config-restore-proof/${gatewayId}`, migrationId, configMutationBody({ migrationId, slug, checkpointCommit }), transferMs);
+            const response = await postSignedJson(transportId ?? gatewayId, `/config-restore-proof/${gatewayId}`, migrationId, configMutationBody({
+                action: "restore-proof",
+                migrationId,
+                slug,
+                checkpointCommit,
+            }), transferMs);
             assertConfigResponseBinding(response, migrationId, slug);
             if (!/^[0-9a-f]{40}$/.test(response.restoredCommit) ||
                 !/^[0-9a-f]{40}$/.test(response.acceptedCommit) ||
@@ -152,7 +157,13 @@ export function createMigrationClient(deps) {
             return response;
         },
         async reproveConfigRestore({ migrationId, gatewayId, transportId, slug, checkpointCommit }) {
-            const response = await postSignedJson(transportId ?? gatewayId, `/config-restore-proof/${gatewayId}`, migrationId, configMutationBody({ migrationId, slug, checkpointCommit, proofOnly: true }), transferMs);
+            const response = await postSignedJson(transportId ?? gatewayId, `/config-restore-proof/${gatewayId}`, migrationId, configMutationBody({
+                action: "restore-proof",
+                migrationId,
+                slug,
+                checkpointCommit,
+                proofOnly: true,
+            }), transferMs);
             assertConfigResponseBinding(response, migrationId, slug);
             if (!/^[0-9a-f]{40}$/.test(response.restoredCommit) ||
                 !/^[0-9a-f]{40}$/.test(response.acceptedCommit) ||
@@ -170,7 +181,7 @@ export function createMigrationClient(deps) {
             return response;
         },
         async unfreezeConfig({ migrationId, gatewayId, transportId, slug }) {
-            const response = await postSignedJson(transportId ?? gatewayId, `/config-unfreeze/${gatewayId}`, migrationId, configMutationBody({ migrationId, slug }), transferMs);
+            const response = await postSignedJson(transportId ?? gatewayId, `/config-unfreeze/${gatewayId}`, migrationId, configMutationBody({ action: "unfreeze", migrationId, slug }), transferMs);
             assertConfigResponseBinding(response, migrationId, slug);
             if (response.unfrozen !== true) {
                 throw new Error("config unfreeze was not confirmed");

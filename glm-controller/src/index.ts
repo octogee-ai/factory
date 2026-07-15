@@ -186,7 +186,10 @@ import { recordConfigRoll, recordReconcile } from "./metrics.js";
 import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
 import { startStuckOpReaper } from "./stuck-op-reaper.js";
-import { assertRecoverableConfigFreezeOwner } from "./config-freeze-recovery.js";
+import {
+  assertRecoverableConfigFreezeOwner,
+  assertRecoverableRollCheckpointOwner,
+} from "./config-freeze-recovery.js";
 import {
   assertMigrationSystemConfigProtocol,
   servingIsolatedProtocolGaps,
@@ -1124,6 +1127,7 @@ function buildRollPassDeps(args: {
       gatewayId,
       rollOperationId,
       systemConfigMigrationMode,
+      preAcquiredConfigCheckpoint,
     }) => {
       const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
       await opRef.set(
@@ -1134,6 +1138,7 @@ function buildRollPassDeps(args: {
           rollOperationId,
           createdAt: Date.now(),
           systemConfigMigrationMode,
+          ...(preAcquiredConfigCheckpoint ? { preAcquiredConfigCheckpoint } : {}),
         }),
       );
       return opRef.id;
@@ -1183,6 +1188,157 @@ function buildRollPassDeps(args: {
       return stopped.every(Boolean);
     },
     isSystemConfigProtocolFleetReady: () => isFleetConfigProtocolReady(db),
+    checkpointConfigFreeze: async ({ gatewayId, revisionId, migrationId, slug }) => {
+      const sourceUrl = await resolveGatewayUrlFromFirestore(db, revisionId);
+      const client = createMigrationClient({
+        privateKey,
+        resolveGatewayUrl: () => sourceUrl,
+        log,
+      });
+      const checkpoint = await client.freezeConfig({
+        migrationId,
+        gatewayId,
+        transportId: revisionId,
+        slug,
+      });
+      return {
+        checkpointCommit: checkpoint.checkpointCommit,
+        configHash: checkpoint.configHash,
+      };
+    },
+    recoverConfigFreezeOwner: async ({
+      ownerMigrationId,
+      requestedMigrationId,
+      gatewayId,
+      sourceRevisionId,
+      rollOperationId,
+      slug,
+    }) => {
+      const ownerOpId = ownerMigrationId.startsWith("mig-")
+        ? ownerMigrationId.slice(4)
+        : "";
+      if (!ownerOpId) {
+        throw new Error("config freeze owner is not operation-bound");
+      }
+      const [ownerSnap, rootSnap] = await Promise.all([
+        db.collection(GLM_OPERATIONS_COLLECTION).doc(ownerOpId).get(),
+        db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get(),
+      ]);
+      const owner = ownerSnap.exists
+        ? ({ id: ownerSnap.id, ...ownerSnap.data() } as Operation)
+        : null;
+      assertRecoverableRollCheckpointOwner({
+        ownerMigrationId,
+        slug,
+        sourceGatewayId: gatewayId,
+      }, owner);
+      const root = rootSnap.data();
+      const checkpoint = isDurableRootConfigDoc(root, gatewayId)
+        ? root.roll?.systemConfigCheckpoint
+        : null;
+      if (
+        root?.roll?.operationId !== rollOperationId ||
+        checkpoint?.migrationId !== requestedMigrationId ||
+        checkpoint.sourceRevisionId !== sourceRevisionId ||
+        checkpoint.builderSlug !== slug ||
+        checkpoint.sourceUnfrozenAt !== null
+      ) {
+        throw new Error("config checkpoint recovery roll lease is no longer current");
+      }
+      const sourceUrl = await resolveGatewayUrlFromFirestore(db, sourceRevisionId);
+      const client = createMigrationClient({
+        privateKey,
+        resolveGatewayUrl: () => sourceUrl,
+        log,
+      });
+      await client.unfreezeConfig({
+        migrationId: ownerMigrationId,
+        gatewayId,
+        transportId: sourceRevisionId,
+        slug,
+      });
+      return true;
+    },
+    proveConfigRestore: async ({
+      gatewayId,
+      rollOperationId,
+      sourceRevisionId,
+      targetRevisionId,
+      migrationId,
+      slug,
+      checkpointCommit,
+    }) => {
+      try {
+        const targetUrl = await resolveGatewayUrlFromFirestore(db, targetRevisionId);
+        const client = createMigrationClient({
+          privateKey,
+          resolveGatewayUrl: () => targetUrl,
+          log,
+        });
+        const proof = await client.proveConfigRestore({
+          migrationId,
+          gatewayId,
+          transportId: targetRevisionId,
+          slug,
+          checkpointCommit,
+        });
+        if (proof.restoredCommit !== checkpointCommit) {
+          throw new Error(
+            `target ${targetRevisionId} restored ${proof.restoredCommit} instead of ${checkpointCommit}`,
+          );
+        }
+        const observedAt = Date.now();
+        await db.runTransaction(async (txn) => {
+          const rootRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+          const rootSnap = await txn.get(rootRef);
+          const root = rootSnap.data();
+          const checkpoint = isDurableRootConfigDoc(root, gatewayId)
+            ? root.roll?.systemConfigCheckpoint
+            : null;
+          if (
+            root?.roll?.operationId !== rollOperationId ||
+            root.roll.targetRevisionId !== targetRevisionId ||
+            checkpoint?.migrationId !== migrationId ||
+            checkpoint.sourceRevisionId !== sourceRevisionId ||
+            checkpoint.checkpointCommit !== checkpointCommit ||
+            checkpoint.sourceUnfrozenAt !== null
+          ) {
+            throw new Error(`target ${targetRevisionId} config proof no longer matches the active roll`);
+          }
+          txn.set(db.collection(GLM_GATEWAYS_COLLECTION).doc(targetRevisionId), {
+            systemConfig: {
+              migrationId,
+              builderSlug: slug,
+              sourceRevisionId,
+              checkpointCommit,
+              restoredCommit: proof.restoredCommit,
+              acceptedCommit: proof.acceptedCommit,
+              configHash: proof.configHash,
+              configReady: proof.configReady,
+              observedRevisionId: proof.observedRevisionId,
+              restoreProvenAt: proof.restoreProvenAt,
+              configReadyAt: proof.configReadyAt,
+              runtimeConfigHash: proof.runtimeConfigHash,
+              observedAt,
+            },
+          }, { merge: true });
+        });
+        recordConfigRoll({
+          stage: "proof",
+          result: "ok",
+          gatewayId,
+          revisionId: targetRevisionId,
+        });
+      } catch (error) {
+        recordConfigRoll({
+          stage: "proof",
+          result: "fail",
+          gatewayId,
+          revisionId: targetRevisionId,
+        });
+        throw error;
+      }
+    },
     reproveConfigRestore: async ({ gatewayId, targetRevisionId, priorProof }) => {
       try {
         const targetUrl = await resolveGatewayUrlFromFirestore(db, targetRevisionId);
@@ -1243,6 +1399,33 @@ function buildRollPassDeps(args: {
         gatewayId,
         transportId: revisionId,
         slug,
+      });
+    },
+    markConfigFreezeReleased: async ({
+      gatewayId,
+      rollOperationId,
+      migrationId,
+      releasedAt,
+    }) => {
+      const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+      await db.runTransaction(async (txn) => {
+        const snap = await txn.get(gatewayRef);
+        const gateway = snap.data();
+        if (!isDurableRootConfigDoc(gateway, gatewayId)) {
+          throw new Error(`gateway ${gatewayId} durable root disappeared during config release`);
+        }
+        if (
+          gateway.roll?.operationId !== rollOperationId ||
+          gateway.roll.systemConfigCheckpoint?.migrationId !== migrationId
+        ) {
+          throw new Error(`gateway ${gatewayId} config release no longer matches the active roll`);
+        }
+        txn.update(gatewayRef, {
+          "roll.systemConfigCheckpoint.sourceUnfrozenAt": releasedAt,
+          "roll.updatedAt": releasedAt,
+          updatedAt: releasedAt,
+          updatedBy: "cowboy",
+        });
       });
     },
     recordConfigRollMetric: recordConfigRoll,
@@ -2914,6 +3097,17 @@ function assertCurrentMigrationRollFence(
   ) {
     throw new Error("stale release-roll fence: roll target changed");
   }
+  if (fence.sourceConfigCheckpoint) {
+    const checkpoint = roll.systemConfigCheckpoint;
+    if (
+      checkpoint?.migrationId !== fence.sourceConfigCheckpoint.migrationId ||
+      checkpoint.checkpointCommit !== fence.sourceConfigCheckpoint.checkpointCommit ||
+      checkpoint.configHash !== fence.sourceConfigCheckpoint.configHash ||
+      checkpoint.sourceUnfrozenAt !== null
+    ) {
+      throw new Error("stale release-roll fence: source config checkpoint changed");
+    }
+  }
   const sourceAssignmentIsCurrent =
     assignment?.revisionId === fence.sourceRevisionId &&
     assignment.epoch === fence.sourceEpoch;
@@ -3082,13 +3276,15 @@ async function assertFleetConfigProtocolForMigration(
   const revisions = new Map(entries.filter(
     (entry): entry is readonly [string, RevisionRealizationDoc] => entry[1] !== null,
   ));
+  const now = Date.now();
   assertMigrationSystemConfigProtocol({
     mode: input.mode,
     sourceRevisionId: input.sourceRevisionId,
     sourceRevision: revisions.get(input.sourceRevisionId) ?? null,
     targetRevisionId: input.targetRevisionId,
     targetRevision: revisions.get(input.targetRevisionId) ?? null,
-    fleetGaps: servingIsolatedProtocolGaps(roots, revisions),
+    fleetGaps: servingIsolatedProtocolGaps(roots, revisions, now),
+    now,
   });
 }
 
@@ -3106,7 +3302,7 @@ async function isFleetConfigProtocolReady(db: Firestore): Promise<boolean> {
   const revisions = new Map(entries.filter(
     (entry): entry is readonly [string, RevisionRealizationDoc] => entry[1] !== null,
   ));
-  return servingIsolatedProtocolGaps(roots, revisions).length === 0;
+  return servingIsolatedProtocolGaps(roots, revisions, Date.now()).length === 0;
 }
 
 // eslint-disable-next-line max-lines-per-function -- Controller dependency assembly is intentionally centralized.
@@ -3203,6 +3399,9 @@ async function buildHandlers(
                   targetRelease: commit.rollFence.targetRelease,
                   sourceRevisionId: commit.rollFence.sourceRevisionId,
                   sourceEpoch: commit.rollFence.sourceEpoch,
+                  ...(commit.rollFence.sourceConfigCheckpoint
+                    ? { sourceConfigCheckpoint: commit.rollFence.sourceConfigCheckpoint }
+                    : {}),
                   ...(commit.rollFence.configReady
                     ? { configReady: commit.rollFence.configReady }
                     : {}),

@@ -4,6 +4,15 @@ export declare const GATEWAY_ASSIGNMENTS_SUBCOLLECTION = "assignments";
 export declare const REVISION_TOMBSTONES_COLLECTION = "revisionTombstones";
 export type GatewayLifecycleStatus = "running" | "paused" | "retired";
 export type GatewayRollStatus = "warming" | "routing" | "migrating" | "retiring-source" | "failed";
+export interface GatewayRollSystemConfigCheckpoint {
+    migrationId: string;
+    builderSlug: string;
+    sourceRevisionId: string;
+    checkpointCommit: string | null;
+    configHash: string | null;
+    checkpointedAt: number | null;
+    sourceUnfrozenAt: number | null;
+}
 export interface GatewayRollState {
     operationId: string;
     status: GatewayRollStatus;
@@ -15,6 +24,7 @@ export interface GatewayRollState {
     startedAt: number;
     updatedAt: number;
     error: string | null;
+    systemConfigCheckpoint?: GatewayRollSystemConfigCheckpoint | null;
     flippedAt: number | null;
 }
 export type GatewayIdleSleepStatus = "paused" | "empty-waiting" | "returning-to-shared";
