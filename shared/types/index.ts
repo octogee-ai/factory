@@ -220,6 +220,7 @@ export {
   OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX,
   isGatewayClass,
   isGatewayClassShellAccessEnabled,
+  isGatewayClassControlUiAccessEnabled,
   isGatewayProfile,
   isOperatorGatewayShellAccessEnabled,
   operatorGatewayServiceAccountName,

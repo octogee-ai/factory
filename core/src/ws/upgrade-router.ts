@@ -15,24 +15,20 @@ export interface WsUpgradeContext {
 export type PathMatcher = string | ((pathname: string) => boolean);
 
 export interface WsUpgradeRoute {
-
-match: PathMatcher;
-
-extractTicket?: (pathname: string) => string | null;
-
-allowedOrigins:
+  match: PathMatcher;
+  extractTicket?: (pathname: string) => string | null;
+  allowedOrigins:
     | Set<string>
     | ((origin: string | undefined) => boolean)
     | "check-in-handler";
 
-requireHeaderKey?: {
+  requireHeaderKey?: {
     header: string;
     expected: string;
   };
-  
   maxPayloadBytes?: number;
-
-onUpgrade: (ctx: WsUpgradeContext) => void;
+  authorize?: (req: IncomingMessage) => boolean | Promise<boolean>;
+  onUpgrade: (ctx: WsUpgradeContext) => void;
 }
 
 interface CompiledRoute extends WsUpgradeRoute {
@@ -78,16 +74,33 @@ export class WsUpgradeRouter {
     });
   }
 
-dispatch(req: IncomingMessage, socket: Duplex, head: Buffer): boolean {
+  dispatch(req: IncomingMessage, socket: Duplex, head: Buffer): boolean {
     const pathname = (req.url ?? "").split("?")[0];
     const route = this.routes.find((r) => r.matchesPath(pathname));
     if (!route) return false;
-    this.handleRoute(route, req, socket, head);
+    void this.handleRoute(route, req, socket, head).catch((err) => {
+      console.error("WsUpgradeRouter route failed", err);
+      writeStatusAndDestroy(socket, 503, "Service Unavailable");
+    });
     return true;
   }
 
-  private handleRoute(route: CompiledRoute, req: IncomingMessage, socket: Duplex, head: Buffer): void {
+  private async handleRoute(
+    route: CompiledRoute,
+    req: IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+  ): Promise<void> {
     const pathname = (req.url ?? "").split("?")[0];
+    let ticket: string | undefined;
+    if (route.extractTicket) {
+      const extracted = route.extractTicket(pathname);
+      if (extracted === null) {
+        writeStatusAndDestroy(socket, 400, "Bad Request");
+        return;
+      }
+      ticket = extracted;
+    }
 
     if (route.allowedOrigins !== "check-in-handler") {
       const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
@@ -109,14 +122,9 @@ dispatch(req: IncomingMessage, socket: Duplex, head: Buffer): boolean {
       }
     }
 
-    let ticket: string | undefined;
-    if (route.extractTicket) {
-      const t = route.extractTicket(pathname);
-      if (t === null) {
-        writeStatusAndDestroy(socket, 400, "Bad Request");
-        return;
-      }
-      ticket = t;
+    if (route.authorize && !(await route.authorize(req))) {
+      writeStatusAndDestroy(socket, 401, "Unauthorized");
+      return;
     }
 
     route.wss.handleUpgrade(req, socket, head, (ws: WebSocket) => {

@@ -32,11 +32,23 @@ export class WsUpgradeRouter {
         const route = this.routes.find((r) => r.matchesPath(pathname));
         if (!route)
             return false;
-        this.handleRoute(route, req, socket, head);
+        void this.handleRoute(route, req, socket, head).catch((err) => {
+            console.error("WsUpgradeRouter route failed", err);
+            writeStatusAndDestroy(socket, 503, "Service Unavailable");
+        });
         return true;
     }
-    handleRoute(route, req, socket, head) {
+    async handleRoute(route, req, socket, head) {
         const pathname = (req.url ?? "").split("?")[0];
+        let ticket;
+        if (route.extractTicket) {
+            const extracted = route.extractTicket(pathname);
+            if (extracted === null) {
+                writeStatusAndDestroy(socket, 400, "Bad Request");
+                return;
+            }
+            ticket = extracted;
+        }
         if (route.allowedOrigins !== "check-in-handler") {
             const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
             const allowed = typeof route.allowedOrigins === "function"
@@ -54,14 +66,9 @@ export class WsUpgradeRouter {
                 return;
             }
         }
-        let ticket;
-        if (route.extractTicket) {
-            const t = route.extractTicket(pathname);
-            if (t === null) {
-                writeStatusAndDestroy(socket, 400, "Bad Request");
-                return;
-            }
-            ticket = t;
+        if (route.authorize && !(await route.authorize(req))) {
+            writeStatusAndDestroy(socket, 401, "Unauthorized");
+            return;
         }
         route.wss.handleUpgrade(req, socket, head, (ws) => {
             route.onUpgrade({ ws, req, ticket });

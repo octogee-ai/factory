@@ -21,6 +21,7 @@ import { createByokBrokerRoutes } from "./routes/byok-broker.js";
 import { createAgentProjectRoutes } from "./routes/agent-projects.js";
 import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
 import { createBuilderShellBrokerRoutes } from "./routes/builder-shell-broker.js";
+import { createOpenClawControlBrokerRoutes } from "./routes/openclaw-control-broker.js";
 import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
 import { createLinkPreviewRoutes } from "./routes/link-preview.js";
 import {
@@ -259,6 +260,7 @@ export function createApp(opts: CreateAppOptions = {}) {
   // octogee-api-only: broker BuilderShell ticket, presence, and audit
   // Firestore writes so operator gateway pods can stay datastore.viewer-only.
   app.use("/internal/builder-shell", createBuilderShellBrokerRoutes());
+  app.use("/internal/openclaw-control", createOpenClawControlBrokerRoutes({ db }));
   // octogee-api-only: mint/revoke opaque model broker tokens. GLM mirrors
   // these into per-gateway K8s secrets, but the values are no longer provider
   // keys and cannot fetch provider keys from the gateway pod.

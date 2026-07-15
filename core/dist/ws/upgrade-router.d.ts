@@ -16,6 +16,7 @@ export interface WsUpgradeRoute {
         expected: string;
     };
     maxPayloadBytes?: number;
+    authorize?: (req: IncomingMessage) => boolean | Promise<boolean>;
     onUpgrade: (ctx: WsUpgradeContext) => void;
 }
 export declare class WsUpgradeRouter {
