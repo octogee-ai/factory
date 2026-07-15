@@ -56,22 +56,22 @@ function renderStatus(status: SystemConfigObservedStatus): string[] {
   ];
 }
 
-export async function runOctogeeConfig(
-  args: string[],
-  dependencies: OctogeeConfigDependencies = {},
+function writeStatus(
+  dir: string,
+  dependencies: OctogeeConfigDependencies,
+  write: (line: string) => void,
+): void {
+  const status = (dependencies.readStatus ?? readSystemConfigStatus)(dir);
+  for (const line of renderStatus(status)) write(line);
+}
+
+async function adoptConfig(
+  parsed: Extract<ParsedArgs, { command: "adopt" }>,
+  dir: string,
+  env: NodeJS.ProcessEnv,
+  dependencies: OctogeeConfigDependencies,
+  write: (line: string) => void,
 ): Promise<void> {
-  const parsed = parseOctogeeConfigArgs(args);
-  const write = dependencies.write ?? console.log;
-  if (parsed.command === "help") {
-    write(OCTOGEE_CONFIG_USAGE);
-    return;
-  }
-  const env = dependencies.env ?? process.env;
-  const dir = openClawDir(env);
-  if (parsed.command === "status") {
-    for (const line of renderStatus((dependencies.readStatus ?? readSystemConfigStatus)(dir))) write(line);
-    return;
-  }
   const slug = env.GATEWAY_BUILDER_SLUG?.trim();
   if (!slug) throw new Error("GATEWAY_BUILDER_SLUG is required for config adoption");
   const result = await (dependencies.adopt ?? adoptSystemConfig)({
@@ -87,6 +87,25 @@ export async function runOctogeeConfig(
   for (const changedPath of result.changedPaths) write(`- ${changedPath}`);
   if (result.changedPaths.length === 0) write("- none");
   if (result.acceptedCommit) write(`accepted head: ${result.acceptedCommit}`);
+}
+
+export async function runOctogeeConfig(
+  args: string[],
+  dependencies: OctogeeConfigDependencies = {},
+): Promise<void> {
+  const parsed = parseOctogeeConfigArgs(args);
+  const write = dependencies.write ?? console.log;
+  if (parsed.command === "help") {
+    write(OCTOGEE_CONFIG_USAGE);
+    return;
+  }
+  const env = dependencies.env ?? process.env;
+  const dir = openClawDir(env);
+  if (parsed.command === "status") {
+    writeStatus(dir, dependencies, write);
+    return;
+  }
+  await adoptConfig(parsed, dir, env, dependencies, write);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

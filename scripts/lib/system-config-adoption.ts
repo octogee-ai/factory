@@ -197,8 +197,11 @@ function desiredMattermostSecrets(
   const next: Record<string, string> = {};
   for (const [accountId, account] of Object.entries(accounts)) {
     if (!accountUsesMattermostSecret(account) && extracted[accountId] === undefined) continue;
-    const token = extracted[accountId] ?? current[accountId];
-    if (token !== undefined) next[accountId] = token;
+    if (Object.prototype.hasOwnProperty.call(extracted, accountId)) {
+      next[accountId] = extracted[accountId];
+    } else if (Object.prototype.hasOwnProperty.call(current, accountId)) {
+      next[accountId] = current[accountId];
+    }
   }
   return next;
 }
@@ -323,6 +326,58 @@ function prepareAdoption(options: SystemConfigAdoptionOptions, env: NodeJS.Proce
   };
 }
 
+function hasSecretChanges(change: ReturnType<typeof secretChange>): boolean {
+  return Object.keys(change.set).length > 0 || (change.remove?.length ?? 0) > 0;
+}
+
+async function applyPreparedAdoption(
+  options: SystemConfigAdoptionOptions,
+  env: NodeJS.ProcessEnv,
+  targetPath: string,
+  adoption: PreparedAdoption,
+): Promise<SystemConfigAdoptionResult> {
+  const writeSecrets = options.writeSecrets ?? updateMattermostAccountSecrets;
+  const applySecrets = secretChange(adoption.currentSecrets, adoption.nextSecrets);
+  try {
+    if (hasSecretChanges(applySecrets)) {
+      await writeSecrets(options.openclawDir, applySecrets);
+    }
+    atomicWrite(targetPath, adoption.contents);
+    const result: SystemConfigSyncResult =
+      (options.checkpoint ?? checkpointDurableSystemConfigForSlug)(options.slug, {
+        openclawDir: options.openclawDir,
+        env,
+        source: "boot-migration",
+        validateConfig: options.validateConfig,
+        lockHeld: true,
+      });
+    return {
+      applied: true,
+      approvalHash: adoption.approvalHash,
+      changedPaths: adoption.changedPaths,
+      acceptedCommit: result.acceptedCommit,
+    };
+  } catch (error) {
+    if (error instanceof SystemConfigCheckpointError &&
+        !canRestoreAfterCheckpointFailure(error.result)) {
+      throw new SystemConfigAdoptionCheckpointError("committed-pending", error);
+    }
+    try {
+      atomicWrite(targetPath, adoption.currentContents);
+      const rollbackSecrets = secretChange(adoption.nextSecrets, adoption.currentSecrets);
+      if (hasSecretChanges(rollbackSecrets)) {
+        await writeSecrets(options.openclawDir, rollbackSecrets);
+      }
+    } catch (rollbackError) {
+      throw new SystemConfigAdoptionCheckpointError("rollback-failed", error, rollbackError);
+    }
+    if (error instanceof SystemConfigCheckpointError) {
+      throw new SystemConfigAdoptionCheckpointError("restored", error);
+    }
+    throw error;
+  }
+}
+
 export async function adoptSystemConfig(
   options: SystemConfigAdoptionOptions,
 ): Promise<SystemConfigAdoptionResult> {
@@ -343,46 +398,7 @@ export async function adoptSystemConfig(
     if (options.approveHash !== adoption.approvalHash) {
       throw new SystemConfigAdoptionApprovalError();
     }
-    const writeSecrets = options.writeSecrets ?? updateMattermostAccountSecrets;
-    const applySecrets = secretChange(adoption.currentSecrets, adoption.nextSecrets);
-    try {
-      if (Object.keys(applySecrets.set).length > 0 || (applySecrets.remove?.length ?? 0) > 0) {
-        await writeSecrets(options.openclawDir, applySecrets);
-      }
-      atomicWrite(targetPath, adoption.contents);
-      const result: SystemConfigSyncResult =
-        (options.checkpoint ?? checkpointDurableSystemConfigForSlug)(options.slug, {
-          openclawDir: options.openclawDir,
-          env,
-          source: "boot-migration",
-          validateConfig: options.validateConfig,
-          lockHeld: true,
-        });
-      return {
-        applied: true,
-        approvalHash: adoption.approvalHash,
-        changedPaths: adoption.changedPaths,
-        acceptedCommit: result.acceptedCommit,
-      };
-    } catch (error) {
-      if (error instanceof SystemConfigCheckpointError &&
-          !canRestoreAfterCheckpointFailure(error.result)) {
-        throw new SystemConfigAdoptionCheckpointError("committed-pending", error);
-      }
-      try {
-        atomicWrite(targetPath, adoption.currentContents);
-        const rollbackSecrets = secretChange(adoption.nextSecrets, adoption.currentSecrets);
-        if (Object.keys(rollbackSecrets.set).length > 0 || (rollbackSecrets.remove?.length ?? 0) > 0) {
-          await writeSecrets(options.openclawDir, rollbackSecrets);
-        }
-      } catch (rollbackError) {
-        throw new SystemConfigAdoptionCheckpointError("rollback-failed", error, rollbackError);
-      }
-      if (error instanceof SystemConfigCheckpointError) {
-        throw new SystemConfigAdoptionCheckpointError("restored", error);
-      }
-      throw error;
-    }
+    return await applyPreparedAdoption(options, env, targetPath, adoption);
   } finally {
     releaseLock();
   }

@@ -389,6 +389,88 @@ function isBoundedTimestamp(value: unknown): value is string {
   return typeof value === "string" && value.length <= 40 && !Number.isNaN(Date.parse(value));
 }
 
+function copyOptionalFields(
+  input: Record<string, unknown>,
+  out: Record<string, unknown>,
+  keys: string[],
+  isValid: (value: unknown) => boolean,
+  nullable = false,
+): boolean {
+  for (const key of keys) {
+    const field = input[key];
+    if (field === undefined) continue;
+    if (field === null && nullable) {
+      out[key] = null;
+      continue;
+    }
+    if (!isValid(field)) return false;
+    out[key] = field;
+  }
+  return true;
+}
+
+function copyEnumFields(
+  input: Record<string, unknown>,
+  out: Record<string, unknown>,
+): boolean {
+  for (const [key, allowed] of Object.entries(SYSTEM_CONFIG_ENUMS)) {
+    const field = input[key];
+    if (field === undefined) continue;
+    if (typeof field !== "string" || !allowed.has(field)) return false;
+    out[key] = field;
+  }
+  return true;
+}
+
+function copyControlProtocol(
+  input: Record<string, unknown>,
+  out: Record<string, unknown>,
+): boolean {
+  if (input.controlProtocol === undefined) return true;
+  if (
+    !input.controlProtocol ||
+    typeof input.controlProtocol !== "object" ||
+    Array.isArray(input.controlProtocol)
+  ) return false;
+  const protocol = input.controlProtocol as Record<string, unknown>;
+  if (
+    protocol.protocol !== DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL ||
+    protocol.version !== DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION
+  ) return false;
+  out.controlProtocol = {
+    protocol: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
+    version: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
+  };
+  return true;
+}
+
+function copySystemConfigStatusFields(
+  input: Record<string, unknown>,
+  out: Record<string, unknown>,
+): boolean {
+  return copyOptionalFields(input, out, ["acceptedCommit", "restoredCommit", "checkpointCommit"],
+    (field) => typeof field === "string" && /^[0-9a-f]{7,64}$/.test(field)) &&
+    copyOptionalFields(input, out, ["configHash"],
+      (field) => typeof field === "string" && /^sha256:[0-9a-f]{64}$/.test(field)) &&
+    copyOptionalFields(input, out,
+      ["dirtySince", "lastSyncedAt", "lastErrorAt", "runtimeHealthCheckedAt", "updatedAt"],
+      isBoundedTimestamp, true) &&
+    copyOptionalFields(input, out, ["lastErrorCode"],
+      (field) => typeof field === "string" && /^[a-z0-9][a-z0-9-]{0,79}$/.test(field), true) &&
+    copyEnumFields(input, out) &&
+    copyOptionalFields(input, out, ["runtimeReady"], (field) => typeof field === "boolean") &&
+    copyOptionalFields(input, out, ["runtimeHealth"],
+      (field) => field === "repair" || field === "healthy" || field === "unhealthy") &&
+    copyOptionalFields(input, out, ["schemaVersion", "rejectedCount", "recoveryCount"],
+      (field) => typeof field === "number" && Number.isSafeInteger(field) && field >= 0) &&
+    copyOptionalFields(input, out, ["openclawVersion"],
+      (field) => typeof field === "string" && /^[A-Za-z0-9._+-]{1,80}$/.test(field)) &&
+    copyOptionalFields(input, out, ["openclawForkSha"],
+      (field) => typeof field === "string" &&
+        (field === "unknown" || /^[0-9a-f]{7,64}$/.test(field))) &&
+    copyControlProtocol(input, out);
+}
+
 function parseDashboardControlStatus(
   input: Record<string, unknown>,
 ): Record<string, unknown> | null {
@@ -425,80 +507,7 @@ export function parseSystemConfigObservedStatus(value: unknown): Record<string, 
   const input = value as Record<string, unknown>;
   if (typeof input.state !== "string" || !SYSTEM_CONFIG_STATES.has(input.state)) return null;
   const out: Record<string, unknown> = { state: input.state };
-  for (const key of ["acceptedCommit", "restoredCommit", "checkpointCommit"]) {
-    const field = input[key];
-    if (field === undefined) continue;
-    if (typeof field !== "string" || !/^[0-9a-f]{7,64}$/.test(field)) return null;
-    out[key] = field;
-  }
-  if (input.configHash !== undefined) {
-    if (typeof input.configHash !== "string" || !/^sha256:[0-9a-f]{64}$/.test(input.configHash)) return null;
-    out.configHash = input.configHash;
-  }
-  for (const key of ["dirtySince", "lastSyncedAt", "lastErrorAt", "runtimeHealthCheckedAt", "updatedAt"]) {
-    const field = input[key];
-    if (field === undefined || field === null) {
-      if (field === null) out[key] = null;
-      continue;
-    }
-    if (typeof field !== "string" || field.length > 40 || Number.isNaN(Date.parse(field))) return null;
-    out[key] = field;
-  }
-  if (input.lastErrorCode !== undefined && input.lastErrorCode !== null) {
-    if (typeof input.lastErrorCode !== "string" || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(input.lastErrorCode)) return null;
-    out.lastErrorCode = input.lastErrorCode;
-  } else if (input.lastErrorCode === null) {
-    out.lastErrorCode = null;
-  }
-  for (const [key, allowed] of Object.entries(SYSTEM_CONFIG_ENUMS)) {
-    const field = input[key];
-    if (field === undefined) continue;
-    if (typeof field !== "string" || !allowed.has(field)) return null;
-    out[key] = field;
-  }
-  if (input.runtimeReady !== undefined) {
-    if (typeof input.runtimeReady !== "boolean") return null;
-    out.runtimeReady = input.runtimeReady;
-  }
-  if (input.runtimeHealth !== undefined) {
-    if (input.runtimeHealth !== "repair" && input.runtimeHealth !== "healthy" && input.runtimeHealth !== "unhealthy") {
-      return null;
-    }
-    out.runtimeHealth = input.runtimeHealth;
-  }
-  for (const key of ["schemaVersion", "rejectedCount", "recoveryCount"]) {
-    const field = input[key];
-    if (field === undefined) continue;
-    if (typeof field !== "number" || !Number.isSafeInteger(field) || field < 0) return null;
-    out[key] = field;
-  }
-  if (input.openclawVersion !== undefined) {
-    if (typeof input.openclawVersion !== "string" || !/^[A-Za-z0-9._+-]{1,80}$/.test(input.openclawVersion)) return null;
-    out.openclawVersion = input.openclawVersion;
-  }
-  if (input.openclawForkSha !== undefined) {
-    if (
-      typeof input.openclawForkSha !== "string" ||
-      (input.openclawForkSha !== "unknown" && !/^[0-9a-f]{7,64}$/.test(input.openclawForkSha))
-    ) return null;
-    out.openclawForkSha = input.openclawForkSha;
-  }
-  if (input.controlProtocol !== undefined) {
-    if (
-      !input.controlProtocol ||
-      typeof input.controlProtocol !== "object" ||
-      Array.isArray(input.controlProtocol)
-    ) return null;
-    const protocol = input.controlProtocol as Record<string, unknown>;
-    if (
-      protocol.protocol !== DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL ||
-      protocol.version !== DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION
-    ) return null;
-    out.controlProtocol = {
-      protocol: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
-      version: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
-    };
-  }
+  if (!copySystemConfigStatusFields(input, out)) return null;
   const dashboardControl = parseDashboardControlStatus(input);
   if (!dashboardControl) return null;
   Object.assign(out, dashboardControl);

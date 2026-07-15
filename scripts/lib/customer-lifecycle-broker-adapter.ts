@@ -236,6 +236,16 @@ async function listProjectsNeedingClone(
   });
 }
 
+function coachToken(
+  mmUpdate: MmUpdate | null,
+  brokerSnapshot: Awaited<ReturnType<typeof snapshotForUid>>,
+): string | null {
+  if (typeof mmUpdate?._coachPersonalToken === "string") {
+    return mmUpdate._coachPersonalToken;
+  }
+  return brokerSnapshot?.coachToken ?? null;
+}
+
 async function applyAddCustomerConfigPatch(
   ctx: BrokerCtx,
   snapshot: UserSnapshot,
@@ -243,10 +253,7 @@ async function applyAddCustomerConfigPatch(
   callOpts: { signal?: AbortSignal; byosActive?: boolean } | undefined,
 ): Promise<{ elapsedMs: number }> {
   const brokerSnapshot = await snapshotForUid(ctx, snapshot.uid);
-  const coachPat =
-    typeof mmUpdate?._coachPersonalToken === "string"
-      ? mmUpdate._coachPersonalToken
-      : brokerSnapshot?.coachToken ?? null;
+  const coachPat = coachToken(mmUpdate, brokerSnapshot);
   if (!coachPat) {
     throw new Error(`[add:${snapshot.slug}] coach PAT unavailable from fleet broker`);
   }

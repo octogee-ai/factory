@@ -82,9 +82,12 @@ function normalizedCandidate(
     const config = parseConfig(contents);
     if (reconcile) reconcilePlatformInvariants(config, env);
     assertPlatformInvariants(config, env);
-    const normalized = reconcile
-      ? `${JSON.stringify(config, null, 2)}\n`
-      : contents.endsWith("\n") ? contents : `${contents}\n`;
+    let normalized = contents;
+    if (reconcile) {
+      normalized = `${JSON.stringify(config, null, 2)}\n`;
+    } else if (!contents.endsWith("\n")) {
+      normalized = `${contents}\n`;
+    }
     atomicWrite(candidatePath, normalized);
     validateConfig(candidatePath);
     return normalized;
@@ -95,32 +98,22 @@ function normalizedCandidate(
   }
 }
 
-export function recoverSystemConfigHead(
-  options: SystemConfigRecoveryOptions,
-): SystemConfigRecoveryResult {
-  const env = options.env ?? process.env;
-  const execGit = options.gitExec ?? defaultGitExec;
-  const keyPath = options.keyPath ?? customerSshKeyPath(options.slug);
-  const rejectedCommit = execGit(options.repoDir, "rev-parse HEAD", keyPath);
-  if (!rejectedCommit) {
-    return { outcome: "unavailable", rejectedCommit: "unknown", errorCode: "head-unavailable" };
-  }
-  const candidatePath = path.join(options.openclawDir, "system_config.recovery-candidate.json");
-  const current = fs.readFileSync(options.configPath, "utf8");
-  if (normalizedCandidate(current, candidatePath, env, options.validateConfig, false)) {
-    return { outcome: "accepted", acceptedCommit: rejectedCommit };
-  }
+interface RecoveryHistoryContext {
+  options: SystemConfigRecoveryOptions;
+  env: NodeJS.ProcessEnv;
+  execGit: GitExec;
+  keyPath: string;
+  rejectedCommit: string;
+  candidatePath: string;
+  history: string;
+}
 
-  const history = execGit(options.repoDir, "rev-list HEAD", keyPath);
-  if (history === null) {
-    return { outcome: "unavailable", rejectedCommit, errorCode: "history-unavailable" };
-  }
+function recoverFromHistory(context: RecoveryHistoryContext): SystemConfigRecoveryResult {
+  const { options, env, execGit, keyPath, rejectedCommit, candidatePath, history } = context;
   for (const commit of history.split("\n").map((value) => value.trim()).filter(Boolean).slice(1)) {
     if (!GIT_SHA_RE.test(commit)) continue;
     const contents = execGit(options.repoDir, `show ${commit}:openclaw.json`, keyPath);
-    if (contents === null) {
-      continue;
-    }
+    if (contents === null) continue;
     const normalized = normalizedCandidate(contents, candidatePath, env, options.validateConfig, true);
     if (normalized === null) continue;
     atomicWrite(options.configPath, normalized);
@@ -151,4 +144,35 @@ export function recoverSystemConfigHead(
     };
   }
   return { outcome: "unavailable", rejectedCommit };
+}
+
+export function recoverSystemConfigHead(
+  options: SystemConfigRecoveryOptions,
+): SystemConfigRecoveryResult {
+  const env = options.env ?? process.env;
+  const execGit = options.gitExec ?? defaultGitExec;
+  const keyPath = options.keyPath ?? customerSshKeyPath(options.slug);
+  const rejectedCommit = execGit(options.repoDir, "rev-parse HEAD", keyPath);
+  if (!rejectedCommit) {
+    return { outcome: "unavailable", rejectedCommit: "unknown", errorCode: "head-unavailable" };
+  }
+  const candidatePath = path.join(options.openclawDir, "system_config.recovery-candidate.json");
+  const current = fs.readFileSync(options.configPath, "utf8");
+  if (normalizedCandidate(current, candidatePath, env, options.validateConfig, false)) {
+    return { outcome: "accepted", acceptedCommit: rejectedCommit };
+  }
+
+  const history = execGit(options.repoDir, "rev-list HEAD", keyPath);
+  if (history === null) {
+    return { outcome: "unavailable", rejectedCommit, errorCode: "history-unavailable" };
+  }
+  return recoverFromHistory({
+    options,
+    env,
+    execGit,
+    keyPath,
+    rejectedCommit,
+    candidatePath,
+    history,
+  });
 }

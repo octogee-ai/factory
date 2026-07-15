@@ -96,6 +96,37 @@ export function createSystemConfigWatcher(options: SystemConfigWatcherOptions) {
     }, delay);
   }
 
+  async function synchronize(startedFingerprint: string): Promise<void> {
+    transition("syncing");
+    try {
+      const result = await options.sync();
+      const processedFingerprint = result.processedFingerprint ?? startedFingerprint;
+      lastProcessedFingerprint = processedFingerprint;
+      pendingPush = result.pending === true || (result.committed && !result.pushed);
+      lastError = result.rejected ? (result.errorCode ?? "config-rejected") : undefined;
+      errorCode = pendingPush || result.rejected
+        ? (result.errorCode ?? "checkpoint-pending")
+        : undefined;
+    } catch (error) {
+      pendingPush = true;
+      lastError = error instanceof Error ? error.message : String(error);
+      errorCode = "watcher-sync-failed";
+      log(`[system_config] watcher sync failed: ${lastError}`);
+    }
+  }
+
+  function scheduleRemainingWork(): void {
+    if (closed) return;
+    if (pendingPush) {
+      schedule(retryMs);
+      return;
+    }
+    if (systemConfigFingerprint(options.configPath) !== lastProcessedFingerprint) {
+      transition("dirty");
+      schedule(debounceMs);
+    }
+  }
+
   async function run(): Promise<void> {
     if (closed || running) return;
     running = true;
@@ -106,24 +137,7 @@ export function createSystemConfigWatcher(options: SystemConfigWatcherOptions) {
           transition(lastError ? "error" : "clean");
           break;
         }
-
-        transition("syncing");
-        try {
-          const result = await options.sync();
-          const processedFingerprint = result.processedFingerprint ?? startedFingerprint;
-          lastProcessedFingerprint = processedFingerprint;
-          pendingPush = result.pending === true || (result.committed && !result.pushed);
-          lastError = result.rejected ? (result.errorCode ?? "config-rejected") : undefined;
-          errorCode = pendingPush || result.rejected
-            ? (result.errorCode ?? "checkpoint-pending")
-            : undefined;
-        } catch (error) {
-          pendingPush = true;
-          lastError = error instanceof Error ? error.message : String(error);
-          errorCode = "watcher-sync-failed";
-          log(`[system_config] watcher sync failed: ${lastError}`);
-        }
-
+        await synchronize(startedFingerprint);
         const currentFingerprint = systemConfigFingerprint(options.configPath);
         const contentChangedAfterSnapshot = currentFingerprint !== lastProcessedFingerprint;
         if (contentChangedAfterSnapshot) {
@@ -136,11 +150,7 @@ export function createSystemConfigWatcher(options: SystemConfigWatcherOptions) {
       }
     } finally {
       running = false;
-      if (!closed && pendingPush) schedule(retryMs);
-      else if (!closed && systemConfigFingerprint(options.configPath) !== lastProcessedFingerprint) {
-        transition("dirty");
-        schedule(debounceMs);
-      }
+      scheduleRemainingWork();
     }
   }
 

@@ -124,7 +124,6 @@ describe("system_config watcher", () => {
   });
 
   it("does not recursively commit a file rewrite performed by its own sync pass", async () => {
-    let watcher!: ReturnType<typeof createSystemConfigWatcher>;
     const sync = vi.fn(async () => {
       fs.writeFileSync(configPath, "{\"version\":2,\"normalized\":true}\n");
       watcher.notify();
@@ -134,7 +133,7 @@ describe("system_config watcher", () => {
         processedFingerprint: systemConfigFingerprint(configPath),
       };
     });
-    watcher = createSystemConfigWatcher({
+    const watcher = createSystemConfigWatcher({
       configPath,
       sync,
       debounceMs: 10,

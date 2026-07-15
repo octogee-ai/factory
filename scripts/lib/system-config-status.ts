@@ -113,8 +113,10 @@ function projectDashboardControlStatus(
   return projected;
 }
 
-function projectSystemConfigStatus(record: Record<string, unknown>): SystemConfigObservedStatus {
-  const status: SystemConfigObservedStatus = { state: record.state as SystemConfigState };
+function projectScalarFields(
+  record: Record<string, unknown>,
+  status: SystemConfigObservedStatus,
+): void {
   for (const key of STRING_FIELDS) {
     if (typeof record[key] === "string") status[key] = record[key];
   }
@@ -124,6 +126,13 @@ function projectSystemConfigStatus(record: Record<string, unknown>): SystemConfi
   for (const key of NUMBER_FIELDS) {
     if (typeof record[key] === "number" && Number.isFinite(record[key])) status[key] = record[key];
   }
+  if (typeof record.runtimeReady === "boolean") status.runtimeReady = record.runtimeReady;
+}
+
+function projectStateFields(
+  record: Record<string, unknown>,
+  status: SystemConfigObservedStatus,
+): void {
   if (record.doctorResult === "ok" || record.doctorResult === "error") {
     status.doctorResult = record.doctorResult;
   }
@@ -136,27 +145,40 @@ function projectSystemConfigStatus(record: Record<string, unknown>): SystemConfi
   if (record.freezeState === "unfrozen" || record.freezeState === "freezing" || record.freezeState === "frozen") {
     status.freezeState = record.freezeState;
   }
-  if (typeof record.runtimeReady === "boolean") status.runtimeReady = record.runtimeReady;
   if (record.runtimeHealth === "repair" || record.runtimeHealth === "healthy" || record.runtimeHealth === "unhealthy") {
     status.runtimeHealth = record.runtimeHealth;
   }
+}
+
+function projectControlProtocol(
+  record: Record<string, unknown>,
+): Pick<SystemConfigObservedStatus, "controlProtocol"> {
   if (
-    record.controlProtocol !== null &&
-    typeof record.controlProtocol === "object" &&
-    !Array.isArray(record.controlProtocol)
-  ) {
-    const controlProtocol = record.controlProtocol as Record<string, unknown>;
-    if (
-      controlProtocol.protocol === "durable-openclaw-config" &&
-      controlProtocol.version === 1
-    ) {
-      status.controlProtocol = {
-        protocol: "durable-openclaw-config",
-        version: 1,
-      };
-    }
+    record.controlProtocol === null ||
+    typeof record.controlProtocol !== "object" ||
+    Array.isArray(record.controlProtocol)
+  ) return {};
+  const controlProtocol = record.controlProtocol as Record<string, unknown>;
+  if (controlProtocol.protocol !== "durable-openclaw-config" || controlProtocol.version !== 1) {
+    return {};
   }
-  Object.assign(status, projectDashboardControlStatus(record));
+  return {
+    controlProtocol: {
+      protocol: "durable-openclaw-config",
+      version: 1,
+    },
+  };
+}
+
+function projectSystemConfigStatus(record: Record<string, unknown>): SystemConfigObservedStatus {
+  const status: SystemConfigObservedStatus = { state: record.state as SystemConfigState };
+  projectScalarFields(record, status);
+  projectStateFields(record, status);
+  Object.assign(
+    status,
+    projectControlProtocol(record),
+    projectDashboardControlStatus(record),
+  );
   return status;
 }
 
