@@ -96,6 +96,10 @@
       "types": "./dist/customer-snapshot-mapping.d.ts",
       "default": "./dist/customer-snapshot-mapping.js"
     },
+    "./customer-migration-v2": {
+      "types": "./dist/customer-migration-v2.d.ts",
+      "default": "./dist/customer-migration-v2.js"
+    },
     "./firebase-auth-helpers": {
       "types": "./dist/firebase-auth-helpers.d.ts",
       "default": "./dist/firebase-auth-helpers.js"
@@ -380,6 +384,9 @@
       ],
       "customer-snapshot-mapping": [
         "dist/customer-snapshot-mapping.d.ts"
+      ],
+      "customer-migration-v2": [
+        "dist/customer-migration-v2.d.ts"
       ],
       "firebase-auth-helpers": [
         "dist/firebase-auth-helpers.d.ts"
