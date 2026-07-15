@@ -1,4 +1,9 @@
-import type { Operation, OperationKind, OperationStep } from "@octogee/shared/types/glm";
+import type {
+  CustomerMigrationV2State,
+  Operation,
+  OperationKind,
+  OperationStep,
+} from "@octogee/shared/types/glm";
 
 export interface OperationResult {
   steps: OperationStep[];
@@ -10,6 +15,8 @@ export interface OperationResult {
 
 export interface OperationContext {
   reportStep: (step: OperationStep) => Promise<void> | void;
+  persistCustomerMigrationV2?: (state: CustomerMigrationV2State) => Promise<void>;
+  cancellationRequested?: () => Promise<boolean>;
 }
 
 export type OperationHandler = (

@@ -1,5 +1,9 @@
 import { FieldValue } from "firebase-admin/firestore";
-import type { OperationAttemptRecord, OperationStep } from "@octogee/shared/types/glm";
+import type {
+  CustomerMigrationV2State,
+  OperationAttemptRecord,
+  OperationStep,
+} from "@octogee/shared/types/glm";
 import type { OperationResult } from "./operation-router.js";
 
 export type OperationFailureClassification = "transient" | "terminal";
@@ -67,6 +71,7 @@ export interface OperationCompletionInput {
     attempts?: number;
     attemptHistory?: OperationAttemptRecord[];
     startedAt?: number | null;
+    customerMigrationV2?: CustomerMigrationV2State;
   };
   result: OperationResult;
   steps: OperationStep[];
@@ -122,9 +127,18 @@ export function buildOperationCompletionUpdate(
   const hasDurableCleanup =
     result.output?.configCleanup !== null &&
     typeof result.output?.configCleanup === "object";
+  const hasActiveCustomerMigrationV2 =
+    op.customerMigrationV2 !== undefined &&
+    op.customerMigrationV2.phase !== "complete" &&
+    op.customerMigrationV2.phase !== "aborted";
   if (
     classification === "transient" &&
-    (attempts < MAX_OPERATION_ATTEMPTS || hasDurableCleanup || hasRetirementFencePending)
+    (
+      attempts < MAX_OPERATION_ATTEMPTS ||
+      hasDurableCleanup ||
+      hasRetirementFencePending ||
+      hasActiveCustomerMigrationV2
+    )
   ) {
     const backoffMs = retryBackoffMs(attempts);
     return {

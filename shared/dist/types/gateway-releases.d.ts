@@ -239,10 +239,18 @@ export interface RevisionRealizationDoc {
     helm: RevisionHelmObservation;
     heartbeat: RevisionHeartbeatObservation;
     systemConfig?: RevisionSystemConfigObservation;
+    systemConfigMigrationContext?: RevisionSystemConfigMigrationContext;
     lastError: {
         message: string | null;
         at: number | null;
     };
+}
+export interface RevisionSystemConfigMigrationContext {
+    migrationId: string;
+    sourceRevisionId: string;
+    targetRevisionId: string;
+    checkpointCommit: string;
+    freezeObject: string;
 }
 export declare function isRevisionRealizationDoc(data: unknown): data is RevisionRealizationDoc;
 export declare function isGatewayLegacyBackfill(value: unknown): value is GatewayLegacyBackfill;

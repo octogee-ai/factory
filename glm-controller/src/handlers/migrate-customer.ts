@@ -1,4 +1,5 @@
 import type {
+  CustomerMigrationV2State,
   Operation,
   OperationStep,
   StepStatus,
@@ -12,6 +13,15 @@ import {
 import type { PlacementResolution } from "@octogee/core/assignment-doc";
 import type { RevisionSystemConfigObservation } from "@octogee/shared/types/gateway-releases";
 import type { SystemConfigMigrationMode } from "@octogee/shared/types/fleet-controller";
+import {
+  advanceCustomerMigrationV2,
+  beginCustomerMigrationV2Abort,
+  classifyCustomerMigrationV2Error,
+  isCustomerMigrationV2PostIntent,
+  type CustomerMigrationV2CutoverFence,
+  type CustomerMigrationV2TargetContext,
+} from "@octogee/core/customer-migration-v2";
+import type { ConfigCandidateProofResponse } from "@octogee/shared/types/fleet-controller";
 import {
   runMigration,
   type ConfigCleanupObligation,
@@ -87,6 +97,32 @@ export interface MigrateCustomerDeps {
     targetRevisionId: string;
   }) => Promise<void>;
 
+  readRevisionExecutionIdentity: (revisionId: string) => Promise<{
+    revisionId: string;
+    imageTag: string;
+    buildSha: string;
+    openclawVersion: string;
+    startedAt: number;
+  }>;
+
+  installTargetSystemConfigContext: (
+    targetRevisionId: string,
+    context: CustomerMigrationV2TargetContext,
+  ) => Promise<void>;
+
+  clearTargetSystemConfigContext: (targetRevisionId: string) => Promise<void>;
+
+  assertCandidateProofCurrent: (
+    targetRevisionId: string,
+    expectedImageTag: string,
+    proof: ConfigCandidateProofResponse,
+  ) => Promise<void>;
+
+  commitV2Cutover: (input: CustomerMigrationV2CutoverFence & {
+    uid: string;
+    slug: string;
+  }) => Promise<void>;
+
   recoverConfigFreezeOwner: (input: {
     ownerMigrationId: string;
     requestedMigrationId: string;
@@ -103,6 +139,162 @@ export interface MigrateCustomerDeps {
 
   now: () => number;
   log: (msg: string) => void;
+}
+
+function isAbortPhase(phase: CustomerMigrationV2State["phase"]): boolean {
+  return phase === "abortIntent" ||
+    phase === "abortPublished" ||
+    phase === "abortTargetUnmounted" ||
+    phase === "abortContextCleared" ||
+    phase === "aborted";
+}
+
+function v2RetryError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return `customer migration V2 retry pending: status 503: ${message}`;
+}
+
+async function persistV2(
+  ctx: OperationContext,
+  state: CustomerMigrationV2State,
+): Promise<void> {
+  if (!ctx.persistCustomerMigrationV2) {
+    throw new Error("customer migration V2 requires durable operation state persistence");
+  }
+  await ctx.persistCustomerMigrationV2(state);
+}
+
+async function runOrdinaryMigrationV2(input: {
+  op: Operation;
+  ctx: OperationContext;
+  deps: MigrateCustomerDeps;
+  targets: MigrationTargets;
+  uid: string;
+  slug: string;
+  migrationId: string;
+  restoreSnapshot: FleetBrokerUserSnapshot;
+  client: MigrationClient;
+}): Promise<OperationResult> {
+  const { op, ctx, deps, targets, uid, slug, migrationId, restoreSnapshot, client } = input;
+  if (targets.toRelease === null) {
+    return { steps: [], success: false, error: "customer migration V2 target has no release" };
+  }
+  let state = op.customerMigrationV2;
+  if (!state) {
+    const [sourceExecution, targetExecution] = await Promise.all([
+      deps.readRevisionExecutionIdentity(targets.fromRevisionId),
+      deps.readRevisionExecutionIdentity(targets.toRevisionId),
+    ]);
+    state = {
+      phase: "initialized",
+      operationId: op.id,
+      migrationId,
+      uid,
+      slug,
+      sourceGatewayId: targets.fromGatewayId,
+      sourceRevisionId: targets.fromRevisionId,
+      sourceRelease: targets.fromRelease,
+      sourceEpoch: targets.fromEpoch,
+      targetGatewayId: targets.toGatewayId,
+      targetRevisionId: targets.toRevisionId,
+      targetRelease: targets.toRelease,
+      sourceImageTag: sourceExecution.imageTag,
+      sourceBuildSha: sourceExecution.buildSha,
+      sourceOpenclawVersion: sourceExecution.openclawVersion,
+      targetImageTag: targetExecution.imageTag,
+    };
+    await persistV2(ctx, state);
+  }
+  if (
+    state.operationId !== op.id ||
+    state.migrationId !== migrationId ||
+    state.uid !== uid ||
+    state.slug !== slug ||
+    state.sourceGatewayId !== targets.fromGatewayId ||
+    state.sourceRevisionId !== targets.fromRevisionId ||
+    state.sourceRelease !== targets.fromRelease ||
+    state.sourceEpoch !== targets.fromEpoch ||
+    state.targetGatewayId !== targets.toGatewayId ||
+    state.targetRevisionId !== targets.toRevisionId ||
+    state.targetRelease !== targets.toRelease
+  ) {
+    return { steps: [], success: false, error: "durable customer migration V2 scope changed" };
+  }
+
+  const driverDeps = {
+    client,
+    restoreSnapshot,
+    installTargetContext: (context: CustomerMigrationV2TargetContext) =>
+      deps.installTargetSystemConfigContext(state!.targetRevisionId, context),
+    clearTargetContext: () => deps.clearTargetSystemConfigContext(state!.targetRevisionId),
+    assertCandidateProofCurrent: (proof: ConfigCandidateProofResponse) =>
+      deps.assertCandidateProofCurrent(state!.targetRevisionId, state!.targetImageTag, proof),
+    setSourceAssignmentState: (assignmentState: "serving" | "quiescing") =>
+      deps.setAssignmentState({
+        gatewayId: state!.sourceGatewayId,
+        uid: state!.uid,
+        state: assignmentState,
+      }),
+    commitCutover: (fence: CustomerMigrationV2CutoverFence) =>
+      deps.commitV2Cutover({ ...fence, uid: state!.uid, slug: state!.slug }),
+    now: deps.now,
+  };
+
+  while (state.phase !== "complete" && state.phase !== "aborted") {
+    if (
+      !isAbortPhase(state.phase) &&
+      !isCustomerMigrationV2PostIntent(state) &&
+      await ctx.cancellationRequested?.()
+    ) {
+      if (state.phase === "initialized") {
+        return { steps: [], success: false, error: "customer migration cancelled before freeze" };
+      }
+      state = beginCustomerMigrationV2Abort(state, "customer migration superseded", deps.now());
+      await persistV2(ctx, state);
+    }
+    try {
+      const next = await advanceCustomerMigrationV2(state, driverDeps);
+      if (next === state) break;
+      state = next;
+      await persistV2(ctx, state);
+    } catch (error) {
+      if (classifyCustomerMigrationV2Error(error) === "retry") {
+        return { steps: [], success: false, error: v2RetryError(error), rolledBack: false };
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      if (isAbortPhase(state.phase)) {
+        return {
+          steps: [],
+          success: false,
+          error: `customer migration V2 abort terminal: ${message}`,
+          rolledBack: false,
+        };
+      }
+      if (isCustomerMigrationV2PostIntent(state)) {
+        return {
+          steps: [],
+          success: false,
+          error: `customer migration V2 retry pending: status 503: roll-forward blocked: ${message}`,
+          rolledBack: false,
+        };
+      }
+      if (state.phase === "initialized") {
+        return { steps: [], success: false, error: message, rolledBack: false };
+      }
+      state = beginCustomerMigrationV2Abort(state, message, deps.now());
+      await persistV2(ctx, state);
+    }
+  }
+
+  if (state.phase === "aborted") {
+    return {
+      steps: [],
+      success: false,
+      error: state.abortReason ?? "customer migration V2 aborted",
+      rolledBack: true,
+    };
+  }
+  return { steps: [], success: true, rolledBack: false };
 }
 
 interface MigrateCustomerInput {
@@ -539,11 +731,34 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
     let rollFence: MigrationRollFence | null = null;
     const urls = new Map<string, string>();
     try {
-      const resolved = await resolveMigrationTargets(deps, uid, user, toGatewayId);
-      if ("error" in resolved) {
-        return { steps: [], success: false, error: resolved.error };
+      if (op.customerMigrationV2) {
+        const durable = op.customerMigrationV2;
+        if (
+          durable.operationId !== op.id ||
+          durable.uid !== uid ||
+          durable.slug !== user.slug ||
+          durable.targetGatewayId !== toGatewayId
+        ) {
+          return { steps: [], success: false, error: "durable customer migration V2 input changed" };
+        }
+        targets = {
+          toGatewayId: durable.targetGatewayId,
+          fromGatewayId: durable.sourceGatewayId,
+          toRevisionId: durable.targetRevisionId,
+          toRelease: durable.targetRelease,
+          fromRevisionId: durable.sourceRevisionId,
+          fromRelease: durable.sourceRelease,
+          fromEpoch: durable.sourceEpoch,
+          fromTransportId: durable.sourceRevisionId,
+          toTransportId: durable.targetRevisionId,
+        };
+      } else {
+        const resolved = await resolveMigrationTargets(deps, uid, user, toGatewayId);
+        if ("error" in resolved) {
+          return { steps: [], success: false, error: resolved.error };
+        }
+        targets = resolved.targets;
       }
-      targets = resolved.targets;
       preAcquiredConfigCheckpoint = requestedPreAcquiredConfigCheckpoint(
         input.preAcquiredConfigCheckpoint,
       );
@@ -582,19 +797,23 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
           };
         }
       }
-      systemConfigMigrationMode = await resolveRequestedSystemConfigMigrationMode({
-        deps,
-        migrationInput: input,
-        sourceGatewayId: user.currentGatewayId,
-        targetGatewayId: toGatewayId,
-      });
-      await deps.assertSystemConfigProtocolReady({
-        mode: systemConfigMigrationMode,
-        sourceGatewayId: targets.fromGatewayId,
-        sourceRevisionId: targets.fromRevisionId,
-        targetGatewayId: targets.toGatewayId,
-        targetRevisionId: targets.toRevisionId,
-      });
+      systemConfigMigrationMode = op.customerMigrationV2
+        ? "checkpoint-and-restore"
+        : await resolveRequestedSystemConfigMigrationMode({
+            deps,
+            migrationInput: input,
+            sourceGatewayId: user.currentGatewayId,
+            targetGatewayId: toGatewayId,
+          });
+      if (!op.customerMigrationV2 || op.customerMigrationV2.phase === "initialized") {
+        await deps.assertSystemConfigProtocolReady({
+          mode: systemConfigMigrationMode,
+          sourceGatewayId: targets.fromGatewayId,
+          sourceRevisionId: targets.fromRevisionId,
+          targetGatewayId: targets.toGatewayId,
+          targetRevisionId: targets.toRevisionId,
+        });
+      }
       urls.set(targets.fromTransportId, await deps.resolveGatewayUrl(targets.fromTransportId));
       urls.set(targets.toTransportId, await deps.resolveGatewayUrl(targets.toTransportId));
       restoreSnapshot = await deps.readUserSnapshot(uid);
@@ -614,6 +833,26 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
       }
       return url;
     });
+
+    if (
+      op.customerMigrationV2 ||
+      (systemConfigMigrationMode === "checkpoint-and-restore" && input.source !== "release-roll")
+    ) {
+      if (targets.toRelease === null) {
+        return { steps: [], success: false, error: "customer migration V2 target has no release" };
+      }
+      return runOrdinaryMigrationV2({
+        op,
+        ctx,
+        deps,
+        targets,
+        uid,
+        slug: user.slug,
+        migrationId,
+        restoreSnapshot,
+        client,
+      });
+    }
 
     const result = await runMigration(
       {

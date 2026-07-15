@@ -59,6 +59,30 @@ describe("resumeOrphanedRunningOps", () => {
     expect(redrive).not.toHaveBeenCalled();
   });
 
+  it("resumes only migrate-customer operations carrying active durable V2 state", async () => {
+    const active = {
+      id: "op-v2",
+      data: {
+        status: "running",
+        kind: "migrate-customer",
+        customerMigrationV2: { phase: "checkpointed" },
+      },
+    };
+    const legacy = { id: "op-v1", data: { status: "running", kind: "migrate-customer" } };
+    const redrive = vi.fn(async () => undefined);
+
+    await resumeOrphanedRunningOps({
+      db: makeFakeDb([active, legacy] as FakeOpDoc[]) as never,
+      log: vi.fn(),
+      resumableKinds: new Set(["rollout", "migrate-customer"]),
+      resumableOperation: (op) => op.kind !== "migrate-customer" || !!op.customerMigrationV2,
+      redrive,
+    });
+
+    expect(redrive).toHaveBeenCalledOnce();
+    expect(redrive).toHaveBeenCalledWith(expect.objectContaining({ id: "op-v2" }), expect.anything());
+  });
+
   it("only scans `running` ops (pending/succeeded are left to the normal worker)", async () => {
     const redrive = vi.fn(async () => undefined);
     const ops: FakeOpDoc[] = [

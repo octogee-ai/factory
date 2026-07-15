@@ -290,6 +290,26 @@ describe("buildOperationCompletionUpdate", () => {
     expect((update.attemptHistory as unknown[]).length).toBe(3);
   });
 
+  it("keeps an active durable customer migration V2 retryable beyond the normal cap", () => {
+    const update = buildOperationCompletionUpdate({
+      op: {
+        attempts: MAX_OPERATION_ATTEMPTS,
+        attemptHistory: [],
+        customerMigrationV2: { phase: "promotionIntent" } as never,
+      },
+      result: {
+        steps: [],
+        success: false,
+        error: "customer migration V2 retry pending: status 503: response lost",
+      },
+      steps: [],
+      now,
+    });
+
+    expect(update.status).toBe("pending");
+    expect(update.nextAttemptAt).toBe(now + retryBackoffMs(MAX_OPERATION_ATTEMPTS + 1));
+  });
+
   it("preserves rolledBack from the handler result on terminal failure", () => {
     const update = buildOperationCompletionUpdate({
       op: { attempts: 0, attemptHistory: [] },
