@@ -35,6 +35,20 @@ export function mattermostAccountSecretsPath(openclawDir: string): string {
   return path.join(openclawDir, "secrets", "mattermost-accounts.json");
 }
 
+export function mattermostProjectAccountSecretChange(
+  slug: string,
+  projects: ReadonlyArray<{ projectId: string; enabled: boolean; token?: string | null }>,
+): { set: Record<string, string>; remove: string[] } {
+  const set: Record<string, string> = {};
+  const remove: string[] = [];
+  for (const project of projects) {
+    const accountId = `${slug}-proj-${project.projectId}`;
+    if (project.enabled && project.token) set[accountId] = project.token;
+    else remove.push(accountId);
+  }
+  return { set, remove };
+}
+
 async function readSecrets(filePath: string): Promise<Record<string, string>> {
   let raw: string;
   try {

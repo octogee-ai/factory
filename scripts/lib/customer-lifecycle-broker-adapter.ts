@@ -88,7 +88,10 @@ import {
 } from "./migration-activation-secrets.js";
 import { writeTierTemplateFiles } from "./tier-template-files.js";
 import { reassertConvergedContextFilesForSlug } from "./context-file-convergence.js";
-import { updateMattermostAccountSecrets } from "./mattermost-account-secrets.js";
+import {
+  mattermostProjectAccountSecretChange,
+  updateMattermostAccountSecrets,
+} from "./mattermost-account-secrets.js";
 
 const DEFAULT_COACH = {
   name: "Octo",
@@ -286,17 +289,13 @@ async function applyAddCustomerConfigPatch(
       : {}),
   });
   const projectAgents = brokerSnapshot?.projectAgents ?? snapshot.projectAgents ?? [];
+  const projectSecretChange = mattermostProjectAccountSecretChange(snapshot.slug, projectAgents);
   await updateMattermostAccountSecrets(OPENCLAW_DIR, {
     set: {
       [accountId]: coachPat,
-      ...Object.fromEntries(
-        projectAgents.flatMap((state) =>
-          state.enabled && state.token
-            ? [[`${snapshot.slug}-proj-${state.projectId}`, state.token] as const]
-            : [],
-        ),
-      ),
+      ...projectSecretChange.set,
     },
+    remove: projectSecretChange.remove,
   });
   const projectAgentEntries = buildProjectAgents({
     slug: snapshot.slug,

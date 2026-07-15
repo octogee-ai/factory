@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   mattermostAccountSecretRef,
   mattermostAccountSecretsPath,
+  mattermostProjectAccountSecretChange,
   readMattermostAccountSecret,
   updateMattermostAccountSecrets,
 } from "../lib/mattermost-account-secrets.js";
@@ -23,6 +24,17 @@ afterEach(() => {
 });
 
 describe("Mattermost account SecretRefs", () => {
+  it("removes disabled and unminted project PATs while setting active accounts", () => {
+    expect(mattermostProjectAccountSecretChange("alice", [
+      { projectId: "orbit", enabled: true, token: "pat-orbit" },
+      { projectId: "nova", enabled: false, token: "pat-nova" },
+      { projectId: "empty", enabled: true, token: null },
+    ])).toEqual({
+      set: { "alice-proj-orbit": "pat-orbit" },
+      remove: ["alice-proj-nova", "alice-proj-empty"],
+    });
+  });
+
   it("uses JSON Pointer ids with the platform file provider", () => {
     expect(mattermostAccountSecretRef("ceckert/coach~blue")).toEqual({
       source: "file",
