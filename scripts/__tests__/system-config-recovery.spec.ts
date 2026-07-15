@@ -31,6 +31,7 @@ function fixture(activeContents: string): { openclawDir: string; repoDir: string
   const configPath = path.join(repoDir, "openclaw.json");
   fs.writeFileSync(configPath, activeContents);
   fs.writeFileSync(path.join(repoDir, ".octogee.json"), '{"schemaVersion":1}\n');
+  fs.writeFileSync(path.join(repoDir, ".gitignore"), "*.bak\n*.tmp\n");
   return { openclawDir, repoDir, configPath };
 }
 
@@ -51,6 +52,10 @@ describe("system config accepted-head recovery", () => {
       if (command === "rev-list HEAD") return `bad111\n${newestValidAncestor}\n${olderValidAncestor}`;
       if (command === `show ${newestValidAncestor}:openclaw.json`) return '{"customerSetting":true}\n';
       if (command === `show ${olderValidAncestor}:openclaw.json`) return validConfig({ customerSetting: false });
+      if (command === `show ${newestValidAncestor}:.octogee.json` ||
+          command === `show ${olderValidAncestor}:.octogee.json`) return '{"schemaVersion":1}\n';
+      if (command === `show ${newestValidAncestor}:.gitignore` ||
+          command === `show ${olderValidAncestor}:.gitignore`) return "*.bak\n*.tmp\n";
       if (command.startsWith("add ")) return "";
       if (command.startsWith("commit ")) {
         head = "recovered444";
@@ -192,7 +197,7 @@ describe("system config accepted-head recovery", () => {
     expect(readSystemConfigStatus(h.openclawDir)).toMatchObject({ doctorResult: "ok" });
   });
 
-  it("boots a locally accepted config while a transient Gitea push remains durably pending", () => {
+  it("keeps a locally accepted config unready while a transient Gitea push remains pending", () => {
     const h = fixture(validConfig({ harmless: true }));
 
     expect(checkpointBootSystemConfigForSlug("ceckert", {
@@ -207,17 +212,80 @@ describe("system config accepted-head recovery", () => {
         errorCode: "push-failed",
         acceptedCommit: "b".repeat(40),
       }),
-    })).toEqual({
-      ready: true,
-      acceptedCommit: "b".repeat(40),
-      durablePending: true,
-      errorCode: "push-failed",
-    });
+    })).toEqual({ ready: false, errorCode: "push-failed" });
     expect(readSystemConfigStatus(h.openclawDir)).toMatchObject({
       state: "error",
       acceptedCommit: "b".repeat(40),
       lastErrorCode: "push-failed",
     });
+  });
+
+  it("recovers a committed openclaw.json deletion from the newest complete ancestor", () => {
+    const h = fixture(validConfig({ deletedAtHead: true }));
+    fs.rmSync(h.configPath);
+    const head = "a".repeat(40);
+    const ancestor = "b".repeat(40);
+    let recoveredHead = head;
+    const gitExec = vi.fn((_cwd: string, command: string) => {
+      if (command === "rev-parse HEAD") return recoveredHead;
+      if (command === "rev-list HEAD") return `${head}\n${ancestor}`;
+      if (command === `show ${ancestor}:openclaw.json`) return validConfig({ recovered: true });
+      if (command === `show ${ancestor}:.octogee.json`) return '{"schemaVersion":1}\n';
+      if (command === `show ${ancestor}:.gitignore`) return "*.bak\n*.tmp\n";
+      if (command.startsWith("add ")) return "";
+      if (command.startsWith("commit ")) {
+        recoveredHead = "c".repeat(40);
+        return "";
+      }
+      if (command === "push origin main") return "";
+      return null;
+    });
+
+    expect(recoverSystemConfigHead({
+      ...h,
+      slug: "ceckert",
+      env,
+      gitExec,
+      validateConfig: vi.fn(),
+    })).toMatchObject({
+      outcome: "recovered",
+      rejectedCommit: head,
+      recoveredFromCommit: ancestor,
+      acceptedCommit: "c".repeat(40),
+    });
+    expect(JSON.parse(fs.readFileSync(h.configPath, "utf8"))).toMatchObject({ recovered: true });
+  });
+
+  it("rejects malformed current metadata and restores the complete accepted ancestor", () => {
+    const h = fixture(validConfig({ current: true }));
+    fs.writeFileSync(path.join(h.repoDir, ".octogee.json"), "{ invalid");
+    const head = "a".repeat(40);
+    const ancestor = "b".repeat(40);
+    let recoveredHead = head;
+    const gitExec = vi.fn((_cwd: string, command: string) => {
+      if (command === "rev-parse HEAD") return recoveredHead;
+      if (command === "rev-list HEAD") return `${head}\n${ancestor}`;
+      if (command === `show ${ancestor}:openclaw.json`) return validConfig({ recovered: true });
+      if (command === `show ${ancestor}:.octogee.json`) return '{"schemaVersion":1}\n';
+      if (command === `show ${ancestor}:.gitignore`) return "*.bak\n*.tmp\n";
+      if (command.startsWith("add ")) return "";
+      if (command.startsWith("commit ")) {
+        recoveredHead = "c".repeat(40);
+        return "";
+      }
+      if (command === "push origin main") return "";
+      return null;
+    });
+
+    expect(recoverSystemConfigHead({
+      ...h,
+      slug: "ceckert",
+      env,
+      gitExec,
+      validateConfig: vi.fn(),
+    })).toMatchObject({ outcome: "recovered", recoveredFromCommit: ancestor });
+    expect(JSON.parse(fs.readFileSync(path.join(h.repoDir, ".octogee.json"), "utf8")))
+      .toEqual({ schemaVersion: 1 });
   });
 
   it("keeps boot unavailable and observable when no accepted ancestor exists", () => {

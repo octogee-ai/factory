@@ -409,6 +409,11 @@ export function createConfigRestoreProofHandler(deps: MigrationHandlerDeps): Req
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log(`[migration-http] config restore proof failed migrationId=${body.migrationId}: ${message}`);
+      const typed = typedConfigFreezeFailure(error);
+      if (typed) {
+        res.status(typed.status).json(typed.body);
+        return;
+      }
       res.status(409).json({ error: "config restore proof failed", message });
     }
   };

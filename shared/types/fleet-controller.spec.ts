@@ -13,6 +13,8 @@ import {
   OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_TTL_MS,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
+  SYSTEM_CONFIG_CONTROL_CAPABILITY_FILE,
+  SYSTEM_CONFIG_CONTROL_CAPABILITY_TTL_MS,
 } from "./fleet-controller.js";
 
 describe("durable OpenClaw config control protocol", () => {
@@ -37,5 +39,7 @@ describe("durable OpenClaw config control protocol", () => {
       "dashboard_bridge.capability.json",
     );
     expect(OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_TTL_MS).toBe(15_000);
+    expect(SYSTEM_CONFIG_CONTROL_CAPABILITY_FILE).toBe("system_config.control-capability.json");
+    expect(SYSTEM_CONFIG_CONTROL_CAPABILITY_TTL_MS).toBe(15_000);
   });
 });

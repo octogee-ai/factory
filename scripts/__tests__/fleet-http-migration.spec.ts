@@ -675,6 +675,55 @@ describe("system config roll handlers", () => {
     });
   });
 
+  it.each([
+    CONFIG_FREEZE_WRITER_LOCK_BUSY_CODE,
+    CONFIG_FREEZE_CHECKPOINT_PUSH_PENDING_CODE,
+  ])("returns retryable 503 for typed restore-proof unavailability %s", async (code) => {
+    const proveSystemConfigRestore = () => {
+      throw new SystemConfigFreezeUnavailableError(code);
+    };
+    const handler = createConfigRestoreProofHandler(mkDeps({ proveSystemConfigRestore }));
+    const body = configControlBody({
+      migrationId: `mig-restore-${code}`,
+      slug: "chris",
+      checkpointCommit: "a".repeat(40),
+    }, "restore-proof");
+    const response = mkResponse();
+
+    await handler(mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+    }), response.res, vi.fn());
+
+    expect(response.getStatus()).toBe(503);
+    expect(response.getBody()).toEqual({
+      error: CONFIG_FREEZE_UNAVAILABLE_ERROR,
+      code,
+      retryable: true,
+    });
+  });
+
+  it("keeps restore-proof validation failures terminal", async () => {
+    const handler = createConfigRestoreProofHandler(mkDeps({
+      proveSystemConfigRestore: () => { throw new Error("target config validation failed"); },
+    }));
+    const body = configControlBody({
+      migrationId: "mig-restore-terminal",
+      slug: "chris",
+      checkpointCommit: "a".repeat(40),
+    }, "restore-proof");
+    const response = mkResponse();
+
+    await handler(mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+    }), response.res, vi.fn());
+
+    expect(response.getStatus()).toBe(409);
+    expect(response.getBody()).toEqual({
+      error: "config restore proof failed",
+      message: "target config validation failed",
+    });
+  });
+
   it("keeps invariant failures terminal while treating an unfreeze writer lock as retryable", async () => {
     const terminal = createConfigFreezeHandler(mkDeps({
       freezeSystemConfig: () => { throw new Error("platform invariant failed"); },

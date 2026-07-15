@@ -42,6 +42,7 @@ import type { SystemConfigCommitSource } from "../lib/system-config-recovery.js"
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
+import { startSystemConfigControlCapabilityHeartbeat } from "../lib/system-config-control-capability.js";
 
 export interface FleetControllerEntrypointConfig {
   builderSlug: string;
@@ -319,6 +320,13 @@ async function main(): Promise<void> {
     reportState: false,
     internalServiceKey: process.env.OPENCLAW_GATEWAY_TOKEN ?? "",
   });
+  const configControlCapability = entrypointConfig.builderSlug
+    ? startSystemConfigControlCapabilityHeartbeat({
+        openclawDir: OPENCLAW_DIR,
+        revisionId: entrypointConfig.revisionId,
+        log,
+      })
+    : null;
 
   const autosaveTimer = startWorkspaceAutosaveLoop(
     {
@@ -350,6 +358,7 @@ async function main(): Promise<void> {
       });
   log(`Local fleet controller running (profile=${GATEWAY_PROFILE}). Press Ctrl+C to stop.`);
   const cleanup = async () => {
+    configControlCapability?.close();
     if (autosaveTimer) clearInterval(autosaveTimer);
     if (usageTimer) clearInterval(usageTimer);
     try { await fleetHandle.stop(); } catch {}

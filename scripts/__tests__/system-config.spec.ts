@@ -17,6 +17,7 @@ import {
 } from "../lib/gitea-admin-broker-client.js";
 import {
   auditSystemConfigForSlug,
+  checkpointBootSystemConfigForSlug,
   pushDirtySystemConfigForSlug,
   reconcileSystemConfigSchema,
   removeLegacyMacConfig,
@@ -26,7 +27,9 @@ import {
   systemConfigPath,
   systemConfigDir,
 } from "../lib/system-config.js";
+import { readSystemConfigStatus } from "../lib/system-config-status.js";
 import { systemConfigFingerprint } from "../lib/system-config-watcher.js";
+import { reconcilePlatformInvariants } from "../lib/system-config-invariants.js";
 import { validateOpenClawConfig } from "../lib/openclaw-config-validation.js";
 
 vi.mock("../lib/git.js", () => ({
@@ -145,6 +148,9 @@ describe("system_config restore", () => {
       }),
       "utf-8",
     );
+    vi.mocked(gitExec).mockImplementation((_cwd: string, args: string) =>
+      args === "rev-parse --verify HEAD" ? null : "ok"
+    );
 
     const result = await restoreSystemConfigForSlug("acme", {
       openclawDir,
@@ -186,9 +192,10 @@ describe("system_config restore", () => {
     fs.rmSync(repoDir, { recursive: true, force: true });
     fs.mkdirSync(path.join(repoDir, ".git"), { recursive: true });
     fs.writeFileSync(templatePath, "{\"agents\":{\"list\":[]}}\n");
-    vi.mocked(gitExec).mockImplementation((_cwd: string, args: string) =>
-      args === "push -u origin main" ? null : "ok"
-    );
+    vi.mocked(gitExec).mockImplementation((_cwd: string, args: string) => {
+      if (args === "rev-parse --verify HEAD") return null;
+      return args === "push -u origin main" ? null : "ok";
+    });
 
     await expect(restoreSystemConfigForSlug("acme", {
       openclawDir,
@@ -197,12 +204,29 @@ describe("system_config restore", () => {
     })).rejects.toThrow(/initial push failed/);
   });
 
+  it("seeds a reused checkout only when both local and remote history are empty", async () => {
+    fs.writeFileSync(templatePath, '{"agents":{"list":[]}}\n');
+    vi.mocked(gitExec).mockImplementation((_cwd: string, args: string) => {
+      if (args === "fetch origin main") return null;
+      if (args === "ls-remote origin refs/heads/main") return "";
+      if (args === "rev-parse --verify HEAD") return null;
+      return "ok";
+    });
+
+    await expect(restoreSystemConfigForSlug("acme", {
+      openclawDir,
+      templatePath,
+      log: () => {},
+    })).resolves.toMatchObject({ seeded: true, restored: true });
+  });
+
   it("retries a retained valid initial commit when the first seed push transiently fails", async () => {
     fs.writeFileSync(templatePath, "{\"agents\":{\"list\":[]}}\n");
     let initialCommitted = false;
     let pushAttempts = 0;
     vi.mocked(gitExec).mockImplementation((_cwd: string, args: string) => {
       if (args === "fetch origin main") return initialCommitted ? null : "ok";
+      if (args === "rev-parse --verify HEAD") return initialCommitted ? "a".repeat(40) : null;
       if (args === "merge --ff-only origin/main") return "ok";
       if (args === 'commit -m "initial system_config openclaw template"') {
         initialCommitted = true;
@@ -265,6 +289,39 @@ describe("system_config restore", () => {
     );
   });
 
+  it("recovers a committed config deletion instead of seeding the stock template over history", async () => {
+    fs.writeFileSync(templatePath, '{"stock":true}\n');
+    writeJson(path.join(repoDir, ".octogee.json"), { schemaVersion: 1 });
+    fs.writeFileSync(path.join(repoDir, ".gitignore"), "*.bak\n*.tmp\n");
+    const recover = vi.fn(() => {
+      writeJson(path.join(repoDir, "openclaw.json"), { recovered: true });
+      return {
+        outcome: "recovered" as const,
+        rejectedCommit: "a".repeat(40),
+        recoveredFromCommit: "b".repeat(40),
+        acceptedCommit: "c".repeat(40),
+      };
+    });
+    vi.mocked(gitExec).mockImplementation((_cwd: string, args: string) => {
+      if (args === "rev-parse --verify HEAD") return "a".repeat(40);
+      return "ok";
+    });
+
+    await expect(restoreSystemConfigForSlug("acme", {
+      openclawDir,
+      templatePath,
+      log: () => {},
+      recover,
+    })).resolves.toMatchObject({ seeded: false, restored: true });
+    expect(recover).toHaveBeenCalledOnce();
+    expect(JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8")))
+      .toEqual({ recovered: true });
+    expect(gitExec).not.toHaveBeenCalledWith(
+      repoDir,
+      'commit -m "initial system_config openclaw template"',
+    );
+  });
+
   it("fast-forwards a reused checkout before reading its authoritative config", async () => {
     writeJson(path.join(repoDir, "openclaw.json"), { agents: { list: [] } });
     writeJson(path.join(repoDir, ".octogee.json"), { schemaVersion: 1 });
@@ -304,7 +361,7 @@ describe("system_config restore", () => {
         mattermost: {
           defaultAccount: "default",
           accounts: {
-            default: { botToken: "legacy-mac-pat" },
+            default: { botToken: "${MM_BOT_TOKEN}" },
             "ceckert-coach": { botToken: { source: "file", provider: "octogee-mattermost", id: "/ceckert-coach" } },
           },
         },
@@ -323,6 +380,114 @@ describe("system_config restore", () => {
     });
     expect(config.channels.mattermost).not.toHaveProperty("defaultAccount");
   });
+
+  it("preserves customer-owned Mattermost defaults and root tokens while removing exact Mac state", () => {
+    const config = {
+      agents: {
+        list: [
+          {
+            id: "octogee-ops-bender",
+            identity: { name: "Mac" },
+            workspace: "/home/node/.openclaw/workspace/ops",
+          },
+          { id: "octogee-ceckert-coach" },
+        ],
+      },
+      bindings: [
+        { agentId: "octogee-ops-bender", match: { channel: "mattermost" } },
+        { agentId: "octogee-ceckert-coach", match: { channel: "mattermost", accountId: "default" } },
+      ],
+      channels: {
+        mattermost: {
+          defaultAccount: "default",
+          botToken: "customer-root-bot-token",
+          token: "customer-root-token",
+          accounts: {
+            default: {
+              botToken: "customer-default-token",
+              groupPolicy: "open",
+            },
+          },
+        },
+      },
+    };
+
+    expect(removeLegacyMacConfig(config, {
+      GATEWAY_ID: "bender",
+      GATEWAY_BUILDER_SLUG: "ceckert",
+    })).toBe(true);
+    expect(config.agents.list).toEqual([
+      expect.objectContaining({ id: "octogee-ceckert-coach", default: true }),
+    ]);
+    expect(config.bindings).toEqual([
+      expect.objectContaining({ agentId: "octogee-ceckert-coach" }),
+    ]);
+    expect(config.channels.mattermost).toMatchObject({
+      defaultAccount: "default",
+      botToken: "customer-root-bot-token",
+      token: "customer-root-token",
+      accounts: {
+        default: {
+          botToken: "customer-default-token",
+          groupPolicy: "open",
+        },
+      },
+    });
+  });
+
+  it("removes only exact historical Mattermost placeholder shapes", () => {
+    const config = {
+      channels: {
+        mattermost: {
+          defaultAccount: "default",
+          botToken: "${MM_BOT_TOKEN}",
+          token: "${MM_BOT_TOKEN}",
+          accounts: {
+            default: { botToken: "${MM_BOT_TOKEN}" },
+          },
+        },
+      },
+    };
+
+    expect(removeLegacyMacConfig(config, {})).toBe(true);
+    expect(config.channels.mattermost.accounts).toEqual({});
+    expect(config.channels.mattermost).not.toHaveProperty("defaultAccount");
+    expect(config.channels.mattermost).not.toHaveProperty("botToken");
+    expect(config.channels.mattermost).not.toHaveProperty("token");
+  });
+
+  it.each(["push-failed", "remote-head-unavailable"])(
+    "keeps boot unready and records %s until changed config is durable",
+    (errorCode) => {
+      writeJson(path.join(repoDir, "openclaw.json"), { customerSetting: true });
+      const now = new Date("2026-07-15T00:00:00.000Z");
+
+      const result = checkpointBootSystemConfigForSlug("acme", {
+        openclawDir,
+        env: { GATEWAY_CLASS: "builder", GATEWAY_BUILDER_SLUG: "acme" },
+        now: () => now,
+        validateConfig: vi.fn(),
+        recover: vi.fn(() => ({
+          outcome: "accepted" as const,
+          acceptedCommit: "a".repeat(40),
+        })),
+        sync: vi.fn(() => ({
+          committed: true,
+          pushed: false,
+          pending: true,
+          errorCode,
+        })),
+      });
+
+      expect(result).toEqual({ ready: false, errorCode });
+      expect(readSystemConfigStatus(openclawDir)).toMatchObject({
+        state: "error",
+        acceptedCommit: "a".repeat(40),
+        lastErrorCode: errorCode,
+        lastErrorAt: now.toISOString(),
+      });
+    },
+  );
 
   it("preserves a customer-owned default Mattermost account when no historical Mac lane exists", () => {
     const config = {
@@ -509,11 +674,57 @@ describe("system_config restore", () => {
       openclawDir,
       templatePath,
       log: () => {},
-    })).rejects.toThrow(/invalid system_config metadata/);
+    })).resolves.toEqual({
+      skipped: "accepted-head-unavailable",
+      seeded: false,
+      restored: false,
+    });
 
     expect(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf-8")).toBe("{ invalid");
     expect(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf-8")).toContain(
       "octogee-acme-coach",
+    );
+  });
+
+  it("rejects and restores malformed dirty metadata before staging durable files", () => {
+    const durableEnv = {
+      GATEWAY_CLASS: "builder",
+      GATEWAY_ID: "bender",
+      API_PUBLIC_URL: "https://api-test.octogee.com",
+    };
+    const config: Record<string, unknown> = {};
+    reconcilePlatformInvariants(config, durableEnv);
+    writeJson(path.join(repoDir, "openclaw.json"), config);
+    fs.writeFileSync(path.join(repoDir, ".octogee.json"), "{ invalid");
+    fs.writeFileSync(path.join(repoDir, ".gitignore"), "*.bak\n*.tmp\n");
+    const head = "a".repeat(40);
+    const git = vi.fn((_cwd: string, args: string) => {
+      if (args === "rev-parse HEAD") return head;
+      if (args === "ls-remote origin refs/heads/main") return `${head}\trefs/heads/main`;
+      if (args === "status --porcelain -- openclaw.json .octogee.json .gitignore") {
+        return " M .octogee.json";
+      }
+      if (args === "show HEAD:.octogee.json") return '{"schemaVersion":1}\n';
+      if (args === "show HEAD:.gitignore") return "*.bak\n*.tmp\n";
+      return "ok";
+    });
+
+    expect(syncSystemConfigForSlug("acme", {
+      openclawDir,
+      env: durableEnv,
+      durablePolicy: true,
+      validateConfig: vi.fn(),
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      gitExec: git,
+      log: () => {},
+    })).toMatchObject({ rejected: true, errorCode: "validation-failed" });
+    expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8")))
+      .toEqual({ schemaVersion: 1 });
+    expect(git).not.toHaveBeenCalledWith(
+      repoDir,
+      "add openclaw.json .octogee.json .gitignore",
+      "/tmp/key",
     );
   });
 

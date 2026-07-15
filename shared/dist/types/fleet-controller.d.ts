@@ -48,6 +48,13 @@ export interface DurableOpenClawConfigControlProtocol {
     protocol: typeof DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL;
     version: typeof DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION;
 }
+export declare const SYSTEM_CONFIG_CONTROL_CAPABILITY_FILE: "system_config.control-capability.json";
+export declare const SYSTEM_CONFIG_CONTROL_CAPABILITY_TTL_MS = 15000;
+export interface SystemConfigControlCapability extends DurableOpenClawConfigControlProtocol {
+    revisionId: string;
+    instanceId: string;
+    observedAt: string;
+}
 export declare const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL: "openclaw-dashboard-bridge";
 export declare const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION: 1;
 export declare const OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_FILE: "dashboard_bridge.capability.json";
