@@ -356,6 +356,26 @@ export function buildFleetHeartbeatSnapshot(input: {
   };
 }
 
+export function buildFleetHealthResponse(input: {
+  status: FleetRuntime["status"];
+  gatewayId: string;
+  version: string;
+  openclawVersion: string;
+  startedAt: number;
+  customers: string[];
+  migratingIn: string[];
+}): Record<string, unknown> {
+  return {
+    status: input.status,
+    gatewayId: input.gatewayId,
+    version: input.version,
+    openclawVersion: input.openclawVersion,
+    startedAt: input.startedAt,
+    customers: input.customers,
+    migratingIn: input.migratingIn,
+  };
+}
+
 interface FleetRuntime {
   mountedCustomers: string[];
   status: "booting" | "ready";
@@ -759,17 +779,18 @@ const waitForGatewayReady = async (): Promise<void> => {
   );
 
   app.get("/health", (_req, res) => {
-    res.json({
+    res.json(buildFleetHealthResponse({
       status: runtime.status,
       gatewayId: opts.gatewayId,
       version: opts.version,
+      openclawVersion: opts.openclawVersion,
       startedAt: PROCESS_STARTED_AT_MS,
       customers: adapter.listLocalCustomerSlugs?.() ?? [],
       // Slugs mid-migration-import — Cowboy's operator poller skips these as eviction
       // candidates until cutover moves their assignment (the operator path has no in-pod
       // reconcile to honor the pin).
       migratingIn: adapter.listMigratingInSlugs?.() ?? [],
-    });
+    }));
   });
 
   const wrappedAdapter = wrapAdapterWithRuntime(adapter, runtime);

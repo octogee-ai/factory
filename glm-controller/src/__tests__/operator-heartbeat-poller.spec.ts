@@ -48,6 +48,20 @@ describe("parseHealthResponse", () => {
     ).toEqual({ status: "ready", customers: [], version: "93073bd" });
   });
 
+  it("carries the OpenClaw runtime version used by retirement fencing", () => {
+    expect(
+      parseHealthResponse({
+        status: "ready",
+        customers: [],
+        openclawVersion: "2026.7.1",
+      }),
+    ).toEqual({
+      status: "ready",
+      customers: [],
+      openclawVersion: "2026.7.1",
+    });
+  });
+
   it("carries migratingIn (string entries only); omits it when absent or non-array", () => {
     expect(
       parseHealthResponse({ status: "ready", customers: ["a"], migratingIn: ["a", 1, "b"] }),
@@ -156,6 +170,22 @@ describe("pollOperatorHeartbeatsOnce", () => {
       status: "ready",
       mountedCustomers: ["ceckert"],
       version: "93073bd",
+    });
+  });
+
+  it("persists the OpenClaw runtime version from /health", async () => {
+    const deps = makeDeps({
+      fetchHealth: vi.fn(async () => ({
+        status: "ready",
+        customers: ["ceckert"],
+        openclawVersion: "2026.7.1",
+      })),
+    });
+    await pollOperatorHeartbeatsOnce(deps);
+    expect(deps.writeHeartbeat).toHaveBeenCalledWith("bender", {
+      status: "ready",
+      mountedCustomers: ["ceckert"],
+      openclawVersion: "2026.7.1",
     });
   });
 

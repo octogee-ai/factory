@@ -3446,11 +3446,31 @@ export function addAdminFleetRoutes(router, deps) {
                 return;
             }
             const updatedBy = req.uid ?? "unknown";
-            await rootRef.update({
-                ...built.ok.patch,
-                updatedAt: Date.now(),
-                updatedBy,
+            const patchResult = await db.runTransaction(async (txn) => {
+                const currentSnap = await txn.get(rootRef);
+                const currentData = currentSnap.exists
+                    ? currentSnap.data()
+                    : undefined;
+                const current = asDurableGatewayRoot(currentData, id);
+                if (!current)
+                    return { ok: false, error: ERR_GATEWAY_NOT_FOUND };
+                if (current.desiredStatus === "retired" || current.retirementClaim != null) {
+                    return {
+                        ok: false,
+                        error: "gateway has a current retirement claim",
+                    };
+                }
+                txn.update(rootRef, {
+                    ...built.ok.patch,
+                    updatedAt: Date.now(),
+                    updatedBy,
+                });
+                return { ok: true };
             });
+            if (!patchResult.ok) {
+                res.status(409).json({ error: patchResult.error, gatewayId: id });
+                return;
+            }
             res.status(202).json({ gatewayId: id, updated: Object.keys(built.ok.patch) });
         }
         catch (e) {

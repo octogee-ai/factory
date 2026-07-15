@@ -1120,6 +1120,31 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
     expect(res.body).toMatchObject({ error: "gateway durable root is invalid", gatewayId: "zeta" });
     expect(store.get("gateways/zeta")?.sizingTier).toBeNull();
   });
+
+  it("does not overwrite a retirement claim that lands after the route reads the root", async () => {
+    const seed = seedNewSchemaGateway("zeta", sharedPayload());
+    const { app, store } = mkApp(seed, {
+      beforeFirstTransaction: (current) => {
+        current.set("gateways/zeta", {
+          ...current.get("gateways/zeta"),
+          desiredStatus: "retired",
+          retirementVersion: 1,
+          retirementClaim: { operationId: "retire-1", version: 1 },
+        });
+      },
+    });
+
+    const response = await request(app)
+      .patch("/gateways/zeta")
+      .send({ desiredStatus: "paused" });
+
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({
+      error: "gateway has a current retirement claim",
+      gatewayId: "zeta",
+    });
+    expect(store.get("gateways/zeta")?.desiredStatus).toBe("retired");
+  });
 });
 
 describe("DELETE /gateways/:id — retirement claim", () => {

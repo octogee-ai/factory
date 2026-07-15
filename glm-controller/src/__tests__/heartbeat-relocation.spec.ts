@@ -79,6 +79,19 @@ describe("revisionHeartbeatMerge — writer targets glmGateways/{id}.heartbeat",
     const merge = revisionHeartbeatMerge({ status: "ready", mountedCustomers: [] }, 5);
     expect(merge.heartbeat).not.toHaveProperty("startedAt");
   });
+
+  it("persists the OpenClaw runtime version from trusted pod health", () => {
+    expect(
+      revisionHeartbeatMerge(
+        {
+          status: "ready",
+          mountedCustomers: [],
+          openclawVersion: "2026.7.1",
+        },
+        5,
+      ).heartbeat,
+    ).toMatchObject({ openclawVersion: "2026.7.1" });
+  });
 });
 
 describe("readHeartbeatLiveness — reader prefers glmGateways heartbeat, falls back to legacy", () => {

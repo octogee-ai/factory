@@ -68,7 +68,17 @@ function canonicalRevision(gatewayId, view) {
         ? revision
         : null;
 }
-function nonRetiredRevisionError(gatewayId, liveRevisionId, revision) {
+function hasSafeDedicatedConfigTelemetry(heartbeat, status, now) {
+    return !!status &&
+        hasDurableOpenClawConfigControlProtocol(status) &&
+        freshObservation(status.observedAt, now) &&
+        status.runtimeReady === true &&
+        status.freezeState === "unfrozen" &&
+        status.bootRole === "normal" &&
+        nonEmptyString(heartbeat.openclawVersion) &&
+        status.openclawVersion === heartbeat.openclawVersion;
+}
+function nonRetiredRevisionError(gatewayId, liveRevisionId, revision, now, configControlRequired) {
     if (revision.lifecycle === "retired")
         return null;
     const heartbeat = heartbeatFromRevision(revision);
@@ -77,21 +87,30 @@ function nonRetiredRevisionError(gatewayId, liveRevisionId, revision) {
         !heartbeat.mountedCustomers.every((customer) => typeof customer === "string" && customer.length > 0)) {
         return `gateway ${gatewayId} revision ${revision.revisionId} mount telemetry is unavailable`;
     }
+    if (heartbeat.mountedCustomers.length > 0) {
+        return `gateway ${gatewayId} revision ${revision.revisionId} still has mounted customers: ${heartbeat.mountedCustomers.join(", ")}`;
+    }
+    if (!freshObservation(heartbeat.lastHeartbeatAt, now)) {
+        return `gateway ${gatewayId} revision ${revision.revisionId} telemetry is stale or unavailable`;
+    }
     if (hasGatewayRetirementConfigObligation(heartbeat.configStatus)) {
         return revision.revisionId === liveRevisionId
             ? `gateway ${gatewayId} live revision has an active config-control obligation`
             : `gateway ${gatewayId} revision ${revision.revisionId} has an active config-control obligation`;
     }
-    return heartbeat.mountedCustomers.length > 0
-        ? `gateway ${gatewayId} revision ${revision.revisionId} still has mounted customers: ${heartbeat.mountedCustomers.join(", ")}`
-        : null;
+    const status = isPlainRecord(heartbeat.configStatus) ? heartbeat.configStatus : null;
+    if (configControlRequired &&
+        !hasSafeDedicatedConfigTelemetry(heartbeat, status, now)) {
+        return `gateway ${gatewayId} revision ${revision.revisionId} config telemetry is stale or unavailable`;
+    }
+    return null;
 }
-function liveRuntimeIdentity(revision, now) {
+function liveRuntimeIdentity(revision, now, configControlRequired) {
     const heartbeat = heartbeatFromRevision(revision);
     const status = heartbeat && isPlainRecord(heartbeat.configStatus)
         ? heartbeat.configStatus
         : null;
-    if (!revision || !heartbeat || !status)
+    if (!revision || !heartbeat)
         return null;
     const complete = [
         revision.lifecycle === "serving",
@@ -100,12 +119,7 @@ function liveRuntimeIdentity(revision, now) {
         typeof heartbeat.startedAt === "number" && Number.isFinite(heartbeat.startedAt),
         nonEmptyString(heartbeat.version),
         nonEmptyString(heartbeat.openclawVersion),
-        hasDurableOpenClawConfigControlProtocol(status),
-        freshObservation(status.observedAt, now),
-        status.runtimeReady === true,
-        status.freezeState === "unfrozen",
-        status.bootRole === "normal",
-        status.openclawVersion === heartbeat.openclawVersion,
+        !configControlRequired || hasSafeDedicatedConfigTelemetry(heartbeat, status, now),
     ].every(Boolean);
     return complete
         ? {
@@ -116,6 +130,7 @@ function liveRuntimeIdentity(revision, now) {
         : null;
 }
 function inspectRetirementState(gatewayId, root, revisions, now) {
+    const configControlRequired = root.gatewayClass !== "shared";
     const liveRevisionId = root.liveRevisionId;
     const liveRelease = root.liveRelease;
     if (typeof liveRevisionId !== "string" ||
@@ -139,7 +154,7 @@ function inspectRetirementState(gatewayId, root, revisions, now) {
         }
         if (view.id === liveRevisionId)
             liveRevision = revision;
-        const error = nonRetiredRevisionError(gatewayId, liveRevisionId, revision);
+        const error = nonRetiredRevisionError(gatewayId, liveRevisionId, revision, now, configControlRequired);
         if (error) {
             return {
                 error,
@@ -156,7 +171,7 @@ function inspectRetirementState(gatewayId, root, revisions, now) {
             liveRuntimeIdentity: null,
         };
     }
-    const identity = liveRuntimeIdentity(liveRevision, now);
+    const identity = liveRuntimeIdentity(liveRevision, now, configControlRequired);
     if (!identity) {
         return {
             error: `gateway ${gatewayId} exact live revision telemetry/config status is unavailable`,

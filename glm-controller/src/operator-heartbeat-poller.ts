@@ -29,6 +29,7 @@ export const EVICT_AFTER_STREAK = 2;
 export interface OperatorGatewayHealth {
   status: string;
   version?: string;
+  openclawVersion?: string;
   /** The pod's current process start (epoch ms). Persisted trusted-side so the
    *  shell reaper can detect a roll. Optional — omitted by a malformed /health. */
   startedAt?: number;
@@ -44,6 +45,7 @@ export interface OperatorHeartbeatRecord {
   status: string;
   mountedCustomers: string[];
   version?: string;
+  openclawVersion?: string;
   /** Live pod-boot time (epoch ms) — lets reapGoneGatewayShells reap pre-roll shells. */
   startedAt?: number;
   configStatus?: GatewayConfigStatus;
@@ -108,6 +110,7 @@ export function parseHealthResponse(json: unknown): OperatorGatewayHealth | null
     customers?: unknown;
     startedAt?: unknown;
     version?: unknown;
+    openclawVersion?: unknown;
     migratingIn?: unknown;
     configStatus?: unknown;
   };
@@ -118,6 +121,9 @@ export function parseHealthResponse(json: unknown): OperatorGatewayHealth | null
   );
   const health: OperatorGatewayHealth = { status: body.status, customers };
   if (typeof body.version === "string") health.version = body.version;
+  if (typeof body.openclawVersion === "string" && body.openclawVersion.length > 0) {
+    health.openclawVersion = body.openclawVersion;
+  }
   if (typeof body.startedAt === "number") health.startedAt = body.startedAt;
   if (Array.isArray(body.migratingIn)) {
     health.migratingIn = body.migratingIn.filter(
@@ -241,6 +247,9 @@ export async function pollOperatorHeartbeatsOnce(
         mountedCustomers: intersectMounted(health.customers, assigned),
       };
       if (typeof health.version === "string") record.version = health.version;
+      if (typeof health.openclawVersion === "string") {
+        record.openclawVersion = health.openclawVersion;
+      }
       if (typeof health.startedAt === "number") record.startedAt = health.startedAt;
       if (health.configStatus) record.configStatus = health.configStatus;
       await deps.writeHeartbeat(gatewayId, record);

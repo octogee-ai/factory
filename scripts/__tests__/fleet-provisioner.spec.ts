@@ -6,6 +6,7 @@ import * as path from "node:path";
 import {
   CLONE_RETRY_DELAYS_MS,
   buildFleetHeartbeatSnapshot,
+  buildFleetHealthResponse,
   cloneRetryDelayMs,
   cloneRetryReady,
   gatewayRevisionServiceName,
@@ -217,6 +218,20 @@ describe("observed split — evict keys off raw presence, mount off completion",
 });
 
 describe("in-pod revision-keyed heartbeat (PR3 dependency)", () => {
+  it("reports the OpenClaw runtime version through the poller health endpoint", () => {
+    expect(
+      buildFleetHealthResponse({
+        status: "ready",
+        gatewayId: "default",
+        version: "sha-1",
+        openclawVersion: "2026.7.1",
+        startedAt: 42,
+        customers: [],
+        migratingIn: [],
+      }),
+    ).toMatchObject({ openclawVersion: "2026.7.1" });
+  });
+
   it("carries revisionId onto the heartbeat snapshot so glmGateways/{revisionId}.heartbeat gets written", () => {
     const snap = buildFleetHeartbeatSnapshot({
       gatewayId: "default",

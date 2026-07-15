@@ -40,6 +40,7 @@ export interface PollerHeartbeatRecord {
   mountedCustomers: string[];
   startedAt?: number;
   version?: string;
+  openclawVersion?: string;
   configStatus?: GatewayConfigStatus;
 }
 
@@ -55,6 +56,9 @@ export function revisionHeartbeatMerge(
   };
   if (typeof record.startedAt === "number") heartbeat.startedAt = record.startedAt;
   if (typeof record.version === "string") heartbeat.version = record.version;
+  if (typeof record.openclawVersion === "string") {
+    heartbeat.openclawVersion = record.openclawVersion;
+  }
   if (record.configStatus) {
     heartbeat.configStatus = { ...record.configStatus, observedAt: lastHeartbeatAt };
   }
