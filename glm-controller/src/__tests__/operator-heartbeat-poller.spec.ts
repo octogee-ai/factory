@@ -63,7 +63,7 @@ describe("parseHealthResponse", () => {
 
   it("carries only a structurally valid nested configStatus marker", () => {
     const configStatus = {
-      controlProtocol: { protocol: "durable-openclaw-config", version: 1 },
+      controlProtocol: { protocol: "durable-openclaw-config", version: 2 },
       freezeState: "freezing",
       openclawVersion: "2026.7.1",
       openclawForkSha: "abc123",
@@ -161,7 +161,7 @@ describe("pollOperatorHeartbeatsOnce", () => {
 
   it("persists the config control protocol marker for controller-side enforcement", async () => {
     const configStatus = {
-      controlProtocol: { protocol: "durable-openclaw-config" as const, version: 1 as const },
+      controlProtocol: { protocol: "durable-openclaw-config" as const, version: 2 as const },
       freezeState: "freezing" as const,
       openclawVersion: "2026.7.1",
       openclawForkSha: "abc123",
@@ -192,7 +192,7 @@ describe("pollOperatorHeartbeatsOnce", () => {
       status: "ready",
       customers: [],
       configStatus: {
-        controlProtocol: { protocol: "durable-openclaw-config", version: 1 },
+        controlProtocol: { protocol: "durable-openclaw-config", version: 2 },
         freezeState: "frozen",
         dashboardControlState: "ready",
         dashboardControlProtocol: { protocol: "openclaw-dashboard-bridge", version: 2 },

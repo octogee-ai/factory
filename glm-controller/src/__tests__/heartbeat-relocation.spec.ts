@@ -45,7 +45,7 @@ describe("revisionHeartbeatMerge — writer targets glmGateways/{id}.heartbeat",
 
   it("timestamps each accepted config marker and clears an omitted marker", () => {
     const timestamp = { toMillis: () => 1000 };
-    const controlProtocol = { protocol: "durable-openclaw-config" as const, version: 1 as const };
+    const controlProtocol = { protocol: "durable-openclaw-config" as const, version: 2 as const };
     expect(revisionHeartbeatMerge({
       status: "ready",
       mountedCustomers: [],

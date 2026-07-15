@@ -173,12 +173,15 @@ async function releaseConfigFreeze(
 ): Promise<ConfigFreezeReleaseResult> {
   await report(deps, { name: "unfreeze-config", status: "running" });
   try {
-    await deps.client.unfreezeConfig({
+    const response = await deps.client.unfreezeConfig({
       migrationId: input.migrationId,
       gatewayId: input.fromGatewayId,
       transportId: input.fromTransportId ?? input.fromGatewayId,
       slug: input.slug,
     });
+    if (!response.unfrozen) {
+      throw new Error("config unfreeze was not confirmed");
+    }
     await report(deps, { name: "unfreeze-config", status: "done" });
     return { kind: "released" };
   } catch (error) {
