@@ -37,7 +37,11 @@ import {
   parseAssignmentDoc,
   readAssignmentDocsForGateway,
 } from "@octogee/core/assignment-doc";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
+import {
+  DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
+  DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
+  GATEWAYS_COLLECTION,
+} from "@octogee/shared/types/fleet-controller";
 import {
   GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
   isAssignmentState,
@@ -426,6 +430,29 @@ export function parseSystemConfigObservedStatus(value: unknown): Record<string, 
   if (input.openclawVersion !== undefined) {
     if (typeof input.openclawVersion !== "string" || !/^[A-Za-z0-9._+-]{1,80}$/.test(input.openclawVersion)) return null;
     out.openclawVersion = input.openclawVersion;
+  }
+  if (input.openclawForkSha !== undefined) {
+    if (
+      typeof input.openclawForkSha !== "string" ||
+      (input.openclawForkSha !== "unknown" && !/^[0-9a-f]{7,64}$/.test(input.openclawForkSha))
+    ) return null;
+    out.openclawForkSha = input.openclawForkSha;
+  }
+  if (input.controlProtocol !== undefined) {
+    if (
+      !input.controlProtocol ||
+      typeof input.controlProtocol !== "object" ||
+      Array.isArray(input.controlProtocol)
+    ) return null;
+    const protocol = input.controlProtocol as Record<string, unknown>;
+    if (
+      protocol.protocol !== DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL ||
+      protocol.version !== DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION
+    ) return null;
+    out.controlProtocol = {
+      protocol: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
+      version: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
+    };
   }
   return out;
 }

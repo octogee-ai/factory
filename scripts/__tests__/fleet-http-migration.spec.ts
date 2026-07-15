@@ -68,6 +68,17 @@ const PUBLIC_KEY = FLEET_KEY_PAIR.publicKey;
 const GATEWAY_ID = "gw-a";
 const SOURCE_POD_IP = ["10", "1", "0", "10"].join(".");
 const TARGET_POD_IP = ["10", "1", "0", "20"].join(".");
+const CONTROL_NOW = Date.parse("2026-07-15T00:00:00.000Z");
+let controlRequestSequence = 0;
+
+function configControlBody<T extends { migrationId: string; slug: string }>(body: T) {
+  return {
+    ...body,
+    issuedAt: CONTROL_NOW - 1_000,
+    expiresAt: CONTROL_NOW + 30_000,
+    requestId: `${body.migrationId}-request-${++controlRequestSequence}`,
+  };
+}
 
 const SAMPLE_QUIESCE: QuiesceRequestBody = {
   migrationId: "mig-1",
@@ -282,6 +293,7 @@ function mkDeps(overrides: Partial<MigrationHandlerDeps> = {}): MigrationHandler
     gatewayId: GATEWAY_ID,
     adapter: mkAdapter(),
     log: vi.fn(),
+    now: () => CONTROL_NOW,
     ...overrides,
   };
 }
@@ -466,7 +478,7 @@ describe("createFlushHandler", () => {
 
   it("fails closed when the gateway did not configure a flush implementation", async () => {
     const handler = createFlushHandler(mkDeps());
-    const body = { migrationId: "mig-1", slug: "chris" };
+    const body = configControlBody({ migrationId: "mig-1", slug: "chris" });
     const req = mkRequest(body, {
       signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
     });
@@ -486,7 +498,7 @@ describe("system config roll handlers", () => {
       configHash: "b".repeat(64),
     }));
     const handler = createConfigFreezeHandler(mkDeps({ freezeSystemConfig }));
-    const body = { migrationId: "mig-1", slug: "chris" };
+    const body = configControlBody({ migrationId: "mig-1", slug: "chris" });
     const rawBody = JSON.stringify(body);
     const req = mkRequest(body, {
       signature: signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody),
@@ -518,11 +530,11 @@ describe("system config roll handlers", () => {
       runtimeConfigHash: "runtime-after",
     }));
     const handler = createConfigRestoreProofHandler(mkDeps({ proveSystemConfigRestore }));
-    const body = {
+    const body = configControlBody({
       migrationId: "mig-1",
       slug: "chris",
       checkpointCommit: "a".repeat(40),
-    };
+    });
     const rawBody = JSON.stringify(body);
     const req = mkRequest(body, {
       signature: signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody),
@@ -551,7 +563,7 @@ describe("system config roll handlers", () => {
 
   it("unfreezes the source on abort and fails closed when roll control is absent", async () => {
     const unfreezeSystemConfig = vi.fn(() => ({ unfrozen: true }));
-    const body = { migrationId: "mig-1", slug: "chris" };
+    const body = configControlBody({ migrationId: "mig-1", slug: "chris" });
     const rawBody = JSON.stringify(body);
     const request = () => mkRequest(body, {
       signature: signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody),
@@ -569,6 +581,56 @@ describe("system config roll handlers", () => {
     const absentResponse = mkResponse();
     await absent(request(), absentResponse.res, vi.fn());
     expect(absentResponse.getStatus()).toBe(501);
+  });
+
+  it("rejects missing or expired config-control freshness before mutation", async () => {
+    const freezeSystemConfig = vi.fn(() => ({
+      checkpointCommit: "a".repeat(40),
+      configHash: "b".repeat(64),
+    }));
+    const handler = createConfigFreezeHandler(mkDeps({ freezeSystemConfig }));
+    for (const body of [
+      { migrationId: "mig-missing", slug: "chris" },
+      {
+        migrationId: "mig-expired",
+        slug: "chris",
+        issuedAt: CONTROL_NOW - 120_000,
+        expiresAt: CONTROL_NOW - 60_000,
+        requestId: "expired-request",
+      },
+    ]) {
+      const rawBody = JSON.stringify(body);
+      const response = mkResponse();
+      await handler(mkRequest(body, {
+        signature: signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody),
+      }), response.res, vi.fn());
+      expect(response.getStatus()).toBe(401);
+    }
+    expect(freezeSystemConfig).not.toHaveBeenCalled();
+  });
+
+  it("rejects replay of an already accepted config-control request id", async () => {
+    const freezeSystemConfig = vi.fn(() => ({
+      checkpointCommit: "a".repeat(40),
+      configHash: "b".repeat(64),
+    }));
+    const handler = createConfigFreezeHandler(mkDeps({ freezeSystemConfig }));
+    const body = {
+      ...configControlBody({ migrationId: "mig-replay", slug: "chris" }),
+      requestId: "one-time-request",
+    };
+    const rawBody = JSON.stringify(body);
+    const request = () => mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody),
+    });
+
+    const first = mkResponse();
+    await handler(request(), first.res, vi.fn());
+    expect(first.getStatus()).toBe(200);
+    const replay = mkResponse();
+    await handler(request(), replay.res, vi.fn());
+    expect(replay.getStatus()).toBe(409);
+    expect(freezeSystemConfig).toHaveBeenCalledTimes(1);
   });
 });
 

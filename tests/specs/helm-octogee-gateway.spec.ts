@@ -807,16 +807,28 @@ expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
     );
   });
 
-  it("keeps repair mode live on 18790 while OpenClaw readiness stays on 18789", () => {
-    const out = helmTemplate();
-    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+  it("keeps shared gateways on the proven OpenClaw HTTP startup and TCP steady-state probes", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const gw = containerBlock(dep, "gateway");
+
+    expect(gw).toMatch(/startupProbe:\s+httpGet:\s+path:\s*\/healthz\s+port:\s*18789/);
+    expect(gw).toMatch(/livenessProbe:\s+tcpSocket:\s+port:\s*18789/);
+    expect(gw).toMatch(/readinessProbe:\s+tcpSocket:\s+port:\s*18789/);
+  });
+
+  it("keeps isolated repair live on 18790 while readiness requires accepted OpenClaw health", () => {
+    const dep = findDoc(
+      helmTemplate("octogee-gw-bender", { gatewayId: "bender", gatewayClass: "builder" }),
+      "Deployment",
+      "octogee-gateway-bender",
+    ) ?? "";
     const gw = containerBlock(dep, "gateway");
 
     expect(gw).toMatch(
       /startupProbe:\s+httpGet:\s+path:\s*\/healthz\s+port:\s*18790/,
     );
     expect(gw).toMatch(/livenessProbe:\s+httpGet:\s+path:\s*\/healthz\s+port:\s*18790/);
-    expect(gw).toMatch(/readinessProbe:\s+httpGet:\s+path:\s*\/healthz\s+port:\s*18789/);
+    expect(gw).toMatch(/readinessProbe:\s+httpGet:\s+path:\s*\/readyz\s+port:\s*18790/);
     expect(dep).not.toMatch(/__openclaw__/);
   });
 

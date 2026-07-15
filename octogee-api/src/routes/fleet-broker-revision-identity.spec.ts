@@ -111,6 +111,13 @@ describe("system config observed status validation", () => {
       runtimeReady: true,
       runtimeHealth: "healthy",
       runtimeHealthCheckedAt: "2026-07-14T20:00:01.000Z",
+      freezeState: "frozen",
+      openclawVersion: "2026.7.1",
+      openclawForkSha: "abc1234",
+      controlProtocol: {
+        protocol: "durable-openclaw-config",
+        version: 1,
+      },
       unknown: "drop-me",
     })).toEqual({
       state: "error",
@@ -122,6 +129,13 @@ describe("system config observed status validation", () => {
       runtimeReady: true,
       runtimeHealth: "healthy",
       runtimeHealthCheckedAt: "2026-07-14T20:00:01.000Z",
+      freezeState: "frozen",
+      openclawVersion: "2026.7.1",
+      openclawForkSha: "abc1234",
+      controlProtocol: {
+        protocol: "durable-openclaw-config",
+        version: 1,
+      },
     });
   });
 
@@ -136,6 +150,10 @@ describe("system config observed status validation", () => {
       state: "error",
       token: "must-not-pass",
     })).toEqual({ state: "error" });
+    expect(parseSystemConfigObservedStatus({
+      state: "clean",
+      controlProtocol: { protocol: "durable-openclaw-config", version: 2 },
+    })).toBeNull();
   });
 });
 

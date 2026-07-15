@@ -115,6 +115,40 @@ describe("system config sync hardening", () => {
     });
   });
 
+  it("returns the validated local head when its durable push remains pending", () => {
+    const h = fixture();
+    let head = "a".repeat(40);
+    const gitExec = vi.fn((_cwd: string, command: string) => {
+      if (command === "rev-parse HEAD") return head;
+      if (command.startsWith("ls-remote")) return `${"a".repeat(40)}\trefs/heads/main`;
+      if (command.startsWith("status --porcelain")) return " M openclaw.json";
+      if (command.startsWith("add ")) return "";
+      if (command.startsWith("commit ")) {
+        head = "b".repeat(40);
+        return "";
+      }
+      if (command === "push origin main") return null;
+      if (command.startsWith("merge-base ")) return "a".repeat(40);
+      return "";
+    });
+
+    expect(syncSystemConfigForSlug("ceckert", {
+      openclawDir: h.openclawDir,
+      env,
+      durablePolicy: true,
+      gitExec,
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      validateConfig: vi.fn(),
+    })).toMatchObject({
+      committed: true,
+      pushed: false,
+      pending: true,
+      errorCode: "push-failed",
+      acceptedCommit: "b".repeat(40),
+    });
+  });
+
   it("keeps retrying when a successful push cannot prove its accepted head", () => {
     const h = fixture();
     let headReads = 0;

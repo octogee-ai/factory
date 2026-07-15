@@ -1,5 +1,9 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+
+import { acquireSystemConfigSyncLeaseSync } from "@octogee/core/system-config-mutation-lease";
+import type { DurableOpenClawConfigControlProtocol } from "../../shared/types/fleet-controller.js";
 
 export type SystemConfigState = "clean" | "dirty" | "syncing" | "error" | "unavailable";
 
@@ -15,6 +19,8 @@ export interface SystemConfigObservedStatus {
   lastErrorAt?: string | null;
   schemaVersion?: number;
   openclawVersion?: string;
+  openclawForkSha?: string;
+  controlProtocol?: DurableOpenClawConfigControlProtocol;
   doctorResult?: "ok" | "error";
   bootRecovery?: "none" | "recovered" | "unavailable";
   watcherState?: "running" | "stopped";
@@ -53,6 +59,7 @@ const STRING_FIELDS = [
   "configHash",
   "lastSyncedAt",
   "openclawVersion",
+  "openclawForkSha",
   "runtimeHealthCheckedAt",
   "updatedAt",
 ] as const;
@@ -87,6 +94,22 @@ function projectSystemConfigStatus(record: Record<string, unknown>): SystemConfi
   if (record.runtimeHealth === "repair" || record.runtimeHealth === "healthy" || record.runtimeHealth === "unhealthy") {
     status.runtimeHealth = record.runtimeHealth;
   }
+  if (
+    record.controlProtocol !== null &&
+    typeof record.controlProtocol === "object" &&
+    !Array.isArray(record.controlProtocol)
+  ) {
+    const controlProtocol = record.controlProtocol as Record<string, unknown>;
+    if (
+      controlProtocol.protocol === "durable-openclaw-config" &&
+      controlProtocol.version === 1
+    ) {
+      status.controlProtocol = {
+        protocol: "durable-openclaw-config",
+        version: 1,
+      };
+    }
+  }
   return status;
 }
 
@@ -108,17 +131,40 @@ export function updateSystemConfigStatus(
   now: () => Date = () => new Date(),
 ): SystemConfigObservedStatus {
   fs.mkdirSync(openclawDir, { recursive: true });
-  const status = {
-    ...readSystemConfigStatus(openclawDir),
-    ...patch,
-    updatedAt: now().toISOString(),
-  };
-  const target = systemConfigStatusPath(openclawDir);
-  const tmp = `${target}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify(status, null, 2)}\n`, { mode: 0o600 });
-  fs.renameSync(tmp, target);
-  fs.chmodSync(target, 0o600);
-  return status;
+  const release = acquireStatusWriterLock(openclawDir);
+  try {
+    const status = {
+      ...readSystemConfigStatus(openclawDir),
+      ...patch,
+      updatedAt: now().toISOString(),
+    };
+    const target = systemConfigStatusPath(openclawDir);
+    const tmp = `${target}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(status, null, 2)}\n`, { mode: 0o600 });
+    try {
+      fs.renameSync(tmp, target);
+    } finally {
+      fs.rmSync(tmp, { force: true });
+    }
+    fs.chmodSync(target, 0o600);
+    return status;
+  } finally {
+    release();
+  }
+}
+
+function acquireStatusWriterLock(openclawDir: string): () => void {
+  const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const lease = acquireSystemConfigSyncLeaseSync({
+      openclawDir,
+      lockName: "system_config.status.lock",
+    });
+    if (lease) return () => lease.release();
+    Atomics.wait(sleeper, 0, 0, 5);
+  }
+  const lockPath = path.join(openclawDir, "system_config.status.lock");
+  throw new Error(`[system_config] timed out acquiring status writer lock ${lockPath}`);
 }
 
 function escapeLabel(value: string): string {

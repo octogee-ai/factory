@@ -13,6 +13,8 @@ export const MIGRATION_VERIFY_TIMEOUT_MS = VERIFY_ACCOUNT_TIMEOUT_MS + 30_000;
 // local-coach-wired.ts (the pin) and fleet-provisioner getEvictObservedSlugs (the skip).
 export const MIGRATING_IN_PIN_TTL_MS = MIGRATION_TRANSFER_TIMEOUT_MS + 60_000;
 export const SIGNATURE_HEADER = "X-Fleet-Controller-Signature";
+export const DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL = "durable-openclaw-config";
+export const DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION = 1;
 export const GATEWAYS_COLLECTION = "gateways";
 export const MIGRATION_RSYNC_PORT_DEFAULT = 30873;
 export const MIGRATION_ID_HEADER = "X-Migration-Id";

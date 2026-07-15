@@ -43,12 +43,14 @@ describe("system config accepted-head recovery", () => {
     const h = fixture('{"gateway":{"port":9999}}\n');
     const commands: string[] = [];
     let head = "bad111";
+    const newestValidAncestor = "b".repeat(40);
+    const olderValidAncestor = "c".repeat(40);
     const gitExec = vi.fn((_cwd: string, command: string) => {
       commands.push(command);
       if (command === "rev-parse HEAD") return head;
-      if (command === "rev-list HEAD") return "bad111\ngood222\nold333";
-      if (command === "show good222:openclaw.json") return '{"customerSetting":true}\n';
-      if (command === "show old333:openclaw.json") return validConfig({ customerSetting: false });
+      if (command === "rev-list HEAD") return `bad111\n${newestValidAncestor}\n${olderValidAncestor}`;
+      if (command === `show ${newestValidAncestor}:openclaw.json`) return '{"customerSetting":true}\n';
+      if (command === `show ${olderValidAncestor}:openclaw.json`) return validConfig({ customerSetting: false });
       if (command.startsWith("add ")) return "";
       if (command.startsWith("commit ")) {
         head = "recovered444";
@@ -73,7 +75,7 @@ describe("system config accepted-head recovery", () => {
     expect(result).toEqual({
       outcome: "recovered",
       rejectedCommit: "bad111",
-      recoveredFromCommit: "good222",
+      recoveredFromCommit: newestValidAncestor,
       acceptedCommit: "recovered444",
     });
     expect(JSON.parse(fs.readFileSync(h.configPath, "utf8"))).toMatchObject({ customerSetting: true });
@@ -109,6 +111,26 @@ describe("system config accepted-head recovery", () => {
     })).toEqual({ outcome: "unavailable", rejectedCommit: "bad111" });
     expect(fs.readFileSync(h.configPath, "utf8")).toBe("not-json\n");
     expect(gitExec).not.toHaveBeenCalledWith(h.repoDir, expect.stringMatching(/^commit /), expect.anything());
+  });
+
+  it("ignores non-SHA recovery history entries before building a git show command", () => {
+    const h = fixture("not-json\n");
+    const gitExec = vi.fn((_cwd: string, command: string) => {
+      if (command === "rev-parse HEAD") return "a".repeat(40);
+      if (command === "rev-list HEAD") return `${"a".repeat(40)}\n--help`;
+      return null;
+    });
+
+    expect(recoverSystemConfigHead({
+      ...h,
+      slug: "ceckert",
+      env,
+      gitExec,
+      validateConfig: vi.fn(() => {
+        throw new Error("invalid");
+      }),
+    })).toMatchObject({ outcome: "unavailable" });
+    expect(gitExec).not.toHaveBeenCalledWith(h.repoDir, "show --help:openclaw.json", expect.anything());
   });
 
   it("records the current head when it already passes policy and validation", () => {
@@ -168,6 +190,34 @@ describe("system config accepted-head recovery", () => {
       }),
     })).toMatchObject({ ready: true });
     expect(readSystemConfigStatus(h.openclawDir)).toMatchObject({ doctorResult: "ok" });
+  });
+
+  it("boots a locally accepted config while a transient Gitea push remains durably pending", () => {
+    const h = fixture(validConfig({ harmless: true }));
+
+    expect(checkpointBootSystemConfigForSlug("ceckert", {
+      openclawDir: h.openclawDir,
+      env,
+      validateConfig: vi.fn(),
+      recover: () => ({ outcome: "accepted", acceptedCommit: "a".repeat(40) }),
+      sync: () => ({
+        committed: true,
+        pushed: false,
+        pending: true,
+        errorCode: "push-failed",
+        acceptedCommit: "b".repeat(40),
+      }),
+    })).toEqual({
+      ready: true,
+      acceptedCommit: "b".repeat(40),
+      durablePending: true,
+      errorCode: "push-failed",
+    });
+    expect(readSystemConfigStatus(h.openclawDir)).toMatchObject({
+      state: "error",
+      acceptedCommit: "b".repeat(40),
+      lastErrorCode: "push-failed",
+    });
   });
 
   it("keeps boot unavailable and observable when no accepted ancestor exists", () => {

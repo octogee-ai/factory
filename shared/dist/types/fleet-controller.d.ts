@@ -42,6 +42,12 @@ export declare const MIGRATION_UNMOUNT_TIMEOUT_MS: number;
 export declare const MIGRATION_VERIFY_TIMEOUT_MS: number;
 export declare const MIGRATING_IN_PIN_TTL_MS: number;
 export declare const SIGNATURE_HEADER = "X-Fleet-Controller-Signature";
+export declare const DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL: "durable-openclaw-config";
+export declare const DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION: 1;
+export interface DurableOpenClawConfigControlProtocol {
+    protocol: typeof DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL;
+    version: typeof DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION;
+}
 export declare const GATEWAYS_COLLECTION = "gateways";
 export interface MigrationRequestBody {
     migrationId: string;
@@ -116,14 +122,19 @@ export interface QuiesceResponse {
     drained: boolean;
     runningCount: number;
 }
-export interface ConfigFreezeRequestBody extends MigrationRequestBody {
+export interface ConfigControlRequestBody extends MigrationRequestBody {
+    issuedAt: number;
+    expiresAt: number;
+    requestId: string;
+}
+export interface ConfigFreezeRequestBody extends ConfigControlRequestBody {
 }
 export interface ConfigFreezeResponse extends MigrationRequestBody {
     frozen: true;
     checkpointCommit: string;
     configHash: string;
 }
-export interface ConfigRestoreProofRequestBody extends MigrationRequestBody {
+export interface ConfigRestoreProofRequestBody extends ConfigControlRequestBody {
     checkpointCommit: string;
 }
 export interface ConfigRestoreProofResponse extends MigrationRequestBody {
@@ -136,7 +147,7 @@ export interface ConfigRestoreProofResponse extends MigrationRequestBody {
     configReadyAt: number;
     runtimeConfigHash: string;
 }
-export interface ConfigUnfreezeRequestBody extends MigrationRequestBody {
+export interface ConfigUnfreezeRequestBody extends ConfigControlRequestBody {
 }
 export interface ConfigUnfreezeResponse extends MigrationRequestBody {
     unfrozen: boolean;

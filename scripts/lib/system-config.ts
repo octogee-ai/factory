@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import * as fs from "fs";
 import * as path from "path";
 
+import { acquireSystemConfigSyncLeaseSync } from "@octogee/core/system-config-mutation-lease";
+
 import { isValidUsername } from "../../shared/types/identity.js";
 import {
   log as defaultLog,
@@ -117,7 +119,13 @@ export interface SystemConfigAuditResult {
 }
 
 export type SystemConfigBootCheckpointResult =
-  | { ready: true; acceptedCommit: string; recoveredFromCommit?: string }
+  | {
+      ready: true;
+      acceptedCommit: string;
+      recoveredFromCommit?: string;
+      durablePending?: true;
+      errorCode?: string;
+    }
   | { ready: false; errorCode: string; rejectedCommit?: string };
 
 interface SystemConfigBootCheckpointOptions {
@@ -534,37 +542,9 @@ export async function restoreSystemConfigForSlug(
   return { seeded, restored: true, configPath };
 }
 
-function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH";
-  }
-}
-
 export function acquireSystemConfigSyncLock(openclawDir: string): (() => void) | null {
-  const lockPath = path.join(openclawDir, "system_config.sync.lock");
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const fd = fs.openSync(lockPath, "wx", 0o600);
-      fs.writeFileSync(fd, `${process.pid}\n`);
-      return () => {
-        fs.closeSync(fd);
-        fs.rmSync(lockPath, { force: true });
-      };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const owner = Number.parseInt(fs.readFileSync(lockPath, "utf-8").trim(), 10);
-      const ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;
-      const validOwner = Number.isInteger(owner) && owner > 0;
-      if ((!validOwner && ageMs < 30_000) || (validOwner && processIsAlive(owner) && ageMs < 600_000)) {
-        return null;
-      }
-      fs.rmSync(lockPath, { force: true });
-    }
-  }
-  return null;
+  const lease = acquireSystemConfigSyncLeaseSync({ openclawDir });
+  return lease ? () => lease.release() : null;
 }
 
 function remoteHeadFromLsRemote(output: string | null): string | null {
@@ -851,6 +831,7 @@ function syncSystemConfigUnlocked(
         pushed: false,
         pending: true,
         errorCode,
+        ...(afterFailure.head ? { acceptedCommit: afterFailure.head } : {}),
         ...(pushWhenClean ? { processedFingerprint: stagedFingerprint } : {}),
       };
     }
@@ -1079,9 +1060,33 @@ export function checkpointBootSystemConfigForSlug(
     source: "boot-migration",
   });
   if (!syncResult.pushed || syncResult.pending || syncResult.rejected || syncResult.skipped) {
+    const errorCode = syncResult.errorCode ?? syncResult.skipped ?? "boot-checkpoint-pending";
+    const transientDurabilityFailure = !syncResult.rejected && !syncResult.skipped &&
+      (errorCode === "push-failed" || errorCode === "remote-head-unavailable");
+    if (transientDurabilityFailure) {
+      const current = readSystemConfigStatus(openclawDir);
+      const at = now().toISOString();
+      const acceptedCommit = syncResult.acceptedCommit ?? recovery.acceptedCommit;
+      updateSystemConfigStatus(openclawDir, {
+        state: "error",
+        acceptedCommit,
+        bootRecovery: "none",
+        schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION,
+        openclawVersion: env.OPENCLAW_VERSION?.trim() || "unknown",
+        dirtySince: current.dirtySince ?? at,
+        lastErrorCode: errorCode,
+        lastErrorAt: current.lastErrorAt ?? at,
+      }, now);
+      return {
+        ready: true,
+        acceptedCommit,
+        durablePending: true,
+        errorCode,
+      };
+    }
     return {
       ready: false,
-      errorCode: syncResult.errorCode ?? syncResult.skipped ?? "boot-checkpoint-pending",
+      errorCode,
     };
   }
   const acceptedCommit = syncResult.acceptedCommit ?? recovery.acceptedCommit;

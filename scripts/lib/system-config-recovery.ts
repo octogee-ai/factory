@@ -8,6 +8,7 @@ import {
 } from "./system-config-invariants.js";
 
 type GitExec = typeof defaultGitExec;
+const GIT_SHA_RE = /^[0-9a-f]{40,64}$/;
 
 export type SystemConfigCommitSource =
   | "auto-watch"
@@ -115,6 +116,7 @@ export function recoverSystemConfigHead(
     return { outcome: "unavailable", rejectedCommit, errorCode: "history-unavailable" };
   }
   for (const commit of history.split("\n").map((value) => value.trim()).filter(Boolean).slice(1)) {
+    if (!GIT_SHA_RE.test(commit)) continue;
     const contents = execGit(options.repoDir, `show ${commit}:openclaw.json`, keyPath);
     if (contents === null) {
       continue;

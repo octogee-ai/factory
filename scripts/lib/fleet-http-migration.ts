@@ -67,6 +67,8 @@ export interface MigrationHandlerDeps {
   
   log?: (msg: string) => void;
 
+  now?: () => number;
+
 getMountedCustomers?: () => readonly string[];
 
 fetch?: typeof globalThis.fetch;
@@ -99,6 +101,48 @@ unfreezeSystemConfig?: (input: {
   migrationId: string;
   slug: string;
 }) => Promise<{ unfrozen: boolean }> | { unfrozen: boolean };
+}
+
+const CONFIG_CONTROL_MAX_LIFETIME_MS = 60_000;
+const CONFIG_CONTROL_CLOCK_SKEW_MS = 5_000;
+const configControlReplayByDeps = new WeakMap<MigrationHandlerDeps, Map<string, number>>();
+
+function acceptConfigControlEnvelope(
+  body: ConfigFreezeRequestBody | ConfigRestoreProofRequestBody | ConfigUnfreezeRequestBody,
+  deps: MigrationHandlerDeps,
+  res: Response,
+  log: (msg: string) => void,
+): boolean {
+  const now = (deps.now ?? Date.now)();
+  if (
+    !Number.isSafeInteger(body.issuedAt) ||
+    !Number.isSafeInteger(body.expiresAt) ||
+    typeof body.requestId !== "string" ||
+    !/^[A-Za-z0-9._:-]{8,128}$/.test(body.requestId) ||
+    body.issuedAt > now + CONFIG_CONTROL_CLOCK_SKEW_MS ||
+    body.expiresAt <= now ||
+    body.expiresAt <= body.issuedAt ||
+    body.expiresAt - body.issuedAt > CONFIG_CONTROL_MAX_LIFETIME_MS
+  ) {
+    log(`[migration-http] rejected stale config control request migrationId=${body.migrationId}`);
+    res.status(401).json({ error: "invalid config control freshness" });
+    return false;
+  }
+  let replay = configControlReplayByDeps.get(deps);
+  if (!replay) {
+    replay = new Map();
+    configControlReplayByDeps.set(deps, replay);
+  }
+  for (const [requestId, expiresAt] of replay) {
+    if (expiresAt <= now) replay.delete(requestId);
+  }
+  if (replay.has(body.requestId)) {
+    log(`[migration-http] rejected replayed config control request migrationId=${body.migrationId}`);
+    res.status(409).json({ error: "config control request replayed" });
+    return false;
+  }
+  replay.set(body.requestId, body.expiresAt);
+  return true;
 }
 
 function rejectInvalidSlug(slug: string, res: Response): boolean {
@@ -259,6 +303,7 @@ export function createConfigFreezeHandler(deps: MigrationHandlerDeps): RequestHa
   return async (req, res) => {
     const body = parseAndVerifyJsonBody<ConfigFreezeRequestBody>(req, res, deps.publicKey, log);
     if (!body) return;
+    if (!acceptConfigControlEnvelope(body, deps, res, log)) return;
     if (!deps.freezeSystemConfig) {
       res.status(501).json({ error: "config freeze not configured" });
       return;
@@ -288,6 +333,7 @@ export function createConfigRestoreProofHandler(deps: MigrationHandlerDeps): Req
   return async (req, res) => {
     const body = parseAndVerifyJsonBody<ConfigRestoreProofRequestBody>(req, res, deps.publicKey, log);
     if (!body) return;
+    if (!acceptConfigControlEnvelope(body, deps, res, log)) return;
     if (!/^[0-9a-f]{40}$/.test(body.checkpointCommit)) {
       res.status(400).json({ error: "invalid checkpointCommit" });
       return;
@@ -321,6 +367,7 @@ export function createConfigUnfreezeHandler(deps: MigrationHandlerDeps): Request
   return async (req, res) => {
     const body = parseAndVerifyJsonBody<ConfigUnfreezeRequestBody>(req, res, deps.publicKey, log);
     if (!body) return;
+    if (!acceptConfigControlEnvelope(body, deps, res, log)) return;
     if (!deps.unfreezeSystemConfig) {
       res.status(501).json({ error: "config unfreeze not configured" });
       return;

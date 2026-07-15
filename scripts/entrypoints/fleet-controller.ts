@@ -29,12 +29,14 @@ import {
   syncSystemConfigForSlug,
 } from "../lib/system-config.js";
 import {
+  assertSystemConfigMutationAllowed,
   checkpointSystemConfig,
   restoreAndProveSystemConfig,
   unfreezeSystemConfig,
   type RestoreAndProofOptions,
   type SystemConfigRestoreProof,
 } from "../lib/system-config-roll-control.js";
+import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
 import { validateOpenClawConfig } from "../lib/openclaw-config-validation.js";
 import type { SystemConfigCommitSource } from "../lib/system-config-recovery.js";
 import { execFileSync } from "node:child_process";
@@ -89,6 +91,32 @@ type SystemConfigRuntimeRpc = Pick<
   GatewayRpcClient,
   "configGet" | "configApply" | "channelsStatus"
 >;
+
+export function createSystemConfigMutationGatedRpc(
+  rpc: GatewayRpcClient,
+  openclawDir: string,
+): GatewayRpcClient {
+  return new Proxy(rpc, {
+    get(target, property, receiver) {
+      if (property !== "configApply") return Reflect.get(target, property, receiver) as unknown;
+      return async (config: object, baseHash: string) => {
+        const acquired = await acquireSystemConfigMutationLease({ openclawDir });
+        if (!acquired.ok) {
+          if (acquired.code === "config-frozen") {
+            throw new Error(`system config is frozen by ${acquired.freezeOwner}`);
+          }
+          throw new Error("system config writer lock is busy");
+        }
+        try {
+          assertSystemConfigMutationAllowed({ openclawDir });
+          return await target.configApply(config, baseHash);
+        } finally {
+          await acquired.lease.release();
+        }
+      };
+    },
+  });
+}
 
 export interface RestoreRevisionSystemConfigOptions {
   checkpointCommit: string;
@@ -167,9 +195,10 @@ export async function restoreRevisionSystemConfig(
 async function main(): Promise<void> {
   const entrypointConfig = resolveFleetControllerEntrypointConfig();
   log(bootBanner("fleet-controller"));
-  const rpc = createGatewayRpc({
+  const runtimeRpc = createGatewayRpc({
     allowLegacyGatewayTokenFallback: true,
   });
+  const rpc = createSystemConfigMutationGatedRpc(runtimeRpc, OPENCLAW_DIR);
   const openclawVersion = probeOpenClawVersion({
     execFile: execFileSync,
     binaryPath: "/usr/local/bin/openclaw",
@@ -264,7 +293,7 @@ async function main(): Promise<void> {
               revisionId: entrypointConfig.revisionId,
               env: process.env,
               source: "migration-restore",
-              rpc,
+              rpc: runtimeRpc,
               validateConfig: validateOpenClawConfig,
             });
           },

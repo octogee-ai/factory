@@ -103,4 +103,39 @@ describe("system config observed status", () => {
       runtimeHealthCheckedAt: "2026-07-14T20:00:06.000Z",
     });
   });
+
+  it("projects the exact control capability and pinned OpenClaw fork identity", () => {
+    const dir = tempDir();
+    updateSystemConfigStatus(dir, {
+      state: "clean",
+      freezeState: "unfrozen",
+      openclawVersion: "2026.7.1",
+      openclawForkSha: "abc1234",
+      controlProtocol: {
+        protocol: "durable-openclaw-config",
+        version: 1,
+      },
+    });
+
+    expect(readSystemConfigStatus(dir)).toMatchObject({
+      freezeState: "unfrozen",
+      openclawVersion: "2026.7.1",
+      openclawForkSha: "abc1234",
+      controlProtocol: {
+        protocol: "durable-openclaw-config",
+        version: 1,
+      },
+    });
+  });
+
+  it("recovers an expired legacy status writer lock before merging a new update", () => {
+    const dir = tempDir();
+    const lockPath = path.join(dir, "system_config.status.lock");
+    fs.writeFileSync(lockPath, "999999999\n");
+    fs.utimesSync(lockPath, new Date(0), new Date(0));
+    updateSystemConfigStatus(dir, { state: "dirty", watcherState: "running" });
+
+    expect(readSystemConfigStatus(dir)).toMatchObject({ state: "dirty", watcherState: "running" });
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
 });

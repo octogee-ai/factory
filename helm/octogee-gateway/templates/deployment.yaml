@@ -314,23 +314,37 @@ spec:
           startupProbe:
             httpGet:
               path: /healthz
+              {{- if eq $gatewayClass "shared" }}
+              port: 18789
+              {{- else }}
               port: 18790
+              {{- end }}
             initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.startup.periodSeconds }}
             failureThreshold: {{ .Values.probes.startup.failureThreshold }}
             timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
           livenessProbe:
+            {{- if eq $gatewayClass "shared" }}
+            tcpSocket:
+              port: 18789
+            {{- else }}
             httpGet:
               path: /healthz
               port: 18790
+            {{- end }}
             initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
             timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
           readinessProbe:
-            httpGet:
-              path: /healthz
+            {{- if eq $gatewayClass "shared" }}
+            tcpSocket:
               port: 18789
+            {{- else }}
+            httpGet:
+              path: /readyz
+              port: 18790
+            {{- end }}
             initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
             failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
