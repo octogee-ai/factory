@@ -19,6 +19,8 @@
 
 import {
   hasDurableOpenClawConfigControlProtocol,
+  OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
+  OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
   type GatewayConfigStatus,
 } from "@octogee/shared/types/fleet-controller";
 
@@ -127,12 +129,40 @@ export function parseHealthResponse(json: unknown): OperatorGatewayHealth | null
     const validOptionalFields =
       (status.freezeState === undefined ||
         status.freezeState === "frozen" ||
+        status.freezeState === "freezing" ||
         status.freezeState === "unfrozen") &&
       (status.openclawVersion === undefined || typeof status.openclawVersion === "string") &&
-      (status.openclawForkSha === undefined || typeof status.openclawForkSha === "string");
+      (status.openclawForkSha === undefined || typeof status.openclawForkSha === "string") &&
+      hasValidDashboardControlStatus(status);
     if (validOptionalFields) health.configStatus = status;
   }
   return health;
+}
+
+function hasValidDashboardControlStatus(status: GatewayConfigStatus): boolean {
+  if (status.dashboardControlState === undefined) {
+    return status.dashboardControlProtocol === undefined &&
+      status.dashboardControlObservedAt === undefined;
+  }
+  if (
+    status.dashboardControlState !== "ready" &&
+    status.dashboardControlState !== "missing" &&
+    status.dashboardControlState !== "stale" &&
+    status.dashboardControlState !== "invalid"
+  ) {
+    return false;
+  }
+  if (status.dashboardControlState !== "ready") {
+    return status.dashboardControlProtocol === undefined &&
+      status.dashboardControlObservedAt === undefined;
+  }
+  const observedAt = status.dashboardControlObservedAt;
+  return status.dashboardControlProtocol?.protocol === OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL &&
+    status.dashboardControlProtocol.version === OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION &&
+    typeof observedAt === "string" &&
+    observedAt.length <= 40 &&
+    Number.isFinite(Date.parse(observedAt)) &&
+    new Date(observedAt).toISOString() === observedAt;
 }
 
 async function evictDepartedForGateway(

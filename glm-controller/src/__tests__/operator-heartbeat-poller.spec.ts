@@ -64,9 +64,12 @@ describe("parseHealthResponse", () => {
   it("carries only a structurally valid nested configStatus marker", () => {
     const configStatus = {
       controlProtocol: { protocol: "durable-openclaw-config", version: 1 },
-      freezeState: "unfrozen",
+      freezeState: "freezing",
       openclawVersion: "2026.7.1",
       openclawForkSha: "abc123",
+      dashboardControlState: "ready",
+      dashboardControlProtocol: { protocol: "openclaw-dashboard-bridge", version: 1 },
+      dashboardControlObservedAt: "2026-07-15T14:00:00.000Z",
     };
     expect(parseHealthResponse({ status: "ready", customers: [], configStatus })).toEqual({
       status: "ready",
@@ -159,9 +162,15 @@ describe("pollOperatorHeartbeatsOnce", () => {
   it("persists the config control protocol marker for controller-side enforcement", async () => {
     const configStatus = {
       controlProtocol: { protocol: "durable-openclaw-config" as const, version: 1 as const },
-      freezeState: "unfrozen" as const,
+      freezeState: "freezing" as const,
       openclawVersion: "2026.7.1",
       openclawForkSha: "abc123",
+      dashboardControlState: "ready" as const,
+      dashboardControlProtocol: {
+        protocol: "openclaw-dashboard-bridge" as const,
+        version: 1 as const,
+      },
+      dashboardControlObservedAt: "2026-07-15T14:00:00.000Z",
     };
     const deps = makeDeps({
       fetchHealth: vi.fn(async () => ({
@@ -176,6 +185,20 @@ describe("pollOperatorHeartbeatsOnce", () => {
       mountedCustomers: ["ceckert"],
       configStatus,
     });
+  });
+
+  it("rejects a ready Dashboard capability without its exact observed protocol tuple", () => {
+    expect(parseHealthResponse({
+      status: "ready",
+      customers: [],
+      configStatus: {
+        controlProtocol: { protocol: "durable-openclaw-config", version: 1 },
+        freezeState: "frozen",
+        dashboardControlState: "ready",
+        dashboardControlProtocol: { protocol: "openclaw-dashboard-bridge", version: 2 },
+        dashboardControlObservedAt: "2026-07-15T14:00:00.000Z",
+      },
+    })).toEqual({ status: "ready", customers: [] });
   });
 
   it("skips a gateway it cannot reach (does NOT clobber the doc to empty)", async () => {

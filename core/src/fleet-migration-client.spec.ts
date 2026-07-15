@@ -135,11 +135,12 @@ describe("MigrationClient system config fencing", () => {
       configHash: "b".repeat(64),
     }), { status: 200, headers: { "content-type": "application/json" } }));
     const requestIds = ["request:id.0001", "request:id.0002"];
+    const issuedAt = [1_000, 2_000];
     const client = createMigrationClient({
       privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => "https://source.example.com",
       fetch: fakeFetch,
-      now: () => 1_000,
+      now: () => issuedAt.shift()!,
       genRequestId: () => requestIds.shift()!,
     });
 
@@ -148,7 +149,7 @@ describe("MigrationClient system config fencing", () => {
 
     expect(calls.map((call) => JSON.parse(call.body!))).toEqual([
       expect.objectContaining({ issuedAt: 1_000, expiresAt: 31_000, requestId: "request:id.0001" }),
-      expect.objectContaining({ issuedAt: 1_000, expiresAt: 31_000, requestId: "request:id.0002" }),
+      expect.objectContaining({ issuedAt: 2_000, expiresAt: 32_000, requestId: "request:id.0002" }),
     ]);
     expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()])
       .not.toBe(calls[1].headers[SIGNATURE_HEADER.toLowerCase()]);
