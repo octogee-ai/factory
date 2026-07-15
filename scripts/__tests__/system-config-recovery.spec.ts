@@ -149,6 +149,25 @@ describe("system config accepted-head recovery", () => {
       durablePolicy: true,
       source: "boot-migration",
     }));
+    expect(readSystemConfigStatus(h.openclawDir)).not.toHaveProperty("doctorResult");
+  });
+
+  it("records Doctor success only when the caller supplies an observed successful result", () => {
+    const h = fixture(validConfig({ harmless: true }));
+
+    expect(checkpointBootSystemConfigForSlug("ceckert", {
+      openclawDir: h.openclawDir,
+      env,
+      doctorResult: "ok",
+      validateConfig: vi.fn(),
+      recover: () => ({ outcome: "accepted", acceptedCommit: "a".repeat(40) }),
+      sync: () => ({
+        committed: true,
+        pushed: true,
+        acceptedCommit: "b".repeat(40),
+      }),
+    })).toMatchObject({ ready: true });
+    expect(readSystemConfigStatus(h.openclawDir)).toMatchObject({ doctorResult: "ok" });
   });
 
   it("keeps boot unavailable and observable when no accepted ancestor exists", () => {

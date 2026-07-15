@@ -151,6 +151,7 @@ else
   export OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$OPENCLAW_DIR/openclaw.json}"
 fi
 
+rm -f "$OPENCLAW_DIR/system_config.boot-accepted"
 supervise_runner system-config-status 5000 "$TSX" /octogee/scripts/entrypoints/system-config-status-server.ts
 
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ "${OPERATOR_SHELLS_ENABLED:-}" = "true" ]; then
@@ -353,8 +354,10 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   export OPENCLAW_SERVICE_REPAIR_POLICY=external
   while true; do
     REPAIR_OK=true
+    export OPENCLAW_DOCTOR_RESULT=ok
     log "Pre-boot: repairing and validating durable OpenClaw config..."
     if ! openclaw doctor --fix --non-interactive; then
+      export OPENCLAW_DOCTOR_RESULT=error
       log "Pre-boot: OpenClaw Doctor failed; repair services remain live"
       REPAIR_OK=false
     fi
@@ -433,6 +436,8 @@ fi
 # leaving BuilderShell and config repair available. Failure of the repair plane
 # itself restarts the pod.
 log "Starting OpenClaw gateway... (build: ${BUILD_SHA:-unknown})"
+touch "$OPENCLAW_DIR/system_config.boot-accepted"
+chmod 600 "$OPENCLAW_DIR/system_config.boot-accepted"
 openclaw gateway run --bind lan --port 18789 &
 
 # OpenClaw file-log mirror REMOVED 2026-05-18. The richer log is available

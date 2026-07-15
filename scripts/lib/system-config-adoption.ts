@@ -3,11 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { validateOpenClawConfig } from "./openclaw-config-validation.js";
+import { customerSshKeyPath, gitExec } from "./git.js";
 import {
+  MATTERMOST_ACCOUNT_SECRET_PROVIDER,
   mattermostAccountSecretsPath,
   updateMattermostAccountSecrets,
 } from "./mattermost-account-secrets.js";
 import {
+  acquireSystemConfigSyncLock,
   checkpointDurableSystemConfigForSlug,
   extractLegacyMattermostAccountSecrets,
   removeLegacyMacConfig,
@@ -16,6 +19,7 @@ import {
   systemConfigPath,
 } from "./system-config.js";
 import { reconcilePlatformInvariants } from "./system-config-invariants.js";
+import { readSystemConfigStatus } from "./system-config-status.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -56,6 +60,15 @@ export class SystemConfigAdoptionCheckpointError extends Error {
   ) {
     super(`config adoption checkpoint failed; local state is ${localState}`);
     this.name = "SystemConfigAdoptionCheckpointError";
+  }
+}
+
+export class SystemConfigAdoptionLockError extends Error {
+  readonly code = "adoption-sync-locked";
+
+  constructor() {
+    super("config adoption cannot acquire the durable config writer lock");
+    this.name = "SystemConfigAdoptionLockError";
   }
 }
 
@@ -165,71 +178,166 @@ function changedJsonPaths(
   return paths;
 }
 
-export async function adoptSystemConfig(
-  options: SystemConfigAdoptionOptions,
-): Promise<SystemConfigAdoptionResult> {
-  const env = options.env ?? process.env;
+function accountUsesMattermostSecret(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  const botToken = value.botToken;
+  return isObject(botToken) && botToken.source === "file" &&
+    botToken.provider === MATTERMOST_ACCOUNT_SECRET_PROVIDER;
+}
+
+function desiredMattermostSecrets(
+  candidate: JsonObject,
+  extracted: Record<string, string>,
+  current: Record<string, string>,
+): Record<string, string> {
+  const channels = isObject(candidate.channels) ? candidate.channels : {};
+  const mattermost = isObject(channels.mattermost) ? channels.mattermost : {};
+  const accounts = isObject(mattermost.accounts) ? mattermost.accounts : {};
+  const next: Record<string, string> = {};
+  for (const [accountId, account] of Object.entries(accounts)) {
+    if (!accountUsesMattermostSecret(account) && extracted[accountId] === undefined) continue;
+    const token = extracted[accountId] ?? current[accountId];
+    if (token !== undefined) next[accountId] = token;
+  }
+  return next;
+}
+
+function secretChange(
+  before: Record<string, string>,
+  after: Record<string, string>,
+): { set: Record<string, string>; remove?: string[] } {
+  const set = Object.fromEntries(Object.entries(after).filter(([key, value]) => before[key] !== value));
+  const remove = Object.keys(before).filter((key) => after[key] === undefined);
+  return { set, ...(remove.length > 0 ? { remove } : {}) };
+}
+
+function adoptionApprovalHash(
+  contents: string,
+  secrets: Record<string, string>,
+  acceptedCommit: string,
+  currentContents: string,
+): string {
+  const secretDigests = Object.fromEntries(
+    Object.keys(secrets).sort().map((accountId) => [
+      accountId,
+      createHash("sha256").update(secrets[accountId]).digest("hex"),
+    ]),
+  );
+  const payload = JSON.stringify({
+    acceptedCommit,
+    currentConfigHash: createHash("sha256").update(currentContents).digest("hex"),
+    candidate: contents,
+    secretDigests,
+  });
+  return `sha256:${createHash("sha256").update(payload).digest("hex")}`;
+}
+
+interface PreparedAdoption {
+  currentContents: string;
+  currentSecrets: Record<string, string>;
+  nextSecrets: Record<string, string>;
+  contents: string;
+  approvalHash: string;
+  changedPaths: string[];
+}
+
+function prepareAdoption(options: SystemConfigAdoptionOptions, env: NodeJS.ProcessEnv): PreparedAdoption {
   const targetPath = systemConfigPath(options.openclawDir);
   const currentContents = fs.readFileSync(targetPath, "utf8");
   const current = parseObject(currentContents);
   const currentSecrets = readMattermostSecrets(options.openclawDir);
   const candidate = parseObject(fs.readFileSync(options.sourcePath, "utf8"));
   removeLegacyMacConfig(candidate, env);
-  const secrets = extractLegacyMattermostAccountSecrets(candidate);
+  const extracted = extractLegacyMattermostAccountSecrets(candidate);
   reconcilePlatformInvariants(candidate, env);
+  const nextSecrets = desiredMattermostSecrets(candidate, extracted, currentSecrets);
   const contents = `${JSON.stringify(candidate, null, 2)}\n`;
-  const approvalHash = `sha256:${createHash("sha256").update(contents).digest("hex")}`;
+  const localHead = gitExec(
+    path.dirname(targetPath),
+    "rev-parse HEAD",
+    customerSshKeyPath(options.slug),
+  );
+  const acceptedCommit = readSystemConfigStatus(options.openclawDir).acceptedCommit;
+  if (!acceptedCommit || !/^[0-9a-f]{7,64}$/.test(acceptedCommit) || localHead !== acceptedCommit) {
+    throw new SystemConfigAdoptionApprovalError();
+  }
   validateAdoptionCandidate(
     candidate,
-    { ...currentSecrets, ...secrets },
+    nextSecrets,
     options.openclawDir,
     options.validateConfig ?? validateOpenClawConfig,
   );
-  const changedPaths = changedJsonPaths(current, candidate);
-  if (options.approveHash === undefined) {
-    return { applied: false, approvalHash, changedPaths };
-  }
-  if (options.approveHash !== approvalHash) throw new SystemConfigAdoptionApprovalError();
-
-  const writeSecrets = options.writeSecrets ?? updateMattermostAccountSecrets;
-  const secretIds = Object.keys(secrets);
-  if (secretIds.length > 0) {
-    await writeSecrets(options.openclawDir, { set: secrets });
-  }
-  atomicWrite(targetPath, contents);
-  let result: SystemConfigSyncResult;
-  try {
-    result = (options.checkpoint ?? checkpointDurableSystemConfigForSlug)(options.slug, {
-      openclawDir: options.openclawDir,
-      env,
-      source: "boot-migration",
-      validateConfig: options.validateConfig,
-    });
-  } catch (error) {
-    if (!(error instanceof SystemConfigCheckpointError) ||
-        !canRestoreAfterCheckpointFailure(error.result)) {
-      throw new SystemConfigAdoptionCheckpointError("committed-pending", error);
-    }
-    try {
-      atomicWrite(targetPath, currentContents);
-      if (secretIds.length > 0) {
-        const previous = Object.fromEntries(
-          secretIds.flatMap((accountId) => currentSecrets[accountId] === undefined
-            ? []
-            : [[accountId, currentSecrets[accountId]]]),
-        );
-        const remove = secretIds.filter((accountId) => currentSecrets[accountId] === undefined);
-        await writeSecrets(options.openclawDir, { set: previous, remove });
-      }
-    } catch (rollbackError) {
-      throw new SystemConfigAdoptionCheckpointError("rollback-failed", error, rollbackError);
-    }
-    throw new SystemConfigAdoptionCheckpointError("restored", error);
-  }
   return {
-    applied: true,
-    approvalHash,
-    changedPaths,
-    acceptedCommit: result.acceptedCommit,
+    currentContents,
+    currentSecrets,
+    nextSecrets,
+    contents,
+    approvalHash: adoptionApprovalHash(contents, nextSecrets, acceptedCommit, currentContents),
+    changedPaths: changedJsonPaths(current, candidate),
   };
+}
+
+export async function adoptSystemConfig(
+  options: SystemConfigAdoptionOptions,
+): Promise<SystemConfigAdoptionResult> {
+  const env = options.env ?? process.env;
+  const targetPath = systemConfigPath(options.openclawDir);
+  const preview = prepareAdoption(options, env);
+  if (options.approveHash === undefined) {
+    return {
+      applied: false,
+      approvalHash: preview.approvalHash,
+      changedPaths: preview.changedPaths,
+    };
+  }
+  const releaseLock = acquireSystemConfigSyncLock(options.openclawDir);
+  if (!releaseLock) throw new SystemConfigAdoptionLockError();
+  try {
+    const adoption = prepareAdoption(options, env);
+    if (options.approveHash !== adoption.approvalHash) {
+      throw new SystemConfigAdoptionApprovalError();
+    }
+    const writeSecrets = options.writeSecrets ?? updateMattermostAccountSecrets;
+    const applySecrets = secretChange(adoption.currentSecrets, adoption.nextSecrets);
+    try {
+      if (Object.keys(applySecrets.set).length > 0 || (applySecrets.remove?.length ?? 0) > 0) {
+        await writeSecrets(options.openclawDir, applySecrets);
+      }
+      atomicWrite(targetPath, adoption.contents);
+      const result: SystemConfigSyncResult =
+        (options.checkpoint ?? checkpointDurableSystemConfigForSlug)(options.slug, {
+          openclawDir: options.openclawDir,
+          env,
+          source: "boot-migration",
+          validateConfig: options.validateConfig,
+          lockHeld: true,
+        });
+      return {
+        applied: true,
+        approvalHash: adoption.approvalHash,
+        changedPaths: adoption.changedPaths,
+        acceptedCommit: result.acceptedCommit,
+      };
+    } catch (error) {
+      if (error instanceof SystemConfigCheckpointError &&
+          !canRestoreAfterCheckpointFailure(error.result)) {
+        throw new SystemConfigAdoptionCheckpointError("committed-pending", error);
+      }
+      try {
+        atomicWrite(targetPath, adoption.currentContents);
+        const rollbackSecrets = secretChange(adoption.nextSecrets, adoption.currentSecrets);
+        if (Object.keys(rollbackSecrets.set).length > 0 || (rollbackSecrets.remove?.length ?? 0) > 0) {
+          await writeSecrets(options.openclawDir, rollbackSecrets);
+        }
+      } catch (rollbackError) {
+        throw new SystemConfigAdoptionCheckpointError("rollback-failed", error, rollbackError);
+      }
+      if (error instanceof SystemConfigCheckpointError) {
+        throw new SystemConfigAdoptionCheckpointError("restored", error);
+      }
+      throw error;
+    }
+  } finally {
+    releaseLock();
+  }
 }

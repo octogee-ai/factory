@@ -21,11 +21,24 @@ export interface SystemConfigObservedStatus {
   freezeState?: "unfrozen" | "freezing" | "frozen";
   rejectedCount?: number;
   recoveryCount?: number;
+  runtimeReady?: boolean;
+  runtimeHealth?: "repair" | "healthy" | "unhealthy";
+  runtimeHealthCheckedAt?: string;
   updatedAt?: string;
 }
 
 export function systemConfigStatusPath(openclawDir: string): string {
   return path.join(openclawDir, "system_config.status.json");
+}
+
+export function systemConfigBootAcceptedPath(openclawDir: string): string {
+  return path.join(openclawDir, "system_config.boot-accepted");
+}
+
+export function markSystemConfigBootAccepted(openclawDir: string): void {
+  fs.mkdirSync(openclawDir, { recursive: true });
+  fs.writeFileSync(systemConfigBootAcceptedPath(openclawDir), "accepted\n", { mode: 0o600 });
+  fs.chmodSync(systemConfigBootAcceptedPath(openclawDir), 0o600);
 }
 
 function isState(value: unknown): value is SystemConfigState {
@@ -40,6 +53,7 @@ const STRING_FIELDS = [
   "configHash",
   "lastSyncedAt",
   "openclawVersion",
+  "runtimeHealthCheckedAt",
   "updatedAt",
 ] as const;
 
@@ -68,6 +82,10 @@ function projectSystemConfigStatus(record: Record<string, unknown>): SystemConfi
   }
   if (record.freezeState === "unfrozen" || record.freezeState === "freezing" || record.freezeState === "frozen") {
     status.freezeState = record.freezeState;
+  }
+  if (typeof record.runtimeReady === "boolean") status.runtimeReady = record.runtimeReady;
+  if (record.runtimeHealth === "repair" || record.runtimeHealth === "healthy" || record.runtimeHealth === "unhealthy") {
+    status.runtimeHealth = record.runtimeHealth;
   }
   return status;
 }
@@ -127,6 +145,9 @@ export function renderSystemConfigMetrics(
     "# HELP octogee_system_config_recovery_total Recovery commits created by this revision.",
     "# TYPE octogee_system_config_recovery_total counter",
     `octogee_system_config_recovery_total ${status.recoveryCount ?? 0}`,
+    "# HELP octogee_openclaw_runtime_ready Whether accepted OpenClaw is passing deep health.",
+    "# TYPE octogee_openclaw_runtime_ready gauge",
+    `octogee_openclaw_runtime_ready ${status.runtimeReady === true ? 1 : 0}`,
   ];
   if (status.lastErrorCode) {
     lines.push(

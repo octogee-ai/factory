@@ -108,6 +108,9 @@ describe("system config observed status validation", () => {
       lastErrorCode: "non-fast-forward-conflict",
       rejectedCount: 2,
       recoveryCount: 1,
+      runtimeReady: true,
+      runtimeHealth: "healthy",
+      runtimeHealthCheckedAt: "2026-07-14T20:00:01.000Z",
       unknown: "drop-me",
     })).toEqual({
       state: "error",
@@ -116,6 +119,9 @@ describe("system config observed status validation", () => {
       lastErrorCode: "non-fast-forward-conflict",
       rejectedCount: 2,
       recoveryCount: 1,
+      runtimeReady: true,
+      runtimeHealth: "healthy",
+      runtimeHealthCheckedAt: "2026-07-14T20:00:01.000Z",
     });
   });
 

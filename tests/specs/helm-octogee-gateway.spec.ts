@@ -820,6 +820,18 @@ expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
     expect(dep).not.toMatch(/__openclaw__/);
   });
 
+  it("keeps isolated repair services routable while OpenClaw readiness is false", () => {
+    const out = helmTemplate("octogee-gw-default", { gatewayClass: "builder" });
+    const gateway = findDoc(out, "Service", "octogee-gateway-default") ?? "";
+    const edge = findDoc(out, "Service", "gateway-edge-default") ?? "";
+
+    expect(gateway).toMatch(/publishNotReadyAddresses:\s*true/);
+    expect(edge).toMatch(/publishNotReadyAddresses:\s*true/);
+    expect(findDoc(helmTemplate(), "Service", "gateway-edge-default") ?? "").not.toMatch(
+      /publishNotReadyAddresses/,
+    );
+  });
+
   it("does not suppress a failed durable pre-stop checkpoint", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const lifecycle = containerBlock(dep, "gateway").match(/lifecycle:[\s\S]*?(?=\n\s+env:)/)?.[0] ?? "";

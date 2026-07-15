@@ -36,6 +36,9 @@ describe("system config observed status", () => {
       configHash: "sha256:deadbeef",
       lastSyncedAt: "2026-07-14T20:00:05.000Z",
       lastErrorCode: null,
+      runtimeReady: true,
+      runtimeHealth: "healthy",
+      runtimeHealthCheckedAt: "2026-07-14T20:00:06.000Z",
     });
 
     expect(readSystemConfigStatus(dir)).toMatchObject({
@@ -44,6 +47,9 @@ describe("system config observed status", () => {
       configHash: "sha256:deadbeef",
       lastSyncedAt: "2026-07-14T20:00:05.000Z",
       lastErrorCode: null,
+      runtimeReady: true,
+      runtimeHealth: "healthy",
+      runtimeHealthCheckedAt: "2026-07-14T20:00:06.000Z",
     });
     expect(fs.statSync(systemConfigStatusPath(dir)).mode & 0o777).toBe(0o600);
     expect(fs.existsSync(`${systemConfigStatusPath(dir)}.tmp`)).toBe(false);
@@ -56,6 +62,7 @@ describe("system config observed status", () => {
       rejectedCount: 2,
       recoveryCount: 1,
       lastErrorCode: "non-fast-forward-conflict",
+      runtimeReady: false,
     }, Date.parse("2026-07-14T20:00:09.000Z"));
 
     expect(metrics).toContain('octogee_system_config_state{state="error"} 1');
@@ -63,6 +70,7 @@ describe("system config observed status", () => {
     expect(metrics).toContain("octogee_system_config_rejected_total 2");
     expect(metrics).toContain("octogee_system_config_recovery_total 1");
     expect(metrics).toContain('octogee_system_config_last_error{code="non-fast-forward-conflict"} 1');
+    expect(metrics).toContain("octogee_openclaw_runtime_ready 0");
     expect(metrics).not.toMatch(/uid|slug|path=/);
   });
 
@@ -80,6 +88,9 @@ describe("system config observed status", () => {
       secret: "must-not-leave-the-pod",
       configPath: "/home/node/.openclaw/system_config/openclaw.json",
       recoveryCount: "not-a-number",
+      runtimeReady: true,
+      runtimeHealth: "healthy",
+      runtimeHealthCheckedAt: "2026-07-14T20:00:06.000Z",
     }));
 
     expect(readSystemConfigStatus(dir)).toEqual({
@@ -87,6 +98,9 @@ describe("system config observed status", () => {
       acceptedCommit: "abc1234",
       rejectedCount: 2,
       lastErrorCode: "validation-failed",
+      runtimeReady: true,
+      runtimeHealth: "healthy",
+      runtimeHealthCheckedAt: "2026-07-14T20:00:06.000Z",
     });
   });
 });

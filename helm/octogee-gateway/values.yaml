@@ -316,21 +316,16 @@ tiers:
       maxOldSpaceSizeMb: "147456"
 
 probes:
-  # Startup uses an HTTP GET against `/healthz` — proves openclaw is
-  # HTTP-responsive (not just port-bound), gating liveness/readiness
-  # until the gateway has actually finished initializing. 10s × 60 =
-  # up to 10 min boot window for slow customer reattach / agent load on
-  # fresh starts. Once it succeeds once, liveness/readiness take over
-  # (both TCP).
+  # Startup reaches the config status plane, which remains healthy during
+  # isolated-gateway repair. 10s × 60 keeps a 10-minute window for failures
+  # of that repair plane itself.
   startup:
     initialDelaySeconds: 15
     periodSeconds: 10
     failureThreshold: 60
     timeoutSeconds: 10
-  # Liveness stays TCP — `/healthz` can block tens of seconds under
-  # per-account MM probe load (chat-proxy/src/proxy.ts:994). Using HTTP
-  # here would restart the pod on slow-but-alive openclaw. TCP confirms
-  # "process bound to port"; only port loss → restart.
+  # Liveness stays permissive during pre-boot repair, then performs a bounded
+  # local OpenClaw health check after the config has been accepted.
   liveness:
     initialDelaySeconds: 0
     periodSeconds: 60

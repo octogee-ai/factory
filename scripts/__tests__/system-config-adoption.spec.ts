@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { reconcilePlatformInvariants } from "../lib/system-config-invariants.js";
@@ -9,6 +10,7 @@ import {
   SystemConfigAdoptionCheckpointError,
 } from "../lib/system-config-adoption.js";
 import { SystemConfigCheckpointError } from "../lib/system-config.js";
+import { updateSystemConfigStatus } from "../lib/system-config-status.js";
 
 const dirs: string[] = [];
 const env = {
@@ -28,6 +30,15 @@ function fixture() {
   const current: Record<string, unknown> = { customerSetting: "old" };
   reconcilePlatformInvariants(current, env);
   fs.writeFileSync(targetPath, `${JSON.stringify(current, null, 2)}\n`);
+  execFileSync("git", ["init", "-q", repoDir]);
+  execFileSync("git", ["-C", repoDir, "config", "user.name", "Octogee Test"]);
+  execFileSync("git", ["-C", repoDir, "config", "user.email", "test@octogee.invalid"]);
+  execFileSync("git", ["-C", repoDir, "add", "openclaw.json"]);
+  execFileSync("git", ["-C", repoDir, "commit", "-q", "-m", "accepted"]);
+  updateSystemConfigStatus(openclawDir, {
+    state: "clean",
+    acceptedCommit: execFileSync("git", ["-C", repoDir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+  });
   const sourcePath = path.join(openclawDir, "bender-live.json");
   fs.writeFileSync(sourcePath, JSON.stringify({
     customerSetting: "new",
@@ -150,6 +161,7 @@ describe("system config adoption", () => {
       openclawDir: h.openclawDir,
       env,
       source: "boot-migration",
+      lockHeld: true,
     }));
     const tracked = fs.readFileSync(h.targetPath, "utf8");
     expect(tracked).not.toContain("bender-live-pat");
@@ -170,6 +182,158 @@ describe("system config adoption", () => {
         },
       },
     });
+  });
+
+  it("binds approval to secret values without disclosing them", async () => {
+    const h = fixture();
+    const preview = await adoptSystemConfig({
+      slug: "ceckert",
+      sourcePath: h.sourcePath,
+      openclawDir: h.openclawDir,
+      env,
+      validateConfig: vi.fn(),
+    });
+    fs.writeFileSync(
+      h.sourcePath,
+      fs.readFileSync(h.sourcePath, "utf8").replace("bender-live-pat", "rotated-live-pat"),
+    );
+
+    await expect(adoptSystemConfig({
+      slug: "ceckert",
+      sourcePath: h.sourcePath,
+      openclawDir: h.openclawDir,
+      env,
+      approveHash: preview.approvalHash,
+      validateConfig: vi.fn(),
+      writeSecrets: vi.fn(),
+      checkpoint: vi.fn(),
+    })).rejects.toMatchObject({ code: "adoption-approval-mismatch" });
+    expect(preview.approvalHash).not.toContain("bender-live-pat");
+  });
+
+  it("binds approval to the accepted durable head and rejects an intervening commit", async () => {
+    const h = fixture();
+    const preview = await adoptSystemConfig({
+      slug: "ceckert",
+      sourcePath: h.sourcePath,
+      openclawDir: h.openclawDir,
+      env,
+      validateConfig: vi.fn(),
+    });
+    execFileSync("git", [
+      "-C",
+      path.dirname(h.targetPath),
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "intervening",
+    ]);
+
+    await expect(adoptSystemConfig({
+      slug: "ceckert",
+      sourcePath: h.sourcePath,
+      openclawDir: h.openclawDir,
+      env,
+      approveHash: preview.approvalHash,
+      validateConfig: vi.fn(),
+      writeSecrets: vi.fn(),
+      checkpoint: vi.fn(),
+    })).rejects.toMatchObject({ code: "adoption-approval-mismatch" });
+  });
+
+  it("refuses to race an active config writer", async () => {
+    const h = fixture();
+    const preview = await adoptSystemConfig({
+      slug: "ceckert",
+      sourcePath: h.sourcePath,
+      openclawDir: h.openclawDir,
+      env,
+      validateConfig: vi.fn(),
+    });
+    fs.writeFileSync(path.join(h.openclawDir, "system_config.sync.lock"), `${process.pid}\n`);
+    const writeSecrets = vi.fn();
+    const checkpoint = vi.fn();
+
+    await expect(adoptSystemConfig({
+      slug: "ceckert",
+      sourcePath: h.sourcePath,
+      openclawDir: h.openclawDir,
+      env,
+      approveHash: preview.approvalHash,
+      validateConfig: vi.fn(),
+      writeSecrets,
+      checkpoint,
+    })).rejects.toMatchObject({ code: "adoption-sync-locked" });
+    expect(writeSecrets).not.toHaveBeenCalled();
+    expect(checkpoint).not.toHaveBeenCalled();
+  });
+
+  it("removes secret entries orphaned by the approved full config", async () => {
+    const h = fixture();
+    const secretsPath = path.join(h.openclawDir, "secrets", "mattermost-accounts.json");
+    fs.mkdirSync(path.dirname(secretsPath), { recursive: true });
+    fs.writeFileSync(secretsPath, JSON.stringify({
+      "old-coach": "old-pat",
+      "ceckert-coach": "previous-pat",
+    }));
+    const preview = await adoptSystemConfig({
+      slug: "ceckert",
+      sourcePath: h.sourcePath,
+      openclawDir: h.openclawDir,
+      env,
+      validateConfig: vi.fn(),
+    });
+
+    await adoptSystemConfig({
+      slug: "ceckert",
+      sourcePath: h.sourcePath,
+      openclawDir: h.openclawDir,
+      env,
+      approveHash: preview.approvalHash,
+      validateConfig: vi.fn(),
+      checkpoint: vi.fn(() => ({
+        committed: true,
+        pushed: true,
+        acceptedCommit: "e".repeat(40),
+      })),
+    });
+
+    expect(JSON.parse(fs.readFileSync(secretsPath, "utf8"))).toEqual({
+      "ceckert-coach": "bender-live-pat",
+    });
+  });
+
+  it("restores orphaned secrets exactly when a precommit checkpoint fails", async () => {
+    const h = fixture();
+    const secretsPath = path.join(h.openclawDir, "secrets", "mattermost-accounts.json");
+    fs.mkdirSync(path.dirname(secretsPath), { recursive: true });
+    fs.writeFileSync(secretsPath, JSON.stringify({ "old-coach": "old-pat" }));
+    const preview = await adoptSystemConfig({
+      slug: "ceckert",
+      sourcePath: h.sourcePath,
+      openclawDir: h.openclawDir,
+      env,
+      validateConfig: vi.fn(),
+    });
+
+    await expect(adoptSystemConfig({
+      slug: "ceckert",
+      sourcePath: h.sourcePath,
+      openclawDir: h.openclawDir,
+      env,
+      approveHash: preview.approvalHash,
+      validateConfig: vi.fn(),
+      checkpoint: vi.fn(() => {
+        throw new SystemConfigCheckpointError({
+          committed: false,
+          pushed: false,
+          rejected: true,
+          errorCode: "validation-failed",
+        });
+      }),
+    })).rejects.toMatchObject({ localState: "restored" });
+    expect(JSON.parse(fs.readFileSync(secretsPath, "utf8"))).toEqual({ "old-coach": "old-pat" });
   });
 
   it("leaves the tracked file untouched when validation or secret audit fails", async () => {

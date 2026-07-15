@@ -288,6 +288,18 @@ describe("system_config restore", () => {
     expect(tracked).not.toContain("http://mm2");
   });
 
+  it("leaves an invalid checked-out head for accepted-ancestor recovery instead of blocking restore", async () => {
+    fs.writeFileSync(path.join(repoDir, "openclaw.json"), "{ invalid\n", "utf8");
+    writeJson(path.join(repoDir, ".octogee.json"), { schemaVersion: 1 });
+
+    await expect(restoreSystemConfigForSlug("acme", {
+      openclawDir,
+      templatePath,
+      log: () => {},
+    })).resolves.toMatchObject({ restored: true, configPath: path.join(repoDir, "openclaw.json") });
+    expect(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8")).toBe("{ invalid\n");
+  });
+
   it("adopts legacy customer Mattermost tokens into the untracked file provider", async () => {
     writeJson(path.join(repoDir, "openclaw.json"), {
       channels: {
@@ -579,6 +591,29 @@ describe("system_config restore", () => {
       processedFingerprint: systemConfigFingerprint(configPath),
     });
     expect(git).not.toHaveBeenCalled();
+  });
+
+  it("uses an already-held writer lock without racing itself", () => {
+    const configPath = path.join(repoDir, "openclaw.json");
+    writeJson(configPath, { version: 1 });
+    fs.writeFileSync(path.join(openclawDir, "system_config.sync.lock"), `${process.pid}\n`);
+    const git = vi.fn((_cwd: string, args: string) => {
+      if (args === "status --porcelain -- openclaw.json .octogee.json .gitignore") return " M openclaw.json";
+      if (args === "rev-parse HEAD") return "a".repeat(40);
+      return "ok";
+    });
+
+    const result = syncSystemConfigForSlug("acme", {
+      openclawDir,
+      lockHeld: true,
+      log: () => {},
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      gitExec: git,
+    });
+
+    expect(result).toMatchObject({ pushed: true, acceptedCommit: "a".repeat(40) });
+    expect(fs.existsSync(path.join(openclawDir, "system_config.sync.lock"))).toBe(true);
   });
 
   it("reclaims a stale incomplete config-sync lock after a crashed writer", () => {

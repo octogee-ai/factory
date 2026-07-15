@@ -386,7 +386,7 @@ export function parseSystemConfigObservedStatus(value: unknown): Record<string, 
     if (typeof input.configHash !== "string" || !/^sha256:[0-9a-f]{64}$/.test(input.configHash)) return null;
     out.configHash = input.configHash;
   }
-  for (const key of ["dirtySince", "lastSyncedAt", "lastErrorAt", "updatedAt"]) {
+  for (const key of ["dirtySince", "lastSyncedAt", "lastErrorAt", "runtimeHealthCheckedAt", "updatedAt"]) {
     const field = input[key];
     if (field === undefined || field === null) {
       if (field === null) out[key] = null;
@@ -406,6 +406,16 @@ export function parseSystemConfigObservedStatus(value: unknown): Record<string, 
     if (field === undefined) continue;
     if (typeof field !== "string" || !allowed.has(field)) return null;
     out[key] = field;
+  }
+  if (input.runtimeReady !== undefined) {
+    if (typeof input.runtimeReady !== "boolean") return null;
+    out.runtimeReady = input.runtimeReady;
+  }
+  if (input.runtimeHealth !== undefined) {
+    if (input.runtimeHealth !== "repair" && input.runtimeHealth !== "healthy" && input.runtimeHealth !== "unhealthy") {
+      return null;
+    }
+    out.runtimeHealth = input.runtimeHealth;
   }
   for (const key of ["schemaVersion", "rejectedCount", "recoveryCount"]) {
     const field = input[key];

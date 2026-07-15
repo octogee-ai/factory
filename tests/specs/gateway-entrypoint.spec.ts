@@ -96,6 +96,20 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     expect(watcherIdx).toBeGreaterThan(checkpointIdx);
     expect(openclawIdx).toBeGreaterThan(watcherIdx);
     expect(entrypoint).toMatch(/OPENCLAW_SERVICE_REPAIR_POLICY=external/);
+    expect(entrypoint).toMatch(/OPENCLAW_DOCTOR_RESULT=ok/);
+    expect(entrypoint).toMatch(/OPENCLAW_DOCTOR_RESULT=error/);
+  });
+
+  it("switches liveness to OpenClaw only after boot acceptance", () => {
+    const markerResetIdx = entrypoint.indexOf('rm -f "$OPENCLAW_DIR/system_config.boot-accepted"');
+    const statusIdx = entrypoint.indexOf("supervise_runner system-config-status");
+    const markerAcceptIdx = entrypoint.indexOf('touch "$OPENCLAW_DIR/system_config.boot-accepted"');
+    const openclawIdx = entrypoint.indexOf("openclaw gateway run");
+
+    expect(markerResetIdx).toBeGreaterThan(-1);
+    expect(markerResetIdx).toBeLessThan(statusIdx);
+    expect(markerAcceptIdx).toBeGreaterThan(statusIdx);
+    expect(markerAcceptIdx).toBeLessThan(openclawIdx);
   });
 
   it("retries class policy and isolated pre-boot reconciliation without losing repair access", () => {

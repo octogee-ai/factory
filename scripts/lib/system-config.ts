@@ -76,7 +76,7 @@ interface SystemConfigRestoreOptions {
   log?: (msg: string) => void;
 }
 
-interface SystemConfigSyncOptions {
+export interface SystemConfigSyncOptions {
   openclawDir?: string;
   now?: () => Date;
   log?: (msg: string) => void;
@@ -87,6 +87,7 @@ interface SystemConfigSyncOptions {
   durablePolicy?: boolean;
   env?: NodeJS.ProcessEnv;
   source?: "auto-watch" | "boot-migration" | "recovery";
+  lockHeld?: boolean;
 }
 
 interface SystemConfigAuditOptions {
@@ -119,6 +120,7 @@ interface SystemConfigBootCheckpointOptions {
   recover?: typeof recoverSystemConfigHead;
   sync?: typeof syncSystemConfigForSlug;
   now?: () => Date;
+  doctorResult?: "ok";
 }
 
 export function systemConfigDir(openclawDir = OPENCLAW_DIR): string {
@@ -376,12 +378,19 @@ async function reconcileTrackedOpenClawConfig(
       (!Number.isInteger(schemaVersion) || (schemaVersion as number) < 0 || (schemaVersion as number) > CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION)) {
     throw new Error(`[system_config] unsupported schemaVersion ${String(schemaVersion)}`);
   }
-  const before = fs.readFileSync(repoConfigPath, "utf-8");
-  const tracked = JSON.parse(before) as Record<string, unknown>;
   if (schemaVersion === CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION) {
     if (!fs.existsSync(path.join(repoDir, ".gitignore"))) {
       fs.writeFileSync(path.join(repoDir, ".gitignore"), SYSTEM_CONFIG_GITIGNORE, "utf-8");
     }
+    return false;
+  }
+  const before = fs.readFileSync(repoConfigPath, "utf-8");
+  let tracked: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(before) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    tracked = parsed as Record<string, unknown>;
+  } catch {
     return false;
   }
 
@@ -436,7 +445,7 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
-function acquireSystemConfigSyncLock(openclawDir: string): (() => void) | null {
+export function acquireSystemConfigSyncLock(openclawDir: string): (() => void) | null {
   const lockPath = path.join(openclawDir, "system_config.sync.lock");
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
@@ -780,6 +789,9 @@ function syncSystemConfig(
   if (!isValidUsername(slug) || !fs.existsSync(openclawDir)) {
     return syncSystemConfigUnlocked(slug, opts, pushWhenClean);
   }
+  if (opts.lockHeld === true) {
+    return syncSystemConfigUnlocked(slug, opts, pushWhenClean);
+  }
   const releaseLock = acquireSystemConfigSyncLock(openclawDir);
   if (!releaseLock) {
     const configPath = systemConfigPath(openclawDir);
@@ -874,6 +886,13 @@ export function checkpointBootSystemConfigForSlug(
   const configPath = systemConfigPath(openclawDir);
   const env = opts.env ?? process.env;
   const now = opts.now ?? (() => new Date());
+  if (opts.doctorResult === "ok") {
+    const current = readSystemConfigStatus(openclawDir);
+    updateSystemConfigStatus(openclawDir, {
+      state: current.state,
+      doctorResult: "ok",
+    }, now);
+  }
   try {
     const value = JSON.parse(fs.readFileSync(configPath, "utf8")) as unknown;
     if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -950,7 +969,6 @@ export function checkpointBootSystemConfigForSlug(
     state: "clean",
     acceptedCommit,
     bootRecovery: "none",
-    doctorResult: "ok",
     schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION,
     openclawVersion: env.OPENCLAW_VERSION?.trim() || "unknown",
     lastErrorCode: null,
