@@ -6,6 +6,7 @@ import * as path from "path";
 import { acquireSystemConfigSyncLeaseSync } from "@octogee/core/system-config-mutation-lease";
 
 import { isValidUsername } from "../../shared/types/identity.js";
+import type { ConfigFreezeOwner } from "../../shared/types/fleet-controller.js";
 import {
   log as defaultLog,
   OPENCLAW_DIR,
@@ -147,8 +148,7 @@ interface SystemConfigBootCheckpointOptions {
   doctorResult?: "ok";
 }
 
-export interface SystemConfigFreezeRecord {
-  migrationId: string;
+export interface SystemConfigFreezeRecord extends ConfigFreezeOwner {
   directoryMode: number;
   configMode: number;
   checkpointCommit?: string;
@@ -175,6 +175,8 @@ export function systemConfigFreezeStatus(
   const parsed = JSON.parse(fs.readFileSync(markerPath, "utf8")) as Partial<SystemConfigFreezeRecord>;
   if (
     typeof parsed.migrationId !== "string" ||
+    typeof parsed.slug !== "string" ||
+    !isValidUsername(parsed.slug) ||
     !Number.isInteger(parsed.directoryMode) ||
     !Number.isInteger(parsed.configMode)
   ) {

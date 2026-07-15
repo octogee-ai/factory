@@ -106,7 +106,9 @@ export function createSystemConfigMutationGatedRpc(
         const acquired = await acquireSystemConfigMutationLease({ openclawDir });
         if (!acquired.ok) {
           if (acquired.code === "config-frozen") {
-            throw new Error(`system config is frozen by ${acquired.freezeOwner}`);
+            throw new Error(
+              `system config is frozen by ${acquired.freezeOwner.migrationId} for ${acquired.freezeOwner.slug}`,
+            );
           }
           throw new Error("system config writer lock is busy");
         }
@@ -304,6 +306,7 @@ async function main(): Promise<void> {
             assertFleetConfigSlug(entrypointConfig.builderSlug, slug);
             return unfreezeSystemConfig({
               migrationId,
+              slug,
               openclawDir: OPENCLAW_DIR,
             });
           },

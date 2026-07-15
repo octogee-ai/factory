@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CONFIG_FREEZE_CHECKPOINT_PUSH_PENDING_CODE,
+  CONFIG_FREEZE_CONFLICT_ERROR,
+  CONFIG_FREEZE_OWNER_CONFLICT_CODE,
+  CONFIG_FREEZE_SCOPE_CONFLICT_CODE,
+  CONFIG_FREEZE_UNAVAILABLE_ERROR,
+  CONFIG_FREEZE_WRITER_LOCK_BUSY_CODE,
   DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
   DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
   OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_FILE,
@@ -13,6 +19,15 @@ describe("durable OpenClaw config control protocol", () => {
   it("exports one exact capability contract for rollout and Dashboard gates", () => {
     expect(DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL).toBe("durable-openclaw-config");
     expect(DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION).toBe(1);
+  });
+
+  it("exports stable freeze conflict and retry codes for signed control responses", () => {
+    expect(CONFIG_FREEZE_CONFLICT_ERROR).toBe("config freeze conflict");
+    expect(CONFIG_FREEZE_UNAVAILABLE_ERROR).toBe("config freeze unavailable");
+    expect(CONFIG_FREEZE_OWNER_CONFLICT_CODE).toBe("freeze-owner-conflict");
+    expect(CONFIG_FREEZE_SCOPE_CONFLICT_CODE).toBe("freeze-scope-conflict");
+    expect(CONFIG_FREEZE_WRITER_LOCK_BUSY_CODE).toBe("writer-lock-busy");
+    expect(CONFIG_FREEZE_CHECKPOINT_PUSH_PENDING_CODE).toBe("checkpoint-push-pending");
   });
 
   it("exports one exact observed Dashboard bridge capability contract", () => {

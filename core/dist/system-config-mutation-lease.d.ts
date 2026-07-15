@@ -1,3 +1,4 @@
+import type { ConfigFreezeOwner } from "@octogee/shared/types/fleet-controller";
 export interface SystemConfigSyncLeaseOptions {
     openclawDir: string;
     lockName?: string;
@@ -22,7 +23,7 @@ export type SystemConfigMutationLeaseResult = {
 } | {
     ok: false;
     code: "config-frozen";
-    freezeOwner: string;
+    freezeOwner: ConfigFreezeOwner;
 };
 export declare function systemConfigSyncLockPath(openclawDir: string, lockName?: string): string;
 export declare function acquireSystemConfigSyncLeaseSync(options: SystemConfigSyncLeaseOptions): SystemConfigSyncLease | null;

@@ -33,6 +33,12 @@ import {
 } from "../lib/fleet-http-migration.js";
 import { signFleetRequest } from "../lib/fleet-signature.js";
 import {
+  CONFIG_FREEZE_CHECKPOINT_PUSH_PENDING_CODE,
+  CONFIG_FREEZE_CONFLICT_ERROR,
+  CONFIG_FREEZE_OWNER_CONFLICT_CODE,
+  CONFIG_FREEZE_SCOPE_CONFLICT_CODE,
+  CONFIG_FREEZE_UNAVAILABLE_ERROR,
+  CONFIG_FREEZE_WRITER_LOCK_BUSY_CODE,
   SIGNATURE_HEADER,
   MIGRATION_ID_HEADER,
   MIGRATION_MODE_HEADER,
@@ -50,6 +56,11 @@ import {
   type PrepareRsyncImportRequestBody,
   type PushRsyncStateRequestBody,
 } from "../../shared/types/fleet-controller.js";
+import {
+  SystemConfigFreezeOwnerConflictError,
+  SystemConfigFreezeScopeConflictError,
+  SystemConfigFreezeUnavailableError,
+} from "../lib/system-config-roll-control.js";
 import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
 import {
   hasMountedMarker,
@@ -588,6 +599,124 @@ describe("system config roll handlers", () => {
       signature: signFleetRequest(PRIVATE_KEY, freezeBody.migrationId, JSON.stringify(freezeBody)),
     }), absentResponse.res, vi.fn());
     expect(absentResponse.getStatus()).toBe(501);
+  });
+
+  it("returns the exact owning freeze for owner and builder-scope conflicts", async () => {
+    const owner = { migrationId: "mig-owner", slug: "alice" };
+    const requested = { migrationId: "mig-request", slug: "chris" };
+    const conflicts = [
+      {
+        error: new SystemConfigFreezeOwnerConflictError(owner, requested),
+        code: CONFIG_FREEZE_OWNER_CONFLICT_CODE,
+      },
+      {
+        error: new SystemConfigFreezeScopeConflictError(owner, requested),
+        code: CONFIG_FREEZE_SCOPE_CONFLICT_CODE,
+      },
+    ];
+    for (const conflict of conflicts) {
+      const freeze = createConfigFreezeHandler(mkDeps({
+        freezeSystemConfig: () => { throw conflict.error; },
+      }));
+      const freezeBody = configControlBody({ migrationId: requested.migrationId, slug: requested.slug });
+      const freezeResponse = mkResponse();
+      await freeze(mkRequest(freezeBody, {
+        signature: signFleetRequest(PRIVATE_KEY, freezeBody.migrationId, JSON.stringify(freezeBody)),
+      }), freezeResponse.res, vi.fn());
+      expect(freezeResponse.getStatus()).toBe(409);
+      expect(freezeResponse.getBody()).toEqual({
+        error: CONFIG_FREEZE_CONFLICT_ERROR,
+        code: conflict.code,
+        owner,
+      });
+
+      const unfreeze = createConfigUnfreezeHandler(mkDeps({
+        unfreezeSystemConfig: () => { throw conflict.error; },
+      }));
+      const unfreezeBody = configControlBody(
+        { migrationId: requested.migrationId, slug: requested.slug },
+        "unfreeze",
+      );
+      const unfreezeResponse = mkResponse();
+      await unfreeze(mkRequest(unfreezeBody, {
+        signature: signFleetRequest(
+          PRIVATE_KEY,
+          unfreezeBody.migrationId,
+          JSON.stringify(unfreezeBody),
+        ),
+      }), unfreezeResponse.res, vi.fn());
+      expect(unfreezeResponse.getStatus()).toBe(409);
+      expect(unfreezeResponse.getBody()).toEqual({
+        error: CONFIG_FREEZE_CONFLICT_ERROR,
+        code: conflict.code,
+        owner,
+      });
+    }
+  });
+
+  it.each([
+    CONFIG_FREEZE_WRITER_LOCK_BUSY_CODE,
+    CONFIG_FREEZE_CHECKPOINT_PUSH_PENDING_CODE,
+  ])("returns retryable 503 for typed freeze unavailability %s", async (code) => {
+    const freezeSystemConfig = () => { throw new SystemConfigFreezeUnavailableError(code); };
+    const handler = createConfigFreezeHandler(mkDeps({ freezeSystemConfig }));
+    const body = configControlBody({ migrationId: `mig-${code}`, slug: "chris" });
+    const response = mkResponse();
+
+    await handler(mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+    }), response.res, vi.fn());
+
+    expect(response.getStatus()).toBe(503);
+    expect(response.getBody()).toEqual({
+      error: CONFIG_FREEZE_UNAVAILABLE_ERROR,
+      code,
+      retryable: true,
+    });
+  });
+
+  it("keeps invariant failures terminal while treating an unfreeze writer lock as retryable", async () => {
+    const terminal = createConfigFreezeHandler(mkDeps({
+      freezeSystemConfig: () => { throw new Error("platform invariant failed"); },
+    }));
+    const terminalBody = configControlBody({ migrationId: "mig-terminal", slug: "chris" });
+    const terminalResponse = mkResponse();
+    await terminal(mkRequest(terminalBody, {
+      signature: signFleetRequest(
+        PRIVATE_KEY,
+        terminalBody.migrationId,
+        JSON.stringify(terminalBody),
+      ),
+    }), terminalResponse.res, vi.fn());
+    expect(terminalResponse.getStatus()).toBe(409);
+    expect(terminalResponse.getBody()).toEqual({
+      error: "config freeze failed",
+      message: "platform invariant failed",
+    });
+
+    const retryable = createConfigUnfreezeHandler(mkDeps({
+      unfreezeSystemConfig: () => {
+        throw new SystemConfigFreezeUnavailableError(CONFIG_FREEZE_WRITER_LOCK_BUSY_CODE);
+      },
+    }));
+    const retryableBody = configControlBody(
+      { migrationId: "mig-unfreeze-busy", slug: "chris" },
+      "unfreeze",
+    );
+    const retryableResponse = mkResponse();
+    await retryable(mkRequest(retryableBody, {
+      signature: signFleetRequest(
+        PRIVATE_KEY,
+        retryableBody.migrationId,
+        JSON.stringify(retryableBody),
+      ),
+    }), retryableResponse.res, vi.fn());
+    expect(retryableResponse.getStatus()).toBe(503);
+    expect(retryableResponse.getBody()).toEqual({
+      error: CONFIG_FREEZE_UNAVAILABLE_ERROR,
+      code: CONFIG_FREEZE_WRITER_LOCK_BUSY_CODE,
+      retryable: true,
+    });
   });
 
   it("rejects missing or expired config-control freshness before mutation", async () => {

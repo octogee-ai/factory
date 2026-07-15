@@ -141,6 +141,28 @@ export interface ConfigControlRequestBody extends MigrationRequestBody {
     expiresAt: number;
     requestId: string;
 }
+export declare const CONFIG_FREEZE_CONFLICT_ERROR = "config freeze conflict";
+export declare const CONFIG_FREEZE_UNAVAILABLE_ERROR = "config freeze unavailable";
+export declare const CONFIG_FREEZE_OWNER_CONFLICT_CODE = "freeze-owner-conflict";
+export declare const CONFIG_FREEZE_SCOPE_CONFLICT_CODE = "freeze-scope-conflict";
+export declare const CONFIG_FREEZE_WRITER_LOCK_BUSY_CODE = "writer-lock-busy";
+export declare const CONFIG_FREEZE_CHECKPOINT_PUSH_PENDING_CODE = "checkpoint-push-pending";
+export interface ConfigFreezeOwner {
+    migrationId: string;
+    slug: string;
+}
+export type ConfigFreezeConflictCode = typeof CONFIG_FREEZE_OWNER_CONFLICT_CODE | typeof CONFIG_FREEZE_SCOPE_CONFLICT_CODE;
+export type ConfigFreezeUnavailableCode = typeof CONFIG_FREEZE_WRITER_LOCK_BUSY_CODE | typeof CONFIG_FREEZE_CHECKPOINT_PUSH_PENDING_CODE;
+export interface ConfigFreezeConflictResponse {
+    error: typeof CONFIG_FREEZE_CONFLICT_ERROR;
+    code: ConfigFreezeConflictCode;
+    owner: ConfigFreezeOwner;
+}
+export interface ConfigFreezeUnavailableResponse {
+    error: typeof CONFIG_FREEZE_UNAVAILABLE_ERROR;
+    code: ConfigFreezeUnavailableCode;
+    retryable: true;
+}
 export interface ConfigFreezeRequestBody extends ConfigControlRequestBody {
     action: "freeze";
 }

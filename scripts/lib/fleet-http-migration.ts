@@ -8,9 +8,13 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  CONFIG_FREEZE_CONFLICT_ERROR,
+  CONFIG_FREEZE_UNAVAILABLE_ERROR,
+  type ConfigFreezeConflictResponse,
   type AbortRsyncImportRequestBody,
   type ConfigFreezeRequestBody,
   type ConfigFreezeResponse,
+  type ConfigFreezeUnavailableResponse,
   type ConfigRestoreProofRequestBody,
   type ConfigRestoreProofResponse,
   type ConfigUnfreezeRequestBody,
@@ -49,6 +53,11 @@ import {
 } from "../../shared/types/fleet-controller.js";
 import { isValidUsername } from "../../shared/types/identity.js";
 import { verifyFleetRequest } from "./fleet-signature.js";
+import {
+  SystemConfigFreezeOwnerConflictError,
+  SystemConfigFreezeScopeConflictError,
+  SystemConfigFreezeUnavailableError,
+} from "./system-config-roll-control.js";
 import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
 import {
   removeCustomerFromGateway,
@@ -306,6 +315,36 @@ export function createFlushHandler(deps: MigrationHandlerDeps): RequestHandler {
   };
 }
 
+function typedConfigFreezeFailure(error: unknown): {
+  status: 409 | 503;
+  body: ConfigFreezeConflictResponse | ConfigFreezeUnavailableResponse;
+} | null {
+  if (
+    error instanceof SystemConfigFreezeOwnerConflictError ||
+    error instanceof SystemConfigFreezeScopeConflictError
+  ) {
+    return {
+      status: 409,
+      body: {
+        error: CONFIG_FREEZE_CONFLICT_ERROR,
+        code: error.code,
+        owner: error.owner,
+      },
+    };
+  }
+  if (error instanceof SystemConfigFreezeUnavailableError) {
+    return {
+      status: 503,
+      body: {
+        error: CONFIG_FREEZE_UNAVAILABLE_ERROR,
+        code: error.code,
+        retryable: true,
+      },
+    };
+  }
+  return null;
+}
+
 export function createConfigFreezeHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
@@ -331,6 +370,11 @@ export function createConfigFreezeHandler(deps: MigrationHandlerDeps): RequestHa
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log(`[migration-http] config freeze failed migrationId=${body.migrationId}: ${message}`);
+      const typed = typedConfigFreezeFailure(error);
+      if (typed) {
+        res.status(typed.status).json(typed.body);
+        return;
+      }
       res.status(409).json({ error: "config freeze failed", message });
     }
   };
@@ -394,6 +438,11 @@ export function createConfigUnfreezeHandler(deps: MigrationHandlerDeps): Request
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log(`[migration-http] config unfreeze failed migrationId=${body.migrationId}: ${message}`);
+      const typed = typedConfigFreezeFailure(error);
+      if (typed) {
+        res.status(typed.status).json(typed.body);
+        return;
+      }
       res.status(409).json({ error: "config unfreeze failed", message });
     }
   };

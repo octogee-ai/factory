@@ -3,6 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 
+import type { ConfigFreezeOwner } from "@octogee/shared/types/fleet-controller";
+import { isValidUsername } from "@octogee/shared/types/identity";
+
 const DEFAULT_HEARTBEAT_MS = 5_000;
 const DEFAULT_STALE_AFTER_MS = 120_000;
 const DEFAULT_LOCK_NAME = "system_config.sync.lock";
@@ -75,7 +78,7 @@ export interface SystemConfigMutationLease {
 export type SystemConfigMutationLeaseResult =
   | { ok: true; lease: SystemConfigMutationLease }
   | { ok: false; code: "writer-lock-busy" }
-  | { ok: false; code: "config-frozen"; freezeOwner: string };
+  | { ok: false; code: "config-frozen"; freezeOwner: ConfigFreezeOwner };
 
 interface HeartbeatStopResult {
   stopped: boolean;
@@ -296,7 +299,7 @@ export function acquireSystemConfigSyncLeaseSync(
   return null;
 }
 
-function readFreezeOwner(openclawDir: string): string | null {
+function readFreezeOwner(openclawDir: string): ConfigFreezeOwner | null {
   const markerPath = path.join(openclawDir, "system_config.freeze.json");
   let contents: string;
   try {
@@ -306,16 +309,19 @@ function readFreezeOwner(openclawDir: string): string | null {
     throw error;
   }
   const parsed = JSON.parse(contents) as unknown;
+  const record = parsed as { migrationId?: unknown; slug?: unknown };
   if (
     !parsed ||
     typeof parsed !== "object" ||
     Array.isArray(parsed) ||
-    typeof (parsed as { migrationId?: unknown }).migrationId !== "string" ||
-    !(parsed as { migrationId: string }).migrationId
+    typeof record.migrationId !== "string" ||
+    !record.migrationId ||
+    typeof record.slug !== "string" ||
+    !isValidUsername(record.slug)
   ) {
     throw new Error(`invalid system config freeze marker at ${markerPath}`);
   }
-  return (parsed as { migrationId: string }).migrationId;
+  return { migrationId: record.migrationId, slug: record.slug };
 }
 
 export async function acquireSystemConfigMutationLease(
@@ -323,7 +329,7 @@ export async function acquireSystemConfigMutationLease(
 ): Promise<SystemConfigMutationLeaseResult> {
   const syncLease = acquireSystemConfigSyncLeaseSync(options);
   if (!syncLease) return { ok: false, code: "writer-lock-busy" };
-  let freezeOwner: string | null;
+  let freezeOwner: ConfigFreezeOwner | null;
   try {
     freezeOwner = readFreezeOwner(options.openclawDir);
   } catch (error) {

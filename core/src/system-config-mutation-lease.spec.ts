@@ -85,14 +85,24 @@ describe("system config cross-container mutation lease", () => {
 
     fs.writeFileSync(path.join(openclawDir, "system_config.freeze.json"), JSON.stringify({
       migrationId: "mig-1",
+      slug: "alice",
       directoryMode: 0o700,
       configMode: 0o600,
     }));
     await expect(acquireSystemConfigMutationLease({ openclawDir })).resolves.toEqual({
       ok: false,
       code: "config-frozen",
-      freezeOwner: "mig-1",
+      freezeOwner: { migrationId: "mig-1", slug: "alice" },
     });
+    expect(fs.existsSync(systemConfigSyncLockPath(openclawDir))).toBe(false);
+
+    fs.writeFileSync(path.join(openclawDir, "system_config.freeze.json"), JSON.stringify({
+      migrationId: "mig-without-scope",
+      directoryMode: 0o700,
+      configMode: 0o600,
+    }));
+    await expect(acquireSystemConfigMutationLease({ openclawDir }))
+      .rejects.toThrow(/invalid system config freeze marker/i);
     expect(fs.existsSync(systemConfigSyncLockPath(openclawDir))).toBe(false);
   });
 

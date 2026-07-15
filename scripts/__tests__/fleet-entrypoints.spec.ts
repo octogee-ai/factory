@@ -89,6 +89,7 @@ describe("fleet-controller entrypoint config", () => {
     } as never, openclawDir);
     fs.writeFileSync(path.join(openclawDir, "system_config.freeze.json"), JSON.stringify({
       migrationId: "mig-1",
+      slug: "alice",
       directoryMode: 0o700,
       configMode: 0o600,
     }));
@@ -112,6 +113,7 @@ describe("fleet-controller entrypoint config", () => {
     } as never, openclawDir);
     fs.writeFileSync(path.join(openclawDir, "system_config.freeze.json"), JSON.stringify({
       migrationId: "mig-1",
+      slug: "alice",
       directoryMode: 0o700,
       configMode: 0o600,
     }));

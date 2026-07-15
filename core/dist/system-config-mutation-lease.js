@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
+import { isValidUsername } from "@octogee/shared/types/identity";
 const DEFAULT_HEARTBEAT_MS = 5_000;
 const DEFAULT_STALE_AFTER_MS = 120_000;
 const DEFAULT_LOCK_NAME = "system_config.sync.lock";
@@ -256,14 +257,17 @@ function readFreezeOwner(openclawDir) {
         throw error;
     }
     const parsed = JSON.parse(contents);
+    const record = parsed;
     if (!parsed ||
         typeof parsed !== "object" ||
         Array.isArray(parsed) ||
-        typeof parsed.migrationId !== "string" ||
-        !parsed.migrationId) {
+        typeof record.migrationId !== "string" ||
+        !record.migrationId ||
+        typeof record.slug !== "string" ||
+        !isValidUsername(record.slug)) {
         throw new Error(`invalid system config freeze marker at ${markerPath}`);
     }
-    return parsed.migrationId;
+    return { migrationId: record.migrationId, slug: record.slug };
 }
 export async function acquireSystemConfigMutationLease(options) {
     const syncLease = acquireSystemConfigSyncLeaseSync(options);

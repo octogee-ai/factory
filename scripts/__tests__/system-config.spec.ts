@@ -741,6 +741,7 @@ describe("system_config restore", () => {
     writeJson(configPath, { version: 1 });
     fs.writeFileSync(path.join(openclawDir, "system_config.freeze.json"), JSON.stringify({
       migrationId: "migration-1",
+      slug: "acme",
       directoryMode: 0o700,
       configMode: 0o600,
     }));
