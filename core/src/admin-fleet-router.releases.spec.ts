@@ -31,6 +31,7 @@ function valueAtPath(data: Record<string, unknown>, path: string): unknown {
 interface TestRouterOptions {
   synchronizeFirstTwoReadsOf?: string;
   failTransactions?: boolean;
+  beforeFirstTransaction?: (store: Map<string, Record<string, unknown>>) => void;
   provisionGatewayAuthSecret?: (input: {
     gatewayId: string;
     gatewayServiceAccount: string;
@@ -140,6 +141,7 @@ function makeDb(
   // bodies run one at a time, and buffered writes apply only if the body
   // completes (a throw leaves the store untouched — all-or-nothing).
   let txnLock: Promise<unknown> = Promise.resolve();
+  let firstTransactionStarted = false;
   async function runTransaction<T>(
     body: (txn: {
       get: (ref: { get: () => Promise<unknown> }) => Promise<unknown>;
@@ -150,6 +152,10 @@ function makeDb(
     const run = txnLock.then(async () => {
       if (opts.failTransactions) {
         throw new Error("simulated transaction failure");
+      }
+      if (!firstTransactionStarted) {
+        firstTransactionStarted = true;
+        opts.beforeFirstTransaction?.(store);
       }
       const writes: Array<() => Promise<void>> = [];
       const txn = {
@@ -1068,16 +1074,20 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
   });
 });
 
-// P1-1: retire must mark the durable GatewayDoc retired and RETAIN release
-// history — never leave the new docs orphaned for the legacy cleanup to nuke.
-describe("DELETE /gateways/:id — retire marks the GatewayDoc, retains releases", () => {
-  it("marks gateways/{id} desiredStatus retired and leaves the release subcollection intact", async () => {
+describe("DELETE /gateways/:id — retirement claim", () => {
+  it("atomically marks the root retired, binds the intent, and retains release history", async () => {
     const { app, store } = mkApp(seedNewSchemaGateway("zed", sharedPayload()));
     const res = await request(app).delete("/gateways/zed");
     expect(res.status).toBe(202);
     expect(store.get(`${GLM_GATEWAYS_COLLECTION}/zed`)).toBeUndefined();
-    expect(store.get("gateways/zed")?.desiredStatus).toBe("retired");
-    // Release history is durable — retire never deletes it.
+    expect(store.get("gateways/zed")).toMatchObject({
+      desiredStatus: "retired",
+      retirementVersion: 1,
+      retirementClaim: { operationId: "auto-1", version: 1 },
+    });
+    expect(opsIn(store, "retire-gateway")[0]?.input).toMatchObject({
+      retirementClaimVersion: 1,
+    });
     expect(store.get(`gateways/zed/${GATEWAY_RELEASES_SUBCOLLECTION}/1`)).toBeDefined();
   });
 
@@ -1095,8 +1105,10 @@ describe("DELETE /gateways/:id — retire marks the GatewayDoc, retains releases
     const { app, store } = mkApp(seedNewSchemaGateway("back", sharedPayload()));
     const res = await request(app).delete("/gateways/back");
     expect(res.status).toBe(202);
-    // Marked retired on the durable doc; the bare glmGateways doc is NOT created.
-    expect(store.get("gateways/back")?.desiredStatus).toBe("retired");
+    expect(store.get("gateways/back")).toMatchObject({
+      desiredStatus: "retired",
+      retirementClaim: { version: 1 },
+    });
     expect(store.get(`${GLM_GATEWAYS_COLLECTION}/back`)).toBeUndefined();
     // A retire-gateway op is queued for the controller.
     expect(opsIn(store, "retire-gateway")).toHaveLength(1);
@@ -1165,6 +1177,43 @@ describe("DELETE /gateways/:id — retire marks the GatewayDoc, retains releases
 
     expect(res.body.error).toMatch(/config-control obligation/i);
     expect(store.get("gateways/frozen")?.desiredStatus).toBe("running");
+    expect(opsIn(store, "retire-gateway")).toHaveLength(0);
+  });
+
+  it("rejects when a roll starts after retirement preflight but before its transactional claim", async () => {
+    const { app, store } = mkApp(seedServingGateway("racing-roll", sharedPayload()), {
+      beforeFirstTransaction: (state) => {
+        state.set("gateways/racing-roll", {
+          ...state.get("gateways/racing-roll"),
+          roll: { operationId: "roll-racing", systemConfigRoll: { phase: "freezing" } },
+        });
+      },
+    });
+
+    await request(app).delete("/gateways/racing-roll").expect(409);
+
+    expect(store.get("gateways/racing-roll")?.desiredStatus).toBe("running");
+    expect(opsIn(store, "retire-gateway")).toHaveLength(0);
+  });
+
+  it("rejects when config freeze starts after retirement preflight but before its transactional claim", async () => {
+    const { app, store } = mkApp(seedServingGateway("racing-freeze", sharedPayload()), {
+      beforeFirstTransaction: (state) => {
+        const path = `${GLM_GATEWAYS_COLLECTION}/racing-freeze-r1`;
+        const revision = state.get(path)!;
+        state.set(path, {
+          ...revision,
+          heartbeat: {
+            ...(revision.heartbeat as Record<string, unknown>),
+            configStatus: { freezeState: "frozen", bootRole: "source-frozen" },
+          },
+        });
+      },
+    });
+
+    await request(app).delete("/gateways/racing-freeze").expect(409);
+
+    expect(store.get("gateways/racing-freeze")?.desiredStatus).toBe("running");
     expect(opsIn(store, "retire-gateway")).toHaveLength(0);
   });
 

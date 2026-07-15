@@ -12,6 +12,7 @@ import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-contro
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 import { findPendingActivationOperation, requestBuilderActivationLease, } from "./builder-activation-lease.js";
 import { resolveUidForSlug } from "./assigned-roster.js";
+import { GatewayRetirementConflictError, claimGatewayRetirementAtomic, hasGatewayRetirementConfigObligation, } from "./gateway-retirement-claim.js";
 export { resolveBuilderActivationPlan } from "./builder-activation-lease.js";
 function rejectPersistenceInBody(body) {
     if (body.persistence === undefined)
@@ -3471,6 +3472,22 @@ export function addAdminFleetRoutes(router, deps) {
                 });
                 return;
             }
+            if (runtime.root.roll) {
+                res.status(409).json({
+                    error: "gateway has an unfinished release roll and config obligation",
+                    gatewayId: id,
+                    operationId: runtime.root.roll.operationId,
+                });
+                return;
+            }
+            if (hasGatewayRetirementConfigObligation(runtime.heartbeat?.configStatus)) {
+                res.status(409).json({
+                    error: "gateway live revision has an active config-control obligation",
+                    gatewayId: id,
+                    revisionId: runtime.root.liveRevisionId,
+                });
+                return;
+            }
             // Refuse synchronously while any customer is still assigned — the
             // controller's retire arm enforces the same gate, but a 409 here spares
             // the operator a marked-retired-then-blocked gateway.
@@ -3494,28 +3511,38 @@ export function addAdminFleetRoutes(router, deps) {
             }
             const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
             const operationId = opRef.id;
-            const batch = db.batch();
-            batch.update(db.collection(GATEWAYS_COLLECTION).doc(id), {
-                desiredStatus: "retired",
-                updatedAt: Date.now(),
-                updatedBy: createdBy,
-            });
-            batch.set(opRef, {
-                kind: "retire-gateway",
-                status: "pending",
-                createdBy,
-                createdAt: Date.now(),
-                startedAt: null,
-                completedAt: null,
-                input: {
+            const createdAt = Date.now();
+            try {
+                await claimGatewayRetirementAtomic({
+                    db,
                     gatewayId: id,
-                    ...(retainData ? { retainData: true } : {}),
-                    ...(retainServiceAccount ? { retainServiceAccount: true } : {}),
-                },
-                steps: [],
-                gatewayId: id,
-            });
-            await batch.commit();
+                    operationId,
+                    operation: {
+                        kind: "retire-gateway",
+                        status: "pending",
+                        createdBy,
+                        createdAt,
+                        startedAt: null,
+                        completedAt: null,
+                        input: {
+                            gatewayId: id,
+                            ...(retainData ? { retainData: true } : {}),
+                            ...(retainServiceAccount ? { retainServiceAccount: true } : {}),
+                        },
+                        steps: [],
+                        gatewayId: id,
+                    },
+                    now: createdAt,
+                    updatedBy: createdBy,
+                });
+            }
+            catch (error) {
+                if (error instanceof GatewayRetirementConflictError) {
+                    res.status(409).json({ error: error.message, gatewayId: id });
+                    return;
+                }
+                throw error;
+            }
             res.status(202).json({ gatewayId: id, operationId, retainData, retainServiceAccount });
         }
         catch (e) {

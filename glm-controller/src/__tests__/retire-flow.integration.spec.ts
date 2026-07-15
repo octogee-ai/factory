@@ -87,7 +87,7 @@ function adminDeleteGateway(
     createdAt: Date.now(),
     startedAt: null,
     completedAt: null,
-    input: { gatewayId },
+    input: { gatewayId, retirementClaimVersion: 1 },
     steps: [],
   });
   return { status: 202, operationId };
@@ -95,20 +95,23 @@ function adminDeleteGateway(
 
 function makeRetireDeps(state: SharedState) {
   return {
-    readGatewayLiveState: async (gatewayId: string) => {
+    verifyRetirementClaim: async ({ gatewayId }: { gatewayId: string }) => {
       const desiredStatus = state.glmGateways.get(gatewayId)?.desiredStatus;
       if (
         desiredStatus !== "running" &&
         desiredStatus !== "paused" &&
         desiredStatus !== "retired"
       ) {
-        return null;
+        return { ok: false as const, error: "durable retirement state unavailable" };
       }
       const hb = state.gateways.get(gatewayId);
-      return {
-        mountedCustomers: hb?.mountedCustomers ?? [],
-        desiredStatus,
-      };
+      if (desiredStatus !== "retired") {
+        return { ok: false as const, error: "desiredStatus is no longer retired" };
+      }
+      if ((hb?.mountedCustomers.length ?? 0) > 0) {
+        return { ok: false as const, error: "mounted customers remain" };
+      }
+      return { ok: true as const };
     },
     // Legacy bare-id gateways: no assignment docs, no revision docs — the
     // full-gateway retire drain reads empty and the flow is byte-identical.
@@ -304,6 +307,7 @@ await reconcilerTick(state, helm);
     const handler = createRetireGatewayHandler(makeRetireDeps(state));
     const result = await handler(state.operations.get(adminRes.operationId!)!, makeCtx());
     expect(result.success).toBe(true);
+    expect(state.helmReleases.size).toBe(0);
     expect(state.glmGateways.size).toBe(0);
   });
 
@@ -349,6 +353,7 @@ imageTag: "9778420",
     const handler = createRetireGatewayHandler(makeRetireDeps(state));
     const result = await handler(state.operations.get(adminRes.operationId!)!, makeCtx());
     expect(result.success).toBe(true);
+    expect(state.helmReleases.size).toBe(0);
     expect(state.glmGateways.size).toBe(0);
     expect(state.gateways.size).toBe(0);
   });

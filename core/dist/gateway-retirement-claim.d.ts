@@ -1,0 +1,36 @@
+import type { Firestore } from "firebase-admin/firestore";
+export declare class GatewayRetirementConflictError extends Error {
+    constructor(message: string);
+}
+interface RetirementOperation {
+    input?: unknown;
+    [key: string]: unknown;
+}
+interface ClaimGatewayRetirementInput {
+    db: Firestore;
+    gatewayId: string;
+    operationId: string;
+    operation: RetirementOperation;
+    now: number;
+    updatedBy: string;
+}
+interface VerifyGatewayRetirementClaimInput {
+    db: Firestore;
+    gatewayId: string;
+    operationId: string;
+    version: number;
+    now: number;
+    updatedBy: string;
+}
+export type GatewayRetirementVerification = {
+    ok: true;
+} | {
+    ok: false;
+    error: string;
+};
+export declare function hasGatewayRetirementConfigObligation(status: unknown): boolean;
+export declare function claimGatewayRetirementAtomic(input: ClaimGatewayRetirementInput): Promise<{
+    version: number;
+}>;
+export declare function verifyGatewayRetirementClaimAtomic(input: VerifyGatewayRetirementClaimInput): Promise<GatewayRetirementVerification>;
+export {};

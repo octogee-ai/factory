@@ -141,6 +141,15 @@ export interface GatewayLegacyBackfill {
   startedAt: number;
 }
 
+export interface GatewayRetirementClaim {
+  operationId: string;
+  version: number;
+  claimedAt: number;
+  liveRevisionId: string | null;
+  liveRelease: number | null;
+  previousDesiredStatus: Exclude<GatewayLifecycleStatus, "retired">;
+}
+
 // gateways/{gatewayId} — durable desired gateway identity. No reservation
 // mirror (operatorGatewayReservations is the sole durable reservation source)
 // and no persistence (all gateways are Spot + emptyDir).
@@ -161,6 +170,8 @@ export interface GatewayDoc {
   preemptionHandoff?: GatewayPreemptionHandoffSpec | null;
   retireAfter?: number | null;
   legacyBackfill?: GatewayLegacyBackfill | null;
+  retirementVersion?: number;
+  retirementClaim?: GatewayRetirementClaim | null;
 }
 
 export const W9_CANDIDATE_MANIFEST_PATH =

@@ -14,7 +14,7 @@ function mkOp(overrides: Partial<Operation> = {}): Operation {
     createdAt: 0,
     startedAt: null,
     completedAt: null,
-    input: { gatewayId: "canary" },
+    input: { gatewayId: "canary", retirementClaimVersion: 1 },
     steps: [],
     ...overrides,
   };
@@ -73,12 +73,22 @@ function baseState(overrides: Partial<FakeState> = {}): FakeState {
 function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}): RetireGatewayDeps {
   let virtualClock = 0;
   return {
-    readGatewayLiveState: vi.fn(async (gatewayId: string) => {
+    verifyRetirementClaim: vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
       const live = state.live.get(gatewayId);
-      return {
-        mountedCustomers: live?.mounted ?? [],
-        desiredStatus: state.desiredStatus.get(gatewayId),
-      };
+      const desiredStatus = state.desiredStatus.get(gatewayId);
+      if (!desiredStatus) {
+        return { ok: false as const, error: `gateway ${gatewayId} durable retirement state unreadable` };
+      }
+      if (desiredStatus !== "retired") {
+        return { ok: false as const, error: `gateway ${gatewayId} desiredStatus is no longer retired` };
+      }
+      if ((live?.mounted.length ?? 0) > 0) {
+        return {
+          ok: false as const,
+          error: `gateway ${gatewayId} still has ${live!.mounted.length} mounted customer(s): ${live!.mounted.join(", ")}`,
+        };
+      }
+      return { ok: true as const };
     }),
     readAssignmentsForGateway: vi.fn(async () => state.assignments),
     readNonRetiredRevisions: vi.fn(async () =>
@@ -179,7 +189,7 @@ describe("createRetireGatewayHandler — teardown completeness (happy path)", ()
     const ctx = makeCtx();
 
     const result = await createRetireGatewayHandler(deps)(
-      mkOp({ input: { gatewayId: "canary", retainData: true } }),
+      mkOp({ input: { gatewayId: "canary", retirementClaimVersion: 1, retainData: true } }),
       ctx,
     );
 
@@ -326,7 +336,7 @@ describe("createRetireGatewayHandler — independent best-effort teardown (D4)",
     const deps = makeDeps(state, { teardownGatewayServiceAccount: teardownGsa });
 
     const result = await createRetireGatewayHandler(deps)(
-      mkOp({ input: { gatewayId: "canary", retainServiceAccount: true } }),
+      mkOp({ input: { gatewayId: "canary", retirementClaimVersion: 1, retainServiceAccount: true } }),
       makeCtx(),
     );
 
@@ -357,6 +367,32 @@ describe("createRetireGatewayHandler — independent best-effort teardown (D4)",
 });
 
 describe("createRetireGatewayHandler — refusals + edge cases", () => {
+  it.each([
+    "gateway canary has an unfinished release roll and config obligation",
+    "gateway canary live revision has an active config-control obligation",
+  ])("rechecks the atomic claim immediately before drain and stops on %s", async (error) => {
+    const state = baseState({
+      revisions: [{ revisionId: "canary-r1", release: 1, lifecycle: "serving" }],
+    });
+    const verifyRetirementClaim = vi.fn(async () => ({ ok: false as const, error }));
+    const deps = makeDeps(
+      state,
+      { verifyRetirementClaim } as unknown as Partial<RetireGatewayDeps>,
+    );
+
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(result).toMatchObject({ success: false, error });
+    expect(verifyRetirementClaim).toHaveBeenCalledWith({
+      gatewayId: "canary",
+      operationId: "op-r-1",
+      version: 1,
+    });
+    expect(deps.readNonRetiredRevisions).not.toHaveBeenCalled();
+    expect(deps.helmUninstallRevision).not.toHaveBeenCalled();
+    expect(deps.deleteGatewayPersistentVolumeClaim).not.toHaveBeenCalled();
+  });
+
   it("refuses when the gateway still has mounted customers (nothing torn down)", async () => {
     const state = baseState({
       helmInstances: new Set(["canary"]),
@@ -419,7 +455,9 @@ describe("createRetireGatewayHandler — refusals + edge cases", () => {
   it("fails closed when the durable root or exact live revision is unreadable", async () => {
     const state = baseState();
     const deps = makeDeps(state, {
-      readGatewayLiveState: vi.fn(async () => null),
+      verifyRetirementClaim: vi.fn(async () => {
+        throw new Error("exact live revision unavailable");
+      }),
     });
 
     const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());

@@ -1,14 +1,8 @@
 import type { Operation, OperationStep, StepStatus } from "@octogee/shared/types/glm";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
-import type { GatewayLifecycleStatus } from "@octogee/shared/types/gateway-releases";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 
 const UNKNOWN_ERROR = "unknown error";
-
-export interface GatewayLiveState {
-  mountedCustomers: string[];
-  desiredStatus?: GatewayLifecycleStatus;
-}
 
 interface NonRetiredGatewayRevision {
   revisionId: string;
@@ -17,7 +11,11 @@ interface NonRetiredGatewayRevision {
 }
 
 export interface RetireGatewayDeps {
-  readGatewayLiveState: (gatewayId: string) => Promise<GatewayLiveState | null>;
+  verifyRetirementClaim: (input: {
+    gatewayId: string;
+    operationId: string;
+    version: number;
+  }) => Promise<{ ok: true } | { ok: false; error: string }>;
 
   deleteGlmGateway: (gatewayId: string) => Promise<void>;
 
@@ -78,6 +76,7 @@ export interface RetireGatewayDeps {
 
 interface RetireGatewayInput {
   gatewayId?: unknown;
+  retirementClaimVersion?: unknown;
   retainData?: unknown;
   retainServiceAccount?: unknown;
 }
@@ -86,6 +85,7 @@ type RetireGatewayRequest =
   | { error: string }
   | {
       gatewayId: string;
+      retirementClaimVersion: number;
       retainData: boolean;
       retainServiceAccount: boolean;
     };
@@ -119,8 +119,15 @@ function resolveRetireGatewayRequest(input: RetireGatewayInput): RetireGatewayRe
   if (!isValidGatewayId(gatewayId)) {
     return { error: `invalid gatewayId in op.input: "${gatewayId}"` };
   }
+  if (
+    !Number.isInteger(input.retirementClaimVersion) ||
+    (input.retirementClaimVersion as number) <= 0
+  ) {
+    return { error: "invalid retirementClaimVersion in op.input" };
+  }
   return {
     gatewayId,
+    retirementClaimVersion: input.retirementClaimVersion as number,
     retainData: shouldRetainData(input),
     retainServiceAccount: shouldRetainServiceAccount(input),
   };
@@ -130,15 +137,28 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
   return async (op: Operation, ctx: OperationContext): Promise<OperationResult> => {
     const request = resolveRetireGatewayRequest(op.input as RetireGatewayInput);
     if ("error" in request) return failure(request.error);
-    const { gatewayId, retainData, retainServiceAccount } = request;
+    const { gatewayId, retirementClaimVersion, retainData, retainServiceAccount } = request;
 
     // Refuse while any customer is still assigned — the operator must migrate
     // them off first. Naming the slugs makes the next action obvious.
     const assignmentFailure = await assertNoAssignments(deps, gatewayId);
     if (assignmentFailure) return assignmentFailure;
 
-    const liveFailure = await assertGatewayRetirable(deps, gatewayId);
-    if (liveFailure) return liveFailure;
+    let claimVerification: { ok: true } | { ok: false; error: string };
+    try {
+      claimVerification = await deps.verifyRetirementClaim({
+        gatewayId,
+        operationId: op.id,
+        version: retirementClaimVersion,
+      });
+    } catch (error) {
+      return failure(
+        `gateway ${gatewayId} durable retirement state unreadable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    if (!claimVerification.ok) return failure(claimVerification.error);
 
     // Drain every non-retired revision (uninstall octogee-gw-{revisionId} +
     // tombstone + retire the revision doc) BEFORE any gateway-scoped teardown.
@@ -344,36 +364,6 @@ function mountedRevisionFailure(
   return failure(
     `gateway ${gatewayId} still has ${mountCount} mounted customer(s) on non-retired revision(s): ${descriptions.join("; ")}`,
   );
-}
-
-async function assertGatewayRetirable(
-  deps: RetireGatewayDeps,
-  gatewayId: string,
-): Promise<OperationResult | null> {
-  let live: GatewayLiveState | null;
-  try {
-    live = await deps.readGatewayLiveState(gatewayId);
-  } catch (error) {
-    return failure(
-      `gateway ${gatewayId} durable retirement state unreadable: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  }
-  if (live == null) {
-    return failure(`gateway ${gatewayId} durable retirement state unreadable`);
-  }
-  if (live.desiredStatus !== "retired") {
-    return failure(
-      `gateway ${gatewayId} desiredStatus is no longer retired; refusing retirement`,
-    );
-  }
-  if (live.mountedCustomers.length > 0) {
-    return failure(
-      `gateway ${gatewayId} still has ${live.mountedCustomers.length} mounted customer(s): ${live.mountedCustomers.join(", ")}`,
-    );
-  }
-  return null;
 }
 
 async function cleanupGatewayRecords(

@@ -78,6 +78,14 @@ export interface GatewayLegacyBackfill {
     sourceGlmGatewayIds: string[];
     startedAt: number;
 }
+export interface GatewayRetirementClaim {
+    operationId: string;
+    version: number;
+    claimedAt: number;
+    liveRevisionId: string | null;
+    liveRelease: number | null;
+    previousDesiredStatus: Exclude<GatewayLifecycleStatus, "retired">;
+}
 export interface GatewayDoc {
     gatewayId: string;
     createdAt: number;
@@ -95,6 +103,8 @@ export interface GatewayDoc {
     preemptionHandoff?: GatewayPreemptionHandoffSpec | null;
     retireAfter?: number | null;
     legacyBackfill?: GatewayLegacyBackfill | null;
+    retirementVersion?: number;
+    retirementClaim?: GatewayRetirementClaim | null;
 }
 export declare const W9_CANDIDATE_MANIFEST_PATH = "infra/gateway/openclaw-candidates/agent-conversation.json";
 export declare const W9_MATTERMOST_OVERLAY_VALUES_PATH = "infra/candidates/values.mattermost-silent-post.yaml";

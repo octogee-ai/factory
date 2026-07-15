@@ -1,4 +1,4 @@
-import { GATEWAYS_COLLECTION, } from "@octogee/shared/types/fleet-controller";
+import { GATEWAY_HEARTBEAT_INTERVAL_MS, GATEWAY_UNREACHABLE_AFTER_MS, GATEWAYS_COLLECTION, hasDurableOpenClawConfigControlProtocol, } from "@octogee/shared/types/fleet-controller";
 import { GLM_GATEWAYS_COLLECTION, resolveUserGatewayShellState, } from "@octogee/shared/types/glm";
 import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, } from "@octogee/shared/types/gateway-releases";
 export async function writeGatewayHeartbeat(deps, snapshot) {
@@ -43,7 +43,7 @@ function protocolV2PromotionIsExact(configRoll, operationId, sourceRevisionId, t
         return false;
     return [
         configRoll.phase === "promoted",
-        configRoll.migrationId === `roll-config:${operationId}`,
+        configRoll.migrationId === `roll-config-${operationId}`,
         configRoll.sourceRevisionId === sourceRevisionId,
         configRoll.targetRevisionId === targetRevisionId,
         configRoll.freezeRef === `refs/octogee/system-config/freeze/${sourceRevisionId}`,
@@ -71,17 +71,28 @@ function recordOrEmpty(value) {
         return {};
     return value;
 }
-function protocolV2TargetProofIsCurrent(configRoll, target) {
+function protocolV2TargetProofIsCurrent(configRoll, target, input) {
     const targetRecord = recordOrEmpty(target);
     const helm = recordOrEmpty(targetRecord.helm);
     const heartbeat = recordOrEmpty(targetRecord.heartbeat);
     const status = recordOrEmpty(heartbeat.configStatus);
     const owner = recordOrEmpty(status.controlOwner);
+    const lastHeartbeatAt = millis(heartbeat.lastHeartbeatAt);
+    const configObservedAt = millis(status.observedAt);
     return [
+        targetRecord.docKind === "revision",
+        targetRecord.gateway === input.gatewayId,
+        targetRecord.revisionId === input.revisionId,
+        targetRecord.release === input.release,
         helm.imageTag === configRoll.imageTag,
+        heartbeat.status === "ready",
+        freshObservation(lastHeartbeatAt, input.now),
         heartbeat.startedAt === configRoll.targetStartedAt,
         heartbeat.version === configRoll.buildSha,
-        heartbeat.openclawVersion === configRoll.openclawVersion,
+        hasDurableOpenClawConfigControlProtocol(status),
+        freshObservation(configObservedAt, input.now),
+        status.runtimeReady === true,
+        status.openclawVersion === configRoll.openclawVersion,
         status.bootRole === "target-candidate",
         owner.migrationId === configRoll.migrationId,
         owner.sourceRevisionId === configRoll.sourceRevisionId,
@@ -91,6 +102,29 @@ function protocolV2TargetProofIsCurrent(configRoll, target) {
         status.candidateCommit === configRoll.candidateCommit,
         status.candidateHash === configRoll.candidateHash,
     ].every(Boolean);
+}
+function millis(value) {
+    if (typeof value === "number" && Number.isFinite(value))
+        return value;
+    if (value instanceof Date)
+        return value.getTime();
+    if (value &&
+        typeof value === "object" &&
+        typeof value.toMillis === "function") {
+        try {
+            const result = value.toMillis();
+            return typeof result === "number" && Number.isFinite(result) ? result : null;
+        }
+        catch {
+            return null;
+        }
+    }
+    return null;
+}
+function freshObservation(observedAt, now) {
+    return observedAt !== null &&
+        observedAt <= now + GATEWAY_HEARTBEAT_INTERVAL_MS &&
+        now - observedAt <= GATEWAY_UNREACHABLE_AFTER_MS;
 }
 // Atomic cutover (GATEWAY-RELEASES-SPEC, PR5 review P0). The mirror move AND the
 // assignment write commit in ONE Firestore transaction, so a crash/throw leaves
@@ -133,7 +167,12 @@ export async function commitCutoverAtomic(deps, params) {
                     throw new Error("protocol-v2 candidate is not durably promoted at cutover");
                 }
                 const targetSnap = await txn.get(deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(params.rollFence.targetRevisionId));
-                if (!protocolV2TargetProofIsCurrent(configRoll, targetSnap.exists ? targetSnap.data() : undefined)) {
+                if (!protocolV2TargetProofIsCurrent(configRoll, targetSnap.exists ? targetSnap.data() : undefined, {
+                    gatewayId: params.toGatewayId,
+                    revisionId: params.rollFence.targetRevisionId,
+                    release: params.rollFence.targetRelease,
+                    now: nowMs,
+                })) {
                     throw new Error("protocol-v2 target candidate proof changed before cutover");
                 }
             }

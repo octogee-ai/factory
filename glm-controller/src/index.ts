@@ -116,6 +116,7 @@ import { completeOperatorReservationAfterMigration } from "./operator-reservatio
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import type { MigrationRollFence } from "@octogee/core/fleet-migration-runner";
+import { verifyGatewayRetirementClaimAtomic } from "@octogee/core/gateway-retirement-claim";
 import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
 import { createRetireRevisionHandler } from "./handlers/retire-revision.js";
 import { createGatewayServiceAccountTeardown } from "./lib/gateway-gsa.js";
@@ -3763,30 +3764,15 @@ async function buildHandlers(
   });
 
   const retireGateway = createRetireGatewayHandler({
-    readGatewayLiveState: async (gatewayId) => {
-      const rootSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-      const root = rootSnap.exists ? rootSnap.data() : undefined;
-      if (!isDurableRootConfigDoc(root, gatewayId)) return null;
-      const revisionId = root.trafficRevisionId ?? root.liveRevisionId;
-      if (!revisionId) return null;
-      const revisionSnap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId).get();
-      const revision = revisionSnap.exists ? revisionSnap.data() : undefined;
-      if (
-        !isRevisionRealizationDoc(revision) ||
-        revision.gateway !== gatewayId ||
-        revision.revisionId !== revisionId ||
-        revisionId !== revisionIdForRelease(gatewayId, revision.release)
-      ) {
-        return null;
-      }
-      return {
-        mountedCustomers: readMountedCustomers(
-          revision as unknown as Record<string, unknown>,
-          undefined,
-        ),
-        desiredStatus: root.desiredStatus,
-      };
-    },
+    verifyRetirementClaim: ({ gatewayId, operationId, version }) =>
+      verifyGatewayRetirementClaimAtomic({
+        db,
+        gatewayId,
+        operationId,
+        version,
+        now: Date.now(),
+        updatedBy: "cowboy-retire-gateway",
+      }),
     readAssignmentsForGateway: async (gatewayId) => {
       const assignments = await readAssignmentDocsForGateway(db, gatewayId);
       return assignments.map((a) => ({ uid: a.uid, slug: a.slug }));

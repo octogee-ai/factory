@@ -89,6 +89,30 @@ function servingRevision(
 }
 
 describe("durable migration root resolution", () => {
+  it("keeps a claimed retired gateway out of ordinary migration sources and destinations", async () => {
+    const claimedRetired = durableGateway("default", {
+      desiredStatus: "retired",
+      retirementClaim: {
+        operationId: "retire-1",
+        version: 1,
+        claimedAt: 10,
+        liveRevisionId: "default-r1",
+        liveRelease: 1,
+        previousDesiredStatus: "running",
+      },
+    });
+    const db = database({
+      "gateways/default": claimedRetired,
+      "glmGateways/default-r1": servingRevision("default"),
+    });
+
+    await expect(resolvePlacementFromFirestore(db as never, "default")).resolves.toEqual({
+      ok: false,
+      reason: "revision-not-ready",
+    });
+    await expect(resolveLiveRevisionAsSource(db as never, "default")).resolves.toBeNull();
+  });
+
   it("does not recover a pending Helm revision for a paused durable root", async () => {
     const db = database({
       "gateways/default": durableGateway("default", { desiredStatus: "paused" }),

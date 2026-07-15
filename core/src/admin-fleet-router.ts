@@ -85,6 +85,11 @@ import {
   requestBuilderActivationLease,
 } from "./builder-activation-lease.js";
 import { resolveUidForSlug } from "./assigned-roster.js";
+import {
+  GatewayRetirementConflictError,
+  claimGatewayRetirementAtomic,
+  hasGatewayRetirementConfigObligation,
+} from "./gateway-retirement-claim.js";
 
 export { resolveBuilderActivationPlan } from "./builder-activation-lease.js";
 
@@ -1188,18 +1193,6 @@ function exactLiveRevision(
 
 function runtimeHeartbeat(revision: RevisionRealizationDoc | null): GlmDoc | null {
   return revision && isPlainRecord(revision.heartbeat) ? revision.heartbeat : null;
-}
-
-function hasConfigControlObligation(heartbeat: GlmDoc | null): boolean {
-  const status = heartbeat && isPlainRecord(heartbeat.configStatus)
-    ? heartbeat.configStatus
-    : null;
-  if (!status) return false;
-  return status.freezeState === "freezing" ||
-    status.freezeState === "frozen" ||
-    status.bootRole === "source-frozen" ||
-    status.bootRole === "target-candidate" ||
-    isPlainRecord(status.controlOwner);
 }
 
 async function readDurableGatewayRuntime(
@@ -4706,7 +4699,7 @@ router.post(
           });
           return;
         }
-        if (hasConfigControlObligation(runtime.heartbeat)) {
+        if (hasGatewayRetirementConfigObligation(runtime.heartbeat?.configStatus)) {
           res.status(409).json({
             error: "gateway live revision has an active config-control obligation",
             gatewayId: id,
@@ -4740,28 +4733,37 @@ router.post(
 
         const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
         const operationId = opRef.id;
-        const batch = db.batch();
-        batch.update(db.collection(GATEWAYS_COLLECTION).doc(id), {
-          desiredStatus: "retired",
-          updatedAt: Date.now(),
-          updatedBy: createdBy,
-        });
-        batch.set(opRef, {
-          kind: "retire-gateway",
-          status: "pending",
-          createdBy,
-          createdAt: Date.now(),
-          startedAt: null,
-          completedAt: null,
-          input: {
+        const createdAt = Date.now();
+        try {
+          await claimGatewayRetirementAtomic({
+            db,
             gatewayId: id,
-            ...(retainData ? { retainData: true } : {}),
-            ...(retainServiceAccount ? { retainServiceAccount: true } : {}),
-          },
-          steps: [],
-          gatewayId: id,
-        });
-        await batch.commit();
+            operationId,
+            operation: {
+              kind: "retire-gateway",
+              status: "pending",
+              createdBy,
+              createdAt,
+              startedAt: null,
+              completedAt: null,
+              input: {
+                gatewayId: id,
+                ...(retainData ? { retainData: true } : {}),
+                ...(retainServiceAccount ? { retainServiceAccount: true } : {}),
+              },
+              steps: [],
+              gatewayId: id,
+            },
+            now: createdAt,
+            updatedBy: createdBy,
+          });
+        } catch (error) {
+          if (error instanceof GatewayRetirementConflictError) {
+            res.status(409).json({ error: error.message, gatewayId: id });
+            return;
+          }
+          throw error;
+        }
         res.status(202).json({ gatewayId: id, operationId, retainData, retainServiceAccount });
       } catch (e) {
         next(e);
