@@ -231,7 +231,14 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       if (
         !/^[0-9a-f]{40}$/.test(response.restoredCommit) ||
         !/^[0-9a-f]{40}$/.test(response.acceptedCommit) ||
-        !/^[0-9a-f]{64}$/.test(response.configHash)
+        !/^[0-9a-f]{64}$/.test(response.configHash) ||
+        response.configReady !== true ||
+        response.observedRevisionId !== (transportId ?? gatewayId) ||
+        !Number.isFinite(response.restoreProvenAt) ||
+        !Number.isFinite(response.configReadyAt) ||
+        response.configReadyAt < response.restoreProvenAt ||
+        typeof response.runtimeConfigHash !== "string" ||
+        response.runtimeConfigHash.length === 0
       ) {
         throw new Error("malformed config restore proof response");
       }
@@ -250,8 +257,8 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
         transferMs,
       );
       assertConfigResponseBinding(response, migrationId, slug);
-      if (typeof response.unfrozen !== "boolean") {
-        throw new Error("malformed config unfreeze response");
+      if (response.unfrozen !== true) {
+        throw new Error("config unfreeze was not confirmed");
       }
       log(`[migration-client] config unfreeze migrationId=${migrationId}`);
       return response;

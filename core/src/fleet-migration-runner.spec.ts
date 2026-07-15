@@ -39,7 +39,7 @@ function happyClient(): MigrationClient & { calls: string[] } {
         configHash: "b".repeat(64),
       };
     }) as MigrationClient["freezeConfig"],
-    proveConfigRestore: vi.fn(async ({ slug, checkpointCommit }) => {
+    proveConfigRestore: vi.fn(async ({ slug, checkpointCommit, transportId, gatewayId }) => {
       calls.push(`config-proof:${slug}:${checkpointCommit}`);
       return {
         migrationId: "m1",
@@ -47,6 +47,11 @@ function happyClient(): MigrationClient & { calls: string[] } {
         restoredCommit: checkpointCommit,
         acceptedCommit: "c".repeat(40),
         configHash: "d".repeat(64),
+        configReady: true,
+        observedRevisionId: transportId ?? gatewayId,
+        restoreProvenAt: 100,
+        configReadyAt: 101,
+        runtimeConfigHash: "runtime-after",
       };
     }) as MigrationClient["proveConfigRestore"],
     unfreezeConfig: vi.fn(async ({ slug }) => {
@@ -100,6 +105,14 @@ interface CutoverCommitCall {
   fromGatewayId: string;
   flipMirror: boolean;
   revision: { revisionId: string; release: number } | null;
+  rollFence?: {
+    configReady?: {
+      observedRevisionId: string;
+      acceptedCommit: string;
+      configReadyAt: number;
+      runtimeConfigHash: string;
+    };
+  };
 }
 
 function makeDeps(client: MigrationClient & { calls: string[] }) {
@@ -215,6 +228,15 @@ describe("runMigration — durable config roll fence", () => {
     toRevision: { revisionId: "default-r2", release: 2 },
     crossGateway: false,
     configFence: true,
+    rollFence: {
+      uid: "uid-alice",
+      gatewayId: "default",
+      rollOperationId: "roll-1",
+      targetRevisionId: "default-r2",
+      targetRelease: 2,
+      sourceRevisionId: "default-r1",
+      sourceEpoch: 1,
+    },
   };
 
   it("keeps the source frozen after assignment cutover until the roll commits the authoritative traffic flip", async () => {
@@ -250,6 +272,12 @@ describe("runMigration — durable config roll fence", () => {
     expect(deps.reportedSteps).toContainEqual({ name: "freeze-config", status: "done" });
     expect(deps.reportedSteps).toContainEqual({ name: "prove-config-restore", status: "done" });
     expect(client.unfreezeConfig).not.toHaveBeenCalled();
+    expect(deps.commitCalls[0].rollFence?.configReady).toEqual({
+      observedRevisionId: "default-r2",
+      acceptedCommit: "c".repeat(40),
+      configReadyAt: 101,
+      runtimeConfigHash: "runtime-after",
+    });
   });
 
   it("rejects an edit attempted after assignment cutover because the source remains frozen until traffic flips", async () => {
@@ -301,6 +329,42 @@ describe("runMigration — durable config roll fence", () => {
     );
   });
 
+  it("persists a cleanup obligation instead of completing when cross-gateway unfreeze is unconfirmed", async () => {
+    const client = happyClient();
+    client.unfreezeConfig = vi.fn(async ({ migrationId, slug }) => ({
+      migrationId,
+      slug,
+      unfrozen: false,
+    })) as MigrationClient["unfreezeConfig"];
+    const deps = makeDeps(client);
+
+    const result = await runMigration({
+      ...INPUT,
+      fromTransportId: "gw-blue-r1",
+      toTransportId: "gw-green-r1",
+      fromRevision: { revisionId: "gw-blue-r1", release: 1 },
+      toRevision: { revisionId: "gw-green-r1", release: 1 },
+      configFence: true,
+    }, deps);
+
+    expect(result).toMatchObject({
+      success: false,
+      finalPhase: "cutover-done",
+      rolledBack: false,
+      errorAt: { error: expect.stringMatching(/config unfreeze cleanup pending/i) },
+      configCleanup: {
+        migrationId: "m1",
+        slug: "alice",
+        sourceGatewayId: "gw-blue",
+        sourceTransportId: "gw-blue-r1",
+        resume: { success: true, rolledBack: false },
+      },
+    });
+    expect(client.unmount).not.toHaveBeenCalledWith(expect.objectContaining({
+      gatewayId: "gw-blue",
+    }));
+  });
+
   it("blocks cutover and unfreezes the source when target ancestor proof fails", async () => {
     const client = happyClient();
     client.proveConfigRestore = vi.fn(async () => {
@@ -316,6 +380,36 @@ describe("runMigration — durable config roll fence", () => {
     expect(client.unfreezeConfig).toHaveBeenCalledWith(expect.objectContaining({
       transportId: "default-r1",
     }));
+  });
+
+  it("persists a cleanup obligation when rollback succeeds but source unfreeze does not", async () => {
+    const client = happyClient();
+    client.proveConfigRestore = vi.fn(async () => {
+      throw new Error("target history does not contain source checkpoint");
+    }) as MigrationClient["proveConfigRestore"];
+    client.unfreezeConfig = vi.fn(async ({ migrationId, slug }) => ({
+      migrationId,
+      slug,
+      unfrozen: false,
+    })) as MigrationClient["unfreezeConfig"];
+    const deps = makeDeps(client);
+
+    const result = await runMigration(FENCED_INPUT, deps);
+
+    expect(result).toMatchObject({
+      success: false,
+      rolledBack: true,
+      errorAt: { error: expect.stringMatching(/config unfreeze cleanup pending/i) },
+      configCleanup: {
+        sourceGatewayId: "default",
+        sourceTransportId: "default-r1",
+        resume: {
+          success: false,
+          rolledBack: true,
+          error: "target history does not contain source checkpoint",
+        },
+      },
+    });
   });
 
   it("blocks cutover when Cowboy cannot persist the revision-observed proof", async () => {

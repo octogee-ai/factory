@@ -69,6 +69,8 @@ import {
   isGatewayLegacyBackfill,
   isRevisionRealizationDoc,
   revisionIdForRelease,
+  GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
+  type AssignmentDoc,
   W9_GATEWAY_EDGE_IMAGE_REPOSITORY,
   type GatewayDoc,
   type ReleasePayload,
@@ -103,10 +105,15 @@ import {
   type OperationRef,
   type PendingOperationRef,
 } from "./operation-queue.js";
-import { buildOperationCompletionUpdate } from "./operation-retry.js";
+import {
+  buildOperationCompletionUpdate,
+  shouldPersistClaimedOperationCompletion,
+  supersededRollMigrationAction,
+} from "./operation-retry.js";
 import { completeOperatorReservationAfterMigration } from "./operator-reservation-completion.js";
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
+import type { MigrationRollFence } from "@octogee/core/fleet-migration-runner";
 import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
 import { createRetireRevisionHandler } from "./handlers/retire-revision.js";
 import { createGatewayServiceAccountTeardown } from "./lib/gateway-gsa.js";
@@ -133,6 +140,7 @@ import {
   slugFromAssignedUser,
 } from "@octogee/core/assigned-roster";
 import {
+  parseAssignmentDoc,
   readAssignmentDoc,
   readAssignmentDocsForGateway,
   resolvePlacementRevision,
@@ -1118,6 +1126,50 @@ function buildRollPassDeps(args: {
       );
       return opRef.id;
     },
+    cancelRollMigrations: async ({ gatewayId, rollOperationId, reason }) => {
+      const snap = await db
+        .collection(GLM_OPERATIONS_COLLECTION)
+        .where("kind", "==", "migrate-customer")
+        .get();
+      const candidates = snap.docs.filter((doc) => {
+        const data = doc.data() as Operation;
+        return data.input?.toGatewayId === gatewayId &&
+          data.input?.source === ROLL_MIGRATE_SOURCE &&
+          data.input?.rollOperationId === rollOperationId;
+      });
+      const stopped = await Promise.all(candidates.map((doc) => db.runTransaction(async (txn) => {
+        const fresh = await txn.get(doc.ref);
+        if (!fresh.exists) return true;
+        const data = fresh.data() as Operation;
+        const input = data.input;
+        if (
+          input?.toGatewayId !== gatewayId ||
+          input?.source !== ROLL_MIGRATE_SOURCE ||
+          input?.rollOperationId !== rollOperationId
+        ) {
+          return true;
+        }
+        const action = supersededRollMigrationAction(data);
+        if (action === "done") return true;
+        if (action === "wait") {
+          txn.update(doc.ref, {
+            cancellationRequestedAt: Date.now(),
+            cancellationReason: reason,
+          });
+          return false;
+        }
+        txn.update(doc.ref, {
+          status: "rolled-back",
+          completedAt: Date.now(),
+          error: `release-roll cancelled: ${reason}`,
+          rolledBack: true,
+          waitingOn: FieldValue.delete(),
+          nextAttemptAt: FieldValue.delete(),
+        });
+        return true;
+      })));
+      return stopped.every(Boolean);
+    },
     releaseConfigFreeze: async ({ gatewayId, revisionId, migrationId, slug }) => {
       const sourceUrl = await resolveGatewayUrlFromFirestore(db, revisionId);
       const client = createMigrationClient({
@@ -2088,7 +2140,18 @@ async function runClaimedOperation(
     steps,
     now: Date.now(),
   });
-  await ref.update(completion);
+  const persisted = await deps.db.runTransaction(async (txn) => {
+    const fresh = await txn.get(ref);
+    if (!fresh.exists) return false;
+    const status = (fresh.data() as Operation | undefined)?.status ?? "missing";
+    if (!shouldPersistClaimedOperationCompletion(status)) return false;
+    txn.update(ref, completion);
+    return true;
+  });
+  if (!persisted) {
+    deps.log(`[glm-controller] op=${op.id} completion discarded because the operation was cancelled`);
+    return;
+  }
 
   if (result.success) {
     try {
@@ -2773,6 +2836,35 @@ function createMigrationClientBuilder(
   };
 }
 
+function assertCurrentMigrationRollFence(
+  rootValue: unknown,
+  assignment: AssignmentDoc | null,
+  fence: MigrationRollFence,
+): void {
+  if (!isDurableRootConfigDoc(rootValue, fence.gatewayId)) {
+    throw new Error("stale release-roll fence: gateway root unavailable");
+  }
+  const roll = rootValue.roll;
+  if (
+    rootValue.desiredRelease !== fence.targetRelease ||
+    roll?.operationId !== fence.rollOperationId ||
+    roll.targetRevisionId !== fence.targetRevisionId ||
+    roll.toRelease !== fence.targetRelease
+  ) {
+    throw new Error("stale release-roll fence: roll target changed");
+  }
+  const sourceAssignmentIsCurrent =
+    assignment?.revisionId === fence.sourceRevisionId &&
+    assignment.epoch === fence.sourceEpoch;
+  const sourceIsUnassignedLiveRevision =
+    assignment === null &&
+    fence.sourceEpoch === 0 &&
+    rootValue.liveRevisionId === fence.sourceRevisionId;
+  if (!sourceAssignmentIsCurrent && !sourceIsUnassignedLiveRevision) {
+    throw new Error("stale release-roll fence: source assignment epoch changed");
+  }
+}
+
 function readPath(obj: Record<string, unknown> | undefined, dotted: string): unknown {
   let cur: unknown = obj;
   for (const part of dotted.split(".")) {
@@ -2981,6 +3073,20 @@ async function buildHandlers(
                 updatedByOperationId: null,
               }
             : null,
+          ...(commit.rollFence
+            ? {
+                rollFence: {
+                  operationId: commit.rollFence.rollOperationId,
+                  targetRevisionId: commit.rollFence.targetRevisionId,
+                  targetRelease: commit.rollFence.targetRelease,
+                  sourceRevisionId: commit.rollFence.sourceRevisionId,
+                  sourceEpoch: commit.rollFence.sourceEpoch,
+                  ...(commit.rollFence.configReady
+                    ? { configReady: commit.rollFence.configReady }
+                    : {}),
+                },
+              }
+            : {}),
         },
       );
     },
@@ -3005,11 +3111,40 @@ async function buildHandlers(
         input,
       );
     },
-    recordConfigProof: async (targetRevisionId, proof) => {
-      await db
-        .collection(GLM_GATEWAYS_COLLECTION)
-        .doc(targetRevisionId)
-        .set({ systemConfig: proof }, { merge: true });
+    assertRollFence: async (fence) => {
+      const [rootSnap, assignment] = await Promise.all([
+        db.collection(GATEWAYS_COLLECTION).doc(fence.gatewayId).get(),
+        readAssignmentDoc(db, fence.gatewayId, fence.uid),
+      ]);
+      assertCurrentMigrationRollFence(rootSnap.data(), assignment, fence);
+    },
+    recordConfigProof: async (targetRevisionId, proof, rollFence) => {
+      if (!rollFence) {
+        await db
+          .collection(GLM_GATEWAYS_COLLECTION)
+          .doc(targetRevisionId)
+          .set({ systemConfig: proof }, { merge: true });
+        return;
+      }
+      await db.runTransaction(async (txn) => {
+        const rootRef = db.collection(GATEWAYS_COLLECTION).doc(rollFence.gatewayId);
+        const assignmentRef = rootRef
+          .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
+          .doc(rollFence.uid);
+        const [rootSnap, assignmentSnap] = await Promise.all([
+          txn.get(rootRef),
+          txn.get(assignmentRef),
+        ]);
+        const assignment = assignmentSnap.exists
+          ? parseAssignmentDoc(rollFence.uid, assignmentSnap.data())
+          : null;
+        assertCurrentMigrationRollFence(rootSnap.data(), assignment, rollFence);
+        txn.set(
+          db.collection(GLM_GATEWAYS_COLLECTION).doc(targetRevisionId),
+          { systemConfig: proof },
+          { merge: true },
+        );
+      });
     },
     recordConfigRollMetric: recordConfigRoll,
     requiresConfigFence: async (fromGatewayId) => {
@@ -3548,7 +3683,7 @@ export async function resolvePlacementFromFirestore(
 export async function resolveLiveRevisionAsSource(
   db: Firestore,
   gatewayId: string,
-): Promise<{ revisionId: string; release: number } | null> {
+): Promise<{ revisionId: string; release: number; epoch?: number } | null> {
   const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
   if (!snap.exists) return null;
   const gateway = snap.data();
@@ -3575,7 +3710,7 @@ export async function resolveSourceRevisionFromFirestore(
   db: Firestore,
   uid: string,
   gatewayId: string,
-): Promise<{ revisionId: string; release: number } | null> {
+): Promise<{ revisionId: string; release: number; epoch?: number } | null> {
   const assignment = await readAssignmentDoc(db, gatewayId, uid);
   if (!assignment) return resolveLiveRevisionAsSource(db, gatewayId);
   const rootSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
@@ -3603,7 +3738,11 @@ export async function resolveSourceRevisionFromFirestore(
   ) {
     return null;
   }
-  return { revisionId: assignment.revisionId, release: assignment.release };
+  return {
+    revisionId: assignment.revisionId,
+    release: assignment.release,
+    epoch: assignment.epoch,
+  };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

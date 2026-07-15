@@ -129,6 +129,19 @@ export interface CutoverCommitParams {
     source: AssignmentSource;
     updatedByOperationId: string | null;
   } | null;
+  rollFence?: {
+    operationId: string;
+    targetRevisionId: string;
+    targetRelease: number;
+    sourceRevisionId: string;
+    sourceEpoch: number;
+    configReady?: {
+      observedRevisionId: string;
+      acceptedCommit: string;
+      configReadyAt: number;
+      runtimeConfigHash: string;
+    };
+  };
 }
 
 // Atomic cutover (GATEWAY-RELEASES-SPEC, PR5 review P0). The mirror move AND the
@@ -149,12 +162,65 @@ export async function commitCutoverAtomic(
   const nowMs = deps.now ? deps.now().getTime() : Date.now();
   await deps.db.runTransaction(async (txn) => {
     let priorEpoch = 0;
+    let priorRevisionId: unknown;
     if (params.assignment) {
       const priorSnap = await txn.get(
         assignmentRef(deps.db, params.fromGatewayId, params.uid),
       );
       const rawEpoch = priorSnap.exists ? priorSnap.data()?.epoch : undefined;
       priorEpoch = typeof rawEpoch === "number" && rawEpoch >= 0 ? rawEpoch : 0;
+      priorRevisionId = priorSnap.exists ? priorSnap.data()?.revisionId : undefined;
+    }
+    if (params.rollFence) {
+      const rootSnap = await txn.get(
+        deps.db.collection(GATEWAYS_COLLECTION).doc(params.toGatewayId),
+      );
+      const root = rootSnap.exists ? rootSnap.data() : undefined;
+      const roll = root?.roll as Record<string, unknown> | undefined;
+      const current =
+        root?.desiredRelease === params.rollFence.targetRelease &&
+        roll?.operationId === params.rollFence.operationId &&
+        roll?.targetRevisionId === params.rollFence.targetRevisionId &&
+        roll?.toRelease === params.rollFence.targetRelease &&
+        params.assignment?.revisionId === params.rollFence.targetRevisionId;
+      if (!current) {
+        throw new Error("stale release-roll fence refused cutover");
+      }
+      const sourceAssignmentIsCurrent =
+        priorRevisionId === params.rollFence.sourceRevisionId &&
+        priorEpoch === params.rollFence.sourceEpoch;
+      const sourceIsUnassignedLiveRevision =
+        priorRevisionId === undefined &&
+        params.rollFence.sourceEpoch === 0 &&
+        root?.liveRevisionId === params.rollFence.sourceRevisionId;
+      if (!sourceAssignmentIsCurrent && !sourceIsUnassignedLiveRevision) {
+        throw new Error("source assignment changed after release-roll proof");
+      }
+      if (params.rollFence.configReady) {
+        const targetSnap = await txn.get(
+          deps.db
+            .collection(GLM_GATEWAYS_COLLECTION)
+            .doc(params.rollFence.targetRevisionId),
+        );
+        const target = targetSnap.exists ? targetSnap.data() : undefined;
+        const systemConfig = target?.systemConfig as Record<string, unknown> | undefined;
+        const heartbeat = target?.heartbeat as Record<string, unknown> | undefined;
+        const proofIsCurrent =
+          systemConfig?.configReady === true &&
+          systemConfig.observedRevisionId === params.rollFence.configReady.observedRevisionId &&
+          systemConfig.acceptedCommit === params.rollFence.configReady.acceptedCommit &&
+          systemConfig.configReadyAt === params.rollFence.configReady.configReadyAt &&
+          systemConfig.runtimeConfigHash === params.rollFence.configReady.runtimeConfigHash;
+        if (!proofIsCurrent) {
+          throw new Error("target config proof changed before release-roll cutover");
+        }
+        if (
+          typeof heartbeat?.startedAt !== "number" ||
+          heartbeat.startedAt > params.rollFence.configReady.configReadyAt
+        ) {
+          throw new Error("target restarted after config proof before release-roll cutover");
+        }
+      }
     }
     if (params.flipMirror) {
       const gatewaySnap = await txn.get(

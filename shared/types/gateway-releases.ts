@@ -340,6 +340,11 @@ export interface RevisionSystemConfigObservation {
   restoredCommit: string;
   acceptedCommit: string;
   configHash: string;
+  configReady: true;
+  observedRevisionId: string;
+  restoreProvenAt: number;
+  configReadyAt: number;
+  runtimeConfigHash: string;
   observedAt: number;
   sourceUnfrozenAt?: number;
 }

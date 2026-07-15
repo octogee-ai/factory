@@ -5,7 +5,30 @@ import {
   buildOperationCompletionUpdate,
   classifyOperationFailure,
   retryBackoffMs,
+  shouldPersistClaimedOperationCompletion,
+  supersededRollMigrationAction,
 } from "../operation-retry";
+
+describe("supersededRollMigrationAction", () => {
+  it("cancels unstarted work but waits for running or cleanup-pending workers to finish", () => {
+    expect(supersededRollMigrationAction({ status: "pending" })).toBe("cancel");
+    expect(supersededRollMigrationAction({ status: "running" })).toBe("wait");
+    expect(supersededRollMigrationAction({
+      status: "pending",
+      output: { configCleanup: { migrationId: "mig-1" } },
+    })).toBe("wait");
+    expect(supersededRollMigrationAction({ status: "failed" })).toBe("done");
+    expect(supersededRollMigrationAction({ status: "rolled-back" })).toBe("done");
+  });
+});
+
+describe("shouldPersistClaimedOperationCompletion", () => {
+  it("does not let an in-memory worker overwrite a durably cancelled operation", () => {
+    expect(shouldPersistClaimedOperationCompletion("running")).toBe(true);
+    expect(shouldPersistClaimedOperationCompletion("rolled-back")).toBe(false);
+    expect(shouldPersistClaimedOperationCompletion("failed")).toBe(false);
+  });
+});
 
 describe("classifyOperationFailure", () => {
   it("classifies timeouts, K8s API hiccups, and preemption as transient", () => {
@@ -22,6 +45,9 @@ describe("classifyOperationFailure", () => {
     expect(
       classifyOperationFailure("gateway bender durable desired revision did not materialize within 120000ms"),
     ).toBe("transient");
+    expect(classifyOperationFailure("config unfreeze cleanup pending: source RPC unavailable")).toBe(
+      "transient",
+    );
   });
 
   it("classifies validation and the #2137 fail-fast target-state guard as terminal", () => {
@@ -84,7 +110,44 @@ describe("buildOperationCompletionUpdate", () => {
       rolledBack: false,
       nextAttemptAt: FieldValue.delete(),
       waitingOn: FieldValue.delete(),
+      output: FieldValue.delete(),
     });
+  });
+
+  it("keeps a durable config cleanup obligation level-triggered after the normal retry cap", () => {
+    const configCleanup = {
+      migrationId: "mig-1",
+      slug: "alice",
+      sourceGatewayId: "default",
+      sourceTransportId: "default-r1",
+      resume: { success: true, rolledBack: false },
+    };
+    const update = buildOperationCompletionUpdate({
+      op: { attempts: MAX_OPERATION_ATTEMPTS, attemptHistory: [] },
+      result: {
+        steps: [],
+        success: false,
+        error: "config unfreeze cleanup pending: source RPC unavailable",
+        output: { configCleanup },
+      },
+      steps: [],
+      now,
+    });
+
+    expect(update.status).toBe("pending");
+    expect(update.output).toEqual({ configCleanup });
+    expect(update.nextAttemptAt).toBe(now + retryBackoffMs(MAX_OPERATION_ATTEMPTS + 1));
+  });
+
+  it("deletes a stale cleanup obligation after cleanup finishes", () => {
+    const update = buildOperationCompletionUpdate({
+      op: { attempts: 1 },
+      result: { steps: [], success: true },
+      steps: [],
+      now,
+    });
+
+    expect(update.output).toEqual(FieldValue.delete());
   });
 
   it("persists migration checkpoint and proof output with the terminal operation", () => {

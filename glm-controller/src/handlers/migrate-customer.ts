@@ -10,7 +10,9 @@ import type { PlacementResolution } from "@octogee/core/assignment-doc";
 import type { RevisionSystemConfigObservation } from "@octogee/shared/types/gateway-releases";
 import {
   runMigration,
+  type ConfigCleanupObligation,
   type CutoverCommit,
+  type MigrationRollFence,
   type MigrationRunnerDeps,
   type ReportedStep,
 } from "@octogee/core/fleet-migration-runner";
@@ -29,6 +31,7 @@ export interface UserGatewayInfo {
 export interface SourceRevision {
   revisionId: string;
   release: number;
+  epoch?: number;
 }
 
 export interface MigrateCustomerDeps {
@@ -52,9 +55,12 @@ export interface MigrateCustomerDeps {
     state: "serving" | "quiescing" | "migrating";
   }) => Promise<void>;
 
+  assertRollFence: (fence: MigrationRollFence) => Promise<void>;
+
   recordConfigProof: (
     targetRevisionId: string,
     proof: RevisionSystemConfigObservation,
+    rollFence: MigrationRollFence | null,
   ) => Promise<void>;
 
   recordConfigRollMetric: (input: {
@@ -79,6 +85,153 @@ interface MigrateCustomerInput {
   uid?: unknown;
   toGatewayId?: unknown;
   configFence?: unknown;
+  source?: unknown;
+  rollOperationId?: unknown;
+}
+
+function optionalCleanupRecord<T>(value: unknown): T | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("invalid durable config cleanup obligation");
+  }
+  return value as T;
+}
+
+function configCleanupFromOutput(
+  output: Record<string, unknown> | undefined,
+): ConfigCleanupObligation | null {
+  if (!output || !Object.prototype.hasOwnProperty.call(output, "configCleanup")) return null;
+  const value = output?.configCleanup;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("invalid durable config cleanup obligation");
+  }
+  const cleanup = value as Record<string, unknown>;
+  const resumeValue = cleanup.resume;
+  if (!resumeValue || typeof resumeValue !== "object" || Array.isArray(resumeValue)) {
+    throw new Error("invalid durable config cleanup obligation");
+  }
+  const resume = resumeValue as Record<string, unknown>;
+  if (
+    typeof cleanup.migrationId !== "string" ||
+    typeof cleanup.slug !== "string" ||
+    typeof cleanup.sourceGatewayId !== "string" ||
+    typeof cleanup.sourceTransportId !== "string" ||
+    typeof resume.success !== "boolean" ||
+    typeof resume.rolledBack !== "boolean" ||
+    (resume.error !== undefined && typeof resume.error !== "string")
+  ) {
+    throw new Error("invalid durable config cleanup obligation");
+  }
+  const configCheckpoint = optionalCleanupRecord<
+    ConfigCleanupObligation["resume"]["configCheckpoint"]
+  >(resume.configCheckpoint);
+  const configProof = optionalCleanupRecord<
+    ConfigCleanupObligation["resume"]["configProof"]
+  >(resume.configProof);
+  return {
+    migrationId: cleanup.migrationId,
+    slug: cleanup.slug,
+    sourceGatewayId: cleanup.sourceGatewayId,
+    sourceTransportId: cleanup.sourceTransportId,
+    completeSourceUnmount: cleanup.completeSourceUnmount === true,
+    resume: {
+      success: resume.success,
+      rolledBack: resume.rolledBack,
+      ...(typeof resume.error === "string" ? { error: resume.error } : {}),
+      ...(configCheckpoint ? { configCheckpoint } : {}),
+      ...(configProof ? { configProof } : {}),
+    },
+  };
+}
+
+function resumedConfigOutput(
+  cleanup: ConfigCleanupObligation,
+): Record<string, unknown> | undefined {
+  const output: Record<string, unknown> = {};
+  if (cleanup.resume.configCheckpoint) output.configCheckpoint = cleanup.resume.configCheckpoint;
+  if (cleanup.resume.configProof) output.configProof = cleanup.resume.configProof;
+  return Object.keys(output).length > 0 ? output : undefined;
+}
+
+async function resumeConfigCleanup(
+  deps: MigrateCustomerDeps,
+  ctx: OperationContext,
+  cleanup: ConfigCleanupObligation,
+): Promise<OperationResult> {
+  const startedAt = deps.now();
+  await ctx.reportStep({ name: "unfreeze-config", status: "running", startedAt });
+  try {
+    const sourceUrl = await deps.resolveGatewayUrl(cleanup.sourceTransportId);
+    const client = deps.buildClient((transportId) => {
+      if (transportId !== cleanup.sourceTransportId) {
+        throw new Error(`cleanup client called with unexpected gatewayId: ${transportId}`);
+      }
+      return sourceUrl;
+    });
+    const response = await client.unfreezeConfig({
+      migrationId: cleanup.migrationId,
+      gatewayId: cleanup.sourceGatewayId,
+      transportId: cleanup.sourceTransportId,
+      slug: cleanup.slug,
+    });
+    if (response.unfrozen !== true) throw new Error("config unfreeze was not confirmed");
+    await ctx.reportStep({
+      name: "unfreeze-config",
+      status: "done",
+      completedAt: deps.now(),
+    });
+    deps.recordConfigRollMetric({
+      stage: "unfreeze",
+      result: "ok",
+      gatewayId: cleanup.sourceGatewayId,
+      revisionId: cleanup.sourceTransportId,
+    });
+    if (cleanup.completeSourceUnmount) {
+      try {
+        await client.unmount({
+          migrationId: cleanup.migrationId,
+          gatewayId: cleanup.sourceGatewayId,
+          transportId: cleanup.sourceTransportId,
+          slug: cleanup.slug,
+        });
+      } catch (error) {
+        deps.log(
+          `[migrate-customer] source unmount cleanup skipped after durable cutover: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    const output = resumedConfigOutput(cleanup);
+    return {
+      steps: [],
+      success: cleanup.resume.success,
+      rolledBack: cleanup.resume.rolledBack,
+      ...(!cleanup.resume.success && cleanup.resume.error ? { error: cleanup.resume.error } : {}),
+      ...(output ? { output } : {}),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await ctx.reportStep({
+      name: "unfreeze-config",
+      status: "skipped",
+      completedAt: deps.now(),
+      error: message,
+    });
+    deps.recordConfigRollMetric({
+      stage: "unfreeze",
+      result: "fail",
+      gatewayId: cleanup.sourceGatewayId,
+      revisionId: cleanup.sourceTransportId,
+    });
+    return {
+      steps: [],
+      success: false,
+      error: `config unfreeze cleanup pending: ${message}`,
+      rolledBack: cleanup.resume.rolledBack,
+      output: { configCleanup: cleanup },
+    };
+  }
 }
 
 function reportedStatusToStepStatus(reported: ReportedStep["status"]): StepStatus {
@@ -104,6 +257,7 @@ interface MigrationTargets {
   toRelease: number | null;
   fromRevisionId: string;
   fromRelease: number;
+  fromEpoch: number;
   fromTransportId: string;
   toTransportId: string;
 }
@@ -158,6 +312,7 @@ async function resolveMigrationTargets(
       toRelease: to.release,
       fromRevisionId: fromRevision.revisionId,
       fromRelease: fromRevision.release,
+      fromEpoch: fromRevision.epoch ?? 0,
       fromTransportId: fromRevision.revisionId,
       toTransportId: to.revisionId,
     },
@@ -171,6 +326,7 @@ function buildRunnerDeps(
   targetRevisionId: string,
   observedAt: () => number,
   targets: MigrationTargets,
+  rollFence: MigrationRollFence | null,
 ): MigrationRunnerDeps {
   const runnerDeps: MigrationRunnerDeps = {
     client,
@@ -204,21 +360,42 @@ function buildRunnerDeps(
     sourceRevisionId,
     checkpoint,
     proof,
-  }) => deps.recordConfigProof(targetRevisionId, {
-    migrationId,
-    builderSlug: slug,
-    sourceRevisionId,
-    checkpointCommit: checkpoint.checkpointCommit,
-    restoredCommit: proof.restoredCommit,
-    acceptedCommit: proof.acceptedCommit,
-    configHash: proof.configHash,
-    observedAt: observedAt(),
-  });
+  }) => deps.recordConfigProof(
+    targetRevisionId,
+    {
+      migrationId,
+      builderSlug: slug,
+      sourceRevisionId,
+      checkpointCommit: checkpoint.checkpointCommit,
+      restoredCommit: proof.restoredCommit,
+      acceptedCommit: proof.acceptedCommit,
+      configHash: proof.configHash,
+      configReady: proof.configReady,
+      observedRevisionId: proof.observedRevisionId,
+      restoreProvenAt: proof.restoreProvenAt,
+      configReadyAt: proof.configReadyAt,
+      runtimeConfigHash: proof.runtimeConfigHash,
+      observedAt: observedAt(),
+    },
+    rollFence,
+  );
   return runnerDeps;
 }
 
 export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): OperationHandler {
   return async (op: Operation, ctx: OperationContext): Promise<OperationResult> => {
+    let cleanup: ConfigCleanupObligation | null;
+    try {
+      cleanup = configCleanupFromOutput(op.output);
+    } catch (error) {
+      return {
+        steps: [],
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+    if (cleanup) return resumeConfigCleanup(deps, ctx, cleanup);
+
     const input = op.input as MigrateCustomerInput;
     const uid = typeof input.uid === "string" ? input.uid : undefined;
     const toGatewayId = typeof input.toGatewayId === "string" ? input.toGatewayId : undefined;
@@ -239,6 +416,7 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
     let targets: MigrationTargets;
     let restoreSnapshot: FleetBrokerUserSnapshot | null;
     let configFence: boolean;
+    let rollFence: MigrationRollFence | null = null;
     const urls = new Map<string, string>();
     try {
       const resolved = await resolveMigrationTargets(deps, uid, user, toGatewayId);
@@ -246,6 +424,51 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
         return { steps: [], success: false, error: resolved.error };
       }
       targets = resolved.targets;
+      if (input.source === "release-roll") {
+        if (typeof input.rollOperationId !== "string" || input.rollOperationId.length === 0) {
+          return {
+            steps: [],
+            success: false,
+            error: "release-roll migration missing rollOperationId",
+          };
+        }
+        if (targets.toRelease === null) {
+          return { steps: [], success: false, error: "release-roll target has no release" };
+        }
+        rollFence = {
+          uid,
+          gatewayId: toGatewayId,
+          rollOperationId: input.rollOperationId,
+          targetRevisionId: targets.toRevisionId,
+          targetRelease: targets.toRelease,
+          sourceRevisionId: targets.fromRevisionId,
+          sourceEpoch: targets.fromEpoch,
+        };
+        try {
+          await deps.assertRollFence(rollFence);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const configCleanup: ConfigCleanupObligation = {
+            migrationId,
+            slug: user.slug,
+            sourceGatewayId: targets.fromGatewayId,
+            sourceTransportId: targets.fromTransportId,
+            completeSourceUnmount: false,
+            resume: {
+              success: false,
+              rolledBack: false,
+              error: message,
+            },
+          };
+          return {
+            steps: [],
+            success: false,
+            error: `config unfreeze cleanup pending: ${message}`,
+            rolledBack: false,
+            output: { configCleanup },
+          };
+        }
+      }
       configFence = input.configFence === true ||
         await deps.requiresConfigFence(user.currentGatewayId, toGatewayId);
       urls.set(targets.fromTransportId, await deps.resolveGatewayUrl(targets.fromTransportId));
@@ -283,8 +506,9 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
         restoreSnapshot,
         includeActivationManifest: true,
         configFence,
+        ...(rollFence ? { rollFence } : {}),
       },
-      buildRunnerDeps(deps, client, ctx, targets.toRevisionId, deps.now, targets),
+      buildRunnerDeps(deps, client, ctx, targets.toRevisionId, deps.now, targets, rollFence),
     );
 
     return {
@@ -292,11 +516,12 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
       success: result.success,
       error: result.errorAt?.error,
       rolledBack: result.rolledBack,
-      ...((result.configCheckpoint || result.configProof)
+      ...((result.configCheckpoint || result.configProof || result.configCleanup)
         ? {
             output: {
               ...(result.configCheckpoint ? { configCheckpoint: result.configCheckpoint } : {}),
               ...(result.configProof ? { configProof: result.configProof } : {}),
+              ...(result.configCleanup ? { configCleanup: result.configCleanup } : {}),
             },
           }
         : {}),

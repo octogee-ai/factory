@@ -20,6 +20,7 @@ const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
   /\bEAI_AGAIN\b/,
   /\bstatus (429|502|503|504)\b/,
   /\bpreempt(ed|ion)?\b/i,
+  /config unfreeze cleanup pending/i,
 ];
 
 export function classifyOperationFailure(
@@ -41,6 +42,22 @@ const RETRY_BACKOFF_MS_CAP = 480_000;
 
 export function retryBackoffMs(attempt: number): number {
   return RETRY_BACKOFF_MS_BY_ATTEMPT[attempt] ?? RETRY_BACKOFF_MS_CAP;
+}
+
+export function shouldPersistClaimedOperationCompletion(status: string): boolean {
+  return status === "running";
+}
+
+export function supersededRollMigrationAction(op: {
+  status: string;
+  output?: Record<string, unknown>;
+}): "cancel" | "wait" | "done" {
+  if (op.status === "running") return "wait";
+  if (op.status === "pending") {
+    const cleanup = op.output?.configCleanup;
+    return cleanup !== null && typeof cleanup === "object" ? "wait" : "cancel";
+  }
+  return "done";
 }
 
 export interface OperationCompletionInput {
@@ -67,7 +84,7 @@ export function buildOperationCompletionUpdate(
   const { op, result, steps, now } = input;
   const persistedSteps = steps.length > 0 ? steps : result.steps;
   const attempts = (op.attempts ?? 0) + 1;
-  const output = result.output ? { output: result.output } : {};
+  const output = { output: result.output ?? FieldValue.delete() };
 
   if (result.success) {
     return {
@@ -95,7 +112,13 @@ export function buildOperationCompletionUpdate(
   };
   const attemptHistory = [...(op.attemptHistory ?? []), attemptRecord];
 
-  if (classification === "transient" && attempts < MAX_OPERATION_ATTEMPTS) {
+  const hasDurableCleanup =
+    result.output?.configCleanup !== null &&
+    typeof result.output?.configCleanup === "object";
+  if (
+    classification === "transient" &&
+    (attempts < MAX_OPERATION_ATTEMPTS || hasDurableCleanup)
+  ) {
     const backoffMs = retryBackoffMs(attempts);
     return {
       status: "pending",

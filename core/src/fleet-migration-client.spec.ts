@@ -144,6 +144,11 @@ describe("MigrationClient system config fencing", () => {
           restoredCommit: checkpointCommit,
           acceptedCommit: "c".repeat(40),
           configHash: "d".repeat(64),
+          configReady: true,
+          observedRevisionId: "default-r2",
+          restoreProvenAt: 100,
+          configReadyAt: 101,
+          runtimeConfigHash: "runtime-after",
         }), { status: 200, headers: { "content-type": "application/json" } });
       }
       return new Response(JSON.stringify({ ...common, unfrozen: true }), {
@@ -232,6 +237,53 @@ describe("MigrationClient system config fencing", () => {
       gatewayId: "default",
       slug: "alice",
     })).rejects.toThrow(/response binding/i);
+  });
+
+  it("rejects readiness observed before restore proof or for another target revision", async () => {
+    const { fakeFetch } = captureFetch(() => new Response(JSON.stringify({
+      migrationId: "m1",
+      slug: "alice",
+      restoredCommit: "a".repeat(40),
+      acceptedCommit: "c".repeat(40),
+      configHash: "d".repeat(64),
+      configReady: true,
+      observedRevisionId: "default-r1",
+      restoreProvenAt: 200,
+      configReadyAt: 199,
+      runtimeConfigHash: "runtime-stale",
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://target.example.com",
+      fetch: fakeFetch,
+    });
+
+    await expect(client.proveConfigRestore({
+      migrationId: "m1",
+      gatewayId: "default",
+      transportId: "default-r2",
+      slug: "alice",
+      checkpointCommit: "a".repeat(40),
+    })).rejects.toThrow(/malformed config restore proof/i);
+  });
+
+  it("rejects an unfreeze response that does not confirm the source is writable", async () => {
+    const { fakeFetch } = captureFetch(() => new Response(JSON.stringify({
+      migrationId: "m1",
+      slug: "alice",
+      unfrozen: false,
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://source.example.com",
+      fetch: fakeFetch,
+    });
+
+    await expect(client.unfreezeConfig({
+      migrationId: "m1",
+      gatewayId: "default",
+      slug: "alice",
+    })).rejects.toThrow(/unfreeze was not confirmed/i);
   });
 });
 
