@@ -142,7 +142,8 @@ RUN chmod 1777 /tmp \
 COPY --chown=node:node infra/gateway/openclaw.template.json /octogee/infra/gateway/openclaw.template.json
 COPY --chown=node:node infra/gateway/apply-gateway-class-policy.mjs /octogee/infra/gateway/apply-gateway-class-policy.mjs
 COPY infra/gateway/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod 755 /usr/local/bin/entrypoint.sh
+COPY infra/gateway/octogee /usr/local/bin/octogee
+RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/octogee
 
 COPY infra/gateway/.bashrc /home/node/.bashrc
 RUN chown node:node /home/node/.bashrc

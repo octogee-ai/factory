@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  parseSystemConfigObservedStatus,
   resolveAssignedUsersRevisionGate,
   revisionIdFromGatewayPodName,
 } from "./fleet-broker.js";
@@ -95,6 +96,40 @@ describe("revisionIdFromGatewayPodName", () => {
     expect(revisionIdFromGatewayPodName("default", "octogee-gateway-default-r27")).toBeNull();
     expect(revisionIdFromGatewayPodName("default", "octogee-gateway-other-r27-5bc5949d46-p946t")).toBeNull();
     expect(revisionIdFromGatewayPodName("default", "octogee-gateway-default-r027-5bc5949d46-p946t")).toBeNull();
+  });
+});
+
+describe("system config observed status validation", () => {
+  it("accepts only the redacted bounded status projection", () => {
+    expect(parseSystemConfigObservedStatus({
+      state: "error",
+      acceptedCommit: "a".repeat(40),
+      configHash: `sha256:${"b".repeat(64)}`,
+      lastErrorCode: "non-fast-forward-conflict",
+      rejectedCount: 2,
+      recoveryCount: 1,
+      unknown: "drop-me",
+    })).toEqual({
+      state: "error",
+      acceptedCommit: "a".repeat(40),
+      configHash: `sha256:${"b".repeat(64)}`,
+      lastErrorCode: "non-fast-forward-conflict",
+      rejectedCount: 2,
+      recoveryCount: 1,
+    });
+  });
+
+  it("rejects secret-shaped, invalid, and oversized fields", () => {
+    expect(parseSystemConfigObservedStatus({ state: "bogus" })).toBeNull();
+    expect(parseSystemConfigObservedStatus({ state: "clean", acceptedCommit: "not-a-sha" })).toBeNull();
+    expect(parseSystemConfigObservedStatus({
+      state: "error",
+      lastErrorCode: "x".repeat(81),
+    })).toBeNull();
+    expect(parseSystemConfigObservedStatus({
+      state: "error",
+      token: "must-not-pass",
+    })).toEqual({ state: "error" });
   });
 });
 

@@ -145,6 +145,20 @@ describe("system_config restore", () => {
     })).rejects.toThrow(/initial push failed/);
   });
 
+  it("fast-forwards a reused checkout before reading its authoritative config", async () => {
+    writeJson(path.join(repoDir, "openclaw.json"), { agents: { list: [] } });
+    writeJson(path.join(repoDir, ".octogee.json"), { schemaVersion: 1 });
+
+    await restoreSystemConfigForSlug("acme", {
+      openclawDir,
+      templatePath,
+      log: () => {},
+    });
+
+    expect(gitExec).toHaveBeenCalledWith(repoDir, "fetch origin main", "/tmp/customer-keys/acme/id_ed25519");
+    expect(gitExec).toHaveBeenCalledWith(repoDir, "merge --ff-only origin/main", "/tmp/customer-keys/acme/id_ed25519");
+  });
+
   it("one-time cleanup removes only the historical Mac lane and preserves customer identities", () => {
     const config = {
       agents: {
@@ -414,17 +428,14 @@ describe("system_config restore", () => {
     });
 
     expect(result).toEqual({ committed: true, pushed: true });
-    expect(calls).toEqual([
-      { cwd: repoDir, args: "status --porcelain -- openclaw.json .octogee.json .gitignore", sshKeyPath: "/tmp/key" },
-      { cwd: repoDir, args: "add openclaw.json .octogee.json .gitignore", sshKeyPath: "/tmp/key" },
-      {
-        cwd: repoDir,
-        args: 'commit -m "prestop: sync openclaw config 2026-06-20T14:00:00.000Z"',
-        sshKeyPath: "/tmp/key",
-      },
-      { cwd: repoDir, args: "push origin main", sshKeyPath: "/tmp/key" },
+    expect(calls.map((call) => call.args)).toEqual([
+      "status --porcelain -- openclaw.json .octogee.json .gitignore",
+      "add openclaw.json .octogee.json .gitignore",
+      expect.stringContaining("Octogee-Config-Source: auto-watch"),
+      "push origin main",
+      "rev-parse HEAD",
     ]);
-    expect(logs.join("\n")).toMatch(/prestop pushed/);
+    expect(logs.join("\n")).toMatch(/auto-watch pushed/);
     expect(validateOpenClawConfig).toHaveBeenCalledWith(path.join(repoDir, "openclaw.json"));
   });
 

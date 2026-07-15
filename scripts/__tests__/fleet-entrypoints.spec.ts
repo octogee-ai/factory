@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  createFleetSystemConfigFlush,
   resolveFleetControllerEntrypointConfig,
 } from "../entrypoints/fleet-controller.js";
 import {
@@ -43,6 +44,22 @@ describe("fleet-controller entrypoint config", () => {
     expect(
       resolveFleetControllerEntrypointConfig({}, { gatewayId: "bender", revisionId: "bender-r2" }).revisionId,
     ).toBe("bender-r2");
+  });
+
+  it("fails a controller-requested flush until the durable config commit is accepted", async () => {
+    const sync = vi.fn(() => ({
+      committed: false,
+      pushed: false,
+      skipped: "sync-locked",
+      pending: true,
+    }));
+    const flush = createFleetSystemConfigFlush("alice", () => {}, sync);
+
+    await expect(flush?.()).rejects.toThrow("sync-locked");
+    expect(sync).toHaveBeenCalledWith("alice", expect.objectContaining({
+      durablePolicy: true,
+      source: "auto-watch",
+    }));
   });
 });
 

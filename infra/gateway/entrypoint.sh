@@ -24,6 +24,19 @@ log() {
   echo "$(date -u +%Y-%m-%dT%H:%M:%S.000+00:00) [entrypoint] $*"
 }
 
+SUPERVISE="$TSX /octogee/scripts/entrypoints/supervise-runner.ts"
+supervise_runner() {
+  _name="$1"; shift
+  _restart_delay_ms="$1"; shift
+  (
+    while true; do
+      $SUPERVISE "$_name" "--restart-delay-ms=${_restart_delay_ms}" "$@" || true
+      log "supervise-runner[$_name] exited — restarting in 5s..."
+      sleep 5
+    done
+  ) &
+}
+
 # ── Boot banner ─────────────────────────────────────────────────────────────
 # One grep-able line so operators can confirm what's running without
 # exec'ing in to read package.json. BUILD_SHA + OPENCLAW_VERSION +
@@ -128,21 +141,37 @@ fi
 # GATEWAY_ID is set by the deployment's env block. Fail fast if it is missing.
 export GATEWAY_ID="${GATEWAY_ID:?GATEWAY_ID env var is required (set via Helm values.env.gatewayId)}"
 
-# ── Dedicated gateway system_config restore ─────────────────────────────────
-# Builder/operator gateways run the tracked Gitea checkout as OpenClaw's active
-# regular config file. Shared gateways keep an untracked template copy. Copy the
-# raw template: OpenClaw resolves ${ENV} and SecretRefs in memory; envsubst would
-# materialize credentials onto disk.
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   if [ -z "${GATEWAY_BUILDER_SLUG:-}" ]; then
     log "FATAL: GATEWAY_BUILDER_SLUG is required for ${GATEWAY_CLASS_EFFECTIVE} durable config"
     exit 1
   fi
   export OPENCLAW_CONFIG_PATH="$OPENCLAW_DIR/system_config/openclaw.json"
-  log "Pre-boot: restoring system_config for builder slug ${GATEWAY_BUILDER_SLUG}..."
-  "$TSX" /octogee/scripts/entrypoints/system-config-restore.ts
 else
   export OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$OPENCLAW_DIR/openclaw.json}"
+fi
+
+supervise_runner system-config-status 5000 "$TSX" /octogee/scripts/entrypoints/system-config-status-server.ts
+
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ "${OPERATOR_SHELLS_ENABLED:-}" = "true" ]; then
+  export BUILDER_SHELL_REQUIRE_KEY="${BUILDER_SHELL_REQUIRE_KEY:-true}"
+  supervise_runner builder-shell 5000 "$TSX" /octogee/scripts/entrypoints/builder-shell-server.ts
+elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
+  log "Builder-shell disabled: runtime shell access is not enabled"
+fi
+
+# ── Dedicated gateway system_config restore ─────────────────────────────────
+# Builder/operator gateways run the tracked Gitea checkout as OpenClaw's active
+# regular config file. Shared gateways keep an untracked template copy. Copy the
+# raw template: OpenClaw resolves ${ENV} and SecretRefs in memory; envsubst would
+# materialize credentials onto disk.
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
+  log "Pre-boot: restoring system_config for builder slug ${GATEWAY_BUILDER_SLUG}..."
+  until "$TSX" /octogee/scripts/entrypoints/system-config-restore.ts; do
+    log "Pre-boot: system_config restore unavailable; repair services remain live, retrying in 5s..."
+    sleep 5
+  done
+else
   if [ ! -f "$OPENCLAW_CONFIG_PATH" ]; then
     mkdir -p "$(dirname "$OPENCLAW_CONFIG_PATH")"
     cp /octogee/infra/gateway/openclaw.template.json "$OPENCLAW_CONFIG_PATH"
@@ -156,7 +185,7 @@ chmod 600 "$OPENCLAW_CONFIG_PATH"
 # standard image but removes the exec/process denies for its one tenant. Operator
 # class is handled later by the operator-image-only codex sandbox patch.
 CLASS_POLICY=/octogee/infra/gateway/apply-gateway-class-policy.mjs
-if [ -f "$CLASS_POLICY" ]; then
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ] && [ -f "$CLASS_POLICY" ]; then
   node "$CLASS_POLICY"
 fi
 
@@ -310,13 +339,9 @@ fi
 # bring back an old auth profile, but ANTHROPIC_BASE_URL is env-owned and is
 # what keeps capped broker tokens from being sent directly to Anthropic.
 # pre-boot-config.ts gates its optional Firestore-backed overrides internally.
-if [ -f "$OPENCLAW_CONFIG_PATH" ]; then
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ] && [ -f "$OPENCLAW_CONFIG_PATH" ]; then
   log "Pre-boot: applying env/runtime config patches..."
-  if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
-    "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts
-  else
-    "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts || log "Pre-boot: non-fatal, continuing..."
-  fi
+  "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts || log "Pre-boot: non-fatal, continuing..."
 fi
 
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
@@ -326,9 +351,30 @@ fi
 
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   export OPENCLAW_SERVICE_REPAIR_POLICY=external
-  log "Pre-boot: repairing and validating durable OpenClaw config..."
-  openclaw doctor --fix --non-interactive
-  "$TSX" /octogee/scripts/entrypoints/system-config-checkpoint.ts
+  while true; do
+    REPAIR_OK=true
+    log "Pre-boot: repairing and validating durable OpenClaw config..."
+    if ! openclaw doctor --fix --non-interactive; then
+      log "Pre-boot: OpenClaw Doctor failed; repair services remain live"
+      REPAIR_OK=false
+    fi
+    if [ -f "$CLASS_POLICY" ] && ! node "$CLASS_POLICY"; then
+      log "Pre-boot: gateway class policy failed; repair services remain live"
+      REPAIR_OK=false
+    fi
+    if ! "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts; then
+      log "Pre-boot: env/runtime reconciliation failed; repair services remain live"
+      REPAIR_OK=false
+    fi
+    if ! "$TSX" /octogee/scripts/entrypoints/system-config-checkpoint.ts; then
+      log "Pre-boot: durable config checkpoint failed; repair services remain live"
+      REPAIR_OK=false
+    fi
+    if [ "$REPAIR_OK" = "true" ]; then
+      break
+    fi
+    sleep 5
+  done
 fi
 
 # ── Boot sync: REMOVED ───────────────────────────────────────────────────────
@@ -337,26 +383,13 @@ fi
 # See docs/GATEWAY-FLEET-CONTROLLER-SPEC.md
 
 # ── In-pod runners: supervised + observable ─────────────────────────────────
-# Each runner is wrapped by supervise-runner.ts, which owns respawn AND writes
+# Each remaining runner is wrapped by supervise-runner.ts, which owns respawn AND writes
 # a heartbeat that runner-metrics-exporter publishes (octogee_runner_up /
 # _restart_total / _last_start). The thin shell `while true` guard here only
 # re-runs the supervisor itself if IT ever dies; the supervisor handles the
 # child's crash-loop. Replaces the bare per-runner respawn loops, which were
 # invisible to monitoring (PID 1 stays alive, so a crash-looping child never
 # showed as a container restart). See GATEWAY-RUNNER-OBSERVABILITY-SPEC.md.
-SUPERVISE="$TSX /octogee/scripts/entrypoints/supervise-runner.ts"
-supervise_runner() {
-  _name="$1"; shift
-  _restart_delay_ms="$1"; shift
-  (
-    while true; do
-      $SUPERVISE "$_name" "--restart-delay-ms=${_restart_delay_ms}" "$@" || true
-      log "supervise-runner[$_name] exited — restarting in 5s..."
-      sleep 5
-    done
-  ) &
-}
-
 # The local fleet controller is db-less for every class. Cowboy owns liveness
 # writes, and standard-image gateways mount customers from tenant-bound
 # octogee-api broker reads rather than local Firestore credentials.
@@ -372,20 +405,6 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "operator" ]; then
 fi
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   supervise_runner system-config-watch 5000 "$TSX" /octogee/scripts/entrypoints/system-config-watch.ts
-fi
-
-# Builder-shell PTY server — runtime class plus explicit access unlock only.
-# Shared and locked runtime gateways own no shells; their Helm Service omits the
-# builder-shell port. BUILDER_SHELL_REQUIRE_KEY enforces the INTERNAL_SERVICE_KEY
-# header on :3005 (defense-in-depth over K8s-namespace isolation) so a compromised
-# same-namespace pod can't bypass chat-proxy's Origin allowlist + ticket discipline.
-# No tmux→Firestore reconciler runs here: runtime pods are db-less (no platform
-# credentials), so dead-shell reconciliation must move to a Cowboy-side design.
-if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ "${OPERATOR_SHELLS_ENABLED:-}" = "true" ]; then
-  export BUILDER_SHELL_REQUIRE_KEY="${BUILDER_SHELL_REQUIRE_KEY:-true}"
-  supervise_runner builder-shell 5000 "$TSX" /octogee/scripts/entrypoints/builder-shell-server.ts
-elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
-  log "Builder-shell disabled: runtime shell access is not enabled"
 fi
 
 # ── Runner metrics exporter (all profiles) ──────────────────────────────────
@@ -409,13 +428,10 @@ fi
 # other backgrounded jobs (fleet-controller, site-build, preview-proxy, etc.) —
 # so `wait` at the bottom of this script keeps the pod up.
 #
-# Hard crash recovery is Kubernetes's job: the deployment
-# has a liveness probe on TCP :18789 in helm/octogee-gateway/templates/
-# deployment.yaml — port-frees-without-successor → pod restart after
-# `periodSeconds × failureThreshold` of consistent failure (default 60s × 5
-# = ~5 min before restart fires, then a fresh boot before the new pod
-# serves). Tradeoff for the no-supervisor simplicity; if you need faster
-# crash recovery, tighten `probes.liveness` in values.yaml.
+# Kubernetes checks the durable config status server for liveness and OpenClaw
+# :18789 for readiness. An OpenClaw failure removes the pod from service while
+# leaving BuilderShell and config repair available. Failure of the repair plane
+# itself restarts the pod.
 log "Starting OpenClaw gateway... (build: ${BUILD_SHA:-unknown})"
 openclaw gateway run --bind lan --port 18789 &
 

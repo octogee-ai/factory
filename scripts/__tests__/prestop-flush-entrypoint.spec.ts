@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { resolvePreStopFlushConfig } from "../entrypoints/prestop-flush.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createPreStopSystemConfigFlush,
+  resolvePreStopFlushConfig,
+} from "../entrypoints/prestop-flush.js";
 
 describe("prestop-flush entrypoint config", () => {
   it("normalizes the local gateway id to default", () => {
@@ -22,5 +25,21 @@ describe("prestop-flush entrypoint config", () => {
       gatewayClass: "dedicated",
       builderSlug: "",
     });
+  });
+
+  it("requires an accepted durable system config checkpoint", async () => {
+    const sync = vi.fn(() => ({
+      committed: true,
+      pushed: false,
+      pending: true,
+      errorCode: "push-failed",
+    }));
+    const flush = createPreStopSystemConfigFlush("alice", () => {}, sync);
+
+    await expect(flush?.()).rejects.toThrow("push-failed");
+    expect(sync).toHaveBeenCalledWith("alice", expect.objectContaining({
+      durablePolicy: true,
+      source: "auto-watch",
+    }));
   });
 });

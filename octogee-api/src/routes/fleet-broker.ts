@@ -59,6 +59,7 @@ import {
 } from "../lib/web-research-service.js";
 import { createBraveSearchClient, createTavilyClient } from "../lib/web-provider-clients.js";
 import { isPublicIp } from "../lib/link-unfurl.js";
+import { recordRevisionSystemConfigStatus } from "../lib/revision-system-config-status.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -360,6 +361,63 @@ function objectBody(req: Request): Record<string, unknown> {
   return req.body && typeof req.body === "object"
     ? (req.body as Record<string, unknown>)
     : {};
+}
+
+const SYSTEM_CONFIG_STATES = new Set(["clean", "dirty", "syncing", "error", "unavailable"]);
+const SYSTEM_CONFIG_ENUMS: Record<string, ReadonlySet<string>> = {
+  doctorResult: new Set(["ok", "error"]),
+  bootRecovery: new Set(["none", "recovered", "unavailable"]),
+  watcherState: new Set(["running", "stopped"]),
+  freezeState: new Set(["unfrozen", "freezing", "frozen"]),
+};
+
+export function parseSystemConfigObservedStatus(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  if (typeof input.state !== "string" || !SYSTEM_CONFIG_STATES.has(input.state)) return null;
+  const out: Record<string, unknown> = { state: input.state };
+  for (const key of ["acceptedCommit", "restoredCommit", "checkpointCommit"]) {
+    const field = input[key];
+    if (field === undefined) continue;
+    if (typeof field !== "string" || !/^[0-9a-f]{7,64}$/.test(field)) return null;
+    out[key] = field;
+  }
+  if (input.configHash !== undefined) {
+    if (typeof input.configHash !== "string" || !/^sha256:[0-9a-f]{64}$/.test(input.configHash)) return null;
+    out.configHash = input.configHash;
+  }
+  for (const key of ["dirtySince", "lastSyncedAt", "lastErrorAt", "updatedAt"]) {
+    const field = input[key];
+    if (field === undefined || field === null) {
+      if (field === null) out[key] = null;
+      continue;
+    }
+    if (typeof field !== "string" || field.length > 40 || Number.isNaN(Date.parse(field))) return null;
+    out[key] = field;
+  }
+  if (input.lastErrorCode !== undefined && input.lastErrorCode !== null) {
+    if (typeof input.lastErrorCode !== "string" || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(input.lastErrorCode)) return null;
+    out.lastErrorCode = input.lastErrorCode;
+  } else if (input.lastErrorCode === null) {
+    out.lastErrorCode = null;
+  }
+  for (const [key, allowed] of Object.entries(SYSTEM_CONFIG_ENUMS)) {
+    const field = input[key];
+    if (field === undefined) continue;
+    if (typeof field !== "string" || !allowed.has(field)) return null;
+    out[key] = field;
+  }
+  for (const key of ["schemaVersion", "rejectedCount", "recoveryCount"]) {
+    const field = input[key];
+    if (field === undefined) continue;
+    if (typeof field !== "number" || !Number.isSafeInteger(field) || field < 0) return null;
+    out[key] = field;
+  }
+  if (input.openclawVersion !== undefined) {
+    if (typeof input.openclawVersion !== "string" || !/^[A-Za-z0-9._+-]{1,80}$/.test(input.openclawVersion)) return null;
+    out.openclawVersion = input.openclawVersion;
+  }
+  return out;
 }
 
 function recordBodyValue(value: unknown): Record<string, unknown> | null {
@@ -1363,6 +1421,34 @@ function installGatewayOpsRoutes(
   deps: ResolvedFleetBrokerRouteDeps,
 ): void {
   const { db, recordUsageEvent, createBlobSignedUrl } = deps;
+
+  router.post("/system-config-status", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const revisionId = typeof req.body?.revisionId === "string" ? req.body.revisionId : "";
+    const authenticatedRevisionId = revisionIdFromGatewayPodName(bound.gatewayId, bound.podName);
+    if (!authenticatedRevisionId || authenticatedRevisionId !== revisionId) {
+      respondInvalidRevision(res, bound.gatewayId, revisionId);
+      return;
+    }
+    const status = parseSystemConfigObservedStatus(req.body?.status);
+    if (!status) {
+      res.status(400).json({ error: "invalid_system_config_status" });
+      return;
+    }
+    await runBrokered(res, async () => {
+      const accepted = await recordRevisionSystemConfigStatus(db, {
+        gatewayId: bound.gatewayId,
+        revisionId,
+        status,
+      });
+      if (!accepted) {
+        res.status(409).json({ error: "revision_not_serving_gateway" });
+        return;
+      }
+      res.status(204).end();
+    });
+  });
 
   router.post("/prestop-flush", async (req, res) => {
     const bound = boundGateway(req, res);

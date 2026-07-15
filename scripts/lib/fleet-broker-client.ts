@@ -8,6 +8,7 @@ import type {
   FleetBrokerUserSnapshot,
 } from "../../shared/types/fleet-broker.js";
 import { internalFetch } from "./internal-fetch.js";
+import type { SystemConfigObservedStatus } from "./system-config-status.js";
 
 function baseUrl(): string {
   if (process.env.FLEET_BROKER_URL) return process.env.FLEET_BROKER_URL;
@@ -62,6 +63,7 @@ export interface FleetBrokerClient {
     usage: FleetBrokerUsageData;
   }): Promise<void>;
   recordPreStopFlush(input: FleetBrokerPreStopFlushEvent): Promise<void>;
+  recordSystemConfigStatus(input: SystemConfigObservedStatus): Promise<void>;
   blobDownloadUrl(input: {
     slug: string;
     path: string;
@@ -166,6 +168,13 @@ export function createFleetBrokerClient(gatewayId: string, revisionId = ""): Fle
     },
     recordPreStopFlush(input) {
       return postNoContent("/internal/fleet/prestop-flush", { gatewayId, ...input });
+    },
+    recordSystemConfigStatus(status) {
+      return postNoContent("/internal/fleet/system-config-status", {
+        gatewayId,
+        revisionId,
+        status,
+      });
     },
     blobDownloadUrl(input) {
       return postJson<FleetBrokerBlobSignedUrl>(

@@ -101,6 +101,12 @@ describe("gateway entrypoint ↔ Dockerfile coverage", () => {
     ).toEqual([]);
   });
 
+  it("installs the octogee config status and adoption helper in every isolated gateway image", () => {
+    expect(existsSync(path.join(repoRoot, "infra/gateway/octogee"))).toBe(true);
+    expect(dockerfile).toMatch(/COPY infra\/gateway\/octogee \/usr\/local\/bin\/octogee/);
+    expect(dockerfile).toMatch(/chmod 755[^\n]*\/usr\/local\/bin\/octogee/);
+  });
+
 it("does not reinstate the unconditional openclaw file-log mirror", () => {
     expect(entrypoint).not.toContain("tail -F /tmp/openclaw-1000");
     expect(entrypoint).not.toContain("[openclaw-file]");

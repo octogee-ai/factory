@@ -23,7 +23,10 @@ import { probeOpenClawVersion } from "../lib/probe-openclaw-version.js";
 import { startUsageEventTailer } from "../lib/usage-log-tailer.js";
 import { startWorkspaceAutosaveLoop } from "../lib/workspace-autosave-runner.js";
 import { runGatewayPreStopFlush } from "../lib/gateway-prestop-flush.js";
-import { pushDirtySystemConfigForSlug } from "../lib/system-config.js";
+import {
+  checkpointDurableSystemConfigForSlug,
+  syncSystemConfigForSlug,
+} from "../lib/system-config.js";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
@@ -51,6 +54,17 @@ export function resolveFleetControllerEntrypointConfig(
     port: parseInt(env.FLEET_CONTROLLER_PORT ?? "3003", 10),
     publicKey: env.FLEET_CONTROLLER_PUBLIC_KEY || "",
     version: env.BUILD_SHA ?? "unknown",
+  };
+}
+
+export function createFleetSystemConfigFlush(
+  builderSlug: string,
+  logFn: (message: string) => void = log,
+  sync: typeof syncSystemConfigForSlug = syncSystemConfigForSlug,
+): (() => Promise<void>) | undefined {
+  if (!builderSlug) return undefined;
+  return async () => {
+    checkpointDurableSystemConfigForSlug(builderSlug, { log: logFn }, sync);
   };
 }
 
@@ -128,11 +142,7 @@ async function main(): Promise<void> {
           : () => blobSyncAllWithOptions({
               storeForSlug: () => createBrokeredBlobStore(brokerClient),
             }),
-        syncSystemConfig: entrypointConfig.builderSlug
-          ? async () => {
-              pushDirtySystemConfigForSlug(entrypointConfig.builderSlug, { log });
-            }
-          : undefined,
+        syncSystemConfig: createFleetSystemConfigFlush(entrypointConfig.builderSlug),
         log,
       });
     },

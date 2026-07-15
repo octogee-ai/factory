@@ -9,6 +9,12 @@ import {
   type RunnerHeartbeat,
   renderPrometheus,
 } from "../lib/runner-heartbeat.js";
+import { openClawDir } from "../lib/openclaw-config-path.js";
+import {
+  readSystemConfigStatus,
+  renderSystemConfigMetrics,
+  type SystemConfigObservedStatus,
+} from "../lib/system-config-status.js";
 
 // Always-on (all gateway profiles) Prometheus exporter for the in-pod runner
 // heartbeats. One scrape target for every supervised runner; a single
@@ -21,6 +27,9 @@ export interface RunnerMetricsExporterOptions {
   render?: (heartbeats: RunnerHeartbeat[], now: number) => string;
   now?: () => number;
   warn?: (message: string) => void;
+  openclawDir?: string;
+  readSystemConfig?: (openclawDir: string) => SystemConfigObservedStatus;
+  renderSystemConfig?: (status: SystemConfigObservedStatus, now: number) => string;
 }
 
 export function createRunnerMetricsHandler(
@@ -38,7 +47,11 @@ export function createRunnerMetricsHandler(
       return;
     }
     if (req.url === "/metrics") {
-      const body = render(read(dir), now());
+      const observedAt = now();
+      const configDir = options.openclawDir ?? openClawDir();
+      const status = (options.readSystemConfig ?? readSystemConfigStatus)(configDir);
+      const body = render(read(dir), observedAt) +
+        (options.renderSystemConfig ?? renderSystemConfigMetrics)(status, observedAt);
       res.writeHead(200, { "content-type": "text/plain; version=0.0.4" });
       res.end(body);
       return;

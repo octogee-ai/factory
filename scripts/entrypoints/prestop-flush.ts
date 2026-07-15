@@ -8,7 +8,10 @@ import { createBrokeredBlobStore } from "../lib/blob-sync-broker.js";
 import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
 import { runGatewayPreStopFlush } from "../lib/gateway-prestop-flush.js";
 import { syncAllWorkspaces } from "../lib/git.js";
-import { pushDirtySystemConfigForSlug } from "../lib/system-config.js";
+import {
+  checkpointDurableSystemConfigForSlug,
+  syncSystemConfigForSlug,
+} from "../lib/system-config.js";
 import { pathToFileURL } from "node:url";
 
 export interface PreStopFlushConfig {
@@ -29,6 +32,17 @@ export function resolvePreStopFlushConfig(
     gatewayId: rawGatewayId === "local" ? "default" : rawGatewayId,
     gatewayClass: runtime.gatewayClass ?? "",
     builderSlug: env.GATEWAY_BUILDER_SLUG?.trim() ?? "",
+  };
+}
+
+export function createPreStopSystemConfigFlush(
+  builderSlug: string,
+  logFn: (message: string) => void = log,
+  sync: typeof syncSystemConfigForSlug = syncSystemConfigForSlug,
+): (() => Promise<void>) | undefined {
+  if (!builderSlug) return undefined;
+  return async () => {
+    checkpointDurableSystemConfigForSlug(builderSlug, { log: logFn }, sync);
   };
 }
 
@@ -53,11 +67,7 @@ async function main(): Promise<void> {
     syncBlobs: () => blobSyncAllWithOptions({
       storeForSlug: () => createBrokeredBlobStore(brokerClient),
     }),
-    syncSystemConfig: builderSlug
-      ? async () => {
-          pushDirtySystemConfigForSlug(builderSlug, { log });
-        }
-      : undefined,
+    syncSystemConfig: createPreStopSystemConfigFlush(builderSlug),
     log,
   });
   await brokerClient

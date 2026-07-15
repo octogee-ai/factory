@@ -807,17 +807,24 @@ expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
     );
   });
 
-  it("startup probe is HTTP GET /healthz; liveness + readiness stay TCP; all on 18789", () => {
+  it("keeps repair mode live on 18790 while OpenClaw readiness stays on 18789", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     const gw = containerBlock(dep, "gateway");
 
-expect(gw).toMatch(
-      /startupProbe:\s+httpGet:\s+path:\s*\/healthz\s+port:\s*18789/,
+    expect(gw).toMatch(
+      /startupProbe:\s+httpGet:\s+path:\s*\/healthz\s+port:\s*18790/,
     );
-    expect(gw).toMatch(/livenessProbe:\s+tcpSocket:\s+port:\s*18789/);
-    expect(gw).toMatch(/readinessProbe:\s+tcpSocket:\s+port:\s*18789/);
+    expect(gw).toMatch(/livenessProbe:\s+httpGet:\s+path:\s*\/healthz\s+port:\s*18790/);
+    expect(gw).toMatch(/readinessProbe:\s+httpGet:\s+path:\s*\/healthz\s+port:\s*18789/);
     expect(dep).not.toMatch(/__openclaw__/);
+  });
+
+  it("does not suppress a failed durable pre-stop checkpoint", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const lifecycle = containerBlock(dep, "gateway").match(/lifecycle:[\s\S]*?(?=\n\s+env:)/)?.[0] ?? "";
+    expect(lifecycle).toContain("prestop-flush.ts");
+    expect(lifecycle).not.toContain("|| true");
   });
 });
 

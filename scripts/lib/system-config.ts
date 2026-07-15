@@ -28,6 +28,20 @@ import {
   mattermostAccountSecretRef,
   updateMattermostAccountSecrets,
 } from "./mattermost-account-secrets.js";
+import {
+  PlatformInvariantPolicyError,
+  assertPlatformInvariants,
+  reconcilePlatformInvariants,
+} from "./system-config-invariants.js";
+import {
+  attributedCommitArgs,
+  recoverSystemConfigHead,
+  type SystemConfigRecoveryResult,
+} from "./system-config-recovery.js";
+import {
+  readSystemConfigStatus,
+  updateSystemConfigStatus,
+} from "./system-config-status.js";
 import { validateOpenClawConfig } from "./openclaw-config-validation.js";
 
 type UnknownRecord = Record<string, unknown>;
@@ -50,6 +64,9 @@ export interface SystemConfigSyncResult {
   processedFingerprint?: string;
   rejected?: boolean;
   errorCode?: string;
+  policyPaths?: string[];
+  acceptedCommit?: string;
+  configHash?: string;
 }
 
 interface SystemConfigRestoreOptions {
@@ -67,6 +84,41 @@ interface SystemConfigSyncOptions {
   setRepoSshCommand?: typeof setRepoSshCommand;
   customerSshKeyPath?: typeof customerSshKeyPath;
   validateConfig?: (configPath: string) => void;
+  durablePolicy?: boolean;
+  env?: NodeJS.ProcessEnv;
+  source?: "auto-watch" | "boot-migration" | "recovery";
+}
+
+interface SystemConfigAuditOptions {
+  openclawDir?: string;
+  gitExec?: typeof gitExec;
+  customerSshKeyPath?: typeof customerSshKeyPath;
+}
+
+export interface SystemConfigAuditResult {
+  state: "clean" | "dirty" | "error" | "unavailable";
+  needsSync: boolean;
+  head?: string;
+  remoteHead?: string;
+  headTree?: string;
+  indexTree?: string;
+  worktreeDirty?: boolean;
+  configHash?: string;
+  errorCode?: string;
+}
+
+export type SystemConfigBootCheckpointResult =
+  | { ready: true; acceptedCommit: string; recoveredFromCommit?: string }
+  | { ready: false; errorCode: string; rejectedCommit?: string };
+
+interface SystemConfigBootCheckpointOptions {
+  openclawDir?: string;
+  env?: NodeJS.ProcessEnv;
+  log?: (message: string) => void;
+  validateConfig: (configPath: string) => void;
+  recover?: typeof recoverSystemConfigHead;
+  sync?: typeof syncSystemConfigForSlug;
+  now?: () => Date;
 }
 
 export function systemConfigDir(openclawDir = OPENCLAW_DIR): string {
@@ -232,6 +284,15 @@ async function ensureIdentityAndRepo(slug: string, log: (msg: string) => void): 
 function cloneOrReuseSystemConfigRepo(slug: string, dir: string, log: (msg: string) => void): boolean {
   if (fs.existsSync(path.join(dir, ".git"))) {
     setRepoSshCommand(dir, slug);
+    const sshKey = customerSshKeyPath(slug);
+    if (gitExec(dir, "fetch origin main", sshKey) === null) {
+      log(`[system_config] fetch failed for ${slug}/${systemConfigRepoName()}`);
+      return false;
+    }
+    if (gitExec(dir, "merge --ff-only origin/main", sshKey) === null) {
+      log(`[system_config] reused checkout is not a fast-forward for ${slug}/${systemConfigRepoName()}`);
+      return false;
+    }
     return true;
   }
   if (fs.existsSync(dir)) {
@@ -243,7 +304,11 @@ function cloneOrReuseSystemConfigRepo(slug: string, dir: string, log: (msg: stri
   const result = gitExec(path.dirname(dir), `clone ${remoteUrl(slug)} ${path.basename(dir)}`, sshKey);
   if (result === null) {
     log(`[system_config] clone failed for ${slug}/${systemConfigRepoName()}`);
-    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch (error) {
+      log(`[system_config] failed to remove partial checkout ${dir}: ${error instanceof Error ? error.message : String(error)}`);
+    }
     return false;
   }
   gitExec(dir, `config user.email "${slug}@octogee.com"`);
@@ -285,7 +350,7 @@ function seedSystemConfigIfMissing(
   return true;
 }
 
-function extractLegacyMattermostAccountSecrets(config: UnknownRecord): Record<string, string> {
+export function extractLegacyMattermostAccountSecrets(config: UnknownRecord): Record<string, string> {
   const accounts = asRecord(asRecord(asRecord(config.channels)?.mattermost)?.accounts);
   if (!accounts) return {};
   const secrets: Record<string, string> = {};
@@ -395,12 +460,75 @@ function acquireSystemConfigSyncLock(openclawDir: string): (() => void) | null {
   return null;
 }
 
+const GIT_SHA_RE = /^[0-9a-f]{40,64}$/;
+
+function remoteHeadFromLsRemote(output: string | null): string | null {
+  if (output === null) return null;
+  const head = output.trim().split(/\s+/)[0] ?? "";
+  return GIT_SHA_RE.test(head) ? head : null;
+}
+
+function inspectRemoteRelation(
+  repoDir: string,
+  keyPath: string,
+  execGit: typeof gitExec,
+): { relation: "equal" | "local-ahead" | "conflict" | "unavailable"; head?: string; remoteHead?: string } {
+  const head = execGit(repoDir, "rev-parse HEAD", keyPath);
+  const remoteHead = remoteHeadFromLsRemote(
+    execGit(repoDir, "ls-remote origin refs/heads/main", keyPath),
+  );
+  if (!head || !GIT_SHA_RE.test(head) || !remoteHead) return { relation: "unavailable" };
+  if (head === remoteHead) return { relation: "equal", head, remoteHead };
+  const mergeBase = execGit(repoDir, `merge-base ${head} ${remoteHead}`, keyPath);
+  if (mergeBase === remoteHead) return { relation: "local-ahead", head, remoteHead };
+  return { relation: "conflict", head, remoteHead };
+}
+
+function recordSyncError(
+  openclawDir: string,
+  errorCode: string,
+  now: () => Date,
+  patch: { rejected?: boolean } = {},
+): void {
+  const current = readSystemConfigStatus(openclawDir);
+  const at = now().toISOString();
+  updateSystemConfigStatus(openclawDir, {
+    state: "error",
+    dirtySince: current.dirtySince ?? at,
+    lastErrorCode: errorCode,
+    lastErrorAt: at,
+    ...(patch.rejected ? { rejectedCount: (current.rejectedCount ?? 0) + 1 } : {}),
+  }, now);
+}
+
+function recordSyncSuccess(
+  openclawDir: string,
+  acceptedCommit: string,
+  configHash: string,
+  env: NodeJS.ProcessEnv,
+  now: () => Date,
+): void {
+  updateSystemConfigStatus(openclawDir, {
+    state: "clean",
+    acceptedCommit,
+    configHash: `sha256:${configHash}`,
+    dirtySince: null,
+    lastSyncedAt: now().toISOString(),
+    lastErrorCode: null,
+    lastErrorAt: null,
+    openclawVersion: env.OPENCLAW_VERSION?.trim() || "unknown",
+    watcherState: "running",
+  }, now);
+}
+
 function syncSystemConfigUnlocked(
   slug: string,
   opts: SystemConfigSyncOptions,
   pushWhenClean: boolean,
 ): SystemConfigSyncResult {
   const log = opts.log ?? defaultLog;
+  const now = opts.now ?? (() => new Date());
+  const env = opts.env ?? process.env;
   if (!isValidUsername(slug)) {
     return { skipped: "invalid-builder-slug", committed: false, pushed: false };
   }
@@ -421,13 +549,39 @@ function syncSystemConfigUnlocked(
   const keyPath = (opts.customerSshKeyPath ?? customerSshKeyPath)(slug);
   configureSsh(repoDir, slug);
 
+  if (opts.durablePolicy) {
+    const remote = inspectRemoteRelation(repoDir, keyPath, execGit);
+    if (remote.relation === "unavailable") {
+      recordSyncError(openclawDir, "remote-head-unavailable", now);
+      return {
+        committed: false,
+        pushed: false,
+        pending: true,
+        errorCode: "remote-head-unavailable",
+        processedFingerprint: initialFingerprint,
+      };
+    }
+    if (remote.relation === "conflict") {
+      recordSyncError(openclawDir, "non-fast-forward-conflict", now);
+      return {
+        committed: false,
+        pushed: false,
+        pending: true,
+        errorCode: "non-fast-forward-conflict",
+        processedFingerprint: initialFingerprint,
+      };
+    }
+  }
+
   const dirty = execGit(repoDir, `status --porcelain -- ${SYSTEM_CONFIG_PATHSPEC}`, keyPath);
   if (dirty === null) {
+    if (opts.durablePolicy) recordSyncError(openclawDir, "status-check-failed", now);
     log(`[system_config] ${slug}: prestop status check failed`);
     return {
       skipped: "status-failed",
       committed: false,
       pushed: false,
+      ...(opts.durablePolicy ? { errorCode: "status-check-failed" } : {}),
       ...(pushWhenClean ? { pending: true, processedFingerprint: initialFingerprint } : {}),
     };
   }
@@ -441,35 +595,62 @@ function syncSystemConfigUnlocked(
     }
     const pushed = execGit(repoDir, "push origin main", keyPath);
     if (pushed === null) {
+      if (opts.durablePolicy) recordSyncError(openclawDir, "push-failed", now);
       log(`[system_config] ${slug}: pending push retry failed`);
       return {
         committed: false,
         pushed: false,
         pending: true,
+        ...(opts.durablePolicy ? { errorCode: "push-failed" } : {}),
         processedFingerprint: initialFingerprint,
       };
+    }
+    const acceptedCommit = execGit(repoDir, "rev-parse HEAD", keyPath);
+    if (opts.durablePolicy && (!acceptedCommit || !GIT_SHA_RE.test(acceptedCommit))) {
+      recordSyncError(openclawDir, "accepted-head-unavailable", now);
+      return {
+        committed: false,
+        pushed: true,
+        pending: true,
+        errorCode: "accepted-head-unavailable",
+        processedFingerprint: initialFingerprint,
+      };
+    }
+    if (opts.durablePolicy && acceptedCommit && GIT_SHA_RE.test(acceptedCommit)) {
+      recordSyncSuccess(openclawDir, acceptedCommit, initialFingerprint, env, now);
     }
     return {
       committed: false,
       pushed: true,
       pending: false,
       processedFingerprint: initialFingerprint,
+      ...(acceptedCommit && GIT_SHA_RE.test(acceptedCommit) ? {
+        acceptedCommit,
+        configHash: initialFingerprint,
+      } : {}),
     };
   }
 
   let validatedFingerprint: string;
   try {
-    JSON.parse(fs.readFileSync(repoConfigPath, "utf-8"));
+    const parsed = JSON.parse(fs.readFileSync(repoConfigPath, "utf-8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("openclaw.json must contain an object");
+    }
+    if (opts.durablePolicy) assertPlatformInvariants(parsed as UnknownRecord, env);
     (opts.validateConfig ?? validateOpenClawConfig)(repoConfigPath);
     validatedFingerprint = systemConfigFingerprint(repoConfigPath);
   } catch (error) {
-    const stamp = (opts.now ?? (() => new Date()))().toISOString().replace(/[:.]/g, "-");
+    const stamp = now().toISOString().replace(/[:.]/g, "-");
     const rejectedDir = path.join(openclawDir, "rejected_config");
     fs.mkdirSync(rejectedDir, { recursive: true, mode: 0o700 });
     const rejectedPath = path.join(rejectedDir, `openclaw.${stamp}.json`);
     fs.writeFileSync(rejectedPath, fs.readFileSync(repoConfigPath), { mode: 0o600 });
     const accepted = execGit(repoDir, "show HEAD:openclaw.json", keyPath);
     if (accepted === null) {
+      if (opts.durablePolicy) {
+        recordSyncError(openclawDir, "validation-restore-failed", now, { rejected: true });
+      }
       log(`[system_config] ${slug}: validation failed and accepted config restore failed`);
       return {
         skipped: "validation-restore-failed",
@@ -480,25 +661,31 @@ function syncSystemConfigUnlocked(
       };
     }
     atomicWrite(repoConfigPath, accepted);
-    log(
-      `[system_config] ${slug}: rejected config restored (${error instanceof Error ? error.message : String(error)})`,
-    );
+    const errorCode = error instanceof PlatformInvariantPolicyError
+      ? error.code
+      : "validation-failed";
+    const policyPaths = error instanceof PlatformInvariantPolicyError ? error.paths : undefined;
+    recordSyncError(openclawDir, errorCode, now, { rejected: true });
+    log(`[system_config] ${slug}: rejected config restored (${errorCode}${policyPaths ? `: ${policyPaths.join(", ")}` : ""})`);
     return {
       committed: false,
       pushed: false,
       rejected: true,
-      errorCode: "validation-failed",
+      errorCode,
+      ...(policyPaths ? { policyPaths } : {}),
       processedFingerprint: systemConfigFingerprint(repoConfigPath),
     };
   }
 
   const staged = execGit(repoDir, `add ${SYSTEM_CONFIG_PATHSPEC}`, keyPath);
   if (staged === null) {
+    if (opts.durablePolicy) recordSyncError(openclawDir, "stage-failed", now);
     log(`[system_config] ${slug}: staging openclaw.json failed`);
     return {
       skipped: "stage-failed",
       committed: false,
       pushed: false,
+      ...(opts.durablePolicy ? { errorCode: "stage-failed" } : {}),
       ...(pushWhenClean ? { pending: true, processedFingerprint: validatedFingerprint } : {}),
     };
   }
@@ -512,20 +699,41 @@ function syncSystemConfigUnlocked(
       processedFingerprint: validatedFingerprint,
     };
   }
-  const stamp = (opts.now ?? (() => new Date()))().toISOString();
-  const source = pushWhenClean ? "auto" : "prestop";
-  const committed = execGit(repoDir, `commit -m "${source}: sync openclaw config ${stamp}"`, keyPath);
+  const stamp = now().toISOString();
+  const source = opts.source ?? "auto-watch";
+  const committed = execGit(
+    repoDir,
+    attributedCommitArgs(`${source}: sync openclaw config ${stamp}`, source, env),
+    keyPath,
+  );
   if (committed === null) {
+    if (opts.durablePolicy) recordSyncError(openclawDir, "commit-failed", now);
     log(`[system_config] ${slug}: ${source} commit failed`);
     return {
       committed: false,
       pushed: false,
+      ...(opts.durablePolicy ? { errorCode: "commit-failed" } : {}),
       ...(pushWhenClean ? { pending: true, processedFingerprint: stagedFingerprint } : {}),
     };
   }
 
   const pushed = execGit(repoDir, "push origin main", keyPath);
   if (pushed === null) {
+    if (opts.durablePolicy) {
+      const afterFailure = inspectRemoteRelation(repoDir, keyPath, execGit);
+      const errorCode = afterFailure.relation === "conflict"
+        ? "non-fast-forward-conflict"
+        : "push-failed";
+      recordSyncError(openclawDir, errorCode, now);
+      log(`[system_config] ${slug}: ${source} push failed (${errorCode})`);
+      return {
+        committed: true,
+        pushed: false,
+        pending: true,
+        errorCode,
+        ...(pushWhenClean ? { processedFingerprint: stagedFingerprint } : {}),
+      };
+    }
     log(`[system_config] ${slug}: ${source} push failed`);
     return {
       committed: true,
@@ -535,6 +743,20 @@ function syncSystemConfigUnlocked(
     };
   }
 
+  const acceptedCommit = execGit(repoDir, "rev-parse HEAD", keyPath);
+  if (opts.durablePolicy && (!acceptedCommit || !GIT_SHA_RE.test(acceptedCommit))) {
+    recordSyncError(openclawDir, "accepted-head-unavailable", now);
+    return {
+      committed: true,
+      pushed: true,
+      pending: true,
+      errorCode: "accepted-head-unavailable",
+      ...(pushWhenClean ? { processedFingerprint: stagedFingerprint } : {}),
+    };
+  }
+  if (opts.durablePolicy && acceptedCommit && GIT_SHA_RE.test(acceptedCommit)) {
+    recordSyncSuccess(openclawDir, acceptedCommit, stagedFingerprint, env, now);
+  }
   log(`[system_config] ${slug}: ${source} pushed openclaw.json changes`);
   return {
     committed: true,
@@ -542,6 +764,10 @@ function syncSystemConfigUnlocked(
     ...(pushWhenClean
       ? { pending: false, processedFingerprint: stagedFingerprint }
       : {}),
+    ...(acceptedCommit && GIT_SHA_RE.test(acceptedCommit) ? {
+      acceptedCommit,
+      configHash: stagedFingerprint,
+    } : {}),
   };
 }
 
@@ -572,6 +798,167 @@ function syncSystemConfig(
   }
 }
 
+export function auditSystemConfigForSlug(
+  slug: string,
+  opts: SystemConfigAuditOptions = {},
+): SystemConfigAuditResult {
+  if (!isValidUsername(slug)) return { state: "unavailable", needsSync: false, errorCode: "invalid-builder-slug" };
+  const openclawDir = opts.openclawDir ?? OPENCLAW_DIR;
+  const repoDir = systemConfigDir(openclawDir);
+  const configPath = systemConfigPath(openclawDir);
+  if (!fs.existsSync(path.join(repoDir, ".git")) || !fs.existsSync(configPath)) {
+    return { state: "unavailable", needsSync: false, errorCode: "checkout-unavailable" };
+  }
+  const execGit = opts.gitExec ?? gitExec;
+  const keyPath = (opts.customerSshKeyPath ?? customerSshKeyPath)(slug);
+  const head = execGit(repoDir, "rev-parse HEAD", keyPath);
+  const headTree = execGit(repoDir, "rev-parse HEAD^{tree}", keyPath);
+  const indexTree = execGit(repoDir, "write-tree", keyPath);
+  const worktree = execGit(repoDir, `status --porcelain -- ${SYSTEM_CONFIG_PATHSPEC}`, keyPath);
+  const remoteHead = remoteHeadFromLsRemote(
+    execGit(repoDir, "ls-remote origin refs/heads/main", keyPath),
+  );
+  const configHash = systemConfigFingerprint(configPath);
+  if (!head || !headTree || !indexTree || worktree === null || !remoteHead) {
+    return {
+      state: "error",
+      needsSync: true,
+      ...(head ? { head } : {}),
+      ...(remoteHead ? { remoteHead } : {}),
+      ...(headTree ? { headTree } : {}),
+      ...(indexTree ? { indexTree } : {}),
+      configHash,
+      errorCode: "git-audit-unavailable",
+    };
+  }
+  let remoteConflict = false;
+  if (head !== remoteHead) {
+    const mergeBase = execGit(repoDir, `merge-base ${head} ${remoteHead}`, keyPath);
+    remoteConflict = mergeBase !== remoteHead;
+  }
+  if (remoteConflict) {
+    return {
+      state: "error",
+      needsSync: true,
+      head,
+      remoteHead,
+      headTree,
+      indexTree,
+      worktreeDirty: worktree.length > 0,
+      configHash,
+      errorCode: "non-fast-forward-conflict",
+    };
+  }
+  const status = readSystemConfigStatus(openclawDir);
+  const worktreeDirty = worktree.length > 0;
+  const needsSync = worktreeDirty || indexTree !== headTree || head !== remoteHead ||
+    (status.configHash !== undefined && status.configHash !== `sha256:${configHash}`);
+  return {
+    state: needsSync ? "dirty" : "clean",
+    needsSync,
+    head,
+    remoteHead,
+    headTree,
+    indexTree,
+    worktreeDirty,
+    configHash,
+  };
+}
+
+export function checkpointBootSystemConfigForSlug(
+  slug: string,
+  opts: SystemConfigBootCheckpointOptions,
+): SystemConfigBootCheckpointResult {
+  const openclawDir = opts.openclawDir ?? OPENCLAW_DIR;
+  const repoDir = systemConfigDir(openclawDir);
+  const configPath = systemConfigPath(openclawDir);
+  const env = opts.env ?? process.env;
+  const now = opts.now ?? (() => new Date());
+  try {
+    const value = JSON.parse(fs.readFileSync(configPath, "utf8")) as unknown;
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const before = fs.readFileSync(configPath, "utf8");
+      reconcilePlatformInvariants(value as UnknownRecord, env);
+      const after = `${JSON.stringify(value, null, 2)}\n`;
+      if (after !== before) atomicWrite(configPath, after);
+    }
+  } catch (error) {
+    (opts.log ?? defaultLog)(
+      `[system_config] boot reconciliation deferred to accepted-head recovery: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  const recovery: SystemConfigRecoveryResult = (opts.recover ?? recoverSystemConfigHead)({
+    slug,
+    openclawDir,
+    repoDir,
+    configPath,
+    env,
+    validateConfig: opts.validateConfig,
+    now,
+  });
+  if (recovery.outcome === "unavailable") {
+    const errorCode = recovery.errorCode ?? "no-valid-ancestor";
+    updateSystemConfigStatus(openclawDir, {
+      state: "unavailable",
+      bootRecovery: "unavailable",
+      lastErrorCode: errorCode,
+      lastErrorAt: now().toISOString(),
+      dirtySince: now().toISOString(),
+      openclawVersion: env.OPENCLAW_VERSION?.trim() || "unknown",
+    }, now);
+    return { ready: false, errorCode, rejectedCommit: recovery.rejectedCommit };
+  }
+  if (recovery.outcome === "recovered") {
+    const current = readSystemConfigStatus(openclawDir);
+    updateSystemConfigStatus(openclawDir, {
+      state: "clean",
+      acceptedCommit: recovery.acceptedCommit,
+      restoredCommit: recovery.recoveredFromCommit,
+      configHash: `sha256:${systemConfigFingerprint(configPath)}`,
+      bootRecovery: "recovered",
+      recoveryCount: (current.recoveryCount ?? 0) + 1,
+      dirtySince: null,
+      lastSyncedAt: now().toISOString(),
+      lastErrorCode: null,
+      lastErrorAt: null,
+      openclawVersion: env.OPENCLAW_VERSION?.trim() || "unknown",
+    }, now);
+    return {
+      ready: true,
+      acceptedCommit: recovery.acceptedCommit,
+      recoveredFromCommit: recovery.recoveredFromCommit,
+    };
+  }
+
+  const syncResult = (opts.sync ?? syncSystemConfigForSlug)(slug, {
+    openclawDir,
+    env,
+    now,
+    validateConfig: opts.validateConfig,
+    durablePolicy: true,
+    source: "boot-migration",
+  });
+  if (!syncResult.pushed || syncResult.pending || syncResult.rejected || syncResult.skipped) {
+    return {
+      ready: false,
+      errorCode: syncResult.errorCode ?? syncResult.skipped ?? "boot-checkpoint-pending",
+    };
+  }
+  const acceptedCommit = syncResult.acceptedCommit ?? recovery.acceptedCommit;
+  updateSystemConfigStatus(openclawDir, {
+    state: "clean",
+    acceptedCommit,
+    bootRecovery: "none",
+    doctorResult: "ok",
+    schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION,
+    openclawVersion: env.OPENCLAW_VERSION?.trim() || "unknown",
+    lastErrorCode: null,
+    lastErrorAt: null,
+  }, now);
+  return { ready: true, acceptedCommit };
+}
+
 export function pushDirtySystemConfigForSlug(
   slug: string,
   opts: SystemConfigSyncOptions = {},
@@ -584,4 +971,30 @@ export function syncSystemConfigForSlug(
   opts: SystemConfigSyncOptions = {},
 ): SystemConfigSyncResult {
   return syncSystemConfig(slug, opts, true);
+}
+
+export class SystemConfigCheckpointError extends Error {
+  readonly code = "durable-system-config-checkpoint-failed";
+
+  constructor(readonly result: SystemConfigSyncResult) {
+    super(`durable system config checkpoint failed: ${result.errorCode ?? result.skipped ?? "accepted-head-unavailable"}`);
+    this.name = "SystemConfigCheckpointError";
+  }
+}
+
+export function checkpointDurableSystemConfigForSlug(
+  slug: string,
+  opts: SystemConfigSyncOptions = {},
+  sync: typeof syncSystemConfigForSlug = syncSystemConfigForSlug,
+): SystemConfigSyncResult {
+  const result = sync(slug, {
+    ...opts,
+    durablePolicy: true,
+    source: opts.source ?? "auto-watch",
+  });
+  if (!result.pushed || result.pending || result.rejected || result.skipped ||
+      result.errorCode || !result.acceptedCommit) {
+    throw new SystemConfigCheckpointError(result);
+  }
+  return result;
 }

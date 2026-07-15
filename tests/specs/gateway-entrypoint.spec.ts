@@ -41,14 +41,41 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     expect(restoreBlock).toMatch(/GATEWAY_BUILDER_SLUG/);
   });
 
-  it("makes the tracked system_config file the active OpenClaw path and fails closed on restore", () => {
+  it("makes the tracked system_config file active and retries restore while repair access stays up", () => {
     expect(entrypoint).toMatch(
       /export OPENCLAW_CONFIG_PATH="\$OPENCLAW_DIR\/system_config\/openclaw\.json"/,
     );
     const restoreLine = entrypoint.split("\n").find((line) => line.includes("system-config-restore.ts"));
     expect(restoreLine).toBeTruthy();
-    expect(restoreLine).not.toMatch(/\|\|/);
+    expect(entrypoint).toMatch(/until "\$TSX" \/octogee\/scripts\/entrypoints\/system-config-restore\.ts/);
+    const shellIdx = entrypoint.indexOf("supervise_runner builder-shell");
+    const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
+    expect(shellIdx).toBeGreaterThan(-1);
+    expect(shellIdx).toBeLessThan(restoreIdx);
     expect(entrypoint).not.toMatch(/gateway\.auth\.token re-synced/);
+  });
+
+  it("starts a repair liveness/status server before isolated restore", () => {
+    const statusIdx = entrypoint.indexOf("supervise_runner system-config-status");
+    const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
+    expect(statusIdx).toBeGreaterThan(-1);
+    expect(statusIdx).toBeLessThan(restoreIdx);
+  });
+
+  it("gives the early repair shell the tracked config path and keeps it stable across restore conflicts", () => {
+    const configPathIdx = entrypoint.indexOf(
+      'export OPENCLAW_CONFIG_PATH="$OPENCLAW_DIR/system_config/openclaw.json"',
+    );
+    const shellIdx = entrypoint.indexOf("supervise_runner builder-shell");
+    const retryIdx = entrypoint.indexOf("until \"$TSX\" /octogee/scripts/entrypoints/system-config-restore.ts");
+    const openclawIdx = entrypoint.indexOf("openclaw gateway run");
+    expect(configPathIdx).toBeGreaterThan(-1);
+    expect(configPathIdx).toBeLessThan(shellIdx);
+    expect(shellIdx).toBeLessThan(retryIdx);
+    expect(retryIdx).toBeLessThan(openclawIdx);
+    const retryBlock = entrypoint.slice(retryIdx, entrypoint.indexOf("else", retryIdx));
+    expect(retryBlock).toMatch(/sleep 5/);
+    expect(retryBlock).not.toMatch(/exit\s+[1-9]/);
   });
 
   it("starts one supervised config watcher on isolated gateways", () => {
@@ -71,18 +98,18 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     expect(entrypoint).toMatch(/OPENCLAW_SERVICE_REPAIR_POLICY=external/);
   });
 
-  it("fails boot when class policy or isolated pre-boot reconciliation fails", () => {
-    const classPolicyLine = entrypoint.split("\n").find((line) =>
-      line.includes('node "$CLASS_POLICY"')
+  it("retries class policy and isolated pre-boot reconciliation without losing repair access", () => {
+    expect(entrypoint).toMatch(/if \[ -f "\$CLASS_POLICY" \] && ! node "\$CLASS_POLICY"/);
+    expect(entrypoint).toMatch(/if ! "\$TSX" \/octogee\/scripts\/entrypoints\/pre-boot-config\.ts/);
+    const repairLoop = entrypoint.slice(
+      entrypoint.indexOf("OPENCLAW_SERVICE_REPAIR_POLICY=external"),
+      entrypoint.indexOf("# ── Boot sync"),
     );
-    expect(classPolicyLine).toBe('  node "$CLASS_POLICY"');
+    expect(repairLoop).toMatch(/while true/);
+    expect(repairLoop).toMatch(/sleep 5/);
+    expect(repairLoop).toContain("system-config-checkpoint.ts");
 
-    const prebootBlock = entrypoint.slice(
-      entrypoint.indexOf("Pre-boot: sync env/runtime config"),
-      entrypoint.indexOf("Pre-boot: hydrating native GitHub CLI auth"),
-    );
-    expect(prebootBlock).toMatch(/GATEWAY_CLASS_EFFECTIVE[^\n]*!= "shared"/);
-    expect(prebootBlock).toContain('"$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts');
+    expect(repairLoop).toContain('"$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts');
   });
 
   it("runs pre-boot env patches without requiring the removed Firebase SA key", () => {
@@ -194,12 +221,18 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
   it("supervise_runner keeps a thin shell guard so a dead supervisor restarts", () => {
     const fnRegion = entrypoint.slice(
       entrypoint.indexOf("supervise_runner() {"),
-      entrypoint.indexOf("supervise_runner fleet-controller"),
+      entrypoint.indexOf("supervise_runner system-config-status"),
     );
     expect(fnRegion).toMatch(/while true/);
     expect(fnRegion).toMatch(/\$SUPERVISE/);
     expect(fnRegion).toMatch(/--restart-delay-ms=\$\{_restart_delay_ms\}/);
     expect(entrypoint).toMatch(/SUPERVISE=[^\n]*supervise-runner\.ts/);
+  });
+
+  it("starts builder-shell before durable config repair on explicitly unlocked isolated gateways", () => {
+    expect(entrypoint.indexOf("supervise_runner builder-shell")).toBeLessThan(
+      entrypoint.indexOf("system-config-restore.ts"),
+    );
   });
 });
 

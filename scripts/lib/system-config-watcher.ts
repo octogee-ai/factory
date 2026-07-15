@@ -15,6 +15,7 @@ export interface SystemConfigWatcherStatus {
   state: "clean" | "dirty" | "syncing" | "error";
   generation: number;
   lastError?: string;
+  errorCode?: string;
 }
 
 interface WatchHandle {
@@ -24,12 +25,14 @@ interface WatchHandle {
 interface SystemConfigWatcherOptions {
   configPath: string;
   sync: () => Promise<SystemConfigWatchSyncResult>;
+  audit?: () => Promise<{ needsSync: boolean }> | { needsSync: boolean };
   debounceMs?: number;
   retryMs?: number;
   pollMs?: number;
   startImmediately?: boolean;
   watch?: (directory: string, onChange: () => void) => WatchHandle;
   log?: (message: string) => void;
+  onStatusChange?: (status: SystemConfigWatcherStatus) => void;
 }
 
 export function systemConfigFingerprint(configPath: string): string {
@@ -50,9 +53,11 @@ export function createSystemConfigWatcher(options: SystemConfigWatcherOptions) {
   let lastProcessedFingerprint = systemConfigFingerprint(options.configPath);
   let state: SystemConfigWatcherStatus["state"] = "clean";
   let lastError: string | undefined;
+  let errorCode: string | undefined;
   let pendingPush = options.startImmediately !== false;
   let closed = false;
   let running = false;
+  let auditRunning = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let poll: ReturnType<typeof setInterval> | undefined;
 
@@ -68,6 +73,20 @@ export function createSystemConfigWatcher(options: SystemConfigWatcherOptions) {
 
   const watchHandle = (options.watch ?? defaultWatch)(path.dirname(options.configPath), () => notify());
 
+  function status(): SystemConfigWatcherStatus {
+    return {
+      state,
+      generation,
+      ...(lastError ? { lastError } : {}),
+      ...(errorCode ? { errorCode } : {}),
+    };
+  }
+
+  function transition(next: SystemConfigWatcherStatus["state"]): void {
+    state = next;
+    options.onStatusChange?.(status());
+  }
+
   function schedule(delay: number): void {
     if (closed || running) return;
     if (timer) clearTimeout(timer);
@@ -80,42 +99,46 @@ export function createSystemConfigWatcher(options: SystemConfigWatcherOptions) {
   async function run(): Promise<void> {
     if (closed || running) return;
     running = true;
-    state = "syncing";
     try {
       while (!closed) {
         const startedFingerprint = systemConfigFingerprint(options.configPath);
         if (!pendingPush && startedFingerprint === lastProcessedFingerprint) {
-          state = lastError ? "error" : "clean";
+          transition(lastError ? "error" : "clean");
           break;
         }
 
+        transition("syncing");
         try {
           const result = await options.sync();
           const processedFingerprint = result.processedFingerprint ?? startedFingerprint;
           lastProcessedFingerprint = processedFingerprint;
           pendingPush = result.pending === true || (result.committed && !result.pushed);
           lastError = result.rejected ? (result.errorCode ?? "config-rejected") : undefined;
+          errorCode = pendingPush || result.rejected
+            ? (result.errorCode ?? "checkpoint-pending")
+            : undefined;
         } catch (error) {
           pendingPush = true;
           lastError = error instanceof Error ? error.message : String(error);
+          errorCode = "watcher-sync-failed";
           log(`[system_config] watcher sync failed: ${lastError}`);
         }
 
         const currentFingerprint = systemConfigFingerprint(options.configPath);
         const contentChangedAfterSnapshot = currentFingerprint !== lastProcessedFingerprint;
         if (contentChangedAfterSnapshot) {
-          state = "dirty";
+          transition("dirty");
           continue;
         }
 
-        state = pendingPush || lastError ? "error" : "clean";
+        transition(pendingPush || lastError ? "error" : "clean");
         break;
       }
     } finally {
       running = false;
       if (!closed && pendingPush) schedule(retryMs);
       else if (!closed && systemConfigFingerprint(options.configPath) !== lastProcessedFingerprint) {
-        state = "dirty";
+        transition("dirty");
         schedule(debounceMs);
       }
     }
@@ -124,7 +147,7 @@ export function createSystemConfigWatcher(options: SystemConfigWatcherOptions) {
   function notify(): void {
     if (closed) return;
     generation += 1;
-    state = "dirty";
+    transition("dirty");
     if (!running) schedule(debounceMs);
   }
 
@@ -133,7 +156,27 @@ export function createSystemConfigWatcher(options: SystemConfigWatcherOptions) {
       if (closed) return;
       if (pendingPush || systemConfigFingerprint(options.configPath) !== lastProcessedFingerprint) {
         notify();
+        return;
       }
+      if (!options.audit || auditRunning) return;
+      auditRunning = true;
+      void Promise.resolve(options.audit())
+        .then((result) => {
+          if (!closed && result.needsSync) {
+            pendingPush = true;
+            notify();
+          }
+        })
+        .catch((error) => {
+          if (closed) return;
+          lastError = error instanceof Error ? error.message : String(error);
+          errorCode = "watcher-audit-failed";
+          log(`[system_config] watcher audit failed: ${lastError}`);
+          notify();
+        })
+        .finally(() => {
+          auditRunning = false;
+        });
     }, pollMs);
   }
 
@@ -142,13 +185,7 @@ export function createSystemConfigWatcher(options: SystemConfigWatcherOptions) {
   return {
     notify,
     flush: run,
-    status(): SystemConfigWatcherStatus {
-      return {
-        state,
-        generation,
-        ...(lastError ? { lastError } : {}),
-      };
-    },
+    status,
     close(): void {
       closed = true;
       if (timer) clearTimeout(timer);

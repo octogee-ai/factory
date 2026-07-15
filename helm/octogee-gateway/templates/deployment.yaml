@@ -110,6 +110,8 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Values.imageTag }}"
           ports:
             - containerPort: 18789
+            - containerPort: 18790
+              name: config-status
             - containerPort: 9092
               name: runner-metrics
             - containerPort: 9080
@@ -134,7 +136,7 @@ spec:
                   - >
                     timeout {{ .Values.preStopFlush.timeoutSeconds | default 25 }}s
                     /octogee/scripts/node_modules/.bin/tsx
-                    /octogee/scripts/entrypoints/prestop-flush.ts || true
+                    /octogee/scripts/entrypoints/prestop-flush.ts
           {{- end }}
           env:
             - name: HOME
@@ -309,34 +311,25 @@ spec:
               readOnly: true
             # No platform secrets are mounted here. The projected token above
             # is this gateway's KSA identity for tenant-bound broker calls.
-          # Startup probe is HTTP GET /healthz (not TCP) — gates
-          # liveness/readiness until openclaw is actually serving HTTP,
-          # not just port-bound. Unrouted paths fall through to openclaw's
-          # Control-UI static handler, which 503s (image skips ui:build);
-          # /healthz returns 200 {"status":"live"}. Once it succeeds once,
-          # liveness/readiness take over (TCP, won't flap on slow /healthz
-          # under steady load).
           startupProbe:
             httpGet:
               path: /healthz
-              port: 18789
+              port: 18790
             initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.startup.periodSeconds }}
             failureThreshold: {{ .Values.probes.startup.failureThreshold }}
             timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
           livenessProbe:
-            tcpSocket:
-              port: 18789
+            httpGet:
+              path: /healthz
+              port: 18790
             initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
             timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
-          # Readiness: TCP probe with `successThreshold` so a freshly-bound
-          # port has to stay bound for N×periodSeconds before traffic starts
-          # routing. Together with `failureThreshold`, prevents the
-          # bind/ready/unready oscillation observed on customer-add bursts.
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /healthz
               port: 18789
             initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
