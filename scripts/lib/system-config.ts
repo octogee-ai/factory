@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -52,11 +51,14 @@ import { validateOpenClawConfig } from "./openclaw-config-validation.js";
 import {
   assertSystemConfigGitignore,
   assertSystemConfigMetadata,
+  readSystemConfigCommitBlob,
+  type ReadSystemConfigCommitBlob,
+  type SystemConfigDurableFilename,
+  SYSTEM_CONFIG_DURABLE_FILENAMES,
 } from "./system-config-durable-files.js";
 
 type UnknownRecord = Record<string, unknown>;
 const CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION = 1;
-const GIT_BIN = "/usr/bin/git";
 const SYSTEM_CONFIG_PATHSPEC = "openclaw.json .octogee.json .gitignore";
 const SYSTEM_CONFIG_GITIGNORE = "*.bak\n*.tmp\n";
 const GIT_SHA_RE = /^[0-9a-f]{40,64}$/;
@@ -65,6 +67,7 @@ const SYSTEM_CONFIG_METADATA_FILENAME = ".octogee.json";
 const SYSTEM_CONFIG_GITIGNORE_FILENAME = ".gitignore";
 const GIT_REV_PARSE_HEAD = "rev-parse HEAD";
 const ACCEPTED_HEAD_UNAVAILABLE = "accepted-head-unavailable";
+const VALIDATION_RESTORE_FAILED = "validation-restore-failed";
 
 function fingerprintContents(contents: Buffer): string {
   return createHash("sha256").update(contents).digest("hex");
@@ -112,7 +115,7 @@ export interface SystemConfigSyncOptions {
   source?: SystemConfigCommitSource;
   lockHeld?: boolean;
   allowFrozen?: boolean;
-  readAcceptedConfig?: (repoDir: string) => Buffer | null;
+  readCommitBlob?: ReadSystemConfigCommitBlob;
 }
 
 interface SystemConfigAuditOptions {
@@ -150,6 +153,7 @@ interface SystemConfigBootCheckpointOptions {
   sync?: typeof syncSystemConfigForSlug;
   now?: () => Date;
   doctorResult?: "ok" | "error";
+  verifyAcceptedDurableSet?: (repoDir: string, acceptedCommit: string) => boolean;
 }
 
 export interface SystemConfigFreezeRecord extends ConfigFreezeOwner {
@@ -206,18 +210,6 @@ function atomicWrite(filePath: string, contents: string | Buffer, mode = 0o600):
     fs.closeSync(fd);
   }
   fs.renameSync(tmp, filePath);
-}
-
-function readAcceptedConfig(repoDir: string): Buffer | null {
-  try {
-    return execFileSync(GIT_BIN, ["show", "HEAD:openclaw.json"], {
-      cwd: repoDir,
-      encoding: null,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  } catch {
-    return null;
-  }
 }
 
 function asRecord(value: unknown): UnknownRecord | null {
@@ -337,11 +329,12 @@ function removeLegacyMattermostConfig(
   const mattermost = asRecord(asRecord(config.channels)?.mattermost);
   const accounts = asRecord(mattermost?.accounts);
   const defaultAccount = asRecord(accounts?.default);
-  const defaultAccountKeys = defaultAccount ? Object.keys(defaultAccount) : [];
-  const removeDefaultAccount = defaultAccount !== null && (
-    defaultAccountKeys.length === 0 ||
-    (defaultAccountKeys.length === 1 && defaultAccount.botToken === "${MM_BOT_TOKEN}")
-  );
+  const commands = asRecord(defaultAccount?.commands);
+  const removeDefaultAccount = mattermost?.defaultAccount === "default" &&
+    defaultAccount?.botToken === "${MM_BOT_TOKEN}" &&
+    Object.keys(defaultAccount).sort().join(",") === "botToken,commands" &&
+    commands?.native === false &&
+    Object.keys(commands).length === 1;
   const defaultChanged = removeDefaultMattermostAccount(
     mattermost,
     accounts,
@@ -571,7 +564,12 @@ export function extractLegacyMattermostAccountSecrets(config: UnknownRecord): Re
   const secrets: Record<string, string> = {};
   for (const [accountId, value] of Object.entries(accounts)) {
     const account = asRecord(value);
-    if (!account || typeof account.botToken !== "string" || account.botToken.length === 0) continue;
+    if (
+      !account ||
+      typeof account.botToken !== "string" ||
+      account.botToken.length === 0 ||
+      account.botToken === "${MM_BOT_TOKEN}"
+    ) continue;
     secrets[accountId] = account.botToken;
     account.botToken = mattermostAccountSecretRef(accountId);
   }
@@ -880,22 +878,77 @@ function restoreAcceptedDirtyFiles(
   context: SystemConfigSyncContext,
   dirtyPaths: ReadonlySet<string>,
 ): boolean {
+  const readBlob: ReadSystemConfigCommitBlob = context.opts.readCommitBlob ??
+    (context.opts.gitExec
+      ? ((_repoDir, commit, filename) => {
+          const contents = context.execGit(
+            context.repoDir,
+            `show ${commit}:${filename}`,
+            context.keyPath,
+          );
+          return contents === null ? null : Buffer.from(contents);
+        })
+      : readSystemConfigCommitBlob);
+  const accepted = new Map<string, Buffer>();
   for (const filename of dirtyPaths) {
     if (filename === OPENCLAW_CONFIG_FILENAME) {
-      const accepted = (context.opts.readAcceptedConfig ?? readAcceptedConfig)(context.repoDir);
-      if (accepted === null) return false;
-      atomicWrite(context.repoConfigPath, accepted);
-      continue;
+      const config = readBlob(context.repoDir, "HEAD", filename);
+      if (config === null) return false;
+      accepted.set(filename, config);
+    } else if (
+      filename === SYSTEM_CONFIG_METADATA_FILENAME ||
+      filename === SYSTEM_CONFIG_GITIGNORE_FILENAME
+    ) {
+      const contents = readBlob(
+        context.repoDir,
+        "HEAD",
+        filename as SystemConfigDurableFilename,
+      );
+      if (contents === null) return false;
+      accepted.set(filename, contents);
     }
-    if (
-      filename !== SYSTEM_CONFIG_METADATA_FILENAME &&
-      filename !== SYSTEM_CONFIG_GITIGNORE_FILENAME
-    ) continue;
-    const accepted = context.execGit(context.repoDir, `show HEAD:${filename}`, context.keyPath);
-    if (accepted === null) return false;
-    atomicWrite(path.join(context.repoDir, filename), accepted);
+  }
+  for (const filename of [
+    SYSTEM_CONFIG_METADATA_FILENAME,
+    SYSTEM_CONFIG_GITIGNORE_FILENAME,
+    OPENCLAW_CONFIG_FILENAME,
+  ]) {
+    const contents = accepted.get(filename);
+    if (contents) atomicWrite(path.join(context.repoDir, filename), contents);
   }
   return true;
+}
+
+function rejectedDeletionResult(context: SystemConfigSyncContext): SystemConfigSyncResult {
+  const durablePaths = new Set([
+    OPENCLAW_CONFIG_FILENAME,
+    SYSTEM_CONFIG_METADATA_FILENAME,
+    SYSTEM_CONFIG_GITIGNORE_FILENAME,
+  ]);
+  if (!restoreAcceptedDirtyFiles(context, durablePaths)) {
+    recordSyncError(context.openclawDir, VALIDATION_RESTORE_FAILED, context.now, {
+      rejected: true,
+    });
+    context.log(`[system_config] ${context.slug}: deleted config restore failed`);
+    return {
+      skipped: VALIDATION_RESTORE_FAILED,
+      committed: false,
+      pushed: false,
+      rejected: true,
+      errorCode: VALIDATION_RESTORE_FAILED,
+    };
+  }
+  recordSyncError(context.openclawDir, "openclaw-json-missing", context.now, {
+    rejected: true,
+  });
+  context.log(`[system_config] ${context.slug}: rejected config deletion and restored accepted durable set`);
+  return {
+    committed: false,
+    pushed: false,
+    rejected: true,
+    errorCode: "openclaw-json-missing",
+    processedFingerprint: systemConfigFingerprint(context.repoConfigPath),
+  };
 }
 
 interface RejectedCandidateContext {
@@ -941,17 +994,17 @@ function rejectedCandidateResult(input: RejectedCandidateContext): SystemConfigS
   }
   if (!restoreAcceptedDirtyFiles(context, dirtyPaths)) {
     if (context.opts.durablePolicy) {
-      recordSyncError(context.openclawDir, "validation-restore-failed", context.now, {
+      recordSyncError(context.openclawDir, VALIDATION_RESTORE_FAILED, context.now, {
         rejected: true,
       });
     }
     context.log(`[system_config] ${context.slug}: validation failed and accepted config restore failed`);
     return {
-      skipped: "validation-restore-failed",
+      skipped: VALIDATION_RESTORE_FAILED,
       committed: false,
       pushed: false,
       rejected: true,
-      errorCode: "validation-restore-failed",
+      errorCode: VALIDATION_RESTORE_FAILED,
     };
   }
   recordSyncError(context.openclawDir, errorCode, context.now, { rejected: true });
@@ -1143,48 +1196,22 @@ function commitValidatedCandidate(
     : committedPushSuccess(context, source, stagedFingerprint);
 }
 
-function syncSystemConfigUnlocked(
-  slug: string,
-  opts: SystemConfigSyncOptions,
-  pushWhenClean: boolean,
-): SystemConfigSyncResult {
-  const log = opts.log ?? defaultLog;
-  const now = opts.now ?? (() => new Date());
-  const env = opts.env ?? process.env;
-  if (!isValidUsername(slug)) {
-    return { skipped: "invalid-builder-slug", committed: false, pushed: false };
-  }
-
-  const openclawDir = opts.openclawDir ?? OPENCLAW_DIR;
-  const repoDir = systemConfigDir(openclawDir);
-  const repoConfigPath = systemConfigPath(openclawDir);
-  if (!fs.existsSync(path.join(repoDir, ".git"))) {
-    return { skipped: "checkout-unavailable", committed: false, pushed: false };
-  }
+function syncPreparedSystemConfig(context: SystemConfigSyncContext): SystemConfigSyncResult {
+  const { repoConfigPath, repoDir, execGit, keyPath } = context;
+  let deletionResult: SystemConfigSyncResult | null = null;
   if (!fs.existsSync(repoConfigPath)) {
-    return { skipped: "openclaw-json-missing", committed: false, pushed: false };
+    deletionResult = rejectedDeletionResult(context);
+    if (deletionResult.skipped) return deletionResult;
   }
-  const initialFingerprint = systemConfigFingerprint(repoConfigPath);
-  const execGit = opts.gitExec ?? gitExec;
-  const configureSsh = opts.setRepoSshCommand ?? setRepoSshCommand;
-  const keyPath = (opts.customerSshKeyPath ?? customerSshKeyPath)(slug);
-  configureSsh(repoDir, slug);
-  const context: SystemConfigSyncContext = {
-    slug,
-    opts,
-    pushWhenClean,
-    log,
-    now,
-    env,
-    openclawDir,
-    repoDir,
-    repoConfigPath,
-    initialFingerprint,
-    execGit,
-    keyPath,
-  };
   const preflight = durableSyncPreflight(context);
-  if (preflight) return preflight;
+  if (preflight) {
+    return deletionResult ? {
+      ...preflight,
+      rejected: true,
+      processedFingerprint: deletionResult.processedFingerprint,
+    } : preflight;
+  }
+  if (deletionResult) return deletionResult;
   const dirty = execGit(repoDir, `status --porcelain -- ${SYSTEM_CONFIG_PATHSPEC}`, keyPath);
   if (dirty === null) return syncStatusFailure(context);
   if (dirty.length === 0) return syncCleanSystemConfig(context);
@@ -1196,6 +1223,38 @@ function syncSystemConfigUnlocked(
     validation.validatedFingerprint,
     validation.validatedDurableFingerprint,
   );
+}
+
+function syncSystemConfigUnlocked(
+  slug: string,
+  opts: SystemConfigSyncOptions,
+  pushWhenClean: boolean,
+): SystemConfigSyncResult {
+  if (!isValidUsername(slug)) {
+    return { skipped: "invalid-builder-slug", committed: false, pushed: false };
+  }
+  const openclawDir = opts.openclawDir ?? OPENCLAW_DIR;
+  const repoDir = systemConfigDir(openclawDir);
+  if (!fs.existsSync(path.join(repoDir, ".git"))) {
+    return { skipped: "checkout-unavailable", committed: false, pushed: false };
+  }
+  const repoConfigPath = systemConfigPath(openclawDir);
+  const configureSsh = opts.setRepoSshCommand ?? setRepoSshCommand;
+  configureSsh(repoDir, slug);
+  return syncPreparedSystemConfig({
+    slug,
+    opts,
+    pushWhenClean,
+    log: opts.log ?? defaultLog,
+    now: opts.now ?? (() => new Date()),
+    env: opts.env ?? process.env,
+    openclawDir,
+    repoDir,
+    repoConfigPath,
+    initialFingerprint: systemConfigFingerprint(repoConfigPath),
+    execGit: opts.gitExec ?? gitExec,
+    keyPath: (opts.customerSshKeyPath ?? customerSshKeyPath)(slug),
+  });
 }
 
 function syncSystemConfig(
@@ -1326,9 +1385,11 @@ export function auditSystemConfigForSlug(
   const openclawDir = opts.openclawDir ?? OPENCLAW_DIR;
   const repoDir = systemConfigDir(openclawDir);
   const configPath = systemConfigPath(openclawDir);
-  const checkoutAvailable = fs.existsSync(path.join(repoDir, ".git")) && fs.existsSync(configPath);
-  if (!checkoutAvailable) {
+  if (!fs.existsSync(path.join(repoDir, ".git"))) {
     return { state: "unavailable", needsSync: false, errorCode: "checkout-unavailable" };
+  }
+  if (!fs.existsSync(configPath)) {
+    return { state: "error", needsSync: true, errorCode: "openclaw-json-missing" };
   }
   const execGit = opts.gitExec ?? gitExec;
   const keyPath = (opts.customerSshKeyPath ?? customerSshKeyPath)(slug);
@@ -1432,24 +1493,55 @@ function bootRecoveryResult(
     return { ready: false, errorCode, rejectedCommit: recovery.rejectedCommit };
   }
   const current = readSystemConfigStatus(context.openclawDir);
+  const at = context.now().toISOString();
   updateSystemConfigStatus(context.openclawDir, {
-    state: "clean",
+    state: "error",
     acceptedCommit: recovery.acceptedCommit,
     restoredCommit: recovery.recoveredFromCommit,
     configHash: `sha256:${systemConfigFingerprint(context.configPath)}`,
     bootRecovery: "recovered",
     recoveryCount: (current.recoveryCount ?? 0) + 1,
-    dirtySince: null,
+    dirtySince: current.dirtySince ?? at,
     lastSyncedAt: context.now().toISOString(),
-    lastErrorCode: null,
-    lastErrorAt: null,
+    lastErrorCode: "accepted-ancestor-retry-required",
+    lastErrorAt: at,
     openclawVersion: context.env.OPENCLAW_VERSION?.trim() || "unknown",
   }, context.now);
   return {
-    ready: true,
-    acceptedCommit: recovery.acceptedCommit,
-    recoveredFromCommit: recovery.recoveredFromCommit,
+    ready: false,
+    errorCode: "accepted-ancestor-retry-required",
+    rejectedCommit: recovery.rejectedCommit,
   };
+}
+
+function activeDurableSetMatchesAcceptedHead(repoDir: string, acceptedCommit: string): boolean {
+  for (const filename of SYSTEM_CONFIG_DURABLE_FILENAMES) {
+    const accepted = readSystemConfigCommitBlob(repoDir, acceptedCommit, filename);
+    if (accepted === null) return false;
+    try {
+      if (!fs.readFileSync(path.join(repoDir, filename)).equals(Buffer.from(accepted))) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+function postPushDurableMismatchResult(
+  context: BootCheckpointContext,
+  acceptedCommit: string,
+): SystemConfigBootCheckpointResult {
+  const current = readSystemConfigStatus(context.openclawDir);
+  const at = context.now().toISOString();
+  updateSystemConfigStatus(context.openclawDir, {
+    state: "error",
+    acceptedCommit,
+    runtimeReady: false,
+    dirtySince: current.dirtySince ?? at,
+    lastErrorCode: "post-push-durable-mismatch",
+    lastErrorAt: at,
+  }, context.now);
+  return { ready: false, errorCode: "post-push-durable-mismatch" };
 }
 
 function bootCheckpointFailed(result: SystemConfigSyncResult): boolean {
@@ -1498,6 +1590,11 @@ function finishBootCheckpoint(
     return failedBootCheckpointResult(context, recovery, syncResult);
   }
   const acceptedCommit = syncResult.acceptedCommit ?? recovery.acceptedCommit;
+  const verifyAcceptedDurableSet = context.opts.verifyAcceptedDurableSet ??
+    activeDurableSetMatchesAcceptedHead;
+  if (!verifyAcceptedDurableSet(systemConfigDir(context.openclawDir), acceptedCommit)) {
+    return postPushDurableMismatchResult(context, acceptedCommit);
+  }
   updateSystemConfigStatus(context.openclawDir, {
     state: "clean",
     acceptedCommit,

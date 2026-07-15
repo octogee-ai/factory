@@ -1,10 +1,43 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+export const SYSTEM_CONFIG_OPENCLAW_FILENAME = "openclaw.json";
 export const SYSTEM_CONFIG_METADATA_FILENAME = ".octogee.json";
 export const SYSTEM_CONFIG_GITIGNORE_FILENAME = ".gitignore";
 export const SYSTEM_CONFIG_GITIGNORE = "*.bak\n*.tmp\n";
 export const CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION = 1;
+export const SYSTEM_CONFIG_DURABLE_FILENAMES = [
+  SYSTEM_CONFIG_OPENCLAW_FILENAME,
+  SYSTEM_CONFIG_METADATA_FILENAME,
+  SYSTEM_CONFIG_GITIGNORE_FILENAME,
+] as const;
+
+export type SystemConfigDurableFilename = typeof SYSTEM_CONFIG_DURABLE_FILENAMES[number];
+export type ReadSystemConfigCommitBlob = (
+  repoDir: string,
+  commit: string,
+  filename: SystemConfigDurableFilename,
+) => Buffer | null;
+
+const GIT_SHA_RE = /^[0-9a-f]{40,64}$/;
+
+export const readSystemConfigCommitBlob: ReadSystemConfigCommitBlob = (
+  repoDir,
+  commit,
+  filename,
+) => {
+  if (commit !== "HEAD" && !GIT_SHA_RE.test(commit)) return null;
+  try {
+    return execFileSync("/usr/bin/git", ["show", `${commit}:${filename}`], {
+      cwd: repoDir,
+      encoding: null,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch {
+    return null;
+  }
+};
 
 export function assertSystemConfigMetadata(contents: string): void {
   const parsed = JSON.parse(contents) as unknown;

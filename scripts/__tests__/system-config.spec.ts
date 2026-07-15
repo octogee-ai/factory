@@ -18,6 +18,7 @@ import {
 import {
   auditSystemConfigForSlug,
   checkpointBootSystemConfigForSlug,
+  extractLegacyMattermostAccountSecrets,
   pushDirtySystemConfigForSlug,
   reconcileSystemConfigSchema,
   removeLegacyMacConfig,
@@ -30,6 +31,7 @@ import {
 import { readSystemConfigStatus } from "../lib/system-config-status.js";
 import { systemConfigFingerprint } from "../lib/system-config-watcher.js";
 import { reconcilePlatformInvariants } from "../lib/system-config-invariants.js";
+import { readSystemConfigCommitBlob } from "../lib/system-config-durable-files.js";
 import { validateOpenClawConfig } from "../lib/openclaw-config-validation.js";
 
 vi.mock("../lib/git.js", () => ({
@@ -361,7 +363,10 @@ describe("system_config restore", () => {
         mattermost: {
           defaultAccount: "default",
           accounts: {
-            default: { botToken: "${MM_BOT_TOKEN}" },
+            default: {
+              botToken: "${MM_BOT_TOKEN}",
+              commands: { native: false },
+            },
             "ceckert-coach": { botToken: { source: "file", provider: "octogee-mattermost", id: "/ceckert-coach" } },
           },
         },
@@ -443,7 +448,10 @@ describe("system_config restore", () => {
           botToken: "${MM_BOT_TOKEN}",
           token: "${MM_BOT_TOKEN}",
           accounts: {
-            default: { botToken: "${MM_BOT_TOKEN}" },
+            default: {
+              botToken: "${MM_BOT_TOKEN}",
+              commands: { native: false },
+            },
           },
         },
       },
@@ -454,6 +462,43 @@ describe("system_config restore", () => {
     expect(config.channels.mattermost).not.toHaveProperty("defaultAccount");
     expect(config.channels.mattermost).not.toHaveProperty("botToken");
     expect(config.channels.mattermost).not.toHaveProperty("token");
+  });
+
+  it("preserves historical-looking Mattermost variants and never externalizes the placeholder", () => {
+    const missingDefaultSelector = {
+      channels: {
+        mattermost: {
+          accounts: {
+            default: {
+              botToken: "${MM_BOT_TOKEN}",
+              commands: { native: false },
+            },
+          },
+        },
+      },
+    };
+    const customizedDefault = {
+      channels: {
+        mattermost: {
+          defaultAccount: "default",
+          accounts: {
+            default: {
+              botToken: "${MM_BOT_TOKEN}",
+              commands: { native: true },
+            },
+          },
+        },
+      },
+    };
+
+    expect(removeLegacyMacConfig(missingDefaultSelector, {})).toBe(false);
+    expect(removeLegacyMacConfig(customizedDefault, {})).toBe(false);
+    expect(extractLegacyMattermostAccountSecrets(missingDefaultSelector)).toEqual({});
+    expect(extractLegacyMattermostAccountSecrets(customizedDefault)).toEqual({});
+    expect(missingDefaultSelector.channels.mattermost.accounts.default.botToken)
+      .toBe("${MM_BOT_TOKEN}");
+    expect(customizedDefault.channels.mattermost.accounts.default.botToken)
+      .toBe("${MM_BOT_TOKEN}");
   });
 
   it.each(["push-failed", "remote-head-unavailable"])(
@@ -637,8 +682,8 @@ describe("system_config restore", () => {
     expect(tracked.agents.list).toEqual([
       expect.objectContaining({ id: "octogee-acme-coach", default: true }),
     ]);
-    expect(tracked.channels.mattermost.accounts).toEqual({});
-    expect(tracked.channels.mattermost).not.toHaveProperty("defaultAccount");
+    expect(tracked.channels.mattermost.accounts).toEqual({ default: {} });
+    expect(tracked.channels.mattermost.defaultAccount).toBe("default");
   });
 
   it("does not silently adopt plaintext tokens after the one-time migration", async () => {
@@ -747,8 +792,10 @@ describe("system_config restore", () => {
 
     expect(result).toMatchObject({ restored: true, configPath: systemConfigPath(openclawDir) });
     const tracked = fs.readFileSync(systemConfigPath(openclawDir), "utf-8");
-    expect(JSON.parse(tracked).channels.mattermost.accounts).toEqual({});
-    expect(tracked).not.toContain("${MM_BOT_TOKEN}");
+    expect(JSON.parse(tracked).channels.mattermost.accounts).toEqual({
+      default: { botToken: "${MM_BOT_TOKEN}" },
+    });
+    expect(tracked).toContain("${MM_BOT_TOKEN}");
     expect(tracked).not.toContain("must-not-enter-git");
     expect(fs.existsSync(path.join(openclawDir, "openclaw.json"))).toBe(false);
   });
@@ -1011,7 +1058,7 @@ describe("system_config restore", () => {
       setRepoSshCommand: vi.fn(),
       customerSshKeyPath: () => "/tmp/key",
       gitExec: git,
-      readAcceptedConfig: () => Buffer.from("{\"accepted\":true}\n"),
+      readCommitBlob: () => Buffer.from("{\"accepted\":true}\n"),
     });
 
     expect(result).toMatchObject({
@@ -1073,6 +1120,7 @@ describe("system_config restore", () => {
       setRepoSshCommand: vi.fn(),
       customerSshKeyPath: () => "/tmp/key",
       gitExec: git,
+      readCommitBlob: readSystemConfigCommitBlob,
     });
 
     expect(rejected).toMatchObject({ rejected: true, errorCode: "validation-failed" });

@@ -150,6 +150,43 @@ describe("system_config watcher", () => {
     watcher.close();
   });
 
+  it("keeps a rejected deletion observable after restoring accepted bytes", async () => {
+    const onStatusChange = vi.fn();
+    const accepted = "{\"version\":1}\n";
+    const sync = vi.fn(async () => {
+      fs.writeFileSync(configPath, accepted);
+      return {
+        committed: false,
+        pushed: false,
+        rejected: true,
+        errorCode: "openclaw-json-missing",
+        processedFingerprint: systemConfigFingerprint(configPath),
+      };
+    });
+    const watcher = createSystemConfigWatcher({
+      configPath,
+      sync,
+      onStatusChange,
+      debounceMs: 10,
+      pollMs: 0,
+      watch: () => ({ close: vi.fn() }),
+      startImmediately: false,
+    });
+
+    fs.rmSync(configPath);
+    watcher.notify();
+    await vi.runAllTimersAsync();
+
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(accepted);
+    expect(watcher.status()).toMatchObject({
+      state: "error",
+      errorCode: "openclaw-json-missing",
+    });
+    expect(onStatusChange).not.toHaveBeenLastCalledWith(expect.objectContaining({ state: "clean" }));
+    watcher.close();
+  });
+
   it("retries a pending local commit without another filesystem edit", async () => {
     const sync = vi
       .fn()

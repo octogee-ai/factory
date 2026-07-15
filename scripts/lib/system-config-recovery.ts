@@ -9,6 +9,8 @@ import {
 import {
   assertSystemConfigGitignore,
   assertSystemConfigMetadata,
+  readSystemConfigCommitBlob,
+  type ReadSystemConfigCommitBlob,
   SYSTEM_CONFIG_GITIGNORE_FILENAME,
   SYSTEM_CONFIG_METADATA_FILENAME,
 } from "./system-config-durable-files.js";
@@ -44,12 +46,13 @@ interface SystemConfigRecoveryOptions {
   now?: () => Date;
   keyPath?: string;
   acceptCurrent?: boolean;
+  readCommitBlob?: ReadSystemConfigCommitBlob;
 }
 
 interface DurableCandidate {
-  config: string;
-  metadata: string;
-  gitignore: string;
+  config: Buffer;
+  metadata: Buffer;
+  gitignore: Buffer;
 }
 
 function parseConfig(contents: string): Record<string, unknown> {
@@ -60,7 +63,7 @@ function parseConfig(contents: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-function atomicWrite(filePath: string, contents: string): void {
+function atomicWrite(filePath: string, contents: string | Buffer): void {
   const tmp = `${filePath}.tmp`;
   fs.writeFileSync(tmp, contents, { mode: 0o600 });
   fs.renameSync(tmp, filePath);
@@ -92,16 +95,19 @@ function normalizedCandidate(
   reconcile: boolean,
 ): string | null {
   try {
-    assertSystemConfigMetadata(candidate.metadata);
-    assertSystemConfigGitignore(candidate.gitignore);
-    const config = parseConfig(candidate.config);
+    const metadata = candidate.metadata.toString("utf8");
+    const gitignore = candidate.gitignore.toString("utf8");
+    const configContents = candidate.config.toString("utf8");
+    assertSystemConfigMetadata(metadata);
+    assertSystemConfigGitignore(gitignore);
+    const config = parseConfig(configContents);
     if (reconcile) reconcilePlatformInvariants(config, env);
     assertPlatformInvariants(config, env);
-    let normalized = candidate.config;
+    let normalized = configContents;
     if (reconcile) {
       normalized = `${JSON.stringify(config, null, 2)}\n`;
-    } else if (!candidate.config.endsWith("\n")) {
-      normalized = `${candidate.config}\n`;
+    } else if (!configContents.endsWith("\n")) {
+      normalized = `${configContents}\n`;
     }
     atomicWrite(candidatePath, normalized);
     validateConfig(candidatePath);
@@ -129,17 +135,15 @@ function historyCandidate(
   keyPath: string,
   commit: string,
 ): DurableCandidate | null {
-  const config = execGit(options.repoDir, `show ${commit}:openclaw.json`, keyPath);
-  const metadata = execGit(
-    options.repoDir,
-    `show ${commit}:${SYSTEM_CONFIG_METADATA_FILENAME}`,
-    keyPath,
-  );
-  const gitignore = execGit(
-    options.repoDir,
-    `show ${commit}:${SYSTEM_CONFIG_GITIGNORE_FILENAME}`,
-    keyPath,
-  );
+  const readBlob = options.readCommitBlob ?? (options.gitExec
+    ? ((_repoDir, ref, filename) => {
+        const contents = execGit(options.repoDir, `show ${ref}:${filename}`, keyPath);
+        return contents === null ? null : Buffer.from(contents);
+      })
+    : readSystemConfigCommitBlob);
+  const config = readBlob(options.repoDir, commit, "openclaw.json");
+  const metadata = readBlob(options.repoDir, commit, SYSTEM_CONFIG_METADATA_FILENAME);
+  const gitignore = readBlob(options.repoDir, commit, SYSTEM_CONFIG_GITIGNORE_FILENAME);
   if (config === null || metadata === null || gitignore === null) return null;
   return { config, metadata, gitignore };
 }
@@ -188,6 +192,23 @@ function recoverFromHistory(context: RecoveryHistoryContext): SystemConfigRecove
   return { outcome: "unavailable", rejectedCommit };
 }
 
+function restoreValidCommittedHead(
+  context: Omit<RecoveryHistoryContext, "history">,
+  commit: string,
+): boolean {
+  const { options, env, execGit, keyPath, candidatePath } = context;
+  if (!GIT_SHA_RE.test(commit)) return false;
+  const candidate = historyCandidate(options, execGit, keyPath, commit);
+  if (!candidate) return false;
+  if (normalizedCandidate(candidate, candidatePath, env, options.validateConfig, false) === null) {
+    return false;
+  }
+  atomicWrite(path.join(options.repoDir, SYSTEM_CONFIG_METADATA_FILENAME), candidate.metadata);
+  atomicWrite(path.join(options.repoDir, SYSTEM_CONFIG_GITIGNORE_FILENAME), candidate.gitignore);
+  atomicWrite(options.configPath, candidate.config);
+  return true;
+}
+
 export function recoverSystemConfigHead(
   options: SystemConfigRecoveryOptions,
 ): SystemConfigRecoveryResult {
@@ -199,17 +220,23 @@ export function recoverSystemConfigHead(
     return { outcome: "unavailable", rejectedCommit: "unknown", errorCode: "head-unavailable" };
   }
   const candidatePath = path.join(options.openclawDir, "system_config.recovery-candidate.json");
+  const recoveryContext = {
+    options,
+    env,
+    execGit,
+    keyPath,
+    rejectedCommit,
+    candidatePath,
+  };
   if (options.acceptCurrent !== false) {
     try {
       const current = {
-        config: fs.readFileSync(options.configPath, "utf8"),
+        config: fs.readFileSync(options.configPath),
         metadata: fs.readFileSync(
           path.join(options.repoDir, SYSTEM_CONFIG_METADATA_FILENAME),
-          "utf8",
         ),
         gitignore: fs.readFileSync(
           path.join(options.repoDir, SYSTEM_CONFIG_GITIGNORE_FILENAME),
-          "utf8",
         ),
       };
       if (normalizedCandidate(current, candidatePath, env, options.validateConfig, false)) {
@@ -219,18 +246,16 @@ export function recoverSystemConfigHead(
       fs.rmSync(candidatePath, { force: true });
     }
   }
+  if (restoreValidCommittedHead(recoveryContext, rejectedCommit)) {
+    return { outcome: "accepted", acceptedCommit: rejectedCommit };
+  }
 
   const history = execGit(options.repoDir, "rev-list HEAD", keyPath);
   if (history === null) {
     return { outcome: "unavailable", rejectedCommit, errorCode: "history-unavailable" };
   }
   return recoverFromHistory({
-    options,
-    env,
-    execGit,
-    keyPath,
-    rejectedCommit,
-    candidatePath,
+    ...recoveryContext,
     history,
   });
 }

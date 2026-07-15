@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { reconcilePlatformInvariants } from "../lib/system-config-invariants.js";
+import { readSystemConfigCommitBlob } from "../lib/system-config-durable-files.js";
 import { readSystemConfigStatus } from "../lib/system-config-status.js";
 import {
   auditSystemConfigForSlug,
@@ -60,7 +62,7 @@ describe("system config sync hardening", () => {
       setRepoSshCommand: vi.fn(),
       customerSshKeyPath: () => "/tmp/key",
       validateConfig: vi.fn(),
-      readAcceptedConfig: () => Buffer.from(acceptedBytes),
+      readCommitBlob: () => Buffer.from(acceptedBytes),
     });
 
     expect(result).toMatchObject({
@@ -74,6 +76,96 @@ describe("system config sync hardening", () => {
       lastErrorCode: "platform-invariant-violation",
       rejectedCount: 1,
     });
+  });
+
+  it("rejects live config deletion and restores the complete accepted durable set", () => {
+    const h = fixture();
+    const runGit = (...args: string[]) => execFileSync("git", args, {
+      cwd: h.repoDir,
+      encoding: "utf8",
+    }).trim();
+    runGit("init", "-b", "main");
+    runGit("config", "user.email", "test@octogee.test");
+    runGit("config", "user.name", "Octogee Test");
+    const accepted = {
+      config: fs.readFileSync(path.join(h.repoDir, "openclaw.json")),
+      metadata: Buffer.from('{"schemaVersion":1,"accepted":true}\n'),
+      gitignore: Buffer.from("*.bak\n*.tmp\n"),
+    };
+    fs.writeFileSync(path.join(h.repoDir, ".octogee.json"), accepted.metadata);
+    fs.writeFileSync(path.join(h.repoDir, ".gitignore"), accepted.gitignore);
+    runGit("add", "openclaw.json", ".octogee.json", ".gitignore");
+    runGit("commit", "-m", "accepted");
+    fs.rmSync(path.join(h.repoDir, "openclaw.json"));
+    fs.writeFileSync(path.join(h.repoDir, ".octogee.json"), '{"schemaVersion":1,"dirty":true}\n');
+    fs.writeFileSync(path.join(h.repoDir, ".gitignore"), "*.tmp\n");
+    const head = "a".repeat(40);
+    const gitExec = vi.fn((_cwd: string, command: string) => {
+      if (command === "rev-parse HEAD") return head;
+      if (command.startsWith("ls-remote")) return `${head}\trefs/heads/main`;
+      if (command.startsWith("status --porcelain")) {
+        return " D openclaw.json\n M .octogee.json\n M .gitignore";
+      }
+      return "";
+    });
+
+    expect(syncSystemConfigForSlug("ceckert", {
+      openclawDir: h.openclawDir,
+      env,
+      durablePolicy: true,
+      gitExec,
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      validateConfig: vi.fn(),
+      readCommitBlob: readSystemConfigCommitBlob,
+    })).toMatchObject({
+      committed: false,
+      pushed: false,
+      rejected: true,
+      errorCode: "openclaw-json-missing",
+    });
+    expect(fs.readFileSync(path.join(h.repoDir, "openclaw.json"))).toEqual(accepted.config);
+    expect(fs.readFileSync(path.join(h.repoDir, ".octogee.json"))).toEqual(accepted.metadata);
+    expect(fs.readFileSync(path.join(h.repoDir, ".gitignore"))).toEqual(accepted.gitignore);
+    expect(readSystemConfigStatus(h.openclawDir)).toMatchObject({
+      state: "error",
+      lastErrorCode: "openclaw-json-missing",
+      rejectedCount: 1,
+    });
+    expect(gitExec).not.toHaveBeenCalledWith(h.repoDir, expect.stringMatching(/^add /), "/tmp/key");
+  });
+
+  it("restores a deleted active config before reporting a remote outage", () => {
+    const h = fixture();
+    const accepted = {
+      "openclaw.json": fs.readFileSync(path.join(h.repoDir, "openclaw.json")),
+      ".octogee.json": Buffer.from('{"schemaVersion":1}\n'),
+      ".gitignore": Buffer.from("*.bak\n*.tmp\n"),
+    };
+    fs.rmSync(path.join(h.repoDir, "openclaw.json"));
+    const head = "a".repeat(40);
+    const gitExec = vi.fn((_cwd: string, command: string) => {
+      if (command === "rev-parse HEAD") return head;
+      if (command.startsWith("ls-remote")) return null;
+      return "";
+    });
+
+    expect(syncSystemConfigForSlug("ceckert", {
+      openclawDir: h.openclawDir,
+      env,
+      durablePolicy: true,
+      gitExec,
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      validateConfig: vi.fn(),
+      readCommitBlob: (_repoDir, _commit, filename) => accepted[filename],
+    })).toMatchObject({
+      pending: true,
+      rejected: true,
+      errorCode: "remote-head-unavailable",
+    });
+    expect(fs.readFileSync(path.join(h.repoDir, "openclaw.json"))).toEqual(accepted["openclaw.json"]);
+    expect(readSystemConfigStatus(h.openclawDir)).toMatchObject({ rejectedCount: 1 });
   });
 
   it("uses attributed commits and records the accepted pushed head", () => {
@@ -238,6 +330,21 @@ describe("system config sync hardening", () => {
       headTree: "tree-head",
       indexTree: "tree-index",
       worktreeDirty: true,
+    });
+  });
+
+  it("audits a deleted live config as repairable error instead of unavailable checkout", () => {
+    const h = fixture();
+    fs.rmSync(path.join(h.repoDir, "openclaw.json"));
+
+    expect(auditSystemConfigForSlug("ceckert", {
+      openclawDir: h.openclawDir,
+      gitExec: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+    })).toEqual({
+      state: "error",
+      needsSync: true,
+      errorCode: "openclaw-json-missing",
     });
   });
 });

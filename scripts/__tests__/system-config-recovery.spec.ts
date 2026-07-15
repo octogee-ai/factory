@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { reconcilePlatformInvariants } from "../lib/system-config-invariants.js";
+import { readSystemConfigCommitBlob } from "../lib/system-config-durable-files.js";
 import { recoverSystemConfigHead } from "../lib/system-config-recovery.js";
 import { readSystemConfigStatus } from "../lib/system-config-status.js";
 import { checkpointBootSystemConfigForSlug } from "../lib/system-config.js";
@@ -35,11 +37,68 @@ function fixture(activeContents: string): { openclawDir: string; repoDir: string
   return { openclawDir, repoDir, configPath };
 }
 
+function git(repoDir: string, ...args: string[]): string {
+  return execFileSync("git", args, { cwd: repoDir, encoding: "utf8" }).trim();
+}
+
+function realGitFixture(configContents = validConfig({ accepted: true })) {
+  const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-config-real-git-"));
+  dirs.push(openclawDir);
+  const repoDir = path.join(openclawDir, "system_config");
+  fs.mkdirSync(repoDir, { recursive: true });
+  git(repoDir, "init", "-b", "main");
+  git(repoDir, "config", "user.email", "test@octogee.test");
+  git(repoDir, "config", "user.name", "Octogee Test");
+  const configPath = path.join(repoDir, "openclaw.json");
+  fs.writeFileSync(configPath, configContents);
+  fs.writeFileSync(path.join(repoDir, ".octogee.json"), '{"schemaVersion":1}\n');
+  fs.writeFileSync(path.join(repoDir, ".gitignore"), "*.bak\n*.tmp\n");
+  git(repoDir, "add", "openclaw.json", ".octogee.json", ".gitignore");
+  git(repoDir, "commit", "-m", "accepted");
+  return { openclawDir, repoDir, configPath, acceptedCommit: git(repoDir, "rev-parse", "HEAD") };
+}
+
 afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 describe("system config accepted-head recovery", () => {
+  it("reads exact committed durable blobs without trimming trailing newlines", () => {
+    const h = realGitFixture();
+
+    expect(readSystemConfigCommitBlob(h.repoDir, h.acceptedCommit, "openclaw.json"))
+      .toEqual(fs.readFileSync(h.configPath));
+    expect(readSystemConfigCommitBlob(h.repoDir, h.acceptedCommit, ".octogee.json"))
+      .toEqual(Buffer.from('{"schemaVersion":1}\n'));
+    expect(readSystemConfigCommitBlob(h.repoDir, h.acceptedCommit, ".gitignore"))
+      .toEqual(Buffer.from("*.bak\n*.tmp\n"));
+  });
+
+  it("recovers from a real accepted ancestor while preserving exact support-file bytes", () => {
+    const h = realGitFixture(validConfig({ ancestor: true }));
+    const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-config-real-remote-"));
+    dirs.push(remoteDir);
+    execFileSync("git", ["init", "--bare", remoteDir]);
+    git(h.repoDir, "remote", "add", "origin", remoteDir);
+    fs.writeFileSync(h.configPath, "not-json\n");
+    git(h.repoDir, "add", "openclaw.json");
+    git(h.repoDir, "commit", "-m", "invalid head");
+    git(h.repoDir, "push", "-u", "origin", "main");
+
+    expect(recoverSystemConfigHead({
+      ...h,
+      slug: "ceckert",
+      env,
+      validateConfig: vi.fn(),
+    })).toMatchObject({
+      outcome: "recovered",
+      recoveredFromCommit: h.acceptedCommit,
+    });
+    expect(fs.readFileSync(path.join(h.repoDir, ".octogee.json")))
+      .toEqual(Buffer.from('{"schemaVersion":1}\n'));
+    expect(fs.readFileSync(path.join(h.repoDir, ".gitignore")))
+      .toEqual(Buffer.from("*.bak\n*.tmp\n"));
+  });
   it("appends and pushes a recovery commit from the newest valid ancestor", () => {
     const h = fixture('{"gateway":{"port":9999}}\n');
     const commands: string[] = [];
@@ -151,6 +210,63 @@ describe("system config accepted-head recovery", () => {
     })).toEqual({ outcome: "accepted", acceptedCommit: "good222" });
   });
 
+  it("restores a valid committed HEAD after Doctor mutates the worktree without creating commits", () => {
+    const h = fixture(validConfig({ doctorMutation: true }));
+    const head = "a".repeat(40);
+    const acceptedConfig = validConfig({ acceptedHead: true });
+    const commands: string[] = [];
+    const gitExec = vi.fn((_cwd: string, command: string) => {
+      commands.push(command);
+      if (command === "rev-parse HEAD") return head;
+      if (command === `show ${head}:openclaw.json`) return acceptedConfig;
+      if (command === `show ${head}:.octogee.json`) return '{"schemaVersion":1}\n';
+      if (command === `show ${head}:.gitignore`) return "*.bak\n*.tmp\n";
+      return null;
+    });
+    const options = {
+      ...h,
+      slug: "ceckert",
+      env,
+      gitExec,
+      validateConfig: vi.fn(),
+      acceptCurrent: false,
+    };
+
+    expect(recoverSystemConfigHead(options)).toEqual({ outcome: "accepted", acceptedCommit: head });
+    expect(fs.readFileSync(h.configPath, "utf8")).toBe(acceptedConfig);
+    fs.writeFileSync(h.configPath, validConfig({ secondDoctorMutation: true }));
+    expect(recoverSystemConfigHead(options)).toEqual({ outcome: "accepted", acceptedCommit: head });
+    expect(fs.readFileSync(h.configPath, "utf8")).toBe(acceptedConfig);
+    expect(commands).not.toContain("rev-list HEAD");
+    expect(commands.join("\n")).not.toMatch(/^(?:add|commit|push) /m);
+  });
+
+  it("restores valid committed HEAD before older history when ordinary working bytes are invalid", () => {
+    const h = fixture("not-json\n");
+    const head = "d".repeat(40);
+    const acceptedConfig = validConfig({ acceptedHead: true });
+    const commands: string[] = [];
+    const gitExec = vi.fn((_cwd: string, command: string) => {
+      commands.push(command);
+      if (command === "rev-parse HEAD") return head;
+      if (command === `show ${head}:openclaw.json`) return acceptedConfig;
+      if (command === `show ${head}:.octogee.json`) return '{"schemaVersion":1}\n';
+      if (command === `show ${head}:.gitignore`) return "*.bak\n*.tmp\n";
+      return null;
+    });
+
+    expect(recoverSystemConfigHead({
+      ...h,
+      slug: "ceckert",
+      env,
+      gitExec,
+      validateConfig: vi.fn(),
+    })).toEqual({ outcome: "accepted", acceptedCommit: head });
+    expect(fs.readFileSync(h.configPath, "utf8")).toBe(acceptedConfig);
+    expect(commands).not.toContain("rev-list HEAD");
+    expect(commands.join("\n")).not.toMatch(/^(?:add|commit|push) /m);
+  });
+
   it("reconciles boot invariants before an attributed migration checkpoint", () => {
     const h = fixture('{"gateway":{"port":9000},"customerSetting":true}\n');
     const recover = vi.fn(() => ({ outcome: "accepted", acceptedCommit: "good222" } as const));
@@ -167,6 +283,7 @@ describe("system config accepted-head recovery", () => {
       validateConfig: vi.fn(),
       recover,
       sync,
+      verifyAcceptedDurableSet: () => true,
     })).toMatchObject({ ready: true, acceptedCommit: "boot333" });
     expect(JSON.parse(fs.readFileSync(h.configPath, "utf8"))).toMatchObject({
       gateway: { port: 18789, mode: "local", bind: "lan" },
@@ -193,6 +310,7 @@ describe("system config accepted-head recovery", () => {
         pushed: true,
         acceptedCommit: "b".repeat(40),
       }),
+      verifyAcceptedDurableSet: () => true,
     })).toMatchObject({ ready: true });
     expect(readSystemConfigStatus(h.openclawDir)).toMatchObject({ doctorResult: "ok" });
   });
@@ -218,6 +336,100 @@ describe("system config accepted-head recovery", () => {
       acceptedCommit: "b".repeat(40),
       lastErrorCode: "push-failed",
     });
+  });
+
+  it("retries the full boot pipeline after accepting an older pre-cleanup ancestor", () => {
+    const h = fixture(validConfig({ current: true }));
+    const sync = vi.fn();
+    const legacy = {
+      channels: {
+        mattermost: {
+          defaultAccount: "default",
+          accounts: {
+            default: {
+              botToken: "${MM_BOT_TOKEN}",
+              commands: { native: false },
+            },
+          },
+        },
+      },
+    };
+    const recover = vi.fn(() => {
+      fs.writeFileSync(h.configPath, `${JSON.stringify(legacy, null, 2)}\n`);
+      fs.writeFileSync(path.join(h.repoDir, ".octogee.json"), '{"schemaVersion":0}\n');
+      return {
+        outcome: "recovered" as const,
+        rejectedCommit: "a".repeat(40),
+        recoveredFromCommit: "b".repeat(40),
+        acceptedCommit: "c".repeat(40),
+      };
+    });
+
+    expect(checkpointBootSystemConfigForSlug("ceckert", {
+      openclawDir: h.openclawDir,
+      env,
+      validateConfig: vi.fn(),
+      recover,
+      sync,
+    })).toEqual({
+      ready: false,
+      errorCode: "accepted-ancestor-retry-required",
+      rejectedCommit: "a".repeat(40),
+    });
+    expect(sync).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(path.join(h.repoDir, ".octogee.json"), "utf8")))
+      .toEqual({ schemaVersion: 0 });
+    expect(fs.readFileSync(h.configPath, "utf8")).toContain("${MM_BOT_TOKEN}");
+  });
+
+  it("keeps boot unready when active durable bytes diverge after a successful push", () => {
+    const h = fixture(validConfig({ harmless: true }));
+
+    expect(checkpointBootSystemConfigForSlug("ceckert", {
+      openclawDir: h.openclawDir,
+      env,
+      validateConfig: vi.fn(),
+      recover: () => ({ outcome: "accepted", acceptedCommit: "a".repeat(40) }),
+      sync: () => ({
+        committed: true,
+        pushed: true,
+        acceptedCommit: "b".repeat(40),
+      }),
+      verifyAcceptedDurableSet: () => false,
+    })).toEqual({ ready: false, errorCode: "post-push-durable-mismatch" });
+    expect(readSystemConfigStatus(h.openclawDir)).toMatchObject({
+      state: "error",
+      lastErrorCode: "post-push-durable-mismatch",
+    });
+  });
+
+  it("accepts a real pushed HEAD only when all three active durable files match exactly", () => {
+    const h = realGitFixture();
+
+    expect(checkpointBootSystemConfigForSlug("ceckert", {
+      openclawDir: h.openclawDir,
+      env,
+      validateConfig: vi.fn(),
+      recover: () => ({ outcome: "accepted", acceptedCommit: h.acceptedCommit }),
+      sync: () => ({
+        committed: false,
+        pushed: true,
+        acceptedCommit: h.acceptedCommit,
+      }),
+    })).toEqual({ ready: true, acceptedCommit: h.acceptedCommit });
+
+    fs.writeFileSync(path.join(h.repoDir, ".gitignore"), "*.bak\n*.tmp");
+    expect(checkpointBootSystemConfigForSlug("ceckert", {
+      openclawDir: h.openclawDir,
+      env,
+      validateConfig: vi.fn(),
+      recover: () => ({ outcome: "accepted", acceptedCommit: h.acceptedCommit }),
+      sync: () => ({
+        committed: false,
+        pushed: true,
+        acceptedCommit: h.acceptedCommit,
+      }),
+    })).toEqual({ ready: false, errorCode: "post-push-durable-mismatch" });
   });
 
   it("recovers a committed openclaw.json deletion from the newest complete ancestor", () => {

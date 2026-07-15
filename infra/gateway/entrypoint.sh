@@ -154,13 +154,6 @@ fi
 rm -f "$OPENCLAW_DIR/system_config.boot-accepted"
 supervise_runner system-config-status 5000 "$TSX" /octogee/scripts/entrypoints/system-config-status-server.ts
 
-if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ "${OPERATOR_SHELLS_ENABLED:-}" = "true" ]; then
-  export BUILDER_SHELL_REQUIRE_KEY="${BUILDER_SHELL_REQUIRE_KEY:-true}"
-  supervise_runner builder-shell 5000 "$TSX" /octogee/scripts/entrypoints/builder-shell-server.ts
-elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
-  log "Builder-shell disabled: runtime shell access is not enabled"
-fi
-
 # ── Dedicated gateway system_config restore ─────────────────────────────────
 # Builder/operator gateways run the tracked Gitea checkout as OpenClaw's active
 # regular config file. Shared gateways keep an untracked template copy. Copy the
@@ -439,6 +432,13 @@ log "Starting OpenClaw gateway... (build: ${BUILD_SHA:-unknown})"
 touch "$OPENCLAW_DIR/system_config.boot-accepted"
 chmod 600 "$OPENCLAW_DIR/system_config.boot-accepted"
 openclaw gateway run --bind lan --port 18789 &
+
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ "${OPERATOR_SHELLS_ENABLED:-}" = "true" ]; then
+  export BUILDER_SHELL_REQUIRE_KEY="${BUILDER_SHELL_REQUIRE_KEY:-true}"
+  supervise_runner builder-shell 5000 "$TSX" /octogee/scripts/entrypoints/builder-shell-server.ts
+elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
+  log "Builder-shell disabled: runtime shell access is not enabled"
+fi
 
 # OpenClaw file-log mirror REMOVED 2026-05-18. The richer log is available
 # on demand via `openclaw logs` from the running gateway, so permanently
