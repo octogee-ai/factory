@@ -125,6 +125,116 @@ describe("MigrationClient.quiesce", () => {
   });
 });
 
+describe("MigrationClient system config fencing", () => {
+  it("freezes/checkpoints the source, proves the target ancestor, and unfreezes by revision transport", async () => {
+    const checkpointCommit = "a".repeat(40);
+    const { calls, fakeFetch } = captureFetch((call) => {
+      const common = { migrationId: "m1", slug: "alice" };
+      if (call.url.includes("/config-freeze/")) {
+        return new Response(JSON.stringify({
+          ...common,
+          frozen: true,
+          checkpointCommit,
+          configHash: "b".repeat(64),
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (call.url.includes("/config-restore-proof/")) {
+        return new Response(JSON.stringify({
+          ...common,
+          restoredCommit: checkpointCommit,
+          acceptedCommit: "c".repeat(40),
+          configHash: "d".repeat(64),
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ ...common, unfrozen: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: (id) => `https://${id}.example.com`,
+      fetch: fakeFetch,
+    });
+
+    const checkpoint = await client.freezeConfig({
+      migrationId: "m1",
+      gatewayId: "default",
+      transportId: "default-r1",
+      slug: "alice",
+    });
+    const proof = await client.proveConfigRestore({
+      migrationId: "m1",
+      gatewayId: "default",
+      transportId: "default-r2",
+      slug: "alice",
+      checkpointCommit,
+    });
+    await client.unfreezeConfig({
+      migrationId: "m1",
+      gatewayId: "default",
+      transportId: "default-r1",
+      slug: "alice",
+    });
+
+    expect(checkpoint.checkpointCommit).toBe(checkpointCommit);
+    expect(proof).toMatchObject({ restoredCommit: checkpointCommit, acceptedCommit: "c".repeat(40) });
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://default-r1.example.com/config-freeze/default",
+      "https://default-r2.example.com/config-restore-proof/default",
+      "https://default-r1.example.com/config-unfreeze/default",
+    ]);
+    expect(JSON.parse(calls[1].body!)).toMatchObject({ checkpointCommit });
+    for (const call of calls) {
+      expect(call.headers[SIGNATURE_HEADER.toLowerCase()]).toBe(
+        signFleetRequest(PRIVATE_KEY, "m1", call.body!),
+      );
+    }
+  });
+
+  it("rejects a malformed checkpoint response before migration can continue", async () => {
+    const { fakeFetch } = captureFetch(() => new Response(JSON.stringify({
+      migrationId: "m1",
+      slug: "alice",
+      frozen: true,
+      checkpointCommit: "not-a-commit",
+      configHash: "not-a-hash",
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://source.example.com",
+      fetch: fakeFetch,
+    });
+
+    await expect(client.freezeConfig({
+      migrationId: "m1",
+      gatewayId: "default",
+      slug: "alice",
+    })).rejects.toThrow(/malformed config checkpoint/i);
+  });
+
+  it("rejects a checkpoint response bound to another migration or builder", async () => {
+    const { fakeFetch } = captureFetch(() => new Response(JSON.stringify({
+      migrationId: "m-other",
+      slug: "mallory",
+      frozen: true,
+      checkpointCommit: "a".repeat(40),
+      configHash: "b".repeat(64),
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://source.example.com",
+      fetch: fakeFetch,
+    });
+
+    await expect(client.freezeConfig({
+      migrationId: "m1",
+      gatewayId: "default",
+      slug: "alice",
+    })).rejects.toThrow(/response binding/i);
+  });
+});
+
 // Transport/tenant split (GATEWAY-RELEASES-SPEC "Placement and migration
 // targeting"): the URL resolves from the revision service ({gw}-r{n}) while the
 // in-pod path/body still carries the bare gatewayId (the pod's GATEWAY_ID and

@@ -8,6 +8,9 @@ import {
   MIGRATION_UNMOUNT_TIMEOUT_MS,
   MIGRATION_VERIFY_TIMEOUT_MS,
   type FlushGatewayResponse,
+  type ConfigFreezeResponse,
+  type ConfigRestoreProofResponse,
+  type ConfigUnfreezeResponse,
   type ImportResponse,
   type QuiesceResponse,
   type RestoreMigrationResponse,
@@ -45,6 +48,28 @@ export interface MigrationClientDeps {
 // same-gateway roll both revisions share the bare gatewayId but differ by
 // transportId, so source and target resolve to distinct URLs.
 export interface MigrationClient {
+  freezeConfig(opts: {
+    migrationId: string;
+    gatewayId: string;
+    transportId?: string;
+    slug: string;
+  }): Promise<ConfigFreezeResponse>;
+
+  proveConfigRestore(opts: {
+    migrationId: string;
+    gatewayId: string;
+    transportId?: string;
+    slug: string;
+    checkpointCommit: string;
+  }): Promise<ConfigRestoreProofResponse>;
+
+  unfreezeConfig(opts: {
+    migrationId: string;
+    gatewayId: string;
+    transportId?: string;
+    slug: string;
+  }): Promise<ConfigUnfreezeResponse>;
+
   quiesce(opts: {
     migrationId: string;
     gatewayId: string;
@@ -95,6 +120,16 @@ export interface MigrationClient {
     transportId?: string;
     slug: string;
   }): Promise<UnmountResponse>;
+}
+
+function assertConfigResponseBinding(
+  response: { migrationId: string; slug: string },
+  migrationId: string,
+  slug: string,
+): void {
+  if (response.migrationId !== migrationId || response.slug !== slug) {
+    throw new Error("malformed config response binding");
+  }
 }
 
 export function createMigrationClient(deps: MigrationClientDeps): MigrationClient {
@@ -162,6 +197,66 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
   };
 
   return {
+    async freezeConfig({ migrationId, gatewayId, transportId, slug }) {
+      const response = await postSignedJson<ConfigFreezeResponse>(
+        transportId ?? gatewayId,
+        `/config-freeze/${gatewayId}`,
+        migrationId,
+        { migrationId, slug },
+        transferMs,
+      );
+      assertConfigResponseBinding(response, migrationId, slug);
+      if (
+        response.frozen !== true ||
+        !/^[0-9a-f]{40}$/.test(response.checkpointCommit) ||
+        !/^[0-9a-f]{64}$/.test(response.configHash)
+      ) {
+        throw new Error("malformed config checkpoint response");
+      }
+      log(
+        `[migration-client] config checkpoint migrationId=${migrationId} commit=${response.checkpointCommit}`,
+      );
+      return response;
+    },
+
+    async proveConfigRestore({ migrationId, gatewayId, transportId, slug, checkpointCommit }) {
+      const response = await postSignedJson<ConfigRestoreProofResponse>(
+        transportId ?? gatewayId,
+        `/config-restore-proof/${gatewayId}`,
+        migrationId,
+        { migrationId, slug, checkpointCommit },
+        transferMs,
+      );
+      assertConfigResponseBinding(response, migrationId, slug);
+      if (
+        !/^[0-9a-f]{40}$/.test(response.restoredCommit) ||
+        !/^[0-9a-f]{40}$/.test(response.acceptedCommit) ||
+        !/^[0-9a-f]{64}$/.test(response.configHash)
+      ) {
+        throw new Error("malformed config restore proof response");
+      }
+      log(
+        `[migration-client] config restore proof migrationId=${migrationId} restored=${response.restoredCommit} accepted=${response.acceptedCommit}`,
+      );
+      return response;
+    },
+
+    async unfreezeConfig({ migrationId, gatewayId, transportId, slug }) {
+      const response = await postSignedJson<ConfigUnfreezeResponse>(
+        transportId ?? gatewayId,
+        `/config-unfreeze/${gatewayId}`,
+        migrationId,
+        { migrationId, slug },
+        transferMs,
+      );
+      assertConfigResponseBinding(response, migrationId, slug);
+      if (typeof response.unfrozen !== "boolean") {
+        throw new Error("malformed config unfreeze response");
+      }
+      log(`[migration-client] config unfreeze migrationId=${migrationId}`);
+      return response;
+    },
+
     async restoreTarget({ migrationId, gatewayId, transportId, uid, slug, snapshot }) {
       const res = await postSignedJson<RestoreMigrationResponse>(
         transportId ?? gatewayId,

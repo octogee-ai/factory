@@ -46,6 +46,25 @@ function mkOp(overrides: Partial<Operation>): Operation {
 
 function happyClient(): MigrationClient {
   return {
+    freezeConfig: vi.fn(async ({ migrationId, slug }) => ({
+      migrationId,
+      slug,
+      frozen: true,
+      checkpointCommit: "a".repeat(40),
+      configHash: "b".repeat(64),
+    })) as MigrationClient["freezeConfig"],
+    proveConfigRestore: vi.fn(async ({ migrationId, slug, checkpointCommit }) => ({
+      migrationId,
+      slug,
+      restoredCommit: checkpointCommit,
+      acceptedCommit: "c".repeat(40),
+      configHash: "d".repeat(64),
+    })) as MigrationClient["proveConfigRestore"],
+    unfreezeConfig: vi.fn(async ({ migrationId, slug }) => ({
+      migrationId,
+      slug,
+      unfrozen: true,
+    })) as MigrationClient["unfreezeConfig"],
     restoreTarget: vi.fn(async ({ migrationId, slug }) => ({
       migrationId,
       slug,
@@ -94,6 +113,9 @@ function makeDeps(
     readUserSnapshot: vi.fn(async () => SNAPSHOT),
     commitCutover: vi.fn(async () => undefined),
     setAssignmentState: vi.fn(async () => undefined),
+    recordConfigProof: vi.fn(async () => undefined),
+    recordConfigRollMetric: vi.fn(),
+    requiresConfigFence: vi.fn(async () => false),
     resolveFromRevision: vi.fn(async (_uid: string, gatewayId: string) => ({
       revisionId: `${gatewayId}-r1`,
       release: 1,
@@ -124,6 +146,24 @@ function makeCtx(): OperationContext & { reported: OperationStep[] } {
 }
 
 describe("createMigrateCustomerHandler — happy path", () => {
+  it("derives a stable migration id from the durable operation id across retries", async () => {
+    const client = happyClient();
+    const genMigrationId = vi.fn((operationId: string) => `mig-${operationId}`);
+    const { deps } = makeDeps({ genMigrationId }, client);
+    const handler = createMigrateCustomerHandler(deps);
+    const op = mkOp({ id: "operation-stable" });
+
+    await handler(op, makeCtx());
+    await handler(op, makeCtx());
+
+    expect(genMigrationId).toHaveBeenNthCalledWith(1, "operation-stable");
+    expect(genMigrationId).toHaveBeenNthCalledWith(2, "operation-stable");
+    const ids = (client.transferState as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([input]) => input.migrationId,
+    );
+    expect(new Set(ids)).toEqual(new Set(["mig-operation-stable"]));
+  });
+
   it("returns success=true and writes all migration step pairs through ctx.reportStep", async () => {
     const { deps } = makeDeps();
     const handler = createMigrateCustomerHandler(deps);
@@ -345,6 +385,77 @@ describe("createMigrateCustomerHandler — input validation", () => {
 });
 
 describe("createMigrateCustomerHandler — revision-targeted (same-gateway drain)", () => {
+  it("enables config fencing for an isolated source even when the operation producer omitted the hint", async () => {
+    const { deps, client } = makeDeps({
+      readUser: vi.fn(async () => ({ slug: "alice", currentGatewayId: "bender" })),
+      resolveFromRevision: vi.fn(async () => ({ revisionId: "bender-r1", release: 1 })),
+      resolvePlacement: vi.fn(async () => ({ ok: true as const, revisionId: "bender-r2", release: 2 })),
+      requiresConfigFence: vi.fn(async () => true),
+    });
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({ input: {
+      uid: "uid-alice",
+      toGatewayId: "bender",
+      source: "release-roll",
+    } }), makeCtx());
+
+    expect(result.success).toBe(true);
+    expect(client.freezeConfig).toHaveBeenCalledOnce();
+  });
+
+  it("persists the planned-roll checkpoint and target proof as operation output", async () => {
+    const { deps, client } = makeDeps({
+      readUser: vi.fn(async () => ({ slug: "alice", currentGatewayId: "default" })),
+      resolveFromRevision: vi.fn(async () => ({ revisionId: "default-r1", release: 1 })),
+      resolvePlacement: vi.fn(async () => ({ ok: true as const, revisionId: "default-r2", release: 2 })),
+    });
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({ input: {
+      uid: "uid-alice",
+      toGatewayId: "default",
+      source: "release-roll",
+      configFence: true,
+    } }), makeCtx());
+
+    expect(result.success).toBe(true);
+    expect(client.freezeConfig).toHaveBeenCalledWith(expect.objectContaining({
+      transportId: "default-r1",
+    }));
+    expect(client.proveConfigRestore).toHaveBeenCalledWith(expect.objectContaining({
+      transportId: "default-r2",
+      checkpointCommit: "a".repeat(40),
+    }));
+    expect(deps.recordConfigProof).toHaveBeenCalledWith("default-r2", expect.objectContaining({
+      migrationId: "mig-test-1",
+      builderSlug: "alice",
+      checkpointCommit: "a".repeat(40),
+      acceptedCommit: "c".repeat(40),
+    }));
+    expect(deps.recordConfigRollMetric).toHaveBeenCalledWith({
+      stage: "checkpoint", result: "ok", gatewayId: "default", revisionId: "default-r1",
+    });
+    expect(deps.recordConfigRollMetric).toHaveBeenCalledWith({
+      stage: "proof", result: "ok", gatewayId: "default", revisionId: "default-r2",
+    });
+    expect(deps.recordConfigRollMetric).not.toHaveBeenCalledWith(expect.objectContaining({
+      stage: "unfreeze",
+    }));
+    expect(client.unfreezeConfig).not.toHaveBeenCalled();
+    expect(result.output).toEqual({
+      configCheckpoint: {
+        checkpointCommit: "a".repeat(40),
+        configHash: "b".repeat(64),
+      },
+      configProof: {
+        restoredCommit: "a".repeat(40),
+        acceptedCommit: "c".repeat(40),
+        configHash: "d".repeat(64),
+      },
+    });
+  });
+
   it("ACCEPTS a same-gateway drain when the resolved from/to REVISIONS differ", async () => {
     const commitCutover = vi.fn(async () => undefined);
     const resolveGatewayUrl = vi.fn(async (id: string) => `http://test/${id}`);

@@ -11,6 +11,7 @@ import {
   GLM_OPERATIONS_COLLECTION,
   deriveGatewayIdentity,
   operatorGatewayServiceAccountName,
+  resolveGatewayClass,
   type GatewayClass,
   type GatewayProfile,
   type Operation,
@@ -172,7 +173,7 @@ import { deleteAuthUserTolerantOfMissing } from "@octogee/core/firebase-auth-hel
 import { deleteHostingSitesForCustomer } from "@octogee/core/firebase-hosting";
 import { GoogleAuth } from "google-auth-library";
 import { startHttpServer, startMaintenanceHttpServer } from "./http-server.js";
-import { recordReconcile } from "./metrics.js";
+import { recordConfigRoll, recordReconcile } from "./metrics.js";
 import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
 import { startStuckOpReaper } from "./stuck-op-reaper.js";
@@ -994,6 +995,7 @@ function rollMigrationSnapshotFromOpDoc(
 // a roll can only ever uninstall a revision's own Helm release.
 function buildRollPassDeps(args: {
   db: Firestore;
+  privateKey: string;
   helm: HelmRunner;
   kubeOps: KubeOps;
   gatewayAliasServiceEnsurer: GatewayAliasServiceEnsurer;
@@ -1003,6 +1005,7 @@ function buildRollPassDeps(args: {
 }): RollPassDeps {
   const {
     db,
+    privateKey,
     helm,
     kubeOps,
     gatewayAliasServiceEnsurer,
@@ -1101,7 +1104,7 @@ function buildRollPassDeps(args: {
       }
       return newest?.snap ?? null;
     },
-    enqueueRollMigration: async ({ uid, slug, gatewayId, rollOperationId }) => {
+    enqueueRollMigration: async ({ uid, slug, gatewayId, rollOperationId, configFence }) => {
       const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
       await opRef.set(
         buildRollMigrateOpDoc({
@@ -1110,10 +1113,26 @@ function buildRollPassDeps(args: {
           gatewayId,
           rollOperationId,
           createdAt: Date.now(),
+          configFence,
         }),
       );
       return opRef.id;
     },
+    releaseConfigFreeze: async ({ gatewayId, revisionId, migrationId, slug }) => {
+      const sourceUrl = await resolveGatewayUrlFromFirestore(db, revisionId);
+      const client = createMigrationClient({
+        privateKey,
+        resolveGatewayUrl: () => sourceUrl,
+        log,
+      });
+      await client.unfreezeConfig({
+        migrationId,
+        gatewayId,
+        transportId: revisionId,
+        slug,
+      });
+    },
+    recordConfigRollMetric: recordConfigRoll,
     hasActiveShell: async (gatewayId) =>
       (await readShellLiveness(db, gatewayId, Date.now())).reallyActive,
     ensurePerGatewayAliasServices: async ({ gatewayId, revisionId }) => {
@@ -2597,6 +2616,7 @@ async function createControllerRuntime(
     runRollPass(
       buildRollPassDeps({
         db,
+        privateKey: fleetControllerPrivateKey,
         helm,
         kubeOps,
         gatewayAliasServiceEnsurer,
@@ -2985,7 +3005,23 @@ async function buildHandlers(
         input,
       );
     },
-    genMigrationId: () => `mig-${Date.now()}-${randomUUID().slice(0, 8)}`,
+    recordConfigProof: async (targetRevisionId, proof) => {
+      await db
+        .collection(GLM_GATEWAYS_COLLECTION)
+        .doc(targetRevisionId)
+        .set({ systemConfig: proof }, { merge: true });
+    },
+    recordConfigRollMetric: recordConfigRoll,
+    requiresConfigFence: async (fromGatewayId) => {
+      const source = await db.collection(GATEWAYS_COLLECTION).doc(fromGatewayId).get();
+      const data = source.data();
+      return isDurableRootConfigDoc(data, fromGatewayId) && resolveGatewayClass({
+        gatewayClass: data.gatewayClass ?? undefined,
+        profile: data.profile ?? undefined,
+        imageProfile: data.imageProfile ?? undefined,
+      }) !== "shared";
+    },
+    genMigrationId: (operationId) => `mig-${operationId}`,
     now: () => Date.now(),
     log: logFn,
   });

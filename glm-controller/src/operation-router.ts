@@ -5,6 +5,7 @@ export interface OperationResult {
   success: boolean;
   error?: string;
   rolledBack?: boolean;
+  output?: Record<string, unknown>;
 }
 
 export interface OperationContext {
@@ -38,4 +39,3 @@ export async function routeOperation(
     return { steps: [], success: false, error: message };
   }
 }
-

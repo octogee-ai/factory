@@ -7,6 +7,7 @@ import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
 import type { PlacementResolution } from "@octogee/core/assignment-doc";
+import type { RevisionSystemConfigObservation } from "@octogee/shared/types/gateway-releases";
 import {
   runMigration,
   type CutoverCommit,
@@ -51,7 +52,24 @@ export interface MigrateCustomerDeps {
     state: "serving" | "quiescing" | "migrating";
   }) => Promise<void>;
 
-  genMigrationId: () => string;
+  recordConfigProof: (
+    targetRevisionId: string,
+    proof: RevisionSystemConfigObservation,
+  ) => Promise<void>;
+
+  recordConfigRollMetric: (input: {
+    stage: "checkpoint" | "proof" | "unfreeze";
+    result: "ok" | "fail";
+    gatewayId: string;
+    revisionId: string;
+  }) => void;
+
+  requiresConfigFence: (
+    fromGatewayId: string,
+    toGatewayId: string,
+  ) => Promise<boolean>;
+
+  genMigrationId: (operationId: string) => string;
 
   now: () => number;
   log: (msg: string) => void;
@@ -60,6 +78,7 @@ export interface MigrateCustomerDeps {
 interface MigrateCustomerInput {
   uid?: unknown;
   toGatewayId?: unknown;
+  configFence?: unknown;
 }
 
 function reportedStatusToStepStatus(reported: ReportedStep["status"]): StepStatus {
@@ -79,6 +98,8 @@ function reportedToOperationStep(rep: ReportedStep, now: number): OperationStep 
 }
 
 interface MigrationTargets {
+  toGatewayId: string;
+  fromGatewayId: string;
   toRevisionId: string;
   toRelease: number | null;
   fromRevisionId: string;
@@ -131,6 +152,8 @@ async function resolveMigrationTargets(
 
   return {
     targets: {
+      toGatewayId,
+      fromGatewayId: user.currentGatewayId,
       toRevisionId: to.revisionId,
       toRelease: to.release,
       fromRevisionId: fromRevision.revisionId,
@@ -145,6 +168,9 @@ function buildRunnerDeps(
   deps: MigrateCustomerDeps,
   client: MigrationClient,
   ctx: OperationContext,
+  targetRevisionId: string,
+  observedAt: () => number,
+  targets: MigrationTargets,
 ): MigrationRunnerDeps {
   const runnerDeps: MigrationRunnerDeps = {
     client,
@@ -153,9 +179,41 @@ function buildRunnerDeps(
     reportStep: async (rep: ReportedStep) => {
       const step = reportedToOperationStep(rep, deps.now());
       await ctx.reportStep(step);
+      const metricStage = rep.name === "freeze-config"
+        ? "checkpoint"
+        : rep.name === "prove-config-restore"
+          ? "proof"
+          : rep.name === "unfreeze-config"
+            ? "unfreeze"
+            : null;
+      if (metricStage && rep.status !== "running") {
+        const targetMetric = metricStage === "proof";
+        deps.recordConfigRollMetric({
+          stage: metricStage,
+          result: rep.status === "done" ? "ok" : "fail",
+          gatewayId: targetMetric ? targets.toGatewayId : targets.fromGatewayId,
+          revisionId: targetMetric ? targets.toRevisionId : targets.fromRevisionId,
+        });
+      }
     },
   };
   runnerDeps.setAssignmentState = deps.setAssignmentState;
+  runnerDeps.acceptConfigProof = async ({
+    migrationId,
+    slug,
+    sourceRevisionId,
+    checkpoint,
+    proof,
+  }) => deps.recordConfigProof(targetRevisionId, {
+    migrationId,
+    builderSlug: slug,
+    sourceRevisionId,
+    checkpointCommit: checkpoint.checkpointCommit,
+    restoredCommit: proof.restoredCommit,
+    acceptedCommit: proof.acceptedCommit,
+    configHash: proof.configHash,
+    observedAt: observedAt(),
+  });
   return runnerDeps;
 }
 
@@ -177,9 +235,10 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
       return { steps: [], success: false, error: `user not found: ${uid}` };
     }
 
-    const migrationId = deps.genMigrationId();
+    const migrationId = deps.genMigrationId(op.id);
     let targets: MigrationTargets;
     let restoreSnapshot: FleetBrokerUserSnapshot | null;
+    let configFence: boolean;
     const urls = new Map<string, string>();
     try {
       const resolved = await resolveMigrationTargets(deps, uid, user, toGatewayId);
@@ -187,6 +246,8 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
         return { steps: [], success: false, error: resolved.error };
       }
       targets = resolved.targets;
+      configFence = input.configFence === true ||
+        await deps.requiresConfigFence(user.currentGatewayId, toGatewayId);
       urls.set(targets.fromTransportId, await deps.resolveGatewayUrl(targets.fromTransportId));
       urls.set(targets.toTransportId, await deps.resolveGatewayUrl(targets.toTransportId));
       restoreSnapshot = await deps.readUserSnapshot(uid);
@@ -221,8 +282,9 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
         fromRevision: { revisionId: targets.fromRevisionId, release: targets.fromRelease },
         restoreSnapshot,
         includeActivationManifest: true,
+        configFence,
       },
-      buildRunnerDeps(deps, client, ctx),
+      buildRunnerDeps(deps, client, ctx, targets.toRevisionId, deps.now, targets),
     );
 
     return {
@@ -230,6 +292,14 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
       success: result.success,
       error: result.errorAt?.error,
       rolledBack: result.rolledBack,
+      ...((result.configCheckpoint || result.configProof)
+        ? {
+            output: {
+              ...(result.configCheckpoint ? { configCheckpoint: result.configCheckpoint } : {}),
+              ...(result.configProof ? { configProof: result.configProof } : {}),
+            },
+          }
+        : {}),
     };
   };
 }

@@ -332,6 +332,18 @@ export interface RevisionHeartbeatObservation {
   migratingIn: string[];
 }
 
+export interface RevisionSystemConfigObservation {
+  migrationId: string;
+  builderSlug: string;
+  sourceRevisionId: string;
+  checkpointCommit: string;
+  restoredCommit: string;
+  acceptedCommit: string;
+  configHash: string;
+  observedAt: number;
+  sourceUnfrozenAt?: number;
+}
+
 // glmGateways/{revisionId} — the Cowboy-owned runtime realization record. In
 // Step 2 this collection stops carrying desired configuration and becomes the
 // per-revision observation shape below.
@@ -354,6 +366,7 @@ export interface RevisionRealizationDoc {
   retireReason: string | null;
   helm: RevisionHelmObservation;
   heartbeat: RevisionHeartbeatObservation;
+  systemConfig?: RevisionSystemConfigObservation;
   lastError: { message: string | null; at: number | null };
 }
 

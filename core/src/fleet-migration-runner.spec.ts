@@ -29,6 +29,30 @@ const SNAPSHOT: FleetBrokerUserSnapshot = {
 function happyClient(): MigrationClient & { calls: string[] } {
   const calls: string[] = [];
   return {
+    freezeConfig: vi.fn(async ({ slug }) => {
+      calls.push(`config-freeze:${slug}`);
+      return {
+        migrationId: "m1",
+        slug,
+        frozen: true,
+        checkpointCommit: "a".repeat(40),
+        configHash: "b".repeat(64),
+      };
+    }) as MigrationClient["freezeConfig"],
+    proveConfigRestore: vi.fn(async ({ slug, checkpointCommit }) => {
+      calls.push(`config-proof:${slug}:${checkpointCommit}`);
+      return {
+        migrationId: "m1",
+        slug,
+        restoredCommit: checkpointCommit,
+        acceptedCommit: "c".repeat(40),
+        configHash: "d".repeat(64),
+      };
+    }) as MigrationClient["proveConfigRestore"],
+    unfreezeConfig: vi.fn(async ({ slug }) => {
+      calls.push(`config-unfreeze:${slug}`);
+      return { migrationId: "m1", slug, unfrozen: true };
+    }) as MigrationClient["unfreezeConfig"],
     restoreTarget: vi.fn(async ({ slug }) => {
       calls.push(`restore:${slug}`);
       return { migrationId: "m1", slug, restored: true, steps: ["clone-workspace-repo"] };
@@ -104,6 +128,9 @@ function makeDeps(client: MigrationClient & { calls: string[] }) {
     reportStep: vi.fn(async (step: ReportedStep) => {
       reportedSteps.push(step);
     }),
+    acceptConfigProof: vi.fn(async () => {
+      client.calls.push("config-observe");
+    }),
     commitCalls,
     cutoverCalls,
     logCalls,
@@ -174,6 +201,149 @@ describe("runMigration — happy path", () => {
       { name: "unmount-source", status: "running" },
       { name: "unmount-source", status: "done" },
     ]);
+  });
+});
+
+describe("runMigration — durable config roll fence", () => {
+  const FENCED_INPUT = {
+    ...INPUT,
+    fromGatewayId: "default",
+    toGatewayId: "default",
+    fromTransportId: "default-r1",
+    toTransportId: "default-r2",
+    fromRevision: { revisionId: "default-r1", release: 1 },
+    toRevision: { revisionId: "default-r2", release: 2 },
+    crossGateway: false,
+    configFence: true,
+  };
+
+  it("keeps the source frozen after assignment cutover until the roll commits the authoritative traffic flip", async () => {
+    const client = happyClient();
+    const deps = makeDeps(client);
+
+    const result = await runMigration(FENCED_INPUT, deps);
+
+    expect(result).toMatchObject({
+      success: true,
+      configCheckpoint: {
+        checkpointCommit: "a".repeat(40),
+        configHash: "b".repeat(64),
+      },
+      configProof: {
+        restoredCommit: "a".repeat(40),
+        acceptedCommit: "c".repeat(40),
+      },
+    });
+    expect(client.calls).toEqual([
+      "config-freeze:alice",
+      "transfer:alice:keys",
+      "restore:alice",
+      `config-proof:alice:${"a".repeat(40)}`,
+      "config-observe",
+      "transfer:alice:pre",
+      "roster-state:default:quiescing",
+      "quiesce:alice",
+      "transfer:alice:final",
+      "verify:alice",
+      "unmount:alice",
+    ]);
+    expect(deps.reportedSteps).toContainEqual({ name: "freeze-config", status: "done" });
+    expect(deps.reportedSteps).toContainEqual({ name: "prove-config-restore", status: "done" });
+    expect(client.unfreezeConfig).not.toHaveBeenCalled();
+  });
+
+  it("rejects an edit attempted after assignment cutover because the source remains frozen until traffic flips", async () => {
+    const client = happyClient();
+    let sourceFrozen = false;
+    client.freezeConfig = vi.fn(async ({ migrationId, slug }) => {
+      sourceFrozen = true;
+      return {
+        migrationId,
+        slug,
+        frozen: true,
+        checkpointCommit: "a".repeat(40),
+        configHash: "b".repeat(64),
+      };
+    }) as MigrationClient["freezeConfig"];
+    client.unfreezeConfig = vi.fn(async ({ migrationId, slug }) => {
+      sourceFrozen = false;
+      return { migrationId, slug, unfrozen: true };
+    }) as MigrationClient["unfreezeConfig"];
+    const deps = makeDeps(client);
+
+    const result = await runMigration(FENCED_INPUT, deps);
+    const editAttempt = () => {
+      if (sourceFrozen) throw new Error("system config is frozen");
+    };
+
+    expect(result.success).toBe(true);
+    expect(editAttempt).toThrow("system config is frozen");
+    expect(client.unfreezeConfig).not.toHaveBeenCalled();
+  });
+
+  it("unfreezes a cross-gateway migration after its atomic mirror and assignment traffic cutover", async () => {
+    const client = happyClient();
+    const deps = makeDeps(client);
+
+    const result = await runMigration({
+      ...INPUT,
+      fromRevision: { revisionId: "gw-blue-r1", release: 1 },
+      toRevision: { revisionId: "gw-green-r1", release: 1 },
+      configFence: true,
+    }, deps);
+
+    expect(result.success).toBe(true);
+    expect(client.calls.indexOf("cutover:uid-alice->gw-green")).toBeLessThan(
+      client.calls.indexOf("config-unfreeze:alice"),
+    );
+    expect(client.calls.indexOf("config-unfreeze:alice")).toBeLessThan(
+      client.calls.indexOf("unmount:alice"),
+    );
+  });
+
+  it("blocks cutover and unfreezes the source when target ancestor proof fails", async () => {
+    const client = happyClient();
+    client.proveConfigRestore = vi.fn(async () => {
+      throw new Error("target history does not contain source checkpoint");
+    }) as MigrationClient["proveConfigRestore"];
+    const deps = makeDeps(client);
+
+    const result = await runMigration(FENCED_INPUT, deps);
+
+    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(result.errorAt?.error).toMatch(/does not contain source checkpoint/);
+    expect(deps.commitCutover).not.toHaveBeenCalled();
+    expect(client.unfreezeConfig).toHaveBeenCalledWith(expect.objectContaining({
+      transportId: "default-r1",
+    }));
+  });
+
+  it("blocks cutover when Cowboy cannot persist the revision-observed proof", async () => {
+    const client = happyClient();
+    const deps = makeDeps(client);
+    deps.acceptConfigProof = vi.fn(async () => {
+      throw new Error("revision status write unavailable");
+    });
+
+    const result = await runMigration(FENCED_INPUT, deps);
+
+    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(result.errorAt?.error).toMatch(/status write unavailable/);
+    expect(deps.commitCutover).not.toHaveBeenCalled();
+  });
+
+  it("blocks every transfer when the source cannot push its checkpoint", async () => {
+    const client = happyClient();
+    client.freezeConfig = vi.fn(async () => {
+      throw new Error("config checkpoint push pending");
+    }) as MigrationClient["freezeConfig"];
+    const deps = makeDeps(client);
+
+    const result = await runMigration(FENCED_INPUT, deps);
+
+    expect(result).toMatchObject({ success: false, finalPhase: "initial", rolledBack: false });
+    expect(client.transferState).not.toHaveBeenCalled();
+    expect(deps.commitCutover).not.toHaveBeenCalled();
   });
 });
 

@@ -67,6 +67,7 @@ export function buildOperationCompletionUpdate(
   const { op, result, steps, now } = input;
   const persistedSteps = steps.length > 0 ? steps : result.steps;
   const attempts = (op.attempts ?? 0) + 1;
+  const output = result.output ? { output: result.output } : {};
 
   if (result.success) {
     return {
@@ -78,6 +79,7 @@ export function buildOperationCompletionUpdate(
       rolledBack: false,
       nextAttemptAt: FieldValue.delete(),
       waitingOn: FieldValue.delete(),
+      ...output,
     };
   }
 
@@ -104,6 +106,7 @@ export function buildOperationCompletionUpdate(
       nextAttemptAt: now + backoffMs,
       waitingOn: FieldValue.delete(),
       error: `attempt ${attempts} failed (transient): ${error} — retrying in ${Math.round(backoffMs / 1000)}s`,
+      ...output,
     };
   }
 
@@ -117,5 +120,6 @@ export function buildOperationCompletionUpdate(
     rolledBack: result.rolledBack ?? false,
     nextAttemptAt: FieldValue.delete(),
     waitingOn: FieldValue.delete(),
+    ...output,
   };
 }

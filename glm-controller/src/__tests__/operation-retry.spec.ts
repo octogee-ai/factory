@@ -87,6 +87,21 @@ describe("buildOperationCompletionUpdate", () => {
     });
   });
 
+  it("persists migration checkpoint and proof output with the terminal operation", () => {
+    const output = {
+      configCheckpoint: { checkpointCommit: "a".repeat(40), configHash: "b".repeat(64) },
+      configProof: { restoredCommit: "a".repeat(40), acceptedCommit: "c".repeat(40) },
+    };
+    const update = buildOperationCompletionUpdate({
+      op: { attempts: 0 },
+      result: { steps: [], success: true, output },
+      steps: [],
+      now,
+    });
+
+    expect(update.output).toEqual(output);
+  });
+
   it("requeues a transient failure with backoff, bumps attempts, and appends attempt history", () => {
     const claimedAt = now - 45_000;
     const update = buildOperationCompletionUpdate({
