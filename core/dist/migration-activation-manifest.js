@@ -64,13 +64,16 @@ function validateManifestShape(value, slug) {
         bindings,
     };
 }
-export async function extractOpenClawActivationManifest(configPath, slug) {
+export async function extractOpenClawActivationManifest(configPath, slug, opts = {}) {
     const raw = await fs.readFile(configPath, "utf-8");
     const parsed = JSON.parse(raw);
     const agentId = expectedAgentId(slug);
     const accountId = expectedAccountId(slug);
     const agent = parsed.agents?.list?.find((entry) => isRecord(entry) && entry.id === agentId);
-    const mattermostAccount = parsed.channels?.mattermost?.accounts?.[accountId];
+    const sourceAccount = parsed.channels?.mattermost?.accounts?.[accountId];
+    const mattermostAccount = isRecord(sourceAccount) && opts.botToken
+        ? { ...sourceAccount, botToken: opts.botToken }
+        : sourceAccount;
     const bindings = (parsed.bindings ?? []).filter((binding) => isRecord(binding) && binding.agentId === agentId);
     return validateManifestShape({
         version: 1,

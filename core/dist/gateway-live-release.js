@@ -20,9 +20,6 @@ export function gatewayArtifactFromReleasePayload(payload) {
     return {
         imageRepository: payload.imageRepository,
         imageTag: payload.imageTag,
-        ...(payload.macOpsTokenProtocol === undefined
-            ? {}
-            : { macOpsTokenProtocol: payload.macOpsTokenProtocol }),
         ...(payload.gatewayEdgeImage === undefined
             ? {}
             : { gatewayEdgeImage: payload.gatewayEdgeImage }),
