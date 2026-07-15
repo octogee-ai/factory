@@ -113,7 +113,15 @@ describe("system config observed status", () => {
       openclawForkSha: "abc1234",
       controlProtocol: {
         protocol: "durable-openclaw-config",
-        version: 1,
+        version: 2,
+      },
+      bootRole: "source-frozen",
+      checkpointCommit: "a".repeat(40),
+      configHash: "b".repeat(64),
+      controlOwner: {
+        migrationId: "mig-1",
+        sourceRevisionId: "bender-r1",
+        targetRevisionId: "bender-r2",
       },
     });
 
@@ -123,7 +131,15 @@ describe("system config observed status", () => {
       openclawForkSha: "abc1234",
       controlProtocol: {
         protocol: "durable-openclaw-config",
-        version: 1,
+        version: 2,
+      },
+      bootRole: "source-frozen",
+      checkpointCommit: "a".repeat(40),
+      configHash: "b".repeat(64),
+      controlOwner: {
+        migrationId: "mig-1",
+        sourceRevisionId: "bender-r1",
+        targetRevisionId: "bender-r2",
       },
     });
   });

@@ -5,6 +5,10 @@
 {{- $gatewayClass := include "octogee-gateway.gatewayClass" . -}}
 {{- $imageProfile := include "octogee-gateway.imageProfile" . -}}
 {{- $gatewayImageLabel := include "octogee-gateway.imageLabel" . -}}
+{{- $gatewayImageTag := .Values.image.tag | default .Values.imageTag -}}
+{{- $roll := .Values.systemConfigRollContext -}}
+{{- $rollValues := compact (list $roll.migrationId $roll.sourceRevisionId $roll.targetRevisionId $roll.checkpointCommit $roll.freezeObject) -}}
+{{- $rollCount := len $rollValues -}}
 {{- $conversationMode := .Values.conversationExperiment.mode | default "broad" -}}
 {{- $operatorShellsEnabled := and (ne $gatewayClass "shared") (.Values.operatorAccess.shellsEnabled | default false) -}}
 {{- if and (ne $conversationMode "broad") (ne $conversationMode "publisher-live") -}}
@@ -12,6 +16,15 @@
 {{- end -}}
 {{- if not $preset -}}
 {{- fail (printf "octogee-gateway: no preset defined for sizingTier=%q (add it under .Values.tiers in values.yaml)" $tier) -}}
+{{- end -}}
+{{- if and (gt $rollCount 0) (ne $rollCount 5) -}}
+{{- fail "octogee-gateway: systemConfigRollContext must provide all five fields" -}}
+{{- end -}}
+{{- if and (eq $rollCount 5) (ne $roll.targetRevisionId $revision) -}}
+{{- fail "octogee-gateway: systemConfigRollContext.targetRevisionId must equal revisionId" -}}
+{{- end -}}
+{{- if and (eq $rollCount 5) (eq $gatewayClass "shared") -}}
+{{- fail "octogee-gateway: systemConfigRollContext is forbidden on shared gateways" -}}
 {{- end -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -166,6 +179,20 @@ spec:
               value: {{ $revision | quote }}
             - name: GATEWAY_BUILDER_SLUG
               value: {{ .Values.builderSlug | quote }}
+            - name: GATEWAY_IMAGE_TAG
+              value: {{ $gatewayImageTag | quote }}
+            {{- if eq $rollCount 5 }}
+            - name: SYSTEM_CONFIG_MIGRATION_ID
+              value: {{ $roll.migrationId | quote }}
+            - name: SYSTEM_CONFIG_SOURCE_REVISION_ID
+              value: {{ $roll.sourceRevisionId | quote }}
+            - name: SYSTEM_CONFIG_TARGET_REVISION_ID
+              value: {{ $roll.targetRevisionId | quote }}
+            - name: SYSTEM_CONFIG_CHECKPOINT_COMMIT
+              value: {{ $roll.checkpointCommit | quote }}
+            - name: SYSTEM_CONFIG_FREEZE_OBJECT
+              value: {{ $roll.freezeObject | quote }}
+            {{- end }}
             # Image profile (standard vs operator) — read by
             # entrypoint.sh to gate operator-image boot steps such as the
             # Claude Code first-run stamper.

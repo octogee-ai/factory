@@ -27,6 +27,13 @@ revisionId: ""
 # starts.
 builderSlug: ""
 
+systemConfigRollContext:
+  migrationId: ""
+  sourceRevisionId: ""
+  targetRevisionId: ""
+  checkpointCommit: ""
+  freezeObject: ""
+
 # Bundle SHA. All three sidecars (gateway, gateway-edge, chat-proxy)
 # default to this tag for atomic rolls. Per-image overrides below take
 # precedence when set, but the operator workflow is single-SHA.

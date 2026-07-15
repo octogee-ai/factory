@@ -160,8 +160,16 @@ interface SystemConfigBootCheckpointOptions {
 export interface SystemConfigFreezeRecord extends ConfigControlOwner {
   directoryMode: number;
   configMode: number;
+  protocolVersion?: 2;
+  role?: "source-frozen" | "target-candidate";
+  gatewayId?: string;
+  sourceRevisionId?: string;
+  targetRevisionId?: string;
   checkpointCommit?: string;
   configHash?: string;
+  freezeObject?: string;
+  candidateCommit?: string;
+  candidateHash?: string;
 }
 
 export function systemConfigDir(openclawDir = OPENCLAW_DIR): string {
@@ -187,7 +195,11 @@ export function systemConfigFreezeStatus(
     typeof parsed.slug !== "string" ||
     !isValidUsername(parsed.slug) ||
     !Number.isInteger(parsed.directoryMode) ||
-    !Number.isInteger(parsed.configMode)
+    !Number.isInteger(parsed.configMode) ||
+    (parsed.protocolVersion !== undefined && parsed.protocolVersion !== 2) ||
+    (parsed.role !== undefined &&
+      parsed.role !== "source-frozen" &&
+      parsed.role !== "target-candidate")
   ) {
     throw new Error(`[system_config] invalid freeze marker at ${markerPath}`);
   }

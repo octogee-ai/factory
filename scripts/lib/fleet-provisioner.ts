@@ -58,7 +58,7 @@ import { mountClaudeSsoAuth } from "./claude-sso-auth-http.js";
 
 const RECONCILE_LOOP_INTERVAL_MS = 15 * 1000;
 
-const PROCESS_STARTED_AT_MS = Date.now() - Math.round(process.uptime() * 1000);
+export const PROCESS_STARTED_AT_MS = Date.now() - Math.round(process.uptime() * 1000);
 
 export interface CloneRetryState {
   attempts: number;

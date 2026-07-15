@@ -213,6 +213,33 @@ describe("system_config watcher", () => {
     watcher.close();
   });
 
+  it("stays live while config is frozen and commits the first post-finalize edit", async () => {
+    const sync = vi
+      .fn()
+      .mockResolvedValueOnce({
+        committed: false,
+        pushed: false,
+        processedFingerprint: systemConfigFingerprint(configPath),
+      })
+      .mockResolvedValueOnce({ committed: true, pushed: true });
+    const watcher = createSystemConfigWatcher({
+      configPath,
+      sync,
+      debounceMs: 10,
+      pollMs: 0,
+      watch: () => ({ close: vi.fn() }),
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(sync).toHaveBeenCalledTimes(1);
+
+    fs.writeFileSync(configPath, "{\"version\":2}\n");
+    watcher.notify();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(sync).toHaveBeenCalledTimes(2);
+    watcher.close();
+  });
+
   it("uses the slow Git audit to heal index or metadata drift with unchanged config bytes", async () => {
     const audit = vi.fn(async () => ({ needsSync: true }));
     const sync = vi.fn(async () => ({

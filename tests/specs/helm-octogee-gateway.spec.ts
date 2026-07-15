@@ -733,6 +733,52 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     expect(dep).not.toMatch(/name:\s*mattermost-gateway[\s\S]*?key:\s*admin_token/);
   });
 
+  it("binds the gateway process to its exact rendered image tag without rollout context by default", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const gw = containerBlock(dep, "gateway");
+    expect(gw).toMatch(/name:\s*GATEWAY_IMAGE_TAG[\s\S]*?value:\s*"abc1234"/);
+    expect(gw).not.toMatch(/name:\s*SYSTEM_CONFIG_MIGRATION_ID/);
+  });
+
+  it("renders all immutable target rollout bindings only on the gateway container", () => {
+    const dep = findDoc(helmTemplate("octogee-gw-bender-r2", {
+      gatewayId: "bender",
+      gatewayClass: "operator",
+      builderSlug: "ceckert",
+      revisionId: "bender-r2",
+      "systemConfigRollContext.migrationId": "mig-123",
+      "systemConfigRollContext.sourceRevisionId": "bender-r1",
+      "systemConfigRollContext.targetRevisionId": "bender-r2",
+      "systemConfigRollContext.checkpointCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "systemConfigRollContext.freezeObject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    }), "Deployment", "octogee-gateway-bender-r2") ?? "";
+    const gw = containerBlock(dep, "gateway");
+    const edge = containerBlock(dep, "gateway-edge");
+    expect(gw).toMatch(/name:\s*SYSTEM_CONFIG_MIGRATION_ID[\s\S]*?value:\s*"mig-123"/);
+    expect(gw).toMatch(/name:\s*SYSTEM_CONFIG_SOURCE_REVISION_ID[\s\S]*?value:\s*"bender-r1"/);
+    expect(gw).toMatch(/name:\s*SYSTEM_CONFIG_TARGET_REVISION_ID[\s\S]*?value:\s*"bender-r2"/);
+    expect(gw).toMatch(/name:\s*SYSTEM_CONFIG_CHECKPOINT_COMMIT[\s\S]*?value:\s*"a{40}"/);
+    expect(gw).toMatch(/name:\s*SYSTEM_CONFIG_FREEZE_OBJECT[\s\S]*?value:\s*"b{40}"/);
+    expect(edge).not.toMatch(/SYSTEM_CONFIG_MIGRATION_ID/);
+  });
+
+  it("refuses partial or wrong-target rollout context before rendering a pod", () => {
+    expect(() => helmTemplate("octogee-gw-bender-r2", {
+      gatewayId: "bender",
+      revisionId: "bender-r2",
+      "systemConfigRollContext.migrationId": "mig-123",
+    })).toThrow(/systemConfigRollContext must provide all five fields/i);
+    expect(() => helmTemplate("octogee-gw-bender-r2", {
+      gatewayId: "bender",
+      revisionId: "bender-r2",
+      "systemConfigRollContext.migrationId": "mig-123",
+      "systemConfigRollContext.sourceRevisionId": "bender-r1",
+      "systemConfigRollContext.targetRevisionId": "bender-r3",
+      "systemConfigRollContext.checkpointCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "systemConfigRollContext.freezeObject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    })).toThrow(/targetRevisionId must equal revisionId/i);
+  });
+
   it("points the sidecar coach reconciler at the tracked config on isolated gateways", () => {
     const isolated = findDoc(
       helmTemplate("octogee-gw-bender", {
