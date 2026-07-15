@@ -224,10 +224,11 @@ export function isDefinitiveConfigRpcRejection(error: unknown): boolean {
     return true;
   }
   return typeof rpc.status === "number" &&
-    rpc.status >= 400 &&
-    rpc.status < 500 &&
-    rpc.status !== 408 &&
-    rpc.status !== 429;
+    (rpc.status === 501 ||
+      rpc.status >= 400 &&
+      rpc.status < 500 &&
+      rpc.status !== 408 &&
+      rpc.status !== 429);
 }
 
 export function isDefinitiveFreezeRejection(error: unknown): boolean {

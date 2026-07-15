@@ -73,6 +73,7 @@ import {
   type AssignmentDoc,
   W9_GATEWAY_EDGE_IMAGE_REPOSITORY,
   type GatewayDoc,
+  type GatewayRollSystemConfigState,
   type ReleasePayload,
   type RevisionRealizationDoc,
 } from "@octogee/shared/types/gateway-releases";
@@ -3173,6 +3174,41 @@ function createMigrationClientBuilder(
   };
 }
 
+function protocolV2PromotionMatchesFence(
+  configRoll: GatewayRollSystemConfigState | null | undefined,
+  fence: MigrationRollFence,
+): boolean {
+  if (!configRoll) return false;
+  return [
+    configRoll.phase === "promoted",
+    configRoll.migrationId === `roll-config:${fence.rollOperationId}`,
+    configRoll.sourceRevisionId === fence.sourceRevisionId,
+    configRoll.targetRevisionId === fence.targetRevisionId,
+    configRoll.freezeRef === `refs/octogee/system-config/freeze/${fence.sourceRevisionId}`,
+    /^[0-9a-f]{40}$/.test(configRoll.freezeObject),
+    /^[0-9a-f]{40}$/.test(configRoll.checkpointCommit),
+    /^[0-9a-f]{64}$/.test(configRoll.configHash),
+    configRoll.candidateRef ===
+      `refs/octogee/system-config/candidate/${fence.targetRevisionId}`,
+    typeof configRoll.candidateCommit === "string" &&
+      /^[0-9a-f]{40}$/.test(configRoll.candidateCommit),
+    typeof configRoll.candidateHash === "string" &&
+      /^[0-9a-f]{64}$/.test(configRoll.candidateHash),
+    typeof configRoll.runtimeConfigHash === "string" &&
+      /^[0-9a-f]{64}$/.test(configRoll.runtimeConfigHash),
+    configRoll.observedRevisionId === fence.targetRevisionId,
+    typeof configRoll.targetStartedAt === "number",
+    typeof configRoll.imageTag === "string" && configRoll.imageTag.length > 0,
+    typeof configRoll.buildSha === "string" && configRoll.buildSha.length > 0,
+    typeof configRoll.openclawVersion === "string" && configRoll.openclawVersion.length > 0,
+    typeof configRoll.provenAt === "number",
+    configRoll.promotedCommit === configRoll.candidateCommit,
+    typeof configRoll.promotedAt === "number" &&
+      typeof configRoll.provenAt === "number" &&
+      configRoll.promotedAt >= configRoll.provenAt,
+  ].every(Boolean);
+}
+
 function assertCurrentMigrationRollFence(
   rootValue: unknown,
   assignment: AssignmentDoc | null,
@@ -3182,13 +3218,20 @@ function assertCurrentMigrationRollFence(
     throw new Error("stale release-roll fence: gateway root unavailable");
   }
   const roll = rootValue.roll;
+  const protocolV2Roll = roll?.systemConfigRoll !== undefined;
   if (
-    rootValue.desiredRelease !== fence.targetRelease ||
+    (!protocolV2Roll && rootValue.desiredRelease !== fence.targetRelease) ||
     roll?.operationId !== fence.rollOperationId ||
     roll.targetRevisionId !== fence.targetRevisionId ||
     roll.toRelease !== fence.targetRelease
   ) {
     throw new Error("stale release-roll fence: roll target changed");
+  }
+  if (protocolV2Roll) {
+    const configRoll = roll.systemConfigRoll;
+    if (!protocolV2PromotionMatchesFence(configRoll, fence)) {
+      throw new Error("stale release-roll fence: protocol-v2 candidate is not durably promoted");
+    }
   }
   if (fence.sourceConfigCheckpoint) {
     const checkpoint = roll.systemConfigCheckpoint;

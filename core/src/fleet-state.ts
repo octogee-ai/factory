@@ -149,6 +149,69 @@ export interface CutoverCommitParams {
   };
 }
 
+function protocolV2PromotionIsExact(
+  configRoll: Record<string, unknown> | null,
+  operationId: string,
+  sourceRevisionId: string,
+  targetRevisionId: string,
+): configRoll is Record<string, unknown> {
+  if (!configRoll) return false;
+  return [
+    configRoll.phase === "promoted",
+    configRoll.migrationId === `roll-config:${operationId}`,
+    configRoll.sourceRevisionId === sourceRevisionId,
+    configRoll.targetRevisionId === targetRevisionId,
+    configRoll.freezeRef === `refs/octogee/system-config/freeze/${sourceRevisionId}`,
+    typeof configRoll.freezeObject === "string" && /^[0-9a-f]{40}$/.test(configRoll.freezeObject),
+    typeof configRoll.checkpointCommit === "string" && /^[0-9a-f]{40}$/.test(configRoll.checkpointCommit),
+    typeof configRoll.configHash === "string" && /^[0-9a-f]{64}$/.test(configRoll.configHash),
+    configRoll.candidateRef === `refs/octogee/system-config/candidate/${targetRevisionId}`,
+    typeof configRoll.candidateCommit === "string" && /^[0-9a-f]{40}$/.test(configRoll.candidateCommit),
+    typeof configRoll.candidateHash === "string" && /^[0-9a-f]{64}$/.test(configRoll.candidateHash),
+    typeof configRoll.runtimeConfigHash === "string" && /^[0-9a-f]{64}$/.test(configRoll.runtimeConfigHash),
+    configRoll.observedRevisionId === targetRevisionId,
+    typeof configRoll.targetStartedAt === "number",
+    typeof configRoll.imageTag === "string" && configRoll.imageTag.length > 0,
+    typeof configRoll.buildSha === "string" && configRoll.buildSha.length > 0,
+    typeof configRoll.openclawVersion === "string" && configRoll.openclawVersion.length > 0,
+    typeof configRoll.provenAt === "number",
+    configRoll.promotedCommit === configRoll.candidateCommit,
+    typeof configRoll.promotedAt === "number" &&
+      typeof configRoll.provenAt === "number" &&
+      configRoll.promotedAt >= configRoll.provenAt,
+  ].every(Boolean);
+}
+
+function recordOrEmpty(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function protocolV2TargetProofIsCurrent(
+  configRoll: Record<string, unknown>,
+  target: Record<string, unknown> | undefined,
+): boolean {
+  const targetRecord = recordOrEmpty(target);
+  const helm = recordOrEmpty(targetRecord.helm);
+  const heartbeat = recordOrEmpty(targetRecord.heartbeat);
+  const status = recordOrEmpty(heartbeat.configStatus);
+  const owner = recordOrEmpty(status.controlOwner);
+  return [
+    helm.imageTag === configRoll.imageTag,
+    heartbeat.startedAt === configRoll.targetStartedAt,
+    heartbeat.version === configRoll.buildSha,
+    heartbeat.openclawVersion === configRoll.openclawVersion,
+    status.bootRole === "target-candidate",
+    owner.migrationId === configRoll.migrationId,
+    owner.sourceRevisionId === configRoll.sourceRevisionId,
+    owner.targetRevisionId === configRoll.targetRevisionId,
+    status.checkpointCommit === configRoll.checkpointCommit,
+    status.configHash === configRoll.configHash,
+    status.candidateCommit === configRoll.candidateCommit,
+    status.candidateHash === configRoll.candidateHash,
+  ].every(Boolean);
+}
+
 // Atomic cutover (GATEWAY-RELEASES-SPEC, PR5 review P0). The mirror move AND the
 // assignment write commit in ONE Firestore transaction, so a crash/throw leaves
 // NEITHER — never a half-state where the mirror points at the target while the
@@ -182,14 +245,35 @@ export async function commitCutoverAtomic(
       );
       const root = rootSnap.exists ? rootSnap.data() : undefined;
       const roll = root?.roll as Record<string, unknown> | undefined;
+      const protocolV2Roll = roll?.systemConfigRoll !== undefined;
       const current =
-        root?.desiredRelease === params.rollFence.targetRelease &&
+        (protocolV2Roll || root?.desiredRelease === params.rollFence.targetRelease) &&
         roll?.operationId === params.rollFence.operationId &&
         roll?.targetRevisionId === params.rollFence.targetRevisionId &&
         roll?.toRelease === params.rollFence.targetRelease &&
         params.assignment?.revisionId === params.rollFence.targetRevisionId;
       if (!current) {
         throw new Error("stale release-roll fence refused cutover");
+      }
+      if (protocolV2Roll) {
+        const configRoll = roll.systemConfigRoll as Record<string, unknown> | null;
+        if (!protocolV2PromotionIsExact(
+          configRoll,
+          params.rollFence.operationId,
+          params.rollFence.sourceRevisionId,
+          params.rollFence.targetRevisionId,
+        )) {
+          throw new Error("protocol-v2 candidate is not durably promoted at cutover");
+        }
+        const targetSnap = await txn.get(
+          deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(params.rollFence.targetRevisionId),
+        );
+        if (!protocolV2TargetProofIsCurrent(
+          configRoll,
+          targetSnap.exists ? targetSnap.data() : undefined,
+        )) {
+          throw new Error("protocol-v2 target candidate proof changed before cutover");
+        }
       }
       if (params.rollFence.sourceConfigCheckpoint) {
         const checkpoint = roll?.systemConfigCheckpoint as Record<string, unknown> | undefined;

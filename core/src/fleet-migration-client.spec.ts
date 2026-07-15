@@ -8,7 +8,11 @@ import {
   MIGRATION_UNMOUNT_TIMEOUT_MS,
   MIGRATION_VERIFY_TIMEOUT_MS,
 } from "@octogee/shared/types/fleet-controller";
-import { createMigrationClient, MigrationRpcError } from "./fleet-migration-client";
+import {
+  createMigrationClient,
+  isDefinitiveConfigRpcRejection,
+  MigrationRpcError,
+} from "./fleet-migration-client";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 
 interface CapturedCall {
@@ -63,6 +67,15 @@ const SNAPSHOT: FleetBrokerUserSnapshot = {
   coachToken: "coach-token",
   coachMmUserId: "mm-coach",
 };
+
+describe("isDefinitiveConfigRpcRejection", () => {
+  it("treats unsupported protocol and typed conflicts as terminal but retries availability", () => {
+    expect(isDefinitiveConfigRpcRejection({ status: 501 })).toBe(true);
+    expect(isDefinitiveConfigRpcRejection({ code: "config-ref-conflict" })).toBe(true);
+    expect(isDefinitiveConfigRpcRejection({ status: 503 })).toBe(false);
+    expect(isDefinitiveConfigRpcRejection({ status: 429 })).toBe(false);
+  });
+});
 
 describe("MigrationClient.quiesce", () => {
   it("POSTs JSON to /quiesce/{gatewayId} signed by the fleet controller private key", async () => {

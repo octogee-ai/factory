@@ -603,7 +603,7 @@ describe("createMigrateCustomerHandler — revision-targeted (same-gateway drain
     expect(client.transferState).not.toHaveBeenCalled();
   });
 
-  it("restores and proves config when an isolated source migrates to an isolated target", async () => {
+  it("leaves gateway-bound config to the protocol-v2 controller during a release drain", async () => {
     const { deps, client } = makeDeps({
       readUser: vi.fn(async () => ({ slug: "alice", currentGatewayId: "bender" })),
       resolveFromRevision: vi.fn(async () => ({ revisionId: "bender-r1", release: 1 })),
@@ -620,8 +620,8 @@ describe("createMigrateCustomerHandler — revision-targeted (same-gateway drain
     } }), makeCtx());
 
     expect(result.success).toBe(true);
-    expect(client.freezeConfig).toHaveBeenCalledOnce();
-    expect(client.proveConfigRestore).toHaveBeenCalledOnce();
+    expect(client.freezeConfig).not.toHaveBeenCalled();
+    expect(client.proveConfigRestore).not.toHaveBeenCalled();
   });
 
   it("checkpoints an idle isolated gateway return without restoring config on the shared target", async () => {

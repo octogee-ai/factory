@@ -159,6 +159,30 @@ function requestedSystemConfigMigrationMode(
   throw new Error("invalid systemConfigMigrationMode in op.input");
 }
 
+async function resolveRequestedSystemConfigMigrationMode(input: {
+  deps: MigrateCustomerDeps;
+  migrationInput: MigrateCustomerInput;
+  sourceGatewayId: string;
+  targetGatewayId: string;
+}): Promise<SystemConfigMigrationMode> {
+  const requestedMode = requestedSystemConfigMigrationMode(
+    input.migrationInput.systemConfigMigrationMode,
+  );
+  if (input.migrationInput.source === "release-roll" && requestedMode === null) {
+    return "none";
+  }
+  const resolvedMode = await input.deps.resolveSystemConfigMigrationMode(
+    input.sourceGatewayId,
+    input.targetGatewayId,
+  );
+  if (requestedMode && requestedMode !== resolvedMode) {
+    throw new Error(
+      `system config migration mode changed: requested=${requestedMode} resolved=${resolvedMode}`,
+    );
+  }
+  return resolvedMode;
+}
+
 function optionalCleanupRecord<T>(value: unknown): T | undefined {
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -558,16 +582,12 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
           };
         }
       }
-      systemConfigMigrationMode = await deps.resolveSystemConfigMigrationMode(
-        user.currentGatewayId,
-        toGatewayId,
-      );
-      const requestedMode = requestedSystemConfigMigrationMode(input.systemConfigMigrationMode);
-      if (requestedMode && requestedMode !== systemConfigMigrationMode) {
-        throw new Error(
-          `system config migration mode changed: requested=${requestedMode} resolved=${systemConfigMigrationMode}`,
-        );
-      }
+      systemConfigMigrationMode = await resolveRequestedSystemConfigMigrationMode({
+        deps,
+        migrationInput: input,
+        sourceGatewayId: user.currentGatewayId,
+        targetGatewayId: toGatewayId,
+      });
       await deps.assertSystemConfigProtocolReady({
         mode: systemConfigMigrationMode,
         sourceGatewayId: targets.fromGatewayId,
