@@ -13,6 +13,7 @@ import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 import { findPendingActivationOperation, requestBuilderActivationLease, } from "./builder-activation-lease.js";
 import { resolveUidForSlug } from "./assigned-roster.js";
 import { GatewayRetirementConflictError, claimGatewayRetirementAtomic, hasGatewayRetirementConfigObligation, } from "./gateway-retirement-claim.js";
+import { findActiveGatewayMigration, GatewayMigrationInFlightError, } from "./fleet-operation-lock.js";
 export { resolveBuilderActivationPlan } from "./builder-activation-lease.js";
 function rejectPersistenceInBody(body) {
     if (body.persistence === undefined)
@@ -1741,21 +1742,16 @@ async function appendGatewayRelease(db, args) {
         const activeOperations = await txn.get(db
             .collection(GLM_OPERATIONS_COLLECTION)
             .where("status", "in", ["pending", "running"]));
-        const migrationConflict = activeOperations.docs.find((doc) => {
+        const migrationConflict = findActiveGatewayMigration(args.gateway.gatewayId, activeOperations.docs.map((doc) => {
             const operation = doc.data();
-            if (operation.kind !== OP_KIND_MIGRATE_CUSTOMER)
-                return false;
-            const input = isPlainRecord(operation.input) ? operation.input : {};
-            const durable = isPlainRecord(operation.customerMigrationV2)
-                ? operation.customerMigrationV2
-                : {};
-            return [
-                input.fromGatewayId,
-                input.toGatewayId,
-                durable.sourceGatewayId,
-                durable.targetGatewayId,
-            ].includes(args.gateway.gatewayId);
-        });
+            return {
+                id: doc.id,
+                kind: typeof operation.kind === "string" ? operation.kind : "",
+                status: typeof operation.status === "string" ? operation.status : "",
+                input: operation.input,
+                customerMigrationV2: operation.customerMigrationV2,
+            };
+        }));
         if (migrationConflict) {
             throw new GatewayMigrationInFlightError(args.gateway.gatewayId, migrationConflict.id);
         }
@@ -1808,15 +1804,6 @@ class InvalidGatewayRootError extends Error {
     constructor(gatewayId) {
         super(`gateway ${gatewayId} durable root is invalid`);
         this.gatewayId = gatewayId;
-    }
-}
-class GatewayMigrationInFlightError extends Error {
-    gatewayId;
-    operationId;
-    constructor(gatewayId, operationId) {
-        super(`customer migration is in flight for gateway ${gatewayId}`);
-        this.gatewayId = gatewayId;
-        this.operationId = operationId;
     }
 }
 function respondReleaseWriteConflict(res, error) {

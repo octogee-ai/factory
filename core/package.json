@@ -120,6 +120,10 @@
       "types": "./dist/fleet-migration-runner.d.ts",
       "default": "./dist/fleet-migration-runner.js"
     },
+    "./fleet-operation-lock": {
+      "types": "./dist/fleet-operation-lock.d.ts",
+      "default": "./dist/fleet-operation-lock.js"
+    },
     "./fleet-signature": {
       "types": "./dist/fleet-signature.d.ts",
       "default": "./dist/fleet-signature.js"
@@ -402,6 +406,9 @@
       ],
       "fleet-migration-runner": [
         "dist/fleet-migration-runner.d.ts"
+      ],
+      "fleet-operation-lock": [
+        "dist/fleet-operation-lock.d.ts"
       ],
       "fleet-signature": [
         "dist/fleet-signature.d.ts"

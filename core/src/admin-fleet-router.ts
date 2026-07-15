@@ -90,6 +90,10 @@ import {
   claimGatewayRetirementAtomic,
   hasGatewayRetirementConfigObligation,
 } from "./gateway-retirement-claim.js";
+import {
+  findActiveGatewayMigration,
+  GatewayMigrationInFlightError,
+} from "./fleet-operation-lock.js";
 
 export { resolveBuilderActivationPlan } from "./builder-activation-lease.js";
 
@@ -2622,20 +2626,19 @@ async function appendGatewayRelease(
         .collection(GLM_OPERATIONS_COLLECTION)
         .where("status", "in", ["pending", "running"]),
     );
-    const migrationConflict = activeOperations.docs.find((doc) => {
-      const operation = doc.data() as Record<string, unknown>;
-      if (operation.kind !== OP_KIND_MIGRATE_CUSTOMER) return false;
-      const input = isPlainRecord(operation.input) ? operation.input : {};
-      const durable = isPlainRecord(operation.customerMigrationV2)
-        ? operation.customerMigrationV2
-        : {};
-      return [
-        input.fromGatewayId,
-        input.toGatewayId,
-        durable.sourceGatewayId,
-        durable.targetGatewayId,
-      ].includes(args.gateway.gatewayId);
-    });
+    const migrationConflict = findActiveGatewayMigration(
+      args.gateway.gatewayId,
+      activeOperations.docs.map((doc) => {
+        const operation = doc.data() as Record<string, unknown>;
+        return {
+          id: doc.id,
+          kind: typeof operation.kind === "string" ? operation.kind : "",
+          status: typeof operation.status === "string" ? operation.status : "",
+          input: operation.input,
+          customerMigrationV2: operation.customerMigrationV2,
+        };
+      }),
+    );
     if (migrationConflict) {
       throw new GatewayMigrationInFlightError(args.gateway.gatewayId, migrationConflict.id);
     }
@@ -2696,15 +2699,6 @@ class StaleGatewayReleaseError extends Error {
 class InvalidGatewayRootError extends Error {
   constructor(readonly gatewayId: string) {
     super(`gateway ${gatewayId} durable root is invalid`);
-  }
-}
-
-class GatewayMigrationInFlightError extends Error {
-  constructor(
-    readonly gatewayId: string,
-    readonly operationId: string,
-  ) {
-    super(`customer migration is in flight for gateway ${gatewayId}`);
   }
 }
 

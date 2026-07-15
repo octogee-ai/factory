@@ -708,6 +708,35 @@ describe("POST /gateways/:id/releases — cut release n+1 from prev + patch", ()
     },
   );
 
+  it("refuses a release while a durable unassigned-live migration owns the gateway", async () => {
+    const seed = seedNewSchemaGateway("source", sharedPayload());
+    seed[`${GLM_OPERATIONS_COLLECTION}/migration-live`] = {
+      kind: "migrate-customer",
+      status: "running",
+      input: { toGatewayId: "target" },
+      customerMigrationV2: {
+        sourceGatewayId: "source",
+        sourceRevisionId: "source-r1",
+        sourceAssignmentMode: "unassigned-live",
+        targetGatewayId: "target",
+        targetRevisionId: "target-r1",
+      },
+    };
+    const { app, store } = mkApp(seed);
+
+    await request(app)
+      .post("/gateways/source/releases")
+      .send({ imageTag: "deadbee" })
+      .expect(409);
+
+    expect(store.get("gateways/source")).toMatchObject({
+      latestRelease: 1,
+      desiredRelease: 1,
+    });
+    expect(store.get(`gateways/source/${GATEWAY_RELEASES_SUBCOLLECTION}/2`)).toBeUndefined();
+    expect(opsIn(store, "rollout")).toHaveLength(0);
+  });
+
   it("cuts release 2 on an image change, bumps desiredRelease, and queues a rollout op (legacy converge)", async () => {
     const { app, store } = mkApp(seedNewSchemaGateway("beta", sharedPayload()));
 
