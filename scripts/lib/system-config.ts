@@ -28,6 +28,7 @@ import {
   mattermostAccountSecretRef,
   updateMattermostAccountSecrets,
 } from "./mattermost-account-secrets.js";
+import { validateOpenClawConfig } from "./openclaw-config-validation.js";
 
 type UnknownRecord = Record<string, unknown>;
 const CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION = 1;
@@ -452,7 +453,7 @@ function syncSystemConfigUnlocked(
   let validatedFingerprint: string;
   try {
     JSON.parse(fs.readFileSync(repoConfigPath, "utf-8"));
-    opts.validateConfig?.(repoConfigPath);
+    (opts.validateConfig ?? validateOpenClawConfig)(repoConfigPath);
     validatedFingerprint = systemConfigFingerprint(repoConfigPath);
   } catch (error) {
     const stamp = (opts.now ?? (() => new Date()))().toISOString().replace(/[:.]/g, "-");

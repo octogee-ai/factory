@@ -24,6 +24,7 @@ import {
   systemConfigDir,
 } from "../lib/system-config.js";
 import { systemConfigFingerprint } from "../lib/system-config-watcher.js";
+import { validateOpenClawConfig } from "../lib/openclaw-config-validation.js";
 
 vi.mock("../lib/git.js", () => ({
   createGiteaUser: vi.fn(async () => {}),
@@ -36,6 +37,10 @@ vi.mock("../lib/git.js", () => ({
 vi.mock("../lib/gitea-admin-broker-client.js", () => ({
   ensureGiteaOrgForWorkspace: vi.fn(async () => {}),
   ensureSystemConfigRepo: vi.fn(async () => {}),
+}));
+
+vi.mock("../lib/openclaw-config-validation.js", () => ({
+  validateOpenClawConfig: vi.fn(),
 }));
 
 function writeJson(filePath: string, value: unknown): void {
@@ -376,6 +381,7 @@ describe("system_config restore", () => {
       { cwd: repoDir, args: "push origin main", sshKeyPath: "/tmp/key" },
     ]);
     expect(logs.join("\n")).toMatch(/prestop pushed/);
+    expect(validateOpenClawConfig).toHaveBeenCalledWith(path.join(repoDir, "openclaw.json"));
   });
 
   it("preStop sync skips a clean system_config checkout", () => {
