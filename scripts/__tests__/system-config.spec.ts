@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { execFileSync } from "node:child_process";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -15,7 +16,9 @@ import {
   ensureSystemConfigRepo,
 } from "../lib/gitea-admin-broker-client.js";
 import {
+  auditSystemConfigForSlug,
   pushDirtySystemConfigForSlug,
+  reconcileSystemConfigSchema,
   removeLegacyMacConfig,
   removeLegacyMacState,
   restoreSystemConfigForSlug,
@@ -78,6 +81,54 @@ describe("system_config restore", () => {
     expect(result).toEqual({ skipped: "invalid-builder-slug", seeded: false, restored: false });
     expect(generateCustomerSshKey).not.toHaveBeenCalled();
     expect(ensureSystemConfigRepo).not.toHaveBeenCalled();
+  });
+
+  it("reruns schema migration after Doctor repairs invalid legacy JSON", async () => {
+    const configPath = path.join(repoDir, "openclaw.json");
+    fs.writeFileSync(configPath, "not-json\n");
+    const env = {
+      GATEWAY_CLASS: "operator",
+      GATEWAY_ID: "bender",
+      GATEWAY_BUILDER_SLUG: "ceckert",
+    };
+
+    await expect(reconcileSystemConfigSchema(openclawDir, env)).resolves.toBe(false);
+    expect(fs.existsSync(path.join(repoDir, ".octogee.json"))).toBe(false);
+
+    fs.writeFileSync(configPath, JSON.stringify({
+      agents: {
+        list: [
+          {
+            id: "octogee-ops-bender",
+            workspace: "/home/node/.openclaw/workspace/ops",
+            identity: { name: "Mac" },
+          },
+          { id: "octogee-ceckert-coach" },
+        ],
+      },
+      channels: {
+        mattermost: {
+          accounts: {
+            "ceckert-coach": { botToken: "customer-pat" },
+          },
+        },
+      },
+    }));
+
+    await expect(reconcileSystemConfigSchema(openclawDir, env)).resolves.toBe(true);
+    const migrated = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    expect(migrated.agents.list).toEqual([{ id: "octogee-ceckert-coach", default: true }]);
+    expect(migrated.channels.mattermost.accounts["ceckert-coach"].botToken).toEqual({
+      source: "file",
+      provider: "octogee-mattermost",
+      id: "/ceckert-coach",
+    });
+    expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8")))
+      .toMatchObject({ schemaVersion: 1 });
+    expect(JSON.parse(fs.readFileSync(
+      path.join(openclawDir, "secrets", "mattermost-accounts.json"),
+      "utf8",
+    ))).toEqual({ "ceckert-coach": "customer-pat" });
   });
 
   it("seeds a missing repo config from the safe template without resolving secrets", async () => {
@@ -748,6 +799,7 @@ describe("system_config restore", () => {
       setRepoSshCommand: vi.fn(),
       customerSshKeyPath: () => "/tmp/key",
       gitExec: git,
+      readAcceptedConfig: () => Buffer.from("{\"accepted\":true}\n"),
     });
 
     expect(result).toMatchObject({
@@ -767,6 +819,68 @@ describe("system_config restore", () => {
     expect(fs.readFileSync(rejected, "utf-8")).toBe("{ invalid");
     expect(fs.statSync(rejected).mode & 0o777).toBe(0o600);
     expect(git).not.toHaveBeenCalledWith(repoDir, "add openclaw.json .octogee.json .gitignore", "/tmp/key");
+  });
+
+  it("restores rejected config from Git bytes without newline-only follow-up churn", () => {
+    fs.rmSync(path.join(repoDir, ".git"), { recursive: true, force: true });
+    execFileSync("git", ["init", "-q", repoDir]);
+    execFileSync("git", ["-C", repoDir, "config", "user.name", "Octogee Test"]);
+    execFileSync("git", ["-C", repoDir, "config", "user.email", "test@octogee.invalid"]);
+    const configPath = path.join(repoDir, "openclaw.json");
+    const acceptedBytes = Buffer.from("{\"accepted\":true}\n");
+    fs.writeFileSync(configPath, acceptedBytes);
+    execFileSync("git", ["-C", repoDir, "add", "openclaw.json"]);
+    execFileSync("git", ["-C", repoDir, "commit", "-q", "-m", "accepted"]);
+    const head = execFileSync("git", ["-C", repoDir, "rev-parse", "HEAD"], {
+      encoding: "utf8",
+    }).trim();
+    const tree = execFileSync("git", ["-C", repoDir, "rev-parse", "HEAD^{tree}"], {
+      encoding: "utf8",
+    }).trim();
+    fs.writeFileSync(configPath, "{ invalid");
+    const git = vi.fn((_cwd: string, args: string) => {
+      if (args === "status --porcelain -- openclaw.json .octogee.json .gitignore") {
+        return execFileSync("git", ["-C", repoDir, "status", "--porcelain", "--", "openclaw.json"], {
+          encoding: "utf8",
+        }).trim();
+      }
+      if (args === "rev-parse HEAD") return head;
+      if (args === "rev-parse HEAD^{tree}" || args === "write-tree") return tree;
+      if (args === "ls-remote origin refs/heads/main") return `${head}\trefs/heads/main`;
+      if (args === "push origin main") return "ok";
+      return null;
+    });
+
+    const rejected = syncSystemConfigForSlug("acme", {
+      openclawDir,
+      now: () => new Date("2026-07-14T17:00:00.000Z"),
+      validateConfig: () => {
+        throw new Error("config invalid");
+      },
+      log: () => {},
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      gitExec: git,
+    });
+
+    expect(rejected).toMatchObject({ rejected: true, errorCode: "validation-failed" });
+    expect(fs.readFileSync(configPath)).toEqual(acceptedBytes);
+    expect(auditSystemConfigForSlug("acme", {
+      openclawDir,
+      customerSshKeyPath: () => "/tmp/key",
+      gitExec: git,
+    })).toMatchObject({ state: "clean", needsSync: false, worktreeDirty: false });
+    const followUp = syncSystemConfigForSlug("acme", {
+      openclawDir,
+      log: () => {},
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      gitExec: git,
+    });
+    expect(followUp).toMatchObject({ committed: false, pushed: true });
+    expect(git.mock.calls.map(([, args]) => args).filter((args) =>
+      args.startsWith("add ") || args.startsWith("commit ")
+    )).toEqual([]);
   });
 
   it("preserves a newer edit when validation rejects the preceding candidate", () => {

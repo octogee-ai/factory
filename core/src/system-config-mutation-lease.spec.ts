@@ -1,6 +1,8 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -18,12 +20,58 @@ function tempDir(): string {
   return dir;
 }
 
+function blockCurrentThread(milliseconds: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
 afterEach(() => {
   vi.useRealTimers();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 describe("system config cross-container mutation lease", () => {
+  it("starts its heartbeat before an immediate release", () => {
+    const openclawDir = tempDir();
+    for (let index = 0; index < 10; index += 1) {
+      const lease = acquireSystemConfigSyncLeaseSync({ openclawDir });
+      expect(lease).not.toBeNull();
+      expect(() => lease!.release()).not.toThrow();
+    }
+  });
+
+  it("starts and releases from an ESM child process both immediately and after a heartbeat", () => {
+    const openclawDir = tempDir();
+    const moduleUrl = pathToFileURL(path.resolve("dist/system-config-mutation-lease.js")).href;
+    const source = `
+      import path from "node:path";
+      import { acquireSystemConfigSyncLeaseSync } from ${JSON.stringify(moduleUrl)};
+      const root = ${JSON.stringify(openclawDir)};
+      for (let index = 0; index < 5; index += 1) {
+        const lease = acquireSystemConfigSyncLeaseSync({
+          openclawDir: path.join(root, "immediate-" + index),
+          heartbeatMs: 20,
+          staleAfterMs: 100,
+        });
+        if (!lease) throw new Error("lease was unexpectedly busy");
+        lease.release();
+      }
+      const delayed = acquireSystemConfigSyncLeaseSync({
+        openclawDir: path.join(root, "delayed"),
+        heartbeatMs: 20,
+        staleAfterMs: 100,
+      });
+      if (!delayed) throw new Error("delayed lease was unexpectedly busy");
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      delayed.release();
+    `;
+
+    expect(() => execFileSync(
+      process.execPath,
+      ["--input-type=module", "-e", source],
+      { stdio: "pipe", timeout: 10_000 },
+    )).not.toThrow();
+  });
+
   it("returns typed busy and frozen results without exposing a mutation window", async () => {
     const openclawDir = tempDir();
     const held = acquireSystemConfigSyncLeaseSync({ openclawDir });
@@ -69,6 +117,29 @@ describe("system config cross-container mutation lease", () => {
     lease?.release();
   });
 
+  it("does not reclaim a live lease while the writer blocks the main thread beyond staleAfterMs", async () => {
+    const openclawDir = tempDir();
+    const lockPath = systemConfigSyncLockPath(openclawDir);
+    const held = acquireSystemConfigSyncLeaseSync({
+      openclawDir,
+      heartbeatMs: 20,
+      staleAfterMs: 100,
+    });
+    expect(held).not.toBeNull();
+    const ownerPath = path.join(lockPath, held!.ownerToken);
+    const initialHeartbeat = fs.statSync(ownerPath).mtimeMs;
+    await vi.waitFor(() => expect(fs.statSync(ownerPath).mtimeMs).toBeGreaterThan(initialHeartbeat));
+
+    blockCurrentThread(250);
+
+    expect(acquireSystemConfigSyncLeaseSync({
+      openclawDir,
+      heartbeatMs: 20,
+      staleAfterMs: 100,
+    })).toBeNull();
+    held!.release();
+  });
+
   it("never removes a successor lease when an expired owner releases late", () => {
     const openclawDir = tempDir();
     const lockPath = systemConfigSyncLockPath(openclawDir);
@@ -100,19 +171,20 @@ describe("system config cross-container mutation lease", () => {
     })).toBeNull();
   });
 
-  it("cleans up owned state even when a heartbeat failure must be reported", () => {
-    vi.useFakeTimers();
+  it("cleans up owned state even when an independent heartbeat loses its owner file", async () => {
     const openclawDir = tempDir();
     const lockPath = systemConfigSyncLockPath(openclawDir);
     const lease = acquireSystemConfigSyncLeaseSync({
       openclawDir,
-      heartbeatMs: 100,
+      heartbeatMs: 20,
       staleAfterMs: 1_000,
     });
     expect(lease).not.toBeNull();
     const ownerPath = path.join(lockPath, lease!.ownerToken);
+    const initialHeartbeat = fs.statSync(ownerPath).mtimeMs;
+    await vi.waitFor(() => expect(fs.statSync(ownerPath).mtimeMs).toBeGreaterThan(initialHeartbeat));
     fs.unlinkSync(ownerPath);
-    vi.advanceTimersByTime(100);
+    blockCurrentThread(60);
     fs.writeFileSync(ownerPath, `${lease!.ownerToken}\n`);
 
     expect(() => lease!.release()).toThrow(/heartbeat failed/i);

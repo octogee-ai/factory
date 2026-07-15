@@ -22,6 +22,7 @@ import { reconcilePlatformInvariants } from "./system-config-invariants.js";
 import { readSystemConfigStatus } from "./system-config-status.js";
 
 type JsonObject = Record<string, unknown>;
+const GIT_SHA_RE = /^[0-9a-f]{7,64}$/;
 
 export interface SystemConfigAdoptionResult {
   applied: boolean;
@@ -214,7 +215,7 @@ function secretChange(
 function adoptionApprovalHash(
   contents: string,
   secrets: Record<string, string>,
-  acceptedCommit: string,
+  baseline: AdoptionBaseline,
   currentContents: string,
 ): string {
   const secretDigests = Object.fromEntries(
@@ -223,13 +224,60 @@ function adoptionApprovalHash(
       createHash("sha256").update(secrets[accountId]).digest("hex"),
     ]),
   );
-  const payload = JSON.stringify({
-    acceptedCommit,
+  const common = {
     currentConfigHash: createHash("sha256").update(currentContents).digest("hex"),
     candidate: contents,
     secretDigests,
+  };
+  const payload = JSON.stringify(baseline.mode === "accepted" ? {
+    acceptedCommit: baseline.acceptedCommit,
+    ...common,
+  } : {
+    unavailableHead: baseline.localHead,
+    repositoryStatusHash: createHash("sha256").update(baseline.repositoryStatus).digest("hex"),
+    ...common,
   });
   return `sha256:${createHash("sha256").update(payload).digest("hex")}`;
+}
+
+type AdoptionBaseline =
+  | { mode: "accepted"; acceptedCommit: string }
+  | { mode: "unavailable"; localHead: string; repositoryStatus: string };
+
+function adoptionBaseline(
+  options: SystemConfigAdoptionOptions,
+  targetPath: string,
+): AdoptionBaseline {
+  const repoDir = path.dirname(targetPath);
+  const keyPath = customerSshKeyPath(options.slug);
+  const localHead = gitExec(repoDir, "rev-parse HEAD", keyPath);
+  const status = readSystemConfigStatus(options.openclawDir);
+  if (
+    localHead !== null &&
+    GIT_SHA_RE.test(localHead) &&
+    status.acceptedCommit !== undefined &&
+    GIT_SHA_RE.test(status.acceptedCommit) &&
+    localHead === status.acceptedCommit
+  ) {
+    return { mode: "accepted", acceptedCommit: status.acceptedCommit };
+  }
+  if (
+    localHead !== null &&
+    GIT_SHA_RE.test(localHead) &&
+    status.acceptedCommit === undefined &&
+    status.state === "unavailable" &&
+    status.bootRecovery === "unavailable"
+  ) {
+    const repositoryStatus = gitExec(
+      repoDir,
+      "status --porcelain=v1 --untracked-files=all",
+      keyPath,
+    );
+    if (repositoryStatus !== null) {
+      return { mode: "unavailable", localHead, repositoryStatus };
+    }
+  }
+  throw new SystemConfigAdoptionApprovalError();
 }
 
 interface PreparedAdoption {
@@ -244,7 +292,14 @@ interface PreparedAdoption {
 function prepareAdoption(options: SystemConfigAdoptionOptions, env: NodeJS.ProcessEnv): PreparedAdoption {
   const targetPath = systemConfigPath(options.openclawDir);
   const currentContents = fs.readFileSync(targetPath, "utf8");
-  const current = parseObject(currentContents);
+  const baseline = adoptionBaseline(options, targetPath);
+  let current: JsonObject | null;
+  try {
+    current = parseObject(currentContents);
+  } catch (error) {
+    if (baseline.mode !== "unavailable") throw error;
+    current = null;
+  }
   const currentSecrets = readMattermostSecrets(options.openclawDir);
   const candidate = parseObject(fs.readFileSync(options.sourcePath, "utf8"));
   removeLegacyMacConfig(candidate, env);
@@ -252,15 +307,6 @@ function prepareAdoption(options: SystemConfigAdoptionOptions, env: NodeJS.Proce
   reconcilePlatformInvariants(candidate, env);
   const nextSecrets = desiredMattermostSecrets(candidate, extracted, currentSecrets);
   const contents = `${JSON.stringify(candidate, null, 2)}\n`;
-  const localHead = gitExec(
-    path.dirname(targetPath),
-    "rev-parse HEAD",
-    customerSshKeyPath(options.slug),
-  );
-  const acceptedCommit = readSystemConfigStatus(options.openclawDir).acceptedCommit;
-  if (!acceptedCommit || !/^[0-9a-f]{7,64}$/.test(acceptedCommit) || localHead !== acceptedCommit) {
-    throw new SystemConfigAdoptionApprovalError();
-  }
   validateAdoptionCandidate(
     candidate,
     nextSecrets,
@@ -272,8 +318,8 @@ function prepareAdoption(options: SystemConfigAdoptionOptions, env: NodeJS.Proce
     currentSecrets,
     nextSecrets,
     contents,
-    approvalHash: adoptionApprovalHash(contents, nextSecrets, acceptedCommit, currentContents),
-    changedPaths: changedJsonPaths(current, candidate),
+    approvalHash: adoptionApprovalHash(contents, nextSecrets, baseline, currentContents),
+    changedPaths: current === null ? ["root"] : changedJsonPaths(current, candidate),
   };
 }
 

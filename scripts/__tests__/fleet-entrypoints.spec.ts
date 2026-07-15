@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
 import {
   createFleetSystemConfigFlush,
   createSystemConfigMutationGatedRpc,
@@ -100,6 +101,30 @@ describe("fleet-controller entrypoint config", () => {
     }
   });
 
+  it("blocks ordinary runtime config.patch while the controller freeze marker exists", async () => {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-entrypoint-freeze-"));
+    const configPatch = vi.fn(async () => ({ ok: true as const, hash: "next" }));
+    const rpc = createSystemConfigMutationGatedRpc({
+      configGet: vi.fn(async () => ({ config: {}, hash: "current" })),
+      configApply: vi.fn(async () => ({ ok: true as const, hash: "next" })),
+      configPatch,
+      channelsStatus: vi.fn(async () => ({ channels: [] })),
+    } as never, openclawDir);
+    fs.writeFileSync(path.join(openclawDir, "system_config.freeze.json"), JSON.stringify({
+      migrationId: "mig-1",
+      directoryMode: 0o700,
+      configMode: 0o600,
+    }));
+
+    try {
+      await expect(rpc.configPatch({ agents: {} }, "current", { replacePaths: ["agents.list"] }))
+        .rejects.toThrow(/frozen by mig-1/i);
+      expect(configPatch).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(openclawDir, { recursive: true, force: true });
+    }
+  });
+
   it("serializes ordinary runtime config.apply against the roll writer lock", async () => {
     const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-entrypoint-lock-"));
     const configApply = vi.fn(async () => ({ ok: true as const, hash: "next" }));
@@ -113,6 +138,59 @@ describe("fleet-controller entrypoint config", () => {
     try {
       await expect(rpc.configApply({}, "current")).rejects.toThrow(/writer lock is busy/i);
       expect(configApply).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(openclawDir, { recursive: true, force: true });
+    }
+  });
+
+  it("serializes ordinary runtime config.patch against the roll writer lock", async () => {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-entrypoint-lock-"));
+    const configPatch = vi.fn(async () => ({ ok: true as const, hash: "next" }));
+    const rpc = createSystemConfigMutationGatedRpc({
+      configGet: vi.fn(async () => ({ config: {}, hash: "current" })),
+      configApply: vi.fn(async () => ({ ok: true as const, hash: "next" })),
+      configPatch,
+      channelsStatus: vi.fn(async () => ({ channels: [] })),
+    } as never, openclawDir);
+    fs.writeFileSync(path.join(openclawDir, "system_config.sync.lock"), `${process.pid}\n`);
+
+    try {
+      await expect(rpc.configPatch({ agents: {} }, "current", { replacePaths: ["agents.list"] }))
+        .rejects.toThrow(/writer lock is busy/i);
+      expect(configPatch).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(openclawDir, { recursive: true, force: true });
+    }
+  });
+
+  it("holds the writer lease through awaited config.patch and preserves its arguments and result", async () => {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-entrypoint-lock-"));
+    let resolvePatch: ((value: { ok: true; hash: string }) => void) | undefined;
+    const configPatch = vi.fn(() => new Promise<{ ok: true; hash: string }>((resolve) => {
+      resolvePatch = resolve;
+    }));
+    const rpc = createSystemConfigMutationGatedRpc({
+      configGet: vi.fn(async () => ({ config: {}, hash: "current" })),
+      configApply: vi.fn(async () => ({ ok: true as const, hash: "next" })),
+      configPatch,
+      channelsStatus: vi.fn(async () => ({ channels: [] })),
+    } as never, openclawDir);
+    const patch = { agents: { list: [] } };
+    const opts = { replacePaths: ["agents.list"] };
+
+    try {
+      const pending = rpc.configPatch(patch, "current", opts);
+      await vi.waitFor(() => expect(configPatch).toHaveBeenCalled());
+      await expect(acquireSystemConfigMutationLease({ openclawDir })).resolves.toEqual({
+        ok: false,
+        code: "writer-lock-busy",
+      });
+      resolvePatch?.({ ok: true, hash: "next" });
+      await expect(pending).resolves.toEqual({ ok: true, hash: "next" });
+      expect(configPatch).toHaveBeenCalledWith(patch, "current", opts);
+      const after = await acquireSystemConfigMutationLease({ openclawDir });
+      expect(after.ok).toBe(true);
+      if (after.ok) await after.lease.release();
     } finally {
       fs.rmSync(openclawDir, { recursive: true, force: true });
     }

@@ -187,12 +187,15 @@ runningCount: number;
 }
 
 export interface ConfigControlRequestBody extends MigrationRequestBody {
+  action: "freeze" | "restore-proof" | "unfreeze";
   issuedAt: number;
   expiresAt: number;
   requestId: string;
 }
 
-export interface ConfigFreezeRequestBody extends ConfigControlRequestBody {}
+export interface ConfigFreezeRequestBody extends ConfigControlRequestBody {
+  action: "freeze";
+}
 
 export interface ConfigFreezeResponse extends MigrationRequestBody {
   frozen: true;
@@ -201,6 +204,7 @@ export interface ConfigFreezeResponse extends MigrationRequestBody {
 }
 
 export interface ConfigRestoreProofRequestBody extends ConfigControlRequestBody {
+  action: "restore-proof";
   checkpointCommit: string;
 }
 
@@ -215,7 +219,9 @@ export interface ConfigRestoreProofResponse extends MigrationRequestBody {
   runtimeConfigHash: string;
 }
 
-export interface ConfigUnfreezeRequestBody extends ConfigControlRequestBody {}
+export interface ConfigUnfreezeRequestBody extends ConfigControlRequestBody {
+  action: "unfreeze";
+}
 
 export interface ConfigUnfreezeResponse extends MigrationRequestBody {
   unfrozen: boolean;

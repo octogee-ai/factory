@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { spawn } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -72,6 +74,58 @@ describe("Mattermost account SecretRefs", () => {
       "bob-coach": "pat-b",
     });
   });
+
+  it("serializes updates from separate processes without losing sibling accounts", async () => {
+    const openclawDir = tempOpenClawDir();
+    const barrierDir = path.join(openclawDir, "barrier");
+    fs.mkdirSync(barrierDir);
+    const moduleUrl = pathToFileURL(path.resolve("lib/mattermost-account-secrets.ts")).href;
+    const source = `
+      import fs from "node:fs";
+      import path from "node:path";
+      import { updateMattermostAccountSecrets } from ${JSON.stringify(moduleUrl)};
+      const [openclawDir, barrierDir, worker] = process.argv.slice(1);
+      fs.writeFileSync(path.join(barrierDir, worker + ".ready"), "ready\\n");
+      while (!fs.existsSync(path.join(barrierDir, "start"))) {
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+      const set = Object.fromEntries(Array.from(
+        { length: 512 },
+        (_, index) => [worker + "-" + index, worker.repeat(8192)],
+      ));
+      await updateMattermostAccountSecrets(openclawDir, { set });
+    `;
+    const run = (worker: string) => {
+      const child = spawn(
+        process.execPath,
+        ["--import", "tsx", "--input-type=module", "-e", source, openclawDir, barrierDir, worker],
+        { cwd: path.resolve("."), stdio: ["ignore", "pipe", "pipe"] },
+      );
+      return new Promise<void>((resolve, reject) => {
+        let stderr = "";
+        child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+        child.once("error", reject);
+        child.once("exit", (code) => {
+          if (code === 0) resolve();
+          else reject(new Error(`secret worker ${worker} exited ${code}: ${stderr}`));
+        });
+      });
+    };
+    const alice = run("alice");
+    const bob = run("bob");
+    await expect.poll(() => fs.existsSync(path.join(barrierDir, "alice.ready"))).toBe(true);
+    await expect.poll(() => fs.existsSync(path.join(barrierDir, "bob.ready"))).toBe(true);
+    fs.writeFileSync(path.join(barrierDir, "start"), "start\n");
+
+    await Promise.all([alice, bob]);
+
+    const secrets = JSON.parse(
+      fs.readFileSync(mattermostAccountSecretsPath(openclawDir), "utf8"),
+    ) as Record<string, string>;
+    expect(Object.keys(secrets)).toHaveLength(1_024);
+    expect(secrets["alice-0"]).toBe("alice".repeat(8192));
+    expect(secrets["bob-511"]).toBe("bob".repeat(8192));
+  }, 30_000);
 
   it("removes retired accounts while preserving siblings", async () => {
     const openclawDir = tempOpenClawDir();

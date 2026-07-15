@@ -98,8 +98,11 @@ export function createSystemConfigMutationGatedRpc(
 ): GatewayRpcClient {
   return new Proxy(rpc, {
     get(target, property, receiver) {
-      if (property !== "configApply") return Reflect.get(target, property, receiver) as unknown;
-      return async (config: object, baseHash: string) => {
+      if (property !== "configApply" && property !== "configPatch") {
+        return Reflect.get(target, property, receiver) as unknown;
+      }
+      const mutation = Reflect.get(target, property, target) as (...args: unknown[]) => Promise<unknown>;
+      return async (...args: unknown[]) => {
         const acquired = await acquireSystemConfigMutationLease({ openclawDir });
         if (!acquired.ok) {
           if (acquired.code === "config-frozen") {
@@ -109,7 +112,7 @@ export function createSystemConfigMutationGatedRpc(
         }
         try {
           assertSystemConfigMutationAllowed({ openclawDir });
-          return await target.configApply(config, baseHash);
+          return await Reflect.apply(mutation, target, args);
         } finally {
           await acquired.lease.release();
         }

@@ -109,11 +109,19 @@ const configControlReplayByDeps = new WeakMap<MigrationHandlerDeps, Map<string, 
 
 function acceptConfigControlEnvelope(
   body: ConfigFreezeRequestBody | ConfigRestoreProofRequestBody | ConfigUnfreezeRequestBody,
+  expectedAction: ConfigFreezeRequestBody["action"] |
+    ConfigRestoreProofRequestBody["action"] |
+    ConfigUnfreezeRequestBody["action"],
   deps: MigrationHandlerDeps,
   res: Response,
   log: (msg: string) => void,
 ): boolean {
   const now = (deps.now ?? Date.now)();
+  if (body.action !== expectedAction) {
+    log(`[migration-http] rejected config control action migrationId=${body.migrationId}`);
+    res.status(401).json({ error: "invalid config control action" });
+    return false;
+  }
   if (
     !Number.isSafeInteger(body.issuedAt) ||
     !Number.isSafeInteger(body.expiresAt) ||
@@ -303,7 +311,7 @@ export function createConfigFreezeHandler(deps: MigrationHandlerDeps): RequestHa
   return async (req, res) => {
     const body = parseAndVerifyJsonBody<ConfigFreezeRequestBody>(req, res, deps.publicKey, log);
     if (!body) return;
-    if (!acceptConfigControlEnvelope(body, deps, res, log)) return;
+    if (!acceptConfigControlEnvelope(body, "freeze", deps, res, log)) return;
     if (!deps.freezeSystemConfig) {
       res.status(501).json({ error: "config freeze not configured" });
       return;
@@ -333,7 +341,7 @@ export function createConfigRestoreProofHandler(deps: MigrationHandlerDeps): Req
   return async (req, res) => {
     const body = parseAndVerifyJsonBody<ConfigRestoreProofRequestBody>(req, res, deps.publicKey, log);
     if (!body) return;
-    if (!acceptConfigControlEnvelope(body, deps, res, log)) return;
+    if (!acceptConfigControlEnvelope(body, "restore-proof", deps, res, log)) return;
     if (!/^[0-9a-f]{40}$/.test(body.checkpointCommit)) {
       res.status(400).json({ error: "invalid checkpointCommit" });
       return;
@@ -367,7 +375,7 @@ export function createConfigUnfreezeHandler(deps: MigrationHandlerDeps): Request
   return async (req, res) => {
     const body = parseAndVerifyJsonBody<ConfigUnfreezeRequestBody>(req, res, deps.publicKey, log);
     if (!body) return;
-    if (!acceptConfigControlEnvelope(body, deps, res, log)) return;
+    if (!acceptConfigControlEnvelope(body, "unfreeze", deps, res, log)) return;
     if (!deps.unfreezeSystemConfig) {
       res.status(501).json({ error: "config unfreeze not configured" });
       return;

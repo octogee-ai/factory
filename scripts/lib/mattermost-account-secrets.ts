@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { acquireSystemConfigSyncLeaseSync } from "@octogee/core/system-config-mutation-lease";
 
 export const MATTERMOST_ACCOUNT_SECRET_PROVIDER = "octogee-mattermost";
 
@@ -10,6 +11,9 @@ export interface MattermostAccountSecretRef {
 }
 
 const updates = new Map<string, Promise<void>>();
+const MATTERMOST_ACCOUNT_SECRETS_LOCK = ".mattermost-accounts.lock";
+const MATTERMOST_ACCOUNT_SECRETS_LOCK_TIMEOUT_MS = 30_000;
+const MATTERMOST_ACCOUNT_SECRETS_LOCK_RETRY_MS = 10;
 let tempSequence = 0;
 
 function jsonPointerSegment(value: string): string {
@@ -77,6 +81,43 @@ async function writeSecrets(filePath: string, secrets: Record<string, string>): 
   await fs.chmod(filePath, 0o600);
 }
 
+async function acquireMattermostAccountSecretsLease(filePath: string) {
+  const secretsDir = path.dirname(filePath);
+  const deadline = Date.now() + MATTERMOST_ACCOUNT_SECRETS_LOCK_TIMEOUT_MS;
+  while (true) {
+    const lease = acquireSystemConfigSyncLeaseSync({
+      openclawDir: secretsDir,
+      lockName: MATTERMOST_ACCOUNT_SECRETS_LOCK,
+    });
+    if (lease) return lease;
+    if (Date.now() >= deadline) {
+      throw new Error(`timed out acquiring Mattermost account secrets lock for ${filePath}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, MATTERMOST_ACCOUNT_SECRETS_LOCK_RETRY_MS));
+  }
+}
+
+async function withMattermostAccountSecretsLease(
+  filePath: string,
+  action: () => Promise<void>,
+): Promise<void> {
+  const lease = await acquireMattermostAccountSecretsLease(filePath);
+  try {
+    await action();
+  } catch (error) {
+    try {
+      lease.release();
+    } catch (releaseError) {
+      throw new AggregateError(
+        [error, releaseError],
+        `Mattermost account secrets update and lock release failed for ${filePath}`,
+      );
+    }
+    throw error;
+  }
+  lease.release();
+}
+
 export async function updateMattermostAccountSecrets(
   openclawDir: string,
   change: {
@@ -87,25 +128,28 @@ export async function updateMattermostAccountSecrets(
 ): Promise<void> {
   const filePath = mattermostAccountSecretsPath(openclawDir);
   const prior = updates.get(filePath) ?? Promise.resolve();
-  const current = prior.catch(() => undefined).then(async () => {
-    const secrets = await readSecrets(filePath);
-    for (const [accountId, token] of Object.entries(change.set ?? {})) {
-      assertAccountId(accountId);
-      if (token.length === 0) throw new Error(`Mattermost account ${accountId} has an empty token`);
-      secrets[accountId] = token;
-    }
-    for (const accountId of change.remove ?? []) {
-      assertAccountId(accountId);
-      delete secrets[accountId];
-    }
-    for (const prefix of change.removePrefixes ?? []) {
-      if (prefix.length === 0) throw new Error("Mattermost account removal prefix must be non-empty");
-      for (const accountId of Object.keys(secrets)) {
-        if (accountId.startsWith(prefix)) delete secrets[accountId];
+  const current = prior.catch(() => undefined).then(() => withMattermostAccountSecretsLease(
+    filePath,
+    async () => {
+      const secrets = await readSecrets(filePath);
+      for (const [accountId, token] of Object.entries(change.set ?? {})) {
+        assertAccountId(accountId);
+        if (token.length === 0) throw new Error(`Mattermost account ${accountId} has an empty token`);
+        secrets[accountId] = token;
       }
-    }
-    await writeSecrets(filePath, secrets);
-  });
+      for (const accountId of change.remove ?? []) {
+        assertAccountId(accountId);
+        delete secrets[accountId];
+      }
+      for (const prefix of change.removePrefixes ?? []) {
+        if (prefix.length === 0) throw new Error("Mattermost account removal prefix must be non-empty");
+        for (const accountId of Object.keys(secrets)) {
+          if (accountId.startsWith(prefix)) delete secrets[accountId];
+        }
+      }
+      await writeSecrets(filePath, secrets);
+    },
+  ));
   updates.set(filePath, current);
   try {
     await current;

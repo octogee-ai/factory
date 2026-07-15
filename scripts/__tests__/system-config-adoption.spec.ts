@@ -54,6 +54,21 @@ function fixture() {
   return { openclawDir, targetPath, sourcePath };
 }
 
+function markRejectedHeadUnavailable(h: ReturnType<typeof fixture>, contents = "not-json\n"): string {
+  fs.writeFileSync(h.targetPath, contents);
+  execFileSync("git", ["-C", path.dirname(h.targetPath), "add", "openclaw.json"]);
+  execFileSync("git", ["-C", path.dirname(h.targetPath), "commit", "-q", "-m", "rejected"]);
+  fs.rmSync(path.join(h.openclawDir, "system_config.status.json"));
+  updateSystemConfigStatus(h.openclawDir, {
+    state: "unavailable",
+    bootRecovery: "unavailable",
+    lastErrorCode: "no-valid-ancestor",
+  });
+  return execFileSync("git", ["-C", path.dirname(h.targetPath), "rev-parse", "HEAD"], {
+    encoding: "utf8",
+  }).trim();
+}
+
 afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -182,6 +197,113 @@ describe("system config adoption", () => {
         },
       },
     });
+  });
+
+  it("adopts a fully validated explicit source from an unavailable rejected head", async () => {
+    const h = fixture();
+    const rejectedHead = markRejectedHeadUnavailable(h);
+    const validateConfig = vi.fn();
+    const checkpoint = vi.fn(() => ({
+      committed: true,
+      pushed: true,
+      acceptedCommit: "b".repeat(40),
+    }));
+    const preview = await adoptSystemConfig({
+      slug: "ceckert",
+      sourcePath: h.sourcePath,
+      openclawDir: h.openclawDir,
+      env,
+      validateConfig,
+    });
+
+    const result = await adoptSystemConfig({
+      slug: "ceckert",
+      sourcePath: h.sourcePath,
+      openclawDir: h.openclawDir,
+      env,
+      approveHash: preview.approvalHash,
+      validateConfig,
+      checkpoint,
+    });
+
+    expect(result).toMatchObject({ applied: true, acceptedCommit: "b".repeat(40) });
+    expect(preview.changedPaths).toEqual(["root"]);
+    expect(validateConfig).toHaveBeenCalledTimes(3);
+    expect(checkpoint).toHaveBeenCalledWith("ceckert", expect.objectContaining({
+      source: "boot-migration",
+      lockHeld: true,
+    }));
+    expect(execFileSync("git", ["-C", path.dirname(h.targetPath), "rev-parse", "HEAD"], {
+      encoding: "utf8",
+    }).trim()).toBe(rejectedHead);
+  });
+
+  it("rejects unavailable adoption after an intervening durable HEAD or worktree status change", async () => {
+    const h = fixture();
+    markRejectedHeadUnavailable(h, JSON.stringify({ rejected: true }));
+    const preview = await adoptSystemConfig({
+      slug: "ceckert",
+      sourcePath: h.sourcePath,
+      openclawDir: h.openclawDir,
+      env,
+      validateConfig: vi.fn(),
+    });
+    fs.writeFileSync(path.join(path.dirname(h.targetPath), "intervening"), "changed\n");
+
+    await expect(adoptSystemConfig({
+      slug: "ceckert",
+      sourcePath: h.sourcePath,
+      openclawDir: h.openclawDir,
+      env,
+      approveHash: preview.approvalHash,
+      validateConfig: vi.fn(),
+      writeSecrets: vi.fn(),
+      checkpoint: vi.fn(),
+    })).rejects.toMatchObject({ code: "adoption-approval-mismatch" });
+
+    fs.rmSync(path.join(path.dirname(h.targetPath), "intervening"));
+    execFileSync("git", ["-C", path.dirname(h.targetPath), "commit", "-q", "--allow-empty", "-m", "intervening"]);
+    await expect(adoptSystemConfig({
+      slug: "ceckert",
+      sourcePath: h.sourcePath,
+      openclawDir: h.openclawDir,
+      env,
+      approveHash: preview.approvalHash,
+      validateConfig: vi.fn(),
+      writeSecrets: vi.fn(),
+      checkpoint: vi.fn(),
+    })).rejects.toMatchObject({ code: "adoption-approval-mismatch" });
+  });
+
+  it("restores the rejected unavailable bytes when adoption checkpointing fails", async () => {
+    const h = fixture();
+    markRejectedHeadUnavailable(h);
+    const before = fs.readFileSync(h.targetPath, "utf8");
+    const preview = await adoptSystemConfig({
+      slug: "ceckert",
+      sourcePath: h.sourcePath,
+      openclawDir: h.openclawDir,
+      env,
+      validateConfig: vi.fn(),
+    });
+
+    await expect(adoptSystemConfig({
+      slug: "ceckert",
+      sourcePath: h.sourcePath,
+      openclawDir: h.openclawDir,
+      env,
+      approveHash: preview.approvalHash,
+      validateConfig: vi.fn(),
+      checkpoint: vi.fn(() => {
+        throw new SystemConfigCheckpointError({
+          committed: false,
+          pushed: false,
+          rejected: true,
+          errorCode: "validation-failed",
+        });
+      }),
+    })).rejects.toMatchObject({ localState: "restored" });
+    expect(fs.readFileSync(h.targetPath, "utf8")).toBe(before);
   });
 
   it("binds approval to secret values without disclosing them", async () => {

@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { generateIdentity, type DeviceIdentity } from "@octogee/shared/types/device-identity";
+import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
 
 import { attachUpstreamRpcClient } from "../chat-proxy/openclaw/bridge-upstream-rpc.js";
 import { fetchGatewayAuth, persistGatewayDeviceToken } from "../chat-proxy/openclaw/gateway-token.js";
@@ -73,6 +74,7 @@ export interface AutomationsRouterDeps {
   resolveUserGateway(uid: string): Promise<ResolvedGateway | null>;
   resolveWorkspaceOwnerUid(slug: string): Promise<string | null>;
   localGatewayId(): string | null;
+  openclawDir(): string;
   invoke(method: string, params: Record<string, unknown>): Promise<unknown>;
 }
 
@@ -448,7 +450,18 @@ async function heartbeatUpdate(
   const heartbeat = sanitizeHeartbeat(body.heartbeat);
   if (!baseHash || !heartbeat) return brokerError(400, "invalid heartbeat update");
   const patch = { agents: { list: [{ id: agentId, heartbeat }] } };
-  return brokerResult(await deps.invoke("config.patch", { raw: JSON.stringify(patch), baseHash }));
+  const acquired = await acquireSystemConfigMutationLease({ openclawDir: deps.openclawDir() });
+  if (!acquired.ok) {
+    if (acquired.code === "config-frozen") {
+      throw new Error(`system config is frozen by ${acquired.freezeOwner}`);
+    }
+    throw new Error("system config writer lock is busy");
+  }
+  try {
+    return brokerResult(await deps.invoke("config.patch", { raw: JSON.stringify(patch), baseHash }));
+  } finally {
+    await acquired.lease.release();
+  }
 }
 
 async function automationResponse(
@@ -523,6 +536,7 @@ const automationsRouter = createAutomationsRouter({
   resolveUserGateway,
   resolveWorkspaceOwnerUid: resolveWorkspaceUid,
   localGatewayId: () => process.env.GATEWAY_ID ?? null,
+  openclawDir: () => process.env.OPENCLAW_DIR ?? "/home/node/.openclaw",
   invoke: invokeLocalOpenClaw,
 });
 

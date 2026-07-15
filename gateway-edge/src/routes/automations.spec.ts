@@ -1,10 +1,22 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import express from "express";
 import request from "supertest";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
 
 import { createAutomationsRouter } from "./automations.js";
 
+const dirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 function appForTest(overrides: Partial<Parameters<typeof createAutomationsRouter>[0]> = {}) {
+  const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "automations-route-"));
+  dirs.push(openclawDir);
   const defaultInvoke = vi.fn(async (method: string) => {
     if (method === "config.get") {
       return {
@@ -34,11 +46,12 @@ function appForTest(overrides: Partial<Parameters<typeof createAutomationsRouter
       resolveUserGateway: async () => ({ slug: "alice", gatewayId: "gw-alice" }),
       resolveWorkspaceOwnerUid: async () => "builder-uid",
       localGatewayId: () => "gw-alice",
+      openclawDir: () => openclawDir,
       invoke,
       ...overrides,
     }),
   );
-  return { app, invoke };
+  return { app, invoke, openclawDir };
 }
 
 describe("automations locality broker", () => {
@@ -292,6 +305,71 @@ describe("automations locality broker", () => {
       }),
       baseHash: "before-hash",
     });
+  });
+
+  it("rejects heartbeat updates while the durable config writer lock is busy", async () => {
+    const { app, invoke, openclawDir } = appForTest();
+    const held = await acquireSystemConfigMutationLease({ openclawDir });
+    expect(held.ok).toBe(true);
+
+    const response = await request(app)
+      .post("/api/g/gw-alice/automations/rpc")
+      .send({
+        method: "heartbeat.update",
+        baseHash: "before-hash",
+        heartbeat: { every: "60m" },
+      });
+
+    expect(response.status).toBe(500);
+    expect(invoke).not.toHaveBeenCalled();
+    if (held.ok) await held.lease.release();
+  });
+
+  it("rejects heartbeat updates while durable config is frozen", async () => {
+    const { app, invoke, openclawDir } = appForTest();
+    fs.writeFileSync(path.join(openclawDir, "system_config.freeze.json"), JSON.stringify({
+      migrationId: "mig-1",
+      directoryMode: 0o700,
+      configMode: 0o600,
+    }));
+
+    const response = await request(app)
+      .post("/api/g/gw-alice/automations/rpc")
+      .send({
+        method: "heartbeat.update",
+        baseHash: "before-hash",
+        heartbeat: { every: "60m" },
+      });
+
+    expect(response.status).toBe(500);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("holds the durable writer lease through the awaited heartbeat patch", async () => {
+    let resolvePatch: ((value: { ok: true; hash: string }) => void) | undefined;
+    const invoke = vi.fn(() => new Promise<{ ok: true; hash: string }>((resolve) => {
+      resolvePatch = resolve;
+    }));
+    const { app, openclawDir } = appForTest({ invoke });
+
+    const pending = request(app)
+      .post("/api/g/gw-alice/automations/rpc")
+      .send({
+        method: "heartbeat.update",
+        baseHash: "before-hash",
+        heartbeat: { every: "60m" },
+      })
+      .then((response) => response);
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalled());
+    await expect(acquireSystemConfigMutationLease({ openclawDir })).resolves.toEqual({
+      ok: false,
+      code: "writer-lock-busy",
+    });
+    resolvePatch?.({ ok: true, hash: "next-hash" });
+    expect((await pending).status).toBe(200);
+    const after = await acquireSystemConfigMutationLease({ openclawDir });
+    expect(after.ok).toBe(true);
+    if (after.ok) await after.lease.release();
   });
 
   it("rejects heartbeat fields outside the narrow Automation editor contract", async () => {

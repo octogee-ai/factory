@@ -71,9 +71,13 @@ const TARGET_POD_IP = ["10", "1", "0", "20"].join(".");
 const CONTROL_NOW = Date.parse("2026-07-15T00:00:00.000Z");
 let controlRequestSequence = 0;
 
-function configControlBody<T extends { migrationId: string; slug: string }>(body: T) {
+function configControlBody<T extends { migrationId: string; slug: string }>(
+  body: T,
+  action: "freeze" | "restore-proof" | "unfreeze" = "freeze",
+) {
   return {
     ...body,
+    action,
     issuedAt: CONTROL_NOW - 1_000,
     expiresAt: CONTROL_NOW + 30_000,
     requestId: `${body.migrationId}-request-${++controlRequestSequence}`,
@@ -534,7 +538,7 @@ describe("system config roll handlers", () => {
       migrationId: "mig-1",
       slug: "chris",
       checkpointCommit: "a".repeat(40),
-    });
+    }, "restore-proof");
     const rawBody = JSON.stringify(body);
     const req = mkRequest(body, {
       signature: signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody),
@@ -563,7 +567,7 @@ describe("system config roll handlers", () => {
 
   it("unfreezes the source on abort and fails closed when roll control is absent", async () => {
     const unfreezeSystemConfig = vi.fn(() => ({ unfrozen: true }));
-    const body = configControlBody({ migrationId: "mig-1", slug: "chris" });
+    const body = configControlBody({ migrationId: "mig-1", slug: "chris" }, "unfreeze");
     const rawBody = JSON.stringify(body);
     const request = () => mkRequest(body, {
       signature: signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody),
@@ -579,7 +583,10 @@ describe("system config roll handlers", () => {
 
     const absent = createConfigFreezeHandler(mkDeps());
     const absentResponse = mkResponse();
-    await absent(request(), absentResponse.res, vi.fn());
+    const freezeBody = configControlBody({ migrationId: "mig-absent", slug: "chris" });
+    await absent(mkRequest(freezeBody, {
+      signature: signFleetRequest(PRIVATE_KEY, freezeBody.migrationId, JSON.stringify(freezeBody)),
+    }), absentResponse.res, vi.fn());
     expect(absentResponse.getStatus()).toBe(501);
   });
 
@@ -594,6 +601,7 @@ describe("system config roll handlers", () => {
       {
         migrationId: "mig-expired",
         slug: "chris",
+        action: "freeze",
         issuedAt: CONTROL_NOW - 120_000,
         expiresAt: CONTROL_NOW - 60_000,
         requestId: "expired-request",
@@ -631,6 +639,22 @@ describe("system config roll handlers", () => {
     await handler(request(), replay.res, vi.fn());
     expect(replay.getStatus()).toBe(409);
     expect(freezeSystemConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a valid signed config-control request substituted across endpoints", async () => {
+    const unfreezeSystemConfig = vi.fn(() => ({ unfrozen: true }));
+    const handler = createConfigUnfreezeHandler(mkDeps({ unfreezeSystemConfig }));
+    const freezeBody = configControlBody({ migrationId: "mig-substitute", slug: "chris" }, "freeze");
+    const rawBody = JSON.stringify(freezeBody);
+    const response = mkResponse();
+
+    await handler(mkRequest(freezeBody, {
+      signature: signFleetRequest(PRIVATE_KEY, freezeBody.migrationId, rawBody),
+    }), response.res, vi.fn());
+
+    expect(response.getStatus()).toBe(401);
+    expect(response.getBody()).toEqual({ error: "invalid config control action" });
+    expect(unfreezeSystemConfig).not.toHaveBeenCalled();
   });
 });
 

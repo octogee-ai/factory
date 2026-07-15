@@ -60,6 +60,7 @@ describe("system config sync hardening", () => {
       setRepoSshCommand: vi.fn(),
       customerSshKeyPath: () => "/tmp/key",
       validateConfig: vi.fn(),
+      readAcceptedConfig: () => Buffer.from(acceptedBytes),
     });
 
     expect(result).toMatchObject({

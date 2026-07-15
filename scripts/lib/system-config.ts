@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -98,6 +99,7 @@ export interface SystemConfigSyncOptions {
   source?: SystemConfigCommitSource;
   lockHeld?: boolean;
   allowFrozen?: boolean;
+  readAcceptedConfig?: (repoDir: string) => Buffer | null;
 }
 
 interface SystemConfigAuditOptions {
@@ -179,7 +181,7 @@ function remoteUrl(slug: string): string {
   return `git@${GIT_SSH_HOST}:${workspaceGiteaOrg(slug)}/${systemConfigRepoName()}.git`;
 }
 
-function atomicWrite(filePath: string, contents: string, mode = 0o600): void {
+function atomicWrite(filePath: string, contents: string | Buffer, mode = 0o600): void {
   const tmp = `${filePath}.tmp`;
   const fd = fs.openSync(
     tmp,
@@ -192,6 +194,18 @@ function atomicWrite(filePath: string, contents: string, mode = 0o600): void {
     fs.closeSync(fd);
   }
   fs.renameSync(tmp, filePath);
+}
+
+function readAcceptedConfig(repoDir: string): Buffer | null {
+  try {
+    return execFileSync("git", ["show", "HEAD:openclaw.json"], {
+      cwd: repoDir,
+      encoding: null,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch {
+    return null;
+  }
 }
 
 function asRecord(value: unknown): UnknownRecord | null {
@@ -515,6 +529,19 @@ async function reconcileTrackedOpenClawConfig(
   return true;
 }
 
+export async function reconcileSystemConfigSchema(
+  openclawDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  const migrated = await reconcileTrackedOpenClawConfig(
+    systemConfigPath(openclawDir),
+    openclawDir,
+    env,
+  );
+  if (migrated) removeLegacyMacState(openclawDir, env);
+  return migrated;
+}
+
 export async function restoreSystemConfigForSlug(
   slug: string,
   opts: SystemConfigRestoreOptions = {},
@@ -536,8 +563,7 @@ export async function restoreSystemConfigForSlug(
   const seeded = seedSystemConfigIfMissing(slug, repoDir, templatePath, log);
   const configPath = systemConfigPath(openclawDir);
   const env = opts.env ?? process.env;
-  const migrated = await reconcileTrackedOpenClawConfig(configPath, openclawDir, env);
-  if (migrated) removeLegacyMacState(openclawDir, env);
+  await reconcileSystemConfigSchema(openclawDir, env);
   log(`[system_config] active openclaw.json is ${slug}/${systemConfigRepoName()}/openclaw.json`);
   return { seeded, restored: true, configPath };
 }
@@ -750,7 +776,7 @@ function syncSystemConfigUnlocked(
         processedFingerprint: candidateFingerprint,
       };
     }
-    const accepted = execGit(repoDir, "show HEAD:openclaw.json", keyPath);
+    const accepted = (opts.readAcceptedConfig ?? readAcceptedConfig)(repoDir);
     if (accepted === null) {
       if (opts.durablePolicy) {
         recordSyncError(openclawDir, "validation-restore-failed", now, { rejected: true });
