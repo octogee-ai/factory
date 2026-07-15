@@ -13,6 +13,14 @@ const fleetController = readFileSync(
   path.join(repoRoot, "scripts/entrypoints/fleet-controller.ts"),
   "utf8",
 );
+const repairContainerRestart = readFileSync(
+  path.join(repoRoot, "scripts/lib/repair-container-restart.ts"),
+  "utf8",
+);
+const gatewayDeployment = readFileSync(
+  path.join(repoRoot, "helm/octogee-gateway/templates/deployment.yaml"),
+  "utf8",
+);
 
 describe("infra/gateway/entrypoint.sh — no permanent platform persona", () => {
   it("does not bootstrap a bot, PAT, operator agent id, or ops workspace", () => {
@@ -274,6 +282,15 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
     expect(watcherIdx).toBeLessThan(acceptedIdx);
     expect(acceptedIdx).toBeLessThan(openclawIdx);
     expect(openclawIdx).toBeLessThan(endIdx);
+  });
+
+  it("turns repair-shell teardown into a restart of the full gateway container", () => {
+    expect(repairContainerRestart).toMatch(/process\.kill\(1,\s*signal\)/);
+    const shutdown = entrypoint.slice(entrypoint.indexOf("shutdown() {"), entrypoint.indexOf("trap shutdown"));
+    expect(shutdown).toMatch(/kill -TERM 0/);
+    expect(shutdown).toMatch(/exit 0/);
+    expect(gatewayDeployment).toMatch(/kind:\s*Deployment/);
+    expect(gatewayDeployment).not.toMatch(/restartPolicy:\s*(?:Never|OnFailure)/);
   });
 });
 
