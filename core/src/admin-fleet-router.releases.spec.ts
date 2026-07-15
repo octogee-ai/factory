@@ -680,6 +680,34 @@ describe("admin target resolution", () => {
 });
 
 describe("POST /gateways/:id/releases — cut release n+1 from prev + patch", () => {
+  it.each(["source", "target"])(
+    "refuses to mutate a %s gateway root while an ordinary customer migration owns it",
+    async (gatewayRole) => {
+      const seed = seedNewSchemaGateway("beta", sharedPayload());
+      seed[`${GLM_OPERATIONS_COLLECTION}/migration-live`] = {
+        kind: "migrate-customer",
+        status: "running",
+        input: { fromGatewayId: "source", toGatewayId: "target" },
+      };
+      const gatewayId = gatewayRole;
+      Object.assign(seed, seedNewSchemaGateway(gatewayId, sharedPayload()));
+      const { app, store } = mkApp(seed);
+
+      const res = await request(app)
+        .post(`/gateways/${gatewayId}/releases`)
+        .send({ imageTag: "deadbee" })
+        .expect(409);
+
+      expect(res.body.error).toMatch(/customer migration.*in flight/i);
+      expect(store.get(`gateways/${gatewayId}`)).toMatchObject({
+        latestRelease: 1,
+        desiredRelease: 1,
+      });
+      expect(store.get(`gateways/${gatewayId}/${GATEWAY_RELEASES_SUBCOLLECTION}/2`)).toBeUndefined();
+      expect(opsIn(store, "rollout")).toHaveLength(0);
+    },
+  );
+
   it("cuts release 2 on an image change, bumps desiredRelease, and queues a rollout op (legacy converge)", async () => {
     const { app, store } = mkApp(seedNewSchemaGateway("beta", sharedPayload()));
 

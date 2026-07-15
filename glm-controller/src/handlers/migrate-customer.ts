@@ -46,6 +46,8 @@ export interface SourceRevision {
   revisionId: string;
   release: number;
   epoch?: number;
+  assignmentMode?: "assigned" | "unassigned-live";
+  rootUpdatedAt?: number;
 }
 
 export interface MigrateCustomerDeps {
@@ -67,6 +69,12 @@ export interface MigrateCustomerDeps {
     gatewayId: string;
     uid: string;
     state: "serving" | "quiescing" | "migrating";
+    slug?: string;
+    revisionId?: string;
+    release?: number;
+    epoch?: number;
+    updatedByOperationId?: string;
+    createIfMissing?: boolean;
   }) => Promise<void>;
 
   assertRollFence: (fence: MigrationRollFence) => Promise<void>;
@@ -195,6 +203,10 @@ async function runOrdinaryMigrationV2(input: {
       sourceRevisionId: targets.fromRevisionId,
       sourceRelease: targets.fromRelease,
       sourceEpoch: targets.fromEpoch,
+      sourceAssignmentMode: targets.sourceAssignmentMode,
+      ...(targets.sourceRootUpdatedAt !== undefined
+        ? { sourceRootUpdatedAt: targets.sourceRootUpdatedAt }
+        : {}),
       targetGatewayId: targets.toGatewayId,
       targetRevisionId: targets.toRevisionId,
       targetRelease: targets.toRelease,
@@ -205,6 +217,37 @@ async function runOrdinaryMigrationV2(input: {
     };
     await persistV2(ctx, state);
   }
+  if (state.phase === "initialized") {
+    const [source, target] = await Promise.all([
+      deps.resolveFromRevision(state.uid, state.sourceGatewayId),
+      deps.resolvePlacement(state.targetGatewayId),
+    ]);
+    const sourceIsExact = source !== null &&
+      source.revisionId === state.sourceRevisionId &&
+      source.release === state.sourceRelease &&
+      (source.epoch ?? 0) === state.sourceEpoch &&
+      (source.assignmentMode ?? "assigned") === state.sourceAssignmentMode &&
+      source.rootUpdatedAt === state.sourceRootUpdatedAt;
+    if (!sourceIsExact) {
+      return {
+        steps: [],
+        success: false,
+        error: "customer migration V2 source placement changed before freeze",
+        rolledBack: false,
+      };
+    }
+    const targetIsExact = target?.ok === true &&
+      target.revisionId === state.targetRevisionId &&
+      target.release === state.targetRelease;
+    if (!targetIsExact) {
+      return {
+        steps: [],
+        success: false,
+        error: "customer migration V2 target placement changed before freeze",
+        rolledBack: false,
+      };
+    }
+  }
   if (
     state.operationId !== op.id ||
     state.migrationId !== migrationId ||
@@ -214,6 +257,8 @@ async function runOrdinaryMigrationV2(input: {
     state.sourceRevisionId !== targets.fromRevisionId ||
     state.sourceRelease !== targets.fromRelease ||
     state.sourceEpoch !== targets.fromEpoch ||
+    state.sourceAssignmentMode !== targets.sourceAssignmentMode ||
+    state.sourceRootUpdatedAt !== targets.sourceRootUpdatedAt ||
     state.targetGatewayId !== targets.toGatewayId ||
     state.targetRevisionId !== targets.toRevisionId ||
     state.targetRelease !== targets.toRelease
@@ -234,6 +279,12 @@ async function runOrdinaryMigrationV2(input: {
         gatewayId: state!.sourceGatewayId,
         uid: state!.uid,
         state: assignmentState,
+        slug: state!.slug,
+        revisionId: state!.sourceRevisionId,
+        release: state!.sourceRelease,
+        epoch: state!.sourceEpoch,
+        updatedByOperationId: state!.operationId,
+        createIfMissing: state!.sourceAssignmentMode === "unassigned-live",
       }),
     commitCutover: (fence: CustomerMigrationV2CutoverFence) =>
       deps.commitV2Cutover({ ...fence, uid: state!.uid, slug: state!.slug }),
@@ -568,6 +619,8 @@ interface MigrationTargets {
   fromRevisionId: string;
   fromRelease: number;
   fromEpoch: number;
+  sourceAssignmentMode: "assigned" | "unassigned-live";
+  sourceRootUpdatedAt?: number;
   fromTransportId: string;
   toTransportId: string;
 }
@@ -623,6 +676,10 @@ async function resolveMigrationTargets(
       fromRevisionId: fromRevision.revisionId,
       fromRelease: fromRevision.release,
       fromEpoch: fromRevision.epoch ?? 0,
+      sourceAssignmentMode: fromRevision.assignmentMode ?? "assigned",
+      ...(fromRevision.rootUpdatedAt !== undefined
+        ? { sourceRootUpdatedAt: fromRevision.rootUpdatedAt }
+        : {}),
       fromTransportId: fromRevision.revisionId,
       toTransportId: to.revisionId,
     },
@@ -718,7 +775,39 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
       return { steps: [], success: false, error: "missing toGatewayId in op.input" };
     }
 
-    const user = await deps.readUser(uid);
+    const durableV2 = op.customerMigrationV2;
+    if (durableV2?.phase === "complete" || durableV2?.phase === "aborted") {
+      if (
+        durableV2.operationId !== op.id ||
+        durableV2.migrationId !== deps.genMigrationId(op.id) ||
+        durableV2.uid !== uid ||
+        durableV2.targetGatewayId !== toGatewayId
+      ) {
+        return { steps: [], success: false, error: "durable customer migration V2 input changed" };
+      }
+      return durableV2.phase === "complete"
+        ? { steps: [], success: true, rolledBack: false }
+        : {
+            steps: [],
+            success: false,
+            error: durableV2.abortReason ?? "customer migration V2 aborted",
+            rolledBack: true,
+          };
+    }
+
+    let user: UserGatewayInfo | null;
+    try {
+      user = await deps.readUser(uid);
+    } catch (error) {
+      if (durableV2 && classifyCustomerMigrationV2Error(error) === "retry") {
+        return { steps: [], success: false, error: v2RetryError(error), rolledBack: false };
+      }
+      return {
+        steps: [],
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
     if (!user) {
       return { steps: [], success: false, error: `user not found: ${uid}` };
     }
@@ -749,6 +838,10 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
           fromRevisionId: durable.sourceRevisionId,
           fromRelease: durable.sourceRelease,
           fromEpoch: durable.sourceEpoch,
+          sourceAssignmentMode: durable.sourceAssignmentMode,
+          ...(durable.sourceRootUpdatedAt !== undefined
+            ? { sourceRootUpdatedAt: durable.sourceRootUpdatedAt }
+            : {}),
           fromTransportId: durable.sourceRevisionId,
           toTransportId: durable.targetRevisionId,
         };
@@ -819,6 +912,9 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
       restoreSnapshot = await deps.readUserSnapshot(uid);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (op.customerMigrationV2 && classifyCustomerMigrationV2Error(err) === "retry") {
+        return { steps: [], success: false, error: v2RetryError(err), rolledBack: false };
+      }
       return { steps: [], success: false, error: message };
     }
     if (!restoreSnapshot) {
@@ -841,17 +937,29 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
       if (targets.toRelease === null) {
         return { steps: [], success: false, error: "customer migration V2 target has no release" };
       }
-      return runOrdinaryMigrationV2({
-        op,
-        ctx,
-        deps,
-        targets,
-        uid,
-        slug: user.slug,
-        migrationId,
-        restoreSnapshot,
-        client,
-      });
+      try {
+        return await runOrdinaryMigrationV2({
+          op,
+          ctx,
+          deps,
+          targets,
+          uid,
+          slug: user.slug,
+          migrationId,
+          restoreSnapshot,
+          client,
+        });
+      } catch (error) {
+        if (classifyCustomerMigrationV2Error(error) === "retry") {
+          return { steps: [], success: false, error: v2RetryError(error), rolledBack: false };
+        }
+        return {
+          steps: [],
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+          rolledBack: false,
+        };
+      }
     }
 
     const result = await runMigration(

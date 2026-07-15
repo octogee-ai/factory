@@ -2617,6 +2617,28 @@ async function appendGatewayRelease(
         current.latestRelease,
       );
     }
+    const activeOperations = await txn.get(
+      db
+        .collection(GLM_OPERATIONS_COLLECTION)
+        .where("status", "in", ["pending", "running"]),
+    );
+    const migrationConflict = activeOperations.docs.find((doc) => {
+      const operation = doc.data() as Record<string, unknown>;
+      if (operation.kind !== OP_KIND_MIGRATE_CUSTOMER) return false;
+      const input = isPlainRecord(operation.input) ? operation.input : {};
+      const durable = isPlainRecord(operation.customerMigrationV2)
+        ? operation.customerMigrationV2
+        : {};
+      return [
+        input.fromGatewayId,
+        input.toGatewayId,
+        durable.sourceGatewayId,
+        durable.targetGatewayId,
+      ].includes(args.gateway.gatewayId);
+    });
+    if (migrationConflict) {
+      throw new GatewayMigrationInFlightError(args.gateway.gatewayId, migrationConflict.id);
+    }
     const release = current.latestRelease + 1;
     const relRef = gwRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc(String(release));
     const relExisting = await txn.get(relRef);
@@ -2677,9 +2699,27 @@ class InvalidGatewayRootError extends Error {
   }
 }
 
+class GatewayMigrationInFlightError extends Error {
+  constructor(
+    readonly gatewayId: string,
+    readonly operationId: string,
+  ) {
+    super(`customer migration is in flight for gateway ${gatewayId}`);
+  }
+}
+
 function respondReleaseWriteConflict(res: Response, error: unknown): boolean {
   if (error instanceof GatewayRetirementConflictError) {
     res.status(409).json({ error: error.message });
+    return true;
+  }
+  if (error instanceof GatewayMigrationInFlightError) {
+    res.status(409).json({
+      error: error.message,
+      gatewayId: error.gatewayId,
+      operationId: error.operationId,
+      kind: OP_KIND_MIGRATE_CUSTOMER,
+    });
     return true;
   }
   if (error instanceof InvalidGatewayRootError) {

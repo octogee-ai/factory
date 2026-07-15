@@ -113,6 +113,37 @@ describe("durable migration root resolution", () => {
     await expect(resolveLiveRevisionAsSource(db as never, "default")).resolves.toBeNull();
   });
 
+  it("binds an unassigned source to the exact stable live root generation", async () => {
+    const db = database({
+      "gateways/source": durableGateway("source", { updatedAt: 17 }),
+      "glmGateways/source-r1": servingRevision("source"),
+    });
+
+    await expect(
+      resolveSourceRevisionFromFirestore(db as never, "uid-alice", "source"),
+    ).resolves.toEqual({
+      revisionId: "source-r1",
+      release: 1,
+      assignmentMode: "unassigned-live",
+      rootUpdatedAt: 17,
+    });
+  });
+
+  it("does not bind an unassigned source while its durable root is rolling", async () => {
+    const db = database({
+      "gateways/source": durableGateway("source", {
+        updatedAt: 18,
+        desiredRelease: 2,
+        roll: { operationId: "roll-source" },
+      }),
+      "glmGateways/source-r1": servingRevision("source"),
+    });
+
+    await expect(
+      resolveSourceRevisionFromFirestore(db as never, "uid-alice", "source"),
+    ).resolves.toBeNull();
+  });
+
   it("does not recover a pending Helm revision for a paused durable root", async () => {
     const db = database({
       "gateways/default": durableGateway("default", { desiredStatus: "paused" }),

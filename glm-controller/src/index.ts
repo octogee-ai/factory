@@ -114,6 +114,7 @@ import {
 } from "./operation-queue.js";
 import {
   buildOperationCompletionUpdate,
+  operationNeedsDurableCustomerMigrationV2Resume,
   shouldPersistClaimedOperationCompletion,
   supersededRollMigrationAction,
 } from "./operation-retry.js";
@@ -2292,10 +2293,7 @@ const RESUMABLE_OP_KINDS: ReadonlySet<string> = new Set(["rollout", "migrate-cus
 
 function operationIsRestartResumable(op: Operation): boolean {
   if (op.kind === "rollout") return true;
-  return op.kind === "migrate-customer" &&
-    op.customerMigrationV2 !== undefined &&
-    op.customerMigrationV2.phase !== "complete" &&
-    op.customerMigrationV2.phase !== "aborted";
+  return operationNeedsDurableCustomerMigrationV2Resume(op);
 }
 
 // Claim, queue, or skip a pending op in one transaction: reads the OTHER
@@ -2324,26 +2322,29 @@ async function attemptClaimOrQueueOperation(
       let runningOpsSameKind: OperationRef[] = [];
       let pendingOpsSameKind: PendingOperationRef[] = [];
       if (isSeriallyExclusiveKind(op.kind)) {
-        const opsOfKind = deps.db
-          .collection(GLM_OPERATIONS_COLLECTION)
-          .where("kind", "==", op.kind);
+        const operations = deps.db.collection(GLM_OPERATIONS_COLLECTION);
         const [runningSnap, pendingSnap] = await Promise.all([
-          txn.get(opsOfKind.where("status", "==", "running")),
-          txn.get(opsOfKind.where("status", "==", "pending")),
+          txn.get(operations.where("status", "==", "running")),
+          txn.get(operations.where("status", "==", "pending")),
         ]);
-        runningOpsSameKind = runningSnap.docs.map((d) => ({
-          id: d.id,
-          kind: op.kind,
-          input: (d.data() as Operation).input,
-        }));
-        pendingOpsSameKind = pendingSnap.docs.map((d) => {
-          const pendingData = d.data() as Operation;
-          return {
+        runningOpsSameKind = runningSnap.docs.flatMap((d) => {
+          const runningData = d.data() as Operation;
+          return isSeriallyExclusiveKind(runningData.kind) ? [{
             id: d.id,
-            kind: op.kind,
+            kind: runningData.kind,
+            input: runningData.input,
+            customerMigrationV2: runningData.customerMigrationV2,
+          }] : [];
+        });
+        pendingOpsSameKind = pendingSnap.docs.flatMap((d) => {
+          const pendingData = d.data() as Operation;
+          return isSeriallyExclusiveKind(pendingData.kind) ? [{
+            id: d.id,
+            kind: pendingData.kind,
             input: pendingData.input,
             createdAt: pendingData.createdAt,
-          };
+            customerMigrationV2: pendingData.customerMigrationV2,
+          }] : [];
         });
       }
 
@@ -2355,6 +2356,7 @@ async function attemptClaimOrQueueOperation(
           createdAt: data.createdAt,
           nextAttemptAt: data.nextAttemptAt,
           input: data.input,
+          customerMigrationV2: data.customerMigrationV2,
         },
         now: Date.now(),
         runningOpsSameKind,
@@ -3743,6 +3745,19 @@ async function buildHandlers(
       if (!isDurableRootConfigDoc(targetData, toGatewayId)) {
         throw new Error(`target gateway ${toGatewayId} has no durable root`);
       }
+      const rootIsStable = (data: typeof sourceData) =>
+        data.desiredStatus === "running" &&
+        data.roll === null &&
+        data.liveRevisionId !== null &&
+        data.trafficRevisionId === data.liveRevisionId &&
+        data.liveRelease !== null &&
+        data.desiredRelease === data.liveRelease;
+      if (!rootIsStable(sourceData)) {
+        throw new Error(`source gateway ${fromGatewayId} has an active or unconverged release roll`);
+      }
+      if (!rootIsStable(targetData)) {
+        throw new Error(`target gateway ${toGatewayId} has an active or unconverged release roll`);
+      }
       const gatewayClass = (data: typeof sourceData) => resolveGatewayClass({
         gatewayClass: data.gatewayClass ?? undefined,
         profile: data.profile ?? undefined,
@@ -3832,6 +3847,11 @@ async function buildHandlers(
             sourceGatewayId: input.sourceGatewayId,
             sourceRevisionId: input.sourceRevisionId,
             sourceEpoch: input.sourceEpoch,
+            sourceRelease: input.sourceRelease,
+            sourceAssignmentMode: input.sourceAssignmentMode,
+            ...(input.sourceRootUpdatedAt !== undefined
+              ? { sourceRootUpdatedAt: input.sourceRootUpdatedAt }
+              : {}),
             targetGatewayId: input.targetGatewayId,
             targetRevisionId: input.targetRevisionId,
             targetRelease: input.targetRelease,
@@ -4528,7 +4548,13 @@ export async function resolvePlacementFromFirestore(
 export async function resolveLiveRevisionAsSource(
   db: Firestore,
   gatewayId: string,
-): Promise<{ revisionId: string; release: number; epoch?: number } | null> {
+): Promise<{
+  revisionId: string;
+  release: number;
+  epoch?: number;
+  assignmentMode: "unassigned-live";
+  rootUpdatedAt: number;
+} | null> {
   const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
   if (!snap.exists) return null;
   const gateway = snap.data();
@@ -4536,7 +4562,11 @@ export async function resolveLiveRevisionAsSource(
     !isDurableRootConfigDoc(gateway, gatewayId) ||
     gateway.desiredStatus !== "running" ||
     !gateway.liveRevisionId ||
-    typeof gateway.liveRelease !== "number"
+    typeof gateway.liveRelease !== "number" ||
+    gateway.trafficRevisionId !== gateway.liveRevisionId ||
+    gateway.desiredRelease !== gateway.liveRelease ||
+    gateway.roll !== null ||
+    typeof gateway.updatedAt !== "number"
   ) {
     return null;
   }
@@ -4547,7 +4577,12 @@ export async function resolveLiveRevisionAsSource(
     gateway.liveRelease,
   );
   return ready
-    ? { revisionId: gateway.liveRevisionId, release: gateway.liveRelease }
+    ? {
+        revisionId: gateway.liveRevisionId,
+        release: gateway.liveRelease,
+        assignmentMode: "unassigned-live",
+        rootUpdatedAt: gateway.updatedAt,
+      }
     : null;
 }
 
@@ -4555,7 +4590,13 @@ export async function resolveSourceRevisionFromFirestore(
   db: Firestore,
   uid: string,
   gatewayId: string,
-): Promise<{ revisionId: string; release: number; epoch?: number } | null> {
+): Promise<{
+  revisionId: string;
+  release: number;
+  epoch?: number;
+  assignmentMode: "assigned" | "unassigned-live";
+  rootUpdatedAt?: number;
+} | null> {
   const assignment = await readAssignmentDoc(db, gatewayId, uid);
   if (!assignment) return resolveLiveRevisionAsSource(db, gatewayId);
   const rootSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
@@ -4587,6 +4628,7 @@ export async function resolveSourceRevisionFromFirestore(
     revisionId: assignment.revisionId,
     release: assignment.release,
     epoch: assignment.epoch,
+    assignmentMode: "assigned",
   };
 }
 

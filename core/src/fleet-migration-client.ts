@@ -222,6 +222,15 @@ export class MigrationRpcError extends Error {
   }
 }
 
+export class MigrationTransportError extends Error {
+  readonly retryable = true;
+
+  constructor(message: string, options: { cause?: unknown } = {}) {
+    super(message, options);
+    this.name = "MigrationTransportError";
+  }
+}
+
 export function isDefinitiveConfigRpcRejection(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const rpc = error as { status?: unknown; code?: unknown };
@@ -317,9 +326,13 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       return await fetchImpl(url, { ...init, signal: controller.signal });
     } catch (err) {
       if (didTimeout) {
-        throw new Error(`${label} timed out after ${timeoutMs}ms (${url})`);
+        throw new MigrationTransportError(
+          `${label} timed out after ${timeoutMs}ms (${url})`,
+          { cause: err },
+        );
       }
-      throw err;
+      const message = err instanceof Error ? err.message : String(err);
+      throw new MigrationTransportError(`${label} transport failed: ${message}`, { cause: err });
     } finally {
       clearTimeout(timer);
     }
@@ -375,7 +388,14 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
           : {}),
       });
     }
-    return (await res.json()) as Resp;
+    try {
+      return (await res.json()) as Resp;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new MigrationTransportError(`${path} response body was incomplete: ${message}`, {
+        cause: err,
+      });
+    }
   };
 
   return {

@@ -321,6 +321,16 @@ describe("customer migration V2 failure boundary", () => {
       new MigrationRpcError("busy", { status: 503, code: "config-writer-lock-busy" }),
     )).toBe("retry");
     expect(classifyCustomerMigrationV2Error(new Error("socket response lost"))).toBe("retry");
+    for (const error of [
+      new TypeError("fetch failed"),
+      new Error("terminated"),
+      new Error("premature close"),
+      new SyntaxError("Unexpected end of JSON input"),
+      Object.assign(new Error("14 UNAVAILABLE: upstream reset"), { code: 14 }),
+      Object.assign(new Error("request aborted"), { name: "AbortError" }),
+    ]) {
+      expect(classifyCustomerMigrationV2Error(error), error.message).toBe("retry");
+    }
     expect(classifyCustomerMigrationV2Error(new Error("malformed config response binding"))).toBe("terminal");
   });
 

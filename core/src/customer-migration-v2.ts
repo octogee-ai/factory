@@ -9,6 +9,7 @@ import type {
 } from "@octogee/shared/types/glm";
 import {
   isDefinitiveConfigRpcRejection,
+  MigrationTransportError,
   type MigrationClient,
 } from "./fleet-migration-client.js";
 
@@ -26,6 +27,9 @@ export interface CustomerMigrationV2CutoverFence {
   sourceGatewayId: string;
   sourceRevisionId: string;
   sourceEpoch: number;
+  sourceRelease: number;
+  sourceAssignmentMode: "assigned" | "unassigned-live";
+  sourceRootUpdatedAt?: number;
   targetGatewayId: string;
   targetRevisionId: string;
   targetRelease: number;
@@ -265,6 +269,11 @@ export async function advanceCustomerMigrationV2(
         sourceGatewayId: state.sourceGatewayId,
         sourceRevisionId: state.sourceRevisionId,
         sourceEpoch: state.sourceEpoch,
+        sourceRelease: state.sourceRelease,
+        sourceAssignmentMode: state.sourceAssignmentMode,
+        ...(state.sourceRootUpdatedAt !== undefined
+          ? { sourceRootUpdatedAt: state.sourceRootUpdatedAt }
+          : {}),
         targetGatewayId: state.targetGatewayId,
         targetRevisionId: state.targetRevisionId,
         targetRelease: state.targetRelease,
@@ -431,14 +440,30 @@ export function classifyCustomerMigrationV2Error(
   error: unknown,
 ): CustomerMigrationV2ErrorClass {
   if (isDefinitiveConfigRpcRejection(error)) return "terminal";
-  const status = error && typeof error === "object"
-    ? (error as { status?: unknown }).status
-    : undefined;
+  if (error instanceof MigrationTransportError) return "retry";
+  const record = error && typeof error === "object"
+    ? error as {
+        status?: unknown;
+        code?: unknown;
+        name?: unknown;
+        retryable?: unknown;
+        message?: unknown;
+      }
+    : {};
+  if (record.retryable === true) return "retry";
+  if (record.name === "AbortError" || record.name === "TimeoutError") return "retry";
+  if (
+    record.code === 4 || record.code === 8 || record.code === 10 || record.code === 14 ||
+    record.code === "ECONNRESET" || record.code === "ECONNREFUSED" ||
+    record.code === "ETIMEDOUT" || record.code === "EAI_AGAIN" ||
+    record.code === "UND_ERR_SOCKET"
+  ) return "retry";
+  const status = record.status;
   if (typeof status === "number") {
     return status === 408 || status === 429 || status >= 500 ? "retry" : "terminal";
   }
-  const message = error instanceof Error ? error.message : String(error);
-  return /response lost|socket|ECONN|timed? out|unavailable|temporar|stale|restarted/i.test(message)
+  const message = error instanceof Error ? error.message : String(record.message ?? error);
+  return /response lost|fetch failed|terminated|premature close|unexpected end|truncated|network|socket|ECONN|timed? out|timeout|unavailable|temporar|stale|restarted/i.test(message)
     ? "retry"
     : "terminal";
 }

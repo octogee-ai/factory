@@ -159,6 +159,9 @@ export interface CutoverCommitParams {
     sourceGatewayId: string;
     sourceRevisionId: string;
     sourceEpoch: number;
+    sourceRelease: number;
+    sourceAssignmentMode: "assigned" | "unassigned-live";
+    sourceRootUpdatedAt?: number;
     targetGatewayId: string;
     targetRevisionId: string;
     targetRelease: number;
@@ -291,6 +294,9 @@ function customerMigrationV2FenceIsExact(
     state.sourceGatewayId === fence.sourceGatewayId,
     state.sourceRevisionId === fence.sourceRevisionId,
     state.sourceEpoch === fence.sourceEpoch,
+    state.sourceRelease === fence.sourceRelease,
+    state.sourceAssignmentMode === fence.sourceAssignmentMode,
+    state.sourceRootUpdatedAt === fence.sourceRootUpdatedAt,
     state.targetGatewayId === fence.targetGatewayId,
     state.targetRevisionId === fence.targetRevisionId,
     state.targetRelease === fence.targetRelease,
@@ -360,14 +366,16 @@ export async function commitCutoverAtomic(
     let priorEpoch = 0;
     let priorRevisionId: unknown;
     let priorAssignmentExists = false;
+    let priorAssignment: Record<string, unknown> | undefined;
     if (params.assignment) {
       const priorSnap = await txn.get(
         assignmentRef(deps.db, params.fromGatewayId, params.uid),
       );
       priorAssignmentExists = priorSnap.exists;
-      const rawEpoch = priorSnap.exists ? priorSnap.data()?.epoch : undefined;
+      priorAssignment = priorSnap.exists ? priorSnap.data() : undefined;
+      const rawEpoch = priorAssignment?.epoch;
       priorEpoch = typeof rawEpoch === "number" && rawEpoch >= 0 ? rawEpoch : 0;
-      priorRevisionId = priorSnap.exists ? priorSnap.data()?.revisionId : undefined;
+      priorRevisionId = priorAssignment?.revisionId;
     }
     const targetRootSnap = await txn.get(
       deps.db.collection(GATEWAYS_COLLECTION).doc(params.toGatewayId),
@@ -388,10 +396,13 @@ export async function commitCutoverAtomic(
       ) {
         throw new Error("ordinary protocol-v2 cutover parameters changed after proof");
       }
-      const [operationSnap, targetSnap, targetAssignmentSnap] = await Promise.all([
+      const [operationSnap, targetSnap, targetAssignmentSnap, sourceRootSnap] = await Promise.all([
         txn.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(fence.operationId)),
         txn.get(deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(fence.targetRevisionId)),
         txn.get(assignmentRef(deps.db, params.toGatewayId, params.uid)),
+        fence.sourceAssignmentMode === "unassigned-live"
+          ? txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(fence.sourceGatewayId))
+          : Promise.resolve(null),
       ]);
       if (!customerMigrationV2FenceIsExact(
         operationSnap.exists ? operationSnap.data() : undefined,
@@ -413,9 +424,31 @@ export async function commitCutoverAtomic(
       if (alreadyCommitted) return;
       if (
         priorRevisionId !== fence.sourceRevisionId ||
-        priorEpoch !== fence.sourceEpoch
+        priorEpoch !== fence.sourceEpoch ||
+        priorAssignment?.uid !== fence.uid ||
+        priorAssignment.slug !== fence.slug ||
+        priorAssignment.gatewayId !== fence.sourceGatewayId ||
+        priorAssignment.release !== fence.sourceRelease ||
+        priorAssignment.state !== "quiescing" ||
+        priorAssignment.updatedByOperationId !== fence.operationId
       ) {
         throw new Error("ordinary protocol-v2 source assignment changed before cutover");
+      }
+      if (fence.sourceAssignmentMode === "unassigned-live") {
+        const sourceRoot = sourceRootSnap?.exists ? sourceRootSnap.data() : undefined;
+        if (
+          fence.sourceRootUpdatedAt === undefined ||
+          sourceRoot?.gatewayId !== fence.sourceGatewayId ||
+          sourceRoot.updatedAt !== fence.sourceRootUpdatedAt ||
+          sourceRoot.desiredStatus !== "running" ||
+          sourceRoot.liveRevisionId !== fence.sourceRevisionId ||
+          sourceRoot.trafficRevisionId !== fence.sourceRevisionId ||
+          sourceRoot.liveRelease !== fence.sourceRelease ||
+          sourceRoot.desiredRelease !== fence.sourceRelease ||
+          sourceRoot.roll !== null
+        ) {
+          throw new Error("ordinary protocol-v2 unassigned source root changed before cutover");
+        }
       }
     }
     if (params.rollFence) {
@@ -541,6 +574,12 @@ export interface MarkAssignmentStateParams {
   gatewayId: string;
   uid: string;
   state: AssignmentState;
+  slug?: string;
+  revisionId?: string;
+  release?: number;
+  epoch?: number;
+  updatedByOperationId?: string;
+  createIfMissing?: boolean;
 }
 
 // Flip ONLY the roster state on an existing assignment — revision and epoch
@@ -556,8 +595,53 @@ export async function markAssignmentState(
   await deps.db.runTransaction(async (txn) => {
     const ref = assignmentRef(deps.db, params.gatewayId, params.uid);
     const snap = await txn.get(ref);
-    if (!snap.exists) return;
-    txn.update(ref, { state: params.state });
+    if (!snap.exists) {
+      if (!params.createIfMissing) return;
+      if (
+        params.state !== "quiescing" ||
+        !params.slug ||
+        !params.revisionId ||
+        typeof params.release !== "number" ||
+        typeof params.epoch !== "number" ||
+        !params.updatedByOperationId
+      ) {
+        throw new Error("unassigned source quiesce requires an exact operation binding");
+      }
+      txn.set(ref, {
+        uid: params.uid,
+        slug: params.slug,
+        gatewayId: params.gatewayId,
+        revisionId: params.revisionId,
+        release: params.release,
+        source: "migrate-customer",
+        state: params.state,
+        epoch: params.epoch,
+        updatedAt: deps.now ? deps.now().getTime() : Date.now(),
+        updatedByOperationId: params.updatedByOperationId,
+      });
+      return;
+    }
+    const assignment = snap.data();
+    if (
+      params.slug !== undefined && assignment?.slug !== params.slug ||
+      params.revisionId !== undefined && assignment?.revisionId !== params.revisionId ||
+      params.release !== undefined && assignment?.release !== params.release ||
+      params.epoch !== undefined && assignment?.epoch !== params.epoch ||
+      assignment?.gatewayId !== undefined && assignment.gatewayId !== params.gatewayId ||
+      assignment?.uid !== undefined && assignment.uid !== params.uid ||
+      params.createIfMissing && assignment?.updatedByOperationId !== params.updatedByOperationId
+    ) {
+      throw new Error("source assignment changed before roster state update");
+    }
+    txn.update(ref, {
+      state: params.state,
+      ...(params.updatedByOperationId
+        ? {
+            updatedAt: deps.now ? deps.now().getTime() : Date.now(),
+            updatedByOperationId: params.updatedByOperationId,
+          }
+        : {}),
+    });
   });
 }
 

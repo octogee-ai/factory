@@ -240,7 +240,129 @@ function makeCtx(): OperationContext & { reported: OperationStep[] } {
   };
 }
 
+function durableV2State(
+  phase: NonNullable<Operation["customerMigrationV2"]>["phase"],
+): NonNullable<Operation["customerMigrationV2"]> {
+  return {
+    phase,
+    operationId: "op-1",
+    migrationId: "mig-test-1",
+    uid: "uid-alice",
+    slug: "alice",
+    sourceGatewayId: "gw-blue",
+    sourceRevisionId: "gw-blue-r1",
+    sourceRelease: 1,
+    sourceEpoch: 1,
+    sourceAssignmentMode: "assigned",
+    targetGatewayId: "gw-green",
+    targetRevisionId: "gw-green-r1",
+    targetRelease: 1,
+    sourceImageTag: "source-image",
+    sourceBuildSha: "source-build",
+    sourceOpenclawVersion: "2026.7.1",
+    targetImageTag: "target-image",
+    checkpointCommit: "1".repeat(40),
+    configHash: "2".repeat(64),
+    freezeRef: "refs/octogee/system-config/freeze/gw-blue-r1",
+    freezeObject: "3".repeat(40),
+  };
+}
+
 describe("createMigrateCustomerHandler — ordinary isolated protocol V2", () => {
+  it("retries raw source transport failure before checkpoint without aborting or terminalizing", async () => {
+    const client = happyClient();
+    vi.mocked(client.freezeConfigV2).mockRejectedValueOnce(new TypeError("fetch failed"));
+    const { deps } = makeDeps({
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
+    }, client);
+
+    const result = await createMigrateCustomerHandler(deps)(mkOp({}), makeCtx());
+
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.error).toMatch(/V2 retry pending.*fetch failed/i);
+    expect(client.abortConfigV2).not.toHaveBeenCalled();
+  });
+
+  it("retries setup outages after checkpoint and leaves the durable source freeze intact", async () => {
+    const client = happyClient();
+    const { deps } = makeDeps({
+      readUserSnapshot: vi.fn(async () => {
+        throw new SyntaxError("Unexpected end of JSON input");
+      }),
+    }, client);
+    const op = mkOp({ customerMigrationV2: durableV2State("checkpointed") });
+
+    const result = await createMigrateCustomerHandler(deps)(op, makeCtx());
+
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.error).toMatch(/V2 retry pending.*Unexpected end/i);
+    expect(client.abortConfigV2).not.toHaveBeenCalled();
+    expect(client.freezeConfigV2).not.toHaveBeenCalled();
+  });
+
+  it("retries raw Firestore UNAVAILABLE while resuming before setup can reach the driver", async () => {
+    const client = happyClient();
+    const { deps } = makeDeps({
+      readUser: vi.fn(async () => {
+        throw Object.assign(new Error("14 UNAVAILABLE: Firestore read failed"), { code: 14 });
+      }),
+    }, client);
+
+    const result = await createMigrateCustomerHandler(deps)(
+      mkOp({ customerMigrationV2: durableV2State("checkpointed") }),
+      makeCtx(),
+    );
+
+    expect(result.error).toMatch(/V2 retry pending.*UNAVAILABLE/i);
+    expect(client.abortConfigV2).not.toHaveBeenCalled();
+  });
+
+  it("keeps abort cleanup retryable through a raw source outage", async () => {
+    const client = happyClient();
+    vi.mocked(client.abortConfigV2).mockRejectedValueOnce(new TypeError("fetch failed"));
+    const { deps } = makeDeps({}, client);
+
+    const result = await createMigrateCustomerHandler(deps)(
+      mkOp({ customerMigrationV2: {
+        ...durableV2State("abortIntent"),
+        abortFromPhase: "checkpointed",
+        abortReason: "candidate conflict",
+        abortIntentAt: 4_999,
+      } }),
+      makeCtx(),
+    );
+
+    expect(result.error).toMatch(/V2 retry pending.*fetch failed/i);
+    expect(result.rolledBack).toBe(false);
+  });
+
+  it.each([
+    ["complete", true, false],
+    ["aborted", false, true],
+  ] as const)("finishes a durably persisted %s phase without re-running setup", async (
+    phase,
+    success,
+    rolledBack,
+  ) => {
+    const { deps } = makeDeps({
+      readUser: vi.fn(async () => { throw new Error("setup must not run"); }),
+      readUserSnapshot: vi.fn(async () => { throw new Error("setup must not run"); }),
+      resolveGatewayUrl: vi.fn(async () => { throw new Error("setup must not run"); }),
+    });
+    const terminal = durableV2State(phase);
+    if (phase === "aborted") terminal.abortReason = "candidate conflict";
+
+    const result = await createMigrateCustomerHandler(deps)(
+      mkOp({ customerMigrationV2: terminal }),
+      makeCtx(),
+    );
+
+    expect(result).toMatchObject({ success, rolledBack });
+    expect(deps.readUser).not.toHaveBeenCalled();
+    expect(deps.readUserSnapshot).not.toHaveBeenCalled();
+    expect(deps.resolveGatewayUrl).not.toHaveBeenCalled();
+  });
+
   it("uses only V2 config control and durably persists every migration edge", async () => {
     const { deps, client } = makeDeps({
       resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
@@ -268,6 +390,74 @@ describe("createMigrateCustomerHandler — ordinary isolated protocol V2", () =>
       sourceRevisionId: "gw-blue-r1",
       targetRevisionId: "gw-green-r1",
     }));
+  });
+
+  it("carries an unassigned live root binding through quiesce and atomic cutover", async () => {
+    const { deps } = makeDeps({
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
+      resolveFromRevision: vi.fn(async () => ({
+        revisionId: "gw-blue-r1",
+        release: 1,
+        assignmentMode: "unassigned-live",
+        rootUpdatedAt: 17,
+      })),
+    });
+    const ctx = makeCtx();
+
+    const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
+
+    expect(result.success).toBe(true);
+    expect(ctx.persistedV2[0]).toMatchObject({
+      sourceAssignmentMode: "unassigned-live",
+      sourceRootUpdatedAt: 17,
+      sourceEpoch: 0,
+    });
+    expect(deps.setAssignmentState).toHaveBeenCalledWith({
+      gatewayId: "gw-blue",
+      uid: "uid-alice",
+      slug: "alice",
+      revisionId: "gw-blue-r1",
+      release: 1,
+      epoch: 0,
+      state: "quiescing",
+      updatedByOperationId: "op-1",
+      createIfMissing: true,
+    });
+    expect(deps.commitV2Cutover).toHaveBeenCalledWith(expect.objectContaining({
+      sourceAssignmentMode: "unassigned-live",
+      sourceRootUpdatedAt: 17,
+      sourceRelease: 1,
+    }));
+  });
+
+  it("rechecks exact placement before freeze and refuses a root generation race", async () => {
+    const resolveFromRevision = vi
+      .fn()
+      .mockResolvedValueOnce({
+        revisionId: "gw-blue-r1",
+        release: 1,
+        assignmentMode: "unassigned-live",
+        rootUpdatedAt: 17,
+      })
+      .mockResolvedValueOnce({
+        revisionId: "gw-blue-r1",
+        release: 1,
+        assignmentMode: "unassigned-live",
+        rootUpdatedAt: 18,
+      });
+    const { deps, client } = makeDeps({
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
+      resolveFromRevision,
+    });
+    const ctx = makeCtx();
+
+    const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
+
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.error).toMatch(/source placement changed before freeze/i);
+    expect(ctx.persistedV2.map((entry) => entry.phase)).toEqual(["initialized"]);
+    expect(client.freezeConfigV2).not.toHaveBeenCalled();
+    expect(client.abortConfigV2).not.toHaveBeenCalled();
   });
 
   it("resumes from the durable phase without reacquiring the source lease", async () => {

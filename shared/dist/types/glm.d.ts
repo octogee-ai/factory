@@ -186,6 +186,8 @@ export interface CustomerMigrationV2State {
     sourceRevisionId: string;
     sourceRelease: number;
     sourceEpoch: number;
+    sourceAssignmentMode: "assigned" | "unassigned-live";
+    sourceRootUpdatedAt?: number;
     targetGatewayId: string;
     targetRevisionId: string;
     targetRelease: number;

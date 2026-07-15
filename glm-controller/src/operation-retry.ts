@@ -22,6 +22,12 @@ const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
   /\bECONNREFUSED\b/,
   /\bETIMEDOUT\b/,
   /\bEAI_AGAIN\b/,
+  /\bfetch failed\b/i,
+  /\bterminated\b/i,
+  /\bpremature close\b/i,
+  /\bunexpected end\b/i,
+  /\btruncated\b/i,
+  /\b14 UNAVAILABLE\b/i,
   /\bstatus (429|502|503|504)\b/,
   /\bpreempt(ed|ion)?\b/i,
   /config unfreeze cleanup pending/i,
@@ -52,6 +58,13 @@ export function retryBackoffMs(attempt: number): number {
 
 export function shouldPersistClaimedOperationCompletion(status: string): boolean {
   return status === "running";
+}
+
+export function operationNeedsDurableCustomerMigrationV2Resume(op: {
+  kind?: string;
+  customerMigrationV2?: CustomerMigrationV2State;
+}): boolean {
+  return op.kind === "migrate-customer" && op.customerMigrationV2 !== undefined;
 }
 
 export function supersededRollMigrationAction(op: {

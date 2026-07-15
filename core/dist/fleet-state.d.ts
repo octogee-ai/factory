@@ -91,6 +91,9 @@ export interface CutoverCommitParams {
         sourceGatewayId: string;
         sourceRevisionId: string;
         sourceEpoch: number;
+        sourceRelease: number;
+        sourceAssignmentMode: "assigned" | "unassigned-live";
+        sourceRootUpdatedAt?: number;
         targetGatewayId: string;
         targetRevisionId: string;
         targetRelease: number;
@@ -112,5 +115,11 @@ export interface MarkAssignmentStateParams {
     gatewayId: string;
     uid: string;
     state: AssignmentState;
+    slug?: string;
+    revisionId?: string;
+    release?: number;
+    epoch?: number;
+    updatedByOperationId?: string;
+    createIfMissing?: boolean;
 }
 export declare function markAssignmentState(deps: FleetStateDeps, params: MarkAssignmentStateParams): Promise<void>;

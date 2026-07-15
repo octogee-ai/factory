@@ -42,6 +42,11 @@ describe("classifyOperationFailure", () => {
     expect(classifyOperationFailure("request failed with status 503")).toBe("transient");
     expect(classifyOperationFailure("context deadline exceeded")).toBe("transient");
     expect(classifyOperationFailure("instance preempted mid-warm")).toBe("transient");
+    expect(classifyOperationFailure("TypeError: fetch failed")).toBe("transient");
+    expect(classifyOperationFailure("response body terminated before completion")).toBe("transient");
+    expect(classifyOperationFailure("premature close while reading response body")).toBe("transient");
+    expect(classifyOperationFailure("Unexpected end of JSON input")).toBe("transient");
+    expect(classifyOperationFailure("14 UNAVAILABLE: Firestore request failed")).toBe("transient");
     expect(
       classifyOperationFailure("gateway bender durable desired revision did not materialize within 120000ms"),
     ).toBe("transient");

@@ -15,6 +15,12 @@ export interface OperationRef {
   id: string;
   kind: string;
   input?: Record<string, unknown>;
+  customerMigrationV2?: {
+    sourceGatewayId?: string;
+    sourceRevisionId?: string;
+    targetGatewayId?: string;
+    targetRevisionId?: string;
+  };
 }
 
 export interface SerialConflict {
@@ -22,30 +28,56 @@ export interface SerialConflict {
   waitingOn: string;
 }
 
-// The scope an op's exclusivity is measured within: "rollout" is a single
-// global plane (one blue/green roll across the whole fleet); "migrate-customer"
-// is exclusive per migration target (mirrors the fleet-migration-runner's
-// one-slot-per-target transfer capacity) — two migrations to DIFFERENT targets
-// never conflict. Returns null when the op carries no usable scope key (e.g. a
-// migrate-customer input missing toGatewayId) — such an op never conflicts;
-// its own validation failure is what stops it, not the queue.
-function conflictScopeKey(op: OperationRef): string | null {
-  if (op.kind === "rollout") return "rollout:global";
-  if (op.kind === "migrate-customer") {
-    const toGatewayId = typeof op.input?.toGatewayId === "string" ? op.input.toGatewayId : undefined;
-    return toGatewayId ? `migrate-customer:${toGatewayId}` : null;
+// Rollouts remain globally serial with other rollouts. Migration/rollout and
+// migration/migration conflicts are scoped to every bound gateway or revision.
+function stringFields(
+  value: Record<string, unknown> | undefined,
+  fields: readonly string[],
+): string[] {
+  return fields.flatMap((field) => typeof value?.[field] === "string" ? [value[field] as string] : []);
+}
+
+function conflictResources(op: OperationRef): ReadonlySet<string> {
+  if (!isSeriallyExclusiveKind(op.kind)) return new Set();
+  const input = stringFields(op.input, [
+    "gatewayId",
+    "fromGatewayId",
+    "toGatewayId",
+    "sourceGatewayId",
+    "targetGatewayId",
+    "sourceRevisionId",
+    "targetRevisionId",
+  ]);
+  const durable = op.customerMigrationV2
+    ? stringFields(op.customerMigrationV2 as Record<string, unknown>, [
+        "sourceGatewayId",
+        "targetGatewayId",
+        "sourceRevisionId",
+        "targetRevisionId",
+      ])
+    : [];
+  return new Set([...input, ...durable]);
+}
+
+function operationsConflict(candidate: OperationRef, other: OperationRef): boolean {
+  if (!isSeriallyExclusiveKind(candidate.kind) || !isSeriallyExclusiveKind(other.kind)) {
+    return false;
   }
-  return null;
+  if (candidate.kind === "rollout" && other.kind === "rollout") return true;
+  const candidateResources = conflictResources(candidate);
+  if (candidateResources.size === 0) return false;
+  for (const resource of conflictResources(other)) {
+    if (candidateResources.has(resource)) return true;
+  }
+  return false;
 }
 
 export function findSerialConflict(
   candidate: OperationRef,
   runningOpsSameKind: ReadonlyArray<OperationRef>,
 ): SerialConflict | null {
-  const candidateScope = conflictScopeKey(candidate);
-  if (candidateScope === null) return null;
   const conflict = runningOpsSameKind.find(
-    (running) => running.id !== candidate.id && conflictScopeKey(running) === candidateScope,
+    (running) => running.id !== candidate.id && operationsConflict(candidate, running),
   );
   if (!conflict) return null;
   return { conflictingOpId: conflict.id, waitingOn: describeWaitingOn(conflict) };
@@ -80,6 +112,7 @@ export interface OperationClaimCandidate {
   createdAt: number;
   nextAttemptAt?: number | null;
   input?: Record<string, unknown>;
+  customerMigrationV2?: OperationRef["customerMigrationV2"];
 }
 
 export interface OperationClaimDecisionInput {
@@ -111,13 +144,11 @@ function findOlderPendingSameScope(
   candidate: OperationRef & { createdAt: number },
   pendingOpsSameKind: ReadonlyArray<PendingOperationRef>,
 ): SerialConflict | null {
-  const candidateScope = conflictScopeKey(candidate);
-  if (candidateScope === null) return null;
   const older = pendingOpsSameKind
     .filter(
       (pending) =>
         pending.id !== candidate.id &&
-        conflictScopeKey(pending) === candidateScope &&
+        operationsConflict(candidate, pending) &&
         isOlderThanCandidate(pending, candidate),
     )
     .sort((a, b) => (isOlderThanCandidate(a, b) ? -1 : 1))[0];
