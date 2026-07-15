@@ -73,7 +73,9 @@ function baseState(overrides: Partial<FakeState> = {}): FakeState {
 function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}): RetireGatewayDeps {
   let virtualClock = 0;
   return {
-    verifyRetirementClaim: vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
+    attestRetirementClaim: vi.fn(async () => ({ ok: true as const, wakeRequired: false })),
+    acquireRetirementConfigFence: vi.fn(async () => ({ kind: "shared" as const })),
+    verifyRetirementConfigFence: vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
       const live = state.live.get(gatewayId);
       const desiredStatus = state.desiredStatus.get(gatewayId);
       if (!desiredStatus) {
@@ -129,6 +131,7 @@ function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}):
     teardownGatewayServiceAccount: vi.fn(async () => {}),
     syncFleetIngress: vi.fn(async () => {}),
     pollIntervalMs: 1_000,
+    retirementAttestationTimeoutMs: 5_000,
     now: () => virtualClock,
     wait: vi.fn(async (ms: number) => {
       virtualClock += ms;
@@ -368,25 +371,121 @@ describe("createRetireGatewayHandler — independent best-effort teardown (D4)",
 
 describe("createRetireGatewayHandler — refusals + edge cases", () => {
   it.each([
+    "openclaw config is dirty",
+    "system config writer is syncing",
+    "system config sync failed",
+    "system config control is unavailable",
+  ])("does not drain when the retirement config freeze fails: %s", async (error) => {
+    const state = baseState({
+      revisions: [{ revisionId: "canary-r1", release: 1, lifecycle: "serving" }],
+    });
+    const deps = makeDeps(state, {
+      acquireRetirementConfigFence: vi.fn(async () => {
+        throw new Error(error);
+      }),
+    } as unknown as Partial<RetireGatewayDeps>);
+
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(result).toMatchObject({
+      success: false,
+      output: {
+        retirementFencePending: {
+          gatewayId: "canary",
+          operationId: "op-r-1",
+        },
+      },
+    });
+    expect(result.error).toContain(error);
+    expect(deps.readNonRetiredRevisions).not.toHaveBeenCalled();
+    expect(deps.helmUninstallRevision).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the exact durable config binding after freeze and before drain", async () => {
+    const state = baseState({
+      revisions: [{ revisionId: "canary-r1", release: 1, lifecycle: "serving" }],
+    });
+    const fence = {
+      kind: "dedicated" as const,
+      checkpoint: {
+        migrationId: "retire-op-r-1",
+        slug: "ceckert",
+        sourceRevisionId: "canary-r1",
+        targetRevisionId: "canary-r0",
+        checkpointCommit: "a".repeat(40),
+        configHash: "b".repeat(64),
+        freezeObject: "c".repeat(40),
+      },
+    };
+    const verifyRetirementConfigFence = vi.fn(async () => ({
+      ok: false as const,
+      error: "gateway canary retirement config checkpoint changed before teardown",
+    }));
+    const deps = makeDeps(state, {
+      acquireRetirementConfigFence: vi.fn(async () => fence),
+      verifyRetirementConfigFence,
+    } as unknown as Partial<RetireGatewayDeps>);
+
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(result).toMatchObject({
+      success: false,
+      error: "gateway canary retirement config checkpoint changed before teardown",
+    });
+    expect(verifyRetirementConfigFence).toHaveBeenCalledWith({
+      gatewayId: "canary",
+      operationId: "op-r-1",
+      version: 1,
+      fence,
+    });
+    expect(deps.readNonRetiredRevisions).not.toHaveBeenCalled();
+    expect(deps.helmUninstallRevision).not.toHaveBeenCalled();
+  });
+
+  it("waits for a long-paused dedicated gateway to publish fresh attestation before claiming retirement", async () => {
+    const state = baseState();
+    const attestRetirementClaim = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false as const,
+        error: "gateway canary revision canary-r1 telemetry is stale or unavailable",
+        retryable: true,
+      })
+      .mockResolvedValueOnce({ ok: true as const, wakeRequired: true });
+    const deps = makeDeps(state, {
+      attestRetirementClaim,
+    } as unknown as Partial<RetireGatewayDeps>);
+
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(result.success).toBe(true);
+    expect(attestRetirementClaim).toHaveBeenCalledTimes(2);
+    expect(deps.wait).toHaveBeenCalledWith(1_000);
+    expect(deps.acquireRetirementConfigFence).toHaveBeenCalledTimes(1);
+    expect(deps.verifyRetirementConfigFence).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
     "gateway canary has an unfinished release roll and config obligation",
     "gateway canary live revision has an active config-control obligation",
   ])("rechecks the atomic claim immediately before drain and stops on %s", async (error) => {
     const state = baseState({
       revisions: [{ revisionId: "canary-r1", release: 1, lifecycle: "serving" }],
     });
-    const verifyRetirementClaim = vi.fn(async () => ({ ok: false as const, error }));
+    const verifyRetirementConfigFence = vi.fn(async () => ({ ok: false as const, error }));
     const deps = makeDeps(
       state,
-      { verifyRetirementClaim } as unknown as Partial<RetireGatewayDeps>,
+      { verifyRetirementConfigFence } as unknown as Partial<RetireGatewayDeps>,
     );
 
     const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
 
     expect(result).toMatchObject({ success: false, error });
-    expect(verifyRetirementClaim).toHaveBeenCalledWith({
+    expect(verifyRetirementConfigFence).toHaveBeenCalledWith({
       gatewayId: "canary",
       operationId: "op-r-1",
       version: 1,
+      fence: { kind: "shared" },
     });
     expect(deps.readNonRetiredRevisions).not.toHaveBeenCalled();
     expect(deps.helmUninstallRevision).not.toHaveBeenCalled();
@@ -455,7 +554,7 @@ describe("createRetireGatewayHandler — refusals + edge cases", () => {
   it("fails closed when the durable root or exact live revision is unreadable", async () => {
     const state = baseState();
     const deps = makeDeps(state, {
-      verifyRetirementClaim: vi.fn(async () => {
+      verifyRetirementConfigFence: vi.fn(async () => {
         throw new Error("exact live revision unavailable");
       }),
     });

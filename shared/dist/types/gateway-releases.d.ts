@@ -82,6 +82,7 @@ export interface GatewayRetirementClaim {
     operationId: string;
     version: number;
     claimedAt: number;
+    phase: "waking" | "claimed";
     liveRevisionId: string | null;
     liveRelease: number | null;
     liveRuntimeIdentity: {
@@ -90,6 +91,16 @@ export interface GatewayRetirementClaim {
         openclawVersion: string;
     } | null;
     previousDesiredStatus: Exclude<GatewayLifecycleStatus, "retired">;
+    configCheckpoint: GatewayRetirementConfigCheckpoint | null;
+}
+export interface GatewayRetirementConfigCheckpoint {
+    migrationId: string;
+    slug: string;
+    sourceRevisionId: string;
+    targetRevisionId: string;
+    checkpointCommit: string;
+    configHash: string;
+    freezeObject: string;
 }
 export interface GatewayDoc {
     gatewayId: string;

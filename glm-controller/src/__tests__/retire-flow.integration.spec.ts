@@ -95,15 +95,10 @@ function adminDeleteGateway(
 
 function makeRetireDeps(state: SharedState) {
   return {
-    verifyRetirementClaim: async ({ gatewayId }: { gatewayId: string }) => {
+    attestRetirementClaim: async () => ({ ok: true as const, wakeRequired: false }),
+    acquireRetirementConfigFence: async () => ({ kind: "shared" as const }),
+    verifyRetirementConfigFence: async ({ gatewayId }: { gatewayId: string }) => {
       const desiredStatus = state.glmGateways.get(gatewayId)?.desiredStatus;
-      if (
-        desiredStatus !== "running" &&
-        desiredStatus !== "paused" &&
-        desiredStatus !== "retired"
-      ) {
-        return { ok: false as const, error: "durable retirement state unavailable" };
-      }
       const hb = state.gateways.get(gatewayId);
       if (desiredStatus !== "retired") {
         return { ok: false as const, error: "desiredStatus is no longer retired" };
@@ -137,6 +132,7 @@ function makeRetireDeps(state: SharedState) {
     teardownGatewayServiceAccount: vi.fn(async () => {}),
     syncFleetIngress: vi.fn(async () => {}),
     pollIntervalMs: 10,
+    retirementAttestationTimeoutMs: 1_000,
     now: () => Date.now(),
     wait: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
     log: vi.fn(),

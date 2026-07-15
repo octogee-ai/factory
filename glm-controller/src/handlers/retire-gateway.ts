@@ -1,5 +1,6 @@
 import type { Operation, OperationStep, StepStatus } from "@octogee/shared/types/glm";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
+import type { GatewayRetirementConfigCheckpoint } from "@octogee/shared/types/gateway-releases";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 
 const UNKNOWN_ERROR = "unknown error";
@@ -10,11 +11,31 @@ interface NonRetiredGatewayRevision {
   mountedCustomers: string[];
 }
 
+export type RetirementConfigFence =
+  | { kind: "shared" }
+  | { kind: "dedicated"; checkpoint: GatewayRetirementConfigCheckpoint };
+
 export interface RetireGatewayDeps {
-  verifyRetirementClaim: (input: {
+  attestRetirementClaim: (input: {
     gatewayId: string;
     operationId: string;
     version: number;
+  }) => Promise<
+    | { ok: true; wakeRequired: boolean }
+    | { ok: false; error: string; retryable: boolean }
+  >;
+
+  acquireRetirementConfigFence: (input: {
+    gatewayId: string;
+    operationId: string;
+    version: number;
+  }) => Promise<RetirementConfigFence>;
+
+  verifyRetirementConfigFence: (input: {
+    gatewayId: string;
+    operationId: string;
+    version: number;
+    fence: RetirementConfigFence;
   }) => Promise<{ ok: true } | { ok: false; error: string }>;
 
   deleteGlmGateway: (gatewayId: string) => Promise<void>;
@@ -69,6 +90,7 @@ export interface RetireGatewayDeps {
 
   syncFleetIngress: () => Promise<void>;
   pollIntervalMs: number;
+  retirementAttestationTimeoutMs: number;
   now: () => number;
   wait: (ms: number) => Promise<void>;
   log: (msg: string) => void;
@@ -144,21 +166,60 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
     const assignmentFailure = await assertNoAssignments(deps, gatewayId);
     if (assignmentFailure) return assignmentFailure;
 
-    let claimVerification: { ok: true } | { ok: false; error: string };
+    const attestationFailure = await awaitRetirementAttestation(
+      deps,
+      gatewayId,
+      op.id,
+      retirementClaimVersion,
+    );
+    if (attestationFailure) return attestationFailure;
+
+    let configFence: RetirementConfigFence;
     try {
-      claimVerification = await deps.verifyRetirementClaim({
+      configFence = await deps.acquireRetirementConfigFence({
         gatewayId,
         operationId: op.id,
         version: retirementClaimVersion,
       });
     } catch (error) {
-      return failure(
-        `gateway ${gatewayId} durable retirement state unreadable: ${
+      return {
+        steps: [],
+        success: false,
+        error: `gateway ${gatewayId} retirement config freeze failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        output: {
+          retirementFencePending: { gatewayId, operationId: op.id },
+        },
+      };
+    }
+
+    let finalVerification: { ok: true } | { ok: false; error: string };
+    try {
+      finalVerification = await deps.verifyRetirementConfigFence({
+        gatewayId,
+        operationId: op.id,
+        version: retirementClaimVersion,
+        fence: configFence,
+      });
+    } catch (error) {
+      return retirementConfigFenceFailure(
+        configFence,
+        gatewayId,
+        op.id,
+        `gateway ${gatewayId} retirement config fence unreadable: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
     }
-    if (!claimVerification.ok) return failure(claimVerification.error);
+    if (!finalVerification.ok) {
+      return retirementConfigFenceFailure(
+        configFence,
+        gatewayId,
+        op.id,
+        finalVerification.error,
+      );
+    }
 
     // Drain every non-retired revision (uninstall octogee-gw-{revisionId} +
     // tombstone + retire the revision doc) BEFORE any gateway-scoped teardown.
@@ -197,6 +258,53 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
 
     return { steps: [], success: true };
   };
+}
+
+function retirementConfigFenceFailure(
+  fence: RetirementConfigFence,
+  gatewayId: string,
+  operationId: string,
+  error: string,
+): OperationResult {
+  if (fence.kind === "shared") return failure(error);
+  return {
+    steps: [],
+    success: false,
+    error,
+    output: {
+      retirementFencePending: { gatewayId, operationId },
+    },
+  };
+}
+
+async function awaitRetirementAttestation(
+  deps: RetireGatewayDeps,
+  gatewayId: string,
+  operationId: string,
+  version: number,
+): Promise<OperationResult | null> {
+  const deadline = deps.now() + deps.retirementAttestationTimeoutMs;
+  while (true) {
+    let attestation: Awaited<ReturnType<RetireGatewayDeps["attestRetirementClaim"]>>;
+    try {
+      attestation = await deps.attestRetirementClaim({ gatewayId, operationId, version });
+    } catch (error) {
+      return failure(
+        `gateway ${gatewayId} retirement wake attestation unreadable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    if (attestation.ok) return null;
+    if (!attestation.retryable) return failure(attestation.error);
+    const remaining = deadline - deps.now();
+    if (remaining <= 0) {
+      return failure(
+        `gateway ${gatewayId} retirement wake attestation timed out: ${attestation.error}`,
+      );
+    }
+    await deps.wait(Math.min(deps.pollIntervalMs, remaining));
+  }
 }
 
 async function teardownResources(

@@ -119,8 +119,14 @@ import { completeOperatorReservationAfterMigration } from "./operator-reservatio
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import type { MigrationRollFence } from "@octogee/core/fleet-migration-runner";
-import { verifyGatewayRetirementClaimAtomic } from "@octogee/core/gateway-retirement-claim";
+import {
+  attestGatewayRetirementAfterWakeAtomic,
+  bindGatewayRetirementConfigCheckpointAtomic,
+  verifyGatewayRetirementConfigCheckpointAtomic,
+  verifyGatewayRetirementClaimAtomic,
+} from "@octogee/core/gateway-retirement-claim";
 import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
+import { createRetirementConfigFenceManager } from "./retirement-config-fence.js";
 import { createRetireRevisionHandler } from "./handlers/retire-revision.js";
 import { createGatewayServiceAccountTeardown } from "./lib/gateway-gsa.js";
 import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
@@ -314,6 +320,10 @@ const RELEASE_RETENTION_SWEEP_MS = parseNonNegativeInt(
 const HELM_RECOVERY_STALE_MS = parseNonNegativeInt(
   process.env.HELM_RECOVERY_STALE_MS,
   15 * 60 * 1000,
+);
+const RETIREMENT_ATTESTATION_TIMEOUT_MS = parseNonNegativeInt(
+  process.env.RETIREMENT_ATTESTATION_TIMEOUT_MS,
+  10 * 60 * 1000,
 );
 
 // One shared edge ingress carries the api host (/g/<id>/* gateway-local public
@@ -3772,8 +3782,55 @@ async function buildHandlers(
     log: logFn,
   });
 
-  const retireGateway = createRetireGatewayHandler({
-    verifyRetirementClaim: ({ gatewayId, operationId, version }) =>
+  const retirementConfigFence = createRetirementConfigFenceManager({
+    readGatewayContext: async (gatewayId) => {
+      const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+      const root = snap.exists ? snap.data() : undefined;
+      if (!isDurableRootConfigDoc(root, gatewayId)) {
+        throw new Error(`gateway ${gatewayId} durable root is unavailable`);
+      }
+      if (root.gatewayClass === "shared") return { kind: "shared" as const };
+      if (
+        (root.gatewayClass !== "builder" && root.gatewayClass !== "operator") ||
+        typeof root.builderSlug !== "string" ||
+        root.builderSlug.length === 0 ||
+        typeof root.liveRevisionId !== "string" ||
+        root.liveRevisionId.length === 0
+      ) {
+        throw new Error(`gateway ${gatewayId} dedicated config identity is unavailable`);
+      }
+      return {
+        kind: "dedicated" as const,
+        slug: root.builderSlug,
+        sourceRevisionId: root.liveRevisionId,
+      };
+    },
+    freezeConfigV2: async (request) => {
+      const sourceUrl = await resolveGatewayUrlFromFirestore(db, request.sourceRevisionId);
+      const client = createMigrationClient({
+        privateKey,
+        resolveGatewayUrl: () => sourceUrl,
+        log: logFn,
+      });
+      return client.freezeConfigV2({
+        ...request,
+        transportId: request.sourceRevisionId,
+      });
+    },
+    bindCheckpoint: (input) =>
+      bindGatewayRetirementConfigCheckpointAtomic({
+        db,
+        ...input,
+        now: Date.now(),
+        updatedBy: "cowboy-retire-gateway",
+      }),
+    verifyCheckpoint: (input) =>
+      verifyGatewayRetirementConfigCheckpointAtomic({
+        db,
+        ...input,
+        now: Date.now(),
+      }),
+    verifySharedClaim: ({ gatewayId, operationId, version }) =>
       verifyGatewayRetirementClaimAtomic({
         db,
         gatewayId,
@@ -3782,6 +3839,20 @@ async function buildHandlers(
         now: Date.now(),
         updatedBy: "cowboy-retire-gateway",
       }),
+  });
+
+  const retireGateway = createRetireGatewayHandler({
+    attestRetirementClaim: ({ gatewayId, operationId, version }) =>
+      attestGatewayRetirementAfterWakeAtomic({
+        db,
+        gatewayId,
+        operationId,
+        version,
+        now: Date.now(),
+        updatedBy: "cowboy-retire-gateway",
+      }),
+    acquireRetirementConfigFence: retirementConfigFence.acquire,
+    verifyRetirementConfigFence: retirementConfigFence.verify,
     readAssignmentsForGateway: async (gatewayId) => {
       const assignments = await readAssignmentDocsForGateway(db, gatewayId);
       return assignments.map((a) => ({ uid: a.uid, slug: a.slug }));
@@ -3879,6 +3950,7 @@ async function buildHandlers(
     }),
     syncFleetIngress: fleetOps.syncFleetIngress,
     pollIntervalMs: 5_000,
+    retirementAttestationTimeoutMs: RETIREMENT_ATTESTATION_TIMEOUT_MS,
     now: () => Date.now(),
     wait: (ms) => new Promise((r) => setTimeout(r, ms)),
     log: logFn,

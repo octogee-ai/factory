@@ -51,6 +51,11 @@ describe("classifyOperationFailure", () => {
     expect(classifyOperationFailure("source unmount cleanup pending: source RPC unavailable")).toBe(
       "transient",
     );
+    expect(
+      classifyOperationFailure(
+        "gateway bender retirement config freeze failed: openclaw config is dirty",
+      ),
+    ).toBe("transient");
   });
 
   it("classifies validation and the #2137 fail-fast target-state guard as terminal", () => {
@@ -139,6 +144,28 @@ describe("buildOperationCompletionUpdate", () => {
 
     expect(update.status).toBe("pending");
     expect(update.output).toEqual({ configCleanup });
+    expect(update.nextAttemptAt).toBe(now + retryBackoffMs(MAX_OPERATION_ATTEMPTS + 1));
+  });
+
+  it("keeps a durable retirement freeze obligation level-triggered after the normal retry cap", () => {
+    const retirementFencePending = {
+      gatewayId: "bender",
+      operationId: "retire-1",
+    };
+    const update = buildOperationCompletionUpdate({
+      op: { attempts: MAX_OPERATION_ATTEMPTS, attemptHistory: [] },
+      result: {
+        steps: [],
+        success: false,
+        error: "gateway bender retirement config checkpoint changed before teardown",
+        output: { retirementFencePending },
+      },
+      steps: [],
+      now,
+    });
+
+    expect(update.status).toBe("pending");
+    expect(update.output).toEqual({ retirementFencePending });
     expect(update.nextAttemptAt).toBe(now + retryBackoffMs(MAX_OPERATION_ATTEMPTS + 1));
   });
 

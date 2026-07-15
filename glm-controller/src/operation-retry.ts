@@ -22,6 +22,7 @@ const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
   /\bpreempt(ed|ion)?\b/i,
   /config unfreeze cleanup pending/i,
   /source unmount cleanup pending/i,
+  /retirement config freeze failed/i,
 ];
 
 export function classifyOperationFailure(
@@ -102,7 +103,12 @@ export function buildOperationCompletionUpdate(
   }
 
   const error = result.error ?? "unknown error";
-  const classification = classifyOperationFailure(error);
+  const hasRetirementFencePending =
+    result.output?.retirementFencePending !== null &&
+    typeof result.output?.retirementFencePending === "object";
+  const classification = hasRetirementFencePending
+    ? "transient"
+    : classifyOperationFailure(error);
   const attemptRecord: OperationAttemptRecord = {
     attempt: attempts,
     startedAt: op.startedAt ?? now,
@@ -118,7 +124,7 @@ export function buildOperationCompletionUpdate(
     typeof result.output?.configCleanup === "object";
   if (
     classification === "transient" &&
-    (attempts < MAX_OPERATION_ATTEMPTS || hasDurableCleanup)
+    (attempts < MAX_OPERATION_ATTEMPTS || hasDurableCleanup || hasRetirementFencePending)
   ) {
     const backoffMs = retryBackoffMs(attempts);
     return {
