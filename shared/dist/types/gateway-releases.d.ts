@@ -132,6 +132,22 @@ export interface RevisionHeartbeatObservation {
     mountedCustomers: string[];
     migratingIn: string[];
 }
+export interface RevisionSystemConfigObservation {
+    migrationId: string;
+    builderSlug: string;
+    sourceRevisionId: string;
+    checkpointCommit: string;
+    restoredCommit: string;
+    acceptedCommit: string;
+    configHash: string;
+    configReady: true;
+    observedRevisionId: string;
+    restoreProvenAt: number;
+    configReadyAt: number;
+    runtimeConfigHash: string;
+    observedAt: number;
+    sourceUnfrozenAt?: number;
+}
 export interface RevisionRealizationDoc {
     docKind: "revision";
     revisionId: string;
@@ -145,6 +161,7 @@ export interface RevisionRealizationDoc {
     retireReason: string | null;
     helm: RevisionHelmObservation;
     heartbeat: RevisionHeartbeatObservation;
+    systemConfig?: RevisionSystemConfigObservation;
     lastError: {
         message: string | null;
         at: number | null;

@@ -65,6 +65,19 @@ export interface CutoverCommitParams {
         source: AssignmentSource;
         updatedByOperationId: string | null;
     } | null;
+    rollFence?: {
+        operationId: string;
+        targetRevisionId: string;
+        targetRelease: number;
+        sourceRevisionId: string;
+        sourceEpoch: number;
+        configReady?: {
+            observedRevisionId: string;
+            acceptedCommit: string;
+            configReadyAt: number;
+            runtimeConfigHash: string;
+        };
+    };
 }
 export declare function commitCutoverAtomic(deps: FleetStateDeps, params: CutoverCommitParams): Promise<void>;
 export interface MarkAssignmentStateParams {

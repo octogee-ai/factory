@@ -1,4 +1,4 @@
-import { type FlushGatewayResponse, type ImportResponse, type QuiesceResponse, type RestoreMigrationResponse, type UnmountResponse, type VerifyMigrationResponse } from "@octogee/shared/types/fleet-controller";
+import { type FlushGatewayResponse, type ConfigFreezeResponse, type ConfigRestoreProofResponse, type ConfigUnfreezeResponse, type ImportResponse, type QuiesceResponse, type RestoreMigrationResponse, type UnmountResponse, type VerifyMigrationResponse } from "@octogee/shared/types/fleet-controller";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { MigrationSyncMode } from "./fleet-migration.js";
 export interface MigrationClientTimeouts {
@@ -15,6 +15,25 @@ export interface MigrationClientDeps {
     timeouts?: MigrationClientTimeouts;
 }
 export interface MigrationClient {
+    freezeConfig(opts: {
+        migrationId: string;
+        gatewayId: string;
+        transportId?: string;
+        slug: string;
+    }): Promise<ConfigFreezeResponse>;
+    proveConfigRestore(opts: {
+        migrationId: string;
+        gatewayId: string;
+        transportId?: string;
+        slug: string;
+        checkpointCommit: string;
+    }): Promise<ConfigRestoreProofResponse>;
+    unfreezeConfig(opts: {
+        migrationId: string;
+        gatewayId: string;
+        transportId?: string;
+        slug: string;
+    }): Promise<ConfigUnfreezeResponse>;
     quiesce(opts: {
         migrationId: string;
         gatewayId: string;

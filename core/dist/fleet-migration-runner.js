@@ -1,6 +1,40 @@
 import { advancePhase, nextMigrationStep, rollbackPlan, } from "./fleet-migration.js";
+async function releaseConfigFreeze(input, deps) {
+    await report(deps, { name: "unfreeze-config", status: "running" });
+    try {
+        const response = await deps.client.unfreezeConfig({
+            migrationId: input.migrationId,
+            gatewayId: input.fromGatewayId,
+            transportId: input.fromTransportId ?? input.fromGatewayId,
+            slug: input.slug,
+        });
+        if (response.unfrozen !== true)
+            throw new Error("config unfreeze was not confirmed");
+        await report(deps, { name: "unfreeze-config", status: "done" });
+        return true;
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await report(deps, { name: "unfreeze-config", status: "skipped", error: message });
+        deps.log(`[migration-runner] config unfreeze failed migrationId=${input.migrationId}: ${message}`);
+        return false;
+    }
+}
+function pendingConfigCleanup(input, completeSourceUnmount, resume) {
+    return {
+        migrationId: input.migrationId,
+        slug: input.slug,
+        sourceGatewayId: input.fromGatewayId,
+        sourceTransportId: input.fromTransportId ?? input.fromGatewayId,
+        completeSourceUnmount,
+        resume,
+    };
+}
+function cleanupPendingError(reason) {
+    return `config unfreeze cleanup pending${reason ? `: ${reason}` : ""}`;
+}
 async function executeStep(params) {
-    const { step, deps, migrationId, slug, restoreSnapshot, includeActivationManifest, fromTransportId, toTransportId, crossGateway, cutoverRevision, } = params;
+    const { step, deps, migrationId, slug, restoreSnapshot, includeActivationManifest, fromTransportId, toTransportId, crossGateway, cutoverRevision, rollFence, } = params;
     switch (step.action) {
         case "restore-target":
             if (!restoreSnapshot) {
@@ -54,6 +88,7 @@ async function executeStep(params) {
                 fromGatewayId: step.from,
                 flipMirror: crossGateway,
                 revision: cutoverRevision,
+                ...(rollFence ? { rollFence } : {}),
             });
             return;
         case "unmount-gateway":
@@ -87,6 +122,10 @@ export async function runMigration(input, deps) {
     const toRevision = input.toRevision ?? null;
     const fromRevision = input.fromRevision ?? null;
     let quiescingMarked = false;
+    let configFrozen = false;
+    let configCheckpoint;
+    let configProof;
+    let cutoverRollFence = input.rollFence ?? null;
     let state = {
         phase: "initial",
         slug: input.slug,
@@ -94,12 +133,64 @@ export async function runMigration(input, deps) {
         fromGatewayId: input.fromGatewayId,
         toGatewayId: input.toGatewayId,
     };
+    if (input.configFence) {
+        if (!input.fromRevision || !input.toRevision || !deps.acceptConfigProof) {
+            return {
+                success: false,
+                finalPhase: "initial",
+                errorAt: {
+                    phase: "initial",
+                    error: "config fence requires source/target revisions and revision status persistence",
+                },
+                rolledBack: false,
+            };
+        }
+        await report(deps, { name: "freeze-config", status: "running" });
+        try {
+            const checkpoint = await deps.client.freezeConfig({
+                migrationId: input.migrationId,
+                gatewayId: input.fromGatewayId,
+                transportId: fromTransportId,
+                slug: input.slug,
+            });
+            configFrozen = true;
+            configCheckpoint = {
+                checkpointCommit: checkpoint.checkpointCommit,
+                configHash: checkpoint.configHash,
+            };
+            await report(deps, { name: "freeze-config", status: "done" });
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            await report(deps, { name: "freeze-config", status: "failed", error: message });
+            const released = await releaseConfigFreeze(input, deps);
+            return {
+                success: false,
+                finalPhase: "initial",
+                errorAt: {
+                    phase: "initial",
+                    error: released ? message : cleanupPendingError(message),
+                },
+                rolledBack: false,
+                ...(!released
+                    ? {
+                        configCleanup: pendingConfigCleanup(input, false, {
+                            success: false,
+                            rolledBack: false,
+                            error: message,
+                        }),
+                    }
+                    : {}),
+            };
+        }
+    }
     while (true) {
         const step = nextMigrationStep(state);
         if (step.action === "complete")
             break;
         const phaseAtStart = state.phase;
         const name = reportName(step);
+        let activeReportName = name;
         await report(deps, { name, status: "running" });
         try {
             // Gated quiesce (PR7): block the source edge from serving this customer
@@ -129,8 +220,85 @@ export async function runMigration(input, deps) {
                 direction: "forward",
                 crossGateway,
                 cutoverRevision: toRevision,
+                rollFence: cutoverRollFence,
             });
             await report(deps, { name, status: "done" });
+            if (step.action === "restore-target" && configCheckpoint) {
+                activeReportName = "prove-config-restore";
+                await report(deps, { name: activeReportName, status: "running" });
+                const proof = await deps.client.proveConfigRestore({
+                    migrationId: input.migrationId,
+                    gatewayId: input.toGatewayId,
+                    transportId: toTransportId,
+                    slug: input.slug,
+                    checkpointCommit: configCheckpoint.checkpointCommit,
+                });
+                if (proof.restoredCommit !== configCheckpoint.checkpointCommit) {
+                    throw new Error(`target restored commit ${proof.restoredCommit} does not match source checkpoint ${configCheckpoint.checkpointCommit}`);
+                }
+                if (proof.configReady !== true ||
+                    proof.observedRevisionId !== toTransportId ||
+                    !Number.isFinite(proof.restoreProvenAt) ||
+                    !Number.isFinite(proof.configReadyAt) ||
+                    proof.configReadyAt < proof.restoreProvenAt ||
+                    !proof.runtimeConfigHash) {
+                    throw new Error("target config readiness is stale or belongs to another revision");
+                }
+                configProof = {
+                    restoredCommit: proof.restoredCommit,
+                    acceptedCommit: proof.acceptedCommit,
+                    configHash: proof.configHash,
+                    configReady: proof.configReady,
+                    observedRevisionId: proof.observedRevisionId,
+                    restoreProvenAt: proof.restoreProvenAt,
+                    configReadyAt: proof.configReadyAt,
+                    runtimeConfigHash: proof.runtimeConfigHash,
+                };
+                if (cutoverRollFence) {
+                    cutoverRollFence = {
+                        ...cutoverRollFence,
+                        configReady: {
+                            observedRevisionId: proof.observedRevisionId,
+                            acceptedCommit: proof.acceptedCommit,
+                            configReadyAt: proof.configReadyAt,
+                            runtimeConfigHash: proof.runtimeConfigHash,
+                        },
+                    };
+                }
+                if (!deps.acceptConfigProof) {
+                    throw new Error("revision status persistence unavailable");
+                }
+                await deps.acceptConfigProof({
+                    migrationId: input.migrationId,
+                    slug: input.slug,
+                    sourceRevisionId: input.fromRevision.revisionId,
+                    targetRevisionId: input.toRevision.revisionId,
+                    checkpoint: configCheckpoint,
+                    proof: configProof,
+                });
+                await report(deps, { name: activeReportName, status: "done" });
+            }
+            if (step.action === "cutover-firestore" && configFrozen && crossGateway) {
+                const released = await releaseConfigFreeze(input, deps);
+                if (!released) {
+                    const error = cleanupPendingError();
+                    return {
+                        success: false,
+                        finalPhase: "cutover-done",
+                        errorAt: { phase: "cutover-done", error },
+                        rolledBack: false,
+                        ...(configCheckpoint ? { configCheckpoint } : {}),
+                        ...(configProof ? { configProof } : {}),
+                        configCleanup: pendingConfigCleanup(input, true, {
+                            success: true,
+                            rolledBack: false,
+                            ...(configCheckpoint ? { configCheckpoint } : {}),
+                            ...(configProof ? { configProof } : {}),
+                        }),
+                    };
+                }
+                configFrozen = false;
+            }
             deps.log(`[migration-runner] ${name} ok migrationId=${input.migrationId} slug=${input.slug} (phase ${phaseAtStart} → ${advancePhase(state.phase)})`);
             state = { ...state, phase: advancePhase(state.phase) };
         }
@@ -142,7 +310,7 @@ export async function runMigration(input, deps) {
                 state = { ...state, phase: advancePhase(state.phase) };
                 continue;
             }
-            await report(deps, { name, status: "failed", error: errMsg });
+            await report(deps, { name: activeReportName, status: "failed", error: errMsg });
             deps.log(`[migration-runner] ❌ ${name} failed at phase=${phaseAtStart}: ${errMsg}`);
             const rolledBack = await tryRollback(state, deps, input.migrationId, {
                 fromTransportId,
@@ -156,16 +324,44 @@ export async function runMigration(input, deps) {
                     ? { gatewayId: input.fromGatewayId, uid: input.uid }
                     : null,
             });
+            let released = true;
+            if (configFrozen) {
+                released = await releaseConfigFreeze(input, deps);
+                if (released)
+                    configFrozen = false;
+            }
             return {
                 success: false,
                 finalPhase: state.phase,
-                errorAt: { phase: phaseAtStart, error: errMsg },
+                errorAt: {
+                    phase: phaseAtStart,
+                    error: released ? errMsg : cleanupPendingError(errMsg),
+                },
                 rolledBack,
+                ...(configCheckpoint ? { configCheckpoint } : {}),
+                ...(configProof ? { configProof } : {}),
+                ...(!released
+                    ? {
+                        configCleanup: pendingConfigCleanup(input, false, {
+                            success: false,
+                            rolledBack,
+                            error: errMsg,
+                            ...(configCheckpoint ? { configCheckpoint } : {}),
+                            ...(configProof ? { configProof } : {}),
+                        }),
+                    }
+                    : {}),
             };
         }
     }
     deps.log(`[migration-runner] ✅ migration complete migrationId=${input.migrationId} slug=${input.slug} ${input.fromGatewayId} → ${input.toGatewayId}`);
-    return { success: true, finalPhase: "done", rolledBack: false };
+    return {
+        success: true,
+        finalPhase: "done",
+        rolledBack: false,
+        ...(configCheckpoint ? { configCheckpoint } : {}),
+        ...(configProof ? { configProof } : {}),
+    };
 }
 async function tryRollback(state, deps, migrationId, transports) {
     let plan;
@@ -200,6 +396,7 @@ async function tryRollback(state, deps, migrationId, transports) {
                 direction: "rollback",
                 crossGateway: transports.crossGateway,
                 cutoverRevision: transports.fromRevision,
+                rollFence: null,
             });
             await report(deps, { name: rbName, status: "done" });
             deps.log(`[migration-runner] rollback ${step.action} ok`);

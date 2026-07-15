@@ -1,5 +1,10 @@
 import { signFleetRequest } from "./fleet-signature.js";
 import { SIGNATURE_HEADER, MIGRATION_QUIESCE_TIMEOUT_MS, MIGRATION_TRANSFER_TIMEOUT_MS, MIGRATION_UNMOUNT_TIMEOUT_MS, MIGRATION_VERIFY_TIMEOUT_MS, } from "@octogee/shared/types/fleet-controller";
+function assertConfigResponseBinding(response, migrationId, slug) {
+    if (response.migrationId !== migrationId || response.slug !== slug) {
+        throw new Error("malformed config response binding");
+    }
+}
 export function createMigrationClient(deps) {
     const fetchImpl = deps.fetch ?? globalThis.fetch;
     const log = deps.log ?? (() => undefined);
@@ -48,6 +53,44 @@ export function createMigrationClient(deps) {
         return (await res.json());
     };
     return {
+        async freezeConfig({ migrationId, gatewayId, transportId, slug }) {
+            const response = await postSignedJson(transportId ?? gatewayId, `/config-freeze/${gatewayId}`, migrationId, { migrationId, slug }, transferMs);
+            assertConfigResponseBinding(response, migrationId, slug);
+            if (response.frozen !== true ||
+                !/^[0-9a-f]{40}$/.test(response.checkpointCommit) ||
+                !/^[0-9a-f]{64}$/.test(response.configHash)) {
+                throw new Error("malformed config checkpoint response");
+            }
+            log(`[migration-client] config checkpoint migrationId=${migrationId} commit=${response.checkpointCommit}`);
+            return response;
+        },
+        async proveConfigRestore({ migrationId, gatewayId, transportId, slug, checkpointCommit }) {
+            const response = await postSignedJson(transportId ?? gatewayId, `/config-restore-proof/${gatewayId}`, migrationId, { migrationId, slug, checkpointCommit }, transferMs);
+            assertConfigResponseBinding(response, migrationId, slug);
+            if (!/^[0-9a-f]{40}$/.test(response.restoredCommit) ||
+                !/^[0-9a-f]{40}$/.test(response.acceptedCommit) ||
+                !/^[0-9a-f]{64}$/.test(response.configHash) ||
+                response.configReady !== true ||
+                response.observedRevisionId !== (transportId ?? gatewayId) ||
+                !Number.isFinite(response.restoreProvenAt) ||
+                !Number.isFinite(response.configReadyAt) ||
+                response.configReadyAt < response.restoreProvenAt ||
+                typeof response.runtimeConfigHash !== "string" ||
+                response.runtimeConfigHash.length === 0) {
+                throw new Error("malformed config restore proof response");
+            }
+            log(`[migration-client] config restore proof migrationId=${migrationId} restored=${response.restoredCommit} accepted=${response.acceptedCommit}`);
+            return response;
+        },
+        async unfreezeConfig({ migrationId, gatewayId, transportId, slug }) {
+            const response = await postSignedJson(transportId ?? gatewayId, `/config-unfreeze/${gatewayId}`, migrationId, { migrationId, slug }, transferMs);
+            assertConfigResponseBinding(response, migrationId, slug);
+            if (response.unfrozen !== true) {
+                throw new Error("config unfreeze was not confirmed");
+            }
+            log(`[migration-client] config unfreeze migrationId=${migrationId}`);
+            return response;
+        },
         async restoreTarget({ migrationId, gatewayId, transportId, uid, slug, snapshot }) {
             const res = await postSignedJson(transportId ?? gatewayId, `/restore/${gatewayId}`, migrationId, { migrationId, uid, slug, snapshot }, transferMs);
             log(`[migration-client] ✅ restoreTarget migrationId=${migrationId} slug=${slug} gateway=${gatewayId} steps=${res.steps.join(",")}`);
