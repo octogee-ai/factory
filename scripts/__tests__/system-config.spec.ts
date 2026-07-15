@@ -190,6 +190,50 @@ describe("system_config restore", () => {
     expect(config.channels.mattermost).not.toHaveProperty("defaultAccount");
   });
 
+  it("preserves a customer-owned default Mattermost account when no historical Mac lane exists", () => {
+    const config = {
+      agents: {
+        list: [
+          {
+            id: "octogee-ceckert-coach",
+            name: "BenderEcho (ceckert)",
+            workspace: "/home/node/.openclaw/customers/ceckert",
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "octogee-ceckert-coach",
+          match: { channel: "mattermost", accountId: "default" },
+        },
+      ],
+      channels: {
+        mattermost: {
+          defaultAccount: "default",
+          accounts: {
+            default: {
+              botToken: {
+                source: "file",
+                provider: "octogee-mattermost",
+                id: "/default",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(removeLegacyMacConfig(config, {
+      GATEWAY_ID: "bender",
+      GATEWAY_BUILDER_SLUG: "ceckert",
+    })).toBe(true);
+    expect(config.channels.mattermost.accounts.default).toBeDefined();
+    expect(config.channels.mattermost.defaultAccount).toBe("default");
+    expect(config.bindings).toEqual([
+      expect.objectContaining({ agentId: "octogee-ceckert-coach" }),
+    ]);
+  });
+
   it("one-time state cleanup deletes only exact Mac directories and memory files", () => {
     const removedAgentDir = path.join(openclawDir, "agents", "octogee-ops-ceckert");
     const keptAgentDir = path.join(openclawDir, "agents", "octogee-ceckert-coach");

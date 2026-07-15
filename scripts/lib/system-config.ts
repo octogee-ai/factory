@@ -175,18 +175,25 @@ export function removeLegacyMacConfig(
 
   const mattermost = asRecord(asRecord(config.channels)?.mattermost);
   const accounts = asRecord(mattermost?.accounts);
-  if (accounts && Object.prototype.hasOwnProperty.call(accounts, "default")) {
+  const defaultAccount = asRecord(accounts?.default);
+  const removeDefaultAccount = removedIds.size > 0 ||
+    (defaultAccount !== null && (
+      Object.keys(defaultAccount).length === 0 || defaultAccount.botToken === "${MM_BOT_TOKEN}"
+    ));
+  if (removeDefaultAccount && accounts && Object.prototype.hasOwnProperty.call(accounts, "default")) {
     delete accounts.default;
     changed = true;
   }
-  if (mattermost?.defaultAccount === "default") {
+  if (removeDefaultAccount && mattermost?.defaultAccount === "default") {
     delete mattermost.defaultAccount;
     changed = true;
   }
-  for (const key of ["botToken", "token"]) {
-    if (mattermost && Object.prototype.hasOwnProperty.call(mattermost, key)) {
-      delete mattermost[key];
-      changed = true;
+  if (removedIds.size > 0) {
+    for (const key of ["botToken", "token"]) {
+      if (mattermost && Object.prototype.hasOwnProperty.call(mattermost, key)) {
+        delete mattermost[key];
+        changed = true;
+      }
     }
   }
   const builderSlug = env.GATEWAY_BUILDER_SLUG?.trim();
