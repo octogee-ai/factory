@@ -801,6 +801,53 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     );
   });
 
+  it("requires and publishes the native Dashboard bridge only for fully enabled isolated gateways", () => {
+    for (const gatewayClass of ["builder", "operator"]) {
+      const enabled = findDoc(
+        helmTemplate(`octogee-gw-${gatewayClass}`, {
+          gatewayId: gatewayClass,
+          gatewayClass,
+          builderSlug: "ceckert",
+          "operatorAccess.shellsEnabled": "true",
+          "operatorAccess.controlUiEnabled": "true",
+        }),
+        "Deployment",
+        `octogee-gateway-${gatewayClass}`,
+      ) ?? "";
+      const enabledGateway = containerBlock(enabled, "gateway");
+      const enabledEdge = containerBlock(enabled, "gateway-edge");
+      expect(enabledGateway).toMatch(
+        /name:\s*OPENCLAW_DASHBOARD_BRIDGE_REQUIRED[\s\S]*?value:\s*"true"/,
+      );
+      expect(enabledEdge).toMatch(
+        /name:\s*OPENCLAW_DASHBOARD_BRIDGE_ENABLED[\s\S]*?value:\s*"true"/,
+      );
+      expect(enabledEdge).toMatch(
+        /name:\s*OPENCLAW_DIR[\s\S]*?value:\s*"\/home\/node\/\.openclaw"/,
+      );
+      expect(enabledEdge).toMatch(
+        /name:\s*OPENCLAW_CONFIG_PATH[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/system_config\/openclaw\.json"/,
+      );
+      expect(enabledEdge).toMatch(
+        /name:\s*OPENCLAW_CONTROL_BROKER_URL[\s\S]*?value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/,
+      );
+      expect(enabledEdge).toMatch(/name:\s*API_PUBLIC_URL\b/);
+    }
+
+    for (const values of [
+      { gatewayId: "operator", gatewayClass: "operator", "operatorAccess.controlUiEnabled": "true" },
+      { gatewayId: "shared", gatewayClass: "shared", "operatorAccess.shellsEnabled": "true", "operatorAccess.controlUiEnabled": "true" },
+    ]) {
+      const disabled = findDoc(
+        helmTemplate(`octogee-gw-${values.gatewayId}`, values),
+        "Deployment",
+        `octogee-gateway-${values.gatewayId}`,
+      ) ?? "";
+      expect(containerBlock(disabled, "gateway")).not.toContain("OPENCLAW_DASHBOARD_BRIDGE_REQUIRED");
+      expect(containerBlock(disabled, "gateway-edge")).not.toContain("OPENCLAW_DASHBOARD_BRIDGE_ENABLED");
+    }
+  });
+
   it("omits the Mattermost admin-PAT bootstrap init container on operator gateways", () => {
     const dep =
       findDoc(

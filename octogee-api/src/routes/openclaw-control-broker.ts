@@ -34,6 +34,7 @@ const CONTROL_EVENTS = new Set([
 const METHOD_CATEGORIES = new Set([
   "read",
   "config_mutation",
+  "tools_invoke",
   "forbidden_mutation",
   "unknown",
 ]);

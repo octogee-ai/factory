@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import WebSocket from "ws";
 import type { AddressInfo } from "node:net";
+import { PassThrough } from "node:stream";
 
 import { WsUpgradeRouter } from "./upgrade-router";
 
@@ -289,6 +290,33 @@ const r = await attempt(port, "/k", {
     });
     expect(good.ok).toBe(true);
     if (good.ok) good.ws.close();
+  });
+
+  it("does not upgrade a browser socket that disconnects while authorization is pending", async () => {
+    let resolveAuthorization!: (allowed: boolean) => void;
+    const authorization = new Promise<boolean>((resolve) => {
+      resolveAuthorization = resolve;
+    });
+    const router = new WsUpgradeRouter();
+    router.add({
+      match: "/dashboard",
+      allowedOrigins: new Set(["https://api.example"]),
+      authorize: async () => authorization,
+      onUpgrade: vi.fn(),
+    });
+    const compiled = (router as unknown as {
+      routes: Array<{ wss: { handleUpgrade: ReturnType<typeof vi.fn> } }>;
+    }).routes[0];
+    compiled.wss.handleUpgrade = vi.fn();
+    const socket = new PassThrough();
+    router.dispatch({
+      url: "/dashboard",
+      headers: { origin: "https://api.example" },
+    } as never, socket, Buffer.alloc(0));
+    socket.destroy();
+    resolveAuthorization(true);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(compiled.wss.handleUpgrade).not.toHaveBeenCalled();
   });
 
   it("returns a retryable response and reports broker authorization failures", async () => {

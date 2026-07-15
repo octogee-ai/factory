@@ -66,10 +66,17 @@ export class WsUpgradeRouter {
                 return;
             }
         }
-        if (route.authorize && !(await route.authorize(req))) {
-            writeStatusAndDestroy(socket, 401, "Unauthorized");
-            return;
+        if (route.authorize) {
+            const allowed = await route.authorize(req);
+            if (socket.destroyed)
+                return;
+            if (!allowed) {
+                writeStatusAndDestroy(socket, 401, "Unauthorized");
+                return;
+            }
         }
+        if (socket.destroyed)
+            return;
         route.wss.handleUpgrade(req, socket, head, (ws) => {
             route.onUpgrade({ ws, req, ticket });
         });

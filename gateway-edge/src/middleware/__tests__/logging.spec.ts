@@ -180,6 +180,22 @@ describe("middleware/logging — requestLogger probe-path noise gating", () => {
     });
   });
 
+  it("redacts one-time OpenClaw launch tickets from request logs", () => {
+    const ticket = "ticket-secret-that-must-never-be-logged";
+    const { req, res, fire } = fakeReqRes(
+      "GET",
+      `/api/g/bender/openclaw/launch/${ticket}`,
+      303,
+    );
+    requestLogger(req, res, vi.fn());
+    fire("finish");
+    const logged = logSpy.mock.calls[0][0] as string;
+    expect(logged).not.toContain(ticket);
+    expect(JSON.parse(logged)).toMatchObject({
+      path: "/api/g/bender/openclaw/launch/<redacted>",
+    });
+  });
+
   it("/health 500 logs at ERROR regardless of LOG_LEVEL (failure signal preserved)", () => {
     delete process.env.LOG_LEVEL;
     const { req, res, fire } = fakeReqRes("GET", "/health", 500);
