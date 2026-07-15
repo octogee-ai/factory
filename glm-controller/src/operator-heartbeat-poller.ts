@@ -15,7 +15,12 @@
  * reconcile path (publishPlatformGatewayReady). This poller owns the live telemetry
  * — status, the honest mounted set, lastHeartbeatAt — and a successful poll IS the
  * liveness signal (it only writes when /health responds).
- */
+*/
+
+import {
+  hasDurableOpenClawConfigControlProtocol,
+  type GatewayConfigStatus,
+} from "@octogee/shared/types/fleet-controller";
 
 export const EVICT_AFTER_STREAK = 2;
 
@@ -30,6 +35,7 @@ export interface OperatorGatewayHealth {
   /** Slugs mid-migration-import (coach-wired here but cutover hasn't moved their assignment
    *  yet). Skipped as eviction candidates so a slow import→cutover isn't drained. */
   migratingIn?: string[];
+  configStatus?: GatewayConfigStatus;
 }
 
 export interface OperatorHeartbeatRecord {
@@ -38,6 +44,7 @@ export interface OperatorHeartbeatRecord {
   version?: string;
   /** Live pod-boot time (epoch ms) — lets reapGoneGatewayShells reap pre-roll shells. */
   startedAt?: number;
+  configStatus?: GatewayConfigStatus;
 }
 
 export interface OperatorHeartbeatPollerDeps {
@@ -100,6 +107,7 @@ export function parseHealthResponse(json: unknown): OperatorGatewayHealth | null
     startedAt?: unknown;
     version?: unknown;
     migratingIn?: unknown;
+    configStatus?: unknown;
   };
   if (typeof body.status !== "string" || body.status.length === 0) return null;
   if (!Array.isArray(body.customers)) return null;
@@ -113,6 +121,16 @@ export function parseHealthResponse(json: unknown): OperatorGatewayHealth | null
     health.migratingIn = body.migratingIn.filter(
       (slug): slug is string => typeof slug === "string",
     );
+  }
+  if (hasDurableOpenClawConfigControlProtocol(body.configStatus)) {
+    const status = body.configStatus as GatewayConfigStatus;
+    const validOptionalFields =
+      (status.freezeState === undefined ||
+        status.freezeState === "frozen" ||
+        status.freezeState === "unfrozen") &&
+      (status.openclawVersion === undefined || typeof status.openclawVersion === "string") &&
+      (status.openclawForkSha === undefined || typeof status.openclawForkSha === "string");
+    if (validOptionalFields) health.configStatus = status;
   }
   return health;
 }
@@ -194,6 +212,7 @@ export async function pollOperatorHeartbeatsOnce(
       };
       if (typeof health.version === "string") record.version = health.version;
       if (typeof health.startedAt === "number") record.startedAt = health.startedAt;
+      if (health.configStatus) record.configStatus = health.configStatus;
       await deps.writeHeartbeat(gatewayId, record);
       await evictDepartedForGateway(
         deps,

@@ -131,6 +131,7 @@ export interface RevisionHeartbeatObservation {
     startedAt: number | null;
     mountedCustomers: string[];
     migratingIn: string[];
+    configStatus?: import("./fleet-controller.js").GatewayConfigStatus;
 }
 export interface RevisionSystemConfigObservation {
     migrationId: string;

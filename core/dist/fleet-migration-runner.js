@@ -1,4 +1,5 @@
 import { advancePhase, nextMigrationStep, rollbackPlan, } from "./fleet-migration.js";
+import { isDefinitiveConfigRpcRejection, isDefinitiveFreezeRejection, isFreezeOwnerConflict, MigrationRpcError, } from "./fleet-migration-client.js";
 async function releaseConfigFreeze(input, deps) {
     await report(deps, { name: "unfreeze-config", status: "running" });
     try {
@@ -11,13 +12,15 @@ async function releaseConfigFreeze(input, deps) {
         if (response.unfrozen !== true)
             throw new Error("config unfreeze was not confirmed");
         await report(deps, { name: "unfreeze-config", status: "done" });
-        return true;
+        return { kind: "released" };
     }
     catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         await report(deps, { name: "unfreeze-config", status: "skipped", error: message });
         deps.log(`[migration-runner] config unfreeze failed migrationId=${input.migrationId}: ${message}`);
-        return false;
+        return isDefinitiveConfigRpcRejection(error)
+            ? { kind: "definitive-rejection", error: message }
+            : { kind: "ambiguous", error: message };
     }
 }
 function pendingConfigCleanup(input, completeSourceUnmount, resume) {
@@ -136,25 +139,69 @@ export async function runMigration(input, deps) {
     };
     if (systemConfigMigrationMode !== "none") {
         if (systemConfigMigrationMode === "checkpoint-and-restore" &&
-            (!input.fromRevision || !input.toRevision || !deps.acceptConfigProof)) {
+            (!input.fromRevision ||
+                !input.toRevision ||
+                !deps.acceptConfigProof ||
+                typeof input.toTransportId !== "string" ||
+                input.toTransportId.length === 0)) {
             return {
                 success: false,
                 finalPhase: "initial",
                 errorAt: {
                     phase: "initial",
-                    error: "checkpoint-and-restore requires source/target revisions and revision status persistence",
+                    error: "checkpoint-and-restore requires source/target revisions, target transport identity, and revision status persistence",
                 },
                 rolledBack: false,
             };
         }
         await report(deps, { name: "freeze-config", status: "running" });
         try {
-            const checkpoint = await deps.client.freezeConfig({
-                migrationId: input.migrationId,
-                gatewayId: input.fromGatewayId,
-                transportId: fromTransportId,
-                slug: input.slug,
-            });
+            let checkpoint;
+            try {
+                checkpoint = await deps.client.freezeConfig({
+                    migrationId: input.migrationId,
+                    gatewayId: input.fromGatewayId,
+                    transportId: fromTransportId,
+                    slug: input.slug,
+                });
+            }
+            catch (error) {
+                if (!isFreezeOwnerConflict(error) || !deps.recoverConfigFreezeOwner)
+                    throw error;
+                let recovered;
+                try {
+                    recovered = await deps.recoverConfigFreezeOwner({
+                        ownerMigrationId: error.ownerMigrationId,
+                        requestedMigrationId: input.migrationId,
+                        uid: input.uid,
+                        slug: input.slug,
+                        sourceGatewayId: input.fromGatewayId,
+                        sourceTransportId: fromTransportId,
+                        targetGatewayId: input.toGatewayId,
+                        targetTransportId: toTransportId,
+                        ...(input.rollFence ? { rollOperationId: input.rollFence.rollOperationId } : {}),
+                    });
+                }
+                catch (recoveryError) {
+                    const detail = recoveryError instanceof Error
+                        ? recoveryError.message
+                        : String(recoveryError);
+                    throw new MigrationRpcError(`config freeze owner recovery rejected: ${detail}`, {
+                        status: 409,
+                        code: error.code,
+                        ownerMigrationId: error.ownerMigrationId,
+                        slug: error.slug,
+                    });
+                }
+                if (!recovered)
+                    throw error;
+                checkpoint = await deps.client.freezeConfig({
+                    migrationId: input.migrationId,
+                    gatewayId: input.fromGatewayId,
+                    transportId: fromTransportId,
+                    slug: input.slug,
+                });
+            }
             configFrozen = true;
             configCheckpoint = {
                 checkpointCommit: checkpoint.checkpointCommit,
@@ -165,16 +212,25 @@ export async function runMigration(input, deps) {
         catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             await report(deps, { name: "freeze-config", status: "failed", error: message });
-            const released = await releaseConfigFreeze(input, deps);
+            if (isDefinitiveFreezeRejection(error)) {
+                return {
+                    success: false,
+                    finalPhase: "initial",
+                    errorAt: { phase: "initial", error: message },
+                    rolledBack: false,
+                };
+            }
+            const release = await releaseConfigFreeze(input, deps);
+            const cleanupPending = release.kind === "ambiguous";
             return {
                 success: false,
                 finalPhase: "initial",
                 errorAt: {
                     phase: "initial",
-                    error: released ? message : cleanupPendingError(message),
+                    error: cleanupPending ? cleanupPendingError(message) : message,
                 },
                 rolledBack: false,
-                ...(!released
+                ...(cleanupPending
                     ? {
                         configCleanup: pendingConfigCleanup(input, false, {
                             success: false,
@@ -285,13 +341,17 @@ export async function runMigration(input, deps) {
             if (step.action === "cutover-firestore" &&
                 configFrozen &&
                 (crossGateway || systemConfigMigrationMode === "checkpoint-only")) {
-                const released = await releaseConfigFreeze(input, deps);
-                if (!released) {
+                const release = await releaseConfigFreeze(input, deps);
+                if (release.kind !== "released") {
+                    const terminal = release.kind === "definitive-rejection";
                     const error = cleanupPendingError();
                     return {
                         success: false,
                         finalPhase: "cutover-done",
-                        errorAt: { phase: "cutover-done", error },
+                        errorAt: {
+                            phase: "cutover-done",
+                            error: terminal ? `config cleanup terminal: ${release.error}` : error,
+                        },
                         rolledBack: false,
                         ...(configCheckpoint ? { configCheckpoint } : {}),
                         ...(configProof ? { configProof } : {}),
@@ -330,23 +390,30 @@ export async function runMigration(input, deps) {
                     ? { gatewayId: input.fromGatewayId, uid: input.uid }
                     : null,
             });
-            let released = true;
+            let release = { kind: "released" };
             if (configFrozen) {
-                released = await releaseConfigFreeze(input, deps);
-                if (released)
+                release = await releaseConfigFreeze(input, deps);
+                if (release.kind === "released")
                     configFrozen = false;
             }
+            const cleanupPending = release.kind === "ambiguous";
+            const cleanupTerminal = release.kind === "definitive-rejection";
+            const finalError = release.kind === "ambiguous"
+                ? cleanupPendingError(errMsg)
+                : release.kind === "definitive-rejection"
+                    ? `config cleanup terminal: ${release.error}`
+                    : errMsg;
             return {
                 success: false,
                 finalPhase: state.phase,
                 errorAt: {
                     phase: phaseAtStart,
-                    error: released ? errMsg : cleanupPendingError(errMsg),
+                    error: finalError,
                 },
                 rolledBack,
                 ...(configCheckpoint ? { configCheckpoint } : {}),
                 ...(configProof ? { configProof } : {}),
-                ...(!released
+                ...((cleanupPending || cleanupTerminal)
                     ? {
                         configCleanup: pendingConfigCleanup(input, false, {
                             success: false,

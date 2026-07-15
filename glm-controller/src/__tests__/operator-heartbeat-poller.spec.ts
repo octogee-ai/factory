@@ -60,6 +60,25 @@ describe("parseHealthResponse", () => {
       parseHealthResponse({ status: "ready", customers: ["a"], migratingIn: "a" }),
     ).toEqual({ status: "ready", customers: ["a"] });
   });
+
+  it("carries only a structurally valid nested configStatus marker", () => {
+    const configStatus = {
+      controlProtocol: { protocol: "durable-openclaw-config", version: 1 },
+      freezeState: "unfrozen",
+      openclawVersion: "2026.7.1",
+      openclawForkSha: "abc123",
+    };
+    expect(parseHealthResponse({ status: "ready", customers: [], configStatus })).toEqual({
+      status: "ready",
+      customers: [],
+      configStatus,
+    });
+    expect(parseHealthResponse({
+      status: "ready",
+      customers: [],
+      configStatus: { controlProtocol: { protocol: "durable-openclaw-config", version: "1" } },
+    })).toEqual({ status: "ready", customers: [] });
+  });
 });
 
 describe("intersectMounted", () => {
@@ -134,6 +153,28 @@ describe("pollOperatorHeartbeatsOnce", () => {
       status: "ready",
       mountedCustomers: ["ceckert"],
       version: "93073bd",
+    });
+  });
+
+  it("persists the config control protocol marker for controller-side enforcement", async () => {
+    const configStatus = {
+      controlProtocol: { protocol: "durable-openclaw-config" as const, version: 1 as const },
+      freezeState: "unfrozen" as const,
+      openclawVersion: "2026.7.1",
+      openclawForkSha: "abc123",
+    };
+    const deps = makeDeps({
+      fetchHealth: vi.fn(async () => ({
+        status: "ready",
+        customers: ["ceckert"],
+        configStatus,
+      })),
+    });
+    await pollOperatorHeartbeatsOnce(deps);
+    expect(deps.writeHeartbeat).toHaveBeenCalledWith("bender", {
+      status: "ready",
+      mountedCustomers: ["ceckert"],
+      configStatus,
     });
   });
 

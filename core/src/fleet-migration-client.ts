@@ -1,6 +1,7 @@
 
 
 import { signFleetRequest } from "./fleet-signature.js";
+import { randomUUID } from "node:crypto";
 import {
   SIGNATURE_HEADER,
   MIGRATION_QUIESCE_TIMEOUT_MS,
@@ -16,6 +17,8 @@ import {
   type RestoreMigrationResponse,
   type UnmountResponse,
   type VerifyMigrationResponse,
+  SYSTEM_CONFIG_FREEZE_OWNED,
+  SYSTEM_CONFIG_FREEZE_SCOPE_MISMATCH,
 } from "@octogee/shared/types/fleet-controller";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { MigrationSyncMode } from "./fleet-migration.js";
@@ -38,6 +41,9 @@ export interface MigrationClientDeps {
   
   timeouts?: MigrationClientTimeouts;
 
+  now?: () => number;
+  genRequestId?: () => string;
+
 }
 
 // Transport/tenant split (GATEWAY-RELEASES-SPEC): `gatewayId` is the TENANT path
@@ -56,6 +62,14 @@ export interface MigrationClient {
   }): Promise<ConfigFreezeResponse>;
 
   proveConfigRestore(opts: {
+    migrationId: string;
+    gatewayId: string;
+    transportId?: string;
+    slug: string;
+    checkpointCommit: string;
+  }): Promise<ConfigRestoreProofResponse>;
+
+  reproveConfigRestore(opts: {
     migrationId: string;
     gatewayId: string;
     transportId?: string;
@@ -122,6 +136,61 @@ export interface MigrationClient {
   }): Promise<UnmountResponse>;
 }
 
+export interface MigrationRpcErrorOptions {
+  status?: number;
+  code?: string;
+  ownerMigrationId?: string;
+  slug?: string;
+}
+
+export class MigrationRpcError extends Error {
+  readonly status?: number;
+  readonly code?: string;
+  readonly ownerMigrationId?: string;
+  readonly slug?: string;
+
+  constructor(message: string, options: MigrationRpcErrorOptions = {}) {
+    super(message);
+    this.name = "MigrationRpcError";
+    this.status = options.status;
+    this.code = options.code;
+    this.ownerMigrationId = options.ownerMigrationId;
+    this.slug = options.slug;
+  }
+}
+
+export function isDefinitiveConfigRpcRejection(error: unknown): boolean {
+  if (!(error instanceof MigrationRpcError)) return false;
+  if (
+    error.code === SYSTEM_CONFIG_FREEZE_OWNED ||
+    error.code === SYSTEM_CONFIG_FREEZE_SCOPE_MISMATCH
+  ) {
+    return true;
+  }
+  return error.status === 404 || error.status === 501;
+}
+
+export function isDefinitiveFreezeRejection(error: unknown): boolean {
+  return error instanceof MigrationRpcError &&
+    (error.status === 501 ||
+    typeof error.status === "number" &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    error.status !== 408 &&
+    error.status !== 429);
+}
+
+export function isFreezeOwnerConflict(
+  error: unknown,
+): error is MigrationRpcError & { ownerMigrationId: string; slug: string } {
+  return error instanceof MigrationRpcError &&
+    error.code === SYSTEM_CONFIG_FREEZE_OWNED &&
+    typeof error.ownerMigrationId === "string" &&
+    error.ownerMigrationId.length > 0 &&
+    typeof error.slug === "string" &&
+    error.slug.length > 0;
+}
+
 function assertConfigResponseBinding(
   response: { migrationId: string; slug: string },
   migrationId: string,
@@ -139,6 +208,17 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
   const transferMs = deps.timeouts?.transferMs ?? MIGRATION_TRANSFER_TIMEOUT_MS;
   const unmountMs = deps.timeouts?.unmountMs ?? MIGRATION_UNMOUNT_TIMEOUT_MS;
   const verifyMs = deps.timeouts?.verifyMs ?? MIGRATION_VERIFY_TIMEOUT_MS;
+  const now = deps.now ?? Date.now;
+  const genRequestId = deps.genRequestId ?? (() => randomUUID().replaceAll("-", ""));
+  const configMutationBody = (body: Record<string, unknown>): Record<string, unknown> => {
+    const issuedAt = now();
+    return {
+      ...body,
+      issuedAt,
+      expiresAt: issuedAt + 30_000,
+      requestId: genRequestId(),
+    };
+  };
 
   const fetchWithTimeout = async (
     label: string,
@@ -191,7 +271,23 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
     );
     if (!res.ok) {
       const text = await res.text().catch(() => "<no body>");
-      throw new Error(`${path}: ${res.status} ${text}`);
+      let details: Record<string, unknown> = {};
+      try {
+        const parsed = JSON.parse(text) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          details = parsed as Record<string, unknown>;
+        }
+      } catch {
+        details = {};
+      }
+      throw new MigrationRpcError(`${path}: ${res.status} ${text}`, {
+        status: res.status,
+        ...(typeof details.code === "string" ? { code: details.code } : {}),
+        ...(typeof details.ownerMigrationId === "string"
+          ? { ownerMigrationId: details.ownerMigrationId }
+          : {}),
+        ...(typeof details.slug === "string" ? { slug: details.slug } : {}),
+      });
     }
     return (await res.json()) as Resp;
   };
@@ -202,7 +298,7 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
         transportId ?? gatewayId,
         `/config-freeze/${gatewayId}`,
         migrationId,
-        { migrationId, slug },
+        configMutationBody({ migrationId, slug }),
         transferMs,
       );
       assertConfigResponseBinding(response, migrationId, slug);
@@ -224,7 +320,7 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
         transportId ?? gatewayId,
         `/config-restore-proof/${gatewayId}`,
         migrationId,
-        { migrationId, slug, checkpointCommit },
+        configMutationBody({ migrationId, slug, checkpointCommit }),
         transferMs,
       );
       assertConfigResponseBinding(response, migrationId, slug);
@@ -248,12 +344,41 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       return response;
     },
 
+    async reproveConfigRestore({ migrationId, gatewayId, transportId, slug, checkpointCommit }) {
+      const response = await postSignedJson<ConfigRestoreProofResponse>(
+        transportId ?? gatewayId,
+        `/config-restore-proof/${gatewayId}`,
+        migrationId,
+        configMutationBody({ migrationId, slug, checkpointCommit, proofOnly: true }),
+        transferMs,
+      );
+      assertConfigResponseBinding(response, migrationId, slug);
+      if (
+        !/^[0-9a-f]{40}$/.test(response.restoredCommit) ||
+        !/^[0-9a-f]{40}$/.test(response.acceptedCommit) ||
+        !/^[0-9a-f]{64}$/.test(response.configHash) ||
+        response.configReady !== true ||
+        response.observedRevisionId !== (transportId ?? gatewayId) ||
+        !Number.isFinite(response.restoreProvenAt) ||
+        !Number.isFinite(response.configReadyAt) ||
+        response.configReadyAt < response.restoreProvenAt ||
+        typeof response.runtimeConfigHash !== "string" ||
+        response.runtimeConfigHash.length === 0
+      ) {
+        throw new Error("malformed config reproof response");
+      }
+      log(
+        `[migration-client] config restore reproof migrationId=${migrationId} accepted=${response.acceptedCommit}`,
+      );
+      return response;
+    },
+
     async unfreezeConfig({ migrationId, gatewayId, transportId, slug }) {
       const response = await postSignedJson<ConfigUnfreezeResponse>(
         transportId ?? gatewayId,
         `/config-unfreeze/${gatewayId}`,
         migrationId,
-        { migrationId, slug },
+        configMutationBody({ migrationId, slug }),
         transferMs,
       );
       assertConfigResponseBinding(response, migrationId, slug);

@@ -21,6 +21,7 @@ const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
   /\bstatus (429|502|503|504)\b/,
   /\bpreempt(ed|ion)?\b/i,
   /config unfreeze cleanup pending/i,
+  /source unmount cleanup pending/i,
 ];
 
 export function classifyOperationFailure(

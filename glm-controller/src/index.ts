@@ -186,6 +186,11 @@ import { recordConfigRoll, recordReconcile } from "./metrics.js";
 import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
 import { startStuckOpReaper } from "./stuck-op-reaper.js";
+import { assertRecoverableConfigFreezeOwner } from "./config-freeze-recovery.js";
+import {
+  assertMigrationSystemConfigProtocol,
+  servingIsolatedProtocolGaps,
+} from "./system-config-protocol-gate.js";
 import { startHelmRecoverySweeper } from "./helm-recovery-sweeper.js";
 import { resumeOrphanedRunningOps } from "./resume-orphaned-ops.js";
 import {
@@ -1176,6 +1181,55 @@ function buildRollPassDeps(args: {
         return true;
       })));
       return stopped.every(Boolean);
+    },
+    isSystemConfigProtocolFleetReady: () => isFleetConfigProtocolReady(db),
+    reproveConfigRestore: async ({ gatewayId, targetRevisionId, priorProof }) => {
+      try {
+        const targetUrl = await resolveGatewayUrlFromFirestore(db, targetRevisionId);
+        const client = createMigrationClient({
+          privateKey,
+          resolveGatewayUrl: () => targetUrl,
+          log,
+        });
+        const proof = await client.reproveConfigRestore({
+          migrationId: priorProof.migrationId,
+          gatewayId,
+          transportId: targetRevisionId,
+          slug: priorProof.builderSlug,
+          checkpointCommit: priorProof.checkpointCommit,
+        });
+        if (
+          proof.restoredCommit !== priorProof.checkpointCommit ||
+          proof.acceptedCommit !== priorProof.acceptedCommit ||
+          proof.configHash !== priorProof.configHash
+        ) {
+          throw new Error(`target ${targetRevisionId} changed durable config before restart reproof`);
+        }
+        const observedAt = Date.now();
+        await db.collection(GLM_GATEWAYS_COLLECTION).doc(targetRevisionId).set({
+          systemConfig: {
+            ...priorProof,
+            restoreProvenAt: proof.restoreProvenAt,
+            configReadyAt: proof.configReadyAt,
+            runtimeConfigHash: proof.runtimeConfigHash,
+            observedAt,
+          },
+        }, { merge: true });
+        recordConfigRoll({
+          stage: "proof",
+          result: "ok",
+          gatewayId,
+          revisionId: targetRevisionId,
+        });
+      } catch (error) {
+        recordConfigRoll({
+          stage: "proof",
+          result: "fail",
+          gatewayId,
+          revisionId: targetRevisionId,
+        });
+        throw error;
+      }
     },
     releaseConfigFreeze: async ({ gatewayId, revisionId, migrationId, slug }) => {
       const sourceUrl = await resolveGatewayUrlFromFirestore(db, revisionId);
@@ -2994,6 +3048,67 @@ export async function readMigrationUserSnapshot(
   };
 }
 
+async function readRevisionForConfigProtocol(
+  db: Firestore,
+  revisionId: string,
+): Promise<RevisionRealizationDoc | null> {
+  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId).get();
+  const value = snap.exists ? snap.data() : undefined;
+  return isRevisionRealizationDoc(value) && value.revisionId === revisionId ? value : null;
+}
+
+async function assertFleetConfigProtocolForMigration(
+  db: Firestore,
+  input: {
+    mode: import("@octogee/shared/types/fleet-controller").SystemConfigMigrationMode;
+    sourceRevisionId: string;
+    targetRevisionId: string;
+  },
+): Promise<void> {
+  if (input.mode === "none") return;
+  const rootsSnap = await db.collection(GATEWAYS_COLLECTION).get();
+  const roots = rootsSnap.docs.flatMap((doc) => {
+    const value = doc.data();
+    return isDurableRootConfigDoc(value, doc.id) ? [value] : [];
+  });
+  const revisionIds = new Set<string>([input.sourceRevisionId, input.targetRevisionId]);
+  for (const root of roots) {
+    if (root.liveRevisionId) revisionIds.add(root.liveRevisionId);
+  }
+  const entries = await Promise.all([...revisionIds].map(async (revisionId) => [
+    revisionId,
+    await readRevisionForConfigProtocol(db, revisionId),
+  ] as const));
+  const revisions = new Map(entries.filter(
+    (entry): entry is readonly [string, RevisionRealizationDoc] => entry[1] !== null,
+  ));
+  assertMigrationSystemConfigProtocol({
+    mode: input.mode,
+    sourceRevisionId: input.sourceRevisionId,
+    sourceRevision: revisions.get(input.sourceRevisionId) ?? null,
+    targetRevisionId: input.targetRevisionId,
+    targetRevision: revisions.get(input.targetRevisionId) ?? null,
+    fleetGaps: servingIsolatedProtocolGaps(roots, revisions),
+  });
+}
+
+async function isFleetConfigProtocolReady(db: Firestore): Promise<boolean> {
+  const rootsSnap = await db.collection(GATEWAYS_COLLECTION).get();
+  const roots = rootsSnap.docs.flatMap((doc) => {
+    const value = doc.data();
+    return isDurableRootConfigDoc(value, doc.id) ? [value] : [];
+  });
+  const liveRevisionIds = roots.flatMap((root) => root.liveRevisionId ? [root.liveRevisionId] : []);
+  const entries = await Promise.all(liveRevisionIds.map(async (revisionId) => [
+    revisionId,
+    await readRevisionForConfigProtocol(db, revisionId),
+  ] as const));
+  const revisions = new Map(entries.filter(
+    (entry): entry is readonly [string, RevisionRealizationDoc] => entry[1] !== null,
+  ));
+  return servingIsolatedProtocolGaps(roots, revisions).length === 0;
+}
+
 // eslint-disable-next-line max-lines-per-function -- Controller dependency assembly is intentionally centralized.
 async function buildHandlers(
   db: Firestore,
@@ -3176,6 +3291,67 @@ async function buildHandlers(
         gatewayClass(sourceData),
         gatewayClass(targetData),
       );
+    },
+    assertSystemConfigProtocolReady: ({ mode, sourceRevisionId, targetRevisionId }) =>
+      assertFleetConfigProtocolForMigration(db, {
+        mode,
+        sourceRevisionId,
+        targetRevisionId,
+      }),
+    recoverConfigFreezeOwner: async (input) => {
+      if (!input.rollOperationId) {
+        throw new Error("config freeze owner recovery requires a release-roll lease");
+      }
+      const ownerOpId = input.ownerMigrationId.startsWith("mig-")
+        ? input.ownerMigrationId.slice(4)
+        : "";
+      const requesterOpId = input.requestedMigrationId.startsWith("mig-")
+        ? input.requestedMigrationId.slice(4)
+        : "";
+      if (!ownerOpId || !requesterOpId) {
+        throw new Error("config freeze recovery migration id is not operation-bound");
+      }
+      const [ownerSnap, requesterSnap, rootSnap] = await Promise.all([
+        db.collection(GLM_OPERATIONS_COLLECTION).doc(ownerOpId).get(),
+        db.collection(GLM_OPERATIONS_COLLECTION).doc(requesterOpId).get(),
+        db.collection(GATEWAYS_COLLECTION).doc(input.sourceGatewayId).get(),
+      ]);
+      const owner = ownerSnap.exists
+        ? ({ id: ownerSnap.id, ...ownerSnap.data() } as Operation)
+        : null;
+      assertRecoverableConfigFreezeOwner(input, owner);
+      const requester = requesterSnap.exists ? requesterSnap.data() as Operation : null;
+      if (
+        !requester ||
+        requester.status !== "running" ||
+        requester.input?.uid !== input.uid ||
+        requester.input?.builderSlug !== input.slug ||
+        requester.input?.rollOperationId !== input.rollOperationId
+      ) {
+        throw new Error("config freeze requester no longer owns the active operation lease");
+      }
+      const root = rootSnap.data();
+      if (
+        !isDurableRootConfigDoc(root, input.sourceGatewayId) ||
+        root.roll?.operationId !== input.rollOperationId ||
+        root.roll.sourceRevisionId !== input.sourceTransportId ||
+        root.roll.targetRevisionId !== input.targetTransportId
+      ) {
+        throw new Error("config freeze recovery roll lease is no longer current");
+      }
+      const sourceUrl = await resolveGatewayUrlFromFirestore(db, input.sourceTransportId);
+      const client = createMigrationClient({
+        privateKey,
+        resolveGatewayUrl: () => sourceUrl,
+        log: logFn,
+      });
+      await client.unfreezeConfig({
+        migrationId: input.ownerMigrationId,
+        gatewayId: input.sourceGatewayId,
+        transportId: input.sourceTransportId,
+        slug: input.slug,
+      });
+      return true;
     },
     genMigrationId: (operationId) => `mig-${operationId}`,
     now: () => Date.now(),

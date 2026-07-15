@@ -4,6 +4,7 @@ import { createMigrateCustomerHandler } from "../handlers/migrate-customer";
 import type { MigrateCustomerDeps } from "../handlers/migrate-customer";
 import type { OperationContext } from "../operation-router";
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
+import { MigrationRpcError } from "@octogee/core/fleet-migration-client";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 
 const SNAPSHOT: FleetBrokerUserSnapshot = {
@@ -65,6 +66,9 @@ function happyClient(): MigrationClient {
       configReadyAt: 101,
       runtimeConfigHash: "runtime-after",
     })) as MigrationClient["proveConfigRestore"],
+    reproveConfigRestore: vi.fn(async () => {
+      throw new Error("not used by migration handler");
+    }) as MigrationClient["reproveConfigRestore"],
     unfreezeConfig: vi.fn(async ({ migrationId, slug }) => ({
       migrationId,
       slug,
@@ -122,6 +126,8 @@ function makeDeps(
     recordConfigProof: vi.fn(async () => undefined),
     recordConfigRollMetric: vi.fn(),
     resolveSystemConfigMigrationMode: vi.fn(async () => "none"),
+    assertSystemConfigProtocolReady: vi.fn(async () => undefined),
+    recoverConfigFreezeOwner: vi.fn(async () => false),
     resolveFromRevision: vi.fn(async (_uid: string, gatewayId: string) => ({
       revisionId: `${gatewayId}-r1`,
       release: 1,
@@ -232,6 +238,60 @@ describe("createMigrateCustomerHandler — happy path", () => {
       output: { configCleanup },
     });
     expect(client.transferState).not.toHaveBeenCalled();
+  });
+
+  it("terminalizes a definitive unsupported cleanup instead of retrying forever", async () => {
+    const client = happyClient();
+    client.unfreezeConfig = vi.fn(async () => {
+      throw new MigrationRpcError("/config-unfreeze/gw-blue: 501 not configured", {
+        status: 501,
+      });
+    }) as MigrationClient["unfreezeConfig"];
+    const { deps } = makeDeps({}, client);
+    const handler = createMigrateCustomerHandler(deps);
+    const configCleanup = {
+      migrationId: "mig-op-1",
+      slug: "alice",
+      sourceGatewayId: "gw-blue",
+      sourceTransportId: "gw-blue-r1",
+      completeSourceUnmount: false,
+      resume: { success: true, rolledBack: false },
+    };
+
+    const result = await handler(mkOp({ output: { configCleanup } }), makeCtx());
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringMatching(/config cleanup terminal.*501/i),
+      output: { configCleanup },
+    });
+  });
+
+  it("retains the deferred source unmount obligation when its cleanup RPC is transiently unavailable", async () => {
+    const client = happyClient();
+    client.unmount = vi.fn(async () => {
+      throw new Error("source RPC unavailable");
+    }) as MigrationClient["unmount"];
+    const { deps } = makeDeps({}, client);
+    const handler = createMigrateCustomerHandler(deps);
+    const configCleanup = {
+      migrationId: "mig-op-1",
+      slug: "alice",
+      sourceGatewayId: "gw-blue",
+      sourceTransportId: "gw-blue-r1",
+      completeSourceUnmount: true,
+      resume: { success: true, rolledBack: false },
+    };
+
+    const result = await handler(mkOp({ output: { configCleanup } }), makeCtx());
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringMatching(/source unmount cleanup pending/i),
+      output: { configCleanup },
+    });
+    expect(client.unfreezeConfig).toHaveBeenCalledOnce();
+    expect(client.unmount).toHaveBeenCalledOnce();
   });
 
   it("fails closed instead of replaying migration when a durable cleanup obligation is malformed", async () => {
@@ -553,6 +613,27 @@ describe("createMigrateCustomerHandler — revision-targeted (same-gateway drain
     expect(client.transferState).not.toHaveBeenCalled();
   });
 
+  it("fails before freeze when the exact fleet control protocol barrier is not satisfied", async () => {
+    const assertSystemConfigProtocolReady = vi.fn(async () => {
+      throw new Error("durable-openclaw-config protocol v1 is not fleet-ready");
+    });
+    const { deps, client } = makeDeps({
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
+      assertSystemConfigProtocolReady,
+    });
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({ input: {
+      uid: "uid-alice",
+      toGatewayId: "gw-green",
+      systemConfigMigrationMode: "checkpoint-and-restore",
+    } }), makeCtx());
+
+    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/not fleet-ready/i) });
+    expect(client.freezeConfig).not.toHaveBeenCalled();
+    expect(client.transferState).not.toHaveBeenCalled();
+  });
+
   it("persists the planned-roll checkpoint and target proof as operation output", async () => {
     const { deps, client } = makeDeps({
       readUser: vi.fn(async () => ({ slug: "alice", currentGatewayId: "default" })),
@@ -655,17 +736,8 @@ describe("createMigrateCustomerHandler — revision-targeted (same-gateway drain
     } }), makeCtx());
 
     expect(result).toMatchObject({ success: false, error: expect.stringMatching(/stale release-roll/i) });
-    expect(result).toMatchObject({
-      error: expect.stringMatching(/config unfreeze cleanup pending/i),
-      output: {
-        configCleanup: {
-          migrationId: "mig-test-1",
-          sourceGatewayId: "default",
-          sourceTransportId: "default-r1",
-          resume: { success: false, rolledBack: false },
-        },
-      },
-    });
+    expect(result.output).toBeUndefined();
+    expect(client.unfreezeConfig).not.toHaveBeenCalled();
     expect(client.freezeConfig).not.toHaveBeenCalled();
     expect(client.transferState).not.toHaveBeenCalled();
   });

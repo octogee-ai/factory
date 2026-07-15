@@ -1,5 +1,46 @@
 import { signFleetRequest } from "./fleet-signature.js";
-import { SIGNATURE_HEADER, MIGRATION_QUIESCE_TIMEOUT_MS, MIGRATION_TRANSFER_TIMEOUT_MS, MIGRATION_UNMOUNT_TIMEOUT_MS, MIGRATION_VERIFY_TIMEOUT_MS, } from "@octogee/shared/types/fleet-controller";
+import { randomUUID } from "node:crypto";
+import { SIGNATURE_HEADER, MIGRATION_QUIESCE_TIMEOUT_MS, MIGRATION_TRANSFER_TIMEOUT_MS, MIGRATION_UNMOUNT_TIMEOUT_MS, MIGRATION_VERIFY_TIMEOUT_MS, SYSTEM_CONFIG_FREEZE_OWNED, SYSTEM_CONFIG_FREEZE_SCOPE_MISMATCH, } from "@octogee/shared/types/fleet-controller";
+export class MigrationRpcError extends Error {
+    status;
+    code;
+    ownerMigrationId;
+    slug;
+    constructor(message, options = {}) {
+        super(message);
+        this.name = "MigrationRpcError";
+        this.status = options.status;
+        this.code = options.code;
+        this.ownerMigrationId = options.ownerMigrationId;
+        this.slug = options.slug;
+    }
+}
+export function isDefinitiveConfigRpcRejection(error) {
+    if (!(error instanceof MigrationRpcError))
+        return false;
+    if (error.code === SYSTEM_CONFIG_FREEZE_OWNED ||
+        error.code === SYSTEM_CONFIG_FREEZE_SCOPE_MISMATCH) {
+        return true;
+    }
+    return error.status === 404 || error.status === 501;
+}
+export function isDefinitiveFreezeRejection(error) {
+    return error instanceof MigrationRpcError &&
+        (error.status === 501 ||
+            typeof error.status === "number" &&
+                error.status >= 400 &&
+                error.status < 500 &&
+                error.status !== 408 &&
+                error.status !== 429);
+}
+export function isFreezeOwnerConflict(error) {
+    return error instanceof MigrationRpcError &&
+        error.code === SYSTEM_CONFIG_FREEZE_OWNED &&
+        typeof error.ownerMigrationId === "string" &&
+        error.ownerMigrationId.length > 0 &&
+        typeof error.slug === "string" &&
+        error.slug.length > 0;
+}
 function assertConfigResponseBinding(response, migrationId, slug) {
     if (response.migrationId !== migrationId || response.slug !== slug) {
         throw new Error("malformed config response binding");
@@ -12,6 +53,17 @@ export function createMigrationClient(deps) {
     const transferMs = deps.timeouts?.transferMs ?? MIGRATION_TRANSFER_TIMEOUT_MS;
     const unmountMs = deps.timeouts?.unmountMs ?? MIGRATION_UNMOUNT_TIMEOUT_MS;
     const verifyMs = deps.timeouts?.verifyMs ?? MIGRATION_VERIFY_TIMEOUT_MS;
+    const now = deps.now ?? Date.now;
+    const genRequestId = deps.genRequestId ?? (() => randomUUID().replaceAll("-", ""));
+    const configMutationBody = (body) => {
+        const issuedAt = now();
+        return {
+            ...body,
+            issuedAt,
+            expiresAt: issuedAt + 30_000,
+            requestId: genRequestId(),
+        };
+    };
     const fetchWithTimeout = async (label, url, init, timeoutMs) => {
         const controller = new AbortController();
         let didTimeout = false;
@@ -48,13 +100,30 @@ export function createMigrationClient(deps) {
         }, timeoutMs);
         if (!res.ok) {
             const text = await res.text().catch(() => "<no body>");
-            throw new Error(`${path}: ${res.status} ${text}`);
+            let details = {};
+            try {
+                const parsed = JSON.parse(text);
+                if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                    details = parsed;
+                }
+            }
+            catch {
+                details = {};
+            }
+            throw new MigrationRpcError(`${path}: ${res.status} ${text}`, {
+                status: res.status,
+                ...(typeof details.code === "string" ? { code: details.code } : {}),
+                ...(typeof details.ownerMigrationId === "string"
+                    ? { ownerMigrationId: details.ownerMigrationId }
+                    : {}),
+                ...(typeof details.slug === "string" ? { slug: details.slug } : {}),
+            });
         }
         return (await res.json());
     };
     return {
         async freezeConfig({ migrationId, gatewayId, transportId, slug }) {
-            const response = await postSignedJson(transportId ?? gatewayId, `/config-freeze/${gatewayId}`, migrationId, { migrationId, slug }, transferMs);
+            const response = await postSignedJson(transportId ?? gatewayId, `/config-freeze/${gatewayId}`, migrationId, configMutationBody({ migrationId, slug }), transferMs);
             assertConfigResponseBinding(response, migrationId, slug);
             if (response.frozen !== true ||
                 !/^[0-9a-f]{40}$/.test(response.checkpointCommit) ||
@@ -65,7 +134,7 @@ export function createMigrationClient(deps) {
             return response;
         },
         async proveConfigRestore({ migrationId, gatewayId, transportId, slug, checkpointCommit }) {
-            const response = await postSignedJson(transportId ?? gatewayId, `/config-restore-proof/${gatewayId}`, migrationId, { migrationId, slug, checkpointCommit }, transferMs);
+            const response = await postSignedJson(transportId ?? gatewayId, `/config-restore-proof/${gatewayId}`, migrationId, configMutationBody({ migrationId, slug, checkpointCommit }), transferMs);
             assertConfigResponseBinding(response, migrationId, slug);
             if (!/^[0-9a-f]{40}$/.test(response.restoredCommit) ||
                 !/^[0-9a-f]{40}$/.test(response.acceptedCommit) ||
@@ -82,8 +151,26 @@ export function createMigrationClient(deps) {
             log(`[migration-client] config restore proof migrationId=${migrationId} restored=${response.restoredCommit} accepted=${response.acceptedCommit}`);
             return response;
         },
+        async reproveConfigRestore({ migrationId, gatewayId, transportId, slug, checkpointCommit }) {
+            const response = await postSignedJson(transportId ?? gatewayId, `/config-restore-proof/${gatewayId}`, migrationId, configMutationBody({ migrationId, slug, checkpointCommit, proofOnly: true }), transferMs);
+            assertConfigResponseBinding(response, migrationId, slug);
+            if (!/^[0-9a-f]{40}$/.test(response.restoredCommit) ||
+                !/^[0-9a-f]{40}$/.test(response.acceptedCommit) ||
+                !/^[0-9a-f]{64}$/.test(response.configHash) ||
+                response.configReady !== true ||
+                response.observedRevisionId !== (transportId ?? gatewayId) ||
+                !Number.isFinite(response.restoreProvenAt) ||
+                !Number.isFinite(response.configReadyAt) ||
+                response.configReadyAt < response.restoreProvenAt ||
+                typeof response.runtimeConfigHash !== "string" ||
+                response.runtimeConfigHash.length === 0) {
+                throw new Error("malformed config reproof response");
+            }
+            log(`[migration-client] config restore reproof migrationId=${migrationId} accepted=${response.acceptedCommit}`);
+            return response;
+        },
         async unfreezeConfig({ migrationId, gatewayId, transportId, slug }) {
-            const response = await postSignedJson(transportId ?? gatewayId, `/config-unfreeze/${gatewayId}`, migrationId, { migrationId, slug }, transferMs);
+            const response = await postSignedJson(transportId ?? gatewayId, `/config-unfreeze/${gatewayId}`, migrationId, configMutationBody({ migrationId, slug }), transferMs);
             assertConfigResponseBinding(response, migrationId, slug);
             if (response.unfrozen !== true) {
                 throw new Error("config unfreeze was not confirmed");

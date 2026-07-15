@@ -5,7 +5,10 @@ import type {
 } from "@octogee/shared/types/glm";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
-import type { MigrationClient } from "@octogee/core/fleet-migration-client";
+import {
+  isDefinitiveConfigRpcRejection,
+  type MigrationClient,
+} from "@octogee/core/fleet-migration-client";
 import type { PlacementResolution } from "@octogee/core/assignment-doc";
 import type { RevisionSystemConfigObservation } from "@octogee/shared/types/gateway-releases";
 import type { SystemConfigMigrationMode } from "@octogee/shared/types/fleet-controller";
@@ -75,6 +78,26 @@ export interface MigrateCustomerDeps {
     fromGatewayId: string,
     toGatewayId: string,
   ) => Promise<SystemConfigMigrationMode>;
+
+  assertSystemConfigProtocolReady: (input: {
+    mode: SystemConfigMigrationMode;
+    sourceGatewayId: string;
+    sourceRevisionId: string;
+    targetGatewayId: string;
+    targetRevisionId: string;
+  }) => Promise<void>;
+
+  recoverConfigFreezeOwner: (input: {
+    ownerMigrationId: string;
+    requestedMigrationId: string;
+    uid: string;
+    slug: string;
+    sourceGatewayId: string;
+    sourceTransportId: string;
+    targetGatewayId: string;
+    targetTransportId: string;
+    rollOperationId?: string;
+  }) => Promise<boolean>;
 
   genMigrationId: (operationId: string) => string;
 
@@ -203,18 +226,40 @@ async function resumeConfigCleanup(
     });
     if (cleanup.completeSourceUnmount) {
       try {
+        await ctx.reportStep({
+          name: "unmount-source-cleanup",
+          status: "running",
+          startedAt: deps.now(),
+        });
         await client.unmount({
           migrationId: cleanup.migrationId,
           gatewayId: cleanup.sourceGatewayId,
           transportId: cleanup.sourceTransportId,
           slug: cleanup.slug,
         });
+        await ctx.reportStep({
+          name: "unmount-source-cleanup",
+          status: "done",
+          completedAt: deps.now(),
+        });
       } catch (error) {
-        deps.log(
-          `[migrate-customer] source unmount cleanup skipped after durable cutover: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
+        const message = error instanceof Error ? error.message : String(error);
+        await ctx.reportStep({
+          name: "unmount-source-cleanup",
+          status: "skipped",
+          completedAt: deps.now(),
+          error: message,
+        });
+        deps.log(`[migrate-customer] source unmount cleanup remains pending: ${message}`);
+        return {
+          steps: [],
+          success: false,
+          error: isDefinitiveConfigRpcRejection(error)
+            ? `config cleanup terminal: ${message}`
+            : `source unmount cleanup pending: ${message}`,
+          rolledBack: cleanup.resume.rolledBack,
+          output: { configCleanup: cleanup },
+        };
       }
     }
     const output = resumedConfigOutput(cleanup);
@@ -242,7 +287,9 @@ async function resumeConfigCleanup(
     return {
       steps: [],
       success: false,
-      error: `config unfreeze cleanup pending: ${message}`,
+      error: isDefinitiveConfigRpcRejection(error)
+        ? `config cleanup terminal: ${message}`
+        : `config unfreeze cleanup pending: ${message}`,
       rolledBack: cleanup.resume.rolledBack,
       output: { configCleanup: cleanup },
     };
@@ -369,6 +416,7 @@ function buildRunnerDeps(
     },
   };
   runnerDeps.setAssignmentState = deps.setAssignmentState;
+  runnerDeps.recoverConfigFreezeOwner = deps.recoverConfigFreezeOwner;
   runnerDeps.acceptConfigProof = async ({
     migrationId,
     slug,
@@ -463,24 +511,11 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
           await deps.assertRollFence(rollFence);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          const configCleanup: ConfigCleanupObligation = {
-            migrationId,
-            slug: user.slug,
-            sourceGatewayId: targets.fromGatewayId,
-            sourceTransportId: targets.fromTransportId,
-            completeSourceUnmount: false,
-            resume: {
-              success: false,
-              rolledBack: false,
-              error: message,
-            },
-          };
           return {
             steps: [],
             success: false,
-            error: `config unfreeze cleanup pending: ${message}`,
+            error: message,
             rolledBack: false,
-            output: { configCleanup },
           };
         }
       }
@@ -494,6 +529,13 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
           `system config migration mode changed: requested=${requestedMode} resolved=${systemConfigMigrationMode}`,
         );
       }
+      await deps.assertSystemConfigProtocolReady({
+        mode: systemConfigMigrationMode,
+        sourceGatewayId: targets.fromGatewayId,
+        sourceRevisionId: targets.fromRevisionId,
+        targetGatewayId: targets.toGatewayId,
+        targetRevisionId: targets.toRevisionId,
+      });
       urls.set(targets.fromTransportId, await deps.resolveGatewayUrl(targets.fromTransportId));
       urls.set(targets.toTransportId, await deps.resolveGatewayUrl(targets.toTransportId));
       restoreSnapshot = await deps.readUserSnapshot(uid);

@@ -8,7 +8,7 @@ import {
   MIGRATION_UNMOUNT_TIMEOUT_MS,
   MIGRATION_VERIFY_TIMEOUT_MS,
 } from "@octogee/shared/types/fleet-controller";
-import { createMigrationClient } from "./fleet-migration-client";
+import { createMigrationClient, MigrationRpcError } from "./fleet-migration-client";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 
 interface CapturedCall {
@@ -126,6 +126,91 @@ describe("MigrationClient.quiesce", () => {
 });
 
 describe("MigrationClient system config fencing", () => {
+  it("mints a fresh bounded mutation envelope for every signed config attempt", async () => {
+    const { calls, fakeFetch } = captureFetch(() => new Response(JSON.stringify({
+      migrationId: "m1",
+      slug: "alice",
+      frozen: true,
+      checkpointCommit: "a".repeat(40),
+      configHash: "b".repeat(64),
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const requestIds = ["request:id.0001", "request:id.0002"];
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://source.example.com",
+      fetch: fakeFetch,
+      now: () => 1_000,
+      genRequestId: () => requestIds.shift()!,
+    });
+
+    await client.freezeConfig({ migrationId: "m1", gatewayId: "bender", slug: "alice" });
+    await client.freezeConfig({ migrationId: "m1", gatewayId: "bender", slug: "alice" });
+
+    expect(calls.map((call) => JSON.parse(call.body!))).toEqual([
+      expect.objectContaining({ issuedAt: 1_000, expiresAt: 31_000, requestId: "request:id.0001" }),
+      expect.objectContaining({ issuedAt: 1_000, expiresAt: 31_000, requestId: "request:id.0002" }),
+    ]);
+    expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()])
+      .not.toBe(calls[1].headers[SIGNATURE_HEADER.toLowerCase()]);
+  });
+
+  it("surfaces a typed freeze-owner conflict with the durable owner id", async () => {
+    const { fakeFetch } = captureFetch(() => new Response(JSON.stringify({
+      error: "config freeze owned",
+      code: "system-config-freeze-owned",
+      ownerMigrationId: "mig-old-op",
+      slug: "alice",
+    }), { status: 409, headers: { "content-type": "application/json" } }));
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://source.example.com",
+      fetch: fakeFetch,
+    });
+
+    await expect(client.freezeConfig({
+      migrationId: "mig-new-op",
+      gatewayId: "bender",
+      transportId: "bender-r1",
+      slug: "alice",
+    })).rejects.toMatchObject<Partial<MigrationRpcError>>({
+      status: 409,
+      code: "system-config-freeze-owned",
+      ownerMigrationId: "mig-old-op",
+      slug: "alice",
+    });
+  });
+
+  it("marks proof-only reverification explicitly on the signed target request", async () => {
+    const checkpointCommit = "a".repeat(40);
+    const { calls, fakeFetch } = captureFetch(() => new Response(JSON.stringify({
+      migrationId: "m1",
+      slug: "alice",
+      restoredCommit: checkpointCommit,
+      acceptedCommit: "c".repeat(40),
+      configHash: "d".repeat(64),
+      configReady: true,
+      observedRevisionId: "bender-r2",
+      restoreProvenAt: 200,
+      configReadyAt: 201,
+      runtimeConfigHash: "runtime-reloaded",
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://target.example.com",
+      fetch: fakeFetch,
+    });
+
+    await client.reproveConfigRestore({
+      migrationId: "m1",
+      gatewayId: "bender",
+      transportId: "bender-r2",
+      slug: "alice",
+      checkpointCommit,
+    });
+
+    expect(JSON.parse(calls[0].body!)).toMatchObject({ proofOnly: true });
+  });
+
   it("freezes/checkpoints the source, proves the target ancestor, and unfreezes by revision transport", async () => {
     const checkpointCommit = "a".repeat(40);
     const { calls, fakeFetch } = captureFetch((call) => {

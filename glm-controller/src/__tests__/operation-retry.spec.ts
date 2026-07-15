@@ -48,6 +48,9 @@ describe("classifyOperationFailure", () => {
     expect(classifyOperationFailure("config unfreeze cleanup pending: source RPC unavailable")).toBe(
       "transient",
     );
+    expect(classifyOperationFailure("source unmount cleanup pending: source RPC unavailable")).toBe(
+      "transient",
+    );
   });
 
   it("classifies validation and the #2137 fail-fast target-state guard as terminal", () => {
@@ -137,6 +140,30 @@ describe("buildOperationCompletionUpdate", () => {
     expect(update.status).toBe("pending");
     expect(update.output).toEqual({ configCleanup });
     expect(update.nextAttemptAt).toBe(now + retryBackoffMs(MAX_OPERATION_ATTEMPTS + 1));
+  });
+
+  it("terminalizes a definitive unsupported or wrong-owner cleanup even when the obligation is retained for audit", () => {
+    for (const error of [
+      "config cleanup terminal: /config-unfreeze/default: 501 not configured",
+      "config cleanup terminal: freeze is owned by mig-other-op",
+    ]) {
+      const configCleanup = {
+        migrationId: "mig-1",
+        slug: "alice",
+        sourceGatewayId: "default",
+        sourceTransportId: "default-r1",
+        resume: { success: true, rolledBack: false },
+      };
+      const update = buildOperationCompletionUpdate({
+        op: { attempts: MAX_OPERATION_ATTEMPTS, attemptHistory: [] },
+        result: { steps: [], success: false, error, output: { configCleanup } },
+        steps: [],
+        now,
+      });
+
+      expect(update.status).toBe("failed");
+      expect(update.output).toEqual({ configCleanup });
+    }
   });
 
   it("deletes a stale cleanup obligation after cleanup finishes", () => {

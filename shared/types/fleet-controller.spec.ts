@@ -9,6 +9,7 @@ import {
   CONFIG_CONTROL_WRITER_LOCK_BUSY_CODE,
   DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
   DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
+  hasDurableOpenClawConfigControlProtocol,
   OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_FILE,
   OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_TTL_MS,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
@@ -64,5 +65,27 @@ describe("systemConfigMigrationMode", () => {
     ["operator", "operator", "checkpoint-and-restore"],
   ] as const)("maps %s → %s to %s", (source, target, expected) => {
     expect(systemConfigMigrationMode(source, target)).toBe(expected);
+  });
+});
+
+describe("hasDurableOpenClawConfigControlProtocol", () => {
+  it("requires the exact nested protocol marker", () => {
+    expect(hasDurableOpenClawConfigControlProtocol({
+      controlProtocol: {
+        protocol: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
+        version: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
+      },
+    })).toBe(true);
+    expect(hasDurableOpenClawConfigControlProtocol(undefined)).toBe(false);
+    expect(hasDurableOpenClawConfigControlProtocol({
+      controlProtocol: {
+        protocol: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
+        version: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION + 1,
+      },
+    })).toBe(false);
+    expect(hasDurableOpenClawConfigControlProtocol({
+      protocol: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
+      version: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
+    })).toBe(false);
   });
 });

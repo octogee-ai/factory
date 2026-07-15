@@ -10,6 +10,7 @@
 // to the legacy flat doc.
 
 import { isGatewayDesiredDoc } from "@octogee/shared/types/gateway-releases";
+import type { GatewayConfigStatus } from "@octogee/shared/types/fleet-controller";
 
 export const HEARTBEAT_FIELD = "heartbeat";
 
@@ -39,6 +40,7 @@ export interface PollerHeartbeatRecord {
   mountedCustomers: string[];
   startedAt?: number;
   version?: string;
+  configStatus?: GatewayConfigStatus;
 }
 
 // glmGateways/{id} merge payload for the poller's live telemetry.
@@ -53,6 +55,7 @@ export function revisionHeartbeatMerge(
   };
   if (typeof record.startedAt === "number") heartbeat.startedAt = record.startedAt;
   if (typeof record.version === "string") heartbeat.version = record.version;
+  if (record.configStatus) heartbeat.configStatus = record.configStatus;
   return { [HEARTBEAT_FIELD]: heartbeat };
 }
 

@@ -1,5 +1,5 @@
 import { type MigrationPhase } from "./fleet-migration.js";
-import type { MigrationClient } from "./fleet-migration-client.js";
+import { type MigrationClient } from "./fleet-migration-client.js";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { ConfigFreezeResponse, ConfigRestoreProofResponse, SystemConfigMigrationMode } from "@octogee/shared/types/fleet-controller";
 export interface ReportedStep {
@@ -51,6 +51,17 @@ export interface MigrationRunnerDeps {
         checkpoint: Pick<ConfigFreezeResponse, "checkpointCommit" | "configHash">;
         proof: Pick<ConfigRestoreProofResponse, "restoredCommit" | "acceptedCommit" | "configHash" | "configReady" | "observedRevisionId" | "restoreProvenAt" | "configReadyAt" | "runtimeConfigHash">;
     }) => Promise<void>;
+    recoverConfigFreezeOwner?: (input: {
+        ownerMigrationId: string;
+        requestedMigrationId: string;
+        uid: string;
+        slug: string;
+        sourceGatewayId: string;
+        sourceTransportId: string;
+        targetGatewayId: string;
+        targetTransportId: string;
+        rollOperationId?: string;
+    }) => Promise<boolean>;
     log: (msg: string) => void;
     reportStep?: (step: ReportedStep) => Promise<void> | void;
 }

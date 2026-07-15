@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { runMigration } from "./fleet-migration-runner";
-import type { MigrationClient } from "./fleet-migration-client";
+import { MigrationRpcError, type MigrationClient } from "./fleet-migration-client";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 
 const SNAPSHOT: FleetBrokerUserSnapshot = {
@@ -54,6 +54,9 @@ function happyClient(): MigrationClient & { calls: string[] } {
         runtimeConfigHash: "runtime-after",
       };
     }) as MigrationClient["proveConfigRestore"],
+    reproveConfigRestore: vi.fn(async () => {
+      throw new Error("not used by migration runner");
+    }) as MigrationClient["reproveConfigRestore"],
     unfreezeConfig: vi.fn(async ({ slug }) => {
       calls.push(`config-unfreeze:${slug}`);
       return { migrationId: "m1", slug, unfrozen: true };
@@ -445,6 +448,96 @@ describe("runMigration — durable config roll fence", () => {
     expect(result).toMatchObject({ success: false, finalPhase: "initial", rolledBack: false });
     expect(client.transferState).not.toHaveBeenCalled();
     expect(deps.commitCutover).not.toHaveBeenCalled();
+  });
+
+  it("rejects checkpoint-and-restore before freezing when target transport identity is absent", async () => {
+    const client = happyClient();
+    const deps = makeDeps(client);
+
+    const result = await runMigration({
+      ...FENCED_INPUT,
+      toTransportId: undefined,
+    }, deps);
+
+    expect(result).toMatchObject({
+      success: false,
+      finalPhase: "initial",
+      errorAt: { error: expect.stringMatching(/target transport/i) },
+    });
+    expect(client.freezeConfig).not.toHaveBeenCalled();
+  });
+
+  it("does not manufacture cleanup under an id that definitively never owned the freeze", async () => {
+    const client = happyClient();
+    client.freezeConfig = vi.fn(async () => {
+      throw new MigrationRpcError("/config-freeze/bender: 501 not configured", {
+        status: 501,
+        code: "not-configured",
+      });
+    }) as MigrationClient["freezeConfig"];
+    const deps = makeDeps(client);
+
+    const result = await runMigration(FENCED_INPUT, deps);
+
+    expect(result).toMatchObject({ success: false, finalPhase: "initial" });
+    expect(result.configCleanup).toBeUndefined();
+    expect(client.unfreezeConfig).not.toHaveBeenCalled();
+  });
+
+  it("releases a terminal same-scope owner then retries the freeze under the new lease", async () => {
+    const client = happyClient();
+    client.freezeConfig = vi
+      .fn()
+      .mockRejectedValueOnce(new MigrationRpcError("owned", {
+        status: 409,
+        code: "system-config-freeze-owned",
+        ownerMigrationId: "mig-old-op",
+        slug: "alice",
+      }))
+      .mockResolvedValueOnce({
+        migrationId: "m1",
+        slug: "alice",
+        frozen: true,
+        checkpointCommit: "a".repeat(40),
+        configHash: "b".repeat(64),
+      }) as MigrationClient["freezeConfig"];
+    const deps = makeDeps(client);
+    deps.recoverConfigFreezeOwner = vi.fn(async () => true);
+
+    const result = await runMigration(FENCED_INPUT, deps);
+
+    expect(result.success).toBe(true);
+    expect(deps.recoverConfigFreezeOwner).toHaveBeenCalledWith(expect.objectContaining({
+      ownerMigrationId: "mig-old-op",
+      requestedMigrationId: "m1",
+      slug: "alice",
+    }));
+    expect(client.freezeConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it("never releases a live or scope-mismatched owner after recovery verification rejects it", async () => {
+    const client = happyClient();
+    client.freezeConfig = vi.fn(async () => {
+      throw new MigrationRpcError("owned", {
+        status: 409,
+        code: "system-config-freeze-owned",
+        ownerMigrationId: "mig-live-op",
+        slug: "alice",
+      });
+    }) as MigrationClient["freezeConfig"];
+    const deps = makeDeps(client);
+    deps.recoverConfigFreezeOwner = vi.fn(async () => {
+      throw new Error("owner operation is not terminal or scope does not match");
+    });
+
+    const result = await runMigration(FENCED_INPUT, deps);
+
+    expect(result).toMatchObject({
+      success: false,
+      errorAt: { error: expect.stringMatching(/owner recovery rejected.*not terminal/i) },
+    });
+    expect(result.configCleanup).toBeUndefined();
+    expect(client.unfreezeConfig).not.toHaveBeenCalled();
   });
 });
 
