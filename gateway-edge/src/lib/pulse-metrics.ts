@@ -63,7 +63,7 @@ export function isDependencyBump(subject: string): boolean {
 }
 
 // LOC headlines lie unless generated + vendored paths are filtered first (lockfiles,
-// the committed @octogee/core tarball, build output, sourcemaps).
+// the committed @octogee/core interface, build output, sourcemaps).
 const GENERATED_RE: RegExp[] = [
   /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$/,
   /\.tgz$/,

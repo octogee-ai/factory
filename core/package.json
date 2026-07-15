@@ -517,8 +517,6 @@
   "scripts": {
     "prebuild": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "build": "rm -rf dist && tsc -p tsconfig.json",
-    "pack:tarball": "npm run build && npm pack && mv -f octogee-core-*.tgz octogee-core.tgz",
-    "verify:tarball": "bash verify-tarball.sh",
     "pretypecheck": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "pretest": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
@@ -536,7 +534,7 @@
     "uuid": "^11.1.1"
   },
   "devDependencies": {
-    "@octogee/shared": "file:../shared/octogee-shared.tgz",
+    "@octogee/shared": "file:../shared",
     "@types/express": "^5.0.6",
     "@types/supertest": "^7.2.0",
     "@types/ws": "^8.18.1",
@@ -545,6 +543,6 @@
     "vitest": "^4.1.9"
   },
   "peerDependencies": {
-    "@octogee/shared": "file:../shared/octogee-shared.tgz"
+    "@octogee/shared": "^1.0.0"
   }
 }

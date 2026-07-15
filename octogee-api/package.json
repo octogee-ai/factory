@@ -32,8 +32,8 @@
     "@aws-sdk/client-sts": "^3.1087.0",
     "@google-cloud/kms": "^5.6.0",
     "@google-cloud/secret-manager": "^6.1.2",
-    "@octogee/core": "file:../core/octogee-core.tgz",
-    "@octogee/shared": "file:../shared/octogee-shared.tgz",
+    "@octogee/core": "file:../core",
+    "@octogee/shared": "file:../shared",
     "busboy": "^1.6.0",
     "cors": "^2.8.5",
     "express": "^5.2.1",
@@ -51,7 +51,7 @@
     "ws": "^8.21.1"
   },
   "devDependencies": {
-    "@octogee/test-helpers": "file:../test-helpers/octogee-test-helpers.tgz",
+    "@octogee/test-helpers": "file:../test-helpers",
     "@types/busboy": "^1.5.4",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.6",

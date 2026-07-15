@@ -12,23 +12,20 @@
 FROM node:26-slim AS builder
 WORKDIR /octogee-api
 
-# @octogee/core ships as a committed tarball (file:../core/octogee-core.tgz);
-# npm ci extracts it into node_modules. Copy it before any npm ci. Builder stage.
-COPY core/octogee-core.tgz /core/octogee-core.tgz
-COPY shared/octogee-shared.tgz /shared/octogee-shared.tgz
-# @octogee/test-helpers is a devDep (firestore-emulator); the builder's full
-# npm ci needs its tarball — for octogee-api here AND the /gateway-edge prefix
-# install below (gateway-edge declares it too, resolving to the same path).
-# The runtime stage's --omit=dev skips it, so it is not copied there.
-COPY test-helpers/octogee-test-helpers.tgz /test-helpers/octogee-test-helpers.tgz
-
-COPY octogee-api/package.json octogee-api/package-lock.json* ./
+# Packed internal directory dependencies must be present at their declared sibling paths.
+COPY core/package.json /core/package.json
+COPY core/dist /core/dist
+COPY shared/package.json /shared/package.json
+COPY shared/dist /shared/dist
+COPY test-helpers/package.json /test-helpers/package.json
+COPY test-helpers/dist /test-helpers/dist
+COPY octogee-api/.npmrc octogee-api/package.json octogee-api/package-lock.json* ./
 RUN npm ci --ignore-scripts
 
 # octogee-api compiles gateway-edge/src/* (the cluster route handlers). Install
-# gateway-edge's deps so its npm packages AND @octogee/* tarball imports resolve
-# during tsc by walking up from /gateway-edge/src/. Builder stage only.
-COPY gateway-edge/package.json gateway-edge/package-lock.json* /gateway-edge/
+# gateway-edge's deps so its package imports resolve during tsc by walking up
+# from /gateway-edge/src/. Builder stage only.
+COPY gateway-edge/.npmrc gateway-edge/package.json gateway-edge/package-lock.json* /gateway-edge/
 RUN npm ci --prefix /gateway-edge --ignore-scripts
 
 COPY scripts/ops/sync-local-file-deps.mjs /scripts/ops/sync-local-file-deps.mjs
@@ -47,13 +44,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libvips-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# @octogee/core + @octogee/shared tarballs at runtime; the compiled route code
-# under dist/octogee-api + dist/gateway-edge resolves @octogee/* from the
-# node_modules npm ci extracts them into.
-COPY core/octogee-core.tgz /core/octogee-core.tgz
-COPY shared/octogee-shared.tgz /shared/octogee-shared.tgz
-
-COPY octogee-api/package.json octogee-api/package-lock.json* ./
+# The runtime install also packs the direct internal directory dependencies.
+COPY core/package.json /core/package.json
+COPY core/dist /core/dist
+COPY shared/package.json /shared/package.json
+COPY shared/dist /shared/dist
+COPY octogee-api/.npmrc octogee-api/package.json octogee-api/package-lock.json* ./
 RUN npm ci --omit=dev
 
 # Runtime module resolution note: the BUILDER stage installs gateway-edge

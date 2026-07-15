@@ -35,17 +35,17 @@ RUN apt-get update \
 # emits dist/glm-controller/src/ (matches the ENTRYPOINT below).
 WORKDIR /app/glm-controller
 
-# @octogee/core + @octogee/shared committed tarballs. glm's package.json
-# file:-depends both (core peer-depends shared); npm ci extracts them. tsc
-# resolves the .d.ts via core's typesVersions, node the .js via core's exports.
-# Single-stage, so they stay for runtime.
-COPY core/octogee-core.tgz /app/core/octogee-core.tgz
-COPY shared/octogee-shared.tgz /app/shared/octogee-shared.tgz
+# Packed internal directory dependencies must exist at the declared sibling paths
+# before npm ci. Single-stage, so they remain available for runtime resolution.
+COPY core/package.json /app/core/package.json
+COPY core/dist /app/core/dist
+COPY shared/package.json /app/shared/package.json
+COPY shared/dist /app/shared/dist
 
 # Two-stage install: dev deps for the build (typescript), then prune to
 # runtime-only after `tsc` finishes. Avoids `npx tsc` falling back to a
 # downloaded unpinned compiler.
-COPY glm-controller/package.json glm-controller/package-lock.json* ./
+COPY glm-controller/.npmrc glm-controller/package.json glm-controller/package-lock.json* ./
 RUN npm ci
 
 COPY glm-controller/tsconfig.json ./

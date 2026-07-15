@@ -21,7 +21,7 @@ function tsFiles(dir: string): string[] {
 
 // A relative import that resolves OUTSIDE octogee-api/ reaches another package's
 // source. It "works" only because the monorepo worktree has that source checked
-// out, and silently breaks any standalone build (Docker image, committed tarball).
+// out, and silently breaks any standalone build (Docker image, packed directory dependency).
 // octogee-api consumes siblings through @octogee/core + @octogee/shared — with ONE
 // deliberate exception: it compiles gateway-edge/src/* (the cluster route handlers
 // physically live there and are imported by relative path from index.ts). Every

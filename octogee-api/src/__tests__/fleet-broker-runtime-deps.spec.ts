@@ -11,7 +11,7 @@ import { describe, it, expect } from "vitest";
 // throws "Cannot find package" the first time the route runs in the container —
 // a latent 502, not a boot crash. This pins the invariant: every package the
 // broker can pull in at runtime must be a declared octogee-api dependency.
-// (`@octogee/*` imports are sealed tarballs whose deps ship with them, so the
+// (`@octogee/*` imports are packed directory packages whose deps ship with them, so the
 // walk below follows only relative source and stops at bare package specifiers.)
 
 const HERE = dirname(fileURLToPath(import.meta.url));

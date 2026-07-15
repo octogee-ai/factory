@@ -20,7 +20,7 @@ function tsFiles(dir: string): string[] {
 
 // A relative import that resolves OUTSIDE gateway-edge/ reaches another package's
 // source. It "works" only because the monorepo worktree has that source checked out,
-// and silently breaks any standalone build (Docker image, committed tarball). gateway-edge
+// and silently breaks any standalone build (Docker image, packed directory dependency). gateway-edge
 // consumes siblings exclusively through @octogee/core + @octogee/shared; this pins it.
 describe("gateway-edge imports no sibling-package source", () => {
   it("has zero relative imports that escape the package root", () => {

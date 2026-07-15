@@ -1,6 +1,5 @@
 # Build context: repo root (see gateway-edge/cloudbuild.yaml). gateway-edge
-# consumes @octogee/core + @octogee/shared (+ @octogee/test-helpers, a devDep
-# for the emulator specs) as committed tarballs — no sibling source is compiled.
+# consumes packed internal directory dependencies — no sibling source is compiled.
 #
 # WORKDIR must be /gateway-edge (not /app) so that tsc's emit paths — which
 # mirror each source file's location relative to rootDir ("..", the container
@@ -8,12 +7,14 @@
 # main + CMD.
 FROM node:26-slim AS builder
 WORKDIR /gateway-edge
-# Committed tarballs, before npm ci (which extracts them) for tsc .d.ts
-# resolution. test-helpers is a devDep; npm ci installs it (builder only).
-COPY core/octogee-core.tgz /core/octogee-core.tgz
-COPY shared/octogee-shared.tgz /shared/octogee-shared.tgz
-COPY test-helpers/octogee-test-helpers.tgz /test-helpers/octogee-test-helpers.tgz
-COPY gateway-edge/package.json gateway-edge/package-lock.json* ./
+# Packed directories must be present before npm ci resolves their type interfaces.
+COPY core/package.json /core/package.json
+COPY core/dist /core/dist
+COPY shared/package.json /shared/package.json
+COPY shared/dist /shared/dist
+COPY test-helpers/package.json /test-helpers/package.json
+COPY test-helpers/dist /test-helpers/dist
+COPY gateway-edge/.npmrc gateway-edge/package.json gateway-edge/package-lock.json* ./
 RUN npm ci --ignore-scripts
 
 COPY scripts/ops/sync-local-file-deps.mjs /scripts/ops/sync-local-file-deps.mjs
@@ -34,11 +35,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     openssh-client \
     && rm -rf /var/lib/apt/lists/*
-# @octogee/core tarball at runtime; the compiled shim under dist/scripts/lib
-# resolves @octogee/core/* from the extracted node_modules.
-COPY core/octogee-core.tgz /core/octogee-core.tgz
-COPY shared/octogee-shared.tgz /shared/octogee-shared.tgz
-COPY gateway-edge/package.json gateway-edge/package-lock.json* ./
+# The runtime install packs the direct internal directory dependencies.
+COPY core/package.json /core/package.json
+COPY core/dist /core/dist
+COPY shared/package.json /shared/package.json
+COPY shared/dist /shared/dist
+COPY gateway-edge/.npmrc gateway-edge/package.json gateway-edge/package-lock.json* ./
 RUN npm ci --omit=dev
 COPY --from=builder /gateway-edge/dist ./dist
 USER node

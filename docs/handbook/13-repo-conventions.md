@@ -46,6 +46,19 @@ Consequences to keep in mind:
 Every package is named `@octogee/<name>` (consistent scope, no NuCrew-era
 leftovers).
 
+## Internal package directory dependencies
+
+`core/`, `shared/`, and `test-helpers/` commit deterministic `dist/` interfaces.
+Consumers declare them as `file:../<package>` dependencies and own an
+`install-links=true` `.npmrc`. npm then packs the directory into a real installed
+package on `npm ci`; it does not create a source symlink or build on install.
+
+Source-package CI rebuilds and verifies committed `dist/`. A source plus `dist/`
+change leaves consumer locks byte-stable; the local synchronizer refreshes only a
+stale installed package and must not change a lock. Dockerfiles copy each required
+internal package's `package.json` and `dist/`, plus the consumer `.npmrc`, before
+installing dependencies.
+
 ## Dependency currency — verified coverage, not configured intent
 
 The target is the newest published stable major/minor/patch for every directly

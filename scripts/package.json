@@ -22,8 +22,8 @@
     "scope": "tsx ops/scope.ts"
   },
   "dependencies": {
-    "@octogee/core": "file:../core/octogee-core.tgz",
-    "@octogee/shared": "file:../shared/octogee-shared.tgz",
+    "@octogee/core": "file:../core",
+    "@octogee/shared": "file:../shared",
     "@types/http-proxy": "^1.17.17",
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",

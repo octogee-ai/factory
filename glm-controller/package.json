@@ -16,8 +16,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@octogee/core": "file:../core/octogee-core.tgz",
-    "@octogee/shared": "file:../shared/octogee-shared.tgz",
+    "@octogee/core": "file:../core",
+    "@octogee/shared": "file:../shared",
     "express": "^5.2.1",
     "firebase-admin": "^13.10.0",
     "google-auth-library": "^10.9.0",

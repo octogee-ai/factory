@@ -31,7 +31,7 @@ export type JobKey = (typeof JOBS)[keyof typeof JOBS];
 
 const TYPECHECK = "npm run typecheck";
 const COMMITTED_DIST_TYPECHECK =
-  "npm run typecheck && npm run build && node ../scripts/ops/verify-committed-dist.mjs && npm run verify:tarball";
+  "npm run typecheck && npm run build && node ../scripts/ops/verify-committed-dist.mjs";
 
 export interface UnitPackage {
   name: JobKey;

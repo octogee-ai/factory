@@ -269,8 +269,6 @@
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json",
-    "pack:tarball": "npm run build && npm pack && mv -f octogee-shared-*.tgz octogee-shared.tgz",
-    "verify:tarball": "bash verify-tarball.sh",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
   },

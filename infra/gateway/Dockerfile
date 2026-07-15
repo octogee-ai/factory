@@ -15,14 +15,14 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 USER root
 
-# @octogee/core committed tarball (scripts file:s it) — copied before the scripts
-# install so npm ci extracts it, present for the build-time typecheck (npx tsc)
-# + provisioner runtime resolution.
-COPY --chown=node:node core/octogee-core.tgz /octogee/core/octogee-core.tgz
-COPY --chown=node:node shared/octogee-shared.tgz /octogee/shared/octogee-shared.tgz
+# Packed internal directory dependencies must be present before scripts installs.
+COPY --chown=node:node core/package.json /octogee/core/package.json
+COPY --chown=node:node core/dist /octogee/core/dist
+COPY --chown=node:node shared/package.json /octogee/shared/package.json
+COPY --chown=node:node shared/dist /octogee/shared/dist
 
 # ── Octogee provisioner + site API ──────────────────────────────────────────
-COPY --chown=node:node scripts/package.json scripts/package-lock.json* /octogee/scripts/
+COPY --chown=node:node scripts/.npmrc scripts/package.json scripts/package-lock.json* /octogee/scripts/
 WORKDIR /octogee/scripts
 # Full install (incl. devDependencies): `typescript` is a devDep but the
 # build-time typecheck two steps down (`npx tsc -p tsconfig.json --noEmit`)
