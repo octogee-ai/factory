@@ -148,7 +148,15 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     expect(roleBlock).toMatch(/source-frozen\)[\s\S]*skipping config mutation repair/);
     expect(roleBlock).toMatch(/target-candidate\)[\s\S]*print-candidate-state/);
     expect(roleBlock).toMatch(/CANDIDATE_STATE.*pending[\s\S]*openclaw doctor/);
+    expect(roleBlock).toMatch(/CANDIDATE_STATE.*pending[\s\S]*system-config-roll-boot\.ts migrate-target/);
     expect(roleBlock).toMatch(/openclaw doctor[\s\S]*system-config-roll-boot\.ts candidate/);
+    const resolveIdx = entrypoint.indexOf("system-config-roll-boot.ts resolve");
+    const migrateIdx = entrypoint.indexOf("system-config-roll-boot.ts migrate-target");
+    const doctorIdx = entrypoint.indexOf("openclaw doctor --fix --non-interactive", migrateIdx);
+    const candidateIdx = entrypoint.indexOf("system-config-roll-boot.ts candidate", migrateIdx);
+    expect(resolveIdx).toBeLessThan(migrateIdx);
+    expect(migrateIdx).toBeLessThan(doctorIdx);
+    expect(doctorIdx).toBeLessThan(candidateIdx);
   });
 
   it("repairs and checkpoints durable config before watcher, OpenClaw, and BuilderShell", () => {

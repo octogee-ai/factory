@@ -437,15 +437,19 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
         while true; do
           REPAIR_OK=true
           log "Pre-boot: building immutable target system_config candidate..."
-          if ! openclaw doctor --fix --non-interactive; then
+          if ! "$TSX" /octogee/scripts/entrypoints/system-config-roll-boot.ts migrate-target; then
+            log "Pre-boot: target system_config schema migration failed; retrying"
+            REPAIR_OK=false
+          fi
+          if [ "$REPAIR_OK" = "true" ] && ! openclaw doctor --fix --non-interactive; then
             log "Pre-boot: target OpenClaw Doctor failed; retrying"
             REPAIR_OK=false
           fi
-          if [ -f "$CLASS_POLICY" ] && ! node "$CLASS_POLICY"; then
+          if [ "$REPAIR_OK" = "true" ] && [ -f "$CLASS_POLICY" ] && ! node "$CLASS_POLICY"; then
             log "Pre-boot: target gateway class policy failed; retrying"
             REPAIR_OK=false
           fi
-          if ! "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts; then
+          if [ "$REPAIR_OK" = "true" ] && ! "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts; then
             log "Pre-boot: target env/runtime reconciliation failed; retrying"
             REPAIR_OK=false
           fi
