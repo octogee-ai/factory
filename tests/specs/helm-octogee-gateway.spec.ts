@@ -733,6 +733,28 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     expect(dep).not.toMatch(/name:\s*mattermost-gateway[\s\S]*?key:\s*admin_token/);
   });
 
+  it("points the sidecar coach reconciler at the tracked config on isolated gateways", () => {
+    const isolated = findDoc(
+      helmTemplate("octogee-gw-bender", {
+        gatewayId: "bender",
+        gatewayClass: "operator",
+        builderSlug: "ceckert",
+      }),
+      "Deployment",
+      "octogee-gateway-bender",
+    ) ?? "";
+    const isolatedEdge = containerBlock(isolated, "gateway-edge");
+    expect(isolatedEdge).toMatch(
+      /name:\s*OPENCLAW_CONFIG[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/system_config\/openclaw\.json"/,
+    );
+
+    const shared = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const sharedEdge = containerBlock(shared, "gateway-edge");
+    expect(sharedEdge).toMatch(
+      /name:\s*OPENCLAW_CONFIG[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/openclaw\.json"/,
+    );
+  });
+
   it("omits the Mattermost admin-PAT bootstrap init container on operator gateways", () => {
     const dep =
       findDoc(

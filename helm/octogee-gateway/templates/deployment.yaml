@@ -373,6 +373,8 @@ spec:
               value: "http://127.0.0.1:18789"
             - name: OPENCLAW_GATEWAY_DEVICE_TOKEN_PATH
               value: "/var/run/octogee/openclaw-device-auth/token"
+            - name: OPENCLAW_CONFIG
+              value: {{ if eq $gatewayClass "shared" }}"/home/node/.openclaw/openclaw.json"{{ else }}"/home/node/.openclaw/system_config/openclaw.json"{{ end }}
             - name: GATEWAY_ID
               value: {{ .Values.gatewayId | quote }}
             # Disposable instance identity ({gatewayId}-r{n}). GATEWAY_ID stays
