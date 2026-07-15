@@ -37,6 +37,24 @@ supervise_runner() {
   ) &
 }
 
+# ── Signal forwarding ──────────────────────────────────────────────────────
+# Kubernetes sends SIGTERM → PID 1 (this sh) → our trap → SIGTERM every
+# direct child → exit cleanly within the pod's terminationGracePeriodSeconds
+# (default 30s). Without this trap, the shell ignores SIGTERM and k8s
+# eventually SIGKILLs the pod, which drops MM WebSockets ungracefully.
+shutdown() {
+  # Clear the trap FIRST. `kill 0` below signals the entire process group,
+  # which includes this shell — without clearing, the re-delivered SIGTERM
+  # re-enters the handler and we loop (observed in 2026-04-17 rollout: the
+  # entrypoint logged `received SIGTERM — forwarding to children` 6+ times
+  # in the same second). Setting to '' makes subsequent signals ignored.
+  trap '' TERM INT
+  log "entrypoint: received SIGTERM — forwarding to children"
+  kill -TERM 0 2>/dev/null || true
+  exit 0
+}
+trap shutdown TERM INT
+
 # ── Boot banner ─────────────────────────────────────────────────────────────
 # One grep-able line so operators can confirm what's running without
 # exec'ing in to read package.json. BUILD_SHA + OPENCLAW_VERSION +
@@ -470,24 +488,6 @@ fi
 # BASELINE). Do NOT reinstate an unconditional tail mirror. Proper
 # root-cause follow-up: make OpenClaw log k8s-native (stdout) instead of to
 # a rotating file, then no mirror is ever needed.
-
-# ── Signal forwarding ──────────────────────────────────────────────────────
-# Kubernetes sends SIGTERM → PID 1 (this sh) → our trap → SIGTERM every
-# direct child → exit cleanly within the pod's terminationGracePeriodSeconds
-# (default 30s). Without this trap, the shell ignores SIGTERM and k8s
-# eventually SIGKILLs the pod, which drops MM WebSockets ungracefully.
-shutdown() {
-  # Clear the trap FIRST. `kill 0` below signals the entire process group,
-  # which includes this shell — without clearing, the re-delivered SIGTERM
-  # re-enters the handler and we loop (observed in 2026-04-17 rollout: the
-  # entrypoint logged `received SIGTERM — forwarding to children` 6+ times
-  # in the same second). Setting to '' makes subsequent signals ignored.
-  trap '' TERM INT
-  log "entrypoint: received SIGTERM — forwarding to children"
-  kill -TERM 0 2>/dev/null || true
-  exit 0
-}
-trap shutdown TERM INT
 
 # Block on all background jobs. `wait` with no args waits for every
 # backgrounded child; our SIGTERM trap will interrupt it and run the
