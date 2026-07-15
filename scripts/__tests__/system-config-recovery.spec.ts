@@ -432,6 +432,51 @@ describe("system config accepted-head recovery", () => {
     })).toEqual({ ready: false, errorCode: "post-push-durable-mismatch" });
   });
 
+  it("reconciles the latest committed config before considering an older ancestor", () => {
+    const latest = "a".repeat(40);
+    const ancestor = "b".repeat(40);
+    const h = fixture('{"gateway":{"port":9000},"customerSetting":"latest"}\n');
+    let head = latest;
+    const gitExec = vi.fn((_cwd: string, command: string) => {
+      if (command === "rev-parse HEAD") return head;
+      if (command === "rev-list HEAD") return `${latest}\n${ancestor}`;
+      if (command === `show ${latest}:openclaw.json`) {
+        return '{"gateway":{"port":9000},"customerSetting":"latest"}\n';
+      }
+      if (command === `show ${ancestor}:openclaw.json`) {
+        return validConfig({ customerSetting: "ancestor" });
+      }
+      if (command.endsWith(":.octogee.json")) return '{"schemaVersion":1}\n';
+      if (command.endsWith(":.gitignore")) return "*.bak\n*.tmp\n";
+      if (command.startsWith("add ")) return "";
+      if (command.startsWith("commit ")) {
+        head = "c".repeat(40);
+        return "";
+      }
+      if (command === "push origin main") return "";
+      return null;
+    });
+
+    expect(recoverSystemConfigHead({
+      ...h,
+      slug: "ceckert",
+      env,
+      gitExec,
+      validateConfig: vi.fn(),
+    })).toMatchObject({
+      outcome: "recovered",
+      rejectedCommit: latest,
+      recoveredFromCommit: latest,
+      acceptedCommit: "c".repeat(40),
+    });
+    expect(JSON.parse(fs.readFileSync(h.configPath, "utf8"))).toMatchObject({
+      gateway: { port: 18789, mode: "local", bind: "lan" },
+      customerSetting: "latest",
+    });
+    expect(gitExec.mock.calls.filter(([, command]) => command.startsWith("commit "))).toHaveLength(1);
+    expect(gitExec.mock.calls.filter(([, command]) => command === "push origin main")).toHaveLength(1);
+  });
+
   it("recovers a committed openclaw.json deletion from the newest complete ancestor", () => {
     const h = fixture(validConfig({ deletedAtHead: true }));
     fs.rmSync(h.configPath);
@@ -464,6 +509,43 @@ describe("system config accepted-head recovery", () => {
       rejectedCommit: head,
       recoveredFromCommit: ancestor,
       acceptedCommit: "c".repeat(40),
+    });
+    expect(JSON.parse(fs.readFileSync(h.configPath, "utf8"))).toMatchObject({ recovered: true });
+  });
+
+  it("skips a committed candidate with an unknown pending state cleanup", () => {
+    const h = fixture("not-json\n");
+    const head = "a".repeat(40);
+    const ancestor = "b".repeat(40);
+    let recoveredHead = head;
+    const gitExec = vi.fn((_cwd: string, command: string) => {
+      if (command === "rev-parse HEAD") return recoveredHead;
+      if (command === "rev-list HEAD") return `${head}\n${ancestor}`;
+      if (command === `show ${head}:openclaw.json`) return validConfig({ rejected: true });
+      if (command === `show ${head}:.octogee.json`) {
+        return '{"schemaVersion":1,"pendingStateCleanup":"unknown"}\n';
+      }
+      if (command === `show ${ancestor}:openclaw.json`) return validConfig({ recovered: true });
+      if (command === `show ${ancestor}:.octogee.json`) return '{"schemaVersion":1}\n';
+      if (command.endsWith(":.gitignore")) return "*.bak\n*.tmp\n";
+      if (command.startsWith("add ")) return "";
+      if (command.startsWith("commit ")) {
+        recoveredHead = "c".repeat(40);
+        return "";
+      }
+      if (command === "push origin main") return "";
+      return null;
+    });
+
+    expect(recoverSystemConfigHead({
+      ...h,
+      slug: "ceckert",
+      env,
+      gitExec,
+      validateConfig: vi.fn(),
+    })).toMatchObject({
+      outcome: "recovered",
+      recoveredFromCommit: ancestor,
     });
     expect(JSON.parse(fs.readFileSync(h.configPath, "utf8"))).toMatchObject({ recovered: true });
   });

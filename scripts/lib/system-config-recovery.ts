@@ -150,7 +150,7 @@ function historyCandidate(
 
 function recoverFromHistory(context: RecoveryHistoryContext): SystemConfigRecoveryResult {
   const { options, env, execGit, keyPath, rejectedCommit, candidatePath, history } = context;
-  for (const commit of history.split("\n").map((value) => value.trim()).filter(Boolean).slice(1)) {
+  for (const commit of history.split("\n").map((value) => value.trim()).filter(Boolean)) {
     if (!GIT_SHA_RE.test(commit)) continue;
     const candidate = historyCandidate(options, execGit, keyPath, commit);
     if (!candidate) continue;

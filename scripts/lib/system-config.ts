@@ -52,6 +52,7 @@ import {
   assertSystemConfigGitignore,
   assertSystemConfigMetadata,
   readSystemConfigCommitBlob,
+  SYSTEM_CONFIG_LEGACY_MAC_STATE_CLEANUP,
   type ReadSystemConfigCommitBlob,
   type SystemConfigDurableFilename,
   SYSTEM_CONFIG_DURABLE_FILENAMES,
@@ -226,6 +227,10 @@ function readSystemConfigMetadata(filePath: string): UnknownRecord | undefined {
     if (!metadata || !Number.isInteger(metadata.schemaVersion)) {
       throw new Error("schemaVersion must be an integer");
     }
+    if (metadata.pendingStateCleanup !== undefined &&
+        metadata.pendingStateCleanup !== SYSTEM_CONFIG_LEGACY_MAC_STATE_CLEANUP) {
+      throw new Error("pendingStateCleanup is invalid");
+    }
     return metadata;
   } catch {
     throw new Error(`[system_config] invalid system_config metadata at ${filePath}`);
@@ -383,6 +388,21 @@ export function removeLegacyMacState(
       fs.rmSync(path.join(openclawDir, "memory", `${agentId}${suffix}`), { force: true });
     }
   }
+}
+
+function legacyMacStateCleanupPending(openclawDir: string): boolean {
+  const metadata = readSystemConfigMetadata(
+    path.join(systemConfigDir(openclawDir), SYSTEM_CONFIG_METADATA_FILENAME),
+  );
+  return metadata?.pendingStateCleanup === SYSTEM_CONFIG_LEGACY_MAC_STATE_CLEANUP;
+}
+
+function clearLegacyMacStateCleanup(openclawDir: string): void {
+  const metadataPath = path.join(systemConfigDir(openclawDir), SYSTEM_CONFIG_METADATA_FILENAME);
+  const metadata = readSystemConfigMetadata(metadataPath);
+  if (metadata?.pendingStateCleanup !== SYSTEM_CONFIG_LEGACY_MAC_STATE_CLEANUP) return;
+  delete metadata.pendingStateCleanup;
+  atomicWrite(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
 }
 
 async function ensureIdentityAndRepo(slug: string, log: (msg: string) => void): Promise<void> {
@@ -613,6 +633,7 @@ async function reconcileTrackedOpenClawConfig(
   atomicWrite(metadataPath, `${JSON.stringify({
     schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION,
     lastMigration: "remove-mac-and-externalize-mattermost-tokens",
+    pendingStateCleanup: SYSTEM_CONFIG_LEGACY_MAC_STATE_CLEANUP,
   }, null, 2)}\n`);
   if (!fs.existsSync(path.join(repoDir, SYSTEM_CONFIG_GITIGNORE_FILENAME))) {
     fs.writeFileSync(path.join(repoDir, SYSTEM_CONFIG_GITIGNORE_FILENAME), SYSTEM_CONFIG_GITIGNORE, "utf-8");
@@ -624,13 +645,11 @@ export async function reconcileSystemConfigSchema(
   openclawDir: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<boolean> {
-  const migrated = await reconcileTrackedOpenClawConfig(
+  return reconcileTrackedOpenClawConfig(
     systemConfigPath(openclawDir),
     openclawDir,
     env,
   );
-  if (migrated) removeLegacyMacState(openclawDir, env);
-  return migrated;
 }
 
 export async function restoreSystemConfigForSlug(
@@ -874,11 +893,10 @@ function durableDirtyPaths(status: string): Set<string> {
   return new Set(status.split("\n").map((line) => line.trim().slice(2).trim()).filter(Boolean));
 }
 
-function restoreAcceptedDirtyFiles(
-  context: SystemConfigSyncContext,
-  dirtyPaths: ReadonlySet<string>,
-): boolean {
-  const readBlob: ReadSystemConfigCommitBlob = context.opts.readCommitBlob ??
+type AcceptedDurableSet = ReadonlyMap<SystemConfigDurableFilename, Buffer>;
+
+function acceptedCommitBlobReader(context: SystemConfigSyncContext): ReadSystemConfigCommitBlob {
+  return context.opts.readCommitBlob ??
     (context.opts.gitExec
       ? ((_repoDir, commit, filename) => {
           const contents = context.execGit(
@@ -889,32 +907,29 @@ function restoreAcceptedDirtyFiles(
           return contents === null ? null : Buffer.from(contents);
         })
       : readSystemConfigCommitBlob);
-  const accepted = new Map<string, Buffer>();
-  for (const filename of dirtyPaths) {
-    if (filename === OPENCLAW_CONFIG_FILENAME) {
-      const config = readBlob(context.repoDir, "HEAD", filename);
-      if (config === null) return false;
-      accepted.set(filename, config);
-    } else if (
-      filename === SYSTEM_CONFIG_METADATA_FILENAME ||
-      filename === SYSTEM_CONFIG_GITIGNORE_FILENAME
-    ) {
-      const contents = readBlob(
-        context.repoDir,
-        "HEAD",
-        filename as SystemConfigDurableFilename,
-      );
-      if (contents === null) return false;
-      accepted.set(filename, contents);
-    }
+}
+
+function loadAcceptedDurableSet(context: SystemConfigSyncContext): AcceptedDurableSet | null {
+  const readBlob = acceptedCommitBlobReader(context);
+  const accepted = new Map<SystemConfigDurableFilename, Buffer>();
+  for (const filename of SYSTEM_CONFIG_DURABLE_FILENAMES) {
+    const contents = readBlob(context.repoDir, "HEAD", filename);
+    if (contents === null) return null;
+    accepted.set(filename, contents);
   }
-  for (const filename of [
-    SYSTEM_CONFIG_METADATA_FILENAME,
-    SYSTEM_CONFIG_GITIGNORE_FILENAME,
-    OPENCLAW_CONFIG_FILENAME,
-  ]) {
+  return accepted;
+}
+
+function writeAcceptedDirtyFiles(
+  context: SystemConfigSyncContext,
+  dirtyPaths: ReadonlySet<string>,
+  accepted: AcceptedDurableSet,
+): boolean {
+  for (const filename of SYSTEM_CONFIG_DURABLE_FILENAMES) {
+    if (!dirtyPaths.has(filename)) continue;
     const contents = accepted.get(filename);
-    if (contents) atomicWrite(path.join(context.repoDir, filename), contents);
+    if (!contents) return false;
+    atomicWrite(path.join(context.repoDir, filename), contents);
   }
   return true;
 }
@@ -925,7 +940,17 @@ function rejectedDeletionResult(context: SystemConfigSyncContext): SystemConfigS
     SYSTEM_CONFIG_METADATA_FILENAME,
     SYSTEM_CONFIG_GITIGNORE_FILENAME,
   ]);
-  if (!restoreAcceptedDirtyFiles(context, durablePaths)) {
+  const deletedDurableFingerprint = durableFilesFingerprint(context.repoDir);
+  const accepted = loadAcceptedDurableSet(context);
+  if (durableFilesFingerprint(context.repoDir) !== deletedDurableFingerprint) {
+    return changedRejectedCandidateResult(
+      context,
+      "openclaw-json-missing",
+      undefined,
+      context.initialFingerprint,
+    );
+  }
+  if (accepted === null || !writeAcceptedDirtyFiles(context, durablePaths, accepted)) {
     recordSyncError(context.openclawDir, VALIDATION_RESTORE_FAILED, context.now, {
       rejected: true,
     });
@@ -960,6 +985,25 @@ interface RejectedCandidateContext {
   error: unknown;
 }
 
+function changedRejectedCandidateResult(
+  context: SystemConfigSyncContext,
+  errorCode: string,
+  policyPaths: string[] | undefined,
+  candidateFingerprint: string,
+): SystemConfigSyncResult {
+  recordSyncError(context.openclawDir, errorCode, context.now, { rejected: true });
+  context.log(`[system_config] ${context.slug}: rejected durable files changed before restore; scheduling another pass`);
+  return {
+    committed: false,
+    pushed: false,
+    pending: true,
+    rejected: true,
+    errorCode,
+    ...(policyPaths ? { policyPaths } : {}),
+    processedFingerprint: candidateFingerprint,
+  };
+}
+
 function rejectedCandidateResult(input: RejectedCandidateContext): SystemConfigSyncResult {
   const {
     context,
@@ -980,19 +1024,23 @@ function rejectedCandidateResult(input: RejectedCandidateContext): SystemConfigS
     : "validation-failed";
   const policyPaths = error instanceof PlatformInvariantPolicyError ? error.paths : undefined;
   if (durableFilesFingerprint(context.repoDir) !== candidateDurableFingerprint) {
-    recordSyncError(context.openclawDir, errorCode, context.now, { rejected: true });
-    context.log(`[system_config] ${context.slug}: rejected config changed during validation; scheduling another pass`);
-    return {
-      committed: false,
-      pushed: false,
-      pending: true,
-      rejected: true,
+    return changedRejectedCandidateResult(
+      context,
       errorCode,
-      ...(policyPaths ? { policyPaths } : {}),
-      processedFingerprint: candidateFingerprint,
-    };
+      policyPaths,
+      candidateFingerprint,
+    );
   }
-  if (!restoreAcceptedDirtyFiles(context, dirtyPaths)) {
+  const accepted = loadAcceptedDurableSet(context);
+  if (durableFilesFingerprint(context.repoDir) !== candidateDurableFingerprint) {
+    return changedRejectedCandidateResult(
+      context,
+      errorCode,
+      policyPaths,
+      candidateFingerprint,
+    );
+  }
+  if (accepted === null || !writeAcceptedDirtyFiles(context, dirtyPaths, accepted)) {
     if (context.opts.durablePolicy) {
       recordSyncError(context.openclawDir, VALIDATION_RESTORE_FAILED, context.now, {
         rejected: true,
@@ -1425,6 +1473,7 @@ export function auditSystemConfigForSlug(
 }
 
 interface BootCheckpointContext {
+  slug: string;
   openclawDir: string;
   configPath: string;
   env: NodeJS.ProcessEnv;
@@ -1589,11 +1638,34 @@ function finishBootCheckpoint(
   if (bootCheckpointFailed(syncResult)) {
     return failedBootCheckpointResult(context, recovery, syncResult);
   }
-  const acceptedCommit = syncResult.acceptedCommit ?? recovery.acceptedCommit;
+  let acceptedCommit = syncResult.acceptedCommit ?? recovery.acceptedCommit;
   const verifyAcceptedDurableSet = context.opts.verifyAcceptedDurableSet ??
     activeDurableSetMatchesAcceptedHead;
   if (!verifyAcceptedDurableSet(systemConfigDir(context.openclawDir), acceptedCommit)) {
     return postPushDurableMismatchResult(context, acceptedCommit);
+  }
+  if (legacyMacStateCleanupPending(context.openclawDir)) {
+    removeLegacyMacState(context.openclawDir, context.env);
+    clearLegacyMacStateCleanup(context.openclawDir);
+    const cleanupSyncResult = (context.opts.sync ?? syncSystemConfigForSlug)(context.slug, {
+      openclawDir: context.openclawDir,
+      env: context.env,
+      now: context.now,
+      validateConfig: context.opts.validateConfig,
+      durablePolicy: true,
+      source: "boot-migration",
+    });
+    if (bootCheckpointFailed(cleanupSyncResult)) {
+      return failedBootCheckpointResult(
+        context,
+        { outcome: "accepted", acceptedCommit },
+        cleanupSyncResult,
+      );
+    }
+    acceptedCommit = cleanupSyncResult.acceptedCommit ?? acceptedCommit;
+    if (!verifyAcceptedDurableSet(systemConfigDir(context.openclawDir), acceptedCommit)) {
+      return postPushDurableMismatchResult(context, acceptedCommit);
+    }
   }
   updateSystemConfigStatus(context.openclawDir, {
     state: "clean",
@@ -1616,7 +1688,7 @@ export function checkpointBootSystemConfigForSlug(
   const configPath = systemConfigPath(openclawDir);
   const env = opts.env ?? process.env;
   const now = opts.now ?? (() => new Date());
-  const context = { openclawDir, configPath, env, now, opts };
+  const context = { slug, openclawDir, configPath, env, now, opts };
   recordBootDoctorResult(context);
   reconcileBootConfig(context);
 

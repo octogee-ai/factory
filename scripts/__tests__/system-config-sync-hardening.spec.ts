@@ -78,6 +78,52 @@ describe("system config sync hardening", () => {
     });
   });
 
+  it("preserves an edit that lands while accepted durable blobs are loading", () => {
+    const h = fixture((config) => {
+      (config.gateway as Record<string, unknown>).port = 9000;
+    });
+    const accepted = fixture().repoDir;
+    const acceptedFiles = {
+      "openclaw.json": fs.readFileSync(path.join(accepted, "openclaw.json")),
+      ".octogee.json": fs.readFileSync(path.join(accepted, ".octogee.json")),
+      ".gitignore": fs.readFileSync(path.join(accepted, ".gitignore")),
+    };
+    const configPath = path.join(h.repoDir, "openclaw.json");
+    const newer = Buffer.from('{"customerSetting":"newer"}\n');
+    const reads: string[] = [];
+    const readCommitBlob = vi.fn((_repoDir: string, _commit: string, filename: keyof typeof acceptedFiles) => {
+      reads.push(filename);
+      if (reads.length === 1) fs.writeFileSync(configPath, newer);
+      return acceptedFiles[filename];
+    });
+
+    const result = syncSystemConfigForSlug("ceckert", {
+      openclawDir: h.openclawDir,
+      env,
+      durablePolicy: true,
+      gitExec: vi.fn((_cwd: string, command: string) => {
+        if (command.startsWith("status --porcelain")) return " M openclaw.json";
+        if (command === "rev-parse HEAD") return "a".repeat(40);
+        if (command.startsWith("ls-remote")) return `${"a".repeat(40)}\trefs/heads/main`;
+        return "";
+      }),
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      validateConfig: vi.fn(),
+      readCommitBlob,
+    });
+
+    expect(result).toMatchObject({
+      committed: false,
+      pushed: false,
+      pending: true,
+      rejected: true,
+      errorCode: "platform-invariant-violation",
+    });
+    expect(reads).toEqual(["openclaw.json", ".octogee.json", ".gitignore"]);
+    expect(fs.readFileSync(configPath)).toEqual(newer);
+  });
+
   it("rejects live config deletion and restores the complete accepted durable set", () => {
     const h = fixture();
     const runGit = (...args: string[]) => execFileSync("git", args, {
@@ -133,6 +179,51 @@ describe("system config sync hardening", () => {
       rejectedCount: 1,
     });
     expect(gitExec).not.toHaveBeenCalledWith(h.repoDir, expect.stringMatching(/^add /), "/tmp/key");
+  });
+
+  it("preserves a recreated config that lands while deleted durable files are loading", () => {
+    const h = fixture();
+    const accepted = {
+      "openclaw.json": fs.readFileSync(path.join(h.repoDir, "openclaw.json")),
+      ".octogee.json": fs.readFileSync(path.join(h.repoDir, ".octogee.json")),
+      ".gitignore": fs.readFileSync(path.join(h.repoDir, ".gitignore")),
+    };
+    const configPath = path.join(h.repoDir, "openclaw.json");
+    fs.rmSync(configPath);
+    const recreated = Buffer.from('{"customerSetting":"recreated"}\n');
+    const reads: string[] = [];
+    const readCommitBlob = vi.fn((_repoDir: string, _commit: string, filename: keyof typeof accepted) => {
+      reads.push(filename);
+      if (reads.length === 1) fs.writeFileSync(configPath, recreated);
+      return accepted[filename];
+    });
+    const head = "a".repeat(40);
+
+    const result = syncSystemConfigForSlug("ceckert", {
+      openclawDir: h.openclawDir,
+      env,
+      durablePolicy: true,
+      gitExec: vi.fn((_cwd: string, command: string) => {
+        if (command === "rev-parse HEAD") return head;
+        if (command.startsWith("ls-remote")) return `${head}\trefs/heads/main`;
+        if (command.startsWith("status --porcelain")) return " D openclaw.json";
+        return "";
+      }),
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      validateConfig: vi.fn(),
+      readCommitBlob,
+    });
+
+    expect(result).toMatchObject({
+      committed: false,
+      pushed: false,
+      pending: true,
+      rejected: true,
+      errorCode: "openclaw-json-missing",
+    });
+    expect(reads).toEqual(["openclaw.json", ".octogee.json", ".gitignore"]);
+    expect(fs.readFileSync(configPath)).toEqual(recreated);
   });
 
   it("restores a deleted active config before reporting a remote outage", () => {

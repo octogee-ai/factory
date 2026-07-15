@@ -7,6 +7,7 @@ export const SYSTEM_CONFIG_METADATA_FILENAME = ".octogee.json";
 export const SYSTEM_CONFIG_GITIGNORE_FILENAME = ".gitignore";
 export const SYSTEM_CONFIG_GITIGNORE = "*.bak\n*.tmp\n";
 export const CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION = 1;
+export const SYSTEM_CONFIG_LEGACY_MAC_STATE_CLEANUP = "legacy-mac";
 export const SYSTEM_CONFIG_DURABLE_FILENAMES = [
   SYSTEM_CONFIG_OPENCLAW_FILENAME,
   SYSTEM_CONFIG_METADATA_FILENAME,
@@ -54,6 +55,10 @@ export function assertSystemConfigMetadata(contents: string): void {
   }
   if (metadata.lastMigration !== undefined && typeof metadata.lastMigration !== "string") {
     throw new Error("system_config metadata lastMigration is invalid");
+  }
+  if (metadata.pendingStateCleanup !== undefined &&
+      metadata.pendingStateCleanup !== SYSTEM_CONFIG_LEGACY_MAC_STATE_CLEANUP) {
+    throw new Error("system_config metadata pendingStateCleanup is invalid");
   }
 }
 
