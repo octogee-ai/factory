@@ -7,6 +7,7 @@ import {
 } from "@octogee/shared/types/fleet-controller";
 import {
   GLM_GATEWAYS_COLLECTION,
+  GLM_OPERATIONS_COLLECTION,
   resolveUserGatewayShellState,
 } from "@octogee/shared/types/glm";
 import {
@@ -150,6 +151,29 @@ export interface CutoverCommitParams {
       runtimeConfigHash: string;
     };
   };
+  customerMigrationV2Fence?: {
+    operationId: string;
+    migrationId: string;
+    uid: string;
+    slug: string;
+    sourceGatewayId: string;
+    sourceRevisionId: string;
+    sourceEpoch: number;
+    targetGatewayId: string;
+    targetRevisionId: string;
+    targetRelease: number;
+    checkpointCommit: string;
+    configHash: string;
+    freezeObject: string;
+    candidateCommit: string;
+    candidateHash: string;
+    runtimeConfigHash: string;
+    targetStartedAt: number;
+    imageTag: string;
+    buildSha: string;
+    openclawVersion: string;
+    provenAt: number;
+  };
 }
 
 function protocolV2PromotionIsExact(
@@ -251,6 +275,71 @@ function freshObservation(observedAt: number | null, now: number): boolean {
     now - observedAt <= GATEWAY_UNREACHABLE_AFTER_MS;
 }
 
+function customerMigrationV2FenceIsExact(
+  operation: Record<string, unknown> | undefined,
+  fence: NonNullable<CutoverCommitParams["customerMigrationV2Fence"]>,
+): boolean {
+  const state = recordOrEmpty(operation?.customerMigrationV2);
+  const proof = recordOrEmpty(state.candidateProof);
+  return [
+    operation?.status === "running",
+    state.phase === "promoted",
+    state.operationId === fence.operationId,
+    state.migrationId === fence.migrationId,
+    state.uid === fence.uid,
+    state.slug === fence.slug,
+    state.sourceGatewayId === fence.sourceGatewayId,
+    state.sourceRevisionId === fence.sourceRevisionId,
+    state.sourceEpoch === fence.sourceEpoch,
+    state.targetGatewayId === fence.targetGatewayId,
+    state.targetRevisionId === fence.targetRevisionId,
+    state.targetRelease === fence.targetRelease,
+    state.checkpointCommit === fence.checkpointCommit,
+    state.configHash === fence.configHash,
+    state.freezeObject === fence.freezeObject,
+    proof.migrationId === fence.migrationId,
+    proof.slug === fence.slug,
+    proof.sourceRevisionId === fence.sourceRevisionId,
+    proof.targetRevisionId === fence.targetRevisionId,
+    proof.checkpointCommit === fence.checkpointCommit,
+    proof.freezeObject === fence.freezeObject,
+    proof.candidateCommit === fence.candidateCommit,
+    proof.candidateHash === fence.candidateHash,
+    proof.runtimeConfigHash === fence.runtimeConfigHash,
+    proof.observedRevisionId === fence.targetRevisionId,
+    proof.targetStartedAt === fence.targetStartedAt,
+    proof.imageTag === fence.imageTag,
+    proof.buildSha === fence.buildSha,
+    proof.openclawVersion === fence.openclawVersion,
+    proof.provenAt === fence.provenAt,
+    typeof state.promotionIntentAt === "number",
+    typeof state.promotedAt === "number",
+  ].every(Boolean);
+}
+
+function customerMigrationV2TargetIsCurrent(
+  target: Record<string, unknown> | undefined,
+  fence: NonNullable<CutoverCommitParams["customerMigrationV2Fence"]>,
+): boolean {
+  const helm = recordOrEmpty(target?.helm);
+  const heartbeat = recordOrEmpty(target?.heartbeat);
+  const status = recordOrEmpty(heartbeat.configStatus);
+  const owner = recordOrEmpty(status.controlOwner);
+  return [
+    helm.imageTag === fence.imageTag,
+    heartbeat.startedAt === fence.targetStartedAt,
+    heartbeat.version === fence.buildSha,
+    status.openclawVersion === fence.openclawVersion,
+    status.bootRole === "target-candidate",
+    owner.migrationId === fence.migrationId,
+    owner.sourceRevisionId === fence.sourceRevisionId,
+    owner.targetRevisionId === fence.targetRevisionId,
+    status.checkpointCommit === fence.checkpointCommit,
+    status.candidateCommit === fence.candidateCommit,
+    status.candidateHash === fence.candidateHash,
+  ].every(Boolean);
+}
+
 // Atomic cutover (GATEWAY-RELEASES-SPEC, PR5 review P0). The mirror move AND the
 // assignment write commit in ONE Firestore transaction, so a crash/throw leaves
 // NEITHER — never a half-state where the mirror points at the target while the
@@ -270,10 +359,12 @@ export async function commitCutoverAtomic(
   await deps.db.runTransaction(async (txn) => {
     let priorEpoch = 0;
     let priorRevisionId: unknown;
+    let priorAssignmentExists = false;
     if (params.assignment) {
       const priorSnap = await txn.get(
         assignmentRef(deps.db, params.fromGatewayId, params.uid),
       );
+      priorAssignmentExists = priorSnap.exists;
       const rawEpoch = priorSnap.exists ? priorSnap.data()?.epoch : undefined;
       priorEpoch = typeof rawEpoch === "number" && rawEpoch >= 0 ? rawEpoch : 0;
       priorRevisionId = priorSnap.exists ? priorSnap.data()?.revisionId : undefined;
@@ -284,6 +375,48 @@ export async function commitCutoverAtomic(
     const targetRoot = targetRootSnap.exists ? targetRootSnap.data() : undefined;
     if (targetRoot?.desiredStatus === "retired" || targetRoot?.retirementClaim != null) {
       throw new Error(`gateway ${params.toGatewayId} has a current retirement claim`);
+    }
+    if (params.customerMigrationV2Fence) {
+      const fence = params.customerMigrationV2Fence;
+      if (
+        fence.uid !== params.uid ||
+        fence.slug !== params.slug ||
+        fence.sourceGatewayId !== params.fromGatewayId ||
+        fence.targetGatewayId !== params.toGatewayId ||
+        params.assignment?.revisionId !== fence.targetRevisionId ||
+        params.assignment.release !== fence.targetRelease
+      ) {
+        throw new Error("ordinary protocol-v2 cutover parameters changed after proof");
+      }
+      const [operationSnap, targetSnap, targetAssignmentSnap] = await Promise.all([
+        txn.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(fence.operationId)),
+        txn.get(deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(fence.targetRevisionId)),
+        txn.get(assignmentRef(deps.db, params.toGatewayId, params.uid)),
+      ]);
+      if (!customerMigrationV2FenceIsExact(
+        operationSnap.exists ? operationSnap.data() : undefined,
+        fence,
+      )) {
+        throw new Error("ordinary protocol-v2 candidate is not durably promoted at cutover");
+      }
+      if (!customerMigrationV2TargetIsCurrent(
+        targetSnap.exists ? targetSnap.data() : undefined,
+        fence,
+      )) {
+        throw new Error("ordinary protocol-v2 target candidate proof changed before cutover");
+      }
+      const targetAssignment = targetAssignmentSnap.exists ? targetAssignmentSnap.data() : undefined;
+      const alreadyCommitted = !priorAssignmentExists &&
+        targetAssignment?.revisionId === fence.targetRevisionId &&
+        targetAssignment.updatedByOperationId === fence.operationId &&
+        targetAssignment.state === "serving";
+      if (alreadyCommitted) return;
+      if (
+        priorRevisionId !== fence.sourceRevisionId ||
+        priorEpoch !== fence.sourceEpoch
+      ) {
+        throw new Error("ordinary protocol-v2 source assignment changed before cutover");
+      }
     }
     if (params.rollFence) {
       const root = targetRoot;

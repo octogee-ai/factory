@@ -83,6 +83,29 @@ export interface CutoverCommitParams {
             runtimeConfigHash: string;
         };
     };
+    customerMigrationV2Fence?: {
+        operationId: string;
+        migrationId: string;
+        uid: string;
+        slug: string;
+        sourceGatewayId: string;
+        sourceRevisionId: string;
+        sourceEpoch: number;
+        targetGatewayId: string;
+        targetRevisionId: string;
+        targetRelease: number;
+        checkpointCommit: string;
+        configHash: string;
+        freezeObject: string;
+        candidateCommit: string;
+        candidateHash: string;
+        runtimeConfigHash: string;
+        targetStartedAt: number;
+        imageTag: string;
+        buildSha: string;
+        openclawVersion: string;
+        provenAt: number;
+    };
 }
 export declare function commitCutoverAtomic(deps: FleetStateDeps, params: CutoverCommitParams): Promise<void>;
 export interface MarkAssignmentStateParams {
