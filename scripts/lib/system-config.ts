@@ -5,7 +5,7 @@ import * as path from "path";
 import { acquireSystemConfigSyncLeaseSync } from "@octogee/core/system-config-mutation-lease";
 
 import { isValidUsername } from "../../shared/types/identity.js";
-import type { ConfigFreezeOwner } from "../../shared/types/fleet-controller.js";
+import type { ConfigControlOwner } from "../../shared/types/fleet-controller.js";
 import {
   log as defaultLog,
   OPENCLAW_DIR,
@@ -157,7 +157,7 @@ interface SystemConfigBootCheckpointOptions {
   verifyAcceptedDurableSet?: (repoDir: string, acceptedCommit: string) => boolean;
 }
 
-export interface SystemConfigFreezeRecord extends ConfigFreezeOwner {
+export interface SystemConfigFreezeRecord extends ConfigControlOwner {
   directoryMode: number;
   configMode: number;
   checkpointCommit?: string;

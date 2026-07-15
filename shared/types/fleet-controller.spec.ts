@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  CONFIG_FREEZE_CHECKPOINT_PUSH_PENDING_CODE,
-  CONFIG_FREEZE_CONFLICT_ERROR,
-  CONFIG_FREEZE_OWNER_CONFLICT_CODE,
-  CONFIG_FREEZE_SCOPE_CONFLICT_CODE,
-  CONFIG_FREEZE_UNAVAILABLE_ERROR,
-  CONFIG_FREEZE_WRITER_LOCK_BUSY_CODE,
+  CONFIG_CONTROL_ACTIONS,
+  CONFIG_CONTROL_CONFLICT_ERROR,
+  CONFIG_CONTROL_GIT_UNAVAILABLE_CODE,
+  CONFIG_CONTROL_REF_CONFLICT_CODE,
+  CONFIG_CONTROL_UNAVAILABLE_ERROR,
+  CONFIG_CONTROL_WRITER_LOCK_BUSY_CODE,
   DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
   DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
   OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_FILE,
@@ -20,16 +20,22 @@ import {
 describe("durable OpenClaw config control protocol", () => {
   it("exports one exact capability contract for rollout and Dashboard gates", () => {
     expect(DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL).toBe("durable-openclaw-config");
-    expect(DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION).toBe(1);
+    expect(DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION).toBe(2);
+    expect(CONFIG_CONTROL_ACTIONS).toEqual([
+      "freeze-v2",
+      "candidate-proof",
+      "promote-candidate",
+      "abort-v2",
+      "finalize-v2",
+    ]);
   });
 
-  it("exports stable freeze conflict and retry codes for signed control responses", () => {
-    expect(CONFIG_FREEZE_CONFLICT_ERROR).toBe("config freeze conflict");
-    expect(CONFIG_FREEZE_UNAVAILABLE_ERROR).toBe("config freeze unavailable");
-    expect(CONFIG_FREEZE_OWNER_CONFLICT_CODE).toBe("freeze-owner-conflict");
-    expect(CONFIG_FREEZE_SCOPE_CONFLICT_CODE).toBe("freeze-scope-conflict");
-    expect(CONFIG_FREEZE_WRITER_LOCK_BUSY_CODE).toBe("writer-lock-busy");
-    expect(CONFIG_FREEZE_CHECKPOINT_PUSH_PENDING_CODE).toBe("checkpoint-push-pending");
+  it("exports stable protocol-v2 conflict and retry codes", () => {
+    expect(CONFIG_CONTROL_CONFLICT_ERROR).toBe("config control conflict");
+    expect(CONFIG_CONTROL_UNAVAILABLE_ERROR).toBe("config control unavailable");
+    expect(CONFIG_CONTROL_REF_CONFLICT_CODE).toBe("config-ref-conflict");
+    expect(CONFIG_CONTROL_WRITER_LOCK_BUSY_CODE).toBe("config-writer-lock-busy");
+    expect(CONFIG_CONTROL_GIT_UNAVAILABLE_CODE).toBe("config-git-unavailable");
   });
 
   it("exports one exact observed Dashboard bridge capability contract", () => {

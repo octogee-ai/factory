@@ -8,17 +8,24 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  CONFIG_FREEZE_CONFLICT_ERROR,
-  CONFIG_FREEZE_UNAVAILABLE_ERROR,
-  type ConfigFreezeConflictResponse,
+  CONFIG_CONTROL_CONFLICT_ERROR,
+  CONFIG_CONTROL_REVISION_MISMATCH_CODE,
+  CONFIG_CONTROL_UNAVAILABLE_ERROR,
+  type ConfigAbortV2RequestBody,
+  type ConfigAbortV2Response,
+  type ConfigCandidateProofRequestBody,
+  type ConfigCandidateProofResponse,
+  type ConfigControlAction,
+  type ConfigControlConflictResponse,
+  type ConfigControlRequestBody,
+  type ConfigControlUnavailableResponse,
+  type ConfigFinalizeV2RequestBody,
+  type ConfigFinalizeV2Response,
+  type ConfigFreezeV2RequestBody,
+  type ConfigFreezeV2Response,
+  type ConfigPromoteCandidateRequestBody,
+  type ConfigPromoteCandidateResponse,
   type AbortRsyncImportRequestBody,
-  type ConfigFreezeRequestBody,
-  type ConfigFreezeResponse,
-  type ConfigFreezeUnavailableResponse,
-  type ConfigRestoreProofRequestBody,
-  type ConfigRestoreProofResponse,
-  type ConfigUnfreezeRequestBody,
-  type ConfigUnfreezeResponse,
   type ImportResponse,
   type ActivateImportRequestBody,
   type ActivationManifestExportRequestBody,
@@ -51,13 +58,17 @@ import {
   MIGRATION_MODE_HEADER,
   MIGRATION_SLUG_HEADER,
 } from "../../shared/types/fleet-controller.js";
+import { isValidGatewayId } from "../../shared/types/glm.js";
 import { isValidUsername } from "../../shared/types/identity.js";
 import { verifyFleetRequest } from "./fleet-signature.js";
 import {
   SystemConfigFreezeOwnerConflictError,
   SystemConfigFreezeScopeConflictError,
-  SystemConfigFreezeUnavailableError,
 } from "./system-config-roll-control.js";
+import {
+  SystemConfigControlRefConflictError,
+  SystemConfigControlUnavailableError,
+} from "./system-config-roll-protocol-v2.js";
 import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
 import {
   removeCustomerFromGateway,
@@ -72,6 +83,7 @@ import {
 export interface MigrationHandlerDeps {
   publicKey: string;
   gatewayId: string;
+  revisionId: string;
   adapter: CustomerLifecycleAdapter;
   
   log?: (msg: string) => void;
@@ -93,34 +105,78 @@ flushLocalState?: (input: {
   reason: string;
 }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
 
-freezeSystemConfig?: (input: {
-  migrationId: string;
-  slug: string;
-}) => Promise<Omit<ConfigFreezeResponse, "migrationId" | "slug" | "frozen">> |
-  Omit<ConfigFreezeResponse, "migrationId" | "slug" | "frozen">;
+freezeSystemConfigV2?: ConfigFreezeV2Callback;
 
-proveSystemConfigRestore?: (input: {
-  migrationId: string;
-  slug: string;
-  checkpointCommit: string;
-}) => Promise<Omit<ConfigRestoreProofResponse, "migrationId" | "slug">> |
-  Omit<ConfigRestoreProofResponse, "migrationId" | "slug">;
+proveSystemConfigCandidate?: ConfigCandidateProofCallback;
 
-unfreezeSystemConfig?: (input: {
-  migrationId: string;
-  slug: string;
-}) => Promise<{ unfrozen: boolean }> | { unfrozen: boolean };
+promoteSystemConfigCandidate?: ConfigPromoteCandidateCallback;
+
+abortSystemConfigV2?: ConfigAbortV2Callback;
+
+finalizeSystemConfigV2?: ConfigFinalizeV2Callback;
 }
+
+type ConfigControlEnvelopeKeys = "action" | "issuedAt" | "expiresAt" | "requestId";
+type ConfigControlBindingKeys = "migrationId" | "slug" | "sourceRevisionId" | "targetRevisionId";
+
+export type ConfigFreezeV2CallbackInput = Omit<ConfigFreezeV2RequestBody, ConfigControlEnvelopeKeys>;
+export type ConfigFreezeV2CallbackResult = Omit<
+  ConfigFreezeV2Response,
+  ConfigControlBindingKeys | "frozen"
+>;
+export type ConfigFreezeV2Callback = (
+  input: ConfigFreezeV2CallbackInput,
+) => Promise<ConfigFreezeV2CallbackResult> | ConfigFreezeV2CallbackResult;
+
+export type ConfigCandidateProofCallbackInput = Omit<
+  ConfigCandidateProofRequestBody,
+  ConfigControlEnvelopeKeys
+>;
+export type ConfigCandidateProofCallbackResult = Omit<
+  ConfigCandidateProofResponse,
+  ConfigControlBindingKeys
+>;
+export type ConfigCandidateProofCallback = (
+  input: ConfigCandidateProofCallbackInput,
+) => Promise<ConfigCandidateProofCallbackResult> | ConfigCandidateProofCallbackResult;
+
+export type ConfigPromoteCandidateCallbackInput = Omit<
+  ConfigPromoteCandidateRequestBody,
+  ConfigControlEnvelopeKeys
+>;
+export type ConfigPromoteCandidateCallbackResult = Omit<
+  ConfigPromoteCandidateResponse,
+  ConfigControlBindingKeys
+>;
+export type ConfigPromoteCandidateCallback = (
+  input: ConfigPromoteCandidateCallbackInput,
+) => Promise<ConfigPromoteCandidateCallbackResult> | ConfigPromoteCandidateCallbackResult;
+
+export type ConfigAbortV2CallbackInput = Omit<ConfigAbortV2RequestBody, ConfigControlEnvelopeKeys>;
+export type ConfigAbortV2CallbackResult = Omit<ConfigAbortV2Response, ConfigControlBindingKeys>;
+export type ConfigAbortV2Callback = (
+  input: ConfigAbortV2CallbackInput,
+) => Promise<ConfigAbortV2CallbackResult> | ConfigAbortV2CallbackResult;
+
+export type ConfigFinalizeV2CallbackInput = Omit<
+  ConfigFinalizeV2RequestBody,
+  ConfigControlEnvelopeKeys
+>;
+export type ConfigFinalizeV2CallbackResult = Omit<
+  ConfigFinalizeV2Response,
+  ConfigControlBindingKeys
+>;
+export type ConfigFinalizeV2Callback = (
+  input: ConfigFinalizeV2CallbackInput,
+) => Promise<ConfigFinalizeV2CallbackResult> | ConfigFinalizeV2CallbackResult;
 
 const CONFIG_CONTROL_MAX_LIFETIME_MS = 60_000;
 const CONFIG_CONTROL_CLOCK_SKEW_MS = 5_000;
 const configControlReplayByDeps = new WeakMap<MigrationHandlerDeps, Map<string, number>>();
 
 function acceptConfigControlEnvelope(
-  body: ConfigFreezeRequestBody | ConfigRestoreProofRequestBody | ConfigUnfreezeRequestBody,
-  expectedAction: ConfigFreezeRequestBody["action"] |
-    ConfigRestoreProofRequestBody["action"] |
-    ConfigUnfreezeRequestBody["action"],
+  body: ConfigControlRequestBody,
+  expectedAction: ConfigControlAction,
   deps: MigrationHandlerDeps,
   res: Response,
   log: (msg: string) => void,
@@ -315,9 +371,104 @@ export function createFlushHandler(deps: MigrationHandlerDeps): RequestHandler {
   };
 }
 
-function typedConfigFreezeFailure(error: unknown): {
+const CONFIG_CONTROL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+const REVISION_ID_RE = /^(.+)-r([1-9]\d*)$/u;
+const GIT_OBJECT_RE = /^[0-9a-f]{40}$/u;
+const CONFIG_HASH_RE = /^[0-9a-f]{64}$/u;
+
+function isValidRevisionId(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const match = REVISION_ID_RE.exec(value);
+  if (!match || !isValidGatewayId(match[1])) return false;
+  return Number.isSafeInteger(Number(match[2]));
+}
+
+function acceptProtocolV2Request(
+  body: ConfigControlRequestBody,
+  expectedAction: ConfigControlAction,
+  localRole: "source" | "target",
+  context: {
+    deps: MigrationHandlerDeps;
+    res: Response;
+    log: (msg: string) => void;
+  },
+): boolean {
+  const { deps, res, log } = context;
+  if (!acceptConfigControlEnvelope(body, expectedAction, deps, res, log)) return false;
+  if (
+    !CONFIG_CONTROL_ID_RE.test(body.migrationId) ||
+    !isValidRevisionId(body.sourceRevisionId) ||
+    !isValidRevisionId(body.targetRevisionId) ||
+    body.sourceRevisionId === body.targetRevisionId
+  ) {
+    res.status(400).json({ error: "invalid config control identifiers" });
+    return false;
+  }
+  const addressedRevisionId = localRole === "source"
+    ? body.sourceRevisionId
+    : body.targetRevisionId;
+  if (addressedRevisionId !== deps.revisionId) {
+    log(
+      `[migration-http] rejected config control revision mismatch migrationId=${body.migrationId}`,
+    );
+    const response: ConfigControlConflictResponse = {
+      error: CONFIG_CONTROL_CONFLICT_ERROR,
+      code: CONFIG_CONTROL_REVISION_MISMATCH_CODE,
+    };
+    res.status(409).json(response);
+    return false;
+  }
+  return true;
+}
+
+function hasGitObject(value: unknown): value is string {
+  return typeof value === "string" && GIT_OBJECT_RE.test(value);
+}
+
+function hasConfigHash(value: unknown): value is string {
+  return typeof value === "string" && CONFIG_HASH_RE.test(value);
+}
+
+function rejectInvalidGitBindings(
+  body: {
+    checkpointCommit: unknown;
+    freezeObject: unknown;
+    candidateCommit?: unknown;
+    candidateHash?: unknown;
+  },
+  res: Response,
+  options: { candidate: "absent" | "nullable" | "required"; hash: boolean },
+): boolean {
+  let candidateValid = true;
+  if (options.candidate === "nullable") {
+    candidateValid = body.candidateCommit === null || hasGitObject(body.candidateCommit);
+  } else if (options.candidate === "required") {
+    candidateValid = hasGitObject(body.candidateCommit);
+  }
+  if (
+    !hasGitObject(body.checkpointCommit) ||
+    !hasGitObject(body.freezeObject) ||
+    !candidateValid ||
+    (options.hash && !hasConfigHash(body.candidateHash))
+  ) {
+    res.status(400).json({ error: "invalid config control Git bindings" });
+    return true;
+  }
+  return false;
+}
+
+function configControlBindings(body: ConfigControlRequestBody) {
+  return {
+    migrationId: body.migrationId,
+    slug: body.slug,
+    sourceRevisionId: body.sourceRevisionId,
+    targetRevisionId: body.targetRevisionId,
+  };
+}
+
+function typedConfigControlFailure(error: unknown): {
   status: 409 | 503;
-  body: ConfigFreezeConflictResponse | ConfigFreezeUnavailableResponse;
+  body: ConfigControlConflictResponse | ConfigControlUnavailableResponse;
 } | null {
   if (
     error instanceof SystemConfigFreezeOwnerConflictError ||
@@ -326,17 +477,26 @@ function typedConfigFreezeFailure(error: unknown): {
     return {
       status: 409,
       body: {
-        error: CONFIG_FREEZE_CONFLICT_ERROR,
+        error: CONFIG_CONTROL_CONFLICT_ERROR,
         code: error.code,
         owner: error.owner,
       },
     };
   }
-  if (error instanceof SystemConfigFreezeUnavailableError) {
+  if (error instanceof SystemConfigControlRefConflictError) {
+    return {
+      status: 409,
+      body: {
+        error: CONFIG_CONTROL_CONFLICT_ERROR,
+        code: error.code,
+      },
+    };
+  }
+  if (error instanceof SystemConfigControlUnavailableError) {
     return {
       status: 503,
       body: {
-        error: CONFIG_FREEZE_UNAVAILABLE_ERROR,
+        error: CONFIG_CONTROL_UNAVAILABLE_ERROR,
         code: error.code,
         retryable: true,
       },
@@ -345,110 +505,161 @@ function typedConfigFreezeFailure(error: unknown): {
   return null;
 }
 
-export function createConfigFreezeHandler(deps: MigrationHandlerDeps): RequestHandler {
+function respondConfigControlError(
+  error: unknown,
+  deps: MigrationHandlerDeps,
+  body: ConfigControlRequestBody,
+  res: Response,
+): void {
+  const message = error instanceof Error ? error.message : String(error);
+  (deps.log ?? ((msg) => console.log(msg)))(
+    `[migration-http] config control failed action=${body.action} migrationId=${body.migrationId}: ${message}`,
+  );
+  const typed = typedConfigControlFailure(error);
+  if (typed) {
+    res.status(typed.status).json(typed.body);
+    return;
+  }
+  res.status(409).json({ error: "config control failed" });
+}
+
+export function createConfigFreezeV2Handler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
-    const body = parseAndVerifyJsonBody<ConfigFreezeRequestBody>(req, res, deps.publicKey, log);
+    const body = parseAndVerifyJsonBody<ConfigFreezeV2RequestBody>(req, res, deps.publicKey, log);
     if (!body) return;
-    if (!acceptConfigControlEnvelope(body, "freeze", deps, res, log)) return;
-    if (!deps.freezeSystemConfig) {
-      res.status(501).json({ error: "config freeze not configured" });
+    if (!acceptProtocolV2Request(body, "freeze-v2", "source", { deps, res, log })) return;
+    if (!deps.freezeSystemConfigV2) {
+      res.status(501).json({ error: "config freeze-v2 not configured" });
       return;
     }
     try {
-      const checkpoint = await deps.freezeSystemConfig({
-        migrationId: body.migrationId,
-        slug: body.slug,
-      });
-      const response: ConfigFreezeResponse = {
-        migrationId: body.migrationId,
-        slug: body.slug,
+      const checkpoint = await deps.freezeSystemConfigV2(configControlBindings(body));
+      const response: ConfigFreezeV2Response = {
+        ...configControlBindings(body),
         frozen: true,
         ...checkpoint,
       };
       res.status(200).json(response);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      log(`[migration-http] config freeze failed migrationId=${body.migrationId}: ${message}`);
-      const typed = typedConfigFreezeFailure(error);
-      if (typed) {
-        res.status(typed.status).json(typed.body);
-        return;
-      }
-      res.status(409).json({ error: "config freeze failed", message });
+      respondConfigControlError(error, deps, body, res);
     }
   };
 }
 
-export function createConfigRestoreProofHandler(deps: MigrationHandlerDeps): RequestHandler {
+export function createConfigCandidateProofHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
-    const body = parseAndVerifyJsonBody<ConfigRestoreProofRequestBody>(req, res, deps.publicKey, log);
+    const body = parseAndVerifyJsonBody<ConfigCandidateProofRequestBody>(req, res, deps.publicKey, log);
     if (!body) return;
-    if (!acceptConfigControlEnvelope(body, "restore-proof", deps, res, log)) return;
-    if (!/^[0-9a-f]{40}$/.test(body.checkpointCommit)) {
-      res.status(400).json({ error: "invalid checkpointCommit" });
-      return;
-    }
-    if (!deps.proveSystemConfigRestore) {
-      res.status(501).json({ error: "config restore proof not configured" });
+    if (!acceptProtocolV2Request(body, "candidate-proof", "target", { deps, res, log })) return;
+    if (rejectInvalidGitBindings(body, res, { candidate: "absent", hash: false })) return;
+    if (!deps.proveSystemConfigCandidate) {
+      res.status(501).json({ error: "config candidate proof not configured" });
       return;
     }
     try {
-      const proof = await deps.proveSystemConfigRestore({
-        migrationId: body.migrationId,
-        slug: body.slug,
+      const proof = await deps.proveSystemConfigCandidate({
+        ...configControlBindings(body),
         checkpointCommit: body.checkpointCommit,
+        freezeObject: body.freezeObject,
       });
-      const response: ConfigRestoreProofResponse = {
-        migrationId: body.migrationId,
-        slug: body.slug,
+      const response: ConfigCandidateProofResponse = {
+        ...configControlBindings(body),
         ...proof,
       };
       res.status(200).json(response);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      log(`[migration-http] config restore proof failed migrationId=${body.migrationId}: ${message}`);
-      const typed = typedConfigFreezeFailure(error);
-      if (typed) {
-        res.status(typed.status).json(typed.body);
-        return;
-      }
-      res.status(409).json({ error: "config restore proof failed", message });
+      respondConfigControlError(error, deps, body, res);
     }
   };
 }
 
-export function createConfigUnfreezeHandler(deps: MigrationHandlerDeps): RequestHandler {
+export function createConfigPromoteCandidateHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
-    const body = parseAndVerifyJsonBody<ConfigUnfreezeRequestBody>(req, res, deps.publicKey, log);
+    const body = parseAndVerifyJsonBody<ConfigPromoteCandidateRequestBody>(req, res, deps.publicKey, log);
     if (!body) return;
-    if (!acceptConfigControlEnvelope(body, "unfreeze", deps, res, log)) return;
-    if (!deps.unfreezeSystemConfig) {
-      res.status(501).json({ error: "config unfreeze not configured" });
+    if (!acceptProtocolV2Request(body, "promote-candidate", "target", { deps, res, log })) return;
+    if (rejectInvalidGitBindings(body, res, { candidate: "required", hash: true })) return;
+    if (!deps.promoteSystemConfigCandidate) {
+      res.status(501).json({ error: "config candidate promotion not configured" });
       return;
     }
     try {
-      const result = await deps.unfreezeSystemConfig({
-        migrationId: body.migrationId,
-        slug: body.slug,
+      const result = await deps.promoteSystemConfigCandidate({
+        ...configControlBindings(body),
+        checkpointCommit: body.checkpointCommit,
+        candidateCommit: body.candidateCommit,
+        candidateHash: body.candidateHash,
+        freezeObject: body.freezeObject,
       });
-      const response: ConfigUnfreezeResponse = {
-        migrationId: body.migrationId,
-        slug: body.slug,
+      const response: ConfigPromoteCandidateResponse = {
+        ...configControlBindings(body),
         ...result,
       };
       res.status(200).json(response);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      log(`[migration-http] config unfreeze failed migrationId=${body.migrationId}: ${message}`);
-      const typed = typedConfigFreezeFailure(error);
-      if (typed) {
-        res.status(typed.status).json(typed.body);
-        return;
-      }
-      res.status(409).json({ error: "config unfreeze failed", message });
+      respondConfigControlError(error, deps, body, res);
+    }
+  };
+}
+
+export function createConfigAbortV2Handler(deps: MigrationHandlerDeps): RequestHandler {
+  const log = deps.log ?? ((msg) => console.log(msg));
+  return async (req, res) => {
+    const body = parseAndVerifyJsonBody<ConfigAbortV2RequestBody>(req, res, deps.publicKey, log);
+    if (!body) return;
+    if (!acceptProtocolV2Request(body, "abort-v2", "source", { deps, res, log })) return;
+    if (rejectInvalidGitBindings(body, res, { candidate: "nullable", hash: false })) return;
+    if (!deps.abortSystemConfigV2) {
+      res.status(501).json({ error: "config abort-v2 not configured" });
+      return;
+    }
+    try {
+      const result = await deps.abortSystemConfigV2({
+        ...configControlBindings(body),
+        checkpointCommit: body.checkpointCommit,
+        candidateCommit: body.candidateCommit,
+        freezeObject: body.freezeObject,
+      });
+      const response: ConfigAbortV2Response = {
+        ...configControlBindings(body),
+        ...result,
+      };
+      res.status(200).json(response);
+    } catch (error) {
+      respondConfigControlError(error, deps, body, res);
+    }
+  };
+}
+
+export function createConfigFinalizeV2Handler(deps: MigrationHandlerDeps): RequestHandler {
+  const log = deps.log ?? ((msg) => console.log(msg));
+  return async (req, res) => {
+    const body = parseAndVerifyJsonBody<ConfigFinalizeV2RequestBody>(req, res, deps.publicKey, log);
+    if (!body) return;
+    if (!acceptProtocolV2Request(body, "finalize-v2", "target", { deps, res, log })) return;
+    if (rejectInvalidGitBindings(body, res, { candidate: "required", hash: true })) return;
+    if (!deps.finalizeSystemConfigV2) {
+      res.status(501).json({ error: "config finalize-v2 not configured" });
+      return;
+    }
+    try {
+      const result = await deps.finalizeSystemConfigV2({
+        ...configControlBindings(body),
+        checkpointCommit: body.checkpointCommit,
+        candidateCommit: body.candidateCommit,
+        candidateHash: body.candidateHash,
+        freezeObject: body.freezeObject,
+      });
+      const response: ConfigFinalizeV2Response = {
+        ...configControlBindings(body),
+        ...result,
+      };
+      res.status(200).json(response);
+    } catch (error) {
+      respondConfigControlError(error, deps, body, res);
     }
   };
 }

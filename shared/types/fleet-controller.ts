@@ -70,7 +70,7 @@ export const MIGRATING_IN_PIN_TTL_MS = MIGRATION_TRANSFER_TIMEOUT_MS + 60_000;
 export const SIGNATURE_HEADER = "X-Fleet-Controller-Signature";
 
 export const DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL = "durable-openclaw-config" as const;
-export const DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION = 1 as const;
+export const DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION = 2 as const;
 
 export interface DurableOpenClawConfigControlProtocol {
   protocol: typeof DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL;
@@ -196,77 +196,134 @@ drained: boolean;
 runningCount: number;
 }
 
+export const CONFIG_CONTROL_ACTIONS = [
+  "freeze-v2",
+  "candidate-proof",
+  "promote-candidate",
+  "abort-v2",
+  "finalize-v2",
+] as const;
+
+export type ConfigControlAction = typeof CONFIG_CONTROL_ACTIONS[number];
+
 export interface ConfigControlRequestBody extends MigrationRequestBody {
-  action: "freeze" | "restore-proof" | "unfreeze";
+  action: ConfigControlAction;
+  sourceRevisionId: string;
+  targetRevisionId: string;
   issuedAt: number;
   expiresAt: number;
   requestId: string;
 }
 
-export const CONFIG_FREEZE_CONFLICT_ERROR = "config freeze conflict";
-export const CONFIG_FREEZE_UNAVAILABLE_ERROR = "config freeze unavailable";
-export const CONFIG_FREEZE_OWNER_CONFLICT_CODE = "freeze-owner-conflict";
-export const CONFIG_FREEZE_SCOPE_CONFLICT_CODE = "freeze-scope-conflict";
-export const CONFIG_FREEZE_WRITER_LOCK_BUSY_CODE = "writer-lock-busy";
-export const CONFIG_FREEZE_CHECKPOINT_PUSH_PENDING_CODE = "checkpoint-push-pending";
+export interface ConfigControlResponseBody extends MigrationRequestBody {
+  sourceRevisionId: string;
+  targetRevisionId: string;
+}
 
-export interface ConfigFreezeOwner {
+export const CONFIG_CONTROL_CONFLICT_ERROR = "config control conflict";
+export const CONFIG_CONTROL_UNAVAILABLE_ERROR = "config control unavailable";
+export const CONFIG_CONTROL_OWNER_CONFLICT_CODE = "freeze-owner-conflict";
+export const CONFIG_CONTROL_SCOPE_CONFLICT_CODE = "freeze-scope-conflict";
+export const CONFIG_CONTROL_REF_CONFLICT_CODE = "config-ref-conflict";
+export const CONFIG_CONTROL_REVISION_MISMATCH_CODE = "revision-mismatch";
+export const CONFIG_CONTROL_WRITER_LOCK_BUSY_CODE = "config-writer-lock-busy";
+export const CONFIG_CONTROL_GIT_UNAVAILABLE_CODE = "config-git-unavailable";
+
+export type ConfigControlConflictCode =
+  | typeof CONFIG_CONTROL_OWNER_CONFLICT_CODE
+  | typeof CONFIG_CONTROL_SCOPE_CONFLICT_CODE
+  | typeof CONFIG_CONTROL_REF_CONFLICT_CODE
+  | typeof CONFIG_CONTROL_REVISION_MISMATCH_CODE;
+
+export type ConfigControlUnavailableCode =
+  | typeof CONFIG_CONTROL_WRITER_LOCK_BUSY_CODE
+  | typeof CONFIG_CONTROL_GIT_UNAVAILABLE_CODE;
+
+export interface ConfigControlConflictResponse {
+  error: typeof CONFIG_CONTROL_CONFLICT_ERROR;
+  code: ConfigControlConflictCode;
+  owner?: ConfigControlOwner;
+}
+
+export interface ConfigControlUnavailableResponse {
+  error: typeof CONFIG_CONTROL_UNAVAILABLE_ERROR;
+  code: ConfigControlUnavailableCode;
+  retryable: true;
+}
+
+export interface ConfigControlOwner {
   migrationId: string;
   slug: string;
 }
 
-export type ConfigFreezeConflictCode =
-  | typeof CONFIG_FREEZE_OWNER_CONFLICT_CODE
-  | typeof CONFIG_FREEZE_SCOPE_CONFLICT_CODE;
-
-export type ConfigFreezeUnavailableCode =
-  | typeof CONFIG_FREEZE_WRITER_LOCK_BUSY_CODE
-  | typeof CONFIG_FREEZE_CHECKPOINT_PUSH_PENDING_CODE;
-
-export interface ConfigFreezeConflictResponse {
-  error: typeof CONFIG_FREEZE_CONFLICT_ERROR;
-  code: ConfigFreezeConflictCode;
-  owner: ConfigFreezeOwner;
+export interface ConfigFreezeV2RequestBody extends ConfigControlRequestBody {
+  action: "freeze-v2";
 }
 
-export interface ConfigFreezeUnavailableResponse {
-  error: typeof CONFIG_FREEZE_UNAVAILABLE_ERROR;
-  code: ConfigFreezeUnavailableCode;
-  retryable: true;
-}
-
-export interface ConfigFreezeRequestBody extends ConfigControlRequestBody {
-  action: "freeze";
-}
-
-export interface ConfigFreezeResponse extends MigrationRequestBody {
+export interface ConfigFreezeV2Response extends ConfigControlResponseBody {
   frozen: true;
   checkpointCommit: string;
   configHash: string;
+  freezeRef: string;
+  freezeObject: string;
 }
 
-export interface ConfigRestoreProofRequestBody extends ConfigControlRequestBody {
-  action: "restore-proof";
+export interface ConfigCandidateProofRequestBody extends ConfigControlRequestBody {
+  action: "candidate-proof";
   checkpointCommit: string;
+  freezeObject: string;
 }
 
-export interface ConfigRestoreProofResponse extends MigrationRequestBody {
-  restoredCommit: string;
-  acceptedCommit: string;
-  configHash: string;
-  configReady: true;
-  observedRevisionId: string;
-  restoreProvenAt: number;
-  configReadyAt: number;
+export interface ConfigCandidateProofResponse extends ConfigControlResponseBody {
+  checkpointCommit: string;
+  candidateCommit: string;
+  candidateHash: string;
+  candidateRef: string;
+  freezeObject: string;
   runtimeConfigHash: string;
+  observedRevisionId: string;
+  targetStartedAt: number;
+  imageTag: string;
+  buildSha: string;
+  openclawVersion: string;
+  configReady: true;
+  provenAt: number;
 }
 
-export interface ConfigUnfreezeRequestBody extends ConfigControlRequestBody {
-  action: "unfreeze";
+export interface ConfigPromoteCandidateRequestBody extends ConfigControlRequestBody {
+  action: "promote-candidate";
+  checkpointCommit: string;
+  candidateCommit: string;
+  candidateHash: string;
+  freezeObject: string;
 }
 
-export interface ConfigUnfreezeResponse extends MigrationRequestBody {
-  unfrozen: boolean;
+export interface ConfigPromoteCandidateResponse extends ConfigControlResponseBody {
+  promoted: true;
+  promotedCommit: string;
+}
+
+export interface ConfigAbortV2RequestBody extends ConfigControlRequestBody {
+  action: "abort-v2";
+  checkpointCommit: string;
+  candidateCommit: string | null;
+  freezeObject: string;
+}
+
+export interface ConfigAbortV2Response extends ConfigControlResponseBody {
+  aborted: true;
+}
+
+export interface ConfigFinalizeV2RequestBody extends ConfigControlRequestBody {
+  action: "finalize-v2";
+  checkpointCommit: string;
+  candidateCommit: string;
+  candidateHash: string;
+  freezeObject: string;
+}
+
+export interface ConfigFinalizeV2Response extends ConfigControlResponseBody {
+  finalized: true;
 }
 
 export interface FlushGatewayRequestBody extends MigrationRequestBody {
