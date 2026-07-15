@@ -285,7 +285,7 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
   });
 
   it("turns repair-shell teardown into a restart of the full gateway container", () => {
-    expect(repairContainerRestart).toMatch(/process\.kill\(1,\s*signal\)/);
+    expect(repairContainerRestart).toMatch(/process\.kill\(0,\s*signal\)/);
     const shutdownIdx = entrypoint.indexOf("shutdown() {");
     const trapIdx = entrypoint.indexOf("trap shutdown TERM INT");
     const shellIdx = entrypoint.indexOf("supervise_runner builder-shell");
