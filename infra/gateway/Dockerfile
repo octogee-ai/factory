@@ -128,10 +128,7 @@ WORKDIR /octogee/extensions/octogee-web-tools
 RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
     && chown -R node:node /octogee/extensions/octogee-web-tools/node_modules
 
-# ── Config template (for ephemeral bootstrap) ──────────────────────────────
-# openclaw.template.json + envsubst replaces the old known-good config
-
-# ── envsubst for config templating ──────────────────────────────────────────
+# ── Runtime utilities ───────────────────────────────────────────────────────
 # `chmod 1777 /tmp` is defensive: newer Debian bookworm apt sandboxes
 # signature verification through user `_apt` and needs a world-writable
 # /tmp. The OpenClaw npm install in Dockerfile.base sometimes leaves /tmp
