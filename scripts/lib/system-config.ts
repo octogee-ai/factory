@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -36,6 +37,7 @@ import {
 import {
   attributedCommitArgs,
   recoverSystemConfigHead,
+  type SystemConfigCommitSource,
   type SystemConfigRecoveryResult,
 } from "./system-config-recovery.js";
 import {
@@ -48,6 +50,11 @@ type UnknownRecord = Record<string, unknown>;
 const CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION = 1;
 const SYSTEM_CONFIG_PATHSPEC = "openclaw.json .octogee.json .gitignore";
 const SYSTEM_CONFIG_GITIGNORE = "*.bak\n*.tmp\n";
+const GIT_SHA_RE = /^[0-9a-f]{40,64}$/;
+
+function fingerprintContents(contents: Buffer): string {
+  return createHash("sha256").update(contents).digest("hex");
+}
 
 export interface SystemConfigRestoreResult {
   skipped?: string;
@@ -86,8 +93,9 @@ export interface SystemConfigSyncOptions {
   validateConfig?: (configPath: string) => void;
   durablePolicy?: boolean;
   env?: NodeJS.ProcessEnv;
-  source?: "auto-watch" | "boot-migration" | "recovery";
+  source?: SystemConfigCommitSource;
   lockHeld?: boolean;
+  allowFrozen?: boolean;
 }
 
 interface SystemConfigAuditOptions {
@@ -123,12 +131,40 @@ interface SystemConfigBootCheckpointOptions {
   doctorResult?: "ok";
 }
 
+export interface SystemConfigFreezeRecord {
+  migrationId: string;
+  directoryMode: number;
+  configMode: number;
+  checkpointCommit?: string;
+  configHash?: string;
+}
+
 export function systemConfigDir(openclawDir = OPENCLAW_DIR): string {
   return path.join(openclawDir, "system_config");
 }
 
 export function systemConfigPath(openclawDir = OPENCLAW_DIR): string {
   return path.join(systemConfigDir(openclawDir), "openclaw.json");
+}
+
+export function systemConfigFreezeMarkerPath(openclawDir = OPENCLAW_DIR): string {
+  return path.join(openclawDir, "system_config.freeze.json");
+}
+
+export function systemConfigFreezeStatus(
+  openclawDir = OPENCLAW_DIR,
+): SystemConfigFreezeRecord | null {
+  const markerPath = systemConfigFreezeMarkerPath(openclawDir);
+  if (!fs.existsSync(markerPath)) return null;
+  const parsed = JSON.parse(fs.readFileSync(markerPath, "utf8")) as Partial<SystemConfigFreezeRecord>;
+  if (
+    typeof parsed.migrationId !== "string" ||
+    !Number.isInteger(parsed.directoryMode) ||
+    !Number.isInteger(parsed.configMode)
+  ) {
+    throw new Error(`[system_config] invalid freeze marker at ${markerPath}`);
+  }
+  return parsed as SystemConfigFreezeRecord;
 }
 
 function remoteUrl(slug: string): string {
@@ -283,11 +319,73 @@ async function ensureIdentityAndRepo(slug: string, log: (msg: string) => void): 
   log(`[system_config] broker ensured Gitea user/org/${systemConfigRepoName()} for ${slug}`);
 }
 
-function cloneOrReuseSystemConfigRepo(slug: string, dir: string, log: (msg: string) => void): boolean {
+function retryRetainedInitialSeedPush(
+  slug: string,
+  repoDir: string,
+  templatePath: string,
+  keyPath: string,
+  log: (msg: string) => void,
+): boolean {
+  if (gitExec(repoDir, "ls-remote origin refs/heads/main", keyPath) !== "") return false;
+  const head = gitExec(repoDir, "rev-parse HEAD", keyPath);
+  if (!head || !GIT_SHA_RE.test(head)) return false;
+  if (gitExec(repoDir, "symbolic-ref --short HEAD", keyPath) !== "main") return false;
+  if (gitExec(repoDir, "rev-list --count HEAD", keyPath) !== "1") return false;
+  if (gitExec(repoDir, "log -1 --pretty=%s", keyPath) !== "initial system_config openclaw template") {
+    return false;
+  }
+  if (gitExec(repoDir, `status --porcelain -- ${SYSTEM_CONFIG_PATHSPEC}`, keyPath) !== "") {
+    return false;
+  }
+  const tracked = gitExec(
+    repoDir,
+    "diff-tree --root --no-commit-id --name-only -r HEAD",
+    keyPath,
+  );
+  if (tracked === null || tracked.split("\n").sort().join("\n") !== [
+    ".gitignore",
+    ".octogee.json",
+    "openclaw.json",
+  ].join("\n")) {
+    return false;
+  }
+  try {
+    const configContents = fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8");
+    const config = JSON.parse(configContents);
+    if (!asRecord(config)) return false;
+    const template = fs.readFileSync(templatePath, "utf8");
+    JSON.parse(template);
+    if (configContents !== (template.endsWith("\n") ? template : `${template}\n`)) return false;
+    const metadata = readSystemConfigMetadata(path.join(repoDir, ".octogee.json"));
+    if (
+      metadata?.schemaVersion !== CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION ||
+      metadata.lastMigration !== "initial" ||
+      fs.readFileSync(path.join(repoDir, ".gitignore"), "utf8") !== SYSTEM_CONFIG_GITIGNORE
+    ) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  if (gitExec(repoDir, "push -u origin main", keyPath) === null) {
+    log(`[system_config] retained initial push retry failed for ${slug}/${systemConfigRepoName()}`);
+    return false;
+  }
+  log(`[system_config] recovered retained initial commit for ${slug}/${systemConfigRepoName()}`);
+  return true;
+}
+
+function cloneOrReuseSystemConfigRepo(
+  slug: string,
+  dir: string,
+  templatePath: string,
+  log: (msg: string) => void,
+): boolean {
   if (fs.existsSync(path.join(dir, ".git"))) {
     setRepoSshCommand(dir, slug);
     const sshKey = customerSshKeyPath(slug);
     if (gitExec(dir, "fetch origin main", sshKey) === null) {
+      if (retryRetainedInitialSeedPush(slug, dir, templatePath, sshKey, log)) return true;
       log(`[system_config] fetch failed for ${slug}/${systemConfigRepoName()}`);
       return false;
     }
@@ -423,7 +521,7 @@ export async function restoreSystemConfigForSlug(
   const templatePath = opts.templatePath ?? path.join(TEMPLATES_DIR, "..", "infra", "gateway", "openclaw.template.json");
 
   await ensureIdentityAndRepo(slug, log);
-  if (!cloneOrReuseSystemConfigRepo(slug, repoDir, log)) {
+  if (!cloneOrReuseSystemConfigRepo(slug, repoDir, templatePath, log)) {
     return { skipped: "checkout-unavailable", seeded: false, restored: false };
   }
 
@@ -468,8 +566,6 @@ export function acquireSystemConfigSyncLock(openclawDir: string): (() => void) |
   }
   return null;
 }
-
-const GIT_SHA_RE = /^[0-9a-f]{40,64}$/;
 
 function remoteHeadFromLsRemote(output: string | null): string | null {
   if (output === null) return null;
@@ -640,9 +736,11 @@ function syncSystemConfigUnlocked(
     };
   }
 
+  const candidateContents = fs.readFileSync(repoConfigPath);
+  const candidateFingerprint = fingerprintContents(candidateContents);
   let validatedFingerprint: string;
   try {
-    const parsed = JSON.parse(fs.readFileSync(repoConfigPath, "utf-8")) as unknown;
+    const parsed = JSON.parse(candidateContents.toString("utf-8")) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("openclaw.json must contain an object");
     }
@@ -654,7 +752,24 @@ function syncSystemConfigUnlocked(
     const rejectedDir = path.join(openclawDir, "rejected_config");
     fs.mkdirSync(rejectedDir, { recursive: true, mode: 0o700 });
     const rejectedPath = path.join(rejectedDir, `openclaw.${stamp}.json`);
-    fs.writeFileSync(rejectedPath, fs.readFileSync(repoConfigPath), { mode: 0o600 });
+    fs.writeFileSync(rejectedPath, candidateContents, { mode: 0o600 });
+    const errorCode = error instanceof PlatformInvariantPolicyError
+      ? error.code
+      : "validation-failed";
+    const policyPaths = error instanceof PlatformInvariantPolicyError ? error.paths : undefined;
+    if (systemConfigFingerprint(repoConfigPath) !== candidateFingerprint) {
+      recordSyncError(openclawDir, errorCode, now, { rejected: true });
+      log(`[system_config] ${slug}: rejected config changed during validation; scheduling another pass`);
+      return {
+        committed: false,
+        pushed: false,
+        pending: true,
+        rejected: true,
+        errorCode,
+        ...(policyPaths ? { policyPaths } : {}),
+        processedFingerprint: candidateFingerprint,
+      };
+    }
     const accepted = execGit(repoDir, "show HEAD:openclaw.json", keyPath);
     if (accepted === null) {
       if (opts.durablePolicy) {
@@ -670,10 +785,6 @@ function syncSystemConfigUnlocked(
       };
     }
     atomicWrite(repoConfigPath, accepted);
-    const errorCode = error instanceof PlatformInvariantPolicyError
-      ? error.code
-      : "validation-failed";
-    const policyPaths = error instanceof PlatformInvariantPolicyError ? error.paths : undefined;
     recordSyncError(openclawDir, errorCode, now, { rejected: true });
     log(`[system_config] ${slug}: rejected config restored (${errorCode}${policyPaths ? `: ${policyPaths.join(", ")}` : ""})`);
     return {
@@ -786,6 +897,15 @@ function syncSystemConfig(
   pushWhenClean: boolean,
 ): SystemConfigSyncResult {
   const openclawDir = opts.openclawDir ?? OPENCLAW_DIR;
+  const frozen = systemConfigFreezeStatus(openclawDir);
+  if (frozen && !opts.allowFrozen) {
+    return {
+      skipped: "config-frozen",
+      committed: false,
+      pushed: false,
+      processedFingerprint: systemConfigFingerprint(systemConfigPath(openclawDir)),
+    };
+  }
   if (!isValidUsername(slug) || !fs.existsSync(openclawDir)) {
     return syncSystemConfigUnlocked(slug, opts, pushWhenClean);
   }
@@ -1015,4 +1135,11 @@ export function checkpointDurableSystemConfigForSlug(
     throw new SystemConfigCheckpointError(result);
   }
   return result;
+}
+
+export function syncSystemConfigForSlugWhileLocked(
+  slug: string,
+  opts: SystemConfigSyncOptions = {},
+): SystemConfigSyncResult {
+  return syncSystemConfigUnlocked(slug, opts, true);
 }

@@ -12,6 +12,7 @@ import {
   OPENCLAW_DIR,
 } from "../lib/config.js";
 import { createGatewayRpc } from "../lib/gateway-rpc.js";
+import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
 import { syncAllWorkspaces } from "../lib/git.js";
 import { buildBrokeredLifecycleAdapter } from "../lib/customer-lifecycle-broker-adapter.js";
 import { blobSyncAllWithOptions } from "../lib/blob-sync.js";
@@ -27,7 +28,17 @@ import {
   checkpointDurableSystemConfigForSlug,
   syncSystemConfigForSlug,
 } from "../lib/system-config.js";
+import {
+  checkpointSystemConfig,
+  restoreAndProveSystemConfig,
+  unfreezeSystemConfig,
+  type RestoreAndProofOptions,
+  type SystemConfigRestoreProof,
+} from "../lib/system-config-roll-control.js";
+import { validateOpenClawConfig } from "../lib/openclaw-config-validation.js";
+import type { SystemConfigCommitSource } from "../lib/system-config-recovery.js";
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 
 export interface FleetControllerEntrypointConfig {
@@ -65,6 +76,91 @@ export function createFleetSystemConfigFlush(
   if (!builderSlug) return undefined;
   return async () => {
     checkpointDurableSystemConfigForSlug(builderSlug, { log: logFn }, sync);
+  };
+}
+
+export function assertFleetConfigSlug(expectedSlug: string, requestedSlug: string): void {
+  if (requestedSlug !== expectedSlug) {
+    throw new Error("config RPC slug does not match gateway builder");
+  }
+}
+
+type SystemConfigRuntimeRpc = Pick<
+  GatewayRpcClient,
+  "configGet" | "configApply" | "channelsStatus"
+>;
+
+export interface RestoreRevisionSystemConfigOptions {
+  checkpointCommit: string;
+  slug: string;
+  openclawDir: string;
+  revisionId: string;
+  env: NodeJS.ProcessEnv;
+  source: SystemConfigCommitSource;
+  rpc: SystemConfigRuntimeRpc;
+  validateConfig?: (configPath: string) => void;
+  now?: () => number;
+  restore?: (options: RestoreAndProofOptions) => Promise<SystemConfigRestoreProof>;
+}
+
+async function loadRuntimeSystemConfig(
+  rpc: SystemConfigRuntimeRpc,
+  configPath: string,
+): Promise<string> {
+  const value = JSON.parse(fs.readFileSync(configPath, "utf8")) as unknown;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("restored OpenClaw config is not an object");
+  }
+  const current = await rpc.configGet();
+  const applied = await rpc.configApply(value as object, current.hash);
+  if (typeof applied.hash !== "string" || applied.hash.length === 0) {
+    throw new Error("OpenClaw config.apply did not return the loaded runtime hash");
+  }
+  return applied.hash;
+}
+
+export async function restoreRevisionSystemConfig(
+  options: RestoreRevisionSystemConfigOptions,
+): Promise<
+  SystemConfigRestoreProof & {
+    configReady: true;
+    observedRevisionId: string;
+    restoreProvenAt: number;
+    configReadyAt: number;
+    runtimeConfigHash: string;
+  }
+> {
+  if (!options.revisionId) throw new Error("target revision id unavailable for config proof");
+  let loadedRuntimeHash = "";
+  const restore = options.restore ?? restoreAndProveSystemConfig;
+  const proof = await restore({
+    checkpointCommit: options.checkpointCommit,
+    slug: options.slug,
+    openclawDir: options.openclawDir,
+    env: options.env,
+    source: options.source,
+    ...(options.validateConfig ? { validateConfig: options.validateConfig } : {}),
+    loadRuntimeConfig: async (configPath) => {
+      loadedRuntimeHash = await loadRuntimeSystemConfig(options.rpc, configPath);
+    },
+  });
+  if (!loadedRuntimeHash) throw new Error("target runtime config was not loaded before proof");
+  const now = options.now ?? Date.now;
+  const restoreProvenAt = now();
+  const observed = await options.rpc.configGet();
+  if (observed.hash !== loadedRuntimeHash) {
+    throw new Error(
+      `runtime config hash ${observed.hash} does not match loaded hash ${loadedRuntimeHash}`,
+    );
+  }
+  await options.rpc.channelsStatus();
+  return {
+    ...proof,
+    configReady: true,
+    observedRevisionId: options.revisionId,
+    restoreProvenAt,
+    configReadyAt: now(),
+    runtimeConfigHash: observed.hash,
   };
 }
 
@@ -146,6 +242,41 @@ async function main(): Promise<void> {
         log,
       });
     },
+    ...(entrypointConfig.builderSlug
+      ? {
+          freezeSystemConfig: ({ migrationId, slug }) => {
+            assertFleetConfigSlug(entrypointConfig.builderSlug, slug);
+            return checkpointSystemConfig({
+              migrationId,
+              slug,
+              openclawDir: OPENCLAW_DIR,
+              env: process.env,
+              source: "migration-checkpoint",
+              validateConfig: validateOpenClawConfig,
+            });
+          },
+          proveSystemConfigRestore: async ({ checkpointCommit, slug }) => {
+            assertFleetConfigSlug(entrypointConfig.builderSlug, slug);
+            return restoreRevisionSystemConfig({
+              checkpointCommit,
+              slug,
+              openclawDir: OPENCLAW_DIR,
+              revisionId: entrypointConfig.revisionId,
+              env: process.env,
+              source: "migration-restore",
+              rpc,
+              validateConfig: validateOpenClawConfig,
+            });
+          },
+          unfreezeSystemConfig: ({ migrationId, slug }) => {
+            assertFleetConfigSlug(entrypointConfig.builderSlug, slug);
+            return unfreezeSystemConfig({
+              migrationId,
+              openclawDir: OPENCLAW_DIR,
+            });
+          },
+        }
+      : {}),
     // Db-less: gateway pods hold NO Firestore credentials. Cowboy polls
     // /health and writes gateways/{id} on the trusted side. Gateway pods run
     // only the local mount reconcile from brokered assigned snapshots; all

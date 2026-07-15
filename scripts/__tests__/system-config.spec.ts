@@ -61,6 +61,7 @@ describe("system_config restore", () => {
     templatePath = path.join(dir, "openclaw.template.json");
     fs.mkdirSync(path.join(repoDir, ".git"), { recursive: true });
     vi.clearAllMocks();
+    vi.mocked(gitExec).mockReset().mockReturnValue("ok");
   });
 
   afterEach(() => {
@@ -143,6 +144,74 @@ describe("system_config restore", () => {
       templatePath,
       log: () => {},
     })).rejects.toThrow(/initial push failed/);
+  });
+
+  it("retries a retained valid initial commit when the first seed push transiently fails", async () => {
+    fs.writeFileSync(templatePath, "{\"agents\":{\"list\":[]}}\n");
+    let initialCommitted = false;
+    let pushAttempts = 0;
+    vi.mocked(gitExec).mockImplementation((_cwd: string, args: string) => {
+      if (args === "fetch origin main") return initialCommitted ? null : "ok";
+      if (args === "merge --ff-only origin/main") return "ok";
+      if (args === 'commit -m "initial system_config openclaw template"') {
+        initialCommitted = true;
+        return "ok";
+      }
+      if (args === "push -u origin main") {
+        pushAttempts += 1;
+        return pushAttempts === 1 ? null : "ok";
+      }
+      if (args === "ls-remote origin refs/heads/main") return "";
+      if (args === "rev-parse HEAD") return "a".repeat(40);
+      if (args === "symbolic-ref --short HEAD") return "main";
+      if (args === "rev-list --count HEAD") return "1";
+      if (args === "log -1 --pretty=%s") return "initial system_config openclaw template";
+      if (args === "status --porcelain -- openclaw.json .octogee.json .gitignore") return "";
+      if (args === "diff-tree --root --no-commit-id --name-only -r HEAD") {
+        return ".gitignore\n.octogee.json\nopenclaw.json";
+      }
+      return "ok";
+    });
+
+    await expect(restoreSystemConfigForSlug("acme", {
+      openclawDir,
+      templatePath,
+      log: () => {},
+    })).rejects.toThrow(/initial push failed/);
+    await expect(restoreSystemConfigForSlug("acme", {
+      openclawDir,
+      templatePath,
+      log: () => {},
+    })).resolves.toMatchObject({ restored: true, seeded: false });
+    expect(pushAttempts).toBe(2);
+  });
+
+  it("does not push a retained seed when empty-remote recovery history is not the initial commit", async () => {
+    writeJson(path.join(repoDir, "openclaw.json"), { agents: { list: [] } });
+    writeJson(path.join(repoDir, ".octogee.json"), {
+      schemaVersion: 1,
+      lastMigration: "initial",
+    });
+    fs.writeFileSync(path.join(repoDir, ".gitignore"), "*.bak\n*.tmp\n");
+    vi.mocked(gitExec).mockImplementation((_cwd: string, args: string) => {
+      if (args === "fetch origin main") return null;
+      if (args === "ls-remote origin refs/heads/main") return "";
+      if (args === "rev-parse HEAD") return "a".repeat(40);
+      if (args === "symbolic-ref --short HEAD") return "main";
+      if (args === "rev-list --count HEAD") return "2";
+      return "ok";
+    });
+
+    await expect(restoreSystemConfigForSlug("acme", {
+      openclawDir,
+      templatePath,
+      log: () => {},
+    })).resolves.toEqual({ skipped: "checkout-unavailable", seeded: false, restored: false });
+    expect(gitExec).not.toHaveBeenCalledWith(
+      repoDir,
+      "push -u origin main",
+      "/tmp/customer-keys/acme/id_ed25519",
+    );
   });
 
   it("fast-forwards a reused checkout before reading its authoritative config", async () => {
@@ -616,6 +685,30 @@ describe("system_config restore", () => {
     expect(fs.existsSync(path.join(openclawDir, "system_config.sync.lock"))).toBe(true);
   });
 
+  it("does not let the background watcher mutate Git while a roll owns the config freeze", () => {
+    const configPath = path.join(repoDir, "openclaw.json");
+    writeJson(configPath, { version: 1 });
+    fs.writeFileSync(path.join(openclawDir, "system_config.freeze.json"), JSON.stringify({
+      migrationId: "migration-1",
+      directoryMode: 0o700,
+      configMode: 0o600,
+    }));
+    const git = vi.fn(() => "unexpected");
+
+    const result = syncSystemConfigForSlug("acme", {
+      openclawDir,
+      gitExec: git,
+    });
+
+    expect(result).toMatchObject({
+      skipped: "config-frozen",
+      committed: false,
+      pushed: false,
+      processedFingerprint: systemConfigFingerprint(configPath),
+    });
+    expect(git).not.toHaveBeenCalled();
+  });
+
   it("reclaims a stale incomplete config-sync lock after a crashed writer", () => {
     writeJson(path.join(repoDir, "openclaw.json"), { version: 1 });
     const lockPath = path.join(openclawDir, "system_config.sync.lock");
@@ -674,5 +767,48 @@ describe("system_config restore", () => {
     expect(fs.readFileSync(rejected, "utf-8")).toBe("{ invalid");
     expect(fs.statSync(rejected).mode & 0o777).toBe(0o600);
     expect(git).not.toHaveBeenCalledWith(repoDir, "add openclaw.json .octogee.json .gitignore", "/tmp/key");
+  });
+
+  it("preserves a newer edit when validation rejects the preceding candidate", () => {
+    const configPath = path.join(repoDir, "openclaw.json");
+    const candidate = '{"candidate":"invalid"}\n';
+    const newer = '{"candidate":"newer-valid"}\n';
+    fs.writeFileSync(configPath, candidate, "utf-8");
+    const candidateFingerprint = systemConfigFingerprint(configPath);
+    const git = vi.fn((_cwd: string, args: string) => {
+      if (args === "status --porcelain -- openclaw.json .octogee.json .gitignore") return " M openclaw.json";
+      if (args === "show HEAD:openclaw.json") return '{"accepted":true}\n';
+      return "unexpected";
+    });
+
+    const result = syncSystemConfigForSlug("acme", {
+      openclawDir,
+      now: () => new Date("2026-07-14T18:00:00.000Z"),
+      validateConfig: () => {
+        fs.writeFileSync(configPath, newer, "utf-8");
+        throw new Error("candidate invalid");
+      },
+      log: () => {},
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      gitExec: git,
+    });
+
+    expect(result).toMatchObject({
+      committed: false,
+      pushed: false,
+      rejected: true,
+      pending: true,
+      errorCode: "validation-failed",
+      processedFingerprint: candidateFingerprint,
+    });
+    expect(fs.readFileSync(configPath, "utf-8")).toBe(newer);
+    const rejected = path.join(
+      openclawDir,
+      "rejected_config",
+      "openclaw.2026-07-14T18-00-00-000Z.json",
+    );
+    expect(fs.readFileSync(rejected, "utf-8")).toBe(candidate);
+    expect(git).not.toHaveBeenCalledWith(repoDir, "show HEAD:openclaw.json", "/tmp/key");
   });
 });

@@ -11,6 +11,9 @@ import {
   createActivateImportHandler,
   createActivationManifestExportHandler,
   createAbortRsyncImportHandler,
+  createConfigFreezeHandler,
+  createConfigRestoreProofHandler,
+  createConfigUnfreezeHandler,
   createExportHandler,
   createExportPathsHandler,
   createFlushHandler,
@@ -473,6 +476,99 @@ describe("createFlushHandler", () => {
 
     expect(getStatus()).toBe(501);
     expect(getBody()).toEqual({ error: "flush not configured" });
+  });
+});
+
+describe("system config roll handlers", () => {
+  it("returns the source checkpoint only after the local config controller freezes and drains", async () => {
+    const freezeSystemConfig = vi.fn(() => ({
+      checkpointCommit: "a".repeat(40),
+      configHash: "b".repeat(64),
+    }));
+    const handler = createConfigFreezeHandler(mkDeps({ freezeSystemConfig }));
+    const body = { migrationId: "mig-1", slug: "chris" };
+    const rawBody = JSON.stringify(body);
+    const req = mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody),
+    });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(freezeSystemConfig).toHaveBeenCalledWith({ migrationId: "mig-1", slug: "chris" });
+    expect(getBody()).toEqual({
+      migrationId: "mig-1",
+      slug: "chris",
+      frozen: true,
+      checkpointCommit: "a".repeat(40),
+      configHash: "b".repeat(64),
+    });
+  });
+
+  it("returns the target restored and post-migration accepted commits", async () => {
+    const proveSystemConfigRestore = vi.fn(() => ({
+      restoredCommit: "a".repeat(40),
+      acceptedCommit: "c".repeat(40),
+      configHash: "d".repeat(64),
+      configReady: true as const,
+      observedRevisionId: "default-r2",
+      restoreProvenAt: 100,
+      configReadyAt: 101,
+      runtimeConfigHash: "runtime-after",
+    }));
+    const handler = createConfigRestoreProofHandler(mkDeps({ proveSystemConfigRestore }));
+    const body = {
+      migrationId: "mig-1",
+      slug: "chris",
+      checkpointCommit: "a".repeat(40),
+    };
+    const rawBody = JSON.stringify(body);
+    const req = mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody),
+    });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(proveSystemConfigRestore).toHaveBeenCalledWith({
+      migrationId: "mig-1",
+      slug: "chris",
+      checkpointCommit: "a".repeat(40),
+    });
+    expect(getBody()).toMatchObject({
+      restoredCommit: "a".repeat(40),
+      acceptedCommit: "c".repeat(40),
+      configHash: "d".repeat(64),
+      configReady: true,
+      observedRevisionId: "default-r2",
+      restoreProvenAt: 100,
+      configReadyAt: 101,
+      runtimeConfigHash: "runtime-after",
+    });
+  });
+
+  it("unfreezes the source on abort and fails closed when roll control is absent", async () => {
+    const unfreezeSystemConfig = vi.fn(() => ({ unfrozen: true }));
+    const body = { migrationId: "mig-1", slug: "chris" };
+    const rawBody = JSON.stringify(body);
+    const request = () => mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody),
+    });
+    const configured = createConfigUnfreezeHandler(mkDeps({ unfreezeSystemConfig }));
+    const configuredResponse = mkResponse();
+
+    await configured(request(), configuredResponse.res, vi.fn());
+
+    expect(configuredResponse.getStatus()).toBe(200);
+    expect(unfreezeSystemConfig).toHaveBeenCalledWith({ migrationId: "mig-1", slug: "chris" });
+    expect(configuredResponse.getBody()).toMatchObject({ unfrozen: true });
+
+    const absent = createConfigFreezeHandler(mkDeps());
+    const absentResponse = mkResponse();
+    await absent(request(), absentResponse.res, vi.fn());
+    expect(absentResponse.getStatus()).toBe(501);
   });
 });
 

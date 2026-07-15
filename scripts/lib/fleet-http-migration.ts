@@ -9,6 +9,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   type AbortRsyncImportRequestBody,
+  type ConfigFreezeRequestBody,
+  type ConfigFreezeResponse,
+  type ConfigRestoreProofRequestBody,
+  type ConfigRestoreProofResponse,
+  type ConfigUnfreezeRequestBody,
+  type ConfigUnfreezeResponse,
   type ImportResponse,
   type ActivateImportRequestBody,
   type ActivationManifestExportRequestBody,
@@ -75,6 +81,24 @@ flushLocalState?: (input: {
   slug: string;
   reason: string;
 }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
+
+freezeSystemConfig?: (input: {
+  migrationId: string;
+  slug: string;
+}) => Promise<Omit<ConfigFreezeResponse, "migrationId" | "slug" | "frozen">> |
+  Omit<ConfigFreezeResponse, "migrationId" | "slug" | "frozen">;
+
+proveSystemConfigRestore?: (input: {
+  migrationId: string;
+  slug: string;
+  checkpointCommit: string;
+}) => Promise<Omit<ConfigRestoreProofResponse, "migrationId" | "slug">> |
+  Omit<ConfigRestoreProofResponse, "migrationId" | "slug">;
+
+unfreezeSystemConfig?: (input: {
+  migrationId: string;
+  slug: string;
+}) => Promise<{ unfrozen: boolean }> | { unfrozen: boolean };
 }
 
 function rejectInvalidSlug(slug: string, res: Response): boolean {
@@ -226,6 +250,96 @@ export function createFlushHandler(deps: MigrationHandlerDeps): RequestHandler {
       const message = err instanceof Error ? err.message : String(err);
       log(`[migration-http] ❌ flush migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
       res.status(500).json({ error: "flush failed", message });
+    }
+  };
+}
+
+export function createConfigFreezeHandler(deps: MigrationHandlerDeps): RequestHandler {
+  const log = deps.log ?? ((msg) => console.log(msg));
+  return async (req, res) => {
+    const body = parseAndVerifyJsonBody<ConfigFreezeRequestBody>(req, res, deps.publicKey, log);
+    if (!body) return;
+    if (!deps.freezeSystemConfig) {
+      res.status(501).json({ error: "config freeze not configured" });
+      return;
+    }
+    try {
+      const checkpoint = await deps.freezeSystemConfig({
+        migrationId: body.migrationId,
+        slug: body.slug,
+      });
+      const response: ConfigFreezeResponse = {
+        migrationId: body.migrationId,
+        slug: body.slug,
+        frozen: true,
+        ...checkpoint,
+      };
+      res.status(200).json(response);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`[migration-http] config freeze failed migrationId=${body.migrationId}: ${message}`);
+      res.status(409).json({ error: "config freeze failed", message });
+    }
+  };
+}
+
+export function createConfigRestoreProofHandler(deps: MigrationHandlerDeps): RequestHandler {
+  const log = deps.log ?? ((msg) => console.log(msg));
+  return async (req, res) => {
+    const body = parseAndVerifyJsonBody<ConfigRestoreProofRequestBody>(req, res, deps.publicKey, log);
+    if (!body) return;
+    if (!/^[0-9a-f]{40}$/.test(body.checkpointCommit)) {
+      res.status(400).json({ error: "invalid checkpointCommit" });
+      return;
+    }
+    if (!deps.proveSystemConfigRestore) {
+      res.status(501).json({ error: "config restore proof not configured" });
+      return;
+    }
+    try {
+      const proof = await deps.proveSystemConfigRestore({
+        migrationId: body.migrationId,
+        slug: body.slug,
+        checkpointCommit: body.checkpointCommit,
+      });
+      const response: ConfigRestoreProofResponse = {
+        migrationId: body.migrationId,
+        slug: body.slug,
+        ...proof,
+      };
+      res.status(200).json(response);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`[migration-http] config restore proof failed migrationId=${body.migrationId}: ${message}`);
+      res.status(409).json({ error: "config restore proof failed", message });
+    }
+  };
+}
+
+export function createConfigUnfreezeHandler(deps: MigrationHandlerDeps): RequestHandler {
+  const log = deps.log ?? ((msg) => console.log(msg));
+  return async (req, res) => {
+    const body = parseAndVerifyJsonBody<ConfigUnfreezeRequestBody>(req, res, deps.publicKey, log);
+    if (!body) return;
+    if (!deps.unfreezeSystemConfig) {
+      res.status(501).json({ error: "config unfreeze not configured" });
+      return;
+    }
+    try {
+      const result = await deps.unfreezeSystemConfig({
+        migrationId: body.migrationId,
+        slug: body.slug,
+      });
+      const response: ConfigUnfreezeResponse = {
+        migrationId: body.migrationId,
+        slug: body.slug,
+        ...result,
+      };
+      res.status(200).json(response);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`[migration-http] config unfreeze failed migrationId=${body.migrationId}: ${message}`);
+      res.status(409).json({ error: "config unfreeze failed", message });
     }
   };
 }

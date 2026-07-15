@@ -161,6 +161,35 @@ drained: boolean;
 runningCount: number;
 }
 
+export interface ConfigFreezeRequestBody extends MigrationRequestBody {}
+
+export interface ConfigFreezeResponse extends MigrationRequestBody {
+  frozen: true;
+  checkpointCommit: string;
+  configHash: string;
+}
+
+export interface ConfigRestoreProofRequestBody extends MigrationRequestBody {
+  checkpointCommit: string;
+}
+
+export interface ConfigRestoreProofResponse extends MigrationRequestBody {
+  restoredCommit: string;
+  acceptedCommit: string;
+  configHash: string;
+  configReady: true;
+  observedRevisionId: string;
+  restoreProvenAt: number;
+  configReadyAt: number;
+  runtimeConfigHash: string;
+}
+
+export interface ConfigUnfreezeRequestBody extends MigrationRequestBody {}
+
+export interface ConfigUnfreezeResponse extends MigrationRequestBody {
+  unfrozen: boolean;
+}
+
 export interface FlushGatewayRequestBody extends MigrationRequestBody {
   reason?: string;
 }

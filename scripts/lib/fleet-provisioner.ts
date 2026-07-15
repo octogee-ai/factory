@@ -5,12 +5,17 @@ import { readAssignedSlugsForGateway, slugFromAssignedUser } from "./assigned-ro
 import type { Server } from "http";
 import {
   GATEWAY_HEARTBEAT_INTERVAL_MS,
+  type ConfigFreezeResponse,
+  type ConfigRestoreProofResponse,
   type FlushGatewayResponse,
 } from "../../shared/types/fleet-controller.js";
 import {
   createActivateImportHandler,
   createActivationManifestExportHandler,
   createAbortRsyncImportHandler,
+  createConfigFreezeHandler,
+  createConfigRestoreProofHandler,
+  createConfigUnfreezeHandler,
   createExportHandler,
   createExportPathsHandler,
   createFlushHandler,
@@ -204,6 +209,22 @@ flushLocalState?: (input: {
   slug: string;
   reason: string;
 }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
+
+freezeSystemConfig?: (input: {
+  migrationId: string;
+  slug: string;
+}) => Promise<Omit<ConfigFreezeResponse, "migrationId" | "slug" | "frozen">> |
+  Omit<ConfigFreezeResponse, "migrationId" | "slug" | "frozen">;
+proveSystemConfigRestore?: (input: {
+  migrationId: string;
+  slug: string;
+  checkpointCommit: string;
+}) => Promise<Omit<ConfigRestoreProofResponse, "migrationId" | "slug">> |
+  Omit<ConfigRestoreProofResponse, "migrationId" | "slug">;
+unfreezeSystemConfig?: (input: {
+  migrationId: string;
+  slug: string;
+}) => Promise<{ unfrozen: boolean }> | { unfrozen: boolean };
 }
 
 export interface StartedFleetController {
@@ -769,10 +790,16 @@ const waitForGatewayReady = async (): Promise<void> => {
     log: opts.log,
     getMountedCustomers: () => runtime.mountedCustomers,
     flushLocalState: opts.flushLocalState,
+    freezeSystemConfig: opts.freezeSystemConfig,
+    proveSystemConfigRestore: opts.proveSystemConfigRestore,
+    unfreezeSystemConfig: opts.unfreezeSystemConfig,
   };
   app.post("/restore/:gatewayId", gatewayIdGuard, createRestoreHandler(migrationDeps));
   app.post("/quiesce/:gatewayId", gatewayIdGuard, createQuiesceHandler(migrationDeps));
   app.post("/flush/:gatewayId", gatewayIdGuard, createFlushHandler(migrationDeps));
+  app.post("/config-freeze/:gatewayId", gatewayIdGuard, createConfigFreezeHandler(migrationDeps));
+  app.post("/config-restore-proof/:gatewayId", gatewayIdGuard, createConfigRestoreProofHandler(migrationDeps));
+  app.post("/config-unfreeze/:gatewayId", gatewayIdGuard, createConfigUnfreezeHandler(migrationDeps));
   app.post("/verify/:gatewayId", gatewayIdGuard, createVerifyHandler(migrationDeps));
   app.post("/export/:gatewayId", gatewayIdGuard, createExportHandler(migrationDeps));
   app.post("/export-paths/:gatewayId", gatewayIdGuard, createExportPathsHandler(migrationDeps));

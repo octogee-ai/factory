@@ -9,6 +9,13 @@ import {
 
 type GitExec = typeof defaultGitExec;
 
+export type SystemConfigCommitSource =
+  | "auto-watch"
+  | "boot-migration"
+  | "recovery"
+  | "migration-checkpoint"
+  | "migration-restore";
+
 export type SystemConfigRecoveryResult =
   | { outcome: "accepted"; acceptedCommit: string }
   | {
@@ -53,7 +60,7 @@ function safeTrailerValue(value: string | undefined): string {
 
 export function attributedCommitArgs(
   subject: string,
-  source: "auto-watch" | "boot-migration" | "recovery",
+  source: SystemConfigCommitSource,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   return [
