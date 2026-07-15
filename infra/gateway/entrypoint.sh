@@ -495,12 +495,6 @@ fi
 # The local fleet controller is db-less for every class. Cowboy owns liveness
 # writes, and standard-image gateways mount customers from tenant-bound
 # octogee-api broker reads rather than local Firestore credentials.
-if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ "${OPERATOR_SHELLS_ENABLED:-}" = "true" ]; then
-  export BUILDER_SHELL_REQUIRE_KEY="${BUILDER_SHELL_REQUIRE_KEY:-true}"
-  supervise_runner builder-shell 5000 "$TSX" /octogee/scripts/entrypoints/builder-shell-server.ts
-elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
-  log "Builder-shell disabled: runtime shell access is not enabled"
-fi
 supervise_runner fleet-controller 5000 "$TSX" /octogee/scripts/entrypoints/fleet-controller.ts
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "operator" ]; then
   supervise_runner site-build 5000 "$TSX" /octogee/scripts/entrypoints/site-build-api.ts
@@ -545,6 +539,13 @@ openclaw gateway run --bind lan --port 18789 &
 
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   end_system_config_boot_transaction
+fi
+
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ "${OPERATOR_SHELLS_ENABLED:-}" = "true" ]; then
+  export BUILDER_SHELL_REQUIRE_KEY="${BUILDER_SHELL_REQUIRE_KEY:-true}"
+  supervise_runner builder-shell 5000 "$TSX" /octogee/scripts/entrypoints/builder-shell-server.ts
+elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
+  log "Builder-shell disabled: runtime shell access is not enabled"
 fi
 
 # OpenClaw file-log mirror REMOVED 2026-05-18. The richer log is available

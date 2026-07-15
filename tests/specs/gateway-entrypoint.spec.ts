@@ -89,6 +89,7 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     expect(retryIdx).toBeLessThan(roleIdx);
     expect(roleIdx).toBeLessThan(shellIdx);
     expect(retryIdx).toBeLessThan(openclawIdx);
+    expect(openclawIdx).toBeLessThan(shellIdx);
     const retryBlock = entrypoint.slice(retryIdx, entrypoint.indexOf("else", retryIdx));
     expect(retryBlock).toMatch(
       /end_system_config_boot_transaction[\s\S]*sleep 5[\s\S]*begin_system_config_boot_transaction/,
@@ -150,7 +151,7 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     expect(roleBlock).toMatch(/openclaw doctor[\s\S]*system-config-roll-boot\.ts candidate/);
   });
 
-  it("repairs and checkpoints durable config before watcher and OpenClaw while shell starts early", () => {
+  it("repairs and checkpoints durable config before watcher, OpenClaw, and BuilderShell", () => {
     const doctorIdx = entrypoint.indexOf("openclaw doctor --fix --non-interactive");
     const checkpointIdx = entrypoint.indexOf("system-config-checkpoint.ts");
     const watcherIdx = entrypoint.indexOf("supervise_runner system-config-watch");
@@ -160,7 +161,7 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     expect(checkpointIdx).toBeGreaterThan(doctorIdx);
     expect(watcherIdx).toBeGreaterThan(checkpointIdx);
     expect(openclawIdx).toBeGreaterThan(watcherIdx);
-    expect(shellIdx).toBeLessThan(doctorIdx);
+    expect(shellIdx).toBeGreaterThan(openclawIdx);
     expect(entrypoint).toMatch(/OPENCLAW_SERVICE_REPAIR_POLICY=external/);
     expect(entrypoint).toMatch(/OPENCLAW_DOCTOR_RESULT=ok/);
     expect(entrypoint).toMatch(/OPENCLAW_DOCTOR_RESULT=error/);
@@ -322,6 +323,15 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
     expect(acceptedIdx).toBeLessThan(watcherIdx);
     expect(acceptedIdx).toBeLessThan(openclawIdx);
     expect(openclawIdx).toBeLessThan(endIdx);
+    expect(endIdx).toBeLessThan(entrypoint.indexOf("supervise_runner builder-shell"));
+  });
+
+  it("starts builder-shell only after durable role resolution, repair, watcher, and OpenClaw", () => {
+    const shellIdx = entrypoint.indexOf("supervise_runner builder-shell");
+    expect(shellIdx).toBeGreaterThan(entrypoint.indexOf("system-config-roll-boot.ts resolve"));
+    expect(shellIdx).toBeGreaterThan(entrypoint.indexOf("system-config-checkpoint.ts"));
+    expect(shellIdx).toBeGreaterThan(entrypoint.indexOf("supervise_runner system-config-watch"));
+    expect(shellIdx).toBeGreaterThan(entrypoint.indexOf("openclaw gateway run"));
   });
 
   it("turns repair-shell teardown into a restart of the full gateway container", () => {
