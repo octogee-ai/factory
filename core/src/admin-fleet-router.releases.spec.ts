@@ -1117,6 +1117,57 @@ describe("DELETE /gateways/:id — retire marks the GatewayDoc, retains releases
     expect(opsIn(store, "retire-gateway")).toHaveLength(0);
   });
 
+  it("refuses retirement while the durable root carries an unfinished release roll", async () => {
+    const seed = seedServingGateway("rolling", sharedPayload());
+    seed["gateways/rolling"] = {
+      ...seed["gateways/rolling"],
+      desiredRelease: 2,
+      roll: {
+        operationId: "roll-1",
+        status: "migrating",
+        fromRelease: 1,
+        toRelease: 2,
+        sourceRevisionId: "rolling-r1",
+        targetRevisionId: "rolling-r2",
+        acceptingNewAssignments: false,
+        startedAt: 10,
+        updatedAt: 10,
+        error: null,
+        flippedAt: null,
+      },
+    };
+    const { app, store } = mkApp(seed);
+
+    const res = await request(app).delete("/gateways/rolling").expect(409);
+
+    expect(res.body.error).toMatch(/release roll.*config obligation/i);
+    expect(store.get("gateways/rolling")?.desiredStatus).toBe("running");
+    expect(opsIn(store, "retire-gateway")).toHaveLength(0);
+  });
+
+  it("refuses retirement while the live revision reports an orphaned config-control obligation", async () => {
+    const seed = seedServingGateway("frozen", sharedPayload(), {
+      status: "ready",
+      mountedCustomers: [],
+      configStatus: {
+        freezeState: "frozen",
+        bootRole: "source-frozen",
+        controlOwner: {
+          migrationId: "roll-config-roll-1",
+          sourceRevisionId: "frozen-r1",
+          targetRevisionId: "frozen-r2",
+        },
+      },
+    });
+    const { app, store } = mkApp(seed);
+
+    const res = await request(app).delete("/gateways/frozen").expect(409);
+
+    expect(res.body.error).toMatch(/config-control obligation/i);
+    expect(store.get("gateways/frozen")?.desiredStatus).toBe("running");
+    expect(opsIn(store, "retire-gateway")).toHaveLength(0);
+  });
+
   it("refuses retirement when a root points at missing live-revision telemetry", async () => {
     const seed = seedNewSchemaGateway("missing-live", sharedPayload());
     seed["gateways/missing-live"] = {

@@ -1190,6 +1190,18 @@ function runtimeHeartbeat(revision: RevisionRealizationDoc | null): GlmDoc | nul
   return revision && isPlainRecord(revision.heartbeat) ? revision.heartbeat : null;
 }
 
+function hasConfigControlObligation(heartbeat: GlmDoc | null): boolean {
+  const status = heartbeat && isPlainRecord(heartbeat.configStatus)
+    ? heartbeat.configStatus
+    : null;
+  if (!status) return false;
+  return status.freezeState === "freezing" ||
+    status.freezeState === "frozen" ||
+    status.bootRole === "source-frozen" ||
+    status.bootRole === "target-candidate" ||
+    isPlainRecord(status.controlOwner);
+}
+
 async function readDurableGatewayRuntime(
   db: Firestore,
   gatewayId: string,
@@ -4681,6 +4693,22 @@ router.post(
         if (runtime.root.liveRevisionId && !runtime.revision) {
           res.status(409).json({
             error: "gateway live revision telemetry is unavailable",
+            gatewayId: id,
+            revisionId: runtime.root.liveRevisionId,
+          });
+          return;
+        }
+        if (runtime.root.roll) {
+          res.status(409).json({
+            error: "gateway has an unfinished release roll and config obligation",
+            gatewayId: id,
+            operationId: runtime.root.roll.operationId,
+          });
+          return;
+        }
+        if (hasConfigControlObligation(runtime.heartbeat)) {
+          res.status(409).json({
+            error: "gateway live revision has an active config-control obligation",
             gatewayId: id,
             revisionId: runtime.root.liveRevisionId,
           });

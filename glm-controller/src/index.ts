@@ -53,6 +53,7 @@ import {
   type GatewayRuntimeRoot,
   type ConvergeEmptyDeps,
 } from "./converge-empty.js";
+import { commitRollTrafficFlipAtomic } from "./roll-traffic-flip.js";
 import {
   DurableRootDirtyTracker,
   isDurableRootConfigDoc,
@@ -1104,6 +1105,7 @@ function buildRollPassDeps(args: {
         .doc(gatewayId)
         .set({ ...patch, updatedAt: Date.now(), updatedBy: "cowboy" }, { merge: true });
     },
+    commitTrafficFlip: (input) => commitRollTrafficFlipAtomic(db, input),
     readAssignments: (gatewayId) => readAssignmentDocsForGateway(db, gatewayId),
     readRollMigration: async ({ uid, gatewayId, rollOperationId }) => {
       const snap = await db

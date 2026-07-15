@@ -56,6 +56,8 @@ export type GatewayRollSystemConfigPhase =
   | "candidateProven"
   | "promotionIntent"
   | "promoted"
+  | "abortIntent"
+  | "terminalHold"
   | "cutover"
   | "sourceRetired"
   | "finalized";
@@ -84,6 +86,11 @@ export interface GatewayRollSystemConfigState {
   promotionIntentAt?: number;
   promotedCommit?: string;
   promotedAt?: number;
+  abortDisposition?: "fail" | "supersede";
+  abortReason?: string;
+  abortIntentAt?: number;
+  terminalError?: string;
+  terminalErrorAt?: number;
   cutoverAt?: number;
   sourceRetiredAt?: number;
   finalizedAt?: number;

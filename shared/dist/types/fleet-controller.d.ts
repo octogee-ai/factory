@@ -87,6 +87,7 @@ export interface GatewayConfigStatus {
     configHash?: string;
     candidateCommit?: string;
     candidateHash?: string;
+    runtimeReady?: boolean;
     openclawVersion?: string;
     openclawForkSha?: string;
     dashboardControlState?: "ready" | "missing" | "stale" | "invalid";

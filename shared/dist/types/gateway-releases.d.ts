@@ -13,7 +13,7 @@ export interface GatewayRollSystemConfigCheckpoint {
     checkpointedAt: number | null;
     sourceUnfrozenAt: number | null;
 }
-export type GatewayRollSystemConfigPhase = "checkpointed" | "candidateProven" | "promotionIntent" | "promoted" | "cutover" | "sourceRetired" | "finalized";
+export type GatewayRollSystemConfigPhase = "checkpointed" | "candidateProven" | "promotionIntent" | "promoted" | "abortIntent" | "terminalHold" | "cutover" | "sourceRetired" | "finalized";
 export interface GatewayRollSystemConfigState {
     phase: GatewayRollSystemConfigPhase;
     migrationId: string;
@@ -38,6 +38,11 @@ export interface GatewayRollSystemConfigState {
     promotionIntentAt?: number;
     promotedCommit?: string;
     promotedAt?: number;
+    abortDisposition?: "fail" | "supersede";
+    abortReason?: string;
+    abortIntentAt?: number;
+    terminalError?: string;
+    terminalErrorAt?: number;
     cutoverAt?: number;
     sourceRetiredAt?: number;
     finalizedAt?: number;
