@@ -1,8 +1,28 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { agentExists, writeOpenClawConfig } from "./config.js";
+
+describe("active OpenClaw config path", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it("uses OPENCLAW_CONFIG_PATH for every core config consumer", async () => {
+    vi.stubEnv("OPENCLAW_DIR", "/durable/.openclaw");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", "/durable/.openclaw/system_config/openclaw.json");
+    vi.resetModules();
+
+    const config = await import("./config.js");
+
+    expect(config.OPENCLAW_DIR).toBe("/durable/.openclaw");
+    expect(config.OPENCLAW_CONFIG).toBe(
+      "/durable/.openclaw/system_config/openclaw.json",
+    );
+  });
+});
 
 describe("readOpenClawConfig / writeOpenClawConfig round-trip", () => {
   let tmpDir: string;
