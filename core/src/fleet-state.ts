@@ -278,11 +278,15 @@ export async function commitCutoverAtomic(
       priorEpoch = typeof rawEpoch === "number" && rawEpoch >= 0 ? rawEpoch : 0;
       priorRevisionId = priorSnap.exists ? priorSnap.data()?.revisionId : undefined;
     }
+    const targetRootSnap = await txn.get(
+      deps.db.collection(GATEWAYS_COLLECTION).doc(params.toGatewayId),
+    );
+    const targetRoot = targetRootSnap.exists ? targetRootSnap.data() : undefined;
+    if (targetRoot?.desiredStatus === "retired" || targetRoot?.retirementClaim != null) {
+      throw new Error(`gateway ${params.toGatewayId} has a current retirement claim`);
+    }
     if (params.rollFence) {
-      const rootSnap = await txn.get(
-        deps.db.collection(GATEWAYS_COLLECTION).doc(params.toGatewayId),
-      );
-      const root = rootSnap.exists ? rootSnap.data() : undefined;
+      const root = targetRoot;
       const roll = root?.roll as Record<string, unknown> | undefined;
       const protocolV2Roll = roll?.systemConfigRoll !== undefined;
       const current =
@@ -369,11 +373,8 @@ export async function commitCutoverAtomic(
       }
     }
     if (params.flipMirror) {
-      const gatewaySnap = await txn.get(
-        deps.db.collection(GATEWAYS_COLLECTION).doc(params.toGatewayId),
-      );
       const shellState = resolveUserGatewayShellState(
-        gatewaySnap.exists ? gatewaySnap.data() : undefined,
+        targetRoot,
         params.uid,
       );
       txn.update(deps.db.collection("users").doc(params.uid), {

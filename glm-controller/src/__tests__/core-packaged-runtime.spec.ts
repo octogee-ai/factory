@@ -16,15 +16,38 @@ function makeTxnDb(seed: Record<string, Record<string, unknown>>) {
     __path: path,
     collection: (name: string) => ({ doc: (id: string) => ref(`${path}/${name}/${id}`) }),
   });
+  const collection = (name: string) => ({
+    doc: (id: string) => ref(`${name}/${id}`),
+    where: (field: string, op: string, value: unknown) => ({
+      __query: async () => {
+        if (op !== "==") throw new Error(`unsupported query operator ${op}`);
+        const docs = Object.entries(store)
+          .filter(([path, data]) =>
+            path.startsWith(`${name}/`) &&
+            !path.slice(name.length + 1).includes("/") &&
+            data?.[field] === value,
+          )
+          .map(([path, data]) => ({
+            id: path.slice(name.length + 1),
+            exists: true,
+            data: () => data,
+          }));
+        return { docs, size: docs.length };
+      },
+    }),
+  });
   const db = {
-    collection: (name: string) => ({ doc: (id: string) => ref(`${name}/${id}`) }),
+    collection,
     runTransaction: async (body: (transaction: unknown) => Promise<unknown>) => {
       const writes: Array<() => void> = [];
       const transaction = {
-        get: async (document: { __path: string }) => ({
-          exists: store[document.__path] !== undefined,
-          data: () => store[document.__path],
-        }),
+        get: async (document: { __path?: string; __query?: () => Promise<unknown> }) => {
+          if (document.__query) return document.__query();
+          return {
+            exists: store[document.__path!] !== undefined,
+            data: () => store[document.__path!],
+          };
+        },
         set: (
           document: { __path: string },
           data: Record<string, unknown>,

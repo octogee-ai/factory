@@ -2605,6 +2605,11 @@ async function appendGatewayRelease(
     if (!current) {
       throw new InvalidGatewayRootError(args.gateway.gatewayId);
     }
+    if (current.desiredStatus === "retired" || current.retirementClaim != null) {
+      throw new GatewayRetirementConflictError(
+        `gateway ${args.gateway.gatewayId} has a current retirement claim`,
+      );
+    }
     if (current.latestRelease !== args.gateway.latestRelease) {
       throw new StaleGatewayReleaseError(
         args.gateway.gatewayId,
@@ -2673,6 +2678,10 @@ class InvalidGatewayRootError extends Error {
 }
 
 function respondReleaseWriteConflict(res: Response, error: unknown): boolean {
+  if (error instanceof GatewayRetirementConflictError) {
+    res.status(409).json({ error: error.message });
+    return true;
+  }
   if (error instanceof InvalidGatewayRootError) {
     res.status(409).json({ error: error.message, gatewayId: error.gatewayId });
     return true;

@@ -89,7 +89,10 @@ import {
   createGatewayModelKeySourceIssuer,
   type GatewayModelKeySourceIssuer,
 } from "./model-key-source-issuer.js";
-import { guardedCreateRevisionDoc } from "./revision-creation.js";
+import {
+  guardedCreateRevisionDoc,
+  guardedPatchGatewayRoot,
+} from "./revision-creation.js";
 import {
   spawnKubectl,
   syncEdgeIngress,
@@ -1101,10 +1104,16 @@ function buildRollPassDeps(args: {
       return convergeHeartbeatMatchesImageTag(hb?.version ?? null, expectedImageTag);
     },
     patchGatewayDoc: async (gatewayId, patch) => {
-      await db
-        .collection(GATEWAYS_COLLECTION)
-        .doc(gatewayId)
-        .set({ ...patch, updatedAt: Date.now(), updatedBy: "cowboy" }, { merge: true });
+      await guardedPatchGatewayRoot(
+        db,
+        gatewayId,
+        patch as Record<string, unknown>,
+        {
+          requireRunning: true,
+          updatedAt: Date.now(),
+          updatedBy: "cowboy",
+        },
+      );
     },
     commitTrafficFlip: (input) => commitRollTrafficFlipAtomic(db, input),
     readAssignments: (gatewayId) => readAssignmentDocsForGateway(db, gatewayId),
@@ -3915,10 +3924,16 @@ async function buildHandlers(
       return isDurableRootConfigDoc(root, gatewayId) ? root.desiredStatus : null;
     },
     setDesiredStatus: async (gatewayId, status) => {
-      await db
-        .collection(GATEWAYS_COLLECTION)
-        .doc(gatewayId)
-        .set({ desiredStatus: status }, { merge: true });
+      await guardedPatchGatewayRoot(
+        db,
+        gatewayId,
+        { desiredStatus: status },
+        {
+          requireRunning: false,
+          updatedAt: Date.now(),
+          updatedBy: "cowboy-recycle-gateway",
+        },
+      );
     },
     readServingRevisionId: async (gatewayId) =>
       (await readDurableGatewayRevision(db, gatewayId, "serving"))?.revisionId ?? null,

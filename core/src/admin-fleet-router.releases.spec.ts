@@ -294,10 +294,37 @@ function sharedPayload(overrides: Partial<ReleasePayload> = {}): ReleasePayload 
   };
 }
 
+function readyHeartbeat(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const observedAt = Date.now();
+  return {
+    status: "ready",
+    lastHeartbeatAt: observedAt,
+    version: "abc1234",
+    openclawVersion: "2026.7.1",
+    startedAt: observedAt - 1_000,
+    mountedCustomers: [],
+    configStatus: {
+      controlProtocol: {
+        protocol: "durable-openclaw-config",
+        version: 2,
+      },
+      observedAt,
+      runtimeReady: true,
+      openclawVersion: "2026.7.1",
+      freezeState: "unfrozen",
+      bootRole: "normal",
+      controlOwner: null,
+      candidateCommit: null,
+      candidateHash: null,
+    },
+    ...overrides,
+  };
+}
+
 function seedServingGateway(
   id: string,
   payload: ReleasePayload,
-  heartbeat: Record<string, unknown> = { status: "ready", mountedCustomers: [] },
+  heartbeat: Record<string, unknown> = readyHeartbeat(),
   gatewayOverrides: Record<string, unknown> = {},
 ): Record<string, Record<string, unknown>> {
   const seed = seedNewSchemaGateway(id, payload, gatewayOverrides);
@@ -742,6 +769,27 @@ describe("POST /gateways/:id/releases — cut release n+1 from prev + patch", ()
     expect(res.status).toBe(409);
   });
 
+  it("rejects when retirement wins after release preflight but before transactional append", async () => {
+    const { app, store } = mkApp(seedNewSchemaGateway("retiring", sharedPayload()), {
+      beforeFirstTransaction: (state) => {
+        state.set("gateways/retiring", {
+          ...state.get("gateways/retiring"),
+          desiredStatus: "retired",
+          retirementClaim: { operationId: "retire-1", version: 1 },
+        });
+      },
+    });
+
+    const res = await request(app)
+      .post("/gateways/retiring/releases")
+      .send({ imageTag: "deadbee" })
+      .expect(409);
+
+    expect(res.body.error).toMatch(/retir/i);
+    expect(store.get(`gateways/retiring/${GATEWAY_RELEASES_SUBCOLLECTION}/2`)).toBeUndefined();
+    expect(opsIn(store, "rollout")).toHaveLength(0);
+  });
+
   it("404s for a legacy gateway that has no GatewayDoc yet (not backfilled)", async () => {
     const { app } = mkApp({
       [`${GLM_GATEWAYS_COLLECTION}/legacy`]: { gatewayId: "legacy", imageTag: "abc1234" },
@@ -1076,7 +1124,7 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
 
 describe("DELETE /gateways/:id — retirement claim", () => {
   it("atomically marks the root retired, binds the intent, and retains release history", async () => {
-    const { app, store } = mkApp(seedNewSchemaGateway("zed", sharedPayload()));
+    const { app, store } = mkApp(seedServingGateway("zed", sharedPayload()));
     const res = await request(app).delete("/gateways/zed");
     expect(res.status).toBe(202);
     expect(store.get(`${GLM_GATEWAYS_COLLECTION}/zed`)).toBeUndefined();
@@ -1102,7 +1150,7 @@ describe("DELETE /gateways/:id — retirement claim", () => {
   });
 
   it("retires a strict durable root with no bare glm desired doc", async () => {
-    const { app, store } = mkApp(seedNewSchemaGateway("back", sharedPayload()));
+    const { app, store } = mkApp(seedServingGateway("back", sharedPayload()));
     const res = await request(app).delete("/gateways/back");
     expect(res.status).toBe(202);
     expect(store.get("gateways/back")).toMatchObject({

@@ -84,6 +84,11 @@ export interface GatewayRetirementClaim {
     claimedAt: number;
     liveRevisionId: string | null;
     liveRelease: number | null;
+    liveRuntimeIdentity: {
+        startedAt: number;
+        version: string;
+        openclawVersion: string;
+    } | null;
     previousDesiredStatus: Exclude<GatewayLifecycleStatus, "retired">;
 }
 export interface GatewayDoc {
