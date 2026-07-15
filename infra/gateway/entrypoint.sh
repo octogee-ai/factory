@@ -185,6 +185,13 @@ fi
 rm -f "$OPENCLAW_DIR/system_config.boot-accepted"
 supervise_runner system-config-status 5000 "$TSX" /octogee/scripts/entrypoints/system-config-status-server.ts
 
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ "${OPERATOR_SHELLS_ENABLED:-}" = "true" ]; then
+  export BUILDER_SHELL_REQUIRE_KEY="${BUILDER_SHELL_REQUIRE_KEY:-true}"
+  supervise_runner builder-shell 5000 "$TSX" /octogee/scripts/entrypoints/builder-shell-server.ts
+elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
+  log "Builder-shell disabled: runtime shell access is not enabled"
+fi
+
 # ── Dedicated gateway system_config restore ─────────────────────────────────
 # Builder/operator gateways run the tracked Gitea checkout as OpenClaw's active
 # regular config file. Shared gateways keep an untracked template copy. Copy the
@@ -212,8 +219,10 @@ SYSTEM_CONFIG_BOOT_ROLE=normal
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   log "Pre-boot: resolving restart-durable system_config role..."
   until "$TSX" /octogee/scripts/entrypoints/system-config-roll-boot.ts resolve; do
+    end_system_config_boot_transaction
     log "Pre-boot: system_config role unavailable; status repair plane remains live, retrying in 5s..."
     sleep 5
+    begin_system_config_boot_transaction
   done
   SYSTEM_CONFIG_BOOT_ROLE=$("$TSX" /octogee/scripts/entrypoints/system-config-roll-boot.ts print-role)
   export SYSTEM_CONFIG_BOOT_ROLE
@@ -457,7 +466,9 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
             "$TSX" /octogee/scripts/entrypoints/system-config-roll-boot.ts candidate; then
             break
           fi
+          end_system_config_boot_transaction
           sleep 5
+          begin_system_config_boot_transaction
         done
       else
         log "Pre-boot: immutable target candidate restored; skipping config mutation repair"
@@ -480,13 +491,6 @@ fi
 # Customer workspaces and OpenClaw customer entries are restored post-boot by
 # the fleet controller, one customer at a time via its local HTTP endpoint.
 # See docs/GATEWAY-FLEET-CONTROLLER-SPEC.md
-
-if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ "$SYSTEM_CONFIG_BOOT_ROLE" != "normal" ]; then
-  "$TSX" /octogee/scripts/entrypoints/system-config-roll-boot.ts accept
-else
-  touch "$OPENCLAW_DIR/system_config.boot-accepted"
-  chmod 600 "$OPENCLAW_DIR/system_config.boot-accepted"
-fi
 
 # ── In-pod runners: supervised + observable ─────────────────────────────────
 # Each remaining runner is wrapped by supervise-runner.ts, which owns respawn AND writes
@@ -511,6 +515,19 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "operator" ]; then
 fi
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   supervise_runner system-config-watch 5000 "$TSX" /octogee/scripts/entrypoints/system-config-watch.ts
+fi
+
+# ── Accept durable system_config boot while repair sessions stay fenced ────
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ "$SYSTEM_CONFIG_BOOT_ROLE" != "normal" ]; then
+  until "$TSX" /octogee/scripts/entrypoints/system-config-roll-boot.ts accept; do
+    end_system_config_boot_transaction
+    log "Pre-boot: system_config acceptance unavailable; repair services remain live, retrying in 5s..."
+    sleep 5
+    begin_system_config_boot_transaction
+  done
+else
+  touch "$OPENCLAW_DIR/system_config.boot-accepted"
+  chmod 600 "$OPENCLAW_DIR/system_config.boot-accepted"
 fi
 
 # ── Runner metrics exporter (all profiles) ──────────────────────────────────
@@ -543,13 +560,6 @@ openclaw gateway run --bind lan --port 18789 &
 
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   end_system_config_boot_transaction
-fi
-
-if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ "${OPERATOR_SHELLS_ENABLED:-}" = "true" ]; then
-  export BUILDER_SHELL_REQUIRE_KEY="${BUILDER_SHELL_REQUIRE_KEY:-true}"
-  supervise_runner builder-shell 5000 "$TSX" /octogee/scripts/entrypoints/builder-shell-server.ts
-elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
-  log "Builder-shell disabled: runtime shell access is not enabled"
 fi
 
 # OpenClaw file-log mirror REMOVED 2026-05-18. The richer log is available

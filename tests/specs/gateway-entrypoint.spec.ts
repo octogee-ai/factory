@@ -49,7 +49,7 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     expect(restoreBlock).toMatch(/GATEWAY_BUILDER_SLUG/);
   });
 
-  it("keeps status up while restoring tracked config and resolves its role before shell access", () => {
+  it("makes the tracked system_config active and resolves its remote role before runtime boot", () => {
     expect(entrypoint).toMatch(
       /export OPENCLAW_CONFIG_PATH="\$OPENCLAW_DIR\/system_config\/openclaw\.json"/,
     );
@@ -59,12 +59,11 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     const statusIdx = entrypoint.indexOf("supervise_runner system-config-status");
     const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
     const roleIdx = entrypoint.indexOf("system-config-roll-boot.ts resolve");
-    const shellIdx = entrypoint.indexOf("supervise_runner builder-shell");
+    const openclawIdx = entrypoint.indexOf("openclaw gateway run");
     expect(statusIdx).toBeGreaterThan(-1);
     expect(statusIdx).toBeLessThan(restoreIdx);
-    expect(shellIdx).toBeGreaterThan(-1);
     expect(roleIdx).toBeGreaterThan(restoreIdx);
-    expect(shellIdx).toBeGreaterThan(roleIdx);
+    expect(openclawIdx).toBeGreaterThan(roleIdx);
     expect(entrypoint).not.toMatch(/gateway\.auth\.token re-synced/);
   });
 
@@ -75,21 +74,19 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     expect(statusIdx).toBeLessThan(restoreIdx);
   });
 
-  it("starts the shell only after restore and role fencing while keeping the tracked config path", () => {
+  it("starts the entitled repair shell before restore under the boot transaction fence", () => {
     const configPathIdx = entrypoint.indexOf(
       'export OPENCLAW_CONFIG_PATH="$OPENCLAW_DIR/system_config/openclaw.json"',
     );
     const shellIdx = entrypoint.indexOf("supervise_runner builder-shell");
     const retryIdx = entrypoint.indexOf("until \"$TSX\" /octogee/scripts/entrypoints/system-config-restore.ts");
-    const roleIdx = entrypoint.indexOf("system-config-roll-boot.ts resolve");
-    const openclawIdx = entrypoint.indexOf("openclaw gateway run");
+    const cleanupIdx = entrypoint.indexOf("system-config-boot-transaction.ts cleanup");
+    const beginIdx = entrypoint.indexOf("\n  begin_system_config_boot_transaction", shellIdx);
     expect(configPathIdx).toBeGreaterThan(-1);
-    expect(configPathIdx).toBeLessThan(shellIdx);
-    expect(retryIdx).toBeLessThan(shellIdx);
-    expect(retryIdx).toBeLessThan(roleIdx);
-    expect(roleIdx).toBeLessThan(shellIdx);
-    expect(retryIdx).toBeLessThan(openclawIdx);
-    expect(openclawIdx).toBeLessThan(shellIdx);
+    expect(cleanupIdx).toBeGreaterThan(configPathIdx);
+    expect(cleanupIdx).toBeLessThan(shellIdx);
+    expect(shellIdx).toBeLessThan(beginIdx);
+    expect(beginIdx).toBeLessThan(retryIdx);
     const retryBlock = entrypoint.slice(retryIdx, entrypoint.indexOf("else", retryIdx));
     expect(retryBlock).toMatch(
       /end_system_config_boot_transaction[\s\S]*sleep 5[\s\S]*begin_system_config_boot_transaction/,
@@ -108,7 +105,7 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     expect(finalEndGuard).toMatch(/!= "shared"/);
   });
 
-  it("keeps one supervised config watcher alive across frozen and finalized roles", () => {
+  it("keeps one supervised config watcher alive across isolated boot roles", () => {
     expect(entrypoint).toMatch(/supervise_runner\s+system-config-watch\s+5000\b/);
     const watcherIdx = entrypoint.indexOf("supervise_runner system-config-watch");
     const guard = entrypoint.slice(entrypoint.lastIndexOf("if [", watcherIdx), watcherIdx);
@@ -117,13 +114,15 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     expect(guard).not.toMatch(/SYSTEM_CONFIG_BOOT_ROLE/);
   });
 
-  it("rehydrates source and target fences before BuilderShell, Doctor, or OpenClaw", () => {
+  it("rehydrates source and target fences inside the transaction before Doctor or OpenClaw", () => {
     const roleIdx = entrypoint.indexOf("system-config-roll-boot.ts resolve");
     const shellIdx = entrypoint.indexOf("supervise_runner builder-shell");
+    const beginIdx = entrypoint.indexOf("\n  begin_system_config_boot_transaction", shellIdx);
     const doctorIdx = entrypoint.indexOf("openclaw doctor --fix --non-interactive");
     const openclawIdx = entrypoint.indexOf("openclaw gateway run");
     expect(roleIdx).toBeGreaterThan(-1);
-    expect(roleIdx).toBeLessThan(shellIdx);
+    expect(shellIdx).toBeLessThan(beginIdx);
+    expect(beginIdx).toBeLessThan(roleIdx);
     expect(roleIdx).toBeLessThan(doctorIdx);
     expect(roleIdx).toBeLessThan(openclawIdx);
   });
@@ -159,7 +158,7 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     expect(doctorIdx).toBeLessThan(candidateIdx);
   });
 
-  it("repairs and checkpoints durable config before watcher, OpenClaw, and BuilderShell", () => {
+  it("repairs and checkpoints durable config before watcher and OpenClaw while shell starts early", () => {
     const doctorIdx = entrypoint.indexOf("openclaw doctor --fix --non-interactive");
     const checkpointIdx = entrypoint.indexOf("system-config-checkpoint.ts");
     const watcherIdx = entrypoint.indexOf("supervise_runner system-config-watch");
@@ -169,7 +168,7 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     expect(checkpointIdx).toBeGreaterThan(doctorIdx);
     expect(watcherIdx).toBeGreaterThan(checkpointIdx);
     expect(openclawIdx).toBeGreaterThan(watcherIdx);
-    expect(shellIdx).toBeGreaterThan(openclawIdx);
+    expect(shellIdx).toBeLessThan(doctorIdx);
     expect(entrypoint).toMatch(/OPENCLAW_SERVICE_REPAIR_POLICY=external/);
     expect(entrypoint).toMatch(/OPENCLAW_DOCTOR_RESULT=ok/);
     expect(entrypoint).toMatch(/OPENCLAW_DOCTOR_RESULT=error/);
@@ -285,6 +284,7 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
 
   it("gates builder-shell behind runtime class and explicit shell unlock", () => {
     expect(entrypoint).toMatch(/supervise_runner\s+builder-shell\s+5000\b/);
+    expect(entrypoint.match(/supervise_runner\s+builder-shell\s+5000\b/g)).toHaveLength(1);
     const builderIdx = entrypoint.indexOf("supervise_runner builder-shell");
     const guardBlock = entrypoint.slice(
       entrypoint.lastIndexOf("if [", builderIdx),
@@ -321,25 +321,32 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
   });
 
   it("holds the transaction through watcher, boot acceptance, and OpenClaw launch", () => {
-    const beginIdx = entrypoint.indexOf("\n  begin_system_config_boot_transaction");
+    const shellIdx = entrypoint.indexOf("supervise_runner builder-shell");
+    const beginIdx = entrypoint.indexOf("\n  begin_system_config_boot_transaction", shellIdx);
     const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
+    const resolveIdx = entrypoint.indexOf("system-config-roll-boot.ts resolve");
     const watcherIdx = entrypoint.indexOf("supervise_runner system-config-watch");
-    const acceptedIdx = entrypoint.indexOf('touch "$OPENCLAW_DIR/system_config.boot-accepted"');
+    const acceptIdx = entrypoint.indexOf("system-config-roll-boot.ts accept");
     const openclawIdx = entrypoint.indexOf("openclaw gateway run");
     const endIdx = entrypoint.lastIndexOf("\n  end_system_config_boot_transaction");
+    expect(shellIdx).toBeLessThan(beginIdx);
     expect(beginIdx).toBeLessThan(restoreIdx);
-    expect(acceptedIdx).toBeLessThan(watcherIdx);
-    expect(acceptedIdx).toBeLessThan(openclawIdx);
+    expect(restoreIdx).toBeLessThan(resolveIdx);
+    expect(resolveIdx).toBeLessThan(watcherIdx);
+    expect(watcherIdx).toBeLessThan(acceptIdx);
+    expect(acceptIdx).toBeLessThan(openclawIdx);
     expect(openclawIdx).toBeLessThan(endIdx);
-    expect(endIdx).toBeLessThan(entrypoint.indexOf("supervise_runner builder-shell"));
   });
 
-  it("starts builder-shell only after durable role resolution, repair, watcher, and OpenClaw", () => {
-    const shellIdx = entrypoint.indexOf("supervise_runner builder-shell");
-    expect(shellIdx).toBeGreaterThan(entrypoint.indexOf("system-config-roll-boot.ts resolve"));
-    expect(shellIdx).toBeGreaterThan(entrypoint.indexOf("system-config-checkpoint.ts"));
-    expect(shellIdx).toBeGreaterThan(entrypoint.indexOf("supervise_runner system-config-watch"));
-    expect(shellIdx).toBeGreaterThan(entrypoint.indexOf("openclaw gateway run"));
+  it("boot-accepts the revalidated frozen role before OpenClaw and transaction release", () => {
+    const acceptIdx = entrypoint.indexOf("system-config-roll-boot.ts accept");
+    const watcherIdx = entrypoint.indexOf("supervise_runner system-config-watch");
+    const openclawIdx = entrypoint.indexOf("openclaw gateway run");
+    const endIdx = entrypoint.lastIndexOf("\n  end_system_config_boot_transaction");
+    expect(acceptIdx).toBeGreaterThan(entrypoint.indexOf("system-config-roll-boot.ts candidate"));
+    expect(acceptIdx).toBeGreaterThan(watcherIdx);
+    expect(acceptIdx).toBeLessThan(openclawIdx);
+    expect(acceptIdx).toBeLessThan(endIdx);
   });
 
   it("turns repair-shell teardown into a restart of the full gateway container", () => {
@@ -356,13 +363,6 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
     expect(entrypoint.match(/trap shutdown TERM INT/g)).toHaveLength(1);
     expect(gatewayDeployment).toMatch(/kind:\s*Deployment/);
     expect(gatewayDeployment).not.toMatch(/restartPolicy:\s*(?:Never|OnFailure)/);
-  });
-
-  it("boot-accepts the revalidated frozen role before shell or controller routes start", () => {
-    const acceptIdx = entrypoint.indexOf("system-config-roll-boot.ts accept");
-    expect(acceptIdx).toBeGreaterThan(entrypoint.indexOf("system-config-roll-boot.ts candidate"));
-    expect(acceptIdx).toBeLessThan(entrypoint.indexOf("supervise_runner builder-shell"));
-    expect(acceptIdx).toBeLessThan(entrypoint.indexOf("supervise_runner fleet-controller"));
   });
 });
 
