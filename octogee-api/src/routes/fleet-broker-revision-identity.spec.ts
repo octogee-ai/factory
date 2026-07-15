@@ -116,7 +116,7 @@ describe("system config observed status validation", () => {
       openclawForkSha: "abc1234",
       controlProtocol: {
         protocol: "durable-openclaw-config",
-        version: 1,
+        version: 2,
       },
       dashboardControlState: "ready",
       dashboardControlProtocol: {
@@ -140,7 +140,7 @@ describe("system config observed status validation", () => {
       openclawForkSha: "abc1234",
       controlProtocol: {
         protocol: "durable-openclaw-config",
-        version: 1,
+        version: 2,
       },
       dashboardControlState: "ready",
       dashboardControlProtocol: {
@@ -164,7 +164,7 @@ describe("system config observed status validation", () => {
     })).toEqual({ state: "error" });
     expect(parseSystemConfigObservedStatus({
       state: "clean",
-      controlProtocol: { protocol: "durable-openclaw-config", version: 2 },
+      controlProtocol: { protocol: "durable-openclaw-config", version: 1 },
     })).toBeNull();
     expect(parseSystemConfigObservedStatus({
       state: "clean",

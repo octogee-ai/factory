@@ -145,6 +145,15 @@ function projectStateFields(
   record: Record<string, unknown>,
   status: SystemConfigObservedStatus,
 ): void {
+  projectRecoveryStateFields(record, status);
+  projectRollStateFields(record, status);
+  projectRuntimeStateFields(record, status);
+}
+
+function projectRecoveryStateFields(
+  record: Record<string, unknown>,
+  status: SystemConfigObservedStatus,
+): void {
   if (record.doctorResult === "ok" || record.doctorResult === "error") {
     status.doctorResult = record.doctorResult;
   }
@@ -154,12 +163,24 @@ function projectStateFields(
   if (record.watcherState === "running" || record.watcherState === "stopped") {
     status.watcherState = record.watcherState;
   }
+}
+
+function projectRollStateFields(
+  record: Record<string, unknown>,
+  status: SystemConfigObservedStatus,
+): void {
   if (record.freezeState === "unfrozen" || record.freezeState === "freezing" || record.freezeState === "frozen") {
     status.freezeState = record.freezeState;
   }
   if (record.bootRole === "normal" || record.bootRole === "source-frozen" || record.bootRole === "target-candidate") {
     status.bootRole = record.bootRole;
   }
+}
+
+function projectRuntimeStateFields(
+  record: Record<string, unknown>,
+  status: SystemConfigObservedStatus,
+): void {
   if (record.runtimeHealth === "repair" || record.runtimeHealth === "healthy" || record.runtimeHealth === "unhealthy") {
     status.runtimeHealth = record.runtimeHealth;
   }

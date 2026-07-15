@@ -18,7 +18,11 @@ import { buildBrokeredLifecycleAdapter } from "../lib/customer-lifecycle-broker-
 import { blobSyncAllWithOptions } from "../lib/blob-sync.js";
 import { createBrokeredBlobStore } from "../lib/blob-sync-broker.js";
 import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
-import { PROCESS_STARTED_AT_MS, startFleetController } from "../lib/fleet-provisioner.js";
+import {
+  PROCESS_STARTED_AT_MS,
+  startFleetController,
+  type StartFleetOptions,
+} from "../lib/fleet-provisioner.js";
 import { desiredFingerprints } from "../lib/snapshot-fingerprint.js";
 import { probeOpenClawVersion } from "../lib/probe-openclaw-version.js";
 import { startUsageEventTailer } from "../lib/usage-log-tailer.js";
@@ -169,17 +173,27 @@ function hashConfigFile(configPath: string): string {
   return createHash("sha256").update(fs.readFileSync(configPath)).digest("hex");
 }
 
-export async function proveRevisionSystemConfigCandidate(
+type LoadedCandidateBootRole = SystemConfigBootResolutionV2 & {
+  role: "target-candidate";
+  candidateExists: true;
+  candidateCommit: string;
+  candidateHash: string;
+};
+
+function requireCandidateBootRole(
   options: ProveRevisionSystemConfigCandidateOptions,
-) {
+): LoadedCandidateBootRole {
   if (!options.revisionId) throw new Error("target revision id unavailable for config proof");
   if (options.targetRevisionId !== options.revisionId) {
     throw new Error("target revision does not match running revision");
   }
-  if (!(options.bootAccepted ?? (() => fs.existsSync(systemConfigBootAcceptedPath(options.openclawDir))))()) {
-    throw new Error("target config is not boot-accepted");
-  }
+  const bootAccepted = options.bootAccepted ??
+    (() => fs.existsSync(systemConfigBootAcceptedPath(options.openclawDir)));
+  if (!bootAccepted()) throw new Error("target config is not boot-accepted");
   const role = (options.readBootRole ?? (() => readSystemConfigBootRoleState(options.openclawDir)))();
+  if (role.role !== "target-candidate" || !role.candidateExists) {
+    throw new Error("target candidate is not loaded and fenced");
+  }
   const bindings = [
     ["migration", role.migrationId, options.migrationId],
     ["source revision", role.sourceRevisionId, options.sourceRevisionId],
@@ -187,15 +201,19 @@ export async function proveRevisionSystemConfigCandidate(
     ["checkpoint", role.checkpointCommit, options.checkpointCommit],
     ["freeze object", role.freezeObject, options.freezeObject],
   ] as const;
-  if (role.role !== "target-candidate" || !role.candidateExists) {
-    throw new Error("target candidate is not loaded and fenced");
-  }
   for (const [label, actual, expected] of bindings) {
     if (actual !== expected) throw new Error(`target ${label} proof binding mismatch`);
   }
   if (!role.candidateCommit || !role.candidateHash) {
     throw new Error("target candidate identity is unavailable");
   }
+  return role as LoadedCandidateBootRole;
+}
+
+export async function proveRevisionSystemConfigCandidate(
+  options: ProveRevisionSystemConfigCandidateOptions,
+) {
+  const role = requireCandidateBootRole(options);
   const verifiedControl = (
     options.verifyControlObjects ?? verifySystemConfigCandidateControlObjectsV2
   )({
@@ -234,6 +252,88 @@ export async function proveRevisionSystemConfigCandidate(
     openclawVersion: requiredIdentity(options.env, "OPENCLAW_VERSION"),
     configReady: true as const,
     provenAt: (options.now ?? Date.now)(),
+  };
+}
+
+type ConfigControlCallbacks = Pick<
+  StartFleetOptions,
+  | "freezeSystemConfigV2"
+  | "proveSystemConfigCandidate"
+  | "promoteSystemConfigCandidate"
+  | "abortSystemConfigV2"
+  | "finalizeSystemConfigV2"
+>;
+
+function createConfigControlCallbacks(
+  entrypointConfig: FleetControllerEntrypointConfig,
+  runtimeRpc: GatewayRpcClient,
+): ConfigControlCallbacks {
+  if (!entrypointConfig.builderSlug) return {};
+  const assertSlug = (slug: string): void => assertFleetConfigSlug(entrypointConfig.builderSlug, slug);
+  return {
+    freezeSystemConfigV2: ({ migrationId, slug, sourceRevisionId, targetRevisionId }) => {
+      assertSlug(slug);
+      return freezeSystemConfigV2({
+        gatewayId: entrypointConfig.gatewayId,
+        migrationId,
+        slug,
+        sourceRevisionId,
+        targetRevisionId,
+        openclawDir: OPENCLAW_DIR,
+        env: process.env,
+        source: "migration-checkpoint",
+        validateConfig: validateOpenClawConfig,
+      });
+    },
+    proveSystemConfigCandidate: ({
+      migrationId,
+      slug,
+      sourceRevisionId,
+      targetRevisionId,
+      checkpointCommit,
+      freezeObject,
+    }) => {
+      assertSlug(slug);
+      return proveRevisionSystemConfigCandidate({
+        migrationId,
+        sourceRevisionId,
+        targetRevisionId,
+        checkpointCommit,
+        freezeObject,
+        openclawDir: OPENCLAW_DIR,
+        revisionId: entrypointConfig.revisionId,
+        env: process.env,
+        rpc: runtimeRpc,
+        startedAt: PROCESS_STARTED_AT_MS,
+      });
+    },
+    promoteSystemConfigCandidate: (input) => {
+      assertSlug(input.slug);
+      return promoteSystemConfigCandidateV2({
+        ...input,
+        gatewayId: entrypointConfig.gatewayId,
+        openclawDir: OPENCLAW_DIR,
+        env: process.env,
+      });
+    },
+    abortSystemConfigV2: (input) => {
+      assertSlug(input.slug);
+      return abortSystemConfigV2({
+        ...input,
+        gatewayId: entrypointConfig.gatewayId,
+        openclawDir: OPENCLAW_DIR,
+        env: process.env,
+      });
+    },
+    finalizeSystemConfigV2: (input) => {
+      assertSlug(input.slug);
+      return finalizeSystemConfigV2({
+        ...input,
+        gatewayId: entrypointConfig.gatewayId,
+        openclawDir: OPENCLAW_DIR,
+        env: process.env,
+      });
+    },
   };
 }
 
@@ -316,124 +416,7 @@ async function main(): Promise<void> {
         log,
       });
     },
-    ...(entrypointConfig.builderSlug
-      ? {
-          freezeSystemConfigV2: ({
-            migrationId,
-            slug,
-            sourceRevisionId,
-            targetRevisionId,
-          }) => {
-            assertFleetConfigSlug(entrypointConfig.builderSlug, slug);
-            return freezeSystemConfigV2({
-              gatewayId: entrypointConfig.gatewayId,
-              migrationId,
-              slug,
-              sourceRevisionId,
-              targetRevisionId,
-              openclawDir: OPENCLAW_DIR,
-              env: process.env,
-              source: "migration-checkpoint",
-              validateConfig: validateOpenClawConfig,
-            });
-          },
-          proveSystemConfigCandidate: ({
-            migrationId,
-            slug,
-            sourceRevisionId,
-            targetRevisionId,
-            checkpointCommit,
-            freezeObject,
-          }) => {
-            assertFleetConfigSlug(entrypointConfig.builderSlug, slug);
-            return proveRevisionSystemConfigCandidate({
-              migrationId,
-              sourceRevisionId,
-              targetRevisionId,
-              checkpointCommit,
-              freezeObject,
-              openclawDir: OPENCLAW_DIR,
-              revisionId: entrypointConfig.revisionId,
-              env: process.env,
-              rpc: runtimeRpc,
-              startedAt: PROCESS_STARTED_AT_MS,
-            });
-          },
-          promoteSystemConfigCandidate: ({
-            migrationId,
-            slug,
-            sourceRevisionId,
-            targetRevisionId,
-            checkpointCommit,
-            freezeObject,
-            candidateCommit,
-            candidateHash,
-          }) => {
-            assertFleetConfigSlug(entrypointConfig.builderSlug, slug);
-            return promoteSystemConfigCandidateV2({
-              gatewayId: entrypointConfig.gatewayId,
-              migrationId,
-              slug,
-              sourceRevisionId,
-              targetRevisionId,
-              checkpointCommit,
-              freezeObject,
-              candidateCommit,
-              candidateHash,
-              openclawDir: OPENCLAW_DIR,
-              env: process.env,
-            });
-          },
-          abortSystemConfigV2: ({
-            migrationId,
-            slug,
-            sourceRevisionId,
-            targetRevisionId,
-            checkpointCommit,
-            freezeObject,
-            candidateCommit,
-          }) => {
-            assertFleetConfigSlug(entrypointConfig.builderSlug, slug);
-            return abortSystemConfigV2({
-              gatewayId: entrypointConfig.gatewayId,
-              migrationId,
-              slug,
-              sourceRevisionId,
-              targetRevisionId,
-              checkpointCommit,
-              freezeObject,
-              candidateCommit,
-              openclawDir: OPENCLAW_DIR,
-              env: process.env,
-            });
-          },
-          finalizeSystemConfigV2: ({
-            migrationId,
-            slug,
-            sourceRevisionId,
-            targetRevisionId,
-            checkpointCommit,
-            freezeObject,
-            candidateCommit,
-            candidateHash,
-          }) => {
-            assertFleetConfigSlug(entrypointConfig.builderSlug, slug);
-            return finalizeSystemConfigV2({
-              gatewayId: entrypointConfig.gatewayId,
-              migrationId,
-              slug,
-              sourceRevisionId,
-              targetRevisionId,
-              checkpointCommit,
-              freezeObject,
-              candidateCommit,
-              candidateHash,
-              openclawDir: OPENCLAW_DIR,
-              env: process.env,
-            });
-          },
-        }
-      : {}),
+    ...createConfigControlCallbacks(entrypointConfig, runtimeRpc),
     // Db-less: gateway pods hold NO Firestore credentials. Cowboy polls
     // /health and writes gateways/{id} on the trusted side. Gateway pods run
     // only the local mount reconcile from brokered assigned snapshots; all
