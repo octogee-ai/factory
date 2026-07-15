@@ -1,6 +1,9 @@
 import {
   type GatewayStatus,
+  GATEWAY_HEARTBEAT_INTERVAL_MS,
+  GATEWAY_UNREACHABLE_AFTER_MS,
   GATEWAYS_COLLECTION,
+  hasDurableOpenClawConfigControlProtocol,
 } from "@octogee/shared/types/fleet-controller";
 import {
   GLM_GATEWAYS_COLLECTION,
@@ -158,7 +161,7 @@ function protocolV2PromotionIsExact(
   if (!configRoll) return false;
   return [
     configRoll.phase === "promoted",
-    configRoll.migrationId === `roll-config:${operationId}`,
+    configRoll.migrationId === `roll-config-${operationId}`,
     configRoll.sourceRevisionId === sourceRevisionId,
     configRoll.targetRevisionId === targetRevisionId,
     configRoll.freezeRef === `refs/octogee/system-config/freeze/${sourceRevisionId}`,
@@ -190,17 +193,29 @@ function recordOrEmpty(value: unknown): Record<string, unknown> {
 function protocolV2TargetProofIsCurrent(
   configRoll: Record<string, unknown>,
   target: Record<string, unknown> | undefined,
+  input: { gatewayId: string; revisionId: string; release: number; now: number },
 ): boolean {
   const targetRecord = recordOrEmpty(target);
   const helm = recordOrEmpty(targetRecord.helm);
   const heartbeat = recordOrEmpty(targetRecord.heartbeat);
   const status = recordOrEmpty(heartbeat.configStatus);
   const owner = recordOrEmpty(status.controlOwner);
+  const lastHeartbeatAt = millis(heartbeat.lastHeartbeatAt);
+  const configObservedAt = millis(status.observedAt);
   return [
+    targetRecord.docKind === "revision",
+    targetRecord.gateway === input.gatewayId,
+    targetRecord.revisionId === input.revisionId,
+    targetRecord.release === input.release,
     helm.imageTag === configRoll.imageTag,
+    heartbeat.status === "ready",
+    freshObservation(lastHeartbeatAt, input.now),
     heartbeat.startedAt === configRoll.targetStartedAt,
     heartbeat.version === configRoll.buildSha,
-    heartbeat.openclawVersion === configRoll.openclawVersion,
+    hasDurableOpenClawConfigControlProtocol(status),
+    freshObservation(configObservedAt, input.now),
+    status.runtimeReady === true,
+    status.openclawVersion === configRoll.openclawVersion,
     status.bootRole === "target-candidate",
     owner.migrationId === configRoll.migrationId,
     owner.sourceRevisionId === configRoll.sourceRevisionId,
@@ -210,6 +225,30 @@ function protocolV2TargetProofIsCurrent(
     status.candidateCommit === configRoll.candidateCommit,
     status.candidateHash === configRoll.candidateHash,
   ].every(Boolean);
+}
+
+function millis(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (value instanceof Date) return value.getTime();
+  if (
+    value &&
+    typeof value === "object" &&
+    typeof (value as { toMillis?: unknown }).toMillis === "function"
+  ) {
+    try {
+      const result = (value as { toMillis: () => unknown }).toMillis();
+      return typeof result === "number" && Number.isFinite(result) ? result : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function freshObservation(observedAt: number | null, now: number): boolean {
+  return observedAt !== null &&
+    observedAt <= now + GATEWAY_HEARTBEAT_INTERVAL_MS &&
+    now - observedAt <= GATEWAY_UNREACHABLE_AFTER_MS;
 }
 
 // Atomic cutover (GATEWAY-RELEASES-SPEC, PR5 review P0). The mirror move AND the
@@ -271,6 +310,12 @@ export async function commitCutoverAtomic(
         if (!protocolV2TargetProofIsCurrent(
           configRoll,
           targetSnap.exists ? targetSnap.data() : undefined,
+          {
+            gatewayId: params.toGatewayId,
+            revisionId: params.rollFence.targetRevisionId,
+            release: params.rollFence.targetRelease,
+            now: nowMs,
+          },
         )) {
           throw new Error("protocol-v2 target candidate proof changed before cutover");
         }

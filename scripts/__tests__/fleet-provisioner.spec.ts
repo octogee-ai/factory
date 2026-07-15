@@ -229,6 +229,7 @@ describe("in-pod revision-keyed heartbeat (PR3 dependency)", () => {
       startedAt: 42,
     });
     expect(snap).toMatchObject({ gatewayId: "default", revisionId: "default-r2", status: "ready" });
+    expect(snap.openclawVersion).toBe("2026.7.1");
   });
 
   it("refuses an empty revision id so a legacy pod cannot write bare telemetry", () => {

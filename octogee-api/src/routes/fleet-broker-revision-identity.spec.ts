@@ -100,6 +100,49 @@ describe("revisionIdFromGatewayPodName", () => {
 });
 
 describe("system config observed status validation", () => {
+  it("accepts the complete protocol-v2 frozen and candidate control identities", () => {
+    const owner = {
+      migrationId: "roll-config-roll-1",
+      sourceRevisionId: "default-r1",
+      targetRevisionId: "default-r2",
+    };
+    const frozen = {
+      state: "clean",
+      freezeState: "frozen",
+      bootRole: "source-frozen",
+      controlOwner: owner,
+      checkpointCommit: "1".repeat(40),
+      configHash: "a".repeat(64),
+      openclawVersion: "2026.7.1",
+      controlProtocol: { protocol: "durable-openclaw-config", version: 2 },
+    };
+    expect(parseSystemConfigObservedStatus(frozen)).toEqual(frozen);
+
+    const candidate = {
+      ...frozen,
+      bootRole: "target-candidate",
+      candidateCommit: "3".repeat(40),
+      candidateHash: "b".repeat(64),
+    };
+    expect(parseSystemConfigObservedStatus(candidate)).toEqual(candidate);
+  });
+
+  it("rejects malformed protocol-v2 hashes and control owners", () => {
+    expect(parseSystemConfigObservedStatus({
+      freezeState: "frozen",
+      bootRole: "source-frozen",
+      configHash: "not-a-hash",
+    })).toBeNull();
+    expect(parseSystemConfigObservedStatus({
+      freezeState: "frozen",
+      bootRole: "source-frozen",
+      controlOwner: {
+        migrationId: "roll-config-roll-1",
+        sourceRevisionId: "default-r1",
+      },
+    })).toBeNull();
+  });
+
   it("accepts only the redacted bounded status projection", () => {
     expect(parseSystemConfigObservedStatus({
       state: "error",

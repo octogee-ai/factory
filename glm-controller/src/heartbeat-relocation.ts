@@ -55,9 +55,9 @@ export function revisionHeartbeatMerge(
   };
   if (typeof record.startedAt === "number") heartbeat.startedAt = record.startedAt;
   if (typeof record.version === "string") heartbeat.version = record.version;
-  heartbeat.configStatus = record.configStatus
-    ? { ...record.configStatus, observedAt: lastHeartbeatAt }
-    : null;
+  if (record.configStatus) {
+    heartbeat.configStatus = { ...record.configStatus, observedAt: lastHeartbeatAt };
+  }
   return { [HEARTBEAT_FIELD]: heartbeat };
 }
 

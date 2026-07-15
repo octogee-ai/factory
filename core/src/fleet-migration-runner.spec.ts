@@ -265,7 +265,7 @@ describe("runMigration — durable config roll fence", () => {
     const result = await runMigration({
       ...FENCED_INPUT,
       preAcquiredConfigCheckpoint: {
-        migrationId: "roll-config:roll-1",
+        migrationId: "roll-config-roll-1",
         checkpointCommit,
         configHash: "a".repeat(64),
       },
@@ -279,11 +279,11 @@ describe("runMigration — durable config roll fence", () => {
     expect(client.freezeConfig).not.toHaveBeenCalled();
     expect(client.unfreezeConfig).not.toHaveBeenCalled();
     expect(client.proveConfigRestore).toHaveBeenCalledWith(expect.objectContaining({
-      migrationId: "roll-config:roll-1",
+      migrationId: "roll-config-roll-1",
       checkpointCommit,
     }));
     expect(deps.acceptConfigProof).toHaveBeenCalledWith(expect.objectContaining({
-      migrationId: "roll-config:roll-1",
+      migrationId: "roll-config-roll-1",
     }));
   });
 
@@ -297,7 +297,7 @@ describe("runMigration — durable config roll fence", () => {
     const result = await runMigration({
       ...FENCED_INPUT,
       preAcquiredConfigCheckpoint: {
-        migrationId: "roll-config:roll-1",
+        migrationId: "roll-config-roll-1",
         checkpointCommit: "1".repeat(40),
         configHash: "a".repeat(64),
       },

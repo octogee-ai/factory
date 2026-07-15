@@ -457,7 +457,7 @@ describe("GatewayRollState.flippedAt (durable forwarder-TTL base)", () => {
       error: null,
       flippedAt: null,
       systemConfigCheckpoint: {
-        migrationId: "roll-config:roll-default-r2-1",
+        migrationId: "roll-config-roll-default-r2-1",
         builderSlug: "alice",
         sourceRevisionId: "default-r1",
         checkpointCommit: "a".repeat(40),
@@ -468,7 +468,7 @@ describe("GatewayRollState.flippedAt (durable forwarder-TTL base)", () => {
     };
 
     expect(roll.systemConfigCheckpoint).toMatchObject({
-      migrationId: "roll-config:roll-default-r2-1",
+      migrationId: "roll-config-roll-default-r2-1",
       checkpointCommit: "a".repeat(40),
       sourceUnfrozenAt: null,
     });

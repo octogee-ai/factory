@@ -487,7 +487,7 @@ async function publishPlatformGatewayReady(
   // GATEWAY-RELEASES-SPEC cutover step 2). The legacy flat gateways/{id}
   // dual-write is CONTRACTED: it recreated the runtime fields the identity
   // backfill refuses on, so leaving it live made the backfill precondition
-  // unsatisfiable on a real fleet. Preserved fields (startedAt, openclawVersion,
+  // unsatisfiable on a real fleet. Preserved fields (startedAt,
   // mountedCustomers, lastError) are read from — and written back to — the
   // relocated heartbeat sub-doc.
   const rootRef = db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId);
@@ -520,8 +520,6 @@ async function publishPlatformGatewayReady(
       version: versionFromImageTag(input.imageTag),
       internalUrl: gatewayServiceInternalUrl(input.revisionId),
       startedAt: typeof existingHb?.startedAt === "number" ? existingHb.startedAt : input.now,
-      openclawVersion:
-        typeof existingHb?.openclawVersion === "string" ? existingHb.openclawVersion : "unknown",
     };
     if (!Array.isArray(existingHb?.mountedCustomers)) {
       patch.mountedCustomers = [];
@@ -3181,7 +3179,7 @@ function protocolV2PromotionMatchesFence(
   if (!configRoll) return false;
   return [
     configRoll.phase === "promoted",
-    configRoll.migrationId === `roll-config:${fence.rollOperationId}`,
+    configRoll.migrationId === `roll-config-${fence.rollOperationId}`,
     configRoll.sourceRevisionId === fence.sourceRevisionId,
     configRoll.targetRevisionId === fence.targetRevisionId,
     configRoll.freezeRef === `refs/octogee/system-config/freeze/${fence.sourceRevisionId}`,

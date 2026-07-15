@@ -396,7 +396,7 @@ describe("MigrationClient system config fencing", () => {
 
 describe("MigrationClient protocol-v2 config control", () => {
   const common = {
-    migrationId: "roll-config:roll-1",
+    migrationId: "roll-config-roll-1",
     gatewayId: "bender",
     slug: "alice",
     sourceRevisionId: "bender-r1",

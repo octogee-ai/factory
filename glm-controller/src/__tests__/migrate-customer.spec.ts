@@ -553,7 +553,7 @@ describe("createMigrateCustomerHandler — revision-targeted (same-gateway drain
       rollOperationId: "roll-1",
       systemConfigMigrationMode: "checkpoint-and-restore",
       preAcquiredConfigCheckpoint: {
-        migrationId: "roll-config:roll-1",
+        migrationId: "roll-config-roll-1",
         checkpointCommit: "1".repeat(40),
         configHash: "a".repeat(64),
       },
@@ -563,12 +563,12 @@ describe("createMigrateCustomerHandler — revision-targeted (same-gateway drain
     expect(client.freezeConfig).not.toHaveBeenCalled();
     expect(client.unfreezeConfig).not.toHaveBeenCalled();
     expect(client.proveConfigRestore).toHaveBeenCalledWith(expect.objectContaining({
-      migrationId: "roll-config:roll-1",
+      migrationId: "roll-config-roll-1",
       checkpointCommit: "1".repeat(40),
     }));
     expect(deps.recordConfigProof).toHaveBeenCalledWith(
       "bender-r2",
-      expect.objectContaining({ migrationId: "roll-config:roll-1" }),
+      expect.objectContaining({ migrationId: "roll-config-roll-1" }),
       expect.objectContaining({ rollOperationId: "roll-1" }),
     );
   });
@@ -589,7 +589,7 @@ describe("createMigrateCustomerHandler — revision-targeted (same-gateway drain
       rollOperationId: "roll-1",
       systemConfigMigrationMode: "checkpoint-and-restore",
       preAcquiredConfigCheckpoint: {
-        migrationId: "roll-config:roll-1",
+        migrationId: "roll-config-roll-1",
         checkpointCommit: "not-a-commit",
         configHash: "a".repeat(64),
       },
