@@ -3,7 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { acquireSystemConfigSyncLeaseSync } from "@octogee/core/system-config-mutation-lease";
-import type { DurableOpenClawConfigControlProtocol } from "../../shared/types/fleet-controller.js";
+import {
+  OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
+  OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
+  type DurableOpenClawConfigControlProtocol,
+  type OpenClawDashboardBridgeProtocol,
+} from "../../shared/types/fleet-controller.js";
 
 export type SystemConfigState = "clean" | "dirty" | "syncing" | "error" | "unavailable";
 
@@ -21,6 +26,9 @@ export interface SystemConfigObservedStatus {
   openclawVersion?: string;
   openclawForkSha?: string;
   controlProtocol?: DurableOpenClawConfigControlProtocol;
+  dashboardControlState?: "ready" | "missing" | "stale" | "invalid";
+  dashboardControlProtocol?: OpenClawDashboardBridgeProtocol;
+  dashboardControlObservedAt?: string;
   doctorResult?: "ok" | "error";
   bootRecovery?: "none" | "recovered" | "unavailable";
   watcherState?: "running" | "stopped";
@@ -60,12 +68,50 @@ const STRING_FIELDS = [
   "lastSyncedAt",
   "openclawVersion",
   "openclawForkSha",
+  "dashboardControlObservedAt",
   "runtimeHealthCheckedAt",
   "updatedAt",
 ] as const;
 
 const NULLABLE_STRING_FIELDS = ["dirtySince", "lastErrorCode", "lastErrorAt"] as const;
 const NUMBER_FIELDS = ["schemaVersion", "rejectedCount", "recoveryCount"] as const;
+
+function projectDashboardControlStatus(
+  record: Record<string, unknown>,
+): Pick<
+  SystemConfigObservedStatus,
+  "dashboardControlState" | "dashboardControlProtocol"
+> {
+  const projected: Pick<
+    SystemConfigObservedStatus,
+    "dashboardControlState" | "dashboardControlProtocol"
+  > = {};
+  if (
+    record.dashboardControlState === "ready" ||
+    record.dashboardControlState === "missing" ||
+    record.dashboardControlState === "stale" ||
+    record.dashboardControlState === "invalid"
+  ) {
+    projected.dashboardControlState = record.dashboardControlState;
+  }
+  if (
+    record.dashboardControlProtocol !== null &&
+    typeof record.dashboardControlProtocol === "object" &&
+    !Array.isArray(record.dashboardControlProtocol)
+  ) {
+    const protocol = record.dashboardControlProtocol as Record<string, unknown>;
+    if (
+      protocol.protocol === OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL &&
+      protocol.version === OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION
+    ) {
+      projected.dashboardControlProtocol = {
+        protocol: OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
+        version: OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
+      };
+    }
+  }
+  return projected;
+}
 
 function projectSystemConfigStatus(record: Record<string, unknown>): SystemConfigObservedStatus {
   const status: SystemConfigObservedStatus = { state: record.state as SystemConfigState };
@@ -110,6 +156,7 @@ function projectSystemConfigStatus(record: Record<string, unknown>): SystemConfi
       };
     }
   }
+  Object.assign(status, projectDashboardControlStatus(record));
   return status;
 }
 

@@ -77,6 +77,23 @@ export interface DurableOpenClawConfigControlProtocol {
   version: typeof DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION;
 }
 
+export const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL = "openclaw-dashboard-bridge" as const;
+export const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION = 1 as const;
+export const OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_FILE =
+  "dashboard_bridge.capability.json" as const;
+export const OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_TTL_MS = 15_000;
+
+export interface OpenClawDashboardBridgeProtocol {
+  protocol: typeof OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL;
+  version: typeof OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION;
+}
+
+export interface OpenClawDashboardBridgeCapability extends OpenClawDashboardBridgeProtocol {
+  revisionId: string;
+  instanceId: string;
+  observedAt: string;
+}
+
 export const GATEWAYS_COLLECTION = "gateways";
 
 export interface MigrationRequestBody {

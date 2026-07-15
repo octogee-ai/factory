@@ -118,6 +118,12 @@ describe("system config observed status validation", () => {
         protocol: "durable-openclaw-config",
         version: 1,
       },
+      dashboardControlState: "ready",
+      dashboardControlProtocol: {
+        protocol: "openclaw-dashboard-bridge",
+        version: 1,
+      },
+      dashboardControlObservedAt: "2026-07-14T20:00:00.000Z",
       unknown: "drop-me",
     })).toEqual({
       state: "error",
@@ -136,6 +142,12 @@ describe("system config observed status validation", () => {
         protocol: "durable-openclaw-config",
         version: 1,
       },
+      dashboardControlState: "ready",
+      dashboardControlProtocol: {
+        protocol: "openclaw-dashboard-bridge",
+        version: 1,
+      },
+      dashboardControlObservedAt: "2026-07-14T20:00:00.000Z",
     });
   });
 
@@ -153,6 +165,16 @@ describe("system config observed status validation", () => {
     expect(parseSystemConfigObservedStatus({
       state: "clean",
       controlProtocol: { protocol: "durable-openclaw-config", version: 2 },
+    })).toBeNull();
+    expect(parseSystemConfigObservedStatus({
+      state: "clean",
+      dashboardControlState: "ready",
+      dashboardControlProtocol: { protocol: "openclaw-dashboard-bridge", version: 2 },
+      dashboardControlObservedAt: "2026-07-14T20:00:00.000Z",
+    })).toBeNull();
+    expect(parseSystemConfigObservedStatus({
+      state: "clean",
+      dashboardControlState: "ready",
     })).toBeNull();
   });
 });

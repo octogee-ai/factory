@@ -41,6 +41,8 @@ import {
   DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
   DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
   GATEWAYS_COLLECTION,
+  OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
+  OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
 } from "@octogee/shared/types/fleet-controller";
 import {
   GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
@@ -374,6 +376,49 @@ const SYSTEM_CONFIG_ENUMS: Record<string, ReadonlySet<string>> = {
   watcherState: new Set(["running", "stopped"]),
   freezeState: new Set(["unfrozen", "freezing", "frozen"]),
 };
+const DASHBOARD_CONTROL_STATES = new Set(["ready", "missing", "stale", "invalid"]);
+
+function isDashboardControlProtocol(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const protocol = value as Record<string, unknown>;
+  return protocol.protocol === OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL &&
+    protocol.version === OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION;
+}
+
+function isBoundedTimestamp(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 40 && !Number.isNaN(Date.parse(value));
+}
+
+function parseDashboardControlStatus(
+  input: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const state = input.dashboardControlState;
+  const protocolValue = input.dashboardControlProtocol;
+  const observedAt = input.dashboardControlObservedAt;
+  if (state === undefined) {
+    if (protocolValue === undefined && observedAt === undefined) return {};
+    return null;
+  }
+  if (typeof state !== "string" || !DASHBOARD_CONTROL_STATES.has(state)) return null;
+  if (state !== "ready") {
+    if (protocolValue === undefined && observedAt === undefined) {
+      return { dashboardControlState: state };
+    }
+    return null;
+  }
+  if (
+    !isDashboardControlProtocol(protocolValue) ||
+    !isBoundedTimestamp(observedAt)
+  ) return null;
+  return {
+    dashboardControlState: state,
+    dashboardControlProtocol: {
+      protocol: OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
+      version: OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
+    },
+    dashboardControlObservedAt: observedAt,
+  };
+}
 
 export function parseSystemConfigObservedStatus(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -454,6 +499,9 @@ export function parseSystemConfigObservedStatus(value: unknown): Record<string, 
       version: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
     };
   }
+  const dashboardControl = parseDashboardControlStatus(input);
+  if (!dashboardControl) return null;
+  Object.assign(out, dashboardControl);
   return out;
 }
 
