@@ -3,7 +3,6 @@ import {
   revisionIdForRelease,
   releasePayloadHash,
   isReleasePayload,
-  releaseMacOpsTokenProtocol,
   classifyGatewayField,
   isRevisionRealizationDoc,
   isGatewayDesiredDoc,
@@ -232,21 +231,6 @@ describe("releasePayloadHash", () => {
   it("changes when any payload value changes", () => {
     const base = releasePayloadHash(samplePayload());
     expect(releasePayloadHash(samplePayload({ imageTag: "def5678" }))).not.toBe(base);
-    expect(
-      releasePayloadHash(samplePayload({ macOpsTokenProtocol: 2 })),
-    ).not.toBe(base);
-  });
-});
-
-describe("releaseMacOpsTokenProtocol", () => {
-  it("treats an omitted protocol on an otherwise-valid historical release as v1", () => {
-    expect(releaseMacOpsTokenProtocol({ imageTag: "abc1234" })).toBe(1);
-  });
-
-  it("accepts only the known immutable token protocol versions", () => {
-    expect(releaseMacOpsTokenProtocol({ macOpsTokenProtocol: 2 })).toBe(2);
-    expect(releaseMacOpsTokenProtocol({ macOpsTokenProtocol: 3 })).toBeNull();
-    expect(releaseMacOpsTokenProtocol(null)).toBeNull();
   });
 });
 

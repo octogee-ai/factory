@@ -464,7 +464,6 @@ function seedDurableGateway(
     payload: {
       imageRepository: GATEWAY_REPOSITORY,
       imageTag,
-      macOpsTokenProtocol: 2,
     },
   };
   if (options.heartbeat) markGatewayServing(gatewayId, options.heartbeat);

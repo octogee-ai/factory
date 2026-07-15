@@ -65,13 +65,6 @@ export interface RetireGatewayDeps {
   // already-absent release so a crashed retire re-drives cleanly.
   helmUninstallRevision: (revisionId: string) => Promise<void>;
 
-  revokeRevisionMacOpsTokens: (input: {
-    gatewayId: string;
-    revisionId: string;
-  }) => Promise<void>;
-
-  revokeGatewayLegacyMacOpsTokens: (input: { gatewayId: string }) => Promise<void>;
-
   // Mark the revision doc retired (lifecycle retired + retiredAt + retireReason).
   // The doc is RETAINED (never deleted), matching the roll's source retirement.
   retireRevisionDoc: (revisionId: string, reason: string) => Promise<void>;
@@ -154,9 +147,6 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
     // gateway-scoped teardown below is UNREACHABLE while any revision lives.
     const revisionFailure = await drainRevisions(ctx, deps, gatewayId);
     if (revisionFailure) return revisionFailure;
-
-    const legacyTokenFailure = await revokeLegacyMacOpsTokens(ctx, deps, gatewayId);
-    if (legacyTokenFailure) return legacyTokenFailure;
 
     // 2. Tear down the per-gateway resources. Steps are independent and
     //    best-effort: every one is attempted even if a prior one failed (D4),
@@ -302,10 +292,6 @@ async function drainRevisions(
     const r = await runReportedStep(ctx, deps, `retire-revision:${rev.revisionId}`, async () => {
       // Tolerates an already-absent Helm release (crash-resume) by contract.
       await deps.helmUninstallRevision(rev.revisionId);
-      await deps.revokeRevisionMacOpsTokens({
-        gatewayId,
-        revisionId: rev.revisionId,
-      });
       // Tombstone while the revision doc is still non-retired, so the writer can
       // read its release/gateway to key the revision_gone 404.
       await deps.writeRevisionTombstone?.(rev.revisionId);
@@ -358,19 +344,6 @@ function mountedRevisionFailure(
   return failure(
     `gateway ${gatewayId} still has ${mountCount} mounted customer(s) on non-retired revision(s): ${descriptions.join("; ")}`,
   );
-}
-
-async function revokeLegacyMacOpsTokens(
-  ctx: OperationContext,
-  deps: RetireGatewayDeps,
-  gatewayId: string,
-): Promise<OperationResult | null> {
-  const result = await runReportedStep(ctx, deps, "revoke-legacy-mac-ops-token", () =>
-    deps.revokeGatewayLegacyMacOpsTokens({ gatewayId }),
-  );
-  return result.ok
-    ? null
-    : failure(`legacy Mac ops token revoke failed: ${result.error ?? UNKNOWN_ERROR}`);
 }
 
 async function assertGatewayRetirable(

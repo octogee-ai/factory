@@ -69,7 +69,6 @@ async function seedDedicatedGateway({
   const payload = {
     imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
     imageTag: "abc1234",
-    macOpsTokenProtocol: 2 as const,
   };
   await db.doc(`gateways/${gatewayId}/releases/1`).set({
     gatewayId,

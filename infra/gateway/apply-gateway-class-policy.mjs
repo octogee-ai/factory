@@ -186,6 +186,7 @@ function resolveGatewayClass(env) {
 }
 
 function resolveOpenclawJsonPath() {
+  if (process.env.OPENCLAW_CONFIG_PATH?.trim()) return process.env.OPENCLAW_CONFIG_PATH.trim();
   const dir =
     process.env.OPENCLAW_DIR ?? path.join(process.env.HOME ?? "/home/node", ".openclaw");
   return path.join(dir, "openclaw.json");

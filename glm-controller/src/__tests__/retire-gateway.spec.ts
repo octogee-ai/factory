@@ -47,8 +47,6 @@ interface FakeState {
     mountedCustomers?: string[];
   }>;
   helmUninstalledRevisions: string[];
-  revokedRevisionMacOpsTokens: string[];
-  revokedLegacyMacOpsTokens: string[];
   retiredRevisionDocs: string[];
   tombstonedRevisions: string[];
   revisionTeardownSteps: string[];
@@ -65,8 +63,6 @@ function baseState(overrides: Partial<FakeState> = {}): FakeState {
     assignments: [],
     revisions: [],
     helmUninstalledRevisions: [],
-    revokedRevisionMacOpsTokens: [],
-    revokedLegacyMacOpsTokens: [],
     retiredRevisionDocs: [],
     tombstonedRevisions: [],
     revisionTeardownSteps: [],
@@ -97,14 +93,6 @@ function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}):
     helmUninstallRevision: vi.fn(async (revisionId: string) => {
       state.helmUninstalledRevisions.push(revisionId);
       state.revisionTeardownSteps.push(`helm:${revisionId}`);
-    }),
-    revokeRevisionMacOpsTokens: vi.fn(async ({ revisionId }: { revisionId: string }) => {
-      state.revokedRevisionMacOpsTokens.push(revisionId);
-      state.revisionTeardownSteps.push(`revoke:${revisionId}`);
-    }),
-    revokeGatewayLegacyMacOpsTokens: vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
-      state.revokedLegacyMacOpsTokens.push(gatewayId);
-      state.revisionTeardownSteps.push(`revoke-legacy:${gatewayId}`);
     }),
     retireRevisionDoc: vi.fn(async (revisionId: string) => {
       state.retiredRevisionDocs.push(revisionId);
@@ -160,8 +148,6 @@ describe("createRetireGatewayHandler — teardown completeness (happy path)", ()
     expect(state.deletedGlm.has("canary")).toBe(true);
     expect(state.deletedHeartbeat.has("canary")).toBe(true);
     expect(ctx.reported.map((s) => `${s.name}:${s.status}`)).toEqual([
-      "revoke-legacy-mac-ops-token:running",
-      "revoke-legacy-mac-ops-token:done",
       "delete-pvc:running",
       "delete-pvc:done",
       "delete-kube-secret:running",
@@ -260,38 +246,6 @@ describe("createRetireGatewayHandler — teardown completeness (happy path)", ()
 
     expect(result.success).toBe(false);
     expect(state.deletedGlm.has("canary")).toBe(false);
-  });
-});
-
-describe("createRetireGatewayHandler — Mac ops retirement", () => {
-  it("revokes the generic legacy PAT only after every revision has been drained", async () => {
-    const state = baseState({
-      revisions: [
-        { revisionId: "canary-r1", release: 1, lifecycle: "ready" },
-        { revisionId: "canary-r2", release: 2, lifecycle: "ready" },
-      ],
-    });
-    const deps = makeDeps(state) as RetireGatewayDeps & {
-      revokeGatewayLegacyMacOpsTokens: (input: { gatewayId: string }) => Promise<void>;
-    };
-    deps.revokeGatewayLegacyMacOpsTokens = vi.fn(async ({ gatewayId }) => {
-      state.revokedLegacyMacOpsTokens.push(gatewayId);
-      state.revisionTeardownSteps.push(`revoke-legacy:${gatewayId}`);
-    });
-
-    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
-
-    expect(result.success).toBe(true);
-    expect(state.revokedLegacyMacOpsTokens).toEqual(["canary"]);
-    expect(state.revisionTeardownSteps).toEqual([
-      "helm:canary-r1",
-      "revoke:canary-r1",
-      "retire:canary-r1",
-      "helm:canary-r2",
-      "revoke:canary-r2",
-      "retire:canary-r2",
-      "revoke-legacy:canary",
-    ]);
   });
 });
 
@@ -515,8 +469,6 @@ describe("createRetireGatewayHandler — refusals + edge cases", () => {
     expect(state.deletedHeartbeat.has("canary")).toBe(true);
     expect(deps.helmUninstallRevision).not.toHaveBeenCalled();
     expect(ctx.reported.map((s) => `${s.name}:${s.status}`)).toEqual([
-      "revoke-legacy-mac-ops-token:running",
-      "revoke-legacy-mac-ops-token:done",
       "delete-pvc:running",
       "delete-pvc:done",
       "delete-kube-secret:running",
@@ -613,7 +565,6 @@ describe("createRetireGatewayHandler — full-gateway revision-aware retire (Ste
 
     expect(result.success).toBe(true);
     expect(state.helmUninstalledRevisions).toEqual(["canary-r1", "canary-r2"]);
-    expect(state.revokedRevisionMacOpsTokens).toEqual(["canary-r1", "canary-r2"]);
     // Each revision is tombstoned during its own teardown (the trailing bare-id
     // cleanup tombstone is a production no-op — no `canary` revision doc exists).
     expect(state.tombstonedRevisions.filter((t) => /-r\d+$/.test(t))).toEqual([
@@ -623,14 +574,11 @@ describe("createRetireGatewayHandler — full-gateway revision-aware retire (Ste
     expect(state.retiredRevisionDocs).toEqual(["canary-r1", "canary-r2"]);
     expect(state.revisionTeardownSteps).toEqual([
       "helm:canary-r1",
-      "revoke:canary-r1",
       "tombstone:canary-r1",
       "retire:canary-r1",
       "helm:canary-r2",
-      "revoke:canary-r2",
       "tombstone:canary-r2",
       "retire:canary-r2",
-      "revoke-legacy:canary",
       "tombstone:canary",
     ]);
     // Both revisions were already retired at the first gateway-scoped teardown.
@@ -669,29 +617,6 @@ describe("createRetireGatewayHandler — full-gateway revision-aware retire (Ste
     expect(deps.deleteAuthTokenSecret).not.toHaveBeenCalled();
     expect(deps.deleteGatewayPersistentVolumeClaim).not.toHaveBeenCalled();
     expect(state.deletedGlm.size).toBe(0);
-  });
-
-  it("leaves the revision retryable when scoped PAT revocation fails after Helm uninstall", async () => {
-    const state = baseState({
-      glmGatewayIds: new Map(),
-      live: new Map(),
-      revisions: [{ revisionId: "canary-r1", release: 1, lifecycle: "serving" }],
-    });
-    const deps = makeDeps(state, {
-      writeRevisionTombstone: trackTombstone(state),
-      revokeRevisionMacOpsTokens: vi.fn(async () => {
-        throw new Error("Mattermost unavailable");
-      }),
-    });
-
-    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
-
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/Mattermost unavailable/);
-    expect(state.helmUninstalledRevisions).toEqual(["canary-r1"]);
-    expect(state.tombstonedRevisions).toEqual([]);
-    expect(state.retiredRevisionDocs).toEqual([]);
-    expect(deps.deleteGatewayPersistentVolumeClaim).not.toHaveBeenCalled();
   });
 
   it("crash after revision-1 teardown converges next tick: revision-2 + gateway-scoped teardown finish", async () => {

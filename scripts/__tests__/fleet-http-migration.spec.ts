@@ -1297,7 +1297,7 @@ describe("createPushStateHandler", () => {
     expect(args).toContain(".octogee-migration-activation/chris/activation.json");
   });
 
-  it("embeds activation manifests for operator gateway transfers when coach wiring exists", async () => {
+  it("operator gateway transfers contain only the movable customer agent", async () => {
     const exportOpenClawActivationManifest = vi.fn(async () => ({
       version: 1 as const,
       slug: "eggman",
@@ -1311,7 +1311,6 @@ describe("createPushStateHandler", () => {
       isOperatorGateway: vi.fn(() => true),
       listExportPaths: vi.fn(async () => [
         { cwd: "/state", path: "agents/octogee-eggman-coach" },
-        { cwd: "/state", path: "agents/octogee-ops-eggman" },
       ]),
       exportOpenClawActivationManifest,
     });
@@ -1345,19 +1344,17 @@ describe("createPushStateHandler", () => {
     expect(exportOpenClawActivationManifest).toHaveBeenCalledWith("eggman");
     const args = spawnMock.mock.calls[0][1] as string[];
     expect(args).toContain("agents/octogee-eggman-coach");
-    expect(args).toContain("agents/octogee-ops-eggman");
+    expect(args.some((arg) => arg.includes("octogee-ops-"))).toBe(false);
     expect(args).toContain(".octogee-migration-activation/eggman/activation.json");
   });
 
-  it("falls back to operator state-only transfer when no customer activation manifest exists", async () => {
+  it("fails an operator transfer when its customer activation manifest is missing", async () => {
     const exportOpenClawActivationManifest = vi.fn(async () => {
       throw new Error("[migration-activation:eggman] activation manifest agent missing or mismatched");
     });
     const adapter = mkAdapter({
       isOperatorGateway: vi.fn(() => true),
-      listExportPaths: vi.fn(async () => [
-        { cwd: "/state", path: "agents/octogee-ops-eggman" },
-      ]),
+      listExportPaths: vi.fn(async () => [{ cwd: "/state", path: "agents/octogee-eggman-coach" }]),
       exportOpenClawActivationManifest,
     });
     const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
@@ -1385,12 +1382,10 @@ describe("createPushStateHandler", () => {
 
     await handler(req, res, vi.fn());
 
-    expect(getStatus()).toBe(200);
-    expect(getBody()).toEqual({ migrationId: "mig-operator", slug: "eggman", imported: true });
+    expect(getStatus()).toBe(500);
+    expect(getBody()).toMatchObject({ error: "push-state failed" });
     expect(exportOpenClawActivationManifest).toHaveBeenCalledWith("eggman");
-    const args = spawnMock.mock.calls[0][1] as string[];
-    expect(args).toContain("agents/octogee-ops-eggman");
-    expect(args).not.toContain(".octogee-migration-activation/eggman/activation.json");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("rejects a missing targetGatewayId before spawning tar", async () => {
@@ -1809,25 +1804,11 @@ await activateStarted;
   });
 });
 
-describe("findPathTraversalViolation — operator agent transfer", () => {
-  it("allows the slug-scoped operator ops-agent directory", () => {
+describe("findPathTraversalViolation — no permanent operator lane", () => {
+  it("rejects every legacy operator agent directory", () => {
     expect(
       findPathTraversalViolation(
-        [
-          "agents/octogee-ops-eggman",
-          "agents/octogee-ops-eggman/sessions/sessions.json",
-          "memory/octogee-ops-eggman.sqlite",
-          "memory/octogee-ops-eggman.sqlite-wal",
-        ],
-        "eggman",
-      ),
-    ).toBeNull();
-  });
-
-  it("rejects another operator agent directory", () => {
-    expect(
-      findPathTraversalViolation(
-        ["agents/octogee-ops-bender/sessions/sessions.json"],
+        ["agents/octogee-ops-eggman/sessions/sessions.json"],
         "eggman",
       ),
     ).toContain("outside the per-slug allowlist");

@@ -12,11 +12,10 @@ import {
   type AuthFingerprint,
   type SyncBackTarget,
 } from "../lib/byosub-syncback.js";
+import { openClawConfigPath, openClawDir } from "../lib/openclaw-config-path.js";
 
-const OPENCLAW_DIR = process.env.HOME
-  ? path.join(process.env.HOME, ".openclaw")
-  : "/home/node/.openclaw";
-const CONFIG_PATH = path.join(OPENCLAW_DIR, "openclaw.json");
+const OPENCLAW_DIR = openClawDir();
+const CONFIG_PATH = openClawConfigPath();
 const INTERVAL_MS = Number(process.env.BYOSUB_SYNCBACK_INTERVAL_MS) || 300_000;
 
 function log(msg: string): void {

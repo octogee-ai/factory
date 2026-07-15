@@ -596,19 +596,7 @@ async function maybeMaterializeActivationManifest(
   if (!deps.adapter.exportOpenClawActivationManifest) {
     throw new Error("source gateway cannot export an OpenClaw activation manifest");
   }
-  let manifest: Awaited<ReturnType<NonNullable<CustomerLifecycleAdapter["exportOpenClawActivationManifest"]>>>;
-  try {
-    manifest = await deps.adapter.exportOpenClawActivationManifest(body.slug);
-  } catch (err) {
-    if (deps.adapter.isOperatorGateway?.() === true) {
-      const message = err instanceof Error ? err.message : String(err);
-      deps.log?.(
-        `[migration-http] no customer activation manifest for operator slug=${body.slug}; continuing with local state only: ${message}`,
-      );
-      return { source: null, cleanup: async () => undefined };
-    }
-    throw err;
-  }
+  const manifest = await deps.adapter.exportOpenClawActivationManifest(body.slug);
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `migration-activation-${body.migrationId}-`));
   try {
     const source = await writeActivationManifest(tmpDir, manifest);
@@ -1588,9 +1576,7 @@ export function findPathTraversalViolation(
     ? [`customer-keys/${slug}/`]
     : [
         `agents/octogee-${slug}-coach/`,
-        `agents/octogee-ops-${slug}/`,
         `memory/octogee-${slug}-coach.sqlite`,
-        `memory/octogee-ops-${slug}.sqlite`,
         `customers/${slug}/`,
         `customer-keys/${slug}/`,
         `${MIGRATION_ACTIVATION_DIR}/${slug}/`,
@@ -1608,7 +1594,7 @@ export function findPathTraversalViolation(
     if (!allowed) {
       const allowlist = mode === "keys"
         ? `customer-keys/${slug}`
-        : `agents/octogee-${slug}-coach, agents/octogee-ops-${slug}, memory/octogee-${slug}-coach.sqlite*, memory/octogee-ops-${slug}.sqlite*, customers/${slug}, customer-keys/${slug}, ${MIGRATION_ACTIVATION_DIR}/${slug}`;
+        : `agents/octogee-${slug}-coach, memory/octogee-${slug}-coach.sqlite*, customers/${slug}, customer-keys/${slug}, ${MIGRATION_ACTIVATION_DIR}/${slug}`;
       return `path '${raw}' is outside the per-slug allowlist (${allowlist})`;
     }
   }

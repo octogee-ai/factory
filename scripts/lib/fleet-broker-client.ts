@@ -1,7 +1,6 @@
 import type {
   FleetBrokerBlobSignedUrl,
   FleetBrokerGreetingResult,
-  FleetBrokerMacOpsToken,
   FleetBrokerMattermostUpdate,
   FleetBrokerPreStopFlushEvent,
   FleetBrokerProvisioningStatus,
@@ -58,7 +57,6 @@ export interface FleetBrokerClient {
   recordReconcileError(slug: string, message: string): Promise<void>;
   clearReconcileError(slug: string): Promise<void>;
   notifySignup(uid: string): Promise<void>;
-  macOpsToken(): Promise<FleetBrokerMacOpsToken>;
   recordUsageEvent(input: {
     agentId: string;
     usage: FleetBrokerUsageData;
@@ -162,12 +160,6 @@ export function createFleetBrokerClient(gatewayId: string, revisionId = ""): Fle
     },
     notifySignup(uid) {
       return postNoContent("/internal/fleet/notify-signup", { gatewayId, uid });
-    },
-    macOpsToken() {
-      return postJson<FleetBrokerMacOpsToken>("/internal/fleet/mac-ops-token/v2", {
-        gatewayId,
-        revisionId: revisionId || gatewayId,
-      });
     },
     recordUsageEvent(input) {
       return postNoContent("/internal/fleet/usage-event", { gatewayId, ...input });

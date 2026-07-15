@@ -28,8 +28,7 @@ describe("system-config-restore entrypoint planning", () => {
     });
   });
 
-  it("restores the dedicated builder config through the injected restore function", async () => {
-    const messages: string[] = [];
+  it("fails a dedicated boot when its durable checkout cannot be restored", async () => {
     const restore = vi.fn(async () => ({
       skipped: "checkout-unavailable",
       seeded: false,
@@ -41,14 +40,9 @@ describe("system-config-restore entrypoint planning", () => {
         GATEWAY_CLASS: "dedicated",
         GATEWAY_BUILDER_SLUG: " alice ",
       },
-      log: (msg) => messages.push(msg),
+      log: () => {},
       restore,
-    })).resolves.toEqual({
-      action: "restore",
-      gatewayClass: "dedicated",
-      slug: "alice",
-    });
+    })).rejects.toThrow(/checkout-unavailable/);
     expect(restore).toHaveBeenCalledWith("alice", { log: expect.any(Function) });
-    expect(messages).toContain("restore skipped: checkout-unavailable");
   });
 });

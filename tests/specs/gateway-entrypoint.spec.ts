@@ -14,32 +14,11 @@ const fleetController = readFileSync(
   "utf8",
 );
 
-describe("infra/gateway/entrypoint.sh — per-gateway Mac ops bootstrap (#998)", () => {
-  it("invokes bootstrap-mac-ops.mjs BEFORE OpenClaw starts so accounts.default.botToken is patched", () => {
-
-const bootstrapIdx = entrypoint.indexOf("bootstrap-mac-ops.mjs");
-    expect(bootstrapIdx).toBeGreaterThan(-1);
-    const openclawStartIdx = entrypoint.indexOf("openclaw gateway run");
-    expect(openclawStartIdx).toBeGreaterThan(-1);
-    expect(bootstrapIdx).toBeLessThan(openclawStartIdx);
-  });
-
-  it("guards on explicit opt-in + openclaw.json so the runtime gateway does not duplicate init bootstrap", () => {
-    const bootstrapBlock = entrypoint.slice(
-      entrypoint.indexOf("Pre-boot: per-gateway Mac ops"),
-      entrypoint.indexOf("bootstrap-mac-ops.mjs") + 200,
-    );
-    expect(bootstrapBlock).toMatch(/MAC_OPS_BOOTSTRAP_ENABLED/);
-    expect(bootstrapBlock).toMatch(/openclaw\.json/);
-    expect(bootstrapBlock).not.toMatch(/MM_ADMIN_PAT/);
-  });
-
-  it("invocation is non-fatal so a transient MM error doesn't crash the boot", () => {
-    const bootstrapLine = entrypoint
-      .split("\n")
-      .find((l) => l.includes("bootstrap-mac-ops.mjs"));
-    expect(bootstrapLine).toBeTruthy();
-    expect(bootstrapLine!).toMatch(/\|\|\s+log/);
+describe("infra/gateway/entrypoint.sh — no permanent platform persona", () => {
+  it("does not bootstrap a bot, PAT, operator agent id, or ops workspace", () => {
+    expect(entrypoint).not.toMatch(/bootstrap-mac-ops|MAC_OPS|MM_BOT_USERNAME/);
+    expect(entrypoint).not.toMatch(/OPERATOR_AGENT_(?:ID|SLUG)|octogee-ops-/);
+    expect(entrypoint).not.toMatch(/workspace\/ops/);
   });
 });
 
@@ -62,31 +41,56 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     expect(restoreBlock).toMatch(/GATEWAY_BUILDER_SLUG/);
   });
 
-  it("exports a builder-stable operator agent id before openclaw.template envsubst", () => {
-    const agentSlugIdx = entrypoint.indexOf("OPERATOR_AGENT_SLUG=");
-    const agentIdIdx = entrypoint.indexOf("OPERATOR_AGENT_ID=");
-    const envsubstIdx = entrypoint.indexOf("envsubst < /octogee/infra/gateway/openclaw.template.json");
-    expect(agentSlugIdx).toBeGreaterThan(-1);
-    expect(agentIdIdx).toBeGreaterThan(-1);
-    expect(envsubstIdx).toBeGreaterThan(-1);
-    expect(agentSlugIdx).toBeLessThan(envsubstIdx);
-    expect(agentIdIdx).toBeLessThan(envsubstIdx);
-
-    const opsBlock = entrypoint.slice(
-      entrypoint.indexOf("Provision ops-agent workspace"),
-      entrypoint.indexOf("Operator-profile: Claude Code first-run stamp"),
+  it("makes the tracked system_config file the active OpenClaw path and fails closed on restore", () => {
+    expect(entrypoint).toMatch(
+      /export OPENCLAW_CONFIG_PATH="\$OPENCLAW_DIR\/system_config\/openclaw\.json"/,
     );
-    expect(opsBlock).toMatch(/OPS_AGENT_ID="\$\{OPERATOR_AGENT_ID\}"/);
+    const restoreLine = entrypoint.split("\n").find((line) => line.includes("system-config-restore.ts"));
+    expect(restoreLine).toBeTruthy();
+    expect(restoreLine).not.toMatch(/\|\|/);
+    expect(entrypoint).not.toMatch(/gateway\.auth\.token re-synced/);
+  });
+
+  it("starts one supervised config watcher on isolated gateways", () => {
+    expect(entrypoint).toMatch(/supervise_runner\s+system-config-watch\s+5000\b/);
+    const watcherIdx = entrypoint.indexOf("supervise_runner system-config-watch");
+    const guard = entrypoint.slice(entrypoint.lastIndexOf("if [", watcherIdx), watcherIdx);
+    expect(guard).toMatch(/GATEWAY_CLASS_EFFECTIVE/);
+    expect(guard).toMatch(/!= "shared"/);
+  });
+
+  it("repairs and checkpoints durable config before OpenClaw or the watcher starts", () => {
+    const doctorIdx = entrypoint.indexOf("openclaw doctor --fix --non-interactive");
+    const checkpointIdx = entrypoint.indexOf("system-config-checkpoint.ts");
+    const watcherIdx = entrypoint.indexOf("supervise_runner system-config-watch");
+    const openclawIdx = entrypoint.indexOf("openclaw gateway run");
+    expect(doctorIdx).toBeGreaterThan(-1);
+    expect(checkpointIdx).toBeGreaterThan(doctorIdx);
+    expect(watcherIdx).toBeGreaterThan(checkpointIdx);
+    expect(openclawIdx).toBeGreaterThan(watcherIdx);
+    expect(entrypoint).toMatch(/OPENCLAW_SERVICE_REPAIR_POLICY=external/);
+  });
+
+  it("fails boot when class policy or isolated pre-boot reconciliation fails", () => {
+    const classPolicyLine = entrypoint.split("\n").find((line) =>
+      line.includes('node "$CLASS_POLICY"')
+    );
+    expect(classPolicyLine).toBe('  node "$CLASS_POLICY"');
+
+    const prebootBlock = entrypoint.slice(
+      entrypoint.indexOf("Pre-boot: sync env/runtime config"),
+      entrypoint.indexOf("Pre-boot: hydrating native GitHub CLI auth"),
+    );
+    expect(prebootBlock).toMatch(/GATEWAY_CLASS_EFFECTIVE[^\n]*!= "shared"/);
+    expect(prebootBlock).toContain('"$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts');
   });
 
   it("runs pre-boot env patches without requiring the removed Firebase SA key", () => {
-    const prebootIdx = entrypoint.indexOf("entrypoints/pre-boot-config.ts");
-    expect(prebootIdx).toBeGreaterThan(-1);
     const prebootBlock = entrypoint.slice(
-      entrypoint.lastIndexOf("if [", prebootIdx),
-      prebootIdx + 220,
+      entrypoint.indexOf("Pre-boot: sync env/runtime config"),
+      entrypoint.indexOf("Pre-boot: hydrating native GitHub CLI auth"),
     );
-    expect(prebootBlock).toMatch(/openclaw\.json/);
+    expect(prebootBlock).toMatch(/OPENCLAW_CONFIG_PATH/);
     expect(prebootBlock).not.toMatch(/SA_KEY_PATH/);
     expect(prebootBlock).not.toMatch(/octogee-test-sa-key\.json/);
   });

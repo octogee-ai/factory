@@ -277,7 +277,6 @@ describe("gateway durable configuration authorization", () => {
     const rendered = mergeGatewayConfigWithArtifact(config, {
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
       imageTag: "deadbee",
-      macOpsTokenProtocol: 2,
     });
 
     expect(rendered).toMatchObject({
@@ -361,7 +360,6 @@ describe("gateway durable configuration authorization", () => {
         payload: {
           imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
           imageTag: "deadbee",
-          macOpsTokenProtocol: 2,
         },
       },
     };
@@ -369,7 +367,6 @@ describe("gateway durable configuration authorization", () => {
     await expect(readGatewayArtifact(database(docs) as never, "bender", 2)).resolves.toEqual({
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
       imageTag: "deadbee",
-      macOpsTokenProtocol: 2,
     });
   });
 

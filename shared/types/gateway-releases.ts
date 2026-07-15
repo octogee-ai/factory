@@ -159,7 +159,6 @@ export function isW9TestPublisherLiveExperiment(
 // experiment contract. Gateway policy lives exclusively on gateways/{gatewayId},
 // never in a release or revision.
 export interface ReleasePayload {
-  macOpsTokenProtocol?: MacOpsTokenProtocol;
   imageRepository: string;
   imageTag: string;
   gatewayEdgeImage?: W9GatewayEdgeImage;
@@ -167,7 +166,6 @@ export interface ReleasePayload {
 }
 
 const RELEASE_PAYLOAD_FIELD_NAMES = new Set<string>([
-  "macOpsTokenProtocol",
   "imageRepository",
   "imageTag",
   "gatewayEdgeImage",
@@ -207,9 +205,6 @@ function hasReleasePayloadShape(value: Record<string, unknown>): boolean {
 
 function hasReleasePayloadIdentity(value: Record<string, unknown>): boolean {
   return (
-    (value.macOpsTokenProtocol === undefined ||
-      value.macOpsTokenProtocol === 1 ||
-      value.macOpsTokenProtocol === 2) &&
     typeof value.imageRepository === "string" &&
     value.imageRepository.length > 0 &&
     typeof value.imageTag === "string" &&
@@ -234,17 +229,6 @@ export function isW9GatewayEdgeImage(
     isW9CandidateImageTag(gatewayImageTag) &&
     w9CandidateImageName(value.imageTag) === w9CandidateImageName(gatewayImageTag)
   );
-}
-
-export type MacOpsTokenProtocol = 1 | 2;
-
-export const CURRENT_MAC_OPS_TOKEN_PROTOCOL: MacOpsTokenProtocol = 2;
-
-export function releaseMacOpsTokenProtocol(payload: unknown): MacOpsTokenProtocol | null {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
-  const protocol = (payload as { macOpsTokenProtocol?: unknown }).macOpsTokenProtocol;
-  if (protocol === undefined || protocol === 1) return 1;
-  return protocol === 2 ? 2 : null;
 }
 
 // gateways/{gatewayId}/releases/{n} — append-only. Rollback cuts a NEW release
@@ -530,7 +514,6 @@ export type GatewayFieldClassification =
 export const RELEASE_NEW_REVISION_FIELDS = [
   "imageRepository",
   "imageTag",
-  "macOpsTokenProtocol",
   "testExperiment",
 ] as const;
 

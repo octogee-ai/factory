@@ -91,8 +91,6 @@ FIX_SUFFIX="--env=${ENV}"
 
 REQUIRED_KEYS=(
   "mattermost-gateway:admin_token:./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
-  "mattermost-gateway:bot_token:./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
-  "mattermost-gateway:bot_user_id:./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
   "mattermost-gateway:team_id:./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
   "mattermost-gateway:admin_user:./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
   "mattermost-gateway:admin_pass:./scripts/setup-mattermost.sh ${FIX_SUFFIX}"

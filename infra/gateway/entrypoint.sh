@@ -39,6 +39,12 @@ mkdir -p "$OPENCLAW_DIR/customers"
 mkdir -p "$OPENCLAW_DIR/identity"
 mkdir -p "$OPENCLAW_DIR/secrets"
 mkdir -p "$OPENCLAW_DIR/agents"
+MATTERMOST_ACCOUNT_SECRETS="$OPENCLAW_DIR/secrets/mattermost-accounts.json"
+if [ ! -f "$MATTERMOST_ACCOUNT_SECRETS" ]; then
+  umask 077
+  printf '{}\n' > "$MATTERMOST_ACCOUNT_SECRETS"
+fi
+chmod 600 "$MATTERMOST_ACCOUNT_SECRETS"
 
 # ── SSH config (host alias for Gitea — used by per-customer GIT_SSH_COMMAND) ──
 # No global SSH identity file — per-customer keys are gateway-local and passed
@@ -60,10 +66,7 @@ SSHEOF
 chmod 600 "$HOME/.ssh/config"
 log "SSH config written for Gitea (host: ${GIT_SSH_HOST}, no global identity file)"
 
-# ── Bootstrap openclaw.json from env vars ───────────────────────────────────
-# Always regenerate on boot — no stale config from prior deploys.
-# envsubst replaces ${VAR} placeholders in the template. One line. No sed.
-export MM_BOT_TOKEN="${MM_BOT_TOKEN:-}"
+# ── OpenClaw environment inputs ─────────────────────────────────────────────
 export MM_URL="${MM_URL:-}"
 export MM_INTERACTIONS_CALLBACK_BASE_URL="${MM_INTERACTIONS_CALLBACK_BASE_URL:-}"
 export MM_INTERACTIONS_ALLOWED_SOURCE_IPS="${MM_INTERACTIONS_ALLOWED_SOURCE_IPS:-}"
@@ -104,9 +107,9 @@ export OPENCLAW_GATEWAY_TOKEN
 # not a durability contract; durable operator-owned credentials belong in the
 # builder/operator credential store or an explicit per-gateway Secret.
 #
-# Sourced AFTER the platform require block but BEFORE envsubst on
-# openclaw.template.json, so operator-defined values can populate the
-# template on a first-boot gateway. Position is also AFTER kubelet's K8s
+# Sourced after the platform require block and before OpenClaw starts, so
+# operator-defined values are available to config environment substitutions.
+# Position is also after kubelet's K8s
 # env injection — operators can override their own gateway if they really
 # want, though the design intent is additive-only.
 #
@@ -122,86 +125,31 @@ if [ -f "$OPERATOR_ENV" ]; then
 fi
 # ── End operator-env ───────────────────────────────────────────────────────
 
-# GATEWAY_ID is set by the deployment's env block; `export` makes it visible
-# to envsubst below. Fail fast if it's missing.
+# GATEWAY_ID is set by the deployment's env block. Fail fast if it is missing.
 export GATEWAY_ID="${GATEWAY_ID:?GATEWAY_ID env var is required (set via Helm values.env.gatewayId)}"
 
-# Operator blue/green uses a different transient gatewayId for the green pod,
-# but the agent identity must stay stable for session transfer. Builder/operator
-# classes carry GATEWAY_BUILDER_SLUG; shared gateways fall back to GATEWAY_ID.
-OPERATOR_AGENT_SLUG="${GATEWAY_BUILDER_SLUG:-$GATEWAY_ID}"
-export OPERATOR_AGENT_SLUG
-OPERATOR_AGENT_ID="octogee-ops-${OPERATOR_AGENT_SLUG}"
-export OPERATOR_AGENT_ID
-
-if [ ! -f "$OPENCLAW_DIR/openclaw.json" ]; then
-  envsubst < /octogee/infra/gateway/openclaw.template.json > "$OPENCLAW_DIR/openclaw.json"
-  chmod 600 "$OPENCLAW_DIR/openclaw.json"
-  # Do NOT log any substring of $OPENCLAW_GATEWAY_TOKEN — this is the live
-  # cross-service auth credential. The gatewayId is the correlator ops
-  # people use to match pod ↔ SM secret ↔ heartbeat doc.
-  log "openclaw.json generated from template (gatewayId=${GATEWAY_ID})"
-else
-  log "openclaw.json already exists — preserving (fleet controller/config patch is source of truth)"
-
-  # ── Re-sync openclaw.json gateway.auth.token from env (PVC drift fix) ──
-  # Closes the chicken-and-egg gap discovered on gw-bender 2026-05-24:
-  # the K8s secret gateway-auth-token-<id> can rotate, the env var picks
-  # up the new value, but openclaw's own AJV-defaults round-trip
-  # periodically re-persists openclaw.json's gateway.auth.token field.
-  # On first boot openclaw reads OPENCLAW_GATEWAY_TOKEN env directly
-  # (openclaw.template.json has no token placeholder for envsubst — the
-  # template only sets gateway.auth.mode) and AJV persists it. Once
-  # that persisted field goes stale relative to env, openclaw
-  # authenticates with the old token while fleet-controller + chat-proxy use
-  # the new one — auth fails forever, and the only fix path
-  # (config.patch) itself requires valid auth. The K8s secret is the
-  # source of truth (#1160); make the PVC field follow it on every
-  # boot. python3 is always in the gateway image; avoids a jq dep.
-  # Inline -c with single quotes so the script eval-substitutes cleanly
-  # (heredoc inside eval "$(...)" parses oddly across sh implementations).
-  python3 -c 'import json, os
-p = os.environ["OPENCLAW_DIR"] + "/openclaw.json"
-with open(p) as f:
-    c = json.load(f)
-c.setdefault("gateway", {}).setdefault("auth", {})["token"] = os.environ["OPENCLAW_GATEWAY_TOKEN"]
-tmp = p + ".tmp"
-with open(tmp, "w") as f:
-    json.dump(c, f, indent=2)
-os.replace(tmp, p)
-'
-  chmod 600 "$OPENCLAW_DIR/openclaw.json"
-  log "openclaw.json gateway.auth.token re-synced from env"
-  # ── End re-sync ────────────────────────────────────────────────────────
-fi
-# Secret rotation / reconciliation (env-sync) happens later via pre-boot-config.ts
-# — nothing else fixed up here. The template is canonical; don't re-derive.
-
 # ── Dedicated gateway system_config restore ─────────────────────────────────
-# Builder/operator gateways are emptyDir cattle too. If Cowboy supplied the
-# one-builder slug, restore the durable runtime config from that builder's
-# Gitea system_config repo before OpenClaw starts. The restore seeds only the
-# placeholder template on a missing repo, preserves already-brokered platform
-# fields (for example mac-${GATEWAY_ID}'s bot PAT), and fails open to the
-# template config so a bad repo cannot brick the gateway.
-if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ -n "${GATEWAY_BUILDER_SLUG:-}" ]; then
+# Builder/operator gateways run the tracked Gitea checkout as OpenClaw's active
+# regular config file. Shared gateways keep an untracked template copy. Copy the
+# raw template: OpenClaw resolves ${ENV} and SecretRefs in memory; envsubst would
+# materialize credentials onto disk.
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
+  if [ -z "${GATEWAY_BUILDER_SLUG:-}" ]; then
+    log "FATAL: GATEWAY_BUILDER_SLUG is required for ${GATEWAY_CLASS_EFFECTIVE} durable config"
+    exit 1
+  fi
+  export OPENCLAW_CONFIG_PATH="$OPENCLAW_DIR/system_config/openclaw.json"
   log "Pre-boot: restoring system_config for builder slug ${GATEWAY_BUILDER_SLUG}..."
-  "$TSX" /octogee/scripts/entrypoints/system-config-restore.ts || log "system_config restore: non-fatal failure, continuing..."
-  python3 -c 'import json, os
-p = os.environ["OPENCLAW_DIR"] + "/openclaw.json"
-with open(p) as f:
-    c = json.load(f)
-c.setdefault("gateway", {}).setdefault("auth", {})["token"] = os.environ["OPENCLAW_GATEWAY_TOKEN"]
-tmp = p + ".tmp"
-with open(tmp, "w") as f:
-    json.dump(c, f, indent=2)
-os.replace(tmp, p)
-'
-  chmod 600 "$OPENCLAW_DIR/openclaw.json"
-  log "openclaw.json gateway.auth.token re-synced after system_config restore"
-elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
-  log "system_config restore skipped: GATEWAY_BUILDER_SLUG is unset for class ${GATEWAY_CLASS_EFFECTIVE}"
+  "$TSX" /octogee/scripts/entrypoints/system-config-restore.ts
+else
+  export OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$OPENCLAW_DIR/openclaw.json}"
+  if [ ! -f "$OPENCLAW_CONFIG_PATH" ]; then
+    mkdir -p "$(dirname "$OPENCLAW_CONFIG_PATH")"
+    cp /octogee/infra/gateway/openclaw.template.json "$OPENCLAW_CONFIG_PATH"
+    log "openclaw.json copied from raw template (gatewayId=${GATEWAY_ID})"
+  fi
 fi
+chmod 600 "$OPENCLAW_CONFIG_PATH"
 
 # Enforce the class-level OpenClaw policy before startup. The base template is
 # shared-safe (exec/process denied, Codex disabled). Builder-class keeps the
@@ -209,7 +157,7 @@ fi
 # class is handled later by the operator-image-only codex sandbox patch.
 CLASS_POLICY=/octogee/infra/gateway/apply-gateway-class-policy.mjs
 if [ -f "$CLASS_POLICY" ]; then
-  node "$CLASS_POLICY" || log "apply-gateway-class-policy: non-fatal failure"
+  node "$CLASS_POLICY"
 fi
 
 # Publish the fresh gateway auth token to Secret Manager only when explicitly
@@ -229,7 +177,7 @@ fi
 #       operator fixes setup-secrets.sh before traffic arrives at a
 #       gateway chat-proxy can never authenticate against.
 #   1 — transient SM error (UNAVAILABLE, DNS blip). WARN + continue;
-#       the next boot retries. Ops agents keep working.
+#       the next boot retries. Gateway-local tools keep working.
 #
 # Skipped unless GATEWAY_AUTH_SECRET_MANAGER_PUBLISH=true/1 and GCP_PROJECT_ID
 # is set.
@@ -263,26 +211,7 @@ if [ "${GATEWAY_AUTH_SECRET_MANAGER_PUBLISH:-}" = "true" ] || [ "${GATEWAY_AUTH_
 else
   log "skipping gateway auth token Secret Manager publish; gateway-edge uses the in-pod OPENCLAW_GATEWAY_TOKEN/device token"
 fi
-
-# ── Provision ops-agent workspace + agent dirs ──────────────────────────────
-# Workspace (SOUL.md et al.) is shared across all gateways — it's the ops
-# agent's personality and runbook, not per-gateway state.
-# agentDir (agents/${OPERATOR_AGENT_ID}/{agent,sessions}) is stable across
-# blue/green gatewayIds and must exist before OpenClaw boots, otherwise the doctor silently
-# creates `sessions/` later and logs it as a reconciliation event.
-OPS_AGENT_ID="${OPERATOR_AGENT_ID}"
-OPS_WS="$OPENCLAW_DIR/workspace/ops"
-OPS_AGENT_DIR="$OPENCLAW_DIR/agents/$OPS_AGENT_ID"
-if [ ! -f "$OPS_WS/SOUL.md" ] && [ -d "$TEMPLATES_DIR/ops-workspace" ]; then
-  log "Setting up ops-agent workspace from templates..."
-  mkdir -p "$OPS_WS"
-  cp -n "$TEMPLATES_DIR/ops-workspace/"*.md "$OPS_WS/" 2>/dev/null || true
-  mkdir -p "$OPS_WS/memory"
-fi
-# agentDir/sessions must pre-exist — OpenClaw's doctor treats a missing
-# sessions dir as a repair. Create both before boot so doctor sees a clean
-# tree on first start.
-mkdir -p "$OPS_AGENT_DIR/agent" "$OPS_AGENT_DIR/sessions"
+# ── End gateway auth token publish ──────────────────────────────────────────
 
 # ── Operator-profile: Claude Code first-run stamp ──────────────────────────
 # Bender's PVC needed this stamped by hand on first boot — Claude's TUI
@@ -320,7 +249,7 @@ fi
 # ── Harden file permissions ─────────────────────────────────────────────────
 # The init container sets 775 for PVC/emptyDir. Tighten sensitive files.
 chmod 700 "$OPENCLAW_DIR" 2>/dev/null || true
-chmod 600 "$OPENCLAW_DIR/openclaw.json" 2>/dev/null || true
+chmod 600 "$OPENCLAW_CONFIG_PATH" 2>/dev/null || true
 find "$OPENCLAW_DIR/agents" -name "sessions.json" -exec chmod 600 {} \; 2>/dev/null || true
 log "File permissions hardened"
 
@@ -381,9 +310,13 @@ fi
 # bring back an old auth profile, but ANTHROPIC_BASE_URL is env-owned and is
 # what keeps capped broker tokens from being sent directly to Anthropic.
 # pre-boot-config.ts gates its optional Firestore-backed overrides internally.
-if [ -f "$OPENCLAW_DIR/openclaw.json" ]; then
+if [ -f "$OPENCLAW_CONFIG_PATH" ]; then
   log "Pre-boot: applying env/runtime config patches..."
-  /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/pre-boot-config.ts || log "Pre-boot: non-fatal, continuing..."
+  if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
+    "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts
+  else
+    "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts || log "Pre-boot: non-fatal, continuing..."
+  fi
 fi
 
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
@@ -391,28 +324,16 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   timeout -k 5s 20s "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts || log "github-cli-auth-hydrate: non-fatal failure"
 fi
 
-# ── Pre-boot: per-gateway Mac ops MM identity (#998/#1482) ───────────────
-# Replaces the shared `mac-gw-prod` user with mac-${GATEWAY_ID} so two
-# gateways in the same env stop fighting for one MM session. Mattermost admin
-# authority stays in octogee-api; this script calls the tenant-bound fleet
-# broker with the projected gateway KSA token, writes the per-gateway bot PAT
-# to the PVC, and patches openclaw.json's accounts.default.botToken.
-# Normal Helm boots run this from the no-shell init container; the runtime
-# entrypoint path is opt-in for legacy/manual boots so the gateway container
-# does not duplicate the mint after init has already patched the config.
-# Non-fatal: a transient broker/MM error must not crash the gateway boot — the
-# next reboot retries, and OpenClaw will keep the previously-patched token in
-# openclaw.json meanwhile.
-if [ "${MAC_OPS_BOOTSTRAP_ENABLED:-}" = "true" ] && [ -f "$OPENCLAW_DIR/openclaw.json" ]; then
-  log "Pre-boot: bootstrapping per-gateway Mac ops MM identity via fleet broker (mac-${GATEWAY_ID})..."
-  node /octogee/scripts/bootstrap-mac-ops.mjs || log "bootstrap-mac-ops: non-fatal failure, continuing..."
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
+  export OPENCLAW_SERVICE_REPAIR_POLICY=external
+  log "Pre-boot: repairing and validating durable OpenClaw config..."
+  openclaw doctor --fix --non-interactive
+  "$TSX" /octogee/scripts/entrypoints/system-config-checkpoint.ts
 fi
 
 # ── Boot sync: REMOVED ───────────────────────────────────────────────────────
-# The gateway now boots with only the default account (written by
-# pre-boot-config.ts). Customer workspaces + openclaw.json customer entries
-# are restored post-boot by the fleet controller, one customer at a time via
-# its local HTTP endpoint.
+# Customer workspaces and OpenClaw customer entries are restored post-boot by
+# the fleet controller, one customer at a time via its local HTTP endpoint.
 # See docs/GATEWAY-FLEET-CONTROLLER-SPEC.md
 
 # ── In-pod runners: supervised + observable ─────────────────────────────────
@@ -448,6 +369,9 @@ fi
 supervise_runner preview-proxy 5000 "$TSX" /octogee/scripts/entrypoints/preview-proxy.ts
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "operator" ]; then
   supervise_runner byosub-syncback 30000 "$TSX" /octogee/scripts/entrypoints/byosub-syncback-runner.ts
+fi
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
+  supervise_runner system-config-watch 5000 "$TSX" /octogee/scripts/entrypoints/system-config-watch.ts
 fi
 
 # Builder-shell PTY server — runtime class plus explicit access unlock only.
@@ -485,15 +409,7 @@ fi
 # other backgrounded jobs (fleet-controller, site-build, preview-proxy, etc.) —
 # so `wait` at the bottom of this script keeps the pod up.
 #
-# Previously a `while true; openclaw || true; sleep 2; done` respawn loop
-# ran here, gated on a `wait_for_gateway_exit` port-binding check. The
-# respawn was meant to recover from hard crashes; the guard prevented
-# stomping on openclaw's self-forked successor. Removed 2026-05-15 after
-# the guard's "port still bound; supervisor waiting" loop spun forever in
-# PROD on the first DM to Mac — openclaw added the operator's MM user id to
-# `commands.ownerAllowFrom`, self-restarted via SIGUSR1, and the supervisor
-# parent-exit + successor-holds-port pattern produced log spam with no
-# productive action. Hard crash recovery is now K8s's job: the deployment
+# Hard crash recovery is Kubernetes's job: the deployment
 # has a liveness probe on TCP :18789 in helm/octogee-gateway/templates/
 # deployment.yaml — port-frees-without-successor → pod restart after
 # `periodSeconds × failureThreshold` of consistent failure (default 60s × 5

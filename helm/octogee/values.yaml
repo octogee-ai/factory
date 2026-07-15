@@ -8,10 +8,9 @@ global:
     # This secret MUST exist before `helm upgrade`. Create it via:
     #   ./scripts/setup-mattermost.sh --env=ENV
     #
-    # Required keys: admin_user, admin_pass, admin_token, admin_user_id,
-    #                bot_token, bot_user_id, team_id
+    # Required keys: admin_user, admin_pass, admin_token, admin_user_id, team_id
     #
-    # Consumed by: chat-proxy, gateway-edge, gateway
+    # Consumed by: octogee-api and glm-controller
     adminSecret:
       name: mattermost-gateway
       tokenKey: admin_token

@@ -162,7 +162,7 @@ case "$SECRET" in
     echo "    anthropic             — ANTHROPIC_API_KEY, platform provider key (octogee-anthropic; consumer: llm-broker only — no gateway carries it)"
     echo "    model-key-issuer      — GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN, consumers: octogee-api, glm-controller"
     echo "    social-notification-bearer — SOCIAL_NOTIFICATION_BEARER_TOKEN, consumers: octogee-api /social, social functions"
-    echo "    mm-admin-pat          — MM admin PAT + bot token, consumers: octogee-api, glm-controller"
+    echo "    mm-admin-pat          — MM admin PAT, consumers: octogee-api, glm-controller"
     echo "    gitea-pat             — Gitea API token, consumers: octogee-api, glm-controller"
     echo "    discord-ops-webhook   — DISCORD_OPS_WEBHOOK_URL, consumer: octogee-gateway"
     echo ""
@@ -277,13 +277,13 @@ case "$SECRET" in
     ok "Rotation complete"
     ;;
 
-  # ── MM admin PAT + bot token ────────────────────────────────────────────
+  # ── MM admin PAT ────────────────────────────────────────────────────────
   mm-admin-pat)
-    confirm "Rotate MM admin PAT and bot token (octogee-api and glm-controller must restart)?" || { info "Cancelled"; exit 0; }
+    confirm "Rotate MM admin PAT (octogee-api and glm-controller must restart)?" || { info "Cancelled"; exit 0; }
 
     info "Clearing cached tokens from mattermost-gateway secret to force rotation..."
-    # We overwrite admin_token and bot_token with empty strings, then run
-    # setup-mattermost.sh which will detect the empty cache and mint new ones.
+    # We overwrite admin_token with an empty string, then run
+    # setup-mattermost.sh which will detect the empty cache and mint a new one.
     EXISTING=$(kubectl get secret mattermost-gateway -n "$K8S_NAMESPACE" -o json 2>/dev/null)
     if [[ -n "$EXISTING" ]]; then
       echo "$EXISTING" | python3 -c "
@@ -291,7 +291,6 @@ import sys, json, base64
 d = json.load(sys.stdin)
 data = d.get('data', {})
 data['admin_token'] = base64.b64encode(b'').decode()
-data['bot_token'] = base64.b64encode(b'').decode()
 d['data'] = data
 print(json.dumps(d))
 " | kubectl apply -f - >/dev/null

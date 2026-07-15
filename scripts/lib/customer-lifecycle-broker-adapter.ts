@@ -78,13 +78,17 @@ import { blobSyncForSlug } from "./blob-sync.js";
 import { createBrokeredBlobStore } from "./blob-sync-broker.js";
 import {
   applyOpenClawActivationManifest,
-  extractOpenClawActivationManifest,
   MIGRATION_ACTIVATION_DIR,
   readActivationManifest,
   removeActivationManifest,
 } from "./migration-activation-manifest.js";
+import {
+  exportActivationManifestWithSecret,
+  materializeActivationManifestSecret,
+} from "./migration-activation-secrets.js";
 import { writeTierTemplateFiles } from "./tier-template-files.js";
 import { reassertConvergedContextFilesForSlug } from "./context-file-convergence.js";
+import { updateMattermostAccountSecrets } from "./mattermost-account-secrets.js";
 
 const DEFAULT_COACH = {
   name: "Octo",
@@ -276,11 +280,24 @@ async function applyAddCustomerConfigPatch(
       emoji: identity.emoji,
       model: DEFAULT_COACH.model,
     },
+    default: process.env.GATEWAY_BUILDER_SLUG?.trim() === snapshot.slug,
     ...(platformOpenAiEmbeddingsEnabled()
       ? { memorySearch: platformOpenAiEmbeddingMemorySearch(agentId) }
       : {}),
   });
   const projectAgents = brokerSnapshot?.projectAgents ?? snapshot.projectAgents ?? [];
+  await updateMattermostAccountSecrets(OPENCLAW_DIR, {
+    set: {
+      [accountId]: coachPat,
+      ...Object.fromEntries(
+        projectAgents.flatMap((state) =>
+          state.enabled && state.token
+            ? [[`${snapshot.slug}-proj-${state.projectId}`, state.token] as const]
+            : [],
+        ),
+      ),
+    },
+  });
   const projectAgentEntries = buildProjectAgents({
     slug: snapshot.slug,
     customerDir: path.join(CUSTOMERS_DIR, snapshot.slug),
@@ -356,6 +373,10 @@ async function applyRemoveCustomerConfigPatch(
     },
     { rpc: ctx.rpc, cache: ctx.configCache, totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS },
   );
+  await updateMattermostAccountSecrets(OPENCLAW_DIR, {
+    remove: [`${slug}-coach`],
+    removePrefixes: [`${slug}-proj-`],
+  });
 }
 
 async function waitForAccountHealthy(
@@ -497,34 +518,14 @@ async function prepareKeyImportDir(slug: string): Promise<string> {
   return OPENCLAW_DIR;
 }
 
-async function hasOperatorAgentStateForMigration(slug: string): Promise<boolean> {
-  const stateDir = resolveOpenClawStateDir();
-  const agentDir = path.join(stateDir, "agents", customerCoachAgentId(slug));
-  try {
-    await fsp.access(agentDir);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function activateImportedCustomer(
   ctx: BrokerCtx,
   slug: string,
   opts: { signal?: AbortSignal } | undefined,
 ): Promise<void> {
-  let manifest;
-  try {
-    manifest = await readActivationManifest(OPENCLAW_DIR, slug);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" && await hasOperatorAgentStateForMigration(slug)) {
-      ctx.log(`[import:${slug}] no customer activation manifest; imported operator agent state only`);
-      return;
-    }
-    throw err;
-  }
-  const patch = await applyOpenClawActivationManifest(manifest, {
+  const manifest = await readActivationManifest(OPENCLAW_DIR, slug);
+  const safeManifest = await materializeActivationManifestSecret(OPENCLAW_DIR, manifest);
+  const patch = await applyOpenClawActivationManifest(safeManifest, {
     rpc: ctx.rpc,
     cache: ctx.configCache,
     signal: opts?.signal,
@@ -674,7 +675,8 @@ export function buildBrokeredLifecycleAdapter(
     prepareImportDir,
     prepareKeyImportDir,
     activateImportedCustomer: (slug, callOpts) => activateImportedCustomer(ctx, slug, callOpts),
-    exportOpenClawActivationManifest: (slug) => extractOpenClawActivationManifest(OPENCLAW_CONFIG, slug),
+    exportOpenClawActivationManifest: (slug) =>
+      exportActivationManifestWithSecret(OPENCLAW_CONFIG, OPENCLAW_DIR, slug),
     removeImportedCustomerBySlug: (slug) => removeImportedCustomerBySlug(ctx, slug),
   };
   return adapter;

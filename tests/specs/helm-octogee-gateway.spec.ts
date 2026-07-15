@@ -722,39 +722,15 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     expect(gw).not.toMatch(/- name:\s*MM_ADMIN_PAT\b/);
   });
 
-  it("uses a brokered init container for per-gateway Mattermost bot bootstrap, with no admin PAT in the pod", () => {
+  it("does not provision a permanent gateway persona or Mattermost PAT", () => {
     const dep = findDoc(
       helmTemplate("octogee-gw-default-r5", { revisionId: "default-r5" }),
       "Deployment",
       "octogee-gateway-default-r5",
     ) ?? "";
-    const bootstrap = containerBlock(dep, "mac-ops-bootstrap");
-    expect(bootstrap).toMatch(/node \/octogee\/scripts\/bootstrap-mac-ops\.mjs/);
-    expect(bootstrap).not.toMatch(/bootstrap-mac-ops\.mjs\s*\|\|\s*true/);
-    expect(bootstrap).toMatch(/name:\s*GATEWAY_REVISION_ID\s*\n\s*value:\s*"default-r5"/);
-    expect(bootstrap).toMatch(/name:\s*FLEET_BROKER_URL\b/);
-    expect(bootstrap).toMatch(/name:\s*OCTOGEE_API_SA_TOKEN_PATH\b/);
-    expect(bootstrap).toMatch(/name:\s*gateway-broker-sa-token[\s\S]*?mountPath:\s*\/var\/run\/secrets\/octogee-gateway-broker/);
+    expect(dep).not.toMatch(/mac-ops-bootstrap|bootstrap-mac-ops|MM_BOT_USERNAME|MAC_OPS/);
     expect(dep).not.toMatch(/name:\s*MM_ADMIN_PAT\b/);
     expect(dep).not.toMatch(/name:\s*mattermost-gateway[\s\S]*?key:\s*admin_token/);
-  });
-
-  it("mac-ops-bootstrap derives + exports the operator agent id before openclaw.template envsubst (an empty-id agents.list[0] degrades every agents.list patch to whole-list replacement)", () => {
-    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
-    const bootstrap = containerBlock(dep, "mac-ops-bootstrap");
-    const envsubstIdx = bootstrap.indexOf(
-      "envsubst < /octogee/infra/gateway/openclaw.template.json",
-    );
-    const slugIdx = bootstrap.indexOf('OPERATOR_AGENT_SLUG="${GATEWAY_BUILDER_SLUG:-$GATEWAY_ID}"');
-    const idIdx = bootstrap.indexOf('OPERATOR_AGENT_ID="octogee-ops-${OPERATOR_AGENT_SLUG}"');
-    expect(envsubstIdx).toBeGreaterThan(-1);
-    expect(slugIdx).toBeGreaterThan(-1);
-    expect(idIdx).toBeGreaterThan(-1);
-    expect(slugIdx).toBeLessThan(envsubstIdx);
-    expect(idIdx).toBeLessThan(envsubstIdx);
-    expect(bootstrap).toMatch(/export OPERATOR_AGENT_SLUG\b/);
-    expect(bootstrap).toMatch(/export OPERATOR_AGENT_ID\b/);
-    expect(bootstrap).toMatch(/name:\s*GATEWAY_BUILDER_SLUG\b/);
   });
 
   it("omits the Mattermost admin-PAT bootstrap init container on operator gateways", () => {
@@ -786,7 +762,7 @@ expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
 
     const dataMounts = dep.match(/- name:\s*data\s+mountPath:\s*\/home\/node\b/g) ?? [];
-    expect(dataMounts.length).toBe(4);
+    expect(dataMounts.length).toBe(3);
     expect(dep).not.toMatch(/mountPath:\s*\/home\/node\/\.openclaw\b/);
   });
 
