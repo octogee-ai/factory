@@ -363,9 +363,10 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
   });
 
   it("forwards the plan-resolution fields (subscription/selectedTier/trialStartedAt) to the reassert — a trial user's model picks must not defer to house_only at mount", async () => {
+    const trialStartedAt = { _seconds: Math.floor(Date.now() / 1000) - 2 * 86_400, _nanoseconds: 0 };
     state.user = snap({
       tier: "trial",
-      subscription: { trialStartedAt: { _seconds: 1_783_500_000, _nanoseconds: 0 } },
+      subscription: { trialStartedAt },
       systemConfig: {
         agentModels: { "octogee-test-coach": { primary: "platform-openrouter/minimax/minimax-m3", fallbacks: [] } },
       },
@@ -374,7 +375,7 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
 
     const ud = state.reassertByotUserData ?? {};
     expect(ud.tier).toBe("trial");
-    expect(ud.subscription).toEqual({ trialStartedAt: { _seconds: 1_783_500_000, _nanoseconds: 0 } });
+    expect(ud.subscription).toEqual({ trialStartedAt });
   });
 
   it("forwards builderSubscription to the reassert — a credits builder's picks must not defer to house_only at mount", async () => {
