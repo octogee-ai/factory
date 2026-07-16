@@ -27,6 +27,29 @@ function requiredEnv(env: NodeJS.ProcessEnv, key: string): string {
   return value;
 }
 
+function readRuntimeIdentity(openclawDir: string): {
+  openclawVersion: string;
+  openclawForkSha: string;
+} {
+  const raw = JSON.parse(
+    fs.readFileSync(path.join(openclawDir, "system_config.status.json"), "utf8"),
+  ) as unknown;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("OpenClaw runtime identity status is invalid");
+  }
+  const status = raw as Record<string, unknown>;
+  const openclawVersion = typeof status.openclawVersion === "string"
+    ? status.openclawVersion.trim()
+    : "";
+  const openclawForkSha = typeof status.openclawForkSha === "string"
+    ? status.openclawForkSha.trim()
+    : "";
+  if (!openclawVersion || !openclawForkSha) {
+    throw new Error("OpenClaw runtime identity status is unavailable");
+  }
+  return { openclawVersion, openclawForkSha };
+}
+
 export function startOpenClawDashboardCapabilityHeartbeat(args: {
   env: NodeJS.ProcessEnv;
   logError: (error: unknown) => void;
@@ -37,16 +60,18 @@ export function startOpenClawDashboardCapabilityHeartbeat(args: {
   if (args.env.OPENCLAW_DASHBOARD_BRIDGE_ENABLED !== "true") return null;
   const openclawDir = requiredEnv(args.env, "OPENCLAW_DIR");
   const revisionId = requiredEnv(args.env, "GATEWAY_REVISION_ID");
-  const openclawVersion = requiredEnv(args.env, "OPENCLAW_VERSION");
-  const openclawForkSha = requiredEnv(args.env, "OPENCLAW_FORK_SHA");
-  if (openclawVersion !== CANONICAL_OPENCLAW_VERSION || openclawForkSha !== CANONICAL_OPENCLAW_FORK_SHA) {
-    throw new Error("OpenClaw Dashboard bridge runtime identity does not match the canonical pin");
-  }
   const instanceId = args.instanceId ?? randomUUID();
   const now = args.now ?? Date.now;
   const target = path.join(openclawDir, OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_FILE);
   const temporary = `${target}.${instanceId}.tmp`;
   const publish = (): void => {
+    const { openclawVersion, openclawForkSha } = readRuntimeIdentity(openclawDir);
+    if (
+      openclawVersion !== CANONICAL_OPENCLAW_VERSION ||
+      openclawForkSha !== CANONICAL_OPENCLAW_FORK_SHA
+    ) {
+      throw new Error("OpenClaw Dashboard bridge runtime identity does not match the canonical pin");
+    }
     fs.mkdirSync(openclawDir, { recursive: true });
     fs.writeFileSync(temporary, `${JSON.stringify({
       protocol: OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
@@ -60,7 +85,12 @@ export function startOpenClawDashboardCapabilityHeartbeat(args: {
     fs.chmodSync(temporary, 0o600);
     fs.renameSync(temporary, target);
   };
-  publish();
+  fs.rmSync(target, { force: true });
+  try {
+    publish();
+  } catch (error) {
+    args.logError(error);
+  }
   const timer = setInterval(() => {
     try {
       publish();

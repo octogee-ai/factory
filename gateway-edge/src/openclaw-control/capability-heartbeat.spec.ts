@@ -12,14 +12,17 @@ import {
 describe("OpenClaw Dashboard capability heartbeat", () => {
   it("atomically publishes a revision and runtime-bound proof and removes only its own proof", () => {
     const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-capability-"));
+    fs.writeFileSync(path.join(openclawDir, "system_config.status.json"), JSON.stringify({
+      state: "clean",
+      openclawVersion: "2026.7.1",
+      openclawForkSha: "5e38a689",
+    }));
     let now = 1_000;
     const heartbeat = startOpenClawDashboardCapabilityHeartbeat({
       env: {
         OPENCLAW_DASHBOARD_BRIDGE_ENABLED: "true",
         OPENCLAW_DIR: openclawDir,
         GATEWAY_REVISION_ID: "bender-r7",
-        OPENCLAW_VERSION: "2026.7.1",
-        OPENCLAW_FORK_SHA: "5e38a689",
       },
       instanceId: "edge-instance-1",
       now: () => now,
@@ -47,17 +50,45 @@ describe("OpenClaw Dashboard capability heartbeat", () => {
     expect(fs.existsSync(capabilityPath)).toBe(true);
   });
 
-  it("fails closed on runtime pin drift and stays disabled without the feature flag", () => {
-    expect(() => startOpenClawDashboardCapabilityHeartbeat({
+  it("fails closed without crash-looping while runtime identity is unavailable or drifting", () => {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-capability-"));
+    const capabilityPath = path.join(openclawDir, "dashboard_bridge.capability.json");
+    fs.writeFileSync(capabilityPath, JSON.stringify({ instanceId: "dead-edge" }));
+    const logError = vi.fn();
+    const heartbeat = startOpenClawDashboardCapabilityHeartbeat({
       env: {
         OPENCLAW_DASHBOARD_BRIDGE_ENABLED: "true",
-        OPENCLAW_DIR: "/tmp/openclaw",
+        OPENCLAW_DIR: openclawDir,
         GATEWAY_REVISION_ID: "bender-r7",
-        OPENCLAW_VERSION: "2026.7.2",
-        OPENCLAW_FORK_SHA: "5e38a689",
       },
-      logError: vi.fn(),
-    })).toThrow(/runtime identity/i);
+      intervalMs: 60_000,
+      logError,
+    });
+    expect(fs.existsSync(capabilityPath)).toBe(false);
+    expect(logError).toHaveBeenCalledTimes(1);
+
+    fs.writeFileSync(path.join(openclawDir, "system_config.status.json"), JSON.stringify({
+      state: "clean",
+      openclawVersion: "2026.7.2",
+      openclawForkSha: "5e38a689",
+    }));
+    expect(() => heartbeat?.publish()).toThrow(/runtime identity/i);
+    expect(fs.existsSync(capabilityPath)).toBe(false);
+
+    fs.writeFileSync(path.join(openclawDir, "system_config.status.json"), JSON.stringify({
+      state: "clean",
+      openclawVersion: "2026.7.1",
+      openclawForkSha: "5e38a689",
+    }));
+    heartbeat?.publish();
+    expect(JSON.parse(fs.readFileSync(capabilityPath, "utf8"))).toMatchObject({
+      openclawVersion: "2026.7.1",
+      openclawForkSha: "5e38a689",
+    });
+    heartbeat?.stop();
+  });
+
+  it("stays disabled without the feature flag", () => {
     expect(startOpenClawDashboardCapabilityHeartbeat({ env: {}, logError: vi.fn() })).toBeNull();
   });
 });
