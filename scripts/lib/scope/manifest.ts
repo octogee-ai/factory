@@ -216,6 +216,18 @@ export const EDGES: readonly ScopeEdge[] = [
       "tests/specs imports app/src source directly (app-route-helpers.spec.ts → routes/appRoutes, context-channel-selection.spec.ts → lib/contextChannelSelection, deferred-action.spec.ts → lib/deferredAction, sizing-cost-lockstep.spec.ts → lib/sizing, activity-wire-contract.spec.ts → hooks/useActivityChannel + activity-rows/ActivityRow)",
   },
   {
+    when: "app/docs/",
+    jobs: [JOBS.tests],
+    reason:
+      "tests/specs/release-input-authority.spec.ts pins app/docs as operator-only documentation rather than a site deploy input",
+  },
+  {
+    when: "infra/gateway/extensions/octogee-chat-tools/",
+    jobs: [JOBS.tests],
+    reason:
+      "tests/specs/release-input-authority.spec.ts pins gateway skill Markdown as a runtime gateway deploy input",
+  },
+  {
     when: "site/",
     jobs: [JOBS.tests],
     reason:

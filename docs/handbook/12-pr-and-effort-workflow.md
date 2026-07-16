@@ -59,7 +59,8 @@ the app-shell decomposition (#958). Still no self-merge.
   small, easily-revertible ops/helm config (e.g. a compute-class default) →
   fresh branch, `git push origin HEAD:main`, **no PR**. Operator policy
   (2026-07-08): PRs burn Copilot review minutes, which are reserved for final
-  code PRs.
+  code PRs. Known documentation-only paths are excluded from release CD; they
+  do not build or deploy anything when pushed to `main`.
 - **How this works with branch protection:** `main` requires a PR with status
   checks (`gitleaks`/`osv-scanner`/`eslint`/`test-gate`) but has
   `enforce_admins:false` — and agent sessions here run on the operator's admin
@@ -68,8 +69,8 @@ the app-shell decomposition (#958). Still no self-merge.
   push would be rejected.
 - **Carve-out:** anything touching `cloudbuild*.yaml` / `oc-build-matrix.yaml` /
   `Dockerfile.base` / `entrypoint.sh` goes via branch + PR — those auto-fire a
-  prod base-image rebuild + Release CI, so a direct push is an unreviewed prod
-  mutation. If unsure, PR.
+  base-image build + TEST release, so a direct push is an unreviewed deploy
+  mutation. Production still requires a version tag. If unsure, PR.
 
 ## Git hygiene
 
