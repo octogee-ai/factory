@@ -3033,6 +3033,29 @@ async function readRolloutCurrentConfig(
   return { gateway, artifact };
 }
 
+async function readRolloutCurrentConfigOrRespond(
+  db: Firestore,
+  gatewayId: string,
+  res: Response,
+): Promise<NonNullable<Awaited<ReturnType<typeof readRolloutCurrentConfig>>> | null> {
+  try {
+    const current = await readRolloutCurrentConfig(db, gatewayId);
+    if (current) return current;
+    res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId });
+    return null;
+  } catch (error) {
+    if (!(error instanceof ReleaseArtifactSchemaUnsupportedError)) throw error;
+    res.status(409).json({
+      error: "release artifact schema is unsupported",
+      code: error.code,
+      gatewayId: error.gatewayId,
+      release: error.release,
+      reason: error.reason,
+    });
+    return null;
+  }
+}
+
 function buildDurableGatewayPatch(args: {
   gatewayId: string;
   current: GatewayMutableConfig;
@@ -5201,28 +5224,8 @@ router.post(
           return;
         }
 
-        let current: Awaited<ReturnType<typeof readRolloutCurrentConfig>>;
-        try {
-          current = await readRolloutCurrentConfig(db, id);
-        } catch (error) {
-          if (error instanceof ReleaseArtifactSchemaUnsupportedError) {
-            res.status(409).json({
-              error: "release artifact schema is unsupported",
-              code: error.code,
-              gatewayId: error.gatewayId,
-              release: error.release,
-              reason: error.reason,
-            });
-            return;
-          }
-          throw error;
-        }
-        if (!current) {
-          res
-            .status(404)
-            .json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
-          return;
-        }
+        const current = await readRolloutCurrentConfigOrRespond(db, id, res);
+        if (!current) return;
         const rolloutGateway = current.gateway;
         if (rolloutGateway?.desiredStatus === "retired") {
           res.status(409).json({

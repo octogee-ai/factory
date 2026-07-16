@@ -2085,6 +2085,27 @@ async function readRolloutCurrentConfig(db, gatewayId) {
     const artifact = await readAndUpgradeReleaseArtifact(db, gatewayId, gateway.latestRelease);
     return { gateway, artifact };
 }
+async function readRolloutCurrentConfigOrRespond(db, gatewayId, res) {
+    try {
+        const current = await readRolloutCurrentConfig(db, gatewayId);
+        if (current)
+            return current;
+        res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId });
+        return null;
+    }
+    catch (error) {
+        if (!(error instanceof ReleaseArtifactSchemaUnsupportedError))
+            throw error;
+        res.status(409).json({
+            error: "release artifact schema is unsupported",
+            code: error.code,
+            gatewayId: error.gatewayId,
+            release: error.release,
+            reason: error.reason,
+        });
+        return null;
+    }
+}
 function buildDurableGatewayPatch(args) {
     const artifactFields = ["imageRepository", "imageTag"].filter((field) => Object.prototype.hasOwnProperty.call(args.body, field));
     if (artifactFields.length > 0) {
@@ -3911,29 +3932,9 @@ export function addAdminFleetRoutes(router, deps) {
                 });
                 return;
             }
-            let current;
-            try {
-                current = await readRolloutCurrentConfig(db, id);
-            }
-            catch (error) {
-                if (error instanceof ReleaseArtifactSchemaUnsupportedError) {
-                    res.status(409).json({
-                        error: "release artifact schema is unsupported",
-                        code: error.code,
-                        gatewayId: error.gatewayId,
-                        release: error.release,
-                        reason: error.reason,
-                    });
-                    return;
-                }
-                throw error;
-            }
-            if (!current) {
-                res
-                    .status(404)
-                    .json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
+            const current = await readRolloutCurrentConfigOrRespond(db, id, res);
+            if (!current)
                 return;
-            }
             const rolloutGateway = current.gateway;
             if (rolloutGateway?.desiredStatus === "retired") {
                 res.status(409).json({
