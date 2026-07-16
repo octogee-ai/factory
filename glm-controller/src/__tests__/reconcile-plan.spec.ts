@@ -176,7 +176,25 @@ describe("buildInstancesMap", () => {
     const map = buildInstancesMap([
       mkDesired({ gatewayId: "bender", profile: "operator", ownerUid: "uid-chris" }),
     ]);
-    expect(map.bender.operatorAccess).toMatchObject({ shellsEnabled: true });
+    expect(map.bender.operatorAccess).toMatchObject({
+      shellsEnabled: true,
+      controlUiEnabled: true,
+    });
+  });
+
+  it("defaults a missing legacy Control UI flag on without changing the persisted shell entitlement", () => {
+    const map = buildInstancesMap([
+      mkDesired({
+        gatewayId: "hobby",
+        profile: "operator",
+        ownerUid: "uid-hobby",
+        operatorAccess: { shellsEnabled: false },
+      }),
+    ]);
+    expect(map.hobby.operatorAccess).toMatchObject({
+      shellsEnabled: false,
+      controlUiEnabled: true,
+    });
   });
 
   it("enables runtime access for an owned builder gateway without Operator Workload Identity", () => {

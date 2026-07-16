@@ -121,7 +121,8 @@ export interface OperatorGatewayReservationRequestResponse {
     reservation: OperatorGatewayReservationRequest | null;
 }
 export declare const OPERATOR_GATEWAY_LOCKED_ACCESS: OperatorGatewayAccessSpec;
-export declare function defaultOperatorGatewayAccess(ownerUid: string | null | undefined): OperatorGatewayAccessSpec;
+export declare function defaultOperatorGatewayAccess(ownerUid: string | null | undefined, shellsEnabled?: boolean): OperatorGatewayAccessSpec;
+export declare function resolveOperatorGatewayAccess(ownerUid: string | null | undefined, operatorAccess: OperatorGatewayAccessSpec | null | undefined): OperatorGatewayAccessSpec;
 export declare const OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX = "octogee-gw-";
 export declare const GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME = "octogee-gateway";
 export declare const GATEWAY_ID_MAX_LENGTH = 32;

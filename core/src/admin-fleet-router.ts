@@ -33,6 +33,8 @@ import {
   type OperatorGatewayReservationSpec,
   type OperatorGatewayReservationRequest,
 } from "@octogee/shared/types/glm";
+import { resolveBuilderTier } from "@octogee/shared/types/billing";
+import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
   GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
@@ -3361,6 +3363,7 @@ async function resolveDedicatedGatewayOwner(opts: {
 function operatorGatewayInitialReleaseFromReservation(opts: {
   body: FulfillOperatorReservationBody;
   reservation: FulfillableOperatorReservation;
+  shellsEnabled: boolean;
   createdBy: string;
   now: number;
 }): InitialGatewayReleaseArgs {
@@ -3384,7 +3387,10 @@ function operatorGatewayInitialReleaseFromReservation(opts: {
       gatewayContainerSecurityContext: null,
       serviceAccountName: operatorGatewayServiceAccountName(opts.body.gatewayId),
       serviceAccount: OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
-      operatorAccess: defaultOperatorGatewayAccess(opts.reservation.uid),
+      operatorAccess: defaultOperatorGatewayAccess(
+        opts.reservation.uid,
+        opts.shellsEnabled,
+      ),
       ownerUid: opts.reservation.uid,
       coOwnerUids: [],
       builderSlug: opts.reservation.builderSlug,
@@ -4506,6 +4512,12 @@ router.post(
           builderSlug: reservation.ok.builderSlug,
           source: "operator-gateway-reservation",
         };
+        const builderTier = resolveBuilderTier(
+          userSnap.data() as Record<string, unknown>,
+        );
+        const shellsEnabled = builderTier === null
+          ? true
+          : BUILDER_TIERS[builderTier].builderShell;
         const reservationUpdate: Partial<OperatorGatewayReservationRequest> = {
           status: "provisioning",
           gatewayId: body.gatewayId,
@@ -4517,6 +4529,7 @@ router.post(
         const initial = operatorGatewayInitialReleaseFromReservation({
           body,
           reservation: reservation.ok,
+          shellsEnabled,
           createdBy,
           now,
         });
@@ -4537,6 +4550,16 @@ router.post(
               if (!currentUserSnap.exists) {
                 throw new InitialGatewayReleaseRequestError(404, {
                   error: ERR_OWNER_USER_NOT_FOUND,
+                  uid,
+                });
+              }
+              if (
+                resolveBuilderTier(
+                  currentUserSnap.data() as Record<string, unknown>,
+                ) !== builderTier
+              ) {
+                throw new InitialGatewayReleaseRequestError(409, {
+                  error: "builder subscription changed during fulfillment",
                   uid,
                 });
               }

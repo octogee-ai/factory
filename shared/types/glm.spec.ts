@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   defaultOperatorGatewayAccess,
   deriveGatewayIdentity,
+  OPERATOR_GATEWAY_LOCKED_ACCESS,
   isValidGatewayId,
   isValidNewGatewayId,
   operatorGatewayServiceAccountName,
@@ -135,15 +136,19 @@ describe("gateway class/profile resolution", () => {
 });
 
 describe("defaultOperatorGatewayAccess", () => {
-  it("grants shells to an owned runtime gateway and locks an un-owned one", () => {
-    expect(defaultOperatorGatewayAccess("uid-chris")).toMatchObject({ shellsEnabled: true });
-    expect(defaultOperatorGatewayAccess(null)).toMatchObject({ shellsEnabled: false });
-    expect(defaultOperatorGatewayAccess(undefined)).toMatchObject({ shellsEnabled: false });
+  it("grants shells and Control UI to an owned runtime gateway and locks an un-owned one", () => {
+    expect(defaultOperatorGatewayAccess("uid-chris")).toEqual({
+      shellsEnabled: true,
+      controlUiEnabled: true,
+      reason: "owned-runtime-gateway",
+    });
+    expect(defaultOperatorGatewayAccess(null)).toEqual(OPERATOR_GATEWAY_LOCKED_ACCESS);
+    expect(defaultOperatorGatewayAccess(undefined)).toEqual(OPERATOR_GATEWAY_LOCKED_ACCESS);
   });
 });
 
 describe("isGatewayClassControlUiAccessEnabled", () => {
-  it("requires an isolated class plus shell and Control UI entitlements", () => {
+  it("requires an isolated class and honors an explicit Control UI disable independently of shells", () => {
     expect(isGatewayClassControlUiAccessEnabled("builder", {
       shellsEnabled: true,
       controlUiEnabled: true,
@@ -159,7 +164,10 @@ describe("isGatewayClassControlUiAccessEnabled", () => {
     expect(isGatewayClassControlUiAccessEnabled("builder", {
       shellsEnabled: false,
       controlUiEnabled: true,
-    })).toBe(false);
+    })).toBe(true);
+    expect(isGatewayClassControlUiAccessEnabled("builder", {
+      shellsEnabled: false,
+    })).toBe(true);
     expect(isGatewayClassControlUiAccessEnabled("operator", {
       shellsEnabled: true,
       controlUiEnabled: false,

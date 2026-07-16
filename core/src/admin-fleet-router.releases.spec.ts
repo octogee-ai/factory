@@ -472,7 +472,10 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
         status: "requested",
         billingStatus: "active",
       },
-      "users/uid-bender": { username: "bender" },
+      "users/uid-bender": {
+        username: "bender",
+        builderSubscription: { tier: "pro", status: "active" },
+      },
     });
 
     await request(app)
@@ -486,12 +489,45 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
       gatewayClass: "operator",
       ownerUid: "uid-bender",
       desiredStatus: "running",
+      operatorAccess: {
+        shellsEnabled: true,
+        controlUiEnabled: true,
+        reason: "owned-runtime-gateway",
+      },
     });
     expect(store.get(`gateways/bender/${GATEWAY_RELEASES_SUBCOLLECTION}/1`)?.payload).toEqual({
       imageRepository: REPO,
       imageTag: "abc1234",
     });
     expect(store.get(`${GLM_GATEWAYS_COLLECTION}/bender`)).toBeUndefined();
+  });
+
+  it("keeps Dashboard enabled while withholding Builder Shell from Builder Hobby", async () => {
+    const { app, store } = mkApp({
+      "operatorGatewayReservations/uid-hobby": {
+        uid: "uid-hobby",
+        builderSlug: "hobby",
+        requestedSizingTier: "micro",
+        requestedAt: 1,
+        status: "requested",
+        billingStatus: "active",
+      },
+      "users/uid-hobby": {
+        username: "hobby",
+        builderSubscription: { tier: "hobby", status: "active" },
+      },
+    });
+
+    await request(app)
+      .post("/operator-gateway-reservations/uid-hobby/fulfill")
+      .send({ gatewayId: "hobby", imageRepository: REPO, imageTag: "abc1234" })
+      .expect(202);
+
+    expect(store.get("gateways/hobby")?.operatorAccess).toEqual({
+      shellsEnabled: false,
+      controlUiEnabled: true,
+      reason: "owned-runtime-gateway",
+    });
   });
 
   it("preserves the reservation when auth-secret provisioning fails", async () => {

@@ -176,18 +176,31 @@ export interface OperatorGatewayReservationRequestResponse {
 
 export const OPERATOR_GATEWAY_LOCKED_ACCESS: OperatorGatewayAccessSpec = {
   shellsEnabled: false,
+  controlUiEnabled: false,
   reason: "runtime-trust-boundary-not-provisioned",
 };
 
-// A builder/operator gateway with a Builder owner IS a provisioned runtime
-// boundary (exec on, owner-only shell auth in gateway-edge), so it can get
-// BuilderShell. Un-owned runtime gateways stay locked.
 export function defaultOperatorGatewayAccess(
   ownerUid: string | null | undefined,
+  shellsEnabled = true,
 ): OperatorGatewayAccessSpec {
   return ownerUid
-    ? { shellsEnabled: true, reason: "owned-runtime-gateway" }
+    ? {
+      shellsEnabled,
+      controlUiEnabled: true,
+      reason: "owned-runtime-gateway",
+    }
     : OPERATOR_GATEWAY_LOCKED_ACCESS;
+}
+
+export function resolveOperatorGatewayAccess(
+  ownerUid: string | null | undefined,
+  operatorAccess: OperatorGatewayAccessSpec | null | undefined,
+): OperatorGatewayAccessSpec {
+  return {
+    ...defaultOperatorGatewayAccess(ownerUid),
+    ...(operatorAccess ?? {}),
+  };
 }
 
 export const OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX = "octogee-gw-";
@@ -275,8 +288,7 @@ export function isGatewayClassControlUiAccessEnabled(
 ): boolean {
   return (
     (gatewayClass === "builder" || gatewayClass === "operator") &&
-    operatorAccess?.shellsEnabled === true &&
-    operatorAccess.controlUiEnabled === true
+    operatorAccess?.controlUiEnabled !== false
   );
 }
 

@@ -23,15 +23,23 @@ export const OPERATOR_GATEWAY_RESERVATION_REQUEST_STATUSES = [
 ];
 export const OPERATOR_GATEWAY_LOCKED_ACCESS = {
     shellsEnabled: false,
+    controlUiEnabled: false,
     reason: "runtime-trust-boundary-not-provisioned",
 };
-// A builder/operator gateway with a Builder owner IS a provisioned runtime
-// boundary (exec on, owner-only shell auth in gateway-edge), so it can get
-// BuilderShell. Un-owned runtime gateways stay locked.
-export function defaultOperatorGatewayAccess(ownerUid) {
+export function defaultOperatorGatewayAccess(ownerUid, shellsEnabled = true) {
     return ownerUid
-        ? { shellsEnabled: true, reason: "owned-runtime-gateway" }
+        ? {
+            shellsEnabled,
+            controlUiEnabled: true,
+            reason: "owned-runtime-gateway",
+        }
         : OPERATOR_GATEWAY_LOCKED_ACCESS;
+}
+export function resolveOperatorGatewayAccess(ownerUid, operatorAccess) {
+    return {
+        ...defaultOperatorGatewayAccess(ownerUid),
+        ...(operatorAccess ?? {}),
+    };
 }
 export const OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX = "octogee-gw-";
 export const GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME = "octogee-gateway";
@@ -95,8 +103,7 @@ export function isGatewayClassShellAccessEnabled(gatewayClass, operatorAccess) {
 }
 export function isGatewayClassControlUiAccessEnabled(gatewayClass, operatorAccess) {
     return ((gatewayClass === "builder" || gatewayClass === "operator") &&
-        operatorAccess?.shellsEnabled === true &&
-        operatorAccess.controlUiEnabled === true);
+        operatorAccess?.controlUiEnabled !== false);
 }
 // The user-doc shell state the PWA gates BuilderShell on (gatewayProfile +
 // shellsEnabled). A Builder gets BuilderShell when placed on a shell-enabled

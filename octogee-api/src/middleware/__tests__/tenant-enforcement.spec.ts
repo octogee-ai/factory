@@ -116,6 +116,7 @@ function app(opts: {
   a.post("/internal/openclaw-control/audit", enforcement, handler);
   a.post("/internal/fleet/agent/web-search", enforcement, handler);
   a.post("/internal/fleet/agent/web-extract", enforcement, handler);
+  a.post("/internal/fleet/configured-builder-bootstrap", enforcement, handler);
   a.post("/internal/billing/check-trial-expiry", enforcement, handler);
   a.post("/internal/billing/run-auto-top-ups", enforcement, handler);
   a.post("/internal/activity-pairs/report", enforcement, handler);
@@ -495,6 +496,17 @@ describe("tenant enforcement middleware", () => {
     }))
       .get("/internal/gitea/user-pubkey")
       .query({ slug: "victim" });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("passes configured builder credential bootstrap to its stricter route-level authorization", async () => {
+    const res = await request(app({
+      boundTenant: BENDER_R2,
+      gateways: { bender: configuredBender() },
+    }))
+      .post("/internal/fleet/configured-builder-bootstrap")
+      .send({ gatewayId: "bender", revisionId: "bender-r2", slug: "victim" });
 
     expect(res.status).toBe(200);
   });
