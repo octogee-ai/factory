@@ -48,6 +48,10 @@
       "types": "./dist/builder-activation-lease.d.ts",
       "default": "./dist/builder-activation-lease.js"
     },
+    "./builder-shell-deletion-fence": {
+      "types": "./dist/builder-shell-deletion-fence.d.ts",
+      "default": "./dist/builder-shell-deletion-fence.js"
+    },
     "./byosub-onboarding": {
       "types": "./dist/byosub-onboarding.d.ts",
       "default": "./dist/byosub-onboarding.js"
@@ -71,6 +75,14 @@
     "./config": {
       "types": "./dist/config.d.ts",
       "default": "./dist/config.js"
+    },
+    "./system-config-invariants": {
+      "types": "./dist/system-config-invariants.d.ts",
+      "default": "./dist/system-config-invariants.js"
+    },
+    "./system-config-mutation-lease": {
+      "types": "./dist/system-config-mutation-lease.d.ts",
+      "default": "./dist/system-config-mutation-lease.js"
     },
     "./context-file-convergence": {
       "types": "./dist/context-file-convergence.d.ts",
@@ -119,6 +131,10 @@
     "./gateway-release-projection": {
       "types": "./dist/gateway-release-projection.d.ts",
       "default": "./dist/gateway-release-projection.js"
+    },
+    "./gateway-retirement-claim": {
+      "types": "./dist/gateway-retirement-claim.d.ts",
+      "default": "./dist/gateway-retirement-claim.js"
     },
     "./gateway-live-release": {
       "types": "./dist/gateway-live-release.d.ts",
@@ -329,6 +345,9 @@
       "builder-activation-lease": [
         "dist/builder-activation-lease.d.ts"
       ],
+      "builder-shell-deletion-fence": [
+        "dist/builder-shell-deletion-fence.d.ts"
+      ],
       "byosub-onboarding": [
         "dist/byosub-onboarding.d.ts"
       ],
@@ -346,6 +365,12 @@
       ],
       "config": [
         "dist/config.d.ts"
+      ],
+      "system-config-invariants": [
+        "dist/system-config-invariants.d.ts"
+      ],
+      "system-config-mutation-lease": [
+        "dist/system-config-mutation-lease.d.ts"
       ],
       "context-file-convergence": [
         "dist/context-file-convergence.d.ts"
@@ -382,6 +407,9 @@
       ],
       "gateway-live-release": [
         "dist/gateway-live-release.d.ts"
+      ],
+      "gateway-retirement-claim": [
+        "dist/gateway-retirement-claim.d.ts"
       ],
       "gateway-rpc": [
         "dist/gateway-rpc.d.ts"

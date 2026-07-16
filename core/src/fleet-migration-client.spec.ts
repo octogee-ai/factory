@@ -8,7 +8,11 @@ import {
   MIGRATION_UNMOUNT_TIMEOUT_MS,
   MIGRATION_VERIFY_TIMEOUT_MS,
 } from "@octogee/shared/types/fleet-controller";
-import { createMigrationClient } from "./fleet-migration-client";
+import {
+  createMigrationClient,
+  isDefinitiveConfigRpcRejection,
+  MigrationRpcError,
+} from "./fleet-migration-client";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 
 interface CapturedCall {
@@ -63,6 +67,15 @@ const SNAPSHOT: FleetBrokerUserSnapshot = {
   coachToken: "coach-token",
   coachMmUserId: "mm-coach",
 };
+
+describe("isDefinitiveConfigRpcRejection", () => {
+  it("treats unsupported protocol and typed conflicts as terminal but retries availability", () => {
+    expect(isDefinitiveConfigRpcRejection({ status: 501 })).toBe(true);
+    expect(isDefinitiveConfigRpcRejection({ code: "config-ref-conflict" })).toBe(true);
+    expect(isDefinitiveConfigRpcRejection({ status: 503 })).toBe(false);
+    expect(isDefinitiveConfigRpcRejection({ status: 429 })).toBe(false);
+  });
+});
 
 describe("MigrationClient.quiesce", () => {
   it("POSTs JSON to /quiesce/{gatewayId} signed by the fleet controller private key", async () => {
@@ -122,6 +135,466 @@ describe("MigrationClient.quiesce", () => {
     await expect(
       client.quiesce({ migrationId: "m1", gatewayId: "gw", slug: "alice" }),
     ).rejects.toThrow(/did not drain.*2 still running/i);
+  });
+});
+
+describe("MigrationClient system config fencing", () => {
+  it("mints a fresh bounded mutation envelope for every signed config attempt", async () => {
+    const { calls, fakeFetch } = captureFetch(() => new Response(JSON.stringify({
+      migrationId: "m1",
+      slug: "alice",
+      frozen: true,
+      checkpointCommit: "a".repeat(40),
+      configHash: "b".repeat(64),
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const requestIds = ["request:id.0001", "request:id.0002"];
+    const issuedAt = [1_000, 2_000];
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://source.example.com",
+      fetch: fakeFetch,
+      now: () => issuedAt.shift()!,
+      genRequestId: () => requestIds.shift()!,
+    });
+
+    await client.freezeConfig({ migrationId: "m1", gatewayId: "bender", slug: "alice" });
+    await client.freezeConfig({ migrationId: "m1", gatewayId: "bender", slug: "alice" });
+
+    expect(calls.map((call) => JSON.parse(call.body!))).toEqual([
+      expect.objectContaining({ action: "freeze", issuedAt: 1_000, expiresAt: 31_000, requestId: "request:id.0001" }),
+      expect.objectContaining({ action: "freeze", issuedAt: 2_000, expiresAt: 32_000, requestId: "request:id.0002" }),
+    ]);
+    expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()])
+      .not.toBe(calls[1].headers[SIGNATURE_HEADER.toLowerCase()]);
+  });
+
+  it("surfaces a typed freeze-owner conflict with the durable owner id", async () => {
+    const { fakeFetch } = captureFetch(() => new Response(JSON.stringify({
+      error: "config freeze owned",
+      code: "system-config-freeze-owned",
+      ownerMigrationId: "mig-old-op",
+      slug: "alice",
+    }), { status: 409, headers: { "content-type": "application/json" } }));
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://source.example.com",
+      fetch: fakeFetch,
+    });
+
+    await expect(client.freezeConfig({
+      migrationId: "mig-new-op",
+      gatewayId: "bender",
+      transportId: "bender-r1",
+      slug: "alice",
+    })).rejects.toMatchObject<Partial<MigrationRpcError>>({
+      status: 409,
+      code: "system-config-freeze-owned",
+      ownerMigrationId: "mig-old-op",
+      slug: "alice",
+    });
+  });
+
+  it("marks proof-only reverification explicitly on the signed target request", async () => {
+    const checkpointCommit = "a".repeat(40);
+    const { calls, fakeFetch } = captureFetch(() => new Response(JSON.stringify({
+      migrationId: "m1",
+      slug: "alice",
+      restoredCommit: checkpointCommit,
+      acceptedCommit: "c".repeat(40),
+      configHash: "d".repeat(64),
+      configReady: true,
+      observedRevisionId: "bender-r2",
+      restoreProvenAt: 200,
+      configReadyAt: 201,
+      runtimeConfigHash: "runtime-reloaded",
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://target.example.com",
+      fetch: fakeFetch,
+    });
+
+    await client.reproveConfigRestore({
+      migrationId: "m1",
+      gatewayId: "bender",
+      transportId: "bender-r2",
+      slug: "alice",
+      checkpointCommit,
+    });
+
+    expect(JSON.parse(calls[0].body!)).toMatchObject({
+      action: "restore-proof",
+      proofOnly: true,
+    });
+  });
+
+  it("freezes/checkpoints the source, proves the target ancestor, and unfreezes by revision transport", async () => {
+    const checkpointCommit = "a".repeat(40);
+    const { calls, fakeFetch } = captureFetch((call) => {
+      const common = { migrationId: "m1", slug: "alice" };
+      if (call.url.includes("/config-freeze/")) {
+        return new Response(JSON.stringify({
+          ...common,
+          frozen: true,
+          checkpointCommit,
+          configHash: "b".repeat(64),
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (call.url.includes("/config-restore-proof/")) {
+        return new Response(JSON.stringify({
+          ...common,
+          restoredCommit: checkpointCommit,
+          acceptedCommit: "c".repeat(40),
+          configHash: "d".repeat(64),
+          configReady: true,
+          observedRevisionId: "default-r2",
+          restoreProvenAt: 100,
+          configReadyAt: 101,
+          runtimeConfigHash: "runtime-after",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ ...common, unfrozen: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: (id) => `https://${id}.example.com`,
+      fetch: fakeFetch,
+    });
+
+    const checkpoint = await client.freezeConfig({
+      migrationId: "m1",
+      gatewayId: "default",
+      transportId: "default-r1",
+      slug: "alice",
+    });
+    const proof = await client.proveConfigRestore({
+      migrationId: "m1",
+      gatewayId: "default",
+      transportId: "default-r2",
+      slug: "alice",
+      checkpointCommit,
+    });
+    await client.unfreezeConfig({
+      migrationId: "m1",
+      gatewayId: "default",
+      transportId: "default-r1",
+      slug: "alice",
+    });
+
+    expect(checkpoint.checkpointCommit).toBe(checkpointCommit);
+    expect(proof).toMatchObject({ restoredCommit: checkpointCommit, acceptedCommit: "c".repeat(40) });
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://default-r1.example.com/config-freeze/default",
+      "https://default-r2.example.com/config-restore-proof/default",
+      "https://default-r1.example.com/config-unfreeze/default",
+    ]);
+    expect(JSON.parse(calls[1].body!)).toMatchObject({ checkpointCommit });
+    expect(calls.map((call) => JSON.parse(call.body!).action)).toEqual([
+      "freeze",
+      "restore-proof",
+      "unfreeze",
+    ]);
+    for (const call of calls) {
+      expect(call.headers[SIGNATURE_HEADER.toLowerCase()]).toBe(
+        signFleetRequest(PRIVATE_KEY, "m1", call.body!),
+      );
+    }
+  });
+
+  it("rejects a malformed checkpoint response before migration can continue", async () => {
+    const { fakeFetch } = captureFetch(() => new Response(JSON.stringify({
+      migrationId: "m1",
+      slug: "alice",
+      frozen: true,
+      checkpointCommit: "not-a-commit",
+      configHash: "not-a-hash",
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://source.example.com",
+      fetch: fakeFetch,
+    });
+
+    await expect(client.freezeConfig({
+      migrationId: "m1",
+      gatewayId: "default",
+      slug: "alice",
+    })).rejects.toThrow(/malformed config checkpoint/i);
+  });
+
+  it("rejects a checkpoint response bound to another migration or builder", async () => {
+    const { fakeFetch } = captureFetch(() => new Response(JSON.stringify({
+      migrationId: "m-other",
+      slug: "mallory",
+      frozen: true,
+      checkpointCommit: "a".repeat(40),
+      configHash: "b".repeat(64),
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://source.example.com",
+      fetch: fakeFetch,
+    });
+
+    await expect(client.freezeConfig({
+      migrationId: "m1",
+      gatewayId: "default",
+      slug: "alice",
+    })).rejects.toThrow(/response binding/i);
+  });
+
+  it("rejects readiness observed before restore proof or for another target revision", async () => {
+    const { fakeFetch } = captureFetch(() => new Response(JSON.stringify({
+      migrationId: "m1",
+      slug: "alice",
+      restoredCommit: "a".repeat(40),
+      acceptedCommit: "c".repeat(40),
+      configHash: "d".repeat(64),
+      configReady: true,
+      observedRevisionId: "default-r1",
+      restoreProvenAt: 200,
+      configReadyAt: 199,
+      runtimeConfigHash: "runtime-stale",
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://target.example.com",
+      fetch: fakeFetch,
+    });
+
+    await expect(client.proveConfigRestore({
+      migrationId: "m1",
+      gatewayId: "default",
+      transportId: "default-r2",
+      slug: "alice",
+      checkpointCommit: "a".repeat(40),
+    })).rejects.toThrow(/malformed config restore proof/i);
+  });
+
+  it("rejects an unfreeze response that does not confirm the source is writable", async () => {
+    const { fakeFetch } = captureFetch(() => new Response(JSON.stringify({
+      migrationId: "m1",
+      slug: "alice",
+      unfrozen: false,
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://source.example.com",
+      fetch: fakeFetch,
+    });
+
+    await expect(client.unfreezeConfig({
+      migrationId: "m1",
+      gatewayId: "default",
+      slug: "alice",
+    })).rejects.toThrow(/unfreeze was not confirmed/i);
+  });
+});
+
+describe("MigrationClient protocol-v2 config control", () => {
+  const common = {
+    migrationId: "roll-config-roll-1",
+    gatewayId: "bender",
+    slug: "alice",
+    sourceRevisionId: "bender-r1",
+    targetRevisionId: "bender-r2",
+  };
+  const checkpointCommit = "1".repeat(40);
+  const configHash = "a".repeat(64);
+  const freezeObject = "2".repeat(40);
+  const candidateCommit = "3".repeat(40);
+  const candidateHash = "b".repeat(64);
+  const retirementObject = "4".repeat(40);
+
+  it("signs all six exact v2 actions with both revision bindings", async () => {
+    const { calls, fakeFetch } = captureFetch((call) => {
+      const request = JSON.parse(call.body!);
+      const binding = {
+        migrationId: common.migrationId,
+        slug: common.slug,
+        sourceRevisionId: common.sourceRevisionId,
+        targetRevisionId: common.targetRevisionId,
+      };
+      const responses: Record<string, object> = {
+        "freeze-v2": {
+          ...binding,
+          frozen: true,
+          checkpointCommit,
+          configHash,
+          freezeRef: `refs/octogee/system-config/freeze/${common.sourceRevisionId}`,
+          freezeObject,
+        },
+        "candidate-proof": {
+          ...binding,
+          checkpointCommit,
+          candidateCommit,
+          candidateHash,
+          candidateRef: `refs/octogee/system-config/candidate/${common.targetRevisionId}`,
+          freezeObject,
+          runtimeConfigHash: "runtime-hash",
+          observedRevisionId: common.targetRevisionId,
+          targetStartedAt: 100,
+          imageTag: "image-1",
+          buildSha: "build-1",
+          openclawVersion: "oc-1",
+          configReady: true,
+          provenAt: 101,
+        },
+        "promote-candidate": { ...binding, promoted: true, promotedCommit: candidateCommit },
+        "abort-v2": { ...binding, aborted: true },
+        "finalize-v2": { ...binding, finalized: true },
+        "retire-v2": {
+          ...binding,
+          retired: true,
+          retirementRef: `refs/octogee/system-config/retired/${common.sourceRevisionId}`,
+          retirementObject,
+        },
+      };
+      return new Response(JSON.stringify(responses[request.action]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: (id) => `https://${id}.example.com`,
+      fetch: fakeFetch,
+    });
+
+    await client.freezeConfigV2({ ...common, transportId: common.sourceRevisionId });
+    await client.proveConfigCandidate({
+      ...common,
+      transportId: common.targetRevisionId,
+      checkpointCommit,
+      freezeObject,
+    });
+    await client.promoteConfigCandidate({
+      ...common,
+      transportId: common.targetRevisionId,
+      checkpointCommit,
+      candidateCommit,
+      candidateHash,
+      freezeObject,
+    });
+    await client.abortConfigV2({
+      ...common,
+      transportId: common.sourceRevisionId,
+      checkpointCommit,
+      candidateCommit,
+      freezeObject,
+    });
+    await client.finalizeConfigV2({
+      ...common,
+      transportId: common.targetRevisionId,
+      checkpointCommit,
+      candidateCommit,
+      candidateHash,
+      freezeObject,
+    });
+    await client.retireConfigV2({
+      ...common,
+      transportId: common.sourceRevisionId,
+      checkpointCommit,
+      freezeObject,
+    });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://bender-r1.example.com/config-freeze-v2/bender",
+      "https://bender-r2.example.com/config-candidate-proof/bender",
+      "https://bender-r2.example.com/config-promote-candidate/bender",
+      "https://bender-r1.example.com/config-abort-v2/bender",
+      "https://bender-r2.example.com/config-finalize-v2/bender",
+      "https://bender-r1.example.com/config-retire-v2/bender",
+    ]);
+    expect(calls.map((call) => JSON.parse(call.body!).action)).toEqual([
+      "freeze-v2",
+      "candidate-proof",
+      "promote-candidate",
+      "abort-v2",
+      "finalize-v2",
+      "retire-v2",
+    ]);
+    for (const call of calls) {
+      const request = JSON.parse(call.body!);
+      expect(request).toMatchObject({
+        migrationId: common.migrationId,
+        slug: common.slug,
+        sourceRevisionId: common.sourceRevisionId,
+        targetRevisionId: common.targetRevisionId,
+      });
+      expect(call.headers[SIGNATURE_HEADER.toLowerCase()]).toBe(
+        signFleetRequest(PRIVATE_KEY, common.migrationId, call.body!),
+      );
+    }
+  });
+
+  it("requests recovery-only retirement evidence without authorizing publication", async () => {
+    const { calls, fakeFetch } = captureFetch(() => new Response(JSON.stringify({
+      migrationId: common.migrationId,
+      slug: common.slug,
+      sourceRevisionId: common.sourceRevisionId,
+      targetRevisionId: common.targetRevisionId,
+      retired: true,
+      retirementRef: `refs/octogee/system-config/retired/${common.sourceRevisionId}`,
+      retirementObject,
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: (id) => `https://${id}.example.com`,
+      fetch: fakeFetch,
+    });
+
+    await client.recoverRetiredConfigV2({
+      ...common,
+      transportId: common.sourceRevisionId,
+      checkpointCommit,
+      freezeObject,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://bender-r1.example.com/config-retire-v2/bender");
+    expect(JSON.parse(calls[0].body!)).toMatchObject({
+      action: "retire-v2",
+      recoverOnly: true,
+      checkpointCommit,
+      freezeObject,
+    });
+  });
+
+  it("rejects a candidate proof observed from another target process", async () => {
+    const { fakeFetch } = captureFetch(() => new Response(JSON.stringify({
+      migrationId: common.migrationId,
+      slug: common.slug,
+      sourceRevisionId: common.sourceRevisionId,
+      targetRevisionId: common.targetRevisionId,
+      checkpointCommit,
+      candidateCommit,
+      candidateHash,
+      candidateRef: `refs/octogee/system-config/candidate/${common.targetRevisionId}`,
+      freezeObject,
+      runtimeConfigHash: "runtime-hash",
+      observedRevisionId: "bender-r9",
+      targetStartedAt: 100,
+      imageTag: "image-1",
+      buildSha: "build-1",
+      openclawVersion: "oc-1",
+      configReady: true,
+      provenAt: 101,
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://target.example.com",
+      fetch: fakeFetch,
+    });
+
+    await expect(client.proveConfigCandidate({
+      ...common,
+      checkpointCommit,
+      freezeObject,
+    })).rejects.toThrow(/candidate proof/i);
   });
 });
 

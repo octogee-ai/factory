@@ -223,7 +223,10 @@ function resolveGatewayAuth(opts) {
     return fromFile ? { token: fromFile } : {};
 }
 function readTokenFromOpenClawJson(configPath) {
-    const resolved = configPath ?? path.join(os.homedir(), ".openclaw", "openclaw.json");
+    const activeConfigPath = process.env.OPENCLAW_CONFIG_PATH?.trim();
+    const resolved = configPath
+        ?? activeConfigPath
+        ?? path.join(os.homedir(), ".openclaw", "openclaw.json");
     try {
         const raw = fs.readFileSync(resolved, "utf8");
         const parsed = JSON.parse(raw);

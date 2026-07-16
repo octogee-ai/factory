@@ -355,6 +355,7 @@ export interface Operation {
   // steps/error/classification (the live `steps` field resets on retry). Successful
   // completions append nothing.
   attemptHistory?: OperationAttemptRecord[];
+  output?: Record<string, unknown>;
 }
 
 export interface OperationAttemptRecord {

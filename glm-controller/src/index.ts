@@ -11,6 +11,7 @@ import {
   GLM_OPERATIONS_COLLECTION,
   deriveGatewayIdentity,
   operatorGatewayServiceAccountName,
+  resolveGatewayClass,
   type GatewayClass,
   type GatewayProfile,
   type Operation,
@@ -52,6 +53,7 @@ import {
   type GatewayRuntimeRoot,
   type ConvergeEmptyDeps,
 } from "./converge-empty.js";
+import { commitRollTrafficFlipAtomic } from "./roll-traffic-flip.js";
 import {
   DurableRootDirtyTracker,
   isDurableRootConfigDoc,
@@ -68,8 +70,11 @@ import {
   isGatewayLegacyBackfill,
   isRevisionRealizationDoc,
   revisionIdForRelease,
+  GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
+  type AssignmentDoc,
   W9_GATEWAY_EDGE_IMAGE_REPOSITORY,
   type GatewayDoc,
+  type GatewayRollSystemConfigState,
   type ReleasePayload,
   type RevisionRealizationDoc,
 } from "@octogee/shared/types/gateway-releases";
@@ -84,7 +89,10 @@ import {
   createGatewayModelKeySourceIssuer,
   type GatewayModelKeySourceIssuer,
 } from "./model-key-source-issuer.js";
-import { guardedCreateRevisionDoc } from "./revision-creation.js";
+import {
+  guardedCreateRevisionDoc,
+  guardedPatchGatewayRoot,
+} from "./revision-creation.js";
 import {
   spawnKubectl,
   syncEdgeIngress,
@@ -102,11 +110,28 @@ import {
   type OperationRef,
   type PendingOperationRef,
 } from "./operation-queue.js";
-import { buildOperationCompletionUpdate } from "./operation-retry.js";
+import {
+  buildOperationCompletionUpdate,
+  shouldPersistClaimedOperationCompletion,
+  supersededRollMigrationAction,
+} from "./operation-retry.js";
 import { completeOperatorReservationAfterMigration } from "./operator-reservation-completion.js";
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
+import type {
+  MigrationRollFence,
+  MigrationRunnerDeps,
+} from "@octogee/core/fleet-migration-runner";
+import {
+  attestGatewayRetirementAfterWakeAtomic,
+  bindGatewayRetirementConfigCheckpointAtomic,
+  bindGatewayRetirementConfigTerminalAtomic,
+  verifyGatewayRetirementConfigCheckpointAtomic,
+  verifyGatewayRetirementConfigTerminalAtomic,
+  verifyGatewayRetirementClaimAtomic,
+} from "@octogee/core/gateway-retirement-claim";
 import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
+import { createRetirementConfigFenceManager } from "./retirement-config-fence.js";
 import { createRetireRevisionHandler } from "./handlers/retire-revision.js";
 import { createGatewayServiceAccountTeardown } from "./lib/gateway-gsa.js";
 import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
@@ -125,10 +150,6 @@ import { loadCustomerCleanupContext } from "./lib/customer-ops/cleanup-context.j
 import { createGiteaCleanupClient } from "./lib/customer-ops/gitea.js";
 import { createMmCleanupClient } from "./lib/customer-ops/mattermost.js";
 import { createUnmountFromGateway } from "./lib/customer-ops/unmount-gateway.js";
-import {
-  createRevisionMacOpsTokenRevoker,
-  type RevisionMacOpsTokenRevoker,
-} from "./revision-mac-ops-token-revoker.js";
 import { resolveDefaultStorageBucket } from "./gcp-project.js";
 import { signFleetRequest } from "@octogee/core/fleet-signature";
 import {
@@ -136,6 +157,7 @@ import {
   slugFromAssignedUser,
 } from "@octogee/core/assigned-roster";
 import {
+  parseAssignmentDoc,
   readAssignmentDoc,
   readAssignmentDocsForGateway,
   resolvePlacementRevision,
@@ -150,6 +172,7 @@ import {
   GATEWAYS_COLLECTION,
   MIGRATION_UNMOUNT_TIMEOUT_MS,
   SIGNATURE_HEADER,
+  systemConfigMigrationMode,
 } from "@octogee/shared/types/fleet-controller";
 import {
   readGatewayArtifact,
@@ -176,10 +199,18 @@ import { deleteAuthUserTolerantOfMissing } from "@octogee/core/firebase-auth-hel
 import { deleteHostingSitesForCustomer } from "@octogee/core/firebase-hosting";
 import { GoogleAuth } from "google-auth-library";
 import { startHttpServer, startMaintenanceHttpServer } from "./http-server.js";
-import { recordReconcile } from "./metrics.js";
+import { recordConfigRoll, recordReconcile } from "./metrics.js";
 import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
 import { startStuckOpReaper } from "./stuck-op-reaper.js";
+import {
+  assertRecoverableConfigFreezeOwner,
+  assertRecoverableRollCheckpointOwner,
+} from "./config-freeze-recovery.js";
+import {
+  assertMigrationSystemConfigProtocol,
+  servingIsolatedProtocolGaps,
+} from "./system-config-protocol-gate.js";
 import { startHelmRecoverySweeper } from "./helm-recovery-sweeper.js";
 import { resumeOrphanedRunningOps } from "./resume-orphaned-ops.js";
 import {
@@ -294,6 +325,10 @@ const RELEASE_RETENTION_SWEEP_MS = parseNonNegativeInt(
 const HELM_RECOVERY_STALE_MS = parseNonNegativeInt(
   process.env.HELM_RECOVERY_STALE_MS,
   15 * 60 * 1000,
+);
+const RETIREMENT_ATTESTATION_TIMEOUT_MS = parseNonNegativeInt(
+  process.env.RETIREMENT_ATTESTATION_TIMEOUT_MS,
+  10 * 60 * 1000,
 );
 
 // One shared edge ingress carries the api host (/g/<id>/* gateway-local public
@@ -472,7 +507,7 @@ async function publishPlatformGatewayReady(
   // GATEWAY-RELEASES-SPEC cutover step 2). The legacy flat gateways/{id}
   // dual-write is CONTRACTED: it recreated the runtime fields the identity
   // backfill refuses on, so leaving it live made the backfill precondition
-  // unsatisfiable on a real fleet. Preserved fields (startedAt, openclawVersion,
+  // unsatisfiable on a real fleet. Preserved fields (startedAt,
   // mountedCustomers, lastError) are read from — and written back to — the
   // relocated heartbeat sub-doc.
   const rootRef = db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId);
@@ -505,8 +540,6 @@ async function publishPlatformGatewayReady(
       version: versionFromImageTag(input.imageTag),
       internalUrl: gatewayServiceInternalUrl(input.revisionId),
       startedAt: typeof existingHb?.startedAt === "number" ? existingHb.startedAt : input.now,
-      openclawVersion:
-        typeof existingHb?.openclawVersion === "string" ? existingHb.openclawVersion : "unknown",
     };
     if (!Array.isArray(existingHb?.mountedCustomers)) {
       patch.mountedCustomers = [];
@@ -996,40 +1029,40 @@ function rollMigrationSnapshotFromOpDoc(
 // teardown primitives, and the tombstone writer. Deliberately ABSENT: any
 // gateway-scoped teardown (KSA, auth/model-key secrets, GSA, gateways/{id}) —
 // a roll can only ever uninstall a revision's own Helm release.
-function buildRollPassDeps(args: {
+interface BuildRollPassDepsArgs {
   db: Firestore;
+  privateKey: string;
   helm: HelmRunner;
   kubeOps: KubeOps;
   gatewayAliasServiceEnsurer: GatewayAliasServiceEnsurer;
-  revisionMacOpsTokenRevoker: RevisionMacOpsTokenRevoker;
   chartFingerprint?: string;
   prepareGatewayConfig: (config: GatewayRuntimeRoot) => Promise<GatewayRuntimeRoot>;
   log: (msg: string) => void;
-}): RollPassDeps {
-  const {
-    db,
-    helm,
-    kubeOps,
-    gatewayAliasServiceEnsurer,
-    revisionMacOpsTokenRevoker,
-    chartFingerprint,
-    prepareGatewayConfig,
-    log,
-  } = args;
-  const tombstoneWriter = createRevisionTombstoneWriter({
-    db,
-    now: () => Date.now(),
-    log,
-  });
+}
+
+function buildRollRevisionAndMigrationDeps(
+  args: BuildRollPassDepsArgs,
+): Pick<
+  RollPassDeps,
+  | "readGatewayDesiredDocs"
+  | "readReleasePayload"
+  | "readRevisionDoc"
+  | "createRevisionDoc"
+  | "helmUpsertRevision"
+  | "markRevisionHelmApplied"
+  | "helmUninstallRevision"
+  | "deleteRevisionDoc"
+  | "patchRevisionDoc"
+  | "checkRevisionReady"
+  | "patchGatewayDoc"
+  | "commitTrafficFlip"
+  | "readAssignments"
+  | "readRollMigration"
+  | "enqueueRollMigration"
+  | "cancelRollMigrations"
+> {
+  const { db, helm, kubeOps, chartFingerprint } = args;
   return {
-    namespace: NAMESPACE,
-    chartPath: GATEWAY_CHART,
-    valuesFile: GATEWAY_VALUES_FILE,
-    chartFingerprint,
-    prepareGatewayConfig,
-    readinessTimeoutMs: CONVERGE_EMPTY_READINESS_TIMEOUT_MS,
-    sourceForwarderTtlMs: ROLL_SOURCE_FORWARDER_TTL_MS,
-    migrateRetryBackoffMs: ROLL_MIGRATE_RETRY_BACKOFF_MS,
     readGatewayDesiredDocs: async () => {
       const snap = await db.collection(GATEWAYS_COLLECTION).get();
       return snap.docs.flatMap((doc) => {
@@ -1067,10 +1100,6 @@ function buildRollPassDeps(args: {
     helmUninstallRevision: async (revisionId) => {
       await helm.removeInstance({ namespace: NAMESPACE, gatewayId: revisionId });
     },
-    revokeRevisionMacOpsTokens: (input) =>
-      revisionMacOpsTokenRevoker.revokeRevisionMacOpsTokens(input),
-    revokeGatewayLegacyMacOpsTokens: (input) =>
-      revisionMacOpsTokenRevoker.revokeGatewayLegacyMacOpsTokens(input),
     deleteRevisionDoc: async (revisionId) => {
       await db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId).delete();
     },
@@ -1090,11 +1119,18 @@ function buildRollPassDeps(args: {
       return convergeHeartbeatMatchesImageTag(hb?.version ?? null, expectedImageTag);
     },
     patchGatewayDoc: async (gatewayId, patch) => {
-      await db
-        .collection(GATEWAYS_COLLECTION)
-        .doc(gatewayId)
-        .set({ ...patch, updatedAt: Date.now(), updatedBy: "cowboy" }, { merge: true });
+      await guardedPatchGatewayRoot(
+        db,
+        gatewayId,
+        patch as Record<string, unknown>,
+        {
+          requireRunning: true,
+          updatedAt: Date.now(),
+          updatedBy: "cowboy",
+        },
+      );
     },
+    commitTrafficFlip: (input) => commitRollTrafficFlipAtomic(db, input),
     readAssignments: (gatewayId) => readAssignmentDocsForGateway(db, gatewayId),
     readRollMigration: async ({ uid, gatewayId, rollOperationId }) => {
       const snap = await db
@@ -1104,14 +1140,25 @@ function buildRollPassDeps(args: {
         .get();
       let newest: { createdAt: number; snap: RollMigrationSnapshot } | null = null;
       for (const doc of snap.docs) {
-        const candidate = rollMigrationSnapshotFromOpDoc(doc.data() as Record<string, unknown>, gatewayId, rollOperationId);
+        const candidate = rollMigrationSnapshotFromOpDoc(
+          doc.data() as Record<string, unknown>,
+          gatewayId,
+          rollOperationId,
+        );
         if (!candidate) continue;
         if (newest && newest.createdAt >= candidate.createdAt) continue;
         newest = candidate;
       }
       return newest?.snap ?? null;
     },
-    enqueueRollMigration: async ({ uid, slug, gatewayId, rollOperationId }) => {
+    enqueueRollMigration: async ({
+      uid,
+      slug,
+      gatewayId,
+      rollOperationId,
+      systemConfigMigrationMode,
+      preAcquiredConfigCheckpoint,
+    }) => {
       const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
       await opRef.set(
         buildRollMigrateOpDoc({
@@ -1120,10 +1167,444 @@ function buildRollPassDeps(args: {
           gatewayId,
           rollOperationId,
           createdAt: Date.now(),
+          systemConfigMigrationMode,
+          ...(preAcquiredConfigCheckpoint ? { preAcquiredConfigCheckpoint } : {}),
         }),
       );
       return opRef.id;
     },
+    cancelRollMigrations: async ({ gatewayId, rollOperationId, reason }) => {
+      const snap = await db
+        .collection(GLM_OPERATIONS_COLLECTION)
+        .where("kind", "==", "migrate-customer")
+        .get();
+      const candidates = snap.docs.filter((doc) => {
+        const data = doc.data() as Operation;
+        return data.input?.toGatewayId === gatewayId &&
+          data.input?.source === ROLL_MIGRATE_SOURCE &&
+          data.input?.rollOperationId === rollOperationId;
+      });
+      const stopped = await Promise.all(candidates.map((doc) => db.runTransaction(async (txn) => {
+        const fresh = await txn.get(doc.ref);
+        if (!fresh.exists) return true;
+        const data = fresh.data() as Operation;
+        const input = data.input;
+        if (
+          input?.toGatewayId !== gatewayId ||
+          input?.source !== ROLL_MIGRATE_SOURCE ||
+          input?.rollOperationId !== rollOperationId
+        ) {
+          return true;
+        }
+        const action = supersededRollMigrationAction(data);
+        if (action === "done") return true;
+        if (action === "wait") {
+          txn.update(doc.ref, {
+            cancellationRequestedAt: Date.now(),
+            cancellationReason: reason,
+          });
+          return false;
+        }
+        txn.update(doc.ref, {
+          status: "rolled-back",
+          completedAt: Date.now(),
+          error: `release-roll cancelled: ${reason}`,
+          rolledBack: true,
+          waitingOn: FieldValue.delete(),
+          nextAttemptAt: FieldValue.delete(),
+        });
+        return true;
+      })));
+      return stopped.every(Boolean);
+    },
+  };
+}
+
+function buildRollConfigFreezeOwnerRecovery(
+  args: BuildRollPassDepsArgs,
+): RollPassDeps["recoverConfigFreezeOwner"] {
+  const { db, privateKey, log } = args;
+  return async ({
+    ownerMigrationId,
+    requestedMigrationId,
+    gatewayId,
+    sourceRevisionId,
+    rollOperationId,
+    slug,
+  }) => {
+    const ownerOpId = ownerMigrationId.startsWith("mig-")
+      ? ownerMigrationId.slice(4)
+      : "";
+    if (!ownerOpId) {
+      throw new Error("config freeze owner is not operation-bound");
+    }
+    const [ownerSnap, rootSnap] = await Promise.all([
+      db.collection(GLM_OPERATIONS_COLLECTION).doc(ownerOpId).get(),
+      db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get(),
+    ]);
+    const owner = ownerSnap.exists
+      ? ({ id: ownerSnap.id, ...ownerSnap.data() } as Operation)
+      : null;
+    assertRecoverableRollCheckpointOwner({
+      ownerMigrationId,
+      slug,
+      sourceGatewayId: gatewayId,
+    }, owner);
+    const root = rootSnap.data();
+    const checkpoint = isDurableRootConfigDoc(root, gatewayId)
+      ? root.roll?.systemConfigCheckpoint
+      : null;
+    if (
+      root?.roll?.operationId !== rollOperationId ||
+      checkpoint?.migrationId !== requestedMigrationId ||
+      checkpoint.sourceRevisionId !== sourceRevisionId ||
+      checkpoint.builderSlug !== slug ||
+      checkpoint.sourceUnfrozenAt !== null
+    ) {
+      throw new Error("config checkpoint recovery roll lease is no longer current");
+    }
+    const sourceUrl = await resolveGatewayUrlFromFirestore(db, sourceRevisionId);
+    const client = createMigrationClient({
+      privateKey,
+      resolveGatewayUrl: () => sourceUrl,
+      log,
+    });
+    await client.unfreezeConfig({
+      migrationId: ownerMigrationId,
+      gatewayId,
+      transportId: sourceRevisionId,
+      slug,
+    });
+    return true;
+  };
+}
+
+function buildRollConfigProofDeps(
+  args: BuildRollPassDepsArgs,
+): Pick<
+  RollPassDeps,
+  | "proveConfigRestore"
+  | "reproveConfigRestore"
+  | "releaseConfigFreeze"
+  | "markConfigFreezeReleased"
+> {
+  const { db, privateKey, log } = args;
+  return {
+    proveConfigRestore: async ({
+      gatewayId,
+      rollOperationId,
+      sourceRevisionId,
+      targetRevisionId,
+      migrationId,
+      slug,
+      checkpointCommit,
+    }) => {
+      try {
+        const targetUrl = await resolveGatewayUrlFromFirestore(db, targetRevisionId);
+        const client = createMigrationClient({
+          privateKey,
+          resolveGatewayUrl: () => targetUrl,
+          log,
+        });
+        const proof = await client.proveConfigRestore({
+          migrationId,
+          gatewayId,
+          transportId: targetRevisionId,
+          slug,
+          checkpointCommit,
+        });
+        if (proof.restoredCommit !== checkpointCommit) {
+          throw new Error(
+            `target ${targetRevisionId} restored ${proof.restoredCommit} instead of ${checkpointCommit}`,
+          );
+        }
+        const observedAt = Date.now();
+        await db.runTransaction(async (txn) => {
+          const rootRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+          const rootSnap = await txn.get(rootRef);
+          const root = rootSnap.data();
+          const checkpoint = isDurableRootConfigDoc(root, gatewayId)
+            ? root.roll?.systemConfigCheckpoint
+            : null;
+          if (
+            root?.roll?.operationId !== rollOperationId ||
+            root.roll.targetRevisionId !== targetRevisionId ||
+            checkpoint?.migrationId !== migrationId ||
+            checkpoint.sourceRevisionId !== sourceRevisionId ||
+            checkpoint.checkpointCommit !== checkpointCommit ||
+            checkpoint.sourceUnfrozenAt !== null
+          ) {
+            throw new Error(
+              `target ${targetRevisionId} config proof no longer matches the active roll`,
+            );
+          }
+          txn.set(db.collection(GLM_GATEWAYS_COLLECTION).doc(targetRevisionId), {
+            systemConfig: {
+              migrationId,
+              builderSlug: slug,
+              sourceRevisionId,
+              checkpointCommit,
+              restoredCommit: proof.restoredCommit,
+              acceptedCommit: proof.acceptedCommit,
+              configHash: proof.configHash,
+              configReady: proof.configReady,
+              observedRevisionId: proof.observedRevisionId,
+              restoreProvenAt: proof.restoreProvenAt,
+              configReadyAt: proof.configReadyAt,
+              runtimeConfigHash: proof.runtimeConfigHash,
+              observedAt,
+            },
+          }, { merge: true });
+        });
+        recordConfigRoll({
+          stage: "proof",
+          result: "ok",
+          gatewayId,
+          revisionId: targetRevisionId,
+        });
+      } catch (error) {
+        recordConfigRoll({
+          stage: "proof",
+          result: "fail",
+          gatewayId,
+          revisionId: targetRevisionId,
+        });
+        throw error;
+      }
+    },
+    reproveConfigRestore: async ({ gatewayId, targetRevisionId, priorProof }) => {
+      try {
+        const targetUrl = await resolveGatewayUrlFromFirestore(db, targetRevisionId);
+        const client = createMigrationClient({
+          privateKey,
+          resolveGatewayUrl: () => targetUrl,
+          log,
+        });
+        const proof = await client.reproveConfigRestore({
+          migrationId: priorProof.migrationId,
+          gatewayId,
+          transportId: targetRevisionId,
+          slug: priorProof.builderSlug,
+          checkpointCommit: priorProof.checkpointCommit,
+        });
+        if (
+          proof.restoredCommit !== priorProof.checkpointCommit ||
+          proof.acceptedCommit !== priorProof.acceptedCommit ||
+          proof.configHash !== priorProof.configHash
+        ) {
+          throw new Error(
+            `target ${targetRevisionId} changed durable config before restart reproof`,
+          );
+        }
+        const observedAt = Date.now();
+        await db.collection(GLM_GATEWAYS_COLLECTION).doc(targetRevisionId).set({
+          systemConfig: {
+            ...priorProof,
+            restoreProvenAt: proof.restoreProvenAt,
+            configReadyAt: proof.configReadyAt,
+            runtimeConfigHash: proof.runtimeConfigHash,
+            observedAt,
+          },
+        }, { merge: true });
+        recordConfigRoll({
+          stage: "proof",
+          result: "ok",
+          gatewayId,
+          revisionId: targetRevisionId,
+        });
+      } catch (error) {
+        recordConfigRoll({
+          stage: "proof",
+          result: "fail",
+          gatewayId,
+          revisionId: targetRevisionId,
+        });
+        throw error;
+      }
+    },
+    releaseConfigFreeze: async ({ gatewayId, revisionId, migrationId, slug }) => {
+      const sourceUrl = await resolveGatewayUrlFromFirestore(db, revisionId);
+      const client = createMigrationClient({
+        privateKey,
+        resolveGatewayUrl: () => sourceUrl,
+        log,
+      });
+      await client.unfreezeConfig({
+        migrationId,
+        gatewayId,
+        transportId: revisionId,
+        slug,
+      });
+    },
+    markConfigFreezeReleased: async ({
+      gatewayId,
+      rollOperationId,
+      migrationId,
+      releasedAt,
+    }) => {
+      const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+      await db.runTransaction(async (txn) => {
+        const snap = await txn.get(gatewayRef);
+        const gateway = snap.data();
+        if (!isDurableRootConfigDoc(gateway, gatewayId)) {
+          throw new Error(`gateway ${gatewayId} durable root disappeared during config release`);
+        }
+        if (
+          gateway.roll?.operationId !== rollOperationId ||
+          gateway.roll.systemConfigCheckpoint?.migrationId !== migrationId
+        ) {
+          throw new Error(`gateway ${gatewayId} config release no longer matches the active roll`);
+        }
+        txn.update(gatewayRef, {
+          "roll.systemConfigCheckpoint.sourceUnfrozenAt": releasedAt,
+          "roll.updatedAt": releasedAt,
+          updatedAt: releasedAt,
+          updatedBy: "cowboy",
+        });
+      });
+    },
+  };
+}
+
+function buildRollPassDeps(args: BuildRollPassDepsArgs): RollPassDeps {
+  const {
+    db,
+    privateKey,
+    gatewayAliasServiceEnsurer,
+    chartFingerprint,
+    prepareGatewayConfig,
+    log,
+  } = args;
+  const tombstoneWriter = createRevisionTombstoneWriter({
+    db,
+    now: () => Date.now(),
+    log,
+  });
+  return {
+    namespace: NAMESPACE,
+    chartPath: GATEWAY_CHART,
+    valuesFile: GATEWAY_VALUES_FILE,
+    chartFingerprint,
+    prepareGatewayConfig,
+    readinessTimeoutMs: CONVERGE_EMPTY_READINESS_TIMEOUT_MS,
+    sourceForwarderTtlMs: ROLL_SOURCE_FORWARDER_TTL_MS,
+    migrateRetryBackoffMs: ROLL_MIGRATE_RETRY_BACKOFF_MS,
+    ...buildRollRevisionAndMigrationDeps(args),
+    isSystemConfigProtocolFleetReady: () => isFleetConfigProtocolReady(db),
+    checkpointConfigFreeze: async ({ gatewayId, revisionId, migrationId, slug }) => {
+      const sourceUrl = await resolveGatewayUrlFromFirestore(db, revisionId);
+      const client = createMigrationClient({
+        privateKey,
+        resolveGatewayUrl: () => sourceUrl,
+        log,
+      });
+      const checkpoint = await client.freezeConfig({
+        migrationId,
+        gatewayId,
+        transportId: revisionId,
+        slug,
+      });
+      return {
+        checkpointCommit: checkpoint.checkpointCommit,
+        configHash: checkpoint.configHash,
+      };
+    },
+    checkpointConfigFreezeV2: async ({
+      gatewayId,
+      sourceRevisionId,
+      targetRevisionId,
+      migrationId,
+      slug,
+    }) => {
+      const sourceUrl = await resolveGatewayUrlFromFirestore(db, sourceRevisionId);
+      const client = createMigrationClient({
+        privateKey,
+        resolveGatewayUrl: () => sourceUrl,
+        log,
+      });
+      return client.freezeConfigV2({
+        migrationId,
+        gatewayId,
+        transportId: sourceRevisionId,
+        slug,
+        sourceRevisionId,
+        targetRevisionId,
+      });
+    },
+    proveConfigCandidate: async ({ gatewayId, state }) => {
+      const targetUrl = await resolveGatewayUrlFromFirestore(db, state.targetRevisionId);
+      const client = createMigrationClient({
+        privateKey,
+        resolveGatewayUrl: () => targetUrl,
+        log,
+      });
+      return client.proveConfigCandidate({
+        migrationId: state.migrationId,
+        gatewayId,
+        transportId: state.targetRevisionId,
+        slug: state.builderSlug,
+        sourceRevisionId: state.sourceRevisionId,
+        targetRevisionId: state.targetRevisionId,
+        checkpointCommit: state.checkpointCommit,
+        freezeObject: state.freezeObject,
+      });
+    },
+    promoteConfigCandidate: async ({ gatewayId, state }) => {
+      if (!state.candidateCommit || !state.candidateHash) {
+        throw new Error("protocol-v2 promotion state lacks candidate bindings");
+      }
+      const targetUrl = await resolveGatewayUrlFromFirestore(db, state.targetRevisionId);
+      const client = createMigrationClient({ privateKey, resolveGatewayUrl: () => targetUrl, log });
+      await client.promoteConfigCandidate({
+        migrationId: state.migrationId,
+        gatewayId,
+        transportId: state.targetRevisionId,
+        slug: state.builderSlug,
+        sourceRevisionId: state.sourceRevisionId,
+        targetRevisionId: state.targetRevisionId,
+        checkpointCommit: state.checkpointCommit,
+        candidateCommit: state.candidateCommit,
+        candidateHash: state.candidateHash,
+        freezeObject: state.freezeObject,
+      });
+    },
+    abortConfigV2: async ({ gatewayId, state }) => {
+      const sourceUrl = await resolveGatewayUrlFromFirestore(db, state.sourceRevisionId);
+      const client = createMigrationClient({ privateKey, resolveGatewayUrl: () => sourceUrl, log });
+      await client.abortConfigV2({
+        migrationId: state.migrationId,
+        gatewayId,
+        transportId: state.sourceRevisionId,
+        slug: state.builderSlug,
+        sourceRevisionId: state.sourceRevisionId,
+        targetRevisionId: state.targetRevisionId,
+        checkpointCommit: state.checkpointCommit,
+        candidateCommit: state.candidateCommit ?? null,
+        freezeObject: state.freezeObject,
+      });
+    },
+    finalizeConfigV2: async ({ gatewayId, state }) => {
+      if (!state.candidateCommit || !state.candidateHash) {
+        throw new Error("protocol-v2 finalize state lacks candidate bindings");
+      }
+      const targetUrl = await resolveGatewayUrlFromFirestore(db, state.targetRevisionId);
+      const client = createMigrationClient({ privateKey, resolveGatewayUrl: () => targetUrl, log });
+      await client.finalizeConfigV2({
+        migrationId: state.migrationId,
+        gatewayId,
+        transportId: state.targetRevisionId,
+        slug: state.builderSlug,
+        sourceRevisionId: state.sourceRevisionId,
+        targetRevisionId: state.targetRevisionId,
+        checkpointCommit: state.checkpointCommit,
+        candidateCommit: state.candidateCommit,
+        candidateHash: state.candidateHash,
+        freezeObject: state.freezeObject,
+      });
+    },
+    recoverConfigFreezeOwner: buildRollConfigFreezeOwnerRecovery(args),
+    ...buildRollConfigProofDeps(args),
+    recordConfigRollMetric: recordConfigRoll,
     hasActiveShell: async (gatewayId) =>
       (await readShellLiveness(db, gatewayId, Date.now())).reallyActive,
     ensurePerGatewayAliasServices: async ({ gatewayId, revisionId }) => {
@@ -2079,7 +2560,18 @@ async function runClaimedOperation(
     steps,
     now: Date.now(),
   });
-  await ref.update(completion);
+  const persisted = await deps.db.runTransaction(async (txn) => {
+    const fresh = await txn.get(ref);
+    if (!fresh.exists) return false;
+    const status = (fresh.data() as Operation | undefined)?.status ?? "missing";
+    if (!shouldPersistClaimedOperationCompletion(status)) return false;
+    txn.update(ref, completion);
+    return true;
+  });
+  if (!persisted) {
+    deps.log(`[glm-controller] op=${op.id} completion discarded because the operation was cancelled`);
+    return;
+  }
 
   if (result.success) {
     try {
@@ -2578,17 +3070,6 @@ async function createControllerRuntime(
     "FLEET_CONTROLLER_PRIVATE_KEY",
     "migrate-customer, deprovision-customer, and operator eviction RPCs require the controller signing key",
   );
-  const revisionMacOpsTokenRevoker = createRevisionMacOpsTokenRevoker(
-    createMmCleanupClient({
-      baseUrl: requireEnv("MM_URL", "revision-scoped Mac ops PAT retirement requires it"),
-      adminToken: requireEnv(
-        "MM_ADMIN_TOKEN",
-        "revision-scoped Mac ops PAT retirement requires it",
-      ),
-      log,
-    }),
-  );
-
   const handlers = await buildHandlers(
     db,
     log,
@@ -2598,7 +3079,6 @@ async function createControllerRuntime(
       syncFleetIngress: handlerSyncFleetIngress,
       privateKey: fleetControllerPrivateKey,
       modelKeySourceIssuer,
-      revisionMacOpsTokenRevoker,
     },
   );
 
@@ -2619,10 +3099,10 @@ async function createControllerRuntime(
     runRollPass(
       buildRollPassDeps({
         db,
+        privateKey: fleetControllerPrivateKey,
         helm,
         kubeOps,
         gatewayAliasServiceEnsurer,
-        revisionMacOpsTokenRevoker,
         chartFingerprint,
         prepareGatewayConfig,
         log,
@@ -2776,6 +3256,205 @@ function createMigrationClientBuilder(
   };
 }
 
+function protocolV2PromotionMatchesFence(
+  configRoll: GatewayRollSystemConfigState | null | undefined,
+  fence: MigrationRollFence,
+): boolean {
+  if (!configRoll) return false;
+  return [
+    configRoll.phase === "promoted",
+    configRoll.migrationId === `roll-config-${fence.rollOperationId}`,
+    configRoll.sourceRevisionId === fence.sourceRevisionId,
+    configRoll.targetRevisionId === fence.targetRevisionId,
+    configRoll.freezeRef === `refs/octogee/system-config/freeze/${fence.sourceRevisionId}`,
+    /^[0-9a-f]{40}$/.test(configRoll.freezeObject),
+    /^[0-9a-f]{40}$/.test(configRoll.checkpointCommit),
+    /^[0-9a-f]{64}$/.test(configRoll.configHash),
+    configRoll.candidateRef ===
+      `refs/octogee/system-config/candidate/${fence.targetRevisionId}`,
+    typeof configRoll.candidateCommit === "string" &&
+      /^[0-9a-f]{40}$/.test(configRoll.candidateCommit),
+    typeof configRoll.candidateHash === "string" &&
+      /^[0-9a-f]{64}$/.test(configRoll.candidateHash),
+    typeof configRoll.runtimeConfigHash === "string" &&
+      /^[0-9a-f]{64}$/.test(configRoll.runtimeConfigHash),
+    configRoll.observedRevisionId === fence.targetRevisionId,
+    typeof configRoll.targetStartedAt === "number",
+    typeof configRoll.imageTag === "string" && configRoll.imageTag.length > 0,
+    typeof configRoll.buildSha === "string" && configRoll.buildSha.length > 0,
+    typeof configRoll.openclawVersion === "string" && configRoll.openclawVersion.length > 0,
+    typeof configRoll.provenAt === "number",
+    configRoll.promotedCommit === configRoll.candidateCommit,
+    typeof configRoll.promotedAt === "number" &&
+      typeof configRoll.provenAt === "number" &&
+      configRoll.promotedAt >= configRoll.provenAt,
+  ].every(Boolean);
+}
+
+function assertCurrentMigrationRollFence(
+  rootValue: unknown,
+  assignment: AssignmentDoc | null,
+  fence: MigrationRollFence,
+): void {
+  const { root, roll } = currentMigrationRoll(rootValue, fence);
+  assertProtocolV2Promotion(roll, fence);
+  assertSourceConfigCheckpoint(roll, fence);
+  assertSourceAssignment(root, assignment, fence);
+}
+
+function currentMigrationRoll(
+  rootValue: unknown,
+  fence: MigrationRollFence,
+): { root: GatewayRuntimeRoot; roll: NonNullable<GatewayRuntimeRoot["roll"]> } {
+  if (!isDurableRootConfigDoc(rootValue, fence.gatewayId)) {
+    throw new Error("stale release-roll fence: gateway root unavailable");
+  }
+  const roll = rootValue.roll;
+  const protocolV2Roll = roll?.systemConfigRoll !== undefined;
+  if (
+    !roll ||
+    (!protocolV2Roll && rootValue.desiredRelease !== fence.targetRelease) ||
+    roll.operationId !== fence.rollOperationId ||
+    roll.targetRevisionId !== fence.targetRevisionId ||
+    roll.toRelease !== fence.targetRelease
+  ) {
+    throw new Error("stale release-roll fence: roll target changed");
+  }
+  return { root: rootValue, roll };
+}
+
+function assertProtocolV2Promotion(
+  roll: NonNullable<GatewayRuntimeRoot["roll"]>,
+  fence: MigrationRollFence,
+): void {
+  if (
+    roll.systemConfigRoll !== undefined &&
+    !protocolV2PromotionMatchesFence(roll.systemConfigRoll, fence)
+  ) {
+    throw new Error("stale release-roll fence: protocol-v2 candidate is not durably promoted");
+  }
+}
+
+function assertSourceConfigCheckpoint(
+  roll: NonNullable<GatewayRuntimeRoot["roll"]>,
+  fence: MigrationRollFence,
+): void {
+  if (!fence.sourceConfigCheckpoint) return;
+  const checkpoint = roll.systemConfigCheckpoint;
+  if (
+    checkpoint?.migrationId !== fence.sourceConfigCheckpoint.migrationId ||
+    checkpoint.checkpointCommit !== fence.sourceConfigCheckpoint.checkpointCommit ||
+    checkpoint.configHash !== fence.sourceConfigCheckpoint.configHash ||
+    checkpoint.sourceUnfrozenAt !== null
+  ) {
+    throw new Error("stale release-roll fence: source config checkpoint changed");
+  }
+}
+
+function assertSourceAssignment(
+  root: GatewayRuntimeRoot,
+  assignment: AssignmentDoc | null,
+  fence: MigrationRollFence,
+): void {
+  const sourceAssignmentIsCurrent =
+    assignment?.revisionId === fence.sourceRevisionId &&
+    assignment.epoch === fence.sourceEpoch;
+  const sourceIsUnassignedLiveRevision =
+    assignment === null &&
+    fence.sourceEpoch === 0 &&
+    root.liveRevisionId === fence.sourceRevisionId;
+  if (!sourceAssignmentIsCurrent && !sourceIsUnassignedLiveRevision) {
+    throw new Error("stale release-roll fence: source assignment epoch changed");
+  }
+}
+
+type RecoverConfigFreezeOwnerInput = Parameters<
+  NonNullable<MigrationRunnerDeps["recoverConfigFreezeOwner"]>
+>[0];
+
+function operationIdFromMigrationId(migrationId: string): string {
+  if (!migrationId.startsWith("mig-")) {
+    throw new Error("config freeze recovery migration id is not operation-bound");
+  }
+  const operationId = migrationId.slice(4);
+  if (!operationId) {
+    throw new Error("config freeze recovery migration id is not operation-bound");
+  }
+  return operationId;
+}
+
+function assertConfigFreezeRequester(
+  input: RecoverConfigFreezeOwnerInput,
+  requester: Operation | null,
+): void {
+  if (
+    !requester ||
+    requester.status !== "running" ||
+    requester.input?.uid !== input.uid ||
+    requester.input?.builderSlug !== input.slug ||
+    requester.input?.rollOperationId !== input.rollOperationId
+  ) {
+    throw new Error("config freeze requester no longer owns the active operation lease");
+  }
+}
+
+function assertConfigFreezeRecoveryRoll(
+  input: RecoverConfigFreezeOwnerInput,
+  root: unknown,
+): void {
+  if (!isDurableRootConfigDoc(root, input.sourceGatewayId)) {
+    throw new Error("config freeze recovery roll lease is no longer current");
+  }
+  const roll = root.roll;
+  if (
+    !roll ||
+    roll.operationId !== input.rollOperationId ||
+    roll.sourceRevisionId !== input.sourceTransportId ||
+    roll.targetRevisionId !== input.targetTransportId
+  ) {
+    throw new Error("config freeze recovery roll lease is no longer current");
+  }
+}
+
+async function recoverMigrationConfigFreezeOwner(
+  input: RecoverConfigFreezeOwnerInput,
+  deps: { db: Firestore; privateKey: string; log: (msg: string) => void },
+): Promise<boolean> {
+  if (!input.rollOperationId) {
+    throw new Error("config freeze owner recovery requires a release-roll lease");
+  }
+  const ownerOpId = operationIdFromMigrationId(input.ownerMigrationId);
+  const requesterOpId = operationIdFromMigrationId(input.requestedMigrationId);
+  const [ownerSnap, requesterSnap, rootSnap] = await Promise.all([
+    deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(ownerOpId).get(),
+    deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(requesterOpId).get(),
+    deps.db.collection(GATEWAYS_COLLECTION).doc(input.sourceGatewayId).get(),
+  ]);
+  const owner = ownerSnap.exists
+    ? ({ id: ownerSnap.id, ...ownerSnap.data() } as Operation)
+    : null;
+  assertRecoverableConfigFreezeOwner(input, owner);
+  const requester = requesterSnap.exists ? requesterSnap.data() as Operation : null;
+  assertConfigFreezeRequester(input, requester);
+  assertConfigFreezeRecoveryRoll(input, rootSnap.data());
+  const sourceUrl = await resolveGatewayUrlFromFirestore(
+    deps.db,
+    input.sourceTransportId,
+  );
+  const client = createMigrationClient({
+    privateKey: deps.privateKey,
+    resolveGatewayUrl: () => sourceUrl,
+    log: deps.log,
+  });
+  await client.unfreezeConfig({
+    migrationId: input.ownerMigrationId,
+    gatewayId: input.sourceGatewayId,
+    transportId: input.sourceTransportId,
+    slug: input.slug,
+  });
+  return true;
+}
+
 function readPath(obj: Record<string, unknown> | undefined, dotted: string): unknown {
   let cur: unknown = obj;
   for (const part of dotted.split(".")) {
@@ -2898,6 +3577,69 @@ export async function readMigrationUserSnapshot(
   };
 }
 
+async function readRevisionForConfigProtocol(
+  db: Firestore,
+  revisionId: string,
+): Promise<RevisionRealizationDoc | null> {
+  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId).get();
+  const value = snap.exists ? snap.data() : undefined;
+  return isRevisionRealizationDoc(value) && value.revisionId === revisionId ? value : null;
+}
+
+async function assertFleetConfigProtocolForMigration(
+  db: Firestore,
+  input: {
+    mode: import("@octogee/shared/types/fleet-controller").SystemConfigMigrationMode;
+    sourceRevisionId: string;
+    targetRevisionId: string;
+  },
+): Promise<void> {
+  if (input.mode === "none") return;
+  const rootsSnap = await db.collection(GATEWAYS_COLLECTION).get();
+  const roots = rootsSnap.docs.flatMap((doc) => {
+    const value = doc.data();
+    return isDurableRootConfigDoc(value, doc.id) ? [value] : [];
+  });
+  const revisionIds = new Set<string>([input.sourceRevisionId, input.targetRevisionId]);
+  for (const root of roots) {
+    if (root.liveRevisionId) revisionIds.add(root.liveRevisionId);
+  }
+  const entries = await Promise.all([...revisionIds].map(async (revisionId) => [
+    revisionId,
+    await readRevisionForConfigProtocol(db, revisionId),
+  ] as const));
+  const revisions = new Map(entries.filter(
+    (entry): entry is readonly [string, RevisionRealizationDoc] => entry[1] !== null,
+  ));
+  const now = Date.now();
+  assertMigrationSystemConfigProtocol({
+    mode: input.mode,
+    sourceRevisionId: input.sourceRevisionId,
+    sourceRevision: revisions.get(input.sourceRevisionId) ?? null,
+    targetRevisionId: input.targetRevisionId,
+    targetRevision: revisions.get(input.targetRevisionId) ?? null,
+    fleetGaps: servingIsolatedProtocolGaps(roots, revisions, now),
+    now,
+  });
+}
+
+async function isFleetConfigProtocolReady(db: Firestore): Promise<boolean> {
+  const rootsSnap = await db.collection(GATEWAYS_COLLECTION).get();
+  const roots = rootsSnap.docs.flatMap((doc) => {
+    const value = doc.data();
+    return isDurableRootConfigDoc(value, doc.id) ? [value] : [];
+  });
+  const liveRevisionIds = roots.flatMap((root) => root.liveRevisionId ? [root.liveRevisionId] : []);
+  const entries = await Promise.all(liveRevisionIds.map(async (revisionId) => [
+    revisionId,
+    await readRevisionForConfigProtocol(db, revisionId),
+  ] as const));
+  const revisions = new Map(entries.filter(
+    (entry): entry is readonly [string, RevisionRealizationDoc] => entry[1] !== null,
+  ));
+  return servingIsolatedProtocolGaps(roots, revisions, Date.now()).length === 0;
+}
+
 // eslint-disable-next-line max-lines-per-function -- Controller dependency assembly is intentionally centralized.
 async function buildHandlers(
   db: Firestore,
@@ -2908,10 +3650,9 @@ async function buildHandlers(
     syncFleetIngress: () => Promise<void>;
     privateKey: string;
     modelKeySourceIssuer: GatewayModelKeySourceIssuer;
-    revisionMacOpsTokenRevoker: RevisionMacOpsTokenRevoker;
   },
 ): Promise<OperationHandlers> {
-  const { privateKey, modelKeySourceIssuer, revisionMacOpsTokenRevoker } = fleetOps;
+  const { privateKey, modelKeySourceIssuer } = fleetOps;
   if (!privateKey) {
     throw new Error(
       "FLEET_CONTROLLER_PRIVATE_KEY is not set — required for migrate-customer. Refusing to start with stub handlers.",
@@ -2985,6 +3726,23 @@ async function buildHandlers(
                 updatedByOperationId: null,
               }
             : null,
+          ...(commit.rollFence
+            ? {
+                rollFence: {
+                  operationId: commit.rollFence.rollOperationId,
+                  targetRevisionId: commit.rollFence.targetRevisionId,
+                  targetRelease: commit.rollFence.targetRelease,
+                  sourceRevisionId: commit.rollFence.sourceRevisionId,
+                  sourceEpoch: commit.rollFence.sourceEpoch,
+                  ...(commit.rollFence.sourceConfigCheckpoint
+                    ? { sourceConfigCheckpoint: commit.rollFence.sourceConfigCheckpoint }
+                    : {}),
+                  ...(commit.rollFence.configReady
+                    ? { configReady: commit.rollFence.configReady }
+                    : {}),
+                },
+              }
+            : {}),
         },
       );
     },
@@ -3009,7 +3767,77 @@ async function buildHandlers(
         input,
       );
     },
-    genMigrationId: () => `mig-${Date.now()}-${randomUUID().slice(0, 8)}`,
+    assertRollFence: async (fence) => {
+      const [rootSnap, assignment] = await Promise.all([
+        db.collection(GATEWAYS_COLLECTION).doc(fence.gatewayId).get(),
+        readAssignmentDoc(db, fence.gatewayId, fence.uid),
+      ]);
+      assertCurrentMigrationRollFence(rootSnap.data(), assignment, fence);
+    },
+    recordConfigProof: async (targetRevisionId, proof, rollFence) => {
+      if (!rollFence) {
+        await db
+          .collection(GLM_GATEWAYS_COLLECTION)
+          .doc(targetRevisionId)
+          .set({ systemConfig: proof }, { merge: true });
+        return;
+      }
+      await db.runTransaction(async (txn) => {
+        const rootRef = db.collection(GATEWAYS_COLLECTION).doc(rollFence.gatewayId);
+        const assignmentRef = rootRef
+          .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
+          .doc(rollFence.uid);
+        const [rootSnap, assignmentSnap] = await Promise.all([
+          txn.get(rootRef),
+          txn.get(assignmentRef),
+        ]);
+        const assignment = assignmentSnap.exists
+          ? parseAssignmentDoc(rollFence.uid, assignmentSnap.data())
+          : null;
+        assertCurrentMigrationRollFence(rootSnap.data(), assignment, rollFence);
+        txn.set(
+          db.collection(GLM_GATEWAYS_COLLECTION).doc(targetRevisionId),
+          { systemConfig: proof },
+          { merge: true },
+        );
+      });
+    },
+    recordConfigRollMetric: recordConfigRoll,
+    resolveSystemConfigMigrationMode: async (fromGatewayId, toGatewayId) => {
+      const [source, target] = await Promise.all([
+        db.collection(GATEWAYS_COLLECTION).doc(fromGatewayId).get(),
+        db.collection(GATEWAYS_COLLECTION).doc(toGatewayId).get(),
+      ]);
+      const sourceData = source.data();
+      const targetData = target.data();
+      if (!isDurableRootConfigDoc(sourceData, fromGatewayId)) {
+        throw new Error(`source gateway ${fromGatewayId} has no durable root`);
+      }
+      if (!isDurableRootConfigDoc(targetData, toGatewayId)) {
+        throw new Error(`target gateway ${toGatewayId} has no durable root`);
+      }
+      const gatewayClass = (data: typeof sourceData) => resolveGatewayClass({
+        gatewayClass: data.gatewayClass ?? undefined,
+        profile: data.profile ?? undefined,
+        imageProfile: data.imageProfile ?? undefined,
+      });
+      return systemConfigMigrationMode(
+        gatewayClass(sourceData),
+        gatewayClass(targetData),
+      );
+    },
+    assertSystemConfigProtocolReady: ({ mode, sourceRevisionId, targetRevisionId }) =>
+      assertFleetConfigProtocolForMigration(db, {
+        mode,
+        sourceRevisionId,
+        targetRevisionId,
+      }),
+    recoverConfigFreezeOwner: (input) => recoverMigrationConfigFreezeOwner(input, {
+      db,
+      privateKey,
+      log: logFn,
+    }),
+    genMigrationId: (operationId) => `mig-${operationId}`,
     now: () => Date.now(),
     log: logFn,
   });
@@ -3078,38 +3906,125 @@ async function buildHandlers(
     helmUninstallRevision: async (revisionId) => {
       await helm.removeInstance({ namespace: NAMESPACE, gatewayId: revisionId });
     },
-    revokeRevisionMacOpsTokens: (input) =>
-      revisionMacOpsTokenRevoker.revokeRevisionMacOpsTokens(input),
     writeRevisionTombstone: writeRevisionTombstoneFromDoc,
     retireRevisionDoc: retireRevisionDocByMerge,
     log: logFn,
   });
 
-  const retireGateway = createRetireGatewayHandler({
-    readGatewayLiveState: async (gatewayId) => {
-      const rootSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-      const root = rootSnap.exists ? rootSnap.data() : undefined;
-      if (!isDurableRootConfigDoc(root, gatewayId)) return null;
-      const revisionId = root.trafficRevisionId ?? root.liveRevisionId;
-      if (!revisionId) return null;
-      const revisionSnap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId).get();
-      const revision = revisionSnap.exists ? revisionSnap.data() : undefined;
+  const retirementConfigFence = createRetirementConfigFenceManager({
+    readGatewayContext: async (gatewayId) => {
+      const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+      const root = snap.exists ? snap.data() : undefined;
+      if (!isDurableRootConfigDoc(root, gatewayId)) {
+        throw new Error(`gateway ${gatewayId} durable root is unavailable`);
+      }
+      if (root.gatewayClass === "shared") return { kind: "shared" as const };
       if (
-        !isRevisionRealizationDoc(revision) ||
-        revision.gateway !== gatewayId ||
-        revision.revisionId !== revisionId ||
-        revisionId !== revisionIdForRelease(gatewayId, revision.release)
+        (root.gatewayClass !== "builder" && root.gatewayClass !== "operator") ||
+        typeof root.builderSlug !== "string" ||
+        root.builderSlug.length === 0 ||
+        typeof root.liveRevisionId !== "string" ||
+        root.liveRevisionId.length === 0
       ) {
-        return null;
+        throw new Error(`gateway ${gatewayId} dedicated config identity is unavailable`);
       }
       return {
-        mountedCustomers: readMountedCustomers(
-          revision as unknown as Record<string, unknown>,
-          undefined,
-        ),
-        desiredStatus: root.desiredStatus,
+        kind: "dedicated" as const,
+        slug: root.builderSlug,
+        sourceRevisionId: root.liveRevisionId,
+        ...(root.retirementClaim?.configCheckpoint
+          ? { checkpoint: root.retirementClaim.configCheckpoint }
+          : {}),
+        ...(root.retirementClaim?.configTerminal
+          ? { terminal: root.retirementClaim.configTerminal }
+          : {}),
       };
     },
+    freezeConfigV2: async (request) => {
+      const sourceUrl = await resolveGatewayUrlFromFirestore(db, request.sourceRevisionId);
+      const client = createMigrationClient({
+        privateKey,
+        resolveGatewayUrl: () => sourceUrl,
+        log: logFn,
+      });
+      return client.freezeConfigV2({
+        ...request,
+        transportId: request.sourceRevisionId,
+      });
+    },
+    bindCheckpoint: (input) =>
+      bindGatewayRetirementConfigCheckpointAtomic({
+        db,
+        ...input,
+        now: Date.now(),
+        updatedBy: "cowboy-retire-gateway",
+      }),
+    verifyCheckpoint: (input) =>
+      verifyGatewayRetirementConfigCheckpointAtomic({
+        db,
+        ...input,
+        now: Date.now(),
+      }),
+    retireConfigV2: async (request) => {
+      const sourceUrl = await resolveGatewayUrlFromFirestore(db, request.sourceRevisionId);
+      const client = createMigrationClient({
+        privateKey,
+        resolveGatewayUrl: () => sourceUrl,
+        log: logFn,
+      });
+      return client.retireConfigV2({
+        ...request,
+        transportId: request.sourceRevisionId,
+      });
+    },
+    recoverRetiredConfigV2: async (request) => {
+      const sourceUrl = await resolveGatewayUrlFromFirestore(db, request.sourceRevisionId);
+      const client = createMigrationClient({
+        privateKey,
+        resolveGatewayUrl: () => sourceUrl,
+        log: logFn,
+      });
+      return client.recoverRetiredConfigV2({
+        ...request,
+        transportId: request.sourceRevisionId,
+      });
+    },
+    bindTerminal: (input) =>
+      bindGatewayRetirementConfigTerminalAtomic({
+        db,
+        ...input,
+        now: Date.now(),
+        updatedBy: "cowboy-retire-gateway",
+      }),
+    verifyTerminal: (input) =>
+      verifyGatewayRetirementConfigTerminalAtomic({
+        db,
+        ...input,
+        now: Date.now(),
+      }),
+    verifySharedClaim: ({ gatewayId, operationId, version }) =>
+      verifyGatewayRetirementClaimAtomic({
+        db,
+        gatewayId,
+        operationId,
+        version,
+        now: Date.now(),
+        updatedBy: "cowboy-retire-gateway",
+      }),
+  });
+
+  const retireGateway = createRetireGatewayHandler({
+    attestRetirementClaim: ({ gatewayId, operationId, version }) =>
+      attestGatewayRetirementAfterWakeAtomic({
+        db,
+        gatewayId,
+        operationId,
+        version,
+        now: Date.now(),
+        updatedBy: "cowboy-retire-gateway",
+      }),
+    acquireRetirementConfigFence: retirementConfigFence.acquire,
+    verifyRetirementConfigFence: retirementConfigFence.verify,
     readAssignmentsForGateway: async (gatewayId) => {
       const assignments = await readAssignmentDocsForGateway(db, gatewayId);
       return assignments.map((a) => ({ uid: a.uid, slug: a.slug }));
@@ -3141,10 +4056,6 @@ async function buildHandlers(
     helmUninstallRevision: async (revisionId) => {
       await helm.removeInstance({ namespace: NAMESPACE, gatewayId: revisionId });
     },
-    revokeRevisionMacOpsTokens: (input) =>
-      revisionMacOpsTokenRevoker.revokeRevisionMacOpsTokens(input),
-    revokeGatewayLegacyMacOpsTokens: (input) =>
-      revisionMacOpsTokenRevoker.revokeGatewayLegacyMacOpsTokens(input),
     retireRevisionDoc: retireRevisionDocByMerge,
     writeRevisionTombstone: writeRevisionTombstoneFromDoc,
     deleteGlmGateway: async (gatewayId) => {
@@ -3211,6 +4122,7 @@ async function buildHandlers(
     }),
     syncFleetIngress: fleetOps.syncFleetIngress,
     pollIntervalMs: 5_000,
+    retirementAttestationTimeoutMs: RETIREMENT_ATTESTATION_TIMEOUT_MS,
     now: () => Date.now(),
     wait: (ms) => new Promise((r) => setTimeout(r, ms)),
     log: logFn,
@@ -3256,10 +4168,16 @@ async function buildHandlers(
       return isDurableRootConfigDoc(root, gatewayId) ? root.desiredStatus : null;
     },
     setDesiredStatus: async (gatewayId, status) => {
-      await db
-        .collection(GATEWAYS_COLLECTION)
-        .doc(gatewayId)
-        .set({ desiredStatus: status }, { merge: true });
+      await guardedPatchGatewayRoot(
+        db,
+        gatewayId,
+        { desiredStatus: status },
+        {
+          requireRunning: false,
+          updatedAt: Date.now(),
+          updatedBy: "cowboy-recycle-gateway",
+        },
+      );
     },
     readServingRevisionId: async (gatewayId) =>
       (await readDurableGatewayRevision(db, gatewayId, "serving"))?.revisionId ?? null,
@@ -3542,7 +4460,7 @@ export async function resolvePlacementFromFirestore(
 export async function resolveLiveRevisionAsSource(
   db: Firestore,
   gatewayId: string,
-): Promise<{ revisionId: string; release: number } | null> {
+): Promise<{ revisionId: string; release: number; epoch?: number } | null> {
   const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
   if (!snap.exists) return null;
   const gateway = snap.data();
@@ -3569,7 +4487,7 @@ export async function resolveSourceRevisionFromFirestore(
   db: Firestore,
   uid: string,
   gatewayId: string,
-): Promise<{ revisionId: string; release: number } | null> {
+): Promise<{ revisionId: string; release: number; epoch?: number } | null> {
   const assignment = await readAssignmentDoc(db, gatewayId, uid);
   if (!assignment) return resolveLiveRevisionAsSource(db, gatewayId);
   const rootSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
@@ -3597,7 +4515,11 @@ export async function resolveSourceRevisionFromFirestore(
   ) {
     return null;
   }
-  return { revisionId: assignment.revisionId, release: assignment.release };
+  return {
+    revisionId: assignment.revisionId,
+    release: assignment.release,
+    epoch: assignment.epoch,
+  };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

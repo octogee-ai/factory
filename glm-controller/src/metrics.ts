@@ -7,6 +7,17 @@ let reconcileOk = 0;
 let reconcileFail = 0;
 let lastSuccessMs: number | null = null;
 let gatewayHealth: GatewayHealthSample[] = [];
+const configRoll = new Map<string, number>();
+
+export type ConfigRollStage = "checkpoint" | "proof" | "unfreeze";
+export type ConfigRollResult = "ok" | "fail";
+
+export interface ConfigRollSample {
+  stage: ConfigRollStage;
+  result: ConfigRollResult;
+  gatewayId: string;
+  revisionId: string;
+}
 
 export interface GatewayHealthSample {
   gatewayId: string;
@@ -27,6 +38,12 @@ export function resetMetrics(): void {
   reconcileFail = 0;
   lastSuccessMs = null;
   gatewayHealth = [];
+  configRoll.clear();
+}
+
+export function recordConfigRoll(sample: ConfigRollSample): void {
+  const key = [sample.gatewayId, sample.revisionId, sample.stage, sample.result].join("\0");
+  configRoll.set(key, (configRoll.get(key) ?? 0) + 1);
 }
 
 export function recordGatewayHealth(samples: GatewayHealthSample[]): void {
@@ -60,6 +77,12 @@ export function renderMetrics(): string {
           sample.availableReplicas > 0 ? 0 : 1
         }`,
     ),
+    "# HELP glm_config_roll_total Durable config roll fencing outcomes.",
+    "# TYPE glm_config_roll_total counter",
+    ...[...configRoll.entries()].map(([key, count]) => {
+      const [gatewayId, revisionId, stage, result] = key.split("\0");
+      return `glm_config_roll_total{gateway_id="${escapeLabel(gatewayId)}",revision_id="${escapeLabel(revisionId)}",stage="${stage}",result="${result}"} ${count}`;
+    }),
     "",
   ].join("\n");
 }

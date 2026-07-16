@@ -48,6 +48,20 @@ describe("parseHealthResponse", () => {
     ).toEqual({ status: "ready", customers: [], version: "93073bd" });
   });
 
+  it("carries the OpenClaw runtime version used by retirement fencing", () => {
+    expect(
+      parseHealthResponse({
+        status: "ready",
+        customers: [],
+        openclawVersion: "2026.7.1",
+      }),
+    ).toEqual({
+      status: "ready",
+      customers: [],
+      openclawVersion: "2026.7.1",
+    });
+  });
+
   it("carries migratingIn (string entries only); omits it when absent or non-array", () => {
     expect(
       parseHealthResponse({ status: "ready", customers: ["a"], migratingIn: ["a", 1, "b"] }),
@@ -59,6 +73,28 @@ describe("parseHealthResponse", () => {
     expect(
       parseHealthResponse({ status: "ready", customers: ["a"], migratingIn: "a" }),
     ).toEqual({ status: "ready", customers: ["a"] });
+  });
+
+  it("carries only a structurally valid nested configStatus marker", () => {
+    const configStatus = {
+      controlProtocol: { protocol: "durable-openclaw-config", version: 2 },
+      freezeState: "freezing",
+      openclawVersion: "2026.7.1",
+      openclawForkSha: "abc123",
+      dashboardControlState: "ready",
+      dashboardControlProtocol: { protocol: "openclaw-dashboard-bridge", version: 1 },
+      dashboardControlObservedAt: "2026-07-15T14:00:00.000Z",
+    };
+    expect(parseHealthResponse({ status: "ready", customers: [], configStatus })).toEqual({
+      status: "ready",
+      customers: [],
+      configStatus,
+    });
+    expect(parseHealthResponse({
+      status: "ready",
+      customers: [],
+      configStatus: { controlProtocol: { protocol: "durable-openclaw-config", version: "1" } },
+    })).toEqual({ status: "ready", customers: [] });
   });
 });
 
@@ -135,6 +171,64 @@ describe("pollOperatorHeartbeatsOnce", () => {
       mountedCustomers: ["ceckert"],
       version: "93073bd",
     });
+  });
+
+  it("persists the OpenClaw runtime version from /health", async () => {
+    const deps = makeDeps({
+      fetchHealth: vi.fn(async () => ({
+        status: "ready",
+        customers: ["ceckert"],
+        openclawVersion: "2026.7.1",
+      })),
+    });
+    await pollOperatorHeartbeatsOnce(deps);
+    expect(deps.writeHeartbeat).toHaveBeenCalledWith("bender", {
+      status: "ready",
+      mountedCustomers: ["ceckert"],
+      openclawVersion: "2026.7.1",
+    });
+  });
+
+  it("persists the config control protocol marker for controller-side enforcement", async () => {
+    const configStatus = {
+      controlProtocol: { protocol: "durable-openclaw-config" as const, version: 2 as const },
+      freezeState: "freezing" as const,
+      openclawVersion: "2026.7.1",
+      openclawForkSha: "abc123",
+      dashboardControlState: "ready" as const,
+      dashboardControlProtocol: {
+        protocol: "openclaw-dashboard-bridge" as const,
+        version: 1 as const,
+      },
+      dashboardControlObservedAt: "2026-07-15T14:00:00.000Z",
+    };
+    const deps = makeDeps({
+      fetchHealth: vi.fn(async () => ({
+        status: "ready",
+        customers: ["ceckert"],
+        configStatus,
+      })),
+    });
+    await pollOperatorHeartbeatsOnce(deps);
+    expect(deps.writeHeartbeat).toHaveBeenCalledWith("bender", {
+      status: "ready",
+      mountedCustomers: ["ceckert"],
+      configStatus,
+    });
+  });
+
+  it("rejects a ready Dashboard capability without its exact observed protocol tuple", () => {
+    expect(parseHealthResponse({
+      status: "ready",
+      customers: [],
+      configStatus: {
+        controlProtocol: { protocol: "durable-openclaw-config", version: 2 },
+        freezeState: "frozen",
+        dashboardControlState: "ready",
+        dashboardControlProtocol: { protocol: "openclaw-dashboard-bridge", version: 2 },
+        dashboardControlObservedAt: "2026-07-15T14:00:00.000Z",
+      },
+    })).toEqual({ status: "ready", customers: [] });
   });
 
   it("skips a gateway it cannot reach (does NOT clobber the doc to empty)", async () => {

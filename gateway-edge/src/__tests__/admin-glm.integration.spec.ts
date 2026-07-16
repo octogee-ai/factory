@@ -4,13 +4,13 @@ import { FieldValue } from "firebase-admin/firestore";
 
 interface FirestoreCall {
   collection: string;
-  op: "add" | "doc.set" | "doc.update" | "batch.commit";
+  op: "add" | "doc.set" | "doc.update" | "batch.commit" | "transaction.commit";
   docId?: string;
   data?: Record<string, unknown>;
   options?: Record<string, unknown>;
 }
 
-let batchCommitFailures = 0;
+let transactionCommitFailures = 0;
 
 const calls: FirestoreCall[] = [];
 let glmOperationsDocs: Array<{ id: string; data: Record<string, unknown> }> = [];
@@ -284,10 +284,6 @@ function makeBatch() {
         return this;
       },
       commit: async () => {
-        if (batchCommitFailures > 0) {
-          batchCommitFailures -= 1;
-          throw new Error("simulated batch commit failure");
-        }
         for (const fn of pending) await fn();
         calls.push({ collection: "<batch>", op: "batch.commit" });
       },
@@ -326,7 +322,12 @@ function makeBatch() {
           },
         };
         const result = await body(txn);
+        if (transactionCommitFailures > 0) {
+          transactionCommitFailures -= 1;
+          throw new Error("simulated transaction commit failure");
+        }
         for (const fn of pending) await fn();
+        calls.push({ collection: "<transaction>", op: "transaction.commit" });
         return result;
       },
       batch: () => makeBatch(),
@@ -464,7 +465,6 @@ function seedDurableGateway(
     payload: {
       imageRepository: GATEWAY_REPOSITORY,
       imageTag,
-      macOpsTokenProtocol: 2,
     },
   };
   if (options.heartbeat) markGatewayServing(gatewayId, options.heartbeat);
@@ -498,6 +498,20 @@ function markGatewayServing(
   };
 }
 
+function seedRetirableGateway(gatewayId: string) {
+  const observedAt = Date.now();
+  seedDurableGateway(gatewayId, {
+    heartbeat: {
+      status: "ready",
+      lastHeartbeatAt: observedAt,
+      startedAt: observedAt - 1_000,
+      version: "abc1234",
+      openclawVersion: "2026.7.1",
+      mountedCustomers: [],
+    },
+  });
+}
+
 beforeEach(() => {
   calls.length = 0;
   glmOperationsDocs = [];
@@ -513,7 +527,7 @@ beforeEach(() => {
   builderCalls.length = 0;
   nextBuildsResult = [];
   nextBuildsError = null;
-  batchCommitFailures = 0;
+  transactionCommitFailures = 0;
   process.env.GATEWAY_SERVICE_ACCOUNT = "octogee-gateway@octogee-test.iam.gserviceaccount.com";
 });
 
@@ -1737,21 +1751,29 @@ describe("POST /api/admin/rollouts — body type guards", () => {
 });
 
 describe("DELETE /api/admin/gateways/:id — retire", () => {
-  it("sets desiredStatus=retired and creates a retire-gateway op when no customers are mounted", async () => {
-    seedDurableGateway("canary");
+  it("atomically claims a converged gateway for retirement when no customers are mounted", async () => {
+    seedRetirableGateway("canary");
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/canary");
     expect(res.status).toBe(202);
     const update = calls.find(
-      (c) => c.collection === "gateways" && c.op === "doc.update",
+      (c) => c.collection === "gateways" && c.op === "doc.set",
     );
-    expect(update?.data).toMatchObject({ desiredStatus: "retired" });
+    expect(update?.data).toMatchObject({
+      desiredStatus: "retired",
+      retirementVersion: 1,
+      retirementClaim: { operationId: res.body.operationId, version: 1 },
+    });
     const op = calls.find((c) => c.collection === "glmOperations");
-    expect(op?.data).toMatchObject({ kind: "retire-gateway", createdBy: "admin-user" });
+    expect(op?.data).toMatchObject({
+      kind: "retire-gateway",
+      createdBy: "admin-user",
+      input: { gatewayId: "canary", retirementClaimVersion: 1 },
+    });
   });
 
   it("defaults to full teardown — no retain flags on the retire-gateway op", async () => {
-    seedDurableGateway("canary");
+    seedRetirableGateway("canary");
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/canary");
     expect(res.status).toBe(202);
@@ -1764,7 +1786,7 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
   });
 
   it("passes retainData + retainServiceAccount through to the retire-gateway operation", async () => {
-    seedDurableGateway("canary");
+    seedRetirableGateway("canary");
     const app = buildApp();
     const res = await request(app)
       .delete("/api/admin/gateways/canary")
@@ -1801,39 +1823,37 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
     expect(update).toBeUndefined();
   });
 
-  it("proceeds with retire when the gateway has no heartbeat doc (stranded crash-loop case)", async () => {
-    seedDurableGateway("orphan");
+  it("fails closed when the live revision telemetry is unavailable", async () => {
+    seedRetirableGateway("orphan");
+    delete glmGatewaysDocs["orphan-r1"];
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/orphan");
-    expect(res.status).toBe(202);
-    const update = calls.find(
-      (c) => c.collection === "gateways" && c.op === "doc.update",
-    );
-    expect(update?.data).toMatchObject({ desiredStatus: "retired" });
-    const op = calls.find((c) => c.collection === "glmOperations");
-    expect(op?.data).toMatchObject({ kind: "retire-gateway", createdBy: "admin-user" });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/live revision telemetry is unavailable/i);
+    expect(gatewaysDocs.orphan).toMatchObject({ desiredStatus: "running" });
+    expect(glmOperationsDocs.find((d) => d.data.kind === "retire-gateway")).toBeUndefined();
   });
 
-  it("commits desiredStatus + op create as one atomic batch (P3 audit follow-up)", async () => {
-    seedDurableGateway("canary");
+  it("commits retirement claim + op create in one transaction", async () => {
+    seedRetirableGateway("canary");
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/canary");
     expect(res.status).toBe(202);
 
-const updateIdx = calls.findIndex(
-      (c) => c.collection === "gateways" && c.op === "doc.update",
+    const updateIdx = calls.findIndex(
+      (c) => c.collection === "gateways" && c.op === "doc.set",
     );
     const opIdx = calls.findIndex((c) => c.collection === "glmOperations");
-    const commitIdx = calls.findIndex((c) => c.op === "batch.commit");
+    const commitIdx = calls.findIndex((c) => c.op === "transaction.commit");
     expect(updateIdx).toBeGreaterThanOrEqual(0);
     expect(opIdx).toBeGreaterThanOrEqual(0);
     expect(commitIdx).toBeGreaterThan(updateIdx);
     expect(commitIdx).toBeGreaterThan(opIdx);
   });
 
-  it("rolls back BOTH writes if the batch commit fails (atomicity)", async () => {
-    seedDurableGateway("canary");
-    batchCommitFailures = 1;
+  it("rolls back both claim writes if the transaction commit fails", async () => {
+    seedRetirableGateway("canary");
+    transactionCommitFailures = 1;
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/canary");
     expect(res.status).toBe(500);

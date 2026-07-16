@@ -30,6 +30,10 @@ const modelCredentialMocks = vi.hoisted(() => ({
 const contextFileConvergenceMocks = vi.hoisted(() => ({
   reassertConvergedContextFilesForSlug: vi.fn(() => []),
 }));
+const secretMocks = vi.hoisted(() => ({
+  updateMattermostAccountSecrets: vi.fn(async () => undefined),
+  materializeActivationManifestSecret: vi.fn(async (_dir: string, manifest: unknown) => manifest),
+}));
 
 vi.mock("../lib/migration-activation-manifest.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/migration-activation-manifest.js")>();
@@ -61,6 +65,17 @@ vi.mock("../lib/context-file-convergence.js", async (importOriginal) => {
     reassertConvergedContextFilesForSlug: contextFileConvergenceMocks.reassertConvergedContextFilesForSlug,
   };
 });
+vi.mock("../lib/mattermost-account-secrets.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/mattermost-account-secrets.js")>();
+  return { ...actual, updateMattermostAccountSecrets: secretMocks.updateMattermostAccountSecrets };
+});
+vi.mock("../lib/migration-activation-secrets.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/migration-activation-secrets.js")>();
+  return {
+    ...actual,
+    materializeActivationManifestSecret: secretMocks.materializeActivationManifestSecret,
+  };
+});
 
 function mkClient(overrides: Partial<FleetBrokerClient> = {}): FleetBrokerClient {
   return {
@@ -77,13 +92,6 @@ function mkClient(overrides: Partial<FleetBrokerClient> = {}): FleetBrokerClient
     recordReconcileError: vi.fn(async () => undefined),
     clearReconcileError: vi.fn(async () => undefined),
     notifySignup: vi.fn(async () => undefined),
-    macOpsToken: vi.fn(async () => ({
-      gatewayId: "gw",
-      revisionId: "gw",
-      username: "tester10",
-      mmUserId: "mm-user",
-      token: "token",
-    })),
     recordUsageEvent: vi.fn(async () => undefined),
     blobDownloadUrl: vi.fn(async () => ({
       url: "https://example.com/download",
@@ -110,6 +118,8 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     mocks.applyOpenClawActivationManifest.mockReset();
     mocks.removeActivationManifest.mockReset();
     patchMocks.applyConfigPatch.mockClear();
+    secretMocks.updateMattermostAccountSecrets.mockClear();
+    secretMocks.materializeActivationManifestSecret.mockClear();
     process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
     tempStateDir = null;
     mocks.readActivationManifest.mockResolvedValue({ slug: "tester10" });
@@ -163,31 +173,6 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(rpc.gatewayRestartRequest).not.toHaveBeenCalled();
     expect(rpc.channelsStatus).toHaveBeenCalled();
     expect(client.uidForSlug).not.toHaveBeenCalled();
-  });
-
-  it("accepts operator-source state-only imports when the activation manifest is absent", async () => {
-    const err = new Error("ENOENT: no such file or directory, open activation.json") as NodeJS.ErrnoException;
-    err.code = "ENOENT";
-    mocks.readActivationManifest.mockRejectedValue(err);
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "broker-import-state-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-    await fs.mkdir(path.join(tempStateDir, "agents", "octogee-tester10-coach"), {
-      recursive: true,
-    });
-    const log = vi.fn();
-    const adapter = buildBrokeredLifecycleAdapter({
-      client: mkClient(),
-      rpc: {} as GatewayRpcClient,
-      log,
-    });
-
-    await adapter.activateImportedCustomer("tester10");
-
-    expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
-    expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(
-      "[import:tester10] no customer activation manifest; imported operator agent state only",
-    );
   });
 
   it("fails before mutating config when the activation manifest is absent", async () => {
@@ -706,7 +691,7 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
       buildPatch: (current: unknown) => {
         agents: { list: Array<{ id?: string; workspace?: string }> };
         bindings: Array<{ agentId: string; match: { accountId: string; peer: { id: string } } }>;
-        channels: { mattermost: { accounts: Record<string, { botToken?: string } | null> } };
+        channels: { mattermost: { accounts: Record<string, { botToken?: unknown } | null> } };
       };
     };
     const patch = args.buildPatch({
@@ -729,7 +714,11 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
       "po-1": "octogee-alice-proj-orbit-coach|alice-proj-orbit",
       "pn-1": "octogee-alice-coach|alice-coach",
     });
-    expect(patch.channels.mattermost.accounts["alice-proj-orbit"]?.botToken).toBe("proj-pat-1");
+    expect(patch.channels.mattermost.accounts["alice-proj-orbit"]?.botToken).toEqual({
+      source: "file",
+      provider: "octogee-mattermost",
+      id: "/alice-proj-orbit",
+    });
     expect(patch.channels.mattermost.accounts["alice-proj-old"]).toBeNull();
   });
 });

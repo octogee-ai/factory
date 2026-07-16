@@ -221,8 +221,6 @@ if [[ "${MM_READY:-0}" -ge 1 ]]; then
   MM_ADMIN_PASS=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.admin_pass}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
   MM_ADMIN_TOKEN=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.admin_token}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
   MM_ADMIN_USER_ID=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.admin_user_id}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
-  MM_BOT_TOKEN=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.bot_token}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
-  MM_BOT_USER_ID=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.bot_user_id}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
   MM_TEAM_ID=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.team_id}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
   GITEA_TOKEN=$(kubectl get secret gitea-token -n "$NAMESPACE" -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
 
@@ -230,8 +228,6 @@ if [[ "${MM_READY:-0}" -ge 1 ]]; then
   status "mattermost-gateway admin_pass present" "mattermost-gateway admin_pass missing" "$MM_ADMIN_PASS"
   status "mattermost-gateway admin_token present" "mattermost-gateway admin_token missing (octogee-api Mattermost broker will fail)" "$MM_ADMIN_TOKEN"
   status "mattermost-gateway admin_user_id present" "mattermost-gateway admin_user_id missing" "$MM_ADMIN_USER_ID"
-  status "mattermost-gateway bot_token present" "mattermost-gateway bot_token missing (MM WS bridge will fail)" "$MM_BOT_TOKEN"
-  status "mattermost-gateway bot_user_id present" "mattermost-gateway bot_user_id missing" "$MM_BOT_USER_ID"
   status "mattermost-gateway team_id present" "mattermost-gateway team_id missing" "$MM_TEAM_ID"
   status "gitea-token present" "gitea-token missing" "$GITEA_TOKEN"
   set_section bootstrap

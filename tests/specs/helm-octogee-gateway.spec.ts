@@ -85,6 +85,34 @@ function gatewayImageLabel(dep: string): string {
 }
 
 describe("helm/octogee-gateway/ — single-instance rendering", () => {
+  it("provides the durable agent and workspace roots required by OpenClaw config", () => {
+    const deployment = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const gateway = containerBlock(deployment, "gateway");
+    expect(gateway).toMatch(
+      /name:\s*CUSTOMERS_DIR[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/customers"/,
+    );
+    expect(gateway).toMatch(
+      /name:\s*AGENTS_DIR[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/agents"/,
+    );
+  });
+
+  it("renders the explicit OpenClaw Doctor mode only into the core gateway", () => {
+    const defaults = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    expect(containerBlock(defaults, "gateway")).toMatch(
+      /name:\s*OPENCLAW_DOCTOR_MODE[\s\S]*?value:\s*"run"/,
+    );
+    expect(containerBlock(defaults, "gateway-edge")).not.toMatch(/OPENCLAW_DOCTOR_MODE/);
+
+    const skipped = findDoc(
+      helmTemplate("octogee-gw-default", { "env.openclawDoctorMode": "skip" }),
+      "Deployment",
+      "octogee-gateway-default",
+    ) ?? "";
+    expect(containerBlock(skipped, "gateway")).toMatch(
+      /name:\s*OPENCLAW_DOCTOR_MODE[\s\S]*?value:\s*"skip"/,
+    );
+  });
+
   it("keeps the broad durable writer selected by default and enables only the bounded candidate pair", () => {
     const defaultDeployment =
       findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
@@ -722,39 +750,83 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     expect(gw).not.toMatch(/- name:\s*MM_ADMIN_PAT\b/);
   });
 
-  it("uses a brokered init container for per-gateway Mattermost bot bootstrap, with no admin PAT in the pod", () => {
+  it("does not provision a permanent gateway persona or Mattermost PAT", () => {
     const dep = findDoc(
       helmTemplate("octogee-gw-default-r5", { revisionId: "default-r5" }),
       "Deployment",
       "octogee-gateway-default-r5",
     ) ?? "";
-    const bootstrap = containerBlock(dep, "mac-ops-bootstrap");
-    expect(bootstrap).toMatch(/node \/octogee\/scripts\/bootstrap-mac-ops\.mjs/);
-    expect(bootstrap).not.toMatch(/bootstrap-mac-ops\.mjs\s*\|\|\s*true/);
-    expect(bootstrap).toMatch(/name:\s*GATEWAY_REVISION_ID\s*\n\s*value:\s*"default-r5"/);
-    expect(bootstrap).toMatch(/name:\s*FLEET_BROKER_URL\b/);
-    expect(bootstrap).toMatch(/name:\s*OCTOGEE_API_SA_TOKEN_PATH\b/);
-    expect(bootstrap).toMatch(/name:\s*gateway-broker-sa-token[\s\S]*?mountPath:\s*\/var\/run\/secrets\/octogee-gateway-broker/);
+    expect(dep).not.toMatch(/mac-ops-bootstrap|bootstrap-mac-ops|MM_BOT_USERNAME|MAC_OPS/);
     expect(dep).not.toMatch(/name:\s*MM_ADMIN_PAT\b/);
     expect(dep).not.toMatch(/name:\s*mattermost-gateway[\s\S]*?key:\s*admin_token/);
   });
 
-  it("mac-ops-bootstrap derives + exports the operator agent id before openclaw.template envsubst (an empty-id agents.list[0] degrades every agents.list patch to whole-list replacement)", () => {
+  it("binds the gateway process to its exact rendered image tag without rollout context by default", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
-    const bootstrap = containerBlock(dep, "mac-ops-bootstrap");
-    const envsubstIdx = bootstrap.indexOf(
-      "envsubst < /octogee/infra/gateway/openclaw.template.json",
+    const gw = containerBlock(dep, "gateway");
+    expect(gw).toMatch(/name:\s*GATEWAY_IMAGE_TAG[\s\S]*?value:\s*"abc1234"/);
+    expect(gw).not.toMatch(/name:\s*SYSTEM_CONFIG_MIGRATION_ID/);
+  });
+
+  it("renders all immutable target rollout bindings only on the gateway container", () => {
+    const dep = findDoc(helmTemplate("octogee-gw-bender-r2", {
+      gatewayId: "bender",
+      gatewayClass: "operator",
+      builderSlug: "ceckert",
+      revisionId: "bender-r2",
+      "systemConfigRollContext.migrationId": "mig-123",
+      "systemConfigRollContext.sourceRevisionId": "bender-r1",
+      "systemConfigRollContext.targetRevisionId": "bender-r2",
+      "systemConfigRollContext.checkpointCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "systemConfigRollContext.freezeObject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    }), "Deployment", "octogee-gateway-bender-r2") ?? "";
+    const gw = containerBlock(dep, "gateway");
+    const edge = containerBlock(dep, "gateway-edge");
+    expect(gw).toMatch(/name:\s*SYSTEM_CONFIG_MIGRATION_ID[\s\S]*?value:\s*"mig-123"/);
+    expect(gw).toMatch(/name:\s*SYSTEM_CONFIG_SOURCE_REVISION_ID[\s\S]*?value:\s*"bender-r1"/);
+    expect(gw).toMatch(/name:\s*SYSTEM_CONFIG_TARGET_REVISION_ID[\s\S]*?value:\s*"bender-r2"/);
+    expect(gw).toMatch(/name:\s*SYSTEM_CONFIG_CHECKPOINT_COMMIT[\s\S]*?value:\s*"a{40}"/);
+    expect(gw).toMatch(/name:\s*SYSTEM_CONFIG_FREEZE_OBJECT[\s\S]*?value:\s*"b{40}"/);
+    expect(edge).not.toMatch(/SYSTEM_CONFIG_MIGRATION_ID/);
+  });
+
+  it("refuses partial or wrong-target rollout context before rendering a pod", () => {
+    expect(() => helmTemplate("octogee-gw-bender-r2", {
+      gatewayId: "bender",
+      revisionId: "bender-r2",
+      "systemConfigRollContext.migrationId": "mig-123",
+    })).toThrow(/systemConfigRollContext must provide all five fields/i);
+    expect(() => helmTemplate("octogee-gw-bender-r2", {
+      gatewayId: "bender",
+      revisionId: "bender-r2",
+      "systemConfigRollContext.migrationId": "mig-123",
+      "systemConfigRollContext.sourceRevisionId": "bender-r1",
+      "systemConfigRollContext.targetRevisionId": "bender-r3",
+      "systemConfigRollContext.checkpointCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "systemConfigRollContext.freezeObject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    })).toThrow(/targetRevisionId must equal revisionId/i);
+  });
+
+  it("points the sidecar coach reconciler at the tracked config on isolated gateways", () => {
+    const isolated = findDoc(
+      helmTemplate("octogee-gw-bender", {
+        gatewayId: "bender",
+        gatewayClass: "operator",
+        builderSlug: "ceckert",
+      }),
+      "Deployment",
+      "octogee-gateway-bender",
+    ) ?? "";
+    const isolatedEdge = containerBlock(isolated, "gateway-edge");
+    expect(isolatedEdge).toMatch(
+      /name:\s*OPENCLAW_CONFIG[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/system_config\/openclaw\.json"/,
     );
-    const slugIdx = bootstrap.indexOf('OPERATOR_AGENT_SLUG="${GATEWAY_BUILDER_SLUG:-$GATEWAY_ID}"');
-    const idIdx = bootstrap.indexOf('OPERATOR_AGENT_ID="octogee-ops-${OPERATOR_AGENT_SLUG}"');
-    expect(envsubstIdx).toBeGreaterThan(-1);
-    expect(slugIdx).toBeGreaterThan(-1);
-    expect(idIdx).toBeGreaterThan(-1);
-    expect(slugIdx).toBeLessThan(envsubstIdx);
-    expect(idIdx).toBeLessThan(envsubstIdx);
-    expect(bootstrap).toMatch(/export OPERATOR_AGENT_SLUG\b/);
-    expect(bootstrap).toMatch(/export OPERATOR_AGENT_ID\b/);
-    expect(bootstrap).toMatch(/name:\s*GATEWAY_BUILDER_SLUG\b/);
+
+    const shared = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const sharedEdge = containerBlock(shared, "gateway-edge");
+    expect(sharedEdge).toMatch(
+      /name:\s*OPENCLAW_CONFIG[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/openclaw\.json"/,
+    );
   });
 
   it("omits the Mattermost admin-PAT bootstrap init container on operator gateways", () => {
@@ -786,7 +858,7 @@ expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
 
     const dataMounts = dep.match(/- name:\s*data\s+mountPath:\s*\/home\/node\b/g) ?? [];
-    expect(dataMounts.length).toBe(4);
+    expect(dataMounts.length).toBe(3);
     expect(dep).not.toMatch(/mountPath:\s*\/home\/node\/\.openclaw\b/);
   });
 
@@ -809,17 +881,52 @@ expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
     );
   });
 
-  it("startup probe is HTTP GET /healthz; liveness + readiness stay TCP; all on 18789", () => {
-    const out = helmTemplate();
-    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+  it("keeps shared gateways on the proven OpenClaw HTTP startup and TCP steady-state probes", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const gw = containerBlock(dep, "gateway");
 
-expect(gw).toMatch(
-      /startupProbe:\s+httpGet:\s+path:\s*\/healthz\s+port:\s*18789/,
-    );
+    expect(gw).toMatch(/startupProbe:\s+httpGet:\s+path:\s*\/healthz\s+port:\s*18789/);
     expect(gw).toMatch(/livenessProbe:\s+tcpSocket:\s+port:\s*18789/);
     expect(gw).toMatch(/readinessProbe:\s+tcpSocket:\s+port:\s*18789/);
+  });
+
+  it("uses the immutable image capability marker to select isolated gateway health endpoints", () => {
+    const dep = findDoc(
+      helmTemplate("octogee-gw-bender", { gatewayId: "bender", gatewayClass: "builder" }),
+      "Deployment",
+      "octogee-gateway-bender",
+    ) ?? "";
+    const gw = containerBlock(dep, "gateway");
+
+    expect(gw).not.toMatch(/startupProbe:\s+httpGet:/);
+    expect(gw).not.toMatch(/livenessProbe:\s+httpGet:/);
+    expect(gw).not.toMatch(/readinessProbe:\s+httpGet:/);
+    expect(gw.match(/\[ -f \/opt\/octogee\/capabilities\/config-status-v2 \]/g)).toHaveLength(3);
+    expect(gw.match(/curl -fsS http:\/\/127\.0\.0\.1:18790\/healthz/g)).toHaveLength(2);
+    expect(gw).toMatch(/curl -fsS http:\/\/127\.0\.0\.1:18790\/readyz/);
+    expect(gw.match(/curl -fsS http:\/\/127\.0\.0\.1:3003\/health/g)).toHaveLength(3);
+    expect(gw).not.toContain("rc=$?");
+    expect(gw).not.toContain("||");
     expect(dep).not.toMatch(/__openclaw__/);
+  });
+
+  it("keeps isolated repair services routable while OpenClaw readiness is false", () => {
+    const out = helmTemplate("octogee-gw-default", { gatewayClass: "builder" });
+    const gateway = findDoc(out, "Service", "octogee-gateway-default") ?? "";
+    const edge = findDoc(out, "Service", "gateway-edge-default") ?? "";
+
+    expect(gateway).toMatch(/publishNotReadyAddresses:\s*true/);
+    expect(edge).toMatch(/publishNotReadyAddresses:\s*true/);
+    expect(findDoc(helmTemplate(), "Service", "gateway-edge-default") ?? "").not.toMatch(
+      /publishNotReadyAddresses/,
+    );
+  });
+
+  it("does not suppress a failed durable pre-stop checkpoint", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const lifecycle = containerBlock(dep, "gateway").match(/lifecycle:[\s\S]*?(?=\n\s+env:)/)?.[0] ?? "";
+    expect(lifecycle).toContain("prestop-flush.ts");
+    expect(lifecycle).not.toContain("|| true");
   });
 });
 

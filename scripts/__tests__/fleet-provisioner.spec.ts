@@ -6,6 +6,7 @@ import * as path from "node:path";
 import {
   CLONE_RETRY_DELAYS_MS,
   buildFleetHeartbeatSnapshot,
+  buildFleetHealthResponse,
   cloneRetryDelayMs,
   cloneRetryReady,
   gatewayRevisionServiceName,
@@ -14,6 +15,7 @@ import {
   getMountObservedSlugs,
   pathGatewayIdMatchesPod,
   readMountedCustomersFromAssignedState,
+  registerConfigControlRoutes,
   resolveFleetCapabilities,
 } from "../lib/fleet-provisioner.js";
 import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
@@ -216,6 +218,20 @@ describe("observed split — evict keys off raw presence, mount off completion",
 });
 
 describe("in-pod revision-keyed heartbeat (PR3 dependency)", () => {
+  it("reports the OpenClaw runtime version through the poller health endpoint", () => {
+    expect(
+      buildFleetHealthResponse({
+        status: "ready",
+        gatewayId: "default",
+        version: "sha-1",
+        openclawVersion: "2026.7.1",
+        startedAt: 42,
+        customers: [],
+        migratingIn: [],
+      }),
+    ).toMatchObject({ openclawVersion: "2026.7.1" });
+  });
+
   it("carries revisionId onto the heartbeat snapshot so glmGateways/{revisionId}.heartbeat gets written", () => {
     const snap = buildFleetHeartbeatSnapshot({
       gatewayId: "default",
@@ -228,6 +244,7 @@ describe("in-pod revision-keyed heartbeat (PR3 dependency)", () => {
       startedAt: 42,
     });
     expect(snap).toMatchObject({ gatewayId: "default", revisionId: "default-r2", status: "ready" });
+    expect(snap.openclawVersion).toBe("2026.7.1");
   });
 
   it("refuses an empty revision id so a legacy pod cannot write bare telemetry", () => {
@@ -255,6 +272,26 @@ describe("in-pod revision-keyed heartbeat (PR3 dependency)", () => {
     expect(() => gatewayRevisionServiceName({ gatewayId: "default", revisionId: "" })).toThrow(
       "revisionId is required",
     );
+  });
+});
+
+describe("protocol-v2 config control route registration", () => {
+  it("mounts only the six restart-durable config-control endpoints", () => {
+    const post = vi.fn();
+    registerConfigControlRoutes(
+      { post } as never,
+      vi.fn(),
+      {} as never,
+    );
+
+    expect(post.mock.calls.map(([route]) => route)).toEqual([
+      "/config-freeze-v2/:gatewayId",
+      "/config-candidate-proof/:gatewayId",
+      "/config-promote-candidate/:gatewayId",
+      "/config-abort-v2/:gatewayId",
+      "/config-retire-v2/:gatewayId",
+      "/config-finalize-v2/:gatewayId",
+    ]);
   });
 });
 

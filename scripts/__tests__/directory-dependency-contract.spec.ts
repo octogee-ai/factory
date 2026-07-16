@@ -124,6 +124,14 @@ describe("directory dependency repository contract", () => {
     }
   });
 
+  it("uploads every packed interface to Cloud Build", () => {
+    const gcloudignore = fs.readFileSync(path.join(root, ".gcloudignore"), "utf8");
+
+    for (const source of ["core", "shared", "test-helpers"]) {
+      expect(gcloudignore).toContain(`!${source}/dist/**`);
+    }
+  });
+
   it("retires tarball transport and its maintenance commands", () => {
     for (const filePath of [
       "core/octogee-core.tgz",

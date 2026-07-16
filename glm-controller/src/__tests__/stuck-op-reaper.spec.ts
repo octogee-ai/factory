@@ -9,6 +9,7 @@ interface FakeOpDoc {
     startedAt?: number;
     createdAt?: number;
     lastProgressAt?: number;
+    output?: Record<string, unknown>;
   };
   updated?: Record<string, unknown>;
 }
@@ -71,6 +72,26 @@ describe("runStuckOpReaperTick", () => {
       error: expect.stringContaining("reaped"),
     });
     expect(log).toHaveBeenCalledWith(expect.stringContaining("op-stuck"));
+  });
+
+  it("does not manufacture a cleanup lease when the reaper cannot prove freeze ownership", async () => {
+    const ops: FakeOpDoc[] = [{
+      id: "op-stuck-migration",
+      data: {
+        status: "running",
+        kind: "migrate-customer",
+        startedAt: NOW - 20 * 60_000,
+      },
+    }];
+
+    await runStuckOpReaperTick({
+      db: makeFakeDb(ops) as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+      log: vi.fn(),
+      now: () => NOW,
+      stalenessMs: 15 * 60_000,
+    });
+
+    expect(ops[0].updated).not.toHaveProperty("output.configCleanup");
   });
 
   it("leaves a recent `running` op alone", async () => {

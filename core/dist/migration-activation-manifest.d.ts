@@ -12,7 +12,9 @@ export interface MigrationActivationManifest {
     bindings: unknown[];
 }
 export declare function activationManifestTarPath(slug: string): string;
-export declare function extractOpenClawActivationManifest(configPath: string, slug: string): Promise<MigrationActivationManifest>;
+export declare function extractOpenClawActivationManifest(configPath: string, slug: string, opts?: {
+    botToken?: string;
+}): Promise<MigrationActivationManifest>;
 export declare function writeActivationManifest(rootDir: string, manifest: MigrationActivationManifest): Promise<{
     cwd: string;
     path: string;

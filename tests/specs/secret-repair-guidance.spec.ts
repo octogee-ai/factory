@@ -23,11 +23,9 @@ describe("secret repair guidance", () => {
     const script = readFileSync(path.join(repoRoot, "scripts/setup-secrets.sh"), "utf8");
 
     for (const [variable, key] of [
-      ["MM_BOT_TOKEN", "bot_token"],
       ["MM_ADMIN_PASS", "admin_pass"],
       ["MM_ADMIN_TOKEN", "admin_token"],
       ["MM_TEAM_ID", "team_id"],
-      ["MM_BOT_USER_ID", "bot_user_id"],
       ["MM_ADMIN_USER_ID", "admin_user_id"],
     ]) {
       expect(script).toContain(`${variable}="\${${variable}:-$(ksecret_key mattermost-gateway ${key})}"`);

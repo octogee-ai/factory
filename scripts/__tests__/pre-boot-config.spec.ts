@@ -18,9 +18,6 @@ function emptyConfig(): any {
   return {};
 }
 
-const GLM_MODEL_REF = "platform-openrouter/z-ai/glm-5.2";
-const MAC_MODEL_REF = "anthropic/claude-sonnet-4-6";
-
 describe("applyPreBootPatches — platform model catalog", () => {
   it("allowlists every broker-backed platform model for an operator gateway", () => {
     const config: any = { agents: { defaults: { models: {} } } };
@@ -73,91 +70,6 @@ describe("applyPreBootPatches — tools.profile (new)", () => {
   });
 });
 
-describe("applyPreBootPatches — Mac platform Anthropic pin", () => {
-  it("repairs Mac from the customer OpenRouter default without changing the customer default", () => {
-    const config: any = {
-      tools: { profile: "coding" },
-      agents: {
-        defaults: {
-          model: { primary: GLM_MODEL_REF },
-          models: {
-            [GLM_MODEL_REF]: { alias: "glm", params: { thinking: "xhigh" } },
-          },
-          subagents: { maxConcurrent: 8, model: GLM_MODEL_REF },
-        },
-        list: [
-          {
-            id: "octogee-ops-default",
-            name: "Mac (default)",
-            model: GLM_MODEL_REF,
-          },
-        ],
-      },
-    };
-
-    const changed = applyPreBootPatches(config, { GATEWAY_CLASS: "shared" });
-
-    expect(changed).toBe(true);
-    expect(config.agents.defaults.model.primary).toBe(GLM_MODEL_REF);
-    expect(config.agents.defaults.subagents.model).toBe(GLM_MODEL_REF);
-    expect(config.agents.list[0].model).toBe(MAC_MODEL_REF);
-    expect(config.auth.profiles["anthropic:default"]).toEqual({
-      provider: "anthropic",
-      mode: "api_key",
-    });
-    expect(config.agents.defaults.models[MAC_MODEL_REF]).toEqual({
-      alias: "sonnet",
-      params: { cacheRetention: "short" },
-    });
-  });
-
-  it("pins operator Mac subagents to Sonnet without changing the customer primary default", () => {
-    const config: any = {
-      tools: { profile: "coding" },
-      agents: {
-        defaults: {
-          model: { primary: GLM_MODEL_REF },
-          models: {},
-          subagents: { maxConcurrent: 8, model: GLM_MODEL_REF },
-        },
-        list: [{ id: "${OPERATOR_AGENT_ID}", name: "Mac (${OPERATOR_AGENT_SLUG})" }],
-      },
-    };
-
-    const changed = applyPreBootPatches(config, { GATEWAY_PROFILE: "operator" });
-
-    expect(changed).toBe(true);
-    expect(config.agents.defaults.model.primary).toBe(GLM_MODEL_REF);
-    expect(config.agents.defaults.subagents.model).toBe(MAC_MODEL_REF);
-    expect(config.agents.list[0].model).toBe(MAC_MODEL_REF);
-  });
-
-  it("does not claim the Anthropic profile was repaired when auth has an invalid shape", () => {
-    const logs: string[] = [];
-    const config: any = {
-      auth: "legacy-invalid-auth",
-      tools: { profile: "coding" },
-      agents: {
-        defaults: { models: {} },
-        list: [{ id: "octogee-ops-default", model: GLM_MODEL_REF }],
-      },
-    };
-
-    const changed = applyPreBootPatches(
-      config,
-      { GATEWAY_CLASS: "shared" },
-      (msg) => logs.push(msg),
-    );
-
-    expect(changed).toBe(true);
-    expect(config.auth).toBe("legacy-invalid-auth");
-    expect(config.agents.list[0].model).toBe(MAC_MODEL_REF);
-    expect(logs).toContain(
-      "Mac pinned to anthropic/claude-sonnet-4-6 (auth profile not repaired: invalid auth/profiles shape)",
-    );
-  });
-});
-
 describe("applyPreBootPatches — MM commands.native", () => {
   it("forces commands.native=false at the channel level when missing", () => {
     const config: any = { channels: { mattermost: {} } };
@@ -200,48 +112,10 @@ describe("applyPreBootPatches — MM commands.native", () => {
 });
 
 describe("applyPreBootPatches — MM env sync", () => {
-  it("syncs MM_BOT_TOKEN into accounts.default.botToken", () => {
+  it("does not manufacture a permanent default Mattermost account", () => {
     const config: any = { channels: { mattermost: { accounts: {} } } };
-    applyPreBootPatches(config, { MM_BOT_TOKEN: "tok-from-env" });
-    expect(config.channels.mattermost.accounts.default.botToken).toBe(
-      "tok-from-env",
-    );
-  });
-
-  it("creates accounts.default if missing", () => {
-    const config: any = { channels: { mattermost: {} } };
-    applyPreBootPatches(config, { MM_BOT_TOKEN: "tok" });
-    expect(config.channels.mattermost.accounts.default.botToken).toBe("tok");
-  });
-
-  it("does not change botToken when MM_BOT_TOKEN env is unset", () => {
-    const config: any = {
-      channels: { mattermost: { accounts: { default: { botToken: "existing" } } } },
-    };
-    applyPreBootPatches(config, {});
-    expect(config.channels.mattermost.accounts.default.botToken).toBe("existing");
-  });
-
-  it("does not flag changed when env token already matches on-disk value", () => {
-    const config: any = {
-      channels: {
-        mattermost: {
-          replyToMode: "all",
-          threadDirectMessages: true,
-          threadSessionScope: "channel",
-          accounts: { default: { botToken: "same-tok" } },
-        },
-      },
-    };
-    config.tools = { profile: "coding" };
-    config.channels.mattermost.commands = { native: false };
-    config.channels.mattermost.accounts.default.commands = { native: false };
-    config.channels.mattermost.baseUrl = "https://mm.example";
-    const changed = applyPreBootPatches(config, {
-      MM_BOT_TOKEN: "same-tok",
-      MM_URL: "https://mm.example",
-    });
-    expect(changed).toBe(false);
+    applyPreBootPatches(config, { MM_BOT_TOKEN: "legacy-token-must-not-be-used" });
+    expect(config.channels.mattermost.accounts).toEqual({});
   });
 
   it("syncs MM_URL into channels.mattermost.baseUrl", () => {
@@ -450,7 +324,7 @@ describe("applyPreBootPatches — memory search embeddings", () => {
       agents: {
         list: [
           { id: "octogee-tester20-coach", name: "Gene" },
-          { id: "octogee-ops-default", name: "Mac" },
+          { id: "utility-agent", name: "Utility" },
           {
             id: "octogee-custom-coach",
             memorySearch: { enabled: false },
@@ -516,7 +390,6 @@ describe("applyMattermostPreBootPatches — non-object preservation", () => {
     };
 
     const changed = applyMattermostPreBootPatches(config, {
-      MM_BOT_TOKEN: "tok",
       MM_URL: "https://mm.example",
     }, () => {});
 
@@ -626,8 +499,8 @@ describe("applyPreBootPatches — no-change reporting", () => {
           baseUrl: "https://mm.example",
           commands: { native: false },
           accounts: {
-            default: {
-              botToken: "tok",
+            "ceckert-coach": {
+              botToken: { source: "file", provider: "octogee-mattermost", id: "/ceckert-coach" },
               commands: { native: false },
             },
           },
@@ -636,7 +509,6 @@ describe("applyPreBootPatches — no-change reporting", () => {
       plugins: { entries: {} },
     };
     const changed = applyPreBootPatches(config, {
-      MM_BOT_TOKEN: "tok",
       MM_URL: "https://mm.example",
     });
     expect(changed).toBe(false);

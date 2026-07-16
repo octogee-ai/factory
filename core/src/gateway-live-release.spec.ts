@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  configuredBuilderBootstrapAllowed,
+  configuredBuilderCredentialBootstrapAllowed,
   mergeGatewayConfigWithArtifact,
   isBareGatewayId,
   isGatewayMutableConfig,
   isGatewayMutableConfigForGateway,
   gatewayAuthorizationFromRootDocument,
+  gatewayRevisionIdFromPodName,
   readGatewayArtifact,
   readGatewayAuthorization,
   readGatewayLiveRevisionHeartbeat,
@@ -12,6 +15,222 @@ import {
   readServingGatewayAuthorization,
   type GatewayMutableConfig,
 } from "./gateway-live-release.js";
+
+describe("gatewayRevisionIdFromPodName", () => {
+  it("derives the exact revision from a generated gateway pod name", () => {
+    expect(
+      gatewayRevisionIdFromPodName(
+        "bender",
+        "octogee-gateway-bender-r12-5bc5949d46-p946t",
+      ),
+    ).toBe("bender-r12");
+  });
+
+  it("rejects another gateway, a bare revision name, and non-canonical releases", () => {
+    expect(
+      gatewayRevisionIdFromPodName(
+        "bender",
+        "octogee-gateway-other-r12-5bc5949d46-p946t",
+      ),
+    ).toBeNull();
+    expect(gatewayRevisionIdFromPodName("bender", "octogee-gateway-bender-r12")).toBeNull();
+    expect(
+      gatewayRevisionIdFromPodName(
+        "bender",
+        "octogee-gateway-bender-r012-5bc5949d46-p946t",
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("configuredBuilderBootstrapAllowed", () => {
+  const configured = {
+    gatewayId: "bender",
+    createdAt: 1,
+    createdBy: "admin",
+    updatedAt: 1,
+    updatedBy: "admin",
+    latestRelease: 2,
+    desiredRelease: 2,
+    liveRelease: 1,
+    liveRevisionId: "bender-r1",
+    trafficRevisionId: "bender-r1",
+    desiredStatus: "running",
+    roll: {
+      operationId: "roll-1",
+      status: "warming",
+      fromRelease: 1,
+      toRelease: 2,
+      sourceRevisionId: "bender-r1",
+      targetRevisionId: "bender-r2",
+      acceptingNewAssignments: false,
+      startedAt: 1,
+      updatedAt: 1,
+      error: null,
+      flippedAt: null,
+    },
+    ...mutableConfig({ builderSlug: "alice" }),
+  };
+
+  it("allows only the configured isolated builder on the authenticated roll target", () => {
+    expect(configuredBuilderBootstrapAllowed(configured, {
+      gatewayId: "bender",
+      revisionId: "bender-r2",
+      slug: "alice",
+    })).toBe(true);
+    expect(configuredBuilderBootstrapAllowed(configured, {
+      gatewayId: "bender",
+      revisionId: "bender-r1",
+      slug: "alice",
+    })).toBe(false);
+    expect(configuredBuilderBootstrapAllowed(configured, {
+      gatewayId: "bender",
+      revisionId: "bender-r2",
+      slug: "victim",
+    })).toBe(false);
+    expect(configuredBuilderBootstrapAllowed({ ...configured, gatewayId: "other" }, {
+      gatewayId: "bender",
+      revisionId: "bender-r2",
+      slug: "alice",
+    })).toBe(false);
+  });
+
+  it.each([
+    { desiredStatus: "retired" },
+    { retireAfter: 2 },
+    { retirementClaim: { operationId: "retire-1", version: 1 } },
+    { roll: { ...configured.roll, status: "failed" } },
+  ])("rejects terminal configured-builder bootstrap state: %o", (override) => {
+    expect(configuredBuilderBootstrapAllowed({ ...configured, ...override }, {
+      gatewayId: "bender",
+      revisionId: "bender-r2",
+      slug: "alice",
+    })).toBe(false);
+  });
+});
+
+describe("configuredBuilderCredentialBootstrapAllowed", () => {
+  const configured = {
+    gatewayId: "bender",
+    createdAt: 1,
+    createdBy: "admin",
+    updatedAt: 1,
+    updatedBy: "admin",
+    latestRelease: 2,
+    desiredRelease: 2,
+    liveRelease: 1,
+    liveRevisionId: "bender-r1",
+    trafficRevisionId: "bender-r1",
+    desiredStatus: "running",
+    roll: {
+      operationId: "roll-1",
+      status: "warming",
+      fromRelease: 1,
+      toRelease: 2,
+      sourceRevisionId: "bender-r1",
+      targetRevisionId: "bender-r2",
+      acceptingNewAssignments: false,
+      startedAt: 1,
+      updatedAt: 1,
+      error: null,
+      flippedAt: null,
+    },
+    ...mutableConfig({ builderSlug: "alice", ownerUid: "uid-alice" }),
+  };
+
+  it("allows credentials only for the configured builder owner on the exact target revision", () => {
+    expect(configuredBuilderCredentialBootstrapAllowed(configured, {
+      gatewayId: "bender",
+      revisionId: "bender-r2",
+      slug: "alice",
+      uid: "uid-alice",
+    })).toBe(true);
+    expect(configuredBuilderCredentialBootstrapAllowed(configured, {
+      gatewayId: "bender",
+      revisionId: "bender-r2",
+      slug: "alice",
+      uid: "uid-victim",
+    })).toBe(false);
+  });
+
+  it.each(["warming", "routing", "migrating"] as const)(
+    "allows the configured owner's credential to rehydrate on the exact load-bearing source during %s",
+    (status) => {
+      expect(configuredBuilderCredentialBootstrapAllowed({
+        ...configured,
+        roll: { ...configured.roll, status },
+      }, {
+        gatewayId: "bender",
+        revisionId: "bender-r1",
+        slug: "alice",
+        uid: "uid-alice",
+      })).toBe(true);
+    },
+  );
+
+  it.each(["retiring-source", "failed"] as const)(
+    "rejects source credential hydration after the roll reaches %s",
+    (status) => {
+      expect(configuredBuilderCredentialBootstrapAllowed({
+        ...configured,
+        roll: { ...configured.roll, status },
+      }, {
+        gatewayId: "bender",
+        revisionId: "bender-r1",
+        slug: "alice",
+        uid: "uid-alice",
+      })).toBe(false);
+    },
+  );
+
+  it("rejects source credential hydration unless it remains both live and traffic-bearing", () => {
+    expect(configuredBuilderCredentialBootstrapAllowed({
+      ...configured,
+      trafficRevisionId: "bender-r2",
+    }, {
+      gatewayId: "bender",
+      revisionId: "bender-r1",
+      slug: "alice",
+      uid: "uid-alice",
+    })).toBe(false);
+    expect(configuredBuilderCredentialBootstrapAllowed({
+      ...configured,
+      liveRevisionId: "bender-r2",
+    }, {
+      gatewayId: "bender",
+      revisionId: "bender-r1",
+      slug: "alice",
+      uid: "uid-alice",
+    })).toBe(false);
+  });
+
+  it("rejects stale revisions and cross-tenant configured-builder identity", () => {
+    expect(configuredBuilderCredentialBootstrapAllowed(configured, {
+      gatewayId: "bender",
+      revisionId: "bender-r3",
+      slug: "alice",
+      uid: "uid-alice",
+    })).toBe(false);
+    expect(configuredBuilderCredentialBootstrapAllowed(configured, {
+      gatewayId: "bender",
+      revisionId: "bender-r1",
+      slug: "victim",
+      uid: "uid-alice",
+    })).toBe(false);
+    expect(configuredBuilderCredentialBootstrapAllowed(configured, {
+      gatewayId: "bender",
+      revisionId: "bender-r1",
+      slug: "alice",
+      uid: "uid-victim",
+    })).toBe(false);
+    expect(configuredBuilderCredentialBootstrapAllowed(configured, {
+      gatewayId: "other",
+      revisionId: "bender-r1",
+      slug: "alice",
+      uid: "uid-alice",
+    })).toBe(false);
+  });
+});
 
 type Docs = Record<string, Record<string, unknown>>;
 
@@ -277,7 +496,6 @@ describe("gateway durable configuration authorization", () => {
     const rendered = mergeGatewayConfigWithArtifact(config, {
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
       imageTag: "deadbee",
-      macOpsTokenProtocol: 2,
     });
 
     expect(rendered).toMatchObject({
@@ -361,7 +579,6 @@ describe("gateway durable configuration authorization", () => {
         payload: {
           imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
           imageTag: "deadbee",
-          macOpsTokenProtocol: 2,
         },
       },
     };
@@ -369,7 +586,6 @@ describe("gateway durable configuration authorization", () => {
     await expect(readGatewayArtifact(database(docs) as never, "bender", 2)).resolves.toEqual({
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
       imageTag: "deadbee",
-      macOpsTokenProtocol: 2,
     });
   });
 

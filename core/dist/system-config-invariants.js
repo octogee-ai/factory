@@ -1,0 +1,225 @@
+const ABSENT = Symbol("absent");
+const REQUIRED_PLUGINS = [
+    "mattermost",
+    "anthropic",
+    "memory-core",
+    "octogee-chat-tools",
+    "octogee-preview-tools",
+    "octogee-project-tools",
+    "octogee-status-tools",
+    "octogee-web-tools",
+    "octogee-workspace-tools",
+    "octogee-publish-tools",
+];
+const PLUGIN_ENTRIES = REQUIRED_PLUGINS.filter((id) => id !== "memory-core");
+const PLATFORM_PLUGIN_CONFIGS = {
+    "octogee-chat-tools": {
+        siteUrl: "${MM_SITE_URL}",
+        brokerUrl: "${FLEET_BROKER_URL}",
+        tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+        customersRoot: "${CUSTOMERS_DIR}",
+    },
+    "octogee-preview-tools": {},
+    "octogee-project-tools": {
+        brokerUrl: "${FLEET_BROKER_URL}",
+        tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+    },
+    "octogee-status-tools": {
+        brokerUrl: "${FLEET_BROKER_URL}",
+        tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+        gatewayClass: "${GATEWAY_CLASS}",
+    },
+    "octogee-web-tools": {
+        brokerUrl: "${FLEET_BROKER_URL}",
+        gatewayId: "${GATEWAY_ID}",
+        tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+    },
+    "octogee-workspace-tools": {},
+    "octogee-publish-tools": {},
+};
+function isolatedToolInvariants() {
+    return [
+        {
+            kind: "forbidden-array",
+            path: "tools.deny",
+            values: ["exec", "process", "subagents", "sessions_spawn"],
+        },
+        { kind: "exact", path: "tools.exec", value: ABSENT },
+        { kind: "exact", path: "tools.elevated.enabled", value: false },
+    ];
+}
+export function platformInvariantTable(context) {
+    const isolated = context.gatewayClass === "builder" || context.gatewayClass === "operator";
+    const gatewayId = context.gatewayId?.trim();
+    const apiOrigin = context.apiOrigin?.trim().replace(/\/$/, "");
+    if (isolated && (!gatewayId || !apiOrigin)) {
+        throw new Error("gatewayId and apiOrigin are required for isolated config invariants");
+    }
+    const base = [
+        { kind: "exact", path: "discovery.mdns.mode", value: "off" },
+        { kind: "exact", path: "gateway.port", value: 18789 },
+        { kind: "exact", path: "gateway.mode", value: "local" },
+        { kind: "exact", path: "gateway.bind", value: "lan" },
+        { kind: "exact", path: "gateway.auth.mode", value: "token" },
+        { kind: "exact", path: "gateway.auth.token", value: ABSENT },
+        { kind: "exact", path: "gateway.auth.password", value: ABSENT },
+        {
+            kind: "exact",
+            path: "gateway.controlUi.allowedOrigins",
+            value: isolated
+                ? [apiOrigin]
+                : ["http://localhost:18789", "http://127.0.0.1:18789"],
+        },
+        {
+            kind: "exact",
+            path: "gateway.controlUi.basePath",
+            value: isolated ? `/g/${gatewayId}/openclaw` : ABSENT,
+        },
+        { kind: "exact", path: "gateway.controlUi.allowInsecureAuth", value: isolated ? false : ABSENT },
+        { kind: "exact", path: "gateway.controlUi.dangerouslyDisableDeviceAuth", value: isolated ? false : ABSENT },
+        { kind: "exact", path: "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback", value: false },
+        { kind: "exact", path: "gateway.terminal.enabled", value: false },
+        { kind: "exact", path: "logging.redactSensitive", value: "tools" },
+        {
+            kind: "exact",
+            path: "secrets.providers.octogee-mattermost",
+            value: {
+                source: "file",
+                path: "/home/node/.openclaw/secrets/mattermost-accounts.json",
+                mode: "json",
+            },
+        },
+        { kind: "exact", path: "channels.mattermost.enabled", value: true },
+        { kind: "exact", path: "channels.mattermost.baseUrl", value: "${MM_URL}" },
+        { kind: "exact", path: "channels.mattermost.network.dangerouslyAllowPrivateNetwork", value: true },
+        {
+            kind: "exact",
+            path: "channels.mattermost.interactions.callbackBaseUrl",
+            value: "${MM_INTERACTIONS_CALLBACK_BASE_URL}",
+        },
+        {
+            kind: "exact",
+            path: "channels.mattermost.interactions.allowedSourceIps",
+            value: ["${MM_INTERACTIONS_ALLOWED_SOURCE_IPS}"],
+        },
+        { kind: "exact", path: "channels.mattermost.commands.native", value: false },
+        { kind: "exact", path: "plugins.enabled", value: true },
+        { kind: "required-array", path: "plugins.allow", values: REQUIRED_PLUGINS },
+        ...PLUGIN_ENTRIES.map((id) => ({
+            kind: "exact",
+            path: `plugins.entries.${id}.enabled`,
+            value: true,
+        })),
+        ...Object.entries(PLATFORM_PLUGIN_CONFIGS).map(([id, value]) => ({
+            kind: "exact",
+            path: `plugins.entries.${id}.config`,
+            value,
+        })),
+    ];
+    return isolated ? [...base, ...isolatedToolInvariants()] : base;
+}
+function asObject(value) {
+    return value !== null && typeof value === "object" && !Array.isArray(value)
+        ? value
+        : null;
+}
+function readPath(root, dottedPath) {
+    let current = root;
+    for (const part of dottedPath.split(".")) {
+        const record = asObject(current);
+        if (!record || !Object.prototype.hasOwnProperty.call(record, part))
+            return ABSENT;
+        current = record[part];
+    }
+    return current;
+}
+function parentForPath(root, dottedPath) {
+    const parts = dottedPath.split(".");
+    const leaf = parts.pop();
+    let current = root;
+    for (const part of parts) {
+        const existing = asObject(current[part]);
+        if (existing) {
+            current = existing;
+            continue;
+        }
+        const created = {};
+        current[part] = created;
+        current = created;
+    }
+    return [current, leaf];
+}
+function equal(left, right) {
+    if (left === ABSENT || right === ABSENT)
+        return left === right;
+    if (Array.isArray(left) || Array.isArray(right)) {
+        return Array.isArray(left) && Array.isArray(right) && left.length === right.length &&
+            left.every((value, index) => equal(value, right[index]));
+    }
+    const leftObject = asObject(left);
+    const rightObject = asObject(right);
+    if (leftObject || rightObject) {
+        if (!leftObject || !rightObject)
+            return false;
+        const leftKeys = Object.keys(leftObject).sort();
+        const rightKeys = Object.keys(rightObject).sort();
+        return leftKeys.length === rightKeys.length &&
+            leftKeys.every((key, index) => key === rightKeys[index] && equal(leftObject[key], rightObject[key]));
+    }
+    return Object.is(left, right);
+}
+function invariantSatisfied(config, invariant) {
+    const actual = readPath(config, invariant.path);
+    if (invariant.kind === "exact")
+        return equal(actual, invariant.value);
+    if (invariant.kind === "required-array") {
+        return Array.isArray(actual) && invariant.values.every((value) => actual.includes(value));
+    }
+    return !Array.isArray(actual) || invariant.values.every((value) => !actual.includes(value));
+}
+function applyInvariant(config, invariant) {
+    const [parent, leaf] = parentForPath(config, invariant.path);
+    if (invariant.kind === "exact") {
+        if (invariant.value === ABSENT)
+            delete parent[leaf];
+        else
+            parent[leaf] = structuredClone(invariant.value);
+        return;
+    }
+    const actual = Array.isArray(parent[leaf])
+        ? parent[leaf].filter((value) => typeof value === "string")
+        : [];
+    parent[leaf] = invariant.kind === "required-array"
+        ? [...actual, ...invariant.values.filter((value) => !actual.includes(value))]
+        : actual.filter((value) => !invariant.values.includes(value));
+}
+export class PlatformInvariantPolicyError extends Error {
+    paths;
+    code = "platform-invariant-violation";
+    constructor(paths) {
+        super(`platform-owned config paths changed: ${paths.join(", ")}`);
+        this.paths = paths;
+        this.name = "PlatformInvariantPolicyError";
+    }
+}
+export function platformInvariantViolations(config, context) {
+    return platformInvariantTable(context)
+        .filter((invariant) => !invariantSatisfied(config, invariant))
+        .map((invariant) => invariant.path);
+}
+export function assertPlatformInvariants(config, context) {
+    const paths = platformInvariantViolations(config, context);
+    if (paths.length > 0)
+        throw new PlatformInvariantPolicyError(paths);
+}
+export function reconcilePlatformInvariants(config, context) {
+    const table = platformInvariantTable(context);
+    const changedPaths = table
+        .filter((invariant) => !invariantSatisfied(config, invariant))
+        .map((invariant) => invariant.path);
+    for (const invariant of table) {
+        if (changedPaths.includes(invariant.path))
+            applyInvariant(config, invariant);
+    }
+    return { changedPaths };
+}

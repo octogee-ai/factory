@@ -33,13 +33,64 @@ describe("revisionHeartbeatMerge — writer targets glmGateways/{id}.heartbeat",
       1000,
     );
     expect(merge).toEqual({
-      heartbeat: { status: "ready", mountedCustomers: ["a", "b"], lastHeartbeatAt: 1000, startedAt: 42 },
+      heartbeat: {
+        status: "ready",
+        mountedCustomers: ["a", "b"],
+        lastHeartbeatAt: 1000,
+        startedAt: 42,
+      },
+    });
+  });
+
+  it("timestamps each accepted config marker without erasing a separately published marker", () => {
+    const timestamp = { toMillis: () => 1000 };
+    const controlProtocol = { protocol: "durable-openclaw-config" as const, version: 2 as const };
+    expect(revisionHeartbeatMerge({
+      status: "ready",
+      mountedCustomers: [],
+      configStatus: { controlProtocol },
+    }, timestamp).heartbeat.configStatus).toEqual({
+      controlProtocol,
+      observedAt: timestamp,
+    });
+    const pollerMerge = revisionHeartbeatMerge({
+      status: "ready",
+      mountedCustomers: [],
+    }, timestamp);
+    expect(pollerMerge.heartbeat).not.toHaveProperty("configStatus");
+    expect({
+      configStatus: {
+        controlProtocol,
+        openclawVersion: "2026.7.1",
+        observedAt: 900,
+      },
+      ...pollerMerge.heartbeat,
+    }).toMatchObject({
+      configStatus: {
+        controlProtocol,
+        openclawVersion: "2026.7.1",
+        observedAt: 900,
+      },
+      lastHeartbeatAt: timestamp,
     });
   });
 
   it("omits startedAt when the poll did not report it", () => {
     const merge = revisionHeartbeatMerge({ status: "ready", mountedCustomers: [] }, 5);
     expect(merge.heartbeat).not.toHaveProperty("startedAt");
+  });
+
+  it("persists the OpenClaw runtime version from trusted pod health", () => {
+    expect(
+      revisionHeartbeatMerge(
+        {
+          status: "ready",
+          mountedCustomers: [],
+          openclawVersion: "2026.7.1",
+        },
+        5,
+      ).heartbeat,
+    ).toMatchObject({ openclawVersion: "2026.7.1" });
   });
 });
 

@@ -4,6 +4,49 @@ export declare const GATEWAY_ASSIGNMENTS_SUBCOLLECTION = "assignments";
 export declare const REVISION_TOMBSTONES_COLLECTION = "revisionTombstones";
 export type GatewayLifecycleStatus = "running" | "paused" | "retired";
 export type GatewayRollStatus = "warming" | "routing" | "migrating" | "retiring-source" | "failed";
+export interface GatewayRollSystemConfigCheckpoint {
+    migrationId: string;
+    builderSlug: string;
+    sourceRevisionId: string;
+    checkpointCommit: string | null;
+    configHash: string | null;
+    checkpointedAt: number | null;
+    sourceUnfrozenAt: number | null;
+}
+export type GatewayRollSystemConfigPhase = "checkpointed" | "candidateProven" | "promotionIntent" | "promoted" | "abortIntent" | "terminalHold" | "cutover" | "sourceRetired" | "finalized";
+export interface GatewayRollSystemConfigState {
+    phase: GatewayRollSystemConfigPhase;
+    migrationId: string;
+    builderSlug: string;
+    sourceRevisionId: string;
+    targetRevisionId: string;
+    checkpointCommit: string;
+    configHash: string;
+    freezeRef: string;
+    freezeObject: string;
+    checkpointedAt: number;
+    candidateCommit?: string;
+    candidateHash?: string;
+    candidateRef?: string;
+    runtimeConfigHash?: string;
+    observedRevisionId?: string;
+    targetStartedAt?: number;
+    imageTag?: string;
+    buildSha?: string;
+    openclawVersion?: string;
+    provenAt?: number;
+    promotionIntentAt?: number;
+    promotedCommit?: string;
+    promotedAt?: number;
+    abortDisposition?: "fail" | "supersede";
+    abortReason?: string;
+    abortIntentAt?: number;
+    terminalError?: string;
+    terminalErrorAt?: number;
+    cutoverAt?: number;
+    sourceRetiredAt?: number;
+    finalizedAt?: number;
+}
 export interface GatewayRollState {
     operationId: string;
     status: GatewayRollStatus;
@@ -15,6 +58,8 @@ export interface GatewayRollState {
     startedAt: number;
     updatedAt: number;
     error: string | null;
+    systemConfigCheckpoint?: GatewayRollSystemConfigCheckpoint | null;
+    systemConfigRoll?: GatewayRollSystemConfigState | null;
     flippedAt: number | null;
 }
 export type GatewayIdleSleepStatus = "paused" | "empty-waiting" | "returning-to-shared";
@@ -33,6 +78,35 @@ export interface GatewayLegacyBackfill {
     sourceGlmGatewayIds: string[];
     startedAt: number;
 }
+export interface GatewayRetirementClaim {
+    operationId: string;
+    version: number;
+    claimedAt: number;
+    phase: "waking" | "claimed";
+    liveRevisionId: string | null;
+    liveRelease: number | null;
+    liveRuntimeIdentity: {
+        startedAt: number;
+        version: string;
+        openclawVersion: string;
+    } | null;
+    previousDesiredStatus: Exclude<GatewayLifecycleStatus, "retired">;
+    configCheckpoint: GatewayRetirementConfigCheckpoint | null;
+    configTerminal: GatewayRetirementConfigTerminal | null;
+}
+export interface GatewayRetirementConfigCheckpoint {
+    migrationId: string;
+    slug: string;
+    sourceRevisionId: string;
+    targetRevisionId: string;
+    checkpointCommit: string;
+    configHash: string;
+    freezeObject: string;
+}
+export interface GatewayRetirementConfigTerminal {
+    retirementRef: string;
+    retirementObject: string;
+}
 export interface GatewayDoc {
     gatewayId: string;
     createdAt: number;
@@ -50,6 +124,8 @@ export interface GatewayDoc {
     preemptionHandoff?: GatewayPreemptionHandoffSpec | null;
     retireAfter?: number | null;
     legacyBackfill?: GatewayLegacyBackfill | null;
+    retirementVersion?: number;
+    retirementClaim?: GatewayRetirementClaim | null;
 }
 export declare const W9_CANDIDATE_MANIFEST_PATH = "infra/gateway/openclaw-candidates/agent-conversation.json";
 export declare const W9_MATTERMOST_OVERLAY_VALUES_PATH = "infra/candidates/values.mattermost-silent-post.yaml";
@@ -72,7 +148,6 @@ export interface W9TestPublisherLiveExperiment {
 }
 export declare function isW9TestPublisherLiveExperiment(value: unknown): value is W9TestPublisherLiveExperiment;
 export interface ReleasePayload {
-    macOpsTokenProtocol?: MacOpsTokenProtocol;
     imageRepository: string;
     imageTag: string;
     gatewayEdgeImage?: W9GatewayEdgeImage;
@@ -80,9 +155,6 @@ export interface ReleasePayload {
 }
 export declare function isReleasePayload(value: unknown): value is ReleasePayload;
 export declare function isW9GatewayEdgeImage(value: unknown, gatewayImageTag: string): value is W9GatewayEdgeImage;
-export type MacOpsTokenProtocol = 1 | 2;
-export declare const CURRENT_MAC_OPS_TOKEN_PROTOCOL: MacOpsTokenProtocol;
-export declare function releaseMacOpsTokenProtocol(payload: unknown): MacOpsTokenProtocol | null;
 export interface ReleaseDoc {
     gatewayId: string;
     release: number;
@@ -135,6 +207,23 @@ export interface RevisionHeartbeatObservation {
     startedAt: number | null;
     mountedCustomers: string[];
     migratingIn: string[];
+    configStatus?: import("./fleet-controller.js").GatewayConfigStatus;
+}
+export interface RevisionSystemConfigObservation {
+    migrationId: string;
+    builderSlug: string;
+    sourceRevisionId: string;
+    checkpointCommit: string;
+    restoredCommit: string;
+    acceptedCommit: string;
+    configHash: string;
+    configReady: true;
+    observedRevisionId: string;
+    restoreProvenAt: number;
+    configReadyAt: number;
+    runtimeConfigHash: string;
+    observedAt: number;
+    sourceUnfrozenAt?: number;
 }
 export interface RevisionRealizationDoc {
     docKind: "revision";
@@ -149,6 +238,7 @@ export interface RevisionRealizationDoc {
     retireReason: string | null;
     helm: RevisionHelmObservation;
     heartbeat: RevisionHeartbeatObservation;
+    systemConfig?: RevisionSystemConfigObservation;
     lastError: {
         message: string | null;
         at: number | null;
@@ -173,7 +263,7 @@ export declare function revisionTombstoneDocId(gatewayId: string, revision: numb
 export declare function isRevisionTombstone(data: unknown): data is RevisionTombstone;
 export declare function releasePayloadHash(payload: ReleasePayload): string;
 export type GatewayFieldClassification = "new-revision" | "in-place" | "gateway-mutable";
-export declare const RELEASE_NEW_REVISION_FIELDS: readonly ["imageRepository", "imageTag", "macOpsTokenProtocol", "testExperiment"];
+export declare const RELEASE_NEW_REVISION_FIELDS: readonly ["imageRepository", "imageTag", "testExperiment"];
 export declare const RELEASE_IN_PLACE_FIELDS: readonly string[];
 export declare const GATEWAY_MUTABLE_FIELDS: readonly ["profile", "gatewayClass", "imageProfile", "sizingTier", "computeClass", "gcpProject", "gatewayContainerSecurityContext", "serviceAccountName", "serviceAccount", "operatorAccess", "ownerUid", "coOwnerUids", "builderSlug", "openclawOverrides", "modelBrokerLimits", "preemption", "desiredStatus", "roll", "idleSleep", "preemptionHandoff", "liveRelease", "liveRevisionId", "trafficRevisionId", "retireAfter"];
 export declare function classifyGatewayField(field: string): GatewayFieldClassification;

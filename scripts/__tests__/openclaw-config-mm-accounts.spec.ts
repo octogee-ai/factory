@@ -1,14 +1,37 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   activeAgentProjectIds,
+  buildCustomerAgent,
   buildMattermostAccounts,
   buildCustomerBindings,
   buildProjectAgentAccounts,
   buildProjectAgents,
   fetchCoachTokens,
-  mergeAccountsPreservingDefault,
   type CoachTokenDeps,
 } from "../lib/openclaw-config-builders.js";
+
+describe("buildCustomerAgent", () => {
+  it("marks the isolated gateway Builder coach as OpenClaw's explicit default", () => {
+    expect(buildCustomerAgent({
+      uid: "uid-chris",
+      slug: "chris",
+      customerDir: "/customers/chris",
+      agentDir: "/agents/octogee-chris-coach/agent",
+      coach: { name: "Coach", emoji: "🤖", model: "house" },
+      default: true,
+    })).toMatchObject({ id: "octogee-chris-coach", default: true });
+  });
+
+  it("does not claim default routing for a shared-gateway customer", () => {
+    expect(buildCustomerAgent({
+      uid: "uid-sam",
+      slug: "sam",
+      customerDir: "/customers/sam",
+      agentDir: "/agents/octogee-sam-coach/agent",
+      coach: { name: "Coach", emoji: "🤖", model: "house" },
+    })).not.toHaveProperty("default");
+  });
+});
 
 describe("fetchCoachTokens", () => {
   function mkDeps(
@@ -129,13 +152,13 @@ describe("buildMattermostAccounts", () => {
       "mm-admin",
     );
     expect(accounts["chris-coach"]).toEqual({
-      botToken: "tok-chris",
+      botToken: { source: "file", provider: "octogee-mattermost", id: "/chris-coach" },
       groupPolicy: "open",
       groupAllowFrom: ["mm-chris", "mm-admin"],
       commands: { native: false },
     });
     expect(accounts["sam-coach"]).toEqual({
-      botToken: "tok-sam",
+      botToken: { source: "file", provider: "octogee-mattermost", id: "/sam-coach" },
       groupPolicy: "open",
       groupAllowFrom: ["mm-sam", "mm-admin"],
       commands: { native: false },
@@ -152,11 +175,11 @@ describe("buildMattermostAccounts", () => {
       "mm-admin",
     );
     expect(accounts["chris-coach"]).toMatchObject({
-      botToken: "tok-chris",
+      botToken: { source: "file", provider: "octogee-mattermost", id: "/chris-coach" },
       groupPolicy: "open",
     });
     expect(accounts["sam-coach"]).toBeUndefined();
-    expect(Object.values(accounts).every((a) => a.botToken.length > 0)).toBe(true);
+    expect(Object.values(accounts).every((a) => a.botToken.source === "file")).toBe(true);
   });
 
   it("routes tokens + allowlists per-uid — no cross-workspace bleed", () => {
@@ -197,7 +220,7 @@ describe("buildMattermostAccounts", () => {
       warn,
     );
     expect(accounts["chris-coach"]).toEqual({
-      botToken: "tok-chris",
+      botToken: { source: "file", provider: "octogee-mattermost", id: "/chris-coach" },
       groupPolicy: "open",
       commands: { native: false },
     });
@@ -265,73 +288,6 @@ describe("buildCustomerBindings", () => {
   });
 });
 
-describe("mergeAccountsPreservingDefault", () => {
-  it("takes all coach entries from the fresh list and preserves `default` from existing", () => {
-    const existing = {
-      default: { botToken: "bot-token-xyz" },
-      "chris-coach": { botToken: "stale-coach-abc" },
-    };
-    const coach = {
-      "marie-coach": { botToken: "marie-tok", groupPolicy: "allowlist" as const, groupAllowFrom: ["u1"] },
-    };
-    const merged = mergeAccountsPreservingDefault(existing, coach);
-    expect(merged).toEqual({
-      default: { botToken: "bot-token-xyz" },
-      "marie-coach": { botToken: "marie-tok", groupPolicy: "allowlist", groupAllowFrom: ["u1"] },
-    });
-    expect(merged).not.toHaveProperty("chris-coach");
-  });
-
-  it("emits only coach entries when existing has no `default` (fresh PVC)", () => {
-    const merged = mergeAccountsPreservingDefault(
-      {},
-      { "x-coach": { botToken: "x", groupPolicy: "allowlist" as const, groupAllowFrom: ["u1"] } },
-    );
-    expect(merged).toEqual({
-      "x-coach": { botToken: "x", groupPolicy: "allowlist", groupAllowFrom: ["u1"] },
-    });
-  });
-
-  it("preserves ONLY `default` — stale non-coach entries (e.g. legacy `admin`) are dropped", () => {
-    const existing = {
-      default: { botToken: "bot" },
-      admin: { botToken: "legacy-admin-that-must-not-survive" },
-    };
-    const merged = mergeAccountsPreservingDefault(existing, {});
-    expect(merged).toEqual({ default: { botToken: "bot" } });
-    expect(merged).not.toHaveProperty("admin");
-  });
-
-  it("when coach list has zero customers, result is just `default`", () => {
-    const merged = mergeAccountsPreservingDefault(
-      { default: { botToken: "bot" } },
-      {},
-    );
-    expect(merged).toEqual({ default: { botToken: "bot" } });
-  });
-
-  it("REGRESSION: reboot with ≥1 customer must retain `default` (the hang-on-reboot bug)", () => {
-    const existing = {
-      default: { botToken: "octogee-bot-token" },
-      "chris1969-coach": { botToken: "stale-pat", groupPolicy: "allowlist" as const, groupAllowFrom: [] },
-    };
-    const coach = {
-      "chris1969-coach": {
-        botToken: "fresh-pat-from-firestore",
-        groupPolicy: "allowlist" as const,
-        groupAllowFrom: ["mm-chris", "mm-admin"],
-      },
-    };
-    const merged = mergeAccountsPreservingDefault(existing, coach);
-    expect(merged.default).toEqual({ botToken: "octogee-bot-token" });
-    expect(merged["chris1969-coach"]).toEqual({
-      botToken: "fresh-pat-from-firestore",
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["mm-chris", "mm-admin"],
-    });
-  });
-});
-
 describe("activeAgentProjectIds", () => {
   it("selects only enabled agents that hold a minted token", () => {
     expect(
@@ -384,7 +340,7 @@ describe("buildProjectAgentAccounts", () => {
 
     expect(accounts).toEqual({
       "chris-proj-orbit": {
-        botToken: "pat-1",
+        botToken: { source: "file", provider: "octogee-mattermost", id: "/chris-proj-orbit" },
         groupPolicy: "open",
         commands: { native: false },
       },

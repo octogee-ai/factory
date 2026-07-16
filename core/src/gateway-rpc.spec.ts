@@ -762,6 +762,7 @@ describe("token resolution", () => {
   let tmpDir: string;
   let configPath: string;
   let origEnv: string | undefined;
+  let origConfigPath: string | undefined;
 
   beforeEach(() => {
     const fs = require("node:fs") as typeof import("node:fs");
@@ -770,7 +771,9 @@ describe("token resolution", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gw-rpc-token-"));
     configPath = path.join(tmpDir, "openclaw.json");
     origEnv = process.env.OPENCLAW_GATEWAY_TOKEN;
+    origConfigPath = process.env.OPENCLAW_CONFIG_PATH;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_CONFIG_PATH;
   });
 
   afterEach(() => {
@@ -778,6 +781,8 @@ describe("token resolution", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
     if (origEnv === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
     else process.env.OPENCLAW_GATEWAY_TOKEN = origEnv;
+    if (origConfigPath === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
+    else process.env.OPENCLAW_CONFIG_PATH = origConfigPath;
   });
 
   it("does not read OPENCLAW_GATEWAY_TOKEN or openclaw.json by default", async () => {
@@ -868,6 +873,48 @@ describe("token resolution", () => {
     }
 
     expect(captured?.auth?.token).toBe("from-file-abc123");
+  });
+
+  it("uses OPENCLAW_CONFIG_PATH when legacy fallback has no explicit path", async () => {
+    const fs = require("node:fs") as typeof import("node:fs");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ gateway: { auth: { token: "from-active-config" } } }),
+    );
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+
+    const srv = await startMockGateway();
+    let captured: any = null;
+    srv.setConnectHandler((params) => {
+      captured = params;
+      return {
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          protocol: 4,
+          server: { version: "test", connId: "c1" },
+          features: { methods: [], events: [] },
+          snapshot: {},
+          policy: { maxPayload: 1024, maxBufferedBytes: 1024, tickIntervalMs: 1000 },
+        },
+      };
+    });
+
+    const rpc = createGatewayRpc({
+      url: srv.url,
+      allowLegacyGatewayTokenFallback: true,
+      connectTimeoutMs: 500,
+      callTimeoutMs: 500,
+      identity: makeTestIdentity(),
+    });
+    try {
+      await rpc.isGatewayUp(500);
+    } finally {
+      await rpc.close();
+      await srv.close();
+    }
+
+    expect(captured?.auth?.token).toBe("from-active-config");
   });
 
   it("legacy fallback prefers the OPENCLAW_GATEWAY_TOKEN env var over openclaw.json", async () => {

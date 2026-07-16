@@ -1,14 +1,12 @@
 import type { Operation, OperationStep, StepStatus } from "@octogee/shared/types/glm";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
-import type { GatewayLifecycleStatus } from "@octogee/shared/types/gateway-releases";
+import type {
+  GatewayRetirementConfigCheckpoint,
+  GatewayRetirementConfigTerminal,
+} from "@octogee/shared/types/gateway-releases";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 
 const UNKNOWN_ERROR = "unknown error";
-
-export interface GatewayLiveState {
-  mountedCustomers: string[];
-  desiredStatus?: GatewayLifecycleStatus;
-}
 
 interface NonRetiredGatewayRevision {
   revisionId: string;
@@ -16,8 +14,36 @@ interface NonRetiredGatewayRevision {
   mountedCustomers: string[];
 }
 
+export type RetirementConfigFence =
+  | { kind: "shared" }
+  | {
+      kind: "dedicated";
+      checkpoint: GatewayRetirementConfigCheckpoint;
+      terminal?: GatewayRetirementConfigTerminal;
+    };
+
 export interface RetireGatewayDeps {
-  readGatewayLiveState: (gatewayId: string) => Promise<GatewayLiveState | null>;
+  attestRetirementClaim: (input: {
+    gatewayId: string;
+    operationId: string;
+    version: number;
+  }) => Promise<
+    | { ok: true; wakeRequired: boolean }
+    | { ok: false; error: string; retryable: boolean }
+  >;
+
+  acquireRetirementConfigFence: (input: {
+    gatewayId: string;
+    operationId: string;
+    version: number;
+  }) => Promise<RetirementConfigFence>;
+
+  verifyRetirementConfigFence: (input: {
+    gatewayId: string;
+    operationId: string;
+    version: number;
+    fence: RetirementConfigFence;
+  }) => Promise<{ ok: true } | { ok: false; error: string }>;
 
   deleteGlmGateway: (gatewayId: string) => Promise<void>;
 
@@ -65,19 +91,13 @@ export interface RetireGatewayDeps {
   // already-absent release so a crashed retire re-drives cleanly.
   helmUninstallRevision: (revisionId: string) => Promise<void>;
 
-  revokeRevisionMacOpsTokens: (input: {
-    gatewayId: string;
-    revisionId: string;
-  }) => Promise<void>;
-
-  revokeGatewayLegacyMacOpsTokens: (input: { gatewayId: string }) => Promise<void>;
-
   // Mark the revision doc retired (lifecycle retired + retiredAt + retireReason).
   // The doc is RETAINED (never deleted), matching the roll's source retirement.
   retireRevisionDoc: (revisionId: string, reason: string) => Promise<void>;
 
   syncFleetIngress: () => Promise<void>;
   pollIntervalMs: number;
+  retirementAttestationTimeoutMs: number;
   now: () => number;
   wait: (ms: number) => Promise<void>;
   log: (msg: string) => void;
@@ -85,6 +105,7 @@ export interface RetireGatewayDeps {
 
 interface RetireGatewayInput {
   gatewayId?: unknown;
+  retirementClaimVersion?: unknown;
   retainData?: unknown;
   retainServiceAccount?: unknown;
 }
@@ -93,6 +114,7 @@ type RetireGatewayRequest =
   | { error: string }
   | {
       gatewayId: string;
+      retirementClaimVersion: number;
       retainData: boolean;
       retainServiceAccount: boolean;
     };
@@ -126,8 +148,15 @@ function resolveRetireGatewayRequest(input: RetireGatewayInput): RetireGatewayRe
   if (!isValidGatewayId(gatewayId)) {
     return { error: `invalid gatewayId in op.input: "${gatewayId}"` };
   }
+  if (
+    !Number.isInteger(input.retirementClaimVersion) ||
+    (input.retirementClaimVersion as number) <= 0
+  ) {
+    return { error: "invalid retirementClaimVersion in op.input" };
+  }
   return {
     gatewayId,
+    retirementClaimVersion: input.retirementClaimVersion as number,
     retainData: shouldRetainData(input),
     retainServiceAccount: shouldRetainServiceAccount(input),
   };
@@ -137,15 +166,67 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
   return async (op: Operation, ctx: OperationContext): Promise<OperationResult> => {
     const request = resolveRetireGatewayRequest(op.input as RetireGatewayInput);
     if ("error" in request) return failure(request.error);
-    const { gatewayId, retainData, retainServiceAccount } = request;
+    const { gatewayId, retirementClaimVersion, retainData, retainServiceAccount } = request;
 
     // Refuse while any customer is still assigned — the operator must migrate
     // them off first. Naming the slugs makes the next action obvious.
     const assignmentFailure = await assertNoAssignments(deps, gatewayId);
     if (assignmentFailure) return assignmentFailure;
 
-    const liveFailure = await assertGatewayRetirable(deps, gatewayId);
-    if (liveFailure) return liveFailure;
+    const attestationFailure = await awaitRetirementAttestation(
+      deps,
+      gatewayId,
+      op.id,
+      retirementClaimVersion,
+    );
+    if (attestationFailure) return attestationFailure;
+
+    let configFence: RetirementConfigFence;
+    try {
+      configFence = await deps.acquireRetirementConfigFence({
+        gatewayId,
+        operationId: op.id,
+        version: retirementClaimVersion,
+      });
+    } catch (error) {
+      return {
+        steps: [],
+        success: false,
+        error: `gateway ${gatewayId} retirement config freeze failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        output: {
+          retirementFencePending: { gatewayId, operationId: op.id },
+        },
+      };
+    }
+
+    let finalVerification: { ok: true } | { ok: false; error: string };
+    try {
+      finalVerification = await deps.verifyRetirementConfigFence({
+        gatewayId,
+        operationId: op.id,
+        version: retirementClaimVersion,
+        fence: configFence,
+      });
+    } catch (error) {
+      return retirementConfigFenceFailure(
+        configFence,
+        gatewayId,
+        op.id,
+        `gateway ${gatewayId} retirement config fence unreadable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    if (!finalVerification.ok) {
+      return retirementConfigFenceFailure(
+        configFence,
+        gatewayId,
+        op.id,
+        finalVerification.error,
+      );
+    }
 
     // Drain every non-retired revision (uninstall octogee-gw-{revisionId} +
     // tombstone + retire the revision doc) BEFORE any gateway-scoped teardown.
@@ -154,9 +235,6 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
     // gateway-scoped teardown below is UNREACHABLE while any revision lives.
     const revisionFailure = await drainRevisions(ctx, deps, gatewayId);
     if (revisionFailure) return revisionFailure;
-
-    const legacyTokenFailure = await revokeLegacyMacOpsTokens(ctx, deps, gatewayId);
-    if (legacyTokenFailure) return legacyTokenFailure;
 
     // 2. Tear down the per-gateway resources. Steps are independent and
     //    best-effort: every one is attempted even if a prior one failed (D4),
@@ -187,6 +265,53 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
 
     return { steps: [], success: true };
   };
+}
+
+function retirementConfigFenceFailure(
+  fence: RetirementConfigFence,
+  gatewayId: string,
+  operationId: string,
+  error: string,
+): OperationResult {
+  if (fence.kind === "shared") return failure(error);
+  return {
+    steps: [],
+    success: false,
+    error,
+    output: {
+      retirementFencePending: { gatewayId, operationId },
+    },
+  };
+}
+
+async function awaitRetirementAttestation(
+  deps: RetireGatewayDeps,
+  gatewayId: string,
+  operationId: string,
+  version: number,
+): Promise<OperationResult | null> {
+  const deadline = deps.now() + deps.retirementAttestationTimeoutMs;
+  while (true) {
+    let attestation: Awaited<ReturnType<RetireGatewayDeps["attestRetirementClaim"]>>;
+    try {
+      attestation = await deps.attestRetirementClaim({ gatewayId, operationId, version });
+    } catch (error) {
+      return failure(
+        `gateway ${gatewayId} retirement wake attestation unreadable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    if (attestation.ok) return null;
+    if (!attestation.retryable) return failure(attestation.error);
+    const remaining = deadline - deps.now();
+    if (remaining <= 0) {
+      return failure(
+        `gateway ${gatewayId} retirement wake attestation timed out: ${attestation.error}`,
+      );
+    }
+    await deps.wait(Math.min(deps.pollIntervalMs, remaining));
+  }
 }
 
 async function teardownResources(
@@ -302,10 +427,6 @@ async function drainRevisions(
     const r = await runReportedStep(ctx, deps, `retire-revision:${rev.revisionId}`, async () => {
       // Tolerates an already-absent Helm release (crash-resume) by contract.
       await deps.helmUninstallRevision(rev.revisionId);
-      await deps.revokeRevisionMacOpsTokens({
-        gatewayId,
-        revisionId: rev.revisionId,
-      });
       // Tombstone while the revision doc is still non-retired, so the writer can
       // read its release/gateway to key the revision_gone 404.
       await deps.writeRevisionTombstone?.(rev.revisionId);
@@ -358,49 +479,6 @@ function mountedRevisionFailure(
   return failure(
     `gateway ${gatewayId} still has ${mountCount} mounted customer(s) on non-retired revision(s): ${descriptions.join("; ")}`,
   );
-}
-
-async function revokeLegacyMacOpsTokens(
-  ctx: OperationContext,
-  deps: RetireGatewayDeps,
-  gatewayId: string,
-): Promise<OperationResult | null> {
-  const result = await runReportedStep(ctx, deps, "revoke-legacy-mac-ops-token", () =>
-    deps.revokeGatewayLegacyMacOpsTokens({ gatewayId }),
-  );
-  return result.ok
-    ? null
-    : failure(`legacy Mac ops token revoke failed: ${result.error ?? UNKNOWN_ERROR}`);
-}
-
-async function assertGatewayRetirable(
-  deps: RetireGatewayDeps,
-  gatewayId: string,
-): Promise<OperationResult | null> {
-  let live: GatewayLiveState | null;
-  try {
-    live = await deps.readGatewayLiveState(gatewayId);
-  } catch (error) {
-    return failure(
-      `gateway ${gatewayId} durable retirement state unreadable: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  }
-  if (live == null) {
-    return failure(`gateway ${gatewayId} durable retirement state unreadable`);
-  }
-  if (live.desiredStatus !== "retired") {
-    return failure(
-      `gateway ${gatewayId} desiredStatus is no longer retired; refusing retirement`,
-    );
-  }
-  if (live.mountedCustomers.length > 0) {
-    return failure(
-      `gateway ${gatewayId} still has ${live.mountedCustomers.length} mounted customer(s): ${live.mountedCustomers.join(", ")}`,
-    );
-  }
-  return null;
 }
 
 async function cleanupGatewayRecords(

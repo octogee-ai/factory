@@ -36,20 +36,29 @@ describe("runner metrics exporter entrypoint", () => {
   it("serves health, metrics, and 404 responses without requiring process startup", async () => {
     const read = vi.fn(() => [hb()]);
     const render = vi.fn(() => "octogee_runner_up 1\n");
+    const readSystemConfig = vi.fn(() => ({ state: "dirty" as const }));
+    const renderSystemConfig = vi.fn(() => "octogee_system_config_state 1\n");
     const baseUrl = await listen(createRunnerMetricsServer({
       dir: "/heartbeats",
       now: () => 123,
       read,
       render,
+      openclawDir: "/openclaw",
+      readSystemConfig,
+      renderSystemConfig,
     }));
 
     await expect(fetch(`${baseUrl}/healthz`).then((r) => r.text())).resolves.toBe("ok");
 
     const metrics = await fetch(`${baseUrl}/metrics`);
-    await expect(metrics.text()).resolves.toBe("octogee_runner_up 1\n");
+    await expect(metrics.text()).resolves.toBe(
+      "octogee_runner_up 1\noctogee_system_config_state 1\n",
+    );
     expect(metrics.headers.get("content-type")).toContain("text/plain; version=0.0.4");
     expect(read).toHaveBeenCalledWith("/heartbeats");
     expect(render).toHaveBeenCalledWith([hb()], 123);
+    expect(readSystemConfig).toHaveBeenCalledWith("/openclaw");
+    expect(renderSystemConfig).toHaveBeenCalledWith({ state: "dirty" }, 123);
 
     const missing = await fetch(`${baseUrl}/missing`);
     expect(missing.status).toBe(404);

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   recordGatewayHealth,
+  recordConfigRoll,
   recordReconcile,
   renderMetrics,
   resetMetrics,
@@ -56,5 +57,19 @@ describe("glm-controller metrics", () => {
 
     expect(out).not.toContain("old-blue");
     expect(out).toContain("new-green");
+  });
+
+  it("counts config checkpoint, proof, and unfreeze outcomes without customer labels", () => {
+    recordConfigRoll({ stage: "checkpoint", result: "ok", gatewayId: "bender", revisionId: "bender-r1" });
+    recordConfigRoll({ stage: "proof", result: "fail", gatewayId: "bender", revisionId: "bender-r2" });
+    recordConfigRoll({ stage: "unfreeze", result: "ok", gatewayId: "bender", revisionId: "bender-r1" });
+
+    const out = renderMetrics();
+
+    expect(out).toContain('glm_config_roll_total{gateway_id="bender",revision_id="bender-r1",stage="checkpoint",result="ok"} 1');
+    expect(out).toContain('glm_config_roll_total{gateway_id="bender",revision_id="bender-r2",stage="proof",result="fail"} 1');
+    expect(out).toContain('glm_config_roll_total{gateway_id="bender",revision_id="bender-r1",stage="unfreeze",result="ok"} 1');
+    expect(out).not.toContain("uid=");
+    expect(out).not.toContain("slug=");
   });
 });

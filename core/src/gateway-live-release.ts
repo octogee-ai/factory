@@ -16,7 +16,6 @@ import {
   isRevisionRealizationDoc,
   revisionIdForRelease,
   type GatewayDoc,
-  type MacOpsTokenProtocol,
   type ReleasePayload,
   type W9GatewayEdgeImage,
   type W9TestPublisherLiveExperiment,
@@ -33,10 +32,96 @@ export type { GatewayMutableConfig };
 
 type FirestoreReader = Pick<Firestore, "doc">;
 
+export function gatewayRevisionIdFromPodName(
+  gatewayId: string,
+  podName: string | undefined,
+): string | null {
+  if (!podName) return null;
+  const prefix = `octogee-gateway-${gatewayId}-r`;
+  if (!podName.startsWith(prefix)) return null;
+  const suffix = podName.slice(prefix.length);
+  const separator = suffix.indexOf("-");
+  if (separator <= 0) return null;
+  const release = suffix.slice(0, separator);
+  const generatedSuffix = suffix.slice(separator + 1);
+  if (!/^[1-9]\d*$/.test(release)) return null;
+  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(generatedSuffix)) return null;
+  return `${gatewayId}-r${release}`;
+}
+
+export function configuredBuilderBootstrapAllowed(
+  value: unknown,
+  input: { gatewayId: string; revisionId: string | null; slug: string },
+): boolean {
+  const gateway = eligibleConfiguredBuilderGateway(value, input);
+  if (!gateway) return false;
+  if (gateway.roll) {
+    return gateway.roll.status !== "failed" &&
+      gateway.roll.targetRevisionId === input.revisionId;
+  }
+  return revisionIdForRelease(input.gatewayId, gateway.desiredRelease) === input.revisionId;
+}
+
+type ConfiguredBuilderGateway = GatewayDoc & GatewayMutableConfig & { retirementClaim?: unknown };
+
+function eligibleConfiguredBuilderGateway(
+  value: unknown,
+  input: { gatewayId: string; revisionId: string | null; slug: string },
+): ConfiguredBuilderGateway | null {
+  if (
+    !isGatewayDesiredDoc(value) ||
+    value.gatewayId !== input.gatewayId ||
+    !isGatewayMutableConfigForGateway(value, input.gatewayId)
+  ) {
+    return null;
+  }
+  const gateway = value as ConfiguredBuilderGateway;
+  if (
+    !input.revisionId ||
+    gateway.desiredStatus !== "running" ||
+    gateway.retireAfter != null ||
+    gateway.retirementClaim != null ||
+    gateway.gatewayClass === "shared" ||
+    gateway.builderSlug !== input.slug
+  ) {
+    return null;
+  }
+  return gateway;
+}
+
+function activeRollSourceCredentialHydrationAllowed(
+  gateway: ConfiguredBuilderGateway,
+  revisionId: string | null,
+): boolean {
+  const roll = gateway.roll;
+  return Boolean(
+    revisionId &&
+    roll &&
+    (roll.status === "warming" || roll.status === "routing" || roll.status === "migrating") &&
+    roll.sourceRevisionId === revisionId &&
+    gateway.liveRevisionId === revisionId &&
+    gateway.trafficRevisionId === revisionId,
+  );
+}
+
+export function configuredBuilderCredentialBootstrapAllowed(
+  value: unknown,
+  input: {
+    gatewayId: string;
+    revisionId: string | null;
+    slug: string;
+    uid: string;
+  },
+): boolean {
+  const gateway = eligibleConfiguredBuilderGateway(value, input);
+  if (!gateway || gateway.ownerUid !== input.uid) return false;
+  return configuredBuilderBootstrapAllowed(gateway, input) ||
+    activeRollSourceCredentialHydrationAllowed(gateway, input.revisionId);
+}
+
 export interface GatewayArtifact {
   imageRepository: string;
   imageTag: string;
-  macOpsTokenProtocol?: MacOpsTokenProtocol;
   gatewayEdgeImage?: W9GatewayEdgeImage;
   testExperiment?: W9TestPublisherLiveExperiment;
 }
@@ -76,9 +161,6 @@ export function gatewayArtifactFromReleasePayload(payload: ReleasePayload): Gate
   return {
     imageRepository: payload.imageRepository,
     imageTag: payload.imageTag,
-    ...(payload.macOpsTokenProtocol === undefined
-      ? {}
-      : { macOpsTokenProtocol: payload.macOpsTokenProtocol }),
     ...(payload.gatewayEdgeImage === undefined
       ? {}
       : { gatewayEdgeImage: payload.gatewayEdgeImage }),

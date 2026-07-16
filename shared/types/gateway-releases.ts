@@ -41,6 +41,61 @@ export type GatewayRollStatus =
   | "retiring-source"
   | "failed";
 
+export interface GatewayRollSystemConfigCheckpoint {
+  migrationId: string;
+  builderSlug: string;
+  sourceRevisionId: string;
+  checkpointCommit: string | null;
+  configHash: string | null;
+  checkpointedAt: number | null;
+  sourceUnfrozenAt: number | null;
+}
+
+export type GatewayRollSystemConfigPhase =
+  | "checkpointed"
+  | "candidateProven"
+  | "promotionIntent"
+  | "promoted"
+  | "abortIntent"
+  | "terminalHold"
+  | "cutover"
+  | "sourceRetired"
+  | "finalized";
+
+export interface GatewayRollSystemConfigState {
+  phase: GatewayRollSystemConfigPhase;
+  migrationId: string;
+  builderSlug: string;
+  sourceRevisionId: string;
+  targetRevisionId: string;
+  checkpointCommit: string;
+  configHash: string;
+  freezeRef: string;
+  freezeObject: string;
+  checkpointedAt: number;
+  candidateCommit?: string;
+  candidateHash?: string;
+  candidateRef?: string;
+  runtimeConfigHash?: string;
+  observedRevisionId?: string;
+  targetStartedAt?: number;
+  imageTag?: string;
+  buildSha?: string;
+  openclawVersion?: string;
+  provenAt?: number;
+  promotionIntentAt?: number;
+  promotedCommit?: string;
+  promotedAt?: number;
+  abortDisposition?: "fail" | "supersede";
+  abortReason?: string;
+  abortIntentAt?: number;
+  terminalError?: string;
+  terminalErrorAt?: number;
+  cutoverAt?: number;
+  sourceRetiredAt?: number;
+  finalizedAt?: number;
+}
+
 export interface GatewayRollState {
   operationId: string;
   status: GatewayRollStatus;
@@ -52,6 +107,8 @@ export interface GatewayRollState {
   startedAt: number;
   updatedAt: number;
   error: string | null;
+  systemConfigCheckpoint?: GatewayRollSystemConfigCheckpoint | null;
+  systemConfigRoll?: GatewayRollSystemConfigState | null;
   // Selector-flip wall-clock. The source revision survives as a forwarder for a
   // drain TTL measured from this durable timestamp, so a controller crash never
   // loses the retire deadline. Null until the flip step runs.
@@ -84,6 +141,38 @@ export interface GatewayLegacyBackfill {
   startedAt: number;
 }
 
+export interface GatewayRetirementClaim {
+  operationId: string;
+  version: number;
+  claimedAt: number;
+  phase: "waking" | "claimed";
+  liveRevisionId: string | null;
+  liveRelease: number | null;
+  liveRuntimeIdentity: {
+    startedAt: number;
+    version: string;
+    openclawVersion: string;
+  } | null;
+  previousDesiredStatus: Exclude<GatewayLifecycleStatus, "retired">;
+  configCheckpoint: GatewayRetirementConfigCheckpoint | null;
+  configTerminal: GatewayRetirementConfigTerminal | null;
+}
+
+export interface GatewayRetirementConfigCheckpoint {
+  migrationId: string;
+  slug: string;
+  sourceRevisionId: string;
+  targetRevisionId: string;
+  checkpointCommit: string;
+  configHash: string;
+  freezeObject: string;
+}
+
+export interface GatewayRetirementConfigTerminal {
+  retirementRef: string;
+  retirementObject: string;
+}
+
 // gateways/{gatewayId} — durable desired gateway identity. No reservation
 // mirror (operatorGatewayReservations is the sole durable reservation source)
 // and no persistence (all gateways are Spot + emptyDir).
@@ -104,6 +193,8 @@ export interface GatewayDoc {
   preemptionHandoff?: GatewayPreemptionHandoffSpec | null;
   retireAfter?: number | null;
   legacyBackfill?: GatewayLegacyBackfill | null;
+  retirementVersion?: number;
+  retirementClaim?: GatewayRetirementClaim | null;
 }
 
 export const W9_CANDIDATE_MANIFEST_PATH =
@@ -159,7 +250,6 @@ export function isW9TestPublisherLiveExperiment(
 // experiment contract. Gateway policy lives exclusively on gateways/{gatewayId},
 // never in a release or revision.
 export interface ReleasePayload {
-  macOpsTokenProtocol?: MacOpsTokenProtocol;
   imageRepository: string;
   imageTag: string;
   gatewayEdgeImage?: W9GatewayEdgeImage;
@@ -167,7 +257,6 @@ export interface ReleasePayload {
 }
 
 const RELEASE_PAYLOAD_FIELD_NAMES = new Set<string>([
-  "macOpsTokenProtocol",
   "imageRepository",
   "imageTag",
   "gatewayEdgeImage",
@@ -207,9 +296,6 @@ function hasReleasePayloadShape(value: Record<string, unknown>): boolean {
 
 function hasReleasePayloadIdentity(value: Record<string, unknown>): boolean {
   return (
-    (value.macOpsTokenProtocol === undefined ||
-      value.macOpsTokenProtocol === 1 ||
-      value.macOpsTokenProtocol === 2) &&
     typeof value.imageRepository === "string" &&
     value.imageRepository.length > 0 &&
     typeof value.imageTag === "string" &&
@@ -234,17 +320,6 @@ export function isW9GatewayEdgeImage(
     isW9CandidateImageTag(gatewayImageTag) &&
     w9CandidateImageName(value.imageTag) === w9CandidateImageName(gatewayImageTag)
   );
-}
-
-export type MacOpsTokenProtocol = 1 | 2;
-
-export const CURRENT_MAC_OPS_TOKEN_PROTOCOL: MacOpsTokenProtocol = 2;
-
-export function releaseMacOpsTokenProtocol(payload: unknown): MacOpsTokenProtocol | null {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
-  const protocol = (payload as { macOpsTokenProtocol?: unknown }).macOpsTokenProtocol;
-  if (protocol === undefined || protocol === 1) return 1;
-  return protocol === 2 ? 2 : null;
 }
 
 // gateways/{gatewayId}/releases/{n} — append-only. Rollback cuts a NEW release
@@ -346,6 +421,24 @@ export interface RevisionHeartbeatObservation {
   startedAt: number | null;
   mountedCustomers: string[];
   migratingIn: string[];
+  configStatus?: import("./fleet-controller.js").GatewayConfigStatus;
+}
+
+export interface RevisionSystemConfigObservation {
+  migrationId: string;
+  builderSlug: string;
+  sourceRevisionId: string;
+  checkpointCommit: string;
+  restoredCommit: string;
+  acceptedCommit: string;
+  configHash: string;
+  configReady: true;
+  observedRevisionId: string;
+  restoreProvenAt: number;
+  configReadyAt: number;
+  runtimeConfigHash: string;
+  observedAt: number;
+  sourceUnfrozenAt?: number;
 }
 
 // glmGateways/{revisionId} — the Cowboy-owned runtime realization record. In
@@ -370,6 +463,7 @@ export interface RevisionRealizationDoc {
   retireReason: string | null;
   helm: RevisionHelmObservation;
   heartbeat: RevisionHeartbeatObservation;
+  systemConfig?: RevisionSystemConfigObservation;
   lastError: { message: string | null; at: number | null };
 }
 
@@ -530,7 +624,6 @@ export type GatewayFieldClassification =
 export const RELEASE_NEW_REVISION_FIELDS = [
   "imageRepository",
   "imageTag",
-  "macOpsTokenProtocol",
   "testExperiment",
 ] as const;
 

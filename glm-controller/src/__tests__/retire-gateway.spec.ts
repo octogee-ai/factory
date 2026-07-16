@@ -14,7 +14,7 @@ function mkOp(overrides: Partial<Operation> = {}): Operation {
     createdAt: 0,
     startedAt: null,
     completedAt: null,
-    input: { gatewayId: "canary" },
+    input: { gatewayId: "canary", retirementClaimVersion: 1 },
     steps: [],
     ...overrides,
   };
@@ -47,8 +47,6 @@ interface FakeState {
     mountedCustomers?: string[];
   }>;
   helmUninstalledRevisions: string[];
-  revokedRevisionMacOpsTokens: string[];
-  revokedLegacyMacOpsTokens: string[];
   retiredRevisionDocs: string[];
   tombstonedRevisions: string[];
   revisionTeardownSteps: string[];
@@ -65,8 +63,6 @@ function baseState(overrides: Partial<FakeState> = {}): FakeState {
     assignments: [],
     revisions: [],
     helmUninstalledRevisions: [],
-    revokedRevisionMacOpsTokens: [],
-    revokedLegacyMacOpsTokens: [],
     retiredRevisionDocs: [],
     tombstonedRevisions: [],
     revisionTeardownSteps: [],
@@ -77,12 +73,24 @@ function baseState(overrides: Partial<FakeState> = {}): FakeState {
 function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}): RetireGatewayDeps {
   let virtualClock = 0;
   return {
-    readGatewayLiveState: vi.fn(async (gatewayId: string) => {
+    attestRetirementClaim: vi.fn(async () => ({ ok: true as const, wakeRequired: false })),
+    acquireRetirementConfigFence: vi.fn(async () => ({ kind: "shared" as const })),
+    verifyRetirementConfigFence: vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
       const live = state.live.get(gatewayId);
-      return {
-        mountedCustomers: live?.mounted ?? [],
-        desiredStatus: state.desiredStatus.get(gatewayId),
-      };
+      const desiredStatus = state.desiredStatus.get(gatewayId);
+      if (!desiredStatus) {
+        return { ok: false as const, error: `gateway ${gatewayId} durable retirement state unreadable` };
+      }
+      if (desiredStatus !== "retired") {
+        return { ok: false as const, error: `gateway ${gatewayId} desiredStatus is no longer retired` };
+      }
+      if ((live?.mounted.length ?? 0) > 0) {
+        return {
+          ok: false as const,
+          error: `gateway ${gatewayId} still has ${live!.mounted.length} mounted customer(s): ${live!.mounted.join(", ")}`,
+        };
+      }
+      return { ok: true as const };
     }),
     readAssignmentsForGateway: vi.fn(async () => state.assignments),
     readNonRetiredRevisions: vi.fn(async () =>
@@ -97,14 +105,6 @@ function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}):
     helmUninstallRevision: vi.fn(async (revisionId: string) => {
       state.helmUninstalledRevisions.push(revisionId);
       state.revisionTeardownSteps.push(`helm:${revisionId}`);
-    }),
-    revokeRevisionMacOpsTokens: vi.fn(async ({ revisionId }: { revisionId: string }) => {
-      state.revokedRevisionMacOpsTokens.push(revisionId);
-      state.revisionTeardownSteps.push(`revoke:${revisionId}`);
-    }),
-    revokeGatewayLegacyMacOpsTokens: vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
-      state.revokedLegacyMacOpsTokens.push(gatewayId);
-      state.revisionTeardownSteps.push(`revoke-legacy:${gatewayId}`);
     }),
     retireRevisionDoc: vi.fn(async (revisionId: string) => {
       state.retiredRevisionDocs.push(revisionId);
@@ -131,6 +131,7 @@ function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}):
     teardownGatewayServiceAccount: vi.fn(async () => {}),
     syncFleetIngress: vi.fn(async () => {}),
     pollIntervalMs: 1_000,
+    retirementAttestationTimeoutMs: 5_000,
     now: () => virtualClock,
     wait: vi.fn(async (ms: number) => {
       virtualClock += ms;
@@ -160,8 +161,6 @@ describe("createRetireGatewayHandler — teardown completeness (happy path)", ()
     expect(state.deletedGlm.has("canary")).toBe(true);
     expect(state.deletedHeartbeat.has("canary")).toBe(true);
     expect(ctx.reported.map((s) => `${s.name}:${s.status}`)).toEqual([
-      "revoke-legacy-mac-ops-token:running",
-      "revoke-legacy-mac-ops-token:done",
       "delete-pvc:running",
       "delete-pvc:done",
       "delete-kube-secret:running",
@@ -193,7 +192,7 @@ describe("createRetireGatewayHandler — teardown completeness (happy path)", ()
     const ctx = makeCtx();
 
     const result = await createRetireGatewayHandler(deps)(
-      mkOp({ input: { gatewayId: "canary", retainData: true } }),
+      mkOp({ input: { gatewayId: "canary", retirementClaimVersion: 1, retainData: true } }),
       ctx,
     );
 
@@ -260,38 +259,6 @@ describe("createRetireGatewayHandler — teardown completeness (happy path)", ()
 
     expect(result.success).toBe(false);
     expect(state.deletedGlm.has("canary")).toBe(false);
-  });
-});
-
-describe("createRetireGatewayHandler — Mac ops retirement", () => {
-  it("revokes the generic legacy PAT only after every revision has been drained", async () => {
-    const state = baseState({
-      revisions: [
-        { revisionId: "canary-r1", release: 1, lifecycle: "ready" },
-        { revisionId: "canary-r2", release: 2, lifecycle: "ready" },
-      ],
-    });
-    const deps = makeDeps(state) as RetireGatewayDeps & {
-      revokeGatewayLegacyMacOpsTokens: (input: { gatewayId: string }) => Promise<void>;
-    };
-    deps.revokeGatewayLegacyMacOpsTokens = vi.fn(async ({ gatewayId }) => {
-      state.revokedLegacyMacOpsTokens.push(gatewayId);
-      state.revisionTeardownSteps.push(`revoke-legacy:${gatewayId}`);
-    });
-
-    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
-
-    expect(result.success).toBe(true);
-    expect(state.revokedLegacyMacOpsTokens).toEqual(["canary"]);
-    expect(state.revisionTeardownSteps).toEqual([
-      "helm:canary-r1",
-      "revoke:canary-r1",
-      "retire:canary-r1",
-      "helm:canary-r2",
-      "revoke:canary-r2",
-      "retire:canary-r2",
-      "revoke-legacy:canary",
-    ]);
   });
 });
 
@@ -372,7 +339,7 @@ describe("createRetireGatewayHandler — independent best-effort teardown (D4)",
     const deps = makeDeps(state, { teardownGatewayServiceAccount: teardownGsa });
 
     const result = await createRetireGatewayHandler(deps)(
-      mkOp({ input: { gatewayId: "canary", retainServiceAccount: true } }),
+      mkOp({ input: { gatewayId: "canary", retirementClaimVersion: 1, retainServiceAccount: true } }),
       makeCtx(),
     );
 
@@ -403,6 +370,128 @@ describe("createRetireGatewayHandler — independent best-effort teardown (D4)",
 });
 
 describe("createRetireGatewayHandler — refusals + edge cases", () => {
+  it.each([
+    "openclaw config is dirty",
+    "system config writer is syncing",
+    "system config sync failed",
+    "system config control is unavailable",
+  ])("does not drain when the retirement config freeze fails: %s", async (error) => {
+    const state = baseState({
+      revisions: [{ revisionId: "canary-r1", release: 1, lifecycle: "serving" }],
+    });
+    const deps = makeDeps(state, {
+      acquireRetirementConfigFence: vi.fn(async () => {
+        throw new Error(error);
+      }),
+    } as unknown as Partial<RetireGatewayDeps>);
+
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(result).toMatchObject({
+      success: false,
+      output: {
+        retirementFencePending: {
+          gatewayId: "canary",
+          operationId: "op-r-1",
+        },
+      },
+    });
+    expect(result.error).toContain(error);
+    expect(deps.readNonRetiredRevisions).not.toHaveBeenCalled();
+    expect(deps.helmUninstallRevision).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the exact durable config binding after freeze and before drain", async () => {
+    const state = baseState({
+      revisions: [{ revisionId: "canary-r1", release: 1, lifecycle: "serving" }],
+    });
+    const fence = {
+      kind: "dedicated" as const,
+      checkpoint: {
+        migrationId: "retire-op-r-1",
+        slug: "ceckert",
+        sourceRevisionId: "canary-r1",
+        targetRevisionId: "canary-r0",
+        checkpointCommit: "a".repeat(40),
+        configHash: "b".repeat(64),
+        freezeObject: "c".repeat(40),
+      },
+    };
+    const verifyRetirementConfigFence = vi.fn(async () => ({
+      ok: false as const,
+      error: "gateway canary retirement config checkpoint changed before teardown",
+    }));
+    const deps = makeDeps(state, {
+      acquireRetirementConfigFence: vi.fn(async () => fence),
+      verifyRetirementConfigFence,
+    } as unknown as Partial<RetireGatewayDeps>);
+
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(result).toMatchObject({
+      success: false,
+      error: "gateway canary retirement config checkpoint changed before teardown",
+    });
+    expect(verifyRetirementConfigFence).toHaveBeenCalledWith({
+      gatewayId: "canary",
+      operationId: "op-r-1",
+      version: 1,
+      fence,
+    });
+    expect(deps.readNonRetiredRevisions).not.toHaveBeenCalled();
+    expect(deps.helmUninstallRevision).not.toHaveBeenCalled();
+  });
+
+  it("waits for a long-paused dedicated gateway to publish fresh attestation before claiming retirement", async () => {
+    const state = baseState();
+    const attestRetirementClaim = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false as const,
+        error: "gateway canary revision canary-r1 telemetry is stale or unavailable",
+        retryable: true,
+      })
+      .mockResolvedValueOnce({ ok: true as const, wakeRequired: true });
+    const deps = makeDeps(state, {
+      attestRetirementClaim,
+    } as unknown as Partial<RetireGatewayDeps>);
+
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(result.success).toBe(true);
+    expect(attestRetirementClaim).toHaveBeenCalledTimes(2);
+    expect(deps.wait).toHaveBeenCalledWith(1_000);
+    expect(deps.acquireRetirementConfigFence).toHaveBeenCalledTimes(1);
+    expect(deps.verifyRetirementConfigFence).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    "gateway canary has an unfinished release roll and config obligation",
+    "gateway canary live revision has an active config-control obligation",
+  ])("rechecks the atomic claim immediately before drain and stops on %s", async (error) => {
+    const state = baseState({
+      revisions: [{ revisionId: "canary-r1", release: 1, lifecycle: "serving" }],
+    });
+    const verifyRetirementConfigFence = vi.fn(async () => ({ ok: false as const, error }));
+    const deps = makeDeps(
+      state,
+      { verifyRetirementConfigFence } as unknown as Partial<RetireGatewayDeps>,
+    );
+
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(result).toMatchObject({ success: false, error });
+    expect(verifyRetirementConfigFence).toHaveBeenCalledWith({
+      gatewayId: "canary",
+      operationId: "op-r-1",
+      version: 1,
+      fence: { kind: "shared" },
+    });
+    expect(deps.readNonRetiredRevisions).not.toHaveBeenCalled();
+    expect(deps.helmUninstallRevision).not.toHaveBeenCalled();
+    expect(deps.deleteGatewayPersistentVolumeClaim).not.toHaveBeenCalled();
+  });
+
   it("refuses when the gateway still has mounted customers (nothing torn down)", async () => {
     const state = baseState({
       helmInstances: new Set(["canary"]),
@@ -465,7 +554,9 @@ describe("createRetireGatewayHandler — refusals + edge cases", () => {
   it("fails closed when the durable root or exact live revision is unreadable", async () => {
     const state = baseState();
     const deps = makeDeps(state, {
-      readGatewayLiveState: vi.fn(async () => null),
+      verifyRetirementConfigFence: vi.fn(async () => {
+        throw new Error("exact live revision unavailable");
+      }),
     });
 
     const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
@@ -515,8 +606,6 @@ describe("createRetireGatewayHandler — refusals + edge cases", () => {
     expect(state.deletedHeartbeat.has("canary")).toBe(true);
     expect(deps.helmUninstallRevision).not.toHaveBeenCalled();
     expect(ctx.reported.map((s) => `${s.name}:${s.status}`)).toEqual([
-      "revoke-legacy-mac-ops-token:running",
-      "revoke-legacy-mac-ops-token:done",
       "delete-pvc:running",
       "delete-pvc:done",
       "delete-kube-secret:running",
@@ -613,7 +702,6 @@ describe("createRetireGatewayHandler — full-gateway revision-aware retire (Ste
 
     expect(result.success).toBe(true);
     expect(state.helmUninstalledRevisions).toEqual(["canary-r1", "canary-r2"]);
-    expect(state.revokedRevisionMacOpsTokens).toEqual(["canary-r1", "canary-r2"]);
     // Each revision is tombstoned during its own teardown (the trailing bare-id
     // cleanup tombstone is a production no-op — no `canary` revision doc exists).
     expect(state.tombstonedRevisions.filter((t) => /-r\d+$/.test(t))).toEqual([
@@ -623,14 +711,11 @@ describe("createRetireGatewayHandler — full-gateway revision-aware retire (Ste
     expect(state.retiredRevisionDocs).toEqual(["canary-r1", "canary-r2"]);
     expect(state.revisionTeardownSteps).toEqual([
       "helm:canary-r1",
-      "revoke:canary-r1",
       "tombstone:canary-r1",
       "retire:canary-r1",
       "helm:canary-r2",
-      "revoke:canary-r2",
       "tombstone:canary-r2",
       "retire:canary-r2",
-      "revoke-legacy:canary",
       "tombstone:canary",
     ]);
     // Both revisions were already retired at the first gateway-scoped teardown.
@@ -669,29 +754,6 @@ describe("createRetireGatewayHandler — full-gateway revision-aware retire (Ste
     expect(deps.deleteAuthTokenSecret).not.toHaveBeenCalled();
     expect(deps.deleteGatewayPersistentVolumeClaim).not.toHaveBeenCalled();
     expect(state.deletedGlm.size).toBe(0);
-  });
-
-  it("leaves the revision retryable when scoped PAT revocation fails after Helm uninstall", async () => {
-    const state = baseState({
-      glmGatewayIds: new Map(),
-      live: new Map(),
-      revisions: [{ revisionId: "canary-r1", release: 1, lifecycle: "serving" }],
-    });
-    const deps = makeDeps(state, {
-      writeRevisionTombstone: trackTombstone(state),
-      revokeRevisionMacOpsTokens: vi.fn(async () => {
-        throw new Error("Mattermost unavailable");
-      }),
-    });
-
-    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
-
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/Mattermost unavailable/);
-    expect(state.helmUninstalledRevisions).toEqual(["canary-r1"]);
-    expect(state.tombstonedRevisions).toEqual([]);
-    expect(state.retiredRevisionDocs).toEqual([]);
-    expect(deps.deleteGatewayPersistentVolumeClaim).not.toHaveBeenCalled();
   });
 
   it("crash after revision-1 teardown converges next tick: revision-2 + gateway-scoped teardown finish", async () => {

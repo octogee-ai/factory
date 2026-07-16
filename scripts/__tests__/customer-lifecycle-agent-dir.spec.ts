@@ -9,6 +9,11 @@ import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
 import type { UserSnapshot } from "../lib/customer-lifecycle.js";
 
+vi.mock("../lib/mattermost-account-secrets.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/mattermost-account-secrets.js")>();
+  return { ...actual, updateMattermostAccountSecrets: vi.fn(async () => undefined) };
+});
+
 interface RuntimeMock {
   tempRoot: string;
   agentsDir: string;
@@ -52,13 +57,6 @@ function mkClient(snapshot: FleetBrokerUserSnapshot): FleetBrokerClient {
     recordReconcileError: vi.fn(async () => undefined),
     clearReconcileError: vi.fn(async () => undefined),
     notifySignup: vi.fn(async () => undefined),
-    macOpsToken: vi.fn(async () => ({
-      gatewayId: "default-blue",
-      revisionId: "default-blue",
-      username: "alice",
-      mmUserId: "mm-user",
-      token: "token",
-    })),
     recordUsageEvent: vi.fn(async () => undefined),
     blobDownloadUrl: vi.fn(async () => ({
       url: "https://example.com/download",

@@ -1,10 +1,15 @@
 import { Router, type Request, type Response } from "express";
 
 import { isValidProjectId, isValidUsername } from "@octogee/shared/types/identity";
+import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
   hasRunningInboundMigrationForSlug,
   readAssignedSlugsForGateway,
 } from "@octogee/core/assigned-roster";
+import {
+  configuredBuilderBootstrapAllowed,
+  gatewayRevisionIdFromPodName,
+} from "@octogee/core/gateway-live-release";
 import { db } from "../../lib/db.js";
 import { requireInternalServiceAuth } from "../../middleware/auth.js";
 import { logger } from "../../middleware/logging.js";
@@ -65,33 +70,51 @@ function validRepoName(value: unknown): value is string {
   );
 }
 
-function gatewayIdForRequest(req: Request): string | null {
+interface GatewayCaller {
+  gatewayId: string;
+  revisionId: string | null;
+}
+
+function gatewayCallerForRequest(req: Request): GatewayCaller | null {
   const boundTenant = (req as Request & {
-    boundTenant?: { kind?: unknown; gatewayId?: unknown };
+    boundTenant?: { kind?: unknown; gatewayId?: unknown; podName?: unknown };
   }).boundTenant;
   if (boundTenant?.kind === "gateway" && typeof boundTenant.gatewayId === "string") {
     const gatewayId = boundTenant.gatewayId.trim();
-    if (gatewayId) return gatewayId;
+    if (gatewayId) {
+      return {
+        gatewayId,
+        revisionId: gatewayRevisionIdFromPodName(
+          gatewayId,
+          typeof boundTenant.podName === "string" ? boundTenant.podName : undefined,
+        ),
+      };
+    }
   }
-
-  const gatewayId = process.env.GATEWAY_ID?.trim();
-  return gatewayId ? gatewayId : null;
+  return null;
 }
 
 async function requireAssignedHere(req: Request, res: Response, slug: string): Promise<boolean> {
-  const gatewayId = gatewayIdForRequest(req);
-  if (!gatewayId) {
+  const caller = gatewayCallerForRequest(req);
+  if (!caller) {
     logger.error("internal/gitea assignment guard failed: no gateway identity is configured");
     res.status(500).json({ error: "gateway assignment guard is not configured" });
     return false;
   }
+  const { gatewayId, revisionId } = caller;
 
   try {
     const assigned = await readAssignedSlugsForGateway(db, gatewayId);
-    if (
-      !assigned.includes(slug) &&
-      !(await hasRunningInboundMigrationForSlug(db, gatewayId, slug))
-    ) {
+    if (assigned.includes(slug)) return true;
+    const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+    const gateway = gatewaySnap.exists ? gatewaySnap.data() : undefined;
+    const configuredIsolatedBuilder = configuredBuilderBootstrapAllowed(gateway, {
+      gatewayId,
+      revisionId,
+      slug,
+    });
+    if (configuredIsolatedBuilder) return true;
+    if (!(await hasRunningInboundMigrationForSlug(db, gatewayId, slug))) {
       res.status(403).json({ error: "slug is not assigned to this gateway" });
       return false;
     }

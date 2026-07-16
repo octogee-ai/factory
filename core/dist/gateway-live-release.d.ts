@@ -1,13 +1,24 @@
 import type { Firestore } from "firebase-admin/firestore";
 import { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, type GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
-import { type GatewayDoc, type MacOpsTokenProtocol, type ReleasePayload, type W9GatewayEdgeImage, type W9TestPublisherLiveExperiment } from "@octogee/shared/types/gateway-releases";
+import { type GatewayDoc, type ReleasePayload, type W9GatewayEdgeImage, type W9TestPublisherLiveExperiment } from "@octogee/shared/types/gateway-releases";
 export { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, };
 export type { GatewayMutableConfig };
 type FirestoreReader = Pick<Firestore, "doc">;
+export declare function gatewayRevisionIdFromPodName(gatewayId: string, podName: string | undefined): string | null;
+export declare function configuredBuilderBootstrapAllowed(value: unknown, input: {
+    gatewayId: string;
+    revisionId: string | null;
+    slug: string;
+}): boolean;
+export declare function configuredBuilderCredentialBootstrapAllowed(value: unknown, input: {
+    gatewayId: string;
+    revisionId: string | null;
+    slug: string;
+    uid: string;
+}): boolean;
 export interface GatewayArtifact {
     imageRepository: string;
     imageTag: string;
-    macOpsTokenProtocol?: MacOpsTokenProtocol;
     gatewayEdgeImage?: W9GatewayEdgeImage;
     testExperiment?: W9TestPublisherLiveExperiment;
 }

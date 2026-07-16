@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  isMacOpsRevisionAllowed,
-  legacyMacOpsTokenAllowed,
-  macOpsTokenIdsForDescription,
+  parseSystemConfigObservedStatus,
   resolveAssignedUsersRevisionGate,
   revisionIdFromGatewayPodName,
 } from "./fleet-broker.js";
@@ -101,50 +99,126 @@ describe("revisionIdFromGatewayPodName", () => {
   });
 });
 
-describe("macOpsTokenIdsForDescription", () => {
-  it("does not select a target revision token when the source restarts", () => {
-    expect(
-      macOpsTokenIdsForDescription(
-        [
-          {
-            id: "source-token",
-            description: "Octogee Mac ops agent (OpenClaw) [revision=default-r2]",
-          },
-          {
-            id: "target-token",
-            description: "Octogee Mac ops agent (OpenClaw) [revision=default-r5]",
-          },
-        ],
-        "Octogee Mac ops agent (OpenClaw) [revision=default-r2]",
-      ),
-    ).toEqual(["source-token"]);
-  });
-});
-
-describe("isMacOpsRevisionAllowed", () => {
-  it("allows only the durable live/source/target revisions", () => {
-    const gateway = {
-      desiredRelease: 5,
-      liveRevisionId: "default-r2",
-      roll: { sourceRevisionId: "default-r2", targetRevisionId: "default-r5" },
+describe("system config observed status validation", () => {
+  it("accepts the complete protocol-v2 frozen and candidate control identities", () => {
+    const owner = {
+      migrationId: "roll-config-roll-1",
+      sourceRevisionId: "default-r1",
+      targetRevisionId: "default-r2",
     };
+    const frozen = {
+      state: "clean",
+      freezeState: "frozen",
+      bootRole: "source-frozen",
+      controlOwner: owner,
+      checkpointCommit: "1".repeat(40),
+      configHash: "a".repeat(64),
+      openclawVersion: "2026.7.1",
+      controlProtocol: { protocol: "durable-openclaw-config", version: 2 },
+    };
+    expect(parseSystemConfigObservedStatus(frozen)).toEqual(frozen);
 
-    expect(isMacOpsRevisionAllowed("default", "default-r2", gateway)).toBe(true);
-    expect(isMacOpsRevisionAllowed("default", "default-r5", gateway)).toBe(true);
-    expect(isMacOpsRevisionAllowed("default", "default-r99", gateway)).toBe(false);
-    expect(isMacOpsRevisionAllowed("default", "default-r2", undefined)).toBe(false);
+    const candidate = {
+      ...frozen,
+      bootRole: "target-candidate",
+      candidateCommit: "3".repeat(40),
+      candidateHash: "b".repeat(64),
+    };
+    expect(parseSystemConfigObservedStatus(candidate)).toEqual(candidate);
   });
 
-  it("allows a prewarmed desired revision before traffic leaves the live revision", () => {
-    const gateway = {
-      desiredRelease: 6,
-      liveRevisionId: "default-r2",
-      roll: null,
-    };
+  it("rejects malformed protocol-v2 hashes and control owners", () => {
+    expect(parseSystemConfigObservedStatus({
+      freezeState: "frozen",
+      bootRole: "source-frozen",
+      configHash: "not-a-hash",
+    })).toBeNull();
+    expect(parseSystemConfigObservedStatus({
+      freezeState: "frozen",
+      bootRole: "source-frozen",
+      controlOwner: {
+        migrationId: "roll-config-roll-1",
+        sourceRevisionId: "default-r1",
+      },
+    })).toBeNull();
+  });
 
-    expect(isMacOpsRevisionAllowed("default", "default-r2", gateway)).toBe(true);
-    expect(isMacOpsRevisionAllowed("default", "default-r6", gateway)).toBe(true);
-    expect(isMacOpsRevisionAllowed("default", "default-r5", gateway)).toBe(false);
+  it("accepts only the redacted bounded status projection", () => {
+    expect(parseSystemConfigObservedStatus({
+      state: "error",
+      acceptedCommit: "a".repeat(40),
+      configHash: `sha256:${"b".repeat(64)}`,
+      lastErrorCode: "non-fast-forward-conflict",
+      rejectedCount: 2,
+      recoveryCount: 1,
+      runtimeReady: true,
+      runtimeHealth: "healthy",
+      runtimeHealthCheckedAt: "2026-07-14T20:00:01.000Z",
+      freezeState: "frozen",
+      openclawVersion: "2026.7.1",
+      openclawForkSha: "abc1234",
+      controlProtocol: {
+        protocol: "durable-openclaw-config",
+        version: 2,
+      },
+      dashboardControlState: "ready",
+      dashboardControlProtocol: {
+        protocol: "openclaw-dashboard-bridge",
+        version: 1,
+      },
+      dashboardControlObservedAt: "2026-07-14T20:00:00.000Z",
+      unknown: "drop-me",
+    })).toEqual({
+      state: "error",
+      acceptedCommit: "a".repeat(40),
+      configHash: `sha256:${"b".repeat(64)}`,
+      lastErrorCode: "non-fast-forward-conflict",
+      rejectedCount: 2,
+      recoveryCount: 1,
+      runtimeReady: true,
+      runtimeHealth: "healthy",
+      runtimeHealthCheckedAt: "2026-07-14T20:00:01.000Z",
+      freezeState: "frozen",
+      openclawVersion: "2026.7.1",
+      openclawForkSha: "abc1234",
+      controlProtocol: {
+        protocol: "durable-openclaw-config",
+        version: 2,
+      },
+      dashboardControlState: "ready",
+      dashboardControlProtocol: {
+        protocol: "openclaw-dashboard-bridge",
+        version: 1,
+      },
+      dashboardControlObservedAt: "2026-07-14T20:00:00.000Z",
+    });
+  });
+
+  it("rejects secret-shaped, invalid, and oversized fields", () => {
+    expect(parseSystemConfigObservedStatus({ state: "bogus" })).toBeNull();
+    expect(parseSystemConfigObservedStatus({ state: "clean", acceptedCommit: "not-a-sha" })).toBeNull();
+    expect(parseSystemConfigObservedStatus({
+      state: "error",
+      lastErrorCode: "x".repeat(81),
+    })).toBeNull();
+    expect(parseSystemConfigObservedStatus({
+      state: "error",
+      token: "must-not-pass",
+    })).toEqual({ state: "error" });
+    expect(parseSystemConfigObservedStatus({
+      state: "clean",
+      controlProtocol: { protocol: "durable-openclaw-config", version: 1 },
+    })).toBeNull();
+    expect(parseSystemConfigObservedStatus({
+      state: "clean",
+      dashboardControlState: "ready",
+      dashboardControlProtocol: { protocol: "openclaw-dashboard-bridge", version: 2 },
+      dashboardControlObservedAt: "2026-07-14T20:00:00.000Z",
+    })).toBeNull();
+    expect(parseSystemConfigObservedStatus({
+      state: "clean",
+      dashboardControlState: "ready",
+    })).toBeNull();
   });
 });
 
@@ -215,17 +289,4 @@ describe("fleet broker durable root boundary", () => {
     ).resolves.toEqual({ allowed: false });
   });
 
-  it("does not mint a legacy MAC token when an invalid root already exists", async () => {
-    const allowed = await legacyMacOpsTokenAllowed(
-      gatewayStateDb(incompleteRoot) as never,
-      {
-        kind: "gateway",
-        gatewayId: "default",
-        podName: "octogee-gateway-default-123",
-        podUid: "pod-uid",
-      } as never,
-    );
-
-    expect(allowed).toBe(false);
-  });
 });
