@@ -188,6 +188,14 @@
       "types": "./dist/model-credential-sync-runtime.d.ts",
       "default": "./dist/model-credential-sync-runtime.js"
     },
+    "./openclaw-control-tickets": {
+      "types": "./dist/openclaw-control-tickets.d.ts",
+      "default": "./dist/openclaw-control-tickets.js"
+    },
+    "./openclaw-control-runtime-ready": {
+      "types": "./dist/openclaw-control-runtime-ready.d.ts",
+      "default": "./dist/openclaw-control-runtime-ready.js"
+    },
     "./secret-manager": {
       "types": "./dist/secret-manager.d.ts",
       "default": "./dist/secret-manager.js"
@@ -454,6 +462,12 @@
       ],
       "model-credential-sync-runtime": [
         "dist/model-credential-sync-runtime.d.ts"
+      ],
+      "openclaw-control-tickets": [
+        "dist/openclaw-control-tickets.d.ts"
+      ],
+      "openclaw-control-runtime-ready": [
+        "dist/openclaw-control-runtime-ready.d.ts"
       ],
       "secret-manager": [
         "dist/secret-manager.d.ts"

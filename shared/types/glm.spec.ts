@@ -8,6 +8,7 @@ import {
   resolveGatewayClass,
   resolveGatewayImageProfile,
   resolveUserGatewayShellState,
+  isGatewayClassControlUiAccessEnabled,
 } from "./glm";
 
 describe("deriveGatewayIdentity", () => {
@@ -138,6 +139,31 @@ describe("defaultOperatorGatewayAccess", () => {
     expect(defaultOperatorGatewayAccess("uid-chris")).toMatchObject({ shellsEnabled: true });
     expect(defaultOperatorGatewayAccess(null)).toMatchObject({ shellsEnabled: false });
     expect(defaultOperatorGatewayAccess(undefined)).toMatchObject({ shellsEnabled: false });
+  });
+});
+
+describe("isGatewayClassControlUiAccessEnabled", () => {
+  it("requires an isolated class plus shell and Control UI entitlements", () => {
+    expect(isGatewayClassControlUiAccessEnabled("builder", {
+      shellsEnabled: true,
+      controlUiEnabled: true,
+    })).toBe(true);
+    expect(isGatewayClassControlUiAccessEnabled("operator", {
+      shellsEnabled: true,
+      controlUiEnabled: true,
+    })).toBe(true);
+    expect(isGatewayClassControlUiAccessEnabled("shared", {
+      shellsEnabled: true,
+      controlUiEnabled: true,
+    })).toBe(false);
+    expect(isGatewayClassControlUiAccessEnabled("builder", {
+      shellsEnabled: false,
+      controlUiEnabled: true,
+    })).toBe(false);
+    expect(isGatewayClassControlUiAccessEnabled("operator", {
+      shellsEnabled: true,
+      controlUiEnabled: false,
+    })).toBe(false);
   });
 });
 

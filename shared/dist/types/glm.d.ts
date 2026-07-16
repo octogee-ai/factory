@@ -74,6 +74,7 @@ export interface GatewayServiceAccountSpec {
 }
 export interface OperatorGatewayAccessSpec {
     shellsEnabled?: boolean;
+    controlUiEnabled?: boolean;
     platformMetadataEgress?: boolean;
     kubeApiServerEgressCidrs?: string[];
     reason?: string;
@@ -133,6 +134,7 @@ export declare function deriveGatewayIdentity(gatewayId: string, explicitGateway
 export declare function operatorGatewayServiceAccountName(gatewayId: string): string;
 export declare function isOperatorGatewayShellAccessEnabled(profile: GatewayProfile | undefined, operatorAccess: OperatorGatewayAccessSpec | undefined): boolean;
 export declare function isGatewayClassShellAccessEnabled(gatewayClass: GatewayClass | undefined, operatorAccess: OperatorGatewayAccessSpec | undefined): boolean;
+export declare function isGatewayClassControlUiAccessEnabled(gatewayClass: GatewayClass | undefined, operatorAccess: OperatorGatewayAccessSpec | undefined): boolean;
 export declare function resolveUserGatewayShellState(data: {
     gatewayClass?: unknown;
     profile?: unknown;

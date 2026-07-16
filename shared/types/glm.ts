@@ -100,6 +100,7 @@ export interface GatewayServiceAccountSpec {
 
 export interface OperatorGatewayAccessSpec {
   shellsEnabled?: boolean;
+  controlUiEnabled?: boolean;
   platformMetadataEgress?: boolean;
   kubeApiServerEgressCidrs?: string[];
   reason?: string;
@@ -265,6 +266,17 @@ export function isGatewayClassShellAccessEnabled(
   return (
     (gatewayClass === "builder" || gatewayClass === "operator") &&
     operatorAccess?.shellsEnabled === true
+  );
+}
+
+export function isGatewayClassControlUiAccessEnabled(
+  gatewayClass: GatewayClass | undefined,
+  operatorAccess: OperatorGatewayAccessSpec | undefined,
+): boolean {
+  return (
+    (gatewayClass === "builder" || gatewayClass === "operator") &&
+    operatorAccess?.shellsEnabled === true &&
+    operatorAccess.controlUiEnabled === true
   );
 }
 
