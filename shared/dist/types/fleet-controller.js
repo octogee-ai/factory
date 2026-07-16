@@ -1,3 +1,8 @@
+export function systemConfigMigrationMode(sourceClass, targetClass) {
+    if (sourceClass === "shared")
+        return "none";
+    return targetClass === "shared" ? "checkpoint-only" : "checkpoint-and-restore";
+}
 export const GATEWAY_HEARTBEAT_INTERVAL_MS = 15_000;
 export const GATEWAY_UNREACHABLE_AFTER_MS = 3 * 60_000;
 export const VERIFY_ACCOUNT_TIMEOUT_MS = 120_000;
@@ -21,6 +26,17 @@ export const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL = "openclaw-dashboard-bridge";
 export const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION = 1;
 export const OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_FILE = "dashboard_bridge.capability.json";
 export const OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_TTL_MS = 15_000;
+export function hasDurableOpenClawConfigControlProtocol(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+        return false;
+    const controlProtocol = value.controlProtocol;
+    if (!controlProtocol || typeof controlProtocol !== "object" || Array.isArray(controlProtocol)) {
+        return false;
+    }
+    const marker = controlProtocol;
+    return marker.protocol === DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL &&
+        marker.version === DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION;
+}
 export const GATEWAYS_COLLECTION = "gateways";
 export const MIGRATION_RSYNC_PORT_DEFAULT = 30873;
 export const CONFIG_CONTROL_ACTIONS = [
@@ -28,6 +44,7 @@ export const CONFIG_CONTROL_ACTIONS = [
     "candidate-proof",
     "promote-candidate",
     "abort-v2",
+    "retire-v2",
     "finalize-v2",
 ];
 export const CONFIG_CONTROL_CONFLICT_ERROR = "config control conflict";

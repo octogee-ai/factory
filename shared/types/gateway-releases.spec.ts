@@ -442,6 +442,37 @@ describe("GatewayRollState.flippedAt (durable forwarder-TTL base)", () => {
     };
     expect(roll.flippedAt).toBe(99);
   });
+
+  it("persists the source config checkpoint lease independently of the target revision", () => {
+    const roll: GatewayRollState = {
+      operationId: "roll-default-r2-1",
+      status: "warming",
+      fromRelease: 1,
+      toRelease: 2,
+      sourceRevisionId: "default-r1",
+      targetRevisionId: "default-r2",
+      acceptingNewAssignments: false,
+      startedAt: 1,
+      updatedAt: 2,
+      error: null,
+      flippedAt: null,
+      systemConfigCheckpoint: {
+        migrationId: "roll-config-roll-default-r2-1",
+        builderSlug: "alice",
+        sourceRevisionId: "default-r1",
+        checkpointCommit: "a".repeat(40),
+        configHash: "b".repeat(64),
+        checkpointedAt: 2,
+        sourceUnfrozenAt: null,
+      },
+    };
+
+    expect(roll.systemConfigCheckpoint).toMatchObject({
+      migrationId: "roll-config-roll-default-r2-1",
+      checkpointCommit: "a".repeat(40),
+      sourceUnfrozenAt: null,
+    });
+  });
 });
 
 describe("commitPlacementAtomic", () => {

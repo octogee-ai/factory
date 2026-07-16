@@ -25,6 +25,8 @@ import {
   type ConfigFreezeV2Response,
   type ConfigPromoteCandidateRequestBody,
   type ConfigPromoteCandidateResponse,
+  type ConfigRetireV2RequestBody,
+  type ConfigRetireV2Response,
   type AbortRsyncImportRequestBody,
   type ImportResponse,
   type ActivateImportRequestBody,
@@ -114,6 +116,8 @@ promoteSystemConfigCandidate?: ConfigPromoteCandidateCallback;
 abortSystemConfigV2?: ConfigAbortV2Callback;
 
 finalizeSystemConfigV2?: ConfigFinalizeV2Callback;
+
+retireSystemConfigV2?: ConfigRetireV2Callback;
 }
 
 type ConfigControlEnvelopeKeys = "action" | "issuedAt" | "expiresAt" | "requestId";
@@ -157,6 +161,18 @@ export type ConfigAbortV2CallbackResult = Omit<ConfigAbortV2Response, ConfigCont
 export type ConfigAbortV2Callback = (
   input: ConfigAbortV2CallbackInput,
 ) => Promise<ConfigAbortV2CallbackResult> | ConfigAbortV2CallbackResult;
+
+export type ConfigRetireV2CallbackInput = Omit<
+  ConfigRetireV2RequestBody,
+  ConfigControlEnvelopeKeys
+>;
+export type ConfigRetireV2CallbackResult = Omit<
+  ConfigRetireV2Response,
+  ConfigControlBindingKeys
+>;
+export type ConfigRetireV2Callback = (
+  input: ConfigRetireV2CallbackInput,
+) => Promise<ConfigRetireV2CallbackResult> | ConfigRetireV2CallbackResult;
 
 export type ConfigFinalizeV2CallbackInput = Omit<
   ConfigFinalizeV2RequestBody,
@@ -383,6 +399,16 @@ function isValidRevisionId(value: unknown): value is string {
   return Number.isSafeInteger(Number(match[2]));
 }
 
+function isRetirementSentinelScope(
+  body: ConfigControlRequestBody,
+  action: ConfigControlAction,
+  gatewayId: string,
+): boolean {
+  return (action === "freeze-v2" || action === "retire-v2") &&
+    /^retire-[A-Za-z0-9]/u.test(body.migrationId) &&
+    body.targetRevisionId === `${gatewayId}-r0`;
+}
+
 function acceptProtocolV2Request(
   body: ConfigControlRequestBody,
   expectedAction: ConfigControlAction,
@@ -395,10 +421,12 @@ function acceptProtocolV2Request(
 ): boolean {
   const { deps, res, log } = context;
   if (!acceptConfigControlEnvelope(body, expectedAction, deps, res, log)) return false;
+  const retirementSentinelScope = isRetirementSentinelScope(body, expectedAction, deps.gatewayId);
   if (
     !CONFIG_CONTROL_ID_RE.test(body.migrationId) ||
     !isValidRevisionId(body.sourceRevisionId) ||
-    !isValidRevisionId(body.targetRevisionId) ||
+    (!isValidRevisionId(body.targetRevisionId) && !retirementSentinelScope) ||
+    (expectedAction === "retire-v2" && !retirementSentinelScope) ||
     body.sourceRevisionId === body.targetRevisionId
   ) {
     res.status(400).json({ error: "invalid config control identifiers" });
@@ -624,6 +652,39 @@ export function createConfigAbortV2Handler(deps: MigrationHandlerDeps): RequestH
         freezeObject: body.freezeObject,
       });
       const response: ConfigAbortV2Response = {
+        ...configControlBindings(body),
+        ...result,
+      };
+      res.status(200).json(response);
+    } catch (error) {
+      respondConfigControlError(error, deps, body, res);
+    }
+  };
+}
+
+export function createConfigRetireV2Handler(deps: MigrationHandlerDeps): RequestHandler {
+  const log = deps.log ?? ((msg) => console.log(msg));
+  return async (req, res) => {
+    const body = parseAndVerifyJsonBody<ConfigRetireV2RequestBody>(req, res, deps.publicKey, log);
+    if (!body) return;
+    if (!acceptProtocolV2Request(body, "retire-v2", "source", { deps, res, log })) return;
+    if (rejectInvalidGitBindings(body, res, { candidate: "absent", hash: false })) return;
+    if (body.recoverOnly !== undefined && body.recoverOnly !== true) {
+      res.status(400).json({ error: "invalid config retirement recovery mode" });
+      return;
+    }
+    if (!deps.retireSystemConfigV2) {
+      res.status(501).json({ error: "config retire-v2 not configured" });
+      return;
+    }
+    try {
+      const result = await deps.retireSystemConfigV2({
+        ...configControlBindings(body),
+        checkpointCommit: body.checkpointCommit,
+        freezeObject: body.freezeObject,
+        ...(body.recoverOnly ? { recoverOnly: true } : {}),
+      });
+      const response: ConfigRetireV2Response = {
         ...configControlBindings(body),
         ...result,
       };

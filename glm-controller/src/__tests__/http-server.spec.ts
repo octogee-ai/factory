@@ -237,6 +237,10 @@ function buildDb(store: FakeStore) {
           ref: { update: (patch: Record<string, unknown>) => Promise<void> },
           patch: Record<string, unknown>,
         ) => void;
+        set: (
+          ref: { set: (data: Record<string, unknown>) => Promise<void> },
+          data: Record<string, unknown>,
+        ) => void;
       }) => Promise<T>,
     ): Promise<T> => {
       const queued: Array<() => Promise<void>> = [];
@@ -247,6 +251,12 @@ function buildDb(store: FakeStore) {
           patch: Record<string, unknown>,
         ) => {
           queued.push(() => ref.update(patch));
+        },
+        set: (
+          ref: { set: (data: Record<string, unknown>) => Promise<void> },
+          data: Record<string, unknown>,
+        ) => {
+          queued.push(() => ref.set(data));
         },
       };
       const result = await fn(txn);

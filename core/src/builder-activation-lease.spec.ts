@@ -227,10 +227,26 @@ describe("requestBuilderActivationLease — durable root policy + revision telem
     users: Record<string, Record<string, unknown>>;
     glmGateways: Record<string, Record<string, unknown>>;
     gateways?: Record<string, Record<string, unknown>>;
+    beforeTransaction?: () => void;
   }) {
     const accessed = new Set<string>();
     const updates: Array<{ id: string; patch: Record<string, unknown> }> = [];
     const db = {
+      async runTransaction<T>(fn: (txn: {
+        get: (ref: { get: () => Promise<unknown> }) => Promise<unknown>;
+        set: (ref: { set: (data: Record<string, unknown>) => Promise<void> }, data: Record<string, unknown>) => void;
+        update: (ref: { update: (patch: Record<string, unknown>) => Promise<void> }, patch: Record<string, unknown>) => void;
+      }) => Promise<T>): Promise<T> {
+        state.beforeTransaction?.();
+        const writes: Array<() => Promise<void>> = [];
+        const result = await fn({
+          get: (ref) => ref.get(),
+          set: (ref, data) => writes.push(() => ref.set(data)),
+          update: (ref, patch) => writes.push(() => ref.update(patch)),
+        });
+        for (const write of writes) await write();
+        return result;
+      },
       doc(path: string) {
         const [name, id] = path.split("/");
         const data = (state as Record<string, Record<string, Record<string, unknown>>>)[name]?.[id];
@@ -250,6 +266,10 @@ describe("requestBuilderActivationLease — durable root policy + revision telem
             update: async (patch: Record<string, unknown>) => {
               updates.push({ id: id ?? "", patch });
             },
+            set: async (data: Record<string, unknown>) => {
+              const collection = (state as Record<string, Record<string, Record<string, unknown>>>)[name];
+              if (collection) collection[id ?? ""] = data;
+            },
           }),
           get: async () => ({
             docs: Object.entries(
@@ -262,6 +282,64 @@ describe("requestBuilderActivationLease — durable root policy + revision telem
     };
     return { db, accessed, updates };
   }
+
+  it.each([
+    { action: "wake", currentGatewayId: "gw-builder", heartbeatStatus: "starting" },
+    { action: "migrate", currentGatewayId: "gw-shared", heartbeatStatus: "ready" },
+  ])("does not $action a gateway claimed for retirement after activation planning", async ({
+    currentGatewayId,
+    heartbeatStatus,
+  }) => {
+    const gateway = durableGateway("gw-builder", {
+      liveRelease: 1,
+      liveRevisionId: "gw-builder-r1",
+      trafficRevisionId: "gw-builder-r1",
+    }).data();
+    const state = {
+      users: {
+        "u-1": {
+          username: "mira",
+          provisioning: { openclaw: { gatewayId: currentGatewayId } },
+        },
+      },
+      gateways: { "gw-builder": gateway },
+      glmGateways: {
+        "gw-builder-r1": {
+          docKind: "revision",
+          revisionId: "gw-builder-r1",
+          gateway: "gw-builder",
+          release: 1,
+          lifecycle: "serving",
+          heartbeat: { status: heartbeatStatus },
+        },
+      },
+      glmOperations: {},
+      beforeTransaction: () => {
+        state.gateways["gw-builder"] = {
+          ...state.gateways["gw-builder"],
+          desiredStatus: "retired",
+          retirementClaim: { claimId: "retire-1" },
+        };
+      },
+    };
+    const { db, updates } = fakeDb(state);
+
+    const result = await requestBuilderActivationLease({
+      db: db as never,
+      uid: "u-1",
+      createdBy: "u-1",
+      workspaceSlugsForUser: () => ["mira"],
+      now: 1_000,
+    });
+
+    expect(result).toMatchObject({
+      statusCode: 409,
+      body: { code: "activation-gateway-retiring", gatewayId: "gw-builder" },
+    });
+    expect(state.gateways["gw-builder"].desiredStatus).toBe("retired");
+    expect(updates).toHaveLength(0);
+    expect(state.glmOperations).toEqual({});
+  });
 
   it("uses durable root ownership/class and the live revision heartbeat", async () => {
     const { db, accessed } = fakeDb({

@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import * as fs from "fs";
 import * as path from "path";
 
-import { acquireSystemConfigSyncLeaseSync } from "@octogee/core/system-config-mutation-lease";
+import {
+  acquireSystemConfigControlLeaseSync,
+  acquireSystemConfigSyncLeaseSync,
+} from "@octogee/core/system-config-mutation-lease";
 
 import { isValidUsername } from "../../shared/types/identity.js";
 import type { ConfigControlOwner } from "../../shared/types/fleet-controller.js";
@@ -711,6 +714,11 @@ export async function restoreSystemConfigForSlug(
 
 export function acquireSystemConfigSyncLock(openclawDir: string): (() => void) | null {
   const lease = acquireSystemConfigSyncLeaseSync({ openclawDir });
+  return lease ? () => lease.release() : null;
+}
+
+export function acquireSystemConfigControlLock(openclawDir: string): (() => void) | null {
+  const lease = acquireSystemConfigControlLeaseSync({ openclawDir });
   return lease ? () => lease.release() : null;
 }
 

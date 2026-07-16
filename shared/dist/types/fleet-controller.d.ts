@@ -1,4 +1,7 @@
 import type { FleetBrokerUserSnapshot } from "./fleet-broker.js";
+import type { GatewayClass } from "./glm.js";
+export type SystemConfigMigrationMode = "none" | "checkpoint-only" | "checkpoint-and-restore";
+export declare function systemConfigMigrationMode(sourceClass: GatewayClass, targetClass: GatewayClass): SystemConfigMigrationMode;
 export type GatewayStatus = "booting" | "ready" | "draining" | "unreachable";
 export interface GatewayLastError {
     slug: string;
@@ -68,6 +71,30 @@ export interface OpenClawDashboardBridgeCapability extends OpenClawDashboardBrid
     instanceId: string;
     observedAt: string;
 }
+export type SystemConfigBootRole = "normal" | "source-frozen" | "target-candidate";
+export interface GatewayConfigControlOwner {
+    migrationId: string;
+    sourceRevisionId: string;
+    targetRevisionId: string;
+}
+export interface GatewayConfigStatus {
+    controlProtocol: DurableOpenClawConfigControlProtocol;
+    observedAt?: unknown;
+    freezeState?: "unfrozen" | "freezing" | "frozen";
+    bootRole?: SystemConfigBootRole;
+    controlOwner?: GatewayConfigControlOwner;
+    checkpointCommit?: string;
+    configHash?: string;
+    candidateCommit?: string;
+    candidateHash?: string;
+    runtimeReady?: boolean;
+    openclawVersion?: string;
+    openclawForkSha?: string;
+    dashboardControlState?: "ready" | "missing" | "stale" | "invalid";
+    dashboardControlProtocol?: OpenClawDashboardBridgeProtocol;
+    dashboardControlObservedAt?: string;
+}
+export declare function hasDurableOpenClawConfigControlProtocol(value: unknown): value is GatewayConfigStatus;
 export declare const GATEWAYS_COLLECTION = "gateways";
 export interface MigrationRequestBody {
     migrationId: string;
@@ -142,7 +169,7 @@ export interface QuiesceResponse {
     drained: boolean;
     runningCount: number;
 }
-export declare const CONFIG_CONTROL_ACTIONS: readonly ["freeze-v2", "candidate-proof", "promote-candidate", "abort-v2", "finalize-v2"];
+export declare const CONFIG_CONTROL_ACTIONS: readonly ["freeze-v2", "candidate-proof", "promote-candidate", "abort-v2", "retire-v2", "finalize-v2"];
 export type ConfigControlAction = typeof CONFIG_CONTROL_ACTIONS[number];
 export interface ConfigControlRequestBody extends MigrationRequestBody {
     action: ConfigControlAction;
@@ -229,6 +256,17 @@ export interface ConfigAbortV2RequestBody extends ConfigControlRequestBody {
 }
 export interface ConfigAbortV2Response extends ConfigControlResponseBody {
     aborted: true;
+}
+export interface ConfigRetireV2RequestBody extends ConfigControlRequestBody {
+    action: "retire-v2";
+    checkpointCommit: string;
+    freezeObject: string;
+    recoverOnly?: true;
+}
+export interface ConfigRetireV2Response extends ConfigControlResponseBody {
+    retired: true;
+    retirementRef: string;
+    retirementObject: string;
 }
 export interface ConfigFinalizeV2RequestBody extends ConfigControlRequestBody {
     action: "finalize-v2";

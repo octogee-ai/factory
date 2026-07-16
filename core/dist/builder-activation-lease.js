@@ -59,6 +59,59 @@ function durableActivationGateway(doc) {
 function isInactiveDedicatedStatus(status) {
     return status === "draining" || status === "retired";
 }
+function currentActivationTarget(snapshot, target, uid, builderSlug) {
+    if (!snapshot.exists)
+        return null;
+    const gateway = durableActivationGateway({
+        id: target.gatewayId,
+        data: () => snapshot.data(),
+    });
+    if (!gateway || gateway.ownerUid !== uid)
+        return null;
+    if (gatewayActivationClass(gateway) !== target.gatewayClass)
+        return null;
+    const currentBuilderSlug = asStringOrNull(gateway.builderSlug);
+    if (currentBuilderSlug !== null && currentBuilderSlug !== builderSlug)
+        return null;
+    return gateway;
+}
+async function commitActivationPlan(input) {
+    const targetRef = input.db.collection(GATEWAYS_COLLECTION).doc(input.target.gatewayId);
+    return input.db.runTransaction(async (txn) => {
+        const targetSnapshot = await txn.get(targetRef);
+        const gateway = currentActivationTarget(targetSnapshot, input.target, input.uid, input.builderSlug);
+        if (!gateway) {
+            return { ok: false, code: "activation-gateway-changed", desiredStatus: null };
+        }
+        const desiredStatus = projectDesiredStatus(gateway);
+        if (gateway.retirementClaim != null || isInactiveDedicatedStatus(desiredStatus)) {
+            return { ok: false, code: "activation-gateway-retiring", desiredStatus };
+        }
+        if (input.action === "already-active" && desiredStatus !== "running") {
+            return { ok: false, code: "activation-gateway-changed", desiredStatus };
+        }
+        if (input.action !== "already-active") {
+            txn.update(targetRef, { desiredStatus: "running" });
+        }
+        if (input.operation)
+            txn.set(input.operation.ref, input.operation.data);
+        txn.update(input.userRef, input.userPatch);
+        return { ok: true };
+    });
+}
+function activationCommitConflict(result, gatewayId) {
+    if (result.ok)
+        return null;
+    return {
+        statusCode: 409,
+        body: {
+            code: result.code,
+            error: "activation gateway changed while acquiring the lease",
+            gatewayId,
+            desiredStatus: result.desiredStatus,
+        },
+    };
+}
 export function resolveBuilderActivationPlan(opts) {
     if (!opts.currentGatewayId) {
         return {
@@ -250,13 +303,24 @@ export async function requestBuilderActivationLease(opts) {
         reason: opts.reason && opts.reason.length > 0 ? opts.reason : "builder-activity",
     };
     if (plan.ok.action === "already-active") {
-        await userRef.update({
-            "provisioning.openclaw.activationLease": {
-                ...leaseBase,
-                status: "active",
-                activeAt: now,
+        const committed = await commitActivationPlan({
+            db,
+            action: plan.ok.action,
+            target,
+            uid,
+            builderSlug,
+            userRef,
+            userPatch: {
+                "provisioning.openclaw.activationLease": {
+                    ...leaseBase,
+                    status: "active",
+                    activeAt: now,
+                },
             },
         });
+        const conflict = activationCommitConflict(committed, target.gatewayId);
+        if (conflict)
+            return conflict;
         return {
             statusCode: 200,
             body: {
@@ -269,18 +333,25 @@ export async function requestBuilderActivationLease(opts) {
             },
         };
     }
-    const targetRef = db.collection(GATEWAYS_COLLECTION).doc(target.gatewayId);
     if (plan.ok.action === "wake") {
-        const batch = db.batch();
-        batch.update(targetRef, { desiredStatus: "running" });
-        batch.update(userRef, {
-            "provisioning.openclaw.activationLease": {
-                ...leaseBase,
-                status: "waking",
-                targetStatus: plan.ok.status,
+        const committed = await commitActivationPlan({
+            db,
+            action: plan.ok.action,
+            target,
+            uid,
+            builderSlug,
+            userRef,
+            userPatch: {
+                "provisioning.openclaw.activationLease": {
+                    ...leaseBase,
+                    status: "waking",
+                    targetStatus: plan.ok.status,
+                },
             },
         });
-        await batch.commit();
+        const conflict = activationCommitConflict(committed, target.gatewayId);
+        if (conflict)
+            return conflict;
         return {
             statusCode: 202,
             body: {
@@ -305,9 +376,7 @@ export async function requestBuilderActivationLease(opts) {
         gatewayClass: target.gatewayClass,
         reason: leaseBase.reason,
     };
-    const batch = db.batch();
-    batch.update(targetRef, { desiredStatus: "running" });
-    batch.set(opRef, {
+    const operationData = {
         kind: "migrate-customer",
         status: "pending",
         createdBy: opts.createdBy,
@@ -318,15 +387,26 @@ export async function requestBuilderActivationLease(opts) {
         steps: [],
         gatewayId: target.gatewayId,
         inputUid: uid,
-    });
-    batch.update(userRef, {
-        "provisioning.openclaw.activationLease": {
-            ...leaseBase,
-            status: "activating",
-            operationId,
+    };
+    const committed = await commitActivationPlan({
+        db,
+        action: plan.ok.action,
+        target,
+        uid,
+        builderSlug,
+        userRef,
+        operation: { ref: opRef, data: operationData },
+        userPatch: {
+            "provisioning.openclaw.activationLease": {
+                ...leaseBase,
+                status: "activating",
+                operationId,
+            },
         },
     });
-    await batch.commit();
+    const conflict = activationCommitConflict(committed, target.gatewayId);
+    if (conflict)
+        return conflict;
     return {
         statusCode: 202,
         body: {

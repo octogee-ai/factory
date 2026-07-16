@@ -15,13 +15,21 @@
  * reconcile path (publishPlatformGatewayReady). This poller owns the live telemetry
  * — status, the honest mounted set, lastHeartbeatAt — and a successful poll IS the
  * liveness signal (it only writes when /health responds).
- */
+*/
+
+import {
+  hasDurableOpenClawConfigControlProtocol,
+  OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
+  OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
+  type GatewayConfigStatus,
+} from "@octogee/shared/types/fleet-controller";
 
 export const EVICT_AFTER_STREAK = 2;
 
 export interface OperatorGatewayHealth {
   status: string;
   version?: string;
+  openclawVersion?: string;
   /** The pod's current process start (epoch ms). Persisted trusted-side so the
    *  shell reaper can detect a roll. Optional — omitted by a malformed /health. */
   startedAt?: number;
@@ -30,14 +38,17 @@ export interface OperatorGatewayHealth {
   /** Slugs mid-migration-import (coach-wired here but cutover hasn't moved their assignment
    *  yet). Skipped as eviction candidates so a slow import→cutover isn't drained. */
   migratingIn?: string[];
+  configStatus?: GatewayConfigStatus;
 }
 
 export interface OperatorHeartbeatRecord {
   status: string;
   mountedCustomers: string[];
   version?: string;
+  openclawVersion?: string;
   /** Live pod-boot time (epoch ms) — lets reapGoneGatewayShells reap pre-roll shells. */
   startedAt?: number;
+  configStatus?: GatewayConfigStatus;
 }
 
 export interface OperatorHeartbeatPollerDeps {
@@ -99,22 +110,83 @@ export function parseHealthResponse(json: unknown): OperatorGatewayHealth | null
     customers?: unknown;
     startedAt?: unknown;
     version?: unknown;
+    openclawVersion?: unknown;
     migratingIn?: unknown;
+    configStatus?: unknown;
   };
   if (typeof body.status !== "string" || body.status.length === 0) return null;
   if (!Array.isArray(body.customers)) return null;
   const customers = body.customers.filter(
     (slug): slug is string => typeof slug === "string",
   );
-  const health: OperatorGatewayHealth = { status: body.status, customers };
-  if (typeof body.version === "string") health.version = body.version;
-  if (typeof body.startedAt === "number") health.startedAt = body.startedAt;
-  if (Array.isArray(body.migratingIn)) {
-    health.migratingIn = body.migratingIn.filter(
-      (slug): slug is string => typeof slug === "string",
-    );
+  return {
+    status: body.status,
+    customers,
+    ...healthStringField("version", body.version, false),
+    ...healthStringField("openclawVersion", body.openclawVersion, true),
+    ...(typeof body.startedAt === "number" ? { startedAt: body.startedAt } : {}),
+    ...(Array.isArray(body.migratingIn)
+      ? { migratingIn: body.migratingIn.filter(isString) }
+      : {}),
+    ...configStatusField(body.configStatus),
+  };
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+function healthStringField<K extends "version" | "openclawVersion">(
+  key: K,
+  value: unknown,
+  requireNonEmpty: boolean,
+): Partial<Pick<OperatorGatewayHealth, K>> {
+  if (typeof value !== "string" || (requireNonEmpty && value.length === 0)) return {};
+  return { [key]: value } as Partial<Pick<OperatorGatewayHealth, K>>;
+}
+
+function configStatusField(
+  value: unknown,
+): Partial<Pick<OperatorGatewayHealth, "configStatus">> {
+  if (!hasDurableOpenClawConfigControlProtocol(value)) return {};
+  const status = value as GatewayConfigStatus;
+  const validFreezeState = status.freezeState === undefined ||
+    status.freezeState === "frozen" ||
+    status.freezeState === "freezing" ||
+    status.freezeState === "unfrozen";
+  const validVersion = status.openclawVersion === undefined ||
+    typeof status.openclawVersion === "string";
+  const validForkSha = status.openclawForkSha === undefined ||
+    typeof status.openclawForkSha === "string";
+  return validFreezeState && validVersion && validForkSha && hasValidDashboardControlStatus(status)
+    ? { configStatus: status }
+    : {};
+}
+
+function hasValidDashboardControlStatus(status: GatewayConfigStatus): boolean {
+  if (status.dashboardControlState === undefined) {
+    return status.dashboardControlProtocol === undefined &&
+      status.dashboardControlObservedAt === undefined;
   }
-  return health;
+  if (
+    status.dashboardControlState !== "ready" &&
+    status.dashboardControlState !== "missing" &&
+    status.dashboardControlState !== "stale" &&
+    status.dashboardControlState !== "invalid"
+  ) {
+    return false;
+  }
+  if (status.dashboardControlState !== "ready") {
+    return status.dashboardControlProtocol === undefined &&
+      status.dashboardControlObservedAt === undefined;
+  }
+  const observedAt = status.dashboardControlObservedAt;
+  return status.dashboardControlProtocol?.protocol === OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL &&
+    status.dashboardControlProtocol.version === OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION &&
+    typeof observedAt === "string" &&
+    observedAt.length <= 40 &&
+    Number.isFinite(Date.parse(observedAt)) &&
+    new Date(observedAt).toISOString() === observedAt;
 }
 
 async function evictDepartedForGateway(
@@ -193,7 +265,11 @@ export async function pollOperatorHeartbeatsOnce(
         mountedCustomers: intersectMounted(health.customers, assigned),
       };
       if (typeof health.version === "string") record.version = health.version;
+      if (typeof health.openclawVersion === "string") {
+        record.openclawVersion = health.openclawVersion;
+      }
       if (typeof health.startedAt === "number") record.startedAt = health.startedAt;
+      if (health.configStatus) record.configStatus = health.configStatus;
       await deps.writeHeartbeat(gatewayId, record);
       await evictDepartedForGateway(
         deps,

@@ -368,6 +368,7 @@ const SYSTEM_CONFIG_ENUMS: Record<string, ReadonlySet<string>> = {
   bootRecovery: new Set(["none", "recovered", "unavailable"]),
   watcherState: new Set(["running", "stopped"]),
   freezeState: new Set(["unfrozen", "freezing", "frozen"]),
+  bootRole: new Set(["normal", "source-frozen", "target-candidate"]),
 };
 const DASHBOARD_CONTROL_STATES = new Set(["ready", "missing", "stale", "invalid"]);
 
@@ -443,8 +444,12 @@ function copySystemConfigStatusFields(
 ): boolean {
   return copyOptionalFields(input, out, ["acceptedCommit", "restoredCommit", "checkpointCommit"],
     (field) => typeof field === "string" && /^[0-9a-f]{7,64}$/.test(field)) &&
+    copyOptionalFields(input, out, ["candidateCommit"],
+      (field) => typeof field === "string" && /^[0-9a-f]{40}$/.test(field)) &&
+    copyOptionalFields(input, out, ["candidateHash"],
+      (field) => typeof field === "string" && /^[0-9a-f]{64}$/.test(field)) &&
     copyOptionalFields(input, out, ["configHash"],
-      (field) => typeof field === "string" && /^sha256:[0-9a-f]{64}$/.test(field)) &&
+      (field) => typeof field === "string" && /^(?:sha256:)?[0-9a-f]{64}$/.test(field)) &&
     copyOptionalFields(input, out,
       ["dirtySince", "lastSyncedAt", "lastErrorAt", "runtimeHealthCheckedAt", "updatedAt"],
       isBoundedTimestamp, true) &&
@@ -461,7 +466,34 @@ function copySystemConfigStatusFields(
     copyOptionalFields(input, out, ["openclawForkSha"],
       (field) => typeof field === "string" &&
         (field === "unknown" || /^[0-9a-f]{7,64}$/.test(field))) &&
-    copyControlProtocol(input, out);
+    copyControlProtocol(input, out) &&
+    copyConfigControlOwner(input, out);
+}
+
+function copyConfigControlOwner(
+  input: Record<string, unknown>,
+  out: Record<string, unknown>,
+): boolean {
+  if (input.controlOwner === undefined) return true;
+  if (!input.controlOwner || typeof input.controlOwner !== "object" || Array.isArray(input.controlOwner)) {
+    return false;
+  }
+  const owner = input.controlOwner as Record<string, unknown>;
+  const validControlId = (value: unknown) =>
+    typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
+  if (
+    !validControlId(owner.migrationId) ||
+    !validControlId(owner.sourceRevisionId) ||
+    !validControlId(owner.targetRevisionId)
+  ) {
+    return false;
+  }
+  out.controlOwner = {
+    migrationId: owner.migrationId,
+    sourceRevisionId: owner.sourceRevisionId,
+    targetRevisionId: owner.targetRevisionId,
+  };
+  return true;
 }
 
 function parseDashboardControlStatus(

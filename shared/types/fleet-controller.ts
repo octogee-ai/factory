@@ -1,6 +1,20 @@
 
 
 import type { FleetBrokerUserSnapshot } from "./fleet-broker.js";
+import type { GatewayClass } from "./glm.js";
+
+export type SystemConfigMigrationMode =
+  | "none"
+  | "checkpoint-only"
+  | "checkpoint-and-restore";
+
+export function systemConfigMigrationMode(
+  sourceClass: GatewayClass,
+  targetClass: GatewayClass,
+): SystemConfigMigrationMode {
+  if (sourceClass === "shared") return "none";
+  return targetClass === "shared" ? "checkpoint-only" : "checkpoint-and-restore";
+}
 
 export type GatewayStatus = "booting" | "ready" | "draining" | "unreachable";
 
@@ -104,6 +118,44 @@ export interface OpenClawDashboardBridgeCapability extends OpenClawDashboardBrid
   observedAt: string;
 }
 
+export type SystemConfigBootRole = "normal" | "source-frozen" | "target-candidate";
+
+export interface GatewayConfigControlOwner {
+  migrationId: string;
+  sourceRevisionId: string;
+  targetRevisionId: string;
+}
+
+export interface GatewayConfigStatus {
+  controlProtocol: DurableOpenClawConfigControlProtocol;
+  observedAt?: unknown;
+  freezeState?: "unfrozen" | "freezing" | "frozen";
+  bootRole?: SystemConfigBootRole;
+  controlOwner?: GatewayConfigControlOwner;
+  checkpointCommit?: string;
+  configHash?: string;
+  candidateCommit?: string;
+  candidateHash?: string;
+  runtimeReady?: boolean;
+  openclawVersion?: string;
+  openclawForkSha?: string;
+  dashboardControlState?: "ready" | "missing" | "stale" | "invalid";
+  dashboardControlProtocol?: OpenClawDashboardBridgeProtocol;
+  dashboardControlObservedAt?: string;
+}
+
+export function hasDurableOpenClawConfigControlProtocol(
+  value: unknown,
+): value is GatewayConfigStatus {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const controlProtocol = (value as { controlProtocol?: unknown }).controlProtocol;
+  if (!controlProtocol || typeof controlProtocol !== "object" || Array.isArray(controlProtocol)) {
+    return false;
+  }
+  const marker = controlProtocol as { protocol?: unknown; version?: unknown };
+  return marker.protocol === DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL &&
+    marker.version === DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION;
+}
 export const GATEWAYS_COLLECTION = "gateways";
 
 export interface MigrationRequestBody {
@@ -201,6 +253,7 @@ export const CONFIG_CONTROL_ACTIONS = [
   "candidate-proof",
   "promote-candidate",
   "abort-v2",
+  "retire-v2",
   "finalize-v2",
 ] as const;
 
@@ -312,6 +365,19 @@ export interface ConfigAbortV2RequestBody extends ConfigControlRequestBody {
 
 export interface ConfigAbortV2Response extends ConfigControlResponseBody {
   aborted: true;
+}
+
+export interface ConfigRetireV2RequestBody extends ConfigControlRequestBody {
+  action: "retire-v2";
+  checkpointCommit: string;
+  freezeObject: string;
+  recoverOnly?: true;
+}
+
+export interface ConfigRetireV2Response extends ConfigControlResponseBody {
+  retired: true;
+  retirementRef: string;
+  retirementObject: string;
 }
 
 export interface ConfigFinalizeV2RequestBody extends ConfigControlRequestBody {

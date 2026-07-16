@@ -5,7 +5,30 @@ import {
   buildOperationCompletionUpdate,
   classifyOperationFailure,
   retryBackoffMs,
+  shouldPersistClaimedOperationCompletion,
+  supersededRollMigrationAction,
 } from "../operation-retry";
+
+describe("supersededRollMigrationAction", () => {
+  it("cancels unstarted work but waits for running or cleanup-pending workers to finish", () => {
+    expect(supersededRollMigrationAction({ status: "pending" })).toBe("cancel");
+    expect(supersededRollMigrationAction({ status: "running" })).toBe("wait");
+    expect(supersededRollMigrationAction({
+      status: "pending",
+      output: { configCleanup: { migrationId: "mig-1" } },
+    })).toBe("wait");
+    expect(supersededRollMigrationAction({ status: "failed" })).toBe("done");
+    expect(supersededRollMigrationAction({ status: "rolled-back" })).toBe("done");
+  });
+});
+
+describe("shouldPersistClaimedOperationCompletion", () => {
+  it("does not let an in-memory worker overwrite a durably cancelled operation", () => {
+    expect(shouldPersistClaimedOperationCompletion("running")).toBe(true);
+    expect(shouldPersistClaimedOperationCompletion("rolled-back")).toBe(false);
+    expect(shouldPersistClaimedOperationCompletion("failed")).toBe(false);
+  });
+});
 
 describe("classifyOperationFailure", () => {
   it("classifies timeouts, K8s API hiccups, and preemption as transient", () => {
@@ -21,6 +44,17 @@ describe("classifyOperationFailure", () => {
     expect(classifyOperationFailure("instance preempted mid-warm")).toBe("transient");
     expect(
       classifyOperationFailure("gateway bender durable desired revision did not materialize within 120000ms"),
+    ).toBe("transient");
+    expect(classifyOperationFailure("config unfreeze cleanup pending: source RPC unavailable")).toBe(
+      "transient",
+    );
+    expect(classifyOperationFailure("source unmount cleanup pending: source RPC unavailable")).toBe(
+      "transient",
+    );
+    expect(
+      classifyOperationFailure(
+        "gateway bender retirement config freeze failed: openclaw config is dirty",
+      ),
     ).toBe("transient");
   });
 
@@ -84,7 +118,105 @@ describe("buildOperationCompletionUpdate", () => {
       rolledBack: false,
       nextAttemptAt: FieldValue.delete(),
       waitingOn: FieldValue.delete(),
+      output: FieldValue.delete(),
     });
+  });
+
+  it("keeps a durable config cleanup obligation level-triggered after the normal retry cap", () => {
+    const configCleanup = {
+      migrationId: "mig-1",
+      slug: "alice",
+      sourceGatewayId: "default",
+      sourceTransportId: "default-r1",
+      resume: { success: true, rolledBack: false },
+    };
+    const update = buildOperationCompletionUpdate({
+      op: { attempts: MAX_OPERATION_ATTEMPTS, attemptHistory: [] },
+      result: {
+        steps: [],
+        success: false,
+        error: "config unfreeze cleanup pending: source RPC unavailable",
+        output: { configCleanup },
+      },
+      steps: [],
+      now,
+    });
+
+    expect(update.status).toBe("pending");
+    expect(update.output).toEqual({ configCleanup });
+    expect(update.nextAttemptAt).toBe(now + retryBackoffMs(MAX_OPERATION_ATTEMPTS + 1));
+  });
+
+  it("keeps a durable retirement freeze obligation level-triggered after the normal retry cap", () => {
+    const retirementFencePending = {
+      gatewayId: "bender",
+      operationId: "retire-1",
+    };
+    const update = buildOperationCompletionUpdate({
+      op: { attempts: MAX_OPERATION_ATTEMPTS, attemptHistory: [] },
+      result: {
+        steps: [],
+        success: false,
+        error: "gateway bender retirement config checkpoint changed before teardown",
+        output: { retirementFencePending },
+      },
+      steps: [],
+      now,
+    });
+
+    expect(update.status).toBe("pending");
+    expect(update.output).toEqual({ retirementFencePending });
+    expect(update.nextAttemptAt).toBe(now + retryBackoffMs(MAX_OPERATION_ATTEMPTS + 1));
+  });
+
+  it("terminalizes a definitive unsupported or wrong-owner cleanup even when the obligation is retained for audit", () => {
+    for (const error of [
+      "config cleanup terminal: /config-unfreeze/default: 501 not configured",
+      "config cleanup terminal: freeze is owned by mig-other-op",
+    ]) {
+      const configCleanup = {
+        migrationId: "mig-1",
+        slug: "alice",
+        sourceGatewayId: "default",
+        sourceTransportId: "default-r1",
+        resume: { success: true, rolledBack: false },
+      };
+      const update = buildOperationCompletionUpdate({
+        op: { attempts: MAX_OPERATION_ATTEMPTS, attemptHistory: [] },
+        result: { steps: [], success: false, error, output: { configCleanup } },
+        steps: [],
+        now,
+      });
+
+      expect(update.status).toBe("failed");
+      expect(update.output).toEqual({ configCleanup });
+    }
+  });
+
+  it("deletes a stale cleanup obligation after cleanup finishes", () => {
+    const update = buildOperationCompletionUpdate({
+      op: { attempts: 1 },
+      result: { steps: [], success: true },
+      steps: [],
+      now,
+    });
+
+    expect(update.output).toEqual(FieldValue.delete());
+  });
+
+  it("persists migration checkpoint and proof output with the terminal operation", () => {
+    const output = {
+      configCheckpoint: { checkpointCommit: "a".repeat(40), configHash: "b".repeat(64) },
+      configProof: { restoredCommit: "a".repeat(40), acceptedCommit: "c".repeat(40) },
+    };
+    const update = buildOperationCompletionUpdate({
+      op: { attempts: 0 },
+      result: { steps: [], success: true, output },
+      steps: [],
+      now,
+    });
+
+    expect(update.output).toEqual(output);
   });
 
   it("requeues a transient failure with backoff, bumps attempts, and appends attempt history", () => {

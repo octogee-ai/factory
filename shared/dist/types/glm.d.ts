@@ -171,6 +171,7 @@ export interface Operation {
     nextAttemptAt?: number | null;
     attempts?: number;
     attemptHistory?: OperationAttemptRecord[];
+    output?: Record<string, unknown>;
 }
 export interface OperationAttemptRecord {
     attempt: number;

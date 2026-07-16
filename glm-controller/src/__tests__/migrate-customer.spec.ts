@@ -4,6 +4,7 @@ import { createMigrateCustomerHandler } from "../handlers/migrate-customer";
 import type { MigrateCustomerDeps } from "../handlers/migrate-customer";
 import type { OperationContext } from "../operation-router";
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
+import { MigrationRpcError } from "@octogee/core/fleet-migration-client";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 
 const SNAPSHOT: FleetBrokerUserSnapshot = {
@@ -46,6 +47,33 @@ function mkOp(overrides: Partial<Operation>): Operation {
 
 function happyClient(): MigrationClient {
   return {
+    freezeConfig: vi.fn(async ({ migrationId, slug }) => ({
+      migrationId,
+      slug,
+      frozen: true,
+      checkpointCommit: "a".repeat(40),
+      configHash: "b".repeat(64),
+    })) as MigrationClient["freezeConfig"],
+    proveConfigRestore: vi.fn(async ({ migrationId, slug, checkpointCommit, transportId, gatewayId }) => ({
+      migrationId,
+      slug,
+      restoredCommit: checkpointCommit,
+      acceptedCommit: "c".repeat(40),
+      configHash: "d".repeat(64),
+      configReady: true,
+      observedRevisionId: transportId ?? gatewayId,
+      restoreProvenAt: 100,
+      configReadyAt: 101,
+      runtimeConfigHash: "runtime-after",
+    })) as MigrationClient["proveConfigRestore"],
+    reproveConfigRestore: vi.fn(async () => {
+      throw new Error("not used by migration handler");
+    }) as MigrationClient["reproveConfigRestore"],
+    unfreezeConfig: vi.fn(async ({ migrationId, slug }) => ({
+      migrationId,
+      slug,
+      unfrozen: true,
+    })) as MigrationClient["unfreezeConfig"],
     restoreTarget: vi.fn(async ({ migrationId, slug }) => ({
       migrationId,
       slug,
@@ -94,9 +122,16 @@ function makeDeps(
     readUserSnapshot: vi.fn(async () => SNAPSHOT),
     commitCutover: vi.fn(async () => undefined),
     setAssignmentState: vi.fn(async () => undefined),
+    assertRollFence: vi.fn(async () => undefined),
+    recordConfigProof: vi.fn(async () => undefined),
+    recordConfigRollMetric: vi.fn(),
+    resolveSystemConfigMigrationMode: vi.fn(async () => "none"),
+    assertSystemConfigProtocolReady: vi.fn(async () => undefined),
+    recoverConfigFreezeOwner: vi.fn(async () => false),
     resolveFromRevision: vi.fn(async (_uid: string, gatewayId: string) => ({
       revisionId: `${gatewayId}-r1`,
       release: 1,
+      epoch: 1,
     })),
     resolvePlacement: vi.fn(async (gatewayId: string) => ({
       ok: true as const,
@@ -124,6 +159,157 @@ function makeCtx(): OperationContext & { reported: OperationStep[] } {
 }
 
 describe("createMigrateCustomerHandler — happy path", () => {
+  it("derives a stable migration id from the durable operation id across retries", async () => {
+    const client = happyClient();
+    const genMigrationId = vi.fn((operationId: string) => `mig-${operationId}`);
+    const { deps } = makeDeps({ genMigrationId }, client);
+    const handler = createMigrateCustomerHandler(deps);
+    const op = mkOp({ id: "operation-stable" });
+
+    await handler(op, makeCtx());
+    await handler(op, makeCtx());
+
+    expect(genMigrationId).toHaveBeenNthCalledWith(1, "operation-stable");
+    expect(genMigrationId).toHaveBeenNthCalledWith(2, "operation-stable");
+    const ids = (client.transferState as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([input]) => input.migrationId,
+    );
+    expect(new Set(ids)).toEqual(new Set(["mig-operation-stable"]));
+  });
+
+  it("resumes only the durable source-unfreeze cleanup before completing a migrated operation", async () => {
+    const client = happyClient();
+    const { deps } = makeDeps({}, client);
+    const handler = createMigrateCustomerHandler(deps);
+    const configCleanup = {
+      migrationId: "mig-op-1",
+      slug: "alice",
+      sourceGatewayId: "gw-blue",
+      sourceTransportId: "gw-blue-r1",
+      resume: {
+        success: true,
+        rolledBack: false,
+        configCheckpoint: {
+          checkpointCommit: "a".repeat(40),
+          configHash: "b".repeat(64),
+        },
+      },
+    };
+
+    const result = await handler(mkOp({ output: { configCleanup } }), makeCtx());
+
+    expect(result).toEqual({
+      steps: [],
+      success: true,
+      rolledBack: false,
+      output: { configCheckpoint: configCleanup.resume.configCheckpoint },
+    });
+    expect(deps.resolveGatewayUrl).toHaveBeenCalledWith("gw-blue-r1");
+    expect(client.unfreezeConfig).toHaveBeenCalledWith({
+      migrationId: "mig-op-1",
+      gatewayId: "gw-blue",
+      transportId: "gw-blue-r1",
+      slug: "alice",
+    });
+    expect(client.transferState).not.toHaveBeenCalled();
+    expect(deps.commitCutover).not.toHaveBeenCalled();
+  });
+
+  it("keeps the cleanup obligation when a cleanup-only retry still cannot confirm unfreeze", async () => {
+    const client = happyClient();
+    client.unfreezeConfig = vi.fn(async () => {
+      throw new Error("source RPC unavailable");
+    }) as MigrationClient["unfreezeConfig"];
+    const { deps } = makeDeps({}, client);
+    const handler = createMigrateCustomerHandler(deps);
+    const configCleanup = {
+      migrationId: "mig-op-1",
+      slug: "alice",
+      sourceGatewayId: "gw-blue",
+      sourceTransportId: "gw-blue-r1",
+      resume: { success: true, rolledBack: false },
+    };
+
+    const result = await handler(mkOp({ output: { configCleanup } }), makeCtx());
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringMatching(/config unfreeze cleanup pending.*source RPC unavailable/i),
+      output: { configCleanup },
+    });
+    expect(client.transferState).not.toHaveBeenCalled();
+  });
+
+  it("terminalizes a definitive unsupported cleanup instead of retrying forever", async () => {
+    const client = happyClient();
+    client.unfreezeConfig = vi.fn(async () => {
+      throw new MigrationRpcError("/config-unfreeze/gw-blue: 501 not configured", {
+        status: 501,
+      });
+    }) as MigrationClient["unfreezeConfig"];
+    const { deps } = makeDeps({}, client);
+    const handler = createMigrateCustomerHandler(deps);
+    const configCleanup = {
+      migrationId: "mig-op-1",
+      slug: "alice",
+      sourceGatewayId: "gw-blue",
+      sourceTransportId: "gw-blue-r1",
+      completeSourceUnmount: false,
+      resume: { success: true, rolledBack: false },
+    };
+
+    const result = await handler(mkOp({ output: { configCleanup } }), makeCtx());
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringMatching(/config cleanup terminal.*501/i),
+      output: { configCleanup },
+    });
+  });
+
+  it("retains the deferred source unmount obligation when its cleanup RPC is transiently unavailable", async () => {
+    const client = happyClient();
+    client.unmount = vi.fn(async () => {
+      throw new Error("source RPC unavailable");
+    }) as MigrationClient["unmount"];
+    const { deps } = makeDeps({}, client);
+    const handler = createMigrateCustomerHandler(deps);
+    const configCleanup = {
+      migrationId: "mig-op-1",
+      slug: "alice",
+      sourceGatewayId: "gw-blue",
+      sourceTransportId: "gw-blue-r1",
+      completeSourceUnmount: true,
+      resume: { success: true, rolledBack: false },
+    };
+
+    const result = await handler(mkOp({ output: { configCleanup } }), makeCtx());
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringMatching(/source unmount cleanup pending/i),
+      output: { configCleanup },
+    });
+    expect(client.unfreezeConfig).toHaveBeenCalledOnce();
+    expect(client.unmount).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed instead of replaying migration when a durable cleanup obligation is malformed", async () => {
+    const { deps, client } = makeDeps();
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({
+      output: { configCleanup: { migrationId: "mig-op-1" } },
+    }), makeCtx());
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringMatching(/invalid durable config cleanup obligation/i),
+    });
+    expect(client.transferState).not.toHaveBeenCalled();
+    expect(deps.commitCutover).not.toHaveBeenCalled();
+  });
+
   it("returns success=true and writes all migration step pairs through ctx.reportStep", async () => {
     const { deps } = makeDeps();
     const handler = createMigrateCustomerHandler(deps);
@@ -186,7 +372,12 @@ describe("createMigrateCustomerHandler — happy path", () => {
     const ctx = makeCtx();
 
     const result = await handler(
-      mkOp({ input: { uid: "uid-alice", toGatewayId: "gw-green", source: "release-roll" } }),
+      mkOp({ input: {
+        uid: "uid-alice",
+        toGatewayId: "gw-green",
+        source: "release-roll",
+        rollOperationId: "roll-1",
+      } }),
       ctx,
     );
 
@@ -345,6 +536,279 @@ describe("createMigrateCustomerHandler — input validation", () => {
 });
 
 describe("createMigrateCustomerHandler — revision-targeted (same-gateway drain)", () => {
+  it("uses the release roll checkpoint lease instead of reacquiring or releasing the source fence", async () => {
+    const { deps, client } = makeDeps({
+      readUser: vi.fn(async () => ({ slug: "alice", currentGatewayId: "bender" })),
+      resolveFromRevision: vi.fn(async () => ({ revisionId: "bender-r1", release: 1 })),
+      resolvePlacement: vi.fn(async () => ({ ok: true as const, revisionId: "bender-r2", release: 2 })),
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
+    });
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({ input: {
+      uid: "uid-alice",
+      builderSlug: "alice",
+      toGatewayId: "bender",
+      source: "release-roll",
+      rollOperationId: "roll-1",
+      systemConfigMigrationMode: "checkpoint-and-restore",
+      preAcquiredConfigCheckpoint: {
+        migrationId: "roll-config-roll-1",
+        checkpointCommit: "1".repeat(40),
+        configHash: "a".repeat(64),
+      },
+    } }), makeCtx());
+
+    expect(result.success).toBe(true);
+    expect(client.freezeConfig).not.toHaveBeenCalled();
+    expect(client.unfreezeConfig).not.toHaveBeenCalled();
+    expect(client.proveConfigRestore).toHaveBeenCalledWith(expect.objectContaining({
+      migrationId: "roll-config-roll-1",
+      checkpointCommit: "1".repeat(40),
+    }));
+    expect(deps.recordConfigProof).toHaveBeenCalledWith(
+      "bender-r2",
+      expect.objectContaining({ migrationId: "roll-config-roll-1" }),
+      expect.objectContaining({ rollOperationId: "roll-1" }),
+    );
+  });
+
+  it("rejects a malformed pre-acquired roll checkpoint before source transfer", async () => {
+    const { deps, client } = makeDeps({
+      readUser: vi.fn(async () => ({ slug: "alice", currentGatewayId: "bender" })),
+      resolveFromRevision: vi.fn(async () => ({ revisionId: "bender-r1", release: 1 })),
+      resolvePlacement: vi.fn(async () => ({ ok: true as const, revisionId: "bender-r2", release: 2 })),
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
+    });
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({ input: {
+      uid: "uid-alice",
+      toGatewayId: "bender",
+      source: "release-roll",
+      rollOperationId: "roll-1",
+      systemConfigMigrationMode: "checkpoint-and-restore",
+      preAcquiredConfigCheckpoint: {
+        migrationId: "roll-config-roll-1",
+        checkpointCommit: "not-a-commit",
+        configHash: "a".repeat(64),
+      },
+    } }), makeCtx());
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringMatching(/invalid preAcquiredConfigCheckpoint/),
+    });
+    expect(client.freezeConfig).not.toHaveBeenCalled();
+    expect(client.transferState).not.toHaveBeenCalled();
+  });
+
+  it("leaves gateway-bound config to the protocol-v2 controller during a release drain", async () => {
+    const { deps, client } = makeDeps({
+      readUser: vi.fn(async () => ({ slug: "alice", currentGatewayId: "bender" })),
+      resolveFromRevision: vi.fn(async () => ({ revisionId: "bender-r1", release: 1 })),
+      resolvePlacement: vi.fn(async () => ({ ok: true as const, revisionId: "bender-r2", release: 2 })),
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
+    });
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({ input: {
+      uid: "uid-alice",
+      toGatewayId: "bender",
+      source: "release-roll",
+      rollOperationId: "roll-1",
+    } }), makeCtx());
+
+    expect(result.success).toBe(true);
+    expect(client.freezeConfig).not.toHaveBeenCalled();
+    expect(client.proveConfigRestore).not.toHaveBeenCalled();
+  });
+
+  it("checkpoints an idle isolated gateway return without restoring config on the shared target", async () => {
+    const { deps, client } = makeDeps({
+      readUser: vi.fn(async () => ({ slug: "alice", currentGatewayId: "bender" })),
+      resolveFromRevision: vi.fn(async () => ({ revisionId: "bender-r1", release: 1 })),
+      resolvePlacement: vi.fn(async () => ({
+        ok: true as const,
+        revisionId: "default-r3",
+        release: 3,
+      })),
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-only"),
+    });
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({ input: {
+      uid: "uid-alice",
+      toGatewayId: "default",
+      source: "dedicated-idle-return",
+      systemConfigMigrationMode: "checkpoint-only",
+    } }), makeCtx());
+
+    expect(result).toMatchObject({
+      success: true,
+      output: {
+        configCheckpoint: {
+          checkpointCommit: "a".repeat(40),
+          configHash: "b".repeat(64),
+        },
+      },
+    });
+    expect(result.output).not.toHaveProperty("configProof");
+    expect(client.freezeConfig).toHaveBeenCalledOnce();
+    expect(client.proveConfigRestore).not.toHaveBeenCalled();
+    expect(deps.recordConfigProof).not.toHaveBeenCalled();
+    expect(client.unfreezeConfig).toHaveBeenCalledOnce();
+  });
+
+  it("fails before transfer when the queued mode no longer matches the gateway classes", async () => {
+    const { deps, client } = makeDeps({
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-only"),
+    });
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({ input: {
+      uid: "uid-alice",
+      toGatewayId: "gw-green",
+      systemConfigMigrationMode: "checkpoint-and-restore",
+    } }), makeCtx());
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringMatching(/mode changed/i),
+    });
+    expect(client.freezeConfig).not.toHaveBeenCalled();
+    expect(client.transferState).not.toHaveBeenCalled();
+  });
+
+  it("fails before freeze when the exact fleet control protocol barrier is not satisfied", async () => {
+    const assertSystemConfigProtocolReady = vi.fn(async () => {
+      throw new Error("durable-openclaw-config protocol v1 is not fleet-ready");
+    });
+    const { deps, client } = makeDeps({
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
+      assertSystemConfigProtocolReady,
+    });
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({ input: {
+      uid: "uid-alice",
+      toGatewayId: "gw-green",
+      systemConfigMigrationMode: "checkpoint-and-restore",
+    } }), makeCtx());
+
+    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/not fleet-ready/i) });
+    expect(client.freezeConfig).not.toHaveBeenCalled();
+    expect(client.transferState).not.toHaveBeenCalled();
+  });
+
+  it("persists the planned-roll checkpoint and target proof as operation output", async () => {
+    const { deps, client } = makeDeps({
+      readUser: vi.fn(async () => ({ slug: "alice", currentGatewayId: "default" })),
+      resolveFromRevision: vi.fn(async () => ({ revisionId: "default-r1", release: 1, epoch: 0 })),
+      resolvePlacement: vi.fn(async () => ({ ok: true as const, revisionId: "default-r2", release: 2 })),
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
+    });
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({ input: {
+      uid: "uid-alice",
+      toGatewayId: "default",
+      source: "release-roll",
+      rollOperationId: "roll-default-r2-1",
+      systemConfigMigrationMode: "checkpoint-and-restore",
+    } }), makeCtx());
+
+    expect(result.success).toBe(true);
+    expect(client.freezeConfig).toHaveBeenCalledWith(expect.objectContaining({
+      transportId: "default-r1",
+    }));
+    expect(client.proveConfigRestore).toHaveBeenCalledWith(expect.objectContaining({
+      transportId: "default-r2",
+      checkpointCommit: "a".repeat(40),
+    }));
+    const rollFence = {
+      uid: "uid-alice",
+      gatewayId: "default",
+      rollOperationId: "roll-default-r2-1",
+      targetRevisionId: "default-r2",
+      targetRelease: 2,
+      sourceRevisionId: "default-r1",
+      sourceEpoch: 0,
+    };
+    expect(deps.assertRollFence).toHaveBeenCalledWith(rollFence);
+    expect(deps.recordConfigProof).toHaveBeenCalledWith(
+      "default-r2",
+      expect.objectContaining({
+        migrationId: "mig-test-1",
+        builderSlug: "alice",
+        checkpointCommit: "a".repeat(40),
+        acceptedCommit: "c".repeat(40),
+      }),
+      rollFence,
+    );
+    expect(deps.recordConfigRollMetric).toHaveBeenCalledWith({
+      stage: "checkpoint", result: "ok", gatewayId: "default", revisionId: "default-r1",
+    });
+    expect(deps.recordConfigRollMetric).toHaveBeenCalledWith({
+      stage: "proof", result: "ok", gatewayId: "default", revisionId: "default-r2",
+    });
+    expect(deps.recordConfigRollMetric).not.toHaveBeenCalledWith(expect.objectContaining({
+      stage: "unfreeze",
+    }));
+    expect(client.unfreezeConfig).not.toHaveBeenCalled();
+    expect(result.output).toEqual({
+      configCheckpoint: {
+        checkpointCommit: "a".repeat(40),
+        configHash: "b".repeat(64),
+      },
+      configProof: {
+        restoredCommit: "a".repeat(40),
+        acceptedCommit: "c".repeat(40),
+        configHash: "d".repeat(64),
+        configReady: true,
+        observedRevisionId: "default-r2",
+        restoreProvenAt: 100,
+        configReadyAt: 101,
+        runtimeConfigHash: "runtime-after",
+      },
+    });
+  });
+
+  it("rejects a superseded roll before freezing or transferring state", async () => {
+    const assertRollFence = vi.fn(async () => {
+      throw new Error("stale release-roll fence");
+    });
+    const { deps, client } = makeDeps({
+      readUser: vi.fn(async () => ({ slug: "alice", currentGatewayId: "default" })),
+      resolveFromRevision: vi.fn(async () => ({
+        revisionId: "default-r1",
+        release: 1,
+        epoch: 7,
+      })),
+      resolvePlacement: vi.fn(async () => ({
+        ok: true as const,
+        revisionId: "default-r2",
+        release: 2,
+      })),
+      assertRollFence,
+    });
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({ input: {
+      uid: "uid-alice",
+      toGatewayId: "default",
+      source: "release-roll",
+      rollOperationId: "roll-old",
+      systemConfigMigrationMode: "checkpoint-and-restore",
+    } }), makeCtx());
+
+    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/stale release-roll/i) });
+    expect(result.output).toBeUndefined();
+    expect(client.unfreezeConfig).not.toHaveBeenCalled();
+    expect(client.freezeConfig).not.toHaveBeenCalled();
+    expect(client.transferState).not.toHaveBeenCalled();
+  });
+
   it("ACCEPTS a same-gateway drain when the resolved from/to REVISIONS differ", async () => {
     const commitCutover = vi.fn(async () => undefined);
     const resolveGatewayUrl = vi.fn(async (id: string) => `http://test/${id}`);
@@ -357,7 +821,12 @@ describe("createMigrateCustomerHandler — revision-targeted (same-gateway drain
     });
     const handler = createMigrateCustomerHandler(deps);
     const result = await handler(
-      mkOp({ input: { uid: "uid-alice", toGatewayId: "default", source: "release-roll" } }),
+      mkOp({ input: {
+        uid: "uid-alice",
+        toGatewayId: "default",
+        source: "release-roll",
+        rollOperationId: "roll-1",
+      } }),
       makeCtx(),
     );
 
@@ -408,7 +877,12 @@ describe("createMigrateCustomerHandler — revision-targeted (same-gateway drain
     });
     const handler = createMigrateCustomerHandler(deps);
     const result = await handler(
-      mkOp({ input: { uid: "uid-alice", toGatewayId: "default", source: "release-roll" } }),
+      mkOp({ input: {
+        uid: "uid-alice",
+        toGatewayId: "default",
+        source: "release-roll",
+        rollOperationId: "roll-1",
+      } }),
       makeCtx(),
     );
     expect(result.success).toBe(true);
@@ -428,7 +902,12 @@ describe("createMigrateCustomerHandler — revision-targeted (same-gateway drain
     });
     const handler = createMigrateCustomerHandler(deps);
     const result = await handler(
-      mkOp({ input: { uid: "uid-alice", toGatewayId: "default", source: "release-roll" } }),
+      mkOp({ input: {
+        uid: "uid-alice",
+        toGatewayId: "default",
+        source: "release-roll",
+        rollOperationId: "roll-1",
+      } }),
       makeCtx(),
     );
     expect(result.success).toBe(true);
@@ -532,7 +1011,12 @@ describe("createMigrateCustomerHandler — post-cutover source cleanup", () => {
     const ctx = makeCtx();
 
     const res = await handler(
-      mkOp({ input: { uid: "uid-alice", toGatewayId: "gw-green", source: "release-roll" } }),
+      mkOp({ input: {
+        uid: "uid-alice",
+        toGatewayId: "gw-green",
+        source: "release-roll",
+        rollOperationId: "roll-1",
+      } }),
       ctx,
     );
 

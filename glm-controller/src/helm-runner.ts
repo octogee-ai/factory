@@ -35,6 +35,13 @@ upsertInstance(opts: {
     serviceAccount?: HelmInstancesMap[string]["serviceAccount"];
     gatewayContainerSecurityContext?: Record<string, unknown>;
     operatorAccess?: HelmInstancesMap[string]["operatorAccess"];
+    systemConfigRollContext?: {
+      migrationId: string;
+      sourceRevisionId: string;
+      targetRevisionId: string;
+      checkpointCommit: string;
+      freezeObject: string;
+    };
     computeClassOverride?: string;
     chartPath: string;
     valuesFile?: string;
@@ -329,6 +336,13 @@ export interface BuildUpgradeArgsOpts {
   serviceAccount?: HelmInstancesMap[string]["serviceAccount"];
   gatewayContainerSecurityContext?: Record<string, unknown>;
   operatorAccess?: HelmInstancesMap[string]["operatorAccess"];
+  systemConfigRollContext?: {
+    migrationId: string;
+    sourceRevisionId: string;
+    targetRevisionId: string;
+    checkpointCommit: string;
+    freezeObject: string;
+  };
   computeClassOverride?: string;
   gcpProject?: string;
   valuesFile?: string;
@@ -356,7 +370,10 @@ type UpgradeStringOption = {
 type UpgradeJsonOption = {
   option: keyof Pick<
     BuildUpgradeArgsOpts,
-    "serviceAccount" | "gatewayContainerSecurityContext" | "operatorAccess"
+    | "serviceAccount"
+    | "gatewayContainerSecurityContext"
+    | "operatorAccess"
+    | "systemConfigRollContext"
   >;
   key: string;
 };
@@ -380,6 +397,7 @@ const UPGRADE_JSON_OPTIONS: UpgradeJsonOption[] = [
   { option: "serviceAccount", key: "serviceAccount" },
   { option: "gatewayContainerSecurityContext", key: "gatewayContainerSecurityContext" },
   { option: "operatorAccess", key: "operatorAccess" },
+  { option: "systemConfigRollContext", key: "systemConfigRollContext" },
 ];
 
 function baseUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {

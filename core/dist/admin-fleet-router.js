@@ -12,6 +12,7 @@ import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-contro
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 import { findPendingActivationOperation, requestBuilderActivationLease, } from "./builder-activation-lease.js";
 import { resolveUidForSlug } from "./assigned-roster.js";
+import { GatewayRetirementConflictError, claimGatewayRetirementAtomic, hasGatewayRetirementConfigObligation, } from "./gateway-retirement-claim.js";
 export { resolveBuilderActivationPlan } from "./builder-activation-lease.js";
 function rejectPersistenceInBody(body) {
     if (body.persistence === undefined)
@@ -753,6 +754,30 @@ async function readDurableGatewayRuntime(db, gatewayId) {
         .get();
     const revision = revisionSnap.exists ? exactLiveRevision(root, revisionSnap.data()) : null;
     return { root, revision, heartbeat: runtimeHeartbeat(revision) };
+}
+function gatewayRetirementBlocker(gatewayId, runtime) {
+    if (runtime.root.liveRevisionId && !runtime.revision) {
+        return {
+            error: "gateway live revision telemetry is unavailable",
+            gatewayId,
+            revisionId: runtime.root.liveRevisionId,
+        };
+    }
+    if (runtime.root.roll) {
+        return {
+            error: "gateway has an unfinished release roll and config obligation",
+            gatewayId,
+            operationId: runtime.root.roll.operationId,
+        };
+    }
+    if (hasGatewayRetirementConfigObligation(runtime.heartbeat?.configStatus)) {
+        return {
+            error: "gateway live revision has an active config-control obligation",
+            gatewayId,
+            revisionId: runtime.root.liveRevisionId,
+        };
+    }
+    return null;
 }
 async function readGatewayRegistrationReadiness(db, gatewayId) {
     const runtime = await readDurableGatewayRuntime(db, gatewayId);
@@ -1731,6 +1756,9 @@ async function appendGatewayRelease(db, args) {
         if (!current) {
             throw new InvalidGatewayRootError(args.gateway.gatewayId);
         }
+        if (current.desiredStatus === "retired" || current.retirementClaim != null) {
+            throw new GatewayRetirementConflictError(`gateway ${args.gateway.gatewayId} has a current retirement claim`);
+        }
         if (current.latestRelease !== args.gateway.latestRelease) {
             throw new StaleGatewayReleaseError(args.gateway.gatewayId, args.gateway.latestRelease, current.latestRelease);
         }
@@ -1786,6 +1814,10 @@ class InvalidGatewayRootError extends Error {
     }
 }
 function respondReleaseWriteConflict(res, error) {
+    if (error instanceof GatewayRetirementConflictError) {
+        res.status(409).json({ error: error.message });
+        return true;
+    }
     if (error instanceof InvalidGatewayRootError) {
         res.status(409).json({ error: error.message, gatewayId: error.gatewayId });
         return true;
@@ -3438,11 +3470,31 @@ export function addAdminFleetRoutes(router, deps) {
                 return;
             }
             const updatedBy = req.uid ?? "unknown";
-            await rootRef.update({
-                ...built.ok.patch,
-                updatedAt: Date.now(),
-                updatedBy,
+            const patchResult = await db.runTransaction(async (txn) => {
+                const currentSnap = await txn.get(rootRef);
+                const currentData = currentSnap.exists
+                    ? currentSnap.data()
+                    : undefined;
+                const current = asDurableGatewayRoot(currentData, id);
+                if (!current)
+                    return { ok: false, error: ERR_GATEWAY_NOT_FOUND };
+                if (current.desiredStatus === "retired" || current.retirementClaim != null) {
+                    return {
+                        ok: false,
+                        error: "gateway has a current retirement claim",
+                    };
+                }
+                txn.update(rootRef, {
+                    ...built.ok.patch,
+                    updatedAt: Date.now(),
+                    updatedBy,
+                });
+                return { ok: true };
             });
+            if (!patchResult.ok) {
+                res.status(409).json({ error: patchResult.error, gatewayId: id });
+                return;
+            }
             res.status(202).json({ gatewayId: id, updated: Object.keys(built.ok.patch) });
         }
         catch (e) {
@@ -3463,12 +3515,9 @@ export function addAdminFleetRoutes(router, deps) {
                     .json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
                 return;
             }
-            if (runtime.root.liveRevisionId && !runtime.revision) {
-                res.status(409).json({
-                    error: "gateway live revision telemetry is unavailable",
-                    gatewayId: id,
-                    revisionId: runtime.root.liveRevisionId,
-                });
+            const retirementBlocker = gatewayRetirementBlocker(id, runtime);
+            if (retirementBlocker) {
+                res.status(409).json(retirementBlocker);
                 return;
             }
             // Refuse synchronously while any customer is still assigned — the
@@ -3494,28 +3543,38 @@ export function addAdminFleetRoutes(router, deps) {
             }
             const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
             const operationId = opRef.id;
-            const batch = db.batch();
-            batch.update(db.collection(GATEWAYS_COLLECTION).doc(id), {
-                desiredStatus: "retired",
-                updatedAt: Date.now(),
-                updatedBy: createdBy,
-            });
-            batch.set(opRef, {
-                kind: "retire-gateway",
-                status: "pending",
-                createdBy,
-                createdAt: Date.now(),
-                startedAt: null,
-                completedAt: null,
-                input: {
+            const createdAt = Date.now();
+            try {
+                await claimGatewayRetirementAtomic({
+                    db,
                     gatewayId: id,
-                    ...(retainData ? { retainData: true } : {}),
-                    ...(retainServiceAccount ? { retainServiceAccount: true } : {}),
-                },
-                steps: [],
-                gatewayId: id,
-            });
-            await batch.commit();
+                    operationId,
+                    operation: {
+                        kind: "retire-gateway",
+                        status: "pending",
+                        createdBy,
+                        createdAt,
+                        startedAt: null,
+                        completedAt: null,
+                        input: {
+                            gatewayId: id,
+                            ...(retainData ? { retainData: true } : {}),
+                            ...(retainServiceAccount ? { retainServiceAccount: true } : {}),
+                        },
+                        steps: [],
+                        gatewayId: id,
+                    },
+                    now: createdAt,
+                    updatedBy: createdBy,
+                });
+            }
+            catch (error) {
+                if (error instanceof GatewayRetirementConflictError) {
+                    res.status(409).json({ error: error.message, gatewayId: id });
+                    return;
+                }
+                throw error;
+            }
             res.status(202).json({ gatewayId: id, operationId, retainData, retainServiceAccount });
         }
         catch (e) {

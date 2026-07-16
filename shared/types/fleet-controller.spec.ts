@@ -9,12 +9,14 @@ import {
   CONFIG_CONTROL_WRITER_LOCK_BUSY_CODE,
   DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
   DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
+  hasDurableOpenClawConfigControlProtocol,
   OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_FILE,
   OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_TTL_MS,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
   SYSTEM_CONFIG_CONTROL_CAPABILITY_FILE,
   SYSTEM_CONFIG_CONTROL_CAPABILITY_TTL_MS,
+  systemConfigMigrationMode,
 } from "./fleet-controller.js";
 
 describe("durable OpenClaw config control protocol", () => {
@@ -26,6 +28,7 @@ describe("durable OpenClaw config control protocol", () => {
       "candidate-proof",
       "promote-candidate",
       "abort-v2",
+      "retire-v2",
       "finalize-v2",
     ]);
   });
@@ -47,5 +50,43 @@ describe("durable OpenClaw config control protocol", () => {
     expect(OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_TTL_MS).toBe(15_000);
     expect(SYSTEM_CONFIG_CONTROL_CAPABILITY_FILE).toBe("system_config.control-capability.json");
     expect(SYSTEM_CONFIG_CONTROL_CAPABILITY_TTL_MS).toBe(15_000);
+  });
+});
+
+describe("systemConfigMigrationMode", () => {
+  it.each([
+    ["shared", "shared", "none"],
+    ["shared", "builder", "none"],
+    ["shared", "operator", "none"],
+    ["builder", "shared", "checkpoint-only"],
+    ["operator", "shared", "checkpoint-only"],
+    ["builder", "builder", "checkpoint-and-restore"],
+    ["builder", "operator", "checkpoint-and-restore"],
+    ["operator", "builder", "checkpoint-and-restore"],
+    ["operator", "operator", "checkpoint-and-restore"],
+  ] as const)("maps %s → %s to %s", (source, target, expected) => {
+    expect(systemConfigMigrationMode(source, target)).toBe(expected);
+  });
+});
+
+describe("hasDurableOpenClawConfigControlProtocol", () => {
+  it("requires the exact nested protocol marker", () => {
+    expect(hasDurableOpenClawConfigControlProtocol({
+      controlProtocol: {
+        protocol: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
+        version: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
+      },
+    })).toBe(true);
+    expect(hasDurableOpenClawConfigControlProtocol(undefined)).toBe(false);
+    expect(hasDurableOpenClawConfigControlProtocol({
+      controlProtocol: {
+        protocol: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
+        version: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION + 1,
+      },
+    })).toBe(false);
+    expect(hasDurableOpenClawConfigControlProtocol({
+      protocol: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
+      version: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
+    })).toBe(false);
   });
 });

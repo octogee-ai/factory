@@ -16,6 +16,7 @@ import {
   createConfigFinalizeV2Handler,
   createConfigFreezeV2Handler,
   createConfigPromoteCandidateHandler,
+  createConfigRetireV2Handler,
   createExportHandler,
   createExportPathsHandler,
   createFlushHandler,
@@ -34,6 +35,7 @@ import {
   type ConfigFinalizeV2Callback,
   type ConfigFreezeV2Callback,
   type ConfigPromoteCandidateCallback,
+  type ConfigRetireV2Callback,
   type MigrationHandlerDeps,
 } from "./fleet-http-migration.js";
 import {
@@ -221,6 +223,7 @@ proveSystemConfigCandidate?: ConfigCandidateProofCallback;
 promoteSystemConfigCandidate?: ConfigPromoteCandidateCallback;
 abortSystemConfigV2?: ConfigAbortV2Callback;
 finalizeSystemConfigV2?: ConfigFinalizeV2Callback;
+retireSystemConfigV2?: ConfigRetireV2Callback;
 }
 
 export interface StartedFleetController {
@@ -318,6 +321,7 @@ export function registerConfigControlRoutes(
     createConfigPromoteCandidateHandler(deps),
   );
   app.post("/config-abort-v2/:gatewayId", gatewayIdGuard, createConfigAbortV2Handler(deps));
+  app.post("/config-retire-v2/:gatewayId", gatewayIdGuard, createConfigRetireV2Handler(deps));
   app.post("/config-finalize-v2/:gatewayId", gatewayIdGuard, createConfigFinalizeV2Handler(deps));
 }
 
@@ -353,6 +357,26 @@ export function buildFleetHeartbeatSnapshot(input: {
     mountedCustomers: input.mountedCustomers,
     internalUrl: input.internalUrl,
     startedAt: input.startedAt,
+  };
+}
+
+export function buildFleetHealthResponse(input: {
+  status: FleetRuntime["status"];
+  gatewayId: string;
+  version: string;
+  openclawVersion: string;
+  startedAt: number;
+  customers: string[];
+  migratingIn: string[];
+}): Record<string, unknown> {
+  return {
+    status: input.status,
+    gatewayId: input.gatewayId,
+    version: input.version,
+    openclawVersion: input.openclawVersion,
+    startedAt: input.startedAt,
+    customers: input.customers,
+    migratingIn: input.migratingIn,
   };
 }
 
@@ -759,17 +783,18 @@ const waitForGatewayReady = async (): Promise<void> => {
   );
 
   app.get("/health", (_req, res) => {
-    res.json({
+    res.json(buildFleetHealthResponse({
       status: runtime.status,
       gatewayId: opts.gatewayId,
       version: opts.version,
+      openclawVersion: opts.openclawVersion,
       startedAt: PROCESS_STARTED_AT_MS,
       customers: adapter.listLocalCustomerSlugs?.() ?? [],
       // Slugs mid-migration-import — Cowboy's operator poller skips these as eviction
       // candidates until cutover moves their assignment (the operator path has no in-pod
       // reconcile to honor the pin).
       migratingIn: adapter.listMigratingInSlugs?.() ?? [],
-    });
+    }));
   });
 
   const wrappedAdapter = wrapAdapterWithRuntime(adapter, runtime);
@@ -811,6 +836,7 @@ const waitForGatewayReady = async (): Promise<void> => {
     proveSystemConfigCandidate: opts.proveSystemConfigCandidate,
     promoteSystemConfigCandidate: opts.promoteSystemConfigCandidate,
     abortSystemConfigV2: opts.abortSystemConfigV2,
+    retireSystemConfigV2: opts.retireSystemConfigV2,
     finalizeSystemConfigV2: opts.finalizeSystemConfigV2,
   };
   app.post("/restore/:gatewayId", gatewayIdGuard, createRestoreHandler(migrationDeps));
