@@ -599,7 +599,7 @@ export async function bindGatewayRetirementConfigCheckpointAtomic(input) {
         return { ok: true };
     });
 }
-function finalRetirementStateError(gatewayId, root, claim, revisions, now) {
+function finalRetirementStateError(gatewayId, root, claim, revisions, now, recoveryCheckpoint) {
     if (root.liveRevisionId !== claim.liveRevisionId ||
         root.liveRelease !== claim.liveRelease) {
         return `gateway ${gatewayId} live revision changed after retirement claim`;
@@ -637,6 +637,37 @@ function finalRetirementStateError(gatewayId, root, claim, revisions, now) {
     const identity = liveRuntimeIdentity(liveRevision, now, false);
     if (!identity) {
         return `gateway ${gatewayId} exact live revision telemetry is unavailable`;
+    }
+    if (recoveryCheckpoint) {
+        const heartbeat = heartbeatFromRevision(liveRevision);
+        const status = heartbeat && isPlainRecord(heartbeat.configStatus)
+            ? heartbeat.configStatus
+            : null;
+        const owner = status && isPlainRecord(status.controlOwner)
+            ? status.controlOwner
+            : null;
+        if (!heartbeat ||
+            !status ||
+            !claim.liveRuntimeIdentity ||
+            identity.version !== claim.liveRuntimeIdentity.version ||
+            identity.openclawVersion !== claim.liveRuntimeIdentity.openclawVersion ||
+            !hasDurableOpenClawConfigControlProtocol(status) ||
+            !freshObservation(status.observedAt, now) ||
+            status.runtimeReady !== true ||
+            status.openclawVersion !== heartbeat.openclawVersion ||
+            status.freezeState !== "frozen" ||
+            status.bootRole !== "source-frozen" ||
+            status.checkpointCommit !== recoveryCheckpoint.checkpointCommit ||
+            status.configHash !== recoveryCheckpoint.configHash ||
+            !owner ||
+            owner.migrationId !== recoveryCheckpoint.migrationId ||
+            owner.sourceRevisionId !== recoveryCheckpoint.sourceRevisionId ||
+            owner.targetRevisionId !== recoveryCheckpoint.targetRevisionId ||
+            nonEmptyString(status.candidateCommit) ||
+            nonEmptyString(status.candidateHash)) {
+            return `gateway ${gatewayId} restarted source retirement fence telemetry is not exact`;
+        }
+        return null;
     }
     if (!sameRuntimeIdentity(claim.liveRuntimeIdentity, identity)) {
         return `gateway ${gatewayId} live runtime identity changed after retirement claim`;
@@ -742,7 +773,7 @@ export async function bindGatewayRetirementConfigTerminalAtomic(input) {
                 };
         }
         const revisionsSnap = await transaction.get(input.db.collection(GLM_GATEWAYS_COLLECTION).where("gateway", "==", input.gatewayId));
-        const stateError = finalRetirementStateError(input.gatewayId, root, claim, revisionsSnap.docs.map((doc) => ({ id: doc.id, data: doc.data() })), input.now);
+        const stateError = finalRetirementStateError(input.gatewayId, root, claim, revisionsSnap.docs.map((doc) => ({ id: doc.id, data: doc.data() })), input.now, input.recovery ? input.checkpoint : undefined);
         if (stateError)
             return { ok: false, error: stateError };
         transaction.set(rootRef, {

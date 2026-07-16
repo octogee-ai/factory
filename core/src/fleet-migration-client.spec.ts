@@ -531,6 +531,39 @@ describe("MigrationClient protocol-v2 config control", () => {
     }
   });
 
+  it("requests recovery-only retirement evidence without authorizing publication", async () => {
+    const { calls, fakeFetch } = captureFetch(() => new Response(JSON.stringify({
+      migrationId: common.migrationId,
+      slug: common.slug,
+      sourceRevisionId: common.sourceRevisionId,
+      targetRevisionId: common.targetRevisionId,
+      retired: true,
+      retirementRef: `refs/octogee/system-config/retired/${common.sourceRevisionId}`,
+      retirementObject,
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: (id) => `https://${id}.example.com`,
+      fetch: fakeFetch,
+    });
+
+    await client.recoverRetiredConfigV2({
+      ...common,
+      transportId: common.sourceRevisionId,
+      checkpointCommit,
+      freezeObject,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://bender-r1.example.com/config-retire-v2/bender");
+    expect(JSON.parse(calls[0].body!)).toMatchObject({
+      action: "retire-v2",
+      recoverOnly: true,
+      checkpointCommit,
+      freezeObject,
+    });
+  });
+
   it("rejects a candidate proof observed from another target process", async () => {
     const { fakeFetch } = captureFetch(() => new Response(JSON.stringify({
       migrationId: common.migrationId,

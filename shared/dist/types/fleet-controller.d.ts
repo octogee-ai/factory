@@ -261,6 +261,7 @@ export interface ConfigRetireV2RequestBody extends ConfigControlRequestBody {
     action: "retire-v2";
     checkpointCommit: string;
     freezeObject: string;
+    recoverOnly?: true;
 }
 export interface ConfigRetireV2Response extends ConfigControlResponseBody {
     retired: true;

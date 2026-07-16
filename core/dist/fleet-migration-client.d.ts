@@ -51,6 +51,10 @@ export interface MigrationClient {
         checkpointCommit: string;
         freezeObject: string;
     }): Promise<ConfigRetireV2Response>;
+    recoverRetiredConfigV2(opts: ConfigControlOpts & {
+        checkpointCommit: string;
+        freezeObject: string;
+    }): Promise<ConfigRetireV2Response>;
     quiesce(opts: {
         migrationId: string;
         gatewayId: string;

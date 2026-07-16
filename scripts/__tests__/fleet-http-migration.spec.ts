@@ -701,6 +701,22 @@ describe("system config protocol-v2 handlers", () => {
       retirementRef: "refs/octogee/system-config/retired/gw-a-r1",
       retirementObject: CANDIDATE,
     });
+
+    await invoke(
+      createConfigRetireV2Handler(mkDeps({ retireSystemConfigV2 })),
+      configControlBody({
+        ...retirementBindings,
+        checkpointCommit: CHECKPOINT,
+        freezeObject: FREEZE_OBJECT,
+        recoverOnly: true,
+      }, "retire-v2"),
+    );
+    expect(retireSystemConfigV2).toHaveBeenLastCalledWith({
+      ...retirementBindings,
+      checkpointCommit: CHECKPOINT,
+      freezeObject: FREEZE_OBJECT,
+      recoverOnly: true,
+    });
   });
 
   it("admits r0 only as the exact retirement sentinel for freeze and retire actions", async () => {
@@ -770,6 +786,20 @@ describe("system config protocol-v2 handlers", () => {
     );
 
     expect(response.getStatus()).toBe(400);
+    expect(retireSystemConfigV2).not.toHaveBeenCalled();
+
+    const invalidRecovery = await invoke(
+      createConfigRetireV2Handler(mkDeps({ retireSystemConfigV2 })),
+      configControlBody({
+        ...bindings,
+        migrationId: "retire-gw-a-operation-3",
+        targetRevisionId: "gw-a-r0",
+        checkpointCommit: CHECKPOINT,
+        freezeObject: FREEZE_OBJECT,
+        recoverOnly: false,
+      }, "retire-v2"),
+    );
+    expect(invalidRecovery.getStatus()).toBe(400);
     expect(retireSystemConfigV2).not.toHaveBeenCalled();
   });
 

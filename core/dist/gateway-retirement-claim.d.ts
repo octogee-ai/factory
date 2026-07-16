@@ -39,6 +39,7 @@ interface VerifyGatewayRetirementConfigCheckpointInput {
 interface BindGatewayRetirementConfigTerminalInput extends VerifyGatewayRetirementClaimInput {
     checkpoint: GatewayRetirementConfigCheckpoint;
     terminal: GatewayRetirementConfigTerminal;
+    recovery?: true;
 }
 interface VerifyGatewayRetirementConfigTerminalInput {
     db: Firestore;

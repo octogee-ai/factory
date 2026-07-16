@@ -3850,6 +3850,18 @@ async function buildHandlers(
         transportId: request.sourceRevisionId,
       });
     },
+    recoverRetiredConfigV2: async (request) => {
+      const sourceUrl = await resolveGatewayUrlFromFirestore(db, request.sourceRevisionId);
+      const client = createMigrationClient({
+        privateKey,
+        resolveGatewayUrl: () => sourceUrl,
+        log: logFn,
+      });
+      return client.recoverRetiredConfigV2({
+        ...request,
+        transportId: request.sourceRevisionId,
+      });
+    },
     bindTerminal: (input) =>
       bindGatewayRetirementConfigTerminalAtomic({
         db,

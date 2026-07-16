@@ -70,6 +70,7 @@ interface BindGatewayRetirementConfigTerminalInput
   extends VerifyGatewayRetirementClaimInput {
   checkpoint: GatewayRetirementConfigCheckpoint;
   terminal: GatewayRetirementConfigTerminal;
+  recovery?: true;
 }
 
 interface VerifyGatewayRetirementConfigTerminalInput {
@@ -873,6 +874,7 @@ function finalRetirementStateError(
   claim: RetirementClaim,
   revisions: readonly RevisionView[],
   now: number,
+  recoveryCheckpoint?: GatewayRetirementConfigCheckpoint,
 ): string | null {
   if (
     root.liveRevisionId !== claim.liveRevisionId ||
@@ -923,6 +925,39 @@ function finalRetirementStateError(
   const identity = liveRuntimeIdentity(liveRevision, now, false);
   if (!identity) {
     return `gateway ${gatewayId} exact live revision telemetry is unavailable`;
+  }
+  if (recoveryCheckpoint) {
+    const heartbeat = heartbeatFromRevision(liveRevision);
+    const status = heartbeat && isPlainRecord(heartbeat.configStatus)
+      ? heartbeat.configStatus
+      : null;
+    const owner = status && isPlainRecord(status.controlOwner)
+      ? status.controlOwner
+      : null;
+    if (
+      !heartbeat ||
+      !status ||
+      !claim.liveRuntimeIdentity ||
+      identity.version !== claim.liveRuntimeIdentity.version ||
+      identity.openclawVersion !== claim.liveRuntimeIdentity.openclawVersion ||
+      !hasDurableOpenClawConfigControlProtocol(status) ||
+      !freshObservation(status.observedAt, now) ||
+      status.runtimeReady !== true ||
+      status.openclawVersion !== heartbeat.openclawVersion ||
+      status.freezeState !== "frozen" ||
+      status.bootRole !== "source-frozen" ||
+      status.checkpointCommit !== recoveryCheckpoint.checkpointCommit ||
+      status.configHash !== recoveryCheckpoint.configHash ||
+      !owner ||
+      owner.migrationId !== recoveryCheckpoint.migrationId ||
+      owner.sourceRevisionId !== recoveryCheckpoint.sourceRevisionId ||
+      owner.targetRevisionId !== recoveryCheckpoint.targetRevisionId ||
+      nonEmptyString(status.candidateCommit) ||
+      nonEmptyString(status.candidateHash)
+    ) {
+      return `gateway ${gatewayId} restarted source retirement fence telemetry is not exact`;
+    }
+    return null;
   }
   if (!sameRuntimeIdentity(claim.liveRuntimeIdentity, identity)) {
     return `gateway ${gatewayId} live runtime identity changed after retirement claim`;
@@ -1075,6 +1110,7 @@ export async function bindGatewayRetirementConfigTerminalAtomic(
       claim,
       revisionsSnap.docs.map((doc) => ({ id: doc.id, data: doc.data() })),
       input.now,
+      input.recovery ? input.checkpoint : undefined,
     );
     if (stateError) return { ok: false, error: stateError };
     transaction.set(

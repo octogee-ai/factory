@@ -669,6 +669,10 @@ export function createConfigRetireV2Handler(deps: MigrationHandlerDeps): Request
     if (!body) return;
     if (!acceptProtocolV2Request(body, "retire-v2", "source", { deps, res, log })) return;
     if (rejectInvalidGitBindings(body, res, { candidate: "absent", hash: false })) return;
+    if (body.recoverOnly !== undefined && body.recoverOnly !== true) {
+      res.status(400).json({ error: "invalid config retirement recovery mode" });
+      return;
+    }
     if (!deps.retireSystemConfigV2) {
       res.status(501).json({ error: "config retire-v2 not configured" });
       return;
@@ -678,6 +682,7 @@ export function createConfigRetireV2Handler(deps: MigrationHandlerDeps): Request
         ...configControlBindings(body),
         checkpointCommit: body.checkpointCommit,
         freezeObject: body.freezeObject,
+        ...(body.recoverOnly ? { recoverOnly: true } : {}),
       });
       const response: ConfigRetireV2Response = {
         ...configControlBindings(body),
