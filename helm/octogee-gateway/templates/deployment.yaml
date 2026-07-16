@@ -339,13 +339,21 @@ spec:
             # No platform secrets are mounted here. The projected token above
             # is this gateway's KSA identity for tenant-bound broker calls.
           startupProbe:
+            {{- if eq $gatewayClass "shared" }}
             httpGet:
               path: /healthz
-              {{- if eq $gatewayClass "shared" }}
               port: 18789
-              {{- else }}
-              port: 18790
-              {{- end }}
+            {{- else }}
+            exec:
+              command:
+                - sh
+                - -ec
+                - >
+                  curl -fsS http://127.0.0.1:18790/healthz || {
+                    rc=$?;
+                    [ "$rc" -eq 7 ] && curl -fsS http://127.0.0.1:{{ .Values.env.fleetControllerPort | default "3003" }}/health;
+                  }
+            {{- end }}
             initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.startup.periodSeconds }}
             failureThreshold: {{ .Values.probes.startup.failureThreshold }}
@@ -355,9 +363,15 @@ spec:
             tcpSocket:
               port: 18789
             {{- else }}
-            httpGet:
-              path: /healthz
-              port: 18790
+            exec:
+              command:
+                - sh
+                - -ec
+                - >
+                  curl -fsS http://127.0.0.1:18790/healthz || {
+                    rc=$?;
+                    [ "$rc" -eq 7 ] && curl -fsS http://127.0.0.1:{{ .Values.env.fleetControllerPort | default "3003" }}/health;
+                  }
             {{- end }}
             initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
@@ -368,9 +382,15 @@ spec:
             tcpSocket:
               port: 18789
             {{- else }}
-            httpGet:
-              path: /readyz
-              port: 18790
+            exec:
+              command:
+                - sh
+                - -ec
+                - >
+                  curl -fsS http://127.0.0.1:18790/readyz || {
+                    rc=$?;
+                    [ "$rc" -eq 7 ] && curl -fsS http://127.0.0.1:{{ .Values.env.fleetControllerPort | default "3003" }}/health;
+                  }
             {{- end }}
             initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}

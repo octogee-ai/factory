@@ -862,7 +862,7 @@ expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
     expect(gw).toMatch(/readinessProbe:\s+tcpSocket:\s+port:\s*18789/);
   });
 
-  it("keeps isolated repair live on 18790 while readiness requires accepted OpenClaw health", () => {
+  it("falls back to the legacy fleet health endpoint only when isolated config health is unavailable", () => {
     const dep = findDoc(
       helmTemplate("octogee-gw-bender", { gatewayId: "bender", gatewayClass: "builder" }),
       "Deployment",
@@ -870,11 +870,12 @@ expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
     ) ?? "";
     const gw = containerBlock(dep, "gateway");
 
-    expect(gw).toMatch(
-      /startupProbe:\s+httpGet:\s+path:\s*\/healthz\s+port:\s*18790/,
-    );
-    expect(gw).toMatch(/livenessProbe:\s+httpGet:\s+path:\s*\/healthz\s+port:\s*18790/);
-    expect(gw).toMatch(/readinessProbe:\s+httpGet:\s+path:\s*\/readyz\s+port:\s*18790/);
+    expect(gw).not.toMatch(/startupProbe:\s+httpGet:/);
+    expect(gw).not.toMatch(/livenessProbe:\s+httpGet:/);
+    expect(gw).not.toMatch(/readinessProbe:\s+httpGet:/);
+    expect(gw.match(/curl -fsS http:\/\/127\.0\.0\.1:18790\/healthz/g)).toHaveLength(2);
+    expect(gw).toMatch(/curl -fsS http:\/\/127\.0\.0\.1:18790\/readyz/);
+    expect(gw.match(/\[ "\$rc" -eq 7 \] && curl -fsS http:\/\/127\.0\.0\.1:3003\/health/g)).toHaveLength(3);
     expect(dep).not.toMatch(/__openclaw__/);
   });
 
