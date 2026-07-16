@@ -5,6 +5,10 @@ import { isIP } from "node:net";
 import path from "node:path";
 import { Transform } from "node:stream";
 import { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
+import {
+  acquireSystemConfigMutationLease,
+  type SystemConfigMutationLease,
+} from "@octogee/core/system-config-mutation-lease";
 import type { SystemConfigInvariantContext } from "@octogee/core/system-config-invariants";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { WebSocket, type RawData } from "ws";
@@ -372,6 +376,7 @@ interface PendingRpc {
   internal: boolean;
   proposed?: Record<string, unknown>;
   lease: OpenClawControlLease;
+  mutationLease?: SystemConfigMutationLease;
   timer: NodeJS.Timeout;
 }
 
@@ -453,6 +458,7 @@ async function bridgeControlSocket(args: {
   let currentConfig: OpenClawConfigSnapshot | undefined;
   let activeSession = args.session;
   const pending = new Map<string, PendingRpc>();
+  const admittingIds = new Set<string>();
   const timedOutIds = new Set<string>();
   let quarantineTimer: NodeJS.Timeout | undefined;
   let closing = false;
@@ -472,6 +478,14 @@ async function bridgeControlSocket(args: {
     pending.delete(id);
     clearTimeout(item.timer);
     item.lease.release();
+    void item.mutationLease?.release().catch((error) => {
+      logger.error("OpenClaw Dashboard config mutation lease release failed", {
+        gatewayId: activeSession.gatewayId,
+        revisionId: activeSession.revisionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      closeBoth("config-lease-release-failed");
+    });
     return item;
   };
   const closeBoth = (reason = "dashboard-session-invalid"): void => {
@@ -480,6 +494,7 @@ async function bridgeControlSocket(args: {
     clearInterval(authorizationTimer);
     if (quarantineTimer) clearTimeout(quarantineTimer);
     timedOutIds.clear();
+    admittingIds.clear();
     for (const id of [...pending.keys()]) releasePending(id);
     if (!socketReleased) {
       socketReleased = true;
@@ -542,7 +557,11 @@ async function bridgeControlSocket(args: {
     method: string,
     category: OpenClawControlRpcCategory,
     lease: OpenClawControlLease,
-    options: { internal?: boolean; proposed?: Record<string, unknown> } = {},
+    options: {
+      internal?: boolean;
+      proposed?: Record<string, unknown>;
+      mutationLease?: SystemConfigMutationLease;
+    } = {},
   ): void => {
     const pendingRpc = {} as PendingRpc;
     const timer = setTimeout(() => {
@@ -566,6 +585,7 @@ async function bridgeControlSocket(args: {
       internal: options.internal ?? false,
       proposed: options.proposed,
       lease,
+      mutationLease: options.mutationLease,
       timer,
     });
     pending.set(id, pendingRpc);
@@ -646,7 +666,7 @@ async function bridgeControlSocket(args: {
       args.metrics?.policy(metricsIdentity, "upstream_quarantined");
       return;
     }
-    if (pending.has(frame.id)) {
+    if (pending.has(frame.id) || admittingIds.has(frame.id)) {
       args.browser.send(openClawControlPolicyError(frame, "request-id-pending"));
       return;
     }
@@ -703,10 +723,63 @@ async function bridgeControlSocket(args: {
       args.metrics?.policy(metricsIdentity, "inflight_limited");
       return;
     }
-    track(frame.id, frame.method, decision.category, lease, { proposed: decision.proposedConfig });
-    upstream.send(JSON.stringify(decision.outbound ?? frame));
-    auditEvent(args.audit, args.env, activeSession, "rpc_allow", decision.category, "ok");
-    args.metrics?.rpc(metricsIdentity, decision.category, "ok");
+    const requestId = frame.id;
+    const requestMethod = frame.method;
+    const forward = async (): Promise<void> => {
+      let mutationLease: SystemConfigMutationLease | undefined;
+      if (decision.category === "config_mutation") {
+        admittingIds.add(requestId);
+        let acquired;
+        try {
+          acquired = await acquireSystemConfigMutationLease({
+            openclawDir: envValue(args.env, "OPENCLAW_DIR"),
+          });
+        } catch (error) {
+          lease.release();
+          throw error;
+        }
+        admittingIds.delete(requestId);
+        if (!acquired.ok) {
+          lease.release();
+          const reason = acquired.code === "config-frozen" ? "config-frozen" : "config-writer-busy";
+          if (args.browser.readyState === WebSocket.OPEN) {
+            args.browser.send(openClawControlPolicyError(frame, reason));
+          }
+          auditEvent(args.audit, args.env, activeSession, "rpc_deny", decision.category, "denied", reason);
+          args.metrics?.rpc(metricsIdentity, decision.category, "denied");
+          args.metrics?.policy(metricsIdentity, reason.replaceAll("-", "_"));
+          return;
+        }
+        mutationLease = acquired.lease;
+        if (closing || args.browser.readyState !== WebSocket.OPEN || upstream.readyState !== WebSocket.OPEN) {
+          lease.release();
+          await mutationLease.release();
+          return;
+        }
+      }
+      track(requestId, requestMethod, decision.category, lease, {
+        proposed: decision.proposedConfig,
+        mutationLease,
+      });
+      try {
+        upstream.send(JSON.stringify(decision.outbound ?? frame));
+      } catch (error) {
+        releasePending(requestId);
+        throw error;
+      }
+      auditEvent(args.audit, args.env, activeSession, "rpc_allow", decision.category, "ok");
+      args.metrics?.rpc(metricsIdentity, decision.category, "ok");
+    };
+    void forward().catch((error) => {
+      admittingIds.delete(requestId);
+      logger.error("OpenClaw Dashboard RPC forwarding failed", {
+        gatewayId: activeSession.gatewayId,
+        revisionId: activeSession.revisionId,
+        category: decision.category,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      closeBoth("rpc-forward-failed");
+    });
   });
 }
 

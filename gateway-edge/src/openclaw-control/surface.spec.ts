@@ -1,10 +1,15 @@
+import fs from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import type { Duplex } from "node:stream";
 import express from "express";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
+import { acquireSystemConfigSyncLeaseSync } from "@octogee/core/system-config-mutation-lease";
+import { reconcilePlatformInvariants } from "@octogee/core/system-config-invariants";
 import { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
 
 import {
@@ -19,6 +24,7 @@ import { OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS } from "./rpc-policy.js";
 import { OpenClawControlResourceLimiter } from "./limits.js";
 
 const servers: http.Server[] = [];
+const tempDirs: string[] = [];
 const SESSION_ID = "7f9b8a1e-429d-4c43-9e1a-9f3bd49d9a70";
 
 afterEach(async () => {
@@ -26,6 +32,7 @@ afterEach(async () => {
     server.close(() => resolve());
     server.closeAllConnections?.();
   })));
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 function sessions(now = () => 1_000): OpenClawControlSessionManager {
@@ -57,7 +64,7 @@ function appWith(args: {
   return app;
 }
 
-function env(port?: number): NodeJS.ProcessEnv {
+function env(port?: number, openclawDir = "/home/node/.openclaw"): NodeJS.ProcessEnv {
   return {
     GATEWAY_ID: "bender",
     GATEWAY_REVISION_ID: "bender-r7",
@@ -65,7 +72,7 @@ function env(port?: number): NodeJS.ProcessEnv {
     API_PUBLIC_URL: "https://api.octogee.com",
     OPENCLAW_GATEWAY_URL: `http://127.0.0.1:${port ?? 18789}`,
     OPENCLAW_GATEWAY_TOKEN: "gateway-secret",
-    OPENCLAW_DIR: "/home/node/.openclaw",
+    OPENCLAW_DIR: openclawDir,
   };
 }
 
@@ -198,6 +205,135 @@ describe("OpenClaw Dashboard HTTP surface", () => {
 });
 
 describe("OpenClaw Dashboard WebSocket surface", () => {
+  it.each(["result", "timeout", "socket-close"] as const)(
+    "holds the durable config writer lease across a native mutation until %s",
+    async (terminal) => {
+      const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dashboard-lease-"));
+      tempDirs.push(openclawDir);
+      const currentConfig: Record<string, unknown> = { customerSetting: "before" };
+      reconcilePlatformInvariants(currentConfig, {
+        gatewayClass: "operator",
+        gatewayId: "bender",
+        apiOrigin: "https://api.octogee.com",
+      });
+      let upstreamSocket: WebSocket | undefined;
+      let mutationAdmitted!: () => void;
+      const admitted = new Promise<void>((resolve) => { mutationAdmitted = resolve; });
+      const upstream = http.createServer();
+      const upstreamWs = new WebSocketServer({ noServer: true });
+      upstream.on("upgrade", (req, socket, head) => {
+        upstreamWs.handleUpgrade(req, socket, head, (ws) => upstreamWs.emit("connection", ws, req));
+      });
+      upstreamWs.on("connection", (ws) => {
+        upstreamSocket = ws;
+        ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "n" } }));
+        ws.on("message", (data) => {
+          const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+          if (frame.method === "connect") {
+            ws.send(JSON.stringify({
+              type: "res",
+              id: frame.id,
+              ok: true,
+              payload: {
+                type: "hello-ok",
+                features: { methods: [...OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS] },
+              },
+            }));
+          } else if (frame.method === "config.get") {
+            ws.send(JSON.stringify({
+              type: "res",
+              id: frame.id,
+              ok: true,
+              payload: { raw: JSON.stringify(currentConfig), hash: "hash-1" },
+            }));
+          } else if (frame.method === "config.patch") {
+            mutationAdmitted();
+          }
+        });
+      });
+      const upstreamPort = await listen(upstream);
+      const manager = sessions();
+      const testEnv = env(upstreamPort, openclawDir);
+      const edge = http.createServer(appWith({ env: testEnv, sessions: manager }));
+      const router = new WsUpgradeRouter();
+      attachOpenClawControlWsRoute({
+        router,
+        env: testEnv,
+        sessions: manager,
+        authorize: async () => true,
+        loadGatewayToken: async () => "gateway-secret",
+        audit: async () => {},
+        rpcTimeoutMs: 30,
+      });
+      router.attach(edge);
+      const edgePort = await listen(edge);
+      const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
+        headers: { cookie: issue(manager), origin: "https://api.octogee.com" },
+      });
+      const terminalFrame = new Promise<Record<string, unknown>>((resolve, reject) => {
+        browser.on("error", reject);
+        browser.on("message", (data) => {
+          const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+          if (frame.event === "connect.challenge") {
+            browser.send(JSON.stringify({ type: "req", id: "connect", method: "connect", params: {} }));
+          } else if ((frame.payload as Record<string, unknown> | undefined)?.type === "hello-ok") {
+            browser.send(JSON.stringify({ type: "req", id: "config-read", method: "config.get", params: {} }));
+          } else if (frame.id === "config-read") {
+            browser.send(JSON.stringify({
+              type: "req",
+              id: "config-write",
+              method: "config.patch",
+              params: {
+                raw: JSON.stringify({ customerSetting: "after" }),
+                baseHash: "hash-1",
+                replacePaths: [],
+              },
+            }));
+          } else if (frame.id === "config-write") {
+            resolve(frame);
+          }
+        });
+      });
+
+      await admitted;
+      const racingFreeze = acquireSystemConfigSyncLeaseSync({ openclawDir });
+      try {
+        expect(racingFreeze).toBeNull();
+      } finally {
+        racingFreeze?.release();
+      }
+
+      if (terminal === "result") {
+        upstreamSocket?.send(JSON.stringify({
+          type: "res",
+          id: "config-write",
+          ok: true,
+          payload: { accepted: true },
+        }));
+        await expect(terminalFrame).resolves.toMatchObject({ id: "config-write", ok: true });
+      } else if (terminal === "timeout") {
+        await expect(terminalFrame).resolves.toMatchObject({
+          id: "config-write",
+          ok: false,
+          error: { code: "UPSTREAM_TIMEOUT" },
+        });
+      } else {
+        const closed = new Promise<void>((resolve) => browser.once("close", () => resolve()));
+        browser.close();
+        await closed;
+      }
+
+      await vi.waitFor(() => {
+        expect(fs.existsSync(path.join(openclawDir, "system_config.sync.lock"))).toBe(false);
+      });
+      const after = acquireSystemConfigSyncLeaseSync({ openclawDir });
+      expect(after).not.toBeNull();
+      after?.release();
+      if (browser.readyState === WebSocket.OPEN) browser.close();
+      await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
+    },
+  );
+
   it("requires the exact Origin, rewrites connect, enforces policy, bounds in-flight work, and scrubs frames/audit", async () => {
     const upstreamFrames: Array<Record<string, unknown>> = [];
     const upstream = http.createServer();
