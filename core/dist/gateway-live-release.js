@@ -23,6 +23,7 @@ export function gatewayRevisionIdFromPodName(gatewayId, podName) {
 }
 export function configuredBuilderBootstrapAllowed(value, input) {
     if (!isGatewayDesiredDoc(value) ||
+        value.gatewayId !== input.gatewayId ||
         !isGatewayMutableConfigForGateway(value, input.gatewayId)) {
         return false;
     }

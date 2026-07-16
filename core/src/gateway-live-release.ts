@@ -55,6 +55,7 @@ export function configuredBuilderBootstrapAllowed(
 ): boolean {
   if (
     !isGatewayDesiredDoc(value) ||
+    value.gatewayId !== input.gatewayId ||
     !isGatewayMutableConfigForGateway(value, input.gatewayId)
   ) {
     return false;

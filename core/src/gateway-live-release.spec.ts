@@ -87,6 +87,11 @@ describe("configuredBuilderBootstrapAllowed", () => {
       revisionId: "bender-r2",
       slug: "victim",
     })).toBe(false);
+    expect(configuredBuilderBootstrapAllowed({ ...configured, gatewayId: "other" }, {
+      gatewayId: "bender",
+      revisionId: "bender-r2",
+      slug: "alice",
+    })).toBe(false);
   });
 
   it.each([
