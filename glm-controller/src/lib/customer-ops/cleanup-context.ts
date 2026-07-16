@@ -1,7 +1,7 @@
 
 
 import type { Firestore } from "firebase-admin/firestore";
-import { WORKSPACE_REPO } from "@octogee/core/gitea-naming";
+import { SYSTEM_CONFIG_REPO, WORKSPACE_REPO } from "@octogee/core/gitea-naming";
 import type { CustomerCleanupContext } from "../../handlers/deprovision-customer.js";
 
 export interface ContextDeps {
@@ -79,7 +79,7 @@ const persisted = asString(projData.giteaRepoName);
 
 async function resolveRepoNames(db: Firestore, slug: string): Promise<string[]> {
   if (!slug) return [];
-  const out: string[] = [WORKSPACE_REPO];
+  const out: string[] = [WORKSPACE_REPO, SYSTEM_CONFIG_REPO];
   const projectsSnap = await db.collection(`workspaces/${slug}/projects`).get();
   for (const projDoc of projectsSnap.docs) {
     out.push(resolveProjectRepoName(projDoc));
