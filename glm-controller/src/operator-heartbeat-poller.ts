@@ -119,30 +119,48 @@ export function parseHealthResponse(json: unknown): OperatorGatewayHealth | null
   const customers = body.customers.filter(
     (slug): slug is string => typeof slug === "string",
   );
-  const health: OperatorGatewayHealth = { status: body.status, customers };
-  if (typeof body.version === "string") health.version = body.version;
-  if (typeof body.openclawVersion === "string" && body.openclawVersion.length > 0) {
-    health.openclawVersion = body.openclawVersion;
-  }
-  if (typeof body.startedAt === "number") health.startedAt = body.startedAt;
-  if (Array.isArray(body.migratingIn)) {
-    health.migratingIn = body.migratingIn.filter(
-      (slug): slug is string => typeof slug === "string",
-    );
-  }
-  if (hasDurableOpenClawConfigControlProtocol(body.configStatus)) {
-    const status = body.configStatus as GatewayConfigStatus;
-    const validOptionalFields =
-      (status.freezeState === undefined ||
-        status.freezeState === "frozen" ||
-        status.freezeState === "freezing" ||
-        status.freezeState === "unfrozen") &&
-      (status.openclawVersion === undefined || typeof status.openclawVersion === "string") &&
-      (status.openclawForkSha === undefined || typeof status.openclawForkSha === "string") &&
-      hasValidDashboardControlStatus(status);
-    if (validOptionalFields) health.configStatus = status;
-  }
-  return health;
+  return {
+    status: body.status,
+    customers,
+    ...healthStringField("version", body.version, false),
+    ...healthStringField("openclawVersion", body.openclawVersion, true),
+    ...(typeof body.startedAt === "number" ? { startedAt: body.startedAt } : {}),
+    ...(Array.isArray(body.migratingIn)
+      ? { migratingIn: body.migratingIn.filter(isString) }
+      : {}),
+    ...configStatusField(body.configStatus),
+  };
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+function healthStringField<K extends "version" | "openclawVersion">(
+  key: K,
+  value: unknown,
+  requireNonEmpty: boolean,
+): Partial<Pick<OperatorGatewayHealth, K>> {
+  if (typeof value !== "string" || (requireNonEmpty && value.length === 0)) return {};
+  return { [key]: value } as Partial<Pick<OperatorGatewayHealth, K>>;
+}
+
+function configStatusField(
+  value: unknown,
+): Partial<Pick<OperatorGatewayHealth, "configStatus">> {
+  if (!hasDurableOpenClawConfigControlProtocol(value)) return {};
+  const status = value as GatewayConfigStatus;
+  const validFreezeState = status.freezeState === undefined ||
+    status.freezeState === "frozen" ||
+    status.freezeState === "freezing" ||
+    status.freezeState === "unfrozen";
+  const validVersion = status.openclawVersion === undefined ||
+    typeof status.openclawVersion === "string";
+  const validForkSha = status.openclawForkSha === undefined ||
+    typeof status.openclawForkSha === "string";
+  return validFreezeState && validVersion && validForkSha && hasValidDashboardControlStatus(status)
+    ? { configStatus: status }
+    : {};
 }
 
 function hasValidDashboardControlStatus(status: GatewayConfigStatus): boolean {

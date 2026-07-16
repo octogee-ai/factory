@@ -372,200 +372,333 @@ export async function commitCutoverAtomic(
 ): Promise<void> {
   const nowMs = deps.now ? deps.now().getTime() : Date.now();
   await deps.db.runTransaction(async (txn) => {
-    let priorEpoch = 0;
-    let priorRevisionId: unknown;
-    let priorAssignmentExists = false;
-    let priorAssignment: Record<string, unknown> | undefined;
-    if (params.assignment) {
-      const priorSnap = await txn.get(
-        assignmentRef(deps.db, params.fromGatewayId, params.uid),
-      );
-      priorAssignmentExists = priorSnap.exists;
-      priorAssignment = priorSnap.exists ? priorSnap.data() : undefined;
-      const rawEpoch = priorAssignment?.epoch;
-      priorEpoch = typeof rawEpoch === "number" && rawEpoch >= 0 ? rawEpoch : 0;
-      priorRevisionId = priorAssignment?.revisionId;
-    }
+    const prior = await readPriorAssignment(txn, deps.db, params);
     const targetRootSnap = await txn.get(
       deps.db.collection(GATEWAYS_COLLECTION).doc(params.toGatewayId),
     );
     const targetRoot = targetRootSnap.exists ? targetRootSnap.data() : undefined;
-    if (targetRoot?.desiredStatus === "retired" || targetRoot?.retirementClaim != null) {
-      throw new Error(`gateway ${params.toGatewayId} has a current retirement claim`);
-    }
+    assertTargetAcceptsCutover(targetRoot, params.toGatewayId);
     if (params.customerMigrationV2Fence) {
-      const fence = params.customerMigrationV2Fence;
-      if (
-        fence.uid !== params.uid ||
-        fence.slug !== params.slug ||
-        fence.sourceGatewayId !== params.fromGatewayId ||
-        fence.targetGatewayId !== params.toGatewayId ||
-        params.assignment?.revisionId !== fence.targetRevisionId ||
-        params.assignment.release !== fence.targetRelease
-      ) {
-        throw new Error("ordinary protocol-v2 cutover parameters changed after proof");
-      }
-      const [operationSnap, targetSnap, targetAssignmentSnap, sourceRootSnap] = await Promise.all([
-        txn.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(fence.operationId)),
-        txn.get(deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(fence.targetRevisionId)),
-        txn.get(assignmentRef(deps.db, params.toGatewayId, params.uid)),
-        txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(fence.sourceGatewayId)),
-      ]);
-      if (!customerMigrationV2FenceIsExact(
-        operationSnap.exists ? operationSnap.data() : undefined,
-        fence,
-      )) {
-        throw new Error("ordinary protocol-v2 candidate is not durably promoted at cutover");
-      }
-      if (!customerMigrationV2TargetIsCurrent(
-        targetSnap.exists ? targetSnap.data() : undefined,
-        fence,
-      )) {
-        throw new Error("ordinary protocol-v2 target candidate proof changed before cutover");
-      }
-      if (!customerMigrationV2GatewayRootFenceMatches(targetRoot, fence.targetRootFence)) {
-        throw new Error("ordinary protocol-v2 target root changed before cutover");
-      }
-      const sourceRoot = sourceRootSnap.exists ? sourceRootSnap.data() : undefined;
-      if (!customerMigrationV2GatewayRootFenceMatches(sourceRoot, fence.sourceRootFence)) {
-        throw new Error("ordinary protocol-v2 source root changed before cutover");
-      }
-      const targetAssignment = targetAssignmentSnap.exists ? targetAssignmentSnap.data() : undefined;
-      const alreadyCommitted = !priorAssignmentExists &&
-        targetAssignment?.revisionId === fence.targetRevisionId &&
-        targetAssignment.updatedByOperationId === fence.operationId &&
-        targetAssignment.state === "serving";
+      const alreadyCommitted = await assertCustomerMigrationV2FenceCurrent({
+        txn,
+        db: deps.db,
+        params,
+        targetRoot,
+        prior,
+      });
       if (alreadyCommitted) return;
-      if (
-        priorRevisionId !== fence.sourceRevisionId ||
-        priorEpoch !== fence.sourceEpoch ||
-        priorAssignment?.uid !== fence.uid ||
-        priorAssignment.slug !== fence.slug ||
-        priorAssignment.gatewayId !== fence.sourceGatewayId ||
-        priorAssignment.release !== fence.sourceRelease ||
-        priorAssignment.state !== "quiescing" ||
-        priorAssignment.updatedByOperationId !== fence.operationId
-      ) {
-        throw new Error("ordinary protocol-v2 source assignment changed before cutover");
-      }
     }
     if (params.rollFence) {
-      const root = targetRoot;
-      const roll = root?.roll as Record<string, unknown> | undefined;
-      const protocolV2Roll = roll?.systemConfigRoll !== undefined;
-      const current =
-        (protocolV2Roll || root?.desiredRelease === params.rollFence.targetRelease) &&
-        roll?.operationId === params.rollFence.operationId &&
-        roll?.targetRevisionId === params.rollFence.targetRevisionId &&
-        roll?.toRelease === params.rollFence.targetRelease &&
-        params.assignment?.revisionId === params.rollFence.targetRevisionId;
-      if (!current) {
-        throw new Error("stale release-roll fence refused cutover");
-      }
-      if (protocolV2Roll) {
-        const configRoll = roll.systemConfigRoll as Record<string, unknown> | null;
-        if (!protocolV2PromotionIsExact(
-          configRoll,
-          params.rollFence.operationId,
-          params.rollFence.sourceRevisionId,
-          params.rollFence.targetRevisionId,
-        )) {
-          throw new Error("protocol-v2 candidate is not durably promoted at cutover");
-        }
-        const targetSnap = await txn.get(
-          deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(params.rollFence.targetRevisionId),
-        );
-        if (!protocolV2TargetProofIsCurrent(
-          configRoll,
-          targetSnap.exists ? targetSnap.data() : undefined,
-          {
-            gatewayId: params.toGatewayId,
-            revisionId: params.rollFence.targetRevisionId,
-            release: params.rollFence.targetRelease,
-            now: nowMs,
-          },
-        )) {
-          throw new Error("protocol-v2 target candidate proof changed before cutover");
-        }
-      }
-      if (params.rollFence.sourceConfigCheckpoint) {
-        const checkpoint = roll?.systemConfigCheckpoint as Record<string, unknown> | undefined;
-        const expected = params.rollFence.sourceConfigCheckpoint;
-        if (
-          checkpoint?.migrationId !== expected.migrationId ||
-          checkpoint.checkpointCommit !== expected.checkpointCommit ||
-          checkpoint.configHash !== expected.configHash ||
-          checkpoint.sourceUnfrozenAt !== null
-        ) {
-          throw new Error("source config checkpoint changed before release-roll cutover");
-        }
-      }
-      const sourceAssignmentIsCurrent =
-        priorRevisionId === params.rollFence.sourceRevisionId &&
-        priorEpoch === params.rollFence.sourceEpoch;
-      const sourceIsUnassignedLiveRevision =
-        priorRevisionId === undefined &&
-        params.rollFence.sourceEpoch === 0 &&
-        root?.liveRevisionId === params.rollFence.sourceRevisionId;
-      if (!sourceAssignmentIsCurrent && !sourceIsUnassignedLiveRevision) {
-        throw new Error("source assignment changed after release-roll proof");
-      }
-      if (params.rollFence.configReady) {
-        const targetSnap = await txn.get(
-          deps.db
-            .collection(GLM_GATEWAYS_COLLECTION)
-            .doc(params.rollFence.targetRevisionId),
-        );
-        const target = targetSnap.exists ? targetSnap.data() : undefined;
-        const systemConfig = target?.systemConfig as Record<string, unknown> | undefined;
-        const heartbeat = target?.heartbeat as Record<string, unknown> | undefined;
-        const proofIsCurrent =
-          systemConfig?.configReady === true &&
-          systemConfig.observedRevisionId === params.rollFence.configReady.observedRevisionId &&
-          systemConfig.acceptedCommit === params.rollFence.configReady.acceptedCommit &&
-          systemConfig.configReadyAt === params.rollFence.configReady.configReadyAt &&
-          systemConfig.runtimeConfigHash === params.rollFence.configReady.runtimeConfigHash;
-        if (!proofIsCurrent) {
-          throw new Error("target config proof changed before release-roll cutover");
-        }
-        if (
-          typeof heartbeat?.startedAt !== "number" ||
-          heartbeat.startedAt > params.rollFence.configReady.configReadyAt
-        ) {
-          throw new Error("target restarted after config proof before release-roll cutover");
-        }
-      }
+      await assertRollFenceCurrent({ txn, db: deps.db, params, targetRoot, prior, nowMs });
     }
-    if (params.flipMirror) {
-      const shellState = resolveUserGatewayShellState(
-        targetRoot,
-        params.uid,
-      );
-      txn.update(deps.db.collection("users").doc(params.uid), {
-        "provisioning.openclaw.gatewayId": params.toGatewayId,
-        "provisioning.openclaw.gatewayAssignedAt": deps.serverTimestamp(),
-        "provisioning.openclaw.gatewayProfile": shellState.gatewayProfile,
-        "provisioning.openclaw.shellsEnabled": shellState.shellsEnabled,
-      });
-    }
-    if (params.assignment) {
-      txn.set(assignmentRef(deps.db, params.toGatewayId, params.uid), {
-        uid: params.uid,
-        slug: params.slug,
-        gatewayId: params.toGatewayId,
-        revisionId: params.assignment.revisionId,
-        release: params.assignment.release,
-        source: params.assignment.source,
-        state: "serving" satisfies AssignmentState,
-        epoch: priorEpoch + 1,
-        updatedAt: nowMs,
-        updatedByOperationId: params.assignment.updatedByOperationId,
-      });
-      if (params.fromGatewayId !== params.toGatewayId) {
-        txn.delete(assignmentRef(deps.db, params.fromGatewayId, params.uid));
-      }
-    }
+    updateUserMirror(txn, deps, params, targetRoot);
+    updateAssignment(txn, deps.db, params, prior.epoch, nowMs);
   });
+}
+
+interface PriorAssignment {
+  exists: boolean;
+  data: Record<string, unknown> | undefined;
+  epoch: number;
+  revisionId: unknown;
+}
+
+async function readPriorAssignment(
+  txn: FleetStateTxn,
+  db: FleetStateFirestore,
+  params: CutoverCommitParams,
+): Promise<PriorAssignment> {
+  if (!params.assignment) {
+    return { exists: false, data: undefined, epoch: 0, revisionId: undefined };
+  }
+  const snapshot = await txn.get(assignmentRef(db, params.fromGatewayId, params.uid));
+  const data = snapshot.exists ? snapshot.data() : undefined;
+  const epoch = data?.epoch;
+  return {
+    exists: snapshot.exists,
+    data,
+    epoch: typeof epoch === "number" && epoch >= 0 ? epoch : 0,
+    revisionId: data?.revisionId,
+  };
+}
+
+function assertTargetAcceptsCutover(
+  targetRoot: Record<string, unknown> | undefined,
+  gatewayId: string,
+): void {
+  if (targetRoot?.desiredStatus === "retired" || targetRoot?.retirementClaim != null) {
+    throw new Error(`gateway ${gatewayId} has a current retirement claim`);
+  }
+}
+
+interface CustomerMigrationV2FenceValidationInput {
+  txn: FleetStateTxn;
+  db: FleetStateFirestore;
+  params: CutoverCommitParams;
+  targetRoot: Record<string, unknown> | undefined;
+  prior: PriorAssignment;
+}
+
+async function assertCustomerMigrationV2FenceCurrent(
+  input: CustomerMigrationV2FenceValidationInput,
+): Promise<boolean> {
+  const { txn, db, params, targetRoot, prior } = input;
+  const fence = params.customerMigrationV2Fence!;
+  assertCustomerMigrationV2ParametersExact(params, fence);
+  const [operationSnap, targetSnap, targetAssignmentSnap, sourceRootSnap] = await Promise.all([
+    txn.get(db.collection(GLM_OPERATIONS_COLLECTION).doc(fence.operationId)),
+    txn.get(db.collection(GLM_GATEWAYS_COLLECTION).doc(fence.targetRevisionId)),
+    txn.get(assignmentRef(db, params.toGatewayId, params.uid)),
+    txn.get(db.collection(GATEWAYS_COLLECTION).doc(fence.sourceGatewayId)),
+  ]);
+  assertCustomerMigrationV2ProofsExact({
+    fence,
+    operation: operationSnap.exists ? operationSnap.data() : undefined,
+    target: targetSnap.exists ? targetSnap.data() : undefined,
+    targetRoot,
+    sourceRoot: sourceRootSnap.exists ? sourceRootSnap.data() : undefined,
+  });
+  const targetAssignment = targetAssignmentSnap.exists ? targetAssignmentSnap.data() : undefined;
+  if (customerMigrationAlreadyCommitted(prior, targetAssignment, fence)) return true;
+  assertCustomerMigrationSourceAssignmentExact(prior, fence);
+  return false;
+}
+
+function assertCustomerMigrationV2ParametersExact(
+  params: CutoverCommitParams,
+  fence: NonNullable<CutoverCommitParams["customerMigrationV2Fence"]>,
+): void {
+  const parametersExact = [
+    fence.uid === params.uid,
+    fence.slug === params.slug,
+    fence.sourceGatewayId === params.fromGatewayId,
+    fence.targetGatewayId === params.toGatewayId,
+    params.assignment?.revisionId === fence.targetRevisionId,
+    params.assignment?.release === fence.targetRelease,
+  ].every(Boolean);
+  if (!parametersExact) {
+    throw new Error("ordinary protocol-v2 cutover parameters changed after proof");
+  }
+}
+
+function assertCustomerMigrationV2ProofsExact(input: {
+  fence: NonNullable<CutoverCommitParams["customerMigrationV2Fence"]>;
+  operation: Record<string, unknown> | undefined;
+  target: Record<string, unknown> | undefined;
+  targetRoot: Record<string, unknown> | undefined;
+  sourceRoot: Record<string, unknown> | undefined;
+}): void {
+  const { fence, operation, target, targetRoot, sourceRoot } = input;
+  if (!customerMigrationV2FenceIsExact(operation, fence)) {
+    throw new Error("ordinary protocol-v2 candidate is not durably promoted at cutover");
+  }
+  if (!customerMigrationV2TargetIsCurrent(target, fence)) {
+    throw new Error("ordinary protocol-v2 target candidate proof changed before cutover");
+  }
+  if (!customerMigrationV2GatewayRootFenceMatches(targetRoot, fence.targetRootFence)) {
+    throw new Error("ordinary protocol-v2 target root changed before cutover");
+  }
+  if (!customerMigrationV2GatewayRootFenceMatches(sourceRoot, fence.sourceRootFence)) {
+    throw new Error("ordinary protocol-v2 source root changed before cutover");
+  }
+}
+
+function customerMigrationAlreadyCommitted(
+  prior: PriorAssignment,
+  targetAssignment: Record<string, unknown> | undefined,
+  fence: NonNullable<CutoverCommitParams["customerMigrationV2Fence"]>,
+): boolean {
+  return !prior.exists &&
+    targetAssignment?.revisionId === fence.targetRevisionId &&
+    targetAssignment.updatedByOperationId === fence.operationId &&
+    targetAssignment.state === "serving";
+}
+
+function assertCustomerMigrationSourceAssignmentExact(
+  prior: PriorAssignment,
+  fence: NonNullable<CutoverCommitParams["customerMigrationV2Fence"]>,
+): void {
+  const sourceAssignmentExact = [
+    prior.revisionId === fence.sourceRevisionId,
+    prior.epoch === fence.sourceEpoch,
+    prior.data?.uid === fence.uid,
+    prior.data?.slug === fence.slug,
+    prior.data?.gatewayId === fence.sourceGatewayId,
+    prior.data?.release === fence.sourceRelease,
+    prior.data?.state === "quiescing",
+    prior.data?.updatedByOperationId === fence.operationId,
+  ].every(Boolean);
+  if (!sourceAssignmentExact) {
+    throw new Error("ordinary protocol-v2 source assignment changed before cutover");
+  }
+}
+
+interface RollFenceValidationInput {
+  txn: FleetStateTxn;
+  db: FleetStateFirestore;
+  params: CutoverCommitParams;
+  targetRoot: Record<string, unknown> | undefined;
+  prior: PriorAssignment;
+  nowMs: number;
+}
+
+async function assertRollFenceCurrent(input: RollFenceValidationInput): Promise<void> {
+  const { txn, db, params, targetRoot, prior, nowMs } = input;
+  const fence = params.rollFence!;
+  const roll = targetRoot?.roll as Record<string, unknown> | undefined;
+  const protocolV2Roll = roll?.systemConfigRoll !== undefined;
+  assertCurrentRoll(params, targetRoot, roll, protocolV2Roll);
+  if (protocolV2Roll) {
+    await assertProtocolV2ProofCurrent(txn, db, params, roll!, nowMs);
+  }
+  assertSourceCheckpointCurrent(roll, fence.sourceConfigCheckpoint);
+  assertSourceAssignmentCurrent(targetRoot, fence, prior);
+  if (fence.configReady) {
+    await assertLegacyConfigProofCurrent(txn, db, fence);
+  }
+}
+
+function assertCurrentRoll(
+  params: CutoverCommitParams,
+  targetRoot: Record<string, unknown> | undefined,
+  roll: Record<string, unknown> | undefined,
+  protocolV2Roll: boolean,
+): void {
+  const fence = params.rollFence!;
+  const current = [
+    protocolV2Roll || targetRoot?.desiredRelease === fence.targetRelease,
+    roll?.operationId === fence.operationId,
+    roll?.targetRevisionId === fence.targetRevisionId,
+    roll?.toRelease === fence.targetRelease,
+    params.assignment?.revisionId === fence.targetRevisionId,
+  ].every(Boolean);
+  if (!current) throw new Error("stale release-roll fence refused cutover");
+}
+
+async function assertProtocolV2ProofCurrent(
+  txn: FleetStateTxn,
+  db: FleetStateFirestore,
+  params: CutoverCommitParams,
+  roll: Record<string, unknown>,
+  nowMs: number,
+): Promise<void> {
+  const fence = params.rollFence!;
+  const configRoll = roll.systemConfigRoll as Record<string, unknown> | null;
+  if (!protocolV2PromotionIsExact(
+    configRoll,
+    fence.operationId,
+    fence.sourceRevisionId,
+    fence.targetRevisionId,
+  )) {
+    throw new Error("protocol-v2 candidate is not durably promoted at cutover");
+  }
+  const targetSnap = await txn.get(
+    db.collection(GLM_GATEWAYS_COLLECTION).doc(fence.targetRevisionId),
+  );
+  const target = targetSnap.exists ? targetSnap.data() : undefined;
+  if (!protocolV2TargetProofIsCurrent(configRoll, target, {
+    gatewayId: params.toGatewayId,
+    revisionId: fence.targetRevisionId,
+    release: fence.targetRelease,
+    now: nowMs,
+  })) {
+    throw new Error("protocol-v2 target candidate proof changed before cutover");
+  }
+}
+
+function assertSourceCheckpointCurrent(
+  roll: Record<string, unknown> | undefined,
+  expected: NonNullable<CutoverCommitParams["rollFence"]>["sourceConfigCheckpoint"],
+): void {
+  if (!expected) return;
+  const checkpoint = roll?.systemConfigCheckpoint as Record<string, unknown> | undefined;
+  const current = [
+    checkpoint?.migrationId === expected.migrationId,
+    checkpoint?.checkpointCommit === expected.checkpointCommit,
+    checkpoint?.configHash === expected.configHash,
+    checkpoint?.sourceUnfrozenAt === null,
+  ].every(Boolean);
+  if (!current) throw new Error("source config checkpoint changed before release-roll cutover");
+}
+
+function assertSourceAssignmentCurrent(
+  root: Record<string, unknown> | undefined,
+  fence: NonNullable<CutoverCommitParams["rollFence"]>,
+  prior: PriorAssignment,
+): void {
+  const assigned = prior.revisionId === fence.sourceRevisionId && prior.epoch === fence.sourceEpoch;
+  const unassigned = prior.revisionId === undefined &&
+    fence.sourceEpoch === 0 &&
+    root?.liveRevisionId === fence.sourceRevisionId;
+  if (!assigned && !unassigned) {
+    throw new Error("source assignment changed after release-roll proof");
+  }
+}
+
+async function assertLegacyConfigProofCurrent(
+  txn: FleetStateTxn,
+  db: FleetStateFirestore,
+  fence: NonNullable<CutoverCommitParams["rollFence"]>,
+): Promise<void> {
+  const proof = fence.configReady!;
+  const targetSnap = await txn.get(
+    db.collection(GLM_GATEWAYS_COLLECTION).doc(fence.targetRevisionId),
+  );
+  const target = targetSnap.exists ? targetSnap.data() : undefined;
+  const systemConfig = target?.systemConfig as Record<string, unknown> | undefined;
+  const heartbeat = target?.heartbeat as Record<string, unknown> | undefined;
+  const current = [
+    systemConfig?.configReady === true,
+    systemConfig?.observedRevisionId === proof.observedRevisionId,
+    systemConfig?.acceptedCommit === proof.acceptedCommit,
+    systemConfig?.configReadyAt === proof.configReadyAt,
+    systemConfig?.runtimeConfigHash === proof.runtimeConfigHash,
+  ].every(Boolean);
+  if (!current) throw new Error("target config proof changed before release-roll cutover");
+  if (typeof heartbeat?.startedAt !== "number" || heartbeat.startedAt > proof.configReadyAt) {
+    throw new Error("target restarted after config proof before release-roll cutover");
+  }
+}
+
+function updateUserMirror(
+  txn: FleetStateTxn,
+  deps: FleetStateDeps,
+  params: CutoverCommitParams,
+  targetRoot: Record<string, unknown> | undefined,
+): void {
+  if (!params.flipMirror) return;
+  const shellState = resolveUserGatewayShellState(targetRoot, params.uid);
+  txn.update(deps.db.collection("users").doc(params.uid), {
+    "provisioning.openclaw.gatewayId": params.toGatewayId,
+    "provisioning.openclaw.gatewayAssignedAt": deps.serverTimestamp(),
+    "provisioning.openclaw.gatewayProfile": shellState.gatewayProfile,
+    "provisioning.openclaw.shellsEnabled": shellState.shellsEnabled,
+  });
+}
+
+function updateAssignment(
+  txn: FleetStateTxn,
+  db: FleetStateFirestore,
+  params: CutoverCommitParams,
+  priorEpoch: number,
+  nowMs: number,
+): void {
+  if (!params.assignment) return;
+  txn.set(assignmentRef(db, params.toGatewayId, params.uid), {
+    uid: params.uid,
+    slug: params.slug,
+    gatewayId: params.toGatewayId,
+    revisionId: params.assignment.revisionId,
+    release: params.assignment.release,
+    source: params.assignment.source,
+    state: "serving" satisfies AssignmentState,
+    epoch: priorEpoch + 1,
+    updatedAt: nowMs,
+    updatedByOperationId: params.assignment.updatedByOperationId,
+  });
+  if (params.fromGatewayId !== params.toGatewayId) {
+    txn.delete(assignmentRef(db, params.fromGatewayId, params.uid));
+  }
 }
 
 export interface MarkAssignmentStateParams {
@@ -595,42 +728,11 @@ export async function markAssignmentState(
     const snap = await txn.get(ref);
     if (!snap.exists) {
       if (!params.createIfMissing) return;
-      if (
-        params.state !== "quiescing" ||
-        !params.slug ||
-        !params.revisionId ||
-        typeof params.release !== "number" ||
-        typeof params.epoch !== "number" ||
-        !params.updatedByOperationId
-      ) {
-        throw new Error("unassigned source quiesce requires an exact operation binding");
-      }
-      txn.set(ref, {
-        uid: params.uid,
-        slug: params.slug,
-        gatewayId: params.gatewayId,
-        revisionId: params.revisionId,
-        release: params.release,
-        source: "migrate-customer",
-        state: params.state,
-        epoch: params.epoch,
-        updatedAt: deps.now ? deps.now().getTime() : Date.now(),
-        updatedByOperationId: params.updatedByOperationId,
-      });
+      createMissingAssignment(txn, ref, deps, params);
       return;
     }
     const assignment = snap.data();
-    if (
-      params.slug !== undefined && assignment?.slug !== params.slug ||
-      params.revisionId !== undefined && assignment?.revisionId !== params.revisionId ||
-      params.release !== undefined && assignment?.release !== params.release ||
-      params.epoch !== undefined && assignment?.epoch !== params.epoch ||
-      assignment?.gatewayId !== undefined && assignment.gatewayId !== params.gatewayId ||
-      assignment?.uid !== undefined && assignment.uid !== params.uid ||
-      params.createIfMissing && assignment?.updatedByOperationId !== params.updatedByOperationId
-    ) {
-      throw new Error("source assignment changed before roster state update");
-    }
+    assertAssignmentStateUpdateMatches(assignment, params);
     txn.update(ref, {
       state: params.state,
       ...(params.updatedByOperationId
@@ -641,6 +743,54 @@ export async function markAssignmentState(
         : {}),
     });
   });
+}
+
+function createMissingAssignment(
+  txn: FleetStateTxn,
+  ref: FleetStateDocRef,
+  deps: FleetStateDeps,
+  params: MarkAssignmentStateParams,
+): void {
+  const exactBinding = [
+    params.state === "quiescing",
+    params.slug,
+    params.revisionId,
+    typeof params.release === "number",
+    typeof params.epoch === "number",
+    params.updatedByOperationId,
+  ].every(Boolean);
+  if (!exactBinding) {
+    throw new Error("unassigned source quiesce requires an exact operation binding");
+  }
+  txn.set(ref, {
+    uid: params.uid,
+    slug: params.slug,
+    gatewayId: params.gatewayId,
+    revisionId: params.revisionId,
+    release: params.release,
+    source: "migrate-customer",
+    state: params.state,
+    epoch: params.epoch,
+    updatedAt: deps.now ? deps.now().getTime() : Date.now(),
+    updatedByOperationId: params.updatedByOperationId,
+  });
+}
+
+function assertAssignmentStateUpdateMatches(
+  assignment: Record<string, unknown> | undefined,
+  params: MarkAssignmentStateParams,
+): void {
+  const current = assignment ?? {};
+  const exact = [
+    params.slug === undefined || current.slug === params.slug,
+    params.revisionId === undefined || current.revisionId === params.revisionId,
+    params.release === undefined || current.release === params.release,
+    params.epoch === undefined || current.epoch === params.epoch,
+    current.gatewayId === undefined || current.gatewayId === params.gatewayId,
+    current.uid === undefined || current.uid === params.uid,
+    !params.createIfMissing || current.updatedByOperationId === params.updatedByOperationId,
+  ].every(Boolean);
+  if (!exact) throw new Error("source assignment changed before roster state update");
 }
 
 function assignmentRef(
