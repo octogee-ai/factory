@@ -288,6 +288,24 @@ export function createMigrationClient(deps) {
                 throw new Error("config finalize was not confirmed");
             return response;
         },
+        async retireConfigV2(opts) {
+            const response = await postSignedJson(opts.transportId ?? opts.gatewayId, `/config-retire-v2/${opts.gatewayId}`, opts.migrationId, configMutationBody({
+                action: "retire-v2",
+                migrationId: opts.migrationId,
+                slug: opts.slug,
+                sourceRevisionId: opts.sourceRevisionId,
+                targetRevisionId: opts.targetRevisionId,
+                checkpointCommit: opts.checkpointCommit,
+                freezeObject: opts.freezeObject,
+            }), transferMs);
+            assertConfigResponseBinding(response, opts);
+            if (response.retired !== true ||
+                response.retirementRef !==
+                    `refs/octogee/system-config/retired/${opts.sourceRevisionId}` ||
+                !COMMIT_PATTERN.test(response.retirementObject))
+                throw new Error("malformed config retirement response");
+            return response;
+        },
         async restoreTarget({ migrationId, gatewayId, transportId, uid, slug, snapshot }) {
             const res = await postSignedJson(transportId ?? gatewayId, `/restore/${gatewayId}`, migrationId, { migrationId, uid, slug, snapshot }, transferMs);
             log(`[migration-client] ✅ restoreTarget migrationId=${migrationId} slug=${slug} gateway=${gatewayId} steps=${res.steps.join(",")}`);

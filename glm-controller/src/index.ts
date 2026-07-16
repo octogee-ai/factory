@@ -122,7 +122,9 @@ import type { MigrationRollFence } from "@octogee/core/fleet-migration-runner";
 import {
   attestGatewayRetirementAfterWakeAtomic,
   bindGatewayRetirementConfigCheckpointAtomic,
+  bindGatewayRetirementConfigTerminalAtomic,
   verifyGatewayRetirementConfigCheckpointAtomic,
+  verifyGatewayRetirementConfigTerminalAtomic,
   verifyGatewayRetirementClaimAtomic,
 } from "@octogee/core/gateway-retirement-claim";
 import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
@@ -3803,6 +3805,12 @@ async function buildHandlers(
         kind: "dedicated" as const,
         slug: root.builderSlug,
         sourceRevisionId: root.liveRevisionId,
+        ...(root.retirementClaim?.configCheckpoint
+          ? { checkpoint: root.retirementClaim.configCheckpoint }
+          : {}),
+        ...(root.retirementClaim?.configTerminal
+          ? { terminal: root.retirementClaim.configTerminal }
+          : {}),
       };
     },
     freezeConfigV2: async (request) => {
@@ -3826,6 +3834,31 @@ async function buildHandlers(
       }),
     verifyCheckpoint: (input) =>
       verifyGatewayRetirementConfigCheckpointAtomic({
+        db,
+        ...input,
+        now: Date.now(),
+      }),
+    retireConfigV2: async (request) => {
+      const sourceUrl = await resolveGatewayUrlFromFirestore(db, request.sourceRevisionId);
+      const client = createMigrationClient({
+        privateKey,
+        resolveGatewayUrl: () => sourceUrl,
+        log: logFn,
+      });
+      return client.retireConfigV2({
+        ...request,
+        transportId: request.sourceRevisionId,
+      });
+    },
+    bindTerminal: (input) =>
+      bindGatewayRetirementConfigTerminalAtomic({
+        db,
+        ...input,
+        now: Date.now(),
+        updatedBy: "cowboy-retire-gateway",
+      }),
+    verifyTerminal: (input) =>
+      verifyGatewayRetirementConfigTerminalAtomic({
         db,
         ...input,
         now: Date.now(),

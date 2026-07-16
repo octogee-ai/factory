@@ -16,6 +16,7 @@ import {
   createConfigFinalizeV2Handler,
   createConfigFreezeV2Handler,
   createConfigPromoteCandidateHandler,
+  createConfigRetireV2Handler,
   createExportHandler,
   createExportPathsHandler,
   createFlushHandler,
@@ -90,7 +91,7 @@ let controlRequestSequence = 0;
 
 function configControlBody<T extends { migrationId: string; slug: string }>(
   body: T,
-  action: "freeze-v2" | "candidate-proof" | "promote-candidate" | "abort-v2" | "finalize-v2" =
+  action: "freeze-v2" | "candidate-proof" | "promote-candidate" | "abort-v2" | "retire-v2" | "finalize-v2" =
     "freeze-v2",
 ) {
   return {
@@ -667,6 +668,111 @@ describe("system config protocol-v2 handlers", () => {
     expect(response.getBody()).toEqual({ ...bindings, aborted: true });
   });
 
+  it("publishes exact retirement evidence without unfreezing the source", async () => {
+    const retireSystemConfigV2 = vi.fn(() => ({
+      retired: true as const,
+      retirementRef: "refs/octogee/system-config/retired/gw-a-r1",
+      retirementObject: CANDIDATE,
+    }));
+    const retirementBindings = {
+      ...bindings,
+      migrationId: "retire-gw-a-operation-1",
+      targetRevisionId: "gw-a-r0",
+    };
+    const body = configControlBody({
+      ...retirementBindings,
+      checkpointCommit: CHECKPOINT,
+      freezeObject: FREEZE_OBJECT,
+    }, "retire-v2");
+    const response = await invoke(
+      createConfigRetireV2Handler(mkDeps({ retireSystemConfigV2 })),
+      body,
+    );
+
+    expect(response.getStatus()).toBe(200);
+    expect(retireSystemConfigV2).toHaveBeenCalledWith({
+      ...retirementBindings,
+      checkpointCommit: CHECKPOINT,
+      freezeObject: FREEZE_OBJECT,
+    });
+    expect(response.getBody()).toEqual({
+      ...retirementBindings,
+      retired: true,
+      retirementRef: "refs/octogee/system-config/retired/gw-a-r1",
+      retirementObject: CANDIDATE,
+    });
+  });
+
+  it("admits r0 only as the exact retirement sentinel for freeze and retire actions", async () => {
+    const freezeSystemConfigV2 = vi.fn(() => ({
+      checkpointCommit: CHECKPOINT,
+      configHash: CONFIG_HASH,
+      freezeRef: "refs/octogee/system-config/freeze/gw-a-r1",
+      freezeObject: FREEZE_OBJECT,
+    }));
+    const retirementBindings = {
+      ...bindings,
+      migrationId: "retire-gw-a-operation-2",
+      targetRevisionId: "gw-a-r0",
+    };
+    expect((await invoke(
+      createConfigFreezeV2Handler(mkDeps({ freezeSystemConfigV2 })),
+      configControlBody(retirementBindings),
+    )).getStatus()).toBe(200);
+
+    const ordinaryFreeze = await invoke(
+      createConfigFreezeV2Handler(mkDeps({ freezeSystemConfigV2 })),
+      configControlBody({ ...retirementBindings, migrationId: "roll-gw-a-operation-2" }),
+    );
+    expect(ordinaryFreeze.getStatus()).toBe(400);
+
+    const abort = await invoke(
+      createConfigAbortV2Handler(mkDeps({ abortSystemConfigV2: vi.fn() })),
+      configControlBody({
+        ...retirementBindings,
+        checkpointCommit: CHECKPOINT,
+        candidateCommit: null,
+        freezeObject: FREEZE_OBJECT,
+      }, "abort-v2"),
+    );
+    expect(abort.getStatus()).toBe(400);
+
+    const wrongGatewaySentinel = await invoke(
+      createConfigFreezeV2Handler(mkDeps({ freezeSystemConfigV2 })),
+      configControlBody({ ...retirementBindings, targetRevisionId: "gw-b-r0" }),
+    );
+    expect(wrongGatewaySentinel.getStatus()).toBe(400);
+
+    const ordinaryTargetRetirement = await invoke(
+      createConfigRetireV2Handler(mkDeps({ retireSystemConfigV2: vi.fn() })),
+      configControlBody({
+        ...bindings,
+        migrationId: "retire-gw-a-operation-2",
+        checkpointCommit: CHECKPOINT,
+        freezeObject: FREEZE_OBJECT,
+      }, "retire-v2"),
+    );
+    expect(ordinaryTargetRetirement.getStatus()).toBe(400);
+    expect(freezeSystemConfigV2).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects malformed retirement bindings before invoking terminal publication", async () => {
+    const retireSystemConfigV2 = vi.fn();
+    const response = await invoke(
+      createConfigRetireV2Handler(mkDeps({ retireSystemConfigV2 })),
+      configControlBody({
+        ...bindings,
+        migrationId: "retire-gw-a-operation-3",
+        targetRevisionId: "gw-a-r0",
+        checkpointCommit: "not-a-commit",
+        freezeObject: FREEZE_OBJECT,
+      }, "retire-v2"),
+    );
+
+    expect(response.getStatus()).toBe(400);
+    expect(retireSystemConfigV2).not.toHaveBeenCalled();
+  });
+
   it("finalizes only the exact promoted candidate on the target revision", async () => {
     const finalizeSystemConfigV2 = vi.fn(() => ({ finalized: true as const }));
     const body = configControlBody({
@@ -811,6 +917,19 @@ describe("system config protocol-v2 handlers", () => {
     );
     expect(response.getStatus()).toBe(501);
     expect(response.getBody()).toEqual({ error: "config freeze-v2 not configured" });
+
+    const retirementResponse = await invoke(
+      createConfigRetireV2Handler(mkDeps()),
+      configControlBody({
+        ...bindings,
+        migrationId: "retire-gw-a-unconfigured",
+        targetRevisionId: "gw-a-r0",
+        checkpointCommit: CHECKPOINT,
+        freezeObject: FREEZE_OBJECT,
+      }, "retire-v2"),
+    );
+    expect(retirementResponse.getStatus()).toBe(501);
+    expect(retirementResponse.getBody()).toEqual({ error: "config retire-v2 not configured" });
   });
 });
 

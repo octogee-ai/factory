@@ -253,6 +253,7 @@ export const CONFIG_CONTROL_ACTIONS = [
   "candidate-proof",
   "promote-candidate",
   "abort-v2",
+  "retire-v2",
   "finalize-v2",
 ] as const;
 
@@ -364,6 +365,18 @@ export interface ConfigAbortV2RequestBody extends ConfigControlRequestBody {
 
 export interface ConfigAbortV2Response extends ConfigControlResponseBody {
   aborted: true;
+}
+
+export interface ConfigRetireV2RequestBody extends ConfigControlRequestBody {
+  action: "retire-v2";
+  checkpointCommit: string;
+  freezeObject: string;
+}
+
+export interface ConfigRetireV2Response extends ConfigControlResponseBody {
+  retired: true;
+  retirementRef: string;
+  retirementObject: string;
 }
 
 export interface ConfigFinalizeV2RequestBody extends ConfigControlRequestBody {

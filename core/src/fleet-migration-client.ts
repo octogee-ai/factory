@@ -14,6 +14,7 @@ import {
   type ConfigPromoteCandidateResponse,
   type ConfigAbortV2Response,
   type ConfigFinalizeV2Response,
+  type ConfigRetireV2Response,
   type ImportResponse,
   type QuiesceResponse,
   type RestoreMigrationResponse,
@@ -92,6 +93,11 @@ export interface MigrationClient {
     candidateHash: string;
     freezeObject: string;
   }): Promise<ConfigFinalizeV2Response>;
+
+  retireConfigV2(opts: ConfigControlOpts & {
+    checkpointCommit: string;
+    freezeObject: string;
+  }): Promise<ConfigRetireV2Response>;
 
   quiesce(opts: {
     migrationId: string;
@@ -575,6 +581,32 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       );
       assertConfigResponseBinding(response, opts);
       if (response.finalized !== true) throw new Error("config finalize was not confirmed");
+      return response;
+    },
+
+    async retireConfigV2(opts) {
+      const response = await postSignedJson<ConfigRetireV2Response>(
+        opts.transportId ?? opts.gatewayId,
+        `/config-retire-v2/${opts.gatewayId}`,
+        opts.migrationId,
+        configMutationBody({
+          action: "retire-v2",
+          migrationId: opts.migrationId,
+          slug: opts.slug,
+          sourceRevisionId: opts.sourceRevisionId,
+          targetRevisionId: opts.targetRevisionId,
+          checkpointCommit: opts.checkpointCommit,
+          freezeObject: opts.freezeObject,
+        }),
+        transferMs,
+      );
+      assertConfigResponseBinding(response, opts);
+      if (
+        response.retired !== true ||
+        response.retirementRef !==
+          `refs/octogee/system-config/retired/${opts.sourceRevisionId}` ||
+        !COMMIT_PATTERN.test(response.retirementObject)
+      ) throw new Error("malformed config retirement response");
       return response;
     },
 

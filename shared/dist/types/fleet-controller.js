@@ -44,6 +44,7 @@ export const CONFIG_CONTROL_ACTIONS = [
     "candidate-proof",
     "promote-candidate",
     "abort-v2",
+    "retire-v2",
     "finalize-v2",
 ];
 export const CONFIG_CONTROL_CONFLICT_ERROR = "config control conflict";

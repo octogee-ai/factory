@@ -1,5 +1,5 @@
 import type { Firestore } from "firebase-admin/firestore";
-import { type GatewayRetirementConfigCheckpoint } from "@octogee/shared/types/gateway-releases";
+import { type GatewayRetirementConfigCheckpoint, type GatewayRetirementConfigTerminal } from "@octogee/shared/types/gateway-releases";
 export declare class GatewayRetirementConflictError extends Error {
     constructor(message: string);
 }
@@ -36,6 +36,19 @@ interface VerifyGatewayRetirementConfigCheckpointInput {
     checkpoint: GatewayRetirementConfigCheckpoint;
     now: number;
 }
+interface BindGatewayRetirementConfigTerminalInput extends VerifyGatewayRetirementClaimInput {
+    checkpoint: GatewayRetirementConfigCheckpoint;
+    terminal: GatewayRetirementConfigTerminal;
+}
+interface VerifyGatewayRetirementConfigTerminalInput {
+    db: Firestore;
+    gatewayId: string;
+    operationId: string;
+    version: number;
+    checkpoint: GatewayRetirementConfigCheckpoint;
+    terminal: GatewayRetirementConfigTerminal;
+    now: number;
+}
 export type GatewayRetirementVerification = {
     ok: true;
 } | {
@@ -59,4 +72,6 @@ export declare function attestGatewayRetirementAfterWakeAtomic(input: AttestGate
 export declare function verifyGatewayRetirementClaimAtomic(input: VerifyGatewayRetirementClaimInput): Promise<GatewayRetirementVerification>;
 export declare function bindGatewayRetirementConfigCheckpointAtomic(input: BindGatewayRetirementConfigCheckpointInput): Promise<GatewayRetirementVerification>;
 export declare function verifyGatewayRetirementConfigCheckpointAtomic(input: VerifyGatewayRetirementConfigCheckpointInput): Promise<GatewayRetirementVerification>;
+export declare function bindGatewayRetirementConfigTerminalAtomic(input: BindGatewayRetirementConfigTerminalInput): Promise<GatewayRetirementVerification>;
+export declare function verifyGatewayRetirementConfigTerminalAtomic(input: VerifyGatewayRetirementConfigTerminalInput): Promise<GatewayRetirementVerification>;
 export {};

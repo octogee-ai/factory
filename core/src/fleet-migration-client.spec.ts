@@ -407,8 +407,9 @@ describe("MigrationClient protocol-v2 config control", () => {
   const freezeObject = "2".repeat(40);
   const candidateCommit = "3".repeat(40);
   const candidateHash = "b".repeat(64);
+  const retirementObject = "4".repeat(40);
 
-  it("signs all five exact v2 actions with both revision bindings", async () => {
+  it("signs all six exact v2 actions with both revision bindings", async () => {
     const { calls, fakeFetch } = captureFetch((call) => {
       const request = JSON.parse(call.body!);
       const binding = {
@@ -445,6 +446,12 @@ describe("MigrationClient protocol-v2 config control", () => {
         "promote-candidate": { ...binding, promoted: true, promotedCommit: candidateCommit },
         "abort-v2": { ...binding, aborted: true },
         "finalize-v2": { ...binding, finalized: true },
+        "retire-v2": {
+          ...binding,
+          retired: true,
+          retirementRef: `refs/octogee/system-config/retired/${common.sourceRevisionId}`,
+          retirementObject,
+        },
       };
       return new Response(JSON.stringify(responses[request.action]), {
         status: 200,
@@ -487,6 +494,12 @@ describe("MigrationClient protocol-v2 config control", () => {
       candidateHash,
       freezeObject,
     });
+    await client.retireConfigV2({
+      ...common,
+      transportId: common.sourceRevisionId,
+      checkpointCommit,
+      freezeObject,
+    });
 
     expect(calls.map((call) => call.url)).toEqual([
       "https://bender-r1.example.com/config-freeze-v2/bender",
@@ -494,6 +507,7 @@ describe("MigrationClient protocol-v2 config control", () => {
       "https://bender-r2.example.com/config-promote-candidate/bender",
       "https://bender-r1.example.com/config-abort-v2/bender",
       "https://bender-r2.example.com/config-finalize-v2/bender",
+      "https://bender-r1.example.com/config-retire-v2/bender",
     ]);
     expect(calls.map((call) => JSON.parse(call.body!).action)).toEqual([
       "freeze-v2",
@@ -501,6 +515,7 @@ describe("MigrationClient protocol-v2 config control", () => {
       "promote-candidate",
       "abort-v2",
       "finalize-v2",
+      "retire-v2",
     ]);
     for (const call of calls) {
       const request = JSON.parse(call.body!);

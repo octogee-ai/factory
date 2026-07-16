@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
 import {
   createFleetSystemConfigFlush,
+  createConfigControlCallbacks,
   createSystemConfigMutationGatedRpc,
   assertFleetConfigSlug,
   proveRevisionSystemConfigCandidate,
@@ -78,6 +79,38 @@ describe("fleet-controller entrypoint config", () => {
   it("rejects a signed config RPC for a builder other than the gateway owner", () => {
     expect(() => assertFleetConfigSlug("alice", "mallory")).toThrow(/does not match gateway builder/i);
     expect(() => assertFleetConfigSlug("alice", "alice")).not.toThrow();
+  });
+
+  it("wires retirement terminalization only for a dedicated builder gateway", () => {
+    const rpc = {} as never;
+    expect(createConfigControlCallbacks({
+      gatewayId: "gw-a",
+      revisionId: "gw-a-r1",
+      builderSlug: "",
+      port: 3003,
+      publicKey: "public-key",
+      version: "build-1",
+    }, rpc)).toEqual({});
+
+    const callbacks = createConfigControlCallbacks({
+      gatewayId: "gw-a",
+      revisionId: "gw-a-r1",
+      builderSlug: "alice",
+      port: 3003,
+      publicKey: "public-key",
+      version: "build-1",
+    }, rpc);
+    expect(callbacks).toEqual(expect.objectContaining({
+      retireSystemConfigV2: expect.any(Function),
+    }));
+    expect(() => callbacks.retireSystemConfigV2?.({
+      migrationId: "retire-operation-1",
+      slug: "mallory",
+      sourceRevisionId: "gw-a-r1",
+      targetRevisionId: "gw-a-r0",
+      checkpointCommit: "a".repeat(40),
+      freezeObject: "b".repeat(40),
+    })).toThrow(/does not match gateway builder/i);
   });
 
   it("blocks ordinary runtime config.apply while the controller freeze marker exists", async () => {

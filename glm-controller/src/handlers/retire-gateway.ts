@@ -1,6 +1,9 @@
 import type { Operation, OperationStep, StepStatus } from "@octogee/shared/types/glm";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
-import type { GatewayRetirementConfigCheckpoint } from "@octogee/shared/types/gateway-releases";
+import type {
+  GatewayRetirementConfigCheckpoint,
+  GatewayRetirementConfigTerminal,
+} from "@octogee/shared/types/gateway-releases";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 
 const UNKNOWN_ERROR = "unknown error";
@@ -13,7 +16,11 @@ interface NonRetiredGatewayRevision {
 
 export type RetirementConfigFence =
   | { kind: "shared" }
-  | { kind: "dedicated"; checkpoint: GatewayRetirementConfigCheckpoint };
+  | {
+      kind: "dedicated";
+      checkpoint: GatewayRetirementConfigCheckpoint;
+      terminal?: GatewayRetirementConfigTerminal;
+    };
 
 export interface RetireGatewayDeps {
   attestRetirementClaim: (input: {

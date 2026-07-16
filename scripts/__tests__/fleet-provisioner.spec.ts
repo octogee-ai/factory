@@ -276,7 +276,7 @@ describe("in-pod revision-keyed heartbeat (PR3 dependency)", () => {
 });
 
 describe("protocol-v2 config control route registration", () => {
-  it("mounts only the five restart-durable config-control endpoints", () => {
+  it("mounts only the six restart-durable config-control endpoints", () => {
     const post = vi.fn();
     registerConfigControlRoutes(
       { post } as never,
@@ -289,6 +289,7 @@ describe("protocol-v2 config control route registration", () => {
       "/config-candidate-proof/:gatewayId",
       "/config-promote-candidate/:gatewayId",
       "/config-abort-v2/:gatewayId",
+      "/config-retire-v2/:gatewayId",
       "/config-finalize-v2/:gatewayId",
     ]);
   });

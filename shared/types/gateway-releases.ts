@@ -155,6 +155,7 @@ export interface GatewayRetirementClaim {
   } | null;
   previousDesiredStatus: Exclude<GatewayLifecycleStatus, "retired">;
   configCheckpoint: GatewayRetirementConfigCheckpoint | null;
+  configTerminal: GatewayRetirementConfigTerminal | null;
 }
 
 export interface GatewayRetirementConfigCheckpoint {
@@ -165,6 +166,11 @@ export interface GatewayRetirementConfigCheckpoint {
   checkpointCommit: string;
   configHash: string;
   freezeObject: string;
+}
+
+export interface GatewayRetirementConfigTerminal {
+  retirementRef: string;
+  retirementObject: string;
 }
 
 // gateways/{gatewayId} — durable desired gateway identity. No reservation

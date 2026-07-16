@@ -42,6 +42,7 @@ import {
   freezeSystemConfigV2,
   promoteSystemConfigCandidateV2,
   readSystemConfigBootRoleState,
+  retireSystemConfigV2,
   type SystemConfigBootResolutionV2,
   verifySystemConfigCandidateControlObjectsV2,
 } from "../lib/system-config-roll-protocol-v2.js";
@@ -261,10 +262,11 @@ type ConfigControlCallbacks = Pick<
   | "proveSystemConfigCandidate"
   | "promoteSystemConfigCandidate"
   | "abortSystemConfigV2"
+  | "retireSystemConfigV2"
   | "finalizeSystemConfigV2"
 >;
 
-function createConfigControlCallbacks(
+export function createConfigControlCallbacks(
   entrypointConfig: FleetControllerEntrypointConfig,
   runtimeRpc: GatewayRpcClient,
 ): ConfigControlCallbacks {
@@ -319,6 +321,15 @@ function createConfigControlCallbacks(
     abortSystemConfigV2: (input) => {
       assertSlug(input.slug);
       return abortSystemConfigV2({
+        ...input,
+        gatewayId: entrypointConfig.gatewayId,
+        openclawDir: OPENCLAW_DIR,
+        env: process.env,
+      });
+    },
+    retireSystemConfigV2: (input) => {
+      assertSlug(input.slug);
+      return retireSystemConfigV2({
         ...input,
         gatewayId: entrypointConfig.gatewayId,
         openclawDir: OPENCLAW_DIR,

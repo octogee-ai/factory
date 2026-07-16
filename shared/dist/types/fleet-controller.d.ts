@@ -169,7 +169,7 @@ export interface QuiesceResponse {
     drained: boolean;
     runningCount: number;
 }
-export declare const CONFIG_CONTROL_ACTIONS: readonly ["freeze-v2", "candidate-proof", "promote-candidate", "abort-v2", "finalize-v2"];
+export declare const CONFIG_CONTROL_ACTIONS: readonly ["freeze-v2", "candidate-proof", "promote-candidate", "abort-v2", "retire-v2", "finalize-v2"];
 export type ConfigControlAction = typeof CONFIG_CONTROL_ACTIONS[number];
 export interface ConfigControlRequestBody extends MigrationRequestBody {
     action: ConfigControlAction;
@@ -256,6 +256,16 @@ export interface ConfigAbortV2RequestBody extends ConfigControlRequestBody {
 }
 export interface ConfigAbortV2Response extends ConfigControlResponseBody {
     aborted: true;
+}
+export interface ConfigRetireV2RequestBody extends ConfigControlRequestBody {
+    action: "retire-v2";
+    checkpointCommit: string;
+    freezeObject: string;
+}
+export interface ConfigRetireV2Response extends ConfigControlResponseBody {
+    retired: true;
+    retirementRef: string;
+    retirementObject: string;
 }
 export interface ConfigFinalizeV2RequestBody extends ConfigControlRequestBody {
     action: "finalize-v2";

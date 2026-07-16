@@ -92,6 +92,7 @@ export interface GatewayRetirementClaim {
     } | null;
     previousDesiredStatus: Exclude<GatewayLifecycleStatus, "retired">;
     configCheckpoint: GatewayRetirementConfigCheckpoint | null;
+    configTerminal: GatewayRetirementConfigTerminal | null;
 }
 export interface GatewayRetirementConfigCheckpoint {
     migrationId: string;
@@ -101,6 +102,10 @@ export interface GatewayRetirementConfigCheckpoint {
     checkpointCommit: string;
     configHash: string;
     freezeObject: string;
+}
+export interface GatewayRetirementConfigTerminal {
+    retirementRef: string;
+    retirementObject: string;
 }
 export interface GatewayDoc {
     gatewayId: string;

@@ -269,6 +269,18 @@ function sameConfigCheckpoint(left, right) {
         left.configHash === right.configHash &&
         left.freezeObject === right.freezeObject;
 }
+function readConfigTerminal(value) {
+    if (!isPlainRecord(value))
+        return null;
+    if (!nonEmptyString(value.retirementRef) ||
+        !isSha(value.retirementObject, 40))
+        return null;
+    return value;
+}
+function sameConfigTerminal(left, right) {
+    return left.retirementRef === right.retirementRef &&
+        left.retirementObject === right.retirementObject;
+}
 function readClaim(value) {
     if (!isPlainRecord(value))
         return null;
@@ -277,6 +289,9 @@ function readClaim(value) {
     const checkpoint = value.configCheckpoint === null
         ? null
         : readConfigCheckpoint(value.configCheckpoint);
+    const terminal = value.configTerminal === null
+        ? null
+        : readConfigTerminal(value.configTerminal);
     if (typeof value.operationId !== "string" ||
         !Number.isInteger(value.version) ||
         value.version <= 0 ||
@@ -290,6 +305,8 @@ function readClaim(value) {
         (phase === "waking" && value.liveRuntimeIdentity !== null) ||
         (phase === "claimed" && identity === null) ||
         (value.configCheckpoint !== null && checkpoint === null) ||
+        (value.configTerminal !== null && terminal === null) ||
+        (terminal !== null && checkpoint === null) ||
         (phase === "waking" && checkpoint !== null)) {
         return null;
     }
@@ -353,6 +370,7 @@ export async function claimGatewayRetirementAtomic(input) {
             liveRuntimeIdentity: inspection.liveRuntimeIdentity,
             previousDesiredStatus: rootData.desiredStatus,
             configCheckpoint: null,
+            configTerminal: null,
         };
         transaction.set(rootRef, {
             desiredStatus: dedicated ? "running" : "retired",
@@ -400,7 +418,7 @@ export async function attestGatewayRetirementAfterWakeAtomic(input) {
         }
         if (claim.phase === "claimed") {
             const dedicatedUnbound = (root.gatewayClass === "builder" || root.gatewayClass === "operator") &&
-                claim.configCheckpoint === null;
+                claim.configTerminal === null;
             return rootData.desiredStatus === (dedicatedUnbound ? "running" : "retired")
                 ? { ok: true, wakeRequired: claim.previousDesiredStatus === "paused" }
                 : {
@@ -555,9 +573,7 @@ export async function bindGatewayRetirementConfigCheckpointAtomic(input) {
         const bindingError = checkpointBindingError(input.gatewayId, input.operationId, root, claim, input.checkpoint);
         if (bindingError)
             return { ok: false, error: bindingError };
-        if ((claim.configCheckpoint === null
-            ? rootData.desiredStatus !== "running"
-            : rootData.desiredStatus !== "retired") ||
+        if (rootData.desiredStatus !== (claim.configTerminal === null ? "running" : "retired") ||
             root.liveRevisionId !== claim.liveRevisionId ||
             root.liveRelease !== claim.liveRelease ||
             rootData.desiredRelease !== rootData.liveRelease ||
@@ -576,7 +592,6 @@ export async function bindGatewayRetirementConfigCheckpointAtomic(input) {
                 };
         }
         transaction.set(rootRef, {
-            desiredStatus: "retired",
             retirementClaim: { ...claim, configCheckpoint: input.checkpoint },
             updatedAt: input.now,
             updatedBy: input.updatedBy,
@@ -660,14 +675,129 @@ export async function verifyGatewayRetirementConfigCheckpointAtomic(input) {
         const bindingError = checkpointBindingError(input.gatewayId, input.operationId, root, claim, input.checkpoint);
         if (bindingError)
             return { ok: false, error: bindingError };
-        if (rootData.desiredStatus !== "retired") {
+        if (rootData.desiredStatus !== "running") {
             return {
                 ok: false,
-                error: `gateway ${input.gatewayId} desiredStatus is no longer retired`,
+                error: `gateway ${input.gatewayId} desiredStatus changed before config terminal binding`,
             };
         }
         const revisionsSnap = await transaction.get(input.db.collection(GLM_GATEWAYS_COLLECTION).where("gateway", "==", input.gatewayId));
         const stateError = finalRetirementStateError(input.gatewayId, root, claim, revisionsSnap.docs.map((doc) => ({ id: doc.id, data: doc.data() })), input.now);
         return stateError ? { ok: false, error: stateError } : { ok: true };
+    });
+}
+function terminalBindingError(gatewayId, checkpoint, terminal) {
+    if (readConfigTerminal(terminal) === null ||
+        terminal.retirementRef !==
+            `refs/octogee/system-config/retired/${checkpoint.sourceRevisionId}`) {
+        return `gateway ${gatewayId} retirement config terminal binding is invalid`;
+    }
+    return null;
+}
+export async function bindGatewayRetirementConfigTerminalAtomic(input) {
+    const rootRef = input.db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId);
+    return input.db.runTransaction(async (transaction) => {
+        const rootSnap = await transaction.get(rootRef);
+        const rootData = rootSnap.exists ? rootSnap.data() : undefined;
+        if (!isGatewayDesiredDoc(rootData) || rootData.gatewayId !== input.gatewayId) {
+            return {
+                ok: false,
+                error: `gateway ${input.gatewayId} durable retirement state is unavailable`,
+            };
+        }
+        const root = rootData;
+        const claim = readClaim(root.retirementClaim);
+        if (!claim ||
+            claim.operationId !== input.operationId ||
+            claim.version !== input.version ||
+            claim.phase !== "claimed") {
+            return {
+                ok: false,
+                error: `gateway ${input.gatewayId} retirement claim does not match operation ${input.operationId}`,
+            };
+        }
+        if (claim.configCheckpoint === null ||
+            !sameConfigCheckpoint(claim.configCheckpoint, input.checkpoint)) {
+            return {
+                ok: false,
+                error: `gateway ${input.gatewayId} retirement config checkpoint changed before teardown`,
+            };
+        }
+        const bindingError = checkpointBindingError(input.gatewayId, input.operationId, root, claim, input.checkpoint) ?? terminalBindingError(input.gatewayId, input.checkpoint, input.terminal);
+        if (bindingError)
+            return { ok: false, error: bindingError };
+        const expectedDesiredStatus = claim.configTerminal === null ? "running" : "retired";
+        if (rootData.desiredStatus !== expectedDesiredStatus) {
+            return {
+                ok: false,
+                error: `gateway ${input.gatewayId} desiredStatus changed before config terminal binding`,
+            };
+        }
+        if (claim.configTerminal !== null) {
+            return sameConfigTerminal(claim.configTerminal, input.terminal)
+                ? { ok: true }
+                : {
+                    ok: false,
+                    error: `gateway ${input.gatewayId} retirement config terminal changed before teardown`,
+                };
+        }
+        const revisionsSnap = await transaction.get(input.db.collection(GLM_GATEWAYS_COLLECTION).where("gateway", "==", input.gatewayId));
+        const stateError = finalRetirementStateError(input.gatewayId, root, claim, revisionsSnap.docs.map((doc) => ({ id: doc.id, data: doc.data() })), input.now);
+        if (stateError)
+            return { ok: false, error: stateError };
+        transaction.set(rootRef, {
+            desiredStatus: "retired",
+            retirementClaim: { ...claim, configTerminal: input.terminal },
+            updatedAt: input.now,
+            updatedBy: input.updatedBy,
+        }, { merge: true });
+        return { ok: true };
+    });
+}
+export async function verifyGatewayRetirementConfigTerminalAtomic(input) {
+    const rootRef = input.db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId);
+    return input.db.runTransaction(async (transaction) => {
+        const rootSnap = await transaction.get(rootRef);
+        const rootData = rootSnap.exists ? rootSnap.data() : undefined;
+        if (!isGatewayDesiredDoc(rootData) || rootData.gatewayId !== input.gatewayId) {
+            return {
+                ok: false,
+                error: `gateway ${input.gatewayId} durable retirement state is unavailable`,
+            };
+        }
+        const root = rootData;
+        const claim = readClaim(root.retirementClaim);
+        if (!claim ||
+            claim.operationId !== input.operationId ||
+            claim.version !== input.version ||
+            claim.phase !== "claimed") {
+            return {
+                ok: false,
+                error: `gateway ${input.gatewayId} retirement claim does not match operation ${input.operationId}`,
+            };
+        }
+        if (claim.configCheckpoint === null ||
+            !sameConfigCheckpoint(claim.configCheckpoint, input.checkpoint)) {
+            return {
+                ok: false,
+                error: `gateway ${input.gatewayId} retirement config checkpoint changed before teardown`,
+            };
+        }
+        if (claim.configTerminal === null ||
+            !sameConfigTerminal(claim.configTerminal, input.terminal)) {
+            return {
+                ok: false,
+                error: `gateway ${input.gatewayId} retirement config terminal changed before teardown`,
+            };
+        }
+        const bindingError = checkpointBindingError(input.gatewayId, input.operationId, root, claim, input.checkpoint) ?? terminalBindingError(input.gatewayId, input.checkpoint, input.terminal);
+        if (bindingError)
+            return { ok: false, error: bindingError };
+        return rootData.desiredStatus === "retired"
+            ? { ok: true }
+            : {
+                ok: false,
+                error: `gateway ${input.gatewayId} desiredStatus is no longer retired`,
+            };
     });
 }
