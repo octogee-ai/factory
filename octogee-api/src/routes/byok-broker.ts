@@ -260,13 +260,16 @@ function agentModelTokenSecretName(input: {
 }
 
 async function handleByosubCred(
-  db: Firestore,
-  readCredentialSecret: (name: string, version?: string) => Promise<string>,
-  gatewayId: string,
-  podName: string | undefined,
-  agentId: string,
-  res: Response,
+  input: {
+    db: Firestore;
+    readCredentialSecret: (name: string, version?: string) => Promise<string>;
+    gatewayId: string;
+    podName: string | undefined;
+    agentId: string;
+    res: Response;
+  },
 ): Promise<void> {
+  const { db, readCredentialSecret, gatewayId, podName, agentId, res } = input;
   const assigned = await findAssignedOrInboundMigratingOrConfiguredUserByAgentId(
     db,
     gatewayId,
@@ -316,6 +319,47 @@ async function handleByosubCred(
   });
 
   res.json({ credentials, ...(parsed.skipped.length > 0 ? { skipped: parsed.skipped } : {}) });
+}
+
+async function handleApiKeyCredential(
+  db: Firestore,
+  readCredentialSecret: (name: string, version?: string) => Promise<string>,
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const bound = boundGateway(req, res);
+  if (!bound) return;
+
+  const id = (req.body as { id?: unknown } | undefined)?.id;
+  if (typeof id !== "string") {
+    res.status(400).json({ error: "valid id required" });
+    return;
+  }
+  const parsed = parseByokApiKeyId(id);
+  if (!parsed) {
+    res.status(400).json({ error: "malformed byok id" });
+    return;
+  }
+  const { slug, provider, version } = parsed;
+  const roster = await readAssignedSlugsForGateway(db, bound.gatewayId);
+  if (
+    !roster.includes(slug) &&
+    !(await configuredBuilderSlugCredentialBootstrapAllowed(
+      db,
+      bound.gatewayId,
+      bound.podName,
+      slug,
+    ))
+  ) {
+    res.status(403).json(FORBIDDEN);
+    return;
+  }
+
+  const value = await readCredentialSecret(
+    `byok-${slug}-${provider}`,
+    version ?? "latest",
+  );
+  res.json({ value });
 }
 
 async function handlePlatformEmbeddingKey(
@@ -387,14 +431,14 @@ export function createByokBrokerRoutes(opts: {
       return;
     }
 
-    await handleByosubCred(
+    await handleByosubCred({
       db,
       readCredentialSecret,
-      bound.gatewayId,
-      bound.podName,
+      gatewayId: bound.gatewayId,
+      podName: bound.podName,
       agentId,
       res,
-    );
+    });
   });
 
   // Materialize a byok API-key credential (anthropic/openai key, Grok,
@@ -404,40 +448,7 @@ export function createByokBrokerRoutes(opts: {
   // slugs in its OWN assigned roster (readAssignedSlugsForGateway) — no
   // cross-tenant read.
   router.post("/api-key", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-
-    const id = (req.body as { id?: unknown } | undefined)?.id;
-    if (typeof id !== "string") {
-      res.status(400).json({ error: "valid id required" });
-      return;
-    }
-    const parsed = parseByokApiKeyId(id);
-    if (!parsed) {
-      res.status(400).json({ error: "malformed byok id" });
-      return;
-    }
-    const { slug, provider, version } = parsed;
-
-    const roster = await readAssignedSlugsForGateway(db, bound.gatewayId);
-    if (
-      !roster.includes(slug) &&
-      !(await configuredBuilderSlugCredentialBootstrapAllowed(
-        db,
-        bound.gatewayId,
-        bound.podName,
-        slug,
-      ))
-    ) {
-      res.status(403).json(FORBIDDEN);
-      return;
-    }
-
-    const value = await readCredentialSecret(
-      `byok-${slug}-${provider}`,
-      version ?? "latest",
-    );
-    res.json({ value });
+    await handleApiKeyCredential(db, readCredentialSecret, req, res);
   });
 
   router.post("/platform-embedding-key", async (req, res) => {

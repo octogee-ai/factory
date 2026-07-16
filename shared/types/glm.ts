@@ -395,6 +395,20 @@ export type CustomerMigrationV2Phase =
   | "abortContextCleared"
   | "aborted";
 
+export interface CustomerMigrationV2GatewayRootFence {
+  gatewayId: string;
+  updatedAt: number;
+  latestRelease: number;
+  desiredRelease: number;
+  liveRelease: number;
+  liveRevisionId: string;
+  trafficRevisionId: string;
+  gatewayClass: "builder" | "operator";
+  ownerUid: string;
+  builderSlug: string;
+  configHash: string;
+}
+
 export interface CustomerMigrationV2State {
   phase: CustomerMigrationV2Phase;
   operationId: string;
@@ -406,10 +420,11 @@ export interface CustomerMigrationV2State {
   sourceRelease: number;
   sourceEpoch: number;
   sourceAssignmentMode: "assigned" | "unassigned-live";
-  sourceRootUpdatedAt?: number;
+  sourceRootFence: CustomerMigrationV2GatewayRootFence;
   targetGatewayId: string;
   targetRevisionId: string;
   targetRelease: number;
+  targetRootFence: CustomerMigrationV2GatewayRootFence;
   sourceImageTag: string;
   sourceBuildSha: string;
   sourceOpenclawVersion: string;

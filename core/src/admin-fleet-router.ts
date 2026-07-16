@@ -4699,7 +4699,14 @@ router.post(
         }
         const updatedBy = (req as ActorRequest).uid ?? "unknown";
         const patchResult = await db.runTransaction(async (txn) => {
-          const currentSnap = await txn.get(rootRef);
+          const [currentSnap, activeOperations] = await Promise.all([
+            txn.get(rootRef),
+            txn.get(
+              db
+                .collection(GLM_OPERATIONS_COLLECTION)
+                .where("status", "in", ["pending", "running"]),
+            ),
+          ]);
           const currentData = currentSnap.exists
             ? (currentSnap.data() as Record<string, unknown> | undefined)
             : undefined;
@@ -4709,6 +4716,25 @@ router.post(
             return {
               ok: false as const,
               error: "gateway has a current retirement claim",
+            };
+          }
+          const migrationConflict = findActiveGatewayMigration(
+            id,
+            activeOperations.docs.map((doc) => {
+              const operation = doc.data() as Record<string, unknown>;
+              return {
+                id: doc.id,
+                kind: typeof operation.kind === "string" ? operation.kind : "",
+                status: typeof operation.status === "string" ? operation.status : "",
+                input: operation.input,
+                customerMigrationV2: operation.customerMigrationV2,
+              };
+            }),
+          );
+          if (migrationConflict) {
+            return {
+              ok: false as const,
+              error: `customer migration is in flight for gateway ${id}`,
             };
           }
           txn.update(rootRef, {

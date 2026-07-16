@@ -30,6 +30,27 @@ const SNAPSHOT: FleetBrokerUserSnapshot = {
   coachMmUserId: "mm-coach",
 };
 
+function gatewayRootFence(
+  gatewayId: string,
+  revisionId = `${gatewayId}-r1`,
+  release = 1,
+  updatedAt = gatewayId === "gw-blue" ? 17 : 18,
+): NonNullable<Operation["customerMigrationV2"]>["sourceRootFence"] {
+  return {
+    gatewayId,
+    updatedAt,
+    latestRelease: release,
+    desiredRelease: release,
+    liveRelease: release,
+    liveRevisionId: revisionId,
+    trafficRevisionId: revisionId,
+    gatewayClass: "operator",
+    ownerUid: "uid-alice",
+    builderSlug: "alice",
+    configHash: gatewayId === "gw-blue" ? "7".repeat(64) : "8".repeat(64),
+  };
+}
+
 function mkOp(overrides: Partial<Operation>): Operation {
   return {
     id: "op-1",
@@ -199,6 +220,7 @@ function makeDeps(
       openclawVersion: revisionId === "gw-green-r1" ? "2026.7.2" : "2026.7.1",
       startedAt: revisionId === "gw-green-r1" ? 4_500 : 4_000,
     })),
+    readGatewayRootFence: vi.fn(async (gatewayId: string) => gatewayRootFence(gatewayId)),
     installTargetSystemConfigContext: vi.fn(async () => undefined),
     clearTargetSystemConfigContext: vi.fn(async () => undefined),
     assertCandidateProofCurrent: vi.fn(async () => undefined),
@@ -254,9 +276,11 @@ function durableV2State(
     sourceRelease: 1,
     sourceEpoch: 1,
     sourceAssignmentMode: "assigned",
+    sourceRootFence: gatewayRootFence("gw-blue"),
     targetGatewayId: "gw-green",
     targetRevisionId: "gw-green-r1",
     targetRelease: 1,
+    targetRootFence: gatewayRootFence("gw-green"),
     sourceImageTag: "source-image",
     sourceBuildSha: "source-build",
     sourceOpenclawVersion: "2026.7.1",
@@ -496,7 +520,9 @@ describe("createMigrateCustomerHandler — ordinary isolated protocol V2", () =>
     expect(deps.commitV2Cutover).toHaveBeenCalledWith(expect.objectContaining({
       operationId: "op-1",
       sourceRevisionId: "gw-blue-r1",
+      sourceRootFence: gatewayRootFence("gw-blue"),
       targetRevisionId: "gw-green-r1",
+      targetRootFence: gatewayRootFence("gw-green"),
     }));
   });
 
@@ -507,7 +533,6 @@ describe("createMigrateCustomerHandler — ordinary isolated protocol V2", () =>
         revisionId: "gw-blue-r1",
         release: 1,
         assignmentMode: "unassigned-live",
-        rootUpdatedAt: 17,
       })),
     });
     const ctx = makeCtx();
@@ -517,7 +542,8 @@ describe("createMigrateCustomerHandler — ordinary isolated protocol V2", () =>
     expect(result.success).toBe(true);
     expect(ctx.persistedV2[0]).toMatchObject({
       sourceAssignmentMode: "unassigned-live",
-      sourceRootUpdatedAt: 17,
+      sourceRootFence: gatewayRootFence("gw-blue"),
+      targetRootFence: gatewayRootFence("gw-green"),
       sourceEpoch: 0,
     });
     expect(deps.setAssignmentState).toHaveBeenCalledWith({
@@ -533,36 +559,29 @@ describe("createMigrateCustomerHandler — ordinary isolated protocol V2", () =>
     });
     expect(deps.commitV2Cutover).toHaveBeenCalledWith(expect.objectContaining({
       sourceAssignmentMode: "unassigned-live",
-      sourceRootUpdatedAt: 17,
+      sourceRootFence: gatewayRootFence("gw-blue"),
+      targetRootFence: gatewayRootFence("gw-green"),
       sourceRelease: 1,
     }));
   });
 
   it("rechecks exact placement before freeze and refuses a root generation race", async () => {
-    const resolveFromRevision = vi
-      .fn()
-      .mockResolvedValueOnce({
-        revisionId: "gw-blue-r1",
-        release: 1,
-        assignmentMode: "unassigned-live",
-        rootUpdatedAt: 17,
-      })
-      .mockResolvedValueOnce({
-        revisionId: "gw-blue-r1",
-        release: 1,
-        assignmentMode: "unassigned-live",
-        rootUpdatedAt: 18,
-      });
+    let sourceRootReads = 0;
+    const readGatewayRootFence = vi.fn(async (gatewayId: string) => {
+      if (gatewayId !== "gw-blue") return gatewayRootFence(gatewayId);
+      sourceRootReads += 1;
+      return gatewayRootFence(gatewayId, "gw-blue-r1", 1, sourceRootReads === 1 ? 17 : 19);
+    });
     const { deps, client } = makeDeps({
       resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
-      resolveFromRevision,
+      readGatewayRootFence,
     });
     const ctx = makeCtx();
 
     const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
 
     expect(result).toMatchObject({ success: false, rolledBack: false });
-    expect(result.error).toMatch(/source placement changed before freeze/i);
+    expect(result.error).toMatch(/source root changed before freeze/i);
     expect(ctx.persistedV2.map((entry) => entry.phase)).toEqual(["initialized"]);
     expect(client.freezeConfigV2).not.toHaveBeenCalled();
     expect(client.abortConfigV2).not.toHaveBeenCalled();
@@ -583,9 +602,12 @@ describe("createMigrateCustomerHandler — ordinary isolated protocol V2", () =>
         sourceRevisionId: "gw-blue-r1",
         sourceRelease: 1,
         sourceEpoch: 1,
+        sourceAssignmentMode: "assigned",
+        sourceRootFence: gatewayRootFence("gw-blue"),
         targetGatewayId: "gw-green",
         targetRevisionId: "gw-green-r1",
         targetRelease: 1,
+        targetRootFence: gatewayRootFence("gw-green"),
         sourceImageTag: "source-image",
         sourceBuildSha: "source-build",
         sourceOpenclawVersion: "2026.7.1",

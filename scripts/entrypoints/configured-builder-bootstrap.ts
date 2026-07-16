@@ -20,7 +20,11 @@ export function resolveConfiguredBuilderBootstrapInput(
 ): ConfiguredBuilderBootstrapInput {
   const gatewayId = required(env, "GATEWAY_ID");
   const revisionId = required(env, "GATEWAY_REVISION_ID");
-  if (!revisionId.match(new RegExp(`^${gatewayId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-r[1-9]\\d*$`))) {
+  const revisionPrefix = `${gatewayId}-r`;
+  const revisionNumber = revisionId.startsWith(revisionPrefix)
+    ? revisionId.slice(revisionPrefix.length)
+    : "";
+  if (!/^[1-9]\d*$/.test(revisionNumber)) {
     throw new Error("GATEWAY_REVISION_ID does not belong to GATEWAY_ID");
   }
   return {
