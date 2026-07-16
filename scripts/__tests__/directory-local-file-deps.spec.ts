@@ -77,6 +77,14 @@ function copySourceToInstalled(sourceDir: string, consumerDir: string): void {
   fs.cpSync(sourceDir, destination, { recursive: true });
 }
 
+function readJson(filePath: string): Record<string, unknown> {
+  return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+}
+
+function writeJson(filePath: string, value: unknown): void {
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
 afterEach(() => {
   for (const root of fixtures.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
@@ -110,21 +118,89 @@ describe("directory local file dependencies", () => {
     const sourceDir = writePackage(root, "source", "@octogee/source");
     const consumerDir = writeConsumer(root);
     const lockBefore = fs.readFileSync(path.join(consumerDir, "package-lock.json"), "utf8");
-    const installs: string[][] = [];
+    const installs: Array<{ specs: string[]; preserveLock: boolean }> = [];
 
     const result = syncLocalFileDeps({
       rootDir: root,
       consumerDirs: [consumerDir],
-      installConsumerDepsFn: (dir, specs) => {
-        installs.push(specs);
+      installConsumerDepsFn: (dir, specs, preserveLock) => {
+        installs.push({ specs, preserveLock });
         copySourceToInstalled(sourceDir, dir);
       },
       stdio: "ignore",
     });
 
     expect(result).toEqual({ staleCount: 1, syncedConsumers: [consumerDir] });
-    expect(installs).toEqual([["@octogee/source@file:../source"]]);
+    expect(installs).toEqual([{
+      specs: ["@octogee/source@file:../source"],
+      preserveLock: true,
+    }]);
     expect(fs.readFileSync(path.join(consumerDir, "package-lock.json"), "utf8")).toBe(lockBefore);
+  });
+
+  it("detects producer package metadata drift in the consumer lock", () => {
+    const root = fixture();
+    const sourceDir = writePackage(root, "source", "@octogee/source");
+    const consumerDir = writeConsumer(root);
+    copySourceToInstalled(sourceDir, consumerDir);
+    const sourcePackagePath = path.join(sourceDir, "package.json");
+    const sourcePackage = readJson(sourcePackagePath);
+    sourcePackage.dependencies = { "@fixture/runtime": "file:../runtime" };
+    writeJson(sourcePackagePath, sourcePackage);
+    writeJson(
+      path.join(consumerDir, "node_modules", "@octogee", "source", "package.json"),
+      sourcePackage,
+    );
+    const [dep] = discoverLocalFileDeps({ rootDir: root, consumerDirs: [consumerDir] });
+
+    expect(inspectLocalFileDep(dep).staleReasons).toEqual([
+      "package-lock.json:dependencies",
+    ]);
+  });
+
+  it("installs transitive runtime directory dependencies in the producer refresh transaction", () => {
+    const root = fixture();
+    const sourceDir = writePackage(root, "source", "@octogee/source");
+    writePackage(root, "runtime", "@fixture/runtime");
+    const sourcePackagePath = path.join(sourceDir, "package.json");
+    const sourcePackage = readJson(sourcePackagePath);
+    sourcePackage.dependencies = { "@fixture/runtime": "file:../runtime" };
+    writeJson(sourcePackagePath, sourcePackage);
+    const consumerDir = writeConsumer(root);
+    const installs: Array<{ specs: string[]; preserveLock: boolean }> = [];
+
+    syncLocalFileDeps({
+      rootDir: root,
+      consumerDirs: [consumerDir],
+      installConsumerDepsFn: (_dir, specs, preserveLock) => {
+        installs.push({ specs, preserveLock });
+        copySourceToInstalled(sourceDir, consumerDir);
+        writeJson(path.join(consumerDir, "package-lock.json"), {
+          name: "consumer",
+          lockfileVersion: 3,
+          packages: {
+            "": {
+              name: "consumer",
+              dependencies: { "@octogee/source": "file:../source" },
+            },
+            "node_modules/@octogee/source": {
+              version: "1.0.0",
+              resolved: "file:../source",
+              dependencies: { "@fixture/runtime": "file:../runtime" },
+            },
+          },
+        });
+      },
+      stdio: "ignore",
+    });
+
+    expect(installs).toEqual([{
+      specs: [
+        "@fixture/runtime@file:../runtime",
+        "@octogee/source@file:../source",
+      ],
+      preserveLock: false,
+    }]);
   });
 
   it("accepts a current installed directory dependency", () => {
@@ -201,4 +277,98 @@ describe("directory local file dependencies", () => {
     );
     expect(fs.readFileSync(path.join(consumerDir, "package-lock.json"), "utf8")).toBe(lockBefore);
   });
+
+  it("refreshes producer metadata while preserving every consumer dependency section pin", () => {
+    const root = fixture();
+    const sourceDir = writePackage(root, "source", "@octogee/source");
+    const consumerDir = path.join(root, "consumer");
+    fs.mkdirSync(consumerDir);
+    writeJson(path.join(consumerDir, "package.json"), {
+      name: "consumer",
+      version: "1.0.0",
+      private: true,
+      devDependencies: { "@octogee/source": "file:../source" },
+      peerDependencies: { "@octogee/source": "^1.0.0" },
+    });
+    fs.writeFileSync(path.join(consumerDir, ".npmrc"), "install-links=true\n");
+    execFileSync(NPM_BIN, ["install", "--ignore-scripts", "--no-audit", "--no-fund"], {
+      cwd: consumerDir,
+      stdio: "pipe",
+    });
+    const sourcePackagePath = path.join(sourceDir, "package.json");
+    const sourcePackage = readJson(sourcePackagePath);
+    sourcePackage.version = "1.0.1";
+    writeJson(sourcePackagePath, sourcePackage);
+
+    syncLocalFileDeps({ rootDir: root, consumerDirs: [consumerDir], stdio: "ignore" });
+
+    const consumerPackage = readJson(path.join(consumerDir, "package.json"));
+    expect(consumerPackage.devDependencies).toEqual({
+      "@octogee/source": "file:../source",
+    });
+    expect(consumerPackage.peerDependencies).toEqual({
+      "@octogee/source": "^1.0.0",
+    });
+    const lock = readJson(path.join(consumerDir, "package-lock.json")) as {
+      packages: Record<string, { version: string }>;
+    };
+    expect(lock.packages["node_modules/@octogee/source"].version).toBe("1.0.1");
+  }, 30_000);
+
+  it("repairs a producer runtime graph before npm 10 performs the next clean install", () => {
+    const root = fixture();
+    const sourceDir = writePackage(root, "source", "@octogee/source");
+    const runtimeDir = path.join(root, "runtime");
+    fs.mkdirSync(runtimeDir);
+    writeJson(path.join(runtimeDir, "package.json"), {
+      name: "@fixture/runtime",
+      version: "1.0.0",
+      type: "module",
+      files: ["index.js"],
+      exports: { ".": "./index.js" },
+    });
+    fs.writeFileSync(path.join(runtimeDir, "index.js"), "export const value = 2;\n");
+    const consumerDir = writeConsumer(root);
+    execFileSync(NPM_BIN, ["install", "--ignore-scripts", "--no-audit", "--no-fund"], {
+      cwd: consumerDir,
+      stdio: "pipe",
+    });
+    const sourcePackagePath = path.join(sourceDir, "package.json");
+    const sourcePackage = readJson(sourcePackagePath);
+    sourcePackage.dependencies = { "@fixture/runtime": "file:../runtime" };
+    writeJson(sourcePackagePath, sourcePackage);
+    fs.writeFileSync(
+      path.join(sourceDir, "dist", "index.js"),
+      'import { value } from "@fixture/runtime";\nexport { value };\n',
+    );
+
+    fs.rmSync(path.join(consumerDir, "node_modules"), { recursive: true, force: true });
+    execFileSync(NPM_BIN, ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], {
+      cwd: consumerDir,
+      stdio: "pipe",
+    });
+    expect(fs.existsSync(path.join(consumerDir, "node_modules", "@fixture", "runtime")))
+      .toBe(false);
+
+    syncLocalFileDeps({ rootDir: root, consumerDirs: [consumerDir], stdio: "ignore" });
+
+    const repairedLock = readJson(path.join(consumerDir, "package-lock.json")) as {
+      packages: Record<string, { dependencies?: Record<string, string> }>;
+    };
+    expect(repairedLock.packages["node_modules/@octogee/source"].dependencies).toEqual({
+      "@fixture/runtime": "file:../runtime",
+    });
+    fs.rmSync(path.join(consumerDir, "node_modules"), { recursive: true, force: true });
+    execFileSync(NPM_BIN, ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], {
+      cwd: consumerDir,
+      stdio: "pipe",
+    });
+    expect(fs.existsSync(path.join(consumerDir, "node_modules", "@fixture", "runtime")))
+      .toBe(true);
+    expect(execFileSync(
+      process.execPath,
+      ["--input-type=module", "--eval", 'console.log((await import("@octogee/source")).value)'],
+      { cwd: consumerDir, encoding: "utf8" },
+    ).trim()).toBe("2");
+  }, 30_000);
 });

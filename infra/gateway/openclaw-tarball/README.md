@@ -1084,6 +1084,11 @@ Reassess next OC upgrade."*). Update it every cycle.
 
 ## Current patches
 
+Executed roll records:
+
+- [OpenClaw 2026.7.2-beta.1 preview build notes](roll-notes/2026.7.2-beta.1.md) — coexist-stack
+  re-cut, test diagnoses, artifacts, matrix/base builds, release result, and operator rollout tag.
+
 Authoritative source: `git log v<OPENCLAW_VERSION>..octogee/gateway-scaling-patches-v<OPENCLAW_VERSION>` in the fork checkout. As of v2026.7.1 (GA — current, fork `5e38a689`, patched Mattermost artifact `5e38a689` (same source SHA)) the fork carries the **RE-AUTHORED 13-commit stack** (2026-07-14): **8 classic scaling patches + the warm-terminal-fallback patch + 3 consolidated agent-conversation patches + 1 durable-activity-capture patch**. The tree is PROVEN identical to the superseded 22-commit GA cut (`29a82fc3`, preserved on ceckert as `...-v2026.7.1-29a82fc3`): the capture commit is an exact tree restore from `29a82fc35ed`, so the full diff between the two cuts is the retired ✅ connect-log marker (operator FINAL ruling 2026-07-14: gone for good) plus three oxfmt whitespace rewraps. Same behavior on the pod; the smaller re-authored surface exists to make Step-5 conflict archaeology cheap. The agent-conversation trio = channel/DM thread sessions (config surface the image config probe writes) · the live `agent.activity.snapshot` pipeline (runs/admissions/queue the gateway-edge run-live bridge reads) · monitor admission wiring. The capture patch = core publisher + per-account outbox spool with exactly-once receipts + HTTPS intake transport + fail-open handling — the ACTIVITY-STREAM-SPEC §4 durability floor; its projection target (paired channel today → run-root thread at Phase 1) lives octogee-side in gateway-edge, so retargeting never needs a fork roll. Warm-terminal-fallback: failed terminal runs finalize the streamed draft in place with warm Octo copy — no "(message deleted)" tombstone, no raw `⚠️ <tool> failed` on the coach surface (receipts half = octogee PR #2263). Surgical-reload stays in the upstream-PR form (#99312, still open; optional-with-default `restartChannelAccounts`). Known-red on the pristine GA tag (NOT ours; verified in fresh worktrees): entry-freshness daily-freshness, plugin-registry-snapshot load-path precedence, sdk-alias ×2.
 
 Live short SHAs at v2026.7.1 GA (top of current's integration branch is `5e38a689`) — these rotate every cycle since cherry-pick creates new commits each time; the "Essential" section below cites the **original introduction** commit IDs for provenance:
@@ -1109,7 +1114,7 @@ Per-slot top SHAs:
 |---|---|---|
 | current | 2026.7.1 (GA) | `5e38a689` |
 | previous | 2026.6.11 (GA) | `652ba8cf` |
-| preview | _(empty)_ | — |
+| preview | 2026.7.2-beta.1 | `5a7dcfe6` |
 
 **Essential:**
 

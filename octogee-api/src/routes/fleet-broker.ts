@@ -13,6 +13,7 @@ import type {
   FleetBrokerBlobSignedUrl,
   FleetBrokerAssignmentRosterEntry,
   FleetBrokerChannelBinding,
+  FleetBrokerConfiguredBuilderBootstrap,
   FleetBrokerGreetingResult,
   FleetBrokerMattermostUpdate,
   FleetBrokerPreStopFlushEvent,
@@ -52,6 +53,7 @@ import {
   type GatewayDoc,
 } from "@octogee/shared/types/gateway-releases";
 import {
+  configuredBuilderCredentialBootstrapAllowed,
   gatewayRevisionIdFromPodName,
   isGatewayMutableConfigForGateway,
   type GatewayMutableConfig,
@@ -778,6 +780,57 @@ export async function findAssignedOrInboundMigratingUserByAgentId(
   return null;
 }
 
+export async function findAssignedOrInboundMigratingOrConfiguredUserByAgentId(
+  db: Firestore,
+  gatewayId: string,
+  podName: string | undefined,
+  agentId: string,
+): Promise<{ uid: string; data: Record<string, unknown> } | null> {
+  const admitted = await findAssignedOrInboundMigratingUserByAgentId(db, gatewayId, agentId);
+  if (admitted) return admitted;
+
+  const revisionId = gatewayRevisionIdFromPodName(gatewayId, podName);
+  if (!revisionId) return null;
+  const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+  const gateway = gatewaySnap.data();
+  const candidates = await findUsersByAgentId(db, agentId);
+  for (const candidate of candidates) {
+    const slug = slugFromAssignedUser(candidate.data);
+    if (
+      slug &&
+      configuredBuilderCredentialBootstrapAllowed(gateway, {
+        gatewayId,
+        revisionId,
+        slug,
+        uid: candidate.uid,
+      })
+    ) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+export async function configuredBuilderSlugCredentialBootstrapAllowed(
+  db: Firestore,
+  gatewayId: string,
+  podName: string | undefined,
+  slug: string,
+): Promise<boolean> {
+  const revisionId = gatewayRevisionIdFromPodName(gatewayId, podName);
+  if (!revisionId) return false;
+  const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+  const gateway = gatewaySnap.data();
+  if (!isGatewayMutableConfigForGateway(gateway, gatewayId)) return false;
+  return typeof gateway.ownerUid === "string" &&
+    configuredBuilderCredentialBootstrapAllowed(gateway, {
+      gatewayId,
+      revisionId,
+      slug,
+      uid: gateway.ownerUid,
+    });
+}
+
 async function requireAssignedUser(
   db: Firestore,
   req: Request,
@@ -1340,6 +1393,70 @@ function installSnapshotRoutes(
       return;
     }
     res.json({ uid });
+  });
+
+  router.post("/configured-builder-bootstrap", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const revisionId = typeof req.body?.revisionId === "string" ? req.body.revisionId : "";
+    const slug = typeof req.body?.slug === "string" ? req.body.slug : "";
+    const authenticatedRevisionId = gatewayRevisionIdFromPodName(
+      bound.gatewayId,
+      bound.podName,
+    );
+    if (
+      !isValidUsername(slug) ||
+      !authenticatedRevisionId ||
+      revisionId !== authenticatedRevisionId
+    ) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+
+    const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get();
+    const gateway = gatewaySnap.data();
+    const uid = isGatewayMutableConfigForGateway(gateway, bound.gatewayId)
+      ? gateway.ownerUid
+      : null;
+    if (
+      typeof uid !== "string" ||
+      !configuredBuilderCredentialBootstrapAllowed(gateway, {
+        gatewayId: bound.gatewayId,
+        revisionId: authenticatedRevisionId,
+        slug,
+        uid,
+      })
+    ) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+
+    const [userSnap, coachSnap] = await Promise.all([
+      db.collection("users").doc(uid).get(),
+      db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
+    ]);
+    const user = userSnap.data() as Record<string, unknown> | undefined;
+    const coach = coachSnap.data() as Record<string, unknown> | undefined;
+    const agentId = `octogee-${slug}-coach`;
+    const bootstrap: FleetBrokerConfiguredBuilderBootstrap | null =
+      user &&
+      slugFromAssignedUser(user) === slug &&
+      agentBelongsToAssignedWorkspace(user, agentId) &&
+      typeof coach?.personalToken === "string" &&
+      coach.personalToken.length > 0
+        ? {
+            uid,
+            slug,
+            agentId,
+            accountId: `${slug}-coach`,
+            coachToken: coach.personalToken,
+          }
+        : null;
+    if (!bootstrap) {
+      res.status(404).json({ error: "configured_builder_bootstrap_unavailable" });
+      return;
+    }
+    res.json({ bootstrap });
   });
 
   router.post("/user-snapshot", async (req, res) => {
