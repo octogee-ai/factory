@@ -37,7 +37,6 @@ export function isW9TestPublisherLiveExperiment(value) {
         DIGEST_BOUND_IMAGE_REFERENCE_PATTERN.test(mattermostOverlay.imageReference));
 }
 const RELEASE_PAYLOAD_FIELD_NAMES = new Set([
-    "macOpsTokenProtocol",
     "imageRepository",
     "imageTag",
     "gatewayEdgeImage",
@@ -67,10 +66,7 @@ function hasReleasePayloadShape(value) {
         RELEASE_PAYLOAD_REQUIRED_FIELDS.some((field) => !Object.prototype.hasOwnProperty.call(value, field)));
 }
 function hasReleasePayloadIdentity(value) {
-    return ((value.macOpsTokenProtocol === undefined ||
-        value.macOpsTokenProtocol === 1 ||
-        value.macOpsTokenProtocol === 2) &&
-        typeof value.imageRepository === "string" &&
+    return (typeof value.imageRepository === "string" &&
         value.imageRepository.length > 0 &&
         typeof value.imageTag === "string" &&
         value.imageTag.length > 0 &&
@@ -86,15 +82,6 @@ export function isW9GatewayEdgeImage(value, gatewayImageTag) {
         isW9CandidateImageTag(value.imageTag) &&
         isW9CandidateImageTag(gatewayImageTag) &&
         w9CandidateImageName(value.imageTag) === w9CandidateImageName(gatewayImageTag));
-}
-export const CURRENT_MAC_OPS_TOKEN_PROTOCOL = 2;
-export function releaseMacOpsTokenProtocol(payload) {
-    if (!payload || typeof payload !== "object" || Array.isArray(payload))
-        return null;
-    const protocol = payload.macOpsTokenProtocol;
-    if (protocol === undefined || protocol === 1)
-        return 1;
-    return protocol === 2 ? 2 : null;
 }
 export function isAssignmentState(value) {
     return value === "serving" || value === "quiescing" || value === "migrating";
@@ -239,7 +226,6 @@ function compareKeys(a, b) {
 export const RELEASE_NEW_REVISION_FIELDS = [
     "imageRepository",
     "imageTag",
-    "macOpsTokenProtocol",
     "testExperiment",
 ];
 // Release-payload fields that are release-audited but may reconcile IN PLACE on

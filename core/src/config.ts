@@ -6,8 +6,10 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export const OPENCLAW_DIR    = path.join(os.homedir(), ".openclaw");
-export const OPENCLAW_CONFIG = path.join(OPENCLAW_DIR, "openclaw.json");
+export const OPENCLAW_DIR = process.env.OPENCLAW_DIR?.trim()
+  || path.join(os.homedir(), ".openclaw");
+export const OPENCLAW_CONFIG = process.env.OPENCLAW_CONFIG_PATH?.trim()
+  || path.join(OPENCLAW_DIR, "openclaw.json");
 export const AGENTS_DIR = process.env.OPENCLAW_AGENTS_DIR
   ?? path.join(OPENCLAW_DIR, "agents");
 

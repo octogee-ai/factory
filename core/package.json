@@ -72,6 +72,14 @@
       "types": "./dist/config.d.ts",
       "default": "./dist/config.js"
     },
+    "./system-config-invariants": {
+      "types": "./dist/system-config-invariants.d.ts",
+      "default": "./dist/system-config-invariants.js"
+    },
+    "./system-config-mutation-lease": {
+      "types": "./dist/system-config-mutation-lease.d.ts",
+      "default": "./dist/system-config-mutation-lease.js"
+    },
     "./context-file-convergence": {
       "types": "./dist/context-file-convergence.d.ts",
       "default": "./dist/context-file-convergence.js"
@@ -346,6 +354,12 @@
       ],
       "config": [
         "dist/config.d.ts"
+      ],
+      "system-config-invariants": [
+        "dist/system-config-invariants.d.ts"
+      ],
+      "system-config-mutation-lease": [
+        "dist/system-config-mutation-lease.d.ts"
       ],
       "context-file-convergence": [
         "dist/context-file-convergence.d.ts"

@@ -1,5 +1,13 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
 import {
+  createFleetSystemConfigFlush,
+  createSystemConfigMutationGatedRpc,
+  assertFleetConfigSlug,
+  restoreRevisionSystemConfig,
   resolveFleetControllerEntrypointConfig,
 } from "../entrypoints/fleet-controller.js";
 import {
@@ -12,6 +20,11 @@ import {
 import { parseFleetArgs, resolveFleetCredentialMode } from "../ops/fleet.js";
 
 describe("fleet-controller entrypoint config", () => {
+  const rollEnv = {
+    GATEWAY_CLASS: "builder",
+    GATEWAY_ID: "default",
+    API_PUBLIC_URL: "https://api.octogee.com",
+  };
   it("normalizes local gateways and trims dedicated builder slugs", () => {
     expect(resolveFleetControllerEntrypointConfig({
       BUILD_SHA: "abc123",
@@ -43,6 +56,262 @@ describe("fleet-controller entrypoint config", () => {
     expect(
       resolveFleetControllerEntrypointConfig({}, { gatewayId: "bender", revisionId: "bender-r2" }).revisionId,
     ).toBe("bender-r2");
+  });
+
+  it("fails a controller-requested flush until the durable config commit is accepted", async () => {
+    const sync = vi.fn(() => ({
+      committed: false,
+      pushed: false,
+      skipped: "sync-locked",
+      pending: true,
+    }));
+    const flush = createFleetSystemConfigFlush("alice", () => {}, sync);
+
+    await expect(flush?.()).rejects.toThrow("sync-locked");
+    expect(sync).toHaveBeenCalledWith("alice", expect.objectContaining({
+      durablePolicy: true,
+      source: "auto-watch",
+    }));
+  });
+
+  it("rejects a signed config RPC for a builder other than the gateway owner", () => {
+    expect(() => assertFleetConfigSlug("alice", "mallory")).toThrow(/does not match gateway builder/i);
+    expect(() => assertFleetConfigSlug("alice", "alice")).not.toThrow();
+  });
+
+  it("blocks ordinary runtime config.apply while the controller freeze marker exists", async () => {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-entrypoint-freeze-"));
+    const configApply = vi.fn(async () => ({ ok: true as const, hash: "next" }));
+    const rpc = createSystemConfigMutationGatedRpc({
+      configGet: vi.fn(async () => ({ config: {}, hash: "current" })),
+      configApply,
+      channelsStatus: vi.fn(async () => ({ channels: [] })),
+    } as never, openclawDir);
+    fs.writeFileSync(path.join(openclawDir, "system_config.freeze.json"), JSON.stringify({
+      migrationId: "mig-1",
+      slug: "alice",
+      directoryMode: 0o700,
+      configMode: 0o600,
+    }));
+
+    try {
+      await expect(rpc.configApply({}, "current")).rejects.toThrow(/frozen by mig-1/i);
+      expect(configApply).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(openclawDir, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks ordinary runtime config.patch while the controller freeze marker exists", async () => {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-entrypoint-freeze-"));
+    const configPatch = vi.fn(async () => ({ ok: true as const, hash: "next" }));
+    const rpc = createSystemConfigMutationGatedRpc({
+      configGet: vi.fn(async () => ({ config: {}, hash: "current" })),
+      configApply: vi.fn(async () => ({ ok: true as const, hash: "next" })),
+      configPatch,
+      channelsStatus: vi.fn(async () => ({ channels: [] })),
+    } as never, openclawDir);
+    fs.writeFileSync(path.join(openclawDir, "system_config.freeze.json"), JSON.stringify({
+      migrationId: "mig-1",
+      slug: "alice",
+      directoryMode: 0o700,
+      configMode: 0o600,
+    }));
+
+    try {
+      await expect(rpc.configPatch({ agents: {} }, "current", { replacePaths: ["agents.list"] }))
+        .rejects.toThrow(/frozen by mig-1/i);
+      expect(configPatch).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(openclawDir, { recursive: true, force: true });
+    }
+  });
+
+  it("serializes ordinary runtime config.apply against the roll writer lock", async () => {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-entrypoint-lock-"));
+    const configApply = vi.fn(async () => ({ ok: true as const, hash: "next" }));
+    const rpc = createSystemConfigMutationGatedRpc({
+      configGet: vi.fn(async () => ({ config: {}, hash: "current" })),
+      configApply,
+      channelsStatus: vi.fn(async () => ({ channels: [] })),
+    } as never, openclawDir);
+    fs.writeFileSync(path.join(openclawDir, "system_config.sync.lock"), `${process.pid}\n`);
+
+    try {
+      await expect(rpc.configApply({}, "current")).rejects.toThrow(/writer lock is busy/i);
+      expect(configApply).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(openclawDir, { recursive: true, force: true });
+    }
+  });
+
+  it("serializes ordinary runtime config.patch against the roll writer lock", async () => {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-entrypoint-lock-"));
+    const configPatch = vi.fn(async () => ({ ok: true as const, hash: "next" }));
+    const rpc = createSystemConfigMutationGatedRpc({
+      configGet: vi.fn(async () => ({ config: {}, hash: "current" })),
+      configApply: vi.fn(async () => ({ ok: true as const, hash: "next" })),
+      configPatch,
+      channelsStatus: vi.fn(async () => ({ channels: [] })),
+    } as never, openclawDir);
+    fs.writeFileSync(path.join(openclawDir, "system_config.sync.lock"), `${process.pid}\n`);
+
+    try {
+      await expect(rpc.configPatch({ agents: {} }, "current", { replacePaths: ["agents.list"] }))
+        .rejects.toThrow(/writer lock is busy/i);
+      expect(configPatch).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(openclawDir, { recursive: true, force: true });
+    }
+  });
+
+  it("holds the writer lease through awaited config.patch and preserves its arguments and result", async () => {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-entrypoint-lock-"));
+    let resolvePatch: ((value: { ok: true; hash: string }) => void) | undefined;
+    const configPatch = vi.fn(() => new Promise<{ ok: true; hash: string }>((resolve) => {
+      resolvePatch = resolve;
+    }));
+    const rpc = createSystemConfigMutationGatedRpc({
+      configGet: vi.fn(async () => ({ config: {}, hash: "current" })),
+      configApply: vi.fn(async () => ({ ok: true as const, hash: "next" })),
+      configPatch,
+      channelsStatus: vi.fn(async () => ({ channels: [] })),
+    } as never, openclawDir);
+    const patch = { agents: { list: [] } };
+    const opts = { replacePaths: ["agents.list"] };
+
+    try {
+      const pending = rpc.configPatch(patch, "current", opts);
+      await vi.waitFor(() => expect(configPatch).toHaveBeenCalled());
+      await expect(acquireSystemConfigMutationLease({ openclawDir })).resolves.toEqual({
+        ok: false,
+        code: "writer-lock-busy",
+      });
+      resolvePatch?.({ ok: true, hash: "next" });
+      await expect(pending).resolves.toEqual({ ok: true, hash: "next" });
+      expect(configPatch).toHaveBeenCalledWith(patch, "current", opts);
+      const after = await acquireSystemConfigMutationLease({ openclawDir });
+      expect(after.ok).toBe(true);
+      if (after.ok) await after.lease.release();
+    } finally {
+      fs.rmSync(openclawDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records config readiness only after proof and a fresh revision-scoped runtime observation", async () => {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-entrypoint-config-"));
+    const configPath = path.join(openclawDir, "openclaw.json");
+    fs.writeFileSync(configPath, '{"gateway":{"mode":"local"}}\n');
+    const order: string[] = [];
+    const configGet = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        order.push("config-get-before-load");
+        return { config: { stale: true }, hash: "runtime-before" };
+      })
+      .mockImplementationOnce(async () => {
+        order.push("config-get-after-proof");
+        return { config: { gateway: { mode: "local" } }, hash: "runtime-after" };
+      });
+    const rpc = {
+      configGet,
+      configApply: vi.fn(async (config: object, baseHash: string) => {
+        order.push("config-apply");
+        expect(config).toEqual({ gateway: { mode: "local" } });
+        expect(baseHash).toBe("runtime-before");
+        return { ok: true as const, hash: "runtime-after" };
+      }),
+      channelsStatus: vi.fn(async () => {
+        order.push("channels-status");
+        return { channels: [] };
+      }),
+    };
+    const now = vi.fn()
+      .mockReturnValueOnce(500)
+      .mockReturnValueOnce(501);
+    const restore = vi.fn(async (options: {
+      env?: NodeJS.ProcessEnv;
+      source?: string;
+      loadRuntimeConfig?: (path: string) => Promise<void>;
+    }) => {
+      expect(options).toMatchObject({ env: rollEnv, source: "migration-restore" });
+      await options.loadRuntimeConfig?.(configPath);
+      order.push("proof");
+      return {
+        restoredCommit: "a".repeat(40),
+        acceptedCommit: "c".repeat(40),
+        configHash: "d".repeat(64),
+      };
+    });
+
+    try {
+      const result = await restoreRevisionSystemConfig({
+        checkpointCommit: "a".repeat(40),
+        slug: "alice",
+        openclawDir,
+        revisionId: "default-r2",
+        env: rollEnv,
+        source: "migration-restore",
+        rpc,
+        now,
+        restore,
+      });
+
+      expect(order).toEqual([
+        "config-get-before-load",
+        "config-apply",
+        "proof",
+        "config-get-after-proof",
+        "channels-status",
+      ]);
+      expect(result).toMatchObject({
+        configReady: true,
+        observedRevisionId: "default-r2",
+        restoreProvenAt: 500,
+        configReadyAt: 501,
+        runtimeConfigHash: "runtime-after",
+      });
+    } finally {
+      fs.rmSync(openclawDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a stale runtime hash observed after proof", async () => {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-entrypoint-config-"));
+    const configPath = path.join(openclawDir, "openclaw.json");
+    fs.writeFileSync(configPath, "{}\n");
+    const rpc = {
+      configGet: vi
+        .fn()
+        .mockResolvedValueOnce({ config: {}, hash: "before" })
+        .mockResolvedValueOnce({ config: {}, hash: "still-before" }),
+      configApply: vi.fn(async () => ({ ok: true as const, hash: "expected-after" })),
+      channelsStatus: vi.fn(async () => ({ channels: [] })),
+    };
+    const restore = async (options: { loadRuntimeConfig?: (path: string) => Promise<void> }) => {
+      await options.loadRuntimeConfig?.(configPath);
+      return {
+        restoredCommit: "a".repeat(40),
+        acceptedCommit: "c".repeat(40),
+        configHash: "d".repeat(64),
+      };
+    };
+
+    try {
+      await expect(restoreRevisionSystemConfig({
+        checkpointCommit: "a".repeat(40),
+        slug: "alice",
+        openclawDir,
+        revisionId: "default-r2",
+        env: rollEnv,
+        source: "migration-restore",
+        rpc,
+        restore,
+      })).rejects.toThrow(/runtime config hash.*does not match/i);
+      expect(rpc.channelsStatus).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(openclawDir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -72,7 +72,6 @@ export interface W9TestPublisherLiveExperiment {
 }
 export declare function isW9TestPublisherLiveExperiment(value: unknown): value is W9TestPublisherLiveExperiment;
 export interface ReleasePayload {
-    macOpsTokenProtocol?: MacOpsTokenProtocol;
     imageRepository: string;
     imageTag: string;
     gatewayEdgeImage?: W9GatewayEdgeImage;
@@ -80,9 +79,6 @@ export interface ReleasePayload {
 }
 export declare function isReleasePayload(value: unknown): value is ReleasePayload;
 export declare function isW9GatewayEdgeImage(value: unknown, gatewayImageTag: string): value is W9GatewayEdgeImage;
-export type MacOpsTokenProtocol = 1 | 2;
-export declare const CURRENT_MAC_OPS_TOKEN_PROTOCOL: MacOpsTokenProtocol;
-export declare function releaseMacOpsTokenProtocol(payload: unknown): MacOpsTokenProtocol | null;
 export interface ReleaseDoc {
     gatewayId: string;
     release: number;
@@ -173,7 +169,7 @@ export declare function revisionTombstoneDocId(gatewayId: string, revision: numb
 export declare function isRevisionTombstone(data: unknown): data is RevisionTombstone;
 export declare function releasePayloadHash(payload: ReleasePayload): string;
 export type GatewayFieldClassification = "new-revision" | "in-place" | "gateway-mutable";
-export declare const RELEASE_NEW_REVISION_FIELDS: readonly ["imageRepository", "imageTag", "macOpsTokenProtocol", "testExperiment"];
+export declare const RELEASE_NEW_REVISION_FIELDS: readonly ["imageRepository", "imageTag", "testExperiment"];
 export declare const RELEASE_IN_PLACE_FIELDS: readonly string[];
 export declare const GATEWAY_MUTABLE_FIELDS: readonly ["profile", "gatewayClass", "imageProfile", "sizingTier", "computeClass", "gcpProject", "gatewayContainerSecurityContext", "serviceAccountName", "serviceAccount", "operatorAccess", "ownerUid", "coOwnerUids", "builderSlug", "openclawOverrides", "modelBrokerLimits", "preemption", "desiredStatus", "roll", "idleSleep", "preemptionHandoff", "liveRelease", "liveRevisionId", "trafficRevisionId", "retireAfter"];
 export declare function classifyGatewayField(field: string): GatewayFieldClassification;

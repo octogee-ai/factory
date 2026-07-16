@@ -1,0 +1,85 @@
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  parseOctogeeConfigArgs,
+  runOctogeeConfig,
+} from "../entrypoints/octogee-config.js";
+
+describe("octogee config CLI", () => {
+  it("prints only redacted durable status fields", async () => {
+    const lines: string[] = [];
+
+    await runOctogeeConfig(["config", "status"], {
+      env: { OPENCLAW_DIR: "/durable" },
+      readStatus: () => ({
+        state: "error",
+        acceptedCommit: "abc1234",
+        lastSyncedAt: "2026-07-14T20:00:00.000Z",
+        lastErrorCode: "validation-failed",
+      }),
+      write: (line) => lines.push(line),
+      adopt: vi.fn(),
+    });
+
+    expect(lines.join("\n")).toBe([
+      "state: error",
+      "accepted head: abc1234",
+      "last sync: 2026-07-14T20:00:00.000Z",
+      "last error: validation-failed",
+    ].join("\n"));
+  });
+
+  it("parses dry-run-first adoption and exact hash approval", () => {
+    expect(parseOctogeeConfigArgs(["config", "adopt", "--from", "/tmp/bender.json"])).toEqual({
+      command: "adopt",
+      sourcePath: "/tmp/bender.json",
+    });
+    expect(parseOctogeeConfigArgs([
+      "config",
+      "adopt",
+      "--from=/tmp/bender.json",
+      `--approve-hash=sha256:${"a".repeat(64)}`,
+    ])).toEqual({
+      command: "adopt",
+      sourcePath: "/tmp/bender.json",
+      approveHash: `sha256:${"a".repeat(64)}`,
+    });
+  });
+
+  it("renders a path-only adoption preview and never candidate values", async () => {
+    const lines: string[] = [];
+    const adopt = vi.fn(async () => ({
+      applied: false,
+      approvalHash: `sha256:${"b".repeat(64)}`,
+      changedPaths: ["channels.mattermost.accounts.ceckert-coach.botToken"],
+    }));
+
+    await runOctogeeConfig(["config", "adopt", "--from=/tmp/bender.json"], {
+      env: {
+        OPENCLAW_DIR: "/durable",
+        GATEWAY_BUILDER_SLUG: "ceckert",
+      },
+      readStatus: vi.fn(),
+      write: (line) => lines.push(line),
+      adopt,
+    });
+
+    expect(lines.join("\n")).toContain("adoption: preview");
+    expect(lines.join("\n")).toContain("channels.mattermost.accounts.ceckert-coach.botToken");
+    expect(lines.join("\n")).not.toContain("bender-live-pat");
+    expect(adopt).toHaveBeenCalledWith(expect.objectContaining({
+      slug: "ceckert",
+      sourcePath: "/tmp/bender.json",
+      openclawDir: "/durable",
+    }));
+  });
+
+  it("rejects adoption without an isolated builder slug", async () => {
+    await expect(runOctogeeConfig(["config", "adopt", "--from=/tmp/bender.json"], {
+      env: { OPENCLAW_DIR: "/durable" },
+      readStatus: vi.fn(),
+      write: vi.fn(),
+      adopt: vi.fn(),
+    })).rejects.toThrow("GATEWAY_BUILDER_SLUG");
+  });
+});

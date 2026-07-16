@@ -70,15 +70,6 @@ export interface FleetBrokerUsageEvent {
     agentId: string;
     usage: FleetBrokerUsageData;
 }
-export interface FleetBrokerMacOpsToken {
-    gatewayId: string;
-    revisionId: string;
-    username: string;
-    mmUserId: string;
-    token: string;
-}
-export declare const MAC_OPS_PAT_DESCRIPTION = "Octogee Mac ops agent (OpenClaw)";
-export declare function macOpsPatDescription(gatewayId: string, revisionId: string): string;
 export interface FleetBrokerBlobSignedUrl {
     url: string;
     method: "GET" | "PUT";

@@ -8,7 +8,17 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  CONFIG_FREEZE_CONFLICT_ERROR,
+  CONFIG_FREEZE_UNAVAILABLE_ERROR,
+  type ConfigFreezeConflictResponse,
   type AbortRsyncImportRequestBody,
+  type ConfigFreezeRequestBody,
+  type ConfigFreezeResponse,
+  type ConfigFreezeUnavailableResponse,
+  type ConfigRestoreProofRequestBody,
+  type ConfigRestoreProofResponse,
+  type ConfigUnfreezeRequestBody,
+  type ConfigUnfreezeResponse,
   type ImportResponse,
   type ActivateImportRequestBody,
   type ActivationManifestExportRequestBody,
@@ -43,6 +53,11 @@ import {
 } from "../../shared/types/fleet-controller.js";
 import { isValidUsername } from "../../shared/types/identity.js";
 import { verifyFleetRequest } from "./fleet-signature.js";
+import {
+  SystemConfigFreezeOwnerConflictError,
+  SystemConfigFreezeScopeConflictError,
+  SystemConfigFreezeUnavailableError,
+} from "./system-config-roll-control.js";
 import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
 import {
   removeCustomerFromGateway,
@@ -61,6 +76,8 @@ export interface MigrationHandlerDeps {
   
   log?: (msg: string) => void;
 
+  now?: () => number;
+
 getMountedCustomers?: () => readonly string[];
 
 fetch?: typeof globalThis.fetch;
@@ -75,6 +92,74 @@ flushLocalState?: (input: {
   slug: string;
   reason: string;
 }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
+
+freezeSystemConfig?: (input: {
+  migrationId: string;
+  slug: string;
+}) => Promise<Omit<ConfigFreezeResponse, "migrationId" | "slug" | "frozen">> |
+  Omit<ConfigFreezeResponse, "migrationId" | "slug" | "frozen">;
+
+proveSystemConfigRestore?: (input: {
+  migrationId: string;
+  slug: string;
+  checkpointCommit: string;
+}) => Promise<Omit<ConfigRestoreProofResponse, "migrationId" | "slug">> |
+  Omit<ConfigRestoreProofResponse, "migrationId" | "slug">;
+
+unfreezeSystemConfig?: (input: {
+  migrationId: string;
+  slug: string;
+}) => Promise<{ unfrozen: boolean }> | { unfrozen: boolean };
+}
+
+const CONFIG_CONTROL_MAX_LIFETIME_MS = 60_000;
+const CONFIG_CONTROL_CLOCK_SKEW_MS = 5_000;
+const configControlReplayByDeps = new WeakMap<MigrationHandlerDeps, Map<string, number>>();
+
+function acceptConfigControlEnvelope(
+  body: ConfigFreezeRequestBody | ConfigRestoreProofRequestBody | ConfigUnfreezeRequestBody,
+  expectedAction: ConfigFreezeRequestBody["action"] |
+    ConfigRestoreProofRequestBody["action"] |
+    ConfigUnfreezeRequestBody["action"],
+  deps: MigrationHandlerDeps,
+  res: Response,
+  log: (msg: string) => void,
+): boolean {
+  const now = (deps.now ?? Date.now)();
+  if (body.action !== expectedAction) {
+    log(`[migration-http] rejected config control action migrationId=${body.migrationId}`);
+    res.status(401).json({ error: "invalid config control action" });
+    return false;
+  }
+  if (
+    !Number.isSafeInteger(body.issuedAt) ||
+    !Number.isSafeInteger(body.expiresAt) ||
+    typeof body.requestId !== "string" ||
+    !/^[A-Za-z0-9._:-]{8,128}$/.test(body.requestId) ||
+    body.issuedAt > now + CONFIG_CONTROL_CLOCK_SKEW_MS ||
+    body.expiresAt <= now ||
+    body.expiresAt <= body.issuedAt ||
+    body.expiresAt - body.issuedAt > CONFIG_CONTROL_MAX_LIFETIME_MS
+  ) {
+    log(`[migration-http] rejected stale config control request migrationId=${body.migrationId}`);
+    res.status(401).json({ error: "invalid config control freshness" });
+    return false;
+  }
+  let replay = configControlReplayByDeps.get(deps);
+  if (!replay) {
+    replay = new Map();
+    configControlReplayByDeps.set(deps, replay);
+  }
+  for (const [requestId, expiresAt] of replay) {
+    if (expiresAt <= now) replay.delete(requestId);
+  }
+  if (replay.has(body.requestId)) {
+    log(`[migration-http] rejected replayed config control request migrationId=${body.migrationId}`);
+    res.status(409).json({ error: "config control request replayed" });
+    return false;
+  }
+  replay.set(body.requestId, body.expiresAt);
+  return true;
 }
 
 function rejectInvalidSlug(slug: string, res: Response): boolean {
@@ -226,6 +311,144 @@ export function createFlushHandler(deps: MigrationHandlerDeps): RequestHandler {
       const message = err instanceof Error ? err.message : String(err);
       log(`[migration-http] ❌ flush migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
       res.status(500).json({ error: "flush failed", message });
+    }
+  };
+}
+
+function typedConfigFreezeFailure(error: unknown): {
+  status: 409 | 503;
+  body: ConfigFreezeConflictResponse | ConfigFreezeUnavailableResponse;
+} | null {
+  if (
+    error instanceof SystemConfigFreezeOwnerConflictError ||
+    error instanceof SystemConfigFreezeScopeConflictError
+  ) {
+    return {
+      status: 409,
+      body: {
+        error: CONFIG_FREEZE_CONFLICT_ERROR,
+        code: error.code,
+        owner: error.owner,
+      },
+    };
+  }
+  if (error instanceof SystemConfigFreezeUnavailableError) {
+    return {
+      status: 503,
+      body: {
+        error: CONFIG_FREEZE_UNAVAILABLE_ERROR,
+        code: error.code,
+        retryable: true,
+      },
+    };
+  }
+  return null;
+}
+
+export function createConfigFreezeHandler(deps: MigrationHandlerDeps): RequestHandler {
+  const log = deps.log ?? ((msg) => console.log(msg));
+  return async (req, res) => {
+    const body = parseAndVerifyJsonBody<ConfigFreezeRequestBody>(req, res, deps.publicKey, log);
+    if (!body) return;
+    if (!acceptConfigControlEnvelope(body, "freeze", deps, res, log)) return;
+    if (!deps.freezeSystemConfig) {
+      res.status(501).json({ error: "config freeze not configured" });
+      return;
+    }
+    try {
+      const checkpoint = await deps.freezeSystemConfig({
+        migrationId: body.migrationId,
+        slug: body.slug,
+      });
+      const response: ConfigFreezeResponse = {
+        migrationId: body.migrationId,
+        slug: body.slug,
+        frozen: true,
+        ...checkpoint,
+      };
+      res.status(200).json(response);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`[migration-http] config freeze failed migrationId=${body.migrationId}: ${message}`);
+      const typed = typedConfigFreezeFailure(error);
+      if (typed) {
+        res.status(typed.status).json(typed.body);
+        return;
+      }
+      res.status(409).json({ error: "config freeze failed", message });
+    }
+  };
+}
+
+export function createConfigRestoreProofHandler(deps: MigrationHandlerDeps): RequestHandler {
+  const log = deps.log ?? ((msg) => console.log(msg));
+  return async (req, res) => {
+    const body = parseAndVerifyJsonBody<ConfigRestoreProofRequestBody>(req, res, deps.publicKey, log);
+    if (!body) return;
+    if (!acceptConfigControlEnvelope(body, "restore-proof", deps, res, log)) return;
+    if (!/^[0-9a-f]{40}$/.test(body.checkpointCommit)) {
+      res.status(400).json({ error: "invalid checkpointCommit" });
+      return;
+    }
+    if (!deps.proveSystemConfigRestore) {
+      res.status(501).json({ error: "config restore proof not configured" });
+      return;
+    }
+    try {
+      const proof = await deps.proveSystemConfigRestore({
+        migrationId: body.migrationId,
+        slug: body.slug,
+        checkpointCommit: body.checkpointCommit,
+      });
+      const response: ConfigRestoreProofResponse = {
+        migrationId: body.migrationId,
+        slug: body.slug,
+        ...proof,
+      };
+      res.status(200).json(response);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`[migration-http] config restore proof failed migrationId=${body.migrationId}: ${message}`);
+      const typed = typedConfigFreezeFailure(error);
+      if (typed) {
+        res.status(typed.status).json(typed.body);
+        return;
+      }
+      res.status(409).json({ error: "config restore proof failed", message });
+    }
+  };
+}
+
+export function createConfigUnfreezeHandler(deps: MigrationHandlerDeps): RequestHandler {
+  const log = deps.log ?? ((msg) => console.log(msg));
+  return async (req, res) => {
+    const body = parseAndVerifyJsonBody<ConfigUnfreezeRequestBody>(req, res, deps.publicKey, log);
+    if (!body) return;
+    if (!acceptConfigControlEnvelope(body, "unfreeze", deps, res, log)) return;
+    if (!deps.unfreezeSystemConfig) {
+      res.status(501).json({ error: "config unfreeze not configured" });
+      return;
+    }
+    try {
+      const result = await deps.unfreezeSystemConfig({
+        migrationId: body.migrationId,
+        slug: body.slug,
+      });
+      const response: ConfigUnfreezeResponse = {
+        migrationId: body.migrationId,
+        slug: body.slug,
+        ...result,
+      };
+      res.status(200).json(response);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`[migration-http] config unfreeze failed migrationId=${body.migrationId}: ${message}`);
+      const typed = typedConfigFreezeFailure(error);
+      if (typed) {
+        res.status(typed.status).json(typed.body);
+        return;
+      }
+      res.status(409).json({ error: "config unfreeze failed", message });
     }
   };
 }
@@ -596,19 +819,7 @@ async function maybeMaterializeActivationManifest(
   if (!deps.adapter.exportOpenClawActivationManifest) {
     throw new Error("source gateway cannot export an OpenClaw activation manifest");
   }
-  let manifest: Awaited<ReturnType<NonNullable<CustomerLifecycleAdapter["exportOpenClawActivationManifest"]>>>;
-  try {
-    manifest = await deps.adapter.exportOpenClawActivationManifest(body.slug);
-  } catch (err) {
-    if (deps.adapter.isOperatorGateway?.() === true) {
-      const message = err instanceof Error ? err.message : String(err);
-      deps.log?.(
-        `[migration-http] no customer activation manifest for operator slug=${body.slug}; continuing with local state only: ${message}`,
-      );
-      return { source: null, cleanup: async () => undefined };
-    }
-    throw err;
-  }
+  const manifest = await deps.adapter.exportOpenClawActivationManifest(body.slug);
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `migration-activation-${body.migrationId}-`));
   try {
     const source = await writeActivationManifest(tmpDir, manifest);
@@ -1588,9 +1799,7 @@ export function findPathTraversalViolation(
     ? [`customer-keys/${slug}/`]
     : [
         `agents/octogee-${slug}-coach/`,
-        `agents/octogee-ops-${slug}/`,
         `memory/octogee-${slug}-coach.sqlite`,
-        `memory/octogee-ops-${slug}.sqlite`,
         `customers/${slug}/`,
         `customer-keys/${slug}/`,
         `${MIGRATION_ACTIVATION_DIR}/${slug}/`,
@@ -1608,7 +1817,7 @@ export function findPathTraversalViolation(
     if (!allowed) {
       const allowlist = mode === "keys"
         ? `customer-keys/${slug}`
-        : `agents/octogee-${slug}-coach, agents/octogee-ops-${slug}, memory/octogee-${slug}-coach.sqlite*, memory/octogee-ops-${slug}.sqlite*, customers/${slug}, customer-keys/${slug}, ${MIGRATION_ACTIVATION_DIR}/${slug}`;
+        : `agents/octogee-${slug}-coach, memory/octogee-${slug}-coach.sqlite*, customers/${slug}, customer-keys/${slug}, ${MIGRATION_ACTIVATION_DIR}/${slug}`;
       return `path '${raw}' is outside the per-slug allowlist (${allowlist})`;
     }
   }

@@ -10,7 +10,7 @@ set -euo pipefail
 #   1. Collect/generate credentials (admin pass, DB pass)
 #   2. Sync DB password to Cloud SQL
 #   3. Create K8s secrets consumed by Helm
-#   4. Bootstrap admin user, team, bot + token on a fresh MM instance
+#   4. Bootstrap the admin user, admin PAT, and team on a fresh MM instance
 #   5. Save everything to .env.test / .env
 #
 # Run this BEFORE `helm upgrade --install` on a fresh environment.
@@ -90,18 +90,6 @@ case "$ENV" in
   *) echo "Unknown environment: $ENV"; exit 1 ;;
 esac
 
-# ── Per-gateway MM bot identity ──────────────────────────────────────────
-# One bot user per gateway, derived from the helm `gateway.env.gatewayId`
-# convention (`gw-test` / `gw-prod` / `<custom-ns>`). Matches the
-# MM_BOT_USERNAME env var the gateway deployment exports.
-case "$ENV" in
-  prod)   MM_BOT_USERNAME="mac-gw-prod" ;;
-  test)   MM_BOT_USERNAME="mac-gw-test" ;;
-  custom) MM_BOT_USERNAME="mac-${CUSTOM_NS}" ;;
-esac
-MM_BOT_DISPLAY_NAME="Mac"
-MM_BOT_DESCRIPTION="Octogee Ops Agent"
-
 ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
 warn() { echo -e "  ${YELLOW}⚠️  $1${NC}"; }
 fail() { echo -e "  ${RED}❌ $1${NC}"; exit 1; }
@@ -155,16 +143,6 @@ print(r.get(field, "") if isinstance(r, dict) else "")
 ' "$field" 2>/dev/null
 }
 
-mm_pat_is_valid() {
-  local pat="$1" expected_uid="$2"
-  [[ -z "$pat" || -z "$expected_uid" ]] && return 1
-  local me_resp actual_uid
-  me_resp=$(curl -s "http://localhost:8065/api/v4/users/me" \
-    -H "Authorization: Bearer $pat" 2>/dev/null)
-  actual_uid=$(mm_field "$me_resp" id) || return 1
-  [[ "$actual_uid" == "$expected_uid" ]]
-}
-
 load_env() {
   [[ -f "$ENV_FILE" ]] || return 0
   set +u
@@ -194,7 +172,7 @@ kubectl config use-context "$K8S_CONTEXT"
 CURRENT_CTX=$(kubectl config current-context)
 [[ "$CURRENT_CTX" == "$K8S_CONTEXT" ]] || fail "kubectl context is '$CURRENT_CTX', expected '$K8S_CONTEXT'."
 ok "kubectl context: $CURRENT_CTX"
-info "This script owns Mattermost bootstrap/app state: admin user, admin PAT, bot token, team, and the mattermost-gateway secret inputs."
+info "This script owns Mattermost bootstrap/app state: admin user, admin PAT, team, and the mattermost-gateway secret inputs."
 
 # Ensure namespace exists
 kubectl get namespace "$K8S_NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$K8S_NAMESPACE"
@@ -389,8 +367,8 @@ for t in tokens:
     fi
   fi
 
-  # ── Discover existing team + bot (may be missing from env/secret) ────────
-  info "Discovering team + bot state..."
+  # ── Discover existing team (may be missing from env/secret) ──────────────
+  info "Discovering team state..."
   TEAM_RESP=$(curl -s "http://localhost:8065/api/v4/teams/name/octogee" \
     -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null)
   TEAM_ID_FROM_API=$(mm_field "$TEAM_RESP" id || true)
@@ -402,93 +380,6 @@ for t in tokens:
     warn "Could not discover Octogee team — MM_TEAM_ID will be empty"
   fi
 
-  BOT_USER_ID_FROM_API=$(\
-    curl -s "http://localhost:8065/api/v4/bots" \
-    -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null \
-    | MM_BOT_USERNAME="$MM_BOT_USERNAME" python3 -c "
-import os, sys, json
-want = os.environ['MM_BOT_USERNAME']
-for b in json.load(sys.stdin):
-    if b.get('username') == want:
-        print(b['user_id'])
-        break
-" 2>/dev/null || echo "")
-  if [[ -n "$BOT_USER_ID_FROM_API" ]]; then
-    MM_BOT_USER_ID="$BOT_USER_ID_FROM_API"
-    save_env "MM_BOT_USER_ID" "$MM_BOT_USER_ID"
-    ok "Bot discovered: $MM_BOT_USER_ID (@$MM_BOT_USERNAME)"
-
-    # ── Bot token: test cached value first, only rotate if broken ────────
-    CACHED_BOT_TOKEN=$(ksecret_key mattermost-gateway bot_token)
-    if mm_pat_is_valid "$CACHED_BOT_TOKEN" "$MM_BOT_USER_ID"; then
-      ok "Cached bot token still valid — skipping rotation"
-      MM_BOT_TOKEN="$CACHED_BOT_TOKEN"
-      save_env "MM_BOT_TOKEN" "$MM_BOT_TOKEN"
-    else
-      info "Cached bot token missing or invalid — rotating"
-      EXISTING_BOT_TOKENS=$(\
-        curl -s "http://localhost:8065/api/v4/users/$MM_BOT_USER_ID/tokens" \
-        -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null)
-      OLD_BOT_IDS=$(echo "$EXISTING_BOT_TOKENS" | python3 -c "
-import sys, json
-for t in json.load(sys.stdin):
-    print(t['id'])
-" 2>/dev/null || echo "")
-      BOT_REVOKED=0
-      for tok_id in $OLD_BOT_IDS; do
-        \
-          curl -s -X POST "http://localhost:8065/api/v4/users/$MM_BOT_USER_ID/tokens/revoke" \
-          -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
-          -H "Content-Type: application/json" \
-          -d "{\"token_id\":\"$tok_id\"}" >/dev/null 2>&1
-        BOT_REVOKED=$((BOT_REVOKED + 1))
-      done
-      [[ $BOT_REVOKED -gt 0 ]] && ok "Revoked $BOT_REVOKED stale bot token(s)"
-
-      TOKEN_RESP=$(\
-        curl -s -X POST "http://localhost:8065/api/v4/users/$MM_BOT_USER_ID/tokens" \
-        -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
-        -H "Content-Type: application/json" \
-        -d '{"description":"Gateway token"}' 2>/dev/null)
-      MM_BOT_TOKEN=$(mm_field "$TOKEN_RESP" token || true)
-      if [[ -n "$MM_BOT_TOKEN" ]]; then
-        save_env "MM_BOT_TOKEN" "$MM_BOT_TOKEN"
-        ok "Bot token created"
-      else
-        warn "Failed to create bot token: $TOKEN_RESP"
-      fi
-    fi
-  else
-    info "Bot @$MM_BOT_USERNAME not found — creating"
-    BOT_RESP=$(\
-      curl -s -X POST "http://localhost:8065/api/v4/bots" \
-      -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
-      -H "Content-Type: application/json" \
-      -d "{\"username\":\"$MM_BOT_USERNAME\",\"display_name\":\"$MM_BOT_DISPLAY_NAME\",\"description\":\"$MM_BOT_DESCRIPTION\"}" 2>/dev/null)
-    MM_BOT_USER_ID=$(mm_field "$BOT_RESP" user_id) && [[ -n "$MM_BOT_USER_ID" ]] \
-      || fail "Failed to create bot @$MM_BOT_USERNAME: $BOT_RESP"
-    save_env "MM_BOT_USER_ID" "$MM_BOT_USER_ID"
-    ok "Bot created: $MM_BOT_USER_ID (@$MM_BOT_USERNAME)"
-
-    # Add bot to team so it can post into channels.
-    \
-      curl -s -X POST "http://localhost:8065/api/v4/teams/$MM_TEAM_ID/members" \
-      -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
-      -H "Content-Type: application/json" \
-      -d "{\"team_id\":\"$MM_TEAM_ID\",\"user_id\":\"$MM_BOT_USER_ID\"}" >/dev/null 2>&1
-    ok "Bot added to team"
-
-    # Issue gateway token.
-    TOKEN_RESP=$(\
-      curl -s -X POST "http://localhost:8065/api/v4/users/$MM_BOT_USER_ID/tokens" \
-      -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
-      -H "Content-Type: application/json" \
-      -d '{"description":"Gateway token"}' 2>/dev/null)
-    MM_BOT_TOKEN=$(mm_field "$TOKEN_RESP" token) && [[ -n "$MM_BOT_TOKEN" ]] \
-      || fail "Failed to create bot token: $TOKEN_RESP"
-    save_env "MM_BOT_TOKEN" "$MM_BOT_TOKEN"
-    ok "Bot token created"
-  fi
 else
   info "Fresh Mattermost — bootstrapping admin via mmctl --local..."
 
@@ -546,9 +437,8 @@ else
     -d "{\"team_id\":\"$MM_TEAM_ID\",\"user_id\":\"$MM_ADMIN_USER_ID\"}" >/dev/null 2>&1
   ok "Admin added to team"
 
-  # Admin personal access token (PAT) for gateway-edge
-  # Session tokens expire; PATs don't — gateway-edge needs MM_ADMIN_TOKEN env var
-  info "Creating admin personal access token (PAT) for gateway-edge..."
+  # Admin personal access token (PAT) for the platform API and controller
+  info "Creating platform admin personal access token (PAT)..."
   PAT_RESP=$(\
     curl -s -X POST "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens" \
     -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
@@ -562,36 +452,6 @@ else
     warn "Failed to create admin PAT — octogee-api Mattermost broker routes will fail!"
   fi
 
-  # Bot
-  BOT_RESP=$(\
-    curl -s -X POST "http://localhost:8065/api/v4/bots" \
-    -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{\"username\":\"$MM_BOT_USERNAME\",\"display_name\":\"$MM_BOT_DISPLAY_NAME\",\"description\":\"$MM_BOT_DESCRIPTION\"}" 2>/dev/null)
-  MM_BOT_USER_ID=$(mm_field "$BOT_RESP" user_id) && [[ -n "$MM_BOT_USER_ID" ]] \
-    || fail "Failed to create bot: $BOT_RESP"
-  save_env "MM_BOT_USER_ID" "$MM_BOT_USER_ID"
-  ok "Bot created: $MM_BOT_USER_ID"
-
-  # Add bot to team
-  \
-    curl -s -X POST "http://localhost:8065/api/v4/teams/$MM_TEAM_ID/members" \
-    -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{\"team_id\":\"$MM_TEAM_ID\",\"user_id\":\"$MM_BOT_USER_ID\"}" >/dev/null 2>&1
-  ok "Bot added to team"
-
-  # Bot token
-  TOKEN_RESP=$(\
-    curl -s -X POST "http://localhost:8065/api/v4/users/$MM_BOT_USER_ID/tokens" \
-    -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d '{"description":"Gateway token"}' 2>/dev/null)
-  MM_BOT_TOKEN=$(mm_field "$TOKEN_RESP" token) && [[ -n "$MM_BOT_TOKEN" ]] \
-    || fail "Failed to create bot token: $TOKEN_RESP"
-  save_env "MM_BOT_TOKEN" "$MM_BOT_TOKEN"
-  ok "Bot token created"
-
   info "All credentials saved to $ENV_FILE"
 fi
 
@@ -600,7 +460,7 @@ set +u
 info "Validating secret values before write..."
 
 WRITE_ERRORS=0
-for var_name in MM_ADMIN_USER MM_ADMIN_PASS MM_ADMIN_USER_ID MM_ADMIN_PAT MM_TEAM_ID MM_BOT_USER_ID MM_BOT_TOKEN; do
+for var_name in MM_ADMIN_USER MM_ADMIN_PASS MM_ADMIN_USER_ID MM_ADMIN_PAT MM_TEAM_ID; do
   val="${!var_name:-}"
   if [[ -z "$val" ]]; then
     warn "$var_name is empty — secret will be incomplete!"
@@ -610,7 +470,7 @@ done
 
 if [[ "$WRITE_ERRORS" -gt 0 ]]; then
   warn "$WRITE_ERRORS value(s) missing — writing partial secret"
-  warn "chat-proxy and gateway-edge may fail to start (MM_ADMIN_TOKEN is required)"
+  warn "octogee-api and glm-controller may fail to start (MM_ADMIN_TOKEN is required)"
 fi
 
 # ── 8. Atomic K8s secret write (dry-run + apply) ────────────────────────
@@ -623,8 +483,6 @@ kubectl create secret generic mattermost-gateway \
   --from-literal=admin_pass="${MM_ADMIN_PASS:-}" \
   --from-literal=admin_token="${MM_ADMIN_PAT:-}" \
   --from-literal=admin_user_id="${MM_ADMIN_USER_ID:-}" \
-  --from-literal=bot_token="${MM_BOT_TOKEN:-}" \
-  --from-literal=bot_user_id="${MM_BOT_USER_ID:-}" \
   --from-literal=team_id="${MM_TEAM_ID:-}" \
   --dry-run=client -o yaml | kubectl apply -f -
 ok "mattermost-gateway K8s secret written (atomic apply)"
@@ -632,7 +490,7 @@ ok "mattermost-gateway K8s secret written (atomic apply)"
 # ── 9. Post-write verification ──────────────────────────────────────────
 info "Verifying written secret..."
 VERIFY_ERRORS=0
-for key in admin_user admin_pass admin_token admin_user_id bot_token bot_user_id team_id; do
+for key in admin_user admin_pass admin_token admin_user_id team_id; do
   VAL=$(kubectl get secret mattermost-gateway -n "$K8S_NAMESPACE" \
     -o jsonpath="{.data.$key}" 2>/dev/null | base64 -d 2>/dev/null || echo "")
   if [[ -z "$VAL" ]]; then
@@ -646,7 +504,7 @@ done
 if [[ "$VERIFY_ERRORS" -gt 0 ]]; then
   warn "$VERIFY_ERRORS key(s) empty after write — investigate above warnings"
 else
-  ok "All 7 keys verified non-empty"
+  ok "All 5 keys verified non-empty"
 fi
 set -u
 
@@ -657,11 +515,9 @@ status "MM_ADMIN_PASS set" "${MM_ADMIN_PASS:-}"
 status "MM_ADMIN_USER_ID set" "${MM_ADMIN_USER_ID:-}"
 status "MM_ADMIN_PAT set (required for octogee-api Mattermost broker)" "${MM_ADMIN_PAT:-}"
 status "MM_TEAM_ID set" "${MM_TEAM_ID:-}"
-status "MM_BOT_USER_ID set" "${MM_BOT_USER_ID:-}"
-status "MM_BOT_TOKEN set (required for chat-proxy)" "${MM_BOT_TOKEN:-}"
 
 echo ""
-if [[ -n "${MM_ADMIN_PAT:-}" && -n "${MM_TEAM_ID:-}" && -n "${MM_BOT_USER_ID:-}" && -n "${MM_BOT_TOKEN:-}" && -n "${MM_ADMIN_USER_ID:-}" ]]; then
+if [[ -n "${MM_ADMIN_PAT:-}" && -n "${MM_TEAM_ID:-}" && -n "${MM_ADMIN_USER_ID:-}" ]]; then
   ok "mattermost-gateway inputs are complete"
   echo ""
   echo "  Next (canonical sequence — see teardown-env.sh --env=$ENV for the full 9 steps):"
@@ -670,14 +526,14 @@ if [[ -n "${MM_ADMIN_PAT:-}" && -n "${MM_TEAM_ID:-}" && -n "${MM_BOT_USER_ID:-}"
   echo "    6. kubectl rollout restart deploy -n $K8S_NAMESPACE   # pods pick up new secret env"
   echo ""
   echo "  octogee-api and glm-controller read mattermost-gateway directly."
-  echo "  Gateway Mac ops bot tokens are minted through the fleet broker; gateway"
+  echo "  Customer account tokens are brokered into gateway-local SecretRefs; gateway"
   echo "  pods do not receive the Mattermost admin PAT."
 else
   warn "Mattermost bootstrap is still incomplete"
   echo ""
   echo "  Expected healthy state includes:"
   echo "    - admin PAT for octogee-api Mattermost broker routes"
-  echo "    - bot token + bot user id + team id for setup/verification and bridge callers"
+  echo "    - team id for customer account provisioning"
   echo ""
   echo "  Next steps:"
   echo "    1. Review warnings above"

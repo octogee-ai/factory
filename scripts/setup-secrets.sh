@@ -15,8 +15,8 @@ set -euo pipefail
 #                        Helm install can now schedule pods that mount these.
 #
 #   Phase 2 (post-bootstrap): re-reads .env after setup-mattermost.sh +
-#                        setup-gitea.sh have populated MM_BOT_TOKEN,
-#                        MM_TEAM_ID, GIT_API_TOKEN, etc., and re-materializes
+#                        setup-gitea.sh have populated MM_TEAM_ID,
+#                        MM_ADMIN_TOKEN, GIT_API_TOKEN, etc., and re-materializes
 #                        mattermost-gateway + gitea-token with REAL values.
 #                        kubectl rollout restart afterwards picks them up.
 #
@@ -180,25 +180,21 @@ ksecret mattermost-cloud-sql --from-literal=password="$MM_DB_PASSWORD"
 # ── 2. Mattermost gateway creds ───────────────────────────────────────────
 info "mattermost-gateway"
 set +u
-MM_BOT_TOKEN="${MM_BOT_TOKEN:-$(ksecret_key mattermost-gateway bot_token)}"
 MM_ADMIN_USER="${MM_ADMIN_USER:-$(ksecret_key mattermost-gateway admin_user)}"
 MM_ADMIN_USER="${MM_ADMIN_USER:-octogee-admin}"
 MM_ADMIN_PASS="${MM_ADMIN_PASS:-$(ksecret_key mattermost-gateway admin_pass)}"
 MM_ADMIN_TOKEN="${MM_ADMIN_TOKEN:-$(ksecret_key mattermost-gateway admin_token)}"
 MM_TEAM_ID="${MM_TEAM_ID:-$(ksecret_key mattermost-gateway team_id)}"
-MM_BOT_USER_ID="${MM_BOT_USER_ID:-$(ksecret_key mattermost-gateway bot_user_id)}"
 MM_ADMIN_USER_ID="${MM_ADMIN_USER_ID:-$(ksecret_key mattermost-gateway admin_user_id)}"
 set -u
 ksecret mattermost-gateway \
-  --from-literal=bot_token="$MM_BOT_TOKEN" \
   --from-literal=admin_user="$MM_ADMIN_USER" \
   --from-literal=admin_pass="$MM_ADMIN_PASS" \
   --from-literal=admin_token="$MM_ADMIN_TOKEN" \
   --from-literal=team_id="$MM_TEAM_ID" \
-  --from-literal=bot_user_id="$MM_BOT_USER_ID" \
   --from-literal=admin_user_id="$MM_ADMIN_USER_ID"
 
-if [[ -z "$MM_BOT_TOKEN" || -z "$MM_TEAM_ID" || -z "$MM_BOT_USER_ID" || -z "$MM_ADMIN_USER_ID" ]]; then
+if [[ -z "$MM_ADMIN_TOKEN" || -z "$MM_TEAM_ID" || -z "$MM_ADMIN_USER_ID" ]]; then
   warn "mattermost-gateway contains blank bootstrap values. Run ./scripts/setup-mattermost.sh --env=$ENV before trusting this environment."
 fi
 
@@ -815,8 +811,6 @@ echo -e "${CYAN}Secret completeness summary${NC}"
 status "mattermost-gateway / admin_user" "${MM_ADMIN_USER:-}"
 status "mattermost-gateway / admin_pass" "${MM_ADMIN_PASS:-}"
 status "mattermost-gateway / admin_user_id" "${MM_ADMIN_USER_ID:-}"
-status "mattermost-gateway / bot_token" "${MM_BOT_TOKEN:-}"
-status "mattermost-gateway / bot_user_id" "${MM_BOT_USER_ID:-}"
 status "mattermost-gateway / team_id" "${MM_TEAM_ID:-}"
 status "gateway-model-key-issuer" "${GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN:-}"
 status "social-notification-bearer" "${SOCIAL_NOTIFICATION_BEARER:-}"
@@ -831,13 +825,13 @@ status "microsoft-oauth / client_id" "${MICROSOFT_CLIENT_ID:-}"
 status "connect-state-secret" "${CONNECT_STATE_SECRET:-}"
 
 echo ""
-if [[ -z "${MM_BOT_TOKEN:-}" || -z "${MM_BOT_USER_ID:-}" || -z "${MM_TEAM_ID:-}" || -z "${MM_ADMIN_USER_ID:-}" ]]; then
+if [[ -z "${MM_ADMIN_TOKEN:-}" || -z "${MM_TEAM_ID:-}" || -z "${MM_ADMIN_USER_ID:-}" ]]; then
   warn "Mattermost-related secret state is incomplete"
   echo ""
   echo "  Next steps:"
   echo "    1. Run ./scripts/setup-mattermost.sh --env=$ENV"
   echo "    2. Re-run ./scripts/setup-secrets.sh --env=$ENV $(if [[ "$YES" == "true" ]]; then echo "--yes"; fi) if you want a clean re-materialization"
-  echo "    3. Do not trust admin chat / chat-proxy until those values are present"
+  echo "    3. Do not trust customer provisioning until those values are present"
 else
   ok "Required Mattermost secret inputs are present"
 fi

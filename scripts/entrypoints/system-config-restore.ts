@@ -50,7 +50,10 @@ export async function runSystemConfigRestore(
 
   const result = await (opts.restore ?? restoreSystemConfigForSlug)(plan.slug, { log: logger });
   if (result.skipped) {
-    logger(`restore skipped: ${result.skipped}`);
+    throw new Error(`durable system_config restore failed: ${result.skipped}`);
+  }
+  if (!result.restored || !result.configPath) {
+    throw new Error("durable system_config restore did not produce an active config path");
   }
   return plan;
 }
@@ -61,7 +64,7 @@ async function main(): Promise<void> {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err) => {
-    console.error(`[system_config] Warning: ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(0);
+    console.error(`[system_config] Fatal: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
   });
 }

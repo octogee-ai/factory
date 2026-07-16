@@ -14,7 +14,6 @@ import type {
   FleetBrokerAssignmentRosterEntry,
   FleetBrokerChannelBinding,
   FleetBrokerGreetingResult,
-  FleetBrokerMacOpsToken,
   FleetBrokerMattermostUpdate,
   FleetBrokerPreStopFlushEvent,
   FleetBrokerPreStopFlushStep,
@@ -23,7 +22,6 @@ import type {
   FleetBrokerUsageData,
   FleetBrokerUserSnapshot,
 } from "@octogee/shared/types/fleet-broker";
-import { macOpsPatDescription } from "@octogee/shared/types/fleet-broker";
 import {
   byotSnapshotProjectionFromSystemConfig,
   collectProjectAgentStates,
@@ -39,13 +37,17 @@ import {
   parseAssignmentDoc,
   readAssignmentDocsForGateway,
 } from "@octogee/core/assignment-doc";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
+import {
+  DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
+  DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
+  GATEWAYS_COLLECTION,
+  OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
+  OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
+} from "@octogee/shared/types/fleet-controller";
 import {
   GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
-  GATEWAY_RELEASES_SUBCOLLECTION,
   isAssignmentState,
   isGatewayDesiredDoc,
-  releaseMacOpsTokenProtocol,
   revisionIdForRelease,
   type GatewayDoc,
 } from "@octogee/shared/types/gateway-releases";
@@ -63,6 +65,7 @@ import {
 } from "../lib/web-research-service.js";
 import { createBraveSearchClient, createTavilyClient } from "../lib/web-provider-clients.js";
 import { isPublicIp } from "../lib/link-unfurl.js";
+import { recordRevisionSystemConfigStatus } from "../lib/revision-system-config-status.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -82,11 +85,6 @@ type CreateBlobSignedUrl = (input: {
   action: "read" | "write";
   contentType?: string;
 }) => Promise<FleetBrokerBlobSignedUrl>;
-
-type MintMacOpsToken = (input: {
-  gatewayId: string;
-  revisionId: string;
-}) => Promise<FleetBrokerMacOpsToken>;
 
 type RenderAvatar = (bytes: Buffer) => Promise<Buffer>;
 
@@ -161,7 +159,6 @@ interface FleetBrokerRouteDeps {
   renderAvatar?: RenderAvatar;
   applyCoachIdentity?: ApplyCoachIdentity;
   createBlobSignedUrl?: CreateBlobSignedUrl;
-  mintMacOpsToken?: MintMacOpsToken;
   executeChatSearch?: ExecuteChatSearch;
   executeChatHistory?: ExecuteChatHistory;
   resolveChatIdentity?: ResolveChatIdentity;
@@ -317,98 +314,6 @@ const defaultCreateBlobSignedUrl: CreateBlobSignedUrl = async (input) => {
   };
 };
 
-function mattermostBaseUrl(): string {
-  return (
-    process.env.MM_URL ||
-    process.env.MM_INTERNAL_URL ||
-    `http://mattermost.${process.env.K8S_NAMESPACE || "octogee"}.svc.cluster.local:8065`
-  );
-}
-
-async function mmAdminCall(
-  method: string,
-  endpoint: string,
-  body?: unknown,
-): Promise<Record<string, unknown> | Record<string, unknown>[] | null> {
-  const token = process.env.MM_ADMIN_TOKEN;
-  if (!token) throw new Error("MM_ADMIN_TOKEN not configured");
-  const resp = await fetch(`${mattermostBaseUrl()}/api/v4${endpoint}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  if (resp.status >= 500) {
-    const text = await resp.text().catch(() => "");
-    throw new Error(`MM ${method} ${endpoint} -> ${resp.status} ${text.slice(0, 200)}`);
-  }
-  if (!resp.ok || resp.status === 204) return null;
-  return (await resp.json()) as Record<string, unknown> | Record<string, unknown>[];
-}
-
-async function provisionMacOpsBot(gatewayId: string): Promise<{
-  mmUserId: string;
-  username: string;
-}> {
-  const username = `mac-${gatewayId}`;
-  const created = await mmAdminCall("POST", "/bots", {
-    username,
-    display_name: "Mac",
-    description: `Octogee ops agent for ${gatewayId}`,
-  });
-  if (!Array.isArray(created)) {
-    const id = stringAt(created ?? undefined, "user_id") || stringAt(created ?? undefined, "id");
-    if (id) return { mmUserId: id, username };
-  }
-
-  const existing = await mmAdminCall("GET", `/users/username/${username}`);
-  if (!Array.isArray(existing)) {
-    const id = stringAt(existing ?? undefined, "id");
-    if (id) return { mmUserId: id, username };
-  }
-  throw new Error(`Mac ops bot ${username} not found or created`);
-}
-
-export function macOpsTokenIdsForDescription(
-  tokens: ReadonlyArray<Record<string, unknown>>,
-  description: string,
-): string[] {
-  return tokens.flatMap((token) =>
-    token.description === description && typeof token.id === "string" && token.id.length > 0
-      ? [token.id]
-      : [],
-  );
-}
-
-async function revokeStaleMacOpsTokens(mmUserId: string, description: string): Promise<void> {
-  const existing = await mmAdminCall("GET", `/users/${mmUserId}/tokens`);
-  if (!Array.isArray(existing)) return;
-  for (const tokenId of macOpsTokenIdsForDescription(existing, description)) {
-    await mmAdminCall("POST", "/users/tokens/revoke", { token_id: tokenId });
-  }
-}
-
-const defaultMintMacOpsToken: MintMacOpsToken = async ({ gatewayId, revisionId }) => {
-  const bot = await provisionMacOpsBot(gatewayId);
-  const description = macOpsPatDescription(gatewayId, revisionId);
-  await revokeStaleMacOpsTokens(bot.mmUserId, description);
-  const minted = await mmAdminCall("POST", `/users/${bot.mmUserId}/tokens`, {
-    description,
-  });
-  if (Array.isArray(minted) || typeof minted?.token !== "string" || !minted.token) {
-    throw new Error(`Mac ops token mint failed for ${bot.username}`);
-  }
-  return {
-    gatewayId,
-    revisionId,
-    username: bot.username,
-    mmUserId: bot.mmUserId,
-    token: minted.token,
-  };
-};
-
 function boundGateway(req: Request, res: Response): GatewayBinding | null {
   const bound = req.boundTenant;
   if (!bound || bound.kind !== "gateway") {
@@ -440,20 +345,6 @@ export function revisionIdFromGatewayPodName(
   return `${gatewayId}-r${release}`;
 }
 
-function macOpsRevisionId(gatewayId: string, raw: unknown): string | null {
-  if (typeof raw !== "string") return null;
-  const prefix = `${gatewayId}-r`;
-  const release = raw.startsWith(prefix) ? raw.slice(prefix.length) : "";
-  return /^[1-9]\d*$/.test(release) ? raw : null;
-}
-
-function macOpsRevisionRelease(gatewayId: string, revisionId: string): number | null {
-  const normalized = macOpsRevisionId(gatewayId, revisionId);
-  if (!normalized) return null;
-  const release = Number(normalized.slice(`${gatewayId}-r`.length));
-  return Number.isSafeInteger(release) ? release : null;
-}
-
 function readPath(obj: Record<string, unknown> | undefined, dotted: string): unknown {
   let cur: unknown = obj;
   for (const part of dotted.split(".")) {
@@ -476,6 +367,151 @@ function objectBody(req: Request): Record<string, unknown> {
   return req.body && typeof req.body === "object"
     ? (req.body as Record<string, unknown>)
     : {};
+}
+
+const SYSTEM_CONFIG_STATES = new Set(["clean", "dirty", "syncing", "error", "unavailable"]);
+const SYSTEM_CONFIG_ENUMS: Record<string, ReadonlySet<string>> = {
+  doctorResult: new Set(["ok", "error"]),
+  bootRecovery: new Set(["none", "recovered", "unavailable"]),
+  watcherState: new Set(["running", "stopped"]),
+  freezeState: new Set(["unfrozen", "freezing", "frozen"]),
+};
+const DASHBOARD_CONTROL_STATES = new Set(["ready", "missing", "stale", "invalid"]);
+
+function isDashboardControlProtocol(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const protocol = value as Record<string, unknown>;
+  return protocol.protocol === OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL &&
+    protocol.version === OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION;
+}
+
+function isBoundedTimestamp(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 40 && !Number.isNaN(Date.parse(value));
+}
+
+function copyOptionalFields(
+  input: Record<string, unknown>,
+  out: Record<string, unknown>,
+  keys: string[],
+  isValid: (value: unknown) => boolean,
+  nullable = false,
+): boolean {
+  for (const key of keys) {
+    const field = input[key];
+    if (field === undefined) continue;
+    if (field === null && nullable) {
+      out[key] = null;
+      continue;
+    }
+    if (!isValid(field)) return false;
+    out[key] = field;
+  }
+  return true;
+}
+
+function copyEnumFields(
+  input: Record<string, unknown>,
+  out: Record<string, unknown>,
+): boolean {
+  for (const [key, allowed] of Object.entries(SYSTEM_CONFIG_ENUMS)) {
+    const field = input[key];
+    if (field === undefined) continue;
+    if (typeof field !== "string" || !allowed.has(field)) return false;
+    out[key] = field;
+  }
+  return true;
+}
+
+function copyControlProtocol(
+  input: Record<string, unknown>,
+  out: Record<string, unknown>,
+): boolean {
+  if (input.controlProtocol === undefined) return true;
+  if (
+    !input.controlProtocol ||
+    typeof input.controlProtocol !== "object" ||
+    Array.isArray(input.controlProtocol)
+  ) return false;
+  const protocol = input.controlProtocol as Record<string, unknown>;
+  if (
+    protocol.protocol !== DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL ||
+    protocol.version !== DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION
+  ) return false;
+  out.controlProtocol = {
+    protocol: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
+    version: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
+  };
+  return true;
+}
+
+function copySystemConfigStatusFields(
+  input: Record<string, unknown>,
+  out: Record<string, unknown>,
+): boolean {
+  return copyOptionalFields(input, out, ["acceptedCommit", "restoredCommit", "checkpointCommit"],
+    (field) => typeof field === "string" && /^[0-9a-f]{7,64}$/.test(field)) &&
+    copyOptionalFields(input, out, ["configHash"],
+      (field) => typeof field === "string" && /^sha256:[0-9a-f]{64}$/.test(field)) &&
+    copyOptionalFields(input, out,
+      ["dirtySince", "lastSyncedAt", "lastErrorAt", "runtimeHealthCheckedAt", "updatedAt"],
+      isBoundedTimestamp, true) &&
+    copyOptionalFields(input, out, ["lastErrorCode"],
+      (field) => typeof field === "string" && /^[a-z0-9][a-z0-9-]{0,79}$/.test(field), true) &&
+    copyEnumFields(input, out) &&
+    copyOptionalFields(input, out, ["runtimeReady"], (field) => typeof field === "boolean") &&
+    copyOptionalFields(input, out, ["runtimeHealth"],
+      (field) => field === "repair" || field === "healthy" || field === "unhealthy") &&
+    copyOptionalFields(input, out, ["schemaVersion", "rejectedCount", "recoveryCount"],
+      (field) => typeof field === "number" && Number.isSafeInteger(field) && field >= 0) &&
+    copyOptionalFields(input, out, ["openclawVersion"],
+      (field) => typeof field === "string" && /^[A-Za-z0-9._+-]{1,80}$/.test(field)) &&
+    copyOptionalFields(input, out, ["openclawForkSha"],
+      (field) => typeof field === "string" &&
+        (field === "unknown" || /^[0-9a-f]{7,64}$/.test(field))) &&
+    copyControlProtocol(input, out);
+}
+
+function parseDashboardControlStatus(
+  input: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const state = input.dashboardControlState;
+  const protocolValue = input.dashboardControlProtocol;
+  const observedAt = input.dashboardControlObservedAt;
+  if (state === undefined) {
+    if (protocolValue === undefined && observedAt === undefined) return {};
+    return null;
+  }
+  if (typeof state !== "string" || !DASHBOARD_CONTROL_STATES.has(state)) return null;
+  if (state !== "ready") {
+    if (protocolValue === undefined && observedAt === undefined) {
+      return { dashboardControlState: state };
+    }
+    return null;
+  }
+  if (
+    !isDashboardControlProtocol(protocolValue) ||
+    !isBoundedTimestamp(observedAt)
+  ) return null;
+  return {
+    dashboardControlState: state,
+    dashboardControlProtocol: {
+      protocol: OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
+      version: OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
+    },
+    dashboardControlObservedAt: observedAt,
+  };
+}
+
+export function parseSystemConfigObservedStatus(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  if (typeof input.state !== "string" || !SYSTEM_CONFIG_STATES.has(input.state)) return null;
+  const out: Record<string, unknown> = { state: input.state };
+  if (!copySystemConfigStatusFields(input, out)) return null;
+  const dashboardControl = parseDashboardControlStatus(input);
+  if (!dashboardControl) return null;
+  Object.assign(out, dashboardControl);
+  return out;
 }
 
 function recordBodyValue(value: unknown): Record<string, unknown> | null {
@@ -903,27 +939,6 @@ export function isRequestedRevisionAllowed(
   );
 }
 
-export function isMacOpsRevisionAllowed(
-  gatewayId: string,
-  revisionId: string,
-  gatewayDoc: RevisionGatewayState | undefined,
-): boolean {
-  if (!macOpsRevisionId(gatewayId, revisionId)) return false;
-  if (!gatewayDoc) return false;
-  const live = typeof gatewayDoc.liveRevisionId === "string" ? gatewayDoc.liveRevisionId : null;
-  const roll = gatewayDoc.roll as
-    | { sourceRevisionId?: unknown; targetRevisionId?: unknown }
-    | null
-    | undefined;
-  const source = typeof roll?.sourceRevisionId === "string" ? roll.sourceRevisionId : null;
-  const target = typeof roll?.targetRevisionId === "string" ? roll.targetRevisionId : null;
-  const desired =
-    typeof gatewayDoc.desiredRelease === "number"
-      ? revisionIdForRelease(gatewayId, gatewayDoc.desiredRelease)
-      : null;
-  return revisionId === live || revisionId === source || revisionId === target || revisionId === desired;
-}
-
 // The full revision-request gate for the /assigned-users mount driver. An
 // empty/absent revisionId is the legacy escape hatch (mount everyone) — but it is
 // permitted ONLY when the bound gateway is genuinely pre-backfill: no
@@ -1029,58 +1044,6 @@ async function readAssignmentRosterForGateway(
     });
   }
   return assignments;
-}
-
-async function resolveMacOpsRevisionId(
-  db: Firestore,
-  bound: GatewayBinding,
-  rawRevisionId: unknown,
-): Promise<string | null> {
-  const revisionId = macOpsRevisionId(bound.gatewayId, rawRevisionId);
-  const trustedRevisionId = revisionIdFromGatewayPodName(
-    bound.gatewayId,
-    bound.podName,
-  );
-  if (!bound.podUid || !revisionId || trustedRevisionId !== revisionId) return null;
-  const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get();
-  const gatewayData = gatewaySnap.data();
-  if (!gatewaySnap.exists || !isDurableGatewayRoot(gatewayData, bound.gatewayId)) return null;
-  return isMacOpsRevisionAllowed(bound.gatewayId, revisionId, gatewayData) ? revisionId : null;
-}
-
-export async function legacyMacOpsTokenAllowed(
-  db: Firestore,
-  bound: GatewayBinding,
-): Promise<boolean> {
-  const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get();
-  if (!gatewaySnap.exists) return true;
-  const gatewayData = gatewaySnap.data();
-  if (!isDurableGatewayRoot(gatewayData, bound.gatewayId)) return false;
-  const gatewayDoc = gatewayData;
-  const trustedRevisionId = revisionIdFromGatewayPodName(bound.gatewayId, bound.podName);
-  const liveRevisionId =
-    typeof gatewayDoc.liveRevisionId === "string" ? gatewayDoc.liveRevisionId : null;
-  const roll = gatewayDoc.roll as { sourceRevisionId?: unknown } | null | undefined;
-  const sourceRevisionId =
-    typeof roll?.sourceRevisionId === "string" ? roll.sourceRevisionId : null;
-  const revisionRelease =
-    trustedRevisionId && macOpsRevisionRelease(bound.gatewayId, trustedRevisionId);
-  if (
-    !bound.podUid ||
-    !trustedRevisionId ||
-    revisionRelease === null ||
-    (trustedRevisionId !== liveRevisionId && trustedRevisionId !== sourceRevisionId)
-  ) {
-    return false;
-  }
-  const releaseSnap = await db
-    .collection(GATEWAYS_COLLECTION)
-    .doc(bound.gatewayId)
-    .collection(GATEWAY_RELEASES_SUBCOLLECTION)
-    .doc(String(revisionRelease))
-    .get();
-  if (!releaseSnap.exists) return false;
-  return releaseMacOpsTokenProtocol(releaseSnap.data()?.payload) === 1;
 }
 
 // The roster (mount driver) predicate for one revision pod: a bare-assigned
@@ -1229,7 +1192,6 @@ type ResolvedFleetBrokerRouteDeps = {
   renderAvatar: RenderAvatar;
   applyCoachIdentity: ApplyCoachIdentity;
   createBlobSignedUrl: CreateBlobSignedUrl;
-  mintMacOpsToken: MintMacOpsToken;
   executeChatSearch: ExecuteChatSearch;
   executeChatHistory: ExecuteChatHistory;
   resolveChatIdentity: ResolveChatIdentity;
@@ -1253,7 +1215,6 @@ function resolveFleetBrokerRouteDeps(
     renderAvatar: opts.renderAvatar ?? defaultRenderAvatar,
     applyCoachIdentity: opts.applyCoachIdentity ?? defaultApplyCoachIdentity,
     createBlobSignedUrl: opts.createBlobSignedUrl ?? defaultCreateBlobSignedUrl,
-    mintMacOpsToken: opts.mintMacOpsToken ?? defaultMintMacOpsToken,
     executeChatSearch: opts.executeChatSearch ?? defaultExecuteChatSearch,
     executeChatHistory: opts.executeChatHistory ?? defaultExecuteChatHistory,
     resolveChatIdentity: opts.resolveChatIdentity ?? defaultResolveChatIdentity,
@@ -1553,43 +1514,33 @@ function installGatewayOpsRoutes(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,
 ): void {
-  const { db, mintMacOpsToken, recordUsageEvent, createBlobSignedUrl } = deps;
+  const { db, recordUsageEvent, createBlobSignedUrl } = deps;
 
-  router.post("/mac-ops-token", async (req, res) => {
+  router.post("/system-config-status", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
-    await runBrokered(res, async () => {
-      if (!(await legacyMacOpsTokenAllowed(db, bound))) {
-        res.status(400).json({
-          error: "revision_identity_required",
-          gatewayId: bound.gatewayId,
-        });
-        return;
-      }
-      const token = await mintMacOpsToken({
-        gatewayId: bound.gatewayId,
-        revisionId: bound.gatewayId,
-      });
-      res.json(token);
-    });
-  });
-
-  router.post("/mac-ops-token/v2", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const body = objectBody(req);
-    const revisionId = await resolveMacOpsRevisionId(db, bound, body.revisionId);
-    if (!revisionId) {
-      res.status(400).json({
-        error: "invalid_revision",
-        gatewayId: bound.gatewayId,
-        revisionId: typeof body.revisionId === "string" ? body.revisionId : "",
-      });
+    const revisionId = typeof req.body?.revisionId === "string" ? req.body.revisionId : "";
+    const authenticatedRevisionId = revisionIdFromGatewayPodName(bound.gatewayId, bound.podName);
+    if (!authenticatedRevisionId || authenticatedRevisionId !== revisionId) {
+      respondInvalidRevision(res, bound.gatewayId, revisionId);
+      return;
+    }
+    const status = parseSystemConfigObservedStatus(req.body?.status);
+    if (!status) {
+      res.status(400).json({ error: "invalid_system_config_status" });
       return;
     }
     await runBrokered(res, async () => {
-      const token = await mintMacOpsToken({ gatewayId: bound.gatewayId, revisionId });
-      res.json(token);
+      const accepted = await recordRevisionSystemConfigStatus(db, {
+        gatewayId: bound.gatewayId,
+        revisionId,
+        status,
+      });
+      if (!accepted) {
+        res.status(409).json({ error: "revision_not_serving_gateway" });
+        return;
+      }
+      res.status(204).end();
     });
   });
 

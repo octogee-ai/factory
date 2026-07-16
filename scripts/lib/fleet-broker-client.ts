@@ -1,7 +1,6 @@
 import type {
   FleetBrokerBlobSignedUrl,
   FleetBrokerGreetingResult,
-  FleetBrokerMacOpsToken,
   FleetBrokerMattermostUpdate,
   FleetBrokerPreStopFlushEvent,
   FleetBrokerProvisioningStatus,
@@ -9,6 +8,7 @@ import type {
   FleetBrokerUserSnapshot,
 } from "../../shared/types/fleet-broker.js";
 import { internalFetch } from "./internal-fetch.js";
+import type { SystemConfigObservedStatus } from "./system-config-status.js";
 
 function baseUrl(): string {
   if (process.env.FLEET_BROKER_URL) return process.env.FLEET_BROKER_URL;
@@ -58,12 +58,12 @@ export interface FleetBrokerClient {
   recordReconcileError(slug: string, message: string): Promise<void>;
   clearReconcileError(slug: string): Promise<void>;
   notifySignup(uid: string): Promise<void>;
-  macOpsToken(): Promise<FleetBrokerMacOpsToken>;
   recordUsageEvent(input: {
     agentId: string;
     usage: FleetBrokerUsageData;
   }): Promise<void>;
   recordPreStopFlush(input: FleetBrokerPreStopFlushEvent): Promise<void>;
+  recordSystemConfigStatus(input: SystemConfigObservedStatus): Promise<void>;
   blobDownloadUrl(input: {
     slug: string;
     path: string;
@@ -163,17 +163,18 @@ export function createFleetBrokerClient(gatewayId: string, revisionId = ""): Fle
     notifySignup(uid) {
       return postNoContent("/internal/fleet/notify-signup", { gatewayId, uid });
     },
-    macOpsToken() {
-      return postJson<FleetBrokerMacOpsToken>("/internal/fleet/mac-ops-token/v2", {
-        gatewayId,
-        revisionId: revisionId || gatewayId,
-      });
-    },
     recordUsageEvent(input) {
       return postNoContent("/internal/fleet/usage-event", { gatewayId, ...input });
     },
     recordPreStopFlush(input) {
       return postNoContent("/internal/fleet/prestop-flush", { gatewayId, ...input });
+    },
+    recordSystemConfigStatus(status) {
+      return postNoContent("/internal/fleet/system-config-status", {
+        gatewayId,
+        revisionId,
+        status,
+      });
     },
     blobDownloadUrl(input) {
       return postJson<FleetBrokerBlobSignedUrl>(

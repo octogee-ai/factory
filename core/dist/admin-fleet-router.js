@@ -1,7 +1,7 @@
 import { FieldValue } from "firebase-admin/firestore";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, OPERATOR_GATEWAY_RESERVATIONS_COLLECTION, defaultOperatorGatewayAccess, resolveUserGatewayShellState, OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT, isValidNewGatewayId, isGatewayClass, isGatewayProfile, operatorGatewayServiceAccountName, resolveGatewayClass, resolveGatewayImageProfile, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, GATEWAY_RELEASES_SUBCOLLECTION, CURRENT_MAC_OPS_TOKEN_PROTOCOL, commitPlacementAtomic, isReleasePayload, releasePayloadHash, releaseMacOpsTokenProtocol, isGatewayDesiredDoc, isGatewayLegacyBackfill, isRevisionRealizationDoc, revisionIdForRelease, rootReferencedRevisionIds, } from "@octogee/shared/types/gateway-releases";
+import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, GATEWAY_RELEASES_SUBCOLLECTION, commitPlacementAtomic, isReleasePayload, releasePayloadHash, isGatewayDesiredDoc, isGatewayLegacyBackfill, isRevisionRealizationDoc, revisionIdForRelease, rootReferencedRevisionIds, } from "@octogee/shared/types/gateway-releases";
 import { parseAssignmentDoc, readAssignmentDocsForGateway } from "./assignment-doc.js";
 import { GATEWAY_CONFIG_SCHEMA_VERSION, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, } from "./gateway-live-release.js";
 import { projectReleaseHistory } from "./gateway-release-history.js";
@@ -1654,13 +1654,11 @@ function currentArtifactPatch(artifact, patch) {
     return {
         imageRepository: patch.imageRepository ?? artifact.imageRepository,
         imageTag: patch.imageTag ?? artifact.imageTag,
-        macOpsTokenProtocol: CURRENT_MAC_OPS_TOKEN_PROTOCOL,
     };
 }
 function sameArtifact(left, right) {
     return (left.imageRepository === right.imageRepository &&
-        left.imageTag === right.imageTag &&
-        (left.macOpsTokenProtocol ?? 1) === (right.macOpsTokenProtocol ?? 1));
+        left.imageTag === right.imageTag);
 }
 function initialGatewayReleaseDocuments(args) {
     const gatewayDoc = {
@@ -1955,7 +1953,6 @@ function buildCreateArtifact(body) {
     return {
         imageRepository: body.imageRepository,
         imageTag: body.imageTag,
-        macOpsTokenProtocol: CURRENT_MAC_OPS_TOKEN_PROTOCOL,
     };
 }
 async function recordRolloutRelease(db, args) {
@@ -2109,18 +2106,6 @@ async function resolveRollbackRelease(args) {
             },
         };
     }
-    if (releaseMacOpsTokenProtocol(target.payload) !== CURRENT_MAC_OPS_TOKEN_PROTOCOL) {
-        return {
-            error: {
-                status: 409,
-                body: {
-                    error: "cannot roll back to a release using legacy MAC token protocol",
-                    gatewayId: args.gatewayId,
-                    release,
-                },
-            },
-        };
-    }
     const previous = await readRelease(args.db, args.gatewayId, gateway.latestRelease);
     if (!previous) {
         return {
@@ -2261,7 +2246,6 @@ function operatorGatewayInitialReleaseFromReservation(opts) {
         artifact: {
             imageRepository: opts.body.imageRepository,
             imageTag: opts.body.imageTag,
-            macOpsTokenProtocol: CURRENT_MAC_OPS_TOKEN_PROTOCOL,
         },
         config: {
             configSchemaVersion: GATEWAY_CONFIG_SCHEMA_VERSION,

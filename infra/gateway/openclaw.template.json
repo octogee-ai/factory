@@ -39,6 +39,11 @@
         "jsonOnly": true,
         "timeoutMs": 5000,
         "allowInsecurePath": true
+      },
+      "octogee-mattermost": {
+        "source": "file",
+        "path": "/home/node/.openclaw/secrets/mattermost-accounts.json",
+        "mode": "json"
       }
     }
   },
@@ -85,22 +90,7 @@
         "runTimeoutSeconds": 900
       }
     },
-    "list": [
-      {
-        "id": "${OPERATOR_AGENT_ID}",
-        "name": "Mac (${OPERATOR_AGENT_SLUG})",
-        "workspace": "/home/node/.openclaw/workspace/ops",
-        "agentDir": "/home/node/.openclaw/agents/${OPERATOR_AGENT_ID}/agent",
-        "model": "anthropic/claude-sonnet-4-6",
-        "heartbeat": {
-          "every": "30m"
-        },
-        "identity": {
-          "name": "Mac",
-          "emoji": "🔧"
-        }
-      }
-    ]
+    "list": []
   },
   "tools": {
     "profile": "coding",
@@ -173,15 +163,7 @@
       "commands": {
         "native": false
       },
-      "accounts": {
-        "default": {
-          "botToken": "${MM_BOT_TOKEN}",
-          "commands": {
-            "native": false
-          }
-        }
-      },
-      "defaultAccount": "default"
+      "accounts": {}
     }
   },
   "gateway": {

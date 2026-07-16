@@ -11,6 +11,7 @@ import {
   platformOpenAiEmbeddingsEnabled,
 } from "../lib/openclaw-config-builders.js";
 import { applyOpenClawConversationExperiment } from "../lib/openclaw-conversation-experiment.js";
+import { openClawConfigPath, openClawDir } from "../lib/openclaw-config-path.js";
 import {
   isBareGatewayId,
   readGatewayAuthorization,
@@ -22,10 +23,8 @@ import {
   platformModelRefs,
 } from "@octogee/shared/types/agent-models";
 
-const OPENCLAW_DIR = process.env.HOME
-  ? path.join(process.env.HOME, ".openclaw")
-  : "/home/node/.openclaw";
-const CONFIG_PATH = path.join(OPENCLAW_DIR, "openclaw.json");
+const OPENCLAW_DIR = openClawDir();
+const CONFIG_PATH = openClawConfigPath();
 
 function log(msg: string): void {
   const ts = new Date().toISOString().replace("Z", "+00:00");
@@ -63,13 +62,6 @@ export function platformBrokerCatalogOpts(env: NodeJS.ProcessEnv): {
 
 type OpenClawConfig = Record<string, unknown>;
 
-const MAC_PLATFORM_ANTHROPIC_MODEL_REF = "anthropic/claude-sonnet-4-6";
-const MAC_PLATFORM_ANTHROPIC_MODEL_CONFIG = {
-  alias: "sonnet",
-  params: { cacheRetention: "short" },
-};
-const MAC_AGENT_ID_TEMPLATE = "${OPERATOR_AGENT_ID}";
-const MAC_AGENT_ID_RE = /^octogee-ops-[a-z0-9][a-z0-9-]{0,62}$/;
 const COACH_AGENT_ID_RE = /^octogee-[a-z0-9][a-z0-9-]{0,62}-coach$/;
 
 function objectProperty(
@@ -105,117 +97,8 @@ function applyToolsProfilePatch(
   return true;
 }
 
-function isMacAgentEntry(value: unknown): value is Record<string, unknown> {
-  if (!isPlainObject(value)) return false;
-  return (
-    value.id === MAC_AGENT_ID_TEMPLATE ||
-    (typeof value.id === "string" && MAC_AGENT_ID_RE.test(value.id))
-  );
-}
-
 function isCoachAgentEntry(value: unknown): value is Record<string, unknown> & { id: string } {
   return isPlainObject(value) && typeof value.id === "string" && COACH_AGENT_ID_RE.test(value.id);
-}
-
-function isOperatorRuntime(env: NodeJS.ProcessEnv): boolean {
-  return env.GATEWAY_CLASS === "operator" || env.GATEWAY_PROFILE === "operator";
-}
-
-function setRecordProperty(
-  record: Record<string, unknown>,
-  key: string,
-  value: unknown,
-): boolean {
-  if (record[key] === value) return false;
-  record[key] = value;
-  return true;
-}
-
-function ensureMacAnthropicProfile(config: OpenClawConfig): {
-  changed: boolean;
-  available: boolean;
-} {
-  const auth = ensureNullishObjectProperty(config, "auth");
-  const profiles = auth ? ensureNullishObjectProperty(auth, "profiles") : null;
-  if (!profiles) return { changed: false, available: false };
-
-  const currentProfile = objectProperty(profiles, "anthropic:default");
-  if (!currentProfile) {
-    profiles["anthropic:default"] = { provider: "anthropic", mode: "api_key" };
-    return { changed: true, available: true };
-  }
-
-  const changed = [
-    setRecordProperty(currentProfile, "provider", "anthropic"),
-    setRecordProperty(currentProfile, "mode", "api_key"),
-  ].some(Boolean);
-  return { changed, available: true };
-}
-
-function macPinLogMessage(profileAvailable: boolean): string {
-  const base = `Mac pinned to ${MAC_PLATFORM_ANTHROPIC_MODEL_REF}`;
-  return profileAvailable
-    ? `${base} on anthropic:default`
-    : `${base} (auth profile not repaired: invalid auth/profiles shape)`;
-}
-
-function ensureMacModelAllowlist(agents: Record<string, unknown>): boolean {
-  const defaults = ensureNullishObjectProperty(agents, "defaults");
-  const models = defaults ? ensureNullishObjectProperty(defaults, "models") : null;
-  if (!models) return false;
-  if (
-    JSON.stringify(models[MAC_PLATFORM_ANTHROPIC_MODEL_REF]) ===
-    JSON.stringify(MAC_PLATFORM_ANTHROPIC_MODEL_CONFIG)
-  ) {
-    return false;
-  }
-
-  models[MAC_PLATFORM_ANTHROPIC_MODEL_REF] = MAC_PLATFORM_ANTHROPIC_MODEL_CONFIG;
-  return true;
-}
-
-function pinMacAgentModels(macAgents: Record<string, unknown>[]): boolean {
-  return macAgents
-    .map((agent) => setRecordProperty(agent, "model", MAC_PLATFORM_ANTHROPIC_MODEL_REF))
-    .some(Boolean);
-}
-
-function pinOperatorMacSubagentModel(
-  agents: Record<string, unknown>,
-  env: NodeJS.ProcessEnv,
-): boolean {
-  if (!isOperatorRuntime(env)) return false;
-  const defaults = objectProperty(agents, "defaults");
-  const subagents = defaults ? objectProperty(defaults, "subagents") : null;
-  return subagents
-    ? setRecordProperty(subagents, "model", MAC_PLATFORM_ANTHROPIC_MODEL_REF)
-    : false;
-}
-
-export function applyMacPlatformAnthropicPin(
-  config: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-  logFn: (msg: string) => void,
-): boolean {
-  const agents = objectProperty(config, "agents");
-  if (!agents) return false;
-
-  const list = Array.isArray(agents.list) ? agents.list : [];
-  const macAgents = list.filter(isMacAgentEntry);
-  if (macAgents.length === 0) return false;
-
-  const profile = ensureMacAnthropicProfile(config);
-  const changed = [
-    profile.changed,
-    ensureMacModelAllowlist(agents),
-    pinMacAgentModels(macAgents),
-    pinOperatorMacSubagentModel(agents, env),
-  ].some(Boolean);
-
-  if (changed) {
-    logFn(macPinLogMessage(profile.available));
-  }
-  return changed;
 }
 
 export function applyMattermostPreBootPatches(
@@ -226,18 +109,6 @@ export function applyMattermostPreBootPatches(
   const mattermost = objectProperty(objectProperty(config, "channels"), "mattermost");
   if (!mattermost) return false;
   let changed = false;
-
-  if (env.MM_BOT_TOKEN) {
-    const accounts = ensureNullishObjectProperty(mattermost, "accounts");
-    const defaultAccount = accounts
-      ? ensureNullishObjectProperty(accounts, "default")
-      : null;
-    if (defaultAccount && defaultAccount.botToken !== env.MM_BOT_TOKEN) {
-      defaultAccount.botToken = env.MM_BOT_TOKEN;
-      changed = true;
-      logFn(`MM bot token synced into accounts.default from MM_BOT_TOKEN env var`);
-    }
-  }
 
   if (env.MM_URL && mattermost.baseUrl !== env.MM_URL) {
     mattermost.baseUrl = env.MM_URL;
@@ -252,9 +123,9 @@ export function applyMattermostPreBootPatches(
     logFn(`forced channels.mattermost.commands.native=false (slash commands disabled)`);
   }
 
-  const accounts = objectProperty(mattermost, "accounts");
-  if (!accounts) return changed;
-  for (const [accountId, account] of Object.entries(accounts)) {
+  const configuredAccounts = objectProperty(mattermost, "accounts");
+  if (!configuredAccounts) return changed;
+  for (const [accountId, account] of Object.entries(configuredAccounts)) {
     if (!isPlainObject(account)) continue;
     const accountCommands = ensureNullishObjectProperty(account, "commands");
     if (accountCommands && accountCommands.native !== false) {
@@ -353,7 +224,6 @@ export function applyPreBootPatches(
     applyToolsProfilePatch(config, logFn),
     applyMattermostPreBootPatches(config, env, logFn),
     applyOpenClawConversationExperiment(config, env.OCTOGEE_ACTIVITY_BRIDGE_MODE),
-    applyMacPlatformAnthropicPin(config, env, logFn),
     applyAnthropicBaseUrlPatch(config, env, logFn),
     applyPlatformModelAllowlist(config, env),
     applyMemorySearchPlatformEmbeddingsPatch(config, env, logFn),

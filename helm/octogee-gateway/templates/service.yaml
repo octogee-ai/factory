@@ -6,6 +6,9 @@ metadata:
   labels:
     {{- include "octogee-gateway.labels" . | nindent 4 }}
 spec:
+  {{- if ne (include "octogee-gateway.gatewayClass" .) "shared" }}
+  publishNotReadyAddresses: true
+  {{- end }}
   selector:
     app: octogee-gateway
     gateway-instance: {{ include "octogee-gateway.revisionId" . }}
@@ -40,6 +43,9 @@ metadata:
     {{- include "octogee-gateway.labels" . | nindent 4 }}
     app.kubernetes.io/name: gateway-edge
 spec:
+  {{- if ne (include "octogee-gateway.gatewayClass" .) "shared" }}
+  publishNotReadyAddresses: true
+  {{- end }}
   selector:
     app: octogee-gateway
     gateway-instance: {{ include "octogee-gateway.revisionId" . }}

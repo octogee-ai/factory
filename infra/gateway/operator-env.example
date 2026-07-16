@@ -2,40 +2,23 @@
 #
 # Operator-customization env file for personal / dedicated gateways.
 #
-# Copy this to /home/node/.openclaw/secrets/operator.env on the gateway's
-# PVC (mode 600) and add additional credentials / integrations the
-# platform doesn't manage. Survives every PVC reschedule. Helm + K8s
-# don't see this file.
+# Copy this to /home/node/.openclaw/secrets/operator.env on a running
+# gateway (mode 600) only for temporary local credentials. It is emptyDir
+# convenience state and is not restored after a gateway replacement.
 #
 # Sourced by entrypoint.sh AFTER the platform K8s env block (so the
 # operator can override their own gateway if absolutely necessary, though
 # the intent is additive-only — don't override platform-critical things
 # like OPENCLAW_GATEWAY_TOKEN unless you know what you're doing). Sourced
-# BEFORE envsubst on openclaw.template.json, so operator-defined values
-# can populate the template on a first-boot gateway.
+# before OpenClaw starts, so operator-defined values can resolve existing
+# environment references in the tracked config.
 #
 # See docs/architecture/GATEWAY-PLATFORM-SPEC.md
 # §Operator-class customization surface for the design rationale.
 #
-# ── Editing on a running gateway's PVC ────────────────────────────────
-# The gateway pod may be crash-looping, so use a debug pod that mounts
-# the PVC (swap <ns> and <instance> for your gateway):
-#
-#   kubectl -n <ns> run pvc-edit --rm -it --restart=Never --image=alpine:3 \
-#     --overrides='{"spec":{"containers":[{"name":"pvc-edit","image":"alpine:3","stdin":true,"tty":true,"command":["sh"],"securityContext":{"runAsUser":1000},"volumeMounts":[{"mountPath":"/data","name":"data"}]}],"volumes":[{"name":"data","persistentVolumeClaim":{"claimName":"octogee-gateway-<instance>-data"}}]}}' \
-#     -- sh
-#
-# Then inside the shell:
-#
-#   mkdir -p /data/.openclaw/secrets
-#   cat > /data/.openclaw/secrets/operator.env <<'EOF'
-#   DISCORD_BENDER_TOKEN=...
-#   EOF
-#   chmod 600 /data/.openclaw/secrets/operator.env
-#
-# Then `kubectl rollout restart deployment/octogee-gateway-<instance>` to
-# pick up the new env. Pod boots, entrypoint sources the file, openclaw
-# resolves the ${VAR} references in openclaw.json.
+# Create or edit this file through BuilderShell, then restart the gateway
+# process to pick it up. Credentials that must survive a roll belong in the
+# customer credential store and enter config through SecretRefs.
 #
 # ── Examples ──────────────────────────────────────────────────────────
 #

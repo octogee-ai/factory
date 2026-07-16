@@ -34,7 +34,6 @@ RUN npm install --no-audit --no-fund
 COPY --chown=node:node scripts/entrypoints/ /octogee/scripts/entrypoints/
 COPY --chown=node:node scripts/secret-resolver.mjs /octogee/scripts/
 COPY --chown=node:node scripts/publish-gateway-token.mjs /octogee/scripts/
-COPY --chown=node:node scripts/bootstrap-mac-ops.mjs /octogee/scripts/
 COPY --chown=node:node scripts/tsconfig.json /octogee/scripts/
 COPY --chown=node:node scripts/lib/ /octogee/scripts/lib/
 
@@ -129,10 +128,7 @@ WORKDIR /octogee/extensions/octogee-web-tools
 RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
     && chown -R node:node /octogee/extensions/octogee-web-tools/node_modules
 
-# ── Config template (for ephemeral bootstrap) ──────────────────────────────
-# openclaw.template.json + envsubst replaces the old known-good config
-
-# ── envsubst for config templating ──────────────────────────────────────────
+# ── Runtime utilities ───────────────────────────────────────────────────────
 # `chmod 1777 /tmp` is defensive: newer Debian bookworm apt sandboxes
 # signature verification through user `_apt` and needs a world-writable
 # /tmp. The OpenClaw npm install in Dockerfile.base sometimes leaves /tmp
@@ -146,7 +142,8 @@ RUN chmod 1777 /tmp \
 COPY --chown=node:node infra/gateway/openclaw.template.json /octogee/infra/gateway/openclaw.template.json
 COPY --chown=node:node infra/gateway/apply-gateway-class-policy.mjs /octogee/infra/gateway/apply-gateway-class-policy.mjs
 COPY infra/gateway/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod 755 /usr/local/bin/entrypoint.sh
+COPY infra/gateway/octogee /usr/local/bin/octogee
+RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/octogee
 
 COPY infra/gateway/.bashrc /home/node/.bashrc
 RUN chown node:node /home/node/.bashrc

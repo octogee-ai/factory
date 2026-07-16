@@ -42,6 +42,32 @@ export declare const MIGRATION_UNMOUNT_TIMEOUT_MS: number;
 export declare const MIGRATION_VERIFY_TIMEOUT_MS: number;
 export declare const MIGRATING_IN_PIN_TTL_MS: number;
 export declare const SIGNATURE_HEADER = "X-Fleet-Controller-Signature";
+export declare const DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL: "durable-openclaw-config";
+export declare const DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION: 1;
+export interface DurableOpenClawConfigControlProtocol {
+    protocol: typeof DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL;
+    version: typeof DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION;
+}
+export declare const SYSTEM_CONFIG_CONTROL_CAPABILITY_FILE: "system_config.control-capability.json";
+export declare const SYSTEM_CONFIG_CONTROL_CAPABILITY_TTL_MS = 15000;
+export interface SystemConfigControlCapability extends DurableOpenClawConfigControlProtocol {
+    revisionId: string;
+    instanceId: string;
+    observedAt: string;
+}
+export declare const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL: "openclaw-dashboard-bridge";
+export declare const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION: 1;
+export declare const OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_FILE: "dashboard_bridge.capability.json";
+export declare const OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_TTL_MS = 15000;
+export interface OpenClawDashboardBridgeProtocol {
+    protocol: typeof OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL;
+    version: typeof OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION;
+}
+export interface OpenClawDashboardBridgeCapability extends OpenClawDashboardBridgeProtocol {
+    revisionId: string;
+    instanceId: string;
+    observedAt: string;
+}
 export declare const GATEWAYS_COLLECTION = "gateways";
 export interface MigrationRequestBody {
     migrationId: string;
@@ -115,6 +141,62 @@ export interface QuiesceResponse {
     slug: string;
     drained: boolean;
     runningCount: number;
+}
+export interface ConfigControlRequestBody extends MigrationRequestBody {
+    action: "freeze" | "restore-proof" | "unfreeze";
+    issuedAt: number;
+    expiresAt: number;
+    requestId: string;
+}
+export declare const CONFIG_FREEZE_CONFLICT_ERROR = "config freeze conflict";
+export declare const CONFIG_FREEZE_UNAVAILABLE_ERROR = "config freeze unavailable";
+export declare const CONFIG_FREEZE_OWNER_CONFLICT_CODE = "freeze-owner-conflict";
+export declare const CONFIG_FREEZE_SCOPE_CONFLICT_CODE = "freeze-scope-conflict";
+export declare const CONFIG_FREEZE_WRITER_LOCK_BUSY_CODE = "writer-lock-busy";
+export declare const CONFIG_FREEZE_CHECKPOINT_PUSH_PENDING_CODE = "checkpoint-push-pending";
+export interface ConfigFreezeOwner {
+    migrationId: string;
+    slug: string;
+}
+export type ConfigFreezeConflictCode = typeof CONFIG_FREEZE_OWNER_CONFLICT_CODE | typeof CONFIG_FREEZE_SCOPE_CONFLICT_CODE;
+export type ConfigFreezeUnavailableCode = typeof CONFIG_FREEZE_WRITER_LOCK_BUSY_CODE | typeof CONFIG_FREEZE_CHECKPOINT_PUSH_PENDING_CODE;
+export interface ConfigFreezeConflictResponse {
+    error: typeof CONFIG_FREEZE_CONFLICT_ERROR;
+    code: ConfigFreezeConflictCode;
+    owner: ConfigFreezeOwner;
+}
+export interface ConfigFreezeUnavailableResponse {
+    error: typeof CONFIG_FREEZE_UNAVAILABLE_ERROR;
+    code: ConfigFreezeUnavailableCode;
+    retryable: true;
+}
+export interface ConfigFreezeRequestBody extends ConfigControlRequestBody {
+    action: "freeze";
+}
+export interface ConfigFreezeResponse extends MigrationRequestBody {
+    frozen: true;
+    checkpointCommit: string;
+    configHash: string;
+}
+export interface ConfigRestoreProofRequestBody extends ConfigControlRequestBody {
+    action: "restore-proof";
+    checkpointCommit: string;
+}
+export interface ConfigRestoreProofResponse extends MigrationRequestBody {
+    restoredCommit: string;
+    acceptedCommit: string;
+    configHash: string;
+    configReady: true;
+    observedRevisionId: string;
+    restoreProvenAt: number;
+    configReadyAt: number;
+    runtimeConfigHash: string;
+}
+export interface ConfigUnfreezeRequestBody extends ConfigControlRequestBody {
+    action: "unfreeze";
+}
+export interface ConfigUnfreezeResponse extends MigrationRequestBody {
+    unfrozen: boolean;
 }
 export interface FlushGatewayRequestBody extends MigrationRequestBody {
     reason?: string;

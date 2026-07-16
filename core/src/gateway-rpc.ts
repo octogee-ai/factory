@@ -375,7 +375,10 @@ function resolveGatewayAuth(opts: GatewayRpcClientOptions): GatewayRpcAuth {
 }
 
 function readTokenFromOpenClawJson(configPath?: string): string {
-  const resolved = configPath ?? path.join(os.homedir(), ".openclaw", "openclaw.json");
+  const activeConfigPath = process.env.OPENCLAW_CONFIG_PATH?.trim();
+  const resolved = configPath
+    ?? activeConfigPath
+    ?? path.join(os.homedir(), ".openclaw", "openclaw.json");
   try {
     const raw = fs.readFileSync(resolved, "utf8");
     const parsed = JSON.parse(raw) as {

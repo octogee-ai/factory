@@ -16,7 +16,6 @@ import {
   isRevisionRealizationDoc,
   revisionIdForRelease,
   type GatewayDoc,
-  type MacOpsTokenProtocol,
   type ReleasePayload,
   type W9GatewayEdgeImage,
   type W9TestPublisherLiveExperiment,
@@ -36,7 +35,6 @@ type FirestoreReader = Pick<Firestore, "doc">;
 export interface GatewayArtifact {
   imageRepository: string;
   imageTag: string;
-  macOpsTokenProtocol?: MacOpsTokenProtocol;
   gatewayEdgeImage?: W9GatewayEdgeImage;
   testExperiment?: W9TestPublisherLiveExperiment;
 }
@@ -76,9 +74,6 @@ export function gatewayArtifactFromReleasePayload(payload: ReleasePayload): Gate
   return {
     imageRepository: payload.imageRepository,
     imageTag: payload.imageTag,
-    ...(payload.macOpsTokenProtocol === undefined
-      ? {}
-      : { macOpsTokenProtocol: payload.macOpsTokenProtocol }),
     ...(payload.gatewayEdgeImage === undefined
       ? {}
       : { gatewayEdgeImage: payload.gatewayEdgeImage }),

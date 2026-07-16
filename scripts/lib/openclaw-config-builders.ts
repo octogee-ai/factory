@@ -1,4 +1,8 @@
 import { projectAgentId } from "../../shared/types/identity.js";
+import {
+  mattermostAccountSecretRef,
+  type MattermostAccountSecretRef,
+} from "./mattermost-account-secrets.js";
 
 const PLATFORM_EMBEDDING_PROVIDER = "openai-compatible";
 const DEFAULT_OPENAI_EMBEDDINGS_BASE_URL = "https://api.openai.com/v1";
@@ -115,6 +119,7 @@ export interface CustomerAgentInput {
   customerDir: string;
   agentDir: string;
   coach: { name: string; emoji: string; model: string };
+  default?: boolean;
   memorySearch?: Record<string, unknown>;
 }
 
@@ -133,6 +138,9 @@ export function buildCustomerAgent(
     heartbeat: { every: "60m", target: "last", lightContext: true },
     tools: { fs: { workspaceOnly: true } },
   };
+  if (c.default) {
+    agent.default = true;
+  }
   if (c.memorySearch) {
     agent.memorySearch = c.memorySearch;
   }
@@ -268,7 +276,7 @@ export interface MattermostAccountInput {
 }
 
 export interface MattermostAccountEntry {
-  botToken: string;
+  botToken: MattermostAccountSecretRef;
   groupPolicy?: "open" | "allowlist" | "disabled";
   groupAllowFrom?: string[];
 
@@ -297,25 +305,15 @@ export function buildMattermostAccounts(
     const groupAllowFrom = [c.customerMmUserId, adminMmUserId].filter(
       (id): id is string => typeof id === "string" && id.length > 0,
     );
-    accounts[`${c.slug}-coach`] = {
-      botToken: token,
+    const accountId = `${c.slug}-coach`;
+    accounts[accountId] = {
+      botToken: mattermostAccountSecretRef(accountId),
       groupPolicy: "open",
       ...(groupAllowFrom.length > 0 ? { groupAllowFrom } : {}),
       commands: { native: false },
     };
   }
   return accounts;
-}
-
-export function mergeAccountsPreservingDefault(
-  existingAccounts: Record<string, unknown>,
-  coachAccounts: Record<string, MattermostAccountEntry>,
-): Record<string, unknown> {
-  const merged: Record<string, unknown> = { ...coachAccounts };
-  if (existingAccounts.default) {
-    merged.default = existingAccounts.default;
-  }
-  return merged;
 }
 
 export interface OpenClawBinding {
@@ -381,8 +379,9 @@ export function buildProjectAgentAccounts(
   const accounts: Record<string, MattermostAccountEntry> = {};
   for (const p of projectAgents) {
     if (!active.has(p.projectId) || !p.token) continue;
-    accounts[`${slug}-proj-${p.projectId}`] = {
-      botToken: p.token,
+    const accountId = `${slug}-proj-${p.projectId}`;
+    accounts[accountId] = {
+      botToken: mattermostAccountSecretRef(accountId),
       groupPolicy: "open",
       commands: { native: false },
     };

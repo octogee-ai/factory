@@ -11,6 +11,9 @@ import {
   createActivateImportHandler,
   createActivationManifestExportHandler,
   createAbortRsyncImportHandler,
+  createConfigFreezeHandler,
+  createConfigRestoreProofHandler,
+  createConfigUnfreezeHandler,
   createExportHandler,
   createExportPathsHandler,
   createFlushHandler,
@@ -30,6 +33,12 @@ import {
 } from "../lib/fleet-http-migration.js";
 import { signFleetRequest } from "../lib/fleet-signature.js";
 import {
+  CONFIG_FREEZE_CHECKPOINT_PUSH_PENDING_CODE,
+  CONFIG_FREEZE_CONFLICT_ERROR,
+  CONFIG_FREEZE_OWNER_CONFLICT_CODE,
+  CONFIG_FREEZE_SCOPE_CONFLICT_CODE,
+  CONFIG_FREEZE_UNAVAILABLE_ERROR,
+  CONFIG_FREEZE_WRITER_LOCK_BUSY_CODE,
   SIGNATURE_HEADER,
   MIGRATION_ID_HEADER,
   MIGRATION_MODE_HEADER,
@@ -47,6 +56,11 @@ import {
   type PrepareRsyncImportRequestBody,
   type PushRsyncStateRequestBody,
 } from "../../shared/types/fleet-controller.js";
+import {
+  SystemConfigFreezeOwnerConflictError,
+  SystemConfigFreezeScopeConflictError,
+  SystemConfigFreezeUnavailableError,
+} from "../lib/system-config-roll-control.js";
 import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
 import {
   hasMountedMarker,
@@ -65,6 +79,21 @@ const PUBLIC_KEY = FLEET_KEY_PAIR.publicKey;
 const GATEWAY_ID = "gw-a";
 const SOURCE_POD_IP = ["10", "1", "0", "10"].join(".");
 const TARGET_POD_IP = ["10", "1", "0", "20"].join(".");
+const CONTROL_NOW = Date.parse("2026-07-15T00:00:00.000Z");
+let controlRequestSequence = 0;
+
+function configControlBody<T extends { migrationId: string; slug: string }>(
+  body: T,
+  action: "freeze" | "restore-proof" | "unfreeze" = "freeze",
+) {
+  return {
+    ...body,
+    action,
+    issuedAt: CONTROL_NOW - 1_000,
+    expiresAt: CONTROL_NOW + 30_000,
+    requestId: `${body.migrationId}-request-${++controlRequestSequence}`,
+  };
+}
 
 const SAMPLE_QUIESCE: QuiesceRequestBody = {
   migrationId: "mig-1",
@@ -279,6 +308,7 @@ function mkDeps(overrides: Partial<MigrationHandlerDeps> = {}): MigrationHandler
     gatewayId: GATEWAY_ID,
     adapter: mkAdapter(),
     log: vi.fn(),
+    now: () => CONTROL_NOW,
     ...overrides,
   };
 }
@@ -463,7 +493,7 @@ describe("createFlushHandler", () => {
 
   it("fails closed when the gateway did not configure a flush implementation", async () => {
     const handler = createFlushHandler(mkDeps());
-    const body = { migrationId: "mig-1", slug: "chris" };
+    const body = configControlBody({ migrationId: "mig-1", slug: "chris" });
     const req = mkRequest(body, {
       signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
     });
@@ -473,6 +503,336 @@ describe("createFlushHandler", () => {
 
     expect(getStatus()).toBe(501);
     expect(getBody()).toEqual({ error: "flush not configured" });
+  });
+});
+
+describe("system config roll handlers", () => {
+  it("returns the source checkpoint only after the local config controller freezes and drains", async () => {
+    const freezeSystemConfig = vi.fn(() => ({
+      checkpointCommit: "a".repeat(40),
+      configHash: "b".repeat(64),
+    }));
+    const handler = createConfigFreezeHandler(mkDeps({ freezeSystemConfig }));
+    const body = configControlBody({ migrationId: "mig-1", slug: "chris" });
+    const rawBody = JSON.stringify(body);
+    const req = mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody),
+    });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(freezeSystemConfig).toHaveBeenCalledWith({ migrationId: "mig-1", slug: "chris" });
+    expect(getBody()).toEqual({
+      migrationId: "mig-1",
+      slug: "chris",
+      frozen: true,
+      checkpointCommit: "a".repeat(40),
+      configHash: "b".repeat(64),
+    });
+  });
+
+  it("returns the target restored and post-migration accepted commits", async () => {
+    const proveSystemConfigRestore = vi.fn(() => ({
+      restoredCommit: "a".repeat(40),
+      acceptedCommit: "c".repeat(40),
+      configHash: "d".repeat(64),
+      configReady: true as const,
+      observedRevisionId: "default-r2",
+      restoreProvenAt: 100,
+      configReadyAt: 101,
+      runtimeConfigHash: "runtime-after",
+    }));
+    const handler = createConfigRestoreProofHandler(mkDeps({ proveSystemConfigRestore }));
+    const body = configControlBody({
+      migrationId: "mig-1",
+      slug: "chris",
+      checkpointCommit: "a".repeat(40),
+    }, "restore-proof");
+    const rawBody = JSON.stringify(body);
+    const req = mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody),
+    });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(proveSystemConfigRestore).toHaveBeenCalledWith({
+      migrationId: "mig-1",
+      slug: "chris",
+      checkpointCommit: "a".repeat(40),
+    });
+    expect(getBody()).toMatchObject({
+      restoredCommit: "a".repeat(40),
+      acceptedCommit: "c".repeat(40),
+      configHash: "d".repeat(64),
+      configReady: true,
+      observedRevisionId: "default-r2",
+      restoreProvenAt: 100,
+      configReadyAt: 101,
+      runtimeConfigHash: "runtime-after",
+    });
+  });
+
+  it("unfreezes the source on abort and fails closed when roll control is absent", async () => {
+    const unfreezeSystemConfig = vi.fn(() => ({ unfrozen: true }));
+    const body = configControlBody({ migrationId: "mig-1", slug: "chris" }, "unfreeze");
+    const rawBody = JSON.stringify(body);
+    const request = () => mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody),
+    });
+    const configured = createConfigUnfreezeHandler(mkDeps({ unfreezeSystemConfig }));
+    const configuredResponse = mkResponse();
+
+    await configured(request(), configuredResponse.res, vi.fn());
+
+    expect(configuredResponse.getStatus()).toBe(200);
+    expect(unfreezeSystemConfig).toHaveBeenCalledWith({ migrationId: "mig-1", slug: "chris" });
+    expect(configuredResponse.getBody()).toMatchObject({ unfrozen: true });
+
+    const absent = createConfigFreezeHandler(mkDeps());
+    const absentResponse = mkResponse();
+    const freezeBody = configControlBody({ migrationId: "mig-absent", slug: "chris" });
+    await absent(mkRequest(freezeBody, {
+      signature: signFleetRequest(PRIVATE_KEY, freezeBody.migrationId, JSON.stringify(freezeBody)),
+    }), absentResponse.res, vi.fn());
+    expect(absentResponse.getStatus()).toBe(501);
+  });
+
+  it("returns the exact owning freeze for owner and builder-scope conflicts", async () => {
+    const owner = { migrationId: "mig-owner", slug: "alice" };
+    const requested = { migrationId: "mig-request", slug: "chris" };
+    const conflicts = [
+      {
+        error: new SystemConfigFreezeOwnerConflictError(owner, requested),
+        code: CONFIG_FREEZE_OWNER_CONFLICT_CODE,
+      },
+      {
+        error: new SystemConfigFreezeScopeConflictError(owner, requested),
+        code: CONFIG_FREEZE_SCOPE_CONFLICT_CODE,
+      },
+    ];
+    for (const conflict of conflicts) {
+      const freeze = createConfigFreezeHandler(mkDeps({
+        freezeSystemConfig: () => { throw conflict.error; },
+      }));
+      const freezeBody = configControlBody({ migrationId: requested.migrationId, slug: requested.slug });
+      const freezeResponse = mkResponse();
+      await freeze(mkRequest(freezeBody, {
+        signature: signFleetRequest(PRIVATE_KEY, freezeBody.migrationId, JSON.stringify(freezeBody)),
+      }), freezeResponse.res, vi.fn());
+      expect(freezeResponse.getStatus()).toBe(409);
+      expect(freezeResponse.getBody()).toEqual({
+        error: CONFIG_FREEZE_CONFLICT_ERROR,
+        code: conflict.code,
+        owner,
+      });
+
+      const unfreeze = createConfigUnfreezeHandler(mkDeps({
+        unfreezeSystemConfig: () => { throw conflict.error; },
+      }));
+      const unfreezeBody = configControlBody(
+        { migrationId: requested.migrationId, slug: requested.slug },
+        "unfreeze",
+      );
+      const unfreezeResponse = mkResponse();
+      await unfreeze(mkRequest(unfreezeBody, {
+        signature: signFleetRequest(
+          PRIVATE_KEY,
+          unfreezeBody.migrationId,
+          JSON.stringify(unfreezeBody),
+        ),
+      }), unfreezeResponse.res, vi.fn());
+      expect(unfreezeResponse.getStatus()).toBe(409);
+      expect(unfreezeResponse.getBody()).toEqual({
+        error: CONFIG_FREEZE_CONFLICT_ERROR,
+        code: conflict.code,
+        owner,
+      });
+    }
+  });
+
+  it.each([
+    CONFIG_FREEZE_WRITER_LOCK_BUSY_CODE,
+    CONFIG_FREEZE_CHECKPOINT_PUSH_PENDING_CODE,
+  ])("returns retryable 503 for typed freeze unavailability %s", async (code) => {
+    const freezeSystemConfig = () => { throw new SystemConfigFreezeUnavailableError(code); };
+    const handler = createConfigFreezeHandler(mkDeps({ freezeSystemConfig }));
+    const body = configControlBody({ migrationId: `mig-${code}`, slug: "chris" });
+    const response = mkResponse();
+
+    await handler(mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+    }), response.res, vi.fn());
+
+    expect(response.getStatus()).toBe(503);
+    expect(response.getBody()).toEqual({
+      error: CONFIG_FREEZE_UNAVAILABLE_ERROR,
+      code,
+      retryable: true,
+    });
+  });
+
+  it.each([
+    CONFIG_FREEZE_WRITER_LOCK_BUSY_CODE,
+    CONFIG_FREEZE_CHECKPOINT_PUSH_PENDING_CODE,
+  ])("returns retryable 503 for typed restore-proof unavailability %s", async (code) => {
+    const proveSystemConfigRestore = () => {
+      throw new SystemConfigFreezeUnavailableError(code);
+    };
+    const handler = createConfigRestoreProofHandler(mkDeps({ proveSystemConfigRestore }));
+    const body = configControlBody({
+      migrationId: `mig-restore-${code}`,
+      slug: "chris",
+      checkpointCommit: "a".repeat(40),
+    }, "restore-proof");
+    const response = mkResponse();
+
+    await handler(mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+    }), response.res, vi.fn());
+
+    expect(response.getStatus()).toBe(503);
+    expect(response.getBody()).toEqual({
+      error: CONFIG_FREEZE_UNAVAILABLE_ERROR,
+      code,
+      retryable: true,
+    });
+  });
+
+  it("keeps restore-proof validation failures terminal", async () => {
+    const handler = createConfigRestoreProofHandler(mkDeps({
+      proveSystemConfigRestore: () => { throw new Error("target config validation failed"); },
+    }));
+    const body = configControlBody({
+      migrationId: "mig-restore-terminal",
+      slug: "chris",
+      checkpointCommit: "a".repeat(40),
+    }, "restore-proof");
+    const response = mkResponse();
+
+    await handler(mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+    }), response.res, vi.fn());
+
+    expect(response.getStatus()).toBe(409);
+    expect(response.getBody()).toEqual({
+      error: "config restore proof failed",
+      message: "target config validation failed",
+    });
+  });
+
+  it("keeps invariant failures terminal while treating an unfreeze writer lock as retryable", async () => {
+    const terminal = createConfigFreezeHandler(mkDeps({
+      freezeSystemConfig: () => { throw new Error("platform invariant failed"); },
+    }));
+    const terminalBody = configControlBody({ migrationId: "mig-terminal", slug: "chris" });
+    const terminalResponse = mkResponse();
+    await terminal(mkRequest(terminalBody, {
+      signature: signFleetRequest(
+        PRIVATE_KEY,
+        terminalBody.migrationId,
+        JSON.stringify(terminalBody),
+      ),
+    }), terminalResponse.res, vi.fn());
+    expect(terminalResponse.getStatus()).toBe(409);
+    expect(terminalResponse.getBody()).toEqual({
+      error: "config freeze failed",
+      message: "platform invariant failed",
+    });
+
+    const retryable = createConfigUnfreezeHandler(mkDeps({
+      unfreezeSystemConfig: () => {
+        throw new SystemConfigFreezeUnavailableError(CONFIG_FREEZE_WRITER_LOCK_BUSY_CODE);
+      },
+    }));
+    const retryableBody = configControlBody(
+      { migrationId: "mig-unfreeze-busy", slug: "chris" },
+      "unfreeze",
+    );
+    const retryableResponse = mkResponse();
+    await retryable(mkRequest(retryableBody, {
+      signature: signFleetRequest(
+        PRIVATE_KEY,
+        retryableBody.migrationId,
+        JSON.stringify(retryableBody),
+      ),
+    }), retryableResponse.res, vi.fn());
+    expect(retryableResponse.getStatus()).toBe(503);
+    expect(retryableResponse.getBody()).toEqual({
+      error: CONFIG_FREEZE_UNAVAILABLE_ERROR,
+      code: CONFIG_FREEZE_WRITER_LOCK_BUSY_CODE,
+      retryable: true,
+    });
+  });
+
+  it("rejects missing or expired config-control freshness before mutation", async () => {
+    const freezeSystemConfig = vi.fn(() => ({
+      checkpointCommit: "a".repeat(40),
+      configHash: "b".repeat(64),
+    }));
+    const handler = createConfigFreezeHandler(mkDeps({ freezeSystemConfig }));
+    for (const body of [
+      { migrationId: "mig-missing", slug: "chris" },
+      {
+        migrationId: "mig-expired",
+        slug: "chris",
+        action: "freeze",
+        issuedAt: CONTROL_NOW - 120_000,
+        expiresAt: CONTROL_NOW - 60_000,
+        requestId: "expired-request",
+      },
+    ]) {
+      const rawBody = JSON.stringify(body);
+      const response = mkResponse();
+      await handler(mkRequest(body, {
+        signature: signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody),
+      }), response.res, vi.fn());
+      expect(response.getStatus()).toBe(401);
+    }
+    expect(freezeSystemConfig).not.toHaveBeenCalled();
+  });
+
+  it("rejects replay of an already accepted config-control request id", async () => {
+    const freezeSystemConfig = vi.fn(() => ({
+      checkpointCommit: "a".repeat(40),
+      configHash: "b".repeat(64),
+    }));
+    const handler = createConfigFreezeHandler(mkDeps({ freezeSystemConfig }));
+    const body = {
+      ...configControlBody({ migrationId: "mig-replay", slug: "chris" }),
+      requestId: "one-time-request",
+    };
+    const rawBody = JSON.stringify(body);
+    const request = () => mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody),
+    });
+
+    const first = mkResponse();
+    await handler(request(), first.res, vi.fn());
+    expect(first.getStatus()).toBe(200);
+    const replay = mkResponse();
+    await handler(request(), replay.res, vi.fn());
+    expect(replay.getStatus()).toBe(409);
+    expect(freezeSystemConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a valid signed config-control request substituted across endpoints", async () => {
+    const unfreezeSystemConfig = vi.fn(() => ({ unfrozen: true }));
+    const handler = createConfigUnfreezeHandler(mkDeps({ unfreezeSystemConfig }));
+    const freezeBody = configControlBody({ migrationId: "mig-substitute", slug: "chris" }, "freeze");
+    const rawBody = JSON.stringify(freezeBody);
+    const response = mkResponse();
+
+    await handler(mkRequest(freezeBody, {
+      signature: signFleetRequest(PRIVATE_KEY, freezeBody.migrationId, rawBody),
+    }), response.res, vi.fn());
+
+    expect(response.getStatus()).toBe(401);
+    expect(response.getBody()).toEqual({ error: "invalid config control action" });
+    expect(unfreezeSystemConfig).not.toHaveBeenCalled();
   });
 });
 
@@ -1297,7 +1657,7 @@ describe("createPushStateHandler", () => {
     expect(args).toContain(".octogee-migration-activation/chris/activation.json");
   });
 
-  it("embeds activation manifests for operator gateway transfers when coach wiring exists", async () => {
+  it("operator gateway transfers contain only the movable customer agent", async () => {
     const exportOpenClawActivationManifest = vi.fn(async () => ({
       version: 1 as const,
       slug: "eggman",
@@ -1311,7 +1671,6 @@ describe("createPushStateHandler", () => {
       isOperatorGateway: vi.fn(() => true),
       listExportPaths: vi.fn(async () => [
         { cwd: "/state", path: "agents/octogee-eggman-coach" },
-        { cwd: "/state", path: "agents/octogee-ops-eggman" },
       ]),
       exportOpenClawActivationManifest,
     });
@@ -1345,19 +1704,17 @@ describe("createPushStateHandler", () => {
     expect(exportOpenClawActivationManifest).toHaveBeenCalledWith("eggman");
     const args = spawnMock.mock.calls[0][1] as string[];
     expect(args).toContain("agents/octogee-eggman-coach");
-    expect(args).toContain("agents/octogee-ops-eggman");
+    expect(args.some((arg) => arg.includes("octogee-ops-"))).toBe(false);
     expect(args).toContain(".octogee-migration-activation/eggman/activation.json");
   });
 
-  it("falls back to operator state-only transfer when no customer activation manifest exists", async () => {
+  it("fails an operator transfer when its customer activation manifest is missing", async () => {
     const exportOpenClawActivationManifest = vi.fn(async () => {
       throw new Error("[migration-activation:eggman] activation manifest agent missing or mismatched");
     });
     const adapter = mkAdapter({
       isOperatorGateway: vi.fn(() => true),
-      listExportPaths: vi.fn(async () => [
-        { cwd: "/state", path: "agents/octogee-ops-eggman" },
-      ]),
+      listExportPaths: vi.fn(async () => [{ cwd: "/state", path: "agents/octogee-eggman-coach" }]),
       exportOpenClawActivationManifest,
     });
     const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
@@ -1385,12 +1742,10 @@ describe("createPushStateHandler", () => {
 
     await handler(req, res, vi.fn());
 
-    expect(getStatus()).toBe(200);
-    expect(getBody()).toEqual({ migrationId: "mig-operator", slug: "eggman", imported: true });
+    expect(getStatus()).toBe(500);
+    expect(getBody()).toMatchObject({ error: "push-state failed" });
     expect(exportOpenClawActivationManifest).toHaveBeenCalledWith("eggman");
-    const args = spawnMock.mock.calls[0][1] as string[];
-    expect(args).toContain("agents/octogee-ops-eggman");
-    expect(args).not.toContain(".octogee-migration-activation/eggman/activation.json");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("rejects a missing targetGatewayId before spawning tar", async () => {
@@ -1809,25 +2164,11 @@ await activateStarted;
   });
 });
 
-describe("findPathTraversalViolation — operator agent transfer", () => {
-  it("allows the slug-scoped operator ops-agent directory", () => {
+describe("findPathTraversalViolation — no permanent operator lane", () => {
+  it("rejects every legacy operator agent directory", () => {
     expect(
       findPathTraversalViolation(
-        [
-          "agents/octogee-ops-eggman",
-          "agents/octogee-ops-eggman/sessions/sessions.json",
-          "memory/octogee-ops-eggman.sqlite",
-          "memory/octogee-ops-eggman.sqlite-wal",
-        ],
-        "eggman",
-      ),
-    ).toBeNull();
-  });
-
-  it("rejects another operator agent directory", () => {
-    expect(
-      findPathTraversalViolation(
-        ["agents/octogee-ops-bender/sessions/sessions.json"],
+        ["agents/octogee-ops-eggman/sessions/sessions.json"],
         "eggman",
       ),
     ).toContain("outside the per-slug allowlist");
