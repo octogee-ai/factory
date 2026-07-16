@@ -101,7 +101,7 @@ function gatewayCallerForRequest(req: Request): GatewayCaller | null {
 }
 
 function configuredBuilderMayBootstrap(
-  gateway: GatewayDoc & GatewayMutableConfig,
+  gateway: GatewayDoc & GatewayMutableConfig & { retirementClaim?: unknown },
   gatewayId: string,
   revisionId: string | null,
   slug: string,
@@ -110,6 +110,7 @@ function configuredBuilderMayBootstrap(
     !revisionId ||
     gateway.desiredStatus !== "running" ||
     gateway.retireAfter != null ||
+    gateway.retirementClaim != null ||
     gateway.gatewayClass === "shared" ||
     gateway.builderSlug !== slug
   ) {

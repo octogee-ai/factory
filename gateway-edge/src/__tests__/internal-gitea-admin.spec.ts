@@ -308,6 +308,7 @@ describe("internal gitea-admin route", () => {
   it.each([
     { desiredStatus: "retired" },
     { retireAfter: 10 },
+    { retirementClaim: { operationId: "retire-1", version: 1 } },
     { roll: { ...isolatedGateway().roll as Record<string, unknown>, status: "failed" } },
   ])("denies configured-builder bootstrap in a terminal lifecycle: %o", async (override) => {
     vi.mocked(readAssignedSlugsForGateway).mockResolvedValueOnce([]);
