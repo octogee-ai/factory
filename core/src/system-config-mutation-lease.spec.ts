@@ -12,6 +12,7 @@ import {
   acquireSystemConfigShellCapabilitySync,
   acquireSystemConfigSyncLeaseSync,
   activeSystemConfigShellIds,
+  readSystemConfigShellCapability,
   releaseSystemConfigShellCapabilitySync,
   systemConfigSyncLockPath,
 } from "./system-config-mutation-lease.js";
@@ -112,10 +113,12 @@ describe("system config cross-container mutation lease", () => {
 
   it("refuses Dashboard mutation and config control while an accepted shell capability exists", async () => {
     const openclawDir = tempDir();
-    expect(acquireSystemConfigShellCapabilitySync({
+    const capability = acquireSystemConfigShellCapabilitySync({
       openclawDir,
       shellId: "accepted-shell",
-    })).toEqual({ ok: true, created: true });
+    });
+    expect(capability).toMatchObject({ ok: true, created: true });
+    if (!capability.ok) throw new Error("expected shell capability");
     expect(activeSystemConfigShellIds(openclawDir)).toEqual(["accepted-shell"]);
 
     await expect(acquireSystemConfigMutationLease({ openclawDir })).resolves.toEqual({
@@ -128,6 +131,7 @@ describe("system config cross-container mutation lease", () => {
     expect(releaseSystemConfigShellCapabilitySync({
       openclawDir,
       shellId: "accepted-shell",
+      ownerToken: capability.ownerToken,
     })).toBe(true);
     expect(activeSystemConfigShellIds(openclawDir)).toEqual([]);
     const mutation = await acquireSystemConfigMutationLease({ openclawDir });
@@ -144,7 +148,7 @@ describe("system config cross-container mutation lease", () => {
       afterGateAcquired: () => {
         dashboardDuringShell = acquireSystemConfigMutationLease({ openclawDir: shellFirstDir });
       },
-    })).toEqual({ ok: true, created: true });
+    })).toMatchObject({ ok: true, created: true, ownerToken: expect.any(String) });
     await expect(dashboardDuringShell).resolves.toEqual({
       ok: false,
       code: "writer-lock-busy",
@@ -164,6 +168,37 @@ describe("system config cross-container mutation lease", () => {
     expect(dashboard.ok).toBe(true);
     expect(shellDuringDashboard).toEqual({ ok: false, code: "writer-lock-busy" });
     if (dashboard.ok) await dashboard.lease.release();
+  });
+
+  it("conditionally releases only the observed shell capability generation", async () => {
+    const openclawDir = tempDir();
+    const observed = acquireSystemConfigShellCapabilitySync({
+      openclawDir,
+      shellId: "same-shell",
+    });
+    if (!observed.ok) throw new Error("expected observed capability");
+    const reacquired = acquireSystemConfigShellCapabilitySync({
+      openclawDir,
+      shellId: "same-shell",
+    });
+    if (!reacquired.ok) throw new Error("expected reacquired capability");
+    expect(reacquired.ownerToken).not.toBe(observed.ownerToken);
+
+    expect(releaseSystemConfigShellCapabilitySync({
+      openclawDir,
+      shellId: "same-shell",
+      ownerToken: observed.ownerToken,
+    })).toBe(true);
+    expect(readSystemConfigShellCapability(openclawDir, "same-shell")).toEqual({
+      shellId: "same-shell",
+      ownerToken: reacquired.ownerToken,
+    });
+    await expect(acquireSystemConfigMutationLease({ openclawDir })).resolves.toEqual({
+      ok: false,
+      code: "shell-active",
+      shellIds: ["same-shell"],
+    });
+    expect(acquireSystemConfigControlLeaseSync({ openclawDir })).toBeNull();
   });
 
   it("reclaims only an expired heartbeat through atomic lease-directory quarantine", () => {

@@ -175,7 +175,7 @@ describe("fleet-controller entrypoint config", () => {
     expect(acquireSystemConfigShellCapabilitySync({
       openclawDir,
       shellId: "native-config",
-    })).toEqual({ ok: true, created: true });
+    })).toMatchObject({ ok: true, created: true, ownerToken: expect.any(String) });
 
     try {
       await expect(rpc.configApply({}, "current")).rejects.toThrow(/writer lock is busy/i);

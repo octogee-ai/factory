@@ -279,17 +279,33 @@ function shellCapabilityPath(openclawDir, shellId) {
 }
 function readShellCapability(markerPath) {
     const parsed = JSON.parse(fs.readFileSync(markerPath, "utf8"));
-    const shellId = parsed?.shellId;
+    const record = parsed;
+    const shellId = record?.shellId;
+    const ownerToken = record?.ownerToken;
     if (!parsed ||
         typeof parsed !== "object" ||
         Array.isArray(parsed) ||
         !isValidShellId(shellId) ||
+        typeof ownerToken !== "string" ||
+        !OWNER_TOKEN_RE.test(ownerToken) ||
         markerPath !== shellCapabilityPath(path.dirname(path.dirname(markerPath)), shellId)) {
         throw new Error(`invalid system config shell capability at ${markerPath}`);
     }
-    return shellId;
+    return { shellId, ownerToken };
 }
-export function activeSystemConfigShellIds(openclawDir) {
+export function readSystemConfigShellCapability(openclawDir, shellId) {
+    if (!isValidShellId(shellId))
+        throw new Error("valid shellId is required");
+    try {
+        return readShellCapability(shellCapabilityPath(openclawDir, shellId));
+    }
+    catch (error) {
+        if (error.code === "ENOENT")
+            return null;
+        throw error;
+    }
+}
+export function activeSystemConfigShellCapabilities(openclawDir) {
     const directory = shellCapabilityDir(openclawDir);
     let entries;
     try {
@@ -306,7 +322,10 @@ export function activeSystemConfigShellIds(openclawDir) {
             throw new Error(`invalid system config shell capability at ${markerPath}`);
         }
         return readShellCapability(markerPath);
-    }).sort();
+    }).sort((left, right) => left.shellId.localeCompare(right.shellId));
+}
+export function activeSystemConfigShellIds(openclawDir) {
+    return activeSystemConfigShellCapabilities(openclawDir).map(({ shellId }) => shellId);
 }
 function releaseSyncLeaseAfterError(syncLease, error) {
     try {
@@ -330,14 +349,21 @@ export function acquireSystemConfigShellCapabilitySync(options) {
         if (freezeOwner) {
             result = { ok: false, code: "config-frozen", freezeOwner };
         }
-        else if (activeSystemConfigShellIds(options.openclawDir).includes(options.shellId)) {
-            result = { ok: true, created: false };
-        }
         else {
+            const existing = readSystemConfigShellCapability(options.openclawDir, options.shellId);
+            const ownerToken = randomUUID();
             const directory = shellCapabilityDir(options.openclawDir);
             fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-            fs.writeFileSync(shellCapabilityPath(options.openclawDir, options.shellId), `${JSON.stringify({ shellId: options.shellId })}\n`, { flag: "wx", mode: 0o600 });
-            result = { ok: true, created: true };
+            const temporaryPath = path.join(options.openclawDir, `.system_config.shell-capability.${options.shellId}.${ownerToken}.tmp`);
+            try {
+                fs.writeFileSync(temporaryPath, `${JSON.stringify({ shellId: options.shellId, ownerToken })}\n`, { flag: "wx", mode: 0o600 });
+                fs.renameSync(temporaryPath, shellCapabilityPath(options.openclawDir, options.shellId));
+            }
+            catch (error) {
+                fs.rmSync(temporaryPath, { force: true });
+                throw error;
+            }
+            result = { ok: true, created: existing === null, ownerToken };
         }
     }
     catch (error) {
@@ -349,21 +375,26 @@ export function acquireSystemConfigShellCapabilitySync(options) {
 export function releaseSystemConfigShellCapabilitySync(options) {
     if (!isValidShellId(options.shellId))
         throw new Error("valid shellId is required");
+    if (!OWNER_TOKEN_RE.test(options.ownerToken))
+        throw new Error("valid ownerToken is required");
     if (!fs.existsSync(shellCapabilityPath(options.openclawDir, options.shellId)))
         return true;
     const syncLease = acquireSystemConfigSyncLeaseSync(options);
     if (!syncLease)
         return false;
     try {
-        activeSystemConfigShellIds(options.openclawDir);
-        fs.rmSync(shellCapabilityPath(options.openclawDir, options.shellId), { force: true });
-        try {
-            fs.rmdirSync(shellCapabilityDir(options.openclawDir));
-        }
-        catch (error) {
-            const code = error.code;
-            if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST")
-                throw error;
+        activeSystemConfigShellCapabilities(options.openclawDir);
+        const current = readSystemConfigShellCapability(options.openclawDir, options.shellId);
+        if (current?.ownerToken === options.ownerToken) {
+            fs.rmSync(shellCapabilityPath(options.openclawDir, options.shellId), { force: true });
+            try {
+                fs.rmdirSync(shellCapabilityDir(options.openclawDir));
+            }
+            catch (error) {
+                const code = error.code;
+                if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST")
+                    throw error;
+            }
         }
     }
     catch (error) {
