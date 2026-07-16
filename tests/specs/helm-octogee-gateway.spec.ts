@@ -862,7 +862,7 @@ expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
     expect(gw).toMatch(/readinessProbe:\s+tcpSocket:\s+port:\s*18789/);
   });
 
-  it("falls back to the legacy fleet health endpoint only when isolated config health is unavailable", () => {
+  it("uses the immutable image capability marker to select isolated gateway health endpoints", () => {
     const dep = findDoc(
       helmTemplate("octogee-gw-bender", { gatewayId: "bender", gatewayClass: "builder" }),
       "Deployment",
@@ -873,9 +873,12 @@ expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
     expect(gw).not.toMatch(/startupProbe:\s+httpGet:/);
     expect(gw).not.toMatch(/livenessProbe:\s+httpGet:/);
     expect(gw).not.toMatch(/readinessProbe:\s+httpGet:/);
+    expect(gw.match(/\[ -f \/opt\/octogee\/capabilities\/config-status-v2 \]/g)).toHaveLength(3);
     expect(gw.match(/curl -fsS http:\/\/127\.0\.0\.1:18790\/healthz/g)).toHaveLength(2);
     expect(gw).toMatch(/curl -fsS http:\/\/127\.0\.0\.1:18790\/readyz/);
-    expect(gw.match(/\[ "\$rc" -eq 7 \] && curl -fsS http:\/\/127\.0\.0\.1:3003\/health/g)).toHaveLength(3);
+    expect(gw.match(/curl -fsS http:\/\/127\.0\.0\.1:3003\/health/g)).toHaveLength(3);
+    expect(gw).not.toContain("rc=$?");
+    expect(gw).not.toContain("||");
     expect(dep).not.toMatch(/__openclaw__/);
   });
 

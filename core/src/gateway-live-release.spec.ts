@@ -5,6 +5,7 @@ import {
   isGatewayMutableConfig,
   isGatewayMutableConfigForGateway,
   gatewayAuthorizationFromRootDocument,
+  gatewayRevisionIdFromPodName,
   readGatewayArtifact,
   readGatewayAuthorization,
   readGatewayLiveRevisionHeartbeat,
@@ -12,6 +13,33 @@ import {
   readServingGatewayAuthorization,
   type GatewayMutableConfig,
 } from "./gateway-live-release.js";
+
+describe("gatewayRevisionIdFromPodName", () => {
+  it("derives the exact revision from a generated gateway pod name", () => {
+    expect(
+      gatewayRevisionIdFromPodName(
+        "bender",
+        "octogee-gateway-bender-r12-5bc5949d46-p946t",
+      ),
+    ).toBe("bender-r12");
+  });
+
+  it("rejects another gateway, a bare revision name, and non-canonical releases", () => {
+    expect(
+      gatewayRevisionIdFromPodName(
+        "bender",
+        "octogee-gateway-other-r12-5bc5949d46-p946t",
+      ),
+    ).toBeNull();
+    expect(gatewayRevisionIdFromPodName("bender", "octogee-gateway-bender-r12")).toBeNull();
+    expect(
+      gatewayRevisionIdFromPodName(
+        "bender",
+        "octogee-gateway-bender-r012-5bc5949d46-p946t",
+      ),
+    ).toBeNull();
+  });
+});
 
 type Docs = Record<string, Record<string, unknown>>;
 

@@ -52,6 +52,7 @@ import {
   type GatewayDoc,
 } from "@octogee/shared/types/gateway-releases";
 import {
+  gatewayRevisionIdFromPodName,
   isGatewayMutableConfigForGateway,
   type GatewayMutableConfig,
 } from "@octogee/core/gateway-live-release";
@@ -332,17 +333,7 @@ export function revisionIdFromGatewayPodName(
   gatewayId: string,
   podName: string | undefined,
 ): string | null {
-  if (!podName) return null;
-  const prefix = `octogee-gateway-${gatewayId}-r`;
-  if (!podName.startsWith(prefix)) return null;
-  const suffix = podName.slice(prefix.length);
-  const separator = suffix.indexOf("-");
-  if (separator <= 0) return null;
-  const release = suffix.slice(0, separator);
-  const generatedSuffix = suffix.slice(separator + 1);
-  if (!/^[1-9]\d*$/.test(release)) return null;
-  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(generatedSuffix)) return null;
-  return `${gatewayId}-r${release}`;
+  return gatewayRevisionIdFromPodName(gatewayId, podName);
 }
 
 function readPath(obj: Record<string, unknown> | undefined, dotted: string): unknown {

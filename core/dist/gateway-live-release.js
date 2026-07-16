@@ -3,6 +3,24 @@ import { GLM_GATEWAYS_COLLECTION } from "@octogee/shared/types/glm";
 import { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, } from "@octogee/shared/types/gateway-mutable-config";
 import { GATEWAY_RELEASES_SUBCOLLECTION, isGatewayDesiredDoc, isReleasePayload, isRevisionRealizationDoc, revisionIdForRelease, } from "@octogee/shared/types/gateway-releases";
 export { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, };
+export function gatewayRevisionIdFromPodName(gatewayId, podName) {
+    if (!podName)
+        return null;
+    const prefix = `octogee-gateway-${gatewayId}-r`;
+    if (!podName.startsWith(prefix))
+        return null;
+    const suffix = podName.slice(prefix.length);
+    const separator = suffix.indexOf("-");
+    if (separator <= 0)
+        return null;
+    const release = suffix.slice(0, separator);
+    const generatedSuffix = suffix.slice(separator + 1);
+    if (!/^[1-9]\d*$/.test(release))
+        return null;
+    if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(generatedSuffix))
+        return null;
+    return `${gatewayId}-r${release}`;
+}
 function isRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
 }

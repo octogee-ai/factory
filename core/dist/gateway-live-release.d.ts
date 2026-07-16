@@ -4,6 +4,7 @@ import { type GatewayDoc, type ReleasePayload, type W9GatewayEdgeImage, type W9T
 export { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, };
 export type { GatewayMutableConfig };
 type FirestoreReader = Pick<Firestore, "doc">;
+export declare function gatewayRevisionIdFromPodName(gatewayId: string, podName: string | undefined): string | null;
 export interface GatewayArtifact {
     imageRepository: string;
     imageTag: string;
