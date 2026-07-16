@@ -4,6 +4,8 @@ import path from "node:path";
 
 import { acquireSystemConfigSyncLeaseSync } from "@octogee/core/system-config-mutation-lease";
 import {
+  DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
+  DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
   type DurableOpenClawConfigControlProtocol,
@@ -18,6 +20,8 @@ export interface SystemConfigObservedStatus {
   restoredCommit?: string;
   checkpointCommit?: string;
   configHash?: string;
+  candidateCommit?: string;
+  candidateHash?: string;
   dirtySince?: string | null;
   lastSyncedAt?: string;
   lastErrorCode?: string | null;
@@ -33,6 +37,12 @@ export interface SystemConfigObservedStatus {
   bootRecovery?: "none" | "recovered" | "unavailable";
   watcherState?: "running" | "stopped";
   freezeState?: "unfrozen" | "freezing" | "frozen";
+  bootRole?: "normal" | "source-frozen" | "target-candidate";
+  controlOwner?: {
+    migrationId: string;
+    sourceRevisionId: string;
+    targetRevisionId: string;
+  };
   rejectedCount?: number;
   recoveryCount?: number;
   runtimeReady?: boolean;
@@ -65,6 +75,8 @@ const STRING_FIELDS = [
   "restoredCommit",
   "checkpointCommit",
   "configHash",
+  "candidateCommit",
+  "candidateHash",
   "lastSyncedAt",
   "openclawVersion",
   "openclawForkSha",
@@ -133,6 +145,15 @@ function projectStateFields(
   record: Record<string, unknown>,
   status: SystemConfigObservedStatus,
 ): void {
+  projectRecoveryStateFields(record, status);
+  projectRollStateFields(record, status);
+  projectRuntimeStateFields(record, status);
+}
+
+function projectRecoveryStateFields(
+  record: Record<string, unknown>,
+  status: SystemConfigObservedStatus,
+): void {
   if (record.doctorResult === "ok" || record.doctorResult === "error") {
     status.doctorResult = record.doctorResult;
   }
@@ -142,9 +163,24 @@ function projectStateFields(
   if (record.watcherState === "running" || record.watcherState === "stopped") {
     status.watcherState = record.watcherState;
   }
+}
+
+function projectRollStateFields(
+  record: Record<string, unknown>,
+  status: SystemConfigObservedStatus,
+): void {
   if (record.freezeState === "unfrozen" || record.freezeState === "freezing" || record.freezeState === "frozen") {
     status.freezeState = record.freezeState;
   }
+  if (record.bootRole === "normal" || record.bootRole === "source-frozen" || record.bootRole === "target-candidate") {
+    status.bootRole = record.bootRole;
+  }
+}
+
+function projectRuntimeStateFields(
+  record: Record<string, unknown>,
+  status: SystemConfigObservedStatus,
+): void {
   if (record.runtimeHealth === "repair" || record.runtimeHealth === "healthy" || record.runtimeHealth === "unhealthy") {
     status.runtimeHealth = record.runtimeHealth;
   }
@@ -159,13 +195,39 @@ function projectControlProtocol(
     Array.isArray(record.controlProtocol)
   ) return {};
   const controlProtocol = record.controlProtocol as Record<string, unknown>;
-  if (controlProtocol.protocol !== "durable-openclaw-config" || controlProtocol.version !== 1) {
+  if (
+    controlProtocol.protocol !== DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL ||
+    controlProtocol.version !== DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION
+  ) {
     return {};
   }
   return {
     controlProtocol: {
-      protocol: "durable-openclaw-config",
-      version: 1,
+      protocol: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
+      version: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
+    },
+  };
+}
+
+function projectControlOwner(
+  record: Record<string, unknown>,
+): Pick<SystemConfigObservedStatus, "controlOwner"> {
+  if (!record.controlOwner || typeof record.controlOwner !== "object" || Array.isArray(record.controlOwner)) {
+    return {};
+  }
+  const owner = record.controlOwner as Record<string, unknown>;
+  if (
+    typeof owner.migrationId !== "string" ||
+    typeof owner.sourceRevisionId !== "string" ||
+    typeof owner.targetRevisionId !== "string"
+  ) {
+    return {};
+  }
+  return {
+    controlOwner: {
+      migrationId: owner.migrationId,
+      sourceRevisionId: owner.sourceRevisionId,
+      targetRevisionId: owner.targetRevisionId,
     },
   };
 }
@@ -177,6 +239,7 @@ function projectSystemConfigStatus(record: Record<string, unknown>): SystemConfi
   Object.assign(
     status,
     projectControlProtocol(record),
+    projectControlOwner(record),
     projectDashboardControlStatus(record),
   );
   return status;

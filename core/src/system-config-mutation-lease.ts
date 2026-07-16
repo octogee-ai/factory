@@ -3,8 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 
-import type { ConfigFreezeOwner } from "@octogee/shared/types/fleet-controller";
 import { isValidUsername } from "@octogee/shared/types/identity";
+
+interface ConfigFreezeOwner {
+  migrationId: string;
+  slug: string;
+}
 
 const DEFAULT_HEARTBEAT_MS = 5_000;
 const DEFAULT_STALE_AFTER_MS = 120_000;

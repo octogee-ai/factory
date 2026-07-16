@@ -18,7 +18,11 @@ import { buildBrokeredLifecycleAdapter } from "../lib/customer-lifecycle-broker-
 import { blobSyncAllWithOptions } from "../lib/blob-sync.js";
 import { createBrokeredBlobStore } from "../lib/blob-sync-broker.js";
 import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
-import { startFleetController } from "../lib/fleet-provisioner.js";
+import {
+  PROCESS_STARTED_AT_MS,
+  startFleetController,
+  type StartFleetOptions,
+} from "../lib/fleet-provisioner.js";
 import { desiredFingerprints } from "../lib/snapshot-fingerprint.js";
 import { probeOpenClawVersion } from "../lib/probe-openclaw-version.js";
 import { startUsageEventTailer } from "../lib/usage-log-tailer.js";
@@ -27,18 +31,24 @@ import { runGatewayPreStopFlush } from "../lib/gateway-prestop-flush.js";
 import {
   checkpointDurableSystemConfigForSlug,
   syncSystemConfigForSlug,
+  systemConfigPath,
 } from "../lib/system-config.js";
 import {
   assertSystemConfigMutationAllowed,
-  checkpointSystemConfig,
-  restoreAndProveSystemConfig,
-  unfreezeSystemConfig,
-  type RestoreAndProofOptions,
-  type SystemConfigRestoreProof,
 } from "../lib/system-config-roll-control.js";
+import {
+  abortSystemConfigV2,
+  finalizeSystemConfigV2,
+  freezeSystemConfigV2,
+  promoteSystemConfigCandidateV2,
+  readSystemConfigBootRoleState,
+  type SystemConfigBootResolutionV2,
+  verifySystemConfigCandidateControlObjectsV2,
+} from "../lib/system-config-roll-protocol-v2.js";
 import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
 import { validateOpenClawConfig } from "../lib/openclaw-config-validation.js";
-import type { SystemConfigCommitSource } from "../lib/system-config-recovery.js";
+import { systemConfigBootAcceptedPath } from "../lib/system-config-status.js";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -90,7 +100,7 @@ export function assertFleetConfigSlug(expectedSlug: string, requestedSlug: strin
 
 type SystemConfigRuntimeRpc = Pick<
   GatewayRpcClient,
-  "configGet" | "configApply" | "channelsStatus"
+  "configGet" | "channelsStatus"
 >;
 
 export function createSystemConfigMutationGatedRpc(
@@ -124,77 +134,206 @@ export function createSystemConfigMutationGatedRpc(
   });
 }
 
-export interface RestoreRevisionSystemConfigOptions {
+export interface ProveRevisionSystemConfigCandidateOptions {
+  migrationId: string;
+  sourceRevisionId: string;
+  targetRevisionId: string;
   checkpointCommit: string;
-  slug: string;
+  freezeObject: string;
   openclawDir: string;
   revisionId: string;
   env: NodeJS.ProcessEnv;
-  source: SystemConfigCommitSource;
   rpc: SystemConfigRuntimeRpc;
-  validateConfig?: (configPath: string) => void;
+  startedAt: number;
   now?: () => number;
-  restore?: (options: RestoreAndProofOptions) => Promise<SystemConfigRestoreProof>;
+  bootAccepted?: () => boolean;
+  readBootRole?: () => SystemConfigBootResolutionV2;
+  hashConfig?: (configPath: string) => string;
+  verifyControlObjects?: typeof verifySystemConfigCandidateControlObjectsV2;
 }
 
-async function loadRuntimeSystemConfig(
-  rpc: SystemConfigRuntimeRpc,
-  configPath: string,
-): Promise<string> {
-  const value = JSON.parse(fs.readFileSync(configPath, "utf8")) as unknown;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("restored OpenClaw config is not an object");
-  }
-  const current = await rpc.configGet();
-  const applied = await rpc.configApply(value as object, current.hash);
-  if (typeof applied.hash !== "string" || applied.hash.length === 0) {
-    throw new Error("OpenClaw config.apply did not return the loaded runtime hash");
-  }
-  return applied.hash;
+function requiredIdentity(env: NodeJS.ProcessEnv, key: string): string {
+  const value = env[key]?.trim();
+  if (!value) throw new Error(`target ${key} is unavailable for config proof`);
+  return value;
 }
 
-export async function restoreRevisionSystemConfig(
-  options: RestoreRevisionSystemConfigOptions,
-): Promise<
-  SystemConfigRestoreProof & {
-    configReady: true;
-    observedRevisionId: string;
-    restoreProvenAt: number;
-    configReadyAt: number;
-    runtimeConfigHash: string;
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) =>
+      `${JSON.stringify(key)}:${stableJson(record[key])}`
+    ).join(",")}}`;
   }
-> {
+  return JSON.stringify(value);
+}
+
+function hashConfigFile(configPath: string): string {
+  return createHash("sha256").update(fs.readFileSync(configPath)).digest("hex");
+}
+
+type LoadedCandidateBootRole = SystemConfigBootResolutionV2 & {
+  role: "target-candidate";
+  candidateExists: true;
+  candidateCommit: string;
+  candidateHash: string;
+};
+
+function requireCandidateBootRole(
+  options: ProveRevisionSystemConfigCandidateOptions,
+): LoadedCandidateBootRole {
   if (!options.revisionId) throw new Error("target revision id unavailable for config proof");
-  let loadedRuntimeHash = "";
-  const restore = options.restore ?? restoreAndProveSystemConfig;
-  const proof = await restore({
+  if (options.targetRevisionId !== options.revisionId) {
+    throw new Error("target revision does not match running revision");
+  }
+  const bootAccepted = options.bootAccepted ??
+    (() => fs.existsSync(systemConfigBootAcceptedPath(options.openclawDir)));
+  if (!bootAccepted()) throw new Error("target config is not boot-accepted");
+  const role = (options.readBootRole ?? (() => readSystemConfigBootRoleState(options.openclawDir)))();
+  if (role.role !== "target-candidate" || !role.candidateExists) {
+    throw new Error("target candidate is not loaded and fenced");
+  }
+  const bindings = [
+    ["migration", role.migrationId, options.migrationId],
+    ["source revision", role.sourceRevisionId, options.sourceRevisionId],
+    ["target revision", role.targetRevisionId, options.targetRevisionId],
+    ["checkpoint", role.checkpointCommit, options.checkpointCommit],
+    ["freeze object", role.freezeObject, options.freezeObject],
+  ] as const;
+  for (const [label, actual, expected] of bindings) {
+    if (actual !== expected) throw new Error(`target ${label} proof binding mismatch`);
+  }
+  if (!role.candidateCommit || !role.candidateHash) {
+    throw new Error("target candidate identity is unavailable");
+  }
+  return role as LoadedCandidateBootRole;
+}
+
+export async function proveRevisionSystemConfigCandidate(
+  options: ProveRevisionSystemConfigCandidateOptions,
+) {
+  const role = requireCandidateBootRole(options);
+  const verifiedControl = (
+    options.verifyControlObjects ?? verifySystemConfigCandidateControlObjectsV2
+  )({
+    gatewayId: requiredIdentity(options.env, "GATEWAY_ID"),
+    slug: requiredIdentity(options.env, "GATEWAY_BUILDER_SLUG"),
+    migrationId: options.migrationId,
+    sourceRevisionId: options.sourceRevisionId,
+    targetRevisionId: options.targetRevisionId,
     checkpointCommit: options.checkpointCommit,
-    slug: options.slug,
+    freezeObject: options.freezeObject,
+    candidateCommit: role.candidateCommit,
+    candidateHash: role.candidateHash,
     openclawDir: options.openclawDir,
     env: options.env,
-    source: options.source,
-    ...(options.validateConfig ? { validateConfig: options.validateConfig } : {}),
-    loadRuntimeConfig: async (configPath) => {
-      loadedRuntimeHash = await loadRuntimeSystemConfig(options.rpc, configPath);
-    },
   });
-  if (!loadedRuntimeHash) throw new Error("target runtime config was not loaded before proof");
-  const now = options.now ?? Date.now;
-  const restoreProvenAt = now();
+  const configPath = systemConfigPath(options.openclawDir);
+  const candidateHash = (options.hashConfig ?? hashConfigFile)(configPath);
+  if (candidateHash !== role.candidateHash) throw new Error("active config does not match candidate hash");
   const observed = await options.rpc.configGet();
-  if (observed.hash !== loadedRuntimeHash) {
-    throw new Error(
-      `runtime config hash ${observed.hash} does not match loaded hash ${loadedRuntimeHash}`,
-    );
+  const candidateConfig = JSON.parse(fs.readFileSync(configPath, "utf8")) as unknown;
+  if (stableJson(observed.config) !== stableJson(candidateConfig)) {
+    throw new Error("runtime config does not match candidate config");
   }
   await options.rpc.channelsStatus();
   return {
-    ...proof,
-    configReady: true,
-    observedRevisionId: options.revisionId,
-    restoreProvenAt,
-    configReadyAt: now(),
+    checkpointCommit: options.checkpointCommit,
+    candidateCommit: role.candidateCommit,
+    candidateHash: role.candidateHash,
+    candidateRef: verifiedControl.candidateRef,
+    freezeObject: options.freezeObject,
     runtimeConfigHash: observed.hash,
+    observedRevisionId: options.revisionId,
+    targetStartedAt: options.startedAt,
+    imageTag: requiredIdentity(options.env, "GATEWAY_IMAGE_TAG"),
+    buildSha: requiredIdentity(options.env, "BUILD_SHA"),
+    openclawVersion: requiredIdentity(options.env, "OPENCLAW_VERSION"),
+    configReady: true as const,
+    provenAt: (options.now ?? Date.now)(),
+  };
+}
+
+type ConfigControlCallbacks = Pick<
+  StartFleetOptions,
+  | "freezeSystemConfigV2"
+  | "proveSystemConfigCandidate"
+  | "promoteSystemConfigCandidate"
+  | "abortSystemConfigV2"
+  | "finalizeSystemConfigV2"
+>;
+
+function createConfigControlCallbacks(
+  entrypointConfig: FleetControllerEntrypointConfig,
+  runtimeRpc: GatewayRpcClient,
+): ConfigControlCallbacks {
+  if (!entrypointConfig.builderSlug) return {};
+  const assertSlug = (slug: string): void => assertFleetConfigSlug(entrypointConfig.builderSlug, slug);
+  return {
+    freezeSystemConfigV2: ({ migrationId, slug, sourceRevisionId, targetRevisionId }) => {
+      assertSlug(slug);
+      return freezeSystemConfigV2({
+        gatewayId: entrypointConfig.gatewayId,
+        migrationId,
+        slug,
+        sourceRevisionId,
+        targetRevisionId,
+        openclawDir: OPENCLAW_DIR,
+        env: process.env,
+        source: "migration-checkpoint",
+        validateConfig: validateOpenClawConfig,
+      });
+    },
+    proveSystemConfigCandidate: ({
+      migrationId,
+      slug,
+      sourceRevisionId,
+      targetRevisionId,
+      checkpointCommit,
+      freezeObject,
+    }) => {
+      assertSlug(slug);
+      return proveRevisionSystemConfigCandidate({
+        migrationId,
+        sourceRevisionId,
+        targetRevisionId,
+        checkpointCommit,
+        freezeObject,
+        openclawDir: OPENCLAW_DIR,
+        revisionId: entrypointConfig.revisionId,
+        env: process.env,
+        rpc: runtimeRpc,
+        startedAt: PROCESS_STARTED_AT_MS,
+      });
+    },
+    promoteSystemConfigCandidate: (input) => {
+      assertSlug(input.slug);
+      return promoteSystemConfigCandidateV2({
+        ...input,
+        gatewayId: entrypointConfig.gatewayId,
+        openclawDir: OPENCLAW_DIR,
+        env: process.env,
+      });
+    },
+    abortSystemConfigV2: (input) => {
+      assertSlug(input.slug);
+      return abortSystemConfigV2({
+        ...input,
+        gatewayId: entrypointConfig.gatewayId,
+        openclawDir: OPENCLAW_DIR,
+        env: process.env,
+      });
+    },
+    finalizeSystemConfigV2: (input) => {
+      assertSlug(input.slug);
+      return finalizeSystemConfigV2({
+        ...input,
+        gatewayId: entrypointConfig.gatewayId,
+        openclawDir: OPENCLAW_DIR,
+        env: process.env,
+      });
+    },
   };
 }
 
@@ -277,42 +416,7 @@ async function main(): Promise<void> {
         log,
       });
     },
-    ...(entrypointConfig.builderSlug
-      ? {
-          freezeSystemConfig: ({ migrationId, slug }) => {
-            assertFleetConfigSlug(entrypointConfig.builderSlug, slug);
-            return checkpointSystemConfig({
-              migrationId,
-              slug,
-              openclawDir: OPENCLAW_DIR,
-              env: process.env,
-              source: "migration-checkpoint",
-              validateConfig: validateOpenClawConfig,
-            });
-          },
-          proveSystemConfigRestore: async ({ checkpointCommit, slug }) => {
-            assertFleetConfigSlug(entrypointConfig.builderSlug, slug);
-            return restoreRevisionSystemConfig({
-              checkpointCommit,
-              slug,
-              openclawDir: OPENCLAW_DIR,
-              revisionId: entrypointConfig.revisionId,
-              env: process.env,
-              source: "migration-restore",
-              rpc: runtimeRpc,
-              validateConfig: validateOpenClawConfig,
-            });
-          },
-          unfreezeSystemConfig: ({ migrationId, slug }) => {
-            assertFleetConfigSlug(entrypointConfig.builderSlug, slug);
-            return unfreezeSystemConfig({
-              migrationId,
-              slug,
-              openclawDir: OPENCLAW_DIR,
-            });
-          },
-        }
-      : {}),
+    ...createConfigControlCallbacks(entrypointConfig, runtimeRpc),
     // Db-less: gateway pods hold NO Firestore credentials. Cowboy polls
     // /health and writes gateways/{id} on the trusted side. Gateway pods run
     // only the local mount reconcile from brokered assigned snapshots; all

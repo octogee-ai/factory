@@ -85,6 +85,34 @@ function gatewayImageLabel(dep: string): string {
 }
 
 describe("helm/octogee-gateway/ — single-instance rendering", () => {
+  it("provides the durable agent and workspace roots required by OpenClaw config", () => {
+    const deployment = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const gateway = containerBlock(deployment, "gateway");
+    expect(gateway).toMatch(
+      /name:\s*CUSTOMERS_DIR[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/customers"/,
+    );
+    expect(gateway).toMatch(
+      /name:\s*AGENTS_DIR[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/agents"/,
+    );
+  });
+
+  it("renders the explicit OpenClaw Doctor mode only into the core gateway", () => {
+    const defaults = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    expect(containerBlock(defaults, "gateway")).toMatch(
+      /name:\s*OPENCLAW_DOCTOR_MODE[\s\S]*?value:\s*"run"/,
+    );
+    expect(containerBlock(defaults, "gateway-edge")).not.toMatch(/OPENCLAW_DOCTOR_MODE/);
+
+    const skipped = findDoc(
+      helmTemplate("octogee-gw-default", { "env.openclawDoctorMode": "skip" }),
+      "Deployment",
+      "octogee-gateway-default",
+    ) ?? "";
+    expect(containerBlock(skipped, "gateway")).toMatch(
+      /name:\s*OPENCLAW_DOCTOR_MODE[\s\S]*?value:\s*"skip"/,
+    );
+  });
+
   it("keeps the broad durable writer selected by default and enables only the bounded candidate pair", () => {
     const defaultDeployment =
       findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
@@ -733,6 +761,52 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     expect(dep).not.toMatch(/name:\s*mattermost-gateway[\s\S]*?key:\s*admin_token/);
   });
 
+  it("binds the gateway process to its exact rendered image tag without rollout context by default", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const gw = containerBlock(dep, "gateway");
+    expect(gw).toMatch(/name:\s*GATEWAY_IMAGE_TAG[\s\S]*?value:\s*"abc1234"/);
+    expect(gw).not.toMatch(/name:\s*SYSTEM_CONFIG_MIGRATION_ID/);
+  });
+
+  it("renders all immutable target rollout bindings only on the gateway container", () => {
+    const dep = findDoc(helmTemplate("octogee-gw-bender-r2", {
+      gatewayId: "bender",
+      gatewayClass: "operator",
+      builderSlug: "ceckert",
+      revisionId: "bender-r2",
+      "systemConfigRollContext.migrationId": "mig-123",
+      "systemConfigRollContext.sourceRevisionId": "bender-r1",
+      "systemConfigRollContext.targetRevisionId": "bender-r2",
+      "systemConfigRollContext.checkpointCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "systemConfigRollContext.freezeObject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    }), "Deployment", "octogee-gateway-bender-r2") ?? "";
+    const gw = containerBlock(dep, "gateway");
+    const edge = containerBlock(dep, "gateway-edge");
+    expect(gw).toMatch(/name:\s*SYSTEM_CONFIG_MIGRATION_ID[\s\S]*?value:\s*"mig-123"/);
+    expect(gw).toMatch(/name:\s*SYSTEM_CONFIG_SOURCE_REVISION_ID[\s\S]*?value:\s*"bender-r1"/);
+    expect(gw).toMatch(/name:\s*SYSTEM_CONFIG_TARGET_REVISION_ID[\s\S]*?value:\s*"bender-r2"/);
+    expect(gw).toMatch(/name:\s*SYSTEM_CONFIG_CHECKPOINT_COMMIT[\s\S]*?value:\s*"a{40}"/);
+    expect(gw).toMatch(/name:\s*SYSTEM_CONFIG_FREEZE_OBJECT[\s\S]*?value:\s*"b{40}"/);
+    expect(edge).not.toMatch(/SYSTEM_CONFIG_MIGRATION_ID/);
+  });
+
+  it("refuses partial or wrong-target rollout context before rendering a pod", () => {
+    expect(() => helmTemplate("octogee-gw-bender-r2", {
+      gatewayId: "bender",
+      revisionId: "bender-r2",
+      "systemConfigRollContext.migrationId": "mig-123",
+    })).toThrow(/systemConfigRollContext must provide all five fields/i);
+    expect(() => helmTemplate("octogee-gw-bender-r2", {
+      gatewayId: "bender",
+      revisionId: "bender-r2",
+      "systemConfigRollContext.migrationId": "mig-123",
+      "systemConfigRollContext.sourceRevisionId": "bender-r1",
+      "systemConfigRollContext.targetRevisionId": "bender-r3",
+      "systemConfigRollContext.checkpointCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "systemConfigRollContext.freezeObject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    })).toThrow(/targetRevisionId must equal revisionId/i);
+  });
+
   it("points the sidecar coach reconciler at the tracked config on isolated gateways", () => {
     const isolated = findDoc(
       helmTemplate("octogee-gw-bender", {
@@ -816,7 +890,7 @@ expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
     expect(gw).toMatch(/readinessProbe:\s+tcpSocket:\s+port:\s*18789/);
   });
 
-  it("keeps isolated repair live on 18790 while readiness requires accepted OpenClaw health", () => {
+  it("uses the immutable image capability marker to select isolated gateway health endpoints", () => {
     const dep = findDoc(
       helmTemplate("octogee-gw-bender", { gatewayId: "bender", gatewayClass: "builder" }),
       "Deployment",
@@ -824,11 +898,15 @@ expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
     ) ?? "";
     const gw = containerBlock(dep, "gateway");
 
-    expect(gw).toMatch(
-      /startupProbe:\s+httpGet:\s+path:\s*\/healthz\s+port:\s*18790/,
-    );
-    expect(gw).toMatch(/livenessProbe:\s+httpGet:\s+path:\s*\/healthz\s+port:\s*18790/);
-    expect(gw).toMatch(/readinessProbe:\s+httpGet:\s+path:\s*\/readyz\s+port:\s*18790/);
+    expect(gw).not.toMatch(/startupProbe:\s+httpGet:/);
+    expect(gw).not.toMatch(/livenessProbe:\s+httpGet:/);
+    expect(gw).not.toMatch(/readinessProbe:\s+httpGet:/);
+    expect(gw.match(/\[ -f \/opt\/octogee\/capabilities\/config-status-v2 \]/g)).toHaveLength(3);
+    expect(gw.match(/curl -fsS http:\/\/127\.0\.0\.1:18790\/healthz/g)).toHaveLength(2);
+    expect(gw).toMatch(/curl -fsS http:\/\/127\.0\.0\.1:18790\/readyz/);
+    expect(gw.match(/curl -fsS http:\/\/127\.0\.0\.1:3003\/health/g)).toHaveLength(3);
+    expect(gw).not.toContain("rc=$?");
+    expect(gw).not.toContain("||");
     expect(dep).not.toMatch(/__openclaw__/);
   });
 

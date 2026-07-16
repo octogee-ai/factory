@@ -206,6 +206,13 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
     sleep 5
     begin_system_config_boot_transaction
   done
+  log "Pre-boot: hydrating the configured builder credential for ${GATEWAY_REVISION_ID}..."
+  until "$TSX" /octogee/scripts/entrypoints/configured-builder-bootstrap.ts; do
+    end_system_config_boot_transaction
+    log "Pre-boot: configured builder credential unavailable; repair services remain live, retrying in 5s..."
+    sleep 5
+    begin_system_config_boot_transaction
+  done
 else
   if [ ! -f "$OPENCLAW_CONFIG_PATH" ]; then
     mkdir -p "$(dirname "$OPENCLAW_CONFIG_PATH")"
@@ -214,6 +221,20 @@ else
   fi
 fi
 chmod 600 "$OPENCLAW_CONFIG_PATH"
+
+SYSTEM_CONFIG_BOOT_ROLE=normal
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
+  log "Pre-boot: resolving restart-durable system_config role..."
+  until "$TSX" /octogee/scripts/entrypoints/system-config-roll-boot.ts resolve; do
+    end_system_config_boot_transaction
+    log "Pre-boot: system_config role unavailable; status repair plane remains live, retrying in 5s..."
+    sleep 5
+    begin_system_config_boot_transaction
+  done
+  SYSTEM_CONFIG_BOOT_ROLE=$("$TSX" /octogee/scripts/entrypoints/system-config-roll-boot.ts print-role)
+  export SYSTEM_CONFIG_BOOT_ROLE
+  log "Pre-boot: system_config role=${SYSTEM_CONFIG_BOOT_ROLE}"
+fi
 
 # Enforce the class-level OpenClaw policy before startup. The base template is
 # shared-safe (exec/process denied, Codex disabled). Builder-class keeps the
@@ -313,7 +334,13 @@ fi
 # ── Harden file permissions ─────────────────────────────────────────────────
 # The init container sets 775 for PVC/emptyDir. Tighten sensitive files.
 chmod 700 "$OPENCLAW_DIR" 2>/dev/null || true
-chmod 600 "$OPENCLAW_CONFIG_PATH" 2>/dev/null || true
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ] || [ "$SYSTEM_CONFIG_BOOT_ROLE" = "normal" ]; then
+  chmod 600 "$OPENCLAW_CONFIG_PATH" 2>/dev/null || true
+elif [ "$SYSTEM_CONFIG_BOOT_ROLE" = "source-frozen" ] && \
+  find "$OPENCLAW_CONFIG_PATH" "$OPENCLAW_DIR/system_config" -maxdepth 0 -perm /222 -print 2>/dev/null | grep -q .; then
+  log "FATAL: ${SYSTEM_CONFIG_BOOT_ROLE} system_config fence became writable after role resolution"
+  exit 1
+fi
 find "$OPENCLAW_DIR/agents" -name "sessions.json" -exec chmod 600 {} \; 2>/dev/null || true
 log "File permissions hardened"
 
@@ -384,36 +411,107 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   timeout -k 5s 20s "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts || log "github-cli-auth-hydrate: non-fatal failure"
 fi
 
+run_openclaw_doctor() {
+  case "${OPENCLAW_DOCTOR_MODE:-run}" in
+    run)
+      export OPENCLAW_DOCTOR_RESULT=ok
+      if ! openclaw doctor --fix --non-interactive; then
+        export OPENCLAW_DOCTOR_RESULT=error
+        return 1
+      fi
+      ;;
+    skip)
+      unset OPENCLAW_DOCTOR_RESULT
+      log "Pre-boot: OpenClaw Doctor skipped by OPENCLAW_DOCTOR_MODE=skip"
+      return 0
+      ;;
+    *)
+      export OPENCLAW_DOCTOR_RESULT=error
+      log "FATAL: invalid OPENCLAW_DOCTOR_MODE=${OPENCLAW_DOCTOR_MODE}; expected run or skip"
+      return 1
+      ;;
+  esac
+}
+
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   export OPENCLAW_SERVICE_REPAIR_POLICY=external
-  while true; do
-    REPAIR_OK=true
-    export OPENCLAW_DOCTOR_RESULT=ok
-    log "Pre-boot: repairing and validating durable OpenClaw config..."
-    if ! openclaw doctor --fix --non-interactive; then
-      export OPENCLAW_DOCTOR_RESULT=error
-      log "Pre-boot: OpenClaw Doctor failed; repair services remain live"
-      REPAIR_OK=false
-    fi
-    if [ -f "$CLASS_POLICY" ] && ! node "$CLASS_POLICY"; then
-      log "Pre-boot: gateway class policy failed; repair services remain live"
-      REPAIR_OK=false
-    fi
-    if ! "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts; then
-      log "Pre-boot: env/runtime reconciliation failed; repair services remain live"
-      REPAIR_OK=false
-    fi
-    if ! "$TSX" /octogee/scripts/entrypoints/system-config-checkpoint.ts; then
-      log "Pre-boot: durable config checkpoint failed; repair services remain live"
-      REPAIR_OK=false
-    fi
-    if [ "$REPAIR_OK" = "true" ]; then
-      break
-    fi
-    end_system_config_boot_transaction
-    sleep 5
-    begin_system_config_boot_transaction
-  done
+  case "$SYSTEM_CONFIG_BOOT_ROLE" in
+    normal)
+      while true; do
+        REPAIR_OK=true
+        log "Pre-boot: repairing and validating durable OpenClaw config..."
+        if ! run_openclaw_doctor; then
+          log "Pre-boot: OpenClaw Doctor failed; repair services remain live"
+          REPAIR_OK=false
+        fi
+        if [ -f "$CLASS_POLICY" ] && ! node "$CLASS_POLICY"; then
+          log "Pre-boot: gateway class policy failed; repair services remain live"
+          REPAIR_OK=false
+        fi
+        if ! "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts; then
+          log "Pre-boot: env/runtime reconciliation failed; repair services remain live"
+          REPAIR_OK=false
+        fi
+        if ! "$TSX" /octogee/scripts/entrypoints/system-config-checkpoint.ts; then
+          log "Pre-boot: durable config checkpoint failed; repair services remain live"
+          REPAIR_OK=false
+        fi
+        if [ "$REPAIR_OK" = "true" ]; then
+          break
+        fi
+        end_system_config_boot_transaction
+        sleep 5
+        begin_system_config_boot_transaction
+      done
+      ;;
+    source-frozen)
+      log "Pre-boot: source-frozen checkpoint verified; skipping config mutation repair"
+      ;;
+    target-candidate)
+      CANDIDATE_STATE=$("$TSX" /octogee/scripts/entrypoints/system-config-roll-boot.ts print-candidate-state)
+      if [ "$CANDIDATE_STATE" = "pending" ]; then
+        while true; do
+          REPAIR_OK=true
+          log "Pre-boot: building immutable target system_config candidate..."
+          if ! "$TSX" /octogee/scripts/entrypoints/system-config-roll-boot.ts migrate-target; then
+            log "Pre-boot: target system_config schema migration failed; retrying"
+            REPAIR_OK=false
+          fi
+          if [ "$REPAIR_OK" = "true" ] && ! run_openclaw_doctor; then
+            log "Pre-boot: target OpenClaw Doctor failed; retrying"
+            REPAIR_OK=false
+          fi
+          if [ "$REPAIR_OK" = "true" ] && [ -f "$CLASS_POLICY" ] && ! node "$CLASS_POLICY"; then
+            log "Pre-boot: target gateway class policy failed; retrying"
+            REPAIR_OK=false
+          fi
+          if [ "$REPAIR_OK" = "true" ] && ! "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts; then
+            log "Pre-boot: target env/runtime reconciliation failed; retrying"
+            REPAIR_OK=false
+          fi
+          if [ "$REPAIR_OK" = "true" ] && \
+            "$TSX" /octogee/scripts/entrypoints/system-config-roll-boot.ts candidate; then
+            break
+          fi
+          end_system_config_boot_transaction
+          sleep 5
+          begin_system_config_boot_transaction
+        done
+      else
+        log "Pre-boot: immutable target candidate restored; skipping config mutation repair"
+      fi
+      ;;
+    *)
+      log "FATAL: unknown system_config boot role ${SYSTEM_CONFIG_BOOT_ROLE}"
+      exit 1
+      ;;
+  esac
+fi
+
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ "$SYSTEM_CONFIG_BOOT_ROLE" != "normal" ] && \
+  find "$OPENCLAW_CONFIG_PATH" "$OPENCLAW_DIR/system_config" -maxdepth 0 -perm /222 -print 2>/dev/null | grep -q .; then
+  log "FATAL: ${SYSTEM_CONFIG_BOOT_ROLE} system_config fence is writable before runtime startup"
+  exit 1
 fi
 
 # ── Boot sync: REMOVED ───────────────────────────────────────────────────────
@@ -446,6 +544,19 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   supervise_runner system-config-watch 5000 "$TSX" /octogee/scripts/entrypoints/system-config-watch.ts
 fi
 
+# ── Accept durable system_config boot while repair sessions stay fenced ────
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ "$SYSTEM_CONFIG_BOOT_ROLE" != "normal" ]; then
+  until "$TSX" /octogee/scripts/entrypoints/system-config-roll-boot.ts accept; do
+    end_system_config_boot_transaction
+    log "Pre-boot: system_config acceptance unavailable; repair services remain live, retrying in 5s..."
+    sleep 5
+    begin_system_config_boot_transaction
+  done
+else
+  touch "$OPENCLAW_DIR/system_config.boot-accepted"
+  chmod 600 "$OPENCLAW_DIR/system_config.boot-accepted"
+fi
+
 # ── Runner metrics exporter (all profiles) ──────────────────────────────────
 # Serves /metrics on :9092 from the runner heartbeat files; one ServiceMonitor
 # scrapes it. Its own thin guard — if the exporter dies, runner liveness goes
@@ -472,8 +583,6 @@ fi
 # leaving BuilderShell and config repair available. Failure of the repair plane
 # itself restarts the pod.
 log "Starting OpenClaw gateway... (build: ${BUILD_SHA:-unknown})"
-touch "$OPENCLAW_DIR/system_config.boot-accepted"
-chmod 600 "$OPENCLAW_DIR/system_config.boot-accepted"
 openclaw gateway run --bind lan --port 18789 &
 
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then

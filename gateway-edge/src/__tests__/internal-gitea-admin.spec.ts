@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => {
   const state = {
     operationDocs: [] as Record<string, unknown>[],
     users: new Map<string, Record<string, unknown>>(),
+    gateways: new Map<string, Record<string, unknown>>(),
   };
   const valueAtPath = (data: Record<string, unknown>, path: string): unknown => {
     let cursor: unknown = data;
@@ -65,6 +66,19 @@ const mocks = vi.hoisted(() => {
           })),
         });
       }
+      if (name === "gateways") {
+        return {
+          doc: vi.fn((gatewayId: string) => ({
+            get: vi.fn(async () => {
+              const data = state.gateways.get(gatewayId);
+              return {
+                exists: data !== undefined,
+                data: () => data,
+              };
+            }),
+          })),
+        };
+      }
       throw new Error(`unexpected collection: ${name}`);
     }),
   };
@@ -96,7 +110,10 @@ vi.mock("../lib/gitea-admin.js", () => ({
   archiveRepo: vi.fn(async () => {}),
 }));
 
-function app(boundGatewayId: string | null = "bender") {
+function app(
+  boundGatewayId: string | null = "bender",
+  revisionId: string | null = "bender-r2",
+) {
   const a = express();
   a.use(express.json());
   if (boundGatewayId) {
@@ -105,12 +122,62 @@ function app(boundGatewayId: string | null = "bender") {
         kind: "gateway",
         gatewayId: boundGatewayId,
         ownerUid: `owner-${boundGatewayId}`,
+        ...(revisionId
+          ? { podName: `octogee-gateway-${revisionId}-5bc5949d46-p946t` }
+          : {}),
       };
       next();
     });
   }
   a.use("/internal/gitea", giteaAdminRoutes);
   return a;
+}
+
+function isolatedGateway(overrides: Record<string, unknown> = {}) {
+  return {
+    gatewayId: "bender",
+    createdAt: 1,
+    createdBy: "admin",
+    updatedAt: 2,
+    updatedBy: "admin",
+    latestRelease: 2,
+    desiredRelease: 2,
+    liveRelease: 1,
+    liveRevisionId: "bender-r1",
+    trafficRevisionId: "bender-r1",
+    desiredStatus: "running",
+    roll: {
+      operationId: "roll-1",
+      status: "warming",
+      fromRelease: 1,
+      toRelease: 2,
+      sourceRevisionId: "bender-r1",
+      targetRevisionId: "bender-r2",
+      acceptingNewAssignments: false,
+      startedAt: 2,
+      updatedAt: 2,
+      error: null,
+      flippedAt: null,
+    },
+    configSchemaVersion: 1,
+    profile: "operator",
+    gatewayClass: "operator",
+    imageProfile: "operator",
+    sizingTier: null,
+    computeClass: null,
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: "octogee-gw-bender",
+    serviceAccount: null,
+    operatorAccess: null,
+    ownerUid: "owner-bender",
+    coOwnerUids: [],
+    builderSlug: "acme",
+    openclawOverrides: null,
+    modelBrokerLimits: null,
+    preemption: null,
+    ...overrides,
+  };
 }
 
 function authed(req: request.Test) {
@@ -125,6 +192,7 @@ describe("internal gitea-admin route", () => {
     vi.clearAllMocks();
     mocks.state.operationDocs.length = 0;
     mocks.state.users.clear();
+    mocks.state.gateways.clear();
     vi.mocked(hasRunningInboundMigrationForSlug).mockResolvedValue(false);
     vi.mocked(readAssignedSlugsForGateway).mockResolvedValue(["acme"]);
   });
@@ -180,6 +248,78 @@ describe("internal gitea-admin route", () => {
       "acme",
     );
     expect(giteaAdmin.readGiteaUserPubKey).toHaveBeenCalledWith("acme");
+  });
+
+  it("allows only the authenticated target revision to bootstrap its configured builder during a roll", async () => {
+    vi.mocked(readAssignedSlugsForGateway).mockResolvedValueOnce([]);
+    mocks.state.gateways.set("bender", isolatedGateway());
+
+    const res = await authed(
+      request(app()).post("/internal/gitea/ensure-user"),
+    ).send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
+
+    expect(res.status).toBe(204);
+    expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith("acme", "ssh-ed25519 AAA");
+  });
+
+  it("denies a stale source revision from bootstrapping the configured builder during a roll", async () => {
+    vi.mocked(readAssignedSlugsForGateway).mockResolvedValueOnce([]);
+    mocks.state.gateways.set("bender", isolatedGateway());
+
+    const res = await request(app("bender", "bender-r1"))
+      .post("/internal/gitea/ensure-user")
+      .send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
+
+    expect(res.status).toBe(403);
+    expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
+  });
+
+  it("allows the desired initial revision before the gateway has a live revision", async () => {
+    vi.mocked(readAssignedSlugsForGateway).mockResolvedValueOnce([]);
+    mocks.state.gateways.set("bender", isolatedGateway({
+      latestRelease: 1,
+      desiredRelease: 1,
+      liveRelease: null,
+      liveRevisionId: null,
+      trafficRevisionId: null,
+      roll: null,
+    }));
+
+    const res = await request(app("bender", "bender-r1"))
+      .post("/internal/gitea/ensure-user")
+      .send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
+
+    expect(res.status).toBe(204);
+    expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith("acme", "ssh-ed25519 AAA");
+  });
+
+  it("denies bootstrap without an authenticated pod revision", async () => {
+    vi.mocked(readAssignedSlugsForGateway).mockResolvedValueOnce([]);
+    mocks.state.gateways.set("bender", isolatedGateway());
+
+    const res = await request(app("bender", null))
+      .post("/internal/gitea/ensure-user")
+      .send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
+
+    expect(res.status).toBe(403);
+    expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { desiredStatus: "retired" },
+    { retireAfter: 10 },
+    { retirementClaim: { operationId: "retire-1", version: 1 } },
+    { roll: { ...isolatedGateway().roll as Record<string, unknown>, status: "failed" } },
+  ])("denies configured-builder bootstrap in a terminal lifecycle: %o", async (override) => {
+    vi.mocked(readAssignedSlugsForGateway).mockResolvedValueOnce([]);
+    mocks.state.gateways.set("bender", isolatedGateway(override));
+
+    const res = await request(app())
+      .post("/internal/gitea/ensure-user")
+      .send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
+
+    expect(res.status).toBe(403);
+    expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
   });
 
   it("denies unassigned slugs when the inbound migration helper does not allow them", async () => {

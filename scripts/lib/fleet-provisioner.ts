@@ -5,17 +5,17 @@ import { readAssignedSlugsForGateway, slugFromAssignedUser } from "./assigned-ro
 import type { Server } from "http";
 import {
   GATEWAY_HEARTBEAT_INTERVAL_MS,
-  type ConfigFreezeResponse,
-  type ConfigRestoreProofResponse,
   type FlushGatewayResponse,
 } from "../../shared/types/fleet-controller.js";
 import {
   createActivateImportHandler,
   createActivationManifestExportHandler,
   createAbortRsyncImportHandler,
-  createConfigFreezeHandler,
-  createConfigRestoreProofHandler,
-  createConfigUnfreezeHandler,
+  createConfigAbortV2Handler,
+  createConfigCandidateProofHandler,
+  createConfigFinalizeV2Handler,
+  createConfigFreezeV2Handler,
+  createConfigPromoteCandidateHandler,
   createExportHandler,
   createExportPathsHandler,
   createFlushHandler,
@@ -29,6 +29,12 @@ import {
   createRestoreHandler,
   createUnmountHandler,
   createVerifyHandler,
+  type ConfigAbortV2Callback,
+  type ConfigCandidateProofCallback,
+  type ConfigFinalizeV2Callback,
+  type ConfigFreezeV2Callback,
+  type ConfigPromoteCandidateCallback,
+  type MigrationHandlerDeps,
 } from "./fleet-http-migration.js";
 import {
   writeGatewayHeartbeat,
@@ -52,7 +58,7 @@ import { mountClaudeSsoAuth } from "./claude-sso-auth-http.js";
 
 const RECONCILE_LOOP_INTERVAL_MS = 15 * 1000;
 
-const PROCESS_STARTED_AT_MS = Date.now() - Math.round(process.uptime() * 1000);
+export const PROCESS_STARTED_AT_MS = Date.now() - Math.round(process.uptime() * 1000);
 
 export interface CloneRetryState {
   attempts: number;
@@ -210,21 +216,11 @@ flushLocalState?: (input: {
   reason: string;
 }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
 
-freezeSystemConfig?: (input: {
-  migrationId: string;
-  slug: string;
-}) => Promise<Omit<ConfigFreezeResponse, "migrationId" | "slug" | "frozen">> |
-  Omit<ConfigFreezeResponse, "migrationId" | "slug" | "frozen">;
-proveSystemConfigRestore?: (input: {
-  migrationId: string;
-  slug: string;
-  checkpointCommit: string;
-}) => Promise<Omit<ConfigRestoreProofResponse, "migrationId" | "slug">> |
-  Omit<ConfigRestoreProofResponse, "migrationId" | "slug">;
-unfreezeSystemConfig?: (input: {
-  migrationId: string;
-  slug: string;
-}) => Promise<{ unfrozen: boolean }> | { unfrozen: boolean };
+freezeSystemConfigV2?: ConfigFreezeV2Callback;
+proveSystemConfigCandidate?: ConfigCandidateProofCallback;
+promoteSystemConfigCandidate?: ConfigPromoteCandidateCallback;
+abortSystemConfigV2?: ConfigAbortV2Callback;
+finalizeSystemConfigV2?: ConfigFinalizeV2Callback;
 }
 
 export interface StartedFleetController {
@@ -303,6 +299,26 @@ export function pathGatewayIdMatchesPod(
   podGatewayId: string,
 ): boolean {
   return pathGatewayId === podGatewayId;
+}
+
+export function registerConfigControlRoutes(
+  app: express.Express,
+  gatewayIdGuard: express.RequestHandler,
+  deps: MigrationHandlerDeps,
+): void {
+  app.post("/config-freeze-v2/:gatewayId", gatewayIdGuard, createConfigFreezeV2Handler(deps));
+  app.post(
+    "/config-candidate-proof/:gatewayId",
+    gatewayIdGuard,
+    createConfigCandidateProofHandler(deps),
+  );
+  app.post(
+    "/config-promote-candidate/:gatewayId",
+    gatewayIdGuard,
+    createConfigPromoteCandidateHandler(deps),
+  );
+  app.post("/config-abort-v2/:gatewayId", gatewayIdGuard, createConfigAbortV2Handler(deps));
+  app.post("/config-finalize-v2/:gatewayId", gatewayIdGuard, createConfigFinalizeV2Handler(deps));
 }
 
 // The K8s Service name a revision pod publishes as its heartbeat internalUrl.
@@ -786,20 +802,21 @@ const waitForGatewayReady = async (): Promise<void> => {
   const migrationDeps = {
     publicKey: opts.publicKey,
     gatewayId: opts.gatewayId,
+    revisionId: opts.revisionId,
     adapter: wrappedAdapter,
     log: opts.log,
     getMountedCustomers: () => runtime.mountedCustomers,
     flushLocalState: opts.flushLocalState,
-    freezeSystemConfig: opts.freezeSystemConfig,
-    proveSystemConfigRestore: opts.proveSystemConfigRestore,
-    unfreezeSystemConfig: opts.unfreezeSystemConfig,
+    freezeSystemConfigV2: opts.freezeSystemConfigV2,
+    proveSystemConfigCandidate: opts.proveSystemConfigCandidate,
+    promoteSystemConfigCandidate: opts.promoteSystemConfigCandidate,
+    abortSystemConfigV2: opts.abortSystemConfigV2,
+    finalizeSystemConfigV2: opts.finalizeSystemConfigV2,
   };
   app.post("/restore/:gatewayId", gatewayIdGuard, createRestoreHandler(migrationDeps));
   app.post("/quiesce/:gatewayId", gatewayIdGuard, createQuiesceHandler(migrationDeps));
   app.post("/flush/:gatewayId", gatewayIdGuard, createFlushHandler(migrationDeps));
-  app.post("/config-freeze/:gatewayId", gatewayIdGuard, createConfigFreezeHandler(migrationDeps));
-  app.post("/config-restore-proof/:gatewayId", gatewayIdGuard, createConfigRestoreProofHandler(migrationDeps));
-  app.post("/config-unfreeze/:gatewayId", gatewayIdGuard, createConfigUnfreezeHandler(migrationDeps));
+  registerConfigControlRoutes(app, gatewayIdGuard, migrationDeps);
   app.post("/verify/:gatewayId", gatewayIdGuard, createVerifyHandler(migrationDeps));
   app.post("/export/:gatewayId", gatewayIdGuard, createExportHandler(migrationDeps));
   app.post("/export-paths/:gatewayId", gatewayIdGuard, createExportPathsHandler(migrationDeps));

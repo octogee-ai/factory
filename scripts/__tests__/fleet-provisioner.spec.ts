@@ -14,6 +14,7 @@ import {
   getMountObservedSlugs,
   pathGatewayIdMatchesPod,
   readMountedCustomersFromAssignedState,
+  registerConfigControlRoutes,
   resolveFleetCapabilities,
 } from "../lib/fleet-provisioner.js";
 import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
@@ -255,6 +256,25 @@ describe("in-pod revision-keyed heartbeat (PR3 dependency)", () => {
     expect(() => gatewayRevisionServiceName({ gatewayId: "default", revisionId: "" })).toThrow(
       "revisionId is required",
     );
+  });
+});
+
+describe("protocol-v2 config control route registration", () => {
+  it("mounts only the five restart-durable config-control endpoints", () => {
+    const post = vi.fn();
+    registerConfigControlRoutes(
+      { post } as never,
+      vi.fn(),
+      {} as never,
+    );
+
+    expect(post.mock.calls.map(([route]) => route)).toEqual([
+      "/config-freeze-v2/:gatewayId",
+      "/config-candidate-proof/:gatewayId",
+      "/config-promote-candidate/:gatewayId",
+      "/config-abort-v2/:gatewayId",
+      "/config-finalize-v2/:gatewayId",
+    ]);
   });
 });
 

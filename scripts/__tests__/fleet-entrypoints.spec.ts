@@ -7,7 +7,7 @@ import {
   createFleetSystemConfigFlush,
   createSystemConfigMutationGatedRpc,
   assertFleetConfigSlug,
-  restoreRevisionSystemConfig,
+  proveRevisionSystemConfigCandidate,
   resolveFleetControllerEntrypointConfig,
 } from "../entrypoints/fleet-controller.js";
 import {
@@ -23,6 +23,7 @@ describe("fleet-controller entrypoint config", () => {
   const rollEnv = {
     GATEWAY_CLASS: "builder",
     GATEWAY_ID: "default",
+    GATEWAY_BUILDER_SLUG: "alice",
     API_PUBLIC_URL: "https://api.octogee.com",
   };
   it("normalizes local gateways and trims dedicated builder slugs", () => {
@@ -198,77 +199,74 @@ describe("fleet-controller entrypoint config", () => {
     }
   });
 
-  it("records config readiness only after proof and a fresh revision-scoped runtime observation", async () => {
+  it("proves an exact boot candidate only after a fresh revision-scoped runtime observation", async () => {
     const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-entrypoint-config-"));
-    const configPath = path.join(openclawDir, "openclaw.json");
+    const configPath = path.join(openclawDir, "system_config", "openclaw.json");
+    fs.mkdirSync(path.dirname(configPath));
     fs.writeFileSync(configPath, '{"gateway":{"mode":"local"}}\n');
     const order: string[] = [];
-    const configGet = vi
-      .fn()
-      .mockImplementationOnce(async () => {
-        order.push("config-get-before-load");
-        return { config: { stale: true }, hash: "runtime-before" };
-      })
-      .mockImplementationOnce(async () => {
-        order.push("config-get-after-proof");
-        return { config: { gateway: { mode: "local" } }, hash: "runtime-after" };
-      });
+    const configGet = vi.fn(async () => {
+      order.push("config-get");
+      return { config: { gateway: { mode: "local" } }, hash: "runtime-after" };
+    });
     const rpc = {
       configGet,
-      configApply: vi.fn(async (config: object, baseHash: string) => {
-        order.push("config-apply");
-        expect(config).toEqual({ gateway: { mode: "local" } });
-        expect(baseHash).toBe("runtime-before");
-        return { ok: true as const, hash: "runtime-after" };
-      }),
       channelsStatus: vi.fn(async () => {
         order.push("channels-status");
         return { channels: [] };
       }),
     };
-    const now = vi.fn()
-      .mockReturnValueOnce(500)
-      .mockReturnValueOnce(501);
-    const restore = vi.fn(async (options: {
-      env?: NodeJS.ProcessEnv;
-      source?: string;
-      loadRuntimeConfig?: (path: string) => Promise<void>;
-    }) => {
-      expect(options).toMatchObject({ env: rollEnv, source: "migration-restore" });
-      await options.loadRuntimeConfig?.(configPath);
-      order.push("proof");
-      return {
-        restoredCommit: "a".repeat(40),
-        acceptedCommit: "c".repeat(40),
-        configHash: "d".repeat(64),
-      };
+    const candidateHash = "d".repeat(64);
+    const verifyControlObjects = vi.fn(() => {
+      order.push("remote-controls");
+      return { candidateRef: "refs/octogee/system-config/candidate/default-r2" };
     });
 
     try {
-      const result = await restoreRevisionSystemConfig({
+      const result = await proveRevisionSystemConfigCandidate({
+        migrationId: "mig-1",
+        sourceRevisionId: "default-r1",
+        targetRevisionId: "default-r2",
         checkpointCommit: "a".repeat(40),
-        slug: "alice",
+        freezeObject: "b".repeat(40),
         openclawDir,
         revisionId: "default-r2",
-        env: rollEnv,
-        source: "migration-restore",
+        env: {
+          ...rollEnv,
+          GATEWAY_IMAGE_TAG: "release-1",
+          BUILD_SHA: "build-1",
+          OPENCLAW_VERSION: "2026.7.1",
+        },
         rpc,
-        now,
-        restore,
+        now: () => 501,
+        startedAt: 500,
+        bootAccepted: () => true,
+        readBootRole: () => ({
+          role: "target-candidate",
+          migrationId: "mig-1",
+          sourceRevisionId: "default-r1",
+          targetRevisionId: "default-r2",
+          checkpointCommit: "a".repeat(40),
+          freezeObject: "b".repeat(40),
+          candidateCommit: "c".repeat(40),
+          candidateHash,
+          candidateExists: true,
+        }),
+        hashConfig: () => candidateHash,
+        verifyControlObjects,
       });
 
-      expect(order).toEqual([
-        "config-get-before-load",
-        "config-apply",
-        "proof",
-        "config-get-after-proof",
-        "channels-status",
-      ]);
+      expect(order).toEqual(["remote-controls", "config-get", "channels-status"]);
       expect(result).toMatchObject({
         configReady: true,
         observedRevisionId: "default-r2",
-        restoreProvenAt: 500,
-        configReadyAt: 501,
+        candidateCommit: "c".repeat(40),
+        candidateHash,
+        targetStartedAt: 500,
+        imageTag: "release-1",
+        buildSha: "build-1",
+        openclawVersion: "2026.7.1",
+        provenAt: 501,
         runtimeConfigHash: "runtime-after",
       });
     } finally {
@@ -276,42 +274,91 @@ describe("fleet-controller entrypoint config", () => {
     }
   });
 
-  it("rejects a stale runtime hash observed after proof", async () => {
+  it("rejects proof when the live runtime config differs from the exact candidate", async () => {
     const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-entrypoint-config-"));
-    const configPath = path.join(openclawDir, "openclaw.json");
-    fs.writeFileSync(configPath, "{}\n");
+    const configPath = path.join(openclawDir, "system_config", "openclaw.json");
+    fs.mkdirSync(path.dirname(configPath));
+    fs.writeFileSync(configPath, '{"candidate":true}\n');
     const rpc = {
-      configGet: vi
-        .fn()
-        .mockResolvedValueOnce({ config: {}, hash: "before" })
-        .mockResolvedValueOnce({ config: {}, hash: "still-before" }),
-      configApply: vi.fn(async () => ({ ok: true as const, hash: "expected-after" })),
+      configGet: vi.fn(async () => ({ config: { stale: true }, hash: "runtime-stale" })),
       channelsStatus: vi.fn(async () => ({ channels: [] })),
-    };
-    const restore = async (options: { loadRuntimeConfig?: (path: string) => Promise<void> }) => {
-      await options.loadRuntimeConfig?.(configPath);
-      return {
-        restoredCommit: "a".repeat(40),
-        acceptedCommit: "c".repeat(40),
-        configHash: "d".repeat(64),
-      };
     };
 
     try {
-      await expect(restoreRevisionSystemConfig({
+      await expect(proveRevisionSystemConfigCandidate({
+        migrationId: "mig-1",
+        sourceRevisionId: "default-r1",
+        targetRevisionId: "default-r2",
         checkpointCommit: "a".repeat(40),
-        slug: "alice",
+        freezeObject: "b".repeat(40),
         openclawDir,
         revisionId: "default-r2",
-        env: rollEnv,
-        source: "migration-restore",
+        env: {
+          ...rollEnv,
+          GATEWAY_IMAGE_TAG: "release-1",
+          BUILD_SHA: "build-1",
+          OPENCLAW_VERSION: "2026.7.1",
+        },
         rpc,
-        restore,
-      })).rejects.toThrow(/runtime config hash.*does not match/i);
+        startedAt: 500,
+        bootAccepted: () => true,
+        readBootRole: () => ({
+          role: "target-candidate",
+          migrationId: "mig-1",
+          sourceRevisionId: "default-r1",
+          targetRevisionId: "default-r2",
+          checkpointCommit: "a".repeat(40),
+          freezeObject: "b".repeat(40),
+          candidateCommit: "c".repeat(40),
+          candidateHash: "d".repeat(64),
+          candidateExists: true,
+        }),
+        hashConfig: () => "d".repeat(64),
+        verifyControlObjects: () => ({
+          candidateRef: "refs/octogee/system-config/candidate/default-r2",
+        }),
+      })).rejects.toThrow(/runtime config does not match candidate/i);
       expect(rpc.channelsStatus).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(openclawDir, { recursive: true, force: true });
     }
+  });
+
+  it("rejects proof before runtime observation when a remote control ref disappeared", async () => {
+    const configGet = vi.fn(async () => ({ config: {}, hash: "runtime" }));
+    await expect(proveRevisionSystemConfigCandidate({
+      migrationId: "mig-1",
+      sourceRevisionId: "default-r1",
+      targetRevisionId: "default-r2",
+      checkpointCommit: "a".repeat(40),
+      freezeObject: "b".repeat(40),
+      openclawDir: "/tmp/openclaw",
+      revisionId: "default-r2",
+      env: {
+        ...rollEnv,
+        GATEWAY_IMAGE_TAG: "release-1",
+        BUILD_SHA: "build-1",
+        OPENCLAW_VERSION: "2026.7.1",
+      },
+      rpc: { configGet, channelsStatus: vi.fn() },
+      startedAt: 500,
+      bootAccepted: () => true,
+      readBootRole: () => ({
+        role: "target-candidate",
+        migrationId: "mig-1",
+        sourceRevisionId: "default-r1",
+        targetRevisionId: "default-r2",
+        checkpointCommit: "a".repeat(40),
+        freezeObject: "b".repeat(40),
+        candidateCommit: "c".repeat(40),
+        candidateHash: "d".repeat(64),
+        candidateExists: true,
+      }),
+      verifyControlObjects: () => {
+        throw new Error("target candidate ref changed");
+      },
+    })).rejects.toThrow(/candidate ref changed/i);
+    expect(configGet).not.toHaveBeenCalled();
   });
 });
 

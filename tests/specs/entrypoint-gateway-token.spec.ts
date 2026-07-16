@@ -144,7 +144,7 @@ function runnerBlockSource(): string {
   const earlyStart = src.indexOf("supervise_runner system-config-status");
   const earlyEnd = src.indexOf("# ── Dedicated gateway system_config restore", earlyStart);
   const start = src.indexOf("# ── In-pod runners:");
-  const end = src.indexOf("# ── Runner metrics exporter", start);
+  const end = src.indexOf("# ── Accept durable system_config boot", start);
   if (earlyStart < 0 || earlyEnd < 0 || start < 0 || end < 0) {
     throw new Error("could not locate runner startup block in entrypoint.sh");
   }

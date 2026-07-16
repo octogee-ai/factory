@@ -5,6 +5,10 @@
 {{- $gatewayClass := include "octogee-gateway.gatewayClass" . -}}
 {{- $imageProfile := include "octogee-gateway.imageProfile" . -}}
 {{- $gatewayImageLabel := include "octogee-gateway.imageLabel" . -}}
+{{- $gatewayImageTag := .Values.image.tag | default .Values.imageTag -}}
+{{- $roll := .Values.systemConfigRollContext -}}
+{{- $rollValues := compact (list $roll.migrationId $roll.sourceRevisionId $roll.targetRevisionId $roll.checkpointCommit $roll.freezeObject) -}}
+{{- $rollCount := len $rollValues -}}
 {{- $conversationMode := .Values.conversationExperiment.mode | default "broad" -}}
 {{- $operatorShellsEnabled := and (ne $gatewayClass "shared") (.Values.operatorAccess.shellsEnabled | default false) -}}
 {{- if and (ne $conversationMode "broad") (ne $conversationMode "publisher-live") -}}
@@ -12,6 +16,15 @@
 {{- end -}}
 {{- if not $preset -}}
 {{- fail (printf "octogee-gateway: no preset defined for sizingTier=%q (add it under .Values.tiers in values.yaml)" $tier) -}}
+{{- end -}}
+{{- if and (gt $rollCount 0) (ne $rollCount 5) -}}
+{{- fail "octogee-gateway: systemConfigRollContext must provide all five fields" -}}
+{{- end -}}
+{{- if and (eq $rollCount 5) (ne $roll.targetRevisionId $revision) -}}
+{{- fail "octogee-gateway: systemConfigRollContext.targetRevisionId must equal revisionId" -}}
+{{- end -}}
+{{- if and (eq $rollCount 5) (eq $gatewayClass "shared") -}}
+{{- fail "octogee-gateway: systemConfigRollContext is forbidden on shared gateways" -}}
 {{- end -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -143,6 +156,10 @@ spec:
               value: "/home/node"
             - name: NPM_CONFIG_CACHE
               value: "/home/node/.npm-cache"
+            - name: CUSTOMERS_DIR
+              value: "/home/node/.openclaw/customers"
+            - name: AGENTS_DIR
+              value: "/home/node/.openclaw/agents"
             - name: K8S_NAMESPACE
               valueFrom:
                 fieldRef:
@@ -166,6 +183,20 @@ spec:
               value: {{ $revision | quote }}
             - name: GATEWAY_BUILDER_SLUG
               value: {{ .Values.builderSlug | quote }}
+            - name: GATEWAY_IMAGE_TAG
+              value: {{ $gatewayImageTag | quote }}
+            {{- if eq $rollCount 5 }}
+            - name: SYSTEM_CONFIG_MIGRATION_ID
+              value: {{ $roll.migrationId | quote }}
+            - name: SYSTEM_CONFIG_SOURCE_REVISION_ID
+              value: {{ $roll.sourceRevisionId | quote }}
+            - name: SYSTEM_CONFIG_TARGET_REVISION_ID
+              value: {{ $roll.targetRevisionId | quote }}
+            - name: SYSTEM_CONFIG_CHECKPOINT_COMMIT
+              value: {{ $roll.checkpointCommit | quote }}
+            - name: SYSTEM_CONFIG_FREEZE_OBJECT
+              value: {{ $roll.freezeObject | quote }}
+            {{- end }}
             # Image profile (standard vs operator) — read by
             # entrypoint.sh to gate operator-image boot steps such as the
             # Claude Code first-run stamper.
@@ -173,6 +204,8 @@ spec:
               value: {{ $imageProfile | quote }}
             - name: GATEWAY_CLASS
               value: {{ $gatewayClass | quote }}
+            - name: OPENCLAW_DOCTOR_MODE
+              value: {{ .Values.env.openclawDoctorMode | default "run" | quote }}
             {{- $autosave := .Values.workspaceAutosaveEnabled | toString }}
             {{- if ne $autosave "" }}
             # Override; unset → gateway code defaults from profile
@@ -312,13 +345,22 @@ spec:
             # No platform secrets are mounted here. The projected token above
             # is this gateway's KSA identity for tenant-bound broker calls.
           startupProbe:
+            {{- if eq $gatewayClass "shared" }}
             httpGet:
               path: /healthz
-              {{- if eq $gatewayClass "shared" }}
               port: 18789
-              {{- else }}
-              port: 18790
-              {{- end }}
+            {{- else }}
+            exec:
+              command:
+                - sh
+                - -ec
+                - >
+                  if [ -f /opt/octogee/capabilities/config-status-v2 ]; then
+                    curl -fsS http://127.0.0.1:18790/healthz;
+                  else
+                    curl -fsS http://127.0.0.1:{{ .Values.env.fleetControllerPort | default "3003" }}/health;
+                  fi
+            {{- end }}
             initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.startup.periodSeconds }}
             failureThreshold: {{ .Values.probes.startup.failureThreshold }}
@@ -328,9 +370,16 @@ spec:
             tcpSocket:
               port: 18789
             {{- else }}
-            httpGet:
-              path: /healthz
-              port: 18790
+            exec:
+              command:
+                - sh
+                - -ec
+                - >
+                  if [ -f /opt/octogee/capabilities/config-status-v2 ]; then
+                    curl -fsS http://127.0.0.1:18790/healthz;
+                  else
+                    curl -fsS http://127.0.0.1:{{ .Values.env.fleetControllerPort | default "3003" }}/health;
+                  fi
             {{- end }}
             initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
@@ -341,9 +390,16 @@ spec:
             tcpSocket:
               port: 18789
             {{- else }}
-            httpGet:
-              path: /readyz
-              port: 18790
+            exec:
+              command:
+                - sh
+                - -ec
+                - >
+                  if [ -f /opt/octogee/capabilities/config-status-v2 ]; then
+                    curl -fsS http://127.0.0.1:18790/readyz;
+                  else
+                    curl -fsS http://127.0.0.1:{{ .Values.env.fleetControllerPort | default "3003" }}/health;
+                  fi
             {{- end }}
             initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
