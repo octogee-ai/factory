@@ -1364,67 +1364,7 @@ function installSnapshotRoutes(
   });
 
   router.post("/configured-builder-bootstrap", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const revisionId = typeof req.body?.revisionId === "string" ? req.body.revisionId : "";
-    const slug = typeof req.body?.slug === "string" ? req.body.slug : "";
-    const authenticatedRevisionId = gatewayRevisionIdFromPodName(
-      bound.gatewayId,
-      bound.podName,
-    );
-    if (
-      !isValidUsername(slug) ||
-      !authenticatedRevisionId ||
-      revisionId !== authenticatedRevisionId
-    ) {
-      res.status(403).json(FORBIDDEN);
-      return;
-    }
-
-    const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get();
-    const gateway = gatewaySnap.data();
-    const uid = isGatewayMutableConfigForGateway(gateway, bound.gatewayId)
-      ? gateway.ownerUid
-      : null;
-    if (
-      typeof uid !== "string" ||
-      !configuredBuilderCredentialBootstrapAllowed(gateway, {
-        gatewayId: bound.gatewayId,
-        revisionId: authenticatedRevisionId,
-        slug,
-        uid,
-      })
-    ) {
-      res.status(403).json(FORBIDDEN);
-      return;
-    }
-
-    const [userSnap, coachSnap] = await Promise.all([
-      db.collection("users").doc(uid).get(),
-      db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
-    ]);
-    const user = userSnap.data() as Record<string, unknown> | undefined;
-    const coach = coachSnap.data() as Record<string, unknown> | undefined;
-    const agentId = `octogee-${slug}-coach`;
-    const bootstrap: FleetBrokerConfiguredBuilderBootstrap | null =
-      user &&
-      slugFromAssignedUser(user) === slug &&
-      agentBelongsToAssignedWorkspace(user, agentId) &&
-      typeof coach?.personalToken === "string" &&
-      coach.personalToken.length > 0
-        ? {
-            uid,
-            slug,
-            agentId,
-            accountId: `${slug}-coach`,
-            coachToken: coach.personalToken,
-          }
-        : null;
-    if (!bootstrap) {
-      res.status(404).json({ error: "configured_builder_bootstrap_unavailable" });
-      return;
-    }
-    res.json({ bootstrap });
+    await handleConfiguredBuilderBootstrap(db, req, res);
   });
 
   router.post("/user-snapshot", async (req, res) => {
@@ -1447,6 +1387,87 @@ function installSnapshotRoutes(
     }
     res.json({ user: snapshot });
   });
+}
+
+function configuredBuilderBootstrapRequest(
+  gatewayId: string,
+  podName: string | undefined,
+  body: unknown,
+): { revisionId: string; slug: string } | null {
+  const record = body && typeof body === "object" ? body as Record<string, unknown> : {};
+  const revisionId = typeof record.revisionId === "string" ? record.revisionId : "";
+  const slug = typeof record.slug === "string" ? record.slug : "";
+  const authenticatedRevisionId = gatewayRevisionIdFromPodName(gatewayId, podName);
+  if (!isValidUsername(slug) || revisionId !== authenticatedRevisionId) return null;
+  return authenticatedRevisionId ? { revisionId: authenticatedRevisionId, slug } : null;
+}
+
+function configuredBuilderBootstrapPayload(input: {
+  uid: string;
+  slug: string;
+  user: Record<string, unknown> | undefined;
+  coach: Record<string, unknown> | undefined;
+}): FleetBrokerConfiguredBuilderBootstrap | null {
+  const { uid, slug, user, coach } = input;
+  const agentId = `octogee-${slug}-coach`;
+  if (!user || slugFromAssignedUser(user) !== slug) return null;
+  if (!agentBelongsToAssignedWorkspace(user, agentId)) return null;
+  if (typeof coach?.personalToken !== "string" || coach.personalToken.length === 0) return null;
+  return {
+    uid,
+    slug,
+    agentId,
+    accountId: `${slug}-coach`,
+    coachToken: coach.personalToken,
+  };
+}
+
+async function handleConfiguredBuilderBootstrap(
+  db: Firestore,
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const bound = boundGateway(req, res);
+  if (!bound) return;
+  const request = configuredBuilderBootstrapRequest(bound.gatewayId, bound.podName, req.body);
+  if (!request) {
+    res.status(403).json(FORBIDDEN);
+    return;
+  }
+
+  const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get();
+  const gateway = gatewaySnap.data();
+  const uid = isGatewayMutableConfigForGateway(gateway, bound.gatewayId)
+    ? gateway.ownerUid
+    : null;
+  if (
+    typeof uid !== "string" ||
+    !configuredBuilderCredentialBootstrapAllowed(gateway, {
+      gatewayId: bound.gatewayId,
+      revisionId: request.revisionId,
+      slug: request.slug,
+      uid,
+    })
+  ) {
+    res.status(403).json(FORBIDDEN);
+    return;
+  }
+
+  const [userSnap, coachSnap] = await Promise.all([
+    db.collection("users").doc(uid).get(),
+    db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
+  ]);
+  const bootstrap = configuredBuilderBootstrapPayload({
+    uid,
+    slug: request.slug,
+    user: userSnap.data() as Record<string, unknown> | undefined,
+    coach: coachSnap.data() as Record<string, unknown> | undefined,
+  });
+  if (!bootstrap) {
+    res.status(404).json({ error: "configured_builder_bootstrap_unavailable" });
+    return;
+  }
+  res.json({ bootstrap });
 }
 
 function installProvisioningRoutes(
