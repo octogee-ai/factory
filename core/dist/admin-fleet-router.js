@@ -1,7 +1,7 @@
 import { FieldValue } from "firebase-admin/firestore";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, OPERATOR_GATEWAY_RESERVATIONS_COLLECTION, defaultOperatorGatewayAccess, resolveUserGatewayShellState, OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT, isValidNewGatewayId, isGatewayClass, isGatewayProfile, operatorGatewayServiceAccountName, resolveGatewayClass, resolveGatewayImageProfile, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, GATEWAY_RELEASES_SUBCOLLECTION, commitPlacementAtomic, isReleasePayload, releasePayloadHash, isGatewayDesiredDoc, isGatewayLegacyBackfill, isRevisionRealizationDoc, revisionIdForRelease, rootReferencedRevisionIds, } from "@octogee/shared/types/gateway-releases";
+import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, GATEWAY_RELEASES_SUBCOLLECTION, commitPlacementAtomic, isReleasePayload, releasePayloadHash, isGatewayDesiredDoc, isGatewayLegacyBackfill, isRevisionRealizationDoc, revisionIdForRelease, rootReferencedRevisionIds, upgradeReleasePayloadSchema, } from "@octogee/shared/types/gateway-releases";
 import { parseAssignmentDoc, readAssignmentDocsForGateway } from "./assignment-doc.js";
 import { GATEWAY_CONFIG_SCHEMA_VERSION, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, } from "./gateway-live-release.js";
 import { projectReleaseHistory } from "./gateway-release-history.js";
@@ -1676,6 +1676,41 @@ function artifactFromRelease(release) {
         return null;
     return gatewayArtifactFromReleasePayload(release.payload);
 }
+class ReleaseArtifactSchemaUnsupportedError extends Error {
+    gatewayId;
+    release;
+    reason;
+    code = "release-artifact-schema-unsupported";
+    constructor(gatewayId, release, reason) {
+        super(`gateway ${gatewayId} release ${release} artifact schema is unsupported`);
+        this.gatewayId = gatewayId;
+        this.release = release;
+        this.reason = reason;
+        this.name = "ReleaseArtifactSchemaUnsupportedError";
+    }
+}
+async function readAndUpgradeReleaseArtifact(db, gatewayId, release) {
+    const releaseRef = db
+        .collection(GATEWAYS_COLLECTION)
+        .doc(gatewayId)
+        .collection(GATEWAY_RELEASES_SUBCOLLECTION)
+        .doc(String(release));
+    return db.runTransaction(async (transaction) => {
+        const snapshot = await transaction.get(releaseRef);
+        const data = snapshot.exists ? snapshot.data() : undefined;
+        const upgrade = upgradeReleasePayloadSchema(data?.payload, data?.payloadHash);
+        if (upgrade.status === "unsupported") {
+            throw new ReleaseArtifactSchemaUnsupportedError(gatewayId, release, upgrade.reason);
+        }
+        if (upgrade.status === "upgraded") {
+            transaction.update(releaseRef, {
+                payload: upgrade.payload,
+                payloadHash: upgrade.payloadHash,
+            });
+        }
+        return gatewayArtifactFromReleasePayload(upgrade.payload);
+    });
+}
 function currentArtifactPatch(artifact, patch) {
     return {
         imageRepository: patch.imageRepository ?? artifact.imageRepository,
@@ -2047,10 +2082,7 @@ async function readRolloutCurrentConfig(db, gatewayId) {
     const gateway = await readGatewayDoc(db, gatewayId);
     if (!gateway)
         return null;
-    const release = await readRelease(db, gatewayId, gateway.latestRelease);
-    const artifact = release ? artifactFromRelease(release) : null;
-    if (!artifact)
-        throw new Error(`gateway ${gatewayId} has no current release artifact`);
+    const artifact = await readAndUpgradeReleaseArtifact(db, gatewayId, gateway.latestRelease);
     return { gateway, artifact };
 }
 function buildDurableGatewayPatch(args) {
@@ -3879,7 +3911,23 @@ export function addAdminFleetRoutes(router, deps) {
                 });
                 return;
             }
-            const current = await readRolloutCurrentConfig(db, id);
+            let current;
+            try {
+                current = await readRolloutCurrentConfig(db, id);
+            }
+            catch (error) {
+                if (error instanceof ReleaseArtifactSchemaUnsupportedError) {
+                    res.status(409).json({
+                        error: "release artifact schema is unsupported",
+                        code: error.code,
+                        gatewayId: error.gatewayId,
+                        release: error.release,
+                        reason: error.reason,
+                    });
+                    return;
+                }
+                throw error;
+            }
             if (!current) {
                 res
                     .status(404)

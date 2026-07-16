@@ -15,6 +15,18 @@ function stringFields(value, fields) {
     const record = value;
     return fields.flatMap((field) => typeof record[field] === "string" ? [record[field]] : []);
 }
+function rolloutParentId(operation) {
+    if (operation.kind !== "migrate-customer")
+        return null;
+    if (!operation.input || typeof operation.input !== "object" || Array.isArray(operation.input)) {
+        return null;
+    }
+    const rollOperationId = operation.input.rollOperationId;
+    return typeof rollOperationId === "string" ? rollOperationId : null;
+}
+function isRolloutMigrationLineage(rollout, migration) {
+    return rollout.kind === "rollout" && rolloutParentId(migration) === rollout.id;
+}
 export function fleetOperationLockResources(operation) {
     if (!SERIAL_KINDS.has(operation.kind))
         return new Set();
@@ -31,6 +43,10 @@ export function fleetOperationLockResources(operation) {
 export function serialFleetOperationsConflict(candidate, other) {
     if (!SERIAL_KINDS.has(candidate.kind) || !SERIAL_KINDS.has(other.kind))
         return false;
+    if (isRolloutMigrationLineage(candidate, other) ||
+        isRolloutMigrationLineage(other, candidate)) {
+        return false;
+    }
     if (candidate.kind === "rollout" && other.kind === "rollout")
         return true;
     const candidateResources = fleetOperationLockResources(candidate);

@@ -15,6 +15,7 @@ import {
   readServingGatewayAuthorization,
   type GatewayMutableConfig,
 } from "./gateway-live-release.js";
+import { releasePayloadHash } from "@octogee/shared/types/gateway-releases";
 
 describe("gatewayRevisionIdFromPodName", () => {
   it("derives the exact revision from a generated gateway pod name", () => {
@@ -580,6 +581,27 @@ describe("gateway durable configuration authorization", () => {
           imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
           imageTag: "deadbee",
         },
+      },
+    };
+
+    await expect(readGatewayArtifact(database(docs) as never, "bender", 2)).resolves.toEqual({
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
+      imageTag: "deadbee",
+    });
+  });
+
+  it("reads a hash-verified artifact through the retired Mac schema upgrade", async () => {
+    const payload = {
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
+      imageTag: "deadbee",
+      macOpsTokenProtocol: { version: 1 },
+    };
+    const docs: Docs = {
+      "gateways/bender/releases/2": {
+        gatewayId: "bender",
+        release: 2,
+        payloadHash: releasePayloadHash(payload as never),
+        payload,
       },
     };
 

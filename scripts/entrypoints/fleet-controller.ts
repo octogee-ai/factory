@@ -43,6 +43,7 @@ import {
   promoteSystemConfigCandidateV2,
   readSystemConfigBootRoleState,
   retireSystemConfigV2,
+  SystemConfigControlUnavailableError,
   type SystemConfigBootResolutionV2,
   verifySystemConfigCandidateControlObjectsV2,
 } from "../lib/system-config-roll-protocol-v2.js";
@@ -107,7 +108,14 @@ type SystemConfigRuntimeRpc = Pick<
 export function createSystemConfigMutationGatedRpc(
   rpc: GatewayRpcClient,
   openclawDir: string,
+  deps: {
+    acquireLease?: typeof acquireSystemConfigMutationLease;
+    wait?: (delayMs: number) => Promise<void>;
+  } = {},
 ): GatewayRpcClient {
+  const acquireLease = deps.acquireLease ?? acquireSystemConfigMutationLease;
+  const wait = deps.wait ?? ((delayMs: number) =>
+    new Promise<void>((resolve) => setTimeout(resolve, delayMs)));
   return new Proxy(rpc, {
     get(target, property, receiver) {
       if (property !== "configApply" && property !== "configPatch") {
@@ -115,14 +123,19 @@ export function createSystemConfigMutationGatedRpc(
       }
       const mutation = Reflect.get(target, property, target) as (...args: unknown[]) => Promise<unknown>;
       return async (...args: unknown[]) => {
-        const acquired = await acquireSystemConfigMutationLease({ openclawDir });
+        let acquired = await acquireLease({ openclawDir });
+        for (const delayMs of [250, 750]) {
+          if (acquired.ok || acquired.code !== "writer-lock-busy") break;
+          await wait(delayMs);
+          acquired = await acquireLease({ openclawDir });
+        }
         if (!acquired.ok) {
           if (acquired.code === "config-frozen") {
             throw new Error(
               `system config is frozen by ${acquired.freezeOwner.migrationId} for ${acquired.freezeOwner.slug}`,
             );
           }
-          throw new Error("system config writer lock is busy");
+          throw new SystemConfigControlUnavailableError("config-writer-lock-busy");
         }
         try {
           assertSystemConfigMutationAllowed({ openclawDir });
