@@ -205,8 +205,8 @@ describe("OpenClaw Dashboard HTTP surface", () => {
 });
 
 describe("OpenClaw Dashboard WebSocket surface", () => {
-  it.each(["result", "timeout", "socket-close"] as const)(
-    "holds the durable config writer lease across a native mutation until %s",
+  it.each(["result", "late-result", "hard-timeout", "browser-close", "upstream-close"] as const)(
+    "holds the durable config writer lease across a native mutation until %s proves its outcome",
     async (terminal) => {
       const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dashboard-lease-"));
       tempDirs.push(openclawDir);
@@ -217,6 +217,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         apiOrigin: "https://api.octogee.com",
       });
       let upstreamSocket: WebSocket | undefined;
+      let retainedMutationLease: { release(): Promise<void> } | undefined;
       let mutationAdmitted!: () => void;
       const admitted = new Promise<void>((resolve) => { mutationAdmitted = resolve; });
       const upstream = http.createServer();
@@ -264,12 +265,17 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         loadGatewayToken: async () => "gateway-secret",
         audit: async () => {},
         rpcTimeoutMs: 30,
+        retainMutationLeaseUntilProcessReplacement: (lease) => {
+          retainedMutationLease = lease;
+        },
       });
       router.attach(edge);
       const edgePort = await listen(edge);
       const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
         headers: { cookie: issue(manager), origin: "https://api.octogee.com" },
       });
+      let collisionObserved!: () => void;
+      const collidingFrame = new Promise<void>((resolve) => { collisionObserved = resolve; });
       const terminalFrame = new Promise<Record<string, unknown>>((resolve, reject) => {
         browser.on("error", reject);
         browser.on("message", (data) => {
@@ -289,6 +295,8 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
                 replacePaths: [],
               },
             }));
+          } else if (frame.type === "event" && frame.id === "config-write") {
+            collisionObserved();
           } else if (frame.id === "config-write") {
             resolve(frame);
           }
@@ -305,30 +313,64 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
 
       if (terminal === "result") {
         upstreamSocket?.send(JSON.stringify({
+          type: "event",
+          id: "config-write",
+          event: "unrelated",
+        }));
+        await collidingFrame;
+        expect(acquireSystemConfigSyncLeaseSync({ openclawDir })).toBeNull();
+        upstreamSocket?.send(JSON.stringify({
           type: "res",
           id: "config-write",
           ok: true,
           payload: { accepted: true },
         }));
         await expect(terminalFrame).resolves.toMatchObject({ id: "config-write", ok: true });
-      } else if (terminal === "timeout") {
+      } else if (terminal === "late-result") {
         await expect(terminalFrame).resolves.toMatchObject({
           id: "config-write",
           ok: false,
           error: { code: "UPSTREAM_TIMEOUT" },
         });
-      } else {
+        expect(acquireSystemConfigSyncLeaseSync({ openclawDir })).toBeNull();
+        upstreamSocket?.send(JSON.stringify({
+          type: "res",
+          id: "config-write",
+          ok: true,
+          payload: { accepted: true },
+        }));
+      } else if (terminal === "hard-timeout") {
+        await expect(terminalFrame).resolves.toMatchObject({
+          id: "config-write",
+          ok: false,
+          error: { code: "UPSTREAM_TIMEOUT" },
+        });
+        const closed = new Promise<void>((resolve) => browser.once("close", () => resolve()));
+        await closed;
+      } else if (terminal === "browser-close") {
         const closed = new Promise<void>((resolve) => browser.once("close", () => resolve()));
         browser.close();
         await closed;
+      } else {
+        const closed = new Promise<void>((resolve) => browser.once("close", () => resolve()));
+        upstreamSocket?.close();
+        await closed;
       }
 
-      await vi.waitFor(() => {
-        expect(fs.existsSync(path.join(openclawDir, "system_config.sync.lock"))).toBe(false);
-      });
-      const after = acquireSystemConfigSyncLeaseSync({ openclawDir });
-      expect(after).not.toBeNull();
-      after?.release();
+      if (terminal === "result" || terminal === "late-result") {
+        await vi.waitFor(() => {
+          expect(fs.existsSync(path.join(openclawDir, "system_config.sync.lock"))).toBe(false);
+        });
+        expect(retainedMutationLease).toBeUndefined();
+        const after = acquireSystemConfigSyncLeaseSync({ openclawDir });
+        expect(after).not.toBeNull();
+        after?.release();
+      } else {
+        await vi.waitFor(() => expect(retainedMutationLease).toBeDefined());
+        expect(fs.existsSync(path.join(openclawDir, "system_config.sync.lock"))).toBe(true);
+        expect(acquireSystemConfigSyncLeaseSync({ openclawDir })).toBeNull();
+        await retainedMutationLease?.release();
+      }
       if (browser.readyState === WebSocket.OPEN) browser.close();
       await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
     },

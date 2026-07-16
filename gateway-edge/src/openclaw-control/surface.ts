@@ -77,6 +77,11 @@ const ALLOWED_RESPONSE_HEADERS = new Set([
 ]);
 const defaultSessions = new OpenClawControlSessionManager();
 const defaultLimiter = new OpenClawControlResourceLimiter();
+const retainedMutationLeases = new Set<SystemConfigMutationLease>();
+
+function retainMutationLeaseUntilProcessReplacement(lease: SystemConfigMutationLease): void {
+  retainedMutationLeases.add(lease);
+}
 
 function envValue(env: NodeJS.ProcessEnv, key: string): string {
   const value = env[key]?.trim();
@@ -434,6 +439,10 @@ async function bridgeControlSocket(args: {
   rpcTimeoutMs: number;
   authorizationIntervalMs: number;
   metrics?: OpenClawControlMetrics;
+  retainMutationLeaseUntilProcessReplacement: (
+    lease: SystemConfigMutationLease,
+    reason: string,
+  ) => void;
 }): Promise<void> {
   const identity: OpenClawControlResourceIdentity = {
     uid: args.session.uid,
@@ -459,7 +468,7 @@ async function bridgeControlSocket(args: {
   let activeSession = args.session;
   const pending = new Map<string, PendingRpc>();
   const admittingIds = new Set<string>();
-  const timedOutIds = new Set<string>();
+  const timedOut = new Map<string, SystemConfigMutationLease | undefined>();
   let quarantineTimer: NodeJS.Timeout | undefined;
   let closing = false;
   let socketReleased = false;
@@ -472,13 +481,8 @@ async function bridgeControlSocket(args: {
     activeSession = touched.session;
     return true;
   };
-  const releasePending = (id: string): PendingRpc | undefined => {
-    const item = pending.get(id);
-    if (!item) return undefined;
-    pending.delete(id);
-    clearTimeout(item.timer);
-    item.lease.release();
-    void item.mutationLease?.release().catch((error) => {
+  const releaseMutationLease = (lease: SystemConfigMutationLease): void => {
+    void lease.release().catch((error) => {
       logger.error("OpenClaw Dashboard config mutation lease release failed", {
         gatewayId: activeSession.gatewayId,
         revisionId: activeSession.revisionId,
@@ -486,6 +490,26 @@ async function bridgeControlSocket(args: {
       });
       closeBoth("config-lease-release-failed");
     });
+  };
+  const retainMutationLease = (lease: SystemConfigMutationLease, reason: string): void => {
+    args.retainMutationLeaseUntilProcessReplacement(lease, reason);
+    logger.error("OpenClaw Dashboard config mutation outcome is uncertain; writer lease retained", {
+      gatewayId: activeSession.gatewayId,
+      revisionId: activeSession.revisionId,
+      reason,
+    });
+  };
+  const takePending = (id: string): PendingRpc | undefined => {
+    const item = pending.get(id);
+    if (!item) return undefined;
+    pending.delete(id);
+    clearTimeout(item.timer);
+    item.lease.release();
+    return item;
+  };
+  const settlePending = (id: string): PendingRpc | undefined => {
+    const item = takePending(id);
+    if (item?.mutationLease) releaseMutationLease(item.mutationLease);
     return item;
   };
   const closeBoth = (reason = "dashboard-session-invalid"): void => {
@@ -493,9 +517,15 @@ async function bridgeControlSocket(args: {
     closing = true;
     clearInterval(authorizationTimer);
     if (quarantineTimer) clearTimeout(quarantineTimer);
-    timedOutIds.clear();
     admittingIds.clear();
-    for (const id of [...pending.keys()]) releasePending(id);
+    for (const [id, mutationLease] of timedOut) {
+      timedOut.delete(id);
+      if (mutationLease) retainMutationLease(mutationLease, reason);
+    }
+    for (const id of [...pending.keys()]) {
+      const item = takePending(id);
+      if (item?.mutationLease) retainMutationLease(item.mutationLease, reason);
+    }
     if (!socketReleased) {
       socketReleased = true;
       args.socketLease.release();
@@ -536,16 +566,19 @@ async function bridgeControlSocket(args: {
   }, args.authorizationIntervalMs);
   authorizationTimer.unref?.();
 
-  const quarantine = (id: string): void => {
-    timedOutIds.add(id);
+  const quarantine = (id: string, mutationLease?: SystemConfigMutationLease): void => {
+    timedOut.set(id, mutationLease);
     if (quarantineTimer) return;
     quarantineTimer = setTimeout(() => closeBoth("request-timeout"), args.rpcTimeoutMs);
     quarantineTimer.unref?.();
   };
 
   const drainQuarantined = (id: string): boolean => {
-    if (!timedOutIds.delete(id)) return false;
-    if (timedOutIds.size === 0 && quarantineTimer) {
+    if (!timedOut.has(id)) return false;
+    const mutationLease = timedOut.get(id);
+    timedOut.delete(id);
+    if (mutationLease) releaseMutationLease(mutationLease);
+    if (timedOut.size === 0 && quarantineTimer) {
       clearTimeout(quarantineTimer);
       quarantineTimer = undefined;
     }
@@ -566,12 +599,12 @@ async function bridgeControlSocket(args: {
     const pendingRpc = {} as PendingRpc;
     const timer = setTimeout(() => {
       if (pending.get(id) !== pendingRpc) return;
-      releasePending(id);
+      const expired = takePending(id);
       if (pendingRpc.internal) {
         closeBoth("request-timeout");
         return;
       }
-      quarantine(id);
+      quarantine(id, expired?.mutationLease);
       if (args.browser.readyState === WebSocket.OPEN) {
         args.browser.send(openClawControlTimeoutError({ type: "req", id, method, params: {} }));
         auditEvent(args.audit, args.env, activeSession, "rpc_result", category, "error", "request-timeout");
@@ -600,7 +633,7 @@ async function bridgeControlSocket(args: {
     nonce = challengeNonce(frame) ?? nonce;
     const id = typeof frame.id === "string" ? frame.id : undefined;
     if (frame.type === "res" && id && drainQuarantined(id)) return;
-    const request = id ? releasePending(id) : undefined;
+    const request = frame.type === "res" && id ? settlePending(id) : undefined;
     const methods = installedMethodsFromHello(frame);
     if (methods) {
       if (!pinnedOpenClawRuntimeMatches(methods)) {
@@ -652,14 +685,14 @@ async function bridgeControlSocket(args: {
       if (args.browser.readyState === WebSocket.OPEN) args.browser.send(openClawControlPolicyError(frame, "invalid-frame"));
       return;
     }
-    if (timedOutIds.has(frame.id)) {
+    if (timedOut.has(frame.id)) {
       args.browser.send(openClawControlPolicyError(frame, "request-id-quarantined"));
       auditEvent(args.audit, args.env, activeSession, "rpc_deny", "unknown", "denied", "request-id-quarantined");
       args.metrics?.rpc(metricsIdentity, "unknown", "denied");
       args.metrics?.policy(metricsIdentity, "request_id_quarantined");
       return;
     }
-    if (timedOutIds.size > 0) {
+    if (timedOut.size > 0) {
       args.browser.send(openClawControlPolicyError(frame, "upstream-quarantined"));
       auditEvent(args.audit, args.env, activeSession, "rpc_deny", "unknown", "denied", "upstream-quarantined");
       args.metrics?.rpc(metricsIdentity, "unknown", "denied");
@@ -764,7 +797,7 @@ async function bridgeControlSocket(args: {
       try {
         upstream.send(JSON.stringify(decision.outbound ?? frame));
       } catch (error) {
-        releasePending(requestId);
+        settlePending(requestId);
         throw error;
       }
       auditEvent(args.audit, args.env, activeSession, "rpc_allow", decision.category, "ok");
@@ -794,6 +827,10 @@ export interface AttachOpenClawControlWsRouteOptions {
   rpcTimeoutMs?: number;
   authorizationIntervalMs?: number;
   metrics?: OpenClawControlMetrics;
+  retainMutationLeaseUntilProcessReplacement?: (
+    lease: SystemConfigMutationLease,
+    reason: string,
+  ) => void;
 }
 
 export function attachOpenClawControlWsRoute(options: AttachOpenClawControlWsRouteOptions): void {
@@ -863,6 +900,8 @@ export function attachOpenClawControlWsRoute(options: AttachOpenClawControlWsRou
         rpcTimeoutMs,
         authorizationIntervalMs,
         metrics: options.metrics,
+        retainMutationLeaseUntilProcessReplacement:
+          options.retainMutationLeaseUntilProcessReplacement ?? retainMutationLeaseUntilProcessReplacement,
       }).catch(() => {
         options.metrics?.ws(metricIdentity(env), "connect", "error");
         socketLease.release();
