@@ -109,7 +109,7 @@ describe("OpenClaw Dashboard HTTP surface", () => {
       .toThrow(/loopback/i);
   });
 
-  it("redeems once into a clean redirect and a secure path-scoped boot-local cookie", async () => {
+  it("redeems once into a cross-site redirect-compatible secure path-scoped boot-local cookie", async () => {
     const manager = sessions();
     const ticket = "a".repeat(43);
     const redeem = vi.fn(async (input) => ({
@@ -124,7 +124,8 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     expect(response.headers.location).toBe("/g/bender/openclaw/");
     expect(response.headers["set-cookie"]?.[0]).toContain("HttpOnly");
     expect(response.headers["set-cookie"]?.[0]).toContain("Secure");
-    expect(response.headers["set-cookie"]?.[0]).toContain("SameSite=Strict");
+    expect(response.headers["set-cookie"]?.[0]).toContain("SameSite=Lax");
+    expect(response.headers["set-cookie"]?.[0]).not.toContain("SameSite=Strict");
     expect(JSON.stringify(response.headers)).not.toContain(ticket);
     expect(response.text).not.toContain(ticket);
     expect(redeem).toHaveBeenCalledWith(expect.objectContaining({
