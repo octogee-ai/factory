@@ -453,6 +453,8 @@ async function bridgeControlSocket(args: {
   let currentConfig: OpenClawConfigSnapshot | undefined;
   let activeSession = args.session;
   const pending = new Map<string, PendingRpc>();
+  const timedOutIds = new Set<string>();
+  let quarantineTimer: NodeJS.Timeout | undefined;
   let closing = false;
   let socketReleased = false;
   const metricsIdentity = metricIdentity(args.env);
@@ -476,6 +478,8 @@ async function bridgeControlSocket(args: {
     if (closing) return;
     closing = true;
     clearInterval(authorizationTimer);
+    if (quarantineTimer) clearTimeout(quarantineTimer);
+    timedOutIds.clear();
     for (const id of [...pending.keys()]) releasePending(id);
     if (!socketReleased) {
       socketReleased = true;
@@ -517,6 +521,22 @@ async function bridgeControlSocket(args: {
   }, args.authorizationIntervalMs);
   authorizationTimer.unref?.();
 
+  const quarantine = (id: string): void => {
+    timedOutIds.add(id);
+    if (quarantineTimer) return;
+    quarantineTimer = setTimeout(() => closeBoth("request-timeout"), args.rpcTimeoutMs);
+    quarantineTimer.unref?.();
+  };
+
+  const drainQuarantined = (id: string): boolean => {
+    if (!timedOutIds.delete(id)) return false;
+    if (timedOutIds.size === 0 && quarantineTimer) {
+      clearTimeout(quarantineTimer);
+      quarantineTimer = undefined;
+    }
+    return true;
+  };
+
   const track = (
     id: string,
     method: string,
@@ -528,7 +548,12 @@ async function bridgeControlSocket(args: {
     const timer = setTimeout(() => {
       if (pending.get(id) !== pendingRpc) return;
       releasePending(id);
-      if (!pendingRpc.internal && args.browser.readyState === WebSocket.OPEN) {
+      if (pendingRpc.internal) {
+        closeBoth("request-timeout");
+        return;
+      }
+      quarantine(id);
+      if (args.browser.readyState === WebSocket.OPEN) {
         args.browser.send(openClawControlTimeoutError({ type: "req", id, method, params: {} }));
         auditEvent(args.audit, args.env, activeSession, "rpc_result", category, "error", "request-timeout");
         args.metrics?.rpc(metricsIdentity, category, "timeout");
@@ -554,6 +579,7 @@ async function bridgeControlSocket(args: {
     }
     nonce = challengeNonce(frame) ?? nonce;
     const id = typeof frame.id === "string" ? frame.id : undefined;
+    if (frame.type === "res" && id && drainQuarantined(id)) return;
     const request = id ? releasePending(id) : undefined;
     const methods = installedMethodsFromHello(frame);
     if (methods) {
@@ -604,6 +630,20 @@ async function bridgeControlSocket(args: {
     if (!frame || typeof frame.id !== "string" || typeof frame.method !== "string" ||
       !frame.params || typeof frame.params !== "object" || Array.isArray(frame.params)) {
       if (args.browser.readyState === WebSocket.OPEN) args.browser.send(openClawControlPolicyError(frame, "invalid-frame"));
+      return;
+    }
+    if (timedOutIds.has(frame.id)) {
+      args.browser.send(openClawControlPolicyError(frame, "request-id-quarantined"));
+      auditEvent(args.audit, args.env, activeSession, "rpc_deny", "unknown", "denied", "request-id-quarantined");
+      args.metrics?.rpc(metricsIdentity, "unknown", "denied");
+      args.metrics?.policy(metricsIdentity, "request_id_quarantined");
+      return;
+    }
+    if (timedOutIds.size > 0) {
+      args.browser.send(openClawControlPolicyError(frame, "upstream-quarantined"));
+      auditEvent(args.audit, args.env, activeSession, "rpc_deny", "unknown", "denied", "upstream-quarantined");
+      args.metrics?.rpc(metricsIdentity, "unknown", "denied");
+      args.metrics?.policy(metricsIdentity, "upstream_quarantined");
       return;
     }
     if (pending.has(frame.id)) {

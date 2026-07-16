@@ -387,6 +387,204 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
   });
 
+  it("tombstones a timed-out id until its late response drains before allowing safe reuse", async () => {
+    let upstreamSocket: WebSocket | undefined;
+    let statusRequests = 0;
+    let returnFresh = false;
+    const upstream = http.createServer();
+    const upstreamWs = new WebSocketServer({ noServer: true });
+    upstream.on("upgrade", (req, socket, head) => {
+      upstreamWs.handleUpgrade(req, socket, head, (ws) => upstreamWs.emit("connection", ws, req));
+    });
+    upstreamWs.on("connection", (ws) => {
+      upstreamSocket = ws;
+      ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "n" } }));
+      ws.on("message", (data) => {
+        const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+        if (frame.method === "connect") {
+          ws.send(JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: true,
+            payload: {
+              type: "hello-ok",
+              features: { methods: [...OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS] },
+            },
+          }));
+        } else if (frame.method === "status") {
+          statusRequests += 1;
+          if (returnFresh) {
+            ws.send(JSON.stringify({
+              type: "res",
+              id: frame.id,
+              ok: true,
+              payload: { generation: "fresh" },
+            }));
+          }
+        }
+      });
+    });
+    const upstreamPort = await listen(upstream);
+    const manager = sessions();
+    const edge = http.createServer(appWith({ env: env(upstreamPort), sessions: manager }));
+    const router = new WsUpgradeRouter();
+    attachOpenClawControlWsRoute({
+      router,
+      env: env(upstreamPort),
+      sessions: manager,
+      authorize: async () => true,
+      loadGatewayToken: async () => "gateway-secret",
+      audit: async () => {},
+      resourceLimiter: new OpenClawControlResourceLimiter({ maxSockets: 1, maxInFlight: 1 }),
+      rpcTimeoutMs: 30,
+    });
+    router.attach(edge);
+    const edgePort = await listen(edge);
+    const browserFrames: Array<Record<string, unknown>> = [];
+    const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
+      headers: { cookie: issue(manager), origin: "https://api.octogee.com" },
+    });
+    await new Promise<void>((resolve, reject) => {
+      const deadline = setTimeout(() => reject(new Error("timed-id reuse did not settle")), 1_000);
+      browser.on("error", reject);
+      browser.on("message", (data) => {
+        const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+        browserFrames.push(frame);
+        if (frame.event === "connect.challenge") {
+          browser.send(JSON.stringify({ type: "req", id: "connect", method: "connect", params: {} }));
+        } else if ((frame.payload as Record<string, unknown> | undefined)?.type === "hello-ok") {
+          browser.send(JSON.stringify({ type: "req", id: "reused", method: "status", params: {} }));
+        } else if ((frame.error as Record<string, unknown> | undefined)?.code === "UPSTREAM_TIMEOUT") {
+          browser.send(JSON.stringify({ type: "req", id: "reused", method: "status", params: {} }));
+          setTimeout(() => {
+            upstreamSocket?.send(JSON.stringify({
+              type: "res",
+              id: "reused",
+              ok: true,
+              payload: { generation: "old" },
+            }));
+            setTimeout(() => {
+              returnFresh = true;
+              browser.send(JSON.stringify({ type: "req", id: "reused", method: "status", params: {} }));
+            }, 5);
+          }, 5);
+        } else if ((frame.payload as Record<string, unknown> | undefined)?.generation === "fresh") {
+          clearTimeout(deadline);
+          resolve();
+        }
+      });
+    });
+
+    expect(statusRequests).toBe(2);
+    expect(browserFrames.some((frame) =>
+      (frame.error as Record<string, unknown> | undefined)?.message ===
+        "Octogee policy denied this operation (request-id-quarantined)")).toBe(true);
+    expect(browserFrames.some((frame) =>
+      (frame.payload as Record<string, unknown> | undefined)?.generation === "old")).toBe(false);
+    browser.close();
+    await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
+  });
+
+  it("quarantines repeated timed-out tools.invoke work and releases the socket after cleanup", async () => {
+    let toolRequests = 0;
+    let connections = 0;
+    const upstream = http.createServer();
+    const upstreamWs = new WebSocketServer({ noServer: true });
+    upstream.on("upgrade", (req, socket, head) => {
+      upstreamWs.handleUpgrade(req, socket, head, (ws) => upstreamWs.emit("connection", ws, req));
+    });
+    upstreamWs.on("connection", (ws) => {
+      connections += 1;
+      ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "n" } }));
+      ws.on("message", (data) => {
+        const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+        if (frame.method === "connect") {
+          ws.send(JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: true,
+            payload: {
+              type: "hello-ok",
+              features: { methods: [...OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS] },
+            },
+          }));
+        } else if (frame.method === "tools.invoke") {
+          toolRequests += 1;
+        }
+      });
+    });
+    const upstreamPort = await listen(upstream);
+    const manager = sessions();
+    const edge = http.createServer(appWith({ env: env(upstreamPort), sessions: manager }));
+    const router = new WsUpgradeRouter();
+    attachOpenClawControlWsRoute({
+      router,
+      env: env(upstreamPort),
+      sessions: manager,
+      authorize: async () => true,
+      loadGatewayToken: async () => "gateway-secret",
+      audit: async () => {},
+      resourceLimiter: new OpenClawControlResourceLimiter({ maxSockets: 1, maxInFlight: 1 }),
+      rpcTimeoutMs: 20,
+    });
+    router.attach(edge);
+    const edgePort = await listen(edge);
+    const first = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
+      headers: { cookie: issue(manager), origin: "https://api.octogee.com" },
+    });
+    await new Promise<void>((resolve, reject) => {
+      const deadline = setTimeout(() => reject(new Error("quarantined socket stayed open")), 1_000);
+      first.on("error", () => undefined);
+      first.on("close", () => {
+        clearTimeout(deadline);
+        resolve();
+      });
+      first.on("message", (data) => {
+        const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+        if (frame.event === "connect.challenge") {
+          first.send(JSON.stringify({ type: "req", id: "connect-1", method: "connect", params: {} }));
+        } else if ((frame.payload as Record<string, unknown> | undefined)?.type === "hello-ok") {
+          first.send(JSON.stringify({
+            type: "req",
+            id: "tool-1",
+            method: "tools.invoke",
+            params: { name: "web_search", args: { query: "first" } },
+          }));
+        } else if ((frame.error as Record<string, unknown> | undefined)?.code === "UPSTREAM_TIMEOUT") {
+          for (let index = 2; index <= 5; index += 1) {
+            first.send(JSON.stringify({
+              type: "req",
+              id: `tool-${index}`,
+              method: "tools.invoke",
+              params: { name: "web_search", args: { query: `retry-${index}` } },
+            }));
+          }
+        }
+      });
+    });
+    expect(toolRequests).toBe(1);
+
+    const second = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
+      headers: { cookie: issue(manager), origin: "https://api.octogee.com" },
+    });
+    await new Promise<void>((resolve, reject) => {
+      const deadline = setTimeout(() => reject(new Error("socket lease was not released")), 1_000);
+      second.on("error", reject);
+      second.on("message", (data) => {
+        const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+        if (frame.event === "connect.challenge") {
+          second.send(JSON.stringify({ type: "req", id: "connect-2", method: "connect", params: {} }));
+        } else if ((frame.payload as Record<string, unknown> | undefined)?.type === "hello-ok") {
+          clearTimeout(deadline);
+          resolve();
+        }
+      });
+    });
+    expect(connections).toBe(2);
+    second.close();
+    await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
+  });
+
   it("terminates a still-negotiating upstream on browser disconnect or capability revocation", async () => {
     let heldSocket: Duplex | undefined;
     let acceptSocket!: () => void;

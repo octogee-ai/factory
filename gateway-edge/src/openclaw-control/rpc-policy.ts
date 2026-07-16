@@ -31,6 +31,7 @@ export interface OpenClawControlRpcDecision {
     | "config-frozen"
     | "config-base-mismatch"
     | "config-invalid"
+    | "redacted-array-structural-edit"
     | "platform-invariant"
     | "tool-denied"
     | "tool-schema-invalid";
@@ -63,6 +64,8 @@ const READ_METHODS = new Set([
 
 const CONFIG_MUTATION_METHODS = new Set(["config.set", "config.apply", "config.patch"]);
 const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
+const ARRAY_IDENTITY_KEYS = ["id", "agentId", "accountId", "key"] as const;
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -154,6 +157,62 @@ function stringIdRecord(value: unknown): value is Record<string, unknown> & { id
   return item !== null && boundedString(item.id, 256);
 }
 
+function containsRedactedSentinel(value: unknown): boolean {
+  if (value === REDACTED_SENTINEL) return true;
+  if (Array.isArray(value)) return value.some(containsRedactedSentinel);
+  const item = record(value);
+  return item ? Object.values(item).some(containsRedactedSentinel) : false;
+}
+
+function structurallyEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) && Array.isArray(right) && left.length === right.length &&
+      left.every((value, index) => structurallyEqual(value, right[index]));
+  }
+  const leftRecord = record(left);
+  const rightRecord = record(right);
+  if (!leftRecord || !rightRecord) return false;
+  const leftKeys = Object.keys(leftRecord).sort();
+  const rightKeys = Object.keys(rightRecord).sort();
+  return leftKeys.length === rightKeys.length &&
+    leftKeys.every((key, index) => key === rightKeys[index] &&
+      structurallyEqual(leftRecord[key], rightRecord[key]));
+}
+
+function arrayItemIdentityPreserved(current: unknown, proposed: unknown): boolean {
+  const currentItem = record(current);
+  const proposedItem = record(proposed);
+  if (!currentItem || !proposedItem) return structurallyEqual(current, proposed);
+  for (const key of ARRAY_IDENTITY_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(currentItem, key)) continue;
+    const value = currentItem[key];
+    if ((typeof value !== "string" && typeof value !== "number") || value === REDACTED_SENTINEL) {
+      return structurallyEqual(current, proposed);
+    }
+    return Object.is(value, proposedItem[key]);
+  }
+  return structurallyEqual(current, proposed);
+}
+
+function redactedArrayStructurePreserved(current: unknown, proposed: unknown): boolean {
+  if (Array.isArray(current)) {
+    if (!Array.isArray(proposed)) return !containsRedactedSentinel(current);
+    if (containsRedactedSentinel(current) &&
+      (current.length !== proposed.length ||
+        current.some((entry, index) => !arrayItemIdentityPreserved(entry, proposed[index])))) {
+      return false;
+    }
+    return current.every((entry, index) =>
+      redactedArrayStructurePreserved(entry, proposed[index]));
+  }
+  const currentItem = record(current);
+  if (!currentItem) return true;
+  const proposedItem = record(proposed);
+  return Object.entries(currentItem).every(([key, value]) =>
+    redactedArrayStructurePreserved(value, proposedItem?.[key]));
+}
+
 function mergePatch(
   current: Record<string, unknown>,
   patch: Record<string, unknown>,
@@ -227,6 +286,13 @@ function configMutationDecision(
   const proposed = request.method === "config.patch"
     ? mergePatch(current.raw, raw, replacePaths)
     : structuredClone(raw);
+  if (!redactedArrayStructurePreserved(current.raw, proposed)) {
+    return {
+      allowed: false,
+      category: "config_mutation",
+      reason: "redacted-array-structural-edit",
+    };
+  }
   if (platformInvariantViolations(proposed, context.invariantContext).length > 0) {
     return { allowed: false, category: "config_mutation", reason: "platform-invariant" };
   }

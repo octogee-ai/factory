@@ -189,6 +189,100 @@ describe("OpenClaw Dashboard RPC policy", () => {
     });
   });
 
+  it("fails closed when a full or replacement mutation structurally shifts a sentinel-bearing array", () => {
+    const current = validConfig({
+      agents: {
+        list: [
+          {
+            id: "alpha",
+            name: "Alpha",
+            memorySearch: {
+              remote: {
+                apiKey: {
+                  source: "exec",
+                  provider: "gcp-secret-manager",
+                  id: "__OPENCLAW_REDACTED__",
+                },
+              },
+            },
+          },
+          {
+            id: "beta",
+            name: "Beta",
+            memorySearch: {
+              remote: {
+                apiKey: {
+                  source: "exec",
+                  provider: "gcp-secret-manager",
+                  id: "__OPENCLAW_REDACTED__",
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+    const context = policyContext({ currentConfig: { raw: current, hash: "hash-1" } });
+    const withAgents = (agents: unknown[]) => ({
+      ...structuredClone(current),
+      agents: { list: agents },
+    });
+    const alpha = structuredClone((current.agents as { list: unknown[] }).list[0]);
+    const beta = structuredClone((current.agents as { list: unknown[] }).list[1]);
+
+    expect(evaluateOpenClawControlRpc(request("config.apply", {
+      raw: JSON.stringify(withAgents([beta])),
+      baseHash: "hash-1",
+    }), context)).toMatchObject({
+      allowed: false,
+      reason: "redacted-array-structural-edit",
+    });
+    expect(evaluateOpenClawControlRpc(request("config.set", {
+      raw: JSON.stringify(withAgents([beta, alpha])),
+      baseHash: "hash-1",
+    }), context)).toMatchObject({
+      allowed: false,
+      reason: "redacted-array-structural-edit",
+    });
+    expect(evaluateOpenClawControlRpc(request("config.patch", {
+      raw: JSON.stringify({ agents: { list: [beta] } }),
+      baseHash: "hash-1",
+      replacePaths: ["agents.list"],
+    }), context)).toMatchObject({
+      allowed: false,
+      reason: "redacted-array-structural-edit",
+    });
+  });
+
+  it("allows scalar and object edits when sentinel-bearing array identities stay positionally stable", () => {
+    const current = validConfig({
+      agents: {
+        list: [{
+          id: "alpha",
+          name: "Alpha",
+          memorySearch: {
+            remote: {
+              apiKey: {
+                source: "exec",
+                provider: "gcp-secret-manager",
+                id: "__OPENCLAW_REDACTED__",
+              },
+            },
+          },
+        }],
+      },
+    });
+    const proposed = structuredClone(current);
+    (proposed.agents as { list: Array<Record<string, unknown>> }).list[0].name = "Renamed";
+    (proposed.agents as { list: Array<Record<string, unknown>> }).list[0].workspace = "/workspace/alpha";
+    const context = policyContext({ currentConfig: { raw: current, hash: "hash-1" } });
+
+    expect(evaluateOpenClawControlRpc(request("config.apply", {
+      raw: JSON.stringify(proposed),
+      baseHash: "hash-1",
+    }), context)).toMatchObject({ allowed: true, category: "config_mutation" });
+  });
+
   it("allows tools.invoke only for three exact safe schemas and categorizes without the tool name", () => {
     const allowed = [
       request("tools.invoke", {
