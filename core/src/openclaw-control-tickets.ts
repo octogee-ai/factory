@@ -78,43 +78,65 @@ export function redeemableOpenClawControlTicket(args: {
     : null;
 }
 
+interface ParsedOpenClawControlTicket {
+  uid: string;
+  gatewayId: string;
+  revisionId: string;
+  expiresAt: number;
+  redeemedAt: unknown;
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function finiteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function parseOpenClawControlTicket(
+  document: Record<string, unknown> | undefined,
+): ParsedOpenClawControlTicket | null {
+  if (!document) return null;
+  const { uid, gatewayId, revisionId, expiresAt, redeemedAt } = document;
+  if (
+    !nonEmptyString(uid) ||
+    !nonEmptyString(gatewayId) ||
+    !nonEmptyString(revisionId) ||
+    !finiteNumber(expiresAt)
+  ) {
+    return null;
+  }
+  return { uid, gatewayId, revisionId, expiresAt, redeemedAt };
+}
+
 export function inspectOpenClawControlTicket(args: {
   document: Record<string, unknown> | undefined;
   gatewayId: string;
   revisionId: string;
   now?: number;
 }): OpenClawControlTicketInspection {
-  const { document, gatewayId, revisionId } = args;
-  if (!document) return { kind: "rejected", reason: "ticket_invalid" };
-  const uid = document.uid;
-  const storedGatewayId = document.gatewayId;
-  const storedRevisionId = document.revisionId;
-  const expiresAt = document.expiresAt;
-  if (
-    typeof uid !== "string" ||
-    uid.length === 0 ||
-    typeof storedGatewayId !== "string" ||
-    storedGatewayId.length === 0 ||
-    typeof storedRevisionId !== "string" ||
-    storedRevisionId.length === 0 ||
-    typeof expiresAt !== "number" ||
-    !Number.isFinite(expiresAt)
-  ) {
-    return { kind: "rejected", reason: "ticket_invalid" };
+  const ticket = parseOpenClawControlTicket(args.document);
+  if (!ticket) return { kind: "rejected", reason: "ticket_invalid" };
+  if (ticket.gatewayId !== args.gatewayId) {
+    return { kind: "rejected", reason: "gateway_mismatch", uid: ticket.uid };
   }
-  if (storedGatewayId !== gatewayId) {
-    return { kind: "rejected", reason: "gateway_mismatch", uid };
+  if (ticket.revisionId !== args.revisionId) {
+    return { kind: "rejected", reason: "revision_mismatch", uid: ticket.uid };
   }
-  if (storedRevisionId !== revisionId) {
-    return { kind: "rejected", reason: "revision_mismatch", uid };
+  if (ticket.redeemedAt !== undefined) {
+    return finiteNumber(ticket.redeemedAt)
+      ? { kind: "rejected", reason: "ticket_replay", uid: ticket.uid }
+      : { kind: "rejected", reason: "ticket_invalid", uid: ticket.uid };
   }
-  if (document.redeemedAt !== undefined) {
-    return typeof document.redeemedAt === "number" && Number.isFinite(document.redeemedAt)
-      ? { kind: "rejected", reason: "ticket_replay", uid }
-      : { kind: "rejected", reason: "ticket_invalid", uid };
+  if (ticket.expiresAt <= (args.now ?? Date.now())) {
+    return { kind: "rejected", reason: "ticket_expired", uid: ticket.uid };
   }
-  if (expiresAt <= (args.now ?? Date.now())) {
-    return { kind: "rejected", reason: "ticket_expired", uid };
-  }
-  return { kind: "redeemable", uid, gatewayId, revisionId, expiresAt };
+  return {
+    kind: "redeemable",
+    uid: ticket.uid,
+    gatewayId: args.gatewayId,
+    revisionId: args.revisionId,
+    expiresAt: ticket.expiresAt,
+  };
 }

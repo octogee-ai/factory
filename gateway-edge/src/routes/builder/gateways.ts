@@ -31,6 +31,9 @@ import { isOpenClawControlRevisionRuntimeReady } from "../../openclaw-control/ru
 
 const router = Router();
 router.use(requireAuth);
+const NOT_FOUND = "not-found";
+const CAPABILITY_DISABLED = "capability-disabled";
+const NOT_READY = "not-ready";
 
 const openClawTicketRateLimit = rateLimit({
   windowMs: 60_000,
@@ -129,6 +132,87 @@ function apiOrigin(): string {
   return configured.replace(/\/$/u, "");
 }
 
+type TicketResult =
+  | { kind: typeof NOT_FOUND }
+  | { kind: typeof CAPABILITY_DISABLED }
+  | { kind: typeof NOT_READY }
+  | { kind: "minted"; minted: ReturnType<typeof createOpenClawControlTicket> };
+
+function controlUiAccess(
+  authorization: Extract<GatewayAuthorization, { kind: "durable" }>,
+  uid: string,
+): "allowed" | typeof NOT_FOUND | typeof CAPABILITY_DISABLED {
+  if (!gatewayAccessVia(
+    authorization.config.ownerUid,
+    authorization.config.coOwnerUids,
+    uid,
+  )) return NOT_FOUND;
+  const gatewayClass = resolveGatewayClass({
+    gatewayClass: authorization.config.gatewayClass,
+    profile: authorization.config.profile ?? undefined,
+    imageProfile: authorization.config.imageProfile,
+  });
+  return isGatewayClassControlUiAccessEnabled(
+    gatewayClass,
+    authorization.config.operatorAccess ?? undefined,
+  ) ? "allowed" : CAPABILITY_DISABLED;
+}
+
+function servingRevisionId(
+  authorization: Extract<GatewayAuthorization, { kind: "durable" }>,
+): string | null {
+  const { gateway } = authorization;
+  if (gateway.desiredStatus !== "running" || gateway.roll !== null ||
+    gateway.desiredRelease !== gateway.liveRelease ||
+    typeof gateway.liveRevisionId !== "string" ||
+    gateway.trafficRevisionId !== gateway.liveRevisionId) return null;
+  return gateway.liveRevisionId;
+}
+
+async function mintOpenClawTicket(gatewayId: string, uid: string): Promise<TicketResult> {
+  return db.runTransaction(async (tx) => {
+    const rootSnap = await tx.get(db.doc(`gateways/${gatewayId}`));
+    const serving = rootSnap.exists
+      ? gatewayAuthorizationFromRootDocument(rootSnap.data(), gatewayId)
+      : null;
+    if (!serving) return { kind: NOT_READY };
+    const access = controlUiAccess(serving, uid);
+    if (access !== "allowed") return { kind: access };
+    const ownerUid = serving.config.ownerUid;
+    const ownerAssignmentSnap = typeof ownerUid === "string"
+      ? await tx.get(db.collection("users").doc(ownerUid))
+      : null;
+    if (!ownerAssignmentSnap?.exists || !userAssignmentMatchesGateway(
+      ownerAssignmentSnap.data(),
+      gatewayId,
+      serving.config.builderSlug,
+    )) return { kind: NOT_FOUND };
+    const revisionId = servingRevisionId(serving);
+    if (!revisionId) return { kind: NOT_READY };
+    const revisionSnap = await tx.get(db.doc(`glmGateways/${revisionId}`));
+    if (!isOpenClawControlRevisionRuntimeReady(
+      revisionSnap.exists ? revisionSnap.data() : undefined,
+      { gatewayId, revisionId },
+    )) return { kind: NOT_READY };
+    const minted = createOpenClawControlTicket({ uid, gatewayId, revisionId });
+    tx.set(db.collection(OPENCLAW_CONTROL_TICKETS_COLLECTION).doc(minted.ticketHash), {
+      ...minted.document,
+      createdAt: FieldValue.serverTimestamp(),
+      expireAt: Timestamp.fromMillis(minted.document.expiresAt),
+    });
+    tx.set(db.collection(OPENCLAW_CONTROL_AUDIT_COLLECTION).doc(), {
+      gatewayId,
+      revisionId,
+      uid,
+      event: "ticket_mint",
+      outcome: "ok",
+      reason: "none",
+      createdAt: FieldValue.serverTimestamp(),
+    });
+    return { kind: "minted" as const, minted };
+  });
+}
+
 router.post(
   "/gateways/:gatewayId/openclaw-ticket",
   openClawTicketRateLimit,
@@ -145,106 +229,25 @@ router.post(
         res.status(404).json({ error: "not-found" });
         return;
       }
-      const via = gatewayAccessVia(
-        authorization.config.ownerUid,
-        authorization.config.coOwnerUids,
-        uid,
-      );
-      if (!via) {
+      const access = controlUiAccess(authorization, uid);
+      if (access === NOT_FOUND) {
         res.status(404).json({ error: "not-found" });
         return;
       }
-      const gatewayClass = resolveGatewayClass({
-        gatewayClass: authorization.config.gatewayClass,
-        profile: authorization.config.profile ?? undefined,
-        imageProfile: authorization.config.imageProfile,
-      });
-      if (!isGatewayClassControlUiAccessEnabled(
-        gatewayClass,
-        authorization.config.operatorAccess ?? undefined,
-      )) {
-        res.status(403).json({ error: "capability-disabled" });
+      if (access === CAPABILITY_DISABLED) {
+        res.status(403).json({ error: CAPABILITY_DISABLED });
         return;
       }
-      const result = await db.runTransaction(async (tx) => {
-        const rootRef = db.doc(`gateways/${gatewayId}`);
-        const rootSnap = await tx.get(rootRef);
-        const serving = rootSnap.exists
-          ? gatewayAuthorizationFromRootDocument(rootSnap.data(), gatewayId)
-          : null;
-        if (!serving) return { kind: "not-ready" as const };
-        if (!gatewayAccessVia(serving.config.ownerUid, serving.config.coOwnerUids, uid)) {
-          return { kind: "not-found" as const };
-        }
-        const servingClass = resolveGatewayClass({
-          gatewayClass: serving.config.gatewayClass,
-          profile: serving.config.profile ?? undefined,
-          imageProfile: serving.config.imageProfile,
-        });
-        if (!isGatewayClassControlUiAccessEnabled(
-          servingClass,
-          serving.config.operatorAccess ?? undefined,
-        )) {
-          return { kind: "capability-disabled" as const };
-        }
-        const ownerUid = serving.config.ownerUid;
-        const ownerAssignmentSnap = typeof ownerUid === "string"
-          ? await tx.get(db.collection("users").doc(ownerUid))
-          : null;
-        if (
-          !ownerAssignmentSnap?.exists ||
-          !userAssignmentMatchesGateway(
-            ownerAssignmentSnap.data(),
-            gatewayId,
-            serving.config.builderSlug,
-          )
-        ) {
-          return { kind: "not-found" as const };
-        }
-        const revisionId = serving.gateway.liveRevisionId;
-        if (
-          serving.gateway.desiredStatus !== "running" ||
-          serving.gateway.roll !== null ||
-          serving.gateway.desiredRelease !== serving.gateway.liveRelease ||
-          typeof revisionId !== "string" ||
-          serving.gateway.trafficRevisionId !== revisionId
-        ) {
-          return { kind: "not-ready" as const };
-        }
-        const revisionRef = db.doc(`glmGateways/${revisionId}`);
-        const revisionSnap = await tx.get(revisionRef);
-        if (!isOpenClawControlRevisionRuntimeReady(
-          revisionSnap.exists ? revisionSnap.data() : undefined,
-          { gatewayId, revisionId },
-        )) {
-          return { kind: "not-ready" as const };
-        }
-        const minted = createOpenClawControlTicket({ uid, gatewayId, revisionId });
-        tx.set(db.collection(OPENCLAW_CONTROL_TICKETS_COLLECTION).doc(minted.ticketHash), {
-          ...minted.document,
-          createdAt: FieldValue.serverTimestamp(),
-          expireAt: Timestamp.fromMillis(minted.document.expiresAt),
-        });
-        tx.set(db.collection(OPENCLAW_CONTROL_AUDIT_COLLECTION).doc(), {
-          gatewayId,
-          revisionId,
-          uid,
-          event: "ticket_mint",
-          outcome: "ok",
-          reason: "none",
-          createdAt: FieldValue.serverTimestamp(),
-        });
-        return { kind: "minted" as const, minted };
-      });
-      if (result.kind === "not-found") {
+      const result = await mintOpenClawTicket(gatewayId, uid);
+      if (result.kind === NOT_FOUND) {
         res.status(404).json({ error: "not-found" });
         return;
       }
-      if (result.kind === "capability-disabled") {
-        res.status(403).json({ error: "capability-disabled" });
+      if (result.kind === CAPABILITY_DISABLED) {
+        res.status(403).json({ error: CAPABILITY_DISABLED });
         return;
       }
-      if (result.kind === "not-ready") {
+      if (result.kind === NOT_READY) {
         res.status(409).json({ error: "gateway-not-ready", retryable: true });
         return;
       }

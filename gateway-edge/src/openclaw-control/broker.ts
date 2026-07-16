@@ -41,6 +41,21 @@ async function post(
   }, { fetchImpl });
 }
 
+function boundedIdentifier(value: unknown, maxLength: number): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= maxLength;
+}
+
+function validRedemptionResponse(value: unknown): value is OpenClawControlRedemptionResponse {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return boundedIdentifier(item.uid, 256) &&
+    boundedIdentifier(item.gatewayId, 128) &&
+    boundedIdentifier(item.revisionId, 128) &&
+    typeof item.expiresAt === "number" &&
+    Number.isFinite(item.expiresAt) &&
+    item.expiresAt > 0;
+}
+
 export async function redeemOpenClawControlTicket(args: {
   ticket: string;
   sessionId: string;
@@ -58,21 +73,14 @@ export async function redeemOpenClawControlTicket(args: {
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`OpenClaw Control ticket broker returned ${res.status}`);
   const body = await res.json() as unknown;
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    throw new Error("OpenClaw Control ticket broker returned invalid JSON");
-  }
-  const item = body as Record<string, unknown>;
-  if (typeof item.uid !== "string" || !item.uid || item.uid.length > 256 ||
-    typeof item.gatewayId !== "string" || !item.gatewayId || item.gatewayId.length > 128 ||
-    typeof item.revisionId !== "string" || !item.revisionId || item.revisionId.length > 128 ||
-    typeof item.expiresAt !== "number" || !Number.isFinite(item.expiresAt) || item.expiresAt <= 0) {
+  if (!validRedemptionResponse(body)) {
     throw new Error("OpenClaw Control ticket broker returned invalid JSON");
   }
   return {
-    uid: item.uid,
-    gatewayId: item.gatewayId,
-    revisionId: item.revisionId,
-    expiresAt: item.expiresAt,
+    uid: body.uid,
+    gatewayId: body.gatewayId,
+    revisionId: body.revisionId,
+    expiresAt: body.expiresAt,
   };
 }
 

@@ -213,6 +213,43 @@ function redactedArrayStructurePreserved(current: unknown, proposed: unknown): b
     redactedArrayStructurePreserved(value, proposedItem?.[key]));
 }
 
+function mergeIdentifiedArray(
+  base: unknown[],
+  patch: unknown[],
+  replacePaths: ReadonlySet<string>,
+  itemPath: string,
+): unknown[] {
+  const merged: unknown[] = structuredClone(base);
+  const indexes = new Map(merged.filter(stringIdRecord).map((entry, index) => [entry.id, index]));
+  for (const patchEntry of patch) {
+    if (!stringIdRecord(patchEntry) || !indexes.has(patchEntry.id)) {
+      merged.push(structuredClone(patchEntry));
+      if (stringIdRecord(patchEntry)) indexes.set(patchEntry.id, merged.length - 1);
+      continue;
+    }
+    const index = indexes.get(patchEntry.id)!;
+    merged[index] = mergePatch(record(merged[index]) ?? {}, patchEntry, replacePaths, `${itemPath}[]`);
+  }
+  return merged;
+}
+
+function mergePatchValue(
+  current: unknown,
+  value: unknown,
+  replacePaths: ReadonlySet<string>,
+  itemPath: string,
+): unknown {
+  if (Array.isArray(current) && Array.isArray(value)) {
+    return replacePaths.has(itemPath) || !current.every(stringIdRecord)
+      ? structuredClone(value)
+      : mergeIdentifiedArray(current, value, replacePaths, itemPath);
+  }
+  const nested = record(value);
+  return nested
+    ? mergePatch(record(current) ?? {}, nested, replacePaths, itemPath)
+    : structuredClone(value);
+}
+
 function mergePatch(
   current: Record<string, unknown>,
   patch: Record<string, unknown>,
@@ -227,32 +264,33 @@ function mergePatch(
       delete candidate[key];
       continue;
     }
-    if (Array.isArray(candidate[key]) && Array.isArray(value)) {
-      const base = candidate[key] as unknown[];
-      if (replacePaths.has(itemPath) || !base.every(stringIdRecord)) {
-        candidate[key] = structuredClone(value);
-        continue;
-      }
-      const merged: unknown[] = structuredClone(base);
-      const indexes = new Map(merged.filter(stringIdRecord).map((entry, index) => [entry.id, index]));
-      for (const patchEntry of value) {
-        if (!stringIdRecord(patchEntry) || !indexes.has(patchEntry.id)) {
-          merged.push(structuredClone(patchEntry));
-          if (stringIdRecord(patchEntry)) indexes.set(patchEntry.id, merged.length - 1);
-          continue;
-        }
-        const index = indexes.get(patchEntry.id)!;
-        merged[index] = mergePatch(record(merged[index]) ?? {}, patchEntry, replacePaths, `${itemPath}[]`);
-      }
-      candidate[key] = merged;
-      continue;
-    }
-    const nested = record(value);
-    candidate[key] = nested
-      ? mergePatch(record(candidate[key]) ?? {}, nested, replacePaths, itemPath)
-      : structuredClone(value);
+    candidate[key] = mergePatchValue(candidate[key], value, replacePaths, itemPath);
   }
   return candidate;
+}
+
+function allowedMutationParams(method: unknown): ReadonlySet<string> {
+  if (method === "config.set") return new Set(["raw", "baseHash"]);
+  if (method === "config.apply") return new Set(["raw", "baseHash", "sessionKey"]);
+  return new Set(["raw", "baseHash", "sessionKey", "note", "replacePaths"]);
+}
+
+function validMutationParams(params: Record<string, unknown>, method: unknown): boolean {
+  return exactKeys(params, allowedMutationParams(method)) &&
+    (params.sessionKey === undefined ||
+      typeof params.sessionKey === "string" && params.sessionKey.length <= 512) &&
+    (params.note === undefined || typeof params.note === "string" && params.note.length <= 512);
+}
+
+function proposedMutationConfig(
+  method: unknown,
+  current: Record<string, unknown>,
+  raw: Record<string, unknown>,
+  replacePaths: ReadonlySet<string>,
+): Record<string, unknown> {
+  return method === "config.patch"
+    ? mergePatch(current, raw, replacePaths)
+    : structuredClone(raw);
 }
 
 function configMutationDecision(
@@ -267,14 +305,7 @@ function configMutationDecision(
   if (!params || !current || params.baseHash !== current.hash) {
     return { allowed: false, category: "config_mutation", reason: "config-base-mismatch" };
   }
-  const allowedParams = request.method === "config.set"
-    ? new Set(["raw", "baseHash"])
-    : request.method === "config.apply"
-      ? new Set(["raw", "baseHash", "sessionKey"])
-      : new Set(["raw", "baseHash", "sessionKey", "note", "replacePaths"]);
-  if (!exactKeys(params, allowedParams) ||
-    (params.sessionKey !== undefined && (typeof params.sessionKey !== "string" || params.sessionKey.length > 512)) ||
-    (params.note !== undefined && (typeof params.note !== "string" || params.note.length > 512))) {
+  if (!validMutationParams(params, request.method)) {
     return { allowed: false, category: "config_mutation", reason: "config-invalid" };
   }
   const replacePaths = normalizedReplacePaths(params.replacePaths);
@@ -283,9 +314,7 @@ function configMutationDecision(
     return { allowed: false, category: "config_mutation", reason: "config-invalid" };
   }
   const raw = parsed;
-  const proposed = request.method === "config.patch"
-    ? mergePatch(current.raw, raw, replacePaths)
-    : structuredClone(raw);
+  const proposed = proposedMutationConfig(request.method, current.raw, raw, replacePaths);
   if (!redactedArrayStructurePreserved(current.raw, proposed)) {
     return {
       allowed: false,

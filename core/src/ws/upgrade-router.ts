@@ -36,6 +36,10 @@ interface CompiledRoute extends WsUpgradeRoute {
   wss: WebSocketServerType;
 }
 
+type ExtractedTicket =
+  | { accepted: true; ticket?: string }
+  | { accepted: false };
+
 const DEFAULT_MAX_PAYLOAD_BYTES = 1 << 20;
 type WebSocketServerConstructor = new (
   opts: ConstructorParameters<typeof WebSocketServerType>[0],
@@ -92,51 +96,50 @@ export class WsUpgradeRouter {
     head: Buffer,
   ): Promise<void> {
     const pathname = (req.url ?? "").split("?")[0];
-    let ticket: string | undefined;
-    if (route.extractTicket) {
-      const extracted = route.extractTicket(pathname);
-      if (extracted === null) {
-        writeStatusAndDestroy(socket, 400, "Bad Request");
-        return;
-      }
-      ticket = extracted;
+    const extracted = extractRouteTicket(route, pathname);
+    if (!extracted.accepted) {
+      writeStatusAndDestroy(socket, 400, "Bad Request");
+      return;
     }
-
-    if (route.allowedOrigins !== "check-in-handler") {
-      const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
-      const allowed =
-        typeof route.allowedOrigins === "function"
-          ? route.allowedOrigins(origin)
-          : origin !== undefined && route.allowedOrigins.has(origin);
-      if (!allowed) {
-        writeStatusAndDestroy(socket, 403, "Forbidden");
-        return;
-      }
+    if (!routeAllowsOrigin(route, req)) {
+      writeStatusAndDestroy(socket, 403, "Forbidden");
+      return;
     }
-
-    if (route.requireHeaderKey) {
-      const got = req.headers[route.requireHeaderKey.header.toLowerCase()];
-      if (typeof got !== "string" || !constantTimeEqual(got, route.requireHeaderKey.expected)) {
-        writeStatusAndDestroy(socket, 401, "Unauthorized");
-        return;
-      }
+    if (!routeHeaderMatches(route, req)) {
+      writeStatusAndDestroy(socket, 401, "Unauthorized");
+      return;
     }
-
-    if (route.authorize) {
-      const allowed = await route.authorize(req);
-      if (socket.destroyed) return;
-      if (!allowed) {
-        writeStatusAndDestroy(socket, 401, "Unauthorized");
-        return;
-      }
-    }
-
+    const authorized = route.authorize ? await route.authorize(req) : true;
     if (socket.destroyed) return;
+    if (!authorized) {
+      writeStatusAndDestroy(socket, 401, "Unauthorized");
+      return;
+    }
 
     route.wss.handleUpgrade(req, socket, head, (ws: WebSocket) => {
-      route.onUpgrade({ ws, req, ticket });
+      route.onUpgrade({ ws, req, ticket: extracted.ticket });
     });
   }
+}
+
+function extractRouteTicket(route: CompiledRoute, pathname: string): ExtractedTicket {
+  if (!route.extractTicket) return { accepted: true };
+  const ticket = route.extractTicket(pathname);
+  return ticket === null ? { accepted: false } : { accepted: true, ticket };
+}
+
+function routeAllowsOrigin(route: CompiledRoute, req: IncomingMessage): boolean {
+  if (route.allowedOrigins === "check-in-handler") return true;
+  const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
+  return typeof route.allowedOrigins === "function"
+    ? route.allowedOrigins(origin)
+    : origin !== undefined && route.allowedOrigins.has(origin);
+}
+
+function routeHeaderMatches(route: CompiledRoute, req: IncomingMessage): boolean {
+  if (!route.requireHeaderKey) return true;
+  const got = req.headers[route.requireHeaderKey.header.toLowerCase()];
+  return typeof got === "string" && constantTimeEqual(got, route.requireHeaderKey.expected);
 }
 
 function writeStatusAndDestroy(socket: Duplex, code: number, text: string): void {
@@ -145,7 +148,6 @@ function writeStatusAndDestroy(socket: Duplex, code: number, text: string): void
 }
 
 function constantTimeEqual(a: string, b: string): boolean {
-
   if (a.length !== b.length) return false;
   let diff = 0;
   for (let i = 0; i < b.length; i++) {

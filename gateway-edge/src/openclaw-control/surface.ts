@@ -37,6 +37,7 @@ import {
   openClawControlTimeoutError,
   pinnedOpenClawRuntimeMatches,
   type OpenClawConfigSnapshot,
+  type OpenClawControlRpcDecision,
   type OpenClawControlRpcCategory,
 } from "./rpc-policy.js";
 import {
@@ -81,7 +82,7 @@ const defaultLimiter = new OpenClawControlResourceLimiter();
 const retainedMutationLeases = new Set<SystemConfigMutationLease>();
 
 function retainMutationLeaseUntilProcessReplacement(lease: SystemConfigMutationLease): void {
-  retainedMutationLeases.add(lease);
+  if (!retainedMutationLeases.has(lease)) retainedMutationLeases.add(lease);
 }
 
 function envValue(env: NodeJS.ProcessEnv, key: string): string {
@@ -150,11 +151,12 @@ export function openClawControlUpstreamPath(originalUrl: string, gatewayId: stri
   }
   const publicBase = `/api/g/${gatewayId}/openclaw`;
   const strippedBase = "/openclaw";
-  const inboundBase = parsed.pathname === publicBase || parsed.pathname.startsWith(`${publicBase}/`)
-    ? publicBase
-    : parsed.pathname === strippedBase || parsed.pathname.startsWith(`${strippedBase}/`)
-      ? strippedBase
-      : null;
+  let inboundBase: string | null = null;
+  if (parsed.pathname === publicBase || parsed.pathname.startsWith(`${publicBase}/`)) {
+    inboundBase = publicBase;
+  } else if (parsed.pathname === strippedBase || parsed.pathname.startsWith(`${strippedBase}/`)) {
+    inboundBase = strippedBase;
+  }
   if (!inboundBase) throw new Error("OpenClaw Dashboard request path is outside its base path");
   const suffix = parsed.pathname.slice(inboundBase.length);
   return `/g/${gatewayId}/openclaw${suffix}${parsed.search}`;
@@ -173,6 +175,11 @@ function securityHeaders(res: Response | http.ServerResponse): void {
 function unauthorized(res: Response): void {
   securityHeaders(res);
   res.status(401).json({ error: "dashboard-session-invalid", relaunch: true });
+}
+
+function httpAssetOutcome(statusCode: number): "ok" | "timeout" | "error" {
+  if (statusCode < 400) return "ok";
+  return statusCode === 504 ? "timeout" : "error";
 }
 
 function requestHeaders(req: Request, env: NodeJS.ProcessEnv): http.OutgoingHttpHeaders {
@@ -283,7 +290,7 @@ export function createOpenClawControlHttpRouter(
     res.once("finish", () => metrics?.http(
       identity,
       "asset",
-      res.statusCode < 400 ? "ok" : res.statusCode === 504 ? "timeout" : "error",
+      httpAssetOutcome(res.statusCode),
       (performance.now() - startedAt) / 1_000,
     ));
     try {
@@ -397,35 +404,37 @@ function canonicalReason(reason: string | undefined): OpenClawControlAuditReason
   return reason ? "method_denied" : "none";
 }
 
-function auditEvent(
-  audit: typeof auditOpenClawControlRpc,
-  env: NodeJS.ProcessEnv,
-  session: OpenClawControlSession,
-  event: "rpc_allow" | "rpc_deny" | "rpc_result",
-  category: OpenClawControlAuditCategory,
-  outcome: "ok" | "denied" | "error",
-  reason?: string,
-): void {
-  void audit({
-    gatewayId: session.gatewayId,
-    revisionId: session.revisionId,
-    sessionId: session.sessionId,
-    event,
-    category,
-    outcome,
-    reason: canonicalReason(reason),
-    env,
+interface AuditEventInput {
+  audit: typeof auditOpenClawControlRpc;
+  env: NodeJS.ProcessEnv;
+  session: OpenClawControlSession;
+  event: "rpc_allow" | "rpc_deny" | "rpc_result";
+  category: OpenClawControlAuditCategory;
+  outcome: "ok" | "denied" | "error";
+  reason?: string;
+}
+
+function auditEvent(input: AuditEventInput): void {
+  void input.audit({
+    gatewayId: input.session.gatewayId,
+    revisionId: input.session.revisionId,
+    sessionId: input.session.sessionId,
+    event: input.event,
+    category: input.category,
+    outcome: input.outcome,
+    reason: canonicalReason(input.reason),
+    env: input.env,
   }).catch(() => {
     logger.warn("OpenClaw Dashboard RPC audit failed", {
-      gatewayId: session.gatewayId,
-      revisionId: session.revisionId,
-      event,
-      category,
+      gatewayId: input.session.gatewayId,
+      revisionId: input.session.revisionId,
+      event: input.event,
+      category: input.category,
     });
   });
 }
 
-async function bridgeControlSocket(args: {
+interface BridgeControlSocketArgs {
   browser: WebSocket;
   requestPath: string;
   cookieHeader?: string;
@@ -444,149 +453,209 @@ async function bridgeControlSocket(args: {
     lease: SystemConfigMutationLease,
     reason: string,
   ) => void;
-}): Promise<void> {
-  const identity: OpenClawControlResourceIdentity = {
-    uid: args.session.uid,
-    gatewayId: args.session.gatewayId,
-    sessionId: args.session.sessionId,
-  };
-  const gatewayToken = await args.loadGatewayToken({ gatewayId: args.session.gatewayId });
-  if (args.browser.readyState !== WebSocket.OPEN) {
-    args.socketLease.release();
-    return;
-  }
-  const base = openClawControlUpstreamBase(args.env);
-  const upstreamUrl = new URL(args.requestPath, base);
-  upstreamUrl.protocol = "ws:";
-  const upstream = new WebSocket(upstreamUrl, {
-    maxPayload: MAX_WS_FRAME_BYTES,
-    origin: apiOrigin(args.env),
-  });
-  let nonce: string | null = null;
-  let connectForwarded = false;
-  let installedMethods: Set<string> | undefined;
-  let currentConfig: OpenClawConfigSnapshot | undefined;
-  let activeSession = args.session;
-  const pending = new Map<string, PendingRpc>();
-  const admittingIds = new Set<string>();
-  const timedOut = new Map<string, SystemConfigMutationLease | undefined>();
-  let quarantineTimer: NodeJS.Timeout | undefined;
-  let closing = false;
-  let socketReleased = false;
-  const metricsIdentity = metricIdentity(args.env);
-  args.metrics?.ws(metricsIdentity, "open", "ok");
+}
 
-  const touch = (): boolean => {
-    const touched = args.sessions.touchSession(activeSession);
+interface BrowserRpcFrame extends Record<string, unknown> {
+  id: string;
+  method: string;
+  params: Record<string, unknown>;
+}
+
+function browserRpcFrame(data: RawData): BrowserRpcFrame | null {
+  const frame = parseFrame(data);
+  if (!frame || typeof frame.id !== "string" || typeof frame.method !== "string") return null;
+  if (!frame.params || typeof frame.params !== "object" || Array.isArray(frame.params)) return null;
+  return frame as BrowserRpcFrame;
+}
+
+class OpenClawControlSocketBridge {
+  private readonly identity: OpenClawControlResourceIdentity;
+  private readonly metricsIdentity: OpenClawControlMetricIdentity;
+  private activeSession: OpenClawControlSession;
+  private gatewayToken = "";
+  private upstream?: WebSocket;
+  private nonce: string | null = null;
+  private connectForwarded = false;
+  private installedMethods?: Set<string>;
+  private currentConfig?: OpenClawConfigSnapshot;
+  private readonly pending = new Map<string, PendingRpc>();
+  private readonly admittingIds = new Set<string>();
+  private readonly timedOut = new Map<string, SystemConfigMutationLease | undefined>();
+  private quarantineTimer?: NodeJS.Timeout;
+  private authorizationTimer?: NodeJS.Timeout;
+  private closing = false;
+  private socketReleased = false;
+
+  constructor(private readonly args: BridgeControlSocketArgs) {
+    this.activeSession = args.session;
+    this.identity = {
+      uid: args.session.uid,
+      gatewayId: args.session.gatewayId,
+      sessionId: args.session.sessionId,
+    };
+    this.metricsIdentity = metricIdentity(args.env);
+  }
+
+  async start(): Promise<void> {
+    this.gatewayToken = await this.args.loadGatewayToken({ gatewayId: this.args.session.gatewayId });
+    if (this.args.browser.readyState !== WebSocket.OPEN) {
+      this.args.socketLease.release();
+      return;
+    }
+    const base = openClawControlUpstreamBase(this.args.env);
+    const upstreamUrl = new URL(this.args.requestPath, base);
+    upstreamUrl.protocol = "ws:";
+    this.upstream = new WebSocket(upstreamUrl, {
+      maxPayload: MAX_WS_FRAME_BYTES,
+      origin: apiOrigin(this.args.env),
+    });
+    this.args.metrics?.ws(this.metricsIdentity, "open", "ok");
+    this.startAuthorizationChecks();
+    this.attachSocketHandlers();
+  }
+
+  private upstreamSocket(): WebSocket {
+    if (!this.upstream) throw new Error("OpenClaw Dashboard upstream is not initialized");
+    return this.upstream;
+  }
+
+  private attachSocketHandlers(): void {
+    const upstream = this.upstreamSocket();
+    upstream.on("message", (data) => this.handleUpstreamMessage(data));
+    upstream.once("close", () => this.closeBoth("upstream-closed"));
+    upstream.once("error", () => this.closeBoth("upstream-unavailable"));
+    this.args.browser.once("close", () => this.closeBoth("browser-closed"));
+    this.args.browser.once("error", () => this.closeBoth("browser-error"));
+    this.args.browser.on("message", (data, isBinary) => this.handleBrowserMessage(data, isBinary));
+  }
+
+  private startAuthorizationChecks(): void {
+    this.authorizationTimer = setInterval(() => this.checkAuthorization(), this.args.authorizationIntervalMs);
+    this.authorizationTimer.unref?.();
+  }
+
+  private checkAuthorization(): void {
+    const local = this.args.sessions.verify({
+      cookieHeader: this.args.cookieHeader,
+      gatewayId: this.activeSession.gatewayId,
+      revisionId: this.activeSession.revisionId,
+    });
+    if (!local) {
+      this.closeBoth("session-expired");
+      return;
+    }
+    void this.args.authorize({
+      sessionId: this.activeSession.sessionId,
+      gatewayId: this.activeSession.gatewayId,
+      revisionId: this.activeSession.revisionId,
+      env: this.args.env,
+    }).then((allowed) => {
+      this.args.metrics?.session(this.metricsIdentity, "authorize", allowed ? "ok" : "denied");
+      if (!allowed) {
+        this.args.sessions.revoke(this.activeSession.sessionId);
+        this.closeBoth("capability-revoked");
+      }
+    }).catch(() => this.closeBoth("capability-unavailable"));
+  }
+
+  private touch(): boolean {
+    const touched = this.args.sessions.touchSession(this.activeSession);
     if (!touched) return false;
-    activeSession = touched.session;
+    this.activeSession = touched.session;
     return true;
-  };
-  const releaseMutationLease = (lease: SystemConfigMutationLease): void => {
+  }
+
+  private releaseMutationLease(lease: SystemConfigMutationLease): void {
     void lease.release().catch((error) => {
       logger.error("OpenClaw Dashboard config mutation lease release failed", {
-        gatewayId: activeSession.gatewayId,
-        revisionId: activeSession.revisionId,
+        gatewayId: this.activeSession.gatewayId,
+        revisionId: this.activeSession.revisionId,
         error: error instanceof Error ? error.message : String(error),
       });
-      closeBoth("config-lease-release-failed");
+      this.closeBoth("config-lease-release-failed");
     });
-  };
-  const retainMutationLease = (lease: SystemConfigMutationLease, reason: string): void => {
-    args.retainMutationLeaseUntilProcessReplacement(lease, reason);
+  }
+
+  private retainMutationLease(lease: SystemConfigMutationLease, reason: string): void {
+    this.args.retainMutationLeaseUntilProcessReplacement(lease, reason);
     logger.error("OpenClaw Dashboard config mutation outcome is uncertain; writer lease retained", {
-      gatewayId: activeSession.gatewayId,
-      revisionId: activeSession.revisionId,
+      gatewayId: this.activeSession.gatewayId,
+      revisionId: this.activeSession.revisionId,
       reason,
     });
-  };
-  const takePending = (id: string): PendingRpc | undefined => {
-    const item = pending.get(id);
+  }
+
+  private takePending(id: string): PendingRpc | undefined {
+    const item = this.pending.get(id);
     if (!item) return undefined;
-    pending.delete(id);
+    this.pending.delete(id);
     clearTimeout(item.timer);
     item.lease.release();
     return item;
-  };
-  const settlePending = (id: string): PendingRpc | undefined => {
-    const item = takePending(id);
-    if (item?.mutationLease) releaseMutationLease(item.mutationLease);
+  }
+
+  private settlePending(id: string): PendingRpc | undefined {
+    const item = this.takePending(id);
+    if (item?.mutationLease) this.releaseMutationLease(item.mutationLease);
     return item;
-  };
-  const closeBoth = (reason = "dashboard-session-invalid"): void => {
-    if (closing) return;
-    closing = true;
-    clearInterval(authorizationTimer);
-    if (quarantineTimer) clearTimeout(quarantineTimer);
-    admittingIds.clear();
-    for (const [id, mutationLease] of timedOut) {
-      timedOut.delete(id);
-      if (mutationLease) retainMutationLease(mutationLease, reason);
+  }
+
+  private closeBoth(reason = "dashboard-session-invalid"): void {
+    if (this.closing) return;
+    this.closing = true;
+    if (this.authorizationTimer) clearInterval(this.authorizationTimer);
+    if (this.quarantineTimer) clearTimeout(this.quarantineTimer);
+    this.admittingIds.clear();
+    this.retainUncertainLeases(reason);
+    if (!this.socketReleased) {
+      this.socketReleased = true;
+      this.args.socketLease.release();
     }
-    for (const id of [...pending.keys()]) {
-      const item = takePending(id);
-      if (item?.mutationLease) retainMutationLease(item.mutationLease, reason);
-    }
-    if (!socketReleased) {
-      socketReleased = true;
-      args.socketLease.release();
-    }
-    if (args.browser.readyState === WebSocket.CONNECTING || args.browser.readyState === WebSocket.OPEN) {
-      args.browser.terminate();
-    }
-    if (upstream.readyState === WebSocket.CONNECTING || upstream.readyState === WebSocket.OPEN) upstream.terminate();
+    this.terminate(this.args.browser);
+    if (this.upstream) this.terminate(this.upstream);
     logger.debug("OpenClaw Dashboard socket closed", {
-      gatewayId: activeSession.gatewayId,
-      revisionId: activeSession.revisionId,
+      gatewayId: this.activeSession.gatewayId,
+      revisionId: this.activeSession.revisionId,
       reason,
     });
-    args.metrics?.ws(metricsIdentity, "close", reason);
-  };
-  const authorizationTimer = setInterval(() => {
-    const local = args.sessions.verify({
-      cookieHeader: args.cookieHeader,
-      gatewayId: activeSession.gatewayId,
-      revisionId: activeSession.revisionId,
-    });
-    if (!local) {
-      closeBoth("session-expired");
-      return;
+    this.args.metrics?.ws(this.metricsIdentity, "close", reason);
+  }
+
+  private terminate(socket: WebSocket): void {
+    if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) socket.terminate();
+  }
+
+  private retainUncertainLeases(reason: string): void {
+    for (const [id, mutationLease] of this.timedOut) {
+      this.timedOut.delete(id);
+      if (mutationLease) this.retainMutationLease(mutationLease, reason);
     }
-    void args.authorize({
-      sessionId: activeSession.sessionId,
-      gatewayId: activeSession.gatewayId,
-      revisionId: activeSession.revisionId,
-      env: args.env,
-    }).then((allowed) => {
-      args.metrics?.session(metricsIdentity, "authorize", allowed ? "ok" : "denied");
-      if (!allowed) {
-        args.sessions.revoke(activeSession.sessionId);
-        closeBoth("capability-revoked");
-      }
-    }).catch(() => closeBoth("capability-unavailable"));
-  }, args.authorizationIntervalMs);
-  authorizationTimer.unref?.();
+    for (const id of [...this.pending.keys()]) {
+      const item = this.takePending(id);
+      if (item?.mutationLease) this.retainMutationLease(item.mutationLease, reason);
+    }
+  }
 
-  const quarantine = (id: string, mutationLease?: SystemConfigMutationLease): void => {
-    timedOut.set(id, mutationLease);
-    if (quarantineTimer) return;
-    quarantineTimer = setTimeout(() => closeBoth("request-timeout"), args.rpcTimeoutMs);
-    quarantineTimer.unref?.();
-  };
+  private quarantine(id: string, mutationLease?: SystemConfigMutationLease): void {
+    this.timedOut.set(id, mutationLease);
+    if (this.quarantineTimer) return;
+    this.quarantineTimer = setTimeout(() => this.closeBoth("request-timeout"), this.args.rpcTimeoutMs);
+    this.quarantineTimer.unref?.();
+  }
 
-  const drainQuarantined = (id: string): boolean => {
-    if (!timedOut.has(id)) return false;
-    const mutationLease = timedOut.get(id);
-    timedOut.delete(id);
-    if (mutationLease) releaseMutationLease(mutationLease);
-    if (timedOut.size === 0 && quarantineTimer) {
-      clearTimeout(quarantineTimer);
-      quarantineTimer = undefined;
+  private drainQuarantined(id: string): boolean {
+    if (!this.timedOut.has(id)) return false;
+    const mutationLease = this.timedOut.get(id);
+    this.timedOut.delete(id);
+    if (mutationLease) this.releaseMutationLease(mutationLease);
+    if (this.timedOut.size === 0 && this.quarantineTimer) {
+      clearTimeout(this.quarantineTimer);
+      this.quarantineTimer = undefined;
     }
     return true;
-  };
+  }
 
-  const track = (
+  private track(
     id: string,
     method: string,
     category: OpenClawControlRpcCategory,
@@ -596,22 +665,9 @@ async function bridgeControlSocket(args: {
       proposed?: Record<string, unknown>;
       mutationLease?: SystemConfigMutationLease;
     } = {},
-  ): void => {
+  ): void {
     const pendingRpc = {} as PendingRpc;
-    const timer = setTimeout(() => {
-      if (pending.get(id) !== pendingRpc) return;
-      const expired = takePending(id);
-      if (pendingRpc.internal) {
-        closeBoth("request-timeout");
-        return;
-      }
-      quarantine(id, expired?.mutationLease);
-      if (args.browser.readyState === WebSocket.OPEN) {
-        args.browser.send(openClawControlTimeoutError({ type: "req", id, method, params: {} }));
-        auditEvent(args.audit, args.env, activeSession, "rpc_result", category, "error", "request-timeout");
-        args.metrics?.rpc(metricsIdentity, category, "timeout");
-      }
-    }, args.rpcTimeoutMs);
+    const timer = setTimeout(() => this.expirePending(id, method, category, pendingRpc), this.args.rpcTimeoutMs);
     timer.unref?.();
     Object.assign(pendingRpc, {
       category,
@@ -622,204 +678,278 @@ async function bridgeControlSocket(args: {
       mutationLease: options.mutationLease,
       timer,
     });
-    pending.set(id, pendingRpc);
-  };
+    this.pending.set(id, pendingRpc);
+  }
 
-  upstream.on("message", (data) => {
-    const frame = parseFrame(data);
-    if (!frame) {
-      closeBoth("protocol-invalid");
+  private expirePending(
+    id: string,
+    method: string,
+    category: OpenClawControlRpcCategory,
+    pendingRpc: PendingRpc,
+  ): void {
+    if (this.pending.get(id) !== pendingRpc) return;
+    const expired = this.takePending(id);
+    if (pendingRpc.internal) {
+      this.closeBoth("request-timeout");
       return;
     }
-    nonce = challengeNonce(frame) ?? nonce;
+    this.quarantine(id, expired?.mutationLease);
+    if (this.args.browser.readyState === WebSocket.OPEN) {
+      this.args.browser.send(openClawControlTimeoutError({ type: "req", id, method, params: {} }));
+      this.audit("rpc_result", category, "error", "request-timeout");
+      this.args.metrics?.rpc(this.metricsIdentity, category, "timeout");
+    }
+  }
+
+  private audit(
+    event: AuditEventInput["event"],
+    category: OpenClawControlAuditCategory,
+    outcome: AuditEventInput["outcome"],
+    reason?: string,
+  ): void {
+    auditEvent({
+      audit: this.args.audit,
+      env: this.args.env,
+      session: this.activeSession,
+      event,
+      category,
+      outcome,
+      reason,
+    });
+  }
+
+  private handleUpstreamMessage(data: RawData): void {
+    const frame = parseFrame(data);
+    if (!frame) {
+      this.closeBoth("protocol-invalid");
+      return;
+    }
+    this.nonce = challengeNonce(frame) ?? this.nonce;
     const response = isResponseFrame(frame) ? frame : undefined;
     if (frame.type === "res" && !response) {
-      closeBoth("protocol-invalid");
+      this.closeBoth("protocol-invalid");
       return;
     }
     const id = typeof frame.id === "string" ? frame.id : undefined;
-    if (response && drainQuarantined(response.id)) return;
-    const request = response ? settlePending(response.id) : undefined;
+    if (response && this.drainQuarantined(response.id)) return;
+    const request = response ? this.settlePending(response.id) : undefined;
+    if (!this.acceptInstalledMethods(frame, id)) return;
+    this.updateCurrentConfig(frame, request);
+    this.recordUpstreamResult(frame, request);
+    this.refreshConfigAfterMutation(frame, request);
+    if (!request?.internal && this.args.browser.readyState === WebSocket.OPEN) {
+      this.args.browser.send(sanitizeOpenClawControlServerFrame(frame, [this.gatewayToken]));
+    }
+  }
+
+  private acceptInstalledMethods(frame: Record<string, unknown>, id: string | undefined): boolean {
     const methods = installedMethodsFromHello(frame);
-    if (methods) {
-      if (!pinnedOpenClawRuntimeMatches(methods)) {
-        if (args.browser.readyState === WebSocket.OPEN) {
-          args.browser.send(openClawControlPolicyError({ id, type: "req" }, "runtime-drift"));
-        }
-        closeBoth("runtime-drift");
-        return;
+    if (!methods) return true;
+    if (!pinnedOpenClawRuntimeMatches(methods)) {
+      if (this.args.browser.readyState === WebSocket.OPEN) {
+        this.args.browser.send(openClawControlPolicyError({ id, type: "req" }, "runtime-drift"));
       }
-      installedMethods = methods;
+      this.closeBoth("runtime-drift");
+      return false;
     }
+    this.installedMethods = methods;
+    return true;
+  }
+
+  private updateCurrentConfig(frame: Record<string, unknown>, request: PendingRpc | undefined): void {
     const snapshot = openClawConfigSnapshotFromGetResponse(frame, request?.method);
-    if (snapshot) currentConfig = snapshot;
-    if (request?.proposed && frame.ok === true) currentConfig = { raw: request.proposed, hash: currentConfig?.hash ?? "" };
+    if (snapshot) this.currentConfig = snapshot;
+    if (request?.proposed && frame.ok === true) {
+      this.currentConfig = { raw: request.proposed, hash: this.currentConfig?.hash ?? "" };
+    }
+  }
+
+  private recordUpstreamResult(frame: Record<string, unknown>, request: PendingRpc | undefined): void {
     if (request && !request.internal) {
-      auditEvent(
-        args.audit,
-        args.env,
-        activeSession,
-        "rpc_result",
-        request.category,
-        frame.ok === true ? "ok" : "error",
-      );
+      this.audit("rpc_result", request.category, frame.ok === true ? "ok" : "error");
     }
-    if (request?.category === "config_mutation" && frame.ok === true && upstream.readyState === WebSocket.OPEN) {
-      const lease = args.limiter.acquireRequest(identity);
-      if (lease) {
-        const refreshId = `octogee-config-refresh-${randomUUID()}`;
-        track(refreshId, "config.get", "read", lease, { internal: true });
-        upstream.send(JSON.stringify({ type: "req", id: refreshId, method: "config.get", params: {} }));
+  }
+
+  private refreshConfigAfterMutation(frame: Record<string, unknown>, request: PendingRpc | undefined): void {
+    if (request?.category !== "config_mutation" || frame.ok !== true) return;
+    const upstream = this.upstreamSocket();
+    if (upstream.readyState !== WebSocket.OPEN) return;
+    const lease = this.args.limiter.acquireRequest(this.identity);
+    if (!lease) return;
+    const refreshId = `octogee-config-refresh-${randomUUID()}`;
+    this.track(refreshId, "config.get", "read", lease, { internal: true });
+    upstream.send(JSON.stringify({ type: "req", id: refreshId, method: "config.get", params: {} }));
+  }
+
+  private handleBrowserMessage(data: RawData, isBinary: boolean): void {
+    const upstream = this.upstreamSocket();
+    if (!this.touch() || isBinary || frameBytes(data) > MAX_WS_FRAME_BYTES || upstream.readyState !== WebSocket.OPEN) {
+      this.closeBoth("invalid-dashboard-frame");
+      return;
+    }
+    const frame = browserRpcFrame(data);
+    if (!frame) {
+      if (this.args.browser.readyState === WebSocket.OPEN) {
+        this.args.browser.send(openClawControlPolicyError(parseFrame(data), "invalid-frame"));
       }
-    }
-    if (!request?.internal && args.browser.readyState === WebSocket.OPEN) {
-      args.browser.send(sanitizeOpenClawControlServerFrame(frame, [gatewayToken]));
-    }
-  });
-  upstream.once("close", () => closeBoth("upstream-closed"));
-  upstream.once("error", () => closeBoth("upstream-unavailable"));
-  args.browser.once("close", () => closeBoth("browser-closed"));
-  args.browser.once("error", () => closeBoth("browser-error"));
-  args.browser.on("message", (data, isBinary) => {
-    if (!touch() || isBinary || frameBytes(data) > MAX_WS_FRAME_BYTES || upstream.readyState !== WebSocket.OPEN) {
-      closeBoth("invalid-dashboard-frame");
       return;
     }
-    const frame = parseFrame(data);
-    if (!frame || typeof frame.id !== "string" || typeof frame.method !== "string" ||
-      !frame.params || typeof frame.params !== "object" || Array.isArray(frame.params)) {
-      if (args.browser.readyState === WebSocket.OPEN) args.browser.send(openClawControlPolicyError(frame, "invalid-frame"));
-      return;
-    }
-    if (timedOut.has(frame.id)) {
-      args.browser.send(openClawControlPolicyError(frame, "request-id-quarantined"));
-      auditEvent(args.audit, args.env, activeSession, "rpc_deny", "unknown", "denied", "request-id-quarantined");
-      args.metrics?.rpc(metricsIdentity, "unknown", "denied");
-      args.metrics?.policy(metricsIdentity, "request_id_quarantined");
-      return;
-    }
-    if (timedOut.size > 0) {
-      args.browser.send(openClawControlPolicyError(frame, "upstream-quarantined"));
-      auditEvent(args.audit, args.env, activeSession, "rpc_deny", "unknown", "denied", "upstream-quarantined");
-      args.metrics?.rpc(metricsIdentity, "unknown", "denied");
-      args.metrics?.policy(metricsIdentity, "upstream_quarantined");
-      return;
-    }
-    if (pending.has(frame.id) || admittingIds.has(frame.id)) {
-      args.browser.send(openClawControlPolicyError(frame, "request-id-pending"));
-      return;
-    }
+    if (this.rejectQuarantined(frame) || this.rejectPending(frame)) return;
     if (frame.method === "connect") {
-      if (connectForwarded || !nonce || installedMethods) {
-        args.browser.send(openClawControlPolicyError(frame, "connect-state"));
-        return;
-      }
-      const lease = args.limiter.acquireRequest(identity);
-      if (!lease) {
-        args.browser.send(openClawControlPolicyError(frame, "inflight-limited"));
-        return;
-      }
-      const rewritten = rewriteTrustedOpenClawConnect({ frame, nonce, gatewayToken });
-      if (!rewritten) {
-        lease.release();
-        args.browser.send(openClawControlPolicyError(frame, "invalid-frame"));
-        return;
-      }
-      connectForwarded = true;
-      track(frame.id, "connect", "unknown", lease);
-      upstream.send(rewritten);
+      this.forwardConnect(frame);
       return;
     }
-    if (!installedMethods) {
-      args.browser.send(openClawControlPolicyError(frame, "connect-state"));
+    if (!this.installedMethods) {
+      this.args.browser.send(openClawControlPolicyError(frame, "connect-state"));
       return;
     }
+    this.evaluateAndForward(frame);
+  }
+
+  private rejectQuarantined(frame: BrowserRpcFrame): boolean {
+    let reason: "request-id-quarantined" | "upstream-quarantined" | undefined;
+    if (this.timedOut.has(frame.id)) reason = "request-id-quarantined";
+    else if (this.timedOut.size > 0) reason = "upstream-quarantined";
+    if (!reason) return false;
+    this.args.browser.send(openClawControlPolicyError(frame, reason));
+    this.audit("rpc_deny", "unknown", "denied", reason);
+    this.args.metrics?.rpc(this.metricsIdentity, "unknown", "denied");
+    this.args.metrics?.policy(this.metricsIdentity, reason.replaceAll("-", "_"));
+    return true;
+  }
+
+  private rejectPending(frame: BrowserRpcFrame): boolean {
+    if (!this.pending.has(frame.id) && !this.admittingIds.has(frame.id)) return false;
+    this.args.browser.send(openClawControlPolicyError(frame, "request-id-pending"));
+    return true;
+  }
+
+  private forwardConnect(frame: BrowserRpcFrame): void {
+    if (this.connectForwarded || !this.nonce || this.installedMethods) {
+      this.args.browser.send(openClawControlPolicyError(frame, "connect-state"));
+      return;
+    }
+    const lease = this.args.limiter.acquireRequest(this.identity);
+    if (!lease) {
+      this.args.browser.send(openClawControlPolicyError(frame, "inflight-limited"));
+      return;
+    }
+    const rewritten = rewriteTrustedOpenClawConnect({
+      frame,
+      nonce: this.nonce,
+      gatewayToken: this.gatewayToken,
+    });
+    if (!rewritten) {
+      lease.release();
+      this.args.browser.send(openClawControlPolicyError(frame, "invalid-frame"));
+      return;
+    }
+    this.connectForwarded = true;
+    this.track(frame.id, "connect", "unknown", lease);
+    this.upstreamSocket().send(rewritten);
+  }
+
+  private evaluateAndForward(frame: BrowserRpcFrame): void {
     const decision = evaluateOpenClawControlRpc(frame, {
-      installedMethods,
-      invariantContext: invariantContext(args.env, activeSession.gatewayId),
-      currentConfig,
-      configFrozen: configFrozen(args.env),
+      installedMethods: this.installedMethods!,
+      invariantContext: invariantContext(this.args.env, this.activeSession.gatewayId),
+      currentConfig: this.currentConfig,
+      configFrozen: configFrozen(this.args.env),
     });
     if (!decision.allowed) {
-      args.browser.send(openClawControlPolicyError(frame, decision.reason ?? "method-denied"));
-      auditEvent(args.audit, args.env, activeSession, "rpc_deny", decision.category, "denied", decision.reason);
-      args.metrics?.rpc(metricsIdentity, decision.category, "denied");
-      args.metrics?.policy(metricsIdentity, (decision.reason ?? "method-denied").replaceAll("-", "_"));
+      this.deny(frame, decision, decision.reason ?? "method-denied");
       return;
     }
-    if (isOpenClawControlMutation(decision.category) && !args.limiter.consumeMutation(identity)) {
-      args.browser.send(openClawControlPolicyError(frame, "rate-limited"));
-      auditEvent(args.audit, args.env, activeSession, "rpc_deny", decision.category, "denied", "rate-limited");
-      args.metrics?.rpc(metricsIdentity, decision.category, "rate_limited");
-      args.metrics?.policy(metricsIdentity, "rate_limited");
+    if (isOpenClawControlMutation(decision.category) && !this.args.limiter.consumeMutation(this.identity)) {
+      this.deny(frame, decision, "rate-limited");
       return;
     }
-    const lease = args.limiter.acquireRequest(identity);
+    const lease = this.args.limiter.acquireRequest(this.identity);
     if (!lease) {
-      args.browser.send(openClawControlPolicyError(frame, "inflight-limited"));
-      auditEvent(args.audit, args.env, activeSession, "rpc_deny", decision.category, "denied", "inflight-limited");
-      args.metrics?.rpc(metricsIdentity, decision.category, "rate_limited");
-      args.metrics?.policy(metricsIdentity, "inflight_limited");
+      this.deny(frame, decision, "inflight-limited");
       return;
     }
-    const requestId = frame.id;
-    const requestMethod = frame.method;
-    const forward = async (): Promise<void> => {
-      let mutationLease: SystemConfigMutationLease | undefined;
-      if (decision.category === "config_mutation") {
-        admittingIds.add(requestId);
-        let acquired;
-        try {
-          acquired = await acquireSystemConfigMutationLease({
-            openclawDir: envValue(args.env, "OPENCLAW_DIR"),
-          });
-        } catch (error) {
-          lease.release();
-          throw error;
-        }
-        admittingIds.delete(requestId);
-        if (!acquired.ok) {
-          lease.release();
-          const reason = acquired.code === "config-frozen" ? "config-frozen" : "config-writer-busy";
-          if (args.browser.readyState === WebSocket.OPEN) {
-            args.browser.send(openClawControlPolicyError(frame, reason));
-          }
-          auditEvent(args.audit, args.env, activeSession, "rpc_deny", decision.category, "denied", reason);
-          args.metrics?.rpc(metricsIdentity, decision.category, "denied");
-          args.metrics?.policy(metricsIdentity, reason.replaceAll("-", "_"));
-          return;
-        }
-        mutationLease = acquired.lease;
-        if (closing || args.browser.readyState !== WebSocket.OPEN || upstream.readyState !== WebSocket.OPEN) {
-          lease.release();
-          await mutationLease.release();
-          return;
-        }
-      }
-      track(requestId, requestMethod, decision.category, lease, {
-        proposed: decision.proposedConfig,
-        mutationLease,
-      });
-      try {
-        upstream.send(JSON.stringify(decision.outbound ?? frame));
-      } catch (error) {
-        settlePending(requestId);
-        throw error;
-      }
-      auditEvent(args.audit, args.env, activeSession, "rpc_allow", decision.category, "ok");
-      args.metrics?.rpc(metricsIdentity, decision.category, "ok");
-    };
-    void forward().catch((error) => {
-      admittingIds.delete(requestId);
+    void this.forwardAllowed(frame, decision, lease).catch((error) => {
+      this.admittingIds.delete(frame.id);
       logger.error("OpenClaw Dashboard RPC forwarding failed", {
-        gatewayId: activeSession.gatewayId,
-        revisionId: activeSession.revisionId,
+        gatewayId: this.activeSession.gatewayId,
+        revisionId: this.activeSession.revisionId,
         category: decision.category,
         error: error instanceof Error ? error.message : String(error),
       });
-      closeBoth("rpc-forward-failed");
+      this.closeBoth("rpc-forward-failed");
     });
-  });
+  }
+
+  private deny(
+    frame: BrowserRpcFrame,
+    decision: OpenClawControlRpcDecision,
+    reason: string,
+    sendResponse = true,
+  ): void {
+    if (sendResponse) this.args.browser.send(openClawControlPolicyError(frame, reason));
+    this.audit("rpc_deny", decision.category, "denied", reason);
+    const outcome = reason === "rate-limited" || reason === "inflight-limited" ? "rate_limited" : "denied";
+    this.args.metrics?.rpc(this.metricsIdentity, decision.category, outcome);
+    this.args.metrics?.policy(this.metricsIdentity, reason.replaceAll("-", "_"));
+  }
+
+  private async forwardAllowed(
+    frame: BrowserRpcFrame,
+    decision: OpenClawControlRpcDecision,
+    lease: OpenClawControlLease,
+  ): Promise<void> {
+    const mutationLease = await this.acquireMutationLease(frame, decision, lease);
+    if (mutationLease === null) return;
+    this.track(frame.id, frame.method, decision.category, lease, {
+      proposed: decision.proposedConfig,
+      mutationLease,
+    });
+    try {
+      this.upstreamSocket().send(JSON.stringify(decision.outbound ?? frame));
+    } catch (error) {
+      this.settlePending(frame.id);
+      throw error;
+    }
+    this.audit("rpc_allow", decision.category, "ok");
+    this.args.metrics?.rpc(this.metricsIdentity, decision.category, "ok");
+  }
+
+  private async acquireMutationLease(
+    frame: BrowserRpcFrame,
+    decision: OpenClawControlRpcDecision,
+    lease: OpenClawControlLease,
+  ): Promise<SystemConfigMutationLease | undefined | null> {
+    if (decision.category !== "config_mutation") return undefined;
+    this.admittingIds.add(frame.id);
+    let acquired;
+    try {
+      acquired = await acquireSystemConfigMutationLease({
+        openclawDir: envValue(this.args.env, "OPENCLAW_DIR"),
+      });
+    } catch (error) {
+      lease.release();
+      throw error;
+    }
+    this.admittingIds.delete(frame.id);
+    if (!acquired.ok) {
+      lease.release();
+      const reason = acquired.code === "config-frozen" ? "config-frozen" : "config-writer-busy";
+      this.deny(frame, decision, reason, this.args.browser.readyState === WebSocket.OPEN);
+      return null;
+    }
+    if (this.closing || this.args.browser.readyState !== WebSocket.OPEN ||
+      this.upstreamSocket().readyState !== WebSocket.OPEN) {
+      lease.release();
+      await acquired.lease.release();
+      return null;
+    }
+    return acquired.lease;
+  }
+}
+
+async function bridgeControlSocket(args: BridgeControlSocketArgs): Promise<void> {
+  await new OpenClawControlSocketBridge(args).start();
 }
 
 export interface AttachOpenClawControlWsRouteOptions {
