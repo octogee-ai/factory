@@ -61,6 +61,11 @@ describe("classifyOperationFailure", () => {
         "gateway bender retirement config freeze failed: openclaw config is dirty",
       ),
     ).toBe("transient");
+    expect(
+      classifyOperationFailure(
+        '/restore/default: 500 {"error":"restore failed","message":"system config writer lock is busy"}',
+      ),
+    ).toBe("transient");
   });
 
   it("classifies validation and the #2137 fail-fast target-state guard as terminal", () => {
