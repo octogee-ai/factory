@@ -1488,14 +1488,20 @@ function buildRollConfigProofDeps(
 
 function buildRollReleaseAdmissionDeps(
   args: BuildRollPassDepsArgs,
-): Pick<RollPassDeps, "releaseAdmissionDraining" | "admitReleaseSensitiveRollStep"> {
+): Pick<
+  RollPassDeps,
+  | "releaseAdmissionDraining"
+  | "admitReleaseSensitiveRollStep"
+  | "completeReleaseSensitiveRollStep"
+> {
   const { db } = args;
   return {
     releaseAdmissionDraining: async () => (await args.releaseAdmissionGate.state()).draining,
     admitReleaseSensitiveRollStep: async ({
       gatewayId,
       rollOperationId,
-      migrationId,
+      action,
+      actionKey,
       startedAt,
     }) => {
       const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
@@ -1506,30 +1512,59 @@ function buildRollReleaseAdmissionDeps(
         ]);
         const gateway = snapshot.data();
         if (!isDurableRootConfigDoc(gateway, gatewayId)) {
-          throw new Error(`gateway ${gatewayId} durable root disappeared before config work`);
-        }
-        if (!gateway.roll) {
-          throw new Error(`gateway ${gatewayId} has no active roll for config work`);
+          throw new Error(`gateway ${gatewayId} durable root disappeared before roll action`);
         }
         const plan = planReleaseSensitiveRollStep({
           draining: gate.draining,
-          activeRollOperationId: gateway.roll.operationId,
-          existing: gateway.roll.releaseAdmissionWork,
-          requested: { rollOperationId, migrationId },
+          activeRollOperationId: gateway.roll?.operationId ?? null,
+          existing: gateway.releaseAdmissionWork,
+          requested: { rollOperationId, action, actionKey },
         });
         if (plan === "resume") return true;
         if (plan === "hold") return false;
         txn.update(gatewayRef, {
-          "roll.releaseAdmissionWork": {
-            kind: "system-config-checkpoint",
-            migrationId,
+          releaseAdmissionWork: {
+            kind: "roll-action",
+            action,
+            actionKey,
+            rollOperationId,
             startedAt,
           },
-          "roll.updatedAt": startedAt,
           updatedAt: startedAt,
           updatedBy: "cowboy",
         });
         return true;
+      });
+    },
+    completeReleaseSensitiveRollStep: async ({
+      gatewayId,
+      rollOperationId,
+      action,
+      actionKey,
+      completedAt,
+    }) => {
+      const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+      await db.runTransaction(async (txn) => {
+        const snapshot = await txn.get(gatewayRef);
+        const gateway = snapshot.data();
+        if (!isDurableRootConfigDoc(gateway, gatewayId)) {
+          throw new Error(`gateway ${gatewayId} durable root disappeared after roll action`);
+        }
+        const work = gateway.releaseAdmissionWork;
+        if (!work) return;
+        if (
+          work.kind !== "roll-action" ||
+          work.action !== action ||
+          work.actionKey !== actionKey ||
+          work.rollOperationId !== rollOperationId
+        ) {
+          throw new Error(`gateway ${gatewayId} release-admitted roll action changed`);
+        }
+        txn.update(gatewayRef, {
+          releaseAdmissionWork: FieldValue.delete(),
+          updatedAt: completedAt,
+          updatedBy: "cowboy",
+        });
       });
     },
   };
