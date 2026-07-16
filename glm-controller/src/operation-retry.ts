@@ -119,13 +119,7 @@ export function buildOperationCompletionUpdate(
   };
   const attemptHistory = [...(op.attemptHistory ?? []), attemptRecord];
 
-  const hasDurableCleanup =
-    result.output?.configCleanup !== null &&
-    typeof result.output?.configCleanup === "object";
-  if (
-    classification === "transient" &&
-    (attempts < MAX_OPERATION_ATTEMPTS || hasDurableCleanup || hasRetirementFencePending)
-  ) {
+  if (shouldRetry(result, classification, attempts, hasRetirementFencePending)) {
     const backoffMs = retryBackoffMs(attempts);
     return {
       status: "pending",
@@ -152,4 +146,17 @@ export function buildOperationCompletionUpdate(
     waitingOn: FieldValue.delete(),
     ...output,
   };
+}
+
+function shouldRetry(
+  result: OperationResult,
+  classification: OperationFailureClassification,
+  attempts: number,
+  hasRetirementFencePending: boolean,
+): boolean {
+  if (classification !== "transient") return false;
+  const hasDurableCleanup =
+    result.output?.configCleanup !== null &&
+    typeof result.output?.configCleanup === "object";
+  return attempts < MAX_OPERATION_ATTEMPTS || hasDurableCleanup || hasRetirementFencePending;
 }

@@ -118,7 +118,10 @@ import {
 import { completeOperatorReservationAfterMigration } from "./operator-reservation-completion.js";
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
-import type { MigrationRollFence } from "@octogee/core/fleet-migration-runner";
+import type {
+  MigrationRollFence,
+  MigrationRunnerDeps,
+} from "@octogee/core/fleet-migration-runner";
 import {
   attestGatewayRetirementAfterWakeAtomic,
   bindGatewayRetirementConfigCheckpointAtomic,
@@ -1026,7 +1029,7 @@ function rollMigrationSnapshotFromOpDoc(
 // teardown primitives, and the tombstone writer. Deliberately ABSENT: any
 // gateway-scoped teardown (KSA, auth/model-key secrets, GSA, gateways/{id}) —
 // a roll can only ever uninstall a revision's own Helm release.
-function buildRollPassDeps(args: {
+interface BuildRollPassDepsArgs {
   db: Firestore;
   privateKey: string;
   helm: HelmRunner;
@@ -1035,31 +1038,31 @@ function buildRollPassDeps(args: {
   chartFingerprint?: string;
   prepareGatewayConfig: (config: GatewayRuntimeRoot) => Promise<GatewayRuntimeRoot>;
   log: (msg: string) => void;
-}): RollPassDeps {
-  const {
-    db,
-    privateKey,
-    helm,
-    kubeOps,
-    gatewayAliasServiceEnsurer,
-    chartFingerprint,
-    prepareGatewayConfig,
-    log,
-  } = args;
-  const tombstoneWriter = createRevisionTombstoneWriter({
-    db,
-    now: () => Date.now(),
-    log,
-  });
+}
+
+function buildRollRevisionAndMigrationDeps(
+  args: BuildRollPassDepsArgs,
+): Pick<
+  RollPassDeps,
+  | "readGatewayDesiredDocs"
+  | "readReleasePayload"
+  | "readRevisionDoc"
+  | "createRevisionDoc"
+  | "helmUpsertRevision"
+  | "markRevisionHelmApplied"
+  | "helmUninstallRevision"
+  | "deleteRevisionDoc"
+  | "patchRevisionDoc"
+  | "checkRevisionReady"
+  | "patchGatewayDoc"
+  | "commitTrafficFlip"
+  | "readAssignments"
+  | "readRollMigration"
+  | "enqueueRollMigration"
+  | "cancelRollMigrations"
+> {
+  const { db, helm, kubeOps, chartFingerprint } = args;
   return {
-    namespace: NAMESPACE,
-    chartPath: GATEWAY_CHART,
-    valuesFile: GATEWAY_VALUES_FILE,
-    chartFingerprint,
-    prepareGatewayConfig,
-    readinessTimeoutMs: CONVERGE_EMPTY_READINESS_TIMEOUT_MS,
-    sourceForwarderTtlMs: ROLL_SOURCE_FORWARDER_TTL_MS,
-    migrateRetryBackoffMs: ROLL_MIGRATE_RETRY_BACKOFF_MS,
     readGatewayDesiredDocs: async () => {
       const snap = await db.collection(GATEWAYS_COLLECTION).get();
       return snap.docs.flatMap((doc) => {
@@ -1137,7 +1140,11 @@ function buildRollPassDeps(args: {
         .get();
       let newest: { createdAt: number; snap: RollMigrationSnapshot } | null = null;
       for (const doc of snap.docs) {
-        const candidate = rollMigrationSnapshotFromOpDoc(doc.data() as Record<string, unknown>, gatewayId, rollOperationId);
+        const candidate = rollMigrationSnapshotFromOpDoc(
+          doc.data() as Record<string, unknown>,
+          gatewayId,
+          rollOperationId,
+        );
         if (!candidate) continue;
         if (newest && newest.createdAt >= candidate.createdAt) continue;
         newest = candidate;
@@ -1210,6 +1217,279 @@ function buildRollPassDeps(args: {
       })));
       return stopped.every(Boolean);
     },
+  };
+}
+
+function buildRollConfigFreezeOwnerRecovery(
+  args: BuildRollPassDepsArgs,
+): RollPassDeps["recoverConfigFreezeOwner"] {
+  const { db, privateKey, log } = args;
+  return async ({
+    ownerMigrationId,
+    requestedMigrationId,
+    gatewayId,
+    sourceRevisionId,
+    rollOperationId,
+    slug,
+  }) => {
+    const ownerOpId = ownerMigrationId.startsWith("mig-")
+      ? ownerMigrationId.slice(4)
+      : "";
+    if (!ownerOpId) {
+      throw new Error("config freeze owner is not operation-bound");
+    }
+    const [ownerSnap, rootSnap] = await Promise.all([
+      db.collection(GLM_OPERATIONS_COLLECTION).doc(ownerOpId).get(),
+      db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get(),
+    ]);
+    const owner = ownerSnap.exists
+      ? ({ id: ownerSnap.id, ...ownerSnap.data() } as Operation)
+      : null;
+    assertRecoverableRollCheckpointOwner({
+      ownerMigrationId,
+      slug,
+      sourceGatewayId: gatewayId,
+    }, owner);
+    const root = rootSnap.data();
+    const checkpoint = isDurableRootConfigDoc(root, gatewayId)
+      ? root.roll?.systemConfigCheckpoint
+      : null;
+    if (
+      root?.roll?.operationId !== rollOperationId ||
+      checkpoint?.migrationId !== requestedMigrationId ||
+      checkpoint.sourceRevisionId !== sourceRevisionId ||
+      checkpoint.builderSlug !== slug ||
+      checkpoint.sourceUnfrozenAt !== null
+    ) {
+      throw new Error("config checkpoint recovery roll lease is no longer current");
+    }
+    const sourceUrl = await resolveGatewayUrlFromFirestore(db, sourceRevisionId);
+    const client = createMigrationClient({
+      privateKey,
+      resolveGatewayUrl: () => sourceUrl,
+      log,
+    });
+    await client.unfreezeConfig({
+      migrationId: ownerMigrationId,
+      gatewayId,
+      transportId: sourceRevisionId,
+      slug,
+    });
+    return true;
+  };
+}
+
+function buildRollConfigProofDeps(
+  args: BuildRollPassDepsArgs,
+): Pick<
+  RollPassDeps,
+  | "proveConfigRestore"
+  | "reproveConfigRestore"
+  | "releaseConfigFreeze"
+  | "markConfigFreezeReleased"
+> {
+  const { db, privateKey, log } = args;
+  return {
+    proveConfigRestore: async ({
+      gatewayId,
+      rollOperationId,
+      sourceRevisionId,
+      targetRevisionId,
+      migrationId,
+      slug,
+      checkpointCommit,
+    }) => {
+      try {
+        const targetUrl = await resolveGatewayUrlFromFirestore(db, targetRevisionId);
+        const client = createMigrationClient({
+          privateKey,
+          resolveGatewayUrl: () => targetUrl,
+          log,
+        });
+        const proof = await client.proveConfigRestore({
+          migrationId,
+          gatewayId,
+          transportId: targetRevisionId,
+          slug,
+          checkpointCommit,
+        });
+        if (proof.restoredCommit !== checkpointCommit) {
+          throw new Error(
+            `target ${targetRevisionId} restored ${proof.restoredCommit} instead of ${checkpointCommit}`,
+          );
+        }
+        const observedAt = Date.now();
+        await db.runTransaction(async (txn) => {
+          const rootRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+          const rootSnap = await txn.get(rootRef);
+          const root = rootSnap.data();
+          const checkpoint = isDurableRootConfigDoc(root, gatewayId)
+            ? root.roll?.systemConfigCheckpoint
+            : null;
+          if (
+            root?.roll?.operationId !== rollOperationId ||
+            root.roll.targetRevisionId !== targetRevisionId ||
+            checkpoint?.migrationId !== migrationId ||
+            checkpoint.sourceRevisionId !== sourceRevisionId ||
+            checkpoint.checkpointCommit !== checkpointCommit ||
+            checkpoint.sourceUnfrozenAt !== null
+          ) {
+            throw new Error(
+              `target ${targetRevisionId} config proof no longer matches the active roll`,
+            );
+          }
+          txn.set(db.collection(GLM_GATEWAYS_COLLECTION).doc(targetRevisionId), {
+            systemConfig: {
+              migrationId,
+              builderSlug: slug,
+              sourceRevisionId,
+              checkpointCommit,
+              restoredCommit: proof.restoredCommit,
+              acceptedCommit: proof.acceptedCommit,
+              configHash: proof.configHash,
+              configReady: proof.configReady,
+              observedRevisionId: proof.observedRevisionId,
+              restoreProvenAt: proof.restoreProvenAt,
+              configReadyAt: proof.configReadyAt,
+              runtimeConfigHash: proof.runtimeConfigHash,
+              observedAt,
+            },
+          }, { merge: true });
+        });
+        recordConfigRoll({
+          stage: "proof",
+          result: "ok",
+          gatewayId,
+          revisionId: targetRevisionId,
+        });
+      } catch (error) {
+        recordConfigRoll({
+          stage: "proof",
+          result: "fail",
+          gatewayId,
+          revisionId: targetRevisionId,
+        });
+        throw error;
+      }
+    },
+    reproveConfigRestore: async ({ gatewayId, targetRevisionId, priorProof }) => {
+      try {
+        const targetUrl = await resolveGatewayUrlFromFirestore(db, targetRevisionId);
+        const client = createMigrationClient({
+          privateKey,
+          resolveGatewayUrl: () => targetUrl,
+          log,
+        });
+        const proof = await client.reproveConfigRestore({
+          migrationId: priorProof.migrationId,
+          gatewayId,
+          transportId: targetRevisionId,
+          slug: priorProof.builderSlug,
+          checkpointCommit: priorProof.checkpointCommit,
+        });
+        if (
+          proof.restoredCommit !== priorProof.checkpointCommit ||
+          proof.acceptedCommit !== priorProof.acceptedCommit ||
+          proof.configHash !== priorProof.configHash
+        ) {
+          throw new Error(
+            `target ${targetRevisionId} changed durable config before restart reproof`,
+          );
+        }
+        const observedAt = Date.now();
+        await db.collection(GLM_GATEWAYS_COLLECTION).doc(targetRevisionId).set({
+          systemConfig: {
+            ...priorProof,
+            restoreProvenAt: proof.restoreProvenAt,
+            configReadyAt: proof.configReadyAt,
+            runtimeConfigHash: proof.runtimeConfigHash,
+            observedAt,
+          },
+        }, { merge: true });
+        recordConfigRoll({
+          stage: "proof",
+          result: "ok",
+          gatewayId,
+          revisionId: targetRevisionId,
+        });
+      } catch (error) {
+        recordConfigRoll({
+          stage: "proof",
+          result: "fail",
+          gatewayId,
+          revisionId: targetRevisionId,
+        });
+        throw error;
+      }
+    },
+    releaseConfigFreeze: async ({ gatewayId, revisionId, migrationId, slug }) => {
+      const sourceUrl = await resolveGatewayUrlFromFirestore(db, revisionId);
+      const client = createMigrationClient({
+        privateKey,
+        resolveGatewayUrl: () => sourceUrl,
+        log,
+      });
+      await client.unfreezeConfig({
+        migrationId,
+        gatewayId,
+        transportId: revisionId,
+        slug,
+      });
+    },
+    markConfigFreezeReleased: async ({
+      gatewayId,
+      rollOperationId,
+      migrationId,
+      releasedAt,
+    }) => {
+      const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+      await db.runTransaction(async (txn) => {
+        const snap = await txn.get(gatewayRef);
+        const gateway = snap.data();
+        if (!isDurableRootConfigDoc(gateway, gatewayId)) {
+          throw new Error(`gateway ${gatewayId} durable root disappeared during config release`);
+        }
+        if (
+          gateway.roll?.operationId !== rollOperationId ||
+          gateway.roll.systemConfigCheckpoint?.migrationId !== migrationId
+        ) {
+          throw new Error(`gateway ${gatewayId} config release no longer matches the active roll`);
+        }
+        txn.update(gatewayRef, {
+          "roll.systemConfigCheckpoint.sourceUnfrozenAt": releasedAt,
+          "roll.updatedAt": releasedAt,
+          updatedAt: releasedAt,
+          updatedBy: "cowboy",
+        });
+      });
+    },
+  };
+}
+
+function buildRollPassDeps(args: BuildRollPassDepsArgs): RollPassDeps {
+  const {
+    db,
+    privateKey,
+    gatewayAliasServiceEnsurer,
+    chartFingerprint,
+    prepareGatewayConfig,
+    log,
+  } = args;
+  const tombstoneWriter = createRevisionTombstoneWriter({
+    db,
+    now: () => Date.now(),
+    log,
+  });
+  return {
+    namespace: NAMESPACE,
+    chartPath: GATEWAY_CHART,
+    valuesFile: GATEWAY_VALUES_FILE,
+    chartFingerprint,
+    prepareGatewayConfig,
+    readinessTimeoutMs: CONVERGE_EMPTY_READINESS_TIMEOUT_MS,
+    sourceForwarderTtlMs: ROLL_SOURCE_FORWARDER_TTL_MS,
+    migrateRetryBackoffMs: ROLL_MIGRATE_RETRY_BACKOFF_MS,
+    ...buildRollRevisionAndMigrationDeps(args),
     isSystemConfigProtocolFleetReady: () => isFleetConfigProtocolReady(db),
     checkpointConfigFreeze: async ({ gatewayId, revisionId, migrationId, slug }) => {
       const sourceUrl = await resolveGatewayUrlFromFirestore(db, revisionId);
@@ -1322,228 +1602,8 @@ function buildRollPassDeps(args: {
         freezeObject: state.freezeObject,
       });
     },
-    recoverConfigFreezeOwner: async ({
-      ownerMigrationId,
-      requestedMigrationId,
-      gatewayId,
-      sourceRevisionId,
-      rollOperationId,
-      slug,
-    }) => {
-      const ownerOpId = ownerMigrationId.startsWith("mig-")
-        ? ownerMigrationId.slice(4)
-        : "";
-      if (!ownerOpId) {
-        throw new Error("config freeze owner is not operation-bound");
-      }
-      const [ownerSnap, rootSnap] = await Promise.all([
-        db.collection(GLM_OPERATIONS_COLLECTION).doc(ownerOpId).get(),
-        db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get(),
-      ]);
-      const owner = ownerSnap.exists
-        ? ({ id: ownerSnap.id, ...ownerSnap.data() } as Operation)
-        : null;
-      assertRecoverableRollCheckpointOwner({
-        ownerMigrationId,
-        slug,
-        sourceGatewayId: gatewayId,
-      }, owner);
-      const root = rootSnap.data();
-      const checkpoint = isDurableRootConfigDoc(root, gatewayId)
-        ? root.roll?.systemConfigCheckpoint
-        : null;
-      if (
-        root?.roll?.operationId !== rollOperationId ||
-        checkpoint?.migrationId !== requestedMigrationId ||
-        checkpoint.sourceRevisionId !== sourceRevisionId ||
-        checkpoint.builderSlug !== slug ||
-        checkpoint.sourceUnfrozenAt !== null
-      ) {
-        throw new Error("config checkpoint recovery roll lease is no longer current");
-      }
-      const sourceUrl = await resolveGatewayUrlFromFirestore(db, sourceRevisionId);
-      const client = createMigrationClient({
-        privateKey,
-        resolveGatewayUrl: () => sourceUrl,
-        log,
-      });
-      await client.unfreezeConfig({
-        migrationId: ownerMigrationId,
-        gatewayId,
-        transportId: sourceRevisionId,
-        slug,
-      });
-      return true;
-    },
-    proveConfigRestore: async ({
-      gatewayId,
-      rollOperationId,
-      sourceRevisionId,
-      targetRevisionId,
-      migrationId,
-      slug,
-      checkpointCommit,
-    }) => {
-      try {
-        const targetUrl = await resolveGatewayUrlFromFirestore(db, targetRevisionId);
-        const client = createMigrationClient({
-          privateKey,
-          resolveGatewayUrl: () => targetUrl,
-          log,
-        });
-        const proof = await client.proveConfigRestore({
-          migrationId,
-          gatewayId,
-          transportId: targetRevisionId,
-          slug,
-          checkpointCommit,
-        });
-        if (proof.restoredCommit !== checkpointCommit) {
-          throw new Error(
-            `target ${targetRevisionId} restored ${proof.restoredCommit} instead of ${checkpointCommit}`,
-          );
-        }
-        const observedAt = Date.now();
-        await db.runTransaction(async (txn) => {
-          const rootRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
-          const rootSnap = await txn.get(rootRef);
-          const root = rootSnap.data();
-          const checkpoint = isDurableRootConfigDoc(root, gatewayId)
-            ? root.roll?.systemConfigCheckpoint
-            : null;
-          if (
-            root?.roll?.operationId !== rollOperationId ||
-            root.roll.targetRevisionId !== targetRevisionId ||
-            checkpoint?.migrationId !== migrationId ||
-            checkpoint.sourceRevisionId !== sourceRevisionId ||
-            checkpoint.checkpointCommit !== checkpointCommit ||
-            checkpoint.sourceUnfrozenAt !== null
-          ) {
-            throw new Error(`target ${targetRevisionId} config proof no longer matches the active roll`);
-          }
-          txn.set(db.collection(GLM_GATEWAYS_COLLECTION).doc(targetRevisionId), {
-            systemConfig: {
-              migrationId,
-              builderSlug: slug,
-              sourceRevisionId,
-              checkpointCommit,
-              restoredCommit: proof.restoredCommit,
-              acceptedCommit: proof.acceptedCommit,
-              configHash: proof.configHash,
-              configReady: proof.configReady,
-              observedRevisionId: proof.observedRevisionId,
-              restoreProvenAt: proof.restoreProvenAt,
-              configReadyAt: proof.configReadyAt,
-              runtimeConfigHash: proof.runtimeConfigHash,
-              observedAt,
-            },
-          }, { merge: true });
-        });
-        recordConfigRoll({
-          stage: "proof",
-          result: "ok",
-          gatewayId,
-          revisionId: targetRevisionId,
-        });
-      } catch (error) {
-        recordConfigRoll({
-          stage: "proof",
-          result: "fail",
-          gatewayId,
-          revisionId: targetRevisionId,
-        });
-        throw error;
-      }
-    },
-    reproveConfigRestore: async ({ gatewayId, targetRevisionId, priorProof }) => {
-      try {
-        const targetUrl = await resolveGatewayUrlFromFirestore(db, targetRevisionId);
-        const client = createMigrationClient({
-          privateKey,
-          resolveGatewayUrl: () => targetUrl,
-          log,
-        });
-        const proof = await client.reproveConfigRestore({
-          migrationId: priorProof.migrationId,
-          gatewayId,
-          transportId: targetRevisionId,
-          slug: priorProof.builderSlug,
-          checkpointCommit: priorProof.checkpointCommit,
-        });
-        if (
-          proof.restoredCommit !== priorProof.checkpointCommit ||
-          proof.acceptedCommit !== priorProof.acceptedCommit ||
-          proof.configHash !== priorProof.configHash
-        ) {
-          throw new Error(`target ${targetRevisionId} changed durable config before restart reproof`);
-        }
-        const observedAt = Date.now();
-        await db.collection(GLM_GATEWAYS_COLLECTION).doc(targetRevisionId).set({
-          systemConfig: {
-            ...priorProof,
-            restoreProvenAt: proof.restoreProvenAt,
-            configReadyAt: proof.configReadyAt,
-            runtimeConfigHash: proof.runtimeConfigHash,
-            observedAt,
-          },
-        }, { merge: true });
-        recordConfigRoll({
-          stage: "proof",
-          result: "ok",
-          gatewayId,
-          revisionId: targetRevisionId,
-        });
-      } catch (error) {
-        recordConfigRoll({
-          stage: "proof",
-          result: "fail",
-          gatewayId,
-          revisionId: targetRevisionId,
-        });
-        throw error;
-      }
-    },
-    releaseConfigFreeze: async ({ gatewayId, revisionId, migrationId, slug }) => {
-      const sourceUrl = await resolveGatewayUrlFromFirestore(db, revisionId);
-      const client = createMigrationClient({
-        privateKey,
-        resolveGatewayUrl: () => sourceUrl,
-        log,
-      });
-      await client.unfreezeConfig({
-        migrationId,
-        gatewayId,
-        transportId: revisionId,
-        slug,
-      });
-    },
-    markConfigFreezeReleased: async ({
-      gatewayId,
-      rollOperationId,
-      migrationId,
-      releasedAt,
-    }) => {
-      const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
-      await db.runTransaction(async (txn) => {
-        const snap = await txn.get(gatewayRef);
-        const gateway = snap.data();
-        if (!isDurableRootConfigDoc(gateway, gatewayId)) {
-          throw new Error(`gateway ${gatewayId} durable root disappeared during config release`);
-        }
-        if (
-          gateway.roll?.operationId !== rollOperationId ||
-          gateway.roll.systemConfigCheckpoint?.migrationId !== migrationId
-        ) {
-          throw new Error(`gateway ${gatewayId} config release no longer matches the active roll`);
-        }
-        txn.update(gatewayRef, {
-          "roll.systemConfigCheckpoint.sourceUnfrozenAt": releasedAt,
-          "roll.updatedAt": releasedAt,
-          updatedAt: releasedAt,
-          updatedBy: "cowboy",
-        });
-      });
-    },
+    recoverConfigFreezeOwner: buildRollConfigFreezeOwnerRecovery(args),
+    ...buildRollConfigProofDeps(args),
     recordConfigRollMetric: recordConfigRoll,
     hasActiveShell: async (gatewayId) =>
       (await readShellLiveness(db, gatewayId, Date.now())).reallyActive,
@@ -3236,46 +3296,163 @@ function assertCurrentMigrationRollFence(
   assignment: AssignmentDoc | null,
   fence: MigrationRollFence,
 ): void {
+  const { root, roll } = currentMigrationRoll(rootValue, fence);
+  assertProtocolV2Promotion(roll, fence);
+  assertSourceConfigCheckpoint(roll, fence);
+  assertSourceAssignment(root, assignment, fence);
+}
+
+function currentMigrationRoll(
+  rootValue: unknown,
+  fence: MigrationRollFence,
+): { root: GatewayRuntimeRoot; roll: NonNullable<GatewayRuntimeRoot["roll"]> } {
   if (!isDurableRootConfigDoc(rootValue, fence.gatewayId)) {
     throw new Error("stale release-roll fence: gateway root unavailable");
   }
   const roll = rootValue.roll;
   const protocolV2Roll = roll?.systemConfigRoll !== undefined;
   if (
+    !roll ||
     (!protocolV2Roll && rootValue.desiredRelease !== fence.targetRelease) ||
-    roll?.operationId !== fence.rollOperationId ||
+    roll.operationId !== fence.rollOperationId ||
     roll.targetRevisionId !== fence.targetRevisionId ||
     roll.toRelease !== fence.targetRelease
   ) {
     throw new Error("stale release-roll fence: roll target changed");
   }
-  if (protocolV2Roll) {
-    const configRoll = roll.systemConfigRoll;
-    if (!protocolV2PromotionMatchesFence(configRoll, fence)) {
-      throw new Error("stale release-roll fence: protocol-v2 candidate is not durably promoted");
-    }
+  return { root: rootValue, roll };
+}
+
+function assertProtocolV2Promotion(
+  roll: NonNullable<GatewayRuntimeRoot["roll"]>,
+  fence: MigrationRollFence,
+): void {
+  if (
+    roll.systemConfigRoll !== undefined &&
+    !protocolV2PromotionMatchesFence(roll.systemConfigRoll, fence)
+  ) {
+    throw new Error("stale release-roll fence: protocol-v2 candidate is not durably promoted");
   }
-  if (fence.sourceConfigCheckpoint) {
-    const checkpoint = roll.systemConfigCheckpoint;
-    if (
-      checkpoint?.migrationId !== fence.sourceConfigCheckpoint.migrationId ||
-      checkpoint.checkpointCommit !== fence.sourceConfigCheckpoint.checkpointCommit ||
-      checkpoint.configHash !== fence.sourceConfigCheckpoint.configHash ||
-      checkpoint.sourceUnfrozenAt !== null
-    ) {
-      throw new Error("stale release-roll fence: source config checkpoint changed");
-    }
+}
+
+function assertSourceConfigCheckpoint(
+  roll: NonNullable<GatewayRuntimeRoot["roll"]>,
+  fence: MigrationRollFence,
+): void {
+  if (!fence.sourceConfigCheckpoint) return;
+  const checkpoint = roll.systemConfigCheckpoint;
+  if (
+    checkpoint?.migrationId !== fence.sourceConfigCheckpoint.migrationId ||
+    checkpoint.checkpointCommit !== fence.sourceConfigCheckpoint.checkpointCommit ||
+    checkpoint.configHash !== fence.sourceConfigCheckpoint.configHash ||
+    checkpoint.sourceUnfrozenAt !== null
+  ) {
+    throw new Error("stale release-roll fence: source config checkpoint changed");
   }
+}
+
+function assertSourceAssignment(
+  root: GatewayRuntimeRoot,
+  assignment: AssignmentDoc | null,
+  fence: MigrationRollFence,
+): void {
   const sourceAssignmentIsCurrent =
     assignment?.revisionId === fence.sourceRevisionId &&
     assignment.epoch === fence.sourceEpoch;
   const sourceIsUnassignedLiveRevision =
     assignment === null &&
     fence.sourceEpoch === 0 &&
-    rootValue.liveRevisionId === fence.sourceRevisionId;
+    root.liveRevisionId === fence.sourceRevisionId;
   if (!sourceAssignmentIsCurrent && !sourceIsUnassignedLiveRevision) {
     throw new Error("stale release-roll fence: source assignment epoch changed");
   }
+}
+
+type RecoverConfigFreezeOwnerInput = Parameters<
+  NonNullable<MigrationRunnerDeps["recoverConfigFreezeOwner"]>
+>[0];
+
+function operationIdFromMigrationId(migrationId: string): string {
+  if (!migrationId.startsWith("mig-")) {
+    throw new Error("config freeze recovery migration id is not operation-bound");
+  }
+  const operationId = migrationId.slice(4);
+  if (!operationId) {
+    throw new Error("config freeze recovery migration id is not operation-bound");
+  }
+  return operationId;
+}
+
+function assertConfigFreezeRequester(
+  input: RecoverConfigFreezeOwnerInput,
+  requester: Operation | null,
+): void {
+  if (
+    !requester ||
+    requester.status !== "running" ||
+    requester.input?.uid !== input.uid ||
+    requester.input?.builderSlug !== input.slug ||
+    requester.input?.rollOperationId !== input.rollOperationId
+  ) {
+    throw new Error("config freeze requester no longer owns the active operation lease");
+  }
+}
+
+function assertConfigFreezeRecoveryRoll(
+  input: RecoverConfigFreezeOwnerInput,
+  root: unknown,
+): void {
+  if (!isDurableRootConfigDoc(root, input.sourceGatewayId)) {
+    throw new Error("config freeze recovery roll lease is no longer current");
+  }
+  const roll = root.roll;
+  if (
+    !roll ||
+    roll.operationId !== input.rollOperationId ||
+    roll.sourceRevisionId !== input.sourceTransportId ||
+    roll.targetRevisionId !== input.targetTransportId
+  ) {
+    throw new Error("config freeze recovery roll lease is no longer current");
+  }
+}
+
+async function recoverMigrationConfigFreezeOwner(
+  input: RecoverConfigFreezeOwnerInput,
+  deps: { db: Firestore; privateKey: string; log: (msg: string) => void },
+): Promise<boolean> {
+  if (!input.rollOperationId) {
+    throw new Error("config freeze owner recovery requires a release-roll lease");
+  }
+  const ownerOpId = operationIdFromMigrationId(input.ownerMigrationId);
+  const requesterOpId = operationIdFromMigrationId(input.requestedMigrationId);
+  const [ownerSnap, requesterSnap, rootSnap] = await Promise.all([
+    deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(ownerOpId).get(),
+    deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(requesterOpId).get(),
+    deps.db.collection(GATEWAYS_COLLECTION).doc(input.sourceGatewayId).get(),
+  ]);
+  const owner = ownerSnap.exists
+    ? ({ id: ownerSnap.id, ...ownerSnap.data() } as Operation)
+    : null;
+  assertRecoverableConfigFreezeOwner(input, owner);
+  const requester = requesterSnap.exists ? requesterSnap.data() as Operation : null;
+  assertConfigFreezeRequester(input, requester);
+  assertConfigFreezeRecoveryRoll(input, rootSnap.data());
+  const sourceUrl = await resolveGatewayUrlFromFirestore(
+    deps.db,
+    input.sourceTransportId,
+  );
+  const client = createMigrationClient({
+    privateKey: deps.privateKey,
+    resolveGatewayUrl: () => sourceUrl,
+    log: deps.log,
+  });
+  await client.unfreezeConfig({
+    migrationId: input.ownerMigrationId,
+    gatewayId: input.sourceGatewayId,
+    transportId: input.sourceTransportId,
+    slug: input.slug,
+  });
+  return true;
 }
 
 function readPath(obj: Record<string, unknown> | undefined, dotted: string): unknown {
@@ -3655,61 +3832,11 @@ async function buildHandlers(
         sourceRevisionId,
         targetRevisionId,
       }),
-    recoverConfigFreezeOwner: async (input) => {
-      if (!input.rollOperationId) {
-        throw new Error("config freeze owner recovery requires a release-roll lease");
-      }
-      const ownerOpId = input.ownerMigrationId.startsWith("mig-")
-        ? input.ownerMigrationId.slice(4)
-        : "";
-      const requesterOpId = input.requestedMigrationId.startsWith("mig-")
-        ? input.requestedMigrationId.slice(4)
-        : "";
-      if (!ownerOpId || !requesterOpId) {
-        throw new Error("config freeze recovery migration id is not operation-bound");
-      }
-      const [ownerSnap, requesterSnap, rootSnap] = await Promise.all([
-        db.collection(GLM_OPERATIONS_COLLECTION).doc(ownerOpId).get(),
-        db.collection(GLM_OPERATIONS_COLLECTION).doc(requesterOpId).get(),
-        db.collection(GATEWAYS_COLLECTION).doc(input.sourceGatewayId).get(),
-      ]);
-      const owner = ownerSnap.exists
-        ? ({ id: ownerSnap.id, ...ownerSnap.data() } as Operation)
-        : null;
-      assertRecoverableConfigFreezeOwner(input, owner);
-      const requester = requesterSnap.exists ? requesterSnap.data() as Operation : null;
-      if (
-        !requester ||
-        requester.status !== "running" ||
-        requester.input?.uid !== input.uid ||
-        requester.input?.builderSlug !== input.slug ||
-        requester.input?.rollOperationId !== input.rollOperationId
-      ) {
-        throw new Error("config freeze requester no longer owns the active operation lease");
-      }
-      const root = rootSnap.data();
-      if (
-        !isDurableRootConfigDoc(root, input.sourceGatewayId) ||
-        root.roll?.operationId !== input.rollOperationId ||
-        root.roll.sourceRevisionId !== input.sourceTransportId ||
-        root.roll.targetRevisionId !== input.targetTransportId
-      ) {
-        throw new Error("config freeze recovery roll lease is no longer current");
-      }
-      const sourceUrl = await resolveGatewayUrlFromFirestore(db, input.sourceTransportId);
-      const client = createMigrationClient({
-        privateKey,
-        resolveGatewayUrl: () => sourceUrl,
-        log: logFn,
-      });
-      await client.unfreezeConfig({
-        migrationId: input.ownerMigrationId,
-        gatewayId: input.sourceGatewayId,
-        transportId: input.sourceTransportId,
-        slug: input.slug,
-      });
-      return true;
-    },
+    recoverConfigFreezeOwner: (input) => recoverMigrationConfigFreezeOwner(input, {
+      db,
+      privateKey,
+      log: logFn,
+    }),
     genMigrationId: (operationId) => `mig-${operationId}`,
     now: () => Date.now(),
     log: logFn,

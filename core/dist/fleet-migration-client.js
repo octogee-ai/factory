@@ -101,8 +101,6 @@ export function createMigrationClient(deps) {
             clearTimeout(timer);
         }
     };
-    // `transportId` resolves the K8s Service URL (revision); `path` already
-    // carries the bare tenant gatewayId — the two are deliberately independent.
     const postSignedJson = async (transportId, path, migrationId, body, timeoutMs) => {
         const rawBody = JSON.stringify(body);
         const signature = signFleetRequest(deps.privateKey, migrationId, rawBody);
@@ -115,34 +113,55 @@ export function createMigrationClient(deps) {
             },
             body: rawBody,
         }, timeoutMs);
-        if (!res.ok) {
-            const text = await res.text().catch(() => "<no body>");
-            let details = {};
-            try {
-                const parsed = JSON.parse(text);
-                if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-                    details = parsed;
-                }
-            }
-            catch {
-                details = {};
-            }
-            const owner = details.owner && typeof details.owner === "object" && !Array.isArray(details.owner)
-                ? details.owner
-                : {};
-            throw new MigrationRpcError(`${path}: ${res.status} ${text}`, {
-                status: res.status,
-                ...(typeof details.code === "string" ? { code: details.code } : {}),
-                ...(typeof owner.migrationId === "string" || typeof details.ownerMigrationId === "string"
-                    ? { ownerMigrationId: (owner.migrationId ?? details.ownerMigrationId) }
-                    : {}),
-                ...(typeof owner.slug === "string" || typeof details.slug === "string"
-                    ? { slug: (owner.slug ?? details.slug) }
-                    : {}),
-            });
-        }
+        if (!res.ok)
+            throw await migrationRpcError(path, res);
         return (await res.json());
     };
+    const context = {
+        deps,
+        postSignedJson,
+        configMutationBody,
+        log,
+        quiesceMs,
+        transferMs,
+        unmountMs,
+        verifyMs,
+    };
+    return {
+        ...createLegacyConfigMethods(context),
+        ...createConfigCandidateMethods(context),
+        ...createConfigLifecycleMethods(context),
+        ...createStateMigrationMethods(context),
+    };
+}
+async function migrationRpcError(path, response) {
+    const text = await response.text().catch(() => "<no body>");
+    let details = {};
+    try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            details = parsed;
+        }
+    }
+    catch {
+        details = {};
+    }
+    const owner = details.owner && typeof details.owner === "object" && !Array.isArray(details.owner)
+        ? details.owner
+        : {};
+    const options = { status: response.status };
+    if (typeof details.code === "string")
+        options.code = details.code;
+    const ownerMigrationId = owner.migrationId ?? details.ownerMigrationId;
+    if (typeof ownerMigrationId === "string")
+        options.ownerMigrationId = ownerMigrationId;
+    const slug = owner.slug ?? details.slug;
+    if (typeof slug === "string")
+        options.slug = slug;
+    return new MigrationRpcError(`${path}: ${response.status} ${text}`, options);
+}
+function createLegacyConfigMethods(context) {
+    const { postSignedJson, configMutationBody, transferMs } = context;
     return {
         async freezeConfig({ migrationId, gatewayId, transportId, slug }) {
             const response = await postSignedJson(transportId ?? gatewayId, `/config-freeze/${gatewayId}`, migrationId, configMutationBody({ action: "freeze", migrationId, slug }), transferMs);
@@ -193,6 +212,11 @@ export function createMigrationClient(deps) {
             }
             return response;
         },
+    };
+}
+function createConfigCandidateMethods(context) {
+    const { postSignedJson, configMutationBody, transferMs } = context;
+    return {
         async freezeConfigV2(opts) {
             const response = await postSignedJson(opts.transportId ?? opts.gatewayId, `/config-freeze-v2/${opts.gatewayId}`, opts.migrationId, configMutationBody({
                 action: "freeze-v2",
@@ -255,6 +279,11 @@ export function createMigrationClient(deps) {
             }
             return response;
         },
+    };
+}
+function createConfigLifecycleMethods(context) {
+    const { postSignedJson, configMutationBody, transferMs } = context;
+    return {
         async abortConfigV2(opts) {
             const response = await postSignedJson(opts.transportId ?? opts.gatewayId, `/config-abort-v2/${opts.gatewayId}`, opts.migrationId, configMutationBody({
                 action: "abort-v2",
@@ -325,6 +354,11 @@ export function createMigrationClient(deps) {
                 throw new Error("malformed config retirement recovery response");
             return response;
         },
+    };
+}
+function createStateMigrationMethods(context) {
+    const { deps, postSignedJson, log, quiesceMs, transferMs, unmountMs, verifyMs, } = context;
+    return {
         async restoreTarget({ migrationId, gatewayId, transportId, uid, slug, snapshot }) {
             const res = await postSignedJson(transportId ?? gatewayId, `/restore/${gatewayId}`, migrationId, { migrationId, uid, slug, snapshot }, transferMs);
             log(`[migration-client] ✅ restoreTarget migrationId=${migrationId} slug=${slug} gateway=${gatewayId} steps=${res.steps.join(",")}`);

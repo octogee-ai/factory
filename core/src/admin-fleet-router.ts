@@ -1213,6 +1213,34 @@ async function readDurableGatewayRuntime(
   return { root, revision, heartbeat: runtimeHeartbeat(revision) };
 }
 
+function gatewayRetirementBlocker(
+  gatewayId: string,
+  runtime: DurableGatewayRuntime,
+): Record<string, unknown> | null {
+  if (runtime.root.liveRevisionId && !runtime.revision) {
+    return {
+      error: "gateway live revision telemetry is unavailable",
+      gatewayId,
+      revisionId: runtime.root.liveRevisionId,
+    };
+  }
+  if (runtime.root.roll) {
+    return {
+      error: "gateway has an unfinished release roll and config obligation",
+      gatewayId,
+      operationId: runtime.root.roll.operationId,
+    };
+  }
+  if (hasGatewayRetirementConfigObligation(runtime.heartbeat?.configStatus)) {
+    return {
+      error: "gateway live revision has an active config-control obligation",
+      gatewayId,
+      revisionId: runtime.root.liveRevisionId,
+    };
+  }
+  return null;
+}
+
 async function readGatewayRegistrationReadiness(
   db: Firestore,
   gatewayId: string,
@@ -4711,28 +4739,9 @@ router.post(
             .json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
           return;
         }
-        if (runtime.root.liveRevisionId && !runtime.revision) {
-          res.status(409).json({
-            error: "gateway live revision telemetry is unavailable",
-            gatewayId: id,
-            revisionId: runtime.root.liveRevisionId,
-          });
-          return;
-        }
-        if (runtime.root.roll) {
-          res.status(409).json({
-            error: "gateway has an unfinished release roll and config obligation",
-            gatewayId: id,
-            operationId: runtime.root.roll.operationId,
-          });
-          return;
-        }
-        if (hasGatewayRetirementConfigObligation(runtime.heartbeat?.configStatus)) {
-          res.status(409).json({
-            error: "gateway live revision has an active config-control obligation",
-            gatewayId: id,
-            revisionId: runtime.root.liveRevisionId,
-          });
+        const retirementBlocker = gatewayRetirementBlocker(id, runtime);
+        if (retirementBlocker) {
+          res.status(409).json(retirementBlocker);
           return;
         }
         // Refuse synchronously while any customer is still assigned — the
