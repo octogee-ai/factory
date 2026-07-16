@@ -205,8 +205,16 @@ describe("OpenClaw Dashboard HTTP surface", () => {
 });
 
 describe("OpenClaw Dashboard WebSocket surface", () => {
-  it.each(["result", "late-result", "hard-timeout", "browser-close", "upstream-close"] as const)(
-    "holds the durable config writer lease across a native mutation until %s proves its outcome",
+  it.each([
+    "result",
+    "late-result",
+    "malformed-response",
+    "late-malformed-response",
+    "hard-timeout",
+    "browser-close",
+    "upstream-close",
+  ] as const)(
+    "handles %s without an early durable config writer lease release",
     async (terminal) => {
       const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dashboard-lease-"));
       tempDirs.push(openclawDir);
@@ -339,6 +347,20 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
           ok: true,
           payload: { accepted: true },
         }));
+      } else if (terminal === "malformed-response") {
+        const closed = new Promise<void>((resolve) => browser.once("close", () => resolve()));
+        upstreamSocket?.send(JSON.stringify({ type: "res", id: "config-write" }));
+        await closed;
+      } else if (terminal === "late-malformed-response") {
+        await expect(terminalFrame).resolves.toMatchObject({
+          id: "config-write",
+          ok: false,
+          error: { code: "UPSTREAM_TIMEOUT" },
+        });
+        expect(acquireSystemConfigSyncLeaseSync({ openclawDir })).toBeNull();
+        const closed = new Promise<void>((resolve) => browser.once("close", () => resolve()));
+        upstreamSocket?.send(JSON.stringify({ type: "res", id: "config-write", ok: "maybe" }));
+        await closed;
       } else if (terminal === "hard-timeout") {
         await expect(terminalFrame).resolves.toMatchObject({
           id: "config-write",

@@ -10,6 +10,7 @@ import {
   type SystemConfigMutationLease,
 } from "@octogee/core/system-config-mutation-lease";
 import type { SystemConfigInvariantContext } from "@octogee/core/system-config-invariants";
+import { isResponseFrame } from "@octogee/shared/types/openclaw-wire-core";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { WebSocket, type RawData } from "ws";
 
@@ -631,9 +632,14 @@ async function bridgeControlSocket(args: {
       return;
     }
     nonce = challengeNonce(frame) ?? nonce;
+    const response = isResponseFrame(frame) ? frame : undefined;
+    if (frame.type === "res" && !response) {
+      closeBoth("protocol-invalid");
+      return;
+    }
     const id = typeof frame.id === "string" ? frame.id : undefined;
-    if (frame.type === "res" && id && drainQuarantined(id)) return;
-    const request = frame.type === "res" && id ? settlePending(id) : undefined;
+    if (response && drainQuarantined(response.id)) return;
+    const request = response ? settlePending(response.id) : undefined;
     const methods = installedMethodsFromHello(frame);
     if (methods) {
       if (!pinnedOpenClawRuntimeMatches(methods)) {
