@@ -834,10 +834,11 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
       expect(enabledEdge).toMatch(/name:\s*API_PUBLIC_URL\b/);
     }
 
-    for (const values of [
+    const disabledValueSets: Array<Record<string, string>> = [
       { gatewayId: "operator", gatewayClass: "operator", "operatorAccess.controlUiEnabled": "true" },
       { gatewayId: "shared", gatewayClass: "shared", "operatorAccess.shellsEnabled": "true", "operatorAccess.controlUiEnabled": "true" },
-    ]) {
+    ];
+    for (const values of disabledValueSets) {
       const disabled = findDoc(
         helmTemplate(`octogee-gw-${values.gatewayId}`, values),
         "Deployment",
