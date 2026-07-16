@@ -4,6 +4,10 @@ import {
   hasRunningInboundMigrationForSlug,
   readAssignedSlugsForGateway,
 } from "@octogee/core/assigned-roster";
+import {
+  configuredBuilderBootstrapAllowed,
+  gatewayRevisionIdFromPodName,
+} from "@octogee/core/gateway-live-release";
 import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
 import { normalizeTenantPolicyPath } from "../lib/tenant-route-policy.js";
 
@@ -134,14 +138,21 @@ function routeRequiresTargetUserOwnership(req: Request): boolean {
 async function slugAllowedForRequest(
   db: Pick<Firestore, "collection">,
   slug: string,
-  gatewayId: string,
+  bound: GatewayBinding,
   req: Request,
 ): Promise<boolean> {
-  if (await slugBelongsToGateway(db, slug, gatewayId)) return true;
-  return (
-    routeAllowsInboundMigrationSlug(req) &&
-    hasRunningInboundMigrationForSlug(db, gatewayId, slug)
-  );
+  if (await slugBelongsToGateway(db, slug, bound.gatewayId)) return true;
+  if (!routeAllowsInboundMigrationSlug(req)) return false;
+  if (await hasRunningInboundMigrationForSlug(db, bound.gatewayId, slug)) return true;
+  const revisionId = gatewayRevisionIdFromPodName(bound.gatewayId, bound.podName);
+  if (!revisionId) return false;
+  const gatewaySnap = await db.collection("gateways").doc(bound.gatewayId).get();
+  const gateway = gatewaySnap.exists ? gatewaySnap.data() : undefined;
+  return configuredBuilderBootstrapAllowed(gateway, {
+    gatewayId: bound.gatewayId,
+    revisionId,
+    slug,
+  });
 }
 
 async function allUidsBelongToGateway(
@@ -158,11 +169,11 @@ async function allUidsBelongToGateway(
 async function allSlugsAllowedForRequest(
   db: Pick<Firestore, "collection">,
   slugs: string[],
-  gatewayId: string,
+  bound: GatewayBinding,
   req: Request,
 ): Promise<boolean> {
   for (const slug of slugs) {
-    if (!(await slugAllowedForRequest(db, slug, gatewayId, req))) return false;
+    if (!(await slugAllowedForRequest(db, slug, bound, req))) return false;
   }
   return true;
 }
@@ -203,7 +214,7 @@ async function gatewayBindingAuthorized(
   }
 
   const slugs = requestedSlugs(req);
-  if (slugs.length > 0 && !(await allSlugsAllowedForRequest(db, slugs, bound.gatewayId, req))) {
+  if (slugs.length > 0 && !(await allSlugsAllowedForRequest(db, slugs, bound, req))) {
     return false;
   }
 

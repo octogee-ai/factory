@@ -3,19 +3,13 @@ import { Router, type Request, type Response } from "express";
 import { isValidProjectId, isValidUsername } from "@octogee/shared/types/identity";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
-  isGatewayDesiredDoc,
-  revisionIdForRelease,
-  type GatewayDoc,
-} from "@octogee/shared/types/gateway-releases";
-import {
-  isGatewayMutableConfigForGateway,
-  type GatewayMutableConfig,
-} from "@octogee/shared/types/gateway-mutable-config";
-import {
   hasRunningInboundMigrationForSlug,
   readAssignedSlugsForGateway,
 } from "@octogee/core/assigned-roster";
-import { gatewayRevisionIdFromPodName } from "@octogee/core/gateway-live-release";
+import {
+  configuredBuilderBootstrapAllowed,
+  gatewayRevisionIdFromPodName,
+} from "@octogee/core/gateway-live-release";
 import { db } from "../../lib/db.js";
 import { requireInternalServiceAuth } from "../../middleware/auth.js";
 import { logger } from "../../middleware/logging.js";
@@ -100,28 +94,6 @@ function gatewayCallerForRequest(req: Request): GatewayCaller | null {
   return null;
 }
 
-function configuredBuilderMayBootstrap(
-  gateway: GatewayDoc & GatewayMutableConfig & { retirementClaim?: unknown },
-  gatewayId: string,
-  revisionId: string | null,
-  slug: string,
-): boolean {
-  if (
-    !revisionId ||
-    gateway.desiredStatus !== "running" ||
-    gateway.retireAfter != null ||
-    gateway.retirementClaim != null ||
-    gateway.gatewayClass === "shared" ||
-    gateway.builderSlug !== slug
-  ) {
-    return false;
-  }
-  if (gateway.roll) {
-    return gateway.roll.status !== "failed" && gateway.roll.targetRevisionId === revisionId;
-  }
-  return revisionIdForRelease(gatewayId, gateway.desiredRelease) === revisionId;
-}
-
 async function requireAssignedHere(req: Request, res: Response, slug: string): Promise<boolean> {
   const caller = gatewayCallerForRequest(req);
   if (!caller) {
@@ -136,10 +108,11 @@ async function requireAssignedHere(req: Request, res: Response, slug: string): P
     if (assigned.includes(slug)) return true;
     const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
     const gateway = gatewaySnap.exists ? gatewaySnap.data() : undefined;
-    const configuredIsolatedBuilder =
-      isGatewayDesiredDoc(gateway) &&
-      isGatewayMutableConfigForGateway(gateway, gatewayId) &&
-      configuredBuilderMayBootstrap(gateway, gatewayId, revisionId, slug);
+    const configuredIsolatedBuilder = configuredBuilderBootstrapAllowed(gateway, {
+      gatewayId,
+      revisionId,
+      slug,
+    });
     if (configuredIsolatedBuilder) return true;
     if (!(await hasRunningInboundMigrationForSlug(db, gatewayId, slug))) {
       res.status(403).json({ error: "slug is not assigned to this gateway" });

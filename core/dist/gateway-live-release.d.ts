@@ -5,6 +5,11 @@ export { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGat
 export type { GatewayMutableConfig };
 type FirestoreReader = Pick<Firestore, "doc">;
 export declare function gatewayRevisionIdFromPodName(gatewayId: string, podName: string | undefined): string | null;
+export declare function configuredBuilderBootstrapAllowed(value: unknown, input: {
+    gatewayId: string;
+    revisionId: string | null;
+    slug: string;
+}): boolean;
 export interface GatewayArtifact {
     imageRepository: string;
     imageTag: string;

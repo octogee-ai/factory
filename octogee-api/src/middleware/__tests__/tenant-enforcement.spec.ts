@@ -21,6 +21,7 @@ function fakeDb(opts: {
   users: Record<string, UserDoc>;
   flows?: Record<string, FlowDoc>;
   operations?: Record<string, OperationDoc>;
+  gateways?: Record<string, Record<string, unknown>>;
   // gateways/{gatewayId}/assignments/{uid} — the Step 2 roster layer. Empty by
   // default: the roster then falls back to the assigned user mirror (legacy).
   assignments?: Record<string, Record<string, Record<string, unknown>>>;
@@ -30,6 +31,10 @@ function fakeDb(opts: {
       if (name === "gateways") {
         return {
           doc: (gatewayId: string) => ({
+            get: async () => ({
+              exists: Object.prototype.hasOwnProperty.call(opts.gateways ?? {}, gatewayId),
+              data: () => opts.gateways?.[gatewayId],
+            }),
             collection: (_sub: string) => ({
               get: async () => ({
                 docs: Object.entries(opts.assignments?.[gatewayId] ?? {}).map(
@@ -74,6 +79,7 @@ function app(opts: {
   users?: Record<string, UserDoc>;
   flows?: Record<string, FlowDoc>;
   operations?: Record<string, OperationDoc>;
+  gateways?: Record<string, Record<string, unknown>>;
 }) {
   const a = express();
   a.use(express.json());
@@ -96,6 +102,7 @@ function app(opts: {
         },
       flows: opts.flows,
       operations: opts.operations,
+      gateways: opts.gateways,
     }),
   });
   const handler = (_req: express.Request, res: express.Response) => res.json({ ok: true });
@@ -120,6 +127,59 @@ const BENDER: Express.Request["boundTenant"] = {
   gatewayId: "bender",
   ownerUid: "owner-bender",
 };
+
+const BENDER_R2: Express.Request["boundTenant"] = {
+  ...BENDER,
+  podName: "octogee-gateway-bender-r2-5bc5949d46-p946t",
+  podUid: "b0de5f4c-2d38-4dc9-9bb7-3f20a0d7beef",
+};
+
+function configuredBender(overrides: Record<string, unknown> = {}) {
+  return {
+    gatewayId: "bender",
+    createdAt: 1,
+    createdBy: "admin",
+    updatedAt: 2,
+    updatedBy: "admin",
+    latestRelease: 2,
+    desiredRelease: 2,
+    liveRelease: 1,
+    liveRevisionId: "bender-r1",
+    trafficRevisionId: "bender-r1",
+    desiredStatus: "running",
+    roll: {
+      operationId: "roll-1",
+      status: "warming",
+      fromRelease: 1,
+      toRelease: 2,
+      sourceRevisionId: "bender-r1",
+      targetRevisionId: "bender-r2",
+      acceptingNewAssignments: false,
+      startedAt: 2,
+      updatedAt: 2,
+      error: null,
+      flippedAt: null,
+    },
+    configSchemaVersion: 1,
+    profile: "operator",
+    gatewayClass: "operator",
+    imageProfile: "operator",
+    sizingTier: null,
+    computeClass: null,
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: "octogee-gw-bender",
+    serviceAccount: null,
+    operatorAccess: null,
+    ownerUid: "owner-bender",
+    coOwnerUids: [],
+    builderSlug: "victim",
+    openclawOverrides: null,
+    modelBrokerLimits: null,
+    preemption: null,
+    ...overrides,
+  };
+}
 
 describe("tenant enforcement middleware", () => {
   it("allows a platform-bound cron caller on an allowlisted cron route", async () => {
@@ -409,6 +469,49 @@ describe("tenant enforcement middleware", () => {
       .query({ slug: "victim" });
 
     expect(res.status).toBe(403);
+  });
+
+  it("allows the authenticated target revision to bootstrap its configured isolated builder", async () => {
+    const res = await request(app({
+      boundTenant: BENDER_R2,
+      gateways: { bender: configuredBender() },
+    }))
+      .get("/internal/gitea/user-pubkey")
+      .query({ slug: "victim" });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects stale, unbound, and retiring configured-builder bootstrap callers", async () => {
+    const source = await request(app({
+      boundTenant: {
+        ...BENDER_R2,
+        podName: "octogee-gateway-bender-r1-5bc5949d46-p946t",
+      },
+      gateways: { bender: configuredBender() },
+    }))
+      .get("/internal/gitea/user-pubkey")
+      .query({ slug: "victim" });
+    const unbound = await request(app({
+      boundTenant: BENDER,
+      gateways: { bender: configuredBender() },
+    }))
+      .get("/internal/gitea/user-pubkey")
+      .query({ slug: "victim" });
+    const retiring = await request(app({
+      boundTenant: BENDER_R2,
+      gateways: {
+        bender: configuredBender({
+          retirementClaim: { operationId: "retire-1", version: 1 },
+        }),
+      },
+    }))
+      .get("/internal/gitea/user-pubkey")
+      .query({ slug: "victim" });
+
+    expect(source.status).toBe(403);
+    expect(unbound.status).toBe(403);
+    expect(retiring.status).toBe(403);
   });
 
   it("allows BYOS capture only for flows owned by the bound gateway", async () => {

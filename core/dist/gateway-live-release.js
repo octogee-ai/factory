@@ -21,6 +21,26 @@ export function gatewayRevisionIdFromPodName(gatewayId, podName) {
         return null;
     return `${gatewayId}-r${release}`;
 }
+export function configuredBuilderBootstrapAllowed(value, input) {
+    if (!isGatewayDesiredDoc(value) ||
+        !isGatewayMutableConfigForGateway(value, input.gatewayId)) {
+        return false;
+    }
+    const gateway = value;
+    if (!input.revisionId ||
+        gateway.desiredStatus !== "running" ||
+        gateway.retireAfter != null ||
+        gateway.retirementClaim != null ||
+        gateway.gatewayClass === "shared" ||
+        gateway.builderSlug !== input.slug) {
+        return false;
+    }
+    if (gateway.roll) {
+        return gateway.roll.status !== "failed" &&
+            gateway.roll.targetRevisionId === input.revisionId;
+    }
+    return revisionIdForRelease(input.gatewayId, gateway.desiredRelease) === input.revisionId;
+}
 function isRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
 }

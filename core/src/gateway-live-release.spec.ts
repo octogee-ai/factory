@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  configuredBuilderBootstrapAllowed,
   mergeGatewayConfigWithArtifact,
   isBareGatewayId,
   isGatewayMutableConfig,
@@ -38,6 +39,67 @@ describe("gatewayRevisionIdFromPodName", () => {
         "octogee-gateway-bender-r012-5bc5949d46-p946t",
       ),
     ).toBeNull();
+  });
+});
+
+describe("configuredBuilderBootstrapAllowed", () => {
+  const configured = {
+    gatewayId: "bender",
+    createdAt: 1,
+    createdBy: "admin",
+    updatedAt: 1,
+    updatedBy: "admin",
+    latestRelease: 2,
+    desiredRelease: 2,
+    liveRelease: 1,
+    liveRevisionId: "bender-r1",
+    trafficRevisionId: "bender-r1",
+    desiredStatus: "running",
+    roll: {
+      operationId: "roll-1",
+      status: "warming",
+      fromRelease: 1,
+      toRelease: 2,
+      sourceRevisionId: "bender-r1",
+      targetRevisionId: "bender-r2",
+      acceptingNewAssignments: false,
+      startedAt: 1,
+      updatedAt: 1,
+      error: null,
+      flippedAt: null,
+    },
+    ...mutableConfig({ builderSlug: "alice" }),
+  };
+
+  it("allows only the configured isolated builder on the authenticated roll target", () => {
+    expect(configuredBuilderBootstrapAllowed(configured, {
+      gatewayId: "bender",
+      revisionId: "bender-r2",
+      slug: "alice",
+    })).toBe(true);
+    expect(configuredBuilderBootstrapAllowed(configured, {
+      gatewayId: "bender",
+      revisionId: "bender-r1",
+      slug: "alice",
+    })).toBe(false);
+    expect(configuredBuilderBootstrapAllowed(configured, {
+      gatewayId: "bender",
+      revisionId: "bender-r2",
+      slug: "victim",
+    })).toBe(false);
+  });
+
+  it.each([
+    { desiredStatus: "retired" },
+    { retireAfter: 2 },
+    { retirementClaim: { operationId: "retire-1", version: 1 } },
+    { roll: { ...configured.roll, status: "failed" } },
+  ])("rejects terminal configured-builder bootstrap state: %o", (override) => {
+    expect(configuredBuilderBootstrapAllowed({ ...configured, ...override }, {
+      gatewayId: "bender",
+      revisionId: "bender-r2",
+      slug: "alice",
+    })).toBe(false);
   });
 });
 

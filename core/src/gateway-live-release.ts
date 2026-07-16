@@ -49,6 +49,34 @@ export function gatewayRevisionIdFromPodName(
   return `${gatewayId}-r${release}`;
 }
 
+export function configuredBuilderBootstrapAllowed(
+  value: unknown,
+  input: { gatewayId: string; revisionId: string | null; slug: string },
+): boolean {
+  if (
+    !isGatewayDesiredDoc(value) ||
+    !isGatewayMutableConfigForGateway(value, input.gatewayId)
+  ) {
+    return false;
+  }
+  const gateway = value as GatewayDoc & GatewayMutableConfig & { retirementClaim?: unknown };
+  if (
+    !input.revisionId ||
+    gateway.desiredStatus !== "running" ||
+    gateway.retireAfter != null ||
+    gateway.retirementClaim != null ||
+    gateway.gatewayClass === "shared" ||
+    gateway.builderSlug !== input.slug
+  ) {
+    return false;
+  }
+  if (gateway.roll) {
+    return gateway.roll.status !== "failed" &&
+      gateway.roll.targetRevisionId === input.revisionId;
+  }
+  return revisionIdForRelease(input.gatewayId, gateway.desiredRelease) === input.revisionId;
+}
+
 export interface GatewayArtifact {
   imageRepository: string;
   imageTag: string;
