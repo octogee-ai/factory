@@ -22,10 +22,20 @@ export function gatewayRevisionIdFromPodName(gatewayId, podName) {
     return `${gatewayId}-r${release}`;
 }
 export function configuredBuilderBootstrapAllowed(value, input) {
+    const gateway = eligibleConfiguredBuilderGateway(value, input);
+    if (!gateway)
+        return false;
+    if (gateway.roll) {
+        return gateway.roll.status !== "failed" &&
+            gateway.roll.targetRevisionId === input.revisionId;
+    }
+    return revisionIdForRelease(input.gatewayId, gateway.desiredRelease) === input.revisionId;
+}
+function eligibleConfiguredBuilderGateway(value, input) {
     if (!isGatewayDesiredDoc(value) ||
         value.gatewayId !== input.gatewayId ||
         !isGatewayMutableConfigForGateway(value, input.gatewayId)) {
-        return false;
+        return null;
     }
     const gateway = value;
     if (!input.revisionId ||
@@ -34,13 +44,25 @@ export function configuredBuilderBootstrapAllowed(value, input) {
         gateway.retirementClaim != null ||
         gateway.gatewayClass === "shared" ||
         gateway.builderSlug !== input.slug) {
+        return null;
+    }
+    return gateway;
+}
+function activeRollSourceCredentialHydrationAllowed(gateway, revisionId) {
+    const roll = gateway.roll;
+    return Boolean(revisionId &&
+        roll &&
+        (roll.status === "warming" || roll.status === "routing" || roll.status === "migrating") &&
+        roll.sourceRevisionId === revisionId &&
+        gateway.liveRevisionId === revisionId &&
+        gateway.trafficRevisionId === revisionId);
+}
+export function configuredBuilderCredentialBootstrapAllowed(value, input) {
+    const gateway = eligibleConfiguredBuilderGateway(value, input);
+    if (!gateway || gateway.ownerUid !== input.uid)
         return false;
-    }
-    if (gateway.roll) {
-        return gateway.roll.status !== "failed" &&
-            gateway.roll.targetRevisionId === input.revisionId;
-    }
-    return revisionIdForRelease(input.gatewayId, gateway.desiredRelease) === input.revisionId;
+    return configuredBuilderBootstrapAllowed(gateway, input) ||
+        activeRollSourceCredentialHydrationAllowed(gateway, input.revisionId);
 }
 function isRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);

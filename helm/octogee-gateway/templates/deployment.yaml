@@ -156,6 +156,10 @@ spec:
               value: "/home/node"
             - name: NPM_CONFIG_CACHE
               value: "/home/node/.npm-cache"
+            - name: CUSTOMERS_DIR
+              value: "/home/node/.openclaw/customers"
+            - name: AGENTS_DIR
+              value: "/home/node/.openclaw/agents"
             - name: K8S_NAMESPACE
               valueFrom:
                 fieldRef:
@@ -200,6 +204,8 @@ spec:
               value: {{ $imageProfile | quote }}
             - name: GATEWAY_CLASS
               value: {{ $gatewayClass | quote }}
+            - name: OPENCLAW_DOCTOR_MODE
+              value: {{ .Values.env.openclawDoctorMode | default "run" | quote }}
             {{- $autosave := .Values.workspaceAutosaveEnabled | toString }}
             {{- if ne $autosave "" }}
             # Override; unset → gateway code defaults from profile

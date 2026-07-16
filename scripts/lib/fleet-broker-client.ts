@@ -1,5 +1,6 @@
 import type {
   FleetBrokerBlobSignedUrl,
+  FleetBrokerConfiguredBuilderBootstrap,
   FleetBrokerGreetingResult,
   FleetBrokerMattermostUpdate,
   FleetBrokerPreStopFlushEvent,
@@ -43,6 +44,7 @@ async function postNoContent(path: string, body: unknown): Promise<void> {
 
 export interface FleetBrokerClient {
   assignedUsers(opts?: { completeOnly?: boolean }): Promise<FleetBrokerUserSnapshot[]>;
+  configuredBuilderBootstrap(slug: string): Promise<FleetBrokerConfiguredBuilderBootstrap>;
   uidForSlug(slug: string): Promise<string | null>;
   userSnapshot(uid: string): Promise<FleetBrokerUserSnapshot | null>;
   setProvisioningStatus(
@@ -87,6 +89,13 @@ export function createFleetBrokerClient(gatewayId: string, revisionId = ""): Fle
         { gatewayId, revisionId, completeOnly: opts.completeOnly === true },
       );
       return data.users;
+    },
+    async configuredBuilderBootstrap(slug) {
+      const data = await postJson<{ bootstrap: FleetBrokerConfiguredBuilderBootstrap }>(
+        "/internal/fleet/configured-builder-bootstrap",
+        { gatewayId, revisionId, slug },
+      );
+      return data.bootstrap;
     },
     async uidForSlug(slug) {
       try {

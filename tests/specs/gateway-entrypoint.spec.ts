@@ -39,6 +39,14 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     expect(restoreIdx).toBeLessThan(openclawStartIdx);
   });
 
+  it("hydrates the configured builder credential after restore and before config repair", () => {
+    const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
+    const hydrateIdx = entrypoint.indexOf("configured-builder-bootstrap.ts");
+    const doctorIdx = entrypoint.indexOf("run_openclaw_doctor");
+    expect(hydrateIdx).toBeGreaterThan(restoreIdx);
+    expect(doctorIdx).toBeGreaterThan(hydrateIdx);
+  });
+
   it("gates system_config restore on non-shared class and explicit builder slug", () => {
     const restoreBlock = entrypoint.slice(
       entrypoint.indexOf("Dedicated gateway system_config restore"),
@@ -118,7 +126,7 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     const roleIdx = entrypoint.indexOf("system-config-roll-boot.ts resolve");
     const shellIdx = entrypoint.indexOf("supervise_runner builder-shell");
     const beginIdx = entrypoint.indexOf("\n  begin_system_config_boot_transaction", shellIdx);
-    const doctorIdx = entrypoint.indexOf("openclaw doctor --fix --non-interactive");
+    const doctorIdx = entrypoint.indexOf("run_openclaw_doctor", roleIdx);
     const openclawIdx = entrypoint.indexOf("openclaw gateway run");
     expect(roleIdx).toBeGreaterThan(-1);
     expect(shellIdx).toBeLessThan(beginIdx);
@@ -146,12 +154,12 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     );
     expect(roleBlock).toMatch(/source-frozen\)[\s\S]*skipping config mutation repair/);
     expect(roleBlock).toMatch(/target-candidate\)[\s\S]*print-candidate-state/);
-    expect(roleBlock).toMatch(/CANDIDATE_STATE.*pending[\s\S]*openclaw doctor/);
+    expect(roleBlock).toMatch(/CANDIDATE_STATE.*pending[\s\S]*run_openclaw_doctor/);
     expect(roleBlock).toMatch(/CANDIDATE_STATE.*pending[\s\S]*system-config-roll-boot\.ts migrate-target/);
-    expect(roleBlock).toMatch(/openclaw doctor[\s\S]*system-config-roll-boot\.ts candidate/);
+    expect(roleBlock).toMatch(/run_openclaw_doctor[\s\S]*system-config-roll-boot\.ts candidate/);
     const resolveIdx = entrypoint.indexOf("system-config-roll-boot.ts resolve");
     const migrateIdx = entrypoint.indexOf("system-config-roll-boot.ts migrate-target");
-    const doctorIdx = entrypoint.indexOf("openclaw doctor --fix --non-interactive", migrateIdx);
+    const doctorIdx = entrypoint.indexOf("run_openclaw_doctor", migrateIdx);
     const candidateIdx = entrypoint.indexOf("system-config-roll-boot.ts candidate", migrateIdx);
     expect(resolveIdx).toBeLessThan(migrateIdx);
     expect(migrateIdx).toBeLessThan(doctorIdx);
@@ -159,7 +167,7 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
   });
 
   it("repairs and checkpoints durable config before watcher and OpenClaw while shell starts early", () => {
-    const doctorIdx = entrypoint.indexOf("openclaw doctor --fix --non-interactive");
+    const doctorIdx = entrypoint.indexOf("run_openclaw_doctor");
     const checkpointIdx = entrypoint.indexOf("system-config-checkpoint.ts");
     const watcherIdx = entrypoint.indexOf("supervise_runner system-config-watch");
     const openclawIdx = entrypoint.indexOf("openclaw gateway run");
@@ -172,6 +180,13 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     expect(entrypoint).toMatch(/OPENCLAW_SERVICE_REPAIR_POLICY=external/);
     expect(entrypoint).toMatch(/OPENCLAW_DOCTOR_RESULT=ok/);
     expect(entrypoint).toMatch(/OPENCLAW_DOCTOR_RESULT=error/);
+  });
+
+  it("supports an explicit Doctor no-op without reporting a successful Doctor run", () => {
+    expect(entrypoint).toMatch(/OPENCLAW_DOCTOR_MODE:-run/);
+    expect(entrypoint).toMatch(/skip\)[\s\S]*unset OPENCLAW_DOCTOR_RESULT[\s\S]*return 0/);
+    expect(entrypoint).toMatch(/run\)[\s\S]*openclaw doctor --fix --non-interactive/);
+    expect(entrypoint).toMatch(/invalid OPENCLAW_DOCTOR_MODE/);
   });
 
   it("switches liveness to OpenClaw only after boot acceptance", () => {
