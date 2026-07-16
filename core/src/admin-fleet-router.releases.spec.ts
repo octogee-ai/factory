@@ -1079,6 +1079,50 @@ describe("GET /gateways/:id/releases — lists retained release docs", () => {
 });
 
 describe("POST /gateways/:id/rollout — compatibility wrapper (mounted-customer image rollout)", () => {
+  it("upgrades the retired Mac artifact field before cutting the rollout release", async () => {
+    const legacyPayload = {
+      ...sharedPayload(),
+      macOpsTokenProtocol: { version: 1 },
+    };
+    const seed = seedNewSchemaGateway("epsilon", sharedPayload());
+    seed[`gateways/epsilon/${GATEWAY_RELEASES_SUBCOLLECTION}/1`]!.payload = legacyPayload;
+    seed[`gateways/epsilon/${GATEWAY_RELEASES_SUBCOLLECTION}/1`]!.payloadHash =
+      releasePayloadHash(legacyPayload as never);
+    const { app, store } = mkApp(seed);
+
+    await request(app)
+      .post("/gateways/epsilon/rollout")
+      .send({ imageTag: "deadbee" })
+      .expect(202);
+
+    expect(store.get(`gateways/epsilon/${GATEWAY_RELEASES_SUBCOLLECTION}/1`)).toMatchObject({
+      payload: sharedPayload(),
+      payloadHash: releasePayloadHash(sharedPayload()),
+    });
+  });
+
+  it("returns a typed conflict when the current artifact schema cannot be upgraded", async () => {
+    const unsupportedPayload = { ...sharedPayload(), futureField: true };
+    const seed = seedNewSchemaGateway("epsilon", sharedPayload());
+    seed[`gateways/epsilon/${GATEWAY_RELEASES_SUBCOLLECTION}/1`]!.payload = unsupportedPayload;
+    seed[`gateways/epsilon/${GATEWAY_RELEASES_SUBCOLLECTION}/1`]!.payloadHash =
+      releasePayloadHash(unsupportedPayload as never);
+    const { app } = mkApp(seed);
+
+    const response = await request(app)
+      .post("/gateways/epsilon/rollout")
+      .send({ imageTag: "deadbee" })
+      .expect(409);
+
+    expect(response.body).toEqual({
+      error: "release artifact schema is unsupported",
+      code: "release-artifact-schema-unsupported",
+      gatewayId: "epsilon",
+      release: 1,
+      reason: "unsupported-payload-schema",
+    });
+  });
+
   it("queues a rollout op AND cuts a release for a new-schema gateway with mounted customers", async () => {
     const { app, store } = mkApp(
       seedNewSchemaGateway("epsilon", sharedPayload(), {

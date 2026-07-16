@@ -294,6 +294,55 @@ export function isReleasePayload(value: unknown): value is ReleasePayload {
   );
 }
 
+export type ReleasePayloadSchemaUpgrade =
+  | {
+      status: "current";
+      payload: ReleasePayload;
+      payloadHash: string;
+    }
+  | {
+      status: "upgraded";
+      migration: "remove-retired-mac-ops-token-protocol";
+      payload: ReleasePayload;
+      payloadHash: string;
+    }
+  | {
+      status: "unsupported";
+      reason: "payload-hash-mismatch" | "unsupported-payload-schema";
+    };
+
+export function upgradeReleasePayloadSchema(
+  payload: unknown,
+  persistedPayloadHash: unknown,
+): ReleasePayloadSchemaUpgrade {
+  if (
+    typeof persistedPayloadHash !== "string" ||
+    persistedPayloadHash !== releasePayloadValueHash(payload)
+  ) {
+    return { status: "unsupported", reason: "payload-hash-mismatch" };
+  }
+  if (isReleasePayload(payload)) {
+    return { status: "current", payload, payloadHash: persistedPayloadHash };
+  }
+  if (
+    !isPlainRecord(payload) ||
+    !Object.prototype.hasOwnProperty.call(payload, "macOpsTokenProtocol")
+  ) {
+    return { status: "unsupported", reason: "unsupported-payload-schema" };
+  }
+  const upgraded = { ...payload };
+  delete upgraded.macOpsTokenProtocol;
+  if (!isReleasePayload(upgraded)) {
+    return { status: "unsupported", reason: "unsupported-payload-schema" };
+  }
+  return {
+    status: "upgraded",
+    migration: "remove-retired-mac-ops-token-protocol",
+    payload: upgraded,
+    payloadHash: releasePayloadValueHash(upgraded),
+  };
+}
+
 function hasReleasePayloadShape(value: Record<string, unknown>): boolean {
   return !(
     Object.keys(value).some((field) => !RELEASE_PAYLOAD_FIELD_NAMES.has(field)) ||
@@ -605,6 +654,10 @@ export function isRevisionTombstone(data: unknown): data is RevisionTombstone {
 // revision's rendered config. Non-cryptographic identity is not required; the
 // only contract is: same normalized value → same hash, any change → different.
 export function releasePayloadHash(payload: ReleasePayload): string {
+  return releasePayloadValueHash(payload);
+}
+
+function releasePayloadValueHash(payload: unknown): string {
   return createHash("sha256")
     .update(canonicalJson(payload))
     .digest("hex");

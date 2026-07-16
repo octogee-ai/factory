@@ -27,6 +27,22 @@ function stringFields(
   return fields.flatMap((field) => typeof record[field] === "string" ? [record[field] as string] : []);
 }
 
+function rolloutParentId(operation: FleetOperationLockRef): string | null {
+  if (operation.kind !== "migrate-customer") return null;
+  if (!operation.input || typeof operation.input !== "object" || Array.isArray(operation.input)) {
+    return null;
+  }
+  const rollOperationId = (operation.input as Record<string, unknown>).rollOperationId;
+  return typeof rollOperationId === "string" ? rollOperationId : null;
+}
+
+function isRolloutMigrationLineage(
+  rollout: FleetOperationLockRef,
+  migration: FleetOperationLockRef,
+): boolean {
+  return rollout.kind === "rollout" && rolloutParentId(migration) === rollout.id;
+}
+
 export function fleetOperationLockResources(
   operation: FleetOperationLockRef,
 ): ReadonlySet<string> {
@@ -47,6 +63,12 @@ export function serialFleetOperationsConflict(
   other: FleetOperationLockRef,
 ): boolean {
   if (!SERIAL_KINDS.has(candidate.kind) || !SERIAL_KINDS.has(other.kind)) return false;
+  if (
+    isRolloutMigrationLineage(candidate, other) ||
+    isRolloutMigrationLineage(other, candidate)
+  ) {
+    return false;
+  }
   if (candidate.kind === "rollout" && other.kind === "rollout") return true;
   const candidateResources = fleetOperationLockResources(candidate);
   for (const resource of fleetOperationLockResources(other)) {

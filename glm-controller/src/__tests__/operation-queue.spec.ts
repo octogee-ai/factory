@@ -139,6 +139,31 @@ describe("findSerialConflict — migrate-customer (per-target scope)", () => {
 });
 
 describe("findSerialConflict — shared migration/release-roll scope", () => {
+  it("claims a rollout-owned migration child while its parent rollout is running", () => {
+    const decision = decideOperationClaim({
+      op: {
+        id: "migration",
+        kind: "migrate-customer",
+        status: "pending",
+        createdAt: 2,
+        input: {
+          fromGatewayId: "default",
+          toGatewayId: "default-r2",
+          rollOperationId: "roll",
+        },
+      },
+      now: 1_000,
+      runningOpsSameKind: [{
+        id: "roll",
+        kind: "rollout",
+        input: { gatewayId: "default" },
+      }],
+      pendingOpsSameKind: [],
+    });
+
+    expect(decision).toEqual({ outcome: "claim" });
+  });
+
   it.each(["source", "target"])(
     "queues a release roll that begins on the migration %s gateway",
     (gatewayId) => {

@@ -1,7 +1,7 @@
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GLM_GATEWAYS_COLLECTION } from "@octogee/shared/types/glm";
 import { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, } from "@octogee/shared/types/gateway-mutable-config";
-import { GATEWAY_RELEASES_SUBCOLLECTION, isGatewayDesiredDoc, isReleasePayload, isRevisionRealizationDoc, revisionIdForRelease, } from "@octogee/shared/types/gateway-releases";
+import { GATEWAY_RELEASES_SUBCOLLECTION, isGatewayDesiredDoc, isReleasePayload, isRevisionRealizationDoc, revisionIdForRelease, upgradeReleasePayloadSchema, } from "@octogee/shared/types/gateway-releases";
 export { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, };
 export function gatewayRevisionIdFromPodName(gatewayId, podName) {
     if (!podName)
@@ -102,13 +102,19 @@ export async function readGatewayArtifact(db, gatewayId, release) {
         .get();
     const releaseData = releaseSnap.exists ? releaseSnap.data() : undefined;
     const payload = isRecord(releaseData) ? releaseData.payload : undefined;
+    let artifact = isGatewayArtifact(payload) ? payload : null;
+    if (artifact === null) {
+        const upgrade = upgradeReleasePayloadSchema(payload, isRecord(releaseData) ? releaseData.payloadHash : undefined);
+        if (upgrade.status === "upgraded")
+            artifact = upgrade.payload;
+    }
     if (!isRecord(releaseData) ||
         releaseData.gatewayId !== gatewayId ||
         releaseData.release !== release ||
-        !isGatewayArtifact(payload)) {
+        artifact === null) {
         return null;
     }
-    return gatewayArtifactFromReleasePayload(payload);
+    return gatewayArtifactFromReleasePayload(artifact);
 }
 export async function readGatewayLiveRevisionHeartbeat(db, gateway) {
     const live = canonicalGatewayRevision(gateway.gatewayId, gateway.liveRevisionId, gateway.liveRelease);

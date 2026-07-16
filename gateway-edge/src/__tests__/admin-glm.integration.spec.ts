@@ -1,6 +1,7 @@
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FieldValue } from "firebase-admin/firestore";
+import { releasePayloadHash } from "@octogee/shared/types/gateway-releases";
 
 interface FirestoreCall {
   collection: string;
@@ -422,6 +423,10 @@ function seedDurableGateway(
   } = {},
 ) {
   const imageTag = options.imageTag ?? "abc1234";
+  const payload = {
+    imageRepository: GATEWAY_REPOSITORY,
+    imageTag,
+  };
   gatewaysDocs[gatewayId] = {
     gatewayId,
     createdAt: 1,
@@ -461,11 +466,8 @@ function seedDurableGateway(
     createdBy: "test",
     sourceRelease: null,
     note: null,
-    payloadHash: "0".repeat(64),
-    payload: {
-      imageRepository: GATEWAY_REPOSITORY,
-      imageTag,
-    },
+    payloadHash: releasePayloadHash(payload),
+    payload,
   };
   if (options.heartbeat) markGatewayServing(gatewayId, options.heartbeat);
 }

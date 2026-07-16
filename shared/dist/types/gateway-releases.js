@@ -61,6 +61,30 @@ export function isReleasePayload(value) {
         isW9TestPublisherLiveExperiment(value.testExperiment) &&
         isW9GatewayEdgeImage(value.gatewayEdgeImage, value.imageTag));
 }
+export function upgradeReleasePayloadSchema(payload, persistedPayloadHash) {
+    if (typeof persistedPayloadHash !== "string" ||
+        persistedPayloadHash !== releasePayloadValueHash(payload)) {
+        return { status: "unsupported", reason: "payload-hash-mismatch" };
+    }
+    if (isReleasePayload(payload)) {
+        return { status: "current", payload, payloadHash: persistedPayloadHash };
+    }
+    if (!isPlainRecord(payload) ||
+        !Object.prototype.hasOwnProperty.call(payload, "macOpsTokenProtocol")) {
+        return { status: "unsupported", reason: "unsupported-payload-schema" };
+    }
+    const upgraded = { ...payload };
+    delete upgraded.macOpsTokenProtocol;
+    if (!isReleasePayload(upgraded)) {
+        return { status: "unsupported", reason: "unsupported-payload-schema" };
+    }
+    return {
+        status: "upgraded",
+        migration: "remove-retired-mac-ops-token-protocol",
+        payload: upgraded,
+        payloadHash: releasePayloadValueHash(upgraded),
+    };
+}
 function hasReleasePayloadShape(value) {
     return !(Object.keys(value).some((field) => !RELEASE_PAYLOAD_FIELD_NAMES.has(field)) ||
         RELEASE_PAYLOAD_REQUIRED_FIELDS.some((field) => !Object.prototype.hasOwnProperty.call(value, field)));
@@ -195,6 +219,9 @@ export function isRevisionTombstone(data) {
 // revision's rendered config. Non-cryptographic identity is not required; the
 // only contract is: same normalized value → same hash, any change → different.
 export function releasePayloadHash(payload) {
+    return releasePayloadValueHash(payload);
+}
+function releasePayloadValueHash(payload) {
     return createHash("sha256")
         .update(canonicalJson(payload))
         .digest("hex");

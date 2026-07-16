@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   revisionIdForRelease,
   releasePayloadHash,
+  upgradeReleasePayloadSchema,
   isReleasePayload,
   classifyGatewayField,
   isRevisionRealizationDoc,
@@ -231,6 +232,51 @@ describe("releasePayloadHash", () => {
   it("changes when any payload value changes", () => {
     const base = releasePayloadHash(samplePayload());
     expect(releasePayloadHash(samplePayload({ imageTag: "def5678" }))).not.toBe(base);
+  });
+});
+
+describe("upgradeReleasePayloadSchema", () => {
+  it("removes the one retired Mac field and returns the replacement hash", () => {
+    const legacyPayload = {
+      ...samplePayload(),
+      macOpsTokenProtocol: { version: 1 },
+    };
+
+    expect(upgradeReleasePayloadSchema(legacyPayload, releasePayloadHash(legacyPayload as never)))
+      .toEqual({
+        status: "upgraded",
+        migration: "remove-retired-mac-ops-token-protocol",
+        payload: samplePayload(),
+        payloadHash: releasePayloadHash(samplePayload()),
+      });
+  });
+
+  it("accepts a current payload only when its persisted hash matches", () => {
+    const payload = samplePayload();
+
+    expect(upgradeReleasePayloadSchema(payload, releasePayloadHash(payload))).toEqual({
+      status: "current",
+      payload,
+      payloadHash: releasePayloadHash(payload),
+    });
+    expect(upgradeReleasePayloadSchema(payload, "0".repeat(64))).toEqual({
+      status: "unsupported",
+      reason: "payload-hash-mismatch",
+    });
+  });
+
+  it("refuses unknown fields and a tampered legacy payload", () => {
+    const unknown = { ...samplePayload(), futureField: true };
+    const legacy = { ...samplePayload(), macOpsTokenProtocol: true };
+
+    expect(upgradeReleasePayloadSchema(unknown, releasePayloadHash(unknown as never))).toEqual({
+      status: "unsupported",
+      reason: "unsupported-payload-schema",
+    });
+    expect(upgradeReleasePayloadSchema(legacy, "0".repeat(64))).toEqual({
+      status: "unsupported",
+      reason: "payload-hash-mismatch",
+    });
   });
 });
 

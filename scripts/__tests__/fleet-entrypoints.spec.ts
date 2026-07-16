@@ -207,6 +207,46 @@ describe("fleet-controller entrypoint config", () => {
     }
   });
 
+  it("retries a transient writer lock within a fixed acquisition budget", async () => {
+    const release = vi.fn(async () => undefined);
+    const acquireLease = vi.fn()
+      .mockResolvedValueOnce({ ok: false, code: "writer-lock-busy" })
+      .mockResolvedValueOnce({ ok: false, code: "writer-lock-busy" })
+      .mockResolvedValueOnce({ ok: true, lease: { release } });
+    const wait = vi.fn(async () => undefined);
+    const configApply = vi.fn(async () => ({ ok: true as const, hash: "next" }));
+    const rpc = createSystemConfigMutationGatedRpc({
+      configGet: vi.fn(async () => ({ config: {}, hash: "current" })),
+      configApply,
+      channelsStatus: vi.fn(async () => ({ channels: [] })),
+    } as never, "/openclaw", { acquireLease: acquireLease as never, wait });
+
+    await expect(rpc.configApply({}, "current")).resolves.toEqual({ ok: true, hash: "next" });
+    expect(acquireLease).toHaveBeenCalledTimes(3);
+    expect(wait.mock.calls).toEqual([[250], [750]]);
+    expect(configApply).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("stops retrying a writer lock after three acquisition attempts", async () => {
+    const acquireLease = vi.fn(async () => ({ ok: false as const, code: "writer-lock-busy" as const }));
+    const wait = vi.fn(async () => undefined);
+    const configApply = vi.fn(async () => ({ ok: true as const, hash: "next" }));
+    const rpc = createSystemConfigMutationGatedRpc({
+      configGet: vi.fn(async () => ({ config: {}, hash: "current" })),
+      configApply,
+      channelsStatus: vi.fn(async () => ({ channels: [] })),
+    } as never, "/openclaw", { acquireLease: acquireLease as never, wait });
+
+    await expect(rpc.configApply({}, "current")).rejects.toMatchObject({
+      code: "config-writer-lock-busy",
+      retryable: true,
+    });
+    expect(acquireLease).toHaveBeenCalledTimes(3);
+    expect(wait.mock.calls).toEqual([[250], [750]]);
+    expect(configApply).not.toHaveBeenCalled();
+  });
+
   it("serializes ordinary runtime config.patch against the roll writer lock", async () => {
     const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-entrypoint-lock-"));
     const configPatch = vi.fn(async () => ({ ok: true as const, hash: "next" }));

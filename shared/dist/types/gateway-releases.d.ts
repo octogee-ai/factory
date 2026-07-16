@@ -162,6 +162,20 @@ export interface ReleasePayload {
     testExperiment?: W9TestPublisherLiveExperiment;
 }
 export declare function isReleasePayload(value: unknown): value is ReleasePayload;
+export type ReleasePayloadSchemaUpgrade = {
+    status: "current";
+    payload: ReleasePayload;
+    payloadHash: string;
+} | {
+    status: "upgraded";
+    migration: "remove-retired-mac-ops-token-protocol";
+    payload: ReleasePayload;
+    payloadHash: string;
+} | {
+    status: "unsupported";
+    reason: "payload-hash-mismatch" | "unsupported-payload-schema";
+};
+export declare function upgradeReleasePayloadSchema(payload: unknown, persistedPayloadHash: unknown): ReleasePayloadSchemaUpgrade;
 export declare function isW9GatewayEdgeImage(value: unknown, gatewayImageTag: string): value is W9GatewayEdgeImage;
 export interface ReleaseDoc {
     gatewayId: string;

@@ -69,6 +69,37 @@ describe("findActiveGatewayMigration", () => {
 });
 
 describe("serialFleetOperationsConflict", () => {
+  it("does not make a rollout wait on the migration child it created", () => {
+    const rollout = { id: "roll-1", kind: "rollout", input: { gatewayId: "default" } };
+    const child = {
+      id: "migration-1",
+      kind: "migrate-customer",
+      input: {
+        fromGatewayId: "default",
+        toGatewayId: "default-r2",
+        rollOperationId: "roll-1",
+      },
+    };
+
+    expect(serialFleetOperationsConflict(rollout, child)).toBe(false);
+    expect(serialFleetOperationsConflict(child, rollout)).toBe(false);
+  });
+
+  it("keeps a rollout isolated from migration children owned by another rollout", () => {
+    expect(serialFleetOperationsConflict(
+      { id: "roll-2", kind: "rollout", input: { gatewayId: "default" } },
+      {
+        id: "migration-1",
+        kind: "migrate-customer",
+        input: {
+          fromGatewayId: "default",
+          toGatewayId: "default-r2",
+          rollOperationId: "roll-1",
+        },
+      },
+    )).toBe(true);
+  });
+
   it("uses durable V2 source bindings across migration and rollout kinds", () => {
     expect(serialFleetOperationsConflict(
       { id: "roll", kind: "rollout", input: { gatewayId: "source" } },
