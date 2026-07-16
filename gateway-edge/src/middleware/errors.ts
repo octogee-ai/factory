@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from "express";
-import { logger } from "./logging.js";
+import { logger, redactRequestPath } from "./logging.js";
 
 const STATUS_MAP: Record<string, number> = {
   Unauthenticated: 401,
@@ -35,7 +35,7 @@ export function errorHandler(
 
   if (status >= 500) {
     logger.error(`Unhandled error: ${err.message}`, {
-      path: req.path,
+      path: redactRequestPath(req.path),
       method: req.method,
       stack: err.stack?.slice(0, 500),
     });
