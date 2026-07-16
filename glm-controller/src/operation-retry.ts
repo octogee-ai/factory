@@ -137,22 +137,7 @@ export function buildOperationCompletionUpdate(
   };
   const attemptHistory = [...(op.attemptHistory ?? []), attemptRecord];
 
-  const hasDurableCleanup =
-    result.output?.configCleanup !== null &&
-    typeof result.output?.configCleanup === "object";
-  const hasActiveCustomerMigrationV2 =
-    op.customerMigrationV2 !== undefined &&
-    op.customerMigrationV2.phase !== "complete" &&
-    op.customerMigrationV2.phase !== "aborted";
-  if (
-    classification === "transient" &&
-    (
-      attempts < MAX_OPERATION_ATTEMPTS ||
-      hasDurableCleanup ||
-      hasRetirementFencePending ||
-      hasActiveCustomerMigrationV2
-    )
-  ) {
+  if (shouldRetry(op, result, classification, attempts, hasRetirementFencePending)) {
     const backoffMs = retryBackoffMs(attempts);
     return {
       status: "pending",
@@ -179,4 +164,25 @@ export function buildOperationCompletionUpdate(
     waitingOn: FieldValue.delete(),
     ...output,
   };
+}
+
+function shouldRetry(
+  op: OperationCompletionInput["op"],
+  result: OperationResult,
+  classification: OperationFailureClassification,
+  attempts: number,
+  hasRetirementFencePending: boolean,
+): boolean {
+  if (classification !== "transient") return false;
+  const hasDurableCleanup =
+    result.output?.configCleanup !== null &&
+    typeof result.output?.configCleanup === "object";
+  const activeMigration = op.customerMigrationV2;
+  const hasActiveCustomerMigrationV2 = activeMigration !== undefined &&
+    activeMigration.phase !== "complete" &&
+    activeMigration.phase !== "aborted";
+  return attempts < MAX_OPERATION_ATTEMPTS ||
+    hasDurableCleanup ||
+    hasRetirementFencePending ||
+    hasActiveCustomerMigrationV2;
 }

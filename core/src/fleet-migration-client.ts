@@ -291,6 +291,25 @@ function assertConfigResponseBinding(
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/;
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 
+type PostSignedJson = <Resp>(
+  transportId: string,
+  path: string,
+  migrationId: string,
+  body: Record<string, unknown>,
+  timeoutMs: number,
+) => Promise<Resp>;
+
+interface MigrationMethodContext {
+  deps: MigrationClientDeps;
+  postSignedJson: PostSignedJson;
+  configMutationBody: (body: Record<string, unknown>) => Record<string, unknown>;
+  log: (msg: string) => void;
+  quiesceMs: number;
+  transferMs: number;
+  unmountMs: number;
+  verifyMs: number;
+}
+
 export function createMigrationClient(deps: MigrationClientDeps): MigrationClient {
   const fetchImpl = deps.fetch ?? globalThis.fetch;
   const log = deps.log ?? (() => undefined);
@@ -338,8 +357,6 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
     }
   };
 
-  // `transportId` resolves the K8s Service URL (revision); `path` already
-  // carries the bare tenant gatewayId — the two are deliberately independent.
   const postSignedJson = async <Resp>(
     transportId: string,
     path: string,
@@ -363,31 +380,7 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       },
       timeoutMs,
     );
-    if (!res.ok) {
-      const text = await res.text().catch(() => "<no body>");
-      let details: Record<string, unknown> = {};
-      try {
-        const parsed = JSON.parse(text) as unknown;
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          details = parsed as Record<string, unknown>;
-        }
-      } catch {
-        details = {};
-      }
-      const owner = details.owner && typeof details.owner === "object" && !Array.isArray(details.owner)
-        ? details.owner as Record<string, unknown>
-        : {};
-      throw new MigrationRpcError(`${path}: ${res.status} ${text}`, {
-        status: res.status,
-        ...(typeof details.code === "string" ? { code: details.code } : {}),
-        ...(typeof owner.migrationId === "string" || typeof details.ownerMigrationId === "string"
-          ? { ownerMigrationId: (owner.migrationId ?? details.ownerMigrationId) as string }
-          : {}),
-        ...(typeof owner.slug === "string" || typeof details.slug === "string"
-          ? { slug: (owner.slug ?? details.slug) as string }
-          : {}),
-      });
-    }
+    if (!res.ok) throw await migrationRpcError(path, res);
     try {
       return (await res.json()) as Resp;
     } catch (err) {
@@ -398,6 +391,54 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
     }
   };
 
+  const context: MigrationMethodContext = {
+    deps,
+    postSignedJson,
+    configMutationBody,
+    log,
+    quiesceMs,
+    transferMs,
+    unmountMs,
+    verifyMs,
+  };
+  return {
+    ...createLegacyConfigMethods(context),
+    ...createConfigCandidateMethods(context),
+    ...createConfigLifecycleMethods(context),
+    ...createStateMigrationMethods(context),
+  };
+}
+
+async function migrationRpcError(path: string, response: Response): Promise<MigrationRpcError> {
+  const text = await response.text().catch(() => "<no body>");
+  let details: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      details = parsed as Record<string, unknown>;
+    }
+  } catch {
+    details = {};
+  }
+  const owner = details.owner && typeof details.owner === "object" && !Array.isArray(details.owner)
+    ? details.owner as Record<string, unknown>
+    : {};
+  const options: MigrationRpcErrorOptions = { status: response.status };
+  if (typeof details.code === "string") options.code = details.code;
+  const ownerMigrationId = owner.migrationId ?? details.ownerMigrationId;
+  if (typeof ownerMigrationId === "string") options.ownerMigrationId = ownerMigrationId;
+  const slug = owner.slug ?? details.slug;
+  if (typeof slug === "string") options.slug = slug;
+  return new MigrationRpcError(`${path}: ${response.status} ${text}`, options);
+}
+
+function createLegacyConfigMethods(
+  context: MigrationMethodContext,
+): Pick<
+  MigrationClient,
+  "freezeConfig" | "proveConfigRestore" | "reproveConfigRestore" | "unfreezeConfig"
+> {
+  const { postSignedJson, configMutationBody, transferMs } = context;
   return {
     async freezeConfig({ migrationId, gatewayId, transportId, slug }) {
       const response = await postSignedJson<LegacyConfigFreezeResponse>(
@@ -479,6 +520,17 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       return response;
     },
 
+  };
+}
+
+function createConfigCandidateMethods(
+  context: MigrationMethodContext,
+): Pick<
+  MigrationClient,
+  "freezeConfigV2" | "proveConfigCandidate" | "promoteConfigCandidate"
+> {
+  const { postSignedJson, configMutationBody, transferMs } = context;
+  return {
     async freezeConfigV2(opts) {
       const response = await postSignedJson<ConfigFreezeV2Response>(
         opts.transportId ?? opts.gatewayId,
@@ -564,6 +616,17 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       return response;
     },
 
+  };
+}
+
+function createConfigLifecycleMethods(
+  context: MigrationMethodContext,
+): Pick<
+  MigrationClient,
+  "abortConfigV2" | "finalizeConfigV2" | "retireConfigV2" | "recoverRetiredConfigV2"
+> {
+  const { postSignedJson, configMutationBody, transferMs } = context;
+  return {
     async abortConfigV2(opts) {
       const response = await postSignedJson<ConfigAbortV2Response>(
         opts.transportId ?? opts.gatewayId,
@@ -662,6 +725,25 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       return response;
     },
 
+  };
+}
+
+function createStateMigrationMethods(
+  context: MigrationMethodContext,
+): Pick<
+  MigrationClient,
+  "restoreTarget" | "quiesce" | "flushGateway" | "unmount" | "transferState" | "verifyTarget"
+> {
+  const {
+    deps,
+    postSignedJson,
+    log,
+    quiesceMs,
+    transferMs,
+    unmountMs,
+    verifyMs,
+  } = context;
+  return {
     async restoreTarget({ migrationId, gatewayId, transportId, uid, slug, snapshot }) {
       const res = await postSignedJson<RestoreMigrationResponse>(
         transportId ?? gatewayId,

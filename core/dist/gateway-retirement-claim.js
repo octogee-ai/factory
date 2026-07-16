@@ -201,26 +201,33 @@ function inspectPausedRetirementState(gatewayId, root, revisions) {
             return `gateway ${gatewayId} revision ${view.id} telemetry is invalid`;
         if (view.id === liveRevisionId)
             foundLive = true;
-        if (revision.lifecycle === "retired")
-            continue;
-        const heartbeat = heartbeatFromRevision(revision);
-        if (!heartbeat ||
-            !Array.isArray(heartbeat.mountedCustomers) ||
-            !heartbeat.mountedCustomers.every((customer) => typeof customer === "string" && customer.length > 0)) {
-            return `gateway ${gatewayId} revision ${revision.revisionId} mount telemetry is unavailable`;
-        }
-        if (heartbeat.mountedCustomers.length > 0) {
-            return `gateway ${gatewayId} revision ${revision.revisionId} still has mounted customers: ${heartbeat.mountedCustomers.join(", ")}`;
-        }
-        if (hasGatewayRetirementConfigObligation(heartbeat.configStatus)) {
-            return revision.revisionId === liveRevisionId
-                ? `gateway ${gatewayId} live revision has an active config-control obligation`
-                : `gateway ${gatewayId} revision ${revision.revisionId} has an active config-control obligation`;
-        }
+        const error = pausedRevisionError(gatewayId, liveRevisionId, revision);
+        if (error)
+            return error;
     }
     return foundLive
         ? null
         : `gateway ${gatewayId} exact live revision telemetry is unavailable`;
+}
+function pausedRevisionError(gatewayId, liveRevisionId, revision) {
+    if (revision.lifecycle === "retired")
+        return null;
+    const heartbeat = heartbeatFromRevision(revision);
+    const mountedCustomers = heartbeat?.mountedCustomers;
+    const mountsValid = Array.isArray(mountedCustomers) &&
+        mountedCustomers.every((customer) => typeof customer === "string" && customer.length > 0);
+    if (!mountsValid) {
+        return `gateway ${gatewayId} revision ${revision.revisionId} mount telemetry is unavailable`;
+    }
+    if (mountedCustomers.length > 0) {
+        return `gateway ${gatewayId} revision ${revision.revisionId} still has mounted customers: ${mountedCustomers.join(", ")}`;
+    }
+    if (!hasGatewayRetirementConfigObligation(heartbeat.configStatus))
+        return null;
+    if (revision.revisionId === liveRevisionId) {
+        return `gateway ${gatewayId} live revision has an active config-control obligation`;
+    }
+    return `gateway ${gatewayId} revision ${revision.revisionId} has an active config-control obligation`;
 }
 function runtimeIdentity(value) {
     if (!isPlainRecord(value))
@@ -245,7 +252,8 @@ function sameRuntimeIdentity(left, right) {
         left.openclawVersion === right.openclawVersion;
 }
 function isSha(value, length) {
-    return typeof value === "string" && new RegExp(`^[0-9a-f]{${length}}$`).test(value);
+    const pattern = length === 40 ? /^[0-9a-f]{40}$/ : /^[0-9a-f]{64}$/;
+    return typeof value === "string" && pattern.test(value);
 }
 function readConfigCheckpoint(value) {
     if (!isPlainRecord(value))
@@ -293,24 +301,26 @@ function readClaim(value) {
     const terminal = value.configTerminal === null
         ? null
         : readConfigTerminal(value.configTerminal);
-    if (typeof value.operationId !== "string" ||
-        !Number.isInteger(value.version) ||
-        value.version <= 0 ||
-        typeof value.claimedAt !== "number" ||
-        !Number.isFinite(value.claimedAt) ||
-        (value.previousDesiredStatus !== "running" && value.previousDesiredStatus !== "paused") ||
-        typeof value.liveRevisionId !== "string" ||
-        !Number.isInteger(value.liveRelease) ||
-        value.liveRelease <= 0 ||
-        (phase !== "waking" && phase !== "claimed") ||
-        (phase === "waking" && value.liveRuntimeIdentity !== null) ||
-        (phase === "claimed" && identity === null) ||
-        (value.configCheckpoint !== null && checkpoint === null) ||
-        (value.configTerminal !== null && terminal === null) ||
-        (terminal !== null && checkpoint === null) ||
-        (phase === "waking" && checkpoint !== null)) {
+    const valid = [
+        typeof value.operationId === "string",
+        Number.isInteger(value.version),
+        value.version > 0,
+        typeof value.claimedAt === "number",
+        Number.isFinite(value.claimedAt),
+        value.previousDesiredStatus === "running" || value.previousDesiredStatus === "paused",
+        typeof value.liveRevisionId === "string",
+        Number.isInteger(value.liveRelease),
+        value.liveRelease > 0,
+        phase === "waking" || phase === "claimed",
+        phase !== "waking" || value.liveRuntimeIdentity === null,
+        phase !== "claimed" || identity !== null,
+        value.configCheckpoint === null || checkpoint !== null,
+        value.configTerminal === null || terminal !== null,
+        terminal === null || checkpoint !== null,
+        phase !== "waking" || checkpoint === null,
+    ].every(Boolean);
+    if (!valid)
         return null;
-    }
     return value;
 }
 function nextRetirementVersion(value) {
@@ -327,6 +337,28 @@ function operationInput(operation) {
     }
     return operation.input;
 }
+function claimableGatewayRetirementRoot(gatewayId, value) {
+    if (!isGatewayDesiredDoc(value) || value.gatewayId !== gatewayId) {
+        throw new GatewayRetirementConflictError(`gateway ${gatewayId} durable root is unavailable`);
+    }
+    const root = value;
+    if (value.desiredStatus === "retired") {
+        throw new GatewayRetirementConflictError(`gateway ${gatewayId} is already retired`);
+    }
+    if (root.retirementClaim != null) {
+        throw new GatewayRetirementConflictError(`gateway ${gatewayId} already has a retirement claim`);
+    }
+    if (hasRootConfigControlObligation(root)) {
+        throw new GatewayRetirementConflictError(`gateway ${gatewayId} has an unfinished release roll and config obligation`);
+    }
+    if (value.desiredRelease !== value.liveRelease) {
+        throw new GatewayRetirementConflictError(`gateway ${gatewayId} desired release is not converged to live`);
+    }
+    return {
+        rootData: value,
+        root,
+    };
+}
 export async function claimGatewayRetirementAtomic(input) {
     const rootRef = input.db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId);
     const operationRef = input.db
@@ -339,23 +371,7 @@ export async function claimGatewayRetirementAtomic(input) {
                 .collection(GLM_OPERATIONS_COLLECTION)
                 .where("status", "in", ["pending", "running"])),
         ]);
-        const rootData = rootSnap.exists ? rootSnap.data() : undefined;
-        if (!isGatewayDesiredDoc(rootData) || rootData.gatewayId !== input.gatewayId) {
-            throw new GatewayRetirementConflictError(`gateway ${input.gatewayId} durable root is unavailable`);
-        }
-        const root = rootData;
-        if (rootData.desiredStatus === "retired") {
-            throw new GatewayRetirementConflictError(`gateway ${input.gatewayId} is already retired`);
-        }
-        if (root.retirementClaim != null) {
-            throw new GatewayRetirementConflictError(`gateway ${input.gatewayId} already has a retirement claim`);
-        }
-        if (hasRootConfigControlObligation(root)) {
-            throw new GatewayRetirementConflictError(`gateway ${input.gatewayId} has an unfinished release roll and config obligation`);
-        }
-        if (rootData.desiredRelease !== rootData.liveRelease) {
-            throw new GatewayRetirementConflictError(`gateway ${input.gatewayId} desired release is not converged to live`);
-        }
+        const { rootData, root } = claimableGatewayRetirementRoot(input.gatewayId, rootSnap.exists ? rootSnap.data() : undefined);
         const migrationConflict = findActiveGatewayMigration(input.gatewayId, activeOperations.docs.map((doc) => {
             const operation = doc.data();
             return {
@@ -412,6 +428,38 @@ export async function claimGatewayRetirementAtomic(input) {
 function retryableWakeAttestationError(error) {
     return /telemetry is (stale or )?unavailable|telemetry\/config status is unavailable/.test(error);
 }
+function matchingRetirementClaim(root, operationId, version) {
+    const claim = readClaim(root.retirementClaim);
+    return claim?.operationId === operationId && claim.version === version ? claim : null;
+}
+function claimedWakeAttestation(gatewayId, rootData, root, claim) {
+    const dedicated = root.gatewayClass === "builder" || root.gatewayClass === "operator";
+    const expectedStatus = dedicated && claim.configTerminal === null ? "running" : "retired";
+    if (rootData.desiredStatus === expectedStatus) {
+        return { ok: true, wakeRequired: claim.previousDesiredStatus === "paused" };
+    }
+    return {
+        ok: false,
+        error: `gateway ${gatewayId} desiredStatus does not match retirement phase`,
+        retryable: false,
+    };
+}
+function wakeClaimStateError(gatewayId, rootData, root, claim) {
+    const claimValid = [
+        claim.previousDesiredStatus === "paused",
+        rootData.desiredStatus === "running",
+        claim.configCheckpoint === null,
+    ].every(Boolean);
+    if (!claimValid)
+        return `gateway ${gatewayId} retirement wake claim is invalid`;
+    const stateCurrent = [
+        root.liveRevisionId === claim.liveRevisionId,
+        root.liveRelease === claim.liveRelease,
+        rootData.desiredRelease === rootData.liveRelease,
+        !hasRootConfigControlObligation(root),
+    ].every(Boolean);
+    return stateCurrent ? null : `gateway ${gatewayId} durable state changed during retirement wake`;
+}
 export async function attestGatewayRetirementAfterWakeAtomic(input) {
     const rootRef = input.db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId);
     return input.db.runTransaction(async (transaction) => {
@@ -425,10 +473,8 @@ export async function attestGatewayRetirementAfterWakeAtomic(input) {
             };
         }
         const root = rootData;
-        const claim = readClaim(root.retirementClaim);
-        if (!claim ||
-            claim.operationId !== input.operationId ||
-            claim.version !== input.version) {
+        const claim = matchingRetirementClaim(root, input.operationId, input.version);
+        if (!claim) {
             return {
                 ok: false,
                 error: `gateway ${input.gatewayId} retirement claim does not match operation ${input.operationId}`,
@@ -436,32 +482,13 @@ export async function attestGatewayRetirementAfterWakeAtomic(input) {
             };
         }
         if (claim.phase === "claimed") {
-            const dedicatedUnbound = (root.gatewayClass === "builder" || root.gatewayClass === "operator") &&
-                claim.configTerminal === null;
-            return rootData.desiredStatus === (dedicatedUnbound ? "running" : "retired")
-                ? { ok: true, wakeRequired: claim.previousDesiredStatus === "paused" }
-                : {
-                    ok: false,
-                    error: `gateway ${input.gatewayId} desiredStatus does not match retirement phase`,
-                    retryable: false,
-                };
+            return claimedWakeAttestation(input.gatewayId, rootData, root, claim);
         }
-        if (claim.previousDesiredStatus !== "paused" ||
-            rootData.desiredStatus !== "running" ||
-            claim.configCheckpoint !== null) {
+        const stateError = wakeClaimStateError(input.gatewayId, rootData, root, claim);
+        if (stateError) {
             return {
                 ok: false,
-                error: `gateway ${input.gatewayId} retirement wake claim is invalid`,
-                retryable: false,
-            };
-        }
-        if (root.liveRevisionId !== claim.liveRevisionId ||
-            root.liveRelease !== claim.liveRelease ||
-            rootData.desiredRelease !== rootData.liveRelease ||
-            hasRootConfigControlObligation(root)) {
-            return {
-                ok: false,
-                error: `gateway ${input.gatewayId} durable state changed during retirement wake`,
+                error: stateError,
                 retryable: false,
             };
         }
@@ -579,11 +606,8 @@ export async function bindGatewayRetirementConfigCheckpointAtomic(input) {
             };
         }
         const root = rootData;
-        const claim = readClaim(root.retirementClaim);
-        if (!claim ||
-            claim.operationId !== input.operationId ||
-            claim.version !== input.version ||
-            claim.phase !== "claimed") {
+        const claim = matchingRetirementClaim(root, input.operationId, input.version);
+        if (!claim || claim.phase !== "claimed") {
             return {
                 ok: false,
                 error: `gateway ${input.gatewayId} retirement claim does not match operation ${input.operationId}`,
@@ -592,11 +616,15 @@ export async function bindGatewayRetirementConfigCheckpointAtomic(input) {
         const bindingError = checkpointBindingError(input.gatewayId, input.operationId, root, claim, input.checkpoint);
         if (bindingError)
             return { ok: false, error: bindingError };
-        if (rootData.desiredStatus !== (claim.configTerminal === null ? "running" : "retired") ||
-            root.liveRevisionId !== claim.liveRevisionId ||
-            root.liveRelease !== claim.liveRelease ||
-            rootData.desiredRelease !== rootData.liveRelease ||
-            hasRootConfigControlObligation(root)) {
+        const expectedStatus = claim.configTerminal === null ? "running" : "retired";
+        const stateCurrent = [
+            rootData.desiredStatus === expectedStatus,
+            root.liveRevisionId === claim.liveRevisionId,
+            root.liveRelease === claim.liveRelease,
+            rootData.desiredRelease === rootData.liveRelease,
+            !hasRootConfigControlObligation(root),
+        ].every(Boolean);
+        if (!stateCurrent) {
             return {
                 ok: false,
                 error: `gateway ${input.gatewayId} durable state changed before config checkpoint binding`,
@@ -618,7 +646,8 @@ export async function bindGatewayRetirementConfigCheckpointAtomic(input) {
         return { ok: true };
     });
 }
-function finalRetirementStateError(gatewayId, root, claim, revisions, now, recoveryCheckpoint) {
+function finalRetirementRootError(input) {
+    const { gatewayId, root, claim } = input;
     if (root.liveRevisionId !== claim.liveRevisionId ||
         root.liveRelease !== claim.liveRelease) {
         return `gateway ${gatewayId} live revision changed after retirement claim`;
@@ -629,67 +658,94 @@ function finalRetirementStateError(gatewayId, root, claim, revisions, now, recov
     if (root.desiredRelease !== root.liveRelease) {
         return `gateway ${gatewayId} desired release is not converged to live`;
     }
+    return null;
+}
+function inspectFinalRetirementRevisions(input) {
+    const { gatewayId, claim, revisions, now } = input;
     let liveRevision = null;
     for (const view of revisions) {
         const revision = canonicalRevision(gatewayId, view);
-        if (!revision)
-            return `gateway ${gatewayId} revision ${view.id} telemetry is invalid`;
+        if (!revision) {
+            return {
+                error: `gateway ${gatewayId} revision ${view.id} telemetry is invalid`,
+                liveRevision: null,
+            };
+        }
         if (revision.lifecycle === "retired")
             continue;
         if (revision.revisionId !== claim.liveRevisionId) {
             const error = nonRetiredRevisionError(gatewayId, claim.liveRevisionId, revision, now, true);
             if (error)
-                return error;
+                return { error, liveRevision: null };
             continue;
         }
         liveRevision = revision;
         const heartbeat = heartbeatFromRevision(revision);
-        if (!heartbeat ||
-            !Array.isArray(heartbeat.mountedCustomers) ||
-            !heartbeat.mountedCustomers.every((customer) => typeof customer === "string" && customer.length > 0)) {
-            return `gateway ${gatewayId} revision ${revision.revisionId} mount telemetry is unavailable`;
+        const mountedCustomers = heartbeat?.mountedCustomers;
+        const mountsValid = Array.isArray(mountedCustomers) &&
+            mountedCustomers.every((customer) => typeof customer === "string" && customer.length > 0);
+        if (!mountsValid) {
+            return {
+                error: `gateway ${gatewayId} revision ${revision.revisionId} mount telemetry is unavailable`,
+                liveRevision: null,
+            };
         }
-        if (heartbeat.mountedCustomers.length > 0) {
-            return `gateway ${gatewayId} revision ${revision.revisionId} still has mounted customers: ${heartbeat.mountedCustomers.join(", ")}`;
+        if (mountedCustomers.length > 0) {
+            return {
+                error: `gateway ${gatewayId} revision ${revision.revisionId} still has mounted customers: ${mountedCustomers.join(", ")}`,
+                liveRevision: null,
+            };
         }
     }
-    const identity = liveRuntimeIdentity(liveRevision, now, false);
-    if (!identity) {
-        return `gateway ${gatewayId} exact live revision telemetry is unavailable`;
+    return { error: null, liveRevision };
+}
+function recoveryFenceIsExact(input, liveRevision, identity) {
+    const checkpoint = input.recoveryCheckpoint;
+    const heartbeat = heartbeatFromRevision(liveRevision);
+    const status = heartbeat && isPlainRecord(heartbeat.configStatus)
+        ? heartbeat.configStatus
+        : null;
+    const owner = status && isPlainRecord(status.controlOwner)
+        ? status.controlOwner
+        : null;
+    if (!heartbeat || !status || !input.claim.liveRuntimeIdentity || !owner)
+        return false;
+    return [
+        identity.version === input.claim.liveRuntimeIdentity.version,
+        identity.openclawVersion === input.claim.liveRuntimeIdentity.openclawVersion,
+        hasDurableOpenClawConfigControlProtocol(status),
+        freshObservation(status.observedAt, input.now),
+        status.runtimeReady === true,
+        status.openclawVersion === heartbeat.openclawVersion,
+        status.freezeState === "frozen",
+        status.bootRole === "source-frozen",
+        status.checkpointCommit === checkpoint.checkpointCommit,
+        status.configHash === checkpoint.configHash,
+        owner.migrationId === checkpoint.migrationId,
+        owner.sourceRevisionId === checkpoint.sourceRevisionId,
+        owner.targetRevisionId === checkpoint.targetRevisionId,
+        !nonEmptyString(status.candidateCommit),
+        !nonEmptyString(status.candidateHash),
+    ].every(Boolean);
+}
+function finalRetirementStateError(input) {
+    const rootError = finalRetirementRootError(input);
+    if (rootError)
+        return rootError;
+    const inspected = inspectFinalRetirementRevisions(input);
+    if (inspected.error)
+        return inspected.error;
+    const identity = liveRuntimeIdentity(inspected.liveRevision, input.now, false);
+    if (!identity || !inspected.liveRevision) {
+        return `gateway ${input.gatewayId} exact live revision telemetry is unavailable`;
     }
-    if (recoveryCheckpoint) {
-        const heartbeat = heartbeatFromRevision(liveRevision);
-        const status = heartbeat && isPlainRecord(heartbeat.configStatus)
-            ? heartbeat.configStatus
-            : null;
-        const owner = status && isPlainRecord(status.controlOwner)
-            ? status.controlOwner
-            : null;
-        if (!heartbeat ||
-            !status ||
-            !claim.liveRuntimeIdentity ||
-            identity.version !== claim.liveRuntimeIdentity.version ||
-            identity.openclawVersion !== claim.liveRuntimeIdentity.openclawVersion ||
-            !hasDurableOpenClawConfigControlProtocol(status) ||
-            !freshObservation(status.observedAt, now) ||
-            status.runtimeReady !== true ||
-            status.openclawVersion !== heartbeat.openclawVersion ||
-            status.freezeState !== "frozen" ||
-            status.bootRole !== "source-frozen" ||
-            status.checkpointCommit !== recoveryCheckpoint.checkpointCommit ||
-            status.configHash !== recoveryCheckpoint.configHash ||
-            !owner ||
-            owner.migrationId !== recoveryCheckpoint.migrationId ||
-            owner.sourceRevisionId !== recoveryCheckpoint.sourceRevisionId ||
-            owner.targetRevisionId !== recoveryCheckpoint.targetRevisionId ||
-            nonEmptyString(status.candidateCommit) ||
-            nonEmptyString(status.candidateHash)) {
-            return `gateway ${gatewayId} restarted source retirement fence telemetry is not exact`;
-        }
-        return null;
+    if (input.recoveryCheckpoint) {
+        return recoveryFenceIsExact(input, inspected.liveRevision, identity)
+            ? null
+            : `gateway ${input.gatewayId} restarted source retirement fence telemetry is not exact`;
     }
-    if (!sameRuntimeIdentity(claim.liveRuntimeIdentity, identity)) {
-        return `gateway ${gatewayId} live runtime identity changed after retirement claim`;
+    if (!sameRuntimeIdentity(input.claim.liveRuntimeIdentity, identity)) {
+        return `gateway ${input.gatewayId} live runtime identity changed after retirement claim`;
     }
     return null;
 }
@@ -705,18 +761,16 @@ export async function verifyGatewayRetirementConfigCheckpointAtomic(input) {
             };
         }
         const root = rootData;
-        const claim = readClaim(root.retirementClaim);
-        if (!claim ||
-            claim.operationId !== input.operationId ||
-            claim.version !== input.version ||
-            claim.phase !== "claimed") {
+        const claim = matchingRetirementClaim(root, input.operationId, input.version);
+        if (!claim || claim.phase !== "claimed") {
             return {
                 ok: false,
                 error: `gateway ${input.gatewayId} retirement claim does not match operation ${input.operationId}`,
             };
         }
-        if (claim.configCheckpoint === null ||
-            !sameConfigCheckpoint(claim.configCheckpoint, input.checkpoint)) {
+        const checkpointCurrent = claim.configCheckpoint !== null &&
+            sameConfigCheckpoint(claim.configCheckpoint, input.checkpoint);
+        if (!checkpointCurrent) {
             return {
                 ok: false,
                 error: `gateway ${input.gatewayId} retirement config checkpoint changed before teardown`,
@@ -732,7 +786,13 @@ export async function verifyGatewayRetirementConfigCheckpointAtomic(input) {
             };
         }
         const revisionsSnap = await transaction.get(input.db.collection(GLM_GATEWAYS_COLLECTION).where("gateway", "==", input.gatewayId));
-        const stateError = finalRetirementStateError(input.gatewayId, root, claim, revisionsSnap.docs.map((doc) => ({ id: doc.id, data: doc.data() })), input.now);
+        const stateError = finalRetirementStateError({
+            gatewayId: input.gatewayId,
+            root,
+            claim,
+            revisions: revisionsSnap.docs.map((doc) => ({ id: doc.id, data: doc.data() })),
+            now: input.now,
+        });
         return stateError ? { ok: false, error: stateError } : { ok: true };
     });
 }
@@ -743,6 +803,9 @@ function terminalBindingError(gatewayId, checkpoint, terminal) {
         return `gateway ${gatewayId} retirement config terminal binding is invalid`;
     }
     return null;
+}
+function retirementTerminalDesiredStatus(claim) {
+    return claim.configTerminal === null ? "running" : "retired";
 }
 export async function bindGatewayRetirementConfigTerminalAtomic(input) {
     const rootRef = input.db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId);
@@ -756,18 +819,16 @@ export async function bindGatewayRetirementConfigTerminalAtomic(input) {
             };
         }
         const root = rootData;
-        const claim = readClaim(root.retirementClaim);
-        if (!claim ||
-            claim.operationId !== input.operationId ||
-            claim.version !== input.version ||
-            claim.phase !== "claimed") {
+        const claim = matchingRetirementClaim(root, input.operationId, input.version);
+        if (!claim || claim.phase !== "claimed") {
             return {
                 ok: false,
                 error: `gateway ${input.gatewayId} retirement claim does not match operation ${input.operationId}`,
             };
         }
-        if (claim.configCheckpoint === null ||
-            !sameConfigCheckpoint(claim.configCheckpoint, input.checkpoint)) {
+        const checkpointCurrent = claim.configCheckpoint !== null &&
+            sameConfigCheckpoint(claim.configCheckpoint, input.checkpoint);
+        if (!checkpointCurrent) {
             return {
                 ok: false,
                 error: `gateway ${input.gatewayId} retirement config checkpoint changed before teardown`,
@@ -776,7 +837,7 @@ export async function bindGatewayRetirementConfigTerminalAtomic(input) {
         const bindingError = checkpointBindingError(input.gatewayId, input.operationId, root, claim, input.checkpoint) ?? terminalBindingError(input.gatewayId, input.checkpoint, input.terminal);
         if (bindingError)
             return { ok: false, error: bindingError };
-        const expectedDesiredStatus = claim.configTerminal === null ? "running" : "retired";
+        const expectedDesiredStatus = retirementTerminalDesiredStatus(claim);
         if (rootData.desiredStatus !== expectedDesiredStatus) {
             return {
                 ok: false,
@@ -784,15 +845,22 @@ export async function bindGatewayRetirementConfigTerminalAtomic(input) {
             };
         }
         if (claim.configTerminal !== null) {
-            return sameConfigTerminal(claim.configTerminal, input.terminal)
-                ? { ok: true }
-                : {
-                    ok: false,
-                    error: `gateway ${input.gatewayId} retirement config terminal changed before teardown`,
-                };
+            if (sameConfigTerminal(claim.configTerminal, input.terminal))
+                return { ok: true };
+            return {
+                ok: false,
+                error: `gateway ${input.gatewayId} retirement config terminal changed before teardown`,
+            };
         }
         const revisionsSnap = await transaction.get(input.db.collection(GLM_GATEWAYS_COLLECTION).where("gateway", "==", input.gatewayId));
-        const stateError = finalRetirementStateError(input.gatewayId, root, claim, revisionsSnap.docs.map((doc) => ({ id: doc.id, data: doc.data() })), input.now, input.recovery ? input.checkpoint : undefined);
+        const stateError = finalRetirementStateError({
+            gatewayId: input.gatewayId,
+            root,
+            claim,
+            revisions: revisionsSnap.docs.map((doc) => ({ id: doc.id, data: doc.data() })),
+            now: input.now,
+            ...(input.recovery ? { recoveryCheckpoint: input.checkpoint } : {}),
+        });
         if (stateError)
             return { ok: false, error: stateError };
         transaction.set(rootRef, {
