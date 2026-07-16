@@ -28,6 +28,20 @@ export interface SerialConflict {
   waitingOn: string;
 }
 
+export function findRunningRolloutParentOperationId(
+  gatewayId: string,
+  runningOperations: ReadonlyArray<OperationRef>,
+): string | null {
+  const matches = runningOperations.filter((operation) =>
+    operation.kind === "rollout" &&
+    (operation.input?.gatewayId === gatewayId || operation.input?.fromGatewayId === gatewayId)
+  );
+  if (matches.length > 1) {
+    throw new Error(`multiple running rollout operations target gateway ${gatewayId}`);
+  }
+  return matches[0]?.id ?? null;
+}
+
 export function findSerialConflict(
   candidate: OperationRef,
   runningOpsSameKind: ReadonlyArray<OperationRef>,

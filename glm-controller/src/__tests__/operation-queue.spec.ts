@@ -1,9 +1,26 @@
 import { describe, expect, it } from "vitest";
 import {
   decideOperationClaim,
+  findRunningRolloutParentOperationId,
   findSerialConflict,
   isSeriallyExclusiveKind,
 } from "../operation-queue";
+
+describe("findRunningRolloutParentOperationId", () => {
+  it("finds the rollout document that owns a gateway's release roll", () => {
+    expect(findRunningRolloutParentOperationId("default", [
+      { id: "other", kind: "migrate-customer", input: { toGatewayId: "default" } },
+      { id: "rollout-document", kind: "rollout", input: { gatewayId: "default" } },
+    ])).toBe("rollout-document");
+  });
+
+  it("rejects an impossible ambiguous parent instead of guessing", () => {
+    expect(() => findRunningRolloutParentOperationId("default", [
+      { id: "rollout-a", kind: "rollout", input: { gatewayId: "default" } },
+      { id: "rollout-b", kind: "rollout", input: { fromGatewayId: "default" } },
+    ])).toThrow("multiple running rollout operations target gateway default");
+  });
+});
 
 describe("isSeriallyExclusiveKind", () => {
   it("treats rollout as globally serial — one blue/green plane at a time", () => {
@@ -149,12 +166,13 @@ describe("findSerialConflict — shared migration/release-roll scope", () => {
         input: {
           fromGatewayId: "default",
           toGatewayId: "default-r2",
-          rollOperationId: "roll",
+          rollOperationId: "roll-default-r2-1",
+          parentOperationId: "rollout-document",
         },
       },
       now: 1_000,
       runningOpsSameKind: [{
-        id: "roll",
+        id: "rollout-document",
         kind: "rollout",
         input: { gatewayId: "default" },
       }],

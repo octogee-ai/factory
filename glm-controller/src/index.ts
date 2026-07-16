@@ -108,6 +108,7 @@ import {
 import { createOperationContext } from "./operation-context.js";
 import {
   decideOperationClaim,
+  findRunningRolloutParentOperationId,
   isSeriallyExclusiveKind,
   type OperationRef,
   type PendingOperationRef,
@@ -1179,6 +1180,17 @@ function buildRollRevisionAndMigrationDeps(
       systemConfigMigrationMode,
       preAcquiredConfigCheckpoint,
     }) => {
+      const runningSnap = await db
+        .collection(GLM_OPERATIONS_COLLECTION)
+        .where("status", "==", "running")
+        .get();
+      const parentOperationId = findRunningRolloutParentOperationId(
+        gatewayId,
+        runningSnap.docs.map((doc) => {
+          const operation = doc.data() as Operation;
+          return { id: doc.id, kind: operation.kind, input: operation.input };
+        }),
+      );
       const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
       await opRef.set(
         buildRollMigrateOpDoc({
@@ -1186,6 +1198,7 @@ function buildRollRevisionAndMigrationDeps(
           builderSlug: slug,
           gatewayId,
           rollOperationId,
+          ...(parentOperationId ? { parentOperationId } : {}),
           createdAt: Date.now(),
           systemConfigMigrationMode,
           ...(preAcquiredConfigCheckpoint ? { preAcquiredConfigCheckpoint } : {}),

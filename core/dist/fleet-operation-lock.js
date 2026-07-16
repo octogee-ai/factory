@@ -21,8 +21,8 @@ function rolloutParentId(operation) {
     if (!operation.input || typeof operation.input !== "object" || Array.isArray(operation.input)) {
         return null;
     }
-    const rollOperationId = operation.input.rollOperationId;
-    return typeof rollOperationId === "string" ? rollOperationId : null;
+    const parentOperationId = operation.input.parentOperationId;
+    return typeof parentOperationId === "string" ? parentOperationId : null;
 }
 function isRolloutMigrationLineage(rollout, migration) {
     return rollout.kind === "rollout" && rolloutParentId(migration) === rollout.id;

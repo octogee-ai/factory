@@ -70,14 +70,15 @@ describe("findActiveGatewayMigration", () => {
 
 describe("serialFleetOperationsConflict", () => {
   it("does not make a rollout wait on the migration child it created", () => {
-    const rollout = { id: "roll-1", kind: "rollout", input: { gatewayId: "default" } };
+    const rollout = { id: "rollout-document-1", kind: "rollout", input: { gatewayId: "default" } };
     const child = {
       id: "migration-1",
       kind: "migrate-customer",
       input: {
         fromGatewayId: "default",
         toGatewayId: "default-r2",
-        rollOperationId: "roll-1",
+        rollOperationId: "roll-default-r2-1",
+        parentOperationId: "rollout-document-1",
       },
     };
 

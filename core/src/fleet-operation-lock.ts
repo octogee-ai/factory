@@ -32,8 +32,8 @@ function rolloutParentId(operation: FleetOperationLockRef): string | null {
   if (!operation.input || typeof operation.input !== "object" || Array.isArray(operation.input)) {
     return null;
   }
-  const rollOperationId = (operation.input as Record<string, unknown>).rollOperationId;
-  return typeof rollOperationId === "string" ? rollOperationId : null;
+  const parentOperationId = (operation.input as Record<string, unknown>).parentOperationId;
+  return typeof parentOperationId === "string" ? parentOperationId : null;
 }
 
 function isRolloutMigrationLineage(
