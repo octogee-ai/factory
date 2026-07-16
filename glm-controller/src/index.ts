@@ -238,6 +238,11 @@ import {
   startMaintenanceRestartWatcher,
   type ControllerMaintenanceGate,
 } from "./maintenance-gate.js";
+import {
+  createFirestoreReleaseAdmissionGate,
+  operationAllowedDuringReleaseDrain,
+  type ControllerReleaseAdmissionGate,
+} from "./release-admission-gate.js";
 import type {
   FleetBrokerChannelBinding,
   FleetBrokerProjectRestore,
@@ -392,6 +397,7 @@ interface ControllerDeps {
   handlers: OperationHandlers;
   log: (msg: string) => void;
   maintenanceGate?: ControllerMaintenanceGate;
+  releaseAdmissionGate?: ControllerReleaseAdmissionGate;
 
   syncFleetIngress?: (
     gateways: ReadonlyArray<{ gatewayId: string }>,
@@ -1037,6 +1043,7 @@ interface BuildRollPassDepsArgs {
   gatewayAliasServiceEnsurer: GatewayAliasServiceEnsurer;
   chartFingerprint?: string;
   prepareGatewayConfig: (config: GatewayRuntimeRoot) => Promise<GatewayRuntimeRoot>;
+  releaseAdmissionGate: ControllerReleaseAdmissionGate;
   log: (msg: string) => void;
 }
 
@@ -1490,6 +1497,7 @@ function buildRollPassDeps(args: BuildRollPassDepsArgs): RollPassDeps {
     sourceForwarderTtlMs: ROLL_SOURCE_FORWARDER_TTL_MS,
     migrateRetryBackoffMs: ROLL_MIGRATE_RETRY_BACKOFF_MS,
     ...buildRollRevisionAndMigrationDeps(args),
+    releaseAdmissionDraining: async () => (await args.releaseAdmissionGate.state()).draining,
     isSystemConfigProtocolFleetReady: () => isFleetConfigProtocolReady(db),
     checkpointConfigFreeze: async ({ gatewayId, revisionId, migrationId, slug }) => {
       const sourceUrl = await resolveGatewayUrlFromFirestore(db, revisionId);
@@ -2370,6 +2378,12 @@ async function attemptClaimOrQueueOperation(
       if (!fresh.exists) return { outcome: "skipped" as const };
       const data = fresh.data() as Operation | undefined;
       if (!data) return { outcome: "skipped" as const };
+      if (deps.releaseAdmissionGate) {
+        const gate = await deps.releaseAdmissionGate.stateInTransaction(txn);
+        if (gate.draining && !operationAllowedDuringReleaseDrain(data)) {
+          return { outcome: "skipped" as const };
+        }
+      }
 
       let runningOpsSameKind: OperationRef[] = [];
       let pendingOpsSameKind: PendingOperationRef[] = [];
@@ -2983,6 +2997,7 @@ interface ControllerRuntime {
 async function createControllerRuntime(
   db: Firestore,
   maintenanceGate: ControllerMaintenanceGate,
+  releaseAdmissionGate: ControllerReleaseAdmissionGate,
 ): Promise<ControllerRuntime> {
   const runKubectl: KubectlSubprocess = (args, opts) => spawnKubectl(args, opts);
   const authSecretEnsurer = createAuthSecretEnsurer({
@@ -3105,6 +3120,7 @@ async function createControllerRuntime(
         gatewayAliasServiceEnsurer,
         chartFingerprint,
         prepareGatewayConfig,
+        releaseAdmissionGate,
         log,
       }),
     );
@@ -3130,6 +3146,7 @@ async function createControllerRuntime(
     handlers,
     log,
     maintenanceGate,
+    releaseAdmissionGate,
     syncFleetIngress: syncEdgeIngressForGateways,
     convergeEmpty,
     convergeRoll,
@@ -3148,6 +3165,7 @@ async function main(): Promise<void> {
   });
   const db = getFirestore();
   const maintenanceGate = createFirestoreMaintenanceGate(db);
+  const releaseAdmissionGate = createFirestoreReleaseAdmissionGate(db);
   if (await maintenanceGateFrozen(maintenanceGate, log, "startup")) {
     holdFrozenController(maintenanceGate, log);
     return;
@@ -3155,6 +3173,7 @@ async function main(): Promise<void> {
   const { deps, fleetControllerPrivateKey, chartFingerprint } = await createControllerRuntime(
     db,
     maintenanceGate,
+    releaseAdmissionGate,
   );
 
   log(
