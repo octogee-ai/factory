@@ -96,6 +96,10 @@
       "types": "./dist/customer-snapshot-mapping.d.ts",
       "default": "./dist/customer-snapshot-mapping.js"
     },
+    "./customer-migration-v2": {
+      "types": "./dist/customer-migration-v2.d.ts",
+      "default": "./dist/customer-migration-v2.js"
+    },
     "./firebase-auth-helpers": {
       "types": "./dist/firebase-auth-helpers.d.ts",
       "default": "./dist/firebase-auth-helpers.js"
@@ -115,6 +119,10 @@
     "./fleet-migration-runner": {
       "types": "./dist/fleet-migration-runner.d.ts",
       "default": "./dist/fleet-migration-runner.js"
+    },
+    "./fleet-operation-lock": {
+      "types": "./dist/fleet-operation-lock.d.ts",
+      "default": "./dist/fleet-operation-lock.js"
     },
     "./fleet-signature": {
       "types": "./dist/fleet-signature.d.ts",
@@ -381,6 +389,9 @@
       "customer-snapshot-mapping": [
         "dist/customer-snapshot-mapping.d.ts"
       ],
+      "customer-migration-v2": [
+        "dist/customer-migration-v2.d.ts"
+      ],
       "firebase-auth-helpers": [
         "dist/firebase-auth-helpers.d.ts"
       ],
@@ -395,6 +406,9 @@
       ],
       "fleet-migration-runner": [
         "dist/fleet-migration-runner.d.ts"
+      ],
+      "fleet-operation-lock": [
+        "dist/fleet-operation-lock.d.ts"
       ],
       "fleet-signature": [
         "dist/fleet-signature.d.ts"

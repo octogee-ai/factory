@@ -8,6 +8,7 @@ export interface ResumeOrphanedOpsDeps {
   // rollout is the one that spans minutes and, if abandoned after its pre-migrate
   // repoint, leaves a split pool — so it must survive a restart.
   resumableKinds: ReadonlySet<string>;
+  resumableOperation?: (op: Operation) => boolean;
   // Re-adopt the orphaned running op (bump heartbeat + resumeCount) and re-run its
   // handler from persisted progress. Supplied by the controller wiring.
   redrive: (op: Operation, ref: FirebaseFirestore.DocumentReference) => Promise<void>;
@@ -39,6 +40,7 @@ export async function resumeOrphanedRunningOps(
     if (!data) continue;
     const op = { ...data, id: doc.id } as Operation;
     if (!deps.resumableKinds.has(op.kind)) continue;
+    if (deps.resumableOperation && !deps.resumableOperation(op)) continue;
     deps.log(
       `[resume-orphaned-ops] re-driving orphaned running op=${op.id} kind=${op.kind} (controller restarted mid-op)`,
     );

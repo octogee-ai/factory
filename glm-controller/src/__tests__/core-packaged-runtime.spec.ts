@@ -20,12 +20,14 @@ function makeTxnDb(seed: Record<string, Record<string, unknown>>) {
     doc: (id: string) => ref(`${name}/${id}`),
     where: (field: string, op: string, value: unknown) => ({
       __query: async () => {
-        if (op !== "==") throw new Error(`unsupported query operator ${op}`);
+        if (op !== "==" && op !== "in") throw new Error(`unsupported query operator ${op}`);
         const docs = Object.entries(store)
           .filter(([path, data]) =>
             path.startsWith(`${name}/`) &&
             !path.slice(name.length + 1).includes("/") &&
-            data?.[field] === value,
+            (op === "=="
+              ? data?.[field] === value
+              : Array.isArray(value) && value.includes(data?.[field])),
           )
           .map(([path, data]) => ({
             id: path.slice(name.length + 1),

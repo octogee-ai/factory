@@ -50,6 +50,7 @@ import {
 } from "./heartbeat-relocation.js";
 import {
   runConvergeEmptyPass,
+  revisionUpsertOptsFromRelease,
   type GatewayRuntimeRoot,
   type ConvergeEmptyDeps,
 } from "./converge-empty.js";
@@ -58,6 +59,7 @@ import {
   DurableRootDirtyTracker,
   isDurableRootConfigDoc,
   runDurableRootRenderPass,
+  systemConfigContextForRevision,
   type DurableRootRenderDeps,
   type DurableRootRenderRequest,
   type DurableRootRenderResult,
@@ -112,12 +114,16 @@ import {
 } from "./operation-queue.js";
 import {
   buildOperationCompletionUpdate,
+  operationNeedsDurableCustomerMigrationV2Resume,
   shouldPersistClaimedOperationCompletion,
   supersededRollMigrationAction,
 } from "./operation-retry.js";
 import { completeOperatorReservationAfterMigration } from "./operator-reservation-completion.js";
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
-import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
+import {
+  createMigrateCustomerHandler,
+  type MigrateCustomerDeps,
+} from "./handlers/migrate-customer.js";
 import type {
   MigrationRollFence,
   MigrationRunnerDeps,
@@ -180,6 +186,10 @@ import {
 import { getStorage } from "firebase-admin/storage";
 import { getAuth } from "firebase-admin/auth";
 import { createMigrationClient } from "@octogee/core/fleet-migration-client";
+import {
+  customerMigrationV2GatewayRootFence,
+  isCustomerMigrationV2Transition,
+} from "@octogee/core/customer-migration-v2";
 import { createRsyncMigrationTransfer } from "./lib/migration-rsync-transfer.js";
 import {
   commitCutoverAtomic,
@@ -209,6 +219,7 @@ import {
 } from "./config-freeze-recovery.js";
 import {
   assertMigrationSystemConfigProtocol,
+  revisionSupportsSystemConfigProtocol,
   servingIsolatedProtocolGaps,
 } from "./system-config-protocol-gate.js";
 import { startHelmRecoverySweeper } from "./helm-recovery-sweeper.js";
@@ -250,6 +261,7 @@ const logger = createLogger({
 });
 const log = (msg: string) => logger.legacy(msg);
 const RECONCILE_DEBOUNCE_MS = 1_000;
+const MIGRATE_CUSTOMER_KIND = "migrate-customer";
 const RECONCILE_RETRY_MS_DEFAULT = 30_000;
 const OPERATOR_READY_REFRESH_MS_DEFAULT = 60_000;
 const MAINTENANCE_GATE_POLL_MS = 5_000;
@@ -1135,7 +1147,7 @@ function buildRollRevisionAndMigrationDeps(
     readRollMigration: async ({ uid, gatewayId, rollOperationId }) => {
       const snap = await db
         .collection(GLM_OPERATIONS_COLLECTION)
-        .where("kind", "==", "migrate-customer")
+        .where("kind", "==", MIGRATE_CUSTOMER_KIND)
         .where("inputUid", "==", uid)
         .get();
       let newest: { createdAt: number; snap: RollMigrationSnapshot } | null = null;
@@ -1176,7 +1188,7 @@ function buildRollRevisionAndMigrationDeps(
     cancelRollMigrations: async ({ gatewayId, rollOperationId, reason }) => {
       const snap = await db
         .collection(GLM_OPERATIONS_COLLECTION)
-        .where("kind", "==", "migrate-customer")
+        .where("kind", "==", MIGRATE_CUSTOMER_KIND)
         .get();
       const candidates = snap.docs.filter((doc) => {
         const data = doc.data() as Operation;
@@ -2342,11 +2354,14 @@ export function startOperationWorker(deps: ControllerDeps): () => void {
 // the stuck-op-reaper's level-triggered pattern.
 export const OPERATION_QUEUE_DRAIN_MS_DEFAULT = 20_000;
 
-// Op kinds safe to re-drive after a controller restart (idempotent orchestrators).
-// The blue/green rollout is the long, repoint-then-migrate op that strands a pool if
-// abandoned mid-flight; its migrate sub-ops are re-issued by the rollout re-drive, so
-// they are intentionally NOT resumed directly.
-const RESUMABLE_OP_KINDS: ReadonlySet<string> = new Set(["rollout"]);
+// Restart re-drive candidates. The predicate below admits only migrations with
+// the durable V2 state machine; legacy rollout sub-operations remain rollout-owned.
+const RESUMABLE_OP_KINDS: ReadonlySet<string> = new Set(["rollout", MIGRATE_CUSTOMER_KIND]);
+
+function operationIsRestartResumable(op: Operation): boolean {
+  if (op.kind === "rollout") return true;
+  return operationNeedsDurableCustomerMigrationV2Resume(op);
+}
 
 // Claim, queue, or skip a pending op in one transaction: reads the OTHER
 // running AND pending ops of the same serially-exclusive kind alongside the
@@ -2374,26 +2389,29 @@ async function attemptClaimOrQueueOperation(
       let runningOpsSameKind: OperationRef[] = [];
       let pendingOpsSameKind: PendingOperationRef[] = [];
       if (isSeriallyExclusiveKind(op.kind)) {
-        const opsOfKind = deps.db
-          .collection(GLM_OPERATIONS_COLLECTION)
-          .where("kind", "==", op.kind);
+        const operations = deps.db.collection(GLM_OPERATIONS_COLLECTION);
         const [runningSnap, pendingSnap] = await Promise.all([
-          txn.get(opsOfKind.where("status", "==", "running")),
-          txn.get(opsOfKind.where("status", "==", "pending")),
+          txn.get(operations.where("status", "==", "running")),
+          txn.get(operations.where("status", "==", "pending")),
         ]);
-        runningOpsSameKind = runningSnap.docs.map((d) => ({
-          id: d.id,
-          kind: op.kind,
-          input: (d.data() as Operation).input,
-        }));
-        pendingOpsSameKind = pendingSnap.docs.map((d) => {
-          const pendingData = d.data() as Operation;
-          return {
+        runningOpsSameKind = runningSnap.docs.flatMap((d) => {
+          const runningData = d.data() as Operation;
+          return isSeriallyExclusiveKind(runningData.kind) ? [{
             id: d.id,
-            kind: op.kind,
+            kind: runningData.kind,
+            input: runningData.input,
+            customerMigrationV2: runningData.customerMigrationV2,
+          }] : [];
+        });
+        pendingOpsSameKind = pendingSnap.docs.flatMap((d) => {
+          const pendingData = d.data() as Operation;
+          return isSeriallyExclusiveKind(pendingData.kind) ? [{
+            id: d.id,
+            kind: pendingData.kind,
             input: pendingData.input,
             createdAt: pendingData.createdAt,
-          };
+            customerMigrationV2: pendingData.customerMigrationV2,
+          }] : [];
         });
       }
 
@@ -2405,6 +2423,7 @@ async function attemptClaimOrQueueOperation(
           createdAt: data.createdAt,
           nextAttemptAt: data.nextAttemptAt,
           input: data.input,
+          customerMigrationV2: data.customerMigrationV2,
         },
         now: Date.now(),
         runningOpsSameKind,
@@ -2549,26 +2568,64 @@ async function runClaimedOperation(
     persist: async (next) => {
       await ref.update({ steps: next, lastProgressAt: Date.now() });
     },
+    persistCustomerMigrationV2: async (state) => {
+      await deps.db.runTransaction(async (txn) => {
+        const fresh = await txn.get(ref);
+        const data = fresh.exists ? fresh.data() as Operation : null;
+        if (data?.status !== "running") {
+          throw new Error("customer migration V2 operation is no longer running");
+        }
+        const current = data.customerMigrationV2;
+        if (current) {
+          if (
+            current.operationId !== state.operationId ||
+            current.migrationId !== state.migrationId ||
+            !isCustomerMigrationV2Transition(current.phase, state.phase)
+          ) {
+            throw new Error(
+              `customer migration V2 state conflict: ${current.phase} -> ${state.phase}`,
+            );
+          }
+        } else if (state.phase !== "initialized" || state.operationId !== op.id) {
+          throw new Error("customer migration V2 must start with its operation-bound initialized state");
+        }
+        txn.update(ref, {
+          customerMigrationV2: state,
+          lastProgressAt: Date.now(),
+        });
+      });
+    },
+    cancellationRequested: async () => {
+      const fresh = await ref.get();
+      const data = fresh.exists ? fresh.data() as Record<string, unknown> : null;
+      return data?.cancellationRequestedAt !== undefined;
+    },
     log: deps.log,
     opId: op.id,
   });
 
   const result = await routeOperation(op, deps.handlers, ctx);
-  const completion = buildOperationCompletionUpdate({
-    op: { attempts: op.attempts, attemptHistory: op.attemptHistory },
-    result,
-    steps,
-    now: Date.now(),
-  });
-  const persisted = await deps.db.runTransaction(async (txn) => {
+  const completion = await deps.db.runTransaction(async (txn) => {
     const fresh = await txn.get(ref);
-    if (!fresh.exists) return false;
-    const status = (fresh.data() as Operation | undefined)?.status ?? "missing";
-    if (!shouldPersistClaimedOperationCompletion(status)) return false;
+    if (!fresh.exists) return null;
+    const freshOp = fresh.data() as Operation | undefined;
+    const status = freshOp?.status ?? "missing";
+    if (!shouldPersistClaimedOperationCompletion(status)) return null;
+    const completion = buildOperationCompletionUpdate({
+      op: {
+        attempts: freshOp?.attempts,
+        attemptHistory: freshOp?.attemptHistory,
+        startedAt: freshOp?.startedAt,
+        customerMigrationV2: freshOp?.customerMigrationV2,
+      },
+      result,
+      steps,
+      now: Date.now(),
+    });
     txn.update(ref, completion);
-    return true;
+    return completion;
   });
-  if (!persisted) {
+  if (!completion) {
     deps.log(`[glm-controller] op=${op.id} completion discarded because the operation was cancelled`);
     return;
   }
@@ -3079,6 +3136,8 @@ async function createControllerRuntime(
       syncFleetIngress: handlerSyncFleetIngress,
       privateKey: fleetControllerPrivateKey,
       modelKeySourceIssuer,
+      prepareGatewayConfig,
+      chartFingerprint,
     },
   );
 
@@ -3184,6 +3243,7 @@ async function main(): Promise<void> {
     db,
     log,
     resumableKinds: RESUMABLE_OP_KINDS,
+    resumableOperation: operationIsRestartResumable,
     redrive: async (op, ref) => {
       if (await controllerWorkFrozen(deps, "orphan-op resume")) return;
       await reAdoptAndRunOperation(op, ref, deps);
@@ -3640,6 +3700,102 @@ async function isFleetConfigProtocolReady(db: Firestore): Promise<boolean> {
   return servingIsolatedProtocolGaps(roots, revisions, Date.now()).length === 0;
 }
 
+type RevisionExecutionIdentity = Awaited<
+  ReturnType<MigrateCustomerDeps["readRevisionExecutionIdentity"]>
+>;
+
+type CandidateProof = Parameters<
+  MigrateCustomerDeps["assertCandidateProofCurrent"]
+>[2];
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function revisionExecutionIdentity(
+  revision: RevisionRealizationDoc | null,
+  revisionId: string,
+): RevisionExecutionIdentity | null {
+  if (!revision) return null;
+  if (!revisionSupportsSystemConfigProtocol(revision, Date.now())) return null;
+  const heartbeat = revision.heartbeat;
+  if (!heartbeat) return null;
+  const status = heartbeat.configStatus;
+  if (!status) return null;
+  const imageTag = revision.helm.imageTag;
+  if (!isNonEmptyString(imageTag)) return null;
+  const buildSha = heartbeat.version;
+  if (!isNonEmptyString(buildSha)) return null;
+  const openclawVersion = status.openclawVersion;
+  if (!isNonEmptyString(openclawVersion)) return null;
+  const startedAt = heartbeat.startedAt;
+  if (typeof startedAt !== "number") return null;
+  return { revisionId, imageTag, buildSha, openclawVersion, startedAt };
+}
+
+async function readMigrationRevisionExecutionIdentity(
+  db: Firestore,
+  revisionId: string,
+): Promise<RevisionExecutionIdentity> {
+  const revision = await readRevisionForConfigProtocol(db, revisionId);
+  const identity = revisionExecutionIdentity(revision, revisionId);
+  if (!identity) {
+    throw new Error(`revision ${revisionId} lacks an exact fresh protocol-v2 execution identity`);
+  }
+  return identity;
+}
+
+function candidateExecutionMatches(
+  revision: RevisionRealizationDoc,
+  expectedImageTag: string,
+  proof: CandidateProof,
+): boolean {
+  const heartbeat = revision.heartbeat;
+  return [
+    revisionSupportsSystemConfigProtocol(revision, Date.now()),
+    revision.helm.imageTag === expectedImageTag,
+    proof.imageTag === expectedImageTag,
+    heartbeat?.startedAt === proof.targetStartedAt,
+    heartbeat?.version === proof.buildSha,
+  ].every(Boolean);
+}
+
+function candidateConfigMatches(
+  revision: RevisionRealizationDoc,
+  proof: CandidateProof,
+): boolean {
+  const status = revision.heartbeat?.configStatus;
+  const owner = status?.controlOwner;
+  return [
+    status?.openclawVersion === proof.openclawVersion,
+    status?.bootRole === "target-candidate",
+    owner?.migrationId === proof.migrationId,
+    owner?.sourceRevisionId === proof.sourceRevisionId,
+    owner?.targetRevisionId === proof.targetRevisionId,
+    status?.checkpointCommit === proof.checkpointCommit,
+    status?.candidateCommit === proof.candidateCommit,
+    status?.candidateHash === proof.candidateHash,
+  ].every(Boolean);
+}
+
+async function assertMigrationCandidateProofCurrent(
+  db: Firestore,
+  targetRevisionId: string,
+  expectedImageTag: string,
+  proof: CandidateProof,
+): Promise<void> {
+  const revision = await readRevisionForConfigProtocol(db, targetRevisionId);
+  const current = revision
+    ? [
+        candidateExecutionMatches(revision, expectedImageTag, proof),
+        candidateConfigMatches(revision, proof),
+      ].every(Boolean)
+    : false;
+  if (!current) {
+    throw new Error(`target revision ${targetRevisionId} candidate proof is stale`);
+  }
+}
+
 // eslint-disable-next-line max-lines-per-function -- Controller dependency assembly is intentionally centralized.
 async function buildHandlers(
   db: Firestore,
@@ -3650,9 +3806,11 @@ async function buildHandlers(
     syncFleetIngress: () => Promise<void>;
     privateKey: string;
     modelKeySourceIssuer: GatewayModelKeySourceIssuer;
+    prepareGatewayConfig: (config: GatewayRuntimeRoot) => Promise<GatewayRuntimeRoot>;
+    chartFingerprint: string;
   },
 ): Promise<OperationHandlers> {
-  const { privateKey, modelKeySourceIssuer } = fleetOps;
+  const { privateKey, modelKeySourceIssuer, prepareGatewayConfig, chartFingerprint } = fleetOps;
   if (!privateKey) {
     throw new Error(
       "FLEET_CONTROLLER_PRIVATE_KEY is not set — required for migrate-customer. Refusing to start with stub handlers.",
@@ -3691,6 +3849,57 @@ async function buildHandlers(
     log: logFn,
   });
 
+  const renderRevisionSystemConfigContext = async (
+    revisionId: string,
+    context: import("@octogee/shared/types/gateway-releases").RevisionSystemConfigMigrationContext | null,
+  ): Promise<void> => {
+    const revisionRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId);
+    const revisionSnap = await revisionRef.get();
+    const revision = revisionSnap.exists ? revisionSnap.data() : undefined;
+    if (!isRevisionRealizationDoc(revision) || revision.revisionId !== revisionId) {
+      throw new Error(`target revision ${revisionId} is not a durable realization`);
+    }
+    if (context && context.targetRevisionId !== revisionId) {
+      throw new Error(`target system config context belongs to ${context.targetRevisionId}`);
+    }
+    const [rootSnap, artifact] = await Promise.all([
+      db.collection(GATEWAYS_COLLECTION).doc(revision.gateway).get(),
+      readGatewayArtifact(db, revision.gateway, revision.release),
+    ]);
+    const root = rootSnap.exists ? rootSnap.data() : undefined;
+    if (!isDurableRootConfigDoc(root, revision.gateway) || !artifact) {
+      throw new Error(`target revision ${revisionId} lacks its durable root or release artifact`);
+    }
+    const bootContext = systemConfigContextForRevision(
+      root,
+      {
+        ...revision,
+        ...(context
+          ? { systemConfigMigrationContext: context }
+          : { systemConfigMigrationContext: undefined }),
+      },
+    );
+    await revisionRef.set(
+      { systemConfigMigrationContext: context ?? FieldValue.delete() },
+      { merge: true },
+    );
+    const config = await prepareGatewayConfig(root);
+    await helm.upsertInstance({
+      ...revisionUpsertOptsFromRelease({
+        namespace: NAMESPACE,
+        gatewayId: revision.gateway,
+        revisionId,
+        config,
+        artifact,
+        chartPath: GATEWAY_CHART,
+        valuesFile: GATEWAY_VALUES_FILE,
+        chartFingerprint,
+        systemConfigRollContext: bootContext,
+      }),
+      replicas: root.desiredStatus === "paused" ? 0 : 1,
+    });
+  };
+
   const migrateCustomer = createMigrateCustomerHandler({
     readUser: async (uid) => {
       const doc = await db.collection("users").doc(uid).get();
@@ -3722,7 +3931,9 @@ async function buildHandlers(
             ? {
                 revisionId: commit.revision.revisionId,
                 release: commit.revision.release,
-                source: commit.fromGatewayId === commit.toGatewayId ? "rollout" : "migrate-customer",
+                source: commit.fromGatewayId === commit.toGatewayId
+                  ? "rollout"
+                  : MIGRATE_CUSTOMER_KIND,
                 updatedByOperationId: null,
               }
             : null,
@@ -3816,6 +4027,19 @@ async function buildHandlers(
       if (!isDurableRootConfigDoc(targetData, toGatewayId)) {
         throw new Error(`target gateway ${toGatewayId} has no durable root`);
       }
+      const rootIsStable = (data: typeof sourceData) =>
+        data.desiredStatus === "running" &&
+        data.roll === null &&
+        data.liveRevisionId !== null &&
+        data.trafficRevisionId === data.liveRevisionId &&
+        data.liveRelease !== null &&
+        data.desiredRelease === data.liveRelease;
+      if (!rootIsStable(sourceData)) {
+        throw new Error(`source gateway ${fromGatewayId} has an active or unconverged release roll`);
+      }
+      if (!rootIsStable(targetData)) {
+        throw new Error(`target gateway ${toGatewayId} has an active or unconverged release roll`);
+      }
       const gatewayClass = (data: typeof sourceData) => resolveGatewayClass({
         gatewayClass: data.gatewayClass ?? undefined,
         profile: data.profile ?? undefined,
@@ -3832,6 +4056,70 @@ async function buildHandlers(
         sourceRevisionId,
         targetRevisionId,
       }),
+    readRevisionExecutionIdentity: (revisionId) =>
+      readMigrationRevisionExecutionIdentity(db, revisionId),
+    readGatewayRootFence: async (gatewayId) => {
+      const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+      return customerMigrationV2GatewayRootFence(
+        snap.exists ? snap.data() : undefined,
+        gatewayId,
+      );
+    },
+    installTargetSystemConfigContext: (targetRevisionId, context) =>
+      renderRevisionSystemConfigContext(targetRevisionId, context),
+    clearTargetSystemConfigContext: (targetRevisionId) =>
+      renderRevisionSystemConfigContext(targetRevisionId, null),
+    assertCandidateProofCurrent: (targetRevisionId, expectedImageTag, proof) =>
+      assertMigrationCandidateProofCurrent(db, targetRevisionId, expectedImageTag, proof),
+    commitV2Cutover: async (input) => {
+      await commitCutoverAtomic(
+        {
+          db: db as unknown as FleetStateFirestore,
+          serverTimestamp: () => FieldValue.serverTimestamp(),
+          log: logFn,
+        },
+        {
+          uid: input.uid,
+          slug: input.slug,
+          toGatewayId: input.targetGatewayId,
+          fromGatewayId: input.sourceGatewayId,
+          flipMirror: input.sourceGatewayId !== input.targetGatewayId,
+          assignment: {
+            revisionId: input.targetRevisionId,
+            release: input.targetRelease,
+            source: MIGRATE_CUSTOMER_KIND,
+            updatedByOperationId: input.operationId,
+          },
+          customerMigrationV2Fence: {
+            operationId: input.operationId,
+            migrationId: input.migrationId,
+            uid: input.uid,
+            slug: input.slug,
+            sourceGatewayId: input.sourceGatewayId,
+            sourceRevisionId: input.sourceRevisionId,
+            sourceEpoch: input.sourceEpoch,
+            sourceRelease: input.sourceRelease,
+            sourceAssignmentMode: input.sourceAssignmentMode,
+            sourceRootFence: input.sourceRootFence,
+            targetGatewayId: input.targetGatewayId,
+            targetRevisionId: input.targetRevisionId,
+            targetRelease: input.targetRelease,
+            targetRootFence: input.targetRootFence,
+            checkpointCommit: input.checkpointCommit,
+            configHash: input.configHash,
+            freezeObject: input.freezeObject,
+            candidateCommit: input.candidateCommit,
+            candidateHash: input.candidateHash,
+            runtimeConfigHash: input.runtimeConfigHash,
+            targetStartedAt: input.targetStartedAt,
+            imageTag: input.imageTag,
+            buildSha: input.buildSha,
+            openclawVersion: input.openclawVersion,
+            provenAt: input.provenAt,
+          },
+        },
+      );
+    },
     recoverConfigFreezeOwner: (input) => recoverMigrationConfigFreezeOwner(input, {
       db,
       privateKey,
@@ -4196,7 +4484,7 @@ async function buildHandlers(
 
   return {
     "add-gateway": addGateway,
-    "migrate-customer": migrateCustomer,
+    [MIGRATE_CUSTOMER_KIND]: migrateCustomer,
     "retire-gateway": retireGateway,
     "retire-revision": retireRevision,
     "restart-gateway": restartGateway,
@@ -4460,7 +4748,13 @@ export async function resolvePlacementFromFirestore(
 export async function resolveLiveRevisionAsSource(
   db: Firestore,
   gatewayId: string,
-): Promise<{ revisionId: string; release: number; epoch?: number } | null> {
+): Promise<{
+  revisionId: string;
+  release: number;
+  epoch?: number;
+  assignmentMode: "unassigned-live";
+  rootUpdatedAt: number;
+} | null> {
   const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
   if (!snap.exists) return null;
   const gateway = snap.data();
@@ -4468,7 +4762,11 @@ export async function resolveLiveRevisionAsSource(
     !isDurableRootConfigDoc(gateway, gatewayId) ||
     gateway.desiredStatus !== "running" ||
     !gateway.liveRevisionId ||
-    typeof gateway.liveRelease !== "number"
+    typeof gateway.liveRelease !== "number" ||
+    gateway.trafficRevisionId !== gateway.liveRevisionId ||
+    gateway.desiredRelease !== gateway.liveRelease ||
+    gateway.roll !== null ||
+    typeof gateway.updatedAt !== "number"
   ) {
     return null;
   }
@@ -4479,7 +4777,12 @@ export async function resolveLiveRevisionAsSource(
     gateway.liveRelease,
   );
   return ready
-    ? { revisionId: gateway.liveRevisionId, release: gateway.liveRelease }
+    ? {
+        revisionId: gateway.liveRevisionId,
+        release: gateway.liveRelease,
+        assignmentMode: "unassigned-live",
+        rootUpdatedAt: gateway.updatedAt,
+      }
     : null;
 }
 
@@ -4487,7 +4790,13 @@ export async function resolveSourceRevisionFromFirestore(
   db: Firestore,
   uid: string,
   gatewayId: string,
-): Promise<{ revisionId: string; release: number; epoch?: number } | null> {
+): Promise<{
+  revisionId: string;
+  release: number;
+  epoch?: number;
+  assignmentMode: "assigned" | "unassigned-live";
+  rootUpdatedAt?: number;
+} | null> {
   const assignment = await readAssignmentDoc(db, gatewayId, uid);
   if (!assignment) return resolveLiveRevisionAsSource(db, gatewayId);
   const rootSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
@@ -4519,6 +4828,7 @@ export async function resolveSourceRevisionFromFirestore(
     revisionId: assignment.revisionId,
     release: assignment.release,
     epoch: assignment.epoch,
+    assignmentMode: "assigned",
   };
 }
 

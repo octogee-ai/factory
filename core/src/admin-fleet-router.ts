@@ -90,6 +90,10 @@ import {
   claimGatewayRetirementAtomic,
   hasGatewayRetirementConfigObligation,
 } from "./gateway-retirement-claim.js";
+import {
+  findActiveGatewayMigration,
+  GatewayMigrationInFlightError,
+} from "./fleet-operation-lock.js";
 
 export { resolveBuilderActivationPlan } from "./builder-activation-lease.js";
 
@@ -2645,6 +2649,27 @@ async function appendGatewayRelease(
         current.latestRelease,
       );
     }
+    const activeOperations = await txn.get(
+      db
+        .collection(GLM_OPERATIONS_COLLECTION)
+        .where("status", "in", ["pending", "running"]),
+    );
+    const migrationConflict = findActiveGatewayMigration(
+      args.gateway.gatewayId,
+      activeOperations.docs.map((doc) => {
+        const operation = doc.data() as Record<string, unknown>;
+        return {
+          id: doc.id,
+          kind: typeof operation.kind === "string" ? operation.kind : "",
+          status: typeof operation.status === "string" ? operation.status : "",
+          input: operation.input,
+          customerMigrationV2: operation.customerMigrationV2,
+        };
+      }),
+    );
+    if (migrationConflict) {
+      throw new GatewayMigrationInFlightError(args.gateway.gatewayId, migrationConflict.id);
+    }
     const release = current.latestRelease + 1;
     const relRef = gwRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc(String(release));
     const relExisting = await txn.get(relRef);
@@ -2708,6 +2733,15 @@ class InvalidGatewayRootError extends Error {
 function respondReleaseWriteConflict(res: Response, error: unknown): boolean {
   if (error instanceof GatewayRetirementConflictError) {
     res.status(409).json({ error: error.message });
+    return true;
+  }
+  if (error instanceof GatewayMigrationInFlightError) {
+    res.status(409).json({
+      error: error.message,
+      gatewayId: error.gatewayId,
+      operationId: error.operationId,
+      kind: OP_KIND_MIGRATE_CUSTOMER,
+    });
     return true;
   }
   if (error instanceof InvalidGatewayRootError) {
@@ -4693,7 +4727,14 @@ router.post(
         }
         const updatedBy = (req as ActorRequest).uid ?? "unknown";
         const patchResult = await db.runTransaction(async (txn) => {
-          const currentSnap = await txn.get(rootRef);
+          const [currentSnap, activeOperations] = await Promise.all([
+            txn.get(rootRef),
+            txn.get(
+              db
+                .collection(GLM_OPERATIONS_COLLECTION)
+                .where("status", "in", ["pending", "running"]),
+            ),
+          ]);
           const currentData = currentSnap.exists
             ? (currentSnap.data() as Record<string, unknown> | undefined)
             : undefined;
@@ -4703,6 +4744,25 @@ router.post(
             return {
               ok: false as const,
               error: "gateway has a current retirement claim",
+            };
+          }
+          const migrationConflict = findActiveGatewayMigration(
+            id,
+            activeOperations.docs.map((doc) => {
+              const operation = doc.data() as Record<string, unknown>;
+              return {
+                id: doc.id,
+                kind: typeof operation.kind === "string" ? operation.kind : "",
+                status: typeof operation.status === "string" ? operation.status : "",
+                input: operation.input,
+                customerMigrationV2: operation.customerMigrationV2,
+              };
+            }),
+          );
+          if (migrationConflict) {
+            return {
+              ok: false as const,
+              error: `customer migration is in flight for gateway ${id}`,
             };
           }
           txn.update(rootRef, {

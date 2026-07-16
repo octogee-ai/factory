@@ -1,4 +1,4 @@
-import type { OperationStep } from "@octogee/shared/types/glm";
+import type { CustomerMigrationV2State, OperationStep } from "@octogee/shared/types/glm";
 import type { OperationContext } from "./operation-router.js";
 
 export interface PersistFn {
@@ -8,6 +8,8 @@ export interface PersistFn {
 export interface CreateOperationContextDeps {
   
   persist: PersistFn;
+  persistCustomerMigrationV2?: (state: CustomerMigrationV2State) => Promise<void>;
+  cancellationRequested?: () => Promise<boolean>;
   log: (msg: string) => void;
   
   opId: string;
@@ -38,6 +40,12 @@ export function createOperationContext(deps: CreateOperationContextDeps): {
         );
       }
     },
+    ...(deps.persistCustomerMigrationV2
+      ? { persistCustomerMigrationV2: deps.persistCustomerMigrationV2 }
+      : {}),
+    ...(deps.cancellationRequested
+      ? { cancellationRequested: deps.cancellationRequested }
+      : {}),
   };
 
   return { ctx, steps };

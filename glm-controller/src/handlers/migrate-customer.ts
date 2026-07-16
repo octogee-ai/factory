@@ -1,4 +1,6 @@
 import type {
+  CustomerMigrationV2GatewayRootFence,
+  CustomerMigrationV2State,
   Operation,
   OperationStep,
   StepStatus,
@@ -12,6 +14,16 @@ import {
 import type { PlacementResolution } from "@octogee/core/assignment-doc";
 import type { RevisionSystemConfigObservation } from "@octogee/shared/types/gateway-releases";
 import type { SystemConfigMigrationMode } from "@octogee/shared/types/fleet-controller";
+import {
+  advanceCustomerMigrationV2,
+  beginCustomerMigrationV2Abort,
+  classifyCustomerMigrationV2Error,
+  isCustomerMigrationV2PostIntent,
+  customerMigrationV2GatewayRootFenceEqual,
+  type CustomerMigrationV2CutoverFence,
+  type CustomerMigrationV2TargetContext,
+} from "@octogee/core/customer-migration-v2";
+import type { ConfigCandidateProofResponse } from "@octogee/shared/types/fleet-controller";
 import {
   runMigration,
   type ConfigCleanupObligation,
@@ -36,6 +48,8 @@ export interface SourceRevision {
   revisionId: string;
   release: number;
   epoch?: number;
+  assignmentMode?: "assigned" | "unassigned-live";
+  rootUpdatedAt?: number;
 }
 
 export interface MigrateCustomerDeps {
@@ -57,6 +71,12 @@ export interface MigrateCustomerDeps {
     gatewayId: string;
     uid: string;
     state: "serving" | "quiescing" | "migrating";
+    slug?: string;
+    revisionId?: string;
+    release?: number;
+    epoch?: number;
+    updatedByOperationId?: string;
+    createIfMissing?: boolean;
   }) => Promise<void>;
 
   assertRollFence: (fence: MigrationRollFence) => Promise<void>;
@@ -87,6 +107,36 @@ export interface MigrateCustomerDeps {
     targetRevisionId: string;
   }) => Promise<void>;
 
+  readRevisionExecutionIdentity: (revisionId: string) => Promise<{
+    revisionId: string;
+    imageTag: string;
+    buildSha: string;
+    openclawVersion: string;
+    startedAt: number;
+  }>;
+
+  readGatewayRootFence: (
+    gatewayId: string,
+  ) => Promise<CustomerMigrationV2GatewayRootFence | null>;
+
+  installTargetSystemConfigContext: (
+    targetRevisionId: string,
+    context: CustomerMigrationV2TargetContext,
+  ) => Promise<void>;
+
+  clearTargetSystemConfigContext: (targetRevisionId: string) => Promise<void>;
+
+  assertCandidateProofCurrent: (
+    targetRevisionId: string,
+    expectedImageTag: string,
+    proof: ConfigCandidateProofResponse,
+  ) => Promise<void>;
+
+  commitV2Cutover: (input: CustomerMigrationV2CutoverFence & {
+    uid: string;
+    slug: string;
+  }) => Promise<void>;
+
   recoverConfigFreezeOwner: (input: {
     ownerMigrationId: string;
     requestedMigrationId: string;
@@ -105,8 +155,351 @@ export interface MigrateCustomerDeps {
   log: (msg: string) => void;
 }
 
+function isAbortPhase(phase: CustomerMigrationV2State["phase"]): boolean {
+  return phase === "abortIntent" ||
+    phase === "abortPublished" ||
+    phase === "abortTargetUnmounted" ||
+    phase === "abortContextCleared" ||
+    phase === "aborted";
+}
+
+function v2RetryError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return `customer migration V2 retry pending: status 503: ${message}`;
+}
+
+async function persistV2(
+  ctx: OperationContext,
+  state: CustomerMigrationV2State,
+): Promise<void> {
+  if (!ctx.persistCustomerMigrationV2) {
+    throw new Error("customer migration V2 requires durable operation state persistence");
+  }
+  await ctx.persistCustomerMigrationV2(state);
+}
+
+async function runOrdinaryMigrationV2(input: {
+  op: Operation;
+  ctx: OperationContext;
+  deps: MigrateCustomerDeps;
+  targets: MigrationTargets;
+  uid: string;
+  slug: string;
+  migrationId: string;
+}): Promise<OperationResult> {
+  const initialized = await initializeOrdinaryMigrationV2(input);
+  if ("success" in initialized) return initialized;
+  const execution = {
+    input,
+    state: initialized,
+    scopeChanged: ordinaryV2ScopeChanged(input, initialized),
+  };
+  while (execution.state.phase !== "complete" && execution.state.phase !== "aborted") {
+    const outcome = await runOrdinaryV2Iteration(execution);
+    if (outcome === "stop") break;
+    if (outcome !== "continue") return outcome;
+  }
+  if (execution.state.phase === "aborted") {
+    return {
+      steps: [],
+      success: false,
+      error: execution.state.abortReason ?? "customer migration V2 aborted",
+      rolledBack: true,
+    };
+  }
+  return { steps: [], success: true, rolledBack: false };
+}
+
+interface OrdinaryV2Input {
+  op: Operation;
+  ctx: OperationContext;
+  deps: MigrateCustomerDeps;
+  targets: MigrationTargets;
+  uid: string;
+  slug: string;
+  migrationId: string;
+}
+
+interface OrdinaryV2Execution {
+  input: OrdinaryV2Input;
+  state: CustomerMigrationV2State;
+  scopeChanged: boolean;
+}
+
+function assertRootOwner(
+  root: CustomerMigrationV2GatewayRootFence | null,
+  uid: string,
+  slug: string,
+  role: "source" | "target",
+): asserts root is CustomerMigrationV2GatewayRootFence {
+  if (!root || root.ownerUid !== uid || root.builderSlug !== slug) {
+    throw new Error(
+      `customer migration V2 ${role} root ownership changed before initialization`,
+    );
+  }
+}
+
+async function initializeOrdinaryMigrationV2(
+  input: OrdinaryV2Input,
+): Promise<CustomerMigrationV2State | OperationResult> {
+  const { op, ctx, deps, targets, uid, slug, migrationId } = input;
+  if (targets.toRelease === null) {
+    return { steps: [], success: false, error: "customer migration V2 target has no release" };
+  }
+  if (op.customerMigrationV2) return op.customerMigrationV2;
+  const [sourceExecution, targetExecution, sourceRootFence, targetRootFence] = await Promise.all([
+    deps.readRevisionExecutionIdentity(targets.fromRevisionId),
+    deps.readRevisionExecutionIdentity(targets.toRevisionId),
+    deps.readGatewayRootFence(targets.fromGatewayId),
+    deps.readGatewayRootFence(targets.toGatewayId),
+  ]);
+  assertRootOwner(sourceRootFence, uid, slug, "source");
+  assertRootOwner(targetRootFence, uid, slug, "target");
+  const state: CustomerMigrationV2State = {
+    phase: "initialized",
+    operationId: op.id,
+    migrationId,
+    uid,
+    slug,
+    sourceGatewayId: targets.fromGatewayId,
+    sourceRevisionId: targets.fromRevisionId,
+    sourceRelease: targets.fromRelease,
+    sourceEpoch: targets.fromEpoch,
+    sourceAssignmentMode: targets.sourceAssignmentMode,
+    sourceRootFence,
+    targetGatewayId: targets.toGatewayId,
+    targetRevisionId: targets.toRevisionId,
+    targetRelease: targets.toRelease,
+    targetRootFence,
+    sourceImageTag: sourceExecution.imageTag,
+    sourceBuildSha: sourceExecution.buildSha,
+    sourceOpenclawVersion: sourceExecution.openclawVersion,
+    targetImageTag: targetExecution.imageTag,
+  };
+  await persistV2(ctx, state);
+  return state;
+}
+
+function ordinaryV2ScopeChanged(
+  input: OrdinaryV2Input,
+  state: CustomerMigrationV2State,
+): boolean {
+  const { op, targets, uid, slug, migrationId } = input;
+  const declaredSourceGatewayId = typeof op.input.fromGatewayId === "string"
+    ? op.input.fromGatewayId
+    : null;
+  return [
+    state.operationId !== op.id,
+    state.migrationId !== migrationId,
+    state.uid !== uid,
+    state.slug !== slug,
+    state.sourceGatewayId !== targets.fromGatewayId,
+    state.sourceRevisionId !== targets.fromRevisionId,
+    state.sourceRelease !== targets.fromRelease,
+    state.sourceEpoch !== targets.fromEpoch,
+    state.sourceAssignmentMode !== targets.sourceAssignmentMode,
+    state.targetGatewayId !== targets.toGatewayId,
+    state.targetRevisionId !== targets.toRevisionId,
+    state.targetRelease !== targets.toRelease,
+    declaredSourceGatewayId !== null && declaredSourceGatewayId !== state.sourceGatewayId,
+  ].some(Boolean);
+}
+
+async function cancellationResult(
+  execution: OrdinaryV2Execution,
+): Promise<OperationResult | null> {
+  const { ctx, deps } = execution.input;
+  const state = execution.state;
+  if (isAbortPhase(state.phase) || isCustomerMigrationV2PostIntent(state)) return null;
+  if (!await ctx.cancellationRequested?.()) return null;
+  if (state.phase === "initialized") {
+    return { steps: [], success: false, error: "customer migration cancelled before freeze" };
+  }
+  execution.state = beginCustomerMigrationV2Abort(
+    state,
+    "customer migration superseded",
+    deps.now(),
+  );
+  await persistV2(ctx, execution.state);
+  return null;
+}
+
+async function ordinaryV2IterationFailure(
+  execution: OrdinaryV2Execution,
+  error: unknown,
+): Promise<OperationResult | "continue"> {
+  if (classifyCustomerMigrationV2Error(error) === "retry") {
+    return { steps: [], success: false, error: v2RetryError(error), rolledBack: false };
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  if (isAbortPhase(execution.state.phase)) {
+    return {
+      steps: [],
+      success: false,
+      error: `customer migration V2 retry pending: status 503: abort cleanup blocked: ${message}`,
+      rolledBack: false,
+    };
+  }
+  if (isCustomerMigrationV2PostIntent(execution.state)) {
+    return {
+      steps: [],
+      success: false,
+      error: `customer migration V2 retry pending: status 503: roll-forward blocked: ${message}`,
+      rolledBack: false,
+    };
+  }
+  if (execution.state.phase === "initialized") {
+    return { steps: [], success: false, error: message, rolledBack: false };
+  }
+  execution.state = beginCustomerMigrationV2Abort(
+    execution.state,
+    message,
+    execution.input.deps.now(),
+  );
+  await persistV2(execution.input.ctx, execution.state);
+  return "continue";
+}
+
+async function runOrdinaryV2Iteration(
+  execution: OrdinaryV2Execution,
+): Promise<OperationResult | "continue" | "stop"> {
+  try {
+    const cancelled = await cancellationResult(execution);
+    if (cancelled) return cancelled;
+    if (execution.scopeChanged && !isAbortPhase(execution.state.phase)) {
+      throw new Error("durable customer migration V2 scope changed");
+    }
+    if (execution.state.phase === "initialized") {
+      await assertV2InitialBindings(execution.state, execution.input.deps);
+    }
+    const driverDeps = await buildV2DriverDeps(execution.state, execution.input.deps);
+    const next = await advanceCustomerMigrationV2(execution.state, driverDeps);
+    if (next === execution.state) return "stop";
+    execution.state = next;
+    await persistV2(execution.input.ctx, execution.state);
+    return "continue";
+  } catch (error) {
+    return ordinaryV2IterationFailure(execution, error);
+  }
+}
+
+async function assertV2InitialBindings(
+  state: CustomerMigrationV2State,
+  deps: MigrateCustomerDeps,
+): Promise<void> {
+  await deps.assertSystemConfigProtocolReady({
+    mode: "checkpoint-and-restore",
+    sourceGatewayId: state.sourceGatewayId,
+    sourceRevisionId: state.sourceRevisionId,
+    targetGatewayId: state.targetGatewayId,
+    targetRevisionId: state.targetRevisionId,
+  });
+  const [source, target, sourceRootFence, targetRootFence] = await Promise.all([
+    deps.resolveFromRevision(state.uid, state.sourceGatewayId),
+    deps.resolvePlacement(state.targetGatewayId),
+    deps.readGatewayRootFence(state.sourceGatewayId),
+    deps.readGatewayRootFence(state.targetGatewayId),
+  ]);
+  const sourceIsExact = source !== null && [
+    source.revisionId === state.sourceRevisionId,
+    source.release === state.sourceRelease,
+    (source.epoch ?? 0) === state.sourceEpoch,
+    (source.assignmentMode ?? "assigned") === state.sourceAssignmentMode,
+  ].every(Boolean);
+  if (!sourceIsExact) {
+    throw new Error("customer migration V2 source placement changed before freeze");
+  }
+  const targetIsExact = target?.ok === true && [
+    target.revisionId === state.targetRevisionId,
+    target.release === state.targetRelease,
+  ].every(Boolean);
+  if (!targetIsExact) {
+    throw new Error("customer migration V2 target placement changed before freeze");
+  }
+  if (
+    !sourceRootFence ||
+    !customerMigrationV2GatewayRootFenceEqual(sourceRootFence, state.sourceRootFence)
+  ) {
+    throw new Error("customer migration V2 source root changed before freeze");
+  }
+  if (
+    !targetRootFence ||
+    !customerMigrationV2GatewayRootFenceEqual(targetRootFence, state.targetRootFence)
+  ) {
+    throw new Error("customer migration V2 target root changed before freeze");
+  }
+}
+
+const V2_SOURCE_TRANSPORT_PHASES = new Set<CustomerMigrationV2State["phase"]>([
+  "initialized", "preSynced", "cutover", "abortIntent",
+]);
+const V2_BOTH_TRANSPORT_PHASES = new Set<CustomerMigrationV2State["phase"]>([
+  "targetPrepared", "candidateProven", "sourceQuiesced",
+]);
+const V2_TARGET_TRANSPORT_PHASES = new Set<CustomerMigrationV2State["phase"]>([
+  "keysSynced", "targetRestored", "finalSynced", "targetVerified",
+  "promotionIntent", "promoted", "sourceRetired", "abortPublished",
+]);
+
+function v2PhaseTransportIds(state: CustomerMigrationV2State): string[] {
+  if (V2_SOURCE_TRANSPORT_PHASES.has(state.phase)) return [state.sourceRevisionId];
+  if (V2_BOTH_TRANSPORT_PHASES.has(state.phase)) {
+    return [state.sourceRevisionId, state.targetRevisionId];
+  }
+  return V2_TARGET_TRANSPORT_PHASES.has(state.phase) ? [state.targetRevisionId] : [];
+}
+
+async function buildV2DriverDeps(
+  state: CustomerMigrationV2State,
+  deps: MigrateCustomerDeps,
+) {
+  const transportIds = v2PhaseTransportIds(state);
+  const urls = new Map<string, string>();
+  await Promise.all(transportIds.map(async (transportId) => {
+    urls.set(transportId, await deps.resolveGatewayUrl(transportId));
+  }));
+  const client = deps.buildClient((transportId) => {
+    const url = urls.get(transportId);
+    if (!url) {
+      throw new Error(`migration client called with unexpected gatewayId: ${transportId}`);
+    }
+    return url;
+  });
+  const restoreSnapshot = state.phase === "keysSynced"
+    ? await deps.readUserSnapshot(state.uid)
+    : undefined;
+  if (state.phase === "keysSynced" && !restoreSnapshot) {
+    throw new Error(`durable snapshot not found for ${state.uid}`);
+  }
+  return {
+    client,
+    ...(restoreSnapshot ? { restoreSnapshot } : {}),
+    installTargetContext: (context: CustomerMigrationV2TargetContext) =>
+      deps.installTargetSystemConfigContext(state.targetRevisionId, context),
+    clearTargetContext: () => deps.clearTargetSystemConfigContext(state.targetRevisionId),
+    assertCandidateProofCurrent: (proof: ConfigCandidateProofResponse) =>
+      deps.assertCandidateProofCurrent(state.targetRevisionId, state.targetImageTag, proof),
+    setSourceAssignmentState: (assignmentState: "serving" | "quiescing") =>
+      deps.setAssignmentState({
+        gatewayId: state.sourceGatewayId,
+        uid: state.uid,
+        state: assignmentState,
+        slug: state.slug,
+        revisionId: state.sourceRevisionId,
+        release: state.sourceRelease,
+        epoch: state.sourceEpoch,
+        updatedByOperationId: state.operationId,
+        createIfMissing: state.sourceAssignmentMode === "unassigned-live",
+      }),
+    commitCutover: (fence: CustomerMigrationV2CutoverFence) =>
+      deps.commitV2Cutover({ ...fence, uid: state.uid, slug: state.slug }),
+    now: deps.now,
+  };
+}
+
 interface MigrateCustomerInput {
   uid?: unknown;
+  fromGatewayId?: unknown;
   toGatewayId?: unknown;
   systemConfigMigrationMode?: unknown;
   source?: unknown;
@@ -377,6 +770,7 @@ interface MigrationTargets {
   fromRevisionId: string;
   fromRelease: number;
   fromEpoch: number;
+  sourceAssignmentMode: "assigned" | "unassigned-live";
   fromTransportId: string;
   toTransportId: string;
 }
@@ -432,6 +826,7 @@ async function resolveMigrationTargets(
       fromRevisionId: fromRevision.revisionId,
       fromRelease: fromRevision.release,
       fromEpoch: fromRevision.epoch ?? 0,
+      sourceAssignmentMode: fromRevision.assignmentMode ?? "assigned",
       fromTransportId: fromRevision.revisionId,
       toTransportId: to.revisionId,
     },
@@ -553,6 +948,66 @@ function migrationRequest(input: MigrateCustomerInput):
   return { uid: input.uid, toGatewayId: input.toGatewayId };
 }
 
+function durableMigrationTargets(state: CustomerMigrationV2State): MigrationTargets {
+  return {
+    toGatewayId: state.targetGatewayId,
+    fromGatewayId: state.sourceGatewayId,
+    toRevisionId: state.targetRevisionId,
+    toRelease: state.targetRelease,
+    fromRevisionId: state.sourceRevisionId,
+    fromRelease: state.sourceRelease,
+    fromEpoch: state.sourceEpoch,
+    sourceAssignmentMode: state.sourceAssignmentMode,
+    fromTransportId: state.sourceRevisionId,
+    toTransportId: state.targetRevisionId,
+  };
+}
+
+function terminalDurableMigrationResult(
+  deps: MigrateCustomerDeps,
+  op: Operation,
+  input: MigrateCustomerInput,
+  request: { uid: string; toGatewayId: string },
+): OperationResult | null {
+  const state = op.customerMigrationV2;
+  if (state?.phase !== "complete" && state?.phase !== "aborted") return null;
+  const scopeChanged = [
+    state.operationId !== op.id,
+    state.migrationId !== deps.genMigrationId(op.id),
+    state.uid !== request.uid,
+    state.targetGatewayId !== request.toGatewayId,
+    typeof input.fromGatewayId === "string" &&
+      input.fromGatewayId !== state.sourceGatewayId,
+  ].some(Boolean);
+  if (scopeChanged) return failure("durable customer migration V2 input changed");
+  return state.phase === "complete"
+    ? { steps: [], success: true, rolledBack: false }
+    : {
+        steps: [],
+        success: false,
+        error: state.abortReason ?? "customer migration V2 aborted",
+        rolledBack: true,
+      };
+}
+
+function resumeDurableMigration(
+  deps: MigrateCustomerDeps,
+  op: Operation,
+  ctx: OperationContext,
+): Promise<OperationResult> | null {
+  const state = op.customerMigrationV2;
+  if (!state) return null;
+  return runOrdinaryMigrationV2({
+    op,
+    ctx,
+    deps,
+    targets: durableMigrationTargets(state),
+    uid: state.uid,
+    slug: state.slug,
+    migrationId: state.migrationId,
+  });
+}
+
 async function prepareRollFence(input: {
   deps: MigrateCustomerDeps;
   migrationInput: MigrateCustomerInput;
@@ -595,11 +1050,16 @@ async function prepareRollFence(input: {
 async function prepareMigration(
   deps: MigrateCustomerDeps,
   op: Operation,
-): Promise<PreparedMigration | { error: string; rolledBack?: false }> {
-  const migrationInput = op.input as MigrateCustomerInput;
-  const request = migrationRequest(migrationInput);
-  if ("error" in request) return request;
-  const user = await deps.readUser(request.uid);
+  ctx: OperationContext,
+  migrationInput: MigrateCustomerInput,
+  request: { uid: string; toGatewayId: string },
+): Promise<PreparedMigration | { result: OperationResult } | { error: string; rolledBack?: false }> {
+  let user: UserGatewayInfo | null;
+  try {
+    user = await deps.readUser(request.uid);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
   if (!user) return { error: `user not found: ${request.uid}` };
   const migrationId = deps.genMigrationId(op.id);
 
@@ -611,6 +1071,14 @@ async function prepareMigration(
       request.toGatewayId,
     );
     if ("error" in resolved) return resolved;
+    if (typeof migrationInput.fromGatewayId === "string" &&
+      migrationInput.fromGatewayId !== resolved.targets.fromGatewayId) {
+      return {
+        error:
+          `declared source ${migrationInput.fromGatewayId} does not match resolved source ${resolved.targets.fromGatewayId}`,
+        rolledBack: false,
+      };
+    }
     const preAcquiredConfigCheckpoint = requestedPreAcquiredConfigCheckpoint(
       migrationInput.preAcquiredConfigCheckpoint,
     );
@@ -628,6 +1096,20 @@ async function prepareMigration(
       sourceGatewayId: user.currentGatewayId,
       targetGatewayId: request.toGatewayId,
     });
+    const ordinaryV2 = systemConfigMigrationMode === "checkpoint-and-restore" &&
+      migrationInput.source !== "release-roll";
+    if (ordinaryV2) {
+      const result = await executeOrdinaryMigrationV2({
+        deps,
+        op,
+        ctx,
+        targets: resolved.targets,
+        uid: request.uid,
+        slug: user.slug,
+        migrationId,
+      });
+      return { result };
+    }
     await deps.assertSystemConfigProtocolReady({
       mode: systemConfigMigrationMode,
       sourceGatewayId: resolved.targets.fromGatewayId,
@@ -661,6 +1143,28 @@ async function prepareMigration(
     };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function executeOrdinaryMigrationV2(input: {
+  deps: MigrateCustomerDeps;
+  op: Operation;
+  ctx: OperationContext;
+  targets: MigrationTargets;
+  uid: string;
+  slug: string;
+  migrationId: string;
+}): Promise<OperationResult> {
+  if (input.targets.toRelease === null) {
+    return failure("customer migration V2 target has no release");
+  }
+  try {
+    return await runOrdinaryMigrationV2(input);
+  } catch (error) {
+    if (classifyCustomerMigrationV2Error(error) === "retry") {
+      return failure(v2RetryError(error), false);
+    }
+    return failure(error instanceof Error ? error.message : String(error), false);
   }
 }
 
@@ -733,8 +1237,16 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
   return async (op: Operation, ctx: OperationContext): Promise<OperationResult> => {
     const cleanup = await cleanupResult(deps, ctx, op);
     if (cleanup) return cleanup;
-    const prepared = await prepareMigration(deps, op);
+    const input = op.input as MigrateCustomerInput;
+    const request = migrationRequest(input);
+    if ("error" in request) return failure(request.error);
+    const terminal = terminalDurableMigrationResult(deps, op, input, request);
+    if (terminal) return terminal;
+    const resumed = resumeDurableMigration(deps, op, ctx);
+    if (resumed) return resumed;
+    const prepared = await prepareMigration(deps, op, ctx, input, request);
     if ("error" in prepared) return failure(prepared.error, prepared.rolledBack);
+    if ("result" in prepared) return prepared.result;
     return executeMigration(deps, ctx, prepared);
   };
 }
