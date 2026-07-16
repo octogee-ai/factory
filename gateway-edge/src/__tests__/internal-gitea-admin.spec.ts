@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => {
   const state = {
     operationDocs: [] as Record<string, unknown>[],
     users: new Map<string, Record<string, unknown>>(),
+    gateways: new Map<string, Record<string, unknown>>(),
   };
   const valueAtPath = (data: Record<string, unknown>, path: string): unknown => {
     let cursor: unknown = data;
@@ -64,6 +65,19 @@ const mocks = vi.hoisted(() => {
             }),
           })),
         });
+      }
+      if (name === "gateways") {
+        return {
+          doc: vi.fn((gatewayId: string) => ({
+            get: vi.fn(async () => {
+              const data = state.gateways.get(gatewayId);
+              return {
+                exists: data !== undefined,
+                data: () => data,
+              };
+            }),
+          })),
+        };
       }
       throw new Error(`unexpected collection: ${name}`);
     }),
@@ -125,6 +139,7 @@ describe("internal gitea-admin route", () => {
     vi.clearAllMocks();
     mocks.state.operationDocs.length = 0;
     mocks.state.users.clear();
+    mocks.state.gateways.clear();
     vi.mocked(hasRunningInboundMigrationForSlug).mockResolvedValue(false);
     vi.mocked(readAssignedSlugsForGateway).mockResolvedValue(["acme"]);
   });
@@ -180,6 +195,36 @@ describe("internal gitea-admin route", () => {
       "acme",
     );
     expect(giteaAdmin.readGiteaUserPubKey).toHaveBeenCalledWith("acme");
+  });
+
+  it("allows an isolated gateway to bootstrap its configured builder before assignment", async () => {
+    vi.mocked(readAssignedSlugsForGateway).mockResolvedValueOnce([]);
+    mocks.state.gateways.set("bender", {
+      configSchemaVersion: 1,
+      profile: "operator",
+      gatewayClass: "operator",
+      imageProfile: "operator",
+      sizingTier: null,
+      computeClass: null,
+      gcpProject: null,
+      gatewayContainerSecurityContext: null,
+      serviceAccountName: "octogee-gw-bender",
+      serviceAccount: null,
+      operatorAccess: null,
+      ownerUid: "owner-bender",
+      coOwnerUids: [],
+      builderSlug: "acme",
+      openclawOverrides: null,
+      modelBrokerLimits: null,
+      preemption: null,
+    });
+
+    const res = await authed(
+      request(app()).post("/internal/gitea/ensure-user"),
+    ).send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
+
+    expect(res.status).toBe(204);
+    expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith("acme", "ssh-ed25519 AAA");
   });
 
   it("denies unassigned slugs when the inbound migration helper does not allow them", async () => {

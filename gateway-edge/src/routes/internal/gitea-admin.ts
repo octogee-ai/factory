@@ -1,6 +1,8 @@
 import { Router, type Request, type Response } from "express";
 
 import { isValidProjectId, isValidUsername } from "@octogee/shared/types/identity";
+import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
+import { isGatewayMutableConfigForGateway } from "@octogee/shared/types/gateway-mutable-config";
 import {
   hasRunningInboundMigrationForSlug,
   readAssignedSlugsForGateway,
@@ -88,10 +90,15 @@ async function requireAssignedHere(req: Request, res: Response, slug: string): P
 
   try {
     const assigned = await readAssignedSlugsForGateway(db, gatewayId);
-    if (
-      !assigned.includes(slug) &&
-      !(await hasRunningInboundMigrationForSlug(db, gatewayId, slug))
-    ) {
+    if (assigned.includes(slug)) return true;
+    const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+    const gateway = gatewaySnap.exists ? gatewaySnap.data() : undefined;
+    const configuredIsolatedBuilder =
+      isGatewayMutableConfigForGateway(gateway, gatewayId) &&
+      gateway.gatewayClass !== "shared" &&
+      gateway.builderSlug === slug;
+    if (configuredIsolatedBuilder) return true;
+    if (!(await hasRunningInboundMigrationForSlug(db, gatewayId, slug))) {
       res.status(403).json({ error: "slug is not assigned to this gateway" });
       return false;
     }
