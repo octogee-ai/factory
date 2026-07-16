@@ -252,6 +252,7 @@ import {
 import {
   createFirestoreReleaseAdmissionGate,
   operationAllowedDuringReleaseDrain,
+  planReleaseSensitiveRollStep,
   type ControllerReleaseAdmissionGate,
 } from "./release-admission-gate.js";
 import type {
@@ -1485,6 +1486,55 @@ function buildRollConfigProofDeps(
   };
 }
 
+function buildRollReleaseAdmissionDeps(
+  args: BuildRollPassDepsArgs,
+): Pick<RollPassDeps, "releaseAdmissionDraining" | "admitReleaseSensitiveRollStep"> {
+  const { db } = args;
+  return {
+    releaseAdmissionDraining: async () => (await args.releaseAdmissionGate.state()).draining,
+    admitReleaseSensitiveRollStep: async ({
+      gatewayId,
+      rollOperationId,
+      migrationId,
+      startedAt,
+    }) => {
+      const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+      return db.runTransaction(async (txn) => {
+        const [gate, snapshot] = await Promise.all([
+          args.releaseAdmissionGate.stateInTransaction(txn),
+          txn.get(gatewayRef),
+        ]);
+        const gateway = snapshot.data();
+        if (!isDurableRootConfigDoc(gateway, gatewayId)) {
+          throw new Error(`gateway ${gatewayId} durable root disappeared before config work`);
+        }
+        if (!gateway.roll) {
+          throw new Error(`gateway ${gatewayId} has no active roll for config work`);
+        }
+        const plan = planReleaseSensitiveRollStep({
+          draining: gate.draining,
+          activeRollOperationId: gateway.roll.operationId,
+          existing: gateway.roll.releaseAdmissionWork,
+          requested: { rollOperationId, migrationId },
+        });
+        if (plan === "resume") return true;
+        if (plan === "hold") return false;
+        txn.update(gatewayRef, {
+          "roll.releaseAdmissionWork": {
+            kind: "system-config-checkpoint",
+            migrationId,
+            startedAt,
+          },
+          "roll.updatedAt": startedAt,
+          updatedAt: startedAt,
+          updatedBy: "cowboy",
+        });
+        return true;
+      });
+    },
+  };
+}
+
 function buildRollPassDeps(args: BuildRollPassDepsArgs): RollPassDeps {
   const {
     db,
@@ -1509,7 +1559,7 @@ function buildRollPassDeps(args: BuildRollPassDepsArgs): RollPassDeps {
     sourceForwarderTtlMs: ROLL_SOURCE_FORWARDER_TTL_MS,
     migrateRetryBackoffMs: ROLL_MIGRATE_RETRY_BACKOFF_MS,
     ...buildRollRevisionAndMigrationDeps(args),
-    releaseAdmissionDraining: async () => (await args.releaseAdmissionGate.state()).draining,
+    ...buildRollReleaseAdmissionDeps(args),
     isSystemConfigProtocolFleetReady: () => isFleetConfigProtocolReady(db),
     checkpointConfigFreeze: async ({ gatewayId, revisionId, migrationId, slug }) => {
       const sourceUrl = await resolveGatewayUrlFromFirestore(db, revisionId);

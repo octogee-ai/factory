@@ -96,6 +96,12 @@ export interface GatewayRollSystemConfigState {
   finalizedAt?: number;
 }
 
+export interface GatewayRollReleaseAdmissionWork {
+  kind: "system-config-checkpoint";
+  migrationId: string;
+  startedAt: number;
+}
+
 export interface GatewayRollState {
   operationId: string;
   status: GatewayRollStatus;
@@ -109,6 +115,7 @@ export interface GatewayRollState {
   error: string | null;
   systemConfigCheckpoint?: GatewayRollSystemConfigCheckpoint | null;
   systemConfigRoll?: GatewayRollSystemConfigState | null;
+  releaseAdmissionWork?: GatewayRollReleaseAdmissionWork;
   // Selector-flip wall-clock. The source revision survives as a forwarder for a
   // drain TTL measured from this durable timestamp, so a controller crash never
   // loses the retire deadline. Null until the flip step runs.

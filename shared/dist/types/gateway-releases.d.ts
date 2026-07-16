@@ -47,6 +47,11 @@ export interface GatewayRollSystemConfigState {
     sourceRetiredAt?: number;
     finalizedAt?: number;
 }
+export interface GatewayRollReleaseAdmissionWork {
+    kind: "system-config-checkpoint";
+    migrationId: string;
+    startedAt: number;
+}
 export interface GatewayRollState {
     operationId: string;
     status: GatewayRollStatus;
@@ -60,6 +65,7 @@ export interface GatewayRollState {
     error: string | null;
     systemConfigCheckpoint?: GatewayRollSystemConfigCheckpoint | null;
     systemConfigRoll?: GatewayRollSystemConfigState | null;
+    releaseAdmissionWork?: GatewayRollReleaseAdmissionWork;
     flippedAt: number | null;
 }
 export type GatewayIdleSleepStatus = "paused" | "empty-waiting" | "returning-to-shared";
