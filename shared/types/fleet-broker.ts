@@ -26,6 +26,14 @@ export interface FleetBrokerAssignmentRosterEntry {
   epoch: number;
 }
 
+export interface FleetBrokerConfiguredBuilderBootstrap {
+  uid: string;
+  slug: string;
+  agentId: string;
+  accountId: string;
+  coachToken: string;
+}
+
 // Vegas: per-project agent state as served to gateways. `token`/`mmUserId`
 // come from users/{uid}/secrets/projectAgentMattermost-{pid} (null until the
 // bot is minted); `enabled` mirrors the server-managed project-doc agent flag.

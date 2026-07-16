@@ -10,6 +10,12 @@ export declare function configuredBuilderBootstrapAllowed(value: unknown, input:
     revisionId: string | null;
     slug: string;
 }): boolean;
+export declare function configuredBuilderCredentialBootstrapAllowed(value: unknown, input: {
+    gatewayId: string;
+    revisionId: string | null;
+    slug: string;
+    uid: string;
+}): boolean;
 export interface GatewayArtifact {
     imageRepository: string;
     imageTag: string;

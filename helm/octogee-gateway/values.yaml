@@ -178,6 +178,7 @@ env:
   openaiEmbeddingsBaseUrl: "https://api.openai.com/v1"
   openaiEmbeddingsModel: "text-embedding-3-small"
   openclawLogLevel: "info"
+  openclawDoctorMode: "run"
   fleetControllerPort: "3003"
   migrationRsyncPort: "30873"
 
