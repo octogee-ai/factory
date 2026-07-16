@@ -32,7 +32,8 @@ import {
   resolveOwnerModelBrokerGrant,
 } from "../lib/model-broker-limits.js";
 import {
-  findAssignedOrInboundMigratingUserByAgentId,
+  configuredBuilderSlugCredentialBootstrapAllowed,
+  findAssignedOrInboundMigratingOrConfiguredUserByAgentId,
   findAssignedUserByAgentId,
 } from "./fleet-broker.js";
 
@@ -260,11 +261,18 @@ function agentModelTokenSecretName(input: {
 
 async function handleByosubCred(
   db: Firestore,
+  readCredentialSecret: (name: string, version?: string) => Promise<string>,
   gatewayId: string,
+  podName: string | undefined,
   agentId: string,
   res: Response,
 ): Promise<void> {
-  const assigned = await findAssignedOrInboundMigratingUserByAgentId(db, gatewayId, agentId);
+  const assigned = await findAssignedOrInboundMigratingOrConfiguredUserByAgentId(
+    db,
+    gatewayId,
+    podName,
+    agentId,
+  );
   if (!assigned) {
     res.status(403).json(FORBIDDEN);
     return;
@@ -294,7 +302,11 @@ async function handleByosubCred(
 
   const credentials = [];
   for (const { provider, secretName } of parsed.refs) {
-    credentials.push({ provider, secretName, credential: await readSecret(secretName) });
+    credentials.push({
+      provider,
+      secretName,
+      credential: await readCredentialSecret(secretName),
+    });
   }
   warnSkippedUserByosubProviders({
     gatewayId,
@@ -328,9 +340,10 @@ async function handlePlatformEmbeddingKey(
     return;
   }
 
-  const assigned = await findAssignedOrInboundMigratingUserByAgentId(
+  const assigned = await findAssignedOrInboundMigratingOrConfiguredUserByAgentId(
     db,
     bound.gatewayId,
+    bound.podName,
     agentId,
   );
   if (!assigned) {
@@ -357,7 +370,7 @@ export function createByokBrokerRoutes(opts: {
   const router = Router();
   const { db } = opts;
   const now = opts.now ?? Date.now;
-  const readPlatformSecret = opts.readSecret ?? readSecret;
+  const readCredentialSecret = opts.readSecret ?? readSecret;
 
   // Materialize a byosub OAuth credential (ChatGPT/codex or Claude/claude-cli)
   // for a gateway that cannot reach Secret Manager directly (cattle pods are
@@ -374,7 +387,14 @@ export function createByokBrokerRoutes(opts: {
       return;
     }
 
-    await handleByosubCred(db, bound.gatewayId, agentId, res);
+    await handleByosubCred(
+      db,
+      readCredentialSecret,
+      bound.gatewayId,
+      bound.podName,
+      agentId,
+      res,
+    );
   });
 
   // Materialize a byok API-key credential (anthropic/openai key, Grok,
@@ -400,17 +420,28 @@ export function createByokBrokerRoutes(opts: {
     const { slug, provider, version } = parsed;
 
     const roster = await readAssignedSlugsForGateway(db, bound.gatewayId);
-    if (!roster.includes(slug)) {
+    if (
+      !roster.includes(slug) &&
+      !(await configuredBuilderSlugCredentialBootstrapAllowed(
+        db,
+        bound.gatewayId,
+        bound.podName,
+        slug,
+      ))
+    ) {
       res.status(403).json(FORBIDDEN);
       return;
     }
 
-    const value = await readSecret(`byok-${slug}-${provider}`, version ?? "latest");
+    const value = await readCredentialSecret(
+      `byok-${slug}-${provider}`,
+      version ?? "latest",
+    );
     res.json({ value });
   });
 
   router.post("/platform-embedding-key", async (req, res) => {
-    await handlePlatformEmbeddingKey(db, readPlatformSecret, req, res);
+    await handlePlatformEmbeddingKey(db, readCredentialSecret, req, res);
   });
 
   // Mint an owner-scoped broker token for one customer-agent on a shared
@@ -436,9 +467,10 @@ export function createByokBrokerRoutes(opts: {
       return;
     }
 
-    const assigned = await findAssignedOrInboundMigratingUserByAgentId(
+    const assigned = await findAssignedOrInboundMigratingOrConfiguredUserByAgentId(
       db,
       bound.gatewayId,
+      bound.podName,
       agentId,
     );
     if (!assigned) {
@@ -491,9 +523,10 @@ export function createByokBrokerRoutes(opts: {
       res.status(400).json(VALID_AGENT_ID_REQUIRED);
       return;
     }
-    const assigned = await findAssignedOrInboundMigratingUserByAgentId(
+    const assigned = await findAssignedOrInboundMigratingOrConfiguredUserByAgentId(
       db,
       bound.gatewayId,
+      bound.podName,
       agentId,
     );
     if (!assigned) {

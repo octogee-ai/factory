@@ -78,6 +78,19 @@ export function configuredBuilderBootstrapAllowed(
   return revisionIdForRelease(input.gatewayId, gateway.desiredRelease) === input.revisionId;
 }
 
+export function configuredBuilderCredentialBootstrapAllowed(
+  value: unknown,
+  input: {
+    gatewayId: string;
+    revisionId: string | null;
+    slug: string;
+    uid: string;
+  },
+): boolean {
+  return configuredBuilderBootstrapAllowed(value, input) &&
+    (value as GatewayMutableConfig).ownerUid === input.uid;
+}
+
 export interface GatewayArtifact {
   imageRepository: string;
   imageTag: string;

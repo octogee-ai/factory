@@ -42,6 +42,10 @@ export function configuredBuilderBootstrapAllowed(value, input) {
     }
     return revisionIdForRelease(input.gatewayId, gateway.desiredRelease) === input.revisionId;
 }
+export function configuredBuilderCredentialBootstrapAllowed(value, input) {
+    return configuredBuilderBootstrapAllowed(value, input) &&
+        value.ownerUid === input.uid;
+}
 function isRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   configuredBuilderBootstrapAllowed,
+  configuredBuilderCredentialBootstrapAllowed,
   mergeGatewayConfigWithArtifact,
   isBareGatewayId,
   isGatewayMutableConfig,
@@ -104,6 +105,57 @@ describe("configuredBuilderBootstrapAllowed", () => {
       gatewayId: "bender",
       revisionId: "bender-r2",
       slug: "alice",
+    })).toBe(false);
+  });
+});
+
+describe("configuredBuilderCredentialBootstrapAllowed", () => {
+  const configured = {
+    gatewayId: "bender",
+    createdAt: 1,
+    createdBy: "admin",
+    updatedAt: 1,
+    updatedBy: "admin",
+    latestRelease: 2,
+    desiredRelease: 2,
+    liveRelease: 1,
+    liveRevisionId: "bender-r1",
+    trafficRevisionId: "bender-r1",
+    desiredStatus: "running",
+    roll: {
+      operationId: "roll-1",
+      status: "warming",
+      fromRelease: 1,
+      toRelease: 2,
+      sourceRevisionId: "bender-r1",
+      targetRevisionId: "bender-r2",
+      acceptingNewAssignments: false,
+      startedAt: 1,
+      updatedAt: 1,
+      error: null,
+      flippedAt: null,
+    },
+    ...mutableConfig({ builderSlug: "alice", ownerUid: "uid-alice" }),
+  };
+
+  it("allows credentials only for the configured builder owner on the exact target revision", () => {
+    expect(configuredBuilderCredentialBootstrapAllowed(configured, {
+      gatewayId: "bender",
+      revisionId: "bender-r2",
+      slug: "alice",
+      uid: "uid-alice",
+    })).toBe(true);
+    expect(configuredBuilderCredentialBootstrapAllowed(configured, {
+      gatewayId: "bender",
+      revisionId: "bender-r2",
+      slug: "alice",
+      uid: "uid-victim",
+    })).toBe(false);
+    expect(configuredBuilderCredentialBootstrapAllowed(configured, {
+      gatewayId: "bender",
+      revisionId: "bender-r1",
+      slug: "alice",
+      uid: "uid-alice",
     })).toBe(false);
   });
 });

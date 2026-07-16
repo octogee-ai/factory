@@ -36,4 +36,33 @@ describe("fleet broker system config status", () => {
       }),
     );
   });
+
+  it("requests the narrow configured-builder bootstrap against the immutable revision", async () => {
+    const bootstrap = {
+      uid: "uid-alice",
+      slug: "alice",
+      agentId: "octogee-alice-coach",
+      accountId: "alice-coach",
+      coachToken: "coach-token",
+    };
+    vi.mocked(internalFetch).mockResolvedValueOnce(new Response(
+      JSON.stringify({ bootstrap }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ));
+
+    await expect(
+      createFleetBrokerClient("bender", "bender-r9").configuredBuilderBootstrap("alice"),
+    ).resolves.toEqual(bootstrap);
+    expect(internalFetch).toHaveBeenCalledWith(
+      "http://broker/internal/fleet/configured-builder-bootstrap",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          gatewayId: "bender",
+          revisionId: "bender-r9",
+          slug: "alice",
+        }),
+      }),
+    );
+  });
 });

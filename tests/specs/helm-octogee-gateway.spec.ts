@@ -85,6 +85,34 @@ function gatewayImageLabel(dep: string): string {
 }
 
 describe("helm/octogee-gateway/ — single-instance rendering", () => {
+  it("provides the durable agent and workspace roots required by OpenClaw config", () => {
+    const deployment = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const gateway = containerBlock(deployment, "gateway");
+    expect(gateway).toMatch(
+      /name:\s*CUSTOMERS_DIR[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/customers"/,
+    );
+    expect(gateway).toMatch(
+      /name:\s*AGENTS_DIR[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/agents"/,
+    );
+  });
+
+  it("renders the explicit OpenClaw Doctor mode only into the core gateway", () => {
+    const defaults = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    expect(containerBlock(defaults, "gateway")).toMatch(
+      /name:\s*OPENCLAW_DOCTOR_MODE[\s\S]*?value:\s*"run"/,
+    );
+    expect(containerBlock(defaults, "gateway-edge")).not.toMatch(/OPENCLAW_DOCTOR_MODE/);
+
+    const skipped = findDoc(
+      helmTemplate("octogee-gw-default", { "env.openclawDoctorMode": "skip" }),
+      "Deployment",
+      "octogee-gateway-default",
+    ) ?? "";
+    expect(containerBlock(skipped, "gateway")).toMatch(
+      /name:\s*OPENCLAW_DOCTOR_MODE[\s\S]*?value:\s*"skip"/,
+    );
+  });
+
   it("keeps the broad durable writer selected by default and enables only the bounded candidate pair", () => {
     const defaultDeployment =
       findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";

@@ -206,6 +206,13 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
     sleep 5
     begin_system_config_boot_transaction
   done
+  log "Pre-boot: hydrating the configured builder credential for ${GATEWAY_REVISION_ID}..."
+  until "$TSX" /octogee/scripts/entrypoints/configured-builder-bootstrap.ts; do
+    end_system_config_boot_transaction
+    log "Pre-boot: configured builder credential unavailable; repair services remain live, retrying in 5s..."
+    sleep 5
+    begin_system_config_boot_transaction
+  done
 else
   if [ ! -f "$OPENCLAW_CONFIG_PATH" ]; then
     mkdir -p "$(dirname "$OPENCLAW_CONFIG_PATH")"
@@ -404,16 +411,36 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   timeout -k 5s 20s "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts || log "github-cli-auth-hydrate: non-fatal failure"
 fi
 
+run_openclaw_doctor() {
+  case "${OPENCLAW_DOCTOR_MODE:-run}" in
+    run)
+      export OPENCLAW_DOCTOR_RESULT=ok
+      if ! openclaw doctor --fix --non-interactive; then
+        export OPENCLAW_DOCTOR_RESULT=error
+        return 1
+      fi
+      ;;
+    skip)
+      unset OPENCLAW_DOCTOR_RESULT
+      log "Pre-boot: OpenClaw Doctor skipped by OPENCLAW_DOCTOR_MODE=skip"
+      return 0
+      ;;
+    *)
+      export OPENCLAW_DOCTOR_RESULT=error
+      log "FATAL: invalid OPENCLAW_DOCTOR_MODE=${OPENCLAW_DOCTOR_MODE}; expected run or skip"
+      return 1
+      ;;
+  esac
+}
+
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   export OPENCLAW_SERVICE_REPAIR_POLICY=external
   case "$SYSTEM_CONFIG_BOOT_ROLE" in
     normal)
       while true; do
         REPAIR_OK=true
-        export OPENCLAW_DOCTOR_RESULT=ok
         log "Pre-boot: repairing and validating durable OpenClaw config..."
-        if ! openclaw doctor --fix --non-interactive; then
-          export OPENCLAW_DOCTOR_RESULT=error
+        if ! run_openclaw_doctor; then
           log "Pre-boot: OpenClaw Doctor failed; repair services remain live"
           REPAIR_OK=false
         fi
@@ -450,7 +477,7 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
             log "Pre-boot: target system_config schema migration failed; retrying"
             REPAIR_OK=false
           fi
-          if [ "$REPAIR_OK" = "true" ] && ! openclaw doctor --fix --non-interactive; then
+          if [ "$REPAIR_OK" = "true" ] && ! run_openclaw_doctor; then
             log "Pre-boot: target OpenClaw Doctor failed; retrying"
             REPAIR_OK=false
           fi
