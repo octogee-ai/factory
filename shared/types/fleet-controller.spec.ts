@@ -28,6 +28,7 @@ describe("durable OpenClaw config control protocol", () => {
       "candidate-proof",
       "promote-candidate",
       "abort-v2",
+      "retire-v2",
       "finalize-v2",
     ]);
   });
