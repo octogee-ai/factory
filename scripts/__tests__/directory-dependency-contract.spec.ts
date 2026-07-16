@@ -111,11 +111,16 @@ describe("directory dependency repository contract", () => {
     expectBefore(gateway, "COPY --chown=node:node scripts/.npmrc", "RUN npm install --no-audit --no-fund");
   });
 
-  it("includes every packed interface in Docker build contexts", () => {
-    const dockerignore = fs.readFileSync(path.join(root, ".dockerignore"), "utf8");
-
-    for (const source of ["core", "shared", "test-helpers"]) {
-      expect(dockerignore).toContain(`!${source}/dist/**`);
+  it("re-includes every packed interface in Docker and Cloud Build upload contexts", () => {
+    for (const ignoreFile of [".dockerignore", ".gcloudignore"]) {
+      const lines = fs
+        .readFileSync(path.join(root, ignoreFile), "utf8")
+        .split("\n")
+        .map((line) => line.trim());
+      for (const source of ["core", "shared", "test-helpers"]) {
+        expect(lines).toContain(`!${source}/dist/`);
+        expect(lines).toContain(`!${source}/dist/**`);
+      }
     }
   });
 
