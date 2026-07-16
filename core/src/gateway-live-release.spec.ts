@@ -151,8 +151,80 @@ describe("configuredBuilderCredentialBootstrapAllowed", () => {
       slug: "alice",
       uid: "uid-victim",
     })).toBe(false);
+  });
+
+  it.each(["warming", "routing", "migrating"] as const)(
+    "allows the configured owner's credential to rehydrate on the exact load-bearing source during %s",
+    (status) => {
+      expect(configuredBuilderCredentialBootstrapAllowed({
+        ...configured,
+        roll: { ...configured.roll, status },
+      }, {
+        gatewayId: "bender",
+        revisionId: "bender-r1",
+        slug: "alice",
+        uid: "uid-alice",
+      })).toBe(true);
+    },
+  );
+
+  it.each(["retiring-source", "failed"] as const)(
+    "rejects source credential hydration after the roll reaches %s",
+    (status) => {
+      expect(configuredBuilderCredentialBootstrapAllowed({
+        ...configured,
+        roll: { ...configured.roll, status },
+      }, {
+        gatewayId: "bender",
+        revisionId: "bender-r1",
+        slug: "alice",
+        uid: "uid-alice",
+      })).toBe(false);
+    },
+  );
+
+  it("rejects source credential hydration unless it remains both live and traffic-bearing", () => {
+    expect(configuredBuilderCredentialBootstrapAllowed({
+      ...configured,
+      trafficRevisionId: "bender-r2",
+    }, {
+      gatewayId: "bender",
+      revisionId: "bender-r1",
+      slug: "alice",
+      uid: "uid-alice",
+    })).toBe(false);
+    expect(configuredBuilderCredentialBootstrapAllowed({
+      ...configured,
+      liveRevisionId: "bender-r2",
+    }, {
+      gatewayId: "bender",
+      revisionId: "bender-r1",
+      slug: "alice",
+      uid: "uid-alice",
+    })).toBe(false);
+  });
+
+  it("rejects stale revisions and cross-tenant configured-builder identity", () => {
     expect(configuredBuilderCredentialBootstrapAllowed(configured, {
       gatewayId: "bender",
+      revisionId: "bender-r3",
+      slug: "alice",
+      uid: "uid-alice",
+    })).toBe(false);
+    expect(configuredBuilderCredentialBootstrapAllowed(configured, {
+      gatewayId: "bender",
+      revisionId: "bender-r1",
+      slug: "victim",
+      uid: "uid-alice",
+    })).toBe(false);
+    expect(configuredBuilderCredentialBootstrapAllowed(configured, {
+      gatewayId: "bender",
+      revisionId: "bender-r1",
+      slug: "alice",
+      uid: "uid-victim",
+    })).toBe(false);
+    expect(configuredBuilderCredentialBootstrapAllowed(configured, {
+      gatewayId: "other",
       revisionId: "bender-r1",
       slug: "alice",
       uid: "uid-alice",

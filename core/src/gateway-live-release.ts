@@ -53,14 +53,29 @@ export function configuredBuilderBootstrapAllowed(
   value: unknown,
   input: { gatewayId: string; revisionId: string | null; slug: string },
 ): boolean {
+  const gateway = eligibleConfiguredBuilderGateway(value, input);
+  if (!gateway) return false;
+  if (gateway.roll) {
+    return gateway.roll.status !== "failed" &&
+      gateway.roll.targetRevisionId === input.revisionId;
+  }
+  return revisionIdForRelease(input.gatewayId, gateway.desiredRelease) === input.revisionId;
+}
+
+type ConfiguredBuilderGateway = GatewayDoc & GatewayMutableConfig & { retirementClaim?: unknown };
+
+function eligibleConfiguredBuilderGateway(
+  value: unknown,
+  input: { gatewayId: string; revisionId: string | null; slug: string },
+): ConfiguredBuilderGateway | null {
   if (
     !isGatewayDesiredDoc(value) ||
     value.gatewayId !== input.gatewayId ||
     !isGatewayMutableConfigForGateway(value, input.gatewayId)
   ) {
-    return false;
+    return null;
   }
-  const gateway = value as GatewayDoc & GatewayMutableConfig & { retirementClaim?: unknown };
+  const gateway = value as ConfiguredBuilderGateway;
   if (
     !input.revisionId ||
     gateway.desiredStatus !== "running" ||
@@ -69,13 +84,24 @@ export function configuredBuilderBootstrapAllowed(
     gateway.gatewayClass === "shared" ||
     gateway.builderSlug !== input.slug
   ) {
-    return false;
+    return null;
   }
-  if (gateway.roll) {
-    return gateway.roll.status !== "failed" &&
-      gateway.roll.targetRevisionId === input.revisionId;
-  }
-  return revisionIdForRelease(input.gatewayId, gateway.desiredRelease) === input.revisionId;
+  return gateway;
+}
+
+function activeRollSourceCredentialHydrationAllowed(
+  gateway: ConfiguredBuilderGateway,
+  revisionId: string | null,
+): boolean {
+  const roll = gateway.roll;
+  return Boolean(
+    revisionId &&
+    roll &&
+    (roll.status === "warming" || roll.status === "routing" || roll.status === "migrating") &&
+    roll.sourceRevisionId === revisionId &&
+    gateway.liveRevisionId === revisionId &&
+    gateway.trafficRevisionId === revisionId,
+  );
 }
 
 export function configuredBuilderCredentialBootstrapAllowed(
@@ -87,8 +113,10 @@ export function configuredBuilderCredentialBootstrapAllowed(
     uid: string;
   },
 ): boolean {
-  return configuredBuilderBootstrapAllowed(value, input) &&
-    (value as GatewayMutableConfig).ownerUid === input.uid;
+  const gateway = eligibleConfiguredBuilderGateway(value, input);
+  if (!gateway || gateway.ownerUid !== input.uid) return false;
+  return configuredBuilderBootstrapAllowed(gateway, input) ||
+    activeRollSourceCredentialHydrationAllowed(gateway, input.revisionId);
 }
 
 export interface GatewayArtifact {
