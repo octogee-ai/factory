@@ -166,6 +166,43 @@ function buildDeps(
 }
 
 describe("gateway operation queue — enqueue instead of reject (glmOperations wiring)", () => {
+  it("leaves new work pending while release admission drains", async () => {
+    const rolloutHandler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
+    const { db, store } = createFakeGlmOperationsDb({
+      "op-new": baseOp({ id: "op-new", createdAt: 1, input: { gatewayId: "default" } }),
+    });
+    const deps = buildDeps(db, { rollout: rolloutHandler });
+    (deps as unknown as { releaseAdmissionGate: unknown }).releaseAdmissionGate = {
+      stateInTransaction: async () => ({ draining: true, releaseId: "candidate", reason: "deploy" }),
+    };
+
+    await drainPendingOperationsOnce(deps);
+
+    expect(store.get("op-new")?.status).toBe("pending");
+    expect(rolloutHandler).not.toHaveBeenCalled();
+  });
+
+  it("admits a pending durable cleanup retry while release admission drains", async () => {
+    const migrationHandler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
+    const { db, store } = createFakeGlmOperationsDb({
+      "op-cleanup": baseOp({
+        id: "op-cleanup",
+        kind: "migrate-customer",
+        createdAt: 1,
+        output: { configCleanup: { migrationId: "migration-1" } },
+      }),
+    });
+    const deps = buildDeps(db, { "migrate-customer": migrationHandler });
+    (deps as unknown as { releaseAdmissionGate: unknown }).releaseAdmissionGate = {
+      stateInTransaction: async () => ({ draining: true, releaseId: "candidate", reason: "deploy" }),
+    };
+
+    await drainPendingOperationsOnce(deps);
+
+    expect(store.get("op-cleanup")?.status).toBe("succeeded");
+    expect(migrationHandler).toHaveBeenCalledOnce();
+  });
+
   it("queues a second rollout op instead of failing it while an earlier one is running, then admits it once the first finishes", async () => {
     let releaseFirst!: () => void;
     const firstGate = new Promise<void>((resolve) => {

@@ -31,10 +31,9 @@ Two triggers:
 Either way, the ritual is the same — you produce a new tarball, upload it
 to GCS, bump the pin in two cloudbuild files, build the base image, then
 let CI build the gateway bundle (`octogee-gateway` + `gateway-edge`, plus the
-`octogee-gateway-operator` image). **Cowboy is the sole
-deployer** — the new image sits in Artifact Registry until the operator
-triggers a rollout from the admin Gateways tab. PROD and TEST follow the
-same operator-driven path.
+`octogee-gateway-operator` image). **Cowboy remains the sole gateway Helm
+writer** — the new image sits in Artifact Registry until an immutable
+environment release tag authorizes a TEST-local or PROD-local roll.
 
 End-to-end this takes ~25 minutes of clock time, ~5 minutes of attention.
 Most of the wait is two Cloud Builds + one Release CI run.
@@ -43,17 +42,17 @@ Most of the wait is two Cloud Builds + one Release CI run.
 
 ## Architectural rule for this flow
 
-> **`gateway-build-operator-base.yml` produces artifacts. Cowboy deploys ALL gateway
-> builds.** CI does not write Firestore, does not call helm, does not roll
-> pods. Every gateway rollout — TEST and PROD — happens because an operator
-> (or Cowboy reconciling an existing desired-state) requested it. This
-> ritual ends at "the new SHA is in Artifact Registry"; the operator picks
-> it up from the admin Gateways tab when they're ready.
+> **Main produces artifacts; immutable environment tags release them; Cowboy
+> deploys gateway revisions.** CI never calls Helm for a gateway pod. A
+> `test/vX.Y.Z` tag can cut TEST's immutable release in TEST Firestore; a
+> `vX.Y.Z` tag independently cuts PROD's release in PROD Firestore. Cowboy
+> observes that local desired state and owns every gateway Helm write.
 
-Keep this in mind reading the steps below: any temptation to add a
-"deploy step" or "auto-rollout step" to CI is wrong. The race conditions
-that arise from CI competing with Cowboy for the helm lock are not worth
-the convenience.
+Both tag ceremonies close their environment's release-admission gate, finish
+the current customer migration, deploy the controller at quiescence, record
+the newer gateway target while the gate remains closed, then reopen Cowboy.
+This prevents controller replacement during a customer-transfer lease without
+making CI a second gateway deployer.
 
 ---
 
@@ -727,15 +726,16 @@ git commit -m "chore(gateway): roll forward to OpenClaw ${NEW_TAG#v} (fork ${SHA
 git push origin main
 ```
 
-✓ Push lands on origin/main. Release CI fires automatically.
+✓ Push lands on origin/main. Build-only Release CI fires automatically; no
+environment is mutated.
 
 ### Step 16 — Watch Release CI
 
 `releasev2.yml` orchestrates `gateway-build-operator-base.yml`, which builds the
 gateway bundle on the same SHA via matrix: `octogee-gateway` + `gateway-edge`
 (chat-proxy is folded into gateway-edge — one container, port 3001), plus the
-`octogee-gateway-operator` image. There's no deploy step — that's intentional,
-[see the architectural rule](#architectural-rule-for-this-flow).
+`octogee-gateway-operator` image. On `main`, the orchestrator passes
+`deploy: false`, `promote_environment: false`, and `publish_aliases: false`.
 
 ▸
 ```bash
@@ -745,21 +745,26 @@ gh run watch <release-run-id> --exit-status
 
 ✓ All steps green. The CI run ends after the matrix builds finish; the
 new SHA is now in Artifact Registry as `octogee-gateway:<short-sha>` and
-`gateway-edge:<short-sha>` (plus `octogee-gateway-operator:<short-sha>`), each
-also aliased `<short-sha>-oc<version>` per matrix slot. The `gateway (prod)`
-matrix legs show `skipped` — correct: the image is env-agnostic (one AR artifact
-serves both namespaces) and gateway rollouts are operator-driven, so CI builds
-once and writes only the test desired-state marker.
+`gateway-edge:<short-sha>` (plus `octogee-gateway-operator:<short-sha>`).
+Matrix extras use `<short-sha>-oc<version>` tags. The image is
+environment-neutral and no desired-state marker is written.
 
 The release does not roll any pods. Nothing in TEST has moved yet.
 
-### Step 17 — Operator triggers TEST rollout via admin Gateways tab
+### Step 17 — Operator authorizes the TEST-local release tag
 
-Open `app-octogee-test.web.app/admin/gateways` (or the prod equivalent
-for PROD). Find the `gw-test` row, click Rollout, pick the new SHA.
-Cowboy reads the desired-state write from Firestore, runs
-`helm upgrade --install octogee-gw-default --set gateway.imageTag=<sha> ...`,
-and rolls the gateway pod's three containers on the new SHA.
+After the build-only run is green, create a new signed, immutable TEST tag at
+the exact matrix commit. Do not reuse or move a tag:
+
+```bash
+TEST_TAG="test/v${NEW_TAG#v}"
+git tag -s "$TEST_TAG" <octogee-matrix-commit> -m "Octogee TEST ${NEW_TAG#v}"
+git push origin "refs/tags/$TEST_TAG"
+```
+
+The tag workflow drains TEST admission, deploys TEST's platform/controller,
+cuts TEST's gateway release, and reopens admission. Cowboy then performs the
+gateway Helm roll. **For a held preview, stop before this step.**
 
 The new pod boots with the build-baked banner:
 
@@ -816,14 +821,15 @@ Commit the doc update direct to main (same flow as Step 15).
 
 ✓ When applicable: this file matches `git log ${NEW_TAG}..octogee/gateway-scaling-patches-${NEW_TAG}` for the `current` slot's `NEW_TAG`.
 
-### Step 20 — PROD promote (separate decision, same path)
+### Step 20 — PROD release (separate decision, same environment-local path)
 
-The PROD rollout is identical to Step 17: open `app.octogee.com/admin/gateways`,
-pick the SHA, click Rollout. The same gateway image SHA from Step 16 is
-already in Artifact Registry; PROD just hasn't been told to use it yet.
+After TEST acceptance, create a new protected `vX.Y.Z` tag at the selected
+Octogee commit. Its workflow drains and rolls PROD entirely inside PROD. It may
+reuse the same gateway image SHA from Step 16, but it does not copy TEST
+customers, revisions, or desired state.
 
-There's no special "release to prod" CI flow — the build already happened.
-Out of scope for this ritual otherwise.
+Never use `--from-test` as part of the normal tag ceremony; the PROD tag pins
+its own immutable release payload directly.
 
 ### Step 21 — Cleanup the temporary worktree
 

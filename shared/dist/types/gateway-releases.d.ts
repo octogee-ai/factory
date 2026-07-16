@@ -47,6 +47,13 @@ export interface GatewayRollSystemConfigState {
     sourceRetiredAt?: number;
     finalizedAt?: number;
 }
+export interface GatewayReleaseAdmissionWork {
+    kind: "roll-action";
+    action: string;
+    actionKey: string;
+    rollOperationId: string;
+    startedAt: number;
+}
 export interface GatewayRollState {
     operationId: string;
     status: GatewayRollStatus;
@@ -120,6 +127,7 @@ export interface GatewayDoc {
     trafficRevisionId: string | null;
     desiredStatus: GatewayLifecycleStatus;
     roll: GatewayRollState | null;
+    releaseAdmissionWork?: GatewayReleaseAdmissionWork;
     idleSleep?: GatewayIdleSleepState | null;
     preemptionHandoff?: GatewayPreemptionHandoffSpec | null;
     retireAfter?: number | null;
