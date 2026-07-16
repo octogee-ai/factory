@@ -4,6 +4,7 @@ import path from "node:path";
 import { Worker } from "node:worker_threads";
 
 import { isValidUsername } from "@octogee/shared/types/identity";
+import { isValidShellId } from "@octogee/shared/types/shells";
 
 interface ConfigFreezeOwner {
   migrationId: string;
@@ -13,6 +14,7 @@ interface ConfigFreezeOwner {
 const DEFAULT_HEARTBEAT_MS = 5_000;
 const DEFAULT_STALE_AFTER_MS = 120_000;
 const DEFAULT_LOCK_NAME = "system_config.sync.lock";
+const SHELL_CAPABILITY_DIRNAME = "system_config.shell-capabilities";
 const OWNER_TOKEN_RE = /^[0-9a-f-]{36}$/;
 const HEARTBEAT_STARTING = 0;
 const HEARTBEAT_RUNNING = 1;
@@ -67,6 +69,11 @@ export interface SystemConfigSyncLeaseOptions {
   heartbeatMs?: number;
   staleAfterMs?: number;
   now?: () => number;
+  afterGateAcquired?: () => void;
+}
+
+export interface SystemConfigShellCapabilityOptions extends SystemConfigSyncLeaseOptions {
+  shellId: string;
 }
 
 export interface SystemConfigSyncLease {
@@ -81,6 +88,12 @@ export interface SystemConfigMutationLease {
 
 export type SystemConfigMutationLeaseResult =
   | { ok: true; lease: SystemConfigMutationLease }
+  | { ok: false; code: "writer-lock-busy" }
+  | { ok: false; code: "shell-active"; shellIds: string[] }
+  | { ok: false; code: "config-frozen"; freezeOwner: ConfigFreezeOwner };
+
+export type SystemConfigShellCapabilityResult =
+  | { ok: true; created: boolean }
   | { ok: false; code: "writer-lock-busy" }
   | { ok: false; code: "config-frozen"; freezeOwner: ConfigFreezeOwner };
 
@@ -328,6 +341,127 @@ function readFreezeOwner(openclawDir: string): ConfigFreezeOwner | null {
   return { migrationId: record.migrationId, slug: record.slug };
 }
 
+function shellCapabilityDir(openclawDir: string): string {
+  return path.join(openclawDir, SHELL_CAPABILITY_DIRNAME);
+}
+
+function shellCapabilityPath(openclawDir: string, shellId: string): string {
+  return path.join(shellCapabilityDir(openclawDir), `${shellId}.json`);
+}
+
+function readShellCapability(markerPath: string): string {
+  const parsed = JSON.parse(fs.readFileSync(markerPath, "utf8")) as unknown;
+  const shellId = (parsed as { shellId?: unknown })?.shellId;
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed) ||
+    !isValidShellId(shellId) ||
+    markerPath !== shellCapabilityPath(path.dirname(path.dirname(markerPath)), shellId)
+  ) {
+    throw new Error(`invalid system config shell capability at ${markerPath}`);
+  }
+  return shellId;
+}
+
+export function activeSystemConfigShellIds(openclawDir: string): string[] {
+  const directory = shellCapabilityDir(openclawDir);
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(directory, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  return entries.map((entry) => {
+    const markerPath = path.join(directory, entry.name);
+    if (!entry.isFile() || !entry.name.endsWith(".json")) {
+      throw new Error(`invalid system config shell capability at ${markerPath}`);
+    }
+    return readShellCapability(markerPath);
+  }).sort();
+}
+
+function releaseSyncLeaseAfterError(syncLease: SystemConfigSyncLease, error: unknown): never {
+  try {
+    syncLease.release();
+  } catch (releaseError) {
+    throw new AggregateError([error, releaseError], "config gate validation and release failed");
+  }
+  throw error;
+}
+
+export function acquireSystemConfigShellCapabilitySync(
+  options: SystemConfigShellCapabilityOptions,
+): SystemConfigShellCapabilityResult {
+  if (!isValidShellId(options.shellId)) throw new Error("valid shellId is required");
+  const syncLease = acquireSystemConfigSyncLeaseSync(options);
+  if (!syncLease) return { ok: false, code: "writer-lock-busy" };
+  let result: SystemConfigShellCapabilityResult;
+  try {
+    options.afterGateAcquired?.();
+    const freezeOwner = readFreezeOwner(options.openclawDir);
+    if (freezeOwner) {
+      result = { ok: false, code: "config-frozen", freezeOwner };
+    } else if (activeSystemConfigShellIds(options.openclawDir).includes(options.shellId)) {
+      result = { ok: true, created: false };
+    } else {
+      const directory = shellCapabilityDir(options.openclawDir);
+      fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(
+        shellCapabilityPath(options.openclawDir, options.shellId),
+        `${JSON.stringify({ shellId: options.shellId })}\n`,
+        { flag: "wx", mode: 0o600 },
+      );
+      result = { ok: true, created: true };
+    }
+  } catch (error) {
+    return releaseSyncLeaseAfterError(syncLease, error);
+  }
+  syncLease.release();
+  return result;
+}
+
+export function releaseSystemConfigShellCapabilitySync(
+  options: SystemConfigShellCapabilityOptions,
+): boolean {
+  if (!isValidShellId(options.shellId)) throw new Error("valid shellId is required");
+  if (!fs.existsSync(shellCapabilityPath(options.openclawDir, options.shellId))) return true;
+  const syncLease = acquireSystemConfigSyncLeaseSync(options);
+  if (!syncLease) return false;
+  try {
+    activeSystemConfigShellIds(options.openclawDir);
+    fs.rmSync(shellCapabilityPath(options.openclawDir, options.shellId), { force: true });
+    try {
+      fs.rmdirSync(shellCapabilityDir(options.openclawDir));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST") throw error;
+    }
+  } catch (error) {
+    return releaseSyncLeaseAfterError(syncLease, error);
+  }
+  syncLease.release();
+  return true;
+}
+
+export function acquireSystemConfigControlLeaseSync(
+  options: SystemConfigSyncLeaseOptions,
+): SystemConfigSyncLease | null {
+  const syncLease = acquireSystemConfigSyncLeaseSync(options);
+  if (!syncLease) return null;
+  let shellActive: boolean;
+  try {
+    options.afterGateAcquired?.();
+    shellActive = activeSystemConfigShellIds(options.openclawDir).length > 0;
+  } catch (error) {
+    return releaseSyncLeaseAfterError(syncLease, error);
+  }
+  if (!shellActive) return syncLease;
+  syncLease.release();
+  return null;
+}
+
 export async function acquireSystemConfigMutationLease(
   options: SystemConfigSyncLeaseOptions,
 ): Promise<SystemConfigMutationLeaseResult> {
@@ -335,6 +469,7 @@ export async function acquireSystemConfigMutationLease(
   if (!syncLease) return { ok: false, code: "writer-lock-busy" };
   let freezeOwner: ConfigFreezeOwner | null;
   try {
+    options.afterGateAcquired?.();
     freezeOwner = readFreezeOwner(options.openclawDir);
   } catch (error) {
     try {
@@ -347,6 +482,16 @@ export async function acquireSystemConfigMutationLease(
   if (freezeOwner) {
     syncLease.release();
     return { ok: false, code: "config-frozen", freezeOwner };
+  }
+  let shellIds: string[];
+  try {
+    shellIds = activeSystemConfigShellIds(options.openclawDir);
+  } catch (error) {
+    return releaseSyncLeaseAfterError(syncLease, error);
+  }
+  if (shellIds.length > 0) {
+    syncLease.release();
+    return { ok: false, code: "shell-active", shellIds };
   }
   return {
     ok: true,

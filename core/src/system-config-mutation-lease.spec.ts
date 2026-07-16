@@ -7,8 +7,12 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  acquireSystemConfigControlLeaseSync,
   acquireSystemConfigMutationLease,
+  acquireSystemConfigShellCapabilitySync,
   acquireSystemConfigSyncLeaseSync,
+  activeSystemConfigShellIds,
+  releaseSystemConfigShellCapabilitySync,
   systemConfigSyncLockPath,
 } from "./system-config-mutation-lease.js";
 
@@ -104,6 +108,62 @@ describe("system config cross-container mutation lease", () => {
     await expect(acquireSystemConfigMutationLease({ openclawDir }))
       .rejects.toThrow(/invalid system config freeze marker/i);
     expect(fs.existsSync(systemConfigSyncLockPath(openclawDir))).toBe(false);
+  });
+
+  it("refuses Dashboard mutation and config control while an accepted shell capability exists", async () => {
+    const openclawDir = tempDir();
+    expect(acquireSystemConfigShellCapabilitySync({
+      openclawDir,
+      shellId: "accepted-shell",
+    })).toEqual({ ok: true, created: true });
+    expect(activeSystemConfigShellIds(openclawDir)).toEqual(["accepted-shell"]);
+
+    await expect(acquireSystemConfigMutationLease({ openclawDir })).resolves.toEqual({
+      ok: false,
+      code: "shell-active",
+      shellIds: ["accepted-shell"],
+    });
+    expect(acquireSystemConfigControlLeaseSync({ openclawDir })).toBeNull();
+
+    expect(releaseSystemConfigShellCapabilitySync({
+      openclawDir,
+      shellId: "accepted-shell",
+    })).toBe(true);
+    expect(activeSystemConfigShellIds(openclawDir)).toEqual([]);
+    const mutation = await acquireSystemConfigMutationLease({ openclawDir });
+    expect(mutation.ok).toBe(true);
+    if (mutation.ok) await mutation.lease.release();
+  });
+
+  it("makes shell admission and Dashboard mutation atomic in either acquisition order", async () => {
+    const shellFirstDir = tempDir();
+    let dashboardDuringShell: ReturnType<typeof acquireSystemConfigMutationLease> | undefined;
+    expect(acquireSystemConfigShellCapabilitySync({
+      openclawDir: shellFirstDir,
+      shellId: "accepted1",
+      afterGateAcquired: () => {
+        dashboardDuringShell = acquireSystemConfigMutationLease({ openclawDir: shellFirstDir });
+      },
+    })).toEqual({ ok: true, created: true });
+    await expect(dashboardDuringShell).resolves.toEqual({
+      ok: false,
+      code: "writer-lock-busy",
+    });
+
+    const dashboardFirstDir = tempDir();
+    let shellDuringDashboard: ReturnType<typeof acquireSystemConfigShellCapabilitySync> | undefined;
+    const dashboard = await acquireSystemConfigMutationLease({
+      openclawDir: dashboardFirstDir,
+      afterGateAcquired: () => {
+        shellDuringDashboard = acquireSystemConfigShellCapabilitySync({
+          openclawDir: dashboardFirstDir,
+          shellId: "dashboard-first",
+        });
+      },
+    });
+    expect(dashboard.ok).toBe(true);
+    expect(shellDuringDashboard).toEqual({ ok: false, code: "writer-lock-busy" });
+    if (dashboard.ok) await dashboard.lease.release();
   });
 
   it("reclaims only an expired heartbeat through atomic lease-directory quarantine", () => {

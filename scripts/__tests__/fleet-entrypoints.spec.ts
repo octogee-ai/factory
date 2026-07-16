@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
+import {
+  acquireSystemConfigMutationLease,
+  acquireSystemConfigShellCapabilitySync,
+} from "@octogee/core/system-config-mutation-lease";
 import {
   createFleetSystemConfigFlush,
   createConfigControlCallbacks,
@@ -156,6 +159,27 @@ describe("fleet-controller entrypoint config", () => {
       await expect(rpc.configPatch({ agents: {} }, "current", { replacePaths: ["agents.list"] }))
         .rejects.toThrow(/frozen by mig-1/i);
       expect(configPatch).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(openclawDir, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks native config mutation while an accepted BuilderShell can edit the config", async () => {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-entrypoint-shell-"));
+    const configApply = vi.fn(async () => ({ ok: true as const, hash: "next" }));
+    const rpc = createSystemConfigMutationGatedRpc({
+      configGet: vi.fn(async () => ({ config: {}, hash: "current" })),
+      configApply,
+      channelsStatus: vi.fn(async () => ({ channels: [] })),
+    } as never, openclawDir);
+    expect(acquireSystemConfigShellCapabilitySync({
+      openclawDir,
+      shellId: "native-config",
+    })).toEqual({ ok: true, created: true });
+
+    try {
+      await expect(rpc.configApply({}, "current")).rejects.toThrow(/writer lock is busy/i);
+      expect(configApply).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(openclawDir, { recursive: true, force: true });
     }
