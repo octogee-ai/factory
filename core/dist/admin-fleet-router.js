@@ -13,6 +13,7 @@ import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 import { findPendingActivationOperation, requestBuilderActivationLease, } from "./builder-activation-lease.js";
 import { resolveUidForSlug } from "./assigned-roster.js";
 import { GatewayRetirementConflictError, claimGatewayRetirementAtomic, hasGatewayRetirementConfigObligation, } from "./gateway-retirement-claim.js";
+import { findActiveGatewayMigration, GatewayMigrationInFlightError, } from "./fleet-operation-lock.js";
 export { resolveBuilderActivationPlan } from "./builder-activation-lease.js";
 function rejectPersistenceInBody(body) {
     if (body.persistence === undefined)
@@ -1762,6 +1763,22 @@ async function appendGatewayRelease(db, args) {
         if (current.latestRelease !== args.gateway.latestRelease) {
             throw new StaleGatewayReleaseError(args.gateway.gatewayId, args.gateway.latestRelease, current.latestRelease);
         }
+        const activeOperations = await txn.get(db
+            .collection(GLM_OPERATIONS_COLLECTION)
+            .where("status", "in", ["pending", "running"]));
+        const migrationConflict = findActiveGatewayMigration(args.gateway.gatewayId, activeOperations.docs.map((doc) => {
+            const operation = doc.data();
+            return {
+                id: doc.id,
+                kind: typeof operation.kind === "string" ? operation.kind : "",
+                status: typeof operation.status === "string" ? operation.status : "",
+                input: operation.input,
+                customerMigrationV2: operation.customerMigrationV2,
+            };
+        }));
+        if (migrationConflict) {
+            throw new GatewayMigrationInFlightError(args.gateway.gatewayId, migrationConflict.id);
+        }
         const release = current.latestRelease + 1;
         const relRef = gwRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc(String(release));
         const relExisting = await txn.get(relRef);
@@ -1816,6 +1833,15 @@ class InvalidGatewayRootError extends Error {
 function respondReleaseWriteConflict(res, error) {
     if (error instanceof GatewayRetirementConflictError) {
         res.status(409).json({ error: error.message });
+        return true;
+    }
+    if (error instanceof GatewayMigrationInFlightError) {
+        res.status(409).json({
+            error: error.message,
+            gatewayId: error.gatewayId,
+            operationId: error.operationId,
+            kind: OP_KIND_MIGRATE_CUSTOMER,
+        });
         return true;
     }
     if (error instanceof InvalidGatewayRootError) {
@@ -3471,7 +3497,12 @@ export function addAdminFleetRoutes(router, deps) {
             }
             const updatedBy = req.uid ?? "unknown";
             const patchResult = await db.runTransaction(async (txn) => {
-                const currentSnap = await txn.get(rootRef);
+                const [currentSnap, activeOperations] = await Promise.all([
+                    txn.get(rootRef),
+                    txn.get(db
+                        .collection(GLM_OPERATIONS_COLLECTION)
+                        .where("status", "in", ["pending", "running"])),
+                ]);
                 const currentData = currentSnap.exists
                     ? currentSnap.data()
                     : undefined;
@@ -3482,6 +3513,22 @@ export function addAdminFleetRoutes(router, deps) {
                     return {
                         ok: false,
                         error: "gateway has a current retirement claim",
+                    };
+                }
+                const migrationConflict = findActiveGatewayMigration(id, activeOperations.docs.map((doc) => {
+                    const operation = doc.data();
+                    return {
+                        id: doc.id,
+                        kind: typeof operation.kind === "string" ? operation.kind : "",
+                        status: typeof operation.status === "string" ? operation.status : "",
+                        input: operation.input,
+                        customerMigrationV2: operation.customerMigrationV2,
+                    };
+                }));
+                if (migrationConflict) {
+                    return {
+                        ok: false,
+                        error: `customer migration is in flight for gateway ${id}`,
                     };
                 }
                 txn.update(rootRef, {

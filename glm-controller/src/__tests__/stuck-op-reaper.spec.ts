@@ -10,6 +10,7 @@ interface FakeOpDoc {
     createdAt?: number;
     lastProgressAt?: number;
     output?: Record<string, unknown>;
+    customerMigrationV2?: { phase: string };
   };
   updated?: Record<string, unknown>;
 }
@@ -110,6 +111,31 @@ describe("runStuckOpReaperTick", () => {
     expect(result).toEqual({ scanned: 1, reaped: 0 });
     expect(ops[0].updated).toBeUndefined();
   });
+
+  it.each(["checkpointed", "promotionIntent", "finalized", "complete", "aborted"])(
+    "never reaps a durable migration V2 operation held in %s for restart recovery",
+    async (phase) => {
+      const ops: FakeOpDoc[] = [{
+        id: `op-v2-${phase}`,
+        data: {
+          status: "running",
+          kind: "migrate-customer",
+          startedAt: NOW - 60 * 60_000,
+          customerMigrationV2: { phase },
+        },
+      }];
+
+      const result = await runStuckOpReaperTick({
+        db: makeFakeDb(ops) as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+        log: vi.fn(),
+        now: () => NOW,
+        stalenessMs: 15 * 60_000,
+      });
+
+      expect(result).toEqual({ scanned: 1, reaped: 0 });
+      expect(ops[0].updated).toBeUndefined();
+    },
+  );
 
   it("falls back to createdAt when startedAt is missing", async () => {
     const ops: FakeOpDoc[] = [

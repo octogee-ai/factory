@@ -31,6 +31,7 @@ export function buildRecycleOperation(input: BuildRecycleOperationInput): Operat
 export interface BuildMigrateOperationInput {
   id: string;
   uid: string;
+  fromGatewayId: string;
   toGatewayId: string;
   createdBy: string;
   now: number;
@@ -49,7 +50,11 @@ export function buildMigrateOperation(input: BuildMigrateOperationInput): Operat
     createdAt: input.now,
     startedAt: null,
     completedAt: null,
-    input: { uid: input.uid, toGatewayId: input.toGatewayId },
+    input: {
+      uid: input.uid,
+      fromGatewayId: input.fromGatewayId,
+      toGatewayId: input.toGatewayId,
+    },
     steps: [],
   };
 }

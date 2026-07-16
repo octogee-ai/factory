@@ -33,7 +33,16 @@ function validConfig(
 
 describe("gateway mutable config", () => {
   it("accepts the complete durable root authority shape", () => {
-    expect(isGatewayMutableConfig(validConfig())).toBe(true);
+    expect(isGatewayMutableConfig(validConfig({
+      operatorAccess: { shellsEnabled: true, controlUiEnabled: true },
+    }))).toBe(true);
+  });
+
+  it("rejects a non-boolean Control UI capability", () => {
+    expect(isGatewayMutableConfig({
+      ...validConfig(),
+      operatorAccess: { shellsEnabled: true, controlUiEnabled: "yes" },
+    })).toBe(false);
   });
 
   it("rejects a credential-bearing or malformed root config", () => {

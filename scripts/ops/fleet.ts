@@ -825,6 +825,14 @@ async function migrateCustomerPlan(
 
 const MIGRATION_OP_TIMEOUT_MS = 30 * 60_000;
 
+export function buildFleetMigrateOperationInput(
+  uid: string,
+  fromGatewayId: string,
+  toGatewayId: string,
+): { uid: string; fromGatewayId: string; toGatewayId: string } {
+  return { uid, fromGatewayId, toGatewayId };
+}
+
 async function executeMigration(
   slug: string,
   uid: string,
@@ -834,7 +842,7 @@ async function executeMigration(
   const opsDb = db as unknown as OperationsDb;
   const opId = await enqueueOperation(opsDb, {
     kind: "migrate-customer",
-    input: { uid, toGatewayId },
+    input: buildFleetMigrateOperationInput(uid, fromGatewayId, toGatewayId),
     createdBy: `fleet-cli:${process.env.USER ?? "operator"}`,
   });
 

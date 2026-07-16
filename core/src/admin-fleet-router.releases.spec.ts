@@ -680,6 +680,82 @@ describe("admin target resolution", () => {
 });
 
 describe("POST /gateways/:id/releases — cut release n+1 from prev + patch", () => {
+  it.each(["source", "target"])(
+    "refuses to mutate a %s gateway root while an ordinary customer migration owns it",
+    async (gatewayRole) => {
+      const seed = seedNewSchemaGateway("beta", sharedPayload());
+      seed[`${GLM_OPERATIONS_COLLECTION}/migration-live`] = {
+        kind: "migrate-customer",
+        status: "running",
+        input: { fromGatewayId: "source", toGatewayId: "target" },
+      };
+      const gatewayId = gatewayRole;
+      Object.assign(seed, seedNewSchemaGateway(gatewayId, sharedPayload()));
+      const { app, store } = mkApp(seed);
+
+      const res = await request(app)
+        .post(`/gateways/${gatewayId}/releases`)
+        .send({ imageTag: "deadbee" })
+        .expect(409);
+
+      expect(res.body.error).toMatch(/customer migration.*in flight/i);
+      expect(store.get(`gateways/${gatewayId}`)).toMatchObject({
+        latestRelease: 1,
+        desiredRelease: 1,
+      });
+      expect(store.get(`gateways/${gatewayId}/${GATEWAY_RELEASES_SUBCOLLECTION}/2`)).toBeUndefined();
+      expect(opsIn(store, "rollout")).toHaveLength(0);
+    },
+  );
+
+  it("refuses a source release while a pending migration is still pre-initialization", async () => {
+    const seed = seedNewSchemaGateway("source", sharedPayload());
+    seed[`${GLM_OPERATIONS_COLLECTION}/migration-pending`] = {
+      kind: "migrate-customer",
+      status: "pending",
+      input: { fromGatewayId: "source", toGatewayId: "target" },
+    };
+    const { app, store } = mkApp(seed);
+
+    await request(app)
+      .post("/gateways/source/releases")
+      .send({ imageTag: "deadbee" })
+      .expect(409);
+
+    expect(store.get("gateways/source")).toMatchObject({ latestRelease: 1, desiredRelease: 1 });
+    expect(store.get(`gateways/source/${GATEWAY_RELEASES_SUBCOLLECTION}/2`)).toBeUndefined();
+    expect(opsIn(store, "rollout")).toHaveLength(0);
+  });
+
+  it("refuses a release while a durable unassigned-live migration owns the gateway", async () => {
+    const seed = seedNewSchemaGateway("source", sharedPayload());
+    seed[`${GLM_OPERATIONS_COLLECTION}/migration-live`] = {
+      kind: "migrate-customer",
+      status: "running",
+      input: { toGatewayId: "target" },
+      customerMigrationV2: {
+        sourceGatewayId: "source",
+        sourceRevisionId: "source-r1",
+        sourceAssignmentMode: "unassigned-live",
+        targetGatewayId: "target",
+        targetRevisionId: "target-r1",
+      },
+    };
+    const { app, store } = mkApp(seed);
+
+    await request(app)
+      .post("/gateways/source/releases")
+      .send({ imageTag: "deadbee" })
+      .expect(409);
+
+    expect(store.get("gateways/source")).toMatchObject({
+      latestRelease: 1,
+      desiredRelease: 1,
+    });
+    expect(store.get(`gateways/source/${GATEWAY_RELEASES_SUBCOLLECTION}/2`)).toBeUndefined();
+    expect(opsIn(store, "rollout")).toHaveLength(0);
+  });
+
   it("cuts release 2 on an image change, bumps desiredRelease, and queues a rollout op (legacy converge)", async () => {
     const { app, store } = mkApp(seedNewSchemaGateway("beta", sharedPayload()));
 
@@ -1121,6 +1197,27 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
     expect(store.get("gateways/zeta")?.sizingTier).toBeNull();
   });
 
+  it.each(["pending", "running"])(
+    "refuses root config mutation while a %s customer migration owns the gateway",
+    async (status) => {
+      const seed = seedNewSchemaGateway("zeta", sharedPayload());
+      seed[`${GLM_OPERATIONS_COLLECTION}/migration-live`] = {
+        kind: "migrate-customer",
+        status,
+        input: { fromGatewayId: "source", toGatewayId: "zeta" },
+      };
+      const { app, store } = mkApp(seed);
+
+      const response = await request(app)
+        .patch("/gateways/zeta")
+        .send({ sizingTier: "medium" });
+
+      expect(response.status).toBe(409);
+      expect(response.body.error).toMatch(/customer migration.*in flight/i);
+      expect(store.get("gateways/zeta")?.sizingTier).toBeNull();
+    },
+  );
+
   it("does not overwrite a retirement claim that lands after the route reads the root", async () => {
     const seed = seedNewSchemaGateway("zeta", sharedPayload());
     const { app, store } = mkApp(seed, {
@@ -1163,6 +1260,26 @@ describe("DELETE /gateways/:id — retirement claim", () => {
     });
     expect(store.get(`gateways/zed/${GATEWAY_RELEASES_SUBCOLLECTION}/1`)).toBeDefined();
   });
+
+  it.each(["pending", "running"])(
+    "refuses retirement while a %s customer migration owns the empty target",
+    async (status) => {
+      const seed = seedServingGateway("target", sharedPayload());
+      seed[`${GLM_OPERATIONS_COLLECTION}/migration-live`] = {
+        kind: "migrate-customer",
+        status,
+        input: { fromGatewayId: "source", toGatewayId: "target" },
+      };
+      const { app, store } = mkApp(seed);
+
+      const response = await request(app).delete("/gateways/target");
+
+      expect(response.status).toBe(409);
+      expect(response.body.error).toMatch(/customer migration.*in flight/i);
+      expect(store.get("gateways/target")?.desiredStatus).toBe("running");
+      expect(opsIn(store, "retire-gateway")).toHaveLength(0);
+    },
+  );
 
   it("rejects a legacy-only gateway without a durable root", async () => {
     const { app, store } = mkApp({

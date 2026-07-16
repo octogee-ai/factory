@@ -464,7 +464,16 @@ export interface RevisionRealizationDoc {
   helm: RevisionHelmObservation;
   heartbeat: RevisionHeartbeatObservation;
   systemConfig?: RevisionSystemConfigObservation;
+  systemConfigMigrationContext?: RevisionSystemConfigMigrationContext;
   lastError: { message: string | null; at: number | null };
+}
+
+export interface RevisionSystemConfigMigrationContext {
+  migrationId: string;
+  sourceRevisionId: string;
+  targetRevisionId: string;
+  checkpointCommit: string;
+  freezeObject: string;
 }
 
 // glmGateways doc-kind discriminators. During expand the collection holds legacy

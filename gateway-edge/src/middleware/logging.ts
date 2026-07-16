@@ -23,6 +23,13 @@ const PROBE_PATHS = new Set([
   "/api/health",
 ]);
 
+export function redactRequestPath(path: string): string {
+  return path.replace(
+    /((?:\/api)?\/g\/[^/]+\/openclaw\/launch\/)[^/?#]+/gu,
+    "$1<redacted>",
+  );
+}
+
 // Without this replacer, JSON.stringify on Error returns {} (name/message/stack
 // are non-enumerable) and "no silent failures" silently breaks for every caught
 // error logged via { err }.
@@ -63,14 +70,15 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
   const start = Date.now();
   res.on("finish", () => {
     const duration = Date.now() - start;
+    const path = redactRequestPath(req.path);
     let level: "error" | "warn" | "debug" | "info";
     if (res.statusCode >= 500) level = "error";
     else if (res.statusCode >= 400) level = "warn";
     else if (PROBE_PATHS.has(req.path)) level = "debug";
     else level = "info";
-    logger[level](`${req.method} ${req.path} ${res.statusCode} ${duration}ms`, {
+    logger[level](`${req.method} ${path} ${res.statusCode} ${duration}ms`, {
       method: req.method,
-      path: req.path,
+      path,
       status: res.statusCode,
       durationMs: duration,
     });

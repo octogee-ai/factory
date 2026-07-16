@@ -1,5 +1,9 @@
 import { FieldValue } from "firebase-admin/firestore";
-import type { OperationAttemptRecord, OperationStep } from "@octogee/shared/types/glm";
+import type {
+  CustomerMigrationV2State,
+  OperationAttemptRecord,
+  OperationStep,
+} from "@octogee/shared/types/glm";
 import type { OperationResult } from "./operation-router.js";
 
 export type OperationFailureClassification = "transient" | "terminal";
@@ -18,6 +22,12 @@ const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
   /\bECONNREFUSED\b/,
   /\bETIMEDOUT\b/,
   /\bEAI_AGAIN\b/,
+  /\bfetch failed\b/i,
+  /\bterminated\b/i,
+  /\bpremature close\b/i,
+  /\bunexpected end\b/i,
+  /\btruncated\b/i,
+  /\b14 UNAVAILABLE\b/i,
   /\bstatus (429|502|503|504)\b/,
   /\bpreempt(ed|ion)?\b/i,
   /config unfreeze cleanup pending/i,
@@ -50,6 +60,13 @@ export function shouldPersistClaimedOperationCompletion(status: string): boolean
   return status === "running";
 }
 
+export function operationNeedsDurableCustomerMigrationV2Resume(op: {
+  kind?: string;
+  customerMigrationV2?: CustomerMigrationV2State;
+}): boolean {
+  return op.kind === "migrate-customer" && op.customerMigrationV2 !== undefined;
+}
+
 export function supersededRollMigrationAction(op: {
   status: string;
   output?: Record<string, unknown>;
@@ -67,6 +84,7 @@ export interface OperationCompletionInput {
     attempts?: number;
     attemptHistory?: OperationAttemptRecord[];
     startedAt?: number | null;
+    customerMigrationV2?: CustomerMigrationV2State;
   };
   result: OperationResult;
   steps: OperationStep[];
@@ -119,7 +137,7 @@ export function buildOperationCompletionUpdate(
   };
   const attemptHistory = [...(op.attemptHistory ?? []), attemptRecord];
 
-  if (shouldRetry(result, classification, attempts, hasRetirementFencePending)) {
+  if (shouldRetry(op, result, classification, attempts, hasRetirementFencePending)) {
     const backoffMs = retryBackoffMs(attempts);
     return {
       status: "pending",
@@ -149,6 +167,7 @@ export function buildOperationCompletionUpdate(
 }
 
 function shouldRetry(
+  op: OperationCompletionInput["op"],
   result: OperationResult,
   classification: OperationFailureClassification,
   attempts: number,
@@ -158,5 +177,12 @@ function shouldRetry(
   const hasDurableCleanup =
     result.output?.configCleanup !== null &&
     typeof result.output?.configCleanup === "object";
-  return attempts < MAX_OPERATION_ATTEMPTS || hasDurableCleanup || hasRetirementFencePending;
+  const activeMigration = op.customerMigrationV2;
+  const hasActiveCustomerMigrationV2 = activeMigration !== undefined &&
+    activeMigration.phase !== "complete" &&
+    activeMigration.phase !== "aborted";
+  return attempts < MAX_OPERATION_ATTEMPTS ||
+    hasDurableCleanup ||
+    hasRetirementFencePending ||
+    hasActiveCustomerMigrationV2;
 }

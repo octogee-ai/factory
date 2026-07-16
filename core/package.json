@@ -96,6 +96,10 @@
       "types": "./dist/customer-snapshot-mapping.d.ts",
       "default": "./dist/customer-snapshot-mapping.js"
     },
+    "./customer-migration-v2": {
+      "types": "./dist/customer-migration-v2.d.ts",
+      "default": "./dist/customer-migration-v2.js"
+    },
     "./firebase-auth-helpers": {
       "types": "./dist/firebase-auth-helpers.d.ts",
       "default": "./dist/firebase-auth-helpers.js"
@@ -115,6 +119,10 @@
     "./fleet-migration-runner": {
       "types": "./dist/fleet-migration-runner.d.ts",
       "default": "./dist/fleet-migration-runner.js"
+    },
+    "./fleet-operation-lock": {
+      "types": "./dist/fleet-operation-lock.d.ts",
+      "default": "./dist/fleet-operation-lock.js"
     },
     "./fleet-signature": {
       "types": "./dist/fleet-signature.d.ts",
@@ -179,6 +187,14 @@
     "./model-credential-sync-runtime": {
       "types": "./dist/model-credential-sync-runtime.d.ts",
       "default": "./dist/model-credential-sync-runtime.js"
+    },
+    "./openclaw-control-tickets": {
+      "types": "./dist/openclaw-control-tickets.d.ts",
+      "default": "./dist/openclaw-control-tickets.js"
+    },
+    "./openclaw-control-runtime-ready": {
+      "types": "./dist/openclaw-control-runtime-ready.d.ts",
+      "default": "./dist/openclaw-control-runtime-ready.js"
     },
     "./secret-manager": {
       "types": "./dist/secret-manager.d.ts",
@@ -381,6 +397,9 @@
       "customer-snapshot-mapping": [
         "dist/customer-snapshot-mapping.d.ts"
       ],
+      "customer-migration-v2": [
+        "dist/customer-migration-v2.d.ts"
+      ],
       "firebase-auth-helpers": [
         "dist/firebase-auth-helpers.d.ts"
       ],
@@ -395,6 +414,9 @@
       ],
       "fleet-migration-runner": [
         "dist/fleet-migration-runner.d.ts"
+      ],
+      "fleet-operation-lock": [
+        "dist/fleet-operation-lock.d.ts"
       ],
       "fleet-signature": [
         "dist/fleet-signature.d.ts"
@@ -440,6 +462,12 @@
       ],
       "model-credential-sync-runtime": [
         "dist/model-credential-sync-runtime.d.ts"
+      ],
+      "openclaw-control-tickets": [
+        "dist/openclaw-control-tickets.d.ts"
+      ],
+      "openclaw-control-runtime-ready": [
+        "dist/openclaw-control-runtime-ready.d.ts"
       ],
       "secret-manager": [
         "dist/secret-manager.d.ts"

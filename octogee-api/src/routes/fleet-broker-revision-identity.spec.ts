@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   parseSystemConfigObservedStatus,
   resolveAssignedUsersRevisionGate,
-  revisionIdFromGatewayPodName,
 } from "./fleet-broker.js";
+import { revisionIdFromGatewayPodName } from "../lib/gateway-pod-revision.js";
 
 function gatewayStateDb(
   data: Record<string, unknown> | undefined,

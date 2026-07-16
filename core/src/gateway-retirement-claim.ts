@@ -13,11 +13,13 @@ import {
   isGatewayDesiredDoc,
   isRevisionRealizationDoc,
   revisionIdForRelease,
+  type GatewayDoc,
   type GatewayRetirementClaim as RetirementClaim,
   type GatewayRetirementConfigCheckpoint,
   type GatewayRetirementConfigTerminal,
   type RevisionRealizationDoc,
 } from "@octogee/shared/types/gateway-releases";
+import { findActiveGatewayMigration } from "./fleet-operation-lock.js";
 
 export class GatewayRetirementConflictError extends Error {
   constructor(message: string) {
@@ -512,6 +514,41 @@ function operationInput(operation: RetirementOperation): Record<string, unknown>
   return operation.input;
 }
 
+function claimableGatewayRetirementRoot(
+  gatewayId: string,
+  value: unknown,
+): {
+  rootData: GatewayDoc & { desiredStatus: "running" | "paused" };
+  root: Record<string, unknown>;
+} {
+  if (!isGatewayDesiredDoc(value) || value.gatewayId !== gatewayId) {
+    throw new GatewayRetirementConflictError(`gateway ${gatewayId} durable root is unavailable`);
+  }
+  const root = value as unknown as Record<string, unknown>;
+  if (value.desiredStatus === "retired") {
+    throw new GatewayRetirementConflictError(`gateway ${gatewayId} is already retired`);
+  }
+  if (root.retirementClaim != null) {
+    throw new GatewayRetirementConflictError(
+      `gateway ${gatewayId} already has a retirement claim`,
+    );
+  }
+  if (hasRootConfigControlObligation(root)) {
+    throw new GatewayRetirementConflictError(
+      `gateway ${gatewayId} has an unfinished release roll and config obligation`,
+    );
+  }
+  if (value.desiredRelease !== value.liveRelease) {
+    throw new GatewayRetirementConflictError(
+      `gateway ${gatewayId} desired release is not converged to live`,
+    );
+  }
+  return {
+    rootData: value as GatewayDoc & { desiredStatus: "running" | "paused" },
+    root,
+  };
+}
+
 export async function claimGatewayRetirementAtomic(
   input: ClaimGatewayRetirementInput,
 ): Promise<{ version: number; wakeRequired: boolean }> {
@@ -521,28 +558,34 @@ export async function claimGatewayRetirementAtomic(
     .doc(input.operationId);
 
   return input.db.runTransaction(async (transaction) => {
-    const rootSnap = await transaction.get(rootRef);
-    const rootData = rootSnap.exists ? rootSnap.data() : undefined;
-    if (!isGatewayDesiredDoc(rootData) || rootData.gatewayId !== input.gatewayId) {
-      throw new GatewayRetirementConflictError(`gateway ${input.gatewayId} durable root is unavailable`);
-    }
-    const root = rootData as unknown as Record<string, unknown>;
-    if (rootData.desiredStatus === "retired") {
-      throw new GatewayRetirementConflictError(`gateway ${input.gatewayId} is already retired`);
-    }
-    if (root.retirementClaim != null) {
+    const [rootSnap, activeOperations] = await Promise.all([
+      transaction.get(rootRef),
+      transaction.get(
+        input.db
+          .collection(GLM_OPERATIONS_COLLECTION)
+          .where("status", "in", ["pending", "running"]),
+      ),
+    ]);
+    const { rootData, root } = claimableGatewayRetirementRoot(
+      input.gatewayId,
+      rootSnap.exists ? rootSnap.data() : undefined,
+    );
+    const migrationConflict = findActiveGatewayMigration(
+      input.gatewayId,
+      activeOperations.docs.map((doc) => {
+        const operation = doc.data() as Record<string, unknown>;
+        return {
+          id: doc.id,
+          kind: typeof operation.kind === "string" ? operation.kind : "",
+          status: typeof operation.status === "string" ? operation.status : "",
+          input: operation.input,
+          customerMigrationV2: operation.customerMigrationV2,
+        };
+      }),
+    );
+    if (migrationConflict) {
       throw new GatewayRetirementConflictError(
-        `gateway ${input.gatewayId} already has a retirement claim`,
-      );
-    }
-    if (hasRootConfigControlObligation(root)) {
-      throw new GatewayRetirementConflictError(
-        `gateway ${input.gatewayId} has an unfinished release roll and config obligation`,
-      );
-    }
-    if (rootData.desiredRelease !== rootData.liveRelease) {
-      throw new GatewayRetirementConflictError(
-        `gateway ${input.gatewayId} desired release is not converged to live`,
+        `customer migration is in flight for gateway ${input.gatewayId}`,
       );
     }
 

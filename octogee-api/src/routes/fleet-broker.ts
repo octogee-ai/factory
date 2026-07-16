@@ -69,6 +69,7 @@ import {
 import { createBraveSearchClient, createTavilyClient } from "../lib/web-provider-clients.js";
 import { isPublicIp } from "../lib/link-unfurl.js";
 import { recordRevisionSystemConfigStatus } from "../lib/revision-system-config-status.js";
+import { revisionIdFromGatewayPodName } from "../lib/gateway-pod-revision.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -329,13 +330,6 @@ function boundGateway(req: Request, res: Response): GatewayBinding | null {
     return null;
   }
   return bound;
-}
-
-export function revisionIdFromGatewayPodName(
-  gatewayId: string,
-  podName: string | undefined,
-): string | null {
-  return gatewayRevisionIdFromPodName(gatewayId, podName);
 }
 
 function readPath(obj: Record<string, unknown> | undefined, dotted: string): unknown {

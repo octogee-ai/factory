@@ -42,6 +42,11 @@ describe("classifyOperationFailure", () => {
     expect(classifyOperationFailure("request failed with status 503")).toBe("transient");
     expect(classifyOperationFailure("context deadline exceeded")).toBe("transient");
     expect(classifyOperationFailure("instance preempted mid-warm")).toBe("transient");
+    expect(classifyOperationFailure("TypeError: fetch failed")).toBe("transient");
+    expect(classifyOperationFailure("response body terminated before completion")).toBe("transient");
+    expect(classifyOperationFailure("premature close while reading response body")).toBe("transient");
+    expect(classifyOperationFailure("Unexpected end of JSON input")).toBe("transient");
+    expect(classifyOperationFailure("14 UNAVAILABLE: Firestore request failed")).toBe("transient");
     expect(
       classifyOperationFailure("gateway bender durable desired revision did not materialize within 120000ms"),
     ).toBe("transient");
@@ -288,6 +293,26 @@ describe("buildOperationCompletionUpdate", () => {
     expect(update.attempts).toBe(3);
     expect(update.error).toBe("connect ECONNREFUSED 10.0.0.1:443");
     expect((update.attemptHistory as unknown[]).length).toBe(3);
+  });
+
+  it("keeps an active durable customer migration V2 retryable beyond the normal cap", () => {
+    const update = buildOperationCompletionUpdate({
+      op: {
+        attempts: MAX_OPERATION_ATTEMPTS,
+        attemptHistory: [],
+        customerMigrationV2: { phase: "promotionIntent" } as never,
+      },
+      result: {
+        steps: [],
+        success: false,
+        error: "customer migration V2 retry pending: status 503: response lost",
+      },
+      steps: [],
+      now,
+    });
+
+    expect(update.status).toBe("pending");
+    expect(update.nextAttemptAt).toBe(now + retryBackoffMs(MAX_OPERATION_ATTEMPTS + 1));
   });
 
   it("preserves rolledBack from the handler result on terminal failure", () => {

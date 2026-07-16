@@ -152,6 +152,12 @@ export declare class MigrationRpcError extends Error {
     readonly slug?: string;
     constructor(message: string, options?: MigrationRpcErrorOptions);
 }
+export declare class MigrationTransportError extends Error {
+    readonly retryable = true;
+    constructor(message: string, options?: {
+        cause?: unknown;
+    });
+}
 export declare function isDefinitiveConfigRpcRejection(error: unknown): boolean;
 export declare function isDefinitiveFreezeRejection(error: unknown): boolean;
 export declare function isFreezeOwnerConflict(error: unknown): error is MigrationRpcError & {

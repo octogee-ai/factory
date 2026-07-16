@@ -43,6 +43,9 @@ const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/byok/agent-model-token",
   "/internal/byok/platform-embedding-key",
   "/internal/byok/byosub-flow",
+  "/internal/openclaw-control/redeem",
+  "/internal/openclaw-control/authorize",
+  "/internal/openclaw-control/audit",
 ]);
 
 function stringValue(value: unknown): string | null {

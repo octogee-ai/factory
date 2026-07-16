@@ -82,6 +82,14 @@ function isStringArray(value: unknown): value is string[] {
   );
 }
 
+function isOptionalBoolean(value: unknown): boolean {
+  return value === undefined || typeof value === "boolean";
+}
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === "string";
+}
+
 function isNullableSizingTier(value: unknown): value is SizingTier | null {
   return value === null || isSizingTier(value);
 }
@@ -89,17 +97,15 @@ function isNullableSizingTier(value: unknown): value is SizingTier | null {
 function isNullableOperatorAccess(value: unknown): value is OperatorGatewayAccessSpec | null {
   if (value === null) return true;
   if (!isRecord(value)) return false;
-  return (
-    (value.shellsEnabled === undefined || typeof value.shellsEnabled === "boolean") &&
-    (value.platformMetadataEgress === undefined ||
-      typeof value.platformMetadataEgress === "boolean") &&
-    (value.kubeApiServerEgressCidrs === undefined ||
-      isStringArray(value.kubeApiServerEgressCidrs)) &&
-    (value.reason === undefined || typeof value.reason === "string") &&
+  const validPowerAccess = isOptionalBoolean(value.shellsEnabled) &&
+    isOptionalBoolean(value.controlUiEnabled);
+  const validNetworkAccess = isOptionalBoolean(value.platformMetadataEgress) &&
+    (value.kubeApiServerEgressCidrs === undefined || isStringArray(value.kubeApiServerEgressCidrs));
+  const validVerification = isOptionalString(value.reason) &&
     (value.verifiedAt === undefined ||
       (typeof value.verifiedAt === "number" && Number.isFinite(value.verifiedAt))) &&
-    (value.verifiedBy === undefined || typeof value.verifiedBy === "string")
-  );
+    isOptionalString(value.verifiedBy);
+  return validPowerAccess && validNetworkAccess && validVerification;
 }
 
 function isNullableServiceAccount(value: unknown): value is GatewayServiceAccountSpec | null {

@@ -17,6 +17,38 @@ function makeDeps() {
 }
 
 describe("createOperationContext", () => {
+  it("persists migration V2 state and exposes cancellation without swallowing errors", async () => {
+    const persistCustomerMigrationV2 = vi.fn(async () => undefined);
+    const cancellationRequested = vi.fn(async () => true);
+    const { ctx } = createOperationContext({
+      ...makeDeps(),
+      persistCustomerMigrationV2,
+      cancellationRequested,
+    });
+    const migration = {
+      phase: "initialized" as const,
+      operationId: "op-1",
+      migrationId: "mig-op-1",
+      uid: "u1",
+      slug: "alice",
+      sourceGatewayId: "source",
+      sourceRevisionId: "source-r1",
+      sourceRelease: 1,
+      sourceEpoch: 1,
+      targetGatewayId: "target",
+      targetRevisionId: "target-r1",
+      targetRelease: 1,
+      sourceImageTag: "image",
+      sourceBuildSha: "build",
+      sourceOpenclawVersion: "oc",
+      targetImageTag: "target-image",
+    };
+
+    await ctx.persistCustomerMigrationV2?.(migration);
+
+    expect(persistCustomerMigrationV2).toHaveBeenCalledWith(migration);
+    await expect(ctx.cancellationRequested?.()).resolves.toBe(true);
+  });
   it("appends the first running event as a new step", async () => {
     const deps = makeDeps();
     const { ctx, steps } = createOperationContext(deps);

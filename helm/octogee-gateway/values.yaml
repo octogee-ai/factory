@@ -54,6 +54,7 @@ operatorAccess:
   # tenant-owned operator gateway boundary (billing/reservation + scoped
   # platform credentials) and the app/user mirror has been updated.
   shellsEnabled: false
+  controlUiEnabled: false
   # Platform-builder ONLY (OPERATOR-GATEWAY-IDENTITY-AND-BROKERING-SPEC D7).
   # Opens egress to the GKE metadata server (169.254.169.254) so this gateway's
   # read-only Workload-Identity GSA can mint tokens. The fleet-wide

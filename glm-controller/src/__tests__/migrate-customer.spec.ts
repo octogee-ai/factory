@@ -30,6 +30,27 @@ const SNAPSHOT: FleetBrokerUserSnapshot = {
   coachMmUserId: "mm-coach",
 };
 
+function gatewayRootFence(
+  gatewayId: string,
+  revisionId = `${gatewayId}-r1`,
+  release = 1,
+  updatedAt = gatewayId === "gw-blue" ? 17 : 18,
+): NonNullable<Operation["customerMigrationV2"]>["sourceRootFence"] {
+  return {
+    gatewayId,
+    updatedAt,
+    latestRelease: release,
+    desiredRelease: release,
+    liveRelease: release,
+    liveRevisionId: revisionId,
+    trafficRevisionId: revisionId,
+    gatewayClass: "operator",
+    ownerUid: "uid-alice",
+    builderSlug: "alice",
+    configHash: gatewayId === "gw-blue" ? "7".repeat(64) : "8".repeat(64),
+  };
+}
+
 function mkOp(overrides: Partial<Operation>): Operation {
   return {
     id: "op-1",
@@ -74,6 +95,71 @@ function happyClient(): MigrationClient {
       slug,
       unfrozen: true,
     })) as MigrationClient["unfreezeConfig"],
+    freezeConfigV2: vi.fn(async ({ migrationId, slug, sourceRevisionId, targetRevisionId }) => ({
+      migrationId,
+      slug,
+      sourceRevisionId,
+      targetRevisionId,
+      frozen: true,
+      checkpointCommit: "1".repeat(40),
+      configHash: "2".repeat(64),
+      freezeRef: `refs/octogee/system-config/freeze/${sourceRevisionId}`,
+      freezeObject: "3".repeat(40),
+    })) as MigrationClient["freezeConfigV2"],
+    proveConfigCandidate: vi.fn(async ({
+      migrationId,
+      slug,
+      sourceRevisionId,
+      targetRevisionId,
+      checkpointCommit,
+      freezeObject,
+    }) => ({
+      migrationId,
+      slug,
+      sourceRevisionId,
+      targetRevisionId,
+      checkpointCommit,
+      candidateCommit: "4".repeat(40),
+      candidateHash: "5".repeat(64),
+      candidateRef: `refs/octogee/system-config/candidate/${targetRevisionId}`,
+      freezeObject,
+      runtimeConfigHash: "6".repeat(64),
+      observedRevisionId: targetRevisionId,
+      targetStartedAt: 4_500,
+      imageTag: "target-image",
+      buildSha: "target-build",
+      openclawVersion: "2026.7.2",
+      configReady: true,
+      provenAt: 4_900,
+    })) as MigrationClient["proveConfigCandidate"],
+    promoteConfigCandidate: vi.fn(async ({
+      migrationId,
+      slug,
+      sourceRevisionId,
+      targetRevisionId,
+      candidateCommit,
+    }) => ({
+      migrationId,
+      slug,
+      sourceRevisionId,
+      targetRevisionId,
+      promoted: true,
+      promotedCommit: candidateCommit,
+    })) as MigrationClient["promoteConfigCandidate"],
+    abortConfigV2: vi.fn(async ({ migrationId, slug, sourceRevisionId, targetRevisionId }) => ({
+      migrationId,
+      slug,
+      sourceRevisionId,
+      targetRevisionId,
+      aborted: true,
+    })) as MigrationClient["abortConfigV2"],
+    finalizeConfigV2: vi.fn(async ({ migrationId, slug, sourceRevisionId, targetRevisionId }) => ({
+      migrationId,
+      slug,
+      sourceRevisionId,
+      targetRevisionId,
+      finalized: true,
+    })) as MigrationClient["finalizeConfigV2"],
     restoreTarget: vi.fn(async ({ migrationId, slug }) => ({
       migrationId,
       slug,
@@ -127,6 +213,18 @@ function makeDeps(
     recordConfigRollMetric: vi.fn(),
     resolveSystemConfigMigrationMode: vi.fn(async () => "none"),
     assertSystemConfigProtocolReady: vi.fn(async () => undefined),
+    readRevisionExecutionIdentity: vi.fn(async (revisionId: string) => ({
+      revisionId,
+      imageTag: revisionId === "gw-green-r1" ? "target-image" : "source-image",
+      buildSha: revisionId === "gw-green-r1" ? "target-build" : "source-build",
+      openclawVersion: revisionId === "gw-green-r1" ? "2026.7.2" : "2026.7.1",
+      startedAt: revisionId === "gw-green-r1" ? 4_500 : 4_000,
+    })),
+    readGatewayRootFence: vi.fn(async (gatewayId: string) => gatewayRootFence(gatewayId)),
+    installTargetSystemConfigContext: vi.fn(async () => undefined),
+    clearTargetSystemConfigContext: vi.fn(async () => undefined),
+    assertCandidateProofCurrent: vi.fn(async () => undefined),
+    commitV2Cutover: vi.fn(async () => undefined),
     recoverConfigFreezeOwner: vi.fn(async () => false),
     resolveFromRevision: vi.fn(async (_uid: string, gatewayId: string) => ({
       revisionId: `${gatewayId}-r1`,
@@ -150,13 +248,530 @@ function makeDeps(
 
 function makeCtx(): OperationContext & { reported: OperationStep[] } {
   const reported: OperationStep[] = [];
+  const persistedV2: NonNullable<Operation["customerMigrationV2"]>[] = [];
   return {
     reportStep: vi.fn(async (step: OperationStep) => {
       reported.push(step);
     }),
+    persistCustomerMigrationV2: vi.fn(async (state) => {
+      persistedV2.push(state);
+    }),
+    cancellationRequested: vi.fn(async () => false),
     reported,
+    persistedV2,
   };
 }
+
+function durableV2State(
+  phase: NonNullable<Operation["customerMigrationV2"]>["phase"],
+): NonNullable<Operation["customerMigrationV2"]> {
+  return {
+    phase,
+    operationId: "op-1",
+    migrationId: "mig-test-1",
+    uid: "uid-alice",
+    slug: "alice",
+    sourceGatewayId: "gw-blue",
+    sourceRevisionId: "gw-blue-r1",
+    sourceRelease: 1,
+    sourceEpoch: 1,
+    sourceAssignmentMode: "assigned",
+    sourceRootFence: gatewayRootFence("gw-blue"),
+    targetGatewayId: "gw-green",
+    targetRevisionId: "gw-green-r1",
+    targetRelease: 1,
+    targetRootFence: gatewayRootFence("gw-green"),
+    sourceImageTag: "source-image",
+    sourceBuildSha: "source-build",
+    sourceOpenclawVersion: "2026.7.1",
+    targetImageTag: "target-image",
+    checkpointCommit: "1".repeat(40),
+    configHash: "2".repeat(64),
+    freezeRef: "refs/octogee/system-config/freeze/gw-blue-r1",
+    freezeObject: "3".repeat(40),
+  };
+}
+
+describe("createMigrateCustomerHandler — ordinary isolated protocol V2", () => {
+  it("retries raw source transport failure before checkpoint without aborting or terminalizing", async () => {
+    const client = happyClient();
+    vi.mocked(client.freezeConfigV2).mockRejectedValueOnce(new TypeError("fetch failed"));
+    const { deps } = makeDeps({
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
+    }, client);
+
+    const result = await createMigrateCustomerHandler(deps)(mkOp({}), makeCtx());
+
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.error).toMatch(/V2 retry pending.*fetch failed/i);
+    expect(client.abortConfigV2).not.toHaveBeenCalled();
+  });
+
+  it("retries setup outages after checkpoint and leaves the durable source freeze intact", async () => {
+    const client = happyClient();
+    const { deps } = makeDeps({
+      readUserSnapshot: vi.fn(async () => {
+        throw new SyntaxError("Unexpected end of JSON input");
+      }),
+    }, client);
+    const op = mkOp({ customerMigrationV2: durableV2State("checkpointed") });
+
+    const result = await createMigrateCustomerHandler(deps)(op, makeCtx());
+
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.error).toMatch(/V2 retry pending.*Unexpected end/i);
+    expect(client.abortConfigV2).not.toHaveBeenCalled();
+    expect(client.freezeConfigV2).not.toHaveBeenCalled();
+  });
+
+  it("resumes from durable identity without re-reading a deleted user after checkpoint", async () => {
+    const readUser = vi.fn(async () => {
+      throw new Error("user document was deleted");
+    });
+    const { deps } = makeDeps({ readUser });
+
+    const result = await createMigrateCustomerHandler(deps)(
+      mkOp({ customerMigrationV2: durableV2State("checkpointed") }),
+      makeCtx(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(readUser).not.toHaveBeenCalled();
+  });
+
+  it("durably aborts when the restore snapshot is terminally unavailable at the restore phase", async () => {
+    const client = happyClient();
+    const { deps } = makeDeps({
+      readUserSnapshot: vi.fn(async () => null),
+    }, client);
+    const ctx = makeCtx();
+
+    const result = await createMigrateCustomerHandler(deps)(
+      mkOp({ customerMigrationV2: durableV2State("keysSynced") }),
+      ctx,
+    );
+
+    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(ctx.persistedV2.map((entry) => entry.phase)).toEqual([
+      "abortIntent",
+      "abortPublished",
+      "abortTargetUnmounted",
+      "abortContextCleared",
+      "aborted",
+    ]);
+    expect(client.abortConfigV2).toHaveBeenCalledOnce();
+    expect(client.restoreTarget).not.toHaveBeenCalled();
+  });
+
+  it("persists abort progress when a target URL disappears after source quiesce", async () => {
+    const resolveGatewayUrl = vi.fn(async (revisionId: string) => {
+      if (revisionId === "gw-green-r1") throw new Error("target revision was deleted");
+      return `http://test/${revisionId}`;
+    });
+    const { deps, client } = makeDeps({ resolveGatewayUrl });
+    const ctx = makeCtx();
+
+    const result = await createMigrateCustomerHandler(deps)(
+      mkOp({ customerMigrationV2: durableV2State("sourceQuiesced") }),
+      ctx,
+    );
+
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.error).toMatch(/retry pending.*abort cleanup blocked.*target revision was deleted/i);
+    expect(ctx.persistedV2.map((entry) => entry.phase)).toEqual(["abortIntent", "abortPublished"]);
+    expect(client.abortConfigV2).toHaveBeenCalledOnce();
+  });
+
+  it("routes a terminal cancellation-read failure through durable pre-intent abort", async () => {
+    const { deps, client } = makeDeps();
+    const ctx = makeCtx();
+    ctx.cancellationRequested = vi.fn(async () => {
+      throw new Error("cancellation record is corrupt");
+    });
+
+    const result = await createMigrateCustomerHandler(deps)(
+      mkOp({ customerMigrationV2: durableV2State("checkpointed") }),
+      ctx,
+    );
+
+    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(ctx.persistedV2.map((entry) => entry.phase)).toContain("abortIntent");
+    expect(ctx.persistedV2.at(-1)?.phase).toBe("aborted");
+    expect(client.abortConfigV2).toHaveBeenCalledOnce();
+  });
+
+  it("does not require the mutable user document while resuming from durable scope", async () => {
+    const client = happyClient();
+    const readUser = vi.fn(async () => {
+      throw Object.assign(new Error("14 UNAVAILABLE: Firestore read failed"), { code: 14 });
+    });
+    const { deps } = makeDeps({
+      readUser,
+    }, client);
+
+    const result = await createMigrateCustomerHandler(deps)(
+      mkOp({ customerMigrationV2: durableV2State("checkpointed") }),
+      makeCtx(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(readUser).not.toHaveBeenCalled();
+    expect(client.abortConfigV2).not.toHaveBeenCalled();
+  });
+
+  it("keeps abort cleanup retryable through a raw source outage", async () => {
+    const client = happyClient();
+    vi.mocked(client.abortConfigV2).mockRejectedValueOnce(new TypeError("fetch failed"));
+    const { deps } = makeDeps({}, client);
+
+    const result = await createMigrateCustomerHandler(deps)(
+      mkOp({ customerMigrationV2: {
+        ...durableV2State("abortIntent"),
+        abortFromPhase: "checkpointed",
+        abortReason: "candidate conflict",
+        abortIntentAt: 4_999,
+      } }),
+      makeCtx(),
+    );
+
+    expect(result.error).toMatch(/V2 retry pending.*fetch failed/i);
+    expect(result.rolledBack).toBe(false);
+  });
+
+  it("keeps abort cleanup retryable through a terminal source URL error", async () => {
+    const readUserSnapshot = vi.fn(async () => {
+      throw new Error("snapshot must not be read during abort");
+    });
+    const { deps, client } = makeDeps({
+      readUserSnapshot,
+      resolveGatewayUrl: vi.fn(async (revisionId: string) => {
+        if (revisionId === "gw-blue-r1") throw new Error("source revision was deleted");
+        return `http://test/${revisionId}`;
+      }),
+    });
+    const ctx = makeCtx();
+
+    const result = await createMigrateCustomerHandler(deps)(
+      mkOp({ customerMigrationV2: {
+        ...durableV2State("abortIntent"),
+        abortFromPhase: "checkpointed",
+        abortReason: "candidate conflict",
+        abortIntentAt: 4_999,
+      } }),
+      ctx,
+    );
+
+    expect(result.error).toMatch(/retry pending.*abort cleanup blocked.*source revision was deleted/i);
+    expect(result.rolledBack).toBe(false);
+    expect(ctx.persistedV2).toEqual([]);
+    expect(readUserSnapshot).not.toHaveBeenCalled();
+    expect(client.abortConfigV2).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["complete", true, false],
+    ["aborted", false, true],
+  ] as const)("finishes a durably persisted %s phase without re-running setup", async (
+    phase,
+    success,
+    rolledBack,
+  ) => {
+    const { deps } = makeDeps({
+      readUser: vi.fn(async () => { throw new Error("setup must not run"); }),
+      readUserSnapshot: vi.fn(async () => { throw new Error("setup must not run"); }),
+      resolveGatewayUrl: vi.fn(async () => { throw new Error("setup must not run"); }),
+    });
+    const terminal = durableV2State(phase);
+    if (phase === "aborted") terminal.abortReason = "candidate conflict";
+
+    const result = await createMigrateCustomerHandler(deps)(
+      mkOp({ customerMigrationV2: terminal }),
+      makeCtx(),
+    );
+
+    expect(result).toMatchObject({ success, rolledBack });
+    expect(deps.readUser).not.toHaveBeenCalled();
+    expect(deps.readUserSnapshot).not.toHaveBeenCalled();
+    expect(deps.resolveGatewayUrl).not.toHaveBeenCalled();
+  });
+
+  it("uses only V2 config control and durably persists every migration edge", async () => {
+    const { deps, client } = makeDeps({
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
+    });
+    const ctx = makeCtx();
+
+    const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
+
+    expect(result.success).toBe(true);
+    expect(client.freezeConfigV2).toHaveBeenCalledOnce();
+    expect(client.proveConfigCandidate).toHaveBeenCalledTimes(2);
+    expect(client.promoteConfigCandidate).toHaveBeenCalledOnce();
+    expect(client.finalizeConfigV2).toHaveBeenCalledOnce();
+    expect(client.freezeConfig).not.toHaveBeenCalled();
+    expect(client.proveConfigRestore).not.toHaveBeenCalled();
+    expect(client.unfreezeConfig).not.toHaveBeenCalled();
+    expect(ctx.persistedV2.map((entry) => entry.phase)).toEqual([
+      "initialized", "checkpointed", "targetPrepared", "keysSynced", "targetRestored",
+      "candidateProven", "preSynced", "sourceQuiesced", "finalSynced",
+      "targetVerified", "promotionIntent", "promoted", "cutover", "sourceRetired",
+      "finalized", "complete",
+    ]);
+    expect(deps.commitV2Cutover).toHaveBeenCalledWith(expect.objectContaining({
+      operationId: "op-1",
+      sourceRevisionId: "gw-blue-r1",
+      sourceRootFence: gatewayRootFence("gw-blue"),
+      targetRevisionId: "gw-green-r1",
+      targetRootFence: gatewayRootFence("gw-green"),
+    }));
+  });
+
+  it("carries an unassigned live root binding through quiesce and atomic cutover", async () => {
+    const { deps } = makeDeps({
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
+      resolveFromRevision: vi.fn(async () => ({
+        revisionId: "gw-blue-r1",
+        release: 1,
+        assignmentMode: "unassigned-live",
+      })),
+    });
+    const ctx = makeCtx();
+
+    const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
+
+    expect(result.success).toBe(true);
+    expect(ctx.persistedV2[0]).toMatchObject({
+      sourceAssignmentMode: "unassigned-live",
+      sourceRootFence: gatewayRootFence("gw-blue"),
+      targetRootFence: gatewayRootFence("gw-green"),
+      sourceEpoch: 0,
+    });
+    expect(deps.setAssignmentState).toHaveBeenCalledWith({
+      gatewayId: "gw-blue",
+      uid: "uid-alice",
+      slug: "alice",
+      revisionId: "gw-blue-r1",
+      release: 1,
+      epoch: 0,
+      state: "quiescing",
+      updatedByOperationId: "op-1",
+      createIfMissing: true,
+    });
+    expect(deps.commitV2Cutover).toHaveBeenCalledWith(expect.objectContaining({
+      sourceAssignmentMode: "unassigned-live",
+      sourceRootFence: gatewayRootFence("gw-blue"),
+      targetRootFence: gatewayRootFence("gw-green"),
+      sourceRelease: 1,
+    }));
+  });
+
+  it("rechecks exact placement before freeze and refuses a root generation race", async () => {
+    let sourceRootReads = 0;
+    const readGatewayRootFence = vi.fn(async (gatewayId: string) => {
+      if (gatewayId !== "gw-blue") return gatewayRootFence(gatewayId);
+      sourceRootReads += 1;
+      return gatewayRootFence(gatewayId, "gw-blue-r1", 1, sourceRootReads === 1 ? 17 : 19);
+    });
+    const { deps, client } = makeDeps({
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
+      readGatewayRootFence,
+    });
+    const ctx = makeCtx();
+
+    const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
+
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.error).toMatch(/source root changed before freeze/i);
+    expect(ctx.persistedV2.map((entry) => entry.phase)).toEqual(["initialized"]);
+    expect(client.freezeConfigV2).not.toHaveBeenCalled();
+    expect(client.abortConfigV2).not.toHaveBeenCalled();
+  });
+
+  it("resumes from the durable phase without reacquiring the source lease", async () => {
+    const { deps, client } = makeDeps({
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
+    });
+    const op = mkOp({
+      customerMigrationV2: {
+        phase: "promotionIntent",
+        operationId: "op-1",
+        migrationId: "mig-test-1",
+        uid: "uid-alice",
+        slug: "alice",
+        sourceGatewayId: "gw-blue",
+        sourceRevisionId: "gw-blue-r1",
+        sourceRelease: 1,
+        sourceEpoch: 1,
+        sourceAssignmentMode: "assigned",
+        sourceRootFence: gatewayRootFence("gw-blue"),
+        targetGatewayId: "gw-green",
+        targetRevisionId: "gw-green-r1",
+        targetRelease: 1,
+        targetRootFence: gatewayRootFence("gw-green"),
+        sourceImageTag: "source-image",
+        sourceBuildSha: "source-build",
+        sourceOpenclawVersion: "2026.7.1",
+        targetImageTag: "target-image",
+        checkpointCommit: "1".repeat(40),
+        configHash: "2".repeat(64),
+        freezeRef: "refs/octogee/system-config/freeze/gw-blue-r1",
+        freezeObject: "3".repeat(40),
+        candidateProof: await client.proveConfigCandidate({
+          migrationId: "mig-test-1",
+          gatewayId: "gw-green",
+          slug: "alice",
+          sourceRevisionId: "gw-blue-r1",
+          targetRevisionId: "gw-green-r1",
+          checkpointCommit: "1".repeat(40),
+          freezeObject: "3".repeat(40),
+        }),
+        promotionIntentAt: 4_999,
+      },
+    });
+    vi.mocked(client.proveConfigCandidate).mockClear();
+
+    const result = await createMigrateCustomerHandler(deps)(op, makeCtx());
+
+    expect(result.success).toBe(true);
+    expect(client.freezeConfigV2).not.toHaveBeenCalled();
+    expect(client.proveConfigCandidate).not.toHaveBeenCalled();
+    expect(client.promoteConfigCandidate).toHaveBeenCalledOnce();
+  });
+
+  it("durably aborts a terminal pre-intent 409 and restores source service", async () => {
+    const { deps, client } = makeDeps({
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
+    });
+    vi.mocked(client.proveConfigCandidate).mockRejectedValueOnce(
+      new MigrationRpcError("candidate conflict", { status: 409, code: "config-ref-conflict" }),
+    );
+    const ctx = makeCtx();
+
+    const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
+
+    expect(result).toMatchObject({ success: false, rolledBack: true, error: "candidate conflict" });
+    expect(ctx.persistedV2.map((entry) => entry.phase)).toContain("abortIntent");
+    expect(ctx.persistedV2.at(-1)?.phase).toBe("aborted");
+    expect(client.abortConfigV2).toHaveBeenCalledOnce();
+    expect(deps.setAssignmentState).toHaveBeenLastCalledWith(expect.objectContaining({
+      gatewayId: "gw-blue",
+      state: "serving",
+    }));
+  });
+
+  it("never aborts after promotion intent even when promotion returns a terminal conflict", async () => {
+    const { deps, client } = makeDeps({
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
+    });
+    const candidateProof = await client.proveConfigCandidate({
+      migrationId: "mig-test-1",
+      gatewayId: "gw-green",
+      slug: "alice",
+      sourceRevisionId: "gw-blue-r1",
+      targetRevisionId: "gw-green-r1",
+      checkpointCommit: "1".repeat(40),
+      freezeObject: "3".repeat(40),
+    });
+    vi.mocked(client.proveConfigCandidate).mockClear();
+    vi.mocked(client.promoteConfigCandidate).mockRejectedValueOnce(
+      new MigrationRpcError("main moved", { status: 409, code: "config-ref-conflict" }),
+    );
+    const op = mkOp({
+      customerMigrationV2: {
+        phase: "promotionIntent",
+        operationId: "op-1",
+        migrationId: "mig-test-1",
+        uid: "uid-alice",
+        slug: "alice",
+        sourceGatewayId: "gw-blue",
+        sourceRevisionId: "gw-blue-r1",
+        sourceRelease: 1,
+        sourceEpoch: 1,
+        targetGatewayId: "gw-green",
+        targetRevisionId: "gw-green-r1",
+        targetRelease: 1,
+        sourceImageTag: "source-image",
+        sourceBuildSha: "source-build",
+        sourceOpenclawVersion: "2026.7.1",
+        targetImageTag: "target-image",
+        checkpointCommit: "1".repeat(40),
+        configHash: "2".repeat(64),
+        freezeRef: "refs/octogee/system-config/freeze/gw-blue-r1",
+        freezeObject: "3".repeat(40),
+        candidateProof,
+        promotionIntentAt: 4_999,
+      },
+    });
+
+    const result = await createMigrateCustomerHandler(deps)(op, makeCtx());
+
+    expect(result).toMatchObject({
+      success: false,
+      rolledBack: false,
+      error: expect.stringMatching(/retry pending.*roll-forward blocked.*main moved/i),
+    });
+    expect(client.abortConfigV2).not.toHaveBeenCalled();
+  });
+
+  it.each(["promotionIntent", "promoted"] as const)(
+    "keeps %s roll-forward durable when the target URL disappears",
+    async (phase) => {
+      const { deps, client } = makeDeps({
+        resolveGatewayUrl: vi.fn(async (revisionId: string) => {
+          if (revisionId === "gw-green-r1") throw new Error("target revision was deleted");
+          return `http://test/${revisionId}`;
+        }),
+      });
+      const candidateProof = await client.proveConfigCandidate({
+        migrationId: "mig-test-1",
+        gatewayId: "gw-green",
+        slug: "alice",
+        sourceRevisionId: "gw-blue-r1",
+        targetRevisionId: "gw-green-r1",
+        checkpointCommit: "1".repeat(40),
+        freezeObject: "3".repeat(40),
+      });
+      const state = {
+        ...durableV2State(phase),
+        candidateProof,
+        promotionIntentAt: 4_999,
+        ...(phase === "promoted" ? { promotedAt: 5_000 } : {}),
+      };
+      const ctx = makeCtx();
+
+      const result = await createMigrateCustomerHandler(deps)(
+        mkOp({ customerMigrationV2: state }),
+        ctx,
+      );
+
+      expect(result).toMatchObject({ success: false, rolledBack: false });
+      expect(result.error).toMatch(/retry pending.*roll-forward blocked.*target revision was deleted/i);
+      expect(ctx.persistedV2).toEqual([]);
+      expect(client.abortConfigV2).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a stale declared source before persisting or freezing V2 state", async () => {
+    const { deps, client } = makeDeps({
+      resolveSystemConfigMigrationMode: vi.fn(async () => "checkpoint-and-restore"),
+    });
+    const ctx = makeCtx();
+
+    const result = await createMigrateCustomerHandler(deps)(
+      mkOp({ input: {
+        uid: "uid-alice",
+        fromGatewayId: "gw-stale",
+        toGatewayId: "gw-green",
+      } }),
+      ctx,
+    );
+
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.error).toMatch(/declared source gw-stale.*resolved source gw-blue/i);
+    expect(ctx.persistedV2).toEqual([]);
+    expect(client.freezeConfigV2).not.toHaveBeenCalled();
+  });
+});
 
 describe("createMigrateCustomerHandler — happy path", () => {
   it("derives a stable migration id from the durable operation id across retries", async () => {

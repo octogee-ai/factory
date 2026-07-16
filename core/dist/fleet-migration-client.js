@@ -15,6 +15,13 @@ export class MigrationRpcError extends Error {
         this.slug = options.slug;
     }
 }
+export class MigrationTransportError extends Error {
+    retryable = true;
+    constructor(message, options = {}) {
+        super(message, options);
+        this.name = "MigrationTransportError";
+    }
+}
 export function isDefinitiveConfigRpcRejection(error) {
     if (!error || typeof error !== "object")
         return false;
@@ -93,9 +100,10 @@ export function createMigrationClient(deps) {
         }
         catch (err) {
             if (didTimeout) {
-                throw new Error(`${label} timed out after ${timeoutMs}ms (${url})`);
+                throw new MigrationTransportError(`${label} timed out after ${timeoutMs}ms (${url})`, { cause: err });
             }
-            throw err;
+            const message = err instanceof Error ? err.message : String(err);
+            throw new MigrationTransportError(`${label} transport failed: ${message}`, { cause: err });
         }
         finally {
             clearTimeout(timer);
@@ -115,7 +123,15 @@ export function createMigrationClient(deps) {
         }, timeoutMs);
         if (!res.ok)
             throw await migrationRpcError(path, res);
-        return (await res.json());
+        try {
+            return (await res.json());
+        }
+        catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            throw new MigrationTransportError(`${path} response body was incomplete: ${message}`, {
+                cause: err,
+            });
+        }
     };
     const context = {
         deps,

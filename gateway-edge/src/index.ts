@@ -48,12 +48,23 @@ import {
 import { chatProxyOwnsHttpPath } from "./chat-proxy/http-paths.js";
 import { stripGatewayPrefix } from "./chat-proxy/gateway-prefix.js";
 import { validateRequiredEnv } from "./lib/required-env.js";
+import type { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
+import {
+  attachOpenClawControlWsRoute,
+  createOpenClawControlHttpRouter,
+} from "./openclaw-control/surface.js";
+import { startOpenClawDashboardCapabilityHeartbeat } from "./openclaw-control/capability-heartbeat.js";
+import {
+  createOpenClawControlMetrics,
+  type OpenClawControlMetrics,
+} from "./openclaw-control/metrics.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 type ChatProxyModule = typeof import("./chat-proxy/proxy.js");
 
 let chatProxyModulePromise: Promise<ChatProxyModule> | null = null;
 let activeChatProxyMetricsRegistry: Registry | null = null;
+let activeOpenClawControlMetrics: OpenClawControlMetrics | undefined;
 
 async function loadChatProxyModule(): Promise<ChatProxyModule> {
   chatProxyModulePromise ??= import("./chat-proxy/proxy.js").then((mod) => {
@@ -87,6 +98,8 @@ app.set("trust proxy", 2);
 
 const metricsRegistry = new Registry();
 collectDefaultMetrics({ register: metricsRegistry });
+const openClawControlMetrics = createOpenClawControlMetrics(metricsRegistry);
+if (surface === "sidecar") activeOpenClawControlMetrics = openClawControlMetrics;
 
 const httpRequestDuration = new Histogram({
   name: 'http_request_duration_seconds',
@@ -170,7 +183,10 @@ if (surface === "cluster") {
   mountClusterSurface(app);
 }
 
-mountSidecarLocalitySurface(app);
+mountSidecarLocalitySurface(app, {
+  dashboardEnabled: surface === "sidecar" && process.env.OPENCLAW_DASHBOARD_BRIDGE_ENABLED === "true",
+  openClawControlMetrics,
+});
 
 app.use(errorHandler);
 
@@ -190,7 +206,16 @@ function mountClusterSurface(app: Express): void {
   mountClusterRoutes(app);
 }
 
-function mountSidecarLocalitySurface(app: Express): void {
+function mountSidecarLocalitySurface(app: Express, options: {
+  dashboardEnabled: boolean;
+  openClawControlMetrics: OpenClawControlMetrics;
+}): void {
+  if (options.dashboardEnabled) {
+    app.use("/api/g/:gatewayId/openclaw", createOpenClawControlHttpRouter({
+      env: process.env,
+      metrics: options.openClawControlMetrics,
+    }));
+  }
   const workspaceLocality = Router();
   workspaceLocality.use("/git", requireAuth);
   workspaceLocality.use(gitRoutes);
@@ -369,6 +394,20 @@ if (process.env.NODE_ENV !== "test") {
   );
   loadChatProxyModule().then((chatProxy) => {
     chatProxy.attachChatProxyWsUpgrade(server, { upgradeGate: rollRosterUpgradeGate });
+    if (process.env.OPENCLAW_DASHBOARD_BRIDGE_ENABLED === "true") {
+      attachOpenClawControlWsRoute({
+        router: (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter,
+        env: process.env,
+        metrics: activeOpenClawControlMetrics,
+      });
+      const dashboardHeartbeat = startOpenClawDashboardCapabilityHeartbeat({
+        env: process.env,
+        logError: (error) => logger.error("OpenClaw Dashboard capability heartbeat failed", {
+          errorType: error instanceof Error ? error.name : "unknown",
+        }),
+      });
+      process.once("exit", () => dashboardHeartbeat?.stop());
+    }
     chatProxy.attachBuilderShellRoute(server, { upgradeGate: rollRosterUpgradeGate }).catch((err) => {
       logger.error("[builder-shell] route attach failed — WS route disabled", {
         err: err instanceof Error ? err.message : String(err),

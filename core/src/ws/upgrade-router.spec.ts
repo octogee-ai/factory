@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import WebSocket from "ws";
 import type { AddressInfo } from "node:net";
+import { PassThrough } from "node:stream";
 
 import { WsUpgradeRouter } from "./upgrade-router";
 
@@ -136,6 +137,30 @@ describe("WsUpgradeRouter", () => {
     if (!r.ok) expect(r.status).toBe(400);
   });
 
+  it("rejects an invalid route path before running authorization or upgrading", async () => {
+    const server = createServer();
+    servers.push(server);
+    const authorize = vi.fn(async () => true);
+    const router = new WsUpgradeRouter();
+    router.add({
+      match: (p) => p.startsWith("/dashboard/"),
+      extractTicket: () => null,
+      allowedOrigins: new Set(["https://app.example"]),
+      authorize,
+      onUpgrade: () => undefined,
+    });
+    router.attach(server);
+    const port = await listen(server);
+
+    const result = await attempt(port, "/dashboard/invalid", {
+      origin: "https://app.example",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.status).toBe(400);
+    expect(authorize).not.toHaveBeenCalled();
+  });
+
   it("accepts a predicate function for dynamic Origin enforcement", async () => {
     const server = createServer();
     servers.push(server);
@@ -242,6 +267,79 @@ const r = await attempt(port, "/k", {
     const good = await attempt(port, "/internal", { headers: { "x-internal-service-key": "secret-xyz" } });
     expect(good.ok).toBe(true);
     if (good.ok) good.ws.close();
+  });
+
+  it("awaits route-specific authorization before accepting the WebSocket", async () => {
+    const server = createServer();
+    servers.push(server);
+    const router = new WsUpgradeRouter();
+    router.add({
+      match: "/dashboard",
+      allowedOrigins: new Set(["https://api.example"]),
+      authorize: async (req) => req.headers.cookie === "session=valid",
+      onUpgrade: () => undefined,
+    });
+    router.attach(server);
+    const port = await listen(server);
+    const bad = await attempt(port, "/dashboard", { origin: "https://api.example" });
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.status).toBe(401);
+    const good = await attempt(port, "/dashboard", {
+      origin: "https://api.example",
+      headers: { cookie: "session=valid" },
+    });
+    expect(good.ok).toBe(true);
+    if (good.ok) good.ws.close();
+  });
+
+  it("does not upgrade a browser socket that disconnects while authorization is pending", async () => {
+    let resolveAuthorization!: (allowed: boolean) => void;
+    const authorization = new Promise<boolean>((resolve) => {
+      resolveAuthorization = resolve;
+    });
+    const router = new WsUpgradeRouter();
+    router.add({
+      match: "/dashboard",
+      allowedOrigins: new Set(["https://api.example"]),
+      authorize: async () => authorization,
+      onUpgrade: vi.fn(),
+    });
+    const compiled = (router as unknown as {
+      routes: Array<{ wss: { handleUpgrade: ReturnType<typeof vi.fn> } }>;
+    }).routes[0];
+    compiled.wss.handleUpgrade = vi.fn();
+    const socket = new PassThrough();
+    router.dispatch({
+      url: "/dashboard",
+      headers: { origin: "https://api.example" },
+    } as never, socket, Buffer.alloc(0));
+    socket.destroy();
+    resolveAuthorization(true);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(compiled.wss.handleUpgrade).not.toHaveBeenCalled();
+  });
+
+  it("returns a retryable response and reports broker authorization failures", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const server = createServer();
+    servers.push(server);
+    const router = new WsUpgradeRouter();
+    router.add({
+      match: "/dashboard",
+      allowedOrigins: new Set(["https://api.example"]),
+      authorize: async () => { throw new Error("broker unavailable"); },
+      onUpgrade: () => undefined,
+    });
+    router.attach(server);
+    const port = await listen(server);
+    const result = await attempt(port, "/dashboard", { origin: "https://api.example" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.status).toBe(503);
+    expect(errorSpy).toHaveBeenCalledWith(
+      "WsUpgradeRouter route failed",
+      expect.any(Error),
+    );
+    errorSpy.mockRestore();
   });
 
   it("first-match-wins across multiple registered routes", async () => {

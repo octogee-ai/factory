@@ -114,6 +114,8 @@ export interface OpenClawDashboardBridgeProtocol {
 
 export interface OpenClawDashboardBridgeCapability extends OpenClawDashboardBridgeProtocol {
   revisionId: string;
+  openclawVersion: string;
+  openclawForkSha: string;
   instanceId: string;
   observedAt: string;
 }

@@ -11,6 +11,7 @@ import {
 import {
   createMigrationClient,
   isDefinitiveConfigRpcRejection,
+  MigrationTransportError,
   MigrationRpcError,
 } from "./fleet-migration-client";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
@@ -74,6 +75,52 @@ describe("isDefinitiveConfigRpcRejection", () => {
     expect(isDefinitiveConfigRpcRejection({ code: "config-ref-conflict" })).toBe(true);
     expect(isDefinitiveConfigRpcRejection({ status: 503 })).toBe(false);
     expect(isDefinitiveConfigRpcRejection({ status: 429 })).toBe(false);
+  });
+});
+
+describe("MigrationClient transport normalization", () => {
+  it.each([
+    new TypeError("fetch failed"),
+    Object.assign(new Error("socket terminated"), { code: "UND_ERR_SOCKET" }),
+    Object.assign(new Error("premature close"), { code: "ECONNRESET" }),
+  ])("normalizes raw fetch transport failures as retryable", async (failure) => {
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://source.example.com",
+      fetch: vi.fn(async () => { throw failure; }),
+    });
+
+    await expect(client.freezeConfigV2({
+      migrationId: "mig-1",
+      gatewayId: "source",
+      transportId: "source-r1",
+      slug: "alice",
+      sourceRevisionId: "source-r1",
+      targetRevisionId: "target-r2",
+    })).rejects.toBeInstanceOf(MigrationTransportError);
+  });
+
+  it("normalizes a truncated successful JSON response as retryable transport loss", async () => {
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://source.example.com",
+      fetch: vi.fn(async () => new Response('{"migrationId":"mig-1"', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })),
+    });
+
+    await expect(client.freezeConfigV2({
+      migrationId: "mig-1",
+      gatewayId: "source",
+      transportId: "source-r1",
+      slug: "alice",
+      sourceRevisionId: "source-r1",
+      targetRevisionId: "target-r2",
+    })).rejects.toMatchObject({
+      name: "MigrationTransportError",
+      retryable: true,
+    });
   });
 });
 

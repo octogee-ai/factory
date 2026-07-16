@@ -1,4 +1,5 @@
 import { type GatewayStatus } from "@octogee/shared/types/fleet-controller";
+import { type CustomerMigrationV2GatewayRootFence } from "@octogee/shared/types/glm";
 import { type AssignmentSource, type AssignmentState } from "@octogee/shared/types/gateway-releases";
 export interface FleetStateDeps {
     db: FleetStateFirestore;
@@ -83,11 +84,44 @@ export interface CutoverCommitParams {
             runtimeConfigHash: string;
         };
     };
+    customerMigrationV2Fence?: {
+        operationId: string;
+        migrationId: string;
+        uid: string;
+        slug: string;
+        sourceGatewayId: string;
+        sourceRevisionId: string;
+        sourceEpoch: number;
+        sourceRelease: number;
+        sourceAssignmentMode: "assigned" | "unassigned-live";
+        sourceRootFence: CustomerMigrationV2GatewayRootFence;
+        targetGatewayId: string;
+        targetRevisionId: string;
+        targetRelease: number;
+        targetRootFence: CustomerMigrationV2GatewayRootFence;
+        checkpointCommit: string;
+        configHash: string;
+        freezeObject: string;
+        candidateCommit: string;
+        candidateHash: string;
+        runtimeConfigHash: string;
+        targetStartedAt: number;
+        imageTag: string;
+        buildSha: string;
+        openclawVersion: string;
+        provenAt: number;
+    };
 }
 export declare function commitCutoverAtomic(deps: FleetStateDeps, params: CutoverCommitParams): Promise<void>;
 export interface MarkAssignmentStateParams {
     gatewayId: string;
     uid: string;
     state: AssignmentState;
+    slug?: string;
+    revisionId?: string;
+    release?: number;
+    epoch?: number;
+    updatedByOperationId?: string;
+    createIfMissing?: boolean;
 }
 export declare function markAssignmentState(deps: FleetStateDeps, params: MarkAssignmentStateParams): Promise<void>;

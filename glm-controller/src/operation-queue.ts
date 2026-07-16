@@ -1,7 +1,7 @@
-// Op kinds with a serial invariant: at most one RUNNING op sharing the same
-// scope key (conflictScopeKey below) at a time. A conflicting pending op is
-// queued (left pending, never failed) until the running one clears — see
-// docs/handbook/22-gateway-rollouts-cowboy.md.
+import { serialFleetOperationsConflict } from "@octogee/core/fleet-operation-lock";
+
+// Op kinds with a serial invariant: overlapping migration/release resources
+// cannot run together, and rollout operations remain globally serial.
 export const SERIALLY_EXCLUSIVE_OPERATION_KINDS: ReadonlySet<string> = new Set([
   "rollout",
   "migrate-customer",
@@ -15,6 +15,12 @@ export interface OperationRef {
   id: string;
   kind: string;
   input?: Record<string, unknown>;
+  customerMigrationV2?: {
+    sourceGatewayId?: string;
+    sourceRevisionId?: string;
+    targetGatewayId?: string;
+    targetRevisionId?: string;
+  };
 }
 
 export interface SerialConflict {
@@ -22,30 +28,12 @@ export interface SerialConflict {
   waitingOn: string;
 }
 
-// The scope an op's exclusivity is measured within: "rollout" is a single
-// global plane (one blue/green roll across the whole fleet); "migrate-customer"
-// is exclusive per migration target (mirrors the fleet-migration-runner's
-// one-slot-per-target transfer capacity) — two migrations to DIFFERENT targets
-// never conflict. Returns null when the op carries no usable scope key (e.g. a
-// migrate-customer input missing toGatewayId) — such an op never conflicts;
-// its own validation failure is what stops it, not the queue.
-function conflictScopeKey(op: OperationRef): string | null {
-  if (op.kind === "rollout") return "rollout:global";
-  if (op.kind === "migrate-customer") {
-    const toGatewayId = typeof op.input?.toGatewayId === "string" ? op.input.toGatewayId : undefined;
-    return toGatewayId ? `migrate-customer:${toGatewayId}` : null;
-  }
-  return null;
-}
-
 export function findSerialConflict(
   candidate: OperationRef,
   runningOpsSameKind: ReadonlyArray<OperationRef>,
 ): SerialConflict | null {
-  const candidateScope = conflictScopeKey(candidate);
-  if (candidateScope === null) return null;
   const conflict = runningOpsSameKind.find(
-    (running) => running.id !== candidate.id && conflictScopeKey(running) === candidateScope,
+    (running) => running.id !== candidate.id && serialFleetOperationsConflict(candidate, running),
   );
   if (!conflict) return null;
   return { conflictingOpId: conflict.id, waitingOn: describeWaitingOn(conflict) };
@@ -80,6 +68,7 @@ export interface OperationClaimCandidate {
   createdAt: number;
   nextAttemptAt?: number | null;
   input?: Record<string, unknown>;
+  customerMigrationV2?: OperationRef["customerMigrationV2"];
 }
 
 export interface OperationClaimDecisionInput {
@@ -111,13 +100,11 @@ function findOlderPendingSameScope(
   candidate: OperationRef & { createdAt: number },
   pendingOpsSameKind: ReadonlyArray<PendingOperationRef>,
 ): SerialConflict | null {
-  const candidateScope = conflictScopeKey(candidate);
-  if (candidateScope === null) return null;
   const older = pendingOpsSameKind
     .filter(
       (pending) =>
         pending.id !== candidate.id &&
-        conflictScopeKey(pending) === candidateScope &&
+        serialFleetOperationsConflict(candidate, pending) &&
         isOlderThanCandidate(pending, candidate),
     )
     .sort((a, b) => (isOlderThanCandidate(a, b) ? -1 : 1))[0];

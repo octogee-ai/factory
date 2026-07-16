@@ -111,6 +111,9 @@ function app(opts: {
   a.post("/internal/connectors/access-token", enforcement, handler);
   a.post("/internal/byok/byosub-flow", enforcement, handler);
   a.post("/internal/byok/platform-embedding-key", enforcement, handler);
+  a.post("/internal/openclaw-control/redeem", enforcement, handler);
+  a.post("/internal/openclaw-control/authorize", enforcement, handler);
+  a.post("/internal/openclaw-control/audit", enforcement, handler);
   a.post("/internal/fleet/agent/web-search", enforcement, handler);
   a.post("/internal/fleet/agent/web-extract", enforcement, handler);
   a.post("/internal/billing/check-trial-expiry", enforcement, handler);
@@ -386,6 +389,20 @@ describe("tenant enforcement middleware", () => {
 
     expect(ownedGateway.status).toBe(200);
     expect(foreignGateway.status).toBe(403);
+  });
+
+  it("delegates exact OpenClaw Control routes only for the bound gateway tenant", async () => {
+    for (const route of ["redeem", "authorize", "audit"]) {
+      const ownedGateway = await request(app({ boundTenant: BENDER }))
+        .post(`/internal/openclaw-control/${route}`)
+        .send({ gatewayId: "bender", uid: "victim" });
+      const foreignGateway = await request(app({ boundTenant: BENDER }))
+        .post(`/internal/openclaw-control/${route}`)
+        .send({ gatewayId: "other" });
+
+      expect(ownedGateway.status, route).toBe(200);
+      expect(foreignGateway.status, route).toBe(403);
+    }
   });
 
   it("allows a gateway-bound caller to target only slugs assigned to that gateway", async () => {

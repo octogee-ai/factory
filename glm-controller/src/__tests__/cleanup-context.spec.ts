@@ -129,7 +129,7 @@ describe("loadCustomerCleanupContext", () => {
       { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
       "uid-alice",
     );
-    expect(ctx?.repoNames).toEqual(["workspace", "blog", "shop"]);
+    expect(ctx?.repoNames).toEqual(["workspace", "system_config", "blog", "shop"]);
   });
 
   it("prefers projData.giteaRepoName when present (the actual Gitea name)", async () => {
@@ -163,7 +163,7 @@ describe("loadCustomerCleanupContext", () => {
       { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
       "uid-alice",
     );
-    expect(ctx?.repoNames).toEqual(["workspace", "legacy-doc-id"]);
+    expect(ctx?.repoNames).toEqual(["workspace", "system_config", "legacy-doc-id"]);
   });
 
   it("surfaces projectSlugs[] directly from project docs (PR #3 — drives Firebase Hosting deletes)", async () => {

@@ -299,6 +299,67 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
     expect(store.get("op-other-target")?.status).toBe("succeeded");
     expect(migrateHandler).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    [
+      "rollout begins on migration source",
+      {
+        running: { kind: "migrate-customer", input: { fromGatewayId: "source", toGatewayId: "target" } },
+        pending: { kind: "rollout", input: { gatewayId: "source" } },
+      },
+    ],
+    [
+      "rollout begins on migration target",
+      {
+        running: { kind: "migrate-customer", input: { fromGatewayId: "source", toGatewayId: "target" } },
+        pending: { kind: "rollout", input: { gatewayId: "target" } },
+      },
+    ],
+    [
+      "migration begins during source rollout",
+      {
+        running: { kind: "rollout", input: { gatewayId: "source" } },
+        pending: { kind: "migrate-customer", input: { fromGatewayId: "source", toGatewayId: "target" } },
+      },
+    ],
+    [
+      "migration begins during target rollout",
+      {
+        running: { kind: "rollout", input: { gatewayId: "target" } },
+        pending: { kind: "migrate-customer", input: { fromGatewayId: "source", toGatewayId: "target" } },
+      },
+    ],
+  ] as const)("serializes cross-protocol conflict: %s", async (_name, fixture) => {
+    const rolloutHandler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
+    const migrateHandler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
+    const { db, store } = createFakeGlmOperationsDb({
+      "op-running": {
+        ...baseOp({
+          id: "op-running",
+          kind: fixture.running.kind,
+          createdAt: 1,
+          input: fixture.running.input,
+        }),
+        status: "running",
+      },
+      "op-pending": baseOp({
+        id: "op-pending",
+        kind: fixture.pending.kind,
+        createdAt: 2,
+        input: fixture.pending.input,
+      }),
+    });
+    const deps = buildDeps(db, {
+      rollout: rolloutHandler,
+      "migrate-customer": migrateHandler,
+    });
+
+    await drainPendingOperationsOnce(deps);
+
+    expect(store.get("op-pending")?.status).toBe("pending");
+    expect(rolloutHandler).not.toHaveBeenCalled();
+    expect(migrateHandler).not.toHaveBeenCalled();
+  });
 });
 
 describe("gateway operation queue — FIFO per scope across the fast path", () => {

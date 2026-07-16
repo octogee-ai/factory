@@ -102,6 +102,22 @@ describe("findSerialConflict — migrate-customer (per-target scope)", () => {
     expect(conflict).toBeNull();
   });
 
+  it("conflicts with another migration sharing the source even when targets differ", () => {
+    const conflict = findSerialConflict(
+      {
+        id: "op-2",
+        kind: "migrate-customer",
+        input: { fromGatewayId: "source", toGatewayId: "target-b" },
+      },
+      [{
+        id: "op-1",
+        kind: "migrate-customer",
+        input: { fromGatewayId: "source", toGatewayId: "target-a" },
+      }],
+    );
+    expect(conflict?.conflictingOpId).toBe("op-1");
+  });
+
   it("never conflicts when the candidate has no toGatewayId — its own validation failure stops it, not the queue", () => {
     const conflict = findSerialConflict(
       { id: "op-2", kind: "migrate-customer", input: {} },
@@ -119,6 +135,56 @@ describe("findSerialConflict — migrate-customer (per-target scope)", () => {
       conflictingOpId: "op-1",
       waitingOn: "migration → gw-green",
     });
+  });
+});
+
+describe("findSerialConflict — shared migration/release-roll scope", () => {
+  it.each(["source", "target"])(
+    "queues a release roll that begins on the migration %s gateway",
+    (gatewayId) => {
+      const conflict = findSerialConflict(
+        { id: "roll", kind: "rollout", input: { gatewayId } },
+        [{
+          id: "migration",
+          kind: "migrate-customer",
+          input: { fromGatewayId: "source", toGatewayId: "target" },
+        }],
+      );
+      expect(conflict?.conflictingOpId).toBe("migration");
+    },
+  );
+
+  it.each(["source", "target"])(
+    "queues a migration that begins while its %s gateway is rolling",
+    (gatewayId) => {
+      const conflict = findSerialConflict(
+        {
+          id: "migration",
+          kind: "migrate-customer",
+          input: { fromGatewayId: "source", toGatewayId: "target" },
+        },
+        [{ id: "roll", kind: "rollout", input: { gatewayId } }],
+      );
+      expect(conflict?.conflictingOpId).toBe("roll");
+    },
+  );
+
+  it("uses durable revision bindings while a migration is retrying", () => {
+    const conflict = findSerialConflict(
+      { id: "roll", kind: "rollout", input: { gatewayId: "source" } },
+      [{
+        id: "migration",
+        kind: "migrate-customer",
+        input: { toGatewayId: "target" },
+        customerMigrationV2: {
+          sourceGatewayId: "source",
+          sourceRevisionId: "source-r2",
+          targetGatewayId: "target",
+          targetRevisionId: "target-r4",
+        } as never,
+      }],
+    );
+    expect(conflict?.conflictingOpId).toBe("migration");
   });
 });
 

@@ -68,6 +68,27 @@ describe("gatewaySurfaceTarget", () => {
     });
   });
 
+  it("preserves the Dashboard launch, asset, and WebSocket route shape on TEST and PROD api origins", () => {
+    for (const host of ["api-test.octogee.com", "api.octogee.com"]) {
+      for (const suffix of [
+        "openclaw/launch/opaque-ticket",
+        "openclaw/assets/app.js?build=1",
+        "openclaw",
+      ]) {
+        expect(gatewaySurfaceTarget({
+          host,
+          previewHost: "preview.octogee.com",
+          url: `/g/bender/${suffix}`,
+          namespace: host.startsWith("api-test") ? "octogee-test" : "octogee",
+        })).toMatchObject({
+          gatewayId: "bender",
+          surface: "api",
+          path: `/api/g/bender/${suffix}`,
+        });
+      }
+    }
+  });
+
   it("maps public preview gateway paths to the selected gateway preview port", () => {
     expect(gatewaySurfaceTarget({
       host: "preview.octogee.com",

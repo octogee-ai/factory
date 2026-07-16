@@ -1,4 +1,5 @@
 import type { SizingTier } from "./sizing.js";
+import type { ConfigCandidateProofResponse } from "./fleet-controller.js";
 
 export type GatewayDesiredStatus = "running" | "paused" | "draining" | "retired";
 
@@ -99,6 +100,7 @@ export interface GatewayServiceAccountSpec {
 
 export interface OperatorGatewayAccessSpec {
   shellsEnabled?: boolean;
+  controlUiEnabled?: boolean;
   platformMetadataEgress?: boolean;
   kubeApiServerEgressCidrs?: string[];
   reason?: string;
@@ -267,6 +269,17 @@ export function isGatewayClassShellAccessEnabled(
   );
 }
 
+export function isGatewayClassControlUiAccessEnabled(
+  gatewayClass: GatewayClass | undefined,
+  operatorAccess: OperatorGatewayAccessSpec | undefined,
+): boolean {
+  return (
+    (gatewayClass === "builder" || gatewayClass === "operator") &&
+    operatorAccess?.shellsEnabled === true &&
+    operatorAccess.controlUiEnabled === true
+  );
+}
+
 // The user-doc shell state the PWA gates BuilderShell on (gatewayProfile +
 // shellsEnabled). A Builder gets BuilderShell when placed on a shell-enabled
 // builder/operator gateway they OWN; a guest migrated onto someone else's
@@ -356,6 +369,81 @@ export interface Operation {
   // completions append nothing.
   attemptHistory?: OperationAttemptRecord[];
   output?: Record<string, unknown>;
+  customerMigrationV2?: CustomerMigrationV2State;
+}
+
+export type CustomerMigrationV2Phase =
+  | "initialized"
+  | "checkpointed"
+  | "targetPrepared"
+  | "keysSynced"
+  | "targetRestored"
+  | "candidateProven"
+  | "preSynced"
+  | "sourceQuiesced"
+  | "finalSynced"
+  | "targetVerified"
+  | "promotionIntent"
+  | "promoted"
+  | "cutover"
+  | "sourceRetired"
+  | "finalized"
+  | "complete"
+  | "abortIntent"
+  | "abortPublished"
+  | "abortTargetUnmounted"
+  | "abortContextCleared"
+  | "aborted";
+
+export interface CustomerMigrationV2GatewayRootFence {
+  gatewayId: string;
+  updatedAt: number;
+  latestRelease: number;
+  desiredRelease: number;
+  liveRelease: number;
+  liveRevisionId: string;
+  trafficRevisionId: string;
+  gatewayClass: "builder" | "operator";
+  ownerUid: string;
+  builderSlug: string;
+  configHash: string;
+}
+
+export interface CustomerMigrationV2State {
+  phase: CustomerMigrationV2Phase;
+  operationId: string;
+  migrationId: string;
+  uid: string;
+  slug: string;
+  sourceGatewayId: string;
+  sourceRevisionId: string;
+  sourceRelease: number;
+  sourceEpoch: number;
+  sourceAssignmentMode: "assigned" | "unassigned-live";
+  sourceRootFence: CustomerMigrationV2GatewayRootFence;
+  targetGatewayId: string;
+  targetRevisionId: string;
+  targetRelease: number;
+  targetRootFence: CustomerMigrationV2GatewayRootFence;
+  sourceImageTag: string;
+  sourceBuildSha: string;
+  sourceOpenclawVersion: string;
+  targetImageTag: string;
+  checkpointCommit?: string;
+  configHash?: string;
+  freezeRef?: string;
+  freezeObject?: string;
+  candidateProof?: ConfigCandidateProofResponse;
+  promotionIntentAt?: number;
+  promotedAt?: number;
+  cutoverAt?: number;
+  sourceRetiredAt?: number;
+  finalizedAt?: number;
+  completedAt?: number;
+  abortFromPhase?: CustomerMigrationV2Phase;
+  abortReason?: string;
+  abortIntentAt?: number;
+  abortedAt?: number;
 }
 
 export interface OperationAttemptRecord {

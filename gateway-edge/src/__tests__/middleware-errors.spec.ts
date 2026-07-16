@@ -4,7 +4,10 @@ const h = vi.hoisted(() => ({
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }));
 
-vi.mock("../middleware/logging.js", () => ({ logger: h.logger }));
+vi.mock("../middleware/logging.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../middleware/logging.js")>(),
+  logger: h.logger,
+}));
 
 const { errorHandler } = await import("../middleware/errors.js");
 
@@ -50,5 +53,28 @@ describe("errorHandler", () => {
     });
     expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json).toHaveBeenCalledWith({ error: "database unavailable" });
+  });
+
+  it("redacts an unconsumed OpenClaw launch ticket when its broker fails", () => {
+    const res = response();
+    const ticket = "a".repeat(43);
+    const err = new Error("OpenClaw Control ticket broker returned 409");
+
+    errorHandler(
+      err,
+      { path: `/api/g/bender/openclaw/launch/${ticket}`, method: "GET" } as never,
+      res as never,
+      vi.fn(),
+    );
+
+    expect(h.logger.error).toHaveBeenLastCalledWith(
+      "Unhandled error: OpenClaw Control ticket broker returned 409",
+      {
+        path: "/api/g/bender/openclaw/launch/<redacted>",
+        method: "GET",
+        stack: expect.any(String),
+      },
+    );
+    expect(JSON.stringify(h.logger.error.mock.calls)).not.toContain(ticket);
   });
 });
