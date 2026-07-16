@@ -1,12 +1,21 @@
+import { createHash } from "node:crypto";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type {
   ConfigCandidateProofResponse,
   ConfigFreezeV2Response,
 } from "@octogee/shared/types/fleet-controller";
 import type {
+  CustomerMigrationV2GatewayRootFence,
   CustomerMigrationV2Phase,
   CustomerMigrationV2State,
 } from "@octogee/shared/types/glm";
+import {
+  isGatewayDesiredDoc,
+} from "@octogee/shared/types/gateway-releases";
+import {
+  isGatewayMutableConfigForGateway,
+  type GatewayMutableConfig,
+} from "@octogee/shared/types/gateway-mutable-config";
 import {
   isDefinitiveConfigRpcRejection,
   MigrationTransportError,
@@ -29,10 +38,11 @@ export interface CustomerMigrationV2CutoverFence {
   sourceEpoch: number;
   sourceRelease: number;
   sourceAssignmentMode: "assigned" | "unassigned-live";
-  sourceRootUpdatedAt?: number;
+  sourceRootFence: CustomerMigrationV2GatewayRootFence;
   targetGatewayId: string;
   targetRevisionId: string;
   targetRelease: number;
+  targetRootFence: CustomerMigrationV2GatewayRootFence;
   checkpointCommit: string;
   configHash: string;
   freezeObject: string;
@@ -44,6 +54,106 @@ export interface CustomerMigrationV2CutoverFence {
   buildSha: string;
   openclawVersion: string;
   provenAt: number;
+}
+
+function canonicalJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJsonValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => [key, canonicalJsonValue(entry)]),
+  );
+}
+
+function mutableConfigHash(config: GatewayMutableConfig): string {
+  const canonical = canonicalJsonValue({
+    configSchemaVersion: config.configSchemaVersion,
+    profile: config.profile,
+    gatewayClass: config.gatewayClass,
+    imageProfile: config.imageProfile,
+    sizingTier: config.sizingTier,
+    computeClass: config.computeClass,
+    gcpProject: config.gcpProject,
+    gatewayContainerSecurityContext: config.gatewayContainerSecurityContext,
+    serviceAccountName: config.serviceAccountName,
+    serviceAccount: config.serviceAccount,
+    operatorAccess: config.operatorAccess,
+    ownerUid: config.ownerUid,
+    coOwnerUids: config.coOwnerUids,
+    builderSlug: config.builderSlug,
+    openclawOverrides: config.openclawOverrides,
+    modelBrokerLimits: config.modelBrokerLimits,
+    preemption: config.preemption,
+  });
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+}
+
+export function customerMigrationV2GatewayRootFence(
+  value: unknown,
+  gatewayId: string,
+): CustomerMigrationV2GatewayRootFence | null {
+  if (
+    !isGatewayDesiredDoc(value) ||
+    value.gatewayId !== gatewayId ||
+    !isGatewayMutableConfigForGateway(value, gatewayId) ||
+    value.desiredStatus !== "running" ||
+    value.roll !== null ||
+    value.retireAfter != null ||
+    (value as { retirementClaim?: unknown }).retirementClaim != null ||
+    typeof value.liveRevisionId !== "string" ||
+    value.trafficRevisionId !== value.liveRevisionId ||
+    typeof value.liveRelease !== "number" ||
+    value.desiredRelease !== value.liveRelease ||
+    typeof value.updatedAt !== "number" ||
+    !Number.isFinite(value.updatedAt) ||
+    (value.gatewayClass !== "builder" && value.gatewayClass !== "operator") ||
+    typeof value.ownerUid !== "string" ||
+    value.ownerUid.length === 0 ||
+    typeof value.builderSlug !== "string" ||
+    value.builderSlug.length === 0
+  ) {
+    return null;
+  }
+  return {
+    gatewayId,
+    updatedAt: value.updatedAt,
+    latestRelease: value.latestRelease,
+    desiredRelease: value.desiredRelease,
+    liveRelease: value.liveRelease,
+    liveRevisionId: value.liveRevisionId,
+    trafficRevisionId: value.trafficRevisionId,
+    gatewayClass: value.gatewayClass,
+    ownerUid: value.ownerUid,
+    builderSlug: value.builderSlug,
+    configHash: mutableConfigHash(value),
+  };
+}
+
+export function customerMigrationV2GatewayRootFenceEqual(
+  left: CustomerMigrationV2GatewayRootFence | null | undefined,
+  right: CustomerMigrationV2GatewayRootFence | null | undefined,
+): boolean {
+  return !!left && !!right &&
+    left.gatewayId === right.gatewayId &&
+    left.updatedAt === right.updatedAt &&
+    left.latestRelease === right.latestRelease &&
+    left.desiredRelease === right.desiredRelease &&
+    left.liveRelease === right.liveRelease &&
+    left.liveRevisionId === right.liveRevisionId &&
+    left.trafficRevisionId === right.trafficRevisionId &&
+    left.gatewayClass === right.gatewayClass &&
+    left.ownerUid === right.ownerUid &&
+    left.builderSlug === right.builderSlug &&
+    left.configHash === right.configHash;
+}
+
+export function customerMigrationV2GatewayRootFenceMatches(
+  value: unknown,
+  fence: CustomerMigrationV2GatewayRootFence,
+): boolean {
+  const current = customerMigrationV2GatewayRootFence(value, fence.gatewayId);
+  return current !== null && customerMigrationV2GatewayRootFenceEqual(current, fence);
 }
 
 export interface CustomerMigrationV2Deps {
@@ -274,12 +384,11 @@ export async function advanceCustomerMigrationV2(
         sourceEpoch: state.sourceEpoch,
         sourceRelease: state.sourceRelease,
         sourceAssignmentMode: state.sourceAssignmentMode,
-        ...(state.sourceRootUpdatedAt !== undefined
-          ? { sourceRootUpdatedAt: state.sourceRootUpdatedAt }
-          : {}),
+        sourceRootFence: state.sourceRootFence,
         targetGatewayId: state.targetGatewayId,
         targetRevisionId: state.targetRevisionId,
         targetRelease: state.targetRelease,
+        targetRootFence: state.targetRootFence,
         checkpointCommit: checkpoint.checkpointCommit,
         configHash: checkpoint.configHash,
         freezeObject: checkpoint.freezeObject,

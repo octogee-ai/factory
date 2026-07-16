@@ -1,4 +1,5 @@
 import type {
+  CustomerMigrationV2GatewayRootFence,
   CustomerMigrationV2State,
   Operation,
   OperationStep,
@@ -18,6 +19,7 @@ import {
   beginCustomerMigrationV2Abort,
   classifyCustomerMigrationV2Error,
   isCustomerMigrationV2PostIntent,
+  customerMigrationV2GatewayRootFenceEqual,
   type CustomerMigrationV2CutoverFence,
   type CustomerMigrationV2TargetContext,
 } from "@octogee/core/customer-migration-v2";
@@ -113,6 +115,10 @@ export interface MigrateCustomerDeps {
     startedAt: number;
   }>;
 
+  readGatewayRootFence: (
+    gatewayId: string,
+  ) => Promise<CustomerMigrationV2GatewayRootFence | null>;
+
   installTargetSystemConfigContext: (
     targetRevisionId: string,
     context: CustomerMigrationV2TargetContext,
@@ -187,10 +193,26 @@ async function runOrdinaryMigrationV2(input: {
   }
   let state = op.customerMigrationV2;
   if (!state) {
-    const [sourceExecution, targetExecution] = await Promise.all([
+    const [sourceExecution, targetExecution, sourceRootFence, targetRootFence] = await Promise.all([
       deps.readRevisionExecutionIdentity(targets.fromRevisionId),
       deps.readRevisionExecutionIdentity(targets.toRevisionId),
+      deps.readGatewayRootFence(targets.fromGatewayId),
+      deps.readGatewayRootFence(targets.toGatewayId),
     ]);
+    if (
+      !sourceRootFence ||
+      sourceRootFence.ownerUid !== uid ||
+      sourceRootFence.builderSlug !== slug
+    ) {
+      throw new Error("customer migration V2 source root ownership changed before initialization");
+    }
+    if (
+      !targetRootFence ||
+      targetRootFence.ownerUid !== uid ||
+      targetRootFence.builderSlug !== slug
+    ) {
+      throw new Error("customer migration V2 target root ownership changed before initialization");
+    }
     state = {
       phase: "initialized",
       operationId: op.id,
@@ -202,12 +224,11 @@ async function runOrdinaryMigrationV2(input: {
       sourceRelease: targets.fromRelease,
       sourceEpoch: targets.fromEpoch,
       sourceAssignmentMode: targets.sourceAssignmentMode,
-      ...(targets.sourceRootUpdatedAt !== undefined
-        ? { sourceRootUpdatedAt: targets.sourceRootUpdatedAt }
-        : {}),
+      sourceRootFence,
       targetGatewayId: targets.toGatewayId,
       targetRevisionId: targets.toRevisionId,
       targetRelease: targets.toRelease,
+      targetRootFence,
       sourceImageTag: sourceExecution.imageTag,
       sourceBuildSha: sourceExecution.buildSha,
       sourceOpenclawVersion: sourceExecution.openclawVersion,
@@ -228,7 +249,6 @@ async function runOrdinaryMigrationV2(input: {
     state.sourceRelease !== targets.fromRelease ||
     state.sourceEpoch !== targets.fromEpoch ||
     state.sourceAssignmentMode !== targets.sourceAssignmentMode ||
-    state.sourceRootUpdatedAt !== targets.sourceRootUpdatedAt ||
     state.targetGatewayId !== targets.toGatewayId ||
     state.targetRevisionId !== targets.toRevisionId ||
     state.targetRelease !== targets.toRelease ||
@@ -310,16 +330,17 @@ async function assertV2InitialBindings(
     targetGatewayId: state.targetGatewayId,
     targetRevisionId: state.targetRevisionId,
   });
-  const [source, target] = await Promise.all([
+  const [source, target, sourceRootFence, targetRootFence] = await Promise.all([
     deps.resolveFromRevision(state.uid, state.sourceGatewayId),
     deps.resolvePlacement(state.targetGatewayId),
+    deps.readGatewayRootFence(state.sourceGatewayId),
+    deps.readGatewayRootFence(state.targetGatewayId),
   ]);
   const sourceIsExact = source !== null &&
     source.revisionId === state.sourceRevisionId &&
     source.release === state.sourceRelease &&
     (source.epoch ?? 0) === state.sourceEpoch &&
-    (source.assignmentMode ?? "assigned") === state.sourceAssignmentMode &&
-    source.rootUpdatedAt === state.sourceRootUpdatedAt;
+    (source.assignmentMode ?? "assigned") === state.sourceAssignmentMode;
   if (!sourceIsExact) {
     throw new Error("customer migration V2 source placement changed before freeze");
   }
@@ -328,6 +349,18 @@ async function assertV2InitialBindings(
     target.release === state.targetRelease;
   if (!targetIsExact) {
     throw new Error("customer migration V2 target placement changed before freeze");
+  }
+  if (
+    !sourceRootFence ||
+    !customerMigrationV2GatewayRootFenceEqual(sourceRootFence, state.sourceRootFence)
+  ) {
+    throw new Error("customer migration V2 source root changed before freeze");
+  }
+  if (
+    !targetRootFence ||
+    !customerMigrationV2GatewayRootFenceEqual(targetRootFence, state.targetRootFence)
+  ) {
+    throw new Error("customer migration V2 target root changed before freeze");
   }
 }
 
@@ -682,7 +715,6 @@ interface MigrationTargets {
   fromRelease: number;
   fromEpoch: number;
   sourceAssignmentMode: "assigned" | "unassigned-live";
-  sourceRootUpdatedAt?: number;
   fromTransportId: string;
   toTransportId: string;
 }
@@ -739,9 +771,6 @@ async function resolveMigrationTargets(
       fromRelease: fromRevision.release,
       fromEpoch: fromRevision.epoch ?? 0,
       sourceAssignmentMode: fromRevision.assignmentMode ?? "assigned",
-      ...(fromRevision.rootUpdatedAt !== undefined
-        ? { sourceRootUpdatedAt: fromRevision.rootUpdatedAt }
-        : {}),
       fromTransportId: fromRevision.revisionId,
       toTransportId: to.revisionId,
     },
@@ -869,9 +898,6 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
         fromRelease: durableV2.sourceRelease,
         fromEpoch: durableV2.sourceEpoch,
         sourceAssignmentMode: durableV2.sourceAssignmentMode,
-        ...(durableV2.sourceRootUpdatedAt !== undefined
-          ? { sourceRootUpdatedAt: durableV2.sourceRootUpdatedAt }
-          : {}),
         fromTransportId: durableV2.sourceRevisionId,
         toTransportId: durableV2.targetRevisionId,
       };

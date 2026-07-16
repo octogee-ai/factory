@@ -1,6 +1,7 @@
 import { GATEWAY_HEARTBEAT_INTERVAL_MS, GATEWAY_UNREACHABLE_AFTER_MS, GATEWAYS_COLLECTION, hasDurableOpenClawConfigControlProtocol, } from "@octogee/shared/types/fleet-controller";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, resolveUserGatewayShellState, } from "@octogee/shared/types/glm";
 import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, } from "@octogee/shared/types/gateway-releases";
+import { customerMigrationV2GatewayRootFenceEqual, customerMigrationV2GatewayRootFenceMatches, } from "./customer-migration-v2.js";
 export async function writeGatewayHeartbeat(deps, snapshot) {
     if (!snapshot.revisionId) {
         throw new Error("revisionId is required for revision-scoped gateway heartbeat");
@@ -129,6 +130,8 @@ function freshObservation(observedAt, now) {
 function customerMigrationV2FenceIsExact(operation, fence) {
     const state = recordOrEmpty(operation?.customerMigrationV2);
     const proof = recordOrEmpty(state.candidateProof);
+    const sourceRootFence = state.sourceRootFence;
+    const targetRootFence = state.targetRootFence;
     return [
         operation?.status === "running",
         state.phase === "promoted",
@@ -141,10 +144,11 @@ function customerMigrationV2FenceIsExact(operation, fence) {
         state.sourceEpoch === fence.sourceEpoch,
         state.sourceRelease === fence.sourceRelease,
         state.sourceAssignmentMode === fence.sourceAssignmentMode,
-        state.sourceRootUpdatedAt === fence.sourceRootUpdatedAt,
+        customerMigrationV2GatewayRootFenceEqual(sourceRootFence, fence.sourceRootFence),
         state.targetGatewayId === fence.targetGatewayId,
         state.targetRevisionId === fence.targetRevisionId,
         state.targetRelease === fence.targetRelease,
+        customerMigrationV2GatewayRootFenceEqual(targetRootFence, fence.targetRootFence),
         state.checkpointCommit === fence.checkpointCommit,
         state.configHash === fence.configHash,
         state.freezeObject === fence.freezeObject,
@@ -231,15 +235,20 @@ export async function commitCutoverAtomic(deps, params) {
                 txn.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(fence.operationId)),
                 txn.get(deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(fence.targetRevisionId)),
                 txn.get(assignmentRef(deps.db, params.toGatewayId, params.uid)),
-                fence.sourceAssignmentMode === "unassigned-live"
-                    ? txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(fence.sourceGatewayId))
-                    : Promise.resolve(null),
+                txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(fence.sourceGatewayId)),
             ]);
             if (!customerMigrationV2FenceIsExact(operationSnap.exists ? operationSnap.data() : undefined, fence)) {
                 throw new Error("ordinary protocol-v2 candidate is not durably promoted at cutover");
             }
             if (!customerMigrationV2TargetIsCurrent(targetSnap.exists ? targetSnap.data() : undefined, fence)) {
                 throw new Error("ordinary protocol-v2 target candidate proof changed before cutover");
+            }
+            if (!customerMigrationV2GatewayRootFenceMatches(targetRoot, fence.targetRootFence)) {
+                throw new Error("ordinary protocol-v2 target root changed before cutover");
+            }
+            const sourceRoot = sourceRootSnap.exists ? sourceRootSnap.data() : undefined;
+            if (!customerMigrationV2GatewayRootFenceMatches(sourceRoot, fence.sourceRootFence)) {
+                throw new Error("ordinary protocol-v2 source root changed before cutover");
             }
             const targetAssignment = targetAssignmentSnap.exists ? targetAssignmentSnap.data() : undefined;
             const alreadyCommitted = !priorAssignmentExists &&
@@ -257,20 +266,6 @@ export async function commitCutoverAtomic(deps, params) {
                 priorAssignment.state !== "quiescing" ||
                 priorAssignment.updatedByOperationId !== fence.operationId) {
                 throw new Error("ordinary protocol-v2 source assignment changed before cutover");
-            }
-            if (fence.sourceAssignmentMode === "unassigned-live") {
-                const sourceRoot = sourceRootSnap?.exists ? sourceRootSnap.data() : undefined;
-                if (fence.sourceRootUpdatedAt === undefined ||
-                    sourceRoot?.gatewayId !== fence.sourceGatewayId ||
-                    sourceRoot.updatedAt !== fence.sourceRootUpdatedAt ||
-                    sourceRoot.desiredStatus !== "running" ||
-                    sourceRoot.liveRevisionId !== fence.sourceRevisionId ||
-                    sourceRoot.trafficRevisionId !== fence.sourceRevisionId ||
-                    sourceRoot.liveRelease !== fence.sourceRelease ||
-                    sourceRoot.desiredRelease !== fence.sourceRelease ||
-                    sourceRoot.roll !== null) {
-                    throw new Error("ordinary protocol-v2 unassigned source root changed before cutover");
-                }
             }
         }
         if (params.rollFence) {

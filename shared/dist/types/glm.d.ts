@@ -176,6 +176,19 @@ export interface Operation {
     customerMigrationV2?: CustomerMigrationV2State;
 }
 export type CustomerMigrationV2Phase = "initialized" | "checkpointed" | "targetPrepared" | "keysSynced" | "targetRestored" | "candidateProven" | "preSynced" | "sourceQuiesced" | "finalSynced" | "targetVerified" | "promotionIntent" | "promoted" | "cutover" | "sourceRetired" | "finalized" | "complete" | "abortIntent" | "abortPublished" | "abortTargetUnmounted" | "abortContextCleared" | "aborted";
+export interface CustomerMigrationV2GatewayRootFence {
+    gatewayId: string;
+    updatedAt: number;
+    latestRelease: number;
+    desiredRelease: number;
+    liveRelease: number;
+    liveRevisionId: string;
+    trafficRevisionId: string;
+    gatewayClass: "builder" | "operator";
+    ownerUid: string;
+    builderSlug: string;
+    configHash: string;
+}
 export interface CustomerMigrationV2State {
     phase: CustomerMigrationV2Phase;
     operationId: string;
@@ -187,10 +200,11 @@ export interface CustomerMigrationV2State {
     sourceRelease: number;
     sourceEpoch: number;
     sourceAssignmentMode: "assigned" | "unassigned-live";
-    sourceRootUpdatedAt?: number;
+    sourceRootFence: CustomerMigrationV2GatewayRootFence;
     targetGatewayId: string;
     targetRevisionId: string;
     targetRelease: number;
+    targetRootFence: CustomerMigrationV2GatewayRootFence;
     sourceImageTag: string;
     sourceBuildSha: string;
     sourceOpenclawVersion: string;

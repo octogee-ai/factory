@@ -1,6 +1,7 @@
 import { GATEWAY_HEARTBEAT_INTERVAL_MS, GATEWAY_UNREACHABLE_AFTER_MS, GATEWAYS_COLLECTION, hasDurableOpenClawConfigControlProtocol, } from "@octogee/shared/types/fleet-controller";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, } from "@octogee/shared/types/glm";
 import { isGatewayDesiredDoc, isRevisionRealizationDoc, revisionIdForRelease, } from "@octogee/shared/types/gateway-releases";
+import { findActiveGatewayMigration } from "./fleet-operation-lock.js";
 export class GatewayRetirementConflictError extends Error {
     constructor(message) {
         super(message);
@@ -332,7 +333,12 @@ export async function claimGatewayRetirementAtomic(input) {
         .collection(GLM_OPERATIONS_COLLECTION)
         .doc(input.operationId);
     return input.db.runTransaction(async (transaction) => {
-        const rootSnap = await transaction.get(rootRef);
+        const [rootSnap, activeOperations] = await Promise.all([
+            transaction.get(rootRef),
+            transaction.get(input.db
+                .collection(GLM_OPERATIONS_COLLECTION)
+                .where("status", "in", ["pending", "running"])),
+        ]);
         const rootData = rootSnap.exists ? rootSnap.data() : undefined;
         if (!isGatewayDesiredDoc(rootData) || rootData.gatewayId !== input.gatewayId) {
             throw new GatewayRetirementConflictError(`gateway ${input.gatewayId} durable root is unavailable`);
@@ -349,6 +355,19 @@ export async function claimGatewayRetirementAtomic(input) {
         }
         if (rootData.desiredRelease !== rootData.liveRelease) {
             throw new GatewayRetirementConflictError(`gateway ${input.gatewayId} desired release is not converged to live`);
+        }
+        const migrationConflict = findActiveGatewayMigration(input.gatewayId, activeOperations.docs.map((doc) => {
+            const operation = doc.data();
+            return {
+                id: doc.id,
+                kind: typeof operation.kind === "string" ? operation.kind : "",
+                status: typeof operation.status === "string" ? operation.status : "",
+                input: operation.input,
+                customerMigrationV2: operation.customerMigrationV2,
+            };
+        }));
+        if (migrationConflict) {
+            throw new GatewayRetirementConflictError(`customer migration is in flight for gateway ${input.gatewayId}`);
         }
         const revisionsSnap = await transaction.get(input.db.collection(GLM_GATEWAYS_COLLECTION).where("gateway", "==", input.gatewayId));
         const revisions = revisionsSnap.docs.map((doc) => ({ id: doc.id, data: doc.data() }));

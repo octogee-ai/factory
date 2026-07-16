@@ -16,6 +16,26 @@ const FREEZE_OBJECT = "b".repeat(40);
 const CANDIDATE = "c".repeat(40);
 const HASH = "d".repeat(64);
 
+function gatewayRootFence(
+  gatewayId: string,
+  revisionId: string,
+  release: number,
+): CustomerMigrationV2State["sourceRootFence"] {
+  return {
+    gatewayId,
+    updatedAt: release * 10,
+    latestRelease: release,
+    desiredRelease: release,
+    liveRelease: release,
+    liveRevisionId: revisionId,
+    trafficRevisionId: revisionId,
+    gatewayClass: "operator",
+    ownerUid: "uid-1",
+    builderSlug: "alice",
+    configHash: gatewayId === "source" ? "1".repeat(64) : "2".repeat(64),
+  };
+}
+
 function state(
   phase: CustomerMigrationV2State["phase"] = "initialized",
 ): CustomerMigrationV2State {
@@ -29,9 +49,12 @@ function state(
     sourceRevisionId: "source-r1",
     sourceRelease: 1,
     sourceEpoch: 7,
+    sourceAssignmentMode: "assigned",
+    sourceRootFence: gatewayRootFence("source", "source-r1", 1),
     targetGatewayId: "target",
     targetRevisionId: "target-r3",
     targetRelease: 3,
+    targetRootFence: gatewayRootFence("target", "target-r3", 3),
     sourceImageTag: "source-image",
     sourceBuildSha: "source-build",
     sourceOpenclawVersion: "2026.7.1",

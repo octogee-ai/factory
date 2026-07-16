@@ -1197,6 +1197,27 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
     expect(store.get("gateways/zeta")?.sizingTier).toBeNull();
   });
 
+  it.each(["pending", "running"])(
+    "refuses root config mutation while a %s customer migration owns the gateway",
+    async (status) => {
+      const seed = seedNewSchemaGateway("zeta", sharedPayload());
+      seed[`${GLM_OPERATIONS_COLLECTION}/migration-live`] = {
+        kind: "migrate-customer",
+        status,
+        input: { fromGatewayId: "source", toGatewayId: "zeta" },
+      };
+      const { app, store } = mkApp(seed);
+
+      const response = await request(app)
+        .patch("/gateways/zeta")
+        .send({ sizingTier: "medium" });
+
+      expect(response.status).toBe(409);
+      expect(response.body.error).toMatch(/customer migration.*in flight/i);
+      expect(store.get("gateways/zeta")?.sizingTier).toBeNull();
+    },
+  );
+
   it("does not overwrite a retirement claim that lands after the route reads the root", async () => {
     const seed = seedNewSchemaGateway("zeta", sharedPayload());
     const { app, store } = mkApp(seed, {
@@ -1239,6 +1260,26 @@ describe("DELETE /gateways/:id — retirement claim", () => {
     });
     expect(store.get(`gateways/zed/${GATEWAY_RELEASES_SUBCOLLECTION}/1`)).toBeDefined();
   });
+
+  it.each(["pending", "running"])(
+    "refuses retirement while a %s customer migration owns the empty target",
+    async (status) => {
+      const seed = seedServingGateway("target", sharedPayload());
+      seed[`${GLM_OPERATIONS_COLLECTION}/migration-live`] = {
+        kind: "migrate-customer",
+        status,
+        input: { fromGatewayId: "source", toGatewayId: "target" },
+      };
+      const { app, store } = mkApp(seed);
+
+      const response = await request(app).delete("/gateways/target");
+
+      expect(response.status).toBe(409);
+      expect(response.body.error).toMatch(/customer migration.*in flight/i);
+      expect(store.get("gateways/target")?.desiredStatus).toBe("running");
+      expect(opsIn(store, "retire-gateway")).toHaveLength(0);
+    },
+  );
 
   it("rejects a legacy-only gateway without a durable root", async () => {
     const { app, store } = mkApp({

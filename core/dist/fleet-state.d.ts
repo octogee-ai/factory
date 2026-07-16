@@ -1,4 +1,5 @@
 import { type GatewayStatus } from "@octogee/shared/types/fleet-controller";
+import { type CustomerMigrationV2GatewayRootFence } from "@octogee/shared/types/glm";
 import { type AssignmentSource, type AssignmentState } from "@octogee/shared/types/gateway-releases";
 export interface FleetStateDeps {
     db: FleetStateFirestore;
@@ -93,10 +94,11 @@ export interface CutoverCommitParams {
         sourceEpoch: number;
         sourceRelease: number;
         sourceAssignmentMode: "assigned" | "unassigned-live";
-        sourceRootUpdatedAt?: number;
+        sourceRootFence: CustomerMigrationV2GatewayRootFence;
         targetGatewayId: string;
         targetRevisionId: string;
         targetRelease: number;
+        targetRootFence: CustomerMigrationV2GatewayRootFence;
         checkpointCommit: string;
         configHash: string;
         freezeObject: string;

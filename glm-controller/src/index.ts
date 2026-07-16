@@ -180,7 +180,10 @@ import {
 import { getStorage } from "firebase-admin/storage";
 import { getAuth } from "firebase-admin/auth";
 import { createMigrationClient } from "@octogee/core/fleet-migration-client";
-import { isCustomerMigrationV2Transition } from "@octogee/core/customer-migration-v2";
+import {
+  customerMigrationV2GatewayRootFence,
+  isCustomerMigrationV2Transition,
+} from "@octogee/core/customer-migration-v2";
 import { createRsyncMigrationTransfer } from "./lib/migration-rsync-transfer.js";
 import {
   commitCutoverAtomic,
@@ -3793,6 +3796,13 @@ async function buildHandlers(
       }
       return { revisionId, imageTag, buildSha, openclawVersion, startedAt };
     },
+    readGatewayRootFence: async (gatewayId) => {
+      const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+      return customerMigrationV2GatewayRootFence(
+        snap.exists ? snap.data() : undefined,
+        gatewayId,
+      );
+    },
     installTargetSystemConfigContext: (targetRevisionId, context) =>
       renderRevisionSystemConfigContext(targetRevisionId, context),
     clearTargetSystemConfigContext: (targetRevisionId) =>
@@ -3849,12 +3859,11 @@ async function buildHandlers(
             sourceEpoch: input.sourceEpoch,
             sourceRelease: input.sourceRelease,
             sourceAssignmentMode: input.sourceAssignmentMode,
-            ...(input.sourceRootUpdatedAt !== undefined
-              ? { sourceRootUpdatedAt: input.sourceRootUpdatedAt }
-              : {}),
+            sourceRootFence: input.sourceRootFence,
             targetGatewayId: input.targetGatewayId,
             targetRevisionId: input.targetRevisionId,
             targetRelease: input.targetRelease,
+            targetRootFence: input.targetRootFence,
             checkpointCommit: input.checkpointCommit,
             configHash: input.configHash,
             freezeObject: input.freezeObject,
