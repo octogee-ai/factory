@@ -390,13 +390,10 @@ export function evaluateNativeOpenClawControlRpc(
   if (!context.installedMethods.has(method)) {
     return { allowed: false, category: "unknown", reason: "method-unavailable" };
   }
-  const category: OpenClawControlRpcCategory = CONFIG_MUTATION_METHODS.has(method)
-    ? "config_mutation"
-    : method === "tools.invoke"
-      ? "tools_invoke"
-      : READ_METHODS.has(method)
-        ? "read"
-        : "unknown";
+  let category: OpenClawControlRpcCategory = "unknown";
+  if (CONFIG_MUTATION_METHODS.has(method)) category = "config_mutation";
+  else if (method === "tools.invoke") category = "tools_invoke";
+  else if (READ_METHODS.has(method)) category = "read";
   return { allowed: true, category, outbound: structuredClone(request) };
 }
 
