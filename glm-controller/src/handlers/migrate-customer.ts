@@ -11,8 +11,28 @@ import {
   isDefinitiveConfigRpcRejection,
   type MigrationClient,
 } from "@octogee/core/fleet-migration-client";
-import type { PlacementResolution } from "@octogee/core/assignment-doc";
-import type { RevisionSystemConfigObservation } from "@octogee/shared/types/gateway-releases";
+type PlacementResolution =
+  | { ok: true; revisionId: string; release: number | null }
+  | { ok: false; reason: "no-live-revision" | "revision-not-ready" };
+
+// The protocol-v2 restore proof the target pod publishes after a
+// checkpoint-and-restore migration; recorded onto the runtime doc for audit.
+interface RevisionSystemConfigObservation {
+  migrationId: string;
+  builderSlug: string;
+  sourceRevisionId: string;
+  checkpointCommit: string;
+  restoredCommit: string;
+  acceptedCommit: string;
+  configHash: string;
+  configReady: true;
+  observedRevisionId: string;
+  restoreProvenAt: number;
+  configReadyAt: number;
+  runtimeConfigHash: string;
+  observedAt: number;
+  sourceUnfrozenAt?: number;
+}
 import type { SystemConfigMigrationMode } from "@octogee/shared/types/fleet-controller";
 import {
   advanceCustomerMigrationV2,

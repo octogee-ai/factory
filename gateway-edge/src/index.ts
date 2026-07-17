@@ -38,13 +38,6 @@ import {
   type RollRosterUpgradeGate,
 } from "./roll-roster.js";
 import { createBrokerRollRosterSubscription } from "./broker-roll-roster.js";
-import { createRevisionTombstoneStore } from "./revision-tombstone-store.js";
-import {
-  REVISION_TOMBSTONES_COLLECTION,
-  isRevisionTombstone,
-  type RevisionTombstone,
-} from "@octogee/shared/types/gateway-releases";
-
 import { chatProxyOwnsHttpPath } from "./chat-proxy/http-paths.js";
 import { stripGatewayPrefix } from "./chat-proxy/gateway-prefix.js";
 import { validateRequiredEnv } from "./lib/required-env.js";
@@ -298,23 +291,9 @@ if (process.env.NODE_ENV !== "test") {
       logger.error("FATAL: GATEWAY_ROUTER_PREVIEW_HOST is required in gateway-router mode");
       process.exit(1);
     }
-    // Tombstone reads are lazy: Firestore is only touched on the first pinned
-    // MISS (a `/g/<gw>/r/<n>/…` request), so router boot stays lookup-free and
-    // the service-addressed hot path never initializes the client at all.
-    const tombstoneStore = createRevisionTombstoneStore({
-      readTombstone: async (revisionId): Promise<RevisionTombstone | null> => {
-        const { db } = await import("./lib/db.js");
-        const snap = await db.collection(REVISION_TOMBSTONES_COLLECTION).doc(revisionId).get();
-        if (!snap.exists) return null;
-        const data = snap.data();
-        return isRevisionTombstone(data) ? data : null;
-      },
-    });
     const server = createGatewayRouter({
       namespace: process.env.K8S_NAMESPACE || "default",
       previewHost: process.env.GATEWAY_ROUTER_PREVIEW_HOST,
-      revisionTombstoneLookup: tombstoneStore.lookup,
-      revisionTombstoneRecheck: tombstoneStore.recheck,
       log: (message, meta) => logger.error(message, meta),
     });
     server.listen(PORT, () => {

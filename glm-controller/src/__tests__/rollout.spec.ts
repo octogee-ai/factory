@@ -189,39 +189,10 @@ describe("rollout op — awaits the roll arm's convergence", () => {
     expect(deps.requestReconcileTick).toHaveBeenCalled();
   });
 
-  it("narrates roll status transitions into the op log", async () => {
+  it("narrates convergence progress into the op log", async () => {
     const states: GatewayDoc[] = [
-      mkGateway({
-        roll: {
-          operationId: "roll-x",
-          status: "warming",
-          fromRelease: 1,
-          toRelease: 2,
-          sourceRevisionId: "default-r1",
-          targetRevisionId: "default-r2",
-          acceptingNewAssignments: false,
-          startedAt: 0,
-          updatedAt: 0,
-          error: null,
-          flippedAt: null,
-        },
-      }),
-      mkGateway({
-        roll: {
-          operationId: "roll-x",
-          status: "migrating",
-          fromRelease: 1,
-          toRelease: 2,
-          sourceRevisionId: "default-r1",
-          targetRevisionId: "default-r2",
-          acceptingNewAssignments: true,
-          startedAt: 0,
-          updatedAt: 0,
-          error: null,
-          flippedAt: null,
-        },
-      }),
-      mkGateway({ liveRelease: 2, liveRevisionId: "default-r2" }),
+      mkGateway(),
+      mkGateway({ liveRelease: 2 }),
     ];
     let i = 0;
     const deps = mkDeps({
@@ -235,35 +206,8 @@ describe("rollout op — awaits the roll arm's convergence", () => {
       ctx,
     );
     expect(res.success).toBe(true);
-    expect(deps.logs.some((l) => l.includes("warming"))).toBe(true);
-    expect(deps.logs.some((l) => l.includes("migrating"))).toBe(true);
-  });
-
-  it("fails with the roll's durable error when the roll arm marks the roll failed", async () => {
-    const deps = mkDeps({
-      readGatewayDoc: async () =>
-        mkGateway({
-          roll: {
-            operationId: "roll-x",
-            status: "failed",
-            fromRelease: 1,
-            toRelease: 2,
-            sourceRevisionId: "default-r1",
-            targetRevisionId: "default-r2",
-            acceptingNewAssignments: false,
-            startedAt: 0,
-            updatedAt: 0,
-            error: "target default-r2 did not become ready within 300000ms",
-            flippedAt: null,
-          },
-        }),
-    });
-    const res = await createRolloutHandler(deps)(
-      mkOp({ gatewayId: "default", imageTag: "cafe123-ocbeta2" }),
-      ctx,
-    );
-    expect(res.success).toBe(false);
-    expect(res.error).toContain("did not become ready");
+    expect(deps.logs.some((l) => l.includes("converging r1 → r2"))).toBe(true);
+    expect(deps.logs.some((l) => l.includes("converged onto release 2"))).toBe(true);
   });
 
   it("fails when the desired release payload never matches the requested image (superseded or the release cut failed)", async () => {
@@ -296,32 +240,18 @@ describe("rollout op — awaits the roll arm's convergence", () => {
     expect(res.success).toBe(true);
   });
 
-  it("times out with the last observed roll state when convergence never happens", async () => {
+  it("times out with the last observed convergence state when it never lands", async () => {
     const deps = mkDeps({
       convergeTimeoutMs: 5_000,
-      readGatewayDoc: async () =>
-        mkGateway({
-          roll: {
-            operationId: "roll-x",
-            status: "migrating",
-            fromRelease: 1,
-            toRelease: 2,
-            sourceRevisionId: "default-r1",
-            targetRevisionId: "default-r2",
-            acceptingNewAssignments: false,
-            startedAt: 0,
-            updatedAt: 0,
-            error: "migration for u1 failed: quiesce did not drain",
-            flippedAt: null,
-          },
-        }),
+      readGatewayDoc: async () => mkGateway(),
     });
     const res = await createRolloutHandler(deps)(
       mkOp({ gatewayId: "default", imageTag: "cafe123-ocbeta2" }),
       ctx,
     );
     expect(res.success).toBe(false);
-    expect(res.error).toContain("quiesce did not drain");
+    expect(res.error).toContain("did not converge within 5000ms");
+    expect(res.error).toContain("converging r1 → r2");
   });
 
   it("no-op rollout (already live on the requested release, no roll) succeeds immediately", async () => {

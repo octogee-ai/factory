@@ -1,7 +1,6 @@
 import { type GatewayDoc, type ReleaseDoc } from "@octogee/shared/types/gateway-releases";
 export interface ReleaseHistoryEntry {
     release: number;
-    revisionId: string;
     imageRepository: string;
     imageTag: string;
     createdAt: string | null;

@@ -2,7 +2,7 @@ import { GLM_OPERATIONS_COLLECTION, isGatewayClass, isGatewayProfile, resolveGat
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { isGatewayMutableConfigForGateway, } from "@octogee/shared/types/gateway-mutable-config";
 import { isGatewayDesiredDoc, } from "@octogee/shared/types/gateway-releases";
-import { readGatewayLiveRevisionHeartbeat } from "./gateway-live-release.js";
+import { readGatewayRuntimeHeartbeat } from "./gateway-live-release.js";
 function asStringOrNull(v) {
     return typeof v === "string" && v.length > 0 ? v : null;
 }
@@ -272,7 +272,7 @@ export async function requestBuilderActivationLease(opts) {
     const gatewayHeartbeats = new Map();
     const liveHeartbeats = await Promise.all(gatewayRoots.map(async ({ root }) => ({
         gatewayId: root.gatewayId,
-        heartbeat: await readGatewayLiveRevisionHeartbeat(db, root),
+        heartbeat: await readGatewayRuntimeHeartbeat(db, root),
     })));
     for (const { gatewayId, heartbeat } of liveHeartbeats) {
         if (heartbeat)

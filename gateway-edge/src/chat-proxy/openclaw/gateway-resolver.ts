@@ -1,8 +1,7 @@
 import type { Firestore } from "firebase-admin/firestore";
 import {
   isGatewayDesiredDoc,
-  isRevisionRealizationDoc,
-  revisionIdForRelease,
+  isGatewayRuntimeDoc,
   type GatewayDoc,
 } from "@octogee/shared/types/gateway-releases";
 import { parseAssignmentDoc } from "@octogee/core/assignment-doc";
@@ -68,64 +67,6 @@ function readInternalUrl(data: Record<string, unknown> | undefined): string {
   return typeof hb?.internalUrl === "string" ? hb.internalUrl : "";
 }
 
-function isPositiveRelease(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0;
-}
-
-function canonicalRevisionPointer(
-  gatewayId: string,
-  revisionId: unknown,
-  release: unknown,
-): RevisionPointer | null {
-  if (
-    typeof revisionId !== "string" ||
-    !isPositiveRelease(release) ||
-    revisionId !== revisionIdForRelease(gatewayId, release)
-  ) {
-    return null;
-  }
-  return { revisionId, release };
-}
-
-function rootLiveRevisionPointer(
-  root: GatewayDoc & GatewayMutableConfig,
-): RevisionPointer | null {
-  return canonicalRevisionPointer(root.gatewayId, root.liveRevisionId, root.liveRelease);
-}
-
-function rootTargetRevisionPointer(
-  root: GatewayDoc & GatewayMutableConfig,
-): RevisionPointer | null {
-  const roll = root.roll;
-  if (!roll || typeof roll !== "object") return null;
-  return canonicalRevisionPointer(root.gatewayId, roll.targetRevisionId, roll.toRelease);
-}
-
-function rootRevisionPointer(
-  root: GatewayDoc & GatewayMutableConfig,
-  revisionId: string,
-): RevisionPointer | null {
-  const live = rootLiveRevisionPointer(root);
-  if (live?.revisionId === revisionId) return live;
-  const target = rootTargetRevisionPointer(root);
-  return target?.revisionId === revisionId ? target : null;
-}
-
-function isExactServingRevision(
-  data: unknown,
-  gatewayId: string,
-  pointer: RevisionPointer,
-): boolean {
-  return (
-    isRevisionRealizationDoc(data) &&
-    data.gateway === gatewayId &&
-    data.revisionId === pointer.revisionId &&
-    data.release === pointer.release &&
-    data.revisionId === revisionIdForRelease(gatewayId, data.release) &&
-    data.lifecycle === "serving"
-  );
-}
-
 function unresolvedGatewayUrl(gatewayId: string, detail: string): never {
   throw new GatewayResolveError(
     "gateway-url-unresolved",
@@ -133,63 +74,18 @@ function unresolvedGatewayUrl(gatewayId: string, detail: string): never {
   );
 }
 
-function durableLiveRevisionPointer(
-  root: GatewayDoc & GatewayMutableConfig,
-): RevisionPointer {
-  if (root.desiredStatus !== "running") {
-    unresolvedGatewayUrl(root.gatewayId, "is not running");
-  }
-  const live = rootLiveRevisionPointer(root);
-  if (!live || root.trafficRevisionId !== live.revisionId) {
-    unresolvedGatewayUrl(root.gatewayId, "has no canonical live revision pointer");
-  }
-  return live;
-}
-
-function resolveAssignmentRevisionPointer(
-  root: GatewayDoc & GatewayMutableConfig,
-  uid: string,
-  assignmentData: Record<string, unknown> | undefined,
-): RevisionPointer {
-  const assignment = parseAssignmentDoc(uid, assignmentData);
-  if (
-    !assignment ||
-    assignment.state !== "serving" ||
-    (assignmentData?.state !== undefined && assignmentData.state !== "serving") ||
-    assignment.gatewayId !== root.gatewayId
-  ) {
-    unresolvedGatewayUrl(root.gatewayId, `has an invalid assignment for ${uid}`);
-  }
-  const pointer = rootRevisionPointer(root, assignment.revisionId);
-  if (
-    !pointer ||
-    assignment.release !== pointer.release ||
-    assignment.revisionId !== revisionIdForRelease(root.gatewayId, assignment.release)
-  ) {
-    unresolvedGatewayUrl(root.gatewayId, `has a stale assignment for ${uid}`);
-  }
-  return pointer;
-}
-
-async function resolveDurableServingRevision(
-  db: Firestore,
-  root: GatewayDoc & GatewayMutableConfig,
-  uid: string,
-): Promise<RevisionPointer> {
-  const live = durableLiveRevisionPointer(root);
-  const assignmentSnap = await db.doc(`gateways/${root.gatewayId}/assignments/${uid}`).get();
-  if (!assignmentSnap.exists) return live;
-  return resolveAssignmentRevisionPointer(root, uid, assignmentSnap.data());
-}
-
-async function resolveServingRevision(
+// Simple-roll resolution (GATEWAY-SIMPLE-ROLL-SPEC): a customer's serving
+// instance IS their gateway's single stable-name realization. The durable root
+// must be running (and any assignment doc serving); the bare-id runtime doc
+// must be serving with a heartbeat internalUrl.
+async function assertResolvableGateway(
   db: Firestore,
   gatewayId: string,
   uid: string,
-): Promise<ResolvedRevision> {
+): Promise<{ requireRuntimeDoc: boolean }> {
   const gwSnap = await db.doc(`gateways/${gatewayId}`).get();
   if (!gwSnap.exists) {
-    return { revisionId: gatewayId, release: null };
+    return { requireRuntimeDoc: false };
   }
   const gwData = gwSnap.data() ?? {};
   if (!isDurableGatewayRoot(gwData, gatewayId)) {
@@ -198,7 +94,22 @@ async function resolveServingRevision(
       `gateways/${gatewayId} exists but is not a valid durable root`,
     );
   }
-  return resolveDurableServingRevision(db, gwData, uid);
+  if (gwData.desiredStatus !== "running") {
+    unresolvedGatewayUrl(gatewayId, "is not running");
+  }
+  const assignmentSnap = await db.doc(`gateways/${gatewayId}/assignments/${uid}`).get();
+  if (assignmentSnap.exists) {
+    const assignment = parseAssignmentDoc(uid, assignmentSnap.data());
+    if (
+      !assignment ||
+      assignment.state !== "serving" ||
+      (assignmentSnap.data()?.state !== undefined && assignmentSnap.data()?.state !== "serving") ||
+      assignment.gatewayId !== gatewayId
+    ) {
+      unresolvedGatewayUrl(gatewayId, `has a non-serving assignment for ${uid}`);
+    }
+  }
+  return { requireRuntimeDoc: true };
 }
 
 export async function resolveGatewayUrl(
@@ -219,33 +130,30 @@ export async function resolveGatewayUrl(
     return { gatewayId, url: overrideUrl, userData };
   }
 
-  const revision = await resolveServingRevision(opts.db, gatewayId, opts.uid);
+  const gate = await assertResolvableGateway(opts.db, gatewayId, opts.uid);
 
-  const revSnap = await opts.db.doc(`glmGateways/${revision.revisionId}`).get();
-  if (!revSnap.exists) {
+  const runtimeSnap = await opts.db.doc(`glmGateways/${gatewayId}`).get();
+  if (!runtimeSnap.exists) {
     throw new GatewayResolveError(
       "gateway-not-registered",
-      `glmGateways/${revision.revisionId} does not exist`,
+      `glmGateways/${gatewayId} does not exist`,
     );
   }
-  const revisionData = revSnap.data() ?? {};
-  if (revision.release !== null) {
-    const pointer: RevisionPointer = {
-      revisionId: revision.revisionId,
-      release: revision.release,
-    };
-    if (!isExactServingRevision(revisionData, gatewayId, pointer)) {
-      unresolvedGatewayUrl(
-        gatewayId,
-        `does not have a canonical serving revision at ${revision.revisionId}`,
-      );
+  const runtimeData = (runtimeSnap.data() ?? {}) as Record<string, unknown>;
+  if (gate.requireRuntimeDoc) {
+    const serving =
+      isGatewayRuntimeDoc(runtimeData) &&
+      runtimeData.gatewayId === gatewayId &&
+      runtimeData.lifecycle === "serving";
+    if (!serving) {
+      unresolvedGatewayUrl(gatewayId, "does not have a serving runtime realization");
     }
   }
-  const internalUrl = readInternalUrl(revisionData);
+  const internalUrl = readInternalUrl(runtimeData);
   if (internalUrl.length === 0) {
     throw new GatewayResolveError(
       "gateway-url-unresolved",
-      `glmGateways/${revision.revisionId}.heartbeat.internalUrl is empty — refusing to fall back to the round-robin alias`,
+      `glmGateways/${gatewayId}.heartbeat.internalUrl is empty — refusing to fall back to the round-robin alias`,
     );
   }
   return { gatewayId, url: internalUrl, userData };

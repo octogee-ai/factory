@@ -20,10 +20,7 @@ vi.mock("../lib/db", () => {
       latestRelease: 1,
       desiredRelease: 1,
       liveRelease: 1,
-      liveRevisionId: revisionId,
-      trafficRevisionId: revisionId,
       desiredStatus: "running",
-      roll: null,
       configSchemaVersion: 1,
       profile: "standard",
       gatewayClass: "shared",
@@ -44,23 +41,18 @@ vi.mock("../lib/db", () => {
     };
   }
 
-  function servingRevision(
+  function servingRuntime(
     gatewayId: string,
-    revisionId: string,
     heartbeat: Record<string, unknown>,
     lastError: Record<string, unknown> = { message: null, at: null },
   ) {
     return {
-      docKind: "revision",
-      revisionId,
-      gateway: gatewayId,
+      docKind: "runtime",
+      gatewayId,
       release: 1,
-      rollRole: "serving",
       lifecycle: "serving",
       createdAt: 1,
       createdByOperationId: null,
-      retiredAt: null,
-      retireReason: null,
       helm: {},
       heartbeat,
       lastError,
@@ -68,29 +60,28 @@ vi.mock("../lib/db", () => {
   }
 
   const gatewayRoots: Record<string, any> = {
-    "gw-test-primary": durableRoot("gw-test-primary", "gw-test-primary-r1"),
-    "gw-test-secondary": durableRoot("gw-test-secondary", "gw-test-secondary-r1"),
-    "gw-test-stale": durableRoot("gw-test-stale", "gw-test-stale-r1"),
+    "gw-test-primary": durableRoot("gw-test-primary", "gw-test-primary"),
+    "gw-test-secondary": durableRoot("gw-test-secondary", "gw-test-secondary"),
+    "gw-test-stale": durableRoot("gw-test-stale", "gw-test-stale"),
   };
 
   const gatewayRevisions: Record<string, any> = {
-    "gw-test-primary-r1": servingRevision("gw-test-primary", "gw-test-primary-r1", {
+    "gw-test-primary": servingRuntime("gw-test-primary", {
       status: "ready",
       version: "abc1234",
       openclawVersion: "v1.2.3",
       mountedCustomers: ["alice", "bob", "christopher"],
       lastHeartbeatAt: { toDate: () => new Date(Date.now() - 2_000) },
     }),
-    "gw-test-secondary-r1": servingRevision("gw-test-secondary", "gw-test-secondary-r1", {
+    "gw-test-secondary": servingRuntime("gw-test-secondary", {
       status: "ready",
       version: "def5678",
       openclawVersion: "v1.2.3",
       mountedCustomers: ["dana"],
       lastHeartbeatAt: { toDate: () => new Date(Date.now() - 5_000) },
     }),
-    "gw-test-stale-r1": servingRevision(
+    "gw-test-stale": servingRuntime(
       "gw-test-stale",
-      "gw-test-stale-r1",
       {
         status: "ready",
         version: "ghi9012",

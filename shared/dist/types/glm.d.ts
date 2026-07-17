@@ -147,7 +147,7 @@ export declare function resolveUserGatewayShellState(data: {
     gatewayProfile: GatewayProfile;
     shellsEnabled: boolean;
 };
-export type OperationKind = "add-gateway" | "migrate-customer" | "retire-gateway" | "retire-revision" | "restart-gateway" | "recycle-gateway" | "rollout" | "deprovision-customer";
+export type OperationKind = "add-gateway" | "migrate-customer" | "retire-gateway" | "restart-gateway" | "recycle-gateway" | "rollout" | "deprovision-customer";
 export type OperationStatus = "pending" | "running" | "succeeded" | "failed" | "rolled-back";
 export type StepStatus = "pending" | "running" | "done" | "failed" | "skipped";
 export interface OperationStep {
@@ -185,8 +185,6 @@ export interface CustomerMigrationV2GatewayRootFence {
     latestRelease: number;
     desiredRelease: number;
     liveRelease: number;
-    liveRevisionId: string;
-    trafficRevisionId: string;
     gatewayClass: "builder" | "operator";
     ownerUid: string;
     builderSlug: string;

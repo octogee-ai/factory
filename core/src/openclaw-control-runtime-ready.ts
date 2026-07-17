@@ -51,9 +51,9 @@ function hasReadyRevisionIdentity(
   revision: Record<string, unknown> | null,
   input: { gatewayId: string; revisionId: string },
 ): boolean {
-  return revision?.docKind === "revision" &&
-    revision.gateway === input.gatewayId &&
-    revision.revisionId === input.revisionId &&
+  return revision?.docKind === "runtime" &&
+    revision.gatewayId === input.gatewayId &&
+    input.revisionId === input.gatewayId &&
     revision.lifecycle === "serving";
 }
 

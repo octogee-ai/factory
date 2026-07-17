@@ -7,8 +7,7 @@ import {
 
 interface RevisionFixture {
   docKind: string;
-  revisionId: string;
-  gateway: string;
+  gatewayId: string;
   lifecycle: string;
   heartbeat: {
     status: string;
@@ -31,9 +30,8 @@ interface RevisionFixture {
 
 function revision(now: number): RevisionFixture {
   return {
-    docKind: "revision",
-    revisionId: "bender-r2",
-    gateway: "bender",
+    docKind: "runtime",
+    gatewayId: "bender",
     lifecycle: "serving",
     heartbeat: {
       status: "ready",
@@ -60,7 +58,7 @@ describe("OpenClaw Dashboard revision runtime gate", () => {
     const now = Date.UTC(2026, 6, 14, 20);
     expect(isOpenClawControlRevisionRuntimeReady(revision(now), {
       gatewayId: "bender",
-      revisionId: "bender-r2",
+      revisionId: "bender",
       now,
     })).toBe(true);
   });
@@ -81,13 +79,13 @@ describe("OpenClaw Dashboard revision runtime gate", () => {
       (value: RevisionFixture) => { value.heartbeat.configStatus.dashboardControlProtocol.version = 2; },
       (value: RevisionFixture) => { value.heartbeat.configStatus.dashboardControlObservedAt = now - 15_001; },
       (value: RevisionFixture) => { value.heartbeat.status = "unreachable"; },
-      (value: RevisionFixture) => { value.revisionId = "bender-r1"; },
+      (value: RevisionFixture) => { value.gatewayId = "other"; },
     ]) {
       const value = revision(now);
       mutate(value);
       expect(isOpenClawControlRevisionRuntimeReady(value, {
         gatewayId: "bender",
-        revisionId: "bender-r2",
+        revisionId: "bender",
         now,
       })).toBe(false);
     }

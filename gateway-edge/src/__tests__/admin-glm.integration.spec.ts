@@ -436,10 +436,7 @@ function seedDurableGateway(
     latestRelease: 1,
     desiredRelease: 1,
     liveRelease: null,
-    liveRevisionId: null,
-    trafficRevisionId: null,
     desiredStatus: "running",
-    roll: null,
     configSchemaVersion: 1,
     profile: "standard",
     gatewayClass: "shared",
@@ -476,24 +473,17 @@ function markGatewayServing(
   gatewayId: string,
   heartbeat: Record<string, unknown>,
 ) {
-  const revisionId = `${gatewayId}-r1`;
   gatewaysDocs[gatewayId] = {
     ...gatewaysDocs[gatewayId],
     liveRelease: 1,
-    liveRevisionId: revisionId,
-    trafficRevisionId: revisionId,
   };
-  glmGatewaysDocs[revisionId] = {
-    docKind: "revision",
-    revisionId,
-    gateway: gatewayId,
+  glmGatewaysDocs[gatewayId] = {
+    docKind: "runtime",
+    gatewayId,
     release: 1,
-    rollRole: "serving",
     lifecycle: "serving",
     createdAt: 1,
     createdByOperationId: null,
-    retiredAt: null,
-    retireReason: null,
     helm: {},
     heartbeat,
     lastError: { message: null, at: null },
@@ -1825,13 +1815,13 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
     expect(update).toBeUndefined();
   });
 
-  it("fails closed when the live revision telemetry is unavailable", async () => {
+  it("fails closed when the runtime telemetry is unavailable", async () => {
     seedRetirableGateway("orphan");
-    delete glmGatewaysDocs["orphan-r1"];
+    delete glmGatewaysDocs["orphan"];
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/orphan");
     expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/live revision telemetry is unavailable/i);
+    expect(res.body.error).toMatch(/runtime telemetry is unavailable/i);
     expect(gatewaysDocs.orphan).toMatchObject({ desiredStatus: "running" });
     expect(glmOperationsDocs.find((d) => d.data.kind === "retire-gateway")).toBeUndefined();
   });

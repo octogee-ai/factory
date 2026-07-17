@@ -15,7 +15,7 @@ import {
   isGatewayDesiredDoc,
   type GatewayDoc,
 } from "@octogee/shared/types/gateway-releases";
-import { readGatewayLiveRevisionHeartbeat } from "./gateway-live-release.js";
+import { readGatewayRuntimeHeartbeat } from "./gateway-live-release.js";
 
 export type ActivationGatewayClass = "builder" | "operator";
 
@@ -424,7 +424,7 @@ export async function requestBuilderActivationLease(opts: {
   const liveHeartbeats = await Promise.all(
     gatewayRoots.map(async ({ root }) => ({
       gatewayId: root.gatewayId,
-      heartbeat: await readGatewayLiveRevisionHeartbeat(db, root),
+      heartbeat: await readGatewayRuntimeHeartbeat(db, root),
     })),
   );
   for (const { gatewayId, heartbeat } of liveHeartbeats) {

@@ -43,7 +43,7 @@ function fail(error: string): OperationResult {
 }
 
 function converged(gw: GatewayDoc): boolean {
-  return gw.liveRelease === gw.desiredRelease && gw.roll == null;
+  return gw.liveRelease === gw.desiredRelease;
 }
 
 export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
@@ -152,9 +152,6 @@ function assessRollOutcome(
         `failed or a newer release superseded this rollout`,
     };
   }
-  if (gw.roll?.status === "failed") {
-    return { success: false, error: gw.roll.error ?? `roll to r${gw.desiredRelease} failed` };
-  }
   if (converged(gw)) {
     deps.log(`[rollout] ${gatewayId} converged onto release ${gw.liveRelease} (${imageTag})`);
     return { success: true };
@@ -168,15 +165,12 @@ function narrateRollProgress(
   gw: GatewayDoc,
   narration: RollNarration,
 ): void {
-  if (gw.roll && gw.roll.status !== narration.lastStatus) {
-    narration.lastStatus = gw.roll.status;
-    deps.log(
-      `[rollout] ${gatewayId} roll r${gw.roll.fromRelease ?? "-"} → r${gw.roll.toRelease}: ${gw.roll.status}`,
-    );
-  }
-  if (gw.roll?.error && gw.roll.error !== narration.lastError) {
-    narration.lastError = gw.roll.error;
-    deps.log(`[rollout] ⚠ ${gatewayId} roll holds: ${narration.lastError}`);
+  const status = gw.liveRelease === gw.desiredRelease
+    ? `live at r${gw.liveRelease}`
+    : `converging r${gw.liveRelease ?? "-"} → r${gw.desiredRelease}`;
+  if (status !== narration.lastStatus) {
+    narration.lastStatus = status;
+    deps.log(`[rollout] ${gatewayId}: ${status}`);
   }
 }
 

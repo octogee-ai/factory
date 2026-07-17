@@ -8,7 +8,6 @@ import {
 } from "@octogee/core/assigned-roster";
 import {
   configuredBuilderBootstrapAllowed,
-  gatewayRevisionIdFromPodName,
 } from "@octogee/core/gateway-live-release";
 import { db } from "../../lib/db.js";
 import { requireInternalServiceAuth } from "../../middleware/auth.js";
@@ -72,7 +71,7 @@ function validRepoName(value: unknown): value is string {
 
 interface GatewayCaller {
   gatewayId: string;
-  revisionId: string | null;
+  podName: string | undefined;
 }
 
 function gatewayCallerForRequest(req: Request): GatewayCaller | null {
@@ -84,10 +83,7 @@ function gatewayCallerForRequest(req: Request): GatewayCaller | null {
     if (gatewayId) {
       return {
         gatewayId,
-        revisionId: gatewayRevisionIdFromPodName(
-          gatewayId,
-          typeof boundTenant.podName === "string" ? boundTenant.podName : undefined,
-        ),
+        podName: typeof boundTenant.podName === "string" ? boundTenant.podName : undefined,
       };
     }
   }
@@ -101,7 +97,7 @@ async function requireAssignedHere(req: Request, res: Response, slug: string): P
     res.status(500).json({ error: "gateway assignment guard is not configured" });
     return false;
   }
-  const { gatewayId, revisionId } = caller;
+  const { gatewayId, podName } = caller;
 
   try {
     const assigned = await readAssignedSlugsForGateway(db, gatewayId);
@@ -110,7 +106,7 @@ async function requireAssignedHere(req: Request, res: Response, slug: string): P
     const gateway = gatewaySnap.exists ? gatewaySnap.data() : undefined;
     const configuredIsolatedBuilder = configuredBuilderBootstrapAllowed(gateway, {
       gatewayId,
-      revisionId,
+      podName,
       slug,
     });
     if (configuredIsolatedBuilder) return true;

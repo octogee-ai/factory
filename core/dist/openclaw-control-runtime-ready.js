@@ -35,9 +35,9 @@ function isFreshWithin(value, now, freshMs) {
         now - observedAt <= freshMs;
 }
 function hasReadyRevisionIdentity(revision, input) {
-    return revision?.docKind === "revision" &&
-        revision.gateway === input.gatewayId &&
-        revision.revisionId === input.revisionId &&
+    return revision?.docKind === "runtime" &&
+        revision.gatewayId === input.gatewayId &&
+        input.revisionId === input.gatewayId &&
         revision.lifecycle === "serving";
 }
 function hasExpectedRuntimeIdentity(configStatus) {

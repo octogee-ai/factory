@@ -34,9 +34,6 @@ function durableRoot(gatewayId: string, overrides: Record<string, unknown> = {})
     latestRelease: 1,
     liveRelease: 1,
     desiredStatus: 'running',
-    liveRevisionId: `${gatewayId}-r1`,
-    trafficRevisionId: `${gatewayId}-r1`,
-    roll: null,
     configSchemaVersion: 1,
     profile: 'standard',
     gatewayClass: 'shared',
@@ -58,29 +55,26 @@ function durableRoot(gatewayId: string, overrides: Record<string, unknown> = {})
   };
 }
 
-function servingRevision(
+function servingRuntime(
   gatewayId: string,
   release: number,
   heartbeat: Record<string, unknown> = {},
   overrides: Record<string, unknown> = {},
 ) {
-  const revisionId = `${gatewayId}-r${release}`;
   return {
-    docKind: 'revision',
-    revisionId,
-    gateway: gatewayId,
+    docKind: 'runtime',
+    gatewayId,
     release,
-    rollRole: null,
     lifecycle: 'serving',
     createdAt: 1,
     createdByOperationId: null,
     retiredAt: null,
     retireReason: null,
     helm: {
-      releaseName: `octogee-gw-${revisionId}`,
-      deploymentName: `octogee-gateway-${revisionId}`,
-      gatewayServiceName: `gateway-${revisionId}`,
-      gatewayEdgeServiceName: `gateway-edge-${revisionId}`,
+      releaseName: `octogee-gw-${gatewayId}`,
+      deploymentName: `octogee-gateway-${gatewayId}`,
+      gatewayServiceName: `gateway-${gatewayId}`,
+      gatewayEdgeServiceName: `gateway-edge-${gatewayId}`,
       serviceAccountName: `octogee-gw-${gatewayId}`,
       imageRepository: 'us-central1-docker.pkg.dev/octogee/octogee/gateway',
       imageTag: 'abc1234',
@@ -107,16 +101,14 @@ function servingRevision(
 function servingAssignment(
   gatewayId: string,
   uid: string,
-  release: number,
+  _release: number,
   overrides: Record<string, unknown> = {},
 ) {
   return {
     uid,
     slug: 'alice',
     gatewayId,
-    revisionId: `${gatewayId}-r${release}`,
-    release,
-    source: 'rollout',
+    source: 'migrate-customer',
     state: 'serving',
     epoch: 1,
     updatedAt: 1,
@@ -137,58 +129,34 @@ describe('resolveGatewayUrl — glm-heartbeat / revision resolution (no round-ro
     expect(r.url).toBe(URL_A);
   });
 
-  it('backfilled rolling GatewayDoc + serving assignment: resolves via the canonical target revision heartbeat', async () => {
-    const db = mkDb({
-      'users/u1': { provisioning: { openclaw: { gatewayId: 'gw-a' } } },
-      'gateways/gw-a': durableRoot('gw-a', {
-        desiredRelease: 2,
-        latestRelease: 2,
-        roll: {
-          operationId: 'roll-gw-a-r2',
-          status: 'migrating',
-          fromRelease: 1,
-          toRelease: 2,
-          sourceRevisionId: 'gw-a-r1',
-          targetRevisionId: 'gw-a-r2',
-          acceptingNewAssignments: true,
-          startedAt: 1,
-          updatedAt: 1,
-          error: null,
-          flippedAt: null,
-        },
-      }),
-      'gateways/gw-a/assignments/u1': servingAssignment('gw-a', 'u1', 2),
-      'glmGateways/gw-a-r1': servingRevision('gw-a', 1, {
-        internalUrl: 'http://stale-r1:18789',
-      }),
-      'glmGateways/gw-a-r2': servingRevision('gw-a', 2, { internalUrl: URL_A }),
-    });
-    const r = await resolveGatewayUrl({ db, uid: 'u1' });
-    // Must dial the customer's assigned revision (r2), never the stale live/other.
-    expect(r.url).toBe(URL_A);
-  });
-
-  it('backfilled GatewayDoc, no assignment: falls back to the live revision heartbeat', async () => {
+  it('GatewayDoc + serving assignment: resolves via the bare runtime heartbeat', async () => {
     const db = mkDb({
       'users/u1': { provisioning: { openclaw: { gatewayId: 'gw-a' } } },
       'gateways/gw-a': durableRoot('gw-a'),
-      'glmGateways/gw-a-r1': servingRevision('gw-a', 1, { internalUrl: URL_A }),
+      'gateways/gw-a/assignments/u1': servingAssignment('gw-a', 'u1', 1),
+      'glmGateways/gw-a': servingRuntime('gw-a', 1, { internalUrl: URL_A }),
     });
     const r = await resolveGatewayUrl({ db, uid: 'u1' });
     expect(r.url).toBe(URL_A);
   });
 
-  it('backfilled GatewayDoc with NO resolvable revision: fails loud, never dials', async () => {
+  it('GatewayDoc, no assignment: resolves via the bare runtime heartbeat', async () => {
     const db = mkDb({
       'users/u1': { provisioning: { openclaw: { gatewayId: 'gw-a' } } },
-      'gateways/gw-a': durableRoot('gw-a', {
-        liveRelease: null,
-        liveRevisionId: null,
-        trafficRevisionId: null,
-      }),
+      'gateways/gw-a': durableRoot('gw-a'),
+      'glmGateways/gw-a': servingRuntime('gw-a', 1, { internalUrl: URL_A }),
+    });
+    const r = await resolveGatewayUrl({ db, uid: 'u1' });
+    expect(r.url).toBe(URL_A);
+  });
+
+  it('GatewayDoc with NO runtime realization: fails loud, never dials', async () => {
+    const db = mkDb({
+      'users/u1': { provisioning: { openclaw: { gatewayId: 'gw-a' } } },
+      'gateways/gw-a': durableRoot('gw-a'),
     });
     await expect(resolveGatewayUrl({ db, uid: 'u1' })).rejects.toMatchObject({
-      code: 'gateway-url-unresolved',
+      code: 'gateway-not-registered',
     });
   });
 
@@ -198,7 +166,7 @@ describe('resolveGatewayUrl — glm-heartbeat / revision resolution (no round-ro
       'gateways/gw-a': durableRoot('gw-a', {
         internalUrl: 'http://WRONG-flat:18789',
       }),
-      'glmGateways/gw-a-r1': servingRevision('gw-a', 1, { internalUrl: URL_A }),
+      'glmGateways/gw-a': servingRuntime('gw-a', 1, { internalUrl: URL_A }),
     });
     const r = await resolveGatewayUrl({ db, uid: 'u1' });
     expect(r.url).toBe(URL_A);
@@ -221,21 +189,7 @@ describe('resolveGatewayUrl — glm-heartbeat / revision resolution (no round-ro
       'users/u1': { provisioning: { openclaw: { gatewayId: 'gw-a' } } },
       'gateways/gw-a': durableRoot('gw-a'),
       'gateways/gw-a/assignments/u1': { gatewayId: 'gw-a' },
-      'glmGateways/gw-a-r1': servingRevision('gw-a', 1, { internalUrl: URL_A }),
-    });
-
-    await expect(resolveGatewayUrl({ db, uid: 'u1' })).rejects.toMatchObject({
-      code: 'gateway-url-unresolved',
-    });
-  });
-
-  it('rejects an assignment that does not point at a current root revision', async () => {
-    const db = mkDb({
-      'users/u1': { provisioning: { openclaw: { gatewayId: 'gw-a' } } },
-      'gateways/gw-a': durableRoot('gw-a'),
-      'gateways/gw-a/assignments/u1': servingAssignment('gw-a', 'u1', 2),
-      'glmGateways/gw-a-r1': servingRevision('gw-a', 1, { internalUrl: 'http://r1:18789' }),
-      'glmGateways/gw-a-r2': servingRevision('gw-a', 2, { internalUrl: URL_A }),
+      'glmGateways/gw-a-r1': servingRuntime('gw-a', 1, { internalUrl: URL_A }),
     });
 
     await expect(resolveGatewayUrl({ db, uid: 'u1' })).rejects.toMatchObject({
@@ -252,19 +206,7 @@ describe('resolveGatewayUrl — glm-heartbeat / revision resolution (no round-ro
       'users/u1': { provisioning: { openclaw: { gatewayId: 'gw-a' } } },
       'gateways/gw-a': durableRoot('gw-a'),
       'gateways/gw-a/assignments/u1': assignment,
-      'glmGateways/gw-a-r1': servingRevision('gw-a', 1, { internalUrl: URL_A }),
-    });
-
-    await expect(resolveGatewayUrl({ db, uid: 'u1' })).rejects.toMatchObject({
-      code: 'gateway-url-unresolved',
-    });
-  });
-
-  it('rejects a durable root with a mismatched traffic pointer', async () => {
-    const db = mkDb({
-      'users/u1': { provisioning: { openclaw: { gatewayId: 'gw-a' } } },
-      'gateways/gw-a': durableRoot('gw-a', { trafficRevisionId: 'gw-a-r2' }),
-      'glmGateways/gw-a-r1': servingRevision('gw-a', 1, { internalUrl: URL_A }),
+      'glmGateways/gw-a-r1': servingRuntime('gw-a', 1, { internalUrl: URL_A }),
     });
 
     await expect(resolveGatewayUrl({ db, uid: 'u1' })).rejects.toMatchObject({
@@ -273,15 +215,13 @@ describe('resolveGatewayUrl — glm-heartbeat / revision resolution (no round-ro
   });
 
   it.each([
-    ['different gateway', servingRevision('gw-a', 1, { internalUrl: URL_A }, { gateway: 'other' })],
-    ['noncanonical revision id', servingRevision('gw-a', 1, { internalUrl: URL_A }, { revisionId: 'gw-a-r2' })],
-    ['wrong release', servingRevision('gw-a', 1, { internalUrl: URL_A }, { release: 2 })],
-    ['retired lifecycle', servingRevision('gw-a', 1, { internalUrl: URL_A }, { lifecycle: 'retired' })],
-  ])('rejects a durable revision with %s', async (_label, revision) => {
+    ['a foreign gateway identity', servingRuntime('gw-a', 1, { internalUrl: URL_A }, { gatewayId: 'other' })],
+    ['a failed lifecycle', servingRuntime('gw-a', 1, { internalUrl: URL_A }, { lifecycle: 'failed' })],
+  ])('rejects a runtime doc with %s', async (_label, runtime) => {
     const db = mkDb({
       'users/u1': { provisioning: { openclaw: { gatewayId: 'gw-a' } } },
       'gateways/gw-a': durableRoot('gw-a'),
-      'glmGateways/gw-a-r1': revision,
+      'glmGateways/gw-a': runtime,
     });
 
     await expect(resolveGatewayUrl({ db, uid: 'u1' })).rejects.toMatchObject({
@@ -293,7 +233,7 @@ describe('resolveGatewayUrl — glm-heartbeat / revision resolution (no round-ro
     const db = mkDb({
       'users/u1': { provisioning: { openclaw: { gatewayId: 'gw-a' } } },
       'gateways/gw-a': durableRoot('gw-a', { desiredStatus: 'retired' }),
-      'glmGateways/gw-a-r1': servingRevision('gw-a', 1, { internalUrl: URL_A }),
+      'glmGateways/gw-a-r1': servingRuntime('gw-a', 1, { internalUrl: URL_A }),
     });
 
     await expect(resolveGatewayUrl({ db, uid: 'u1' })).rejects.toMatchObject({

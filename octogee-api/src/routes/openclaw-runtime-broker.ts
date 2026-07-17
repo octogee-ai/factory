@@ -641,11 +641,12 @@ export function resolveServingRevisionId(input: {
   gatewayData: Record<string, unknown>;
   assignmentData: Record<string, unknown> | undefined;
   uid: string;
+  gatewayId: string;
 }): string | null {
   const assignment = parseAssignmentDoc(input.uid, input.assignmentData);
-  if (assignment && assignment.revisionId.length > 0) return assignment.revisionId;
-  const live = input.gatewayData.liveRevisionId;
-  return typeof live === "string" && live.length > 0 ? live : null;
+  if (assignment) return assignment.gatewayId;
+  const live = input.gatewayData.liveRelease;
+  return typeof live === "number" ? input.gatewayId : null;
 }
 
 // Read the revision's serving internalUrl, failing LOUD rather than dialing a
@@ -658,9 +659,9 @@ export function readRevisionInternalUrl(input: {
 }): { url: string } | { error: string } {
   const data = input.revisionData;
   if (!data) return { error: `revision ${input.revisionId} not found` };
-  if (data.gateway !== input.expectedGatewayId) {
+  if (data.gatewayId !== input.expectedGatewayId) {
     return {
-      error: `revision ${input.revisionId} belongs to gateway ${String(data.gateway)}, not ${input.expectedGatewayId}`,
+      error: `revision ${input.revisionId} belongs to gateway ${String(data.gatewayId)}, not ${input.expectedGatewayId}`,
     };
   }
   // Never dial a corpse: a retired/failed revision may still carry a stale
@@ -718,6 +719,7 @@ export async function resolveRedeemGatewayUrl(input: {
     gatewayData: input.gatewayData,
     assignmentData: assignmentSnap.data(),
     uid: input.uid,
+    gatewayId: input.gatewayId,
   });
   if (!revisionId) return { error: "gateway-url-unresolved" };
   const revSnap = await input.tx.get(input.db.doc(`glmGateways/${revisionId}`));

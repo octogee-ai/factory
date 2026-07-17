@@ -100,7 +100,7 @@ describe("internal connector materialize route", () => {
     process.env.GATEWAY_CLASS = "operator";
     process.env.GATEWAY_PROFILE = "operator";
     process.env.GATEWAY_ID = "bender";
-    process.env.GATEWAY_REVISION_ID = "bender-r2";
+    process.env.GATEWAY_REVISION_ID = "bender";
     process.env.GATEWAY_BUILDER_SLUG = "acme";
     mocks.docs["workspaces/acme"] = { ownerUid: "uid-owner" };
     mocks.docs["gateways/bender"] = {
@@ -108,14 +108,12 @@ describe("internal connector materialize route", () => {
       latestRelease: 2,
       desiredRelease: 2,
       liveRelease: 2,
-      liveRevisionId: "bender-r2",
       desiredStatus: "running",
       ...rootConfig(),
     };
-    mocks.docs["glmGateways/bender-r2"] = {
-      docKind: "revision",
-      revisionId: "bender-r2",
-      gateway: "bender",
+    mocks.docs["glmGateways/bender"] = {
+      docKind: "runtime",
+      gatewayId: "bender",
       release: 2,
       lifecycle: "serving",
     };
@@ -162,7 +160,7 @@ describe("internal connector materialize route", () => {
     expect(res.body).toMatchObject({ status: "connected", accessToken: "gho_secret" });
   });
 
-  it("does not let stale bare glm gateway config override durable root config", async () => {
+  it("fails closed when the runtime doc is legacy-shaped instead of honoring its stale config", async () => {
     mocks.docs["glmGateways/bender"] = {
       gatewayId: "bender",
       ownerUid: "uid-someone-else",
@@ -172,8 +170,7 @@ describe("internal connector materialize route", () => {
 
     const res = await request(app()).get("/internal/connectors/github/materialize");
 
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ status: "connected", accessToken: "gho_secret" });
+    expect(res.status).toBe(503);
   });
 
   it("returns a structured disconnected response when the owner has no token", async () => {

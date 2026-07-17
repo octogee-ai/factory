@@ -12,9 +12,8 @@ import {
 import {
   GATEWAY_RELEASES_SUBCOLLECTION,
   isGatewayDesiredDoc,
+  isGatewayRuntimeDoc,
   isReleasePayload,
-  isRevisionRealizationDoc,
-  revisionIdForRelease,
   upgradeReleasePayloadSchema,
   type GatewayDoc,
   type ReleasePayload,
@@ -33,41 +32,32 @@ export type { GatewayMutableConfig };
 
 type FirestoreReader = Pick<Firestore, "doc">;
 
-export function gatewayRevisionIdFromPodName(
+// A gateway's pods are named octogee-gateway-<id>-<replicaset>-<pod> by the
+// stable-name Deployment. Pod identity binds to the gateway alone — never to a
+// release or lifecycle state (GATEWAY-SIMPLE-ROLL-SPEC identity-pure boot).
+export function podBelongsToGateway(
   gatewayId: string,
   podName: string | undefined,
-): string | null {
-  if (!podName) return null;
-  const prefix = `octogee-gateway-${gatewayId}-r`;
-  if (!podName.startsWith(prefix)) return null;
+): boolean {
+  if (!podName) return false;
+  const prefix = `octogee-gateway-${gatewayId}-`;
+  if (!podName.startsWith(prefix)) return false;
   const suffix = podName.slice(prefix.length);
-  const separator = suffix.indexOf("-");
-  if (separator <= 0) return null;
-  const release = suffix.slice(0, separator);
-  const generatedSuffix = suffix.slice(separator + 1);
-  if (!/^[1-9]\d*$/.test(release)) return null;
-  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(generatedSuffix)) return null;
-  return `${gatewayId}-r${release}`;
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(suffix);
 }
 
 export function configuredBuilderBootstrapAllowed(
   value: unknown,
-  input: { gatewayId: string; revisionId: string | null; slug: string },
+  input: { gatewayId: string; podName: string | undefined; slug: string },
 ): boolean {
-  const gateway = eligibleConfiguredBuilderGateway(value, input);
-  if (!gateway) return false;
-  if (gateway.roll) {
-    return gateway.roll.status !== "failed" &&
-      gateway.roll.targetRevisionId === input.revisionId;
-  }
-  return revisionIdForRelease(input.gatewayId, gateway.desiredRelease) === input.revisionId;
+  return eligibleConfiguredBuilderGateway(value, input) !== null;
 }
 
 type ConfiguredBuilderGateway = GatewayDoc & GatewayMutableConfig & { retirementClaim?: unknown };
 
 function eligibleConfiguredBuilderGateway(
   value: unknown,
-  input: { gatewayId: string; revisionId: string | null; slug: string },
+  input: { gatewayId: string; podName: string | undefined; slug: string },
 ): ConfiguredBuilderGateway | null {
   if (
     !isGatewayDesiredDoc(value) ||
@@ -78,7 +68,7 @@ function eligibleConfiguredBuilderGateway(
   }
   const gateway = value as ConfiguredBuilderGateway;
   if (
-    !input.revisionId ||
+    !podBelongsToGateway(input.gatewayId, input.podName) ||
     gateway.desiredStatus !== "running" ||
     gateway.retireAfter != null ||
     gateway.retirementClaim != null ||
@@ -90,34 +80,17 @@ function eligibleConfiguredBuilderGateway(
   return gateway;
 }
 
-function activeRollSourceCredentialHydrationAllowed(
-  gateway: ConfiguredBuilderGateway,
-  revisionId: string | null,
-): boolean {
-  const roll = gateway.roll;
-  return Boolean(
-    revisionId &&
-    roll &&
-    (roll.status === "warming" || roll.status === "routing" || roll.status === "migrating") &&
-    roll.sourceRevisionId === revisionId &&
-    gateway.liveRevisionId === revisionId &&
-    gateway.trafficRevisionId === revisionId,
-  );
-}
-
 export function configuredBuilderCredentialBootstrapAllowed(
   value: unknown,
   input: {
     gatewayId: string;
-    revisionId: string | null;
+    podName: string | undefined;
     slug: string;
     uid: string;
   },
 ): boolean {
   const gateway = eligibleConfiguredBuilderGateway(value, input);
-  if (!gateway || gateway.ownerUid !== input.uid) return false;
-  return configuredBuilderBootstrapAllowed(gateway, input) ||
-    activeRollSourceCredentialHydrationAllowed(gateway, input.revisionId);
+  return gateway !== null && gateway.ownerUid === input.uid;
 }
 
 export interface GatewayArtifact {
@@ -139,23 +112,6 @@ export interface GatewayAuthorization {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function canonicalGatewayRevision(
-  gatewayId: string,
-  revisionId: string | null,
-  release: number | null,
-): { revisionId: string; release: number } | null {
-  if (
-    typeof revisionId !== "string" ||
-    typeof release !== "number" ||
-    !Number.isInteger(release) ||
-    release < 1 ||
-    revisionId !== revisionIdForRelease(gatewayId, release)
-  ) {
-    return null;
-  }
-  return { revisionId, release };
 }
 
 export function gatewayArtifactFromReleasePayload(payload: ReleasePayload): GatewayArtifact {
@@ -206,29 +162,23 @@ export async function readGatewayArtifact(
   return gatewayArtifactFromReleasePayload(artifact);
 }
 
-export async function readGatewayLiveRevisionHeartbeat(
+export async function readGatewayRuntimeHeartbeat(
   db: FirestoreReader,
   gateway: GatewayDoc,
 ): Promise<Record<string, unknown> | null> {
-  const live = canonicalGatewayRevision(
-    gateway.gatewayId,
-    gateway.liveRevisionId,
-    gateway.liveRelease,
-  );
-  if (!live) return null;
-  const revisionSnap = await db.doc(`${GLM_GATEWAYS_COLLECTION}/${live.revisionId}`).get();
-  const revision = revisionSnap.exists ? revisionSnap.data() : undefined;
+  const runtimeSnap = await db
+    .doc(`${GLM_GATEWAYS_COLLECTION}/${gateway.gatewayId}`)
+    .get();
+  const runtime = runtimeSnap.exists ? runtimeSnap.data() : undefined;
   if (
-    !isRevisionRealizationDoc(revision) ||
-    revision.revisionId !== live.revisionId ||
-    revision.gateway !== gateway.gatewayId ||
-    revision.release !== live.release ||
-    revision.lifecycle !== "serving" ||
-    !isRecord(revision.heartbeat)
+    !isGatewayRuntimeDoc(runtime) ||
+    runtime.gatewayId !== gateway.gatewayId ||
+    runtime.lifecycle !== "serving" ||
+    !isRecord(runtime.heartbeat)
   ) {
     return null;
   }
-  return revision.heartbeat;
+  return runtime.heartbeat;
 }
 
 export function mergeGatewayConfigWithArtifact(
@@ -281,50 +231,6 @@ export async function readGatewayAuthorization(
   return gatewaySnap.exists ? gatewayAuthorizationFromRootDocument(gatewayData, gatewayId) : null;
 }
 
-export async function readRevisionGatewayAuthorization(
-  db: FirestoreReader,
-  gatewayId: string,
-  revisionId: string,
-): Promise<GatewayAuthorization | null> {
-  const gatewaySnap = await db.doc(`${GATEWAYS_COLLECTION}/${gatewayId}`).get();
-  const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
-  if (!gatewaySnap.exists) return null;
-  const authorization = gatewayAuthorizationFromRootDocument(gatewayData, gatewayId);
-  if (!authorization) return null;
-
-  const live = canonicalGatewayRevision(
-    authorization.gateway.gatewayId,
-    authorization.gateway.liveRevisionId,
-    authorization.gateway.liveRelease,
-  );
-  const target = authorization.gateway.roll
-    ? canonicalGatewayRevision(
-        authorization.gateway.gatewayId,
-        authorization.gateway.roll.targetRevisionId,
-        authorization.gateway.roll.toRelease,
-      )
-    : null;
-  let expected: { revisionId: string; release: number } | null = null;
-  if (live?.revisionId === revisionId) {
-    expected = live;
-  } else if (target?.revisionId === revisionId) {
-    expected = target;
-  }
-  if (!expected) return null;
-
-  const revisionSnap = await db.doc(`${GLM_GATEWAYS_COLLECTION}/${revisionId}`).get();
-  const revisionData = revisionSnap.exists ? revisionSnap.data() : undefined;
-  if (
-    !isRevisionRealizationDoc(revisionData) ||
-    revisionData.revisionId !== revisionId ||
-    revisionData.gateway !== gatewayId ||
-    revisionData.release !== expected.release
-  ) {
-    return null;
-  }
-  return authorization;
-}
-
 export async function readServingGatewayAuthorization(
   db: FirestoreReader,
   gatewayId: string,
@@ -332,21 +238,13 @@ export async function readServingGatewayAuthorization(
   const authorization = await readGatewayAuthorization(db, gatewayId);
   if (!authorization) return null;
   if (authorization.gateway.desiredStatus !== "running") return null;
-  const live = canonicalGatewayRevision(
-    authorization.gateway.gatewayId,
-    authorization.gateway.liveRevisionId,
-    authorization.gateway.liveRelease,
-  );
-  if (!live) return null;
 
-  const revisionSnap = await db.doc(`${GLM_GATEWAYS_COLLECTION}/${live.revisionId}`).get();
-  const revisionData = revisionSnap.exists ? revisionSnap.data() : undefined;
+  const runtimeSnap = await db.doc(`${GLM_GATEWAYS_COLLECTION}/${gatewayId}`).get();
+  const runtimeData = runtimeSnap.exists ? runtimeSnap.data() : undefined;
   if (
-    !isRevisionRealizationDoc(revisionData) ||
-    revisionData.revisionId !== live.revisionId ||
-    revisionData.gateway !== gatewayId ||
-    revisionData.release !== live.release ||
-    revisionData.lifecycle !== "serving"
+    !isGatewayRuntimeDoc(runtimeData) ||
+    runtimeData.gatewayId !== gatewayId ||
+    runtimeData.lifecycle !== "serving"
   ) {
     return null;
   }

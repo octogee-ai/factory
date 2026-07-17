@@ -9,8 +9,8 @@ describe("API-server egress runtime wiring", () => {
     expect(source).toContain(
       "createGatewayRuntimeConfigPreparer(resolveApiServerEgressCidrs)",
     );
-    expect(source).toMatch(/buildConvergeEmptyDeps\(\{[\s\S]*?prepareGatewayConfig,/u);
-    expect(source).toMatch(/buildRollPassDeps\(\{[\s\S]*?prepareGatewayConfig,/u);
-    expect(source).toMatch(/buildDurableRootRenderDeps\(\{[\s\S]*?prepareGatewayConfig,/u);
+    expect(source).toMatch(/runGatewayConvergencePass\(\{[\s\S]*?prepareGatewayConfig,/u);
+    expect(source).toMatch(/const prepared = await passDeps\.prepareGatewayConfig\(gateway\);/u);
+    expect(source).toMatch(/const config = await prepareGatewayConfig\(root\);/u);
   });
 });

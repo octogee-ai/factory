@@ -267,10 +267,7 @@ function seedNewSchemaGateway(
       latestRelease: 1,
       desiredRelease: 1,
       liveRelease: null,
-      liveRevisionId: null,
-      trafficRevisionId: null,
       desiredStatus: "running",
-      roll: null,
       ...config,
     },
     [`gateways/${id}/${GATEWAY_RELEASES_SUBCOLLECTION}/1`]: {
@@ -331,20 +328,14 @@ function seedServingGateway(
   seed[`gateways/${id}`] = {
     ...seed[`gateways/${id}`],
     liveRelease: 1,
-    liveRevisionId: `${id}-r1`,
-    trafficRevisionId: `${id}-r1`,
   };
-  seed[`${GLM_GATEWAYS_COLLECTION}/${id}-r1`] = {
-    docKind: "revision",
-    revisionId: `${id}-r1`,
-    gateway: id,
+  seed[`${GLM_GATEWAYS_COLLECTION}/${id}`] = {
+    docKind: "runtime",
+    gatewayId: id,
     release: 1,
-    rollRole: "serving",
     lifecycle: "serving",
     createdAt: 1,
     createdByOperationId: null,
-    retiredAt: null,
-    retireReason: null,
     helm: {},
     heartbeat,
     lastError: { message: null, at: null },
@@ -386,8 +377,6 @@ describe("POST /gateways — creates only the durable root and immutable release
       latestRelease: 1,
       desiredRelease: 1,
       desiredStatus: "running",
-      roll: null,
-      legacyBackfill: null,
       configSchemaVersion: 1,
       gatewayClass: "shared",
       sizingTier: null,
@@ -662,18 +651,15 @@ describe("admin target resolution", () => {
 
     expect(res.body).toMatchObject({ gatewayProfile: "operator" });
     expect(store.get("gateways/operator/assignments/uid-alice")).toMatchObject({
-      revisionId: "operator-r1",
       gatewayId: "operator",
     });
   });
 
-  it("does not use a bare gateway heartbeat when the root's live revision is unavailable", async () => {
+  it("does not use a legacy bare heartbeat doc when no runtime realization exists", async () => {
     const seed = seedNewSchemaGateway("target", sharedPayload());
     seed["gateways/target"] = {
       ...seed["gateways/target"],
       liveRelease: 1,
-      liveRevisionId: "target-r1",
-      trafficRevisionId: "target-r1",
     };
     seed[`${GLM_GATEWAYS_COLLECTION}/target`] = {
       gatewayId: "target",
@@ -1104,7 +1090,7 @@ describe("GET /gateways/:id/releases — lists retained release docs", () => {
     const res = await request(app).get("/gateways/delta/releases").expect(200);
     expect(res.body).toMatchObject({ gatewayId: "delta", latestRelease: 2, desiredRelease: 2 });
     expect(res.body.releases.map((r: { release: number }) => r.release)).toEqual([2, 1]);
-    expect(res.body.releases[0]).toMatchObject({ revisionId: "delta-r2", note: "bump" });
+    expect(res.body.releases[0]).toMatchObject({ note: "bump" });
   });
 
   it("404s for a gateway with no GatewayDoc", async () => {
@@ -1329,7 +1315,7 @@ describe("DELETE /gateways/:id — retirement claim", () => {
     const { app, store } = mkApp(seedServingGateway("zed", sharedPayload()));
     const res = await request(app).delete("/gateways/zed");
     expect(res.status).toBe(202);
-    expect(store.get(`${GLM_GATEWAYS_COLLECTION}/zed`)).toBeUndefined();
+    expect(store.get(`${GLM_GATEWAYS_COLLECTION}/zed`)).not.toMatchObject({ desiredStatus: expect.anything() });
     expect(store.get("gateways/zed")).toMatchObject({
       desiredStatus: "retired",
       retirementVersion: 1,
@@ -1379,7 +1365,7 @@ describe("DELETE /gateways/:id — retirement claim", () => {
       desiredStatus: "retired",
       retirementClaim: { version: 1 },
     });
-    expect(store.get(`${GLM_GATEWAYS_COLLECTION}/back`)).toBeUndefined();
+    expect(store.get(`${GLM_GATEWAYS_COLLECTION}/back`)).not.toMatchObject({ desiredStatus: expect.anything() });
     // A retire-gateway op is queued for the controller.
     expect(opsIn(store, "retire-gateway")).toHaveLength(1);
   });
@@ -1399,63 +1385,27 @@ describe("DELETE /gateways/:id — retirement claim", () => {
     expect(opsIn(store, "retire-gateway")).toHaveLength(0);
   });
 
-  it("refuses retirement while the durable root carries an unfinished release roll", async () => {
+  it("refuses retirement while the desired release has not converged to live", async () => {
     const seed = seedServingGateway("rolling", sharedPayload());
     seed["gateways/rolling"] = {
       ...seed["gateways/rolling"],
       desiredRelease: 2,
-      roll: {
-        operationId: "roll-1",
-        status: "migrating",
-        fromRelease: 1,
-        toRelease: 2,
-        sourceRevisionId: "rolling-r1",
-        targetRevisionId: "rolling-r2",
-        acceptingNewAssignments: false,
-        startedAt: 10,
-        updatedAt: 10,
-        error: null,
-        flippedAt: null,
-      },
     };
     const { app, store } = mkApp(seed);
 
     const res = await request(app).delete("/gateways/rolling").expect(409);
 
-    expect(res.body.error).toMatch(/release roll.*config obligation/i);
+    expect(res.body.error).toMatch(/not converged to live/i);
     expect(store.get("gateways/rolling")?.desiredStatus).toBe("running");
     expect(opsIn(store, "retire-gateway")).toHaveLength(0);
   });
 
-  it("refuses retirement while the live revision reports an orphaned config-control obligation", async () => {
-    const seed = seedServingGateway("frozen", sharedPayload(), {
-      status: "ready",
-      mountedCustomers: [],
-      configStatus: {
-        freezeState: "frozen",
-        bootRole: "source-frozen",
-        controlOwner: {
-          migrationId: "roll-config-roll-1",
-          sourceRevisionId: "frozen-r1",
-          targetRevisionId: "frozen-r2",
-        },
-      },
-    });
-    const { app, store } = mkApp(seed);
-
-    const res = await request(app).delete("/gateways/frozen").expect(409);
-
-    expect(res.body.error).toMatch(/config-control obligation/i);
-    expect(store.get("gateways/frozen")?.desiredStatus).toBe("running");
-    expect(opsIn(store, "retire-gateway")).toHaveLength(0);
-  });
-
-  it("rejects when a roll starts after retirement preflight but before its transactional claim", async () => {
+  it("rejects when a new release lands after retirement preflight but before its transactional claim", async () => {
     const { app, store } = mkApp(seedServingGateway("racing-roll", sharedPayload()), {
       beforeFirstTransaction: (state) => {
         state.set("gateways/racing-roll", {
           ...state.get("gateways/racing-roll"),
-          roll: { operationId: "roll-racing", systemConfigRoll: { phase: "freezing" } },
+          desiredRelease: 2,
         });
       },
     });
@@ -1466,34 +1416,11 @@ describe("DELETE /gateways/:id — retirement claim", () => {
     expect(opsIn(store, "retire-gateway")).toHaveLength(0);
   });
 
-  it("rejects when config freeze starts after retirement preflight but before its transactional claim", async () => {
-    const { app, store } = mkApp(seedServingGateway("racing-freeze", sharedPayload()), {
-      beforeFirstTransaction: (state) => {
-        const path = `${GLM_GATEWAYS_COLLECTION}/racing-freeze-r1`;
-        const revision = state.get(path)!;
-        state.set(path, {
-          ...revision,
-          heartbeat: {
-            ...(revision.heartbeat as Record<string, unknown>),
-            configStatus: { freezeState: "frozen", bootRole: "source-frozen" },
-          },
-        });
-      },
-    });
-
-    await request(app).delete("/gateways/racing-freeze").expect(409);
-
-    expect(store.get("gateways/racing-freeze")?.desiredStatus).toBe("running");
-    expect(opsIn(store, "retire-gateway")).toHaveLength(0);
-  });
-
-  it("refuses retirement when a root points at missing live-revision telemetry", async () => {
+  it("refuses retirement when a running root has no runtime realization", async () => {
     const seed = seedNewSchemaGateway("missing-live", sharedPayload());
     seed["gateways/missing-live"] = {
       ...seed["gateways/missing-live"],
       liveRelease: 1,
-      liveRevisionId: "missing-live-r1",
-      trafficRevisionId: "missing-live-r1",
     };
     seed[`${GLM_GATEWAYS_COLLECTION}/missing-live`] = {
       gatewayId: "missing-live",
@@ -1503,7 +1430,7 @@ describe("DELETE /gateways/:id — retirement claim", () => {
 
     const res = await request(app).delete("/gateways/missing-live").expect(409);
 
-    expect(res.body.error).toContain("live revision telemetry");
+    expect(res.body.error).toContain("runtime telemetry");
     expect(store.get("gateways/missing-live")?.desiredStatus).toBe("running");
   });
 

@@ -130,11 +130,7 @@ describe("gatewaySurfaceTarget", () => {
 });
 
 describe("gatewaySurfaceTarget — revision-pinned address form", () => {
-  it("maps /g/<gw>/r/<n>/… api paths to the revision's Service, stripping /r/<n> from the sidecar path", () => {
-    // The /r/<n> is a ROUTING directive the router consumes to select the
-    // revision target (origin = gateway-edge-<gw>-r<n>). The revision pod is
-    // revision-agnostic in its own routing, so it receives the BARE
-    // /api/g/<gw>/… path its routes actually mount.
+  it("parses /g/<gw>/r/<n>/… as a pinned target addressed at the STABLE service (pinned addressing is retired)", () => {
     expect(gatewaySurfaceTarget({
       host: "api.octogee.com",
       previewHost: "preview.octogee.com",
@@ -144,23 +140,8 @@ describe("gatewaySurfaceTarget — revision-pinned address form", () => {
       gatewayId: "default",
       revision: 7,
       surface: "api",
-      origin: "http://gateway-edge-default-r7.octogee.svc.cluster.local:3001",
+      origin: "http://gateway-edge-default.octogee.svc.cluster.local:3001",
       path: "/api/g/default/byosub/health?probe=1",
-    });
-  });
-
-  it("maps /g/<gw>/r/<n>/… preview paths to the revision's pod, stripping /r/<n> from the preview path", () => {
-    expect(gatewaySurfaceTarget({
-      host: "preview.octogee.com",
-      previewHost: "preview.octogee.com",
-      url: "/g/default/r/7/ticket123/",
-      namespace: "octogee-test",
-    })).toEqual({
-      gatewayId: "default",
-      revision: 7,
-      surface: "preview",
-      origin: "http://octogee-gateway-default-r7.octogee-test.svc.cluster.local:9080",
-      path: "/g/default/ticket123/",
     });
   });
 
@@ -212,14 +193,12 @@ describe("gatewaySurfaceTarget — revision-pinned address form", () => {
   });
 });
 
-describe("createGatewayRouter — revision_gone tombstone (pinned-miss path only)", () => {
-  it("returns a typed revision_gone 404 with the current-revision pointer for a retired /r/{n}", async () => {
-    const lookup = vi.fn(async () => ({ tombstoned: true, currentRevisionId: "default-r8" }));
+describe("createGatewayRouter — pinned addressing is retired (GATEWAY-SIMPLE-ROLL-SPEC)", () => {
+  it("answers every pinned /r/{n} request with the typed revision_gone 404, never dialing upstream", async () => {
     const router = createGatewayRouter({
       namespace: "octogee",
       previewHost: "preview.octogee.com",
       targetOriginForGateway: () => "http://127.0.0.1:1", // must never be dialed
-      revisionTombstoneLookup: lookup,
       log: () => undefined,
     });
     const routerPort = await listen(router);
@@ -233,13 +212,11 @@ describe("createGatewayRouter — revision_gone tombstone (pinned-miss path only
       error: "revision_gone",
       gatewayId: "default",
       revision: 7,
-      currentRevisionId: "default-r8",
+      currentRevisionId: null,
     });
-    expect(lookup).toHaveBeenCalledWith("default", 7);
   });
 
-  it("proxies a pinned request when the revision is NOT tombstoned", async () => {
-    const lookup = vi.fn(async () => ({ tombstoned: false }));
+  it("service-addressed requests proxy straight through", async () => {
     const upstream = http.createServer((req, res) => {
       res.writeHead(200, { "content-type": "text/plain" });
       res.end(`ok:${req.url}`);
@@ -249,85 +226,6 @@ describe("createGatewayRouter — revision_gone tombstone (pinned-miss path only
       namespace: "octogee",
       previewHost: "preview.octogee.com",
       targetOriginForGateway: () => `http://127.0.0.1:${upstreamPort}`,
-      revisionTombstoneLookup: lookup,
-      log: () => undefined,
-    });
-    const routerPort = await listen(router);
-
-    const res = await requestText(`http://127.0.0.1:${routerPort}/g/default/r/7/byosub/health`, {
-      host: "api.octogee.com",
-    });
-
-    expect(res.status).toBe(200);
-    // P0: the revision sidecar receives its BARE /api/g/<gw>/… route — the
-    // /r/7 is consumed by the router to pick the revision Service, not forwarded.
-    expect(res.body).toBe("ok:/api/g/default/byosub/health");
-    expect(lookup).toHaveBeenCalledWith("default", 7);
-  });
-
-  it("re-checks the tombstone (cache-bypass) when a pinned upstream proxy FAILS, and returns revision_gone", async () => {
-    // Stale-negative: cached "not tombstoned", then the revision retires; the
-    // next pinned request dials a dead pod. On the proxy failure we bypass the
-    // cache, re-check, find the tombstone, and return the controlled error.
-    const lookup = vi.fn(async () => ({ tombstoned: false }));
-    const recheck = vi.fn(async () => ({ tombstoned: true, currentRevisionId: "default-r8" }));
-    const router = createGatewayRouter({
-      namespace: "octogee",
-      previewHost: "preview.octogee.com",
-      targetOriginForGateway: () => "http://127.0.0.1:1", // connection refused
-      revisionTombstoneLookup: lookup,
-      revisionTombstoneRecheck: recheck,
-      log: () => undefined,
-    });
-    const routerPort = await listen(router);
-
-    const res = await requestText(`http://127.0.0.1:${routerPort}/g/default/r/7/byosub/health`, {
-      host: "api.octogee.com",
-    });
-
-    expect(res.status).toBe(404);
-    expect(JSON.parse(res.body)).toEqual({
-      error: "revision_gone",
-      gatewayId: "default",
-      revision: 7,
-      currentRevisionId: "default-r8",
-    });
-    expect(recheck).toHaveBeenCalledWith("default", 7);
-  });
-
-  it("returns 502 (not revision_gone) when a pinned upstream fails and the re-check still finds no tombstone", async () => {
-    const lookup = vi.fn(async () => ({ tombstoned: false }));
-    const recheck = vi.fn(async () => ({ tombstoned: false }));
-    const router = createGatewayRouter({
-      namespace: "octogee",
-      previewHost: "preview.octogee.com",
-      targetOriginForGateway: () => "http://127.0.0.1:1",
-      revisionTombstoneLookup: lookup,
-      revisionTombstoneRecheck: recheck,
-      log: () => undefined,
-    });
-    const routerPort = await listen(router);
-
-    const res = await requestText(`http://127.0.0.1:${routerPort}/g/default/r/7/byosub/health`, {
-      host: "api.octogee.com",
-    });
-
-    expect(res.status).toBe(502);
-    expect(recheck).toHaveBeenCalledWith("default", 7);
-  });
-
-  it("NEVER consults the tombstone on the service-addressed hot path", async () => {
-    const lookup = vi.fn(async () => ({ tombstoned: true, currentRevisionId: "default-r8" }));
-    const upstream = http.createServer((req, res) => {
-      res.writeHead(200, { "content-type": "text/plain" });
-      res.end(`ok:${req.url}`);
-    });
-    const upstreamPort = await listen(upstream);
-    const router = createGatewayRouter({
-      namespace: "octogee",
-      previewHost: "preview.octogee.com",
-      targetOriginForGateway: () => `http://127.0.0.1:${upstreamPort}`,
-      revisionTombstoneLookup: lookup,
       log: () => undefined,
     });
     const routerPort = await listen(router);
@@ -338,7 +236,6 @@ describe("createGatewayRouter — revision_gone tombstone (pinned-miss path only
 
     expect(res.status).toBe(200);
     expect(res.body).toBe("ok:/api/g/default/byosub/health");
-    expect(lookup).not.toHaveBeenCalled();
   });
 });
 

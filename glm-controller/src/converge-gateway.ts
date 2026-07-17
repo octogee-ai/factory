@@ -1,0 +1,253 @@
+import {
+  operatorGatewayServiceAccountName,
+  resolveGatewayClass,
+  resolveGatewayImageProfile,
+  resolveOperatorGatewayAccess,
+  GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME,
+  type HelmInstanceValue,
+} from "@octogee/shared/types/glm";
+import {
+  isW9GatewayEdgeImage,
+  isW9TestPublisherLiveExperiment,
+  type GatewayDoc,
+  type GatewayRuntimeDoc,
+  type ReleasePayload,
+} from "@octogee/shared/types/gateway-releases";
+import { isW9CandidateImageTag } from "@octogee/shared/types/image-tag";
+import type { GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
+import type { W9TestPublisherLiveExperiment } from "@octogee/shared/types/gateway-releases";
+import { resolveGatewayImageRepository } from "./gateway-profiles.js";
+
+// The simple-roll convergence arm (GATEWAY-SIMPLE-ROLL-SPEC): every gateway has
+// ONE stable-name Helm release; a roll is a desiredRelease write that surfaces
+// here as image drift and applies in place (the chart's surge strategy replaces
+// the pod). No revisions, no roll state machine, no proofs beyond readiness.
+
+export type DurableGateway = GatewayDoc & GatewayMutableConfig;
+
+function classKnobs(gateway: DurableGateway): {
+  gatewayClass?: "builder" | "operator" | "shared";
+  profile?: "operator" | "standard";
+  imageProfile?: "operator" | "standard";
+} {
+  return {
+    gatewayClass: gateway.gatewayClass ?? undefined,
+    profile: gateway.profile ?? undefined,
+    imageProfile: gateway.imageProfile ?? undefined,
+  };
+}
+
+function imageRepositoryFor(gateway: DurableGateway, artifact: ReleasePayload): string {
+  return resolveGatewayImageRepository({
+    ...classKnobs(gateway),
+    imageRepository: artifact.imageRepository,
+  });
+}
+
+export interface ObservedHelmInstance {
+  imageRepository: string | null;
+  imageTag: string | null;
+  replicas: number | null;
+}
+
+export interface GatewayConvergencePlanInput {
+  gateway: DurableGateway;
+  artifact: ReleasePayload | null;
+  helm: ObservedHelmInstance | null;
+  deploymentReady: boolean;
+}
+
+export type GatewayConvergenceAction =
+  | { kind: "uninstall" }
+  | { kind: "hold-missing-release"; error: string }
+  | { kind: "upsert"; replicas: number }
+  | { kind: "mark-live" }
+  | { kind: "steady" };
+
+function desiredReplicas(gateway: DurableGateway): number {
+  return gateway.desiredStatus === "paused" ? 0 : 1;
+}
+
+export function planGatewayConvergence(
+  input: GatewayConvergencePlanInput,
+): GatewayConvergenceAction {
+  const { gateway, artifact, helm } = input;
+  if (gateway.desiredStatus === "retired") {
+    return helm ? { kind: "uninstall" } : { kind: "steady" };
+  }
+  if (!artifact) {
+    return {
+      kind: "hold-missing-release",
+      error:
+        `gateway ${gateway.gatewayId} desired release ${gateway.desiredRelease} has no ` +
+        `readable payload at gateways/${gateway.gatewayId}/releases/${gateway.desiredRelease}`,
+    };
+  }
+  const replicas = desiredReplicas(gateway);
+  const drifted =
+    !helm ||
+    helm.imageTag !== artifact.imageTag ||
+    helm.imageRepository !== imageRepositoryFor(gateway, artifact) ||
+    helm.replicas !== replicas;
+  if (drifted) return { kind: "upsert", replicas };
+  if (
+    gateway.desiredStatus === "running" &&
+    input.deploymentReady &&
+    gateway.liveRelease !== gateway.desiredRelease
+  ) {
+    return { kind: "mark-live" };
+  }
+  return { kind: "steady" };
+}
+
+export interface GatewayUpsertOpts {
+  namespace: string;
+  gatewayId: string;
+  builderSlug?: string;
+  imageRepository: string;
+  imageTag: string;
+  gatewayEdgeImageRepository?: string;
+  gatewayEdgeImageTag?: string;
+  conversationExperimentMode?: "publisher-live";
+  testExperiment?: W9TestPublisherLiveExperiment;
+  serviceAccountName?: string;
+  serviceAccount?: HelmInstanceValue["serviceAccount"];
+  gatewayContainerSecurityContext?: Record<string, unknown>;
+  operatorAccess?: HelmInstanceValue["operatorAccess"];
+  computeClassOverride?: string;
+  chartPath: string;
+  valuesFile?: string;
+  chartFingerprint?: string;
+  profile?: HelmInstanceValue["profile"];
+  gatewayClass?: HelmInstanceValue["gatewayClass"];
+  imageProfile?: HelmInstanceValue["imageProfile"];
+  sizingTier?: HelmInstanceValue["sizingTier"];
+  replicas?: number;
+  gcpProject?: string;
+  rollStrategy: "surge";
+}
+
+function w9TestExperimentForNamespace(input: {
+  namespace: string;
+  artifact: ReleasePayload;
+}): Pick<
+  GatewayUpsertOpts,
+  | "conversationExperimentMode"
+  | "testExperiment"
+  | "gatewayEdgeImageRepository"
+  | "gatewayEdgeImageTag"
+> {
+  const testExperiment = input.artifact.testExperiment;
+  if (testExperiment === undefined) {
+    if (isW9CandidateImageTag(input.artifact.imageTag)) {
+      throw new Error("digest-bound W9 candidate image requires its W9 TEST experiment");
+    }
+    return {};
+  }
+  if (
+    input.namespace !== "octogee-test" ||
+    !isW9CandidateImageTag(input.artifact.imageTag) ||
+    !isW9GatewayEdgeImage(input.artifact.gatewayEdgeImage, input.artifact.imageTag) ||
+    !isW9TestPublisherLiveExperiment(testExperiment)
+  ) {
+    throw new Error("publisher-live W9 experiment is TEST-only and requires its digest-bound candidate");
+  }
+  return {
+    conversationExperimentMode: "publisher-live",
+    testExperiment,
+    gatewayEdgeImageRepository: input.artifact.gatewayEdgeImage.imageRepository,
+    gatewayEdgeImageTag: input.artifact.gatewayEdgeImage.imageTag,
+  };
+}
+
+// Tenant identity (KSA, secrets, GATEWAY_ID) and every resource name key off
+// the bare gatewayId — the chart's revisionId value defaults to it.
+export function gatewayUpsertOptsFromRelease(input: {
+  namespace: string;
+  gateway: DurableGateway;
+  artifact: ReleasePayload;
+  replicas: number;
+  chartPath: string;
+  valuesFile?: string;
+  chartFingerprint?: string;
+}): GatewayUpsertOpts {
+  const { gateway, artifact } = input;
+  const gatewayClass = resolveGatewayClass(classKnobs(gateway));
+  const serviceAccountName =
+    gateway.serviceAccountName &&
+    gateway.serviceAccountName.length > 0 &&
+    gateway.serviceAccountName !== GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME
+      ? gateway.serviceAccountName
+      : operatorGatewayServiceAccountName(gateway.gatewayId);
+  const operatorAccess =
+    gatewayClass === "builder" || gatewayClass === "operator"
+      ? resolveOperatorGatewayAccess(gateway.ownerUid, gateway.operatorAccess ?? undefined)
+      : gateway.operatorAccess ?? undefined;
+  return {
+    namespace: input.namespace,
+    gatewayId: gateway.gatewayId,
+    builderSlug: gateway.builderSlug ?? undefined,
+    imageRepository: imageRepositoryFor(gateway, artifact),
+    imageTag: artifact.imageTag,
+    ...w9TestExperimentForNamespace({ namespace: input.namespace, artifact }),
+    serviceAccountName,
+    serviceAccount: gateway.serviceAccount ?? undefined,
+    gatewayContainerSecurityContext: gateway.gatewayContainerSecurityContext ?? undefined,
+    operatorAccess: operatorAccess ?? undefined,
+    computeClassOverride: gateway.computeClass ?? undefined,
+    chartPath: input.chartPath,
+    valuesFile: input.valuesFile,
+    chartFingerprint: input.chartFingerprint,
+    profile: gateway.profile ?? undefined,
+    gatewayClass,
+    imageProfile: resolveGatewayImageProfile(classKnobs(gateway)),
+    sizingTier: gateway.sizingTier ?? undefined,
+    replicas: input.replicas,
+    gcpProject: gateway.gcpProject ?? undefined,
+    rollStrategy: "surge",
+  };
+}
+
+// The runtime doc the converge arm maintains at glmGateways/{gatewayId}.
+export function provisioningRuntimeDoc(input: {
+  gateway: DurableGateway;
+  artifact: ReleasePayload;
+  existing: GatewayRuntimeDoc | null;
+  now: number;
+}): GatewayRuntimeDoc {
+  const { gateway, artifact, existing } = input;
+  return {
+    docKind: "runtime",
+    gatewayId: gateway.gatewayId,
+    release: gateway.desiredRelease,
+    lifecycle:
+      existing && existing.release === gateway.desiredRelease
+        ? existing.lifecycle
+        : "provisioning",
+    createdAt: existing?.createdAt ?? input.now,
+    createdByOperationId: existing?.createdByOperationId ?? null,
+    helm: {
+      releaseName: `octogee-gw-${gateway.gatewayId}`,
+      deploymentName: `octogee-gateway-${gateway.gatewayId}`,
+      gatewayServiceName: `octogee-gateway-${gateway.gatewayId}`,
+      gatewayEdgeServiceName: `gateway-edge-${gateway.gatewayId}`,
+      serviceAccountName: operatorGatewayServiceAccountName(gateway.gatewayId),
+      imageRepository: imageRepositoryFor(gateway, artifact),
+      imageTag: artifact.imageTag,
+      replicas: gateway.desiredStatus === "paused" ? 0 : 1,
+      availableReplicas: existing?.helm.availableReplicas ?? null,
+      lastAppliedAt: input.now,
+    },
+    heartbeat: existing?.heartbeat ?? {
+      status: "unknown",
+      lastHeartbeatAt: null,
+      version: null,
+      openclawVersion: null,
+      internalUrl: null,
+      startedAt: null,
+      mountedCustomers: [],
+      migratingIn: [],
+    },
+    lastError: existing?.lastError ?? { message: null, at: null },
+  };
+}

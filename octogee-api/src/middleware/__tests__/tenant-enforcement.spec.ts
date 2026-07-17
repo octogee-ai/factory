@@ -511,8 +511,8 @@ describe("tenant enforcement middleware", () => {
     expect(res.status).toBe(200);
   });
 
-  it("rejects stale, unbound, and retiring configured-builder bootstrap callers", async () => {
-    const source = await request(app({
+  it("allows any pod of the gateway's own Deployment — identity, never lifecycle (GATEWAY-SIMPLE-ROLL-SPEC)", async () => {
+    const anyPod = await request(app({
       boundTenant: {
         ...BENDER_R2,
         podName: "octogee-gateway-bender-r1-5bc5949d46-p946t",
@@ -521,6 +521,11 @@ describe("tenant enforcement middleware", () => {
     }))
       .get("/internal/gitea/user-pubkey")
       .query({ slug: "victim" });
+
+    expect(anyPod.status).toBe(200);
+  });
+
+  it("rejects unbound and retiring configured-builder bootstrap callers", async () => {
     const unbound = await request(app({
       boundTenant: BENDER,
       gateways: { bender: configuredBender() },
@@ -538,7 +543,6 @@ describe("tenant enforcement middleware", () => {
       .get("/internal/gitea/user-pubkey")
       .query({ slug: "victim" });
 
-    expect(source.status).toBe(403);
     expect(unbound.status).toBe(403);
     expect(retiring.status).toBe(403);
   });

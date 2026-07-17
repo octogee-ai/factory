@@ -3,12 +3,10 @@ import type { Firestore } from "firebase-admin/firestore";
 import { SIGNATURE_HEADER } from "@octogee/shared/types/fleet-controller";
 import { verifyFleetRequest } from "@octogee/core/fleet-signature";
 import {
-  buildLegacyBackfillRecoveryHeartbeatPollerDeps,
   buildOperatorHeartbeatPollerDeps,
   callUnmountRpc,
   heartbeatPollInstanceIds,
   heartbeatRosterTarget,
-  startLegacyBackfillRecoveryHeartbeatPoller,
 } from "../index.js";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 
@@ -19,9 +17,8 @@ function fakeDb(): Firestore {
         get: vi.fn(async () => ({
           exists: true,
           data: () => ({
-            docKind: "revision",
-            revisionId: "bender-r2",
-            gateway: "bender",
+            docKind: "runtime",
+            gatewayId: "bender",
             release: 2,
             lifecycle: "serving",
           }),
@@ -53,13 +50,12 @@ describe("callUnmountRpc", () => {
     const pending = callUnmountRpc(fakeDb(), {
       privateKey: FLEET_KEY_PAIR.privateKey,
       gatewayId: "bender",
-      revisionId: "bender-r2",
       slug: "ghost",
       log: vi.fn(),
       timeoutMs: 25,
     });
     const rejection = expect(pending).rejects.toThrow(
-      /unmount timed out after 25ms gatewayId=bender revisionId=bender-r2 slug=ghost/,
+      /unmount timed out after 25ms gatewayId=bender slug=ghost/,
     );
 
     await vi.advanceTimersByTimeAsync(25);
@@ -98,15 +94,15 @@ describe("buildOperatorHeartbeatPollerDeps", () => {
     } as unknown as Firestore;
 
     const deps = buildOperatorHeartbeatPollerDeps(batchDb, vi.fn(), FLEET_KEY_PAIR.privateKey);
-    await deps.writeHeartbeat("bender-r2", { status: "ready", mountedCustomers: ["ceckert"], startedAt: 42 });
+    await deps.writeHeartbeat("bender", { status: "ready", mountedCustomers: ["ceckert"], startedAt: 42 });
 
     expect(committed).toBe(true);
     expect(setCalls.map((c) => c.collection)).toEqual(["glmGateways"]);
     const glmCall = setCalls.find((c) => c.collection === "glmGateways");
-    expect(glmCall!.doc).toBe("bender-r2");
+    expect(glmCall!.doc).toBe("bender");
     expect(glmCall!.data).toHaveProperty("heartbeat");
     expect(glmCall!.data).toMatchObject({
-      heartbeat: { internalUrl: expect.stringContaining("octogee-gateway-bender-r2") },
+      heartbeat: { internalUrl: expect.stringContaining("octogee-gateway-bender") },
     });
     expect(setCalls.some((c) => c.collection === "gateways")).toBe(false);
   });
@@ -123,7 +119,7 @@ describe("buildOperatorHeartbeatPollerDeps", () => {
       FLEET_KEY_PAIR.privateKey,
     );
 
-    await deps.evictSlug?.("bender-r2", "ghost");
+    await deps.evictSlug?.("bender", "ghost");
 
     const rawBody = capturedInit?.body as string;
     const body = JSON.parse(rawBody) as { migrationId: string };
@@ -138,85 +134,8 @@ describe("buildOperatorHeartbeatPollerDeps", () => {
   });
 });
 
-describe("buildLegacyBackfillRecoveryHeartbeatPollerDeps", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("polls only canonical bridge revisions and cannot evict customers", async () => {
-    const roots = {
-      default: {
-        gatewayId: "default",
-        latestRelease: 1,
-        desiredRelease: 1,
-        desiredStatus: "running",
-        legacyBackfill: { sourceGlmGatewayIds: ["default-blue"], startedAt: 1 },
-      },
-      ordinary: {
-        gatewayId: "ordinary",
-        latestRelease: 3,
-        desiredRelease: 3,
-        desiredStatus: "running",
-        legacyBackfill: null,
-      },
-    };
-    const runtime = {
-      "default-blue": {
-        gatewayId: "default-blue",
-        gateway: "default",
-        desiredStatus: "running",
-        imageRepository: "repo",
-        imageTag: "abc1234",
-        createdBy: "legacy-controller",
-      },
-      "default-r1": {
-        docKind: "revision",
-        revisionId: "default-r1",
-        gateway: "default",
-        release: 1,
-        lifecycle: "provisioning",
-      },
-      "ordinary-r3": {
-        docKind: "revision",
-        revisionId: "ordinary-r3",
-        gateway: "ordinary",
-        release: 3,
-        lifecycle: "serving",
-      },
-    };
-    const db = {
-      collection: (name: string) => {
-        const store = name === "gateways" ? roots : runtime;
-        return {
-          get: async () => ({
-            docs: Object.entries(store).map(([id, data]) => ({ id, data: () => data })),
-          }),
-        };
-      },
-    } as unknown as Firestore;
-
-    const deps = buildLegacyBackfillRecoveryHeartbeatPollerDeps(db, vi.fn());
-
-    await expect(deps.listGatewayIds()).resolves.toEqual(["default-r1"]);
-    expect(deps.evictSlug).toBeUndefined();
-  });
-
-  it("starts a stoppable heartbeat-only loop for the recovery controller", () => {
-    vi.useFakeTimers();
-    const db = {
-      collection: () => ({ get: async () => ({ docs: [] }) }),
-    } as unknown as Firestore;
-
-    const stop = startLegacyBackfillRecoveryHeartbeatPoller(db, vi.fn());
-
-    expect(vi.getTimerCount()).toBe(1);
-    stop();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-});
-
-describe("revision heartbeat polling", () => {
-  it("polls only active revision realizations", () => {
+describe("runtime heartbeat polling", () => {
+  it("polls only live runtime realizations", () => {
     expect(
       heartbeatPollInstanceIds([
         {
@@ -229,21 +148,20 @@ describe("revision heartbeat polling", () => {
             createdBy: "test",
           }),
         },
-        { id: "default-r2", data: () => ({ docKind: "revision", revisionId: "default-r2", gateway: "default", release: 2, lifecycle: "provisioning" }) },
-        { id: "default-r1", data: () => ({ docKind: "revision", revisionId: "default-r1", gateway: "default", release: 1, lifecycle: "retired" }) },
+        { id: "default", data: () => ({ docKind: "runtime", gatewayId: "default", release: 2, lifecycle: "provisioning" }) },
+        { id: "failed", data: () => ({ docKind: "runtime", gatewayId: "failed", release: 1, lifecycle: "failed" }) },
       ]),
-    ).toEqual(["default-r2"]);
+    ).toEqual(["default"]);
   });
 
-  it("does not poll a shadow document that claims another revision identity", () => {
+  it("does not poll a shadow document that claims another gateway identity", () => {
     expect(
       heartbeatPollInstanceIds([
         {
-          id: "default-r2-shadow",
+          id: "default-shadow",
           data: () => ({
-            docKind: "revision",
-            revisionId: "default-r2",
-            gateway: "default",
+            docKind: "runtime",
+            gatewayId: "default",
             release: 2,
             lifecycle: "serving",
           }),
@@ -252,16 +170,15 @@ describe("revision heartbeat polling", () => {
     ).toEqual([]);
   });
 
-  it("resolves a revision instance to the bare gateway's revision-filtered roster", () => {
+  it("resolves a runtime instance to the bare gateway roster", () => {
     expect(
-      heartbeatRosterTarget("default-r2", {
-        docKind: "revision",
-        revisionId: "default-r2",
-        gateway: "default",
+      heartbeatRosterTarget("default", {
+        docKind: "runtime",
+        gatewayId: "default",
         release: 2,
-        lifecycle: "warming",
+        lifecycle: "serving",
       }),
-    ).toEqual({ gatewayId: "default", revisionId: "default-r2" });
+    ).toEqual({ gatewayId: "default" });
     expect(heartbeatRosterTarget("default-green", { gatewayId: "default-green" })).toBeNull();
   });
 });

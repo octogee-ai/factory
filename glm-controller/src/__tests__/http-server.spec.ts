@@ -38,8 +38,6 @@ function durableBuilderGateway(
     latestRelease: 1,
     desiredRelease: 1,
     liveRelease: 1,
-    liveRevisionId: `${gatewayId}-r1`,
-    trafficRevisionId: `${gatewayId}-r1`,
     desiredStatus,
     roll: null,
     configSchemaVersion: 1,
@@ -72,8 +70,6 @@ function durableSharedGateway(gatewayId: string): Record<string, unknown> {
     latestRelease: 1,
     desiredRelease: 1,
     liveRelease: 1,
-    liveRevisionId: `${gatewayId}-r1`,
-    trafficRevisionId: `${gatewayId}-r1`,
     desiredStatus: "running",
     roll: null,
     configSchemaVersion: 1,
@@ -96,7 +92,7 @@ function durableSharedGateway(gatewayId: string): Record<string, unknown> {
   };
 }
 
-function servingRevision(
+function servingRuntime(
   gatewayId: string,
   opts: {
     imageTag?: string;
@@ -105,11 +101,9 @@ function servingRevision(
 ): Record<string, unknown> {
   const imageTag = opts.imageTag ?? "abc1234";
   return {
-    docKind: "revision",
-    revisionId: `${gatewayId}-r1`,
-    gateway: gatewayId,
+    docKind: "runtime",
+    gatewayId,
     release: 1,
-    rollRole: null,
     lifecycle: "serving",
     createdAt: 1,
     createdByOperationId: null,
@@ -544,7 +538,7 @@ describe("createHttpServer — admin gateway routes", () => {
 
   it("serves /api/admin/gateways with populated fleet stats", async () => {
     store.gateways["gw-blue"] = durableSharedGateway("gw-blue");
-    store.glmGateways["gw-blue-r1"] = servingRevision("gw-blue", {
+    store.glmGateways["gw-blue"] = servingRuntime("gw-blue", {
       heartbeat: {
         status: "ready",
         version: "abc1234",
@@ -553,7 +547,7 @@ describe("createHttpServer — admin gateway routes", () => {
       },
     });
     store.gateways["gw-stale"] = durableSharedGateway("gw-stale");
-    store.glmGateways["gw-stale-r1"] = servingRevision("gw-stale", {
+    store.glmGateways["gw-stale"] = servingRuntime("gw-stale", {
       heartbeat: {
         status: "unreachable",
         version: "def5678",
@@ -577,7 +571,7 @@ describe("createHttpServer — admin gateway routes", () => {
 
   it("includes Cowboy pod diagnostics in the gateway summaries when available", async () => {
     store.gateways["bender"] = durableSharedGateway("bender");
-    store.glmGateways["bender-r1"] = servingRevision("bender", {
+    store.glmGateways["bender"] = servingRuntime("bender", {
       heartbeat: {
         status: "ready",
         version: "8507a63",
@@ -678,7 +672,7 @@ describe("createHttpServer — admin gateway routes", () => {
 
   it("derives OpenClaw from Cowboy image tags when heartbeat reports unknown", async () => {
     store.gateways["bender"] = durableSharedGateway("bender");
-    store.glmGateways["bender-r1"] = servingRevision("bender", {
+    store.glmGateways["bender"] = servingRuntime("bender", {
       imageTag: "5b287cb-oc2026.6.10",
       heartbeat: {
         status: "ready",
@@ -731,10 +725,9 @@ describe("createHttpServer — admin gateway routes", () => {
       provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
     };
     store.gateways["gw-alice"] = durableBuilderGateway("gw-alice", "running");
-    store.glmGateways["gw-alice-r1"] = {
-      docKind: "revision",
-      revisionId: "gw-alice-r1",
-      gateway: "gw-alice",
+    store.glmGateways["gw-alice"] = {
+      docKind: "runtime",
+      gatewayId: "gw-alice",
       release: 1,
       lifecycle: "serving",
       heartbeat: { status: "ready", mountedCustomers: [] },
