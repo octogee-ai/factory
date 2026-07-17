@@ -234,17 +234,6 @@ const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
 const OPERATOR_HEARTBEAT_POLL_MS = 15_000;
 const OPERATOR_HEALTH_TIMEOUT_MS = 5_000;
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
-// Release-roll pacing (converge-roll.ts): how long a flipped source keeps
-// forwarding before its revision-scoped teardown, and how long a failed drain
-// migration backs off before the level-triggered retry.
-const ROLL_SOURCE_FORWARDER_TTL_MS = parseNonNegativeInt(
-  process.env.ROLL_SOURCE_FORWARDER_TTL_MS,
-  5 * 60 * 1000,
-);
-const ROLL_MIGRATE_RETRY_BACKOFF_MS = parseNonNegativeInt(
-  process.env.ROLL_MIGRATE_RETRY_BACKOFF_MS,
-  5 * 60 * 1000,
-);
 
 // Lets out-of-loop callers (the roll arm's pacing, the rollout op handler)
 // nudge the reconciler without holding a reference to its closure; installed by

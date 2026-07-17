@@ -286,17 +286,6 @@ export function isAssignmentState(value: unknown): value is AssignmentState {
 }
 
 // Internal-only headers a forwarded intra-family hop carries between two
-// gateway-edge sidecars of the SAME gateway. The public gateway-router strips
-// them from every inbound request (they must never be client-controllable) and
-// an edge never forwards a request that already carries the hop header — one
-// hop max, by construction.
-export const INTRA_FAMILY_HOP_HEADER = "x-octogee-intra-family-hop";
-export const ASSIGNMENT_EPOCH_HEADER = "x-octogee-assignment-epoch";
-export const INTERNAL_ROUTING_HEADERS: readonly string[] = [
-  INTRA_FAMILY_HOP_HEADER,
-  ASSIGNMENT_EPOCH_HEADER,
-];
-
 // gateways/{gatewayId}/assignments/{uid} — which customers a gateway serves.
 // `epoch` is monotonic per customer, bumped at each migration cutover; `state`
 // gates serving while a customer moves between gateways.
@@ -496,21 +485,18 @@ export function classifyGatewayField(field: string): GatewayFieldClassification 
 //
 // EVERY placement entry point — onboarding (functions), the admin direct-assign
 // route (core), and the operator assignment script (scripts) — commits through
-// this ONE helper so a customer's user mirror AND their revision assignment doc
-// land together, in a single Firestore transaction. Without it, a placement that
+// this ONE helper so a customer's user mirror AND their assignment doc land
+// together, in a single Firestore transaction. Without it, a placement that
 // wrote only users/{uid}.provisioning.openclaw.gatewayId (the "decorative layer"
-// bug) leaves a customer with no assignment doc: during a roll with
-// acceptingNewAssignments=true the mount driver treats them as a gap user and
-// mounts them on the OLD live revision, and the source heartbeat then holds the
-// roll open as an unassigned-mounted customer.
+// bug) leaves a customer with no assignment doc — invisible to the edge's
+// quiesce gate and the mount roster.
 //
-// The destination revision is resolved INSIDE the transaction from a fresh read
-// of the gateway doc (spec placement rule): roll.acceptingNewAssignments ?
-// roll.targetRevisionId : liveRevisionId — rejecting if the resolved revision is
-// not ready. A legacy / un-backfilled gateway (no GatewayDoc) has no assignment
-// layer yet, so this writes ONLY the mirror — byte-identical to pre-Step-2
-// behavior. Three different packages call it, so it is written against a narrow
-// structural Firestore surface that the real firebase-admin Firestore satisfies.
+// Serving eligibility is resolved INSIDE the transaction from a fresh read of
+// the gateway root + runtime doc, rejecting if the gateway is not serving. A
+// legacy gateway (no GatewayDoc) has no assignment layer, so this writes ONLY
+// the mirror. Three different packages call it, so it is written against a
+// narrow structural Firestore surface that the real firebase-admin Firestore
+// satisfies.
 
 export interface PlacementDocSnap {
   exists: boolean;

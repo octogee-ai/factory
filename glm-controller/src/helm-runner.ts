@@ -36,6 +36,7 @@ upsertInstance(opts: {
     gatewayContainerSecurityContext?: Record<string, unknown>;
     operatorAccess?: HelmInstancesMap[string]["operatorAccess"];
     computeClassOverride?: string;
+    rollStrategy?: "surge" | "recreate";
     chartPath: string;
     valuesFile?: string;
 
@@ -334,6 +335,7 @@ export interface BuildUpgradeArgsOpts {
   gatewayContainerSecurityContext?: Record<string, unknown>;
   operatorAccess?: HelmInstancesMap[string]["operatorAccess"];
   computeClassOverride?: string;
+  rollStrategy?: "surge" | "recreate";
   gcpProject?: string;
   valuesFile?: string;
   rollStrategy?: "recreate" | "surge";
@@ -351,6 +353,7 @@ type UpgradeStringOption = {
     | "sizingTier"
     | "serviceAccountName"
     | "computeClassOverride"
+    | "rollStrategy"
     | "gcpProject"
     | "conversationExperimentMode"
     | "gatewayEdgeImageRepository"
@@ -380,6 +383,7 @@ const UPGRADE_STRING_OPTIONS: UpgradeStringOption[] = [
   { option: "sizingTier", key: "sizingTier" },
   { option: "serviceAccountName", key: "serviceAccountName" },
   { option: "computeClassOverride", key: "computeClassOverride" },
+  { option: "rollStrategy", key: "rollStrategy" },
   { option: "gcpProject", key: "gatewayEdge.env.GCP_PROJECT_ID" },
   { option: "conversationExperimentMode", key: "conversationExperiment.mode" },
   { option: "gatewayEdgeImageRepository", key: "gatewayEdge.image.repository" },

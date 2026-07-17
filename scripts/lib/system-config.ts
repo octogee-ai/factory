@@ -1106,6 +1106,11 @@ function committedPushFailure(
   };
 }
 
+// processedFingerprint stays the STAGED fingerprint deliberately: an edit that
+// raced the commit leaves the live file differing from it, so the watcher's
+// post-sync check schedules another pass instead of silently absorbing the
+// edit. A heal-pull rebase that merged remote content converges the same way —
+// the next pass finds a clean tree and records the post-pull content.
 function committedPushSuccess(
   context: SystemConfigSyncContext,
   source: SystemConfigCommitSource,

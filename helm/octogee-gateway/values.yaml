@@ -324,16 +324,18 @@ tiers:
       maxOldSpaceSizeMb: "147456"
 
 probes:
-  # Startup reaches the config status plane, which remains healthy during
-  # isolated-gateway repair. 10s × 60 keeps a 10-minute window for failures
-  # of that repair plane itself.
+  # Non-shared startup reaches the fleet controller's runner plane
+  # (:3003/health), which is up while the durable-config restore/repair loop
+  # still runs. 10s × 60 = a 10-minute budget: a data-plane outage longer than
+  # that restarts the container into the same identity-pure retry loop.
   startup:
     initialDelaySeconds: 15
     periodSeconds: 10
     failureThreshold: 60
     timeoutSeconds: 10
-  # Liveness stays permissive during pre-boot repair, then performs a bounded
-  # local OpenClaw health check after the config has been accepted.
+  # Non-shared liveness rides the same runner plane — a dead fleet controller
+  # restarts the pod; an OpenClaw failure only drops readiness (repair stays
+  # reachable). Shared gateways probe OpenClaw directly.
   liveness:
     initialDelaySeconds: 0
     periodSeconds: 60

@@ -8,8 +8,6 @@ import {
   gatewaySurfaceTarget,
 } from "../public-router";
 import {
-  ASSIGNMENT_EPOCH_HEADER,
-  INTRA_FAMILY_HOP_HEADER,
 } from "@octogee/shared/types/gateway-releases";
 
 const servers: http.Server[] = [];
@@ -541,14 +539,13 @@ describe("createGatewayRouter socket resilience — a proxied socket error must 
   });
 });
 
-describe("createGatewayRouter — internal routing headers are stripped at the PUBLIC boundary", () => {
-  it("a public request carrying forged loop-guard/epoch headers never delivers them upstream (cannot bypass the single-hop guard)", async () => {
+describe("createGatewayRouter — retired internal routing headers get no special handling", () => {
+  it("forwards ordinary custom headers upstream; only hop-by-hop headers are stripped", async () => {
     const upstreamSeen = vi.fn();
     const upstream = http.createServer((req, res) => {
       upstreamSeen({
-        hop: req.headers[INTRA_FAMILY_HOP_HEADER] ?? null,
-        epoch: req.headers[ASSIGNMENT_EPOCH_HEADER] ?? null,
         kept: req.headers["x-router-test"] ?? null,
+        connection: req.headers["proxy-authorization"] ?? null,
       });
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true }));
@@ -566,13 +563,14 @@ describe("createGatewayRouter — internal routing headers are stripped at the P
       headers: {
         host: "api.octogee.com",
         "x-router-test": "kept",
-        [INTRA_FAMILY_HOP_HEADER]: "default-r99",
-        [ASSIGNMENT_EPOCH_HEADER]: "999999",
+        "proxy-authorization": "forged",
       },
     });
 
     expect(res.status).toBe(200);
-    expect(upstreamSeen).toHaveBeenCalledWith({ hop: null, epoch: null, kept: "kept" });
+    expect(upstreamSeen).toHaveBeenCalledWith({ kept: "kept", connection: null });
+    router.close();
+    upstream.close();
   });
 });
 
@@ -682,13 +680,13 @@ describe("createGatewayRouter — a non-101 upstream upgrade response is forward
     expect(res.body).toBe("hello");
   });
 
-  it("does not leak internal routing headers from the upstream reply back to the public client", async () => {
+  it("forwards a non-101 upstream reply's headers to the public client", async () => {
     const res = await expectHandshake(
       rejectingUpstream(
-        `HTTP/1.1 503 Service Unavailable\r\n${INTRA_FAMILY_HOP_HEADER}: default-r9\r\ncontent-length: 0\r\n\r\n`,
+        "HTTP/1.1 503 Service Unavailable\r\nretry-after: 2\r\ncontent-length: 0\r\n\r\n",
       ),
     );
     expect(res.status).toBe(503);
-    expect(res.headers[INTRA_FAMILY_HOP_HEADER]).toBeUndefined();
+    expect(res.headers["retry-after"]).toBe("2");
   });
 });

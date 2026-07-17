@@ -323,12 +323,12 @@ if (process.env.NODE_ENV !== "test") {
     process.exit(1);
   }
 
-  // Revision pods gate service-addressed traffic on the durable roll roster.
-  // The gate installs SYNCHRONOUSLY with a not-yet-loaded store facade, so an
-  // edge booting mid-roll answers 503 + Retry-After until the roster snapshot
-  // lands — it never defaults to serve-local (council-resolved). The roster
-  // read is scoped to this pod's own gateway and is read-only (Cowboy is the
-  // sole roster writer).
+  // Gateway pods gate customer-state traffic on the durable assignment roster
+  // (the migration quiesce gate). The gate installs SYNCHRONOUSLY with a
+  // not-yet-loaded store facade, so an edge booting mid-migration answers 503 +
+  // Retry-After until the roster snapshot lands — it never defaults to
+  // serve-local for a quiescing customer (council-resolved). The roster read is
+  // scoped to this pod's own gateway and is read-only.
   const selfRevisionId = process.env.GATEWAY_REVISION_ID ?? "";
   const rosterGatewayId = process.env.GATEWAY_ID ?? "";
   let rollRosterUpgradeGate: RollRosterUpgradeGate | null = null;
@@ -343,7 +343,6 @@ if (process.env.NODE_ENV !== "test") {
         store: storeFacade,
         gatewayId: rosterGatewayId,
         selfRevisionId,
-        namespace: process.env.K8S_NAMESPACE || "octogee",
         log: (msg) => logger.warn(msg),
       }),
     );
