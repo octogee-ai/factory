@@ -36,11 +36,23 @@ function rolloutParentId(operation: FleetOperationLockRef): string | null {
   return typeof parentOperationId === "string" ? parentOperationId : null;
 }
 
+function isDurableReleaseRollMigration(operation: FleetOperationLockRef): boolean {
+  if (operation.kind !== "migrate-customer") return false;
+  if (!operation.input || typeof operation.input !== "object" || Array.isArray(operation.input)) {
+    return false;
+  }
+  const input = operation.input as Record<string, unknown>;
+  return input.source === "release-roll" &&
+    typeof input.rollOperationId === "string" &&
+    input.rollOperationId.length > 0;
+}
+
 function isRolloutMigrationLineage(
   rollout: FleetOperationLockRef,
   migration: FleetOperationLockRef,
 ): boolean {
-  return rollout.kind === "rollout" && rolloutParentId(migration) === rollout.id;
+  return rollout.kind === "rollout" &&
+    (rolloutParentId(migration) === rollout.id || isDurableReleaseRollMigration(migration));
 }
 
 export function fleetOperationLockResources(

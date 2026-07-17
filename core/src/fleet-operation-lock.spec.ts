@@ -69,6 +69,23 @@ describe("findActiveGatewayMigration", () => {
 });
 
 describe("serialFleetOperationsConflict", () => {
+  it("does not block a durable release-roll child whose roll fence id differs from the supervisor op id", () => {
+    const rollout = { id: "firestore-supervisor", kind: "rollout", input: { gatewayId: "default" } };
+    const child = {
+      id: "migration-1",
+      kind: "migrate-customer",
+      input: {
+        fromGatewayId: "default",
+        toGatewayId: "default",
+        source: "release-roll",
+        rollOperationId: "roll-default-r58-1784238415029",
+      },
+    };
+
+    expect(serialFleetOperationsConflict(rollout, child)).toBe(false);
+    expect(serialFleetOperationsConflict(child, rollout)).toBe(false);
+  });
+
   it("does not make a rollout wait on the migration child it created", () => {
     const rollout = { id: "rollout-document-1", kind: "rollout", input: { gatewayId: "default" } };
     const child = {
