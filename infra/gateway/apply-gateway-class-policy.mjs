@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 
 const EXEC_TOOLS = new Set(["exec", "process"]);
 const SHARED_DENIED_TOOLS = ["exec", "process", "subagents", "sessions_spawn"];
-const OCTOGEE_WORKFLOW_TOOLS = [
+export const OCTOGEE_WORKFLOW_TOOLS = [
   "preview_start",
   "preview_stop",
   "preview_list",
@@ -15,6 +15,9 @@ const OCTOGEE_WORKFLOW_TOOLS = [
   "octogee_project_commit",
   "octogee_project_list",
   "workspace_commit",
+  "brave_search",
+  "tavily_search",
+  "tavily_extract",
   "octogee_chat_search",
   "octogee_chat_history",
   "octogee_chat_set_identity",
