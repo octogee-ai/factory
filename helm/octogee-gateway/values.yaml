@@ -365,6 +365,7 @@ pdb:
 # ── gateway-edge sidecar ──────────────────────────────────────────────────
 gatewayEdge:
   enabled: true
+  openClawControlRpcPolicyMode: "native"
   image:
     repository: us-central1-docker.pkg.dev/octogee/octogee/gateway-edge
     tag: ""  # inherits from imageTag

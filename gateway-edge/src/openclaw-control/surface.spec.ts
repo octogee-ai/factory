@@ -399,7 +399,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     },
   );
 
-  it("requires the exact Origin, rewrites connect, enforces policy, bounds in-flight work, and scrubs frames/audit", async () => {
+  it("requires the exact Origin, rewrites connect, forwards native operator RPCs, and scrubs frames/audit", async () => {
     const upstreamFrames: Array<Record<string, unknown>> = [];
     const upstream = http.createServer();
     const upstreamWs = new WebSocketServer({ noServer: true });
@@ -423,7 +423,12 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
             payload: {
               type: "hello-ok",
               auth: { token: "gateway-secret" },
-              features: { methods: [...OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS] },
+              features: {
+                methods: [
+                  ...OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS,
+                  "mattermost.ingress.retry",
+                ],
+              },
             },
           }));
         } else if (frame.method === "tools.invoke") {
@@ -486,17 +491,11 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         } else if ((frame.payload as Record<string, unknown> | undefined)?.type === "hello-ok") {
           browser.send(JSON.stringify({
             type: "req",
-            id: "safe-tool",
+            id: "owner-tool",
             method: "tools.invoke",
-            params: { name: "memory_search", args: { query: "prior decision" } },
+            params: { name: "exec", args: { command: "id" } },
           }));
-          browser.send(JSON.stringify({
-            type: "req",
-            id: "blocked-tool",
-            method: "tools.invoke",
-            params: { name: "web_fetch", args: { url: "http://169.254.169.254" } },
-          }));
-        } else if (frame.id === "safe-tool") {
+        } else if (frame.id === "owner-tool") {
           resolve();
         }
       });
@@ -513,7 +512,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         auth: { token: "gateway-secret" },
       }),
     }));
-    expect(upstreamFrames.some((frame) => frame.id === "blocked-tool")).toBe(false);
+    expect(upstreamFrames.some((frame) => frame.id === "owner-tool")).toBe(true);
     expect(JSON.stringify(browserFrames)).not.toContain("gateway-secret");
     expect(JSON.stringify(browserFrames)).not.toContain("browser-token");
     expect(audit).toHaveBeenCalledWith(expect.objectContaining({
@@ -521,8 +520,8 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       event: "rpc_allow",
       outcome: "ok",
     }));
-    expect(JSON.stringify(audit.mock.calls)).not.toContain("memory_search");
-    expect(JSON.stringify(audit.mock.calls)).not.toContain("prior decision");
+    expect(JSON.stringify(audit.mock.calls)).not.toContain("exec");
+    expect(JSON.stringify(audit.mock.calls)).not.toContain("command");
   });
 
   it("times out every forwarded RPC and releases the shared in-flight slot", async () => {

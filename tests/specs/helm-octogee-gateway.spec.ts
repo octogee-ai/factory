@@ -859,6 +859,9 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
       expect(enabledEdge).toMatch(
         /name:\s*OPENCLAW_CONTROL_BROKER_URL[\s\S]*?value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/,
       );
+      expect(enabledEdge).toMatch(
+        /name:\s*OPENCLAW_CONTROL_RPC_POLICY_MODE[\s\S]*?value:\s*"native"/,
+      );
       expect(enabledEdge).toMatch(/name:\s*API_PUBLIC_URL\b/);
     }
 
