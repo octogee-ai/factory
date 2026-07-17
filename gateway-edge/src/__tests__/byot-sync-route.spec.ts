@@ -3,10 +3,24 @@ import * as crypto from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const syncModelCredentialsForCustomerSpy = vi.fn(async () => {});
+const applyConfigPatchSpy = vi.fn(async () => ({ mode: "rpc" as const, attempts: 1 }));
+const releaseLeaseSpy = vi.fn(async () => {});
+const acquireLeaseSpy = vi.fn(async () => ({
+  ok: true as const,
+  lease: { release: releaseLeaseSpy },
+}));
 
 vi.mock("@octogee/core/model-credential-sync-runtime", () => ({
-  syncModelCredentialsForCustomer: (userData: Record<string, unknown>) =>
-    syncModelCredentialsForCustomerSpy(userData),
+  syncModelCredentialsForCustomer: (
+    userData: Record<string, unknown>,
+    deps?: Record<string, unknown>,
+  ) => syncModelCredentialsForCustomerSpy(userData, deps),
+}));
+vi.mock("@octogee/core/apply-config-patch", () => ({
+  applyConfigPatch: (...args: unknown[]) => applyConfigPatchSpy(...args),
+}));
+vi.mock("@octogee/core/system-config-mutation-lease", () => ({
+  acquireSystemConfigMutationLease: (...args: unknown[]) => acquireLeaseSpy(...args),
 }));
 
 const { createApp } = await import("../index.js");
@@ -69,10 +83,14 @@ function byotSyncHeaders(body: unknown, secret = "byot-sync-secret", timestamp =
 describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
   beforeEach(() => {
     syncModelCredentialsForCustomerSpy.mockClear();
+    applyConfigPatchSpy.mockClear();
+    releaseLeaseSpy.mockClear();
+    acquireLeaseSpy.mockClear();
     delete process.env.INTERNAL_SERVICE_KEY;
     process.env.BYOT_SYNC_INTERNAL_SIGNING_SECRET = "byot-sync-secret";
     delete process.env.GATEWAY_PROFILE;
     process.env.K8S_NAMESPACE = "octogee-test";
+    process.env.OPENCLAW_DIR = "/home/node/.openclaw";
   });
 
   afterEach(() => {
@@ -80,6 +98,7 @@ describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
     delete process.env.BYOT_SYNC_INTERNAL_SIGNING_SECRET;
     delete process.env.K8S_NAMESPACE;
     delete process.env.GATEWAY_PROFILE;
+    delete process.env.OPENCLAW_DIR;
   });
 
   it("rejects unauthenticated calls before sync", async () => {
@@ -106,14 +125,27 @@ describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
     expect(syncModelCredentialsForCustomerSpy).not.toHaveBeenCalled();
   });
 
-  it("runs pod-local sync with a valid BYOT sync signature", async () => {
+  it("runs model config writes under the shared system-config lease", async () => {
     const res = await request(createApp({ surface: "sidecar" }))
       .post(PRIMARY_SYNC_PATH)
       .set(byotSyncHeaders(userData))
       .send(userData);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
-    expect(syncModelCredentialsForCustomerSpy).toHaveBeenCalledWith(userData);
+    expect(syncModelCredentialsForCustomerSpy).toHaveBeenCalledWith(
+      userData,
+      expect.objectContaining({ applyConfigPatch: expect.any(Function) }),
+    );
+
+    const deps = syncModelCredentialsForCustomerSpy.mock.calls[0]?.[1];
+    await deps.applyConfigPatch({ buildPatch: () => ({}) }, { maxRetries: 2 });
+
+    expect(acquireLeaseSpy).toHaveBeenCalledWith({ openclawDir: "/home/node/.openclaw" });
+    expect(applyConfigPatchSpy).toHaveBeenCalledWith(
+      { buildPatch: expect.any(Function) },
+      { maxRetries: 2 },
+    );
+    expect(releaseLeaseSpy).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the legacy BYOT sync route as an authenticated alias", async () => {
@@ -123,7 +155,10 @@ describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
       .send(userData);
 
     expect(res.status).toBe(200);
-    expect(syncModelCredentialsForCustomerSpy).toHaveBeenCalledWith(userData);
+    expect(syncModelCredentialsForCustomerSpy).toHaveBeenCalledWith(
+      userData,
+      expect.objectContaining({ applyConfigPatch: expect.any(Function) }),
+    );
   });
 
   it("accepts canonical model credential sync payloads", async () => {
@@ -145,7 +180,10 @@ describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
       .send(body);
 
     expect(res.status).toBe(200);
-    expect(syncModelCredentialsForCustomerSpy).toHaveBeenCalledWith(body);
+    expect(syncModelCredentialsForCustomerSpy).toHaveBeenCalledWith(
+      body,
+      expect.objectContaining({ applyConfigPatch: expect.any(Function) }),
+    );
   });
 
   it("rejects projected service-account tokens without the BYOT sync signature", async () => {

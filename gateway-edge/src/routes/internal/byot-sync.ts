@@ -1,8 +1,43 @@
 import { Router, Request, Response, NextFunction } from "express";
+import { applyConfigPatch } from "@octogee/core/apply-config-patch";
 import { syncModelCredentialsForCustomer } from "@octogee/core/model-credential-sync-runtime";
+import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
 import { requireByotSyncInternalAuth } from "../../middleware/byot-sync-auth.js";
 
 const router = Router();
+
+export function createLeasedModelConfigWriter(
+  deps: {
+    acquireLease?: typeof acquireSystemConfigMutationLease;
+    applyPatch?: typeof applyConfigPatch;
+    openclawDir?: () => string;
+  } = {},
+): typeof applyConfigPatch {
+  const acquireLease = deps.acquireLease ?? acquireSystemConfigMutationLease;
+  const applyPatch = deps.applyPatch ?? applyConfigPatch;
+  const openclawDir = deps.openclawDir ?? (() => process.env.OPENCLAW_DIR ?? "/home/node/.openclaw");
+  return async (args, options) => {
+    const acquired = await acquireLease({ openclawDir: openclawDir() });
+    if (!acquired.ok) {
+      if (acquired.code === "config-frozen") {
+        throw new Error(
+          `system config is frozen by ${acquired.freezeOwner.migrationId} for ${acquired.freezeOwner.slug}`,
+        );
+      }
+      if (acquired.code === "shell-active") {
+        throw new Error(`system config mutation blocked by active builder shells: ${acquired.shellIds.join(", ")}`);
+      }
+      throw new Error("system config writer lock is busy");
+    }
+    try {
+      return await applyPatch(args, options);
+    } finally {
+      await acquired.lease.release();
+    }
+  };
+}
+
+const modelConfigWriter = createLeasedModelConfigWriter();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -27,7 +62,9 @@ router.post(
         res.status(400).json({ error: "username and provisioning.openclaw.status required" });
         return;
       }
-      await syncModelCredentialsForCustomer(req.body);
+      await syncModelCredentialsForCustomer(req.body, {
+        applyConfigPatch: modelConfigWriter,
+      });
       res.json({ ok: true });
     } catch (e) {
       next(e);
