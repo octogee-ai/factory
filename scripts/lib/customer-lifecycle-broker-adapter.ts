@@ -510,6 +510,7 @@ async function prepareImportDir(slug: string): Promise<string> {
     await fsp.rm(p, { recursive: true, force: true }).catch(() => undefined);
   }
   await fsp.mkdir(path.join(stateDir, "agents"), { recursive: true });
+  await fsp.mkdir(path.join(stateDir, "agents", agentId, "agent"), { recursive: true });
   await fsp.mkdir(CUSTOMERS_DIR, { recursive: true });
   await fsp.mkdir(CUSTOMER_KEYS_DIR, { recursive: true });
   return OPENCLAW_DIR;

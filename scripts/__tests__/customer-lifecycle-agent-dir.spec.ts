@@ -76,6 +76,7 @@ function mkClient(snapshot: FleetBrokerUserSnapshot): FleetBrokerClient {
 async function withRuntimeMock(fn: (runtime: RuntimeMock) => Promise<void>): Promise<void> {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "customer-agent-dir-"));
   const agentsDir = path.join(tempRoot, "agents");
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
   const applyConfigPatch = vi.fn(async () => {
     expect(fsSync.existsSync(path.join(agentsDir, "octogee-alice-coach", "agent"))).toBe(true);
     return { mode: "rpc" as const, attempts: 1 };
@@ -99,6 +100,8 @@ async function withRuntimeMock(fn: (runtime: RuntimeMock) => Promise<void>): Pro
   try {
     await fn({ tempRoot, agentsDir, applyConfigPatch });
   } finally {
+    if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+    else process.env.OPENCLAW_STATE_DIR = previousStateDir;
     vi.doUnmock("../lib/config.js");
     vi.doUnmock("../lib/apply-config-patch.js");
     vi.resetModules();
@@ -144,6 +147,50 @@ describe("customer lifecycle config patch agent directories", () => {
 
       expect(fsSync.existsSync(path.join(agentsDir, "octogee-alice-coach", "agent"))).toBe(true);
       expect(applyConfigPatch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("broker import preparation keeps the coach agent dir present across a gateway restart", async () => {
+    await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
+      process.env.OPENCLAW_STATE_DIR = tempRoot;
+      const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(path.join(agentDir, "stale.json"), "stale");
+      const { buildBrokeredLifecycleAdapter } = await import(
+        "../lib/customer-lifecycle-broker-adapter.js"
+      );
+      const adapter = buildBrokeredLifecycleAdapter({
+        client: mkClient(brokerSnapshot),
+        rpc: {} as GatewayRpcClient,
+        log: vi.fn(),
+      });
+
+      await adapter.prepareImportDir("alice");
+
+      expect(fsSync.existsSync(agentDir)).toBe(true);
+      expect(fsSync.existsSync(path.join(agentDir, "stale.json"))).toBe(false);
+    });
+  });
+
+  it("prod import preparation keeps the coach agent dir present across a gateway restart", async () => {
+    await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
+      process.env.OPENCLAW_STATE_DIR = tempRoot;
+      const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(path.join(agentDir, "stale.json"), "stale");
+      const { buildProductionLifecycleAdapter } = await import(
+        "../lib/customer-lifecycle-prod-adapter.js"
+      );
+      const adapter = buildProductionLifecycleAdapter({
+        db: {} as Firestore,
+        rpc: {} as GatewayRpcClient,
+        log: vi.fn(),
+      });
+
+      await adapter.prepareImportDir("alice");
+
+      expect(fsSync.existsSync(agentDir)).toBe(true);
+      expect(fsSync.existsSync(path.join(agentDir, "stale.json"))).toBe(false);
     });
   });
 });
