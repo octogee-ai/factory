@@ -75,6 +75,33 @@ describe("infra/gateway/entrypoint.sh — system_config restore", () => {
     expect(entrypoint).not.toMatch(/gateway\.auth\.token re-synced/);
   });
 
+  it("exposes image-staged plugin roots beside the nested durable config", () => {
+    const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
+    const hydrateIdx = entrypoint.indexOf("configured-builder-bootstrap.ts");
+    const roleIdx = entrypoint.indexOf("system-config-roll-boot.ts resolve");
+    const pluginRootsIdx = entrypoint.indexOf(
+      "Expose staged plugin roots beside the active config",
+    );
+    const watcherIdx = entrypoint.indexOf("supervise_runner system-config-watch");
+    const openclawIdx = entrypoint.indexOf("openclaw gateway run");
+
+    expect(pluginRootsIdx).toBeGreaterThan(restoreIdx);
+    expect(pluginRootsIdx).toBeGreaterThan(hydrateIdx);
+    expect(pluginRootsIdx).toBeLessThan(roleIdx);
+    expect(pluginRootsIdx).toBeLessThan(watcherIdx);
+    expect(pluginRootsIdx).toBeLessThan(openclawIdx);
+    expect(entrypoint.slice(roleIdx)).not.toContain("OPENCLAW_CONFIG_DIR");
+    expect(entrypoint).toMatch(/for runtime_name in npm extensions/);
+    expect(entrypoint).toMatch(
+      /ln -s "\$OPENCLAW_DIR\/\$runtime_name" "\$runtime_root"/,
+    );
+    expect(entrypoint).toMatch(/\.git\/info\/exclude/);
+    expect(entrypoint).toMatch(/git -C "\$OPENCLAW_CONFIG_DIR" ls-files/);
+    expect(entrypoint).toMatch(/mktemp -d/);
+    expect(entrypoint).toMatch(/mv "\$runtime_root" "\$RUNTIME_ROOT_QUARANTINE\//);
+    expect(entrypoint).not.toMatch(/rm -rf "\$OPENCLAW_CONFIG_DIR\//);
+  });
+
   it("starts a repair liveness/status server before isolated restore", () => {
     const statusIdx = entrypoint.indexOf("supervise_runner system-config-status");
     const restoreIdx = entrypoint.indexOf("system-config-restore.ts");

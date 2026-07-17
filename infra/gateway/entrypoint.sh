@@ -220,6 +220,35 @@ else
     log "openclaw.json copied from raw template (gatewayId=${GATEWAY_ID})"
   fi
 fi
+
+# ── Expose staged plugin roots beside the active config ────────────────────
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
+  OPENCLAW_CONFIG_DIR=$(dirname "$OPENCLAW_CONFIG_PATH")
+  if [ "$OPENCLAW_CONFIG_DIR" != "$OPENCLAW_DIR" ]; then
+    RUNTIME_ROOT_QUARANTINE=""
+    for runtime_name in npm extensions; do
+      runtime_root="$OPENCLAW_CONFIG_DIR/$runtime_name"
+      if [ -n "$(git -C "$OPENCLAW_CONFIG_DIR" ls-files -- "$runtime_name" "$runtime_name/**")" ]; then
+        log "FATAL: tracked system_config path conflicts with OpenClaw runtime root: ${runtime_name}"
+        exit 1
+      fi
+      grep -qxF "/$runtime_name" "$OPENCLAW_CONFIG_DIR/.git/info/exclude" 2>/dev/null || \
+        printf '/%s\n' "$runtime_name" >> "$OPENCLAW_CONFIG_DIR/.git/info/exclude"
+      if [ -L "$runtime_root" ]; then
+        rm "$runtime_root"
+      elif [ -e "$runtime_root" ]; then
+        if [ -z "$RUNTIME_ROOT_QUARANTINE" ]; then
+          RUNTIME_ROOT_QUARANTINE=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-system-config.XXXXXX")
+        fi
+        mv "$runtime_root" "$RUNTIME_ROOT_QUARANTINE/$runtime_name"
+        log "Existing system_config runtime root quarantined: ${runtime_name}"
+      fi
+      ln -s "$OPENCLAW_DIR/$runtime_name" "$runtime_root"
+    done
+    log "Plugin roots linked beside durable system_config"
+  fi
+fi
+
 chmod 600 "$OPENCLAW_CONFIG_PATH"
 
 SYSTEM_CONFIG_BOOT_ROLE=normal
