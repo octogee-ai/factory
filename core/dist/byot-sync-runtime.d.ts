@@ -55,6 +55,7 @@ export interface SyncByotForCustomerDeps {
     isSharedGateway?: () => boolean;
     usesLlmBrokerToken?: () => boolean;
     logFn?: (m: string) => void;
+    applyConfigPatch?: typeof applyConfigPatch;
     applyByotState?: typeof applyByotState;
     restoreOauthStoreForSlug?: typeof restoreOauthStoreForSlug;
     applyCoachModelPatch?: typeof applyCoachModelPatch;

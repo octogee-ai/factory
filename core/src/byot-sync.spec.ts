@@ -1332,6 +1332,28 @@ describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", ()
 });
 
 describe("standard gateway — BYOS materialization", () => {
+  it("threads an injected config writer through the default coach model patch", async () => {
+    const configWriter = vi.fn(async () => ({ mode: "rpc" as const, attempts: 1 }));
+
+    await syncByotForCustomer(
+      {
+        byotActive: false,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        selectedTier: "free",
+      },
+      {
+        usesLlmBrokerToken: () => true,
+        isOperatorGateway: () => false,
+        applyByotState: () => false,
+        applyConfigPatch: configWriter,
+        triggerSecretsReload: vi.fn(async () => {}),
+      },
+    );
+
+    expect(configWriter).toHaveBeenCalledTimes(1);
+  });
+
   it("free post-trial non-BYOK customer removes local BYOT state, patches GLM, and reloads", async () => {
     const applyByotStateFn = vi.fn(() => false);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));

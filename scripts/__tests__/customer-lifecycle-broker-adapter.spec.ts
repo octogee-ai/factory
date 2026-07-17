@@ -628,10 +628,11 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
     expect(userSnapshot).toHaveBeenCalledTimes(1); // second read served from the seeded cache
   });
 
-  it("reassertByotForCustomer delegates to the brokered model credential sync with the userData verbatim", async () => {
+  it("reassertByotForCustomer delegates model config writes through the adapter RPC", async () => {
+    const rpc = {} as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),
-      rpc: {} as unknown as GatewayRpcClient,
+      rpc,
       log: vi.fn(),
     });
     const userData = {
@@ -643,7 +644,18 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
     await adapter.reassertByotForCustomer(userData);
 
     expect(modelCredentialMocks.syncModelCredentialsForCustomer).toHaveBeenCalledTimes(1);
-    expect(modelCredentialMocks.syncModelCredentialsForCustomer).toHaveBeenCalledWith(userData);
+    expect(modelCredentialMocks.syncModelCredentialsForCustomer).toHaveBeenCalledWith(
+      userData,
+      expect.objectContaining({ applyConfigPatch: expect.any(Function) }),
+    );
+
+    const deps = modelCredentialMocks.syncModelCredentialsForCustomer.mock.calls[0]?.[1];
+    await deps.applyConfigPatch({ buildPatch: () => ({}) }, { maxRetries: 2 });
+
+    expect(patchMocks.applyConfigPatch).toHaveBeenLastCalledWith(
+      { buildPatch: expect.any(Function) },
+      expect.objectContaining({ maxRetries: 2, rpc }),
+    );
   });
 });
 

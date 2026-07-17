@@ -660,7 +660,13 @@ export function buildBrokeredLifecycleAdapter(
     },
     restoreByosubForAgent: async () => ({ restored: false, present: false }),
     reassertByotForCustomer: (userData) =>
-      syncModelCredentialsForCustomer(userData as Parameters<typeof syncModelCredentialsForCustomer>[0]),
+      syncModelCredentialsForCustomer(
+        userData as Parameters<typeof syncModelCredentialsForCustomer>[0],
+        {
+          applyConfigPatch: (args, options) =>
+            applyConfigPatch(args, { ...options, rpc: ctx.rpc }),
+        },
+      ),
     reassertConvergedContextFilesForCustomer: async (userData) => {
       reassertConvergedContextFilesForSlug(
         userData as Parameters<typeof reassertConvergedContextFilesForSlug>[0],
