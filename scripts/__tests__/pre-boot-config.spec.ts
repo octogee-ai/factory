@@ -118,10 +118,19 @@ describe("applyPreBootPatches — MM env sync", () => {
     expect(config.channels.mattermost.accounts).toEqual({});
   });
 
-  it("syncs MM_URL into channels.mattermost.baseUrl", () => {
-    const config: any = { channels: { mattermost: {} } };
-    applyPreBootPatches(config, { MM_URL: "https://chat.example.com" });
-    expect(config.channels.mattermost.baseUrl).toBe("https://chat.example.com");
+  it("restores the durable MM_URL placeholder instead of materializing the runtime URL", () => {
+    const config: any = {
+      channels: { mattermost: { baseUrl: "https://legacy-chat.example.com" } },
+    };
+
+    const changed = applyMattermostPreBootPatches(
+      config,
+      { MM_URL: "https://chat.example.com" },
+      vi.fn(),
+    );
+
+    expect(changed).toBe(true);
+    expect(config.channels.mattermost.baseUrl).toBe("${MM_URL}");
   });
 });
 
@@ -379,7 +388,7 @@ describe("applyMattermostPreBootPatches — non-object preservation", () => {
           replyToMode: "all",
           threadDirectMessages: true,
           threadSessionScope: "channel",
-          baseUrl: "https://mm.example",
+          baseUrl: "${MM_URL}",
           commands: "legacy-commands",
           accounts: {
             default: "legacy-default",
@@ -496,7 +505,7 @@ describe("applyPreBootPatches — no-change reporting", () => {
           replyToMode: "all",
           threadDirectMessages: true,
           threadSessionScope: "channel",
-          baseUrl: "https://mm.example",
+          baseUrl: "${MM_URL}",
           commands: { native: false },
           accounts: {
             "ceckert-coach": {
