@@ -14,6 +14,7 @@ import {
 
 interface DiskState {
   customerDir: boolean;
+  agentRuntime?: boolean;
   workspaceGitDir: boolean;
   gitRemote: boolean;
   sshKey: boolean;
@@ -76,6 +77,7 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
       write("provisioning.openclaw.agentIds", agentIds),
 
     hasCustomerDir: () => state.disk.customerDir,
+    hasCustomerAgentRuntime: () => state.disk.agentRuntime ?? state.disk.customerDir,
     hasWorkspaceGitDir: () => state.disk.workspaceGitDir,
     hasGitRemote: () => state.disk.gitRemote,
     ensureCustomerDirectories: () => {
@@ -775,6 +777,34 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
     expect(result.steps).toContain("ssh-key");
     expect(result.steps).toContain("config-patch");
     expect(result.steps).toContain("verify-channel-ready");
+  });
+
+  it("does NOT short-circuit when the agent runtime dir is absent after an emptyDir restart", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        agentIds: ["octogee-test-coach"],
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user-existing",
+        greetingPosted: true,
+      }),
+      {
+        customerDir: true,
+        agentRuntime: false,
+        workspaceGitDir: true,
+        gitRemote: true,
+        sshKey: true,
+        templatesWritten: true,
+        repoHasCommits: true,
+      },
+    );
+    const adapter = makeAdapter(state);
+    adapter.isOperatorGateway = () => true;
+    adapter.customerCoachWiredInOpenclawConfig = () => true;
+
+    await addCustomerToGateway(adapter, "uid-test");
+
+    expect(state.calls).toContain("applyAddCustomerConfigPatch");
   });
 
   it("crash-mid-flow recovery: SSH key on disk but openclaw.json missing agent → falls through to full flow", async () => {

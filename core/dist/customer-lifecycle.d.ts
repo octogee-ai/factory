@@ -58,6 +58,7 @@ export interface CustomerLifecycleAdapter {
      * is exactly what bender hit on 2026-05-26.
      */
     customerCoachWiredInOpenclawConfig?: (slug: string) => boolean;
+    hasCustomerAgentRuntime?: (slug: string) => boolean;
     /** Locally-present, coach-wired customer slugs — the pod's honest mounted set
      *  read WITHOUT Firestore, served via /health for Cowboy's pull-model poller.
      *  Also the reconcile's heartbeat report + mount-observed basis. */

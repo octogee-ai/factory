@@ -598,6 +598,8 @@ fi
   done
 ) &
 
+"$TSX" /octogee/scripts/entrypoints/ensure-configured-agent-runtime-dirs.ts
+
 # ── Start OpenClaw gateway ──────────────────────────────────────────────────
 # Single backgrounded child, no supervisor / respawn loop. OpenClaw 2026.5.x
 # handles config-driven restarts internally: when chokidar detects a change
