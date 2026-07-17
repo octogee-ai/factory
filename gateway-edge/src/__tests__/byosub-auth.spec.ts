@@ -5,15 +5,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const TEST_UID = "uid-tester5";
 
 vi.mock("../middleware/auth.js", () => ({
-  requireAuth: (req: express.Request, _res: express.Response, next: express.NextFunction) => {
+  requireAuthenticatedUid: (req: express.Request, _res: express.Response, next: express.NextFunction) => {
     (req as { uid?: string }).uid = TEST_UID;
     next();
   },
 }));
 
-const resolveUserGateway = vi.fn();
-vi.mock("../lib/user-gateway.js", () => ({
-  resolveUserGateway: (...a: unknown[]) => resolveUserGateway(...a),
+const resolveByosubUserGateway = vi.fn();
+const readByosubFlow = vi.fn();
+vi.mock("../lib/byosub-broker.js", () => ({
+  resolveByosubUserGateway: (...a: unknown[]) => resolveByosubUserGateway(...a),
+  readByosubFlow: (...a: unknown[]) => readByosubFlow(...a),
 }));
 
 const ssoStart = vi.fn();
@@ -31,20 +33,6 @@ vi.mock("../lib/byosub.js", async (orig) => {
   };
 });
 
-const flowStore = new Map<string, Record<string, unknown>>();
-vi.mock("../lib/db.js", () => ({
-  db: {
-    collection: (name: string) => ({
-      doc: (id: string) => ({
-        get: async () => ({
-          exists: name === "byosubFlows" && flowStore.has(id),
-          data: () => flowStore.get(id),
-        }),
-      }),
-    }),
-  },
-}));
-
 import { createByosubAuthRouter } from "../routes/byosub-auth.js";
 import { coachAgentId } from "../lib/byosub.js";
 
@@ -60,13 +48,13 @@ function app() {
 describe("byosub-auth sidecar router", () => {
   beforeEach(() => {
     process.env.GATEWAY_ID = "bender";
-    resolveUserGateway.mockReset().mockResolvedValue({ slug: "tester5", gatewayId: "bender" });
+    resolveByosubUserGateway.mockReset().mockResolvedValue({ slug: "tester5", gatewayId: "bender" });
+    readByosubFlow.mockReset();
     ssoStart.mockReset();
     ssoStatus.mockReset();
     ssoSubmit.mockReset();
     deviceStart.mockReset();
     brokerByosubFlow.mockReset().mockResolvedValue(undefined);
-    flowStore.clear();
   });
   afterEach(() => {
     delete process.env.GATEWAY_ID;
@@ -86,7 +74,7 @@ describe("byosub-auth sidecar router", () => {
   });
 
   it("connect: 409 not_on_this_pod when the user's gateway is not this pod", async () => {
-    resolveUserGateway.mockResolvedValue({ slug: "tester5", gatewayId: "other-gw" });
+    resolveByosubUserGateway.mockResolvedValue({ slug: "tester5", gatewayId: "other-gw" });
     const res = await request(app()).post("/byosub/connect").send({ provider: "anthropic" });
     expect(res.status).toBe(409);
     expect(ssoStart).not.toHaveBeenCalled();
@@ -99,7 +87,7 @@ describe("byosub-auth sidecar router", () => {
   });
 
   it("connect: 400 when the user has no provisioned gateway", async () => {
-    resolveUserGateway.mockResolvedValue(null);
+    resolveByosubUserGateway.mockResolvedValue(null);
     const res = await request(app()).post("/byosub/connect").send({ provider: "anthropic" });
     expect(res.status).toBe(400);
   });
@@ -112,8 +100,8 @@ describe("byosub-auth sidecar router", () => {
     expect(brokerByosubFlow).not.toHaveBeenCalled();
   });
 
-  it("status: reads the flow locally and proxies the in-pod status for the owner", async () => {
-    flowStore.set("f1", { uid: TEST_UID, gatewayId: "bender", agentId: AGENT, provider: "anthropic" });
+  it("status: reads the brokered flow and proxies the in-pod status for the owner", async () => {
+    readByosubFlow.mockResolvedValue({ uid: TEST_UID, gatewayId: "bender", agentId: AGENT, provider: "anthropic" });
     ssoStatus.mockResolvedValue({ state: "pending" });
     const res = await request(app()).get("/byosub/status/f1");
     expect(res.status).toBe(200);
@@ -121,14 +109,14 @@ describe("byosub-auth sidecar router", () => {
   });
 
   it("status: 404 when the flow belongs to a different user", async () => {
-    flowStore.set("f1", { uid: "someone-else", gatewayId: "bender", agentId: AGENT, provider: "anthropic" });
+    readByosubFlow.mockResolvedValue({ uid: "someone-else", gatewayId: "bender", agentId: AGENT, provider: "anthropic" });
     const res = await request(app()).get("/byosub/status/f1");
     expect(res.status).toBe(404);
     expect(ssoStatus).not.toHaveBeenCalled();
   });
 
   it("status: 409 when the flow belongs to a different pod", async () => {
-    flowStore.set("f1", { uid: TEST_UID, gatewayId: "other-gw", agentId: AGENT, provider: "anthropic" });
+    readByosubFlow.mockResolvedValue({ uid: TEST_UID, gatewayId: "other-gw", agentId: AGENT, provider: "anthropic" });
     const res = await request(app()).get("/byosub/status/f1");
     expect(res.status).toBe(409);
     expect(res.body).toEqual({ error: "not_on_this_pod" });
@@ -136,7 +124,7 @@ describe("byosub-auth sidecar router", () => {
   });
 
   it("sso/submit: proxies the in-pod submit for the owner", async () => {
-    flowStore.set("f1", { uid: TEST_UID, gatewayId: "bender", agentId: AGENT, provider: "anthropic" });
+    readByosubFlow.mockResolvedValue({ uid: TEST_UID, gatewayId: "bender", agentId: AGENT, provider: "anthropic" });
     ssoSubmit.mockResolvedValue({ state: "connected" });
     const res = await request(app()).post("/byosub/sso/submit").send({ flowId: "f1", code: "abc" });
     expect(res.status).toBe(200);
@@ -144,7 +132,7 @@ describe("byosub-auth sidecar router", () => {
   });
 
   it("sso/submit: 409 when the flow belongs to a different pod", async () => {
-    flowStore.set("f1", { uid: TEST_UID, gatewayId: "other-gw", agentId: AGENT, provider: "anthropic" });
+    readByosubFlow.mockResolvedValue({ uid: TEST_UID, gatewayId: "other-gw", agentId: AGENT, provider: "anthropic" });
     const res = await request(app()).post("/byosub/sso/submit").send({ flowId: "f1", code: "abc" });
     expect(res.status).toBe(409);
     expect(res.body).toEqual({ error: "not_on_this_pod" });

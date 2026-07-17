@@ -113,6 +113,18 @@ function assignedOwnerSlug(data: Record<string, unknown>): string | null {
   return typeof slug === "string" && SLUG_RE.test(slug) ? slug : null;
 }
 
+function assignedGatewayId(data: Record<string, unknown>): string | null {
+  const provisioning =
+    data.provisioning && typeof data.provisioning === "object" && !Array.isArray(data.provisioning)
+      ? data.provisioning as Record<string, unknown>
+      : {};
+  const openclaw =
+    provisioning.openclaw && typeof provisioning.openclaw === "object" && !Array.isArray(provisioning.openclaw)
+      ? provisioning.openclaw as Record<string, unknown>
+      : {};
+  return stringOrNull(openclaw.gatewayId);
+}
+
 
 function requestedModelProvider(value: unknown): ModelBrokerProvider | null {
   if (value === undefined || value === null || value === "") return "anthropic";
@@ -632,6 +644,61 @@ export function createByokBrokerRoutes(opts: {
         }, { merge: true }),
     ]);
     res.json({ ok: true });
+  });
+
+  router.post("/byosub-user", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const uid = (req.body as { uid?: unknown } | undefined)?.uid;
+    if (typeof uid !== "string" || uid.length === 0 || uid.length > 128) {
+      res.status(400).json({ error: "valid uid required" });
+      return;
+    }
+    const user = await db.collection("users").doc(uid).get();
+    const data = user.data() as Record<string, unknown> | undefined;
+    const slug = data ? assignedOwnerSlug(data) : null;
+    if (!data || !slug || assignedGatewayId(data) !== bound.gatewayId) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    res.json({ user: { uid, slug, gatewayId: bound.gatewayId } });
+  });
+
+  router.post("/byosub-flow-read", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const flowId = (req.body as { flowId?: unknown } | undefined)?.flowId;
+    if (typeof flowId !== "string" || !SAFE_FLOW_ID_RE.test(flowId)) {
+      res.status(400).json({ error: "valid flowId required" });
+      return;
+    }
+    const flow = await db.collection("byosubFlows").doc(flowId).get();
+    if (!flow.exists) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const data = flow.data();
+    if (
+      !data ||
+      data.gatewayId !== bound.gatewayId ||
+      typeof data.uid !== "string" ||
+      typeof data.agentId !== "string" ||
+      typeof data.provider !== "string"
+    ) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    res.json({
+      flow: {
+        uid: data.uid,
+        gatewayId: data.gatewayId,
+        agentId: data.agentId,
+        provider: data.provider,
+        ...(typeof data.modelCredentialProvider === "string"
+          ? { modelCredentialProvider: data.modelCredentialProvider }
+          : {}),
+      },
+    });
   });
 
   return router;
