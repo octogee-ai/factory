@@ -75,6 +75,11 @@ operatorAccess:
 # needed — TEST is always paused unless an operator explicitly resumes).
 replicas: 1
 
+# Roll strategy — "recreate" (default) or "surge" (RollingUpdate maxSurge=1 /
+# maxUnavailable=0: new pod Ready before the old one dies). Cowboy passes
+# surge for stable-name gateway releases (GATEWAY-SIMPLE-ROLL-SPEC).
+rollStrategy: recreate
+
 # Spot/preemption drain budget. Kubernetes runs this hook before SIGTERM and
 # counts it against terminationGracePeriodSeconds, so keep timeoutSeconds below
 # gracePeriodSeconds to leave the entrypoint time to forward TERM to children.
