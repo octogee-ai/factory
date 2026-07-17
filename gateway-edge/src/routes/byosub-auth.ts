@@ -1,14 +1,17 @@
 import { Router, Request, Response, NextFunction } from "express";
 
-import { requireAuth } from "../middleware/auth.js";
-import { db } from "../lib/db.js";
+import { requireAuthenticatedUid } from "../middleware/auth.js";
 import {
   coachAgentId,
   gatewayClaudeSsoClient,
   gatewayDeviceAuthClient,
   brokerByosubFlow,
 } from "../lib/byosub.js";
-import { resolveUserGateway } from "../lib/user-gateway.js";
+import {
+  readByosubFlow,
+  resolveByosubUserGateway,
+  type ByosubFlowRecord,
+} from "../lib/byosub-broker.js";
 import {
   MODEL_CREDENTIAL_SUBSCRIPTION_PROVIDER_IDS,
   modelCredentialOAuthEntryByProviderId,
@@ -18,33 +21,11 @@ import {
   type ModelCredentialSubscriptionProviderId,
 } from "@octogee/shared/types/model-credentials";
 
-// The byosub OAuth auth flow (connect/status/submit) runs on the customer's OWN
-// pod via the /api/g/<gatewayId>/byosub/* locality seam — NOT octogee-api. The
-// in-pod claude-sso/device-auth managers authenticate callers with the pod's own
-// OPENCLAW_GATEWAY_TOKEN, which only matches from inside the pod (the sidecar),
-// never from octogee-api. The sidecar reads Firestore (datastore.viewer:
-// resolveUserGateway/readFlow) but cannot write, so the one write — the
-// flowId->owner mapping — brokers through octogee-api on the gateway identity.
-
-interface FlowDoc {
-  uid: string;
-  gatewayId: string;
-  agentId: string;
-  provider: string;
-  modelCredentialProvider?: string;
-}
-
-async function readFlow(flowId: string): Promise<FlowDoc | null> {
-  const snap = await db.collection("byosubFlows").doc(flowId).get();
-  if (!snap.exists) return null;
-  return (snap.data() || null) as FlowDoc | null;
-}
-
 function subscriptionProviderIds(): ModelCredentialSubscriptionProviderId[] {
   return [...MODEL_CREDENTIAL_SUBSCRIPTION_PROVIDER_IDS];
 }
 
-function oauthEntryFromFlow(flow: FlowDoc): ModelCredentialOAuthCatalogEntry | null {
+function oauthEntryFromFlow(flow: ByosubFlowRecord): ModelCredentialOAuthCatalogEntry | null {
   if (flow.modelCredentialProvider) {
     try {
       return modelCredentialOAuthEntryByProviderId(
@@ -61,7 +42,7 @@ function localGatewayId(): string | null {
   return process.env.GATEWAY_ID?.trim() || null;
 }
 
-function flowIsMountedHere(flow: FlowDoc): boolean {
+function flowIsMountedHere(flow: ByosubFlowRecord): boolean {
   const local = localGatewayId();
   return !!local && flow.gatewayId === local;
 }
@@ -71,7 +52,7 @@ export function createByosubAuthRouter(): Router {
 
   router.post(
     "/connect",
-    requireAuth,
+    requireAuthenticatedUid,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const uid = req.uid!;
@@ -84,7 +65,7 @@ export function createByosubAuthRouter(): Router {
           });
           return;
         }
-        const resolved = await resolveUserGateway(uid);
+        const resolved = await resolveByosubUserGateway(uid);
         if (!resolved) {
           res.status(400).json({ error: "No provisioned workspace/gateway for this user" });
           return;
@@ -119,11 +100,11 @@ export function createByosubAuthRouter(): Router {
 
   router.get(
     "/status/:flowId",
-    requireAuth,
+    requireAuthenticatedUid,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const flowId = req.params.flowId as string;
-        const flow = await readFlow(flowId);
+        const flow = await readByosubFlow(flowId);
         if (!flow || flow.uid !== req.uid!) {
           res.status(404).json({ error: "flow not found" });
           return;
@@ -154,7 +135,7 @@ export function createByosubAuthRouter(): Router {
 
   router.post(
     "/sso/submit",
-    requireAuth,
+    requireAuthenticatedUid,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const b = (req.body || {}) as { flowId?: string; code?: string };
@@ -162,7 +143,7 @@ export function createByosubAuthRouter(): Router {
           res.status(400).json({ error: "flowId and code required" });
           return;
         }
-        const flow = await readFlow(b.flowId);
+        const flow = await readByosubFlow(b.flowId);
         if (!flow || flow.uid !== req.uid!) {
           res.status(404).json({ error: "flow not found" });
           return;

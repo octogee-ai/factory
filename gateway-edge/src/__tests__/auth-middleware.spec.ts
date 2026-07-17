@@ -33,7 +33,7 @@ vi.mock('../middleware/logging', () => ({
   logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireAuthenticatedUid } from '../middleware/auth.js';
 
 function runAuth(): Promise<{ req: Request; nextCalled: boolean; status?: number }> {
   return new Promise((resolve) => {
@@ -78,5 +78,22 @@ describe('requireAuth — admin role only; no per-user gitea secret read (retire
     const { req, nextCalled } = await runAuth();
     expect(nextCalled).toBe(true);
     expect(req.isAdmin).toBe(false);
+  });
+});
+
+describe('requireAuthenticatedUid', () => {
+  it('verifies the Firebase bearer and does not read Firestore', async () => {
+    reads.length = 0;
+    const req = { headers: { authorization: 'Bearer fake' } } as unknown as Request;
+    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() } as unknown as Response;
+    let called = false;
+
+    requireAuthenticatedUid(req, res, () => {
+      called = true;
+    });
+    await vi.waitFor(() => expect(called).toBe(true));
+
+    expect(req.uid).toBe('u1');
+    expect(reads).toEqual([]);
   });
 });
