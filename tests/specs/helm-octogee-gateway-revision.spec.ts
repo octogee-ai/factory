@@ -145,6 +145,37 @@ describe("helm/octogee-gateway/ — KSA is out of the chart (Cowboy owns it)", (
   });
 });
 
+describe("helm/octogee-gateway/ — roll strategy (GATEWAY-SIMPLE-ROLL-SPEC)", () => {
+  interface StrategyDoc extends Doc {
+    spec?: Doc["spec"] & {
+      strategy?: {
+        type?: string;
+        rollingUpdate?: { maxSurge?: number | string; maxUnavailable?: number | string };
+      };
+    };
+  }
+
+  function deploymentStrategy(setValues: Record<string, string> = {}) {
+    const dep = byKind(helmTemplate(setValues), "Deployment")[0] as StrategyDoc;
+    return dep?.spec?.strategy;
+  }
+
+  it("defaults to Recreate (no behavior change for the revision-model fleet)", () => {
+    expect(deploymentStrategy()).toEqual({ type: "Recreate" });
+  });
+
+  it("renders surge replacement when rollStrategy=surge (maxSurge=1, maxUnavailable=0)", () => {
+    expect(deploymentStrategy({ rollStrategy: "surge" })).toEqual({
+      type: "RollingUpdate",
+      rollingUpdate: { maxSurge: 1, maxUnavailable: 0 },
+    });
+  });
+
+  it("rejects unknown rollStrategy values instead of rendering silently", () => {
+    expect(() => helmTemplate({ rollStrategy: "bluegreen" })).toThrow(/rollStrategy/);
+  });
+});
+
 describe("helm/octogee-gateway/ — persistence is deleted (Spot + emptyDir only)", () => {
   it("never renders a PersistentVolumeClaim", () => {
     expect(byKind(helmTemplate(), "PersistentVolumeClaim")).toHaveLength(0);
