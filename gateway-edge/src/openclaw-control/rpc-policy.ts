@@ -46,6 +46,18 @@ export interface OpenClawControlRpcPolicyContext {
   configFrozen?: boolean;
 }
 
+export type OpenClawControlRpcPolicyMode = "native" | "sanitized";
+
+export function openClawControlRpcPolicyMode(
+  env: NodeJS.ProcessEnv = process.env,
+): OpenClawControlRpcPolicyMode {
+  const value = env.OPENCLAW_CONTROL_RPC_POLICY_MODE?.trim() || "native";
+  if (value === "native" || value === "sanitized") return value;
+  throw new Error(
+    `OPENCLAW_CONTROL_RPC_POLICY_MODE must be native or sanitized, got ${JSON.stringify(value)}`,
+  );
+}
+
 const READ_METHODS = new Set([
   "health",
   "status",
@@ -363,6 +375,26 @@ export function evaluateOpenClawControlRpc(
   if (CONFIG_MUTATION_METHODS.has(method)) return configMutationDecision(request, context);
   if (method === "tools.invoke") return safeToolDecision(request);
   return { allowed: false, category: "forbidden_mutation", reason: "method-unavailable" };
+}
+
+export function evaluateNativeOpenClawControlRpc(
+  frame: unknown,
+  context: Pick<OpenClawControlRpcPolicyContext, "installedMethods">,
+): OpenClawControlRpcDecision {
+  const request = record(frame);
+  if (!request || request.type !== "req" || !boundedString(request.id, 256) ||
+    !boundedString(request.method, 256) || !record(request.params)) {
+    return { allowed: false, category: "unknown", reason: "invalid-frame" };
+  }
+  const method = request.method as string;
+  if (!context.installedMethods.has(method)) {
+    return { allowed: false, category: "unknown", reason: "method-unavailable" };
+  }
+  let category: OpenClawControlRpcCategory = "unknown";
+  if (CONFIG_MUTATION_METHODS.has(method)) category = "config_mutation";
+  else if (method === "tools.invoke") category = "tools_invoke";
+  else if (READ_METHODS.has(method)) category = "read";
+  return { allowed: true, category, outbound: structuredClone(request) };
 }
 
 export function openClawConfigSnapshotFromGetResponse(

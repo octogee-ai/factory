@@ -3,8 +3,10 @@ import { reconcilePlatformInvariants } from "@octogee/core/system-config-invaria
 
 import {
   OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS,
+  evaluateNativeOpenClawControlRpc,
   evaluateOpenClawControlRpc,
   installedMethodsFromHello,
+  openClawControlRpcPolicyMode,
   openClawConfigSnapshotFromGetResponse,
   pinnedOpenClawRuntimeMatches,
 } from "./rpc-policy.js";
@@ -34,6 +36,44 @@ function policyContext(extra: Record<string, unknown> = {}) {
 }
 
 describe("OpenClaw Dashboard RPC policy", () => {
+  it("defaults to native passthrough and keeps sanitized mode behind one explicit switch", () => {
+    expect(openClawControlRpcPolicyMode({})).toBe("native");
+    expect(openClawControlRpcPolicyMode({ OPENCLAW_CONTROL_RPC_POLICY_MODE: "native" })).toBe("native");
+    expect(openClawControlRpcPolicyMode({ OPENCLAW_CONTROL_RPC_POLICY_MODE: "sanitized" }))
+      .toBe("sanitized");
+    expect(() => openClawControlRpcPolicyMode({
+      OPENCLAW_CONTROL_RPC_POLICY_MODE: "sometimes",
+    })).toThrow(/OPENCLAW_CONTROL_RPC_POLICY_MODE/u);
+  });
+
+  it("native mode forwards every installed OpenClaw operator method unchanged", () => {
+    const methods = new Set([
+      "status",
+      "config.patch",
+      "tools.invoke",
+      "terminal.open",
+      "agents.files.set",
+      "node.invoke",
+      "secrets.resolve",
+      "mattermost.ingress.retry",
+    ]);
+    for (const frame of [
+      request("status"),
+      request("config.patch", { raw: "{}", baseHash: "native" }),
+      request("tools.invoke", { name: "exec", args: { command: "id" } }),
+      request("terminal.open", { agentId: "main" }),
+      request("agents.files.set", { agentId: "main", name: "AGENTS.md", content: "owned" }),
+      request("node.invoke", { nodeId: "node-1", command: "system.run" }),
+      request("secrets.resolve", { commandName: "status", targetIds: [] }),
+      request("mattermost.ingress.retry", { id: "message-1" }),
+    ]) {
+      expect(evaluateNativeOpenClawControlRpc(frame, { installedMethods: methods }), String(frame.method))
+        .toMatchObject({ allowed: true, outbound: frame });
+    }
+    expect(evaluateNativeOpenClawControlRpc(request("future.write"), { installedMethods: methods }))
+      .toMatchObject({ allowed: false, reason: "method-unavailable" });
+  });
+
   it("fails closed unless hello advertises the exact pinned runtime method set", () => {
     const methods = [...OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS];
     const hello = {

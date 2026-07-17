@@ -29,16 +29,19 @@ import {
   sanitizeOpenClawControlServerFrame,
 } from "./connect-rewrite.js";
 import {
+  evaluateNativeOpenClawControlRpc,
   evaluateOpenClawControlRpc,
   installedMethodsFromHello,
   isOpenClawControlMutation,
   openClawConfigSnapshotFromGetResponse,
+  openClawControlRpcPolicyMode,
   openClawControlPolicyError,
   openClawControlTimeoutError,
   pinnedOpenClawRuntimeMatches,
   type OpenClawConfigSnapshot,
   type OpenClawControlRpcDecision,
   type OpenClawControlRpcCategory,
+  type OpenClawControlRpcPolicyMode,
 } from "./rpc-policy.js";
 import {
   OpenClawControlResourceLimiter,
@@ -471,6 +474,7 @@ function browserRpcFrame(data: RawData): BrowserRpcFrame | null {
 class OpenClawControlSocketBridge {
   private readonly identity: OpenClawControlResourceIdentity;
   private readonly metricsIdentity: OpenClawControlMetricIdentity;
+  private readonly rpcPolicyMode: OpenClawControlRpcPolicyMode;
   private activeSession: OpenClawControlSession;
   private gatewayToken = "";
   private upstream?: WebSocket;
@@ -494,6 +498,7 @@ class OpenClawControlSocketBridge {
       sessionId: args.session.sessionId,
     };
     this.metricsIdentity = metricIdentity(args.env);
+    this.rpcPolicyMode = openClawControlRpcPolicyMode(args.env);
   }
 
   async start(): Promise<void> {
@@ -745,7 +750,7 @@ class OpenClawControlSocketBridge {
   private acceptInstalledMethods(frame: Record<string, unknown>, id: string | undefined): boolean {
     const methods = installedMethodsFromHello(frame);
     if (!methods) return true;
-    if (!pinnedOpenClawRuntimeMatches(methods)) {
+    if (this.rpcPolicyMode === "sanitized" && !pinnedOpenClawRuntimeMatches(methods)) {
       if (this.args.browser.readyState === WebSocket.OPEN) {
         this.args.browser.send(openClawControlPolicyError({ id, type: "req" }, "runtime-drift"));
       }
@@ -850,12 +855,14 @@ class OpenClawControlSocketBridge {
   }
 
   private evaluateAndForward(frame: BrowserRpcFrame): void {
-    const decision = evaluateOpenClawControlRpc(frame, {
-      installedMethods: this.installedMethods!,
-      invariantContext: invariantContext(this.args.env, this.activeSession.gatewayId),
-      currentConfig: this.currentConfig,
-      configFrozen: configFrozen(this.args.env),
-    });
+    const decision = this.rpcPolicyMode === "native"
+      ? evaluateNativeOpenClawControlRpc(frame, { installedMethods: this.installedMethods! })
+      : evaluateOpenClawControlRpc(frame, {
+        installedMethods: this.installedMethods!,
+        invariantContext: invariantContext(this.args.env, this.activeSession.gatewayId),
+        currentConfig: this.currentConfig,
+        configFrozen: configFrozen(this.args.env),
+      });
     if (!decision.allowed) {
       this.deny(frame, decision, decision.reason ?? "method-denied");
       return;
