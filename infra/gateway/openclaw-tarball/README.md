@@ -1092,6 +1092,8 @@ Reassess next OC upgrade."*). Update it every cycle.
 
 Executed roll records:
 
+- [OpenClaw 2026.7.2-beta.2 preview build notes](roll-notes/2026.7.2-beta.2.md) — exact
+  coexist-stack re-cut, beta.2 adaptations, verification, artifacts, and held-preview builds.
 - [OpenClaw 2026.7.2-beta.1 preview build notes](roll-notes/2026.7.2-beta.1.md) — coexist-stack
   re-cut, test diagnoses, artifacts, matrix/base builds, release result, and operator rollout tag.
 
@@ -1120,7 +1122,7 @@ Per-slot top SHAs:
 |---|---|---|
 | current | 2026.7.1 (GA) | `5e38a689` |
 | previous | 2026.6.11 (GA) | `652ba8cf` |
-| preview | 2026.7.2-beta.1 | `5a7dcfe6` |
+| preview | 2026.7.2-beta.2 | `6a5f46e7` |
 
 **Essential:**
 
