@@ -11,7 +11,7 @@
 {{- $rollCount := len $rollValues -}}
 {{- $conversationMode := .Values.conversationExperiment.mode | default "broad" -}}
 {{- $operatorShellsEnabled := and (ne $gatewayClass "shared") (.Values.operatorAccess.shellsEnabled | default false) -}}
-{{- $operatorControlUiEnabled := and $operatorShellsEnabled (.Values.operatorAccess.controlUiEnabled | default false) -}}
+{{- $operatorControlUiEnabled := ne $gatewayClass "shared" -}}
 {{- if and (ne $conversationMode "broad") (ne $conversationMode "publisher-live") -}}
 {{- fail (printf "octogee-gateway: conversationExperiment.mode must be broad or publisher-live, got %q" $conversationMode) -}}
 {{- end -}}
@@ -210,7 +210,7 @@ spec:
             - name: GATEWAY_CLASS
               value: {{ $gatewayClass | quote }}
             - name: OPENCLAW_DOCTOR_MODE
-              value: {{ .Values.env.openclawDoctorMode | default "run" | quote }}
+              value: {{ .Values.env.openclawDoctorMode | default "skip" | quote }}
             {{- $autosave := .Values.workspaceAutosaveEnabled | toString }}
             {{- if ne $autosave "" }}
             # Override; unset → gateway code defaults from profile

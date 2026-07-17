@@ -101,9 +101,8 @@ export function isGatewayClassShellAccessEnabled(gatewayClass, operatorAccess) {
     return ((gatewayClass === "builder" || gatewayClass === "operator") &&
         operatorAccess?.shellsEnabled === true);
 }
-export function isGatewayClassControlUiAccessEnabled(gatewayClass, operatorAccess) {
-    return ((gatewayClass === "builder" || gatewayClass === "operator") &&
-        operatorAccess?.controlUiEnabled !== false);
+export function isGatewayClassControlUiAccessEnabled(gatewayClass, _operatorAccess) {
+    return gatewayClass === "builder" || gatewayClass === "operator";
 }
 // The user-doc shell state the PWA gates BuilderShell on (gatewayProfile +
 // shellsEnabled). A Builder gets BuilderShell when placed on a shell-enabled

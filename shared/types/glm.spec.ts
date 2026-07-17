@@ -148,7 +148,7 @@ describe("defaultOperatorGatewayAccess", () => {
 });
 
 describe("isGatewayClassControlUiAccessEnabled", () => {
-  it("requires an isolated class and honors an explicit Control UI disable independently of shells", () => {
+  it("enables the Control UI for every isolated class independently of shells and legacy flags", () => {
     expect(isGatewayClassControlUiAccessEnabled("builder", {
       shellsEnabled: true,
       controlUiEnabled: true,
@@ -171,7 +171,7 @@ describe("isGatewayClassControlUiAccessEnabled", () => {
     expect(isGatewayClassControlUiAccessEnabled("operator", {
       shellsEnabled: true,
       controlUiEnabled: false,
-    })).toBe(false);
+    })).toBe(true);
   });
 });
 

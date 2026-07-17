@@ -96,20 +96,20 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     );
   });
 
-  it("renders the explicit OpenClaw Doctor mode only into the core gateway", () => {
+  it("skips OpenClaw Doctor by default and permits an explicit run only in the core gateway", () => {
     const defaults = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     expect(containerBlock(defaults, "gateway")).toMatch(
-      /name:\s*OPENCLAW_DOCTOR_MODE[\s\S]*?value:\s*"run"/,
+      /name:\s*OPENCLAW_DOCTOR_MODE[\s\S]*?value:\s*"skip"/,
     );
     expect(containerBlock(defaults, "gateway-edge")).not.toMatch(/OPENCLAW_DOCTOR_MODE/);
 
-    const skipped = findDoc(
-      helmTemplate("octogee-gw-default", { "env.openclawDoctorMode": "skip" }),
+    const enabled = findDoc(
+      helmTemplate("octogee-gw-default", { "env.openclawDoctorMode": "run" }),
       "Deployment",
       "octogee-gateway-default",
     ) ?? "";
-    expect(containerBlock(skipped, "gateway")).toMatch(
-      /name:\s*OPENCLAW_DOCTOR_MODE[\s\S]*?value:\s*"skip"/,
+    expect(containerBlock(enabled, "gateway")).toMatch(
+      /name:\s*OPENCLAW_DOCTOR_MODE[\s\S]*?value:\s*"run"/,
     );
   });
 
@@ -829,15 +829,15 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     );
   });
 
-  it("requires and publishes the native Dashboard bridge only for fully enabled isolated gateways", () => {
+  it("requires and publishes the native Dashboard bridge for every isolated gateway", () => {
     for (const gatewayClass of ["builder", "operator"]) {
       const enabled = findDoc(
         helmTemplate(`octogee-gw-${gatewayClass}`, {
           gatewayId: gatewayClass,
           gatewayClass,
           builderSlug: "ceckert",
-          "operatorAccess.shellsEnabled": "true",
-          "operatorAccess.controlUiEnabled": "true",
+          "operatorAccess.shellsEnabled": "false",
+          "operatorAccess.controlUiEnabled": "false",
         }),
         "Deployment",
         `octogee-gateway-${gatewayClass}`,
@@ -863,7 +863,6 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     }
 
     const disabledValueSets: Array<Record<string, string>> = [
-      { gatewayId: "operator", gatewayClass: "operator", "operatorAccess.controlUiEnabled": "true" },
       { gatewayId: "shared", gatewayClass: "shared", "operatorAccess.shellsEnabled": "true", "operatorAccess.controlUiEnabled": "true" },
     ];
     for (const values of disabledValueSets) {

@@ -284,12 +284,9 @@ export function isGatewayClassShellAccessEnabled(
 
 export function isGatewayClassControlUiAccessEnabled(
   gatewayClass: GatewayClass | undefined,
-  operatorAccess: OperatorGatewayAccessSpec | undefined,
+  _operatorAccess: OperatorGatewayAccessSpec | undefined,
 ): boolean {
-  return (
-    (gatewayClass === "builder" || gatewayClass === "operator") &&
-    operatorAccess?.controlUiEnabled !== false
-  );
+  return gatewayClass === "builder" || gatewayClass === "operator";
 }
 
 // The user-doc shell state the PWA gates BuilderShell on (gatewayProfile +
