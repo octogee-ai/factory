@@ -24,7 +24,10 @@ vi.mock("@octogee/core/system-config-mutation-lease", () => ({
 }));
 
 const { createApp } = await import("../index.js");
-const { default: byotSyncRoutes } = await import("../routes/internal/byot-sync.js");
+const {
+  createLeasedModelConfigWriter,
+  default: byotSyncRoutes,
+} = await import("../routes/internal/byot-sync.js");
 
 const userData = {
   byotActive: true,
@@ -146,6 +149,46 @@ describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
       { maxRetries: 2 },
     );
     expect(releaseLeaseSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries transient writer-lock collisions before applying the patch", async () => {
+    acquireLeaseSpy
+      .mockResolvedValueOnce({ ok: false, code: "writer-lock-busy" })
+      .mockResolvedValueOnce({ ok: false, code: "writer-lock-busy" });
+    const wait = vi.fn(async () => {});
+    const writer = createLeasedModelConfigWriter({
+      acquireLease: acquireLeaseSpy as never,
+      applyPatch: applyConfigPatchSpy as never,
+      openclawDir: () => "/home/node/.openclaw",
+      wait,
+    });
+
+    await writer({ buildPatch: () => ({}) }, { maxRetries: 2 });
+
+    expect(wait.mock.calls).toEqual([[250], [750]]);
+    expect(acquireLeaseSpy).toHaveBeenCalledTimes(3);
+    expect(applyConfigPatchSpy).toHaveBeenCalledTimes(1);
+    expect(releaseLeaseSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not patch when bounded writer-lock retries are exhausted", async () => {
+    acquireLeaseSpy.mockResolvedValue({ ok: false, code: "writer-lock-busy" });
+    const wait = vi.fn(async () => {});
+    const writer = createLeasedModelConfigWriter({
+      acquireLease: acquireLeaseSpy as never,
+      applyPatch: applyConfigPatchSpy as never,
+      openclawDir: () => "/home/node/.openclaw",
+      wait,
+    });
+
+    await expect(writer({ buildPatch: () => ({}) })).rejects.toThrow(
+      "system config writer lock is busy",
+    );
+
+    expect(wait.mock.calls).toEqual([[250], [750]]);
+    expect(acquireLeaseSpy).toHaveBeenCalledTimes(3);
+    expect(applyConfigPatchSpy).not.toHaveBeenCalled();
+    expect(releaseLeaseSpy).not.toHaveBeenCalled();
   });
 
   it("keeps the legacy BYOT sync route as an authenticated alias", async () => {

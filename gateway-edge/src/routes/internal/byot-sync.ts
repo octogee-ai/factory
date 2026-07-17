@@ -11,13 +11,20 @@ export function createLeasedModelConfigWriter(
     acquireLease?: typeof acquireSystemConfigMutationLease;
     applyPatch?: typeof applyConfigPatch;
     openclawDir?: () => string;
+    wait?: (delayMs: number) => Promise<void>;
   } = {},
 ): typeof applyConfigPatch {
   const acquireLease = deps.acquireLease ?? acquireSystemConfigMutationLease;
   const applyPatch = deps.applyPatch ?? applyConfigPatch;
   const openclawDir = deps.openclawDir ?? (() => process.env.OPENCLAW_DIR ?? "/home/node/.openclaw");
+  const wait = deps.wait ?? ((delayMs: number) => new Promise((resolve) => setTimeout(resolve, delayMs)));
   return async (args, options) => {
-    const acquired = await acquireLease({ openclawDir: openclawDir() });
+    let acquired = await acquireLease({ openclawDir: openclawDir() });
+    for (const delayMs of [250, 750]) {
+      if (acquired.ok || acquired.code !== "writer-lock-busy") break;
+      await wait(delayMs);
+      acquired = await acquireLease({ openclawDir: openclawDir() });
+    }
     if (!acquired.ok) {
       if (acquired.code === "config-frozen") {
         throw new Error(
