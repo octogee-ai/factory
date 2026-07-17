@@ -145,7 +145,7 @@ RUN set -e; \
       if [ -n "${OPENCLAW_MATTERMOST_FORK_SHA}" ]; then \
         test -s /tmp/openclaw-mattermost-fork.tgz; \
         echo "mattermost: installing local fork ${OPENCLAW_MATTERMOST_FORK_SHA}"; \
-        openclaw plugins install "npm-pack:/tmp/openclaw-mattermost-fork.tgz" > /tmp/oc-plugin.log 2>&1 \
+        openclaw plugins install "npm-pack:/tmp/openclaw-mattermost-fork.tgz" --force > /tmp/oc-plugin.log 2>&1 \
           || { echo "FATAL: fork @openclaw/mattermost install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
         printf '%s\n' '{"channels":{"mattermost":{"replyToMode":"all","threadDirectMessages":true,"threadSessionScope":"channel"}}}' \
           | openclaw config patch --stdin > /tmp/oc-plugin.log 2>&1 \

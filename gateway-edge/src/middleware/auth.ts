@@ -16,7 +16,7 @@ declare global {
   }
 }
 
-export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+export function requireAuthenticatedUid(req: Request, res: Response, next: NextFunction): void {
   const header = req.headers.authorization;
   if (!header?.startsWith("Bearer ")) {
     res.status(401).json({ error: "Unauthenticated" });
@@ -26,26 +26,38 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   const token = header.slice(7);
   auth
     .verifyIdToken(token)
-    .then(async (decoded) => {
+    .then((decoded) => {
       req.uid = decoded.uid;
-      const userSnap = await db.collection("users").doc(decoded.uid).get();
-      if (userSnap.exists) {
-        const userData = userSnap.data();
-        req.user = userData;
-        req.workspaceSlug = await resolveCanonicalWorkspaceSlug(decoded.uid, userData);
-      }
-      try {
-        const configSnap = await db.collection("users").doc(decoded.uid).collection("system").doc("config").get();
-        req.isAdmin = configSnap.exists && configSnap.data()?.role === "admin";
-      } catch {
-        req.isAdmin = false;
-      }
       next();
     })
     .catch((err) => {
       logger.warn(`Auth failed: ${err.message}`);
       res.status(401).json({ error: "Invalid token" });
     });
+}
+
+export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  requireAuthenticatedUid(req, res, () => {
+    const uid = req.uid!;
+    void (async () => {
+      const userSnap = await db.collection("users").doc(uid).get();
+      if (userSnap.exists) {
+        const userData = userSnap.data();
+        req.user = userData;
+        req.workspaceSlug = await resolveCanonicalWorkspaceSlug(uid, userData);
+      }
+      try {
+        const configSnap = await db.collection("users").doc(uid).collection("system").doc("config").get();
+        req.isAdmin = configSnap.exists && configSnap.data()?.role === "admin";
+      } catch {
+        req.isAdmin = false;
+      }
+      next();
+    })().catch((err) => {
+      logger.warn(`Auth lookup failed: ${err.message}`);
+      res.status(503).json({ error: "Authentication lookup unavailable" });
+    });
+  });
 }
 
 export function requireAdmin(req: Request, res: Response, next: NextFunction): void {

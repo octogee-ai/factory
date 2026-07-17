@@ -9,6 +9,10 @@ import {
 } from "./openclaw-control-tickets.js";
 
 describe("OpenClaw Control tickets", () => {
+  it("allows a bounded two-minute handoff from the launcher to the Dashboard", () => {
+    expect(OPENCLAW_CONTROL_TICKET_TTL_MS).toBe(120_000);
+  });
+
   it("mints 256-bit URL-safe material while persisting only its hash", () => {
     const minted = createOpenClawControlTicket({
       uid: "uid-owner",
