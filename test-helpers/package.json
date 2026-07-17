@@ -41,7 +41,7 @@
   "devDependencies": {
     "@types/node": "^26.1.1",
     "firebase-admin": "^13.10.0",
-    "typescript": "^5.9.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   },
   "overrides": {
