@@ -63,6 +63,7 @@ export function platformBrokerCatalogOpts(env: NodeJS.ProcessEnv): {
 type OpenClawConfig = Record<string, unknown>;
 
 const COACH_AGENT_ID_RE = /^octogee-[a-z0-9][a-z0-9-]{0,62}-coach$/;
+const MM_URL_PLACEHOLDER = "${MM_URL}";
 
 function objectProperty(
   parent: Record<string, unknown> | null,
@@ -110,10 +111,10 @@ export function applyMattermostPreBootPatches(
   if (!mattermost) return false;
   let changed = false;
 
-  if (env.MM_URL && mattermost.baseUrl !== env.MM_URL) {
-    mattermost.baseUrl = env.MM_URL;
+  if (env.MM_URL && mattermost.baseUrl !== MM_URL_PLACEHOLDER) {
+    mattermost.baseUrl = MM_URL_PLACEHOLDER;
     changed = true;
-    logFn(`MM baseUrl synced from MM_URL env var: ${env.MM_URL}`);
+    logFn(`restored channels.mattermost.baseUrl to the MM_URL placeholder`);
   }
 
   const commands = ensureNullishObjectProperty(mattermost, "commands");
