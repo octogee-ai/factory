@@ -1,6 +1,6 @@
 export declare const OPENCLAW_CONTROL_TICKETS_COLLECTION = "openclawControlTickets";
 export declare const OPENCLAW_CONTROL_AUDIT_COLLECTION = "openclawControlAudit";
-export declare const OPENCLAW_CONTROL_TICKET_TTL_MS = 30000;
+export declare const OPENCLAW_CONTROL_TICKET_TTL_MS = 120000;
 export interface OpenClawControlTicketDocument {
     uid: string;
     gatewayId: string;
