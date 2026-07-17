@@ -104,44 +104,38 @@ describe("system config observed status", () => {
     });
   });
 
-  it("projects the exact control capability and pinned OpenClaw fork identity", () => {
+  it("projects the pinned OpenClaw identity and drops retired roll-era fields", () => {
     const dir = tempDir();
     updateSystemConfigStatus(dir, {
       state: "clean",
-      freezeState: "unfrozen",
       openclawVersion: "2026.7.1",
       openclawForkSha: "abc1234",
-      controlProtocol: {
-        protocol: "durable-openclaw-config",
-        version: 2,
-      },
-      bootRole: "source-frozen",
-      checkpointCommit: "a".repeat(40),
       configHash: "b".repeat(64),
-      controlOwner: {
-        migrationId: "mig-1",
-        sourceRevisionId: "bender-r1",
-        targetRevisionId: "bender-r2",
-      },
     });
+    fs.writeFileSync(path.join(dir, "system_config.status.json"), JSON.stringify({
+      state: "clean",
+      openclawVersion: "2026.7.1",
+      openclawForkSha: "abc1234",
+      configHash: "b".repeat(64),
+      freezeState: "unfrozen",
+      bootRole: "source-frozen",
+      controlProtocol: { protocol: "durable-openclaw-config", version: 2 },
+      checkpointCommit: "a".repeat(40),
+      controlOwner: { migrationId: "mig-1" },
+    }));
 
-    expect(readSystemConfigStatus(dir)).toMatchObject({
-      freezeState: "unfrozen",
+    const status = readSystemConfigStatus(dir);
+    expect(status).toMatchObject({
+      state: "clean",
       openclawVersion: "2026.7.1",
       openclawForkSha: "abc1234",
-      controlProtocol: {
-        protocol: "durable-openclaw-config",
-        version: 2,
-      },
-      bootRole: "source-frozen",
-      checkpointCommit: "a".repeat(40),
       configHash: "b".repeat(64),
-      controlOwner: {
-        migrationId: "mig-1",
-        sourceRevisionId: "bender-r1",
-        targetRevisionId: "bender-r2",
-      },
     });
+    expect(status).not.toHaveProperty("freezeState");
+    expect(status).not.toHaveProperty("bootRole");
+    expect(status).not.toHaveProperty("controlProtocol");
+    expect(status).not.toHaveProperty("checkpointCommit");
+    expect(status).not.toHaveProperty("controlOwner");
   });
 
   it("recovers an expired legacy status writer lock before merging a new update", () => {

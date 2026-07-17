@@ -26,11 +26,6 @@ export function createLeasedModelConfigWriter(
       acquired = await acquireLease({ openclawDir: openclawDir() });
     }
     if (!acquired.ok) {
-      if (acquired.code === "config-frozen") {
-        throw new Error(
-          `system config is frozen by ${acquired.freezeOwner.migrationId} for ${acquired.freezeOwner.slug}`,
-        );
-      }
       if (acquired.code === "shell-active") {
         throw new Error(`system config mutation blocked by active builder shells: ${acquired.shellIds.join(", ")}`);
       }

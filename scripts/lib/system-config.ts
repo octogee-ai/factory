@@ -3,12 +3,10 @@ import * as fs from "fs";
 import * as path from "path";
 
 import {
-  acquireSystemConfigControlLeaseSync,
   acquireSystemConfigSyncLeaseSync,
 } from "@octogee/core/system-config-mutation-lease";
 
 import { isValidUsername } from "../../shared/types/identity.js";
-import type { ConfigControlOwner } from "../../shared/types/fleet-controller.js";
 import {
   log as defaultLog,
   OPENCLAW_DIR,
@@ -118,7 +116,6 @@ export interface SystemConfigSyncOptions {
   env?: NodeJS.ProcessEnv;
   source?: SystemConfigCommitSource;
   lockHeld?: boolean;
-  allowFrozen?: boolean;
   readCommitBlob?: ReadSystemConfigCommitBlob;
 }
 
@@ -160,53 +157,12 @@ interface SystemConfigBootCheckpointOptions {
   verifyAcceptedDurableSet?: (repoDir: string, acceptedCommit: string) => boolean;
 }
 
-export interface SystemConfigFreezeRecord extends ConfigControlOwner {
-  directoryMode: number;
-  configMode: number;
-  protocolVersion?: 2;
-  role?: "source-frozen" | "target-candidate";
-  gatewayId?: string;
-  sourceRevisionId?: string;
-  targetRevisionId?: string;
-  checkpointCommit?: string;
-  configHash?: string;
-  freezeObject?: string;
-  candidateCommit?: string;
-  candidateHash?: string;
-}
-
 export function systemConfigDir(openclawDir = OPENCLAW_DIR): string {
   return path.join(openclawDir, "system_config");
 }
 
 export function systemConfigPath(openclawDir = OPENCLAW_DIR): string {
   return path.join(systemConfigDir(openclawDir), OPENCLAW_CONFIG_FILENAME);
-}
-
-export function systemConfigFreezeMarkerPath(openclawDir = OPENCLAW_DIR): string {
-  return path.join(openclawDir, "system_config.freeze.json");
-}
-
-export function systemConfigFreezeStatus(
-  openclawDir = OPENCLAW_DIR,
-): SystemConfigFreezeRecord | null {
-  const markerPath = systemConfigFreezeMarkerPath(openclawDir);
-  if (!fs.existsSync(markerPath)) return null;
-  const parsed = JSON.parse(fs.readFileSync(markerPath, "utf8")) as Partial<SystemConfigFreezeRecord>;
-  if (
-    typeof parsed.migrationId !== "string" ||
-    typeof parsed.slug !== "string" ||
-    !isValidUsername(parsed.slug) ||
-    !Number.isInteger(parsed.directoryMode) ||
-    !Number.isInteger(parsed.configMode) ||
-    (parsed.protocolVersion !== undefined && parsed.protocolVersion !== 2) ||
-    (parsed.role !== undefined &&
-      parsed.role !== "source-frozen" &&
-      parsed.role !== "target-candidate")
-  ) {
-    throw new Error(`[system_config] invalid freeze marker at ${markerPath}`);
-  }
-  return parsed as SystemConfigFreezeRecord;
 }
 
 function remoteUrl(slug: string): string {
@@ -717,11 +673,6 @@ export function acquireSystemConfigSyncLock(openclawDir: string): (() => void) |
   return lease ? () => lease.release() : null;
 }
 
-export function acquireSystemConfigControlLock(openclawDir: string): (() => void) | null {
-  const lease = acquireSystemConfigControlLeaseSync({ openclawDir });
-  return lease ? () => lease.release() : null;
-}
-
 function remoteHeadFromLsRemote(output: string | null): string | null {
   if (output === null) return null;
   const head = output.trim().split(/\s+/)[0] ?? "";
@@ -796,30 +747,19 @@ interface SystemConfigSyncContext {
   keyPath: string;
 }
 
-function durableSyncPreflight(context: SystemConfigSyncContext): SystemConfigSyncResult | null {
-  if (!context.opts.durablePolicy) return null;
-  const remote = inspectRemoteRelation(context.repoDir, context.keyPath, context.execGit);
-  if (remote.relation === "unavailable") {
-    recordSyncError(context.openclawDir, "remote-head-unavailable", context.now);
-    return {
-      committed: false,
-      pushed: false,
-      pending: true,
-      errorCode: "remote-head-unavailable",
-      processedFingerprint: context.initialFingerprint,
-    };
-  }
-  if (remote.relation === "conflict") {
-    recordSyncError(context.openclawDir, "non-fast-forward-conflict", context.now);
-    return {
-      committed: false,
-      pushed: false,
-      pending: true,
-      errorCode: "non-fast-forward-conflict",
-      processedFingerprint: context.initialFingerprint,
-    };
-  }
-  return null;
+// Converge a remote-ahead checkout by rebasing onto origin/main. The remote is
+// the durable source of truth (GATEWAY-SIMPLE-ROLL-SPEC): during a surge roll
+// the predecessor pod's final flush can land after this pod cloned, and this
+// pull is what absorbs it. A true content conflict aborts the rebase and leaves
+// the checkout untouched for the typed non-fast-forward error path.
+function pullRebaseRemote(context: SystemConfigSyncContext): boolean {
+  const pulled = context.execGit(context.repoDir, "pull --rebase origin main", context.keyPath);
+  if (pulled !== null) return true;
+  context.execGit(context.repoDir, "rebase --abort", context.keyPath);
+  context.log(
+    `[system_config] ${context.slug}: pull --rebase could not converge with origin/main`,
+  );
+  return false;
 }
 
 function syncStatusFailure(context: SystemConfigSyncContext): SystemConfigSyncResult {
@@ -844,7 +784,10 @@ function syncCleanSystemConfig(context: SystemConfigSyncContext): SystemConfigSy
     context.log(`[system_config] ${context.slug}: no openclaw.json changes to flush`);
     return { committed: false, pushed: false };
   }
-  const pushed = context.execGit(context.repoDir, "push origin main", context.keyPath);
+  let pushed = context.execGit(context.repoDir, "push origin main", context.keyPath);
+  if (pushed === null && pullRebaseRemote(context)) {
+    pushed = context.execGit(context.repoDir, "push origin main", context.keyPath);
+  }
   if (pushed === null) {
     if (context.opts.durablePolicy) {
       recordSyncError(context.openclawDir, "push-failed", context.now);
@@ -858,6 +801,9 @@ function syncCleanSystemConfig(context: SystemConfigSyncContext): SystemConfigSy
       processedFingerprint: context.initialFingerprint,
     };
   }
+  // The heal pull may have fast-forwarded openclaw.json — fingerprint the
+  // content that is actually accepted now, not the pre-pull snapshot.
+  const acceptedFingerprint = systemConfigFingerprint(context.repoConfigPath);
   const acceptedCommit = context.execGit(context.repoDir, GIT_REV_PARSE_HEAD, context.keyPath);
   if (context.opts.durablePolicy && (!acceptedCommit || !GIT_SHA_RE.test(acceptedCommit))) {
     recordSyncError(context.openclawDir, ACCEPTED_HEAD_UNAVAILABLE, context.now);
@@ -866,14 +812,14 @@ function syncCleanSystemConfig(context: SystemConfigSyncContext): SystemConfigSy
       pushed: true,
       pending: true,
       errorCode: ACCEPTED_HEAD_UNAVAILABLE,
-      processedFingerprint: context.initialFingerprint,
+      processedFingerprint: acceptedFingerprint,
     };
   }
   if (context.opts.durablePolicy && acceptedCommit && GIT_SHA_RE.test(acceptedCommit)) {
     recordSyncSuccess(
       context.openclawDir,
       acceptedCommit,
-      context.initialFingerprint,
+      acceptedFingerprint,
       context.env,
       context.now,
     );
@@ -882,10 +828,10 @@ function syncCleanSystemConfig(context: SystemConfigSyncContext): SystemConfigSy
     committed: false,
     pushed: true,
     pending: false,
-    processedFingerprint: context.initialFingerprint,
+    processedFingerprint: acceptedFingerprint,
     ...(acceptedCommit && GIT_SHA_RE.test(acceptedCommit) ? {
       acceptedCommit,
-      configHash: context.initialFingerprint,
+      configHash: acceptedFingerprint,
     } : {}),
   };
 }
@@ -1258,7 +1204,10 @@ function commitValidatedCandidate(
       ...(context.pushWhenClean ? { pending: true, processedFingerprint: stagedFingerprint } : {}),
     };
   }
-  const pushed = context.execGit(context.repoDir, "push origin main", context.keyPath);
+  let pushed = context.execGit(context.repoDir, "push origin main", context.keyPath);
+  if (pushed === null && pullRebaseRemote(context)) {
+    pushed = context.execGit(context.repoDir, "push origin main", context.keyPath);
+  }
   return pushed === null
     ? committedPushFailure(context, source, stagedFingerprint)
     : committedPushSuccess(context, source, stagedFingerprint);
@@ -1266,20 +1215,9 @@ function commitValidatedCandidate(
 
 function syncPreparedSystemConfig(context: SystemConfigSyncContext): SystemConfigSyncResult {
   const { repoConfigPath, repoDir, execGit, keyPath } = context;
-  let deletionResult: SystemConfigSyncResult | null = null;
   if (!fs.existsSync(repoConfigPath)) {
-    deletionResult = rejectedDeletionResult(context);
-    if (deletionResult.skipped) return deletionResult;
+    return rejectedDeletionResult(context);
   }
-  const preflight = durableSyncPreflight(context);
-  if (preflight) {
-    return deletionResult ? {
-      ...preflight,
-      rejected: true,
-      processedFingerprint: deletionResult.processedFingerprint,
-    } : preflight;
-  }
-  if (deletionResult) return deletionResult;
   const dirty = execGit(repoDir, `status --porcelain -- ${SYSTEM_CONFIG_PATHSPEC}`, keyPath);
   if (dirty === null) return syncStatusFailure(context);
   if (dirty.length === 0) return syncCleanSystemConfig(context);
@@ -1331,15 +1269,6 @@ function syncSystemConfig(
   pushWhenClean: boolean,
 ): SystemConfigSyncResult {
   const openclawDir = opts.openclawDir ?? OPENCLAW_DIR;
-  const frozen = systemConfigFreezeStatus(openclawDir);
-  if (frozen && !opts.allowFrozen) {
-    return {
-      skipped: "config-frozen",
-      committed: false,
-      pushed: false,
-      processedFingerprint: systemConfigFingerprint(systemConfigPath(openclawDir)),
-    };
-  }
   if (!isValidUsername(slug) || !fs.existsSync(openclawDir)) {
     return syncSystemConfigUnlocked(slug, opts, pushWhenClean);
   }
@@ -1779,11 +1708,4 @@ export function checkpointDurableSystemConfigForSlug(
     throw new SystemConfigCheckpointError(result);
   }
   return result;
-}
-
-export function syncSystemConfigForSlugWhileLocked(
-  slug: string,
-  opts: SystemConfigSyncOptions = {},
-): SystemConfigSyncResult {
-  return syncSystemConfigUnlocked(slug, opts, true);
 }

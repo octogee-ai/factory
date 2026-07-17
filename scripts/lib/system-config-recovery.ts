@@ -83,7 +83,7 @@ export function attributedCommitArgs(
   return [
     "commit",
     `-m "${subject.replace(/["\\]/g, "_")}"`,
-    `-m "Octogee-Config-Source: ${source}\nOctogee-Gateway-Revision: ${safeTrailerValue(env.GATEWAY_REVISION_ID)}\nOpenClaw-Version: ${safeTrailerValue(env.OPENCLAW_VERSION)}"`,
+    `-m "Octogee-Config-Source: ${source}\nOctogee-Gateway: ${safeTrailerValue(env.GATEWAY_ID)}\nOpenClaw-Version: ${safeTrailerValue(env.OPENCLAW_VERSION)}"`,
   ].join(" ");
 }
 

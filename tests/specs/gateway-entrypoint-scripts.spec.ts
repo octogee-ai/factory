@@ -107,10 +107,8 @@ describe("gateway entrypoint ↔ Dockerfile coverage", () => {
     expect(dockerfile).toMatch(/chmod 755[^\n]*\/usr\/local\/bin\/octogee/);
   });
 
-  it("bakes an immutable config-status-v2 capability marker into new gateway images", () => {
-    expect(dockerfile).toContain(
-      "RUN install -D -o root -g root -m 0444 /dev/null /opt/octogee/capabilities/config-status-v2",
-    );
+  it("ships no image capability markers — probes are identity-pure (GATEWAY-SIMPLE-ROLL-SPEC)", () => {
+    expect(dockerfile).not.toContain("/opt/octogee/capabilities/");
   });
 
 it("does not reinstate the unconditional openclaw file-log mirror", () => {

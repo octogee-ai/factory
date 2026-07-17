@@ -99,47 +99,25 @@ describe("revisionIdFromGatewayPodName", () => {
 });
 
 describe("system config observed status validation", () => {
-  it("accepts the complete protocol-v2 frozen and candidate control identities", () => {
-    const owner = {
-      migrationId: "roll-config-roll-1",
-      sourceRevisionId: "default-r1",
-      targetRevisionId: "default-r2",
-    };
-    const frozen = {
+  it("drops retired protocol-v2 roll fields instead of persisting them", () => {
+    expect(parseSystemConfigObservedStatus({
       state: "clean",
-      freezeState: "frozen",
-      bootRole: "source-frozen",
-      controlOwner: owner,
-      checkpointCommit: "1".repeat(40),
-      configHash: "a".repeat(64),
       openclawVersion: "2026.7.1",
+      freezeState: "frozen",
+      bootRole: "source-frozen",
       controlProtocol: { protocol: "durable-openclaw-config", version: 2 },
-    };
-    expect(parseSystemConfigObservedStatus(frozen)).toEqual(frozen);
-
-    const candidate = {
-      ...frozen,
-      bootRole: "target-candidate",
-      candidateCommit: "3".repeat(40),
-      candidateHash: "b".repeat(64),
-    };
-    expect(parseSystemConfigObservedStatus(candidate)).toEqual(candidate);
-  });
-
-  it("rejects malformed protocol-v2 hashes and control owners", () => {
-    expect(parseSystemConfigObservedStatus({
-      freezeState: "frozen",
-      bootRole: "source-frozen",
-      configHash: "not-a-hash",
-    })).toBeNull();
-    expect(parseSystemConfigObservedStatus({
-      freezeState: "frozen",
-      bootRole: "source-frozen",
       controlOwner: {
         migrationId: "roll-config-roll-1",
         sourceRevisionId: "default-r1",
+        targetRevisionId: "default-r2",
       },
-    })).toBeNull();
+      checkpointCommit: "1".repeat(40),
+      candidateCommit: "3".repeat(40),
+      candidateHash: "b".repeat(64),
+    })).toEqual({
+      state: "clean",
+      openclawVersion: "2026.7.1",
+    });
   });
 
   it("accepts only the redacted bounded status projection", () => {
@@ -153,13 +131,8 @@ describe("system config observed status validation", () => {
       runtimeReady: true,
       runtimeHealth: "healthy",
       runtimeHealthCheckedAt: "2026-07-14T20:00:01.000Z",
-      freezeState: "frozen",
       openclawVersion: "2026.7.1",
       openclawForkSha: "abc1234",
-      controlProtocol: {
-        protocol: "durable-openclaw-config",
-        version: 2,
-      },
       dashboardControlState: "ready",
       dashboardControlProtocol: {
         protocol: "openclaw-dashboard-bridge",
@@ -177,13 +150,8 @@ describe("system config observed status validation", () => {
       runtimeReady: true,
       runtimeHealth: "healthy",
       runtimeHealthCheckedAt: "2026-07-14T20:00:01.000Z",
-      freezeState: "frozen",
       openclawVersion: "2026.7.1",
       openclawForkSha: "abc1234",
-      controlProtocol: {
-        protocol: "durable-openclaw-config",
-        version: 2,
-      },
       dashboardControlState: "ready",
       dashboardControlProtocol: {
         protocol: "openclaw-dashboard-bridge",
@@ -204,10 +172,6 @@ describe("system config observed status validation", () => {
       state: "error",
       token: "must-not-pass",
     })).toEqual({ state: "error" });
-    expect(parseSystemConfigObservedStatus({
-      state: "clean",
-      controlProtocol: { protocol: "durable-openclaw-config", version: 1 },
-    })).toBeNull();
     expect(parseSystemConfigObservedStatus({
       state: "clean",
       dashboardControlState: "ready",

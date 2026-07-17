@@ -39,7 +39,6 @@ export interface FleetStateFirestore {
 }
 export interface HeartbeatSnapshot {
     gatewayId: string;
-    revisionId: string;
     status: GatewayStatus;
     version: string;
     openclawVersion: string;
@@ -47,13 +46,7 @@ export interface HeartbeatSnapshot {
     internalUrl: string;
     startedAt: number;
 }
-export interface CutoverUserGatewayParams {
-    uid: string;
-    slug: string;
-    toGatewayId: string;
-}
 export declare function writeGatewayHeartbeat(deps: FleetStateDeps, snapshot: HeartbeatSnapshot): Promise<void>;
-export declare function cutoverUserGatewayAndMarkMounted(deps: FleetStateDeps, params: CutoverUserGatewayParams): Promise<void>;
 export interface CutoverCommitParams {
     uid: string;
     slug: string;
@@ -61,55 +54,22 @@ export interface CutoverCommitParams {
     fromGatewayId: string;
     flipMirror: boolean;
     assignment: {
-        revisionId: string;
-        release: number;
         source: AssignmentSource;
         updatedByOperationId: string | null;
     } | null;
-    rollFence?: {
-        operationId: string;
-        targetRevisionId: string;
-        targetRelease: number;
-        sourceRevisionId: string;
-        sourceEpoch: number;
-        sourceConfigCheckpoint?: {
-            migrationId: string;
-            checkpointCommit: string;
-            configHash: string;
-        };
-        configReady?: {
-            observedRevisionId: string;
-            acceptedCommit: string;
-            configReadyAt: number;
-            runtimeConfigHash: string;
-        };
-    };
     customerMigrationV2Fence?: {
         operationId: string;
         migrationId: string;
         uid: string;
         slug: string;
         sourceGatewayId: string;
-        sourceRevisionId: string;
         sourceEpoch: number;
         sourceRelease: number;
         sourceAssignmentMode: "assigned" | "unassigned-live";
         sourceRootFence: CustomerMigrationV2GatewayRootFence;
         targetGatewayId: string;
-        targetRevisionId: string;
         targetRelease: number;
         targetRootFence: CustomerMigrationV2GatewayRootFence;
-        checkpointCommit: string;
-        configHash: string;
-        freezeObject: string;
-        candidateCommit: string;
-        candidateHash: string;
-        runtimeConfigHash: string;
-        targetStartedAt: number;
-        imageTag: string;
-        buildSha: string;
-        openclawVersion: string;
-        provenAt: number;
     };
 }
 export declare function commitCutoverAtomic(deps: FleetStateDeps, params: CutoverCommitParams): Promise<void>;
@@ -118,8 +78,6 @@ export interface MarkAssignmentStateParams {
     uid: string;
     state: AssignmentState;
     slug?: string;
-    revisionId?: string;
-    release?: number;
     epoch?: number;
     updatedByOperationId?: string;
     createIfMissing?: boolean;

@@ -325,7 +325,7 @@ describe("automations locality broker", () => {
     if (held.ok) await held.lease.release();
   });
 
-  it("rejects heartbeat updates while durable config is frozen", async () => {
+  it("applies heartbeat updates through a leftover roll-era freeze marker — the freeze plane is retired", async () => {
     const { app, invoke, openclawDir } = appForTest();
     fs.writeFileSync(path.join(openclawDir, "system_config.freeze.json"), JSON.stringify({
       migrationId: "mig-1",
@@ -342,8 +342,8 @@ describe("automations locality broker", () => {
         heartbeat: { every: "60m" },
       });
 
-    expect(response.status).toBe(500);
-    expect(invoke).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(invoke).toHaveBeenCalledWith("config.patch", expect.anything());
   });
 
   it("holds the durable writer lease through the awaited heartbeat patch", async () => {

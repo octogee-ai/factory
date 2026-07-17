@@ -1,6 +1,4 @@
 import {
-  DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
-  DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
   GATEWAY_HEARTBEAT_INTERVAL_MS,
   OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_TTL_MS,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
@@ -58,14 +56,10 @@ function hasReadyRevisionIdentity(
 }
 
 function hasExpectedRuntimeIdentity(configStatus: Record<string, unknown> | null): boolean {
-  const controlProtocol = record(configStatus?.controlProtocol);
   return configStatus?.runtimeReady === true &&
     configStatus.runtimeHealth === "healthy" &&
-    configStatus.freezeState === "unfrozen" &&
     configStatus.openclawVersion === OPENCLAW_CONTROL_OPENCLAW_VERSION &&
-    configStatus.openclawForkSha === OPENCLAW_CONTROL_OPENCLAW_FORK_SHA &&
-    controlProtocol?.protocol === DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL &&
-    controlProtocol.version === DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION;
+    configStatus.openclawForkSha === OPENCLAW_CONTROL_OPENCLAW_FORK_SHA;
 }
 
 function hasReadyDashboard(

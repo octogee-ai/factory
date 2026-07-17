@@ -156,7 +156,7 @@ describe("findSerialConflict — migrate-customer (per-target scope)", () => {
 });
 
 describe("findSerialConflict — shared migration/release-roll scope", () => {
-  it("claims a rollout-owned migration child while its parent rollout is running", () => {
+  it("queues a migration that shares a gateway with a running rollout — no lineage exemption", () => {
     const decision = decideOperationClaim({
       op: {
         id: "migration",
@@ -165,8 +165,7 @@ describe("findSerialConflict — shared migration/release-roll scope", () => {
         createdAt: 2,
         input: {
           fromGatewayId: "default",
-          toGatewayId: "default-r2",
-          rollOperationId: "roll-default-r2-1",
+          toGatewayId: "other",
           parentOperationId: "rollout-document",
         },
       },
@@ -179,7 +178,7 @@ describe("findSerialConflict — shared migration/release-roll scope", () => {
       pendingOpsSameKind: [],
     });
 
-    expect(decision).toEqual({ outcome: "claim" });
+    expect(decision).toEqual({ outcome: "queue", waitingOn: "roll default" });
   });
 
   it.each(["source", "target"])(

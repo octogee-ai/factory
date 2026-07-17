@@ -11,12 +11,6 @@ import {
   createActivateImportHandler,
   createActivationManifestExportHandler,
   createAbortRsyncImportHandler,
-  createConfigAbortV2Handler,
-  createConfigCandidateProofHandler,
-  createConfigFinalizeV2Handler,
-  createConfigFreezeV2Handler,
-  createConfigPromoteCandidateHandler,
-  createConfigRetireV2Handler,
   createExportHandler,
   createExportPathsHandler,
   createFlushHandler,
@@ -30,12 +24,6 @@ import {
   createRestoreHandler,
   createUnmountHandler,
   createVerifyHandler,
-  type ConfigAbortV2Callback,
-  type ConfigCandidateProofCallback,
-  type ConfigFinalizeV2Callback,
-  type ConfigFreezeV2Callback,
-  type ConfigPromoteCandidateCallback,
-  type ConfigRetireV2Callback,
   type MigrationHandlerDeps,
 } from "./fleet-http-migration.js";
 import {
@@ -175,7 +163,6 @@ export interface StartFleetOptions {
   rpc: GatewayRpcClient;
   adapter?: CustomerLifecycleAdapter;
   gatewayId: string;
-  revisionId: string;
   log: (msg: string) => void;
   port: number;
   publicKey: string;
@@ -218,12 +205,6 @@ flushLocalState?: (input: {
   reason: string;
 }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
 
-freezeSystemConfigV2?: ConfigFreezeV2Callback;
-proveSystemConfigCandidate?: ConfigCandidateProofCallback;
-promoteSystemConfigCandidate?: ConfigPromoteCandidateCallback;
-abortSystemConfigV2?: ConfigAbortV2Callback;
-finalizeSystemConfigV2?: ConfigFinalizeV2Callback;
-retireSystemConfigV2?: ConfigRetireV2Callback;
 }
 
 export interface StartedFleetController {
@@ -304,40 +285,16 @@ export function pathGatewayIdMatchesPod(
   return pathGatewayId === podGatewayId;
 }
 
-export function registerConfigControlRoutes(
-  app: express.Express,
-  gatewayIdGuard: express.RequestHandler,
-  deps: MigrationHandlerDeps,
-): void {
-  app.post("/config-freeze-v2/:gatewayId", gatewayIdGuard, createConfigFreezeV2Handler(deps));
-  app.post(
-    "/config-candidate-proof/:gatewayId",
-    gatewayIdGuard,
-    createConfigCandidateProofHandler(deps),
-  );
-  app.post(
-    "/config-promote-candidate/:gatewayId",
-    gatewayIdGuard,
-    createConfigPromoteCandidateHandler(deps),
-  );
-  app.post("/config-abort-v2/:gatewayId", gatewayIdGuard, createConfigAbortV2Handler(deps));
-  app.post("/config-retire-v2/:gatewayId", gatewayIdGuard, createConfigRetireV2Handler(deps));
-  app.post("/config-finalize-v2/:gatewayId", gatewayIdGuard, createConfigFinalizeV2Handler(deps));
-}
-
-// The K8s Service name a revision pod publishes as its heartbeat internalUrl.
-export function gatewayRevisionServiceName(input: {
-  gatewayId: string;
-  revisionId: string;
-}): string {
-  if (!input.revisionId) throw new Error("revisionId is required for gateway service addressing");
-  return `octogee-gateway-${input.revisionId}`;
+// The K8s Service name this pod publishes as its heartbeat internalUrl — the
+// chart's stable bare-id Service (GATEWAY-SIMPLE-ROLL-SPEC).
+export function gatewayServiceName(input: { gatewayId: string }): string {
+  if (!input.gatewayId) throw new Error("gatewayId is required for gateway service addressing");
+  return `octogee-gateway-${input.gatewayId}`;
 }
 
 // Build the heartbeat snapshot for a fleet tick.
 export function buildFleetHeartbeatSnapshot(input: {
   gatewayId: string;
-  revisionId: string;
   status: HeartbeatSnapshot["status"];
   version: string;
   openclawVersion: string;
@@ -345,12 +302,11 @@ export function buildFleetHeartbeatSnapshot(input: {
   internalUrl: string;
   startedAt: number;
 }): HeartbeatSnapshot {
-  if (!input.revisionId) {
-    throw new Error("revisionId is required for revision-scoped gateway heartbeat");
+  if (!input.gatewayId) {
+    throw new Error("gatewayId is required for a gateway heartbeat");
   }
   return {
     gatewayId: input.gatewayId,
-    revisionId: input.revisionId,
     status: input.status,
     version: input.version,
     openclawVersion: input.openclawVersion,
@@ -706,10 +662,7 @@ export async function startFleetController(
   const namespace = resolveK8sNamespace();
   const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || "18789";
 
-const serviceName = gatewayRevisionServiceName({
-    gatewayId: opts.gatewayId,
-    revisionId: opts.revisionId,
-  });
+const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
   const internalUrl = `http://${serviceName}.${namespace}.svc.cluster.local:${gatewayPort}`;
 
   const emitHeartbeat = async (status: HeartbeatSnapshot["status"]) => {
@@ -719,7 +672,6 @@ const serviceName = gatewayRevisionServiceName({
         stateDeps,
         buildFleetHeartbeatSnapshot({
           gatewayId: opts.gatewayId,
-          revisionId: opts.revisionId,
           status,
           version: opts.version,
           openclawVersion: opts.openclawVersion,
@@ -827,22 +779,14 @@ const waitForGatewayReady = async (): Promise<void> => {
   const migrationDeps = {
     publicKey: opts.publicKey,
     gatewayId: opts.gatewayId,
-    revisionId: opts.revisionId,
     adapter: wrappedAdapter,
     log: opts.log,
     getMountedCustomers: () => runtime.mountedCustomers,
     flushLocalState: opts.flushLocalState,
-    freezeSystemConfigV2: opts.freezeSystemConfigV2,
-    proveSystemConfigCandidate: opts.proveSystemConfigCandidate,
-    promoteSystemConfigCandidate: opts.promoteSystemConfigCandidate,
-    abortSystemConfigV2: opts.abortSystemConfigV2,
-    retireSystemConfigV2: opts.retireSystemConfigV2,
-    finalizeSystemConfigV2: opts.finalizeSystemConfigV2,
   };
   app.post("/restore/:gatewayId", gatewayIdGuard, createRestoreHandler(migrationDeps));
   app.post("/quiesce/:gatewayId", gatewayIdGuard, createQuiesceHandler(migrationDeps));
   app.post("/flush/:gatewayId", gatewayIdGuard, createFlushHandler(migrationDeps));
-  registerConfigControlRoutes(app, gatewayIdGuard, migrationDeps);
   app.post("/verify/:gatewayId", gatewayIdGuard, createVerifyHandler(migrationDeps));
   app.post("/export/:gatewayId", gatewayIdGuard, createExportHandler(migrationDeps));
   app.post("/export-paths/:gatewayId", gatewayIdGuard, createExportPathsHandler(migrationDeps));

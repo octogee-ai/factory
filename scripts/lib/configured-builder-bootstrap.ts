@@ -8,14 +8,12 @@ import { updateMattermostAccountSecrets } from "./mattermost-account-secrets.js"
 interface ConfiguredBuilderBootstrapInput {
   openclawDir: string;
   gatewayId: string;
-  revisionId: string;
   slug: string;
 }
 
 interface ConfiguredBuilderBootstrapDependencies {
   createClient?: (
     gatewayId: string,
-    revisionId: string,
   ) => Pick<FleetBrokerClient, "configuredBuilderBootstrap">;
   writeSecrets?: typeof updateMattermostAccountSecrets;
 }
@@ -36,10 +34,8 @@ export async function hydrateConfiguredBuilderBootstrap(
 ): Promise<void> {
   const createClient = dependencies.createClient ?? createFleetBrokerClient;
   const writeSecrets = dependencies.writeSecrets ?? updateMattermostAccountSecrets;
-  const bootstrap = await createClient(
-    input.gatewayId,
-    input.revisionId,
-  ).configuredBuilderBootstrap(input.slug);
+  const bootstrap = await createClient(input.gatewayId)
+    .configuredBuilderBootstrap(input.slug);
   if (!matchesConfiguredBuilder(bootstrap, input.slug)) {
     throw new Error("configured builder bootstrap identity mismatch");
   }

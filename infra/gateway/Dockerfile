@@ -15,7 +15,6 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 USER root
 
-RUN install -D -o root -g root -m 0444 /dev/null /opt/octogee/capabilities/config-status-v2
 
 # Packed internal directory dependencies must be present before scripts installs.
 COPY --chown=node:node core/package.json /octogee/core/package.json

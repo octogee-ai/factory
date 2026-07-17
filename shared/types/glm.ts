@@ -1,5 +1,4 @@
 import type { SizingTier } from "./sizing.js";
-import type { ConfigCandidateProofResponse } from "./fleet-controller.js";
 
 export type GatewayDesiredStatus = "running" | "paused" | "draining" | "retired";
 
@@ -382,25 +381,17 @@ export interface Operation {
 
 export type CustomerMigrationV2Phase =
   | "initialized"
-  | "checkpointed"
-  | "targetPrepared"
   | "keysSynced"
   | "targetRestored"
-  | "candidateProven"
   | "preSynced"
   | "sourceQuiesced"
   | "finalSynced"
   | "targetVerified"
-  | "promotionIntent"
-  | "promoted"
   | "cutover"
   | "sourceRetired"
-  | "finalized"
   | "complete"
   | "abortIntent"
-  | "abortPublished"
   | "abortTargetUnmounted"
-  | "abortContextCleared"
   | "aborted";
 
 export interface CustomerMigrationV2GatewayRootFence {
@@ -422,29 +413,15 @@ export interface CustomerMigrationV2State {
   uid: string;
   slug: string;
   sourceGatewayId: string;
-  sourceRevisionId: string;
   sourceRelease: number;
   sourceEpoch: number;
   sourceAssignmentMode: "assigned" | "unassigned-live";
   sourceRootFence: CustomerMigrationV2GatewayRootFence;
   targetGatewayId: string;
-  targetRevisionId: string;
   targetRelease: number;
   targetRootFence: CustomerMigrationV2GatewayRootFence;
-  sourceImageTag: string;
-  sourceBuildSha: string;
-  sourceOpenclawVersion: string;
-  targetImageTag: string;
-  checkpointCommit?: string;
-  configHash?: string;
-  freezeRef?: string;
-  freezeObject?: string;
-  candidateProof?: ConfigCandidateProofResponse;
-  promotionIntentAt?: number;
-  promotedAt?: number;
   cutoverAt?: number;
   sourceRetiredAt?: number;
-  finalizedAt?: number;
   completedAt?: number;
   abortFromPhase?: CustomerMigrationV2Phase;
   abortReason?: string;

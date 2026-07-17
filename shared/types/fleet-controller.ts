@@ -1,20 +1,6 @@
 
 
 import type { FleetBrokerUserSnapshot } from "./fleet-broker.js";
-import type { GatewayClass } from "./glm.js";
-
-export type SystemConfigMigrationMode =
-  | "none"
-  | "checkpoint-only"
-  | "checkpoint-and-restore";
-
-export function systemConfigMigrationMode(
-  sourceClass: GatewayClass,
-  targetClass: GatewayClass,
-): SystemConfigMigrationMode {
-  if (sourceClass === "shared") return "none";
-  return targetClass === "shared" ? "checkpoint-only" : "checkpoint-and-restore";
-}
 
 export type GatewayStatus = "booting" | "ready" | "draining" | "unreachable";
 
@@ -83,24 +69,6 @@ export const MIGRATING_IN_PIN_TTL_MS = MIGRATION_TRANSFER_TIMEOUT_MS + 60_000;
 
 export const SIGNATURE_HEADER = "X-Fleet-Controller-Signature";
 
-export const DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL = "durable-openclaw-config" as const;
-export const DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION = 2 as const;
-
-export interface DurableOpenClawConfigControlProtocol {
-  protocol: typeof DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL;
-  version: typeof DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION;
-}
-
-export const SYSTEM_CONFIG_CONTROL_CAPABILITY_FILE =
-  "system_config.control-capability.json" as const;
-export const SYSTEM_CONFIG_CONTROL_CAPABILITY_TTL_MS = 15_000;
-
-export interface SystemConfigControlCapability extends DurableOpenClawConfigControlProtocol {
-  revisionId: string;
-  instanceId: string;
-  observedAt: string;
-}
-
 export const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL = "openclaw-dashboard-bridge" as const;
 export const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION = 1 as const;
 export const OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_FILE =
@@ -120,24 +88,8 @@ export interface OpenClawDashboardBridgeCapability extends OpenClawDashboardBrid
   observedAt: string;
 }
 
-export type SystemConfigBootRole = "normal" | "source-frozen" | "target-candidate";
-
-export interface GatewayConfigControlOwner {
-  migrationId: string;
-  sourceRevisionId: string;
-  targetRevisionId: string;
-}
-
 export interface GatewayConfigStatus {
-  controlProtocol: DurableOpenClawConfigControlProtocol;
   observedAt?: unknown;
-  freezeState?: "unfrozen" | "freezing" | "frozen";
-  bootRole?: SystemConfigBootRole;
-  controlOwner?: GatewayConfigControlOwner;
-  checkpointCommit?: string;
-  configHash?: string;
-  candidateCommit?: string;
-  candidateHash?: string;
   runtimeReady?: boolean;
   openclawVersion?: string;
   openclawForkSha?: string;
@@ -146,18 +98,6 @@ export interface GatewayConfigStatus {
   dashboardControlObservedAt?: string;
 }
 
-export function hasDurableOpenClawConfigControlProtocol(
-  value: unknown,
-): value is GatewayConfigStatus {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const controlProtocol = (value as { controlProtocol?: unknown }).controlProtocol;
-  if (!controlProtocol || typeof controlProtocol !== "object" || Array.isArray(controlProtocol)) {
-    return false;
-  }
-  const marker = controlProtocol as { protocol?: unknown; version?: unknown };
-  return marker.protocol === DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL &&
-    marker.version === DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION;
-}
 export const GATEWAYS_COLLECTION = "gateways";
 
 export interface MigrationRequestBody {
@@ -248,150 +188,6 @@ export interface QuiesceResponse {
 drained: boolean;
 
 runningCount: number;
-}
-
-export const CONFIG_CONTROL_ACTIONS = [
-  "freeze-v2",
-  "candidate-proof",
-  "promote-candidate",
-  "abort-v2",
-  "retire-v2",
-  "finalize-v2",
-] as const;
-
-export type ConfigControlAction = typeof CONFIG_CONTROL_ACTIONS[number];
-
-export interface ConfigControlRequestBody extends MigrationRequestBody {
-  action: ConfigControlAction;
-  sourceRevisionId: string;
-  targetRevisionId: string;
-  issuedAt: number;
-  expiresAt: number;
-  requestId: string;
-}
-
-export interface ConfigControlResponseBody extends MigrationRequestBody {
-  sourceRevisionId: string;
-  targetRevisionId: string;
-}
-
-export const CONFIG_CONTROL_CONFLICT_ERROR = "config control conflict";
-export const CONFIG_CONTROL_UNAVAILABLE_ERROR = "config control unavailable";
-export const CONFIG_CONTROL_OWNER_CONFLICT_CODE = "freeze-owner-conflict";
-export const CONFIG_CONTROL_SCOPE_CONFLICT_CODE = "freeze-scope-conflict";
-export const CONFIG_CONTROL_REF_CONFLICT_CODE = "config-ref-conflict";
-export const CONFIG_CONTROL_REVISION_MISMATCH_CODE = "revision-mismatch";
-export const CONFIG_CONTROL_WRITER_LOCK_BUSY_CODE = "config-writer-lock-busy";
-export const CONFIG_CONTROL_GIT_UNAVAILABLE_CODE = "config-git-unavailable";
-
-export type ConfigControlConflictCode =
-  | typeof CONFIG_CONTROL_OWNER_CONFLICT_CODE
-  | typeof CONFIG_CONTROL_SCOPE_CONFLICT_CODE
-  | typeof CONFIG_CONTROL_REF_CONFLICT_CODE
-  | typeof CONFIG_CONTROL_REVISION_MISMATCH_CODE;
-
-export type ConfigControlUnavailableCode =
-  | typeof CONFIG_CONTROL_WRITER_LOCK_BUSY_CODE
-  | typeof CONFIG_CONTROL_GIT_UNAVAILABLE_CODE;
-
-export interface ConfigControlConflictResponse {
-  error: typeof CONFIG_CONTROL_CONFLICT_ERROR;
-  code: ConfigControlConflictCode;
-  owner?: ConfigControlOwner;
-}
-
-export interface ConfigControlUnavailableResponse {
-  error: typeof CONFIG_CONTROL_UNAVAILABLE_ERROR;
-  code: ConfigControlUnavailableCode;
-  retryable: true;
-}
-
-export interface ConfigControlOwner {
-  migrationId: string;
-  slug: string;
-}
-
-export interface ConfigFreezeV2RequestBody extends ConfigControlRequestBody {
-  action: "freeze-v2";
-}
-
-export interface ConfigFreezeV2Response extends ConfigControlResponseBody {
-  frozen: true;
-  checkpointCommit: string;
-  configHash: string;
-  freezeRef: string;
-  freezeObject: string;
-}
-
-export interface ConfigCandidateProofRequestBody extends ConfigControlRequestBody {
-  action: "candidate-proof";
-  checkpointCommit: string;
-  freezeObject: string;
-}
-
-export interface ConfigCandidateProofResponse extends ConfigControlResponseBody {
-  checkpointCommit: string;
-  candidateCommit: string;
-  candidateHash: string;
-  candidateRef: string;
-  freezeObject: string;
-  runtimeConfigHash: string;
-  observedRevisionId: string;
-  targetStartedAt: number;
-  imageTag: string;
-  buildSha: string;
-  openclawVersion: string;
-  configReady: true;
-  provenAt: number;
-}
-
-export interface ConfigPromoteCandidateRequestBody extends ConfigControlRequestBody {
-  action: "promote-candidate";
-  checkpointCommit: string;
-  candidateCommit: string;
-  candidateHash: string;
-  freezeObject: string;
-}
-
-export interface ConfigPromoteCandidateResponse extends ConfigControlResponseBody {
-  promoted: true;
-  promotedCommit: string;
-}
-
-export interface ConfigAbortV2RequestBody extends ConfigControlRequestBody {
-  action: "abort-v2";
-  checkpointCommit: string;
-  candidateCommit: string | null;
-  freezeObject: string;
-}
-
-export interface ConfigAbortV2Response extends ConfigControlResponseBody {
-  aborted: true;
-}
-
-export interface ConfigRetireV2RequestBody extends ConfigControlRequestBody {
-  action: "retire-v2";
-  checkpointCommit: string;
-  freezeObject: string;
-  recoverOnly?: true;
-}
-
-export interface ConfigRetireV2Response extends ConfigControlResponseBody {
-  retired: true;
-  retirementRef: string;
-  retirementObject: string;
-}
-
-export interface ConfigFinalizeV2RequestBody extends ConfigControlRequestBody {
-  action: "finalize-v2";
-  checkpointCommit: string;
-  candidateCommit: string;
-  candidateHash: string;
-  freezeObject: string;
-}
-
-export interface ConfigFinalizeV2Response extends ConfigControlResponseBody {
-  finalized: true;
 }
 
 export interface FlushGatewayRequestBody extends MigrationRequestBody {
