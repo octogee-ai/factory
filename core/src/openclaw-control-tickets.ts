@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 
 export const OPENCLAW_CONTROL_TICKETS_COLLECTION = "openclawControlTickets";
 export const OPENCLAW_CONTROL_AUDIT_COLLECTION = "openclawControlAudit";
-export const OPENCLAW_CONTROL_TICKET_TTL_MS = 30_000;
+export const OPENCLAW_CONTROL_TICKET_TTL_MS = 120_000;
 
 export interface OpenClawControlTicketDocument {
   uid: string;
