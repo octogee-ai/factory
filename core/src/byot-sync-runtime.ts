@@ -531,6 +531,7 @@ export interface SyncByotForCustomerDeps {
   isSharedGateway?: () => boolean;
   usesLlmBrokerToken?: () => boolean;
   logFn?: (m: string) => void;
+  applyConfigPatch?: typeof applyConfigPatch;
   applyByotState?: typeof applyByotState;
   restoreOauthStoreForSlug?: typeof restoreOauthStoreForSlug;
   applyCoachModelPatch?: typeof applyCoachModelPatch;
@@ -623,17 +624,26 @@ function configuredPlatformOpenAiBaseUrl(): string | null {
 
 // eslint-disable-next-line complexity -- Dependency injection defaults are intentionally centralized for runtime and tests.
 function syncActions(deps?: SyncByotForCustomerDeps): SyncByotActions {
+  const patchDeps = deps?.applyConfigPatch
+    ? { applyConfigPatch: deps.applyConfigPatch, logFn: deps.logFn }
+    : undefined;
   return {
     applyByotState: deps?.applyByotState ?? applyByotState,
     restoreOauthStoreForSlug: deps?.restoreOauthStoreForSlug ?? restoreOauthStoreForSlug,
-    applyCoachModelPatch: deps?.applyCoachModelPatch ?? applyCoachModelPatch,
-    applyCoachToolsConvergence: deps?.applyCoachToolsConvergence ?? applyCoachToolsConvergence,
+    applyCoachModelPatch:
+      deps?.applyCoachModelPatch ?? ((input) => applyCoachModelPatch(input, patchDeps)),
+    applyCoachToolsConvergence:
+      deps?.applyCoachToolsConvergence ??
+      ((slug, houseOnly) => applyCoachToolsConvergence(slug, houseOnly, patchDeps)),
     applyOauthRuntimeModelAllowlist:
-      deps?.applyOauthRuntimeModelAllowlist ?? applyOauthRuntimeModelAllowlist,
+      deps?.applyOauthRuntimeModelAllowlist ??
+      ((providers) => applyOauthRuntimeModelAllowlist(providers, patchDeps)),
     requestGatewayRestart: deps?.requestGatewayRestart ?? requestGatewayRestartForRuntimeChange,
     triggerSecretsReload: deps?.triggerSecretsReload ?? triggerSecretsReload,
     materializeAnthropicBroker: deps?.materializeAnthropicBroker ?? materializeAnthropicBroker,
-    applyAgentModelOverrides: deps?.applyAgentModelOverrides ?? applyAgentModelOverrides,
+    applyAgentModelOverrides:
+      deps?.applyAgentModelOverrides ??
+      ((slug, agentModels, opts) => applyAgentModelOverrides(slug, agentModels, opts, patchDeps)),
     hasPendingPlatformCatalogRestart:
       deps?.hasPendingPlatformCatalogRestart ?? hasPendingPlatformCatalogRestart,
     markPlatformCatalogRestartPending:
