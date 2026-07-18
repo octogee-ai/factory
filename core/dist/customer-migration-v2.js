@@ -136,6 +136,13 @@ async function advanceForward(state, deps) {
                 transportId: state.sourceGatewayId,
                 slug: state.slug,
             });
+            await deps.client.flushGateway({
+                migrationId: state.migrationId,
+                gatewayId: state.sourceGatewayId,
+                transportId: state.sourceGatewayId,
+                slug: state.slug,
+                reason: "migration-final",
+            });
             return { ...state, phase: "sourceQuiesced" };
         case "sourceQuiesced":
             await deps.client.transferState({
@@ -147,6 +154,13 @@ async function advanceForward(state, deps) {
                 slug: state.slug,
                 mode: "final",
                 includeActivationManifest: true,
+            });
+            await deps.client.flushGateway({
+                migrationId: state.migrationId,
+                gatewayId: state.targetGatewayId,
+                transportId: state.targetGatewayId,
+                slug: state.slug,
+                reason: "migration-converge",
             });
             return { ...state, phase: "finalSynced" };
         case "finalSynced":

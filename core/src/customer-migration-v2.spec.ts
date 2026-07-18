@@ -55,9 +55,15 @@ function deps(): CustomerMigrationV2Deps {
     transferState: vi.fn(async () => ({ migrationId: "mig-op-1", slug: "alice", imported: true })),
     restoreTarget: vi.fn(async () => ({ migrationId: "mig-op-1", slug: "alice", restored: true })),
     quiesce: vi.fn(async () => ({ migrationId: "mig-op-1", slug: "alice", drained: true, runningCount: 0 })),
+    flushGateway: vi.fn(async () => ({
+      migrationId: "mig-op-1",
+      slug: "alice",
+      ok: true,
+      durationMs: 1,
+      steps: [],
+    })),
     verifyTarget: vi.fn(async () => ({ migrationId: "mig-op-1", slug: "alice", ready: true })),
     unmount: vi.fn(async () => ({ migrationId: "mig-op-1", slug: "alice", unmounted: true })),
-    flushGateway: vi.fn(),
   } as unknown as MigrationClient;
   return {
     client,
@@ -101,6 +107,22 @@ describe("advanceCustomerMigrationV2", () => {
       gatewayId: "source",
       transportId: "source",
     }));
+    expect(client.flushGateway.mock.calls.map((call) => call[0])).toEqual([
+      {
+        migrationId: "mig-op-1",
+        gatewayId: "source",
+        transportId: "source",
+        slug: "alice",
+        reason: "migration-final",
+      },
+      {
+        migrationId: "mig-op-1",
+        gatewayId: "target",
+        transportId: "target",
+        slug: "alice",
+        reason: "migration-converge",
+      },
+    ]);
     expect(d.commitCutover).toHaveBeenCalledWith({
       operationId: "op-1",
       migrationId: "mig-op-1",
@@ -132,9 +154,52 @@ describe("advanceCustomerMigrationV2", () => {
       return { migrationId: "mig-op-1", slug: "alice", drained: true, runningCount: 0 };
     });
 
+    client.flushGateway.mockImplementation(async () => {
+      order.push("source-flush");
+      return { migrationId: "mig-op-1", slug: "alice", ok: true, durationMs: 1, steps: [] };
+    });
+
     await advanceCustomerMigrationV2(state("preSynced"), d);
 
-    expect(order).toEqual(["assignment-quiescing", "quiesce-rpc"]);
+    expect(order).toEqual(["assignment-quiescing", "quiesce-rpc", "source-flush"]);
+  });
+
+  it("converges target config after final transfer and before target verification", async () => {
+    const d = deps();
+    const order: string[] = [];
+    const client = d.client as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    client.transferState.mockImplementation(async () => {
+      order.push("final-transfer");
+      return { migrationId: "mig-op-1", slug: "alice", imported: true };
+    });
+    client.flushGateway.mockImplementation(async () => {
+      order.push("target-flush");
+      return { migrationId: "mig-op-1", slug: "alice", ok: true, durationMs: 1, steps: [] };
+    });
+    client.verifyTarget.mockImplementation(async () => {
+      order.push("target-verify");
+      return { migrationId: "mig-op-1", slug: "alice", ready: true };
+    });
+
+    const finalSynced = await advanceCustomerMigrationV2(state("sourceQuiesced"), d);
+    await advanceCustomerMigrationV2(finalSynced, d);
+
+    expect(order).toEqual(["final-transfer", "target-flush", "target-verify"]);
+  });
+
+  it.each([
+    ["source", "preSynced" as const, "quiesce"],
+    ["target", "sourceQuiesced" as const, "transferState"],
+  ])("replays the %s handoff phase after a lost flush response", async (_name, phase, priorRpc) => {
+    const d = deps();
+    const client = d.client as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    client.flushGateway.mockRejectedValueOnce(new MigrationTransportError("flush response lost"));
+
+    await expect(advanceCustomerMigrationV2(state(phase), d)).rejects.toThrow(/response lost/u);
+    await expect(advanceCustomerMigrationV2(state(phase), d)).resolves.toBeDefined();
+
+    expect(client.flushGateway).toHaveBeenCalledTimes(2);
+    expect(client[priorRpc]).toHaveBeenCalledTimes(2);
   });
 
   it("advances state only after the RPC response so a lost response is reissued", async () => {

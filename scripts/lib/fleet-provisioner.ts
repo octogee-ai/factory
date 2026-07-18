@@ -24,7 +24,6 @@ import {
   createRestoreHandler,
   createUnmountHandler,
   createVerifyHandler,
-  type MigrationHandlerDeps,
 } from "./fleet-http-migration.js";
 import {
   writeGatewayHeartbeat,

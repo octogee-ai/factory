@@ -17,6 +17,10 @@ const gatewayDeployment = readFileSync(
   path.join(repoRoot, "helm/octogee-gateway/templates/deployment.yaml"),
   "utf8",
 );
+const gatewayValues = readFileSync(
+  path.join(repoRoot, "helm/octogee-gateway/values.yaml"),
+  "utf8",
+);
 
 describe("infra/gateway/entrypoint.sh — no permanent platform persona", () => {
   it("does not bootstrap a bot, PAT, operator agent id, or ops workspace", () => {
@@ -81,6 +85,19 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(configPathIdx).toBeGreaterThan(-1);
     expect(configPathIdx).toBeLessThan(shellIdx);
     expect(shellIdx).toBeLessThan(restoreIdx);
+  });
+
+  it("keeps the probed runner plane behind repair and bounds each startup attempt", () => {
+    const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
+    const checkpointIdx = entrypoint.indexOf("system-config-checkpoint.ts");
+    const fleetControllerIdx = entrypoint.indexOf("supervise_runner fleet-controller");
+
+    expect(fleetControllerIdx).toBeGreaterThan(restoreIdx);
+    expect(fleetControllerIdx).toBeGreaterThan(checkpointIdx);
+    expect(gatewayDeployment).toMatch(/startupProbe:[\s\S]*?path:\s*\/health[\s\S]*?port:\s*\{\{ \.Values\.env\.fleetControllerPort/);
+    expect(gatewayValues).toMatch(
+      /startup:\s+initialDelaySeconds:\s*15\s+periodSeconds:\s*10\s+failureThreshold:\s*60/,
+    );
   });
 
   it("exposes image-staged plugin roots beside the nested durable config", () => {

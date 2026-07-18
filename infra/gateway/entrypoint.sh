@@ -430,9 +430,8 @@ run_openclaw_doctor() {
 # ── Repair + accept the durable config (identity-pure, level-triggered) ─────
 # Doctor-repair, class policy, env reconciliation, and the durable checkpoint
 # (recovery + commit + push) retry as one unit until the accepted config is
-# durable in Gitea. The loop consults nothing but the data plane; a stuck loop
-# means the data plane is down, and the pod just keeps retrying (the operator
-# can shell in via BuilderShell the whole time).
+# durable in Gitea. The loop consults nothing but the data plane and retries
+# until the startup probe's ten-minute budget begins a fresh container attempt.
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   export OPENCLAW_SERVICE_REPAIR_POLICY=external
   while true; do

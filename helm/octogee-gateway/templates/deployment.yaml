@@ -333,12 +333,9 @@ spec:
               readOnly: true
             # No platform secrets are mounted here. The projected token above
             # is this gateway's KSA identity for tenant-bound broker calls.
-          # Identity-pure probes (GATEWAY-SIMPLE-ROLL-SPEC): startup + liveness
-          # ride the fleet controller's runner plane on non-shared gateways —
-          # a long durable-config restore keeps the pod alive, and a dead
-          # runner plane restarts it. Readiness is OpenClaw itself on every
-          # class, so the surge roll only retires the old pod once the new one
-          # actually serves.
+          # Non-shared startup and liveness probe the fleet controller, which
+          # starts after durable-config repair; the startup budget bounds one
+          # identity-pure attempt. Readiness probes OpenClaw on every class.
           startupProbe:
             {{- if eq $gatewayClass "shared" }}
             httpGet:

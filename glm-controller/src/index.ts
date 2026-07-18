@@ -9,11 +9,8 @@ import {
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
-  deriveGatewayIdentity,
   operatorGatewayServiceAccountName,
   resolveGatewayClass,
-  type GatewayClass,
-  type GatewayProfile,
   type HelmInstancesMap,
   type Operation,
 } from "@octogee/shared/types/glm";
@@ -48,12 +45,8 @@ import {
 } from "./heartbeat-relocation.js";
 import { createGatewayRuntimeConfigPreparer } from "./gateway-runtime-config.js";
 import {
-  gatewayEdgeServiceName,
-  gatewayPodServiceName,
   isGatewayDesiredDoc,
   isGatewayRuntimeDoc,
-  GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
-  type AssignmentDoc,
   W9_GATEWAY_EDGE_IMAGE_REPOSITORY,
   type GatewayDoc,
   type GatewayRuntimeDoc,
@@ -88,7 +81,6 @@ import {
 import { createOperationContext } from "./operation-context.js";
 import {
   decideOperationClaim,
-  findRunningRolloutParentOperationId,
   isSeriallyExclusiveKind,
   type OperationRef,
   type PendingOperationRef,
@@ -97,7 +89,6 @@ import {
   buildOperationCompletionUpdate,
   operationNeedsDurableCustomerMigrationV2Resume,
   shouldPersistClaimedOperationCompletion,
-  supersededRollMigrationAction,
 } from "./operation-retry.js";
 import { completeOperatorReservationAfterMigration } from "./operator-reservation-completion.js";
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
@@ -123,7 +114,6 @@ import {
   slugFromAssignedUser,
 } from "@octogee/core/assigned-roster";
 import {
-  parseAssignmentDoc,
   readAssignmentDoc,
   readAssignmentDocsForGateway,
 } from "@octogee/core/assignment-doc";
@@ -181,7 +171,6 @@ import {
   DEDICATED_GATEWAY_IDLE_SWEEP_MS_DEFAULT,
   startDedicatedGatewayIdleSweeper,
 } from "./dedicated-gateway-idle-sweeper.js";
-import { readShellLiveness } from "./shell-liveness.js";
 import {
   PREEMPTION_HANDOFF_SWEEP_MS_DEFAULT,
   startPreemptionHandoffSweeper,
@@ -209,11 +198,6 @@ const MIGRATE_CUSTOMER_KIND = "migrate-customer";
 const RECONCILE_RETRY_MS_DEFAULT = 30_000;
 const OPERATOR_READY_REFRESH_MS_DEFAULT = 60_000;
 const MAINTENANCE_GATE_POLL_MS = 5_000;
-
-// Wall-clock budget for a converge-empty revision to become ready (Deployment
-// available + heartbeat version match) before it is marked failed instead of
-// re-driven. Generous — a cold gateway boot + image pull can take minutes.
-const CONVERGE_EMPTY_READINESS_TIMEOUT_MS = 15 * 60_000;
 
 const GATEWAY_CHART = process.env.GATEWAY_CHART ?? "/charts/octogee-gateway";
 const ORCHESTRATOR_CONFIG_DOC_PATH = "config/orchestrator";
@@ -1847,17 +1831,6 @@ function createMigrationClientBuilder(
   };
 }
 
-function operationIdFromMigrationId(migrationId: string): string {
-  if (!migrationId.startsWith("mig-")) {
-    throw new Error("config freeze recovery migration id is not operation-bound");
-  }
-  const operationId = migrationId.slice(4);
-  if (!operationId) {
-    throw new Error("config freeze recovery migration id is not operation-bound");
-  }
-  return operationId;
-}
-
 function readPath(obj: Record<string, unknown> | undefined, dotted: string): unknown {
   let cur: unknown = obj;
   for (const part of dotted.split(".")) {
@@ -1996,7 +1969,7 @@ async function buildHandlers(
     chartFingerprint: string;
   },
 ): Promise<OperationHandlers> {
-  const { privateKey, modelKeySourceIssuer, prepareGatewayConfig, chartFingerprint } = fleetOps;
+  const { privateKey, modelKeySourceIssuer } = fleetOps;
   if (!privateKey) {
     throw new Error(
       "FLEET_CONTROLLER_PRIVATE_KEY is not set — required for migrate-customer. Refusing to start with stub handlers.",

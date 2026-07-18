@@ -324,10 +324,9 @@ tiers:
       maxOldSpaceSizeMb: "147456"
 
 probes:
-  # Non-shared startup reaches the fleet controller's runner plane
-  # (:3003/health), which is up while the durable-config restore/repair loop
-  # still runs. 10s × 60 = a 10-minute budget: a data-plane outage longer than
-  # that restarts the container into the same identity-pure retry loop.
+  # Non-shared startup reaches the fleet controller only after durable-config
+  # restore and repair. 10s × 60 gives each identity-pure attempt 10 minutes;
+  # an attempt that exceeds the budget restarts from gateway identity.
   startup:
     initialDelaySeconds: 15
     periodSeconds: 10

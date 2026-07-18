@@ -163,6 +163,18 @@ export async function probeOpenClawHealth(
   }
 }
 
+function resolveRuntimeHealth(
+  healthy: boolean,
+  dashboardRequired: boolean,
+  dashboardReady: boolean,
+): Pick<SystemConfigObservedStatus, "runtimeHealth" | "runtimeReady"> {
+  if (!healthy) return { runtimeHealth: "unhealthy", runtimeReady: false };
+  if (dashboardRequired && !dashboardReady) {
+    return { runtimeHealth: "repair", runtimeReady: false };
+  }
+  return { runtimeHealth: "healthy", runtimeReady: true };
+}
+
 // Identity-pure runtime health (GATEWAY-SIMPLE-ROLL-SPEC): the deep OpenClaw
 // probe and the local Dashboard capability file are the only inputs — no boot
 // acceptance, no roll role, no fleet state. The boot loop does not start
@@ -183,17 +195,13 @@ export async function refreshSystemConfigRuntimeHealth(
   const healthy = await (options.probeOpenClaw ?? probeOpenClawHealth)();
   const dashboardRequired = env.OPENCLAW_DASHBOARD_BRIDGE_REQUIRED === "true";
   const dashboardReady = dashboard.dashboardControlState === "ready";
-  let runtimeHealth: SystemConfigObservedStatus["runtimeHealth"] = healthy
-    ? "healthy"
-    : "unhealthy";
-  if (healthy && dashboardRequired && !dashboardReady) runtimeHealth = "repair";
+  const runtime = resolveRuntimeHealth(healthy, dashboardRequired, dashboardReady);
   return updateSystemConfigStatus(options.openclawDir, {
     state: current.state,
     ...dashboard,
     openclawVersion: env.OPENCLAW_VERSION?.trim() || "unknown",
     openclawForkSha: env.OPENCLAW_FORK_SHA?.trim() || "unknown",
-    runtimeReady: healthy && (!dashboardRequired || dashboardReady),
-    runtimeHealth,
+    ...runtime,
     runtimeHealthCheckedAt: observedAt.toISOString(),
   }, now);
 }
