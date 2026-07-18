@@ -250,7 +250,6 @@ describe('readConnectorAccessToken', () => {
         encryptedRefreshToken: 'ENC:refresh_google',
         expiresAt: Date.now() - 60_000,
         tokenType: 'Bearer',
-        clientSource: 'platform',
       },
     };
 
@@ -289,7 +288,6 @@ describe('readConnectorAccessToken', () => {
         encryptedRefreshToken: 'ENC:refresh_google',
         expiresAt: Date.now() - 60_000,
         tokenType: 'Bearer',
-        clientSource: 'platform',
       },
     };
 
@@ -360,71 +358,50 @@ describe('readConnectorAccessToken', () => {
   });
 });
 
-describe('readConnectorClientCreds — per-user first, platform env fallback', () => {
-  it("per-user connectors prefer the user's own encrypted client creds over env", async () => {
+describe('readConnectorClientCreds — platform env only', () => {
+  it('reads the platform client from env', () => {
     process.env.GOOGLE_CLIENT_ID = 'env-id';
     process.env.GOOGLE_CLIENT_SECRET = 'env-secret';
+    expect(readConnectorClientCreds(getConnector('google')!)).toEqual({
+      clientId: 'env-id',
+      clientSecret: 'env-secret',
+    });
+  });
+
+  it('returns null when env is unset', () => {
+    expect(readConnectorClientCreds(getConnector('google')!)).toBeNull();
+    expect(readConnectorClientCreds(getConnector('microsoft')!)).toBeNull();
+  });
+
+  it('treats empty and literal-placeholder values as unconfigured', () => {
+    process.env.GOOGLE_CLIENT_ID = '';
+    process.env.GOOGLE_CLIENT_SECRET = '';
+    expect(readConnectorClientCreds(getConnector('google')!)).toBeNull();
+
+    process.env.GOOGLE_CLIENT_ID = 'placeholder';
+    process.env.GOOGLE_CLIENT_SECRET = 'placeholder';
+    expect(readConnectorClientCreds(getConnector('google')!)).toBeNull();
+
+    process.env.GOOGLE_CLIENT_ID = '  ';
+    process.env.GOOGLE_CLIENT_SECRET = 'real-secret';
+    expect(readConnectorClientCreds(getConnector('google')!)).toBeNull();
+  });
+
+  it('a legacy per-user client doc is dead weight — env decides, alone', () => {
     firestoreData['users/u-dan/secrets/google'] = {
       client: {
         encryptedClientId: 'ENC:dan-client.apps.googleusercontent.com',
         encryptedClientSecret: 'ENC:dan-secret',
       },
     };
-    await expect(readConnectorClientCreds('u-dan', getConnector('google')!)).resolves.toEqual({
-      clientId: 'dan-client.apps.googleusercontent.com',
-      clientSecret: 'dan-secret',
-      source: 'per-user',
-    });
-  });
+    expect(readConnectorClientCreds(getConnector('google')!)).toBeNull();
 
-  it('per-user connectors fall back to the platform env client (zero-setup mode)', async () => {
     process.env.GOOGLE_CLIENT_ID = 'env-id';
     process.env.GOOGLE_CLIENT_SECRET = 'env-secret';
-    firestoreData['users/u-dan/secrets/google'] = { tokens: {} };
-    await expect(readConnectorClientCreds('u-dan', getConnector('google')!)).resolves.toEqual({
+    expect(readConnectorClientCreds(getConnector('google')!)).toEqual({
       clientId: 'env-id',
       clientSecret: 'env-secret',
-      source: 'platform',
     });
-  });
-
-  it('per-user connectors return null only when user client AND env are both absent', async () => {
-    firestoreData['users/u-dan/secrets/google'] = { tokens: {} };
-    await expect(readConnectorClientCreds('u-dan', getConnector('google')!)).resolves.toBeNull();
-  });
-
-  it('a forSource pin resolves exactly that source (refresh must reuse the minting client)', async () => {
-    process.env.GOOGLE_CLIENT_ID = 'env-id';
-    process.env.GOOGLE_CLIENT_SECRET = 'env-secret';
-    firestoreData['users/u-dan/secrets/google'] = {
-      client: {
-        encryptedClientId: 'ENC:dan-client',
-        encryptedClientSecret: 'ENC:dan-secret',
-      },
-    };
-    await expect(
-      readConnectorClientCreds('u-dan', getConnector('google')!, 'platform'),
-    ).resolves.toEqual({ clientId: 'env-id', clientSecret: 'env-secret', source: 'platform' });
-    await expect(
-      readConnectorClientCreds('u-dan', getConnector('google')!, 'per-user'),
-    ).resolves.toEqual({ clientId: 'dan-client', clientSecret: 'dan-secret', source: 'per-user' });
-  });
-
-  it('platform connectors read env and ignore any per-user doc', async () => {
-    const microsoftLike = getConnector('microsoft')!;
-    process.env.MICROSOFT_CLIENT_ID = 'ms-env-id';
-    process.env.MICROSOFT_CLIENT_SECRET = 'ms-env-secret';
-    await expect(readConnectorClientCreds('u-dan', microsoftLike)).resolves.toEqual({
-      clientId: 'ms-env-id',
-      clientSecret: 'ms-env-secret',
-      source: 'platform',
-    });
-    delete process.env.MICROSOFT_CLIENT_ID;
-    delete process.env.MICROSOFT_CLIENT_SECRET;
-  });
-
-  it('platform connectors return null when env is unset', async () => {
-    await expect(readConnectorClientCreds('u-dan', getConnector('microsoft')!)).resolves.toBeNull();
   });
 });
 
@@ -432,10 +409,6 @@ describe('getFreshAccessToken — refresh-aware access', () => {
   function seedGoogleTokens(overrides: Record<string, unknown> = {}) {
     firestoreData['users/u-dan/secrets/google'] = {
       provider: 'google',
-      client: {
-        encryptedClientId: 'ENC:dan-client',
-        encryptedClientSecret: 'ENC:dan-secret',
-      },
       tokens: {
         encryptedAccessToken: 'ENC:stale-access',
         encryptedRefreshToken: 'ENC:long-lived-refresh',
@@ -456,30 +429,9 @@ describe('getFreshAccessToken — refresh-aware access', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('refreshes a platform-captured token with the platform client, even when a user client exists', async () => {
+  it('refreshes an expired token with the platform client and persists the rotation', async () => {
     process.env.GOOGLE_CLIENT_ID = 'env-id';
     process.env.GOOGLE_CLIENT_SECRET = 'env-secret';
-    seedGoogleTokens({ expiresAt: Date.now() - 1000, clientSource: 'platform' });
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string | URL, init?: RequestInit) => {
-        const body = String(init?.body);
-        expect(body).toContain('client_id=env-id');
-        expect(body).toContain('client_secret=env-secret');
-        return new Response(
-          JSON.stringify({ access_token: 'fresh-platform', expires_in: 3600, token_type: 'Bearer' }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        );
-      }),
-    );
-
-    await expect(getFreshAccessToken('u-dan', getConnector('google')!)).resolves.toEqual({
-      ok: true,
-      accessToken: 'fresh-platform',
-    });
-  });
-
-  it('refreshes an expired token with the per-user client and persists the rotation', async () => {
     seedGoogleTokens({ expiresAt: Date.now() - 1000 });
     vi.stubGlobal(
       'fetch',
@@ -488,8 +440,8 @@ describe('getFreshAccessToken — refresh-aware access', () => {
         const body = String(init?.body);
         expect(body).toContain('grant_type=refresh_token');
         expect(body).toContain('refresh_token=long-lived-refresh');
-        expect(body).toContain('client_id=dan-client');
-        expect(body).toContain('client_secret=dan-secret');
+        expect(body).toContain('client_id=env-id');
+        expect(body).toContain('client_secret=env-secret');
         return new Response(
           JSON.stringify({ access_token: 'fresh-access', expires_in: 3600, token_type: 'Bearer' }),
           { status: 200, headers: { 'Content-Type': 'application/json' } },
@@ -507,7 +459,21 @@ describe('getFreshAccessToken — refresh-aware access', () => {
     expect(tokens.encryptedRefreshToken).toBe('ENC:long-lived-refresh');
   });
 
+  it('reports reauth_required when a token expires and no platform client is configured', async () => {
+    seedGoogleTokens({ expiresAt: Date.now() - 1000 });
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await expect(getFreshAccessToken('u-dan', getConnector('google')!)).resolves.toEqual({
+      ok: false,
+      reason: 'reauth_required',
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it('reports reauth_required when the provider rejects the refresh token', async () => {
+    process.env.GOOGLE_CLIENT_ID = 'env-id';
+    process.env.GOOGLE_CLIENT_SECRET = 'env-secret';
     seedGoogleTokens({ expiresAt: Date.now() - 1000 });
     vi.stubGlobal(
       'fetch',
@@ -526,6 +492,8 @@ describe('getFreshAccessToken — refresh-aware access', () => {
   });
 
   it('a lost refresh race re-reads the doc and returns the winning rotation instead of reauth', async () => {
+    process.env.GOOGLE_CLIENT_ID = 'env-id';
+    process.env.GOOGLE_CLIENT_SECRET = 'env-secret';
     seedGoogleTokens({ expiresAt: Date.now() - 1000 });
     vi.stubGlobal(
       'fetch',

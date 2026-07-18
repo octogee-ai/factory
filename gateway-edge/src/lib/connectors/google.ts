@@ -1,16 +1,56 @@
-import type { ConnectorDef } from "./def.js";
+import {
+  GOOGLE_CAPABILITY_SCOPES,
+  googleAuthRequestScopes,
+  googleCapabilitiesFromScopes,
+  type GoogleCapability,
+} from "@octogee/shared/types/connectors";
+import type { ConnectorDef, ConnectorProbeResult } from "./def.js";
 import { catalogMeta } from "./def.js";
+
+const CAPABILITY_PROBES: Record<GoogleCapability, { name: string; url: string }> = {
+  calendar: {
+    name: "calendar.list",
+    url: "https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1",
+  },
+  gmail: {
+    name: "gmail.profile",
+    url: "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+  },
+  drive: {
+    name: "drive.about",
+    url: "https://www.googleapis.com/drive/v3/about?fields=user",
+  },
+};
+
+async function probeCapability(accessToken: string, capability: GoogleCapability): Promise<void> {
+  const probe = CAPABILITY_PROBES[capability];
+  const resp = await fetch(probe.url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!resp.ok) {
+    throw new Error(`Google ${probe.name} probe failed: ${resp.status}`);
+  }
+}
 
 export const googleConnector: ConnectorDef = {
   meta: catalogMeta("google"),
   oauth: {
     authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",
     tokenUrl: "https://oauth2.googleapis.com/token",
+    revocationUrl: "https://oauth2.googleapis.com/revoke",
     clientIdEnv: "GOOGLE_CLIENT_ID",
     clientSecretEnv: "GOOGLE_CLIENT_SECRET",
     redirectUriEnv: "GOOGLE_OAUTH_REDIRECT_URI",
-    extraAuthParams: { access_type: "offline", prompt: "consent" },
+    extraAuthParams: {
+      access_type: "offline",
+      prompt: "consent",
+      include_granted_scopes: "true",
+    },
   },
+  capabilityRequestScopes: (capability) =>
+    capability in GOOGLE_CAPABILITY_SCOPES
+      ? googleAuthRequestScopes(capability as GoogleCapability)
+      : null,
   fetchIdentity: async (accessToken) => {
     const resp = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -24,14 +64,17 @@ export const googleConnector: ConnectorDef = {
     }
     return { accountLabel: user.email };
   },
-  deepProbe: async (accessToken) => {
-    const resp = await fetch("https://www.googleapis.com/drive/v3/about?fields=user", {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (!resp.ok) {
-      throw new Error(`Google Drive probe failed: ${resp.status}`);
+  deepProbe: async (accessToken, grantedScopes): Promise<ConnectorProbeResult> => {
+    const capabilities = googleCapabilitiesFromScopes(grantedScopes);
+    if (capabilities.length === 0) {
+      return { probe: "identity", detail: "no capability scopes granted" };
     }
-    const about = (await resp.json()) as { user?: { emailAddress?: string } };
-    return { probe: "drive.about", detail: about.user?.emailAddress ?? "unknown" };
+    for (const capability of capabilities) {
+      await probeCapability(accessToken, capability);
+    }
+    return {
+      probe: capabilities.map((capability) => CAPABILITY_PROBES[capability].name).join("+"),
+      detail: capabilities.join(", "),
+    };
   },
 };

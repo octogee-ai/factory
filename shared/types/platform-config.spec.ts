@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_FREE_TIER_MODEL_REF,
+  DEFAULT_PLATFORM_CONNECT_CONFIG,
+  PLATFORM_CONNECT_CONFIG_DOC,
+  googleConnectAllowed,
+  parsePlatformConnectConfig,
   parsePlatformModelConfig,
   resolveFreeTierModel,
 } from "./platform-config";
@@ -70,5 +74,55 @@ describe("resolveFreeTierModel", () => {
   it("returns null for a ref outside the catalog", () => {
     expect(resolveFreeTierModel("claude-cli/claude-opus-4-8")).toBeNull();
     expect(resolveFreeTierModel("z-ai/glm-5.2")).toBeNull();
+  });
+});
+
+describe("parsePlatformConnectConfig", () => {
+  it("accepts each stage and normalizes the allowlist", () => {
+    expect(
+      parsePlatformConnectConfig({ googleStage: "allowlist", googleAllowlistUids: ["u1", " u2 ", ""] }),
+    ).toEqual({ googleStage: "allowlist", googleAllowlistUids: ["u1", "u2"] });
+    expect(parsePlatformConnectConfig({ googleStage: "on" })).toEqual({
+      googleStage: "on",
+      googleAllowlistUids: [],
+    });
+    expect(parsePlatformConnectConfig({ googleStage: "off", googleAllowlistUids: [] })).toEqual({
+      googleStage: "off",
+      googleAllowlistUids: [],
+    });
+  });
+
+  it("rejects unknown stages and malformed docs", () => {
+    expect(parsePlatformConnectConfig({ googleStage: "public" })).toBeNull();
+    expect(parsePlatformConnectConfig({ googleStage: 42 })).toBeNull();
+    expect(parsePlatformConnectConfig({ googleStage: "on", googleAllowlistUids: "u1" })).toBeNull();
+    expect(parsePlatformConnectConfig({ googleStage: "on", googleAllowlistUids: [42] })).toBeNull();
+    expect(parsePlatformConnectConfig({})).toBeNull();
+    expect(parsePlatformConnectConfig(null)).toBeNull();
+    expect(parsePlatformConnectConfig("on")).toBeNull();
+  });
+
+  it("ships dark: the compiled default is off with an empty allowlist", () => {
+    expect(DEFAULT_PLATFORM_CONNECT_CONFIG).toEqual({ googleStage: "off", googleAllowlistUids: [] });
+    expect(PLATFORM_CONNECT_CONFIG_DOC).toBe("connect");
+  });
+});
+
+describe("googleConnectAllowed", () => {
+  it("off (or an unreadable doc) admits nobody", () => {
+    expect(googleConnectAllowed(null, "u1")).toBe(false);
+    expect(googleConnectAllowed({ googleStage: "off", googleAllowlistUids: ["u1"] }, "u1")).toBe(false);
+  });
+
+  it("allowlist admits exactly the listed uids", () => {
+    const config = { googleStage: "allowlist" as const, googleAllowlistUids: ["u1", "u2"] };
+    expect(googleConnectAllowed(config, "u1")).toBe(true);
+    expect(googleConnectAllowed(config, "u3")).toBe(false);
+  });
+
+  it("on admits any authenticated uid but never a blank one", () => {
+    const config = { googleStage: "on" as const, googleAllowlistUids: [] };
+    expect(googleConnectAllowed(config, "anyone")).toBe(true);
+    expect(googleConnectAllowed(config, "")).toBe(false);
   });
 });

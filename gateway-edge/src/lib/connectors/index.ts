@@ -39,6 +39,10 @@ export function getConnector(id: string): ConnectorDef | undefined {
   return IMPLEMENTED[id as ConnectorId];
 }
 
+export function listConnectors(): ConnectorDef[] {
+  return Object.values(IMPLEMENTED);
+}
+
 export function isConnectorTokenBrokerable(id: string): boolean {
   const def = getConnector(id);
   return def?.meta.consumption === "platform-read" && def.meta.family === "code-hosting";

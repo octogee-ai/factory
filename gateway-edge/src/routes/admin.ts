@@ -16,8 +16,11 @@ import { MODEL_CATALOG } from "@octogee/shared/types/model-catalog";
 import { modelRefForCatalogEntry } from "@octogee/shared/types/agent-models";
 import {
   DEFAULT_FREE_TIER_MODEL_REF,
+  DEFAULT_PLATFORM_CONNECT_CONFIG,
   PLATFORM_CONFIG_COLLECTION,
+  PLATFORM_CONNECT_CONFIG_DOC,
   PLATFORM_MODEL_CONFIG_DOC,
+  parsePlatformConnectConfig,
   parsePlatformModelConfig,
 } from "@octogee/shared/types/platform-config";
 
@@ -101,6 +104,57 @@ router.put("/platform-config", async (req, res) => {
     res.json({ ok: true, freeTierModelRef: parsed.freeTierModelRef });
   } catch (err) {
     logger.error("[admin] platform-config write failed", { err });
+    res.status(500).json({ error: "platform_config_write_failed" });
+  }
+});
+
+// The Google connect-stage dial (platformConfig/connect) — GOOGLE-PLATFORM-OAUTH-SPEC §7.
+// Ships dark; 'allowlist' admits the listed uids during the unverified approval
+// window; 'on' at verification acceptance. GET reports the EFFECTIVE value (a
+// malformed doc reads as the dark default, same as the connect routes resolve it).
+const platformConnectDoc = () =>
+  db.collection(PLATFORM_CONFIG_COLLECTION).doc(PLATFORM_CONNECT_CONFIG_DOC);
+
+router.get("/platform-connect-config", async (_req, res) => {
+  try {
+    const snap = await platformConnectDoc().get();
+    const parsed = parsePlatformConnectConfig(snap.data());
+    if (snap.data() !== undefined && !parsed) {
+      logger.warn("[admin] platformConfig/connect is malformed — serving the dark default", {
+        data: snap.data(),
+      });
+    }
+    res.json(parsed ?? DEFAULT_PLATFORM_CONNECT_CONFIG);
+  } catch (err) {
+    logger.error("[admin] platform-connect-config read failed", { err });
+    res.status(500).json({ error: "platform_config_read_failed" });
+  }
+});
+
+router.put("/platform-connect-config", async (req, res) => {
+  const parsed = parsePlatformConnectConfig(req.body);
+  if (!parsed) {
+    res.status(400).json({ error: "invalid_connect_config" });
+    return;
+  }
+  try {
+    await platformConnectDoc().set(
+      {
+        googleStage: parsed.googleStage,
+        googleAllowlistUids: parsed.googleAllowlistUids,
+        updatedAt: FieldValue.serverTimestamp(),
+        updatedBy: req.uid ?? null,
+      },
+      { merge: true },
+    );
+    logger.info("[admin] google connect dial set", {
+      googleStage: parsed.googleStage,
+      allowlistCount: parsed.googleAllowlistUids.length,
+      updatedBy: req.uid,
+    });
+    res.json({ ok: true, ...parsed });
+  } catch (err) {
+    logger.error("[admin] platform-connect-config write failed", { err });
     res.status(500).json({ error: "platform_config_write_failed" });
   }
 });

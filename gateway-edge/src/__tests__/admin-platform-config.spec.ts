@@ -125,3 +125,66 @@ describe("admin platform-config", () => {
     expect(res.body.error).toBe("invalid_model_ref");
   });
 });
+
+describe("admin platform-connect-config", () => {
+  let app: express.Express;
+
+  beforeEach(() => {
+    app = buildApp();
+    for (const key of Object.keys(platformDocs)) delete platformDocs[key];
+    setCalls.length = 0;
+  });
+
+  it("GET serves the compiled dark default when no doc exists", async () => {
+    const res = await request(app).get("/api/admin/platform-connect-config");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ googleStage: "off", googleAllowlistUids: [] });
+  });
+
+  it("GET serves the stored dial, and a malformed doc reads as the dark default", async () => {
+    platformDocs["platformConfig/connect"] = {
+      googleStage: "allowlist",
+      googleAllowlistUids: ["uid-chris", "uid-dan"],
+    };
+    const stored = await request(app).get("/api/admin/platform-connect-config");
+    expect(stored.status).toBe(200);
+    expect(stored.body).toEqual({
+      googleStage: "allowlist",
+      googleAllowlistUids: ["uid-chris", "uid-dan"],
+    });
+
+    platformDocs["platformConfig/connect"] = { googleStage: "public" };
+    const malformed = await request(app).get("/api/admin/platform-connect-config");
+    expect(malformed.status).toBe(200);
+    expect(malformed.body).toEqual({ googleStage: "off", googleAllowlistUids: [] });
+  });
+
+  it("PUT writes the dial with audit fields and echoes the normalized value", async () => {
+    const res = await request(app)
+      .put("/api/admin/platform-connect-config")
+      .send({ googleStage: "allowlist", googleAllowlistUids: [" uid-chris ", ""] });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      ok: true,
+      googleStage: "allowlist",
+      googleAllowlistUids: ["uid-chris"],
+    });
+    expect(setCalls).toHaveLength(1);
+    expect(setCalls[0].path).toBe("platformConfig/connect");
+    expect(setCalls[0].data).toMatchObject({
+      googleStage: "allowlist",
+      googleAllowlistUids: ["uid-chris"],
+      updatedBy: "admin-user",
+      updatedAt: "server-now",
+    });
+  });
+
+  it("PUT rejects an unknown stage with 400 and writes nothing", async () => {
+    const res = await request(app)
+      .put("/api/admin/platform-connect-config")
+      .send({ googleStage: "public" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_connect_config");
+    expect(setCalls).toHaveLength(0);
+  });
+});

@@ -1,11 +1,13 @@
 import * as crypto from "crypto";
 import { Router, Request, Response, NextFunction } from "express";
 import type { ConnectorCaptureMethod } from "@octogee/shared/types/connectors";
+import { googleConnectAllowed } from "@octogee/shared/types/platform-config";
 import { requireAuth } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";
 import { db, FieldValue, Timestamp } from "../lib/db.js";
 import { encryptSecret, decryptSecret } from "../lib/kms.js";
 import { sanitizeReturnUrl, buildOAuthRedirect } from "../lib/redirect-validation.js";
+import { readPlatformConnectConfig } from "../lib/platform-connect-config.js";
 import {
   generateConnectState,
   verifyConnectState,
@@ -13,6 +15,7 @@ import {
 } from "../lib/connect-state.js";
 import {
   getConnector,
+  listConnectors,
   connectorRedirectUri,
   type ConnectorDef,
 } from "../lib/connectors/index.js";
@@ -30,6 +33,7 @@ interface TokenResponse {
   refresh_token?: string;
   expires_in?: number;
   token_type?: string;
+  scope?: string;
 }
 
 interface RouteError {
@@ -65,10 +69,18 @@ function userCol(uid: string, sub: "secrets" | "integrations") {
   return db.collection("users").doc(uid).collection(sub);
 }
 
-function grantedScopes(def: ConnectorDef, clientSource?: "platform" | "per-user"): string[] {
-  return clientSource === "platform" && def.meta.platformScopes
-    ? def.meta.platformScopes
-    : def.meta.scopes;
+function requestScopesFor(def: ConnectorDef, capability: unknown): string[] | RouteError {
+  if (!def.capabilityRequestScopes) return def.meta.scopes;
+  if (typeof capability !== "string" || capability.length === 0) {
+    return routeError(400, { error: "capability required" });
+  }
+  const scopes = def.capabilityRequestScopes(capability);
+  return scopes ?? routeError(400, { error: `Unknown capability: ${capability}` });
+}
+
+function parseGrantedScopes(scope: string | undefined, requested: string[]): string[] {
+  const parsed = (scope ?? "").split(/[\s,]+/).filter(Boolean);
+  return parsed.length > 0 ? parsed : requested;
 }
 
 async function storeConnectorTokens(args: {
@@ -77,9 +89,9 @@ async function storeConnectorTokens(args: {
   tokens: TokenResponse;
   accountLabel: string;
   captureMethod: ConnectorCaptureMethod;
-  clientSource?: "platform" | "per-user";
+  grantedScopes?: string[];
 }): Promise<void> {
-  const { uid, def, tokens, accountLabel, captureMethod, clientSource } = args;
+  const { uid, def, tokens, accountLabel, captureMethod, grantedScopes } = args;
   const encryptedAccessToken = await encryptSecret(tokens.access_token);
   const encryptedRefreshToken = tokens.refresh_token
     ? await encryptSecret(tokens.refresh_token)
@@ -93,7 +105,6 @@ async function storeConnectorTokens(args: {
         encryptedRefreshToken,
         expiresAt: tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : null,
         tokenType: tokens.token_type ?? "bearer",
-        clientSource: clientSource ?? null,
       },
       updatedAt: FieldValue.serverTimestamp(),
     },
@@ -104,9 +115,8 @@ async function storeConnectorTokens(args: {
     provider: def.meta.id,
     status: "connected",
     accountLabel,
-    scopes: captureMethod === "oauth-web" ? grantedScopes(def, clientSource) : [],
+    scopes: captureMethod === "oauth-web" ? grantedScopes ?? [] : [],
     captureMethod,
-    ...(clientSource === "per-user" ? { clientConfigured: true } : {}),
     connectedAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
   });
@@ -144,6 +154,33 @@ async function exchangeAuthCode(
   return tokens;
 }
 
+async function revokeProviderGrant(uid: string, def: ConnectorDef): Promise<void> {
+  const revocationUrl = def.oauth?.revocationUrl;
+  if (!revocationUrl) return;
+  const snap = await userCol(uid, "secrets").doc(def.meta.id).get();
+  const tokens = (snap.data() as { tokens?: Record<string, unknown> } | undefined)?.tokens;
+  const enc = [tokens?.encryptedRefreshToken, tokens?.encryptedAccessToken].find(
+    (value): value is string => typeof value === "string" && value.length > 0,
+  );
+  if (!enc) return;
+  try {
+    const resp = await fetch(revocationUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: await decryptSecret(enc) }),
+    });
+    if (!resp.ok) {
+      logger.warn(
+        `[connect] ${def.meta.id} provider revoke returned ${resp.status} for uid=${uid} — deleting the local grant anyway`,
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      `[connect] ${def.meta.id} provider revoke failed for uid=${uid}: ${(err as Error).message} — deleting the local grant anyway`,
+    );
+  }
+}
+
 router.post(
   "/disconnect",
   requireAuth,
@@ -155,31 +192,13 @@ router.post(
         res.status(400).json({ error: `Unknown connector: ${connector}` });
         return;
       }
-      const secretRef = userCol(req.uid!, "secrets").doc(def.meta.id);
-      const client =
-        def.meta.clientSource === "per-user"
-          ? ((await secretRef.get()).data() as { client?: unknown } | undefined)?.client
-          : undefined;
-      if (client) {
-        await secretRef.set({
-          provider: def.meta.id,
-          client,
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-        await userCol(req.uid!, "integrations").doc(def.meta.id).set({
-          provider: def.meta.id,
-          status: "disconnected",
-          clientConfigured: true,
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-      } else {
-        await secretRef.delete();
-        await userCol(req.uid!, "integrations").doc(def.meta.id).set({
-          provider: def.meta.id,
-          status: "disconnected",
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-      }
+      await revokeProviderGrant(req.uid!, def);
+      await userCol(req.uid!, "secrets").doc(def.meta.id).delete();
+      await userCol(req.uid!, "integrations").doc(def.meta.id).set({
+        provider: def.meta.id,
+        status: "disconnected",
+        updatedAt: FieldValue.serverTimestamp(),
+      });
       res.json({ ok: true });
     } catch (e) {
       next(e);
@@ -187,56 +206,27 @@ router.post(
   },
 );
 
-const CLIENT_FIELD_MAX = 512;
-
-router.post(
-  "/:connector/client",
+router.get(
+  "/availability",
   requireAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const def = getConnector(req.params.connector as string);
-      if (!def || def.meta.clientSource !== "per-user") {
-        res.status(404).json({ error: "Connector does not take a per-user client" });
-        return;
+      const config = await readPlatformConnectConfig();
+      const providers: Record<string, { configured: boolean; available: boolean; stage?: string }> =
+        {};
+      for (const def of listConnectors()) {
+        if (!def.oauth) continue;
+        const configured = readConnectorClientCreds(def) !== null;
+        providers[def.meta.id] =
+          def.meta.id === "google"
+            ? {
+                configured,
+                stage: config.googleStage,
+                available: configured && googleConnectAllowed(config, req.uid!),
+              }
+            : { configured, available: configured };
       }
-      const { clientId, clientSecret } = (req.body ?? {}) as {
-        clientId?: unknown;
-        clientSecret?: unknown;
-      };
-      if (
-        typeof clientId !== "string" ||
-        clientId.trim().length === 0 ||
-        clientId.length > CLIENT_FIELD_MAX ||
-        typeof clientSecret !== "string" ||
-        clientSecret.trim().length === 0 ||
-        clientSecret.length > CLIENT_FIELD_MAX
-      ) {
-        res.status(400).json({ error: "clientId and clientSecret required" });
-        return;
-      }
-
-      const encryptedClientId = await encryptSecret(clientId.trim());
-      const encryptedClientSecret = await encryptSecret(clientSecret.trim());
-      await userCol(req.uid!, "secrets").doc(def.meta.id).set(
-        {
-          provider: def.meta.id,
-          client: { encryptedClientId, encryptedClientSecret },
-          tokens: FieldValue.delete(),
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-        { merge: true },
-      );
-      await userCol(req.uid!, "integrations").doc(def.meta.id).set(
-        {
-          provider: def.meta.id,
-          status: "disconnected",
-          clientConfigured: true,
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-        { merge: true },
-      );
-      logger.info(`[connect] ${def.meta.id} per-user client saved for uid=${req.uid}`);
-      res.json({ ok: true });
+      res.json({ providers });
     } catch (e) {
       next(e);
     }
@@ -287,6 +277,12 @@ async function verifyFieldsConnector(
   }
 }
 
+async function grantedScopesFor(uid: string, def: ConnectorDef): Promise<string[]> {
+  const snap = await userCol(uid, "integrations").doc(def.meta.id).get();
+  const scopes = (snap.data() as { scopes?: unknown } | undefined)?.scopes;
+  return Array.isArray(scopes) ? scopes.filter((s): s is string => typeof s === "string") : [];
+}
+
 async function verifyTokenConnector(
   uid: string,
   def: ConnectorDef,
@@ -304,7 +300,9 @@ async function verifyTokenConnector(
   }
   try {
     const identity = await def.fetchIdentity(fresh.accessToken);
-    const probe = def.deepProbe ? await def.deepProbe(fresh.accessToken) : null;
+    const probe = def.deepProbe
+      ? await def.deepProbe(fresh.accessToken, await grantedScopesFor(uid, def))
+      : null;
     await setVerifyStatus(uid, def, { status: "connected" });
     res.json({ ok: true, accountLabel: identity.accountLabel, ...(probe ? { probe } : {}) });
   } catch (err) {
@@ -345,17 +343,25 @@ router.get(
         res.status(404).json({ error: "Unknown connector" });
         return;
       }
-      const creds = await readConnectorClientCreds(req.uid!, def);
-      if (!creds) {
-        if (def.meta.clientSource === "per-user") {
-          res.status(422).json({
-            error: `${def.meta.displayName} client not configured`,
-            reason: "client_not_configured",
-          });
+      if (def.meta.id === "google") {
+        const config = await readPlatformConnectConfig();
+        if (!googleConnectAllowed(config, req.uid!)) {
+          logger.info(
+            `[connect] google auth-url refused for uid=${req.uid}: stage=${config.googleStage}`,
+          );
+          res.status(403).json({ error: "pending_verification" });
           return;
         }
+      }
+      const creds = readConnectorClientCreds(def);
+      if (!creds) {
         logger.error(`[connect] ${def.meta.id} unavailable: ${def.oauth.clientIdEnv} is not set`);
         res.status(503).json({ error: `${def.meta.displayName} connection is not configured` });
+        return;
+      }
+      const scopes = requestScopesFor(def, req.query.capability);
+      if (isRouteError(scopes)) {
+        sendRouteError(res, scopes);
         return;
       }
 
@@ -369,7 +375,6 @@ router.get(
         uid: req.uid!,
         connector: def.meta.id,
         kind: "oauth-web",
-        clientSource: creds.source,
         createdAt: FieldValue.serverTimestamp(),
         expireAt: Timestamp.fromDate(expiresAt),
       });
@@ -378,7 +383,7 @@ router.get(
         client_id: creds.clientId,
         redirect_uri: connectorRedirectUri(def),
         response_type: "code",
-        scope: grantedScopes(def, creds.source).join(" "),
+        scope: scopes.join(" "),
         state,
         ...(def.oauth.extraAuthParams ?? {}),
       });
@@ -389,26 +394,17 @@ router.get(
   },
 );
 
-async function consumeFlowNonce(
-  payload: ConnectStatePayload,
-  connectorId: string,
-): Promise<{ clientSource?: "platform" | "per-user" }> {
-  return db.runTransaction(async (tx) => {
+async function consumeFlowNonce(payload: ConnectStatePayload, connectorId: string): Promise<void> {
+  await db.runTransaction(async (tx) => {
     const ref = flowsCol().doc(payload.nonce);
     const snap = await tx.get(ref);
     const flow = snap.data() as
-      | { uid?: string; connector?: string; consumedAt?: unknown; clientSource?: unknown }
+      | { uid?: string; connector?: string; consumedAt?: unknown }
       | undefined;
     if (!snap.exists || !flow || flow.consumedAt || flow.uid !== payload.uid || flow.connector !== connectorId) {
       throw new Error("state nonce unknown or already consumed");
     }
     tx.set(ref, { consumedAt: FieldValue.serverTimestamp() }, { merge: true });
-    return {
-      clientSource:
-        flow.clientSource === "platform" || flow.clientSource === "per-user"
-          ? flow.clientSource
-          : undefined,
-    };
   });
 }
 
@@ -421,13 +417,12 @@ router.get("/:connector/callback", async (req: Request, res: Response) => {
   const { code, state, error: authError } = req.query as Record<string, string | undefined>;
 
   let payload: ConnectStatePayload;
-  let flowPin: { clientSource?: "platform" | "per-user" };
   try {
     payload = verifyConnectState(String(state ?? ""));
     if (payload.connector !== def.meta.id) {
       throw new Error(`state minted for ${payload.connector}, presented to ${def.meta.id}`);
     }
-    flowPin = await consumeFlowNonce(payload, def.meta.id);
+    await consumeFlowNonce(payload, def.meta.id);
   } catch (err) {
     logger.warn(`[connect] ${def.meta.id} callback rejected: ${(err as Error).message}`);
     res.redirect(`${APP_URL}/dashboard?connect_error=invalid_state`);
@@ -444,11 +439,9 @@ router.get("/:connector/callback", async (req: Request, res: Response) => {
   }
 
   try {
-    const creds = await readConnectorClientCreds(payload.uid, def, flowPin.clientSource);
+    const creds = readConnectorClientCreds(def);
     if (!creds) {
-      throw new Error(
-        `connector client credentials missing at exchange time (pinned source: ${flowPin.clientSource ?? "unpinned"})`,
-      );
+      throw new Error("connector client credentials missing at exchange time");
     }
     const tokens = await exchangeAuthCode(def, code, creds);
     const identity = await def.fetchIdentity(tokens.access_token);
@@ -458,7 +451,7 @@ router.get("/:connector/callback", async (req: Request, res: Response) => {
       tokens,
       accountLabel: identity.accountLabel,
       captureMethod: "oauth-web",
-      clientSource: creds.source,
+      grantedScopes: parseGrantedScopes(tokens.scope, def.meta.scopes),
     });
     res.redirect(
       buildOAuthRedirect(payload.returnUrl, APP_URL, {
