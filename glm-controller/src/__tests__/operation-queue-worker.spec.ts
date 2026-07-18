@@ -166,22 +166,6 @@ function buildDeps(
 }
 
 describe("gateway operation queue — enqueue instead of reject (glmOperations wiring)", () => {
-  it("leaves new work pending while release admission drains", async () => {
-    const rolloutHandler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
-    const { db, store } = createFakeGlmOperationsDb({
-      "op-new": baseOp({ id: "op-new", createdAt: 1, input: { gatewayId: "default" } }),
-    });
-    const deps = buildDeps(db, { rollout: rolloutHandler });
-    (deps as unknown as { releaseAdmissionGate: unknown }).releaseAdmissionGate = {
-      stateInTransaction: async () => ({ draining: true, releaseId: "candidate", reason: "deploy" }),
-    };
-
-    await drainPendingOperationsOnce(deps);
-
-    expect(store.get("op-new")?.status).toBe("pending");
-    expect(rolloutHandler).not.toHaveBeenCalled();
-  });
-
   it("admits a pending durable cleanup retry while release admission drains", async () => {
     const migrationHandler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
     const { db, store } = createFakeGlmOperationsDb({

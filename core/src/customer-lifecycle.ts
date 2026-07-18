@@ -74,6 +74,7 @@ export interface CustomerLifecycleAdapter {
    * is exactly what bender hit on 2026-05-26.
    */
   customerCoachWiredInOpenclawConfig?: (slug: string) => boolean;
+  hasCustomerAgentRuntime?: (slug: string) => boolean;
 
   /** Locally-present, coach-wired customer slugs — the pod's honest mounted set
    *  read WITHOUT Firestore, served via /health for Cowboy's pull-model poller.
@@ -483,6 +484,7 @@ async function addCustomerToGatewayInner(
     snapshot.status === "complete"
     && adapter.isOperatorGateway?.()
     && adapter.customerCoachWiredInOpenclawConfig?.(slug)
+    && adapter.hasCustomerAgentRuntime?.(slug)
   ) {
     adapter.log(
       `[add:${slug}] operator gateway, status=complete, coach fully wired in openclaw.json — skipping resync; verifying MM coach only`,

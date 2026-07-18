@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   durableRolloutGateway,
-  isRecoverableHelmRevision,
+  isRecoverableGatewayRelease,
   resolveLiveRevisionAsSource,
   resolvePlacementFromFirestore,
   resolveSourceRevisionFromFirestore,
@@ -49,10 +49,7 @@ function durableGateway(
     latestRelease: 1,
     desiredRelease: 1,
     liveRelease: 1,
-    liveRevisionId: `${gatewayId}-r1`,
-    trafficRevisionId: `${gatewayId}-r1`,
     desiredStatus: "running",
-    roll: null,
     configSchemaVersion: 1,
     profile: null,
     gatewayClass: "shared",
@@ -74,14 +71,13 @@ function durableGateway(
   };
 }
 
-function servingRevision(
+function servingRuntime(
   gatewayId: string,
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
-    docKind: "revision",
-    revisionId: `${gatewayId}-r1`,
-    gateway: gatewayId,
+    docKind: "runtime",
+    gatewayId,
     release: 1,
     lifecycle: "serving",
     ...overrides,
@@ -96,14 +92,15 @@ describe("durable migration root resolution", () => {
         operationId: "retire-1",
         version: 1,
         claimedAt: 10,
-        liveRevisionId: "default-r1",
+        phase: "claimed",
         liveRelease: 1,
+        liveRuntimeIdentity: null,
         previousDesiredStatus: "running",
       },
     });
     const db = database({
       "gateways/default": claimedRetired,
-      "glmGateways/default-r1": servingRevision("default"),
+      "glmGateways/default": servingRuntime("default"),
     });
 
     await expect(resolvePlacementFromFirestore(db as never, "default")).resolves.toEqual({
@@ -116,27 +113,26 @@ describe("durable migration root resolution", () => {
   it("binds an unassigned source to the exact stable live root generation", async () => {
     const db = database({
       "gateways/source": durableGateway("source", { updatedAt: 17 }),
-      "glmGateways/source-r1": servingRevision("source"),
+      "glmGateways/source": servingRuntime("source"),
     });
 
     await expect(
       resolveSourceRevisionFromFirestore(db as never, "uid-alice", "source"),
     ).resolves.toEqual({
-      revisionId: "source-r1",
+      revisionId: "source",
       release: 1,
       assignmentMode: "unassigned-live",
       rootUpdatedAt: 17,
     });
   });
 
-  it("does not bind an unassigned source while its durable root is rolling", async () => {
+  it("does not bind an unassigned source while its durable root is unconverged", async () => {
     const db = database({
       "gateways/source": durableGateway("source", {
         updatedAt: 18,
         desiredRelease: 2,
-        roll: { operationId: "roll-source" },
       }),
-      "glmGateways/source-r1": servingRevision("source"),
+      "glmGateways/source": servingRuntime("source"),
     });
 
     await expect(
@@ -144,22 +140,31 @@ describe("durable migration root resolution", () => {
     ).resolves.toBeNull();
   });
 
-  it("does not recover a pending Helm revision for a paused durable root", async () => {
+  it("does not recover a pending Helm release for a paused durable root", async () => {
     const db = database({
       "gateways/default": durableGateway("default", { desiredStatus: "paused" }),
-      "glmGateways/default-r1": servingRevision("default"),
+      "glmGateways/default": servingRuntime("default"),
     });
 
-    await expect(isRecoverableHelmRevision(db as never, "default-r1")).resolves.toBe(false);
+    await expect(isRecoverableGatewayRelease(db as never, "default")).resolves.toBe(false);
   });
 
-  it("does not recover a pending Helm revision marked failed", async () => {
+  it("does not recover a pending Helm release whose runtime is marked failed", async () => {
     const db = database({
       "gateways/default": durableGateway("default"),
-      "glmGateways/default-r1": servingRevision("default", { lifecycle: "failed" }),
+      "glmGateways/default": servingRuntime("default", { lifecycle: "failed" }),
     });
 
-    await expect(isRecoverableHelmRevision(db as never, "default-r1")).resolves.toBe(false);
+    await expect(isRecoverableGatewayRelease(db as never, "default")).resolves.toBe(false);
+  });
+
+  it("recovers a pending Helm release for a healthy running root", async () => {
+    const db = database({
+      "gateways/default": durableGateway("default"),
+      "glmGateways/default": servingRuntime("default"),
+    });
+
+    await expect(isRecoverableGatewayRelease(db as never, "default")).resolves.toBe(true);
   });
 
   it("rejects a gateway-shaped root before a rollout can consume it", () => {
@@ -183,10 +188,9 @@ describe("durable migration root resolution", () => {
         latestRelease: 1,
         desiredRelease: 1,
         liveRelease: 1,
-        liveRevisionId: "target-r1",
         desiredStatus: "running",
       },
-      "glmGateways/target-r1": servingRevision("target"),
+      "glmGateways/target": servingRuntime("target"),
     });
 
     await expect(resolvePlacementFromFirestore(db as never, "target")).resolves.toBeNull();
@@ -199,19 +203,18 @@ describe("durable migration root resolution", () => {
         latestRelease: 1,
         desiredRelease: 1,
         liveRelease: 1,
-        liveRevisionId: "source-r1",
         desiredStatus: "running",
       },
-      "glmGateways/source-r1": servingRevision("source"),
+      "glmGateways/source": servingRuntime("source"),
     });
 
     await expect(resolveLiveRevisionAsSource(db as never, "source")).resolves.toBeNull();
   });
 
-  it("refuses a destination revision whose identity does not match its durable root", async () => {
+  it("refuses a destination whose runtime doc claims a foreign gateway identity", async () => {
     const db = database({
       "gateways/target": durableGateway("target"),
-      "glmGateways/target-r1": servingRevision("other"),
+      "glmGateways/target": servingRuntime("other", { gatewayId: "other" }),
     });
 
     await expect(resolvePlacementFromFirestore(db as never, "target")).resolves.toEqual({
@@ -220,17 +223,15 @@ describe("durable migration root resolution", () => {
     });
   });
 
-  it("refuses an assigned source whose revision identity does not match its durable root", async () => {
+  it("refuses an assigned source whose runtime doc claims a foreign gateway identity", async () => {
     const db = database({
       "gateways/source": durableGateway("source"),
       "gateways/source/assignments/uid-alice": {
         slug: "alice",
         gatewayId: "source",
-        revisionId: "source-r1",
-        release: 1,
-        source: "rollout",
+        source: "migrate-customer",
       },
-      "glmGateways/source-r1": servingRevision("other"),
+      "glmGateways/source": servingRuntime("other", { gatewayId: "other" }),
     });
 
     await expect(

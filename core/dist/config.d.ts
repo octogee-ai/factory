@@ -3,7 +3,6 @@ export declare const OPENCLAW_CONFIG: string;
 export declare const AGENTS_DIR: string;
 export declare const AGENT_PREFIX: string;
 export declare const GATEWAY_ID: string;
-export declare const GATEWAY_REVISION_ID: string;
 export declare const GATEWAY_PROFILE: string;
 export declare const GATEWAY_CLASS: string;
 export declare function isOperatorGateway(): boolean;

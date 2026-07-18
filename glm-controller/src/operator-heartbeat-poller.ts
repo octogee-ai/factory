@@ -18,7 +18,6 @@
 */
 
 import {
-  hasDurableOpenClawConfigControlProtocol,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
   type GatewayConfigStatus,
@@ -148,17 +147,13 @@ function healthStringField<K extends "version" | "openclawVersion">(
 function configStatusField(
   value: unknown,
 ): Partial<Pick<OperatorGatewayHealth, "configStatus">> {
-  if (!hasDurableOpenClawConfigControlProtocol(value)) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const status = value as GatewayConfigStatus;
-  const validFreezeState = status.freezeState === undefined ||
-    status.freezeState === "frozen" ||
-    status.freezeState === "freezing" ||
-    status.freezeState === "unfrozen";
   const validVersion = status.openclawVersion === undefined ||
     typeof status.openclawVersion === "string";
   const validForkSha = status.openclawForkSha === undefined ||
     typeof status.openclawForkSha === "string";
-  return validFreezeState && validVersion && validForkSha && hasValidDashboardControlStatus(status)
+  return validVersion && validForkSha && hasValidDashboardControlStatus(status)
     ? { configStatus: status }
     : {};
 }

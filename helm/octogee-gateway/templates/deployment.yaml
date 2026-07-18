@@ -6,9 +6,6 @@
 {{- $imageProfile := include "octogee-gateway.imageProfile" . -}}
 {{- $gatewayImageLabel := include "octogee-gateway.imageLabel" . -}}
 {{- $gatewayImageTag := .Values.image.tag | default .Values.imageTag -}}
-{{- $roll := .Values.systemConfigRollContext -}}
-{{- $rollValues := compact (list $roll.migrationId $roll.sourceRevisionId $roll.targetRevisionId $roll.checkpointCommit $roll.freezeObject) -}}
-{{- $rollCount := len $rollValues -}}
 {{- $conversationMode := .Values.conversationExperiment.mode | default "broad" -}}
 {{- $operatorShellsEnabled := and (ne $gatewayClass "shared") (.Values.operatorAccess.shellsEnabled | default false) -}}
 {{- $operatorControlUiEnabled := ne $gatewayClass "shared" -}}
@@ -17,15 +14,6 @@
 {{- end -}}
 {{- if not $preset -}}
 {{- fail (printf "octogee-gateway: no preset defined for sizingTier=%q (add it under .Values.tiers in values.yaml)" $tier) -}}
-{{- end -}}
-{{- if and (gt $rollCount 0) (ne $rollCount 5) -}}
-{{- fail "octogee-gateway: systemConfigRollContext must provide all five fields" -}}
-{{- end -}}
-{{- if and (eq $rollCount 5) (ne $roll.targetRevisionId $revision) -}}
-{{- fail "octogee-gateway: systemConfigRollContext.targetRevisionId must equal revisionId" -}}
-{{- end -}}
-{{- if and (eq $rollCount 5) (eq $gatewayClass "shared") -}}
-{{- fail "octogee-gateway: systemConfigRollContext is forbidden on shared gateways" -}}
 {{- end -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -135,8 +123,6 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Values.imageTag }}"
           ports:
             - containerPort: 18789
-            - containerPort: 18790
-              name: config-status
             - containerPort: 9092
               name: runner-metrics
             - containerPort: 9080
@@ -192,27 +178,14 @@ spec:
               value: {{ .Values.env.agentPrefix | quote }}
             - name: GATEWAY_ID
               value: {{ .Values.gatewayId | quote }}
-            # Disposable instance identity ({gatewayId}-r{n}). GATEWAY_ID stays
-            # the bare tenant identity for path guards + broker calls; the pod
-            # reports both so Cowboy can key revision heartbeats.
+            # Identity alias — always the bare gatewayId under simple-roll.
+            # gateway-edge stamps it into the Dashboard-bridge capability file.
             - name: GATEWAY_REVISION_ID
               value: {{ $revision | quote }}
             - name: GATEWAY_BUILDER_SLUG
               value: {{ .Values.builderSlug | quote }}
             - name: GATEWAY_IMAGE_TAG
               value: {{ $gatewayImageTag | quote }}
-            {{- if eq $rollCount 5 }}
-            - name: SYSTEM_CONFIG_MIGRATION_ID
-              value: {{ $roll.migrationId | quote }}
-            - name: SYSTEM_CONFIG_SOURCE_REVISION_ID
-              value: {{ $roll.sourceRevisionId | quote }}
-            - name: SYSTEM_CONFIG_TARGET_REVISION_ID
-              value: {{ $roll.targetRevisionId | quote }}
-            - name: SYSTEM_CONFIG_CHECKPOINT_COMMIT
-              value: {{ $roll.checkpointCommit | quote }}
-            - name: SYSTEM_CONFIG_FREEZE_OBJECT
-              value: {{ $roll.freezeObject | quote }}
-            {{- end }}
             # Image profile (standard vs operator) — read by
             # entrypoint.sh to gate operator-image boot steps such as the
             # Claude Code first-run stamper.
@@ -360,22 +333,18 @@ spec:
               readOnly: true
             # No platform secrets are mounted here. The projected token above
             # is this gateway's KSA identity for tenant-bound broker calls.
+          # Non-shared startup and liveness probe the fleet controller, which
+          # starts after durable-config repair; the startup budget bounds one
+          # identity-pure attempt. Readiness probes OpenClaw on every class.
           startupProbe:
             {{- if eq $gatewayClass "shared" }}
             httpGet:
               path: /healthz
               port: 18789
             {{- else }}
-            exec:
-              command:
-                - sh
-                - -ec
-                - >
-                  if [ -f /opt/octogee/capabilities/config-status-v2 ]; then
-                    curl -fsS http://127.0.0.1:18790/healthz;
-                  else
-                    curl -fsS http://127.0.0.1:{{ .Values.env.fleetControllerPort | default "3003" }}/health;
-                  fi
+            httpGet:
+              path: /health
+              port: {{ .Values.env.fleetControllerPort | default "3003" }}
             {{- end }}
             initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.startup.periodSeconds }}
@@ -386,37 +355,17 @@ spec:
             tcpSocket:
               port: 18789
             {{- else }}
-            exec:
-              command:
-                - sh
-                - -ec
-                - >
-                  if [ -f /opt/octogee/capabilities/config-status-v2 ]; then
-                    curl -fsS http://127.0.0.1:18790/healthz;
-                  else
-                    curl -fsS http://127.0.0.1:{{ .Values.env.fleetControllerPort | default "3003" }}/health;
-                  fi
+            httpGet:
+              path: /health
+              port: {{ .Values.env.fleetControllerPort | default "3003" }}
             {{- end }}
             initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
             timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
           readinessProbe:
-            {{- if eq $gatewayClass "shared" }}
             tcpSocket:
               port: 18789
-            {{- else }}
-            exec:
-              command:
-                - sh
-                - -ec
-                - >
-                  if [ -f /opt/octogee/capabilities/config-status-v2 ]; then
-                    curl -fsS http://127.0.0.1:18790/readyz;
-                  else
-                    curl -fsS http://127.0.0.1:{{ .Values.env.fleetControllerPort | default "3003" }}/health;
-                  fi
-            {{- end }}
             initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
             failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
@@ -468,9 +417,8 @@ spec:
             {{- end }}
             - name: GATEWAY_ID
               value: {{ .Values.gatewayId | quote }}
-            # Disposable instance identity ({gatewayId}-r{n}). GATEWAY_ID stays
-            # the bare tenant identity for path guards + broker calls; the pod
-            # reports both so Cowboy can key revision heartbeats.
+            # Identity alias — always the bare gatewayId under simple-roll.
+            # gateway-edge stamps it into the Dashboard-bridge capability file.
             - name: GATEWAY_REVISION_ID
               value: {{ $revision | quote }}
             - name: GATEWAY_BUILDER_SLUG

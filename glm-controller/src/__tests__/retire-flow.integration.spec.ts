@@ -95,25 +95,19 @@ function adminDeleteGateway(
 
 function makeRetireDeps(state: SharedState) {
   return {
-    attestRetirementClaim: async () => ({ ok: true as const, wakeRequired: false }),
-    acquireRetirementConfigFence: async () => ({ kind: "shared" as const }),
-    verifyRetirementConfigFence: async ({ gatewayId }: { gatewayId: string }) => {
+    verifyRetirementClaim: async ({ gatewayId }: { gatewayId: string }) => {
       const desiredStatus = state.glmGateways.get(gatewayId)?.desiredStatus;
-      const hb = state.gateways.get(gatewayId);
-      if (desiredStatus !== "retired") {
+      if (desiredStatus !== undefined && desiredStatus !== "retired") {
         return { ok: false as const, error: "desiredStatus is no longer retired" };
-      }
-      if ((hb?.mountedCustomers.length ?? 0) > 0) {
-        return { ok: false as const, error: "mounted customers remain" };
       }
       return { ok: true as const };
     },
-    // Legacy bare-id gateways: no assignment docs, no revision docs — the
-    // full-gateway retire drain reads empty and the flow is byte-identical.
+    readMountedCustomers: async (gatewayId: string) =>
+      state.gateways.get(gatewayId)?.mountedCustomers ?? [],
     readAssignmentsForGateway: async () => [],
-    readNonRetiredRevisions: async () => [],
-    helmUninstallRevision: vi.fn(async () => {}),
-    retireRevisionDoc: vi.fn(async () => {}),
+    helmUninstallGateway: async (gatewayId: string) => {
+      state.helmReleases.delete(gatewayId);
+    },
     deleteGlmGateway: async (gatewayId: string) => {
       state.glmGateways.delete(gatewayId);
     },
@@ -126,13 +120,11 @@ function makeRetireDeps(state: SharedState) {
     deleteGatewayKubeSecret: vi.fn(async () => {}),
     deleteAuthTokenSecret: vi.fn(async () => {}),
     deleteGatewayServiceAccount: vi.fn(async () => {}),
-    deleteGatewayAliasServices: vi.fn(async () => {}),
     deleteGatewayModelKeyKubeSecret: vi.fn(async () => {}),
     deleteGatewayModelKeySource: vi.fn(async () => {}),
     teardownGatewayServiceAccount: vi.fn(async () => {}),
     syncFleetIngress: vi.fn(async () => {}),
     pollIntervalMs: 10,
-    retirementAttestationTimeoutMs: 1_000,
     now: () => Date.now(),
     wait: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
     log: vi.fn(),
@@ -198,6 +190,8 @@ expect(state.helmReleases.size).toBe(0);
 
     const stepFlow = ctx.reported.map((s) => `${s.name}:${s.status}`);
     expect(stepFlow).toEqual([
+      "helm-uninstall:running",
+      "helm-uninstall:done",
       "delete-pvc:running",
       "delete-pvc:done",
       "delete-kube-secret:running",
@@ -206,8 +200,6 @@ expect(state.helmReleases.size).toBe(0);
       "delete-sm-secret:done",
       "delete-ksa:running",
       "delete-ksa:done",
-      "delete-alias-services:running",
-      "delete-alias-services:done",
       "delete-model-key-kube-secret:running",
       "delete-model-key-kube-secret:done",
       "delete-model-key-source:running",

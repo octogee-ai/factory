@@ -21,7 +21,6 @@ export interface FleetBrokerProjectRestore {
 
 export interface FleetBrokerAssignmentRosterEntry {
   uid: string;
-  revisionId: string;
   state: AssignmentState;
   epoch: number;
 }

@@ -1,61 +1,29 @@
 import type { Operation, OperationStep, StepStatus } from "@octogee/shared/types/glm";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
-import type {
-  GatewayRetirementConfigCheckpoint,
-  GatewayRetirementConfigTerminal,
-} from "@octogee/shared/types/gateway-releases";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 
 const UNKNOWN_ERROR = "unknown error";
 
-interface NonRetiredGatewayRevision {
-  revisionId: string;
-  release: number;
-  mountedCustomers: string[];
-}
-
-export type RetirementConfigFence =
-  | { kind: "shared" }
-  | {
-      kind: "dedicated";
-      checkpoint: GatewayRetirementConfigCheckpoint;
-      terminal?: GatewayRetirementConfigTerminal;
-    };
-
 export interface RetireGatewayDeps {
-  attestRetirementClaim: (input: {
+  // Retirement claim verification (claim held by THIS op at THIS version, root
+  // still marked retired) — the transactional guard before destructive steps.
+  verifyRetirementClaim: (input: {
     gatewayId: string;
     operationId: string;
     version: number;
-  }) => Promise<
-    | { ok: true; wakeRequired: boolean }
-    | { ok: false; error: string; retryable: boolean }
-  >;
-
-  acquireRetirementConfigFence: (input: {
-    gatewayId: string;
-    operationId: string;
-    version: number;
-  }) => Promise<RetirementConfigFence>;
-
-  verifyRetirementConfigFence: (input: {
-    gatewayId: string;
-    operationId: string;
-    version: number;
-    fence: RetirementConfigFence;
   }) => Promise<{ ok: true } | { ok: false; error: string }>;
+
+  // Mounted-customer telemetry from the gateway's runtime doc — retirement
+  // refuses while any customer is still mounted.
+  readMountedCustomers: (gatewayId: string) => Promise<string[]>;
+
+  // Stable-name Helm uninstall (octogee-gw-{gatewayId}) — must tolerate an
+  // already-absent release so a crashed retire re-drives cleanly.
+  helmUninstallGateway: (gatewayId: string) => Promise<void>;
 
   deleteGlmGateway: (gatewayId: string) => Promise<void>;
 
   deleteGatewayHeartbeat: (gatewayId: string) => Promise<void>;
-
-  // Write the revision_gone tombstone for a revision being torn down, so a
-  // subsequent revision-pinned `/g/<gw>/r/<n>/…` request answers with the typed
-  // revision_gone 404 instead of dialing the now-dead pod. Called with the
-  // glmGateways doc id (== revisionId in the new model) BEFORE the doc is
-  // deleted; a no-op for a legacy bare gateway that has no /r/<n> addressing.
-  // (The roll source-drain retire in PR7 uses the same writer.)
-  writeRevisionTombstone?: (revisionId: string) => Promise<void>;
 
   readGatewayHeartbeatExists?: (gatewayId: string) => Promise<boolean>;
 
@@ -64,7 +32,6 @@ export interface RetireGatewayDeps {
   deleteGatewayKubeSecret: (gatewayId: string) => Promise<void>;
   deleteAuthTokenSecret: (gatewayId: string) => Promise<void>;
   deleteGatewayServiceAccount: (gatewayId: string) => Promise<void>;
-  deleteGatewayAliasServices: (gatewayId: string) => Promise<void>;
   deleteGatewayModelKeyKubeSecret: (gatewayId: string) => Promise<void>;
   deleteGatewayModelKeySource: (gatewayId: string) => Promise<void>;
 
@@ -73,31 +40,14 @@ export interface RetireGatewayDeps {
   // no GSA exists for the gateway (cattle gateways never have one).
   teardownGatewayServiceAccount?: (gatewayId: string) => Promise<void>;
 
-  // Full-gateway retirement drains every revision before scoped teardown.
-
   // Assignment docs for the gateway (gateways/{id}/assignments/*). Retirement
   // refuses while any exists — customers must be migrated off first.
   readAssignmentsForGateway: (
     gatewayId: string,
   ) => Promise<Array<{ uid: string; slug: string }>>;
 
-  // Every non-retired revision realization doc for the gateway (glmGateways
-  // where gateway == id, lifecycle != retired).
-  readNonRetiredRevisions: (
-    gatewayId: string,
-  ) => Promise<NonRetiredGatewayRevision[]>;
-
-  // Revision-scoped Helm uninstall (octogee-gw-{revisionId}) — must tolerate an
-  // already-absent release so a crashed retire re-drives cleanly.
-  helmUninstallRevision: (revisionId: string) => Promise<void>;
-
-  // Mark the revision doc retired (lifecycle retired + retiredAt + retireReason).
-  // The doc is RETAINED (never deleted), matching the roll's source retirement.
-  retireRevisionDoc: (revisionId: string, reason: string) => Promise<void>;
-
   syncFleetIngress: () => Promise<void>;
   pollIntervalMs: number;
-  retirementAttestationTimeoutMs: number;
   now: () => number;
   wait: (ms: number) => Promise<void>;
   log: (msg: string) => void;
@@ -173,74 +123,37 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
     const assignmentFailure = await assertNoAssignments(deps, gatewayId);
     if (assignmentFailure) return assignmentFailure;
 
-    const attestationFailure = await awaitRetirementAttestation(
-      deps,
-      gatewayId,
-      op.id,
-      retirementClaimVersion,
+    const mountedFailure = await assertNoMountedCustomers(deps, gatewayId);
+    if (mountedFailure) return mountedFailure;
+
+    let verification: { ok: true } | { ok: false; error: string };
+    try {
+      verification = await deps.verifyRetirementClaim({
+        gatewayId,
+        operationId: op.id,
+        version: retirementClaimVersion,
+      });
+    } catch (error) {
+      return failure(
+        `gateway ${gatewayId} retirement claim unreadable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    if (!verification.ok) return failure(verification.error);
+
+    const uninstall = await runReportedStep(ctx, deps, "helm-uninstall", () =>
+      deps.helmUninstallGateway(gatewayId),
     );
-    if (attestationFailure) return attestationFailure;
-
-    let configFence: RetirementConfigFence;
-    try {
-      configFence = await deps.acquireRetirementConfigFence({
-        gatewayId,
-        operationId: op.id,
-        version: retirementClaimVersion,
-      });
-    } catch (error) {
-      return {
-        steps: [],
-        success: false,
-        error: `gateway ${gatewayId} retirement config freeze failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-        output: {
-          retirementFencePending: { gatewayId, operationId: op.id },
-        },
-      };
+    if (!uninstall.ok) {
+      return failure(`helm uninstall failed: ${uninstall.error ?? UNKNOWN_ERROR}`);
     }
 
-    let finalVerification: { ok: true } | { ok: false; error: string };
-    try {
-      finalVerification = await deps.verifyRetirementConfigFence({
-        gatewayId,
-        operationId: op.id,
-        version: retirementClaimVersion,
-        fence: configFence,
-      });
-    } catch (error) {
-      return retirementConfigFenceFailure(
-        configFence,
-        gatewayId,
-        op.id,
-        `gateway ${gatewayId} retirement config fence unreadable: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-    if (!finalVerification.ok) {
-      return retirementConfigFenceFailure(
-        configFence,
-        gatewayId,
-        op.id,
-        finalVerification.error,
-      );
-    }
-
-    // Drain every non-retired revision (uninstall octogee-gw-{revisionId} +
-    // tombstone + retire the revision doc) BEFORE any gateway-scoped teardown.
-    // Level-triggered: a crash after some revisions retire converges on the next
-    // tick (already-retired revisions drop out of the enumeration); the
-    // gateway-scoped teardown below is UNREACHABLE while any revision lives.
-    const revisionFailure = await drainRevisions(ctx, deps, gatewayId);
-    if (revisionFailure) return revisionFailure;
-
-    // 2. Tear down the per-gateway resources. Steps are independent and
-    //    best-effort: every one is attempted even if a prior one failed (D4),
-    //    so a single stuck resource cannot strand the rest. Records are NOT
-    //    removed until all gating teardown succeeds, so a partial failure
-    //    leaves the operation re-drivable from glmGateways/<id>.
+    // Tear down the per-gateway resources. Steps are independent and
+    // best-effort: every one is attempted even if a prior one failed, so a
+    // single stuck resource cannot strand the rest. Records are NOT removed
+    // until all gating teardown succeeds, so a partial failure leaves the
+    // operation re-drivable.
     const teardownErrors = await teardownResources(
       ctx,
       deps,
@@ -254,7 +167,6 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
       );
     }
 
-    // 3. Remove the control-plane records last.
     const cleanupFailure = await cleanupGatewayRecords(ctx, deps, gatewayId);
     if (cleanupFailure) return cleanupFailure;
 
@@ -267,51 +179,16 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
   };
 }
 
-function retirementConfigFenceFailure(
-  fence: RetirementConfigFence,
-  gatewayId: string,
-  operationId: string,
-  error: string,
-): OperationResult {
-  if (fence.kind === "shared") return failure(error);
-  return {
-    steps: [],
-    success: false,
-    error,
-    output: {
-      retirementFencePending: { gatewayId, operationId },
-    },
-  };
-}
-
-async function awaitRetirementAttestation(
+async function assertNoMountedCustomers(
   deps: RetireGatewayDeps,
   gatewayId: string,
-  operationId: string,
-  version: number,
 ): Promise<OperationResult | null> {
-  const deadline = deps.now() + deps.retirementAttestationTimeoutMs;
-  while (true) {
-    let attestation: Awaited<ReturnType<RetireGatewayDeps["attestRetirementClaim"]>>;
-    try {
-      attestation = await deps.attestRetirementClaim({ gatewayId, operationId, version });
-    } catch (error) {
-      return failure(
-        `gateway ${gatewayId} retirement wake attestation unreadable: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-    if (attestation.ok) return null;
-    if (!attestation.retryable) return failure(attestation.error);
-    const remaining = deadline - deps.now();
-    if (remaining <= 0) {
-      return failure(
-        `gateway ${gatewayId} retirement wake attestation timed out: ${attestation.error}`,
-      );
-    }
-    await deps.wait(Math.min(deps.pollIntervalMs, remaining));
-  }
+  const mounted = [...(await deps.readMountedCustomers(gatewayId))].sort(compareStrings);
+  if (mounted.length === 0) return null;
+  return failure(
+    `gateway ${gatewayId} still has ${mounted.length} mounted customer(s): ` +
+      `${mounted.join(", ")} — migrate them off before retiring`,
+  );
 }
 
 async function teardownResources(
@@ -339,9 +216,6 @@ async function teardownResources(
   );
   await collectTeardownError(ctx, deps, errors, "delete-ksa", () =>
     deps.deleteGatewayServiceAccount(gatewayId),
-  );
-  await collectTeardownError(ctx, deps, errors, "delete-alias-services", () =>
-    deps.deleteGatewayAliasServices(gatewayId),
   );
   await collectTeardownError(
     ctx,
@@ -398,99 +272,12 @@ async function assertNoAssignments(
   );
 }
 
-// Retire every non-retired revision before any gateway-scoped teardown. Each
-// revision's teardown (helm uninstall → tombstone → retire doc) is one reported
-// step, aggregate-gated like resource teardown: a failure preserves the revision
-// for retry and short-circuits BEFORE gateway-scoped teardown. After the loop we
-// re-read: any revision still live (a fresh doc written mid-retire, or a step
-// that silently no-op'd) blocks the gateway-scoped phase, converging next tick.
-async function drainRevisions(
-  ctx: OperationContext,
-  deps: RetireGatewayDeps,
-  gatewayId: string,
-): Promise<OperationResult | null> {
-  let revisions: NonRetiredGatewayRevision[];
-  try {
-    revisions = await deps.readNonRetiredRevisions(gatewayId);
-  } catch (error) {
-    return failure(
-      `gateway ${gatewayId} durable revision retirement state unreadable: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  }
-  const mountedFailure = mountedRevisionFailure(gatewayId, revisions);
-  if (mountedFailure) return mountedFailure;
-  const sorted = [...revisions].sort((a, b) => compareStrings(a.revisionId, b.revisionId));
-  const errors: string[] = [];
-  for (const rev of sorted) {
-    const r = await runReportedStep(ctx, deps, `retire-revision:${rev.revisionId}`, async () => {
-      // Tolerates an already-absent Helm release (crash-resume) by contract.
-      await deps.helmUninstallRevision(rev.revisionId);
-      // Tombstone while the revision doc is still non-retired, so the writer can
-      // read its release/gateway to key the revision_gone 404.
-      await deps.writeRevisionTombstone?.(rev.revisionId);
-      await deps.retireRevisionDoc(rev.revisionId, "gateway-retire");
-    });
-    if (!r.ok) errors.push(`${rev.revisionId}: ${r.error ?? UNKNOWN_ERROR}`);
-  }
-  if (errors.length > 0) {
-    return failure(
-      `revision teardown incomplete (gateway-scoped resources preserved): ${errors.join("; ")}`,
-    );
-  }
-  let remaining: NonRetiredGatewayRevision[];
-  try {
-    remaining = await deps.readNonRetiredRevisions(gatewayId);
-  } catch (error) {
-    return failure(
-      `gateway ${gatewayId} durable revision retirement state unreadable: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  }
-  const remainingMountedFailure = mountedRevisionFailure(gatewayId, remaining);
-  if (remainingMountedFailure) return remainingMountedFailure;
-  if (remaining.length > 0) {
-    return failure(
-      `revisions still non-retired after drain: ${remaining
-        .map((r) => r.revisionId)
-        .join(", ")} — converging next tick before gateway-scoped teardown`,
-    );
-  }
-  return null;
-}
-
-function mountedRevisionFailure(
-  gatewayId: string,
-  revisions: ReadonlyArray<NonRetiredGatewayRevision>,
-): OperationResult | null {
-  const mounted = revisions
-    .filter((revision) => revision.mountedCustomers.length > 0)
-    .sort((left, right) => compareStrings(left.revisionId, right.revisionId));
-  if (mounted.length === 0) return null;
-  const mountCount = mounted.reduce(
-    (count, revision) => count + revision.mountedCustomers.length,
-    0,
-  );
-  const descriptions = mounted.map(
-    (revision) => `${revision.revisionId}: ${[...revision.mountedCustomers].sort(compareStrings).join(", ")}`,
-  );
-  return failure(
-    `gateway ${gatewayId} still has ${mountCount} mounted customer(s) on non-retired revision(s): ${descriptions.join("; ")}`,
-  );
-}
-
 async function cleanupGatewayRecords(
   ctx: OperationContext,
   deps: RetireGatewayDeps,
   gatewayId: string,
 ): Promise<OperationResult | null> {
   const result = await runReportedStep(ctx, deps, "cleanup", async () => {
-    // Tombstone BEFORE the revision doc is deleted, so the writer can still read
-    // its release/gateway to key the tombstone and resolve the current-revision
-    // pointer.
-    await deps.writeRevisionTombstone?.(gatewayId);
     await deps.deleteGlmGateway(gatewayId);
     await deps.deleteGatewayHeartbeat(gatewayId);
   });

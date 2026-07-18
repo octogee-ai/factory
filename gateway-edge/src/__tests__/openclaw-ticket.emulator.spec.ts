@@ -32,7 +32,6 @@ async function seedDedicatedGateway({
   desiredStatus: "running" | "paused";
   heartbeatStatus: "ready" | "unknown";
 }): Promise<void> {
-  const revisionId = `${gatewayId}-r1`;
   const isOperator = gatewayClass === "operator";
   const replicas = desiredStatus === "running" ? 1 : 0;
   await db.doc(`gateways/${gatewayId}`).set({
@@ -44,10 +43,7 @@ async function seedDedicatedGateway({
     latestRelease: 1,
     desiredRelease: 1,
     liveRelease: 1,
-    liveRevisionId: revisionId,
-    trafficRevisionId: revisionId,
     desiredStatus,
-    roll: null,
     configSchemaVersion: 1,
     profile: isOperator ? "operator" : null,
     gatewayClass,
@@ -80,22 +76,18 @@ async function seedDedicatedGateway({
     payloadHash: releasePayloadHash(payload),
     payload,
   });
-  await db.doc(`glmGateways/${revisionId}`).set({
-    docKind: "revision",
-    revisionId,
-    gateway: gatewayId,
+  await db.doc(`glmGateways/${gatewayId}`).set({
+    docKind: "runtime",
+    gatewayId,
     release: 1,
-    rollRole: null,
     lifecycle: "serving",
     createdAt: 1,
     createdByOperationId: null,
-    retiredAt: null,
-    retireReason: null,
     helm: {
-      releaseName: `octogee-gw-${revisionId}`,
-      deploymentName: `octogee-gateway-${revisionId}`,
-      gatewayServiceName: `octogee-gateway-${revisionId}`,
-      gatewayEdgeServiceName: `gateway-edge-${revisionId}`,
+      releaseName: `octogee-gw-${gatewayId}`,
+      deploymentName: `octogee-gateway-${gatewayId}`,
+      gatewayServiceName: `octogee-gateway-${gatewayId}`,
+      gatewayEdgeServiceName: `gateway-edge-${gatewayId}`,
       serviceAccountName: `octogee-gw-${gatewayId}`,
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
       imageTag: "abc1234",

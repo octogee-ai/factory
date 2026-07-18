@@ -3,27 +3,26 @@ import { describe, expect, it } from "vitest";
 import { revisionIdFromGatewayPodName } from "./gateway-pod-revision.js";
 
 describe("revisionIdFromGatewayPodName", () => {
-  it("derives the immutable revision from the authenticated Deployment pod name", () => {
+  it("resolves the bare gateway id from the stable-name Deployment's pod name", () => {
+    expect(revisionIdFromGatewayPodName(
+      "default",
+      "octogee-gateway-default-5bc5949d46-p946t",
+    )).toBe("default");
+    // Legacy revision-suffixed pods resolve too — the suffix is just part of the
+    // generated pod name under the bare prefix.
     expect(revisionIdFromGatewayPodName(
       "default",
       "octogee-gateway-default-r27-5bc5949d46-p946t",
-    )).toBe("default-r27");
+    )).toBe("default");
   });
 
-  it("refuses ambiguous, cross-gateway, malformed, and unbounded pod identities", () => {
+  it("refuses cross-gateway and malformed pod identities", () => {
     expect(revisionIdFromGatewayPodName("default", undefined)).toBeNull();
-    expect(revisionIdFromGatewayPodName("default", "octogee-gateway-default-r27")).toBeNull();
+    expect(revisionIdFromGatewayPodName("default", "octogee-gateway-default")).toBeNull();
     expect(revisionIdFromGatewayPodName(
       "default",
-      "octogee-gateway-other-r27-5bc5949d46-p946t",
+      "octogee-gateway-other-5bc5949d46-p946t",
     )).toBeNull();
-    expect(revisionIdFromGatewayPodName(
-      "default",
-      "octogee-gateway-default-r027-5bc5949d46-p946t",
-    )).toBeNull();
-    expect(revisionIdFromGatewayPodName(
-      "default",
-      `octogee-gateway-default-r${"9".repeat(20)}-5bc5949d46-p946t`,
-    )).toBeNull();
+    expect(revisionIdFromGatewayPodName("default", "octogee-gateway-default-")).toBeNull();
   });
 });

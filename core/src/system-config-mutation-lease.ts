@@ -3,13 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 
-import { isValidUsername } from "@octogee/shared/types/identity";
 import { isValidShellId } from "@octogee/shared/types/shells";
-
-interface ConfigFreezeOwner {
-  migrationId: string;
-  slug: string;
-}
 
 const DEFAULT_HEARTBEAT_MS = 5_000;
 const DEFAULT_STALE_AFTER_MS = 120_000;
@@ -99,13 +93,11 @@ export interface SystemConfigMutationLease {
 export type SystemConfigMutationLeaseResult =
   | { ok: true; lease: SystemConfigMutationLease }
   | { ok: false; code: "writer-lock-busy" }
-  | { ok: false; code: "shell-active"; shellIds: string[] }
-  | { ok: false; code: "config-frozen"; freezeOwner: ConfigFreezeOwner };
+  | { ok: false; code: "shell-active"; shellIds: string[] };
 
 export type SystemConfigShellCapabilityResult =
   | { ok: true; created: boolean; ownerToken: string }
-  | { ok: false; code: "writer-lock-busy" }
-  | { ok: false; code: "config-frozen"; freezeOwner: ConfigFreezeOwner };
+  | { ok: false; code: "writer-lock-busy" };
 
 interface HeartbeatStopResult {
   stopped: boolean;
@@ -326,31 +318,6 @@ export function acquireSystemConfigSyncLeaseSync(
   return null;
 }
 
-function readFreezeOwner(openclawDir: string): ConfigFreezeOwner | null {
-  const markerPath = path.join(openclawDir, "system_config.freeze.json");
-  let contents: string;
-  try {
-    contents = fs.readFileSync(markerPath, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-  const parsed = JSON.parse(contents) as unknown;
-  const record = parsed as { migrationId?: unknown; slug?: unknown };
-  if (
-    !parsed ||
-    typeof parsed !== "object" ||
-    Array.isArray(parsed) ||
-    typeof record.migrationId !== "string" ||
-    !record.migrationId ||
-    typeof record.slug !== "string" ||
-    !isValidUsername(record.slug)
-  ) {
-    throw new Error(`invalid system config freeze marker at ${markerPath}`);
-  }
-  return { migrationId: record.migrationId, slug: record.slug };
-}
-
 function shellCapabilityDir(openclawDir: string): string {
   return path.join(openclawDir, SHELL_CAPABILITY_DIRNAME);
 }
@@ -433,34 +400,29 @@ export function acquireSystemConfigShellCapabilitySync(
   let result: SystemConfigShellCapabilityResult;
   try {
     options.afterGateAcquired?.();
-    const freezeOwner = readFreezeOwner(options.openclawDir);
-    if (freezeOwner) {
-      result = { ok: false, code: "config-frozen", freezeOwner };
-    } else {
-      const existing = readSystemConfigShellCapability(options.openclawDir, options.shellId);
-      const ownerToken = randomUUID();
-      const directory = shellCapabilityDir(options.openclawDir);
-      fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-      const temporaryPath = path.join(
-        options.openclawDir,
-        `.system_config.shell-capability.${options.shellId}.${ownerToken}.tmp`,
+    const existing = readSystemConfigShellCapability(options.openclawDir, options.shellId);
+    const ownerToken = randomUUID();
+    const directory = shellCapabilityDir(options.openclawDir);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const temporaryPath = path.join(
+      options.openclawDir,
+      `.system_config.shell-capability.${options.shellId}.${ownerToken}.tmp`,
+    );
+    try {
+      fs.writeFileSync(
+        temporaryPath,
+        `${JSON.stringify({ shellId: options.shellId, ownerToken })}\n`,
+        { flag: "wx", mode: 0o600 },
       );
-      try {
-        fs.writeFileSync(
-          temporaryPath,
-          `${JSON.stringify({ shellId: options.shellId, ownerToken })}\n`,
-          { flag: "wx", mode: 0o600 },
-        );
-        fs.renameSync(
-          temporaryPath,
-          shellCapabilityPath(options.openclawDir, options.shellId),
-        );
-      } catch (error) {
-        fs.rmSync(temporaryPath, { force: true });
-        throw error;
-      }
-      result = { ok: true, created: existing === null, ownerToken };
+      fs.renameSync(
+        temporaryPath,
+        shellCapabilityPath(options.openclawDir, options.shellId),
+      );
+    } catch (error) {
+      fs.rmSync(temporaryPath, { force: true });
+      throw error;
     }
+    result = { ok: true, created: existing === null, ownerToken };
   } catch (error) {
     return releaseSyncLeaseAfterError(syncLease, error);
   }
@@ -495,46 +457,14 @@ export function releaseSystemConfigShellCapabilitySync(
   return true;
 }
 
-export function acquireSystemConfigControlLeaseSync(
-  options: SystemConfigSyncLeaseOptions,
-): SystemConfigSyncLease | null {
-  const syncLease = acquireSystemConfigSyncLeaseSync(options);
-  if (!syncLease) return null;
-  let shellActive: boolean;
-  try {
-    options.afterGateAcquired?.();
-    shellActive = activeSystemConfigShellIds(options.openclawDir).length > 0;
-  } catch (error) {
-    return releaseSyncLeaseAfterError(syncLease, error);
-  }
-  if (!shellActive) return syncLease;
-  syncLease.release();
-  return null;
-}
-
 export async function acquireSystemConfigMutationLease(
   options: SystemConfigSyncLeaseOptions,
 ): Promise<SystemConfigMutationLeaseResult> {
   const syncLease = acquireSystemConfigSyncLeaseSync(options);
   if (!syncLease) return { ok: false, code: "writer-lock-busy" };
-  let freezeOwner: ConfigFreezeOwner | null;
-  try {
-    options.afterGateAcquired?.();
-    freezeOwner = readFreezeOwner(options.openclawDir);
-  } catch (error) {
-    try {
-      syncLease.release();
-    } catch (releaseError) {
-      throw new AggregateError([error, releaseError], "freeze validation and lease release failed");
-    }
-    throw error;
-  }
-  if (freezeOwner) {
-    syncLease.release();
-    return { ok: false, code: "config-frozen", freezeOwner };
-  }
   let shellIds: string[];
   try {
+    options.afterGateAcquired?.();
     shellIds = activeSystemConfigShellIds(options.openclawDir);
   } catch (error) {
     return releaseSyncLeaseAfterError(syncLease, error);

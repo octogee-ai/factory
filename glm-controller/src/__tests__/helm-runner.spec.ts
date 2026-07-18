@@ -85,6 +85,8 @@ describe("helm-runner helpers", () => {
       imageRepository: REPO,
       upgradeTimeout: "10m",
       chartFingerprint: "f".repeat(64),
+      deploymentIntentFingerprint: "d".repeat(64),
+      rollStrategy: "surge",
       profile: "operator",
       gatewayClass: "operator",
       imageProfile: "operator",
@@ -106,6 +108,10 @@ describe("helm-runner helpers", () => {
     expect(stringPair("gatewayId")).toBe("gatewayId=bender");
     expect(stringPair("imageTag")).toBe("imageTag=3280519");
     expect(stringPair("serviceAccountName")).toBe("serviceAccountName=octogee-gateway-bender");
+    expect(stringPair("deploymentIntentFingerprint")).toBe(
+      `deploymentIntentFingerprint=${"d".repeat(64)}`,
+    );
+    expect(stringPair("rollStrategy")).toBe("rollStrategy=surge");
     expect(args).toContain("--set");
     expect(args).toContain("replicas=0");
     expect(args).toContain(

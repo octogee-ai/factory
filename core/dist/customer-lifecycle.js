@@ -150,7 +150,8 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     // the MM account + bindings were missing, so the coach sat inert).
     if (snapshot.status === "complete"
         && adapter.isOperatorGateway?.()
-        && adapter.customerCoachWiredInOpenclawConfig?.(slug)) {
+        && adapter.customerCoachWiredInOpenclawConfig?.(slug)
+        && adapter.hasCustomerAgentRuntime?.(slug)) {
         adapter.log(`[add:${slug}] operator gateway, status=complete, coach fully wired in openclaw.json — skipping resync; verifying MM coach only`);
         throwIfAborted(signal, uid);
         await verifyChannelReady(adapter, slug, verifyTimeoutMs);

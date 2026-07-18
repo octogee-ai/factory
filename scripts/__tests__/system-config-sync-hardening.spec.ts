@@ -226,7 +226,7 @@ describe("system config sync hardening", () => {
     expect(fs.readFileSync(configPath)).toEqual(recreated);
   });
 
-  it("restores a deleted active config before reporting a remote outage", () => {
+  it("restores a deleted active config from the accepted head without consulting the remote", () => {
     const h = fixture();
     const accepted = {
       "openclaw.json": fs.readFileSync(path.join(h.repoDir, "openclaw.json")),
@@ -251,9 +251,8 @@ describe("system config sync hardening", () => {
       validateConfig: vi.fn(),
       readCommitBlob: (_repoDir, _commit, filename) => accepted[filename],
     })).toMatchObject({
-      pending: true,
       rejected: true,
-      errorCode: "remote-head-unavailable",
+      errorCode: "openclaw-json-missing",
     });
     expect(fs.readFileSync(path.join(h.repoDir, "openclaw.json"))).toEqual(accepted["openclaw.json"]);
     expect(readSystemConfigStatus(h.openclawDir)).toMatchObject({ rejectedCount: 1 });
@@ -335,12 +334,8 @@ describe("system config sync hardening", () => {
 
   it("keeps retrying when a successful push cannot prove its accepted head", () => {
     const h = fixture();
-    let headReads = 0;
     const gitExec = vi.fn((_cwd: string, command: string) => {
-      if (command === "rev-parse HEAD") {
-        headReads += 1;
-        return headReads === 1 ? "a".repeat(40) : null;
-      }
+      if (command === "rev-parse HEAD") return null;
       if (command.startsWith("ls-remote")) return `${"a".repeat(40)}\trefs/heads/main`;
       if (command.startsWith("status --porcelain")) return "";
       if (command === "push origin main") return "";
@@ -367,15 +362,50 @@ describe("system config sync hardening", () => {
     });
   });
 
-  it("marks a non-fast-forward conflict and never pushes or force-pushes", () => {
+  it("heals a remote-ahead checkout by pull --rebase and re-pushes (surge overlap convergence)", () => {
+    const h = fixture();
+    const commands: string[] = [];
+    let pushes = 0;
+    const gitExec = vi.fn((_cwd: string, command: string) => {
+      commands.push(command);
+      if (command.startsWith("status --porcelain")) return "";
+      if (command === "rev-parse HEAD") return "b".repeat(40);
+      if (command === "push origin main") {
+        pushes += 1;
+        return pushes === 1 ? null : "";
+      }
+      if (command === "pull --rebase origin main") return "Updating a..b";
+      return "";
+    });
+
+    expect(syncSystemConfigForSlug("ceckert", {
+      openclawDir: h.openclawDir,
+      env,
+      durablePolicy: true,
+      gitExec,
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      validateConfig: vi.fn(),
+    })).toMatchObject({
+      committed: false,
+      pushed: true,
+      pending: false,
+      acceptedCommit: "b".repeat(40),
+    });
+    expect(commands).toContain("pull --rebase origin main");
+    expect(commands.join(" ")).not.toMatch(/force|--force/);
+  });
+
+  it("aborts a conflicted rebase, leaves the checkout intact, and reports push-failed pending", () => {
     const h = fixture();
     const commands: string[] = [];
     const gitExec = vi.fn((_cwd: string, command: string) => {
       commands.push(command);
       if (command.startsWith("status --porcelain")) return "";
       if (command === "rev-parse HEAD") return "a".repeat(40);
-      if (command.startsWith("ls-remote")) return `${"b".repeat(40)}\trefs/heads/main`;
-      if (command.startsWith("merge-base ")) return "c".repeat(40);
+      if (command === "push origin main") return null;
+      if (command === "pull --rebase origin main") return null;
+      if (command === "rebase --abort") return "";
       return "";
     });
 
@@ -391,9 +421,10 @@ describe("system config sync hardening", () => {
       committed: false,
       pushed: false,
       pending: true,
-      errorCode: "non-fast-forward-conflict",
+      errorCode: "push-failed",
     });
-    expect(commands).not.toContain("push origin main");
+    expect(commands).toContain("rebase --abort");
+    expect(commands.filter((command) => command === "push origin main")).toHaveLength(1);
     expect(commands.join(" ")).not.toMatch(/force|--force/);
   });
 

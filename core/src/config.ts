@@ -15,11 +15,6 @@ export const AGENTS_DIR = process.env.OPENCLAW_AGENTS_DIR
 
 export const AGENT_PREFIX = process.env.AGENT_PREFIX ?? "octogee-";
 export const GATEWAY_ID = process.env.GATEWAY_ID ?? "local";
-// The revision this pod realizes ({gatewayId}-r{n}, PR3 env). Bare GATEWAY_ID
-// stays the tenant identity; the revision id keys the runtime heartbeat Cowboy's
-// converge-empty readiness matches (glmGateways/{revisionId}.heartbeat). Empty on
-// legacy pods that predate the revision dimension.
-export const GATEWAY_REVISION_ID = process.env.GATEWAY_REVISION_ID ?? "";
 export const GATEWAY_PROFILE = process.env.GATEWAY_PROFILE ?? "default";
 export const GATEWAY_CLASS = process.env.GATEWAY_CLASS ?? "";
 
