@@ -593,6 +593,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     expect(calls[0]).toContain("profile=operator");
   });
 
+  // eslint-disable-next-line sonarjs/parameterized-tests -- The adjacent profile, string-typing, and sizing cases assert different Helm flag invariants with incompatible setup and assertions.
   it("omits --set profile when profile is undefined (cattle/standard default = chart's profile=\"\")", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
     const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });

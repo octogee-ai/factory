@@ -601,32 +601,18 @@ describe("GET /api/projects/slug-available", () => {
     expect(res.body.reason).toMatch(/no hyphens/i);
   });
 
-  it("rejects slugs with uppercase letters", async () => {
+  it.each([
+    ["uppercase letters", "MyGame", undefined],
+    ["a reserved name", "settings", /reserved/],
+    ["more than 16 characters", "seventeencharsxxx", undefined],
+  ])("rejects a slug containing %s", async (_, slug, reason) => {
     const app = createApp();
     const res = await request(app)
-      .get("/api/projects/slug-available?slug=MyGame")
+      .get(`/api/projects/slug-available?slug=${slug}`)
       .set(await authHeader());
     expect(res.status).toBe(200);
     expect(res.body.available).toBe(false);
-  });
-
-  it("rejects reserved slugs", async () => {
-    const app = createApp();
-    const res = await request(app)
-      .get("/api/projects/slug-available?slug=settings")
-      .set(await authHeader());
-    expect(res.status).toBe(200);
-    expect(res.body.available).toBe(false);
-    expect(res.body.reason).toMatch(/reserved/);
-  });
-
-  it("rejects too-long slugs (>16 chars)", async () => {
-    const app = createApp();
-    const res = await request(app)
-      .get("/api/projects/slug-available?slug=seventeencharsxxx")
-      .set(await authHeader());
-    expect(res.status).toBe(200);
-    expect(res.body.available).toBe(false);
+    if (reason) expect(res.body.reason).toMatch(reason);
   });
 
   it("returns available=true for a valid, unclaimed slug", async () => {

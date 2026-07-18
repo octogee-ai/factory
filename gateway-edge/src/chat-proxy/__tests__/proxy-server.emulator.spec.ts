@@ -89,20 +89,8 @@ async function request(
 }
 
 describe('health endpoints', () => {
-  it('GET /healthz → 200 with status:ok (no auth)', async () => {
-    const res = await request('/healthz');
-    expect(res.status).toBe(200);
-    expect(JSON.parse(res.body)).toEqual({ status: 'ok' });
-  });
-
-  it('GET /health → 200', async () => {
-    const res = await request('/health');
-    expect(res.status).toBe(200);
-    expect(JSON.parse(res.body)).toEqual({ status: 'ok' });
-  });
-
-  it('GET /_health → 200', async () => {
-    const res = await request('/_health');
+  it.each(['/healthz', '/health', '/_health'])('GET %s returns status:ok without auth', async (path) => {
+    const res = await request(path);
     expect(res.status).toBe(200);
     expect(JSON.parse(res.body)).toEqual({ status: 'ok' });
   });

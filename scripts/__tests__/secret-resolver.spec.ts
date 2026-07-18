@@ -201,41 +201,12 @@ describe("secret-resolver — defense-in-depth", () => {
     }
   });
 
-  it("accepts an agent-model-token ref for a known slug (forwards to the broker, not a Refusal)", async () => {
-    const id = "agent-model-token-octogee-alice-coach";
-    const stdin = JSON.stringify({ protocolVersion: 1, provider: "gcp-secret-manager", ids: [id] });
-    const out = await runResolver(envFor(), stdin);
-    const res = parseResponse(out.stdout);
-    expect(out.stderr).toContain(`accept id="${id}"`);
-    if (res.errors?.[id]) {
-      expect(res.errors[id].message).not.toMatch(/^Refused by resolver:/);
-    }
-  });
-
-  it("accepts an OpenRouter agent-model-token ref for a known slug", async () => {
-    const id = "agent-model-token-openrouter-octogee-alice-coach";
-    const stdin = JSON.stringify({ protocolVersion: 1, provider: "gcp-secret-manager", ids: [id] });
-    const out = await runResolver(envFor(), stdin);
-    const res = parseResponse(out.stdout);
-    expect(out.stderr).toContain(`accept id="${id}"`);
-    if (res.errors?.[id]) {
-      expect(res.errors[id].message).not.toMatch(/^Refused by resolver:/);
-    }
-  });
-
-  it("accepts an OpenAI agent-model-token ref for a known slug", async () => {
-    const id = "agent-model-token-openai-octogee-alice-coach";
-    const stdin = JSON.stringify({ protocolVersion: 1, provider: "gcp-secret-manager", ids: [id] });
-    const out = await runResolver(envFor(), stdin);
-    const res = parseResponse(out.stdout);
-    expect(out.stderr).toContain(`accept id="${id}"`);
-    if (res.errors?.[id]) {
-      expect(res.errors[id].message).not.toMatch(/^Refused by resolver:/);
-    }
-  });
-
-  it("accepts a platform OpenAI embedding ref for a known slug", async () => {
-    const id = "platform-openai-embedding-octogee-alice-coach";
+  it.each([
+    "agent-model-token-octogee-alice-coach",
+    "agent-model-token-openrouter-octogee-alice-coach",
+    "agent-model-token-openai-octogee-alice-coach",
+    "platform-openai-embedding-octogee-alice-coach",
+  ])("accepts the known ref %s", async (id) => {
     const stdin = JSON.stringify({ protocolVersion: 1, provider: "gcp-secret-manager", ids: [id] });
     const out = await runResolver(envFor(), stdin);
     const res = parseResponse(out.stdout);
