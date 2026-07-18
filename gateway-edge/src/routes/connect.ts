@@ -121,13 +121,14 @@ async function storeConnectorTokens(args: {
     updatedAt: FieldValue.serverTimestamp(),
   });
 
-  logger.info(`[connect] ${def.meta.id} connected for uid=${uid} via ${captureMethod} (${accountLabel})`);
+  logger.info(`[connect] ${def.meta.id} connected for uid=${uid} via ${captureMethod}`);
 }
 
 async function exchangeAuthCode(
   def: ConnectorDef,
   code: string,
   creds: ConnectorClientCreds,
+  codeVerifier: string | null,
 ): Promise<TokenResponse> {
   const oauth = def.oauth!;
   const resp = await fetch(oauth.tokenUrl, {
@@ -142,6 +143,7 @@ async function exchangeAuthCode(
       grant_type: "authorization_code",
       code,
       redirect_uri: connectorRedirectUri(def),
+      ...(codeVerifier ? { code_verifier: codeVerifier } : {}),
     }),
   });
   if (!resp.ok) {
@@ -159,25 +161,26 @@ async function revokeProviderGrant(uid: string, def: ConnectorDef): Promise<void
   if (!revocationUrl) return;
   const snap = await userCol(uid, "secrets").doc(def.meta.id).get();
   const tokens = (snap.data() as { tokens?: Record<string, unknown> } | undefined)?.tokens;
-  const enc = [tokens?.encryptedRefreshToken, tokens?.encryptedAccessToken].find(
+  const encrypted = [tokens?.encryptedRefreshToken, tokens?.encryptedAccessToken].filter(
     (value): value is string => typeof value === "string" && value.length > 0,
   );
-  if (!enc) return;
-  try {
-    const resp = await fetch(revocationUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ token: await decryptSecret(enc) }),
-    });
-    if (!resp.ok) {
+  for (const enc of new Set(encrypted)) {
+    try {
+      const resp = await fetch(revocationUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ token: await decryptSecret(enc) }),
+      });
+      if (!resp.ok) {
+        logger.warn(
+          `[connect] ${def.meta.id} provider revoke returned ${resp.status} for uid=${uid} — deleting the local grant anyway`,
+        );
+      }
+    } catch (err) {
       logger.warn(
-        `[connect] ${def.meta.id} provider revoke returned ${resp.status} for uid=${uid} — deleting the local grant anyway`,
+        `[connect] ${def.meta.id} provider revoke failed for uid=${uid}: ${(err as Error).message} — deleting the local grant anyway`,
       );
     }
-  } catch (err) {
-    logger.warn(
-      `[connect] ${def.meta.id} provider revoke failed for uid=${uid}: ${(err as Error).message} — deleting the local grant anyway`,
-    );
   }
 }
 
@@ -299,10 +302,11 @@ async function verifyTokenConnector(
     return;
   }
   try {
-    const identity = await def.fetchIdentity(fresh.accessToken);
-    const probe = def.deepProbe
-      ? await def.deepProbe(fresh.accessToken, await grantedScopesFor(uid, def))
-      : null;
+    const [identity, grantedScopes] = await Promise.all([
+      def.fetchIdentity(fresh.accessToken),
+      def.deepProbe ? grantedScopesFor(uid, def) : Promise.resolve([]),
+    ]);
+    const probe = def.deepProbe ? await def.deepProbe(fresh.accessToken, grantedScopes) : null;
     await setVerifyStatus(uid, def, { status: "connected" });
     res.json({ ok: true, accountLabel: identity.accountLabel, ...(probe ? { probe } : {}) });
   } catch (err) {
@@ -371,10 +375,13 @@ router.get(
         connector: def.meta.id,
         returnUrl,
       });
+      const codeVerifier = def.oauth.pkce ? crypto.randomBytes(32).toString("base64url") : null;
       await flowsCol().doc(nonce).set({
         uid: req.uid!,
         connector: def.meta.id,
         kind: "oauth-web",
+        requestedScopes: scopes,
+        ...(codeVerifier ? { codeVerifier } : {}),
         createdAt: FieldValue.serverTimestamp(),
         expireAt: Timestamp.fromDate(expiresAt),
       });
@@ -385,6 +392,15 @@ router.get(
         response_type: "code",
         scope: scopes.join(" "),
         state,
+        ...(codeVerifier
+          ? {
+              code_challenge: crypto
+                .createHash("sha256")
+                .update(codeVerifier)
+                .digest("base64url"),
+              code_challenge_method: "S256",
+            }
+          : {}),
         ...(def.oauth.extraAuthParams ?? {}),
       });
       res.json({ url: `${def.oauth.authorizeUrl}?${params}` });
@@ -394,17 +410,32 @@ router.get(
   },
 );
 
-async function consumeFlowNonce(payload: ConnectStatePayload, connectorId: string): Promise<void> {
-  await db.runTransaction(async (tx) => {
+async function consumeFlowNonce(
+  payload: ConnectStatePayload,
+  connectorId: string,
+): Promise<{ requestedScopes: string[] | null; codeVerifier: string | null }> {
+  return db.runTransaction(async (tx) => {
     const ref = flowsCol().doc(payload.nonce);
     const snap = await tx.get(ref);
     const flow = snap.data() as
-      | { uid?: string; connector?: string; consumedAt?: unknown }
+      | {
+          uid?: string;
+          connector?: string;
+          consumedAt?: unknown;
+          requestedScopes?: unknown;
+          codeVerifier?: unknown;
+        }
       | undefined;
     if (!snap.exists || !flow || flow.consumedAt || flow.uid !== payload.uid || flow.connector !== connectorId) {
       throw new Error("state nonce unknown or already consumed");
     }
     tx.set(ref, { consumedAt: FieldValue.serverTimestamp() }, { merge: true });
+    return {
+      requestedScopes: Array.isArray(flow.requestedScopes)
+        ? flow.requestedScopes.filter((s): s is string => typeof s === "string")
+        : null,
+      codeVerifier: typeof flow.codeVerifier === "string" ? flow.codeVerifier : null,
+    };
   });
 }
 
@@ -417,12 +448,13 @@ router.get("/:connector/callback", async (req: Request, res: Response) => {
   const { code, state, error: authError } = req.query as Record<string, string | undefined>;
 
   let payload: ConnectStatePayload;
+  let flow: { requestedScopes: string[] | null; codeVerifier: string | null };
   try {
     payload = verifyConnectState(String(state ?? ""));
     if (payload.connector !== def.meta.id) {
       throw new Error(`state minted for ${payload.connector}, presented to ${def.meta.id}`);
     }
-    await consumeFlowNonce(payload, def.meta.id);
+    flow = await consumeFlowNonce(payload, def.meta.id);
   } catch (err) {
     logger.warn(`[connect] ${def.meta.id} callback rejected: ${(err as Error).message}`);
     res.redirect(`${APP_URL}/dashboard?connect_error=invalid_state`);
@@ -443,7 +475,7 @@ router.get("/:connector/callback", async (req: Request, res: Response) => {
     if (!creds) {
       throw new Error("connector client credentials missing at exchange time");
     }
-    const tokens = await exchangeAuthCode(def, code, creds);
+    const tokens = await exchangeAuthCode(def, code, creds, flow.codeVerifier);
     const identity = await def.fetchIdentity(tokens.access_token);
     await storeConnectorTokens({
       uid: payload.uid,
@@ -451,12 +483,11 @@ router.get("/:connector/callback", async (req: Request, res: Response) => {
       tokens,
       accountLabel: identity.accountLabel,
       captureMethod: "oauth-web",
-      grantedScopes: parseGrantedScopes(tokens.scope, def.meta.scopes),
+      grantedScopes: parseGrantedScopes(tokens.scope, flow.requestedScopes ?? def.meta.scopes),
     });
     res.redirect(
       buildOAuthRedirect(payload.returnUrl, APP_URL, {
         [`${def.meta.id}_connected`]: "true",
-        [`${def.meta.id}_account`]: identity.accountLabel,
       }),
     );
   } catch (err) {

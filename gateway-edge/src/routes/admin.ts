@@ -16,13 +16,15 @@ import { MODEL_CATALOG } from "@octogee/shared/types/model-catalog";
 import { modelRefForCatalogEntry } from "@octogee/shared/types/agent-models";
 import {
   DEFAULT_FREE_TIER_MODEL_REF,
-  DEFAULT_PLATFORM_CONNECT_CONFIG,
   PLATFORM_CONFIG_COLLECTION,
-  PLATFORM_CONNECT_CONFIG_DOC,
   PLATFORM_MODEL_CONFIG_DOC,
   parsePlatformConnectConfig,
   parsePlatformModelConfig,
 } from "@octogee/shared/types/platform-config";
+import {
+  platformConnectDoc,
+  readPlatformConnectConfig,
+} from "../lib/platform-connect-config.js";
 
 const router = Router();
 router.use(requireAdmin);
@@ -108,23 +110,12 @@ router.put("/platform-config", async (req, res) => {
   }
 });
 
-// The Google connect-stage dial (platformConfig/connect) — GOOGLE-PLATFORM-OAUTH-SPEC §7.
-// Ships dark; 'allowlist' admits the listed uids during the unverified approval
-// window; 'on' at verification acceptance. GET reports the EFFECTIVE value (a
-// malformed doc reads as the dark default, same as the connect routes resolve it).
-const platformConnectDoc = () =>
-  db.collection(PLATFORM_CONFIG_COLLECTION).doc(PLATFORM_CONNECT_CONFIG_DOC);
-
+// Google connect-stage dial: 'allowlist' exists to protect the project's
+// lifetime unverified-consent budget at Google, so a stage-only PUT must never
+// clobber the curated uid list.
 router.get("/platform-connect-config", async (_req, res) => {
   try {
-    const snap = await platformConnectDoc().get();
-    const parsed = parsePlatformConnectConfig(snap.data());
-    if (snap.data() !== undefined && !parsed) {
-      logger.warn("[admin] platformConfig/connect is malformed — serving the dark default", {
-        data: snap.data(),
-      });
-    }
-    res.json(parsed ?? DEFAULT_PLATFORM_CONNECT_CONFIG);
+    res.json(await readPlatformConnectConfig());
   } catch (err) {
     logger.error("[admin] platform-connect-config read failed", { err });
     res.status(500).json({ error: "platform_config_read_failed" });
@@ -138,10 +129,15 @@ router.put("/platform-connect-config", async (req, res) => {
     return;
   }
   try {
+    const bodyHasUids =
+      !!req.body && typeof req.body === "object" && "googleAllowlistUids" in (req.body as object);
+    const googleAllowlistUids = bodyHasUids
+      ? parsed.googleAllowlistUids
+      : (await readPlatformConnectConfig()).googleAllowlistUids;
     await platformConnectDoc().set(
       {
         googleStage: parsed.googleStage,
-        googleAllowlistUids: parsed.googleAllowlistUids,
+        googleAllowlistUids,
         updatedAt: FieldValue.serverTimestamp(),
         updatedBy: req.uid ?? null,
       },
@@ -149,10 +145,10 @@ router.put("/platform-connect-config", async (req, res) => {
     );
     logger.info("[admin] google connect dial set", {
       googleStage: parsed.googleStage,
-      allowlistCount: parsed.googleAllowlistUids.length,
+      allowlistCount: googleAllowlistUids.length,
       updatedBy: req.uid,
     });
-    res.json({ ok: true, ...parsed });
+    res.json({ ok: true, googleStage: parsed.googleStage, googleAllowlistUids });
   } catch (err) {
     logger.error("[admin] platform-connect-config write failed", { err });
     res.status(500).json({ error: "platform_config_write_failed" });

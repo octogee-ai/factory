@@ -296,7 +296,7 @@ describe("connect — callback state verification (the security regression)", ()
     );
     expect(res.status).toBe(302);
     expect(res.headers.location).toContain("github_connected=true");
-    expect(res.headers.location).toContain("github_account=chris-e");
+    expect(res.headers.location).not.toContain("chris-e");
     expect(res.headers.location).toContain("/w/me/files");
 
     const secret = await readSecret(UID, "github");
@@ -797,7 +797,7 @@ describe("connect — google platform capability flow", () => {
     expect(status?.scopes).toEqual([EMAIL]);
   });
 
-  it("disconnect revokes the grant at Google, then deletes the whole secret", async () => {
+  it("disconnect revokes both stored tokens at Google, then deletes the whole secret", async () => {
     await setGoogleStage("on");
     await connectGoogle("calendar", `${CAL} ${EMAIL}`);
 
@@ -809,12 +809,71 @@ describe("connect — google platform capability flow", () => {
       .set("Authorization", auth.bearer())
       .send({ connector: "google" });
     expect(res.status, res.text).toBe(200);
-    expect(calls).toHaveLength(1);
-    expect(String(calls[0].init?.body)).toBe(
+    expect(calls.map((c) => String(c.init?.body))).toEqual([
       new URLSearchParams({ token: PLAINTEXT_GOOGLE_REFRESH }).toString(),
-    );
+      new URLSearchParams({ token: PLAINTEXT_GOOGLE_ACCESS }).toString(),
+    ]);
     expect(await readSecret(UID, "google")).toBeUndefined();
     expect((await readStatus(UID, "google"))?.status).toBe("disconnected");
+  });
+
+  it("falls back to the REQUESTED capability bundle when the token response omits scope", async () => {
+    await setGoogleStage("on");
+    stubProviderFetch([
+      {
+        url: /oauth2\.googleapis\.com\/token/,
+        respond: () => ({
+          access_token: PLAINTEXT_GOOGLE_ACCESS,
+          refresh_token: PLAINTEXT_GOOGLE_REFRESH,
+          expires_in: 3600,
+          token_type: "Bearer",
+        }),
+      },
+      googleUserinfoStub,
+    ]);
+    const { state } = await mintAuthUrlState("google", "&capability=calendar");
+    await request(createApp()).get(
+      `/api/connect/google/callback?code=c&state=${encodeURIComponent(state)}`,
+    );
+    const status = await readStatus(UID, "google");
+    expect(status?.scopes).toEqual([CAL, EMAIL]);
+  });
+
+  it("PKCE: google mints an S256 challenge and the exchange presents the matching verifier; github does not", async () => {
+    await setGoogleStage("on");
+    let exchangeBody = "";
+    stubProviderFetch([
+      {
+        url: /oauth2\.googleapis\.com\/token/,
+        respond: (init) => {
+          exchangeBody = String(init?.body);
+          return {
+            access_token: PLAINTEXT_GOOGLE_ACCESS,
+            refresh_token: PLAINTEXT_GOOGLE_REFRESH,
+            expires_in: 3600,
+            token_type: "Bearer",
+            scope: `${CAL} ${EMAIL}`,
+          };
+        },
+      },
+      googleUserinfoStub,
+    ]);
+    const { state, url } = await mintAuthUrlState("google", "&capability=calendar");
+    const minted = new URL(url);
+    const challenge = minted.searchParams.get("code_challenge")!;
+    expect(challenge).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(minted.searchParams.get("code_challenge_method")).toBe("S256");
+
+    await request(createApp()).get(
+      `/api/connect/google/callback?code=c&state=${encodeURIComponent(state)}`,
+    );
+    const verifier = new URLSearchParams(exchangeBody).get("code_verifier")!;
+    expect(verifier).toBeTruthy();
+    const { createHash } = await import("crypto");
+    expect(createHash("sha256").update(verifier).digest("base64url")).toBe(challenge);
+
+    const gh = await mintAuthUrlState("github");
+    expect(new URL(gh.url).searchParams.get("code_challenge")).toBeNull();
   });
 
   it("disconnect still deletes the local grant when the provider revoke fails", async () => {

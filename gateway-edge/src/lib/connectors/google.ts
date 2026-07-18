@@ -41,6 +41,7 @@ export const googleConnector: ConnectorDef = {
     clientIdEnv: "GOOGLE_CLIENT_ID",
     clientSecretEnv: "GOOGLE_CLIENT_SECRET",
     redirectUriEnv: "GOOGLE_OAUTH_REDIRECT_URI",
+    pkce: true,
     extraAuthParams: {
       access_type: "offline",
       prompt: "consent",
@@ -69,9 +70,7 @@ export const googleConnector: ConnectorDef = {
     if (capabilities.length === 0) {
       return { probe: "identity", detail: "no capability scopes granted" };
     }
-    for (const capability of capabilities) {
-      await probeCapability(accessToken, capability);
-    }
+    await Promise.all(capabilities.map((capability) => probeCapability(accessToken, capability)));
     return {
       probe: capabilities.map((capability) => CAPABILITY_PROBES[capability].name).join("+"),
       detail: capabilities.join(", "),

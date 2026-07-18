@@ -188,3 +188,46 @@ describe("admin platform-connect-config", () => {
     expect(setCalls).toHaveLength(0);
   });
 });
+
+describe("admin platform-connect-config — stage-only updates", () => {
+  let app: express.Express;
+
+  beforeEach(() => {
+    app = buildApp();
+    for (const key of Object.keys(platformDocs)) delete platformDocs[key];
+    setCalls.length = 0;
+  });
+
+  it("a stage-only PUT preserves the stored allowlist", async () => {
+    platformDocs["platformConfig/connect"] = {
+      googleStage: "allowlist",
+      googleAllowlistUids: ["uid-chris", "uid-dan"],
+    };
+    const res = await request(app)
+      .put("/api/admin/platform-connect-config")
+      .send({ googleStage: "on" });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      ok: true,
+      googleStage: "on",
+      googleAllowlistUids: ["uid-chris", "uid-dan"],
+    });
+    expect(setCalls[0].data).toMatchObject({
+      googleStage: "on",
+      googleAllowlistUids: ["uid-chris", "uid-dan"],
+    });
+  });
+
+  it("an explicit empty allowlist clears it", async () => {
+    platformDocs["platformConfig/connect"] = {
+      googleStage: "allowlist",
+      googleAllowlistUids: ["uid-chris"],
+    };
+    const res = await request(app)
+      .put("/api/admin/platform-connect-config")
+      .send({ googleStage: "allowlist", googleAllowlistUids: [] });
+    expect(res.status).toBe(200);
+    expect(res.body.googleAllowlistUids).toEqual([]);
+    expect(setCalls[0].data).toMatchObject({ googleAllowlistUids: [] });
+  });
+});
