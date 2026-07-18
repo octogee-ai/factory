@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createSurgeSourceLossDebounce,
   reconcileSurgeCustomerHandoff,
   assertSurgeAssignmentCoverage,
   type SurgeAssignment,
@@ -88,7 +89,9 @@ function harness(input: {
         targetReleased = true;
         throw input.releaseErrorAfterCommit;
       }
+      targetReleased = true;
     }),
+    sourceLossDebounce: createSurgeSourceLossDebounce(2),
     log: vi.fn(),
   };
   return { deps, events, assignments: () => assignments, operationId };
@@ -199,14 +202,52 @@ describe("surge customer handoff", () => {
     expect(h.events).toEqual([]);
   });
 
-  it("fails closed when a release target has no source and no completed handoff", async () => {
-    const h = harness({ pods: [targetPod] });
+  it("debounces source loss, then releases the target and heals its owned roster gates", async () => {
+    const pods: SurgePod[] = [targetPod];
+    const h = harness({
+      pods,
+      assignments: [assignment("u1", "alice", {
+        state: "quiescing",
+        updatedByOperationId: "surge-default-target-uid",
+      })],
+    });
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
       desiredVersion: "new-sha",
       requiresCustomerMigration: true,
-    })).rejects.toThrow(/source pod disappeared/);
+    })).resolves.toEqual({ ready: false });
+    expect(h.events).toEqual([]);
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredVersion: "new-sha",
+      requiresCustomerMigration: true,
+    })).resolves.toEqual({ ready: false });
+    expect(h.events).toEqual(["release:target-uid"]);
+
+    pods[0] = { ...targetPod, ready: true };
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredVersion: "new-sha",
+      requiresCustomerMigration: true,
+    })).resolves.toEqual({ ready: true });
+    expect(h.events).toEqual([
+      "release:target-uid",
+      "assignment:u1:serving",
+    ]);
+  });
+
+  it("does not accept source loss while the old pod still exists but is NotReady", async () => {
+    const h = harness({ pods: [{ ...oldPod, ready: false }, targetPod] });
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(reconcileSurgeCustomerHandoff(h.deps, {
+        gatewayId: "default",
+        desiredVersion: "new-sha",
+        requiresCustomerMigration: true,
+      })).resolves.toEqual({ ready: false });
+    }
     expect(h.events).toEqual([]);
   });
 

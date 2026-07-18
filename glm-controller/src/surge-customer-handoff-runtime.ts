@@ -234,12 +234,13 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
         if (
           (health.status !== "booting" && health.status !== "ready") ||
           typeof health.version !== "string" ||
-          typeof ready.handoffReleased !== "boolean"
+          typeof ready.handoffReleased !== "boolean" ||
+          typeof ready.openclawUp !== "boolean"
         ) {
           throw new Error(`invalid surge health response from pod=${pod.name}`);
         }
         return {
-          status: health.status,
+          status: ready.openclawUp ? "ready" : "booting",
           version: health.version,
           handoffReleased: ready.handoffReleased,
         };

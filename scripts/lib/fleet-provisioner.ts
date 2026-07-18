@@ -346,6 +346,50 @@ interface FleetRuntime {
   status: "booting" | "ready";
 }
 
+const SURGE_READINESS_RPC_TIMEOUT_MS = 2_000;
+
+export async function probeSurgeReadiness(input: {
+  runtimeStatus: FleetRuntime["status"];
+  handoffReleased: boolean;
+  isGatewayUp: (timeoutMs: number) => Promise<boolean>;
+}): Promise<{ ready: boolean; openclawUp: boolean }> {
+  const openclawUp = input.runtimeStatus === "ready"
+    ? await input.isGatewayUp(SURGE_READINESS_RPC_TIMEOUT_MS)
+    : false;
+  return {
+    ready: input.handoffReleased && openclawUp,
+    openclawUp,
+  };
+}
+
+function createSurgeReadinessHandler(input: {
+  runtime: FleetRuntime;
+  surgeReadiness: SurgeReadinessGate;
+  rpc: GatewayRpcClient;
+  log: (message: string) => void;
+}): express.RequestHandler {
+  return async (_req, res) => {
+    try {
+      const handoffReleased = await input.surgeReadiness.released();
+      const { ready, openclawUp } = await probeSurgeReadiness({
+        runtimeStatus: input.runtime.status,
+        handoffReleased,
+        isGatewayUp: (timeoutMs) => input.rpc.isGatewayUp(timeoutMs),
+      });
+      res.status(ready ? 200 : 503).json({
+        ready,
+        runtimeStatus: input.runtime.status,
+        handoffReleased,
+        openclawUp,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      input.log(`[surge-handoff] readiness probe failed: ${message}`);
+      res.status(500).json({ ready: false, error: message });
+    }
+  };
+}
+
 // Evict-observed: RAW on-disk dir presence (NOT coach-wired), minus migrating-in. Drives the
 // reconcile's evict direction only. Raw — so a partial/junk dir left by a mount that died
 // before its config patch is still drained once it's unassigned (a coach-wired-only view
@@ -762,21 +806,12 @@ const waitForGatewayReady = async (): Promise<void> => {
     }));
   });
 
-  app.get("/surge-ready", async (_req, res) => {
-    try {
-      const released = await surgeReadiness.released();
-      const ready = runtime.status === "ready" && released;
-      res.status(ready ? 200 : 503).json({
-        ready,
-        runtimeStatus: runtime.status,
-        handoffReleased: released,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      opts.log(`[surge-handoff] readiness probe failed: ${message}`);
-      res.status(500).json({ ready: false, error: message });
-    }
-  });
+  app.get("/surge-ready", createSurgeReadinessHandler({
+    runtime,
+    surgeReadiness,
+    rpc: opts.rpc,
+    log: opts.log,
+  }));
 
   const wrappedAdapter = wrapAdapterWithRuntime(adapter, runtime);
 

@@ -79,7 +79,7 @@ describe("surge handoff direct pod transport", () => {
         return new Response(JSON.stringify({ status: "ready", version: url.includes("10.0.0.2") ? "new" : "old" }));
       }
       if (url.endsWith("/surge-ready")) {
-        return new Response(JSON.stringify({ handoffReleased: false }), { status: 503 });
+        return new Response(JSON.stringify({ handoffReleased: false, openclawUp: true }), { status: 503 });
       }
       if (url.includes("/prepare-rsync-import/")) {
         return new Response(JSON.stringify({ port: 30873, host: "0.0.0.0", module: "octogee-import" }));
@@ -142,6 +142,30 @@ describe("surge handoff direct pod transport", () => {
     expect(calls[6]?.body).toEqual({
       migrationId: "surge-default-new",
       targetPodUid: "new",
+    });
+  });
+
+  it("reports a latched runtime as booting when the live OpenClaw probe is down", async () => {
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/health")) {
+        return new Response(JSON.stringify({ status: "ready", version: "new" }));
+      }
+      return new Response(JSON.stringify({
+        handoffReleased: true,
+        openclawUp: false,
+      }), { status: 503 });
+    }) as unknown as typeof globalThis.fetch;
+    const transport = createSurgePodTransport({
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fetch,
+      log: vi.fn(),
+    });
+
+    await expect(transport.readPodHealth(target)).resolves.toEqual({
+      status: "booting",
+      version: "new",
+      handoffReleased: true,
     });
   });
 });
