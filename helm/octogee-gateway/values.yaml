@@ -107,6 +107,7 @@ workspaceAutosaveEnabled: ""
 # gateways may override this per instance via glmGateways desired state.
 gatewayContainerSecurityContext:
   allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
   capabilities:
     drop:
       - ALL

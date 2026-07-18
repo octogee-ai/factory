@@ -43,7 +43,7 @@ describe("gitExec failure logging carries the diagnosable detail", () => {
   });
 
   it("logs exit code + stdout when git fails with its reason on stdout (the 5-min auto-commit case)", () => {
-    const result = gitExec(repo, 'commit -m "auto: test"');
+    const result = gitExec(repo, ["commit", "-m", "auto: test"]);
 
     expect(result).toBeNull();
     const line = logSpy.mock.calls.map((c) => String(c[0])).find((l) => l.includes("exec failed"));
@@ -53,7 +53,7 @@ describe("gitExec failure logging carries the diagnosable detail", () => {
   });
 
   it("still logs stderr for stderr-reporting failures", () => {
-    const result = gitExec(repo, "checkout no-such-branch");
+    const result = gitExec(repo, ["checkout", "no-such-branch"]);
 
     expect(result).toBeNull();
     const line = logSpy.mock.calls.map((c) => String(c[0])).find((l) => l.includes("exec failed"));

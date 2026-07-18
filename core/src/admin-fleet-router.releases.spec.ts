@@ -220,6 +220,7 @@ function mkApp(
       : vi.fn(async () => ({})),
     listGatewayBuilds: vi.fn(async () => []),
     deleteAuthUserTolerantOfMissing: vi.fn(async () => undefined),
+    revokeConnectorGrantsForUser: vi.fn(async () => undefined),
   });
   return { app, store };
 }

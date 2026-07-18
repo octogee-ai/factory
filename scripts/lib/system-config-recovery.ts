@@ -79,12 +79,14 @@ export function attributedCommitArgs(
   subject: string,
   source: SystemConfigCommitSource,
   env: NodeJS.ProcessEnv = process.env,
-): string {
+): string[] {
   return [
     "commit",
-    `-m "${subject.replace(/["\\]/g, "_")}"`,
-    `-m "Octogee-Config-Source: ${source}\nOctogee-Gateway: ${safeTrailerValue(env.GATEWAY_ID)}\nOpenClaw-Version: ${safeTrailerValue(env.OPENCLAW_VERSION)}"`,
-  ].join(" ");
+    "-m",
+    subject,
+    "-m",
+    `Octogee-Config-Source: ${source}\nOctogee-Gateway: ${safeTrailerValue(env.GATEWAY_ID)}\nOpenClaw-Version: ${safeTrailerValue(env.OPENCLAW_VERSION)}`,
+  ];
 }
 
 function normalizedCandidate(
@@ -137,7 +139,7 @@ function historyCandidate(
 ): DurableCandidate | null {
   const readBlob = options.readCommitBlob ?? (options.gitExec
     ? ((_repoDir, ref, filename) => {
-        const contents = execGit(options.repoDir, `show ${ref}:${filename}`, keyPath);
+        const contents = execGit(options.repoDir, ["show", `${ref}:${filename}`], keyPath);
         return contents === null ? null : Buffer.from(contents);
       })
     : readSystemConfigCommitBlob);
@@ -161,7 +163,7 @@ function recoverFromHistory(context: RecoveryHistoryContext): SystemConfigRecove
     atomicWrite(path.join(options.repoDir, SYSTEM_CONFIG_GITIGNORE_FILENAME), candidate.gitignore);
     if (execGit(
       options.repoDir,
-      `add openclaw.json ${SYSTEM_CONFIG_METADATA_FILENAME} ${SYSTEM_CONFIG_GITIGNORE_FILENAME}`,
+      ["add", "openclaw.json", SYSTEM_CONFIG_METADATA_FILENAME, SYSTEM_CONFIG_GITIGNORE_FILENAME],
       keyPath,
     ) === null) {
       return { outcome: "unavailable", rejectedCommit, errorCode: "recovery-stage-failed" };
@@ -175,10 +177,10 @@ function recoverFromHistory(context: RecoveryHistoryContext): SystemConfigRecove
     if (execGit(options.repoDir, commitArgs, keyPath) === null) {
       return { outcome: "unavailable", rejectedCommit, errorCode: "recovery-commit-failed" };
     }
-    if (execGit(options.repoDir, "push origin main", keyPath) === null) {
+    if (execGit(options.repoDir, ["push", "origin", "main"], keyPath) === null) {
       return { outcome: "unavailable", rejectedCommit, errorCode: "recovery-push-failed" };
     }
-    const acceptedCommit = execGit(options.repoDir, "rev-parse HEAD", keyPath);
+    const acceptedCommit = execGit(options.repoDir, ["rev-parse", "HEAD"], keyPath);
     if (!acceptedCommit) {
       return { outcome: "unavailable", rejectedCommit, errorCode: "recovery-head-unavailable" };
     }
@@ -215,7 +217,7 @@ export function recoverSystemConfigHead(
   const env = options.env ?? process.env;
   const execGit = options.gitExec ?? defaultGitExec;
   const keyPath = options.keyPath ?? customerSshKeyPath(options.slug);
-  const rejectedCommit = execGit(options.repoDir, "rev-parse HEAD", keyPath);
+  const rejectedCommit = execGit(options.repoDir, ["rev-parse", "HEAD"], keyPath);
   if (!rejectedCommit) {
     return { outcome: "unavailable", rejectedCommit: "unknown", errorCode: "head-unavailable" };
   }
@@ -250,7 +252,7 @@ export function recoverSystemConfigHead(
     return { outcome: "accepted", acceptedCommit: rejectedCommit };
   }
 
-  const history = execGit(options.repoDir, "rev-list HEAD", keyPath);
+  const history = execGit(options.repoDir, ["rev-list", "HEAD"], keyPath);
   if (history === null) {
     return { outcome: "unavailable", rejectedCommit, errorCode: "history-unavailable" };
   }

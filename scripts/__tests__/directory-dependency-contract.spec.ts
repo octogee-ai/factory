@@ -55,9 +55,11 @@ describe("directory dependency repository contract", () => {
   });
 
   it.each(["core", "functions", "gateway-edge", "glm-controller", "octogee-api", "scripts"])(
-    "%s supplies install-links locally",
+    "%s supplies install-links and a supply-chain release-age cooldown locally",
     (consumer) => {
-      expect(fs.readFileSync(path.join(root, consumer, ".npmrc"), "utf8")).toBe("install-links=true\n");
+      expect(fs.readFileSync(path.join(root, consumer, ".npmrc"), "utf8")).toBe(
+        "install-links=true\nmin-release-age=7\n",
+      );
     },
   );
 

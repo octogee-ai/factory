@@ -9,7 +9,7 @@
     "build": "tsc && tsc-alias -p tsconfig.json && npm run verify:no-alias-leakage",
     "build:watch": "tsc --watch",
     "start": "node dist/octogee-api/src/index.js",
-    "dev": "tsx watch src/index.ts",
+    "dev": "OCTOGEE_ALLOW_LOCAL_ORIGINS=true tsx watch src/index.ts",
     "pretest": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "test": "vitest run --exclude 'src/__tests__/**/*.emulator.spec.ts'",
     "pretest:watch": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",

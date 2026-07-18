@@ -10,6 +10,12 @@ import {
 } from "../tenant-binding.js";
 import type { Reviewer } from "../../lib/token-review.js";
 
+const WELL_FORMED_SA_TOKEN = [
+  "eyJhbGciOiJSUzI1NiIsImtpZCI6InRlc3Qta2V5LWlkIn0",
+  "eyJhdWQiOlsib2N0b2dlZS1hcGkiXSwiZXhwIjoxNzUyODAwMDAwLCJpc3MiOiJrOHMifQ",
+  "c2lnbmF0dXJlLXNlZ21lbnQtZm9yLXRlc3RpbmctcHVycG9zZXMtb25seQ",
+].join(".");
+
 function fakeDb(docs: Record<string, Record<string, unknown>>): Pick<Firestore, "collection" | "doc"> {
   return {
     collection: () => ({
@@ -138,7 +144,7 @@ describe("tenant binding middleware", () => {
 
     const res = await request(app)
       .post("/internal/probe")
-      .set(K8S_SA_TOKEN_HEADER, "caller-jwt")
+      .set(K8S_SA_TOKEN_HEADER, WELL_FORMED_SA_TOKEN)
       .send({ gatewayId: "bender" });
 
     expect(res.status).toBe(200);
@@ -164,7 +170,7 @@ describe("tenant binding middleware", () => {
 
     const res = await request(app)
       .post("/internal/probe")
-      .set(K8S_SA_TOKEN_HEADER, "caller-jwt")
+      .set(K8S_SA_TOKEN_HEADER, WELL_FORMED_SA_TOKEN)
       .send({});
 
     expect(res.status).toBe(200);
@@ -187,7 +193,7 @@ describe("tenant binding middleware", () => {
 
     const res = await request(app)
       .post("/internal/probe")
-      .set(K8S_SA_TOKEN_HEADER, "caller-jwt")
+      .set(K8S_SA_TOKEN_HEADER, WELL_FORMED_SA_TOKEN)
       .send({});
 
     expect(res.status).toBe(200);
@@ -209,7 +215,7 @@ describe("tenant binding middleware", () => {
 
     const res = await request(app)
       .post("/internal/probe")
-      .set(K8S_SA_TOKEN_HEADER, "caller-jwt")
+      .set(K8S_SA_TOKEN_HEADER, WELL_FORMED_SA_TOKEN)
       .send({});
 
     expect(res.status).toBe(200);
@@ -231,7 +237,7 @@ describe("tenant binding middleware", () => {
 
     const res = await request(app)
       .post("/internal/probe")
-      .set(K8S_SA_TOKEN_HEADER, "caller-jwt")
+      .set(K8S_SA_TOKEN_HEADER, WELL_FORMED_SA_TOKEN)
       .send({ gatewayId: "bender" });
 
     expect(res.status).toBe(200);
@@ -254,7 +260,7 @@ describe("tenant binding middleware", () => {
 
     const res = await request(app)
       .post("/internal/probe")
-      .set(K8S_SA_TOKEN_HEADER, "caller-jwt")
+      .set(K8S_SA_TOKEN_HEADER, WELL_FORMED_SA_TOKEN)
       .send({ gatewayId: "other" });
 
     expect(res.status).toBe(200);
@@ -274,7 +280,7 @@ describe("tenant binding middleware", () => {
 
     const res = await request(app)
       .post("/internal/probe")
-      .set(K8S_SA_TOKEN_HEADER, "caller-jwt")
+      .set(K8S_SA_TOKEN_HEADER, WELL_FORMED_SA_TOKEN)
       .send({});
 
     expect(res.status).toBe(200);
@@ -298,7 +304,7 @@ describe("tenant binding middleware", () => {
 
     const res = await request(app)
       .post("/internal/probe")
-      .set(K8S_SA_TOKEN_HEADER, "caller-jwt")
+      .set(K8S_SA_TOKEN_HEADER, WELL_FORMED_SA_TOKEN)
       .send({});
 
     expect(res.status).toBe(200);
@@ -332,15 +338,15 @@ describe("tenant binding middleware", () => {
 
     await request(invalid.app)
       .post("/internal/probe")
-      .set(K8S_SA_TOKEN_HEADER, "bad")
+      .set(K8S_SA_TOKEN_HEADER, WELL_FORMED_SA_TOKEN)
       .expect(200);
     await request(reviewerError.app)
       .post("/internal/probe")
-      .set(K8S_SA_TOKEN_HEADER, "bad")
+      .set(K8S_SA_TOKEN_HEADER, WELL_FORMED_SA_TOKEN)
       .expect(200);
     const res = await request(unknownTenant.app)
       .post("/internal/probe")
-      .set(K8S_SA_TOKEN_HEADER, "caller-jwt")
+      .set(K8S_SA_TOKEN_HEADER, WELL_FORMED_SA_TOKEN)
       .expect(200);
 
     expect(res.body.boundTenant).toBeNull();

@@ -8,7 +8,7 @@
   "scripts": {
     "prebuild": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "build": "tsc",
-    "dev": "tsx src/index.ts",
+    "dev": "OCTOGEE_ALLOW_LOCAL_ORIGINS=true tsx src/index.ts",
     "start": "node dist/glm-controller/src/index.js",
     "pretest": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "test": "vitest run",
@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@google-cloud/kms": "^5.6.0",
     "@octogee/core": "file:../core",
     "@octogee/shared": "file:../shared",
     "express": "^5.2.1",

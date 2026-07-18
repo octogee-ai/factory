@@ -63,6 +63,7 @@ vi.mock("../lib/db", () => {
           }
           return { exists: false, data: () => undefined };
         },
+        collection: (sub: string) => collection(sub),
         delete: async () => {
           fsCalls.push({ collection: name, op: "doc.delete", docId });
           if (name === "users") delete usersDocs[docId];

@@ -2542,6 +2542,7 @@ export function addAdminFleetRoutes(router, deps) {
                     `subscriptionId=${stripe.subscriptionId ?? "?"} status=${stripe.subscriptionStatus ?? "?"}`);
             }
             const slug = resolveCustomerSlug(userData, deps.workspaceSlugsForUser);
+            await deps.revokeConnectorGrantsForUser(uid);
             if (!slug) {
                 await deps.deleteAuthUserTolerantOfMissing(uid);
                 await userRef.delete();

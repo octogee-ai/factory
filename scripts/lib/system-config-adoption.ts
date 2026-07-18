@@ -253,7 +253,7 @@ function adoptionBaseline(
 ): AdoptionBaseline {
   const repoDir = path.dirname(targetPath);
   const keyPath = customerSshKeyPath(options.slug);
-  const localHead = gitExec(repoDir, "rev-parse HEAD", keyPath);
+  const localHead = gitExec(repoDir, ["rev-parse", "HEAD"], keyPath);
   const status = readSystemConfigStatus(options.openclawDir);
   if (
     localHead !== null &&
@@ -273,7 +273,7 @@ function adoptionBaseline(
   ) {
     const repositoryStatus = gitExec(
       repoDir,
-      "status --porcelain=v1 --untracked-files=all",
+      ["status", "--porcelain=v1", "--untracked-files=all"],
       keyPath,
     );
     if (repositoryStatus !== null) {

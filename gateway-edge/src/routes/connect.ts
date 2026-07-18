@@ -6,6 +6,7 @@ import {
   type ConnectorCaptureMethod,
 } from "@octogee/shared/types/connectors";
 import { googleConnectAllowed } from "@octogee/shared/types/platform-config";
+import { revokeProviderGrant } from "@octogee/core/connector-revocation";
 import { requireAuth } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";
 import { db, FieldValue, Timestamp } from "../lib/db.js";
@@ -197,34 +198,6 @@ async function exchangeAuthCode(
   return tokens;
 }
 
-async function revokeProviderGrant(uid: string, def: ConnectorDef): Promise<void> {
-  const revocationUrl = def.oauth?.revocationUrl;
-  if (!revocationUrl) return;
-  const snap = await userCol(uid, "secrets").doc(def.meta.id).get();
-  const tokens = (snap.data() as { tokens?: Record<string, unknown> } | undefined)?.tokens;
-  const encrypted = [tokens?.encryptedRefreshToken, tokens?.encryptedAccessToken].filter(
-    (value): value is string => typeof value === "string" && value.length > 0,
-  );
-  for (const enc of new Set(encrypted)) {
-    try {
-      const resp = await fetch(revocationUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ token: await decryptSecret(enc) }),
-      });
-      if (!resp.ok) {
-        logger.warn(
-          `[connect] ${def.meta.id} provider revoke returned ${resp.status} for uid=${uid} — deleting the local grant anyway`,
-        );
-      }
-    } catch (err) {
-      logger.warn(
-        `[connect] ${def.meta.id} provider revoke failed for uid=${uid}: ${(err as Error).message} — deleting the local grant anyway`,
-      );
-    }
-  }
-}
-
 router.post(
   "/disconnect",
   requireAuth,
@@ -236,7 +209,13 @@ router.post(
         res.status(400).json({ error: `Unknown connector: ${connector}` });
         return;
       }
-      await revokeProviderGrant(req.uid!, def);
+      if (def.oauth?.revocationUrl) {
+        await revokeProviderGrant(
+          req.uid!,
+          { connectorId: def.meta.id, revocationUrl: def.oauth.revocationUrl },
+          { db, decryptSecret, logger },
+        );
+      }
       await userCol(req.uid!, "secrets").doc(def.meta.id).delete();
       await userCol(req.uid!, "integrations").doc(def.meta.id).set({
         provider: def.meta.id,

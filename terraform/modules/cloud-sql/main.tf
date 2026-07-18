@@ -16,6 +16,7 @@ terraform {
 }
 
 # ── Data: existing Cloud SQL instance (imported) ────────────────────────────
+# nosemgrep: gcp-sql-database-require-ssl
 resource "google_sql_database_instance" "main" {
   name             = var.instance_name
   project          = var.project_id

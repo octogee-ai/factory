@@ -14,7 +14,7 @@
 // token; those calls go through the no-shell gateway-edge sidecar via
 // gitea-admin-broker-client (PLATFORM-CREDENTIAL-BROKERING). What stays here
 // is local git on the per-customer SSH key — clone/init/commit/push.
-import { execSync } from "child_process";
+import { execFileSync, execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import {
@@ -66,7 +66,7 @@ export function setRepoSshCommand(repoDir: string, slug: string): void {
   const keyPath = customerSshKeyPath(slug);
   if (!fs.existsSync(keyPath)) return;
   const sshCmd = `ssh -i ${keyPath} -F /home/node/.ssh/config -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`;
-  gitExec(repoDir, `config core.sshCommand "${sshCmd}"`);
+  gitExec(repoDir, ["config", "core.sshCommand", sshCmd]);
 }
 
 export function generateCustomerSshKey(slug: string): string {
@@ -125,7 +125,7 @@ function sshRemoteUrl(org: string, repoName: string): string {
   return `git@${GIT_SSH_HOST}:${org}/${repoName}.git`;
 }
 
-export function gitExec(cwd: string, args: string, sshKeyPath?: string): string | null {
+export function gitExec(cwd: string, argv: string[], sshKeyPath?: string): string | null {
   try {
     const env: Record<string, string | undefined> = {
       ...process.env,
@@ -134,7 +134,7 @@ export function gitExec(cwd: string, args: string, sshKeyPath?: string): string 
     if (sshKeyPath) {
       env.GIT_SSH_COMMAND = `ssh -i "${sshKeyPath}" -F /home/node/.ssh/config -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`;
     }
-    return execSync(`git ${args}`, {
+    return execFileSync("/usr/bin/git", argv, {
       cwd,
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
@@ -144,7 +144,7 @@ export function gitExec(cwd: string, args: string, sshKeyPath?: string): string 
     const detail =
       [execErrStderr(err), execErrStdout(err)].filter(Boolean).join(" | ") || errMessage(err);
     const code = execErrCode(err);
-    const safeArgs = args.replace(/x-access-token:[^\s@]+/g, "x-access-token:***");
+    const safeArgs = argv.join(" ").replace(/x-access-token:[^\s@]+/g, "x-access-token:***");
     const safeDetail = detail.replace(/x-access-token:[^\s@]+/g, "x-access-token:***");
     log(`⚠ [git] exec failed: git ${safeArgs} → code=${code ?? "?"} ${safeDetail}`);
     return null;
@@ -182,15 +182,15 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
     return false;
   }
 
-  const result = gitExec(path.dirname(dest), `clone ${sshRemoteUrl(org, repoName)} ${slug}`, sshKey);
+  const result = gitExec(path.dirname(dest), ["clone", sshRemoteUrl(org, repoName), slug], sshKey);
   if (result === null) {
     log(`⚠ [git] Clone failed for ${slug}`);
     try { fs.rmSync(dest, { recursive: true, force: true }); } catch {}
     return false;
   }
 
-  gitExec(dest, `config user.email "${slug}@octogee.com"`);
-  gitExec(dest, `config user.name "Octo (${slug})"`);
+  gitExec(dest, ["config", "user.email", `${slug}@octogee.com`]);
+  gitExec(dest, ["config", "user.name", `Octo (${slug})`]);
 
   setRepoSshCommand(dest, slug);
 
@@ -229,15 +229,15 @@ export async function cloneProjectRepo(
 
   fs.mkdirSync(path.dirname(dest), { recursive: true });
 
-  const result = gitExec(path.dirname(dest), `clone ${sshRemoteUrl(org, giteaRepoName)} ${projectSlug}`, sshKey);
+  const result = gitExec(path.dirname(dest), ["clone", sshRemoteUrl(org, giteaRepoName), projectSlug], sshKey);
   if (result === null) {
     log(`⚠ [git] Clone failed for ${slug}/${projectSlug}`);
     try { fs.rmSync(dest, { recursive: true, force: true }); } catch {}
     return false;
   }
 
-  gitExec(dest, `config user.email "${slug}@octogee.com"`);
-  gitExec(dest, `config user.name "Octo (${slug})"`);
+  gitExec(dest, ["config", "user.email", `${slug}@octogee.com`]);
+  gitExec(dest, ["config", "user.name", `Octo (${slug})`]);
 
   setRepoSshCommand(dest, slug);
 
@@ -257,14 +257,14 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   if (!fs.existsSync(welcomeDest)) fs.writeFileSync(welcomeDest, welcome.content, "utf-8");
 
   log(`[git] Initializing repo in ${coachDir}`);
-  const initResult = gitExec(coachDir, "init -b main");
+  const initResult = gitExec(coachDir, ["init", "-b", "main"]);
   if (initResult === null) {
     log(`⚠ [git] git init failed for ${slug} — aborting repo setup`);
     return null;
   }
   log(`[git] init: ${initResult}`);
-  gitExec(coachDir, `config user.email "${slug}@octogee.com"`);
-  gitExec(coachDir, `config user.name "Octo (${slug})"`);
+  gitExec(coachDir, ["config", "user.email", `${slug}@octogee.com`]);
+  gitExec(coachDir, ["config", "user.name", `Octo (${slug})`]);
 
   setRepoSshCommand(coachDir, slug);
 
@@ -276,7 +276,7 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   }
 
   const originUrl = sshRemoteUrl(org, repoName);
-  const remoteResult = gitExec(coachDir, `remote add origin ${originUrl}`);
+  const remoteResult = gitExec(coachDir, ["remote", "add", "origin", originUrl]);
   if (remoteResult === null) {
     log(`⚠ [git] remote add failed for ${slug} — aborting (would leak orphan Firestore repoUrl)`);
     return null;
@@ -352,13 +352,13 @@ export async function initProjectRepo(
   fs.writeFileSync(path.join(projectDir, ".gitignore"), projectGitignore(), "utf-8");
 
   log(`[git] Initializing project repo: ${slug}/${projectName}`);
-  gitExec(projectDir, "init -b main");
-  gitExec(projectDir, `config user.email "${committerEmail}"`);
-  gitExec(projectDir, `config user.name "${committerName}"`);
+  gitExec(projectDir, ["init", "-b", "main"]);
+  gitExec(projectDir, ["config", "user.email", committerEmail]);
+  gitExec(projectDir, ["config", "user.name", committerName]);
 
   setRepoSshCommand(projectDir, slug);
-  gitExec(projectDir, "add -A");
-  const commitResult = gitExec(projectDir, `commit -m "initial: ${projectName} project created"`);
+  gitExec(projectDir, ["add", "-A"]);
+  const commitResult = gitExec(projectDir, ["commit", "-m", `initial: ${projectName} project created`]);
   if (commitResult === null) {
     log(`⚠ [git] Failed to create initial commit for project ${slug}/${projectName}`);
     return null;
@@ -372,8 +372,8 @@ export async function initProjectRepo(
   }
 
   const originUrl = sshRemoteUrl(org, repoName);
-  gitExec(projectDir, `remote add origin ${originUrl}`);
-  const pushResult = gitExec(projectDir, "push -u origin main", keyArg);
+  gitExec(projectDir, ["remote", "add", "origin", originUrl]);
+  const pushResult = gitExec(projectDir, ["push", "-u", "origin", "main"], keyArg);
   log(`[git] project push: ${pushResult !== null ? "OK" : "FAILED"}`);
 
   if (pushResult === null) {
@@ -392,13 +392,13 @@ export function pushInitialSkeleton(
   slug: string,
   sshKeyPath?: string,
 ): void {
-  if (gitExec(coachDir, "status --porcelain")) {
-    gitExec(coachDir, "add -A");
-    if (gitExec(coachDir, `commit -m "initial workspace skeleton"`) === null) {
+  if (gitExec(coachDir, ["status", "--porcelain"])) {
+    gitExec(coachDir, ["add", "-A"]);
+    if (gitExec(coachDir, ["commit", "-m", "initial workspace skeleton"]) === null) {
       log(`⚠ [git] ${slug} initial commit failed — sync will retry`);
     }
   }
-  if (gitExec(coachDir, "push -u origin main", sshKeyPath) === null) {
+  if (gitExec(coachDir, ["push", "-u", "origin", "main"], sshKeyPath) === null) {
     log(`⚠ [git] ${slug} initial push failed — sync will retry`);
   } else {
     log(`[git] ${slug} initial push: OK`);
@@ -411,19 +411,18 @@ export async function commitAndPush(repoDir: string, message: string): Promise<b
   const sshKey = customerSshKeyPath(slug);
   const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
 
-  const status = gitExec(repoDir, "status --porcelain");
+  const status = gitExec(repoDir, ["status", "--porcelain"]);
   if (!status) {
     log(`[git] commitAndPush: nothing to commit in ${repoDir}`);
     return true;
   }
-  gitExec(repoDir, "add -A");
-  const safeMessage = `'${message.replace(/'/g, "'\\''")}'`;
-  const commitResult = gitExec(repoDir, `commit -m ${safeMessage}`);
+  gitExec(repoDir, ["add", "-A"]);
+  const commitResult = gitExec(repoDir, ["commit", "-m", message]);
   if (commitResult === null) {
     log(`⚠ [git] commitAndPush: commit failed in ${repoDir}`);
     return false;
   }
-  const pushResult = gitExec(repoDir, "push origin main", keyArg);
+  const pushResult = gitExec(repoDir, ["push", "origin", "main"], keyArg);
   if (pushResult === null) {
     log(`⚠ [git] commitAndPush: push failed in ${repoDir}`);
     return false;
@@ -457,29 +456,29 @@ function getOriginRemoteSilent(coachDir: string): string | null {
 }
 
 function migrateHttpRemoteToSsh(coachDir: string, slug: string): void {
-  gitExec(
-    coachDir,
-    `remote set-url origin ${sshRemoteUrl(workspaceGiteaOrg(slug), workspaceRepoName())}`,
-  );
+  gitExec(coachDir, [
+    "remote", "set-url", "origin",
+    sshRemoteUrl(workspaceGiteaOrg(slug), workspaceRepoName()),
+  ]);
   log(`[git-sync] ${slug}: migrated remote to SSH`);
 }
 
 function commitLocalChanges(coachDir: string): boolean {
-  const status = gitExec(coachDir, "status --porcelain");
+  const status = gitExec(coachDir, ["status", "--porcelain"]);
   if (!status) return false;
-  gitExec(coachDir, "add -A");
-  return gitExec(coachDir, `commit -m "auto: ${new Date().toISOString()}"`) !== null;
+  gitExec(coachDir, ["add", "-A"]);
+  return gitExec(coachDir, ["commit", "-m", `auto: ${new Date().toISOString()}`]) !== null;
 }
 
 function rebaseFromOriginIfPresent(coachDir: string, keyArg: string | undefined): void {
-  const remoteMain = gitExec(coachDir, "ls-remote --heads origin main", keyArg);
+  const remoteMain = gitExec(coachDir, ["ls-remote", "--heads", "origin", "main"], keyArg);
   if (remoteMain) {
-    gitExec(coachDir, "pull --rebase origin main", keyArg);
+    gitExec(coachDir, ["pull", "--rebase", "origin", "main"], keyArg);
   }
 }
 
 function pushAndLog(coachDir: string, slug: string, keyArg: string | undefined): void {
-  const pushResult = gitExec(coachDir, "push origin main", keyArg);
+  const pushResult = gitExec(coachDir, ["push", "origin", "main"], keyArg);
   if (pushResult !== null) {
     log(`[git-sync] ${slug}: pushed changes`);
   } else {

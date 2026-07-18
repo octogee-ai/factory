@@ -644,7 +644,7 @@ export function buildBrokeredLifecycleAdapter(
 
     hasCustomerDir: (slug) => fs.existsSync(path.join(CUSTOMERS_DIR, slug)),
     hasWorkspaceGitDir: (slug) => fs.existsSync(path.join(CUSTOMERS_DIR, slug, ".git")),
-    hasGitRemote: (slug) => gitExec(path.join(CUSTOMERS_DIR, slug), "remote get-url origin") !== null,
+    hasGitRemote: (slug) => gitExec(path.join(CUSTOMERS_DIR, slug), ["remote", "get-url", "origin"]) !== null,
     ensureCustomerDirectories,
     writeCustomerTemplateFiles,
     deleteCustomerDir: (slug) => fsp.rm(path.join(CUSTOMERS_DIR, slug), { recursive: true, force: true }),

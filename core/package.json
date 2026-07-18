@@ -76,6 +76,10 @@
       "types": "./dist/config.d.ts",
       "default": "./dist/config.js"
     },
+    "./connector-revocation": {
+      "types": "./dist/connector-revocation.d.ts",
+      "default": "./dist/connector-revocation.js"
+    },
     "./system-config-invariants": {
       "types": "./dist/system-config-invariants.d.ts",
       "default": "./dist/system-config-invariants.js"

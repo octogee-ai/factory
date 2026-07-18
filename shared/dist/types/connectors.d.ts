@@ -26,6 +26,11 @@ export declare const GOOGLE_CAPABILITY_ORDER: readonly GoogleCapability[];
 export declare const GOOGLE_CAPABILITY_SCOPES: Record<GoogleCapability, string[]>;
 export declare const GOOGLE_IDENTITY_SCOPE = "https://www.googleapis.com/auth/userinfo.email";
 export declare const GOOGLE_DRIVE_FULL_READ_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+export declare const GOOGLE_OAUTH_REVOCATION_URL = "https://oauth2.googleapis.com/revoke";
+export declare const CONNECTOR_OAUTH_REVOCATION_TARGETS: readonly [{
+    readonly connectorId: 'google';
+    readonly revocationUrl: "https://oauth2.googleapis.com/revoke";
+}];
 export declare function googleAuthRequestScopes(capability: GoogleCapability): string[];
 export declare function googleCapabilitiesFromScopes(granted: readonly string[] | null | undefined): GoogleCapability[];
 export declare const GOOGLE_SCOPES: string[];

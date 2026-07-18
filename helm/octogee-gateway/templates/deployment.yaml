@@ -396,6 +396,7 @@ spec:
               name: gateway-edge
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
           env:
@@ -525,6 +526,8 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
+            - name: tmp
+              mountPath: /tmp
             - name: openclaw-device-auth
               mountPath: /var/run/octogee/openclaw-device-auth
             - name: octogee-api-sa-token
@@ -552,6 +555,9 @@ spec:
         # persistence path (PVC) was deleted end-to-end (GATEWAY-RELEASES-SPEC).
         - name: data
           emptyDir: {}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
         - name: octogee-api-sa-token
           projected:
             sources:

@@ -155,8 +155,9 @@ export interface FleetRouterDeps {
     limit: number;
   }) => Promise<unknown[]>;
   readGatewayPodDiagnostics?: (gatewayId: string) => Promise<GatewayPodDiagnostics>;
-  
+
   deleteAuthUserTolerantOfMissing: (uid: string) => Promise<void>;
+  revokeConnectorGrantsForUser: (uid: string) => Promise<void>;
   dedicatedGatewayIdleDefaultMs?: number;
   dedicatedGatewayIdleSweepMs?: number;
 }
@@ -3651,6 +3652,8 @@ router.post(
         }
 
         const slug = resolveCustomerSlug(userData, deps.workspaceSlugsForUser);
+
+        await deps.revokeConnectorGrantsForUser(uid);
 
         if (!slug) {
           await deps.deleteAuthUserTolerantOfMissing(uid);

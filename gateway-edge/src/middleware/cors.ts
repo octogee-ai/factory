@@ -1,4 +1,5 @@
 import cors from "cors";
+import { isAllowedLocalhostOrigin } from "../lib/dev-origins.js";
 
 const ALLOWED_ORIGINS = new Set([
   "https://octogee.web.app",
@@ -15,7 +16,7 @@ const ALLOWED_ORIGINS = new Set([
 ]);
 
 function isAllowedOrigin(origin: string): boolean {
-  return ALLOWED_ORIGINS.has(origin) || /^http:\/\/localhost:\d+$/.test(origin);
+  return ALLOWED_ORIGINS.has(origin) || isAllowedLocalhostOrigin(origin);
 }
 
 export const corsMiddleware = cors({

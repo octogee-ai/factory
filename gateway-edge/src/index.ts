@@ -5,7 +5,7 @@ import { corsMiddleware } from "./middleware/cors.js";
 import { requestLogger } from "./middleware/logging.js";
 import { errorHandler } from "./middleware/errors.js";
 import { logger } from "./middleware/logging.js";
-import { helmetMiddleware, globalRateLimit } from "./middleware/security.js";
+import { helmetMiddleware, globalRateLimit, internalRateLimit } from "./middleware/security.js";
 import { requireAuth, requireAuthenticatedUid } from "./middleware/auth.js";
 import { installBodyParsers } from "./middleware/body-parsers.js";
 import { createEmailMetrics, setEmailMetrics } from "./lib/email-metrics.js";
@@ -119,6 +119,7 @@ app.use(helmetMiddleware);
 app.use(corsMiddleware);
 
 app.use(globalRateLimit);
+app.use(internalRateLimit);
 
 app.use((req, res, next) => {
   if (req.path === '/metrics') return next();
