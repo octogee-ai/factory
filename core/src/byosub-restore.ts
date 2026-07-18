@@ -113,14 +113,14 @@ export function readCodexAuthStateText(
 }
 
 export function shouldRestoreCodexCredential(opts: {
-  authProfilesPresent: boolean;
+  usableCodexProfilePresent: boolean;
   authStateText: string | null;
   profileId: string;
   now: number;
   targetPathPresent?: boolean;
 }): "write" | "skip" {
   if (opts.targetPathPresent === false) return "write";
-  if (!opts.authProfilesPresent) return "write";
+  if (!opts.usableCodexProfilePresent) return "write";
   if (
     deriveCodexAuthHealth(opts.authStateText, opts.profileId, opts.now) ===
     "needs_reauth"
@@ -149,6 +149,24 @@ function profileStoreProfiles(store: unknown): Record<string, unknown> | null {
   return profiles && typeof profiles === "object" && !Array.isArray(profiles)
     ? (profiles as Record<string, unknown>)
     : null;
+}
+
+function hasUsableCodexDefaultProfile(store: unknown): boolean {
+  const profile = profileStoreProfiles(store)?.[
+    OPENAI_CODEX_DEFAULT_PROFILE_ID
+  ];
+  if (!profile || typeof profile !== "object" || Array.isArray(profile)) {
+    return false;
+  }
+  const fields = profile as Record<string, unknown>;
+  return (
+    fields.type === "oauth" &&
+    fields.provider === "openai-codex" &&
+    typeof fields.access === "string" &&
+    fields.access.length > 0 &&
+    typeof fields.refresh === "string" &&
+    fields.refresh.length > 0
+  );
 }
 
 function writeMergedAuthProfileStore(agentDir: string, next: unknown): void {
@@ -236,11 +254,13 @@ export async function restoreByosubCredentials(opts: {
     const agentDir = codexAgentDir(item.openclawDir, item.agentId);
 
     if (item.provider === "openai") {
-      const authProfilesPresent = readAuthProfileStore(agentDir) !== null;
+      const usableCodexProfilePresent = hasUsableCodexDefaultProfile(
+        readAuthProfileStore(agentDir),
+      );
       const authStateText = readCodexAuthStateText(item.openclawDir, item.agentId);
       if (
         shouldRestoreCodexCredential({
-          authProfilesPresent,
+          usableCodexProfilePresent,
           authStateText,
           profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
           now: Date.now(),
