@@ -45,6 +45,10 @@
       "types": "./dist/types/channel.d.ts",
       "default": "./dist/types/channel.js"
     },
+    "./types/channel-session-models": {
+      "types": "./dist/types/channel-session-models.d.ts",
+      "default": "./dist/types/channel-session-models.js"
+    },
     "./types/connectors": {
       "types": "./dist/types/connectors.d.ts",
       "default": "./dist/types/connectors.js"
@@ -187,6 +191,9 @@
       ],
       "types/channel": [
         "dist/types/channel.d.ts"
+      ],
+      "types/channel-session-models": [
+        "dist/types/channel-session-models.d.ts"
       ],
       "types/connectors": [
         "dist/types/connectors.d.ts"

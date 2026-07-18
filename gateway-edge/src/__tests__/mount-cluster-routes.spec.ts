@@ -130,6 +130,7 @@ describe("mountClusterRoutes", () => {
       "/api/mattermost",
       "/api/openclaw",
       "/api/agent-models",
+      "/api/channel-session-models",
       "/api/billing",
       "/api/model-credentials",
       "/api/legal",
