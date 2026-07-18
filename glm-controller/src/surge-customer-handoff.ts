@@ -7,6 +7,11 @@ export interface SurgePod {
   ready: boolean;
 }
 
+export interface SurgePodSnapshot {
+  pods: readonly SurgePod[];
+  observedPodUids: readonly string[];
+}
+
 export interface SurgePodHealth {
   status: "booting" | "ready";
   version: string;
@@ -48,7 +53,7 @@ interface SessionDigest {
 }
 
 export interface SurgeCustomerHandoffDeps {
-  listPods: (gatewayId: string) => Promise<SurgePod[]>;
+  listPods: (gatewayId: string) => Promise<SurgePodSnapshot>;
   readPodHealth: (pod: SurgePod) => Promise<SurgePodHealth | null>;
   readAssignments: (gatewayId: string) => Promise<SurgeAssignment[]>;
   markAssignment: (input: {
@@ -104,6 +109,13 @@ export interface ReconcileSurgeCustomerHandoffInput {
 
 function operationId(gatewayId: string, targetPodUid: string): string {
   return `surge-${gatewayId}-${targetPodUid}`;
+}
+
+const SURGE_OPERATION_ID_RE =
+  /^surge-(.+)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/u;
+
+function isSurgeOwnerForGateway(owner: string, gatewayId: string): boolean {
+  return SURGE_OPERATION_ID_RE.exec(owner)?.[1] === gatewayId;
 }
 
 function selectTarget(
@@ -175,17 +187,16 @@ async function restoreAbandonedSurgeAssignments(
   gatewayId: string,
   assignments: readonly SurgeAssignment[],
   ownedBy: string | null,
-  pods: readonly SurgePod[],
+  observedPodUids: readonly string[],
 ): Promise<void> {
-  const surgeOwnerPrefix = `surge-${gatewayId}-`;
-  const liveSurgeOwners = new Set(pods.map((pod) => operationId(gatewayId, pod.uid)));
+  const liveSurgeOwners = new Set(observedPodUids.map((uid) => operationId(gatewayId, uid)));
   for (const assignment of assignments) {
     const priorOwner = assignment.updatedByOperationId;
     if (
       assignment.state !== "quiescing" ||
       priorOwner === null ||
       priorOwner === ownedBy ||
-      !priorOwner.startsWith(surgeOwnerPrefix) ||
+      !isSurgeOwnerForGateway(priorOwner, gatewayId) ||
       liveSurgeOwners.has(priorOwner)
     ) {
       continue;
@@ -310,7 +321,7 @@ export async function reconcileSurgeCustomerHandoff(
   deps: SurgeCustomerHandoffDeps,
   input: ReconcileSurgeCustomerHandoffInput,
 ): Promise<{ ready: boolean }> {
-  const pods = await deps.listPods(input.gatewayId);
+  const { pods, observedPodUids } = await deps.listPods(input.gatewayId);
   const healthEntries = await Promise.all(pods.map(async (pod) => [
     pod.uid,
     await deps.readPodHealth(pod),
@@ -326,7 +337,7 @@ export async function reconcileSurgeCustomerHandoff(
       input.gatewayId,
       assignments,
       null,
-      pods,
+      observedPodUids,
     );
     return { ready: false };
   }
@@ -345,7 +356,7 @@ export async function reconcileSurgeCustomerHandoff(
       input.gatewayId,
       assignments,
       ownedBy,
-      pods,
+      observedPodUids,
     );
     await restoreOwnedAssignments(deps, input.gatewayId, assignments, ownedBy);
     return { ready: true };
@@ -363,7 +374,7 @@ export async function reconcileSurgeCustomerHandoff(
     input.gatewayId,
     assignments,
     ownedBy,
-    pods,
+    observedPodUids,
   );
   assertAssignmentsAvailable(assignments, ownedBy);
   try {
