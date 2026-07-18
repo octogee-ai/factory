@@ -5,25 +5,40 @@ function exactKeys(value, keys) {
     const actual = Object.keys(value).sort();
     return actual.length === keys.length && [...keys].sort().every((key, index) => key === actual[index]);
 }
+function isOperationBody(value) {
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+function hasValidAgentId(body) {
+    return typeof body.agentId === "string" && AGENT_ID.test(body.agentId);
+}
+function parseSimpleOperation(body) {
+    return exactKeys(body, ["operation", "agentId"]) ? body : null;
+}
+function parseProviderOperation(body) {
+    const valid = exactKeys(body, ["operation", "agentId", "provider"])
+        && typeof body.provider === "string"
+        && IDENTIFIER.test(body.provider);
+    return valid ? body : null;
+}
+function parseSetOperation(body) {
+    const valid = exactKeys(body, ["operation", "agentId", "modelRef"])
+        && typeof body.modelRef === "string"
+        && isValidModelRef(body.modelRef);
+    return valid ? body : null;
+}
 export function parseChannelSessionModelOperation(value) {
-    if (!value || typeof value !== "object" || Array.isArray(value))
+    if (!isOperationBody(value) || !hasValidAgentId(value))
         return null;
     const body = value;
-    if (typeof body.agentId !== "string" || !AGENT_ID.test(body.agentId))
-        return null;
     switch (body.operation) {
         case "getSessionModel":
         case "listModels":
         case "resetSessionModel":
-            return exactKeys(body, ["operation", "agentId"]) ? body : null;
+            return parseSimpleOperation(body);
         case "listModelsByProvider":
-            return exactKeys(body, ["operation", "agentId", "provider"]) && typeof body.provider === "string" && IDENTIFIER.test(body.provider)
-                ? body : null;
-        case "setSessionModel": {
-            if (!exactKeys(body, ["operation", "agentId", "modelRef"]) || typeof body.modelRef !== "string")
-                return null;
-            return isValidModelRef(body.modelRef) ? body : null;
-        }
+            return parseProviderOperation(body);
+        case "setSessionModel":
+            return parseSetOperation(body);
         default:
             return null;
     }

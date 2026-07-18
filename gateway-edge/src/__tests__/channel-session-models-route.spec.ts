@@ -155,6 +155,7 @@ describe("channel session model routes", () => {
       operation: "resetSessionModel",
       agentId: "octogee-alice-coach",
     }).expect(502);
+    expect(h.auditUpdates).toContainEqual({ outcome: "failed", completedAt: "SERVER_TIMESTAMP" });
   });
 
   it("finishes and correlates the audit when native command dispatch fails", async () => {

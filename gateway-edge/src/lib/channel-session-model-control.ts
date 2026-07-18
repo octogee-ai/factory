@@ -59,8 +59,11 @@ export function parseNativeModelResult(operation: string, message: string): Nati
   const applied = operation === "setSessionModel" || operation === "resetSessionModel"
     ? /^Model (?:set to|reset to default)/i.test(message.trim())
     : false;
+  let outcome: NativeModelResult["outcome"] = "unknown";
+  if (rejected) outcome = "rejected";
+  else if (applied) outcome = "applied";
   return {
-    outcome: rejected ? "rejected" : applied ? "applied" : "unknown",
+    outcome,
     ...(currentModel ? { currentModel } : {}),
     ...(providers.length ? { providers: [...new Set(providers)] } : {}),
     ...(models.length ? { models: [...new Set(models)] } : {}),

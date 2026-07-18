@@ -15,22 +15,44 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
   return actual.length === keys.length && [...keys].sort().every((key, index) => key === actual[index]);
 }
 
+function isOperationBody(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasValidAgentId(body: Record<string, unknown>): boolean {
+  return typeof body.agentId === "string" && AGENT_ID.test(body.agentId);
+}
+
+function parseSimpleOperation(body: Record<string, unknown>): ChannelSessionModelOperation | null {
+  return exactKeys(body, ["operation", "agentId"]) ? body as ChannelSessionModelOperation : null;
+}
+
+function parseProviderOperation(body: Record<string, unknown>): ChannelSessionModelOperation | null {
+  const valid = exactKeys(body, ["operation", "agentId", "provider"])
+    && typeof body.provider === "string"
+    && IDENTIFIER.test(body.provider);
+  return valid ? body as ChannelSessionModelOperation : null;
+}
+
+function parseSetOperation(body: Record<string, unknown>): ChannelSessionModelOperation | null {
+  const valid = exactKeys(body, ["operation", "agentId", "modelRef"])
+    && typeof body.modelRef === "string"
+    && isValidModelRef(body.modelRef);
+  return valid ? body as ChannelSessionModelOperation : null;
+}
+
 export function parseChannelSessionModelOperation(value: unknown): ChannelSessionModelOperation | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const body = value as Record<string, unknown>;
-  if (typeof body.agentId !== "string" || !AGENT_ID.test(body.agentId)) return null;
+  if (!isOperationBody(value) || !hasValidAgentId(value)) return null;
+  const body = value;
   switch (body.operation) {
     case "getSessionModel":
     case "listModels":
     case "resetSessionModel":
-      return exactKeys(body, ["operation", "agentId"]) ? body as ChannelSessionModelOperation : null;
+      return parseSimpleOperation(body);
     case "listModelsByProvider":
-      return exactKeys(body, ["operation", "agentId", "provider"]) && typeof body.provider === "string" && IDENTIFIER.test(body.provider)
-        ? body as ChannelSessionModelOperation : null;
-    case "setSessionModel": {
-      if (!exactKeys(body, ["operation", "agentId", "modelRef"]) || typeof body.modelRef !== "string") return null;
-      return isValidModelRef(body.modelRef) ? body as ChannelSessionModelOperation : null;
-    }
+      return parseProviderOperation(body);
+    case "setSessionModel":
+      return parseSetOperation(body);
     default:
       return null;
   }

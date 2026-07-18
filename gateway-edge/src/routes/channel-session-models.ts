@@ -5,6 +5,7 @@ import { projectAgentId, workspaceCoachAgentId } from "@octogee/shared/types/ide
 import {
   channelSessionModelCommand,
   parseChannelSessionModelOperation,
+  type ChannelSessionModelOperation,
 } from "@octogee/shared/types/channel-session-models";
 import {
   ChannelSessionMattermostError,
@@ -37,7 +38,25 @@ interface ChannelTarget {
   agentMmUserId: string;
 }
 
-function pathScope(path: string): { workspaceSlug: string; projectId?: string } | null {
+interface ChannelScope {
+  workspaceSlug: string;
+  projectId?: string;
+}
+
+type MattermostClient = ReturnType<typeof createChannelSessionMattermostClient>;
+
+interface AuthorizedChannel {
+  forbidden: false;
+  target: ChannelTarget;
+  client: MattermostClient;
+  callerMmUserId: string;
+}
+
+interface ForbiddenChannel {
+  forbidden: true;
+}
+
+function pathScope(path: string): ChannelScope | null {
   const parts = path.split("/");
   if (parts.length === 4 && parts[0] === "workspaces" && parts[2] === "channels") {
     return { workspaceSlug: parts[1] };
@@ -48,6 +67,42 @@ function pathScope(path: string): { workspaceSlug: string; projectId?: string } 
   return null;
 }
 
+function activeProjectAgentMmUserId(
+  projectData: FirebaseFirestore.DocumentData | undefined,
+  credential: FirebaseFirestore.DocumentData | undefined,
+): string | null {
+  if (projectData?.agent?.enabled !== true) return null;
+  if (typeof credential?.mmUserId !== "string" || !MATTERMOST_ID.test(credential.mmUserId)) return null;
+  if (typeof credential.personalToken !== "string" || !credential.personalToken) return null;
+  return credential.mmUserId;
+}
+
+async function resolveProjectTarget(
+  scope: ChannelScope,
+  ownerUid: string,
+): Promise<ChannelTarget | null> {
+  if (!scope.projectId) return null;
+  const [project, secret] = await Promise.all([
+    db.doc(`workspaces/${scope.workspaceSlug}/projects/${scope.projectId}`).get(),
+    db.doc(`users/${ownerUid}/secrets/projectAgentMattermost-${scope.projectId}`).get(),
+  ]);
+  const agentMmUserId = activeProjectAgentMmUserId(project.data(), secret.data());
+  if (!agentMmUserId) return null;
+  return {
+    ...scope,
+    ownerUid,
+    agentId: projectAgentId(scope.workspaceSlug, scope.projectId),
+    agentMmUserId,
+  };
+}
+
+async function resolveCoachTarget(scope: ChannelScope, ownerUid: string): Promise<ChannelTarget | null> {
+  const coachSecret = await db.doc(`users/${ownerUid}/secrets/coachMattermost`).get();
+  const agentMmUserId = coachSecret.data()?.coachMmUserId;
+  if (typeof agentMmUserId !== "string" || !MATTERMOST_ID.test(agentMmUserId)) return null;
+  return { ...scope, ownerUid, agentId: workspaceCoachAgentId(scope.workspaceSlug), agentMmUserId };
+}
+
 async function resolveTarget(channelId: string): Promise<ChannelTarget | null> {
   const channels = await db.collectionGroup("channels").where("mattermost.channelId", "==", channelId).get();
   if (channels.docs.length !== 1) return null;
@@ -55,34 +110,8 @@ async function resolveTarget(channelId: string): Promise<ChannelTarget | null> {
   if (!scope) return null;
   const ownerUid = await resolveWorkspaceUid(scope.workspaceSlug);
   if (!ownerUid) return null;
-
-  if (scope.projectId) {
-    const [project, secret] = await Promise.all([
-      db.doc(`workspaces/${scope.workspaceSlug}/projects/${scope.projectId}`).get(),
-      db.doc(`users/${ownerUid}/secrets/projectAgentMattermost-${scope.projectId}`).get(),
-    ]);
-    const projectCredential = secret.data();
-    if (
-      project.data()?.agent?.enabled === true &&
-      typeof projectCredential?.mmUserId === "string" &&
-      MATTERMOST_ID.test(projectCredential.mmUserId) &&
-      typeof projectCredential.personalToken === "string" &&
-      projectCredential.personalToken.length > 0
-    ) {
-      return {
-        ...scope,
-        ownerUid,
-        agentId: projectAgentId(scope.workspaceSlug, scope.projectId),
-        agentMmUserId: projectCredential.mmUserId,
-      };
-    }
-  }
-
-  const coachSecret = await db.doc(`users/${ownerUid}/secrets/coachMattermost`).get();
-  const agentMmUserId = coachSecret.data()?.coachMmUserId;
-  return typeof agentMmUserId === "string" && MATTERMOST_ID.test(agentMmUserId)
-    ? { ...scope, ownerUid, agentId: workspaceCoachAgentId(scope.workspaceSlug), agentMmUserId }
-    : null;
+  const projectTarget = await resolveProjectTarget(scope, ownerUid);
+  return projectTarget ?? resolveCoachTarget(scope, ownerUid);
 }
 
 async function callerCredentials(uid: string): Promise<{ storedUserId: string; token: string } | null> {
@@ -119,7 +148,10 @@ function threadPosts(value: unknown): MattermostModelPost[] {
   });
 }
 
-async function authorizeChannel(uid: string, channelId: string) {
+async function authorizeChannel(
+  uid: string,
+  channelId: string,
+): Promise<AuthorizedChannel | ForbiddenChannel | null> {
   const [target, credentials] = await Promise.all([resolveTarget(channelId), callerCredentials(uid)]);
   if (!target || !credentials) return null;
   const client = createChannelSessionMattermostClient({
@@ -160,6 +192,178 @@ function handleRouteError(error: unknown, res: Response, next: NextFunction): vo
   next(error);
 }
 
+interface ModelOperationRequest {
+  uid: string;
+  channelId: string;
+  operation: ChannelSessionModelOperation;
+  authorization: AuthorizedChannel;
+}
+
+async function resolveModelOperationRequest(
+  req: Request,
+  res: Response,
+): Promise<ModelOperationRequest | null> {
+  const channelId = channelIdParam(req);
+  if (!channelId) {
+    res.status(400).json({ error: "Invalid channel ID" });
+    return null;
+  }
+  const operation = parseChannelSessionModelOperation(req.body);
+  if (!operation) {
+    res.status(400).json({ error: "Invalid model operation" });
+    return null;
+  }
+  const authorization = await authorizeChannel(req.uid!, channelId);
+  if (!authorization) {
+    res.status(404).json({ error: "Channel model controls unavailable" });
+    return null;
+  }
+  if (authorization.forbidden) {
+    res.status(403).json({ error: "Channel access denied" });
+    return null;
+  }
+  if (operation.agentId !== authorization.target.agentId) {
+    res.status(409).json({ error: "The channel Agent changed; refresh settings" });
+    return null;
+  }
+  return { uid: req.uid!, channelId, operation, authorization };
+}
+
+async function createCommandAudit(request: ModelOperationRequest): Promise<FirebaseFirestore.DocumentReference> {
+  const { uid, channelId, operation, authorization } = request;
+  const audit = db.collection("channelSessionModelAudit").doc();
+  await audit.set({
+    actorUid: uid,
+    channelId,
+    workspaceSlug: authorization.target.workspaceSlug,
+    ...(authorization.target.projectId ? { projectId: authorization.target.projectId } : {}),
+    agentId: authorization.target.agentId,
+    operation: operation.operation,
+    ...(operation.operation === "setSessionModel" ? { requestedModel: operation.modelRef } : {}),
+    outcome: "pending",
+    createdAt: FieldValue.serverTimestamp(),
+  });
+  return audit;
+}
+
+function requireCommandPost(
+  value: unknown,
+  channelId: string,
+  callerMmUserId: string,
+): MattermostModelPost {
+  const commandPost = asPost(value);
+  if (!commandPost || commandPost.channel_id !== channelId || commandPost.user_id !== callerMmUserId) {
+    throw new ChannelSessionMattermostError("Mattermost command post response was invalid");
+  }
+  return commandPost;
+}
+
+async function waitForAgentReply(
+  request: ModelOperationRequest,
+  posted: MattermostModelPost,
+): Promise<MattermostModelPost | null> {
+  const { channelId, authorization } = request;
+  let reply: MattermostModelPost | null = null;
+  for (let attempt = 0; attempt < 20 && !reply; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 250));
+    const thread = await authorization.client.getJson(["posts", posted.id, "thread"]);
+    reply = pickCorrelatedAgentReply(threadPosts(thread), {
+      rootPostId: posted.id,
+      channelId,
+      agentUserId: authorization.target.agentMmUserId,
+      commandCreatedAt: posted.create_at,
+    });
+  }
+  return reply;
+}
+
+async function dispatchNativeCommand(
+  request: ModelOperationRequest,
+): Promise<{ posted: MattermostModelPost; reply: MattermostModelPost | null }> {
+  const { channelId, operation, authorization } = request;
+  const value = await authorization.client.postJson(["posts"], {
+    channel_id: channelId,
+    message: channelSessionModelCommand(operation),
+  });
+  const posted = requireCommandPost(value, channelId, authorization.callerMmUserId);
+  return { posted, reply: await waitForAgentReply(request, posted) };
+}
+
+function auditLogContext(
+  audit: FirebaseFirestore.DocumentReference,
+  request: ModelOperationRequest,
+): { auditId: string; channelId: string; operation: ChannelSessionModelOperation["operation"] } {
+  return {
+    auditId: audit.id,
+    channelId: request.channelId,
+    operation: request.operation.operation,
+  };
+}
+
+async function markCommandFailed(
+  audit: FirebaseFirestore.DocumentReference,
+  request: ModelOperationRequest,
+  error: unknown,
+): Promise<void> {
+  const context = auditLogContext(audit, request);
+  try {
+    await audit.update({ outcome: "failed", completedAt: FieldValue.serverTimestamp() });
+  } catch (auditError) {
+    logger.error("channel session model audit failure update failed", {
+      ...context,
+      error: auditError instanceof Error ? auditError.message : String(auditError),
+    });
+  }
+  logger.error("channel session model command failed", {
+    ...context,
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
+
+async function completeCommandAudit(
+  audit: FirebaseFirestore.DocumentReference,
+  request: ModelOperationRequest,
+  posted: MattermostModelPost,
+  reply: MattermostModelPost | null,
+  parsed: ReturnType<typeof parseNativeModelResult>,
+): Promise<void> {
+  try {
+    await audit.update({
+      commandPostId: posted.id,
+      ...(reply ? { replyPostId: reply.id } : {}),
+      outcome: parsed.outcome,
+      ...(parsed.currentModel ? { resultingModel: parsed.currentModel } : {}),
+      completedAt: FieldValue.serverTimestamp(),
+    });
+  } catch (error) {
+    logger.error("channel session model audit completion failed", {
+      ...auditLogContext(audit, request),
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function executeModelOperation(request: ModelOperationRequest): Promise<Record<string, unknown>> {
+  const audit = await createCommandAudit(request);
+  try {
+    const { posted, reply } = await dispatchNativeCommand(request);
+    const nativeMessage = reply?.message.slice(0, 8192) ?? "No correlated Agent reply was received.";
+    const parsed = reply
+      ? parseNativeModelResult(request.operation.operation, nativeMessage)
+      : { outcome: "unknown" as const };
+    await completeCommandAudit(audit, request, posted, reply, parsed);
+    return {
+      ...parsed,
+      nativeMessage,
+      commandPostId: posted.id,
+      ...(reply ? { replyPostId: reply.id } : {}),
+    };
+  } catch (error) {
+    await markCommandFailed(audit, request, error);
+    throw error;
+  }
+}
+
 router.get("/:channelId", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const channelId = channelIdParam(req);
@@ -180,103 +384,8 @@ router.get("/:channelId", requireAuth, async (req: Request, res: Response, next:
 
 router.post("/:channelId", requireAuth, channelSessionModelRateLimit, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const channelId = channelIdParam(req);
-    if (!channelId) { res.status(400).json({ error: "Invalid channel ID" }); return; }
-    const operation = parseChannelSessionModelOperation(req.body);
-    if (!operation) { res.status(400).json({ error: "Invalid model operation" }); return; }
-    const authorization = await authorizeChannel(req.uid!, channelId);
-    if (!authorization) { res.status(404).json({ error: "Channel model controls unavailable" }); return; }
-    if (authorization.forbidden) { res.status(403).json({ error: "Channel access denied" }); return; }
-    if (operation.agentId !== authorization.target.agentId) {
-      res.status(409).json({ error: "The channel Agent changed; refresh settings" });
-      return;
-    }
-
-    const audit = db.collection("channelSessionModelAudit").doc();
-    await audit.set({
-      actorUid: req.uid,
-      channelId,
-      workspaceSlug: authorization.target.workspaceSlug,
-      ...(authorization.target.projectId ? { projectId: authorization.target.projectId } : {}),
-      agentId: authorization.target.agentId,
-      operation: operation.operation,
-      ...(operation.operation === "setSessionModel" ? { requestedModel: operation.modelRef } : {}),
-      outcome: "pending",
-      createdAt: FieldValue.serverTimestamp(),
-    });
-
-    let posted: MattermostModelPost;
-    let reply: MattermostModelPost | null = null;
-    try {
-      const commandPost = asPost(await authorization.client.postJson(["posts"], {
-        channel_id: channelId,
-        message: channelSessionModelCommand(operation),
-      }));
-      if (
-        !commandPost ||
-        commandPost.channel_id !== channelId ||
-        commandPost.user_id !== authorization.callerMmUserId
-      ) {
-        throw new ChannelSessionMattermostError("Mattermost command post response was invalid");
-      }
-      posted = commandPost;
-
-      for (let attempt = 0; attempt < 20 && !reply; attempt += 1) {
-        if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 250));
-        const thread = await authorization.client.getJson(["posts", posted.id, "thread"]);
-        reply = pickCorrelatedAgentReply(threadPosts(thread), {
-          rootPostId: posted.id,
-          channelId,
-          agentUserId: authorization.target.agentMmUserId,
-          commandCreatedAt: posted.create_at,
-        });
-      }
-    } catch (error) {
-      try {
-        await audit.update({ outcome: "failed", completedAt: FieldValue.serverTimestamp() });
-      } catch (auditError) {
-        logger.error("channel session model audit failure update failed", {
-          auditId: audit.id,
-          channelId,
-          operation: operation.operation,
-          error: auditError instanceof Error ? auditError.message : String(auditError),
-        });
-      }
-      logger.error("channel session model command failed", {
-        auditId: audit.id,
-        channelId,
-        operation: operation.operation,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
-    }
-
-    const nativeMessage = reply?.message.slice(0, 8192) ?? "No correlated Agent reply was received.";
-    const parsed = reply
-      ? parseNativeModelResult(operation.operation, nativeMessage)
-      : { outcome: "unknown" as const };
-    try {
-      await audit.update({
-        commandPostId: posted.id,
-        ...(reply ? { replyPostId: reply.id } : {}),
-        outcome: parsed.outcome,
-        ...(parsed.currentModel ? { resultingModel: parsed.currentModel } : {}),
-        completedAt: FieldValue.serverTimestamp(),
-      });
-    } catch (error) {
-      logger.error("channel session model audit completion failed", {
-        auditId: audit.id,
-        channelId,
-        operation: operation.operation,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-    res.json({
-      ...parsed,
-      nativeMessage,
-      commandPostId: posted.id,
-      ...(reply ? { replyPostId: reply.id } : {}),
-    });
+    const request = await resolveModelOperationRequest(req, res);
+    if (request) res.json(await executeModelOperation(request));
   } catch (error) { handleRouteError(error, res, next); }
 });
 
