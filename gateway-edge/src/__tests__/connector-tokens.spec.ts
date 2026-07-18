@@ -32,6 +32,7 @@ vi.mock('../lib/internal-fetch', () => ({
 import {
   ConnectorTokenBrokerError,
   readConnectorAccessToken,
+  readOwnerRuntimeConnectorAccessToken,
   readConnectorClientCreds,
   getFreshAccessToken,
 } from '../lib/connector-tokens.js';
@@ -181,9 +182,7 @@ describe('readConnectorAccessToken', () => {
       }),
     );
 
-    await expect(
-      readConnectorAccessToken('uid-owner', 'cloudflare', { kind: 'owner-runtime' }),
-    ).resolves.toBe('cf_brokered');
+    await expect(readOwnerRuntimeConnectorAccessToken('cloudflare')).resolves.toBe('cf_brokered');
 
     expect(internalFetch).toHaveBeenCalledWith(
       'http://octogee-api.octogee-test.svc.cluster.local:3001/internal/connectors/access-token',
@@ -191,7 +190,6 @@ describe('readConnectorAccessToken', () => {
         method: 'POST',
         body: JSON.stringify({
           gatewayId: 'bender',
-          uid: 'uid-owner',
           connectorId: 'cloudflare',
           access: { kind: 'owner-runtime' },
         }),

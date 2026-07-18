@@ -22,8 +22,7 @@ const mocks = vi.hoisted(() => {
   }
 
   return {
-    docs: {} as Record<string, Record<string, unknown>>,
-    readConnectorAccessToken: vi.fn(),
+    readOwnerRuntimeConnectorAccessToken: vi.fn(),
     ConnectorTokenReadError,
     ConnectorTokenBrokerError,
     error: vi.fn(),
@@ -32,19 +31,8 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../lib/db.js", () => ({
-  db: {
-    doc: (path: string) => ({
-      get: async () => ({
-        exists: Object.prototype.hasOwnProperty.call(mocks.docs, path),
-        data: () => mocks.docs[path],
-      }),
-    }),
-  },
-}));
-
 vi.mock("../lib/connector-tokens.js", () => ({
-  readConnectorAccessToken: mocks.readConnectorAccessToken,
+  readOwnerRuntimeConnectorAccessToken: mocks.readOwnerRuntimeConnectorAccessToken,
   ConnectorTokenReadError: mocks.ConnectorTokenReadError,
   ConnectorTokenBrokerError: mocks.ConnectorTokenBrokerError,
 }));
@@ -60,7 +48,7 @@ vi.mock("../middleware/logging.js", () => ({
 import connectorRoutes from "../routes/internal/connectors.js";
 import {
   ConnectorTokenBrokerError,
-  readConnectorAccessToken,
+  readOwnerRuntimeConnectorAccessToken,
 } from "../lib/connector-tokens.js";
 
 function app() {
@@ -70,57 +58,15 @@ function app() {
   return a;
 }
 
-function rootConfig(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    configSchemaVersion: 1,
-    profile: "operator",
-    gatewayClass: "operator",
-    imageProfile: "operator",
-    sizingTier: null,
-    computeClass: null,
-    gcpProject: null,
-    gatewayContainerSecurityContext: null,
-    serviceAccountName: null,
-    serviceAccount: null,
-    operatorAccess: { shellsEnabled: true },
-    ownerUid: "uid-owner",
-    coOwnerUids: [],
-    builderSlug: "acme",
-    openclawOverrides: null,
-    modelBrokerLimits: null,
-    preemption: null,
-    ...overrides,
-  };
-}
-
 describe("internal connector materialize route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    for (const key of Object.keys(mocks.docs)) delete mocks.docs[key];
     process.env.GATEWAY_CLASS = "operator";
     process.env.GATEWAY_PROFILE = "operator";
-    process.env.GATEWAY_ID = "bender";
-    process.env.GATEWAY_REVISION_ID = "bender";
-    process.env.GATEWAY_BUILDER_SLUG = "acme";
-    mocks.docs["workspaces/acme"] = { ownerUid: "uid-owner" };
-    mocks.docs["gateways/bender"] = {
-      gatewayId: "bender",
-      latestRelease: 2,
-      desiredRelease: 2,
-      liveRelease: 2,
-      desiredStatus: "running",
-      ...rootConfig(),
-    };
-    mocks.docs["glmGateways/bender"] = {
-      docKind: "runtime",
-      gatewayId: "bender",
-      release: 2,
-      lifecycle: "serving",
-    };
   });
 
-  it("materializes a connected owner-runtime token for the bound operator owner", async () => {
-    vi.mocked(readConnectorAccessToken).mockResolvedValue("cf_secret");
+  it("materializes a connected owner-runtime token without direct Firestore access", async () => {
+    vi.mocked(readOwnerRuntimeConnectorAccessToken).mockResolvedValue("cf_secret");
 
     const res = await request(app()).get("/internal/connectors/cloudflare/materialize");
 
@@ -130,51 +76,21 @@ describe("internal connector materialize route", () => {
       connectorId: "cloudflare",
       accessToken: "cf_secret",
     });
-    expect(readConnectorAccessToken).toHaveBeenCalledWith("uid-owner", "cloudflare", {
-      kind: "owner-runtime",
-    });
+    expect(readOwnerRuntimeConnectorAccessToken).toHaveBeenCalledWith("cloudflare");
   });
 
-  it("materializes GitHub through the same owner-runtime rail", async () => {
-    vi.mocked(readConnectorAccessToken).mockResolvedValue("gho_secret");
-
-    const res = await request(app()).get("/internal/connectors/github/materialize");
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({
-      status: "connected",
-      connectorId: "github",
-      accessToken: "gho_secret",
-    });
-    expect(readConnectorAccessToken).toHaveBeenCalledWith("uid-owner", "github", {
-      kind: "owner-runtime",
-    });
-  });
-
-  it("authorizes a revision runtime from durable root config without a bare glm alias", async () => {
-    vi.mocked(readConnectorAccessToken).mockResolvedValue("gho_secret");
+  it("materializes GitHub through the owner-runtime broker rail", async () => {
+    vi.mocked(readOwnerRuntimeConnectorAccessToken).mockResolvedValue("gho_secret");
 
     const res = await request(app()).get("/internal/connectors/github/materialize");
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ status: "connected", accessToken: "gho_secret" });
-  });
-
-  it("fails closed when the runtime doc is legacy-shaped instead of honoring its stale config", async () => {
-    mocks.docs["glmGateways/bender"] = {
-      gatewayId: "bender",
-      ownerUid: "uid-someone-else",
-      gatewayClass: "shared",
-    };
-    vi.mocked(readConnectorAccessToken).mockResolvedValue("gho_secret");
-
-    const res = await request(app()).get("/internal/connectors/github/materialize");
-
-    expect(res.status).toBe(503);
+    expect(readOwnerRuntimeConnectorAccessToken).toHaveBeenCalledWith("github");
   });
 
   it("returns a structured disconnected response when the owner has no token", async () => {
-    vi.mocked(readConnectorAccessToken).mockResolvedValue(null);
+    vi.mocked(readOwnerRuntimeConnectorAccessToken).mockResolvedValue(null);
 
     const res = await request(app()).get("/internal/connectors/cloudflare/materialize");
 
@@ -187,7 +103,7 @@ describe("internal connector materialize route", () => {
   });
 
   it("returns reauth_required when the broker cannot refresh the owner token", async () => {
-    vi.mocked(readConnectorAccessToken).mockRejectedValue(
+    vi.mocked(readOwnerRuntimeConnectorAccessToken).mockRejectedValue(
       new ConnectorTokenBrokerError(409, "reauth_required"),
     );
 
@@ -204,13 +120,11 @@ describe("internal connector materialize route", () => {
   it("allows builder-class gateways because they are isolated exec-capable runtimes", async () => {
     process.env.GATEWAY_CLASS = "builder";
     process.env.GATEWAY_PROFILE = "standard";
-    mocks.docs["gateways/bender"].gatewayClass = "builder";
-    vi.mocked(readConnectorAccessToken).mockResolvedValue("cf_secret");
+    vi.mocked(readOwnerRuntimeConnectorAccessToken).mockResolvedValue("cf_secret");
 
     const res = await request(app()).get("/internal/connectors/cloudflare/materialize");
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ status: "connected", accessToken: "cf_secret" });
   });
 
   it("rejects shared gateways before reading a token", async () => {
@@ -221,47 +135,7 @@ describe("internal connector materialize route", () => {
 
     expect(res.status).toBe(403);
     expect(res.body).toEqual({ error: "forbidden", code: "owner_runtime_gateway_required" });
-    expect(readConnectorAccessToken).not.toHaveBeenCalled();
-  });
-
-  it("returns 503 when the durable root config marker is missing", async () => {
-    delete mocks.docs["gateways/bender"].configSchemaVersion;
-
-    const res = await request(app()).get("/internal/connectors/cloudflare/materialize");
-
-    expect(res.status).toBe(503);
-    expect(res.body).toEqual({ error: "gateway owner unavailable", code: "gateway_owner_unconfigured" });
-    expect(readConnectorAccessToken).not.toHaveBeenCalled();
-  });
-
-  it("returns 503 when the root config is malformed", async () => {
-    mocks.docs["gateways/bender"].operatorAccess = "corrupt";
-
-    const res = await request(app()).get("/internal/connectors/cloudflare/materialize");
-
-    expect(res.status).toBe(503);
-    expect(res.body).toEqual({ error: "gateway owner unavailable", code: "gateway_owner_unconfigured" });
-    expect(readConnectorAccessToken).not.toHaveBeenCalled();
-  });
-
-  it("rejects a shared desired-state gateway even when the pod env says owner-runtime", async () => {
-    mocks.docs["gateways/bender"].gatewayClass = "shared";
-
-    const res = await request(app()).get("/internal/connectors/cloudflare/materialize");
-
-    expect(res.status).toBe(403);
-    expect(res.body).toEqual({ error: "forbidden", code: "owner_runtime_gateway_required" });
-    expect(readConnectorAccessToken).not.toHaveBeenCalled();
-  });
-
-  it("rejects a gateway whose desired owner does not match the mounted workspace owner", async () => {
-    mocks.docs["gateways/bender"].ownerUid = "uid-someone-else";
-
-    const res = await request(app()).get("/internal/connectors/cloudflare/materialize");
-
-    expect(res.status).toBe(403);
-    expect(res.body).toEqual({ error: "forbidden", code: "gateway_owner_mismatch" });
-    expect(readConnectorAccessToken).not.toHaveBeenCalled();
+    expect(readOwnerRuntimeConnectorAccessToken).not.toHaveBeenCalled();
   });
 
   it("rejects fields-only connectors because this route returns a token shape", async () => {
@@ -269,6 +143,6 @@ describe("internal connector materialize route", () => {
 
     expect(res.status).toBe(403);
     expect(res.body).toEqual({ error: "forbidden", code: "connector_not_materializable" });
-    expect(readConnectorAccessToken).not.toHaveBeenCalled();
+    expect(readOwnerRuntimeConnectorAccessToken).not.toHaveBeenCalled();
   });
 });

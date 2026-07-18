@@ -166,13 +166,17 @@ export function createConnectorTokenBrokerRoutes(opts: { db: Firestore }): Route
     const bound = boundGateway(req, res);
     if (!bound) return;
 
-    const uid = stringBody(req, "uid");
     const connectorId = stringBody(req, "connectorId");
-    if (!uid || !connectorId) {
-      res.status(400).json({ error: "uid and connectorId required" });
+    if (!connectorId) {
+      res.status(400).json({ error: "connectorId required" });
       return;
     }
     const access = requestAccess(req);
+    const uid = access?.kind === OWNER_RUNTIME_ACCESS_KIND ? bound.ownerUid : stringBody(req, "uid");
+    if (!uid) {
+      res.status(400).json({ error: "uid required" });
+      return;
+    }
     if (!connectorAllowedForAccess(connectorId, access)) {
       res.status(403).json(FORBIDDEN);
       return;
