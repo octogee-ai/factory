@@ -259,7 +259,14 @@ export function resolveFleetCapabilities(opts: {
 export async function readMountedCustomersFromAssignedState(
   db: Firestore,
   gatewayId: string,
-  adapter: Pick<CustomerLifecycleAdapter, "hasCustomerDir" | "customerCoachWiredInOpenclawConfig">,
+  adapter: Pick<
+    CustomerLifecycleAdapter,
+    | "hasCustomerDir"
+    | "customerCoachWiredInOpenclawConfig"
+    | "hasCustomerAgentRuntime"
+    | "hasWorkspaceGitDir"
+    | "hasGitRemote"
+  >,
 ): Promise<string[]> {
   const snap = await db
     .collection("users")
@@ -278,9 +285,24 @@ export async function readMountedCustomersFromAssignedState(
     ) {
       continue;
     }
+    if (!hasMountedRuntimeAndWorkspace(adapter, slug)) continue;
     mounted.add(slug);
   }
   return [...mounted].sort((a, b) => a.localeCompare(b));
+}
+
+function hasMountedRuntimeAndWorkspace(
+  adapter: Pick<
+    CustomerLifecycleAdapter,
+    "hasCustomerAgentRuntime" | "hasWorkspaceGitDir" | "hasGitRemote"
+  >,
+  slug: string,
+): boolean {
+  return (
+    (!adapter.hasCustomerAgentRuntime || adapter.hasCustomerAgentRuntime(slug))
+    && adapter.hasWorkspaceGitDir(slug)
+    && adapter.hasGitRemote(slug)
+  );
 }
 
 // In-pod migration RPC path guard (GATEWAY-RELEASES-SPEC transport/tenant
@@ -410,14 +432,19 @@ export function getEvictObservedSlugs(adapter: CustomerLifecycleAdapter): string
   return dirs.filter((s) => !migratingIn || !migratingIn(s)).sort((a, b) => a.localeCompare(b));
 }
 
-// Mount-observed: coach-wired AND fully COMPLETE (the .mounted marker ensure writes as its
-// last step). Drives the reconcile's mount direction, so a coach-wired-but-incomplete slug
-// (config patch landed, then greeting / mark-complete failed) stays in desired−observed and
-// is re-ensured — closing the post-config wedge. Pin-blind (see getEvictObservedSlugs).
+// Mount-observed: coach-wired, runtime-present, durable-workspace-ready, and marked complete.
+// Drives both reconciliation and mounted reporting so any lost runtime, checkout, or origin
+// re-enters desired−observed and is repaired instead of being reported as mounted forever.
 export function getMountObservedSlugs(adapter: CustomerLifecycleAdapter): string[] {
   const coachWired = adapter.listLocalCustomerSlugs?.() ?? [];
   const marked = adapter.customerMountMarked;
-  return coachWired.filter((s) => !marked || marked(s)).sort((a, b) => a.localeCompare(b));
+  return coachWired
+    .filter(
+      (slug) =>
+        hasMountedRuntimeAndWorkspace(adapter, slug)
+        && (!marked || marked(slug)),
+    )
+    .sort((a, b) => a.localeCompare(b));
 }
 
 // Bounded, derived lastError mirror (the restoreJobs writer is gone — this is the only
@@ -540,12 +567,9 @@ function startMaybeReconcileLoop(params: {
     maxConcurrent: 1,
     log: opts.log,
     getMountObserved: () => {
-      // Heartbeat reports the honest coach-wired set (D2) — pin-blind, so a migrated customer
-      // shows mounted as soon as it's coach-wired, not suppressed for the migrating-in TTL.
-      runtime.mountedCustomers = (wrappedAdapter.listLocalCustomerSlugs?.() ?? [])
-        .slice()
-        .sort((a, b) => a.localeCompare(b));
-      return getMountObservedSlugs(wrappedAdapter);
+      const mounted = getMountObservedSlugs(wrappedAdapter);
+      runtime.mountedCustomers = mounted;
+      return mounted;
     },
     getEvictObserved: () => getEvictObservedSlugs(wrappedAdapter),
     ...(getContentStale ? { getContentStale } : {}),
@@ -828,7 +852,7 @@ const waitForGatewayReady = async (): Promise<void> => {
       version: opts.version,
       openclawVersion: opts.openclawVersion,
       startedAt: PROCESS_STARTED_AT_MS,
-      customers: adapter.listLocalCustomerSlugs?.() ?? [],
+      customers: getMountObservedSlugs(adapter),
       // Slugs mid-migration-import — Cowboy's operator poller skips these as eviction
       // candidates until cutover moves their assignment (the operator path has no in-pod
       // reconcile to honor the pin).

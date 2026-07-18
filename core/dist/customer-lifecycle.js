@@ -79,10 +79,11 @@ async function restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts) 
     throwIfAborted(signal, uid);
     steps.push(...(await ensureSshKeyAndGitea(adapter, slug)));
     throwIfAborted(signal, uid);
-    if (snapshot.repoUrl && !adapter.hasWorkspaceGitDir(slug)) {
-        steps.push(...(await cloneExistingWorkspaceRepo(adapter, snapshot, ctx)));
-    }
-    else {
+    const workspaceSteps = snapshot.repoUrl
+        ? await convergeWorkspaceCheckout(adapter, uid, snapshot, ctx)
+        : [];
+    steps.push(...workspaceSteps);
+    if (!workspaceSteps.includes("write-templates")) {
         adapter.ensureCustomerDirectories(slug);
         await adapter.writeCustomerTemplateFiles(ctx);
         steps.push("write-templates");
@@ -141,18 +142,13 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     let snapshot = prepared.snapshot;
     const { ctx, newCustomer } = prepared;
     const { slug } = snapshot;
-    // Operator gateway short-circuit: status=complete AND the customer's
-    // coach is FULLY wired in openclaw.json — agent registered, MM account
-    // configured, AND at least one binding linking the agent to the MM
-    // account. All three must be present for the agent to actually respond
-    // to chat; checking only `agents.list` was too narrow and let bender
-    // boot into a half-wired state on 2026-05-26 (the agent existed but
-    // the MM account + bindings were missing, so the coach sat inert).
     if (snapshot.status === "complete"
         && adapter.isOperatorGateway?.()
         && adapter.customerCoachWiredInOpenclawConfig?.(slug)
-        && adapter.hasCustomerAgentRuntime?.(slug)) {
-        adapter.log(`[add:${slug}] operator gateway, status=complete, coach fully wired in openclaw.json — skipping resync; verifying MM coach only`);
+        && adapter.hasCustomerAgentRuntime?.(slug)
+        && adapter.hasWorkspaceGitDir(slug)
+        && adapter.hasGitRemote(slug)) {
+        adapter.log(`[add:${slug}] operator gateway, status=complete, coach and durable workspace ready — verifying MM coach only`);
         throwIfAborted(signal, uid);
         await verifyChannelReady(adapter, slug, verifyTimeoutMs);
         // Fleet heartbeat must include this customer as mounted — same as
@@ -249,11 +245,19 @@ async function resyncSshKeyIfDrifted(adapter, slug) {
     return ["ssh-key-resync"];
 }
 async function ensureWorkspaceRepo(adapter, uid, snapshot, ctx) {
+    await adapter.ensureGiteaOrg(snapshot.slug);
+    return convergeWorkspaceCheckout(adapter, uid, snapshot, ctx);
+}
+async function convergeWorkspaceCheckout(adapter, uid, snapshot, ctx) {
     const { slug } = snapshot;
-    await adapter.ensureGiteaOrg(slug);
     if (adapter.hasWorkspaceGitDir(slug)) {
         if (adapter.hasGitRemote(slug))
             return [];
+        if (snapshot.repoUrl) {
+            adapter.log(`[add:${slug}] workspace has no origin; restoring canonical Gitea checkout`);
+            await adapter.deleteCustomerDir(slug);
+            return cloneExistingWorkspaceRepo(adapter, snapshot, ctx);
+        }
         return recoverMissingWorkspaceRemote(adapter, uid, ctx);
     }
     if (snapshot.repoUrl) {

@@ -122,6 +122,9 @@ describe("readMountedCustomersFromAssignedState", () => {
       { provisioning: { openclaw: { slug: "ceckert" } } },
       { provisioning: { openclaw: { slug: "missing-dir" } } },
       { provisioning: { openclaw: { slug: "unwired" } } },
+      { provisioning: { openclaw: { slug: "no-runtime" } } },
+      { provisioning: { openclaw: { slug: "no-git" } } },
+      { provisioning: { openclaw: { slug: "no-origin" } } },
       { provisioning: { openclaw: { slug: "ceckert" } } },
       { username: "fallback" },
     ]);
@@ -134,6 +137,9 @@ describe("readMountedCustomersFromAssignedState", () => {
       readMountedCustomersFromAssignedState(db, "gw-bender", {
         hasCustomerDir,
         customerCoachWiredInOpenclawConfig,
+        hasCustomerAgentRuntime: (slug) => slug !== "no-runtime",
+        hasWorkspaceGitDir: (slug) => slug !== "no-git",
+        hasGitRemote: (slug) => slug !== "no-origin",
       }),
     ).resolves.toEqual(["ceckert", "fallback"]);
   });
@@ -147,13 +153,20 @@ describe("readMountedCustomersFromAssignedState", () => {
     await expect(
       readMountedCustomersFromAssignedState(db, "gw-a", {
         hasCustomerDir: (slug) => slug === "bob",
+        hasWorkspaceGitDir: () => true,
+        hasGitRemote: () => true,
       }),
     ).resolves.toEqual(["bob"]);
   });
 });
 
 function mkObservedAdapter(over: Partial<CustomerLifecycleAdapter>): CustomerLifecycleAdapter {
-  return over as CustomerLifecycleAdapter;
+  return {
+    hasCustomerAgentRuntime: () => true,
+    hasWorkspaceGitDir: () => true,
+    hasGitRemote: () => true,
+    ...over,
+  } as CustomerLifecycleAdapter;
 }
 
 describe("observed split — evict keys off raw presence, mount off completion", () => {
@@ -194,6 +207,18 @@ describe("observed split — evict keys off raw presence, mount off completion",
       customerMountMarked: (s) => s === "alice", // only alice fully mounted
     });
     expect(getMountObservedSlugs(a)).toEqual(["alice"]); // bob still in toMount
+  });
+
+  it("mount-observed excludes marked customers missing runtime or durable workspace state", () => {
+    const a = mkObservedAdapter({
+      listLocalCustomerSlugs: () => ["healthy", "no-runtime", "no-git", "no-origin"],
+      customerMountMarked: () => true,
+      hasCustomerAgentRuntime: (slug) => slug !== "no-runtime",
+      hasWorkspaceGitDir: (slug) => slug !== "no-git",
+      hasGitRemote: (slug) => slug !== "no-origin",
+    });
+
+    expect(getMountObservedSlugs(a)).toEqual(["healthy"]);
   });
 
   it("mount-observed counts every coach-wired slug when no marker probe exists", () => {
