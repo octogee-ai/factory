@@ -155,6 +155,26 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(dep).not.toBeNull();
   });
 
+  it("renders the dedicated owner snapshot into immutable pod annotations", () => {
+    const dep = findDoc(helmTemplate("octogee-gw-bender", {
+      gatewayId: "bender",
+      ownerUid: "uid-ceckert",
+      builderSlug: "ceckert",
+      profile: "operator",
+    }), "Deployment", "octogee-gateway-bender") ?? "";
+
+    expect(dep).toMatch(/octogee\.ai\/owner-uid:\s*"uid-ceckert"/);
+    expect(dep).toMatch(/octogee\.ai\/builder-slug:\s*"ceckert"/);
+  });
+
+  it("refuses a partial dedicated owner snapshot", () => {
+    expect(() => helmTemplate("octogee-gw-bender", {
+      gatewayId: "bender",
+      ownerUid: "uid-ceckert",
+      profile: "operator",
+    })).toThrow(/ownerUid and builderSlug must be provided together/);
+  });
+
   it("standard profile references the gateway-scoped KSA but never renders a ServiceAccount (Cowboy owns it)", () => {
     // KSA creation moved OUT of the chart to Cowboy: a gateway-scoped KSA
     // (octogee-gw-<gatewayId>) is created once and referenced by each revision
@@ -772,6 +792,7 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     const dep = findDoc(helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
       gatewayClass: "operator",
+      ownerUid: "uid-ceckert",
       builderSlug: "ceckert",
     }), "Deployment", "octogee-gateway-bender") ?? "";
     expect(dep).not.toMatch(/SYSTEM_CONFIG_MIGRATION_ID/);
@@ -783,6 +804,7 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
       helmTemplate("octogee-gw-bender", {
         gatewayId: "bender",
         gatewayClass: "operator",
+        ownerUid: "uid-ceckert",
         builderSlug: "ceckert",
       }),
       "Deployment",
@@ -806,6 +828,7 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
         helmTemplate(`octogee-gw-${gatewayClass}`, {
           gatewayId: gatewayClass,
           gatewayClass,
+          ownerUid: "uid-ceckert",
           builderSlug: "ceckert",
           "operatorAccess.shellsEnabled": "false",
           "operatorAccess.controlUiEnabled": "false",
@@ -978,6 +1001,7 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
         helmTemplate("octogee-gw-jack", {
           gatewayId: "jack",
           gatewayClass: "builder",
+          ownerUid: "uid-jack",
           builderSlug: "jack",
         }),
         "Deployment",
@@ -1154,6 +1178,7 @@ const cattleDep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default
         helmTemplate("octogee-gw-jack", {
           gatewayId: "jack",
           gatewayClass: "builder",
+          ownerUid: "uid-jack",
           builderSlug: "jack",
         }),
         "Deployment",

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   gatewayDeploymentIntentFingerprint,
+  deploymentIntentFingerprintForComparison,
   gatewayUpsertOptsFromRelease,
   orderGatewaysForConvergence,
   planGatewayConvergence,
@@ -239,6 +240,139 @@ describe("gatewayUpsertOptsFromRelease", () => {
       gatewayEdgeImageRepository: "example/gateway-edge",
       gatewayEdgeImageTag: "edge-b",
     })).not.toBe(base.deploymentIntentFingerprint);
+  });
+
+  it("upserts an unchanged release when only the rendered owner pair changes", () => {
+    const previous = gatewayUpsertOptsFromRelease({
+      namespace: "octogee-test",
+      gateway: gateway({
+        gatewayClass: "operator",
+        imageProfile: "operator",
+        ownerUid: "uid-previous",
+        builderSlug: "previous",
+      }),
+      artifact: artifact(),
+      replicas: 1,
+      chartPath: "/charts/octogee-gateway",
+    });
+    const successor = gatewayUpsertOptsFromRelease({
+      namespace: "octogee-test",
+      gateway: gateway({
+        gatewayClass: "operator",
+        imageProfile: "operator",
+        ownerUid: "uid-successor",
+        builderSlug: "successor",
+      }),
+      artifact: artifact(),
+      replicas: 1,
+      chartPath: "/charts/octogee-gateway",
+    });
+
+    expect(successor).toMatchObject({ ownerUid: "uid-successor", builderSlug: "successor" });
+    expect(planGatewayConvergence({
+      gateway: gateway({
+        gatewayClass: "operator",
+        imageProfile: "operator",
+        ownerUid: "uid-successor",
+        builderSlug: "successor",
+        liveRelease: 2,
+      }),
+      artifact: artifact(),
+      helm: {
+        imageRepository: REPO,
+        imageTag: "def5678",
+        replicas: 1,
+        deploymentIntentFingerprint: previous.deploymentIntentFingerprint,
+      },
+      desiredDeploymentIntentFingerprint: successor.deploymentIntentFingerprint,
+      deploymentReady: true,
+    })).toEqual({ kind: "upsert", replicas: 1 });
+  });
+
+  it("ignores chart-only drift in PROD while retaining it in TEST", () => {
+    const observed = gatewayUpsertOptsFromRelease({
+      namespace: "octogee",
+      gateway: gateway(),
+      artifact: artifact(),
+      replicas: 1,
+      chartPath: "/charts/octogee-gateway",
+      chartFingerprint: "chart-a",
+    });
+    const desired = gatewayUpsertOptsFromRelease({
+      namespace: "octogee",
+      gateway: gateway(),
+      artifact: artifact(),
+      replicas: 1,
+      chartPath: "/charts/octogee-gateway",
+      chartFingerprint: "chart-b",
+    });
+
+    expect(deploymentIntentFingerprintForComparison({
+      desired,
+      observedChartFingerprint: "chart-a",
+      observedDeploymentIntentFingerprint: observed.deploymentIntentFingerprint,
+      autoRollOnChartDrift: false,
+    })).toBe(observed.deploymentIntentFingerprint);
+    expect(deploymentIntentFingerprintForComparison({
+      desired,
+      observedChartFingerprint: "chart-a",
+      observedDeploymentIntentFingerprint: observed.deploymentIntentFingerprint,
+      autoRollOnChartDrift: true,
+    })).toBe(desired.deploymentIntentFingerprint);
+  });
+
+  it("retains owner drift in PROD when chart-only drift is suppressed", () => {
+    const observed = gatewayUpsertOptsFromRelease({
+      namespace: "octogee",
+      gateway: gateway({
+        gatewayClass: "operator",
+        imageProfile: "operator",
+        ownerUid: "uid-previous",
+        builderSlug: "previous",
+      }),
+      artifact: artifact(),
+      replicas: 1,
+      chartPath: "/charts/octogee-gateway",
+      chartFingerprint: "chart-a",
+    });
+    const desired = gatewayUpsertOptsFromRelease({
+      namespace: "octogee",
+      gateway: gateway({
+        gatewayClass: "operator",
+        imageProfile: "operator",
+        ownerUid: "uid-successor",
+        builderSlug: "successor",
+      }),
+      artifact: artifact(),
+      replicas: 1,
+      chartPath: "/charts/octogee-gateway",
+      chartFingerprint: "chart-b",
+    });
+
+    expect(deploymentIntentFingerprintForComparison({
+      desired,
+      observedChartFingerprint: "chart-a",
+      observedDeploymentIntentFingerprint: observed.deploymentIntentFingerprint,
+      autoRollOnChartDrift: false,
+    })).not.toBe(observed.deploymentIntentFingerprint);
+  });
+
+  it("does not turn a missing legacy intent fingerprint into a shared PROD fleet roll", () => {
+    const desired = gatewayUpsertOptsFromRelease({
+      namespace: "octogee",
+      gateway: gateway(),
+      artifact: artifact(),
+      replicas: 1,
+      chartPath: "/charts/octogee-gateway",
+      chartFingerprint: "chart-current",
+    });
+
+    expect(deploymentIntentFingerprintForComparison({
+      desired,
+      observedChartFingerprint: undefined,
+      observedDeploymentIntentFingerprint: undefined,
+      autoRollOnChartDrift: false,
+    })).toBeUndefined();
   });
 
   it("resolves operator access for builder/operator classes from the owner", () => {

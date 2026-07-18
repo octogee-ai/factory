@@ -171,8 +171,10 @@ export function isGatewayMutableConfig(value: unknown): value is GatewayMutableC
     isNullableRecord(value.openclawOverrides) &&
     isNullableModelBrokerLimits(value.modelBrokerLimits) &&
     isNullablePreemption(value.preemption) &&
-    (value.gatewayClass === "shared" ||
-      (typeof value.ownerUid === "string" && value.ownerUid.length > 0))
+    (value.gatewayClass === "shared"
+      ? value.ownerUid === null && value.builderSlug === null
+      : typeof value.ownerUid === "string" && value.ownerUid.length > 0 &&
+        typeof value.builderSlug === "string" && value.builderSlug.length > 0)
   );
 }
 

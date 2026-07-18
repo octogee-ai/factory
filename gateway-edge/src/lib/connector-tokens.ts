@@ -53,6 +53,7 @@ export interface ConnectorTokenProjectAccessContext {
 
 export interface ConnectorTokenOwnerRuntimeAccessContext {
   kind: "owner-runtime";
+  builderSlug: string;
 }
 
 export type ConnectorTokenAccessContext =
@@ -79,7 +80,7 @@ export class ConnectorTokenBrokerError extends ConnectorTokenReadError {
 
 async function readConnectorAccessTokenViaBroker(
   baseUrl: string,
-  uid: string,
+  uid: string | null,
   connectorId: string,
   access?: ConnectorTokenAccessContext,
 ): Promise<string | null> {
@@ -95,7 +96,7 @@ async function readConnectorAccessTokenViaBroker(
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         gatewayId,
-        uid,
+        ...(uid ? { uid } : {}),
         connectorId,
         ...(access ? { access } : {}),
       }),
@@ -153,6 +154,19 @@ export async function readConnectorAccessToken(
   if (baseUrl) return readConnectorAccessTokenViaBroker(baseUrl, uid, connectorId, access);
   if (connectorTokenAuthorityFromEnv()) return readConnectorAccessTokenDirect(uid, connectorId, access);
   throw new Error("CONNECTOR_TOKEN_BROKER_URL is required");
+}
+
+export async function readOwnerRuntimeConnectorAccessToken(
+  connectorId: string,
+): Promise<string | null> {
+  const baseUrl = connectorTokenBrokerBaseUrlFromEnv();
+  if (!baseUrl) throw new Error("CONNECTOR_TOKEN_BROKER_URL is required");
+  const builderSlug = nonBlank(process.env.GATEWAY_BUILDER_SLUG);
+  if (!builderSlug) throw new Error("GATEWAY_BUILDER_SLUG is required");
+  return readConnectorAccessTokenViaBroker(baseUrl, null, connectorId, {
+    kind: "owner-runtime",
+    builderSlug,
+  });
 }
 
 export interface ConnectorClientCreds {

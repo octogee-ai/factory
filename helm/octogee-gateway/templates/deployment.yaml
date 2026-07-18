@@ -7,6 +7,9 @@
 {{- $gatewayImageLabel := include "octogee-gateway.imageLabel" . -}}
 {{- $gatewayImageTag := .Values.image.tag | default .Values.imageTag -}}
 {{- $conversationMode := .Values.conversationExperiment.mode | default "broad" -}}
+{{- if ne (empty .Values.ownerUid) (empty .Values.builderSlug) -}}
+{{- fail "octogee-gateway: ownerUid and builderSlug must be provided together" -}}
+{{- end -}}
 {{- $operatorShellsEnabled := and (ne $gatewayClass "shared") (.Values.operatorAccess.shellsEnabled | default false) -}}
 {{- $operatorControlUiEnabled := ne $gatewayClass "shared" -}}
 {{- if and (ne $conversationMode "broad") (ne $conversationMode "publisher-live") -}}
@@ -47,6 +50,9 @@ spec:
       gateway-instance: {{ $revision }}
   template:
     metadata:
+      annotations:
+        octogee.ai/owner-uid: {{ .Values.ownerUid | quote }}
+        octogee.ai/builder-slug: {{ .Values.builderSlug | quote }}
       labels:
         app: octogee-gateway
         gateway-instance: {{ $revision }}
