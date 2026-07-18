@@ -81,5 +81,9 @@ export interface MarkAssignmentStateParams {
     epoch?: number;
     updatedByOperationId?: string;
     createIfMissing?: boolean;
+    expected?: {
+        state: AssignmentState;
+        updatedByOperationId: string | null;
+    };
 }
 export declare function markAssignmentState(deps: FleetStateDeps, params: MarkAssignmentStateParams): Promise<void>;

@@ -239,12 +239,17 @@ function createMissingAssignment(txn, ref, deps, params) {
 }
 function assertAssignmentStateUpdateMatches(assignment, params) {
     const current = assignment ?? {};
+    const currentOwner = typeof current.updatedByOperationId === "string"
+        ? current.updatedByOperationId
+        : null;
     const exact = [
         params.slug === undefined || current.slug === params.slug,
         params.epoch === undefined || current.epoch === params.epoch,
         current.gatewayId === undefined || current.gatewayId === params.gatewayId,
         current.uid === undefined || current.uid === params.uid,
         !params.createIfMissing || current.updatedByOperationId === params.updatedByOperationId,
+        params.expected === undefined || (current.state === params.expected.state &&
+            currentOwner === params.expected.updatedByOperationId),
     ].every(Boolean);
     if (!exact)
         throw new Error("source assignment changed before roster state update");

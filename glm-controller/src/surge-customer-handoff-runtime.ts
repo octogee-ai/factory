@@ -10,6 +10,7 @@ import type {
   SurgeCustomerHandoffDeps,
   SurgePod,
   SurgePodHealth,
+  SurgePodSnapshot,
 } from "./surge-customer-handoff.js";
 
 interface KubectlResult {
@@ -35,27 +36,31 @@ interface PodList {
   }>;
 }
 
-export function parseSurgePods(raw: string): SurgePod[] {
+export function parseSurgePodSnapshot(raw: string): SurgePodSnapshot {
   const parsed = JSON.parse(raw) as PodList;
-  return (parsed.items ?? []).flatMap((item) => {
+  const observedPodUids: string[] = [];
+  const pods: SurgePod[] = [];
+  for (const item of parsed.items ?? []) {
     const { uid, name, deletionTimestamp } = item.metadata ?? {};
     const { phase, podIP, conditions } = item.status ?? {};
-    if (deletionTimestamp || phase !== "Running" || !uid || !name || !podIP) return [];
-    return [{
+    if (uid) observedPodUids.push(uid);
+    if (deletionTimestamp || phase !== "Running" || !uid || !name || !podIP) continue;
+    pods.push({
       uid,
       name,
       podIP,
       ready: (conditions ?? []).some((condition) =>
         condition.type === "Ready" && condition.status === "True"),
-    }];
-  });
+    });
+  }
+  return { pods, observedPodUids };
 }
 
 export async function listSurgePods(
   runKubectl: SurgeKubectl,
   namespace: string,
   gatewayId: string,
-): Promise<SurgePod[]> {
+): Promise<SurgePodSnapshot> {
   const result = await runKubectl([
     "-n",
     namespace,
@@ -71,7 +76,7 @@ export async function listSurgePods(
       `kubectl get surge pods for ${gatewayId} failed: ${result.stderr.trim() || result.stdout.trim()}`,
     );
   }
-  return parseSurgePods(result.stdout);
+  return parseSurgePodSnapshot(result.stdout);
 }
 
 const POD_SESSION_DIGEST_SCRIPT = [
