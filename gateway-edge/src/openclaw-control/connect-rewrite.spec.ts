@@ -33,7 +33,13 @@ describe("trusted OpenClaw Dashboard connect rewrite", () => {
       params: {
         client: { id: "gateway-client", mode: "backend", platform: "linux" },
         role: "operator",
-        scopes: ["operator.admin"],
+        scopes: [
+          "operator.admin",
+          "operator.read",
+          "operator.write",
+          "operator.approvals",
+          "operator.pairing",
+        ],
         auth: { token: gatewayToken },
       },
     });

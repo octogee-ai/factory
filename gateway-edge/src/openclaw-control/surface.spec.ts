@@ -508,7 +508,13 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       params: expect.objectContaining({
         client: expect.objectContaining({ id: "gateway-client", mode: "backend" }),
         role: "operator",
-        scopes: ["operator.admin"],
+        scopes: [
+          "operator.admin",
+          "operator.read",
+          "operator.write",
+          "operator.approvals",
+          "operator.pairing",
+        ],
         auth: { token: "gateway-secret" },
       }),
     }));

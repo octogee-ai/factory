@@ -1,5 +1,13 @@
 import { OPENCLAW_PROTOCOL_VERSION } from "@octogee/shared/types/openclaw-wire";
 
+const OPERATOR_BUILDER_DASHBOARD_SCOPES = [
+  "operator.admin",
+  "operator.read",
+  "operator.write",
+  "operator.approvals",
+  "operator.pairing",
+] as const;
+
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -39,7 +47,7 @@ export function rewriteTrustedOpenClawConnect(args: {
         mode: "backend",
       },
       role: "operator",
-      scopes: ["operator.admin"],
+      scopes: [...OPERATOR_BUILDER_DASHBOARD_SCOPES],
       auth: { token: args.gatewayToken },
     },
   });
