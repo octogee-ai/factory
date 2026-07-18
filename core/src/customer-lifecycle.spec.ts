@@ -777,6 +777,42 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
     expect(result.steps).toContain("verify-channel-ready");
   });
 
+  it("restores the canonical workspace when a coach-wired customer has no Git remote", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        agentIds: ["octogee-test-coach"],
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user-existing",
+        greetingPosted: true,
+      }),
+      {
+        customerDir: true,
+        workspaceGitDir: true,
+        gitRemote: false,
+        sshKey: true,
+        templatesWritten: true,
+        repoHasCommits: false,
+      },
+    );
+    state.giteaRegisteredPubKey = "ssh-pubkey";
+    const adapter = makeAdapter(state);
+    adapter.isOperatorGateway = () => true;
+    adapter.customerCoachWiredInOpenclawConfig = () => true;
+
+    const result = await addCustomerToGateway(adapter, "uid-test");
+
+    expect(state.calls).toContain("deleteCustomerDir");
+    expect(state.calls).toContain("cloneWorkspaceRepo");
+    expect(state.calls.indexOf("deleteCustomerDir")).toBeLessThan(
+      state.calls.indexOf("cloneWorkspaceRepo"),
+    );
+    expect(state.calls).not.toContain("initWorkspaceRepoFromExistingDir");
+    expect(state.disk.sshKey).toBe(true);
+    expect(result.steps).toContain("clone-workspace-repo");
+    expect(result.steps).toContain("verify-channel-ready");
+  });
+
   it("crash-mid-flow recovery: SSH key on disk but openclaw.json missing agent → falls through to full flow", async () => {
     // Copilot review on PR #1182 surfaced this scenario: a previous mount
     // crashed AFTER generateCustomerSshKey but BEFORE applyAddCustomerConfigPatch

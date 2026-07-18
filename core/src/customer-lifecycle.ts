@@ -472,20 +472,15 @@ async function addCustomerToGatewayInner(
   const { ctx, newCustomer } = prepared;
   const { slug } = snapshot;
 
-  // Operator gateway short-circuit: status=complete AND the customer's
-  // coach is FULLY wired in openclaw.json — agent registered, MM account
-  // configured, AND at least one binding linking the agent to the MM
-  // account. All three must be present for the agent to actually respond
-  // to chat; checking only `agents.list` was too narrow and let bender
-  // boot into a half-wired state on 2026-05-26 (the agent existed but
-  // the MM account + bindings were missing, so the coach sat inert).
   if (
     snapshot.status === "complete"
     && adapter.isOperatorGateway?.()
     && adapter.customerCoachWiredInOpenclawConfig?.(slug)
+    && adapter.hasWorkspaceGitDir(slug)
+    && adapter.hasGitRemote(slug)
   ) {
     adapter.log(
-      `[add:${slug}] operator gateway, status=complete, coach fully wired in openclaw.json — skipping resync; verifying MM coach only`,
+      `[add:${slug}] operator gateway, status=complete, coach and durable workspace ready — verifying MM coach only`,
     );
     throwIfAborted(signal, uid);
     await verifyChannelReady(adapter, slug, verifyTimeoutMs);
@@ -630,6 +625,11 @@ async function ensureWorkspaceRepo(
 
   if (adapter.hasWorkspaceGitDir(slug)) {
     if (adapter.hasGitRemote(slug)) return [];
+    if (snapshot.repoUrl) {
+      adapter.log(`[add:${slug}] workspace has no origin; restoring canonical Gitea checkout`);
+      await adapter.deleteCustomerDir(slug);
+      return cloneExistingWorkspaceRepo(adapter, snapshot, ctx);
+    }
     return recoverMissingWorkspaceRemote(adapter, uid, ctx);
   }
   if (snapshot.repoUrl) {
