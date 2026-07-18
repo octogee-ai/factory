@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   discoverLocalFileDeps,
+  fileDepInstallArgs,
+  fileDepLockOnlyArgs,
   inspectLocalFileDep,
   syncLocalFileDeps,
 } from "../ops/sync-local-file-deps.mjs";
@@ -371,4 +373,23 @@ describe("directory local file dependencies", () => {
       { cwd: consumerDir, encoding: "utf8" },
     ).trim()).toBe("2");
   }, 30_000);
+});
+
+describe("file-dependency refresh disables the registry release-age cooldown", () => {
+  it("neutralizes min-release-age on the preserve-lock refresh install", () => {
+    const args = fileDepInstallArgs(["@octogee/source@file:../source"], true);
+    expect(args).toContain("--min-release-age=0");
+    expect(args).toContain("--install-links=true");
+    expect(args).toContain("--no-save");
+    expect(args).toContain("--package-lock=false");
+    expect(args.at(-1)).toBe("@octogee/source@file:../source");
+  });
+
+  it("neutralizes min-release-age on the lock-rewriting refresh install", () => {
+    expect(fileDepInstallArgs(["@octogee/source@file:../source"], false)).toContain(
+      "--min-release-age=0",
+    );
+    expect(fileDepLockOnlyArgs()).toContain("--min-release-age=0");
+    expect(fileDepLockOnlyArgs()).toContain("--package-lock-only");
+  });
 });
