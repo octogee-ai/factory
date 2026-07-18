@@ -30,8 +30,8 @@ export function mmBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
 export interface ChatBrokerIdentity {
   /** PAT the MM reads run under — the capability boundary. */
   pat: string;
-  /** The agent's own MM user id; its posts are excluded from results. */
-  excludeMmUserId: string;
+  /** The agent's own MM user id; its posts are labeled `self: true` in results. */
+  coachMmUserId: string;
   /** The agent bot's own credential, used ONLY for the `unread` direction (MM serves a
    *  user's unread state only to that user; the builder PAT would 403 or clobber the
    *  human's read marker). */
@@ -99,7 +99,7 @@ export async function executeChatSearch(
   const { channels, users } = await hydrate(mm, pat, result.bundle);
 
   const shaped = shapeBundle(result.bundle, {
-    coachMmUserId: identity.excludeMmUserId,
+    coachMmUserId: identity.coachMmUserId,
     siteUrl: identity.siteUrl,
     teamName: slug,
     channels,
@@ -168,7 +168,7 @@ export async function executeChatHistory(
   const users = await hydrateUsersForBundle(mm, pat, result.bundle);
 
   const shaped = shapeBundle(result.bundle, {
-    coachMmUserId: identity.excludeMmUserId,
+    coachMmUserId: identity.coachMmUserId,
     siteUrl: identity.siteUrl,
     teamName: slug,
     channels,

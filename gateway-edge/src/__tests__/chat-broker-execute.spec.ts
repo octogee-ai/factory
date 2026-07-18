@@ -5,7 +5,7 @@ import type { MmClient } from "../lib/chat-broker/mm-client.js";
 
 const IDENTITY: ChatBrokerIdentity = {
   pat: "builder-pat",
-  excludeMmUserId: "mm-coach-bot",
+  coachMmUserId: "mm-coach-bot",
   unread: { pat: "coach-pat", mmUserId: "mm-coach-bot" },
   slug: "alice",
   siteUrl: "https://chat.example",
