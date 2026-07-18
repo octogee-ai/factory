@@ -29,6 +29,14 @@ export declare const GOOGLE_DRIVE_FULL_READ_SCOPE = "https://www.googleapis.com/
 export declare function googleAuthRequestScopes(capability: GoogleCapability): string[];
 export declare function googleCapabilitiesFromScopes(granted: readonly string[] | null | undefined): GoogleCapability[];
 export declare const GOOGLE_SCOPES: string[];
+export declare function googleEscalationRequestScopes(escalation: string): string[] | null;
+export declare function googleDriveFullReadGranted(granted: readonly string[] | null | undefined): boolean;
+export interface GooglePickedFile {
+    id: string;
+    name: string;
+    mimeType: string;
+}
+export declare function parseGooglePickedFiles(value: unknown): GooglePickedFile[];
 export declare const MICROSOFT_SCOPES: string[];
 export declare const CONNECTOR_CATALOG: readonly ConnectorMeta[];
 export type IntegrationStatus = 'connected' | 'disconnected' | 'error' | 'pending';
@@ -38,6 +46,7 @@ export interface IntegrationStatusDoc {
     accountLabel?: string;
     scopes?: string[];
     captureMethod?: ConnectorCaptureMethod;
+    pickedFiles?: GooglePickedFile[];
     error?: string;
     connectedAt?: unknown;
     updatedAt?: unknown;

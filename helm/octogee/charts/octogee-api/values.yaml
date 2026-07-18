@@ -89,6 +89,14 @@ secrets:
     secretName: google-oauth
     secretKey: client_secret
     optional: true
+  - envName: GOOGLE_PICKER_API_KEY
+    secretName: google-oauth
+    secretKey: picker_api_key
+    optional: true
+  - envName: GOOGLE_PICKER_APP_ID
+    secretName: google-oauth
+    secretKey: picker_app_id
+    optional: true
   - envName: MICROSOFT_CLIENT_ID
     secretName: microsoft-oauth
     secretKey: client_id

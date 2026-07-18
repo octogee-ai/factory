@@ -67,6 +67,8 @@ setupEmulatorTest({
     GITHUB_CLIENT_SECRET: "gh-client-secret",
     GOOGLE_CLIENT_ID: "google-client-id",
     GOOGLE_CLIENT_SECRET: "google-client-secret",
+    GOOGLE_PICKER_API_KEY: "picker-key",
+    GOOGLE_PICKER_APP_ID: "123456789",
     MICROSOFT_CLIENT_ID: "ms-client-id",
     MICROSOFT_CLIENT_SECRET: "ms-client-secret",
   },
@@ -163,6 +165,8 @@ describe("connect route module", () => {
       "POST /disconnect",
       "GET /availability",
       "POST /:connector/verify",
+      "GET /google/picker-token",
+      "POST /google/picked-files",
       "GET /:connector/auth-url",
       "GET /:connector/callback",
       "POST /:connector/pat",
@@ -917,6 +921,7 @@ describe("connect — availability", () => {
       configured: true,
       stage: "allowlist",
       available: true,
+      pickerConfigured: true,
     });
 
     const theirs = await request(createApp())
@@ -926,6 +931,7 @@ describe("connect — availability", () => {
       configured: true,
       stage: "allowlist",
       available: false,
+      pickerConfigured: true,
     });
   });
 
@@ -937,6 +943,7 @@ describe("connect — availability", () => {
       configured: true,
       stage: "off",
       available: false,
+      pickerConfigured: true,
     });
 
     const savedId = process.env.GOOGLE_CLIENT_ID;
@@ -950,6 +957,7 @@ describe("connect — availability", () => {
         configured: false,
         stage: "on",
         available: false,
+        pickerConfigured: true,
       });
     } finally {
       process.env.GOOGLE_CLIENT_ID = savedId;
@@ -1120,6 +1128,162 @@ describe("connect — microsoft + verify", () => {
     ]) {
       const res = await request(createApp()).get(path);
       expect(res.status, path).toBe(404);
+    }
+  });
+});
+
+describe("connect — google drive picker + full-read escalation", () => {
+  const DRIVE = "https://www.googleapis.com/auth/drive.file";
+  const DRIVE_FULL = "https://www.googleapis.com/auth/drive.readonly";
+  const EMAIL = "https://www.googleapis.com/auth/userinfo.email";
+  const CAL = "https://www.googleapis.com/auth/calendar.events";
+
+  async function grantGoogle(capability: string, grantedScope: string): Promise<void> {
+    stubProviderFetch([
+      {
+        url: /oauth2\.googleapis\.com\/token/,
+        respond: () => ({
+          access_token: PLAINTEXT_GOOGLE_ACCESS,
+          refresh_token: PLAINTEXT_GOOGLE_REFRESH,
+          expires_in: 3600,
+          token_type: "Bearer",
+          scope: grantedScope,
+        }),
+      },
+      { url: /googleapis\.com\/oauth2\/v2\/userinfo/, respond: () => ({ email: "g@x.com" }) },
+    ]);
+    const { state } = await mintAuthUrlState("google", `&capability=${capability}`);
+    const res = await request(createApp()).get(
+      `/api/connect/google/callback?code=c&state=${encodeURIComponent(state)}`,
+    );
+    expect(res.headers.location).toContain("google_connected=true");
+    vi.restoreAllMocks();
+    _setKmsClientForTesting(deterministicMockKms());
+  }
+
+  it("drive-full mints an escalation consent that keeps drive.file and adds drive.readonly", async () => {
+    await setGoogleStage("on");
+    const { url } = await mintAuthUrlState("google", "&capability=drive-full");
+    expect(new URL(url).searchParams.get("scope")).toBe(`${DRIVE} ${DRIVE_FULL} ${EMAIL}`);
+  });
+
+  it("a drive-full grant records drive.readonly in the granted scopes", async () => {
+    await setGoogleStage("on");
+    await grantGoogle("drive-full", `${DRIVE} ${DRIVE_FULL} ${EMAIL}`);
+    const status = await readStatus(UID, "google");
+    expect(status?.scopes).toContain(DRIVE_FULL);
+  });
+
+  it("picker-token requires auth, drive grant, and picker env", async () => {
+    expect((await request(createApp()).get("/api/connect/google/picker-token")).status).toBe(401);
+
+    await setGoogleStage("on");
+    const ungranted = await request(createApp())
+      .get("/api/connect/google/picker-token")
+      .set("Authorization", auth.bearer());
+    expect(ungranted.status).toBe(422);
+    expect(ungranted.body.reason).toBe("drive_not_connected");
+
+    await grantGoogle("calendar", `${CAL} ${EMAIL}`);
+    const calendarOnly = await request(createApp())
+      .get("/api/connect/google/picker-token")
+      .set("Authorization", auth.bearer());
+    expect(calendarOnly.status).toBe(422);
+    expect(calendarOnly.body.reason).toBe("drive_not_connected");
+  });
+
+  it("picker-token 503s when the picker env is unset", async () => {
+    await setGoogleStage("on");
+    await grantGoogle("drive", `${DRIVE} ${EMAIL}`);
+    const saved = process.env.GOOGLE_PICKER_API_KEY;
+    try {
+      delete process.env.GOOGLE_PICKER_API_KEY;
+      const res = await request(createApp())
+        .get("/api/connect/google/picker-token")
+        .set("Authorization", auth.bearer());
+      expect(res.status).toBe(503);
+    } finally {
+      process.env.GOOGLE_PICKER_API_KEY = saved;
+    }
+  });
+
+  it("picker-token returns the Builder's fresh access token with the picker client config", async () => {
+    await setGoogleStage("on");
+    await grantGoogle("drive", `${DRIVE} ${EMAIL}`);
+    const res = await request(createApp())
+      .get("/api/connect/google/picker-token")
+      .set("Authorization", auth.bearer());
+    expect(res.status, res.text).toBe(200);
+    expect(res.body).toEqual({
+      accessToken: PLAINTEXT_GOOGLE_ACCESS,
+      apiKey: "picker-key",
+      appId: "123456789",
+    });
+  });
+
+  it("picked-files add/remove merges by id and round-trips through the integration doc", async () => {
+    await setGoogleStage("on");
+    await grantGoogle("drive", `${DRIVE} ${EMAIL}`);
+
+    const add = await request(createApp())
+      .post("/api/connect/google/picked-files")
+      .set("Authorization", auth.bearer())
+      .send({
+        add: [
+          { id: "f1", name: "Plan.pdf", mimeType: "application/pdf" },
+          { id: "f2", name: "Notes.md", mimeType: "text/markdown" },
+        ],
+      });
+    expect(add.status, add.text).toBe(200);
+
+    const again = await request(createApp())
+      .post("/api/connect/google/picked-files")
+      .set("Authorization", auth.bearer())
+      .send({
+        add: [{ id: "f1", name: "Plan v2.pdf", mimeType: "application/pdf" }],
+        remove: ["f2"],
+      });
+    expect(again.status).toBe(200);
+    expect(again.body.pickedFiles).toEqual([
+      { id: "f1", name: "Plan v2.pdf", mimeType: "application/pdf" },
+    ]);
+    expect((await readStatus(UID, "google"))?.pickedFiles).toEqual([
+      { id: "f1", name: "Plan v2.pdf", mimeType: "application/pdf" },
+    ]);
+  });
+
+  it("picked-files rejects empty payloads and unconnected users", async () => {
+    await setGoogleStage("on");
+    const empty = await request(createApp())
+      .post("/api/connect/google/picked-files")
+      .set("Authorization", auth.bearer())
+      .send({ add: [{ id: "", name: "x", mimeType: "t" }] });
+    expect(empty.status).toBe(400);
+
+    const unconnected = await request(createApp())
+      .post("/api/connect/google/picked-files")
+      .set("Authorization", auth.bearer())
+      .send({ add: [{ id: "f1", name: "Plan.pdf", mimeType: "application/pdf" }] });
+    expect(unconnected.status).toBe(422);
+    expect(unconnected.body.reason).toBe("not_connected");
+  });
+
+  it("availability reports picker configuration", async () => {
+    await setGoogleStage("on");
+    const res = await request(createApp())
+      .get("/api/connect/availability")
+      .set("Authorization", auth.bearer());
+    expect(res.body.providers.google.pickerConfigured).toBe(true);
+
+    const saved = process.env.GOOGLE_PICKER_APP_ID;
+    try {
+      process.env.GOOGLE_PICKER_APP_ID = "placeholder";
+      const dark = await request(createApp())
+        .get("/api/connect/availability")
+        .set("Authorization", auth.bearer());
+      expect(dark.body.providers.google.pickerConfigured).toBe(false);
+    } finally {
+      process.env.GOOGLE_PICKER_APP_ID = saved;
     }
   });
 });

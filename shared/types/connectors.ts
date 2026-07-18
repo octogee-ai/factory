@@ -86,6 +86,36 @@ export const GOOGLE_SCOPES = [
   GOOGLE_IDENTITY_SCOPE,
 ];
 
+export function googleEscalationRequestScopes(escalation: string): string[] | null {
+  if (escalation !== 'drive-full') return null;
+  return [...GOOGLE_CAPABILITY_SCOPES.drive, GOOGLE_DRIVE_FULL_READ_SCOPE, GOOGLE_IDENTITY_SCOPE];
+}
+
+export function googleDriveFullReadGranted(granted: readonly string[] | null | undefined): boolean {
+  return (granted ?? []).includes(GOOGLE_DRIVE_FULL_READ_SCOPE);
+}
+
+export interface GooglePickedFile {
+  id: string;
+  name: string;
+  mimeType: string;
+}
+
+export function parseGooglePickedFiles(value: unknown): GooglePickedFile[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const { id, name, mimeType } = (entry ?? {}) as Record<string, unknown>;
+    if (
+      typeof id !== 'string' || id.length === 0 ||
+      typeof name !== 'string' || name.length === 0 ||
+      typeof mimeType !== 'string' || mimeType.length === 0
+    ) {
+      return [];
+    }
+    return [{ id, name, mimeType }];
+  });
+}
+
 export const MICROSOFT_SCOPES = [
   'Files.Read.All',
   'Mail.Read',
@@ -320,6 +350,7 @@ export interface IntegrationStatusDoc {
   accountLabel?: string;
   scopes?: string[];
   captureMethod?: ConnectorCaptureMethod;
+  pickedFiles?: GooglePickedFile[];
   error?: string;
   connectedAt?: unknown;
   updatedAt?: unknown;

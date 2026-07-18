@@ -176,7 +176,7 @@ export interface ConnectorClientCreds {
 
 export type ConnectorTokenStore = Pick<FirebaseFirestore.Firestore, "doc">;
 
-function configuredEnvValue(value: string | undefined): string | null {
+export function configuredEnvValue(value: string | undefined): string | null {
   const trimmed = value?.trim();
   if (!trimmed || trimmed === "placeholder") return null;
   return trimmed;

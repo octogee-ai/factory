@@ -129,6 +129,11 @@ describe('connector registry (gateway-edge)', () => {
       'https://www.googleapis.com/auth/gmail.modify',
       'https://www.googleapis.com/auth/userinfo.email',
     ]);
+    expect(google.capabilityRequestScopes!('drive-full')).toEqual([
+      'https://www.googleapis.com/auth/drive.file',
+      'https://www.googleapis.com/auth/drive.readonly',
+      'https://www.googleapis.com/auth/userinfo.email',
+    ]);
     expect(google.capabilityRequestScopes!('nope')).toBeNull();
     expect(getConnector('github')!.capabilityRequestScopes).toBeUndefined();
     expect(getConnector('microsoft')!.capabilityRequestScopes).toBeUndefined();

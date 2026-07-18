@@ -18,6 +18,27 @@ export const GOOGLE_SCOPES = [
     ...GOOGLE_CAPABILITY_ORDER.flatMap((capability) => GOOGLE_CAPABILITY_SCOPES[capability]),
     GOOGLE_IDENTITY_SCOPE,
 ];
+export function googleEscalationRequestScopes(escalation) {
+    if (escalation !== 'drive-full')
+        return null;
+    return [...GOOGLE_CAPABILITY_SCOPES.drive, GOOGLE_DRIVE_FULL_READ_SCOPE, GOOGLE_IDENTITY_SCOPE];
+}
+export function googleDriveFullReadGranted(granted) {
+    return (granted ?? []).includes(GOOGLE_DRIVE_FULL_READ_SCOPE);
+}
+export function parseGooglePickedFiles(value) {
+    if (!Array.isArray(value))
+        return [];
+    return value.flatMap((entry) => {
+        const { id, name, mimeType } = (entry ?? {});
+        if (typeof id !== 'string' || id.length === 0 ||
+            typeof name !== 'string' || name.length === 0 ||
+            typeof mimeType !== 'string' || mimeType.length === 0) {
+            return [];
+        }
+        return [{ id, name, mimeType }];
+    });
+}
 export const MICROSOFT_SCOPES = [
     'Files.Read.All',
     'Mail.Read',

@@ -1,6 +1,10 @@
 import * as crypto from "crypto";
 import { Router, Request, Response, NextFunction } from "express";
-import type { ConnectorCaptureMethod } from "@octogee/shared/types/connectors";
+import {
+  googleCapabilitiesFromScopes,
+  parseGooglePickedFiles,
+  type ConnectorCaptureMethod,
+} from "@octogee/shared/types/connectors";
 import { googleConnectAllowed } from "@octogee/shared/types/platform-config";
 import { requireAuth } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";
@@ -20,6 +24,7 @@ import {
   type ConnectorDef,
 } from "../lib/connectors/index.js";
 import {
+  configuredEnvValue,
   readConnectorClientCreds,
   getFreshAccessToken,
   type ConnectorClientCreds,
@@ -215,8 +220,10 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const config = await readPlatformConnectConfig();
-      const providers: Record<string, { configured: boolean; available: boolean; stage?: string }> =
-        {};
+      const providers: Record<
+        string,
+        { configured: boolean; available: boolean; stage?: string; pickerConfigured?: boolean }
+      > = {};
       for (const def of listConnectors()) {
         if (!def.oauth) continue;
         const configured = readConnectorClientCreds(def) !== null;
@@ -226,6 +233,7 @@ router.get(
                 configured,
                 stage: config.googleStage,
                 available: configured && googleConnectAllowed(config, req.uid!),
+                pickerConfigured: googlePickerEnv() !== null,
               }
             : { configured, available: configured };
       }
@@ -331,6 +339,84 @@ router.post(
       } else {
         await verifyTokenConnector(req.uid!, def, res);
       }
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+function googlePickerEnv(): { apiKey: string; appId: string } | null {
+  const apiKey = configuredEnvValue(process.env.GOOGLE_PICKER_API_KEY);
+  const appId = configuredEnvValue(process.env.GOOGLE_PICKER_APP_ID);
+  return apiKey && appId ? { apiKey, appId } : null;
+}
+
+router.get(
+  "/google/picker-token",
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const picker = googlePickerEnv();
+      if (!picker) {
+        logger.error(
+          "[connect] google picker unavailable: GOOGLE_PICKER_API_KEY/GOOGLE_PICKER_APP_ID is not set",
+        );
+        res.status(503).json({ error: "Google Drive picker is not configured" });
+        return;
+      }
+      const def = getConnector("google")!;
+      const scopes = await grantedScopesFor(req.uid!, def);
+      if (!googleCapabilitiesFromScopes(scopes).includes("drive")) {
+        res.status(422).json({ ok: false, reason: "drive_not_connected" });
+        return;
+      }
+      const fresh = await getFreshAccessToken(req.uid!, def);
+      if (!fresh.ok) {
+        res
+          .status(fresh.reason === "reauth_required" ? 409 : 422)
+          .json({ ok: false, reason: fresh.reason });
+        return;
+      }
+      res.json({ accessToken: fresh.accessToken, apiKey: picker.apiKey, appId: picker.appId });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+const GOOGLE_PICKED_FILES_MAX = 500;
+
+router.post(
+  "/google/picked-files",
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { add, remove } = (req.body ?? {}) as { add?: unknown; remove?: unknown };
+      const files = parseGooglePickedFiles(add);
+      const removeIds = Array.isArray(remove)
+        ? remove.filter((id): id is string => typeof id === "string" && id.length > 0)
+        : [];
+      if (files.length === 0 && removeIds.length === 0) {
+        res.status(400).json({ error: "add or remove required" });
+        return;
+      }
+      const ref = userCol(req.uid!, "integrations").doc("google");
+      const snap = await ref.get();
+      if (!snap.exists) {
+        res.status(422).json({ ok: false, reason: "not_connected" });
+        return;
+      }
+      const current = parseGooglePickedFiles(
+        (snap.data() as { pickedFiles?: unknown }).pickedFiles,
+      );
+      const dropIds = new Set([...removeIds, ...files.map((f) => f.id)]);
+      const pickedFiles = [...current.filter((f) => !dropIds.has(f.id)), ...files];
+      if (pickedFiles.length > GOOGLE_PICKED_FILES_MAX) {
+        res.status(400).json({ error: `picked files capped at ${GOOGLE_PICKED_FILES_MAX}` });
+        return;
+      }
+      await ref.set({ pickedFiles, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+      res.json({ ok: true, pickedFiles });
     } catch (e) {
       next(e);
     }

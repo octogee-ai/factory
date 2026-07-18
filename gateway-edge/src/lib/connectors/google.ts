@@ -2,6 +2,7 @@ import {
   GOOGLE_CAPABILITY_SCOPES,
   googleAuthRequestScopes,
   googleCapabilitiesFromScopes,
+  googleEscalationRequestScopes,
   type GoogleCapability,
 } from "@octogee/shared/types/connectors";
 import type { ConnectorDef, ConnectorProbeResult } from "./def.js";
@@ -51,7 +52,7 @@ export const googleConnector: ConnectorDef = {
   capabilityRequestScopes: (capability) =>
     capability in GOOGLE_CAPABILITY_SCOPES
       ? googleAuthRequestScopes(capability as GoogleCapability)
-      : null,
+      : googleEscalationRequestScopes(capability),
   fetchIdentity: async (accessToken) => {
     const resp = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
       headers: { Authorization: `Bearer ${accessToken}` },

@@ -7,6 +7,9 @@ import {
   GOOGLE_SCOPES,
   googleAuthRequestScopes,
   googleCapabilitiesFromScopes,
+  googleDriveFullReadGranted,
+  googleEscalationRequestScopes,
+  parseGooglePickedFiles,
   type GoogleCapability,
 } from "./connectors.js";
 
@@ -101,5 +104,40 @@ describe("google catalog entry — platform client", () => {
     expect(google.clientSource).toBeUndefined();
     // @ts-expect-error platformScopes was removed with the BYO-client path
     expect(google.platformScopes).toBeUndefined();
+  });
+});
+
+describe("google drive full-read escalation", () => {
+  it("drive-full requests keep drive.file and add the declared read-all scope", () => {
+    expect(googleEscalationRequestScopes("drive-full")).toEqual([
+      "https://www.googleapis.com/auth/drive.file",
+      GOOGLE_DRIVE_FULL_READ_SCOPE,
+      GOOGLE_IDENTITY_SCOPE,
+    ]);
+    expect(googleEscalationRequestScopes("nope")).toBeNull();
+  });
+
+  it("full read derives from the granted drive.readonly scope", () => {
+    expect(googleDriveFullReadGranted([GOOGLE_DRIVE_FULL_READ_SCOPE])).toBe(true);
+    expect(googleDriveFullReadGranted(["https://www.googleapis.com/auth/drive.file"])).toBe(false);
+    expect(googleDriveFullReadGranted(undefined)).toBe(false);
+  });
+
+  it("drive.readonly alone still does not light the drive capability card", () => {
+    expect(googleCapabilitiesFromScopes([GOOGLE_DRIVE_FULL_READ_SCOPE])).toEqual([]);
+  });
+});
+
+describe("google picked files", () => {
+  it("normalizes picker docs to id/name/mimeType and drops malformed entries", () => {
+    expect(
+      parseGooglePickedFiles([
+        { id: "f1", name: "Plan.pdf", mimeType: "application/pdf", extra: "x" },
+        { id: "", name: "bad", mimeType: "t" },
+        { id: "f2", name: 42, mimeType: "t" },
+        "junk",
+      ]),
+    ).toEqual([{ id: "f1", name: "Plan.pdf", mimeType: "application/pdf" }]);
+    expect(parseGooglePickedFiles("nope")).toEqual([]);
   });
 });
