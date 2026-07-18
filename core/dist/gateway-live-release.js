@@ -26,9 +26,6 @@ function eligibleConfiguredBuilderGateway(value, input) {
     }
     const gateway = value;
     if (!podBelongsToGateway(input.gatewayId, input.podName) ||
-        gateway.desiredStatus !== "running" ||
-        gateway.retireAfter != null ||
-        gateway.retirementClaim != null ||
         gateway.gatewayClass === "shared" ||
         gateway.builderSlug !== input.slug) {
         return null;

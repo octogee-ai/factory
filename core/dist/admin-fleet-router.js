@@ -4169,13 +4169,13 @@ export function addAdminFleetRoutes(router, deps) {
     router.post("/rollouts", async (req, res, next) => {
         try {
             const body = req.body;
-            if (typeof body.fromGatewayId !== "string" ||
-                body.fromGatewayId.length === 0 ||
+            if (typeof body.gatewayId !== "string" ||
+                body.gatewayId.length === 0 ||
                 typeof body.imageTag !== "string" ||
                 body.imageTag.length === 0) {
                 res.status(400).json({
                     error: "missing required fields",
-                    required: ["fromGatewayId", "imageTag"],
+                    required: ["gatewayId", "imageTag"],
                 });
                 return;
             }
@@ -4185,7 +4185,7 @@ export function addAdminFleetRoutes(router, deps) {
                 kind: "rollout",
                 createdBy,
                 input: {
-                    fromGatewayId: body.fromGatewayId,
+                    gatewayId: body.gatewayId,
                     imageTag: body.imageTag,
                 },
             });

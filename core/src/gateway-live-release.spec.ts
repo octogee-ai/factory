@@ -73,9 +73,16 @@ describe("configuredBuilderBootstrapAllowed", () => {
     { desiredStatus: "retired" },
     { retireAfter: 2 },
     { retirementClaim: { operationId: "retire-1", version: 1 } },
-    { gatewayClass: "shared" },
-  ])("rejects terminal or shared configured-builder bootstrap state: %o", (override) => {
+  ])("ignores lifecycle state for configured-builder bootstrap: %o", (override) => {
     expect(configuredBuilderBootstrapAllowed({ ...configured, ...override }, {
+      gatewayId: "bender",
+      podName: POD_NAME,
+      slug: "alice",
+    })).toBe(true);
+  });
+
+  it("rejects shared gateways because they have no configured builder identity", () => {
+    expect(configuredBuilderBootstrapAllowed({ ...configured, gatewayClass: "shared" }, {
       gatewayId: "bender",
       podName: POD_NAME,
       slug: "alice",

@@ -10,7 +10,7 @@ vi.mock("../lib/db", () => {
     },
   };
 
-  function durableRoot(gatewayId: string, revisionId: string) {
+  function durableRoot(gatewayId: string) {
     return {
       gatewayId,
       createdAt: 1,
@@ -60,9 +60,9 @@ vi.mock("../lib/db", () => {
   }
 
   const gatewayRoots: Record<string, any> = {
-    "gw-test-primary": durableRoot("gw-test-primary", "gw-test-primary"),
-    "gw-test-secondary": durableRoot("gw-test-secondary", "gw-test-secondary"),
-    "gw-test-stale": durableRoot("gw-test-stale", "gw-test-stale"),
+    "gw-test-primary": durableRoot("gw-test-primary"),
+    "gw-test-secondary": durableRoot("gw-test-secondary"),
+    "gw-test-stale": durableRoot("gw-test-stale"),
   };
 
   const gatewayRevisions: Record<string, any> = {

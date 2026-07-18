@@ -1737,7 +1737,7 @@ describe("POST /api/admin/rollouts — body type guards", () => {
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/rollouts")
-      .send({ fromGatewayId: "default", imageTag: 9999 });
+      .send({ gatewayId: "default", imageTag: 9999 });
     expect(res.status).toBe(400);
   });
 });
@@ -2201,10 +2201,10 @@ describe("POST /api/admin/customers/:uid/unassign — clear assignment, let reco
 });
 
 describe("POST /api/admin/rollouts — composite operation", () => {
-  it("creates a rollout operation with the source gateway + target image", async () => {
+  it("creates a rollout operation with the gateway + target image", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/rollouts").send({
-      fromGatewayId: "default",
+      gatewayId: "default",
       imageTag: "def5678",
     });
     expect(res.status).toBe(202);
@@ -2212,7 +2212,7 @@ describe("POST /api/admin/rollouts — composite operation", () => {
     expect(op?.data).toMatchObject({
       kind: "rollout",
       status: "pending",
-      input: { fromGatewayId: "default", imageTag: "def5678" },
+      input: { gatewayId: "default", imageTag: "def5678" },
       createdBy: "admin-user",
     });
   });

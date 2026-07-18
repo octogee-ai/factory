@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   operatorGatewayServiceAccountName,
   resolveGatewayClass,
@@ -25,6 +26,16 @@ import { resolveGatewayImageRepository } from "./gateway-profiles.js";
 
 export type DurableGateway = GatewayDoc & GatewayMutableConfig;
 
+export function orderGatewaysForConvergence(
+  gateways: readonly DurableGateway[],
+): DurableGateway[] {
+  return [...gateways].sort((left, right) => {
+    const leftRank = resolveGatewayClass(classKnobs(left)) === "operator" ? 0 : 1;
+    const rightRank = resolveGatewayClass(classKnobs(right)) === "operator" ? 0 : 1;
+    return leftRank - rightRank || left.gatewayId.localeCompare(right.gatewayId);
+  });
+}
+
 function classKnobs(gateway: DurableGateway): {
   gatewayClass?: "builder" | "operator" | "shared";
   profile?: "operator" | "standard";
@@ -48,12 +59,14 @@ export interface ObservedHelmInstance {
   imageRepository: string | null;
   imageTag: string | null;
   replicas: number | null;
+  deploymentIntentFingerprint?: string | null;
 }
 
 export interface GatewayConvergencePlanInput {
   gateway: DurableGateway;
   artifact: ReleasePayload | null;
   helm: ObservedHelmInstance | null;
+  desiredDeploymentIntentFingerprint?: string;
   deploymentReady: boolean;
 }
 
@@ -88,7 +101,9 @@ export function planGatewayConvergence(
     !helm ||
     helm.imageTag !== artifact.imageTag ||
     helm.imageRepository !== imageRepositoryFor(gateway, artifact) ||
-    helm.replicas !== replicas;
+    helm.replicas !== replicas ||
+    (input.desiredDeploymentIntentFingerprint !== undefined &&
+      helm.deploymentIntentFingerprint !== input.desiredDeploymentIntentFingerprint);
   if (drifted) return { kind: "upsert", replicas };
   if (
     gateway.desiredStatus === "running" &&
@@ -125,6 +140,33 @@ export interface GatewayUpsertOpts {
   replicas?: number;
   gcpProject?: string;
   rollStrategy: "surge";
+  deploymentIntentFingerprint: string;
+}
+
+type GatewayIntentInput =
+  | GatewayUpsertOpts
+  | (Omit<GatewayUpsertOpts, "deploymentIntentFingerprint"> & {
+      deploymentIntentFingerprint?: undefined;
+    });
+
+function canonicalJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJsonValue);
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, canonicalJsonValue(item)]),
+  );
+}
+
+export function gatewayDeploymentIntentFingerprint(opts: GatewayIntentInput): string {
+  const intent = Object.fromEntries(
+    Object.entries(opts).filter(([key]) => key !== "deploymentIntentFingerprint"),
+  );
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalJsonValue(intent)))
+    .digest("hex");
 }
 
 function w9TestExperimentForNamespace(input: {
@@ -173,27 +215,17 @@ export function gatewayUpsertOptsFromRelease(input: {
 }): GatewayUpsertOpts {
   const { gateway, artifact } = input;
   const gatewayClass = resolveGatewayClass(classKnobs(gateway));
-  const serviceAccountName =
-    gateway.serviceAccountName &&
-    gateway.serviceAccountName.length > 0 &&
-    gateway.serviceAccountName !== GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME
-      ? gateway.serviceAccountName
-      : operatorGatewayServiceAccountName(gateway.gatewayId);
-  const operatorAccess =
-    gatewayClass === "builder" || gatewayClass === "operator"
-      ? resolveOperatorGatewayAccess(gateway.ownerUid, gateway.operatorAccess ?? undefined)
-      : gateway.operatorAccess ?? undefined;
-  return {
+  const intent: Omit<GatewayUpsertOpts, "deploymentIntentFingerprint"> = {
     namespace: input.namespace,
     gatewayId: gateway.gatewayId,
     builderSlug: gateway.builderSlug ?? undefined,
     imageRepository: imageRepositoryFor(gateway, artifact),
     imageTag: artifact.imageTag,
     ...w9TestExperimentForNamespace({ namespace: input.namespace, artifact }),
-    serviceAccountName,
+    serviceAccountName: gatewayServiceAccountName(gateway),
     serviceAccount: gateway.serviceAccount ?? undefined,
     gatewayContainerSecurityContext: gateway.gatewayContainerSecurityContext ?? undefined,
-    operatorAccess: operatorAccess ?? undefined,
+    operatorAccess: gatewayOperatorAccess(gateway, gatewayClass),
     computeClassOverride: gateway.computeClass ?? undefined,
     chartPath: input.chartPath,
     valuesFile: input.valuesFile,
@@ -206,6 +238,25 @@ export function gatewayUpsertOptsFromRelease(input: {
     gcpProject: gateway.gcpProject ?? undefined,
     rollStrategy: "surge",
   };
+  return {
+    ...intent,
+    deploymentIntentFingerprint: gatewayDeploymentIntentFingerprint(intent),
+  };
+}
+
+function gatewayServiceAccountName(gateway: DurableGateway): string {
+  const configured = gateway.serviceAccountName;
+  return configured && configured !== GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME
+    ? configured
+    : operatorGatewayServiceAccountName(gateway.gatewayId);
+}
+
+function gatewayOperatorAccess(
+  gateway: DurableGateway,
+  gatewayClass: "shared" | "builder" | "operator",
+): HelmInstanceValue["operatorAccess"] | undefined {
+  if (gatewayClass === "shared") return gateway.operatorAccess ?? undefined;
+  return resolveOperatorGatewayAccess(gateway.ownerUid, gateway.operatorAccess ?? undefined);
 }
 
 // The runtime doc the converge arm maintains at glmGateways/{gatewayId}.
@@ -220,10 +271,7 @@ export function provisioningRuntimeDoc(input: {
     docKind: "runtime",
     gatewayId: gateway.gatewayId,
     release: gateway.desiredRelease,
-    lifecycle:
-      existing && existing.release === gateway.desiredRelease
-        ? existing.lifecycle
-        : "provisioning",
+    lifecycle: existing?.lifecycle ?? "provisioning",
     createdAt: existing?.createdAt ?? input.now,
     createdByOperationId: existing?.createdByOperationId ?? null,
     helm: {

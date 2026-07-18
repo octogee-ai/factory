@@ -489,7 +489,7 @@ describe("tenant enforcement middleware", () => {
     expect(res.status).toBe(403);
   });
 
-  it("allows the authenticated target revision to bootstrap its configured isolated builder", async () => {
+  it("allows an authenticated stable gateway pod to bootstrap its configured builder", async () => {
     const res = await request(app({
       boundTenant: BENDER_R2,
       gateways: { bender: configuredBender() },
@@ -525,7 +525,7 @@ describe("tenant enforcement middleware", () => {
     expect(anyPod.status).toBe(200);
   });
 
-  it("rejects unbound and retiring configured-builder bootstrap callers", async () => {
+  it("rejects an unbound caller but keeps configured-builder bootstrap identity-pure while retiring", async () => {
     const unbound = await request(app({
       boundTenant: BENDER,
       gateways: { bender: configuredBender() },
@@ -544,7 +544,7 @@ describe("tenant enforcement middleware", () => {
       .query({ slug: "victim" });
 
     expect(unbound.status).toBe(403);
-    expect(retiring.status).toBe(403);
+    expect(retiring.status).toBe(200);
   });
 
   it("allows BYOS capture only for flows owned by the bound gateway", async () => {

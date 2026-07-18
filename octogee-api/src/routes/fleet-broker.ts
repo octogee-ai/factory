@@ -35,7 +35,6 @@ import {
 } from "@octogee/core/assigned-roster";
 import {
   parseAssignmentDoc,
-  readAssignmentDocsForGateway,
 } from "@octogee/core/assignment-doc";
 import {
   DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,

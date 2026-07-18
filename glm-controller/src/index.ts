@@ -9,11 +9,8 @@ import {
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
-  deriveGatewayIdentity,
   operatorGatewayServiceAccountName,
   resolveGatewayClass,
-  type GatewayClass,
-  type GatewayProfile,
   type HelmInstancesMap,
   type Operation,
 } from "@octogee/shared/types/glm";
@@ -48,12 +45,8 @@ import {
 } from "./heartbeat-relocation.js";
 import { createGatewayRuntimeConfigPreparer } from "./gateway-runtime-config.js";
 import {
-  gatewayEdgeServiceName,
-  gatewayPodServiceName,
   isGatewayDesiredDoc,
   isGatewayRuntimeDoc,
-  GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
-  type AssignmentDoc,
   W9_GATEWAY_EDGE_IMAGE_REPOSITORY,
   type GatewayDoc,
   type GatewayRuntimeDoc,
@@ -61,10 +54,14 @@ import {
 } from "@octogee/shared/types/gateway-releases";
 import {
   gatewayUpsertOptsFromRelease,
+  orderGatewaysForConvergence,
   planGatewayConvergence,
   provisioningRuntimeDoc,
   type DurableGateway,
+  type GatewayConvergenceAction,
+  type GatewayUpsertOpts,
 } from "./converge-gateway.js";
+import { createImagePrepuller, type ImagePrepuller } from "./image-prepuller.js";
 import {
   createGatewayModelKeySecretEnsurer,
   gatewayModelKeySecretName,
@@ -88,7 +85,6 @@ import {
 import { createOperationContext } from "./operation-context.js";
 import {
   decideOperationClaim,
-  findRunningRolloutParentOperationId,
   isSeriallyExclusiveKind,
   type OperationRef,
   type PendingOperationRef,
@@ -97,7 +93,6 @@ import {
   buildOperationCompletionUpdate,
   operationNeedsDurableCustomerMigrationV2Resume,
   shouldPersistClaimedOperationCompletion,
-  supersededRollMigrationAction,
 } from "./operation-retry.js";
 import { completeOperatorReservationAfterMigration } from "./operator-reservation-completion.js";
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
@@ -105,10 +100,6 @@ import {
   createMigrateCustomerHandler,
   type MigrateCustomerDeps,
 } from "./handlers/migrate-customer.js";
-import type {
-  MigrationRollFence,
-  MigrationRunnerDeps,
-} from "@octogee/core/fleet-migration-runner";
 import {
   verifyGatewayRetirementClaimAtomic,
 } from "@octogee/core/gateway-retirement-claim";
@@ -130,7 +121,6 @@ import {
   slugFromAssignedUser,
 } from "@octogee/core/assigned-roster";
 import {
-  parseAssignmentDoc,
   readAssignmentDoc,
   readAssignmentDocsForGateway,
 } from "@octogee/core/assignment-doc";
@@ -194,7 +184,6 @@ import {
   DEDICATED_GATEWAY_IDLE_SWEEP_MS_DEFAULT,
   startDedicatedGatewayIdleSweeper,
 } from "./dedicated-gateway-idle-sweeper.js";
-import { readShellLiveness } from "./shell-liveness.js";
 import {
   PREEMPTION_HANDOFF_SWEEP_MS_DEFAULT,
   startPreemptionHandoffSweeper,
@@ -223,11 +212,6 @@ const RECONCILE_RETRY_MS_DEFAULT = 30_000;
 const OPERATOR_READY_REFRESH_MS_DEFAULT = 60_000;
 const MAINTENANCE_GATE_POLL_MS = 5_000;
 
-// Wall-clock budget for a converge-empty revision to become ready (Deployment
-// available + heartbeat version match) before it is marked failed instead of
-// re-driven. Generous — a cold gateway boot + image pull can take minutes.
-const CONVERGE_EMPTY_READINESS_TIMEOUT_MS = 15 * 60_000;
-
 const GATEWAY_CHART = process.env.GATEWAY_CHART ?? "/charts/octogee-gateway";
 const ORCHESTRATOR_CONFIG_DOC_PATH = "config/orchestrator";
 
@@ -247,18 +231,6 @@ const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
 const OPERATOR_HEARTBEAT_POLL_MS = 15_000;
 const OPERATOR_HEALTH_TIMEOUT_MS = 5_000;
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
-// Release-roll pacing (converge-roll.ts): how long a flipped source keeps
-// forwarding before its revision-scoped teardown, and how long a failed drain
-// migration backs off before the level-triggered retry.
-const ROLL_SOURCE_FORWARDER_TTL_MS = parseNonNegativeInt(
-  process.env.ROLL_SOURCE_FORWARDER_TTL_MS,
-  5 * 60 * 1000,
-);
-const ROLL_MIGRATE_RETRY_BACKOFF_MS = parseNonNegativeInt(
-  process.env.ROLL_MIGRATE_RETRY_BACKOFF_MS,
-  5 * 60 * 1000,
-);
-
 // Lets out-of-loop callers (the roll arm's pacing, the rollout op handler)
 // nudge the reconciler without holding a reference to its closure; installed by
 // startReconciler.
@@ -748,6 +720,7 @@ interface GatewayConvergencePassDeps {
   prepareGatewayConfig: <T extends GatewayMutableConfig & { gatewayId: string }>(
     config: T,
   ) => Promise<T>;
+  prepullImages: ImagePrepuller;
   log: (msg: string) => void;
 }
 
@@ -777,7 +750,7 @@ async function runGatewayConvergencePass(
   const runtimeById = new Map(state.runtimeDocs.map((doc) => [doc.gatewayId, doc]));
   const failures: string[] = [];
   const selected = gatewayIds ? new Set(gatewayIds) : null;
-  for (const gateway of state.gateways) {
+  for (const gateway of orderGatewaysForConvergence(state.gateways)) {
     if (selected && !selected.has(gateway.gatewayId)) continue;
     try {
       await convergeOneGateway(passDeps, gateway, instances, runtimeById);
@@ -798,13 +771,14 @@ async function convergeOneGateway(
   instances: HelmInstancesMap,
   runtimeById: Map<string, GatewayRuntimeDoc>,
 ): Promise<void> {
-  const { db, helm, log } = passDeps;
+  const { db } = passDeps;
   const instance = instances[gateway.gatewayId];
   const helmObserved = instance
     ? {
         imageRepository: instance.image.repository ?? null,
         imageTag: instance.image.tag ?? null,
         replicas: typeof instance.replicas === "number" ? instance.replicas : 1,
+        deploymentIntentFingerprint: instance.deploymentIntentFingerprint ?? null,
       }
     : null;
   const artifact =
@@ -812,12 +786,45 @@ async function convergeOneGateway(
       ? null
       : await readGatewayArtifact(db, gateway.gatewayId, gateway.desiredRelease);
   const runtime = runtimeById.get(gateway.gatewayId);
+  const prepared = artifact ? await passDeps.prepareGatewayConfig(gateway) : null;
+  const upsertOpts = prepared && artifact
+    ? gatewayUpsertOptsFromRelease({
+        namespace: NAMESPACE,
+        gateway: prepared,
+        artifact,
+        replicas: gateway.desiredStatus === "paused" ? 0 : 1,
+        chartPath: GATEWAY_CHART,
+        valuesFile: GATEWAY_VALUES_FILE,
+        chartFingerprint: passDeps.chartFingerprint,
+      })
+    : null;
   const action = planGatewayConvergence({
     gateway,
     artifact,
     helm: helmObserved,
+    desiredDeploymentIntentFingerprint: upsertOpts?.deploymentIntentFingerprint,
     deploymentReady: artifact ? runtimeReportsDesiredBuild(runtime, artifact) : false,
   });
+  await applyGatewayConvergenceAction({
+    passDeps,
+    gateway,
+    action,
+    artifact,
+    runtime: runtime ?? null,
+    upsertOpts,
+  });
+}
+
+async function applyGatewayConvergenceAction(input: {
+  passDeps: GatewayConvergencePassDeps;
+  gateway: DurableGateway;
+  action: GatewayConvergenceAction;
+  artifact: ReleasePayload | null;
+  runtime: GatewayRuntimeDoc | null;
+  upsertOpts: GatewayUpsertOpts | null;
+}): Promise<void> {
+  const { passDeps, gateway, action, artifact, runtime, upsertOpts } = input;
+  const { db, helm, log } = passDeps;
   switch (action.kind) {
     case "steady":
       return;
@@ -830,33 +837,37 @@ async function convergeOneGateway(
       return;
     }
     case "upsert": {
-      const prepared = await passDeps.prepareGatewayConfig(gateway);
-      const opts = gatewayUpsertOptsFromRelease({
-        namespace: NAMESPACE,
-        gateway: prepared,
-        artifact: artifact as ReleasePayload,
-        replicas: action.replicas,
-        chartPath: GATEWAY_CHART,
-        valuesFile: GATEWAY_VALUES_FILE,
-        chartFingerprint: passDeps.chartFingerprint,
-      });
+      if (!upsertOpts || !artifact) {
+        throw new Error(`gateway ${gateway.gatewayId} planned an upsert without release intent`);
+      }
       log(
         `[converge-gateway] ${gateway.gatewayId} → release ${gateway.desiredRelease} ` +
-          `(${opts.imageTag}, replicas=${action.replicas})`,
+          `(${upsertOpts.imageTag}, replicas=${action.replicas})`,
       );
+      await passDeps.prepullImages({
+        namespace: NAMESPACE,
+        images: [
+          { repository: upsertOpts.imageRepository, tag: upsertOpts.imageTag },
+          {
+            repository:
+              upsertOpts.gatewayEdgeImageRepository ?? W9_GATEWAY_EDGE_IMAGE_REPOSITORY,
+            tag: upsertOpts.gatewayEdgeImageTag ?? upsertOpts.imageTag,
+          },
+        ],
+      });
       await db
         .collection(GLM_GATEWAYS_COLLECTION)
         .doc(gateway.gatewayId)
         .set(
           provisioningRuntimeDoc({
             gateway,
-            artifact: artifact as ReleasePayload,
-            existing: runtime ?? null,
+            artifact,
+            existing: runtime,
             now: Date.now(),
           }) as unknown as Record<string, unknown>,
           { merge: true },
         );
-      await helm.upsertInstance(opts);
+      await helm.upsertInstance(upsertOpts);
       return;
     }
     case "mark-live": {
@@ -1708,6 +1719,7 @@ async function createControllerRuntime(
   );
   const prepareGatewayConfig =
     createGatewayRuntimeConfigPreparer(resolveApiServerEgressCidrs);
+  const prepullImages = createImagePrepuller({ runKubectl, log });
 
   const handlerSyncFleetIngress = async () => {
     await syncEdgeIngressForGateways(await readDurableServingFleetGateways(db));
@@ -1738,6 +1750,7 @@ async function createControllerRuntime(
       kubeOps,
       chartFingerprint,
       prepareGatewayConfig,
+      prepullImages,
       log,
     }, gatewayIds);
 
@@ -1869,17 +1882,6 @@ function createMigrationClientBuilder(
       }),
     };
   };
-}
-
-function operationIdFromMigrationId(migrationId: string): string {
-  if (!migrationId.startsWith("mig-")) {
-    throw new Error("config freeze recovery migration id is not operation-bound");
-  }
-  const operationId = migrationId.slice(4);
-  if (!operationId) {
-    throw new Error("config freeze recovery migration id is not operation-bound");
-  }
-  return operationId;
 }
 
 function readPath(obj: Record<string, unknown> | undefined, dotted: string): unknown {
@@ -2059,12 +2061,6 @@ async function assertFleetConfigProtocolForMigration(
     fleetGaps: servingIsolatedProtocolGaps(roots, runtimes, now),
     now,
   });
-}
-
-async function isFleetConfigProtocolReady(db: Firestore): Promise<boolean> {
-  const roots = await readProtocolRoots(db);
-  const runtimes = await readProtocolRuntimes(db, roots.map((root) => root.gatewayId));
-  return servingIsolatedProtocolGaps(roots, runtimes, Date.now()).length === 0;
 }
 
 type RevisionExecutionIdentity = Awaited<

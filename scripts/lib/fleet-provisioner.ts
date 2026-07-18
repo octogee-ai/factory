@@ -502,7 +502,7 @@ function startMaybeReconcileLoop(params: {
     readDesired = opts.readDesiredSlugs;
   } else if (opts.db) {
     readDesired = () =>
-      readAssignedSlugsForGateway(opts.db!, opts.gatewayId, { revisionId: opts.revisionId });
+      readAssignedSlugsForGateway(opts.db!, opts.gatewayId);
   }
   if (!provision || !readDesired) return () => undefined;
 

@@ -156,6 +156,7 @@ machineFamily: ""
 # triggers a one-tick re-apply in PROD even though PROD's render is
 # unchanged — free no-op rolls, not a correctness issue.
 chartFingerprint: ""
+deploymentIntentFingerprint: ""
 
 conversationExperiment:
   mode: "broad"

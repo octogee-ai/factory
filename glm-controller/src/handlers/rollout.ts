@@ -2,29 +2,10 @@ import type { Operation, OperationStep, StepStatus } from "@octogee/shared/types
 import type { GatewayDoc, ReleasePayload } from "@octogee/shared/types/gateway-releases";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 
-// The rollout op is a THIN release-roll driver (GATEWAY-RELEASES-SPEC delivery
-// item 7). The admin wrapper cuts the release + sets desiredRelease; the
-// reconciler's roll arm (converge-roll.ts) does ALL the work, level-triggered
-// from durable state. This handler only:
-//   1. refuses an un-backfilled gateway (no gateways/{id} desired doc) with the
-//      backfill tool named — the guard that replaced the legacy suffix
-//      blue/green path outright;
-//   2. confirms the desired release records the requested image (tolerating
-//      the enqueue/record race);
-//   3. kicks a reconcile tick and awaits convergence, narrating roll-status
-//      transitions and surfacing the roll's durable error on failure.
-// The op holds the queue's rollout single-flight while it waits; a controller
-// restart re-drives it idempotently (RESUMABLE_OP_KINDS) — the roll itself
-// never depends on this op's lifetime.
-
 export interface RolloutDeps {
-  // gateways/{id} filtered through isGatewayDesiredDoc — null for legacy
-  // (un-backfilled) gateways.
   readGatewayDoc: (gatewayId: string) => Promise<GatewayDoc | null>;
   readReleasePayload: (gatewayId: string, release: number) => Promise<ReleasePayload | null>;
   requestReconcileTick?: () => void;
-  // How long the desired release may lag the requested image before the op
-  // fails (the admin wrapper writes the release right after enqueuing the op).
   releaseRecordTimeoutMs: number;
   convergeTimeoutMs: number;
   pollIntervalMs: number;
@@ -57,9 +38,7 @@ export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
     const gateway = await deps.readGatewayDoc(gatewayId);
     if (!gateway) {
       return fail(
-        `gateway ${gatewayId} has no durable gateways/${gatewayId} desired doc — release rolls ` +
-          `require the Step 2 identity backfill; run scripts/ops/backfill-gateway-identity.ts ` +
-          `(dry-run first), then re-roll`,
+        `gateway ${gatewayId} has no durable gateways/${gatewayId} desired doc`,
       );
     }
     if (gateway.desiredStatus === "retired") {

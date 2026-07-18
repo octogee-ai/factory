@@ -467,6 +467,7 @@ export interface HelmInstanceValue {
   gatewayId: string;
 
   chartFingerprint?: string;
+  deploymentIntentFingerprint?: string;
   serviceAccountName?: string;
   serviceAccount?: GatewayServiceAccountSpec;
   gatewayContainerSecurityContext?: Record<string, unknown>;

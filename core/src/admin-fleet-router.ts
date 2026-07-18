@@ -5482,18 +5482,18 @@ router.get(
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const body = req.body as Partial<{
-          fromGatewayId: string;
+          gatewayId: string;
           imageTag: string;
         }>;
         if (
-          typeof body.fromGatewayId !== "string" ||
-          body.fromGatewayId.length === 0 ||
+          typeof body.gatewayId !== "string" ||
+          body.gatewayId.length === 0 ||
           typeof body.imageTag !== "string" ||
           body.imageTag.length === 0
         ) {
           res.status(400).json({
             error: "missing required fields",
-            required: ["fromGatewayId", "imageTag"],
+            required: ["gatewayId", "imageTag"],
           });
           return;
         }
@@ -5503,7 +5503,7 @@ router.get(
           kind: "rollout",
           createdBy,
           input: {
-            fromGatewayId: body.fromGatewayId,
+            gatewayId: body.gatewayId,
             imageTag: body.imageTag,
           },
         });

@@ -38,16 +38,6 @@ export interface ResolvedGateway {
   userData: Record<string, unknown>;
 }
 
-interface RevisionPointer {
-  revisionId: string;
-  release: number;
-}
-
-interface ResolvedRevision {
-  revisionId: string;
-  release: number | null;
-}
-
 function isDurableGatewayRoot(
   data: unknown,
   gatewayId: string,
@@ -72,6 +62,53 @@ function unresolvedGatewayUrl(gatewayId: string, detail: string): never {
     "gateway-url-unresolved",
     `gateways/${gatewayId} ${detail}`,
   );
+}
+
+async function readProvisionedUser(
+  db: Firestore,
+  uid: string,
+): Promise<{ gatewayId: string; userData: Record<string, unknown> }> {
+  const userSnap = await db.doc(`users/${uid}`).get();
+  const userData = userSnap.data() ?? {};
+  const gatewayId = userData?.provisioning?.openclaw?.gatewayId;
+  if (typeof gatewayId !== "string" || gatewayId.length === 0) {
+    throw new GatewayResolveError(
+      "user-not-provisioned",
+      `users/${uid} has no provisioning.openclaw.gatewayId`,
+    );
+  }
+  return { gatewayId, userData };
+}
+
+async function readRuntimeUrl(
+  db: Firestore,
+  gatewayId: string,
+  requireRuntimeDoc: boolean,
+): Promise<string> {
+  const runtimeSnap = await db.doc(`glmGateways/${gatewayId}`).get();
+  if (!runtimeSnap.exists) {
+    throw new GatewayResolveError(
+      "gateway-not-registered",
+      `glmGateways/${gatewayId} does not exist`,
+    );
+  }
+  const runtimeData = (runtimeSnap.data() ?? {}) as Record<string, unknown>;
+  if (
+    requireRuntimeDoc &&
+    (!isGatewayRuntimeDoc(runtimeData) ||
+      runtimeData.gatewayId !== gatewayId ||
+      runtimeData.lifecycle !== "serving")
+  ) {
+    unresolvedGatewayUrl(gatewayId, "does not have a serving runtime realization");
+  }
+  const internalUrl = readInternalUrl(runtimeData);
+  if (internalUrl.length === 0) {
+    throw new GatewayResolveError(
+      "gateway-url-unresolved",
+      `glmGateways/${gatewayId}.heartbeat.internalUrl is empty — refusing to fall back to the round-robin alias`,
+    );
+  }
+  return internalUrl;
 }
 
 // Simple-roll resolution (GATEWAY-SIMPLE-ROLL-SPEC): a customer's serving
@@ -115,46 +152,13 @@ async function assertResolvableGateway(
 export async function resolveGatewayUrl(
   opts: ResolveGatewayOptions,
 ): Promise<ResolvedGateway> {
-  const userSnap = await opts.db.doc(`users/${opts.uid}`).get();
-  const userData = userSnap.data() ?? {};
-  const gatewayId = userData?.provisioning?.openclaw?.gatewayId;
-  if (typeof gatewayId !== "string" || gatewayId.length === 0) {
-    throw new GatewayResolveError(
-      "user-not-provisioned",
-      `users/${opts.uid} has no provisioning.openclaw.gatewayId`,
-    );
-  }
-
+  const { gatewayId, userData } = await readProvisionedUser(opts.db, opts.uid);
   const overrideUrl = opts.overrideUrl ?? process.env.OPENCLAW_GATEWAY_URL;
   if (typeof overrideUrl === "string" && overrideUrl.length > 0) {
     return { gatewayId, url: overrideUrl, userData };
   }
 
   const gate = await assertResolvableGateway(opts.db, gatewayId, opts.uid);
-
-  const runtimeSnap = await opts.db.doc(`glmGateways/${gatewayId}`).get();
-  if (!runtimeSnap.exists) {
-    throw new GatewayResolveError(
-      "gateway-not-registered",
-      `glmGateways/${gatewayId} does not exist`,
-    );
-  }
-  const runtimeData = (runtimeSnap.data() ?? {}) as Record<string, unknown>;
-  if (gate.requireRuntimeDoc) {
-    const serving =
-      isGatewayRuntimeDoc(runtimeData) &&
-      runtimeData.gatewayId === gatewayId &&
-      runtimeData.lifecycle === "serving";
-    if (!serving) {
-      unresolvedGatewayUrl(gatewayId, "does not have a serving runtime realization");
-    }
-  }
-  const internalUrl = readInternalUrl(runtimeData);
-  if (internalUrl.length === 0) {
-    throw new GatewayResolveError(
-      "gateway-url-unresolved",
-      `glmGateways/${gatewayId}.heartbeat.internalUrl is empty — refusing to fall back to the round-robin alias`,
-    );
-  }
+  const internalUrl = await readRuntimeUrl(opts.db, gatewayId, gate.requireRuntimeDoc);
   return { gatewayId, url: internalUrl, userData };
 }

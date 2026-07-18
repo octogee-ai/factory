@@ -88,14 +88,15 @@ function mkDeps(overrides: Partial<RolloutDeps> = {}): RolloutDeps & { logs: str
   };
 }
 
-describe("rollout op — un-backfilled refusal (replaces all dual machinery)", () => {
-  it("refuses a gateway with no durable gateways/{id} desired doc, naming the backfill tool", async () => {
+describe("rollout op — durable root validation", () => {
+  it("refuses a gateway with no durable gateways/{id} desired doc without naming retired recovery tools", async () => {
     const deps = mkDeps({ readGatewayDoc: async () => null });
     const handler = createRolloutHandler(deps);
     const res = await handler(mkOp({ gatewayId: "legacy-gw", imageTag: "cafe123-ocbeta2" }), ctx);
     expect(res.success).toBe(false);
     expect(res.error).toContain("legacy-gw");
-    expect(res.error).toContain("scripts/ops/backfill-gateway-identity.ts");
+    expect(res.error).toContain("durable gateways/legacy-gw desired doc");
+    expect(res.error).not.toContain("backfill-gateway-identity");
   });
 
   it("fails on missing gatewayId / imageTag inputs", async () => {

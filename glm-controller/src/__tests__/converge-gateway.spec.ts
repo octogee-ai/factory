@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  gatewayDeploymentIntentFingerprint,
   gatewayUpsertOptsFromRelease,
+  orderGatewaysForConvergence,
   planGatewayConvergence,
   provisioningRuntimeDoc,
   type DurableGateway,
@@ -62,7 +64,30 @@ describe("planGatewayConvergence", () => {
       planGatewayConvergence({
         gateway: gateway(),
         artifact: artifact({ imageTag: "def5678" }),
-        helm: { imageRepository: REPO, imageTag: "abc1234", replicas: 1 },
+        helm: {
+          imageRepository: REPO,
+          imageTag: "abc1234",
+          replicas: 1,
+          deploymentIntentFingerprint: "old-intent",
+        },
+        desiredDeploymentIntentFingerprint: "new-intent",
+        deploymentReady: true,
+      }),
+    ).toEqual({ kind: "upsert", replicas: 1 });
+  });
+
+  it("upserts when any rendered Helm intent changes without image or replica drift", () => {
+    expect(
+      planGatewayConvergence({
+        gateway: gateway({ liveRelease: 2 }),
+        artifact: artifact(),
+        helm: {
+          imageRepository: REPO,
+          imageTag: "def5678",
+          replicas: 1,
+          deploymentIntentFingerprint: "old-intent",
+        },
+        desiredDeploymentIntentFingerprint: "new-intent",
         deploymentReady: true,
       }),
     ).toEqual({ kind: "upsert", replicas: 1 });
@@ -143,6 +168,16 @@ describe("planGatewayConvergence", () => {
   });
 });
 
+describe("orderGatewaysForConvergence", () => {
+  it("rolls operator canaries first, then the remaining gateways by stable id", () => {
+    expect(orderGatewaysForConvergence([
+      gateway({ gatewayId: "zeta", gatewayClass: "shared" }),
+      gateway({ gatewayId: "operator", gatewayClass: "operator" }),
+      gateway({ gatewayId: "alpha", gatewayClass: "builder" }),
+    ]).map((item) => item.gatewayId)).toEqual(["operator", "alpha", "zeta"]);
+  });
+});
+
 describe("gatewayUpsertOptsFromRelease", () => {
   it("keys every name off the bare gatewayId and always requests surge rolls", () => {
     const opts = gatewayUpsertOptsFromRelease({
@@ -159,8 +194,36 @@ describe("gatewayUpsertOptsFromRelease", () => {
       serviceAccountName: "octogee-gw-bender",
       replicas: 1,
       rollStrategy: "surge",
+      deploymentIntentFingerprint: expect.any(String),
     });
     expect(opts).not.toHaveProperty("revisionId");
+  });
+
+  it("fingerprints chart, config, and sidecar values as part of the rendered intent", () => {
+    const base = gatewayUpsertOptsFromRelease({
+      namespace: "octogee-test",
+      gateway: gateway(),
+      artifact: artifact(),
+      replicas: 1,
+      chartPath: "/charts/octogee-gateway",
+      chartFingerprint: "chart-a",
+    });
+    expect(gatewayDeploymentIntentFingerprint({
+      ...base,
+      deploymentIntentFingerprint: undefined,
+      chartFingerprint: "chart-b",
+    })).not.toBe(base.deploymentIntentFingerprint);
+    expect(gatewayDeploymentIntentFingerprint({
+      ...base,
+      deploymentIntentFingerprint: undefined,
+      operatorAccess: { shellsEnabled: true },
+    })).not.toBe(base.deploymentIntentFingerprint);
+    expect(gatewayDeploymentIntentFingerprint({
+      ...base,
+      deploymentIntentFingerprint: undefined,
+      gatewayEdgeImageRepository: "example/gateway-edge",
+      gatewayEdgeImageTag: "edge-b",
+    })).not.toBe(base.deploymentIntentFingerprint);
   });
 
   it("resolves operator access for builder/operator classes from the owner", () => {
@@ -220,7 +283,7 @@ describe("provisioningRuntimeDoc", () => {
     });
   });
 
-  it("preserves lifecycle and heartbeat across a same-release re-apply, resets on a new release", () => {
+  it("preserves the serving runtime and heartbeat while a new release rolls in place", () => {
     const existing = provisioningRuntimeDoc({
       gateway: gateway({ desiredRelease: 2 }),
       artifact: artifact(),
@@ -246,7 +309,7 @@ describe("provisioningRuntimeDoc", () => {
       existing,
       now: 300,
     });
-    expect(newRelease.lifecycle).toBe("provisioning");
+    expect(newRelease.lifecycle).toBe("serving");
     expect(newRelease.release).toBe(3);
   });
 });
