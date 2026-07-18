@@ -134,6 +134,7 @@ export function gitExec(cwd: string, argv: string[], sshKeyPath?: string): strin
     if (sshKeyPath) {
       env.GIT_SSH_COMMAND = `ssh -i "${sshKeyPath}" -F /home/node/.ssh/config -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`;
     }
+    // eslint-disable-next-line sonarjs/no-os-command-from-path -- executable is the fixed literal "git" (only argv is dynamic, and it's a no-shell array — the whole point of the argv conversion); PATH is the gateway image's fixed PATH, same convention as getOriginRemoteSilent below
     return execFileSync("git", argv, {
       cwd,
       encoding: "utf8",
