@@ -49,7 +49,7 @@ async function readRuntimeReleasePayload(
 ): Promise<{ payload: Record<string, unknown> | undefined; release: number } | null> {
   const authorization = await readServingGatewayAuthorization(db, gatewayId);
   if (!authorization) return null;
-  if (authorization.gateway.liveRevisionId !== revisionId) return null;
+  if (revisionId !== gatewayId) return null;
   const release = authorization.gateway.liveRelease;
   if (typeof release !== "number") return null;
   return {

@@ -4,15 +4,15 @@ import { type GatewayDoc, type ReleasePayload, type W9GatewayEdgeImage, type W9T
 export { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, };
 export type { GatewayMutableConfig };
 type FirestoreReader = Pick<Firestore, "doc">;
-export declare function gatewayRevisionIdFromPodName(gatewayId: string, podName: string | undefined): string | null;
+export declare function podBelongsToGateway(gatewayId: string, podName: string | undefined): boolean;
 export declare function configuredBuilderBootstrapAllowed(value: unknown, input: {
     gatewayId: string;
-    revisionId: string | null;
+    podName: string | undefined;
     slug: string;
 }): boolean;
 export declare function configuredBuilderCredentialBootstrapAllowed(value: unknown, input: {
     gatewayId: string;
-    revisionId: string | null;
+    podName: string | undefined;
     slug: string;
     uid: string;
 }): boolean;
@@ -31,9 +31,8 @@ export interface GatewayAuthorization {
 }
 export declare function gatewayArtifactFromReleasePayload(payload: ReleasePayload): GatewayArtifact;
 export declare function readGatewayArtifact(db: FirestoreReader, gatewayId: string, release: number | null): Promise<GatewayArtifact | null>;
-export declare function readGatewayLiveRevisionHeartbeat(db: FirestoreReader, gateway: GatewayDoc): Promise<Record<string, unknown> | null>;
+export declare function readGatewayRuntimeHeartbeat(db: FirestoreReader, gateway: GatewayDoc): Promise<Record<string, unknown> | null>;
 export declare function mergeGatewayConfigWithArtifact(config: GatewayMutableConfig, artifact: GatewayArtifact): RenderedGatewayConfig;
 export declare function gatewayAuthorizationFromRootDocument(data: unknown, gatewayId: string): GatewayAuthorization | null;
 export declare function readGatewayAuthorization(db: FirestoreReader, gatewayId: string): Promise<GatewayAuthorization | null>;
-export declare function readRevisionGatewayAuthorization(db: FirestoreReader, gatewayId: string, revisionId: string): Promise<GatewayAuthorization | null>;
 export declare function readServingGatewayAuthorization(db: FirestoreReader, gatewayId: string): Promise<GatewayAuthorization | null>;

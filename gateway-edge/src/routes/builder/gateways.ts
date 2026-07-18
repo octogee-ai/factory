@@ -16,7 +16,7 @@ import {
 import {
   readGatewayArtifact,
   readGatewayAuthorization,
-  readGatewayLiveRevisionHeartbeat,
+  readGatewayRuntimeHeartbeat,
   gatewayAuthorizationFromRootDocument,
   type GatewayAuthorization,
 } from "@octogee/core/gateway-live-release";
@@ -114,7 +114,7 @@ router.get("/gateways/me", async (req: Request, res: Response, next: NextFunctio
           authorization.gateway.gatewayId,
           authorization.gateway.liveRelease,
         ),
-        readGatewayLiveRevisionHeartbeat(db, authorization.gateway),
+        readGatewayRuntimeHeartbeat(db, authorization.gateway),
       ]);
       out.push(builderViewOf(authorization, via, artifact?.imageTag, heartbeat));
     }
@@ -162,11 +162,10 @@ function servingRevisionId(
   authorization: Extract<GatewayAuthorization, { kind: "durable" }>,
 ): string | null {
   const { gateway } = authorization;
-  if (gateway.desiredStatus !== "running" || gateway.roll !== null ||
+  if (gateway.desiredStatus !== "running" ||
     gateway.desiredRelease !== gateway.liveRelease ||
-    typeof gateway.liveRevisionId !== "string" ||
-    gateway.trafficRevisionId !== gateway.liveRevisionId) return null;
-  return gateway.liveRevisionId;
+    typeof gateway.liveRelease !== "number") return null;
+  return gateway.gatewayId;
 }
 
 async function mintOpenClawTicket(gatewayId: string, uid: string): Promise<TicketResult> {

@@ -1,4 +1,3 @@
-import { revisionIdForRelease, } from "@octogee/shared/types/gateway-releases";
 // A normal release cut always sources from the immediately-preceding release
 // (appendGatewayRelease sets sourceRelease = latestRelease = release - 1). A
 // rollback cuts release = latest + 1 whose source is an EARLIER release (the
@@ -17,7 +16,6 @@ export function projectReleaseHistory(input) {
         .sort((a, b) => b.release - a.release)
         .map((r) => ({
         release: r.release,
-        revisionId: revisionIdForRelease(r.gatewayId, r.release),
         imageRepository: r.payload.imageRepository,
         imageTag: r.payload.imageTag,
         createdAt: typeof r.createdAt === "number" ? new Date(r.createdAt).toISOString() : null,

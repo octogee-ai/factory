@@ -323,7 +323,6 @@ export type OperationKind =
   | "add-gateway"
   | "migrate-customer"
   | "retire-gateway"
-  | "retire-revision"
   | "restart-gateway"
   | "recycle-gateway"
   | "rollout"
@@ -410,8 +409,6 @@ export interface CustomerMigrationV2GatewayRootFence {
   latestRelease: number;
   desiredRelease: number;
   liveRelease: number;
-  liveRevisionId: string;
-  trafficRevisionId: string;
   gatewayClass: "builder" | "operator";
   ownerUid: string;
   builderSlug: string;
@@ -470,6 +467,7 @@ export interface HelmInstanceValue {
   gatewayId: string;
 
   chartFingerprint?: string;
+  deploymentIntentFingerprint?: string;
   serviceAccountName?: string;
   serviceAccount?: GatewayServiceAccountSpec;
   gatewayContainerSecurityContext?: Record<string, unknown>;

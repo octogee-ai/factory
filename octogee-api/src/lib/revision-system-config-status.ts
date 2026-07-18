@@ -1,5 +1,6 @@
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 
+import { isGatewayRuntimeDoc } from "@octogee/shared/types/gateway-releases";
 import { GLM_GATEWAYS_COLLECTION } from "@octogee/shared/types/glm";
 
 export async function recordRevisionSystemConfigStatus(
@@ -10,19 +11,19 @@ export async function recordRevisionSystemConfigStatus(
     status: Record<string, unknown>;
   },
 ): Promise<boolean> {
-  const revisionRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(input.revisionId);
+  const runtimeRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId);
   return db.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(revisionRef);
+    const snapshot = await transaction.get(runtimeRef);
     const data = snapshot.data();
     if (
       !snapshot.exists ||
-      data?.docKind !== "revision" ||
-      data.gateway !== input.gatewayId ||
-      data.revisionId !== input.revisionId
+      input.revisionId !== input.gatewayId ||
+      !isGatewayRuntimeDoc(data) ||
+      data.gatewayId !== input.gatewayId
     ) {
       return false;
     }
-    transaction.update(revisionRef, {
+    transaction.update(runtimeRef, {
       "heartbeat.configStatus": {
         ...input.status,
         observedAt: FieldValue.serverTimestamp(),

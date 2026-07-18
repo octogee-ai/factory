@@ -13,7 +13,7 @@ import {
 import { type GatewayProfile } from "../../shared/types/glm.js";
 import {
   readGatewayAuthorization,
-  readGatewayLiveRevisionHeartbeat,
+  readGatewayRuntimeHeartbeat,
 } from "@octogee/core/gateway-live-release";
 import {
   type MigrationState,
@@ -360,7 +360,7 @@ export async function readFleetGatewayRuntime(
 ): Promise<FleetGatewayRuntime | null> {
   const authorization = await readGatewayAuthorization(reader, gatewayId);
   if (!authorization) return null;
-  const heartbeat = await readGatewayLiveRevisionHeartbeat(reader, authorization.gateway);
+  const heartbeat = await readGatewayRuntimeHeartbeat(reader, authorization.gateway);
   return {
     gatewayId,
     desiredStatus: authorization.gateway.desiredStatus,

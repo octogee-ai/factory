@@ -373,20 +373,16 @@ describe("requestBuilderActivationLease — durable root policy + revision telem
           coOwnerUids: [],
           desiredStatus: "running",
           builderSlug: "mira",
-          liveRevisionId: "gw-builder-r2",
           liveRelease: 2,
-          trafficRevisionId: "gw-builder-r2",
-          roll: null,
           openclawOverrides: null,
           modelBrokerLimits: null,
           preemption: null,
         },
       },
       glmGateways: {
-        "gw-builder-r2": {
-          docKind: "revision",
-          revisionId: "gw-builder-r2",
-          gateway: "gw-builder",
+        "gw-builder": {
+          docKind: "runtime",
+          gatewayId: "gw-builder",
           release: 2,
           lifecycle: "serving",
           heartbeat: { status: "ready" },

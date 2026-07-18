@@ -97,11 +97,8 @@ export function customerMigrationV2GatewayRootFence(
   if (!isGatewayMutableConfigForGateway(value, gatewayId)) return null;
   const valid = [
     value.desiredStatus === "running",
-    value.roll === null,
     value.retireAfter == null,
     (value as { retirementClaim?: unknown }).retirementClaim == null,
-    typeof value.liveRevisionId === "string",
-    value.trafficRevisionId === value.liveRevisionId,
     typeof value.liveRelease === "number",
     value.desiredRelease === value.liveRelease,
     typeof value.updatedAt === "number" && Number.isFinite(value.updatedAt),
@@ -113,8 +110,6 @@ export function customerMigrationV2GatewayRootFence(
   const fenced = value as typeof value & {
     updatedAt: number;
     liveRelease: number;
-    liveRevisionId: string;
-    trafficRevisionId: string;
     gatewayClass: "builder" | "operator";
     ownerUid: string;
     builderSlug: string;
@@ -125,8 +120,6 @@ export function customerMigrationV2GatewayRootFence(
     latestRelease: fenced.latestRelease,
     desiredRelease: fenced.desiredRelease,
     liveRelease: fenced.liveRelease,
-    liveRevisionId: fenced.liveRevisionId,
-    trafficRevisionId: fenced.trafficRevisionId,
     gatewayClass: fenced.gatewayClass,
     ownerUid: fenced.ownerUid,
     builderSlug: fenced.builderSlug,
@@ -144,8 +137,6 @@ export function customerMigrationV2GatewayRootFenceEqual(
     left.latestRelease === right.latestRelease &&
     left.desiredRelease === right.desiredRelease &&
     left.liveRelease === right.liveRelease &&
-    left.liveRevisionId === right.liveRevisionId &&
-    left.trafficRevisionId === right.trafficRevisionId &&
     left.gatewayClass === right.gatewayClass &&
     left.ownerUid === right.ownerUid &&
     left.builderSlug === right.builderSlug &&

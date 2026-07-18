@@ -34,9 +34,7 @@ import {
   slugFromAssignedUser,
 } from "@octogee/core/assigned-roster";
 import {
-  mountsOnRevision,
   parseAssignmentDoc,
-  readAssignmentDocsForGateway,
 } from "@octogee/core/assignment-doc";
 import {
   DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
@@ -49,13 +47,12 @@ import {
   GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
   isAssignmentState,
   isGatewayDesiredDoc,
-  revisionIdForRelease,
   type GatewayDoc,
 } from "@octogee/shared/types/gateway-releases";
 import {
   configuredBuilderCredentialBootstrapAllowed,
-  gatewayRevisionIdFromPodName,
   isGatewayMutableConfigForGateway,
+  podBelongsToGateway,
   type GatewayMutableConfig,
 } from "@octogee/core/gateway-live-release";
 import { createCachedOwnerModelBrokerGrantResolver } from "../lib/model-broker-limits.js";
@@ -783,8 +780,6 @@ export async function findAssignedOrInboundMigratingOrConfiguredUserByAgentId(
   const admitted = await findAssignedOrInboundMigratingUserByAgentId(db, gatewayId, agentId);
   if (admitted) return admitted;
 
-  const revisionId = gatewayRevisionIdFromPodName(gatewayId, podName);
-  if (!revisionId) return null;
   const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
   const gateway = gatewaySnap.data();
   const candidates = await findUsersByAgentId(db, agentId);
@@ -794,7 +789,7 @@ export async function findAssignedOrInboundMigratingOrConfiguredUserByAgentId(
       slug &&
       configuredBuilderCredentialBootstrapAllowed(gateway, {
         gatewayId,
-        revisionId,
+        podName,
         slug,
         uid: candidate.uid,
       })
@@ -811,15 +806,13 @@ export async function configuredBuilderSlugCredentialBootstrapAllowed(
   podName: string | undefined,
   slug: string,
 ): Promise<boolean> {
-  const revisionId = gatewayRevisionIdFromPodName(gatewayId, podName);
-  if (!revisionId) return false;
   const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
   const gateway = gatewaySnap.data();
   if (!isGatewayMutableConfigForGateway(gateway, gatewayId)) return false;
   return typeof gateway.ownerUid === "string" &&
     configuredBuilderCredentialBootstrapAllowed(gateway, {
       gatewayId,
-      revisionId,
+      podName,
       slug,
       uid: gateway.ownerUid,
     });
@@ -967,88 +960,23 @@ async function isAssignedToGateway(
   return stringAt(userData, OPENCLAW_GATEWAY_ID_FIELD) === gatewayId ? userData : null;
 }
 
-// Defense-in-depth against same-gateway revision spoofing (PR5 review P1). The
-// KSA binds the BARE gateway, but the revisionId is self-reported, so a pod
-// bound as `default` could otherwise request `default-r2` while running r1 and
-// double-mount during a roll. This is NOT a cross-tenant boundary (both revisions
-// serve the same tenant); it rejects an out-of-family or non-active revision.
-// (Deferred hardening: true revision-authenticated pod identity — vs the
-// self-reported GATEWAY_REVISION_ID env — is a later item, since it is not a
-// cross-tenant boundary today.)
-type RevisionGatewayState = {
-  desiredRelease?: unknown;
-  liveRelease?: unknown;
-  liveRevisionId?: unknown;
-  roll?: { sourceRevisionId?: unknown; targetRevisionId?: unknown } | null;
-};
-
+// Defense-in-depth against pod identity spoofing: the KSA binds the BARE
+// gateway; the pod self-reports its instance id, which under the simple-roll
+// model must be the bare gateway id (legacy pods report nothing).
 export function isRequestedRevisionAllowed(
   gatewayId: string,
   revisionId: string,
-  gatewayDoc: RevisionGatewayState | undefined,
 ): boolean {
   if (!revisionId) return true; // legacy pod: no filtering
-  if (!revisionId.startsWith(`${gatewayId}-r`)) return false; // wrong gateway / malformed
-  if (!gatewayDoc) return true; // pre-backfill: prefix is the only boundary
-  const live = typeof gatewayDoc.liveRevisionId === "string" ? gatewayDoc.liveRevisionId : null;
-  const roll = gatewayDoc.roll as
-    | { sourceRevisionId?: unknown; targetRevisionId?: unknown }
-    | null
-    | undefined;
-  const source = typeof roll?.sourceRevisionId === "string" ? roll.sourceRevisionId : null;
-  const target = typeof roll?.targetRevisionId === "string" ? roll.targetRevisionId : null;
-  const firstDesired =
-    live === null && typeof gatewayDoc.desiredRelease === "number"
-      ? revisionIdForRelease(gatewayId, gatewayDoc.desiredRelease)
-      : null;
-  return (
-    revisionId === live ||
-    revisionId === source ||
-    revisionId === target ||
-    revisionId === firstDesired
-  );
+  return revisionId === gatewayId;
 }
 
-// The full revision-request gate for the /assigned-users mount driver. An
-// empty/absent revisionId is the legacy escape hatch (mount everyone) — but it is
-// permitted ONLY when the bound gateway is genuinely pre-backfill: no
-// gateways/{gw} desired doc AND no assignment docs. A backfilled gateway that
-// omits its revision would otherwise downgrade the revision-filtered roster to
-// the FULL roster and double-mount during a roll, so it is rejected (the pod must
-// report its GATEWAY_REVISION_ID). Non-empty revisions keep the existing
-// same-gateway spoofing validation.
-export function isRevisionRosterRequestAllowed(input: {
-  gatewayId: string;
-  podRevisionId: string;
-  gatewayDoc: RevisionGatewayState | undefined;
-  hasAssignmentDocs: boolean;
-}): boolean {
-  if (!input.podRevisionId) {
-    return !input.gatewayDoc && !input.hasAssignmentDocs;
-  }
-  return isRequestedRevisionAllowed(input.gatewayId, input.podRevisionId, input.gatewayDoc);
-}
-
-async function isAssignedSupersededRevision(
-  db: Firestore,
-  gatewayId: string,
-  podRevisionId: string,
-): Promise<boolean> {
-  if (!podRevisionId) return false;
-  return (await readAssignmentRosterForGateway(db, gatewayId))?.some(
-    (assignment) => assignment.revisionId === podRevisionId,
-  ) === true;
-}
-
-// Reads the gateway's desired doc (and, for an omitted revision, its assignment
-// docs) and applies the revision-request gate. Returns the live revision for the
-// mount filter when allowed, else { allowed: false } → the route answers 400.
 export async function resolveAssignedUsersRevisionGate(
   db: Firestore,
   gatewayId: string,
   podRevisionId: string,
   options: { requireDurableRoot?: boolean } = {},
-): Promise<{ allowed: false } | { allowed: true; liveRevisionId: string | null }> {
+): Promise<{ allowed: false } | { allowed: true }> {
   const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
   const gatewayData = gatewaySnap.data();
   if (
@@ -1057,22 +985,8 @@ export async function resolveAssignedUsersRevisionGate(
   ) {
     return { allowed: false };
   }
-  const gatewayDoc = gatewaySnap.exists ? gatewayData : undefined;
-  const hasAssignmentDocs = podRevisionId
-    ? false
-    : (await readAssignmentDocsForGateway(db, gatewayId)).length > 0;
-  const activeRevision = isRevisionRosterRequestAllowed({
-    gatewayId,
-    podRevisionId,
-    gatewayDoc,
-    hasAssignmentDocs,
-  });
-  if (!activeRevision && !(await isAssignedSupersededRevision(db, gatewayId, podRevisionId))) {
-    return { allowed: false };
-  }
-  const liveRevisionId =
-    typeof gatewayDoc?.liveRevisionId === "string" ? gatewayDoc.liveRevisionId : null;
-  return { allowed: true, liveRevisionId };
+  if (!isRequestedRevisionAllowed(gatewayId, podRevisionId)) return { allowed: false };
+  return { allowed: true };
 }
 
 function respondInvalidRevision(res: Response, gatewayId: string, revisionId: string): void {
@@ -1095,9 +1009,6 @@ async function readAssignmentRosterForGateway(
     if (
       !assignment ||
       assignment.gatewayId !== gatewayId ||
-      !Number.isSafeInteger(assignment.release) ||
-      assignment.release < 1 ||
-      assignment.revisionId !== revisionIdForRelease(gatewayId, assignment.release) ||
       (raw.state !== undefined && !isAssignmentState(raw.state)) ||
       (raw.epoch !== undefined &&
         (typeof raw.epoch !== "number" ||
@@ -1108,33 +1019,11 @@ async function readAssignmentRosterForGateway(
     }
     assignments.push({
       uid: assignment.uid,
-      revisionId: assignment.revisionId,
       state: assignment.state,
       epoch: assignment.epoch,
     });
   }
   return assignments;
-}
-
-// The roster (mount driver) predicate for one revision pod: a bare-assigned
-// user mounts on the pod's revision iff mountsOnRevision says so
-// (assignment doc → its revision; gap user → the live revision). Legacy pods
-// (empty revisionId) load nothing and mount everyone — byte-identical to today.
-export async function buildRosterRevisionFilter(
-  db: Firestore,
-  gatewayId: string,
-  podRevisionId: string,
-  liveRevisionId: string | null,
-): Promise<(uid: string) => boolean> {
-  if (!podRevisionId) return () => true;
-  const assignments = await readAssignmentDocsForGateway(db, gatewayId);
-  const assignmentRevisionByUid = new Map(assignments.map((a) => [a.uid, a.revisionId]));
-  return (uid: string) =>
-    mountsOnRevision({
-      podRevisionId,
-      liveRevisionId,
-      assignmentRevisionId: assignmentRevisionByUid.get(uid) ?? null,
-    });
 }
 
 function snapshotProvisioningStatus(data: Record<string, unknown>): FleetBrokerProvisioningStatus {
@@ -1345,12 +1234,6 @@ function installSnapshotRoutes(
       respondInvalidRevision(res, bound.gatewayId, podRevisionId);
       return;
     }
-    const revisionFilter = await buildRosterRevisionFilter(
-      db,
-      bound.gatewayId,
-      podRevisionId,
-      gate.liveRevisionId,
-    );
     const snap = await db
       .collection("users")
       .where(OPENCLAW_GATEWAY_ID_FIELD, "==", bound.gatewayId)
@@ -1360,10 +1243,6 @@ function installSnapshotRoutes(
     for (const doc of snap.docs) {
       const data = await isAssignedToGateway(db, bound.gatewayId, doc.id, doc.data() as Record<string, unknown>);
       if (!data) continue;
-      // Revision-aware mount driver (GATEWAY-RELEASES-SPEC): during a same-gateway
-      // roll both revision pods hit this with the SAME bare tenant — the filter
-      // keeps each pod to its own revision so both never mount the full roster.
-      if (!revisionFilter(doc.id)) continue;
       if (completeOnly && stringAt(data, "provisioning.openclaw.status") !== "complete") {
         continue;
       }
@@ -1419,13 +1298,14 @@ function configuredBuilderBootstrapRequest(
   gatewayId: string,
   podName: string | undefined,
   body: unknown,
-): { revisionId: string; slug: string } | null {
+): { slug: string } | null {
   const record = body && typeof body === "object" ? body as Record<string, unknown> : {};
-  const revisionId = typeof record.revisionId === "string" ? record.revisionId : "";
+  const requestedRevisionId = typeof record.revisionId === "string" ? record.revisionId : "";
   const slug = typeof record.slug === "string" ? record.slug : "";
-  const authenticatedRevisionId = gatewayRevisionIdFromPodName(gatewayId, podName);
-  if (!isValidUsername(slug) || revisionId !== authenticatedRevisionId) return null;
-  return authenticatedRevisionId ? { revisionId: authenticatedRevisionId, slug } : null;
+  if (!isValidUsername(slug)) return null;
+  if (!podBelongsToGateway(gatewayId, podName)) return null;
+  if (requestedRevisionId && requestedRevisionId !== gatewayId) return null;
+  return { slug };
 }
 
 function configuredBuilderBootstrapPayload(input: {
@@ -1470,7 +1350,7 @@ async function handleConfiguredBuilderBootstrap(
     typeof uid !== "string" ||
     !configuredBuilderCredentialBootstrapAllowed(gateway, {
       gatewayId: bound.gatewayId,
-      revisionId: request.revisionId,
+      podName: bound.podName,
       slug: request.slug,
       uid,
     })

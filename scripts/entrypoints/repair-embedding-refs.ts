@@ -65,7 +65,7 @@ async function main(): Promise<void> {
   if (!repairTargetRevisionAllowed(root, revisionId)) {
     console.error(
       `revision ${revisionId} is not the live/traffic/roll-source revision of ${gatewayId} ` +
-        `(live=${root.liveRevisionId} traffic=${root.trafficRevisionId} rollSource=${root.roll?.sourceRevisionId ?? "-"}) — refusing`,
+        `(stable instance=${root.gatewayId}) — refusing`,
     );
     process.exit(1);
   }

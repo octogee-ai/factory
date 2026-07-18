@@ -74,17 +74,10 @@ export function planEmbeddingRefRepair(
   };
 }
 
-// A repair may only target a revision that legitimately serves this gateway's
-// customers today: the live/traffic revision or an in-flight roll's SOURCE.
-// The roll target boots fresh with correct bindings (repairing it means the
-// operator picked the wrong pod), and orphan/desired-only revisions have no
-// business being mutated at all.
+// A repair may only target the gateway's single stable-name instance
+// (GATEWAY-SIMPLE-ROLL-SPEC): the bare gateway id.
 export function repairTargetRevisionAllowed(root: GatewayDoc, revisionId: string): boolean {
-  return (
-    revisionId === root.liveRevisionId ||
-    revisionId === root.trafficRevisionId ||
-    revisionId === (root.roll?.sourceRevisionId ?? null)
-  );
+  return revisionId === root.gatewayId;
 }
 
 export interface RunEmbeddingRefRepairOptions {

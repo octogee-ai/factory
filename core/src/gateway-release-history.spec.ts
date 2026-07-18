@@ -35,7 +35,7 @@ describe("projectReleaseHistory", () => {
     });
     expect(history.map((h) => h.release)).toEqual([3, 2, 1]);
     const byRelease = new Map(history.map((h) => [h.release, h]));
-    expect(byRelease.get(3)).toMatchObject({ desired: true, live: false, revisionId: "default-r3" });
+    expect(byRelease.get(3)).toMatchObject({ desired: true, live: false });
     expect(byRelease.get(2)).toMatchObject({ desired: false, live: true });
     expect(byRelease.get(1)).toMatchObject({ desired: false, live: false });
     expect(byRelease.get(2)!.imageTag).toBe("tag-2");

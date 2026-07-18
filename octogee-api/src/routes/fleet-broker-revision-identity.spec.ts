@@ -83,19 +83,18 @@ function durableGatewayState(overrides: Record<string, unknown> = {}): Record<st
 }
 
 describe("revisionIdFromGatewayPodName", () => {
-  it("derives the immutable revision from the authenticated Deployment pod name", () => {
+  it("resolves the bare gateway id from the stable-name Deployment's pod name", () => {
     expect(
       revisionIdFromGatewayPodName(
         "default",
-        "octogee-gateway-default-r27-5bc5949d46-p946t",
+        "octogee-gateway-default-5bc5949d46-p946t",
       ),
-    ).toBe("default-r27");
+    ).toBe("default");
   });
 
   it("refuses pods outside the gateway Deployment naming contract", () => {
-    expect(revisionIdFromGatewayPodName("default", "octogee-gateway-default-r27")).toBeNull();
+    expect(revisionIdFromGatewayPodName("default", "octogee-gateway-default")).toBeNull();
     expect(revisionIdFromGatewayPodName("default", "octogee-gateway-other-r27-5bc5949d46-p946t")).toBeNull();
-    expect(revisionIdFromGatewayPodName("default", "octogee-gateway-default-r027-5bc5949d46-p946t")).toBeNull();
   });
 });
 
@@ -228,7 +227,7 @@ describe("fleet broker durable root boundary", () => {
   it("permits the empty-revision legacy roster path only when the root is absent", async () => {
     await expect(
       resolveAssignedUsersRevisionGate(gatewayStateDb(undefined) as never, "default", ""),
-    ).resolves.toEqual({ allowed: true, liveRevisionId: null });
+    ).resolves.toEqual({ allowed: true });
     await expect(
       resolveAssignedUsersRevisionGate(gatewayStateDb(incompleteRoot) as never, "default", ""),
     ).resolves.toEqual({ allowed: false });
@@ -245,39 +244,17 @@ describe("fleet broker durable root boundary", () => {
     ).resolves.toEqual({ allowed: false });
   });
 
-  it("keeps a superseded assigned revision authorized for both roster mounts until it drains", async () => {
-    const supersededTargetAssignment = {
-      uid: "uid-builder",
-      data: {
-        slug: "builder",
-        gatewayId: "default",
-        revisionId: "default-r13",
-        release: 13,
-        source: "rollout",
-        state: "serving",
-        epoch: 2,
-        updatedAt: 1,
-        updatedByOperationId: "roll-default-r13",
-      },
-    };
+  it("authorizes the bare-id pod for a durable root and rejects revision-suffixed identities", async () => {
     const root = durableGatewayState();
 
     await expect(
       resolveAssignedUsersRevisionGate(
-        gatewayStateDb(root, [supersededTargetAssignment]) as never,
+        gatewayStateDb(root) as never,
         "default",
-        "default-r13",
+        "default",
         { requireDurableRoot: true },
       ),
-    ).resolves.toEqual({ allowed: true, liveRevisionId: "default-r12" });
-
-    await expect(
-      resolveAssignedUsersRevisionGate(
-        gatewayStateDb(root, [supersededTargetAssignment]) as never,
-        "default",
-        "default-r13",
-      ),
-    ).resolves.toEqual({ allowed: true, liveRevisionId: "default-r12" });
+    ).resolves.toEqual({ allowed: true });
 
     await expect(
       resolveAssignedUsersRevisionGate(
