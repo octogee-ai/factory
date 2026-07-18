@@ -1,3 +1,5 @@
+import { isValidModelRef } from "./agent-models.js";
+
 export type ChannelSessionModelOperation =
   | { operation: "getSessionModel"; agentId: string }
   | { operation: "listModels"; agentId: string }
@@ -27,8 +29,7 @@ export function parseChannelSessionModelOperation(value: unknown): ChannelSessio
         ? body as ChannelSessionModelOperation : null;
     case "setSessionModel": {
       if (!exactKeys(body, ["operation", "agentId", "modelRef"]) || typeof body.modelRef !== "string") return null;
-      const parts = body.modelRef.split("/");
-      return parts.length === 2 && parts.every((part) => IDENTIFIER.test(part)) ? body as ChannelSessionModelOperation : null;
+      return isValidModelRef(body.modelRef) ? body as ChannelSessionModelOperation : null;
     }
     default:
       return null;

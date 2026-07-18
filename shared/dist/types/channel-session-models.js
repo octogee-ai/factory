@@ -1,3 +1,4 @@
+import { isValidModelRef } from "./agent-models.js";
 const IDENTIFIER = /^[a-z0-9](?:[a-z0-9._-]{0,127})$/;
 const AGENT_ID = /^[a-z0-9](?:[a-z0-9._-]{0,255})$/;
 function exactKeys(value, keys) {
@@ -21,8 +22,7 @@ export function parseChannelSessionModelOperation(value) {
         case "setSessionModel": {
             if (!exactKeys(body, ["operation", "agentId", "modelRef"]) || typeof body.modelRef !== "string")
                 return null;
-            const parts = body.modelRef.split("/");
-            return parts.length === 2 && parts.every((part) => IDENTIFIER.test(part)) ? body : null;
+            return isValidModelRef(body.modelRef) ? body : null;
         }
         default:
             return null;
