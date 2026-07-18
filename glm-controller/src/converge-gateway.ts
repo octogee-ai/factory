@@ -22,9 +22,16 @@ import { resolveGatewayImageRepository } from "./gateway-profiles.js";
 // The simple-roll convergence arm (GATEWAY-SIMPLE-ROLL-SPEC): every gateway has
 // ONE stable-name Helm release; a roll is a desiredRelease write that surfaces
 // here as image drift and applies in place (the chart's surge strategy replaces
-// the pod). No revisions, no roll state machine, no proofs beyond readiness.
+// the pod). No revisions or durable roll state machine; readiness opens only
+// after the surge customer handoff converges.
 
 export type DurableGateway = GatewayDoc & GatewayMutableConfig;
+
+export function requiresSurgeCustomerMigration(gateway: DurableGateway): boolean {
+  return gateway.desiredStatus === "running" &&
+    gateway.liveRelease !== null &&
+    gateway.liveRelease !== gateway.desiredRelease;
+}
 
 export function orderGatewaysForConvergence(
   gateways: readonly DurableGateway[],
@@ -140,6 +147,7 @@ export interface GatewayUpsertOpts {
   replicas?: number;
   gcpProject?: string;
   rollStrategy: "surge";
+  waitForReady: false;
   deploymentIntentFingerprint: string;
 }
 
@@ -162,7 +170,8 @@ function canonicalJsonValue(value: unknown): unknown {
 
 export function gatewayDeploymentIntentFingerprint(opts: GatewayIntentInput): string {
   const intent = Object.fromEntries(
-    Object.entries(opts).filter(([key]) => key !== "deploymentIntentFingerprint"),
+    Object.entries(opts).filter(([key]) =>
+      key !== "deploymentIntentFingerprint" && key !== "waitForReady"),
   );
   return createHash("sha256")
     .update(JSON.stringify(canonicalJsonValue(intent)))
@@ -237,6 +246,7 @@ export function gatewayUpsertOptsFromRelease(input: {
     replicas: input.replicas,
     gcpProject: gateway.gcpProject ?? undefined,
     rollStrategy: "surge",
+    waitForReady: false,
   };
   return {
     ...intent,

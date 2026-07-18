@@ -53,6 +53,7 @@ replicas?: number;
 
 gcpProject?: string;
     rollStrategy?: "recreate" | "surge";
+    waitForReady?: boolean;
   }): Promise<void>;
 
 removeInstance(opts: {
@@ -337,6 +338,7 @@ export interface BuildUpgradeArgsOpts {
   gcpProject?: string;
   valuesFile?: string;
   rollStrategy?: "recreate" | "surge";
+  waitForReady?: boolean;
 }
 
 type UpgradeStringOption = {
@@ -447,7 +449,8 @@ function appendUpgradeApplyArgs(args: string[], opts: BuildUpgradeArgsOpts): voi
   // ServiceAccount. Adopt it rather than wedge the blue/green roll forever on
   // "exists and cannot be imported into the current release".
   args.push("--take-ownership");
-  args.push("--wait", `--timeout=${opts.upgradeTimeout}`);
+  if (opts.waitForReady !== false) args.push("--wait");
+  args.push(`--timeout=${opts.upgradeTimeout}`);
 }
 
 function validateW9TestExperimentRender(opts: BuildUpgradeArgsOpts): void {

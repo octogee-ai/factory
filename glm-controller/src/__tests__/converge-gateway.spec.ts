@@ -5,6 +5,7 @@ import {
   orderGatewaysForConvergence,
   planGatewayConvergence,
   provisioningRuntimeDoc,
+  requiresSurgeCustomerMigration,
   type DurableGateway,
 } from "../converge-gateway.js";
 import type { ReleasePayload } from "@octogee/shared/types/gateway-releases";
@@ -168,6 +169,19 @@ describe("planGatewayConvergence", () => {
   });
 });
 
+describe("surge customer migration boundary", () => {
+  it("requires transfer only when replacing a previously-live release", () => {
+    expect(requiresSurgeCustomerMigration(gateway({ liveRelease: 1, desiredRelease: 2 }))).toBe(true);
+    expect(requiresSurgeCustomerMigration(gateway({ liveRelease: null, desiredRelease: 1 }))).toBe(false);
+    expect(requiresSurgeCustomerMigration(gateway({ liveRelease: 2, desiredRelease: 2 }))).toBe(false);
+    expect(requiresSurgeCustomerMigration(gateway({
+      liveRelease: 1,
+      desiredRelease: 2,
+      desiredStatus: "paused",
+    }))).toBe(false);
+  });
+});
+
 describe("orderGatewaysForConvergence", () => {
   it("rolls operator canaries first, then the remaining gateways by stable id", () => {
     expect(orderGatewaysForConvergence([
@@ -194,6 +208,7 @@ describe("gatewayUpsertOptsFromRelease", () => {
       serviceAccountName: "octogee-gw-bender",
       replicas: 1,
       rollStrategy: "surge",
+      waitForReady: false,
       deploymentIntentFingerprint: expect.any(String),
     });
     expect(opts).not.toHaveProperty("revisionId");

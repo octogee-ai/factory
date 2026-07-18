@@ -11,6 +11,7 @@ import {
   createActivateImportHandler,
   createActivationManifestExportHandler,
   createAbortRsyncImportHandler,
+  createCompleteSurgeHandoffHandler,
   createExportHandler,
   createExportPathsHandler,
   createFlushHandler,
@@ -46,6 +47,7 @@ import {
   type FinishRsyncImportRequestBody,
   type PrepareRsyncImportRequestBody,
   type PushRsyncStateRequestBody,
+  type CompleteSurgeHandoffRequestBody,
 } from "../../shared/types/fleet-controller.js";
 import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
 import {
@@ -79,6 +81,11 @@ const SAMPLE_UNMOUNT: UnmountRequestBody = {
 const SAMPLE_EXPORT: MigrationRequestBody = {
   migrationId: "mig-1",
   slug: "chris",
+};
+
+const SAMPLE_COMPLETE_SURGE: CompleteSurgeHandoffRequestBody = {
+  migrationId: "surge-gw-a-pod-123",
+  targetPodUid: "pod-123",
 };
 
 const SAMPLE_PUSH: PushStateRequestBody = {
@@ -284,6 +291,33 @@ function mkDeps(overrides: Partial<MigrationHandlerDeps> = {}): MigrationHandler
 
 beforeEach(() => {
   spawnMock.mockReset();
+});
+
+describe("surge handoff control", () => {
+  it("opens pod readiness only for a signed request", async () => {
+    const releaseSurgeReadiness = vi.fn(async () => undefined);
+    const handler = createCompleteSurgeHandoffHandler(mkDeps({ releaseSurgeReadiness }));
+    const rawBody = JSON.stringify(SAMPLE_COMPLETE_SURGE);
+    const signature = signFleetRequest(PRIVATE_KEY, SAMPLE_COMPLETE_SURGE.migrationId, rawBody);
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(mkRequest(SAMPLE_COMPLETE_SURGE, { signature }), res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(getBody()).toEqual({ released: true, targetPodUid: "pod-123" });
+    expect(releaseSurgeReadiness).toHaveBeenCalledWith({ targetPodUid: "pod-123" });
+  });
+
+  it("rejects an unsigned readiness release", async () => {
+    const releaseSurgeReadiness = vi.fn(async () => undefined);
+    const handler = createCompleteSurgeHandoffHandler(mkDeps({ releaseSurgeReadiness }));
+    const { res, getStatus } = mkResponse();
+
+    await handler(mkRequest(SAMPLE_COMPLETE_SURGE), res, vi.fn());
+
+    expect(getStatus()).toBe(401);
+    expect(releaseSurgeReadiness).not.toHaveBeenCalled();
+  });
 });
 
 function mkFakeChild(opts: {

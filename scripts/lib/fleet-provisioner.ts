@@ -24,7 +24,13 @@ import {
   createRestoreHandler,
   createUnmountHandler,
   createVerifyHandler,
+  createCompleteSurgeHandoffHandler,
 } from "./fleet-http-migration.js";
+import {
+  createSurgeReadinessGate,
+  type SurgeReadinessGate,
+} from "./surge-readiness.js";
+import { startAfterSurgeReadiness } from "./surge-reconcile-gate.js";
 import {
   writeGatewayHeartbeat,
   type FleetStateDeps,
@@ -415,8 +421,9 @@ function startMaybeReconcileLoop(params: {
   wrappedAdapter: CustomerLifecycleAdapter;
   runtime: FleetRuntime;
   stampMounted: (uid: string, mounted: boolean) => Promise<void>;
+  surgeReadiness: SurgeReadinessGate;
 }): () => void {
-  const { provision, opts, wrappedAdapter, runtime, stampMounted } = params;
+  const { provision, opts, wrappedAdapter, runtime, stampMounted, surgeReadiness } = params;
 
   // Content-convergence bookkeeping (only when a fingerprint source is wired). desiredFp
   // is refreshed every tick by readDesired; appliedFp records the fingerprint that was
@@ -472,7 +479,7 @@ function startMaybeReconcileLoop(params: {
         );
       }
     : undefined;
-  return startReconcileLoop({
+  const start = () => startReconcileLoop({
     gatewayId: opts.gatewayId,
     intervalMs: RECONCILE_LOOP_INTERVAL_MS,
     // SERIAL (not the default cap): the production lifecycle adapter shares one mutable
@@ -555,6 +562,11 @@ function startMaybeReconcileLoop(params: {
         );
       }
     },
+  });
+  return startAfterSurgeReadiness({
+    released: surgeReadiness.released,
+    start,
+    log: opts.log,
   });
 }
 
@@ -657,6 +669,8 @@ export async function startFleetController(
     mountedCustomers: [],
     status: "booting",
   };
+  const openclawDir = opts.openclawDir ?? path.join(process.env.HOME ?? "/home/node", ".openclaw");
+  const surgeReadiness = createSurgeReadinessGate(openclawDir);
 
   const namespace = resolveK8sNamespace();
   const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || "18789";
@@ -748,6 +762,22 @@ const waitForGatewayReady = async (): Promise<void> => {
     }));
   });
 
+  app.get("/surge-ready", async (_req, res) => {
+    try {
+      const released = await surgeReadiness.released();
+      const ready = runtime.status === "ready" && released;
+      res.status(ready ? 200 : 503).json({
+        ready,
+        runtimeStatus: runtime.status,
+        handoffReleased: released,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      opts.log(`[surge-handoff] readiness probe failed: ${message}`);
+      res.status(500).json({ ready: false, error: message });
+    }
+  });
+
   const wrappedAdapter = wrapAdapterWithRuntime(adapter, runtime);
 
   await seedRuntimeMountedCustomers({ opts, reportMounted: caps.reportMounted, wrappedAdapter, runtime });
@@ -782,6 +812,13 @@ const waitForGatewayReady = async (): Promise<void> => {
     log: opts.log,
     getMountedCustomers: () => runtime.mountedCustomers,
     flushLocalState: opts.flushLocalState,
+    releaseSurgeReadiness: async ({ targetPodUid }: { targetPodUid: string }) => {
+      const ownPodUid = process.env.POD_UID;
+      if (ownPodUid && ownPodUid !== targetPodUid) {
+        throw new Error(`target pod UID mismatch: expected ${ownPodUid}, received ${targetPodUid}`);
+      }
+      await surgeReadiness.release({ targetPodUid });
+    },
   };
   app.post("/restore/:gatewayId", gatewayIdGuard, createRestoreHandler(migrationDeps));
   app.post("/quiesce/:gatewayId", gatewayIdGuard, createQuiesceHandler(migrationDeps));
@@ -800,6 +837,7 @@ const waitForGatewayReady = async (): Promise<void> => {
   app.post("/push-rsync-state/:gatewayId", gatewayIdGuard, createPushRsyncStateHandler(migrationDeps));
   app.post("/finish-rsync-import/:gatewayId", gatewayIdGuard, createFinishRsyncImportHandler(migrationDeps));
   app.post("/abort-rsync-import/:gatewayId", gatewayIdGuard, createAbortRsyncImportHandler(migrationDeps));
+  app.post("/complete-surge-handoff/:gatewayId", gatewayIdGuard, createCompleteSurgeHandoffHandler(migrationDeps));
   app.post("/push-state/:gatewayId", gatewayIdGuard, createPushStateHandler(migrationDeps));
   app.post("/import/:gatewayId", gatewayIdGuard, createImportHandler(migrationDeps));
   app.post("/unmount/:gatewayId", gatewayIdGuard, createUnmountHandler(migrationDeps));
@@ -812,6 +850,7 @@ const waitForGatewayReady = async (): Promise<void> => {
     wrappedAdapter,
     runtime,
     stampMounted,
+    surgeReadiness,
   });
 
   const server: Server = await new Promise((resolve) => {
