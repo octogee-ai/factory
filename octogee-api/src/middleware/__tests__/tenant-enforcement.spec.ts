@@ -186,27 +186,14 @@ function configuredBender(overrides: Record<string, unknown> = {}) {
 }
 
 describe("tenant enforcement middleware", () => {
-  it("allows a platform-bound cron caller on an allowlisted cron route", async () => {
+  it.each([
+    "/internal/billing/check-trial-expiry",
+    "/internal/billing/run-auto-top-ups",
+    "/internal/activity-pairs/report",
+  ])("allows the cron caller on %s", async (path) => {
     const res = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
-      .post("/internal/billing/check-trial-expiry")
+      .post(path)
       .send({});
-
-    expect(res.status).toBe(200);
-  });
-
-  it("allows the cron caller on the auto-top-up sweep route", async () => {
-    const res = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
-      .post("/internal/billing/run-auto-top-ups")
-      .send({});
-
-    expect(res.status).toBe(200);
-  });
-
-  it("allows the cron caller on the report-only Activity pair route", async () => {
-    const res = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
-      .post("/internal/activity-pairs/report")
-      .send({});
-
     expect(res.status).toBe(200);
   });
 
