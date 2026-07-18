@@ -349,6 +349,10 @@ export interface MarkAssignmentStateParams {
   epoch?: number;
   updatedByOperationId?: string;
   createIfMissing?: boolean;
+  expected?: {
+    state: AssignmentState;
+    updatedByOperationId: string | null;
+  };
 }
 
 // Flip ONLY the roster state on an existing assignment — epoch stays put. The
@@ -415,12 +419,19 @@ function assertAssignmentStateUpdateMatches(
   params: MarkAssignmentStateParams,
 ): void {
   const current = assignment ?? {};
+  const currentOwner = typeof current.updatedByOperationId === "string"
+    ? current.updatedByOperationId
+    : null;
   const exact = [
     params.slug === undefined || current.slug === params.slug,
     params.epoch === undefined || current.epoch === params.epoch,
     current.gatewayId === undefined || current.gatewayId === params.gatewayId,
     current.uid === undefined || current.uid === params.uid,
     !params.createIfMissing || current.updatedByOperationId === params.updatedByOperationId,
+    params.expected === undefined || (
+      current.state === params.expected.state &&
+      currentOwner === params.expected.updatedByOperationId
+    ),
   ].every(Boolean);
   if (!exact) throw new Error("source assignment changed before roster state update");
 }

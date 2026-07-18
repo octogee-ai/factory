@@ -58,6 +58,10 @@ export interface SurgeCustomerHandoffDeps {
     epoch: number;
     state: "serving" | "quiescing";
     updatedByOperationId: string;
+    expected: {
+      state: AssignmentState;
+      updatedByOperationId: string | null;
+    };
   }) => Promise<void>;
   quiesce: (input: {
     gatewayId: string;
@@ -146,6 +150,10 @@ async function setAssignmentState(
     epoch: assignment.epoch,
     state,
     updatedByOperationId: ownedBy,
+    expected: {
+      state: assignment.state,
+      updatedByOperationId: assignment.updatedByOperationId,
+    },
   });
 }
 
@@ -159,6 +167,37 @@ async function restoreOwnedAssignments(
     if (assignment.state === "quiescing" && assignment.updatedByOperationId === ownedBy) {
       await setAssignmentState(deps, gatewayId, assignment, "serving", ownedBy);
     }
+  }
+}
+
+async function restoreAbandonedSurgeAssignments(
+  deps: SurgeCustomerHandoffDeps,
+  gatewayId: string,
+  assignments: readonly SurgeAssignment[],
+  ownedBy: string | null,
+  pods: readonly SurgePod[],
+): Promise<void> {
+  const surgeOwnerPrefix = `surge-${gatewayId}-`;
+  const liveSurgeOwners = new Set(pods.map((pod) => operationId(gatewayId, pod.uid)));
+  for (const assignment of assignments) {
+    const priorOwner = assignment.updatedByOperationId;
+    if (
+      assignment.state !== "quiescing" ||
+      priorOwner === null ||
+      priorOwner === ownedBy ||
+      !priorOwner.startsWith(surgeOwnerPrefix) ||
+      liveSurgeOwners.has(priorOwner)
+    ) {
+      continue;
+    }
+    deps.log(
+      `[surge-handoff] restoring abandoned assignment ` +
+      `gateway=${gatewayId} uid=${assignment.uid} owner=${priorOwner}`,
+    );
+    const recoveryOwner = ownedBy ?? priorOwner;
+    await setAssignmentState(deps, gatewayId, assignment, "serving", recoveryOwner);
+    assignment.state = "serving";
+    assignment.updatedByOperationId = recoveryOwner;
   }
 }
 
@@ -280,7 +319,17 @@ export async function reconcileSurgeCustomerHandoff(
     healthEntries.filter((entry): entry is readonly [string, SurgePodHealth] => entry[1] !== null),
   );
   const target = selectTarget(pods, healthByUid, input.desiredVersion);
-  if (!target) return { ready: false };
+  if (!target) {
+    const assignments = await deps.readAssignments(input.gatewayId);
+    await restoreAbandonedSurgeAssignments(
+      deps,
+      input.gatewayId,
+      assignments,
+      null,
+      pods,
+    );
+    return { ready: false };
+  }
   const targetHealth = healthByUid.get(target.uid);
   if (!targetHealth) return { ready: false };
 
@@ -291,6 +340,13 @@ export async function reconcileSurgeCustomerHandoff(
   if (target.ready) {
     if (source.kind !== "missing") return { ready: false };
     const assignments = await deps.readAssignments(input.gatewayId);
+    await restoreAbandonedSurgeAssignments(
+      deps,
+      input.gatewayId,
+      assignments,
+      ownedBy,
+      pods,
+    );
     await restoreOwnedAssignments(deps, input.gatewayId, assignments, ownedBy);
     return { ready: true };
   }
@@ -302,6 +358,13 @@ export async function reconcileSurgeCustomerHandoff(
   if (!sourcePod) return { ready: false };
 
   const assignments = await deps.readAssignments(input.gatewayId);
+  await restoreAbandonedSurgeAssignments(
+    deps,
+    input.gatewayId,
+    assignments,
+    ownedBy,
+    pods,
+  );
   assertAssignmentsAvailable(assignments, ownedBy);
   try {
     for (const assignment of assignments) {

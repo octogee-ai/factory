@@ -57,10 +57,17 @@ function harness(input: {
       handoffReleased: pod.uid === targetPod.uid && targetReleased,
     })),
     readAssignments: vi.fn(async () => assignments),
-    markAssignment: vi.fn(async ({ uid, state, updatedByOperationId }) => {
+    markAssignment: vi.fn(async ({ uid, state, updatedByOperationId, expected }) => {
       events.push(`assignment:${uid}:${state}`);
       if (input.markErrorUid === uid && state === "quiescing") {
         throw new Error("assignment write failed");
+      }
+      const current = assignments.find((item) => item.uid === uid);
+      if (
+        current?.state !== expected.state ||
+        current.updatedByOperationId !== expected.updatedByOperationId
+      ) {
+        throw new Error("assignment ownership changed");
       }
       assignments = assignments.map((item) => item.uid === uid
         ? { ...item, state, updatedByOperationId }
@@ -247,6 +254,96 @@ describe("surge customer handoff", () => {
         requiresCustomerMigration: true,
       })).resolves.toEqual({ ready: false });
     }
+    expect(h.events).toEqual([]);
+  });
+
+  it("reclaims an abandoned surge gate before retrying the verified handoff", async () => {
+    const h = harness({
+      assignments: [assignment("u1", "alice", {
+        state: "quiescing",
+        updatedByOperationId: "surge-default-vanished-target-uid",
+      })],
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredVersion: "new-sha",
+      requiresCustomerMigration: true,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual([
+      "assignment:u1:serving",
+      "assignment:u1:quiescing",
+      "quiesce:alice",
+      "transfer:alice",
+      "digest:old-uid:alice",
+      "digest:target-uid:alice",
+      "release:target-uid",
+    ]);
+    expect(h.assignments()[0]).toMatchObject({
+      state: "quiescing",
+      updatedByOperationId: h.operationId,
+    });
+  });
+
+  it("reopens an abandoned surge gate while Kubernetes replaces the missing target", async () => {
+    const h = harness({
+      pods: [oldPod],
+      assignments: [assignment("u1", "alice", {
+        state: "quiescing",
+        updatedByOperationId: "surge-default-vanished-target-uid",
+      })],
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredVersion: "new-sha",
+      requiresCustomerMigration: true,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual(["assignment:u1:serving"]);
+    expect(h.assignments()[0]).toMatchObject({
+      state: "serving",
+      updatedByOperationId: "surge-default-vanished-target-uid",
+    });
+  });
+
+  it("reopens an abandoned surge gate after the replacement becomes the only pod", async () => {
+    const h = harness({
+      pods: [{ ...targetPod, ready: true }],
+      targetReleased: true,
+      assignments: [assignment("u1", "alice", {
+        state: "quiescing",
+        updatedByOperationId: "surge-default-vanished-target-uid",
+      })],
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredVersion: "new-sha",
+      requiresCustomerMigration: true,
+    })).resolves.toEqual({ ready: true });
+
+    expect(h.events).toEqual(["assignment:u1:serving"]);
+    expect(h.assignments()[0]).toMatchObject({
+      state: "serving",
+      updatedByOperationId: h.operationId,
+    });
+  });
+
+  it("does not reclaim a surge gate while its owning pod still exists", async () => {
+    const h = harness({
+      assignments: [assignment("u1", "alice", {
+        state: "quiescing",
+        updatedByOperationId: "surge-default-old-uid",
+      })],
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredVersion: "new-sha",
+      requiresCustomerMigration: true,
+    })).rejects.toThrow(/foreign assignment gate/);
     expect(h.events).toEqual([]);
   });
 
