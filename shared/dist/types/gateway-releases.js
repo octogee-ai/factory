@@ -105,17 +105,6 @@ export function isW9GatewayEdgeImage(value, gatewayImageTag) {
 export function isAssignmentState(value) {
     return value === "serving" || value === "quiescing" || value === "migrating";
 }
-// Internal-only headers a forwarded intra-family hop carries between two
-// gateway-edge sidecars of the SAME gateway. The public gateway-router strips
-// them from every inbound request (they must never be client-controllable) and
-// an edge never forwards a request that already carries the hop header — one
-// hop max, by construction.
-export const INTRA_FAMILY_HOP_HEADER = "x-octogee-intra-family-hop";
-export const ASSIGNMENT_EPOCH_HEADER = "x-octogee-assignment-epoch";
-export const INTERNAL_ROUTING_HEADERS = [
-    INTRA_FAMILY_HOP_HEADER,
-    ASSIGNMENT_EPOCH_HEADER,
-];
 export function isGatewayRuntimeDoc(data) {
     if (!data || typeof data !== "object")
         return false;

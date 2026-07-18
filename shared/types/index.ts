@@ -88,10 +88,6 @@ export type {
   GatewayState,
   GatewayLastError,
   CustomerSnapshot,
-  SystemConfigMigrationMode,
-} from './fleet-controller.js';
-export {
-  systemConfigMigrationMode,
 } from './fleet-controller.js';
 export {
   CANONICAL_OPENCLAW_FORK_SHA,

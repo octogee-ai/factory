@@ -4,7 +4,6 @@ import { Duplex } from "node:stream";
 import { URL } from "node:url";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import {
-  INTERNAL_ROUTING_HEADERS,
   gatewayEdgeServiceName,
   gatewayPodServiceName,
 } from "@octogee/shared/types/gateway-releases";
@@ -70,14 +69,8 @@ const HOP_BY_HOP_HEADERS = new Set([
   "upgrade",
 ]);
 
-// The router is THE public trust boundary for /g/* traffic: the intra-family
-// loop-guard/epoch headers are internal-only (set by a gateway-edge forwarding
-// hop), so any inbound value is forged — strip them on both the HTTP and the
-// upgrade path before proxying. A public client can therefore never influence
-// the edge's single-hop guard or epoch handling.
 const STRIPPED_PUBLIC_HEADERS = new Set<string>([
   ...HOP_BY_HOP_HEADERS,
-  ...INTERNAL_ROUTING_HEADERS,
 ]);
 
 function defaultOrigin(surface: GatewayRouterSurface, serviceId: string, namespace: string): string {

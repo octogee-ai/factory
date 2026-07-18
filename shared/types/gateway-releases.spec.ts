@@ -12,9 +12,6 @@ import {
   RELEASE_FIELDS,
   GATEWAY_MUTABLE_FIELDS,
   isAssignmentState,
-  INTRA_FAMILY_HOP_HEADER,
-  ASSIGNMENT_EPOCH_HEADER,
-  INTERNAL_ROUTING_HEADERS,
   commitPlacementAtomic,
   type AssignmentDoc,
   type GatewayIdleSleepState,
@@ -302,19 +299,6 @@ describe("assignment roster state + epoch (migration plane)", () => {
     };
     expect(doc.state).toBe("serving");
     expect(doc.epoch).toBe(3);
-  });
-});
-
-describe("internal routing headers (intra-family forward)", () => {
-  it("names are lowercase (Node lowercases incoming header keys) and stable", () => {
-    expect(INTRA_FAMILY_HOP_HEADER).toBe("x-octogee-intra-family-hop");
-    expect(ASSIGNMENT_EPOCH_HEADER).toBe("x-octogee-assignment-epoch");
-  });
-
-  it("INTERNAL_ROUTING_HEADERS enumerates every internal header so the public router can strip them all", () => {
-    expect([...INTERNAL_ROUTING_HEADERS].sort()).toEqual(
-      [INTRA_FAMILY_HOP_HEADER, ASSIGNMENT_EPOCH_HEADER].sort(),
-    );
   });
 });
 

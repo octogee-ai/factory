@@ -37,8 +37,6 @@ import {
   parseAssignmentDoc,
 } from "@octogee/core/assignment-doc";
 import {
-  DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
-  DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
   GATEWAYS_COLLECTION,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
@@ -358,8 +356,6 @@ const SYSTEM_CONFIG_ENUMS: Record<string, ReadonlySet<string>> = {
   doctorResult: new Set(["ok", "error"]),
   bootRecovery: new Set(["none", "recovered", "unavailable"]),
   watcherState: new Set(["running", "stopped"]),
-  freezeState: new Set(["unfrozen", "freezing", "frozen"]),
-  bootRole: new Set(["normal", "source-frozen", "target-candidate"]),
 };
 const DASHBOARD_CONTROL_STATES = new Set(["ready", "missing", "stale", "invalid"]);
 
@@ -407,38 +403,12 @@ function copyEnumFields(
   return true;
 }
 
-function copyControlProtocol(
-  input: Record<string, unknown>,
-  out: Record<string, unknown>,
-): boolean {
-  if (input.controlProtocol === undefined) return true;
-  if (
-    !input.controlProtocol ||
-    typeof input.controlProtocol !== "object" ||
-    Array.isArray(input.controlProtocol)
-  ) return false;
-  const protocol = input.controlProtocol as Record<string, unknown>;
-  if (
-    protocol.protocol !== DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL ||
-    protocol.version !== DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION
-  ) return false;
-  out.controlProtocol = {
-    protocol: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
-    version: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
-  };
-  return true;
-}
-
 function copySystemConfigStatusFields(
   input: Record<string, unknown>,
   out: Record<string, unknown>,
 ): boolean {
-  return copyOptionalFields(input, out, ["acceptedCommit", "restoredCommit", "checkpointCommit"],
+  return copyOptionalFields(input, out, ["acceptedCommit", "restoredCommit"],
     (field) => typeof field === "string" && /^[0-9a-f]{7,64}$/.test(field)) &&
-    copyOptionalFields(input, out, ["candidateCommit"],
-      (field) => typeof field === "string" && /^[0-9a-f]{40}$/.test(field)) &&
-    copyOptionalFields(input, out, ["candidateHash"],
-      (field) => typeof field === "string" && /^[0-9a-f]{64}$/.test(field)) &&
     copyOptionalFields(input, out, ["configHash"],
       (field) => typeof field === "string" && /^(?:sha256:)?[0-9a-f]{64}$/.test(field)) &&
     copyOptionalFields(input, out,
@@ -456,35 +426,7 @@ function copySystemConfigStatusFields(
       (field) => typeof field === "string" && /^[A-Za-z0-9._+-]{1,80}$/.test(field)) &&
     copyOptionalFields(input, out, ["openclawForkSha"],
       (field) => typeof field === "string" &&
-        (field === "unknown" || /^[0-9a-f]{7,64}$/.test(field))) &&
-    copyControlProtocol(input, out) &&
-    copyConfigControlOwner(input, out);
-}
-
-function copyConfigControlOwner(
-  input: Record<string, unknown>,
-  out: Record<string, unknown>,
-): boolean {
-  if (input.controlOwner === undefined) return true;
-  if (!input.controlOwner || typeof input.controlOwner !== "object" || Array.isArray(input.controlOwner)) {
-    return false;
-  }
-  const owner = input.controlOwner as Record<string, unknown>;
-  const validControlId = (value: unknown) =>
-    typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
-  if (
-    !validControlId(owner.migrationId) ||
-    !validControlId(owner.sourceRevisionId) ||
-    !validControlId(owner.targetRevisionId)
-  ) {
-    return false;
-  }
-  out.controlOwner = {
-    migrationId: owner.migrationId,
-    sourceRevisionId: owner.sourceRevisionId,
-    targetRevisionId: owner.targetRevisionId,
-  };
-  return true;
+        (field === "unknown" || /^[0-9a-f]{7,64}$/.test(field)));
 }
 
 function parseDashboardControlStatus(

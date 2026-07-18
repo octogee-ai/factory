@@ -14,8 +14,6 @@ const RESOURCE_FIELDS = [
   "toGatewayId",
   "sourceGatewayId",
   "targetGatewayId",
-  "sourceRevisionId",
-  "targetRevisionId",
 ] as const;
 
 function stringFields(
@@ -27,34 +25,6 @@ function stringFields(
   return fields.flatMap((field) => typeof record[field] === "string" ? [record[field] as string] : []);
 }
 
-function rolloutParentId(operation: FleetOperationLockRef): string | null {
-  if (operation.kind !== "migrate-customer") return null;
-  if (!operation.input || typeof operation.input !== "object" || Array.isArray(operation.input)) {
-    return null;
-  }
-  const parentOperationId = (operation.input as Record<string, unknown>).parentOperationId;
-  return typeof parentOperationId === "string" ? parentOperationId : null;
-}
-
-function isDurableReleaseRollMigration(operation: FleetOperationLockRef): boolean {
-  if (operation.kind !== "migrate-customer") return false;
-  if (!operation.input || typeof operation.input !== "object" || Array.isArray(operation.input)) {
-    return false;
-  }
-  const input = operation.input as Record<string, unknown>;
-  return input.source === "release-roll" &&
-    typeof input.rollOperationId === "string" &&
-    input.rollOperationId.length > 0;
-}
-
-function isRolloutMigrationLineage(
-  rollout: FleetOperationLockRef,
-  migration: FleetOperationLockRef,
-): boolean {
-  return rollout.kind === "rollout" &&
-    (rolloutParentId(migration) === rollout.id || isDurableReleaseRollMigration(migration));
-}
-
 export function fleetOperationLockResources(
   operation: FleetOperationLockRef,
 ): ReadonlySet<string> {
@@ -64,8 +34,6 @@ export function fleetOperationLockResources(
     ...stringFields(operation.customerMigrationV2, [
       "sourceGatewayId",
       "targetGatewayId",
-      "sourceRevisionId",
-      "targetRevisionId",
     ]),
   ]);
 }
@@ -75,12 +43,6 @@ export function serialFleetOperationsConflict(
   other: FleetOperationLockRef,
 ): boolean {
   if (!SERIAL_KINDS.has(candidate.kind) || !SERIAL_KINDS.has(other.kind)) return false;
-  if (
-    isRolloutMigrationLineage(candidate, other) ||
-    isRolloutMigrationLineage(other, candidate)
-  ) {
-    return false;
-  }
   if (candidate.kind === "rollout" && other.kind === "rollout") return true;
   const candidateResources = fleetOperationLockResources(candidate);
   for (const resource of fleetOperationLockResources(other)) {

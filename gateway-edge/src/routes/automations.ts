@@ -452,11 +452,6 @@ async function heartbeatUpdate(
   const patch = { agents: { list: [{ id: agentId, heartbeat }] } };
   const acquired = await acquireSystemConfigMutationLease({ openclawDir: deps.openclawDir() });
   if (!acquired.ok) {
-    if (acquired.code === "config-frozen") {
-      throw new Error(
-        `system config is frozen by ${acquired.freezeOwner.migrationId} for ${acquired.freezeOwner.slug}`,
-      );
-    }
     throw new Error("system config writer lock is busy");
   }
   try {

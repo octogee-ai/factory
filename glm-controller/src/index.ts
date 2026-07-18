@@ -54,14 +54,10 @@ import {
 } from "@octogee/shared/types/gateway-releases";
 import {
   gatewayUpsertOptsFromRelease,
-  orderGatewaysForConvergence,
   planGatewayConvergence,
   provisioningRuntimeDoc,
   type DurableGateway,
-  type GatewayConvergenceAction,
-  type GatewayUpsertOpts,
 } from "./converge-gateway.js";
-import { createImagePrepuller, type ImagePrepuller } from "./image-prepuller.js";
 import {
   createGatewayModelKeySecretEnsurer,
   gatewayModelKeySecretName,
@@ -96,10 +92,7 @@ import {
 } from "./operation-retry.js";
 import { completeOperatorReservationAfterMigration } from "./operator-reservation-completion.js";
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
-import {
-  createMigrateCustomerHandler,
-  type MigrateCustomerDeps,
-} from "./handlers/migrate-customer.js";
+import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import {
   verifyGatewayRetirementClaimAtomic,
 } from "@octogee/core/gateway-retirement-claim";
@@ -133,7 +126,6 @@ import {
   GATEWAYS_COLLECTION,
   MIGRATION_UNMOUNT_TIMEOUT_MS,
   SIGNATURE_HEADER,
-  systemConfigMigrationMode,
 } from "@octogee/shared/types/fleet-controller";
 import {
   gatewayAuthorizationFromRootDocument,
@@ -165,16 +157,11 @@ import { deleteAuthUserTolerantOfMissing } from "@octogee/core/firebase-auth-hel
 import { deleteHostingSitesForCustomer } from "@octogee/core/firebase-hosting";
 import { GoogleAuth } from "google-auth-library";
 import { startHttpServer, startMaintenanceHttpServer } from "./http-server.js";
-import { recordConfigRoll, recordReconcile } from "./metrics.js";
+import { recordReconcile } from "./metrics.js";
 import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
 import { startStuckOpReaper } from "./stuck-op-reaper.js";
 import { startHelmRecoverySweeper } from "./helm-recovery-sweeper.js";
-import {
-  assertMigrationSystemConfigProtocol,
-  runtimeSupportsSystemConfigProtocol,
-  servingIsolatedProtocolGaps,
-} from "./system-config-protocol-gate.js";
 import { resumeOrphanedRunningOps } from "./resume-orphaned-ops.js";
 import {
   ACTIVATION_LEASE_SWEEP_MS_DEFAULT,
@@ -231,6 +218,7 @@ const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
 const OPERATOR_HEARTBEAT_POLL_MS = 15_000;
 const OPERATOR_HEALTH_TIMEOUT_MS = 5_000;
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
+
 // Lets out-of-loop callers (the roll arm's pacing, the rollout op handler)
 // nudge the reconciler without holding a reference to its closure; installed by
 // startReconciler.
@@ -720,7 +708,6 @@ interface GatewayConvergencePassDeps {
   prepareGatewayConfig: <T extends GatewayMutableConfig & { gatewayId: string }>(
     config: T,
   ) => Promise<T>;
-  prepullImages: ImagePrepuller;
   log: (msg: string) => void;
 }
 
@@ -750,7 +737,7 @@ async function runGatewayConvergencePass(
   const runtimeById = new Map(state.runtimeDocs.map((doc) => [doc.gatewayId, doc]));
   const failures: string[] = [];
   const selected = gatewayIds ? new Set(gatewayIds) : null;
-  for (const gateway of orderGatewaysForConvergence(state.gateways)) {
+  for (const gateway of state.gateways) {
     if (selected && !selected.has(gateway.gatewayId)) continue;
     try {
       await convergeOneGateway(passDeps, gateway, instances, runtimeById);
@@ -771,14 +758,13 @@ async function convergeOneGateway(
   instances: HelmInstancesMap,
   runtimeById: Map<string, GatewayRuntimeDoc>,
 ): Promise<void> {
-  const { db } = passDeps;
+  const { db, helm, log } = passDeps;
   const instance = instances[gateway.gatewayId];
   const helmObserved = instance
     ? {
         imageRepository: instance.image.repository ?? null,
         imageTag: instance.image.tag ?? null,
         replicas: typeof instance.replicas === "number" ? instance.replicas : 1,
-        deploymentIntentFingerprint: instance.deploymentIntentFingerprint ?? null,
       }
     : null;
   const artifact =
@@ -786,45 +772,12 @@ async function convergeOneGateway(
       ? null
       : await readGatewayArtifact(db, gateway.gatewayId, gateway.desiredRelease);
   const runtime = runtimeById.get(gateway.gatewayId);
-  const prepared = artifact ? await passDeps.prepareGatewayConfig(gateway) : null;
-  const upsertOpts = prepared && artifact
-    ? gatewayUpsertOptsFromRelease({
-        namespace: NAMESPACE,
-        gateway: prepared,
-        artifact,
-        replicas: gateway.desiredStatus === "paused" ? 0 : 1,
-        chartPath: GATEWAY_CHART,
-        valuesFile: GATEWAY_VALUES_FILE,
-        chartFingerprint: passDeps.chartFingerprint,
-      })
-    : null;
   const action = planGatewayConvergence({
     gateway,
     artifact,
     helm: helmObserved,
-    desiredDeploymentIntentFingerprint: upsertOpts?.deploymentIntentFingerprint,
     deploymentReady: artifact ? runtimeReportsDesiredBuild(runtime, artifact) : false,
   });
-  await applyGatewayConvergenceAction({
-    passDeps,
-    gateway,
-    action,
-    artifact,
-    runtime: runtime ?? null,
-    upsertOpts,
-  });
-}
-
-async function applyGatewayConvergenceAction(input: {
-  passDeps: GatewayConvergencePassDeps;
-  gateway: DurableGateway;
-  action: GatewayConvergenceAction;
-  artifact: ReleasePayload | null;
-  runtime: GatewayRuntimeDoc | null;
-  upsertOpts: GatewayUpsertOpts | null;
-}): Promise<void> {
-  const { passDeps, gateway, action, artifact, runtime, upsertOpts } = input;
-  const { db, helm, log } = passDeps;
   switch (action.kind) {
     case "steady":
       return;
@@ -837,37 +790,33 @@ async function applyGatewayConvergenceAction(input: {
       return;
     }
     case "upsert": {
-      if (!upsertOpts || !artifact) {
-        throw new Error(`gateway ${gateway.gatewayId} planned an upsert without release intent`);
-      }
+      const prepared = await passDeps.prepareGatewayConfig(gateway);
+      const opts = gatewayUpsertOptsFromRelease({
+        namespace: NAMESPACE,
+        gateway: prepared,
+        artifact: artifact as ReleasePayload,
+        replicas: action.replicas,
+        chartPath: GATEWAY_CHART,
+        valuesFile: GATEWAY_VALUES_FILE,
+        chartFingerprint: passDeps.chartFingerprint,
+      });
       log(
         `[converge-gateway] ${gateway.gatewayId} → release ${gateway.desiredRelease} ` +
-          `(${upsertOpts.imageTag}, replicas=${action.replicas})`,
+          `(${opts.imageTag}, replicas=${action.replicas})`,
       );
-      await passDeps.prepullImages({
-        namespace: NAMESPACE,
-        images: [
-          { repository: upsertOpts.imageRepository, tag: upsertOpts.imageTag },
-          {
-            repository:
-              upsertOpts.gatewayEdgeImageRepository ?? W9_GATEWAY_EDGE_IMAGE_REPOSITORY,
-            tag: upsertOpts.gatewayEdgeImageTag ?? upsertOpts.imageTag,
-          },
-        ],
-      });
       await db
         .collection(GLM_GATEWAYS_COLLECTION)
         .doc(gateway.gatewayId)
         .set(
           provisioningRuntimeDoc({
             gateway,
-            artifact,
-            existing: runtime,
+            artifact: artifact as ReleasePayload,
+            existing: runtime ?? null,
             now: Date.now(),
           }) as unknown as Record<string, unknown>,
           { merge: true },
         );
-      await helm.upsertInstance(upsertOpts);
+      await helm.upsertInstance(opts);
       return;
     }
     case "mark-live": {
@@ -1719,7 +1668,6 @@ async function createControllerRuntime(
   );
   const prepareGatewayConfig =
     createGatewayRuntimeConfigPreparer(resolveApiServerEgressCidrs);
-  const prepullImages = createImagePrepuller({ runKubectl, log });
 
   const handlerSyncFleetIngress = async () => {
     await syncEdgeIngressForGateways(await readDurableServingFleetGateways(db));
@@ -1750,7 +1698,6 @@ async function createControllerRuntime(
       kubeOps,
       chartFingerprint,
       prepareGatewayConfig,
-      prepullImages,
       log,
     }, gatewayIds);
 
@@ -2006,159 +1953,6 @@ export async function readMigrationUserSnapshot(
   };
 }
 
-async function readRuntimeForConfigProtocol(
-  db: Firestore,
-  gatewayId: string,
-): Promise<GatewayRuntimeDoc | null> {
-  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-  const value = snap.exists ? snap.data() : undefined;
-  return isGatewayRuntimeDoc(value) && value.gatewayId === gatewayId ? value : null;
-}
-
-async function readProtocolRoots(db: Firestore): Promise<DurableGateway[]> {
-  const rootsSnap = await db.collection(GATEWAYS_COLLECTION).get();
-  return rootsSnap.docs.flatMap((doc) => {
-    const authorization = gatewayAuthorizationFromRootDocument(doc.data(), doc.id);
-    return authorization ? [authorization.gateway as DurableGateway] : [];
-  });
-}
-
-async function readProtocolRuntimes(
-  db: Firestore,
-  gatewayIds: Iterable<string>,
-): Promise<Map<string, GatewayRuntimeDoc>> {
-  const entries = await Promise.all([...new Set(gatewayIds)].map(async (gatewayId) => [
-    gatewayId,
-    await readRuntimeForConfigProtocol(db, gatewayId),
-  ] as const));
-  return new Map(entries.filter(
-    (entry): entry is readonly [string, GatewayRuntimeDoc] => entry[1] !== null,
-  ));
-}
-
-async function assertFleetConfigProtocolForMigration(
-  db: Firestore,
-  input: {
-    mode: import("@octogee/shared/types/fleet-controller").SystemConfigMigrationMode;
-    sourceGatewayId: string;
-    targetGatewayId: string;
-  },
-): Promise<void> {
-  if (input.mode === "none") return;
-  const roots = await readProtocolRoots(db);
-  const runtimes = await readProtocolRuntimes(db, [
-    input.sourceGatewayId,
-    input.targetGatewayId,
-    ...roots.map((root) => root.gatewayId),
-  ]);
-  const now = Date.now();
-  assertMigrationSystemConfigProtocol({
-    mode: input.mode,
-    sourceGatewayId: input.sourceGatewayId,
-    sourceRuntime: runtimes.get(input.sourceGatewayId) ?? null,
-    targetGatewayId: input.targetGatewayId,
-    targetRuntime: runtimes.get(input.targetGatewayId) ?? null,
-    fleetGaps: servingIsolatedProtocolGaps(roots, runtimes, now),
-    now,
-  });
-}
-
-type RevisionExecutionIdentity = Awaited<
-  ReturnType<MigrateCustomerDeps["readRevisionExecutionIdentity"]>
->;
-
-type CandidateProof = Parameters<
-  MigrateCustomerDeps["assertCandidateProofCurrent"]
->[2];
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-function runtimeExecutionIdentity(
-  runtime: GatewayRuntimeDoc | null,
-  gatewayId: string,
-): RevisionExecutionIdentity | null {
-  if (!runtime) return null;
-  if (!runtimeSupportsSystemConfigProtocol(runtime, Date.now())) return null;
-  const heartbeat = runtime.heartbeat;
-  if (!heartbeat) return null;
-  const status = heartbeat.configStatus;
-  if (!status) return null;
-  const imageTag = runtime.helm.imageTag;
-  if (!isNonEmptyString(imageTag)) return null;
-  const buildSha = heartbeat.version;
-  if (!isNonEmptyString(buildSha)) return null;
-  const openclawVersion = status.openclawVersion;
-  if (!isNonEmptyString(openclawVersion)) return null;
-  const startedAt = heartbeat.startedAt;
-  if (typeof startedAt !== "number") return null;
-  return { revisionId: gatewayId, imageTag, buildSha, openclawVersion, startedAt };
-}
-
-async function readMigrationRevisionExecutionIdentity(
-  db: Firestore,
-  gatewayId: string,
-): Promise<RevisionExecutionIdentity> {
-  const runtime = await readRuntimeForConfigProtocol(db, gatewayId);
-  const identity = runtimeExecutionIdentity(runtime, gatewayId);
-  if (!identity) {
-    throw new Error(`gateway ${gatewayId} lacks an exact fresh protocol-v2 execution identity`);
-  }
-  return identity;
-}
-
-function candidateExecutionMatches(
-  runtime: GatewayRuntimeDoc,
-  expectedImageTag: string,
-  proof: CandidateProof,
-): boolean {
-  const heartbeat = runtime.heartbeat;
-  return [
-    runtimeSupportsSystemConfigProtocol(runtime, Date.now()),
-    runtime.helm.imageTag === expectedImageTag,
-    proof.imageTag === expectedImageTag,
-    heartbeat?.startedAt === proof.targetStartedAt,
-    heartbeat?.version === proof.buildSha,
-  ].every(Boolean);
-}
-
-function candidateConfigMatches(
-  runtime: GatewayRuntimeDoc,
-  proof: CandidateProof,
-): boolean {
-  const status = runtime.heartbeat?.configStatus;
-  const owner = status?.controlOwner;
-  return [
-    status?.openclawVersion === proof.openclawVersion,
-    status?.bootRole === "target-candidate",
-    owner?.migrationId === proof.migrationId,
-    owner?.sourceRevisionId === proof.sourceRevisionId,
-    owner?.targetRevisionId === proof.targetRevisionId,
-    status?.checkpointCommit === proof.checkpointCommit,
-    status?.candidateCommit === proof.candidateCommit,
-    status?.candidateHash === proof.candidateHash,
-  ].every(Boolean);
-}
-
-async function assertMigrationCandidateProofCurrent(
-  db: Firestore,
-  targetGatewayId: string,
-  expectedImageTag: string,
-  proof: CandidateProof,
-): Promise<void> {
-  const runtime = await readRuntimeForConfigProtocol(db, targetGatewayId);
-  const current = runtime
-    ? [
-        candidateExecutionMatches(runtime, expectedImageTag, proof),
-        candidateConfigMatches(runtime, proof),
-      ].every(Boolean)
-    : false;
-  if (!current) {
-    throw new Error(`target gateway ${targetGatewayId} candidate proof is stale`);
-  }
-}
-
 // eslint-disable-next-line max-lines-per-function -- Controller dependency assembly is intentionally centralized.
 async function buildHandlers(
   db: Firestore,
@@ -2175,7 +1969,7 @@ async function buildHandlers(
     chartFingerprint: string;
   },
 ): Promise<OperationHandlers> {
-  const { privateKey, modelKeySourceIssuer, prepareGatewayConfig, chartFingerprint } = fleetOps;
+  const { privateKey, modelKeySourceIssuer } = fleetOps;
   if (!privateKey) {
     throw new Error(
       "FLEET_CONTROLLER_PRIVATE_KEY is not set — required for migrate-customer. Refusing to start with stub handlers.",
@@ -2226,56 +2020,6 @@ async function buildHandlers(
     log: logFn,
   });
 
-  const renderGatewaySystemConfigContext = async (
-    gatewayId: string,
-    context: {
-      migrationId: string;
-      sourceRevisionId: string;
-      targetRevisionId: string;
-      checkpointCommit: string;
-      freezeObject: string;
-    } | null,
-  ): Promise<void> => {
-    const runtimeRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId);
-    const runtimeSnap = await runtimeRef.get();
-    const runtime = runtimeSnap.exists ? runtimeSnap.data() : undefined;
-    if (!isGatewayRuntimeDoc(runtime) || runtime.gatewayId !== gatewayId) {
-      throw new Error(`target gateway ${gatewayId} is not a durable realization`);
-    }
-    if (context && context.targetRevisionId !== gatewayId) {
-      throw new Error(`target system config context belongs to ${context.targetRevisionId}`);
-    }
-    const [rootSnap, artifact] = await Promise.all([
-      db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get(),
-      readGatewayArtifact(db, gatewayId, runtime.release),
-    ]);
-    const authorization = gatewayAuthorizationFromRootDocument(
-      rootSnap.exists ? rootSnap.data() : undefined,
-      gatewayId,
-    );
-    if (!authorization || !artifact) {
-      throw new Error(`target gateway ${gatewayId} lacks its durable root or release artifact`);
-    }
-    const root = authorization.gateway as DurableGateway;
-    await runtimeRef.set(
-      { systemConfigMigrationContext: context ?? FieldValue.delete() },
-      { merge: true },
-    );
-    const config = await prepareGatewayConfig(root);
-    await helm.upsertInstance({
-      ...gatewayUpsertOptsFromRelease({
-        namespace: NAMESPACE,
-        gateway: config,
-        artifact,
-        replicas: root.desiredStatus === "paused" ? 0 : 1,
-        chartPath: GATEWAY_CHART,
-        valuesFile: GATEWAY_VALUES_FILE,
-        chartFingerprint,
-      }),
-      ...(context ? { systemConfigRollContext: context } : {}),
-    });
-  };
-
   const migrateCustomer = createMigrateCustomerHandler({
     readUser: async (uid) => {
       const doc = await db.collection("users").doc(uid).get();
@@ -2303,26 +2047,35 @@ async function buildHandlers(
           toGatewayId: commit.toGatewayId,
           fromGatewayId: commit.fromGatewayId,
           flipMirror: commit.flipMirror,
-          assignment: commit.revision
-            ? {
-                revisionId: commit.revision.revisionId,
-                release: commit.revision.release,
-                source: MIGRATE_CUSTOMER_KIND,
-                updatedByOperationId: null,
-              }
-            : null,
+          assignment: {
+            source: MIGRATE_CUSTOMER_KIND,
+            updatedByOperationId: null,
+          },
         },
       );
     },
-    resolveGatewayUrl: (transportId) => resolveGatewayUrlFromFirestore(db, transportId),
+    resolveGatewayUrl: (gatewayId) => resolveGatewayUrlFromFirestore(db, gatewayId),
     buildClient: createMigrationClientBuilder(
       db,
       privateKey,
       logFn,
     ),
-    resolveFromRevision: (uid, currentGatewayId) =>
-      resolveSourceRevisionFromFirestore(db, uid, currentGatewayId),
-    resolvePlacement: (toGatewayId) => resolvePlacementFromFirestore(db, toGatewayId),
+    resolveSourcePlacement: async (uid, currentGatewayId) => {
+      const source = await resolveSourceRevisionFromFirestore(db, uid, currentGatewayId);
+      if (!source) return null;
+      return {
+        release: source.release,
+        ...(source.epoch !== undefined ? { epoch: source.epoch } : {}),
+        assignmentMode: source.assignmentMode,
+      };
+    },
+    resolveTargetPlacement: async (toGatewayId) => {
+      const placement = await resolvePlacementFromFirestore(db, toGatewayId);
+      if (!placement) return null;
+      return placement.ok
+        ? { ok: true, release: placement.release }
+        : { ok: false, reason: placement.reason };
+    },
     // The roster quiesce gate: written "quiescing" before the source quiesce
     // RPC, restored "serving" on a pre-cutover rollback (fleet-migration-runner).
     setAssignmentState: async (input) => {
@@ -2335,17 +2088,50 @@ async function buildHandlers(
         input,
       );
     },
-    assertRollFence: async () => {
-      throw new Error("release-roll migrations are retired (GATEWAY-SIMPLE-ROLL-SPEC)");
+    readGatewayRootFence: async (gatewayId) => {
+      const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+      return customerMigrationV2GatewayRootFence(
+        snap.exists ? snap.data() : undefined,
+        gatewayId,
+      );
     },
-    recordConfigProof: async (targetRevisionId, proof) => {
-      await db
-        .collection(GLM_GATEWAYS_COLLECTION)
-        .doc(targetRevisionId)
-        .set({ systemConfig: proof }, { merge: true });
+    commitV2Cutover: async (input) => {
+      await commitCutoverAtomic(
+        {
+          db: db as unknown as FleetStateFirestore,
+          serverTimestamp: () => FieldValue.serverTimestamp(),
+          log: logFn,
+        },
+        {
+          uid: input.uid,
+          slug: input.slug,
+          toGatewayId: input.targetGatewayId,
+          fromGatewayId: input.sourceGatewayId,
+          flipMirror: input.sourceGatewayId !== input.targetGatewayId,
+          assignment: {
+            source: MIGRATE_CUSTOMER_KIND,
+            updatedByOperationId: input.operationId,
+          },
+          customerMigrationV2Fence: {
+            operationId: input.operationId,
+            migrationId: input.migrationId,
+            uid: input.uid,
+            slug: input.slug,
+            sourceGatewayId: input.sourceGatewayId,
+            sourceEpoch: input.sourceEpoch,
+            sourceRelease: input.sourceRelease,
+            sourceAssignmentMode: input.sourceAssignmentMode,
+            sourceRootFence: input.sourceRootFence,
+            targetGatewayId: input.targetGatewayId,
+            targetRelease: input.targetRelease,
+            targetRootFence: input.targetRootFence,
+          },
+        },
+      );
     },
-    recordConfigRollMetric: recordConfigRoll,
-    resolveSystemConfigMigrationMode: async (fromGatewayId, toGatewayId) => {
+    // Durable (V2) migration when neither side is shared-class; roots must be
+    // converged (no in-flight release roll) for every class.
+    useDurableMigration: async (fromGatewayId, toGatewayId) => {
       const [source, target] = await Promise.all([
         db.collection(GATEWAYS_COLLECTION).doc(fromGatewayId).get(),
         db.collection(GATEWAYS_COLLECTION).doc(toGatewayId).get(),
@@ -2381,83 +2167,7 @@ async function buildHandlers(
         profile: data.profile ?? undefined,
         imageProfile: data.imageProfile ?? undefined,
       });
-      return systemConfigMigrationMode(
-        gatewayClass(sourceData),
-        gatewayClass(targetData),
-      );
-    },
-    assertSystemConfigProtocolReady: ({ mode, sourceRevisionId, targetRevisionId }) =>
-      assertFleetConfigProtocolForMigration(db, {
-        mode,
-        sourceGatewayId: sourceRevisionId,
-        targetGatewayId: targetRevisionId,
-      }),
-    readRevisionExecutionIdentity: (revisionId) =>
-      readMigrationRevisionExecutionIdentity(db, revisionId),
-    readGatewayRootFence: async (gatewayId) => {
-      const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-      return customerMigrationV2GatewayRootFence(
-        snap.exists ? snap.data() : undefined,
-        gatewayId,
-      );
-    },
-    installTargetSystemConfigContext: (targetRevisionId, context) =>
-      renderGatewaySystemConfigContext(targetRevisionId, context),
-    clearTargetSystemConfigContext: (targetRevisionId) =>
-      renderGatewaySystemConfigContext(targetRevisionId, null),
-    assertCandidateProofCurrent: (targetRevisionId, expectedImageTag, proof) =>
-      assertMigrationCandidateProofCurrent(db, targetRevisionId, expectedImageTag, proof),
-    commitV2Cutover: async (input) => {
-      await commitCutoverAtomic(
-        {
-          db: db as unknown as FleetStateFirestore,
-          serverTimestamp: () => FieldValue.serverTimestamp(),
-          log: logFn,
-        },
-        {
-          uid: input.uid,
-          slug: input.slug,
-          toGatewayId: input.targetGatewayId,
-          fromGatewayId: input.sourceGatewayId,
-          flipMirror: input.sourceGatewayId !== input.targetGatewayId,
-          assignment: {
-            revisionId: input.targetRevisionId,
-            release: input.targetRelease,
-            source: MIGRATE_CUSTOMER_KIND,
-            updatedByOperationId: input.operationId,
-          },
-          customerMigrationV2Fence: {
-            operationId: input.operationId,
-            migrationId: input.migrationId,
-            uid: input.uid,
-            slug: input.slug,
-            sourceGatewayId: input.sourceGatewayId,
-            sourceRevisionId: input.sourceRevisionId,
-            sourceEpoch: input.sourceEpoch,
-            sourceRelease: input.sourceRelease,
-            sourceAssignmentMode: input.sourceAssignmentMode,
-            sourceRootFence: input.sourceRootFence,
-            targetGatewayId: input.targetGatewayId,
-            targetRevisionId: input.targetRevisionId,
-            targetRelease: input.targetRelease,
-            targetRootFence: input.targetRootFence,
-            checkpointCommit: input.checkpointCommit,
-            configHash: input.configHash,
-            freezeObject: input.freezeObject,
-            candidateCommit: input.candidateCommit,
-            candidateHash: input.candidateHash,
-            runtimeConfigHash: input.runtimeConfigHash,
-            targetStartedAt: input.targetStartedAt,
-            imageTag: input.imageTag,
-            buildSha: input.buildSha,
-            openclawVersion: input.openclawVersion,
-            provenAt: input.provenAt,
-          },
-        },
-      );
-    },
-    recoverConfigFreezeOwner: async () => {
-      throw new Error("config freeze owner recovery is retired (GATEWAY-SIMPLE-ROLL-SPEC)");
+      return gatewayClass(sourceData) !== "shared" && gatewayClass(targetData) !== "shared";
     },
     genMigrationId: (operationId) => `mig-${operationId}`,
     now: () => Date.now(),

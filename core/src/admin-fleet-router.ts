@@ -1461,7 +1461,6 @@ interface NewOperationInput {
     | "add-gateway"
     | typeof OP_KIND_MIGRATE_CUSTOMER
     | "retire-gateway"
-    | "retire-revision"
     | "restart-gateway"
     | "rollout"
     | "deprovision-customer";

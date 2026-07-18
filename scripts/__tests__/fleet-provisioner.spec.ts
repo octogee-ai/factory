@@ -9,13 +9,12 @@ import {
   buildFleetHealthResponse,
   cloneRetryDelayMs,
   cloneRetryReady,
-  gatewayRevisionServiceName,
+  gatewayServiceName,
   settleConvergence,
   getEvictObservedSlugs,
   getMountObservedSlugs,
   pathGatewayIdMatchesPod,
   readMountedCustomersFromAssignedState,
-  registerConfigControlRoutes,
   resolveFleetCapabilities,
 } from "../lib/fleet-provisioner.js";
 import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
@@ -217,7 +216,7 @@ describe("observed split — evict keys off raw presence, mount off completion",
   });
 });
 
-describe("in-pod revision-keyed heartbeat (PR3 dependency)", () => {
+describe("in-pod gateway heartbeat", () => {
   it("reports the OpenClaw runtime version through the poller health endpoint", () => {
     expect(
       buildFleetHealthResponse({
@@ -232,26 +231,25 @@ describe("in-pod revision-keyed heartbeat (PR3 dependency)", () => {
     ).toMatchObject({ openclawVersion: "2026.7.1" });
   });
 
-  it("carries revisionId onto the heartbeat snapshot so glmGateways/{revisionId}.heartbeat gets written", () => {
+  it("keys the heartbeat snapshot by the bare gateway id (GATEWAY-SIMPLE-ROLL-SPEC)", () => {
     const snap = buildFleetHeartbeatSnapshot({
       gatewayId: "default",
-      revisionId: "default-r2",
       status: "ready",
       version: "sha-1",
       openclawVersion: "2026.7.1",
       mountedCustomers: ["alice"],
-      internalUrl: "http://octogee-gateway-default-r2.ns.svc.cluster.local:18789",
+      internalUrl: "http://octogee-gateway-default.ns.svc.cluster.local:18789",
       startedAt: 42,
     });
-    expect(snap).toMatchObject({ gatewayId: "default", revisionId: "default-r2", status: "ready" });
+    expect(snap).toMatchObject({ gatewayId: "default", status: "ready" });
+    expect(snap).not.toHaveProperty("revisionId");
     expect(snap.openclawVersion).toBe("2026.7.1");
   });
 
-  it("refuses an empty revision id so a legacy pod cannot write bare telemetry", () => {
+  it("refuses an empty gateway id so a misconfigured pod cannot write anonymous telemetry", () => {
     expect(() =>
       buildFleetHeartbeatSnapshot({
-        gatewayId: "default",
-        revisionId: "",
+        gatewayId: "",
         status: "booting",
         version: "v",
         openclawVersion: "v",
@@ -259,39 +257,12 @@ describe("in-pod revision-keyed heartbeat (PR3 dependency)", () => {
         internalUrl: "http://gw",
         startedAt: 1,
       }),
-    ).toThrow("revisionId is required");
+    ).toThrow("gatewayId is required");
   });
 
-  it("points the heartbeat internalUrl at the revision Service when a revision id is set", () => {
-    expect(gatewayRevisionServiceName({ gatewayId: "default", revisionId: "default-r2" })).toBe(
-      "octogee-gateway-default-r2",
-    );
-  });
-
-  it("refuses bare service addressing", () => {
-    expect(() => gatewayRevisionServiceName({ gatewayId: "default", revisionId: "" })).toThrow(
-      "revisionId is required",
-    );
-  });
-});
-
-describe("protocol-v2 config control route registration", () => {
-  it("mounts only the six restart-durable config-control endpoints", () => {
-    const post = vi.fn();
-    registerConfigControlRoutes(
-      { post } as never,
-      vi.fn(),
-      {} as never,
-    );
-
-    expect(post.mock.calls.map(([route]) => route)).toEqual([
-      "/config-freeze-v2/:gatewayId",
-      "/config-candidate-proof/:gatewayId",
-      "/config-promote-candidate/:gatewayId",
-      "/config-abort-v2/:gatewayId",
-      "/config-retire-v2/:gatewayId",
-      "/config-finalize-v2/:gatewayId",
-    ]);
+  it("points the heartbeat internalUrl at the stable bare-id Service", () => {
+    expect(gatewayServiceName({ gatewayId: "default" })).toBe("octogee-gateway-default");
+    expect(() => gatewayServiceName({ gatewayId: "" })).toThrow("gatewayId is required");
   });
 });
 

@@ -27,13 +27,6 @@ revisionId: ""
 # starts.
 builderSlug: ""
 
-systemConfigRollContext:
-  migrationId: ""
-  sourceRevisionId: ""
-  targetRevisionId: ""
-  checkpointCommit: ""
-  freezeObject: ""
-
 # Bundle SHA. All three sidecars (gateway, gateway-edge, chat-proxy)
 # default to this tag for atomic rolls. Per-image overrides below take
 # precedence when set, but the operator workflow is single-SHA.
@@ -331,16 +324,17 @@ tiers:
       maxOldSpaceSizeMb: "147456"
 
 probes:
-  # Startup reaches the config status plane, which remains healthy during
-  # isolated-gateway repair. 10s × 60 keeps a 10-minute window for failures
-  # of that repair plane itself.
+  # Non-shared startup reaches the fleet controller only after durable-config
+  # restore and repair. 10s × 60 gives each identity-pure attempt 10 minutes;
+  # an attempt that exceeds the budget restarts from gateway identity.
   startup:
     initialDelaySeconds: 15
     periodSeconds: 10
     failureThreshold: 60
     timeoutSeconds: 10
-  # Liveness stays permissive during pre-boot repair, then performs a bounded
-  # local OpenClaw health check after the config has been accepted.
+  # Non-shared liveness rides the same runner plane — a dead fleet controller
+  # restarts the pod; an OpenClaw failure only drops readiness (repair stays
+  # reachable). Shared gateways probe OpenClaw directly.
   liveness:
     initialDelaySeconds: 0
     periodSeconds: 60

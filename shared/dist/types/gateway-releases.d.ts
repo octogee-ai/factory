@@ -98,9 +98,6 @@ export interface ReleaseDoc {
 export type AssignmentSource = "onboarding" | "migrate-customer" | "repair";
 export type AssignmentState = "serving" | "quiescing" | "migrating";
 export declare function isAssignmentState(value: unknown): value is AssignmentState;
-export declare const INTRA_FAMILY_HOP_HEADER = "x-octogee-intra-family-hop";
-export declare const ASSIGNMENT_EPOCH_HEADER = "x-octogee-assignment-epoch";
-export declare const INTERNAL_ROUTING_HEADERS: readonly string[];
 export interface AssignmentDoc {
     uid: string;
     slug: string;
