@@ -41,6 +41,13 @@ interface TokenResponse {
   scope?: string;
 }
 
+class GoogleAccountMismatchError extends Error {
+  constructor() {
+    super("google_account_mismatch");
+    this.name = "GoogleAccountMismatchError";
+  }
+}
+
 interface RouteError {
   status: number;
   body: Record<string, unknown>;
@@ -88,6 +95,17 @@ function parseGrantedScopes(scope: string | undefined, requested: string[]): str
   return parsed.length > 0 ? parsed : requested;
 }
 
+async function enforceGoogleAccountContinuity(uid: string, accountLabel: string): Promise<void> {
+  const snap = await userCol(uid, "integrations").doc("google").get();
+  const existing = (snap.data() as { accountLabel?: unknown } | undefined)?.accountLabel;
+  if (
+    typeof existing === "string" &&
+    existing.trim().toLowerCase() !== accountLabel.trim().toLowerCase()
+  ) {
+    throw new GoogleAccountMismatchError();
+  }
+}
+
 async function storeConnectorTokens(args: {
   uid: string;
   def: ConnectorDef;
@@ -101,13 +119,19 @@ async function storeConnectorTokens(args: {
   const encryptedRefreshToken = tokens.refresh_token
     ? await encryptSecret(tokens.refresh_token)
     : null;
+  const refreshTokenPatch: { encryptedRefreshToken?: string | null } = {};
+  if (encryptedRefreshToken) {
+    refreshTokenPatch.encryptedRefreshToken = encryptedRefreshToken;
+  } else if (captureMethod !== "oauth-web") {
+    refreshTokenPatch.encryptedRefreshToken = null;
+  }
 
   await userCol(uid, "secrets").doc(def.meta.id).set(
     {
       provider: def.meta.id,
       tokens: {
         encryptedAccessToken,
-        encryptedRefreshToken,
+        ...refreshTokenPatch,
         expiresAt: tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : null,
         tokenType: tokens.token_type ?? "bearer",
       },
@@ -116,7 +140,7 @@ async function storeConnectorTokens(args: {
     { merge: true },
   );
 
-  await userCol(uid, "integrations").doc(def.meta.id).set({
+  const integration = {
     provider: def.meta.id,
     status: "connected",
     accountLabel,
@@ -124,7 +148,19 @@ async function storeConnectorTokens(args: {
     captureMethod,
     connectedAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
-  });
+  };
+  if (def.meta.id === "google") {
+    await userCol(uid, "integrations").doc(def.meta.id).set(
+      {
+        ...integration,
+        error: FieldValue.delete(),
+        verifiedAt: FieldValue.delete(),
+      },
+      { merge: true },
+    );
+  } else {
+    await userCol(uid, "integrations").doc(def.meta.id).set(integration);
+  }
 
   logger.info(`[connect] ${def.meta.id} connected for uid=${uid} via ${captureMethod}`);
 }
@@ -377,6 +413,8 @@ router.get(
           .json({ ok: false, reason: fresh.reason });
         return;
       }
+      res.set("Cache-Control", "no-store");
+      res.set("Pragma", "no-cache");
       res.json({ accessToken: fresh.accessToken, apiKey: picker.apiKey, appId: picker.appId });
     } catch (e) {
       next(e);
@@ -406,8 +444,20 @@ router.post(
         res.status(422).json({ ok: false, reason: "not_connected" });
         return;
       }
+      const integration = snap.data() as { status?: unknown; scopes?: unknown; pickedFiles?: unknown };
+      if (integration.status !== "connected") {
+        res.status(422).json({ ok: false, reason: "not_connected" });
+        return;
+      }
+      const scopes = Array.isArray(integration.scopes)
+        ? integration.scopes.filter((scope): scope is string => typeof scope === "string")
+        : [];
+      if (!googleCapabilitiesFromScopes(scopes).includes("drive")) {
+        res.status(422).json({ ok: false, reason: "drive_not_connected" });
+        return;
+      }
       const current = parseGooglePickedFiles(
-        (snap.data() as { pickedFiles?: unknown }).pickedFiles,
+        integration.pickedFiles,
       );
       const dropIds = new Set([...removeIds, ...files.map((f) => f.id)]);
       const pickedFiles = [...current.filter((f) => !dropIds.has(f.id)), ...files];
@@ -489,6 +539,8 @@ router.get(
           : {}),
         ...(def.oauth.extraAuthParams ?? {}),
       });
+      res.set("Cache-Control", "no-store");
+      res.set("Pragma", "no-cache");
       res.json({ url: `${def.oauth.authorizeUrl}?${params}` });
     } catch (e) {
       next(e);
@@ -523,6 +575,45 @@ async function consumeFlowNonce(
       codeVerifier: typeof flow.codeVerifier === "string" ? flow.codeVerifier : null,
     };
   });
+}
+
+async function redirectOAuthCallbackFailure(
+  res: Response,
+  def: ConnectorDef,
+  payload: ConnectStatePayload,
+  err: unknown,
+): Promise<void> {
+  if (err instanceof GoogleAccountMismatchError) {
+    logger.warn(`[connect] google callback rejected an account switch for uid=${payload.uid}`);
+    res.redirect(
+      buildOAuthRedirect(payload.returnUrl, APP_URL, {
+        connect_error: "google_account_mismatch",
+      }),
+    );
+    return;
+  }
+  const msg = err instanceof Error ? err.message : String(err);
+  logger.error(`[connect] ${def.meta.id} connect failed for uid=${payload.uid}: ${msg}`);
+  try {
+    await userCol(payload.uid, "integrations").doc(def.meta.id).set(
+      {
+        provider: def.meta.id,
+        status: "error",
+        error: msg.slice(0, 300),
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  } catch (statusErr) {
+    logger.error(
+      `[connect] ${def.meta.id} error-status write failed for uid=${payload.uid}: ${String(statusErr)}`,
+    );
+  }
+  res.redirect(
+    buildOAuthRedirect(payload.returnUrl, APP_URL, {
+      connect_error: `${def.meta.id}_failed`,
+    }),
+  );
 }
 
 router.get("/:connector/callback", async (req: Request, res: Response) => {
@@ -563,6 +654,9 @@ router.get("/:connector/callback", async (req: Request, res: Response) => {
     }
     const tokens = await exchangeAuthCode(def, code, creds, flow.codeVerifier);
     const identity = await def.fetchIdentity(tokens.access_token);
+    if (def.meta.id === "google") {
+      await enforceGoogleAccountContinuity(payload.uid, identity.accountLabel);
+    }
     await storeConnectorTokens({
       uid: payload.uid,
       def,
@@ -577,26 +671,7 @@ router.get("/:connector/callback", async (req: Request, res: Response) => {
       }),
     );
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error(`[connect] ${def.meta.id} connect failed for uid=${payload.uid}: ${msg}`);
-    try {
-      await userCol(payload.uid, "integrations").doc(def.meta.id).set(
-        {
-          provider: def.meta.id,
-          status: "error",
-          error: msg.slice(0, 300),
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-        { merge: true },
-      );
-    } catch (statusErr) {
-      logger.error(`[connect] ${def.meta.id} error-status write failed for uid=${payload.uid}: ${String(statusErr)}`);
-    }
-    res.redirect(
-      buildOAuthRedirect(payload.returnUrl, APP_URL, {
-        connect_error: `${def.meta.id}_failed`,
-      }),
-    );
+    await redirectOAuthCallbackFailure(res, def, payload, err);
   }
 });
 

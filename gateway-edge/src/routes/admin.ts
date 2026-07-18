@@ -110,9 +110,6 @@ router.put("/platform-config", async (req, res) => {
   }
 });
 
-// Google connect-stage dial: 'allowlist' exists to protect the project's
-// lifetime unverified-consent budget at Google, so a stage-only PUT must never
-// clobber the curated uid list.
 router.get("/platform-connect-config", async (_req, res) => {
   try {
     res.json(await readPlatformConnectConfig());

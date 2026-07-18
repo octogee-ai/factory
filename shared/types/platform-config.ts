@@ -10,12 +10,6 @@ export const PLATFORM_CONFIG_COLLECTION = "platformConfig";
 export const PLATFORM_MODEL_CONFIG_DOC = "models";
 export const PLATFORM_CONNECT_CONFIG_DOC = "connect";
 
-// Operator dial for the platform Google OAuth client (GOOGLE-PLATFORM-OAUTH-SPEC):
-// ships dark ('off'), opens per-uid during the unverified approval window
-// ('allowlist' — protects the lifetime 100-unverified-consent cap), goes public
-// at verification acceptance ('on'). Absent or invalid doc → the compiled
-// default below, so a fresh environment can never leak Google connect early.
-
 export type GoogleConnectStage = "off" | "allowlist" | "on";
 
 export interface PlatformConnectConfig {

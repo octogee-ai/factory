@@ -10,8 +10,8 @@ import { catalogMeta } from "./def.js";
 
 const CAPABILITY_PROBES: Record<GoogleCapability, { name: string; url: string }> = {
   calendar: {
-    name: "calendar.list",
-    url: "https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1",
+    name: "calendar.events",
+    url: "https://www.googleapis.com/calendar/v3/calendars/primary/events?maxResults=1",
   },
   gmail: {
     name: "gmail.profile",

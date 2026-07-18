@@ -433,17 +433,15 @@ oauth_secret() {
 oauth_secret github-oauth    GITHUB_CLIENT_ID    GITHUB_CLIENT_SECRET
 oauth_secret microsoft-oauth MICROSOFT_CLIENT_ID MICROSOFT_CLIENT_SECRET
 
-# google-oauth carries the platform client PLUS the Drive Picker browser config
-# (API key + project number) — all four ride one secret so a rotate is one step.
 info "google-oauth"
 set +u
 G_ID="${GOOGLE_CLIENT_ID:-}"; G_SEC="${GOOGLE_CLIENT_SECRET:-}"
 G_PICKER_KEY="${GOOGLE_PICKER_API_KEY:-}"; G_PICKER_APP="${GOOGLE_PICKER_APP_ID:-}"
 set -u
-[[ -z "$G_ID" ]]         && G_ID=$(sm_get GOOGLE_CLIENT_ID 2>/dev/null || echo "")
-[[ -z "$G_SEC" ]]        && G_SEC=$(sm_get GOOGLE_CLIENT_SECRET 2>/dev/null || echo "")
-[[ -z "$G_PICKER_KEY" ]] && G_PICKER_KEY=$(sm_get GOOGLE_PICKER_API_KEY 2>/dev/null || echo "")
-[[ -z "$G_PICKER_APP" ]] && G_PICKER_APP=$(sm_get GOOGLE_PICKER_APP_ID 2>/dev/null || echo "")
+[[ -z "$G_ID" ]]         && G_ID=$(sm_get GOOGLE_CLIENT_ID "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+[[ -z "$G_SEC" ]]        && G_SEC=$(sm_get GOOGLE_CLIENT_SECRET "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+[[ -z "$G_PICKER_KEY" ]] && G_PICKER_KEY=$(sm_get GOOGLE_PICKER_API_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+[[ -z "$G_PICKER_APP" ]] && G_PICKER_APP=$(sm_get GOOGLE_PICKER_APP_ID "$FIREBASE_PROJECT" 2>/dev/null || echo "")
 [[ -z "$G_ID" || -z "$G_SEC" ]] && warn "GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET not set — Google connect disabled"
 [[ -z "$G_PICKER_KEY" || -z "$G_PICKER_APP" ]] && warn "GOOGLE_PICKER_API_KEY/GOOGLE_PICKER_APP_ID not set — Drive picker disabled"
 ksecret google-oauth \

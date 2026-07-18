@@ -91,6 +91,24 @@ describe("connector provider definitions", () => {
     });
   });
 
+  it("probes Calendar through an endpoint authorized by calendar.events", async () => {
+    h.fetch.mockResolvedValue(response(200, { items: [] }));
+
+    await expect(
+      googleConnector.deepProbe?.("google-token", [
+        "https://www.googleapis.com/auth/calendar.events",
+      ]),
+    ).resolves.toEqual({
+      probe: "calendar.events",
+      detail: "calendar",
+    });
+
+    expect(h.fetch).toHaveBeenCalledWith(
+      "https://www.googleapis.com/calendar/v3/calendars/primary/events?maxResults=1",
+      { headers: { Authorization: "Bearer google-token" } },
+    );
+  });
+
   it("uses Microsoft mail first and userPrincipalName as fallback", async () => {
     h.fetch
       .mockResolvedValueOnce(response(200, { mail: "mail@example.com", userPrincipalName: "upn@example.com" }))

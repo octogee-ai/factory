@@ -206,7 +206,13 @@ describe("connect — auth-url", () => {
   });
 
   it("builds the provider authorize URL with a signed state and persists the single-use flow doc", async () => {
-    const { state, url } = await mintAuthUrlState();
+    const authUrlResponse = await request(createApp())
+      .get("/api/connect/github/auth-url?returnUrl=/w/me/files")
+      .set("Authorization", auth.bearer());
+    expect(authUrlResponse.status, authUrlResponse.text).toBe(200);
+    expect(authUrlResponse.headers["cache-control"]).toContain("no-store");
+    const url = authUrlResponse.body.url as string;
+    const state = new URL(url).searchParams.get("state")!;
 
     expect(url).toContain("https://github.com/login/oauth/authorize?");
     const parsed = new URL(url);
@@ -307,7 +313,7 @@ describe("connect — callback state verification (the security regression)", ()
     expect(JSON.stringify(secret)).not.toContain(PLAINTEXT_GH_TOKEN);
     const tokens = (secret as Record<string, Record<string, unknown>>).tokens;
     expect(tokens.encryptedAccessToken).toBe(encOf(PLAINTEXT_GH_TOKEN));
-    expect(tokens.encryptedRefreshToken).toBeNull();
+    expect(tokens.encryptedRefreshToken).toBeUndefined();
 
     const status = await readStatus(UID, "github");
     expect(status).toMatchObject({
@@ -794,6 +800,91 @@ describe("connect — google platform capability flow", () => {
     expect(status?.accountLabel).toBe("g@x.com");
   });
 
+  it("incremental consent preserves the durable refresh token and Drive picked-file registry", async () => {
+    await setGoogleStage("on");
+    await connectGoogle("drive", `${DRIVE} ${EMAIL}`);
+    await db
+      .collection("users")
+      .doc(UID)
+      .collection("integrations")
+      .doc("google")
+      .set(
+        { pickedFiles: [{ id: "f1", name: "Plan.pdf", mimeType: "application/pdf" }] },
+        { merge: true },
+      );
+
+    stubProviderFetch([
+      {
+        url: /oauth2\.googleapis\.com\/token/,
+        respond: () => ({
+          access_token: "new-google-access",
+          expires_in: 3600,
+          token_type: "Bearer",
+          scope: `${DRIVE} ${GMAIL} ${EMAIL}`,
+        }),
+      },
+      googleUserinfoStub,
+    ]);
+    const { state } = await mintAuthUrlState("google", "&capability=gmail");
+    const res = await request(createApp()).get(
+      `/api/connect/google/callback?code=c&state=${encodeURIComponent(state)}`,
+    );
+    expect(res.headers.location).toContain("google_connected=true");
+
+    const tokens = (await readSecret(UID, "google"))?.tokens as Record<string, unknown>;
+    expect(tokens.encryptedAccessToken).toBe(encOf("new-google-access"));
+    expect(tokens.encryptedRefreshToken).toBe(encOf(PLAINTEXT_GOOGLE_REFRESH));
+    expect((await readStatus(UID, "google"))?.pickedFiles).toEqual([
+      { id: "f1", name: "Plan.pdf", mimeType: "application/pdf" },
+    ]);
+  });
+
+  it("rejects incremental consent from a different Google account without replacing the grant", async () => {
+    await setGoogleStage("on");
+    await connectGoogle("drive", `${DRIVE} ${EMAIL}`);
+    await db
+      .collection("users")
+      .doc(UID)
+      .collection("integrations")
+      .doc("google")
+      .set(
+        { pickedFiles: [{ id: "f1", name: "Plan.pdf", mimeType: "application/pdf" }] },
+        { merge: true },
+      );
+
+    stubProviderFetch([
+      {
+        url: /oauth2\.googleapis\.com\/token/,
+        respond: () => ({
+          access_token: "other-account-access",
+          refresh_token: "other-account-refresh",
+          expires_in: 3600,
+          token_type: "Bearer",
+          scope: `${DRIVE} ${GMAIL} ${EMAIL}`,
+        }),
+      },
+      {
+        url: /googleapis\.com\/oauth2\/v2\/userinfo/,
+        respond: () => ({ email: "other@x.com" }),
+      },
+    ]);
+    const { state } = await mintAuthUrlState("google", "&capability=gmail");
+    const res = await request(createApp()).get(
+      `/api/connect/google/callback?code=c&state=${encodeURIComponent(state)}`,
+    );
+
+    expect(res.headers.location).toContain("connect_error=google_account_mismatch");
+    const tokens = (await readSecret(UID, "google"))?.tokens as Record<string, unknown>;
+    expect(tokens.encryptedAccessToken).toBe(encOf(PLAINTEXT_GOOGLE_ACCESS));
+    expect(tokens.encryptedRefreshToken).toBe(encOf(PLAINTEXT_GOOGLE_REFRESH));
+    expect(await readStatus(UID, "google")).toMatchObject({
+      status: "connected",
+      accountLabel: "g@x.com",
+      scopes: [DRIVE, EMAIL],
+      pickedFiles: [{ id: "f1", name: "Plan.pdf", mimeType: "application/pdf" }],
+    });
+  });
+
   it("granular consent: an unticked data scope is absent from the stored grant", async () => {
     await setGoogleStage("on");
     await connectGoogle("gmail", EMAIL);
@@ -1042,7 +1133,7 @@ describe("connect — microsoft + verify", () => {
       },
       { url: /googleapis\.com\/oauth2\/v2\/userinfo/, respond: () => ({ email: "g@x.com" }) },
       {
-        url: /www\.googleapis\.com\/calendar\/v3\/users\/me\/calendarList/,
+        url: /www\.googleapis\.com\/calendar\/v3\/calendars\/primary\/events/,
         respond: () => ({ items: [] }),
       },
       {
@@ -1073,7 +1164,7 @@ describe("connect — microsoft + verify", () => {
     expect(res.body).toMatchObject({
       ok: true,
       accountLabel: "g@x.com",
-      probe: { probe: "calendar.list+gmail.profile+drive.about", detail: "calendar, gmail, drive" },
+      probe: { probe: "calendar.events+gmail.profile+drive.about", detail: "calendar, gmail, drive" },
     });
 
     const tokens = (await readSecret(UID, "google"))?.tokens as Record<string, unknown>;
@@ -1219,6 +1310,7 @@ describe("connect — google drive picker + full-read escalation", () => {
       apiKey: "picker-key",
       appId: "123456789",
     });
+    expect(res.headers["cache-control"]).toContain("no-store");
   });
 
   it("picked-files add/remove merges by id and round-trips through the integration doc", async () => {
@@ -1266,6 +1358,20 @@ describe("connect — google drive picker + full-read escalation", () => {
       .send({ add: [{ id: "f1", name: "Plan.pdf", mimeType: "application/pdf" }] });
     expect(unconnected.status).toBe(422);
     expect(unconnected.body.reason).toBe("not_connected");
+  });
+
+  it("picked-files requires an active Drive grant, not merely a Google integration doc", async () => {
+    await setGoogleStage("on");
+    await grantGoogle("calendar", `${CAL} ${EMAIL}`);
+
+    const res = await request(createApp())
+      .post("/api/connect/google/picked-files")
+      .set("Authorization", auth.bearer())
+      .send({ add: [{ id: "f1", name: "Plan.pdf", mimeType: "application/pdf" }] });
+
+    expect(res.status).toBe(422);
+    expect(res.body.reason).toBe("drive_not_connected");
+    expect((await readStatus(UID, "google"))?.pickedFiles).toBeUndefined();
   });
 
   it("availability reports picker configuration", async () => {

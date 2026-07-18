@@ -148,7 +148,7 @@ describe('connector registry (gateway-edge)', () => {
   it('google deep probe checks each granted capability and names them all', async () => {
     const calls = mockFetchJson([
       {
-        url: /www\.googleapis\.com\/calendar\/v3\/users\/me\/calendarList/,
+        url: /www\.googleapis\.com\/calendar\/v3\/calendars\/primary\/events/,
         auth: 'Bearer g-tok',
         body: { items: [] },
       },
@@ -171,7 +171,7 @@ describe('connector registry (gateway-edge)', () => {
         'https://www.googleapis.com/auth/userinfo.email',
       ]),
     ).resolves.toEqual({
-      probe: 'calendar.list+gmail.profile+drive.about',
+      probe: 'calendar.events+gmail.profile+drive.about',
       detail: 'calendar, gmail, drive',
     });
     expect(calls).toHaveLength(3);
