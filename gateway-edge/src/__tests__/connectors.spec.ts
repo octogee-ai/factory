@@ -49,10 +49,9 @@ describe('connector catalog (shared)', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("every 'fields' connector is platform clientSource (the /fields route stores with non-merge set)", () => {
+  it("every 'fields' connector declares capture fields (the /fields route stores with non-merge set)", () => {
     for (const m of CONNECTOR_CATALOG) {
       if (m.captureMethods.includes('fields')) {
-        expect(m.clientSource, m.id).toBe('platform');
         expect(m.captureFields?.length, m.id).toBeGreaterThan(0);
       }
     }
@@ -100,53 +99,120 @@ describe('connector registry (gateway-edge)', () => {
     });
   });
 
-  it('google: oauth-web only, agent-runtime, offline-access auth params, drive+gmail+calendar scopes', () => {
+  it('google: oauth-web only, agent-runtime, incremental offline-access auth params, capability-union scopes', () => {
     const def = getConnector('google');
     expect(def!.meta.captureMethods).toEqual(['oauth-web']);
     expect(def!.meta.consumption).toBe('agent-runtime');
-    expect(def!.meta.scopes).toContain('https://www.googleapis.com/auth/drive.readonly');
-    expect(def!.meta.scopes).toContain('https://www.googleapis.com/auth/gmail.readonly');
-    expect(def!.meta.scopes).toContain('https://www.googleapis.com/auth/userinfo.email');
+    expect(def!.meta.scopes).toEqual([
+      'https://www.googleapis.com/auth/calendar.events',
+      'https://www.googleapis.com/auth/gmail.modify',
+      'https://www.googleapis.com/auth/drive.file',
+      'https://www.googleapis.com/auth/userinfo.email',
+    ]);
     expect(def!.oauth).toMatchObject({
       authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
       tokenUrl: 'https://oauth2.googleapis.com/token',
+      revocationUrl: 'https://oauth2.googleapis.com/revoke',
       clientIdEnv: 'GOOGLE_CLIENT_ID',
       clientSecretEnv: 'GOOGLE_CLIENT_SECRET',
-      extraAuthParams: { access_type: 'offline', prompt: 'consent' },
+      extraAuthParams: {
+        access_type: 'offline',
+        prompt: 'consent',
+        include_granted_scopes: 'true',
+      },
     });
   });
 
-  it('google is BYO-client: per-user clientSource; github/microsoft stay platform', () => {
-    expect(getConnector('google')!.meta.clientSource).toBe('per-user');
-    expect(getConnector('github')!.meta.clientSource).toBe('platform');
-    expect(getConnector('microsoft')!.meta.clientSource).toBe('platform');
+  it('google resolves capability request scopes; github/microsoft have no capability map', () => {
+    const google = getConnector('google')!;
+    expect(google.capabilityRequestScopes!('gmail')).toEqual([
+      'https://www.googleapis.com/auth/gmail.modify',
+      'https://www.googleapis.com/auth/userinfo.email',
+    ]);
+    expect(google.capabilityRequestScopes!('drive-full')).toEqual([
+      'https://www.googleapis.com/auth/drive.file',
+      'https://www.googleapis.com/auth/drive.readonly',
+      'https://www.googleapis.com/auth/userinfo.email',
+    ]);
+    expect(google.capabilityRequestScopes!('nope')).toBeNull();
+    expect(getConnector('github')!.capabilityRequestScopes).toBeUndefined();
+    expect(getConnector('microsoft')!.capabilityRequestScopes).toBeUndefined();
   });
 
-  it('google has a Drive deep probe; github/microsoft have none', () => {
+  it('google has a capability deep probe; github/microsoft have none', () => {
     expect(typeof getConnector('google')!.deepProbe).toBe('function');
     expect(getConnector('github')!.deepProbe).toBeUndefined();
     expect(getConnector('microsoft')!.deepProbe).toBeUndefined();
   });
 
-  it('google deep probe hits Drive about and returns the storage user', async () => {
-    mockFetchJson([
+  it('google deep probe checks each granted capability and names them all', async () => {
+    const calls = mockFetchJson([
+      {
+        url: /www\.googleapis\.com\/calendar\/v3\/calendars\/primary\/events/,
+        auth: 'Bearer g-tok',
+        body: { items: [] },
+      },
+      {
+        url: /gmail\.googleapis\.com\/gmail\/v1\/users\/me\/profile/,
+        auth: 'Bearer g-tok',
+        body: { emailAddress: 'dan@x.com' },
+      },
       {
         url: /www\.googleapis\.com\/drive\/v3\/about/,
         auth: 'Bearer g-tok',
         body: { user: { emailAddress: 'dan@x.com' } },
       },
     ]);
-    await expect(getConnector('google')!.deepProbe!('g-tok')).resolves.toEqual({
-      probe: 'drive.about',
-      detail: 'dan@x.com',
+    await expect(
+      getConnector('google')!.deepProbe!('g-tok', [
+        'https://www.googleapis.com/auth/calendar.events',
+        'https://www.googleapis.com/auth/gmail.modify',
+        'https://www.googleapis.com/auth/drive.file',
+        'https://www.googleapis.com/auth/userinfo.email',
+      ]),
+    ).resolves.toEqual({
+      probe: 'calendar.events+gmail.profile+drive.about',
+      detail: 'calendar, gmail, drive',
     });
+    expect(calls).toHaveLength(3);
   });
 
-  it('google deep probe throws on a non-OK Drive response (scope missing/revoked)', async () => {
-    mockFetchJson([
-      { url: /www\.googleapis\.com\/drive\/v3\/about/, body: { error: 'forbidden' }, status: 403 },
+  it('google deep probe only probes the granted capability', async () => {
+    const calls = mockFetchJson([
+      {
+        url: /gmail\.googleapis\.com\/gmail\/v1\/users\/me\/profile/,
+        auth: 'Bearer g-tok',
+        body: { emailAddress: 'dan@x.com' },
+      },
     ]);
-    await expect(getConnector('google')!.deepProbe!('g-tok')).rejects.toThrow('403');
+    await expect(
+      getConnector('google')!.deepProbe!('g-tok', [
+        'https://www.googleapis.com/auth/gmail.modify',
+      ]),
+    ).resolves.toEqual({ probe: 'gmail.profile', detail: 'gmail' });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('google deep probe reports identity-only when no capability scope is granted', async () => {
+    const calls = mockFetchJson([]);
+    await expect(getConnector('google')!.deepProbe!('g-tok', [])).resolves.toEqual({
+      probe: 'identity',
+      detail: 'no capability scopes granted',
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('google deep probe throws on a non-OK capability response (scope missing/revoked)', async () => {
+    mockFetchJson([
+      {
+        url: /gmail\.googleapis\.com\/gmail\/v1\/users\/me\/profile/,
+        body: { error: 'forbidden' },
+        status: 403,
+      },
+    ]);
+    await expect(
+      getConnector('google')!.deepProbe!('g-tok', ['https://www.googleapis.com/auth/gmail.modify']),
+    ).rejects.toThrow('403');
   });
 
   it('microsoft: oauth-web only, mail+calendar scopes', () => {

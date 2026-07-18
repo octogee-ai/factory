@@ -67,6 +67,8 @@ setupEmulatorTest({
     GITHUB_CLIENT_SECRET: "gh-client-secret",
     GOOGLE_CLIENT_ID: "google-client-id",
     GOOGLE_CLIENT_SECRET: "google-client-secret",
+    GOOGLE_PICKER_API_KEY: "picker-key",
+    GOOGLE_PICKER_APP_ID: "123456789",
     MICROSOFT_CLIENT_ID: "ms-client-id",
     MICROSOFT_CLIENT_SECRET: "ms-client-secret",
   },
@@ -133,34 +135,38 @@ async function readStatus(uid: string, provider: string): Promise<Record<string,
   return snap.data();
 }
 
-async function mintAuthUrlState(connector = "github"): Promise<{ state: string; url: string }> {
+async function mintAuthUrlState(
+  connector = "github",
+  query = "",
+): Promise<{ state: string; url: string }> {
   const res = await request(createApp())
-    .get(`/api/connect/${connector}/auth-url?returnUrl=/w/me/files`)
+    .get(`/api/connect/${connector}/auth-url?returnUrl=/w/me/files${query}`)
     .set("Authorization", auth.bearer());
-  expect(res.status).toBe(200);
+  expect(res.status, res.text).toBe(200);
   const url = res.body.url as string;
   const state = new URL(url).searchParams.get("state")!;
   expect(state).toBeTruthy();
   return { state, url };
 }
 
-const DAN_CLIENT_ID = "dan-client.apps.googleusercontent.com";
-const DAN_CLIENT_SECRET = "GOCSPX-dan-plaintext-client-secret";
-
-async function configureGoogleClient(): Promise<void> {
-  const res = await request(createApp())
-    .post("/api/connect/google/client")
-    .set("Authorization", auth.bearer())
-    .send({ clientId: DAN_CLIENT_ID, clientSecret: DAN_CLIENT_SECRET });
-  expect(res.status, res.text).toBe(200);
+async function setGoogleStage(
+  stage: "off" | "allowlist" | "on",
+  uids: string[] = [],
+): Promise<void> {
+  await db
+    .collection("platformConfig")
+    .doc("connect")
+    .set({ googleStage: stage, googleAllowlistUids: uids });
 }
 
 describe("connect route module", () => {
-  it("exports the connector endpoints covered by this emulator suite", () => {
+  it("exports the connector endpoints covered by this emulator suite (the per-user client route is gone)", () => {
     expect(routeSignatures(connectRoutes)).toEqual([
       "POST /disconnect",
-      "POST /:connector/client",
+      "GET /availability",
       "POST /:connector/verify",
+      "GET /google/picker-token",
+      "POST /google/picked-files",
       "GET /:connector/auth-url",
       "GET /:connector/callback",
       "POST /:connector/pat",
@@ -200,7 +206,13 @@ describe("connect — auth-url", () => {
   });
 
   it("builds the provider authorize URL with a signed state and persists the single-use flow doc", async () => {
-    const { state, url } = await mintAuthUrlState();
+    const authUrlResponse = await request(createApp())
+      .get("/api/connect/github/auth-url?returnUrl=/w/me/files")
+      .set("Authorization", auth.bearer());
+    expect(authUrlResponse.status, authUrlResponse.text).toBe(200);
+    expect(authUrlResponse.headers["cache-control"]).toContain("no-store");
+    const url = authUrlResponse.body.url as string;
+    const state = new URL(url).searchParams.get("state")!;
 
     expect(url).toContain("https://github.com/login/oauth/authorize?");
     const parsed = new URL(url);
@@ -276,8 +288,8 @@ describe("connect — callback state verification (the security regression)", ()
 
   it("rejects a state minted for a different connector", async () => {
     stubProviderFetch(githubHappyStubs);
-    await configureGoogleClient();
-    const { state } = await mintAuthUrlState("google");
+    await setGoogleStage("on");
+    const { state } = await mintAuthUrlState("google", "&capability=calendar");
     const res = await request(createApp()).get(
       `/api/connect/github/callback?code=c&state=${encodeURIComponent(state)}`,
     );
@@ -294,14 +306,14 @@ describe("connect — callback state verification (the security regression)", ()
     );
     expect(res.status).toBe(302);
     expect(res.headers.location).toContain("github_connected=true");
-    expect(res.headers.location).toContain("github_account=chris-e");
+    expect(res.headers.location).not.toContain("chris-e");
     expect(res.headers.location).toContain("/w/me/files");
 
     const secret = await readSecret(UID, "github");
     expect(JSON.stringify(secret)).not.toContain(PLAINTEXT_GH_TOKEN);
     const tokens = (secret as Record<string, Record<string, unknown>>).tokens;
     expect(tokens.encryptedAccessToken).toBe(encOf(PLAINTEXT_GH_TOKEN));
-    expect(tokens.encryptedRefreshToken).toBeNull();
+    expect(tokens.encryptedRefreshToken).toBeUndefined();
 
     const status = await readStatus(UID, "github");
     expect(status).toMatchObject({
@@ -644,77 +656,286 @@ describe("connect — disconnect", () => {
   });
 });
 
-describe("connect — migrated google + microsoft (credentials at rest)", () => {
-  it("google 422s client_not_configured only when BOTH the user client and the platform env are absent", async () => {
+describe("connect — google platform capability flow", () => {
+  const CAL = "https://www.googleapis.com/auth/calendar.events";
+  const GMAIL = "https://www.googleapis.com/auth/gmail.modify";
+  const DRIVE = "https://www.googleapis.com/auth/drive.file";
+  const EMAIL = "https://www.googleapis.com/auth/userinfo.email";
+
+  function googleTokenStub(grantedScope: string): ProviderStub {
+    return {
+      url: /oauth2\.googleapis\.com\/token/,
+      respond: () => ({
+        access_token: PLAINTEXT_GOOGLE_ACCESS,
+        refresh_token: PLAINTEXT_GOOGLE_REFRESH,
+        expires_in: 3600,
+        token_type: "Bearer",
+        scope: grantedScope,
+      }),
+    };
+  }
+  const googleUserinfoStub: ProviderStub = {
+    url: /googleapis\.com\/oauth2\/v2\/userinfo/,
+    respond: () => ({ email: "g@x.com" }),
+  };
+
+  async function connectGoogle(capability: string, grantedScope: string): Promise<void> {
+    stubProviderFetch([googleTokenStub(grantedScope), googleUserinfoStub]);
+    const { state } = await mintAuthUrlState("google", `&capability=${capability}`);
+    const res = await request(createApp()).get(
+      `/api/connect/google/callback?code=c&state=${encodeURIComponent(state)}`,
+    );
+    expect(res.headers.location).toContain("google_connected=true");
+    vi.restoreAllMocks();
+    _setKmsClientForTesting(deterministicMockKms());
+  }
+
+  it("enforces the connect-stage dial server-side: dark by default, allowlist admits listed uids only", async () => {
+    const dark = await request(createApp())
+      .get("/api/connect/google/auth-url?capability=calendar")
+      .set("Authorization", auth.bearer());
+    expect(dark.status).toBe(403);
+    expect(dark.body.error).toBe("pending_verification");
+
+    await setGoogleStage("off", [UID]);
+    const off = await request(createApp())
+      .get("/api/connect/google/auth-url?capability=calendar")
+      .set("Authorization", auth.bearer());
+    expect(off.status).toBe(403);
+
+    await setGoogleStage("allowlist", [UID]);
+    const allowed = await request(createApp())
+      .get("/api/connect/google/auth-url?capability=calendar")
+      .set("Authorization", auth.bearer());
+    expect(allowed.status, allowed.text).toBe(200);
+
+    const denied = await request(createApp())
+      .get("/api/connect/google/auth-url?capability=calendar")
+      .set("Authorization", otherAuth.bearer());
+    expect(denied.status).toBe(403);
+    expect(denied.body.error).toBe("pending_verification");
+  });
+
+  it("the dial gates only google — github mints regardless of the connect doc", async () => {
+    await setGoogleStage("off");
+    await mintAuthUrlState("github");
+  });
+
+  it("requires a known capability", async () => {
+    await setGoogleStage("on");
+    const missing = await request(createApp())
+      .get("/api/connect/google/auth-url")
+      .set("Authorization", auth.bearer());
+    expect(missing.status).toBe(400);
+    const unknown = await request(createApp())
+      .get("/api/connect/google/auth-url?capability=voice")
+      .set("Authorization", auth.bearer());
+    expect(unknown.status).toBe(400);
+  });
+
+  it("503s when the platform client env is unset or the literal placeholder", async () => {
+    await setGoogleStage("on");
     const savedId = process.env.GOOGLE_CLIENT_ID;
     const savedSecret = process.env.GOOGLE_CLIENT_SECRET;
-    delete process.env.GOOGLE_CLIENT_ID;
-    delete process.env.GOOGLE_CLIENT_SECRET;
-    const res = await request(createApp())
-      .get("/api/connect/google/auth-url")
-      .set("Authorization", auth.bearer());
-    process.env.GOOGLE_CLIENT_ID = savedId;
-    process.env.GOOGLE_CLIENT_SECRET = savedSecret;
-    expect(res.status).toBe(422);
-    expect(res.body.reason).toBe("client_not_configured");
+    try {
+      delete process.env.GOOGLE_CLIENT_ID;
+      delete process.env.GOOGLE_CLIENT_SECRET;
+      const unset = await request(createApp())
+        .get("/api/connect/google/auth-url?capability=calendar")
+        .set("Authorization", auth.bearer());
+      expect(unset.status).toBe(503);
+
+      process.env.GOOGLE_CLIENT_ID = "placeholder";
+      process.env.GOOGLE_CLIENT_SECRET = "placeholder";
+      const placeholder = await request(createApp())
+        .get("/api/connect/google/auth-url?capability=calendar")
+        .set("Authorization", auth.bearer());
+      expect(placeholder.status).toBe(503);
+    } finally {
+      process.env.GOOGLE_CLIENT_ID = savedId;
+      process.env.GOOGLE_CLIENT_SECRET = savedSecret;
+    }
   });
 
-  it("zero-setup mode: with no user client, google rides the platform env client with the TRIMMED scope set", async () => {
-    const res = await request(createApp())
-      .get("/api/connect/google/auth-url")
-      .set("Authorization", auth.bearer());
-    expect(res.status, res.text).toBe(200);
-    const url = new URL(res.body.url as string);
-    expect(url.searchParams.get("client_id")).toBe("google-client-id");
-    const scope = url.searchParams.get("scope")!;
-    expect(scope).toContain("drive.readonly");
-    expect(scope).toContain("calendar.readonly");
-    expect(scope).not.toContain("gmail");
+  it("mints a capability-scoped incremental-consent authorize URL on the platform client", async () => {
+    await setGoogleStage("on");
+    const { url } = await mintAuthUrlState("google", "&capability=gmail");
+    const parsed = new URL(url);
+    expect(parsed.origin + parsed.pathname).toBe("https://accounts.google.com/o/oauth2/v2/auth");
+    expect(parsed.searchParams.get("client_id")).toBe("google-client-id");
+    expect(parsed.searchParams.get("scope")).toBe(`${GMAIL} ${EMAIL}`);
+    expect(parsed.searchParams.get("include_granted_scopes")).toBe("true");
+    expect(parsed.searchParams.get("access_type")).toBe("offline");
+    expect(parsed.searchParams.get("prompt")).toBe("consent");
   });
 
-  it("a saved user client wins over the platform env and grants the FULL scope bundle", async () => {
-    await configureGoogleClient();
-    const res = await request(createApp())
-      .get("/api/connect/google/auth-url")
-      .set("Authorization", auth.bearer());
-    expect(res.status).toBe(200);
-    const url = new URL(res.body.url as string);
-    expect(url.searchParams.get("client_id")).toBe(DAN_CLIENT_ID);
-    expect(url.searchParams.get("scope")).toContain("gmail.readonly");
+  it("scopes each capability card to its own bundle", async () => {
+    await setGoogleStage("on");
+    const calendar = await mintAuthUrlState("google", "&capability=calendar");
+    expect(new URL(calendar.url).searchParams.get("scope")).toBe(`${CAL} ${EMAIL}`);
+    const drive = await mintAuthUrlState("google", "&capability=drive");
+    expect(new URL(drive.url).searchParams.get("scope")).toBe(`${DRIVE} ${EMAIL}`);
   });
 
-  it("client save requires auth, rejects platform connectors and partial bodies, stores ciphertext", async () => {
-    expect(
-      (await request(createApp()).post("/api/connect/google/client").send({ clientId: "x", clientSecret: "y" })).status,
-    ).toBe(401);
-    expect(
-      (
-        await request(createApp())
-          .post("/api/connect/github/client")
-          .set("Authorization", auth.bearer())
-          .send({ clientId: "x", clientSecret: "y" })
-      ).status,
-    ).toBe(404);
-    expect(
-      (
-        await request(createApp())
-          .post("/api/connect/google/client")
-          .set("Authorization", auth.bearer())
-          .send({ clientId: "x" })
-      ).status,
-    ).toBe(400);
+  it("callback stores what Google actually granted — the accumulated scope set from the token response", async () => {
+    await setGoogleStage("on");
+    stubProviderFetch([googleTokenStub(`${CAL} ${GMAIL} ${EMAIL}`), googleUserinfoStub]);
+    const { state } = await mintAuthUrlState("google", "&capability=gmail");
+    const res = await request(createApp()).get(
+      `/api/connect/google/callback?code=c&state=${encodeURIComponent(state)}`,
+    );
+    expect(res.headers.location).toContain("google_connected=true");
 
-    await configureGoogleClient();
     const secret = await readSecret(UID, "google");
     const body = JSON.stringify(secret);
-    expect(body).not.toContain(DAN_CLIENT_SECRET);
-    const client = (secret as Record<string, Record<string, unknown>>).client;
-    expect(client.encryptedClientId).toBe(encOf(DAN_CLIENT_ID));
-    expect(client.encryptedClientSecret).toBe(encOf(DAN_CLIENT_SECRET));
-    expect((await readStatus(UID, "google"))?.clientConfigured).toBe(true);
+    expect(body).not.toContain(PLAINTEXT_GOOGLE_ACCESS);
+    expect(body).not.toContain(PLAINTEXT_GOOGLE_REFRESH);
+    const tokens = (secret as Record<string, Record<string, unknown>>).tokens;
+    expect(tokens.encryptedAccessToken).toBe(encOf(PLAINTEXT_GOOGLE_ACCESS));
+    expect(tokens.encryptedRefreshToken).toBe(encOf(PLAINTEXT_GOOGLE_REFRESH));
+    expect(tokens.clientSource).toBeUndefined();
+
+    const status = await readStatus(UID, "google");
+    expect(status?.scopes).toEqual([CAL, GMAIL, EMAIL]);
+    expect(status?.accountLabel).toBe("g@x.com");
   });
 
-  it("google callback exchanges with the USER's client and stores encrypted tokens beside the preserved client", async () => {
+  it("incremental consent preserves the durable refresh token and Drive picked-file registry", async () => {
+    await setGoogleStage("on");
+    await connectGoogle("drive", `${DRIVE} ${EMAIL}`);
+    await db
+      .collection("users")
+      .doc(UID)
+      .collection("integrations")
+      .doc("google")
+      .set(
+        { pickedFiles: [{ id: "f1", name: "Plan.pdf", mimeType: "application/pdf" }] },
+        { merge: true },
+      );
+
+    stubProviderFetch([
+      {
+        url: /oauth2\.googleapis\.com\/token/,
+        respond: () => ({
+          access_token: "new-google-access",
+          expires_in: 3600,
+          token_type: "Bearer",
+          scope: `${DRIVE} ${GMAIL} ${EMAIL}`,
+        }),
+      },
+      googleUserinfoStub,
+    ]);
+    const { state } = await mintAuthUrlState("google", "&capability=gmail");
+    const res = await request(createApp()).get(
+      `/api/connect/google/callback?code=c&state=${encodeURIComponent(state)}`,
+    );
+    expect(res.headers.location).toContain("google_connected=true");
+
+    const tokens = (await readSecret(UID, "google"))?.tokens as Record<string, unknown>;
+    expect(tokens.encryptedAccessToken).toBe(encOf("new-google-access"));
+    expect(tokens.encryptedRefreshToken).toBe(encOf(PLAINTEXT_GOOGLE_REFRESH));
+    expect((await readStatus(UID, "google"))?.pickedFiles).toEqual([
+      { id: "f1", name: "Plan.pdf", mimeType: "application/pdf" },
+    ]);
+  });
+
+  it("rejects incremental consent from a different Google account without replacing the grant", async () => {
+    await setGoogleStage("on");
+    await connectGoogle("drive", `${DRIVE} ${EMAIL}`);
+    await db
+      .collection("users")
+      .doc(UID)
+      .collection("integrations")
+      .doc("google")
+      .set(
+        { pickedFiles: [{ id: "f1", name: "Plan.pdf", mimeType: "application/pdf" }] },
+        { merge: true },
+      );
+
+    stubProviderFetch([
+      {
+        url: /oauth2\.googleapis\.com\/token/,
+        respond: () => ({
+          access_token: "other-account-access",
+          refresh_token: "other-account-refresh",
+          expires_in: 3600,
+          token_type: "Bearer",
+          scope: `${DRIVE} ${GMAIL} ${EMAIL}`,
+        }),
+      },
+      {
+        url: /googleapis\.com\/oauth2\/v2\/userinfo/,
+        respond: () => ({ email: "other@x.com" }),
+      },
+    ]);
+    const { state } = await mintAuthUrlState("google", "&capability=gmail");
+    const res = await request(createApp()).get(
+      `/api/connect/google/callback?code=c&state=${encodeURIComponent(state)}`,
+    );
+
+    expect(res.headers.location).toContain("connect_error=google_account_mismatch");
+    const tokens = (await readSecret(UID, "google"))?.tokens as Record<string, unknown>;
+    expect(tokens.encryptedAccessToken).toBe(encOf(PLAINTEXT_GOOGLE_ACCESS));
+    expect(tokens.encryptedRefreshToken).toBe(encOf(PLAINTEXT_GOOGLE_REFRESH));
+    expect(await readStatus(UID, "google")).toMatchObject({
+      status: "connected",
+      accountLabel: "g@x.com",
+      scopes: [DRIVE, EMAIL],
+      pickedFiles: [{ id: "f1", name: "Plan.pdf", mimeType: "application/pdf" }],
+    });
+  });
+
+  it("granular consent: an unticked data scope is absent from the stored grant", async () => {
+    await setGoogleStage("on");
+    await connectGoogle("gmail", EMAIL);
+    const status = await readStatus(UID, "google");
+    expect(status?.scopes).toEqual([EMAIL]);
+  });
+
+  it("disconnect revokes both stored tokens at Google, then deletes the whole secret", async () => {
+    await setGoogleStage("on");
+    await connectGoogle("calendar", `${CAL} ${EMAIL}`);
+
+    const { calls } = stubProviderFetch([
+      { url: /oauth2\.googleapis\.com\/revoke/, respond: () => ({}) },
+    ]);
+    const res = await request(createApp())
+      .post("/api/connect/disconnect")
+      .set("Authorization", auth.bearer())
+      .send({ connector: "google" });
+    expect(res.status, res.text).toBe(200);
+    expect(calls.map((c) => String(c.init?.body))).toEqual([
+      new URLSearchParams({ token: PLAINTEXT_GOOGLE_REFRESH }).toString(),
+      new URLSearchParams({ token: PLAINTEXT_GOOGLE_ACCESS }).toString(),
+    ]);
+    expect(await readSecret(UID, "google")).toBeUndefined();
+    expect((await readStatus(UID, "google"))?.status).toBe("disconnected");
+  });
+
+  it("falls back to the REQUESTED capability bundle when the token response omits scope", async () => {
+    await setGoogleStage("on");
+    stubProviderFetch([
+      {
+        url: /oauth2\.googleapis\.com\/token/,
+        respond: () => ({
+          access_token: PLAINTEXT_GOOGLE_ACCESS,
+          refresh_token: PLAINTEXT_GOOGLE_REFRESH,
+          expires_in: 3600,
+          token_type: "Bearer",
+        }),
+      },
+      googleUserinfoStub,
+    ]);
+    const { state } = await mintAuthUrlState("google", "&capability=calendar");
+    await request(createApp()).get(
+      `/api/connect/google/callback?code=c&state=${encodeURIComponent(state)}`,
+    );
+    const status = await readStatus(UID, "google");
+    expect(status?.scopes).toEqual([CAL, EMAIL]);
+  });
+
+  it("PKCE: google mints an S256 challenge and the exchange presents the matching verifier; github does not", async () => {
+    await setGoogleStage("on");
     let exchangeBody = "";
     stubProviderFetch([
       {
@@ -726,96 +947,116 @@ describe("connect — migrated google + microsoft (credentials at rest)", () => 
             refresh_token: PLAINTEXT_GOOGLE_REFRESH,
             expires_in: 3600,
             token_type: "Bearer",
+            scope: `${CAL} ${EMAIL}`,
           };
         },
       },
-      { url: /googleapis\.com\/oauth2\/v2\/userinfo/, respond: () => ({ email: "g@x.com" }) },
+      googleUserinfoStub,
     ]);
-    await configureGoogleClient();
-    const { state, url } = await mintAuthUrlState("google");
-    expect(new URL(url).searchParams.get("client_id")).toBe(DAN_CLIENT_ID);
+    const { state, url } = await mintAuthUrlState("google", "&capability=calendar");
+    const minted = new URL(url);
+    const challenge = minted.searchParams.get("code_challenge")!;
+    expect(challenge).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(minted.searchParams.get("code_challenge_method")).toBe("S256");
 
-    const res = await request(createApp()).get(
-      `/api/connect/google/callback?code=c&state=${encodeURIComponent(state)}`,
-    );
-    expect(res.headers.location).toContain("google_connected=true");
-    expect(exchangeBody).toContain(`client_id=${encodeURIComponent(DAN_CLIENT_ID)}`);
-    expect(exchangeBody).toContain(`client_secret=${encodeURIComponent(DAN_CLIENT_SECRET)}`);
-
-    const secret = await readSecret(UID, "google");
-    const body = JSON.stringify(secret);
-    expect(body).not.toContain(PLAINTEXT_GOOGLE_ACCESS);
-    expect(body).not.toContain(PLAINTEXT_GOOGLE_REFRESH);
-    expect(body).not.toContain(DAN_CLIENT_SECRET);
-    const tokens = (secret as Record<string, Record<string, unknown>>).tokens;
-    expect(tokens.encryptedAccessToken).toBe(encOf(PLAINTEXT_GOOGLE_ACCESS));
-    expect(tokens.encryptedRefreshToken).toBe(encOf(PLAINTEXT_GOOGLE_REFRESH));
-    expect(typeof tokens.expiresAt).toBe("number");
-    expect(tokens.clientSource).toBe("per-user");
-    const client = (secret as Record<string, Record<string, unknown>>).client;
-    expect(client.encryptedClientId).toBe(encOf(DAN_CLIENT_ID));
-    expect((await readStatus(UID, "google"))?.accountLabel).toBe("g@x.com");
-  });
-
-  it("platform-captured tokens record clientSource=platform so refresh reuses the minting client", async () => {
-    stubProviderFetch([
-      {
-        url: /oauth2\.googleapis\.com\/token/,
-        respond: () => ({
-          access_token: PLAINTEXT_GOOGLE_ACCESS,
-          refresh_token: PLAINTEXT_GOOGLE_REFRESH,
-          expires_in: 3600,
-          token_type: "Bearer",
-        }),
-      },
-      { url: /googleapis\.com\/oauth2\/v2\/userinfo/, respond: () => ({ email: "g@x.com" }) },
-    ]);
-    const { state } = await mintAuthUrlState("google");
     await request(createApp()).get(
       `/api/connect/google/callback?code=c&state=${encodeURIComponent(state)}`,
     );
+    const verifier = new URLSearchParams(exchangeBody).get("code_verifier")!;
+    expect(verifier).toBeTruthy();
+    const { createHash } = await import("crypto");
+    expect(createHash("sha256").update(verifier).digest("base64url")).toBe(challenge);
 
-    const tokens = (await readSecret(UID, "google"))?.tokens as Record<string, unknown>;
-    expect(tokens.clientSource).toBe("platform");
-    const status = await readStatus(UID, "google");
-    expect((status?.scopes as string[]).join(" ")).not.toContain("gmail");
+    const gh = await mintAuthUrlState("github");
+    expect(new URL(gh.url).searchParams.get("code_challenge")).toBeNull();
   });
 
-  it("disconnect for a BYO-client connector drops the tokens but keeps the client registration", async () => {
-    stubProviderFetch([
-      {
-        url: /oauth2\.googleapis\.com\/token/,
-        respond: () => ({
-          access_token: PLAINTEXT_GOOGLE_ACCESS,
-          refresh_token: PLAINTEXT_GOOGLE_REFRESH,
-          expires_in: 3600,
-          token_type: "Bearer",
-        }),
-      },
-      { url: /googleapis\.com\/oauth2\/v2\/userinfo/, respond: () => ({ email: "g@x.com" }) },
-    ]);
-    await configureGoogleClient();
-    const { state } = await mintAuthUrlState("google");
-    await request(createApp()).get(
-      `/api/connect/google/callback?code=c&state=${encodeURIComponent(state)}`,
-    );
+  it("disconnect still deletes the local grant when the provider revoke fails", async () => {
+    await setGoogleStage("on");
+    await connectGoogle("calendar", `${CAL} ${EMAIL}`);
+
+    const passthrough: typeof fetch = globalThis.fetch.bind(globalThis);
+    vi.spyOn(globalThis, "fetch").mockImplementation((async (
+      url: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      const u = String(url);
+      if (u.includes("127.0.0.1") || u.includes("localhost")) return passthrough(u, init);
+      return new Response("revoke exploded", { status: 500 });
+    }) as typeof fetch);
 
     const res = await request(createApp())
       .post("/api/connect/disconnect")
       .set("Authorization", auth.bearer())
       .send({ connector: "google" });
     expect(res.status).toBe(200);
+    expect(await readSecret(UID, "google")).toBeUndefined();
+    expect((await readStatus(UID, "google"))?.status).toBe("disconnected");
+  });
+});
 
-    const secret = await readSecret(UID, "google");
-    expect((secret as Record<string, unknown>).tokens).toBeUndefined();
-    expect(
-      (secret as Record<string, Record<string, unknown>>).client.encryptedClientId,
-    ).toBe(encOf(DAN_CLIENT_ID));
-    const status = await readStatus(UID, "google");
-    expect(status?.status).toBe("disconnected");
-    expect(status?.clientConfigured).toBe(true);
+describe("connect — availability", () => {
+  it("requires auth", async () => {
+    expect((await request(createApp()).get("/api/connect/availability")).status).toBe(401);
   });
 
+  it("reports configured oauth-web providers and the caller-effective google availability", async () => {
+    await setGoogleStage("allowlist", [UID]);
+    const mine = await request(createApp())
+      .get("/api/connect/availability")
+      .set("Authorization", auth.bearer());
+    expect(mine.status, mine.text).toBe(200);
+    expect(mine.body.providers.github).toEqual({ configured: true, available: true });
+    expect(mine.body.providers.microsoft).toEqual({ configured: true, available: true });
+    expect(mine.body.providers.google).toEqual({
+      configured: true,
+      stage: "allowlist",
+      available: true,
+      pickerConfigured: true,
+    });
+
+    const theirs = await request(createApp())
+      .get("/api/connect/availability")
+      .set("Authorization", otherAuth.bearer());
+    expect(theirs.body.providers.google).toEqual({
+      configured: true,
+      stage: "allowlist",
+      available: false,
+      pickerConfigured: true,
+    });
+  });
+
+  it("is dark by default, and placeholder creds read as unconfigured", async () => {
+    const dark = await request(createApp())
+      .get("/api/connect/availability")
+      .set("Authorization", auth.bearer());
+    expect(dark.body.providers.google).toEqual({
+      configured: true,
+      stage: "off",
+      available: false,
+      pickerConfigured: true,
+    });
+
+    const savedId = process.env.GOOGLE_CLIENT_ID;
+    try {
+      process.env.GOOGLE_CLIENT_ID = "placeholder";
+      await setGoogleStage("on");
+      const placeholder = await request(createApp())
+        .get("/api/connect/availability")
+        .set("Authorization", auth.bearer());
+      expect(placeholder.body.providers.google).toEqual({
+        configured: false,
+        stage: "on",
+        available: false,
+        pickerConfigured: true,
+      });
+    } finally {
+      process.env.GOOGLE_CLIENT_ID = savedId;
+    }
+  });
+});
+
+describe("connect — microsoft + verify", () => {
   it("microsoft callback stores encrypted tokens via the signed-state framework", async () => {
     stubProviderFetch([
       {
@@ -865,7 +1106,12 @@ describe("connect — migrated google + microsoft (credentials at rest)", () => 
     expect((await readStatus(UID, "github"))?.verifiedAt).toBeTruthy();
   });
 
-  it("verify on google: refreshes an expired token with the user's client, deep-probes Drive, rotates at rest", async () => {
+  it("verify on google: refreshes with the platform client, probes every granted capability, rotates at rest", async () => {
+    await setGoogleStage("on");
+    const CAL = "https://www.googleapis.com/auth/calendar.events";
+    const GMAIL = "https://www.googleapis.com/auth/gmail.modify";
+    const DRIVE = "https://www.googleapis.com/auth/drive.file";
+    const EMAIL = "https://www.googleapis.com/auth/userinfo.email";
     const FRESH_ACCESS = "ya29.FRESH-after-refresh";
     stubProviderFetch([
       {
@@ -873,7 +1119,7 @@ describe("connect — migrated google + microsoft (credentials at rest)", () => 
         respond: (init) => {
           const body = String(init?.body);
           if (body.includes("grant_type=refresh_token")) {
-            expect(body).toContain(`client_id=${encodeURIComponent(DAN_CLIENT_ID)}`);
+            expect(body).toContain("client_id=google-client-id");
             return { access_token: FRESH_ACCESS, expires_in: 3600, token_type: "Bearer" };
           }
           return {
@@ -881,17 +1127,25 @@ describe("connect — migrated google + microsoft (credentials at rest)", () => 
             refresh_token: PLAINTEXT_GOOGLE_REFRESH,
             expires_in: 3600,
             token_type: "Bearer",
+            scope: `${CAL} ${GMAIL} ${DRIVE} ${EMAIL}`,
           };
         },
       },
       { url: /googleapis\.com\/oauth2\/v2\/userinfo/, respond: () => ({ email: "g@x.com" }) },
       {
+        url: /www\.googleapis\.com\/calendar\/v3\/calendars\/primary\/events/,
+        respond: () => ({ items: [] }),
+      },
+      {
+        url: /gmail\.googleapis\.com\/gmail\/v1\/users\/me\/profile/,
+        respond: () => ({ emailAddress: "g@x.com" }),
+      },
+      {
         url: /www\.googleapis\.com\/drive\/v3\/about/,
         respond: () => ({ user: { emailAddress: "g@x.com" } }),
       },
     ]);
-    await configureGoogleClient();
-    const { state } = await mintAuthUrlState("google");
+    const { state } = await mintAuthUrlState("google", "&capability=drive");
     await request(createApp()).get(
       `/api/connect/google/callback?code=c&state=${encodeURIComponent(state)}`,
     );
@@ -910,7 +1164,7 @@ describe("connect — migrated google + microsoft (credentials at rest)", () => 
     expect(res.body).toMatchObject({
       ok: true,
       accountLabel: "g@x.com",
-      probe: { probe: "drive.about", detail: "g@x.com" },
+      probe: { probe: "calendar.events+gmail.profile+drive.about", detail: "calendar, gmail, drive" },
     });
 
     const tokens = (await readSecret(UID, "google"))?.tokens as Record<string, unknown>;
@@ -918,6 +1172,7 @@ describe("connect — migrated google + microsoft (credentials at rest)", () => 
   });
 
   it("verify reports reauth_required (409) and flags the status doc when the refresh is rejected", async () => {
+    await setGoogleStage("on");
     stubProviderFetch([
       {
         url: /oauth2\.googleapis\.com\/token/,
@@ -929,12 +1184,12 @@ describe("connect — migrated google + microsoft (credentials at rest)", () => 
                 refresh_token: PLAINTEXT_GOOGLE_REFRESH,
                 expires_in: 3600,
                 token_type: "Bearer",
+                scope: "https://www.googleapis.com/auth/userinfo.email",
               },
       },
       { url: /googleapis\.com\/oauth2\/v2\/userinfo/, respond: () => ({ email: "g@x.com" }) },
     ]);
-    await configureGoogleClient();
-    const { state } = await mintAuthUrlState("google");
+    const { state } = await mintAuthUrlState("google", "&capability=calendar");
     await request(createApp()).get(
       `/api/connect/google/callback?code=c&state=${encodeURIComponent(state)}`,
     );
@@ -964,6 +1219,177 @@ describe("connect — migrated google + microsoft (credentials at rest)", () => 
     ]) {
       const res = await request(createApp()).get(path);
       expect(res.status, path).toBe(404);
+    }
+  });
+});
+
+describe("connect — google drive picker + full-read escalation", () => {
+  const DRIVE = "https://www.googleapis.com/auth/drive.file";
+  const DRIVE_FULL = "https://www.googleapis.com/auth/drive.readonly";
+  const EMAIL = "https://www.googleapis.com/auth/userinfo.email";
+  const CAL = "https://www.googleapis.com/auth/calendar.events";
+
+  async function grantGoogle(capability: string, grantedScope: string): Promise<void> {
+    stubProviderFetch([
+      {
+        url: /oauth2\.googleapis\.com\/token/,
+        respond: () => ({
+          access_token: PLAINTEXT_GOOGLE_ACCESS,
+          refresh_token: PLAINTEXT_GOOGLE_REFRESH,
+          expires_in: 3600,
+          token_type: "Bearer",
+          scope: grantedScope,
+        }),
+      },
+      { url: /googleapis\.com\/oauth2\/v2\/userinfo/, respond: () => ({ email: "g@x.com" }) },
+    ]);
+    const { state } = await mintAuthUrlState("google", `&capability=${capability}`);
+    const res = await request(createApp()).get(
+      `/api/connect/google/callback?code=c&state=${encodeURIComponent(state)}`,
+    );
+    expect(res.headers.location).toContain("google_connected=true");
+    vi.restoreAllMocks();
+    _setKmsClientForTesting(deterministicMockKms());
+  }
+
+  it("drive-full mints an escalation consent that keeps drive.file and adds drive.readonly", async () => {
+    await setGoogleStage("on");
+    const { url } = await mintAuthUrlState("google", "&capability=drive-full");
+    expect(new URL(url).searchParams.get("scope")).toBe(`${DRIVE} ${DRIVE_FULL} ${EMAIL}`);
+  });
+
+  it("a drive-full grant records drive.readonly in the granted scopes", async () => {
+    await setGoogleStage("on");
+    await grantGoogle("drive-full", `${DRIVE} ${DRIVE_FULL} ${EMAIL}`);
+    const status = await readStatus(UID, "google");
+    expect(status?.scopes).toContain(DRIVE_FULL);
+  });
+
+  it("picker-token requires auth, drive grant, and picker env", async () => {
+    expect((await request(createApp()).get("/api/connect/google/picker-token")).status).toBe(401);
+
+    await setGoogleStage("on");
+    const ungranted = await request(createApp())
+      .get("/api/connect/google/picker-token")
+      .set("Authorization", auth.bearer());
+    expect(ungranted.status).toBe(422);
+    expect(ungranted.body.reason).toBe("drive_not_connected");
+
+    await grantGoogle("calendar", `${CAL} ${EMAIL}`);
+    const calendarOnly = await request(createApp())
+      .get("/api/connect/google/picker-token")
+      .set("Authorization", auth.bearer());
+    expect(calendarOnly.status).toBe(422);
+    expect(calendarOnly.body.reason).toBe("drive_not_connected");
+  });
+
+  it("picker-token 503s when the picker env is unset", async () => {
+    await setGoogleStage("on");
+    await grantGoogle("drive", `${DRIVE} ${EMAIL}`);
+    const saved = process.env.GOOGLE_PICKER_API_KEY;
+    try {
+      delete process.env.GOOGLE_PICKER_API_KEY;
+      const res = await request(createApp())
+        .get("/api/connect/google/picker-token")
+        .set("Authorization", auth.bearer());
+      expect(res.status).toBe(503);
+    } finally {
+      process.env.GOOGLE_PICKER_API_KEY = saved;
+    }
+  });
+
+  it("picker-token returns the Builder's fresh access token with the picker client config", async () => {
+    await setGoogleStage("on");
+    await grantGoogle("drive", `${DRIVE} ${EMAIL}`);
+    const res = await request(createApp())
+      .get("/api/connect/google/picker-token")
+      .set("Authorization", auth.bearer());
+    expect(res.status, res.text).toBe(200);
+    expect(res.body).toEqual({
+      accessToken: PLAINTEXT_GOOGLE_ACCESS,
+      apiKey: "picker-key",
+      appId: "123456789",
+    });
+    expect(res.headers["cache-control"]).toContain("no-store");
+  });
+
+  it("picked-files add/remove merges by id and round-trips through the integration doc", async () => {
+    await setGoogleStage("on");
+    await grantGoogle("drive", `${DRIVE} ${EMAIL}`);
+
+    const add = await request(createApp())
+      .post("/api/connect/google/picked-files")
+      .set("Authorization", auth.bearer())
+      .send({
+        add: [
+          { id: "f1", name: "Plan.pdf", mimeType: "application/pdf" },
+          { id: "f2", name: "Notes.md", mimeType: "text/markdown" },
+        ],
+      });
+    expect(add.status, add.text).toBe(200);
+
+    const again = await request(createApp())
+      .post("/api/connect/google/picked-files")
+      .set("Authorization", auth.bearer())
+      .send({
+        add: [{ id: "f1", name: "Plan v2.pdf", mimeType: "application/pdf" }],
+        remove: ["f2"],
+      });
+    expect(again.status).toBe(200);
+    expect(again.body.pickedFiles).toEqual([
+      { id: "f1", name: "Plan v2.pdf", mimeType: "application/pdf" },
+    ]);
+    expect((await readStatus(UID, "google"))?.pickedFiles).toEqual([
+      { id: "f1", name: "Plan v2.pdf", mimeType: "application/pdf" },
+    ]);
+  });
+
+  it("picked-files rejects empty payloads and unconnected users", async () => {
+    await setGoogleStage("on");
+    const empty = await request(createApp())
+      .post("/api/connect/google/picked-files")
+      .set("Authorization", auth.bearer())
+      .send({ add: [{ id: "", name: "x", mimeType: "t" }] });
+    expect(empty.status).toBe(400);
+
+    const unconnected = await request(createApp())
+      .post("/api/connect/google/picked-files")
+      .set("Authorization", auth.bearer())
+      .send({ add: [{ id: "f1", name: "Plan.pdf", mimeType: "application/pdf" }] });
+    expect(unconnected.status).toBe(422);
+    expect(unconnected.body.reason).toBe("not_connected");
+  });
+
+  it("picked-files requires an active Drive grant, not merely a Google integration doc", async () => {
+    await setGoogleStage("on");
+    await grantGoogle("calendar", `${CAL} ${EMAIL}`);
+
+    const res = await request(createApp())
+      .post("/api/connect/google/picked-files")
+      .set("Authorization", auth.bearer())
+      .send({ add: [{ id: "f1", name: "Plan.pdf", mimeType: "application/pdf" }] });
+
+    expect(res.status).toBe(422);
+    expect(res.body.reason).toBe("drive_not_connected");
+    expect((await readStatus(UID, "google"))?.pickedFiles).toBeUndefined();
+  });
+
+  it("availability reports picker configuration", async () => {
+    await setGoogleStage("on");
+    const res = await request(createApp())
+      .get("/api/connect/availability")
+      .set("Authorization", auth.bearer());
+    expect(res.body.providers.google.pickerConfigured).toBe(true);
+
+    const saved = process.env.GOOGLE_PICKER_APP_ID;
+    try {
+      process.env.GOOGLE_PICKER_APP_ID = "placeholder";
+      const dark = await request(createApp())
+        .get("/api/connect/availability")
+        .set("Authorization", auth.bearer());
+      expect(dark.body.providers.google.pickerConfigured).toBe(false);
+    } finally {
+      process.env.GOOGLE_PICKER_APP_ID = saved;
     }
   });
 });

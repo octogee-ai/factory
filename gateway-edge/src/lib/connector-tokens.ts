@@ -172,64 +172,22 @@ export async function readOwnerRuntimeConnectorAccessToken(
 export interface ConnectorClientCreds {
   clientId: string;
   clientSecret: string;
-  source: "platform" | "per-user";
 }
 
 export type ConnectorTokenStore = Pick<FirebaseFirestore.Firestore, "doc">;
 
-async function readUserClientCreds(
-  store: ConnectorTokenStore,
-  uid: string,
-  def: ConnectorDef,
-): Promise<ConnectorClientCreds | null> {
-  const snap = await store.doc(`users/${uid}/secrets/${def.meta.id}`).get();
-  const client = (
-    snap.data() as
-      | { client?: { encryptedClientId?: unknown; encryptedClientSecret?: unknown } }
-      | undefined
-  )?.client;
-  if (
-    typeof client?.encryptedClientId !== "string" ||
-    typeof client?.encryptedClientSecret !== "string"
-  ) {
-    return null;
-  }
-  return {
-    clientId: await decryptSecret(client.encryptedClientId),
-    clientSecret: await decryptSecret(client.encryptedClientSecret),
-    source: "per-user",
-  };
+export function configuredEnvValue(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed === "placeholder") return null;
+  return trimmed;
 }
 
-function readPlatformClientCreds(def: ConnectorDef): ConnectorClientCreds | null {
+export function readConnectorClientCreds(def: ConnectorDef): ConnectorClientCreds | null {
   if (!def.oauth) return null;
-  const clientId = process.env[def.oauth.clientIdEnv];
-  const clientSecret = process.env[def.oauth.clientSecretEnv];
+  const clientId = configuredEnvValue(process.env[def.oauth.clientIdEnv]);
+  const clientSecret = configuredEnvValue(process.env[def.oauth.clientSecretEnv]);
   if (!clientId || !clientSecret) return null;
-  return { clientId, clientSecret, source: "platform" };
-}
-
-export async function readConnectorClientCredsFromDb(
-  store: ConnectorTokenStore,
-  uid: string,
-  def: ConnectorDef,
-  forSource?: "platform" | "per-user",
-): Promise<ConnectorClientCreds | null> {
-  if (!def.oauth) return null;
-  if (forSource === "platform") return readPlatformClientCreds(def);
-  if (forSource === "per-user") return readUserClientCreds(store, uid, def);
-  if (def.meta.clientSource === "per-user") {
-    return (await readUserClientCreds(store, uid, def)) ?? readPlatformClientCreds(def);
-  }
-  return readPlatformClientCreds(def);
-}
-
-export async function readConnectorClientCreds(
-  uid: string,
-  def: ConnectorDef,
-  forSource?: "platform" | "per-user",
-): Promise<ConnectorClientCreds | null> {
-  return readConnectorClientCredsFromDb(db, uid, def, forSource);
+  return { clientId, clientSecret };
 }
 
 export type FreshTokenResult =
@@ -241,7 +199,6 @@ interface StoredConnectorTokens {
   encryptedRefreshToken?: unknown;
   expiresAt?: unknown;
   tokenType?: unknown;
-  clientSource?: unknown;
 }
 
 export async function getFreshAccessToken(
@@ -273,12 +230,7 @@ export async function getFreshAccessTokenFromDb(
   if (!encRefresh || !def.oauth) {
     return { ok: false, reason: "reauth_required" };
   }
-  const creds = await readConnectorClientCredsFromDb(
-    store,
-    uid,
-    def,
-    readStoredClientSource(tokens),
-  );
+  const creds = readConnectorClientCreds(def);
   if (!creds) {
     return { ok: false, reason: "reauth_required" };
   }
@@ -304,12 +256,6 @@ function readEncryptedToken(value: unknown): string | null {
 function isStoredAccessTokenFresh(tokens: StoredConnectorTokens | undefined): boolean {
   const expiresAt = typeof tokens?.expiresAt === "number" ? tokens.expiresAt : null;
   return expiresAt === null || expiresAt > Date.now() + FRESHNESS_MARGIN_MS;
-}
-
-function readStoredClientSource(tokens: StoredConnectorTokens | undefined): "platform" | "per-user" | undefined {
-  return tokens?.clientSource === "platform" || tokens?.clientSource === "per-user"
-    ? tokens.clientSource
-    : undefined;
 }
 
 function readStoredTokenType(tokens: StoredConnectorTokens | undefined): string {

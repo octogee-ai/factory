@@ -3,8 +3,6 @@ import type { Agent } from "./agent.js";
 import type { Channel } from "./channel.js";
 import {
   CONNECTOR_CATALOG,
-  GOOGLE_PLATFORM_SCOPES,
-  GOOGLE_SCOPES,
   MICROSOFT_SCOPES,
   type ConnectorId,
   type IntegrationStatusDoc,
@@ -23,13 +21,6 @@ describe("connector catalog", () => {
     expect(ids).toContain("github");
     expect(ids).toContain("gemini");
     expect(ids).toContain("openai-compatible");
-  });
-
-  it("keeps Google platform scopes a subset of per-user Google scopes", () => {
-    expect(GOOGLE_SCOPES).toContain("https://www.googleapis.com/auth/gmail.send");
-    for (const scope of GOOGLE_PLATFORM_SCOPES) {
-      expect(GOOGLE_SCOPES).toContain(scope);
-    }
   });
 
   it("pins Microsoft offline access for refreshable OAuth captures", () => {
@@ -101,7 +92,6 @@ describe("shared document shapes", () => {
       provider: "github",
       status: "connected",
       captureMethod: "oauth-web",
-      clientConfigured: true,
       scopes: ["repo"],
     } satisfies IntegrationStatusDoc;
 

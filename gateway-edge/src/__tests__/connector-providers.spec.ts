@@ -75,7 +75,7 @@ describe("connector provider definitions", () => {
     );
   });
 
-  it("fetches Google identity and deep-probes Drive", async () => {
+  it("fetches Google identity and deep-probes the granted capabilities", async () => {
     h.fetch
       .mockResolvedValueOnce(response(200, { email: "builder@example.com" }))
       .mockResolvedValueOnce(response(200, { user: { emailAddress: "drive@example.com" } }));
@@ -83,10 +83,30 @@ describe("connector provider definitions", () => {
     await expect(googleConnector.fetchIdentity("google-token")).resolves.toEqual({
       accountLabel: "builder@example.com",
     });
-    await expect(googleConnector.deepProbe?.("google-token")).resolves.toEqual({
+    await expect(
+      googleConnector.deepProbe?.("google-token", ["https://www.googleapis.com/auth/drive.file"]),
+    ).resolves.toEqual({
       probe: "drive.about",
-      detail: "drive@example.com",
+      detail: "drive",
     });
+  });
+
+  it("probes Calendar through an endpoint authorized by calendar.events", async () => {
+    h.fetch.mockResolvedValue(response(200, { items: [] }));
+
+    await expect(
+      googleConnector.deepProbe?.("google-token", [
+        "https://www.googleapis.com/auth/calendar.events",
+      ]),
+    ).resolves.toEqual({
+      probe: "calendar.events",
+      detail: "calendar",
+    });
+
+    expect(h.fetch).toHaveBeenCalledWith(
+      "https://www.googleapis.com/calendar/v3/calendars/primary/events?maxResults=1",
+      { headers: { Authorization: "Bearer google-token" } },
+    );
   });
 
   it("uses Microsoft mail first and userPrincipalName as fallback", async () => {

@@ -18,8 +18,13 @@ import {
   DEFAULT_FREE_TIER_MODEL_REF,
   PLATFORM_CONFIG_COLLECTION,
   PLATFORM_MODEL_CONFIG_DOC,
+  parsePlatformConnectConfig,
   parsePlatformModelConfig,
 } from "@octogee/shared/types/platform-config";
+import {
+  platformConnectDoc,
+  readPlatformConnectConfig,
+} from "../lib/platform-connect-config.js";
 
 const router = Router();
 router.use(requireAdmin);
@@ -101,6 +106,48 @@ router.put("/platform-config", async (req, res) => {
     res.json({ ok: true, freeTierModelRef: parsed.freeTierModelRef });
   } catch (err) {
     logger.error("[admin] platform-config write failed", { err });
+    res.status(500).json({ error: "platform_config_write_failed" });
+  }
+});
+
+router.get("/platform-connect-config", async (_req, res) => {
+  try {
+    res.json(await readPlatformConnectConfig());
+  } catch (err) {
+    logger.error("[admin] platform-connect-config read failed", { err });
+    res.status(500).json({ error: "platform_config_read_failed" });
+  }
+});
+
+router.put("/platform-connect-config", async (req, res) => {
+  const parsed = parsePlatformConnectConfig(req.body);
+  if (!parsed) {
+    res.status(400).json({ error: "invalid_connect_config" });
+    return;
+  }
+  try {
+    const bodyHasUids =
+      !!req.body && typeof req.body === "object" && "googleAllowlistUids" in (req.body as object);
+    const googleAllowlistUids = bodyHasUids
+      ? parsed.googleAllowlistUids
+      : (await readPlatformConnectConfig()).googleAllowlistUids;
+    await platformConnectDoc().set(
+      {
+        googleStage: parsed.googleStage,
+        googleAllowlistUids,
+        updatedAt: FieldValue.serverTimestamp(),
+        updatedBy: req.uid ?? null,
+      },
+      { merge: true },
+    );
+    logger.info("[admin] google connect dial set", {
+      googleStage: parsed.googleStage,
+      allowlistCount: googleAllowlistUids.length,
+      updatedBy: req.uid,
+    });
+    res.json({ ok: true, googleStage: parsed.googleStage, googleAllowlistUids });
+  } catch (err) {
+    logger.error("[admin] platform-connect-config write failed", { err });
     res.status(500).json({ error: "platform_config_write_failed" });
   }
 });

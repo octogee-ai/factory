@@ -1,11 +1,17 @@
 import * as crypto from "crypto";
 import { Router, Request, Response, NextFunction } from "express";
-import type { ConnectorCaptureMethod } from "@octogee/shared/types/connectors";
+import {
+  googleCapabilitiesFromScopes,
+  parseGooglePickedFiles,
+  type ConnectorCaptureMethod,
+} from "@octogee/shared/types/connectors";
+import { googleConnectAllowed } from "@octogee/shared/types/platform-config";
 import { requireAuth } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";
 import { db, FieldValue, Timestamp } from "../lib/db.js";
 import { encryptSecret, decryptSecret } from "../lib/kms.js";
 import { sanitizeReturnUrl, buildOAuthRedirect } from "../lib/redirect-validation.js";
+import { readPlatformConnectConfig } from "../lib/platform-connect-config.js";
 import {
   generateConnectState,
   verifyConnectState,
@@ -13,10 +19,12 @@ import {
 } from "../lib/connect-state.js";
 import {
   getConnector,
+  listConnectors,
   connectorRedirectUri,
   type ConnectorDef,
 } from "../lib/connectors/index.js";
 import {
+  configuredEnvValue,
   readConnectorClientCreds,
   getFreshAccessToken,
   type ConnectorClientCreds,
@@ -30,6 +38,14 @@ interface TokenResponse {
   refresh_token?: string;
   expires_in?: number;
   token_type?: string;
+  scope?: string;
+}
+
+class GoogleAccountMismatchError extends Error {
+  constructor() {
+    super("google_account_mismatch");
+    this.name = "GoogleAccountMismatchError";
+  }
 }
 
 interface RouteError {
@@ -65,10 +81,29 @@ function userCol(uid: string, sub: "secrets" | "integrations") {
   return db.collection("users").doc(uid).collection(sub);
 }
 
-function grantedScopes(def: ConnectorDef, clientSource?: "platform" | "per-user"): string[] {
-  return clientSource === "platform" && def.meta.platformScopes
-    ? def.meta.platformScopes
-    : def.meta.scopes;
+function requestScopesFor(def: ConnectorDef, capability: unknown): string[] | RouteError {
+  if (!def.capabilityRequestScopes) return def.meta.scopes;
+  if (typeof capability !== "string" || capability.length === 0) {
+    return routeError(400, { error: "capability required" });
+  }
+  const scopes = def.capabilityRequestScopes(capability);
+  return scopes ?? routeError(400, { error: `Unknown capability: ${capability}` });
+}
+
+function parseGrantedScopes(scope: string | undefined, requested: string[]): string[] {
+  const parsed = (scope ?? "").split(/[\s,]+/).filter(Boolean);
+  return parsed.length > 0 ? parsed : requested;
+}
+
+async function enforceGoogleAccountContinuity(uid: string, accountLabel: string): Promise<void> {
+  const snap = await userCol(uid, "integrations").doc("google").get();
+  const existing = (snap.data() as { accountLabel?: unknown } | undefined)?.accountLabel;
+  if (
+    typeof existing === "string" &&
+    existing.trim().toLowerCase() !== accountLabel.trim().toLowerCase()
+  ) {
+    throw new GoogleAccountMismatchError();
+  }
 }
 
 async function storeConnectorTokens(args: {
@@ -77,47 +112,64 @@ async function storeConnectorTokens(args: {
   tokens: TokenResponse;
   accountLabel: string;
   captureMethod: ConnectorCaptureMethod;
-  clientSource?: "platform" | "per-user";
+  grantedScopes?: string[];
 }): Promise<void> {
-  const { uid, def, tokens, accountLabel, captureMethod, clientSource } = args;
+  const { uid, def, tokens, accountLabel, captureMethod, grantedScopes } = args;
   const encryptedAccessToken = await encryptSecret(tokens.access_token);
   const encryptedRefreshToken = tokens.refresh_token
     ? await encryptSecret(tokens.refresh_token)
     : null;
+  const refreshTokenPatch: { encryptedRefreshToken?: string | null } = {};
+  if (encryptedRefreshToken) {
+    refreshTokenPatch.encryptedRefreshToken = encryptedRefreshToken;
+  } else if (captureMethod !== "oauth-web") {
+    refreshTokenPatch.encryptedRefreshToken = null;
+  }
 
   await userCol(uid, "secrets").doc(def.meta.id).set(
     {
       provider: def.meta.id,
       tokens: {
         encryptedAccessToken,
-        encryptedRefreshToken,
+        ...refreshTokenPatch,
         expiresAt: tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : null,
         tokenType: tokens.token_type ?? "bearer",
-        clientSource: clientSource ?? null,
       },
       updatedAt: FieldValue.serverTimestamp(),
     },
     { merge: true },
   );
 
-  await userCol(uid, "integrations").doc(def.meta.id).set({
+  const integration = {
     provider: def.meta.id,
     status: "connected",
     accountLabel,
-    scopes: captureMethod === "oauth-web" ? grantedScopes(def, clientSource) : [],
+    scopes: captureMethod === "oauth-web" ? grantedScopes ?? [] : [],
     captureMethod,
-    ...(clientSource === "per-user" ? { clientConfigured: true } : {}),
     connectedAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
-  });
+  };
+  if (def.meta.id === "google") {
+    await userCol(uid, "integrations").doc(def.meta.id).set(
+      {
+        ...integration,
+        error: FieldValue.delete(),
+        verifiedAt: FieldValue.delete(),
+      },
+      { merge: true },
+    );
+  } else {
+    await userCol(uid, "integrations").doc(def.meta.id).set(integration);
+  }
 
-  logger.info(`[connect] ${def.meta.id} connected for uid=${uid} via ${captureMethod} (${accountLabel})`);
+  logger.info(`[connect] ${def.meta.id} connected for uid=${uid} via ${captureMethod}`);
 }
 
 async function exchangeAuthCode(
   def: ConnectorDef,
   code: string,
   creds: ConnectorClientCreds,
+  codeVerifier: string | null,
 ): Promise<TokenResponse> {
   const oauth = def.oauth!;
   const resp = await fetch(oauth.tokenUrl, {
@@ -132,6 +184,7 @@ async function exchangeAuthCode(
       grant_type: "authorization_code",
       code,
       redirect_uri: connectorRedirectUri(def),
+      ...(codeVerifier ? { code_verifier: codeVerifier } : {}),
     }),
   });
   if (!resp.ok) {
@@ -142,6 +195,34 @@ async function exchangeAuthCode(
     throw new Error(`token exchange rejected: ${tokens.error ?? "no access_token"}`);
   }
   return tokens;
+}
+
+async function revokeProviderGrant(uid: string, def: ConnectorDef): Promise<void> {
+  const revocationUrl = def.oauth?.revocationUrl;
+  if (!revocationUrl) return;
+  const snap = await userCol(uid, "secrets").doc(def.meta.id).get();
+  const tokens = (snap.data() as { tokens?: Record<string, unknown> } | undefined)?.tokens;
+  const encrypted = [tokens?.encryptedRefreshToken, tokens?.encryptedAccessToken].filter(
+    (value): value is string => typeof value === "string" && value.length > 0,
+  );
+  for (const enc of new Set(encrypted)) {
+    try {
+      const resp = await fetch(revocationUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ token: await decryptSecret(enc) }),
+      });
+      if (!resp.ok) {
+        logger.warn(
+          `[connect] ${def.meta.id} provider revoke returned ${resp.status} for uid=${uid} — deleting the local grant anyway`,
+        );
+      }
+    } catch (err) {
+      logger.warn(
+        `[connect] ${def.meta.id} provider revoke failed for uid=${uid}: ${(err as Error).message} — deleting the local grant anyway`,
+      );
+    }
+  }
 }
 
 router.post(
@@ -155,31 +236,13 @@ router.post(
         res.status(400).json({ error: `Unknown connector: ${connector}` });
         return;
       }
-      const secretRef = userCol(req.uid!, "secrets").doc(def.meta.id);
-      const client =
-        def.meta.clientSource === "per-user"
-          ? ((await secretRef.get()).data() as { client?: unknown } | undefined)?.client
-          : undefined;
-      if (client) {
-        await secretRef.set({
-          provider: def.meta.id,
-          client,
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-        await userCol(req.uid!, "integrations").doc(def.meta.id).set({
-          provider: def.meta.id,
-          status: "disconnected",
-          clientConfigured: true,
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-      } else {
-        await secretRef.delete();
-        await userCol(req.uid!, "integrations").doc(def.meta.id).set({
-          provider: def.meta.id,
-          status: "disconnected",
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-      }
+      await revokeProviderGrant(req.uid!, def);
+      await userCol(req.uid!, "secrets").doc(def.meta.id).delete();
+      await userCol(req.uid!, "integrations").doc(def.meta.id).set({
+        provider: def.meta.id,
+        status: "disconnected",
+        updatedAt: FieldValue.serverTimestamp(),
+      });
       res.json({ ok: true });
     } catch (e) {
       next(e);
@@ -187,56 +250,30 @@ router.post(
   },
 );
 
-const CLIENT_FIELD_MAX = 512;
-
-router.post(
-  "/:connector/client",
+router.get(
+  "/availability",
   requireAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const def = getConnector(req.params.connector as string);
-      if (!def || def.meta.clientSource !== "per-user") {
-        res.status(404).json({ error: "Connector does not take a per-user client" });
-        return;
+      const config = await readPlatformConnectConfig();
+      const providers: Record<
+        string,
+        { configured: boolean; available: boolean; stage?: string; pickerConfigured?: boolean }
+      > = {};
+      for (const def of listConnectors()) {
+        if (!def.oauth) continue;
+        const configured = readConnectorClientCreds(def) !== null;
+        providers[def.meta.id] =
+          def.meta.id === "google"
+            ? {
+                configured,
+                stage: config.googleStage,
+                available: configured && googleConnectAllowed(config, req.uid!),
+                pickerConfigured: googlePickerEnv() !== null,
+              }
+            : { configured, available: configured };
       }
-      const { clientId, clientSecret } = (req.body ?? {}) as {
-        clientId?: unknown;
-        clientSecret?: unknown;
-      };
-      if (
-        typeof clientId !== "string" ||
-        clientId.trim().length === 0 ||
-        clientId.length > CLIENT_FIELD_MAX ||
-        typeof clientSecret !== "string" ||
-        clientSecret.trim().length === 0 ||
-        clientSecret.length > CLIENT_FIELD_MAX
-      ) {
-        res.status(400).json({ error: "clientId and clientSecret required" });
-        return;
-      }
-
-      const encryptedClientId = await encryptSecret(clientId.trim());
-      const encryptedClientSecret = await encryptSecret(clientSecret.trim());
-      await userCol(req.uid!, "secrets").doc(def.meta.id).set(
-        {
-          provider: def.meta.id,
-          client: { encryptedClientId, encryptedClientSecret },
-          tokens: FieldValue.delete(),
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-        { merge: true },
-      );
-      await userCol(req.uid!, "integrations").doc(def.meta.id).set(
-        {
-          provider: def.meta.id,
-          status: "disconnected",
-          clientConfigured: true,
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-        { merge: true },
-      );
-      logger.info(`[connect] ${def.meta.id} per-user client saved for uid=${req.uid}`);
-      res.json({ ok: true });
+      res.json({ providers });
     } catch (e) {
       next(e);
     }
@@ -287,6 +324,12 @@ async function verifyFieldsConnector(
   }
 }
 
+async function grantedScopesFor(uid: string, def: ConnectorDef): Promise<string[]> {
+  const snap = await userCol(uid, "integrations").doc(def.meta.id).get();
+  const scopes = (snap.data() as { scopes?: unknown } | undefined)?.scopes;
+  return Array.isArray(scopes) ? scopes.filter((s): s is string => typeof s === "string") : [];
+}
+
 async function verifyTokenConnector(
   uid: string,
   def: ConnectorDef,
@@ -303,8 +346,11 @@ async function verifyTokenConnector(
     return;
   }
   try {
-    const identity = await def.fetchIdentity(fresh.accessToken);
-    const probe = def.deepProbe ? await def.deepProbe(fresh.accessToken) : null;
+    const [identity, grantedScopes] = await Promise.all([
+      def.fetchIdentity(fresh.accessToken),
+      def.deepProbe ? grantedScopesFor(uid, def) : Promise.resolve([]),
+    ]);
+    const probe = def.deepProbe ? await def.deepProbe(fresh.accessToken, grantedScopes) : null;
     await setVerifyStatus(uid, def, { status: "connected" });
     res.json({ ok: true, accountLabel: identity.accountLabel, ...(probe ? { probe } : {}) });
   } catch (err) {
@@ -335,6 +381,98 @@ router.post(
   },
 );
 
+function googlePickerEnv(): { apiKey: string; appId: string } | null {
+  const apiKey = configuredEnvValue(process.env.GOOGLE_PICKER_API_KEY);
+  const appId = configuredEnvValue(process.env.GOOGLE_PICKER_APP_ID);
+  return apiKey && appId ? { apiKey, appId } : null;
+}
+
+router.get(
+  "/google/picker-token",
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const picker = googlePickerEnv();
+      if (!picker) {
+        logger.error(
+          "[connect] google picker unavailable: GOOGLE_PICKER_API_KEY/GOOGLE_PICKER_APP_ID is not set",
+        );
+        res.status(503).json({ error: "Google Drive picker is not configured" });
+        return;
+      }
+      const def = getConnector("google")!;
+      const scopes = await grantedScopesFor(req.uid!, def);
+      if (!googleCapabilitiesFromScopes(scopes).includes("drive")) {
+        res.status(422).json({ ok: false, reason: "drive_not_connected" });
+        return;
+      }
+      const fresh = await getFreshAccessToken(req.uid!, def);
+      if (!fresh.ok) {
+        res
+          .status(fresh.reason === "reauth_required" ? 409 : 422)
+          .json({ ok: false, reason: fresh.reason });
+        return;
+      }
+      res.set("Cache-Control", "no-store");
+      res.set("Pragma", "no-cache");
+      res.json({ accessToken: fresh.accessToken, apiKey: picker.apiKey, appId: picker.appId });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+const GOOGLE_PICKED_FILES_MAX = 500;
+
+router.post(
+  "/google/picked-files",
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { add, remove } = (req.body ?? {}) as { add?: unknown; remove?: unknown };
+      const files = parseGooglePickedFiles(add);
+      const removeIds = Array.isArray(remove)
+        ? remove.filter((id): id is string => typeof id === "string" && id.length > 0)
+        : [];
+      if (files.length === 0 && removeIds.length === 0) {
+        res.status(400).json({ error: "add or remove required" });
+        return;
+      }
+      const ref = userCol(req.uid!, "integrations").doc("google");
+      const snap = await ref.get();
+      if (!snap.exists) {
+        res.status(422).json({ ok: false, reason: "not_connected" });
+        return;
+      }
+      const integration = snap.data() as { status?: unknown; scopes?: unknown; pickedFiles?: unknown };
+      if (integration.status !== "connected") {
+        res.status(422).json({ ok: false, reason: "not_connected" });
+        return;
+      }
+      const scopes = Array.isArray(integration.scopes)
+        ? integration.scopes.filter((scope): scope is string => typeof scope === "string")
+        : [];
+      if (!googleCapabilitiesFromScopes(scopes).includes("drive")) {
+        res.status(422).json({ ok: false, reason: "drive_not_connected" });
+        return;
+      }
+      const current = parseGooglePickedFiles(
+        integration.pickedFiles,
+      );
+      const dropIds = new Set([...removeIds, ...files.map((f) => f.id)]);
+      const pickedFiles = [...current.filter((f) => !dropIds.has(f.id)), ...files];
+      if (pickedFiles.length > GOOGLE_PICKED_FILES_MAX) {
+        res.status(400).json({ error: `picked files capped at ${GOOGLE_PICKED_FILES_MAX}` });
+        return;
+      }
+      await ref.set({ pickedFiles, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+      res.json({ ok: true, pickedFiles });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
 router.get(
   "/:connector/auth-url",
   requireAuth,
@@ -345,17 +483,25 @@ router.get(
         res.status(404).json({ error: "Unknown connector" });
         return;
       }
-      const creds = await readConnectorClientCreds(req.uid!, def);
-      if (!creds) {
-        if (def.meta.clientSource === "per-user") {
-          res.status(422).json({
-            error: `${def.meta.displayName} client not configured`,
-            reason: "client_not_configured",
-          });
+      if (def.meta.id === "google") {
+        const config = await readPlatformConnectConfig();
+        if (!googleConnectAllowed(config, req.uid!)) {
+          logger.info(
+            `[connect] google auth-url refused for uid=${req.uid}: stage=${config.googleStage}`,
+          );
+          res.status(403).json({ error: "pending_verification" });
           return;
         }
+      }
+      const creds = readConnectorClientCreds(def);
+      if (!creds) {
         logger.error(`[connect] ${def.meta.id} unavailable: ${def.oauth.clientIdEnv} is not set`);
         res.status(503).json({ error: `${def.meta.displayName} connection is not configured` });
+        return;
+      }
+      const scopes = requestScopesFor(def, req.query.capability);
+      if (isRouteError(scopes)) {
+        sendRouteError(res, scopes);
         return;
       }
 
@@ -365,11 +511,13 @@ router.get(
         connector: def.meta.id,
         returnUrl,
       });
+      const codeVerifier = def.oauth.pkce ? crypto.randomBytes(32).toString("base64url") : null;
       await flowsCol().doc(nonce).set({
         uid: req.uid!,
         connector: def.meta.id,
         kind: "oauth-web",
-        clientSource: creds.source,
+        requestedScopes: scopes,
+        ...(codeVerifier ? { codeVerifier } : {}),
         createdAt: FieldValue.serverTimestamp(),
         expireAt: Timestamp.fromDate(expiresAt),
       });
@@ -378,10 +526,21 @@ router.get(
         client_id: creds.clientId,
         redirect_uri: connectorRedirectUri(def),
         response_type: "code",
-        scope: grantedScopes(def, creds.source).join(" "),
+        scope: scopes.join(" "),
         state,
+        ...(codeVerifier
+          ? {
+              code_challenge: crypto
+                .createHash("sha256")
+                .update(codeVerifier)
+                .digest("base64url"),
+              code_challenge_method: "S256",
+            }
+          : {}),
         ...(def.oauth.extraAuthParams ?? {}),
       });
+      res.set("Cache-Control", "no-store");
+      res.set("Pragma", "no-cache");
       res.json({ url: `${def.oauth.authorizeUrl}?${params}` });
     } catch (e) {
       next(e);
@@ -392,24 +551,69 @@ router.get(
 async function consumeFlowNonce(
   payload: ConnectStatePayload,
   connectorId: string,
-): Promise<{ clientSource?: "platform" | "per-user" }> {
+): Promise<{ requestedScopes: string[] | null; codeVerifier: string | null }> {
   return db.runTransaction(async (tx) => {
     const ref = flowsCol().doc(payload.nonce);
     const snap = await tx.get(ref);
     const flow = snap.data() as
-      | { uid?: string; connector?: string; consumedAt?: unknown; clientSource?: unknown }
+      | {
+          uid?: string;
+          connector?: string;
+          consumedAt?: unknown;
+          requestedScopes?: unknown;
+          codeVerifier?: unknown;
+        }
       | undefined;
     if (!snap.exists || !flow || flow.consumedAt || flow.uid !== payload.uid || flow.connector !== connectorId) {
       throw new Error("state nonce unknown or already consumed");
     }
     tx.set(ref, { consumedAt: FieldValue.serverTimestamp() }, { merge: true });
     return {
-      clientSource:
-        flow.clientSource === "platform" || flow.clientSource === "per-user"
-          ? flow.clientSource
-          : undefined,
+      requestedScopes: Array.isArray(flow.requestedScopes)
+        ? flow.requestedScopes.filter((s): s is string => typeof s === "string")
+        : null,
+      codeVerifier: typeof flow.codeVerifier === "string" ? flow.codeVerifier : null,
     };
   });
+}
+
+async function redirectOAuthCallbackFailure(
+  res: Response,
+  def: ConnectorDef,
+  payload: ConnectStatePayload,
+  err: unknown,
+): Promise<void> {
+  if (err instanceof GoogleAccountMismatchError) {
+    logger.warn(`[connect] google callback rejected an account switch for uid=${payload.uid}`);
+    res.redirect(
+      buildOAuthRedirect(payload.returnUrl, APP_URL, {
+        connect_error: "google_account_mismatch",
+      }),
+    );
+    return;
+  }
+  const msg = err instanceof Error ? err.message : String(err);
+  logger.error(`[connect] ${def.meta.id} connect failed for uid=${payload.uid}: ${msg}`);
+  try {
+    await userCol(payload.uid, "integrations").doc(def.meta.id).set(
+      {
+        provider: def.meta.id,
+        status: "error",
+        error: msg.slice(0, 300),
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  } catch (statusErr) {
+    logger.error(
+      `[connect] ${def.meta.id} error-status write failed for uid=${payload.uid}: ${String(statusErr)}`,
+    );
+  }
+  res.redirect(
+    buildOAuthRedirect(payload.returnUrl, APP_URL, {
+      connect_error: `${def.meta.id}_failed`,
+    }),
+  );
 }
 
 router.get("/:connector/callback", async (req: Request, res: Response) => {
@@ -421,13 +625,13 @@ router.get("/:connector/callback", async (req: Request, res: Response) => {
   const { code, state, error: authError } = req.query as Record<string, string | undefined>;
 
   let payload: ConnectStatePayload;
-  let flowPin: { clientSource?: "platform" | "per-user" };
+  let flow: { requestedScopes: string[] | null; codeVerifier: string | null };
   try {
     payload = verifyConnectState(String(state ?? ""));
     if (payload.connector !== def.meta.id) {
       throw new Error(`state minted for ${payload.connector}, presented to ${def.meta.id}`);
     }
-    flowPin = await consumeFlowNonce(payload, def.meta.id);
+    flow = await consumeFlowNonce(payload, def.meta.id);
   } catch (err) {
     logger.warn(`[connect] ${def.meta.id} callback rejected: ${(err as Error).message}`);
     res.redirect(`${APP_URL}/dashboard?connect_error=invalid_state`);
@@ -444,49 +648,30 @@ router.get("/:connector/callback", async (req: Request, res: Response) => {
   }
 
   try {
-    const creds = await readConnectorClientCreds(payload.uid, def, flowPin.clientSource);
+    const creds = readConnectorClientCreds(def);
     if (!creds) {
-      throw new Error(
-        `connector client credentials missing at exchange time (pinned source: ${flowPin.clientSource ?? "unpinned"})`,
-      );
+      throw new Error("connector client credentials missing at exchange time");
     }
-    const tokens = await exchangeAuthCode(def, code, creds);
+    const tokens = await exchangeAuthCode(def, code, creds, flow.codeVerifier);
     const identity = await def.fetchIdentity(tokens.access_token);
+    if (def.meta.id === "google") {
+      await enforceGoogleAccountContinuity(payload.uid, identity.accountLabel);
+    }
     await storeConnectorTokens({
       uid: payload.uid,
       def,
       tokens,
       accountLabel: identity.accountLabel,
       captureMethod: "oauth-web",
-      clientSource: creds.source,
+      grantedScopes: parseGrantedScopes(tokens.scope, flow.requestedScopes ?? def.meta.scopes),
     });
     res.redirect(
       buildOAuthRedirect(payload.returnUrl, APP_URL, {
         [`${def.meta.id}_connected`]: "true",
-        [`${def.meta.id}_account`]: identity.accountLabel,
       }),
     );
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error(`[connect] ${def.meta.id} connect failed for uid=${payload.uid}: ${msg}`);
-    try {
-      await userCol(payload.uid, "integrations").doc(def.meta.id).set(
-        {
-          provider: def.meta.id,
-          status: "error",
-          error: msg.slice(0, 300),
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-        { merge: true },
-      );
-    } catch (statusErr) {
-      logger.error(`[connect] ${def.meta.id} error-status write failed for uid=${payload.uid}: ${String(statusErr)}`);
-    }
-    res.redirect(
-      buildOAuthRedirect(payload.returnUrl, APP_URL, {
-        connect_error: `${def.meta.id}_failed`,
-      }),
-    );
+    await redirectOAuthCallbackFailure(res, def, payload, err);
   }
 });
 

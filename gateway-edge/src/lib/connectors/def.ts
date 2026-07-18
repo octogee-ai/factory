@@ -4,9 +4,11 @@ import { CONNECTOR_CATALOG } from "@octogee/shared/types/connectors";
 export interface ConnectorOAuthWebDef {
   authorizeUrl: string;
   tokenUrl: string;
+  revocationUrl?: string;
   clientIdEnv: string;
   clientSecretEnv: string;
   redirectUriEnv: string;
+  pkce?: boolean;
   extraAuthParams?: Record<string, string>;
 }
 
@@ -29,8 +31,9 @@ export interface ConnectorDef {
   meta: ConnectorMeta;
   oauth?: ConnectorOAuthWebDef;
   device?: ConnectorDeviceDef;
+  capabilityRequestScopes?: (capability: string) => string[] | null;
   fetchIdentity: (accessToken: string) => Promise<ConnectorIdentity>;
-  deepProbe?: (accessToken: string) => Promise<ConnectorProbeResult>;
+  deepProbe?: (accessToken: string, grantedScopes?: string[]) => Promise<ConnectorProbeResult>;
   validateFields?: (fields: Record<string, string>) => Promise<ConnectorIdentity>;
 }
 

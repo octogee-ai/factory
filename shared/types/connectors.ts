@@ -4,8 +4,6 @@ export type ConnectorConsumption = 'platform-read' | 'agent-runtime';
 
 const AGENT_RUNTIME: ConnectorConsumption = 'agent-runtime';
 
-export type ConnectorClientSource = 'platform' | 'per-user';
-
 export type ConnectorFamily =
   | 'code-hosting'
   | 'deploy-hosting'
@@ -50,29 +48,73 @@ export interface ConnectorMeta {
   family: ConnectorFamily;
   captureMethods: ConnectorCaptureMethod[];
   consumption: ConnectorConsumption;
-  clientSource: ConnectorClientSource;
   scopes: string[];
-  platformScopes?: string[];
   agentRuntimeMaterializable?: boolean;
   captureFields?: ConnectorCaptureField[];
   implemented: boolean;
 }
 
+export type GoogleCapability = 'calendar' | 'gmail' | 'drive';
+
+export const GOOGLE_CAPABILITY_ORDER: readonly GoogleCapability[] = ['calendar', 'gmail', 'drive'];
+
+export const GOOGLE_CAPABILITY_SCOPES: Record<GoogleCapability, string[]> = {
+  calendar: ['https://www.googleapis.com/auth/calendar.events'],
+  gmail: ['https://www.googleapis.com/auth/gmail.modify'],
+  drive: ['https://www.googleapis.com/auth/drive.file'],
+};
+
+export const GOOGLE_IDENTITY_SCOPE = 'https://www.googleapis.com/auth/userinfo.email';
+
+export const GOOGLE_DRIVE_FULL_READ_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
+
+export function googleAuthRequestScopes(capability: GoogleCapability): string[] {
+  return [...GOOGLE_CAPABILITY_SCOPES[capability], GOOGLE_IDENTITY_SCOPE];
+}
+
+export function googleCapabilitiesFromScopes(
+  granted: readonly string[] | null | undefined,
+): GoogleCapability[] {
+  const set = new Set(granted ?? []);
+  return GOOGLE_CAPABILITY_ORDER.filter((capability) =>
+    GOOGLE_CAPABILITY_SCOPES[capability].every((scope) => set.has(scope)),
+  );
+}
+
 export const GOOGLE_SCOPES = [
-  'https://www.googleapis.com/auth/drive.readonly',
-  'https://www.googleapis.com/auth/gmail.readonly',
-  'https://www.googleapis.com/auth/gmail.send',
-  'https://www.googleapis.com/auth/calendar.readonly',
-  'https://www.googleapis.com/auth/calendar.events',
-  'https://www.googleapis.com/auth/userinfo.email',
-  'https://www.googleapis.com/auth/userinfo.profile',
+  ...GOOGLE_CAPABILITY_ORDER.flatMap((capability) => GOOGLE_CAPABILITY_SCOPES[capability]),
+  GOOGLE_IDENTITY_SCOPE,
 ];
 
-export const GOOGLE_PLATFORM_SCOPES = [
-  'https://www.googleapis.com/auth/drive.readonly',
-  'https://www.googleapis.com/auth/calendar.readonly',
-  'https://www.googleapis.com/auth/userinfo.email',
-];
+export function googleEscalationRequestScopes(escalation: string): string[] | null {
+  if (escalation !== 'drive-full') return null;
+  return [...GOOGLE_CAPABILITY_SCOPES.drive, GOOGLE_DRIVE_FULL_READ_SCOPE, GOOGLE_IDENTITY_SCOPE];
+}
+
+export function googleDriveFullReadGranted(granted: readonly string[] | null | undefined): boolean {
+  return (granted ?? []).includes(GOOGLE_DRIVE_FULL_READ_SCOPE);
+}
+
+export interface GooglePickedFile {
+  id: string;
+  name: string;
+  mimeType: string;
+}
+
+export function parseGooglePickedFiles(value: unknown): GooglePickedFile[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const { id, name, mimeType } = (entry ?? {}) as Record<string, unknown>;
+    if (
+      typeof id !== 'string' || id.length === 0 ||
+      typeof name !== 'string' || name.length === 0 ||
+      typeof mimeType !== 'string' || mimeType.length === 0
+    ) {
+      return [];
+    }
+    return [{ id, name, mimeType }];
+  });
+}
 
 export const MICROSOFT_SCOPES = [
   'Files.Read.All',
@@ -92,7 +134,6 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     family: 'code-hosting',
     captureMethods: ['oauth-web', 'device', 'pat'],
     consumption: 'platform-read',
-    clientSource: 'platform',
     scopes: ['repo'],
     agentRuntimeMaterializable: true,
     implemented: true,
@@ -104,7 +145,6 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     family: 'deploy-hosting',
     captureMethods: ['pat'],
     consumption: AGENT_RUNTIME,
-    clientSource: 'platform',
     scopes: [],
     implemented: true,
   },
@@ -115,7 +155,6 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     family: 'deploy-hosting',
     captureMethods: ['pat'],
     consumption: AGENT_RUNTIME,
-    clientSource: 'platform',
     scopes: [],
     implemented: true,
   },
@@ -126,7 +165,6 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     family: 'deploy-hosting',
     captureMethods: ['pat'],
     consumption: AGENT_RUNTIME,
-    clientSource: 'platform',
     scopes: [],
     implemented: true,
   },
@@ -137,7 +175,6 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     family: 'registry',
     captureMethods: ['pat'],
     consumption: AGENT_RUNTIME,
-    clientSource: 'platform',
     scopes: [],
     implemented: true,
   },
@@ -148,7 +185,6 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     family: 'registry',
     captureMethods: ['fields'],
     consumption: AGENT_RUNTIME,
-    clientSource: 'platform',
     scopes: [],
     captureFields: [
       { key: 'username', label: 'Docker Hub username', placeholder: 'your-dockerhub-username' },
@@ -163,7 +199,6 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     family: 'ai',
     captureMethods: ['pat'],
     consumption: AGENT_RUNTIME,
-    clientSource: 'platform',
     scopes: [],
     implemented: false,
   },
@@ -174,7 +209,6 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     family: 'ai',
     captureMethods: ['pat'],
     consumption: AGENT_RUNTIME,
-    clientSource: 'platform',
     scopes: [],
     implemented: false,
   },
@@ -185,7 +219,6 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     family: 'ai',
     captureMethods: ['pat'],
     consumption: AGENT_RUNTIME,
-    clientSource: 'platform',
     scopes: [],
     implemented: false,
   },
@@ -196,7 +229,6 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     family: 'ai',
     captureMethods: ['pat'],
     consumption: AGENT_RUNTIME,
-    clientSource: 'platform',
     scopes: [],
     implemented: false,
   },
@@ -207,7 +239,6 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     family: 'ai',
     captureMethods: ['pat'],
     consumption: AGENT_RUNTIME,
-    clientSource: 'platform',
     scopes: [],
     implemented: false,
   },
@@ -218,7 +249,6 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     family: 'ai',
     captureMethods: ['pat'],
     consumption: AGENT_RUNTIME,
-    clientSource: 'platform',
     scopes: [],
     implemented: false,
   },
@@ -229,7 +259,6 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     family: 'ai',
     captureMethods: ['pat'],
     consumption: AGENT_RUNTIME,
-    clientSource: 'platform',
     scopes: [],
     implemented: true,
   },
@@ -240,7 +269,6 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     family: 'cloud',
     captureMethods: ['fields'],
     consumption: AGENT_RUNTIME,
-    clientSource: 'platform',
     scopes: [],
     captureFields: [
       { key: 'accessKeyId', label: 'Access key ID', placeholder: 'AKIA…' },
@@ -255,7 +283,6 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     family: 'cloud',
     captureMethods: ['fields'],
     consumption: AGENT_RUNTIME,
-    clientSource: 'platform',
     scopes: [],
     captureFields: [
       {
@@ -275,9 +302,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     family: 'productivity',
     captureMethods: ['oauth-web'],
     consumption: AGENT_RUNTIME,
-    clientSource: 'per-user',
     scopes: GOOGLE_SCOPES,
-    platformScopes: GOOGLE_PLATFORM_SCOPES,
     implemented: true,
   },
   {
@@ -287,7 +312,6 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     family: 'productivity',
     captureMethods: ['oauth-web'],
     consumption: AGENT_RUNTIME,
-    clientSource: 'platform',
     scopes: MICROSOFT_SCOPES,
     implemented: true,
   },
@@ -298,7 +322,6 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     family: 'cloud',
     captureMethods: ['fields'],
     consumption: AGENT_RUNTIME,
-    clientSource: 'platform',
     scopes: [],
     captureFields: [
       { key: 'tenantId', label: 'Directory (tenant) ID' },
@@ -314,7 +337,6 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     family: 'productivity',
     captureMethods: ['pat'],
     consumption: AGENT_RUNTIME,
-    clientSource: 'platform',
     scopes: [],
     implemented: false,
   },
@@ -328,7 +350,7 @@ export interface IntegrationStatusDoc {
   accountLabel?: string;
   scopes?: string[];
   captureMethod?: ConnectorCaptureMethod;
-  clientConfigured?: boolean;
+  pickedFiles?: GooglePickedFile[];
   error?: string;
   connectedAt?: unknown;
   updatedAt?: unknown;
