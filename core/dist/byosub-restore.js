@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { buildCodexAuthProfilesStore, buildClaudeCliAuthProfilesStore, buildClaudeCliNativeCredentialsJson, OPENAI_CODEX_DEFAULT_PROFILE_ID, } from "./model-credential-materializer.js";
+import { buildCodexAuthJsonFromStore, buildCodexAuthProfilesStore, buildClaudeCliAuthProfilesStore, buildClaudeCliNativeCredentialsJson, OPENAI_CODEX_DEFAULT_PROFILE_ID, } from "./model-credential-materializer.js";
 import { readAuthProfileState, readAuthProfileStore, writeAuthProfileStore, } from "./auth-profile-sqlite.js";
 import { deriveCodexAuthHealth } from "./codex-auth-health.js";
 export function agentIdsFromConfig(config) {
@@ -62,14 +62,14 @@ export function readCodexAuthStateText(openclawDir, agentId) {
     }
 }
 export function shouldRestoreCodexCredential(opts) {
-    if (opts.targetPathPresent === false)
-        return "write";
-    if (!opts.authProfilesPresent)
+    if (!opts.usableCodexProfilePresent)
         return "write";
     if (deriveCodexAuthHealth(opts.authStateText, opts.profileId, opts.now) ===
         "needs_reauth") {
         return "write";
     }
+    if (opts.targetPathPresent === false)
+        return "materialize";
     return "skip";
 }
 function removeTempFile(tmp) {
@@ -91,6 +91,19 @@ function profileStoreProfiles(store) {
     return profiles && typeof profiles === "object" && !Array.isArray(profiles)
         ? profiles
         : null;
+}
+function hasUsableCodexDefaultProfile(store) {
+    const profile = profileStoreProfiles(store)?.[OPENAI_CODEX_DEFAULT_PROFILE_ID];
+    if (!profile || typeof profile !== "object" || Array.isArray(profile)) {
+        return false;
+    }
+    const fields = profile;
+    return (fields.type === "oauth" &&
+        fields.provider === "openai-codex" &&
+        typeof fields.access === "string" &&
+        fields.access.length > 0 &&
+        typeof fields.refresh === "string" &&
+        fields.refresh.length > 0);
 }
 function writeMergedAuthProfileStore(agentDir, next) {
     const nextProfiles = profileStoreProfiles(next);
@@ -154,6 +167,25 @@ function restoreCodexCredential(item, payload, agentDir) {
         throw err;
     }
 }
+function materializeCodexAuthJson(targetPath, store) {
+    const payload = buildCodexAuthJsonFromStore(JSON.stringify(store));
+    if (payload === null) {
+        throw new Error("usable openai-codex:default profile could not be materialized");
+    }
+    let tmp;
+    try {
+        ensurePrivateDir(path.dirname(targetPath));
+        tmp = `${targetPath}.tmp`;
+        fs.writeFileSync(tmp, payload, { mode: 0o600 });
+        fs.chmodSync(tmp, 0o600);
+        fs.renameSync(tmp, targetPath);
+        tmp = undefined;
+    }
+    catch (err) {
+        removeTempFile(tmp);
+        throw err;
+    }
+}
 export async function restoreByosubCredentials(opts) {
     const log = opts.logFn ?? (() => { });
     let restored = 0;
@@ -161,22 +193,32 @@ export async function restoreByosubCredentials(opts) {
     let skipped = 0;
     for (const item of opts.plan) {
         const agentDir = codexAgentDir(item.openclawDir, item.agentId);
+        let codexAction;
+        let codexStore;
         if (item.provider === "openai") {
-            const authProfilesPresent = readAuthProfileStore(agentDir) !== null;
+            codexStore = readAuthProfileStore(agentDir);
+            const usableCodexProfilePresent = hasUsableCodexDefaultProfile(codexStore);
             const authStateText = readCodexAuthStateText(item.openclawDir, item.agentId);
-            if (shouldRestoreCodexCredential({
-                authProfilesPresent,
+            codexAction = shouldRestoreCodexCredential({
+                usableCodexProfilePresent,
                 authStateText,
                 profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
                 now: Date.now(),
                 targetPathPresent: fs.existsSync(item.targetPath),
-            }) === "skip") {
+            });
+            if (codexAction === "skip") {
                 skipped++;
                 log(`byosub: ${item.agentId} healthy on-disk credential — conservative skip (openclaw owns it; not clobbering)`);
                 continue;
             }
         }
         try {
+            if (codexAction === "materialize") {
+                materializeCodexAuthJson(item.targetPath, codexStore);
+                restored++;
+                log(`byosub: materialized ${item.provider} credential for ${item.agentId} from the healthy profile store`);
+                continue;
+            }
             const payload = await opts.fetchSecret(item.secretName);
             if (item.provider === "anthropic") {
                 const { nativeRestored } = restoreClaudeCliCredential({

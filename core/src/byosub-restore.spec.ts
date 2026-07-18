@@ -134,7 +134,7 @@ describe("shouldRestoreCodexCredential — conservative-restore keystone", () =>
   it("cold start (no on-disk auth-profiles.json) → write — nothing healthy to clobber", () => {
     expect(
       shouldRestoreCodexCredential({
-        authProfilesPresent: false,
+        usableCodexProfilePresent: false,
         authStateText: null,
         profileId: P,
         now: NOW,
@@ -143,7 +143,7 @@ describe("shouldRestoreCodexCredential — conservative-restore keystone", () =>
     
     expect(
       shouldRestoreCodexCredential({
-        authProfilesPresent: false,
+        usableCodexProfilePresent: false,
         authStateText: authPermanent,
         profileId: P,
         now: NOW,
@@ -154,7 +154,7 @@ describe("shouldRestoreCodexCredential — conservative-restore keystone", () =>
   it("steady state (healthy on-disk cred, no auth_permanent) → SKIP — never clobber openclaw's rotated token", () => {
     expect(
       shouldRestoreCodexCredential({
-        authProfilesPresent: true,
+        usableCodexProfilePresent: true,
         authStateText: null,
         profileId: P,
         now: NOW,
@@ -162,7 +162,7 @@ describe("shouldRestoreCodexCredential — conservative-restore keystone", () =>
     ).toBe("skip");
     expect(
       shouldRestoreCodexCredential({
-        authProfilesPresent: true,
+        usableCodexProfilePresent: true,
         authStateText: JSON.stringify({ version: 1, usageStats: { [P]: { errorCount: 0 } } }),
         profileId: P,
         now: NOW,
@@ -170,10 +170,22 @@ describe("shouldRestoreCodexCredential — conservative-restore keystone", () =>
     ).toBe("skip");
   });
 
+  it("healthy SQLite credential with missing CODEX_HOME → materialize without replacing the rotated token", () => {
+    expect(
+      shouldRestoreCodexCredential({
+        usableCodexProfilePresent: true,
+        authStateText: null,
+        profileId: P,
+        now: NOW,
+        targetPathPresent: false,
+      }),
+    ).toBe("materialize");
+  });
+
   it("recovery (on-disk cred present but openclaw flagged auth_permanent) → write — replace the dead cred", () => {
     expect(
       shouldRestoreCodexCredential({
-        authProfilesPresent: true,
+        usableCodexProfilePresent: true,
         authStateText: authPermanent,
         profileId: P,
         now: NOW,
@@ -184,7 +196,7 @@ describe("shouldRestoreCodexCredential — conservative-restore keystone", () =>
   it("an elapsed auth_permanent window is healthy again → SKIP (openclaw will retry; don't clobber)", () => {
     expect(
       shouldRestoreCodexCredential({
-        authProfilesPresent: true,
+        usableCodexProfilePresent: true,
         authStateText: JSON.stringify({
           version: 1,
           usageStats: { [P]: { disabledReason: "auth_permanent", disabledUntil: NOW - 1 } },
@@ -440,13 +452,102 @@ describe("restoreByosubCredentials", () => {
     expect(logs.join("\n")).toMatch(/octogee-b-coach|secret access denied/);
   });
 
-  it("KEYSTONE: a healthy on-disk auth-profile SQLite row is NOT clobbered — skip, no SM read (the refresh_token_reused root cause)", async () => {
+  it("restores Codex when SQLite contains only platform broker profiles, preserving every broker profile", async () => {
+    const oc = mkTmp();
+    const agentId = "octogee-a-coach";
+    const agentDir = path.join(oc, "agents", agentId, "agent");
+    const targetPath = path.join(agentDir, "codex-home", "auth.json");
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.writeFileSync(
+      targetPath,
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "stale-on-disk" },
+      }),
+    );
+
+    const brokerProfiles = {
+      "anthropic:default": {
+        type: "api_key",
+        provider: "anthropic",
+        keyRef: {
+          source: "exec",
+          provider: "gcp-secret-manager",
+          id: `agent-model-token-${agentId}`,
+        },
+      },
+      "platform-openrouter:default": {
+        type: "api_key",
+        provider: "platform-openrouter",
+        keyRef: {
+          source: "exec",
+          provider: "gcp-secret-manager",
+          id: `agent-model-token-openrouter-${agentId}`,
+        },
+      },
+      "platform-openai:default": {
+        type: "api_key",
+        provider: "platform-openai",
+        keyRef: {
+          source: "exec",
+          provider: "gcp-secret-manager",
+          id: `agent-model-token-openai-${agentId}`,
+        },
+      },
+    };
+    writeAuthProfileStore(agentDir, { version: 1, profiles: brokerProfiles });
+
+    let fetched = false;
+    const r = await restoreByosubCredentials({
+      plan: [
+        {
+          agentId,
+          provider: "openai",
+          secretName: "byosub-a-openai",
+          targetPath,
+          openclawDir: oc,
+        },
+      ],
+      fetchSecret: async () => {
+        fetched = true;
+        return codexBlob();
+      },
+    });
+
+    expect(r).toEqual({ restored: 1, failed: 0, skipped: 0 });
+    expect(fetched).toBe(true);
+    expect(JSON.parse(fs.readFileSync(targetPath, "utf8")).tokens.access_token).toBe("acc-1");
+    const store = readAuthProfileStore(agentDir) as {
+      profiles: Record<string, unknown>;
+    };
+    expect(store.profiles).toMatchObject(brokerProfiles);
+    expect(store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toMatchObject({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "acc-1",
+      refresh: "ref-1",
+    });
+  });
+
+  it("KEYSTONE: a healthy on-disk Codex OAuth profile is NOT clobbered — skip, no SM read (the refresh_token_reused root cause)", async () => {
     const oc = mkTmp();
     const agentId = "octogee-a-coach";
     const agentDir = path.join(oc, "agents", agentId, "agent");
     fs.mkdirSync(agentDir, { recursive: true });
 
-    const liveCred = { version: 1, profiles: { rotated: "RT1" } };
+    const liveCred = {
+      version: 1,
+      profiles: {
+        [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "live",
+          refresh: "rotated-refresh",
+          expires: Date.now() + 3_600_000,
+          copyToAgents: true,
+        },
+      },
+    };
     writeAuthProfileStore(agentDir, liveCred);
     const targetPath = path.join(agentDir, "codex-home", "auth.json");
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
@@ -478,7 +579,66 @@ describe("restoreByosubCredentials", () => {
     expect(logs.join("\n")).toMatch(/octogee-a-coach|skip|conservative/i);
   });
 
-  it("restores Codex auth.json when the profile store exists but CODEX_HOME is missing", async () => {
+  it("materializes missing Codex auth.json from the healthy SQLite credential without fetching or replacing it", async () => {
+    const oc = mkTmp();
+    const agentId = "octogee-a-coach";
+    const agentDir = path.join(oc, "agents", agentId, "agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    const liveCred = {
+      version: 1,
+      profiles: {
+        "platform-openai:default": {
+          type: "api_key",
+          provider: "platform-openai",
+          keyRef: {
+            source: "exec",
+            provider: "gcp-secret-manager",
+            id: `agent-model-token-openai-${agentId}`,
+          },
+        },
+        [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "live",
+          refresh: "rotated-refresh",
+          expires: Date.now() + 3_600_000,
+          copyToAgents: true,
+        },
+      },
+    };
+    writeAuthProfileStore(agentDir, liveCred);
+
+    const targetPath = path.join(agentDir, "codex-home", "auth.json");
+    let fetched = false;
+    const r = await restoreByosubCredentials({
+      plan: [
+        {
+          agentId,
+          provider: "openai" as const,
+          secretName: "byosub-a-openai",
+          targetPath,
+          openclawDir: oc,
+        },
+      ],
+      fetchSecret: async () => {
+        fetched = true;
+        return codexBlob();
+      },
+    });
+
+    expect(r).toEqual({ restored: 1, failed: 0, skipped: 0 });
+    expect(fetched).toBe(false);
+    expect(JSON.parse(fs.readFileSync(targetPath, "utf-8"))).toMatchObject({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: "live",
+        refresh_token: "rotated-refresh",
+      },
+    });
+    expect(readAuthProfileStore(agentDir)).toEqual(liveCred);
+  });
+
+  it("restores Codex from Secret Manager when only unrelated profiles exist and CODEX_HOME is missing", async () => {
     const oc = mkTmp();
     const agentId = "octogee-a-coach";
     const agentDir = path.join(oc, "agents", agentId, "agent");
