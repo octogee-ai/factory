@@ -52,25 +52,15 @@ describe("stripGatewayPrefix", () => {
 });
 
 describe("applyGatewayPrefixStripInPlace", () => {
-  it("mutates req.url to the stripped path so downstream consumers see post-strip", () => {
-    const req: { url?: string } = { url: "/api/g/gw-bender/api/v4/users/me" };
+  it.each([
+    ["strips the prefix for downstream consumers", "/api/g/gw-bender/api/v4/users/me", "/api/v4/users/me", "/api/v4/users/me"],
+    ["preserves the query string in req.url", "/api/g/gw-bender/api/v4/users?since=123", "/api/v4/users", "/api/v4/users?since=123"],
+    ["leaves an unprefixed URL unchanged", "/healthz", "/healthz", "/healthz"],
+  ])("%s", (_, url, expectedResult, expectedUrl) => {
+    const req: { url?: string } = { url };
     const result = applyGatewayPrefixStripInPlace(req);
-    expect(result).toBe("/api/v4/users/me");
-    expect(req.url).toBe("/api/v4/users/me");
-  });
-
-  it("preserves query string when stripping", () => {
-    const req: { url?: string } = { url: "/api/g/gw-bender/api/v4/users?since=123" };
-    const result = applyGatewayPrefixStripInPlace(req);
-    expect(result).toBe("/api/v4/users");
-    expect(req.url).toBe("/api/v4/users?since=123");
-  });
-
-  it("leaves req.url unchanged when no /api/g/ prefix present", () => {
-    const req: { url?: string } = { url: "/healthz" };
-    const result = applyGatewayPrefixStripInPlace(req);
-    expect(result).toBe("/healthz");
-    expect(req.url).toBe("/healthz");
+    expect(result).toBe(expectedResult);
+    expect(req.url).toBe(expectedUrl);
   });
 
   it("is idempotent — a second call on the same req is a no-op", () => {
