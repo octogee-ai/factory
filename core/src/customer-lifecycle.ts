@@ -483,6 +483,8 @@ async function addCustomerToGatewayInner(
     && adapter.hasWorkspaceGitDir(slug)
     && adapter.hasGitRemote(slug)
   ) {
+    steps.push(...(await ensureSshKeyAndGitea(adapter, slug)));
+    throwIfAborted(signal, uid);
     adapter.log(
       `[add:${slug}] operator gateway, status=complete, coach and durable workspace ready — verifying MM coach only`,
     );

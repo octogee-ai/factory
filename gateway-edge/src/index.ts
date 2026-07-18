@@ -11,6 +11,8 @@ import { installBodyParsers } from "./middleware/body-parsers.js";
 import { createEmailMetrics, setEmailMetrics } from "./lib/email-metrics.js";
 import { createNotificationMetrics, setNotificationMetrics } from "./lib/notification-metrics.js";
 import { createActivityPairMetrics, setActivityPairMetrics } from "./lib/activity-pair-metrics.js";
+import { getKiller } from "./lib/shell-kill-fetcher.js";
+import { reconcileDeletingWorkspaceShells } from "./lib/shells.js";
 
 import { mountApi } from "./routes/mount-api.js";
 import automationsRoutes from "./routes/automations.js";
@@ -401,6 +403,7 @@ if (process.env.NODE_ENV !== "test") {
         fork: process.env.OPENCLAW_FORK_SHA || "n/a",
         node: process.version,
       });
+      startDeletingShellReconciliation(rosterGatewayId);
     });
 
     chatProxy.startChatProxyBackground().catch((err) => {
@@ -415,6 +418,35 @@ if (process.env.NODE_ENV !== "test") {
     process.exit(1);
   });
   }
+}
+
+function startDeletingShellReconciliation(gatewayId: string): void {
+  if (!gatewayId) return;
+  let stopped = false;
+  let timer: NodeJS.Timeout | null = null;
+  const run = (): void => {
+    if (stopped) return;
+    void reconcileDeletingWorkspaceShells({ gatewayId, kill: getKiller() })
+      .then((result) => {
+        if (result.completed || result.pending) {
+          logger.info("[shells] deletion reconciliation", { gatewayId, ...result });
+        }
+      })
+      .catch((error) => {
+        logger.error("[shells] deletion reconciliation failed", {
+          gatewayId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        if (!stopped) timer = setTimeout(run, 30_000);
+      });
+  };
+  run();
+  process.once("exit", () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+  });
 }
 
 export default app;

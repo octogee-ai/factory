@@ -688,7 +688,7 @@ const cloneIdx = state.calls.indexOf("cloneWorkspaceRepo");
 });
 
 describe("addCustomerToGateway — operator gateway short-circuits when status=complete", () => {
-  it("skips SSH-resync + Gitea ensure + blob-sync + byosub-restore + config-patch; only verify-channel-ready fires", async () => {
+  it("verifies the SSH key but skips unrelated convergence when the durable workspace is ready", async () => {
     const state = makeState(
       snap({
         status: "complete",
@@ -710,15 +710,14 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
     const adapter = makeAdapter(state);
     adapter.isOperatorGateway = () => true;
     adapter.customerCoachWiredInOpenclawConfig = () => true; // openclaw.json has the agent
+    state.giteaRegisteredPubKey = "ssh-pubkey";
 
     const result = await addCustomerToGateway(adapter, "uid-test");
 
     expect(result.newCustomer).toBe(false);
     expect(result.steps).toEqual(["verify-channel-ready"]);
-    // Heavy / network-touching calls MUST NOT fire on an operator pod with a hot PVC
     expect(state.calls).not.toContain("ensureGiteaOrg");
     expect(state.calls).not.toContain("createGiteaUser");
-    expect(state.calls).not.toContain("readGiteaCustomerPubKey");
     expect(state.calls).not.toContain("blobSyncForSlug");
     expect(state.calls).not.toContain("restoreByosubForAgent");
     expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
@@ -728,6 +727,38 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
     // short-circuit path — Copilot review on PR #1182 caught a regression
     // here. Without it, fleet/heartbeat reports no mounted customers.
     expect(state.calls).toContain("onMounted");
+  });
+
+  it("resyncs a drifted Gitea SSH key before the complete/wired fast path returns", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        agentIds: ["octogee-test-coach"],
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user-existing",
+        greetingPosted: true,
+      }),
+      {
+        customerDir: true,
+        workspaceGitDir: true,
+        gitRemote: true,
+        sshKey: true,
+        templatesWritten: true,
+        repoHasCommits: true,
+      },
+    );
+    state.giteaRegisteredPubKey = "ssh-stale-from-old-pod";
+    const adapter = makeAdapter(state);
+    adapter.isOperatorGateway = () => true;
+    adapter.customerCoachWiredInOpenclawConfig = () => true;
+
+    const result = await addCustomerToGateway(adapter, "uid-test");
+
+    expect(result.steps).toEqual(["ssh-key-resync", "verify-channel-ready"]);
+    expect(state.giteaRegisteredPubKey).toBe("ssh-pubkey");
+    expect(state.calls).toContain("createGiteaUser");
+    expect(state.calls).not.toContain("ensureGiteaOrg");
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
   });
 
   it("does not short-circuit for a brand-new customer (status='')", async () => {
