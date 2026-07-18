@@ -1,4 +1,4 @@
-import { DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL, DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION, GATEWAY_HEARTBEAT_INTERVAL_MS, OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_TTL_MS, OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL, OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION, } from "@octogee/shared/types/fleet-controller";
+import { GATEWAY_HEARTBEAT_INTERVAL_MS, OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_TTL_MS, OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL, OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION, } from "@octogee/shared/types/fleet-controller";
 import { CANONICAL_OPENCLAW_FORK_SHA, CANONICAL_OPENCLAW_VERSION, } from "@octogee/shared/types/openclaw-release";
 export const OPENCLAW_CONTROL_RUNTIME_FRESH_MS = GATEWAY_HEARTBEAT_INTERVAL_MS * 4;
 export const OPENCLAW_CONTROL_OPENCLAW_VERSION = CANONICAL_OPENCLAW_VERSION;
@@ -35,20 +35,16 @@ function isFreshWithin(value, now, freshMs) {
         now - observedAt <= freshMs;
 }
 function hasReadyRevisionIdentity(revision, input) {
-    return revision?.docKind === "revision" &&
-        revision.gateway === input.gatewayId &&
-        revision.revisionId === input.revisionId &&
+    return revision?.docKind === "runtime" &&
+        revision.gatewayId === input.gatewayId &&
+        input.revisionId === input.gatewayId &&
         revision.lifecycle === "serving";
 }
 function hasExpectedRuntimeIdentity(configStatus) {
-    const controlProtocol = record(configStatus?.controlProtocol);
     return configStatus?.runtimeReady === true &&
         configStatus.runtimeHealth === "healthy" &&
-        configStatus.freezeState === "unfrozen" &&
         configStatus.openclawVersion === OPENCLAW_CONTROL_OPENCLAW_VERSION &&
-        configStatus.openclawForkSha === OPENCLAW_CONTROL_OPENCLAW_FORK_SHA &&
-        controlProtocol?.protocol === DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL &&
-        controlProtocol.version === DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION;
+        configStatus.openclawForkSha === OPENCLAW_CONTROL_OPENCLAW_FORK_SHA;
 }
 function hasReadyDashboard(configStatus, now) {
     const dashboardProtocol = record(configStatus?.dashboardControlProtocol);

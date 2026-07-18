@@ -1138,7 +1138,7 @@ describe("system_config restore", () => {
     expect(fs.existsSync(path.join(openclawDir, "system_config.sync.lock"))).toBe(true);
   });
 
-  it("does not let the background watcher mutate Git while a roll owns the config freeze", () => {
+  it("syncs through a leftover roll-era freeze marker — the freeze plane is retired", () => {
     const configPath = path.join(repoDir, "openclaw.json");
     writeJson(configPath, { version: 1 });
     fs.writeFileSync(path.join(openclawDir, "system_config.freeze.json"), JSON.stringify({
@@ -1147,20 +1147,20 @@ describe("system_config restore", () => {
       directoryMode: 0o700,
       configMode: 0o600,
     }));
-    const git = vi.fn(() => "unexpected");
+    const git = vi.fn((_cwd: string, args: string) =>
+      args === "status --porcelain -- openclaw.json .octogee.json .gitignore" ? "" : "ok"
+    );
 
     const result = syncSystemConfigForSlug("acme", {
       openclawDir,
+      log: () => {},
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
       gitExec: git,
     });
 
-    expect(result).toMatchObject({
-      skipped: "config-frozen",
-      committed: false,
-      pushed: false,
-      processedFingerprint: systemConfigFingerprint(configPath),
-    });
-    expect(git).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ pushed: true, pending: false });
+    expect(git).toHaveBeenCalled();
   });
 
   it("reclaims a stale incomplete config-sync lock after a crashed writer", () => {

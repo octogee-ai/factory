@@ -88,10 +88,6 @@ export type {
   GatewayState,
   GatewayLastError,
   CustomerSnapshot,
-  SystemConfigMigrationMode,
-} from './fleet-controller.js';
-export {
-  systemConfigMigrationMode,
 } from './fleet-controller.js';
 export {
   CANONICAL_OPENCLAW_FORK_SHA,
@@ -236,8 +232,6 @@ export {
 
 export type {
   GatewayLifecycleStatus,
-  GatewayRollStatus,
-  GatewayRollState,
   GatewayIdleSleepStatus,
   GatewayIdleSleepState,
   GatewayDoc,
@@ -245,28 +239,22 @@ export type {
   ReleaseDoc,
   AssignmentSource,
   AssignmentDoc,
-  RevisionRollRole,
-  RevisionLifecycle,
-  RevisionHeartbeatStatus,
-  RevisionHelmObservation,
-  RevisionHeartbeatObservation,
-  RevisionRealizationDoc,
-  RevisionTombstone,
+  GatewayRuntimeLifecycle,
+  GatewayHeartbeatStatus,
+  GatewayHelmObservation,
+  GatewayHeartbeatObservation,
+  GatewayRuntimeDoc,
   GatewayFieldClassification,
 } from './gateway-releases.js';
 export {
   GATEWAY_RELEASES_SUBCOLLECTION,
   GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
-  REVISION_TOMBSTONES_COLLECTION,
-  RELEASE_NEW_REVISION_FIELDS,
-  RELEASE_IN_PLACE_FIELDS,
+  RELEASE_FIELDS,
   GATEWAY_MUTABLE_FIELDS,
-  revisionIdForRelease,
-  helmReleaseNameForRevision,
+  helmReleaseNameForGateway,
   gatewayEdgeServiceName,
   gatewayPodServiceName,
-  revisionTombstoneDocId,
-  isRevisionTombstone,
+  isGatewayRuntimeDoc,
   releasePayloadHash,
   classifyGatewayField,
 } from './gateway-releases.js';

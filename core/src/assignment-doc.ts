@@ -4,14 +4,12 @@ import {
   isAssignmentState,
   type AssignmentDoc,
   type AssignmentSource,
-  type GatewayDoc,
 } from "@octogee/shared/types/gateway-releases";
 
-// gateways/{gatewayId}/assignments/{uid} — the revision-assignment layer
-// (GATEWAY-RELEASES-SPEC "Placement and migration targeting"). This module owns
-// reading/writing that layer and the pure placement-resolution rule. Bare user
-// mirrors stay put; assignment docs carry the per-customer serving revision so a
-// roll can migrate customers between two revisions of the same bare gateway.
+// gateways/{gatewayId}/assignments/{uid} — which customers a gateway serves
+// (GATEWAY-SIMPLE-ROLL-SPEC). This module owns reading/writing that layer.
+// Bare user mirrors stay put; assignment docs carry the roster state the
+// migration plane flips while a customer moves between gateways.
 
 // Narrow structural surfaces — the real firebase-admin Firestore satisfies them
 // (collection → doc → collection → doc/get), and tests fake exactly these.
@@ -47,12 +45,13 @@ function assignmentsCollection(
 const ASSIGNMENT_SOURCES: ReadonlySet<AssignmentSource> = new Set<AssignmentSource>([
   "onboarding",
   "migrate-customer",
-  "rollout",
   "repair",
 ]);
 
 // A parsed AssignmentDoc or null when the stored shape is not a complete
 // assignment — a partial/junk doc must never be resolved as a mount signal.
+// Revision-era fields (revisionId, release) on legacy docs are ignored; the
+// cutover script normalizes sources (e.g. retired "rollout") when it runs.
 export function parseAssignmentDoc(
   uid: string,
   data: Record<string, unknown> | undefined,
@@ -60,14 +59,10 @@ export function parseAssignmentDoc(
   if (!data) return null;
   const slug = data.slug;
   const gatewayId = data.gatewayId;
-  const revisionId = data.revisionId;
-  const release = data.release;
   const source = data.source;
   if (
     typeof slug !== "string" ||
     typeof gatewayId !== "string" ||
-    typeof revisionId !== "string" ||
-    typeof release !== "number" ||
     typeof source !== "string" ||
     !ASSIGNMENT_SOURCES.has(source as AssignmentSource)
   ) {
@@ -77,11 +72,7 @@ export function parseAssignmentDoc(
     uid,
     slug,
     gatewayId,
-    revisionId,
-    release,
     source: source as AssignmentSource,
-    // Pre-PR7 docs carry no roster fields: default to serving at epoch 0 (the
-    // steady state before any flip) so they keep routing exactly as today.
     state: isAssignmentState(data.state) ? data.state : "serving",
     epoch: typeof data.epoch === "number" && data.epoch >= 0 ? data.epoch : 0,
     updatedAt: typeof data.updatedAt === "number" ? data.updatedAt : 0,
@@ -119,71 +110,4 @@ export async function deleteAssignmentDoc(
   uid: string,
 ): Promise<void> {
   await assignmentsCollection(db, gatewayId).doc(uid).delete();
-}
-
-// gateways/{gatewayId}.liveRevisionId — the revision serving traffic, used as the
-// gap-user placement fallback (an assigned builder with no assignment doc mounts on
-// the live revision). Null pre-backfill (no desired doc yet) — callers must treat
-// null as "unknown", never as an exclusion.
-interface GatewayDocReader {
-  collection: (name: string) => { doc: (id: string) => AssignmentDocRef };
-}
-
-export async function readLiveRevisionId(
-  db: GatewayDocReader,
-  gatewayId: string,
-): Promise<string | null> {
-  const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-  if (!snap.exists) return null;
-  const live = snap.data()?.liveRevisionId;
-  return typeof live === "string" ? live : null;
-}
-
-// The revision-aware mount decision (GATEWAY-RELEASES-SPEC). An assigned builder
-// mounts on the pod's revision iff:
-//   - the pod has NO revision (legacy pod) → mount (byte-identical to today); or
-//   - the user has an assignment doc → only on that assignment's revision; or
-//   - the user is a gap user (no assignment doc) → only on the LIVE revision
-//     (never on both revisions of a rolling gateway). When the live revision is
-//     unknown (pre-backfill), a gap user still mounts — the safe default that
-//     preserves today's single-revision behavior.
-// Builder placement is decided by the caller from the user mirror; this predicate
-// only resolves the serving revision.
-export function mountsOnRevision(input: {
-  podRevisionId: string;
-  liveRevisionId: string | null;
-  assignmentRevisionId: string | null;
-}): boolean {
-  if (!input.podRevisionId) return true;
-  if (input.assignmentRevisionId != null) {
-    return input.assignmentRevisionId === input.podRevisionId;
-  }
-  if (input.liveRevisionId == null) return true;
-  return input.podRevisionId === input.liveRevisionId;
-}
-
-// Placement resolution rule (GATEWAY-RELEASES-SPEC "Placement and migration
-// targeting"): the destination revision for a new/migrated assignment is the
-// roll target while the roll is accepting new assignments, else the live
-// revision. A resolved-but-not-ready revision is rejected — never place onto a
-// revision that cannot yet serve.
-export type PlacementRejectReason = "no-live-revision" | "revision-not-ready";
-
-export type PlacementResolution =
-  | { ok: true; revisionId: string; release: number | null }
-  | { ok: false; reason: PlacementRejectReason };
-
-export function resolvePlacementRevision(input: {
-  gateway: Pick<GatewayDoc, "roll" | "liveRevisionId" | "liveRelease">;
-  isRevisionReady: (revisionId: string) => boolean;
-}): PlacementResolution {
-  const { gateway, isRevisionReady } = input;
-  const roll = gateway.roll;
-  const revisionId =
-    roll && roll.acceptingNewAssignments ? roll.targetRevisionId : gateway.liveRevisionId;
-  const release =
-    roll && roll.acceptingNewAssignments ? roll.toRelease : gateway.liveRelease;
-  if (!revisionId) return { ok: false, reason: "no-live-revision" };
-  if (!isRevisionReady(revisionId)) return { ok: false, reason: "revision-not-ready" };
-  return { ok: true, revisionId, release };
 }

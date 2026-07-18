@@ -141,10 +141,10 @@ describe("infra/gateway/entrypoint.sh — gateway token Secret Manager publish b
 
 function runnerBlockSource(): string {
   const src = fs.readFileSync(ENTRYPOINT, "utf8");
-  const earlyStart = src.indexOf("supervise_runner system-config-status");
+  const earlyStart = src.indexOf("# BuilderShell comes up before the durable restore");
   const earlyEnd = src.indexOf("# ── Dedicated gateway system_config restore", earlyStart);
   const start = src.indexOf("# ── In-pod runners:");
-  const end = src.indexOf("# ── Accept durable system_config boot", start);
+  const end = src.indexOf("# ── Runner metrics exporter", start);
   if (earlyStart < 0 || earlyEnd < 0 || start < 0 || end < 0) {
     throw new Error("could not locate runner startup block in entrypoint.sh");
   }
@@ -196,7 +196,6 @@ describe("infra/gateway/entrypoint.sh — locked operator platform provisioner b
   it("starts only the db-less controller and neutral side runners on operator gateways", () => {
     const result = runRunnerBlock("operator");
     expect(result.status).toBe(0);
-    expect(result.runners).toContain("system-config-status");
     expect(result.runners).toContain("fleet-controller");
     expect(result.runners).toContain("preview-proxy");
     expect(result.runners).not.toContain("provisioner");
@@ -211,7 +210,6 @@ describe("infra/gateway/entrypoint.sh — locked operator platform provisioner b
     const result = runRunnerBlock("standard", { operatorShellsEnabled: "true" });
     expect(result.status).toBe(0);
     expect(result.runners).toEqual([
-      "system-config-status",
       "fleet-controller",
       "site-build",
       "preview-proxy",
@@ -226,7 +224,6 @@ describe("infra/gateway/entrypoint.sh — locked operator platform provisioner b
     });
     expect(result.status).toBe(0);
     expect(result.runners).toEqual([
-      "system-config-status",
       "builder-shell",
       "fleet-controller",
       "site-build",

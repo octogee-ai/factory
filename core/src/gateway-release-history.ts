@@ -1,5 +1,4 @@
 import {
-  revisionIdForRelease,
   type GatewayDoc,
   type ReleaseDoc,
 } from "@octogee/shared/types/gateway-releases";
@@ -15,7 +14,6 @@ import {
 // `rolledBackFrom` names the release this entry restored when it is a rollback.
 export interface ReleaseHistoryEntry {
   release: number;
-  revisionId: string;
   imageRepository: string;
   imageTag: string;
   createdAt: string | null;
@@ -49,7 +47,6 @@ export function projectReleaseHistory(input: {
     .sort((a, b) => b.release - a.release)
     .map((r) => ({
       release: r.release,
-      revisionId: revisionIdForRelease(r.gatewayId, r.release),
       imageRepository: r.payload.imageRepository,
       imageTag: r.payload.imageTag,
       createdAt: typeof r.createdAt === "number" ? new Date(r.createdAt).toISOString() : null,

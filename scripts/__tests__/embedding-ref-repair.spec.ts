@@ -40,22 +40,7 @@ function root(overrides: Partial<GatewayDoc> = {}): GatewayDoc {
     latestRelease: 8,
     desiredRelease: 8,
     liveRelease: 2,
-    liveRevisionId: "default-r2",
-    trafficRevisionId: "default-r2",
     desiredStatus: "running",
-    roll: {
-      operationId: "roll-8",
-      status: "migrating",
-      fromRelease: 2,
-      toRelease: 8,
-      sourceRevisionId: "default-r2",
-      targetRevisionId: "default-r8",
-      acceptingNewAssignments: false,
-      startedAt: 1,
-      updatedAt: 2,
-      error: null,
-      flippedAt: null,
-    },
     ...overrides,
   };
 }
@@ -129,22 +114,15 @@ describe("planEmbeddingRefRepair", () => {
 });
 
 describe("repairTargetRevisionAllowed", () => {
-  it("allows exactly the live, traffic, and roll-source revisions", () => {
+  it("allows exactly the gateway's single stable-name instance", () => {
     const gw = root();
-    expect(repairTargetRevisionAllowed(gw, "default-r2")).toBe(true);
-    expect(
-      repairTargetRevisionAllowed(root({ trafficRevisionId: "default-r3" }), "default-r3"),
-    ).toBe(true);
+    expect(repairTargetRevisionAllowed(gw, "default")).toBe(true);
   });
 
-  it("refuses the roll target, unreferenced orphans, and desired-only revisions", () => {
+  it("refuses revision-suffixed or foreign instances", () => {
     const gw = root();
-    expect(repairTargetRevisionAllowed(gw, "default-r8")).toBe(false);
-    expect(repairTargetRevisionAllowed(gw, "default-r4")).toBe(false);
-    expect(repairTargetRevisionAllowed(gw, "default-r5")).toBe(false);
-    expect(
-      repairTargetRevisionAllowed(root({ roll: null, desiredRelease: 9 }), "default-r9"),
-    ).toBe(false);
+    expect(repairTargetRevisionAllowed(gw, "default-r2")).toBe(false);
+    expect(repairTargetRevisionAllowed(gw, "other")).toBe(false);
   });
 });
 

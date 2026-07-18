@@ -5,7 +5,7 @@ export interface SweepStuckReleasesDeps {
   // revision with a valid, non-retired durable root. Bare legacy ids are
   // intentionally excluded: the explicit legacy cleanup owns those releases.
   isRecoverableRevision: (revisionId: string) => Promise<boolean>;
-  // Recover one stuck revision release (rollback-to-last-good / uninstall-stuck-first-install).
+  // Recover one stuck stable release (rollback-to-last-good / uninstall-stuck-first-install).
   recover: (revisionId: string) => Promise<string>;
   now: () => number;
   // A release must be CONTINUOUSLY pending for this long before we recover it.

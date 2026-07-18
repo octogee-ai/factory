@@ -6,7 +6,6 @@ import {
 } from "@octogee/core/assigned-roster";
 import {
   configuredBuilderBootstrapAllowed,
-  gatewayRevisionIdFromPodName,
 } from "@octogee/core/gateway-live-release";
 import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
 import { normalizeTenantPolicyPath } from "../lib/tenant-route-policy.js";
@@ -43,6 +42,8 @@ const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/byok/agent-model-token",
   "/internal/byok/platform-embedding-key",
   "/internal/byok/byosub-flow",
+  "/internal/byok/byosub-user",
+  "/internal/byok/byosub-flow-read",
   "/internal/fleet/configured-builder-bootstrap",
   "/internal/openclaw-control/redeem",
   "/internal/openclaw-control/authorize",
@@ -148,13 +149,11 @@ async function slugAllowedForRequest(
   if (await slugBelongsToGateway(db, slug, bound.gatewayId)) return true;
   if (!routeAllowsInboundMigrationSlug(req)) return false;
   if (await hasRunningInboundMigrationForSlug(db, bound.gatewayId, slug)) return true;
-  const revisionId = gatewayRevisionIdFromPodName(bound.gatewayId, bound.podName);
-  if (!revisionId) return false;
   const gatewaySnap = await db.collection("gateways").doc(bound.gatewayId).get();
   const gateway = gatewaySnap.exists ? gatewaySnap.data() : undefined;
   return configuredBuilderBootstrapAllowed(gateway, {
     gatewayId: bound.gatewayId,
-    revisionId,
+    podName: bound.podName,
     slug,
   });
 }

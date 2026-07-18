@@ -186,27 +186,14 @@ function configuredBender(overrides: Record<string, unknown> = {}) {
 }
 
 describe("tenant enforcement middleware", () => {
-  it("allows a platform-bound cron caller on an allowlisted cron route", async () => {
+  it.each([
+    "/internal/billing/check-trial-expiry",
+    "/internal/billing/run-auto-top-ups",
+    "/internal/activity-pairs/report",
+  ])("allows the cron caller on %s", async (path) => {
     const res = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
-      .post("/internal/billing/check-trial-expiry")
+      .post(path)
       .send({});
-
-    expect(res.status).toBe(200);
-  });
-
-  it("allows the cron caller on the auto-top-up sweep route", async () => {
-    const res = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
-      .post("/internal/billing/run-auto-top-ups")
-      .send({});
-
-    expect(res.status).toBe(200);
-  });
-
-  it("allows the cron caller on the report-only Activity pair route", async () => {
-    const res = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
-      .post("/internal/activity-pairs/report")
-      .send({});
-
     expect(res.status).toBe(200);
   });
 
@@ -489,7 +476,7 @@ describe("tenant enforcement middleware", () => {
     expect(res.status).toBe(403);
   });
 
-  it("allows the authenticated target revision to bootstrap its configured isolated builder", async () => {
+  it("allows an authenticated stable gateway pod to bootstrap its configured builder", async () => {
     const res = await request(app({
       boundTenant: BENDER_R2,
       gateways: { bender: configuredBender() },
@@ -511,8 +498,8 @@ describe("tenant enforcement middleware", () => {
     expect(res.status).toBe(200);
   });
 
-  it("rejects stale, unbound, and retiring configured-builder bootstrap callers", async () => {
-    const source = await request(app({
+  it("allows any pod of the gateway's own Deployment — identity, never lifecycle (GATEWAY-SIMPLE-ROLL-SPEC)", async () => {
+    const anyPod = await request(app({
       boundTenant: {
         ...BENDER_R2,
         podName: "octogee-gateway-bender-r1-5bc5949d46-p946t",
@@ -521,6 +508,11 @@ describe("tenant enforcement middleware", () => {
     }))
       .get("/internal/gitea/user-pubkey")
       .query({ slug: "victim" });
+
+    expect(anyPod.status).toBe(200);
+  });
+
+  it("rejects an unbound caller but keeps configured-builder bootstrap identity-pure while retiring", async () => {
     const unbound = await request(app({
       boundTenant: BENDER,
       gateways: { bender: configuredBender() },
@@ -538,9 +530,8 @@ describe("tenant enforcement middleware", () => {
       .get("/internal/gitea/user-pubkey")
       .query({ slug: "victim" });
 
-    expect(source.status).toBe(403);
     expect(unbound.status).toBe(403);
-    expect(retiring.status).toBe(403);
+    expect(retiring.status).toBe(200);
   });
 
   it("allows BYOS capture only for flows owned by the bound gateway", async () => {

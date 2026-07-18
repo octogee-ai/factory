@@ -150,7 +150,7 @@ describe("system config accepted-head recovery", () => {
       },
     });
     expect(commands.some((command) => command.includes("Octogee-Config-Source: recovery"))).toBe(true);
-    expect(commands.some((command) => command.includes("Octogee-Gateway-Revision: bender-r9"))).toBe(true);
+    expect(commands.some((command) => command.includes("Octogee-Gateway: bender"))).toBe(true);
     expect(commands.some((command) => command.includes("OpenClaw-Version: 2026.7.1"))).toBe(true);
     expect(commands.at(-1)).toBe("rev-parse HEAD");
   });

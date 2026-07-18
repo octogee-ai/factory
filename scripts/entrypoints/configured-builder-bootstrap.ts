@@ -5,7 +5,6 @@ import { hydrateConfiguredBuilderBootstrap } from "../lib/configured-builder-boo
 export interface ConfiguredBuilderBootstrapInput {
   openclawDir: string;
   gatewayId: string;
-  revisionId: string;
   slug: string;
 }
 
@@ -18,19 +17,9 @@ function required(env: NodeJS.ProcessEnv, name: string): string {
 export function resolveConfiguredBuilderBootstrapInput(
   env: NodeJS.ProcessEnv = process.env,
 ): ConfiguredBuilderBootstrapInput {
-  const gatewayId = required(env, "GATEWAY_ID");
-  const revisionId = required(env, "GATEWAY_REVISION_ID");
-  const revisionPrefix = `${gatewayId}-r`;
-  const revisionNumber = revisionId.startsWith(revisionPrefix)
-    ? revisionId.slice(revisionPrefix.length)
-    : "";
-  if (!/^[1-9]\d*$/.test(revisionNumber)) {
-    throw new Error("GATEWAY_REVISION_ID does not belong to GATEWAY_ID");
-  }
   return {
     openclawDir: required(env, "OPENCLAW_DIR"),
-    gatewayId,
-    revisionId,
+    gatewayId: required(env, "GATEWAY_ID"),
     slug: required(env, "GATEWAY_BUILDER_SLUG"),
   };
 }

@@ -9,13 +9,13 @@ import {
   buildFleetHealthResponse,
   cloneRetryDelayMs,
   cloneRetryReady,
-  gatewayRevisionServiceName,
+  gatewayServiceName,
   settleConvergence,
   getEvictObservedSlugs,
   getMountObservedSlugs,
   pathGatewayIdMatchesPod,
+  probeSurgeReadiness,
   readMountedCustomersFromAssignedState,
-  registerConfigControlRoutes,
   resolveFleetCapabilities,
 } from "../lib/fleet-provisioner.js";
 import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
@@ -122,6 +122,9 @@ describe("readMountedCustomersFromAssignedState", () => {
       { provisioning: { openclaw: { slug: "ceckert" } } },
       { provisioning: { openclaw: { slug: "missing-dir" } } },
       { provisioning: { openclaw: { slug: "unwired" } } },
+      { provisioning: { openclaw: { slug: "no-runtime" } } },
+      { provisioning: { openclaw: { slug: "no-git" } } },
+      { provisioning: { openclaw: { slug: "no-origin" } } },
       { provisioning: { openclaw: { slug: "ceckert" } } },
       { username: "fallback" },
     ]);
@@ -134,6 +137,9 @@ describe("readMountedCustomersFromAssignedState", () => {
       readMountedCustomersFromAssignedState(db, "gw-bender", {
         hasCustomerDir,
         customerCoachWiredInOpenclawConfig,
+        hasCustomerAgentRuntime: (slug) => slug !== "no-runtime",
+        hasWorkspaceGitDir: (slug) => slug !== "no-git",
+        hasGitRemote: (slug) => slug !== "no-origin",
       }),
     ).resolves.toEqual(["ceckert", "fallback"]);
   });
@@ -147,13 +153,20 @@ describe("readMountedCustomersFromAssignedState", () => {
     await expect(
       readMountedCustomersFromAssignedState(db, "gw-a", {
         hasCustomerDir: (slug) => slug === "bob",
+        hasWorkspaceGitDir: () => true,
+        hasGitRemote: () => true,
       }),
     ).resolves.toEqual(["bob"]);
   });
 });
 
 function mkObservedAdapter(over: Partial<CustomerLifecycleAdapter>): CustomerLifecycleAdapter {
-  return over as CustomerLifecycleAdapter;
+  return {
+    hasCustomerAgentRuntime: () => true,
+    hasWorkspaceGitDir: () => true,
+    hasGitRemote: () => true,
+    ...over,
+  } as CustomerLifecycleAdapter;
 }
 
 describe("observed split — evict keys off raw presence, mount off completion", () => {
@@ -196,6 +209,18 @@ describe("observed split — evict keys off raw presence, mount off completion",
     expect(getMountObservedSlugs(a)).toEqual(["alice"]); // bob still in toMount
   });
 
+  it("mount-observed excludes marked customers missing runtime or durable workspace state", () => {
+    const a = mkObservedAdapter({
+      listLocalCustomerSlugs: () => ["healthy", "no-runtime", "no-git", "no-origin"],
+      customerMountMarked: () => true,
+      hasCustomerAgentRuntime: (slug) => slug !== "no-runtime",
+      hasWorkspaceGitDir: (slug) => slug !== "no-git",
+      hasGitRemote: (slug) => slug !== "no-origin",
+    });
+
+    expect(getMountObservedSlugs(a)).toEqual(["healthy"]);
+  });
+
   it("mount-observed counts every coach-wired slug when no marker probe exists", () => {
     const a = mkObservedAdapter({
       listLocalCustomerSlugs: () => ["alice"],
@@ -217,41 +242,67 @@ describe("observed split — evict keys off raw presence, mount off completion",
   });
 });
 
-describe("in-pod revision-keyed heartbeat (PR3 dependency)", () => {
+describe("in-pod gateway heartbeat", () => {
+  it("requires both the handoff marker and a live OpenClaw probe for surge readiness", async () => {
+    const isGatewayUp = vi.fn(async () => true);
+
+    await expect(probeSurgeReadiness({
+      runtimeStatus: "ready",
+      handoffReleased: true,
+      isGatewayUp,
+    })).resolves.toEqual({ ready: true, openclawUp: true });
+    expect(isGatewayUp).toHaveBeenCalledWith(2_000);
+
+    isGatewayUp.mockResolvedValueOnce(false);
+    await expect(probeSurgeReadiness({
+      runtimeStatus: "ready",
+      handoffReleased: true,
+      isGatewayUp,
+    })).resolves.toEqual({ ready: false, openclawUp: false });
+
+    isGatewayUp.mockClear();
+    await expect(probeSurgeReadiness({
+      runtimeStatus: "booting",
+      handoffReleased: true,
+      isGatewayUp,
+    })).resolves.toEqual({ ready: false, openclawUp: false });
+    expect(isGatewayUp).not.toHaveBeenCalled();
+  });
+
   it("reports the OpenClaw runtime version through the poller health endpoint", () => {
     expect(
       buildFleetHealthResponse({
         status: "ready",
         gatewayId: "default",
+        podUid: "pod-uid-1",
         version: "sha-1",
         openclawVersion: "2026.7.1",
         startedAt: 42,
         customers: [],
         migratingIn: [],
       }),
-    ).toMatchObject({ openclawVersion: "2026.7.1" });
+    ).toMatchObject({ openclawVersion: "2026.7.1", podUid: "pod-uid-1" });
   });
 
-  it("carries revisionId onto the heartbeat snapshot so glmGateways/{revisionId}.heartbeat gets written", () => {
+  it("keys the heartbeat snapshot by the bare gateway id (GATEWAY-SIMPLE-ROLL-SPEC)", () => {
     const snap = buildFleetHeartbeatSnapshot({
       gatewayId: "default",
-      revisionId: "default-r2",
       status: "ready",
       version: "sha-1",
       openclawVersion: "2026.7.1",
       mountedCustomers: ["alice"],
-      internalUrl: "http://octogee-gateway-default-r2.ns.svc.cluster.local:18789",
+      internalUrl: "http://octogee-gateway-default.ns.svc.cluster.local:18789",
       startedAt: 42,
     });
-    expect(snap).toMatchObject({ gatewayId: "default", revisionId: "default-r2", status: "ready" });
+    expect(snap).toMatchObject({ gatewayId: "default", status: "ready" });
+    expect(snap).not.toHaveProperty("revisionId");
     expect(snap.openclawVersion).toBe("2026.7.1");
   });
 
-  it("refuses an empty revision id so a legacy pod cannot write bare telemetry", () => {
+  it("refuses an empty gateway id so a misconfigured pod cannot write anonymous telemetry", () => {
     expect(() =>
       buildFleetHeartbeatSnapshot({
-        gatewayId: "default",
-        revisionId: "",
+        gatewayId: "",
         status: "booting",
         version: "v",
         openclawVersion: "v",
@@ -259,39 +310,12 @@ describe("in-pod revision-keyed heartbeat (PR3 dependency)", () => {
         internalUrl: "http://gw",
         startedAt: 1,
       }),
-    ).toThrow("revisionId is required");
+    ).toThrow("gatewayId is required");
   });
 
-  it("points the heartbeat internalUrl at the revision Service when a revision id is set", () => {
-    expect(gatewayRevisionServiceName({ gatewayId: "default", revisionId: "default-r2" })).toBe(
-      "octogee-gateway-default-r2",
-    );
-  });
-
-  it("refuses bare service addressing", () => {
-    expect(() => gatewayRevisionServiceName({ gatewayId: "default", revisionId: "" })).toThrow(
-      "revisionId is required",
-    );
-  });
-});
-
-describe("protocol-v2 config control route registration", () => {
-  it("mounts only the six restart-durable config-control endpoints", () => {
-    const post = vi.fn();
-    registerConfigControlRoutes(
-      { post } as never,
-      vi.fn(),
-      {} as never,
-    );
-
-    expect(post.mock.calls.map(([route]) => route)).toEqual([
-      "/config-freeze-v2/:gatewayId",
-      "/config-candidate-proof/:gatewayId",
-      "/config-promote-candidate/:gatewayId",
-      "/config-abort-v2/:gatewayId",
-      "/config-retire-v2/:gatewayId",
-      "/config-finalize-v2/:gatewayId",
-    ]);
+  it("points the heartbeat internalUrl at the stable bare-id Service", () => {
+    expect(gatewayServiceName({ gatewayId: "default" })).toBe("octogee-gateway-default");
+    expect(() => gatewayServiceName({ gatewayId: "" })).toThrow("gatewayId is required");
   });
 });
 

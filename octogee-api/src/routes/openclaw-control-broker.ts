@@ -13,7 +13,7 @@ import {
   type OpenClawControlTicketRejectionReason,
 } from "@octogee/core/openclaw-control-tickets";
 import { isOpenClawControlRevisionRuntimeReady } from "@octogee/core/openclaw-control-runtime-ready";
-import { isGatewayDesiredDoc, isRevisionRealizationDoc } from "@octogee/shared/types/gateway-releases";
+import { isGatewayDesiredDoc, isGatewayRuntimeDoc } from "@octogee/shared/types/gateway-releases";
 import { isGatewayClassControlUiAccessEnabled, resolveGatewayClass } from "@octogee/shared/types/glm";
 import { revisionIdFromGatewayPodName } from "../lib/gateway-pod-revision.js";
 
@@ -168,13 +168,10 @@ function isReadyLiveServingRevision(
   return isGatewayDesiredDoc(root) &&
     root.gatewayId === gatewayId &&
     root.desiredStatus === "running" &&
-    root.roll === null &&
     root.desiredRelease === root.liveRelease &&
-    root.liveRevisionId === revisionId &&
-    root.trafficRevisionId === revisionId &&
-    isRevisionRealizationDoc(revision) &&
-    revision.revisionId === revisionId &&
-    revision.gateway === gatewayId &&
+    revisionId === gatewayId &&
+    isGatewayRuntimeDoc(revision) &&
+    revision.gatewayId === gatewayId &&
     revision.release === root.liveRelease &&
     revision.lifecycle === "serving" &&
     isOpenClawControlRevisionRuntimeReady(revision, { gatewayId, revisionId, now });

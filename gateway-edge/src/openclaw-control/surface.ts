@@ -941,8 +941,7 @@ class OpenClawControlSocketBridge {
     this.admittingIds.delete(frame.id);
     if (!acquired.ok) {
       lease.release();
-      const reason = acquired.code === "config-frozen" ? "config-frozen" : "config-writer-busy";
-      this.deny(frame, decision, reason, this.args.browser.readyState === WebSocket.OPEN);
+      this.deny(frame, decision, "config-writer-busy", this.args.browser.readyState === WebSocket.OPEN);
       return null;
     }
     if (this.closing || this.args.browser.readyState !== WebSocket.OPEN ||

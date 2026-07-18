@@ -97,22 +97,14 @@ describe("validateRolloutBody", () => {
     }
   });
 
-  it("accepts a pinned-bundle tag with a numeric hotfix suffix", () => {
-    const r = validateRolloutBody({ imageTag: "a9d7600-oc2026.5.3-1" });
+  it.each([
+    "a9d7600-oc2026.5.3-1",
+    "a9f521f-oc2026.5.12-diag",
+    "a9f521f-oc2026.5.16-beta.6",
+  ])("accepts a pinned-bundle tag with the suffix %s", (imageTag) => {
+    const r = validateRolloutBody({ imageTag });
     expect("ok" in r).toBe(true);
-  });
-
-  it("accepts a build-flavor suffix like -diag", () => {
-    const r = validateRolloutBody({ imageTag: "a9f521f-oc2026.5.12-diag" });
-    expect("ok" in r).toBe(true);
-    if ("ok" in r) {
-      expect(r.ok.imageTag).toBe("a9f521f-oc2026.5.12-diag");
-    }
-  });
-
-  it("accepts an oc prerelease version like -beta.6", () => {
-    const r = validateRolloutBody({ imageTag: "a9f521f-oc2026.5.16-beta.6" });
-    expect("ok" in r).toBe(true);
+    if ("ok" in r) expect(r.ok.imageTag).toBe(imageTag);
   });
 
   it("accepts a non-canonical -oc suffix (operator-trusted, not strict semver)", () => {

@@ -7,7 +7,6 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  acquireSystemConfigControlLeaseSync,
   acquireSystemConfigMutationLease,
   acquireSystemConfigShellCapabilitySync,
   acquireSystemConfigSyncLeaseSync,
@@ -77,7 +76,7 @@ describe("system config cross-container mutation lease", () => {
     )).not.toThrow();
   });
 
-  it("returns typed busy and frozen results without exposing a mutation window", async () => {
+  it("returns a typed busy result without exposing a mutation window and ignores retired freeze markers", async () => {
     const openclawDir = tempDir();
     const held = acquireSystemConfigSyncLeaseSync({ openclawDir });
     expect(held).not.toBeNull();
@@ -94,20 +93,9 @@ describe("system config cross-container mutation lease", () => {
       directoryMode: 0o700,
       configMode: 0o600,
     }));
-    await expect(acquireSystemConfigMutationLease({ openclawDir })).resolves.toEqual({
-      ok: false,
-      code: "config-frozen",
-      freezeOwner: { migrationId: "mig-1", slug: "alice" },
-    });
-    expect(fs.existsSync(systemConfigSyncLockPath(openclawDir))).toBe(false);
-
-    fs.writeFileSync(path.join(openclawDir, "system_config.freeze.json"), JSON.stringify({
-      migrationId: "mig-without-scope",
-      directoryMode: 0o700,
-      configMode: 0o600,
-    }));
-    await expect(acquireSystemConfigMutationLease({ openclawDir }))
-      .rejects.toThrow(/invalid system config freeze marker/i);
+    const mutation = await acquireSystemConfigMutationLease({ openclawDir });
+    expect(mutation.ok).toBe(true);
+    if (mutation.ok) await mutation.lease.release();
     expect(fs.existsSync(systemConfigSyncLockPath(openclawDir))).toBe(false);
   });
 
@@ -126,7 +114,6 @@ describe("system config cross-container mutation lease", () => {
       code: "shell-active",
       shellIds: ["accepted-shell"],
     });
-    expect(acquireSystemConfigControlLeaseSync({ openclawDir })).toBeNull();
 
     expect(releaseSystemConfigShellCapabilitySync({
       openclawDir,
@@ -198,7 +185,6 @@ describe("system config cross-container mutation lease", () => {
       code: "shell-active",
       shellIds: ["same-shell"],
     });
-    expect(acquireSystemConfigControlLeaseSync({ openclawDir })).toBeNull();
   });
 
   it("reclaims only an expired heartbeat through atomic lease-directory quarantine", () => {

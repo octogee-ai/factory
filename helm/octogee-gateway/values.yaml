@@ -27,13 +27,6 @@ revisionId: ""
 # starts.
 builderSlug: ""
 
-systemConfigRollContext:
-  migrationId: ""
-  sourceRevisionId: ""
-  targetRevisionId: ""
-  checkpointCommit: ""
-  freezeObject: ""
-
 # Bundle SHA. All three sidecars (gateway, gateway-edge, chat-proxy)
 # default to this tag for atomic rolls. Per-image overrides below take
 # precedence when set, but the operator workflow is single-SHA.
@@ -74,6 +67,11 @@ operatorAccess:
 # pushes (the manual `kubectl scale --replicas=0 --all` workaround is no longer
 # needed — TEST is always paused unless an operator explicitly resumes).
 replicas: 1
+
+# Roll strategy — "recreate" (default) or "surge" (RollingUpdate maxSurge=1 /
+# maxUnavailable=0: new pod Ready before the old one dies). Cowboy passes
+# surge for stable-name gateway releases (GATEWAY-SIMPLE-ROLL-SPEC).
+rollStrategy: recreate
 
 # Spot/preemption drain budget. Kubernetes runs this hook before SIGTERM and
 # counts it against terminationGracePeriodSeconds, so keep timeoutSeconds below
@@ -151,6 +149,7 @@ machineFamily: ""
 # triggers a one-tick re-apply in PROD even though PROD's render is
 # unchanged — free no-op rolls, not a correctness issue.
 chartFingerprint: ""
+deploymentIntentFingerprint: ""
 
 conversationExperiment:
   mode: "broad"
@@ -325,25 +324,25 @@ tiers:
       maxOldSpaceSizeMb: "147456"
 
 probes:
-  # Startup reaches the config status plane, which remains healthy during
-  # isolated-gateway repair. 10s × 60 keeps a 10-minute window for failures
-  # of that repair plane itself.
+  # Non-shared startup reaches the fleet controller only after durable-config
+  # restore and repair. 10s × 60 gives each identity-pure attempt 10 minutes;
+  # an attempt that exceeds the budget restarts from gateway identity.
   startup:
     initialDelaySeconds: 15
     periodSeconds: 10
     failureThreshold: 60
     timeoutSeconds: 10
-  # Liveness stays permissive during pre-boot repair, then performs a bounded
-  # local OpenClaw health check after the config has been accepted.
+  # Non-shared liveness rides the same runner plane — a dead fleet controller
+  # restarts the pod; an OpenClaw failure only drops readiness (repair stays
+  # reachable). Shared gateways probe OpenClaw directly.
   liveness:
     initialDelaySeconds: 0
     periodSeconds: 60
     failureThreshold: 5
     timeoutSeconds: 10
-  # Readiness: TCP probe, generous tolerance, `successThreshold: 3`
-  # prevents the "TCP-bound = Ready" flip from firing before openclaw
-  # is stably accepting connections. 3 × 10s = 30s of consistent
-  # port-bound before flipping to Ready on cold boot. failureThreshold
+  # Readiness: fleet-controller surge gate, `successThreshold: 3` prevents
+  # handoff release from flipping the pod Ready before OpenClaw remains healthy
+  # for 30 seconds. failureThreshold
   # at 12 = 120s of consistent failure before flipping to NotReady,
   # absorbing transient stalls during customer-add bursts.
   readiness:

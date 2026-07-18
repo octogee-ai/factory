@@ -69,53 +69,20 @@ describe("findActiveGatewayMigration", () => {
 });
 
 describe("serialFleetOperationsConflict", () => {
-  it("does not block a durable release-roll child whose roll fence id differs from the supervisor op id", () => {
-    const rollout = { id: "firestore-supervisor", kind: "rollout", input: { gatewayId: "default" } };
-    const child = {
-      id: "migration-1",
-      kind: "migrate-customer",
-      input: {
-        fromGatewayId: "default",
-        toGatewayId: "default",
-        source: "release-roll",
-        rollOperationId: "roll-default-r58-1784238415029",
-      },
-    };
-
-    expect(serialFleetOperationsConflict(rollout, child)).toBe(false);
-    expect(serialFleetOperationsConflict(child, rollout)).toBe(false);
-  });
-
-  it("does not make a rollout wait on the migration child it created", () => {
+  it("serializes a migration against a rollout that shares its gateway — release-roll lineage is retired", () => {
     const rollout = { id: "rollout-document-1", kind: "rollout", input: { gatewayId: "default" } };
     const child = {
       id: "migration-1",
       kind: "migrate-customer",
       input: {
         fromGatewayId: "default",
-        toGatewayId: "default-r2",
-        rollOperationId: "roll-default-r2-1",
+        toGatewayId: "other",
         parentOperationId: "rollout-document-1",
       },
     };
 
-    expect(serialFleetOperationsConflict(rollout, child)).toBe(false);
-    expect(serialFleetOperationsConflict(child, rollout)).toBe(false);
-  });
-
-  it("keeps a rollout isolated from migration children owned by another rollout", () => {
-    expect(serialFleetOperationsConflict(
-      { id: "roll-2", kind: "rollout", input: { gatewayId: "default" } },
-      {
-        id: "migration-1",
-        kind: "migrate-customer",
-        input: {
-          fromGatewayId: "default",
-          toGatewayId: "default-r2",
-          rollOperationId: "roll-1",
-        },
-      },
-    )).toBe(true);
+    expect(serialFleetOperationsConflict(rollout, child)).toBe(true);
+    expect(serialFleetOperationsConflict(child, rollout)).toBe(true);
   });
 
   it("uses durable V2 source bindings across migration and rollout kinds", () => {

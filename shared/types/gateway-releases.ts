@@ -13,115 +13,19 @@ import type {
   GatewayPreemptionHandoffSpec,
 } from "./glm.js";
 
-// Step 2 release/revision model (GATEWAY-RELEASES-SPEC). These types describe
-// the desired-identity + immutable-release + revision-realization split that
-// supersedes the single overloaded glmGateways desired doc. PR1 adds the
-// schema + helpers only; no writer or reader is rerouted yet.
+// Simple-roll model (GATEWAY-SIMPLE-ROLL-SPEC): durable identity
+// (gateways/{id}) + immutable releases (releases/{n}) + ONE stable-name
+// realization per gateway (glmGateways/{gatewayId} runtime doc). A roll is a
+// desiredRelease write; Kubernetes surge replacement is the only mechanism.
 
 // gateways/{gatewayId}/releases/{n} and gateways/{gatewayId}/assignments/{uid}
 // are subcollections of the durable gateway identity doc.
 export const GATEWAY_RELEASES_SUBCOLLECTION = "releases";
 export const GATEWAY_ASSIGNMENTS_SUBCOLLECTION = "assignments";
 
-// Cowboy-written tombstone table (top-level collection, doc id = revisionId).
-// The gateway-router reads it ONLY on the revision-pinned MISS path to answer a
-// retired /r/{n} with a typed revision_gone 404 (+ current-revision pointer),
-// never by asking a dead pod. Service-addressed traffic never touches it.
-export const REVISION_TOMBSTONES_COLLECTION = "revisionTombstones";
-
-// gateways/{gatewayId} desired-identity lifecycle. The Step 2 model drops the
-// interim "draining" desiredStatus — pausing scales the live revision down;
-// retirement is its own terminal state.
+// gateways/{gatewayId} desired-identity lifecycle. Pausing scales the gateway
+// to zero; retirement is its own terminal state.
 export type GatewayLifecycleStatus = "running" | "paused" | "retired";
-
-export type GatewayRollStatus =
-  | "warming"
-  | "routing"
-  | "migrating"
-  | "retiring-source"
-  | "failed";
-
-export interface GatewayRollSystemConfigCheckpoint {
-  migrationId: string;
-  builderSlug: string;
-  sourceRevisionId: string;
-  checkpointCommit: string | null;
-  configHash: string | null;
-  checkpointedAt: number | null;
-  sourceUnfrozenAt: number | null;
-}
-
-export type GatewayRollSystemConfigPhase =
-  | "checkpointed"
-  | "candidateProven"
-  | "promotionIntent"
-  | "promoted"
-  | "abortIntent"
-  | "terminalHold"
-  | "cutover"
-  | "sourceRetired"
-  | "finalized";
-
-export interface GatewayRollSystemConfigState {
-  phase: GatewayRollSystemConfigPhase;
-  migrationId: string;
-  builderSlug: string;
-  sourceRevisionId: string;
-  targetRevisionId: string;
-  checkpointCommit: string;
-  configHash: string;
-  freezeRef: string;
-  freezeObject: string;
-  checkpointedAt: number;
-  candidateCommit?: string;
-  candidateHash?: string;
-  candidateRef?: string;
-  runtimeConfigHash?: string;
-  observedRevisionId?: string;
-  targetStartedAt?: number;
-  imageTag?: string;
-  buildSha?: string;
-  openclawVersion?: string;
-  provenAt?: number;
-  promotionIntentAt?: number;
-  promotedCommit?: string;
-  promotedAt?: number;
-  abortDisposition?: "fail" | "supersede";
-  abortReason?: string;
-  abortIntentAt?: number;
-  terminalError?: string;
-  terminalErrorAt?: number;
-  cutoverAt?: number;
-  sourceRetiredAt?: number;
-  finalizedAt?: number;
-}
-
-export interface GatewayReleaseAdmissionWork {
-  kind: "roll-action";
-  action: string;
-  actionKey: string;
-  rollOperationId: string;
-  startedAt: number;
-}
-
-export interface GatewayRollState {
-  operationId: string;
-  status: GatewayRollStatus;
-  fromRelease: number | null;
-  toRelease: number;
-  sourceRevisionId: string | null;
-  targetRevisionId: string;
-  acceptingNewAssignments: boolean;
-  startedAt: number;
-  updatedAt: number;
-  error: string | null;
-  systemConfigCheckpoint?: GatewayRollSystemConfigCheckpoint | null;
-  systemConfigRoll?: GatewayRollSystemConfigState | null;
-  // Selector-flip wall-clock. The source revision survives as a forwarder for a
-  // drain TTL measured from this durable timestamp, so a controller crash never
-  // loses the retire deadline. Null until the flip step runs.
-  flippedAt: number | null;
-}
 
 export type GatewayIdleSleepStatus =
   | "paused"
@@ -144,17 +48,11 @@ export interface GatewayIdleSleepState {
   targetGatewayId?: string;
 }
 
-export interface GatewayLegacyBackfill {
-  sourceGlmGatewayIds: string[];
-  startedAt: number;
-}
-
 export interface GatewayRetirementClaim {
   operationId: string;
   version: number;
   claimedAt: number;
-  phase: "waking" | "claimed";
-  liveRevisionId: string | null;
+  phase: "claimed";
   liveRelease: number | null;
   liveRuntimeIdentity: {
     startedAt: number;
@@ -162,23 +60,6 @@ export interface GatewayRetirementClaim {
     openclawVersion: string;
   } | null;
   previousDesiredStatus: Exclude<GatewayLifecycleStatus, "retired">;
-  configCheckpoint: GatewayRetirementConfigCheckpoint | null;
-  configTerminal: GatewayRetirementConfigTerminal | null;
-}
-
-export interface GatewayRetirementConfigCheckpoint {
-  migrationId: string;
-  slug: string;
-  sourceRevisionId: string;
-  targetRevisionId: string;
-  checkpointCommit: string;
-  configHash: string;
-  freezeObject: string;
-}
-
-export interface GatewayRetirementConfigTerminal {
-  retirementRef: string;
-  retirementObject: string;
 }
 
 // gateways/{gatewayId} — durable desired gateway identity. No reservation
@@ -193,15 +74,10 @@ export interface GatewayDoc {
   latestRelease: number;
   desiredRelease: number;
   liveRelease: number | null;
-  liveRevisionId: string | null;
-  trafficRevisionId: string | null;
   desiredStatus: GatewayLifecycleStatus;
-  roll: GatewayRollState | null;
-  releaseAdmissionWork?: GatewayReleaseAdmissionWork;
   idleSleep?: GatewayIdleSleepState | null;
   preemptionHandoff?: GatewayPreemptionHandoffSpec | null;
   retireAfter?: number | null;
-  legacyBackfill?: GatewayLegacyBackfill | null;
   retirementVersion?: number;
   retirementClaim?: GatewayRetirementClaim | null;
 }
@@ -396,15 +272,13 @@ export interface ReleaseDoc {
 export type AssignmentSource =
   | "onboarding"
   | "migrate-customer"
-  | "rollout"
   | "repair";
 
-// Mid-roll routing state for one customer's assignment (council-resolved
-// "Inbound routing across rolls"). serving = the assigned revision answers
-// service-addressed traffic; quiescing/migrating = the assigned revision is
-// BLOCKED from serving (the customer is being quiesced/cut over — the edge
-// answers 503 + Retry-After until the flip lands). The flip writes serving on
-// the target revision and bumps `epoch`.
+// Migration-plane routing state for one customer's assignment. serving = the
+// assigned gateway answers service-addressed traffic; quiescing/migrating =
+// the customer is being moved between gateways (the edge answers 503 +
+// Retry-After until the cutover lands). The cutover writes serving on the
+// target gateway's assignment and bumps `epoch`.
 export type AssignmentState = "serving" | "quiescing" | "migrating";
 
 export function isAssignmentState(value: unknown): value is AssignmentState {
@@ -412,27 +286,13 @@ export function isAssignmentState(value: unknown): value is AssignmentState {
 }
 
 // Internal-only headers a forwarded intra-family hop carries between two
-// gateway-edge sidecars of the SAME gateway. The public gateway-router strips
-// them from every inbound request (they must never be client-controllable) and
-// an edge never forwards a request that already carries the hop header — one
-// hop max, by construction.
-export const INTRA_FAMILY_HOP_HEADER = "x-octogee-intra-family-hop";
-export const ASSIGNMENT_EPOCH_HEADER = "x-octogee-assignment-epoch";
-export const INTERNAL_ROUTING_HEADERS: readonly string[] = [
-  INTRA_FAMILY_HOP_HEADER,
-  ASSIGNMENT_EPOCH_HEADER,
-];
-
-// gateways/{gatewayId}/assignments/{uid} — the revision-assignment layer that
-// lets user mirrors stay bare while a roll migrates customers between two
-// revisions of the same gateway. `epoch` is monotonic per customer, bumped at
-// each cutover flip; `state` gates which revision may serve mid-roll.
+// gateways/{gatewayId}/assignments/{uid} — which customers a gateway serves.
+// `epoch` is monotonic per customer, bumped at each migration cutover; `state`
+// gates serving while a customer moves between gateways.
 export interface AssignmentDoc {
   uid: string;
   slug: string;
   gatewayId: string;
-  revisionId: string;
-  release: number;
   source: AssignmentSource;
   state: AssignmentState;
   epoch: number;
@@ -440,24 +300,18 @@ export interface AssignmentDoc {
   updatedByOperationId: string | null;
 }
 
-export type RevisionRollRole = "source" | "target" | null;
-
-export type RevisionLifecycle =
+export type GatewayRuntimeLifecycle =
   | "provisioning"
-  | "warming"
   | "serving"
-  | "draining"
-  | "retiring"
-  | "retired"
   | "failed";
 
-export type RevisionHeartbeatStatus =
+export type GatewayHeartbeatStatus =
   | "unknown"
   | "ready"
   | "unreachable"
   | "error";
 
-export interface RevisionHelmObservation {
+export interface GatewayHelmObservation {
   releaseName: string;
   deploymentName: string;
   gatewayServiceName: string;
@@ -470,8 +324,8 @@ export interface RevisionHelmObservation {
   lastAppliedAt: number | null;
 }
 
-export interface RevisionHeartbeatObservation {
-  status: RevisionHeartbeatStatus;
+export interface GatewayHeartbeatObservation {
+  status: GatewayHeartbeatStatus;
   lastHeartbeatAt: number | null;
   version: string | null;
   openclawVersion: string | null;
@@ -482,88 +336,34 @@ export interface RevisionHeartbeatObservation {
   configStatus?: import("./fleet-controller.js").GatewayConfigStatus;
 }
 
-export interface RevisionSystemConfigObservation {
-  migrationId: string;
-  builderSlug: string;
-  sourceRevisionId: string;
-  checkpointCommit: string;
-  restoredCommit: string;
-  acceptedCommit: string;
-  configHash: string;
-  configReady: true;
-  observedRevisionId: string;
-  restoreProvenAt: number;
-  configReadyAt: number;
-  runtimeConfigHash: string;
-  observedAt: number;
-  sourceUnfrozenAt?: number;
-}
-
-// glmGateways/{revisionId} — the Cowboy-owned runtime realization record. In
-// Step 2 this collection stops carrying desired configuration and becomes the
-// per-revision observation shape below.
-//
-// During expand, glmGateways holds BOTH kinds of doc: legacy bare-id desired
-// docs (GatewayDesiredState, no docKind) and new {gw}-rN revision docs. Every
-// glmGateways iterator MUST route through isRevisionRealizationDoc /
-// isGatewayDesiredDoc so a revision doc is never mistaken for a legacy desired
-// doc (and vice-versa). `docKind` is the explicit discriminator.
-export interface RevisionRealizationDoc {
-  docKind: "revision";
-  revisionId: string;
-  gateway: string;
+// glmGateways/{gatewayId} — the Cowboy-owned runtime observation record for the
+// gateway's single stable-name realization: which release is applied, what the
+// pod last reported. Never desired configuration (that is gateways/{id}).
+export interface GatewayRuntimeDoc {
+  docKind: "runtime";
+  gatewayId: string;
   release: number;
-  rollRole: RevisionRollRole;
-  lifecycle: RevisionLifecycle;
+  lifecycle: GatewayRuntimeLifecycle;
   createdAt: number;
   createdByOperationId: string | null;
-  retiredAt: number | null;
-  retireReason: string | null;
-  helm: RevisionHelmObservation;
-  heartbeat: RevisionHeartbeatObservation;
-  systemConfig?: RevisionSystemConfigObservation;
-  systemConfigMigrationContext?: RevisionSystemConfigMigrationContext;
+  helm: GatewayHelmObservation;
+  heartbeat: GatewayHeartbeatObservation;
   lastError: { message: string | null; at: number | null };
 }
 
-export interface RevisionSystemConfigMigrationContext {
-  migrationId: string;
-  sourceRevisionId: string;
-  targetRevisionId: string;
-  checkpointCommit: string;
-  freezeObject: string;
-}
-
-// glmGateways doc-kind discriminators. During expand the collection holds legacy
-// bare-id desired docs alongside {gw}-rN revision-realization docs; every
-// iterator routes through these so it treats each doc correctly.
-export function isRevisionRealizationDoc(data: unknown): data is RevisionRealizationDoc {
+export function isGatewayRuntimeDoc(data: unknown): data is GatewayRuntimeDoc {
   if (!data || typeof data !== "object") return false;
   const d = data as Record<string, unknown>;
-  if (d.docKind === "revision") return true;
-  // Structural fallback for a revision doc written before docKind existed.
   return (
-    typeof d.revisionId === "string" &&
-    typeof d.gateway === "string" &&
+    d.docKind === "runtime" &&
+    typeof d.gatewayId === "string" &&
+    typeof d.release === "number" &&
     typeof d.lifecycle === "string"
   );
 }
 
-export function isGatewayLegacyBackfill(value: unknown): value is GatewayLegacyBackfill {
-  if (!isPlainRecord(value) || !Array.isArray(value.sourceGlmGatewayIds)) return false;
-  const sourceGlmGatewayIds = value.sourceGlmGatewayIds;
-  return (
-    sourceGlmGatewayIds.length > 0 &&
-    sourceGlmGatewayIds.every((id) => typeof id === "string" && id.length > 0) &&
-    new Set(sourceGlmGatewayIds).size === sourceGlmGatewayIds.length &&
-    typeof value.startedAt === "number" &&
-    Number.isFinite(value.startedAt) &&
-    value.startedAt >= 0
-  );
-}
-
-// A new gateways/{id} durable desired doc (GatewayDoc). Distinct from a legacy
-// GatewayDesiredState (no desiredRelease/latestRelease) and a revision doc.
+// A gateways/{id} durable desired doc (GatewayDoc), distinct from a legacy
+// GatewayDesiredState (no desiredRelease/latestRelease).
 export function isGatewayDesiredDoc(data: unknown): data is GatewayDoc {
   if (!data || typeof data !== "object") return false;
   const d = data as Record<string, unknown>;
@@ -571,82 +371,24 @@ export function isGatewayDesiredDoc(data: unknown): data is GatewayDoc {
     typeof d.gatewayId === "string" &&
     typeof d.desiredRelease === "number" &&
     typeof d.latestRelease === "number" &&
-    (d.desiredStatus === "running" || d.desiredStatus === "paused" || d.desiredStatus === "retired") &&
-    (d.legacyBackfill === undefined ||
-      d.legacyBackfill === null ||
-      isGatewayLegacyBackfill(d.legacyBackfill))
+    (d.desiredStatus === "running" || d.desiredStatus === "paused" || d.desiredStatus === "retired")
   );
 }
 
-// Revision id convention: {gatewayId}-r{release}. Blue/green are transient roll
-// ROLES (rollRole), never encoded into identity.
-export function revisionIdForRelease(gatewayId: string, release: number): string {
-  return `${gatewayId}-r${release}`;
+export function helmReleaseNameForGateway(gatewayId: string): string {
+  return `octogee-gw-${gatewayId}`;
 }
 
-// Every revision the durable root references or intends to realize: live +
-// traffic + the desired release + BOTH endpoints of any recorded roll — a
-// parked failed roll still owns its revisions until an operator resolves it.
-// Recovery primitives (orphan-revision retire, stranded-assignment reset)
-// refuse to touch a referenced revision; this is deliberately WIDER than the
-// renderer's selection, which excludes failed rolls and desired-only releases.
-export function rootReferencedRevisionIds(root: GatewayDoc): ReadonlySet<string> {
-  const ids = new Set<string>();
-  if (root.liveRevisionId) ids.add(root.liveRevisionId);
-  if (root.trafficRevisionId) ids.add(root.trafficRevisionId);
-  ids.add(revisionIdForRelease(root.gatewayId, root.desiredRelease));
-  if (root.roll) {
-    if (root.roll.sourceRevisionId) ids.add(root.roll.sourceRevisionId);
-    ids.add(root.roll.targetRevisionId);
-  }
-  return ids;
-}
-
-export function helmReleaseNameForRevision(revisionId: string): string {
-  return `octogee-gw-${revisionId}`;
-}
-
-// Kubernetes Service DNS names, keyed by the ADDRESSED id. Service-addressed
-// `/g/{gatewayId}/…` targets the per-gateway Service `gateway-edge-{gatewayId}`
-// whose selector Cowboy points at the serving revision; revision-pinned
-// `/g/{gatewayId}/r/{n}/…` targets the revision's own Service
-// `gateway-edge-{revisionId}`. Both share one formula — the router passes the
-// gateway id for the service form and the revision id for the pinned form.
+// Kubernetes Service DNS names for the gateway's stable-name resources.
+// Service-addressed `/g/{gatewayId}/…` targets `gateway-edge-{gatewayId}`;
+// the chart renders both names directly from the bare gateway id.
 export function gatewayEdgeServiceName(id: string): string {
   return `gateway-edge-${id}`;
 }
 
-// The gateway pod Service (preview surface, port 9080), same addressing split.
+// The gateway pod Service (preview surface, port 9080).
 export function gatewayPodServiceName(id: string): string {
   return `octogee-gateway-${id}`;
-}
-
-// Cowboy-written record that a revision has retired. `currentRevisionId` is the
-// gateway's live-revision pointer at tombstone-write time (may be null when the
-// gateway itself has no live revision), surfaced to the caller in the
-// revision_gone 404 so a pinned client can re-derive its service-addressed base.
-export interface RevisionTombstone {
-  gatewayId: string;
-  revision: number;
-  revisionId: string;
-  currentRevisionId: string | null;
-  retiredAt: number;
-}
-
-export function revisionTombstoneDocId(gatewayId: string, revision: number): string {
-  return revisionIdForRelease(gatewayId, revision);
-}
-
-export function isRevisionTombstone(data: unknown): data is RevisionTombstone {
-  if (!data || typeof data !== "object") return false;
-  const d = data as Record<string, unknown>;
-  return (
-    typeof d.gatewayId === "string" &&
-    typeof d.revision === "number" &&
-    typeof d.revisionId === "string" &&
-    (d.currentRevisionId === null || typeof d.currentRevisionId === "string") &&
-    typeof d.retiredAt === "number"
-  );
 }
 
 // Deterministic, order-independent hash of a release payload. Used to reject a
@@ -685,28 +427,22 @@ function compareKeys(a: string, b: string): number {
 }
 
 export type GatewayFieldClassification =
-  | "new-revision"
-  | "in-place"
+  | "release"
   | "gateway-mutable";
 
-// Release-payload fields that force a NEW revision when they change. Listed for
-// documentation + testing; the classifier does not need them because the
-// conservative default already returns "new-revision" for anything unlisted.
-export const RELEASE_NEW_REVISION_FIELDS = [
+// Release-payload fields — audited via an immutable release; changing one is a
+// roll. Listed for documentation + testing; the classifier does not need them
+// because the conservative default already returns "release" for anything
+// unlisted.
+export const RELEASE_FIELDS = [
   "imageRepository",
   "imageTag",
   "testExperiment",
 ] as const;
 
-// Release-payload fields that are release-audited but may reconcile IN PLACE on
-// the live revision (broker-consumed after request time; no pod restart).
-export const RELEASE_IN_PLACE_FIELDS: readonly string[] = [];
-
-// gateways/{gatewayId} DOC fields that mutate without cutting a release. The
-// spec's "gateway mutable without release" list also names assignment docs,
-// revision heartbeat, and revision lastError — those live in SEPARATE
-// collections (gateways/{id}/assignments/{uid}, glmGateways/{revisionId}), not
-// as gateway-doc field names, so they are not enumerated here.
+// gateways/{gatewayId} DOC fields that mutate without cutting a release.
+// Separate-collection observations (assignment docs, runtime heartbeat /
+// lastError) are not gateway-doc fields and are not enumerated here.
 export const GATEWAY_MUTABLE_FIELDS = [
   "profile",
   "gatewayClass",
@@ -725,29 +461,22 @@ export const GATEWAY_MUTABLE_FIELDS = [
   "modelBrokerLimits",
   "preemption",
   "desiredStatus",
-  "roll",
   "idleSleep",
   "preemptionHandoff",
   "liveRelease",
-  "liveRevisionId",
-  "trafficRevisionId",
   "retireAfter",
 ] as const;
 
-const IN_PLACE_SET = new Set<string>(RELEASE_IN_PLACE_FIELDS);
 const GATEWAY_MUTABLE_SET = new Set<string>(GATEWAY_MUTABLE_FIELDS);
 
 // Conservative classifier over gateway-DOC and release-PAYLOAD field NAMES.
-// Only explicitly enumerated in-place / gateway-mutable fields escape the
-// default; every other field — including any new field added to the payload
-// later — cuts a new revision. That default is the safety property the spec
-// pins (operator, 2026-07-08). Separate-collection observations (assignment
-// docs, revision heartbeat/lastError) are not gateway-doc fields and are not
-// classified here.
+// Only explicitly enumerated gateway-mutable fields escape the default; every
+// other field — including any new field added to the payload later — is
+// release-audited. That default is the safety property the spec pins
+// (operator, 2026-07-08).
 export function classifyGatewayField(field: string): GatewayFieldClassification {
-  if (IN_PLACE_SET.has(field)) return "in-place";
   if (GATEWAY_MUTABLE_SET.has(field)) return "gateway-mutable";
-  return "new-revision";
+  return "release";
 }
 
 // ---------------------------------------------------------------------------
@@ -756,21 +485,18 @@ export function classifyGatewayField(field: string): GatewayFieldClassification 
 //
 // EVERY placement entry point — onboarding (functions), the admin direct-assign
 // route (core), and the operator assignment script (scripts) — commits through
-// this ONE helper so a customer's user mirror AND their revision assignment doc
-// land together, in a single Firestore transaction. Without it, a placement that
+// this ONE helper so a customer's user mirror AND their assignment doc land
+// together, in a single Firestore transaction. Without it, a placement that
 // wrote only users/{uid}.provisioning.openclaw.gatewayId (the "decorative layer"
-// bug) leaves a customer with no assignment doc: during a roll with
-// acceptingNewAssignments=true the mount driver treats them as a gap user and
-// mounts them on the OLD live revision, and the source heartbeat then holds the
-// roll open as an unassigned-mounted customer.
+// bug) leaves a customer with no assignment doc — invisible to the edge's
+// quiesce gate and the mount roster.
 //
-// The destination revision is resolved INSIDE the transaction from a fresh read
-// of the gateway doc (spec placement rule): roll.acceptingNewAssignments ?
-// roll.targetRevisionId : liveRevisionId — rejecting if the resolved revision is
-// not ready. A legacy / un-backfilled gateway (no GatewayDoc) has no assignment
-// layer yet, so this writes ONLY the mirror — byte-identical to pre-Step-2
-// behavior. Three different packages call it, so it is written against a narrow
-// structural Firestore surface that the real firebase-admin Firestore satisfies.
+// Serving eligibility is resolved INSIDE the transaction from a fresh read of
+// the gateway root + runtime doc, rejecting if the gateway is not serving. A
+// legacy gateway (no GatewayDoc) has no assignment layer, so this writes ONLY
+// the mirror. Three different packages call it, so it is written against a
+// narrow structural Firestore surface that the real firebase-admin Firestore
+// satisfies.
 
 export interface PlacementDocSnap {
   exists: boolean;
@@ -814,14 +540,12 @@ export interface CommitPlacementParams {
 export type PlacementRejectReason =
   | "gateway-root-invalid"
   | "gateway-not-running"
-  | "no-live-revision"
-  | "revision-identity-invalid"
-  | "revision-not-ready";
+  | "gateway-not-serving";
 
 export type CommitPlacementResult =
   | { kind: "mirror-only" }
   | { kind: "assignment-preserved" }
-  | { kind: "assigned"; revisionId: string; release: number | null }
+  | { kind: "assigned"; release: number | null }
   | { kind: "rejected"; reason: PlacementRejectReason };
 
 type DurablePlacementRoot = GatewayDoc & GatewayMutableConfig;
@@ -837,36 +561,15 @@ function isDurablePlacementRoot(
   );
 }
 
-function hasCanonicalPlacementRevision(
-  gatewayId: string,
-  revisionId: unknown,
-  release: unknown,
-): revisionId is string {
-  return (
-    typeof revisionId === "string" &&
-    typeof release === "number" &&
-    Number.isInteger(release) &&
-    release > 0 &&
-    revisionId === revisionIdForRelease(gatewayId, release)
-  );
-}
-
-function placementRevisionRejectReason(
+function placementRuntimeRejectReason(
   snap: PlacementDocSnap,
   gatewayId: string,
-  revisionId: string,
-  release: number,
 ): PlacementRejectReason | null {
   const data = snap.exists ? snap.data() : undefined;
-  if (
-    !isRevisionRealizationDoc(data) ||
-    data.revisionId !== revisionId ||
-    data.gateway !== gatewayId ||
-    data.release !== release
-  ) {
-    return "revision-identity-invalid";
+  if (!isGatewayRuntimeDoc(data) || data.gatewayId !== gatewayId) {
+    return "gateway-not-serving";
   }
-  return data.lifecycle === "serving" ? null : "revision-not-ready";
+  return data.lifecycle === "serving" ? null : "gateway-not-serving";
 }
 
 async function preserveExistingAssignment(
@@ -909,39 +612,24 @@ export async function commitPlacementAtomic(
       return { kind: "assignment-preserved" };
     }
 
-    const roll = gatewayData.roll;
-    const revisionId =
-      roll && roll.acceptingNewAssignments ? roll.targetRevisionId : gatewayData.liveRevisionId;
-    const release =
-      roll && roll.acceptingNewAssignments ? roll.toRelease : gatewayData.liveRelease;
-    if (revisionId === null || release === null) {
-      return { kind: "rejected", reason: "no-live-revision" };
-    }
-    if (!hasCanonicalPlacementRevision(params.gatewayId, revisionId, release)) {
-      return { kind: "rejected", reason: "revision-identity-invalid" };
-    }
-    const revisionSnap = await txn.get(
-      db.collection(GLM_GATEWAYS_COLLECTION).doc(revisionId),
+    const runtimeSnap = await txn.get(
+      db.collection(GLM_GATEWAYS_COLLECTION).doc(params.gatewayId),
     );
-    const revisionRejectReason = placementRevisionRejectReason(
-      revisionSnap,
+    const runtimeRejectReason = placementRuntimeRejectReason(
+      runtimeSnap,
       params.gatewayId,
-      revisionId,
-      release,
     );
-    if (revisionRejectReason) {
-      return { kind: "rejected", reason: revisionRejectReason };
+    if (runtimeRejectReason) {
+      return { kind: "rejected", reason: runtimeRejectReason };
     }
 
     // Mirror + assignment are all-or-nothing: a serving assignment at epoch 0
-    // (the steady baseline before any cutover flip bumps the epoch).
+    // (the steady baseline before any migration cutover bumps the epoch).
     txn.update(userRef, params.mirrorPatch);
     const assignmentDoc: AssignmentDoc = {
       uid: params.uid,
       slug: params.slug,
       gatewayId: params.gatewayId,
-      revisionId,
-      release,
       source: params.source,
       state: "serving",
       epoch: 0,
@@ -949,6 +637,6 @@ export async function commitPlacementAtomic(
       updatedByOperationId: params.updatedByOperationId ?? null,
     };
     txn.set(assignmentRef, assignmentDoc as unknown as Record<string, unknown>);
-    return { kind: "assigned", revisionId, release };
+    return { kind: "assigned", release: gatewayData.liveRelease };
   });
 }

@@ -103,23 +103,12 @@ describe("model credential materializer consumers", () => {
     ).toBe(false);
   });
 
-  test("byot-sync consumes the model credential materializer facade", () => {
-    const src = readSrc("scripts/lib/byot-sync.ts");
-
-    expect(src).toContain("./model-credential-materializer.js");
-    expect(src).not.toContain("./byot-multi-provider-config.js");
-  });
-
-  test("byot-sync-runtime consumes the model credential materializer facade", () => {
-    const src = readSrc("scripts/lib/byot-sync-runtime.ts");
-
-    expect(src).toContain("./model-credential-materializer.js");
-    expect(src).not.toContain("./byot-multi-provider-config.js");
-  });
-
-  test("customer lifecycle adapter consumes the model credential materializer facade", () => {
-    const src = readSrc("scripts/lib/customer-lifecycle-prod-adapter.ts");
-
+  test.each([
+    "scripts/lib/byot-sync.ts",
+    "scripts/lib/byot-sync-runtime.ts",
+    "scripts/lib/customer-lifecycle-prod-adapter.ts",
+  ])("%s consumes the model credential materializer facade", (relativePath) => {
+    const src = readSrc(relativePath);
     expect(src).toContain("./model-credential-materializer.js");
     expect(src).not.toContain("./byot-multi-provider-config.js");
   });

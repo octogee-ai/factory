@@ -77,8 +77,6 @@ describe("parseHealthResponse", () => {
 
   it("carries only a structurally valid nested configStatus marker", () => {
     const configStatus = {
-      controlProtocol: { protocol: "durable-openclaw-config", version: 2 },
-      freezeState: "freezing",
       openclawVersion: "2026.7.1",
       openclawForkSha: "abc123",
       dashboardControlState: "ready",
@@ -93,7 +91,7 @@ describe("parseHealthResponse", () => {
     expect(parseHealthResponse({
       status: "ready",
       customers: [],
-      configStatus: { controlProtocol: { protocol: "durable-openclaw-config", version: "1" } },
+      configStatus: { openclawVersion: 7, dashboardControlState: "ready" },
     })).toEqual({ status: "ready", customers: [] });
   });
 });

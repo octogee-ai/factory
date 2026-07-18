@@ -74,6 +74,7 @@ export interface CustomerLifecycleAdapter {
    * is exactly what bender hit on 2026-05-26.
    */
   customerCoachWiredInOpenclawConfig?: (slug: string) => boolean;
+  hasCustomerAgentRuntime?: (slug: string) => boolean;
 
   /** Locally-present, coach-wired customer slugs — the pod's honest mounted set
    *  read WITHOUT Firestore, served via /health for Cowboy's pull-model poller.
@@ -392,9 +393,11 @@ async function restoreCustomerRuntimeFromSnapshotInner(
   steps.push(...(await ensureSshKeyAndGitea(adapter, slug)));
   throwIfAborted(signal, uid);
 
-  if (snapshot.repoUrl && !adapter.hasWorkspaceGitDir(slug)) {
-    steps.push(...(await cloneExistingWorkspaceRepo(adapter, snapshot, ctx)));
-  } else {
+  const workspaceSteps = snapshot.repoUrl
+    ? await convergeWorkspaceCheckout(adapter, uid, snapshot, ctx)
+    : [];
+  steps.push(...workspaceSteps);
+  if (!workspaceSteps.includes("write-templates")) {
     adapter.ensureCustomerDirectories(slug);
     await adapter.writeCustomerTemplateFiles(ctx);
     steps.push("write-templates");
@@ -476,6 +479,7 @@ async function addCustomerToGatewayInner(
     snapshot.status === "complete"
     && adapter.isOperatorGateway?.()
     && adapter.customerCoachWiredInOpenclawConfig?.(slug)
+    && adapter.hasCustomerAgentRuntime?.(slug)
     && adapter.hasWorkspaceGitDir(slug)
     && adapter.hasGitRemote(slug)
   ) {
@@ -620,9 +624,17 @@ async function ensureWorkspaceRepo(
   snapshot: UserSnapshot,
   ctx: CustomerContext,
 ): Promise<AddCustomerStep[]> {
-  const { slug } = snapshot;
-  await adapter.ensureGiteaOrg(slug);
+  await adapter.ensureGiteaOrg(snapshot.slug);
+  return convergeWorkspaceCheckout(adapter, uid, snapshot, ctx);
+}
 
+async function convergeWorkspaceCheckout(
+  adapter: CustomerLifecycleAdapter,
+  uid: string,
+  snapshot: UserSnapshot,
+  ctx: CustomerContext,
+): Promise<AddCustomerStep[]> {
+  const { slug } = snapshot;
   if (adapter.hasWorkspaceGitDir(slug)) {
     if (adapter.hasGitRemote(slug)) return [];
     if (snapshot.repoUrl) {

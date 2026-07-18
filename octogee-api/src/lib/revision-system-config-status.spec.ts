@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { recordRevisionSystemConfigStatus } from "./revision-system-config-status.js";
 
-describe("revision system config status telemetry", () => {
-  it("updates only the matching immutable revision heartbeat", async () => {
+describe("gateway system config status telemetry", () => {
+  it("updates the matching stable runtime heartbeat", async () => {
     const update = vi.fn();
     const ref = {};
     const db = {
@@ -11,7 +11,7 @@ describe("revision system config status telemetry", () => {
       runTransaction: vi.fn(async (body: (transaction: unknown) => Promise<unknown>) => body({
         get: vi.fn(async () => ({
           exists: true,
-          data: () => ({ docKind: "revision", gateway: "bender", revisionId: "bender-r7" }),
+          data: () => ({ docKind: "runtime", gatewayId: "bender", release: 7, lifecycle: "serving" }),
         })),
         update,
       })),
@@ -19,7 +19,7 @@ describe("revision system config status telemetry", () => {
 
     await expect(recordRevisionSystemConfigStatus(db as never, {
       gatewayId: "bender",
-      revisionId: "bender-r7",
+      revisionId: "bender",
       status: { state: "clean", acceptedCommit: "a".repeat(40) },
     })).resolves.toBe(true);
     expect(update).toHaveBeenCalledWith(ref, {
@@ -30,7 +30,7 @@ describe("revision system config status telemetry", () => {
     });
   });
 
-  it("refuses a stale or mismatched revision document", async () => {
+  it("refuses a mismatched or legacy revision document", async () => {
     const update = vi.fn();
     const db = {
       collection: vi.fn(() => ({ doc: vi.fn(() => ({})) })),
@@ -45,7 +45,7 @@ describe("revision system config status telemetry", () => {
 
     await expect(recordRevisionSystemConfigStatus(db as never, {
       gatewayId: "bender",
-      revisionId: "bender-r7",
+      revisionId: "bender",
       status: { state: "error" },
     })).resolves.toBe(false);
     expect(update).not.toHaveBeenCalled();

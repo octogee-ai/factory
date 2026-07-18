@@ -74,71 +74,20 @@ function makeTxnDb(seed: Record<string, Record<string, unknown>>) {
   return { db, store };
 }
 
-function v2CutoverSeed(observedAt: number): Record<string, Record<string, unknown>> {
+function migrationCutoverSeed(): Record<string, Record<string, unknown>> {
   return {
-    "gateways/default": {
+    "users/uid-a": { provisioning: { openclaw: { gatewayId: "source" } } },
+    "gateways/target": {
+      gatewayId: "target",
+      latestRelease: 2,
       desiredRelease: 2,
-      liveRevisionId: "default-r1",
-      roll: {
-        operationId: "roll-1",
-        targetRevisionId: "default-r2",
-        toRelease: 2,
-        systemConfigRoll: {
-          phase: "promoted",
-          sourceRevisionId: "default-r1",
-          targetRevisionId: "default-r2",
-          migrationId: "roll-config-roll-1",
-          checkpointCommit: "a".repeat(40),
-          configHash: "b".repeat(64),
-          freezeRef: "refs/octogee/system-config/freeze/default-r1",
-          freezeObject: "e".repeat(40),
-          candidateCommit: "c".repeat(40),
-          candidateHash: "d".repeat(64),
-          candidateRef: "refs/octogee/system-config/candidate/default-r2",
-          runtimeConfigHash: "f".repeat(64),
-          observedRevisionId: "default-r2",
-          targetStartedAt: 80,
-          imageTag: "release-2",
-          buildSha: "build-2",
-          openclawVersion: "2026.7.1",
-          provenAt: 100,
-          promotedCommit: "c".repeat(40),
-          promotedAt: 110,
-        },
-      },
+      liveRelease: 2,
+      desiredStatus: "running",
     },
-    "glmGateways/default-r2": {
-      docKind: "revision",
-      gateway: "default",
-      revisionId: "default-r2",
-      release: 2,
-      helm: { imageTag: "release-2" },
-      heartbeat: {
-        status: "ready",
-        lastHeartbeatAt: observedAt,
-        startedAt: 80,
-        version: "build-2",
-        configStatus: {
-          controlProtocol: { protocol: "durable-openclaw-config", version: 2 },
-          observedAt,
-          runtimeReady: true,
-          openclawVersion: "2026.7.1",
-          bootRole: "target-candidate",
-          controlOwner: {
-            migrationId: "roll-config-roll-1",
-            sourceRevisionId: "default-r1",
-            targetRevisionId: "default-r2",
-          },
-          checkpointCommit: "a".repeat(40),
-          configHash: "b".repeat(64),
-          candidateCommit: "c".repeat(40),
-          candidateHash: "d".repeat(64),
-        },
-      },
-    },
-    "gateways/default/assignments/uid-a": {
+    "gateways/source/assignments/uid-a": {
       uid: "uid-a",
-      revisionId: "default-r1",
+      slug: "alice",
+      gatewayId: "source",
       state: "quiescing",
       epoch: 4,
     },
@@ -155,64 +104,47 @@ function cutover(db: FleetStateFirestore, now: number) {
   return commitCutoverAtomic(deps, {
     uid: "uid-a",
     slug: "alice",
-    toGatewayId: "default",
-    fromGatewayId: "default",
-    flipMirror: false,
+    toGatewayId: "target",
+    fromGatewayId: "source",
+    flipMirror: true,
     assignment: {
-      revisionId: "default-r2",
-      release: 2,
-      source: "rollout",
-      updatedByOperationId: "roll-1",
-    },
-    rollFence: {
-      operationId: "roll-1",
-      targetRevisionId: "default-r2",
-      targetRelease: 2,
-      sourceRevisionId: "default-r1",
-      sourceEpoch: 4,
+      source: "migrate-customer",
+      updatedByOperationId: "op-1",
     },
   });
 }
 
 describe("installed @octogee/core runtime", () => {
-  it("ships the ref-safe v2 identity and accepts its exact fresh target proof", async () => {
-    const { db, store } = makeTxnDb(v2CutoverSeed(100_000));
+  it("ships the lean atomic cutover: assignment move + epoch bump, no roll fence", async () => {
+    const { db, store } = makeTxnDb(migrationCutoverSeed());
 
     await cutover(db as unknown as FleetStateFirestore, 100_000);
 
-    expect(store["gateways/default/assignments/uid-a"]).toMatchObject({
-      revisionId: "default-r2",
+    expect(store["gateways/target/assignments/uid-a"]).toMatchObject({
+      gatewayId: "target",
+      state: "serving",
       epoch: 5,
+      updatedByOperationId: "op-1",
+    });
+    expect(store["gateways/target/assignments/uid-a"]).not.toHaveProperty("revisionId");
+    expect(store["gateways/source/assignments/uid-a"]).toBeUndefined();
+    expect(store["users/uid-a"]).toMatchObject({
+      "provisioning.openclaw.gatewayId": "target",
     });
   });
 
-  it("rejects a target proof that is stale at the transaction boundary", async () => {
-    const { db } = makeTxnDb(v2CutoverSeed(1));
-
-    await expect(
-      cutover(db as unknown as FleetStateFirestore, 1_000_000),
-    ).rejects.toThrow(/target candidate proof changed/i);
-  });
-
-  it("rejects the old colon-bearing v2 migration identity", async () => {
-    const seed = v2CutoverSeed(100_000);
-    const root = seed["gateways/default"];
-    const roll = root.roll as Record<string, unknown>;
-    seed["gateways/default"] = {
-      ...root,
-      roll: {
-        ...roll,
-        systemConfigRoll: {
-          ...(roll.systemConfigRoll as Record<string, unknown>),
-          migrationId: "roll-config:roll-1",
-        },
-      },
+  it("refuses a cutover onto a retirement-claimed target at the transaction boundary", async () => {
+    const seed = migrationCutoverSeed();
+    seed["gateways/target"] = {
+      ...seed["gateways/target"],
+      retirementClaim: { operationId: "retire-1" },
     };
-    const { db } = makeTxnDb(seed);
+    const { db, store } = makeTxnDb(seed);
 
     await expect(
       cutover(db as unknown as FleetStateFirestore, 100_000),
-    ).rejects.toThrow(/not durably promoted/i);
+    ).rejects.toThrow(/retirement claim/i);
+    expect(store["gateways/source/assignments/uid-a"]).toMatchObject({ epoch: 4 });
   });
 
   it("ships the atomic retirement fence against candidate config obligations", async () => {

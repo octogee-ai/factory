@@ -4,11 +4,8 @@ import path from "node:path";
 
 import { acquireSystemConfigSyncLeaseSync } from "@octogee/core/system-config-mutation-lease";
 import {
-  DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
-  DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
-  type DurableOpenClawConfigControlProtocol,
   type OpenClawDashboardBridgeProtocol,
 } from "../../shared/types/fleet-controller.js";
 
@@ -18,10 +15,7 @@ export interface SystemConfigObservedStatus {
   state: SystemConfigState;
   acceptedCommit?: string;
   restoredCommit?: string;
-  checkpointCommit?: string;
   configHash?: string;
-  candidateCommit?: string;
-  candidateHash?: string;
   dirtySince?: string | null;
   lastSyncedAt?: string;
   lastErrorCode?: string | null;
@@ -29,20 +23,12 @@ export interface SystemConfigObservedStatus {
   schemaVersion?: number;
   openclawVersion?: string;
   openclawForkSha?: string;
-  controlProtocol?: DurableOpenClawConfigControlProtocol;
   dashboardControlState?: "ready" | "missing" | "stale" | "invalid";
   dashboardControlProtocol?: OpenClawDashboardBridgeProtocol;
   dashboardControlObservedAt?: string;
   doctorResult?: "ok" | "error";
   bootRecovery?: "none" | "recovered" | "unavailable";
   watcherState?: "running" | "stopped";
-  freezeState?: "unfrozen" | "freezing" | "frozen";
-  bootRole?: "normal" | "source-frozen" | "target-candidate";
-  controlOwner?: {
-    migrationId: string;
-    sourceRevisionId: string;
-    targetRevisionId: string;
-  };
   rejectedCount?: number;
   recoveryCount?: number;
   runtimeReady?: boolean;
@@ -55,16 +41,6 @@ export function systemConfigStatusPath(openclawDir: string): string {
   return path.join(openclawDir, "system_config.status.json");
 }
 
-export function systemConfigBootAcceptedPath(openclawDir: string): string {
-  return path.join(openclawDir, "system_config.boot-accepted");
-}
-
-export function markSystemConfigBootAccepted(openclawDir: string): void {
-  fs.mkdirSync(openclawDir, { recursive: true });
-  fs.writeFileSync(systemConfigBootAcceptedPath(openclawDir), "accepted\n", { mode: 0o600 });
-  fs.chmodSync(systemConfigBootAcceptedPath(openclawDir), 0o600);
-}
-
 function isState(value: unknown): value is SystemConfigState {
   return value === "clean" || value === "dirty" || value === "syncing" ||
     value === "error" || value === "unavailable";
@@ -73,10 +49,7 @@ function isState(value: unknown): value is SystemConfigState {
 const STRING_FIELDS = [
   "acceptedCommit",
   "restoredCommit",
-  "checkpointCommit",
   "configHash",
-  "candidateCommit",
-  "candidateHash",
   "lastSyncedAt",
   "openclawVersion",
   "openclawForkSha",
@@ -146,7 +119,6 @@ function projectStateFields(
   status: SystemConfigObservedStatus,
 ): void {
   projectRecoveryStateFields(record, status);
-  projectRollStateFields(record, status);
   projectRuntimeStateFields(record, status);
 }
 
@@ -165,18 +137,6 @@ function projectRecoveryStateFields(
   }
 }
 
-function projectRollStateFields(
-  record: Record<string, unknown>,
-  status: SystemConfigObservedStatus,
-): void {
-  if (record.freezeState === "unfrozen" || record.freezeState === "freezing" || record.freezeState === "frozen") {
-    status.freezeState = record.freezeState;
-  }
-  if (record.bootRole === "normal" || record.bootRole === "source-frozen" || record.bootRole === "target-candidate") {
-    status.bootRole = record.bootRole;
-  }
-}
-
 function projectRuntimeStateFields(
   record: Record<string, unknown>,
   status: SystemConfigObservedStatus,
@@ -186,62 +146,11 @@ function projectRuntimeStateFields(
   }
 }
 
-function projectControlProtocol(
-  record: Record<string, unknown>,
-): Pick<SystemConfigObservedStatus, "controlProtocol"> {
-  if (
-    record.controlProtocol === null ||
-    typeof record.controlProtocol !== "object" ||
-    Array.isArray(record.controlProtocol)
-  ) return {};
-  const controlProtocol = record.controlProtocol as Record<string, unknown>;
-  if (
-    controlProtocol.protocol !== DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL ||
-    controlProtocol.version !== DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION
-  ) {
-    return {};
-  }
-  return {
-    controlProtocol: {
-      protocol: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL,
-      version: DURABLE_OPENCLAW_CONFIG_CONTROL_PROTOCOL_VERSION,
-    },
-  };
-}
-
-function projectControlOwner(
-  record: Record<string, unknown>,
-): Pick<SystemConfigObservedStatus, "controlOwner"> {
-  if (!record.controlOwner || typeof record.controlOwner !== "object" || Array.isArray(record.controlOwner)) {
-    return {};
-  }
-  const owner = record.controlOwner as Record<string, unknown>;
-  if (
-    typeof owner.migrationId !== "string" ||
-    typeof owner.sourceRevisionId !== "string" ||
-    typeof owner.targetRevisionId !== "string"
-  ) {
-    return {};
-  }
-  return {
-    controlOwner: {
-      migrationId: owner.migrationId,
-      sourceRevisionId: owner.sourceRevisionId,
-      targetRevisionId: owner.targetRevisionId,
-    },
-  };
-}
-
 function projectSystemConfigStatus(record: Record<string, unknown>): SystemConfigObservedStatus {
   const status: SystemConfigObservedStatus = { state: record.state as SystemConfigState };
   projectScalarFields(record, status);
   projectStateFields(record, status);
-  Object.assign(
-    status,
-    projectControlProtocol(record),
-    projectControlOwner(record),
-    projectDashboardControlStatus(record),
-  );
+  Object.assign(status, projectDashboardControlStatus(record));
   return status;
 }
 

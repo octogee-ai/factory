@@ -4,10 +4,8 @@ import { Duplex } from "node:stream";
 import { URL } from "node:url";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import {
-  INTERNAL_ROUTING_HEADERS,
   gatewayEdgeServiceName,
   gatewayPodServiceName,
-  revisionIdForRelease,
 } from "@octogee/shared/types/gateway-releases";
 
 export type GatewayRouterSurface = "api" | "preview";
@@ -38,18 +36,11 @@ function isInvalidRevision(
   return "invalidRevision" in resolution;
 }
 
-// The gateway-router's ONE state read: whether a pinned revision has retired.
-// Returns `tombstoned: true` (+ current-revision pointer) so the router answers
-// a retired /r/{n} with a typed revision_gone 404 instead of dialing a dead pod.
-export type RevisionTombstoneLookup = (
-  gatewayId: string,
-  revision: number,
-) => Promise<{ tombstoned: boolean; currentRevisionId?: string | null }>;
-
-// Resolve the DNS host id for the surface target: the bare gateway id addresses
-// the Cowboy-flipped per-gateway Service; a pinned revision addresses its own.
-function serviceIdFor(gatewayId: string, revision: number | null): string {
-  return revision === null ? gatewayId : revisionIdForRelease(gatewayId, revision);
+// The stable-name model has ONE service per gateway; the bare gateway id is
+// always the DNS host id. Revision-pinned addressing (`/g/<gw>/r/<n>/…`) is
+// retired wholesale — every pinned URL answers the typed revision_gone 404.
+function serviceIdFor(gatewayId: string, _revision: number | null): string {
+  return gatewayId;
 }
 
 export interface GatewaySurfaceTargetOptions {
@@ -64,11 +55,6 @@ export interface CreateGatewayRouterOptions {
   namespace: string;
   previewHost?: string;
   targetOriginForGateway?: (surface: GatewayRouterSurface, serviceId: string) => string;
-  revisionTombstoneLookup?: RevisionTombstoneLookup;
-  // Cache-bypassing tombstone read, used to recover from a pinned upstream proxy
-  // FAILURE (a connection-refused to a likely-gone revision) into a controlled
-  // revision_gone rather than a bare 502.
-  revisionTombstoneRecheck?: RevisionTombstoneLookup;
   log: (message: string, meta?: Record<string, unknown>) => void;
 }
 
@@ -83,14 +69,8 @@ const HOP_BY_HOP_HEADERS = new Set([
   "upgrade",
 ]);
 
-// The router is THE public trust boundary for /g/* traffic: the intra-family
-// loop-guard/epoch headers are internal-only (set by a gateway-edge forwarding
-// hop), so any inbound value is forged — strip them on both the HTTP and the
-// upgrade path before proxying. A public client can therefore never influence
-// the edge's single-hop guard or epoch handling.
 const STRIPPED_PUBLIC_HEADERS = new Set<string>([
   ...HOP_BY_HOP_HEADERS,
-  ...INTERNAL_ROUTING_HEADERS,
 ]);
 
 function defaultOrigin(surface: GatewayRouterSurface, serviceId: string, namespace: string): string {
@@ -197,7 +177,6 @@ function requestHeaders(
 // For a pinned request only: re-check the tombstone (cache-bypass) after the
 // upstream proxy fails. Resolves to the retired-revision verdict, or null to
 // fall back to a plain 502.
-type PinnedUpstreamRecovery = () => Promise<{ currentRevisionId: string | null } | null>;
 
 interface GatewayProxyContext {
   target: GatewaySurfaceTarget;
@@ -209,7 +188,6 @@ function proxyHttp(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   context: GatewayProxyContext,
-  pinnedRecovery?: PinnedUpstreamRecovery,
 ): void {
   const { target, previewHost, log } = context;
   const origin = new URL(target.origin);
@@ -250,24 +228,7 @@ function proxyHttp(
       res.destroy();
       return;
     }
-    if (!pinnedRecovery) {
-      writeUpstreamUnavailable();
-      return;
-    }
-    // A pinned upstream failure likely means the revision retired between the
-    // cached "not tombstoned" verdict and this dial. Re-check (cache-bypass): if
-    // it is now tombstoned, answer with the controlled revision_gone; otherwise
-    // a plain 502.
-    pinnedRecovery()
-      .then((gone) => {
-        if (res.headersSent) return;
-        if (gone) {
-          writeRevisionGone(res, target, gone.currentRevisionId);
-          return;
-        }
-        writeUpstreamUnavailable();
-      })
-      .catch(() => writeUpstreamUnavailable());
+    writeUpstreamUnavailable();
   });
   req.on("error", (err) => {
     log("[gateway-router] client request socket error", {
@@ -313,32 +274,6 @@ function writeRevisionGone(
       currentRevisionId,
     }),
   );
-}
-
-// The tombstone is consulted ONLY for a pinned target and ONLY here — the
-// service-addressed hot path never reaches this. Returns the retired-revision
-// verdict, or null when the request should proxy through.
-async function tombstoneVerdict(
-  target: GatewaySurfaceTarget,
-  lookup: RevisionTombstoneLookup | undefined,
-  log: CreateGatewayRouterOptions["log"],
-): Promise<{ currentRevisionId: string | null } | null> {
-  if (target.revision === null || !lookup) return null;
-  try {
-    const result = await lookup(target.gatewayId, target.revision);
-    if (result.tombstoned) {
-      return { currentRevisionId: result.currentRevisionId ?? null };
-    }
-  } catch (err) {
-    // A tombstone read failure must not synthesize a false revision_gone; fall
-    // through to proxy and let the revision's own pod answer (or fail) honestly.
-    log("[gateway-router] revision tombstone lookup failed", {
-      gatewayId: target.gatewayId,
-      revision: target.revision,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-  return null;
 }
 
 // Serialize an upstream reply's status line + headers back onto the raw client
@@ -474,27 +409,11 @@ export function createGatewayRouter(opts: CreateGatewayRouterOptions): http.Serv
       return;
     }
     const target = resolved;
-    tombstoneVerdict(target, opts.revisionTombstoneLookup, opts.log)
-      .then((gone) => {
-        if (gone) {
-          writeRevisionGone(res, target, gone.currentRevisionId);
-          return;
-        }
-        const pinnedRecovery =
-          target.revision !== null && opts.revisionTombstoneRecheck
-            ? () => tombstoneVerdict(target, opts.revisionTombstoneRecheck, opts.log)
-            : undefined;
-        proxyHttp(req, res, { target, previewHost, log: opts.log }, pinnedRecovery);
-      })
-      .catch((err) => {
-        opts.log("[gateway-router] request routing failed", {
-          error: err instanceof Error ? err.message : String(err),
-        });
-        if (!res.headersSent) {
-          res.writeHead(502, { "content-type": "application/json" });
-          res.end(JSON.stringify({ error: "gateway routing error" }));
-        }
-      });
+    if (target.revision !== null) {
+      writeRevisionGone(res, target, null);
+      return;
+    }
+    proxyHttp(req, res, { target, previewHost, log: opts.log });
   });
 
   server.on("upgrade", (req, socket, head) => {
@@ -520,25 +439,14 @@ export function createGatewayRouter(opts: CreateGatewayRouterOptions): http.Serv
       return;
     }
     const target = resolved;
-    tombstoneVerdict(target, opts.revisionTombstoneLookup, opts.log)
-      .then((gone) => {
-        if (gone) {
-          socket.on("error", (err) => {
-            opts.log("[gateway-router] revision_gone WS reject socket error", { error: err.message });
-          });
-          socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
-          return;
-        }
-        proxyUpgrade(req, socket, head, { target, previewHost, log: opts.log });
-      })
-      .catch((err) => {
-        opts.log("[gateway-router] websocket routing failed", {
-          error: err instanceof Error ? err.message : String(err),
-        });
-        if (!socket.destroyed) {
-          socket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
-        }
+    if (target.revision !== null) {
+      socket.on("error", (err) => {
+        opts.log("[gateway-router] revision_gone WS reject socket error", { error: err.message });
       });
+      socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+      return;
+    }
+    proxyUpgrade(req, socket, head, { target, previewHost, log: opts.log });
   });
 
   return server;

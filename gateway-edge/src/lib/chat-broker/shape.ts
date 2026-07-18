@@ -1,12 +1,12 @@
 /**
  * Shape Mattermost API responses into the per-post objects the Coach sees.
  *
- * Boundary rule (spec §2.3.8): coach-authored posts are filtered out here.
- * Reasons:
- *   - Prevents echo (Coach searches → finds its own past replies → cites them).
- *   - Keeps the agent's "evidence from the team" honest — what others said,
- *     not what the Coach itself wrote earlier.
- * The filter is a hard rule, not a config switch.
+ * Boundary rule: coach-authored posts are included and labeled `self: true`.
+ * The label — not omission — is what keeps "evidence from the team" honest:
+ * the Coach can recover its own half of a conversation (full-fidelity
+ * re-prime after a restart) while seeing plainly which words are its own and
+ * therefore not team evidence. Supersedes the original §2.3.8 omission rule;
+ * DECISIONS.md (2026-07-17) records the reversal.
  */
 
 export interface MmPost {
@@ -42,7 +42,7 @@ export interface MmUserMeta {
 }
 
 export interface ShapeContext {
-  /** Coach's own MM user id. Posts authored by this id are filtered out. */
+  /** Coach's own MM user id. Posts authored by this id are labeled `self: true`. */
   coachMmUserId: string;
   /** Public site URL for permalink construction, e.g. https://mattermost.octogee.com */
   siteUrl: string;
@@ -59,6 +59,8 @@ export interface CoachPost {
   post_id: string;
   channel: { name: string; display_name: string };
   author:  { username: string; display_name: string };
+  /** True when the Coach itself authored this post — its own words, not team evidence. */
+  self: boolean;
   created_at: string; // ISO 8601 UTC
   permalink: string;
   snippet: string;
@@ -118,16 +120,16 @@ function makeSnippet(message: string, query?: string): string {
 
 export interface ShapedBundle {
   posts: CoachPost[];
-  /** Total returned by MM after coach-author filter applied. */
+  /** Total returned by MM after the drops below. */
   total: number;
 }
 
 /**
- * Order-preserving shape. Drops:
- *   - Coach-authored posts (boundary §2.3.8).
+ * Order-preserving shape. Coach-authored posts are kept and labeled
+ * `self: true`. Drops:
  *   - Soft-deleted posts (`delete_at > 0`).
  *   - System messages (`type` non-empty — joins, leaves, etc.).
- *   - Posts whose channel/author can't be hydrated (defensive — should not happen).
+ *   - Posts whose channel can't be hydrated (defensive — should not happen).
  */
 export function shapeBundle(
   bundle: MmPostsBundle,
@@ -136,16 +138,15 @@ export function shapeBundle(
   const out: CoachPost[] = [];
   for (const id of bundle.order ?? []) {
     const post = bundle.posts?.[id];
-    if (!shouldShapePost(post, ctx)) continue;
+    if (!shouldShapePost(post)) continue;
     const shaped = shapePost(post, ctx);
     if (shaped) out.push(shaped);
   }
   return { posts: out, total: out.length };
 }
 
-function shouldShapePost(post: MmPost | undefined, ctx: ShapeContext): post is MmPost {
+function shouldShapePost(post: MmPost | undefined): post is MmPost {
   if (!post) return false;
-  if (post.user_id === ctx.coachMmUserId) return false;
   if ((post.delete_at ?? 0) > 0) return false;
   if (post.type && post.type !== "") return false;
   return true;
@@ -165,6 +166,7 @@ function shapePost(post: MmPost, ctx: ShapeContext): CoachPost | null {
       username: author?.username ?? "(unknown)",
       display_name: displayName(author),
     },
+    self: post.user_id === ctx.coachMmUserId,
     created_at: isoFromMs(post.create_at),
     permalink: buildPermalink(ctx.siteUrl, ctx.teamName, post.id),
     snippet: makeSnippet(post.message, ctx.query),

@@ -11,12 +11,6 @@ import {
   createActivateImportHandler,
   createActivationManifestExportHandler,
   createAbortRsyncImportHandler,
-  createConfigAbortV2Handler,
-  createConfigCandidateProofHandler,
-  createConfigFinalizeV2Handler,
-  createConfigFreezeV2Handler,
-  createConfigPromoteCandidateHandler,
-  createConfigRetireV2Handler,
   createExportHandler,
   createExportPathsHandler,
   createFlushHandler,
@@ -30,14 +24,17 @@ import {
   createRestoreHandler,
   createUnmountHandler,
   createVerifyHandler,
-  type ConfigAbortV2Callback,
-  type ConfigCandidateProofCallback,
-  type ConfigFinalizeV2Callback,
-  type ConfigFreezeV2Callback,
-  type ConfigPromoteCandidateCallback,
-  type ConfigRetireV2Callback,
-  type MigrationHandlerDeps,
+  createCompleteSurgeHandoffHandler,
 } from "./fleet-http-migration.js";
+import {
+  createSurgeReadinessGate,
+  type SurgeReadinessGate,
+} from "./surge-readiness.js";
+import {
+  observeReadySibling,
+  startAfterSurgeReadiness,
+  startSurgeReadinessSelfRelease,
+} from "./surge-reconcile-gate.js";
 import {
   writeGatewayHeartbeat,
   type FleetStateDeps,
@@ -175,7 +172,6 @@ export interface StartFleetOptions {
   rpc: GatewayRpcClient;
   adapter?: CustomerLifecycleAdapter;
   gatewayId: string;
-  revisionId: string;
   log: (msg: string) => void;
   port: number;
   publicKey: string;
@@ -218,12 +214,6 @@ flushLocalState?: (input: {
   reason: string;
 }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
 
-freezeSystemConfigV2?: ConfigFreezeV2Callback;
-proveSystemConfigCandidate?: ConfigCandidateProofCallback;
-promoteSystemConfigCandidate?: ConfigPromoteCandidateCallback;
-abortSystemConfigV2?: ConfigAbortV2Callback;
-finalizeSystemConfigV2?: ConfigFinalizeV2Callback;
-retireSystemConfigV2?: ConfigRetireV2Callback;
 }
 
 export interface StartedFleetController {
@@ -269,7 +259,14 @@ export function resolveFleetCapabilities(opts: {
 export async function readMountedCustomersFromAssignedState(
   db: Firestore,
   gatewayId: string,
-  adapter: Pick<CustomerLifecycleAdapter, "hasCustomerDir" | "customerCoachWiredInOpenclawConfig">,
+  adapter: Pick<
+    CustomerLifecycleAdapter,
+    | "hasCustomerDir"
+    | "customerCoachWiredInOpenclawConfig"
+    | "hasCustomerAgentRuntime"
+    | "hasWorkspaceGitDir"
+    | "hasGitRemote"
+  >,
 ): Promise<string[]> {
   const snap = await db
     .collection("users")
@@ -288,9 +285,24 @@ export async function readMountedCustomersFromAssignedState(
     ) {
       continue;
     }
+    if (!hasMountedRuntimeAndWorkspace(adapter, slug)) continue;
     mounted.add(slug);
   }
   return [...mounted].sort((a, b) => a.localeCompare(b));
+}
+
+function hasMountedRuntimeAndWorkspace(
+  adapter: Pick<
+    CustomerLifecycleAdapter,
+    "hasCustomerAgentRuntime" | "hasWorkspaceGitDir" | "hasGitRemote"
+  >,
+  slug: string,
+): boolean {
+  return (
+    (!adapter.hasCustomerAgentRuntime || adapter.hasCustomerAgentRuntime(slug))
+    && adapter.hasWorkspaceGitDir(slug)
+    && adapter.hasGitRemote(slug)
+  );
 }
 
 // In-pod migration RPC path guard (GATEWAY-RELEASES-SPEC transport/tenant
@@ -304,40 +316,16 @@ export function pathGatewayIdMatchesPod(
   return pathGatewayId === podGatewayId;
 }
 
-export function registerConfigControlRoutes(
-  app: express.Express,
-  gatewayIdGuard: express.RequestHandler,
-  deps: MigrationHandlerDeps,
-): void {
-  app.post("/config-freeze-v2/:gatewayId", gatewayIdGuard, createConfigFreezeV2Handler(deps));
-  app.post(
-    "/config-candidate-proof/:gatewayId",
-    gatewayIdGuard,
-    createConfigCandidateProofHandler(deps),
-  );
-  app.post(
-    "/config-promote-candidate/:gatewayId",
-    gatewayIdGuard,
-    createConfigPromoteCandidateHandler(deps),
-  );
-  app.post("/config-abort-v2/:gatewayId", gatewayIdGuard, createConfigAbortV2Handler(deps));
-  app.post("/config-retire-v2/:gatewayId", gatewayIdGuard, createConfigRetireV2Handler(deps));
-  app.post("/config-finalize-v2/:gatewayId", gatewayIdGuard, createConfigFinalizeV2Handler(deps));
-}
-
-// The K8s Service name a revision pod publishes as its heartbeat internalUrl.
-export function gatewayRevisionServiceName(input: {
-  gatewayId: string;
-  revisionId: string;
-}): string {
-  if (!input.revisionId) throw new Error("revisionId is required for gateway service addressing");
-  return `octogee-gateway-${input.revisionId}`;
+// The K8s Service name this pod publishes as its heartbeat internalUrl — the
+// chart's stable bare-id Service (GATEWAY-SIMPLE-ROLL-SPEC).
+export function gatewayServiceName(input: { gatewayId: string }): string {
+  if (!input.gatewayId) throw new Error("gatewayId is required for gateway service addressing");
+  return `octogee-gateway-${input.gatewayId}`;
 }
 
 // Build the heartbeat snapshot for a fleet tick.
 export function buildFleetHeartbeatSnapshot(input: {
   gatewayId: string;
-  revisionId: string;
   status: HeartbeatSnapshot["status"];
   version: string;
   openclawVersion: string;
@@ -345,12 +333,11 @@ export function buildFleetHeartbeatSnapshot(input: {
   internalUrl: string;
   startedAt: number;
 }): HeartbeatSnapshot {
-  if (!input.revisionId) {
-    throw new Error("revisionId is required for revision-scoped gateway heartbeat");
+  if (!input.gatewayId) {
+    throw new Error("gatewayId is required for a gateway heartbeat");
   }
   return {
     gatewayId: input.gatewayId,
-    revisionId: input.revisionId,
     status: input.status,
     version: input.version,
     openclawVersion: input.openclawVersion,
@@ -363,6 +350,7 @@ export function buildFleetHeartbeatSnapshot(input: {
 export function buildFleetHealthResponse(input: {
   status: FleetRuntime["status"];
   gatewayId: string;
+  podUid: string | null;
   version: string;
   openclawVersion: string;
   startedAt: number;
@@ -372,6 +360,7 @@ export function buildFleetHealthResponse(input: {
   return {
     status: input.status,
     gatewayId: input.gatewayId,
+    podUid: input.podUid,
     version: input.version,
     openclawVersion: input.openclawVersion,
     startedAt: input.startedAt,
@@ -383,6 +372,50 @@ export function buildFleetHealthResponse(input: {
 interface FleetRuntime {
   mountedCustomers: string[];
   status: "booting" | "ready";
+}
+
+const SURGE_READINESS_RPC_TIMEOUT_MS = 2_000;
+
+export async function probeSurgeReadiness(input: {
+  runtimeStatus: FleetRuntime["status"];
+  handoffReleased: boolean;
+  isGatewayUp: (timeoutMs: number) => Promise<boolean>;
+}): Promise<{ ready: boolean; openclawUp: boolean }> {
+  const openclawUp = input.runtimeStatus === "ready"
+    ? await input.isGatewayUp(SURGE_READINESS_RPC_TIMEOUT_MS)
+    : false;
+  return {
+    ready: input.handoffReleased && openclawUp,
+    openclawUp,
+  };
+}
+
+function createSurgeReadinessHandler(input: {
+  runtime: FleetRuntime;
+  surgeReadiness: SurgeReadinessGate;
+  rpc: GatewayRpcClient;
+  log: (message: string) => void;
+}): express.RequestHandler {
+  return async (_req, res) => {
+    try {
+      const handoffReleased = await input.surgeReadiness.released();
+      const { ready, openclawUp } = await probeSurgeReadiness({
+        runtimeStatus: input.runtime.status,
+        handoffReleased,
+        isGatewayUp: (timeoutMs) => input.rpc.isGatewayUp(timeoutMs),
+      });
+      res.status(ready ? 200 : 503).json({
+        ready,
+        runtimeStatus: input.runtime.status,
+        handoffReleased,
+        openclawUp,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      input.log(`[surge-handoff] readiness probe failed: ${message}`);
+      res.status(500).json({ ready: false, error: message });
+    }
+  };
 }
 
 // Evict-observed: RAW on-disk dir presence (NOT coach-wired), minus migrating-in. Drives the
@@ -399,14 +432,19 @@ export function getEvictObservedSlugs(adapter: CustomerLifecycleAdapter): string
   return dirs.filter((s) => !migratingIn || !migratingIn(s)).sort((a, b) => a.localeCompare(b));
 }
 
-// Mount-observed: coach-wired AND fully COMPLETE (the .mounted marker ensure writes as its
-// last step). Drives the reconcile's mount direction, so a coach-wired-but-incomplete slug
-// (config patch landed, then greeting / mark-complete failed) stays in desired−observed and
-// is re-ensured — closing the post-config wedge. Pin-blind (see getEvictObservedSlugs).
+// Mount-observed: coach-wired, runtime-present, durable-workspace-ready, and marked complete.
+// Drives both reconciliation and mounted reporting so any lost runtime, checkout, or origin
+// re-enters desired−observed and is repaired instead of being reported as mounted forever.
 export function getMountObservedSlugs(adapter: CustomerLifecycleAdapter): string[] {
   const coachWired = adapter.listLocalCustomerSlugs?.() ?? [];
   const marked = adapter.customerMountMarked;
-  return coachWired.filter((s) => !marked || marked(s)).sort((a, b) => a.localeCompare(b));
+  return coachWired
+    .filter(
+      (slug) =>
+        hasMountedRuntimeAndWorkspace(adapter, slug)
+        && (!marked || marked(slug)),
+    )
+    .sort((a, b) => a.localeCompare(b));
 }
 
 // Bounded, derived lastError mirror (the restoreJobs writer is gone — this is the only
@@ -460,8 +498,9 @@ function startMaybeReconcileLoop(params: {
   wrappedAdapter: CustomerLifecycleAdapter;
   runtime: FleetRuntime;
   stampMounted: (uid: string, mounted: boolean) => Promise<void>;
+  surgeReadiness: SurgeReadinessGate;
 }): () => void {
-  const { provision, opts, wrappedAdapter, runtime, stampMounted } = params;
+  const { provision, opts, wrappedAdapter, runtime, stampMounted, surgeReadiness } = params;
 
   // Content-convergence bookkeeping (only when a fingerprint source is wired). desiredFp
   // is refreshed every tick by readDesired; appliedFp records the fingerprint that was
@@ -502,7 +541,7 @@ function startMaybeReconcileLoop(params: {
     readDesired = opts.readDesiredSlugs;
   } else if (opts.db) {
     readDesired = () =>
-      readAssignedSlugsForGateway(opts.db!, opts.gatewayId, { revisionId: opts.revisionId });
+      readAssignedSlugsForGateway(opts.db!, opts.gatewayId);
   }
   if (!provision || !readDesired) return () => undefined;
 
@@ -517,7 +556,7 @@ function startMaybeReconcileLoop(params: {
         );
       }
     : undefined;
-  return startReconcileLoop({
+  const start = () => startReconcileLoop({
     gatewayId: opts.gatewayId,
     intervalMs: RECONCILE_LOOP_INTERVAL_MS,
     // SERIAL (not the default cap): the production lifecycle adapter shares one mutable
@@ -528,12 +567,9 @@ function startMaybeReconcileLoop(params: {
     maxConcurrent: 1,
     log: opts.log,
     getMountObserved: () => {
-      // Heartbeat reports the honest coach-wired set (D2) — pin-blind, so a migrated customer
-      // shows mounted as soon as it's coach-wired, not suppressed for the migrating-in TTL.
-      runtime.mountedCustomers = (wrappedAdapter.listLocalCustomerSlugs?.() ?? [])
-        .slice()
-        .sort((a, b) => a.localeCompare(b));
-      return getMountObservedSlugs(wrappedAdapter);
+      const mounted = getMountObservedSlugs(wrappedAdapter);
+      runtime.mountedCustomers = mounted;
+      return mounted;
     },
     getEvictObserved: () => getEvictObservedSlugs(wrappedAdapter),
     ...(getContentStale ? { getContentStale } : {}),
@@ -601,6 +637,11 @@ function startMaybeReconcileLoop(params: {
       }
     },
   });
+  return startAfterSurgeReadiness({
+    released: surgeReadiness.released,
+    start,
+    log: opts.log,
+  });
 }
 
 function createStateDeps(opts: StartFleetOptions, needsState: boolean): FleetStateDeps | null {
@@ -638,6 +679,29 @@ function resolveK8sNamespace(): string {
     );
   }
   return namespace;
+}
+
+function startPodSurgeReadinessRecovery(input: {
+  surgeReadiness: SurgeReadinessGate;
+  serviceName: string;
+  namespace: string;
+  port: number;
+  log: (message: string) => void;
+}): () => void {
+  const ownPodUid = process.env.POD_UID?.trim() || null;
+  if (!ownPodUid) {
+    input.log("[surge-handoff] POD_UID is unset; pod-side readiness recovery is disabled");
+    return () => undefined;
+  }
+  return startSurgeReadinessSelfRelease({
+    released: input.surgeReadiness.released,
+    observe: () => observeReadySibling({
+      healthUrl: `http://${input.serviceName}.${input.namespace}.svc.cluster.local:${input.port}/health`,
+      ownPodUid,
+    }),
+    release: () => input.surgeReadiness.release({ targetPodUid: ownPodUid }),
+    log: input.log,
+  });
 }
 
 function wrapAdapterWithRuntime(
@@ -702,14 +766,13 @@ export async function startFleetController(
     mountedCustomers: [],
     status: "booting",
   };
+  const openclawDir = opts.openclawDir ?? path.join(process.env.HOME ?? "/home/node", ".openclaw");
+  const surgeReadiness = createSurgeReadinessGate(openclawDir);
 
   const namespace = resolveK8sNamespace();
   const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || "18789";
 
-const serviceName = gatewayRevisionServiceName({
-    gatewayId: opts.gatewayId,
-    revisionId: opts.revisionId,
-  });
+const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
   const internalUrl = `http://${serviceName}.${namespace}.svc.cluster.local:${gatewayPort}`;
 
   const emitHeartbeat = async (status: HeartbeatSnapshot["status"]) => {
@@ -719,7 +782,6 @@ const serviceName = gatewayRevisionServiceName({
         stateDeps,
         buildFleetHeartbeatSnapshot({
           gatewayId: opts.gatewayId,
-          revisionId: opts.revisionId,
           status,
           version: opts.version,
           openclawVersion: opts.openclawVersion,
@@ -786,16 +848,24 @@ const waitForGatewayReady = async (): Promise<void> => {
     res.json(buildFleetHealthResponse({
       status: runtime.status,
       gatewayId: opts.gatewayId,
+      podUid: process.env.POD_UID ?? null,
       version: opts.version,
       openclawVersion: opts.openclawVersion,
       startedAt: PROCESS_STARTED_AT_MS,
-      customers: adapter.listLocalCustomerSlugs?.() ?? [],
+      customers: getMountObservedSlugs(adapter),
       // Slugs mid-migration-import — Cowboy's operator poller skips these as eviction
       // candidates until cutover moves their assignment (the operator path has no in-pod
       // reconcile to honor the pin).
       migratingIn: adapter.listMigratingInSlugs?.() ?? [],
     }));
   });
+
+  app.get("/surge-ready", createSurgeReadinessHandler({
+    runtime,
+    surgeReadiness,
+    rpc: opts.rpc,
+    log: opts.log,
+  }));
 
   const wrappedAdapter = wrapAdapterWithRuntime(adapter, runtime);
 
@@ -827,22 +897,21 @@ const waitForGatewayReady = async (): Promise<void> => {
   const migrationDeps = {
     publicKey: opts.publicKey,
     gatewayId: opts.gatewayId,
-    revisionId: opts.revisionId,
     adapter: wrappedAdapter,
     log: opts.log,
     getMountedCustomers: () => runtime.mountedCustomers,
     flushLocalState: opts.flushLocalState,
-    freezeSystemConfigV2: opts.freezeSystemConfigV2,
-    proveSystemConfigCandidate: opts.proveSystemConfigCandidate,
-    promoteSystemConfigCandidate: opts.promoteSystemConfigCandidate,
-    abortSystemConfigV2: opts.abortSystemConfigV2,
-    retireSystemConfigV2: opts.retireSystemConfigV2,
-    finalizeSystemConfigV2: opts.finalizeSystemConfigV2,
+    releaseSurgeReadiness: async ({ targetPodUid }: { targetPodUid: string }) => {
+      const ownPodUid = process.env.POD_UID;
+      if (ownPodUid && ownPodUid !== targetPodUid) {
+        throw new Error(`target pod UID mismatch: expected ${ownPodUid}, received ${targetPodUid}`);
+      }
+      await surgeReadiness.release({ targetPodUid });
+    },
   };
   app.post("/restore/:gatewayId", gatewayIdGuard, createRestoreHandler(migrationDeps));
   app.post("/quiesce/:gatewayId", gatewayIdGuard, createQuiesceHandler(migrationDeps));
   app.post("/flush/:gatewayId", gatewayIdGuard, createFlushHandler(migrationDeps));
-  registerConfigControlRoutes(app, gatewayIdGuard, migrationDeps);
   app.post("/verify/:gatewayId", gatewayIdGuard, createVerifyHandler(migrationDeps));
   app.post("/export/:gatewayId", gatewayIdGuard, createExportHandler(migrationDeps));
   app.post("/export-paths/:gatewayId", gatewayIdGuard, createExportPathsHandler(migrationDeps));
@@ -857,6 +926,7 @@ const waitForGatewayReady = async (): Promise<void> => {
   app.post("/push-rsync-state/:gatewayId", gatewayIdGuard, createPushRsyncStateHandler(migrationDeps));
   app.post("/finish-rsync-import/:gatewayId", gatewayIdGuard, createFinishRsyncImportHandler(migrationDeps));
   app.post("/abort-rsync-import/:gatewayId", gatewayIdGuard, createAbortRsyncImportHandler(migrationDeps));
+  app.post("/complete-surge-handoff/:gatewayId", gatewayIdGuard, createCompleteSurgeHandoffHandler(migrationDeps));
   app.post("/push-state/:gatewayId", gatewayIdGuard, createPushStateHandler(migrationDeps));
   app.post("/import/:gatewayId", gatewayIdGuard, createImportHandler(migrationDeps));
   app.post("/unmount/:gatewayId", gatewayIdGuard, createUnmountHandler(migrationDeps));
@@ -869,10 +939,18 @@ const waitForGatewayReady = async (): Promise<void> => {
     wrappedAdapter,
     runtime,
     stampMounted,
+    surgeReadiness,
   });
 
   const server: Server = await new Promise((resolve) => {
     const s = app.listen(opts.port, "0.0.0.0", () => resolve(s));
+  });
+  const stopSurgeSelfRelease = startPodSurgeReadinessRecovery({
+    surgeReadiness,
+    serviceName,
+    namespace,
+    port: opts.port,
+    log: opts.log,
   });
   const reconcileLoopStatus = caps.provision ? `${RECONCILE_LOOP_INTERVAL_MS}ms` : "disabled";
   opts.log(
@@ -883,6 +961,7 @@ return {
     whenReady: waitForGatewayReady(),
     stop: async () => {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
+      stopSurgeSelfRelease();
       stopReconcileLoop();
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));

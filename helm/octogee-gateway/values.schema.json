@@ -105,6 +105,9 @@
     "chartFingerprint": {
       "type": "string"
     },
+    "deploymentIntentFingerprint": {
+      "type": "string"
+    },
     "serviceAccountName": {
       "type": "string"
     },

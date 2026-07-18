@@ -35,18 +35,13 @@ upsertInstance(opts: {
     serviceAccount?: HelmInstancesMap[string]["serviceAccount"];
     gatewayContainerSecurityContext?: Record<string, unknown>;
     operatorAccess?: HelmInstancesMap[string]["operatorAccess"];
-    systemConfigRollContext?: {
-      migrationId: string;
-      sourceRevisionId: string;
-      targetRevisionId: string;
-      checkpointCommit: string;
-      freezeObject: string;
-    };
     computeClassOverride?: string;
     chartPath: string;
     valuesFile?: string;
 
 chartFingerprint?: string;
+
+deploymentIntentFingerprint?: string;
 
 profile?: GatewayProfile;
 gatewayClass?: GatewayClass;
@@ -57,6 +52,8 @@ sizingTier?: SizingTier;
 replicas?: number;
 
 gcpProject?: string;
+    rollStrategy?: "recreate" | "surge";
+    waitForReady?: boolean;
   }): Promise<void>;
 
 removeInstance(opts: {
@@ -165,6 +162,7 @@ interface PerReleaseValues {
   imageTag?: unknown;
   image?: { repository?: unknown; tag?: unknown };
   chartFingerprint?: unknown;
+  deploymentIntentFingerprint?: unknown;
   serviceAccountName?: unknown;
   serviceAccount?: unknown;
   gatewayContainerSecurityContext?: unknown;
@@ -237,16 +235,15 @@ async function readInstanceValue(
     );
     return null;
   }
-  const chartFingerprint =
-    typeof v.chartFingerprint === "string" && v.chartFingerprint.length > 0
-      ? v.chartFingerprint
-      : undefined;
+  const chartFingerprint = nonEmptyString(v.chartFingerprint);
+  const deploymentIntentFingerprint = nonEmptyString(v.deploymentIntentFingerprint);
   return {
     enabled: true,
     image: { repository: imageRepo, tag: imageTag },
     gatewayId,
-    ...(typeof v.builderSlug === "string" && v.builderSlug.length > 0 ? { builderSlug: v.builderSlug } : {}),
+    ...knob("builderSlug", nonEmptyString(v.builderSlug)),
     ...(chartFingerprint ? { chartFingerprint } : {}),
+    ...(deploymentIntentFingerprint ? { deploymentIntentFingerprint } : {}),
     ...readPersonalKnobs(v),
   };
 }
@@ -327,6 +324,7 @@ export interface BuildUpgradeArgsOpts {
   testExperiment?: W9TestPublisherLiveExperiment;
   upgradeTimeout: string;
   chartFingerprint?: string;
+  deploymentIntentFingerprint?: string;
   profile?: string;
   gatewayClass?: GatewayClass;
   imageProfile?: GatewayImageProfile;
@@ -336,22 +334,18 @@ export interface BuildUpgradeArgsOpts {
   serviceAccount?: HelmInstancesMap[string]["serviceAccount"];
   gatewayContainerSecurityContext?: Record<string, unknown>;
   operatorAccess?: HelmInstancesMap[string]["operatorAccess"];
-  systemConfigRollContext?: {
-    migrationId: string;
-    sourceRevisionId: string;
-    targetRevisionId: string;
-    checkpointCommit: string;
-    freezeObject: string;
-  };
   computeClassOverride?: string;
   gcpProject?: string;
   valuesFile?: string;
+  rollStrategy?: "recreate" | "surge";
+  waitForReady?: boolean;
 }
 
 type UpgradeStringOption = {
   option: keyof Pick<
     BuildUpgradeArgsOpts,
     | "chartFingerprint"
+    | "deploymentIntentFingerprint"
     | "builderSlug"
     | "profile"
     | "gatewayClass"
@@ -363,6 +357,7 @@ type UpgradeStringOption = {
     | "conversationExperimentMode"
     | "gatewayEdgeImageRepository"
     | "gatewayEdgeImageTag"
+    | "rollStrategy"
   >;
   key: string;
 };
@@ -373,13 +368,13 @@ type UpgradeJsonOption = {
     | "serviceAccount"
     | "gatewayContainerSecurityContext"
     | "operatorAccess"
-    | "systemConfigRollContext"
   >;
   key: string;
 };
 
 const UPGRADE_STRING_OPTIONS: UpgradeStringOption[] = [
   { option: "chartFingerprint", key: "chartFingerprint" },
+  { option: "deploymentIntentFingerprint", key: "deploymentIntentFingerprint" },
   { option: "builderSlug", key: "builderSlug" },
   { option: "profile", key: "profile" },
   { option: "gatewayClass", key: "gatewayClass" },
@@ -391,13 +386,13 @@ const UPGRADE_STRING_OPTIONS: UpgradeStringOption[] = [
   { option: "conversationExperimentMode", key: "conversationExperiment.mode" },
   { option: "gatewayEdgeImageRepository", key: "gatewayEdge.image.repository" },
   { option: "gatewayEdgeImageTag", key: "gatewayEdge.image.tag" },
+  { option: "rollStrategy", key: "rollStrategy" },
 ];
 
 const UPGRADE_JSON_OPTIONS: UpgradeJsonOption[] = [
   { option: "serviceAccount", key: "serviceAccount" },
   { option: "gatewayContainerSecurityContext", key: "gatewayContainerSecurityContext" },
   { option: "operatorAccess", key: "operatorAccess" },
-  { option: "systemConfigRollContext", key: "systemConfigRollContext" },
 ];
 
 function baseUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
@@ -454,7 +449,8 @@ function appendUpgradeApplyArgs(args: string[], opts: BuildUpgradeArgsOpts): voi
   // ServiceAccount. Adopt it rather than wedge the blue/green roll forever on
   // "exists and cannot be imported into the current release".
   args.push("--take-ownership");
-  args.push("--wait", `--timeout=${opts.upgradeTimeout}`);
+  if (opts.waitForReady !== false) args.push("--wait");
+  args.push(`--timeout=${opts.upgradeTimeout}`);
 }
 
 function validateW9TestExperimentRender(opts: BuildUpgradeArgsOpts): void {

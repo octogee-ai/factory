@@ -768,43 +768,14 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     expect(gw).not.toMatch(/name:\s*SYSTEM_CONFIG_MIGRATION_ID/);
   });
 
-  it("renders all immutable target rollout bindings only on the gateway container", () => {
-    const dep = findDoc(helmTemplate("octogee-gw-bender-r2", {
+  it("accepts no roll-context values — the target-candidate boot plane is retired", () => {
+    const dep = findDoc(helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
       gatewayClass: "operator",
       builderSlug: "ceckert",
-      revisionId: "bender-r2",
-      "systemConfigRollContext.migrationId": "mig-123",
-      "systemConfigRollContext.sourceRevisionId": "bender-r1",
-      "systemConfigRollContext.targetRevisionId": "bender-r2",
-      "systemConfigRollContext.checkpointCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "systemConfigRollContext.freezeObject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    }), "Deployment", "octogee-gateway-bender-r2") ?? "";
-    const gw = containerBlock(dep, "gateway");
-    const edge = containerBlock(dep, "gateway-edge");
-    expect(gw).toMatch(/name:\s*SYSTEM_CONFIG_MIGRATION_ID[\s\S]*?value:\s*"mig-123"/);
-    expect(gw).toMatch(/name:\s*SYSTEM_CONFIG_SOURCE_REVISION_ID[\s\S]*?value:\s*"bender-r1"/);
-    expect(gw).toMatch(/name:\s*SYSTEM_CONFIG_TARGET_REVISION_ID[\s\S]*?value:\s*"bender-r2"/);
-    expect(gw).toMatch(/name:\s*SYSTEM_CONFIG_CHECKPOINT_COMMIT[\s\S]*?value:\s*"a{40}"/);
-    expect(gw).toMatch(/name:\s*SYSTEM_CONFIG_FREEZE_OBJECT[\s\S]*?value:\s*"b{40}"/);
-    expect(edge).not.toMatch(/SYSTEM_CONFIG_MIGRATION_ID/);
-  });
-
-  it("refuses partial or wrong-target rollout context before rendering a pod", () => {
-    expect(() => helmTemplate("octogee-gw-bender-r2", {
-      gatewayId: "bender",
-      revisionId: "bender-r2",
-      "systemConfigRollContext.migrationId": "mig-123",
-    })).toThrow(/systemConfigRollContext must provide all five fields/i);
-    expect(() => helmTemplate("octogee-gw-bender-r2", {
-      gatewayId: "bender",
-      revisionId: "bender-r2",
-      "systemConfigRollContext.migrationId": "mig-123",
-      "systemConfigRollContext.sourceRevisionId": "bender-r1",
-      "systemConfigRollContext.targetRevisionId": "bender-r3",
-      "systemConfigRollContext.checkpointCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "systemConfigRollContext.freezeObject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    })).toThrow(/targetRevisionId must equal revisionId/i);
+    }), "Deployment", "octogee-gateway-bender") ?? "";
+    expect(dep).not.toMatch(/SYSTEM_CONFIG_MIGRATION_ID/);
+    expect(dep).not.toMatch(/systemConfigRollContext/);
   });
 
   it("points the sidecar coach reconciler at the tracked config on isolated gateways", () => {
@@ -931,16 +902,16 @@ expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
     );
   });
 
-  it("keeps shared gateways on the proven OpenClaw HTTP startup and TCP steady-state probes", () => {
+  it("keeps shared startup/liveness on OpenClaw and gates readiness on surge handoff", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const gw = containerBlock(dep, "gateway");
 
     expect(gw).toMatch(/startupProbe:\s+httpGet:\s+path:\s*\/healthz\s+port:\s*18789/);
     expect(gw).toMatch(/livenessProbe:\s+tcpSocket:\s+port:\s*18789/);
-    expect(gw).toMatch(/readinessProbe:\s+tcpSocket:\s+port:\s*18789/);
+    expect(gw).toMatch(/readinessProbe:\s+httpGet:\s+path:\s*\/surge-ready\s+port:\s*3003/);
   });
 
-  it("uses the immutable image capability marker to select isolated gateway health endpoints", () => {
+  it("probes isolated gateways identity-pure and gates readiness on surge handoff", () => {
     const dep = findDoc(
       helmTemplate("octogee-gw-bender", { gatewayId: "bender", gatewayClass: "builder" }),
       "Deployment",
@@ -948,25 +919,21 @@ expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
     ) ?? "";
     const gw = containerBlock(dep, "gateway");
 
-    expect(gw).not.toMatch(/startupProbe:\s+httpGet:/);
-    expect(gw).not.toMatch(/livenessProbe:\s+httpGet:/);
-    expect(gw).not.toMatch(/readinessProbe:\s+httpGet:/);
-    expect(gw.match(/\[ -f \/opt\/octogee\/capabilities\/config-status-v2 \]/g)).toHaveLength(3);
-    expect(gw.match(/curl -fsS http:\/\/127\.0\.0\.1:18790\/healthz/g)).toHaveLength(2);
-    expect(gw).toMatch(/curl -fsS http:\/\/127\.0\.0\.1:18790\/readyz/);
-    expect(gw.match(/curl -fsS http:\/\/127\.0\.0\.1:3003\/health/g)).toHaveLength(3);
-    expect(gw).not.toContain("rc=$?");
-    expect(gw).not.toContain("||");
+    expect(gw).toMatch(/startupProbe:[\s\S]*?httpGet:\s+path:\s*\/health\s+port:\s*3003/);
+    expect(gw).toMatch(/livenessProbe:\s+httpGet:\s+path:\s*\/health\s+port:\s*3003/);
+    expect(gw).toMatch(/readinessProbe:\s+httpGet:\s+path:\s*\/surge-ready\s+port:\s*3003/);
+    expect(gw).not.toContain("config-status-v2");
+    expect(gw).not.toContain("18790");
     expect(dep).not.toMatch(/__openclaw__/);
   });
 
-  it("keeps isolated repair services routable while OpenClaw readiness is false", () => {
+  it("keeps NotReady surge targets out of every per-instance Service", () => {
     const out = helmTemplate("octogee-gw-default", { gatewayClass: "builder" });
     const gateway = findDoc(out, "Service", "octogee-gateway-default") ?? "";
     const edge = findDoc(out, "Service", "gateway-edge-default") ?? "";
 
-    expect(gateway).toMatch(/publishNotReadyAddresses:\s*true/);
-    expect(edge).toMatch(/publishNotReadyAddresses:\s*true/);
+    expect(gateway).not.toMatch(/publishNotReadyAddresses/);
+    expect(edge).not.toMatch(/publishNotReadyAddresses/);
     expect(findDoc(helmTemplate(), "Service", "gateway-edge-default") ?? "").not.toMatch(
       /publishNotReadyAddresses/,
     );

@@ -6,7 +6,7 @@ import { requestLogger } from "./middleware/logging.js";
 import { errorHandler } from "./middleware/errors.js";
 import { logger } from "./middleware/logging.js";
 import { helmetMiddleware, globalRateLimit } from "./middleware/security.js";
-import { requireAuth } from "./middleware/auth.js";
+import { requireAuth, requireAuthenticatedUid } from "./middleware/auth.js";
 import { installBodyParsers } from "./middleware/body-parsers.js";
 import { createEmailMetrics, setEmailMetrics } from "./lib/email-metrics.js";
 import { createNotificationMetrics, setNotificationMetrics } from "./lib/notification-metrics.js";
@@ -38,13 +38,6 @@ import {
   type RollRosterUpgradeGate,
 } from "./roll-roster.js";
 import { createBrokerRollRosterSubscription } from "./broker-roll-roster.js";
-import { createRevisionTombstoneStore } from "./revision-tombstone-store.js";
-import {
-  REVISION_TOMBSTONES_COLLECTION,
-  isRevisionTombstone,
-  type RevisionTombstone,
-} from "@octogee/shared/types/gateway-releases";
-
 import { chatProxyOwnsHttpPath } from "./chat-proxy/http-paths.js";
 import { stripGatewayPrefix } from "./chat-proxy/gateway-prefix.js";
 import { validateRequiredEnv } from "./lib/required-env.js";
@@ -238,7 +231,7 @@ function mountSidecarLocalitySurface(app: Express, options: {
   // /api/g/<gatewayId>/byosub/* locality seam), so it can read the pod's
   // auth-profile store — the proof /api/model-credentials/subscription/connection's ref-read can't give.
   const byosubLocality = Router();
-  byosubLocality.use("/health", requireAuth);
+  byosubLocality.use("/health", requireAuthenticatedUid);
   byosubLocality.use(byosubHealthRoutes);
   mountApi(app, "/byosub", byosubLocality);
   const automationsLocality = Router({ mergeParams: true });
@@ -298,23 +291,9 @@ if (process.env.NODE_ENV !== "test") {
       logger.error("FATAL: GATEWAY_ROUTER_PREVIEW_HOST is required in gateway-router mode");
       process.exit(1);
     }
-    // Tombstone reads are lazy: Firestore is only touched on the first pinned
-    // MISS (a `/g/<gw>/r/<n>/…` request), so router boot stays lookup-free and
-    // the service-addressed hot path never initializes the client at all.
-    const tombstoneStore = createRevisionTombstoneStore({
-      readTombstone: async (revisionId): Promise<RevisionTombstone | null> => {
-        const { db } = await import("./lib/db.js");
-        const snap = await db.collection(REVISION_TOMBSTONES_COLLECTION).doc(revisionId).get();
-        if (!snap.exists) return null;
-        const data = snap.data();
-        return isRevisionTombstone(data) ? data : null;
-      },
-    });
     const server = createGatewayRouter({
       namespace: process.env.K8S_NAMESPACE || "default",
       previewHost: process.env.GATEWAY_ROUTER_PREVIEW_HOST,
-      revisionTombstoneLookup: tombstoneStore.lookup,
-      revisionTombstoneRecheck: tombstoneStore.recheck,
       log: (message, meta) => logger.error(message, meta),
     });
     server.listen(PORT, () => {
@@ -344,12 +323,12 @@ if (process.env.NODE_ENV !== "test") {
     process.exit(1);
   }
 
-  // Revision pods gate service-addressed traffic on the durable roll roster.
-  // The gate installs SYNCHRONOUSLY with a not-yet-loaded store facade, so an
-  // edge booting mid-roll answers 503 + Retry-After until the roster snapshot
-  // lands — it never defaults to serve-local (council-resolved). The roster
-  // read is scoped to this pod's own gateway and is read-only (Cowboy is the
-  // sole roster writer).
+  // Gateway pods gate customer-state traffic on the durable assignment roster
+  // (the migration quiesce gate). The gate installs SYNCHRONOUSLY with a
+  // not-yet-loaded store facade, so an edge booting mid-migration answers 503 +
+  // Retry-After until the roster snapshot lands — it never defaults to
+  // serve-local for a quiescing customer (council-resolved). The roster read is
+  // scoped to this pod's own gateway and is read-only.
   const selfRevisionId = process.env.GATEWAY_REVISION_ID ?? "";
   const rosterGatewayId = process.env.GATEWAY_ID ?? "";
   let rollRosterUpgradeGate: RollRosterUpgradeGate | null = null;
@@ -364,7 +343,6 @@ if (process.env.NODE_ENV !== "test") {
         store: storeFacade,
         gatewayId: rosterGatewayId,
         selfRevisionId,
-        namespace: process.env.K8S_NAMESPACE || "octogee",
         log: (msg) => logger.warn(msg),
       }),
     );

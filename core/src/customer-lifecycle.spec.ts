@@ -14,6 +14,7 @@ import {
 
 interface DiskState {
   customerDir: boolean;
+  agentRuntime?: boolean;
   workspaceGitDir: boolean;
   gitRemote: boolean;
   sshKey: boolean;
@@ -76,6 +77,7 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
       write("provisioning.openclaw.agentIds", agentIds),
 
     hasCustomerDir: () => state.disk.customerDir,
+    hasCustomerAgentRuntime: () => state.disk.agentRuntime ?? state.disk.customerDir,
     hasWorkspaceGitDir: () => state.disk.workspaceGitDir,
     hasGitRemote: () => state.disk.gitRemote,
     ensureCustomerDirectories: () => {
@@ -813,6 +815,34 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
     expect(result.steps).toContain("verify-channel-ready");
   });
 
+  it("does NOT short-circuit when the agent runtime dir is absent after an emptyDir restart", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        agentIds: ["octogee-test-coach"],
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user-existing",
+        greetingPosted: true,
+      }),
+      {
+        customerDir: true,
+        agentRuntime: false,
+        workspaceGitDir: true,
+        gitRemote: true,
+        sshKey: true,
+        templatesWritten: true,
+        repoHasCommits: true,
+      },
+    );
+    const adapter = makeAdapter(state);
+    adapter.isOperatorGateway = () => true;
+    adapter.customerCoachWiredInOpenclawConfig = () => true;
+
+    await addCustomerToGateway(adapter, "uid-test");
+
+    expect(state.calls).toContain("applyAddCustomerConfigPatch");
+  });
+
   it("crash-mid-flow recovery: SSH key on disk but openclaw.json missing agent → falls through to full flow", async () => {
     // Copilot review on PR #1182 surfaced this scenario: a previous mount
     // crashed AFTER generateCustomerSshKey but BEFORE applyAddCustomerConfigPatch
@@ -1349,6 +1379,37 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
     expect(state.calls).not.toContain("blobSyncForSlug");
     expect(result.steps).not.toContain("blob-sync");
     expect(result.steps).toContain("verify-channel-ready");
+  });
+
+  it("replaces an imported origin-less checkout with the canonical Gitea workspace", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        repoUrl: "http://gitea/octogee/test-workspace",
+      }),
+      {
+        customerDir: true,
+        agentRuntime: true,
+        workspaceGitDir: true,
+        gitRemote: false,
+        sshKey: true,
+        templatesWritten: true,
+        repoHasCommits: false,
+      },
+    );
+    state.giteaRegisteredPubKey = "ssh-pubkey";
+
+    const result = await restoreCustomerRuntimeFromSnapshot(
+      makeAdapter(state),
+      state.user!,
+    );
+
+    expect(state.calls).toContain("deleteCustomerDir");
+    expect(state.calls).toContain("cloneWorkspaceRepo");
+    expect(state.calls.indexOf("deleteCustomerDir")).toBeLessThan(
+      state.calls.indexOf("cloneWorkspaceRepo"),
+    );
+    expect(result.steps).toContain("clone-workspace-repo");
   });
 });
 

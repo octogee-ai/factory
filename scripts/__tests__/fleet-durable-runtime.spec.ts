@@ -19,10 +19,7 @@ function gatewayRoot(
     latestRelease: 2,
     desiredRelease: 2,
     liveRelease: 2,
-    liveRevisionId: `${gatewayId}-r2`,
-    trafficRevisionId: `${gatewayId}-r2`,
     desiredStatus: "running",
-    roll: null,
     configSchemaVersion: 1,
     profile: null,
     gatewayClass: "shared",
@@ -44,14 +41,13 @@ function gatewayRoot(
   };
 }
 
-function revision(
+function runtimeDoc(
   gatewayId: string,
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
-    docKind: "revision",
-    revisionId: `${gatewayId}-r2`,
-    gateway: gatewayId,
+    docKind: "runtime",
+    gatewayId,
     release: 2,
     lifecycle: "serving",
     heartbeat: {
@@ -89,13 +85,10 @@ function database(docs: Docs, gatewayIds: readonly string[] = []): {
 }
 
 describe("fleet durable gateway runtime", () => {
-  it("reads the exact live revision heartbeat while retaining the bare gateway id", async () => {
+  it("reads the runtime heartbeat from the bare-id doc", async () => {
     const db = database({
       "gateways/default": gatewayRoot("default"),
-      "glmGateways/default-r2": revision("default"),
-      "glmGateways/default": {
-        heartbeat: { status: "unreachable", mountedCustomers: ["stale"] },
-      },
+      "glmGateways/default": runtimeDoc("default"),
     });
 
     await expect(readFleetGatewayRuntime(db as never, "default")).resolves.toEqual({
@@ -120,15 +113,10 @@ describe("fleet durable gateway runtime", () => {
     await expect(readFleetGatewayRuntime(db as never, "default")).resolves.toBeNull();
   });
 
-  it("lists durable root identities and never turns runtime revisions into gateway rows", async () => {
+  it("lists durable root identities from their bare-id runtime docs", async () => {
     const db = database({
       "gateways/default": gatewayRoot("default"),
-      "glmGateways/default-r2": revision("default"),
-      "glmGateways/default-r3": revision("default", {
-        revisionId: "default-r3",
-        release: 3,
-        heartbeat: { status: "ready", mountedCustomers: ["bob"] },
-      }),
+      "glmGateways/default": runtimeDoc("default"),
     }, ["default"]);
 
     await expect(listFleetGatewayRuntimes(db as never)).resolves.toEqual([

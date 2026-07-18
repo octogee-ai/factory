@@ -1,35 +1,10 @@
 import { type MigrationPhase } from "./fleet-migration.js";
-import { type LegacyConfigFreezeResponse, type LegacyConfigRestoreProofResponse, type MigrationClient } from "./fleet-migration-client.js";
+import type { MigrationClient } from "./fleet-migration-client.js";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
-import type { SystemConfigMigrationMode } from "@octogee/shared/types/fleet-controller";
 export interface ReportedStep {
     name: string;
     status: "running" | "done" | "failed" | "skipped";
     error?: string;
-}
-export interface CutoverAssignmentRevision {
-    revisionId: string;
-    release: number;
-}
-export interface MigrationRollFence {
-    uid: string;
-    gatewayId: string;
-    rollOperationId: string;
-    targetRevisionId: string;
-    targetRelease: number;
-    sourceRevisionId: string;
-    sourceEpoch: number;
-    sourceConfigCheckpoint?: {
-        migrationId: string;
-        checkpointCommit: string;
-        configHash: string;
-    };
-    configReady?: {
-        observedRevisionId: string;
-        acceptedCommit: string;
-        configReadyAt: number;
-        runtimeConfigHash: string;
-    };
 }
 export interface CutoverCommit {
     uid: string;
@@ -37,8 +12,6 @@ export interface CutoverCommit {
     toGatewayId: string;
     fromGatewayId: string;
     flipMirror: boolean;
-    revision: CutoverAssignmentRevision | null;
-    rollFence?: MigrationRollFence;
 }
 export interface MigrationRunnerDeps {
     client: MigrationClient;
@@ -48,25 +21,6 @@ export interface MigrationRunnerDeps {
         uid: string;
         state: "serving" | "quiescing" | "migrating";
     }) => Promise<void>;
-    acceptConfigProof?: (input: {
-        migrationId: string;
-        slug: string;
-        sourceRevisionId: string;
-        targetRevisionId: string;
-        checkpoint: Pick<LegacyConfigFreezeResponse, "checkpointCommit" | "configHash">;
-        proof: Omit<LegacyConfigRestoreProofResponse, "migrationId" | "slug">;
-    }) => Promise<void>;
-    recoverConfigFreezeOwner?: (input: {
-        ownerMigrationId: string;
-        requestedMigrationId: string;
-        uid: string;
-        slug: string;
-        sourceGatewayId: string;
-        sourceTransportId: string;
-        targetGatewayId: string;
-        targetTransportId: string;
-        rollOperationId?: string;
-    }) => Promise<boolean>;
     log: (msg: string) => void;
     reportStep?: (step: ReportedStep) => Promise<void> | void;
 }
@@ -76,34 +30,10 @@ export interface MigrationRunnerInput {
     slug: string;
     fromGatewayId: string;
     toGatewayId: string;
-    fromTransportId?: string;
-    toTransportId?: string;
-    toRevision?: CutoverAssignmentRevision | null;
-    fromRevision?: CutoverAssignmentRevision | null;
     crossGateway?: boolean;
+    gateAssignment?: boolean;
     restoreSnapshot: FleetBrokerUserSnapshot;
     includeActivationManifest?: boolean;
-    systemConfigMigrationMode?: SystemConfigMigrationMode;
-    preAcquiredConfigCheckpoint?: {
-        migrationId: string;
-        checkpointCommit: string;
-        configHash: string;
-    };
-    rollFence?: MigrationRollFence;
-}
-export interface ConfigCleanupObligation {
-    migrationId: string;
-    slug: string;
-    sourceGatewayId: string;
-    sourceTransportId: string;
-    completeSourceUnmount: boolean;
-    resume: {
-        success: boolean;
-        rolledBack: boolean;
-        error?: string;
-        configCheckpoint?: Pick<LegacyConfigFreezeResponse, "checkpointCommit" | "configHash">;
-        configProof?: Omit<LegacyConfigRestoreProofResponse, "migrationId" | "slug">;
-    };
 }
 export interface MigrationRunnerResult {
     success: boolean;
@@ -113,8 +43,5 @@ export interface MigrationRunnerResult {
         error: string;
     };
     rolledBack: boolean;
-    configCheckpoint?: Pick<LegacyConfigFreezeResponse, "checkpointCommit" | "configHash">;
-    configProof?: Omit<LegacyConfigRestoreProofResponse, "migrationId" | "slug">;
-    configCleanup?: ConfigCleanupObligation;
 }
 export declare function runMigration(input: MigrationRunnerInput, deps: MigrationRunnerDeps): Promise<MigrationRunnerResult>;

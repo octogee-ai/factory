@@ -14,12 +14,12 @@ function response(body: unknown, status = 200): Response {
 }
 
 describe("broker roll roster", () => {
-  it("reads the full sanitized assignment roster through the tenant-bound fleet broker", async () => {
+  it("reads the full sanitized lean assignment roster through the tenant-bound fleet broker", async () => {
     const fetcher = vi.fn(async () =>
       response({
         assignments: [
-          { uid: "uid-a", revisionId: "default-r2", state: "serving", epoch: 3 },
-          { uid: "uid-b", revisionId: "default-r7", state: "migrating", epoch: 4 },
+          { uid: "uid-a", state: "serving", epoch: 3 },
+          { uid: "uid-b", state: "migrating", epoch: 4 },
         ],
       }),
     );
@@ -27,7 +27,7 @@ describe("broker roll roster", () => {
     const docs = await readBrokerRollRoster({
       brokerUrl,
       gatewayId: "default",
-      revisionId: "default-r2",
+      revisionId: "default",
       fetcher,
     });
 
@@ -35,12 +35,12 @@ describe("broker roll roster", () => {
       `${brokerUrl}/internal/fleet/assignment-roster`,
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ gatewayId: "default", revisionId: "default-r2" }),
+        body: JSON.stringify({ gatewayId: "default", revisionId: "default" }),
       }),
     );
     expect(docs.map((doc) => ({ id: doc.id, ...doc.data() }))).toEqual([
-      { id: "uid-a", uid: "uid-a", revisionId: "default-r2", state: "serving", epoch: 3 },
-      { id: "uid-b", uid: "uid-b", revisionId: "default-r7", state: "migrating", epoch: 4 },
+      { id: "uid-a", uid: "uid-a", state: "serving", epoch: 3 },
+      { id: "uid-b", uid: "uid-b", state: "migrating", epoch: 4 },
     ]);
   });
 
@@ -49,8 +49,8 @@ describe("broker roll roster", () => {
       readBrokerRollRoster({
         brokerUrl,
         gatewayId: "default",
-        revisionId: "default-r2",
-        fetcher: async () => response({ assignments: [{ uid: "uid-a", revisionId: "other-r2" }] }),
+        revisionId: "default",
+        fetcher: async () => response({ assignments: [{ uid: "uid-a", state: "nonsense" }] }),
       }),
     ).rejects.toThrow(/malformed assignment roster/u);
   });
@@ -62,7 +62,7 @@ describe("broker roll roster", () => {
     const unsubscribe = createBrokerRollRosterSubscription({
       brokerUrl,
       gatewayId: "default",
-      revisionId: "default-r2",
+      revisionId: "default",
       fetcher: async () => response({ error: "unavailable" }, 503),
       schedule: (callback) => {
         nextPoll = callback;
@@ -92,7 +92,7 @@ describe("broker roll roster", () => {
       const unsubscribe = createBrokerRollRosterSubscription({
         brokerUrl,
         gatewayId: "default",
-        revisionId: "default-r2",
+        revisionId: "default",
         fetcher,
         requestTimeoutMs: 10,
       })(onDocs, onError);
@@ -123,7 +123,7 @@ describe("broker roll roster", () => {
       const unsubscribe = createBrokerRollRosterSubscription({
         brokerUrl,
         gatewayId: "default",
-        revisionId: "default-r2",
+        revisionId: "default",
         fetcher,
         requestTimeoutMs: 10,
       })(onDocs, onError);
@@ -147,7 +147,7 @@ describe("broker roll roster", () => {
     const unsubscribe = createBrokerRollRosterSubscription({
       brokerUrl,
       gatewayId: "default",
-      revisionId: "default-r2",
+      revisionId: "default",
       fetcher,
       schedule: (callback) => {
         nextPoll = callback;

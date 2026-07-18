@@ -1,6 +1,6 @@
 import { isAssignmentState } from "@octogee/shared/types/gateway-releases";
 import { internalFetch, type InternalFetchOptions } from "./lib/internal-fetch.js";
-import { isIntraFamilyRevision, type RosterDocSnapshot } from "./roll-roster.js";
+import type { RosterDocSnapshot } from "./roll-roster.js";
 
 type BrokerFetcher = (
   url: string | URL,
@@ -69,20 +69,18 @@ function malformedRoster(): Error {
   return new Error("fleet broker returned malformed assignment roster");
 }
 
-function rosterDocs(value: unknown, gatewayId: string): RosterDocSnapshot[] {
+function rosterDocs(value: unknown): RosterDocSnapshot[] {
   if (!value || typeof value !== "object" || !Array.isArray((value as { assignments?: unknown }).assignments)) {
     throw malformedRoster();
   }
   const seenUids = new Set<string>();
   return (value as { assignments: unknown[] }).assignments.map((entry) => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw malformedRoster();
-    const { uid, revisionId, state, epoch } = entry as Record<string, unknown>;
+    const { uid, state, epoch } = entry as Record<string, unknown>;
     if (
       typeof uid !== "string" ||
       uid.length === 0 ||
       seenUids.has(uid) ||
-      typeof revisionId !== "string" ||
-      !isIntraFamilyRevision(gatewayId, revisionId) ||
       !isAssignmentState(state) ||
       typeof epoch !== "number" ||
       !Number.isSafeInteger(epoch) ||
@@ -91,7 +89,7 @@ function rosterDocs(value: unknown, gatewayId: string): RosterDocSnapshot[] {
       throw malformedRoster();
     }
     seenUids.add(uid);
-    return { id: uid, data: () => ({ uid, revisionId, state, epoch }) };
+    return { id: uid, data: () => ({ uid, state, epoch }) };
   });
 }
 
@@ -140,7 +138,7 @@ export async function readBrokerRollRoster(opts: BrokerRollRosterOptions): Promi
   } finally {
     if (timer) clearTimeout(timer);
   }
-  return rosterDocs(body, opts.gatewayId);
+  return rosterDocs(body);
 }
 
 function defaultSchedule(callback: () => void, delayMs: number): () => void {

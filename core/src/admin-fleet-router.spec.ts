@@ -306,15 +306,12 @@ describe("fleet gateway projection", () => {
       gateways: {
         default: durableGatewayRoot("default", {
           liveRelease: 1,
-          liveRevisionId: "default-r1",
-          trafficRevisionId: "default-r1",
         }),
       },
       glmGateways: {
-        "default-r1": {
-          docKind: "revision",
-          revisionId: "default-r1",
-          gateway: "default",
+        default: {
+          docKind: "runtime",
+          gatewayId: "default",
           release: 1,
           lifecycle: "serving",
           helm: {
@@ -371,7 +368,7 @@ describe("fleet gateway projection", () => {
     ]);
   });
 
-  it("does not render durable desired docs or retired compatibility aliases as pod revisions", async () => {
+  it("renders one fleet entry per durable gateway from its bare-id runtime doc", async () => {
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "default", overrides: {} },
       users: {},
@@ -380,36 +377,17 @@ describe("fleet gateway projection", () => {
           latestRelease: 2,
           desiredRelease: 2,
           liveRelease: 2,
-          liveRevisionId: "default-r2",
-          trafficRevisionId: "default-r2",
         }),
         bender: durableGatewayRoot("bender", {
           latestRelease: 2,
           desiredRelease: 2,
           liveRelease: 2,
-          liveRevisionId: "bender-r2",
-          trafficRevisionId: "bender-r2",
         }),
       },
       glmGateways: {
         bender: {
-          docKind: "revision",
-          revisionId: "bender-r1",
-          gateway: "bender",
-          release: 1,
-          lifecycle: "retired",
-          compatibilityPurpose: "connector-owner-auth",
-          heartbeat: {
-            status: "unknown",
-            mountedCustomers: [],
-            version: null,
-            lastHeartbeatAt: null,
-          },
-        },
-        "bender-r2": {
-          docKind: "revision",
-          revisionId: "bender-r2",
-          gateway: "bender",
+          docKind: "runtime",
+          gatewayId: "bender",
           release: 2,
           lifecycle: "serving",
           helm: {
@@ -419,10 +397,9 @@ describe("fleet gateway projection", () => {
           heartbeat: { status: "ready", mountedCustomers: ["ceckert"] },
           lastError: { message: null, at: null },
         },
-        "default-r2": {
-          docKind: "revision",
-          revisionId: "default-r2",
-          gateway: "default",
+        default: {
+          docKind: "runtime",
+          gatewayId: "default",
           release: 2,
           lifecycle: "serving",
           helm: {
@@ -468,7 +445,7 @@ describe("onboarding placement (post-cohorts)", () => {
     expect(shared).toMatchObject({ assignableAsDefault: true, defaultTarget: false });
   });
 
-  it("surfaces the DURABLE roster state + revision + epoch from the assignment doc", async () => {
+  it("surfaces the DURABLE roster state + epoch from the assignment doc", async () => {
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "default", overrides: {} },
       users: {
@@ -485,9 +462,7 @@ describe("onboarding placement (post-cohorts)", () => {
             uid: "uid-a",
             slug: "alice",
             gatewayId: "default",
-            revisionId: "default-r2",
-            release: 2,
-            source: "rollout",
+            source: "migrate-customer",
             state: "quiescing",
             epoch: 5,
           },
@@ -499,7 +474,6 @@ describe("onboarding placement (post-cohorts)", () => {
     const customer = res.body.customers.find((c: { uid: string }) => c.uid === "uid-a");
     expect(customer).toMatchObject({
       rosterState: "quiescing",
-      rosterRevisionId: "default-r2",
       rosterEpoch: 5,
     });
   });
@@ -521,7 +495,6 @@ describe("onboarding placement (post-cohorts)", () => {
     const customer = res.body.customers.find((c: { uid: string }) => c.uid === "uid-a");
     expect(customer).toMatchObject({
       rosterState: null,
-      rosterRevisionId: null,
       rosterEpoch: null,
     });
   });

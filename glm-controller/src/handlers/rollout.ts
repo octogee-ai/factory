@@ -2,29 +2,10 @@ import type { Operation, OperationStep, StepStatus } from "@octogee/shared/types
 import type { GatewayDoc, ReleasePayload } from "@octogee/shared/types/gateway-releases";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 
-// The rollout op is a THIN release-roll driver (GATEWAY-RELEASES-SPEC delivery
-// item 7). The admin wrapper cuts the release + sets desiredRelease; the
-// reconciler's roll arm (converge-roll.ts) does ALL the work, level-triggered
-// from durable state. This handler only:
-//   1. refuses an un-backfilled gateway (no gateways/{id} desired doc) with the
-//      backfill tool named — the guard that replaced the legacy suffix
-//      blue/green path outright;
-//   2. confirms the desired release records the requested image (tolerating
-//      the enqueue/record race);
-//   3. kicks a reconcile tick and awaits convergence, narrating roll-status
-//      transitions and surfacing the roll's durable error on failure.
-// The op holds the queue's rollout single-flight while it waits; a controller
-// restart re-drives it idempotently (RESUMABLE_OP_KINDS) — the roll itself
-// never depends on this op's lifetime.
-
 export interface RolloutDeps {
-  // gateways/{id} filtered through isGatewayDesiredDoc — null for legacy
-  // (un-backfilled) gateways.
   readGatewayDoc: (gatewayId: string) => Promise<GatewayDoc | null>;
   readReleasePayload: (gatewayId: string, release: number) => Promise<ReleasePayload | null>;
   requestReconcileTick?: () => void;
-  // How long the desired release may lag the requested image before the op
-  // fails (the admin wrapper writes the release right after enqueuing the op).
   releaseRecordTimeoutMs: number;
   convergeTimeoutMs: number;
   pollIntervalMs: number;
@@ -43,7 +24,7 @@ function fail(error: string): OperationResult {
 }
 
 function converged(gw: GatewayDoc): boolean {
-  return gw.liveRelease === gw.desiredRelease && gw.roll == null;
+  return gw.liveRelease === gw.desiredRelease;
 }
 
 export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
@@ -57,9 +38,7 @@ export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
     const gateway = await deps.readGatewayDoc(gatewayId);
     if (!gateway) {
       return fail(
-        `gateway ${gatewayId} has no durable gateways/${gatewayId} desired doc — release rolls ` +
-          `require the Step 2 identity backfill; run scripts/ops/backfill-gateway-identity.ts ` +
-          `(dry-run first), then re-roll`,
+        `gateway ${gatewayId} has no durable gateways/${gatewayId} desired doc`,
       );
     }
     if (gateway.desiredStatus === "retired") {
@@ -152,9 +131,6 @@ function assessRollOutcome(
         `failed or a newer release superseded this rollout`,
     };
   }
-  if (gw.roll?.status === "failed") {
-    return { success: false, error: gw.roll.error ?? `roll to r${gw.desiredRelease} failed` };
-  }
   if (converged(gw)) {
     deps.log(`[rollout] ${gatewayId} converged onto release ${gw.liveRelease} (${imageTag})`);
     return { success: true };
@@ -168,15 +144,12 @@ function narrateRollProgress(
   gw: GatewayDoc,
   narration: RollNarration,
 ): void {
-  if (gw.roll && gw.roll.status !== narration.lastStatus) {
-    narration.lastStatus = gw.roll.status;
-    deps.log(
-      `[rollout] ${gatewayId} roll r${gw.roll.fromRelease ?? "-"} → r${gw.roll.toRelease}: ${gw.roll.status}`,
-    );
-  }
-  if (gw.roll?.error && gw.roll.error !== narration.lastError) {
-    narration.lastError = gw.roll.error;
-    deps.log(`[rollout] ⚠ ${gatewayId} roll holds: ${narration.lastError}`);
+  const status = gw.liveRelease === gw.desiredRelease
+    ? `live at r${gw.liveRelease}`
+    : `converging r${gw.liveRelease ?? "-"} → r${gw.desiredRelease}`;
+  if (status !== narration.lastStatus) {
+    narration.lastStatus = status;
+    deps.log(`[rollout] ${gatewayId}: ${status}`);
   }
 }
 
