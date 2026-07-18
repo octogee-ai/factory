@@ -601,6 +601,8 @@ export function buildBrokeredLifecycleAdapter(
     isOperatorGateway: opts.isOperatorGateway ?? (() => false),
     customerCoachWiredInOpenclawConfig: (slug) =>
       customerCoachWiredInOpenclawConfig(OPENCLAW_CONFIG, slug),
+    hasCustomerAgentRuntime: (slug) =>
+      fs.existsSync(path.join(AGENTS_DIR, `octogee-${slug}-coach`, "agent")),
     listLocalCustomerSlugs: () =>
       listLocalCoachWiredSlugs(CUSTOMERS_DIR, (slug) =>
         customerCoachWiredInOpenclawConfig(OPENCLAW_CONFIG, slug),
