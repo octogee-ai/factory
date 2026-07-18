@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createSurgePodTransport,
-  parseSurgePods,
+  parseSurgePodSnapshot,
   readPodDurableSessionDigest,
 } from "../surge-customer-handoff-runtime.js";
 import type { SurgePod } from "../surge-customer-handoff.js";
@@ -11,8 +11,8 @@ const source: SurgePod = { uid: "old", name: "old-pod", podIP: "10.0.0.1", ready
 const target: SurgePod = { uid: "new", name: "new-pod", podIP: "10.0.0.2", ready: false };
 
 describe("surge handoff Kubernetes projection", () => {
-  it("keeps only live Running pods and projects Ready independently", () => {
-    expect(parseSurgePods(JSON.stringify({
+  it("keeps every observed UID while projecting usable pods independently", () => {
+    expect(parseSurgePodSnapshot(JSON.stringify({
       items: [
         {
           metadata: { uid: "old", name: "old-pod" },
@@ -35,7 +35,10 @@ describe("surge handoff Kubernetes projection", () => {
           status: { phase: "Pending" },
         },
       ],
-    }))).toEqual([source, target]);
+    }))).toEqual({
+      pods: [source, target],
+      observedPodUids: ["old", "new", "gone", "pending"],
+    });
   });
 
   it("reads the session digest through kubectl exec so the source may run the prior image", async () => {

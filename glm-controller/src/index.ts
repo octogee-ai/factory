@@ -51,6 +51,7 @@ import {
   type GatewayDoc,
   type GatewayRuntimeDoc,
   type ReleasePayload,
+  type AssignmentState,
 } from "@octogee/shared/types/gateway-releases";
 import {
   gatewayUpsertOptsFromRelease,
@@ -1842,6 +1843,10 @@ async function createControllerRuntime(
       epoch: number;
       state: "serving" | "quiescing";
       updatedByOperationId: string;
+      expected: {
+        state: AssignmentState;
+        updatedByOperationId: string | null;
+      };
     }) => markAssignmentState(
       {
         db: db as unknown as FleetStateFirestore,
