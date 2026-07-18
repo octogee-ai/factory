@@ -16,6 +16,10 @@ terraform {
 }
 
 # ── Data: existing Cloud SQL instance (imported) ────────────────────────────
+# Settings are import-only (ignore_changes below), so ssl_mode cannot be declared
+# here without being ignored. SSL is enforced on the live instance out-of-band via
+# ssl_mode = ENCRYPTED_ONLY — verified 2026-07-18, see CASA-EVIDENCE-RUNBOOK.md §1.
+# nosemgrep: gcp-sql-database-require-ssl
 resource "google_sql_database_instance" "main" {
   name             = var.instance_name
   project          = var.project_id
