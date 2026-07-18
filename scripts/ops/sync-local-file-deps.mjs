@@ -212,34 +212,48 @@ function topLevelPackageDirs(rootDir) {
     .filter((dir) => fs.existsSync(path.join(dir, "package.json")));
 }
 
+export function fileDepInstallArgs(specs, preserveLock) {
+  const saveArgs = preserveLock ? ["--no-save", "--package-lock=false"] : [];
+  return [
+    "install",
+    "--install-links=true",
+    "--no-audit",
+    "--no-fund",
+    "--ignore-scripts",
+    "--min-release-age=0",
+    ...saveArgs,
+    ...specs,
+  ];
+}
+
+export function fileDepLockOnlyArgs() {
+  return [
+    "install",
+    "--package-lock-only",
+    "--ignore-scripts",
+    "--no-audit",
+    "--no-fund",
+    "--min-release-age=0",
+  ];
+}
+
 function installConsumerDeps(consumerDir, specs, preserveLock, stdio) {
   const manifestPath = path.join(consumerDir, "package.json");
   const lockPath = path.join(consumerDir, "package-lock.json");
   const originalManifest = fs.readFileSync(manifestPath);
   const originalLock = fs.existsSync(lockPath) ? fs.readFileSync(lockPath) : null;
-  const saveArgs = preserveLock ? ["--no-save", "--package-lock=false"] : [];
 
   try {
     execFileSync(process.execPath, [
       npmCliPath(),
-      "install",
-      "--install-links=true",
-      "--no-audit",
-      "--no-fund",
-      "--ignore-scripts",
-      ...saveArgs,
-      ...specs,
+      ...fileDepInstallArgs(specs, preserveLock),
     ], { cwd: consumerDir, stdio });
 
     if (!preserveLock) {
       fs.writeFileSync(manifestPath, originalManifest);
       execFileSync(process.execPath, [
         npmCliPath(),
-        "install",
-        "--package-lock-only",
-        "--ignore-scripts",
-        "--no-audit",
-        "--no-fund",
+        ...fileDepLockOnlyArgs(),
       ], { cwd: consumerDir, stdio });
     }
   } catch (error) {
