@@ -9,6 +9,7 @@ import {
 import { getFreshAccessTokenFromDb } from "../../../gateway-edge/src/lib/connector-tokens.js";
 import { decryptSecret } from "../../../gateway-edge/src/lib/kms.js";
 import { readServingGatewayAuthorization } from "@octogee/core/gateway-live-release";
+import type { GatewayPodOwnerIdentityReader } from "../lib/gateway-pod-owner-identity.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -26,9 +27,14 @@ interface ProjectAccessContext {
 
 interface OwnerRuntimeAccessContext {
   kind: typeof OWNER_RUNTIME_ACCESS_KIND;
+  builderSlug: string;
 }
 
 type ConnectorAccessContext = ProjectAccessContext | OwnerRuntimeAccessContext;
+type ParsedAccess =
+  | { status: "absent" }
+  | { status: "invalid" }
+  | { status: "valid"; value: ConnectorAccessContext };
 type FreshTokenFailureReason = "not_connected" | "reauth_required";
 type OwnerRuntimeTokenRead =
   | { status: "connected"; accessToken: string }
@@ -53,12 +59,19 @@ function stringBody(req: Request, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
-function requestAccess(req: Request): ConnectorAccessContext | null {
-  const access = (req.body as Record<string, unknown> | undefined)?.access;
-  if (!access || typeof access !== "object") return null;
+function requestAccess(req: Request): ParsedAccess {
+  const body = req.body as Record<string, unknown> | undefined;
+  if (!body || !("access" in body)) return { status: "absent" };
+  const access = body.access;
+  if (!access || typeof access !== "object") return { status: "invalid" };
   const data = access as Record<string, unknown>;
-  if (data.kind === OWNER_RUNTIME_ACCESS_KIND) return { kind: OWNER_RUNTIME_ACCESS_KIND };
-  if (data.kind !== "project") return null;
+  if (data.kind === OWNER_RUNTIME_ACCESS_KIND) {
+    const builderSlug = typeof data.builderSlug === "string" ? data.builderSlug : "";
+    return WORKSPACE_SLUG_RE.test(builderSlug)
+      ? { status: "valid", value: { kind: OWNER_RUNTIME_ACCESS_KIND, builderSlug } }
+      : { status: "invalid" };
+  }
+  if (data.kind !== "project") return { status: "invalid" };
   const requestingUid = typeof data.requestingUid === "string" ? data.requestingUid : "";
   const workspaceSlug = typeof data.workspaceSlug === "string" ? data.workspaceSlug : "";
   const projectSlug = typeof data.projectSlug === "string" ? data.projectSlug : "";
@@ -67,9 +80,9 @@ function requestAccess(req: Request): ConnectorAccessContext | null {
     !WORKSPACE_SLUG_RE.test(workspaceSlug) ||
     !PROJECT_ID_RE.test(projectSlug)
   ) {
-    return null;
+    return { status: "invalid" };
   }
-  return { kind: "project", requestingUid, workspaceSlug, projectSlug };
+  return { status: "valid", value: { kind: "project", requestingUid, workspaceSlug, projectSlug } };
 }
 
 function safeDocId(value: string): boolean {
@@ -102,27 +115,65 @@ async function projectAccessAuthorized(
 }
 
 async function accessAuthorized(
-  db: Firestore,
-  bound: GatewayBinding,
-  uid: string,
-  connectorId: string,
-  access: ConnectorAccessContext | null,
+  input: {
+    db: Firestore;
+    bound: GatewayBinding;
+    uid: string;
+    connectorId: string;
+    access: ConnectorAccessContext | null;
+    readPodOwnerIdentity: GatewayPodOwnerIdentityReader;
+  },
 ): Promise<boolean> {
-  if (!safeDocId(uid) || !bound.ownerUid) return false;
+  const { db, bound, uid, connectorId, access, readPodOwnerIdentity } = input;
+  if (!safeDocId(uid) || !bound.ownerUid || !bound.podName || !bound.podUid) return false;
   const authorization = await readServingGatewayAuthorization(db, bound.gatewayId);
   if (!authorization || authorization.config.ownerUid !== bound.ownerUid) return false;
-  if (access?.kind === OWNER_RUNTIME_ACCESS_KIND) {
-    return (
-      uid === bound.ownerUid &&
-      (authorization.config.gatewayClass === "builder" ||
-        authorization.config.gatewayClass === "operator")
-    );
+  const podOwnerIdentity = await readPodOwnerIdentity({
+    podName: bound.podName,
+    podUid: bound.podUid,
+  });
+  if (
+    !podOwnerIdentity
+    || podOwnerIdentity.ownerUid !== authorization.config.ownerUid
+    || podOwnerIdentity.builderSlug !== authorization.config.builderSlug
+  ) {
+    return false;
   }
+  if (access?.kind === OWNER_RUNTIME_ACCESS_KIND) return ownerRuntimeAccessAuthorized({
+    db,
+    access,
+    uid,
+    ownerUid: bound.ownerUid,
+    builderSlug: authorization.config.builderSlug,
+    gatewayClass: authorization.config.gatewayClass,
+  });
   if (uid === bound.ownerUid) return true;
 
   if (!access) return false;
   if (access.requestingUid !== bound.ownerUid) return false;
   return projectAccessAuthorized(db, uid, connectorId, access);
+}
+
+async function ownerRuntimeAccessAuthorized(input: {
+  db: Firestore;
+  access: OwnerRuntimeAccessContext;
+  uid: string;
+  ownerUid: string;
+  builderSlug: string;
+  gatewayClass: string;
+}): Promise<boolean> {
+  if (
+    input.uid !== input.ownerUid
+    || input.builderSlug !== input.access.builderSlug
+    || (input.gatewayClass !== "builder" && input.gatewayClass !== "operator")
+  ) {
+    return false;
+  }
+  const workspace = await input.db.doc(`workspaces/${input.access.builderSlug}`).get();
+  const workspaceOwnerUid = workspace.exists
+    ? (workspace.data() as Record<string, unknown> | undefined)?.ownerUid
+    : undefined;
+  return workspaceOwnerUid === input.ownerUid;
 }
 
 function connectorAllowedForAccess(
@@ -158,9 +209,12 @@ async function readOwnerRuntimeAccessToken(
   return { status: "connected", accessToken: fresh.accessToken };
 }
 
-export function createConnectorTokenBrokerRoutes(opts: { db: Firestore }): Router {
+export function createConnectorTokenBrokerRoutes(opts: {
+  db: Firestore;
+  readPodOwnerIdentity: GatewayPodOwnerIdentityReader;
+}): Router {
   const router = Router();
-  const { db } = opts;
+  const { db, readPodOwnerIdentity } = opts;
 
   router.post("/access-token", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -171,7 +225,12 @@ export function createConnectorTokenBrokerRoutes(opts: { db: Firestore }): Route
       res.status(400).json({ error: "connectorId required" });
       return;
     }
-    const access = requestAccess(req);
+    const parsedAccess = requestAccess(req);
+    if (parsedAccess.status === "invalid") {
+      res.status(400).json({ error: "invalid_access" });
+      return;
+    }
+    const access = parsedAccess.status === "valid" ? parsedAccess.value : null;
     const uid = access?.kind === OWNER_RUNTIME_ACCESS_KIND ? bound.ownerUid : stringBody(req, "uid");
     if (!uid) {
       res.status(400).json({ error: "uid required" });
@@ -182,7 +241,14 @@ export function createConnectorTokenBrokerRoutes(opts: { db: Firestore }): Route
       return;
     }
 
-    if (!(await accessAuthorized(db, bound, uid, connectorId, access))) {
+    if (!(await accessAuthorized({
+      db,
+      bound,
+      uid,
+      connectorId,
+      access,
+      readPodOwnerIdentity,
+    }))) {
       res.status(403).json(FORBIDDEN);
       return;
     }

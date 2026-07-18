@@ -511,6 +511,7 @@ describe("onboarding placement (post-cohorts)", () => {
         "gw-builder": durableGatewayRoot("gw-builder", {
           gatewayClass: "builder",
           ownerUid: "uid-builder",
+          builderSlug: "builder",
         }),
       },
     });

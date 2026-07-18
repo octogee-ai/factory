@@ -66,6 +66,8 @@ export interface ObservedHelmInstance {
   imageRepository: string | null;
   imageTag: string | null;
   replicas: number | null;
+  ownerUid?: string;
+  builderSlug?: string;
   deploymentIntentFingerprint?: string | null;
 }
 
@@ -104,14 +106,9 @@ export function planGatewayConvergence(
     };
   }
   const replicas = desiredReplicas(gateway);
-  const drifted =
-    !helm ||
-    helm.imageTag !== artifact.imageTag ||
-    helm.imageRepository !== imageRepositoryFor(gateway, artifact) ||
-    helm.replicas !== replicas ||
-    (input.desiredDeploymentIntentFingerprint !== undefined &&
-      helm.deploymentIntentFingerprint !== input.desiredDeploymentIntentFingerprint);
-  if (drifted) return { kind: "upsert", replicas };
+  if (gatewayDeploymentDrifted(input, artifact, replicas)) {
+    return { kind: "upsert", replicas };
+  }
   if (
     gateway.desiredStatus === "running" &&
     input.deploymentReady &&
@@ -122,9 +119,28 @@ export function planGatewayConvergence(
   return { kind: "steady" };
 }
 
+function gatewayDeploymentDrifted(
+  input: GatewayConvergencePlanInput,
+  artifact: ReleasePayload,
+  replicas: number,
+): boolean {
+  const { gateway, helm } = input;
+  return (
+    !helm ||
+    helm.imageTag !== artifact.imageTag ||
+    helm.imageRepository !== imageRepositoryFor(gateway, artifact) ||
+    helm.replicas !== replicas ||
+    helm.ownerUid !== (gateway.ownerUid ?? undefined) ||
+    helm.builderSlug !== (gateway.builderSlug ?? undefined) ||
+    (input.desiredDeploymentIntentFingerprint !== undefined &&
+      helm.deploymentIntentFingerprint !== input.desiredDeploymentIntentFingerprint)
+  );
+}
+
 export interface GatewayUpsertOpts {
   namespace: string;
   gatewayId: string;
+  ownerUid?: string;
   builderSlug?: string;
   imageRepository: string;
   imageTag: string;
@@ -178,6 +194,25 @@ export function gatewayDeploymentIntentFingerprint(opts: GatewayIntentInput): st
     .digest("hex");
 }
 
+export function deploymentIntentFingerprintForComparison(input: {
+  desired: GatewayUpsertOpts;
+  observedChartFingerprint: string | undefined;
+  observedDeploymentIntentFingerprint: string | undefined;
+  autoRollOnChartDrift: boolean;
+}): string | undefined {
+  if (!input.autoRollOnChartDrift && !input.observedDeploymentIntentFingerprint) {
+    return undefined;
+  }
+  if (input.autoRollOnChartDrift || !input.observedChartFingerprint) {
+    return input.desired.deploymentIntentFingerprint;
+  }
+  return gatewayDeploymentIntentFingerprint({
+    ...input.desired,
+    chartFingerprint: input.observedChartFingerprint,
+    deploymentIntentFingerprint: undefined,
+  });
+}
+
 function w9TestExperimentForNamespace(input: {
   namespace: string;
   artifact: ReleasePayload;
@@ -227,6 +262,7 @@ export function gatewayUpsertOptsFromRelease(input: {
   const intent: Omit<GatewayUpsertOpts, "deploymentIntentFingerprint"> = {
     namespace: input.namespace,
     gatewayId: gateway.gatewayId,
+    ownerUid: gateway.ownerUid ?? undefined,
     builderSlug: gateway.builderSlug ?? undefined,
     imageRepository: imageRepositoryFor(gateway, artifact),
     imageTag: artifact.imageTag,

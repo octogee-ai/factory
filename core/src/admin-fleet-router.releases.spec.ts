@@ -426,6 +426,41 @@ describe("POST /gateways — creates only the durable root and immutable release
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/credential|BYOSUB/i);
   });
+
+  it("rejects a dedicated gateway without an owner before provisioning any runtime state", async () => {
+    const { app, store } = mkApp();
+    const res = await request(app).post("/gateways").send({
+      gatewayId: "operator",
+      imageRepository: REPO,
+      imageTag: "abc1234",
+      gatewayClass: "operator",
+      imageProfile: "operator",
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/ownerUid/);
+    expect(store.get("gateways/operator")).toBeUndefined();
+  });
+
+  it("rejects a dedicated owner and builder slug that do not identify the same workspace", async () => {
+    const { app, store } = mkApp({
+      "users/uid-owner": { username: "owner" },
+      "workspaces/claimed": { ownerUid: "uid-other", slug: "claimed" },
+    });
+    const res = await request(app).post("/gateways").send({
+      gatewayId: "operator",
+      imageRepository: REPO,
+      imageTag: "abc1234",
+      gatewayClass: "operator",
+      imageProfile: "operator",
+      ownerUid: "uid-owner",
+      builderSlug: "claimed",
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/workspace owner/);
+    expect(store.get("gateways/operator")).toBeUndefined();
+  });
 });
 
 describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
@@ -451,6 +486,59 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
     expect(store.get(`gateways/bender/${GATEWAY_RELEASES_SUBCOLLECTION}/1`)).toBeUndefined();
   });
 
+  it("rejects a reservation whose builder workspace belongs to another owner", async () => {
+    const provisionGatewayAuthSecret = vi.fn(async () => ({}));
+    const { app, store } = mkApp({
+      "operatorGatewayReservations/uid-bender": {
+        uid: "uid-bender",
+        builderSlug: "bender",
+        requestedSizingTier: "small",
+        requestedAt: 1,
+        status: "requested",
+        billingStatus: "active",
+      },
+      "users/uid-bender": { username: "bender" },
+      "workspaces/bender": { ownerUid: "uid-fry" },
+    }, { provisionGatewayAuthSecret });
+
+    await request(app)
+      .post("/operator-gateway-reservations/uid-bender/fulfill")
+      .send({ gatewayId: "bender", imageRepository: REPO, imageTag: "abc1234" })
+      .expect(400);
+
+    expect(provisionGatewayAuthSecret).not.toHaveBeenCalled();
+    expect(store.get("gateways/bender")).toBeUndefined();
+  });
+
+  it("rejects fulfillment when workspace ownership changes after preflight", async () => {
+    const { app, store } = mkApp({
+      "operatorGatewayReservations/uid-bender": {
+        uid: "uid-bender",
+        builderSlug: "bender",
+        requestedSizingTier: "small",
+        requestedAt: 1,
+        status: "requested",
+        billingStatus: "active",
+      },
+      "users/uid-bender": { username: "bender" },
+      "workspaces/bender": { ownerUid: "uid-bender" },
+    }, {
+      beforeFirstTransaction: (documents) => {
+        documents.set("workspaces/bender", { ownerUid: "uid-fry" });
+      },
+    });
+
+    await request(app)
+      .post("/operator-gateway-reservations/uid-bender/fulfill")
+      .send({ gatewayId: "bender", imageRepository: REPO, imageTag: "abc1234" })
+      .expect(400);
+
+    expect(store.get("gateways/bender")).toBeUndefined();
+    expect(store.get("operatorGatewayReservations/uid-bender")).toMatchObject({
+      status: "requested",
+    });
+  });
+
   it("creates the durable root and artifact release in the fulfillment batch", async () => {
     const { app, store } = mkApp({
       "operatorGatewayReservations/uid-bender": {
@@ -465,6 +553,7 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
         username: "bender",
         builderSubscription: { tier: "pro", status: "active" },
       },
+      "workspaces/bender": { ownerUid: "uid-bender" },
     });
 
     await request(app)
@@ -505,6 +594,7 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
         username: "hobby",
         builderSubscription: { tier: "hobby", status: "active" },
       },
+      "workspaces/hobby": { ownerUid: "uid-hobby" },
     });
 
     await request(app)
@@ -533,6 +623,7 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
         billingStatus: "active",
       },
       "users/uid-bender": { username: "bender" },
+      "workspaces/bender": { ownerUid: "uid-bender" },
     }, { provisionGatewayAuthSecret });
 
     await request(app)
@@ -579,6 +670,7 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
         billingStatus: "active",
       },
       "users/uid-bender": { username: "bender" },
+      "workspaces/bender": { ownerUid: "uid-bender" },
     }, { provisionGatewayAuthSecret });
 
     const fulfillment = request(app)
@@ -931,13 +1023,47 @@ describe("POST /gateways/:id/releases — cut release n+1 from prev + patch", ()
       seedNewSchemaGateway(
         "bench",
         sharedPayload(),
-        { gatewayClass: "builder", ownerUid: "uid-old" },
+        { gatewayClass: "builder", ownerUid: "uid-old", builderSlug: "old" },
       ),
     );
     const res = await request(app)
       .patch("/gateways/bench")
-      .send({ ownerUid: "uid-ghost" });
+      .send({ ownerUid: "uid-ghost", builderSlug: "ghost" });
     expect(res.status).toBe(404);
+  });
+
+  it("requires ownerUid and builderSlug to change atomically on a dedicated gateway", async () => {
+    const { app } = mkApp(seedNewSchemaGateway(
+      "bench",
+      sharedPayload(),
+      { gatewayClass: "builder", ownerUid: "uid-old", builderSlug: "old" },
+    ));
+
+    const res = await request(app)
+      .patch("/gateways/bench")
+      .send({ ownerUid: "uid-new" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/ownerUid and builderSlug/);
+  });
+
+  it("rejects an atomic owner pair PATCH when the workspace belongs to another user", async () => {
+    const { app } = mkApp({
+      ...seedNewSchemaGateway(
+        "bench",
+        sharedPayload(),
+        { gatewayClass: "builder", ownerUid: "uid-old", builderSlug: "old" },
+      ),
+      "users/uid-new": { username: "new" },
+      "workspaces/claimed": { ownerUid: "uid-other", slug: "claimed" },
+    });
+
+    const res = await request(app)
+      .patch("/gateways/bench")
+      .send({ ownerUid: "uid-new", builderSlug: "claimed" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/workspace owner/);
   });
 });
 

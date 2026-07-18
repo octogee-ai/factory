@@ -53,6 +53,7 @@ afterEach(() => {
   delete process.env.GOOGLE_CLIENT_SECRET;
   delete process.env.CONNECTOR_TOKEN_BROKER_URL;
   delete process.env.GATEWAY_ID;
+  delete process.env.GATEWAY_BUILDER_SLUG;
   delete process.env.CONNECTOR_TOKEN_AUTHORITY;
 });
 
@@ -175,6 +176,7 @@ describe('readConnectorAccessToken', () => {
   it('forwards owner-runtime access context for agent-side materialization', async () => {
     process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
     process.env.GATEWAY_ID = 'bender';
+    process.env.GATEWAY_BUILDER_SLUG = 'alice';
     vi.mocked(internalFetch).mockResolvedValue(
       new Response(JSON.stringify({ accessToken: 'cf_brokered' }), {
         status: 200,
@@ -191,11 +193,27 @@ describe('readConnectorAccessToken', () => {
         body: JSON.stringify({
           gatewayId: 'bender',
           connectorId: 'cloudflare',
-          access: { kind: 'owner-runtime' },
+          access: { kind: 'owner-runtime', builderSlug: 'alice' },
         }),
       }),
       expect.any(Object),
     );
+  });
+
+  it('fails closed when the mounted builder identity is unavailable', async () => {
+    process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
+    process.env.GATEWAY_ID = 'bender';
+    vi.mocked(internalFetch).mockResolvedValue(
+      new Response(JSON.stringify({ accessToken: 'cf_brokered' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await expect(readOwnerRuntimeConnectorAccessToken('cloudflare')).rejects.toThrow(
+      'GATEWAY_BUILDER_SLUG is required',
+    );
+    expect(internalFetch).not.toHaveBeenCalled();
   });
 
   it('reads directly from Firestore+KMS when it is the connector-token authority (broker host, no broker URL)', async () => {
@@ -237,7 +255,7 @@ describe('readConnectorAccessToken', () => {
     };
 
     await expect(
-      readConnectorAccessToken('uid-owner', 'google', { kind: 'owner-runtime' }),
+      readConnectorAccessToken('uid-owner', 'google', { kind: 'owner-runtime', builderSlug: 'alice' }),
     ).resolves.toBe('fresh_google');
 
     expect(docWrites[0]).toMatchObject({
@@ -278,7 +296,7 @@ describe('readConnectorAccessToken', () => {
     const err = await readConnectorAccessToken(
       'uid-owner',
       'google',
-      { kind: 'owner-runtime' },
+      { kind: 'owner-runtime', builderSlug: 'alice' },
     ).then(
       () => null,
       (e: unknown) => e,

@@ -18,6 +18,10 @@
       "maxLength": 64,
       "description": "Disposable revision instance id ({gatewayId}-r{n}). Every per-instance resource NAME (Deployment, Services, PDB, NetworkPolicies) and the gateway-instance selector derive from it. Empty defaults to gatewayId (legacy single-revision render)."
     },
+    "ownerUid": {
+      "type": "string",
+      "description": "Dedicated builder/operator owner UID rendered into immutable pod metadata."
+    },
     "builderSlug": {
       "type": "string",
       "pattern": "^(?:|[a-z0-9]+(?:-[a-z0-9]+)*)$",

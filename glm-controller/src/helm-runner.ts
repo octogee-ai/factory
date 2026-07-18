@@ -24,6 +24,7 @@ upsertInstance(opts: {
     // Disposable revision instance id ({gatewayId}-r{n}). Names the Helm release
     // + per-instance resources; defaults to gatewayId (legacy single-revision).
     revisionId?: string;
+    ownerUid?: string;
     builderSlug?: string;
     imageRepository: string;
     imageTag: string;
@@ -158,6 +159,7 @@ interface HelmListItem {
 
 interface PerReleaseValues {
   gatewayId?: unknown;
+  ownerUid?: unknown;
   builderSlug?: unknown;
   imageTag?: unknown;
   image?: { repository?: unknown; tag?: unknown };
@@ -241,6 +243,7 @@ async function readInstanceValue(
     enabled: true,
     image: { repository: imageRepo, tag: imageTag },
     gatewayId,
+    ...knob("ownerUid", nonEmptyString(v.ownerUid)),
     ...knob("builderSlug", nonEmptyString(v.builderSlug)),
     ...(chartFingerprint ? { chartFingerprint } : {}),
     ...(deploymentIntentFingerprint ? { deploymentIntentFingerprint } : {}),
@@ -315,6 +318,7 @@ export interface BuildUpgradeArgsOpts {
   namespace: string;
   gatewayId: string;
   revisionId?: string;
+  ownerUid?: string;
   builderSlug?: string;
   imageTag: string;
   imageRepository: string;
@@ -346,6 +350,7 @@ type UpgradeStringOption = {
     BuildUpgradeArgsOpts,
     | "chartFingerprint"
     | "deploymentIntentFingerprint"
+    | "ownerUid"
     | "builderSlug"
     | "profile"
     | "gatewayClass"
@@ -375,6 +380,7 @@ type UpgradeJsonOption = {
 const UPGRADE_STRING_OPTIONS: UpgradeStringOption[] = [
   { option: "chartFingerprint", key: "chartFingerprint" },
   { option: "deploymentIntentFingerprint", key: "deploymentIntentFingerprint" },
+  { option: "ownerUid", key: "ownerUid" },
   { option: "builderSlug", key: "builderSlug" },
   { option: "profile", key: "profile" },
   { option: "gatewayClass", key: "gatewayClass" },

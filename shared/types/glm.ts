@@ -453,6 +453,7 @@ export interface HelmInstanceValue {
   profile?: GatewayProfile;
   gatewayClass?: GatewayClass;
   imageProfile?: GatewayImageProfile;
+  ownerUid?: string;
   builderSlug?: string;
 
   sizingTier?: SizingTier;

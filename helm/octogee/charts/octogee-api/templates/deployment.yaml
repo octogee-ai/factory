@@ -46,6 +46,8 @@ spec:
           env:
             - name: PORT
               value: {{ .Values.port | quote }}
+            - name: NODE_EXTRA_CA_CERTS
+              value: /var/run/secrets/kubernetes-api/ca.crt
             # K8S_NAMESPACE + the four legacy GCP-project env-var
             # spellings the route handlers use (GCLOUD_PROJECT,
             # GCP_PROJECT_ID, GOOGLE_CLOUD_PROJECT, FIREBASE_PROJECT_ID)
@@ -112,6 +114,9 @@ spec:
             - name: octogee-api-sa-token
               mountPath: /var/run/secrets/octogee-api
               readOnly: true
+            - name: kubernetes-api-identity
+              mountPath: /var/run/secrets/kubernetes-api
+              readOnly: true
       volumes:
         - name: octogee-api-sa-token
           projected:
@@ -120,3 +125,14 @@ spec:
                   path: token
                   audience: octogee-api
                   expirationSeconds: 3600
+        - name: kubernetes-api-identity
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt

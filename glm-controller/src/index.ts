@@ -54,11 +54,13 @@ import {
 } from "@octogee/shared/types/gateway-releases";
 import {
   gatewayUpsertOptsFromRelease,
+  deploymentIntentFingerprintForComparison,
   planGatewayConvergence,
   provisioningRuntimeDoc,
   requiresSurgeCustomerMigration,
   type DurableGateway,
   type GatewayConvergenceAction,
+  type GatewayUpsertOpts,
   type ObservedHelmInstance,
 } from "./converge-gateway.js";
 import {
@@ -749,9 +751,18 @@ export async function refineGatewayConvergenceAction(input: {
   artifact: ReleasePayload | null;
   runtime: GatewayRuntimeDoc | undefined;
   helmObserved: ObservedHelmInstance | null;
+  desiredDeploymentIntentFingerprint?: string;
   action: GatewayConvergenceAction;
 }): Promise<GatewayConvergenceAction> {
-  const { passDeps, gateway, artifact, runtime, helmObserved, action } = input;
+  const {
+    passDeps,
+    gateway,
+    artifact,
+    runtime,
+    helmObserved,
+    desiredDeploymentIntentFingerprint,
+    action,
+  } = input;
   if (action.kind !== "steady" || !artifact || gateway.desiredStatus !== "running") {
     return action;
   }
@@ -764,6 +775,7 @@ export async function refineGatewayConvergenceAction(input: {
     gateway,
     artifact,
     helm: helmObserved,
+    desiredDeploymentIntentFingerprint,
     deploymentReady: handoff.ready && runtimeReportsDesiredBuild(runtime, artifact),
   });
 }
@@ -802,22 +814,25 @@ async function convergeOneGateway(
 ): Promise<void> {
   const { db, helm, log } = passDeps;
   const instance = instances[gateway.gatewayId];
-  const helmObserved = instance
-    ? {
-        imageRepository: instance.image.repository ?? null,
-        imageTag: instance.image.tag ?? null,
-        replicas: typeof instance.replicas === "number" ? instance.replicas : 1,
-      }
-    : null;
+  const helmObserved = observedHelmInstance(instance);
   const artifact =
     gateway.desiredStatus === "retired"
       ? null
       : await readGatewayArtifact(db, gateway.gatewayId, gateway.desiredRelease);
   const runtime = runtimeById.get(gateway.gatewayId);
+  const desiredIntent = await prepareDesiredGatewayIntent({
+    passDeps,
+    gateway,
+    artifact,
+    instance,
+  });
+  const desiredOpts = desiredIntent?.opts ?? null;
+  const desiredDeploymentIntentFingerprint = desiredIntent?.comparisonFingerprint;
   const initialAction = planGatewayConvergence({
     gateway,
     artifact,
     helm: helmObserved,
+    desiredDeploymentIntentFingerprint,
     deploymentReady: false,
   });
   const action = await refineGatewayConvergenceAction({
@@ -826,6 +841,7 @@ async function convergeOneGateway(
     artifact,
     runtime,
     helmObserved,
+    desiredDeploymentIntentFingerprint,
     action: initialAction,
   });
   switch (action.kind) {
@@ -840,16 +856,8 @@ async function convergeOneGateway(
       return;
     }
     case "upsert": {
-      const prepared = await passDeps.prepareGatewayConfig(gateway);
-      const opts = gatewayUpsertOptsFromRelease({
-        namespace: NAMESPACE,
-        gateway: prepared,
-        artifact: artifact as ReleasePayload,
-        replicas: action.replicas,
-        chartPath: GATEWAY_CHART,
-        valuesFile: GATEWAY_VALUES_FILE,
-        chartFingerprint: passDeps.chartFingerprint,
-      });
+      if (!desiredOpts) throw new Error(`gateway ${gateway.gatewayId} has no deployable intent`);
+      const opts = desiredOpts;
       log(
         `[converge-gateway] ${gateway.gatewayId} → release ${gateway.desiredRelease} ` +
           `(${opts.imageTag}, replicas=${action.replicas})`,
@@ -891,6 +899,49 @@ async function convergeOneGateway(
       return;
     }
   }
+}
+
+function observedHelmInstance(
+  instance: HelmInstancesMap[string] | undefined,
+): ObservedHelmInstance | null {
+  if (!instance) return null;
+  return {
+    imageRepository: instance.image.repository ?? null,
+    imageTag: instance.image.tag ?? null,
+    replicas: typeof instance.replicas === "number" ? instance.replicas : 1,
+    ownerUid: instance.ownerUid,
+    builderSlug: instance.builderSlug,
+    deploymentIntentFingerprint: instance.deploymentIntentFingerprint ?? null,
+  };
+}
+
+async function prepareDesiredGatewayIntent(input: {
+  passDeps: GatewayConvergencePassDeps;
+  gateway: DurableGateway;
+  artifact: ReleasePayload | null;
+  instance: HelmInstancesMap[string] | undefined;
+}): Promise<{ opts: GatewayUpsertOpts; comparisonFingerprint?: string } | null> {
+  const { passDeps, gateway, artifact, instance } = input;
+  if (!artifact || gateway.desiredStatus === "retired") return null;
+  const prepared = await passDeps.prepareGatewayConfig(gateway);
+  const opts = gatewayUpsertOptsFromRelease({
+    namespace: NAMESPACE,
+    gateway: prepared,
+    artifact,
+    replicas: gateway.desiredStatus === "paused" ? 0 : 1,
+    chartPath: GATEWAY_CHART,
+    valuesFile: GATEWAY_VALUES_FILE,
+    chartFingerprint: passDeps.chartFingerprint,
+  });
+  return {
+    opts,
+    comparisonFingerprint: deploymentIntentFingerprintForComparison({
+      desired: opts,
+      observedChartFingerprint: instance?.chartFingerprint,
+      observedDeploymentIntentFingerprint: instance?.deploymentIntentFingerprint,
+      autoRollOnChartDrift: AUTO_ROLL_ON_CHART_DRIFT,
+    }),
+  };
 }
 
 async function convergeGatewaysIfConfigured(

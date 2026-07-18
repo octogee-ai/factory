@@ -53,6 +53,7 @@ export interface ConnectorTokenProjectAccessContext {
 
 export interface ConnectorTokenOwnerRuntimeAccessContext {
   kind: "owner-runtime";
+  builderSlug: string;
 }
 
 export type ConnectorTokenAccessContext =
@@ -160,8 +161,11 @@ export async function readOwnerRuntimeConnectorAccessToken(
 ): Promise<string | null> {
   const baseUrl = connectorTokenBrokerBaseUrlFromEnv();
   if (!baseUrl) throw new Error("CONNECTOR_TOKEN_BROKER_URL is required");
+  const builderSlug = nonBlank(process.env.GATEWAY_BUILDER_SLUG);
+  if (!builderSlug) throw new Error("GATEWAY_BUILDER_SLUG is required");
   return readConnectorAccessTokenViaBroker(baseUrl, null, connectorId, {
     kind: "owner-runtime",
+    builderSlug,
   });
 }
 

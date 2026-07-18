@@ -80,6 +80,7 @@ describe("helm-runner helpers", () => {
       chartPath: "/charts/octogee-gateway",
       namespace: "octogee",
       gatewayId: "bender",
+      ownerUid: "uid-ceckert",
       builderSlug: "ceckert",
       imageTag: "3280519",
       imageRepository: REPO,
@@ -300,6 +301,7 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
       {
         stdout: JSON.stringify({
           gatewayId: "bender",
+          ownerUid: "uid-ceckert",
           builderSlug: "ceckert",
           imageTag: "abc1234",
           image: { repository: REPO },
@@ -314,6 +316,7 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
     const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
     const map = await runner.readDeployedInstances({ namespace: "octogee" });
     expect(map.bender).toMatchObject({
+      ownerUid: "uid-ceckert",
       builderSlug: "ceckert",
       serviceAccountName: "octogee-gateway-bender",
       gatewayContainerSecurityContext: {
@@ -616,6 +619,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     await runner.upsertInstance({
       namespace: "octogee",
       gatewayId: "bender",
+      ownerUid: "uid-ceckert",
       builderSlug: "ceckert",
       imageRepository: REPO,
       imageTag: "3280519", // digits only — would be coerced to number by plain --set
@@ -634,6 +638,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     expect(stringPair("imageTag")).toBe("imageTag=3280519");
     expect(stringPair("gatewayId")).toBe("gatewayId=bender");
     expect(stringPair("builderSlug")).toBe("builderSlug=ceckert");
+    expect(stringPair("ownerUid")).toBe("ownerUid=uid-ceckert");
     expect(stringPair("profile")).toBe("profile=operator");
     expect(stringPair("sizingTier")).toBe("sizingTier=large");
     // replicas stays on --set because it's number-typed.

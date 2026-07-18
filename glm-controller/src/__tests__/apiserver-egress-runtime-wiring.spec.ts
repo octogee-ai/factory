@@ -10,6 +10,8 @@ describe("API-server egress runtime wiring", () => {
       "createGatewayRuntimeConfigPreparer(resolveApiServerEgressCidrs)",
     );
     expect(source).toMatch(/runGatewayConvergencePass\(\{[\s\S]*?prepareGatewayConfig,/u);
-    expect(source).toMatch(/const prepared = await passDeps\.prepareGatewayConfig\(gateway\);/u);
+    expect(source).toMatch(/await passDeps\.prepareGatewayConfig\(gateway\)/u);
+    expect(source).toMatch(/deploymentIntentFingerprint: instance\.deploymentIntentFingerprint/u);
+    expect(source).toMatch(/desiredDeploymentIntentFingerprint,/u);
   });
 });

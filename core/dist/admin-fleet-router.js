@@ -1,4 +1,4 @@
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue, } from "firebase-admin/firestore";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, OPERATOR_GATEWAY_RESERVATIONS_COLLECTION, defaultOperatorGatewayAccess, resolveUserGatewayShellState, OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT, isValidNewGatewayId, isGatewayClass, isGatewayProfile, operatorGatewayServiceAccountName, resolveGatewayClass, resolveGatewayImageProfile, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
 import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
@@ -1157,11 +1157,11 @@ function validateAddGatewayOwnerFields(body, gatewayClass) {
             },
         };
     }
-    if (gatewayClass === "builder" && body.ownerUid === undefined) {
+    if (gatewayClass !== "shared" && body.ownerUid === undefined) {
         return {
             error: {
                 status: 400,
-                body: { error: "builder gateway requires ownerUid" },
+                body: { error: "dedicated gateway requires ownerUid" },
             },
         };
     }
@@ -1273,6 +1273,79 @@ function validateFulfillableOperatorReservation(uid, data) {
             requestedAt: data.requestedAt,
         },
     };
+}
+function validateOperatorReservationFulfillmentState(input) {
+    return async (transaction) => {
+        const { uid, builderTier, reservation, reservationRef, userRef, workspaceRef } = input;
+        const [reservationSnap, userSnap, workspaceSnap] = await Promise.all([
+            transaction.get(reservationRef),
+            transaction.get(userRef),
+            transaction.get(workspaceRef),
+        ]);
+        if (!reservationSnap.exists) {
+            throw new InitialGatewayReleaseRequestError(404, {
+                error: "operator gateway reservation not found",
+                uid,
+            });
+        }
+        if (!userSnap.exists) {
+            throw new InitialGatewayReleaseRequestError(404, {
+                error: ERR_OWNER_USER_NOT_FOUND,
+                uid,
+            });
+        }
+        if (resolveBuilderTier(userSnap.data()) !== builderTier) {
+            throw new InitialGatewayReleaseRequestError(409, {
+                error: "builder subscription changed during fulfillment",
+                uid,
+            });
+        }
+        const currentReservation = validateFulfillableOperatorReservation(uid, reservationSnap.data());
+        if ("error" in currentReservation) {
+            throw new InitialGatewayReleaseRequestError(currentReservation.error.status, currentReservation.error.body);
+        }
+        if (currentReservation.ok.builderSlug !== reservation.builderSlug ||
+            currentReservation.ok.requestedSizingTier !== reservation.requestedSizingTier ||
+            currentReservation.ok.requestedAt !== reservation.requestedAt) {
+            throw new InitialGatewayReleaseRequestError(409, {
+                error: "operator gateway reservation changed during fulfillment",
+                uid,
+            });
+        }
+        const workspaceOwnerError = builderWorkspaceOwnerError(uid, reservation.builderSlug, workspaceSnap.exists
+            ? workspaceSnap.data()
+            : undefined);
+        if (workspaceOwnerError) {
+            throw new InitialGatewayReleaseRequestError(workspaceOwnerError.status, workspaceOwnerError.body);
+        }
+    };
+}
+async function provisionGatewayAuthSecretForFulfillment(input) {
+    if (!input.gatewayServiceAccount) {
+        return {
+            status: 500,
+            body: {
+                error: "GATEWAY_SERVICE_ACCOUNT not configured — admin cannot provision gateway auth-token secret",
+            },
+        };
+    }
+    try {
+        await input.provisionGatewayAuthSecret({
+            gatewayId: input.gatewayId,
+            gatewayServiceAccount: input.gatewayServiceAccount,
+        });
+        return null;
+    }
+    catch (err) {
+        return {
+            status: 502,
+            body: {
+                error: "failed to provision gateway auth-token secret",
+                gatewayId: input.gatewayId,
+                detail: err instanceof Error ? err.message : String(err),
+            },
+        };
+    }
 }
 function validateActivatableOperatorReservation(uid, data) {
     if (data.uid !== uid) {
@@ -1992,7 +2065,32 @@ async function validateGatewayConfigOwner(db, previous, next) {
             return { status: 404, body: { error: ERR_OWNER_USER_NOT_FOUND, ownerUid: uid } };
         }
     }
+    if (next.ownerUid !== previous.ownerUid
+        || next.builderSlug !== previous.builderSlug) {
+        return validateBuilderWorkspaceOwner(db, next.ownerUid, next.builderSlug);
+    }
     return null;
+}
+async function validateBuilderWorkspaceOwner(db, ownerUid, builderSlug) {
+    if (!builderSlug)
+        return builderWorkspaceOwnerError(ownerUid, builderSlug, undefined);
+    const workspace = await db.collection("workspaces").doc(builderSlug).get();
+    return builderWorkspaceOwnerError(ownerUid, builderSlug, workspace.exists ? workspace.data() : undefined);
+}
+function builderWorkspaceOwnerError(ownerUid, builderSlug, workspace) {
+    if (!ownerUid || !builderSlug) {
+        return { status: 400, body: { error: "dedicated gateway requires ownerUid and builderSlug" } };
+    }
+    return workspace?.ownerUid === ownerUid
+        ? null
+        : {
+            status: 400,
+            body: {
+                error: "builderSlug workspace owner does not match ownerUid",
+                builderSlug,
+                ownerUid,
+            },
+        };
 }
 function buildCreateGatewayConfig(args) {
     return {
@@ -2097,6 +2195,17 @@ function buildDurableGatewayPatch(args) {
             error: {
                 status: 400,
                 body: { error: "gateway credential references are user-scoped and cannot be patched here" },
+            },
+        };
+    }
+    const ownerUidPatched = Object.prototype.hasOwnProperty.call(args.body, "ownerUid");
+    const builderSlugPatched = Object.prototype.hasOwnProperty.call(args.body, "builderSlug");
+    if (args.current.gatewayClass !== "shared"
+        && ownerUidPatched !== builderSlugPatched) {
+        return {
+            error: {
+                status: 400,
+                body: { error: "ownerUid and builderSlug must be updated together" },
             },
         };
     }
@@ -2304,6 +2413,9 @@ async function resolveDedicatedGatewayOwner(opts) {
             },
         };
     }
+    const workspaceOwnerError = await validateBuilderWorkspaceOwner(opts.db, body.ownerUid, builderSlug);
+    if (workspaceOwnerError)
+        return { error: workspaceOwnerError };
     return {
         ok: {
             ownerUid: body.ownerUid,
@@ -3227,31 +3339,24 @@ export function addAdminFleetRoutes(router, deps) {
                 res.status(reservation.error.status).json(reservation.error.body);
                 return;
             }
+            const workspaceRef = db.collection("workspaces").doc(reservation.ok.builderSlug);
+            const workspaceOwnerError = await validateBuilderWorkspaceOwner(db, uid, reservation.ok.builderSlug);
+            if (workspaceOwnerError) {
+                res.status(workspaceOwnerError.status).json(workspaceOwnerError.body);
+                return;
+            }
             const uniqueness = await ensureGatewayCreateIsUnique(db, body);
             if ("error" in uniqueness) {
                 res.status(uniqueness.error.status).json(uniqueness.error.body);
                 return;
             }
-            const gatewayServiceAccount = process.env.GATEWAY_SERVICE_ACCOUNT;
-            if (!gatewayServiceAccount) {
-                res.status(500).json({
-                    error: "GATEWAY_SERVICE_ACCOUNT not configured — admin cannot provision gateway auth-token secret",
-                });
-                return;
-            }
-            try {
-                await deps.provisionGatewayAuthSecret({
-                    gatewayId: body.gatewayId,
-                    gatewayServiceAccount,
-                });
-            }
-            catch (err) {
-                const message = err instanceof Error ? err.message : String(err);
-                res.status(502).json({
-                    error: "failed to provision gateway auth-token secret",
-                    gatewayId: body.gatewayId,
-                    detail: message,
-                });
+            const secretProvisionError = await provisionGatewayAuthSecretForFulfillment({
+                provisionGatewayAuthSecret: deps.provisionGatewayAuthSecret,
+                gatewayId: body.gatewayId,
+                gatewayServiceAccount: process.env.GATEWAY_SERVICE_ACCOUNT,
+            });
+            if (secretProvisionError) {
+                res.status(secretProvisionError.status).json(secretProvisionError.body);
                 return;
             }
             const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
@@ -3289,42 +3394,14 @@ export function addAdminFleetRoutes(router, deps) {
             try {
                 await writeInitialGatewayRelease(db, {
                     ...initial,
-                    validateAdditional: async (transaction) => {
-                        const [currentReservationSnap, currentUserSnap] = await Promise.all([
-                            transaction.get(reservationRef),
-                            transaction.get(userRef),
-                        ]);
-                        if (!currentReservationSnap.exists) {
-                            throw new InitialGatewayReleaseRequestError(404, {
-                                error: "operator gateway reservation not found",
-                                uid,
-                            });
-                        }
-                        if (!currentUserSnap.exists) {
-                            throw new InitialGatewayReleaseRequestError(404, {
-                                error: ERR_OWNER_USER_NOT_FOUND,
-                                uid,
-                            });
-                        }
-                        if (resolveBuilderTier(currentUserSnap.data()) !== builderTier) {
-                            throw new InitialGatewayReleaseRequestError(409, {
-                                error: "builder subscription changed during fulfillment",
-                                uid,
-                            });
-                        }
-                        const currentReservation = validateFulfillableOperatorReservation(uid, currentReservationSnap.data());
-                        if ("error" in currentReservation) {
-                            throw new InitialGatewayReleaseRequestError(currentReservation.error.status, currentReservation.error.body);
-                        }
-                        if (currentReservation.ok.builderSlug !== reservation.ok.builderSlug ||
-                            currentReservation.ok.requestedSizingTier !== reservation.ok.requestedSizingTier ||
-                            currentReservation.ok.requestedAt !== reservation.ok.requestedAt) {
-                            throw new InitialGatewayReleaseRequestError(409, {
-                                error: "operator gateway reservation changed during fulfillment",
-                                uid,
-                            });
-                        }
-                    },
+                    validateAdditional: validateOperatorReservationFulfillmentState({
+                        uid,
+                        builderTier,
+                        reservation: reservation.ok,
+                        reservationRef,
+                        userRef,
+                        workspaceRef,
+                    }),
                     writeAdditional: (transaction) => {
                         transaction.set(opRef, addGatewayOperationRecord({
                             createdBy,

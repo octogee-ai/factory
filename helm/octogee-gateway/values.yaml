@@ -21,6 +21,8 @@ gatewayId: ""
 # stays gateway-scoped on gatewayId, never revisionId.
 revisionId: ""
 
+ownerUid: ""
+
 # Dedicated builder/operator owner slug. Shared gateways leave this empty.
 # When present on builder/operator classes, the gateway restores durable
 # openclaw.json from that builder's Gitea system_config repo before OpenClaw

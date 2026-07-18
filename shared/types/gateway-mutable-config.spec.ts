@@ -48,11 +48,24 @@ describe("gateway mutable config", () => {
   it("rejects a credential-bearing or malformed root config", () => {
     expect(isGatewayMutableConfig({ ...validConfig(), byosub: {} })).toBe(false);
     expect(isGatewayMutableConfig(validConfig({ ownerUid: null }))).toBe(false);
+    expect(isGatewayMutableConfig(validConfig({ builderSlug: null }))).toBe(false);
     expect(
       isGatewayMutableConfig(
         validConfig({ preemption: { warmTargetGatewayId: "" } }),
       ),
     ).toBe(false);
+  });
+
+  it("keeps shared gateways ownerless while requiring the complete dedicated owner pair", () => {
+    expect(isGatewayMutableConfig(validConfig({
+      profile: null,
+      gatewayClass: "shared",
+      imageProfile: "standard",
+      ownerUid: null,
+      builderSlug: null,
+    }))).toBe(true);
+    expect(isGatewayMutableConfig(validConfig({ ownerUid: "uid-owner", builderSlug: null }))).toBe(false);
+    expect(isGatewayMutableConfig(validConfig({ ownerUid: null, builderSlug: "owner" }))).toBe(false);
   });
 
   it("allows only the addressed gateway's generated service account", () => {

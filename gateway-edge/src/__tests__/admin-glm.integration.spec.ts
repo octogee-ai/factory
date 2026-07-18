@@ -24,6 +24,7 @@ let gatewayReleasesDocs: Record<string, Record<string, unknown>> = {};
 // `${gatewayId}/${uid}` so the fake can serve subcollection + collectionGroup.
 let gatewayAssignmentsDocs: Record<string, Record<string, unknown>> = {};
 let usersDocs: Record<string, Record<string, unknown>> = {};
+let workspacesDocs: Record<string, Record<string, unknown>> = {};
 let configDocs: Record<string, Record<string, unknown>> = {};
 let operatorGatewayReservationsDocs: Record<string, Record<string, unknown>> = {};
 
@@ -105,6 +106,10 @@ vi.mock("../lib/db", () => {
         }
         if (name === "users") {
           const data = usersDocs[docId];
+          return { exists: data !== undefined, data: () => data };
+        }
+        if (name === "workspaces") {
+          const data = workspacesDocs[docId];
           return { exists: data !== undefined, data: () => data };
         }
         if (name === "operatorGatewayReservations") {
@@ -512,6 +517,7 @@ beforeEach(() => {
   gatewayReleasesDocs = {};
   gatewayAssignmentsDocs = {};
   usersDocs = {};
+  workspacesDocs = {};
   configDocs = {};
   operatorGatewayReservationsDocs = {};
   provisionerCalls.length = 0;
@@ -705,12 +711,18 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
   });
 
   it("persists sizingTier and profile when supplied in the body", async () => {
+    usersDocs["uid-operator"] = {
+      username: "operator",
+      provisioning: { openclaw: { slug: "operator" } },
+    };
+    workspacesDocs.operator = { ownerUid: "uid-operator", slug: "operator" };
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "created-operator",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
       profile: "operator",
+      ownerUid: "uid-operator",
       sizingTier: "large",
     });
     expect(res.status).toBe(202);
@@ -723,8 +735,8 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       imageProfile: "operator",
       sizingTier: "large",
       operatorAccess: {
-        shellsEnabled: false,
-        reason: "runtime-trust-boundary-not-provisioned",
+        shellsEnabled: true,
+        reason: "owned-runtime-gateway",
       },
       serviceAccountName: "octogee-gw-created-operator",
       serviceAccount: {
@@ -738,6 +750,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       username: "jack",
       provisioning: { openclaw: { slug: "jack" } },
     };
+    workspacesDocs.jack = { ownerUid: "uid-jack", slug: "jack" };
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "jack",
@@ -777,6 +790,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       username: "jack",
       provisioning: { openclaw: { slug: "jack" } },
     };
+    workspacesDocs.jack = { ownerUid: "uid-jack", slug: "jack" };
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "jack",
@@ -1170,6 +1184,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
         },
       },
     };
+    workspacesDocs.alice = { ownerUid: "admin-user" };
     const app = buildOperatorFlowApp();
 
     const requestRes = await request(app)
@@ -1292,6 +1307,7 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
       provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
       subscription: { status: "active" },
     };
+    workspacesDocs.alice = { ownerUid: "uid-alice" };
     operatorGatewayReservationsDocs["uid-alice"] = {
       uid: "uid-alice",
       builderSlug: "alice",
