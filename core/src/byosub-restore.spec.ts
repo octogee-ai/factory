@@ -170,6 +170,18 @@ describe("shouldRestoreCodexCredential — conservative-restore keystone", () =>
     ).toBe("skip");
   });
 
+  it("healthy SQLite credential with missing CODEX_HOME → materialize without replacing the rotated token", () => {
+    expect(
+      shouldRestoreCodexCredential({
+        usableCodexProfilePresent: true,
+        authStateText: null,
+        profileId: P,
+        now: NOW,
+        targetPathPresent: false,
+      }),
+    ).toBe("materialize");
+  });
+
   it("recovery (on-disk cred present but openclaw flagged auth_permanent) → write — replace the dead cred", () => {
     expect(
       shouldRestoreCodexCredential({
@@ -567,7 +579,66 @@ describe("restoreByosubCredentials", () => {
     expect(logs.join("\n")).toMatch(/octogee-a-coach|skip|conservative/i);
   });
 
-  it("restores Codex auth.json when the profile store exists but CODEX_HOME is missing", async () => {
+  it("materializes missing Codex auth.json from the healthy SQLite credential without fetching or replacing it", async () => {
+    const oc = mkTmp();
+    const agentId = "octogee-a-coach";
+    const agentDir = path.join(oc, "agents", agentId, "agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    const liveCred = {
+      version: 1,
+      profiles: {
+        "platform-openai:default": {
+          type: "api_key",
+          provider: "platform-openai",
+          keyRef: {
+            source: "exec",
+            provider: "gcp-secret-manager",
+            id: `agent-model-token-openai-${agentId}`,
+          },
+        },
+        [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "live",
+          refresh: "rotated-refresh",
+          expires: Date.now() + 3_600_000,
+          copyToAgents: true,
+        },
+      },
+    };
+    writeAuthProfileStore(agentDir, liveCred);
+
+    const targetPath = path.join(agentDir, "codex-home", "auth.json");
+    let fetched = false;
+    const r = await restoreByosubCredentials({
+      plan: [
+        {
+          agentId,
+          provider: "openai" as const,
+          secretName: "byosub-a-openai",
+          targetPath,
+          openclawDir: oc,
+        },
+      ],
+      fetchSecret: async () => {
+        fetched = true;
+        return codexBlob();
+      },
+    });
+
+    expect(r).toEqual({ restored: 1, failed: 0, skipped: 0 });
+    expect(fetched).toBe(false);
+    expect(JSON.parse(fs.readFileSync(targetPath, "utf-8"))).toMatchObject({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: "live",
+        refresh_token: "rotated-refresh",
+      },
+    });
+    expect(readAuthProfileStore(agentDir)).toEqual(liveCred);
+  });
+
+  it("restores Codex from Secret Manager when only unrelated profiles exist and CODEX_HOME is missing", async () => {
     const oc = mkTmp();
     const agentId = "octogee-a-coach";
     const agentDir = path.join(oc, "agents", agentId, "agent");

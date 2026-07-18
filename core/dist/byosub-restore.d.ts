@@ -27,12 +27,12 @@ export declare function codexAuthStatePath(openclawDir: string, agentId: string)
  */
 export declare function readCodexAuthStateText(openclawDir: string, agentId: string): string | null;
 export declare function shouldRestoreCodexCredential(opts: {
-    authProfilesPresent: boolean;
+    usableCodexProfilePresent: boolean;
     authStateText: string | null;
     profileId: string;
     now: number;
     targetPathPresent?: boolean;
-}): "write" | "skip";
+}): "write" | "skip" | "materialize";
 export declare function restoreByosubCredentials(opts: {
     plan: ByosubRestorePlanItem[];
     fetchSecret: (secretName: string) => Promise<string>;
