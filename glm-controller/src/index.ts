@@ -63,7 +63,6 @@ import {
 } from "./converge-gateway.js";
 import {
   assertSurgeAssignmentCoverage,
-  createSurgeSourceLossDebounce,
   reconcileSurgeCustomerHandoff,
 } from "./surge-customer-handoff.js";
 import {
@@ -1746,7 +1745,6 @@ async function createControllerRuntime(
     privateKey: fleetControllerPrivateKey,
     log,
   });
-  const surgeSourceLossDebounce = createSurgeSourceLossDebounce();
   const surgeHandoffDeps = {
     ...surgeTransport,
     listPods: (gatewayId: string) => listSurgePods(runKubectl, NAMESPACE, gatewayId),
@@ -1791,7 +1789,6 @@ async function createControllerRuntime(
       },
       input,
     ),
-    sourceLossDebounce: surgeSourceLossDebounce,
     log,
   };
 

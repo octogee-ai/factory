@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  createSurgeSourceLossDebounce,
   reconcileSurgeCustomerHandoff,
   assertSurgeAssignmentCoverage,
   type SurgeAssignment,
@@ -91,10 +90,17 @@ function harness(input: {
       }
       targetReleased = true;
     }),
-    sourceLossDebounce: createSurgeSourceLossDebounce(2),
     log: vi.fn(),
   };
-  return { deps, events, assignments: () => assignments, operationId };
+  return {
+    deps,
+    events,
+    assignments: () => assignments,
+    operationId,
+    setTargetReleased: (released: boolean) => {
+      targetReleased = released;
+    },
+  };
 }
 
 describe("surge customer handoff", () => {
@@ -109,7 +115,7 @@ describe("surge customer handoff", () => {
     )).not.toThrow();
   });
 
-  it("opens a healthy first-install pod without customer transfer", async () => {
+  it("leaves a healthy first-install pod for pod-side self-release", async () => {
     const h = harness({ pods: [targetPod], assignments: [] });
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
@@ -118,7 +124,7 @@ describe("surge customer handoff", () => {
       requiresCustomerMigration: false,
     })).resolves.toEqual({ ready: false });
 
-    expect(h.events).toEqual(["release:target-uid"]);
+    expect(h.events).toEqual([]);
   });
 
   it("migrates a same-release replacement when an old Ready pod still exists", async () => {
@@ -202,7 +208,7 @@ describe("surge customer handoff", () => {
     expect(h.events).toEqual([]);
   });
 
-  it("debounces source loss, then releases the target and heals its owned roster gates", async () => {
+  it("waits for pod-side source-loss release, then heals its owned roster gates", async () => {
     const pods: SurgePod[] = [targetPod];
     const h = harness({
       pods,
@@ -219,13 +225,7 @@ describe("surge customer handoff", () => {
     })).resolves.toEqual({ ready: false });
     expect(h.events).toEqual([]);
 
-    await expect(reconcileSurgeCustomerHandoff(h.deps, {
-      gatewayId: "default",
-      desiredVersion: "new-sha",
-      requiresCustomerMigration: true,
-    })).resolves.toEqual({ ready: false });
-    expect(h.events).toEqual(["release:target-uid"]);
-
+    h.setTargetReleased(true);
     pods[0] = { ...targetPod, ready: true };
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
@@ -233,7 +233,6 @@ describe("surge customer handoff", () => {
       requiresCustomerMigration: true,
     })).resolves.toEqual({ ready: true });
     expect(h.events).toEqual([
-      "release:target-uid",
       "assignment:u1:serving",
     ]);
   });

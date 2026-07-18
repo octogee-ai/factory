@@ -30,7 +30,11 @@ import {
   createSurgeReadinessGate,
   type SurgeReadinessGate,
 } from "./surge-readiness.js";
-import { startAfterSurgeReadiness } from "./surge-reconcile-gate.js";
+import {
+  observeReadySibling,
+  startAfterSurgeReadiness,
+  startSurgeReadinessSelfRelease,
+} from "./surge-reconcile-gate.js";
 import {
   writeGatewayHeartbeat,
   type FleetStateDeps,
@@ -324,6 +328,7 @@ export function buildFleetHeartbeatSnapshot(input: {
 export function buildFleetHealthResponse(input: {
   status: FleetRuntime["status"];
   gatewayId: string;
+  podUid: string | null;
   version: string;
   openclawVersion: string;
   startedAt: number;
@@ -333,6 +338,7 @@ export function buildFleetHealthResponse(input: {
   return {
     status: input.status,
     gatewayId: input.gatewayId,
+    podUid: input.podUid,
     version: input.version,
     openclawVersion: input.openclawVersion,
     startedAt: input.startedAt,
@@ -651,6 +657,29 @@ function resolveK8sNamespace(): string {
   return namespace;
 }
 
+function startPodSurgeReadinessRecovery(input: {
+  surgeReadiness: SurgeReadinessGate;
+  serviceName: string;
+  namespace: string;
+  port: number;
+  log: (message: string) => void;
+}): () => void {
+  const ownPodUid = process.env.POD_UID?.trim() || null;
+  if (!ownPodUid) {
+    input.log("[surge-handoff] POD_UID is unset; pod-side readiness recovery is disabled");
+    return () => undefined;
+  }
+  return startSurgeReadinessSelfRelease({
+    released: input.surgeReadiness.released,
+    observe: () => observeReadySibling({
+      healthUrl: `http://${input.serviceName}.${input.namespace}.svc.cluster.local:${input.port}/health`,
+      ownPodUid,
+    }),
+    release: () => input.surgeReadiness.release({ targetPodUid: ownPodUid }),
+    log: input.log,
+  });
+}
+
 function wrapAdapterWithRuntime(
   adapter: CustomerLifecycleAdapter,
   runtime: FleetRuntime,
@@ -795,6 +824,7 @@ const waitForGatewayReady = async (): Promise<void> => {
     res.json(buildFleetHealthResponse({
       status: runtime.status,
       gatewayId: opts.gatewayId,
+      podUid: process.env.POD_UID ?? null,
       version: opts.version,
       openclawVersion: opts.openclawVersion,
       startedAt: PROCESS_STARTED_AT_MS,
@@ -891,6 +921,13 @@ const waitForGatewayReady = async (): Promise<void> => {
   const server: Server = await new Promise((resolve) => {
     const s = app.listen(opts.port, "0.0.0.0", () => resolve(s));
   });
+  const stopSurgeSelfRelease = startPodSurgeReadinessRecovery({
+    surgeReadiness,
+    serviceName,
+    namespace,
+    port: opts.port,
+    log: opts.log,
+  });
   const reconcileLoopStatus = caps.provision ? `${RECONCILE_LOOP_INTERVAL_MS}ms` : "disabled";
   opts.log(
     `[fleet] listening on 0.0.0.0:${opts.port}; gatewayId=${opts.gatewayId}; platformState=${platformState}; reportState=${reportState}; reconcile-loop=${reconcileLoopStatus}`,
@@ -900,6 +937,7 @@ return {
     whenReady: waitForGatewayReady(),
     stop: async () => {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
+      stopSurgeSelfRelease();
       stopReconcileLoop();
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));

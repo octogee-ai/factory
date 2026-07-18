@@ -47,31 +47,6 @@ interface SessionDigest {
   sha256: string;
 }
 
-export interface SurgeSourceLossDebounce {
-  observeMissing: (operationId: string) => { accepted: boolean; observation: number };
-  clear: (operationId: string) => void;
-}
-
-export function createSurgeSourceLossDebounce(
-  requiredObservations = 2,
-): SurgeSourceLossDebounce {
-  const observations = new Map<string, number>();
-  return {
-    observeMissing(operationId) {
-      const observation = (observations.get(operationId) ?? 0) + 1;
-      if (observation >= requiredObservations) {
-        observations.delete(operationId);
-        return { accepted: true, observation };
-      }
-      observations.set(operationId, observation);
-      return { accepted: false, observation };
-    },
-    clear(operationId) {
-      observations.delete(operationId);
-    },
-  };
-}
-
 export interface SurgeCustomerHandoffDeps {
   listPods: (gatewayId: string) => Promise<SurgePod[]>;
   readPodHealth: (pod: SurgePod) => Promise<SurgePodHealth | null>;
@@ -114,7 +89,6 @@ export interface SurgeCustomerHandoffDeps {
     operationId: string;
     pod: SurgePod;
   }) => Promise<void>;
-  sourceLossDebounce: SurgeSourceLossDebounce;
   log: (message: string) => void;
 }
 
@@ -252,21 +226,6 @@ function selectSource(pods: readonly SurgePod[], target: SurgePod): SurgeSourceS
   return source.ready ? { kind: "ready", pod: source } : { kind: "waiting", pod: source };
 }
 
-function isSinglePodBoot(
-  input: ReconcileSurgeCustomerHandoffInput,
-  sourceMissing: boolean,
-): boolean {
-  return !input.requiresCustomerMigration && sourceMissing;
-}
-
-function clearSourceLossWhilePresent(
-  debounce: SurgeSourceLossDebounce,
-  operationId: string,
-  source: SurgeSourceSelection,
-): void {
-  if (source.kind !== "missing") debounce.clear(operationId);
-}
-
 async function releaseTargetWithConfirmation(
   deps: SurgeCustomerHandoffDeps,
   input: { gatewayId: string; operationId: string; pod: SurgePod },
@@ -286,41 +245,16 @@ async function releaseTargetWithConfirmation(
   }
 }
 
-async function recoverFromConfirmedSourceLoss(
+function sourceForTransfer(
   deps: SurgeCustomerHandoffDeps,
   input: ReconcileSurgeCustomerHandoffInput,
-  target: SurgePod,
-  ownedBy: string,
-): Promise<{ ready: false }> {
-  const missing = deps.sourceLossDebounce.observeMissing(ownedBy);
-  if (!missing.accepted) {
-    deps.log(
-      `[surge-handoff] source absent; waiting for confirmation ` +
-      `gateway=${input.gatewayId} observation=${missing.observation}`,
-    );
-    return { ready: false };
-  }
-  deps.log(
-    `[surge-handoff] source loss confirmed; accepting pod-local state loss ` +
-    `gateway=${input.gatewayId} target=${target.name}`,
-  );
-  await releaseTargetWithConfirmation(deps, {
-    gatewayId: input.gatewayId,
-    operationId: ownedBy,
-    pod: target,
-  });
-  return { ready: false };
-}
-
-async function sourceForTransfer(
-  deps: SurgeCustomerHandoffDeps,
-  input: ReconcileSurgeCustomerHandoffInput,
-  target: SurgePod,
-  ownedBy: string,
   source: SurgeSourceSelection,
-): Promise<SurgePod | null> {
+): SurgePod | null {
   if (source.kind === "missing") {
-    await recoverFromConfirmedSourceLoss(deps, input, target, ownedBy);
+    deps.log(
+      `[surge-handoff] source absent; waiting for pod-side readiness release ` +
+      `gateway=${input.gatewayId}`,
+    );
     return null;
   }
   if (source.kind === "waiting") {
@@ -352,30 +286,19 @@ export async function reconcileSurgeCustomerHandoff(
 
   const ownedBy = operationId(input.gatewayId, target.uid);
   const source = selectSource(pods, target);
-  clearSourceLossWhilePresent(deps.sourceLossDebounce, ownedBy, source);
   if (targetHealth.status !== "ready") return { ready: false };
 
   if (target.ready) {
     if (source.kind !== "missing") return { ready: false };
-    deps.sourceLossDebounce.clear(ownedBy);
     const assignments = await deps.readAssignments(input.gatewayId);
     await restoreOwnedAssignments(deps, input.gatewayId, assignments, ownedBy);
     return { ready: true };
   }
   if (targetHealth.handoffReleased) {
-    deps.sourceLossDebounce.clear(ownedBy);
     return { ready: false };
   }
 
-  if (isSinglePodBoot(input, source.kind === "missing")) {
-    await releaseTargetWithConfirmation(deps, {
-      gatewayId: input.gatewayId,
-      operationId: ownedBy,
-      pod: target,
-    });
-    return { ready: false };
-  }
-  const sourcePod = await sourceForTransfer(deps, input, target, ownedBy, source);
+  const sourcePod = sourceForTransfer(deps, input, source);
   if (!sourcePod) return { ready: false };
 
   const assignments = await deps.readAssignments(input.gatewayId);

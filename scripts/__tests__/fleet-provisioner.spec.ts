@@ -249,13 +249,14 @@ describe("in-pod gateway heartbeat", () => {
       buildFleetHealthResponse({
         status: "ready",
         gatewayId: "default",
+        podUid: "pod-uid-1",
         version: "sha-1",
         openclawVersion: "2026.7.1",
         startedAt: 42,
         customers: [],
         migratingIn: [],
       }),
-    ).toMatchObject({ openclawVersion: "2026.7.1" });
+    ).toMatchObject({ openclawVersion: "2026.7.1", podUid: "pod-uid-1" });
   });
 
   it("keys the heartbeat snapshot by the bare gateway id (GATEWAY-SIMPLE-ROLL-SPEC)", () => {
