@@ -47,8 +47,8 @@ export interface ChatIdentityInput {
 export interface ResolvedChatIdentity {
   lane: "workspace" | "project";
   pat: string;
-  /** The agent's own MM user id — its authored posts are excluded from results. */
-  excludeMmUserId: string;
+  /** The agent's own MM user id — its authored posts are labeled `self: true` in results. */
+  coachMmUserId: string;
   /** Credential for the `unread` direction: the AGENT's own catch-up cursor. MM only
    *  serves a user's unread state to that user, so this must be the bot's own PAT —
    *  running unread under the builder PAT would either 403 (coach id) or advance the
@@ -101,7 +101,7 @@ export async function resolveChatIdentity(
     return {
       lane: "project",
       pat,
-      excludeMmUserId: mmUserId,
+      coachMmUserId: mmUserId,
       unread: { pat, mmUserId },
     };
   }
@@ -120,13 +120,13 @@ export async function resolveChatIdentity(
   if (!coachMmUserId || !coachPat) {
     throw new ChatPatError(
       "no-coach-identity",
-      `incomplete users/{uid}/secrets/coachMattermost for ${input.slug} — cannot exclude the agent's own posts or read its unread cursor`,
+      `incomplete users/{uid}/secrets/coachMattermost for ${input.slug} — cannot self-label the agent's own posts or read its unread cursor`,
     );
   }
   return {
     lane: "workspace",
     pat: builderPat,
-    excludeMmUserId: coachMmUserId,
+    coachMmUserId,
     unread: { pat: coachPat, mmUserId: coachMmUserId },
   };
 }

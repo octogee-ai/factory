@@ -37,65 +37,73 @@ describe("shapeBundle", () => {
     expect(out.posts.map((p) => p.post_id)).toEqual(["p1", "p2"]);
   });
 
-  it("filters out coach-authored posts (boundary §2.3.8)", () => {
+  it("includes coach-authored posts labeled self: true (full-fidelity re-prime)", () => {
     const out = shapeBundle(
       {
         posts: {
-          p1: { id: "p1", channel_id: "ch1", user_id: COACH_USER_ID, message: "echo", create_at: 1_700_000_000_000 },
+          p1: { id: "p1", channel_id: "ch1", user_id: COACH_USER_ID, message: "my reply", create_at: 1_700_000_000_000 },
           p2: { id: "p2", channel_id: "ch1", user_id: "u-taylor", message: "real", create_at: 1_700_000_001_000 },
         },
         order: ["p1", "p2"],
       },
       baseCtx,
     );
-    expect(out.posts).toHaveLength(1);
-    expect(out.posts[0].post_id).toBe("p2");
-    expect(out.posts[0].snippet).toBe("real");
+    expect(out.posts.map((p) => [p.post_id, p.self])).toEqual([
+      ["p1", true],
+      ["p2", false],
+    ]);
+    expect(out.posts[0].snippet).toBe("my reply");
   });
 
-  it("filters MULTIPLE coach-authored posts in one bundle — guards against `find` vs `filter`", () => {
-    // Catches a regression where the impl uses .find() (returns first non-coach
-    // match) or otherwise stops at the first hit. Posts arranged so coach
-    // and non-coach interleave — output must contain BOTH non-coach posts
-    // and NEITHER coach post.
+  it("labels EVERY coach post in an interleaved bundle — guards against `find` vs `filter`", () => {
+    // Catches a regression where the impl labels only the first coach match
+    // or otherwise stops at the first hit. Posts arranged so coach and
+    // non-coach interleave — output must keep all four in order with the
+    // self flag correct on each.
     const out = shapeBundle(
       {
         posts: {
-          p1: { id: "p1", channel_id: "ch1", user_id: COACH_USER_ID, message: "coach echo 1", create_at: 1 },
+          p1: { id: "p1", channel_id: "ch1", user_id: COACH_USER_ID, message: "coach one", create_at: 1 },
           p2: { id: "p2", channel_id: "ch1", user_id: "u-taylor", message: "real one", create_at: 2 },
-          p3: { id: "p3", channel_id: "ch1", user_id: COACH_USER_ID, message: "coach echo 2", create_at: 3 },
+          p3: { id: "p3", channel_id: "ch1", user_id: COACH_USER_ID, message: "coach two", create_at: 3 },
           p4: { id: "p4", channel_id: "ch1", user_id: "u-other", message: "real two", create_at: 4 },
         },
         order: ["p1", "p2", "p3", "p4"],
       },
       baseCtx,
     );
-    expect(out.posts.map((p) => p.post_id)).toEqual(["p2", "p4"]);
+    expect(out.posts.map((p) => [p.post_id, p.self])).toEqual([
+      ["p1", true],
+      ["p2", false],
+      ["p3", true],
+      ["p4", false],
+    ]);
   });
 
-  it("compares coach-author filter against post.user_id specifically (not username/display_name)", () => {
-    // If the impl ever swapped the filter to compare against author.username
-    // or author.display_name (they're easier to read in logs), the coach's
-    // post would slip through whenever its user metadata was missing or
-    // the username string didn't equal the coach id. This test pins the
-    // contract: filter is keyed on user_id even when username happens to
-    // collide with non-coach posts, AND when the coach has no user metadata.
+  it("keys the self label on post.user_id even when the coach has no user metadata", () => {
+    // If the impl ever swapped the comparison to author.username or
+    // author.display_name (they're easier to read in logs), a coach post
+    // would lose its self label whenever the coach's user metadata was
+    // missing from the hydrated map. The label must come from user_id; the
+    // author falls back to "(unknown)" without affecting it.
     const usersWithCoachMissing = new Map<string, MmUserMeta>([
       ["u-taylor", { id: "u-taylor", username: "taylor" }],
-      // Coach's user metadata intentionally absent — the filter must still
-      // catch the post via user_id, not via author lookup.
     ]);
     const out = shapeBundle(
       {
         posts: {
-          p1: { id: "p1", channel_id: "ch1", user_id: COACH_USER_ID, message: "echo", create_at: 1 },
+          p1: { id: "p1", channel_id: "ch1", user_id: COACH_USER_ID, message: "my reply", create_at: 1 },
           p2: { id: "p2", channel_id: "ch1", user_id: "u-taylor", message: "real", create_at: 2 },
         },
         order: ["p1", "p2"],
       },
       { ...baseCtx, users: usersWithCoachMissing },
     );
-    expect(out.posts.map((p) => p.post_id)).toEqual(["p2"]);
+    expect(out.posts.map((p) => [p.post_id, p.self])).toEqual([
+      ["p1", true],
+      ["p2", false],
+    ]);
+    expect(out.posts[0].author.username).toBe("(unknown)");
   });
 
   it("filters soft-deleted and system posts", () => {

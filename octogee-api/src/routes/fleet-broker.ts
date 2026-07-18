@@ -101,7 +101,7 @@ type ApplyCoachIdentity = (input: {
 // project agent → its bot's project-scoped PAT).
 interface ChatBrokerIdentity {
   pat: string;
-  excludeMmUserId: string;
+  coachMmUserId: string;
   /** Agent bot's own credential — used only for the `unread` read cursor. */
   unread: { pat: string; mmUserId: string };
   slug: string;
@@ -136,7 +136,7 @@ type ResolveChatIdentity = (
 ) => Promise<{
   lane: "workspace" | "project";
   pat: string;
-  excludeMmUserId: string;
+  coachMmUserId: string;
   unread: { pat: string; mmUserId: string };
 }>;
 
@@ -1707,7 +1707,7 @@ async function requireAssignedChatIdentity(
       slug,
       identity: {
         pat: resolved.pat,
-        excludeMmUserId: resolved.excludeMmUserId,
+        coachMmUserId: resolved.coachMmUserId,
         unread: resolved.unread,
         slug,
         siteUrl,

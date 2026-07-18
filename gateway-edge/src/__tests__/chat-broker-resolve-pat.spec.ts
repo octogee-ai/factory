@@ -18,10 +18,10 @@ const UID = "uid-1";
 const SLUG = "alice";
 
 describe("resolveChatIdentity", () => {
-  it("workspace coach agent reads with the BUILDER's PAT and excludes the coach bot's posts", async () => {
+  it("workspace coach agent reads with the BUILDER's PAT and self-labels the coach bot's posts", async () => {
     // The workspace agent acts on behalf of the human — the Builder's own MM
     // membership (workspace + project channels) is exactly the context the
-    // user's agent should see. The exclusion id is still the coach BOT (the
+    // user's agent should see. The self-label id is still the coach BOT (the
     // agent's own authored posts), which the builder PAT cannot report as "me".
     const db = dbOf({
       [`users/${UID}/secrets/mattermost`]: { personalToken: "builder-pat" },
@@ -38,7 +38,7 @@ describe("resolveChatIdentity", () => {
     expect(identity).toEqual({
       lane: "workspace",
       pat: "builder-pat",
-      excludeMmUserId: "mm-coach-bot",
+      coachMmUserId: "mm-coach-bot",
       // The `unread` direction is the AGENT's catch-up cursor, so it runs under
       // the coach bot's own PAT — MM only serves a user's unread state to that
       // user, and running it under the builder PAT would either 403 (coach id)
@@ -62,7 +62,7 @@ describe("resolveChatIdentity", () => {
     expect(identity).toEqual({
       lane: "project",
       pat: "proj-pat",
-      excludeMmUserId: "mm-proj-bot",
+      coachMmUserId: "mm-proj-bot",
       unread: { pat: "proj-pat", mmUserId: "mm-proj-bot" },
     });
   });
