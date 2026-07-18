@@ -3,8 +3,7 @@ import { requireAdmin } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";
 import { db, FieldValue } from "../lib/db.js";
 import { decryptSecret } from "../lib/kms.js";
-import { listConnectors } from "../lib/connectors/index.js";
-import { revokeAllConnectorGrantsForUser } from "../lib/connector-revocation.js";
+import { revokeAllConnectorGrantsForUser } from "@octogee/core/connector-revocation";
 import { liftSuppression } from "../lib/email-suppression.js";
 import { runEmailPreflight } from "../lib/email-preflight.js";
 import { getResend } from "../lib/resend.js";
@@ -16,6 +15,7 @@ import { addAdminFleetRoutes } from "@octogee/core/admin-fleet-router";
 import { addAdminCustomerRoutes } from "@octogee/core/admin-customer-router";
 import { deleteAuthUserTolerantOfMissing as deleteAuthUserLib } from "@octogee/core/firebase-auth-helpers";
 import { MODEL_CATALOG } from "@octogee/shared/types/model-catalog";
+import { CONNECTOR_OAUTH_REVOCATION_TARGETS } from "@octogee/shared/types/connectors";
 import { modelRefForCatalogEntry } from "@octogee/shared/types/agent-models";
 import {
   DEFAULT_FREE_TIER_MODEL_REF,
@@ -53,14 +53,11 @@ addAdminFleetRoutes(router, {
     const { getAuth } = await import("firebase-admin/auth");
     await deleteAuthUserLib(uid, getAuth());
   },
-  // H-1: relinquish OAuth-web connector grants at the provider before user
-  // data is deleted (Google restricted-scope expects revoke-on-removal).
   revokeConnectorGrantsForUser: (uid: string) =>
-    revokeAllConnectorGrantsForUser(uid, {
+    revokeAllConnectorGrantsForUser(uid, CONNECTOR_OAUTH_REVOCATION_TARGETS, {
       db,
       decryptSecret,
       logger,
-      connectors: listConnectors(),
     }),
 });
 

@@ -526,9 +526,6 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
-            # readOnlyRootFilesystem is on for this no-shell sidecar; the only
-            # paths it writes outside /home/node are transient temp files
-            # (uploads, artifact staging), so give it a dedicated writable /tmp.
             - name: tmp
               mountPath: /tmp
             - name: openclaw-device-auth
@@ -558,8 +555,6 @@ spec:
         # persistence path (PVC) was deleted end-to-end (GATEWAY-RELEASES-SPEC).
         - name: data
           emptyDir: {}
-        # Writable /tmp for the read-only-root gateway-edge sidecar. Bounded so
-        # transient upload/artifact staging can't exhaust node ephemeral storage.
         - name: tmp
           emptyDir:
             sizeLimit: 1Gi

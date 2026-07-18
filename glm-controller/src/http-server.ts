@@ -38,7 +38,8 @@ const ALLOWED_ORIGINS = new Set([
 ]);
 
 function isAllowedOrigin(origin: string): boolean {
-  return ALLOWED_ORIGINS.has(origin) || /^http:\/\/localhost:\d+$/.test(origin);
+  return ALLOWED_ORIGINS.has(origin) ||
+    (process.env.OCTOGEE_ALLOW_LOCAL_ORIGINS === "true" && /^http:\/\/localhost:\d+$/.test(origin));
 }
 
 function corsMiddleware(req: Request, res: Response, next: NextFunction): void {
@@ -80,6 +81,7 @@ export interface HttpServerDeps {
   }) => Promise<unknown[]>;
   readGatewayPodDiagnostics?: (gatewayId: string) => Promise<GatewayPodDiagnostics>;
   deleteAuthUserTolerantOfMissing: (uid: string) => Promise<void>;
+  revokeConnectorGrantsForUser: (uid: string) => Promise<void>;
   dedicatedGatewayIdleDefaultMs?: number;
   dedicatedGatewayIdleSweepMs?: number;
 }
@@ -199,7 +201,7 @@ export function createHttpServer(deps: HttpServerDeps): Express {
 
   addAdminFleetEventRoute(adminRouter, deps);
 
-addAdminCustomerRoutes(adminRouter, {
+  addAdminCustomerRoutes(adminRouter, {
     db: deps.db,
     FieldValue,
     logger: adaptLogger(deps.log),
@@ -214,6 +216,7 @@ addAdminCustomerRoutes(adminRouter, {
     listGatewayBuilds: deps.listGatewayBuilds,
     readGatewayPodDiagnostics: deps.readGatewayPodDiagnostics,
     deleteAuthUserTolerantOfMissing: deps.deleteAuthUserTolerantOfMissing,
+    revokeConnectorGrantsForUser: deps.revokeConnectorGrantsForUser,
     dedicatedGatewayIdleDefaultMs: deps.dedicatedGatewayIdleDefaultMs,
     dedicatedGatewayIdleSweepMs: deps.dedicatedGatewayIdleSweepMs,
   });

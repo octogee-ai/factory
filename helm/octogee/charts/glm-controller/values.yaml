@@ -19,6 +19,8 @@ gatewayServiceAccount: ""
 # members even though its runtime Google project is octogee-test.
 workloadIdentityProject: ""
 
+kmsKeyName: ""
+
 # Path inside the controller image where the standalone per-instance
 # gateway chart is baked at build time (see glm-controller/Dockerfile,
 # which COPYs helm/octogee-gateway → /charts/octogee-gateway). The

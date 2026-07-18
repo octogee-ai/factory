@@ -155,13 +155,9 @@ export interface FleetRouterDeps {
     limit: number;
   }) => Promise<unknown[]>;
   readGatewayPodDiagnostics?: (gatewayId: string) => Promise<GatewayPodDiagnostics>;
-  
+
   deleteAuthUserTolerantOfMissing: (uid: string) => Promise<void>;
-  // Revoke the user's OAuth-web connector grants at each provider before their
-  // data is deleted (Google restricted-scope / RFC 7009). Best-effort inside
-  // the implementation — it must not throw or block deletion. Optional so
-  // consumers that never delete accounts need not wire it.
-  revokeConnectorGrantsForUser?: (uid: string) => Promise<void>;
+  revokeConnectorGrantsForUser: (uid: string) => Promise<void>;
   dedicatedGatewayIdleDefaultMs?: number;
   dedicatedGatewayIdleSweepMs?: number;
 }
@@ -3657,12 +3653,7 @@ router.post(
 
         const slug = resolveCustomerSlug(userData, deps.workspaceSlugsForUser);
 
-        // Relinquish provider access before any user data (the encrypted
-        // connector tokens the revoke reads) is torn down — for both the inline
-        // delete below and the queued deprovision op. Best-effort by contract.
-        if (deps.revokeConnectorGrantsForUser) {
-          await deps.revokeConnectorGrantsForUser(uid);
-        }
+        await deps.revokeConnectorGrantsForUser(uid);
 
         if (!slug) {
           await deps.deleteAuthUserTolerantOfMissing(uid);

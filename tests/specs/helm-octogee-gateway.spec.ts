@@ -480,14 +480,10 @@ const out = helmTemplate();
     expect(dep).toMatch(/name:\s*tmp\s*\n\s*emptyDir:\s*\n\s*sizeLimit:\s*1Gi/);
   });
 
-  it("keeps the shell-bearing gateway runtime writable (arbitrary agent code + builds) but explicit about it", () => {
+  it("keeps the shell-bearing gateway runtime writable", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const gateway = containerBlock(dep, "gateway");
 
-    // The agent runtime installs packages, runs builds, and writes to /tmp and
-    // countless working paths; a read-only root would break arbitrary agent
-    // code. The posture is deliberate and rendered as an explicit `false`, not
-    // a silent omission, so a reviewer sees the choice.
     expect(gateway).toMatch(/securityContext:[\s\S]*?readOnlyRootFilesystem:\s*false/);
   });
 

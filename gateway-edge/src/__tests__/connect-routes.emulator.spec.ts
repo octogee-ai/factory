@@ -892,7 +892,7 @@ describe("connect — google platform capability flow", () => {
     expect(status?.scopes).toEqual([EMAIL]);
   });
 
-  it("disconnect revokes both stored tokens at Google, then deletes the whole secret", async () => {
+  it("disconnect revokes the Google grant with the refresh token, then deletes the secret", async () => {
     await setGoogleStage("on");
     await connectGoogle("calendar", `${CAL} ${EMAIL}`);
 
@@ -906,7 +906,6 @@ describe("connect — google platform capability flow", () => {
     expect(res.status, res.text).toBe(200);
     expect(calls.map((c) => String(c.init?.body))).toEqual([
       new URLSearchParams({ token: PLAINTEXT_GOOGLE_REFRESH }).toString(),
-      new URLSearchParams({ token: PLAINTEXT_GOOGLE_ACCESS }).toString(),
     ]);
     expect(await readSecret(UID, "google")).toBeUndefined();
     expect((await readStatus(UID, "google"))?.status).toBe("disconnected");

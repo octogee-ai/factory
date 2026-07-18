@@ -4,10 +4,6 @@ import { CONNECTOR_CATALOG } from "@octogee/shared/types/connectors";
 export interface ConnectorOAuthWebDef {
   authorizeUrl: string;
   tokenUrl: string;
-  // RFC 7009 token revocation endpoint. Set for providers that support it
-  // (Google) so disconnect / account-deletion can relinquish the grant at the
-  // authority, not just locally. Omit for providers without one (Microsoft
-  // identity has no RFC 7009 endpoint) — revocation is then a documented no-op.
   revocationUrl?: string;
   clientIdEnv: string;
   clientSecretEnv: string;

@@ -1,5 +1,6 @@
 import {
   GOOGLE_CAPABILITY_SCOPES,
+  GOOGLE_OAUTH_REVOCATION_URL,
   googleAuthRequestScopes,
   googleCapabilitiesFromScopes,
   googleEscalationRequestScopes,
@@ -38,7 +39,7 @@ export const googleConnector: ConnectorDef = {
   oauth: {
     authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",
     tokenUrl: "https://oauth2.googleapis.com/token",
-    revocationUrl: "https://oauth2.googleapis.com/revoke",
+    revocationUrl: GOOGLE_OAUTH_REVOCATION_URL,
     clientIdEnv: "GOOGLE_CLIENT_ID",
     clientSecretEnv: "GOOGLE_CLIENT_SECRET",
     redirectUriEnv: "GOOGLE_OAUTH_REDIRECT_URI",

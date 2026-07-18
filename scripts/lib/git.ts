@@ -134,7 +134,7 @@ export function gitExec(cwd: string, argv: string[], sshKeyPath?: string): strin
     if (sshKeyPath) {
       env.GIT_SSH_COMMAND = `ssh -i "${sshKeyPath}" -F /home/node/.ssh/config -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`;
     }
-    return execFileSync("git", argv, {
+    return execFileSync("/usr/bin/git", argv, {
       cwd,
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],

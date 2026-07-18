@@ -168,9 +168,12 @@ import { listGatewayBuilds } from "@octogee/core/artifact-registry";
 import { reconcileImagePins } from "./reconcile-image-pins.js";
 import { workspaceSlugsForUser } from "@octogee/core/workspace-slugs";
 import { deleteAuthUserTolerantOfMissing } from "@octogee/core/firebase-auth-helpers";
+import { revokeAllConnectorGrantsForUser } from "@octogee/core/connector-revocation";
+import { CONNECTOR_OAUTH_REVOCATION_TARGETS } from "@octogee/shared/types/connectors";
 import { deleteHostingSitesForCustomer } from "@octogee/core/firebase-hosting";
 import { GoogleAuth } from "google-auth-library";
 import { startHttpServer, startMaintenanceHttpServer } from "./http-server.js";
+import { createConnectorSecretDecryptor } from "./connector-secret-decryption.js";
 import { recordReconcile } from "./metrics.js";
 import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
@@ -1615,6 +1618,7 @@ function startControllerBackgroundTasks({
     PREEMPTION_HANDOFF_SWEEP_MS,
   );
   const httpKubeOps = deps.kubeOps;
+  const decryptConnectorSecret = createConnectorSecretDecryptor();
   const stopHttp = startHttpServer({
     db,
     log,
@@ -1633,6 +1637,12 @@ function startControllerBackgroundTasks({
         }
       : {}),
     deleteAuthUserTolerantOfMissing: (uid) => deleteAuthUserTolerantOfMissing(uid, getAuth()),
+    revokeConnectorGrantsForUser: (uid) =>
+      revokeAllConnectorGrantsForUser(uid, CONNECTOR_OAUTH_REVOCATION_TARGETS, {
+        db,
+        decryptSecret: decryptConnectorSecret,
+        logger: { warn: log },
+      }),
     dedicatedGatewayIdleDefaultMs: DEDICATED_GATEWAY_IDLE_MS,
     dedicatedGatewayIdleSweepMs: DEDICATED_GATEWAY_IDLE_SWEEP_MS,
   });

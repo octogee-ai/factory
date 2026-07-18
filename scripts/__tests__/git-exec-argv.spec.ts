@@ -19,6 +19,7 @@ const { gitExec } = await import("../lib/git.js");
 describe("gitExec argv semantics (no shell)", () => {
   const originalGitConfigGlobal = process.env.GIT_CONFIG_GLOBAL;
   const originalGitConfigSystem = process.env.GIT_CONFIG_SYSTEM;
+  const originalPath = process.env.PATH;
   let repo: string;
 
   beforeEach(() => {
@@ -39,6 +40,8 @@ describe("gitExec argv semantics (no shell)", () => {
     else process.env.GIT_CONFIG_GLOBAL = originalGitConfigGlobal;
     if (originalGitConfigSystem === undefined) delete process.env.GIT_CONFIG_SYSTEM;
     else process.env.GIT_CONFIG_SYSTEM = originalGitConfigSystem;
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
   });
 
   it("passes hostile commit messages through as a single literal argument", () => {
@@ -75,5 +78,20 @@ describe("gitExec argv semantics (no shell)", () => {
 
   it("keeps the null-on-failure contract for argv commands", () => {
     expect(gitExec(repo, ["checkout", "no-such-branch"])).toBeNull();
+  });
+
+  it("uses the trusted system git binary instead of PATH lookup", () => {
+    const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), "git-exec-fake-bin-"));
+    const marker = path.join(repo, "fake-git-ran");
+    const fakeGit = path.join(fakeBin, "git");
+    fs.writeFileSync(fakeGit, `#!/bin/sh\ntouch "${marker}"\nexit 1\n`);
+    fs.chmodSync(fakeGit, 0o755);
+    process.env.PATH = `${fakeBin}:${originalPath ?? ""}`;
+
+    const result = gitExec(repo, ["rev-parse", "--is-inside-work-tree"]);
+
+    expect(result).toBe("true");
+    expect(fs.existsSync(marker)).toBe(false);
+    fs.rmSync(fakeBin, { recursive: true, force: true });
   });
 });

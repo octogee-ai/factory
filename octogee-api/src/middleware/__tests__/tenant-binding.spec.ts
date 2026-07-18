@@ -10,9 +10,6 @@ import {
 } from "../tenant-binding.js";
 import type { Reviewer } from "../../lib/token-review.js";
 
-// A syntactically well-formed projected SA JWT (three base64url segments).
-// The middleware short-circuits obviously malformed tokens before TokenReview,
-// so reviewer-integration tests must present a token that passes that shape gate.
 const WELL_FORMED_SA_TOKEN = [
   "eyJhbGciOiJSUzI1NiIsImtpZCI6InRlc3Qta2V5LWlkIn0",
   "eyJhdWQiOlsib2N0b2dlZS1hcGkiXSwiZXhwIjoxNzUyODAwMDAwLCJpc3MiOiJrOHMifQ",

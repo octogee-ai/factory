@@ -204,6 +204,7 @@ function mkAdminFleetRouteApp(opts: {
     provisionGatewayAuthSecret: vi.fn(async () => ({})),
     listGatewayBuilds: vi.fn(async () => []),
     deleteAuthUserTolerantOfMissing: vi.fn(async () => undefined),
+    revokeConnectorGrantsForUser: vi.fn(async () => undefined),
   });
   return { app, state };
 }
@@ -693,7 +694,6 @@ describe("account deletion revokes connector grants at the provider first", () =
     expect(res.body).toMatchObject({ status: "queued", slug: "acme" });
     expect(added).toHaveLength(1);
     expect(added[0]).toMatchObject({ kind: "deprovision-customer", inputUid: "u2" });
-    // Revocation happens up-front, before the teardown op is queued.
     expect(calls[0]).toBe("revoke:u2");
     expect(calls).not.toContain("delete-auth:u2");
   });

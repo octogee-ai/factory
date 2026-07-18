@@ -1,5 +1,5 @@
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createHttpServer,
   createMaintenanceHttpServer,
@@ -333,6 +333,9 @@ function buildDb(store: FakeStore) {
               else store.glmOperations[index] = { id: docId, data };
             }
           },
+          delete: async () => {
+            if (name === "users") delete store.users[docId];
+          },
           collection: (sub: string) => ({
             doc: (subId: string) => ({
               get: async () => {
@@ -412,6 +415,7 @@ function buildDeps(store: FakeStore, overrides: Partial<HttpServerDeps> = {}): H
     })),
     listGatewayBuilds: vi.fn(async () => []),
     deleteAuthUserTolerantOfMissing: vi.fn(async () => undefined),
+    revokeConnectorGrantsForUser: vi.fn(async () => undefined),
     ...overrides,
   };
 }
@@ -426,6 +430,8 @@ describe("createHttpServer — admin gateway routes", () => {
     store.users["user-uid"] = { email: "user@octogee.com" };
     store.configs["user-uid"] = { role: "operator" };
   });
+
+  afterEach(() => vi.unstubAllEnvs());
 
   it("/healthz responds without auth", async () => {
     const app = createHttpServer(buildDeps(store));
@@ -473,6 +479,33 @@ describe("createHttpServer — admin gateway routes", () => {
       .set("Origin", "https://evil.example.com");
     expect(res.status).toBe(200);
     expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("denies localhost CORS by default and admits it only for explicit local development", async () => {
+    const app = createHttpServer(buildDeps(store));
+    const denied = await request(app).get("/healthz").set("Origin", "http://localhost:4322");
+    expect(denied.headers["access-control-allow-origin"]).toBeUndefined();
+
+    vi.stubEnv("OCTOGEE_ALLOW_LOCAL_ORIGINS", "true");
+    const devApp = createHttpServer(buildDeps(store));
+    const allowed = await request(devApp).get("/healthz").set("Origin", "http://localhost:4322");
+    expect(allowed.headers["access-control-allow-origin"]).toBe("http://localhost:4322");
+  });
+
+  it("revokes connector grants on the live controller-owned account deletion route", async () => {
+    store.users["delete-me"] = { email: "delete@example.com" };
+    const order: string[] = [];
+    const app = createHttpServer(buildDeps(store, {
+      revokeConnectorGrantsForUser: vi.fn(async () => { order.push("revoke"); }),
+      deleteAuthUserTolerantOfMissing: vi.fn(async () => { order.push("delete-auth"); }),
+    }));
+
+    const res = await request(app)
+      .post("/api/admin/customer/delete-me/delete")
+      .set("Authorization", "Bearer admin-token");
+
+    expect(res.status).toBe(200);
+    expect(order).toEqual(["revoke", "delete-auth"]);
   });
 
   it("rejects unauthenticated requests with 401", async () => {

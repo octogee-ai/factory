@@ -2542,12 +2542,7 @@ export function addAdminFleetRoutes(router, deps) {
                     `subscriptionId=${stripe.subscriptionId ?? "?"} status=${stripe.subscriptionStatus ?? "?"}`);
             }
             const slug = resolveCustomerSlug(userData, deps.workspaceSlugsForUser);
-            // Relinquish provider access before any user data (the encrypted
-            // connector tokens the revoke reads) is torn down — for both the inline
-            // delete below and the queued deprovision op. Best-effort by contract.
-            if (deps.revokeConnectorGrantsForUser) {
-                await deps.revokeConnectorGrantsForUser(uid);
-            }
+            await deps.revokeConnectorGrantsForUser(uid);
             if (!slug) {
                 await deps.deleteAuthUserTolerantOfMissing(uid);
                 await userRef.delete();

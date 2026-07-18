@@ -7,6 +7,10 @@ export const GOOGLE_CAPABILITY_SCOPES = {
 };
 export const GOOGLE_IDENTITY_SCOPE = 'https://www.googleapis.com/auth/userinfo.email';
 export const GOOGLE_DRIVE_FULL_READ_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
+export const GOOGLE_OAUTH_REVOCATION_URL = 'https://oauth2.googleapis.com/revoke';
+export const CONNECTOR_OAUTH_REVOCATION_TARGETS = [
+    { connectorId: 'google', revocationUrl: GOOGLE_OAUTH_REVOCATION_URL },
+];
 export function googleAuthRequestScopes(capability) {
     return [...GOOGLE_CAPABILITY_SCOPES[capability], GOOGLE_IDENTITY_SCOPE];
 }

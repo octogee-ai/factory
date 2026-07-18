@@ -45,12 +45,6 @@ const SA_JWT_SEGMENT = /^[A-Za-z0-9_-]+$/;
 const SA_JWT_MIN_LENGTH = 40;
 const SA_JWT_MAX_LENGTH = 8192;
 
-// Structural shape gate only — NOT authentication. A syntactically valid
-// base64url JWT still passes here and reaches the Kubernetes TokenReview (on the
-// bounded internalRateLimit lane), where it is actually verified and rejected.
-// The gate's job is to drop obvious garbage cheaply and cap the crafted-token
-// case at internalRateLimit (1200/min) instead of the pre-fix unbounded flood —
-// it does not, and is not meant to, stop a well-formed forged token pre-review.
 export function isWellFormedServiceAccountJwt(token: string): boolean {
   if (token.length < SA_JWT_MIN_LENGTH || token.length > SA_JWT_MAX_LENGTH) return false;
   const segments = token.split(".");
@@ -78,11 +72,6 @@ export const globalRateLimit = rateLimit({
   },
 });
 
-// Bounded lane for token-bearing /internal traffic: tenant binding verifies
-// the token via a Kubernetes TokenReview, so the exemption from the global
-// bucket must not become an unmetered path to that call. Sized for one
-// pod's migration/boot burst (the reason internal traffic left the global
-// bucket in #2153), not for a flood.
 export const internalRateLimit = rateLimit({
   ...DEFAULT_RATE_LIMIT_OPTIONS,
   windowMs: 60 * 1000,
