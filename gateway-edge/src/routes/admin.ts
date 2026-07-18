@@ -2,6 +2,9 @@ import { Router } from "express";
 import { requireAdmin } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";
 import { db, FieldValue } from "../lib/db.js";
+import { decryptSecret } from "../lib/kms.js";
+import { listConnectors } from "../lib/connectors/index.js";
+import { revokeAllConnectorGrantsForUser } from "../lib/connector-revocation.js";
 import { liftSuppression } from "../lib/email-suppression.js";
 import { runEmailPreflight } from "../lib/email-preflight.js";
 import { getResend } from "../lib/resend.js";
@@ -50,6 +53,15 @@ addAdminFleetRoutes(router, {
     const { getAuth } = await import("firebase-admin/auth");
     await deleteAuthUserLib(uid, getAuth());
   },
+  // H-1: relinquish OAuth-web connector grants at the provider before user
+  // data is deleted (Google restricted-scope expects revoke-on-removal).
+  revokeConnectorGrantsForUser: (uid: string) =>
+    revokeAllConnectorGrantsForUser(uid, {
+      db,
+      decryptSecret,
+      logger,
+      connectors: listConnectors(),
+    }),
 });
 
 // The operator's platform model dials (platformConfig/models). Today one dial:

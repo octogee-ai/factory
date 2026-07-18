@@ -105,8 +105,16 @@ workspaceAutosaveEnabled: ""
 
 # Gateway container security defaults stay locked down. Personal build
 # gateways may override this per instance via glmGateways desired state.
+#
+# readOnlyRootFilesystem is intentionally false for THIS container: it is the
+# shell-bearing OpenClaw agent runtime that installs packages, runs builds, and
+# writes to /tmp and arbitrary working paths on behalf of user code — a
+# read-only root would break that. The no-shell gateway-edge sidecar (which
+# holds no platform credentials) DOES run read-only-root; see deployment.yaml.
+# Rendered as an explicit false so the posture is reviewable, not a silent gap.
 gatewayContainerSecurityContext:
   allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
   capabilities:
     drop:
       - ALL

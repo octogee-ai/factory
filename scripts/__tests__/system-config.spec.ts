@@ -150,8 +150,8 @@ describe("system_config restore", () => {
       }),
       "utf-8",
     );
-    vi.mocked(gitExec).mockImplementation((_cwd: string, args: string) =>
-      args === "rev-parse --verify HEAD" ? null : "ok"
+    vi.mocked(gitExec).mockImplementation((_cwd: string, argv: string[]) =>
+      argv.join(" ") === "rev-parse --verify HEAD" ? null : "ok"
     );
 
     const result = await restoreSystemConfigForSlug("acme", {
@@ -174,10 +174,10 @@ describe("system_config restore", () => {
     expect(ensureGiteaOrgForWorkspace).toHaveBeenCalledWith("acme");
     expect(ensureSystemConfigRepo).toHaveBeenCalledWith("acme");
     expect(setRepoSshCommand).toHaveBeenCalledWith(repoDir, "acme");
-    expect(gitExec).toHaveBeenCalledWith(repoDir, "add openclaw.json .octogee.json .gitignore");
+    expect(gitExec).toHaveBeenCalledWith(repoDir, ["add", "openclaw.json", ".octogee.json", ".gitignore"]);
     expect(gitExec).toHaveBeenCalledWith(
       repoDir,
-      "commit -m \"initial system_config openclaw template\"",
+      ["commit", "-m", "initial system_config openclaw template"],
     );
     const tracked = fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf-8");
     expect(tracked).toContain("${MM_URL}");
@@ -194,7 +194,8 @@ describe("system_config restore", () => {
     fs.rmSync(repoDir, { recursive: true, force: true });
     fs.mkdirSync(path.join(repoDir, ".git"), { recursive: true });
     fs.writeFileSync(templatePath, "{\"agents\":{\"list\":[]}}\n");
-    vi.mocked(gitExec).mockImplementation((_cwd: string, args: string) => {
+    vi.mocked(gitExec).mockImplementation((_cwd: string, argsArgv: string[]) => {
+      const args = argsArgv.join(" ");
       if (args === "rev-parse --verify HEAD") return null;
       return args === "push -u origin main" ? null : "ok";
     });
@@ -208,7 +209,8 @@ describe("system_config restore", () => {
 
   it("seeds a reused checkout only when both local and remote history are empty", async () => {
     fs.writeFileSync(templatePath, '{"agents":{"list":[]}}\n');
-    vi.mocked(gitExec).mockImplementation((_cwd: string, args: string) => {
+    vi.mocked(gitExec).mockImplementation((_cwd: string, argsArgv: string[]) => {
+      const args = argsArgv.join(" ");
       if (args === "fetch origin main") return null;
       if (args === "ls-remote origin refs/heads/main") return "";
       if (args === "rev-parse --verify HEAD") return null;
@@ -226,11 +228,12 @@ describe("system_config restore", () => {
     fs.writeFileSync(templatePath, "{\"agents\":{\"list\":[]}}\n");
     let initialCommitted = false;
     let pushAttempts = 0;
-    vi.mocked(gitExec).mockImplementation((_cwd: string, args: string) => {
+    vi.mocked(gitExec).mockImplementation((_cwd: string, argsArgv: string[]) => {
+      const args = argsArgv.join(" ");
       if (args === "fetch origin main") return initialCommitted ? null : "ok";
       if (args === "rev-parse --verify HEAD") return initialCommitted ? "a".repeat(40) : null;
       if (args === "merge --ff-only origin/main") return "ok";
-      if (args === 'commit -m "initial system_config openclaw template"') {
+      if (args === "commit -m initial system_config openclaw template") {
         initialCommitted = true;
         return "ok";
       }
@@ -270,7 +273,8 @@ describe("system_config restore", () => {
       lastMigration: "initial",
     });
     fs.writeFileSync(path.join(repoDir, ".gitignore"), "*.bak\n*.tmp\n");
-    vi.mocked(gitExec).mockImplementation((_cwd: string, args: string) => {
+    vi.mocked(gitExec).mockImplementation((_cwd: string, argsArgv: string[]) => {
+      const args = argsArgv.join(" ");
       if (args === "fetch origin main") return null;
       if (args === "ls-remote origin refs/heads/main") return "";
       if (args === "rev-parse HEAD") return "a".repeat(40);
@@ -286,7 +290,7 @@ describe("system_config restore", () => {
     })).resolves.toEqual({ skipped: "checkout-unavailable", seeded: false, restored: false });
     expect(gitExec).not.toHaveBeenCalledWith(
       repoDir,
-      "push -u origin main",
+      ["push", "-u", "origin", "main"],
       "/tmp/customer-keys/acme/id_ed25519",
     );
   });
@@ -304,7 +308,8 @@ describe("system_config restore", () => {
         acceptedCommit: "c".repeat(40),
       };
     });
-    vi.mocked(gitExec).mockImplementation((_cwd: string, args: string) => {
+    vi.mocked(gitExec).mockImplementation((_cwd: string, argsArgv: string[]) => {
+      const args = argsArgv.join(" ");
       if (args === "rev-parse --verify HEAD") return "a".repeat(40);
       return "ok";
     });
@@ -320,7 +325,7 @@ describe("system_config restore", () => {
       .toEqual({ recovered: true });
     expect(gitExec).not.toHaveBeenCalledWith(
       repoDir,
-      'commit -m "initial system_config openclaw template"',
+      ["commit", "-m", "initial system_config openclaw template"],
     );
   });
 
@@ -334,8 +339,8 @@ describe("system_config restore", () => {
       log: () => {},
     });
 
-    expect(gitExec).toHaveBeenCalledWith(repoDir, "fetch origin main", "/tmp/customer-keys/acme/id_ed25519");
-    expect(gitExec).toHaveBeenCalledWith(repoDir, "merge --ff-only origin/main", "/tmp/customer-keys/acme/id_ed25519");
+    expect(gitExec).toHaveBeenCalledWith(repoDir, ["fetch", "origin", "main"], "/tmp/customer-keys/acme/id_ed25519");
+    expect(gitExec).toHaveBeenCalledWith(repoDir, ["merge", "--ff-only", "origin/main"], "/tmp/customer-keys/acme/id_ed25519");
   });
 
   it("one-time cleanup removes only the historical Mac lane and preserves customer identities", () => {
@@ -755,7 +760,7 @@ describe("system_config restore", () => {
       restored: true,
       configPath: path.join(repoDir, "openclaw.json"),
     });
-    expect(gitExec).not.toHaveBeenCalledWith(repoDir, "add openclaw.json .octogee.json .gitignore");
+    expect(gitExec).not.toHaveBeenCalledWith(repoDir, ["add", "openclaw.json", ".octogee.json", ".gitignore"]);
     const tracked = fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf-8");
     expect(tracked).toContain("${MM_URL}");
     expect(tracked).not.toContain("http://mm2");
@@ -887,7 +892,8 @@ describe("system_config restore", () => {
     fs.writeFileSync(path.join(repoDir, ".octogee.json"), "{ invalid");
     fs.writeFileSync(path.join(repoDir, ".gitignore"), "*.bak\n*.tmp\n");
     const head = "a".repeat(40);
-    const git = vi.fn((_cwd: string, args: string) => {
+    const git = vi.fn((_cwd: string, argsArgv: string[]) => {
+      const args = argsArgv.join(" ");
       if (args === "rev-parse HEAD") return head;
       if (args === "ls-remote origin refs/heads/main") return `${head}\trefs/heads/main`;
       if (args === "status --porcelain -- openclaw.json .octogee.json .gitignore") {
@@ -954,7 +960,8 @@ describe("system_config restore", () => {
       log: (msg) => logs.push(msg),
       setRepoSshCommand: vi.fn(),
       customerSshKeyPath: () => "/tmp/key",
-      gitExec: vi.fn((cwd: string, args: string, sshKeyPath?: string) => {
+      gitExec: vi.fn((cwd: string, argsArgv: string[], sshKeyPath?: string) => {
+        const args = argsArgv.join(" ");
         calls.push({ cwd, args, sshKeyPath });
         if (args === "status --porcelain -- openclaw.json .octogee.json .gitignore") return " M openclaw.json";
         return "ok";
@@ -975,7 +982,8 @@ describe("system_config restore", () => {
 
   it("preStop sync skips a clean system_config checkout", () => {
     writeJson(path.join(repoDir, "openclaw.json"), { agents: { list: [] } });
-    const git = vi.fn((cwd: string, args: string) => {
+    const git = vi.fn((cwd: string, argsArgv: string[]) => {
+      const args = argsArgv.join(" ");
       if (args === "status --porcelain -- openclaw.json .octogee.json .gitignore") return "";
       return "unexpected";
     });
@@ -1010,7 +1018,8 @@ describe("system_config restore", () => {
 
   it("watcher sync retries a previously committed change even when the worktree is clean", () => {
     writeJson(path.join(repoDir, "openclaw.json"), { agents: { list: [] } });
-    const git = vi.fn((_cwd: string, args: string) => {
+    const git = vi.fn((_cwd: string, argsArgv: string[]) => {
+      const args = argsArgv.join(" ");
       if (args === "status --porcelain -- openclaw.json .octogee.json .gitignore") return "";
       if (args === "push origin main") return "ok";
       return null;
@@ -1025,12 +1034,13 @@ describe("system_config restore", () => {
     });
 
     expect(result).toMatchObject({ committed: false, pushed: true, pending: false });
-    expect(git).toHaveBeenCalledWith(repoDir, "push origin main", "/tmp/key");
+    expect(git).toHaveBeenCalledWith(repoDir, ["push", "origin", "main"], "/tmp/key");
   });
 
   it("watcher sync marks a local commit pending when push fails", () => {
     writeJson(path.join(repoDir, "openclaw.json"), { agents: { list: [] } });
-    const git = vi.fn((_cwd: string, args: string) => {
+    const git = vi.fn((_cwd: string, argsArgv: string[]) => {
+      const args = argsArgv.join(" ");
       if (args === "status --porcelain -- openclaw.json .octogee.json .gitignore") return " M openclaw.json";
       if (args === "push origin main") return null;
       return "ok";
@@ -1051,7 +1061,8 @@ describe("system_config restore", () => {
     const configPath = path.join(repoDir, "openclaw.json");
     writeJson(configPath, { version: 1 });
     const stagedFingerprint = systemConfigFingerprint(configPath);
-    const git = vi.fn((_cwd: string, args: string) => {
+    const git = vi.fn((_cwd: string, argsArgv: string[]) => {
+      const args = argsArgv.join(" ");
       if (args === "status --porcelain -- openclaw.json .octogee.json .gitignore") return " M openclaw.json";
       if (args.startsWith("commit -m ")) {
         writeJson(configPath, { version: 2 });
@@ -1074,8 +1085,8 @@ describe("system_config restore", () => {
   it("backs off and retries a transient staging failure instead of spinning", () => {
     const configPath = path.join(repoDir, "openclaw.json");
     writeJson(configPath, { version: 1 });
-    const git = vi.fn((_cwd: string, args: string) =>
-      args === "status --porcelain -- openclaw.json .octogee.json .gitignore" ? " M openclaw.json" : null
+    const git = vi.fn((_cwd: string, argv: string[]) =>
+      argv.join(" ") === "status --porcelain -- openclaw.json .octogee.json .gitignore" ? " M openclaw.json" : null
     );
 
     const result = syncSystemConfigForSlug("acme", {
@@ -1119,7 +1130,8 @@ describe("system_config restore", () => {
     const configPath = path.join(repoDir, "openclaw.json");
     writeJson(configPath, { version: 1 });
     fs.writeFileSync(path.join(openclawDir, "system_config.sync.lock"), `${process.pid}\n`);
-    const git = vi.fn((_cwd: string, args: string) => {
+    const git = vi.fn((_cwd: string, argsArgv: string[]) => {
+      const args = argsArgv.join(" ");
       if (args === "status --porcelain -- openclaw.json .octogee.json .gitignore") return " M openclaw.json";
       if (args === "rev-parse HEAD") return "a".repeat(40);
       return "ok";
@@ -1147,8 +1159,8 @@ describe("system_config restore", () => {
       directoryMode: 0o700,
       configMode: 0o600,
     }));
-    const git = vi.fn((_cwd: string, args: string) =>
-      args === "status --porcelain -- openclaw.json .octogee.json .gitignore" ? "" : "ok"
+    const git = vi.fn((_cwd: string, argv: string[]) =>
+      argv.join(" ") === "status --porcelain -- openclaw.json .octogee.json .gitignore" ? "" : "ok"
     );
 
     const result = syncSystemConfigForSlug("acme", {
@@ -1168,8 +1180,8 @@ describe("system_config restore", () => {
     const lockPath = path.join(openclawDir, "system_config.sync.lock");
     fs.writeFileSync(lockPath, "");
     fs.utimesSync(lockPath, new Date(0), new Date(0));
-    const git = vi.fn((_cwd: string, args: string) =>
-      args === "status --porcelain -- openclaw.json .octogee.json .gitignore" ? "" : "ok"
+    const git = vi.fn((_cwd: string, argv: string[]) =>
+      argv.join(" ") === "status --porcelain -- openclaw.json .octogee.json .gitignore" ? "" : "ok"
     );
 
     const result = syncSystemConfigForSlug("acme", {
@@ -1186,7 +1198,8 @@ describe("system_config restore", () => {
 
   it("rejects and restores a config that fails validation before staging", () => {
     fs.writeFileSync(path.join(repoDir, "openclaw.json"), "{ invalid", "utf-8");
-    const git = vi.fn((_cwd: string, args: string) => {
+    const git = vi.fn((_cwd: string, argsArgv: string[]) => {
+      const args = argsArgv.join(" ");
       if (args === "status --porcelain -- openclaw.json .octogee.json .gitignore") return " M openclaw.json";
       if (args === "show HEAD:openclaw.json") return "{\"accepted\":true}\n";
       return "unexpected";
@@ -1221,7 +1234,7 @@ describe("system_config restore", () => {
     );
     expect(fs.readFileSync(rejected, "utf-8")).toBe("{ invalid");
     expect(fs.statSync(rejected).mode & 0o777).toBe(0o600);
-    expect(git).not.toHaveBeenCalledWith(repoDir, "add openclaw.json .octogee.json .gitignore", "/tmp/key");
+    expect(git).not.toHaveBeenCalledWith(repoDir, ["add", "openclaw.json", ".octogee.json", ".gitignore"], "/tmp/key");
   });
 
   it("restores rejected config from Git bytes without newline-only follow-up churn", () => {
@@ -1243,7 +1256,8 @@ describe("system_config restore", () => {
       encoding: "utf8",
     }).trim();
     fs.writeFileSync(configPath, "{ invalid");
-    const git = vi.fn((_cwd: string, args: string) => {
+    const git = vi.fn((_cwd: string, argsArgv: string[]) => {
+      const args = argsArgv.join(" ");
       if (args === "status --porcelain -- openclaw.json .octogee.json .gitignore") {
         return execFileSync("git", ["-C", repoDir, "status", "--porcelain", "--", "openclaw.json"], {
           encoding: "utf8",
@@ -1284,7 +1298,7 @@ describe("system_config restore", () => {
       gitExec: git,
     });
     expect(followUp).toMatchObject({ committed: false, pushed: true });
-    expect(git.mock.calls.map(([, args]) => args).filter((args) =>
+    expect(git.mock.calls.map(([, argv]) => argv.join(" ")).filter((args) =>
       args.startsWith("add ") || args.startsWith("commit ")
     )).toEqual([]);
   });
@@ -1295,7 +1309,8 @@ describe("system_config restore", () => {
     const newer = '{"candidate":"newer-valid"}\n';
     fs.writeFileSync(configPath, candidate, "utf-8");
     const candidateFingerprint = systemConfigFingerprint(configPath);
-    const git = vi.fn((_cwd: string, args: string) => {
+    const git = vi.fn((_cwd: string, argsArgv: string[]) => {
+      const args = argsArgv.join(" ");
       if (args === "status --porcelain -- openclaw.json .octogee.json .gitignore") return " M openclaw.json";
       if (args === "show HEAD:openclaw.json") return '{"accepted":true}\n';
       return "unexpected";
@@ -1329,6 +1344,6 @@ describe("system_config restore", () => {
       "openclaw.2026-07-14T18-00-00-000Z.json",
     );
     expect(fs.readFileSync(rejected, "utf-8")).toBe(candidate);
-    expect(git).not.toHaveBeenCalledWith(repoDir, "show HEAD:openclaw.json", "/tmp/key");
+    expect(git).not.toHaveBeenCalledWith(repoDir, ["show", "HEAD:openclaw.json"], "/tmp/key");
   });
 });

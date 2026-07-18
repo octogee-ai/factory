@@ -27,6 +27,7 @@ import {
 import { isAllowedWsOrigin, warnIfWsOriginsMisconfigured } from "./openclaw/ws-origin.js";
 import { applyGatewayPrefixStripInPlace, stripGatewayPrefix } from "./gateway-prefix.js";
 import { resolveBuilderShellInternalAuthSecret } from "../lib/builder-shell-internal-auth.js";
+import { isAllowedLocalhostOrigin } from "../lib/dev-origins.js";
 import {
   guardUpgradeRequest,
   mmRosterVerdictFor,
@@ -527,7 +528,7 @@ const ALLOWED_ORIGINS = new Set([
 ]);
 
 function isAllowedOrigin(origin: string): boolean {
-  return ALLOWED_ORIGINS.has(origin) || /^http:\/\/localhost:\d+$/.test(origin);
+  return ALLOWED_ORIGINS.has(origin) || isAllowedLocalhostOrigin(origin);
 }
 
 export function setCors(req: http.IncomingMessage, res: http.ServerResponse): void {

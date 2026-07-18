@@ -5,7 +5,11 @@ import { Registry, collectDefaultMetrics, Counter, Histogram } from "prom-client
 import { corsMiddleware } from "../../gateway-edge/src/middleware/cors.js";
 import { requestLogger, logger } from "../../gateway-edge/src/middleware/logging.js";
 import { errorHandler } from "../../gateway-edge/src/middleware/errors.js";
-import { helmetMiddleware, globalRateLimit } from "../../gateway-edge/src/middleware/security.js";
+import {
+  helmetMiddleware,
+  globalRateLimit,
+  internalRateLimit,
+} from "../../gateway-edge/src/middleware/security.js";
 
 import { mountClusterRoutes } from "../../gateway-edge/src/routes/mount-cluster-routes.js";
 import internalBillingRoutes from "../../gateway-edge/src/routes/internal/billing.js";
@@ -175,6 +179,7 @@ export function createApp(opts: CreateAppOptions = {}) {
   app.use(helmetMiddleware);
   app.use(corsMiddleware);
   app.use(globalRateLimit);
+  app.use(internalRateLimit);
 
   app.use((req, res, next) => {
     if (req.path === "/metrics") return next();

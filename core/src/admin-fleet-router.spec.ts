@@ -615,3 +615,94 @@ describe("onboarding placement (post-cohorts)", () => {
     });
   });
 });
+
+describe("account deletion revokes connector grants at the provider first", () => {
+  function makeDeleteApp(users: Record<string, Record<string, unknown>>) {
+    const calls: string[] = [];
+    const remaining = { ...users };
+    const added: Record<string, unknown>[] = [];
+    const db = {
+      collection: (name: string) => {
+        if (name === "users") {
+          return {
+            doc: (id: string) => ({
+              get: async () => ({
+                id,
+                exists: id in remaining,
+                data: () => remaining[id],
+              }),
+              delete: async () => {
+                calls.push(`delete-doc:${id}`);
+                delete remaining[id];
+              },
+            }),
+          };
+        }
+        if (name === GLM_OPERATIONS_COLLECTION) {
+          const chain = {
+            where: () => chain,
+            get: async () => ({ docs: [] as unknown[] }),
+            add: async (doc: Record<string, unknown>) => {
+              added.push(doc);
+              return { id: "op-1" };
+            },
+          };
+          return chain;
+        }
+        return { doc: () => ({ get: async () => ({ exists: false, data: () => undefined }) }) };
+      },
+    } as unknown as Firestore;
+
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      (req as unknown as { uid?: string }).uid = "admin-1";
+      next();
+    });
+    addAdminFleetRoutes(app, {
+      db,
+      logger: { info: vi.fn(), warn: vi.fn() },
+      workspaceSlugsForUser: (data) => (data.username ? [String(data.username)] : []),
+      provisionGatewayAuthSecret: vi.fn(async () => ({})),
+      listGatewayBuilds: vi.fn(async () => []),
+      deleteAuthUserTolerantOfMissing: vi.fn(async (uid: string) => {
+        calls.push(`delete-auth:${uid}`);
+      }),
+      revokeConnectorGrantsForUser: vi.fn(async (uid: string) => {
+        calls.push(`revoke:${uid}`);
+      }),
+    });
+    return { app, calls, added, remaining };
+  }
+
+  it("revokes before deleting for the inline lite-delete path (no workspace slug)", async () => {
+    const { app, calls } = makeDeleteApp({ u1: { email: "a@b.co" } });
+
+    await request(app).post("/customer/u1/delete").expect(200);
+
+    expect(calls).toEqual(["revoke:u1", "delete-auth:u1", "delete-doc:u1"]);
+  });
+
+  it("revokes before queuing the deprovision operation (customer with a workspace slug)", async () => {
+    const { app, calls, added } = makeDeleteApp({
+      u2: { username: "acme", email: "c@d.co" },
+    });
+
+    const res = await request(app).post("/customer/u2/delete").expect(202);
+
+    expect(res.body).toMatchObject({ status: "queued", slug: "acme" });
+    expect(added).toHaveLength(1);
+    expect(added[0]).toMatchObject({ kind: "deprovision-customer", inputUid: "u2" });
+    // Revocation happens up-front, before the teardown op is queued.
+    expect(calls[0]).toBe("revoke:u2");
+    expect(calls).not.toContain("delete-auth:u2");
+  });
+
+  it("does not revoke or delete when the user does not exist", async () => {
+    const { app, calls } = makeDeleteApp({});
+
+    await request(app).post("/customer/ghost/delete").expect(404);
+
+    expect(calls).toEqual([]);
+  });
+});

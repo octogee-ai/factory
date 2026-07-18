@@ -42,9 +42,11 @@ describe('gateway-edge middleware stack', () => {
 
   afterEach(() => {
     delete process.env.INTERNAL_SERVICE_KEY;
+    delete process.env.OCTOGEE_ALLOW_LOCAL_ORIGINS;
   });
 
-  it('sets CORS headers for allowed localhost origin', async () => {
+  it('sets CORS headers for a localhost origin when local origins are enabled', async () => {
+    process.env.OCTOGEE_ALLOW_LOCAL_ORIGINS = 'true';
     const app = createSidecarApp();
     const res = await request(app)
       .get('/health')
@@ -53,6 +55,17 @@ describe('gateway-edge middleware stack', () => {
     expect(res.status).toBe(200);
     expect(res.headers['access-control-allow-origin']).toBe('http://localhost:4321');
     expect(res.headers['access-control-allow-credentials']).toBe('true');
+  });
+
+  it('withholds CORS allow-origin for localhost in production builds (flag unset)', async () => {
+    delete process.env.OCTOGEE_ALLOW_LOCAL_ORIGINS;
+    const app = createSidecarApp();
+    const res = await request(app)
+      .get('/health')
+      .set('Origin', 'http://localhost:4321');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['access-control-allow-origin']).toBeUndefined();
   });
 
   it('does not set allow-origin header for disallowed origin', async () => {

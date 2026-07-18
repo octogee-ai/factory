@@ -63,6 +63,10 @@ vi.mock("../lib/db", () => {
           }
           return { exists: false, data: () => undefined };
         },
+        // Subcollections (e.g. users/{uid}/secrets/{connector}) resolve through
+        // the same factory; connector-grant revocation reads secrets and finds
+        // none in these fixtures, so it no-ops.
+        collection: (sub: string) => collection(sub),
         delete: async () => {
           fsCalls.push({ collection: name, op: "doc.delete", docId });
           if (name === "users") delete usersDocs[docId];

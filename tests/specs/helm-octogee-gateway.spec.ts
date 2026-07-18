@@ -471,6 +471,26 @@ const out = helmTemplate();
     expect(selectorBlock(svc)).toMatch(/gateway-instance:\s*default/);
   });
 
+  it("locks the no-shell gateway-edge sidecar to a read-only root filesystem with an explicit writable /tmp", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const edge = containerBlock(dep, "gateway-edge");
+
+    expect(edge).toMatch(/securityContext:[\s\S]*?readOnlyRootFilesystem:\s*true/);
+    expect(edge).toMatch(/name:\s*tmp\s*\n\s*mountPath:\s*\/tmp/);
+    expect(dep).toMatch(/name:\s*tmp\s*\n\s*emptyDir:\s*\n\s*sizeLimit:\s*1Gi/);
+  });
+
+  it("keeps the shell-bearing gateway runtime writable (arbitrary agent code + builds) but explicit about it", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const gateway = containerBlock(dep, "gateway");
+
+    // The agent runtime installs packages, runs builds, and writes to /tmp and
+    // countless working paths; a read-only root would break arbitrary agent
+    // code. The posture is deliberate and rendered as an explicit `false`, not
+    // a silent omission, so a reviewer sees the choice.
+    expect(gateway).toMatch(/securityContext:[\s\S]*?readOnlyRootFilesystem:\s*false/);
+  });
+
   it("renders the gateway-edge-<gatewayId> alias Service", () => {
     const out = helmTemplate();
     const svc = findDoc(out, "Service", "gateway-edge-default") ?? "";

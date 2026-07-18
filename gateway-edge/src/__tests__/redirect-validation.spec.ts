@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect } from 'vitest';
 import { buildOAuthRedirect, sanitizeReturnUrl } from '../lib/redirect-validation.js';
 
 const BASE = 'https://app.octogee.com';
@@ -46,5 +46,32 @@ describe('sanitizeReturnUrl — existing contract pins', () => {
   it('rejects backslash-prefixed protocol-relative bypasses', () => {
     expect(sanitizeReturnUrl('/\\evil.com')).toBe('/dashboard');
     expect(sanitizeReturnUrl('/\\\\evil.com')).toBe('/dashboard');
+  });
+});
+
+describe('sanitizeReturnUrl — localhost is gated out of production builds', () => {
+  const ORIGINAL_LOCAL = process.env.OCTOGEE_ALLOW_LOCAL_ORIGINS;
+  afterEach(() => {
+    if (ORIGINAL_LOCAL === undefined) delete process.env.OCTOGEE_ALLOW_LOCAL_ORIGINS;
+    else process.env.OCTOGEE_ALLOW_LOCAL_ORIGINS = ORIGINAL_LOCAL;
+  });
+
+  it('rejects an absolute localhost returnUrl when the flag is unset (production)', () => {
+    delete process.env.OCTOGEE_ALLOW_LOCAL_ORIGINS;
+    expect(sanitizeReturnUrl('http://localhost:4322/@me/account')).toBe('/dashboard');
+  });
+
+  it('accepts an absolute localhost returnUrl only when OCTOGEE_ALLOW_LOCAL_ORIGINS=true', () => {
+    process.env.OCTOGEE_ALLOW_LOCAL_ORIGINS = 'true';
+    expect(sanitizeReturnUrl('http://localhost:4322/@me/account')).toBe(
+      'http://localhost:4322/@me/account',
+    );
+  });
+
+  it('still accepts the public app hosts regardless of the flag', () => {
+    delete process.env.OCTOGEE_ALLOW_LOCAL_ORIGINS;
+    expect(sanitizeReturnUrl('https://octogee.com/dashboard')).toBe(
+      'https://octogee.com/dashboard',
+    );
   });
 });

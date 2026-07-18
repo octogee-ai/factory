@@ -46,7 +46,8 @@ describe("system config sync hardening", () => {
     });
     const accepted = fixture().repoDir;
     const acceptedBytes = fs.readFileSync(path.join(accepted, "openclaw.json"), "utf8");
-    const gitExec = vi.fn((_cwd: string, command: string) => {
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
       if (command.startsWith("status --porcelain")) return " M openclaw.json";
       if (command === "rev-parse HEAD") return "a".repeat(40);
       if (command.startsWith("ls-remote")) return `${"a".repeat(40)}\trefs/heads/main`;
@@ -101,7 +102,8 @@ describe("system config sync hardening", () => {
       openclawDir: h.openclawDir,
       env,
       durablePolicy: true,
-      gitExec: vi.fn((_cwd: string, command: string) => {
+      gitExec: vi.fn((_cwd: string, commandArgv: string[]) => {
+        const command = commandArgv.join(" ");
         if (command.startsWith("status --porcelain")) return " M openclaw.json";
         if (command === "rev-parse HEAD") return "a".repeat(40);
         if (command.startsWith("ls-remote")) return `${"a".repeat(40)}\trefs/heads/main`;
@@ -146,7 +148,8 @@ describe("system config sync hardening", () => {
     fs.writeFileSync(path.join(h.repoDir, ".octogee.json"), '{"schemaVersion":1,"dirty":true}\n');
     fs.writeFileSync(path.join(h.repoDir, ".gitignore"), "*.tmp\n");
     const head = "a".repeat(40);
-    const gitExec = vi.fn((_cwd: string, command: string) => {
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
       if (command === "rev-parse HEAD") return head;
       if (command.startsWith("ls-remote")) return `${head}\trefs/heads/main`;
       if (command.startsWith("status --porcelain")) {
@@ -178,7 +181,7 @@ describe("system config sync hardening", () => {
       lastErrorCode: "openclaw-json-missing",
       rejectedCount: 1,
     });
-    expect(gitExec).not.toHaveBeenCalledWith(h.repoDir, expect.stringMatching(/^add /), "/tmp/key");
+    expect(gitExec.mock.calls.some(([cwd, argv, key]) => cwd === h.repoDir && argv[0] === "add" && key === "/tmp/key")).toBe(false);
   });
 
   it("preserves a recreated config that lands while deleted durable files are loading", () => {
@@ -203,7 +206,8 @@ describe("system config sync hardening", () => {
       openclawDir: h.openclawDir,
       env,
       durablePolicy: true,
-      gitExec: vi.fn((_cwd: string, command: string) => {
+      gitExec: vi.fn((_cwd: string, commandArgv: string[]) => {
+        const command = commandArgv.join(" ");
         if (command === "rev-parse HEAD") return head;
         if (command.startsWith("ls-remote")) return `${head}\trefs/heads/main`;
         if (command.startsWith("status --porcelain")) return " D openclaw.json";
@@ -235,7 +239,8 @@ describe("system config sync hardening", () => {
     };
     fs.rmSync(path.join(h.repoDir, "openclaw.json"));
     const head = "a".repeat(40);
-    const gitExec = vi.fn((_cwd: string, command: string) => {
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
       if (command === "rev-parse HEAD") return head;
       if (command.startsWith("ls-remote")) return null;
       return "";
@@ -262,7 +267,8 @@ describe("system config sync hardening", () => {
     const h = fixture();
     let head = "a".repeat(40);
     const calls: string[] = [];
-    const gitExec = vi.fn((_cwd: string, command: string) => {
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
       calls.push(command);
       if (command.startsWith("status --porcelain")) return " M openclaw.json";
       if (command === "rev-parse HEAD") return head;
@@ -301,7 +307,8 @@ describe("system config sync hardening", () => {
   it("returns the validated local head when its durable push remains pending", () => {
     const h = fixture();
     let head = "a".repeat(40);
-    const gitExec = vi.fn((_cwd: string, command: string) => {
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
       if (command === "rev-parse HEAD") return head;
       if (command.startsWith("ls-remote")) return `${"a".repeat(40)}\trefs/heads/main`;
       if (command.startsWith("status --porcelain")) return " M openclaw.json";
@@ -334,7 +341,8 @@ describe("system config sync hardening", () => {
 
   it("keeps retrying when a successful push cannot prove its accepted head", () => {
     const h = fixture();
-    const gitExec = vi.fn((_cwd: string, command: string) => {
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
       if (command === "rev-parse HEAD") return null;
       if (command.startsWith("ls-remote")) return `${"a".repeat(40)}\trefs/heads/main`;
       if (command.startsWith("status --porcelain")) return "";
@@ -366,7 +374,8 @@ describe("system config sync hardening", () => {
     const h = fixture();
     const commands: string[] = [];
     let pushes = 0;
-    const gitExec = vi.fn((_cwd: string, command: string) => {
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
       commands.push(command);
       if (command.startsWith("status --porcelain")) return "";
       if (command === "rev-parse HEAD") return "b".repeat(40);
@@ -399,7 +408,8 @@ describe("system config sync hardening", () => {
   it("aborts a conflicted rebase, leaves the checkout intact, and reports push-failed pending", () => {
     const h = fixture();
     const commands: string[] = [];
-    const gitExec = vi.fn((_cwd: string, command: string) => {
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
       commands.push(command);
       if (command.startsWith("status --porcelain")) return "";
       if (command === "rev-parse HEAD") return "a".repeat(40);
@@ -431,7 +441,8 @@ describe("system config sync hardening", () => {
   it("audits remote head, local head, index, worktree, and active hash", () => {
     const h = fixture();
     const head = "a".repeat(40);
-    const gitExec = vi.fn((_cwd: string, command: string) => {
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
       if (command === "rev-parse HEAD") return head;
       if (command === "rev-parse HEAD^{tree}") return "tree-head";
       if (command === "write-tree") return "tree-index";

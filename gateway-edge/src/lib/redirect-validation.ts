@@ -1,3 +1,5 @@
+import { isAllowedLocalhostHostname } from "./dev-origins.js";
+
 const ALLOWED_HOSTS = new Set([
   "octogee.com",
   "www.octogee.com",
@@ -5,7 +7,6 @@ const ALLOWED_HOSTS = new Set([
   "octogee-test.web.app",
   "octogee.firebaseapp.com",
   "octogee-test.firebaseapp.com",
-  "localhost",
 ]);
 
 export function sanitizeReturnUrl(
@@ -26,7 +27,7 @@ export function sanitizeReturnUrl(
     const parsed = new URL(trimmed);
     if (
       (parsed.protocol === "http:" || parsed.protocol === "https:") &&
-      ALLOWED_HOSTS.has(parsed.hostname)
+      (ALLOWED_HOSTS.has(parsed.hostname) || isAllowedLocalhostHostname(parsed.hostname))
     ) {
       return trimmed;
     }

@@ -105,7 +105,8 @@ describe("system config accepted-head recovery", () => {
     let head = "bad111";
     const newestValidAncestor = "b".repeat(40);
     const olderValidAncestor = "c".repeat(40);
-    const gitExec = vi.fn((_cwd: string, command: string) => {
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
       commands.push(command);
       if (command === "rev-parse HEAD") return head;
       if (command === "rev-list HEAD") return `bad111\n${newestValidAncestor}\n${olderValidAncestor}`;
@@ -157,7 +158,8 @@ describe("system config accepted-head recovery", () => {
 
   it("keeps the rejected head available for repair when no valid ancestor exists", () => {
     const h = fixture("not-json\n");
-    const gitExec = vi.fn((_cwd: string, command: string) => {
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
       if (command === "rev-parse HEAD") return "bad111";
       if (command === "rev-list HEAD") return "bad111\nbad000";
       if (command === "show bad000:openclaw.json") return '{"gateway":{"port":1}}\n';
@@ -174,12 +176,13 @@ describe("system config accepted-head recovery", () => {
       },
     })).toEqual({ outcome: "unavailable", rejectedCommit: "bad111" });
     expect(fs.readFileSync(h.configPath, "utf8")).toBe("not-json\n");
-    expect(gitExec).not.toHaveBeenCalledWith(h.repoDir, expect.stringMatching(/^commit /), expect.anything());
+    expect(gitExec.mock.calls.some(([cwd, argv]) => cwd === h.repoDir && argv[0] === "commit")).toBe(false);
   });
 
   it("ignores non-SHA recovery history entries before building a git show command", () => {
     const h = fixture("not-json\n");
-    const gitExec = vi.fn((_cwd: string, command: string) => {
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
       if (command === "rev-parse HEAD") return "a".repeat(40);
       if (command === "rev-list HEAD") return `${"a".repeat(40)}\n--help`;
       return null;
@@ -194,12 +197,12 @@ describe("system config accepted-head recovery", () => {
         throw new Error("invalid");
       }),
     })).toMatchObject({ outcome: "unavailable" });
-    expect(gitExec).not.toHaveBeenCalledWith(h.repoDir, "show --help:openclaw.json", expect.anything());
+    expect(gitExec.mock.calls.some(([cwd, argv]) => cwd === h.repoDir && argv.join(" ") === "show --help:openclaw.json")).toBe(false);
   });
 
   it("records the current head when it already passes policy and validation", () => {
     const h = fixture(validConfig({ harmless: "value" }));
-    const gitExec = vi.fn((_cwd: string, command: string) => command === "rev-parse HEAD" ? "good222" : null);
+    const gitExec = vi.fn((_cwd: string, argv: string[]) => argv.join(" ") === "rev-parse HEAD" ? "good222" : null);
 
     expect(recoverSystemConfigHead({
       ...h,
@@ -215,7 +218,8 @@ describe("system config accepted-head recovery", () => {
     const head = "a".repeat(40);
     const acceptedConfig = validConfig({ acceptedHead: true });
     const commands: string[] = [];
-    const gitExec = vi.fn((_cwd: string, command: string) => {
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
       commands.push(command);
       if (command === "rev-parse HEAD") return head;
       if (command === `show ${head}:openclaw.json`) return acceptedConfig;
@@ -246,7 +250,8 @@ describe("system config accepted-head recovery", () => {
     const head = "d".repeat(40);
     const acceptedConfig = validConfig({ acceptedHead: true });
     const commands: string[] = [];
-    const gitExec = vi.fn((_cwd: string, command: string) => {
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
       commands.push(command);
       if (command === "rev-parse HEAD") return head;
       if (command === `show ${head}:openclaw.json`) return acceptedConfig;
@@ -437,7 +442,8 @@ describe("system config accepted-head recovery", () => {
     const ancestor = "b".repeat(40);
     const h = fixture('{"gateway":{"port":9000},"customerSetting":"latest"}\n');
     let head = latest;
-    const gitExec = vi.fn((_cwd: string, command: string) => {
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
       if (command === "rev-parse HEAD") return head;
       if (command === "rev-list HEAD") return `${latest}\n${ancestor}`;
       if (command === `show ${latest}:openclaw.json`) {
@@ -473,8 +479,8 @@ describe("system config accepted-head recovery", () => {
       gateway: { port: 18789, mode: "local", bind: "lan" },
       customerSetting: "latest",
     });
-    expect(gitExec.mock.calls.filter(([, command]) => command.startsWith("commit "))).toHaveLength(1);
-    expect(gitExec.mock.calls.filter(([, command]) => command === "push origin main")).toHaveLength(1);
+    expect(gitExec.mock.calls.filter(([, argv]) => argv[0] === "commit")).toHaveLength(1);
+    expect(gitExec.mock.calls.filter(([, argv]) => argv.join(" ") === "push origin main")).toHaveLength(1);
   });
 
   it("recovers a committed openclaw.json deletion from the newest complete ancestor", () => {
@@ -483,7 +489,8 @@ describe("system config accepted-head recovery", () => {
     const head = "a".repeat(40);
     const ancestor = "b".repeat(40);
     let recoveredHead = head;
-    const gitExec = vi.fn((_cwd: string, command: string) => {
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
       if (command === "rev-parse HEAD") return recoveredHead;
       if (command === "rev-list HEAD") return `${head}\n${ancestor}`;
       if (command === `show ${ancestor}:openclaw.json`) return validConfig({ recovered: true });
@@ -518,7 +525,8 @@ describe("system config accepted-head recovery", () => {
     const head = "a".repeat(40);
     const ancestor = "b".repeat(40);
     let recoveredHead = head;
-    const gitExec = vi.fn((_cwd: string, command: string) => {
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
       if (command === "rev-parse HEAD") return recoveredHead;
       if (command === "rev-list HEAD") return `${head}\n${ancestor}`;
       if (command === `show ${head}:openclaw.json`) return validConfig({ rejected: true });
@@ -556,7 +564,8 @@ describe("system config accepted-head recovery", () => {
     const head = "a".repeat(40);
     const ancestor = "b".repeat(40);
     let recoveredHead = head;
-    const gitExec = vi.fn((_cwd: string, command: string) => {
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
       if (command === "rev-parse HEAD") return recoveredHead;
       if (command === "rev-list HEAD") return `${head}\n${ancestor}`;
       if (command === `show ${ancestor}:openclaw.json`) return validConfig({ recovered: true });

@@ -41,9 +41,29 @@ function hasMatchingInternalServiceKey(req: Request): boolean {
   return Boolean(configured && provided && timingSafeStringEqual(provided, configured));
 }
 
-function isInternalServiceRequest(req: Request): boolean {
-  if (req.path !== "/internal" && !req.path.startsWith("/internal/")) return false;
-  return Boolean(req.get(K8S_SA_TOKEN_HEADER) || hasMatchingInternalServiceKey(req));
+const SA_JWT_SEGMENT = /^[A-Za-z0-9_-]+$/;
+const SA_JWT_MIN_LENGTH = 40;
+const SA_JWT_MAX_LENGTH = 8192;
+
+// Structural shape gate only — NOT authentication. A syntactically valid
+// base64url JWT still passes here and reaches the Kubernetes TokenReview (on the
+// bounded internalRateLimit lane), where it is actually verified and rejected.
+// The gate's job is to drop obvious garbage cheaply and cap the crafted-token
+// case at internalRateLimit (1200/min) instead of the pre-fix unbounded flood —
+// it does not, and is not meant to, stop a well-formed forged token pre-review.
+export function isWellFormedServiceAccountJwt(token: string): boolean {
+  if (token.length < SA_JWT_MIN_LENGTH || token.length > SA_JWT_MAX_LENGTH) return false;
+  const segments = token.split(".");
+  return segments.length === 3 && segments.every((segment) => SA_JWT_SEGMENT.test(segment));
+}
+
+function isInternalPath(path: string): boolean {
+  return path === "/internal" || path.startsWith("/internal/");
+}
+
+function carriesWellFormedSaToken(req: Request): boolean {
+  const token = req.get(K8S_SA_TOKEN_HEADER);
+  return Boolean(token && isWellFormedServiceAccountJwt(token));
 }
 
 export const globalRateLimit = rateLimit({
@@ -52,8 +72,26 @@ export const globalRateLimit = rateLimit({
   limit: 300,
   message: { error: "Too many requests, please try again later." },
   skip: (req: Request) => {
-    return isHealthOrMetricsPath(req.path) || isInternalServiceRequest(req);
+    if (isHealthOrMetricsPath(req.path)) return true;
+    if (!isInternalPath(req.path)) return false;
+    return hasMatchingInternalServiceKey(req) || carriesWellFormedSaToken(req);
   },
+});
+
+// Bounded lane for token-bearing /internal traffic: tenant binding verifies
+// the token via a Kubernetes TokenReview, so the exemption from the global
+// bucket must not become an unmetered path to that call. Sized for one
+// pod's migration/boot burst (the reason internal traffic left the global
+// bucket in #2153), not for a flood.
+export const internalRateLimit = rateLimit({
+  ...DEFAULT_RATE_LIMIT_OPTIONS,
+  windowMs: 60 * 1000,
+  limit: 1200,
+  message: { error: "Too many requests, please try again later." },
+  skip: (req: Request) =>
+    !isInternalPath(req.path) ||
+    hasMatchingInternalServiceKey(req) ||
+    !carriesWellFormedSaToken(req),
 });
 
 // Shared-state foot-gun: this is ONE instance — every route that uses

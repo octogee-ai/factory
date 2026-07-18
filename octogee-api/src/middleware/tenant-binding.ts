@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { Counter, type Registry } from "prom-client";
 import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
+import { isWellFormedServiceAccountJwt } from "../../../gateway-edge/src/middleware/security.js";
 import {
   mapSaToTenant,
   type BoundTenant,
@@ -27,6 +28,7 @@ export const K8S_SA_TOKEN_HEADER = "x-k8s-sa-token";
 type TenantBindingMetricResult =
   | TenantBindingResult
   | "missing"
+  | "malformed"
   | "invalid"
   | "reviewer_error"
   | "audience_mismatch";
@@ -91,6 +93,14 @@ export function createTenantBindingMiddleware(
     const token = req.get(K8S_SA_TOKEN_HEADER);
     if (!token) {
       record(opts.metrics, req, "missing");
+      return;
+    }
+
+    if (!isWellFormedServiceAccountJwt(token)) {
+      record(opts.metrics, req, "malformed");
+      warn(logger, "service account token malformed — skipping TokenReview", {
+        route: req.path,
+      });
       return;
     }
 

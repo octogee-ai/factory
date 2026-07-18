@@ -61,13 +61,13 @@ import {
 
 type UnknownRecord = Record<string, unknown>;
 const CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION = 1;
-const SYSTEM_CONFIG_PATHSPEC = "openclaw.json .octogee.json .gitignore";
+const SYSTEM_CONFIG_PATHSPEC_ARGS = ["openclaw.json", ".octogee.json", ".gitignore"];
 const SYSTEM_CONFIG_GITIGNORE = "*.bak\n*.tmp\n";
 const GIT_SHA_RE = /^[0-9a-f]{40,64}$/;
 const OPENCLAW_CONFIG_FILENAME = "openclaw.json";
 const SYSTEM_CONFIG_METADATA_FILENAME = ".octogee.json";
 const SYSTEM_CONFIG_GITIGNORE_FILENAME = ".gitignore";
-const GIT_REV_PARSE_HEAD = "rev-parse HEAD";
+const GIT_REV_PARSE_HEAD = ["rev-parse", "HEAD"];
 const ACCEPTED_HEAD_UNAVAILABLE = "accepted-head-unavailable";
 const VALIDATION_RESTORE_FAILED = "validation-restore-failed";
 
@@ -385,20 +385,20 @@ async function ensureIdentityAndRepo(slug: string, log: (msg: string) => void): 
 }
 
 function retainedSeedGitStateMatches(repoDir: string, keyPath: string): boolean {
-  if (gitExec(repoDir, "ls-remote origin refs/heads/main", keyPath) !== "") return false;
+  if (gitExec(repoDir, ["ls-remote", "origin", "refs/heads/main"], keyPath) !== "") return false;
   const head = gitExec(repoDir, GIT_REV_PARSE_HEAD, keyPath);
   if (!head || !GIT_SHA_RE.test(head)) return false;
-  if (gitExec(repoDir, "symbolic-ref --short HEAD", keyPath) !== "main") return false;
-  if (gitExec(repoDir, "rev-list --count HEAD", keyPath) !== "1") return false;
-  if (gitExec(repoDir, "log -1 --pretty=%s", keyPath) !== "initial system_config openclaw template") {
+  if (gitExec(repoDir, ["symbolic-ref", "--short", "HEAD"], keyPath) !== "main") return false;
+  if (gitExec(repoDir, ["rev-list", "--count", "HEAD"], keyPath) !== "1") return false;
+  if (gitExec(repoDir, ["log", "-1", "--pretty=%s"], keyPath) !== "initial system_config openclaw template") {
     return false;
   }
-  if (gitExec(repoDir, `status --porcelain -- ${SYSTEM_CONFIG_PATHSPEC}`, keyPath) !== "") {
+  if (gitExec(repoDir, ["status", "--porcelain", "--", ...SYSTEM_CONFIG_PATHSPEC_ARGS], keyPath) !== "") {
     return false;
   }
   const tracked = gitExec(
     repoDir,
-    "diff-tree --root --no-commit-id --name-only -r HEAD",
+    ["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "HEAD"],
     keyPath,
   );
   const expected = [
@@ -436,7 +436,7 @@ function retryRetainedInitialSeedPush(
 ): boolean {
   if (!retainedSeedGitStateMatches(repoDir, keyPath)) return false;
   if (!retainedSeedFilesMatch(repoDir, templatePath)) return false;
-  if (gitExec(repoDir, "push -u origin main", keyPath) === null) {
+  if (gitExec(repoDir, ["push", "-u", "origin", "main"], keyPath) === null) {
     log(`[system_config] retained initial push retry failed for ${slug}/${systemConfigRepoName()}`);
     return false;
   }
@@ -453,18 +453,18 @@ function cloneOrReuseSystemConfigRepo(
   if (fs.existsSync(path.join(dir, ".git"))) {
     setRepoSshCommand(dir, slug);
     const sshKey = customerSshKeyPath(slug);
-    if (gitExec(dir, "fetch origin main", sshKey) === null) {
+    if (gitExec(dir, ["fetch", "origin", "main"], sshKey) === null) {
       if (retryRetainedInitialSeedPush(slug, dir, templatePath, sshKey, log)) return true;
       if (
-        gitExec(dir, "ls-remote origin refs/heads/main", sshKey) === "" &&
-        gitExec(dir, "rev-parse --verify HEAD", sshKey) === null
+        gitExec(dir, ["ls-remote", "origin", "refs/heads/main"], sshKey) === "" &&
+        gitExec(dir, ["rev-parse", "--verify", "HEAD"], sshKey) === null
       ) {
         return true;
       }
       log(`[system_config] fetch failed for ${slug}/${systemConfigRepoName()}`);
       return false;
     }
-    if (gitExec(dir, "merge --ff-only origin/main", sshKey) === null) {
+    if (gitExec(dir, ["merge", "--ff-only", "origin/main"], sshKey) === null) {
       log(`[system_config] reused checkout is not a fast-forward for ${slug}/${systemConfigRepoName()}`);
       return false;
     }
@@ -476,7 +476,7 @@ function cloneOrReuseSystemConfigRepo(
   }
   fs.mkdirSync(path.dirname(dir), { recursive: true });
   const sshKey = customerSshKeyPath(slug);
-  const result = gitExec(path.dirname(dir), `clone ${remoteUrl(slug)} ${path.basename(dir)}`, sshKey);
+  const result = gitExec(path.dirname(dir), ["clone", remoteUrl(slug), path.basename(dir)], sshKey);
   if (result === null) {
     log(`[system_config] clone failed for ${slug}/${systemConfigRepoName()}`);
     try {
@@ -486,8 +486,8 @@ function cloneOrReuseSystemConfigRepo(
     }
     return false;
   }
-  gitExec(dir, `config user.email "${slug}@octogee.com"`);
-  gitExec(dir, `config user.name "Octo (${slug})"`);
+  gitExec(dir, ["config", "user.email", `${slug}@octogee.com`]);
+  gitExec(dir, ["config", "user.name", `Octo (${slug})`]);
   setRepoSshCommand(dir, slug);
   log(`[system_config] cloned ${slug}/${systemConfigRepoName()} -> ${dir}`);
   return true;
@@ -509,15 +509,15 @@ function seedSystemConfigIfMissing(
     lastMigration: "initial",
   }, null, 2)}\n`);
   fs.writeFileSync(path.join(repoDir, SYSTEM_CONFIG_GITIGNORE_FILENAME), SYSTEM_CONFIG_GITIGNORE, "utf-8");
-  const staged = gitExec(repoDir, `add ${SYSTEM_CONFIG_PATHSPEC}`);
+  const staged = gitExec(repoDir, ["add", ...SYSTEM_CONFIG_PATHSPEC_ARGS]);
   if (staged === null) {
     throw new Error(`[system_config] initial stage failed for ${slug}`);
   }
-  const committed = gitExec(repoDir, `commit -m "initial system_config openclaw template"`);
+  const committed = gitExec(repoDir, ["commit", "-m", "initial system_config openclaw template"]);
   if (committed === null) {
     throw new Error(`[system_config] initial commit failed for ${slug}`);
   }
-  const pushed = gitExec(repoDir, "push -u origin main", customerSshKeyPath(slug));
+  const pushed = gitExec(repoDir, ["push", "-u", "origin", "main"], customerSshKeyPath(slug));
   if (pushed === null) {
     throw new Error(`[system_config] initial push failed for ${slug}`);
   }
@@ -528,7 +528,7 @@ function seedSystemConfigIfMissing(
 function repositoryHasHead(slug: string, repoDir: string): boolean {
   return gitExec(
     repoDir,
-    "rev-parse --verify HEAD",
+    ["rev-parse", "--verify", "HEAD"],
     customerSshKeyPath(slug),
   ) !== null;
 }
@@ -684,13 +684,13 @@ function inspectRemoteRelation(
   keyPath: string,
   execGit: typeof gitExec,
 ): { relation: "equal" | "local-ahead" | "conflict" | "unavailable"; head?: string; remoteHead?: string } {
-  const head = execGit(repoDir, "rev-parse HEAD", keyPath);
+  const head = execGit(repoDir, GIT_REV_PARSE_HEAD, keyPath);
   const remoteHead = remoteHeadFromLsRemote(
-    execGit(repoDir, "ls-remote origin refs/heads/main", keyPath),
+    execGit(repoDir, ["ls-remote", "origin", "refs/heads/main"], keyPath),
   );
   if (!head || !GIT_SHA_RE.test(head) || !remoteHead) return { relation: "unavailable" };
   if (head === remoteHead) return { relation: "equal", head, remoteHead };
-  const mergeBase = execGit(repoDir, `merge-base ${head} ${remoteHead}`, keyPath);
+  const mergeBase = execGit(repoDir, ["merge-base", head, remoteHead], keyPath);
   if (mergeBase === remoteHead) return { relation: "local-ahead", head, remoteHead };
   return { relation: "conflict", head, remoteHead };
 }
@@ -753,9 +753,9 @@ interface SystemConfigSyncContext {
 // pull is what absorbs it. A true content conflict aborts the rebase and leaves
 // the checkout untouched for the typed non-fast-forward error path.
 function pullRebaseRemote(context: SystemConfigSyncContext): boolean {
-  const pulled = context.execGit(context.repoDir, "pull --rebase origin main", context.keyPath);
+  const pulled = context.execGit(context.repoDir, ["pull", "--rebase", "origin", "main"], context.keyPath);
   if (pulled !== null) return true;
-  context.execGit(context.repoDir, "rebase --abort", context.keyPath);
+  context.execGit(context.repoDir, ["rebase", "--abort"], context.keyPath);
   context.log(
     `[system_config] ${context.slug}: pull --rebase could not converge with origin/main`,
   );
@@ -784,9 +784,9 @@ function syncCleanSystemConfig(context: SystemConfigSyncContext): SystemConfigSy
     context.log(`[system_config] ${context.slug}: no openclaw.json changes to flush`);
     return { committed: false, pushed: false };
   }
-  let pushed = context.execGit(context.repoDir, "push origin main", context.keyPath);
+  let pushed = context.execGit(context.repoDir, ["push", "origin", "main"], context.keyPath);
   if (pushed === null && pullRebaseRemote(context)) {
-    pushed = context.execGit(context.repoDir, "push origin main", context.keyPath);
+    pushed = context.execGit(context.repoDir, ["push", "origin", "main"], context.keyPath);
   }
   if (pushed === null) {
     if (context.opts.durablePolicy) {
@@ -867,7 +867,7 @@ function acceptedCommitBlobReader(context: SystemConfigSyncContext): ReadSystemC
       ? ((_repoDir, commit, filename) => {
           const contents = context.execGit(
             context.repoDir,
-            `show ${commit}:${filename}`,
+            ["show", `${commit}:${filename}`],
             context.keyPath,
           );
           return contents === null ? null : Buffer.from(contents);
@@ -1155,7 +1155,7 @@ function commitValidatedCandidate(
 ): SystemConfigSyncResult {
   const staged = context.execGit(
     context.repoDir,
-    `add ${SYSTEM_CONFIG_PATHSPEC}`,
+    ["add", ...SYSTEM_CONFIG_PATHSPEC_ARGS],
     context.keyPath,
   );
   if (staged === null) {
@@ -1209,9 +1209,9 @@ function commitValidatedCandidate(
       ...(context.pushWhenClean ? { pending: true, processedFingerprint: stagedFingerprint } : {}),
     };
   }
-  let pushed = context.execGit(context.repoDir, "push origin main", context.keyPath);
+  let pushed = context.execGit(context.repoDir, ["push", "origin", "main"], context.keyPath);
   if (pushed === null && pullRebaseRemote(context)) {
-    pushed = context.execGit(context.repoDir, "push origin main", context.keyPath);
+    pushed = context.execGit(context.repoDir, ["push", "origin", "main"], context.keyPath);
   }
   return pushed === null
     ? committedPushFailure(context, source, stagedFingerprint)
@@ -1223,7 +1223,7 @@ function syncPreparedSystemConfig(context: SystemConfigSyncContext): SystemConfi
   if (!fs.existsSync(repoConfigPath)) {
     return rejectedDeletionResult(context);
   }
-  const dirty = execGit(repoDir, `status --porcelain -- ${SYSTEM_CONFIG_PATHSPEC}`, keyPath);
+  const dirty = execGit(repoDir, ["status", "--porcelain", "--", ...SYSTEM_CONFIG_PATHSPEC_ARGS], keyPath);
   if (dirty === null) return syncStatusFailure(context);
   if (dirty.length === 0) return syncCleanSystemConfig(context);
   const dirtyPaths = durableDirtyPaths(dirty);
@@ -1323,11 +1323,11 @@ function readSystemConfigAuditGitState(
 ): SystemConfigAuditGitState {
   return {
     head: execGit(repoDir, GIT_REV_PARSE_HEAD, keyPath),
-    headTree: execGit(repoDir, "rev-parse HEAD^{tree}", keyPath),
-    indexTree: execGit(repoDir, "write-tree", keyPath),
-    worktree: execGit(repoDir, `status --porcelain -- ${SYSTEM_CONFIG_PATHSPEC}`, keyPath),
+    headTree: execGit(repoDir, ["rev-parse", "HEAD^{tree}"], keyPath),
+    indexTree: execGit(repoDir, ["write-tree"], keyPath),
+    worktree: execGit(repoDir, ["status", "--porcelain", "--", ...SYSTEM_CONFIG_PATHSPEC_ARGS], keyPath),
     remoteHead: remoteHeadFromLsRemote(
-      execGit(repoDir, "ls-remote origin refs/heads/main", keyPath),
+      execGit(repoDir, ["ls-remote", "origin", "refs/heads/main"], keyPath),
     ),
     configHash: systemConfigFingerprint(configPath),
   };
@@ -1376,7 +1376,7 @@ function auditHasRemoteConflict(
   remoteHead: string,
 ): boolean {
   if (head === remoteHead) return false;
-  return execGit(repoDir, `merge-base ${head} ${remoteHead}`, keyPath) !== remoteHead;
+  return execGit(repoDir, ["merge-base", head, remoteHead], keyPath) !== remoteHead;
 }
 
 export function auditSystemConfigForSlug(
