@@ -14,6 +14,7 @@ import {
   getEvictObservedSlugs,
   getMountObservedSlugs,
   pathGatewayIdMatchesPod,
+  probeSurgeReadiness,
   readMountedCustomersFromAssignedState,
   resolveFleetCapabilities,
 } from "../lib/fleet-provisioner.js";
@@ -217,18 +218,45 @@ describe("observed split — evict keys off raw presence, mount off completion",
 });
 
 describe("in-pod gateway heartbeat", () => {
+  it("requires both the handoff marker and a live OpenClaw probe for surge readiness", async () => {
+    const isGatewayUp = vi.fn(async () => true);
+
+    await expect(probeSurgeReadiness({
+      runtimeStatus: "ready",
+      handoffReleased: true,
+      isGatewayUp,
+    })).resolves.toEqual({ ready: true, openclawUp: true });
+    expect(isGatewayUp).toHaveBeenCalledWith(2_000);
+
+    isGatewayUp.mockResolvedValueOnce(false);
+    await expect(probeSurgeReadiness({
+      runtimeStatus: "ready",
+      handoffReleased: true,
+      isGatewayUp,
+    })).resolves.toEqual({ ready: false, openclawUp: false });
+
+    isGatewayUp.mockClear();
+    await expect(probeSurgeReadiness({
+      runtimeStatus: "booting",
+      handoffReleased: true,
+      isGatewayUp,
+    })).resolves.toEqual({ ready: false, openclawUp: false });
+    expect(isGatewayUp).not.toHaveBeenCalled();
+  });
+
   it("reports the OpenClaw runtime version through the poller health endpoint", () => {
     expect(
       buildFleetHealthResponse({
         status: "ready",
         gatewayId: "default",
+        podUid: "pod-uid-1",
         version: "sha-1",
         openclawVersion: "2026.7.1",
         startedAt: 42,
         customers: [],
         migratingIn: [],
       }),
-    ).toMatchObject({ openclawVersion: "2026.7.1" });
+    ).toMatchObject({ openclawVersion: "2026.7.1", podUid: "pod-uid-1" });
   });
 
   it("keys the heartbeat snapshot by the bare gateway id (GATEWAY-SIMPLE-ROLL-SPEC)", () => {

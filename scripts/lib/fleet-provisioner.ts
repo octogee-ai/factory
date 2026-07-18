@@ -24,7 +24,17 @@ import {
   createRestoreHandler,
   createUnmountHandler,
   createVerifyHandler,
+  createCompleteSurgeHandoffHandler,
 } from "./fleet-http-migration.js";
+import {
+  createSurgeReadinessGate,
+  type SurgeReadinessGate,
+} from "./surge-readiness.js";
+import {
+  observeReadySibling,
+  startAfterSurgeReadiness,
+  startSurgeReadinessSelfRelease,
+} from "./surge-reconcile-gate.js";
 import {
   writeGatewayHeartbeat,
   type FleetStateDeps,
@@ -318,6 +328,7 @@ export function buildFleetHeartbeatSnapshot(input: {
 export function buildFleetHealthResponse(input: {
   status: FleetRuntime["status"];
   gatewayId: string;
+  podUid: string | null;
   version: string;
   openclawVersion: string;
   startedAt: number;
@@ -327,6 +338,7 @@ export function buildFleetHealthResponse(input: {
   return {
     status: input.status,
     gatewayId: input.gatewayId,
+    podUid: input.podUid,
     version: input.version,
     openclawVersion: input.openclawVersion,
     startedAt: input.startedAt,
@@ -338,6 +350,50 @@ export function buildFleetHealthResponse(input: {
 interface FleetRuntime {
   mountedCustomers: string[];
   status: "booting" | "ready";
+}
+
+const SURGE_READINESS_RPC_TIMEOUT_MS = 2_000;
+
+export async function probeSurgeReadiness(input: {
+  runtimeStatus: FleetRuntime["status"];
+  handoffReleased: boolean;
+  isGatewayUp: (timeoutMs: number) => Promise<boolean>;
+}): Promise<{ ready: boolean; openclawUp: boolean }> {
+  const openclawUp = input.runtimeStatus === "ready"
+    ? await input.isGatewayUp(SURGE_READINESS_RPC_TIMEOUT_MS)
+    : false;
+  return {
+    ready: input.handoffReleased && openclawUp,
+    openclawUp,
+  };
+}
+
+function createSurgeReadinessHandler(input: {
+  runtime: FleetRuntime;
+  surgeReadiness: SurgeReadinessGate;
+  rpc: GatewayRpcClient;
+  log: (message: string) => void;
+}): express.RequestHandler {
+  return async (_req, res) => {
+    try {
+      const handoffReleased = await input.surgeReadiness.released();
+      const { ready, openclawUp } = await probeSurgeReadiness({
+        runtimeStatus: input.runtime.status,
+        handoffReleased,
+        isGatewayUp: (timeoutMs) => input.rpc.isGatewayUp(timeoutMs),
+      });
+      res.status(ready ? 200 : 503).json({
+        ready,
+        runtimeStatus: input.runtime.status,
+        handoffReleased,
+        openclawUp,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      input.log(`[surge-handoff] readiness probe failed: ${message}`);
+      res.status(500).json({ ready: false, error: message });
+    }
+  };
 }
 
 // Evict-observed: RAW on-disk dir presence (NOT coach-wired), minus migrating-in. Drives the
@@ -415,8 +471,9 @@ function startMaybeReconcileLoop(params: {
   wrappedAdapter: CustomerLifecycleAdapter;
   runtime: FleetRuntime;
   stampMounted: (uid: string, mounted: boolean) => Promise<void>;
+  surgeReadiness: SurgeReadinessGate;
 }): () => void {
-  const { provision, opts, wrappedAdapter, runtime, stampMounted } = params;
+  const { provision, opts, wrappedAdapter, runtime, stampMounted, surgeReadiness } = params;
 
   // Content-convergence bookkeeping (only when a fingerprint source is wired). desiredFp
   // is refreshed every tick by readDesired; appliedFp records the fingerprint that was
@@ -472,7 +529,7 @@ function startMaybeReconcileLoop(params: {
         );
       }
     : undefined;
-  return startReconcileLoop({
+  const start = () => startReconcileLoop({
     gatewayId: opts.gatewayId,
     intervalMs: RECONCILE_LOOP_INTERVAL_MS,
     // SERIAL (not the default cap): the production lifecycle adapter shares one mutable
@@ -556,6 +613,11 @@ function startMaybeReconcileLoop(params: {
       }
     },
   });
+  return startAfterSurgeReadiness({
+    released: surgeReadiness.released,
+    start,
+    log: opts.log,
+  });
 }
 
 function createStateDeps(opts: StartFleetOptions, needsState: boolean): FleetStateDeps | null {
@@ -593,6 +655,29 @@ function resolveK8sNamespace(): string {
     );
   }
   return namespace;
+}
+
+function startPodSurgeReadinessRecovery(input: {
+  surgeReadiness: SurgeReadinessGate;
+  serviceName: string;
+  namespace: string;
+  port: number;
+  log: (message: string) => void;
+}): () => void {
+  const ownPodUid = process.env.POD_UID?.trim() || null;
+  if (!ownPodUid) {
+    input.log("[surge-handoff] POD_UID is unset; pod-side readiness recovery is disabled");
+    return () => undefined;
+  }
+  return startSurgeReadinessSelfRelease({
+    released: input.surgeReadiness.released,
+    observe: () => observeReadySibling({
+      healthUrl: `http://${input.serviceName}.${input.namespace}.svc.cluster.local:${input.port}/health`,
+      ownPodUid,
+    }),
+    release: () => input.surgeReadiness.release({ targetPodUid: ownPodUid }),
+    log: input.log,
+  });
 }
 
 function wrapAdapterWithRuntime(
@@ -657,6 +742,8 @@ export async function startFleetController(
     mountedCustomers: [],
     status: "booting",
   };
+  const openclawDir = opts.openclawDir ?? path.join(process.env.HOME ?? "/home/node", ".openclaw");
+  const surgeReadiness = createSurgeReadinessGate(openclawDir);
 
   const namespace = resolveK8sNamespace();
   const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || "18789";
@@ -737,6 +824,7 @@ const waitForGatewayReady = async (): Promise<void> => {
     res.json(buildFleetHealthResponse({
       status: runtime.status,
       gatewayId: opts.gatewayId,
+      podUid: process.env.POD_UID ?? null,
       version: opts.version,
       openclawVersion: opts.openclawVersion,
       startedAt: PROCESS_STARTED_AT_MS,
@@ -747,6 +835,13 @@ const waitForGatewayReady = async (): Promise<void> => {
       migratingIn: adapter.listMigratingInSlugs?.() ?? [],
     }));
   });
+
+  app.get("/surge-ready", createSurgeReadinessHandler({
+    runtime,
+    surgeReadiness,
+    rpc: opts.rpc,
+    log: opts.log,
+  }));
 
   const wrappedAdapter = wrapAdapterWithRuntime(adapter, runtime);
 
@@ -782,6 +877,13 @@ const waitForGatewayReady = async (): Promise<void> => {
     log: opts.log,
     getMountedCustomers: () => runtime.mountedCustomers,
     flushLocalState: opts.flushLocalState,
+    releaseSurgeReadiness: async ({ targetPodUid }: { targetPodUid: string }) => {
+      const ownPodUid = process.env.POD_UID;
+      if (ownPodUid && ownPodUid !== targetPodUid) {
+        throw new Error(`target pod UID mismatch: expected ${ownPodUid}, received ${targetPodUid}`);
+      }
+      await surgeReadiness.release({ targetPodUid });
+    },
   };
   app.post("/restore/:gatewayId", gatewayIdGuard, createRestoreHandler(migrationDeps));
   app.post("/quiesce/:gatewayId", gatewayIdGuard, createQuiesceHandler(migrationDeps));
@@ -800,6 +902,7 @@ const waitForGatewayReady = async (): Promise<void> => {
   app.post("/push-rsync-state/:gatewayId", gatewayIdGuard, createPushRsyncStateHandler(migrationDeps));
   app.post("/finish-rsync-import/:gatewayId", gatewayIdGuard, createFinishRsyncImportHandler(migrationDeps));
   app.post("/abort-rsync-import/:gatewayId", gatewayIdGuard, createAbortRsyncImportHandler(migrationDeps));
+  app.post("/complete-surge-handoff/:gatewayId", gatewayIdGuard, createCompleteSurgeHandoffHandler(migrationDeps));
   app.post("/push-state/:gatewayId", gatewayIdGuard, createPushStateHandler(migrationDeps));
   app.post("/import/:gatewayId", gatewayIdGuard, createImportHandler(migrationDeps));
   app.post("/unmount/:gatewayId", gatewayIdGuard, createUnmountHandler(migrationDeps));
@@ -812,10 +915,18 @@ const waitForGatewayReady = async (): Promise<void> => {
     wrappedAdapter,
     runtime,
     stampMounted,
+    surgeReadiness,
   });
 
   const server: Server = await new Promise((resolve) => {
     const s = app.listen(opts.port, "0.0.0.0", () => resolve(s));
+  });
+  const stopSurgeSelfRelease = startPodSurgeReadinessRecovery({
+    surgeReadiness,
+    serviceName,
+    namespace,
+    port: opts.port,
+    log: opts.log,
   });
   const reconcileLoopStatus = caps.provision ? `${RECONCILE_LOOP_INTERVAL_MS}ms` : "disabled";
   opts.log(
@@ -826,6 +937,7 @@ return {
     whenReady: waitForGatewayReady(),
     stop: async () => {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
+      stopSurgeSelfRelease();
       stopReconcileLoop();
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));

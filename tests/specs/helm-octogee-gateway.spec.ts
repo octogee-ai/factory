@@ -902,16 +902,16 @@ expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
     );
   });
 
-  it("keeps shared gateways on the proven OpenClaw HTTP startup and TCP steady-state probes", () => {
+  it("keeps shared startup/liveness on OpenClaw and gates readiness on surge handoff", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const gw = containerBlock(dep, "gateway");
 
     expect(gw).toMatch(/startupProbe:\s+httpGet:\s+path:\s*\/healthz\s+port:\s*18789/);
     expect(gw).toMatch(/livenessProbe:\s+tcpSocket:\s+port:\s*18789/);
-    expect(gw).toMatch(/readinessProbe:\s+tcpSocket:\s+port:\s*18789/);
+    expect(gw).toMatch(/readinessProbe:\s+httpGet:\s+path:\s*\/surge-ready\s+port:\s*3003/);
   });
 
-  it("probes isolated gateways identity-pure: runner plane for startup/liveness, OpenClaw for readiness", () => {
+  it("probes isolated gateways identity-pure and gates readiness on surge handoff", () => {
     const dep = findDoc(
       helmTemplate("octogee-gw-bender", { gatewayId: "bender", gatewayClass: "builder" }),
       "Deployment",
@@ -921,19 +921,19 @@ expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
 
     expect(gw).toMatch(/startupProbe:[\s\S]*?httpGet:\s+path:\s*\/health\s+port:\s*3003/);
     expect(gw).toMatch(/livenessProbe:\s+httpGet:\s+path:\s*\/health\s+port:\s*3003/);
-    expect(gw).toMatch(/readinessProbe:\s+tcpSocket:\s+port:\s*18789/);
+    expect(gw).toMatch(/readinessProbe:\s+httpGet:\s+path:\s*\/surge-ready\s+port:\s*3003/);
     expect(gw).not.toContain("config-status-v2");
     expect(gw).not.toContain("18790");
     expect(dep).not.toMatch(/__openclaw__/);
   });
 
-  it("keeps isolated repair services routable while OpenClaw readiness is false", () => {
+  it("keeps NotReady surge targets out of every per-instance Service", () => {
     const out = helmTemplate("octogee-gw-default", { gatewayClass: "builder" });
     const gateway = findDoc(out, "Service", "octogee-gateway-default") ?? "";
     const edge = findDoc(out, "Service", "gateway-edge-default") ?? "";
 
-    expect(gateway).toMatch(/publishNotReadyAddresses:\s*true/);
-    expect(edge).toMatch(/publishNotReadyAddresses:\s*true/);
+    expect(gateway).not.toMatch(/publishNotReadyAddresses/);
+    expect(edge).not.toMatch(/publishNotReadyAddresses/);
     expect(findDoc(helmTemplate(), "Service", "gateway-edge-default") ?? "").not.toMatch(
       /publishNotReadyAddresses/,
     );

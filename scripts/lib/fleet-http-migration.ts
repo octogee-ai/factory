@@ -18,6 +18,7 @@ import {
   type FinishRsyncImportRequestBody,
   type FlushGatewayRequestBody,
   type FlushGatewayResponse,
+  type CompleteSurgeHandoffRequestBody,
   type MigrationRequestBody,
   type MigrationTransferMode,
   type PrepareRsyncImportRequestBody,
@@ -77,6 +78,7 @@ flushLocalState?: (input: {
   slug: string;
   reason: string;
 }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
+releaseSurgeReadiness?: (input: { targetPodUid: string }) => Promise<void>;
 }
 
 function rejectInvalidSlug(slug: string, res: Response): boolean {
@@ -116,6 +118,62 @@ const sigValid = verifyFleetRequest(publicKey, body.migrationId, rawBody, sigHea
     return null;
   }
   return body;
+}
+
+function parseAndVerifySurgeBody(
+  req: Request,
+  res: Response,
+  publicKey: string,
+  log: (msg: string) => void,
+): CompleteSurgeHandoffRequestBody | null {
+  const rawBody: string = (req as unknown as { rawBody?: string }).rawBody ?? "";
+  let body: CompleteSurgeHandoffRequestBody;
+  try {
+    body = JSON.parse(rawBody) as CompleteSurgeHandoffRequestBody;
+  } catch {
+    res.status(400).json({ error: "invalid JSON body" });
+    return null;
+  }
+  if (
+    typeof body.migrationId !== "string" ||
+    body.migrationId.length === 0 ||
+    typeof body.targetPodUid !== "string" ||
+    body.targetPodUid.length === 0 ||
+    body.targetPodUid.length > 128
+  ) {
+    res.status(400).json({ error: "missing or invalid migrationId/targetPodUid" });
+    return null;
+  }
+  const signature = req.header(SIGNATURE_HEADER);
+  if (!verifyFleetRequest(publicKey, body.migrationId, rawBody, signature ?? undefined)) {
+    log(`[surge-handoff] bad signature migrationId=${body.migrationId}`);
+    res.status(401).json({ error: "invalid signature" });
+    return null;
+  }
+  return body;
+}
+
+export function createCompleteSurgeHandoffHandler(
+  deps: MigrationHandlerDeps,
+): RequestHandler {
+  const log = deps.log ?? ((message) => console.log(message));
+  return async (req, res) => {
+    const body = parseAndVerifySurgeBody(req, res, deps.publicKey, log);
+    if (!body) return;
+    if (!deps.releaseSurgeReadiness) {
+      res.status(500).json({ error: "surge readiness is not configured" });
+      return;
+    }
+    try {
+      await deps.releaseSurgeReadiness({ targetPodUid: body.targetPodUid });
+      log(`[surge-handoff] readiness released targetPodUid=${body.targetPodUid}`);
+      res.status(200).json({ released: true, targetPodUid: body.targetPodUid });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`[surge-handoff] readiness release failed: ${message}`);
+      res.status(500).json({ error: "surge readiness release failed", message });
+    }
+  };
 }
 
 function verifyHeaderSignature(

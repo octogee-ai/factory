@@ -71,6 +71,10 @@ export interface MigrationRequestBody {
     migrationId: string;
     slug: string;
 }
+export interface CompleteSurgeHandoffRequestBody {
+    migrationId: string;
+    targetPodUid: string;
+}
 export interface PushStateRequestBody extends MigrationRequestBody {
     targetGatewayId: string;
     targetUrl: string;

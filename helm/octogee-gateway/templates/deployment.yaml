@@ -166,6 +166,10 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
             - name: GCLOUD_PROJECT
               value: {{ .Values.env.gcloudProject | quote }}
             - name: CLOUDSDK_CORE_PROJECT
@@ -335,7 +339,8 @@ spec:
             # is this gateway's KSA identity for tenant-bound broker calls.
           # Non-shared startup and liveness probe the fleet controller, which
           # starts after durable-config repair; the startup budget bounds one
-          # identity-pure attempt. Readiness probes OpenClaw on every class.
+          # identity-pure attempt. Readiness stays closed until Cowboy finishes
+          # the surge customer handoff and OpenClaw is healthy.
           startupProbe:
             {{- if eq $gatewayClass "shared" }}
             httpGet:
@@ -364,8 +369,9 @@ spec:
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
             timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
           readinessProbe:
-            tcpSocket:
-              port: 18789
+            httpGet:
+              path: /surge-ready
+              port: {{ .Values.env.fleetControllerPort | default "3003" }}
             initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
             failureThreshold: {{ .Values.probes.readiness.failureThreshold }}

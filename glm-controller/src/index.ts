@@ -56,8 +56,20 @@ import {
   gatewayUpsertOptsFromRelease,
   planGatewayConvergence,
   provisioningRuntimeDoc,
+  requiresSurgeCustomerMigration,
   type DurableGateway,
+  type GatewayConvergenceAction,
+  type ObservedHelmInstance,
 } from "./converge-gateway.js";
+import {
+  assertSurgeAssignmentCoverage,
+  reconcileSurgeCustomerHandoff,
+} from "./surge-customer-handoff.js";
+import {
+  createSurgePodTransport,
+  listSurgePods,
+  readPodDurableSessionDigest,
+} from "./surge-customer-handoff-runtime.js";
 import {
   createGatewayModelKeySecretEnsurer,
   gatewayModelKeySecretName,
@@ -708,6 +720,11 @@ interface GatewayConvergencePassDeps {
   prepareGatewayConfig: <T extends GatewayMutableConfig & { gatewayId: string }>(
     config: T,
   ) => Promise<T>;
+  reconcileSurgeHandoff: (input: {
+    gatewayId: string;
+    desiredVersion: string;
+    requiresCustomerMigration: boolean;
+  }) => Promise<{ ready: boolean }>;
   log: (msg: string) => void;
 }
 
@@ -724,6 +741,31 @@ function runtimeReportsDesiredBuild(
     runtime.heartbeat.status === "ready" &&
     runtime.heartbeat.version === versionFromImageTag(artifact.imageTag)
   );
+}
+
+export async function refineGatewayConvergenceAction(input: {
+  passDeps: Pick<GatewayConvergencePassDeps, "reconcileSurgeHandoff">;
+  gateway: DurableGateway;
+  artifact: ReleasePayload | null;
+  runtime: GatewayRuntimeDoc | undefined;
+  helmObserved: ObservedHelmInstance | null;
+  action: GatewayConvergenceAction;
+}): Promise<GatewayConvergenceAction> {
+  const { passDeps, gateway, artifact, runtime, helmObserved, action } = input;
+  if (action.kind !== "steady" || !artifact || gateway.desiredStatus !== "running") {
+    return action;
+  }
+  const handoff = await passDeps.reconcileSurgeHandoff({
+    gatewayId: gateway.gatewayId,
+    desiredVersion: versionFromImageTag(artifact.imageTag),
+    requiresCustomerMigration: requiresSurgeCustomerMigration(gateway),
+  });
+  return planGatewayConvergence({
+    gateway,
+    artifact,
+    helm: helmObserved,
+    deploymentReady: handoff.ready && runtimeReportsDesiredBuild(runtime, artifact),
+  });
 }
 
 async function runGatewayConvergencePass(
@@ -772,11 +814,19 @@ async function convergeOneGateway(
       ? null
       : await readGatewayArtifact(db, gateway.gatewayId, gateway.desiredRelease);
   const runtime = runtimeById.get(gateway.gatewayId);
-  const action = planGatewayConvergence({
+  const initialAction = planGatewayConvergence({
     gateway,
     artifact,
     helm: helmObserved,
-    deploymentReady: artifact ? runtimeReportsDesiredBuild(runtime, artifact) : false,
+    deploymentReady: false,
+  });
+  const action = await refineGatewayConvergenceAction({
+    passDeps,
+    gateway,
+    artifact,
+    runtime,
+    helmObserved,
+    action: initialAction,
   });
   switch (action.kind) {
     case "steady":
@@ -1691,6 +1741,57 @@ async function createControllerRuntime(
     },
   );
 
+  const surgeTransport = createSurgePodTransport({
+    privateKey: fleetControllerPrivateKey,
+    log,
+  });
+  const surgeHandoffDeps = {
+    ...surgeTransport,
+    listPods: (gatewayId: string) => listSurgePods(runKubectl, NAMESPACE, gatewayId),
+    readAssignments: async (gatewayId: string) => {
+      const [assignments, userSnapshot] = await Promise.all([
+        readAssignmentDocsForGateway(db, gatewayId),
+        db.collection("users")
+          .where("provisioning.openclaw.gatewayId", "==", gatewayId)
+          .get(),
+      ]);
+      const projected = assignments.map((assignment) => ({
+        uid: assignment.uid,
+        slug: assignment.slug,
+        state: assignment.state,
+        epoch: assignment.epoch,
+        updatedByOperationId: assignment.updatedByOperationId,
+      }));
+      const assignedUsers = userSnapshot.docs.map((doc) => {
+        const slug = slugFromAssignedUser(doc.data() as Record<string, unknown>);
+        if (!slug) throw new Error(`assigned user ${doc.id} has no gateway slug`);
+        return { uid: doc.id, slug };
+      });
+      assertSurgeAssignmentCoverage(projected, assignedUsers);
+      return projected;
+    },
+    readDurableSessionDigest: ({ pod, slug }: {
+      pod: { uid: string; name: string; podIP: string; ready: boolean };
+      slug: string;
+    }) => readPodDurableSessionDigest(runKubectl, NAMESPACE, pod, slug),
+    markAssignment: (input: {
+      gatewayId: string;
+      uid: string;
+      slug: string;
+      epoch: number;
+      state: "serving" | "quiescing";
+      updatedByOperationId: string;
+    }) => markAssignmentState(
+      {
+        db: db as unknown as FleetStateFirestore,
+        serverTimestamp: () => FieldValue.serverTimestamp(),
+        log,
+      },
+      input,
+    ),
+    log,
+  };
+
   const convergeGateways = (gatewayIds?: readonly string[]) =>
     runGatewayConvergencePass({
       db,
@@ -1698,6 +1799,7 @@ async function createControllerRuntime(
       kubeOps,
       chartFingerprint,
       prepareGatewayConfig,
+      reconcileSurgeHandoff: (input) => reconcileSurgeCustomerHandoff(surgeHandoffDeps, input),
       log,
     }, gatewayIds);
 

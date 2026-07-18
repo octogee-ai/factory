@@ -144,6 +144,21 @@ describe("helm-runner helpers", () => {
     expect(args).toContain("--take-ownership");
   });
 
+  it("can apply a surge upgrade without waiting for the controller-owned readiness gate", () => {
+    const args = buildUpgradeArgs({
+      release: "octogee-gw-bender",
+      chartPath: "/charts/octogee-gateway",
+      namespace: "octogee-test",
+      gatewayId: "bender",
+      imageTag: "def5678",
+      imageRepository: REPO,
+      upgradeTimeout: "10m",
+      waitForReady: false,
+    });
+    expect(args).not.toContain("--wait");
+    expect(args).toContain("--timeout=10m");
+  });
+
   it("renders publisher-live only with the digest-bound TEST W9 candidate handoff", () => {
     const testExperiment = {
       kind: "w9-agent-conversation",
