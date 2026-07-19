@@ -11,6 +11,7 @@ const REQUIRED_PLUGINS = [
     "octogee-workspace-tools",
     "octogee-publish-tools",
 ];
+const RETIRED_PLUGINS = ["octogee-mattermost-tools", "octogee-router"];
 const PLUGIN_ENTRIES = REQUIRED_PLUGINS.filter((id) => id !== "memory-core");
 const PLATFORM_PLUGIN_CONFIGS = {
     "octogee-chat-tools": {
@@ -105,6 +106,12 @@ export function platformInvariantTable(context) {
         { kind: "exact", path: "channels.mattermost.commands.native", value: false },
         { kind: "exact", path: "plugins.enabled", value: true },
         { kind: "required-array", path: "plugins.allow", values: REQUIRED_PLUGINS },
+        { kind: "forbidden-array", path: "plugins.allow", values: RETIRED_PLUGINS },
+        ...RETIRED_PLUGINS.map((id) => ({
+            kind: "exact",
+            path: `plugins.entries.${id}`,
+            value: ABSENT,
+        })),
         ...PLUGIN_ENTRIES.map((id) => ({
             kind: "exact",
             path: `plugins.entries.${id}.enabled`,
@@ -214,9 +221,9 @@ export function assertPlatformInvariants(config, context) {
 }
 export function reconcilePlatformInvariants(config, context) {
     const table = platformInvariantTable(context);
-    const changedPaths = table
+    const changedPaths = Array.from(new Set(table
         .filter((invariant) => !invariantSatisfied(config, invariant))
-        .map((invariant) => invariant.path);
+        .map((invariant) => invariant.path)));
     for (const invariant of table) {
         if (changedPaths.includes(invariant.path))
             applyInvariant(config, invariant);
