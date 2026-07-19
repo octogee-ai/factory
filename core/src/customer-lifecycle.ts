@@ -289,6 +289,7 @@ export interface AddCustomerOptions {
   verifyTimeoutMs?: number;
   customersDir?: string;
   mountDeadlineMs?: number;
+  convergeContent?: boolean;
 
 signal?: AbortSignal;
 
@@ -461,7 +462,12 @@ function throwIfAborted(signal: AbortSignal | undefined, uid: string): void {
 async function addCustomerToGatewayInner(
   adapter: CustomerLifecycleAdapter,
   uid: string,
-  opts: { verifyTimeoutMs?: number; customersDir?: string; signal?: AbortSignal } = {},
+  opts: {
+    verifyTimeoutMs?: number;
+    customersDir?: string;
+    signal?: AbortSignal;
+    convergeContent?: boolean;
+  } = {},
 ): Promise<AddCustomerResult> {
   const verifyTimeoutMs = opts.verifyTimeoutMs ?? VERIFY_ACCOUNT_TIMEOUT_MS;
   const customersDir = opts.customersDir ?? "/home/node/.openclaw/customers";
@@ -477,6 +483,7 @@ async function addCustomerToGatewayInner(
 
   if (
     snapshot.status === "complete"
+    && !opts.convergeContent
     && adapter.isOperatorGateway?.()
     && adapter.customerCoachWiredInOpenclawConfig?.(slug)
     && adapter.hasCustomerAgentRuntime?.(slug)

@@ -143,6 +143,7 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     const { ctx, newCustomer } = prepared;
     const { slug } = snapshot;
     if (snapshot.status === "complete"
+        && !opts.convergeContent
         && adapter.isOperatorGateway?.()
         && adapter.customerCoachWiredInOpenclawConfig?.(slug)
         && adapter.hasCustomerAgentRuntime?.(slug)

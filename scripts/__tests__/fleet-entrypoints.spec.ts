@@ -7,6 +7,7 @@ import {
   acquireSystemConfigShellCapabilitySync,
 } from "@octogee/core/system-config-mutation-lease";
 import {
+  createAssignedFingerprintReader,
   createFleetSystemConfigFlush,
   createSystemConfigMutationGatedRpc,
   resolveFleetControllerEntrypointConfig,
@@ -25,6 +26,32 @@ import {
 } from "../ops/fleet.js";
 
 describe("fleet-controller entrypoint config", () => {
+  it("uses a snapshot fingerprint roster for operator gateways so post-mount project creation reconverges", async () => {
+    const snapshot = {
+      uid: "u1",
+      slug: "alice",
+      channels: [],
+      projects: [
+        { projectSlug: "launchroom", giteaRepoName: "launchroom", provisioningState: "active" },
+      ],
+      projectAgents: [],
+      coachToken: "pat",
+      coachMmUserId: "coach",
+      customerMmUserId: "customer",
+      tier: "paid",
+    } as never;
+    const assignedUsers = vi.fn(async () => [snapshot]);
+    const seed = vi.fn();
+
+    const read = createAssignedFingerprintReader({ assignedUsers }, seed);
+    const fingerprints = await read();
+
+    expect([...fingerprints.keys()]).toEqual(["alice"]);
+    expect(fingerprints.get("alice")).toMatch(/^[0-9a-f]{16}$/);
+    expect(seed).toHaveBeenCalledWith(snapshot);
+    expect(assignedUsers).toHaveBeenCalledWith({ completeOnly: false });
+  });
+
   it("normalizes local gateways and trims dedicated builder slugs", () => {
     expect(resolveFleetControllerEntrypointConfig({
       BUILD_SHA: "abc123",
