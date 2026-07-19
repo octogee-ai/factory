@@ -459,6 +459,21 @@ function throwIfAborted(signal: AbortSignal | undefined, uid: string): void {
   throw new Error(`[add:${uid}] aborted: ${String(reason ?? "operation cancelled")}`);
 }
 
+function operatorGatewayIsReadyForFastAttach(
+  adapter: CustomerLifecycleAdapter,
+  snapshot: UserSnapshot,
+  convergeContent: boolean | undefined,
+): boolean {
+  const { slug } = snapshot;
+  return snapshot.status === "complete"
+    && !convergeContent
+    && Boolean(adapter.isOperatorGateway?.())
+    && Boolean(adapter.customerCoachWiredInOpenclawConfig?.(slug))
+    && Boolean(adapter.hasCustomerAgentRuntime?.(slug))
+    && adapter.hasWorkspaceGitDir(slug)
+    && adapter.hasGitRemote(slug);
+}
+
 async function addCustomerToGatewayInner(
   adapter: CustomerLifecycleAdapter,
   uid: string,
@@ -481,15 +496,7 @@ async function addCustomerToGatewayInner(
   const { ctx, newCustomer } = prepared;
   const { slug } = snapshot;
 
-  if (
-    snapshot.status === "complete"
-    && !opts.convergeContent
-    && adapter.isOperatorGateway?.()
-    && adapter.customerCoachWiredInOpenclawConfig?.(slug)
-    && adapter.hasCustomerAgentRuntime?.(slug)
-    && adapter.hasWorkspaceGitDir(slug)
-    && adapter.hasGitRemote(slug)
-  ) {
+  if (operatorGatewayIsReadyForFastAttach(adapter, snapshot, opts.convergeContent)) {
     steps.push(...(await ensureSshKeyAndGitea(adapter, slug)));
     throwIfAborted(signal, uid);
     adapter.log(
