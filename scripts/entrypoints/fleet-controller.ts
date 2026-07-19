@@ -55,7 +55,7 @@ export function resolveFleetControllerEntrypointConfig(
     builderSlug: env.GATEWAY_BUILDER_SLUG?.trim() ?? "",
     port: parseInt(env.FLEET_CONTROLLER_PORT ?? "3003", 10),
     publicKey: env.FLEET_CONTROLLER_PUBLIC_KEY || "",
-    version: env.BUILD_SHA ?? "unknown",
+    version: env.GATEWAY_IMAGE_TAG?.trim() || env.BUILD_SHA || "unknown",
   };
 }
 

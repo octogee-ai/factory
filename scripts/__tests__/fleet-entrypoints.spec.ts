@@ -26,6 +26,15 @@ import {
 } from "../ops/fleet.js";
 
 describe("fleet-controller entrypoint config", () => {
+  it("reports the complete gateway image tag instead of its ambiguous build SHA", () => {
+    expect(resolveFleetControllerEntrypointConfig({
+      BUILD_SHA: "abc1234",
+      GATEWAY_IMAGE_TAG: "abc1234-oc2026.7.1",
+    }, { gatewayId: "gw-1" })).toMatchObject({
+      version: "abc1234-oc2026.7.1",
+    });
+  });
+
   it("uses a snapshot fingerprint roster for operator gateways so post-mount project creation reconverges", async () => {
     const snapshot = {
       uid: "u1",
