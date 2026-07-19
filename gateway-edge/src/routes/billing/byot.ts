@@ -12,6 +12,7 @@ import { writeSecret, archiveSecret } from "@octogee/core/secret-manager";
 import { byotSecretName, keyFingerprintFor, keyHashFor } from "./helpers.js";
 import { triggerGatewayModelCredentialSync } from "../../lib/byot-sync-trigger.js";
 import { modelCredentialApiKeyState } from "@octogee/shared/types/model-credentials";
+import { pickPlanInputs } from "@octogee/shared/types/billing";
 
 const router = Router();
 
@@ -57,7 +58,7 @@ function tierFieldsFromRequest(req: Request): Record<string, unknown> {
   const user = req.user ?? {};
   return {
     ...(typeof user.tier === "string" ? { tier: user.tier } : {}),
-    ...(typeof user.selectedTier === "string" ? { selectedTier: user.selectedTier } : {}),
+    ...pickPlanInputs(user as Record<string, unknown>),
     ...(typeof user.trialExpired === "boolean" ? { trialExpired: user.trialExpired } : {}),
   };
 }

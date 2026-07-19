@@ -89,7 +89,9 @@ function triggerAgentModelSync(args: {
     tier?: unknown;
     selectedTier?: unknown;
     subscription?: unknown;
+    builderSubscription?: unknown;
     trialStartedAt?: unknown;
+    trialGrant?: unknown;
   };
   // The gateway re-runs resolveBillingProfile on this payload before applying the picks.
   // Every plan input travels: a trial user's catalog access hangs on trialStartedAt and a

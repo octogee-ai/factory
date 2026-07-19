@@ -34,6 +34,7 @@ export interface UserSnapshot {
   subscription?: unknown;
   builderSubscription?: unknown;
   trialStartedAt?: unknown;
+  trialGrant?: unknown;
   // The operator's free-tier model dial, stamped by the fleet broker; drives
   // the house pin and the BYOK fallback baseline at mount-time reassert.
   freeTierModelRef?: string;

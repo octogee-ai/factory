@@ -104,6 +104,18 @@ describe("snapshotConfigFingerprint", () => {
     expect(
       snapshotConfigFingerprint(snap({ trialStartedAt: { _seconds: 1_783_500_000 } })),
     ).not.toBe(base);
+    expect(
+      snapshotConfigFingerprint(snap({
+        trialGrant: {
+          schemaVersion: 1,
+          personalTier: "personal_pro",
+          builderTier: "pro",
+          gatewayId: "trial-op-000001",
+          configHash: "config-a",
+          claimedAt: { _seconds: 1_783_500_000 },
+        },
+      })),
+    ).not.toBe(base);
   });
 
   it("ignores routine Stripe churn — only the plan-resolution slice of subscription hashes", () => {

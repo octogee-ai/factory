@@ -1,5 +1,6 @@
 import { GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME, isGatewayClass, isGatewayProfile, isValidGatewayId, operatorGatewayServiceAccountName, } from "./glm.js";
 import { isSizingTier } from "./sizing.js";
+import { isTrialGatewayAllocation, } from "./trial-gateway.js";
 export const GATEWAY_CONFIG_SCHEMA_VERSION = 1;
 const KUBERNETES_SERVICE_ACCOUNT_NAME = /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/u;
 const REVISION_GATEWAY_ID_RE = /-r[1-9]\d*$/u;
@@ -94,6 +95,50 @@ function isNullableModelBrokerLimits(value) {
         isNonNegative(spendWeekUsd) &&
         isNonNegative(requestsPerMinute));
 }
+function isOptionalTrialGatewayAllocation(value) {
+    return value === undefined || value === null || isTrialGatewayAllocation(value);
+}
+function isLockedTrialOperator(value) {
+    const access = value.operatorAccess;
+    return value.gatewayClass === "operator" &&
+        value.profile === "operator" &&
+        value.imageProfile === "operator" &&
+        isRecord(access) &&
+        access.shellsEnabled === false &&
+        access.controlUiEnabled === false &&
+        access.platformMetadataEgress !== true &&
+        (access.kubeApiServerEgressCidrs === undefined ||
+            (Array.isArray(access.kubeApiServerEgressCidrs) && access.kubeApiServerEgressCidrs.length === 0));
+}
+function hasLegalOwnershipAndAllocation(value) {
+    const allocation = value.allocation;
+    const ownerUid = value.ownerUid;
+    const builderSlug = value.builderSlug;
+    const isOwned = typeof ownerUid === "string" && ownerUid.length > 0 &&
+        typeof builderSlug === "string" && builderSlug.length > 0;
+    if (value.gatewayClass === "shared") {
+        return ownerUid === null && builderSlug === null && (allocation === undefined || allocation === null);
+    }
+    if (isOwned) {
+        if (allocation === undefined || allocation === null)
+            return true;
+        return isTrialGatewayAllocation(allocation) &&
+            allocation.state !== "warming" && allocation.state !== "standby" &&
+            allocation.claimedByUid === ownerUid;
+    }
+    const isUnownedTrial = ownerUid === null && builderSlug === null &&
+        isTrialGatewayAllocation(allocation) &&
+        (allocation.state === "warming" || allocation.state === "standby") &&
+        isLockedTrialOperator(value);
+    if (!isUnownedTrial)
+        return false;
+    const desiredStatus = value.desiredStatus;
+    if (desiredStatus === undefined || desiredStatus === "retired")
+        return true;
+    return allocation.state === "warming"
+        ? desiredStatus === "running" || desiredStatus === "paused"
+        : desiredStatus === "paused";
+}
 export function isBareGatewayId(value) {
     return isValidGatewayId(value) && !REVISION_GATEWAY_ID_RE.test(value);
 }
@@ -119,10 +164,8 @@ export function isGatewayMutableConfig(value) {
         isNullableRecord(value.openclawOverrides) &&
         isNullableModelBrokerLimits(value.modelBrokerLimits) &&
         isNullablePreemption(value.preemption) &&
-        (value.gatewayClass === "shared"
-            ? value.ownerUid === null && value.builderSlug === null
-            : typeof value.ownerUid === "string" && value.ownerUid.length > 0 &&
-                typeof value.builderSlug === "string" && value.builderSlug.length > 0));
+        isOptionalTrialGatewayAllocation(value.allocation) &&
+        hasLegalOwnershipAndAllocation(value));
 }
 export function isGatewayMutableConfigForGateway(value, gatewayId) {
     if (!isBareGatewayId(gatewayId) || !isGatewayMutableConfig(value))
@@ -141,6 +184,19 @@ export function isGatewayMutableConfigForGateway(value, gatewayId) {
         return serviceAccountName === legacyName;
     }
     return true;
+}
+export function isGatewayMutableConfigForDesiredStatus(value, gatewayId, desiredStatus) {
+    if (!isGatewayMutableConfigForGateway(value, gatewayId))
+        return false;
+    const allocation = value.allocation;
+    if (!allocation || allocation.state === "claimed" ||
+        allocation.state === "expiring" || allocation.state === "converted")
+        return true;
+    if (desiredStatus === "retired")
+        return true;
+    return allocation.state === "warming"
+        ? desiredStatus === "running" || desiredStatus === "paused"
+        : desiredStatus === "paused";
 }
 export function effectiveGatewayServiceAccountNameForGateway(config, gatewayId) {
     return config.serviceAccountName || operatorGatewayServiceAccountName(gatewayId);

@@ -288,6 +288,7 @@ export function deriveDesiredByotState(userData: {
   // credits-rail builder resolves catalog, not house_only.
   builderSubscription?: unknown;
   trialStartedAt?: unknown;
+  trialGrant?: unknown;
   // The operator's free-tier model dial, stamped on the snapshot by the
   // trusted side; revalidated here against the catalog.
   freeTierModelRef?: unknown;

@@ -40,6 +40,7 @@ import {
 } from "@octogee/shared/types/glm";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
 import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
+import { builderGatewayIdForSlug } from "@octogee/shared/types/builder-gateway-id";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
   GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
@@ -4603,6 +4604,15 @@ router.post(
         );
         if ("error" in reservation) {
           res.status(reservation.error.status).json(reservation.error.body);
+          return;
+        }
+        const expectedGatewayId = builderGatewayIdForSlug(reservation.ok.builderSlug);
+        if (body.gatewayId !== expectedGatewayId) {
+          res.status(400).json({
+            error: "gatewayId must match the Builder slug",
+            gatewayId: body.gatewayId,
+            expectedGatewayId,
+          });
           return;
         }
 

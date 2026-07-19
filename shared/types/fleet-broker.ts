@@ -138,6 +138,7 @@ export interface FleetBrokerUserSnapshot {
   // credits-rail builder as catalog, not house_only.
   builderSubscription?: unknown;
   trialStartedAt?: unknown;
+  trialGrant?: unknown;
   // The operator's free-tier model dial (platformConfig/models), resolved
   // server-side: the house pin for house_only plans and the BYOK fallback.
   // Fingerprinted — a dial flip re-ensures mounted house-only customers.

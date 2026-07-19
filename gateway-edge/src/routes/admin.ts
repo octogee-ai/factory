@@ -17,13 +17,27 @@ import { deleteAuthUserTolerantOfMissing as deleteAuthUserLib } from "@octogee/c
 import { MODEL_CATALOG } from "@octogee/shared/types/model-catalog";
 import { CONNECTOR_OAUTH_REVOCATION_TARGETS } from "@octogee/shared/types/connectors";
 import { modelRefForCatalogEntry } from "@octogee/shared/types/agent-models";
+import { BUILDER_TIERS, TIERS } from "@octogee/shared/types/billing-tiers";
+import {
+  GATEWAY_RELEASES_SUBCOLLECTION,
+  isGatewayDesiredDoc,
+  isReleasePayload,
+} from "@octogee/shared/types/gateway-releases";
 import {
   DEFAULT_FREE_TIER_MODEL_REF,
   PLATFORM_CONFIG_COLLECTION,
   PLATFORM_MODEL_CONFIG_DOC,
+  PLATFORM_TRIAL_CONFIG_DOC,
   parsePlatformConnectConfig,
   parsePlatformModelConfig,
+  parsePlatformTrialConfig,
 } from "@octogee/shared/types/platform-config";
+import {
+  GATEWAY_POOLS_COLLECTION,
+  TRIAL_GATEWAY_CLAIMS_COLLECTION,
+  TRIAL_GATEWAY_POOL_DOC,
+  isTrialGatewayPoolState,
+} from "@octogee/shared/types/trial-gateway";
 import {
   platformConnectDoc,
   readPlatformConnectConfig,
@@ -158,6 +172,114 @@ router.put("/platform-connect-config", async (req, res) => {
   } catch (err) {
     logger.error("[admin] platform-connect-config write failed", { err });
     res.status(500).json({ error: "platform_config_write_failed" });
+  }
+});
+
+const platformTrialDoc = () =>
+  db.collection(PLATFORM_CONFIG_COLLECTION).doc(PLATFORM_TRIAL_CONFIG_DOC);
+
+router.get("/platform-trial-config", async (_req, res) => {
+  try {
+    const claims = db.collection(TRIAL_GATEWAY_CLAIMS_COLLECTION);
+    const [configSnap, poolSnap, waitingSnap, claimedSnap] = await Promise.all([
+      platformTrialDoc().get(),
+      db.collection(GATEWAY_POOLS_COLLECTION).doc(TRIAL_GATEWAY_POOL_DOC).get(),
+      claims.where("status", "==", "waiting").orderBy("requestedAt", "asc").get(),
+      claims.where("status", "==", "claimed").get(),
+    ]);
+    const config = parsePlatformTrialConfig(configSnap.data());
+    if (!config) {
+      logger.error("[admin] trial config is missing or invalid", {
+        exists: configSnap.exists,
+      });
+      res.status(409).json({ error: "trial_config_invalid" });
+      return;
+    }
+    const storedPool = poolSnap.data();
+    const pool = isTrialGatewayPoolState(storedPool) ? storedPool : null;
+    if (!pool) {
+      logger.error("[admin] trial gateway pool state is missing or invalid", {
+        exists: poolSnap.exists,
+      });
+    }
+    res.json({
+      config,
+      personalPlans: ["personal_free", "personal", "personal_pro", "personal_pro_max"].map((name) => ({
+        name,
+        displayName: TIERS[name as keyof typeof TIERS].displayName,
+      })),
+      builderPlans: ["hobby", "pro", "team"].map((name) => ({
+        name,
+        displayName: BUILDER_TIERS[name as keyof typeof BUILDER_TIERS].displayName,
+        sizingTier: BUILDER_TIERS[name as keyof typeof BUILDER_TIERS].instance,
+      })),
+      pool: {
+        availableGatewayId: pool?.availableGatewayId ?? null,
+        preparingGatewayId: pool?.preparingGatewayId ?? null,
+        waitingClaims: waitingSnap.size,
+        claimedCount: claimedSnap.size,
+        oldestQueuedBuilderUid: waitingSnap.docs[0]?.id ?? null,
+        lastError: pool ? pool.lastError : (
+          { at: Date.now(), code: "pool_state_invalid", message: "trial gateway pool state is missing or invalid" }
+        ),
+      },
+    });
+  } catch (err) {
+    logger.error("[admin] platform-trial-config read failed", { err });
+    res.status(500).json({ error: "trial_config_read_failed" });
+  }
+});
+
+router.put("/platform-trial-config", async (req, res) => {
+  const config = parsePlatformTrialConfig(req.body);
+  if (!config) {
+    res.status(400).json({ error: "invalid_trial_config" });
+    return;
+  }
+  try {
+    const sourceRef = db.collection("gateways").doc(config.releaseSourceGatewayId);
+    const sourceSnap = await sourceRef.get();
+    const source = sourceSnap.data();
+    if (
+      !isGatewayDesiredDoc(source) ||
+      source.gatewayId !== config.releaseSourceGatewayId ||
+      source.desiredStatus === "retired"
+    ) {
+      res.status(400).json({ error: "invalid_release_source" });
+      return;
+    }
+    const releaseSnap = await sourceRef
+      .collection(GATEWAY_RELEASES_SUBCOLLECTION)
+      .doc(String(source.desiredRelease))
+      .get();
+    const release = releaseSnap.data();
+    if (
+      !releaseSnap.exists ||
+      release?.gatewayId !== config.releaseSourceGatewayId ||
+      release.release !== source.desiredRelease ||
+      !isReleasePayload(release.payload)
+    ) {
+      res.status(400).json({ error: "invalid_release_source" });
+      return;
+    }
+    await platformTrialDoc().set({
+      schemaVersion: config.schemaVersion,
+      defaultPersonalTier: config.defaultPersonalTier,
+      defaultBuilderTier: config.defaultBuilderTier,
+      releaseSourceGatewayId: config.releaseSourceGatewayId,
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: req.uid ?? null,
+    });
+    logger.info("[admin] trial defaults set", {
+      defaultPersonalTier: config.defaultPersonalTier,
+      defaultBuilderTier: config.defaultBuilderTier,
+      releaseSourceGatewayId: config.releaseSourceGatewayId,
+      updatedBy: req.uid,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error("[admin] platform-trial-config write failed", { err });
+    res.status(500).json({ error: "trial_config_write_failed" });
   }
 });
 

@@ -34,6 +34,7 @@ import {
 import {
   createAuthSecretEnsurer,
   defaultRandomTokenHex,
+  type AuthSecretEnsurer,
 } from "./auth-secret-ensurer.js";
 import { createGatewayServiceAccountEnsurer } from "./gateway-service-account-ensurer.js";
 import {
@@ -200,6 +201,11 @@ import {
   startMaintenanceRestartWatcher,
   type ControllerMaintenanceGate,
 } from "./maintenance-gate.js";
+import {
+  TRIAL_GATEWAY_POOL_RECONCILE_MS_DEFAULT,
+  createFirestoreTrialGatewayPoolDeps,
+  startTrialGatewayPoolReconciler,
+} from "./trial-gateway-pool.js";
 import type {
   FleetBrokerChannelBinding,
   FleetBrokerProjectRestore,
@@ -257,6 +263,10 @@ const DEDICATED_GATEWAY_IDLE_SWEEP_MS = parseNonNegativeInt(
 const PREEMPTION_HANDOFF_SWEEP_MS = parseNonNegativeInt(
   process.env.PREEMPTION_HANDOFF_SWEEP_MS,
   PREEMPTION_HANDOFF_SWEEP_MS_DEFAULT,
+);
+const TRIAL_GATEWAY_POOL_RECONCILE_MS = parseNonNegativeInt(
+  process.env.TRIAL_GATEWAY_POOL_RECONCILE_MS,
+  TRIAL_GATEWAY_POOL_RECONCILE_MS_DEFAULT,
 );
 const HELM_RECOVERY_SWEEP_MS = parseNonNegativeInt(
   process.env.HELM_RECOVERY_SWEEP_MS,
@@ -345,6 +355,8 @@ interface ControllerDeps {
   operatorReadyRefreshMs?: number;
 
   chartFingerprint?: string;
+
+  ensureGatewayAuthSecret: AuthSecretEnsurer["ensureAuthSecret"];
 }
 
 function maintenanceFreezeReasonSuffix(reason: string | null): string {
@@ -1618,6 +1630,16 @@ function startControllerBackgroundTasks({
     { db, now: () => Date.now(), log },
     PREEMPTION_HANDOFF_SWEEP_MS,
   );
+  const stopTrialGatewayPool = startTrialGatewayPoolReconciler(
+    createFirestoreTrialGatewayPoolDeps({
+      db,
+      namespace: NAMESPACE,
+      ensureAuthSecret: deps.ensureGatewayAuthSecret,
+      now: () => Date.now(),
+      log,
+    }),
+    TRIAL_GATEWAY_POOL_RECONCILE_MS,
+  );
   const httpKubeOps = deps.kubeOps;
   const decryptConnectorSecret = createConnectorSecretDecryptor();
   const stopHttp = startHttpServer({
@@ -1658,6 +1680,7 @@ function startControllerBackgroundTasks({
     stopActivationSweeper,
     stopIdleSweeper,
     stopPreemptionHandoffSweeper,
+    stopTrialGatewayPool,
     stopHttp,
   ];
 }
@@ -1884,6 +1907,7 @@ async function createControllerRuntime(
     convergeGateways,
     operatorReadyRefreshMs: OPERATOR_READY_REFRESH_MS_DEFAULT,
     chartFingerprint,
+    ensureGatewayAuthSecret: authSecretEnsurer.ensureAuthSecret,
   };
 
   return { deps, fleetControllerPrivateKey, chartFingerprint };
