@@ -20,9 +20,6 @@ export function gatewayHeartbeatMatchesImageTag(heartbeatVersion, imageTag) {
     if (heartbeatVersion === imageTag)
         return true;
     const [reference] = imageTag.split("@", 1);
-    if (heartbeatVersion === reference)
-        return true;
-    const [buildSha] = reference.split("-oc", 1);
-    return heartbeatVersion === buildSha;
+    return heartbeatVersion === reference;
 }
 export const IMAGE_TAG_PATTERN = { test: isGatewayImageTag };

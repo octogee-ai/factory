@@ -9,8 +9,8 @@ describe("gatewayHeartbeatMatchesImageTag", () => {
     )).toBe(true);
   });
 
-  it("matches a legacy build-SHA heartbeat to its OpenClaw-qualified artifact tag", () => {
-    expect(gatewayHeartbeatMatchesImageTag("cf36a88", "cf36a88-oc2026.7.1")).toBe(true);
+  it("rejects an ambiguous legacy build-SHA heartbeat for an OpenClaw-qualified tag", () => {
+    expect(gatewayHeartbeatMatchesImageTag("cf36a88", "cf36a88-oc2026.7.1")).toBe(false);
   });
 
   it("matches the tag-name heartbeat for a digest-pinned W9 artifact", () => {

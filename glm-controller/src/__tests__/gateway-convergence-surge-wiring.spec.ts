@@ -64,7 +64,7 @@ describe("gateway convergence surge wiring", () => {
     })).resolves.toEqual({ kind: "steady" });
   });
 
-  it("keeps accepting a legacy build-SHA heartbeat after the surge handoff", async () => {
+  it("does not mark a qualified release live from an ambiguous legacy SHA heartbeat", async () => {
     await expect(refineGatewayConvergenceAction({
       passDeps: { reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })) },
       gateway: gateway(),
@@ -72,6 +72,6 @@ describe("gateway convergence surge wiring", () => {
       runtime: runtime("def5678"),
       helmObserved: { imageRepository: repository, imageTag: artifact.imageTag, replicas: 1 },
       action: { kind: "steady" },
-    })).resolves.toEqual({ kind: "mark-live" });
+    })).resolves.toEqual({ kind: "steady" });
   });
 });
