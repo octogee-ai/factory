@@ -34,13 +34,13 @@ describe("gateway convergence surge wiring", () => {
       passDeps: { reconcileSurgeHandoff },
       gateway: gateway(),
       artifact,
-      runtime: runtime("def5678"),
+      runtime: runtime("def5678-oc2026.7.1"),
       helmObserved: { imageRepository: repository, imageTag: artifact.imageTag, replicas: 1 },
       action: { kind: "steady" },
     })).resolves.toEqual({ kind: "mark-live" });
     expect(reconcileSurgeHandoff).toHaveBeenCalledWith({
       gatewayId: "bender",
-      desiredVersion: "def5678",
+      desiredImageTag: "def5678-oc2026.7.1",
       requiresCustomerMigration: true,
     });
 
@@ -62,5 +62,16 @@ describe("gateway convergence surge wiring", () => {
       helmObserved: { imageRepository: repository, imageTag: artifact.imageTag, replicas: 1 },
       action: { kind: "steady" },
     })).resolves.toEqual({ kind: "steady" });
+  });
+
+  it("keeps accepting a legacy build-SHA heartbeat after the surge handoff", async () => {
+    await expect(refineGatewayConvergenceAction({
+      passDeps: { reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })) },
+      gateway: gateway(),
+      artifact,
+      runtime: runtime("def5678"),
+      helmObserved: { imageRepository: repository, imageTag: artifact.imageTag, replicas: 1 },
+      action: { kind: "steady" },
+    })).resolves.toEqual({ kind: "mark-live" });
   });
 });

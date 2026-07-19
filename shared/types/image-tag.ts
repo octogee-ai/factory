@@ -20,4 +20,16 @@ export function isGatewayImageTag(value: string): boolean {
   );
 }
 
+export function gatewayHeartbeatMatchesImageTag(
+  heartbeatVersion: string | null | undefined,
+  imageTag: string,
+): boolean {
+  if (!heartbeatVersion) return false;
+  if (heartbeatVersion === imageTag) return true;
+  const [reference] = imageTag.split("@", 1);
+  if (heartbeatVersion === reference) return true;
+  const [buildSha] = reference.split("-oc", 1);
+  return heartbeatVersion === buildSha;
+}
+
 export const IMAGE_TAG_PATTERN = { test: isGatewayImageTag };
