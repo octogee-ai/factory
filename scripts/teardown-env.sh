@@ -600,13 +600,15 @@ if $FULL; then
       # `-y` so a fresh shell doesn't hang on npx's "Ok to proceed? (y)"
       # tsx-install prompt when running non-interactively.
       npx -y tsx -e "
-import * as admin from 'firebase-admin';
+import { cert, initializeApp } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
 import * as fs from 'fs';
 const sa = JSON.parse(fs.readFileSync('$SA_KEY', 'utf8'));
-admin.initializeApp({ credential: admin.credential.cert(sa as any), projectId: '$FIREBASE_PROJECT' });
+initializeApp({ credential: cert(sa as any), projectId: '$FIREBASE_PROJECT' });
 (async () => {
-  const list = await admin.auth().listUsers(1000);
-  await Promise.all(list.users.map(u => admin.auth().deleteUser(u.uid)));
+  const auth = getAuth();
+  const list = await auth.listUsers(1000);
+  await Promise.all(list.users.map(u => auth.deleteUser(u.uid)));
   console.log('Deleted ' + list.users.length + ' auth users');
   process.exit(0);
 })();

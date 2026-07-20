@@ -1,6 +1,7 @@
 
 
-import * as admin from "firebase-admin";
+import { cert, initializeApp } from "firebase-admin/app";
+import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -190,13 +191,13 @@ for (const m of [
     kind: "general",
     name: "general",
     mattermost: { channelId },
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: FieldValue.serverTimestamp(),
   });
   const updates: Record<string, unknown> = {
     provisioningState: "active",
     provisioningError: null,
     pendingVisibility: null,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
   };
   if (p.targetVisibility) updates.visibility = p.targetVisibility;
   if (!p.giteaRepoName) updates.giteaRepoName = p.projectSlug;
@@ -215,11 +216,11 @@ async function main() {
   MM_ADMIN_TOKEN = config.mmAdminToken;
 
   const saKey = JSON.parse(fs.readFileSync(config.saKey, "utf-8"));
-  admin.initializeApp({
-    credential: admin.credential.cert(saKey),
+  initializeApp({
+    credential: cert(saKey),
     projectId: saKey.project_id,
   });
-  db = admin.firestore();
+  db = getFirestore();
   console.log(`Project: ${saKey.project_id}${APPLY ? "" : " [DRY RUN — pass --apply to write]"}`);
 
   const needs = await findProjectsNeedingRepair();
