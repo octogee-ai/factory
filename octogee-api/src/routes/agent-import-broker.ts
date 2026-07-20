@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from "express";
+import { Router, type NextFunction, type Request, type Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
 
 import { slugFromAssignedUser } from "@octogee/core/assigned-roster";
@@ -6,11 +6,7 @@ import { classifyAgentImportArchivePath } from "@octogee/shared/types/agent-impo
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { isValidUsername } from "@octogee/shared/types/identity";
 import type { AgentImportManifestEntry } from "../../../gateway-edge/src/lib/agent-import-git.js";
-import type {
-  AgentImportIdentity,
-  AgentImportRecord,
-  StoredAgentImportPlan,
-} from "../../../gateway-edge/src/lib/agent-import-service.js";
+import type { AgentImportIdentity } from "../../../gateway-edge/src/lib/agent-import-service.js";
 
 const IMPORT_ID_RE = /^[A-Za-z0-9_-]{1,160}$/;
 const GITHUB_OWNER_RE = /^[A-Za-z0-9-]{1,39}$/;
@@ -46,6 +42,8 @@ interface OwnerContext {
   gatewayId: string;
 }
 
+type BrokerRouter = ReturnType<typeof Router>;
+
 function object(value: unknown): JsonObject | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as JsonObject
@@ -72,15 +70,9 @@ async function ownerContext(
 ): Promise<OwnerContext | null> {
   const bound = boundGateway(req, res);
   if (!bound) return null;
-  if (!safeUid(req.uid)) {
-    res.status(401).json({ error: "Unauthenticated" });
-    return null;
-  }
-  if (bound.ownerUid && bound.ownerUid !== req.uid) {
-    res.status(403).json({ error: "forbidden" });
-    return null;
-  }
-  const userSnapshot = await deps.db.doc(`users/${req.uid}`).get();
+  const uid = authenticatedUid(req, res, bound);
+  if (!uid) return null;
+  const userSnapshot = await deps.db.doc(`users/${uid}`).get();
   const user = userSnapshot.exists ? userSnapshot.data() : undefined;
   const slug = slugFromAssignedUser(user);
   const provisioning = object(object(user)?.provisioning);
@@ -94,11 +86,23 @@ async function ownerContext(
     return null;
   }
   const workspace = await deps.db.doc(`workspaces/${slug}`).get();
-  if (!workspace.exists || workspace.data()?.ownerUid !== req.uid) {
+  if (!workspace.exists || workspace.data()?.ownerUid !== uid) {
     res.status(403).json({ error: "forbidden" });
     return null;
   }
-  return { uid: req.uid, slug, gatewayId: bound.gatewayId };
+  return { uid, slug, gatewayId: bound.gatewayId };
+}
+
+function authenticatedUid(req: Request, res: Response, bound: GatewayBinding): string | null {
+  if (!safeUid(req.uid)) {
+    res.status(401).json({ error: "Unauthenticated" });
+    return null;
+  }
+  if (bound.ownerUid && bound.ownerUid !== req.uid) {
+    res.status(403).json({ error: "forbidden" });
+    return null;
+  }
+  return req.uid;
 }
 
 function importId(req: Request, res: Response): string | null {
@@ -157,22 +161,11 @@ async function githubToken(context: OwnerContext, deps: AgentImportBrokerDeps): 
   return token;
 }
 
-export function createAgentImportBrokerRoutes(deps: AgentImportBrokerDeps): Router {
-  const router = Router();
+function context(res: Response): OwnerContext {
+  return res.locals.agentImportOwner as OwnerContext;
+}
 
-  router.use(async (req, res, next) => {
-    try {
-      const context = await ownerContext(req, res, deps);
-      if (!context) return;
-      res.locals.agentImportOwner = context;
-      next();
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  const context = (res: Response): OwnerContext => res.locals.agentImportOwner as OwnerContext;
-
+function registerAccessRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps): void {
   router.post("/authorize", (req, res) => {
     const owner = context(res);
     const body = object(req.body);
@@ -212,7 +205,9 @@ export function createAgentImportBrokerRoutes(deps: AgentImportBrokerDeps): Rout
       next(error);
     }
   });
+}
 
+function registerRecordRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps): void {
   router.put("/records/:importId", async (req, res, next) => {
     try {
       const id = importId(req, res);
@@ -244,7 +239,9 @@ export function createAgentImportBrokerRoutes(deps: AgentImportBrokerDeps): Rout
       next(error);
     }
   });
+}
 
+function registerPlanRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps): void {
   router.put("/plans/:importId", async (req, res, next) => {
     try {
       const id = importId(req, res);
@@ -288,7 +285,9 @@ export function createAgentImportBrokerRoutes(deps: AgentImportBrokerDeps): Rout
       next(error);
     }
   });
+}
 
+function registerArchiveRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps): void {
   router.put("/archives/:importId", async (req, res, next) => {
     try {
       const id = importId(req, res);
@@ -342,7 +341,9 @@ export function createAgentImportBrokerRoutes(deps: AgentImportBrokerDeps): Rout
       next(error);
     }
   });
+}
 
+function registerBlobRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps): void {
   router.put("/blobs/:importId", async (req, res, next) => {
     try {
       const id = importId(req, res);
@@ -380,7 +381,9 @@ export function createAgentImportBrokerRoutes(deps: AgentImportBrokerDeps): Rout
       next(error);
     }
   });
+}
 
+function registerIdentityRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps): void {
   router.get("/identity", async (_req, res, next) => {
     try {
       res.json(await deps.readIdentity(context(res).uid));
@@ -402,18 +405,40 @@ export function createAgentImportBrokerRoutes(deps: AgentImportBrokerDeps): Rout
       next(error);
     }
   });
+}
 
-  router.use((error: unknown, _req: Request, res: Response, next: (error?: unknown) => void) => {
-    const data = object(error);
-    if (typeof data?.status !== "number" || typeof data.code !== "string") {
-      next(error);
-      return;
-    }
-    res.status(data.status).json({
-      error: data.code,
-      message: error instanceof Error ? error.message : "Agent import broker failed",
-    });
+function agentImportBrokerError(error: unknown, _req: Request, res: Response, next: NextFunction): void {
+  const data = object(error);
+  if (typeof data?.status !== "number" || typeof data.code !== "string") {
+    next(error);
+    return;
+  }
+  res.status(data.status).json({
+    error: data.code,
+    message: error instanceof Error ? error.message : "Agent import broker failed",
   });
+}
+
+export function createAgentImportBrokerRoutes(deps: AgentImportBrokerDeps): Router {
+  const router = Router();
+  router.use(async (req, res, next) => {
+    try {
+      const owner = await ownerContext(req, res, deps);
+      if (!owner) return;
+      res.locals.agentImportOwner = owner;
+      next();
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  registerAccessRoutes(router, deps);
+  registerRecordRoutes(router, deps);
+  registerPlanRoutes(router, deps);
+  registerArchiveRoutes(router, deps);
+  registerBlobRoutes(router, deps);
+  registerIdentityRoutes(router, deps);
+  router.use(agentImportBrokerError);
 
   return router;
 }

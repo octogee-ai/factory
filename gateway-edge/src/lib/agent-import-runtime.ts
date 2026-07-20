@@ -18,7 +18,6 @@ import { cloneGithubAgentImportSource, extractLocalAgentImportArchive } from "./
 import {
   AgentImportService,
   type AgentImportDoctorResult,
-  type AgentImportIdentity,
 } from "./agent-import-service.js";
 
 type JsonObject = Record<string, unknown>;

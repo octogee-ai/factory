@@ -403,16 +403,17 @@ export function planAgentImportConfig(input, options) {
     return {
         analyzer: "octogee-policy-v1",
         doctorOutcome: options.doctorOutcome,
-        effectiveOutcome: Object.keys(planned.runtimePatch).length > 0
-            ? "applied"
-            : runtimeEntries(portable).length === 0
-                ? "unchanged"
-                : "safe_baseline",
+        effectiveOutcome: agentImportConfigOutcome(portable, planned.runtimePatch),
         identity,
         runtimePatch: planned.runtimePatch,
         decisions,
         reauth: reauthenticationRequirements(portable, artifacts.configInventory),
     };
+}
+function agentImportConfigOutcome(portable, runtimePatch) {
+    if (Object.keys(runtimePatch).length > 0)
+        return "applied";
+    return runtimeEntries(portable).length === 0 ? "unchanged" : "safe_baseline";
 }
 const ARCHIVE_METADATA = new Set([
     "manifest.json", "portable-agent.json", "config-inventory.json", "doctor-candidate.json",

@@ -164,12 +164,14 @@ async function command(
   return result.stdout.trim();
 }
 
+const GIT_COMMAND = "/usr/bin/git";
+
 function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv, label = "git"): Promise<string> {
-  return command("/usr/bin/git", args, { cwd, env, label });
+  return command(GIT_COMMAND, args, { cwd, env, label });
 }
 
 async function readRef(cwd: string, ref: string): Promise<string | null> {
-  const result = await defaultRun("/usr/bin/git", ["rev-parse", "--verify", ref], { cwd });
+  const result = await defaultRun(GIT_COMMAND, ["rev-parse", "--verify", ref], { cwd });
   if (!result.error && (result.status === 1 || result.status === 128)) return null;
   if (result.error || result.status !== 0) throw safeCommandError("git ref lookup", result);
   return requireSha(result.stdout.trim(), "git ref");
@@ -270,7 +272,7 @@ async function historyTrees(repoDir: string, head: string): Promise<Map<string, 
     const id = line.split(" ", 1)[0];
     return SHA_RE.test(id) ? [id] : [];
   }))];
-  const check = await command("/usr/bin/git", ["cat-file", "--batch-check"], {
+  const check = await command(GIT_COMMAND, ["cat-file", "--batch-check"], {
     cwd: repoDir,
     input: `${objectIds.join("\n")}\n`,
     label: "git tree batch check",
@@ -279,7 +281,7 @@ async function historyTrees(repoDir: string, head: string): Promise<Map<string, 
     const [id, type] = line.split(" ", 3);
     return SHA_RE.test(id) && type === "tree" ? [id] : [];
   });
-  const batch = await runChild("/usr/bin/git", ["cat-file", "--batch"], {
+  const batch = await runChild(GIT_COMMAND, ["cat-file", "--batch"], {
     cwd: repoDir,
     input: `${treeIds.join("\n")}\n`,
     maxOutput: MAX_TREE_METADATA_OUTPUT,
@@ -295,6 +297,43 @@ async function historyTrees(repoDir: string, head: string): Promise<Map<string, 
   return new Map([...parseBatchObjects(batch.stdout)].map(([id, contents]) => [id, parseRawTree(contents)]));
 }
 
+function assertSafeHistoryEntry(entry: RawTreeEntry, relative: string, commit: string): void {
+  if (classifyAgentImportArchivePath(`workspace/${relative}`) !== "workspace") {
+    throw new AgentImportGitError("unsafe_git_entry", `source history contains blocked path ${relative} at ${commit}`);
+  }
+  if (entry.mode === "120000" || entry.mode === "160000") {
+    throw new AgentImportGitError("unsafe_git_entry", `source history contains unsafe path ${relative} at ${commit}`);
+  }
+  if (entry.mode !== "100644" && entry.mode !== "100755") {
+    throw new AgentImportGitError("unsafe_git_entry", `source history contains mode ${entry.mode} at ${relative} in ${commit}`);
+  }
+}
+
+function assertSafeCommitTree(
+  rootTree: string,
+  commit: string,
+  trees: Map<string, RawTreeEntry[]>,
+  checked: Set<string>,
+): void {
+  const stack = [{ objectId: rootTree, prefix: "" }];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    const cacheKey = `${current.objectId}\0${current.prefix}`;
+    if (checked.has(cacheKey)) continue;
+    checked.add(cacheKey);
+    const entries = trees.get(current.objectId);
+    if (!entries) throw new AgentImportGitError("invalid_git_tree", "reachable git tree object is missing");
+    for (const entry of entries) {
+      const relative = current.prefix ? `${current.prefix}/${entry.name}` : entry.name;
+      if (entry.mode === "040000") {
+        stack.push({ objectId: entry.objectId, prefix: relative });
+      } else {
+        assertSafeHistoryEntry(entry, relative, commit);
+      }
+    }
+  }
+}
+
 async function assertSafeHistoryTrees(repoDir: string, head: string): Promise<void> {
   const commits = (await git(repoDir, ["log", "--format=%H%x09%T", head])).split(/\r?\n/).map((line) => {
     const [commit, tree] = line.split("\t", 2);
@@ -302,33 +341,7 @@ async function assertSafeHistoryTrees(repoDir: string, head: string): Promise<vo
   });
   const trees = await historyTrees(repoDir, head);
   const checked = new Set<string>();
-  for (const { commit, tree } of commits) {
-    const stack = [{ objectId: tree, prefix: "" }];
-    while (stack.length > 0) {
-      const current = stack.pop()!;
-      const cacheKey = `${current.objectId}\0${current.prefix}`;
-      if (checked.has(cacheKey)) continue;
-      checked.add(cacheKey);
-      const entries = trees.get(current.objectId);
-      if (!entries) throw new AgentImportGitError("invalid_git_tree", "reachable git tree object is missing");
-      for (const entry of entries) {
-        const relative = current.prefix ? `${current.prefix}/${entry.name}` : entry.name;
-        if (entry.mode === "040000") {
-          stack.push({ objectId: entry.objectId, prefix: relative });
-          continue;
-        }
-        if (classifyAgentImportArchivePath(`workspace/${relative}`) !== "workspace") {
-          throw new AgentImportGitError("unsafe_git_entry", `source history contains blocked path ${relative} at ${commit}`);
-        }
-        if (entry.mode === "120000" || entry.mode === "160000") {
-          throw new AgentImportGitError("unsafe_git_entry", `source history contains unsafe path ${relative} at ${commit}`);
-        }
-        if (entry.mode !== "100644" && entry.mode !== "100755") {
-          throw new AgentImportGitError("unsafe_git_entry", `source history contains mode ${entry.mode} at ${relative} in ${commit}`);
-        }
-      }
-    }
-  }
+  for (const { commit, tree } of commits) assertSafeCommitTree(tree, commit, trees, checked);
 }
 
 export async function inspectAgentImportRepository(
@@ -487,7 +500,7 @@ async function commitTree(
     GIT_COMMITTER_EMAIL: "agent-import@octogee.invalid",
   });
   return requireSha(await command(
-    "/usr/bin/git",
+    GIT_COMMAND,
     ["commit-tree", tree, ...parents.flatMap((parent) => ["-p", parent])],
     { cwd: repoDir, env, input: `${message}\n`, label: "git commit-tree" },
   ), "created commit");
@@ -645,7 +658,7 @@ export async function applyAgentImportRepository(options: {
   const stageDir = path.join(stageRoot, "source");
   let retainBlobs = false;
   try {
-    await command("/usr/bin/git", ["clone", "--quiet", "--no-hardlinks", options.sourceDir, stageDir], { label: "source staging clone" });
+    await command(GIT_COMMAND, ["clone", "--quiet", "--no-hardlinks", options.sourceDir, stageDir], { label: "source staging clone" });
     clearWorkingTree(stageDir);
     readDirectory(options.sourceDir, stageDir);
     preserveTargetPath(options.targetDir, stageDir, ".files");
