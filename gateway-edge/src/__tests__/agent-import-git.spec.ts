@@ -94,11 +94,25 @@ describe("inspectAgentImportRepository", () => {
     expect(env).toMatchObject({
       PATH: "/usr/local/bin:/usr/bin:/bin",
       GIT_CONFIG_NOSYSTEM: "1",
+      GIT_NO_REPLACE_OBJECTS: "1",
       GIT_TERMINAL_PROMPT: "0",
     });
     expect(env).not.toHaveProperty("OPENCLAW_GATEWAY_TOKEN");
     expect(env).not.toHaveProperty("GITEA_TOKEN");
     expect(env).not.toHaveProperty("SSH_AUTH_SOCK");
+  });
+
+  it("rejects symlink modes that exist only in historical trees", async () => {
+    const source = repo("agent-import-historical-symlink", { "MEMORY.md": "memory\n" });
+    fs.symlinkSync("MEMORY.md", path.join(source, "linked-memory"));
+    git(source, "add", "linked-memory");
+    git(source, "commit", "-q", "-m", "historical link");
+    fs.rmSync(path.join(source, "linked-memory"));
+    git(source, "add", "-A");
+    git(source, "commit", "-q", "-m", "remove link");
+
+    await expect(inspectAgentImportRepository(source, { scanSecrets: async () => [] }))
+      .rejects.toMatchObject({ code: "unsafe_git_entry" });
   });
 });
 
@@ -233,6 +247,42 @@ describe("applyAgentImportRepository", () => {
     expect(git(target, "rev-list", "--count", "main")).toBe("3");
   });
 
+  it("publishes missing remote refs when retrying an exact local import after a crash", async () => {
+    const source = repo("agent-import-source", { "AGENTS.md": "Moof\n" });
+    const sourceHead = git(source, "rev-parse", "HEAD");
+    const target = repo("agent-import-target", { "README.md": "starter\n" });
+    const destinationHead = git(target, "rev-parse", "HEAD");
+    const remote = temp("agent-import-crash-remote");
+    git(remote, "init", "-q", "--bare");
+    git(target, "remote", "add", "origin", remote);
+    git(target, "push", "-q", "-u", "origin", "main");
+    const first = await applyAgentImportRepository({
+      sourceDir: source,
+      sourceHead,
+      targetDir: target,
+      destinationHead,
+      importId: "import-crash",
+      slug: "jack",
+      storeBlob: vi.fn(),
+      push: false,
+    });
+
+    const retried = await applyAgentImportRepository({
+      sourceDir: source,
+      sourceHead,
+      targetDir: target,
+      destinationHead,
+      importId: "import-crash",
+      slug: "jack",
+      storeBlob: vi.fn(),
+    });
+
+    expect(retried).toEqual(first);
+    expect(git(remote, "rev-parse", "refs/heads/main")).toBe(first.importCommit);
+    expect(git(remote, "rev-parse", "refs/octogee/imports/import-crash/source")).toBe(sourceHead);
+    expect(git(remote, "rev-parse", "refs/octogee/imports/import-crash/commit")).toBe(first.importCommit);
+  });
+
   it("rolls back with a forward commit only while the import commit is still current", async () => {
     const source = repo("agent-import-source", { "AGENTS.md": "Moof\n" });
     const target = repo("agent-import-target", { "README.md": "starter\n" });
@@ -257,7 +307,18 @@ describe("applyAgentImportRepository", () => {
     });
     expect(git(target, "rev-list", "--parents", "-n", "1", rolledBack.rollbackCommit).split(" "))
       .toEqual([rolledBack.rollbackCommit, applied.importCommit]);
+    expect(git(target, "rev-parse", "refs/octogee/imports/import-rollback/rollback"))
+      .toBe(rolledBack.rollbackCommit);
     expect(fs.readFileSync(path.join(target, "README.md"), "utf8")).toBe("starter\n");
+
+    const retried = await rollbackAgentImportRepository({
+      targetDir: target,
+      importCommit: applied.importCommit,
+      destinationHead,
+      importId: "import-rollback",
+      push: false,
+    });
+    expect(retried).toEqual(rolledBack);
 
     await expect(rollbackAgentImportRepository({
       targetDir: target,
@@ -265,7 +326,7 @@ describe("applyAgentImportRepository", () => {
       destinationHead,
       importId: "import-rollback",
       push: false,
-    })).rejects.toMatchObject({ code: "rollback_window_closed" });
+    })).resolves.toEqual(rolledBack);
   });
 });
 

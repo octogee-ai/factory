@@ -150,4 +150,16 @@ describe("local agent import archive", () => {
       { tmpRoot: temp("extract-root"), maxEntryBytes: 64 },
     )).rejects.toMatchObject({ code: "archive_too_large" });
   });
+
+  it("rejects replacement refs smuggled through packed-refs", async () => {
+    const source = sourceRepo();
+    const zip = await JSZip.loadAsync(await localArchive(source));
+    const head = git(source, "rev-parse", "HEAD");
+    zip.file("git/packed-refs", `# pack-refs with: peeled fully-peeled sorted\n${head} refs/replace/${head}\n`);
+
+    await expect(extractLocalAgentImportArchive(
+      await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }),
+      { tmpRoot: temp("extract-root") },
+    )).rejects.toMatchObject({ code: "unsafe_archive_entry" });
+  });
 });

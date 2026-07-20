@@ -165,6 +165,7 @@ describe("agent import transport contracts", () => {
     expect(classifyAgentImportArchivePath("workspace/MEMORY.md")).toBe("workspace");
     expect(classifyAgentImportArchivePath("git/objects/aa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")).toBe("git");
     expect(classifyAgentImportArchivePath("git/refs/heads/main")).toBe("git");
+    expect(classifyAgentImportArchivePath("git/shallow")).toBeNull();
     expect(classifyAgentImportArchivePath("git/config")).toBeNull();
     expect(classifyAgentImportArchivePath("workspace/.env")).toBeNull();
     expect(classifyAgentImportArchivePath("workspace/credentials/provider.json")).toBeNull();

@@ -448,7 +448,7 @@ export function classifyAgentImportArchivePath(path) {
     if (segments[0] !== "git")
         return null;
     const relative = segments.slice(1).join("/");
-    if (["HEAD", "packed-refs", "shallow"].includes(relative))
+    if (["HEAD", "packed-refs"].includes(relative))
         return "git";
     if (/^refs\/(heads|tags)\/[A-Za-z0-9][A-Za-z0-9._/-]{0,249}$/.test(relative))
         return "git";

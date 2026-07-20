@@ -84,6 +84,16 @@ function harness(overrides: Partial<AgentImportServiceDeps> = {}) {
         hash: "config-after",
         config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m", lightContext: true } }] } },
       })
+      .mockResolvedValueOnce({ status: "ok" })
+      .mockResolvedValueOnce({
+        hash: "config-before-rollback",
+        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m", lightContext: true } }] } },
+      })
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({
+        hash: "config-after-rollback",
+        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m" } }] } },
+      })
       .mockResolvedValueOnce({ status: "ok" }),
     ...overrides,
   };
@@ -227,12 +237,22 @@ describe("AgentImportService apply and rollback", () => {
       persona: "Jack's trusty sidekick.",
       emoji: "🐮",
     });
+    const identityCheckpointCall = vi.mocked(h.deps.putRecord).mock.calls.findIndex(([record]) =>
+      record.previousIdentity?.name === "Octo"
+    );
+    expect(vi.mocked(h.deps.putRecord).mock.invocationCallOrder[identityCheckpointCall])
+      .toBeLessThan(vi.mocked(h.deps.syncIdentity).mock.invocationCallOrder[0]);
     expect(h.deps.invokeOpenClaw).toHaveBeenNthCalledWith(2, "config.patch", {
       raw: JSON.stringify({
         agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m", lightContext: true } }] },
       }),
       baseHash: "config-before",
     });
+    const runtimeCheckpointCall = vi.mocked(h.deps.putRecord).mock.calls.findIndex(([record]) =>
+      record.previousRuntime?.heartbeat !== undefined
+    );
+    expect(vi.mocked(h.deps.putRecord).mock.invocationCallOrder[runtimeCheckpointCall])
+      .toBeLessThan(vi.mocked(h.deps.invokeOpenClaw).mock.invocationCallOrder[1]);
     expect(completed).toMatchObject({
       status: "complete",
       importCommit: IMPORT_COMMIT,
@@ -252,7 +272,12 @@ describe("AgentImportService apply and rollback", () => {
         hash: "config-rollback",
         config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m" } }] } },
       })
-      .mockResolvedValueOnce({ ok: true });
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({
+        hash: "config-restored",
+        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m" } }] } },
+      })
+      .mockResolvedValueOnce({ status: "ok" });
     const h = harness({ invokeOpenClaw });
     const preview = await h.service.previewGithub({
       uid: "uid-jack",
@@ -268,11 +293,43 @@ describe("AgentImportService apply and rollback", () => {
     expect(completed.status).toBe("complete");
     expect(completed.configOutcome).toBe("safe_baseline");
     expect(completed.warnings).toContain("config_delta_rejected");
-    expect(invokeOpenClaw).toHaveBeenLastCalledWith("config.patch", expect.objectContaining({
+    expect(invokeOpenClaw).toHaveBeenNthCalledWith(4, "config.patch", expect.objectContaining({
       raw: JSON.stringify({
         agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m" } }] },
       }),
     }));
+  });
+
+  it("fails instead of claiming a safe baseline when reverse-patch readback is wrong", async () => {
+    const invokeOpenClaw = vi.fn()
+      .mockResolvedValueOnce({
+        hash: "config-before",
+        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m" } }] } },
+      })
+      .mockRejectedValueOnce(new Error("config patch rejected"))
+      .mockResolvedValueOnce({
+        hash: "config-rollback",
+        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m" } }] } },
+      })
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({
+        hash: "config-still-wrong",
+        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m" } }] } },
+      });
+    const h = harness({ invokeOpenClaw });
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack",
+      slug: "jack",
+      gatewayId: "shared-1",
+      owner: "jack",
+      repo: "moof",
+      branch: "main",
+      artifacts: artifacts(),
+    });
+
+    await expect(h.service.apply({ uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash }))
+      .rejects.toMatchObject({ code: "config_readback_failed" });
+    expect(h.records.get(preview.id)?.status).toBe("failed");
   });
 
   it("resumes from the durable workspace checkpoint after an interrupted apply", async () => {
@@ -410,5 +467,35 @@ describe("AgentImportService apply and rollback", () => {
       emoji: "🐙",
     });
     expect(rolledBack.status).toBe("rolled_back");
+  });
+
+  it("resumes rollback after Git succeeded but its checkpoint write was interrupted", async () => {
+    const h = harness();
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack",
+      slug: "jack",
+      gatewayId: "shared-1",
+      owner: "jack",
+      repo: "moof",
+      branch: "main",
+      artifacts: artifacts(),
+    });
+    await h.service.apply({ uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash });
+    const putRecord = h.deps.putRecord;
+    let interruptCheckpoint = true;
+    h.deps.putRecord = vi.fn(async (record) => {
+      if (record.rollbackCommit && interruptCheckpoint) {
+        interruptCheckpoint = false;
+        throw new Error("rollback checkpoint unavailable");
+      }
+      await putRecord(record);
+    });
+
+    await expect(h.service.rollback({ uid: "uid-jack", importId: preview.id }))
+      .rejects.toThrow("rollback checkpoint unavailable");
+    const rolledBack = await h.service.rollback({ uid: "uid-jack", importId: preview.id });
+
+    expect(rolledBack.status).toBe("rolled_back");
+    expect(h.deps.rollbackRepository).toHaveBeenCalledTimes(2);
   });
 });

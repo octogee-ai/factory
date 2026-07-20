@@ -14,9 +14,9 @@ import {
 const OWNER_RE = /^[A-Za-z0-9-]{1,39}$/;
 const REPO_RE = /^[A-Za-z0-9._-]{1,100}$/;
 const SHA_RE = /^[0-9a-f]{40}$/;
-const MAX_ARCHIVE_BYTES = 250 * 1024 * 1024;
-const MAX_UNPACKED_BYTES = 1024 * 1024 * 1024;
-const MAX_ENTRY_BYTES = 100 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
+const MAX_UNPACKED_BYTES = 128 * 1024 * 1024;
+const MAX_ENTRY_BYTES = 32 * 1024 * 1024;
 const MAX_ENTRIES = 25_000;
 
 export interface LocalAgentImportManifest {
@@ -181,12 +181,36 @@ function zipEntryIsSymlink(entry: JSZip.JSZipObject): boolean {
   return (permissions & 0o170000) === 0o120000;
 }
 
+function validatePackedRefs(contents: Buffer): void {
+  const text = contents.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(contents)) {
+    throw new AgentImportSourceError("unsafe_archive_entry", "packed-refs is not valid UTF-8");
+  }
+  let mayPeelTag = false;
+  for (const line of text.split(/\r?\n/)) {
+    if (!line || line.startsWith("#")) continue;
+    if (line.startsWith("^")) {
+      if (!mayPeelTag || !SHA_RE.test(line.slice(1))) {
+        throw new AgentImportSourceError("unsafe_archive_entry", "packed-refs contains an invalid peeled ref");
+      }
+      mayPeelTag = false;
+      continue;
+    }
+    const match = /^([0-9a-f]{40}) refs\/(heads|tags)\/(.+)$/.exec(line);
+    const suffix = match?.[3] ?? "";
+    if (!match || !validBranch(suffix)) {
+      throw new AgentImportSourceError("unsafe_archive_entry", "packed-refs contains a blocked ref");
+    }
+    mayPeelTag = match[2] === "tags";
+  }
+}
+
 async function validatedArchiveEntries(
   buffer: Buffer,
   limits: { maxEntryBytes: number; maxUnpackedBytes: number },
 ): Promise<Map<string, Buffer>> {
   if (buffer.length > MAX_ARCHIVE_BYTES) {
-    throw new AgentImportSourceError("archive_too_large", "agent import archive exceeds 250 MiB");
+    throw new AgentImportSourceError("archive_too_large", "agent import archive exceeds 32 MiB");
   }
   let zip: JSZip;
   try {
@@ -213,11 +237,11 @@ async function validatedArchiveEntries(
     }
     const contents = await entry.async("nodebuffer");
     if (contents.length > limits.maxEntryBytes) {
-      throw new AgentImportSourceError("archive_too_large", `archive entry exceeds 100 MiB: ${entry.name}`);
+      throw new AgentImportSourceError("archive_too_large", `archive entry exceeds 32 MiB: ${entry.name}`);
     }
     total += contents.length;
     if (total > limits.maxUnpackedBytes) {
-      throw new AgentImportSourceError("archive_too_large", "agent import archive exceeds 1 GiB unpacked");
+      throw new AgentImportSourceError("archive_too_large", "agent import archive exceeds 128 MiB unpacked");
     }
     result.set(entry.name, contents);
   }
@@ -297,6 +321,7 @@ export async function extractLocalAgentImportArchive(
     }
     if (manifest.hadGit) {
       for (const [entry, contents] of gitEntries) {
+        if (entry === "git/packed-refs") validatePackedRefs(contents);
         writeEntry(path.join(repoDir, ".git"), entry.slice("git/".length), contents);
       }
       runGit(repoDir, ["fsck", "--strict", "--no-dangling"]);

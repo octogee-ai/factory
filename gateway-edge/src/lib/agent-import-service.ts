@@ -50,10 +50,13 @@ export interface AgentImportPreview {
 export type AgentImportStatus =
   | "previewed"
   | "workspace"
+  | "identity"
   | "config"
   | "verifying"
   | "complete"
   | "failed"
+  | "rolling_back"
+  | "rollback_failed"
   | "rolled_back";
 
 export interface AgentImportRecord {
@@ -258,8 +261,19 @@ function assertRuntimeApplied(config: JsonObject, coachId: string, patch: JsonOb
   }
 }
 
+function assertRuntimeRestored(config: JsonObject, coachId: string, previous: JsonObject): void {
+  const coach = coachFromConfig(config, coachId);
+  for (const [key, value] of Object.entries(previous)) {
+    const present = Object.prototype.hasOwnProperty.call(coach, key);
+    if (value === null ? present && coach[key] !== null : !deepEqual(coach[key], value)) {
+      throw new AgentImportServiceError("config_readback_failed", `OpenClaw did not restore ${key}`);
+    }
+  }
+}
+
 export class AgentImportService {
   private readonly activeApplies = new Map<string, Promise<AgentImportRecord>>();
+  private readonly activeRollbacks = new Map<string, Promise<AgentImportRecord>>();
 
   constructor(private readonly deps: AgentImportServiceDeps) {}
 
@@ -438,7 +452,7 @@ export class AgentImportService {
   private async applyOnce(input: { uid: string; importId: string; approvalHash: string }): Promise<AgentImportRecord> {
     let current = await this.ownedRecord(input.importId, input.uid);
     if (current.status === "complete") return current;
-    if (current.status !== "previewed" && current.status !== "workspace" && current.status !== "config" && current.status !== "failed") {
+    if (current.status !== "previewed" && current.status !== "workspace" && current.status !== "identity" && current.status !== "config" && current.status !== "failed") {
       throw new AgentImportServiceError("invalid_import_state", `cannot apply import in ${current.status}`);
     }
     if (current.approvalHash !== input.approvalHash) {
@@ -474,13 +488,24 @@ export class AgentImportService {
           source.cleanup();
         }
       }
-      const priorIdentity = current.previousIdentity ?? await this.deps.readIdentity(plan.uid);
+      if (!current.previousIdentity) {
+        current = await this.update(current, {
+          status: "identity",
+          previousIdentity: await this.deps.readIdentity(plan.uid),
+        });
+      }
       await this.deps.syncIdentity(plan.uid, plan.config.identity);
       current = await this.update(current, {
         status: "config",
-        previousIdentity: priorIdentity,
       });
-      const configured = await this.applyRuntimeConfig(plan.slug, plan.config.runtimePatch);
+      const configured = await this.applyRuntimeConfig(
+        plan.slug,
+        plan.config.runtimePatch,
+        current.previousRuntime,
+        async (previous) => {
+          current = await this.update(current, { status: "config", previousRuntime: previous });
+        },
+      );
       const warnings = configured.outcome === "safe_baseline"
         ? [...new Set([...current.warnings, "config_delta_rejected"])]
         : current.warnings;
@@ -516,35 +541,59 @@ export class AgentImportService {
   }
 
   async rollback(input: { uid: string; importId: string }): Promise<AgentImportRecord> {
+    const key = `${input.uid}\0${input.importId}`;
+    const active = this.activeRollbacks.get(key);
+    if (active) return active;
+    const work = this.rollbackOnce(input);
+    this.activeRollbacks.set(key, work);
+    try {
+      return await work;
+    } finally {
+      if (this.activeRollbacks.get(key) === work) this.activeRollbacks.delete(key);
+    }
+  }
+
+  private async rollbackOnce(input: { uid: string; importId: string }): Promise<AgentImportRecord> {
     let current = await this.ownedRecord(input.importId, input.uid);
-    if (current.status !== "complete" || !current.importCommit) {
+    if (current.status === "rolled_back") return current;
+    if (!["complete", "rolling_back", "rollback_failed"].includes(current.status) || !current.importCommit) {
       throw new AgentImportServiceError("rollback_window_closed", "only a completed unchanged import can be rolled back");
     }
     if (!current.completedAt || this.deps.now().getTime() - Date.parse(current.completedAt) > 7 * 24 * 60 * 60 * 1_000) {
       throw new AgentImportServiceError("rollback_window_closed", "the seven-day rollback window has closed");
     }
-    const target = this.deps.workspaceState(current.slug);
-    const result = await this.deps.rollbackRepository({
-      targetDir: target.targetDir,
-      importCommit: current.importCommit,
-      destinationHead: current.destinationHead,
-      importId: current.id,
-    });
-    if (current.previousIdentity) await this.deps.syncIdentity(current.uid, current.previousIdentity);
-    const warnings = [...current.warnings];
-    if (current.previousRuntime && Object.keys(current.previousRuntime).length > 0) {
-      try {
-        await this.patchRuntime(current.slug, current.previousRuntime);
-      } catch {
-        warnings.push("config_rollback_manual_review");
+    try {
+      if (!current.rollbackCommit) {
+        const target = this.deps.workspaceState(current.slug);
+        const result = await this.deps.rollbackRepository({
+          targetDir: target.targetDir,
+          importCommit: current.importCommit,
+          destinationHead: current.destinationHead,
+          importId: current.id,
+        });
+        current = await this.update(current, {
+          status: "rolling_back",
+          rollbackCommit: result.rollbackCommit,
+        });
       }
+      if (current.previousIdentity) await this.deps.syncIdentity(current.uid, current.previousIdentity);
+      if (current.previousRuntime && Object.keys(current.previousRuntime).length > 0) {
+        await this.patchRuntime(current.slug, current.previousRuntime);
+      }
+      current = await this.update(current, {
+        status: "rolled_back",
+      });
+      return current;
+    } catch (error) {
+      await this.update(current, {
+        status: "rollback_failed",
+        error: {
+          code: error instanceof AgentImportServiceError ? error.code : "agent_import_rollback_failed",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
+      throw error;
     }
-    current = await this.update(current, {
-      status: "rolled_back",
-      rollbackCommit: result.rollbackCommit,
-      warnings: [...new Set(warnings)],
-    });
-    return current;
   }
 
   async get(input: { uid: string; importId: string }): Promise<AgentImportRecord> {
@@ -575,12 +624,18 @@ export class AgentImportService {
   private async applyRuntimeConfig(
     slug: string,
     runtimePatch: JsonObject,
+    checkpointedPrevious: JsonObject | undefined,
+    checkpoint: (previous: JsonObject) => Promise<void>,
   ): Promise<{ outcome: "applied" | "safe_baseline"; previous: JsonObject }> {
-    if (Object.keys(runtimePatch).length === 0) return { outcome: "safe_baseline", previous: {} };
+    if (Object.keys(runtimePatch).length === 0) {
+      if (!checkpointedPrevious) await checkpoint({});
+      return { outcome: "safe_baseline", previous: checkpointedPrevious ?? {} };
+    }
     const coachId = `octogee-${slug}-coach`;
     return this.deps.withConfigLock(async () => {
       const before = configGet(await this.deps.invokeOpenClaw("config.get", {}));
-      const previous = previousRuntime(coachFromConfig(before.config, coachId), runtimePatch);
+      const previous = checkpointedPrevious ?? previousRuntime(coachFromConfig(before.config, coachId), runtimePatch);
+      if (!checkpointedPrevious) await checkpoint(previous);
       try {
         await this.deps.invokeOpenClaw("config.patch", {
           raw: JSON.stringify({ agents: { list: [{ id: coachId, ...runtimePatch }] } }),
@@ -596,6 +651,9 @@ export class AgentImportService {
           raw: JSON.stringify({ agents: { list: [{ id: coachId, ...previous }] } }),
           baseHash: rollbackBase.hash,
         });
+        const restored = configGet(await this.deps.invokeOpenClaw("config.get", {}));
+        assertRuntimeRestored(restored.config, coachId, previous);
+        await this.deps.invokeOpenClaw("health", {});
         return { outcome: "safe_baseline", previous };
       }
     });
@@ -610,6 +668,9 @@ export class AgentImportService {
         raw: JSON.stringify({ agents: { list: [{ id: coachId, ...patch }] } }),
         baseHash: before.hash,
       });
+      const after = configGet(await this.deps.invokeOpenClaw("config.get", {}));
+      assertRuntimeRestored(after.config, coachId, patch);
+      await this.deps.invokeOpenClaw("health", {});
     });
   }
 

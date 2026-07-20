@@ -125,6 +125,43 @@ describe("agent imports route", () => {
     });
   });
 
+  it("rejects multipart requests containing more than one local archive", async () => {
+    const { app, service } = harness();
+    await request(app)
+      .post("/api/g/gw-alice/agent-imports/preview/local")
+      .attach("archive", Buffer.from("first"), { filename: "moof.zip", contentType: "application/zip" })
+      .attach("archive", Buffer.from("second"), { filename: "other.zip", contentType: "application/zip" })
+      .expect(400, {
+        error: "invalid_local_archive",
+        message: "exactly one ZIP archive under 32 MiB is required",
+      });
+    expect(service.previewLocal).not.toHaveBeenCalled();
+  });
+
+  it("admits only one local archive preview at a time per gateway process", async () => {
+    const { app, service } = harness();
+    let release!: () => void;
+    const blocked = new Promise<{ id: string; approvalHash: string }>((resolve) => {
+      release = () => resolve({ id: "imp-2", approvalHash: "sha256:local" });
+    });
+    service.previewLocal.mockReturnValueOnce(blocked);
+    const first = request(app)
+      .post("/api/g/gw-alice/agent-imports/preview/local")
+      .attach("archive", Buffer.from("normalized"), { filename: "moof.zip", contentType: "application/zip" })
+      .expect(201)
+      .then((response) => response);
+    while (service.previewLocal.mock.calls.length === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+
+    const second = await request(app)
+      .post("/api/g/gw-alice/agent-imports/preview/local")
+      .attach("archive", Buffer.from("normalized"), { filename: "moof.zip", contentType: "application/zip" });
+    expect(second.status).toBe(429);
+    expect(second.body).toEqual({ error: "local_import_busy" });
+
+    release();
+    await first;
+  });
+
   it("binds apply, status, and rollback to the authenticated owner", async () => {
     const { app, service } = harness();
     await request(app)

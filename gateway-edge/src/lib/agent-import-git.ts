@@ -11,6 +11,7 @@ const SHA_RE = /^[0-9a-f]{40}$/;
 const IMPORT_ID_RE = /^[A-Za-z0-9._-]{1,160}$/;
 const MAX_COMMAND_OUTPUT = 16 * 1024 * 1024;
 const MAX_BINARY_BYTES = 100 * 1024 * 1024;
+const MAX_IMPORT_COMMITS = 10_000;
 
 export interface AgentImportSecretFinding {
   ruleId: string;
@@ -60,6 +61,7 @@ export function buildAgentImportGitEnvironment(
     HOME: os.tmpdir(),
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_NO_REPLACE_OBJECTS: "1",
     GIT_TERMINAL_PROMPT: "0",
     ...extra,
   };
@@ -137,6 +139,10 @@ function trackedTree(repoDir: string, head: string): {
   for (const raw of serialized.split("\0").filter(Boolean)) {
     const tab = raw.indexOf("\t");
     if (tab < 0) throw new AgentImportGitError("invalid_git_tree", "git tree output is malformed");
+    const relative = raw.slice(tab + 1);
+    if (classifyAgentImportArchivePath(`workspace/${relative}`) !== "workspace") {
+      throw new AgentImportGitError("unsafe_git_entry", "source history contains a blocked workspace path");
+    }
     const metadata = raw.slice(0, tab).trim().split(/\s+/);
     const mode = metadata[0];
     if (mode === "120000" || mode === "160000") {
@@ -152,22 +158,9 @@ function trackedTree(repoDir: string, head: string): {
   return { serialized, fileCount, totalBytes };
 }
 
-function assertSafeHistoryPaths(repoDir: string, head: string): void {
-  const serialized = git(
-    repoDir,
-    ["log", "--format=", "--name-only", "-z", head],
-    undefined,
-    "git history path inspection",
-  );
-  for (const raw of serialized.split("\0")) {
-    let relative = raw;
-    while (relative.startsWith("\n")) relative = relative.slice(1);
-    while (relative.endsWith("\n")) relative = relative.slice(0, -1);
-    if (!relative) continue;
-    if (classifyAgentImportArchivePath(`workspace/${relative}`) !== "workspace") {
-      throw new AgentImportGitError("unsafe_git_entry", "source history contains a blocked workspace path");
-    }
-  }
+function assertSafeHistoryTrees(repoDir: string, head: string): void {
+  const trees = new Set(git(repoDir, ["log", "--format=%T", head]).split(/\r?\n/).filter(Boolean));
+  for (const tree of trees) trackedTree(repoDir, requireSha(tree, "history tree"));
 }
 
 export async function inspectAgentImportRepository(
@@ -181,11 +174,14 @@ export async function inspectAgentImportRepository(
   const head = requireSha(options.head ?? git(repoDir, ["rev-parse", "HEAD"]), "source head");
   git(repoDir, ["cat-file", "-e", `${head}^{commit}`], undefined, "source commit lookup");
   const tree = trackedTree(repoDir, head);
-  assertSafeHistoryPaths(repoDir, head);
   const commitCount = Number.parseInt(git(repoDir, ["rev-list", "--count", head]), 10);
   if (!Number.isFinite(commitCount) || commitCount < 1) {
     throw new AgentImportGitError("invalid_git_history", "source history has no reachable commit");
   }
+  if (commitCount > MAX_IMPORT_COMMITS) {
+    throw new AgentImportGitError("invalid_git_history", `source history exceeds ${MAX_IMPORT_COMMITS} commits`);
+  }
+  assertSafeHistoryTrees(repoDir, head);
   const scanSecrets = options.scanSecrets ?? ((dir: string) => scanAgentImportSecrets(dir));
   const secretFindings = await scanSecrets(repoDir);
   if (secretFindings.length > 0) {
@@ -358,6 +354,46 @@ function ensureCleanDestination(targetDir: string): void {
   }
 }
 
+interface PublishedRef {
+  ref: string;
+  expected: string;
+}
+
+function remoteRefsMatch(targetDir: string, refs: PublishedRef[]): boolean {
+  const output = git(
+    targetDir,
+    ["ls-remote", "--refs", "origin", ...refs.map(({ ref }) => ref)],
+    undefined,
+    "Gitea ref verification",
+  );
+  const remote = new Map(output.split(/\r?\n/).filter(Boolean).map((line) => {
+    const [head, ref] = line.split("\t", 2);
+    return [ref, head];
+  }));
+  return refs.every(({ ref, expected }) => remote.get(ref) === expected);
+}
+
+function publishRefs(targetDir: string, refs: PublishedRef[]): void {
+  try {
+    git(
+      targetDir,
+      ["push", "--atomic", "origin", ...refs.map(({ ref }) => `${ref}:${ref}`)],
+      undefined,
+      "Gitea push",
+    );
+  } catch (error) {
+    try {
+      if (remoteRefsMatch(targetDir, refs)) return;
+    } catch {
+      throw new AgentImportGitError(
+        "push_outcome_unknown",
+        "Gitea push outcome could not be verified; retry the same import",
+      );
+    }
+    throw error;
+  }
+}
+
 function updateTarget(options: {
   targetDir: string;
   destinationHead: string;
@@ -365,6 +401,7 @@ function updateTarget(options: {
   sourceHead?: string;
   sourceRef?: string;
   importRef?: string;
+  rollbackRef?: string;
   push: boolean;
 }): void {
   git(options.targetDir, ["update-ref", "refs/heads/main", options.nextHead, options.destinationHead]);
@@ -375,16 +412,23 @@ function updateTarget(options: {
     if (options.importRef) {
       git(options.targetDir, ["update-ref", options.importRef, options.nextHead, "0".repeat(40)]);
     }
+    if (options.rollbackRef) {
+      git(options.targetDir, ["update-ref", options.rollbackRef, options.nextHead, "0".repeat(40)]);
+    }
     git(options.targetDir, ["reset", "--hard", options.nextHead]);
     if (options.push) {
-      const refs = [
-        "refs/heads/main:refs/heads/main",
-        ...(options.sourceRef ? [`${options.sourceRef}:${options.sourceRef}`] : []),
-        ...(options.importRef ? [`${options.importRef}:${options.importRef}`] : []),
+      const refs: PublishedRef[] = [
+        { ref: "refs/heads/main", expected: options.nextHead },
+        ...(options.sourceRef && options.sourceHead
+          ? [{ ref: options.sourceRef, expected: options.sourceHead }]
+          : []),
+        ...(options.importRef ? [{ ref: options.importRef, expected: options.nextHead }] : []),
+        ...(options.rollbackRef ? [{ ref: options.rollbackRef, expected: options.nextHead }] : []),
       ];
-      git(options.targetDir, ["push", "--atomic", "origin", ...refs], undefined, "Gitea push");
+      publishRefs(options.targetDir, refs);
     }
   } catch (error) {
+    if (error instanceof AgentImportGitError && error.code === "push_outcome_unknown") throw error;
     try {
       git(options.targetDir, ["update-ref", "refs/heads/main", options.destinationHead, options.nextHead]);
       git(options.targetDir, ["reset", "--hard", options.destinationHead]);
@@ -393,6 +437,9 @@ function updateTarget(options: {
       }
       if (options.importRef) {
         git(options.targetDir, ["update-ref", "-d", options.importRef, options.nextHead]);
+      }
+      if (options.rollbackRef) {
+        git(options.targetDir, ["update-ref", "-d", options.rollbackRef, options.nextHead]);
       }
     } catch {
       throw new AgentImportGitError("destination_restore_failed", "workspace import failed and local restore also failed");
@@ -433,6 +480,13 @@ export async function applyAgentImportRepository(options: {
       parents[2] === sourceHead &&
       subject === `Import agent workspace (${importId})`
     ) {
+      if (options.push !== false) {
+        publishRefs(options.targetDir, [
+          { ref: "refs/heads/main", expected: currentHead },
+          { ref: sourceRef, expected: sourceHead },
+          { ref: importRef, expected: currentHead },
+        ]);
+      }
       return { importCommit: currentHead, sourceRef };
     }
     throw new AgentImportGitError("destination_changed", "destination workspace changed after preview");
@@ -482,9 +536,29 @@ export async function rollbackAgentImportRepository(options: {
   const importCommit = requireSha(options.importCommit, "import commit");
   const destinationHead = requireSha(options.destinationHead, "destination head");
   const importId = checkedImportId(options.importId);
+  const rollbackRef = `refs/octogee/imports/${importId}/rollback`;
   ensureCleanDestination(options.targetDir);
   const current = currentMainHead(options.targetDir);
   if (current !== importCommit) {
+    const parents = git(options.targetDir, ["rev-list", "--parents", "-n", "1", current]).split(" ");
+    const subject = git(options.targetDir, ["show", "-s", "--format=%s", current]);
+    const currentTree = requireSha(git(options.targetDir, ["rev-parse", `${current}^{tree}`]), "rollback tree");
+    const destinationTree = requireSha(git(options.targetDir, ["rev-parse", `${destinationHead}^{tree}`]), "destination tree");
+    if (
+      readRef(options.targetDir, rollbackRef) === current &&
+      parents.length === 2 &&
+      parents[1] === importCommit &&
+      subject === `Rollback agent import (${importId})` &&
+      currentTree === destinationTree
+    ) {
+      if (options.push !== false) {
+        publishRefs(options.targetDir, [
+          { ref: "refs/heads/main", expected: current },
+          { ref: rollbackRef, expected: current },
+        ]);
+      }
+      return { rollbackCommit: current };
+    }
     throw new AgentImportGitError("rollback_window_closed", "workspace changed after import");
   }
   git(options.targetDir, ["cat-file", "-e", `${destinationHead}^{commit}`]);
@@ -499,6 +573,7 @@ export async function rollbackAgentImportRepository(options: {
     targetDir: options.targetDir,
     destinationHead: importCommit,
     nextHead: rollbackCommit,
+    rollbackRef,
     push: options.push !== false,
   });
   return { rollbackCommit };

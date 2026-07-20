@@ -1,4 +1,7 @@
 import Busboy from "busboy";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Router, type NextFunction, type Request, type Response } from "express";
 
 import { isValidGatewayId } from "@octogee/shared/types/glm";
@@ -6,7 +9,7 @@ import type { AgentImportConfigArtifacts } from "@octogee/shared/types/agent-imp
 import type { ResolvedGateway } from "../lib/user-gateway.js";
 import type { AgentImportService } from "../lib/agent-import-service.js";
 
-const MAX_ARCHIVE_BYTES = 250 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
 const IMPORT_ID_RE = /^[A-Za-z0-9_-]{1,160}$/;
 
 interface AgentImportsRouterDeps {
@@ -31,9 +34,11 @@ const IMPORT_ERROR_STATUS: Record<string, number> = {
   invalid_archive_metadata: 400,
   unsafe_archive_entry: 422,
   unsafe_git_entry: 422,
+  invalid_git_history: 422,
   archive_too_large: 413,
   secret_findings: 422,
   secret_scan_failed: 503,
+  push_outcome_unknown: 503,
   destination_dirty: 409,
   destination_changed: 409,
   source_changed: 409,
@@ -96,34 +101,72 @@ function importId(req: Request, res: Response): string | null {
   return id;
 }
 
-function localArchive(req: Request): Promise<Buffer> {
+interface StagedLocalArchive {
+  path: string;
+  cleanup(): void;
+}
+
+function localArchive(req: Request): Promise<StagedLocalArchive> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-agent-import-upload-"));
+  fs.chmodSync(root, 0o700);
+  const archivePath = path.join(root, "source.zip");
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      fs.rmSync(root, { recursive: true, force: true });
+      reject(error);
+    };
     let parser: Busboy.Busboy;
     try {
       parser = Busboy({ headers: req.headers, limits: { files: 1, fileSize: MAX_ARCHIVE_BYTES, fields: 0 } });
     } catch {
-      reject(Object.assign(new Error("invalid multipart archive"), { code: "invalid_local_archive" }));
+      fail(Object.assign(new Error("invalid multipart archive"), { code: "invalid_local_archive" }));
       return;
     }
-    const chunks: Buffer[] = [];
     let fileCount = 0;
+    let limitExceeded = false;
     let truncated = false;
+    let wroteArchive = false;
+    let writeComplete: Promise<void> = Promise.resolve();
     parser.on("file", (field, stream, info) => {
       fileCount += 1;
       if (field !== "archive" || info.mimeType !== "application/zip") {
         stream.resume();
         return;
       }
+      wroteArchive = true;
+      const output = fs.createWriteStream(archivePath, { flags: "wx", mode: 0o600 });
+      writeComplete = new Promise((complete, failed) => {
+        output.on("finish", complete);
+        output.on("error", failed);
+        stream.on("error", failed);
+      });
       stream.on("limit", () => { truncated = true; });
-      stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+      stream.pipe(output);
     });
-    parser.on("error", reject);
-    parser.on("finish", () => {
-      if (fileCount !== 1 || truncated || chunks.length === 0) {
-        reject(Object.assign(new Error("exactly one ZIP archive under 250 MiB is required"), { code: "invalid_local_archive" }));
-        return;
+    parser.on("filesLimit", () => { limitExceeded = true; });
+    parser.on("fieldsLimit", () => { limitExceeded = true; });
+    parser.on("error", fail);
+    req.on("aborted", () => fail(Object.assign(new Error("archive upload aborted"), { code: "invalid_local_archive" })));
+    parser.on("finish", async () => {
+      try {
+        await writeComplete;
+        const size = wroteArchive && fs.existsSync(archivePath) ? fs.statSync(archivePath).size : 0;
+        if (fileCount !== 1 || limitExceeded || truncated || size === 0) {
+          fail(Object.assign(new Error("exactly one ZIP archive under 32 MiB is required"), { code: "invalid_local_archive" }));
+          return;
+        }
+        if (settled) return;
+        settled = true;
+        resolve({
+          path: archivePath,
+          cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
+        });
+      } catch (error) {
+        fail(error);
       }
-      resolve(Buffer.concat(chunks));
     });
     req.pipe(parser);
   });
@@ -131,6 +174,7 @@ function localArchive(req: Request): Promise<Buffer> {
 
 export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
   const router = Router({ mergeParams: true });
+  let localImportActive = false;
 
   router.get("/sources/github", async (req, res, next) => {
     try {
@@ -169,19 +213,31 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
   });
 
   router.post("/preview/local", async (req, res, next) => {
+    let archive: StagedLocalArchive | null = null;
+    let acquired = false;
     try {
       const resolved = await authorize(req, res, deps);
       if (!resolved) return;
-      const archive = await localArchive(req);
+      if (localImportActive) {
+        req.resume();
+        res.status(429).json({ error: "local_import_busy" });
+        return;
+      }
+      localImportActive = true;
+      acquired = true;
+      archive = await localArchive(req);
       const preview = await deps.service.previewLocal({
         uid: req.uid!,
         slug: resolved.slug,
         gatewayId: resolved.gatewayId,
-        archive,
+        archive: fs.readFileSync(archive.path),
       });
       res.status(201).json(preview);
     } catch (error) {
       handleImportError(error, res, next);
+    } finally {
+      archive?.cleanup();
+      if (acquired) localImportActive = false;
     }
   });
 

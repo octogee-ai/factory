@@ -551,7 +551,7 @@ export function classifyAgentImportArchivePath(path: string): "git" | "metadata"
   }
   if (segments[0] !== "git") return null;
   const relative = segments.slice(1).join("/");
-  if (["HEAD", "packed-refs", "shallow"].includes(relative)) return "git";
+  if (["HEAD", "packed-refs"].includes(relative)) return "git";
   if (/^refs\/(heads|tags)\/[A-Za-z0-9][A-Za-z0-9._/-]{0,249}$/.test(relative)) return "git";
   if (/^objects\/[0-9a-f]{2}\/[0-9a-f]{38}$/.test(relative)) return "git";
   if (/^objects\/pack\/pack-[0-9a-f]{40}\.(pack|idx)$/.test(relative)) return "git";
