@@ -259,15 +259,10 @@ if [[ "${GITEA_READY:-0}" -ge 1 ]]; then
 
     set_section bootstrap
     if [[ -n "$GW_DEPLOYMENT" ]]; then
-      GITEA_SVC=$(kubectl get svc -n "$NAMESPACE" -o name 2>/dev/null | grep gitea-http | head -1 | sed 's|service/||' || echo "octogee-gitea-http")
-      GITEA_ORG_CHECK=$(kubectl exec "deployment/$GW_DEPLOYMENT" -n "$NAMESPACE" -c gateway -- \
-        node -e "const h=require('http');const t=process.env.GIT_API_TOKEN||'';const o={hostname:'$GITEA_SVC.$NAMESPACE.svc.cluster.local',port:3000,path:'/api/v1/orgs/octogee',headers:{Authorization:'token '+t}};h.get(o,r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" \
+      GITEA_BROKER_CHECK=$(kubectl exec "deployment/$GW_DEPLOYMENT" -n "$NAMESPACE" -c gateway -- \
+        sh -c 'node -e "const safe=!!process.env.GITEA_ADMIN_BROKER_URL&&!process.env.GIT_API_TOKEN;process.exit(safe?0:1)" && exec /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/gitea-broker-probe.ts' \
         >/dev/null 2>&1 && echo ok || echo "")
-      status "Gitea org/API trust check passed from gateway pod" "Gitea org/API trust check failed from gateway pod" "$GITEA_ORG_CHECK"
-      GITEA_ISSUE_CHECK=$(kubectl exec "deployment/$GW_DEPLOYMENT" -n "$NAMESPACE" -c gateway -- \
-        node -e "const h=require('http');const t=process.env.GIT_API_TOKEN||'';const o={hostname:'$GITEA_SVC.$NAMESPACE.svc.cluster.local',port:3000,path:'/api/v1/repos/issues/search?limit=1',headers:{Authorization:'token '+t}};h.get(o,r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" \
-        >/dev/null 2>&1 && echo ok || echo "")
-      status "Gitea issue API trust check passed from gateway pod" "Gitea issue API trust check failed from gateway pod" "$GITEA_ISSUE_CHECK"
+      status "Authenticated Gitea admin broker read passed from assigned gateway tenant" "Gitea admin broker contract failed in gateway pod" "$GITEA_BROKER_CHECK"
     else
       info "Skipping Gitea-from-gateway trust check — no gateway deployment yet"
     fi
