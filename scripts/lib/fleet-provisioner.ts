@@ -46,7 +46,7 @@ import { buildProductionLifecycleAdapter } from "./customer-lifecycle-prod-adapt
 import { addCustomerToGateway, removeCustomerFromGateway } from "./customer-lifecycle.js";
 import type { AddCustomerOptions } from "./customer-lifecycle.js";
 import type { AddCustomerResult, CustomerLifecycleAdapter } from "./customer-lifecycle.js";
-import { startReconcileLoop } from "./reconcile-loop.js";
+import { startReconcileLoop, type UnmountOutcome } from "./reconcile-loop.js";
 import { selectStale } from "./content-convergence.js";
 import { loadAppliedFingerprints, saveAppliedFingerprints } from "./applied-fingerprint-store.js";
 import { createDeviceAuthManager } from "./byosub-device-auth.js";
@@ -497,6 +497,44 @@ function clearReconcileError(opts: StartFleetOptions, slug: string): void {
     .catch((err) => opts.log(`[reconcile] ${opts.gatewayId}: ⚠ lastError clear failed: ${String(err)}`));
 }
 
+export async function evictLocalCustomer(input: {
+  adapter: CustomerLifecycleAdapter;
+  slug: string;
+  stampMounted: (uid: string, mounted: boolean) => Promise<void>;
+  onLocalStateRemoved: (slug: string) => void;
+}): Promise<UnmountOutcome> {
+  const { adapter, slug, stampMounted, onLocalStateRemoved } = input;
+  const uid = await adapter.uidForSlug(slug);
+  if (uid) {
+    const result = await removeCustomerFromGateway(adapter, uid);
+    await stampMounted(uid, false);
+    onLocalStateRemoved(slug);
+    return result.wasMounted ? "drained" : "noop";
+  }
+
+  try {
+    if (adapter.removeImportedCustomerBySlug) {
+      const result = await adapter.removeImportedCustomerBySlug(slug);
+      adapter.onUnmounted?.(slug);
+      onLocalStateRemoved(slug);
+      return result.wasMounted ? "deleted-user" : "noop";
+    }
+
+    const agentId = `octogee-${slug}-coach`;
+    await adapter.applyRemoveCustomerConfigPatch(slug, agentId);
+    if (adapter.hasCustomerDir(slug)) {
+      await adapter.deleteCustomerDir(slug);
+    }
+    adapter.onUnmounted?.(slug);
+    onLocalStateRemoved(slug);
+    return "deleted-user";
+  } catch (err) {
+    throw new Error(
+      `slug-only cleanup failed for ${slug} (no user doc): ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 function startMaybeReconcileLoop(params: {
   provision: boolean;
   opts: StartFleetOptions;
@@ -619,32 +657,16 @@ function startMaybeReconcileLoop(params: {
     },
     onEnsureError: (slug, message) => recordReconcileError(opts, slug, message),
     onEnsureSuccess: (slug) => clearReconcileError(opts, slug),
-    unmountSlug: async (slug: string) => {
-      const uid = await wrappedAdapter.uidForSlug(slug);
-      if (uid) {
-        const result = await removeCustomerFromGateway(wrappedAdapter, uid);
-        await stampMounted(uid, false);
-        cloneRetry.delete(slug);
-        if (appliedFp.delete(slug)) persistAppliedFp();
-        return result.wasMounted ? "drained" : "noop";
-      }
-
-      const agentId = `octogee-${slug}-coach`;
-      try {
-        await wrappedAdapter.applyRemoveCustomerConfigPatch(slug, agentId);
-        if (wrappedAdapter.hasCustomerDir(slug)) {
-          await wrappedAdapter.deleteCustomerDir(slug);
-        }
-        wrappedAdapter.onUnmounted?.(slug);
-        cloneRetry.delete(slug);
-        if (appliedFp.delete(slug)) persistAppliedFp();
-        return "deleted-user";
-      } catch (err) {
-        throw new Error(
-          `slug-only cleanup failed for ${slug} (no user doc): ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    },
+    unmountSlug: (slug: string) =>
+      evictLocalCustomer({
+        adapter: wrappedAdapter,
+        slug,
+        stampMounted,
+        onLocalStateRemoved: (removedSlug) => {
+          cloneRetry.delete(removedSlug);
+          if (appliedFp.delete(removedSlug)) persistAppliedFp();
+        },
+      }),
   });
   return startAfterSurgeReadiness({
     released: surgeReadiness.released,
