@@ -82,6 +82,7 @@ const DELEGATED_READ_METHODS = new Set(delegatedInventory.delegatedReadMethods);
 const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
 const ARRAY_IDENTITY_KEYS = ["id", "agentId", "accountId", "key"] as const;
+const METHOD_UNAVAILABLE = "method-unavailable" as const;
 const DELEGATED_MUTABLE_PATHS = new Set([
   "agents.defaults.maxConcurrent",
   "agents.defaults.model",
@@ -450,14 +451,14 @@ export function evaluateOpenClawControlRpc(
   }
   const method = request.method as string;
   if (!context.installedMethods.has(method)) {
-    return { allowed: false, category: "forbidden_mutation", reason: "method-unavailable" };
+    return { allowed: false, category: "forbidden_mutation", reason: METHOD_UNAVAILABLE };
   }
   if (READ_METHODS.has(method)) {
     return { allowed: true, category: "read", outbound: structuredClone(request) };
   }
   if (CONFIG_MUTATION_METHODS.has(method)) return configMutationDecision(request, context);
   if (method === "tools.invoke") return safeToolDecision(request);
-  return { allowed: false, category: "forbidden_mutation", reason: "method-unavailable" };
+  return { allowed: false, category: "forbidden_mutation", reason: METHOD_UNAVAILABLE };
 }
 
 export function evaluateNativeOpenClawControlRpc(
@@ -471,7 +472,7 @@ export function evaluateNativeOpenClawControlRpc(
   }
   const method = request.method as string;
   if (!context.installedMethods.has(method)) {
-    return { allowed: false, category: "unknown", reason: "method-unavailable" };
+    return { allowed: false, category: "unknown", reason: METHOD_UNAVAILABLE };
   }
   let category: OpenClawControlRpcCategory = "unknown";
   if (CONFIG_MUTATION_METHODS.has(method)) category = "config_mutation";
@@ -490,7 +491,7 @@ export function evaluateDelegatedOpenClawControlRpc(
   const request = record(frame);
   const method = typeof request?.method === "string" ? request.method : "";
   if (method === "config.schema.lookup" && request && !delegatedSchemaLookupIsSafe(request)) {
-    return { allowed: false, category: "read", reason: "method-unavailable" };
+    return { allowed: false, category: "read", reason: METHOD_UNAVAILABLE };
   }
   if (decision.category === "read" && DELEGATED_READ_METHODS.has(method)) return decision;
   if (profile === "delegated-config" && decision.category === "config_mutation") {
@@ -500,7 +501,7 @@ export function evaluateDelegatedOpenClawControlRpc(
       ? decision
       : { allowed: false, category: decision.category, reason: "config-unsafe-path" };
   }
-  return { allowed: false, category: decision.category, reason: "method-unavailable" };
+  return { allowed: false, category: decision.category, reason: METHOD_UNAVAILABLE };
 }
 
 export function projectOpenClawHelloForProfile(
@@ -660,49 +661,61 @@ function schemaMetadata(value: Record<string, unknown>): Record<string, unknown>
   return projected;
 }
 
+function delegatedSchemaProperties(value: unknown, path: string): Record<string, unknown> {
+  const properties = record(value);
+  if (!properties) return {};
+  const safeProperties: Record<string, unknown> = {};
+  for (const [name, child] of Object.entries(properties)) {
+    if (BLOCKED_OBJECT_KEYS.has(name)) continue;
+    const childPath = path ? `${path}.${name}` : name;
+    if (!delegatedConfigPathIsSafe(childPath)) continue;
+    const projectedChild = delegatedSchemaNode(child, childPath);
+    if (projectedChild) safeProperties[name] = projectedChild;
+  }
+  return safeProperties;
+}
+
+function delegatedSchemaItems(value: unknown, path: string): Record<string, unknown> | null {
+  const itemsPath = `${path}[]`;
+  return value !== undefined && delegatedConfigPathIsSafe(itemsPath)
+    ? delegatedSchemaNode(value, itemsPath)
+    : null;
+}
+
+function delegatedRequiredFields(
+  value: unknown,
+  properties: Record<string, unknown>,
+): string[] {
+  return Array.isArray(value)
+    ? value.filter((name): name is string =>
+      typeof name === "string" && Object.prototype.hasOwnProperty.call(properties, name))
+    : [];
+}
+
 function delegatedSchemaNode(value: unknown, path = ""): Record<string, unknown> | null {
   const node = record(value);
   if (!node) return null;
   const projected = schemaMetadata(node);
-  const properties = record(node.properties);
-  if (properties) {
-    const safeProperties: Record<string, unknown> = {};
-    for (const [name, child] of Object.entries(properties)) {
-      if (BLOCKED_OBJECT_KEYS.has(name)) continue;
-      const childPath = path ? `${path}.${name}` : name;
-      if (!delegatedConfigPathIsSafe(childPath)) continue;
-      const projectedChild = delegatedSchemaNode(child, childPath);
-      if (projectedChild) safeProperties[name] = projectedChild;
-    }
-    if (Object.keys(safeProperties).length > 0) projected.properties = safeProperties;
-  }
-  const itemsPath = `${path}[]`;
-  if (node.items !== undefined && delegatedConfigPathIsSafe(itemsPath)) {
-    const items = delegatedSchemaNode(node.items, itemsPath);
-    if (items) projected.items = items;
-  }
-  if (Array.isArray(node.required) && properties) {
-    const required = node.required.filter((name): name is string =>
-      typeof name === "string" && Object.prototype.hasOwnProperty.call(projected.properties ?? {}, name));
-    if (required.length > 0) projected.required = required;
-  }
+  const properties = delegatedSchemaProperties(node.properties, path);
+  if (Object.keys(properties).length > 0) projected.properties = properties;
+  const items = delegatedSchemaItems(node.items, path);
+  if (items) projected.items = items;
+  const required = delegatedRequiredFields(node.required, properties);
+  if (required.length > 0) projected.required = required;
   return projected;
 }
 
-function delegatedSchemaPayload(method: string, payload: unknown): Record<string, unknown> {
+function delegatedSchemaPayload(payload: unknown): Record<string, unknown> {
   const source = record(payload);
   if (!source) return {};
-  if (method === "config.schema.lookup") {
-    const schema = delegatedSchemaNode(source.schema ?? source);
-    return schema ? (source.schema === undefined ? schema : { schema }) : {};
-  }
   const schema = delegatedSchemaNode(source.schema ?? source);
-  return schema ? (source.schema === undefined ? schema : { schema }) : {};
+  if (!schema) return {};
+  return source.schema === undefined ? schema : { schema };
 }
 
 function delegatedReadPayload(method: string, payload: unknown): Record<string, unknown> {
   if (method === "config.schema" || method === "config.schema.lookup") {
-    return delegatedSchemaPayload(method, payload);
+    return delegatedSchemaPayload(payload);
   }
   if (method === "models.list") {
     return projectedListPayload(payload, "models", [
