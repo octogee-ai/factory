@@ -185,6 +185,6 @@ export class OpenClawControlSessionManager {
     } satisfies SessionPayload));
     const signature = createHmac("sha256", this.key).update(body).digest("base64url");
     const maxAge = Math.max(1, Math.floor((stored.abs - this.now()) / 1_000));
-    return `${OPENCLAW_CONTROL_SESSION_COOKIE}=${body}.${signature}; Path=/g/${stored.gid}/openclaw; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+    return `${OPENCLAW_CONTROL_SESSION_COOKIE}=${body}.${signature}; Path=/g/${stored.gid}/openclaw; HttpOnly; Secure; SameSite=None; Partitioned; Max-Age=${maxAge}`;
   }
 }

@@ -11,7 +11,7 @@ import {
 } from "@octogee/core/system-config-mutation-lease";
 import type { SystemConfigInvariantContext } from "@octogee/core/system-config-invariants";
 import { isResponseFrame } from "@octogee/shared/types/openclaw-wire-core";
-import { Router, type NextFunction, type Request, type Response } from "express";
+import { Router, type Request, type Response } from "express";
 import { WebSocket, type RawData } from "ws";
 
 import { fetchGatewayToken } from "../chat-proxy/openclaw/gateway-token.js";
@@ -55,7 +55,9 @@ const MAX_WS_FRAME_BYTES = 1_048_576;
 const DEFAULT_HTTP_TIMEOUT_MS = 5_000;
 const DEFAULT_RPC_TIMEOUT_MS = 10_000;
 const DEFAULT_AUTHORIZATION_INTERVAL_MS = 30_000;
-const CSP = "default-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self' blob:";
+const CSP_BEFORE_FRAME_ANCESTORS = "default-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors";
+const CSP_AFTER_FRAME_ANCESTORS = "; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self' blob:";
+const DASHBOARD_ERROR_EVENT = "octogee-openclaw-dashboard-error";
 const ALLOWED_REQUEST_HEADERS = new Set([
   "accept",
   "accept-language",
@@ -99,6 +101,17 @@ function apiOrigin(env: NodeJS.ProcessEnv): string {
   if (origin.pathname !== "/" || origin.search || origin.hash ||
     (origin.protocol !== "https:" && origin.hostname !== "localhost")) {
     throw new Error("API_PUBLIC_URL must be an HTTPS origin for OpenClaw Dashboard");
+  }
+  return origin.origin;
+}
+
+function appOrigin(env: NodeJS.ProcessEnv): string {
+  const origin = new URL(envValue(env, "APP_URL"));
+  const allowedProtocol = origin.protocol === "https:" ||
+    (origin.protocol === "http:" && origin.hostname === "localhost");
+  if (origin.pathname !== "/" || origin.search || origin.hash || origin.username || origin.password ||
+    !allowedProtocol) {
+    throw new Error("APP_URL must be an HTTPS origin for OpenClaw Dashboard");
   }
   return origin.origin;
 }
@@ -174,19 +187,68 @@ export function openClawControlUpstreamPath(originalUrl: string, gatewayId: stri
   return `/g/${gatewayId}/openclaw${suffix}${parsed.search}`;
 }
 
-function securityHeaders(res: Response | http.ServerResponse): void {
+function securityHeaders(res: Response | http.ServerResponse, frameAncestor: string): void {
   res.setHeader("cache-control", "no-store");
-  res.setHeader("content-security-policy", CSP);
+  res.setHeader(
+    "content-security-policy",
+    `${CSP_BEFORE_FRAME_ANCESTORS} ${frameAncestor}${CSP_AFTER_FRAME_ANCESTORS}`,
+  );
   res.setHeader("cross-origin-opener-policy", "same-origin");
   res.setHeader("cross-origin-resource-policy", "same-origin");
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader("x-content-type-options", "nosniff");
-  res.setHeader("x-frame-options", "DENY");
+  res.removeHeader("x-frame-options");
 }
 
-function unauthorized(res: Response): void {
-  securityHeaders(res);
-  res.status(401).json({ error: "dashboard-session-invalid", relaunch: true });
+function isDashboardNavigation(req: Request): boolean {
+  const destination = req.get("sec-fetch-dest")?.toLowerCase();
+  return destination === "document" || destination === "iframe" ||
+    /(?:^|,)\s*text\/html(?:\s*;[^,]*)?(?:,|$)/iu.test(req.get("accept") ?? "");
+}
+
+function dashboardFailureDocument(
+  res: Response,
+  frameAncestor: string,
+  status: number,
+): void {
+  securityHeaders(res, frameAncestor);
+  const targetOrigin = JSON.stringify(frameAncestor);
+  const eventType = JSON.stringify(DASHBOARD_ERROR_EVENT);
+  res.status(status).type("html").send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>OpenClaw Dashboard</title>
+  <style>html,body{height:100%;margin:0}body{display:grid;place-items:center;background:#f8fafc;color:#1e293b;font:14px system-ui,sans-serif}.card{max-width:24rem;margin:1.5rem;padding:1.5rem;border:1px solid #e2e8f0;border-radius:.75rem;background:#fff;text-align:center}h1{margin:0 0 .5rem;font-size:1rem}p{margin:0;color:#64748b}</style>
+</head>
+<body>
+  <main class="card"><h1>OpenClaw Dashboard</h1><p>The secure Dashboard could not load. Return to Octogee and try again.</p></main>
+  <script>window.parent.postMessage({type:${eventType}},${targetOrigin})</script>
+</body>
+</html>`);
+}
+
+function dashboardFailure(
+  req: Request,
+  res: Response,
+  frameAncestor: string,
+  status: number,
+  body: Record<string, unknown>,
+): void {
+  if (isDashboardNavigation(req)) {
+    dashboardFailureDocument(res, frameAncestor, status);
+    return;
+  }
+  securityHeaders(res, frameAncestor);
+  res.status(status).json(body);
+}
+
+function unauthorized(req: Request, res: Response, frameAncestor: string): void {
+  dashboardFailure(req, res, frameAncestor, 401, {
+    error: "dashboard-session-invalid",
+    relaunch: true,
+  });
 }
 
 function httpAssetOutcome(statusCode: number): "ok" | "timeout" | "error" {
@@ -260,11 +322,12 @@ export function createOpenClawControlHttpRouter(
   const httpTimeoutMs = options.httpTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
   const metrics = options.metrics;
   const identity = metricIdentity(env);
+  const frameAncestor = appOrigin(env);
   if (!Number.isSafeInteger(httpTimeoutMs) || httpTimeoutMs <= 0) {
     throw new Error("OpenClaw Dashboard HTTP timeout must be a positive integer");
   }
   const router = Router({ mergeParams: true });
-  router.get("/launch/:ticket", async (req: Request, res: Response, next: NextFunction) => {
+  router.get("/launch/:ticket", async (req: Request, res: Response) => {
     const startedAt = performance.now();
     res.once("finish", () => metrics?.http(
       identity,
@@ -278,14 +341,14 @@ export function createOpenClawControlHttpRouter(
       const ticket = req.params.ticket;
       if (gatewayId !== envValue(env, "GATEWAY_ID") || typeof ticket !== "string" ||
         !/^[A-Za-z0-9_-]{43}$/u.test(ticket)) {
-        unauthorized(res);
+        unauthorized(req, res, frameAncestor);
         return;
       }
       const sessionId = randomUUID();
       const redeemed = await redeem({ ticket, sessionId, gatewayId, revisionId, env });
       if (!redeemed || redeemed.gatewayId !== gatewayId || redeemed.revisionId !== revisionId) {
         metrics?.session(identity, "redeem", "denied");
-        unauthorized(res);
+        unauthorized(req, res, frameAncestor);
         return;
       }
       metrics?.session(identity, "redeem", "ok");
@@ -296,15 +359,22 @@ export function createOpenClawControlHttpRouter(
         revisionId,
         absoluteExpiresAt: redeemed.expiresAt,
       });
-      securityHeaders(res);
+      securityHeaders(res, frameAncestor);
       res.setHeader("set-cookie", issued.cookie);
       res.setHeader("location", `/g/${gatewayId}/openclaw/`);
       res.status(303).end();
     } catch (error) {
-      next(error);
+      logger.error("OpenClaw Dashboard ticket redemption failed", {
+        error: error instanceof Error ? error.name : "UnknownError",
+        gatewayId: req.params.gatewayId,
+      });
+      dashboardFailure(req, res, frameAncestor, 502, {
+        error: "openclaw-unavailable",
+        retryable: true,
+      });
     }
   });
-  router.use(async (req: Request, res: Response, next: NextFunction) => {
+  router.use(async (req: Request, res: Response) => {
     const startedAt = performance.now();
     res.once("finish", () => metrics?.http(
       identity,
@@ -316,26 +386,26 @@ export function createOpenClawControlHttpRouter(
       const gatewayId = req.params.gatewayId;
       const revisionId = env.GATEWAY_REVISION_ID?.trim();
       if (gatewayId !== env.GATEWAY_ID || !revisionId) {
-        unauthorized(res);
+        unauthorized(req, res, frameAncestor);
         return;
       }
       const session = sessions.verify({ cookieHeader: req.headers.cookie, gatewayId, revisionId });
       if (!session || !await authorize({ sessionId: session.sessionId, gatewayId, revisionId, env })) {
         metrics?.session(identity, "authorize", "denied");
         if (session) sessions.revoke(session.sessionId);
-        unauthorized(res);
+        unauthorized(req, res, frameAncestor);
         return;
       }
       metrics?.session(identity, "authorize", "ok");
       if (req.method !== "GET" && req.method !== "HEAD") {
-        securityHeaders(res);
+        securityHeaders(res, frameAncestor);
         res.setHeader("allow", "GET, HEAD");
         res.status(405).json({ error: "method-not-allowed" });
         return;
       }
       const touched = sessions.touchSession(session);
       if (!touched) {
-        unauthorized(res);
+        unauthorized(req, res, frameAncestor);
         return;
       }
       const gatewayToken = await loadGatewayToken({ gatewayId });
@@ -355,7 +425,7 @@ export function createOpenClawControlHttpRouter(
         for (const [name, value] of Object.entries(upstream.headers)) {
           if (value !== undefined && ALLOWED_RESPONSE_HEADERS.has(name.toLowerCase())) res.setHeader(name, value);
         }
-        securityHeaders(res);
+        securityHeaders(res, frameAncestor);
         res.setHeader("set-cookie", touched.cookie);
         upstream.pipe(credentialScrubber([gatewayToken])).pipe(res);
       });
@@ -368,14 +438,33 @@ export function createOpenClawControlHttpRouter(
           res.destroy();
           return;
         }
-        securityHeaders(res);
-        if (timedOut) res.status(504).json({ error: "openclaw-timeout", retryable: true });
-        else res.status(502).json({ error: "openclaw-unavailable", retryable: true });
+        if (timedOut) {
+          dashboardFailure(req, res, frameAncestor, 504, {
+            error: "openclaw-timeout",
+            retryable: true,
+          });
+        } else {
+          dashboardFailure(req, res, frameAncestor, 502, {
+            error: "openclaw-unavailable",
+            retryable: true,
+          });
+        }
       });
       req.once("aborted", () => proxy.destroy());
       proxy.end();
     } catch (error) {
-      next(error);
+      logger.error("OpenClaw Dashboard HTTP proxy failed", {
+        error: error instanceof Error ? error.name : "UnknownError",
+        gatewayId: req.params.gatewayId,
+      });
+      if (!res.headersSent) {
+        dashboardFailure(req, res, frameAncestor, 502, {
+          error: "openclaw-unavailable",
+          retryable: true,
+        });
+      } else {
+        res.destroy();
+      }
     }
   });
   return router;
