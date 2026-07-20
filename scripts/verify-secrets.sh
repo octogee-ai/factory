@@ -9,7 +9,8 @@ set -euo pipefail
 # them are non-empty. Run this in CI before deploy, or locally before manual
 # helm commands.
 #
-# Required secrets are derived from the Helm chart:
+# Required secrets include Helm startup dependencies and product integrations
+# that must fail closed before a release is considered operational:
 #   - gateway/templates/deployment.yaml  (secretKeyRef without optional: true)
 #   - gateway-edge/values.yaml          (optional: false)
 #   - chat-proxy/values.yaml             (optional: false)
@@ -27,6 +28,10 @@ set -euo pipefail
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BOLD='\033[1m'; NC='\033[0m'
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/lib/shell-env.sh
+source "$SCRIPT_DIR/lib/shell-env.sh"
 
 ENV=""
 KUBE_CTX=""
@@ -76,7 +81,9 @@ REQUIRED_SECRETS=(
   "ops-agent-bearer"        # octogee-api → octogee-ops-agent
   "social-notification-bearer"  # octogee-api /social + Cloud Functions social producer
   "mattermost-gateway"      # octogee-api + glm-controller; gateway pods do not mount admin_token
-  "stripe-secrets"          # gateway-edge: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
+  "stripe-secrets"          # octogee-api: Stripe API, webhook, and per-environment price map
+  "google-oauth"             # octogee-api: Google OAuth + Drive picker
+  "connect-state-secret"     # octogee-api: OAuth state HMAC
   "gitea-token"             # octogee-api + glm-controller
   "approval-signing"        # gateway-edge activity bridge callback HMAC
   "agent-control-signing"        # chat-proxy: OCTOGEE_AGENT_CONTROL_SIGNING_SECRET (HMAC for controls)
@@ -106,6 +113,14 @@ REQUIRED_KEYS=(
   "agent-control-signing:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "agent-control-router:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "byot-sync-internal:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+  "stripe-secrets:secret_key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+  "stripe-secrets:webhook_secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+  "stripe-secrets:price_ids:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+  "google-oauth:client_id:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+  "google-oauth:client_secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+  "google-oauth:picker_api_key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+  "google-oauth:picker_app_id:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+  "connect-state-secret:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
 )
 
 echo ""
@@ -140,8 +155,26 @@ for entry in "${REQUIRED_KEYS[@]}"; do
   VAL_B64=$(kubectl get secret "$secret" -n "$NS" --context "$KUBE_CTX" \
     -o jsonpath="{.data.${key}}" 2>/dev/null || echo "")
 
-  if [[ -z "$VAL_B64" ]]; then
+  VALUE=""
+  [[ -n "$VAL_B64" ]] && VALUE="$(printf '%s' "$VAL_B64" | base64 -d 2>/dev/null || true)"
+
+  if [[ -z "$(configured_secret_value "$VALUE")" ]]; then
     echo -e "  ${RED}✗${NC} ${secret}/${key} — ${RED}EMPTY${NC}"
+    echo -e "    Fix: ${fix}"
+    FAILURES=$((FAILURES + 1))
+  elif [[ "$secret:$key" == "stripe-secrets:secret_key" ]] \
+    && ! validate_stripe_secret_key_mode "$ENV" "$VALUE"; then
+    echo -e "  ${RED}✗${NC} ${secret}/${key} — ${RED}INVALID MODE${NC}"
+    echo -e "    Fix: ${fix}"
+    FAILURES=$((FAILURES + 1))
+  elif [[ "$secret:$key" == "stripe-secrets:webhook_secret" ]] \
+    && ! validate_stripe_webhook_secret "$VALUE"; then
+    echo -e "  ${RED}✗${NC} ${secret}/${key} — ${RED}INVALID${NC}"
+    echo -e "    Fix: ${fix}"
+    FAILURES=$((FAILURES + 1))
+  elif [[ "$secret:$key" == "stripe-secrets:price_ids" ]] \
+    && ! validate_stripe_price_ids_json "$VALUE"; then
+    echo -e "  ${RED}✗${NC} ${secret}/${key} — ${RED}INVALID${NC}"
     echo -e "    Fix: ${fix}"
     FAILURES=$((FAILURES + 1))
   else
