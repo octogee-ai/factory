@@ -260,9 +260,9 @@ if [[ "${GITEA_READY:-0}" -ge 1 ]]; then
     set_section bootstrap
     if [[ -n "$GW_DEPLOYMENT" ]]; then
       GITEA_BROKER_CHECK=$(kubectl exec "deployment/$GW_DEPLOYMENT" -n "$NAMESPACE" -c gateway -- \
-        node -e "const u=process.env.GITEA_ADMIN_BROKER_URL||'';const safe=!!u&&!process.env.GIT_API_TOKEN;if(!safe)process.exit(1);fetch(u+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" \
+        sh -c 'node -e "const safe=!!process.env.GITEA_ADMIN_BROKER_URL&&!process.env.GIT_API_TOKEN;process.exit(safe?0:1)" && exec /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/gitea-broker-probe.ts' \
         >/dev/null 2>&1 && echo ok || echo "")
-      status "Gitea admin broker reachable from gateway without legacy admin token" "Gitea admin broker contract failed in gateway pod" "$GITEA_BROKER_CHECK"
+      status "Authenticated Gitea admin broker read passed from assigned gateway tenant" "Gitea admin broker contract failed in gateway pod" "$GITEA_BROKER_CHECK"
     else
       info "Skipping Gitea-from-gateway trust check — no gateway deployment yet"
     fi
