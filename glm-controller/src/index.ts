@@ -1590,6 +1590,9 @@ function startControllerBackgroundTasks({
   helm,
   fleetControllerPrivateKey,
 }: ControllerBackgroundTasksDeps): ControllerStopper[] {
+  if (!deps.kubeOps) {
+    throw new Error("controller background tasks require Kubernetes operations");
+  }
   const stopReconciler = startReconciler(deps);
   const stopWorker = startOperationWorker(deps);
   const stopOperationQueueDrain = startOperationQueueDrain(deps);
@@ -1643,6 +1646,7 @@ function startControllerBackgroundTasks({
     createFirestoreTrialGatewayPoolDeps({
       db,
       namespace: NAMESPACE,
+      kubeOps: deps.kubeOps,
       ensureAuthSecret: deps.ensureGatewayAuthSecret,
       now: () => Date.now(),
       log,
