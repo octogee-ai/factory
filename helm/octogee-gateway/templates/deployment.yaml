@@ -12,7 +12,7 @@
 {{- end -}}
 {{- $unownedOperatorPrewarm := and (eq $gatewayClass "operator") (hasPrefix "trial-op-" .Values.gatewayId) (empty .Values.ownerUid) (empty .Values.builderSlug) -}}
 {{- $operatorShellsEnabled := and (ne $gatewayClass "shared") (.Values.operatorAccess.shellsEnabled | default false) -}}
-{{- $operatorControlUiEnabled := ne $gatewayClass "shared" -}}
+{{- $operatorControlUiEnabled := and (ne $gatewayClass "shared") (not $unownedOperatorPrewarm) -}}
 {{- if and (ne $conversationMode "broad") (ne $conversationMode "publisher-live") -}}
 {{- fail (printf "octogee-gateway: conversationExperiment.mode must be broad or publisher-live, got %q" $conversationMode) -}}
 {{- end -}}

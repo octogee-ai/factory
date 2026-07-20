@@ -184,6 +184,12 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(containerBlock(prewarm, "gateway")).toMatch(
       /name:\s*GATEWAY_UNOWNED_OPERATOR_PREWARM[\s\S]*?value:\s*"true"/,
     );
+    expect(containerBlock(prewarm, "gateway")).not.toMatch(
+      /name:\s*OPENCLAW_DASHBOARD_BRIDGE_REQUIRED/,
+    );
+    expect(containerBlock(prewarm, "gateway-edge")).not.toMatch(
+      /name:\s*OPENCLAW_DASHBOARD_BRIDGE_ENABLED/,
+    );
     expect(containerBlock(prewarm, "gateway-edge")).toMatch(
       /name:\s*OPENCLAW_CONFIG[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/openclaw\.json"/,
     );
@@ -200,6 +206,29 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     );
     expect(containerBlock(owned, "gateway-edge")).toMatch(
       /name:\s*OPENCLAW_CONFIG[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/system_config\/openclaw\.json"/,
+    );
+
+    const claimedTrial = findDoc(helmTemplate("octogee-gw-trial-op-000001", {
+      gatewayId: "trial-op-000001",
+      ownerUid: "uid-alice",
+      builderSlug: "alice",
+      gatewayClass: "operator",
+      imageProfile: "operator",
+    }), "Deployment", "octogee-gateway-trial-op-000001") ?? "";
+    expect(containerBlock(claimedTrial, "gateway")).toMatch(
+      /name:\s*GATEWAY_UNOWNED_OPERATOR_PREWARM[\s\S]*?value:\s*"false"/,
+    );
+    expect(containerBlock(claimedTrial, "gateway")).toMatch(
+      /name:\s*OPENCLAW_DASHBOARD_BRIDGE_REQUIRED[\s\S]*?value:\s*"true"/,
+    );
+    expect(containerBlock(claimedTrial, "gateway-edge")).toMatch(
+      /name:\s*OPENCLAW_DASHBOARD_BRIDGE_ENABLED[\s\S]*?value:\s*"true"/,
+    );
+    expect(containerBlock(claimedTrial, "gateway-edge")).toMatch(
+      /name:\s*OPENCLAW_CONFIG[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/system_config\/openclaw\.json"/,
+    );
+    expect(containerBlock(claimedTrial, "gateway-edge")).toMatch(
+      /name:\s*OPENCLAW_CONFIG_PATH[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/system_config\/openclaw\.json"/,
     );
 
     const unownedNonTrial = findDoc(helmTemplate("octogee-gw-bender", {
