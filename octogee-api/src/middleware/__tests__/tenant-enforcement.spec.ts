@@ -114,6 +114,9 @@ function app(opts: {
   a.post("/internal/openclaw-control/redeem", enforcement, handler);
   a.post("/internal/openclaw-control/authorize", enforcement, handler);
   a.post("/internal/openclaw-control/audit", enforcement, handler);
+  a.post("/internal/openclaw/previews/authorize", enforcement, handler);
+  a.post("/internal/agent-projects/create", enforcement, handler);
+  a.post("/internal/agent-projects/list", enforcement, handler);
   a.post("/internal/fleet/agent/web-search", enforcement, handler);
   a.post("/internal/fleet/agent/web-extract", enforcement, handler);
   a.post("/internal/fleet/configured-builder-bootstrap", enforcement, handler);
@@ -387,6 +390,42 @@ describe("tenant enforcement middleware", () => {
       const foreignGateway = await request(app({ boundTenant: BENDER }))
         .post(`/internal/openclaw-control/${route}`)
         .send({ gatewayId: "other" });
+
+      expect(ownedGateway.status, route).toBe(200);
+      expect(foreignGateway.status, route).toBe(403);
+    }
+  });
+
+  it("lets preview authorization evaluate a member whose own agent is on another gateway", async () => {
+    const delegated = await request(app({ boundTenant: BENDER }))
+      .post("/internal/openclaw/previews/authorize")
+      .send({
+        gatewayId: "bender",
+        uid: "victim",
+        workspaceSlug: "alice",
+        projectSlug: "launch-room",
+      });
+    const foreignGateway = await request(app({ boundTenant: BENDER }))
+      .post("/internal/openclaw/previews/authorize")
+      .send({
+        gatewayId: "other",
+        uid: "victim",
+        workspaceSlug: "alice",
+        projectSlug: "launch-room",
+      });
+
+    expect(delegated.status).toBe(200);
+    expect(foreignGateway.status).toBe(403);
+  });
+
+  it("delegates agent project routes only for the bound gateway tenant", async () => {
+    for (const route of ["create", "list"]) {
+      const ownedGateway = await request(app({ boundTenant: BENDER }))
+        .post(`/internal/agent-projects/${route}`)
+        .send({ agentId: "octogee-alice-coach" });
+      const foreignGateway = await request(app({ boundTenant: BENDER }))
+        .post(`/internal/agent-projects/${route}`)
+        .send({ gatewayId: "other", agentId: "octogee-alice-coach" });
 
       expect(ownedGateway.status, route).toBe(200);
       expect(foreignGateway.status, route).toBe(403);

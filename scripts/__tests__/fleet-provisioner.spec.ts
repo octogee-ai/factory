@@ -15,6 +15,7 @@ import {
   getMountObservedSlugs,
   pathGatewayIdMatchesPod,
   probeSurgeReadiness,
+  reconcileAddCustomerOptions,
   readMountedCustomersFromAssignedState,
   resolveFleetCapabilities,
 } from "../lib/fleet-provisioner.js";
@@ -96,6 +97,13 @@ describe("settleConvergence — the applied-fingerprint gate", () => {
     expect(cloneRetryDelayMs(1)).toBeLessThan(cloneRetryDelayMs(2));
     expect(cloneRetryDelayMs(2)).toBeLessThan(cloneRetryDelayMs(3));
     expect(cloneRetryDelayMs(99)).toBe(cloneRetryDelayMs(CLONE_RETRY_DELAYS_MS.length));
+  });
+});
+
+describe("reconcileAddCustomerOptions", () => {
+  it("forces the full lifecycle path when snapshot fingerprints drive convergence", () => {
+    expect(reconcileAddCustomerOptions(true)).toEqual({ convergeContent: true });
+    expect(reconcileAddCustomerOptions(false)).toEqual({});
   });
 });
 

@@ -220,13 +220,13 @@ function mountSidecarLocalitySurface(app: Express, options: {
 
   const projectsLocality = Router();
   projectsLocality.use("/:wid/:pid/publish", requireAuth);
-  projectsLocality.use("/:wid/:pid/preview", requireAuth);
+  projectsLocality.use("/:wid/:pid/preview", requireAuthenticatedUid);
   projectsLocality.use(projectPreviewRoutes);
   projectsLocality.use(publishRoutes);
   mountApi(app, "/projects", projectsLocality);
 
   const workspacesLocality = Router();
-  workspacesLocality.use("/:wid/preview", requireAuth);
+  workspacesLocality.use("/:wid/preview", requireAuthenticatedUid);
   workspacesLocality.use(workspacePreviewRoutes);
   mountApi(app, "/workspaces", workspacesLocality);
 

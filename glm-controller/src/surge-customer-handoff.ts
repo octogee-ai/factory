@@ -1,4 +1,5 @@
 import type { AssignmentState } from "@octogee/shared/types/gateway-releases";
+import { gatewayHeartbeatMatchesImageTag } from "@octogee/shared/types/image-tag";
 
 export interface SurgePod {
   uid: string;
@@ -103,7 +104,7 @@ export interface SurgeCustomerHandoffDeps {
 
 export interface ReconcileSurgeCustomerHandoffInput {
   gatewayId: string;
-  desiredVersion: string;
+  desiredImageTag: string;
   requiresCustomerMigration: boolean;
 }
 
@@ -121,13 +122,16 @@ function isSurgeOwnerForGateway(owner: string, gatewayId: string): boolean {
 function selectTarget(
   pods: readonly SurgePod[],
   healthByUid: ReadonlyMap<string, SurgePodHealth>,
-  desiredVersion: string,
+  desiredImageTag: string,
 ): SurgePod | null {
-  const desired = pods.filter((pod) => healthByUid.get(pod.uid)?.version === desiredVersion);
+  const desired = pods.filter((pod) => gatewayHeartbeatMatchesImageTag(
+    healthByUid.get(pod.uid)?.version,
+    desiredImageTag,
+  ));
   const blocked = desired.filter((pod) => !pod.ready);
   if (blocked.length === 1) return blocked[0];
   if (blocked.length > 1) {
-    throw new Error(`multiple blocked replacement pods report desired build ${desiredVersion}`);
+    throw new Error(`multiple blocked replacement pods report desired image ${desiredImageTag}`);
   }
   if (desired.length === 1) return desired[0];
   return null;
@@ -329,7 +333,7 @@ export async function reconcileSurgeCustomerHandoff(
   const healthByUid = new Map(
     healthEntries.filter((entry): entry is readonly [string, SurgePodHealth] => entry[1] !== null),
   );
-  const target = selectTarget(pods, healthByUid, input.desiredVersion);
+  const target = selectTarget(pods, healthByUid, input.desiredImageTag);
   if (!target) {
     const assignments = await deps.readAssignments(input.gatewayId);
     await restoreAbandonedSurgeAssignments(
