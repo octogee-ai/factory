@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   parseActivityPairReportArgs,
+  projectIdForActivityPairReport,
 } from "../ops/activity-pair-report.js";
 import {
   parsePurgeRestoreJobsArgs,
@@ -73,11 +74,34 @@ describe("one-shot operator CLI parsers", () => {
 
   it("parses the report-only activity-pair inventory", () => {
     expect(parseActivityPairReportArgs([
+      "--env=test",
       "--workspace",
       "octogee",
-    ])).toEqual({ workspaceSlug: "octogee", help: false });
-    expect(parseActivityPairReportArgs(["--help"])).toEqual({ help: true });
-    expect(() => parseActivityPairReportArgs(["--apply"])).toThrow("unknown argument");
+    ])).toEqual({
+      kind: "ok",
+      args: { env: "test", workspaceSlug: "octogee", apply: false },
+    });
+    expect(parseActivityPairReportArgs([
+      "--env=prod",
+      "--workspace=octogee",
+      "--apply",
+      "--confirm-prod",
+    ])).toEqual({
+      kind: "ok",
+      args: { env: "prod", workspaceSlug: "octogee", apply: true },
+    });
+    expect(parseActivityPairReportArgs(["--help"])).toEqual({ kind: "help" });
+    expect(parseActivityPairReportArgs(["--env=test", "--apply"])).toMatchObject({ kind: "error" });
+    expect(parseActivityPairReportArgs([
+      "--env=prod",
+      "--workspace=octogee",
+      "--apply",
+    ])).toMatchObject({ kind: "error", message: expect.stringContaining("--confirm-prod") });
+  });
+
+  it("binds the activity-pair report to the explicitly selected Firebase project", () => {
+    expect(projectIdForActivityPairReport("test")).toBe("octogee-test");
+    expect(projectIdForActivityPairReport("prod")).toBe("octogee");
   });
 
   it("parses GitHub project seeding and rejects incomplete create requests", () => {
