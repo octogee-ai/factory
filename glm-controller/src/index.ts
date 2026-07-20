@@ -124,6 +124,7 @@ import { deleteAvatarObjects } from "./lib/customer-ops/avatars.js";
 import { loadCustomerCleanupContext } from "./lib/customer-ops/cleanup-context.js";
 import { createGiteaCleanupClient } from "./lib/customer-ops/gitea.js";
 import { createMmCleanupClient } from "./lib/customer-ops/mattermost.js";
+import { deleteCustomerFirestoreData } from "./lib/customer-ops/customer-firestore-cleanup.js";
 import { createUnmountFromGateway } from "./lib/customer-ops/unmount-gateway.js";
 import { resolveDefaultStorageBucket } from "./gcp-project.js";
 import { signFleetRequest } from "@octogee/core/fleet-signature";
@@ -2611,17 +2612,8 @@ function buildDeprovisionCustomerHandler(
     cloudCleanup: {
       gitea,
       mattermost,
-      nukeUserFirestore: async (uid, slug) => {
-        const userRef = db.collection("users").doc(uid);
-        await db.recursiveDelete(userRef.collection("secrets"));
-        await db.recursiveDelete(userRef.collection("settings"));
-        await db.recursiveDelete(userRef.collection("customers"));
-        await db.recursiveDelete(userRef.collection("workspaces"));
-        await userRef.delete();
-        await db.recursiveDelete(db.collection("customerStats").doc(uid));
-        await db.recursiveDelete(db.collection("workspaces").doc(slug));
-        await db.recursiveDelete(db.collection("agents").doc(uid));
-      },
+      nukeUserFirestore: (uid, slug) =>
+        deleteCustomerFirestoreData(db, uid, slug),
       deleteAvatar: (uid) => deleteAvatarObjects(getStorage().bucket(), uid),
       deleteAuthUser: async (uid) => {
         try {

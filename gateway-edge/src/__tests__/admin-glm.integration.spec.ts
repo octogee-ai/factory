@@ -1003,6 +1003,9 @@ describe("PATCH /api/admin/gateways/:id — durable config only", () => {
 
 describe("GET /api/admin/operator-gateway-reservations", () => {
   it("returns reservations sorted by fulfillment priority with ISO timestamps", async () => {
+    usersDocs["uid-pending"] = { username: "pending" };
+    usersDocs["uid-ready"] = { username: "ready" };
+    usersDocs["uid-provisioning"] = { username: "provisioning" };
     operatorGatewayReservationsDocs["uid-pending"] = {
       uid: "uid-pending",
       builderSlug: "pending",
@@ -1062,6 +1065,7 @@ describe("GET /api/admin/operator-gateway-reservations", () => {
       updatedAt: new Date(1_000).toISOString(),
       readyToFulfill: true,
       fulfillBlockedReason: null,
+      ownerExists: true,
     });
     expect(res.body.reservations[1]).toMatchObject({
       uid: "uid-pending",

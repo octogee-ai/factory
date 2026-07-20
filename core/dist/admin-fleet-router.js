@@ -1410,9 +1410,11 @@ function normalizeReservationGatewayProfile(v) {
         ? v
         : null;
 }
-function fulfillBlockedReason(uid, data) {
+function fulfillBlockedReason(uid, data, ownerExists) {
     if (data.uid !== uid)
         return "reservation uid mismatch";
+    if (!ownerExists)
+        return "owner user is missing";
     if (data.status !== "requested")
         return `status is ${String(data.status)}`;
     if (data.billingStatus !== "active") {
@@ -1427,12 +1429,13 @@ function fulfillBlockedReason(uid, data) {
     }
     return null;
 }
-function projectOperatorGatewayReservation(doc) {
+function projectOperatorGatewayReservation(doc, ownerExists) {
     const data = doc.data();
-    const uid = isNonEmptyString(data.uid) ? data.uid : doc.id;
-    const blockedReason = fulfillBlockedReason(uid, data);
+    const uid = doc.id;
+    const blockedReason = fulfillBlockedReason(uid, data, ownerExists);
     return {
         uid,
+        ownerExists,
         builderSlug: isNonEmptyString(data.builderSlug) ? data.builderSlug : null,
         requestedSizingTier: isSizingTier(data.requestedSizingTier)
             ? data.requestedSizingTier
@@ -2981,13 +2984,56 @@ export function addAdminFleetRoutes(router, deps) {
             const snap = await db
                 .collection(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION)
                 .get();
-            const reservations = snap.docs
-                .map(projectOperatorGatewayReservation)
-                .sort(compareOperatorReservations);
+            const reservations = await Promise.all(snap.docs.map(async (doc) => {
+                const userSnap = await db.collection("users").doc(doc.id).get();
+                return projectOperatorGatewayReservation(doc, userSnap.exists);
+            }));
+            reservations.sort(compareOperatorReservations);
             res.json({
                 reservations,
                 generatedAt: new Date().toISOString(),
             });
+        }
+        catch (e) {
+            next(e);
+        }
+    });
+    router.delete("/operator-gateway-reservations/:uid", async (req, res, next) => {
+        try {
+            const uid = req.params.uid;
+            const reservationRef = db
+                .collection(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION)
+                .doc(uid);
+            const userRef = db.collection("users").doc(uid);
+            const outcome = await db.runTransaction(async (transaction) => {
+                const [reservationSnap, userSnap] = await Promise.all([
+                    transaction.get(reservationRef),
+                    transaction.get(userRef),
+                ]);
+                if (!reservationSnap.exists)
+                    return "missing";
+                if (userSnap.exists)
+                    return "owner-exists";
+                transaction.delete(reservationRef);
+                return "deleted";
+            });
+            if (outcome === "missing") {
+                res.status(404).json({
+                    error: "operator gateway reservation not found",
+                    uid,
+                });
+                return;
+            }
+            if (outcome === "owner-exists") {
+                res.status(409).json({
+                    error: "owner user still exists; reservation cleanup refused",
+                    uid,
+                });
+                return;
+            }
+            const actor = req;
+            deps.logger.info(`[operator-reservation] removed orphan uid=${uid} by=${actor.uid ?? "unknown"}`);
+            res.json({ status: "deleted", uid });
         }
         catch (e) {
             next(e);
