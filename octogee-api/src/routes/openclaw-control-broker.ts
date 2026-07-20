@@ -264,12 +264,11 @@ function auditPrincipalDenial(args: {
   });
 }
 
-function isReadyLiveServingRevision(
+function isLiveServingRevision(
   root: unknown,
   revision: unknown,
   gatewayId: string,
   revisionId: string,
-  now: number,
 ): boolean {
   const gateway = projectGatewayDesiredRootForGateway(root, gatewayId);
   return gateway !== null &&
@@ -279,7 +278,17 @@ function isReadyLiveServingRevision(
     isGatewayRuntimeDoc(revision) &&
     revision.gatewayId === gatewayId &&
     revision.release === gateway.liveRelease &&
-    revision.lifecycle === "serving" &&
+    revision.lifecycle === "serving";
+}
+
+function isReadyLiveServingRevision(
+  root: unknown,
+  revision: unknown,
+  gatewayId: string,
+  revisionId: string,
+  now: number,
+): boolean {
+  return isLiveServingRevision(root, revision, gatewayId, revisionId) &&
     isOpenClawControlRevisionRuntimeReady(revision, { gatewayId, revisionId, now });
 }
 
@@ -454,13 +463,7 @@ async function sessionAccessInTransaction(args: {
   )) {
     return { kind: ASSIGNMENT_MISSING };
   }
-  if (!isReadyLiveServingRevision(
-    root,
-    revisionSnap.data(),
-    args.gatewayId,
-    args.revisionId,
-    args.now,
-  )) {
+  if (!isLiveServingRevision(root, revisionSnap.data(), args.gatewayId, args.revisionId)) {
     return { kind: "not-ready" };
   }
   return { kind: "allowed", session };

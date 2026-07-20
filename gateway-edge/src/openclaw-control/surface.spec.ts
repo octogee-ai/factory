@@ -239,6 +239,41 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     expect(response.text).not.toContain("gateway-secret");
   });
 
+  it("keeps the Dashboard session usable after transient broker readiness uncertainty", async () => {
+    const upstream = http.createServer((_req, res) => {
+      res.setHeader("content-type", "text/javascript");
+      res.end("export const loaded = true;");
+    });
+    const port = await listen(upstream);
+    const manager = sessions();
+    const cookie = issue(manager);
+    let authorizations = 0;
+    const application = appWith({
+      env: env(port),
+      sessions: manager,
+      authorize: async () => {
+        authorizations += 1;
+        if (authorizations === 1) {
+          throw new Error("OpenClaw Control authorization broker returned 409");
+        }
+        return true;
+      },
+    });
+
+    const unavailable = await request(application)
+      .get("/api/g/bender/openclaw/assets/tasks-page.js")
+      .set("cookie", cookie);
+    const recovered = await request(application)
+      .get("/api/g/bender/openclaw/assets/agents-page.js")
+      .set("cookie", cookie);
+
+    expect(unavailable.status).toBe(502);
+    expect(unavailable.body).toEqual({ error: "openclaw-unavailable", retryable: true });
+    expect(recovered.status).toBe(200);
+    expect(recovered.text).toBe("export const loaded = true;");
+    expect(authorizations).toBe(2);
+  });
+
   it("redacts rejected sensitive query parameters from the HTTP response", async () => {
     const manager = sessions();
     const response = await request(appWith({ env: env(), sessions: manager }))

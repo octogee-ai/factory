@@ -128,7 +128,7 @@ export async function authorizeOpenClawControlSession(args: {
     revisionId: args.revisionId,
     sessionId: args.sessionId,
   }, args.env ?? process.env, args.fetchImpl);
-  if (res.status === 403 || res.status === 404 || res.status === 409) return false;
+  if (res.status === 403 || res.status === 404) return false;
   if (res.status !== 204) throw new Error(`OpenClaw Control authorization broker returned ${res.status}`);
   return true;
 }
