@@ -11,6 +11,7 @@ import {
   createFleetSystemConfigFlush,
   createSystemConfigMutationGatedRpc,
   resolveFleetControllerEntrypointConfig,
+  SYSTEM_CONFIG_MUTATION_LEASE_RETRY_DELAYS_MS,
 } from "../entrypoints/fleet-controller.js";
 import {
   ASSIGN_CUSTOMER_GATEWAY_USAGE,
@@ -153,7 +154,7 @@ describe("fleet-controller entrypoint config", () => {
       configGet: vi.fn(async () => ({ config: {}, hash: "current" })),
       configApply,
       channelsStatus: vi.fn(async () => ({ channels: [] })),
-    } as never, openclawDir);
+    } as never, openclawDir, { wait: async () => undefined });
     fs.writeFileSync(path.join(openclawDir, "system_config.sync.lock"), `${process.pid}\n`);
 
     try {
@@ -185,7 +186,30 @@ describe("fleet-controller entrypoint config", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("stops retrying a writer lock after three acquisition attempts", async () => {
+  it("allows a five-second auto-push overlap within a finite writer-lock acquisition window", async () => {
+    let elapsedMs = 0;
+    const release = vi.fn(async () => undefined);
+    const acquireLease = vi.fn(async () => elapsedMs >= 5_000
+      ? { ok: true as const, lease: { release } }
+      : { ok: false as const, code: "writer-lock-busy" as const });
+    const wait = vi.fn(async (delayMs: number) => {
+      elapsedMs += delayMs;
+    });
+    const configApply = vi.fn(async () => ({ ok: true as const, hash: "next" }));
+    const rpc = createSystemConfigMutationGatedRpc({
+      configGet: vi.fn(async () => ({ config: {}, hash: "current" })),
+      configApply,
+      channelsStatus: vi.fn(async () => ({ channels: [] })),
+    } as never, "/openclaw", { acquireLease: acquireLease as never, wait });
+
+    await expect(rpc.configApply({}, "current")).resolves.toEqual({ ok: true, hash: "next" });
+    expect(elapsedMs).toBeGreaterThanOrEqual(5_000);
+    expect(elapsedMs).toBeLessThanOrEqual(10_000);
+    expect(configApply).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("stops retrying a writer lock after the bounded eight-second acquisition window", async () => {
     const acquireLease = vi.fn(async () => ({ ok: false as const, code: "writer-lock-busy" as const }));
     const wait = vi.fn(async () => undefined);
     const configApply = vi.fn(async () => ({ ok: true as const, hash: "next" }));
@@ -196,8 +220,16 @@ describe("fleet-controller entrypoint config", () => {
     } as never, "/openclaw", { acquireLease: acquireLease as never, wait });
 
     await expect(rpc.configApply({}, "current")).rejects.toThrow(/writer-lock-busy/i);
-    expect(acquireLease).toHaveBeenCalledTimes(3);
-    expect(wait.mock.calls).toEqual([[250], [750]]);
+    expect(acquireLease).toHaveBeenCalledTimes(
+      SYSTEM_CONFIG_MUTATION_LEASE_RETRY_DELAYS_MS.length + 1,
+    );
+    expect(wait.mock.calls).toEqual(
+      SYSTEM_CONFIG_MUTATION_LEASE_RETRY_DELAYS_MS.map((delayMs) => [delayMs]),
+    );
+    expect(SYSTEM_CONFIG_MUTATION_LEASE_RETRY_DELAYS_MS.reduce(
+      (totalMs, delayMs) => totalMs + delayMs,
+      0,
+    )).toBe(8_000);
     expect(configApply).not.toHaveBeenCalled();
   });
 
@@ -209,7 +241,7 @@ describe("fleet-controller entrypoint config", () => {
       configApply: vi.fn(async () => ({ ok: true as const, hash: "next" })),
       configPatch,
       channelsStatus: vi.fn(async () => ({ channels: [] })),
-    } as never, openclawDir);
+    } as never, openclawDir, { wait: async () => undefined });
     fs.writeFileSync(path.join(openclawDir, "system_config.sync.lock"), `${process.pid}\n`);
 
     try {

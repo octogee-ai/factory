@@ -34,6 +34,7 @@ const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
   /source unmount cleanup pending/i,
   /retirement config freeze failed/i,
   /system config writer lock is busy/i,
+  /system config mutation unavailable: writer-lock-busy/i,
 ];
 
 export function classifyOperationFailure(

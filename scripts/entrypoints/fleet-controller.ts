@@ -45,6 +45,14 @@ export interface FleetControllerEntrypointConfig {
   version: string;
 }
 
+export const SYSTEM_CONFIG_MUTATION_LEASE_RETRY_DELAYS_MS = [
+  250,
+  750,
+  1_500,
+  2_500,
+  3_000,
+] as const;
+
 export function resolveFleetControllerEntrypointConfig(
   env: NodeJS.ProcessEnv = process.env,
   runtime: { gatewayId?: string } = { gatewayId: GATEWAY_ID },
@@ -99,7 +107,7 @@ export function createSystemConfigMutationGatedRpc(
       const mutation = Reflect.get(target, property, target) as (...args: unknown[]) => Promise<unknown>;
       return async (...args: unknown[]) => {
         let acquired = await acquireLease({ openclawDir });
-        for (const delayMs of [250, 750]) {
+        for (const delayMs of SYSTEM_CONFIG_MUTATION_LEASE_RETRY_DELAYS_MS) {
           if (acquired.ok || acquired.code !== "writer-lock-busy") break;
           await wait(delayMs);
           acquired = await acquireLease({ openclawDir });
