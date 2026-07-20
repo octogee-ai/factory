@@ -169,7 +169,6 @@ function mutableConfig(
     serviceAccount: null,
     operatorAccess: { shellsEnabled: true },
     ownerUid: "uid-ceckert",
-    coOwnerUids: [],
     builderSlug: "ceckert",
     openclawOverrides: null,
     modelBrokerLimits: null,

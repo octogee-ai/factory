@@ -1,0 +1,16 @@
+{
+  "id": "octogee-access-tools",
+  "name": "Octogee Access Tools",
+  "version": "0.1.0",
+  "description": "Prepare owner-reviewed delegated Agent access without activating access from chat.",
+  "contracts": { "tools": ["delegated_access"] },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "brokerUrl": { "type": "string" },
+      "tokenPath": { "type": "string" }
+    }
+  },
+  "skills": ["./skills"]
+}

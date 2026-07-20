@@ -17,7 +17,6 @@ function operatorConfig(overrides: Partial<GatewayMutableConfig> = {}): GatewayM
     serviceAccount: { create: true },
     operatorAccess: { shellsEnabled: true },
     ownerUid: "uid-operator",
-    coOwnerUids: [],
     builderSlug: null,
     openclawOverrides: null,
     modelBrokerLimits: null,

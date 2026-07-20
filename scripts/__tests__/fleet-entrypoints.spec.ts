@@ -369,7 +369,6 @@ describe("assign-customer-gateway root config", () => {
       serviceAccount: null,
       operatorAccess: null,
       ownerUid: null,
-      coOwnerUids: [],
       builderSlug: null,
       openclawOverrides: null,
       modelBrokerLimits: null,

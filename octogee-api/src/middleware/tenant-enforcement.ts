@@ -55,6 +55,11 @@ const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/agent-projects/list",
 ]);
 
+function isSelfScopedInternalBrokerRoute(path: string): boolean {
+  return SELF_SCOPED_INTERNAL_BROKER_ROUTES.has(path) ||
+    path === "/internal/agent-access" || path.startsWith("/internal/agent-access/");
+}
+
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
@@ -212,7 +217,7 @@ async function gatewayBindingAuthorized(
   // These brokers perform route-specific authorization from their own body
   // shape. Keeping this as an explicit route allowlist avoids turning
   // gatewayId into a generic skeleton key for future internal routes.
-  if (SELF_SCOPED_INTERNAL_BROKER_ROUTES.has(req.path)) {
+  if (isSelfScopedInternalBrokerRoute(req.path)) {
     return true;
   }
 

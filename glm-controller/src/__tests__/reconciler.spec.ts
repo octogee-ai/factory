@@ -30,7 +30,6 @@ function durableRoot(overrides: Record<string, unknown> = {}): Record<string, un
     serviceAccount: null,
     operatorAccess: null,
     ownerUid: null,
-    coOwnerUids: [],
     builderSlug: null,
     openclawOverrides: null,
     modelBrokerLimits: null,

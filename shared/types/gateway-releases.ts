@@ -455,7 +455,6 @@ export const GATEWAY_MUTABLE_FIELDS = [
   "serviceAccount",
   "operatorAccess",
   "ownerUid",
-  "coOwnerUids",
   "builderSlug",
   "openclawOverrides",
   "modelBrokerLimits",

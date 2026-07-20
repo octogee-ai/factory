@@ -388,6 +388,22 @@ async function removeMemberDocument(
   }
 }
 
+async function markWorkspaceMemberRevoking(
+  target: RemovalTarget,
+  mmUserId: string,
+): Promise<void> {
+  if (target.projectRef) return;
+  const targetUid = await uidForMattermostUser(mmUserId);
+  if (!targetUid) return;
+  const ref = db.doc(`workspaces/${target.workspaceId}/members/${targetUid}`);
+  const member = await ref.get();
+  if (!member.exists) return;
+  await ref.set({
+    canonicalState: "revoking",
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+}
+
 router.delete("/:kind/:id/members/:mmUserId", async (req: Request, res: Response) => {
   const callerUid = req.uid!;
   const { kind, id, mmUserId } = req.params as { kind: string; id: string; mmUserId: string };
@@ -414,6 +430,7 @@ router.delete("/:kind/:id/members/:mmUserId", async (req: Request, res: Response
       return;
     }
 
+    await markWorkspaceMemberRevoking(target, mmUserId);
     const { removeActivityPairMember } = await import("../lib/activityPair.js");
     await removeActivityPairMember(target.channelDocPath, mmUserId);
     await removeMemberDocument(target, mmUserId);

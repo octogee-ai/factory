@@ -428,8 +428,6 @@ spec:
               value: "true"
             - name: OPENCLAW_CONTROL_BROKER_URL
               value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
-            - name: OPENCLAW_CONTROL_RPC_POLICY_MODE
-              value: {{ .Values.gatewayEdge.openClawControlRpcPolicyMode | quote }}
             {{- end }}
             - name: GATEWAY_ID
               value: {{ .Values.gatewayId | quote }}

@@ -2921,7 +2921,6 @@ const GATEWAY_MUTABLE_CONFIG_FIELDS = [
   "serviceAccount",
   "operatorAccess",
   "ownerUid",
-  "coOwnerUids",
   "builderSlug",
   "openclawOverrides",
   "modelBrokerLimits",
@@ -3033,9 +3032,6 @@ async function validateGatewayConfigOwner(
   if (next.ownerUid && next.ownerUid !== previous.ownerUid) {
     candidates.add(next.ownerUid);
   }
-  for (const uid of next.coOwnerUids) {
-    if (!previous.coOwnerUids.includes(uid)) candidates.add(uid);
-  }
   for (const uid of candidates) {
     const snap = await db.collection("users").doc(uid).get();
     if (!snap.exists) {
@@ -3108,7 +3104,6 @@ function buildCreateGatewayConfig(args: {
     serviceAccount: args.serviceAccount ?? null,
     operatorAccess: args.operatorAccess ?? null,
     ownerUid: args.ownerUid ?? null,
-    coOwnerUids: [],
     builderSlug: args.builderSlug ?? null,
     openclawOverrides: null,
     modelBrokerLimits: null,
@@ -3546,7 +3541,6 @@ function operatorGatewayInitialReleaseFromReservation(opts: {
         opts.shellsEnabled,
       ),
       ownerUid: opts.reservation.uid,
-      coOwnerUids: [],
       builderSlug: opts.reservation.builderSlug,
       openclawOverrides: null,
       modelBrokerLimits: null,
@@ -3603,11 +3597,6 @@ export function buildBuilderCandidates(opts: {
     if (!root) continue;
     const ownerUid = asStringOrNull(root.ownerUid);
     if (ownerUid) assigned.add(ownerUid);
-    if (Array.isArray(root.coOwnerUids)) {
-      for (const co of root.coOwnerUids) {
-        if (typeof co === "string" && co.length > 0) assigned.add(co);
-      }
-    }
   }
 
   for (const doc of opts.reservations) {
@@ -4728,7 +4717,6 @@ router.post(
             profile: target.root.profile ?? undefined,
             imageProfile: target.root.imageProfile,
             ownerUid: target.root.ownerUid ?? undefined,
-            coOwnerUids: target.root.coOwnerUids,
             operatorAccess: target.root.operatorAccess ?? undefined,
           },
           uid,

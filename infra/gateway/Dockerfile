@@ -134,6 +134,11 @@ WORKDIR /octogee/extensions/octogee-web-tools
 RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
     && chown -R node:node /octogee/extensions/octogee-web-tools/node_modules
 
+# octogee-access-tools runtime deps
+WORKDIR /octogee/extensions/octogee-access-tools
+RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
+    && chown -R node:node /octogee/extensions/octogee-access-tools/node_modules
+
 # ── Runtime utilities ───────────────────────────────────────────────────────
 # `chmod 1777 /tmp` is defensive: newer Debian bookworm apt sandboxes
 # signature verification through user `_apt` and needs a world-writable

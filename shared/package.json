@@ -93,6 +93,10 @@
       "types": "./dist/types/gateway-mutable-config.d.ts",
       "default": "./dist/types/gateway-mutable-config.js"
     },
+    "./types/gateway-access": {
+      "types": "./dist/types/gateway-access.d.ts",
+      "default": "./dist/types/gateway-access.js"
+    },
     "./types/glm": {
       "types": "./dist/types/glm.d.ts",
       "default": "./dist/types/glm.js"
@@ -244,6 +248,9 @@
       ],
       "types/gateway-mutable-config": [
         "dist/types/gateway-mutable-config.d.ts"
+      ],
+      "types/gateway-access": [
+        "dist/types/gateway-access.d.ts"
       ],
       "types/glm": [
         "dist/types/glm.d.ts"

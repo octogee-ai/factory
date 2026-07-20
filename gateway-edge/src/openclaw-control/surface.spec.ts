@@ -45,6 +45,9 @@ function issue(manager: OpenClawControlSessionManager): string {
     uid: "uid-owner",
     gatewayId: "bender",
     revisionId: "bender-r7",
+    brokerProfile: "native-owner",
+    permissionSetIds: [],
+    grantRevision: null,
     absoluteExpiresAt: 3_601_000,
   }).cookie.split(";", 1)[0];
 }
@@ -136,6 +139,9 @@ describe("OpenClaw Dashboard HTTP surface", () => {
       uid: "uid-owner",
       gatewayId: input.gatewayId,
       revisionId: input.revisionId,
+      brokerProfile: "native-owner" as const,
+      permissionSetIds: [],
+      grantRevision: null,
       expiresAt: 3_601_000,
     }));
     const response = await request(appWith({ env: env(), sessions: manager, redeem }))
@@ -228,6 +234,7 @@ describe("OpenClaw Dashboard HTTP surface", () => {
       "default-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors https://app.octogee.com; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self' blob:",
     );
     expect(response.headers["x-frame-options"]).toBeUndefined();
+    expect(response.headers["cross-origin-resource-policy"]).toBe("cross-origin");
     expect(JSON.stringify(response.headers)).not.toContain("gateway-secret");
     expect(response.text).not.toContain("gateway-secret");
   });
@@ -257,7 +264,7 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     expect(response.headers["content-security-policy"])
       .toContain("frame-ancestors https://app-octogee-test.web.app");
     expect(response.headers["content-security-policy"]).not.toContain("frame-ancestors *");
-    expect(response.headers["cross-origin-resource-policy"]).toBe("same-origin");
+    expect(response.headers["cross-origin-resource-policy"]).toBe("cross-origin");
   });
 
   it("rejects malformed or non-HTTPS Dashboard frame origins", () => {
@@ -968,5 +975,78 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     await expect(browserClosed).resolves.toEqual({ code: 1008, reason: "capability-revoked" });
     heldSocket?.destroy();
     expect(authorizations).toBeGreaterThanOrEqual(3);
+  });
+
+  it("uses the session authorization timer instead of revalidating every Dashboard RPC", async () => {
+    let statusForwarded = false;
+    const upstream = http.createServer();
+    const upstreamWs = new WebSocketServer({ noServer: true });
+    upstream.on("upgrade", (req, socket, head) => {
+      upstreamWs.handleUpgrade(req, socket, head, (ws) => upstreamWs.emit("connection", ws, req));
+    });
+    upstreamWs.on("connection", (ws) => {
+      ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "n" } }));
+      ws.on("message", (data) => {
+        const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+        if (frame.method === "connect") {
+          ws.send(JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: true,
+            payload: {
+              type: "hello-ok",
+              features: { methods: [...OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS] },
+            },
+          }));
+        } else if (frame.method === "status") {
+          statusForwarded = true;
+        }
+      });
+    });
+    const upstreamPort = await listen(upstream);
+    const manager = sessions();
+    const edge = http.createServer(appWith({ env: env(upstreamPort), sessions: manager }));
+    const router = new WsUpgradeRouter();
+    let authorizations = 0;
+    attachOpenClawControlWsRoute({
+      router,
+      env: env(upstreamPort),
+      sessions: manager,
+      authorize: async () => {
+        authorizations += 1;
+        return true;
+      },
+      loadGatewayToken: async () => "gateway-secret",
+      audit: async () => {},
+      authorizationIntervalMs: 60_000,
+    });
+    router.attach(edge);
+    const edgePort = await listen(edge);
+    const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
+      headers: { cookie: issue(manager), origin: "https://api.octogee.com" },
+    });
+    await new Promise<void>((resolve, reject) => {
+      const deadline = setTimeout(() => reject(new Error("status RPC was not forwarded")), 1_000);
+      browser.on("error", reject);
+      browser.on("message", (data) => {
+        const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+        if (frame.event === "connect.challenge") {
+          browser.send(JSON.stringify({ type: "req", id: "connect", method: "connect", params: {} }));
+        } else if ((frame.payload as Record<string, unknown> | undefined)?.type === "hello-ok") {
+          browser.send(JSON.stringify({ type: "req", id: "status", method: "status", params: {} }));
+        }
+      });
+      const observeStatus = setInterval(() => {
+        if (!statusForwarded) return;
+        clearInterval(observeStatus);
+        clearTimeout(deadline);
+        resolve();
+      }, 5);
+    });
+
+    expect(authorizations).toBe(1);
+    expect(statusForwarded).toBe(true);
+    browser.close();
+    await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
   });
 });

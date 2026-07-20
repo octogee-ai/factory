@@ -204,13 +204,13 @@ describe("resolveUserGatewayShellState", () => {
     ).toEqual({ gatewayProfile: "standard", shellsEnabled: true });
   });
 
-  it("honors a co-owner", () => {
+  it("does not infer shell access for a non-owner", () => {
     expect(
       resolveUserGatewayShellState(
-        { gatewayClass: "operator", coOwnerUids: ["uid-jack"], operatorAccess: { shellsEnabled: true } },
+        { gatewayClass: "operator", ownerUid: "uid-bender", operatorAccess: { shellsEnabled: true } },
         "uid-jack",
       ).shellsEnabled,
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("denies a guest migrated onto someone else's operator gateway", () => {

@@ -25,6 +25,7 @@ import { createGatewayPodOwnerIdentityReader } from "./lib/gateway-pod-owner-ide
 import { createByokBrokerRoutes } from "./routes/byok-broker.js";
 import { createAgentProjectRoutes } from "./routes/agent-projects.js";
 import { createAgentSupportRoutes } from "./routes/agent-support.js";
+import { createAgentAccessRoutes } from "./routes/agent-access.js";
 import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
 import { createBuilderShellBrokerRoutes } from "./routes/builder-shell-broker.js";
 import { createOpenClawControlBrokerRoutes } from "./routes/openclaw-control-broker.js";
@@ -306,6 +307,7 @@ export function createApp(opts: CreateAppOptions = {}) {
       logError: (message, fields) => logger.error(message, fields),
     }),
   );
+  app.use("/internal/agent-access", createAgentAccessRoutes({ db }));
   // octogee-api-only: broker BuilderShell ticket, presence, and audit
   // Firestore writes so operator gateway pods can stay datastore.viewer-only.
   app.use("/internal/builder-shell", createBuilderShellBrokerRoutes());

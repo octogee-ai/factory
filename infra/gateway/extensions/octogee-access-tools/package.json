@@ -1,0 +1,13 @@
+{
+  "name": "octogee-access-tools",
+  "private": true,
+  "dependencies": {
+    "typebox": "^1.3.2"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.9"
+  },
+  "scripts": {
+    "test": "vitest run"
+  }
+}

@@ -18,6 +18,9 @@ describe("OpenClaw Dashboard session", () => {
       uid: "uid-owner",
       gatewayId: "bender",
       revisionId: "bender-r7",
+      brokerProfile: "delegated-config",
+      permissionSetIds: ["trusted-helper.v1"],
+      grantRevision: 4,
       absoluteExpiresAt: 5_000,
     });
     expect(issued.cookie).toContain(`${OPENCLAW_CONTROL_SESSION_COOKIE}=`);
@@ -30,7 +33,14 @@ describe("OpenClaw Dashboard session", () => {
 
     const cookieHeader = issued.cookie.split(";", 1)[0];
     expect(manager.verify({ cookieHeader, gatewayId: "bender", revisionId: "bender-r7" }))
-      .toMatchObject({ uid: "uid-owner", idleExpiresAt: 2_000, absoluteExpiresAt: 5_000 });
+      .toMatchObject({
+        uid: "uid-owner",
+        brokerProfile: "delegated-config",
+        permissionSetIds: ["trusted-helper.v1"],
+        grantRevision: 4,
+        idleExpiresAt: 2_000,
+        absoluteExpiresAt: 5_000,
+      });
     expect(manager.verify({ cookieHeader, gatewayId: "other", revisionId: "bender-r7" })).toBeNull();
     expect(manager.verify({ cookieHeader, gatewayId: "bender", revisionId: "bender-r8" })).toBeNull();
 
@@ -65,6 +75,9 @@ describe("OpenClaw Dashboard session", () => {
       uid: "uid-owner",
       gatewayId: "bender",
       revisionId: "bender-r7",
+      brokerProfile: "native-owner",
+      permissionSetIds: [],
+      grantRevision: null,
       absoluteExpiresAt: 5_000,
     });
     const cookieHeader = issued.cookie.split(";", 1)[0];

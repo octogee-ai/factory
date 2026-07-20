@@ -22,7 +22,6 @@ function validConfig(
     serviceAccount: null,
     operatorAccess: { shellsEnabled: true },
     ownerUid: "uid-owner",
-    coOwnerUids: [],
     builderSlug: "owner",
     openclawOverrides: null,
     modelBrokerLimits: null,
