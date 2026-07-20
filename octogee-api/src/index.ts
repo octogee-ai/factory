@@ -28,6 +28,7 @@ import { createAgentSupportRoutes } from "./routes/agent-support.js";
 import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
 import { createBuilderShellBrokerRoutes } from "./routes/builder-shell-broker.js";
 import { createOpenClawControlBrokerRoutes } from "./routes/openclaw-control-broker.js";
+import { createAutomationAuthorizationBrokerRoutes } from "./routes/automation-authorization-broker.js";
 import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
 import { createLinkPreviewRoutes } from "./routes/link-preview.js";
 import {
@@ -42,7 +43,7 @@ import {
   createMattermostArtifactSourceReader,
 } from "./lib/chat-artifact-adapters.js";
 import { db, storage } from "../../gateway-edge/src/lib/db.js";
-import { requireAuth } from "../../gateway-edge/src/middleware/auth.js";
+import { requireAuth, requireAuthenticatedUid } from "../../gateway-edge/src/middleware/auth.js";
 import { createKubernetesTokenReviewer } from "./lib/token-review.js";
 import {
   createTenantBindingHealthState,
@@ -302,6 +303,11 @@ export function createApp(opts: CreateAppOptions = {}) {
   // Firestore writes so operator gateway pods can stay datastore.viewer-only.
   app.use("/internal/builder-shell", createBuilderShellBrokerRoutes());
   app.use("/internal/openclaw-control", createOpenClawControlBrokerRoutes({ db }));
+  app.use(
+    "/internal/automations",
+    requireAuthenticatedUid,
+    createAutomationAuthorizationBrokerRoutes({ db }),
+  );
   // octogee-api-only: mint/revoke opaque model broker tokens. GLM mirrors
   // these into per-gateway K8s secrets, but the values are no longer provider
   // keys and cannot fetch provider keys from the gateway pod.
