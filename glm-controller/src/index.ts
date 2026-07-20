@@ -37,6 +37,7 @@ import {
   type AuthSecretEnsurer,
 } from "./auth-secret-ensurer.js";
 import { createGatewayServiceAccountEnsurer } from "./gateway-service-account-ensurer.js";
+import { resolveGatewayImageRepository } from "./gateway-profiles.js";
 import {
   revisionHeartbeatMerge,
   readHeartbeatLiveness,
@@ -683,7 +684,15 @@ async function readDurableReleaseArtifacts(
           `gateway ${gateway.gatewayId} release ${release} has no valid release artifact`,
         );
       }
-      artifacts.push({ imageRepository: artifact.imageRepository, imageTag: artifact.imageTag });
+      artifacts.push({
+        imageRepository: resolveGatewayImageRepository({
+          gatewayClass: gateway.gatewayClass,
+          imageProfile: gateway.imageProfile,
+          profile: gateway.profile ?? undefined,
+          imageRepository: artifact.imageRepository,
+        }),
+        imageTag: artifact.imageTag,
+      });
       // The chart always renders the gateway-edge sidecar (tag defaults to the
       // gateway imageTag), so its image must be pinned even when the release
       // payload carries no explicit gatewayEdgeImage.

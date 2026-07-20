@@ -171,6 +171,7 @@ export async function claimGatewayRetirementAtomic(input) {
                 throw new GatewayRetirementConflictError(inspection.error);
             liveRuntimeIdentity = inspection.liveRuntimeIdentity;
         }
+        await input.claimGuard?.({ transaction, root: rootData });
         const version = nextRetirementVersion(rootData.retirementVersion);
         const claim = {
             operationId: input.operationId,

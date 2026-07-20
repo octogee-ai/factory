@@ -3,6 +3,9 @@ import {
   snapshotHasReconcileRelevantChange,
   startReconciler,
 } from "../index";
+import {
+  buildWarmingTrialGateway,
+} from "../trial-gateway-pool.js";
 
 function durableRoot(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -286,6 +289,67 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
       "octogee-gateway:abc1234",
       "octogee-gateway:def5678",
     ]);
+  });
+
+  it("pins the effective operator gateway image instead of the standard release repository", async () => {
+    const gatewayId = "trial-op-000001";
+    const callbacks: SnapshotCallbacks = {};
+    const reconcileImagePins = vi.fn(async () => {});
+    const operatorRoot = buildWarmingTrialGateway({
+      gatewayId,
+      source: {
+        gatewayId: "default",
+        release: 2,
+        payload: {
+          imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+          imageTag: "abc1234",
+        },
+      },
+      sizingTier: "nano",
+      configHash: "0123456789abcdef",
+      now: 1,
+    }).root;
+    const stop = startReconciler({
+      db: makeDb({
+        roots: {
+          [gatewayId]: { ...operatorRoot, liveRelease: 2 },
+        },
+        runtimes: {
+          [gatewayId]: servingRuntime({ gatewayId }),
+        },
+        releases: {
+          [gatewayId]: {
+            2: releaseArtifact(gatewayId, 2, "abc1234"),
+          },
+        },
+        callbacks,
+      }),
+      helm: {} as never,
+      handlers: {} as never,
+      reconcileImagePins,
+      log: vi.fn(),
+    });
+
+    await runTick(callbacks);
+    stop();
+
+    const [, artifacts] = reconcileImagePins.mock.calls[0] as [
+      string,
+      Array<{ imageRepository: string; imageTag: string }>,
+    ];
+    expect(artifacts).toEqual(expect.arrayContaining([
+      {
+        imageRepository:
+          "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator",
+        imageTag: "abc1234",
+      },
+    ]));
+    expect(artifacts).not.toEqual(expect.arrayContaining([
+      {
+        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+        imageTag: "abc1234",
+      },
+    ]));
   });
 
   it("pins the W9 gateway-edge candidate artifact alongside the gateway image", async () => {

@@ -25,4 +25,5 @@ export interface GatewayMutableConfig {
 export declare function isBareGatewayId(value: unknown): value is string;
 export declare function isGatewayMutableConfig(value: unknown): value is GatewayMutableConfig;
 export declare function isGatewayMutableConfigForGateway(value: unknown, gatewayId: string): value is GatewayMutableConfig;
+export declare function isCanonicalTrialStandbyMutableConfigForGateway(value: unknown, gatewayId: string): value is GatewayMutableConfig;
 export declare function effectiveGatewayServiceAccountNameForGateway(config: GatewayMutableConfig, gatewayId: string): string;
