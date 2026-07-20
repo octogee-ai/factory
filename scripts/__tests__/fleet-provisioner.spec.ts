@@ -9,6 +9,7 @@ import {
   buildFleetHealthResponse,
   cloneRetryDelayMs,
   cloneRetryReady,
+  evictLocalCustomer,
   gatewayServiceName,
   settleConvergence,
   getEvictObservedSlugs,
@@ -247,6 +248,116 @@ describe("observed split — evict keys off raw presence, mount off completion",
       customerMigratingIn: () => true,
     });
     expect(getMountObservedSlugs(a)).toEqual(["migrated"]);
+  });
+});
+
+describe("evictLocalCustomer — complete local teardown", () => {
+  function adapter(overrides: Partial<CustomerLifecycleAdapter>): CustomerLifecycleAdapter {
+    return {
+      log: vi.fn(),
+      uidForSlug: vi.fn(async () => null),
+      applyRemoveCustomerConfigPatch: vi.fn(async () => undefined),
+      hasCustomerDir: vi.fn(() => true),
+      deleteCustomerDir: vi.fn(async () => undefined),
+      ...overrides,
+    } as CustomerLifecycleAdapter;
+  }
+
+  it("prefers the imported-customer teardown for an unassigned slug", async () => {
+    const removeImportedCustomerBySlug = vi.fn(async () => ({
+      wasMounted: true,
+      steps: ["config-patch-remove", "delete-dir"] as const,
+    }));
+    const onUnmounted = vi.fn();
+    const stampMounted = vi.fn(async () => undefined);
+    const onLocalStateRemoved = vi.fn();
+    const a = adapter({ removeImportedCustomerBySlug, onUnmounted });
+
+    await expect(evictLocalCustomer({
+      adapter: a,
+      slug: "departed",
+      stampMounted,
+      onLocalStateRemoved,
+    })).resolves.toBe("deleted-user");
+
+    expect(removeImportedCustomerBySlug).toHaveBeenCalledWith("departed");
+    expect(a.applyRemoveCustomerConfigPatch).not.toHaveBeenCalled();
+    expect(a.deleteCustomerDir).not.toHaveBeenCalled();
+    expect(onUnmounted).toHaveBeenCalledWith("departed");
+    expect(stampMounted).not.toHaveBeenCalled();
+    expect(onLocalStateRemoved).toHaveBeenCalledWith("departed");
+  });
+
+  it("preserves the manual fallback for adapters without imported-customer teardown", async () => {
+    const onUnmounted = vi.fn();
+    const onLocalStateRemoved = vi.fn();
+    const a = adapter({ onUnmounted });
+
+    await expect(evictLocalCustomer({
+      adapter: a,
+      slug: "departed",
+      stampMounted: vi.fn(async () => undefined),
+      onLocalStateRemoved,
+    })).resolves.toBe("deleted-user");
+
+    expect(a.applyRemoveCustomerConfigPatch).toHaveBeenCalledWith(
+      "departed",
+      "octogee-departed-coach",
+    );
+    expect(a.deleteCustomerDir).toHaveBeenCalledWith("departed");
+    expect(onUnmounted).toHaveBeenCalledWith("departed");
+    expect(onLocalStateRemoved).toHaveBeenCalledWith("departed");
+  });
+
+  it("clears runtime and fingerprint bookkeeping when teardown races with another cleanup", async () => {
+    const onUnmounted = vi.fn();
+    const onLocalStateRemoved = vi.fn();
+    const a = adapter({
+      removeImportedCustomerBySlug: vi.fn(async () => ({ wasMounted: false, steps: [] })),
+      onUnmounted,
+    });
+
+    await expect(evictLocalCustomer({
+      adapter: a,
+      slug: "departed",
+      stampMounted: vi.fn(async () => undefined),
+      onLocalStateRemoved,
+    })).resolves.toBe("noop");
+
+    expect(onUnmounted).toHaveBeenCalledWith("departed");
+    expect(onLocalStateRemoved).toHaveBeenCalledWith("departed");
+  });
+
+  it("keeps assigned-customer mounted state and local bookkeeping cleanup", async () => {
+    const stampMounted = vi.fn(async () => undefined);
+    const onLocalStateRemoved = vi.fn();
+    const a = adapter({
+      uidForSlug: vi.fn(async () => "uid-alice"),
+      loadUserSnapshot: vi.fn(async () => ({
+        uid: "uid-alice",
+        slug: "alice",
+        tier: "trial",
+        gatewayId: "bender",
+        status: "complete",
+        agentIds: ["octogee-alice-coach"],
+        repoUrl: "",
+        mattermostUserId: null,
+        greetingPosted: false,
+        channels: [],
+        ownerName: "Alice",
+        projects: [],
+      })),
+    });
+
+    await expect(evictLocalCustomer({
+      adapter: a,
+      slug: "alice",
+      stampMounted,
+      onLocalStateRemoved,
+    })).resolves.toBe("drained");
+
+    expect(stampMounted).toHaveBeenCalledWith("uid-alice", false);
+    expect(onLocalStateRemoved).toHaveBeenCalledWith("alice");
   });
 });
 

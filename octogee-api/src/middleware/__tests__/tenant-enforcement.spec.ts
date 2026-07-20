@@ -121,6 +121,7 @@ function app(opts: {
   a.post("/internal/fleet/agent/web-search", enforcement, handler);
   a.post("/internal/fleet/agent/web-extract", enforcement, handler);
   a.post("/internal/fleet/configured-builder-bootstrap", enforcement, handler);
+  a.post("/internal/fleet/uid-for-slug", enforcement, handler);
   a.post("/internal/billing/check-trial-expiry", enforcement, handler);
   a.post("/internal/billing/run-auto-top-ups", enforcement, handler);
   a.post("/internal/activity-pairs/report", enforcement, handler);
@@ -338,6 +339,19 @@ describe("tenant enforcement middleware", () => {
       });
 
     expect(ownedGateway.status).toBe(200);
+    expect(foreignGateway.status).toBe(403);
+  });
+
+  it("lets the fleet broker resolve an unassigned stale slug for idempotent eviction", async () => {
+    const stale = await request(app({ boundTenant: BENDER }))
+      .post("/internal/fleet/uid-for-slug")
+      .send({ gatewayId: "bender", slug: "departed" });
+
+    const foreignGateway = await request(app({ boundTenant: BENDER }))
+      .post("/internal/fleet/uid-for-slug")
+      .send({ gatewayId: "other", slug: "alice" });
+
+    expect(stale.status).toBe(200);
     expect(foreignGateway.status).toBe(403);
   });
 
