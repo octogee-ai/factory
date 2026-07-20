@@ -5,8 +5,13 @@ import express from "express";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
+import type { UpstreamRpcClient } from "../chat-proxy/openclaw/bridge-upstream-rpc.js";
 
-import { createAutomationsRouter } from "./automations.js";
+import {
+  createAutomationsRouter,
+  invokeLocalOpenClaw,
+  type LocalAutomationOpenClawDeps,
+} from "./automations.js";
 
 const dirs: string[] = [];
 
@@ -421,5 +426,35 @@ describe("automations locality broker", () => {
 
     expect(response.status).toBe(400);
     expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("local Automations OpenClaw transport", () => {
+  it("uses the auth-rotating upstream and closes it after the bounded RPC", async () => {
+    const close = vi.fn();
+    const dispose = vi.fn();
+    const openAuthenticatedUpstream = vi.fn(async () => ({ close } as never));
+    const rpc: UpstreamRpcClient = {
+      call: async <T>() => ({ ok: true as const, result: { jobs: [] } as T }),
+      dispose,
+    };
+    const attachRpcClient = vi.fn(() => rpc);
+    const deps: LocalAutomationOpenClawDeps = {
+      gatewayId: () => "eggman-devdays",
+      gatewayUrl: () => "http://127.0.0.1:18789",
+      openAuthenticatedUpstream,
+      attachRpcClient,
+    };
+
+    await expect(invokeLocalOpenClaw("cron.list", {}, deps)).resolves.toEqual({ jobs: [] });
+
+    expect(openAuthenticatedUpstream).toHaveBeenCalledWith({
+      gatewayId: "eggman-devdays",
+      url: "http://127.0.0.1:18789",
+      timeoutMs: 10_000,
+    });
+    expect(attachRpcClient).toHaveBeenCalledWith(expect.anything(), { timeoutMs: 10_000 });
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
   });
 });

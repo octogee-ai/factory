@@ -1,7 +1,6 @@
 import { Router, type Request, type Response } from "express";
 
 import { isValidGatewayId } from "@octogee/shared/types/glm";
-import { generateIdentity, type DeviceIdentity } from "@octogee/shared/types/device-identity";
 import {
   AUTOMATION_OPENCLAW_CONNECT_TIMEOUT_MS,
   AUTOMATION_OPENCLAW_RPC_TIMEOUT_MS,
@@ -9,8 +8,7 @@ import {
 import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
 
 import { attachUpstreamRpcClient } from "../chat-proxy/openclaw/bridge-upstream-rpc.js";
-import { fetchGatewayAuth, persistGatewayDeviceToken } from "../chat-proxy/openclaw/gateway-token.js";
-import { openUpstream } from "../chat-proxy/openclaw/upstream.js";
+import { openAuthenticatedUpstream } from "../chat-proxy/openclaw/authenticated-upstream.js";
 import {
   authorizeAutomationOwner,
   type AutomationAuthorizationOutcome,
@@ -518,26 +516,33 @@ export function createAutomationsRouter(deps: AutomationsRouterDeps): Router {
   return router;
 }
 
-let upstreamIdentity: DeviceIdentity | null = null;
-
-function identity(): DeviceIdentity {
-  upstreamIdentity ??= generateIdentity();
-  return upstreamIdentity;
+export interface LocalAutomationOpenClawDeps {
+  gatewayId(): string;
+  gatewayUrl(): string;
+  openAuthenticatedUpstream: typeof openAuthenticatedUpstream;
+  attachRpcClient: typeof attachUpstreamRpcClient;
 }
 
-async function invokeLocalOpenClaw(method: string, params: Record<string, unknown>): Promise<unknown> {
-  const gatewayId = process.env.GATEWAY_ID ?? "";
+const localAutomationOpenClawDeps: LocalAutomationOpenClawDeps = {
+  gatewayId: () => process.env.GATEWAY_ID ?? "",
+  gatewayUrl: () => process.env.OPENCLAW_GATEWAY_URL ?? "http://127.0.0.1:18789",
+  openAuthenticatedUpstream,
+  attachRpcClient: attachUpstreamRpcClient,
+};
+
+export async function invokeLocalOpenClaw(
+  method: string,
+  params: Record<string, unknown>,
+  deps: LocalAutomationOpenClawDeps = localAutomationOpenClawDeps,
+): Promise<unknown> {
+  const gatewayId = deps.gatewayId();
   if (!isValidGatewayId(gatewayId)) throw new Error("GATEWAY_ID is required for automation broker");
-  const auth = await fetchGatewayAuth({ gatewayId, allowLegacyFallback: true });
-  const ws = await openUpstream({
-    url: process.env.OPENCLAW_GATEWAY_URL ?? "http://127.0.0.1:18789",
-    token: auth.token,
-    deviceToken: auth.deviceToken,
-    identity: identity(),
+  const ws = await deps.openAuthenticatedUpstream({
+    gatewayId,
+    url: deps.gatewayUrl(),
     timeoutMs: AUTOMATION_OPENCLAW_CONNECT_TIMEOUT_MS,
-    onDeviceToken: async (issued) => persistGatewayDeviceToken({ token: issued.deviceToken }),
   });
-  const rpc = attachUpstreamRpcClient(ws, { timeoutMs: AUTOMATION_OPENCLAW_RPC_TIMEOUT_MS });
+  const rpc = deps.attachRpcClient(ws, { timeoutMs: AUTOMATION_OPENCLAW_RPC_TIMEOUT_MS });
   try {
     const result = await rpc.call(method, params);
     if (!result.ok) throw new Error(`automation broker ${method} failed: ${result.reason}`);

@@ -5,9 +5,9 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
 import admin from "firebase-admin";
 import { Registry, Counter, Gauge, Histogram } from "prom-client";
-import { generateIdentity, type DeviceIdentity } from "@octogee/shared/types/device-identity";
 import { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
 import { openUpstream, OpenclawWireError } from "./openclaw/upstream.js";
+import { getOpenClawDeviceIdentity } from "./openclaw/device-identity.js";
 import {
   clearGatewayDeviceToken,
   fetchGatewayAuth,
@@ -431,12 +431,6 @@ function normalizeWsData(data: unknown): Buffer {
   return Buffer.from(String(data));
 }
 
-let openclawIdentity: DeviceIdentity | null = null;
-function getOpenClawIdentity(): DeviceIdentity {
-  if (!openclawIdentity) openclawIdentity = generateIdentity();
-  return openclawIdentity;
-}
-
 let openclawRuntimeBroker: OpenClawRuntimeBroker | undefined;
 function getOpenClawRuntimeBroker(): OpenClawRuntimeBroker {
   if (openclawRuntimeBroker === undefined) {
@@ -665,7 +659,7 @@ async function tryOpenGatewayUpstream(
       url: gatewayUrl,
       token: auth.token,
       deviceToken: auth.deviceToken,
-      identity: getOpenClawIdentity(),
+      identity: getOpenClawDeviceIdentity(),
       onDeviceToken: async (issued) => {
         await persistGatewayDeviceToken({ token: issued.deviceToken });
       },
@@ -1304,7 +1298,7 @@ async function startRunLiveProjectionBackground(
           url: process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
           token: auth.token,
           deviceToken: auth.deviceToken,
-          identity: getOpenClawIdentity(),
+          identity: getOpenClawDeviceIdentity(),
           onDeviceToken: async (issued) => {
             await persistGatewayDeviceToken({ token: issued.deviceToken });
           },
@@ -1530,7 +1524,7 @@ export async function startChatProxyBackground(): Promise<void> {
         runtimeBroker,
         upstreamUrl: process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
         gatewayToken: '',
-        identity: getOpenClawIdentity(),
+        identity: getOpenClawDeviceIdentity(),
         mmBaseUrl: MM_PUBLIC_URL,
         metrics: { ...bridgeMetrics, approvalDropped: approvalDroppedCounter },
         log: bridgeLog,
@@ -1585,7 +1579,7 @@ export async function startChatProxyBackground(): Promise<void> {
             url: process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
             token: authResolved.token,
             deviceToken: authResolved.deviceToken,
-            identity: getOpenClawIdentity(),
+            identity: getOpenClawDeviceIdentity(),
             onDeviceToken: async (issued) => {
               await persistGatewayDeviceToken({ token: issued.deviceToken });
             },
