@@ -64,6 +64,7 @@ describe('toRepoSummary', () => {
         private: true,
         description: 'the thing',
         updated_at: '2026-06-10T00:00:00Z',
+        default_branch: 'main',
         owner: { login: 'octogee-ai' },
       }),
     ).toEqual({
@@ -73,6 +74,7 @@ describe('toRepoSummary', () => {
       private: true,
       description: 'the thing',
       updatedAt: '2026-06-10T00:00:00Z',
+      defaultBranch: 'main',
     });
   });
 });

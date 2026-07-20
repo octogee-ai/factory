@@ -8,6 +8,7 @@ import { storeWorkspaceBlob, removeWorkspaceBlob } from "./workspace-blob.js";
 export interface CoachIdentityPatch {
   name?: string;
   persona?: string;
+  emoji?: string;
   avatarPng?: Buffer;
 }
 
@@ -43,6 +44,10 @@ function applyTextIdentity(
   if (typeof patch.persona === "string") {
     update.persona = patch.persona;
     updated.push("persona");
+  }
+  if (typeof patch.emoji === "string" && patch.emoji) {
+    update.avatarEmoji = patch.emoji;
+    updated.push("emoji");
   }
 }
 

@@ -25,6 +25,10 @@
       "types": "./dist/types/account-lifecycle.d.ts",
       "default": "./dist/types/account-lifecycle.js"
     },
+    "./types/agent-import": {
+      "types": "./dist/types/agent-import.d.ts",
+      "default": "./dist/types/agent-import.js"
+    },
     "./types/agent-conversation": {
       "types": "./dist/types/agent-conversation.d.ts",
       "default": "./dist/types/agent-conversation.js"
@@ -197,6 +201,9 @@
       ],
       "types/agent": [
         "dist/types/agent.d.ts"
+      ],
+      "types/agent-import": [
+        "dist/types/agent-import.d.ts"
       ],
       "types/agent-conversation": [
         "dist/types/agent-conversation.d.ts"

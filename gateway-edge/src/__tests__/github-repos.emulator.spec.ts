@@ -83,6 +83,7 @@ describe("GET /workspace/github/repos — mounted + caller's own connection", ()
             private: true,
             description: "Eight arms. One dream.",
             updated_at: "2026-06-01T00:00:00Z",
+            default_branch: "main",
             owner: { login: "octogee-ai" },
           },
         ]),
@@ -106,6 +107,7 @@ describe("GET /workspace/github/repos — mounted + caller's own connection", ()
         private: true,
         description: "Eight arms. One dream.",
         updatedAt: "2026-06-01T00:00:00Z",
+        defaultBranch: "main",
       },
     ]);
   });

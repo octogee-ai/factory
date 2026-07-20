@@ -58,6 +58,16 @@ describe("avatarFileName", () => {
 });
 
 describe("syncCoachIdentity", () => {
+  it("persists an imported emoji without treating it as a credential or Mattermost mutation", async () => {
+    const updated = await syncCoachIdentity("u1", { emoji: "🐮" });
+    expect(updated).toEqual(["emoji"]);
+    expect(mockSet).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "u1", avatarEmoji: "🐮" }),
+      { merge: true },
+    );
+    expect(mockMmApi).not.toHaveBeenCalled();
+  });
+
   it("writes name to agents/{uid} and pushes the MM bot display_name", async () => {
     const updated = await syncCoachIdentity("u1", { name: "Scout" });
     expect(updated).toEqual(["name"]);

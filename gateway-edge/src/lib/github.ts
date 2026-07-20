@@ -241,6 +241,7 @@ export interface GithubRepoSummary {
   private: boolean;
   description: string | null;
   updatedAt: string;
+  defaultBranch: string;
 }
 
 interface GithubRepoRaw {
@@ -249,6 +250,7 @@ interface GithubRepoRaw {
   private: boolean;
   description: string | null;
   updated_at: string;
+  default_branch: string;
   owner: { login: string };
 }
 
@@ -267,6 +269,7 @@ export function toRepoSummary(r: GithubRepoRaw): GithubRepoSummary {
     private: r.private,
     description: r.description,
     updatedAt: r.updated_at,
+    defaultBranch: r.default_branch,
   };
 }
 
