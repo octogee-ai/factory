@@ -127,6 +127,82 @@ sm_get() {
   gcloud secrets versions access latest --secret="$1" --project="${2:-$SM_PROJECT}" 2>/dev/null || echo ""
 }
 
+sync_secret_manager_value() {
+  local name="$1"
+  local value="$2"
+  local project="${3:-$SM_PROJECT}"
+  local normalizer="${4:-configured_secret_value}"
+  [[ -n "$value" ]] || fail "Refusing to persist empty Secret Manager value: $name"
+
+  local state current normalized_current normalized_value
+  state="$(secret_manager_secret_state "$name" "$project")"
+  case "$state" in
+    present)
+      current="$(gcloud secrets versions access latest \
+        --secret="$name" --project="$project" 2>/dev/null)" \
+        || fail "Could not read existing Secret Manager value: $name"
+      normalized_current="$("$normalizer" "$current")" \
+        || fail "Existing Secret Manager value is invalid: $name"
+      normalized_value="$("$normalizer" "$value")" \
+        || fail "Proposed Secret Manager value is invalid: $name"
+      [[ "$normalized_current" == "$normalized_value" ]] \
+        || fail "Secret Manager is authoritative for $name; rotate it there before running setup-secrets.sh"
+      ok "Secret Manager: $name"
+      ;;
+    absent)
+      printf '%s' "$value" | gcloud secrets create "$name" \
+        --data-file=- --project="$project" \
+        --replication-policy=user-managed --locations=us-central1 --quiet >/dev/null \
+        || fail "Could not create absent Secret Manager value: $name"
+      ok "Secret Manager: $name"
+      ;;
+    *) fail "Could not establish Secret Manager state: $name" ;;
+  esac
+}
+
+read_authoritative_secret_manager_value() {
+  local name="$1"
+  local project="$2"
+  local normalizer="$3"
+  local state raw
+  state="$(secret_manager_secret_state "$name" "$project")"
+  case "$state" in
+    present)
+      raw="$(gcloud secrets versions access latest \
+        --secret="$name" --project="$project" 2>/dev/null)" \
+        || { echo "Could not read authoritative Secret Manager value: $name" >&2; return 1; }
+      "$normalizer" "$raw"
+      ;;
+    absent) return 0 ;;
+    *) echo "Could not establish authoritative Secret Manager state: $name" >&2; return 1 ;;
+  esac
+}
+
+resolve_environment_secret_value() {
+  local initial="$1"
+  local sm_name="$2"
+  local k8s_secret="$3"
+  local k8s_key="$4"
+  local normalizer="$5"
+  local env_value secret_manager_value kubernetes_value
+  env_value="$("$normalizer" "$initial")"
+  kubernetes_value="$("$normalizer" "$(ksecret_key "$k8s_secret" "$k8s_key")")"
+  if [[ "$ENV" == "custom" ]]; then
+    if [[ -n "$kubernetes_value" ]]; then
+      printf '%s' "$kubernetes_value"
+      return 0
+    fi
+    secret_manager_value="$("$normalizer" "$(sm_get "$sm_name" "$FIREBASE_PROJECT")")"
+    select_environment_secret_value \
+      "$ENV" "$secret_manager_value" "$env_value" "$kubernetes_value"
+    return 0
+  fi
+  secret_manager_value="$(read_authoritative_secret_manager_value \
+    "$sm_name" "$FIREBASE_PROJECT" "$normalizer")" || return 1
+  select_environment_secret_value \
+    "$ENV" "$secret_manager_value" "$env_value" "$kubernetes_value"
+}
+
 # Load env file
 set +u
 load_env_file "$ENV_FILE"
@@ -431,16 +507,34 @@ oauth_secret github-oauth    GITHUB_CLIENT_ID    GITHUB_CLIENT_SECRET
 oauth_secret microsoft-oauth MICROSOFT_CLIENT_ID MICROSOFT_CLIENT_SECRET
 
 info "google-oauth"
-set +u
-G_ID="${GOOGLE_CLIENT_ID:-}"; G_SEC="${GOOGLE_CLIENT_SECRET:-}"
-G_PICKER_KEY="${GOOGLE_PICKER_API_KEY:-}"; G_PICKER_APP="${GOOGLE_PICKER_APP_ID:-}"
-set -u
-[[ -z "$G_ID" ]]         && G_ID=$(sm_get GOOGLE_CLIENT_ID "$FIREBASE_PROJECT" 2>/dev/null || echo "")
-[[ -z "$G_SEC" ]]        && G_SEC=$(sm_get GOOGLE_CLIENT_SECRET "$FIREBASE_PROJECT" 2>/dev/null || echo "")
-[[ -z "$G_PICKER_KEY" ]] && G_PICKER_KEY=$(sm_get GOOGLE_PICKER_API_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
-[[ -z "$G_PICKER_APP" ]] && G_PICKER_APP=$(sm_get GOOGLE_PICKER_APP_ID "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+persist_google_env() {
+  local env_file="$1"
+  save_env_file_value "$env_file" GOOGLE_CLIENT_ID "$G_ID"
+  save_env_file_value "$env_file" GOOGLE_CLIENT_SECRET "$G_SEC"
+  save_env_file_value "$env_file" GOOGLE_PICKER_API_KEY "$G_PICKER_KEY"
+  save_env_file_value "$env_file" GOOGLE_PICKER_APP_ID "$G_PICKER_APP"
+}
+
+G_ID="$(resolve_environment_secret_value "${GOOGLE_CLIENT_ID:-}" GOOGLE_CLIENT_ID google-oauth client_id configured_secret_value)"
+G_SEC="$(resolve_environment_secret_value "${GOOGLE_CLIENT_SECRET:-}" GOOGLE_CLIENT_SECRET google-oauth client_secret configured_secret_value)"
+G_PICKER_KEY="$(resolve_environment_secret_value "${GOOGLE_PICKER_API_KEY:-}" GOOGLE_PICKER_API_KEY google-oauth picker_api_key configured_secret_value)"
+G_PICKER_APP="$(resolve_environment_secret_value "${GOOGLE_PICKER_APP_ID:-}" GOOGLE_PICKER_APP_ID google-oauth picker_app_id configured_secret_value)"
 [[ -z "$G_ID" || -z "$G_SEC" ]] && warn "GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET not set — Google connect disabled"
 [[ -z "$G_PICKER_KEY" || -z "$G_PICKER_APP" ]] && warn "GOOGLE_PICKER_API_KEY/GOOGLE_PICKER_APP_ID not set — Drive picker disabled"
+if [[ "$ENV" != "custom" ]]; then
+  [[ -n "$G_ID" ]] && sync_secret_manager_value GOOGLE_CLIENT_ID "$G_ID" "$FIREBASE_PROJECT"
+  [[ -n "$G_SEC" ]] && sync_secret_manager_value GOOGLE_CLIENT_SECRET "$G_SEC" "$FIREBASE_PROJECT"
+  [[ -n "$G_PICKER_KEY" ]] && sync_secret_manager_value GOOGLE_PICKER_API_KEY "$G_PICKER_KEY" "$FIREBASE_PROJECT"
+  [[ -n "$G_PICKER_APP" ]] && sync_secret_manager_value GOOGLE_PICKER_APP_ID "$G_PICKER_APP" "$FIREBASE_PROJECT"
+fi
+if [[ -n "$G_ID" && -n "$G_SEC" && -n "$G_PICKER_KEY" && -n "$G_PICKER_APP" ]]; then
+  persist_google_env "$ENV_FILE"
+  [[ "$ENV" == "test" ]] && persist_google_env "$REPO_DIR/.env.local"
+fi
+export GOOGLE_CLIENT_ID="$G_ID"
+export GOOGLE_CLIENT_SECRET="$G_SEC"
+export GOOGLE_PICKER_API_KEY="$G_PICKER_KEY"
+export GOOGLE_PICKER_APP_ID="$G_PICKER_APP"
 ksecret google-oauth \
   --from-literal=client_id="$G_ID" \
   --from-literal=client_secret="$G_SEC" \
@@ -694,20 +788,42 @@ for gw_id in "${GATEWAY_IDS[@]}"; do
 done
 
 # ── 10. Stripe secrets ────────────────────────────────────────────────────
-# Required by gateway-edge at startup (not optional). Use placeholder if not
+# Required by octogee-api at startup (not optional). Use placeholder if not
 # configured yet — billing is sandbox mode until real keys are set.
 info "stripe-secrets"
-set +u
-STRIPE_SECRET_KEY="${STRIPE_SECRET_KEY:-}"
-STRIPE_WEBHOOK_SECRET="${STRIPE_WEBHOOK_SECRET:-}"
-set -u
-[[ -z "$STRIPE_SECRET_KEY" ]]    && STRIPE_SECRET_KEY=$(sm_get STRIPE_SECRET_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
-[[ -z "$STRIPE_WEBHOOK_SECRET" ]] && STRIPE_WEBHOOK_SECRET=$(sm_get STRIPE_WEBHOOK_SECRET "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+STRIPE_SECRET_KEY="$(resolve_environment_secret_value "${STRIPE_SECRET_KEY:-}" STRIPE_SECRET_KEY stripe-secrets secret_key configured_secret_value)"
+STRIPE_WEBHOOK_SECRET="$(resolve_environment_secret_value "${STRIPE_WEBHOOK_SECRET:-}" STRIPE_WEBHOOK_SECRET stripe-secrets webhook_secret configured_secret_value)"
+STRIPE_PRICE_IDS="$(resolve_environment_secret_value "${STRIPE_PRICE_IDS:-}" STRIPE_PRICE_IDS stripe-secrets price_ids configured_stripe_price_ids_value)"
 [[ -z "$STRIPE_SECRET_KEY" ]]    && warn "STRIPE_SECRET_KEY not found — using placeholder (billing disabled)"
 [[ -z "$STRIPE_WEBHOOK_SECRET" ]] && warn "STRIPE_WEBHOOK_SECRET not found — using placeholder"
+[[ -z "$STRIPE_PRICE_IDS" ]] && warn "STRIPE_PRICE_IDS not found — checkout plans remain unavailable"
+if [[ -n "$STRIPE_SECRET_KEY" ]]; then
+  validate_stripe_secret_key_mode "$ENV" "$STRIPE_SECRET_KEY" \
+    || fail "STRIPE_SECRET_KEY mode does not match --env=$ENV"
+fi
+if [[ -n "$STRIPE_WEBHOOK_SECRET" ]]; then
+  validate_stripe_webhook_secret "$STRIPE_WEBHOOK_SECRET" \
+    || fail "STRIPE_WEBHOOK_SECRET must be a Stripe whsec_ signing secret"
+fi
+if [[ "$ENV" != "custom" ]]; then
+  [[ -n "$STRIPE_SECRET_KEY" ]] && sync_secret_manager_value STRIPE_SECRET_KEY "$STRIPE_SECRET_KEY" "$FIREBASE_PROJECT"
+  [[ -n "$STRIPE_WEBHOOK_SECRET" ]] && sync_secret_manager_value STRIPE_WEBHOOK_SECRET "$STRIPE_WEBHOOK_SECRET" "$FIREBASE_PROJECT"
+fi
+if [[ -n "$STRIPE_PRICE_IDS" ]]; then
+  validate_stripe_price_ids_json "$STRIPE_PRICE_IDS" \
+    || fail "STRIPE_PRICE_IDS must map every supported plan and credit key to a Stripe price ID"
+  STRIPE_PRICE_IDS="$(canonicalize_stripe_price_ids_json "$STRIPE_PRICE_IDS")" \
+    || fail "STRIPE_PRICE_IDS could not be canonicalized"
+  if [[ "$ENV" != "custom" ]]; then
+    sync_secret_manager_value STRIPE_PRICE_IDS "$STRIPE_PRICE_IDS" "$FIREBASE_PROJECT" canonicalize_stripe_price_ids_json
+  fi
+  save_env_file_value "$ENV_FILE" STRIPE_PRICE_IDS "$STRIPE_PRICE_IDS"
+fi
+STRIPE_PRICE_IDS_MATERIALIZED="$(materialize_stripe_price_ids_json "$STRIPE_PRICE_IDS")"
 ksecret stripe-secrets \
   --from-literal=secret_key="${STRIPE_SECRET_KEY:-placeholder}" \
-  --from-literal=webhook_secret="${STRIPE_WEBHOOK_SECRET:-placeholder}"
+  --from-literal=webhook_secret="${STRIPE_WEBHOOK_SECRET:-placeholder}" \
+  --from-literal=price_ids="$STRIPE_PRICE_IDS_MATERIALIZED"
 
 # ── 11. Resend secrets (email digest delivery — P6) ──────────────────────
 # Used by gateway-edge for email digest delivery via Resend.
@@ -856,6 +972,9 @@ status "github-oauth / client_id" "${GITHUB_CLIENT_ID:-}"
 status "google-oauth / client_id" "${GOOGLE_CLIENT_ID:-}"
 status "microsoft-oauth / client_id" "${MICROSOFT_CLIENT_ID:-}"
 status "connect-state-secret" "${CONNECT_STATE_SECRET:-}"
+status "stripe-secrets / secret_key" "${STRIPE_SECRET_KEY:-}"
+status "stripe-secrets / webhook_secret" "${STRIPE_WEBHOOK_SECRET:-}"
+status "stripe-secrets / price_ids" "${STRIPE_PRICE_IDS:-}"
 
 echo ""
 if [[ -z "${MM_ADMIN_TOKEN:-}" || -z "${MM_TEAM_ID:-}" || -z "${MM_ADMIN_USER_ID:-}" ]]; then

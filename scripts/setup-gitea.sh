@@ -216,11 +216,14 @@ CACHED_TOKEN=$(kubectl get secret gitea-token -n "$K8S_NAMESPACE" \
 token_is_valid() {
   local tok="$1"
   [[ -z "$tok" ]] && return 1
-  local who
+  local who issue_status
   who=$(curl -s -H "Authorization: token $tok" \
     "http://localhost:13000/api/v1/user" 2>/dev/null \
     | python3 -c "import sys,json; print(json.load(sys.stdin).get('login',''))" 2>/dev/null || echo "")
-  [[ "$who" == "octogee-admin" ]]
+  issue_status=$(curl -s -o /dev/null -w "%{http_code}" \
+    -H "Authorization: token $tok" \
+    "http://localhost:13000/api/v1/repos/issues/search?limit=1" 2>/dev/null || echo "000")
+  [[ "$who" == "octogee-admin" && "$issue_status" == "200" ]]
 }
 
 if token_is_valid "$CACHED_TOKEN"; then
@@ -237,7 +240,7 @@ else
     -u "octogee-admin:$GITEA_ADMIN_PASS" \
     -H "Content-Type: application/json" \
     "http://localhost:13000/api/v1/users/octogee-admin/tokens" \
-    -d '{"name":"octogee-gateway-token","scopes":["write:repository","write:organization","write:user","write:admin"]}' 2>/dev/null)
+    -d '{"name":"octogee-gateway-token","scopes":["write:repository","write:issue","write:organization","write:user","write:admin"]}' 2>/dev/null)
   TOKEN_CODE=$(echo "$TOKEN_RESP" | tail -1)
   TOKEN_BODY=$(echo "$TOKEN_RESP" | head -1)
 

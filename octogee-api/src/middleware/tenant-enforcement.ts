@@ -45,6 +45,7 @@ const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/byok/byosub-user",
   "/internal/byok/byosub-flow-read",
   "/internal/fleet/configured-builder-bootstrap",
+  "/internal/fleet/uid-for-slug",
   "/internal/openclaw-control/redeem",
   "/internal/openclaw-control/authorize",
   "/internal/openclaw-control/audit",

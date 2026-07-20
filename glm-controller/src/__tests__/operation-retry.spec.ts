@@ -114,6 +114,14 @@ describe("classifyOperationFailure", () => {
     ).toBe("terminal");
   });
 
+  it("classifies the gateway mutation writer-lock-busy response as transient", () => {
+    expect(
+      classifyOperationFailure(
+        "finish-rsync-import failed: system config mutation unavailable: writer-lock-busy",
+      ),
+    ).toBe("transient");
+  });
+
   it("defaults to terminal for an unrecognized cause — fail fast rather than retry blind", () => {
     expect(classifyOperationFailure("some never-seen-before error string")).toBe("terminal");
   });

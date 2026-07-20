@@ -10,8 +10,9 @@
 {{- if ne (empty .Values.ownerUid) (empty .Values.builderSlug) -}}
 {{- fail "octogee-gateway: ownerUid and builderSlug must be provided together" -}}
 {{- end -}}
+{{- $unownedOperatorPrewarm := and (eq $gatewayClass "operator") (hasPrefix "trial-op-" .Values.gatewayId) (empty .Values.ownerUid) (empty .Values.builderSlug) -}}
 {{- $operatorShellsEnabled := and (ne $gatewayClass "shared") (.Values.operatorAccess.shellsEnabled | default false) -}}
-{{- $operatorControlUiEnabled := ne $gatewayClass "shared" -}}
+{{- $operatorControlUiEnabled := and (ne $gatewayClass "shared") (not $unownedOperatorPrewarm) -}}
 {{- if and (ne $conversationMode "broad") (ne $conversationMode "publisher-live") -}}
 {{- fail (printf "octogee-gateway: conversationExperiment.mode must be broad or publisher-live, got %q" $conversationMode) -}}
 {{- end -}}
@@ -203,6 +204,8 @@ spec:
               value: {{ $imageProfile | quote }}
             - name: GATEWAY_CLASS
               value: {{ $gatewayClass | quote }}
+            - name: GATEWAY_UNOWNED_OPERATOR_PREWARM
+              value: {{ ternary "true" "false" $unownedOperatorPrewarm | quote }}
             - name: OPENCLAW_DOCTOR_MODE
               value: {{ .Values.env.openclawDoctorMode | default "skip" | quote }}
             {{- $autosave := .Values.workspaceAutosaveEnabled | toString }}
@@ -415,12 +418,12 @@ spec:
             - name: OPENCLAW_GATEWAY_DEVICE_TOKEN_PATH
               value: "/var/run/octogee/openclaw-device-auth/token"
             - name: OPENCLAW_CONFIG
-              value: {{ if eq $gatewayClass "shared" }}"/home/node/.openclaw/openclaw.json"{{ else }}"/home/node/.openclaw/system_config/openclaw.json"{{ end }}
+              value: {{ if or (eq $gatewayClass "shared") $unownedOperatorPrewarm }}"/home/node/.openclaw/openclaw.json"{{ else }}"/home/node/.openclaw/system_config/openclaw.json"{{ end }}
             {{- if $operatorControlUiEnabled }}
             - name: OPENCLAW_DIR
               value: "/home/node/.openclaw"
             - name: OPENCLAW_CONFIG_PATH
-              value: "/home/node/.openclaw/system_config/openclaw.json"
+              value: {{ if $unownedOperatorPrewarm }}"/home/node/.openclaw/openclaw.json"{{ else }}"/home/node/.openclaw/system_config/openclaw.json"{{ end }}
             - name: OPENCLAW_DASHBOARD_BRIDGE_ENABLED
               value: "true"
             - name: OPENCLAW_CONTROL_BROKER_URL
