@@ -27,7 +27,7 @@
     "@types/http-proxy": "^1.17.17",
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",
-    "firebase-admin": "^13.10.0",
+    "firebase-admin": "^14.1.0",
     "google-auth-library": "^10.9.0",
     "http-proxy": "^1.18.1",
     "node-pty": "^1.1.0",

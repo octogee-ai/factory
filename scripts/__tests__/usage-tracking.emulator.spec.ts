@@ -6,10 +6,10 @@ import * as os from "os";
 process.env.FIRESTORE_EMULATOR_HOST ??= "127.0.0.1:8088";
 process.env.GCLOUD_PROJECT ??= "octogee-test";
 
-const adminMod = await import("firebase-admin");
-const admin = adminMod.default;
-if (admin.apps.length === 0) admin.initializeApp({ projectId: "octogee-test" });
-const db = admin.firestore();
+const { deleteApp, getApps, initializeApp } = await import("firebase-admin/app");
+const { getFirestore } = await import("firebase-admin/firestore");
+if (getApps().length === 0) initializeApp({ projectId: "octogee-test" });
+const db = getFirestore();
 
 const { reportUsage } = await import("../lib/usage-tracking.js");
 
@@ -29,7 +29,7 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
-  await Promise.all(admin.apps.map((app) => app?.delete()));
+  await Promise.all(getApps().map(deleteApp));
 });
 
 function makeAgentDir(_slug: string | null): string {

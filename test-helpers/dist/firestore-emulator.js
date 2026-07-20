@@ -1,20 +1,22 @@
-import admin from "firebase-admin";
+import { getApps, initializeApp } from "firebase-admin/app";
+import { getAuth as getFirebaseAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
 import { beforeAll as vitestBeforeAll, beforeEach as vitestBeforeEach, afterAll as vitestAfterAll, } from "vitest";
 const originalFetch = globalThis.fetch.bind(globalThis);
 function ensureApp() {
-    if (admin.apps.length === 0) {
-        admin.initializeApp({
+    if (getApps().length === 0) {
+        initializeApp({
             projectId: process.env.GCLOUD_PROJECT ?? process.env.FIREBASE_PROJECT ?? "octogee-test",
         });
     }
 }
 export function getAdminDb() {
     ensureApp();
-    return admin.firestore();
+    return getFirestore();
 }
 export function getAdminAuth() {
     ensureApp();
-    return admin.auth();
+    return getFirebaseAuth();
 }
 const getAuth = getAdminAuth;
 export async function resetEmulator() {

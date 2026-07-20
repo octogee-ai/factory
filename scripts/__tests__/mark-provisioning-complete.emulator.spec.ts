@@ -15,10 +15,10 @@ const originalFetch = globalThis.fetch;
 process.env.MM_URL = "http://mattermost.test";
 process.env.MM_ADMIN_TOKEN = "test-admin-token";
 
-const adminMod = await import("firebase-admin");
-const admin = adminMod.default;
-if (admin.apps.length === 0) admin.initializeApp({ projectId: "octogee-test" });
-const db = admin.firestore();
+const { deleteApp, getApps, initializeApp } = await import("firebase-admin/app");
+const { getFirestore } = await import("firebase-admin/firestore");
+if (getApps().length === 0) initializeApp({ projectId: "octogee-test" });
+const db = getFirestore();
 
 const { markProvisioningComplete: markProvisioningCompleteImpl } = await import("../lib/provisionSteps.js");
 
@@ -165,7 +165,7 @@ afterAll(async () => {
   else process.env.MM_URL = originalMmUrl;
   if (originalMmAdminToken === undefined) delete process.env.MM_ADMIN_TOKEN;
   else process.env.MM_ADMIN_TOKEN = originalMmAdminToken;
-  await admin.app().delete();
+  await Promise.all(getApps().map(deleteApp));
 });
 
 const baseCtx = (uid: string, slug: string, tier = "trial") => ({

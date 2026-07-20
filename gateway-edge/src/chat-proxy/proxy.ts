@@ -3,7 +3,9 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
-import admin from "firebase-admin";
+import { cert, getApps, initializeApp } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
 import { Registry, Counter, Gauge, Histogram } from "prom-client";
 import { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
 import { openUpstream, OpenclawWireError } from "./openclaw/upstream.js";
@@ -492,18 +494,18 @@ function watchBrokerGatewayIdChange(
   return () => clearInterval(timer);
 }
 
-if (!admin.apps.length) {
+if (!getApps().length) {
   if (SA_KEY_PATH) {
     const fs = await import("node:fs");
     const sa = JSON.parse(fs.readFileSync(SA_KEY_PATH, "utf-8"));
-    admin.initializeApp({ credential: admin.credential.cert(sa), projectId: FIREBASE_PROJECT });
+    initializeApp({ credential: cert(sa), projectId: FIREBASE_PROJECT });
     console.log(`[chat-proxy] Using SA key: ${SA_KEY_PATH}`);
   } else {
-    admin.initializeApp({ projectId: FIREBASE_PROJECT });
+    initializeApp({ projectId: FIREBASE_PROJECT });
     console.log(`[chat-proxy] Using ADC for project: ${FIREBASE_PROJECT}`);
   }
 }
-const db = admin.firestore();
+const db = getFirestore();
 
 function proxyAuthToken(req: http.IncomingMessage): string | null {
   const authHeader = req.headers.authorization;
@@ -526,7 +528,7 @@ export async function verifyAuth(req: http.IncomingMessage): Promise<string | nu
   if (!token) return null;
 
   try {
-    const decoded = await admin.auth().verifyIdToken(token, true);
+    const decoded = await getAuth().verifyIdToken(token, true);
     const userSnap = await db.collection("users").doc(decoded.uid).get();
     const userData = userSnap.exists ? userSnap.data() : undefined;
     return userData && accountAllowsInteractiveAccess(userData)
