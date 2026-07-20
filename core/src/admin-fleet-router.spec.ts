@@ -147,6 +147,9 @@ function mkCollection(records: Record<string, Record<string, unknown>>) {
         exists: records[id] !== undefined,
         data: () => records[id],
       })),
+      delete: vi.fn(async () => {
+        delete records[id];
+      }),
     })),
   });
   return query();
@@ -157,12 +160,14 @@ function mkAdminFleetRouteApp(opts: {
   users: Record<string, Record<string, unknown>>;
   glmGateways?: Record<string, Record<string, unknown>>;
   gateways?: Record<string, Record<string, unknown>>;
+  reservations?: Record<string, Record<string, unknown>>;
   // gateways/{gatewayId}/assignments/{uid} durable roster docs (PR7).
   assignments?: Record<string, Record<string, Record<string, unknown>>>;
 }) {
   const state = {
     config: { ...opts.config },
     users: { ...opts.users },
+    reservations: { ...(opts.reservations ?? {}) },
   };
   const assignmentDocs = Object.values(opts.assignments ?? {}).flatMap((byUid) =>
     Object.entries(byUid).map(([uid, data]) => ({ id: uid, data: () => data })),
@@ -185,7 +190,24 @@ function mkAdminFleetRouteApp(opts: {
       if (name === GLM_GATEWAYS_COLLECTION) return mkCollection(opts.glmGateways ?? {});
       if (name === "gateways") return mkCollection(opts.gateways ?? {});
       if (name === GLM_OPERATIONS_COLLECTION) return mkCollection({});
+      if (name === "operatorGatewayReservations") {
+        return mkCollection(state.reservations);
+      }
       return mkCollection({});
+    }),
+    runTransaction: vi.fn(async (body: (transaction: {
+      get: (ref: { get: () => Promise<unknown> }) => Promise<unknown>;
+      delete: (ref: { delete: () => Promise<void> }) => void;
+    }) => Promise<unknown>) => {
+      const pendingDeletes: Array<() => Promise<void>> = [];
+      const result = await body({
+        get: (ref) => ref.get(),
+        delete: (ref) => {
+          pendingDeletes.push(() => ref.delete());
+        },
+      });
+      for (const remove of pendingDeletes) await remove();
+      return result;
     }),
     collectionGroup: vi.fn((name: string) => ({
       get: vi.fn(async () => ({
@@ -208,6 +230,87 @@ function mkAdminFleetRouteApp(opts: {
   });
   return { app, state };
 }
+
+describe("operator reservation orphan cleanup", () => {
+  const reservation = {
+    uid: "uid-orphan",
+    builderSlug: "orphan",
+    requestedSizingTier: "nano",
+    status: "requested",
+    billingStatus: "active",
+    requestedAt: 1_000,
+    updatedAt: 2_000,
+  };
+
+  it("marks a reservation without an owner user as orphaned and not fulfillable", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: {},
+      users: {},
+      reservations: { "uid-orphan": reservation },
+    });
+
+    const response = await request(app)
+      .get("/operator-gateway-reservations")
+      .expect(200);
+
+    expect(response.body.reservations).toEqual([
+      expect.objectContaining({
+        uid: "uid-orphan",
+        ownerExists: false,
+        readyToFulfill: false,
+        fulfillBlockedReason: "owner user is missing",
+      }),
+    ]);
+  });
+
+  it("uses the reservation document id as the cleanup identity", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: {},
+      users: {},
+      reservations: {
+        "uid-orphan": { ...reservation, uid: "uid-from-malformed-payload" },
+      },
+    });
+
+    const response = await request(app)
+      .get("/operator-gateway-reservations")
+      .expect(200);
+
+    expect(response.body.reservations[0]).toMatchObject({
+      uid: "uid-orphan",
+      ownerExists: false,
+      readyToFulfill: false,
+      fulfillBlockedReason: "reservation uid mismatch",
+    });
+  });
+
+  it("deletes a reservation only when its owner user is absent", async () => {
+    const { app, state } = mkAdminFleetRouteApp({
+      config: {},
+      users: {},
+      reservations: { "uid-orphan": reservation },
+    });
+
+    await request(app)
+      .delete("/operator-gateway-reservations/uid-orphan")
+      .expect(200, { status: "deleted", uid: "uid-orphan" });
+    expect(state.reservations).toEqual({});
+  });
+
+  it("refuses to delete a reservation while its owner user exists", async () => {
+    const { app, state } = mkAdminFleetRouteApp({
+      config: {},
+      users: { "uid-orphan": { username: "still-here" } },
+      reservations: { "uid-orphan": reservation },
+    });
+
+    const response = await request(app)
+      .delete("/operator-gateway-reservations/uid-orphan")
+      .expect(409);
+    expect(response.body.error).toMatch(/owner user still exists/i);
+    expect(state.reservations).toHaveProperty("uid-orphan");
+  });
+});
 
 function durableGatewayRoot(
   gatewayId: string,
