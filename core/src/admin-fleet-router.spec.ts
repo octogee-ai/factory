@@ -915,7 +915,7 @@ describe("account deletion revokes connector grants at the provider first", () =
     expect(added.filter((data) => data.kind === "erase-customer")).toHaveLength(1);
   });
 
-  it("atomically hides public projections and removes identifying social edges", async () => {
+  it("admits deletion without reading or writing an unbounded public-document fan-out", async () => {
     const publicDocs = {
       "workspaces/acme": { ownerUid: "u2", ownerActive: true },
       "workspaces/acme/projects/project-one": { ownerUid: "u2", ownerActive: true },
@@ -928,12 +928,14 @@ describe("account deletion revokes connector grants at the provider first", () =
 
     await request(app).post("/customer/u2/delete").expect(202);
 
-    expect(publicDocs["workspaces/acme"].ownerActive).toBe(false);
-    expect(publicDocs["workspaces/acme/projects/project-one"].ownerActive).toBe(false);
-    expect(publicDocs["posts/post-one"].ownerActive).toBe(false);
-    expect(publicDocs).not.toHaveProperty("feed/feed-one");
-    expect(publicDocs).not.toHaveProperty("stars/star-one");
-    expect(publicDocs).not.toHaveProperty("follows/follow-one");
+    expect(publicDocs).toMatchObject({
+      "workspaces/acme": { ownerUid: "u2", ownerActive: true },
+      "workspaces/acme/projects/project-one": { ownerUid: "u2", ownerActive: true },
+      "posts/post-one": { authorUid: "u2", ownerActive: true },
+      "feed/feed-one": { actorUid: "u2" },
+      "stars/star-one": { target: { ownerUid: "u2" } },
+      "follows/follow-one": { actorUid: "u2" },
+    });
   });
 
   it("does not revoke or delete when the user does not exist", async () => {

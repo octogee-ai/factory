@@ -33,6 +33,7 @@ projectSlugs: string[];
   projectAgentMmUserIds: string[];
   projectAgentCredentialDocPaths: string[];
   chatArtifactIds: string[];
+  agentImportIds: string[];
 }
 
 export interface DeprovisionCustomerDeps {
@@ -128,6 +129,7 @@ const nukeCtx: NukeCloudCtx = {
       projectAgentMmUserIds: cleanup.projectAgentMmUserIds,
       projectAgentCredentialDocPaths: cleanup.projectAgentCredentialDocPaths,
       chatArtifactIds: cleanup.chatArtifactIds,
+      agentImportIds: cleanup.agentImportIds,
       skipAuth,
       skipHosting,
     };

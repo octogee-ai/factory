@@ -5,6 +5,7 @@ import {
   modelCredentialOAuthEntryBySubscriptionProvider,
   resolveUserByosubCredentialRefs,
 } from "@octogee/shared/types/model-credentials";
+import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 
 import { readSecret } from "@octogee/core/secret-manager";
 import { isSafeAgentId } from "@octogee/core/byosub-restore";
@@ -525,6 +526,41 @@ function registerAgentUsageStatusRoute(
   });
 }
 
+function registerByosubUserRoute(router: Router, db: Firestore): void {
+  router.post("/byosub-user", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const uid = (req.body as { uid?: unknown } | undefined)?.uid;
+    if (typeof uid !== "string" || uid.length === 0 || uid.length > 128) {
+      res.status(400).json({ error: "valid uid required" });
+      return;
+    }
+    const user = await db.collection("users").doc(uid).get();
+    const data = user.data() as Record<string, unknown> | undefined;
+    const slug = data ? assignedOwnerSlug(data) : null;
+    if (
+      !data ||
+      !accountAllowsInteractiveAccess(data) ||
+      !slug ||
+      assignedGatewayId(data) !== bound.gatewayId
+    ) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const integration = await db
+      .collection("users")
+      .doc(uid)
+      .collection("integrations")
+      .doc("byosub")
+      .get();
+    const refs = resolveUserByosubCredentialRefs(uid, integration.data()).refs;
+    let refProvider: "openai" | "anthropic" | null = null;
+    if (refs.some((ref) => ref.provider === "openai")) refProvider = "openai";
+    else if (refs.some((ref) => ref.provider === "anthropic")) refProvider = "anthropic";
+    res.json({ user: { uid, slug, gatewayId: bound.gatewayId, refProvider } });
+  });
+}
+
 export function createByokBrokerRoutes(opts: {
   db: Firestore;
   now?: () => number;
@@ -647,7 +683,7 @@ export function createByokBrokerRoutes(opts: {
       bound.gatewayId,
       body.agentId,
     );
-    if (!assigned) {
+    if (!assigned || !accountAllowsInteractiveAccess(assigned.data)) {
       res.status(403).json(FORBIDDEN);
       return;
     }
@@ -694,23 +730,7 @@ export function createByokBrokerRoutes(opts: {
     res.json({ ok: true });
   });
 
-  router.post("/byosub-user", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const uid = (req.body as { uid?: unknown } | undefined)?.uid;
-    if (typeof uid !== "string" || uid.length === 0 || uid.length > 128) {
-      res.status(400).json({ error: "valid uid required" });
-      return;
-    }
-    const user = await db.collection("users").doc(uid).get();
-    const data = user.data() as Record<string, unknown> | undefined;
-    const slug = data ? assignedOwnerSlug(data) : null;
-    if (!data || !slug || assignedGatewayId(data) !== bound.gatewayId) {
-      res.status(404).json({ error: "not_found" });
-      return;
-    }
-    res.json({ user: { uid, slug, gatewayId: bound.gatewayId } });
-  });
+  registerByosubUserRoute(router, db);
 
   router.post("/byosub-flow-read", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -733,6 +753,11 @@ export function createByokBrokerRoutes(opts: {
       typeof data.agentId !== "string" ||
       typeof data.provider !== "string"
     ) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const user = await db.collection("users").doc(data.uid).get();
+    if (!user.exists || !accountAllowsInteractiveAccess(user.data())) {
       res.status(404).json({ error: "not_found" });
       return;
     }

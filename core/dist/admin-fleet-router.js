@@ -2621,17 +2621,6 @@ async function claimCustomerDeletion(opts) {
                 operationId: conflict.id,
             };
         }
-        const [workspaces, projects, posts, ...socialReferences] = await Promise.all([
-            transaction.get(opts.db.collection("workspaces").where("ownerUid", "==", opts.uid)),
-            transaction.get(opts.db.collectionGroup("projects").where("ownerUid", "==", opts.uid)),
-            transaction.get(opts.db.collection("posts").where("authorUid", "==", opts.uid)),
-            transaction.get(opts.db.collection("feed").where("actorUid", "==", opts.uid)),
-            transaction.get(opts.db.collection("feed").where("targetUid", "==", opts.uid)),
-            transaction.get(opts.db.collection("stars").where("actorUid", "==", opts.uid)),
-            transaction.get(opts.db.collection("stars").where("target.ownerUid", "==", opts.uid)),
-            transaction.get(opts.db.collection("follows").where("actorUid", "==", opts.uid)),
-            transaction.get(opts.db.collection("follows").where("target.ownerUid", "==", opts.uid)),
-        ]);
         const now = Date.now();
         const schedule = buildCustomerDeletionSchedule({ now, eraseNow: opts.eraseNow });
         const slug = resolveCustomerSlug(userData, opts.workspaceSlugsForUser);
@@ -2664,12 +2653,6 @@ async function claimCustomerDeletion(opts) {
         transaction.set(deletionRef, plan.job);
         transaction.set(suspensionRef, plan.suspensionOperation);
         transaction.set(erasureRef, plan.erasureOperation);
-        for (const doc of [...workspaces.docs, ...projects.docs, ...posts.docs]) {
-            transaction.update(doc.ref, { ownerActive: false });
-        }
-        const socialRefs = new Map(socialReferences.flatMap((snapshot) => snapshot.docs).map((doc) => [doc.ref.path, doc.ref]));
-        for (const ref of socialRefs.values())
-            transaction.delete(ref);
         if (currentGatewayId) {
             transaction.delete(opts.db
                 .collection(GATEWAYS_COLLECTION)

@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
 
 import { slugFromAssignedUser } from "@octogee/core/assigned-roster";
+import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { isValidUsername } from "@octogee/shared/types/identity";
 
@@ -57,14 +58,17 @@ async function assignedOwnerSlug(
   db: Firestore,
   uid: string,
   gatewayId: string,
-): Promise<string | null> {
+): Promise<{ slug: string | null; active: boolean }> {
   const userSnap = await db.doc(`users/${uid}`).get();
   const user = userSnap.exists ? userSnap.data() : undefined;
+  if (!accountAllowsInteractiveAccess(user)) return { slug: null, active: false };
   const slug = slugFromAssignedUser(user);
   const provisioning = user?.provisioning as Record<string, unknown> | undefined;
   const openclaw = provisioning?.openclaw as Record<string, unknown> | undefined;
-  if (!slug || !isValidUsername(slug) || openclaw?.gatewayId !== gatewayId) return null;
-  return slug;
+  if (!slug || !isValidUsername(slug) || openclaw?.gatewayId !== gatewayId) {
+    return { slug: null, active: true };
+  }
+  return { slug, active: true };
 }
 
 async function isWorkspaceOwner(db: Firestore, slug: string, uid: string): Promise<boolean> {
@@ -75,7 +79,12 @@ async function isWorkspaceOwner(db: Firestore, slug: string, uid: string): Promi
 async function authorizeRequest(req: Request, res: Response, db: Firestore): Promise<void> {
   const context = authorizationContext(req, res);
   if (!context) return;
-  const slug = await assignedOwnerSlug(db, context.uid, context.bound.gatewayId);
+  const assignment = await assignedOwnerSlug(db, context.uid, context.bound.gatewayId);
+  if (!assignment.active) {
+    res.status(403).json(FORBIDDEN);
+    return;
+  }
+  const { slug } = assignment;
   if (!slug) {
     res.status(404).json({ error: "not_found" });
     return;

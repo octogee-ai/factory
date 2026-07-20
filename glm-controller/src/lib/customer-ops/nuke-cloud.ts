@@ -25,6 +25,7 @@ projectSlugs: string[];
   projectAgentMmUserIds: string[];
   projectAgentCredentialDocPaths: string[];
   chatArtifactIds: string[];
+  agentImportIds: string[];
   
   skipHosting?: boolean;
   
@@ -62,6 +63,7 @@ export interface NukeCloudDeps {
     uid: string,
     slug: string,
     chatArtifactIds: string[],
+    agentImportIds: string[],
   ) => Promise<void>;
 
   deleteCredentialSecrets: (secretNames: string[]) => Promise<void>;
@@ -122,7 +124,12 @@ results.push(
 
 results.push(
     await runStep("storage", log, async () => {
-      await deps.deleteCustomerStorage(ctx.uid, ctx.slug, ctx.chatArtifactIds);
+      await deps.deleteCustomerStorage(
+        ctx.uid,
+        ctx.slug,
+        ctx.chatArtifactIds,
+        ctx.agentImportIds,
+      );
     }),
   );
 

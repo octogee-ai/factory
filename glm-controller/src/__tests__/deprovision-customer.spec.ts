@@ -50,6 +50,8 @@ function mkCleanup(overrides: Partial<CustomerCleanupContext> = {}): CustomerCle
     projectAgentCredentialDocPaths: [
       "users/uid-alice/secrets/projectAgentMattermost-blog",
     ],
+    chatArtifactIds: [],
+    agentImportIds: [],
     ...overrides,
   };
 }

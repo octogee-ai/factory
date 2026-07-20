@@ -95,7 +95,7 @@ describe('requireAuthenticatedUid', () => {
     mockDocs.set('users/u1', { username: 'alice' });
   });
 
-  it('checks revocation and requires an active Firestore user', async () => {
+  it('verifies the token without revocation or Firestore lookups on pod-local routes', async () => {
     reads.length = 0;
     const req = { headers: { authorization: 'Bearer fake' } } as unknown as Request;
     const res = { status: vi.fn().mockReturnThis(), json: vi.fn() } as unknown as Response;
@@ -107,9 +107,18 @@ describe('requireAuthenticatedUid', () => {
     await vi.waitFor(() => expect(called).toBe(true));
 
     expect(req.uid).toBe('u1');
-    expect(verifyIdToken).toHaveBeenCalledWith('fake', true);
-    expect(reads).toEqual(['users/u1']);
-    expect(req.user).toMatchObject({ username: 'alice' });
+    expect(verifyIdToken).toHaveBeenCalledWith('fake');
+    expect(reads).toEqual([]);
+    expect(req.user).toBeUndefined();
+  });
+});
+
+describe('requireAuth lifecycle gate', () => {
+  beforeEach(() => {
+    mockDocs.clear();
+    reads.length = 0;
+    verifyIdToken.mockReset().mockResolvedValue({ uid: 'u1' });
+    mockDocs.set('users/u1', { username: 'alice' });
   });
 
   it.each(['suspended', 'deletion_scheduled', 'erasing'])(
@@ -144,7 +153,7 @@ describe('requireAuthAllowUnregistered', () => {
     expect(result.req.uid).toBe('u1');
     expect(result.req.user).toBeUndefined();
     expect(result.req.workspaceSlug).toBeNull();
-    expect(verifyIdToken).toHaveBeenCalledWith('fake', true);
+    expect(verifyIdToken).toHaveBeenCalledWith('fake');
   });
 
   it.each(['suspended', 'deletion_scheduled', 'erasing'])(

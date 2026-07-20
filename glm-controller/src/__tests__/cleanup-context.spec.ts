@@ -357,6 +357,21 @@ const db = buildDb({
     expect(ctx?.chatArtifactIds).toEqual(["a".repeat(64), "b".repeat(64)]);
   });
 
+  it("captures every agent import staging prefix owned by the user", async () => {
+    const db = buildDb({
+      "users/uid-alice": { username: "alice" },
+      "agentImports/import-owned": { uid: "uid-alice" },
+      "agentImports/import-other": { uid: "uid-other" },
+    });
+
+    const ctx = await loadCustomerCleanupContext(
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      "uid-alice",
+    );
+
+    expect(ctx?.agentImportIds).toEqual(["import-owned"]);
+  });
+
   it("fails context capture when a connected credential leaf is malformed", async () => {
     const db = buildDb({
       "users/uid-alice": { username: "alice" },

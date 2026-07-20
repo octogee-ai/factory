@@ -5,6 +5,7 @@ import { internalFetch } from "./internal-fetch.js";
 export interface ByosubGatewayAssignment {
   slug: string;
   gatewayId: string;
+  refProvider: "openai" | "anthropic" | null;
 }
 
 export interface ByosubFlowRecord {
@@ -58,11 +59,18 @@ export async function resolveByosubUserGateway(uid: string): Promise<ByosubGatew
     typeof record.slug !== "string" ||
     !record.slug ||
     typeof record.gatewayId !== "string" ||
-    !isValidGatewayId(record.gatewayId)
+    !isValidGatewayId(record.gatewayId) ||
+    (record.refProvider !== null &&
+      record.refProvider !== "openai" &&
+      record.refProvider !== "anthropic")
   ) {
     return null;
   }
-  return { slug: record.slug, gatewayId: record.gatewayId };
+  return {
+    slug: record.slug,
+    gatewayId: record.gatewayId,
+    refProvider: record.refProvider,
+  };
 }
 
 export async function readByosubFlow(flowId: string): Promise<ByosubFlowRecord | null> {

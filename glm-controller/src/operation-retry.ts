@@ -126,7 +126,12 @@ function successfulCompletion(
   attempts: number,
 ): Record<string, unknown> {
   const scrubbedInput = input.result.scrubInputOnSuccess
-    ? { input: FieldValue.delete(), inputUid: FieldValue.delete() }
+    ? {
+        input: FieldValue.delete(),
+        inputUid: FieldValue.delete(),
+        attemptHistory: FieldValue.delete(),
+        steps: [],
+      }
     : {};
   return {
     status: "succeeded",

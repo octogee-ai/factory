@@ -121,10 +121,13 @@ function healthPath(gatewayId = "default"): string {
 
 function fakeDeps(over: Partial<ByosubHealthDeps> = {}): ByosubHealthDeps {
   return {
-    resolveUserGateway: async () => ({ slug: "smile-wring-011b", gatewayId: "default" }),
+    resolveUserGateway: async () => ({
+      slug: "smile-wring-011b",
+      gatewayId: "default",
+      refProvider: "openai",
+    }),
     localGatewayId: () => "default",
     isMounted: () => true,
-    readRefProvider: async () => "openai",
     readStorePresent: () => true,
     readProfileExpiresAt: () => null,
     readAuthStateText: () => "",
@@ -135,7 +138,11 @@ function fakeDeps(over: Partial<ByosubHealthDeps> = {}): ByosubHealthDeps {
 
 describe("GET /byosub/health route glue", () => {
   it("200 not_on_this_pod on the unscoped alias — no gateway-local proof without /api/g/<gatewayId>", async () => {
-    const resolve = vi.fn(async () => ({ slug: "smile-wring-011b", gatewayId: "default" }));
+    const resolve = vi.fn(async () => ({
+      slug: "smile-wring-011b",
+      gatewayId: "default",
+      refProvider: "openai" as const,
+    }));
     const res = await request(appWith(fakeDeps({ resolveUserGateway: resolve }))).get(
       "/probe/byosub/health",
     );
@@ -145,7 +152,11 @@ describe("GET /byosub/health route glue", () => {
   });
 
   it("200 not_on_this_pod when the scoped path reached a different gateway pod — no fs reads", async () => {
-    const resolve = vi.fn(async () => ({ slug: "smile-wring-011b", gatewayId: "operator-1" }));
+    const resolve = vi.fn(async () => ({
+      slug: "smile-wring-011b",
+      gatewayId: "operator-1",
+      refProvider: "openai" as const,
+    }));
     const mountRead = vi.fn(() => true);
     const storeRead = vi.fn(() => true);
     const stateRead = vi.fn(() => "");
@@ -172,14 +183,16 @@ describe("GET /byosub/health route glue", () => {
     const mountRead = vi.fn(() => true);
     const storeRead = vi.fn(() => true);
     const stateRead = vi.fn(() => "");
-    const refRead = vi.fn(async () => "openai");
     const res = await request(
       appWith(
         fakeDeps({
-          resolveUserGateway: async () => ({ slug: "smile-wring-011b", gatewayId: "default" }),
+          resolveUserGateway: async () => ({
+            slug: "smile-wring-011b",
+            gatewayId: "default",
+            refProvider: "openai",
+          }),
           localGatewayId: () => "operator-1",
           isMounted: mountRead,
-          readRefProvider: refRead,
           readStorePresent: storeRead,
           readAuthStateText: stateRead,
         }),
@@ -188,7 +201,6 @@ describe("GET /byosub/health route glue", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ connected: false, status: "not_on_this_pod" });
     expect(mountRead).not.toHaveBeenCalled();
-    expect(refRead).not.toHaveBeenCalled();
     expect(storeRead).not.toHaveBeenCalled();
     expect(stateRead).not.toHaveBeenCalled();
   });
@@ -237,7 +249,11 @@ describe("GET /byosub/health route glue", () => {
     const res = await request(
       appWith(
         fakeDeps({
-          readRefProvider: async () => "anthropic",
+          resolveUserGateway: async () => ({
+            slug: "smile-wring-011b",
+            gatewayId: "default",
+            refProvider: "anthropic",
+          }),
           readStorePresent: (agentId, profileId) => {
             seen.push({ agentId, profileId });
             return profileId === CLAUDE_PROFILE;
@@ -254,7 +270,11 @@ describe("GET /byosub/health route glue", () => {
     const res = await request(
       appWith(
         fakeDeps({
-          readRefProvider: async () => "anthropic",
+          resolveUserGateway: async () => ({
+            slug: "smile-wring-011b",
+            gatewayId: "default",
+            refProvider: "anthropic",
+          }),
           readProfileExpiresAt: () => NOW - 1,
         }),
       ),
@@ -268,7 +288,6 @@ describe("GET /byosub/health route glue", () => {
     const res = await request(
       appWith(
         fakeDeps({
-          readRefProvider: async () => "openai",
           readProfileExpiresAt: expiryRead,
         }),
       ),
@@ -290,7 +309,11 @@ describe("GET /byosub/health route glue", () => {
     const res = await request(
       appWith(
         fakeDeps({
-          resolveUserGateway: async () => ({ slug: "../../etc", gatewayId: "default" }),
+          resolveUserGateway: async () => ({
+            slug: "../../etc",
+            gatewayId: "default",
+            refProvider: "openai",
+          }),
           isMounted: mountRead,
           readStorePresent: storeRead,
           readAuthStateText: stateRead,
@@ -304,17 +327,20 @@ describe("GET /byosub/health route glue", () => {
     expect(stateRead).not.toHaveBeenCalled();
   });
 
-  it("passes the authenticated user id through to the integration read", async () => {
+  it("passes the authenticated user id through to the central assignment broker", async () => {
     let seen: string | null = null;
     await request(
       appWith(
         fakeDeps({
-          resolveUserGateway: async () => ({ slug: "smile-wring-011b", gatewayId: "operator-1" }),
-          localGatewayId: () => "operator-1",
-          readRefProvider: async (uid) => {
+          resolveUserGateway: async (uid) => {
             seen = uid;
-            return "openai";
+            return {
+              slug: "smile-wring-011b",
+              gatewayId: "operator-1",
+              refProvider: "openai",
+            };
           },
+          localGatewayId: () => "operator-1",
         }),
       ),
     ).get(healthPath("operator-1"));

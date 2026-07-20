@@ -171,19 +171,31 @@ describe("buildOperationCompletionUpdate", () => {
 
   it("atomically scrubs identifying operation input only on verified success", () => {
     const update = buildOperationCompletionUpdate({
-      op: { attempts: 0, attemptHistory: [] },
+      op: {
+        attempts: 1,
+        attemptHistory: [{
+          attempt: 1,
+          startedAt: 1,
+          completedAt: 2,
+          error: "failed to delete alice@example.com",
+          classification: "transient",
+          steps: [],
+        }],
+      },
       result: {
         steps: [],
         success: true,
         scrubInputOnSuccess: true,
         output: { archiveId: "archive-random" },
       },
-      steps: [],
+      steps: [{ name: "delete-stripe-customer:cus_identifying", status: "done" }],
       now,
     });
     expect(update).toMatchObject({ status: "succeeded", output: { archiveId: "archive-random" } });
     expect(update.input).toEqual(FieldValue.delete());
     expect(update.inputUid).toEqual(FieldValue.delete());
+    expect(update.attemptHistory).toEqual(FieldValue.delete());
+    expect(update.steps).toEqual([]);
   });
 
   it("keeps a durable config cleanup obligation level-triggered after the normal retry cap", () => {

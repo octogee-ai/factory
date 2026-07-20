@@ -21,7 +21,6 @@ function authenticateUid(
   req: Request,
   res: Response,
   next: NextFunction,
-  allowUnregistered: boolean,
 ): void {
   const header = req.headers.authorization;
   if (!header?.startsWith("Bearer ")) {
@@ -33,41 +32,49 @@ function authenticateUid(
   void (async () => {
     let uid: string;
     try {
-      uid = (await auth.verifyIdToken(token, true)).uid;
+      uid = (await auth.verifyIdToken(token)).uid;
     } catch (err) {
       logger.warn(`Auth failed: ${(err as Error).message}`);
       res.status(401).json({ error: "Invalid token" });
       return;
     }
-    try {
-      const userSnap = await db.collection("users").doc(uid).get();
-      if (!userSnap.exists) {
-        if (allowUnregistered) {
-          req.uid = uid;
-          req.user = undefined;
-          next();
-          return;
-        }
-        res.status(403).json({ error: "Account is not active" });
-        return;
-      }
-      const userData = userSnap.data()!;
-      if (!accountAllowsInteractiveAccess(userData)) {
-        res.status(403).json({ error: "Account is not active" });
-        return;
-      }
-      req.uid = uid;
-      req.user = userData;
-      next();
-    } catch (err) {
-      logger.warn(`Auth lookup failed: ${(err as Error).message}`);
-      res.status(503).json({ error: "Authentication lookup unavailable" });
-    }
+    req.uid = uid;
+    next();
   })();
 }
 
 export function requireAuthenticatedUid(req: Request, res: Response, next: NextFunction): void {
-  authenticateUid(req, res, next, false);
+  authenticateUid(req, res, next);
+}
+
+function attachActiveUser(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+  allowUnregistered: boolean,
+): void {
+  void (async () => {
+    const userSnap = await db.collection("users").doc(req.uid!).get();
+    if (!userSnap.exists) {
+      if (allowUnregistered) {
+        req.user = undefined;
+        next();
+        return;
+      }
+      res.status(403).json({ error: "Account is not active" });
+      return;
+    }
+    const userData = userSnap.data()!;
+    if (!accountAllowsInteractiveAccess(userData)) {
+      res.status(403).json({ error: "Account is not active" });
+      return;
+    }
+    req.user = userData;
+    next();
+  })().catch((err) => {
+    logger.warn(`Auth lookup failed: ${(err as Error).message}`);
+    res.status(503).json({ error: "Authentication lookup unavailable" });
+  });
 }
 
 function attachAuthContext(req: Request, res: Response, next: NextFunction): void {
@@ -88,7 +95,9 @@ function attachAuthContext(req: Request, res: Response, next: NextFunction): voi
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  requireAuthenticatedUid(req, res, () => attachAuthContext(req, res, next));
+  requireAuthenticatedUid(req, res, () => {
+    attachActiveUser(req, res, () => attachAuthContext(req, res, next), false);
+  });
 }
 
 export function requireAuthAllowUnregistered(
@@ -96,9 +105,9 @@ export function requireAuthAllowUnregistered(
   res: Response,
   next: NextFunction,
 ): void {
-  authenticateUid(req, res, () => {
-    attachAuthContext(req, res, next);
-  }, true);
+  requireAuthenticatedUid(req, res, () => {
+    attachActiveUser(req, res, () => attachAuthContext(req, res, next), true);
+  });
 }
 
 export function requireAdmin(req: Request, res: Response, next: NextFunction): void {

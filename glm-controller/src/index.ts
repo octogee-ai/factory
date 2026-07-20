@@ -202,6 +202,7 @@ import { startHttpServer, startMaintenanceHttpServer } from "./http-server.js";
 import { createConnectorSecretDecryptor } from "./connector-secret-decryption.js";
 import {
   cancelStripeSubscription,
+  deactivateCustomerVisibility,
   deleteStripeCustomer,
   disableCreditAutoTopUp,
   expireStripeCheckoutSession,
@@ -2836,6 +2837,7 @@ function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void) 
         cleanup.uid,
         cleanup.slug,
         cleanup.chatArtifactIds,
+        cleanup.agentImportIds,
       ));
       for (const userId of [
         cleanup.mmUserId,
@@ -2912,6 +2914,7 @@ function buildSuspendCustomerHandler(
       );
     },
     suspendAuthUser: (uid) => disableAuthUserAndRevokeSessions(uid, getAuth()),
+    deactivateCustomerVisibility: (uid) => deactivateCustomerVisibility(db, uid),
     invalidatePendingCredentialFlows: (uid) => invalidatePendingCredentialFlows(db, uid),
     unmountFromGateway: createCustomerDeletionUnmount(db, privateKey, logFn, kubeOps),
     cancelStripeSubscription: (subscriptionId) =>
@@ -3069,8 +3072,18 @@ function buildCustomerCloudCleanupDeps(db: Firestore, logFn: (msg: string) => vo
       email: string | null,
       currentOperationId: string,
     ) => eraseCustomerFirestore(db, uid, slug, email, currentOperationId),
-    deleteCustomerStorage: (uid: string, slug: string, chatArtifactIds: string[]) =>
-      deleteCustomerStorageObjects(getStorage().bucket(), uid, slug, chatArtifactIds),
+    deleteCustomerStorage: (
+      uid: string,
+      slug: string,
+      chatArtifactIds: string[],
+      agentImportIds: string[],
+    ) => deleteCustomerStorageObjects(
+      getStorage().bucket(),
+      uid,
+      slug,
+      chatArtifactIds,
+      agentImportIds,
+    ),
     deleteCredentialSecrets: async (secretNames: string[]) => {
       for (const secretName of secretNames) await deleteSecret(secretName);
     },
