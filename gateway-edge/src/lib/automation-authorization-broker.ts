@@ -72,6 +72,32 @@ function authorizedResponse(value: unknown, requestedGatewayId: string): Automat
   return { kind: "authorized", slug: body.slug, gatewayId: requestedGatewayId };
 }
 
+async function outcomeFromBrokerResponse(
+  response: Response,
+  gatewayId: string,
+  timeout: Promise<never>,
+  signal: AbortSignal,
+): Promise<AutomationAuthorizationOutcome> {
+  if (response.status === 401) return { kind: "unauthenticated" };
+  if (response.status === 403) return { kind: "forbidden" };
+  if (response.status === 404) return { kind: "not_found" };
+  if (!response.ok) {
+    throw new Error(`automation authorization broker returned ${response.status}`);
+  }
+  let body: unknown;
+  try {
+    body = await Promise.race([response.json(), timeout]);
+  } catch (error) {
+    if (signal.aborted) throw error;
+    throw new Error("automation authorization broker returned malformed authorization response");
+  }
+  const authorized = authorizedResponse(body, gatewayId);
+  if (!authorized) {
+    throw new Error("automation authorization broker returned malformed authorization response");
+  }
+  return authorized;
+}
+
 export async function authorizeAutomationOwner(args: {
   gatewayId: string;
   authorization?: string;
@@ -120,24 +146,7 @@ export async function authorizeAutomationOwner(args: {
       ),
       timeout,
     ]);
-    if (response.status === 401) return { kind: "unauthenticated" };
-    if (response.status === 403) return { kind: "forbidden" };
-    if (response.status === 404) return { kind: "not_found" };
-    if (!response.ok) {
-      throw new Error(`automation authorization broker returned ${response.status}`);
-    }
-    let body: unknown;
-    try {
-      body = await Promise.race([response.json(), timeout]);
-    } catch (error) {
-      if (controller.signal.aborted) throw error;
-      throw new Error("automation authorization broker returned malformed authorization response");
-    }
-    const authorized = authorizedResponse(body, args.gatewayId);
-    if (!authorized) {
-      throw new Error("automation authorization broker returned malformed authorization response");
-    }
-    return authorized;
+    return await outcomeFromBrokerResponse(response, args.gatewayId, timeout, controller.signal);
   } finally {
     if (timer) clearTimeout(timer);
   }

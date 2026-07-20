@@ -25,10 +25,13 @@ function projectedTokenPath(): string {
 
 describe("automation authorization broker client", () => {
   it("forwards both identities only to same-namespace octogee-api and forbids redirects", async () => {
-    const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => new Response(
-      JSON.stringify({ slug: "eggman", gatewayId: "eggman-devdays" }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    ));
+    const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      expect(init).toEqual(expect.objectContaining({ method: "POST", redirect: "error" }));
+      return new Response(
+        JSON.stringify({ slug: "eggman", gatewayId: "eggman-devdays" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
 
     const result = await authorizeAutomationOwner({
       gatewayId: "eggman-devdays",
