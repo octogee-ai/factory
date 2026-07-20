@@ -177,6 +177,16 @@ async function resolveChatArtifactIds(
   return Array.from(new Set(ids)).sort();
 }
 
+async function resolveAgentImportIds(db: Firestore, uid: string): Promise<string[]> {
+  const snapshot = await db.collection("agentImports").where("uid", "==", uid).get();
+  return snapshot.docs.map((doc) => {
+    if (!/^[A-Za-z0-9_-]{1,160}$/.test(doc.id)) {
+      throw new Error(`agent import cleanup context invalid: ${doc.id}`);
+    }
+    return doc.id;
+  }).sort();
+}
+
 export async function loadCustomerCleanupContext(
   deps: ContextDeps,
   uid: string,
@@ -196,6 +206,7 @@ export async function loadCustomerCleanupContext(
     credentialSecretNames,
     projectAgentCleanup,
     chatArtifactIds,
+    agentImportIds,
   ] =
     await Promise.all([
       resolveWorkspaceTeamId(deps.db, slug),
@@ -206,6 +217,7 @@ export async function loadCustomerCleanupContext(
       resolveCredentialSecretNames(deps.db, uid),
       resolveProjectAgentCleanup(deps.db, uid),
       resolveChatArtifactIds(deps.db, uid, slug),
+      resolveAgentImportIds(deps.db, uid),
     ]);
 
   return {
@@ -223,5 +235,6 @@ export async function loadCustomerCleanupContext(
     credentialSecretNames,
     ...projectAgentCleanup,
     chatArtifactIds,
+    agentImportIds,
   };
 }

@@ -25,13 +25,19 @@ describe("byosub sidecar broker", () => {
     process.env.FLEET_BROKER_URL = "http://octogee-api.octogee.svc.cluster.local:3001///";
     internalFetch.mockResolvedValue(
       jsonResponse({
-        user: { uid: "uid-tester5", slug: "tester5", gatewayId: "bender" },
+        user: {
+          uid: "uid-tester5",
+          slug: "tester5",
+          gatewayId: "bender",
+          refProvider: "anthropic",
+        },
       }),
     );
 
     await expect(resolveByosubUserGateway("uid-tester5")).resolves.toEqual({
       slug: "tester5",
       gatewayId: "bender",
+      refProvider: "anthropic",
     });
     expect(internalFetch).toHaveBeenCalledWith(
       "http://octogee-api.octogee.svc.cluster.local:3001/internal/byok/byosub-user",

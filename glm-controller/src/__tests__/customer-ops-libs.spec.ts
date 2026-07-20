@@ -227,18 +227,20 @@ describe("deleteCustomerStorageObjects", () => {
       "uid-alice",
       "alice",
       ["a".repeat(64)],
+      ["import-1"],
     );
     expect(deleteFiles.mock.calls.map(([arg]) => arg)).toEqual([
       { prefix: "avatars/uid-alice/" },
       { prefix: "post-covers/uid-alice/" },
       { prefix: "customers/alice/" },
       { prefix: `chat-artifacts/${"a".repeat(64)}/` },
+      { prefix: "agent-imports/import-1/" },
     ]);
   });
 
   it("skips only the slug prefix for a pre-provisioning account", async () => {
     const deleteFiles = vi.fn(async () => undefined);
-    await deleteCustomerStorageObjects({ deleteFiles }, "uid-lite", "", []);
+    await deleteCustomerStorageObjects({ deleteFiles }, "uid-lite", "", [], []);
     expect(deleteFiles.mock.calls.map(([arg]) => arg)).toEqual([
       { prefix: "avatars/uid-lite/" },
       { prefix: "post-covers/uid-lite/" },
@@ -255,8 +257,9 @@ describe("deleteCustomerStorageObjects", () => {
         "uid-alice",
         "alice",
         ["a".repeat(64)],
+        ["import-1"],
       ),
     ).resolves.toEqual(["gcs/post-covers/uid-alice/cover.jpg"]);
-    expect(getFiles).toHaveBeenCalledTimes(4);
+    expect(getFiles).toHaveBeenCalledTimes(5);
   });
 });

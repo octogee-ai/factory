@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   cancelStripeSubscription,
+  deactivateCustomerVisibility,
   deleteStripeCustomer,
   disableCreditAutoTopUp,
   expireStripeCheckoutSession,
@@ -168,6 +169,42 @@ describe("deleteStripeCustomer", () => {
 });
 
 describe("Firestore suspension fences", () => {
+  it("deactivates every public projection and deletes social edges in bounded batches", async () => {
+    const refs = (prefix: string) => Array.from({ length: 250 }, (_, index) => ({
+      ref: { path: `${prefix}/${index}` },
+    }));
+    const queryDocs: Record<string, Array<{ ref: { path: string } }>> = {
+      workspaces: refs("workspaces"),
+      projects: refs("projects"),
+      posts: refs("posts"),
+      feed: refs("feed"),
+      stars: refs("stars"),
+      follows: refs("follows"),
+    };
+    const committed: Array<Array<{ kind: string; path: string }>> = [];
+    const query = (name: string) => ({
+      where: () => ({ get: async () => ({ docs: queryDocs[name] }) }),
+    });
+    const db = {
+      collection: (name: string) => query(name),
+      collectionGroup: (name: string) => query(name),
+      batch: () => {
+        const operations: Array<{ kind: string; path: string }> = [];
+        return {
+          update: (ref: { path: string }) => operations.push({ kind: "update", path: ref.path }),
+          delete: (ref: { path: string }) => operations.push({ kind: "delete", path: ref.path }),
+          commit: async () => { committed.push(operations); },
+        };
+      },
+    };
+
+    await deactivateCustomerVisibility(db as never, "uid-1");
+
+    expect(committed.map((batch) => batch.length)).toEqual([400, 400, 400, 300]);
+    expect(committed.flat().filter((write) => write.kind === "update")).toHaveLength(750);
+    expect(committed.flat().filter((write) => write.kind === "delete")).toHaveLength(750);
+  });
+
   it("deletes every pending connector and BYOS flow owned by the user", async () => {
     const deleted: string[] = [];
     const db = {

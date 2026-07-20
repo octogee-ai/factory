@@ -202,6 +202,31 @@ describe("POST /internal/automations/authorize", () => {
     expect(response.body).toEqual({ slug: "eggman", gatewayId: "eggman-devdays" });
   });
 
+  it.each(["suspended", "deletion_scheduled", "erasing"])(
+    "rejects an assigned owner whose lifecycle is %s",
+    async (status) => {
+      const { app } = appForTest({
+        uid: "eggman-uid",
+        boundGatewayId: "eggman-devdays",
+        docs: {
+          "users/eggman-uid": {
+            username: "eggman",
+            accountLifecycle: { status },
+            provisioning: { openclaw: { slug: "eggman", gatewayId: "eggman-devdays" } },
+          },
+          "workspaces/eggman": { ownerUid: "eggman-uid" },
+        },
+      });
+
+      const response = await request(app)
+        .post("/internal/automations/authorize")
+        .send({ gatewayId: "eggman-devdays" });
+
+      expect(response.status).toBe(403);
+      expect(response.body).toEqual({ error: "forbidden" });
+    },
+  );
+
   it("404s when the authenticated user's assignment does not match the bound gateway", async () => {
     const { app } = appForTest({
       uid: "eggman-uid",

@@ -1,4 +1,4 @@
-import type { Firestore } from "firebase-admin/firestore";
+import type { DocumentReference, Firestore } from "firebase-admin/firestore";
 import {
   MODEL_BROKER_CREDITS_COLLECTION,
   MODEL_BROKER_GATEWAY_POINTERS_COLLECTION,
@@ -6,6 +6,48 @@ import {
 } from "@octogee/shared/types/model-broker-usage";
 
 const TERMINAL_STRIPE_SUBSCRIPTION_STATUSES = new Set(["canceled", "incomplete_expired"]);
+const FIRESTORE_VISIBILITY_BATCH_SIZE = 400;
+
+type VisibilityWrite = {
+  kind: "update" | "delete";
+  ref: DocumentReference;
+};
+
+export async function deactivateCustomerVisibility(
+  db: Pick<Firestore, "collection" | "collectionGroup" | "batch">,
+  uid: string,
+): Promise<void> {
+  const [workspaces, projects, posts, ...socialSnapshots] = await Promise.all([
+    db.collection("workspaces").where("ownerUid", "==", uid).get(),
+    db.collectionGroup("projects").where("ownerUid", "==", uid).get(),
+    db.collection("posts").where("authorUid", "==", uid).get(),
+    db.collection("feed").where("actorUid", "==", uid).get(),
+    db.collection("feed").where("targetUid", "==", uid).get(),
+    db.collection("stars").where("actorUid", "==", uid).get(),
+    db.collection("stars").where("target.ownerUid", "==", uid).get(),
+    db.collection("follows").where("actorUid", "==", uid).get(),
+    db.collection("follows").where("target.ownerUid", "==", uid).get(),
+  ]);
+  const writes: VisibilityWrite[] = [
+    ...[...workspaces.docs, ...projects.docs, ...posts.docs].map((doc) => ({
+      kind: "update" as const,
+      ref: doc.ref,
+    })),
+    ...Array.from(new Map(
+      socialSnapshots
+        .flatMap((snapshot) => snapshot.docs)
+        .map((doc) => [doc.ref.path, doc.ref]),
+    ).values(), (ref) => ({ kind: "delete" as const, ref })),
+  ];
+  for (let offset = 0; offset < writes.length; offset += FIRESTORE_VISIBILITY_BATCH_SIZE) {
+    const batch = db.batch();
+    for (const write of writes.slice(offset, offset + FIRESTORE_VISIBILITY_BATCH_SIZE)) {
+      if (write.kind === "update") batch.update(write.ref, { ownerActive: false });
+      else batch.delete(write.ref);
+    }
+    await batch.commit();
+  }
+}
 
 export async function listStripeCustomerIdsForUid(
   fetchImpl: typeof fetch,

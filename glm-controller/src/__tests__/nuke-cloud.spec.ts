@@ -20,6 +20,7 @@ function mkCtx(overrides: Partial<NukeCloudCtx> = {}): NukeCloudCtx {
       "users/uid-alice/secrets/projectAgentMattermost-blog",
     ],
     chatArtifactIds: ["a".repeat(64)],
+    agentImportIds: ["import-1"],
     ...overrides,
   };
 }
@@ -241,6 +242,7 @@ describe("nukeUserCloudSide — firestore step", () => {
       "uid-alice",
       "alice",
       ["a".repeat(64)],
+      ["import-1"],
     );
     expect(deps.deleteCredentialSecrets).toHaveBeenCalledWith(["byosub-1"]);
     expect(order).toEqual(["storage", "credentials", "firestore"]);

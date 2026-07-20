@@ -1,75 +1,114 @@
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 
-export const CUSTOMER_REFERENCE_QUERIES = [
-  { collection: "modelBrokerUsageEvents", field: "ownerUid" },
-  { collection: "modelBrokerUsageRollups", field: "ownerUid" },
-  { collection: "modelBrokerUsageWindows", field: "ownerUid" },
-  { collection: "modelBrokerWeekWindows", field: "ownerUid" },
-  { collection: "modelBrokerRateWindows", field: "ownerKey" },
-  { collection: "modelBrokerTokens", field: "ownerUid" },
-  { collection: "modelBrokerGatewayTokens", field: "ownerUid" },
-  { collection: "modelBrokerCreditTopups", field: "ownerUid" },
-  { collection: "connectFlows", field: "uid" },
-  { collection: "byosubFlows", field: "uid" },
-  { collection: "invites", field: "inviteeUid" },
-  { collection: "invites", field: "inviterUid" },
-  { collection: "invites", field: "callerUid" },
-  { collection: "invites", field: "ownerUid" },
-  { collection: "invites", field: "createdBy" },
-  { collection: "invites", field: "redeemedBy" },
-  { collection: "invites", field: "acceptedBy" },
-  { collection: "invites", field: "revokedBy" },
-  { collection: "channelInvites", field: "createdBy" },
-  { collection: "posts", field: "authorUid" },
-  { collection: "glmOperations", field: "inputUid" },
-  { collection: "feed", field: "actorUid" },
-  { collection: "feed", field: "targetUid" },
-  { collection: "stars", field: "actorUid" },
-  { collection: "stars", field: "target.ownerUid" },
-  { collection: "follows", field: "actorUid" },
-  { collection: "follows", field: "target.ownerUid" },
-  { collection: "gatewayTickets", field: "uid" },
-  { collection: "gatewayTicketMintLog", field: "uid" },
-  { collection: "openclawControlTickets", field: "uid" },
-  { collection: "openclawControlAudit", field: "uid" },
-  { collection: "channelSessionModelAudit", field: "actorUid" },
-  { collection: "builder_shell_sessions", field: "attacherUid" },
-  { collection: "builder_shell_sessions", field: "takenOverFromUid" },
-  { collection: "chatArtifactJobs", field: "ownerUid" },
-  { collection: "chatArtifactJobs", field: "workspaceOwnerUid" },
-] as const;
+export interface CustomerErasureCollectionPolicy {
+  customerKey?: "uid" | "slug" | "email";
+  uidFields?: readonly string[];
+  slugFields?: readonly string[];
+  emailFields?: readonly string[];
+  uidArrayFields?: readonly string[];
+  emailArrayFields?: readonly string[];
+}
 
-export const CUSTOMER_SLUG_REFERENCE_QUERIES = [
-  { collection: "cleanupJobs", field: "slug" },
-  { collection: "chatArtifactJobs", field: "workspaceSlug" },
-] as const;
+export const CUSTOMER_ERASURE_COLLECTION_POLICIES = {
+  users: { customerKey: "uid" },
+  customerStats: { customerKey: "uid" },
+  agents: { customerKey: "uid" },
+  modelBrokerCredits: { customerKey: "uid" },
+  operatorGatewayReservations: { customerKey: "uid" },
+  trialGatewayClaims: { customerKey: "uid" },
+  workspaces: { customerKey: "slug" },
+  emailSuppressions: { customerKey: "email" },
+  modelBrokerUsageEvents: { uidFields: ["ownerUid"] },
+  modelBrokerUsageRollups: { uidFields: ["ownerUid"] },
+  modelBrokerUsageWindows: { uidFields: ["ownerUid"] },
+  modelBrokerWeekWindows: { uidFields: ["ownerUid"] },
+  modelBrokerRateWindows: { uidFields: ["ownerKey"] },
+  modelBrokerTokens: { uidFields: ["ownerUid"] },
+  modelBrokerGatewayTokens: { uidFields: ["ownerUid"] },
+  modelBrokerCreditTopups: { uidFields: ["ownerUid"] },
+  connectFlows: { uidFields: ["uid"] },
+  byosubFlows: { uidFields: ["uid"] },
+  invites: {
+    uidFields: [
+      "inviteeUid",
+      "inviterUid",
+      "callerUid",
+      "ownerUid",
+      "createdBy",
+      "redeemedBy",
+      "acceptedBy",
+      "revokedBy",
+    ],
+    emailFields: ["inviteeEmail", "email"],
+  },
+  channelInvites: { uidFields: ["createdBy"] },
+  posts: { uidFields: ["authorUid"] },
+  glmOperations: { uidFields: ["inputUid"] },
+  feed: { uidFields: ["actorUid", "targetUid"] },
+  stars: { uidFields: ["actorUid", "target.ownerUid"] },
+  follows: { uidFields: ["actorUid", "target.ownerUid"] },
+  gatewayTickets: { uidFields: ["uid"] },
+  gatewayTicketMintLog: { uidFields: ["uid"] },
+  openclawControlTickets: { uidFields: ["uid"] },
+  openclawControlAudit: { uidFields: ["uid"] },
+  channelSessionModelAudit: { uidFields: ["actorUid"] },
+  builder_shell_sessions: { uidFields: ["attacherUid", "takenOverFromUid"] },
+  chatArtifactJobs: {
+    uidFields: ["ownerUid", "workspaceOwnerUid"],
+    slugFields: ["workspaceSlug"],
+  },
+  cleanupJobs: { slugFields: ["slug"] },
+  gateways: { uidArrayFields: ["coOwnerUids"] },
+  email: { emailFields: ["to"], emailArrayFields: ["to"] },
+  gatewayAccessGrants: {
+    uidFields: ["ownerUid", "granteeUid", "createdByUid", "updatedByUid", "revokedByUid"],
+  },
+  gatewayAccessAudit: { uidFields: ["ownerUid", "actorUid", "granteeUid"] },
+  gatewayAccessApprovals: {
+    uidFields: ["ownerUid", "granteeUid", "confirmedByUid", "cancelledByUid"],
+  },
+  gatewayConnectionAssistance: { uidFields: ["ownerUid", "requesterUid"] },
+  agentImports: { uidFields: ["uid"] },
+  agentControls: {},
+  glmGateways: {},
+  platformConfig: {},
+  revisionTombstones: {},
+  systemTypingPhrases: {},
+} as const satisfies Record<string, CustomerErasureCollectionPolicy>;
+
+type PolicyEntry = [string, CustomerErasureCollectionPolicy];
+const POLICY_ENTRIES = Object.entries(CUSTOMER_ERASURE_COLLECTION_POLICIES) as PolicyEntry[];
+
+function policyQueries(key: "uidFields" | "slugFields" | "emailFields") {
+  return POLICY_ENTRIES.flatMap(([collection, policy]) =>
+    (policy[key] ?? []).map((field) => ({ collection, field })));
+}
+
+function policyArrayQueries(key: "uidArrayFields" | "emailArrayFields") {
+  return POLICY_ENTRIES.flatMap(([collection, policy]) =>
+    (policy[key] ?? []).map((field) => ({ collection, field })));
+}
+
+export const CUSTOMER_REFERENCE_QUERIES = policyQueries("uidFields");
+export const CUSTOMER_SLUG_REFERENCE_QUERIES = policyQueries("slugFields");
 
 export const CUSTOMER_GROUP_REFERENCE_QUERIES = [
   { collectionGroup: "members", field: "id" },
 ] as const;
 
-export const CUSTOMER_ARRAY_REFERENCE_QUERIES = [
-  { collection: "gateways", field: "coOwnerUids" },
-] as const;
+export const CUSTOMER_ARRAY_REFERENCE_QUERIES = policyArrayQueries("uidArrayFields");
+export const CUSTOMER_EMAIL_REFERENCE_QUERIES = policyQueries("emailFields");
+export const CUSTOMER_EMAIL_ARRAY_REFERENCE_QUERIES = policyArrayQueries("emailArrayFields");
 
-export const CUSTOMER_EMAIL_REFERENCE_QUERIES = [
-  { collection: "invites", field: "inviteeEmail" },
-  { collection: "invites", field: "email" },
-  { collection: "email", field: "to" },
-] as const;
-
-export const CUSTOMER_EMAIL_ARRAY_REFERENCE_QUERIES = [
-  { collection: "email", field: "to" },
-] as const;
-
-const CUSTOMER_KEYED_ROOTS = [
-  "users",
-  "customerStats",
-  "agents",
-  "modelBrokerCredits",
-  "operatorGatewayReservations",
-  "trialGatewayClaims",
-] as const;
+const CUSTOMER_KEYED_ROOTS = POLICY_ENTRIES
+  .filter(([, policy]) => policy.customerKey === "uid")
+  .map(([collection]) => collection);
+const CUSTOMER_SLUG_KEYED_ROOTS = POLICY_ENTRIES
+  .filter(([, policy]) => policy.customerKey === "slug")
+  .map(([collection]) => collection);
+const CUSTOMER_EMAIL_KEYED_ROOTS = POLICY_ENTRIES
+  .filter(([, policy]) => policy.customerKey === "email")
+  .map(([collection]) => collection);
 
 type ErasureFirestore = Pick<Firestore, "collection" | "collectionGroup" | "recursiveDelete">;
 type VerificationFirestore = Pick<Firestore, "collection" | "collectionGroup">;
@@ -83,8 +122,10 @@ function customerRootRefs(
   return [
     ...CUSTOMER_KEYED_ROOTS.map((collection) =>
       db.collection(collection).doc(uid)),
-    ...(slug ? [db.collection("workspaces").doc(slug)] : []),
-    ...(email ? [db.collection("emailSuppressions").doc(email)] : []),
+    ...(slug ? CUSTOMER_SLUG_KEYED_ROOTS.map((collection) =>
+      db.collection(collection).doc(slug)) : []),
+    ...(email ? CUSTOMER_EMAIL_KEYED_ROOTS.map((collection) =>
+      db.collection(collection).doc(email)) : []),
   ];
 }
 

@@ -5,6 +5,7 @@ import {
   modelCredentialOAuthEntryBySubscriptionProvider,
   resolveUserByosubCredentialRefs,
 } from "@octogee/shared/types/model-credentials";
+import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 
 import { readSecret } from "@octogee/core/secret-manager";
 import { isSafeAgentId } from "@octogee/core/byosub-restore";
@@ -647,7 +648,7 @@ export function createByokBrokerRoutes(opts: {
       bound.gatewayId,
       body.agentId,
     );
-    if (!assigned) {
+    if (!assigned || !accountAllowsInteractiveAccess(assigned.data)) {
       res.status(403).json(FORBIDDEN);
       return;
     }
@@ -705,11 +706,28 @@ export function createByokBrokerRoutes(opts: {
     const user = await db.collection("users").doc(uid).get();
     const data = user.data() as Record<string, unknown> | undefined;
     const slug = data ? assignedOwnerSlug(data) : null;
-    if (!data || !slug || assignedGatewayId(data) !== bound.gatewayId) {
+    if (
+      !data ||
+      !accountAllowsInteractiveAccess(data) ||
+      !slug ||
+      assignedGatewayId(data) !== bound.gatewayId
+    ) {
       res.status(404).json({ error: "not_found" });
       return;
     }
-    res.json({ user: { uid, slug, gatewayId: bound.gatewayId } });
+    const integration = await db
+      .collection("users")
+      .doc(uid)
+      .collection("integrations")
+      .doc("byosub")
+      .get();
+    const refs = resolveUserByosubCredentialRefs(uid, integration.data()).refs;
+    const refProvider = refs.some((ref) => ref.provider === "openai")
+      ? "openai"
+      : refs.some((ref) => ref.provider === "anthropic")
+        ? "anthropic"
+        : null;
+    res.json({ user: { uid, slug, gatewayId: bound.gatewayId, refProvider } });
   });
 
   router.post("/byosub-flow-read", async (req, res) => {
@@ -733,6 +751,11 @@ export function createByokBrokerRoutes(opts: {
       typeof data.agentId !== "string" ||
       typeof data.provider !== "string"
     ) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const user = await db.collection("users").doc(data.uid).get();
+    if (!user.exists || !accountAllowsInteractiveAccess(user.data())) {
       res.status(404).json({ error: "not_found" });
       return;
     }

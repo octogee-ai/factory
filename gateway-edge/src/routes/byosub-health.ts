@@ -1,13 +1,15 @@
 import { Router, Request, Response, NextFunction } from "express";
 import * as fs from "fs";
 import * as path from "path";
-import { db } from "../lib/db.js";
 import {
   coachAgentId,
   deriveByosubHealth,
   isSafeGatewayId,
 } from "../lib/byosub.js";
-import { resolveUserGateway, type ResolvedGateway } from "../lib/user-gateway.js";
+import {
+  resolveByosubUserGateway,
+  type ByosubGatewayAssignment,
+} from "../lib/byosub-broker.js";
 import {
   codexAgentDir,
   isSafeAgentId,
@@ -18,7 +20,6 @@ import {
   CLAUDE_CLI_DEFAULT_PROFILE_ID,
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "@octogee/core/model-credential-materializer";
-import { resolveUserByosubCredentialRefs } from "@octogee/shared/types/model-credentials";
 
 // GET /api/g/<gatewayId>/byosub/health — the DEEP byosub durability check.
 //
@@ -32,10 +33,9 @@ import { resolveUserByosubCredentialRefs } from "@octogee/shared/types/model-cre
 // false-"connected" the ref-only read can't catch.
 
 export interface ByosubHealthDeps {
-  resolveUserGateway: (uid: string) => Promise<ResolvedGateway | null>;
+  resolveUserGateway: (uid: string) => Promise<ByosubGatewayAssignment | null>;
   localGatewayId: () => string | null;
   isMounted: (slug: string) => boolean;
-  readRefProvider: (uid: string) => Promise<string | null>;
   readStorePresent: (agentId: string, profileId: string) => boolean;
   readProfileExpiresAt: (agentId: string, profileId: string) => number | null;
   readAuthStateText: (agentId: string) => string | null;
@@ -86,7 +86,7 @@ export function createByosubHealthRouter(deps: ByosubHealthDeps): Router {
           return;
         }
         const mountedHere = deps.isMounted(resolved.slug);
-        const refProvider = await deps.readRefProvider(req.uid!);
+        const refProvider = resolved.refProvider;
         const profileId =
           refProvider === "anthropic"
             ? CLAUDE_CLI_DEFAULT_PROFILE_ID
@@ -130,19 +130,6 @@ export function createByosubHealthRouter(deps: ByosubHealthDeps): Router {
 const CUSTOMERS_DIR = process.env.CUSTOMERS_DIR ?? "/home/node/.openclaw/customers";
 const OPENCLAW_DIR = process.env.OPENCLAW_DIR ?? path.dirname(CUSTOMERS_DIR);
 
-async function readRefProvider(uid: string): Promise<string | null> {
-  const snap = await db
-    .collection("users")
-    .doc(uid)
-    .collection("integrations")
-    .doc("byosub")
-    .get();
-  const refs = resolveUserByosubCredentialRefs(uid, snap.data()).refs;
-  if (refs.some((ref) => ref.provider === "openai")) return "openai";
-  if (refs.some((ref) => ref.provider === "anthropic")) return "anthropic";
-  return null;
-}
-
 function profileRecord(agentId: string, profileId: string): Record<string, unknown> | null {
   const store = readAuthProfileStore(codexAgentDir(OPENCLAW_DIR, agentId));
   const profiles = (store as { profiles?: unknown } | null)?.profiles;
@@ -154,10 +141,9 @@ function profileRecord(agentId: string, profileId: string): Record<string, unkno
 }
 
 const byosubHealthRouter = createByosubHealthRouter({
-  resolveUserGateway,
+  resolveUserGateway: resolveByosubUserGateway,
   localGatewayId: () => process.env.GATEWAY_ID?.trim() || null,
   isMounted: (slug) => fs.existsSync(path.join(CUSTOMERS_DIR, slug)),
-  readRefProvider,
   readStorePresent: (agentId, profileId) => {
     return profileRecord(agentId, profileId) !== null;
   },

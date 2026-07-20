@@ -10,12 +10,14 @@ function customerStoragePrefixes(
   uid: string,
   slug: string,
   chatArtifactIds: string[],
+  agentImportIds: string[],
 ): string[] {
   return [
     `avatars/${uid}/`,
     `post-covers/${uid}/`,
     ...(slug ? [`customers/${slug}/`] : []),
     ...chatArtifactIds.map((artifactId) => `chat-artifacts/${artifactId}/`),
+    ...agentImportIds.map((importId) => `agent-imports/${importId}/`),
   ];
 }
 
@@ -30,8 +32,9 @@ export async function deleteCustomerStorageObjects(
   uid: string,
   slug: string,
   chatArtifactIds: string[],
+  agentImportIds: string[],
 ): Promise<void> {
-  for (const prefix of customerStoragePrefixes(uid, slug, chatArtifactIds)) {
+  for (const prefix of customerStoragePrefixes(uid, slug, chatArtifactIds, agentImportIds)) {
     await bucket.deleteFiles({ prefix });
   }
 }
@@ -41,9 +44,10 @@ export async function verifyCustomerStorageErasure(
   uid: string,
   slug: string,
   chatArtifactIds: string[],
+  agentImportIds: string[],
 ): Promise<string[]> {
   const remaining: string[] = [];
-  for (const prefix of customerStoragePrefixes(uid, slug, chatArtifactIds)) {
+  for (const prefix of customerStoragePrefixes(uid, slug, chatArtifactIds, agentImportIds)) {
     const [files] = await bucket.getFiles({ prefix, maxResults: 1 });
     if (files[0]) remaining.push(`gcs/${files[0].name}`);
   }

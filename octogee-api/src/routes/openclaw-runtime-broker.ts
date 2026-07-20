@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import type { Firestore, Transaction } from "firebase-admin/firestore";
+import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 
 import {
   isValidCustomChannelName,
@@ -115,11 +116,20 @@ async function previewAccessAuthorized(
   const path = projectSlug
     ? `workspaces/${workspaceSlug}/projects/${projectSlug}`
     : `workspaces/${workspaceSlug}`;
-  const [target, member] = await Promise.all([
-    db.doc(path).get(),
+  const target = await db.doc(path).get();
+  if (!target.exists) return false;
+  const ownerUid = target.data()?.ownerUid;
+  if (typeof ownerUid !== "string") return false;
+  const [caller, owner, member] = await Promise.all([
+    db.doc(`users/${uid}`).get(),
+    db.doc(`users/${ownerUid}`).get(),
     db.doc(`${path}/members/${uid}`).get(),
   ]);
-  return target.exists && (target.data()?.ownerUid === uid || member.exists);
+  return caller.exists &&
+    owner.exists &&
+    accountAllowsInteractiveAccess(caller.data()) &&
+    accountAllowsInteractiveAccess(owner.data()) &&
+    (ownerUid === uid || member.exists);
 }
 
 function readPath(obj: Record<string, unknown> | undefined, dotted: string): unknown {
