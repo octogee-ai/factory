@@ -49,18 +49,6 @@ export interface OpenClawControlRpcPolicyContext {
   configFrozen?: boolean;
 }
 
-export type OpenClawControlRpcPolicyMode = "native" | "sanitized";
-
-export function openClawControlRpcPolicyMode(
-  env: NodeJS.ProcessEnv = process.env,
-): OpenClawControlRpcPolicyMode {
-  const value = env.OPENCLAW_CONTROL_RPC_POLICY_MODE?.trim() || "native";
-  if (value === "native" || value === "sanitized") return value;
-  throw new Error(
-    `OPENCLAW_CONTROL_RPC_POLICY_MODE must be native or sanitized, got ${JSON.stringify(value)}`,
-  );
-}
-
 const READ_METHODS = new Set([
   "health",
   "status",
@@ -90,8 +78,6 @@ const DELEGATED_MUTABLE_PATHS = new Set([
   "agents.defaults.model.fallbacks[]",
   "agents.defaults.thinkingDefault",
   "agents.defaults.timeoutSeconds",
-  "agents.list[].default",
-  "agents.list[].id",
   "agents.list[].model",
   "agents.list[].model.primary",
   "agents.list[].model.fallbacks[]",
@@ -756,11 +742,33 @@ function projectDelegatedReadResponse(
   return projected;
 }
 
+function projectDelegatedOutcome(frame: Record<string, unknown>): Record<string, unknown> {
+  const projected: Record<string, unknown> = {
+    type: frame.type,
+    id: frame.id,
+    ok: frame.ok,
+  };
+  if (frame.ok !== true) {
+    projected.error = { code: "REQUEST_FAILED", message: "OpenClaw request failed" };
+  }
+  return projected;
+}
+
+function projectDelegatedConnectChallenge(
+  frame: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const payload = record(frame.payload);
+  return frame.type === "event" && frame.event === "connect.challenge" &&
+    boundedString(payload?.nonce, 512)
+    ? { type: "event", event: "connect.challenge", payload: { nonce: payload.nonce } }
+    : null;
+}
+
 export function projectOpenClawServerFrameForProfile(
   frame: Record<string, unknown>,
   requestedMethod: string | undefined,
   profile: OpenClawBrokerProfile,
-): Record<string, unknown> {
+): Record<string, unknown> | null {
   if (profile === "native-owner" || profile === "native-co-owner") {
     return structuredClone(frame);
   }
@@ -770,7 +778,11 @@ export function projectOpenClawServerFrameForProfile(
   if (requestedMethod && frame.type === "res" && DELEGATED_READ_METHODS.has(requestedMethod)) {
     return projectDelegatedReadResponse(frame, requestedMethod);
   }
-  return projectOpenClawHelloForProfile(frame, profile);
+  if (record(frame.payload)?.type === "hello-ok") {
+    return projectOpenClawHelloForProfile(frame, profile);
+  }
+  if (requestedMethod && frame.type === "res") return projectDelegatedOutcome(frame);
+  return projectDelegatedConnectChallenge(frame);
 }
 
 export function openClawConfigSnapshotFromGetResponse(

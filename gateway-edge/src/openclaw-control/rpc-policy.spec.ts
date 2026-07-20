@@ -10,7 +10,6 @@ import {
   projectOpenClawServerFrameForProfile,
   evaluateOpenClawControlRpc,
   installedMethodsFromHello,
-  openClawControlRpcPolicyMode,
   openClawConfigSnapshotFromGetResponse,
   pinnedOpenClawRuntimeMatches,
 } from "./rpc-policy.js";
@@ -40,16 +39,6 @@ function policyContext(extra: Record<string, unknown> = {}) {
 }
 
 describe("OpenClaw Dashboard RPC policy", () => {
-  it("defaults to native passthrough and keeps sanitized mode behind one explicit switch", () => {
-    expect(openClawControlRpcPolicyMode({})).toBe("native");
-    expect(openClawControlRpcPolicyMode({ OPENCLAW_CONTROL_RPC_POLICY_MODE: "native" })).toBe("native");
-    expect(openClawControlRpcPolicyMode({ OPENCLAW_CONTROL_RPC_POLICY_MODE: "sanitized" }))
-      .toBe("sanitized");
-    expect(() => openClawControlRpcPolicyMode({
-      OPENCLAW_CONTROL_RPC_POLICY_MODE: "sometimes",
-    })).toThrow(/OPENCLAW_CONTROL_RPC_POLICY_MODE/u);
-  });
-
   it("native mode forwards every installed OpenClaw operator method unchanged", () => {
     const methods = new Set([
       "status",
@@ -302,7 +291,8 @@ describe("OpenClaw Dashboard RPC policy", () => {
       "config.get",
       "delegated-config",
     );
-    const payload = projected.payload as Record<string, unknown>;
+    expect(projected).not.toBeNull();
+    const payload = projected!.payload as Record<string, unknown>;
     const raw = JSON.parse(String(payload.raw));
 
     expect(payload).toEqual({ hash: "hash-1", raw: expect.any(String) });
@@ -348,6 +338,62 @@ describe("OpenClaw Dashboard RPC policy", () => {
       },
     });
     expect(JSON.stringify(projected)).not.toMatch(/owner-secret|attacker|future/u);
+  });
+
+  it("drops unsolicited delegated frames and strips matched mutation responses", () => {
+    const pushed = {
+      type: "event",
+      event: "session.updated",
+      payload: { conversation: "private", token: "owner-secret" },
+    };
+    expect(projectOpenClawServerFrameForProfile(
+      pushed,
+      undefined,
+      "delegated-config",
+    )).toBeNull();
+    expect(projectOpenClawServerFrameForProfile(
+      pushed,
+      undefined,
+      "native-owner",
+    )).toEqual(pushed);
+    expect(projectOpenClawServerFrameForProfile({
+      type: "res",
+      id: "config-write",
+      ok: true,
+      payload: { accepted: true, resolved: { token: "owner-secret" } },
+    }, "config.patch", "delegated-config")).toEqual({
+      type: "res",
+      id: "config-write",
+      ok: true,
+    });
+  });
+
+  it("lets helpers edit existing agent labels and models but not agent identity or default routing", () => {
+    const current = validConfig({
+      agents: {
+        list: [{ id: "main", name: "Main", default: true, model: "openai/gpt-5" }],
+      },
+    });
+    const context = policyContext({ currentConfig: { raw: current, hash: "hash-1" } });
+    const decide = (list: Record<string, unknown>[]) => evaluateDelegatedOpenClawControlRpc(
+      request("config.patch", {
+        raw: JSON.stringify({ agents: { list } }),
+        baseHash: "hash-1",
+      }),
+      context,
+      "delegated-config",
+    );
+
+    expect(decide([{ id: "main", name: "Primary", model: "openai/gpt-5.1" }]))
+      .toMatchObject({ allowed: true });
+    expect(decide([{ id: "helper", name: "Helper", model: "openai/gpt-5.1" }]))
+      .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
+    expect(decide([{ id: "main", default: false }]))
+      .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
+    expect(decide([
+      { id: "main" },
+      { id: "helper", name: "Helper", model: "openai/gpt-5.1" },
+    ])).toMatchObject({ allowed: false, reason: "config-unsafe-path" });
   });
 
   it("projects config schema to editable safe paths and rejects unsafe schema lookups", () => {

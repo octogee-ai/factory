@@ -82,7 +82,6 @@ function sharedGatewayRoot(): Record<string, unknown> {
     serviceAccount: null,
     operatorAccess: null,
     ownerUid: null,
-    coOwnerUids: [],
     builderSlug: null,
     openclawOverrides: null,
     modelBrokerLimits: null,

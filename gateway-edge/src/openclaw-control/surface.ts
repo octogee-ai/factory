@@ -53,7 +53,7 @@ import type { OpenClawControlMetrics, OpenClawControlMetricIdentity } from "./me
 const MAX_WS_FRAME_BYTES = 1_048_576;
 const DEFAULT_HTTP_TIMEOUT_MS = 5_000;
 const DEFAULT_RPC_TIMEOUT_MS = 10_000;
-const DEFAULT_AUTHORIZATION_INTERVAL_MS = 30_000;
+const DEFAULT_AUTHORIZATION_INTERVAL_MS = 10_000;
 const CSP_BEFORE_FRAME_ANCESTORS = "default-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors";
 const CSP_AFTER_FRAME_ANCESTORS = "; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self' blob:";
 const DASHBOARD_ERROR_EVENT = "octogee-openclaw-dashboard-error";
@@ -193,7 +193,7 @@ function securityHeaders(res: Response | http.ServerResponse, frameAncestor: str
     `${CSP_BEFORE_FRAME_ANCESTORS} ${frameAncestor}${CSP_AFTER_FRAME_ANCESTORS}`,
   );
   res.setHeader("cross-origin-opener-policy", "same-origin");
-  res.setHeader("cross-origin-resource-policy", "same-site");
+  res.setHeader("cross-origin-resource-policy", "cross-origin");
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader("x-content-type-options", "nosniff");
   res.removeHeader("x-frame-options");
@@ -857,12 +857,20 @@ class OpenClawControlSocketBridge {
     this.updateCurrentConfig(frame, request);
     this.recordUpstreamResult(frame, request);
     this.refreshConfigAfterMutation(frame, request);
-    if (!request?.internal && this.args.browser.readyState === WebSocket.OPEN) {
-      const projected = projectOpenClawServerFrameForProfile(
-        frame,
-        request?.method,
-        this.activeSession.brokerProfile,
-      );
+    this.forwardProjectedFrame(frame, request);
+  }
+
+  private forwardProjectedFrame(
+    frame: Record<string, unknown>,
+    request: PendingRpc | undefined,
+  ): void {
+    if (request?.internal || this.args.browser.readyState !== WebSocket.OPEN) return;
+    const projected = projectOpenClawServerFrameForProfile(
+      frame,
+      request?.method,
+      this.activeSession.brokerProfile,
+    );
+    if (projected) {
       this.args.browser.send(sanitizeOpenClawControlServerFrame(projected, [this.gatewayToken]));
     }
   }
@@ -923,39 +931,14 @@ class OpenClawControlSocketBridge {
     }
     if (this.rejectQuarantined(frame) || this.rejectPending(frame)) return;
     if (frame.method === "connect") {
-      this.authorizeAndForward(frame);
+      this.forwardConnect(frame);
       return;
     }
     if (!this.installedMethods) {
       this.args.browser.send(openClawControlPolicyError(frame, "connect-state"));
       return;
     }
-    this.authorizeAndForward(frame);
-  }
-
-  private authorizeAndForward(frame: BrowserRpcFrame): void {
-    this.admittingIds.add(frame.id);
-    void this.args.authorize({
-      sessionId: this.activeSession.sessionId,
-      gatewayId: this.activeSession.gatewayId,
-      revisionId: this.activeSession.revisionId,
-      env: this.args.env,
-    }).then((allowed) => {
-      this.admittingIds.delete(frame.id);
-      this.args.metrics?.session(this.metricsIdentity, "authorize", allowed ? "ok" : "denied");
-      if (this.closing) return;
-      if (!allowed) {
-        this.args.sessions.revoke(this.activeSession.sessionId);
-        this.audit("rpc_deny", "unknown", "denied", "capability-revoked");
-        this.closeBoth("capability-revoked");
-        return;
-      }
-      if (frame.method === "connect") this.forwardConnect(frame);
-      else this.evaluateAndForward(frame);
-    }).catch(() => {
-      this.admittingIds.delete(frame.id);
-      this.closeBoth("capability-unavailable");
-    });
+    this.evaluateAndForward(frame);
   }
 
   private rejectQuarantined(frame: BrowserRpcFrame): boolean {
