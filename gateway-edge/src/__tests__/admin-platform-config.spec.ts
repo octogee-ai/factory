@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const platformDocs: Record<string, Record<string, unknown> | undefined> = {};
 const setCalls: Array<{ path: string; data: Record<string, unknown>; opts?: unknown }> = [];
 const queryDocs: Record<string, Array<{ id: string; data: Record<string, unknown> }>> = {};
+const aggregateCalls: string[] = [];
 
 vi.mock("../lib/db", () => {
   function collection(path: string): any {
@@ -35,6 +36,13 @@ vi.mock("../lib/db", () => {
       }),
       where: (field: string, _op: string, value: unknown) => ({
         get: async () => queryResult(`${path}:${field}:${String(value)}`),
+        count: () => ({
+          get: async () => {
+            const key = `${path}:${field}:${String(value)}`;
+            aggregateCalls.push(key);
+            return { data: () => ({ count: queryDocs[key]?.length ?? 0 }) };
+          },
+        }),
         orderBy: () => ({
           limit: (count: number) => ({ get: async () => queryResult(`${path}:${field}:${String(value)}`, count) }),
           get: async () => queryResult(`${path}:${field}:${String(value)}`),
@@ -81,6 +89,7 @@ describe("admin platform-config", () => {
     for (const key of Object.keys(platformDocs)) delete platformDocs[key];
     for (const key of Object.keys(queryDocs)) delete queryDocs[key];
     setCalls.length = 0;
+    aggregateCalls.length = 0;
   });
 
   it("GET serves the compiled default plus the full catalog when no doc exists", async () => {
@@ -286,6 +295,18 @@ describe("admin platform-trial-config", () => {
     queryDocs["trialGatewayClaims:status:claimed"] = [
       { id: "claimed-user", data: { status: "claimed" } },
     ];
+    queryDocs["trialGatewayClaims:status:failed"] = [
+      {
+        id: "failed-user",
+        data: {
+          uid: "failed-user",
+          slug: "failed-builder",
+          status: "failed",
+          requestedAt: 80,
+          lastError: { at: 101, code: "trial_config_missing", message: "trial config unavailable" },
+        },
+      },
+    ];
 
     const res = await request(app).get("/api/admin/platform-trial-config");
 
@@ -308,9 +329,21 @@ describe("admin platform-trial-config", () => {
       preparingGatewayId: null,
       waitingClaims: 2,
       claimedCount: 1,
+      failedClaims: 1,
       oldestQueuedBuilderUid: "waiting-user",
+      oldestFailedBuilderUid: "failed-user",
+      oldestFailedClaimError: {
+        at: 101,
+        code: "trial_config_missing",
+        message: "trial config unavailable",
+      },
       lastError: null,
     });
+    expect(aggregateCalls).toEqual([
+      "trialGatewayClaims:status:waiting",
+      "trialGatewayClaims:status:claimed",
+      "trialGatewayClaims:status:failed",
+    ]);
   });
 
   it("GET reports missing configuration instead of silently granting a compiled tier", async () => {

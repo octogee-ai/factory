@@ -18,5 +18,6 @@ describe("builderGatewayIdForSlug", () => {
 
   it("rejects a value that is not a canonical Builder slug", () => {
     expect(() => builderGatewayIdForSlug("Chris Builder")).toThrow("invalid Builder slug");
+    expect(() => builderGatewayIdForSlug("chris--builder")).toThrow("invalid Builder slug");
   });
 });

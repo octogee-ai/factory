@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  isGatewayMutableConfigForDesiredStatus,
   isGatewayMutableConfigForGateway,
   isGatewayMutableConfig,
   type GatewayMutableConfig,
@@ -109,26 +108,6 @@ describe("gateway mutable config", () => {
       desiredStatus: "running",
       allocation: { kind: "trial", state: "standby", configHash: "0123456789abcdef" },
     })).toBe(false);
-  });
-
-  it("requires standby allocations to be paused while warming covers boot and scale-down", () => {
-    const unowned = validConfig({
-      ownerUid: null,
-      builderSlug: null,
-      operatorAccess: { shellsEnabled: false, controlUiEnabled: false },
-      allocation: { kind: "trial", state: "warming", configHash: "0123456789abcdef" },
-    });
-
-    expect(isGatewayMutableConfigForDesiredStatus(unowned, "trial-op-000001", "running")).toBe(true);
-    expect(isGatewayMutableConfigForDesiredStatus(unowned, "trial-op-000001", "paused")).toBe(true);
-    expect(isGatewayMutableConfigForDesiredStatus({
-      ...unowned,
-      allocation: { kind: "trial", state: "standby", configHash: "0123456789abcdef" },
-    }, "trial-op-000001", "paused")).toBe(true);
-    expect(isGatewayMutableConfigForDesiredStatus({
-      ...unowned,
-      allocation: { kind: "trial", state: "standby", configHash: "0123456789abcdef" },
-    }, "trial-op-000001", "running")).toBe(false);
   });
 
   it("requires owned trial allocations to carry a matching claim identity", () => {

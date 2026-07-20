@@ -285,7 +285,6 @@ export {
   isBareGatewayId,
   isGatewayMutableConfig,
   isGatewayMutableConfigForGateway,
-  isGatewayMutableConfigForDesiredStatus,
 } from './gateway-mutable-config.js';
 
 export type {

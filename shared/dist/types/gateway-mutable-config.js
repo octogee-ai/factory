@@ -110,23 +110,21 @@ function isLockedTrialOperator(value) {
         (access.kubeApiServerEgressCidrs === undefined ||
             (Array.isArray(access.kubeApiServerEgressCidrs) && access.kubeApiServerEgressCidrs.length === 0));
 }
-function hasLegalOwnershipAndAllocation(value) {
+function isOwnedGateway(value) {
+    return typeof value.ownerUid === "string" && value.ownerUid.length > 0 &&
+        typeof value.builderSlug === "string" && value.builderSlug.length > 0;
+}
+function hasLegalOwnedAllocation(value) {
     const allocation = value.allocation;
-    const ownerUid = value.ownerUid;
-    const builderSlug = value.builderSlug;
-    const isOwned = typeof ownerUid === "string" && ownerUid.length > 0 &&
-        typeof builderSlug === "string" && builderSlug.length > 0;
-    if (value.gatewayClass === "shared") {
-        return ownerUid === null && builderSlug === null && (allocation === undefined || allocation === null);
-    }
-    if (isOwned) {
-        if (allocation === undefined || allocation === null)
-            return true;
-        return isTrialGatewayAllocation(allocation) &&
-            allocation.state !== "warming" && allocation.state !== "standby" &&
-            allocation.claimedByUid === ownerUid;
-    }
-    const isUnownedTrial = ownerUid === null && builderSlug === null &&
+    if (allocation === undefined || allocation === null)
+        return true;
+    return isTrialGatewayAllocation(allocation) &&
+        allocation.state !== "warming" && allocation.state !== "standby" &&
+        allocation.claimedByUid === value.ownerUid;
+}
+function hasLegalUnownedTrialAllocation(value) {
+    const allocation = value.allocation;
+    const isUnownedTrial = value.ownerUid === null && value.builderSlug === null &&
         isTrialGatewayAllocation(allocation) &&
         (allocation.state === "warming" || allocation.state === "standby") &&
         isLockedTrialOperator(value);
@@ -138,6 +136,15 @@ function hasLegalOwnershipAndAllocation(value) {
     return allocation.state === "warming"
         ? desiredStatus === "running" || desiredStatus === "paused"
         : desiredStatus === "paused";
+}
+function hasLegalOwnershipAndAllocation(value) {
+    if (value.gatewayClass === "shared") {
+        return value.ownerUid === null && value.builderSlug === null &&
+            (value.allocation === undefined || value.allocation === null);
+    }
+    return isOwnedGateway(value)
+        ? hasLegalOwnedAllocation(value)
+        : hasLegalUnownedTrialAllocation(value);
 }
 export function isBareGatewayId(value) {
     return isValidGatewayId(value) && !REVISION_GATEWAY_ID_RE.test(value);
@@ -184,19 +191,6 @@ export function isGatewayMutableConfigForGateway(value, gatewayId) {
         return serviceAccountName === legacyName;
     }
     return true;
-}
-export function isGatewayMutableConfigForDesiredStatus(value, gatewayId, desiredStatus) {
-    if (!isGatewayMutableConfigForGateway(value, gatewayId))
-        return false;
-    const allocation = value.allocation;
-    if (!allocation || allocation.state === "claimed" ||
-        allocation.state === "expiring" || allocation.state === "converted")
-        return true;
-    if (desiredStatus === "retired")
-        return true;
-    return allocation.state === "warming"
-        ? desiredStatus === "running" || desiredStatus === "paused"
-        : desiredStatus === "paused";
 }
 export function effectiveGatewayServiceAccountNameForGateway(config, gatewayId) {
     return config.serviceAccountName || operatorGatewayServiceAccountName(gatewayId);

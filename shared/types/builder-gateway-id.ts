@@ -1,6 +1,6 @@
 import { isValidNewGatewayId } from "./glm.js";
+import { USERNAME_RE } from "./identity.js";
 
-const BUILDER_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 const SHORT_SLUG_LENGTH = 13;
 
 function stableHash(value: string): string {
@@ -13,12 +13,13 @@ function stableHash(value: string): string {
 }
 
 export function builderGatewayIdForSlug(slug: string): string {
-  if (!BUILDER_SLUG.test(slug)) {
+  if (!USERNAME_RE.test(slug)) {
     throw new Error("invalid Builder slug");
   }
   const full = `builder-${slug}`;
   if (isValidNewGatewayId(full)) return full;
-  const shortSlug = slug.slice(0, SHORT_SLUG_LENGTH).replace(/-+$/u, "");
+  let shortSlug = slug.slice(0, SHORT_SLUG_LENGTH);
+  while (shortSlug.endsWith("-")) shortSlug = shortSlug.slice(0, -1);
   const shortened = `builder-${shortSlug}-${stableHash(slug)}`;
   if (!isValidNewGatewayId(shortened)) {
     throw new Error("Builder slug cannot produce a valid gateway id");

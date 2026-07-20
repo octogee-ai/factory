@@ -170,22 +170,22 @@ function isLockedTrialOperator(value: Record<string, unknown>): boolean {
       (Array.isArray(access.kubeApiServerEgressCidrs) && access.kubeApiServerEgressCidrs.length === 0));
 }
 
-function hasLegalOwnershipAndAllocation(value: Record<string, unknown>): boolean {
+function isOwnedGateway(value: Record<string, unknown>): boolean {
+  return typeof value.ownerUid === "string" && value.ownerUid.length > 0 &&
+    typeof value.builderSlug === "string" && value.builderSlug.length > 0;
+}
+
+function hasLegalOwnedAllocation(value: Record<string, unknown>): boolean {
   const allocation = value.allocation;
-  const ownerUid = value.ownerUid;
-  const builderSlug = value.builderSlug;
-  const isOwned = typeof ownerUid === "string" && ownerUid.length > 0 &&
-    typeof builderSlug === "string" && builderSlug.length > 0;
-  if (value.gatewayClass === "shared") {
-    return ownerUid === null && builderSlug === null && (allocation === undefined || allocation === null);
-  }
-  if (isOwned) {
-    if (allocation === undefined || allocation === null) return true;
-    return isTrialGatewayAllocation(allocation) &&
-      allocation.state !== "warming" && allocation.state !== "standby" &&
-      allocation.claimedByUid === ownerUid;
-  }
-  const isUnownedTrial = ownerUid === null && builderSlug === null &&
+  if (allocation === undefined || allocation === null) return true;
+  return isTrialGatewayAllocation(allocation) &&
+    allocation.state !== "warming" && allocation.state !== "standby" &&
+    allocation.claimedByUid === value.ownerUid;
+}
+
+function hasLegalUnownedTrialAllocation(value: Record<string, unknown>): boolean {
+  const allocation = value.allocation;
+  const isUnownedTrial = value.ownerUid === null && value.builderSlug === null &&
     isTrialGatewayAllocation(allocation) &&
     (allocation.state === "warming" || allocation.state === "standby") &&
     isLockedTrialOperator(value);
@@ -195,6 +195,16 @@ function hasLegalOwnershipAndAllocation(value: Record<string, unknown>): boolean
   return allocation.state === "warming"
     ? desiredStatus === "running" || desiredStatus === "paused"
     : desiredStatus === "paused";
+}
+
+function hasLegalOwnershipAndAllocation(value: Record<string, unknown>): boolean {
+  if (value.gatewayClass === "shared") {
+    return value.ownerUid === null && value.builderSlug === null &&
+      (value.allocation === undefined || value.allocation === null);
+  }
+  return isOwnedGateway(value)
+    ? hasLegalOwnedAllocation(value)
+    : hasLegalUnownedTrialAllocation(value);
 }
 
 export function isBareGatewayId(value: unknown): value is string {
@@ -244,21 +254,6 @@ export function isGatewayMutableConfigForGateway(
     return serviceAccountName === legacyName;
   }
   return true;
-}
-
-export function isGatewayMutableConfigForDesiredStatus(
-  value: unknown,
-  gatewayId: string,
-  desiredStatus: "running" | "paused" | "retired",
-): value is GatewayMutableConfig {
-  if (!isGatewayMutableConfigForGateway(value, gatewayId)) return false;
-  const allocation = value.allocation;
-  if (!allocation || allocation.state === "claimed" ||
-    allocation.state === "expiring" || allocation.state === "converted") return true;
-  if (desiredStatus === "retired") return true;
-  return allocation.state === "warming"
-    ? desiredStatus === "running" || desiredStatus === "paused"
-    : desiredStatus === "paused";
 }
 
 export function effectiveGatewayServiceAccountNameForGateway(
