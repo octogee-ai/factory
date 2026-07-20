@@ -58,6 +58,7 @@ import {
 } from "@octogee/shared/types/gateway-releases";
 import {
   gatewayUpsertOptsFromRelease,
+  isOwnerlessOperatorPrewarm,
   deploymentIntentFingerprintForComparison,
   planGatewayConvergence,
   provisioningRuntimeDoc,
@@ -752,6 +753,7 @@ interface GatewayConvergencePassDeps {
     gatewayId: string;
     desiredImageTag: string;
     requiresCustomerMigration: boolean;
+    ownerlessOperatorPrewarm: boolean;
   }) => Promise<{ ready: boolean }>;
   log: (msg: string) => void;
 }
@@ -796,6 +798,7 @@ export async function refineGatewayConvergenceAction(input: {
     gatewayId: gateway.gatewayId,
     desiredImageTag: artifact.imageTag,
     requiresCustomerMigration: requiresSurgeCustomerMigration(gateway),
+    ownerlessOperatorPrewarm: isOwnerlessOperatorPrewarm(gateway),
   });
   return planGatewayConvergence({
     gateway,

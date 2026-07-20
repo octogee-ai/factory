@@ -324,11 +324,11 @@ fi
 #     completion without underlying OAuth)
 #   - PRESERVES every other key in ~/.claude.json
 #   - is idempotent across reboots
-# Operator-only by GATEWAY_PROFILE gate AND by COPY-set (only
-# Dockerfile.operator-base ships the script). See
+# Tenant-bound operator only by the GATEWAY_PROFILE/prewarm gates and by
+# COPY-set (only Dockerfile.operator-base ships the script). See
 # tests/specs/stamp-claude-first-run.spec.ts.
 STAMPER=/octogee/infra/gateway/stamp-claude-first-run.mjs
-if [ "${GATEWAY_PROFILE:-}" = "operator" ] && [ -f "$STAMPER" ]; then
+if [ "${GATEWAY_PROFILE:-}" = "operator" ] && [ "$UNOWNED_OPERATOR_PREWARM" != "true" ] && [ -f "$STAMPER" ]; then
   # The stamper writes ~/.claude.json itself with 0600 — the
   # file-permission hardening block below does NOT cover it. If that
   # invariant ever moves to the entrypoint, add an explicit chmod here.
@@ -340,11 +340,11 @@ fi
 # so codex's app-server runs danger-full-access + approvalPolicy=never (the
 # agent acts without per-action approval prompts). Cattle gateways currently get
 # the same Codex app-server posture from the template as a temporary unblock;
-# this script ships ONLY in Dockerfile.operator-base and is gated on GATEWAY_PROFILE.
+# this script ships ONLY in Dockerfile.operator-base and is gated to tenant-bound operators.
 # Idempotent + non-fatal.
 # See tests/specs/apply-operator-codex-sandbox.spec.ts.
 CODEX_YOLO=/octogee/infra/gateway/apply-operator-codex-sandbox.mjs
-if [ "${GATEWAY_PROFILE:-}" = "operator" ] && [ -f "$CODEX_YOLO" ]; then
+if [ "${GATEWAY_PROFILE:-}" = "operator" ] && [ "$UNOWNED_OPERATOR_PREWARM" != "true" ] && [ -f "$CODEX_YOLO" ]; then
   node "$CODEX_YOLO" || log "apply-operator-codex-sandbox: non-fatal failure"
 fi
 

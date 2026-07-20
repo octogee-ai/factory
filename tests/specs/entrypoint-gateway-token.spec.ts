@@ -139,6 +139,55 @@ describe("infra/gateway/entrypoint.sh — gateway token Secret Manager publish b
   });
 });
 
+function runOperatorMutationBlock(unownedOperatorPrewarm: boolean): string[] {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "operator-mutations-"));
+  try {
+    const marker = path.join(tmp, "node-calls");
+    const stamper = path.join(tmp, "stamp-claude-first-run.mjs");
+    const codexSandbox = path.join(tmp, "apply-operator-codex-sandbox.mjs");
+    fs.writeFileSync(stamper, "");
+    fs.writeFileSync(codexSandbox, "");
+    const src = fs.readFileSync(ENTRYPOINT, "utf8");
+    const start = src.indexOf("# ── Operator-profile: Claude Code first-run stamp");
+    const end = src.indexOf("# ── Harden file permissions", start);
+    if (start < 0 || end < 0) throw new Error("could not locate operator mutation block");
+    const block = src.slice(start, end)
+      .replace("/octogee/infra/gateway/stamp-claude-first-run.mjs", stamper)
+      .replace("/octogee/infra/gateway/apply-operator-codex-sandbox.mjs", codexSandbox);
+    const script = `
+      set -e
+      log() { :; }
+      node() { basename "$1" >> "${marker}"; }
+      export GATEWAY_PROFILE=operator
+      export UNOWNED_OPERATOR_PREWARM=${unownedOperatorPrewarm ? "true" : "false"}
+      ${block}
+    `;
+    const result = spawnSync("sh", ["-c", script], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    return fs.existsSync(marker)
+      ? fs.readFileSync(marker, "utf8").trim().split("\n").filter(Boolean)
+      : [];
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+describe("infra/gateway/entrypoint.sh — operator mutation runtime boundary", () => {
+  it("skips credential and Codex config mutations for an ownerless prewarm", () => {
+    expect(runOperatorMutationBlock(true)).toEqual([]);
+  });
+
+  it("runs credential and Codex config mutations after the operator is tenant-bound", () => {
+    expect(runOperatorMutationBlock(false)).toEqual([
+      "stamp-claude-first-run.mjs",
+      "apply-operator-codex-sandbox.mjs",
+    ]);
+  });
+});
+
 function runnerBlockSource(): string {
   const src = fs.readFileSync(ENTRYPOINT, "utf8");
   const earlyStart = src.indexOf("# BuilderShell comes up before the durable restore");

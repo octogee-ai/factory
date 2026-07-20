@@ -236,7 +236,7 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
 });
 
 describe("infra/gateway/entrypoint.sh — operator-profile boot hooks", () => {
-  it("invokes the Claude first-run stamper when GATEWAY_PROFILE=operator AND the script exists", () => {
+  it("invokes the Claude first-run stamper for a tenant-bound operator when the script exists", () => {
 
 expect(entrypoint).toMatch(/GATEWAY_PROFILE[^\n]*=[^\n]*"?operator"?/);
 
@@ -258,7 +258,7 @@ const stamperRegion = entrypoint.match(
 expect(stamperRegion).toMatch(/\[\s*-f\s+/);
   });
 
-  it("applies the codex YOLO sandbox when GATEWAY_PROFILE=operator AND the script exists", () => {
+  it("applies the codex YOLO sandbox for a tenant-bound operator when the script exists", () => {
     expect(entrypoint).toMatch(/\/octogee\/infra\/gateway\/apply-operator-codex-sandbox\.mjs/);
     expect(entrypoint).toMatch(/node\s+[^\n]*apply-operator-codex-sandbox/);
   });
