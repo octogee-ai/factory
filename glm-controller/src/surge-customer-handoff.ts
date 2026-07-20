@@ -106,6 +106,7 @@ export interface ReconcileSurgeCustomerHandoffInput {
   gatewayId: string;
   desiredImageTag: string;
   requiresCustomerMigration: boolean;
+  ownerlessOperatorPrewarm?: boolean;
 }
 
 function operationId(gatewayId: string, targetPodUid: string): string {
@@ -321,6 +322,68 @@ function sourceForTransfer(
   return source.pod;
 }
 
+async function migrateAssignmentsAndReleaseTarget(
+  deps: SurgeCustomerHandoffDeps,
+  context: {
+    input: ReconcileSurgeCustomerHandoffInput;
+    assignments: SurgeAssignment[];
+    sourcePod: SurgePod;
+    targetPod: SurgePod;
+    ownedBy: string;
+    observedPodUids: readonly string[];
+  },
+): Promise<void> {
+  const { input, assignments, sourcePod, targetPod, ownedBy, observedPodUids } = context;
+  await restoreAbandonedSurgeAssignments(
+    deps,
+    input.gatewayId,
+    assignments,
+    ownedBy,
+    observedPodUids,
+  );
+  assertAssignmentsAvailable(assignments, ownedBy);
+  try {
+    for (const assignment of assignments) {
+      if (assignment.state === "serving") {
+        await setAssignmentState(deps, input.gatewayId, assignment, "quiescing", ownedBy);
+        assignment.state = "quiescing";
+        assignment.updatedByOperationId = ownedBy;
+      }
+    }
+    await transferAssignments(deps, {
+      input,
+      assignments,
+      sourcePod,
+      targetPod,
+      ownedBy,
+    });
+  } catch (error) {
+    try {
+      for (const assignment of assignments) {
+        await deps.discardTargetCustomer({
+          gatewayId: input.gatewayId,
+          slug: assignment.slug,
+          operationId: ownedBy,
+          targetPod,
+        });
+      }
+    } catch (cleanupError) {
+      throw new Error(
+        `surge target cleanup failed; admission remains closed: ` +
+        `${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+        { cause: error },
+      );
+    }
+    await restoreOwnedAssignments(deps, input.gatewayId, assignments, ownedBy);
+    throw error;
+  }
+  await releaseTargetWithConfirmation(deps, {
+    gatewayId: input.gatewayId,
+    operationId: ownedBy,
+    pod: targetPod,
+  });
+}
+
 export async function reconcileSurgeCustomerHandoff(
   deps: SurgeCustomerHandoffDeps,
   input: ReconcileSurgeCustomerHandoffInput,
@@ -369,57 +432,30 @@ export async function reconcileSurgeCustomerHandoff(
     return { ready: false };
   }
 
+  let assignments: SurgeAssignment[] | null = null;
+  if (input.requiresCustomerMigration && input.ownerlessOperatorPrewarm === true) {
+    assignments = await deps.readAssignments(input.gatewayId);
+    if (assignments.length === 0) {
+      await releaseTargetWithConfirmation(deps, {
+        gatewayId: input.gatewayId,
+        operationId: ownedBy,
+        pod: target,
+      });
+      return { ready: false };
+    }
+  }
+
   const sourcePod = sourceForTransfer(deps, input, source);
   if (!sourcePod) return { ready: false };
 
-  const assignments = await deps.readAssignments(input.gatewayId);
-  await restoreAbandonedSurgeAssignments(
-    deps,
-    input.gatewayId,
+  assignments ??= await deps.readAssignments(input.gatewayId);
+  await migrateAssignmentsAndReleaseTarget(deps, {
+    input,
     assignments,
+    sourcePod,
+    targetPod: target,
     ownedBy,
     observedPodUids,
-  );
-  assertAssignmentsAvailable(assignments, ownedBy);
-  try {
-    for (const assignment of assignments) {
-      if (assignment.state === "serving") {
-        await setAssignmentState(deps, input.gatewayId, assignment, "quiescing", ownedBy);
-        assignment.state = "quiescing";
-        assignment.updatedByOperationId = ownedBy;
-      }
-    }
-    await transferAssignments(deps, {
-      input,
-      assignments,
-      sourcePod,
-      targetPod: target,
-      ownedBy,
-    });
-  } catch (error) {
-    try {
-      for (const assignment of assignments) {
-        await deps.discardTargetCustomer({
-          gatewayId: input.gatewayId,
-          slug: assignment.slug,
-          operationId: ownedBy,
-          targetPod: target,
-        });
-      }
-    } catch (cleanupError) {
-      throw new Error(
-        `surge target cleanup failed; admission remains closed: ` +
-        `${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
-        { cause: error },
-      );
-    }
-    await restoreOwnedAssignments(deps, input.gatewayId, assignments, ownedBy);
-    throw error;
-  }
-  await releaseTargetWithConfirmation(deps, {
-    gatewayId: input.gatewayId,
-    operationId: ownedBy,
-    pod: target,
   });
   return { ready: false };
 }

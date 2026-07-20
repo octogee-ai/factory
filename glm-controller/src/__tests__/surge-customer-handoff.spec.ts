@@ -290,6 +290,54 @@ describe("surge customer handoff", () => {
     expect(h.events).toEqual([]);
   });
 
+  it("releases an empty release migration without requiring a healthy source pod", async () => {
+    const h = harness({
+      pods: [{ ...oldPod, ready: false }, targetPod],
+      assignments: [],
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "trial-op-000001",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      ownerlessOperatorPrewarm: true,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual(["release:target-uid"]);
+  });
+
+  it("leaves an empty same-release replacement to the pod-side readiness gate", async () => {
+    const h = harness({
+      pods: [{ ...oldPod, ready: false }, targetPod],
+      assignments: [],
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "trial-op-000001",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: false,
+      ownerlessOperatorPrewarm: true,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual([]);
+  });
+
+  it("does not bypass source health for an empty customer gateway release migration", async () => {
+    const h = harness({
+      pods: [{ ...oldPod, ready: false }, targetPod],
+      assignments: [],
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      ownerlessOperatorPrewarm: false,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual([]);
+  });
+
   it("reclaims an abandoned surge gate before retrying the verified handoff", async () => {
     const h = harness({
       assignments: [assignment("u1", "alice", {
