@@ -13,7 +13,7 @@ import { provisionGatewayAuthSecret } from "@octogee/core/secret-manager";
 import { listGatewayBuilds } from "@octogee/core/artifact-registry";
 import { addAdminFleetRoutes } from "@octogee/core/admin-fleet-router";
 import { addAdminCustomerRoutes } from "@octogee/core/admin-customer-router";
-import { deleteAuthUserTolerantOfMissing as deleteAuthUserLib } from "@octogee/core/firebase-auth-helpers";
+import { disableAuthUserAndRevokeSessions } from "@octogee/core/firebase-auth-helpers";
 import { MODEL_CATALOG } from "@octogee/shared/types/model-catalog";
 import { CONNECTOR_OAUTH_REVOCATION_TARGETS } from "@octogee/shared/types/connectors";
 import { modelRefForCatalogEntry } from "@octogee/shared/types/agent-models";
@@ -69,9 +69,9 @@ addAdminFleetRoutes(router, {
   workspaceSlugsForUser,
   provisionGatewayAuthSecret,
   listGatewayBuilds,
-  deleteAuthUserTolerantOfMissing: async (uid: string) => {
+  suspendAuthUser: async (uid: string) => {
     const { getAuth } = await import("firebase-admin/auth");
-    await deleteAuthUserLib(uid, getAuth());
+    await disableAuthUserAndRevokeSessions(uid, getAuth());
   },
   revokeConnectorGrantsForUser: (uid: string) =>
     revokeAllConnectorGrantsForUser(uid, CONNECTOR_OAUTH_REVOCATION_TARGETS, {

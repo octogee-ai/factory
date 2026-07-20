@@ -414,7 +414,7 @@ function buildDeps(store: FakeStore, overrides: Partial<HttpServerDeps> = {}): H
       created: true,
     })),
     listGatewayBuilds: vi.fn(async () => []),
-    deleteAuthUserTolerantOfMissing: vi.fn(async () => undefined),
+    suspendAuthUser: vi.fn(async () => undefined),
     revokeConnectorGrantsForUser: vi.fn(async () => undefined),
     ...overrides,
   };
@@ -497,15 +497,15 @@ describe("createHttpServer — admin gateway routes", () => {
     const order: string[] = [];
     const app = createHttpServer(buildDeps(store, {
       revokeConnectorGrantsForUser: vi.fn(async () => { order.push("revoke"); }),
-      deleteAuthUserTolerantOfMissing: vi.fn(async () => { order.push("delete-auth"); }),
+      suspendAuthUser: vi.fn(async () => { order.push("suspend-auth"); }),
     }));
 
     const res = await request(app)
       .post("/api/admin/customer/delete-me/delete")
       .set("Authorization", "Bearer admin-token");
 
-    expect(res.status).toBe(200);
-    expect(order).toEqual(["revoke", "delete-auth"]);
+    expect(res.status).toBe(202);
+    expect(order).toEqual(["suspend-auth", "revoke"]);
   });
 
   it("rejects unauthenticated requests with 401", async () => {

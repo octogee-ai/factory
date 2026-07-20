@@ -118,6 +118,12 @@ export function buildOperationCompletionUpdate(
       nextAttemptAt: FieldValue.delete(),
       waitingOn: FieldValue.delete(),
       ...output,
+      ...(result.scrubInputOnSuccess
+        ? {
+            input: FieldValue.delete(),
+            inputUid: FieldValue.delete(),
+          }
+        : {}),
     };
   }
 
@@ -125,7 +131,11 @@ export function buildOperationCompletionUpdate(
   const hasRetirementFencePending =
     result.output?.retirementFencePending !== null &&
     typeof result.output?.retirementFencePending === "object";
-  const classification = hasRetirementFencePending
+  const hasDeletionFencePending =
+    result.output?.deletionFencePending !== null &&
+    typeof result.output?.deletionFencePending === "object";
+  const hasLevelTriggeredFence = hasRetirementFencePending || hasDeletionFencePending;
+  const classification = hasLevelTriggeredFence
     ? "transient"
     : classifyOperationFailure(error);
   const attemptRecord: OperationAttemptRecord = {
@@ -138,7 +148,7 @@ export function buildOperationCompletionUpdate(
   };
   const attemptHistory = [...(op.attemptHistory ?? []), attemptRecord];
 
-  if (shouldRetry(op, result, classification, attempts, hasRetirementFencePending)) {
+  if (shouldRetry(op, result, classification, attempts, hasLevelTriggeredFence)) {
     const backoffMs = retryBackoffMs(attempts);
     return {
       status: "pending",
@@ -172,7 +182,7 @@ function shouldRetry(
   result: OperationResult,
   classification: OperationFailureClassification,
   attempts: number,
-  hasRetirementFencePending: boolean,
+  hasLevelTriggeredFence: boolean,
 ): boolean {
   if (classification !== "transient") return false;
   const hasDurableCleanup =
@@ -184,6 +194,6 @@ function shouldRetry(
     activeMigration.phase !== "aborted";
   return attempts < MAX_OPERATION_ATTEMPTS ||
     hasDurableCleanup ||
-    hasRetirementFencePending ||
+    hasLevelTriggeredFence ||
     hasActiveCustomerMigrationV2;
 }

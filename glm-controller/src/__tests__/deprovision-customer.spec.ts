@@ -44,6 +44,7 @@ function mkCleanup(overrides: Partial<CustomerCleanupContext> = {}): CustomerCle
     mmCoachUserId: "mm-coach-1",
     adminChannelId: "mm-c-admin",
     currentGatewayId: "gw-test",
+    credentialSecretNames: [],
     ...overrides,
   };
 }
@@ -65,7 +66,8 @@ function mkDeps(overrides: Partial<DeprovisionCustomerDeps> = {}): DeprovisionCu
         getUserChannels: vi.fn(async () => []),
       },
       nukeUserFirestore: vi.fn(async () => undefined),
-      deleteAvatar: vi.fn(async () => undefined),
+      deleteCustomerStorage: vi.fn(async () => undefined),
+      deleteCredentialSecrets: vi.fn(async () => undefined),
       deleteAuthUser: vi.fn(async () => undefined),
       log: vi.fn(),
     },
@@ -76,7 +78,7 @@ function mkDeps(overrides: Partial<DeprovisionCustomerDeps> = {}): DeprovisionCu
 }
 
 describe("createDeprovisionCustomerHandler — happy path", () => {
-  it("returns success=true and reports unmount-gateway + 6 cloud steps", async () => {
+  it("returns success=true and reports unmount-gateway + 7 cloud steps", async () => {
     const deps = mkDeps();
     const handler = createDeprovisionCustomerHandler(deps);
     const ctx = mkCtx();
@@ -90,9 +92,10 @@ describe("createDeprovisionCustomerHandler — happy path", () => {
       "unmount-gateway:done",
       "gitea:done",
       "mattermost:done",
-      "firestore:done",
       "storage:done",
       "hosting:skipped",
+      "credentials:done",
+      "firestore:done",
       "auth:done",
     ]);
   });
@@ -141,7 +144,7 @@ describe("createDeprovisionCustomerHandler — gateway has no live pod", () => {
 });
 
 describe("createDeprovisionCustomerHandler — unmount RPC failure", () => {
-  it("logs the failure, reports the step as failed, and continues with cloud cleanup", async () => {
+  it("reports failure for retry after continuing independent cloud cleanup", async () => {
     const deps = mkDeps({
       unmountFromGateway: vi.fn(async () => {
         throw new Error("gateway unreachable");
@@ -158,7 +161,8 @@ expect(deps.cloudCleanup.nukeUserFirestore).toHaveBeenCalled();
     expect(unmountSteps.map((s) => s.status)).toEqual(["running", "failed"]);
     expect(unmountSteps[1].error).toMatch(/gateway unreachable/);
     
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("unmount-gateway: gateway unreachable");
   });
 });
 
@@ -180,7 +184,8 @@ describe("createDeprovisionCustomerHandler — cloud step failure", () => {
           getUserChannels: vi.fn(async () => []),
         },
         nukeUserFirestore: vi.fn(),
-        deleteAvatar: vi.fn(),
+        deleteCustomerStorage: vi.fn(),
+        deleteCredentialSecrets: vi.fn(),
         deleteAuthUser: vi.fn(),
         log: vi.fn(),
       },

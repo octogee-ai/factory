@@ -36,6 +36,7 @@ import {
   weekWindowStartMs,
 } from "@octogee/shared/types/model-broker-usage";
 import { meterExhausted, readPlatformSpendState } from "./lib/platform-usage-allowance.js";
+import type { ModelBrokerOwnerAccessResolver } from "./lib/model-broker-owner-access.js";
 
 export interface LlmBrokerAppDeps {
   store: Pick<ModelBrokerTokenStore, "lookupToken">;
@@ -61,6 +62,7 @@ export interface LlmBrokerAppDeps {
   // authoritative on every call — mint-time token limits stop being load-bearing,
   // so plan changes and the trial daily decay reach the gate within one cache TTL.
   resolveGrant?: LiveOwnerGrantResolver;
+  resolveOwnerAccess?: ModelBrokerOwnerAccessResolver;
   // Structured gate-decision log: one line per proxied model call with the
   // owner, budget, and model routing needed to verify billing in TEST.
   log?: (msg: string, fields?: Record<string, unknown>) => void;
@@ -1256,6 +1258,23 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
         if (!record || record.capped !== true) {
           res.status(401).json({ error: "invalid broker token" });
           return;
+        }
+        if (deps.resolveOwnerAccess) {
+          let ownerActive: boolean;
+          try {
+            ownerActive = await deps.resolveOwnerAccess({
+              gatewayId: record.gatewayId,
+              ownerUid: record.ownerUid,
+            });
+          } catch (err) {
+            (deps.onMeteringError ?? (() => undefined))(err);
+            res.status(503).json({ error: "model broker owner resolution failed" });
+            return;
+          }
+          if (!ownerActive) {
+            res.status(403).json({ error: "model broker owner is not active" });
+            return;
+          }
         }
         if (!providerAllowedEndpoint(record.provider, req, url)) {
           res.status(404).json({ error: "unsupported LLM broker endpoint" });

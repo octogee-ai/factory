@@ -42,6 +42,7 @@ import {
   readOpenclawConfig,
   coachWiredInParsedConfig,
 } from "@octogee/core/local-coach-wired";
+import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 
 // The operator pod holds no platform credentials, so the bridge's coach reconcile
 // derives the mounted set locally (PVC + openclaw config) instead of reading
@@ -501,8 +502,12 @@ export async function verifyAuth(req: http.IncomingMessage): Promise<string | nu
   if (!token) return null;
 
   try {
-    const decoded = await admin.auth().verifyIdToken(token);
-    return decoded.uid;
+    const decoded = await admin.auth().verifyIdToken(token, true);
+    const userSnap = await db.collection("users").doc(decoded.uid).get();
+    const userData = userSnap.exists ? userSnap.data() : undefined;
+    return userData && accountAllowsInteractiveAccess(userData)
+      ? decoded.uid
+      : null;
   } catch (e) {
     const code =
       typeof e === 'object' && e !== null

@@ -146,7 +146,7 @@ export declare function resolveUserGatewayShellState(data: {
     gatewayProfile: GatewayProfile;
     shellsEnabled: boolean;
 };
-export type OperationKind = "add-gateway" | "migrate-customer" | "retire-gateway" | "restart-gateway" | "recycle-gateway" | "rollout" | "deprovision-customer";
+export type OperationKind = "add-gateway" | "migrate-customer" | "retire-gateway" | "restart-gateway" | "recycle-gateway" | "rollout" | "deprovision-customer" | "suspend-customer" | "erase-customer";
 export type OperationStatus = "pending" | "running" | "succeeded" | "failed" | "rolled-back";
 export type StepStatus = "pending" | "running" | "done" | "failed" | "skipped";
 export interface OperationStep {

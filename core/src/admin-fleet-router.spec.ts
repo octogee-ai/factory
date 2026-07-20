@@ -203,7 +203,7 @@ function mkAdminFleetRouteApp(opts: {
     workspaceSlugsForUser: (data) => data.username ? [data.username] : [],
     provisionGatewayAuthSecret: vi.fn(async () => ({})),
     listGatewayBuilds: vi.fn(async () => []),
-    deleteAuthUserTolerantOfMissing: vi.fn(async () => undefined),
+    suspendAuthUser: vi.fn(async () => undefined),
     revokeConnectorGrantsForUser: vi.fn(async () => undefined),
   });
   return { app, state };
@@ -618,24 +618,38 @@ describe("onboarding placement (post-cohorts)", () => {
 });
 
 describe("account deletion revokes connector grants at the provider first", () => {
-  function makeDeleteApp(users: Record<string, Record<string, unknown>>) {
+  function makeDeleteApp(
+    users: Record<string, Record<string, unknown>>,
+    otherDocs: Record<string, Record<string, unknown>> = {},
+  ) {
     const calls: string[] = [];
     const remaining = { ...users };
     const added: Record<string, unknown>[] = [];
+    let autoId = 0;
+    const ref = (path: string) => ({
+      id: path.split("/").at(-1)!,
+      path,
+      get: async () => ({
+        id: path.split("/").at(-1)!,
+        exists: path in otherDocs,
+        data: () => otherDocs[path],
+      }),
+      collection: (name: string) => ref(`${path}/${name}`),
+      doc: (id = `auto-${++autoId}`) => ref(`${path}/${id}`),
+    });
     const db = {
       collection: (name: string) => {
         if (name === "users") {
           return {
             doc: (id: string) => ({
+              id,
+              path: `users/${id}`,
               get: async () => ({
                 id,
                 exists: id in remaining,
                 data: () => remaining[id],
               }),
-              delete: async () => {
-                calls.push(`delete-doc:${id}`);
-                delete remaining[id];
-              },
+              collection: (sub: string) => ref(`users/${id}/${sub}`),
             }),
           };
         }
@@ -643,15 +657,30 @@ describe("account deletion revokes connector grants at the provider first", () =
           const chain = {
             where: () => chain,
             get: async () => ({ docs: [] as unknown[] }),
-            add: async (doc: Record<string, unknown>) => {
-              added.push(doc);
-              return { id: "op-1" };
-            },
+            doc: (id = `op-${++autoId}`) => ref(`${name}/${id}`),
           };
           return chain;
         }
-        return { doc: () => ({ get: async () => ({ exists: false, data: () => undefined }) }) };
+        return {
+          doc: (id = `auto-${++autoId}`) => ref(`${name}/${id}`),
+        };
       },
+      batch: () => ({
+        update: (target: { path?: string }, data: Record<string, unknown>) => {
+          calls.push(`batch:update:${target.path ?? "unknown"}`);
+          added.push(data);
+        },
+        set: (target: { path: string }, data: Record<string, unknown>) => {
+          calls.push(`batch:set:${target.path.split("/")[0]}`);
+          added.push(data);
+        },
+        delete: (target: { path: string }) => {
+          calls.push(`batch:delete:${target.path}`);
+        },
+        commit: async () => {
+          calls.push("batch:commit");
+        },
+      }),
     } as unknown as Firestore;
 
     const app = express();
@@ -666,8 +695,8 @@ describe("account deletion revokes connector grants at the provider first", () =
       workspaceSlugsForUser: (data) => (data.username ? [String(data.username)] : []),
       provisionGatewayAuthSecret: vi.fn(async () => ({})),
       listGatewayBuilds: vi.fn(async () => []),
-      deleteAuthUserTolerantOfMissing: vi.fn(async (uid: string) => {
-        calls.push(`delete-auth:${uid}`);
+      suspendAuthUser: vi.fn(async (uid: string) => {
+        calls.push(`suspend-auth:${uid}`);
       }),
       revokeConnectorGrantsForUser: vi.fn(async (uid: string) => {
         calls.push(`revoke:${uid}`);
@@ -676,26 +705,30 @@ describe("account deletion revokes connector grants at the provider first", () =
     return { app, calls, added, remaining };
   }
 
-  it("revokes before deleting for the inline lite-delete path (no workspace slug)", async () => {
+  it("schedules retention for a pre-provisioning account instead of deleting inline", async () => {
     const { app, calls } = makeDeleteApp({ u1: { email: "a@b.co" } });
 
-    await request(app).post("/customer/u1/delete").expect(200);
+    const res = await request(app).post("/customer/u1/delete").expect(202);
 
-    expect(calls).toEqual(["revoke:u1", "delete-auth:u1", "delete-doc:u1"]);
+    expect(res.body).toMatchObject({ status: "deletion_scheduled", slug: null });
+    expect(calls.at(-2)).toBe("suspend-auth:u1");
+    expect(calls.at(-1)).toBe("revoke:u1");
   });
 
-  it("revokes before queuing the deprovision operation (customer with a workspace slug)", async () => {
+  it("queues independent suspension and delayed erasure operations", async () => {
     const { app, calls, added } = makeDeleteApp({
       u2: { username: "acme", email: "c@d.co" },
     });
 
     const res = await request(app).post("/customer/u2/delete").expect(202);
 
-    expect(res.body).toMatchObject({ status: "queued", slug: "acme" });
-    expect(added).toHaveLength(1);
-    expect(added[0]).toMatchObject({ kind: "deprovision-customer", inputUid: "u2" });
-    expect(calls[0]).toBe("revoke:u2");
-    expect(calls).not.toContain("delete-auth:u2");
+    expect(res.body).toMatchObject({ status: "deletion_scheduled", slug: "acme" });
+    expect(added).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "suspend-customer", inputUid: "u2" }),
+      expect.objectContaining({ kind: "erase-customer", inputUid: "u2" }),
+    ]));
+    expect(calls.at(-2)).toBe("suspend-auth:u2");
+    expect(calls.at(-1)).toBe("revoke:u2");
   });
 
   it("does not revoke or delete when the user does not exist", async () => {
@@ -704,5 +737,47 @@ describe("account deletion revokes connector grants at the provider first", () =
     await request(app).post("/customer/ghost/delete").expect(404);
 
     expect(calls).toEqual([]);
+  });
+
+  it("moves an already scheduled erasure to now only after an explicit eraseNow request", async () => {
+    const { app, calls, added } = makeDeleteApp(
+      {
+        u3: {
+          username: "later",
+          accountLifecycle: {
+            status: "deletion_scheduled",
+            deletionId: "delete-3",
+            eraseAfter: Date.now() + 90 * 24 * 60 * 60 * 1_000,
+          },
+        },
+      },
+      {
+        "customerDeletionJobs/delete-3": {
+          erasureOperationId: "erase-3",
+        },
+        "glmOperations/erase-3": {
+          kind: "erase-customer",
+          status: "pending",
+        },
+      },
+    );
+
+    const res = await request(app)
+      .post("/customer/u3/delete")
+      .send({ eraseNow: true })
+      .expect(202);
+
+    expect(res.body).toMatchObject({
+      status: "erasure_requested",
+      deletionId: "delete-3",
+      erasureOperationId: "erase-3",
+    });
+    expect(added).toEqual(expect.arrayContaining([
+      expect.objectContaining({ "accountLifecycle.eraseAfter": expect.any(Number) }),
+      expect.objectContaining({ eraseAfter: expect.any(Number) }),
+      expect.objectContaining({ nextAttemptAt: expect.any(Number) }),
+    ]));
+    expect(calls).not.toContain("suspend-auth:u3");
+    expect(calls).not.toContain("revoke:u3");
   });
 });

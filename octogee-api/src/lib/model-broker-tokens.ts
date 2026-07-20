@@ -1,5 +1,14 @@
 import * as crypto from "node:crypto";
 import type { Firestore } from "firebase-admin/firestore";
+import {
+  MODEL_BROKER_GATEWAY_POINTERS_COLLECTION,
+  MODEL_BROKER_TOKENS_COLLECTION,
+} from "@octogee/shared/types/model-broker-usage";
+
+export {
+  MODEL_BROKER_GATEWAY_POINTERS_COLLECTION,
+  MODEL_BROKER_TOKENS_COLLECTION,
+} from "@octogee/shared/types/model-broker-usage";
 
 export type ModelBrokerProvider = "anthropic" | "openrouter" | "openai";
 
@@ -86,9 +95,6 @@ export interface ModelBrokerTokenStore {
   revokeGatewayToken(input: RevokeModelBrokerTokenInput): Promise<{ revoked: boolean }>;
   lookupToken(token: string, now?: number): Promise<ModelBrokerTokenRecord | null>;
 }
-
-export const MODEL_BROKER_TOKENS_COLLECTION = "modelBrokerTokens";
-export const MODEL_BROKER_GATEWAY_POINTERS_COLLECTION = "modelBrokerGatewayTokens";
 
 export function hashModelBrokerToken(token: string): string {
   return crypto.createHash("sha256").update(token, "utf8").digest("hex");

@@ -234,4 +234,41 @@ const db = buildDb({
       giteaOrg: "alice",
     });
   });
+
+  it("captures every persisted model credential secret name before deletion", async () => {
+    const db = buildDb({
+      "users/uid-alice": { username: "alice" },
+      "users/uid-alice/system/config": {
+        modelCredential: { secretName: "byok-alice-openai-compatible" },
+      },
+      "users/uid-alice/integrations/byosub": {
+        providers: {
+          openai: { provider: "openai", connected: true, status: "connected" },
+          anthropic: { provider: "anthropic", connected: true, status: "connected" },
+        },
+      },
+    });
+    const ctx = await loadCustomerCleanupContext(
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      "uid-alice",
+    );
+    expect(ctx?.credentialSecretNames).toEqual([
+      "byok-alice-openai-compatible",
+      "byosub-uid-alice-anthropic",
+      "byosub-uid-alice-openai",
+    ]);
+  });
+
+  it("fails context capture when a connected credential leaf is malformed", async () => {
+    const db = buildDb({
+      "users/uid-alice": { username: "alice" },
+      "users/uid-alice/integrations/byosub": {
+        providers: { openai: { connected: true, status: "connected" } },
+      },
+    });
+    await expect(loadCustomerCleanupContext(
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      "uid-alice",
+    )).rejects.toThrow(/malformed provider leaf/);
+  });
 });

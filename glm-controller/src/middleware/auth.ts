@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import type { Firestore } from "firebase-admin/firestore";
+import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 
 export interface RequireAdminDeps {
   
@@ -60,6 +61,10 @@ let userSnap: FirebaseFirestore.DocumentSnapshot;
         `[admin-auth] role lookup failed uid=${uid}: ${err instanceof Error ? err.message : String(err)}`,
       );
       next(err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
+    if (!userSnap.exists || !accountAllowsInteractiveAccess(userSnap.data())) {
+      res.status(403).json({ error: "Account suspended" });
       return;
     }
     if (userSnap.exists) {

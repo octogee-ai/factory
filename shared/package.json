@@ -21,6 +21,10 @@
       "types": "./dist/types/agent.d.ts",
       "default": "./dist/types/agent.js"
     },
+    "./types/account-lifecycle": {
+      "types": "./dist/types/account-lifecycle.d.ts",
+      "default": "./dist/types/account-lifecycle.js"
+    },
     "./types/agent-conversation": {
       "types": "./dist/types/agent-conversation.d.ts",
       "default": "./dist/types/agent-conversation.js"

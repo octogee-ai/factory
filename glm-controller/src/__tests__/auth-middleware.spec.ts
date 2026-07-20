@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from "vitest";
 import { createRequireAdmin } from "../middleware/auth";
 
 interface FakeStore {
-  users: Record<string, { email?: string }>;
+  users: Record<string, { email?: string; accountLifecycle?: { status?: string } }>;
   configs: Record<string, { role?: string }>;
 }
 
@@ -119,6 +119,26 @@ describe("createRequireAdmin", () => {
       .get("/probe")
       .set("Authorization", "Bearer ok");
     expect(res.status).toBe(403);
+  });
+
+  it("returns 403 for an admin whose account deletion is scheduled", async () => {
+    const app = buildApp({
+      verifyIdToken: async () => ({ uid: "alice" }),
+      store: {
+        users: {
+          alice: {
+            email: "alice@octogee.com",
+            accountLifecycle: { status: "deletion_scheduled" },
+          },
+        },
+        configs: { alice: { role: "admin" } },
+      },
+    });
+    const res = await request(app)
+      .get("/probe")
+      .set("Authorization", "Bearer ok");
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "Account suspended" });
   });
 
   it("returns 500 when Firestore throws on the role lookup", async () => {

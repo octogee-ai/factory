@@ -3,6 +3,7 @@
 import type { Firestore } from "firebase-admin/firestore";
 import { SYSTEM_CONFIG_REPO, WORKSPACE_REPO } from "@octogee/core/gitea-naming";
 import type { CustomerCleanupContext } from "../../handlers/deprovision-customer.js";
+import { resolveUserByosubCredentialRefs } from "@octogee/shared/types/model-credentials";
 
 export interface ContextDeps {
   db: Firestore;
@@ -100,6 +101,27 @@ async function resolveProjectSlugs(db: Firestore, slug: string): Promise<string[
   return slugs.sort();
 }
 
+async function resolveCredentialSecretNames(
+  db: Firestore,
+  uid: string,
+): Promise<string[]> {
+  const [configSnap, integrationSnap] = await Promise.all([
+    db.doc(`users/${uid}/system/config`).get(),
+    db.doc(`users/${uid}/integrations/byosub`).get(),
+  ]);
+  const config = configSnap.data() as Record<string, unknown> | undefined;
+  const modelCredential = config?.modelCredential as Record<string, unknown> | undefined;
+  const configured = asString(modelCredential?.secretName);
+  const byosub = resolveUserByosubCredentialRefs(uid, integrationSnap.data());
+  if (byosub.skipped.length > 0) {
+    throw new Error(`credential cleanup context invalid: ${byosub.skipped.join("; ")}`);
+  }
+  return Array.from(new Set([
+    ...(configured ? [configured] : []),
+    ...byosub.refs.map((ref) => ref.secretName),
+  ])).sort();
+}
+
 export async function loadCustomerCleanupContext(
   deps: ContextDeps,
   uid: string,
@@ -110,13 +132,21 @@ export async function loadCustomerCleanupContext(
   const slug = resolveSlug(userData);
   const gatewayId = resolveGatewayId(userData);
 
-  const [workspaceTeamId, mmCoachUserId, adminChannelId, repoNames, projectSlugs] =
+  const [
+    workspaceTeamId,
+    mmCoachUserId,
+    adminChannelId,
+    repoNames,
+    projectSlugs,
+    credentialSecretNames,
+  ] =
     await Promise.all([
       resolveWorkspaceTeamId(deps.db, slug),
       resolveCoachMmUserId(deps.db, uid),
       resolveAdminChannelId(deps.db, slug),
       resolveRepoNames(deps.db, slug),
       resolveProjectSlugs(deps.db, slug),
+      resolveCredentialSecretNames(deps.db, uid),
     ]);
 
   return {
@@ -131,5 +161,6 @@ export async function loadCustomerCleanupContext(
     mmCoachUserId,
     adminChannelId,
     currentGatewayId: gatewayId,
+    credentialSecretNames,
   };
 }

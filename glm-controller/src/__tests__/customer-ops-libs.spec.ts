@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { deleteAvatarObjects } from "../lib/customer-ops/avatars";
+import {
+  deleteAvatarObjects,
+  deleteCustomerStorageObjects,
+  verifyCustomerStorageErasure,
+} from "../lib/customer-ops/avatars";
 import { createGiteaCleanupClient, giteaUsername } from "../lib/customer-ops/gitea";
 import { createMmCleanupClient } from "../lib/customer-ops/mattermost";
 
@@ -205,5 +209,36 @@ describe("deleteAvatarObjects", () => {
     const deleteFiles = vi.fn(async () => undefined);
     await deleteAvatarObjects({ deleteFiles }, "uid-alice");
     expect(deleteFiles).toHaveBeenCalledWith({ prefix: "avatars/uid-alice/" });
+  });
+});
+
+describe("deleteCustomerStorageObjects", () => {
+  it("deletes avatars, post covers, and the complete workspace/project blob tree", async () => {
+    const deleteFiles = vi.fn(async () => undefined);
+    await deleteCustomerStorageObjects({ deleteFiles }, "uid-alice", "alice");
+    expect(deleteFiles.mock.calls.map(([arg]) => arg)).toEqual([
+      { prefix: "avatars/uid-alice/" },
+      { prefix: "post-covers/uid-alice/" },
+      { prefix: "customers/alice/" },
+    ]);
+  });
+
+  it("skips only the slug prefix for a pre-provisioning account", async () => {
+    const deleteFiles = vi.fn(async () => undefined);
+    await deleteCustomerStorageObjects({ deleteFiles }, "uid-lite", "");
+    expect(deleteFiles.mock.calls.map(([arg]) => arg)).toEqual([
+      { prefix: "avatars/uid-lite/" },
+      { prefix: "post-covers/uid-lite/" },
+    ]);
+  });
+
+  it("reports any object that remains under an identifying customer prefix", async () => {
+    const getFiles = vi.fn(async ({ prefix }: { prefix: string }) => [
+      prefix === "post-covers/uid-alice/" ? [{ name: `${prefix}cover.jpg` }] : [],
+    ]);
+    await expect(
+      verifyCustomerStorageErasure({ getFiles }, "uid-alice", "alice"),
+    ).resolves.toEqual(["gcs/post-covers/uid-alice/cover.jpg"]);
+    expect(getFiles).toHaveBeenCalledTimes(3);
   });
 });

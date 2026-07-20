@@ -5,6 +5,7 @@ import type { MmCleanupClient } from "./mattermost.js";
 
 export interface NukeCloudCtx {
   uid: string;
+  currentOperationId: string;
   slug: string;
   email: string | null;
   giteaOrg: string;
@@ -20,6 +21,7 @@ projectSlugs: string[];
   mmCoachUserId: string | null;
   
   adminChannelId: string | null;
+  credentialSecretNames: string[];
   
   skipHosting?: boolean;
   
@@ -29,9 +31,10 @@ projectSlugs: string[];
 export type NukeCloudStepKey =
   | "gitea"
   | "mattermost"
-  | "firestore"
   | "storage"
   | "hosting"
+  | "credentials"
+  | "firestore"
   | "auth";
 
 export interface NukeCloudStepResult {
@@ -45,9 +48,15 @@ export interface NukeCloudDeps {
   gitea: GiteaCleanupClient;
   mattermost: MmCleanupClient;
 
-  nukeUserFirestore: (uid: string, slug: string) => Promise<void>;
+  nukeUserFirestore: (
+    uid: string,
+    slug: string,
+    currentOperationId: string,
+  ) => Promise<void>;
 
-  deleteAvatar: (uid: string) => Promise<void>;
+  deleteCustomerStorage: (uid: string, slug: string) => Promise<void>;
+
+  deleteCredentialSecrets: (secretNames: string[]) => Promise<void>;
 
 deleteAuthUser: (uid: string) => Promise<void>;
 
@@ -62,7 +71,10 @@ export async function nukeUserCloudSide(
   const log = deps.log ?? (() => undefined);
   const results: NukeCloudStepResult[] = [];
 
-results.push(
+if (!ctx.slug) {
+  results.push({ key: "gitea", ok: true, skipped: true });
+} else {
+  results.push(
     await runStep("gitea", log, async () => {
       for (const repoName of ctx.repoNames) {
         await deps.gitea.deleteRepo(ctx.giteaOrg, repoName);
@@ -71,6 +83,7 @@ results.push(
       await deps.gitea.deleteGiteaUser(ctx.slug);
     }),
   );
+}
 
 results.push(
     await runStep("mattermost", log, async () => {
@@ -82,8 +95,8 @@ results.push(
         for (const id of channelIds) {
           await deps.mattermost.destroyChannel(id);
         }
-        await deps.mattermost.destroyUser(ctx.mmUserId);
       }
+      if (ctx.mmUserId) await deps.mattermost.destroyUser(ctx.mmUserId);
       if (ctx.adminChannelId) {
         await deps.mattermost.destroyChannel(ctx.adminChannelId);
       }
@@ -97,18 +110,12 @@ results.push(
   );
 
 results.push(
-    await runStep("firestore", log, async () => {
-      await deps.nukeUserFirestore(ctx.uid, ctx.slug);
-    }),
-  );
-
-results.push(
     await runStep("storage", log, async () => {
-      await deps.deleteAvatar(ctx.uid);
+      await deps.deleteCustomerStorage(ctx.uid, ctx.slug);
     }),
   );
 
-if (ctx.skipHosting || !deps.deleteHostingSites) {
+if (ctx.skipHosting || !deps.deleteHostingSites || !ctx.slug) {
     results.push({ key: "hosting", ok: true, skipped: true });
   } else {
     results.push(
@@ -117,6 +124,18 @@ if (ctx.skipHosting || !deps.deleteHostingSites) {
       }),
     );
   }
+
+  results.push(
+    await runStep("credentials", log, async () => {
+      await deps.deleteCredentialSecrets(ctx.credentialSecretNames);
+    }),
+  );
+
+  results.push(
+    await runStep("firestore", log, async () => {
+      await deps.nukeUserFirestore(ctx.uid, ctx.slug, ctx.currentOperationId);
+    }),
+  );
 
 if (ctx.skipAuth) {
     results.push({ key: "auth", ok: true, skipped: true });

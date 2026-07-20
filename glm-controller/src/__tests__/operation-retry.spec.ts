@@ -132,6 +132,23 @@ describe("buildOperationCompletionUpdate", () => {
     });
   });
 
+  it("atomically scrubs identifying operation input only on verified success", () => {
+    const update = buildOperationCompletionUpdate({
+      op: { attempts: 0, attemptHistory: [] },
+      result: {
+        steps: [],
+        success: true,
+        scrubInputOnSuccess: true,
+        output: { archiveId: "archive-random" },
+      },
+      steps: [],
+      now,
+    });
+    expect(update).toMatchObject({ status: "succeeded", output: { archiveId: "archive-random" } });
+    expect(update.input).toEqual(FieldValue.delete());
+    expect(update.inputUid).toEqual(FieldValue.delete());
+  });
+
   it("keeps a durable config cleanup obligation level-triggered after the normal retry cap", () => {
     const configCleanup = {
       migrationId: "mig-1",
@@ -177,6 +194,24 @@ describe("buildOperationCompletionUpdate", () => {
     expect(update.status).toBe("pending");
     expect(update.output).toEqual({ retirementFencePending });
     expect(update.nextAttemptAt).toBe(now + retryBackoffMs(MAX_OPERATION_ATTEMPTS + 1));
+  });
+
+  it("keeps a customer deletion context fence level-triggered after the normal retry cap", () => {
+    const deletionFencePending = { deletionId: "delete-1" };
+    const update = buildOperationCompletionUpdate({
+      op: { attempts: MAX_OPERATION_ATTEMPTS, attemptHistory: [] },
+      result: {
+        steps: [],
+        success: false,
+        error: "customer suspension cleanup context pending",
+        output: { deletionFencePending },
+      },
+      steps: [],
+      now,
+    });
+
+    expect(update.status).toBe("pending");
+    expect(update.output).toEqual({ deletionFencePending });
   });
 
   it("terminalizes a definitive unsupported or wrong-owner cleanup even when the obligation is retained for audit", () => {
