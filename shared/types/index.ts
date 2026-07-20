@@ -75,6 +75,7 @@ export {
   trialDaysRemaining,
 } from './billing.js';
 export type { BillingRail, EffectivePlan } from './billing.js';
+export { redactSecrets, redactStructuredSecrets } from './secret-redaction.js';
 
 export type {
   NotificationCategory,

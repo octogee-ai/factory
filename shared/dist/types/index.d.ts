@@ -9,6 +9,7 @@ export type { Channel, ChannelKind, ChannelMattermost, } from './channel.js';
 export type { Member, MemberRole, } from './member.js';
 export { WINDOW_LENGTH_HOURS, WINDOWS_PER_DAY, WINDOWS_PER_WEEK, WINDOW_BURST_MULTIPLIER, TRIAL_LENGTH_DAYS, planWeeklyBudgetUsd, planWindowBudgetUsd, resolveEffectivePlan, resolveTier, trialDayN, trialDaysRemaining, } from './billing.js';
 export type { BillingRail, EffectivePlan } from './billing.js';
+export { redactSecrets, redactStructuredSecrets } from './secret-redaction.js';
 export type { NotificationCategory, DeliveryChannel, NotificationAction, InboxDocument, } from './notifications.js';
 export type { GatewayStatus, GatewayState, GatewayLastError, CustomerSnapshot, } from './fleet-controller.js';
 export { CANONICAL_OPENCLAW_FORK_SHA, CANONICAL_OPENCLAW_VERSION, } from './openclaw-release.js';

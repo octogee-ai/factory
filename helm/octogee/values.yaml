@@ -323,6 +323,7 @@ opsAgent:
   serviceAccountName: octogee-ops-agent
   gcpServiceAccount: octogee-ops-agent@octogee.iam.gserviceaccount.com
   loggingProjectId: octogee
+  loggingResourceName: projects/octogee/locations/global/buckets/ops-agent-prod/views/ops-agent
   appUrl: https://app.octogee.com
   openrouterSecret:
     name: octogee-openrouter

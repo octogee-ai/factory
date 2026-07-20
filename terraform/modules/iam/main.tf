@@ -65,10 +65,41 @@ resource "google_service_account_iam_member" "workload_identity_ops_agent" {
   member             = "serviceAccount:${var.cluster_project_id}.svc.id.goog[${var.namespace}/octogee-ops-agent]"
 }
 
-resource "google_project_iam_member" "ops_agent_logging_viewer" {
+resource "google_logging_project_bucket_config" "ops_agent" {
+  project        = var.cluster_project_id
+  location       = "global"
+  bucket_id      = "ops-agent-${var.environment}"
+  retention_days = 7
+}
+
+resource "google_logging_project_sink" "ops_agent" {
+  project                = var.cluster_project_id
+  name                   = "ops-agent-${var.environment}"
+  destination            = "logging.googleapis.com/${google_logging_project_bucket_config.ops_agent.id}"
+  filter                 = "resource.type=\"k8s_container\" AND resource.labels.namespace_name=\"${var.namespace}\""
+  unique_writer_identity = true
+}
+
+resource "google_project_iam_member" "ops_agent_sink_writer" {
   project = var.cluster_project_id
-  role    = "roles/logging.viewer"
-  member  = "serviceAccount:${google_service_account.ops_agent.email}"
+  role    = "roles/logging.bucketWriter"
+  member  = google_logging_project_sink.ops_agent.writer_identity
+}
+
+resource "google_logging_log_view" "ops_agent" {
+  name        = "ops-agent"
+  bucket      = google_logging_project_bucket_config.ops_agent.id
+  description = "Read-only ${var.environment} namespace logs for the Octogee Ops Agent"
+  filter      = "resource.type=\"k8s_container\""
+}
+
+resource "google_logging_log_view_iam_member" "ops_agent" {
+  parent   = google_logging_log_view.ops_agent.parent
+  location = google_logging_log_view.ops_agent.location
+  bucket   = google_logging_log_view.ops_agent.bucket
+  name     = google_logging_log_view.ops_agent.name
+  role     = "roles/logging.viewAccessor"
+  member   = "serviceAccount:${google_service_account.ops_agent.email}"
 }
 
 # ── Cloud SQL Client role ───────────────────────────────────────────────────

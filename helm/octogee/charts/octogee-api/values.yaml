@@ -65,7 +65,7 @@ secrets:
   - envName: OPS_AGENT_BEARER_TOKEN
     secretName: ops-agent-bearer
     secretKey: bearer_token
-    optional: false
+    optional: true
   - envName: STRIPE_SECRET_KEY
     secretName: stripe-secrets
     secretKey: secret_key

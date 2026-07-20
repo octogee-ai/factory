@@ -7,7 +7,7 @@ import {
   DEFAULT_FREE_TIER_MODEL_REF,
   PLATFORM_CONFIG_COLLECTION,
   PLATFORM_MODEL_CONFIG_DOC,
-  parsePlatformModelConfig,
+  resolveFreeTierModel,
 } from "@octogee/shared/types/platform-config";
 
 export interface ModelCredentialSyncUserData {
@@ -75,7 +75,10 @@ async function freeTierModelRefForSync(logWarn: (msg: string) => void): Promise<
       .collection(PLATFORM_CONFIG_COLLECTION)
       .doc(PLATFORM_MODEL_CONFIG_DOC)
       .get();
-    return parsePlatformModelConfig(snap.data())?.freeTierModelRef ?? DEFAULT_FREE_TIER_MODEL_REF;
+    const configured = (snap.data() as { freeTierModelRef?: unknown } | undefined)?.freeTierModelRef;
+    return typeof configured === "string" && resolveFreeTierModel(configured)
+      ? configured
+      : DEFAULT_FREE_TIER_MODEL_REF;
   } catch (err) {
     logWarn(
       `free-tier dial read failed for model credential sync — sending the compiled default: ${

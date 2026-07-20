@@ -24,6 +24,8 @@ import {
   PLATFORM_MODEL_CONFIG_DOC,
   parsePlatformConnectConfig,
   parsePlatformModelConfig,
+  resolveFreeTierModel,
+  resolveOpsAgentModel,
 } from "@octogee/shared/types/platform-config";
 import {
   platformConnectDoc,
@@ -74,17 +76,29 @@ const platformCatalog = MODEL_CATALOG.map((entry) => ({
 router.get("/platform-config", async (_req, res) => {
   try {
     const snap = await platformModelDoc().get();
-    const parsed = parsePlatformModelConfig(snap.data());
-    if (snap.data() !== undefined && !parsed) {
-      logger.warn("[admin] platformConfig/models carries an invalid model ref — serving compiled defaults", {
-        freeTierModelRef: (snap.data() as { freeTierModelRef?: unknown })?.freeTierModelRef,
-        opsAgentModelRef: (snap.data() as { opsAgentModelRef?: unknown })?.opsAgentModelRef,
+    const data = snap.data() as Record<string, unknown> | undefined;
+    const freeTierModelRef = typeof data?.freeTierModelRef === "string" &&
+      resolveFreeTierModel(data.freeTierModelRef)
+      ? data.freeTierModelRef
+      : DEFAULT_FREE_TIER_MODEL_REF;
+    const opsAgentModelRef = typeof data?.opsAgentModelRef === "string" &&
+      resolveOpsAgentModel(data.opsAgentModelRef)
+      ? data.opsAgentModelRef
+      : DEFAULT_OPS_AGENT_MODEL_REF;
+    const invalidFreeTierDial = data?.freeTierModelRef !== undefined &&
+      freeTierModelRef !== data.freeTierModelRef;
+    const invalidOpsDial = data?.opsAgentModelRef !== undefined &&
+      opsAgentModelRef !== data.opsAgentModelRef;
+    if (invalidFreeTierDial || invalidOpsDial) {
+      logger.warn("[admin] platformConfig/models carries an invalid model ref — defaulting invalid fields", {
+        freeTierModelRef: data.freeTierModelRef,
+        opsAgentModelRef: data.opsAgentModelRef,
       });
     }
     res.json({
-      freeTierModelRef: parsed?.freeTierModelRef ?? DEFAULT_FREE_TIER_MODEL_REF,
+      freeTierModelRef,
       defaultFreeTierModelRef: DEFAULT_FREE_TIER_MODEL_REF,
-      opsAgentModelRef: parsed?.opsAgentModelRef ?? DEFAULT_OPS_AGENT_MODEL_REF,
+      opsAgentModelRef,
       defaultOpsAgentModelRef: DEFAULT_OPS_AGENT_MODEL_REF,
       catalog: platformCatalog,
       opsCatalog: platformCatalog.filter((entry) => entry.provider === "openrouter"),

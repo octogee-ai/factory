@@ -132,6 +132,22 @@ describe("model credential sync trigger", () => {
     expect(body.freeTierModelRef).toBe("anthropic/claude-haiku-4-5");
   });
 
+  it("keeps the free-tier dial when the independent Ops dial is invalid", async () => {
+    platformModelDoc = {
+      freeTierModelRef: "anthropic/claude-haiku-4-5",
+      opsAgentModelRef: "anthropic/claude-haiku-4-5",
+    };
+    internalFetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
+    await postGatewayModelCredentialSync({
+      gatewayId: "bender",
+      userData,
+      env: { K8S_NAMESPACE: "octogee-test", BYOT_SYNC_INTERNAL_SIGNING_SECRET: "sync-secret" },
+    });
+
+    const body = JSON.parse(internalFetchSpy.mock.calls[0][1].body as string);
+    expect(body.freeTierModelRef).toBe("anthropic/claude-haiku-4-5");
+  });
+
   it("serves the compiled default when the dial read fails (loud, never blocking the sync)", async () => {
     platformModelDocError = new Error("firestore down");
     internalFetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));

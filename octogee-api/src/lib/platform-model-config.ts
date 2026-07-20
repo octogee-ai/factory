@@ -5,7 +5,6 @@ import {
   DEFAULT_OPS_AGENT_MODEL_REF,
   PLATFORM_CONFIG_COLLECTION,
   PLATFORM_MODEL_CONFIG_DOC,
-  parsePlatformModelConfig,
   resolveFreeTierModel,
   resolveOpsAgentModel,
   type ResolvedFreeTierModel,
@@ -59,9 +58,11 @@ export function createCachedFreeTierModelResolver(opts: {
       const data = snap.data();
       let value = fallback;
       if (data !== undefined) {
-        const parsed = parsePlatformModelConfig(data);
-        if (parsed) {
-          value = mustResolve(parsed.freeTierModelRef);
+        const configured = (data as { freeTierModelRef?: unknown }).freeTierModelRef;
+        if (configured === undefined) {
+          value = fallback;
+        } else if (typeof configured === "string" && resolveFreeTierModel(configured)) {
+          value = mustResolve(configured);
         } else {
           opts.onError?.(
             new Error(
@@ -103,9 +104,11 @@ export function createCachedOpsAgentModelResolver(opts: {
       const data = snap.data();
       let value = fallback;
       if (data !== undefined) {
-        const parsed = parsePlatformModelConfig(data);
-        if (parsed) {
-          value = mustResolveOpsAgent(parsed.opsAgentModelRef);
+        const configured = (data as { opsAgentModelRef?: unknown }).opsAgentModelRef;
+        if (configured === undefined) {
+          value = fallback;
+        } else if (typeof configured === "string" && resolveOpsAgentModel(configured)) {
+          value = mustResolveOpsAgent(configured);
         } else {
           opts.onError?.(
             new Error(

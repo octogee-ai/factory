@@ -160,7 +160,7 @@ schemas and detail; ask `octogee_ask_ops` when unsure.
 Capability preflight: before claiming Octogee or OpenClaw cannot do something, or
 suggesting local/manual work, external hosting, OAuth code, or user-managed credentials,
 call `octogee_ask_ops`. Skip this for ordinary project coding supported by current tools.
-Never send credentials, tokens, or secret values to Ops.
+Never send credentials to Ops. Use only `octogee_ask_ops`, never an internal endpoint.
 
 If the current gateway or plan lacks a capability, do not bypass it. Ask
 `octogee_ask_ops` for the supported path and relay its upgrade recommendation.

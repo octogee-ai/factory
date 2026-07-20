@@ -93,6 +93,24 @@ describe("admin platform-config", () => {
     expect(res.body.opsAgentModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
   });
 
+  it("GET resolves each model dial independently when its sibling is invalid", async () => {
+    platformDocs["platformConfig/models"] = {
+      freeTierModelRef: "anthropic/claude-haiku-4-5",
+      opsAgentModelRef: "anthropic/claude-haiku-4-5",
+    };
+    let res = await request(app).get("/api/admin/platform-config");
+    expect(res.body.freeTierModelRef).toBe("anthropic/claude-haiku-4-5");
+    expect(res.body.opsAgentModelRef).toBe("platform-openrouter/z-ai/glm-5.2");
+
+    platformDocs["platformConfig/models"] = {
+      freeTierModelRef: "invalid/model",
+      opsAgentModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+    };
+    res = await request(app).get("/api/admin/platform-config");
+    expect(res.body.freeTierModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
+    expect(res.body.opsAgentModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
+  });
+
   it("GET falls back to the default when the stored ref left the catalog", async () => {
     platformDocs["platformConfig/models"] = { freeTierModelRef: "platform-openrouter/gone/model" };
     const res = await request(app).get("/api/admin/platform-config");
