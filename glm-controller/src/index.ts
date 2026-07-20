@@ -391,8 +391,7 @@ function gatewayServiceInternalUrl(gatewayId: string): string {
 export function versionFromImageTag(imageTag: string | undefined): string {
   if (!imageTag) return "unknown";
   const [reference] = imageTag.split("@", 1);
-  const [buildSha] = reference.split("-oc");
-  return buildSha || reference;
+  return reference;
 }
 
 function parseNonNegativeInt(raw: string | undefined, fallback: number): number {

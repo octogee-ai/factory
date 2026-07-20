@@ -37,6 +37,14 @@ describe("legacy bootstrap is disabled", () => {
 });
 
 describe("versionFromImageTag", () => {
+  it("publishes the complete OpenClaw-qualified tag as the operator observed version", () => {
+    expect(versionFromImageTag("cf36a88-oc2026.7.1")).toBe("cf36a88-oc2026.7.1");
+  });
+
+  it("preserves an unqualified immutable tag exactly", () => {
+    expect(versionFromImageTag("cf36a88")).toBe("cf36a88");
+  });
+
   it("uses the immutable tag name for a digest-pinned candidate heartbeat", () => {
     expect(versionFromImageTag(`agent-conversation-w9a-8c356bb1@sha256:${"a".repeat(64)}`)).toBe(
       "agent-conversation-w9a-8c356bb1",
