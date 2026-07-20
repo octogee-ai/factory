@@ -48,20 +48,34 @@ function cookieValue(header: string | undefined): string | null {
   return null;
 }
 
+function sessionBinding(
+  profile: unknown,
+  rawPermissionSetIds: unknown,
+  grantRevision: unknown,
+): { ids: GatewayPermissionSetId[]; revision: number | null } | null {
+  const ids = Array.isArray(rawPermissionSetIds) && rawPermissionSetIds.length === 0
+    ? []
+    : permissionSetIds(rawPermissionSetIds);
+  if (profile === "native-owner") {
+    return ids?.length === 0 && grantRevision === null ? { ids: [], revision: null } : null;
+  }
+  const delegated = profile === "native-co-owner" || profile === "delegated-config" ||
+    profile === "delegated-read";
+  return delegated && ids && Number.isSafeInteger(grantRevision) && (grantRevision as number) >= 1
+    ? { ids, revision: grantRevision as number }
+    : null;
+}
+
 function parsePayload(value: unknown): SessionPayload | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const item = value as Record<string, unknown>;
   const profile = item.prf;
-  const ids = Array.isArray(item.ps) && item.ps.length === 0 ? [] : permissionSetIds(item.ps);
-  const owner = profile === "native-owner" && ids?.length === 0 && item.gr === null;
-  const delegated = (profile === "native-co-owner" || profile === "delegated-config" ||
-    profile === "delegated-read") && ids !== null && Number.isSafeInteger(item.gr) &&
-    (item.gr as number) >= 1;
+  const binding = sessionBinding(profile, item.ps, item.gr);
   return typeof item.sid === "string" && item.sid.length > 0 &&
     typeof item.uid === "string" && item.uid.length > 0 &&
     typeof item.gid === "string" && item.gid.length > 0 &&
     typeof item.rid === "string" && item.rid.length > 0 &&
-    (owner || delegated) &&
+    binding !== null &&
     typeof item.abs === "number" && Number.isFinite(item.abs)
     ? item as unknown as SessionPayload
     : null;

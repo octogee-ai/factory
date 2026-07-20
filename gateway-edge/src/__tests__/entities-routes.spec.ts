@@ -310,4 +310,28 @@ describe("entities routes", () => {
       },
     });
   });
+
+  it("marks workspace membership revoking before Mattermost removal", async () => {
+    h.uid = "owner-1";
+    h.resolveWorkspaceUid.mockResolvedValue("owner-1");
+    h.getWorkspaceMmContext.mockResolvedValue({ generalChannelId: "general-ch" });
+    h.docs.set("users/owner-1", { mattermost: { userId: "mm-owner" } });
+    h.docs.set("users/member-1", { mattermost: { userId: "mmmember" } });
+    h.docs.set("workspaces/acme/members/member-1", {
+      canonicalSource: "mattermost-general",
+      canonicalState: "active",
+    });
+    h.removeActivityPairMember.mockRejectedValueOnce(new Error("chat unavailable"));
+
+    const res = await request(app()).delete("/api/entities/workspace/acme/members/mmmember");
+
+    expect(res.status).toBe(500);
+    expect(h.docs.get("workspaces/acme/members/member-1")).toMatchObject({
+      canonicalState: "revoking",
+    });
+    expect(h.writes).not.toContainEqual({
+      method: "delete",
+      path: "workspaces/acme/members/member-1",
+    });
+  });
 });

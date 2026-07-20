@@ -70,6 +70,13 @@ function record(value) {
 function nonEmptyString(value) {
     return typeof value === "string" && value.length > 0;
 }
+export function isCanonicalWorkspaceMembership(value) {
+    const membership = record(value);
+    return membership?.canonicalSource === "mattermost-general" &&
+        membership.canonicalState === "active" &&
+        nonEmptyString(membership.mattermostChannelId) &&
+        nonEmptyString(membership.mattermostUserId);
+}
 export function isGatewayPermissionSetId(value) {
     return typeof value === "string" &&
         GATEWAY_PERMISSION_SET_IDS.includes(value);
@@ -136,6 +143,12 @@ function delegateProfile(ids) {
         return "delegated-read";
     return null;
 }
+function grantMatchesPrincipal(grant, gateway, uid) {
+    return grant.gatewayId === gateway.gatewayId &&
+        grant.workspaceSlug === gateway.workspaceSlug &&
+        grant.ownerUid === gateway.ownerUid &&
+        grant.granteeUid === uid;
+}
 export function resolveGatewayPrincipalAccess(input) {
     if (!input.gateway.ownerUid || !input.gateway.workspaceSlug) {
         return { kind: "denied", reason: "gateway_unowned" };
@@ -157,12 +170,9 @@ export function resolveGatewayPrincipalAccess(input) {
         return { kind: "denied", reason: "grant_missing" };
     }
     const grant = parseGrant(input.grant);
-    if (!grant ||
-        grant.gatewayId !== input.gateway.gatewayId ||
-        grant.workspaceSlug !== input.gateway.workspaceSlug ||
-        grant.ownerUid !== input.gateway.ownerUid ||
-        grant.granteeUid !== input.uid)
+    if (!grant || !grantMatchesPrincipal(grant, input.gateway, input.uid)) {
         return { kind: "denied", reason: "grant_invalid" };
+    }
     if (grant.state === "revoked")
         return { kind: "denied", reason: "grant_revoked" };
     if (grant.expiresAt !== null && grant.expiresAt <= (input.now ?? Date.now())) {

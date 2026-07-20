@@ -17,6 +17,12 @@ interface PluginApi {
   logger?: { info?: (message: string) => void };
 }
 
+function preparedOperation(operation: unknown): "grant" | "change" | "revoke" {
+  if (operation === "prepare_revoke") return "revoke";
+  if (operation === "prepare_change") return "change";
+  return "grant";
+}
+
 export default definePluginEntry({
   id: "octogee-access-tools",
   name: "Octogee Access Tools",
@@ -56,11 +62,7 @@ export default definePluginEntry({
           if (input.operation === "status") {
             return jsonResult(await accessApprovalStatus(String(input.approvalId ?? ""), options));
           }
-          const operation = input.operation === "prepare_revoke"
-            ? "revoke"
-            : input.operation === "prepare_change"
-              ? "change"
-              : "grant";
+          const operation = preparedOperation(input.operation);
           return jsonResult(await prepareAccess({
             operation,
             granteeUid: input.granteeUid,

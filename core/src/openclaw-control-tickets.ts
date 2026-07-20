@@ -124,6 +124,23 @@ function brokerProfile(value: unknown): OpenClawBrokerProfile | null {
     : null;
 }
 
+function ticketBinding(
+  profile: OpenClawBrokerProfile,
+  rawPermissionSetIds: unknown,
+  grantRevision: unknown,
+): { ids: GatewayPermissionSetId[]; grantRevision: number | null } | null {
+  if (profile === "native-owner") {
+    return Array.isArray(rawPermissionSetIds) && rawPermissionSetIds.length === 0 &&
+      grantRevision === null
+      ? { ids: [], grantRevision: null }
+      : null;
+  }
+  const ids = permissionSetIds(rawPermissionSetIds);
+  return ids && Number.isSafeInteger(grantRevision) && (grantRevision as number) >= 1
+    ? { ids, grantRevision: grantRevision as number }
+    : null;
+}
+
 function parseOpenClawControlTicket(
   document: Record<string, unknown> | undefined,
 ): ParsedOpenClawControlTicket | null {
@@ -139,18 +156,14 @@ function parseOpenClawControlTicket(
     redeemedAt,
   } = document;
   const profile = brokerProfile(rawProfile);
-  const ids = rawPermissionSetIds === undefined ? null : permissionSetIds(rawPermissionSetIds);
-  const ownerBinding = profile === "native-owner" && Array.isArray(rawPermissionSetIds) &&
-    rawPermissionSetIds.length === 0 && grantRevision === null;
-  const delegateBinding = profile !== "native-owner" && ids !== null &&
-    Number.isSafeInteger(grantRevision) && (grantRevision as number) >= 1;
+  const binding = profile ? ticketBinding(profile, rawPermissionSetIds, grantRevision) : null;
   if (
     !nonEmptyString(uid) ||
     !nonEmptyString(gatewayId) ||
     !nonEmptyString(revisionId) ||
     !finiteNumber(expiresAt) ||
     !profile ||
-    (!ownerBinding && !delegateBinding)
+    !binding
   ) {
     return null;
   }
@@ -159,8 +172,8 @@ function parseOpenClawControlTicket(
     gatewayId,
     revisionId,
     brokerProfile: profile,
-    permissionSetIds: ownerBinding ? [] : ids!,
-    grantRevision: ownerBinding ? null : grantRevision as number,
+    permissionSetIds: binding.ids,
+    grantRevision: binding.grantRevision,
     expiresAt,
     redeemedAt,
   };

@@ -16,15 +16,18 @@ import { isOpenClawControlRevisionRuntimeReady } from "@octogee/core/openclaw-co
 import {
   GATEWAY_ACCESS_GRANTS_COLLECTION,
   gatewayAccessGrantId,
+  isCanonicalWorkspaceMembership,
   permissionSetIds,
   resolveGatewayPrincipalAccess,
   type GatewayPermissionSetId,
+  type GatewayPrincipalAccess,
   type OpenClawBrokerProfile,
   type ResolvedGatewayAccess,
 } from "@octogee/core/gateway-principal-access";
 import { isGatewayDesiredDoc, isGatewayRuntimeDoc } from "@octogee/shared/types/gateway-releases";
 import { isGatewayClassControlUiAccessEnabled, resolveGatewayClass } from "@octogee/shared/types/glm";
 import { revisionIdFromGatewayPodName } from "../lib/gateway-pod-revision.js";
+import { setGatewayAccessDenialAudit } from "../../../gateway-edge/src/lib/gateway-access-audit.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -191,7 +194,7 @@ async function storedPrincipalAccess(args: {
   gatewayId: string;
   uid: string;
   now: number;
-}): Promise<ResolvedGatewayAccess | null> {
+}): Promise<GatewayPrincipalAccess | null> {
   const authorization = gatewayAuthorizationFromRootDocument(args.root, args.gatewayId);
   if (!authorization) return null;
   const ownerUid = authorization.config.ownerUid;
@@ -217,10 +220,37 @@ async function storedPrincipalAccess(args: {
     gateway: { gatewayId: args.gatewayId, ownerUid, workspaceSlug },
     uid: args.uid,
     grant: grantSnap.exists ? grantSnap.data() : null,
-    isWorkspaceMember: memberSnap.exists,
+    isWorkspaceMember: memberSnap.exists && isCanonicalWorkspaceMembership(memberSnap.data()),
     now: args.now,
   });
-  return delegated.kind === "denied" ? null : delegated;
+  return delegated;
+}
+
+function auditPrincipalDenial(
+  db: Firestore,
+  tx: Transaction,
+  root: unknown,
+  gatewayId: string,
+  uid: string,
+  principal: GatewayPrincipalAccess,
+  now: number,
+): void {
+  const authorization = gatewayAuthorizationFromRootDocument(root, gatewayId);
+  const ownerUid = authorization?.config.ownerUid;
+  const workspaceSlug = authorization?.config.builderSlug;
+  if (!ownerUid || !workspaceSlug || uid === ownerUid) return;
+  setGatewayAccessDenialAudit(db, tx, {
+    gatewayId,
+    workspaceSlug,
+    ownerUid,
+    actorUid: uid,
+    granteeUid: uid,
+    reason: principal.kind === "denied" ? principal.reason : "binding_changed",
+    source: "system",
+    now,
+    beforePermissionSetIds: principal.kind === "denied" ? [] : principal.permissionSetIds,
+    beforeRevision: principal.kind === "denied" ? null : principal.grantRevision,
+  });
 }
 
 function isReadyLiveServingRevision(
@@ -246,6 +276,29 @@ export function openClawControlSessionHash(sessionId: string): string {
   return createHash("sha256").update("openclaw-control-session\0").update(sessionId).digest("hex");
 }
 
+function controlProfile(value: unknown): OpenClawBrokerProfile | null {
+  return value === "native-owner" || value === "native-co-owner" ||
+    value === "delegated-config" || value === "delegated-read"
+    ? value
+    : null;
+}
+
+function controlSessionBinding(
+  profile: OpenClawBrokerProfile,
+  rawPermissionSetIds: unknown,
+  grantRevision: unknown,
+): { ids: GatewayPermissionSetId[]; revision: number | null } | null {
+  const ids = Array.isArray(rawPermissionSetIds) && rawPermissionSetIds.length === 0
+    ? []
+    : permissionSetIds(rawPermissionSetIds);
+  if (profile === "native-owner") {
+    return ids?.length === 0 && grantRevision === null ? { ids: [], revision: null } : null;
+  }
+  return ids && Number.isSafeInteger(grantRevision) && (grantRevision as number) >= 1
+    ? { ids, revision: grantRevision as number }
+    : null;
+}
+
 function parseSession(
   value: unknown,
   gatewayId: string,
@@ -255,20 +308,14 @@ function parseSession(
   const item = record(value);
   if (!item) return null;
   const uid = boundedString(item.uid, 128);
-  const profile = item.brokerProfile === "native-owner" || item.brokerProfile === "native-co-owner" ||
-    item.brokerProfile === "delegated-config" || item.brokerProfile === "delegated-read"
-    ? item.brokerProfile
+  const profile = controlProfile(item.brokerProfile);
+  const binding = profile
+    ? controlSessionBinding(profile, item.permissionSetIds, item.grantRevision)
     : null;
-  const ids = Array.isArray(item.permissionSetIds) && item.permissionSetIds.length === 0
-    ? []
-    : permissionSetIds(item.permissionSetIds);
-  const ownerBinding = profile === "native-owner" && ids?.length === 0 && item.grantRevision === null;
-  const delegateBinding = profile !== "native-owner" && ids !== null &&
-    Number.isSafeInteger(item.grantRevision) && (item.grantRevision as number) >= 1;
   if (
     !uid ||
     !profile ||
-    (!ownerBinding && !delegateBinding) ||
+    !binding ||
     item.gatewayId !== gatewayId ||
     item.revisionId !== revisionId ||
     typeof item.expiresAt !== "number" ||
@@ -282,8 +329,8 @@ function parseSession(
     gatewayId,
     revisionId,
     brokerProfile: profile,
-    permissionSetIds: ids!,
-    grantRevision: ownerBinding ? null : item.grantRevision as number,
+    permissionSetIds: binding.ids,
+    grantRevision: binding.revision,
     expiresAt: item.expiresAt,
   };
 }
@@ -370,7 +417,12 @@ async function sessionAccessInTransaction(args: {
     uid: session.uid,
     now: args.now,
   });
-  if (!principal || !accessBindingMatches(principal, session)) {
+  if (!principal || principal.kind === "denied" || !accessBindingMatches(principal, session)) {
+    if (principal) {
+      auditPrincipalDenial(
+        args.db, args.tx, root, args.gatewayId, session.uid, principal, args.now,
+      );
+    }
     return { kind: CAPABILITY_DISABLED };
   }
   const authorization = controlUiAuthorization(root, args.gatewayId, principal);
@@ -647,10 +699,22 @@ async function redeemAttemptInTransaction(
       uid: inspected.uid,
       now: attemptAt,
     });
-    const authorization = principal
+    const authorization = principal && principal.kind !== "denied"
       ? controlUiAuthorization(root, authenticated.bound.gatewayId, principal)
       : null;
-    if (!authorization || !principal || !accessBindingMatches(principal, inspected)) {
+    if (!authorization || !principal || principal.kind === "denied" ||
+      !accessBindingMatches(principal, inspected)) {
+      if (principal) {
+        auditPrincipalDenial(
+          context.db,
+          tx,
+          root,
+          authenticated.bound.gatewayId,
+          inspected.uid,
+          principal,
+          attemptAt,
+        );
+      }
       setRedeemAudit(context, tx, {
         ...baseAudit,
         uid: inspected.uid,

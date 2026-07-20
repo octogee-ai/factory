@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   GATEWAY_PERMISSION_SETS,
   gatewayAccessGrantId,
+  isCanonicalWorkspaceMembership,
   resolveGatewayPrincipalAccess,
 } from "./gateway-principal-access.js";
 
@@ -28,6 +29,24 @@ function grant(overrides: Record<string, unknown> = {}) {
 }
 
 describe("gateway principal access", () => {
+  it("accepts only a server-maintained Mattermost general-channel membership assertion", () => {
+    expect(isCanonicalWorkspaceMembership({ role: "member" })).toBe(false);
+    expect(isCanonicalWorkspaceMembership({
+      role: "member",
+      canonicalSource: "mattermost-general",
+      canonicalState: "active",
+      mattermostChannelId: "channel-1",
+      mattermostUserId: "user-1",
+    })).toBe(true);
+    expect(isCanonicalWorkspaceMembership({
+      role: "member",
+      canonicalSource: "mattermost-general",
+      canonicalState: "revoking",
+      mattermostChannelId: "channel-1",
+      mattermostUserId: "user-1",
+    })).toBe(false);
+  });
+
   it("keeps the owner native without requiring a grant or membership", () => {
     expect(resolveGatewayPrincipalAccess({
       gateway,

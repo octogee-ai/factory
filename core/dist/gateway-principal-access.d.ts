@@ -31,6 +31,7 @@ export type GatewayPrincipalAccess = ResolvedGatewayAccess | {
     kind: "denied";
     reason: GatewayAccessDenialReason;
 };
+export declare function isCanonicalWorkspaceMembership(value: unknown): boolean;
 export declare function isGatewayPermissionSetId(value: unknown): value is GatewayPermissionSetId;
 export declare function permissionSetIds(value: unknown): GatewayPermissionSetId[] | null;
 export declare function timestampMillis(value: unknown): number | null | undefined;

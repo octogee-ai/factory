@@ -37,7 +37,7 @@ import {
   openClawControlPolicyError,
   openClawControlTimeoutError,
   pinnedOpenClawRuntimeMatches,
-  projectOpenClawHelloForProfile,
+  projectOpenClawServerFrameForProfile,
   type OpenClawConfigSnapshot,
   type OpenClawControlRpcDecision,
   type OpenClawControlRpcCategory,
@@ -858,8 +858,9 @@ class OpenClawControlSocketBridge {
     this.recordUpstreamResult(frame, request);
     this.refreshConfigAfterMutation(frame, request);
     if (!request?.internal && this.args.browser.readyState === WebSocket.OPEN) {
-      const projected = projectOpenClawHelloForProfile(
+      const projected = projectOpenClawServerFrameForProfile(
         frame,
+        request?.method,
         this.activeSession.brokerProfile,
       );
       this.args.browser.send(sanitizeOpenClawControlServerFrame(projected, [this.gatewayToken]));

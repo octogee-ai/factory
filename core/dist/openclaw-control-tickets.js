@@ -50,22 +50,30 @@ function brokerProfile(value) {
         ? value
         : null;
 }
+function ticketBinding(profile, rawPermissionSetIds, grantRevision) {
+    if (profile === "native-owner") {
+        return Array.isArray(rawPermissionSetIds) && rawPermissionSetIds.length === 0 &&
+            grantRevision === null
+            ? { ids: [], grantRevision: null }
+            : null;
+    }
+    const ids = permissionSetIds(rawPermissionSetIds);
+    return ids && Number.isSafeInteger(grantRevision) && grantRevision >= 1
+        ? { ids, grantRevision: grantRevision }
+        : null;
+}
 function parseOpenClawControlTicket(document) {
     if (!document)
         return null;
     const { uid, gatewayId, revisionId, brokerProfile: rawProfile, permissionSetIds: rawPermissionSetIds, grantRevision, expiresAt, redeemedAt, } = document;
     const profile = brokerProfile(rawProfile);
-    const ids = rawPermissionSetIds === undefined ? null : permissionSetIds(rawPermissionSetIds);
-    const ownerBinding = profile === "native-owner" && Array.isArray(rawPermissionSetIds) &&
-        rawPermissionSetIds.length === 0 && grantRevision === null;
-    const delegateBinding = profile !== "native-owner" && ids !== null &&
-        Number.isSafeInteger(grantRevision) && grantRevision >= 1;
+    const binding = profile ? ticketBinding(profile, rawPermissionSetIds, grantRevision) : null;
     if (!nonEmptyString(uid) ||
         !nonEmptyString(gatewayId) ||
         !nonEmptyString(revisionId) ||
         !finiteNumber(expiresAt) ||
         !profile ||
-        (!ownerBinding && !delegateBinding)) {
+        !binding) {
         return null;
     }
     return {
@@ -73,8 +81,8 @@ function parseOpenClawControlTicket(document) {
         gatewayId,
         revisionId,
         brokerProfile: profile,
-        permissionSetIds: ownerBinding ? [] : ids,
-        grantRevision: ownerBinding ? null : grantRevision,
+        permissionSetIds: binding.ids,
+        grantRevision: binding.grantRevision,
         expiresAt,
         redeemedAt,
     };

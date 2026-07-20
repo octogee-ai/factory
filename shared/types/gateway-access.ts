@@ -50,6 +50,7 @@ export interface GatewayAccessListResponse {
   owner: boolean;
   grants: GatewayAccessGrantView[];
   eligibleMembers: GatewayAccessIdentity[];
+  pendingApprovals: GatewayAccessApprovalView[];
   history: GatewayAccessAuditView[];
 }
 
@@ -80,4 +81,15 @@ export interface GatewayAccessApprovalView {
   requestedExpiresAt: string | null;
   approvalExpiresAt: string;
   reason: string;
+}
+
+export interface GatewayConnectionAssistanceView {
+  id: string;
+  connectorId: "google";
+  connectorLabel: "Google";
+  capability: "calendar";
+  capabilityLabel: "Calendar";
+  state: "waiting" | "connected";
+  requester: GatewayAccessIdentity;
+  requestedAt: string;
 }

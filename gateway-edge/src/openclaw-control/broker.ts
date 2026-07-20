@@ -53,6 +53,24 @@ function boundedIdentifier(value: unknown, maxLength: number): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= maxLength;
 }
 
+function validAccessBinding(
+  profile: unknown,
+  ids: GatewayPermissionSetId[] | null,
+  grantRevision: unknown,
+): boolean {
+  if (profile === "native-owner") return ids?.length === 0 && grantRevision === null;
+  const delegatedProfile = profile === "native-co-owner" || profile === "delegated-config" ||
+    profile === "delegated-read";
+  return delegatedProfile && ids !== null && Number.isSafeInteger(grantRevision) &&
+    (grantRevision as number) >= 1;
+}
+
+function validRedemptionIdentity(item: Record<string, unknown>): boolean {
+  return boundedIdentifier(item.uid, 256) &&
+    boundedIdentifier(item.gatewayId, 128) &&
+    boundedIdentifier(item.revisionId, 128);
+}
+
 function validRedemptionResponse(value: unknown): value is OpenClawControlRedemptionResponse {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const item = value as Record<string, unknown>;
@@ -60,14 +78,8 @@ function validRedemptionResponse(value: unknown): value is OpenClawControlRedemp
   const ids = Array.isArray(item.permissionSetIds) && item.permissionSetIds.length === 0
     ? []
     : permissionSetIds(item.permissionSetIds);
-  const owner = profile === "native-owner" && ids?.length === 0 && item.grantRevision === null;
-  const delegated = (profile === "native-co-owner" || profile === "delegated-config" ||
-    profile === "delegated-read") && ids !== null && Number.isSafeInteger(item.grantRevision) &&
-    (item.grantRevision as number) >= 1;
-  return boundedIdentifier(item.uid, 256) &&
-    boundedIdentifier(item.gatewayId, 128) &&
-    boundedIdentifier(item.revisionId, 128) &&
-    (owner || delegated) &&
+  return validRedemptionIdentity(item) &&
+    validAccessBinding(profile, ids, item.grantRevision) &&
     typeof item.expiresAt === "number" &&
     Number.isFinite(item.expiresAt) &&
     item.expiresAt > 0;

@@ -29,18 +29,31 @@ import {
 import {
   GATEWAY_ACCESS_GRANTS_COLLECTION,
   gatewayAccessGrantId,
+  isCanonicalWorkspaceMembership,
   resolveGatewayPrincipalAccess,
   type GatewayPrincipalAccess,
   type ResolvedGatewayAccess,
 } from "@octogee/core/gateway-principal-access";
 import { userAssignmentMatchesGateway } from "@octogee/core/assigned-roster";
 import { isOpenClawControlRevisionRuntimeReady } from "../../openclaw-control/runtime-ready.js";
+import {
+  recordGatewayAccessDenial,
+  setGatewayAccessDenialAudit,
+} from "../../lib/gateway-access-audit.js";
 
 const router = Router();
 router.use(requireAuth);
 const NOT_FOUND = "not-found";
 const CAPABILITY_DISABLED = "capability-disabled";
 const NOT_READY = "not-ready";
+
+function accessRole(access: ResolvedGatewayAccess): BuilderGatewayListEntry["via"] {
+  if (access.kind === "owner") return "owner";
+  if (access.permissionSetIds.includes("co-owner.v1")) return "co-owner";
+  if (access.permissionSetIds.includes("trusted-helper.v1")) return "trusted-helper";
+  if (access.permissionSetIds.includes("agent-viewer.v1")) return "agent-viewer";
+  return "shell-only";
+}
 
 const openClawTicketRateLimit = rateLimit({
   windowMs: 60_000,
@@ -90,15 +103,7 @@ function builderViewOf(
     ),
     isCurrentAssignment,
     ...(configStatus ? { configStatus } : {}),
-    via: access.kind === "owner"
-      ? "owner"
-      : access.permissionSetIds.includes("co-owner.v1")
-        ? "co-owner"
-        : access.permissionSetIds.includes("trusted-helper.v1")
-          ? "trusted-helper"
-          : access.permissionSetIds.includes("agent-viewer.v1")
-            ? "agent-viewer"
-            : "shell-only",
+    via: accessRole(access),
     permissionSetIds: access.permissionSetIds,
     capabilities: {
       dashboard: access.dashboard,
@@ -140,7 +145,8 @@ async function principalAccess(
     gateway: { gatewayId, ownerUid, workspaceSlug },
     uid,
     grant: grantSnap.exists ? grantSnap.data() : null,
-    isWorkspaceMember: membershipSnap.exists,
+    isWorkspaceMember: membershipSnap.exists &&
+      isCanonicalWorkspaceMembership(membershipSnap.data()),
     now,
   });
 }
@@ -234,6 +240,26 @@ function controlUiAccess(
   ) ? "allowed" : CAPABILITY_DISABLED;
 }
 
+function denialAuditInput(
+  authorization: Extract<GatewayAuthorization, { kind: "durable" }>,
+  uid: string,
+  access: GatewayPrincipalAccess,
+  reason: "permission_required" | Exclude<GatewayPrincipalAccess, ResolvedGatewayAccess>["reason"],
+) {
+  return {
+    gatewayId: authorization.gateway.gatewayId,
+    workspaceSlug: authorization.config.builderSlug!,
+    ownerUid: authorization.config.ownerUid!,
+    actorUid: uid,
+    granteeUid: uid,
+    reason,
+    source: "system" as const,
+    now: Date.now(),
+    beforePermissionSetIds: access.kind === "denied" ? [] : access.permissionSetIds,
+    beforeRevision: access.kind === "denied" ? null : access.grantRevision,
+  };
+}
+
 function servingRevisionId(
   authorization: Extract<GatewayAuthorization, { kind: "durable" }>,
 ): string | null {
@@ -259,7 +285,15 @@ async function mintOpenClawTicket(gatewayId: string, uid: string): Promise<Ticke
         return { exists: snap.exists, data: () => snap.data() };
       },
     );
-    if (principal.kind === "denied" || !principal.brokerProfile) return { kind: NOT_FOUND };
+    if (principal.kind === "denied" || !principal.brokerProfile) {
+      setGatewayAccessDenialAudit(db, tx, denialAuditInput(
+        serving,
+        uid,
+        principal,
+        principal.kind === "denied" ? principal.reason : "permission_required",
+      ));
+      return { kind: NOT_FOUND };
+    }
     const access = controlUiAccess(serving, principal);
     if (access !== "allowed") return { kind: access };
     const ownerUid = serving.config.ownerUid;
@@ -330,6 +364,14 @@ router.post(
       );
       const access = controlUiAccess(authorization, principal);
       if (access === NOT_FOUND) {
+        if (authorization.config.builderSlug && authorization.config.ownerUid) {
+          await recordGatewayAccessDenial(db, denialAuditInput(
+            authorization,
+            uid,
+            principal,
+            principal.kind === "denied" ? principal.reason : "permission_required",
+          ));
+        }
         res.status(404).json({ error: "not-found" });
         return;
       }

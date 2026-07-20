@@ -133,6 +133,14 @@ function nonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+export function isCanonicalWorkspaceMembership(value: unknown): boolean {
+  const membership = record(value);
+  return membership?.canonicalSource === "mattermost-general" &&
+    membership.canonicalState === "active" &&
+    nonEmptyString(membership.mattermostChannelId) &&
+    nonEmptyString(membership.mattermostUserId);
+}
+
 export function isGatewayPermissionSetId(value: unknown): value is GatewayPermissionSetId {
   return typeof value === "string" &&
     (GATEWAY_PERMISSION_SET_IDS as readonly string[]).includes(value);
@@ -196,6 +204,17 @@ function delegateProfile(ids: readonly GatewayPermissionSetId[]): OpenClawBroker
   return null;
 }
 
+function grantMatchesPrincipal(
+  grant: ParsedGrant,
+  gateway: GatewayPrincipalGateway,
+  uid: string,
+): boolean {
+  return grant.gatewayId === gateway.gatewayId &&
+    grant.workspaceSlug === gateway.workspaceSlug &&
+    grant.ownerUid === gateway.ownerUid &&
+    grant.granteeUid === uid;
+}
+
 export function resolveGatewayPrincipalAccess(input: {
   gateway: GatewayPrincipalGateway;
   uid: string;
@@ -223,13 +242,9 @@ export function resolveGatewayPrincipalAccess(input: {
     return { kind: "denied", reason: "grant_missing" };
   }
   const grant = parseGrant(input.grant);
-  if (
-    !grant ||
-    grant.gatewayId !== input.gateway.gatewayId ||
-    grant.workspaceSlug !== input.gateway.workspaceSlug ||
-    grant.ownerUid !== input.gateway.ownerUid ||
-    grant.granteeUid !== input.uid
-  ) return { kind: "denied", reason: "grant_invalid" };
+  if (!grant || !grantMatchesPrincipal(grant, input.gateway, input.uid)) {
+    return { kind: "denied", reason: "grant_invalid" };
+  }
   if (grant.state === "revoked") return { kind: "denied", reason: "grant_revoked" };
   if (grant.expiresAt !== null && grant.expiresAt <= (input.now ?? Date.now())) {
     return { kind: "denied", reason: "grant_expired" };
