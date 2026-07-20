@@ -43,6 +43,12 @@ describe('gateway-edge middleware stack', () => {
   afterEach(() => {
     delete process.env.INTERNAL_SERVICE_KEY;
     delete process.env.OCTOGEE_ALLOW_LOCAL_ORIGINS;
+    delete process.env.OPENCLAW_DASHBOARD_BRIDGE_ENABLED;
+    delete process.env.GATEWAY_ID;
+    delete process.env.GATEWAY_REVISION_ID;
+    delete process.env.GATEWAY_CLASS;
+    delete process.env.API_PUBLIC_URL;
+    delete process.env.APP_URL;
   });
 
   it('sets CORS headers for a localhost origin when local origins are enabled', async () => {
@@ -160,6 +166,23 @@ process.env.INTERNAL_SERVICE_KEY = 'redeem-mount-test-key';
     const res = await request(app).get('/api/health');
 
     expect(res.headers['x-frame-options']).toBe('SAMEORIGIN');
+  });
+
+  it('uses exact APP_URL CSP framing instead of Helmet SAMEORIGIN on the Dashboard surface', async () => {
+    process.env.OPENCLAW_DASHBOARD_BRIDGE_ENABLED = 'true';
+    process.env.GATEWAY_ID = 'gw-bender';
+    process.env.GATEWAY_REVISION_ID = 'gw-bender-r1';
+    process.env.GATEWAY_CLASS = 'operator';
+    process.env.API_PUBLIC_URL = 'https://api-test.octogee.com';
+    process.env.APP_URL = 'https://app-octogee-test.web.app';
+    const app = createSidecarApp();
+
+    const res = await request(app).get('/api/g/gw-bender/openclaw/');
+
+    expect(res.status).toBe(401);
+    expect(res.headers['content-security-policy'])
+      .toContain('frame-ancestors https://app-octogee-test.web.app');
+    expect(res.headers['x-frame-options']).toBeUndefined();
   });
 
   it('sets Strict-Transport-Security header', async () => {

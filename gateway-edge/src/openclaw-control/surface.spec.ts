@@ -72,6 +72,7 @@ function env(port?: number, openclawDir = "/home/node/.openclaw"): NodeJS.Proces
     GATEWAY_REVISION_ID: "bender-r7",
     GATEWAY_CLASS: "operator",
     API_PUBLIC_URL: "https://api.octogee.com",
+    APP_URL: "https://app.octogee.com",
     OPENCLAW_GATEWAY_URL: `http://127.0.0.1:${port ?? 18789}`,
     OPENCLAW_GATEWAY_TOKEN: "gateway-secret",
     OPENCLAW_DIR: openclawDir,
@@ -128,7 +129,7 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     )).toThrow(/sensitive/i);
   });
 
-  it("redeems once into a cross-site redirect-compatible secure path-scoped boot-local cookie", async () => {
+  it("redeems once into an embedded-context secure partitioned path-scoped boot-local cookie", async () => {
     const manager = sessions();
     const ticket = "a".repeat(43);
     const redeem = vi.fn(async (input) => ({
@@ -143,8 +144,9 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     expect(response.headers.location).toBe("/g/bender/openclaw/");
     expect(response.headers["set-cookie"]?.[0]).toContain("HttpOnly");
     expect(response.headers["set-cookie"]?.[0]).toContain("Secure");
-    expect(response.headers["set-cookie"]?.[0]).toContain("SameSite=Lax");
-    expect(response.headers["set-cookie"]?.[0]).not.toContain("SameSite=Strict");
+    expect(response.headers["set-cookie"]?.[0]).toContain("SameSite=None");
+    expect(response.headers["set-cookie"]?.[0]).toContain("Partitioned");
+    expect(response.headers["set-cookie"]?.[0]).not.toContain("SameSite=Lax");
     expect(JSON.stringify(response.headers)).not.toContain(ticket);
     expect(response.text).not.toContain(ticket);
     expect(redeem).toHaveBeenCalledWith(expect.objectContaining({
@@ -153,6 +155,44 @@ describe("OpenClaw Dashboard HTTP surface", () => {
       revisionId: "bender-r7",
       sessionId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
     }));
+  });
+
+  it("returns a branded relaunch document only to an unauthenticated Dashboard navigation", async () => {
+    const manager = sessions();
+    const application = appWith({ env: env(), sessions: manager });
+
+    const navigation = await request(application)
+      .get("/api/g/bender/openclaw/")
+      .set("accept", "text/html");
+    const asset = await request(application)
+      .get("/api/g/bender/openclaw/assets/app.js")
+      .set("accept", "application/json");
+
+    expect(navigation.status).toBe(401);
+    expect(navigation.type).toBe("text/html");
+    expect(navigation.text).toContain("OpenClaw Dashboard");
+    expect(navigation.text).toContain("octogee-openclaw-dashboard-error");
+    expect(navigation.text).toContain('"https://app.octogee.com"');
+    expect(navigation.text).not.toContain('postMessage({type:"octogee-openclaw-dashboard-error"},"*")');
+    expect(asset.status).toBe(401);
+    expect(asset.body).toEqual({ error: "dashboard-session-invalid", relaunch: true });
+  });
+
+  it("redacts ticket redemption failures behind the branded embedded retry", async () => {
+    const manager = sessions();
+    const ticket = "a".repeat(43);
+    const response = await request(appWith({
+      env: env(),
+      sessions: manager,
+      redeem: async () => { throw new Error(`broker failed for ${ticket}`); },
+    }))
+      .get(`/api/g/bender/openclaw/launch/${ticket}`)
+      .set("accept", "text/html");
+
+    expect(response.status).toBe(502);
+    expect(response.type).toBe("text/html");
+    expect(response.text).toContain("octogee-openclaw-dashboard-error");
+    expect(response.text).not.toContain(ticket);
   });
 
   it("authenticates native HTTP resources without forwarding browser identity or exposing the gateway token", async () => {
@@ -185,11 +225,54 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     expect(captured.origin).toBe("https://api.octogee.com");
     expect(captured["accept-encoding"]).toBe("identity");
     expect(response.headers["content-security-policy"]).toBe(
-      "default-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self' blob:",
+      "default-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors https://app.octogee.com; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self' blob:",
     );
-    expect(response.headers["x-frame-options"]).toBe("DENY");
+    expect(response.headers["x-frame-options"]).toBeUndefined();
     expect(JSON.stringify(response.headers)).not.toContain("gateway-secret");
     expect(response.text).not.toContain("gateway-secret");
+  });
+
+  it("redacts rejected sensitive query parameters from the HTTP response", async () => {
+    const manager = sessions();
+    const response = await request(appWith({ env: env(), sessions: manager }))
+      .get("/api/g/bender/openclaw/chat?token=gateway-secret")
+      .set("accept", "application/json")
+      .set("cookie", issue(manager));
+
+    expect(response.status).toBe(502);
+    expect(response.body).toEqual({ error: "openclaw-unavailable", retryable: true });
+    expect(JSON.stringify(response.body)).not.toContain("gateway-secret");
+    expect(JSON.stringify(response.body)).not.toContain("sensitive query parameter");
+  });
+
+  it("allows framing only by the configured Octogee app origin", async () => {
+    const upstream = http.createServer((_req, res) => res.end("dashboard"));
+    const port = await listen(upstream);
+    const manager = sessions();
+    const response = await request(appWith({
+      env: { ...env(port), APP_URL: "https://app-octogee-test.web.app" },
+      sessions: manager,
+    })).get("/api/g/bender/openclaw/").set("cookie", issue(manager));
+
+    expect(response.headers["content-security-policy"])
+      .toContain("frame-ancestors https://app-octogee-test.web.app");
+    expect(response.headers["content-security-policy"]).not.toContain("frame-ancestors *");
+    expect(response.headers["cross-origin-resource-policy"]).toBe("same-origin");
+  });
+
+  it("rejects malformed or non-HTTPS Dashboard frame origins", () => {
+    for (const APP_URL of [
+      "https://app.octogee.com/path",
+      "https://app.octogee.com?leak=1",
+      "https://user@app.octogee.com",
+      "http://app.octogee.com",
+      "ftp://localhost",
+    ]) {
+      expect(() => createOpenClawControlHttpRouter({
+        env: { ...env(), APP_URL },
+        sessions: sessions(),
+      }), APP_URL).toThrow(/APP_URL.*HTTPS origin/i);
+    }
   });
 
   it.each(["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])(
@@ -226,6 +309,26 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     expect(response.status).toBe(504);
     expect(response.body).toEqual({ error: "openclaw-timeout", retryable: true });
     expect(JSON.stringify(response.body)).not.toContain("gateway-secret");
+  });
+
+  it("reports an upstream navigation failure to the embedding Octogee panel", async () => {
+    const upstream = http.createServer(() => {});
+    const port = await listen(upstream);
+    const manager = sessions();
+    const response = await request(appWith({
+      env: env(port),
+      sessions: manager,
+      httpTimeoutMs: 20,
+    }))
+      .get("/api/g/bender/openclaw/")
+      .set("accept", "text/html")
+      .set("cookie", issue(manager));
+
+    expect(response.status).toBe(504);
+    expect(response.type).toBe("text/html");
+    expect(response.text).toContain("OpenClaw Dashboard");
+    expect(response.text).toContain("octogee-openclaw-dashboard-error");
+    expect(response.text).not.toContain("gateway-secret");
   });
 });
 

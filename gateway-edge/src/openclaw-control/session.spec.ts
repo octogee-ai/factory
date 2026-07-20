@@ -24,8 +24,9 @@ describe("OpenClaw Dashboard session", () => {
     expect(issued.cookie).toContain("Path=/g/bender/openclaw;");
     expect(issued.cookie).toContain("HttpOnly");
     expect(issued.cookie).toContain("Secure");
-    expect(issued.cookie).toContain("SameSite=Lax");
-    expect(issued.cookie).not.toContain("SameSite=Strict");
+    expect(issued.cookie).toContain("SameSite=None");
+    expect(issued.cookie).toContain("Partitioned");
+    expect(issued.cookie).not.toContain("SameSite=Lax");
 
     const cookieHeader = issued.cookie.split(";", 1)[0];
     expect(manager.verify({ cookieHeader, gatewayId: "bender", revisionId: "bender-r7" }))
