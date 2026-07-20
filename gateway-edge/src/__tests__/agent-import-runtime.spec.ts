@@ -75,7 +75,15 @@ describe("agent import runtime", () => {
   it("stores imported binary data in the tenant workspace prefix", async () => {
     const save = vi.fn().mockResolvedValue(undefined);
     const bucket = { file: vi.fn(() => ({ save })) };
-    const result = await storeAgentImportBlob(bucket, "alice", "imp-1", "images/moof.png", Buffer.from("png"), "image/png", new Date("2026-07-20T12:00:00Z"));
+    const result = await storeAgentImportBlob({
+      bucket,
+      slug: "alice",
+      importId: "imp-1",
+      filePath: "images/moof.png",
+      contents: Buffer.from("png"),
+      mimeType: "image/png",
+      now: new Date("2026-07-20T12:00:00Z"),
+    });
     expect(bucket.file).toHaveBeenCalledWith("customers/alice/agent-imports/imp-1/images/moof.png");
     expect(save).toHaveBeenCalledWith(Buffer.from("png"), { metadata: { contentType: "image/png" } });
     expect(result).toEqual({

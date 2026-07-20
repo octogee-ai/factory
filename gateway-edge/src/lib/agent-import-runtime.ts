@@ -111,23 +111,25 @@ interface ImportBlobBucket {
   };
 }
 
-export async function storeAgentImportBlob(
-  bucket: ImportBlobBucket,
-  slug: string,
-  importId: string,
-  filePath: string,
-  contents: Buffer,
-  mimeType: string,
-  now = new Date(),
-): Promise<AgentImportManifestEntry> {
-  const gcsPath = `customers/${slug}/agent-imports/${importId}/${filePath}`;
-  await bucket.file(gcsPath).save(contents, { metadata: { contentType: mimeType } });
+interface StoreAgentImportBlobInput {
+  bucket: ImportBlobBucket;
+  slug: string;
+  importId: string;
+  filePath: string;
+  contents: Buffer;
+  mimeType: string;
+  now?: Date;
+}
+
+export async function storeAgentImportBlob(input: StoreAgentImportBlobInput): Promise<AgentImportManifestEntry> {
+  const gcsPath = `customers/${input.slug}/agent-imports/${input.importId}/${input.filePath}`;
+  await input.bucket.file(gcsPath).save(input.contents, { metadata: { contentType: input.mimeType } });
   return {
     type: "blob",
     gcsPath,
-    size: contents.length,
-    mimeType,
-    uploadedAt: now.toISOString(),
+    size: input.contents.length,
+    mimeType: input.mimeType,
+    uploadedAt: (input.now ?? new Date()).toISOString(),
   };
 }
 
@@ -208,14 +210,14 @@ export function createAgentImportRuntime() {
     ...store,
     applyRepository: (input) => applyAgentImportRepository({
       ...input,
-      storeBlob: (filePath, contents, mimeType) => storeAgentImportBlob(
+      storeBlob: (filePath, contents, mimeType) => storeAgentImportBlob({
         bucket,
-        input.slug,
-        input.importId,
+        slug: input.slug,
+        importId: input.importId,
         filePath,
         contents,
         mimeType,
-      ),
+      }),
     }),
     rollbackRepository: rollbackAgentImportRepository,
     readIdentity,

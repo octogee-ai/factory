@@ -322,38 +322,23 @@ function runtimeDecisionPaths(path, value) {
         return [path];
     return Object.entries(object).flatMap(([key, entry]) => runtimeDecisionPaths(`${path}.${key}`, entry));
 }
-export function planAgentImportConfig(input, options) {
-    const artifacts = validateAgentImportConfigArtifacts(input);
-    const portable = artifacts.portableAgent;
-    const doctorSafe = options.doctorOutcome === "migrated" || options.doctorOutcome === "unchanged";
+function plannedRuntime(portable, doctorSafe) {
     const runtimePatch = {};
     const decisions = [];
-    const identity = compact({
-        name: portable.name ?? portable.identity?.name,
-        persona: portable.persona,
-        emoji: portable.identity?.emoji,
-    });
-    for (const path of Object.keys(identity)) {
-        decisions.push({ path: `identity.${path}`, disposition: "apply", reason: "portable identity field" });
-    }
     for (const [path, value] of runtimeEntries(portable)) {
         const paths = runtimeDecisionPaths(path, value);
-        if (doctorSafe) {
+        const disposition = doctorSafe ? "apply" : "manual_review";
+        const reason = doctorSafe
+            ? "validated by current OpenClaw doctor"
+            : "current OpenClaw could not validate the source config";
+        if (doctorSafe)
             runtimePatch[path] = structuredClone(value);
-            decisions.push(...paths.map((decisionPath) => ({
-                path: decisionPath,
-                disposition: "apply",
-                reason: "validated by current OpenClaw doctor",
-            })));
-        }
-        else {
-            decisions.push(...paths.map((decisionPath) => ({
-                path: decisionPath,
-                disposition: "manual_review",
-                reason: "current OpenClaw could not validate the source config",
-            })));
-        }
+        decisions.push(...paths.map((decisionPath) => ({ path: decisionPath, disposition, reason })));
     }
+    return { runtimePatch, decisions };
+}
+function modelDecisions(portable) {
+    const decisions = [];
     if (portable.requestedModel?.primary) {
         decisions.push({
             path: "model.primary",
@@ -368,37 +353,61 @@ export function planAgentImportConfig(input, options) {
             reason: "fallback models require new Octogee credentials",
         });
     }
+    return decisions;
+}
+function droppedConfigReason(classification) {
+    if (classification === "credential")
+        return "credentials are never imported";
+    if (classification === "unknown")
+        return "field is not in the portable allowlist";
+    return "field is owned by the source host or Octogee platform";
+}
+function appendDroppedConfigDecisions(decisions, inventory) {
     const seen = new Set(decisions.map((entry) => entry.path));
-    for (const entry of artifacts.configInventory) {
-        if (entry.classification === "customer")
-            continue;
-        const disposition = entry.classification === "unknown" ? "drop_unsupported" : "drop_platform";
-        if (seen.has(entry.path))
+    for (const entry of inventory) {
+        if (entry.classification === "customer" || seen.has(entry.path))
             continue;
         decisions.push({
             path: entry.path,
-            disposition,
-            reason: entry.classification === "credential"
-                ? "credentials are never imported"
-                : entry.classification === "unknown"
-                    ? "field is not in the portable allowlist"
-                    : "field is owned by the source host or Octogee platform",
+            disposition: entry.classification === "unknown" ? "drop_unsupported" : "drop_platform",
+            reason: droppedConfigReason(entry.classification),
         });
         seen.add(entry.path);
     }
-    const reauth = [
+}
+function reauthenticationRequirements(portable, inventory) {
+    const requirements = [
         ...(portable.requestedModel?.primary ? ["models"] : []),
-        ...(artifacts.configInventory.some((entry) => entry.path.startsWith("channels.")) ? ["channels"] : []),
-        ...(artifacts.configInventory.some((entry) => entry.path.toLowerCase().includes("github")) ? ["github"] : []),
+        ...(inventory.some((entry) => entry.path.startsWith("channels.")) ? ["channels"] : []),
+        ...(inventory.some((entry) => entry.path.toLowerCase().includes("github")) ? ["github"] : []),
     ];
+    return [...new Set(requirements)];
+}
+export function planAgentImportConfig(input, options) {
+    const artifacts = validateAgentImportConfigArtifacts(input);
+    const portable = artifacts.portableAgent;
+    const doctorSafe = options.doctorOutcome === "migrated" || options.doctorOutcome === "unchanged";
+    const identity = compact({
+        name: portable.name ?? portable.identity?.name,
+        persona: portable.persona,
+        emoji: portable.identity?.emoji,
+    });
+    const planned = plannedRuntime(portable, doctorSafe);
+    const decisions = Object.keys(identity).map((path) => ({
+        path: `identity.${path}`,
+        disposition: "apply",
+        reason: "portable identity field",
+    }));
+    decisions.push(...planned.decisions, ...modelDecisions(portable));
+    appendDroppedConfigDecisions(decisions, artifacts.configInventory);
     return {
         analyzer: "octogee-policy-v1",
         doctorOutcome: options.doctorOutcome,
-        effectiveOutcome: doctorSafe && Object.keys(runtimePatch).length > 0 ? "applied" : "safe_baseline",
+        effectiveOutcome: doctorSafe && Object.keys(planned.runtimePatch).length > 0 ? "applied" : "safe_baseline",
         identity,
-        runtimePatch,
+        runtimePatch: planned.runtimePatch,
         decisions,
-        reauth: [...new Set(reauth)],
+        reauth: reauthenticationRequirements(portable, artifacts.configInventory),
     };
 }
 const ARCHIVE_METADATA = new Set([
@@ -429,25 +438,28 @@ export function classifyAgentImportArchivePath(path) {
     const segments = safeRelativePath(path);
     if (!segments)
         return null;
-    if (segments[0] === "workspace") {
-        const relative = segments.slice(1);
-        if (relative.length === 0)
-            return null;
-        const lowered = relative.map((segment) => segment.toLowerCase());
-        if (lowered.some((segment) => BLOCKED_WORKSPACE_SEGMENTS.has(segment)))
-            return null;
-        if (lowered.some((segment) => segment === ".env" || segment.startsWith(".env.")))
-            return null;
-        const leaf = lowered[lowered.length - 1];
-        if (leaf === "openclaw.json" || [".npmrc", ".pypirc", ".netrc"].includes(leaf) ||
-            /^(credentials?|secrets?|tokens?|auth(?:-profiles?)?)([._-].*)?$/.test(leaf) ||
-            /(^|[._-])(id_rsa|id_ed25519|private[-_.]?key)([._-]|$)/.test(leaf))
-            return null;
-        return "workspace";
-    }
-    if (segments[0] !== "git")
+    if (segments[0] === "workspace")
+        return classifyWorkspaceArchivePath(segments.slice(1));
+    return segments[0] === "git" ? classifyGitArchivePath(segments.slice(1).join("/")) : null;
+}
+function classifyWorkspaceArchivePath(relative) {
+    if (relative.length === 0)
         return null;
-    const relative = segments.slice(1).join("/");
+    const lowered = relative.map((segment) => segment.toLowerCase());
+    if (lowered.some((segment) => BLOCKED_WORKSPACE_SEGMENTS.has(segment)))
+        return null;
+    if (lowered.some((segment) => segment === ".env" || segment.startsWith(".env.")))
+        return null;
+    const leaf = lowered[lowered.length - 1];
+    if (leaf === "openclaw.json" || [".npmrc", ".pypirc", ".netrc"].includes(leaf))
+        return null;
+    if (/^(credentials?|secrets?|tokens?|auth(?:-profiles?)?)([._-].*)?$/.test(leaf))
+        return null;
+    if (/(^|[._-])(id_rsa|id_ed25519|private[-_.]?key)([._-]|$)/.test(leaf))
+        return null;
+    return "workspace";
+}
+function classifyGitArchivePath(relative) {
     if (["HEAD", "packed-refs"].includes(relative))
         return "git";
     if (/^refs\/(heads|tags)\/[A-Za-z0-9][A-Za-z0-9._/-]{0,249}$/.test(relative))

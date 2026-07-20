@@ -59,6 +59,11 @@ export type AgentImportStatus =
   | "rollback_failed"
   | "rolled_back";
 
+const APPLYABLE_STATUSES = new Set<AgentImportStatus>([
+  "previewed", "workspace", "identity", "config", "verifying", "failed",
+]);
+const CONFIG_GET_METHOD = "config.get";
+
 export interface AgentImportRecord {
   id: string;
   uid: string;
@@ -452,7 +457,7 @@ export class AgentImportService {
   private async applyOnce(input: { uid: string; importId: string; approvalHash: string }): Promise<AgentImportRecord> {
     let current = await this.ownedRecord(input.importId, input.uid);
     if (current.status === "complete") return current;
-    if (current.status !== "previewed" && current.status !== "workspace" && current.status !== "identity" && current.status !== "config" && current.status !== "verifying" && current.status !== "failed") {
+    if (!APPLYABLE_STATUSES.has(current.status)) {
       throw new AgentImportServiceError("invalid_import_state", `cannot apply import in ${current.status}`);
     }
     if (current.approvalHash !== input.approvalHash) {
@@ -463,73 +468,13 @@ export class AgentImportService {
       throw new AgentImportServiceError("import_plan_missing", "approved import plan is unavailable");
     }
     try {
-      if (!current.importCommit) {
-        const source = await this.sourceForPlan(plan, input.importId);
-        try {
-          const inspected = await this.deps.inspectSource(source.repoDir);
-          if (inspected.head !== plan.source.head) {
-            throw new AgentImportServiceError("source_changed", "source changed after preview");
-          }
-          const destination = this.deps.workspaceState(plan.slug);
-          if (!destination.clean) {
-            throw new AgentImportServiceError("destination_changed", "Octogee workspace changed after preview");
-          }
-          current = await this.update(current, { status: "workspace" });
-          const applied = await this.deps.applyRepository({
-            sourceDir: source.repoDir,
-            sourceHead: plan.source.head,
-            targetDir: destination.targetDir,
-            destinationHead: plan.destinationHead,
-            importId: input.importId,
-            slug: plan.slug,
-          });
-          current = await this.update(current, { importCommit: applied.importCommit });
-        } finally {
-          source.cleanup();
-        }
-      }
-      if (!current.previousIdentity) {
-        current = await this.update(current, {
-          status: "identity",
-          previousIdentity: await this.deps.readIdentity(plan.uid),
-        });
-      }
-      await this.deps.syncIdentity(plan.uid, plan.config.identity);
-      current = await this.update(current, {
-        status: "config",
-      });
-      const configured = await this.applyRuntimeConfig(
-        plan.slug,
-        plan.config.runtimePatch,
-        current.previousRuntime,
-        async (previous) => {
-          current = await this.update(current, { status: "config", previousRuntime: previous });
-        },
-      );
-      const warnings = configured.outcome === "safe_baseline"
-        ? [...new Set([...current.warnings, "config_delta_rejected"])]
-        : current.warnings;
-      current = await this.update(current, {
-        status: "verifying",
-        configOutcome: configured.outcome,
-        previousRuntime: configured.previous,
-        warnings,
-      });
-      const completedAt = this.deps.now().toISOString();
-      current = await this.update(current, {
-        status: "complete",
-        completedAt,
-      });
-      try {
-        await this.deps.deleteStaging(input.importId);
-      } catch {
-        current = await this.update(current, {
-          warnings: [...new Set([...current.warnings, "staging_cleanup_pending"])],
-        });
-      }
-      return current;
+      current = await this.applyWorkspace(current, plan, input.importId);
+      current = await this.applyIdentity(current, plan);
+      current = await this.applyConfig(current, plan);
+      return await this.completeApply(current, input.importId);
     } catch (error) {
-      await this.update(current, {
+      const checkpoint = await this.ownedRecord(input.importId, input.uid);
+      await this.update(checkpoint, {
         status: "failed",
         error: {
           code: error instanceof AgentImportServiceError ? error.code : "agent_import_failed",
@@ -538,6 +483,91 @@ export class AgentImportService {
       });
       throw error;
     }
+  }
+
+  private async applyWorkspace(
+    current: AgentImportRecord,
+    plan: StoredAgentImportPlan,
+    importId: string,
+  ): Promise<AgentImportRecord> {
+    if (current.importCommit) return current;
+    const source = await this.sourceForPlan(plan, importId);
+    try {
+      const inspected = await this.deps.inspectSource(source.repoDir);
+      if (inspected.head !== plan.source.head) {
+        throw new AgentImportServiceError("source_changed", "source changed after preview");
+      }
+      const destination = this.deps.workspaceState(plan.slug);
+      if (!destination.clean) {
+        throw new AgentImportServiceError("destination_changed", "Octogee workspace changed after preview");
+      }
+      const workspace = await this.update(current, { status: "workspace" });
+      const applied = await this.deps.applyRepository({
+        sourceDir: source.repoDir,
+        sourceHead: plan.source.head,
+        targetDir: destination.targetDir,
+        destinationHead: plan.destinationHead,
+        importId,
+        slug: plan.slug,
+      });
+      return this.update(workspace, { importCommit: applied.importCommit });
+    } finally {
+      source.cleanup();
+    }
+  }
+
+  private async applyIdentity(
+    current: AgentImportRecord,
+    plan: StoredAgentImportPlan,
+  ): Promise<AgentImportRecord> {
+    let checkpoint = current;
+    if (!checkpoint.previousIdentity) {
+      checkpoint = await this.update(checkpoint, {
+        status: "identity",
+        previousIdentity: await this.deps.readIdentity(plan.uid),
+      });
+    }
+    await this.deps.syncIdentity(plan.uid, plan.config.identity);
+    return this.update(checkpoint, { status: "config" });
+  }
+
+  private async applyConfig(
+    current: AgentImportRecord,
+    plan: StoredAgentImportPlan,
+  ): Promise<AgentImportRecord> {
+    let checkpoint = current;
+    const configured = await this.applyRuntimeConfig(
+      plan.slug,
+      plan.config.runtimePatch,
+      checkpoint.previousRuntime,
+      async (previous) => {
+        checkpoint = await this.update(checkpoint, { status: "config", previousRuntime: previous });
+      },
+    );
+    const warnings = configured.outcome === "safe_baseline"
+      ? [...new Set([...checkpoint.warnings, "config_delta_rejected"])]
+      : checkpoint.warnings;
+    return this.update(checkpoint, {
+      status: "verifying",
+      configOutcome: configured.outcome,
+      previousRuntime: configured.previous,
+      warnings,
+    });
+  }
+
+  private async completeApply(current: AgentImportRecord, importId: string): Promise<AgentImportRecord> {
+    let completed = await this.update(current, {
+      status: "complete",
+      completedAt: this.deps.now().toISOString(),
+    });
+    try {
+      await this.deps.deleteStaging(importId);
+    } catch {
+      completed = await this.update(completed, {
+        warnings: [...new Set([...completed.warnings, "staging_cleanup_pending"])],
+      });
+    }
+    return completed;
   }
 
   async rollback(input: { uid: string; importId: string }): Promise<AgentImportRecord> {
@@ -633,7 +663,7 @@ export class AgentImportService {
     }
     const coachId = `octogee-${slug}-coach`;
     return this.deps.withConfigLock(async () => {
-      const before = configGet(await this.deps.invokeOpenClaw("config.get", {}));
+      const before = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
       const previous = checkpointedPrevious ?? previousRuntime(coachFromConfig(before.config, coachId), runtimePatch);
       if (!checkpointedPrevious) await checkpoint(previous);
       try {
@@ -641,17 +671,17 @@ export class AgentImportService {
           raw: JSON.stringify({ agents: { list: [{ id: coachId, ...runtimePatch }] } }),
           baseHash: before.hash,
         });
-        const after = configGet(await this.deps.invokeOpenClaw("config.get", {}));
+        const after = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
         assertRuntimeApplied(after.config, coachId, runtimePatch);
         await this.deps.invokeOpenClaw("health", {});
         return { outcome: "applied", previous };
       } catch {
-        const rollbackBase = configGet(await this.deps.invokeOpenClaw("config.get", {}));
+        const rollbackBase = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
         await this.deps.invokeOpenClaw("config.patch", {
           raw: JSON.stringify({ agents: { list: [{ id: coachId, ...previous }] } }),
           baseHash: rollbackBase.hash,
         });
-        const restored = configGet(await this.deps.invokeOpenClaw("config.get", {}));
+        const restored = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
         assertRuntimeRestored(restored.config, coachId, previous);
         await this.deps.invokeOpenClaw("health", {});
         return { outcome: "safe_baseline", previous };
@@ -663,12 +693,12 @@ export class AgentImportService {
     if (Object.keys(patch).length === 0) return;
     const coachId = `octogee-${slug}-coach`;
     await this.deps.withConfigLock(async () => {
-      const before = configGet(await this.deps.invokeOpenClaw("config.get", {}));
+      const before = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
       await this.deps.invokeOpenClaw("config.patch", {
         raw: JSON.stringify({ agents: { list: [{ id: coachId, ...patch }] } }),
         baseHash: before.hash,
       });
-      const after = configGet(await this.deps.invokeOpenClaw("config.get", {}));
+      const after = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
       assertRuntimeRestored(after.config, coachId, patch);
       await this.deps.invokeOpenClaw("health", {});
     });

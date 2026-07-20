@@ -12,6 +12,8 @@ const IMPORT_ID_RE = /^[A-Za-z0-9._-]{1,160}$/;
 const MAX_COMMAND_OUTPUT = 16 * 1024 * 1024;
 const MAX_BINARY_BYTES = 100 * 1024 * 1024;
 const MAX_IMPORT_COMMITS = 10_000;
+const MAIN_REF = "refs/heads/main";
+const EMPTY_REF = "0".repeat(40);
 
 export interface AgentImportSecretFinding {
   ruleId: string;
@@ -359,6 +361,17 @@ interface PublishedRef {
   expected: string;
 }
 
+interface TargetUpdate {
+  targetDir: string;
+  destinationHead: string;
+  nextHead: string;
+  sourceHead?: string;
+  sourceRef?: string;
+  importRef?: string;
+  rollbackRef?: string;
+  push: boolean;
+}
+
 function remoteRefsMatch(targetDir: string, refs: PublishedRef[]): boolean {
   const output = git(
     targetDir,
@@ -394,53 +407,35 @@ function publishRefs(targetDir: string, refs: PublishedRef[]): void {
   }
 }
 
-function updateTarget(options: {
-  targetDir: string;
-  destinationHead: string;
-  nextHead: string;
-  sourceHead?: string;
-  sourceRef?: string;
-  importRef?: string;
-  rollbackRef?: string;
-  push: boolean;
-}): void {
-  git(options.targetDir, ["update-ref", "refs/heads/main", options.nextHead, options.destinationHead]);
+function targetRefs(options: TargetUpdate): PublishedRef[] {
+  const refs: PublishedRef[] = [{ ref: MAIN_REF, expected: options.nextHead }];
+  if (options.sourceHead && options.sourceRef) refs.push({ ref: options.sourceRef, expected: options.sourceHead });
+  if (options.importRef) refs.push({ ref: options.importRef, expected: options.nextHead });
+  if (options.rollbackRef) refs.push({ ref: options.rollbackRef, expected: options.nextHead });
+  return refs;
+}
+
+function restoreTarget(options: TargetUpdate, refs: PublishedRef[]): void {
+  git(options.targetDir, ["update-ref", MAIN_REF, options.destinationHead, options.nextHead]);
+  git(options.targetDir, ["reset", "--hard", options.destinationHead]);
+  for (const { ref, expected } of refs.slice(1)) {
+    git(options.targetDir, ["update-ref", "-d", ref, expected]);
+  }
+}
+
+function updateTarget(options: TargetUpdate): void {
+  const refs = targetRefs(options);
+  git(options.targetDir, ["update-ref", MAIN_REF, options.nextHead, options.destinationHead]);
   try {
-    if (options.sourceHead && options.sourceRef) {
-      git(options.targetDir, ["update-ref", options.sourceRef, options.sourceHead, "0".repeat(40)]);
-    }
-    if (options.importRef) {
-      git(options.targetDir, ["update-ref", options.importRef, options.nextHead, "0".repeat(40)]);
-    }
-    if (options.rollbackRef) {
-      git(options.targetDir, ["update-ref", options.rollbackRef, options.nextHead, "0".repeat(40)]);
+    for (const { ref, expected } of refs.slice(1)) {
+      git(options.targetDir, ["update-ref", ref, expected, EMPTY_REF]);
     }
     git(options.targetDir, ["reset", "--hard", options.nextHead]);
-    if (options.push) {
-      const refs: PublishedRef[] = [
-        { ref: "refs/heads/main", expected: options.nextHead },
-        ...(options.sourceRef && options.sourceHead
-          ? [{ ref: options.sourceRef, expected: options.sourceHead }]
-          : []),
-        ...(options.importRef ? [{ ref: options.importRef, expected: options.nextHead }] : []),
-        ...(options.rollbackRef ? [{ ref: options.rollbackRef, expected: options.nextHead }] : []),
-      ];
-      publishRefs(options.targetDir, refs);
-    }
+    if (options.push) publishRefs(options.targetDir, refs);
   } catch (error) {
     if (error instanceof AgentImportGitError && error.code === "push_outcome_unknown") throw error;
     try {
-      git(options.targetDir, ["update-ref", "refs/heads/main", options.destinationHead, options.nextHead]);
-      git(options.targetDir, ["reset", "--hard", options.destinationHead]);
-      if (options.sourceHead && options.sourceRef) {
-        git(options.targetDir, ["update-ref", "-d", options.sourceRef, options.sourceHead]);
-      }
-      if (options.importRef) {
-        git(options.targetDir, ["update-ref", "-d", options.importRef, options.nextHead]);
-      }
-      if (options.rollbackRef) {
-        git(options.targetDir, ["update-ref", "-d", options.rollbackRef, options.nextHead]);
-      }
+      restoreTarget(options, refs);
     } catch {
       throw new AgentImportGitError("destination_restore_failed", "workspace import failed and local restore also failed");
     }
@@ -482,7 +477,7 @@ export async function applyAgentImportRepository(options: {
     ) {
       if (options.push !== false) {
         publishRefs(options.targetDir, [
-          { ref: "refs/heads/main", expected: currentHead },
+          { ref: MAIN_REF, expected: currentHead },
           { ref: sourceRef, expected: sourceHead },
           { ref: importRef, expected: currentHead },
         ]);
@@ -553,7 +548,7 @@ export async function rollbackAgentImportRepository(options: {
     ) {
       if (options.push !== false) {
         publishRefs(options.targetDir, [
-          { ref: "refs/heads/main", expected: current },
+          { ref: MAIN_REF, expected: current },
           { ref: rollbackRef, expected: current },
         ]);
       }
