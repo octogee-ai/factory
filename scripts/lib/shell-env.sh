@@ -72,7 +72,11 @@ materialize_stripe_price_ids_json() {
 canonicalize_stripe_price_ids_json() {
   node - "$1" <<'NODE'
 try {
-  process.stdout.write(JSON.stringify(JSON.parse(process.argv[2])));
+  const parsed = JSON.parse(process.argv[2]);
+  const sorted = Object.fromEntries(
+    Object.entries(parsed).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0),
+  );
+  process.stdout.write(JSON.stringify(sorted));
 } catch {
   process.exit(1);
 }

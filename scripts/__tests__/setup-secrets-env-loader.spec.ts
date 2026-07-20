@@ -27,6 +27,9 @@ const completeStripePriceMap = JSON.stringify(Object.fromEntries([
   "credit_50",
   "credit_100",
 ].map((key) => [key, `price_${key.replaceAll("_", "")}`])));
+const canonicalStripePriceMap = JSON.stringify(Object.fromEntries(
+  Object.entries(JSON.parse(completeStripePriceMap)).sort(([left], [right]) => left.localeCompare(right)),
+));
 
 function runLoader(envFile: string, env: Record<string, string> = {}): string {
   const script = [
@@ -226,12 +229,16 @@ describe("setup-secrets env loader", () => {
   it("materializes a configured Stripe map byte-for-byte and defaults only an empty map", () => {
     const configured = completeStripePriceMap;
     const pretty = JSON.stringify(JSON.parse(completeStripePriceMap), null, 2);
+    const reversed = JSON.stringify(Object.fromEntries(
+      Object.entries(JSON.parse(completeStripePriceMap)).reverse(),
+    ));
 
     expect(materializedStripePriceMap(configured)).toBe(configured);
     expect(materializedStripePriceMap("")).toBe("{}");
     expect(configuredStripePriceMap("{}")).toBe("");
     expect(configuredStripePriceMap(configured)).toBe(configured);
-    expect(canonicalizedStripePriceMap(pretty)).toBe(completeStripePriceMap);
+    expect(canonicalizedStripePriceMap(pretty)).toBe(canonicalStripePriceMap);
+    expect(canonicalizedStripePriceMap(reversed)).toBe(canonicalStripePriceMap);
   });
 
   it("rejects Stripe secret keys from the wrong environment mode", () => {
