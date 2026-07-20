@@ -452,7 +452,7 @@ export class AgentImportService {
   private async applyOnce(input: { uid: string; importId: string; approvalHash: string }): Promise<AgentImportRecord> {
     let current = await this.ownedRecord(input.importId, input.uid);
     if (current.status === "complete") return current;
-    if (current.status !== "previewed" && current.status !== "workspace" && current.status !== "identity" && current.status !== "config" && current.status !== "failed") {
+    if (current.status !== "previewed" && current.status !== "workspace" && current.status !== "identity" && current.status !== "config" && current.status !== "verifying" && current.status !== "failed") {
       throw new AgentImportServiceError("invalid_import_state", `cannot apply import in ${current.status}`);
     }
     if (current.approvalHash !== input.approvalHash) {

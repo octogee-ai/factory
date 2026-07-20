@@ -355,6 +355,50 @@ describe("AgentImportService apply and rollback", () => {
     expect(h.deps.applyRepository).toHaveBeenCalledTimes(1);
   });
 
+  it("reconverges a verified import when the process exits before its completion checkpoint", async () => {
+    const h = harness();
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack",
+      slug: "jack",
+      gatewayId: "shared-1",
+      owner: "jack",
+      repo: "moof",
+      branch: "main",
+      artifacts: artifacts(),
+    });
+    const putRecord = h.deps.putRecord;
+    h.deps.putRecord = vi.fn(async (record) => {
+      if (record.status === "complete" || record.status === "failed") {
+        throw new Error("process exited before completion checkpoint");
+      }
+      await putRecord(record);
+    });
+
+    await expect(h.service.apply({ uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash }))
+      .rejects.toThrow("process exited before completion checkpoint");
+    expect(h.records.get(preview.id)?.status).toBe("verifying");
+
+    h.deps.putRecord = putRecord;
+    h.deps.invokeOpenClaw = vi.fn()
+      .mockResolvedValueOnce({
+        hash: "config-before-retry",
+        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m", lightContext: true } }] } },
+      })
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({
+        hash: "config-after-retry",
+        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m", lightContext: true } }] } },
+      })
+      .mockResolvedValueOnce({ status: "ok" });
+
+    const completed = await h.service.apply({ uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash });
+
+    expect(completed.status).toBe("complete");
+    expect(h.deps.applyRepository).toHaveBeenCalledOnce();
+    expect(h.deps.syncIdentity).toHaveBeenCalledTimes(2);
+    expect(h.deps.invokeOpenClaw).toHaveBeenCalledWith("health", {});
+  });
+
   it("reconciles an exact prior Git import when its checkpoint write was interrupted", async () => {
     let workspaceHead = DESTINATION_HEAD;
     const applyRepository = vi.fn(async () => {
