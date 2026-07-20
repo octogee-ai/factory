@@ -65,6 +65,7 @@ import {
   GATEWAY_CONFIG_SCHEMA_VERSION,
   gatewayArtifactFromReleasePayload,
   isGatewayMutableConfigForGateway,
+  projectGatewayMutableConfigForGateway,
   type GatewayArtifact,
   type GatewayMutableConfig,
 } from "./gateway-live-release.js";
@@ -1165,14 +1166,8 @@ function asDurableGatewayRoot(
   data: unknown,
   gatewayId: string,
 ): DurableGatewayRoot | null {
-  if (
-    !isGatewayDesiredDoc(data) ||
-    data.gatewayId !== gatewayId ||
-    !isGatewayMutableConfigForGateway(data, gatewayId)
-  ) {
-    return null;
-  }
-  return data as DurableGatewayRoot;
+  if (!isGatewayDesiredDoc(data) || data.gatewayId !== gatewayId) return null;
+  return projectGatewayMutableConfigForGateway(data, gatewayId) as DurableGatewayRoot | null;
 }
 
 function hasDurableGatewayRootMarkers(data: unknown): boolean {

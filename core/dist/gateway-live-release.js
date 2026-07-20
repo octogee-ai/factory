@@ -1,8 +1,8 @@
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GLM_GATEWAYS_COLLECTION } from "@octogee/shared/types/glm";
-import { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, } from "@octogee/shared/types/gateway-mutable-config";
-import { GATEWAY_RELEASES_SUBCOLLECTION, isGatewayDesiredDoc, isGatewayRuntimeDoc, isReleasePayload, upgradeReleasePayloadSchema, } from "@octogee/shared/types/gateway-releases";
-export { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, };
+import { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, } from "@octogee/shared/types/gateway-mutable-config";
+import { GATEWAY_RELEASES_SUBCOLLECTION, isGatewayRuntimeDoc, isReleasePayload, projectGatewayDesiredRootForGateway, upgradeReleasePayloadSchema, } from "@octogee/shared/types/gateway-releases";
+export { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, };
 // A gateway's pods are named octogee-gateway-<id>-<replicaset>-<pod> by the
 // stable-name Deployment. Pod identity binds to the gateway alone — never to a
 // release or lifecycle state (GATEWAY-SIMPLE-ROLL-SPEC identity-pure boot).
@@ -19,12 +19,9 @@ export function configuredBuilderBootstrapAllowed(value, input) {
     return eligibleConfiguredBuilderGateway(value, input) !== null;
 }
 function eligibleConfiguredBuilderGateway(value, input) {
-    if (!isGatewayDesiredDoc(value) ||
-        value.gatewayId !== input.gatewayId ||
-        !isGatewayMutableConfigForGateway(value, input.gatewayId)) {
+    const gateway = projectGatewayDesiredRootForGateway(value, input.gatewayId);
+    if (gateway === null)
         return null;
-    }
-    const gateway = value;
     if (!podBelongsToGateway(input.gatewayId, input.podName) ||
         gateway.gatewayClass === "shared" ||
         gateway.builderSlug !== input.slug) {
@@ -114,12 +111,10 @@ export function mergeGatewayConfigWithArtifact(config, artifact) {
 export function gatewayAuthorizationFromRootDocument(data, gatewayId) {
     if (!isBareGatewayId(gatewayId))
         return null;
-    if (!isGatewayDesiredDoc(data) ||
-        data.gatewayId !== gatewayId ||
-        !isGatewayMutableConfigForGateway(data, gatewayId)) {
+    const gateway = projectGatewayDesiredRootForGateway(data, gatewayId);
+    if (gateway === null)
         return null;
-    }
-    return { kind: "durable", gateway: data, config: data };
+    return { kind: "durable", gateway, config: gateway };
 }
 export async function readGatewayAuthorization(db, gatewayId) {
     if (!isBareGatewayId(gatewayId))

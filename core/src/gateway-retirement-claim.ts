@@ -9,8 +9,8 @@ import {
   GLM_OPERATIONS_COLLECTION,
 } from "@octogee/shared/types/glm";
 import {
-  isGatewayDesiredDoc,
   isGatewayRuntimeDoc,
+  projectGatewayDesiredRootForGateway,
   type GatewayDoc,
   type GatewayRetirementClaim as RetirementClaim,
 } from "@octogee/shared/types/gateway-releases";
@@ -185,11 +185,12 @@ function claimableGatewayRetirementRoot(
   rootData: GatewayDoc & { desiredStatus: "running" | "paused" };
   root: Record<string, unknown>;
 } {
-  if (!isGatewayDesiredDoc(value) || value.gatewayId !== gatewayId) {
+  const projected = projectGatewayDesiredRootForGateway(value, gatewayId);
+  if (projected === null) {
     throw new GatewayRetirementConflictError(`gateway ${gatewayId} durable root is unavailable`);
   }
-  const root = value as unknown as Record<string, unknown>;
-  if (value.desiredStatus === "retired") {
+  const root = projected as unknown as Record<string, unknown>;
+  if (projected.desiredStatus === "retired") {
     throw new GatewayRetirementConflictError(`gateway ${gatewayId} is already retired`);
   }
   if (root.retirementClaim != null) {
@@ -197,13 +198,13 @@ function claimableGatewayRetirementRoot(
       `gateway ${gatewayId} already has a retirement claim`,
     );
   }
-  if (value.liveRelease != null && value.desiredRelease !== value.liveRelease) {
+  if (projected.liveRelease != null && projected.desiredRelease !== projected.liveRelease) {
     throw new GatewayRetirementConflictError(
       `gateway ${gatewayId} desired release is not converged to live`,
     );
   }
   return {
-    rootData: value as GatewayDoc & { desiredStatus: "running" | "paused" },
+    rootData: projected as GatewayDoc & { desiredStatus: "running" | "paused" },
     root,
   };
 }

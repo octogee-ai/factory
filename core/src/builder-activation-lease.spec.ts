@@ -371,6 +371,7 @@ describe("requestBuilderActivationLease — durable root policy + revision telem
           operatorAccess: null,
           desiredStatus: "running",
           builderSlug: "mira",
+          coOwnerUids: [],
           liveRelease: 2,
           openclawOverrides: null,
           modelBrokerLimits: null,

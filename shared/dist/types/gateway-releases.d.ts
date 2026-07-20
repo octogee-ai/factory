@@ -1,3 +1,4 @@
+import { type GatewayMutableConfig } from "./gateway-mutable-config.js";
 import type { GatewayPreemptionHandoffSpec } from "./glm.js";
 export declare const GATEWAY_RELEASES_SUBCOLLECTION = "releases";
 export declare const GATEWAY_ASSIGNMENTS_SUBCOLLECTION = "assignments";
@@ -149,6 +150,7 @@ export interface GatewayRuntimeDoc {
 }
 export declare function isGatewayRuntimeDoc(data: unknown): data is GatewayRuntimeDoc;
 export declare function isGatewayDesiredDoc(data: unknown): data is GatewayDoc;
+export declare function projectGatewayDesiredRootForGateway(value: unknown, gatewayId: string): (GatewayDoc & GatewayMutableConfig) | null;
 export declare function helmReleaseNameForGateway(gatewayId: string): string;
 export declare function gatewayEdgeServiceName(id: string): string;
 export declare function gatewayPodServiceName(id: string): string;

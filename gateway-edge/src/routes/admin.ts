@@ -20,8 +20,8 @@ import { modelRefForCatalogEntry } from "@octogee/shared/types/agent-models";
 import { BUILDER_TIERS, TIERS } from "@octogee/shared/types/billing-tiers";
 import {
   GATEWAY_RELEASES_SUBCOLLECTION,
-  isGatewayDesiredDoc,
   isReleasePayload,
+  projectGatewayDesiredRootForGateway,
 } from "@octogee/shared/types/gateway-releases";
 import {
   DEFAULT_FREE_TIER_MODEL_REF,
@@ -311,12 +311,11 @@ router.put("/platform-trial-config", async (req, res) => {
   try {
     const sourceRef = db.collection("gateways").doc(config.releaseSourceGatewayId);
     const sourceSnap = await sourceRef.get();
-    const source = sourceSnap.data();
-    if (
-      !isGatewayDesiredDoc(source) ||
-      source.gatewayId !== config.releaseSourceGatewayId ||
-      source.desiredStatus === "retired"
-    ) {
+    const source = projectGatewayDesiredRootForGateway(
+      sourceSnap.data(),
+      config.releaseSourceGatewayId,
+    );
+    if (source === null || source.desiredStatus === "retired") {
       res.status(400).json({ error: "invalid_release_source" });
       return;
     }

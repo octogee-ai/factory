@@ -1,12 +1,11 @@
 import type { Firestore } from "firebase-admin/firestore";
 import {
-  isGatewayDesiredDoc,
   isGatewayRuntimeDoc,
+  projectGatewayDesiredRootForGateway,
   type GatewayDoc,
 } from "@octogee/shared/types/gateway-releases";
 import { parseAssignmentDoc } from "@octogee/core/assignment-doc";
 import {
-  isGatewayMutableConfigForGateway,
   type GatewayMutableConfig,
 } from "@octogee/core/gateway-live-release";
 
@@ -43,9 +42,7 @@ function isDurableGatewayRoot(
   gatewayId: string,
 ): data is GatewayDoc & GatewayMutableConfig {
   return (
-    isGatewayDesiredDoc(data) &&
-    data.gatewayId === gatewayId &&
-    isGatewayMutableConfigForGateway(data, gatewayId)
+    projectGatewayDesiredRootForGateway(data, gatewayId) !== null
   );
 }
 

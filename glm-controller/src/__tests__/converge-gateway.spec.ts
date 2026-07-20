@@ -106,6 +106,17 @@ describe("planGatewayConvergence", () => {
     ).toEqual({ kind: "upsert", replicas: 0 });
   });
 
+  it("marks an applied paused release live without booting a pod", () => {
+    expect(
+      planGatewayConvergence({
+        gateway: gateway({ desiredStatus: "paused", liveRelease: 1, desiredRelease: 2 }),
+        artifact: artifact(),
+        helm: { imageRepository: REPO, imageTag: "def5678", replicas: 0 },
+        deploymentReady: false,
+      }),
+    ).toEqual({ kind: "mark-live" });
+  });
+
   it("marks the desired release live once the deployment is ready at the desired image", () => {
     expect(
       planGatewayConvergence({

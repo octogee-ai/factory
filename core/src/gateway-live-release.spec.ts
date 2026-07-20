@@ -210,6 +210,26 @@ describe("gateway durable configuration authorization", () => {
     expect(gatewayAuthorizationFromRootDocument(durableGateway(), "other")).toBeNull();
   });
 
+  it("authorizes an empty retired co-owner mirror without exposing it as mutable config", () => {
+    const authorization = gatewayAuthorizationFromRootDocument(
+      durableGateway({ coOwnerUids: [] }),
+      "bender",
+    );
+
+    expect(authorization).toMatchObject({
+      kind: "durable",
+      gateway: { gatewayId: "bender" },
+      config: { ownerUid: "uid-ceckert" },
+    });
+    expect(authorization?.config).not.toHaveProperty("coOwnerUids");
+    expect(
+      gatewayAuthorizationFromRootDocument(
+        durableGateway({ coOwnerUids: ["uid-former-helper"] }),
+        "bender",
+      ),
+    ).toBeNull();
+  });
+
   it("rejects revision-shaped ids before attempting a durable root read", async () => {
     let reads = 0;
     const db = {

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { GATEWAYS_COLLECTION } from "./fleet-controller.js";
-import { isGatewayMutableConfigForGateway, } from "./gateway-mutable-config.js";
+import { projectGatewayMutableConfigForGateway, } from "./gateway-mutable-config.js";
 import { IMAGE_TAG_PATTERN, isW9CandidateImageTag, } from "./image-tag.js";
 import { GLM_GATEWAYS_COLLECTION } from "./glm.js";
 // Simple-roll model (GATEWAY-SIMPLE-ROLL-SPEC): durable identity
@@ -125,6 +125,12 @@ export function isGatewayDesiredDoc(data) {
         typeof d.latestRelease === "number" &&
         (d.desiredStatus === "running" || d.desiredStatus === "paused" || d.desiredStatus === "retired"));
 }
+export function projectGatewayDesiredRootForGateway(value, gatewayId) {
+    if (!isGatewayDesiredDoc(value) || value.gatewayId !== gatewayId)
+        return null;
+    const projected = projectGatewayMutableConfigForGateway(value, gatewayId);
+    return projected;
+}
 export function helmReleaseNameForGateway(gatewayId) {
     return `octogee-gw-${gatewayId}`;
 }
@@ -218,9 +224,7 @@ export function classifyGatewayField(field) {
     return "release";
 }
 function isDurablePlacementRoot(value, gatewayId) {
-    return (isGatewayDesiredDoc(value) &&
-        value.gatewayId === gatewayId &&
-        isGatewayMutableConfigForGateway(value, gatewayId));
+    return projectGatewayDesiredRootForGateway(value, gatewayId) !== null;
 }
 function placementRuntimeRejectReason(snap, gatewayId) {
     const data = snap.exists ? snap.data() : undefined;

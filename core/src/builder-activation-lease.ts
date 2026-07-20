@@ -8,11 +8,10 @@ import {
 } from "@octogee/shared/types/glm";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
-  isGatewayMutableConfigForGateway,
   type GatewayMutableConfig,
 } from "@octogee/shared/types/gateway-mutable-config";
 import {
-  isGatewayDesiredDoc,
+  projectGatewayDesiredRootForGateway,
   type GatewayDoc,
 } from "@octogee/shared/types/gateway-releases";
 import { readGatewayRuntimeHeartbeat } from "./gateway-live-release.js";
@@ -139,14 +138,7 @@ function durableActivationGateway(
   doc: FirestoreDocLike,
 ): DurableActivationGateway | null {
   const data = doc.data();
-  if (
-    !isGatewayDesiredDoc(data) ||
-    data.gatewayId !== doc.id ||
-    !isGatewayMutableConfigForGateway(data, doc.id)
-  ) {
-    return null;
-  }
-  return data as DurableActivationGateway;
+  return projectGatewayDesiredRootForGateway(data, doc.id) as DurableActivationGateway | null;
 }
 
 function isInactiveDedicatedStatus(

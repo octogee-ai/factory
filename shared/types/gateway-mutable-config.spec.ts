@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isCanonicalTrialStandbyMutableConfigForGateway,
   isGatewayMutableConfigForGateway,
   isGatewayMutableConfig,
+  projectGatewayMutableConfigForGateway,
   type GatewayMutableConfig,
 } from "./gateway-mutable-config.js";
 
@@ -54,6 +56,47 @@ describe("gateway mutable config", () => {
         validConfig({ preemption: { warmTargetGatewayId: "" } }),
       ),
     ).toBe(false);
+  });
+
+  it("projects only an empty retired co-owner mirror out of a desired-root read", () => {
+    const transitional = { ...validConfig(), coOwnerUids: [] };
+
+    expect(isGatewayMutableConfigForGateway(transitional, "owner")).toBe(false);
+    expect(projectGatewayMutableConfigForGateway(transitional, "owner")).toEqual(validConfig());
+    expect(
+      projectGatewayMutableConfigForGateway(
+        { ...validConfig(), coOwnerUids: ["uid-former-helper"] },
+        "owner",
+      ),
+    ).toBeNull();
+  });
+
+  it("accepts only an empty retired co-owner mirror on a canonical trial standby read", () => {
+    const trial = validConfig({
+      ownerUid: null,
+      builderSlug: null,
+      serviceAccountName: "octogee-gw-trial-op-000001",
+      serviceAccount: { create: true },
+      operatorAccess: {
+        shellsEnabled: false,
+        controlUiEnabled: false,
+        reason: "runtime-trust-boundary-not-provisioned",
+      },
+      allocation: { kind: "trial", state: "standby", configHash: "0123456789abcdef" },
+    });
+
+    const projected = projectGatewayMutableConfigForGateway(
+      { ...trial, desiredStatus: "paused", coOwnerUids: [] },
+      "trial-op-000001",
+    );
+    expect(isCanonicalTrialStandbyMutableConfigForGateway(
+      projected,
+      "trial-op-000001",
+    )).toBe(true);
+    expect(projectGatewayMutableConfigForGateway(
+      { ...trial, desiredStatus: "paused", coOwnerUids: ["uid-former-helper"] },
+      "trial-op-000001",
+    )).toBeNull();
   });
 
   it("keeps shared gateways ownerless while requiring the complete dedicated owner pair", () => {

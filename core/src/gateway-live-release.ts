@@ -7,13 +7,14 @@ import {
   isBareGatewayId,
   isGatewayMutableConfig,
   isGatewayMutableConfigForGateway,
+  projectGatewayMutableConfigForGateway,
   type GatewayMutableConfig,
 } from "@octogee/shared/types/gateway-mutable-config";
 import {
   GATEWAY_RELEASES_SUBCOLLECTION,
-  isGatewayDesiredDoc,
   isGatewayRuntimeDoc,
   isReleasePayload,
+  projectGatewayDesiredRootForGateway,
   upgradeReleasePayloadSchema,
   type GatewayDoc,
   type ReleasePayload,
@@ -27,6 +28,7 @@ export {
   isBareGatewayId,
   isGatewayMutableConfig,
   isGatewayMutableConfigForGateway,
+  projectGatewayMutableConfigForGateway,
 };
 export type { GatewayMutableConfig };
 
@@ -59,14 +61,11 @@ function eligibleConfiguredBuilderGateway(
   value: unknown,
   input: { gatewayId: string; podName: string | undefined; slug: string },
 ): ConfiguredBuilderGateway | null {
-  if (
-    !isGatewayDesiredDoc(value) ||
-    value.gatewayId !== input.gatewayId ||
-    !isGatewayMutableConfigForGateway(value, input.gatewayId)
-  ) {
-    return null;
-  }
-  const gateway = value as ConfiguredBuilderGateway;
+  const gateway = projectGatewayDesiredRootForGateway(
+    value,
+    input.gatewayId,
+  ) as ConfiguredBuilderGateway | null;
+  if (gateway === null) return null;
   if (
     !podBelongsToGateway(input.gatewayId, input.podName) ||
     gateway.gatewayClass === "shared" ||
@@ -207,14 +206,9 @@ export function gatewayAuthorizationFromRootDocument(
   gatewayId: string,
 ): GatewayAuthorization | null {
   if (!isBareGatewayId(gatewayId)) return null;
-  if (
-    !isGatewayDesiredDoc(data) ||
-    data.gatewayId !== gatewayId ||
-    !isGatewayMutableConfigForGateway(data, gatewayId)
-  ) {
-    return null;
-  }
-  return { kind: "durable", gateway: data, config: data };
+  const gateway = projectGatewayDesiredRootForGateway(data, gatewayId);
+  if (gateway === null) return null;
+  return { kind: "durable", gateway, config: gateway };
 }
 
 export async function readGatewayAuthorization(

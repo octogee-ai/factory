@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
-import { isGatewayDesiredDoc, } from "@octogee/shared/types/gateway-releases";
-import { isGatewayMutableConfigForGateway, } from "@octogee/shared/types/gateway-mutable-config";
+import { projectGatewayDesiredRootForGateway, } from "@octogee/shared/types/gateway-releases";
 import { isDefinitiveConfigRpcRejection, MigrationTransportError, } from "./fleet-migration-client.js";
 function canonicalJsonValue(value) {
     if (Array.isArray(value))
@@ -33,24 +32,23 @@ function mutableConfigHash(config) {
     return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 export function customerMigrationV2GatewayRootFence(value, gatewayId) {
-    if (!isGatewayDesiredDoc(value) || value.gatewayId !== gatewayId)
-        return null;
-    if (!isGatewayMutableConfigForGateway(value, gatewayId))
+    const root = projectGatewayDesiredRootForGateway(value, gatewayId);
+    if (root === null)
         return null;
     const valid = [
-        value.desiredStatus === "running",
-        value.retireAfter == null,
-        value.retirementClaim == null,
-        typeof value.liveRelease === "number",
-        value.desiredRelease === value.liveRelease,
-        typeof value.updatedAt === "number" && Number.isFinite(value.updatedAt),
-        value.gatewayClass === "builder" || value.gatewayClass === "operator",
-        typeof value.ownerUid === "string" && value.ownerUid.length > 0,
-        typeof value.builderSlug === "string" && value.builderSlug.length > 0,
+        root.desiredStatus === "running",
+        root.retireAfter == null,
+        root.retirementClaim == null,
+        typeof root.liveRelease === "number",
+        root.desiredRelease === root.liveRelease,
+        typeof root.updatedAt === "number" && Number.isFinite(root.updatedAt),
+        root.gatewayClass === "builder" || root.gatewayClass === "operator",
+        typeof root.ownerUid === "string" && root.ownerUid.length > 0,
+        typeof root.builderSlug === "string" && root.builderSlug.length > 0,
     ].every(Boolean);
     if (!valid)
         return null;
-    const fenced = value;
+    const fenced = root;
     return {
         gatewayId,
         updatedAt: fenced.updatedAt,

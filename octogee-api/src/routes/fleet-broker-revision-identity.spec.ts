@@ -229,4 +229,23 @@ describe("fleet broker durable root boundary", () => {
     ).resolves.toEqual({ allowed: false });
   });
 
+  it("authorizes only an empty retired co-owner mirror on a durable roster root", async () => {
+    await expect(
+      resolveAssignedUsersRevisionGate(
+        gatewayStateDb(durableGatewayState({ coOwnerUids: [] })) as never,
+        "default",
+        "default",
+        { requireDurableRoot: true },
+      ),
+    ).resolves.toEqual({ allowed: true });
+    await expect(
+      resolveAssignedUsersRevisionGate(
+        gatewayStateDb(durableGatewayState({ coOwnerUids: ["uid-former-helper"] })) as never,
+        "default",
+        "default",
+        { requireDurableRoot: true },
+      ),
+    ).resolves.toEqual({ allowed: false });
+  });
+
 });

@@ -52,6 +52,7 @@ import { createGatewayRuntimeConfigPreparer } from "./gateway-runtime-config.js"
 import {
   isGatewayDesiredDoc,
   isGatewayRuntimeDoc,
+  projectGatewayDesiredRootForGateway,
   W9_GATEWAY_EDGE_IMAGE_REPOSITORY,
   type GatewayDoc,
   type GatewayRuntimeDoc,
@@ -952,8 +953,11 @@ async function convergeOneGateway(
         const rootRef = db.collection(GATEWAYS_COLLECTION).doc(gateway.gatewayId);
         const glmRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(gateway.gatewayId);
         const rootSnap = await txn.get(rootRef);
-        const root = rootSnap.exists ? rootSnap.data() : undefined;
-        if (!isGatewayDesiredDoc(root) || root.desiredRelease !== gateway.desiredRelease) {
+        const root = projectGatewayDesiredRootForGateway(
+          rootSnap.exists ? rootSnap.data() : undefined,
+          gateway.gatewayId,
+        );
+        if (root === null || root.desiredRelease !== gateway.desiredRelease) {
           return;
         }
         txn.set(

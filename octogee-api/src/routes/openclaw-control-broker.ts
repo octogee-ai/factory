@@ -30,7 +30,10 @@ import {
   type OpenClawBrokerProfile,
   type ResolvedGatewayAccess,
 } from "@octogee/core/gateway-principal-access";
-import { isGatewayDesiredDoc, isGatewayRuntimeDoc } from "@octogee/shared/types/gateway-releases";
+import {
+  isGatewayRuntimeDoc,
+  projectGatewayDesiredRootForGateway,
+} from "@octogee/shared/types/gateway-releases";
 import { isGatewayClassControlUiAccessEnabled, resolveGatewayClass } from "@octogee/shared/types/glm";
 import { revisionIdFromGatewayPodName } from "../lib/gateway-pod-revision.js";
 import { setGatewayAccessDenialAudit } from "../../../gateway-edge/src/lib/gateway-access-audit.js";
@@ -268,14 +271,14 @@ function isReadyLiveServingRevision(
   revisionId: string,
   now: number,
 ): boolean {
-  return isGatewayDesiredDoc(root) &&
-    root.gatewayId === gatewayId &&
-    root.desiredStatus === "running" &&
-    root.desiredRelease === root.liveRelease &&
+  const gateway = projectGatewayDesiredRootForGateway(root, gatewayId);
+  return gateway !== null &&
+    gateway.desiredStatus === "running" &&
+    gateway.desiredRelease === gateway.liveRelease &&
     revisionId === gatewayId &&
     isGatewayRuntimeDoc(revision) &&
     revision.gatewayId === gatewayId &&
-    revision.release === root.liveRelease &&
+    revision.release === gateway.liveRelease &&
     revision.lifecycle === "serving" &&
     isOpenClawControlRevisionRuntimeReady(revision, { gatewayId, revisionId, now });
 }

@@ -119,9 +119,8 @@ export function planGatewayConvergence(
     return { kind: "upsert", replicas };
   }
   if (
-    gateway.desiredStatus === "running" &&
-    input.deploymentReady &&
-    gateway.liveRelease !== gateway.desiredRelease
+    gateway.liveRelease !== gateway.desiredRelease &&
+    (gateway.desiredStatus === "paused" || input.deploymentReady)
   ) {
     return { kind: "mark-live" };
   }

@@ -4,6 +4,7 @@ import {
   advanceCustomerMigrationV2,
   beginCustomerMigrationV2Abort,
   classifyCustomerMigrationV2Error,
+  customerMigrationV2GatewayRootFence,
   isCustomerMigrationV2PostIntent,
   isCustomerMigrationV2Transition,
   type CustomerMigrationV2Deps,
@@ -73,6 +74,49 @@ function deps(): CustomerMigrationV2Deps {
     now: vi.fn(() => 1_000),
   };
 }
+
+describe("customerMigrationV2GatewayRootFence", () => {
+  const root = (coOwnerUids: string[]) => ({
+    gatewayId: "source",
+    createdAt: 1,
+    createdBy: "test",
+    updatedAt: 10,
+    updatedBy: "test",
+    latestRelease: 1,
+    desiredRelease: 1,
+    liveRelease: 1,
+    desiredStatus: "running",
+    configSchemaVersion: 1,
+    profile: "operator",
+    gatewayClass: "operator",
+    imageProfile: "operator",
+    sizingTier: "small",
+    computeClass: null,
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: null,
+    serviceAccount: null,
+    operatorAccess: { shellsEnabled: true },
+    ownerUid: "uid-1",
+    builderSlug: "alice",
+    openclawOverrides: null,
+    modelBrokerLimits: null,
+    preemption: null,
+    allocation: null,
+    coOwnerUids,
+  });
+
+  it("projects an empty retired co-owner mirror and rejects non-empty legacy authority", () => {
+    expect(customerMigrationV2GatewayRootFence(root([]), "source")).toMatchObject({
+      gatewayId: "source",
+      ownerUid: "uid-1",
+    });
+    expect(customerMigrationV2GatewayRootFence(
+      root(["uid-former-helper"]),
+      "source",
+    )).toBeNull();
+  });
+});
 
 describe("advanceCustomerMigrationV2", () => {
   it("drives the lean data-plane migration with no config-protocol steps", async () => {

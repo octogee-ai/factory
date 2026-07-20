@@ -149,6 +149,27 @@ describe('resolveGatewayUrl — glm-heartbeat / revision resolution (no round-ro
     expect(r.url).toBe(URL_A);
   });
 
+  it('routes only an empty retired co-owner mirror on the desired root', async () => {
+    const empty = mkDb({
+      'users/u1': { provisioning: { openclaw: { gatewayId: 'gw-a' } } },
+      'gateways/gw-a': durableRoot('gw-a', { coOwnerUids: [] }),
+      'glmGateways/gw-a': servingRuntime('gw-a', 1, { internalUrl: URL_A }),
+    });
+    await expect(resolveGatewayUrl({ db: empty, uid: 'u1' })).resolves.toMatchObject({
+      gatewayId: 'gw-a',
+      url: URL_A,
+    });
+
+    const nonEmpty = mkDb({
+      'users/u1': { provisioning: { openclaw: { gatewayId: 'gw-a' } } },
+      'gateways/gw-a': durableRoot('gw-a', { coOwnerUids: ['uid-former-helper'] }),
+      'glmGateways/gw-a': servingRuntime('gw-a', 1, { internalUrl: URL_A }),
+    });
+    await expect(resolveGatewayUrl({ db: nonEmpty, uid: 'u1' })).rejects.toMatchObject({
+      code: 'gateway-root-invalid',
+    });
+  });
+
   it('GatewayDoc with NO runtime realization: fails loud, never dials', async () => {
     const db = mkDb({
       'users/u1': { provisioning: { openclaw: { gatewayId: 'gw-a' } } },

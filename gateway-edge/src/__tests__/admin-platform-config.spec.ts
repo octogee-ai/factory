@@ -81,6 +81,33 @@ function buildApp() {
   return app;
 }
 
+function durableSharedRoot(overrides: Record<string, unknown> = {}) {
+  return {
+    gatewayId: "default",
+    desiredStatus: "running",
+    latestRelease: 42,
+    desiredRelease: 42,
+    configSchemaVersion: 1,
+    profile: "standard",
+    gatewayClass: "shared",
+    imageProfile: "standard",
+    sizingTier: null,
+    computeClass: null,
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: null,
+    serviceAccount: null,
+    operatorAccess: null,
+    ownerUid: null,
+    builderSlug: null,
+    openclawOverrides: null,
+    modelBrokerLimits: null,
+    preemption: null,
+    coOwnerUids: [],
+    ...overrides,
+  };
+}
+
 describe("admin platform-config", () => {
   let app: express.Express;
 
@@ -394,12 +421,7 @@ describe("admin platform-trial-config", () => {
   });
 
   it("PUT writes validated defaults with audit fields", async () => {
-    platformDocs["gateways/default"] = {
-      gatewayId: "default",
-      desiredStatus: "running",
-      latestRelease: 42,
-      desiredRelease: 42,
-    };
+    platformDocs["gateways/default"] = durableSharedRoot();
     platformDocs["gateways/default/releases/42"] = {
       gatewayId: "default",
       release: 42,
@@ -458,13 +480,26 @@ describe("admin platform-trial-config", () => {
     expect(setCalls).toHaveLength(0);
   });
 
+  it("PUT rejects a release source with non-empty legacy co-owner authority", async () => {
+    platformDocs["gateways/default"] = durableSharedRoot({
+      coOwnerUids: ["uid-former-helper"],
+    });
+
+    const res = await request(app)
+      .put("/api/admin/platform-trial-config")
+      .send({
+        schemaVersion: 1,
+        defaultPersonalTier: "personal_pro",
+        defaultBuilderTier: "pro",
+        releaseSourceGatewayId: "default",
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_release_source");
+  });
+
   it("PUT rejects a durable root whose pinned release payload is absent", async () => {
-    platformDocs["gateways/default"] = {
-      gatewayId: "default",
-      desiredStatus: "running",
-      latestRelease: 42,
-      desiredRelease: 42,
-    };
+    platformDocs["gateways/default"] = durableSharedRoot();
 
     const res = await request(app)
       .put("/api/admin/platform-trial-config")

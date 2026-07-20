@@ -255,6 +255,7 @@ function seedNewSchemaGateway(
     openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
+    coOwnerUids: [],
     ...gatewayOverrides,
   };
   return {

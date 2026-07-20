@@ -9,13 +9,10 @@ import {
   parseAgentId,
 } from "@octogee/shared/types/identity";
 import {
-  isGatewayDesiredDoc,
+  projectGatewayDesiredRootForGateway,
   type GatewayDoc,
 } from "@octogee/shared/types/gateway-releases";
-import {
-  isGatewayMutableConfigForGateway,
-  type GatewayMutableConfig,
-} from "@octogee/core/gateway-live-release";
+import type { GatewayMutableConfig } from "@octogee/core/gateway-live-release";
 import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
 import { readAssignedSlugsForGateway } from "@octogee/core/assigned-roster";
 import { parseAssignmentDoc } from "@octogee/core/assignment-doc";
@@ -71,9 +68,7 @@ function isDurableGatewayRoot(
   gatewayId: string,
 ): data is GatewayDoc & GatewayMutableConfig {
   return (
-    isGatewayDesiredDoc(data) &&
-    data.gatewayId === gatewayId &&
-    isGatewayMutableConfigForGateway(data, gatewayId)
+    projectGatewayDesiredRootForGateway(data, gatewayId) !== null
   );
 }
 
