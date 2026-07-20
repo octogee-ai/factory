@@ -54,12 +54,14 @@ function appWith(args: {
   sessions: OpenClawControlSessionManager;
   redeem?: Parameters<typeof createOpenClawControlHttpRouter>[0]["redeem"];
   authorize?: Parameters<typeof createOpenClawControlHttpRouter>[0]["authorize"];
+  loadGatewayToken?: Parameters<typeof createOpenClawControlHttpRouter>[0]["loadGatewayToken"];
   httpTimeoutMs?: number;
 }) {
   const app = express();
   app.use("/api/g/:gatewayId/openclaw", createOpenClawControlHttpRouter({
     ...args,
     authorize: args.authorize ?? (async () => true),
+    loadGatewayToken: args.loadGatewayToken ?? (async () => "gateway-secret"),
   }));
   return app;
 }
@@ -109,6 +111,23 @@ describe("OpenClaw Dashboard HTTP surface", () => {
       .toThrow(/loopback/i);
   });
 
+  it("allows the native chat session selector without weakening sensitive query rejection", () => {
+    expect(openClawControlUpstreamPath(
+      "/api/g/bender/openclaw/chat?session=agent%3Aoctogee-eggman-coach%3Amain",
+      "bender",
+    )).toBe(
+      "/g/bender/openclaw/chat?session=agent%3Aoctogee-eggman-coach%3Amain",
+    );
+    expect(() => openClawControlUpstreamPath(
+      "/api/g/bender/openclaw/chat?session=agent%3Aoctogee-eggman-coach%3Amain&token=secret",
+      "bender",
+    )).toThrow(/sensitive/i);
+    expect(() => openClawControlUpstreamPath(
+      "/api/g/bender/openclaw/chat?session=agent%3Aoctogee-eggman-coach%3Amain&session=secret%2Fpath",
+      "bender",
+    )).toThrow(/sensitive/i);
+  });
+
   it("redeems once into a cross-site redirect-compatible secure path-scoped boot-local cookie", async () => {
     const manager = sessions();
     const ticket = "a".repeat(43);
@@ -136,10 +155,15 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     }));
   });
 
-  it("proxies authenticated GET/HEAD assets with exact security headers and no browser identity or token", async () => {
+  it("authenticates native HTTP resources without forwarding browser identity or exposing the gateway token", async () => {
     let captured: http.IncomingHttpHeaders = {};
     const upstream = http.createServer((req, res) => {
       captured = req.headers;
+      if (req.headers.authorization !== "Bearer gateway-secret") {
+        res.statusCode = 401;
+        res.end("missing gateway auth");
+        return;
+      }
       res.setHeader("content-type", "text/javascript");
       res.setHeader("set-cookie", "openclaw=gateway-secret");
       res.setHeader("authorization", "Bearer gateway-secret");
@@ -154,7 +178,7 @@ describe("OpenClaw Dashboard HTTP surface", () => {
       .set("x-forwarded-for", "forged")
       .set("x-openclaw-token", "browser-token");
     expect(response.status).toBe(200);
-    expect(captured.authorization).toBeUndefined();
+    expect(captured.authorization).toBe("Bearer gateway-secret");
     expect(captured.cookie).toBeUndefined();
     expect(captured["x-forwarded-for"]).toBeUndefined();
     expect(captured["x-openclaw-token"]).toBeUndefined();
@@ -401,9 +425,11 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
 
   it("requires the exact Origin, rewrites connect, forwards native operator RPCs, and scrubs frames/audit", async () => {
     const upstreamFrames: Array<Record<string, unknown>> = [];
+    let upstreamOrigin: string | undefined;
     const upstream = http.createServer();
     const upstreamWs = new WebSocketServer({ noServer: true });
     upstream.on("upgrade", (req, socket, head) => {
+      upstreamOrigin = req.headers.origin;
       upstreamWs.handleUpgrade(req, socket, head, (ws) => upstreamWs.emit("connection", ws, req));
     });
     upstreamWs.on("connection", (ws) => {
@@ -519,6 +545,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       }),
     }));
     expect(upstreamFrames.some((frame) => frame.id === "owner-tool")).toBe(true);
+    expect(upstreamOrigin).toBeUndefined();
     expect(JSON.stringify(browserFrames)).not.toContain("gateway-secret");
     expect(JSON.stringify(browserFrames)).not.toContain("browser-token");
     expect(audit).toHaveBeenCalledWith(expect.objectContaining({
@@ -827,11 +854,15 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       browser.once("open", resolve);
       browser.once("error", reject);
     });
+    const browserClosed = new Promise<{ code: number; reason: string }>((resolve) => {
+      browser.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+    });
     await accepted;
     await Promise.race([
       closed,
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("upstream stayed open")), 500)),
     ]);
+    await expect(browserClosed).resolves.toEqual({ code: 1008, reason: "capability-revoked" });
     heldSocket?.destroy();
     expect(authorizations).toBeGreaterThanOrEqual(3);
   });

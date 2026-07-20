@@ -73,6 +73,18 @@ export function sanitizeOpenClawControlServerFrame(
   const cleaned = scrub(structuredClone(frame), credentials);
   const item = record(cleaned);
   const payload = record(item?.payload);
-  if (payload?.type === "hello-ok") delete payload.auth;
+  if (payload?.type === "hello-ok") {
+    const auth = record(payload.auth);
+    const scopes = Array.isArray(auth?.scopes) && auth.scopes.every((scope) =>
+      typeof scope === "string" && scope.length > 0 && scope.length <= 128
+    )
+      ? auth.scopes
+      : null;
+    if (auth?.role === "operator" && scopes) {
+      payload.auth = { role: "operator", scopes };
+    } else {
+      delete payload.auth;
+    }
+  }
   return JSON.stringify(cleaned);
 }

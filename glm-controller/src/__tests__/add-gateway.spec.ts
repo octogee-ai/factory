@@ -366,6 +366,38 @@ describe("createAddGatewayHandler — happy path", () => {
     expect(result.success).toBe(true);
   });
 
+  it("waits past a same-build heartbeat from a different OpenClaw version and an ambiguous SHA", async () => {
+    const imageTag = "abc1234-oc2026.7.1";
+    const state: FakeState = {
+      helmInstances: new Set(["canary"]),
+      helmImageTags: new Map([["canary", imageTag]]),
+      availableReplicas: new Map([["octogee-gateway-canary", 1]]),
+      heartbeats: new Map([[
+        "canary",
+        { lastHeartbeatAt: 1, version: "abc1234-oc2026.7.0" },
+      ]]),
+      platformReady: new Set(),
+    };
+    let polls = 0;
+    const deps = makeDeps(state, {
+      wait: vi.fn(async () => {
+        polls++;
+        state.heartbeats.set("canary", {
+          lastHeartbeatAt: polls + 1,
+          version: polls === 1 ? "abc1234" : imageTag,
+        });
+      }),
+    });
+
+    const result = await createAddGatewayHandler(deps)(
+      mkOp({ input: { gatewayId: "canary", imageTag } }),
+      makeCtx(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(deps.readGatewayHeartbeat).toHaveBeenCalledTimes(3);
+  });
+
   it("uses the durable revision id for Helm, deployment, and heartbeat checks", async () => {
     const state: FakeState = {
       helmInstances: new Set(["canary-r7"]),

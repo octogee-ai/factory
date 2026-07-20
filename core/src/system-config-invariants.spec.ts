@@ -143,4 +143,36 @@ describe("system config platform invariants", () => {
       "plugins.entries.octogee-chat-tools.config",
     );
   });
+
+  it("removes retired platform plugin ids from durable config", () => {
+    const config: Record<string, unknown> = {
+      plugins: {
+        allow: ["customer-plugin", "octogee-mattermost-tools", "octogee-router"],
+        entries: {
+          "customer-plugin": { enabled: true },
+          "octogee-mattermost-tools": { enabled: true },
+          "octogee-router": { enabled: true },
+        },
+      },
+    };
+
+    const result = reconcilePlatformInvariants(config, isolated);
+
+    expect(result.changedPaths).toEqual(expect.arrayContaining([
+      "plugins.allow",
+      "plugins.entries.octogee-mattermost-tools",
+      "plugins.entries.octogee-router",
+    ]));
+    expect(result.changedPaths.filter((path) => path === "plugins.allow")).toHaveLength(1);
+    const plugins = config.plugins as Record<string, unknown>;
+    expect(plugins.allow).toEqual(expect.arrayContaining(["customer-plugin", "octogee-chat-tools"]));
+    expect(plugins.allow).not.toEqual(expect.arrayContaining([
+      "octogee-mattermost-tools",
+      "octogee-router",
+    ]));
+    expect(plugins.entries).toMatchObject({ "customer-plugin": { enabled: true } });
+    expect(plugins.entries).not.toHaveProperty("octogee-mattermost-tools");
+    expect(plugins.entries).not.toHaveProperty("octogee-router");
+    expect(platformInvariantViolations(config, isolated)).toEqual([]);
+  });
 });

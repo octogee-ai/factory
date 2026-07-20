@@ -561,6 +561,29 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
     expect(snap?.builderSubscription).toEqual({ tier: "hobby", status: "active" });
   });
 
+  it("loadUserSnapshot carries the trial grant into the pod-side lifecycle snapshot", async () => {
+    const trialGrant = {
+      schemaVersion: 1,
+      personalTier: "personal_pro",
+      builderTier: "pro",
+      gatewayId: "trial-op-000001",
+      configHash: "config-a",
+      claimedAt: { _seconds: 1_783_500_000 },
+    };
+    const client = mkClient({
+      userSnapshot: vi.fn(async () => fullSnapshot({ trialGrant })),
+    });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client,
+      rpc: {} as unknown as GatewayRpcClient,
+      log: vi.fn(),
+    });
+
+    const snap = await adapter.loadUserSnapshot("uid-tester10");
+
+    expect(snap?.trialGrant).toBe(trialGrant);
+  });
+
   it("loadUserSnapshot carries the free-tier dial ref (the house pin must follow the operator)", async () => {
     const client = mkClient({
       userSnapshot: vi.fn(async () =>

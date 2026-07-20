@@ -48,6 +48,7 @@ function harness(input: {
   markErrorUid?: string;
   releaseErrorBeforeCommit?: Error;
   releaseErrorAfterCommit?: Error;
+  targetVersion?: string;
 } = {}) {
   const events: string[] = [];
   let assignments = input.assignments ?? [assignment("u1", "alice"), assignment("u2", "bob")];
@@ -63,7 +64,7 @@ function harness(input: {
     }),
     readPodHealth: vi.fn(async (pod) => ({
       status: "ready",
-      version: pod.uid === targetPod.uid ? "new-sha" : "old-sha",
+      version: pod.uid === targetPod.uid ? input.targetVersion ?? "new-sha" : "old-sha",
       handoffReleased: pod.uid === targetPod.uid && targetReleased,
     })),
     readAssignments: vi.fn(async () => assignments),
@@ -137,7 +138,7 @@ describe("surge customer handoff", () => {
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
-      desiredVersion: "new-sha",
+      desiredImageTag: "new-sha",
       requiresCustomerMigration: false,
     })).resolves.toEqual({ ready: false });
 
@@ -149,8 +150,30 @@ describe("surge customer handoff", () => {
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
-      desiredVersion: "new-sha",
+      desiredImageTag: "new-sha",
       requiresCustomerMigration: false,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual([
+      "assignment:u1:quiescing",
+      "quiesce:alice",
+      "transfer:alice",
+      "digest:old-uid:alice",
+      "digest:target-uid:alice",
+      "release:target-uid",
+    ]);
+  });
+
+  it("selects a replacement that reports the complete OpenClaw-qualified image tag", async () => {
+    const h = harness({
+      assignments: [assignment("u1", "alice")],
+      targetVersion: "cf36a88-oc2026.7.1",
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "cf36a88-oc2026.7.1",
+      requiresCustomerMigration: true,
     })).resolves.toEqual({ ready: false });
 
     expect(h.events).toEqual([
@@ -168,7 +191,7 @@ describe("surge customer handoff", () => {
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
-      desiredVersion: "new-sha",
+      desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
     })).resolves.toEqual({ ready: false });
 
@@ -200,7 +223,7 @@ describe("surge customer handoff", () => {
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
-      desiredVersion: "new-sha",
+      desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
     })).resolves.toEqual({ ready: true });
 
@@ -219,7 +242,7 @@ describe("surge customer handoff", () => {
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
-      desiredVersion: "new-sha",
+      desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
     })).resolves.toEqual({ ready: false });
     expect(h.events).toEqual([]);
@@ -237,7 +260,7 @@ describe("surge customer handoff", () => {
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
-      desiredVersion: "new-sha",
+      desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
     })).resolves.toEqual({ ready: false });
     expect(h.events).toEqual([]);
@@ -246,7 +269,7 @@ describe("surge customer handoff", () => {
     pods[0] = { ...targetPod, ready: true };
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
-      desiredVersion: "new-sha",
+      desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
     })).resolves.toEqual({ ready: true });
     expect(h.events).toEqual([
@@ -260,7 +283,7 @@ describe("surge customer handoff", () => {
     for (let attempt = 0; attempt < 2; attempt++) {
       await expect(reconcileSurgeCustomerHandoff(h.deps, {
         gatewayId: "default",
-        desiredVersion: "new-sha",
+        desiredImageTag: "new-sha",
         requiresCustomerMigration: true,
       })).resolves.toEqual({ ready: false });
     }
@@ -277,7 +300,7 @@ describe("surge customer handoff", () => {
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
-      desiredVersion: "new-sha",
+      desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
     })).resolves.toEqual({ ready: false });
 
@@ -307,7 +330,7 @@ describe("surge customer handoff", () => {
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
-      desiredVersion: "new-sha",
+      desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
     })).resolves.toEqual({ ready: false });
 
@@ -330,7 +353,7 @@ describe("surge customer handoff", () => {
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
-      desiredVersion: "new-sha",
+      desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
     })).resolves.toEqual({ ready: false });
 
@@ -353,7 +376,7 @@ describe("surge customer handoff", () => {
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
-      desiredVersion: "new-sha",
+      desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
     })).resolves.toEqual({ ready: true });
 
@@ -374,7 +397,7 @@ describe("surge customer handoff", () => {
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
-      desiredVersion: "new-sha",
+      desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
     })).rejects.toThrow(/foreign assignment gate/);
     expect(h.events).toEqual([]);
@@ -390,7 +413,7 @@ describe("surge customer handoff", () => {
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
-      desiredVersion: "new-sha",
+      desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
     })).rejects.toThrow(/foreign assignment gate/);
     expect(h.events).toEqual([]);
@@ -406,7 +429,7 @@ describe("surge customer handoff", () => {
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
-      desiredVersion: "new-sha",
+      desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
     })).rejects.toThrow(/foreign assignment gate/);
     expect(h.events).toEqual([]);
@@ -420,7 +443,7 @@ describe("surge customer handoff", () => {
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
-      desiredVersion: "new-sha",
+      desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
     })).rejects.toThrow("rsync failed");
     expect(h.events).toEqual([
@@ -437,7 +460,7 @@ describe("surge customer handoff", () => {
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
-      desiredVersion: "new-sha",
+      desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
     })).rejects.toThrow("assignment write failed");
     expect(h.events).toEqual([
@@ -458,7 +481,7 @@ describe("surge customer handoff", () => {
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
-      desiredVersion: "new-sha",
+      desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
     })).rejects.toThrow(/target cleanup failed/);
     expect(h.events).toEqual([
@@ -477,7 +500,7 @@ describe("surge customer handoff", () => {
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
-      desiredVersion: "new-sha",
+      desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
     })).resolves.toEqual({ ready: false });
     expect(h.events).toEqual([
@@ -498,7 +521,7 @@ describe("surge customer handoff", () => {
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
-      desiredVersion: "new-sha",
+      desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
     })).rejects.toThrow("connection refused");
     expect(h.events).toEqual([

@@ -84,12 +84,30 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.plugins.entries["octogee-ops-tools"]).toEqual({ enabled: true, config: {} });
   });
 
+  it("shared class keeps the default Codex plugin disabled without disabled-plugin config", () => {
+    const out = runPolicy("shared", {
+      plugins: {
+        entries: {
+          codex: { enabled: false },
+        },
+      },
+    });
+
+    expect(out.plugins.entries.codex).toEqual({ enabled: false });
+  });
+
   it("builder class enables OpenClaw exec/process/subagents plus runtime plugins", () => {
     const out = runPolicy("builder", {
-      auth: { profiles: {} },
+      auth: {
+        profiles: {
+          "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+        },
+      },
       agents: {
         defaults: {
-          models: {},
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+          },
           subagents: { maxConcurrent: 8, model: "anthropic/claude-sonnet-4-6" },
         },
       },
@@ -138,10 +156,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       config: {},
     });
     expect(out.plugins.entries["octogee-ops-tools"]).toEqual({ enabled: true, config: {} });
-    expect(out.auth.profiles["openai-codex:default"]).toEqual({
-      provider: "openai-codex",
-      mode: "oauth",
-    });
+    expect(out.auth.profiles["openai-codex:default"]).toBeUndefined();
     expect(out.agents.defaults.models["openai/gpt-5.5"]).toEqual({
       agentRuntime: { id: "codex" },
     });

@@ -175,6 +175,51 @@ describe("OpenClaw runtime broker env", () => {
       },
     ]);
   });
+
+  it("brokers preview membership without requiring Firestore access in the gateway pod", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const fetchImpl: typeof fetch = vi.fn(async (input, init) => {
+      const url = String(input);
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      calls.push({ url, body });
+      return new Response(JSON.stringify({ authorized: body.uid === "uid-member" }), {
+        headers: { "content-type": "application/json" },
+        status: 200,
+      });
+    });
+    const broker = createOpenClawRuntimeBroker({
+      baseUrl: "http://octogee-api:3001/",
+      gatewayId: "gw-bender",
+      fetchImpl,
+    });
+
+    await expect(
+      broker.authorizePreviewAccess("uid-member", "acme", "launch-room"),
+    ).resolves.toBe(true);
+    await expect(
+      broker.authorizePreviewAccess("uid-outsider", "acme", null),
+    ).resolves.toBe(false);
+    expect(calls).toEqual([
+      {
+        url: "http://octogee-api:3001/internal/openclaw/previews/authorize",
+        body: {
+          gatewayId: "gw-bender",
+          uid: "uid-member",
+          workspaceSlug: "acme",
+          projectSlug: "launch-room",
+        },
+      },
+      {
+        url: "http://octogee-api:3001/internal/openclaw/previews/authorize",
+        body: {
+          gatewayId: "gw-bender",
+          uid: "uid-outsider",
+          workspaceSlug: "acme",
+          projectSlug: null,
+        },
+      },
+    ]);
+  });
 });
 
 describe("activity write receipts", () => {

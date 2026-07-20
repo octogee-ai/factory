@@ -101,7 +101,15 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
     expect(() => mapUserDocToSnapshot("u2", {}, ch)).toThrow(/cannot derive slug/);
   });
 
-  it("carries the plan-resolution inputs (selectedTier/subscription/builderSubscription/trialStartedAt) — dropping any silently degrades a trial/builder user to house_only at mount-time reassert", () => {
+  it("carries every plan-resolution input, including the immutable trial grant", () => {
+    const trialGrant = {
+      schemaVersion: 1,
+      personalTier: "personal_pro",
+      builderTier: "pro",
+      gatewayId: "trial-op-000001",
+      configHash: "config-a",
+      claimedAt: "2026-07-08T00:00:00.000Z",
+    };
     const snap = mapUserDocToSnapshot(
       "u1",
       {
@@ -111,6 +119,7 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
         subscription: { tier: "personal_pro", status: "active" },
         builderSubscription: { tier: "hobby", status: "active" },
         trialStartedAt: "2026-07-08T00:00:00.000Z",
+        trialGrant,
       },
       ch,
     );
@@ -118,6 +127,7 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
     expect(snap.subscription).toEqual({ tier: "personal_pro", status: "active" });
     expect(snap.builderSubscription).toEqual({ tier: "hobby", status: "active" });
     expect(snap.trialStartedAt).toBe("2026-07-08T00:00:00.000Z");
+    expect(snap.trialGrant).toBe(trialGrant);
   });
 
   it("keeps absent plan inputs absent (no undefined keys written into the snapshot)", () => {
@@ -126,6 +136,7 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
     expect("subscription" in snap).toBe(false);
     expect("builderSubscription" in snap).toBe(false);
     expect("trialStartedAt" in snap).toBe(false);
+    expect("trialGrant" in snap).toBe(false);
   });
 });
 

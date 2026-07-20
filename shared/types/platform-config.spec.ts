@@ -4,13 +4,82 @@ import {
   DEFAULT_FREE_TIER_MODEL_REF,
   DEFAULT_OPS_AGENT_MODEL_REF,
   DEFAULT_PLATFORM_CONNECT_CONFIG,
+  DEFAULT_PLATFORM_TRIAL_CONFIG,
   PLATFORM_CONNECT_CONFIG_DOC,
+  PLATFORM_TRIAL_CONFIG_DOC,
+  TRIAL_CONFIG_SCHEMA_VERSION,
   googleConnectAllowed,
   parsePlatformConnectConfig,
   parsePlatformModelConfig,
+  parsePlatformTrialConfig,
   resolveFreeTierModel,
   resolveOpsAgentModel,
+  trialConfigHash,
 } from "./platform-config";
+
+describe("parsePlatformTrialConfig", () => {
+  it("accepts the seeded Personal Pro + Builder Pro defaults", () => {
+    expect(parsePlatformTrialConfig(DEFAULT_PLATFORM_TRIAL_CONFIG)).toEqual({
+      schemaVersion: 1,
+      defaultPersonalTier: "personal_pro",
+      defaultBuilderTier: "pro",
+      releaseSourceGatewayId: "default",
+    });
+    expect(PLATFORM_TRIAL_CONFIG_DOC).toBe("trial");
+    expect(TRIAL_CONFIG_SCHEMA_VERSION).toBe(1);
+  });
+
+  it("accepts every Personal tier and only concrete Builder tiers", () => {
+    for (const personalTier of ["personal_free", "personal", "personal_pro", "personal_pro_max"]) {
+      expect(
+        parsePlatformTrialConfig({
+          ...DEFAULT_PLATFORM_TRIAL_CONFIG,
+          defaultPersonalTier: personalTier,
+        }),
+      ).not.toBeNull();
+    }
+    for (const builderTier of ["hobby", "pro", "team"]) {
+      expect(
+        parsePlatformTrialConfig({
+          ...DEFAULT_PLATFORM_TRIAL_CONFIG,
+          defaultBuilderTier: builderTier,
+        }),
+      ).not.toBeNull();
+    }
+    expect(
+      parsePlatformTrialConfig({
+        ...DEFAULT_PLATFORM_TRIAL_CONFIG,
+        defaultBuilderTier: "enterprise",
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects malformed, unsupported, and revision-source configs", () => {
+    expect(parsePlatformTrialConfig(null)).toBeNull();
+    expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, schemaVersion: 2 })).toBeNull();
+    expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, defaultPersonalTier: "pro" })).toBeNull();
+    expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, defaultBuilderTier: "max" })).toBeNull();
+    expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, releaseSourceGatewayId: "" })).toBeNull();
+    expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, releaseSourceGatewayId: "default-r1" })).toBeNull();
+  });
+
+  it("hashes only the canonical grant-shaping fields", () => {
+    const hash = trialConfigHash(DEFAULT_PLATFORM_TRIAL_CONFIG);
+    expect(hash).toMatch(/^[0-9a-f]{16}$/);
+    expect(
+      trialConfigHash({
+        releaseSourceGatewayId: "default",
+        defaultBuilderTier: "pro",
+        defaultPersonalTier: "personal_pro",
+        schemaVersion: 1,
+        updatedBy: "operator-2",
+      }),
+    ).toBe(hash);
+    expect(
+      trialConfigHash({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, defaultBuilderTier: "team" }),
+    ).not.toBe(hash);
+  });
+});
 
 describe("DEFAULT_FREE_TIER_MODEL_REF", () => {
   it("is DeepSeek V4 Pro on the OpenRouter platform key", () => {

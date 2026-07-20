@@ -27,7 +27,6 @@ export const OCTOGEE_WORKFLOW_TOOLS = [
 const CONNECTOR_TOOLS_PLUGIN = "octogee-connector-tools";
 const PROJECT_TOOLS_PLUGIN = "octogee-project-tools";
 const OPS_TOOLS_PLUGIN = "octogee-ops-tools";
-const CODEX_MODEL = "openai/gpt-5.5";
 const CODEX_PROFILE = "openai-codex:default";
 const RUNTIME_CODEX_SANDBOX = "danger-full-access";
 const RUNTIME_CODEX_APPROVAL_POLICY = "never";
@@ -70,20 +69,20 @@ function disableConnectorTools(config) {
   config.plugins.entries[CONNECTOR_TOOLS_PLUGIN].enabled = false;
 }
 
-function ensureCodexAuthProfile(config) {
-  config.auth ??= {};
-  config.auth.profiles ??= {};
-  config.auth.profiles[CODEX_PROFILE] = {
-    provider: "openai-codex",
-    mode: "oauth",
-  };
+function isPolicyCodexAuthProfile(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  return (
+    Object.keys(value).length === 2 &&
+    value.provider === "openai-codex" &&
+    value.mode === "oauth"
+  );
 }
 
-function ensureCodexRuntimeModel(config) {
-  config.agents ??= {};
-  config.agents.defaults ??= {};
-  config.agents.defaults.models ??= {};
-  config.agents.defaults.models[CODEX_MODEL] = { agentRuntime: { id: "codex" } };
+export function removePolicyCodexAuthPlaceholder(config) {
+  const profile = config.auth?.profiles?.[CODEX_PROFILE];
+  if (isPolicyCodexAuthProfile(profile)) {
+    delete config.auth.profiles[CODEX_PROFILE];
+  }
 }
 
 function allowPlugin(config, id) {
@@ -132,8 +131,7 @@ function enableOpsTools(config) {
 }
 
 function enableRuntimePlugins(config) {
-  ensureCodexAuthProfile(config);
-  ensureCodexRuntimeModel(config);
+  removePolicyCodexAuthPlaceholder(config);
   enableCodexAppServer(config);
   enableConnectorTools(config);
 }
@@ -155,6 +153,10 @@ function sandboxCodex(config) {
   }
   config.plugins.entries ??= {};
   config.plugins.entries.codex ??= { enabled: false };
+  if (config.plugins.entries.codex.enabled === false) {
+    delete config.plugins.entries.codex.config;
+    return;
+  }
   config.plugins.entries.codex.config ??= {};
   config.plugins.entries.codex.config.appServer ??= {};
   config.plugins.entries.codex.config.appServer.sandbox = SHARED_CODEX_SANDBOX;

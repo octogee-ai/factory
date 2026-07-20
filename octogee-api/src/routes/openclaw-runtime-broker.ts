@@ -62,6 +62,8 @@ interface ChannelPair {
 const TICKETS = "gatewayTickets";
 const FORBIDDEN = { error: "forbidden" } as const;
 const RECEIPT_MAX_LEASE_MS = 60_000;
+const PREVIEW_PROJECT_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const PREVIEW_PROJECT_SLUG_MAX_LENGTH = 63;
 
 function isDurableGatewayRoot(
   data: unknown,
@@ -91,6 +93,33 @@ function boundGateway(req: Request, res: Response): GatewayBinding | null {
 function stringBody(req: Request, key: string): string {
   const value = (req.body as Record<string, unknown> | undefined)?.[key];
   return typeof value === "string" ? value : "";
+}
+
+function safeDocId(value: string): boolean {
+  return value.length > 0 && !value.includes("/");
+}
+
+function validPreviewProjectSlug(value: unknown): value is string {
+  return typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= PREVIEW_PROJECT_SLUG_MAX_LENGTH &&
+    PREVIEW_PROJECT_SLUG_RE.test(value);
+}
+
+async function previewAccessAuthorized(
+  db: Firestore,
+  uid: string,
+  workspaceSlug: string,
+  projectSlug: string | null,
+): Promise<boolean> {
+  const path = projectSlug
+    ? `workspaces/${workspaceSlug}/projects/${projectSlug}`
+    : `workspaces/${workspaceSlug}`;
+  const [target, member] = await Promise.all([
+    db.doc(path).get(),
+    db.doc(`${path}/members/${uid}`).get(),
+  ]);
+  return target.exists && (target.data()?.ownerUid === uid || member.exists);
 }
 
 function readPath(obj: Record<string, unknown> | undefined, dotted: string): unknown {
@@ -731,6 +760,30 @@ export async function resolveRedeemGatewayUrl(input: {
 }
 
 function mountUserAndWsRoutes(router: Router, db: Firestore): void {
+  router.post("/previews/authorize", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const uid = stringBody(req, "uid");
+    const workspaceSlug = stringBody(req, "workspaceSlug");
+    const rawProjectSlug = (req.body as Record<string, unknown> | undefined)?.projectSlug;
+    const projectSlug = rawProjectSlug === null ? null : rawProjectSlug;
+    if (
+      !safeDocId(uid) ||
+      !isValidUsername(workspaceSlug) ||
+      (projectSlug !== null && !validPreviewProjectSlug(projectSlug))
+    ) {
+      res.status(400).json({ error: "invalid_preview_access_request" });
+      return;
+    }
+    if (!(await assignedHere(db, bound.gatewayId, workspaceSlug))) {
+      forbidden(res);
+      return;
+    }
+    res.json({
+      authorized: await previewAccessAuthorized(db, uid, workspaceSlug, projectSlug),
+    });
+  });
+
   router.post("/users/gateway-id", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;

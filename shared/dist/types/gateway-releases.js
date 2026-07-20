@@ -200,6 +200,7 @@ export const GATEWAY_MUTABLE_FIELDS = [
     "openclawOverrides",
     "modelBrokerLimits",
     "preemption",
+    "allocation",
     "desiredStatus",
     "idleSleep",
     "preemptionHandoff",

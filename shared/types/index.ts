@@ -70,11 +70,30 @@ export {
   planWeeklyBudgetUsd,
   planWindowBudgetUsd,
   resolveEffectivePlan,
+  resolveBuilderTier,
+  resolvePaidBuilderTier,
+  resolvePaidPersonalTier,
   resolveTier,
   trialDayN,
   trialDaysRemaining,
 } from './billing.js';
-export type { BillingRail, EffectivePlan } from './billing.js';
+export type {
+  BillingProfile,
+  BillingRail,
+  EffectivePlan,
+  PlanInputs,
+  TierResolvable,
+  TrialGrant,
+} from './billing.js';
+
+export type { PlatformTrialConfig, TrialBuilderTier } from './platform-config.js';
+export {
+  DEFAULT_PLATFORM_TRIAL_CONFIG,
+  PLATFORM_TRIAL_CONFIG_DOC,
+  TRIAL_CONFIG_SCHEMA_VERSION,
+  parsePlatformTrialConfig,
+  trialConfigHash,
+} from './platform-config.js';
 export { redactSecrets, redactStructuredSecrets } from './secret-redaction.js';
 
 export type {
@@ -270,6 +289,27 @@ export {
 } from './gateway-mutable-config.js';
 
 export type {
+  TrialGatewayAllocationState,
+  TrialGatewayAllocation,
+  TrialGatewayPoolError,
+  TrialGatewayPoolState,
+  TrialGatewayClaimStatus,
+  TrialGatewayClaimError,
+  TrialGatewayClaim,
+} from './trial-gateway.js';
+export {
+  TRIAL_GATEWAY_ALLOCATION_STATES,
+  GATEWAY_POOLS_COLLECTION,
+  TRIAL_GATEWAY_POOL_DOC,
+  TRIAL_GATEWAY_POOL_SCHEMA_VERSION,
+  TRIAL_GATEWAY_CLAIMS_COLLECTION,
+  isTimestampLike,
+  isTrialGatewayAllocation,
+  isTrialGatewayPoolState,
+  isTrialGatewayClaim,
+} from './trial-gateway.js';
+
+export type {
   SizingTier,
   SizingTierPreset,
   TierResources,
@@ -298,6 +338,8 @@ export {
 } from './cost-estimator.js';
 
 export { OPENCLAW_PROTOCOL_VERSION } from './openclaw-wire.js';
+
+export { builderGatewayIdForSlug } from './builder-gateway-id.js';
 
 export type {
   DeviceIdentity,

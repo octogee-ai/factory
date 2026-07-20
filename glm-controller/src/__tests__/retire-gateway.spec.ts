@@ -117,6 +117,24 @@ describe("createRetireGatewayHandler — simple-roll retirement", () => {
     expect(deps.syncFleetIngress).toHaveBeenCalledTimes(1);
   });
 
+  it("re-drives the complete idempotent teardown when gateway resources are already absent", async () => {
+    const state = baseState();
+    const deps = makeDeps(state);
+    const handler = createRetireGatewayHandler(deps);
+
+    await expect(handler(mkOp(), makeCtx())).resolves.toMatchObject({ success: true });
+    await expect(handler(mkOp(), makeCtx())).resolves.toMatchObject({ success: true });
+
+    expect(deps.helmUninstallGateway).toHaveBeenCalledTimes(2);
+    expect(deps.deleteGatewayPersistentVolumeClaim).toHaveBeenCalledTimes(2);
+    expect(deps.deleteGatewayKubeSecret).toHaveBeenCalledTimes(2);
+    expect(deps.deleteAuthTokenSecret).toHaveBeenCalledTimes(2);
+    expect(deps.deleteGatewayServiceAccount).toHaveBeenCalledTimes(2);
+    expect(deps.deleteGatewayModelKeyKubeSecret).toHaveBeenCalledTimes(2);
+    expect(deps.deleteGatewayModelKeySource).toHaveBeenCalledTimes(2);
+    expect(deps.teardownGatewayServiceAccount).toHaveBeenCalledTimes(2);
+  });
+
   it("refuses while customers are still assigned, naming the slugs", async () => {
     const state = baseState({
       assignments: [

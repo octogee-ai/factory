@@ -21,6 +21,7 @@ export interface UserSnapshot {
     subscription?: unknown;
     builderSubscription?: unknown;
     trialStartedAt?: unknown;
+    trialGrant?: unknown;
     freeTierModelRef?: string;
     systemConfig?: {
         byot?: {
@@ -204,6 +205,7 @@ export interface AddCustomerOptions {
     verifyTimeoutMs?: number;
     customersDir?: string;
     mountDeadlineMs?: number;
+    convergeContent?: boolean;
     signal?: AbortSignal;
     onSignalCreated?: (signal: AbortSignal) => void;
 }

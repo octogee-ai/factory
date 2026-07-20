@@ -364,11 +364,20 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
     });
   });
 
-  it("forwards the plan-resolution fields (subscription/selectedTier/trialStartedAt) to the reassert — a trial user's model picks must not defer to house_only at mount", async () => {
+  it("forwards the trial grant to the reassert so its configured plans survive the mount boundary", async () => {
     const trialStartedAt = { _seconds: Math.floor(Date.now() / 1000) - 2 * 86_400, _nanoseconds: 0 };
+    const trialGrant = {
+      schemaVersion: 1,
+      personalTier: "personal_pro",
+      builderTier: "pro",
+      gatewayId: "trial-op-000001",
+      configHash: "config-a",
+      claimedAt: trialStartedAt,
+    };
     state.user = snap({
       tier: "trial",
       subscription: { trialStartedAt },
+      trialGrant,
       systemConfig: {
         agentModels: { "octogee-test-coach": { primary: "platform-openrouter/minimax/minimax-m3", fallbacks: [] } },
       },
@@ -378,6 +387,7 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
     const ud = state.reassertByotUserData ?? {};
     expect(ud.tier).toBe("trial");
     expect(ud.subscription).toEqual({ trialStartedAt });
+    expect(ud.trialGrant).toBe(trialGrant);
   });
 
   it("forwards builderSubscription to the reassert — a credits builder's picks must not defer to house_only at mount", async () => {
@@ -688,6 +698,43 @@ const cloneIdx = state.calls.indexOf("cloneWorkspaceRepo");
 });
 
 describe("addCustomerToGateway — operator gateway short-circuits when status=complete", () => {
+  it("runs full content convergence for a mounted operator when its assigned snapshot changed", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        agentIds: ["octogee-test-coach"],
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user-existing",
+        greetingPosted: true,
+      }),
+      {
+        customerDir: true,
+        workspaceGitDir: true,
+        gitRemote: true,
+        sshKey: true,
+        templatesWritten: true,
+        repoHasCommits: true,
+      },
+    );
+    state.giteaRegisteredPubKey = "ssh-pubkey";
+    state.pendingProjects = [
+      { projectSlug: "launchroom", giteaRepoName: "launchroom" },
+    ];
+    const adapter = makeAdapter(state);
+    adapter.isOperatorGateway = () => true;
+    adapter.customerCoachWiredInOpenclawConfig = () => true;
+
+    const result = await addCustomerToGateway(adapter, "uid-test", {
+      convergeContent: true,
+    });
+
+    expect(result.steps).toContain("project-clone");
+    expect(result.steps).toContain("config-patch");
+    expect(result.pendingProjectClones).toEqual([]);
+    expect(state.calls).toContain("cloneProjectRepo");
+    expect(state.calls).toContain("applyAddCustomerConfigPatch");
+  });
+
   it("verifies the SSH key but skips unrelated convergence when the durable workspace is ready", async () => {
     const state = makeState(
       snap({

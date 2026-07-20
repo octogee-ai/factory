@@ -44,6 +44,7 @@ import {
   type ModelCredentialOAuthCatalogEntry,
   type ModelCredentialOAuthProviderId,
 } from "@octogee/shared/types/model-credentials";
+import { pickPlanInputs } from "@octogee/shared/types/billing";
 
 const router = Router();
 const BYOSUB_PROVIDER_ORDER: ByosubProvider[] = ["openai", "anthropic"];
@@ -273,9 +274,7 @@ function tierFieldsFromRequest(req: Request): Record<string, unknown> {
   const user = req.user ?? {};
   return {
     ...(typeof user.tier === "string" ? { tier: user.tier } : {}),
-    ...(typeof user.selectedTier === "string" ? { selectedTier: user.selectedTier } : {}),
-    ...(user.subscription ? { subscription: user.subscription } : {}),
-    ...(user.trialStartedAt !== undefined ? { trialStartedAt: user.trialStartedAt } : {}),
+    ...pickPlanInputs(user as Record<string, unknown>),
     ...(typeof user.trialExpired === "boolean" ? { trialExpired: user.trialExpired } : {}),
   };
 }

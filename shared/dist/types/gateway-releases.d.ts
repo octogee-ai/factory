@@ -155,7 +155,7 @@ export declare function gatewayPodServiceName(id: string): string;
 export declare function releasePayloadHash(payload: ReleasePayload): string;
 export type GatewayFieldClassification = "release" | "gateway-mutable";
 export declare const RELEASE_FIELDS: readonly ["imageRepository", "imageTag", "testExperiment"];
-export declare const GATEWAY_MUTABLE_FIELDS: readonly ["profile", "gatewayClass", "imageProfile", "sizingTier", "computeClass", "gcpProject", "gatewayContainerSecurityContext", "serviceAccountName", "serviceAccount", "operatorAccess", "ownerUid", "coOwnerUids", "builderSlug", "openclawOverrides", "modelBrokerLimits", "preemption", "desiredStatus", "idleSleep", "preemptionHandoff", "liveRelease", "retireAfter"];
+export declare const GATEWAY_MUTABLE_FIELDS: readonly ["profile", "gatewayClass", "imageProfile", "sizingTier", "computeClass", "gcpProject", "gatewayContainerSecurityContext", "serviceAccountName", "serviceAccount", "operatorAccess", "ownerUid", "coOwnerUids", "builderSlug", "openclawOverrides", "modelBrokerLimits", "preemption", "allocation", "desiredStatus", "idleSleep", "preemptionHandoff", "liveRelease", "retireAfter"];
 export declare function classifyGatewayField(field: string): GatewayFieldClassification;
 export interface PlacementDocSnap {
     exists: boolean;
