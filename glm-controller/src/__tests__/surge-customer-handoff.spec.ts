@@ -306,6 +306,22 @@ describe("surge customer handoff", () => {
     expect(h.events).toEqual(["release:target-uid"]);
   });
 
+  it("keeps a non-empty operator prewarm closed while its source pod is NotReady", async () => {
+    const h = harness({
+      pods: [{ ...oldPod, ready: false }, targetPod],
+      assignments: [assignment("u1", "alice")],
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "trial-op-000001",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      ownerlessOperatorPrewarm: true,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual([]);
+  });
+
   it("leaves an empty same-release replacement to the pod-side readiness gate", async () => {
     const h = harness({
       pods: [{ ...oldPod, ready: false }, targetPod],
