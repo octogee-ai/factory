@@ -5,6 +5,7 @@ import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../index.js";
+import { db } from "../lib/db.js";
 import {
   getIdTokenForUid,
   setupEmulatorTest,
@@ -44,6 +45,12 @@ async function authHeader(uid: string): Promise<{ Authorization: string }> {
   return { Authorization: `Bearer ${await getIdTokenForUid(uid)}` };
 }
 
+async function seedActiveUser(uid: string): Promise<void> {
+  await db.collection("users").doc(uid).set({
+    accountLifecycle: { status: "active" },
+  });
+}
+
 describe("POST /api/g/:gatewayId/automations/rpc", () => {
   it("rejects an unauthenticated request at the sidecar mount", async () => {
     const response = await request(createApp({ surface: "sidecar" }))
@@ -54,6 +61,7 @@ describe("POST /api/g/:gatewayId/automations/rpc", () => {
   });
 
   it("propagates an authorization broker rejection", async () => {
+    await seedActiveUser("automations-member");
     const authorization = await authHeader("automations-member");
     vi.stubGlobal("fetch", vi.fn(async () => new Response(
       JSON.stringify({ error: "forbidden" }),
@@ -70,6 +78,7 @@ describe("POST /api/g/:gatewayId/automations/rpc", () => {
   });
 
   it("rejects an authorized owner request outside the automation allowlist", async () => {
+    await seedActiveUser(OWNER_UID);
     const authorization = await authHeader(OWNER_UID);
     vi.stubGlobal("fetch", vi.fn(async () => new Response(
       JSON.stringify({ slug: WORKSPACE_SLUG, gatewayId: GATEWAY_ID }),
