@@ -43,8 +43,7 @@ function appForTest(overrides: Partial<Parameters<typeof createAutomationsRouter
   app.use(
     "/api/g/:gatewayId/automations",
     createAutomationsRouter({
-      resolveUserGateway: async () => ({ slug: "alice", gatewayId: "gw-alice" }),
-      resolveWorkspaceOwnerUid: async () => "builder-uid",
+      authorizeOwner: async () => ({ kind: "authorized", slug: "alice", gatewayId: "gw-alice" }),
       localGatewayId: () => "gw-alice",
       openclawDir: () => openclawDir,
       invoke,
@@ -55,6 +54,42 @@ function appForTest(overrides: Partial<Parameters<typeof createAutomationsRouter
 }
 
 describe("automations locality broker", () => {
+  it("forwards the Firebase bearer to the tenant-bound authorization broker before OpenClaw", async () => {
+    const authorizeOwner = vi.fn(async () => ({
+      kind: "authorized" as const,
+      slug: "alice",
+      gatewayId: "gw-alice",
+    }));
+    const { app } = appForTest({ authorizeOwner });
+
+    await request(app)
+      .post("/api/g/gw-alice/automations/rpc")
+      .set("Authorization", "Bearer caller-token")
+      .send({ method: "cron.list" })
+      .expect(200);
+
+    expect(authorizeOwner).toHaveBeenCalledWith({
+      gatewayId: "gw-alice",
+      authorization: "Bearer caller-token",
+      uid: "builder-uid",
+    });
+  });
+
+  it("does not invoke OpenClaw when the platform broker denies workspace ownership", async () => {
+    const { app, invoke } = appForTest({
+      authorizeOwner: vi.fn(async () => ({ kind: "forbidden" as const })),
+    });
+
+    const response = await request(app)
+      .post("/api/g/gw-alice/automations/rpc")
+      .set("Authorization", "Bearer caller-token")
+      .send({ method: "cron.list" });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toEqual({ error: "forbidden" });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("lists only cron jobs scoped to the authenticated Builder's coach", async () => {
     const { app, invoke } = appForTest();
 

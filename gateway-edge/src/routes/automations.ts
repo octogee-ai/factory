@@ -2,13 +2,20 @@ import { Router, type Request, type Response } from "express";
 
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { generateIdentity, type DeviceIdentity } from "@octogee/shared/types/device-identity";
+import {
+  AUTOMATION_OPENCLAW_CONNECT_TIMEOUT_MS,
+  AUTOMATION_OPENCLAW_RPC_TIMEOUT_MS,
+} from "@octogee/shared/types/automations";
 import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
 
 import { attachUpstreamRpcClient } from "../chat-proxy/openclaw/bridge-upstream-rpc.js";
 import { fetchGatewayAuth, persistGatewayDeviceToken } from "../chat-proxy/openclaw/gateway-token.js";
 import { openUpstream } from "../chat-proxy/openclaw/upstream.js";
-import { resolveUserGateway, type ResolvedGateway } from "../lib/user-gateway.js";
-import { resolveWorkspaceUid } from "../lib/workspace-resolution.js";
+import {
+  authorizeAutomationOwner,
+  type AutomationAuthorizationOutcome,
+} from "../lib/automation-authorization-broker.js";
+import type { ResolvedGateway } from "../lib/user-gateway.js";
 
 const MAX_CRON_NAME_LENGTH = 160;
 const MAX_CRON_PROMPT_LENGTH = 20_000;
@@ -71,8 +78,11 @@ export interface AutomationHeartbeat {
 }
 
 export interface AutomationsRouterDeps {
-  resolveUserGateway(uid: string): Promise<ResolvedGateway | null>;
-  resolveWorkspaceOwnerUid(slug: string): Promise<string | null>;
+  authorizeOwner(input: {
+    gatewayId: string;
+    authorization?: string;
+    uid: string;
+  }): Promise<AutomationAuthorizationOutcome>;
   localGatewayId(): string | null;
   openclawDir(): string;
   invoke(method: string, params: Record<string, unknown>): Promise<unknown>;
@@ -337,23 +347,31 @@ async function callerJob(
 async function authorize(
   req: Request,
   res: Response,
-  deps: Pick<AutomationsRouterDeps, "resolveUserGateway" | "resolveWorkspaceOwnerUid" | "localGatewayId">,
+  deps: Pick<AutomationsRouterDeps, "authorizeOwner" | "localGatewayId">,
 ): Promise<ResolvedGateway | null> {
   const gatewayId = requestedGatewayId(req);
   if (!gatewayId || deps.localGatewayId() !== gatewayId) {
     res.status(404).json({ error: "not_found" });
     return null;
   }
-  const resolved = await deps.resolveUserGateway(req.uid!);
-  if (!resolved || resolved.gatewayId !== gatewayId) {
+  const outcome = await deps.authorizeOwner({
+    gatewayId,
+    authorization: req.headers.authorization,
+    uid: req.uid!,
+  });
+  if (outcome.kind === "unauthenticated") {
+    res.status(401).json({ error: "Unauthenticated" });
+    return null;
+  }
+  if (outcome.kind === "not_found") {
     res.status(404).json({ error: "not_found" });
     return null;
   }
-  if (await deps.resolveWorkspaceOwnerUid(resolved.slug) !== req.uid) {
+  if (outcome.kind === "forbidden") {
     res.status(403).json({ error: "forbidden" });
     return null;
   }
-  return resolved;
+  return { slug: outcome.slug, gatewayId: outcome.gatewayId };
 }
 
 interface BrokerResponse {
@@ -516,9 +534,10 @@ async function invokeLocalOpenClaw(method: string, params: Record<string, unknow
     token: auth.token,
     deviceToken: auth.deviceToken,
     identity: identity(),
+    timeoutMs: AUTOMATION_OPENCLAW_CONNECT_TIMEOUT_MS,
     onDeviceToken: async (issued) => persistGatewayDeviceToken({ token: issued.deviceToken }),
   });
-  const rpc = attachUpstreamRpcClient(ws, { timeoutMs: 30_000 });
+  const rpc = attachUpstreamRpcClient(ws, { timeoutMs: AUTOMATION_OPENCLAW_RPC_TIMEOUT_MS });
   try {
     const result = await rpc.call(method, params);
     if (!result.ok) throw new Error(`automation broker ${method} failed: ${result.reason}`);
@@ -530,8 +549,7 @@ async function invokeLocalOpenClaw(method: string, params: Record<string, unknow
 }
 
 const automationsRouter = createAutomationsRouter({
-  resolveUserGateway,
-  resolveWorkspaceOwnerUid: resolveWorkspaceUid,
+  authorizeOwner: authorizeAutomationOwner,
   localGatewayId: () => process.env.GATEWAY_ID ?? null,
   openclawDir: () => process.env.OPENCLAW_DIR ?? "/home/node/.openclaw",
   invoke: invokeLocalOpenClaw,
