@@ -5,10 +5,11 @@ import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
 import {
+  deleteGiteaUserPubKey,
   ensureGiteaOrgForWorkspace,
   ensureWorkspaceRepo,
   ensureGiteaUser,
-  readGiteaUserPubKey,
+  readGiteaUserPubKeys,
   repoExists,
 } from "../lib/gitea-admin.js";
 
@@ -49,13 +50,20 @@ describe.skipIf(!RUN_LIVE)("gitea-admin — live against real Gitea (relocated p
     await fetch(`${BASE}/admin/users/${USER}?purge=true`, { method: "DELETE", headers: adminHeaders() }).catch(() => {});
   });
 
-  it("ensures user + registers the octogee-gateway key, readable back (idempotent)", async () => {
-    const pub = freshPubKey();
-    await ensureGiteaUser(SLUG, pub);
-    expect(await readGiteaUserPubKey(SLUG)).toBe(pub);
-    // Idempotent re-ensure (user exists 422; key replaced) must not throw.
-    await ensureGiteaUser(SLUG, pub);
-    expect(await readGiteaUserPubKey(SLUG)).toBe(pub);
+  it("keeps predecessor and successor pod keys readable back (idempotent)", async () => {
+    const predecessor = freshPubKey();
+    const successor = freshPubKey();
+    await ensureGiteaUser(SLUG, predecessor);
+    await ensureGiteaUser(SLUG, successor);
+    expect(await readGiteaUserPubKeys(SLUG)).toEqual(
+      expect.arrayContaining([predecessor, successor]),
+    );
+    await ensureGiteaUser(SLUG, successor);
+    expect(await readGiteaUserPubKeys(SLUG)).toEqual(
+      expect.arrayContaining([predecessor, successor]),
+    );
+    await deleteGiteaUserPubKey(SLUG, predecessor);
+    expect(await readGiteaUserPubKeys(SLUG)).toEqual([successor]);
   }, 30_000);
 
   it("ensures org + builders team + member, then creates the workspace repo (idempotent)", async () => {

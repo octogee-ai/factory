@@ -285,6 +285,20 @@ export function isGatewayMutableConfigForGateway(
   return true;
 }
 
+export function projectGatewayMutableConfigForGateway(
+  value: unknown,
+  gatewayId: string,
+): GatewayMutableConfig | null {
+  if (isGatewayMutableConfigForGateway(value, gatewayId)) return value;
+  if (!isRecord(value) || !Object.prototype.hasOwnProperty.call(value, "coOwnerUids")) {
+    return null;
+  }
+  if (!Array.isArray(value.coOwnerUids) || value.coOwnerUids.length !== 0) return null;
+  const projected = { ...value };
+  delete projected.coOwnerUids;
+  return isGatewayMutableConfigForGateway(projected, gatewayId) ? projected : null;
+}
+
 export function isCanonicalTrialStandbyMutableConfigForGateway(
   value: unknown,
   gatewayId: string,

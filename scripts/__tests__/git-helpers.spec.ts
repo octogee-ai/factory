@@ -122,9 +122,21 @@ describe("runWorkspaceSyncMutation", () => {
     const work = vi.fn();
     const log = vi.fn();
 
-    expect(runWorkspaceSyncMutation("/customers/acme", "acme", work, () => null, log)).toBe(false);
+    expect(runWorkspaceSyncMutation("/customers/acme", "acme", work, {
+      acquire: () => null,
+      log,
+    })).toBe(false);
     expect(work).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(expect.stringContaining("workspace busy"));
+  });
+
+  it("fails a strict durability flush while another writer holds the workspace lease", () => {
+    expect(() => runWorkspaceSyncMutation(
+      "/customers/acme",
+      "acme",
+      vi.fn(),
+      { acquire: () => null, log: vi.fn(), strict: true },
+    )).toThrow(/acme.*lease unavailable/i);
   });
 
   it("holds the lease through autosave work and releases it afterward", () => {
@@ -135,8 +147,7 @@ describe("runWorkspaceSyncMutation", () => {
       "/customers/acme",
       "acme",
       work,
-      () => ({ ownerToken: "lease", release }),
-      vi.fn(),
+      { acquire: () => ({ ownerToken: "lease", release }), log: vi.fn() },
     )).toBe(true);
     expect(work).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();

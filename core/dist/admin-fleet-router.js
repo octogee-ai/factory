@@ -6,7 +6,7 @@ import { builderGatewayIdForSlug } from "@octogee/shared/types/builder-gateway-i
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, GATEWAY_RELEASES_SUBCOLLECTION, commitPlacementAtomic, isReleasePayload, releasePayloadHash, isGatewayDesiredDoc, isGatewayRuntimeDoc, upgradeReleasePayloadSchema, } from "@octogee/shared/types/gateway-releases";
 import { parseAssignmentDoc, readAssignmentDocsForGateway } from "./assignment-doc.js";
-import { GATEWAY_CONFIG_SCHEMA_VERSION, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, } from "./gateway-live-release.js";
+import { GATEWAY_CONFIG_SCHEMA_VERSION, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, } from "./gateway-live-release.js";
 import { projectReleaseHistory } from "./gateway-release-history.js";
 import { resolveOnboardingPlacementForUid, } from "@octogee/shared/types/orchestrator-placement";
 import { SIZING_TIERS, isSizingTier, resolveSizingTier, } from "@octogee/shared/types/sizing";
@@ -709,12 +709,9 @@ function isPlainRecord(v) {
     return !!v && typeof v === "object" && !Array.isArray(v);
 }
 function asDurableGatewayRoot(data, gatewayId) {
-    if (!isGatewayDesiredDoc(data) ||
-        data.gatewayId !== gatewayId ||
-        !isGatewayMutableConfigForGateway(data, gatewayId)) {
+    if (!isGatewayDesiredDoc(data) || data.gatewayId !== gatewayId)
         return null;
-    }
-    return data;
+    return projectGatewayMutableConfigForGateway(data, gatewayId);
 }
 function hasDurableGatewayRootMarkers(data) {
     if (!isPlainRecord(data))

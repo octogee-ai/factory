@@ -4,6 +4,7 @@ import {
   deploymentIntentFingerprintForComparison,
   gatewayUpsertOptsFromRelease,
   isOwnerlessOperatorPrewarm,
+  markLiveRuntimePatch,
   orderGatewaysForConvergence,
   planGatewayConvergence,
   provisioningRuntimeDoc,
@@ -104,6 +105,25 @@ describe("planGatewayConvergence", () => {
         deploymentReady: true,
       }),
     ).toEqual({ kind: "upsert", replicas: 0 });
+  });
+
+  it("marks an applied paused release live without booting a pod", () => {
+    expect(
+      planGatewayConvergence({
+        gateway: gateway({ desiredStatus: "paused", liveRelease: 1, desiredRelease: 2 }),
+        artifact: artifact(),
+        helm: { imageRepository: REPO, imageTag: "def5678", replicas: 0 },
+        deploymentReady: false,
+      }),
+    ).toEqual({ kind: "mark-live" });
+  });
+
+  it("does not advertise a paused zero-pod release as a serving runtime", () => {
+    expect(markLiveRuntimePatch(gateway({ desiredStatus: "paused" }))).toBeNull();
+    expect(markLiveRuntimePatch(gateway({ desiredStatus: "running" }))).toEqual({
+      lifecycle: "serving",
+      release: 2,
+    });
   });
 
   it("marks the desired release live once the deployment is ready at the desired image", () => {

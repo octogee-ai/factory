@@ -20,6 +20,7 @@ const workflowTools = [
   "octogee_chat_set_identity",
   "octogee_status",
   "octogee_ask_ops",
+  "octogee_google_calendar_list",
 ];
 
 function readTemplate() {
@@ -58,10 +59,17 @@ describe("infra/gateway/openclaw.template.json — standard gateway exec-off pos
     expect(template.auth.profiles["openai-codex:default"]).toBeUndefined();
   });
 
-  it("does not enable connector materialization in the shared-safe base template", () => {
+  it("enables bearer-blind productivity skills in the shared-safe base template", () => {
     const template = readTemplate();
 
-    expect(template.plugins.allow).not.toContain("octogee-connector-tools");
-    expect(template.plugins.entries["octogee-connector-tools"]).toBeUndefined();
+    expect(template.tools.alsoAllow).toContain("octogee_google_calendar_list");
+    expect(template.plugins.allow).toContain("octogee-connector-tools");
+    expect(template.plugins.entries["octogee-connector-tools"]).toEqual({
+      enabled: true,
+      config: {
+        brokerUrl: "${FLEET_BROKER_URL}",
+        tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+      },
+    });
   });
 });

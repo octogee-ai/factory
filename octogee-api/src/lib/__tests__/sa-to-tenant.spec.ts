@@ -90,6 +90,44 @@ describe("mapSaToTenant", () => {
     });
   });
 
+  it("maps a gateway with only an empty retired co-owner mirror", async () => {
+    await expect(
+      mapSaToTenant(
+        fakeDb({
+          "gateways/bender": durableGateway("bender", {
+            gatewayClass: "operator",
+            imageProfile: "operator",
+            ownerUid: "uid-bender",
+            builderSlug: "bender",
+            coOwnerUids: [],
+          }),
+        }),
+        { namespace: "octogee", saName: "octogee-gw-bender" },
+        "octogee",
+      ),
+    ).resolves.toEqual({
+      attached: true,
+      result: "ok",
+      tenant: { kind: "gateway", gatewayId: "bender", ownerUid: "uid-bender" },
+    });
+
+    await expect(
+      mapSaToTenant(
+        fakeDb({
+          "gateways/bender": durableGateway("bender", {
+            gatewayClass: "operator",
+            imageProfile: "operator",
+            ownerUid: "uid-bender",
+            builderSlug: "bender",
+            coOwnerUids: ["uid-former-helper"],
+          }),
+        }),
+        { namespace: "octogee", saName: "octogee-gw-bender" },
+        "octogee",
+      ),
+    ).resolves.toEqual({ attached: false, result: "unknown_tenant" });
+  });
+
   it("takes the KSA suffix as the bare gateway id", async () => {
     const result = await mapSaToTenant(
       fakeDb({ "gateways/canary-2": durableGateway("canary-2") }),

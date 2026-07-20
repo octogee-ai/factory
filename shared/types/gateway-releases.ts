@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { GATEWAYS_COLLECTION } from "./fleet-controller.js";
 import {
-  isGatewayMutableConfigForGateway,
+  projectGatewayMutableConfigForGateway,
   type GatewayMutableConfig,
 } from "./gateway-mutable-config.js";
 import {
@@ -375,6 +375,15 @@ export function isGatewayDesiredDoc(data: unknown): data is GatewayDoc {
   );
 }
 
+export function projectGatewayDesiredRootForGateway(
+  value: unknown,
+  gatewayId: string,
+): (GatewayDoc & GatewayMutableConfig) | null {
+  if (!isGatewayDesiredDoc(value) || value.gatewayId !== gatewayId) return null;
+  const projected = projectGatewayMutableConfigForGateway(value, gatewayId);
+  return projected as (GatewayDoc & GatewayMutableConfig) | null;
+}
+
 export function helmReleaseNameForGateway(gatewayId: string): string {
   return `octogee-gw-${gatewayId}`;
 }
@@ -554,11 +563,7 @@ function isDurablePlacementRoot(
   value: unknown,
   gatewayId: string,
 ): value is DurablePlacementRoot {
-  return (
-    isGatewayDesiredDoc(value) &&
-    value.gatewayId === gatewayId &&
-    isGatewayMutableConfigForGateway(value, gatewayId)
-  );
+  return projectGatewayDesiredRootForGateway(value, gatewayId) !== null;
 }
 
 function placementRuntimeRejectReason(

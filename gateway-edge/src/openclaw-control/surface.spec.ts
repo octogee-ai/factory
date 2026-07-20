@@ -239,6 +239,88 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     expect(response.text).not.toContain("gateway-secret");
   });
 
+  it("keeps the Dashboard session usable after transient broker readiness uncertainty", async () => {
+    const upstream = http.createServer((_req, res) => {
+      res.setHeader("content-type", "text/javascript");
+      res.end("export const loaded = true;");
+    });
+    const port = await listen(upstream);
+    const manager = sessions();
+    const cookie = issue(manager);
+    let authorizations = 0;
+    const application = appWith({
+      env: env(port),
+      sessions: manager,
+      authorize: async () => {
+        authorizations += 1;
+        if (authorizations === 1) {
+          throw new Error("OpenClaw Control authorization broker returned 409");
+        }
+        return true;
+      },
+    });
+
+    const unavailable = await request(application)
+      .get("/api/g/bender/openclaw/assets/tasks-page.js")
+      .set("cookie", cookie);
+    const recovered = await request(application)
+      .get("/api/g/bender/openclaw/assets/agents-page.js")
+      .set("cookie", cookie);
+
+    expect(unavailable.status).toBe(502);
+    expect(unavailable.body).toEqual({ error: "openclaw-unavailable", retryable: true });
+    expect(recovered.status).toBe(200);
+    expect(recovered.text).toBe("export const loaded = true;");
+    expect(authorizations).toBe(2);
+  });
+
+  it.each(["success-first", "retryable-first"] as const)(
+    "keeps one session usable when concurrent 204 and 409 checks finish %s",
+    async (completionOrder) => {
+      const upstream = http.createServer((_req, res) => {
+        res.setHeader("content-type", "text/javascript");
+        res.end("export const loaded = true;");
+      });
+      const port = await listen(upstream);
+      const manager = sessions();
+      const cookie = issue(manager);
+      const attempts: Array<{
+        resolve: (value: boolean) => void;
+        reject: (reason: Error) => void;
+      }> = [];
+      const application = appWith({
+        env: env(port),
+        sessions: manager,
+        authorize: async () => {
+          if (attempts.length >= 2) return true;
+          return new Promise<boolean>((resolve, reject) => attempts.push({ resolve, reject }));
+        },
+      });
+
+      const first = request(application)
+        .get("/api/g/bender/openclaw/assets/tasks-page.js")
+        .set("cookie", cookie);
+      const second = request(application)
+        .get("/api/g/bender/openclaw/assets/agents-page.js")
+        .set("cookie", cookie);
+      const responses = Promise.all([first, second]);
+
+      await vi.waitFor(() => expect(attempts).toHaveLength(2));
+      const successIndex = completionOrder === "success-first" ? 0 : 1;
+      attempts[successIndex]!.resolve(true);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      attempts[1 - successIndex]!.reject(
+        new Error("OpenClaw Control authorization broker returned 409"),
+      );
+
+      expect((await responses).map((response) => response.status).sort()).toEqual([200, 502]);
+      const recovered = await request(application)
+        .get("/api/g/bender/openclaw/assets/skills-page.js")
+        .set("cookie", cookie);
+      expect(recovered.status).toBe(200);
+    },
+  );
+
   it("redacts rejected sensitive query parameters from the HTTP response", async () => {
     const manager = sessions();
     const response = await request(appWith({ env: env(), sessions: manager }))

@@ -95,6 +95,14 @@ export type GatewayConvergenceAction =
   | { kind: "mark-live" }
   | { kind: "steady" };
 
+export function markLiveRuntimePatch(
+  gateway: DurableGateway,
+): Pick<GatewayRuntimeDoc, "lifecycle" | "release"> | null {
+  return gateway.desiredStatus === "running"
+    ? { lifecycle: "serving", release: gateway.desiredRelease }
+    : null;
+}
+
 function desiredReplicas(gateway: DurableGateway): number {
   return gateway.desiredStatus === "paused" ? 0 : 1;
 }
@@ -119,9 +127,8 @@ export function planGatewayConvergence(
     return { kind: "upsert", replicas };
   }
   if (
-    gateway.desiredStatus === "running" &&
-    input.deploymentReady &&
-    gateway.liveRelease !== gateway.desiredRelease
+    gateway.liveRelease !== gateway.desiredRelease &&
+    (gateway.desiredStatus === "paused" || input.deploymentReady)
   ) {
     return { kind: "mark-live" };
   }

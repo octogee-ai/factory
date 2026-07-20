@@ -51,6 +51,7 @@ export function isConnectorTokenBrokerable(id: string): boolean {
 export function isConnectorAgentRuntimeTokenMaterializable(id: string): boolean {
   const def = getConnector(id);
   if (!def) return false;
+  if (def.meta.family === "productivity") return false;
   if (def.meta.consumption !== "agent-runtime" && def.meta.agentRuntimeMaterializable !== true) {
     return false;
   }

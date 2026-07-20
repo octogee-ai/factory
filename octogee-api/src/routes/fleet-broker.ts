@@ -44,12 +44,12 @@ import {
 import {
   GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
   isAssignmentState,
-  isGatewayDesiredDoc,
+  projectGatewayDesiredRootForGateway,
   type GatewayDoc,
 } from "@octogee/shared/types/gateway-releases";
 import {
   configuredBuilderCredentialBootstrapAllowed,
-  isGatewayMutableConfigForGateway,
+  projectGatewayMutableConfigForGateway,
   podBelongsToGateway,
   type GatewayMutableConfig,
 } from "@octogee/core/gateway-live-release";
@@ -528,9 +528,7 @@ function isDurableGatewayRoot(
   gatewayId: string,
 ): data is GatewayDoc & GatewayMutableConfig {
   return (
-    isGatewayDesiredDoc(data) &&
-    data.gatewayId === gatewayId &&
-    isGatewayMutableConfigForGateway(data, gatewayId)
+    projectGatewayDesiredRootForGateway(data, gatewayId) !== null
   );
 }
 
@@ -750,13 +748,14 @@ export async function configuredBuilderSlugCredentialBootstrapAllowed(
 ): Promise<boolean> {
   const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
   const gateway = gatewaySnap.data();
-  if (!isGatewayMutableConfigForGateway(gateway, gatewayId)) return false;
-  return typeof gateway.ownerUid === "string" &&
+  const config = projectGatewayMutableConfigForGateway(gateway, gatewayId);
+  if (!config) return false;
+  return typeof config.ownerUid === "string" &&
     configuredBuilderCredentialBootstrapAllowed(gateway, {
       gatewayId,
       podName,
       slug,
-      uid: gateway.ownerUid,
+      uid: config.ownerUid,
     });
 }
 
@@ -1285,9 +1284,7 @@ async function handleConfiguredBuilderBootstrap(
 
   const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get();
   const gateway = gatewaySnap.data();
-  const uid = isGatewayMutableConfigForGateway(gateway, bound.gatewayId)
-    ? gateway.ownerUid
-    : null;
+  const uid = projectGatewayMutableConfigForGateway(gateway, bound.gatewayId)?.ownerUid ?? null;
   if (
     typeof uid !== "string" ||
     !configuredBuilderCredentialBootstrapAllowed(gateway, {

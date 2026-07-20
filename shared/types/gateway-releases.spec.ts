@@ -6,6 +6,7 @@ import {
   classifyGatewayField,
   isGatewayRuntimeDoc,
   isGatewayDesiredDoc,
+  projectGatewayDesiredRootForGateway,
   gatewayEdgeServiceName,
   gatewayPodServiceName,
   helmReleaseNameForGateway,
@@ -389,6 +390,20 @@ describe("commitPlacementAtomic", () => {
 
   const mirror = { "provisioning.openclaw.gatewayId": "default", "provisioning.openclaw.shellsEnabled": false };
 
+  it("projects only an empty retired co-owner mirror from a desired root", () => {
+    const projected = projectGatewayDesiredRootForGateway(
+      backfilled({ coOwnerUids: [] }),
+      "default",
+    );
+
+    expect(projected).not.toBeNull();
+    expect(projected).not.toHaveProperty("coOwnerUids");
+    expect(projectGatewayDesiredRootForGateway(
+      backfilled({ coOwnerUids: ["uid-former-helper"] }),
+      "default",
+    )).toBeNull();
+  });
+
   it("un-backfilled gateway (no GatewayDoc): writes ONLY the mirror, byte-identical to today", async () => {
     const { db, store } = mkDb({
       "users/u1": { tier: "trial" },
@@ -472,6 +487,26 @@ describe("commitPlacementAtomic", () => {
       source: "onboarding", state: "serving", epoch: 0, updatedAt: 100, updatedByOperationId: null,
     });
     expect(store.get("users/u1")).toMatchObject({ "provisioning.openclaw.gatewayId": "default" });
+  });
+
+  it("places through an empty retired co-owner mirror but rejects a non-empty one", async () => {
+    const empty = mkDb({
+      "users/u1": { tier: "trial" },
+      "gateways/default": backfilled({ coOwnerUids: [] }),
+      "glmGateways/default": runtimeDoc(),
+    });
+    await expect(commitPlacementAtomic(empty.db, {
+      uid: "u1", slug: "s1", gatewayId: "default", source: "onboarding", now: 100, mirrorPatch: mirror,
+    })).resolves.toEqual({ kind: "assigned", release: 3 });
+
+    const nonEmpty = mkDb({
+      "users/u1": { tier: "trial" },
+      "gateways/default": backfilled({ coOwnerUids: ["uid-former-helper"] }),
+      "glmGateways/default": runtimeDoc(),
+    });
+    await expect(commitPlacementAtomic(nonEmpty.db, {
+      uid: "u1", slug: "s1", gatewayId: "default", source: "onboarding", now: 100, mirrorPatch: mirror,
+    })).resolves.toEqual({ kind: "rejected", reason: "gateway-root-invalid" });
   });
 
   it("create-if-missing repair preserves an existing in-flight assignment byte-for-byte", async () => {

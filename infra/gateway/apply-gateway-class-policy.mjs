@@ -24,6 +24,7 @@ export const OCTOGEE_WORKFLOW_TOOLS = [
   "octogee_chat_set_identity",
   "octogee_status",
   "octogee_ask_ops",
+  "octogee_google_calendar_list",
 ];
 const CONNECTOR_TOOLS_PLUGIN = "octogee-connector-tools";
 const PROJECT_TOOLS_PLUGIN = "octogee-project-tools";
@@ -59,16 +60,6 @@ function removeSharedSubagentDefaults(config) {
 function allowOctogeeWorkflowTools(config) {
   config.tools ??= {};
   config.tools.alsoAllow = addTools(config.tools.alsoAllow, OCTOGEE_WORKFLOW_TOOLS);
-}
-
-function disableConnectorTools(config) {
-  config.plugins ??= {};
-  if (Array.isArray(config.plugins.allow)) {
-    config.plugins.allow = config.plugins.allow.filter((id) => id !== CONNECTOR_TOOLS_PLUGIN);
-  }
-  config.plugins.entries ??= {};
-  config.plugins.entries[CONNECTOR_TOOLS_PLUGIN] ??= {};
-  config.plugins.entries[CONNECTOR_TOOLS_PLUGIN].enabled = false;
 }
 
 function isPolicyCodexAuthProfile(value) {
@@ -187,8 +178,8 @@ function applySharedPolicy(config) {
   enableProjectTools(config);
   enableOpsTools(config);
   enableAccessTools(config);
+  enableConnectorTools(config);
   sandboxCodex(config);
-  disableConnectorTools(config);
 }
 
 function applyBuilderPolicy(config) {

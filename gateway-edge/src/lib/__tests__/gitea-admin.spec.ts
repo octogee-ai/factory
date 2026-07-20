@@ -51,12 +51,15 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
         visibility: "private",
       });
       expect((calls[0].body as { password?: string }).password).toMatch(/^[0-9a-f]{64}$/);
-      expect(calls[1]).toMatchObject({ url: `${BASE}/users/ws-acme/keys`, method: "GET" });
+      expect(calls[1]).toMatchObject({
+        url: `${BASE}/users/ws-acme/keys?limit=50&page=1`,
+        method: "GET",
+      });
       expect(calls[2]).toMatchObject({ url: `${BASE}/admin/users/ws-acme/keys`, method: "POST" });
       expect(calls[2].body).toMatchObject({
-        title: "octogee-gateway",
         key: "ssh-ed25519 AAAABBB octogee-acme@gateway",
       });
+      expect((calls[2].body as { title: string }).title).toMatch(/^octogee-gateway-[0-9a-f]{16}$/);
       expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe("token admin-tok");
     });
 
@@ -69,18 +72,64 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
       await expect(ensureGiteaUser("acme", "ssh-ed25519 K")).resolves.toBeUndefined();
     });
 
-    it("deletes a stale octogee-gateway key before registering the new one", async () => {
+    it("keeps the predecessor pod key while registering a successor key for surge overlap", async () => {
       fetchMock
         .mockResolvedValueOnce(res(422, {})) // user exists
-        .mockResolvedValueOnce(res(200, [{ id: 7, title: "octogee-gateway" }, { id: 8, title: "other" }]))
-        .mockResolvedValueOnce(res(204)) // DELETE key 7
+        .mockResolvedValueOnce(res(200, [
+          { id: 7, title: "octogee-gateway", key: "ssh-ed25519 OLD predecessor" },
+          { id: 8, title: "other", key: "ssh-ed25519 OTHER" },
+        ]))
         .mockResolvedValueOnce(res(201, {})); // POST new key
       const { ensureGiteaUser } = await import("../gitea-admin.js");
       await ensureGiteaUser("acme", "ssh-ed25519 NEW");
 
       const calls = callsTo(fetchMock);
-      expect(calls[2]).toMatchObject({ url: `${BASE}/admin/users/ws-acme/keys/7`, method: "DELETE" });
-      expect(calls[3]).toMatchObject({ url: `${BASE}/admin/users/ws-acme/keys`, method: "POST" });
+      expect(calls).not.toContainEqual(expect.objectContaining({ method: "DELETE" }));
+      expect(calls[2]).toMatchObject({ url: `${BASE}/admin/users/ws-acme/keys`, method: "POST" });
+      expect((calls[2].body as { title: string }).title).toMatch(/^octogee-gateway-[0-9a-f]{16}$/);
+    });
+
+    it("does not replace another pod key when the requested key is already registered", async () => {
+      fetchMock
+        .mockResolvedValueOnce(res(422, {}))
+        .mockResolvedValueOnce(res(200, [
+          { id: 7, title: "octogee-gateway-old", key: "ssh-ed25519 OLD predecessor" },
+          { id: 9, title: "octogee-gateway-new", key: "ssh-ed25519 WANT current-pod" },
+        ]));
+      const { ensureGiteaUser } = await import("../gitea-admin.js");
+      await ensureGiteaUser("acme", "ssh-ed25519 WANT another-comment");
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("accepts a concurrent registration only after confirming the requested key exists", async () => {
+      fetchMock
+        .mockResolvedValueOnce(res(422, {}))
+        .mockResolvedValueOnce(res(200, [{
+          id: 7,
+          title: "octogee-gateway-old",
+          key: "ssh-ed25519 OLD predecessor",
+        }]))
+        .mockResolvedValueOnce(res(422, { message: "key already exists" }))
+        .mockResolvedValueOnce(res(200, [{
+          id: 9,
+          title: "octogee-gateway-current",
+          key: "ssh-ed25519 WANT current-pod",
+        }]));
+      const { ensureGiteaUser } = await import("../gitea-admin.js");
+      await expect(
+        ensureGiteaUser("acme", "ssh-ed25519 WANT another-comment"),
+      ).resolves.toBeUndefined();
+    });
+
+    it("fails loud when existing keys cannot be listed", async () => {
+      fetchMock
+        .mockResolvedValueOnce(res(422, {}))
+        .mockResolvedValueOnce(res(500, { message: "database unavailable" }));
+      const { ensureGiteaUser } = await import("../gitea-admin.js");
+      await expect(ensureGiteaUser("acme", "ssh-ed25519 WANT")).rejects.toThrow(
+        /list-keys.*500.*database unavailable/,
+      );
     });
 
     it("throws (no silent failure) when key registration fails", async () => {
@@ -99,29 +148,80 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
     });
   });
 
-  describe("readGiteaUserPubKey", () => {
-    it("returns the trimmed octogee-gateway key", async () => {
+  describe("readGiteaUserPubKeys", () => {
+    it("returns every managed gateway key so overlapping pods can verify membership", async () => {
       fetchMock.mockResolvedValueOnce(
         res(200, [
           { id: 1, title: "other", key: "ssh-ed25519 OTHER" },
           { id: 2, title: "octogee-gateway", key: "ssh-ed25519 WANT octogee\n" },
+          { id: 3, title: "octogee-gateway-new", key: "ssh-ed25519 NEXT successor\n" },
         ]),
       );
-      const { readGiteaUserPubKey } = await import("../gitea-admin.js");
-      expect(await readGiteaUserPubKey("acme")).toBe("ssh-ed25519 WANT octogee");
-      expect(callsTo(fetchMock)[0]).toMatchObject({ url: `${BASE}/users/ws-acme/keys`, method: "GET" });
+      const { readGiteaUserPubKeys } = await import("../gitea-admin.js");
+      expect(await readGiteaUserPubKeys("acme")).toEqual([
+        "ssh-ed25519 WANT octogee",
+        "ssh-ed25519 NEXT successor",
+      ]);
+      expect(callsTo(fetchMock)[0]).toMatchObject({
+        url: `${BASE}/users/ws-acme/keys?limit=50&page=1`,
+        method: "GET",
+      });
     });
 
-    it("returns null on 404 (user not provisioned)", async () => {
+    it("keeps the legacy singular reader pinned to the predecessor key during version skew", async () => {
+      fetchMock.mockResolvedValueOnce(res(200, [
+        { id: 9, title: "octogee-gateway-new", key: "ssh-ed25519 NEXT successor" },
+        { id: 2, title: "octogee-gateway", key: "ssh-ed25519 OLD predecessor" },
+      ]));
+      const { readGiteaUserPubKey } = await import("../gitea-admin.js");
+      expect(await readGiteaUserPubKey("acme")).toBe("ssh-ed25519 OLD predecessor");
+    });
+
+    it("returns an empty list on 404 (user not provisioned)", async () => {
       fetchMock.mockResolvedValueOnce(res(404, {}));
-      const { readGiteaUserPubKey } = await import("../gitea-admin.js");
-      expect(await readGiteaUserPubKey("acme")).toBeNull();
+      const { readGiteaUserPubKeys } = await import("../gitea-admin.js");
+      expect(await readGiteaUserPubKeys("acme")).toEqual([]);
     });
 
-    it("returns null when no octogee-gateway key is present", async () => {
+    it("returns an empty list when no managed gateway key is present", async () => {
       fetchMock.mockResolvedValueOnce(res(200, [{ id: 1, title: "other", key: "x" }]));
-      const { readGiteaUserPubKey } = await import("../gitea-admin.js");
-      expect(await readGiteaUserPubKey("acme")).toBeNull();
+      const { readGiteaUserPubKeys } = await import("../gitea-admin.js");
+      expect(await readGiteaUserPubKeys("acme")).toEqual([]);
+    });
+  });
+
+  describe("deleteGiteaUserPubKey", () => {
+    it("removes only the retiring predecessor key and preserves the successor key", async () => {
+      fetchMock
+        .mockResolvedValueOnce(res(200, [
+          { id: 7, title: "octogee-gateway-old", key: "ssh-ed25519 OLD predecessor" },
+          { id: 9, title: "octogee-gateway-new", key: "ssh-ed25519 NEXT successor" },
+        ]))
+        .mockResolvedValueOnce(res(204));
+      const { deleteGiteaUserPubKey } = await import("../gitea-admin.js");
+      await deleteGiteaUserPubKey("acme", "ssh-ed25519 OLD retiring-comment");
+
+      expect(callsTo(fetchMock)).toEqual([
+        expect.objectContaining({
+          url: `${BASE}/users/ws-acme/keys?limit=50&page=1`,
+          method: "GET",
+        }),
+        expect.objectContaining({
+          url: `${BASE}/admin/users/ws-acme/keys/7`,
+          method: "DELETE",
+        }),
+      ]);
+    });
+
+    it("treats an already-cleaned retiring key as an idempotent success", async () => {
+      fetchMock.mockResolvedValueOnce(res(200, [
+        { id: 9, title: "octogee-gateway-new", key: "ssh-ed25519 NEXT successor" },
+      ]));
+      const { deleteGiteaUserPubKey } = await import("../gitea-admin.js");
+      await expect(
+        deleteGiteaUserPubKey("acme", "ssh-ed25519 OLD retiring-comment"),
+      ).resolves.toBeUndefined();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
   });
 

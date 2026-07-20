@@ -27,6 +27,7 @@ import {
 import * as giteaBroker from "./gitea-admin-broker-client.js";
 import { notesWelcomeSeed } from "@octogee/core/templates/project-seeds";
 import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
+import { pubKeysMatch } from "@octogee/core/customer-lifecycle";
 
 export function errMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -98,7 +99,16 @@ export function generateCustomerSshKey(slug: string): string {
 // admin broker — used by the mount flow to detect SSH-key drift. Returns null
 // when the user/key is absent.
 export async function readGiteaCustomerPubKey(slug: string): Promise<string | null> {
-  return giteaBroker.readGiteaUserPubKey(slug);
+  const localPubKey = readLocalCustomerPubKey(slug);
+  if (localPubKey === null) return null;
+  return findMatchingGiteaPubKey(localPubKey, await giteaBroker.readGiteaUserPubKeys(slug));
+}
+
+export function findMatchingGiteaPubKey(
+  localPubKey: string,
+  registeredPubKeys: readonly string[],
+): string | null {
+  return registeredPubKeys.find((candidate) => pubKeysMatch(candidate, localPubKey)) ?? null;
 }
 
 export async function deleteCustomerSshKey(slug: string): Promise<void> {
@@ -113,6 +123,25 @@ export function readLocalCustomerPubKey(slug: string): string | null {
   } catch {
     return null;
   }
+}
+
+export interface LocalCustomerPubKey {
+  slug: string;
+  pubKey: string;
+}
+
+export function listLocalCustomerPubKeys(): LocalCustomerPubKey[] {
+  if (!fs.existsSync(CUSTOMER_KEYS_DIR)) return [];
+  return fs.readdirSync(CUSTOMER_KEYS_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => {
+      const pubKey = readLocalCustomerPubKey(entry.name);
+      if (pubKey === null) {
+        throw new Error(`[git] local SSH public key is missing for ${entry.name}`);
+      }
+      return { slug: entry.name, pubKey };
+    })
+    .sort((a, b) => a.slug.localeCompare(b.slug));
 }
 
 // Ensures the per-customer Gitea user exists and its SSH key is registered.
@@ -491,19 +520,33 @@ function getOriginRemoteSilent(coachDir: string): string | null {
   }
 }
 
-function migrateHttpRemoteToSsh(coachDir: string, slug: string): void {
-  gitExec(coachDir, [
+function migrateHttpRemoteToSsh(coachDir: string, slug: string): boolean {
+  const result = gitExec(coachDir, [
     "remote", "set-url", "origin",
     sshRemoteUrl(workspaceGiteaOrg(slug), workspaceRepoName()),
   ]);
+  if (result === null) return false;
   log(`[git-sync] ${slug}: migrated remote to SSH`);
+  return true;
 }
 
-function commitLocalChanges(coachDir: string): boolean {
+function commitLocalChanges(coachDir: string, slug: string, strict: boolean): boolean {
   const status = gitExec(coachDir, ["status", "--porcelain"]);
-  if (!status) return false;
-  gitExec(coachDir, ["add", "-A"]);
-  return gitExec(coachDir, ["commit", "-m", `auto: ${new Date().toISOString()}`]) !== null;
+  if (status === null) {
+    if (strict) throw new Error(`${slug}: git status failed`);
+    return false;
+  }
+  if (status === "") return false;
+  if (gitExec(coachDir, ["add", "-A"]) === null) {
+    if (strict) throw new Error(`${slug}: git add failed`);
+    return false;
+  }
+  const committed = gitExec(
+    coachDir,
+    ["commit", "-m", `auto: ${new Date().toISOString()}`],
+  ) !== null;
+  if (!committed && strict) throw new Error(`${slug}: git commit failed`);
+  return committed;
 }
 
 function rebaseFromOriginIfPresent(coachDir: string, keyArg: string | undefined): void {
@@ -513,12 +556,14 @@ function rebaseFromOriginIfPresent(coachDir: string, keyArg: string | undefined)
   }
 }
 
-function pushAndLog(coachDir: string, slug: string, keyArg: string | undefined): void {
+function pushAndLog(coachDir: string, slug: string, keyArg: string | undefined): boolean {
   const pushResult = gitExec(coachDir, ["push", "origin", "main"], keyArg);
   if (pushResult !== null) {
     log(`[git-sync] ${slug}: pushed changes`);
+    return true;
   } else {
     log(`⚠ [git-sync] ${slug}: push failed`);
+    return false;
   }
 }
 
@@ -528,17 +573,25 @@ interface WorkspaceSyncLease {
 
 type WorkspaceSyncLeaseFactory = (workspaceDir: string) => WorkspaceSyncLease | null;
 
+export interface WorkspaceSyncMutationOptions {
+  acquire?: WorkspaceSyncLeaseFactory;
+  log?: (message: string) => void;
+  strict?: boolean;
+}
+
 export function runWorkspaceSyncMutation(
   coachDir: string,
   slug: string,
   work: () => void,
-  acquire: WorkspaceSyncLeaseFactory = (workspaceDir) =>
-    acquireWorkspaceMutationLeaseSync({ workspaceDir }),
-  logFn: (message: string) => void = dlog,
+  opts: WorkspaceSyncMutationOptions = {},
 ): boolean {
+  const acquire = opts.acquire ?? ((workspaceDir) =>
+    acquireWorkspaceMutationLeaseSync({ workspaceDir }));
+  const logFn = opts.log ?? dlog;
   const lease = acquire(coachDir);
   if (!lease) {
     logFn(`[git-sync] ${slug}: workspace busy — autosave deferred`);
+    if (opts.strict) throw new Error(`${slug}: workspace mutation lease unavailable`);
     return false;
   }
   try {
@@ -549,7 +602,7 @@ export function runWorkspaceSyncMutation(
   }
 }
 
-function syncOneWorkspace(slug: string): void {
+function syncOneWorkspace(slug: string, strict: boolean): void {
   const coachDir = path.join(CUSTOMERS_DIR, slug);
   const gitDir = path.join(coachDir, ".git");
   if (!fs.existsSync(gitDir)) return;
@@ -561,29 +614,46 @@ function syncOneWorkspace(slug: string): void {
 
     const remoteCheck = getOriginRemoteSilent(coachDir);
     if (remoteCheck === null) {
+      if (strict) throw new Error(`${slug}: git origin is missing`);
       dlog(`[git-sync] ${slug}: no remote — skipping (lifecycle contract will heal on next restore)`);
       return;
     }
 
     if (remoteCheck.startsWith("http")) {
-      migrateHttpRemoteToSsh(coachDir, slug);
+      const migrated = migrateHttpRemoteToSsh(coachDir, slug);
+      if (!migrated && strict) throw new Error(`${slug}: SSH remote migration failed`);
     }
 
-    const committed = commitLocalChanges(coachDir);
+    const committed = commitLocalChanges(coachDir, slug, strict);
     rebaseFromOriginIfPresent(coachDir, keyArg);
 
-    if (committed) {
-      pushAndLog(coachDir, slug, keyArg);
+    if (committed || strict) {
+      const pushed = pushAndLog(coachDir, slug, keyArg);
+      if (!pushed && strict) throw new Error(`${slug}: git push failed`);
     }
-  });
+  }, { strict });
 }
 
 // Workspace auto-sync is pure SSH/git on the per-customer key — no admin token.
 // The fleet controller decides whether this runs; this loops
 // the on-disk customers and pushes their local changes.
-export async function syncAllWorkspaces(): Promise<void> {
+export interface SyncAllWorkspacesOptions {
+  strict?: boolean;
+}
+
+export async function syncAllWorkspaces(opts: SyncAllWorkspacesOptions = {}): Promise<void> {
+  const failures: string[] = [];
   for (const slug of listOnDiskCustomerSlugs()) {
-    syncOneWorkspace(slug);
+    try {
+      syncOneWorkspace(slug, opts.strict === true);
+    } catch (err) {
+      const failure = errMessage(err);
+      log(`⚠ [git-sync] ${failure}`);
+      failures.push(failure);
+    }
+  }
+  if (opts.strict && failures.length > 0) {
+    throw new Error(`[git-sync] durable flush failed: ${failures.join("; ")}`);
   }
 }
 

@@ -1,6 +1,6 @@
 import { GATEWAY_HEARTBEAT_INTERVAL_MS, GATEWAY_UNREACHABLE_AFTER_MS, GATEWAYS_COLLECTION, } from "@octogee/shared/types/fleet-controller";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, } from "@octogee/shared/types/glm";
-import { isGatewayDesiredDoc, isGatewayRuntimeDoc, } from "@octogee/shared/types/gateway-releases";
+import { isGatewayRuntimeDoc, projectGatewayDesiredRootForGateway, } from "@octogee/shared/types/gateway-releases";
 import { findActiveGatewayMigration } from "./fleet-operation-lock.js";
 // Retirement under the simple-roll model (GATEWAY-SIMPLE-ROLL-SPEC): claim the
 // gateway atomically (guarding mounted customers + in-flight migrations), flip
@@ -119,21 +119,22 @@ function operationInput(operation) {
     return operation.input;
 }
 function claimableGatewayRetirementRoot(gatewayId, value) {
-    if (!isGatewayDesiredDoc(value) || value.gatewayId !== gatewayId) {
+    const projected = projectGatewayDesiredRootForGateway(value, gatewayId);
+    if (projected === null) {
         throw new GatewayRetirementConflictError(`gateway ${gatewayId} durable root is unavailable`);
     }
-    const root = value;
-    if (value.desiredStatus === "retired") {
+    const root = projected;
+    if (projected.desiredStatus === "retired") {
         throw new GatewayRetirementConflictError(`gateway ${gatewayId} is already retired`);
     }
     if (root.retirementClaim != null) {
         throw new GatewayRetirementConflictError(`gateway ${gatewayId} already has a retirement claim`);
     }
-    if (value.liveRelease != null && value.desiredRelease !== value.liveRelease) {
+    if (projected.liveRelease != null && projected.desiredRelease !== projected.liveRelease) {
         throw new GatewayRetirementConflictError(`gateway ${gatewayId} desired release is not converged to live`);
     }
     return {
-        rootData: value,
+        rootData: projected,
         root,
     };
 }

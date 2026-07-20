@@ -109,6 +109,8 @@ describe('connector registry (gateway-edge)', () => {
       'https://www.googleapis.com/auth/drive.file',
       'https://www.googleapis.com/auth/userinfo.email',
     ]);
+    expect(isConnectorAgentRuntimeTokenMaterializable('google')).toBe(false);
+    expect(isConnectorAgentRuntimeTokenMaterializable('microsoft')).toBe(false);
     expect(def!.oauth).toMatchObject({
       authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
       tokenUrl: 'https://oauth2.googleapis.com/token',

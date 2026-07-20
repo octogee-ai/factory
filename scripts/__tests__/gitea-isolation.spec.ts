@@ -117,6 +117,24 @@ describe("Gitea username", () => {
   });
 });
 
+describe("surge-safe Gitea key membership", () => {
+  it("selects this pod's key without treating the predecessor key as drift", async () => {
+    const { findMatchingGiteaPubKey } = await import("../lib/git.js");
+    expect(findMatchingGiteaPubKey(
+      "ssh-ed25519 CURRENT local-comment",
+      ["ssh-ed25519 OLD predecessor", "ssh-ed25519 CURRENT registered-comment"],
+    )).toBe("ssh-ed25519 CURRENT registered-comment");
+  });
+
+  it("returns null when this pod's key is not registered", async () => {
+    const { findMatchingGiteaPubKey } = await import("../lib/git.js");
+    expect(findMatchingGiteaPubKey(
+      "ssh-ed25519 CURRENT local-comment",
+      ["ssh-ed25519 OLD predecessor"],
+    )).toBeNull();
+  });
+});
+
 describe("workspace .gitignore excludes .ssh/", () => {
   it("initWorkspaceRepo gitignore template contains .ssh/ but keeps context files customer-owned", () => {
     

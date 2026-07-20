@@ -7,7 +7,13 @@ import {
 import { createBrokeredBlobStore } from "../lib/blob-sync-broker.js";
 import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
 import { runGatewayPreStopFlush } from "../lib/gateway-prestop-flush.js";
-import { syncAllWorkspaces } from "../lib/git.js";
+import {
+  listLocalCustomerPubKeys,
+  readLocalCustomerPubKey,
+  syncAllWorkspaces,
+  type LocalCustomerPubKey,
+} from "../lib/git.js";
+import { releaseGiteaUserKey } from "../lib/gitea-admin-broker-client.js";
 import {
   checkpointDurableSystemConfigForSlug,
   syncSystemConfigForSlug,
@@ -46,6 +52,39 @@ export function createPreStopSystemConfigFlush(
   };
 }
 
+export function createPreStopGiteaKeyRelease(
+  builderSlug: string,
+  deps: {
+    readLocalCustomerPubKey: typeof readLocalCustomerPubKey;
+    listLocalCustomerPubKeys?: () => LocalCustomerPubKey[];
+    releaseGiteaUserKey: typeof releaseGiteaUserKey;
+  } = { readLocalCustomerPubKey, listLocalCustomerPubKeys, releaseGiteaUserKey },
+): () => Promise<void> {
+  return async () => {
+    let keys: LocalCustomerPubKey[];
+    if (builderSlug) {
+      const pubKey = deps.readLocalCustomerPubKey(builderSlug);
+      if (pubKey === null) {
+        throw new Error(`[prestop-flush] local SSH public key is missing for ${builderSlug}`);
+      }
+      keys = [{ slug: builderSlug, pubKey }];
+    } else {
+      keys = (deps.listLocalCustomerPubKeys ?? listLocalCustomerPubKeys)();
+    }
+    const failures: string[] = [];
+    for (const key of keys) {
+      try {
+        await deps.releaseGiteaUserKey(key.slug, key.pubKey);
+      } catch (err) {
+        failures.push(`${key.slug}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    if (failures.length > 0) {
+      throw new Error(`[prestop-flush] Gitea key release failed: ${failures.join("; ")}`);
+    }
+  };
+}
+
 async function main(): Promise<void> {
   const { builderSlug, gatewayClass, gatewayId } = resolvePreStopFlushConfig();
   const brokerClient = createFleetBrokerClient(gatewayId);
@@ -63,11 +102,13 @@ async function main(): Promise<void> {
   const result = await runGatewayPreStopFlush({
     gatewayId,
     gatewayClass,
-    syncWorkspaces: syncAllWorkspaces,
+    syncWorkspaces: () => syncAllWorkspaces({ strict: true }),
     syncBlobs: () => blobSyncAllWithOptions({
+      strict: true,
       storeForSlug: () => createBrokeredBlobStore(brokerClient),
     }),
     syncSystemConfig: createPreStopSystemConfigFlush(builderSlug),
+    releaseGiteaKey: createPreStopGiteaKeyRelease(builderSlug),
     log,
   });
   await brokerClient

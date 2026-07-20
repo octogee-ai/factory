@@ -34,6 +34,7 @@ function durableRoot(overrides: Record<string, unknown> = {}): Record<string, un
     openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
+    coOwnerUids: [],
     ...overrides,
   };
 }

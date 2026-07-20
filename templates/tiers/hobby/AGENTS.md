@@ -153,7 +153,7 @@ schemas and detail; ask `octogee_ask_ops` when unsure.
 - Deliver: `workspace_commit`; `preview_start`, `preview_list`, `preview_stop`;
   `octogee_publish`.
 - Account: `octogee_status`; `delegated_access` for owner-requested temporary access;
-  `octogee_connector_materialize` only when exposed on a dedicated gateway.
+  `octogee_google_calendar_list` for bearer-blind, read-only schedule access.
 - Dedicated runtime: `exec`, `process`, `sessions_spawn`, `sessions_yield`, `subagents`
   only when exposed; use for commands or genuinely parallel work.
 

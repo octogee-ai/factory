@@ -215,6 +215,32 @@ describe("resolveRedeemGatewayUrl — broker discriminates a real legacy doc", (
     expect(result).toEqual({ url: RUNTIME_URL });
   });
 
+  it("resolves only an empty retired co-owner mirror on the desired root", async () => {
+    const { tx, db } = fakeRedeemDeps({
+      "glmGateways/default": {
+        gatewayId: "default",
+        lifecycle: "serving",
+        heartbeat: { internalUrl: RUNTIME_URL },
+      },
+    });
+    await expect(resolveRedeemGatewayUrl({
+      tx,
+      db,
+      gatewayId: "default",
+      uid: "u1",
+      gatewayExists: true,
+      gatewayData: desiredDoc({ coOwnerUids: [] }),
+    })).resolves.toEqual({ url: RUNTIME_URL });
+    await expect(resolveRedeemGatewayUrl({
+      tx,
+      db,
+      gatewayId: "default",
+      uid: "u1",
+      gatewayExists: true,
+      gatewayData: desiredDoc({ coOwnerUids: ["uid-former-helper"] }),
+    })).resolves.toEqual({ error: "gateway-root-invalid" });
+  });
+
   it("fails loud (no url) rather than dial the stale flat field when a desired doc cannot resolve", async () => {
     const { tx, db } = fakeRedeemDeps({});
     const result = await resolveRedeemGatewayUrl({

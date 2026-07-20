@@ -46,6 +46,24 @@ describe("OpenClaw Dashboard broker client", () => {
     ]);
   });
 
+  it("does not turn a retryable gateway-readiness response into session revocation", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      error: "gateway-not-ready",
+      retryable: true,
+    }), {
+      status: 409,
+      headers: { "content-type": "application/json" },
+    })) as unknown as typeof fetch;
+
+    await expect(authorizeOpenClawControlSession({
+      sessionId,
+      gatewayId: "bender",
+      revisionId: "bender-r7",
+      env: { OPENCLAW_CONTROL_BROKER_URL: "https://broker.test" },
+      fetchImpl,
+    })).rejects.toThrow("authorization broker returned 409");
+  });
+
   it("sends only canonical audit category/outcome and never raw tool or upstream material", async () => {
     const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
       const serialized = String(init?.body);

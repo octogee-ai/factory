@@ -53,6 +53,7 @@ const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/openclaw/previews/authorize",
   "/internal/agent-projects/create",
   "/internal/agent-projects/list",
+  "/internal/agent-productivity/google/calendar/events",
 ]);
 
 function isSelfScopedInternalBrokerRoute(path: string): boolean {

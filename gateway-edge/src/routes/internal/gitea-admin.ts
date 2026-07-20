@@ -14,12 +14,14 @@ import { requireInternalServiceAuth } from "../../middleware/auth.js";
 import { logger } from "../../middleware/logging.js";
 import {
   archiveRepo,
+  deleteGiteaUserPubKey,
   ensureGiteaOrgForWorkspace,
   ensureGiteaUser,
   ensureProjectRepo,
   ensureSystemConfigRepo,
   ensureWorkspaceRepo,
   readGiteaUserPubKey,
+  readGiteaUserPubKeys,
   repoExists,
 } from "../../lib/gitea-admin.js";
 import {
@@ -143,6 +145,17 @@ router.post("/ensure-user", async (req: Request, res: Response) => {
   await broker(res, "ensure-user", () => ensureGiteaUser(slug, pubKey));
 });
 
+router.post("/release-user-key", async (req: Request, res: Response) => {
+  const { slug, pubKey } = (req.body ?? {}) as { slug?: unknown; pubKey?: unknown };
+  if (!validSlug(res, slug)) return;
+  if (!isSshPublicKey(pubKey)) {
+    res.status(400).json({ error: "pubKey must be a valid SSH public key" });
+    return;
+  }
+  if (!(await requireAssignedHere(req, res, slug))) return;
+  await broker(res, "release-user-key", () => deleteGiteaUserPubKey(slug, pubKey));
+});
+
 router.get("/user-pubkey", async (req: Request, res: Response) => {
   const { slug } = req.query;
   if (!validSlug(res, slug)) return;
@@ -152,6 +165,19 @@ router.get("/user-pubkey", async (req: Request, res: Response) => {
     res.json({ pubKey });
   } catch (err) {
     logger.error("internal/gitea user-pubkey failed", { err });
+    res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+router.get("/user-pubkeys", async (req: Request, res: Response) => {
+  const { slug } = req.query;
+  if (!validSlug(res, slug)) return;
+  if (!(await requireAssignedHere(req, res, slug))) return;
+  try {
+    const pubKeys = await readGiteaUserPubKeys(slug);
+    res.json({ pubKeys });
+  } catch (err) {
+    logger.error("internal/gitea user-pubkeys failed", { err });
     res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });

@@ -41,10 +41,12 @@ export type BlobStoreFactory = (slug: string) => BlobStore | Promise<BlobStore>;
 
 export interface BlobSyncOptions {
   store?: BlobStore;
+  strict?: boolean;
 }
 
 export interface BlobSyncAllOptions {
   storeForSlug?: BlobStoreFactory;
+  strict?: boolean;
 }
 
 export interface BlobSyncActions {
@@ -226,14 +228,20 @@ export async function blobSyncAllWithOptions(opts: BlobSyncAllOptions = {}): Pro
     return fs.statSync(path.join(CUSTOMERS_DIR, d)).isDirectory();
   });
 
+  const failures: string[] = [];
   for (const slug of slugs) {
     try {
       await blobSyncForSlug(slug, {
         store: opts.storeForSlug ? await opts.storeForSlug(slug) : undefined,
+        strict: opts.strict,
       });
     } catch (err) {
       log(`⚠ [blob-sync] ${slug}: ${err}`);
+      failures.push(`${slug}: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+  if (opts.strict && failures.length > 0) {
+    throw new Error(`[blob-sync] durable flush failed: ${failures.join("; ")}`);
   }
 }
 
@@ -285,17 +293,25 @@ export async function blobSyncForSlug(slug: string, opts: BlobSyncOptions = {}):
   }
 
   const store = opts.store ?? await firebaseAdminBlobStore();
-  const downloadCount = await runDownloads(slug, paths.blobsDir, actions.toDownload, store);
-  const uploadCount = await runUploads(slug, paths.blobsDir, actions.toUpload, manifest, store);
+  const downloads = await runDownloads(slug, paths.blobsDir, actions.toDownload, store);
+  const uploads = await runUploads(slug, paths.blobsDir, actions.toUpload, manifest, store);
+  const failures = [...downloads.failures, ...uploads.failures];
+  if (opts.strict && failures.length > 0) {
+    throw new Error(failures.join("; "));
+  }
   const cleanupCount = runCleanup(paths.blobsDir, actions.toDelete);
 
-  if (uploadCount > 0) {
+  if (uploads.count > 0) {
     mkdirP(path.dirname(paths.manifestPath));
     writeFile(paths.manifestPath, JSON.stringify(manifest, null, 2) + "\n");
   }
   writeFile(paths.syncStatePath, JSON.stringify(Object.keys(manifest)));
 
-  logSummary(slug, { downloadCount, uploadCount, cleanupCount });
+  logSummary(slug, {
+    downloadCount: downloads.count,
+    uploadCount: uploads.count,
+    cleanupCount,
+  });
 }
 
 function mb(bytes: number): string {
@@ -307,8 +323,9 @@ async function runDownloads(
   blobsDir: string,
   queue: BlobSyncActions["toDownload"],
   store: BlobStore,
-): Promise<number> {
+): Promise<{ count: number; failures: string[] }> {
   let count = 0;
+  const failures: string[] = [];
   for (let i = 0; i < queue.length; i += BLOB_SYNC_MAX_CONCURRENT) {
     const batch = queue.slice(i, i + BLOB_SYNC_MAX_CONCURRENT);
     await Promise.all(batch.map(async ({ path: blobPath, entry }) => {
@@ -324,10 +341,11 @@ async function runDownloads(
         count++;
       } catch (err) {
         log(`⚠ [blob-sync] ${slug}: failed to download ${blobPath}: ${err}`);
+        failures.push(`download ${blobPath}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }));
   }
-  return count;
+  return { count, failures };
 }
 
 async function runUploads(
@@ -336,8 +354,9 @@ async function runUploads(
   queue: string[],
   manifest: Manifest,
   store: BlobStore,
-): Promise<number> {
+): Promise<{ count: number; failures: string[] }> {
   let count = 0;
+  const failures: string[] = [];
   for (const relativePath of queue) {
     const localPath = path.join(blobsDir, relativePath);
     const stats = statOrNull(localPath);
@@ -350,9 +369,10 @@ async function runUploads(
       count++;
     } catch (err) {
       log(`⚠ [blob-sync] ${slug}: failed to upload ${relativePath}: ${err}`);
+      failures.push(`upload ${relativePath}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  return count;
+  return { count, failures };
 }
 
 function runCleanup(blobsDir: string, toDelete: string[]): number {

@@ -47,7 +47,6 @@ vi.mock("../middleware/logging.js", () => ({
 
 import connectorRoutes from "../routes/internal/connectors.js";
 import {
-  ConnectorTokenBrokerError,
   readOwnerRuntimeConnectorAccessToken,
 } from "../lib/connector-tokens.js";
 
@@ -102,19 +101,12 @@ describe("internal connector materialize route", () => {
     });
   });
 
-  it("returns reauth_required when the broker cannot refresh the owner token", async () => {
-    vi.mocked(readOwnerRuntimeConnectorAccessToken).mockRejectedValue(
-      new ConnectorTokenBrokerError(409, "reauth_required"),
-    );
-
+  it("rejects productivity OAuth before any bearer can enter the gateway runtime", async () => {
     const res = await request(app()).get("/internal/connectors/google/materialize");
 
-    expect(res.status).toBe(409);
-    expect(res.body).toEqual({
-      status: "disconnected",
-      connectorId: "google",
-      reason: "reauth_required",
-    });
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "forbidden", code: "connector_not_materializable" });
+    expect(readOwnerRuntimeConnectorAccessToken).not.toHaveBeenCalled();
   });
 
   it("allows builder-class gateways because they are isolated exec-capable runtimes", async () => {

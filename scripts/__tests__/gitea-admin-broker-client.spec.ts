@@ -43,23 +43,36 @@ describe("gitea-admin-broker-client → Gitea admin broker", () => {
     });
   });
 
+  it("releaseGiteaUserKey POSTs the retiring pod's exact public key", async () => {
+    mockFetch.mockResolvedValueOnce(reply(204));
+    await broker.releaseGiteaUserKey("acme", "ssh-ed25519 OLD predecessor");
+    expect(lastCall()).toMatchObject({
+      url: `${DEFAULT_BASE}/internal/gitea/release-user-key`,
+      method: "POST",
+      body: { slug: "acme", pubKey: "ssh-ed25519 OLD predecessor" },
+    });
+  });
+
   it("fails loud when the sidecar returns a non-2xx (no silent success)", async () => {
     mockFetch.mockResolvedValueOnce(reply(502, { error: "gitea down" }));
     await expect(broker.ensureGiteaUser("acme", "k")).rejects.toThrow(/502/);
   });
 
-  it("readGiteaUserPubKey GETs and returns the pubKey", async () => {
-    mockFetch.mockResolvedValueOnce(reply(200, { pubKey: "ssh-ed25519 WANT" }));
-    expect(await broker.readGiteaUserPubKey("acme")).toBe("ssh-ed25519 WANT");
+  it("readGiteaUserPubKeys GETs and returns every active pod key", async () => {
+    mockFetch.mockResolvedValueOnce(reply(200, { pubKeys: ["ssh-ed25519 OLD", "ssh-ed25519 WANT"] }));
+    expect(await broker.readGiteaUserPubKeys("acme")).toEqual([
+      "ssh-ed25519 OLD",
+      "ssh-ed25519 WANT",
+    ]);
     expect(lastCall()).toMatchObject({
-      url: `${DEFAULT_BASE}/internal/gitea/user-pubkey?slug=acme`,
+      url: `${DEFAULT_BASE}/internal/gitea/user-pubkeys?slug=acme`,
       method: "GET",
     });
   });
 
-  it("readGiteaUserPubKey passes through null", async () => {
-    mockFetch.mockResolvedValueOnce(reply(200, { pubKey: null }));
-    expect(await broker.readGiteaUserPubKey("acme")).toBeNull();
+  it("readGiteaUserPubKeys passes through an empty list", async () => {
+    mockFetch.mockResolvedValueOnce(reply(200, { pubKeys: [] }));
+    expect(await broker.readGiteaUserPubKeys("acme")).toEqual([]);
   });
 
   it("ensureGiteaOrgForWorkspace POSTs slug", async () => {

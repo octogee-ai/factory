@@ -3,6 +3,39 @@ import { describe, expect, it, vi } from "vitest";
 import { runGatewayPreStopFlush } from "../lib/gateway-prestop-flush.js";
 
 describe("runGatewayPreStopFlush", () => {
+  it("lets the predecessor complete its final pushes before releasing its stale key", async () => {
+    const calls: string[] = [];
+    const result = await runGatewayPreStopFlush({
+      gatewayId: "eggman-devdays",
+      gatewayClass: "operator",
+      syncWorkspaces: vi.fn(async () => { calls.push("workspaces"); }),
+      syncBlobs: vi.fn(async () => { calls.push("blobs"); }),
+      syncSystemConfig: vi.fn(async () => { calls.push("system_config-push"); }),
+      releaseGiteaKey: vi.fn(async () => { calls.push("release-key"); }),
+      log: () => {},
+    });
+
+    expect(calls).toEqual(["workspaces", "blobs", "system_config-push", "release-key"]);
+    expect(result.ok).toBe(true);
+    expect(result.steps.at(-1)).toMatchObject({ name: "gitea-key-release", status: "done" });
+  });
+
+  it("fences stale-key cleanup when the predecessor final push fails", async () => {
+    const releaseGiteaKey = vi.fn(async () => {});
+    const result = await runGatewayPreStopFlush({
+      gatewayId: "eggman-devdays",
+      gatewayClass: "operator",
+      syncWorkspaces: vi.fn(async () => {}),
+      syncSystemConfig: vi.fn(async () => { throw new Error("push failed"); }),
+      releaseGiteaKey,
+      log: () => {},
+    });
+
+    expect(releaseGiteaKey).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    expect(result.steps.at(-1)).toMatchObject({ name: "gitea-key-release", status: "skipped" });
+  });
+
   it("runs workspace, blob, and system_config flushes in order", async () => {
     const calls: string[] = [];
     const logs: string[] = [];
@@ -23,7 +56,12 @@ describe("runGatewayPreStopFlush", () => {
 
     expect(calls).toEqual(["workspaces", "blobs", "system_config"]);
     expect(result.ok).toBe(true);
-    expect(result.steps.map((step) => step.status)).toEqual(["done", "done", "done"]);
+    expect(result.steps.map((step) => step.status)).toEqual([
+      "done",
+      "done",
+      "done",
+      "skipped",
+    ]);
     expect(logs.join("\n")).toMatch(/starting gateway=builder-a class=builder/);
     expect(logs.join("\n")).toMatch(/complete ok=true/);
   });
@@ -50,6 +88,7 @@ describe("runGatewayPreStopFlush", () => {
       { name: "workspace-git", status: "failed", error: "git unavailable" },
       { name: "blob-sync", status: "done" },
       { name: "system-config", status: "skipped" },
+      { name: "gitea-key-release", status: "skipped" },
     ]);
     expect(logs.join("\n")).toMatch(/workspace-git failed/);
     expect(logs.join("\n")).toMatch(/complete ok=false/);

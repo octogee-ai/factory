@@ -132,6 +132,55 @@ spec:
                 name: {{ $glm }}
                 port:
                   name: http
+          - path: /api/admin/fleet-settings
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/onboarding-placement/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/onboarding-placement
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/gateway-migrations/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/builder-candidates
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/operator-gateway-reservations/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/operator-gateway-reservations
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
           - path: /api/admin/customer-distribution
             pathType: ImplementationSpecific
             backend:

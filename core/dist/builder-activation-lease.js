@@ -1,7 +1,6 @@
 import { GLM_OPERATIONS_COLLECTION, isGatewayClass, isGatewayProfile, resolveGatewayClass, } from "@octogee/shared/types/glm";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { isGatewayMutableConfigForGateway, } from "@octogee/shared/types/gateway-mutable-config";
-import { isGatewayDesiredDoc, } from "@octogee/shared/types/gateway-releases";
+import { projectGatewayDesiredRootForGateway, } from "@octogee/shared/types/gateway-releases";
 import { readGatewayRuntimeHeartbeat } from "./gateway-live-release.js";
 function asStringOrNull(v) {
     return typeof v === "string" && v.length > 0 ? v : null;
@@ -49,12 +48,7 @@ function gatewayActivationClass(data) {
 }
 function durableActivationGateway(doc) {
     const data = doc.data();
-    if (!isGatewayDesiredDoc(data) ||
-        data.gatewayId !== doc.id ||
-        !isGatewayMutableConfigForGateway(data, doc.id)) {
-        return null;
-    }
-    return data;
+    return projectGatewayDesiredRootForGateway(data, doc.id);
 }
 function isInactiveDedicatedStatus(status) {
     return status === "draining" || status === "retired";
