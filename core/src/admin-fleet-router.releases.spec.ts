@@ -465,6 +465,35 @@ describe("POST /gateways — creates only the durable root and immutable release
 });
 
 describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
+  it("rejects a paid Builder gateway id that does not match the canonical slug scheme", async () => {
+    const provisionGatewayAuthSecret = vi.fn(async () => ({}));
+    const { app, store } = mkApp({
+      "operatorGatewayReservations/uid-bender": {
+        uid: "uid-bender",
+        builderSlug: "bender",
+        requestedSizingTier: "small",
+        requestedAt: 1,
+        status: "requested",
+        billingStatus: "active",
+      },
+      "users/uid-bender": { username: "bender" },
+      "workspaces/bender": { ownerUid: "uid-bender" },
+    }, { provisionGatewayAuthSecret });
+
+    const response = await request(app)
+      .post("/operator-gateway-reservations/uid-bender/fulfill")
+      .send({ gatewayId: "bender", imageRepository: REPO, imageTag: "abc1234" });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      error: "gatewayId must match the Builder slug",
+      gatewayId: "bender",
+      expectedGatewayId: "builder-bender",
+    });
+    expect(provisionGatewayAuthSecret).not.toHaveBeenCalled();
+    expect(store.get("gateways/bender")).toBeUndefined();
+  });
+
   it("rejects an invalid artifact tag before provisioning an operator gateway", async () => {
     const { app, store } = mkApp({
       "operatorGatewayReservations/uid-bender": {
@@ -480,11 +509,11 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
 
     await request(app)
       .post("/operator-gateway-reservations/uid-bender/fulfill")
-      .send({ gatewayId: "bender", imageRepository: REPO, imageTag: "latest" })
+      .send({ gatewayId: "builder-bender", imageRepository: REPO, imageTag: "latest" })
       .expect(400);
 
-    expect(store.get("gateways/bender")).toBeUndefined();
-    expect(store.get(`gateways/bender/${GATEWAY_RELEASES_SUBCOLLECTION}/1`)).toBeUndefined();
+    expect(store.get("gateways/builder-bender")).toBeUndefined();
+    expect(store.get(`gateways/builder-bender/${GATEWAY_RELEASES_SUBCOLLECTION}/1`)).toBeUndefined();
   });
 
   it("rejects a reservation whose builder workspace belongs to another owner", async () => {
@@ -504,11 +533,11 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
 
     await request(app)
       .post("/operator-gateway-reservations/uid-bender/fulfill")
-      .send({ gatewayId: "bender", imageRepository: REPO, imageTag: "abc1234" })
+      .send({ gatewayId: "builder-bender", imageRepository: REPO, imageTag: "abc1234" })
       .expect(400);
 
     expect(provisionGatewayAuthSecret).not.toHaveBeenCalled();
-    expect(store.get("gateways/bender")).toBeUndefined();
+    expect(store.get("gateways/builder-bender")).toBeUndefined();
   });
 
   it("rejects fulfillment when workspace ownership changes after preflight", async () => {
@@ -531,10 +560,10 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
 
     await request(app)
       .post("/operator-gateway-reservations/uid-bender/fulfill")
-      .send({ gatewayId: "bender", imageRepository: REPO, imageTag: "abc1234" })
+      .send({ gatewayId: "builder-bender", imageRepository: REPO, imageTag: "abc1234" })
       .expect(400);
 
-    expect(store.get("gateways/bender")).toBeUndefined();
+    expect(store.get("gateways/builder-bender")).toBeUndefined();
     expect(store.get("operatorGatewayReservations/uid-bender")).toMatchObject({
       status: "requested",
     });
@@ -559,11 +588,11 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
 
     await request(app)
       .post("/operator-gateway-reservations/uid-bender/fulfill")
-      .send({ gatewayId: "bender", imageRepository: REPO, imageTag: "abc1234" })
+      .send({ gatewayId: "builder-bender", imageRepository: REPO, imageTag: "abc1234" })
       .expect(202);
 
-    expect(store.get("gateways/bender")).toMatchObject({
-      gatewayId: "bender",
+    expect(store.get("gateways/builder-bender")).toMatchObject({
+      gatewayId: "builder-bender",
       configSchemaVersion: 1,
       gatewayClass: "operator",
       ownerUid: "uid-bender",
@@ -574,11 +603,11 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
         reason: "owned-runtime-gateway",
       },
     });
-    expect(store.get(`gateways/bender/${GATEWAY_RELEASES_SUBCOLLECTION}/1`)?.payload).toEqual({
+    expect(store.get(`gateways/builder-bender/${GATEWAY_RELEASES_SUBCOLLECTION}/1`)?.payload).toEqual({
       imageRepository: REPO,
       imageTag: "abc1234",
     });
-    expect(store.get(`${GLM_GATEWAYS_COLLECTION}/bender`)).toBeUndefined();
+    expect(store.get(`${GLM_GATEWAYS_COLLECTION}/builder-bender`)).toBeUndefined();
   });
 
   it("keeps Dashboard enabled while withholding Builder Shell from Builder Hobby", async () => {
@@ -600,10 +629,10 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
 
     await request(app)
       .post("/operator-gateway-reservations/uid-hobby/fulfill")
-      .send({ gatewayId: "hobby", imageRepository: REPO, imageTag: "abc1234" })
+      .send({ gatewayId: "builder-hobby", imageRepository: REPO, imageTag: "abc1234" })
       .expect(202);
 
-    expect(store.get("gateways/hobby")?.operatorAccess).toEqual({
+    expect(store.get("gateways/builder-hobby")?.operatorAccess).toEqual({
       shellsEnabled: false,
       controlUiEnabled: true,
       reason: "owned-runtime-gateway",
@@ -629,15 +658,15 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
 
     await request(app)
       .post("/operator-gateway-reservations/uid-bender/fulfill")
-      .send({ gatewayId: "bender", imageRepository: REPO, imageTag: "abc1234" })
+      .send({ gatewayId: "builder-bender", imageRepository: REPO, imageTag: "abc1234" })
       .expect(502);
 
     expect(provisionGatewayAuthSecret).toHaveBeenCalledWith({
-      gatewayId: "bender",
+      gatewayId: "builder-bender",
       gatewayServiceAccount: "gw@octogee.iam.gserviceaccount.com",
     });
-    expect(store.get("gateways/bender")).toBeUndefined();
-    expect(store.get(`gateways/bender/${GATEWAY_RELEASES_SUBCOLLECTION}/1`)).toBeUndefined();
+    expect(store.get("gateways/builder-bender")).toBeUndefined();
+    expect(store.get(`gateways/builder-bender/${GATEWAY_RELEASES_SUBCOLLECTION}/1`)).toBeUndefined();
     expect(store.get("operatorGatewayReservations/uid-bender")).toMatchObject({
       status: "requested",
     });
@@ -676,21 +705,21 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
 
     const fulfillment = request(app)
       .post("/operator-gateway-reservations/uid-bender/fulfill")
-      .send({ gatewayId: "bender", imageRepository: REPO, imageTag: "c0ffee1" })
+      .send({ gatewayId: "builder-bender", imageRepository: REPO, imageTag: "c0ffee1" })
       .then((response) => response);
     await fulfillmentSecretStarted;
 
     await request(app)
       .post("/gateways")
-      .send({ gatewayId: "bender", imageRepository: REPO, imageTag: "deadbee" })
+      .send({ gatewayId: "builder-bender", imageRepository: REPO, imageTag: "deadbee" })
       .expect(202);
     releaseFulfillmentSecret();
 
     await expect(fulfillment).resolves.toMatchObject({ status: 409 });
 
     expect(provisionGatewayAuthSecret).toHaveBeenCalledTimes(2);
-    expect(store.get("gateways/bender")).toMatchObject({ gatewayClass: "shared" });
-    expect(store.get(`gateways/bender/${GATEWAY_RELEASES_SUBCOLLECTION}/1`)?.payload).toEqual({
+    expect(store.get("gateways/builder-bender")).toMatchObject({ gatewayClass: "shared" });
+    expect(store.get(`gateways/builder-bender/${GATEWAY_RELEASES_SUBCOLLECTION}/1`)?.payload).toEqual({
       imageRepository: REPO,
       imageTag: "deadbee",
     });

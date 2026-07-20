@@ -41,6 +41,10 @@
       "types": "./dist/types/builder-shell-pty.d.ts",
       "default": "./dist/types/builder-shell-pty.js"
     },
+    "./types/builder-gateway-id": {
+      "types": "./dist/types/builder-gateway-id.d.ts",
+      "default": "./dist/types/builder-gateway-id.js"
+    },
     "./types/channel": {
       "types": "./dist/types/channel.d.ts",
       "default": "./dist/types/channel.js"
@@ -157,6 +161,10 @@
       "types": "./dist/types/sizing.d.ts",
       "default": "./dist/types/sizing.js"
     },
+    "./types/trial-gateway": {
+      "types": "./dist/types/trial-gateway.d.ts",
+      "default": "./dist/types/trial-gateway.js"
+    },
     "./types/social": {
       "types": "./dist/types/social.d.ts",
       "default": "./dist/types/social.js"
@@ -188,6 +196,9 @@
       ],
       "types/builder-shell-pty": [
         "dist/types/builder-shell-pty.d.ts"
+      ],
+      "types/builder-gateway-id": [
+        "dist/types/builder-gateway-id.d.ts"
       ],
       "types/channel": [
         "dist/types/channel.d.ts"
@@ -272,6 +283,9 @@
       ],
       "types/sizing": [
         "dist/types/sizing.d.ts"
+      ],
+      "types/trial-gateway": [
+        "dist/types/trial-gateway.d.ts"
       ],
       "types/social": [
         "dist/types/social.d.ts"

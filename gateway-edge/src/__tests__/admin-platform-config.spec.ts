@@ -3,9 +3,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const platformDocs: Record<string, Record<string, unknown> | undefined> = {};
 const setCalls: Array<{ path: string; data: Record<string, unknown>; opts?: unknown }> = [];
+const queryDocs: Record<string, Array<{ id: string; data: Record<string, unknown> }>> = {};
+const aggregateCalls: string[] = [];
 
 vi.mock("../lib/db", () => {
   function collection(path: string): any {
+    const queryResult = (key: string, limit?: number) => {
+      const rows = (queryDocs[key] ?? []).slice(0, limit);
+      return {
+        docs: rows.map((row) => ({ id: row.id, data: () => row.data })),
+        size: rows.length,
+      };
+    };
     return {
       doc: (id: string) => ({
         get: async () => ({
@@ -16,11 +25,29 @@ vi.mock("../lib/db", () => {
           setCalls.push({ path: `${path}/${id}`, data, opts });
           platformDocs[`${path}/${id}`] = { ...(platformDocs[`${path}/${id}`] ?? {}), ...data };
         },
-        collection: () => ({
-          doc: () => ({ get: async () => ({ exists: false, data: () => undefined }) }),
+        collection: (subcollection: string) => ({
+          doc: (subId: string) => ({
+            get: async () => ({
+              exists: platformDocs[`${path}/${id}/${subcollection}/${subId}`] !== undefined,
+              data: () => platformDocs[`${path}/${id}/${subcollection}/${subId}`],
+            }),
+          }),
         }),
       }),
-      where: () => ({ get: async () => ({ docs: [], size: 0 }) }),
+      where: (field: string, _op: string, value: unknown) => ({
+        get: async () => queryResult(`${path}:${field}:${String(value)}`),
+        count: () => ({
+          get: async () => {
+            const key = `${path}:${field}:${String(value)}`;
+            aggregateCalls.push(key);
+            return { data: () => ({ count: queryDocs[key]?.length ?? 0 }) };
+          },
+        }),
+        orderBy: () => ({
+          limit: (count: number) => ({ get: async () => queryResult(`${path}:${field}:${String(value)}`, count) }),
+          get: async () => queryResult(`${path}:${field}:${String(value)}`),
+        }),
+      }),
       orderBy: () => ({ get: async () => ({ docs: [], size: 0 }) }),
     };
   }
@@ -60,7 +87,9 @@ describe("admin platform-config", () => {
   beforeEach(() => {
     app = buildApp();
     for (const key of Object.keys(platformDocs)) delete platformDocs[key];
+    for (const key of Object.keys(queryDocs)) delete queryDocs[key];
     setCalls.length = 0;
+    aggregateCalls.length = 0;
   });
 
   it("GET serves the compiled default plus the full catalog when no doc exists", async () => {
@@ -132,6 +161,7 @@ describe("admin platform-connect-config", () => {
   beforeEach(() => {
     app = buildApp();
     for (const key of Object.keys(platformDocs)) delete platformDocs[key];
+    for (const key of Object.keys(queryDocs)) delete queryDocs[key];
     setCalls.length = 0;
   });
 
@@ -195,6 +225,7 @@ describe("admin platform-connect-config — stage-only updates", () => {
   beforeEach(() => {
     app = buildApp();
     for (const key of Object.keys(platformDocs)) delete platformDocs[key];
+    for (const key of Object.keys(queryDocs)) delete queryDocs[key];
     setCalls.length = 0;
   });
 
@@ -229,5 +260,182 @@ describe("admin platform-connect-config — stage-only updates", () => {
     expect(res.status).toBe(200);
     expect(res.body.googleAllowlistUids).toEqual([]);
     expect(setCalls[0].data).toMatchObject({ googleAllowlistUids: [] });
+  });
+});
+
+describe("admin platform-trial-config", () => {
+  let app: express.Express;
+
+  beforeEach(() => {
+    app = buildApp();
+    for (const key of Object.keys(platformDocs)) delete platformDocs[key];
+    for (const key of Object.keys(queryDocs)) delete queryDocs[key];
+    setCalls.length = 0;
+  });
+
+  it("GET returns the strict defaults, concrete plan choices, and live standby health", async () => {
+    platformDocs["platformConfig/trial"] = {
+      schemaVersion: 1,
+      defaultPersonalTier: "personal_pro",
+      defaultBuilderTier: "pro",
+      releaseSourceGatewayId: "default",
+    };
+    platformDocs["gatewayPools/trial"] = {
+      schemaVersion: 1,
+      availableGatewayId: "trial-op-000001",
+      preparingGatewayId: null,
+      nextSequence: 2,
+      lastError: null,
+      updatedAt: 100,
+    };
+    queryDocs["trialGatewayClaims:status:waiting"] = [
+      { id: "waiting-user", data: { requestedAt: 90, status: "waiting" } },
+      { id: "waiting-user-2", data: { requestedAt: 100, status: "waiting" } },
+    ];
+    queryDocs["trialGatewayClaims:status:claimed"] = [
+      { id: "claimed-user", data: { status: "claimed" } },
+    ];
+    queryDocs["trialGatewayClaims:status:failed"] = [
+      {
+        id: "failed-user",
+        data: {
+          uid: "failed-user",
+          slug: "failed-builder",
+          status: "failed",
+          requestedAt: 80,
+          lastError: { at: 101, code: "trial_config_missing", message: "trial config unavailable" },
+        },
+      },
+    ];
+
+    const res = await request(app).get("/api/admin/platform-trial-config");
+
+    expect(res.status).toBe(200);
+    expect(res.body.config).toEqual({
+      schemaVersion: 1,
+      defaultPersonalTier: "personal_pro",
+      defaultBuilderTier: "pro",
+      releaseSourceGatewayId: "default",
+    });
+    expect(res.body.personalPlans).toContainEqual({ name: "personal_pro", displayName: "Personal Pro" });
+    expect(res.body.builderPlans).toContainEqual({
+      name: "pro",
+      displayName: "Builder Pro",
+      sizingTier: "nano",
+    });
+    expect(res.body.builderPlans.map((plan: { name: string }) => plan.name)).not.toContain("enterprise");
+    expect(res.body.pool).toMatchObject({
+      availableGatewayId: "trial-op-000001",
+      preparingGatewayId: null,
+      waitingClaims: 2,
+      claimedCount: 1,
+      failedClaims: 1,
+      oldestQueuedBuilderUid: "waiting-user",
+      oldestFailedBuilderUid: "failed-user",
+      oldestFailedClaimError: {
+        at: 101,
+        code: "trial_config_missing",
+        message: "trial config unavailable",
+      },
+      lastError: null,
+    });
+    expect(aggregateCalls).toEqual([
+      "trialGatewayClaims:status:waiting",
+      "trialGatewayClaims:status:claimed",
+      "trialGatewayClaims:status:failed",
+    ]);
+  });
+
+  it("GET reports missing configuration instead of silently granting a compiled tier", async () => {
+    const res = await request(app).get("/api/admin/platform-trial-config");
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("trial_config_invalid");
+  });
+
+  it("PUT writes validated defaults with audit fields", async () => {
+    platformDocs["gateways/default"] = {
+      gatewayId: "default",
+      desiredStatus: "running",
+      latestRelease: 42,
+      desiredRelease: 42,
+    };
+    platformDocs["gateways/default/releases/42"] = {
+      gatewayId: "default",
+      release: 42,
+      payload: {
+        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+        imageTag: "abcdef1",
+      },
+    };
+
+    const res = await request(app)
+      .put("/api/admin/platform-trial-config")
+      .send({
+        schemaVersion: 1,
+        defaultPersonalTier: "personal_pro_max",
+        defaultBuilderTier: "team",
+        releaseSourceGatewayId: "default",
+      });
+
+    expect(res.status).toBe(200);
+    expect(setCalls).toHaveLength(1);
+    expect(setCalls[0]).toMatchObject({
+      path: "platformConfig/trial",
+      data: {
+        schemaVersion: 1,
+        defaultPersonalTier: "personal_pro_max",
+        defaultBuilderTier: "team",
+        releaseSourceGatewayId: "default",
+        updatedAt: "server-now",
+        updatedBy: "admin-user",
+      },
+    });
+  });
+
+  it("PUT rejects enterprise and an absent release source", async () => {
+    const enterprise = await request(app)
+      .put("/api/admin/platform-trial-config")
+      .send({
+        schemaVersion: 1,
+        defaultPersonalTier: "personal_pro",
+        defaultBuilderTier: "enterprise",
+        releaseSourceGatewayId: "default",
+      });
+    expect(enterprise.status).toBe(400);
+    expect(enterprise.body.error).toBe("invalid_trial_config");
+
+    const missingSource = await request(app)
+      .put("/api/admin/platform-trial-config")
+      .send({
+        schemaVersion: 1,
+        defaultPersonalTier: "personal_pro",
+        defaultBuilderTier: "pro",
+        releaseSourceGatewayId: "missing",
+      });
+    expect(missingSource.status).toBe(400);
+    expect(missingSource.body.error).toBe("invalid_release_source");
+    expect(setCalls).toHaveLength(0);
+  });
+
+  it("PUT rejects a durable root whose pinned release payload is absent", async () => {
+    platformDocs["gateways/default"] = {
+      gatewayId: "default",
+      desiredStatus: "running",
+      latestRelease: 42,
+      desiredRelease: 42,
+    };
+
+    const res = await request(app)
+      .put("/api/admin/platform-trial-config")
+      .send({
+        schemaVersion: 1,
+        defaultPersonalTier: "personal_pro",
+        defaultBuilderTier: "pro",
+        releaseSourceGatewayId: "default",
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_release_source");
+    expect(setCalls).toHaveLength(0);
   });
 });

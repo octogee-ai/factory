@@ -1,6 +1,7 @@
 export { LEGAL_DOCS, ALL_LEGAL_DOC_IDS, REGISTRATION_DOCS, isLegalDocId, currentVersion, isCurrentVersion, acceptanceDocId, } from './legal.js';
 export { WORKSPACE_VIBE_PRESETS, DEFAULT_VIBE_NOUN, WORKSPACE_CHANNEL_DISPLAY_NAMES, TYPING_PHRASES_BY_VIBE, DEFAULT_TYPING_PHRASES, isWorkspaceVibe, titleCaseVibe, computeWorkspaceDisplayName, computeProjectChannelDisplayName, } from './display-names.js';
-export { WINDOW_LENGTH_HOURS, WINDOWS_PER_DAY, WINDOWS_PER_WEEK, WINDOW_BURST_MULTIPLIER, TRIAL_LENGTH_DAYS, planWeeklyBudgetUsd, planWindowBudgetUsd, resolveEffectivePlan, resolveTier, trialDayN, trialDaysRemaining, } from './billing.js';
+export { WINDOW_LENGTH_HOURS, WINDOWS_PER_DAY, WINDOWS_PER_WEEK, WINDOW_BURST_MULTIPLIER, TRIAL_LENGTH_DAYS, planWeeklyBudgetUsd, planWindowBudgetUsd, resolveEffectivePlan, resolveBuilderTier, resolvePaidBuilderTier, resolvePaidPersonalTier, resolveTier, trialDayN, trialDaysRemaining, } from './billing.js';
+export { DEFAULT_PLATFORM_TRIAL_CONFIG, PLATFORM_TRIAL_CONFIG_DOC, TRIAL_CONFIG_SCHEMA_VERSION, parsePlatformTrialConfig, trialConfigHash, } from './platform-config.js';
 export { CANONICAL_OPENCLAW_FORK_SHA, CANONICAL_OPENCLAW_VERSION, } from './openclaw-release.js';
 export { GATEWAY_HEARTBEAT_INTERVAL_MS, GATEWAY_UNREACHABLE_AFTER_MS, VERIFY_ACCOUNT_TIMEOUT_MS, CONFIG_PATCH_DEADLINE_MS, ADD_CUSTOMER_DEADLINE_MS, MIGRATION_QUIESCE_TIMEOUT_MS, MIGRATION_TRANSFER_TIMEOUT_MS, MIGRATION_UNMOUNT_TIMEOUT_MS, MIGRATING_IN_PIN_TTL_MS, SIGNATURE_HEADER, GATEWAYS_COLLECTION, } from './fleet-controller.js';
 export { resolveOnboardingPlacementForUid, rewritePlacementGatewayPointers, } from './orchestrator-placement.js';
@@ -9,9 +10,11 @@ export { MODEL_CREDENTIAL_CATALOG, MODEL_CREDENTIAL_STATIC_PROVIDER_IDS, MODEL_C
 export { GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME, OPERATOR_GATEWAY_LOCKED_ACCESS, OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT, OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX, isGatewayClass, isGatewayClassShellAccessEnabled, isGatewayClassControlUiAccessEnabled, isGatewayProfile, isOperatorGatewayShellAccessEnabled, operatorGatewayServiceAccountName, resolveGatewayClass, resolveGatewayImageProfile, } from './glm.js';
 export { GATEWAY_RELEASES_SUBCOLLECTION, GATEWAY_ASSIGNMENTS_SUBCOLLECTION, RELEASE_FIELDS, GATEWAY_MUTABLE_FIELDS, helmReleaseNameForGateway, gatewayEdgeServiceName, gatewayPodServiceName, isGatewayRuntimeDoc, releasePayloadHash, classifyGatewayField, } from './gateway-releases.js';
 export { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, } from './gateway-mutable-config.js';
+export { TRIAL_GATEWAY_ALLOCATION_STATES, GATEWAY_POOLS_COLLECTION, TRIAL_GATEWAY_POOL_DOC, TRIAL_GATEWAY_POOL_SCHEMA_VERSION, TRIAL_GATEWAY_CLAIMS_COLLECTION, isTimestampLike, isTrialGatewayAllocation, isTrialGatewayPoolState, isTrialGatewayClaim, } from './trial-gateway.js';
 export { SIZING_TIERS, TIER_PRESETS, GATEWAY_CLASS_DEFAULT_TIER, PROFILE_DEFAULT_TIER, FALLBACK_DEFAULT_TIER, resolveSizingTier, } from './sizing.js';
 export { C2D_AUTOPILOT_VCPU_USD_PER_HR, C2D_AUTOPILOT_GIB_USD_PER_HR, HOURS_PER_MONTH, estimateGatewayMonthlyCost, estimateFleetMonthlyCost, } from './cost-estimator.js';
 export { OPENCLAW_PROTOCOL_VERSION } from './openclaw-wire.js';
+export { builderGatewayIdForSlug } from './builder-gateway-id.js';
 export { PTY_FRAME, PTY_SIGNALS, PTY_BUDGET, PTY_DEFAULT, ALLOWED_DRIVER_SIGNALS, encodeStdin, encodeStdout, encodeResize, encodeSignal, encodeExit, encodeError, decodeFrame, } from './builder-shell-pty.js';
 export { OpenclawWireError, isResponseFrame, waitForWsOpen, startConnectChallengeTracker, sendWsRequest, } from './openclaw-wire-core.js';
 export { AGENT_CONVERSATION_SCHEMA_VERSION, AGENT_ACTIVITY_ENVELOPE_SCHEMA_VERSION, AGENT_ACTIVITY_RESERVED_ITEM_IDS, agentActivityCanonicalKey, } from './agent-conversation.js';

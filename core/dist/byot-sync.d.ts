@@ -52,6 +52,7 @@ export declare function deriveDesiredByotState(userData: {
     subscription?: unknown;
     builderSubscription?: unknown;
     trialStartedAt?: unknown;
+    trialGrant?: unknown;
     freeTierModelRef?: unknown;
     provisioning?: {
         openclaw?: {

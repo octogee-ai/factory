@@ -1149,7 +1149,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
       billingStatus: "active",
       currentGatewayId: "default",
       currentGatewayProfile: "standard",
-      gatewayId: "alice",
+      gatewayId: "builder-alice",
       operationId: "op-add",
       requestedAt: 1_234,
       updatedAt: 2_345,
@@ -1165,7 +1165,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
     expect(res.body).toMatchObject({
       error: "operator gateway reservation can no longer be updated",
       status: "provisioning",
-      gatewayId: "alice",
+      gatewayId: "builder-alice",
     });
     expect(operatorGatewayReservationsDocs["admin-user"]).toEqual(before);
     expect(calls.find((c) => c.collection === "operatorGatewayReservations")).toBeUndefined();
@@ -1215,14 +1215,14 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
     const fulfillRes = await request(app)
       .post("/api/admin/operator-gateway-reservations/admin-user/fulfill")
       .send({
-        gatewayId: "alice",
+        gatewayId: "builder-alice",
         imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
         imageTag: "abc1234",
       });
     expect(fulfillRes.status).toBe(202);
     expect(fulfillRes.body).toMatchObject({
       uid: "admin-user",
-      gatewayId: "alice",
+      gatewayId: "builder-alice",
       status: "provisioning",
     });
 
@@ -1230,7 +1230,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
       (c) => c.collection === "gateways" && c.op === "doc.set",
     );
     expect(gwWrite?.data).toMatchObject({
-      gatewayId: "alice",
+      gatewayId: "builder-alice",
       profile: "operator",
       gatewayClass: "operator",
       imageProfile: "operator",
@@ -1241,7 +1241,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
         shellsEnabled: true,
         reason: "owned-runtime-gateway",
       },
-      serviceAccountName: "octogee-gw-alice",
+      serviceAccountName: "octogee-gw-builder-alice",
       serviceAccount: { create: true },
     });
 
@@ -1252,7 +1252,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
     expect(fulfillmentUserUpdate?.docId).toBe("admin-user");
     expect(fulfillmentUserUpdate?.data).toMatchObject({
       "operatorGatewayReservation.status": "provisioning",
-      "operatorGatewayReservation.gatewayId": "alice",
+      "operatorGatewayReservation.gatewayId": "builder-alice",
     });
     expect(fulfillmentUserUpdate?.data).not.toHaveProperty(
       "provisioning.openclaw.gatewayId",
@@ -1261,14 +1261,14 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
       "provisioning.openclaw.shellsEnabled",
     );
 
-    markGatewayServing("alice", { status: "ready", mountedCustomers: [] });
+    markGatewayServing("builder-alice", { status: "ready", mountedCustomers: [] });
     const activateRes = await request(app)
       .post("/api/admin/operator-gateway-reservations/admin-user/activate")
       .send({});
     expect(activateRes.status).toBe(202);
     expect(activateRes.body).toMatchObject({
       uid: "admin-user",
-      gatewayId: "alice",
+      gatewayId: "builder-alice",
       status: "activating",
     });
     const activationOp = calls
@@ -1278,11 +1278,11 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
       kind: "migrate-customer",
       status: "pending",
       createdBy: "admin-user",
-      gatewayId: "alice",
+      gatewayId: "builder-alice",
       inputUid: "admin-user",
       input: {
         uid: "admin-user",
-        toGatewayId: "alice",
+        toGatewayId: "builder-alice",
         source: "operator-gateway-reservation",
         operatorReservationUid: "admin-user",
         builderSlug: "alice",
@@ -1322,7 +1322,7 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
   }
 
   const fulfillBody = {
-    gatewayId: "alice",
+    gatewayId: "builder-alice",
     imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
     imageTag: "abc1234",
   };
@@ -1337,13 +1337,13 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
     expect(res.status).toBe(202);
     expect(res.body).toMatchObject({
       uid: "uid-alice",
-      gatewayId: "alice",
+      gatewayId: "builder-alice",
       status: "provisioning",
     });
     expect(res.body.operationId).toBeTruthy();
     expect(provisionerCalls).toEqual([
       {
-        gatewayId: "alice",
+        gatewayId: "builder-alice",
         gatewayServiceAccount: "octogee-gateway@octogee-test.iam.gserviceaccount.com",
       },
     ]);
@@ -1351,9 +1351,9 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
     const gwWrite = calls.find(
       (c) => c.collection === "gateways" && c.op === "doc.set",
     );
-    expect(gwWrite?.docId).toBe("alice");
+    expect(gwWrite?.docId).toBe("builder-alice");
     expect(gwWrite?.data).toMatchObject({
-      gatewayId: "alice",
+      gatewayId: "builder-alice",
       desiredStatus: "running",
       profile: "operator",
       gatewayClass: "operator",
@@ -1365,11 +1365,11 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
         shellsEnabled: true,
         reason: "owned-runtime-gateway",
       },
-      serviceAccountName: "octogee-gw-alice",
+      serviceAccountName: "octogee-gw-builder-alice",
       serviceAccount: { create: true },
     });
     expect(gwWrite?.data).not.toHaveProperty("operatorReservation");
-    expect(gatewayReleasesDocs["alice/1"]?.payload).toMatchObject({ imageTag: "abc1234" });
+    expect(gatewayReleasesDocs["builder-alice/1"]?.payload).toMatchObject({ imageTag: "abc1234" });
 
     const reservationUpdate = calls.find(
       (c) => c.collection === "operatorGatewayReservations" && c.op === "doc.update",
@@ -1377,7 +1377,7 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
     expect(reservationUpdate?.docId).toBe("uid-alice");
     expect(reservationUpdate?.data).toMatchObject({
       status: "provisioning",
-      gatewayId: "alice",
+      gatewayId: "builder-alice",
       operationId: res.body.operationId,
       provisioningStartedBy: "admin-user",
     });
@@ -1388,7 +1388,7 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
     expect(userUpdate?.docId).toBe("uid-alice");
     expect(userUpdate?.data).toMatchObject({
       "operatorGatewayReservation.status": "provisioning",
-      "operatorGatewayReservation.gatewayId": "alice",
+      "operatorGatewayReservation.gatewayId": "builder-alice",
       "operatorGatewayReservation.operationId": res.body.operationId,
     });
     expect(userUpdate?.data).not.toHaveProperty("provisioning.openclaw.gatewayId");
@@ -1400,11 +1400,11 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
       kind: "add-gateway",
       status: "pending",
       createdBy: "admin-user",
-      gatewayId: "alice",
+      gatewayId: "builder-alice",
       inputUid: "uid-alice",
       input: {
         uid: "uid-alice",
-        gatewayId: "alice",
+        gatewayId: "builder-alice",
         profile: "operator",
         sizingTier: "medium",
         builderSlug: "alice",

@@ -1,4 +1,5 @@
-import type { Firestore } from "firebase-admin/firestore";
+import type { Firestore, Transaction } from "firebase-admin/firestore";
+import { type GatewayDoc } from "@octogee/shared/types/gateway-releases";
 export declare class GatewayRetirementConflictError extends Error {
     constructor(message: string);
 }
@@ -13,6 +14,12 @@ interface ClaimGatewayRetirementInput {
     operation: RetirementOperation;
     now: number;
     updatedBy: string;
+    claimGuard?: (input: {
+        transaction: Transaction;
+        root: GatewayDoc & {
+            desiredStatus: "running" | "paused";
+        };
+    }) => Promise<void> | void;
 }
 interface VerifyGatewayRetirementClaimInput {
     db: Firestore;

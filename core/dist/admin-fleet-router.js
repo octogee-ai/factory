@@ -2,6 +2,7 @@ import { FieldValue, } from "firebase-admin/firestore";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, OPERATOR_GATEWAY_RESERVATIONS_COLLECTION, defaultOperatorGatewayAccess, resolveUserGatewayShellState, OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT, isValidNewGatewayId, isGatewayClass, isGatewayProfile, operatorGatewayServiceAccountName, resolveGatewayClass, resolveGatewayImageProfile, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
 import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
+import { builderGatewayIdForSlug } from "@octogee/shared/types/builder-gateway-id";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, GATEWAY_RELEASES_SUBCOLLECTION, commitPlacementAtomic, isReleasePayload, releasePayloadHash, isGatewayDesiredDoc, isGatewayRuntimeDoc, upgradeReleasePayloadSchema, } from "@octogee/shared/types/gateway-releases";
 import { parseAssignmentDoc, readAssignmentDocsForGateway } from "./assignment-doc.js";
@@ -3338,6 +3339,15 @@ export function addAdminFleetRoutes(router, deps) {
             const reservation = validateFulfillableOperatorReservation(uid, reservationSnap.data());
             if ("error" in reservation) {
                 res.status(reservation.error.status).json(reservation.error.body);
+                return;
+            }
+            const expectedGatewayId = builderGatewayIdForSlug(reservation.ok.builderSlug);
+            if (body.gatewayId !== expectedGatewayId) {
+                res.status(400).json({
+                    error: "gatewayId must match the Builder slug",
+                    gatewayId: body.gatewayId,
+                    expectedGatewayId,
+                });
                 return;
             }
             const workspaceRef = db.collection("workspaces").doc(reservation.ok.builderSlug);

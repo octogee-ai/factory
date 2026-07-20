@@ -245,6 +245,7 @@ describe("classifyGatewayField", () => {
   it("classifies all former release policy fields as gateway-mutable", () => {
     expect(classifyGatewayField("operatorAccess")).toBe("gateway-mutable");
     expect(classifyGatewayField("openclawOverrides")).toBe("gateway-mutable");
+    expect(classifyGatewayField("allocation")).toBe("gateway-mutable");
   });
 });
 

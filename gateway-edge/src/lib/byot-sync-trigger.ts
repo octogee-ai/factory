@@ -29,6 +29,7 @@ export interface ModelCredentialSyncUserData {
   subscription?: unknown;
   builderSubscription?: unknown;
   trialStartedAt?: unknown;
+  trialGrant?: unknown;
   provisioning?: { openclaw?: { status?: string } };
   systemConfig?: {
     byot?: { provider?: string; baseUrl?: string; model?: string };

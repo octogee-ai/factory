@@ -117,6 +117,7 @@ export interface FleetBrokerUserSnapshot {
     subscription?: unknown;
     builderSubscription?: unknown;
     trialStartedAt?: unknown;
+    trialGrant?: unknown;
     freeTierModelRef?: string;
     ownerName: string;
     email: string;

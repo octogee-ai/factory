@@ -1,4 +1,6 @@
 import { catalogEntryForModelRef } from "./agent-models.js";
+import { BUILDER_TIERS, TIERS, } from "./billing-tiers.js";
+import { isBareGatewayId } from "./gateway-mutable-config.js";
 // Operator dials for platform-wide model policy, stored at platformConfig/models
 // (server-only collection; admin reads/writes go through the API). Absent or
 // invalid doc → the compiled default below, so the free tier always has a
@@ -6,6 +8,60 @@ import { catalogEntryForModelRef } from "./agent-models.js";
 export const PLATFORM_CONFIG_COLLECTION = "platformConfig";
 export const PLATFORM_MODEL_CONFIG_DOC = "models";
 export const PLATFORM_CONNECT_CONFIG_DOC = "connect";
+export const PLATFORM_TRIAL_CONFIG_DOC = "trial";
+export const TRIAL_CONFIG_SCHEMA_VERSION = 1;
+export const DEFAULT_PLATFORM_TRIAL_CONFIG = {
+    schemaVersion: TRIAL_CONFIG_SCHEMA_VERSION,
+    defaultPersonalTier: "personal_pro",
+    defaultBuilderTier: "pro",
+    releaseSourceGatewayId: "default",
+};
+function isPersonalTier(value) {
+    return typeof value === "string" && value in TIERS && value !== "builder" && value !== "operator";
+}
+function isTrialBuilderTier(value) {
+    return (typeof value === "string" &&
+        value in BUILDER_TIERS &&
+        BUILDER_TIERS[value].instance !== null);
+}
+export function parsePlatformTrialConfig(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+        return null;
+    const raw = value;
+    if (raw.schemaVersion !== TRIAL_CONFIG_SCHEMA_VERSION ||
+        !isPersonalTier(raw.defaultPersonalTier) ||
+        !isTrialBuilderTier(raw.defaultBuilderTier) ||
+        !isBareGatewayId(raw.releaseSourceGatewayId) ||
+        (raw.updatedBy !== undefined && typeof raw.updatedBy !== "string")) {
+        return null;
+    }
+    return {
+        schemaVersion: TRIAL_CONFIG_SCHEMA_VERSION,
+        defaultPersonalTier: raw.defaultPersonalTier,
+        defaultBuilderTier: raw.defaultBuilderTier,
+        releaseSourceGatewayId: raw.releaseSourceGatewayId,
+        ...(raw.updatedAt !== undefined ? { updatedAt: raw.updatedAt } : {}),
+        ...(raw.updatedBy !== undefined ? { updatedBy: raw.updatedBy } : {}),
+    };
+}
+function fnv1a64Hex(input) {
+    let high = 0x811c9dc5;
+    let low = 0x01000193;
+    for (let index = 0; index < input.length; index += 1) {
+        const code = input.charCodeAt(index);
+        high = Math.imul(high ^ code, 0x01000193) >>> 0;
+        low = Math.imul(low ^ code, 0x811c9dc5) >>> 0;
+    }
+    return high.toString(16).padStart(8, "0") + low.toString(16).padStart(8, "0");
+}
+export function trialConfigHash(config) {
+    return fnv1a64Hex(JSON.stringify({
+        schemaVersion: config.schemaVersion,
+        defaultPersonalTier: config.defaultPersonalTier,
+        defaultBuilderTier: config.defaultBuilderTier,
+        releaseSourceGatewayId: config.releaseSourceGatewayId,
+    }));
+}
 export const DEFAULT_PLATFORM_CONNECT_CONFIG = {
     googleStage: "off",
     googleAllowlistUids: [],

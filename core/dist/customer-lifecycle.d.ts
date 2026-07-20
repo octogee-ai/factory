@@ -21,6 +21,7 @@ export interface UserSnapshot {
     subscription?: unknown;
     builderSubscription?: unknown;
     trialStartedAt?: unknown;
+    trialGrant?: unknown;
     freeTierModelRef?: string;
     systemConfig?: {
         byot?: {

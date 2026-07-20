@@ -27,6 +27,7 @@ function validConfig(
     openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
+    allocation: null,
     ...overrides,
   };
 }
@@ -66,6 +67,107 @@ describe("gateway mutable config", () => {
     }))).toBe(true);
     expect(isGatewayMutableConfig(validConfig({ ownerUid: "uid-owner", builderSlug: null }))).toBe(false);
     expect(isGatewayMutableConfig(validConfig({ ownerUid: null, builderSlug: "owner" }))).toBe(false);
+  });
+
+  it("allows only an explicitly locked trial operator to be unowned", () => {
+    const trial = validConfig({
+      ownerUid: null,
+      builderSlug: null,
+      serviceAccountName: "octogee-gw-trial-op-000001",
+      serviceAccount: { create: true },
+      operatorAccess: {
+        shellsEnabled: false,
+        controlUiEnabled: false,
+        reason: "runtime-trust-boundary-not-provisioned",
+      },
+      allocation: { kind: "trial", state: "warming", configHash: "0123456789abcdef" },
+    });
+
+    expect(isGatewayMutableConfig(trial)).toBe(true);
+    expect(isGatewayMutableConfig({ ...trial, gatewayClass: "builder" })).toBe(false);
+    expect(isGatewayMutableConfig({ ...trial, imageProfile: "standard" })).toBe(false);
+    expect(isGatewayMutableConfig({
+      ...trial,
+      operatorAccess: { shellsEnabled: true, controlUiEnabled: false },
+    })).toBe(false);
+    expect(isGatewayMutableConfig({ ...trial, allocation: null })).toBe(false);
+    expect(isGatewayMutableConfig({
+      ...trial,
+      allocation: {
+        kind: "trial",
+        state: "claimed",
+        configHash: "0123456789abcdef",
+        claimedAt: 1,
+        claimedByUid: "uid-owner",
+      },
+    })).toBe(false);
+    expect(isGatewayMutableConfig({
+      ...trial,
+      desiredStatus: "paused",
+    })).toBe(true);
+    expect(isGatewayMutableConfig({
+      ...trial,
+      desiredStatus: "running",
+      allocation: { kind: "trial", state: "standby", configHash: "0123456789abcdef" },
+    })).toBe(false);
+  });
+
+  it("requires the canonical privilege-locked template for an unowned trial gateway", () => {
+    const trial = validConfig({
+      ownerUid: null,
+      builderSlug: null,
+      serviceAccountName: "octogee-gw-trial-op-000001",
+      serviceAccount: { create: true },
+      operatorAccess: {
+        shellsEnabled: false,
+        controlUiEnabled: false,
+        reason: "runtime-trust-boundary-not-provisioned",
+      },
+      allocation: { kind: "trial", state: "standby", configHash: "0123456789abcdef" },
+      desiredStatus: "paused",
+    });
+
+    expect(isGatewayMutableConfigForGateway(trial, "trial-op-000001")).toBe(true);
+    for (const drift of [
+      { serviceAccountName: null },
+      { serviceAccountName: "custom-tenant-ksa" },
+      { serviceAccount: null },
+      { serviceAccount: { create: true, annotations: { "iam.gke.io/gcp-service-account": "admin@example.test" } } },
+      { gatewayContainerSecurityContext: { privileged: true } },
+      { openclawOverrides: { env: { PLATFORM_TOKEN: "secret" } } },
+      { modelBrokerLimits: { requestsPerMinute: 1000 } },
+      { preemption: { warmTargetGatewayId: "other" } },
+      { gcpProject: "foreign-project" },
+      { computeClass: "privileged" },
+      { coOwnerUids: ["uid-other"] },
+      { operatorAccess: { shellsEnabled: false, controlUiEnabled: false, platformMetadataEgress: true } },
+      { operatorAccess: { shellsEnabled: false, controlUiEnabled: false, kubeApiServerEgressCidrs: ["0.0.0.0/0"] } },
+      { operatorAccess: { shellsEnabled: false, controlUiEnabled: false, verifiedBy: "operator" } },
+    ]) {
+      expect(isGatewayMutableConfigForGateway({ ...trial, ...drift }, "trial-op-000001"))
+        .toBe(false);
+    }
+  });
+
+  it("requires owned trial allocations to carry a matching claim identity", () => {
+    expect(isGatewayMutableConfig(validConfig({
+      allocation: {
+        kind: "trial",
+        state: "claimed",
+        configHash: "0123456789abcdef",
+        claimedAt: { seconds: 1, nanoseconds: 0 },
+        claimedByUid: "uid-owner",
+      },
+    }))).toBe(true);
+    expect(isGatewayMutableConfig(validConfig({
+      allocation: {
+        kind: "trial",
+        state: "claimed",
+        configHash: "0123456789abcdef",
+        claimedAt: 1,
+        claimedByUid: "uid-other",
+      },
+    }))).toBe(false);
   });
 
   it("allows only the addressed gateway's generated service account", () => {

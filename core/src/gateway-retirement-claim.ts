@@ -1,4 +1,4 @@
-import type { Firestore } from "firebase-admin/firestore";
+import type { Firestore, Transaction } from "firebase-admin/firestore";
 import {
   GATEWAY_HEARTBEAT_INTERVAL_MS,
   GATEWAY_UNREACHABLE_AFTER_MS,
@@ -41,6 +41,10 @@ interface ClaimGatewayRetirementInput {
   operation: RetirementOperation;
   now: number;
   updatedBy: string;
+  claimGuard?: (input: {
+    transaction: Transaction;
+    root: GatewayDoc & { desiredStatus: "running" | "paused" };
+  }) => Promise<void> | void;
 }
 
 interface VerifyGatewayRetirementClaimInput {
@@ -257,6 +261,8 @@ export async function claimGatewayRetirementAtomic(
       if (inspection.error) throw new GatewayRetirementConflictError(inspection.error);
       liveRuntimeIdentity = inspection.liveRuntimeIdentity;
     }
+
+    await input.claimGuard?.({ transaction, root: rootData });
 
     const version = nextRetirementVersion(
       (rootData as unknown as Record<string, unknown>).retirementVersion,
