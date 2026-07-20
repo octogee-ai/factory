@@ -11,6 +11,7 @@ import { openUpstream } from "../chat-proxy/openclaw/upstream.js";
 import { agentImportBrokerBaseUrlFromEnv, createAgentImportStore } from "./agent-import-store.js";
 import {
   applyAgentImportRepository,
+  compareAgentImportWorkspaces,
   inspectAgentImportRepository,
   rollbackAgentImportRepository,
 } from "./agent-import-git.js";
@@ -181,6 +182,7 @@ export function createAgentImportRuntime(options: {
     cloneGithubSource: cloneGithubAgentImportSource,
     extractLocalSource: extractLocalAgentImportArchive,
     inspectSource: inspectAgentImportRepository,
+    compareWorkspaces: compareAgentImportWorkspaces,
     workspaceState: (slug) => readAgentImportWorkspaceState(slug),
     runDoctor,
     applyRepository: (input) => applyAgentImportRepository({
@@ -192,6 +194,7 @@ export function createAgentImportRuntime(options: {
     rollbackRepository: rollbackAgentImportRepository,
     readIdentity: () => store.readIdentity(),
     syncIdentity: (_uid, identity) => store.syncIdentity(identity),
+    replaceIdentity: (_uid, identity) => store.replaceIdentity(identity),
     deleteImportBlobs: (id) => store.deleteImportBlobs(id),
     withConfigLock,
     invokeOpenClaw: invokeLocalOpenClaw,

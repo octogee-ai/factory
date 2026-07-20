@@ -16,6 +16,12 @@ export interface CoachIdentityContext {
   slug?: string;
 }
 
+export interface CoachTextIdentitySnapshot {
+  name: string | null;
+  persona: string | null;
+  emoji: string | null;
+}
+
 export function avatarFileName(name: string): string {
   const base = name.replace(/[^a-zA-Z0-9 _-]/g, "").trim().replace(/\s+/g, "-");
   return `${base || "Coach"}-avatar.png`;
@@ -111,6 +117,21 @@ export async function syncCoachIdentity(
     await syncCoachToMattermost(uid, patch, agent);
   }
   return updated;
+}
+
+export async function replaceCoachTextIdentity(
+  uid: string,
+  identity: CoachTextIdentitySnapshot,
+): Promise<void> {
+  const agent = await readAgent(uid);
+  await db.doc(`agents/${uid}`).set({
+    id: uid,
+    updatedAt: FieldValue.serverTimestamp(),
+    name: identity.name ?? FieldValue.delete(),
+    persona: identity.persona ?? FieldValue.delete(),
+    avatarEmoji: identity.emoji ?? FieldValue.delete(),
+  }, { merge: true });
+  await syncCoachToMattermost(uid, { name: identity.name ?? "Coach" }, agent);
 }
 
 async function syncCoachToMattermost(

@@ -49,7 +49,7 @@ import { db, storage } from "../../gateway-edge/src/lib/db.js";
 import { readConnectorAccessToken } from "../../gateway-edge/src/lib/connector-tokens.js";
 import { githubListRepos, githubRepoApi } from "../../gateway-edge/src/lib/github.js";
 import { readAgent } from "../../gateway-edge/src/lib/firestoreReads.js";
-import { syncCoachIdentity } from "../../gateway-edge/src/lib/coach-identity.js";
+import { replaceCoachTextIdentity, syncCoachIdentity } from "../../gateway-edge/src/lib/coach-identity.js";
 import { requireAuth, requireAuthenticatedUid } from "../../gateway-edge/src/middleware/auth.js";
 import { createKubernetesTokenReviewer } from "./lib/token-review.js";
 import {
@@ -353,11 +353,11 @@ export function createApp(opts: CreateAppOptions = {}) {
       },
       readIdentity: async (uid) => {
         const agent = await readAgent(uid);
-        return agent ? {
-          ...(agent.name ? { name: agent.name } : {}),
-          ...(typeof agent.persona === "string" ? { persona: agent.persona } : {}),
-          ...(typeof agent.avatarEmoji === "string" ? { emoji: agent.avatarEmoji } : {}),
-        } : {};
+        return {
+          name: agent?.name ?? null,
+          persona: typeof agent?.persona === "string" ? agent.persona : null,
+          emoji: typeof agent?.avatarEmoji === "string" ? agent.avatarEmoji : null,
+        };
       },
       syncIdentity: async (uid, identity) => {
         await syncCoachIdentity(uid, {
@@ -366,6 +366,7 @@ export function createApp(opts: CreateAppOptions = {}) {
           ...(identity.emoji ? { emoji: identity.emoji } : {}),
         });
       },
+      replaceIdentity: replaceCoachTextIdentity,
       now: () => new Date(),
     }),
   );

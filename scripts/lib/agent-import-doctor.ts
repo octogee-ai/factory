@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -30,13 +30,20 @@ interface AgentImportDoctorOptions {
     command: string,
     args: string[],
     options: { env: NodeJS.ProcessEnv },
-  ) => AgentImportDoctorCommandResult;
+  ) => Promise<AgentImportDoctorCommandResult>;
 }
 
 const CREDENTIAL_KEYS = new Set([
-  "apikey", "api_key", "cookie", "credential", "credentials", "env", "oauth", "password",
-  "privatekey", "private_key", "secret", "secrets", "token",
+  "apikey", "cookie", "credential", "credentials", "env", "oauth", "password",
+  "privatekey", "secret", "secrets", "token",
 ]);
+
+function credentialKey(key: string): boolean {
+  const normalized = key.toLowerCase().replace(/[-_]/g, "");
+  return CREDENTIAL_KEYS.has(normalized) ||
+    /(?:token|secret|password|passwd|credential|credentials|cookie|authorization|authheader|oauth|bearer|auth)$/.test(normalized) ||
+    /(?:apikey|privatekey|accesskey|signingkey|encryptionkey|clientkey|webhookkey)$/.test(normalized);
+}
 
 function record(value: unknown): JsonObject | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -52,7 +59,7 @@ function assertSecretFree(value: unknown): void {
   const object = record(value);
   if (!object) return;
   for (const [key, entry] of Object.entries(object)) {
-    if (CREDENTIAL_KEYS.has(key.toLowerCase().replace(/-/g, ""))) {
+    if (credentialKey(key)) {
       throw new Error("agent import doctor candidate contains a credential-bearing path");
     }
     assertSecretFree(entry);
@@ -63,20 +70,46 @@ function defaultRun(
   command: string,
   args: string[],
   options: { env: NodeJS.ProcessEnv },
-): AgentImportDoctorCommandResult {
-  const result = spawnSync(command, args, {
-    env: options.env,
-    encoding: "utf8",
-    timeout: 60_000,
-    maxBuffer: 2 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "pipe"],
+): Promise<AgentImportDoctorCommandResult> {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { env: options.env, stdio: ["ignore", "pipe", "pipe"] });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let error: Error | undefined;
+    const limit = 2 * 1024 * 1024;
+    const timer = setTimeout(() => {
+      error = new Error("agent import doctor command timed out");
+      child.kill("SIGKILL");
+    }, 60_000);
+    const collect = (target: Buffer[], chunk: Buffer, size: number) => {
+      if (size > limit) {
+        error = new Error("agent import doctor output exceeded limit");
+        child.kill("SIGKILL");
+        return;
+      }
+      target.push(chunk);
+    };
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdoutBytes += chunk.length;
+      collect(stdout, chunk, stdoutBytes);
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderrBytes += chunk.length;
+      collect(stderr, chunk, stderrBytes);
+    });
+    child.on("error", (spawnError) => { error = spawnError; });
+    child.on("close", (status) => {
+      clearTimeout(timer);
+      resolve({
+        status,
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+        ...(error ? { error } : {}),
+      });
+    });
   });
-  return {
-    status: result.status,
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
-    ...(result.error ? { error: result.error } : {}),
-  };
 }
 
 function atomicPrivateWrite(filePath: string, value: unknown): void {
@@ -123,10 +156,10 @@ function versionFrom(result: AgentImportDoctorCommandResult): string {
   return firstLine.replace(/^OpenClaw\s+/i, "").trim() || "unknown";
 }
 
-export function runAgentImportDoctor(
+export async function runAgentImportDoctor(
   candidate: unknown,
   options: AgentImportDoctorOptions = {},
-): AgentImportDoctorResult {
+): Promise<AgentImportDoctorResult> {
   const source = record(candidate);
   if (!source) throw new Error("agent import doctor candidate must be an object");
   assertSecretFree(source);
@@ -138,8 +171,8 @@ export function runAgentImportDoctor(
   try {
     atomicPrivateWrite(configPath, source);
     const env = isolatedEnvironment(stateDir, configPath, options.env ?? process.env);
-    const version = versionFrom(run(command, ["--version"], { env }));
-    const doctor = run(command, ["doctor", "--fix", "--non-interactive"], { env });
+    const version = versionFrom(await run(command, ["--version"], { env }));
+    const doctor = await run(command, ["doctor", "--fix", "--non-interactive"], { env });
     if (doctor.error) {
       return {
         outcome: "failed",
@@ -156,7 +189,7 @@ export function runAgentImportDoctor(
         diagnostics: [`doctor_exit_${String(doctor.status)}`],
       };
     }
-    const validate = run(command, ["config", "validate"], { env });
+    const validate = await run(command, ["config", "validate"], { env });
     if (validate.error) {
       return {
         outcome: "failed",
@@ -221,11 +254,11 @@ function safeEqual(left: string | null, right: string): boolean {
 
 export function createAgentImportDoctorHandler(options: {
   token: string;
-  runDoctor?: (candidate: unknown) => AgentImportDoctorResult;
+  runDoctor?: (candidate: unknown) => Promise<AgentImportDoctorResult>;
 }): RequestHandler {
   if (!options.token) throw new Error("agent import doctor token is required");
   const doctor = options.runDoctor ?? ((candidate) => runAgentImportDoctor(candidate));
-  return (req, res) => {
+  return async (req, res) => {
     if (!safeEqual(bearer(req), options.token)) {
       res.status(401).json({ error: "agent import doctor authentication failed" });
       return;
@@ -236,7 +269,7 @@ export function createAgentImportDoctorHandler(options: {
       return;
     }
     try {
-      res.json(doctor(body.candidate));
+      res.json(await doctor(body.candidate));
     } catch (error) {
       res.status(422).json({
         error: "agent import doctor rejected the candidate",

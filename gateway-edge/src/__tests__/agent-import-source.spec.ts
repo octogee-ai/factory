@@ -31,7 +31,9 @@ function sourceRepo(): string {
   git(repo, "config", "user.name", "Jack");
   git(repo, "config", "user.email", "jack@example.invalid");
   fs.writeFileSync(path.join(repo, "MEMORY.md"), "old memory\n");
-  git(repo, "add", "MEMORY.md");
+  fs.mkdirSync(path.join(repo, "bin"));
+  fs.writeFileSync(path.join(repo, "bin", "moof"), "#!/bin/sh\necho moof\n", { mode: 0o755 });
+  git(repo, "add", "MEMORY.md", "bin/moof");
   git(repo, "commit", "-q", "-m", "old memory");
   fs.writeFileSync(path.join(repo, "MEMORY.md"), "new uncommitted memory\n");
   fs.writeFileSync(path.join(repo, "SOUL.md"), "I am Moof.\n");
@@ -60,6 +62,7 @@ async function localArchive(repo: string): Promise<Buffer> {
   zip.file("doctor-candidate.json", JSON.stringify(config.doctorCandidate));
   zip.file("workspace/MEMORY.md", fs.readFileSync(path.join(repo, "MEMORY.md")));
   zip.file("workspace/SOUL.md", fs.readFileSync(path.join(repo, "SOUL.md")));
+  zip.file("workspace/bin/moof", fs.readFileSync(path.join(repo, "bin", "moof")));
   for (const relative of ["HEAD", "packed-refs", "shallow"]) {
     const file = path.join(repo, ".git", relative);
     if (fs.existsSync(file)) zip.file(`git/${relative}`, fs.readFileSync(file));
@@ -115,6 +118,7 @@ describe("local agent import archive", () => {
       expect(fs.readFileSync(path.join(extracted.repoDir, "MEMORY.md"), "utf8"))
         .toBe("new uncommitted memory\n");
       expect(fs.readFileSync(path.join(extracted.repoDir, "SOUL.md"), "utf8")).toBe("I am Moof.\n");
+      expect(git(extracted.repoDir, "ls-tree", extracted.sourceHead, "bin/moof")).toContain("100755");
       expect(JSON.stringify(extracted.artifacts)).not.toContain("must-not-be-in-artifacts");
     } finally {
       extracted.cleanup();
@@ -151,6 +155,20 @@ describe("local agent import archive", () => {
     )).rejects.toMatchObject({ code: "archive_too_large" });
   });
 
+  it("rejects a highly compressed oversized blob on a non-HEAD ref before checkout", async () => {
+    const source = sourceRepo();
+    git(source, "checkout", "-q", "-b", "hidden-large-object");
+    fs.writeFileSync(path.join(source, "huge.txt"), "x".repeat(4096));
+    git(source, "add", "huge.txt");
+    git(source, "commit", "-q", "-m", "compressed oversized blob");
+    git(source, "checkout", "-q", "main");
+
+    await expect(extractLocalAgentImportArchive(
+      await localArchive(source),
+      { tmpRoot: temp("extract-root"), maxGitBlobBytes: 1024 },
+    )).rejects.toMatchObject({ code: "archive_too_large" });
+  });
+
   it("rejects replacement refs smuggled through packed-refs", async () => {
     const source = sourceRepo();
     const zip = await JSZip.loadAsync(await localArchive(source));
@@ -161,5 +179,24 @@ describe("local agent import archive", () => {
       await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }),
       { tmpRoot: temp("extract-root") },
     )).rejects.toMatchObject({ code: "unsafe_archive_entry" });
+  });
+
+  it("drops an ordinary packed remote-tracking ref while retaining importable history", async () => {
+    const source = sourceRepo();
+    const head = git(source, "rev-parse", "HEAD");
+    git(source, "update-ref", "refs/remotes/origin/main", head);
+    git(source, "pack-refs", "--all");
+
+    const extracted = await extractLocalAgentImportArchive(
+      await localArchive(source),
+      { tmpRoot: temp("extract-root") },
+    );
+    try {
+      expect(git(extracted.repoDir, "rev-parse", "HEAD")).toBe(extracted.sourceHead);
+      expect(fs.readFileSync(path.join(extracted.repoDir, ".git", "packed-refs"), "utf8"))
+        .not.toContain("refs/remotes/origin/main");
+    } finally {
+      extracted.cleanup();
+    }
   });
 });

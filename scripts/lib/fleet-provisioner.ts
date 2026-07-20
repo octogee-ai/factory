@@ -211,7 +211,7 @@ export interface StartFleetOptions {
   openclawDir?: string;
   internalServiceKey?: string;
   agentImportDoctorToken?: string;
-  runAgentImportDoctor?: (candidate: unknown) => AgentImportDoctorResult;
+  runAgentImportDoctor?: (candidate: unknown) => Promise<AgentImportDoctorResult>;
   flushLocalState?: (input: {
     slug: string;
     reason: string;

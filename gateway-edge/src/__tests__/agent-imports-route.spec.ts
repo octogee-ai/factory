@@ -2,7 +2,7 @@ import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createAgentImportsRouter } from "../routes/agent-imports.js";
+import { AGENT_IMPORT_ERROR_STATUS, createAgentImportsRouter } from "../routes/agent-imports.js";
 
 const artifacts = {
   formatVersion: 1,
@@ -17,6 +17,7 @@ function harness() {
     previewLocal: vi.fn().mockResolvedValue({ id: "imp-2", approvalHash: "sha256:local" }),
     apply: vi.fn().mockResolvedValue({ id: "imp-1", status: "complete" }),
     get: vi.fn().mockResolvedValue({ id: "imp-1", status: "previewed" }),
+    latest: vi.fn().mockResolvedValue({ id: "imp-1", status: "complete", importCommit: "c".repeat(40) }),
     rollback: vi.fn().mockResolvedValue({ id: "imp-1", status: "rolled_back" }),
   };
   const authorize = vi.fn().mockResolvedValue({ slug: "alice", gatewayId: "gw-alice" });
@@ -41,6 +42,23 @@ function harness() {
 
 describe("agent imports route", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("maps every typed import failure to an actionable HTTP response", () => {
+    const codes = [
+      "approval_mismatch", "archive_too_large", "binary_too_large", "coach_config_missing",
+      "config_changed", "config_get_failed", "config_readback_failed", "config_rollback_unsafe",
+      "destination_branch", "destination_changed", "destination_dirty", "destination_restore_failed",
+      "forbidden", "git_command_failed", "git_lfs_unsupported", "git_source_invalid",
+      "github_clone_failed", "github_not_connected", "import_not_found", "import_plan_missing",
+      "invalid_archive", "invalid_archive_metadata", "invalid_config_artifact", "invalid_git_head",
+      "invalid_git_history", "invalid_git_tree", "invalid_github_source", "invalid_github_token",
+      "invalid_import_id", "invalid_import_state", "invalid_platform_manifest", "invalid_source_config",
+      "local_archive_missing", "rollback_window_closed", "secret_scan_failed", "source_agent_ambiguous",
+      "source_agent_not_found", "source_changed", "unsafe_archive_entry", "unsafe_config_artifact",
+      "unsafe_git_entry", "unsafe_platform_path",
+    ];
+    expect(codes.filter((code) => !AGENT_IMPORT_ERROR_STATUS[code])).toEqual([]);
+  });
 
   it("previews a GitHub repository for the authenticated local gateway owner", async () => {
     const { app, service } = harness();
@@ -95,6 +113,40 @@ describe("agent imports route", () => {
       error: "github_not_connected",
       message: "GitHub not connected",
     });
+  });
+
+  it("returns an actionable client error when the authorized GitHub clone fails", async () => {
+    const { app, service } = harness();
+    service.previewGithub.mockRejectedValue(Object.assign(new Error("GitHub repository could not be cloned"), {
+      code: "github_clone_failed",
+    }));
+
+    await request(app)
+      .post("/api/g/gw-alice/agent-imports/preview/github")
+      .send({ owner: "jack", repo: "moof", branch: "main", artifacts })
+      .expect(422, {
+        error: "github_clone_failed",
+        message: "GitHub repository could not be cloned",
+      });
+    expect(service.previewGithub).toHaveBeenCalledOnce();
+  });
+
+  it("returns only sanitized secret finding coordinates", async () => {
+    const { app, service } = harness();
+    service.previewGithub.mockRejectedValue(Object.assign(new Error("source contains credentials"), {
+      code: "secret_findings",
+      findings: [{ ruleId: "github-pat", path: "memory/old.md", commit: "a".repeat(40), secret: "never" }],
+    }));
+
+    const response = await request(app)
+      .post("/api/g/gw-alice/agent-imports/preview/github")
+      .send({ owner: "jack", repo: "moof", branch: "main", artifacts })
+      .expect(422);
+
+    expect(response.body.findings).toEqual([{
+      ruleId: "github-pat", path: "memory/old.md", commit: "a".repeat(40),
+    }]);
+    expect(JSON.stringify(response.body)).not.toContain("never");
   });
 
   it("returns a typed rejection for a structurally unsafe Git history", async () => {
@@ -173,10 +225,12 @@ describe("agent imports route", () => {
       .send({ approvalHash: "sha256:approval" })
       .expect(200, { id: "imp-1", status: "complete" });
     await request(app).get("/api/g/gw-alice/agent-imports/imp-1").expect(200);
+    await request(app).get("/api/g/gw-alice/agent-imports/latest").expect(200);
     await request(app).post("/api/g/gw-alice/agent-imports/imp-1/rollback").expect(200);
 
     expect(service.apply).toHaveBeenCalledWith({ importId: "imp-1", uid: "uid-alice", approvalHash: "sha256:approval" });
     expect(service.get).toHaveBeenCalledWith({ importId: "imp-1", uid: "uid-alice" });
+    expect(service.latest).toHaveBeenCalledWith({ uid: "uid-alice" });
     expect(service.rollback).toHaveBeenCalledWith({ importId: "imp-1", uid: "uid-alice" });
   });
 });

@@ -11,6 +11,7 @@ import {
 } from "@octogee/shared/types/agent-import";
 import type {
   AgentImportRepositoryInspection,
+  AgentImportWorkspaceComparison,
 } from "./agent-import-git.js";
 import type {
   ExtractedAgentImportSource,
@@ -41,6 +42,8 @@ export interface AgentImportPreview {
     workspaceDigest: string;
     historyPreserved: boolean;
     conflicts: string[];
+    conflictCount: number;
+    conflictDigest: string;
   };
   doctor: AgentImportDoctorResult;
   config: AgentImportConfigPlan;
@@ -82,7 +85,7 @@ export interface AgentImportRecord {
   rollbackCommit?: string;
   configOutcome?: "applied" | "safe_baseline" | "unchanged";
   warnings: string[];
-  previousIdentity?: AgentImportIdentity;
+  previousIdentity?: AgentImportIdentitySnapshot;
   previousRuntime?: JsonObject;
   error?: { code: string; message: string };
 }
@@ -104,6 +107,12 @@ export interface AgentImportIdentity {
   emoji?: string;
 }
 
+export interface AgentImportIdentitySnapshot {
+  name: string | null;
+  persona: string | null;
+  emoji: string | null;
+}
+
 export interface AgentImportServiceDeps {
   newId(): string;
   now(): Date;
@@ -117,10 +126,12 @@ export interface AgentImportServiceDeps {
   }): Promise<{ repoDir: string; sourceHead: string; cleanup(): void }>;
   extractLocalSource(archive: Buffer): Promise<ExtractedAgentImportSource>;
   inspectSource(repoDir: string): Promise<AgentImportRepositoryInspection>;
+  compareWorkspaces(sourceDir: string, targetDir: string): Promise<AgentImportWorkspaceComparison>;
   workspaceState(slug: string): Promise<{ targetDir: string; head: string; clean: boolean }>;
   runDoctor(candidate: JsonObject): Promise<AgentImportDoctorResult>;
   putRecord(record: AgentImportRecord): Promise<void>;
   getRecord(id: string): Promise<AgentImportRecord | null>;
+  getLatestRecord(): Promise<AgentImportRecord | null>;
   putPlan(id: string, plan: StoredAgentImportPlan): Promise<void>;
   getPlan(id: string): Promise<StoredAgentImportPlan | null>;
   putArchive(id: string, archive: Buffer): Promise<void>;
@@ -141,8 +152,9 @@ export interface AgentImportServiceDeps {
     destinationHead: string;
     importId: string;
   }): Promise<{ rollbackCommit: string }>;
-  readIdentity(uid: string): Promise<AgentImportIdentity>;
+  readIdentity(uid: string): Promise<AgentImportIdentitySnapshot>;
   syncIdentity(uid: string, identity: AgentImportIdentity): Promise<void>;
+  replaceIdentity(uid: string, identity: AgentImportIdentitySnapshot): Promise<void>;
   withConfigLock<T>(work: () => Promise<T>): Promise<T>;
   invokeOpenClaw(method: string, params: Record<string, unknown>): Promise<unknown>;
 }
@@ -164,6 +176,15 @@ function sha256(value: string | Buffer): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
+function assertGithubRepoSize(repoSizeKiB: number): void {
+  if (!Number.isSafeInteger(repoSizeKiB) || repoSizeKiB < 0) {
+    throw new AgentImportServiceError("invalid_github_source", "GitHub repository size is invalid");
+  }
+  if (repoSizeKiB > MAX_GITHUB_REPO_KIB) {
+    throw new AgentImportServiceError("archive_too_large", "GitHub repository exceeds the 128 MiB import limit");
+  }
+}
+
 function configDigest(artifacts: AgentImportConfigArtifacts): string {
   return sha256(buildAgentImportApprovalInput({
     source: { kind: "config" },
@@ -179,6 +200,7 @@ function approvalHash(input: {
   destinationHead: string;
   workspaceDigest: string;
   artifacts: AgentImportConfigArtifacts;
+  comparison: AgentImportWorkspaceComparison;
 }): string {
   const source = Object.fromEntries(
     Object.entries(input.source).map(([key, value]) => [key, String(value)]),
@@ -188,7 +210,7 @@ function approvalHash(input: {
     destinationHead: input.destinationHead,
     workspaceDigest: input.workspaceDigest,
     configDigest: configDigest(input.artifacts),
-    resolutions: {},
+    resolutions: { workspaceConflictDigest: input.comparison.conflictDigest },
   }));
 }
 
@@ -249,10 +271,22 @@ function coachFromConfig(config: JsonObject, coachId: string): JsonObject {
   return matches[0];
 }
 
+function restorationValue(previous: unknown, patch: unknown, wasPresent: boolean): unknown {
+  const patchObject = record(patch);
+  const previousObject = record(previous);
+  if (patchObject && previousObject) {
+    return Object.fromEntries(Object.entries(patchObject).map(([key, value]) => [
+      key,
+      restorationValue(previousObject[key], value, Object.prototype.hasOwnProperty.call(previousObject, key)),
+    ]));
+  }
+  return wasPresent ? cloneValue(previous) : null;
+}
+
 function previousRuntime(coach: JsonObject, patch: JsonObject): JsonObject {
-  return Object.fromEntries(Object.keys(patch).map((key) => [
+  return Object.fromEntries(Object.entries(patch).map(([key, value]) => [
     key,
-    Object.prototype.hasOwnProperty.call(coach, key) ? cloneValue(coach[key]) : null,
+    restorationValue(coach[key], value, Object.prototype.hasOwnProperty.call(coach, key)),
   ]));
 }
 
@@ -260,65 +294,121 @@ function deepEqual(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function assertRuntimeApplied(config: JsonObject, coachId: string, patch: JsonObject): void {
-  const coach = coachFromConfig(config, coachId);
+const DELETED = Symbol("deleted");
+
+function mergePatchValue(previous: unknown, patch: unknown): unknown {
+  if (patch === null) return DELETED;
+  const patchObject = record(patch);
+  if (!patchObject) return cloneValue(patch);
+  const previousObject = record(previous) ?? {};
+  const merged = cloneValue(previousObject);
+  for (const [key, value] of Object.entries(patchObject)) {
+    const next = mergePatchValue(previousObject[key], value);
+    if (next === DELETED) delete merged[key];
+    else merged[key] = next;
+  }
+  return merged;
+}
+
+function assertRuntimePatchApplied(
+  beforeConfig: JsonObject,
+  afterConfig: JsonObject,
+  coachId: string,
+  patch: JsonObject,
+): void {
+  const before = coachFromConfig(beforeConfig, coachId);
+  const after = coachFromConfig(afterConfig, coachId);
   for (const [key, value] of Object.entries(patch)) {
-    if (!deepEqual(coach[key], value)) {
+    const expected = mergePatchValue(before[key], value);
+    if (expected === DELETED) {
+      if (Object.prototype.hasOwnProperty.call(after, key)) {
+        throw new AgentImportServiceError("config_readback_failed", `OpenClaw did not delete ${key}`);
+      }
+    } else if (!deepEqual(after[key], expected)) {
       throw new AgentImportServiceError("config_readback_failed", `OpenClaw did not retain ${key}`);
     }
   }
 }
 
-function assertRuntimeRestored(config: JsonObject, coachId: string, previous: JsonObject): void {
-  const coach = coachFromConfig(config, coachId);
-  for (const [key, value] of Object.entries(previous)) {
-    const present = Object.prototype.hasOwnProperty.call(coach, key);
-    if (value === null ? present && coach[key] !== null : !deepEqual(coach[key], value)) {
-      throw new AgentImportServiceError("config_readback_failed", `OpenClaw did not restore ${key}`);
-    }
-  }
-}
-
-function patchedAgentList(
-  config: JsonObject,
+function runtimePatchState(
+  beforeConfig: JsonObject,
+  currentConfig: JsonObject,
   coachId: string,
   patch: JsonObject,
-  removeNulls = false,
-): JsonObject[] {
+): "unchanged" | "applied" | "diverged" {
+  const before = coachFromConfig(beforeConfig, coachId);
+  const current = coachFromConfig(currentConfig, coachId);
+  let unchanged = true;
+  let applied = true;
+  for (const [key, value] of Object.entries(patch)) {
+    const wasPresent = Object.prototype.hasOwnProperty.call(before, key);
+    const isPresent = Object.prototype.hasOwnProperty.call(current, key);
+    unchanged &&= wasPresent === isPresent && (!wasPresent || deepEqual(before[key], current[key]));
+    const expected = mergePatchValue(before[key], value);
+    applied &&= expected === DELETED
+      ? !isPresent
+      : isPresent && deepEqual(current[key], expected);
+  }
+  if (unchanged) return "unchanged";
+  if (applied) return "applied";
+  return "diverged";
+}
+
+function agentList(config: JsonObject): JsonObject[] {
   const agents = record(config.agents);
   const list = agents?.list;
   if (!Array.isArray(list)) {
     throw new AgentImportServiceError("coach_config_missing", "OpenClaw config has no agent list");
   }
-  let found = 0;
-  const result = list.map((entry) => {
-    const agent = record(entry);
-    if (!agent || agent.id !== coachId) return cloneValue(entry) as JsonObject;
-    found += 1;
-    const next = { ...cloneValue(agent), ...cloneValue(patch) };
-    if (removeNulls) {
-      for (const [key, value] of Object.entries(patch)) if (value === null) delete next[key];
-    }
-    return next;
-  });
-  if (found !== 1) {
-    throw new AgentImportServiceError("coach_config_missing", "Octogee coach config is missing or ambiguous");
-  }
-  return result;
+  return list.map((entry) => cloneValue(entry) as JsonObject);
 }
 
-function assertAgentList(config: JsonObject, expected: JsonObject[]): void {
-  const list = record(config.agents)?.list;
-  if (!deepEqual(list, expected)) {
-    throw new AgentImportServiceError("config_readback_failed", "OpenClaw did not retain the complete agent list");
+function safelyIdKeyedAgentList(config: JsonObject): boolean {
+  return agentList(config).every((entry) => typeof record(entry)?.id === "string");
+}
+
+function coachPatch(coachId: string, patch: JsonObject): JsonObject {
+  return { agents: { list: [{ id: coachId, ...cloneValue(patch) }] } };
+}
+
+function assertUnpatchedAgentConfig(before: JsonObject, after: JsonObject, coachId: string, patch: JsonObject): void {
+  const beforeList = agentList(before);
+  const afterList = agentList(after);
+  if (beforeList.length !== afterList.length) {
+    throw new AgentImportServiceError("config_readback_failed", "OpenClaw changed the agent list length");
+  }
+  for (let index = 0; index < beforeList.length; index += 1) {
+    const prior = beforeList[index];
+    const current = afterList[index];
+    if (prior.id !== coachId) {
+      if (!deepEqual(current, prior)) {
+        throw new AgentImportServiceError("config_readback_failed", "OpenClaw changed a sibling agent");
+      }
+      continue;
+    }
+    for (const [key, value] of Object.entries(prior)) {
+      if (!(key in patch) && !deepEqual(current[key], value)) {
+        throw new AgentImportServiceError("config_readback_failed", `OpenClaw changed coach field ${key}`);
+      }
+    }
   }
 }
 
 export class AgentImportService {
-  private static readonly activeApplies = new Map<string, Promise<AgentImportRecord>>();
-  private static readonly activeRollbacks = new Map<string, Promise<AgentImportRecord>>();
+  private static readonly activeMutations = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: AgentImportServiceDeps) {}
+
+  private serializeMutation<T>(uid: string, importId: string, work: () => Promise<T>): Promise<T> {
+    const key = `${uid}\0${importId}`;
+    const predecessor = AgentImportService.activeMutations.get(key) ?? Promise.resolve();
+    const execution = predecessor.catch(() => undefined).then(work);
+    const tail = execution.then(() => undefined, () => undefined);
+    AgentImportService.activeMutations.set(key, tail);
+    return execution.finally(() => {
+      if (AgentImportService.activeMutations.get(key) === tail) AgentImportService.activeMutations.delete(key);
+    });
+  }
 
   async previewGithub(input: {
     uid: string;
@@ -332,13 +422,7 @@ export class AgentImportService {
     const artifacts = validateAgentImportConfigArtifacts(input.artifacts);
     const token = await this.deps.readGithubToken(input.uid);
     if (!token) throw new AgentImportServiceError("github_not_connected", "GitHub is not connected");
-    const repoSizeKiB = await this.deps.readGithubRepoSize(input.owner, input.repo);
-    if (!Number.isSafeInteger(repoSizeKiB) || repoSizeKiB < 0) {
-      throw new AgentImportServiceError("invalid_github_source", "GitHub repository size is invalid");
-    }
-    if (repoSizeKiB > MAX_GITHUB_REPO_KIB) {
-      throw new AgentImportServiceError("archive_too_large", "GitHub repository exceeds the 128 MiB import limit");
-    }
+    assertGithubRepoSize(await this.deps.readGithubRepoSize(input.owner, input.repo));
     const source = await this.deps.cloneGithubSource({
       owner: input.owner,
       repo: input.repo,
@@ -356,6 +440,8 @@ export class AgentImportService {
         gatewayId: input.gatewayId,
         artifacts,
         inspected,
+        repoDir: source.repoDir,
+        historyPreserved: true,
         source: {
           kind: "github",
           owner: input.owner,
@@ -387,6 +473,8 @@ export class AgentImportService {
         gatewayId: input.gatewayId,
         artifacts: extracted.artifacts,
         inspected,
+        repoDir: extracted.repoDir,
+        historyPreserved: extracted.manifest.hadGit,
         source: {
           kind: "local",
           head: extracted.sourceHead,
@@ -408,6 +496,8 @@ export class AgentImportService {
     gatewayId: string;
     artifacts: AgentImportConfigArtifacts;
     inspected: AgentImportRepositoryInspection;
+    repoDir: string;
+    historyPreserved: boolean;
     source: AgentImportSource;
     archive?: Buffer;
   }): Promise<AgentImportPreview> {
@@ -428,12 +518,14 @@ export class AgentImportService {
     }
     const adapted = adaptedArtifacts(input.artifacts, doctor);
     const config = planAgentImportConfig(adapted.artifacts, { doctorOutcome: adapted.outcome });
+    const comparison = await this.deps.compareWorkspaces(input.repoDir, destination.targetDir);
     const id = this.deps.newId();
     const hash = approvalHash({
       source: input.source,
       destinationHead: destination.head,
       workspaceDigest: input.inspected.workspaceDigest,
       artifacts: adapted.artifacts,
+      comparison,
     });
     const preview: AgentImportPreview = {
       id,
@@ -444,8 +536,10 @@ export class AgentImportService {
         fileCount: input.inspected.fileCount,
         totalBytes: input.inspected.totalBytes,
         workspaceDigest: input.inspected.workspaceDigest,
-        historyPreserved: input.inspected.commitCount > 0,
-        conflicts: [],
+        historyPreserved: input.historyPreserved,
+        conflicts: comparison.conflicts,
+        conflictCount: comparison.conflictCount,
+        conflictDigest: comparison.conflictDigest,
       },
       doctor: { ...doctor, ...(adapted.outcome !== doctor.outcome ? { outcome: adapted.outcome } : {}) },
       config,
@@ -487,16 +581,7 @@ export class AgentImportService {
   }
 
   async apply(input: { uid: string; importId: string; approvalHash: string }): Promise<AgentImportRecord> {
-    const key = `${input.uid}\0${input.importId}\0${input.approvalHash}`;
-    const active = AgentImportService.activeApplies.get(key);
-    if (active) return active;
-    const work = this.applyOnce(input);
-    AgentImportService.activeApplies.set(key, work);
-    try {
-      return await work;
-    } finally {
-      if (AgentImportService.activeApplies.get(key) === work) AgentImportService.activeApplies.delete(key);
-    }
+    return this.serializeMutation(input.uid, input.importId, () => this.applyOnce(input));
   }
 
   private async applyOnce(input: { uid: string; importId: string; approvalHash: string }): Promise<AgentImportRecord> {
@@ -624,25 +709,20 @@ export class AgentImportService {
   }
 
   async rollback(input: { uid: string; importId: string }): Promise<AgentImportRecord> {
-    const key = `${input.uid}\0${input.importId}`;
-    const active = AgentImportService.activeRollbacks.get(key);
-    if (active) return active;
-    const work = this.rollbackOnce(input);
-    AgentImportService.activeRollbacks.set(key, work);
-    try {
-      return await work;
-    } finally {
-      if (AgentImportService.activeRollbacks.get(key) === work) AgentImportService.activeRollbacks.delete(key);
-    }
+    return this.serializeMutation(input.uid, input.importId, () => this.rollbackOnce(input));
   }
 
   private async rollbackOnce(input: { uid: string; importId: string }): Promise<AgentImportRecord> {
     let current = await this.ownedRecord(input.importId, input.uid);
     if (current.status === "rolled_back") return current;
-    if (!["complete", "rolling_back", "rollback_failed"].includes(current.status) || !current.importCommit) {
-      throw new AgentImportServiceError("rollback_window_closed", "only a completed unchanged import can be rolled back");
+    if (![
+      "workspace", "identity", "config", "verifying", "complete", "failed", "rolling_back", "rollback_failed",
+    ].includes(current.status) || !current.importCommit) {
+      throw new AgentImportServiceError("rollback_window_closed", "only a post-workspace import with an unchanged tip can be rolled back");
     }
-    if (!current.completedAt || this.deps.now().getTime() - Date.parse(current.completedAt) > 7 * 24 * 60 * 60 * 1_000) {
+    const rollbackAnchor = current.completedAt ?? current.createdAt;
+    const rollbackAge = this.deps.now().getTime() - Date.parse(rollbackAnchor);
+    if (!Number.isFinite(rollbackAge) || rollbackAge > 7 * 24 * 60 * 60 * 1_000) {
       throw new AgentImportServiceError("rollback_window_closed", "the seven-day rollback window has closed");
     }
     try {
@@ -659,7 +739,7 @@ export class AgentImportService {
           rollbackCommit: result.rollbackCommit,
         });
       }
-      if (current.previousIdentity) await this.deps.syncIdentity(current.uid, current.previousIdentity);
+      if (current.previousIdentity) await this.deps.replaceIdentity(current.uid, current.previousIdentity);
       if (current.previousRuntime && Object.keys(current.previousRuntime).length > 0) {
         await this.patchRuntime(current.slug, current.previousRuntime);
       }
@@ -684,6 +764,13 @@ export class AgentImportService {
     return this.ownedRecord(input.importId, input.uid);
   }
 
+  async latest(input: { uid: string }): Promise<AgentImportRecord | null> {
+    const record = await this.deps.getLatestRecord();
+    if (!record) return null;
+    if (record.uid !== input.uid) throw new AgentImportServiceError("forbidden", "agent import belongs to another builder");
+    return record;
+  }
+
   private async sourceForPlan(
     plan: StoredAgentImportPlan,
     importId: string,
@@ -691,6 +778,7 @@ export class AgentImportService {
     if (plan.source.kind === "github") {
       const token = await this.deps.readGithubToken(plan.uid);
       if (!token) throw new AgentImportServiceError("github_not_connected", "GitHub was disconnected after preview");
+      assertGithubRepoSize(await this.deps.readGithubRepoSize(plan.source.owner, plan.source.repo));
       return await this.deps.cloneGithubSource({
         owner: plan.source.owner,
         repo: plan.source.repo,
@@ -720,27 +808,39 @@ export class AgentImportService {
       const before = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
       const previous = checkpointedPrevious ?? previousRuntime(coachFromConfig(before.config, coachId), runtimePatch);
       if (!checkpointedPrevious) await checkpoint(previous);
-      const nextList = patchedAgentList(before.config, coachId, runtimePatch);
+      if (!safelyIdKeyedAgentList(before.config)) {
+        return { outcome: "safe_baseline", previous };
+      }
       try {
         await this.deps.invokeOpenClaw("config.patch", {
-          raw: JSON.stringify({ agents: { list: nextList } }),
+          raw: JSON.stringify(coachPatch(coachId, runtimePatch)),
           baseHash: before.hash,
         });
         const after = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
-        assertRuntimeApplied(after.config, coachId, runtimePatch);
-        assertAgentList(after.config, nextList);
+        assertRuntimePatchApplied(before.config, after.config, coachId, runtimePatch);
+        assertUnpatchedAgentConfig(before.config, after.config, coachId, runtimePatch);
         await this.deps.invokeOpenClaw("health", {});
         return { outcome: "applied", previous };
       } catch {
         const rollbackBase = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
-        const restoredList = patchedAgentList(before.config, coachId, previous, true);
+        const patchState = runtimePatchState(before.config, rollbackBase.config, coachId, runtimePatch);
+        if (patchState === "unchanged") {
+          await this.deps.invokeOpenClaw("health", {});
+          return { outcome: "safe_baseline", previous };
+        }
+        if (patchState === "diverged") {
+          throw new AgentImportServiceError("config_changed", "OpenClaw configuration changed during import");
+        }
+        if (!safelyIdKeyedAgentList(rollbackBase.config)) {
+          throw new AgentImportServiceError("config_rollback_unsafe", "OpenClaw agent list cannot be safely restored");
+        }
         await this.deps.invokeOpenClaw("config.patch", {
-          raw: JSON.stringify({ agents: { list: restoredList } }),
+          raw: JSON.stringify(coachPatch(coachId, previous)),
           baseHash: rollbackBase.hash,
         });
         const restored = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
-        assertRuntimeRestored(restored.config, coachId, previous);
-        assertAgentList(restored.config, restoredList);
+        assertRuntimePatchApplied(rollbackBase.config, restored.config, coachId, previous);
+        assertUnpatchedAgentConfig(before.config, restored.config, coachId, previous);
         await this.deps.invokeOpenClaw("health", {});
         return { outcome: "safe_baseline", previous };
       }
@@ -752,14 +852,16 @@ export class AgentImportService {
     const coachId = `octogee-${slug}-coach`;
     await this.deps.withConfigLock(async () => {
       const before = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
-      const restoredList = patchedAgentList(before.config, coachId, patch, true);
+      if (!safelyIdKeyedAgentList(before.config)) {
+        throw new AgentImportServiceError("config_rollback_unsafe", "OpenClaw agent list cannot be safely restored");
+      }
       await this.deps.invokeOpenClaw("config.patch", {
-        raw: JSON.stringify({ agents: { list: restoredList } }),
+        raw: JSON.stringify(coachPatch(coachId, patch)),
         baseHash: before.hash,
       });
       const after = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
-      assertRuntimeRestored(after.config, coachId, patch);
-      assertAgentList(after.config, restoredList);
+      assertRuntimePatchApplied(before.config, after.config, coachId, patch);
+      assertUnpatchedAgentConfig(before.config, after.config, coachId, patch);
       await this.deps.invokeOpenClaw("health", {});
     });
   }

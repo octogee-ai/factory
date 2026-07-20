@@ -1,18 +1,28 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
-import type { Firestore } from "firebase-admin/firestore";
+import { Timestamp, type Firestore } from "firebase-admin/firestore";
+import { randomUUID } from "node:crypto";
+import { Transform, type Readable, type Writable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 
 import { slugFromAssignedUser } from "@octogee/core/assigned-roster";
 import { classifyAgentImportArchivePath } from "@octogee/shared/types/agent-import";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { isValidUsername } from "@octogee/shared/types/identity";
 import type { AgentImportManifestEntry } from "../../../gateway-edge/src/lib/agent-import-git.js";
-import type { AgentImportIdentity } from "../../../gateway-edge/src/lib/agent-import-service.js";
+import type {
+  AgentImportIdentity,
+  AgentImportIdentitySnapshot,
+} from "../../../gateway-edge/src/lib/agent-import-service.js";
 
 const IMPORT_ID_RE = /^[A-Za-z0-9_-]{1,160}$/;
 const GITHUB_OWNER_RE = /^[A-Za-z0-9-]{1,39}$/;
 const GITHUB_REPO_RE = /^[A-Za-z0-9._-]{1,100}$/;
 const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
 const MAX_BLOB_BYTES = 100 * 1024 * 1024;
+const RECOVERY_STATUSES = new Set([
+  "workspace", "identity", "config", "verifying", "complete", "failed",
+  "rolling_back", "rollback_failed", "rolled_back",
+]);
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 type JsonObject = Record<string, unknown>;
@@ -21,6 +31,11 @@ interface BucketLike {
   file(path: string): {
     save(value: Buffer | string, options?: unknown): Promise<unknown>;
     download(): Promise<[Buffer]>;
+    createWriteStream(options?: unknown): Writable;
+    createReadStream(): Readable;
+    exists(): Promise<[boolean]>;
+    delete(): Promise<unknown>;
+    move(destination: string): Promise<unknown>;
   };
   deleteFiles(options: { prefix: string }): Promise<unknown>;
 }
@@ -31,9 +46,13 @@ export interface AgentImportBrokerDeps {
   readGithubToken(uid: string): Promise<string | null>;
   listGithubRepos(token: string): Promise<unknown>;
   readGithubRepoSize(owner: string, repo: string, token: string): Promise<number>;
-  readIdentity(uid: string): Promise<AgentImportIdentity>;
+  readIdentity(uid: string): Promise<AgentImportIdentitySnapshot>;
   syncIdentity(uid: string, identity: AgentImportIdentity): Promise<void>;
+  replaceIdentity(uid: string, identity: AgentImportIdentitySnapshot): Promise<void>;
   now(): Date;
+  maxArchiveBytes?: number;
+  maxBlobBytes?: number;
+  newUploadId?(): string;
 }
 
 interface OwnerContext {
@@ -116,9 +135,24 @@ function importId(req: Request, res: Response): string | null {
 
 function ownedPayload(value: unknown, context: OwnerContext): JsonObject | null {
   const payload = object(value);
-  return payload?.uid === context.uid && payload.slug === context.slug && payload.gatewayId === context.gatewayId
+  return payload?.uid === context.uid && payload.slug === context.slug
     ? payload
     : null;
+}
+
+function durableRecord(payload: JsonObject, now: Date): JsonObject {
+  const rollbackEligible = typeof payload.importCommit === "string" && payload.status !== "rolled_back";
+  const cleanupAt = new Date(now.getTime() + (rollbackEligible ? 8 : 1) * 24 * 60 * 60 * 1_000);
+  return {
+    ...payload,
+    cleanupAt: Timestamp.fromDate(cleanupAt),
+  };
+}
+
+function publicRecord(payload: JsonObject): JsonObject {
+  const value = { ...payload };
+  delete value.cleanupAt;
+  return value;
 }
 
 function missingObject(error: unknown): boolean {
@@ -126,26 +160,55 @@ function missingObject(error: unknown): boolean {
   return code === 404 || code === "404";
 }
 
-function stagingPath(id: string, name: string): string {
-  return `agent-imports/${id}/${name}`;
+function stagingPath(owner: OwnerContext, id: string, name: string): string {
+  return `agent-imports/${owner.uid}/${id}/${name}`;
 }
 
-async function readRequestBody(req: Request, limit: number): Promise<Buffer> {
-  const chunks: Buffer[] = [];
+async function streamRequestBody(
+  req: Request,
+  deps: AgentImportBrokerDeps,
+  objectPath: string,
+  limit: number,
+  options: unknown,
+): Promise<number> {
+  const uploadId = deps.newUploadId?.() ?? randomUUID();
+  const temporaryPath = `${objectPath}.upload-${uploadId}`;
   let size = 0;
-  for await (const raw of req) {
-    const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
-    size += chunk.length;
-    if (size > limit) {
-      req.resume();
-      throw Object.assign(new Error("request body exceeds the import limit"), {
-        status: 413,
-        code: "archive_too_large",
+  const limiter = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      size += chunk.length;
+      if (size > limit) {
+        callback(Object.assign(new Error("request body exceeds the import limit"), {
+          status: 413,
+          code: "archive_too_large",
+        }));
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+  try {
+    await pipeline(req, limiter, deps.bucket.file(temporaryPath).createWriteStream(options));
+    if (size === 0) {
+      throw Object.assign(new Error("request body is empty"), {
+        status: 400,
+        code: "invalid_archive",
       });
     }
-    chunks.push(chunk);
+    await deps.bucket.file(temporaryPath).move(objectPath);
+  } catch (error) {
+    req.resume();
+    try {
+      await deps.bucket.file(temporaryPath).delete();
+    } catch (cleanupError) {
+      throw Object.assign(new AggregateError([error, cleanupError], "import upload cleanup failed"), {
+        status: typeof object(error)?.status === "number" ? object(error)?.status : 500,
+        code: typeof object(error)?.code === "string" ? object(error)?.code : "upload_cleanup_failed",
+      });
+    }
+    throw error;
   }
-  return Buffer.concat(chunks, size);
+  return size;
 }
 
 function identity(value: unknown): AgentImportIdentity | null {
@@ -153,6 +216,14 @@ function identity(value: unknown): AgentImportIdentity | null {
   if (!input || Object.keys(input).some((key) => !["name", "persona", "emoji"].includes(key))) return null;
   if (Object.values(input).some((entry) => entry !== undefined && typeof entry !== "string")) return null;
   return input as AgentImportIdentity;
+}
+
+function identitySnapshot(value: unknown): AgentImportIdentitySnapshot | null {
+  const input = object(value);
+  if (!input || Object.keys(input).some((key) => !["name", "persona", "emoji"].includes(key))) return null;
+  if (!["name", "persona", "emoji"].every((key) => Object.prototype.hasOwnProperty.call(input, key))) return null;
+  if (Object.values(input).some((entry) => entry !== null && typeof entry !== "string")) return null;
+  return input as unknown as AgentImportIdentitySnapshot;
 }
 
 async function githubToken(context: OwnerContext, deps: AgentImportBrokerDeps): Promise<string> {
@@ -217,8 +288,39 @@ function registerRecordRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps)
         res.status(400).json({ error: "invalid_import_record" });
         return;
       }
-      await deps.db.doc(`agentImports/${id}`).set(payload);
+      const batch = deps.db.batch();
+      batch.set(
+        deps.db.doc(`users/${context(res).uid}/agentImports/${id}`),
+        durableRecord(payload, deps.now()),
+      );
+      if (RECOVERY_STATUSES.has(payload.status)) {
+        batch.set(deps.db.doc(`users/${context(res).uid}/agentImportState/latest`), {
+          id,
+          uid: context(res).uid,
+          slug: context(res).slug,
+          updatedAt: deps.now().toISOString(),
+        });
+      }
+      await batch.commit();
       res.status(204).end();
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/records/latest", async (_req, res, next) => {
+    try {
+      const owner = context(res);
+      const pointer = await deps.db.doc(`users/${owner.uid}/agentImportState/latest`).get();
+      const data = pointer.exists ? ownedPayload(pointer.data(), owner) : null;
+      const id = typeof data?.id === "string" && IMPORT_ID_RE.test(data.id) ? data.id : null;
+      if (!id) {
+        res.json(null);
+        return;
+      }
+      const snapshot = await deps.db.doc(`users/${owner.uid}/agentImports/${id}`).get();
+      const payload = snapshot.exists ? ownedPayload(snapshot.data(), owner) : null;
+      res.json(payload ? publicRecord(payload) : null);
     } catch (error) {
       next(error);
     }
@@ -228,13 +330,13 @@ function registerRecordRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps)
     try {
       const id = importId(req, res);
       if (!id) return;
-      const snapshot = await deps.db.doc(`agentImports/${id}`).get();
+      const snapshot = await deps.db.doc(`users/${context(res).uid}/agentImports/${id}`).get();
       const payload = snapshot.exists ? ownedPayload(snapshot.data(), context(res)) : null;
       if (!payload || payload.id !== id) {
         res.status(404).json({ error: "not_found" });
         return;
       }
-      res.json(payload);
+      res.json(publicRecord(payload));
     } catch (error) {
       next(error);
     }
@@ -251,7 +353,7 @@ function registerPlanRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps): 
         res.status(400).json({ error: "invalid_import_plan" });
         return;
       }
-      await deps.bucket.file(stagingPath(id, "plan.json")).save(JSON.stringify(payload), {
+      await deps.bucket.file(stagingPath(context(res), id, "plan.json")).save(JSON.stringify(payload), {
         contentType: "application/json",
         resumable: false,
       });
@@ -267,7 +369,7 @@ function registerPlanRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps): 
       if (!id) return;
       let payload: JsonObject | null;
       try {
-        const [contents] = await deps.bucket.file(stagingPath(id, "plan.json")).download();
+        const [contents] = await deps.bucket.file(stagingPath(context(res), id, "plan.json")).download();
         payload = ownedPayload(JSON.parse(contents.toString("utf8")), context(res));
       } catch (error) {
         if (missingObject(error)) {
@@ -297,15 +399,13 @@ function registerArchiveRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps
         res.status(415).json({ error: "invalid_archive" });
         return;
       }
-      const archive = await readRequestBody(req, MAX_ARCHIVE_BYTES);
-      if (archive.length === 0) {
-        res.status(400).json({ error: "invalid_archive" });
-        return;
-      }
-      await deps.bucket.file(stagingPath(id, "source.zip")).save(archive, {
-        contentType: "application/zip",
-        resumable: true,
-      });
+      await streamRequestBody(
+        req,
+        deps,
+        stagingPath(context(res), id, "source.zip"),
+        deps.maxArchiveBytes ?? MAX_ARCHIVE_BYTES,
+        { contentType: "application/zip", resumable: true },
+      );
       res.status(204).end();
     } catch (error) {
       next(error);
@@ -316,16 +416,14 @@ function registerArchiveRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps
     try {
       const id = importId(req, res);
       if (!id) return;
-      try {
-        const [archive] = await deps.bucket.file(stagingPath(id, "source.zip")).download();
-        res.type("application/zip").send(archive);
-      } catch (error) {
-        if (missingObject(error)) {
-          res.status(404).json({ error: "not_found" });
-          return;
-        }
-        throw error;
+      const file = deps.bucket.file(stagingPath(context(res), id, "source.zip"));
+      const [exists] = await file.exists();
+      if (!exists) {
+        res.status(404).json({ error: "not_found" });
+        return;
       }
+      res.type("application/zip");
+      await pipeline(file.createReadStream(), res);
     } catch (error) {
       next(error);
     }
@@ -335,7 +433,7 @@ function registerArchiveRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps
     try {
       const id = importId(req, res);
       if (!id) return;
-      await deps.bucket.deleteFiles({ prefix: stagingPath(id, "") });
+      await deps.bucket.deleteFiles({ prefix: stagingPath(context(res), id, "") });
       res.status(204).end();
     } catch (error) {
       next(error);
@@ -355,13 +453,18 @@ function registerBlobRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps): 
         res.status(400).json({ error: "invalid_import_blob" });
         return;
       }
-      const contents = await readRequestBody(req, MAX_BLOB_BYTES);
       const objectPath = `customers/${context(res).slug}/agent-imports/${id}/${filePath}`;
-      await deps.bucket.file(objectPath).save(contents, { metadata: { contentType: mimeType } });
+      const size = await streamRequestBody(
+        req,
+        deps,
+        objectPath,
+        deps.maxBlobBytes ?? MAX_BLOB_BYTES,
+        { metadata: { contentType: mimeType } },
+      );
       const manifest: AgentImportManifestEntry = {
         type: "blob",
         gcsPath: objectPath,
-        size: contents.length,
+        size,
         mimeType,
         uploadedAt: deps.now().toISOString(),
       };
@@ -400,6 +503,20 @@ function registerIdentityRoutes(router: BrokerRouter, deps: AgentImportBrokerDep
         return;
       }
       await deps.syncIdentity(context(res).uid, value);
+      res.status(204).end();
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.put("/identity", async (req, res, next) => {
+    try {
+      const value = identitySnapshot(req.body);
+      if (!value) {
+        res.status(400).json({ error: "invalid_identity" });
+        return;
+      }
+      await deps.replaceIdentity(context(res).uid, value);
       res.status(204).end();
     } catch (error) {
       next(error);

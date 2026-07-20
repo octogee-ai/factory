@@ -10,6 +10,7 @@ import {
   validateAgentImportConfigArtifacts,
   type AgentImportConfigArtifacts,
 } from "@octogee/shared/types/agent-import";
+import { assertAgentImportRepositoryExpansionSafe } from "./agent-import-git.js";
 
 const OWNER_RE = /^[A-Za-z0-9-]{1,39}$/;
 const REPO_RE = /^[A-Za-z0-9._-]{1,100}$/;
@@ -89,7 +90,10 @@ function runGit(cwd: string, args: string[], env: NodeJS.ProcessEnv = sourceGitE
     child.on("close", (status) => {
       clearTimeout(timer);
       if (failure || status !== 0) {
-        reject(new AgentImportSourceError("git_source_invalid", `source git operation failed (exit ${String(status)})`));
+        reject(new AgentImportSourceError(
+          "git_source_invalid",
+          `source git ${args[0] ?? "operation"} failed (exit ${String(status)})`,
+        ));
         return;
       }
       resolve(Buffer.concat(stdout).toString("utf8").trim());
@@ -139,7 +143,7 @@ export async function cloneGithubAgentImportSource(options: {
   try {
     try {
       await runGit(root, [
-      "clone", "--quiet", "--single-branch", "--no-tags", "--branch", options.branch,
+      "clone", "--quiet", "--single-branch", "--no-checkout", "--no-tags", "--branch", options.branch,
         githubAgentImportCloneUrl(options.owner, options.repo), repoDir,
       ], githubAgentImportCloneEnvironment(options.token));
     } catch {
@@ -147,6 +151,8 @@ export async function cloneGithubAgentImportSource(options: {
     }
     const sourceHead = await runGit(repoDir, ["rev-parse", "HEAD"]);
     if (!SHA_RE.test(sourceHead)) throw new AgentImportSourceError("git_source_invalid", "GitHub source has no commit");
+    await assertAgentImportRepositoryExpansionSafe(repoDir, sourceHead);
+    await runGit(repoDir, ["reset", "--hard", sourceHead]);
     return {
       repoDir,
       sourceHead,
@@ -195,28 +201,41 @@ function zipEntryIsSymlink(entry: JSZip.JSZipObject): boolean {
   return (permissions & 0o170000) === 0o120000;
 }
 
-function validatePackedRefs(contents: Buffer): void {
+function sanitizedPackedRefs(contents: Buffer): Buffer {
   const text = contents.toString("utf8");
   if (!Buffer.from(text, "utf8").equals(contents)) {
     throw new AgentImportSourceError("unsafe_archive_entry", "packed-refs is not valid UTF-8");
   }
   let mayPeelTag = false;
+  const retained: string[] = [];
   for (const line of text.split(/\r?\n/)) {
-    if (!line || line.startsWith("#")) continue;
+    if (!line || line.startsWith("#")) {
+      retained.push(line);
+      continue;
+    }
     if (line.startsWith("^")) {
       if (!mayPeelTag || !SHA_RE.test(line.slice(1))) {
         throw new AgentImportSourceError("unsafe_archive_entry", "packed-refs contains an invalid peeled ref");
       }
+      retained.push(line);
       mayPeelTag = false;
       continue;
     }
     const match = /^([0-9a-f]{40}) refs\/(heads|tags)\/(.+)$/.exec(line);
     const suffix = match?.[3] ?? "";
-    if (!match || !validBranch(suffix)) {
-      throw new AgentImportSourceError("unsafe_archive_entry", "packed-refs contains a blocked ref");
+    if (match && validBranch(suffix)) {
+      retained.push(line);
+      mayPeelTag = match[2] === "tags";
+      continue;
     }
-    mayPeelTag = match[2] === "tags";
+    const ignored = /^[0-9a-f]{40} refs\/(remotes|notes)\/(.+)$/.exec(line);
+    if (ignored && validBranch(ignored[2])) {
+      mayPeelTag = false;
+      continue;
+    }
+    throw new AgentImportSourceError("unsafe_archive_entry", "packed-refs contains a blocked ref");
   }
+  return Buffer.from(retained.join("\n"), "utf8");
 }
 
 async function validatedArchiveEntries(
@@ -268,14 +287,22 @@ function requireMetadata(entries: Map<string, Buffer>, pathName: string): Buffer
   return value;
 }
 
-function writeEntry(root: string, relative: string, contents: Buffer): void {
+function writeEntry(root: string, relative: string, contents: Buffer, mode = 0o600): void {
   const destination = path.resolve(root, relative);
   const rootPrefix = `${path.resolve(root)}${path.sep}`;
   if (!destination.startsWith(rootPrefix)) {
     throw new AgentImportSourceError("unsafe_archive_entry", "archive path escapes its destination");
   }
   fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.writeFileSync(destination, contents, { mode: 0o600 });
+  fs.writeFileSync(destination, contents, { mode });
+}
+
+async function executablePaths(repoDir: string, head: string): Promise<Set<string>> {
+  const output = await runGit(repoDir, ["ls-tree", "-r", "-z", head]);
+  return new Set(output.split("\0").flatMap((line) => {
+    const tab = line.indexOf("\t");
+    return tab >= 0 && line.startsWith("100755 ") ? [line.slice(tab + 1)] : [];
+  }));
 }
 
 function clearRepoWorktree(repoDir: string): void {
@@ -301,9 +328,45 @@ async function commitCurrentTip(repoDir: string, message: string): Promise<strin
   return head;
 }
 
+async function initializeLocalRepository(
+  repoDir: string,
+  entries: Map<string, Buffer>,
+  manifest: LocalAgentImportManifest,
+  maxGitBlobBytes: number | undefined,
+): Promise<Set<string>> {
+  const gitEntries = [...entries.entries()].filter(([entry]) => entry.startsWith("git/"));
+  if (manifest.hadGit !== (gitEntries.length > 0)) {
+    throw new AgentImportSourceError("invalid_archive_metadata", "manifest Git flag does not match archive contents");
+  }
+  if (!manifest.hadGit) {
+    await runGit(repoDir, ["init", "--quiet", "--initial-branch", "main"]);
+    return new Set();
+  }
+  for (const [entry, contents] of gitEntries) {
+    const safeContents = entry === "git/packed-refs" ? sanitizedPackedRefs(contents) : contents;
+    writeEntry(path.join(repoDir, ".git"), entry.slice("git/".length), safeContents);
+  }
+  fs.mkdirSync(path.join(repoDir, ".git", "refs", "heads"), { recursive: true, mode: 0o700 });
+  const committedHead = await runGit(repoDir, ["rev-parse", "HEAD"]);
+  if (!SHA_RE.test(committedHead)) throw new AgentImportSourceError("git_source_invalid", "local Git HEAD is invalid");
+  await assertAgentImportRepositoryExpansionSafe(repoDir, committedHead, {
+    ...(maxGitBlobBytes === undefined ? {} : { maxBlobBytes: maxGitBlobBytes }),
+  });
+  await runGit(repoDir, ["fsck", "--strict", "--no-dangling"]);
+  const trackedExecutables = await executablePaths(repoDir, committedHead);
+  await runGit(repoDir, ["reset", "--hard", committedHead]);
+  clearRepoWorktree(repoDir);
+  return trackedExecutables;
+}
+
 export async function extractLocalAgentImportArchive(
   buffer: Buffer,
-  options: { tmpRoot?: string; maxEntryBytes?: number; maxUnpackedBytes?: number } = {},
+  options: {
+    tmpRoot?: string;
+    maxEntryBytes?: number;
+    maxUnpackedBytes?: number;
+    maxGitBlobBytes?: number;
+  } = {},
 ): Promise<ExtractedAgentImportSource> {
   const entries = await validatedArchiveEntries(buffer, {
     maxEntryBytes: options.maxEntryBytes ?? MAX_ENTRY_BYTES,
@@ -329,26 +392,16 @@ export async function extractLocalAgentImportArchive(
   const repoDir = path.join(root, "source");
   fs.mkdirSync(repoDir, { recursive: true, mode: 0o700 });
   try {
-    const gitEntries = [...entries.entries()].filter(([entry]) => entry.startsWith("git/"));
-    if (manifest.hadGit !== (gitEntries.length > 0)) {
-      throw new AgentImportSourceError("invalid_archive_metadata", "manifest Git flag does not match archive contents");
-    }
-    if (manifest.hadGit) {
-      for (const [entry, contents] of gitEntries) {
-        if (entry === "git/packed-refs") validatePackedRefs(contents);
-        writeEntry(path.join(repoDir, ".git"), entry.slice("git/".length), contents);
-      }
-      await runGit(repoDir, ["fsck", "--strict", "--no-dangling"]);
-      const committedHead = await runGit(repoDir, ["rev-parse", "HEAD"]);
-      if (!SHA_RE.test(committedHead)) throw new AgentImportSourceError("git_source_invalid", "local Git HEAD is invalid");
-      await runGit(repoDir, ["reset", "--hard", committedHead]);
-      clearRepoWorktree(repoDir);
-    } else {
-      await runGit(repoDir, ["init", "--quiet", "--initial-branch", "main"]);
-    }
+    const trackedExecutables = await initializeLocalRepository(
+      repoDir,
+      entries,
+      manifest,
+      options.maxGitBlobBytes,
+    );
     for (const [entry, contents] of entries) {
       if (!entry.startsWith("workspace/")) continue;
-      writeEntry(repoDir, entry.slice("workspace/".length), contents);
+      const relative = entry.slice("workspace/".length);
+      writeEntry(repoDir, relative, contents, trackedExecutables.has(relative) ? 0o700 : 0o600);
     }
     const sourceHead = await commitCurrentTip(
       repoDir,

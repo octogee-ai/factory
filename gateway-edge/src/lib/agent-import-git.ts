@@ -12,6 +12,10 @@ const IMPORT_ID_RE = /^[A-Za-z0-9._-]{1,160}$/;
 const MAX_COMMAND_OUTPUT = 16 * 1024 * 1024;
 const MAX_TREE_METADATA_OUTPUT = 64 * 1024 * 1024;
 const MAX_BINARY_BYTES = 100 * 1024 * 1024;
+const MAX_REPOSITORY_TIP_BYTES = 128 * 1024 * 1024;
+const MAX_REACHABLE_BLOB_BYTES = 256 * 1024 * 1024;
+const MAX_REACHABLE_OBJECTS = 250_000;
+const MAX_SECRET_REPORT_BYTES = 4 * 1024 * 1024;
 const MAX_IMPORT_COMMITS = 10_000;
 const MAIN_REF = "refs/heads/main";
 const EMPTY_REF = "0".repeat(40);
@@ -38,6 +42,51 @@ export interface AgentImportManifestEntry {
   mimeType: string;
   uploadedAt: string;
   thumbnailUrl?: string;
+}
+
+function treeEntries(serialized: string): Map<string, string> {
+  return new Map(serialized.split("\0").filter(Boolean).map((raw) => {
+    const tab = raw.indexOf("\t");
+    if (tab < 0) throw new AgentImportGitError("invalid_git_tree", "git tree output is malformed");
+    return [raw.slice(tab + 1), raw.slice(0, tab)];
+  }));
+}
+
+function platformPreservedPath(relative: string): boolean {
+  return relative === ".files" || relative.startsWith(".files/") ||
+    relative === "projects" || relative.startsWith("projects/");
+}
+
+export interface AgentImportWorkspaceComparison {
+  conflicts: string[];
+  conflictCount: number;
+  conflictDigest: string;
+}
+
+export async function compareAgentImportWorkspaces(
+  sourceDir: string,
+  targetDir: string,
+): Promise<AgentImportWorkspaceComparison> {
+  const source = treeEntries(await git(sourceDir, ["ls-tree", "-r", "-l", "-z", "HEAD"]));
+  const target = treeEntries(await git(targetDir, ["ls-tree", "-r", "-l", "-z", "HEAD"]));
+  const conflicts: string[] = [];
+  for (const [relative, metadata] of target) {
+    if (platformPreservedPath(relative)) continue;
+    const sourceMetadata = source.get(relative);
+    if (relative === ".gitignore") {
+      if (sourceMetadata !== metadata) conflicts.push("merge:.gitignore");
+    } else if (sourceMetadata === undefined) {
+      conflicts.push(`delete:${relative}`);
+    } else if (sourceMetadata !== metadata) {
+      conflicts.push(`overwrite:${relative}`);
+    }
+  }
+  const sorted = conflicts.sort();
+  return {
+    conflicts: sorted.slice(0, 100),
+    conflictCount: sorted.length,
+    conflictDigest: `sha256:${createHash("sha256").update(sorted.join("\0")).digest("hex")}`,
+  };
 }
 
 interface CommandResult {
@@ -71,7 +120,11 @@ export function buildAgentImportGitEnvironment(
 }
 
 export class AgentImportGitError extends Error {
-  constructor(readonly code: string, message: string) {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly findings?: AgentImportSecretFinding[],
+  ) {
     super(message);
     this.name = "AgentImportGitError";
   }
@@ -210,6 +263,110 @@ async function trackedTree(repoDir: string, head: string, commit = head): Promis
     if (Number.isFinite(size)) totalBytes += size;
   }
   return { serialized, fileCount, totalBytes };
+}
+
+interface RepositoryExpansionLimits {
+  maxBlobBytes?: number;
+  maxReachableBlobBytes?: number;
+  maxTipBytes?: number;
+  maxObjects?: number;
+}
+
+async function storedObjectMetadata(repoDir: string): Promise<string[]> {
+  const objectMetadata = await runChild(GIT_COMMAND, [
+    "cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype) %(objectsize)",
+  ], { cwd: repoDir, maxOutput: 32 * 1024 * 1024 });
+  if (objectMetadata.error || objectMetadata.status !== 0) {
+    if ((objectMetadata.error as NodeJS.ErrnoException | undefined)?.code === "ENOBUFS") {
+      throw new AgentImportGitError("archive_too_large", "source repository has too many stored objects");
+    }
+    throw safeCommandError("git object size inspection", {
+      status: objectMetadata.status,
+      stdout: objectMetadata.stdout.toString("utf8"),
+      stderr: objectMetadata.stderr.toString("utf8"),
+      ...(objectMetadata.error ? { error: objectMetadata.error } : {}),
+    });
+  }
+  return objectMetadata.stdout.toString("utf8").trim().split(/\r?\n/).filter(Boolean);
+}
+
+function lfsCandidatesFromMetadata(
+  metadataLines: string[],
+  limits: RepositoryExpansionLimits,
+): string[] {
+  if (metadataLines.length > (limits.maxObjects ?? MAX_REACHABLE_OBJECTS)) {
+    throw new AgentImportGitError("archive_too_large", "source repository has too many stored objects");
+  }
+  let storedObjectBytes = 0;
+  const lfsCandidates: string[] = [];
+  const maxBlobBytes = limits.maxBlobBytes ?? MAX_BINARY_BYTES;
+  const maxReachableBlobBytes = limits.maxReachableBlobBytes ?? MAX_REACHABLE_BLOB_BYTES;
+  for (const line of metadataLines) {
+    const [objectId, type, rawSize] = line.split(" ", 3);
+    const size = Number.parseInt(rawSize ?? "", 10);
+    if (!SHA_RE.test(objectId ?? "") || !Number.isSafeInteger(size) || size < 0) {
+      throw new AgentImportGitError("invalid_git_history", "source repository object metadata is invalid");
+    }
+    if (size > maxBlobBytes) {
+      throw new AgentImportGitError("archive_too_large", "source repository contains an oversized Git object");
+    }
+    storedObjectBytes += size;
+    if (storedObjectBytes > maxReachableBlobBytes) {
+      throw new AgentImportGitError("archive_too_large", "source repository object database expands beyond the import limit");
+    }
+    if (type === "blob" && size <= 1_024) lfsCandidates.push(objectId!);
+  }
+  return lfsCandidates;
+}
+
+async function assertNoLfsPointers(repoDir: string, lfsCandidates: string[]): Promise<void> {
+  for (let offset = 0; offset < lfsCandidates.length; offset += 1_000) {
+    const ids = lfsCandidates.slice(offset, offset + 1_000);
+    const batch = await runChild(GIT_COMMAND, ["cat-file", "--batch"], {
+      cwd: repoDir,
+      input: `${ids.join("\n")}\n`,
+      maxOutput: 2 * 1024 * 1024,
+    });
+    if (batch.error || batch.status !== 0) {
+      throw safeCommandError("git LFS inspection", {
+        status: batch.status, stdout: "", stderr: batch.stderr.toString("utf8"),
+        ...(batch.error ? { error: batch.error } : {}),
+      });
+    }
+    let cursor = 0;
+    while (cursor < batch.stdout.length) {
+      const newline = batch.stdout.indexOf(0x0a, cursor);
+      if (newline < 0) {
+        throw new AgentImportGitError("invalid_git_history", "Git LFS inspection returned invalid metadata");
+      }
+      const header = batch.stdout.subarray(cursor, newline).toString("ascii").split(" ");
+      const size = Number.parseInt(header[2] ?? "", 10);
+      if (header[1] !== "blob" || !Number.isSafeInteger(size) || size < 0) {
+        throw new AgentImportGitError("invalid_git_history", "Git LFS inspection returned invalid metadata");
+      }
+      const start = newline + 1;
+      const end = start + size;
+      const contents = batch.stdout.subarray(start, end);
+      if (contents.toString("utf8").startsWith("version https://git-lfs.github.com/spec/v1\n")) {
+        throw new AgentImportGitError("git_lfs_unsupported", "Git LFS repositories must be materialized before import");
+      }
+      cursor = end + 1;
+    }
+  }
+}
+
+export async function assertAgentImportRepositoryExpansionSafe(
+  repoDir: string,
+  head: string,
+  limits: RepositoryExpansionLimits = {},
+): Promise<void> {
+  const sourceHead = requireSha(head, "source head");
+  const lfsCandidates = lfsCandidatesFromMetadata(await storedObjectMetadata(repoDir), limits);
+  const tip = await trackedTree(repoDir, sourceHead);
+  if (tip.totalBytes > (limits.maxTipBytes ?? MAX_REPOSITORY_TIP_BYTES)) {
+    throw new AgentImportGitError("archive_too_large", "source repository tip exceeds the import limit");
+  }
+  await assertNoLfsPointers(repoDir, lfsCandidates);
 }
 
 interface RawTreeEntry {
@@ -351,9 +508,10 @@ export async function inspectAgentImportRepository(
     scanSecrets?: (repoDir: string) => Promise<AgentImportSecretFinding[]>;
   } = {},
 ): Promise<AgentImportRepositoryInspection> {
-  await git(repoDir, ["fsck", "--strict", "--no-dangling"], undefined, "git fsck");
   const head = requireSha(options.head ?? await git(repoDir, ["rev-parse", "HEAD"]), "source head");
   await git(repoDir, ["cat-file", "-e", `${head}^{commit}`], undefined, "source commit lookup");
+  await assertAgentImportRepositoryExpansionSafe(repoDir, head);
+  await git(repoDir, ["fsck", "--strict", "--no-dangling"], undefined, "git fsck");
   const tree = await trackedTree(repoDir, head);
   const commitCount = Number.parseInt(await git(repoDir, ["rev-list", "--count", head]), 10);
   if (!Number.isFinite(commitCount) || commitCount < 1) {
@@ -366,7 +524,11 @@ export async function inspectAgentImportRepository(
   const scanSecrets = options.scanSecrets ?? ((dir: string) => scanAgentImportSecrets(dir));
   const secretFindings = await scanSecrets(repoDir);
   if (secretFindings.length > 0) {
-    throw new AgentImportGitError("secret_findings", "source repository contains credential-like material");
+    throw new AgentImportGitError(
+      "secret_findings",
+      "source repository contains credential-like material",
+      secretFindings,
+    );
   }
   return {
     head,
@@ -476,13 +638,17 @@ async function normalizeBinaryTip(options: {
       throw new AgentImportGitError("binary_too_large", `${relative} exceeds the import blob limit`);
     }
     const contents = fs.readFileSync(absolute);
+    delete manifest[relative];
     if (probablyText(relative, contents)) continue;
     const mimeType = getMimeType(getExtension(relative));
     manifest[relative] = await options.storeBlob(relative, contents, mimeType);
     fs.rmSync(absolute);
   }
-  if (Object.keys(manifest).length === 0) return;
   const manifestPath = path.join(options.stageDir, ".files", "manifest.json");
+  if (Object.keys(manifest).length === 0) {
+    fs.rmSync(manifestPath, { force: true });
+    return;
+  }
   fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
   fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
@@ -509,6 +675,14 @@ async function commitTree(
 function checkedImportId(importId: string): string {
   if (!IMPORT_ID_RE.test(importId)) throw new AgentImportGitError("invalid_import_id", "import id is invalid");
   return importId;
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 31 || code === 127) return true;
+  }
+  return false;
 }
 
 async function currentMainHead(targetDir: string): Promise<string> {
@@ -675,6 +849,7 @@ export async function applyAgentImportRepository(options: {
       `Import agent workspace (${importId})`,
     );
     await git(options.targetDir, ["fetch", "--quiet", "--no-tags", stageDir, importCommit]);
+    await ensureCleanDestination(options.targetDir);
     await updateTarget({
       targetDir: options.targetDir,
       destinationHead,
@@ -758,14 +933,19 @@ export async function rollbackAgentImportRepository(options: {
 
 export async function scanAgentImportSecrets(
   repoDir: string,
-  options: { currentOnly?: boolean; run?: CommandRunner } = {},
+  options: { currentOnly?: boolean; run?: CommandRunner; configPath?: string } = {},
 ): Promise<AgentImportSecretFinding[]> {
   const reportDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-agent-import-scan-"));
   const reportPath = path.join(reportDir, "report.json");
+  const ignorePath = path.join(reportDir, "trusted-empty-ignore");
   try {
+    fs.writeFileSync(ignorePath, "", { mode: 0o600 });
     const args = [
       "detect",
       "--source", repoDir,
+      "--config", options.configPath ?? "/gateway-edge/agent-import-gitleaks.toml",
+      "--gitleaks-ignore-path", ignorePath,
+      "--ignore-gitleaks-allow",
       "--redact",
       "--report-format", "json",
       "--report-path", reportPath,
@@ -782,6 +962,9 @@ export async function scanAgentImportSecrets(
       throw new AgentImportGitError("secret_scan_failed", "secret scanner failed closed");
     }
     if (result.status === 0) return [];
+    if (!fs.existsSync(reportPath) || fs.statSync(reportPath).size > MAX_SECRET_REPORT_BYTES) {
+      throw new AgentImportGitError("secret_findings", "source repository contains too many credential-like findings");
+    }
     let raw: unknown;
     try {
       raw = JSON.parse(fs.readFileSync(reportPath, "utf8"));
@@ -791,11 +974,18 @@ export async function scanAgentImportSecrets(
     if (!Array.isArray(raw)) {
       throw new AgentImportGitError("secret_scan_failed", "secret scanner report is invalid");
     }
-    return raw.map((finding) => {
+    if (raw.length === 0) {
+      throw new AgentImportGitError("secret_scan_failed", "secret scanner reported findings without a valid report");
+    }
+    return raw.slice(0, 100).map((finding) => {
       const item = finding && typeof finding === "object" && !Array.isArray(finding)
         ? finding as Record<string, unknown>
         : {};
-      if (typeof item.RuleID !== "string" || typeof item.File !== "string") {
+      if (
+        typeof item.RuleID !== "string" || !/^[A-Za-z0-9._-]{1,160}$/u.test(item.RuleID) ||
+        typeof item.File !== "string" || item.File.length > 2_048 || hasControlCharacter(item.File) ||
+        (item.Commit !== undefined && item.Commit !== "" && (typeof item.Commit !== "string" || !SHA_RE.test(item.Commit)))
+      ) {
         throw new AgentImportGitError("secret_scan_failed", "secret scanner finding is invalid");
       }
       return {

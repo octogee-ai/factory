@@ -31,6 +31,7 @@ describe("agent import broker client", () => {
   it("delegates all platform persistence and identity operations with both caller and pod proofs", async () => {
     const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
+      if (url.endsWith("/records/latest")) return Response.json(record);
       if (url.endsWith("/records/imp-1") && init?.method !== "PUT") {
         return Response.json(record);
       }
@@ -49,7 +50,9 @@ describe("agent import broker client", () => {
           uploadedAt: "2026-07-20T12:00:00.000Z",
         }, { status: 201 });
       }
-      if (url.endsWith("/identity") && init?.method !== "PATCH") return Response.json({ name: "Octo" });
+      if (url.endsWith("/identity") && !["PATCH", "PUT"].includes(init?.method ?? "GET")) {
+        return Response.json({ name: "Octo", persona: null, emoji: null });
+      }
       if (url.endsWith("/github/sources")) return Response.json({ repos: [], truncated: false });
       if (url.endsWith("/github/token")) return Response.json({ token: "github-oauth" });
       if (url.endsWith("/github/repos/jack/moof/size")) return Response.json({ sizeKiB: 12 });
@@ -65,6 +68,7 @@ describe("agent import broker client", () => {
 
     await store.putRecord(record);
     await expect(store.getRecord("imp-1")).resolves.toEqual(record);
+    await expect(store.getLatestRecord()).resolves.toEqual(record);
     await store.putPlan("imp-1", plan);
     await expect(store.getPlan("imp-1")).resolves.toEqual(plan);
     await store.putArchive("imp-1", Buffer.from("zip"));
@@ -73,8 +77,9 @@ describe("agent import broker client", () => {
     await store.deleteImportBlobs("imp-1");
     await expect(store.storeBlob("imp-1", "image.png", Buffer.from("png"), "image/png"))
       .resolves.toMatchObject({ size: 3, mimeType: "image/png" });
-    await expect(store.readIdentity()).resolves.toEqual({ name: "Octo" });
+    await expect(store.readIdentity()).resolves.toEqual({ name: "Octo", persona: null, emoji: null });
     await store.syncIdentity({ name: "Moof" });
+    await store.replaceIdentity({ name: "Octo", persona: null, emoji: null });
     await expect(store.listGithubSources()).resolves.toEqual({ repos: [], truncated: false });
     await expect(store.readGithubToken()).resolves.toBe("github-oauth");
     await expect(store.readGithubRepoSize("jack", "moof")).resolves.toBe(12);

@@ -5,6 +5,7 @@ import { internalFetch } from "./internal-fetch.js";
 import type { AgentImportManifestEntry } from "./agent-import-git.js";
 import type {
   AgentImportIdentity,
+  AgentImportIdentitySnapshot,
   AgentImportRecord,
   StoredAgentImportPlan,
 } from "./agent-import-service.js";
@@ -100,15 +101,18 @@ function validPlan(value: unknown): StoredAgentImportPlan {
   return data as unknown as StoredAgentImportPlan;
 }
 
-function validIdentity(value: unknown): AgentImportIdentity {
+function validIdentity(value: unknown): AgentImportIdentitySnapshot {
   const data = object(value);
   if (!data || Object.keys(data).some((key) => !["name", "persona", "emoji"].includes(key))) {
     throw new Error("agent import broker returned an invalid identity");
   }
-  if (Object.values(data).some((entry) => typeof entry !== "string")) {
+  if (
+    !["name", "persona", "emoji"].every((key) => Object.prototype.hasOwnProperty.call(data, key)) ||
+    Object.values(data).some((entry) => entry !== null && typeof entry !== "string")
+  ) {
     throw new Error("agent import broker returned an invalid identity");
   }
-  return data as AgentImportIdentity;
+  return data as unknown as AgentImportIdentitySnapshot;
 }
 
 function validManifest(value: unknown): AgentImportManifestEntry {
@@ -188,6 +192,15 @@ export function createAgentImportStore(deps: StoreDeps) {
       return validRecord(await response.json(), safeId);
     },
 
+    async getLatestRecord(): Promise<AgentImportRecord | null> {
+      const response = await request("/records/latest");
+      if (!response.ok) throw await brokerError(response);
+      const value: unknown = await response.json();
+      if (value === null) return null;
+      const data = object(value);
+      return validRecord(data, typeof data?.id === "string" ? data.id : "");
+    },
+
     async putPlan(id: string, plan: StoredAgentImportPlan): Promise<void> {
       await jsonRequest(`/plans/${requireId(id)}`, { method: "PUT", ...jsonBody(plan) });
     },
@@ -239,12 +252,16 @@ export function createAgentImportStore(deps: StoreDeps) {
       return validManifest(value);
     },
 
-    async readIdentity(): Promise<AgentImportIdentity> {
+    async readIdentity(): Promise<AgentImportIdentitySnapshot> {
       return validIdentity(await jsonRequest("/identity"));
     },
 
     async syncIdentity(value: AgentImportIdentity): Promise<void> {
       await jsonRequest("/identity", { method: "PATCH", ...jsonBody(value) });
+    },
+
+    async replaceIdentity(value: AgentImportIdentitySnapshot): Promise<void> {
+      await jsonRequest("/identity", { method: "PUT", ...jsonBody(value) });
     },
 
     async listGithubSources(): Promise<unknown> {

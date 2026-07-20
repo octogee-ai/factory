@@ -121,6 +121,10 @@ function app(opts: {
   a.get("/internal/agent-access/context", enforcement, handler);
   a.post("/internal/agent-access/prepare", enforcement, handler);
   a.get("/internal/agent-access/approvals/:approvalId/status", enforcement, handler);
+  a.get("/internal/agent-imports/github/sources", enforcement, handler);
+  a.get("/internal/agent-imports/records/:importId", enforcement, handler);
+  a.patch("/internal/agent-imports/identity", enforcement, handler);
+  a.delete("/internal/agent-imports/staging/:importId", enforcement, handler);
   a.post("/internal/fleet/agent/web-search", enforcement, handler);
   a.post("/internal/fleet/agent/web-extract", enforcement, handler);
   a.post("/internal/fleet/configured-builder-bootstrap", enforcement, handler);
@@ -662,5 +666,17 @@ describe("tenant enforcement middleware", () => {
       .send({});
 
     expect(res.status).toBe(403);
+  });
+
+  it("admits targetless agent-import broker calls for route-local owner authorization", async () => {
+    const target = app({ boundTenant: BENDER });
+    const responses = await Promise.all([
+      request(target).get("/internal/agent-imports/github/sources"),
+      request(target).get("/internal/agent-imports/records/import-1"),
+      request(target).patch("/internal/agent-imports/identity").send({ name: "Moof" }),
+      request(target).delete("/internal/agent-imports/staging/import-1"),
+    ]);
+
+    expect(responses.map((response) => response.status)).toEqual([200, 200, 200, 200]);
   });
 });

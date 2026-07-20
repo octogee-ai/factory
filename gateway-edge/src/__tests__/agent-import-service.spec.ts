@@ -55,6 +55,9 @@ function harness(overrides: Partial<AgentImportServiceDeps> = {}) {
       workspaceDigest: `sha256:${"d".repeat(64)}`,
       secretFindings: [],
     })),
+    compareWorkspaces: vi.fn(async () => ({
+      conflicts: [], conflictCount: 0, conflictDigest: `sha256:${"0".repeat(64)}`,
+    })),
     workspaceState: vi.fn(async () => ({ targetDir: "/target", head: DESTINATION_HEAD, clean: true })),
     runDoctor: vi.fn(async () => ({
       outcome: "migrated",
@@ -65,6 +68,10 @@ function harness(overrides: Partial<AgentImportServiceDeps> = {}) {
     })),
     putRecord: vi.fn(async (record) => { records.set(record.id, structuredClone(record)); }),
     getRecord: vi.fn(async (id) => records.get(id) ? structuredClone(records.get(id)!) : null),
+    getLatestRecord: vi.fn(async () => {
+      const record = [...records.values()].at(-1);
+      return record ? structuredClone(record) : null;
+    }),
     putPlan: vi.fn(async (id, plan) => { plans.set(id, structuredClone(plan)); }),
     getPlan: vi.fn(async (id) => plans.get(id) ? structuredClone(plans.get(id)!) : null),
     putArchive: vi.fn(async (id, archive) => { archives.set(id, Buffer.from(archive)); }),
@@ -75,6 +82,7 @@ function harness(overrides: Partial<AgentImportServiceDeps> = {}) {
     rollbackRepository: vi.fn(async () => ({ rollbackCommit: "e".repeat(40) })),
     readIdentity: vi.fn(async () => ({ name: "Octo", persona: "Default", emoji: "🐙" })),
     syncIdentity: vi.fn(async () => undefined),
+    replaceIdentity: vi.fn(async () => undefined),
     withConfigLock: vi.fn(async (work) => work()),
     invokeOpenClaw: vi.fn()
       .mockResolvedValueOnce({
@@ -119,7 +127,11 @@ describe("AgentImportService preview", () => {
   });
 
   it("previews GitHub history with current Doctor and stores no OAuth token or source credential", async () => {
-    const h = harness();
+    const h = harness({ compareWorkspaces: vi.fn(async () => ({
+      conflicts: ["overwrite:README.md", "delete:NOTES.md"],
+      conflictCount: 2,
+      conflictDigest: `sha256:${"f".repeat(64)}`,
+    })) });
     const preview = await h.service.previewGithub({
       uid: "uid-jack",
       slug: "jack",
@@ -133,7 +145,13 @@ describe("AgentImportService preview", () => {
     expect(preview).toMatchObject({
       id: "import-1",
       source: { kind: "github", owner: "jack", repo: "moof", branch: "main", head: SOURCE_HEAD },
-      workspace: { commitCount: 14, fileCount: 9, historyPreserved: true },
+      workspace: {
+        commitCount: 14,
+        fileCount: 9,
+        historyPreserved: true,
+        conflicts: ["overwrite:README.md", "delete:NOTES.md"],
+        conflictCount: 2,
+      },
       doctor: { outcome: "migrated", doctorVersion: "2026.7.2" },
     });
     expect(preview.approvalHash).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -168,6 +186,38 @@ describe("AgentImportService preview", () => {
     expect(preview.config.effectiveOutcome).toBe("safe_baseline");
     expect(preview.config.runtimePatch).toEqual({});
     expect(preview.workspace.historyPreserved).toBe(true);
+  });
+
+  it("lets current Doctor migrate a legacy agent field before portable planning", async () => {
+    const legacy = buildAgentImportConfigArtifacts({
+      meta: { lastTouchedVersion: "2026.5.5" },
+      agents: { defaults: { llm: "openai-codex/gpt-5.5" }, list: [{ id: "moof" }] },
+    }, "moof");
+    const repairedCandidate = {
+      meta: { lastTouchedVersion: "2026.7.2" },
+      agents: { defaults: { model: "openai/gpt-5.5" }, list: [{ id: "moof" }] },
+    };
+    const runDoctor = vi.fn(async () => ({
+      outcome: "migrated" as const,
+      doctorVersion: "2026.7.2",
+      changedPaths: ["agents.defaults.llm", "agents.defaults.model"],
+      diagnostics: [],
+      repairedCandidate,
+    }));
+    const h = harness({ runDoctor });
+
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack", slug: "jack", gatewayId: "shared-1", owner: "jack", repo: "moof", branch: "main",
+      artifacts: legacy,
+    });
+
+    expect(runDoctor).toHaveBeenCalledWith(expect.objectContaining({
+      agents: { defaults: { llm: "openai-codex/gpt-5.5" }, list: [{ id: "moof" }] },
+    }));
+    expect(preview.config.decisions).toContainEqual(expect.objectContaining({
+      path: "model.primary",
+      disposition: "reauth_then_apply",
+    }));
   });
 
   it("falls back to the safe config when the current Doctor is unavailable", async () => {
@@ -207,6 +257,22 @@ describe("AgentImportService preview", () => {
     expect(h.archives.get("import-1")).toEqual(archive);
   });
 
+  it("reports new history when the browser did not provide local Git metadata", async () => {
+    const h = harness({
+      extractLocalSource: vi.fn(async () => ({
+        repoDir: "/source", sourceHead: SOURCE_HEAD, artifacts: artifacts(),
+        manifest: { formatVersion: 1, sourceAgentId: "moof", hadGit: false, uncommittedFileCount: 0 },
+        cleanup: vi.fn(),
+      })),
+    });
+
+    const preview = await h.service.previewLocal({
+      uid: "uid-jack", slug: "jack", gatewayId: "shared-1", archive: Buffer.from("zip"),
+    });
+
+    expect(preview.workspace.historyPreserved).toBe(false);
+  });
+
   it("publishes no preview record when durable local archive staging fails", async () => {
     const h = harness({
       putArchive: vi.fn(async () => { throw new Error("GCS unavailable"); }),
@@ -223,6 +289,46 @@ describe("AgentImportService preview", () => {
 });
 
 describe("AgentImportService apply and rollback", () => {
+  it("rechecks GitHub repository size before the apply clone", async () => {
+    const readGithubRepoSize = vi.fn()
+      .mockResolvedValueOnce(12)
+      .mockResolvedValueOnce(128 * 1024 + 1);
+    const h = harness({ readGithubRepoSize });
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack", slug: "jack", gatewayId: "shared-1", owner: "jack", repo: "moof", branch: "main",
+      artifacts: artifacts(),
+    });
+
+    await expect(h.service.apply({
+      uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash,
+    })).rejects.toMatchObject({ code: "archive_too_large" });
+    expect(h.deps.cloneGithubSource).toHaveBeenCalledOnce();
+  });
+
+  it("serializes rollback behind an in-flight apply for the same import", async () => {
+    let releaseIdentity!: () => void;
+    const identityBlocked = new Promise<void>((resolve) => { releaseIdentity = resolve; });
+    const syncIdentity = vi.fn(async () => identityBlocked);
+    const h = harness({ syncIdentity });
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack", slug: "jack", gatewayId: "shared-1", owner: "jack", repo: "moof", branch: "main",
+      artifacts: artifacts(),
+    });
+
+    const applying = h.service.apply({
+      uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash,
+    });
+    await vi.waitFor(() => expect(syncIdentity).toHaveBeenCalledOnce());
+    const rollingBack = h.service.rollback({ uid: "uid-jack", importId: preview.id });
+    await Promise.resolve();
+    expect(h.deps.rollbackRepository).not.toHaveBeenCalled();
+
+    releaseIdentity();
+    await expect(applying).resolves.toMatchObject({ status: "complete" });
+    await expect(rollingBack).resolves.toMatchObject({ status: "rolled_back" });
+    expect(h.records.get(preview.id)).toMatchObject({ status: "rolled_back" });
+  });
+
   it("treats an empty portable runtime patch as unchanged without warning", async () => {
     const emptyArtifacts = buildAgentImportConfigArtifacts({
       agents: { list: [{ id: "moof", name: "Moof" }] },
@@ -257,17 +363,17 @@ describe("AgentImportService apply and rollback", () => {
     expect(h.deps.invokeOpenClaw).not.toHaveBeenCalled();
   });
 
-  it("preserves sibling agents and unpatched coach fields in config.patch", async () => {
+  it("patches only the coach and verifies redacted siblings and unpatched coach fields", async () => {
     const before = {
       agents: { list: [
-        { id: "other", name: "Other", tools: { profile: "full" } },
-        { id: "octogee-jack-coach", name: "Octo", tools: { profile: "safe" }, heartbeat: { every: "60m" } },
+        { id: "other", name: "Other", apiKey: "__OPENCLAW_REDACTED__", tools: { profile: "full" } },
+        { id: "octogee-jack-coach", name: "Octo", tools: { profile: "safe" }, heartbeat: { every: "60m", jitter: "5m" } },
       ] },
     };
     const after = {
       agents: { list: [
         before.agents.list[0],
-        { ...before.agents.list[1], heartbeat: { every: "30m", lightContext: true } },
+        { ...before.agents.list[1], heartbeat: { every: "30m", jitter: "5m", lightContext: true } },
       ] },
     };
     const invokeOpenClaw = vi.fn()
@@ -284,9 +390,34 @@ describe("AgentImportService apply and rollback", () => {
     await h.service.apply({ uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash });
 
     expect(invokeOpenClaw).toHaveBeenNthCalledWith(2, "config.patch", {
-      raw: JSON.stringify({ agents: { list: after.agents.list } }),
+      raw: JSON.stringify({
+        agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m", lightContext: true } }] },
+      }),
       baseHash: "before",
     });
+  });
+
+  it("uses the safe baseline without patching an agent list with an id-less sibling", async () => {
+    const invokeOpenClaw = vi.fn().mockResolvedValueOnce({
+      hash: "before",
+      config: { agents: { list: [
+        { name: "Legacy", apiKey: "__OPENCLAW_REDACTED__" },
+        { id: "octogee-jack-coach", heartbeat: { every: "60m" } },
+      ] } },
+    });
+    const h = harness({ invokeOpenClaw });
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack", slug: "jack", gatewayId: "shared-1", owner: "jack", repo: "moof", branch: "main",
+      artifacts: artifacts(),
+    });
+
+    const completed = await h.service.apply({
+      uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash,
+    });
+
+    expect(completed.configOutcome).toBe("safe_baseline");
+    expect(completed.warnings).toContain("config_delta_rejected");
+    expect(invokeOpenClaw).toHaveBeenCalledTimes(1);
   });
   it("requires the exact preview hash, imports history, updates identity, and patches only the Octogee coach", async () => {
     const h = harness();
@@ -352,7 +483,7 @@ describe("AgentImportService apply and rollback", () => {
       .mockRejectedValueOnce(new Error("config patch rejected"))
       .mockResolvedValueOnce({
         hash: "config-rollback",
-        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m" } }] } },
+        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m", lightContext: true } }] } },
       })
       .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({
@@ -377,7 +508,7 @@ describe("AgentImportService apply and rollback", () => {
     expect(completed.warnings).toContain("config_delta_rejected");
     expect(invokeOpenClaw).toHaveBeenNthCalledWith(4, "config.patch", expect.objectContaining({
       raw: JSON.stringify({
-        agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m" } }] },
+        agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m", lightContext: null } }] },
       }),
     }));
   });
@@ -391,12 +522,12 @@ describe("AgentImportService apply and rollback", () => {
       .mockRejectedValueOnce(new Error("config patch rejected"))
       .mockResolvedValueOnce({
         hash: "config-rollback",
-        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m" } }] } },
+        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m", lightContext: true } }] } },
       })
       .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({
         hash: "config-still-wrong",
-        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m" } }] } },
+        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m", lightContext: true } }] } },
       });
     const h = harness({ invokeOpenClaw });
     const preview = await h.service.previewGithub({
@@ -412,6 +543,29 @@ describe("AgentImportService apply and rollback", () => {
     await expect(h.service.apply({ uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash }))
       .rejects.toMatchObject({ code: "config_readback_failed" });
     expect(h.records.get(preview.id)?.status).toBe("failed");
+  });
+
+  it("does not overwrite a concurrent coach edit after a rejected config patch", async () => {
+    const invokeOpenClaw = vi.fn()
+      .mockResolvedValueOnce({
+        hash: "before",
+        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m" } }] } },
+      })
+      .mockRejectedValueOnce(new Error("base hash mismatch"))
+      .mockResolvedValueOnce({
+        hash: "concurrent",
+        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "45m" } }] } },
+      });
+    const h = harness({ invokeOpenClaw });
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack", slug: "jack", gatewayId: "shared-1", owner: "jack", repo: "moof", branch: "main",
+      artifacts: artifacts(),
+    });
+
+    await expect(h.service.apply({
+      uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash,
+    })).rejects.toMatchObject({ code: "config_changed" });
+    expect(invokeOpenClaw).toHaveBeenCalledTimes(3);
   });
 
   it("resumes from the durable workspace checkpoint after an interrupted apply", async () => {
@@ -610,13 +764,84 @@ describe("AgentImportService apply and rollback", () => {
       importCommit: IMPORT_COMMIT,
       destinationHead: DESTINATION_HEAD,
     }));
-    expect(h.deps.syncIdentity).toHaveBeenLastCalledWith("uid-jack", {
+    expect(h.deps.replaceIdentity).toHaveBeenCalledWith("uid-jack", {
       name: "Octo",
       persona: "Default",
       emoji: "🐙",
     });
     expect(rolledBack.status).toBe("rolled_back");
     expect(h.deps.deleteImportBlobs).toHaveBeenCalledWith("import-1");
+  });
+
+  it("removes imported identity fields that were absent before rollback", async () => {
+    const replaceIdentity = vi.fn(async () => undefined);
+    const h = harness({
+      readIdentity: vi.fn(async () => ({ name: "Octo", persona: null, emoji: null })),
+      replaceIdentity,
+    });
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack", slug: "jack", gatewayId: "shared-1", owner: "jack", repo: "moof", branch: "main",
+      artifacts: artifacts(),
+    });
+    await h.service.apply({ uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash });
+
+    const rolledBack = await h.service.rollback({ uid: "uid-jack", importId: preview.id });
+
+    expect(replaceIdentity).toHaveBeenCalledWith("uid-jack", {
+      name: "Octo",
+      persona: null,
+      emoji: null,
+    });
+    const rolledBackCheckpoint = vi.mocked(h.deps.putRecord).mock.calls.findIndex(([record]) =>
+      record.status === "rolled_back"
+    );
+    expect(replaceIdentity.mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(h.deps.putRecord).mock.invocationCallOrder[rolledBackCheckpoint]);
+    expect(rolledBack.status).toBe("rolled_back");
+  });
+
+  it("rolls back a partial apply after the workspace commit and identity checkpoint", async () => {
+    const replaceIdentity = vi.fn(async () => undefined);
+    const h = harness({
+      syncIdentity: vi.fn(async () => { throw new Error("identity write permanently failed"); }),
+      readIdentity: vi.fn(async () => ({ name: "Octo", persona: null, emoji: null })),
+      replaceIdentity,
+    });
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack", slug: "jack", gatewayId: "shared-1", owner: "jack", repo: "moof", branch: "main",
+      artifacts: artifacts(),
+    });
+
+    await expect(h.service.apply({ uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash }))
+      .rejects.toThrow("identity write permanently failed");
+    expect(h.records.get(preview.id)).toMatchObject({
+      status: "failed",
+      importCommit: IMPORT_COMMIT,
+      completedAt: null,
+      previousIdentity: { name: "Octo", persona: null, emoji: null },
+    });
+
+    await expect(h.service.rollback({ uid: "uid-jack", importId: preview.id }))
+      .resolves.toMatchObject({ status: "rolled_back" });
+    expect(h.deps.rollbackRepository).toHaveBeenCalledOnce();
+    expect(replaceIdentity).toHaveBeenCalledWith("uid-jack", {
+      name: "Octo", persona: null, emoji: null,
+    });
+  });
+
+  it("rolls back an interrupted identity checkpoint before failure status was persisted", async () => {
+    const h = harness();
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack", slug: "jack", gatewayId: "shared-1", owner: "jack", repo: "moof", branch: "main",
+      artifacts: artifacts(),
+    });
+    h.records.set(preview.id, {
+      ...h.records.get(preview.id)!, status: "identity", importCommit: IMPORT_COMMIT,
+    });
+
+    await expect(h.service.rollback({ uid: "uid-jack", importId: preview.id }))
+      .resolves.toMatchObject({ status: "rolled_back" });
+    expect(h.deps.rollbackRepository).toHaveBeenCalledOnce();
   });
 
   it("resumes rollback after Git succeeded but its checkpoint write was interrupted", async () => {

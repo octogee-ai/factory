@@ -10,10 +10,12 @@ import type { AgentImportService } from "../lib/agent-import-service.js";
 
 const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
 const IMPORT_ID_RE = /^[A-Za-z0-9_-]{1,160}$/;
+const FINDING_RULE_RE = /^[A-Za-z0-9._-]{1,160}$/;
+const COMMIT_RE = /^[0-9a-f]{40}$/;
 
 interface AgentImportsRouterDeps {
   createRuntime(input: { authorization: string; gatewayId: string }): {
-    service: Pick<AgentImportService, "previewGithub" | "previewLocal" | "apply" | "get" | "rollback">;
+    service: Pick<AgentImportService, "previewGithub" | "previewLocal" | "apply" | "get" | "latest" | "rollback">;
     authorize(): Promise<{ slug: string; gatewayId: string }>;
     listGithubSources(): Promise<unknown>;
   };
@@ -26,8 +28,19 @@ function object(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-const IMPORT_ERROR_STATUS: Record<string, number> = {
+function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 31 || code === 127) return true;
+  }
+  return false;
+}
+
+export const AGENT_IMPORT_ERROR_STATUS: Record<string, number> = {
   github_not_connected: 422,
+  github_clone_failed: 422,
+  invalid_github_source: 400,
+  invalid_github_token: 422,
   invalid_import_source: 400,
   invalid_local_archive: 400,
   invalid_archive: 400,
@@ -35,34 +48,70 @@ const IMPORT_ERROR_STATUS: Record<string, number> = {
   unsafe_archive_entry: 422,
   unsafe_git_entry: 422,
   invalid_git_history: 422,
+  invalid_git_head: 422,
+  invalid_git_tree: 422,
+  git_command_failed: 422,
+  git_source_invalid: 422,
+  git_lfs_unsupported: 422,
+  invalid_config_artifact: 422,
+  unsafe_config_artifact: 422,
+  invalid_source_config: 422,
+  source_agent_not_found: 422,
+  source_agent_ambiguous: 422,
   archive_too_large: 413,
+  binary_too_large: 413,
   secret_findings: 422,
   secret_scan_failed: 503,
   push_outcome_unknown: 503,
   destination_dirty: 409,
+  destination_branch: 409,
+  destination_restore_failed: 503,
+  invalid_platform_manifest: 409,
+  unsafe_platform_path: 409,
   destination_changed: 409,
   source_changed: 409,
+  config_changed: 409,
+  coach_config_missing: 409,
+  config_get_failed: 503,
+  config_readback_failed: 503,
+  config_rollback_unsafe: 503,
   approval_mismatch: 409,
   invalid_import_state: 409,
   rollback_window_closed: 409,
   import_plan_missing: 410,
+  invalid_import_id: 400,
   local_archive_missing: 410,
   import_not_found: 404,
   forbidden: 404,
   openclaw_not_ready: 409,
 };
 
+function publicFindings(value: unknown): Array<{ ruleId: string; path: string; commit: string | null }> | undefined {
+  if (!Array.isArray(value) || value.length > 100) return undefined;
+  const result = value.flatMap((entry) => {
+    const finding = object(entry);
+    return finding && typeof finding.ruleId === "string" && FINDING_RULE_RE.test(finding.ruleId) &&
+      typeof finding.path === "string" && finding.path.length <= 2_048 && !hasControlCharacter(finding.path) &&
+      (finding.commit === null || typeof finding.commit === "string" && COMMIT_RE.test(finding.commit))
+      ? [{ ruleId: finding.ruleId, path: finding.path, commit: finding.commit as string | null }]
+      : [];
+  });
+  return result.length === value.length ? result : undefined;
+}
+
 function handleImportError(error: unknown, res: Response, next: NextFunction): void {
   const data = object(error);
   const code = typeof data?.code === "string" ? data.code : null;
-  const status = code ? IMPORT_ERROR_STATUS[code] : undefined;
+  const status = code ? AGENT_IMPORT_ERROR_STATUS[code] : undefined;
   if (!code || !status) {
     next(error);
     return;
   }
+  const findings = publicFindings(data?.findings);
   res.status(status).json({
     error: code,
     message: error instanceof Error ? error.message : "Agent import failed",
+    ...(findings ? { findings } : {}),
   });
 }
 
@@ -260,6 +309,16 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
         return;
       }
       res.json(await authorized.runtime.service.apply({ importId: id, uid: req.uid!, approvalHash: body.approvalHash }));
+    } catch (error) {
+      handleImportError(error, res, next);
+    }
+  });
+
+  router.get("/latest", async (req, res, next) => {
+    try {
+      const authorized = await authorize(req, res, deps);
+      if (!authorized) return;
+      res.json(await authorized.runtime.service.latest({ uid: req.uid! }));
     } catch (error) {
       handleImportError(error, res, next);
     }

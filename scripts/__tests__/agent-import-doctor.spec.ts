@@ -25,10 +25,10 @@ afterEach(() => {
 });
 
 describe("runAgentImportDoctor", () => {
-  it("runs the pinned OpenClaw doctor in isolated state, reports changed paths, and cleans up", () => {
+  it("runs the pinned OpenClaw doctor in isolated state, reports changed paths, and cleans up", async () => {
     const root = tempRoot();
     const calls: Array<{ command: string; args: string[]; env: NodeJS.ProcessEnv }> = [];
-    const run = vi.fn((command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
+    const run = vi.fn(async (command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
       calls.push({ command, args, env: options.env });
       if (args[0] === "--version") return result(0, "OpenClaw 2026.7.2\n");
       if (args[0] === "doctor") {
@@ -41,7 +41,7 @@ describe("runAgentImportDoctor", () => {
       return result(0);
     });
 
-    const output = runAgentImportDoctor(
+    const output = await runAgentImportDoctor(
       { agents: { list: [{ id: "moof", verboseDefault: "full" }] } },
       { tmpRoot: root, env: { PATH: "/bin", SECRET_THAT_MUST_NOT_LEAK: "nope" }, run },
     );
@@ -62,14 +62,14 @@ describe("runAgentImportDoctor", () => {
     expect(fs.readdirSync(root)).toEqual([]);
   });
 
-  it("returns unsupported without repaired values when current OpenClaw rejects the source", () => {
+  it("returns unsupported without repaired values when current OpenClaw rejects the source", async () => {
     const root = tempRoot();
-    const run = vi.fn((_command: string, args: string[]) =>
+    const run = vi.fn(async (_command: string, args: string[]) =>
       args[0] === "--version" ? result(0, "2026.7.2") : result(2, "", "invalid legacy key"),
     );
 
-    expect(runAgentImportDoctor({ agents: { list: [{ id: "moof" }] } }, { tmpRoot: root, run }))
-      .toEqual({
+    await expect(runAgentImportDoctor({ agents: { list: [{ id: "moof" }] } }, { tmpRoot: root, run }))
+      .resolves.toEqual({
         outcome: "unsupported",
         doctorVersion: "2026.7.2",
         changedPaths: [],
@@ -78,11 +78,33 @@ describe("runAgentImportDoctor", () => {
     expect(fs.readdirSync(root)).toEqual([]);
   });
 
-  it("rejects credential-shaped candidates before invoking OpenClaw", () => {
+  it("rejects credential-shaped candidates before invoking OpenClaw", async () => {
     const run = vi.fn();
-    expect(() => runAgentImportDoctor({ apiKey: "secret" }, { tmpRoot: tempRoot(), run }))
-      .toThrow(/credential-bearing/i);
+    await expect(runAgentImportDoctor({
+      agents: { list: [{ id: "moof", clientSecret: "short-secret", accessToken: "short-token" }] },
+    }, { tmpRoot: tempRoot(), run }))
+      .rejects.toThrow(/credential-bearing/i);
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it("rejects credential fields introduced by Doctor output", async () => {
+    const root = tempRoot();
+    const run = vi.fn(async (_command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
+      if (args[0] === "--version") return result(0, "OpenClaw 2026.7.2\n");
+      if (args[0] === "doctor") {
+        const configPath = options.env.OPENCLAW_CONFIG_PATH!;
+        const candidate = JSON.parse(fs.readFileSync(configPath, "utf8"));
+        candidate.agents.list[0].refreshToken = "short-refresh-token";
+        fs.writeFileSync(configPath, `${JSON.stringify(candidate)}\n`);
+      }
+      return result(0);
+    });
+
+    await expect(runAgentImportDoctor(
+      { agents: { list: [{ id: "moof" }] } },
+      { tmpRoot: root, run },
+    )).rejects.toThrow(/credential-bearing/i);
+    expect(fs.readdirSync(root)).toEqual([]);
   });
 });
 
@@ -92,7 +114,7 @@ describe("agent import doctor HTTP handler", () => {
     instance.use(express.json());
     instance.post("/agent-import/doctor", createAgentImportDoctorHandler({
       token: "pod-token",
-      runDoctor: vi.fn(() => ({
+      runDoctor: vi.fn(async () => ({
         outcome: "unchanged",
         doctorVersion: "2026.7.2",
         changedPaths: [],
@@ -125,10 +147,35 @@ describe("agent import doctor HTTP handler", () => {
     expect(response.body).toMatchObject({ outcome: "unchanged", doctorVersion: "2026.7.2" });
   });
 
+  it("keeps health responsive while a doctor command is pending", async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const instance = express();
+    instance.use(express.json());
+    instance.get("/health", (_req, res) => { res.json({ status: "ok" }); });
+    instance.post("/agent-import/doctor", createAgentImportDoctorHandler({
+      token: "pod-token",
+      runDoctor: async () => {
+        await pending;
+        return {
+          outcome: "unchanged", doctorVersion: "2026.7.2", changedPaths: [], diagnostics: [],
+        };
+      },
+    }));
+    const doctor = request(instance).post("/agent-import/doctor")
+      .set("authorization", "Bearer pod-token").send({ candidate: {} });
+    const doctorPromise = doctor.then((response) => response);
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+
+    await request(instance).get("/health").expect(200, { status: "ok" });
+    release();
+    await doctorPromise;
+  });
+
   it("is mounted by every fleet controller with the pod-shared gateway token", async () => {
     const instance = express();
     instance.use(express.json());
-    const runDoctor = vi.fn(() => ({
+    const runDoctor = vi.fn(async () => ({
       outcome: "unchanged" as const,
       doctorVersion: "2026.7.2",
       changedPaths: [],

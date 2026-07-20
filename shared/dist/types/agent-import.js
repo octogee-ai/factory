@@ -98,29 +98,6 @@ function portableAgent(config, agent) {
     });
     return result;
 }
-function doctorAgent(portable) {
-    return compact({
-        id: portable.sourceAgentId,
-        name: portable.name,
-        persona: portable.persona,
-        identity: portable.identity ? structuredClone(portable.identity) : undefined,
-        heartbeat: portable.heartbeat ? structuredClone(portable.heartbeat) : undefined,
-        bootstrapMaxChars: portable.bootstrapMaxChars,
-        bootstrapTotalMaxChars: portable.bootstrapTotalMaxChars,
-        thinkingDefault: portable.thinkingDefault,
-        verboseDefault: portable.verboseDefault,
-        timeoutSeconds: portable.timeoutSeconds,
-        model: portable.requestedModel ? structuredClone(portable.requestedModel) : undefined,
-    });
-}
-function doctorCandidate(portable) {
-    return compact({
-        meta: portable.sourceOpenClawVersion
-            ? { lastTouchedVersion: portable.sourceOpenClawVersion }
-            : undefined,
-        agents: { list: [doctorAgent(portable)] },
-    });
-}
 function valueType(value) {
     if (value === null)
         return "null";
@@ -141,15 +118,79 @@ const PORTABLE_AGENT_FIELDS = new Set([
     "name", "persona", "identity", "heartbeat", "bootstrapmaxchars", "bootstraptotalmaxchars",
     "thinkingdefault", "verbosedefault", "timeoutseconds", "model",
 ]);
+const FORBIDDEN_DOCTOR_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const OMIT_DOCTOR_VALUE = Symbol("omit-doctor-value");
+function credentialKey(key) {
+    const normalized = key.toLowerCase().replace(/[-_]/g, "");
+    return CREDENTIAL_SEGMENTS.has(normalized) ||
+        /(?:token|secret|password|passwd|credential|credentials|cookie|authorization|authheader|oauth|bearer|auth)$/.test(normalized) ||
+        /(?:apikey|privatekey|accesskey|signingkey|encryptionkey|clientkey|webhookkey)$/.test(normalized);
+}
+function blockedDoctorKey(key, depth, remaining) {
+    const normalized = key.toLowerCase().replace(/-/g, "");
+    return depth > 20 || remaining <= 0 || FORBIDDEN_DOCTOR_KEYS.has(normalized) ||
+        credentialKey(key) || sensitiveInventoryKey(key) ||
+        HOST_FIELDS.has(normalized) || PLATFORM_ROOTS.has(normalized);
+}
+function doctorArray(value, depth, budget) {
+    return value.flatMap((entry) => {
+        const sanitized = doctorValue(entry, "", depth + 1, budget);
+        return sanitized === OMIT_DOCTOR_VALUE ? [] : [sanitized];
+    });
+}
+function doctorObject(value, depth, budget) {
+    const result = {};
+    for (const [childKey, entry] of Object.entries(value)) {
+        const sanitized = doctorValue(entry, childKey, depth + 1, budget);
+        if (sanitized !== OMIT_DOCTOR_VALUE)
+            result[childKey] = sanitized;
+    }
+    return result;
+}
+function doctorValue(value, key, depth, budget) {
+    if (blockedDoctorKey(key, depth, budget.remaining))
+        return OMIT_DOCTOR_VALUE;
+    budget.remaining -= 1;
+    if (Array.isArray(value))
+        return doctorArray(value, depth, budget);
+    const source = record(value);
+    if (source)
+        return doctorObject(source, depth, budget);
+    if (value === null || typeof value === "boolean" || typeof value === "string")
+        return value;
+    if (typeof value === "number")
+        return Number.isFinite(value) ? value : OMIT_DOCTOR_VALUE;
+    return OMIT_DOCTOR_VALUE;
+}
+function doctorCandidate(config, agent) {
+    const defaults = record(record(config.agents)?.defaults);
+    const budget = { remaining: 5_000 };
+    const sanitizedAgent = doctorValue(agent, "", 0, budget);
+    const sanitizedDefaults = defaults ? doctorValue(defaults, "", 0, budget) : undefined;
+    const sourceOpenClawVersion = trimmedString(record(config.meta)?.lastTouchedVersion, 100);
+    return compact({
+        meta: sourceOpenClawVersion ? { lastTouchedVersion: sourceOpenClawVersion } : undefined,
+        agents: compact({
+            defaults: record(sanitizedDefaults) && Object.keys(sanitizedDefaults).length > 0
+                ? sanitizedDefaults
+                : undefined,
+            list: [sanitizedAgent],
+        }),
+    });
+}
 function normalizedPathSegments(path) {
     return path.split("[").join(".").split("]").join(".").split(".")
         .filter(Boolean)
         .map((part) => part.toLowerCase().replace(/-/g, ""));
 }
 function inventoryClassification(path, sourcePrefix) {
-    const segments = normalizedPathSegments(path);
-    if (segments.some((segment) => CREDENTIAL_SEGMENTS.has(segment)))
+    const rawSegments = path.split("[").join(".").split("]").join(".").split(".").filter(Boolean);
+    if (rawSegments.some(sensitiveInventoryKey))
         return "credential";
+    const segments = normalizedPathSegments(path);
+    if (segments.some(credentialKey)) {
+        return "credential";
+    }
     if (segments.some((segment) => HOST_FIELDS.has(segment)))
         return "host";
     const root = segments[0] ?? "";
@@ -161,23 +202,24 @@ function inventoryClassification(path, sourcePrefix) {
     }
     return "unknown";
 }
-function inventoryEntries(value, path, sourcePrefix, entries) {
+function inventoryEntries(value, path, sourcePrefix, entries, sourcePath = path) {
     const object = record(value);
     if (object && Object.keys(object).length > 0) {
         for (const key of Object.keys(object).sort()) {
-            inventoryEntries(object[key], path ? `${path}.${key}` : key, sourcePrefix, entries);
+            const safeKey = sensitiveInventoryKey(key) ? "$key" : key;
+            inventoryEntries(object[key], path ? `${path}.${safeKey}` : safeKey, sourcePrefix, entries, sourcePath ? `${sourcePath}.${key}` : key);
         }
         return;
     }
     if (Array.isArray(value) && value.length > 0) {
-        value.forEach((entry, index) => inventoryEntries(entry, `${path}[${index}]`, sourcePrefix, entries));
+        value.forEach((entry, index) => inventoryEntries(entry, `${path}[${index}]`, sourcePrefix, entries, `${sourcePath}[${index}]`));
         return;
     }
     entries.push({
         path,
         valueType: valueType(value),
-        classification: inventoryClassification(path, sourcePrefix),
-        sourceAgent: path === sourcePrefix || path.startsWith(`${sourcePrefix}.`) || path.startsWith(`${sourcePrefix}[`),
+        classification: inventoryClassification(sourcePath, sourcePrefix),
+        sourceAgent: sourcePath === sourcePrefix || sourcePath.startsWith(`${sourcePrefix}.`) || sourcePath.startsWith(`${sourcePrefix}[`),
     });
 }
 export function buildAgentImportConfigArtifacts(source, selectedAgentId) {
@@ -202,11 +244,22 @@ export function buildAgentImportConfigArtifacts(source, selectedAgentId) {
     const portable = portableAgent(config, selected.agent);
     const inventory = [];
     inventoryEntries(config, "", `agents.list[${selected.index}]`, inventory);
+    const boundedInventory = inventory.length <= 500
+        ? inventory
+        : [
+            ...inventory.slice(0, 499),
+            {
+                path: `$inventory.truncated[${inventory.length - 499}]`,
+                valueType: "number",
+                classification: "unknown",
+                sourceAgent: false,
+            },
+        ];
     return {
         formatVersion: AGENT_IMPORT_FORMAT_VERSION,
         portableAgent: portable,
-        configInventory: inventory,
-        doctorCandidate: doctorCandidate(portable),
+        configInventory: boundedInventory,
+        doctorCandidate: doctorCandidate(config, selected.agent),
     };
 }
 function exactKeys(value, keys, code = "invalid_config_artifact") {
@@ -224,11 +277,73 @@ function assertNoCredentialKeys(value) {
         return;
     for (const [key, entry] of Object.entries(object)) {
         const normalized = key.toLowerCase().replace(/-/g, "");
-        if (CREDENTIAL_SEGMENTS.has(normalized) || normalized === "env") {
+        if (credentialKey(key) || normalized === "env" || sensitiveInventoryKey(key)) {
             throw new AgentImportConfigError("unsafe_config_artifact", "credential-bearing config path is forbidden");
         }
         assertNoCredentialKeys(entry);
     }
+}
+const KNOWN_SECRET_PATTERNS = [
+    /\bsk-[\w-]{20,}/u,
+    /\bgh[pousr]_[A-Za-z\d]{30,}/u,
+    /\bgithub_pat_\w{20,}/u,
+    /\bxox[baprs]-[\w-]{20,}/u,
+    /\bAKIA[\dA-Z]{16}\b/u,
+    /\bAIza[\w-]{30,}/u,
+];
+function knownSecretValue(value) {
+    return KNOWN_SECRET_PATTERNS.some((pattern) => pattern.test(value));
+}
+function tokenEntropy(value) {
+    const counts = new Map();
+    for (const character of value)
+        counts.set(character, (counts.get(character) ?? 0) + 1);
+    return [...counts.values()].reduce((entropy, count) => {
+        const probability = count / value.length;
+        return entropy - probability * Math.log2(probability);
+    }, 0);
+}
+function highEntropyCredential(value) {
+    const candidates = [];
+    let start = -1;
+    for (let index = 0; index <= value.length; index += 1) {
+        const character = value[index] ?? "";
+        const allowed = /[\w+/=-]/u.test(character);
+        if (allowed && start < 0)
+            start = index;
+        if (!allowed && start >= 0) {
+            if (index - start >= 40)
+                candidates.push(value.slice(start, index));
+            start = -1;
+        }
+    }
+    return candidates.some((candidate) => /[a-z]/u.test(candidate) && /[A-Z]/u.test(candidate) && /\d/u.test(candidate) && tokenEntropy(candidate) >= 4.5);
+}
+function looksLikeEmail(value) {
+    if ([...value].some((character) => character.trim() === ""))
+        return false;
+    const at = value.indexOf("@");
+    const dot = value.lastIndexOf(".");
+    return at > 0 && at === value.lastIndexOf("@") && dot > at + 1 && dot < value.length - 1;
+}
+function sensitiveInventoryKey(value) {
+    return knownSecretValue(value) || highEntropyCredential(value) || looksLikeEmail(value);
+}
+function sensitiveInventoryPath(value) {
+    return value.includes("@") || sensitiveInventoryKey(value) ||
+        value.split("[").join(".").split("]").join(".").split(".").filter(Boolean).some(sensitiveInventoryKey);
+}
+function assertNoCredentialValues(value) {
+    if (typeof value === "string" && (knownSecretValue(value) || highEntropyCredential(value))) {
+        throw new AgentImportConfigError("unsafe_config_artifact", "credential-like config value is forbidden");
+    }
+    if (Array.isArray(value)) {
+        value.forEach(assertNoCredentialValues);
+        return;
+    }
+    const object = record(value);
+    if (object)
+        Object.values(object).forEach(assertNoCredentialValues);
 }
 function validatePortable(value) {
     const portable = record(value);
@@ -265,7 +380,7 @@ function validatePortable(value) {
     return rebuilt;
 }
 function validateInventory(value) {
-    if (!Array.isArray(value) || value.length > 20_000) {
+    if (!Array.isArray(value) || value.length > 500) {
         throw new AgentImportConfigError("invalid_config_artifact", "configInventory must be a bounded array");
     }
     return value.map((raw) => {
@@ -273,11 +388,14 @@ function validateInventory(value) {
         if (!entry)
             throw new AgentImportConfigError("invalid_config_artifact", "inventory entry must be an object");
         exactKeys(entry, ["path", "valueType", "classification", "sourceAgent"]);
-        if (typeof entry.path !== "string" || entry.path.length > 1_024 ||
+        if (typeof entry.path !== "string" || entry.path.length > 512 ||
             !["array", "boolean", "null", "number", "object", "string"].includes(String(entry.valueType)) ||
             !["credential", "host", "customer", "platform", "unknown"].includes(String(entry.classification)) ||
             typeof entry.sourceAgent !== "boolean") {
             throw new AgentImportConfigError("invalid_config_artifact", "inventory entry is invalid");
+        }
+        if (sensitiveInventoryPath(entry.path)) {
+            throw new AgentImportConfigError("unsafe_config_artifact", "inventory path contains credential-like data");
         }
         return entry;
     });
@@ -292,10 +410,24 @@ export function validateAgentImportConfigArtifacts(value) {
     }
     assertNoCredentialKeys(artifacts.portableAgent);
     assertNoCredentialKeys(artifacts.doctorCandidate);
+    assertNoCredentialValues(artifacts.portableAgent);
+    assertNoCredentialValues(artifacts.doctorCandidate);
     const portable = validatePortable(artifacts.portableAgent);
     const inventory = validateInventory(artifacts.configInventory);
-    const expectedCandidate = doctorCandidate(portable);
+    const candidate = record(artifacts.doctorCandidate);
+    const candidateList = record(candidate?.agents)?.list;
+    const candidateAgent = Array.isArray(candidateList) && candidateList.length === 1
+        ? record(candidateList[0])
+        : null;
+    if (!candidate || !candidateAgent || candidateAgent.id !== portable.sourceAgentId) {
+        throw new AgentImportConfigError("invalid_config_artifact", "doctorCandidate must contain only the selected agent");
+    }
+    const expectedCandidate = doctorCandidate(candidate, candidateAgent);
     if (stableJson(expectedCandidate) !== stableJson(artifacts.doctorCandidate)) {
+        throw new AgentImportConfigError("unsafe_config_artifact", "doctorCandidate contains a forbidden or non-canonical field");
+    }
+    const candidatePortable = portableAgent(candidate, candidateAgent);
+    if (stableJson(candidatePortable) !== stableJson(portable)) {
         throw new AgentImportConfigError("unsafe_config_artifact", "doctorCandidate does not match portableAgent");
     }
     return {
@@ -418,7 +550,11 @@ function agentImportConfigOutcome(portable, runtimePatch) {
 const ARCHIVE_METADATA = new Set([
     "manifest.json", "portable-agent.json", "config-inventory.json", "doctor-candidate.json",
 ]);
-const BLOCKED_WORKSPACE_SEGMENTS = new Set([".git", ".ssh", ".openclaw"]);
+const BLOCKED_WORKSPACE_SEGMENTS = new Set([
+    ".git", ".ssh", ".openclaw", ".aws", ".azure", ".kube", ".docker",
+]);
+const SENSITIVE_WORKSPACE_DIRECTORY = /^(?:credentials?|secrets?|sessions?|auth[-_]?profiles?)$/;
+const OPENCLAW_CONFIG_BACKUP = /^openclaw\.json(?:[._-].+|~)$/;
 function hasControlCharacter(value) {
     for (const character of value) {
         const code = character.charCodeAt(0);
@@ -451,12 +587,14 @@ function classifyWorkspaceArchivePath(relative) {
     const lowered = relative.map((segment) => segment.toLowerCase());
     if (lowered.some((segment) => BLOCKED_WORKSPACE_SEGMENTS.has(segment)))
         return null;
+    if (lowered.some((segment) => SENSITIVE_WORKSPACE_DIRECTORY.test(segment)))
+        return null;
     if (lowered.some((segment) => segment === ".env" || segment.startsWith(".env.")))
         return null;
-    if (["credentials", "secrets", "auth-profiles"].includes(lowered[0]))
-        return null;
     const leaf = lowered[lowered.length - 1];
-    if (leaf === "openclaw.json" || [".npmrc", ".pypirc", ".netrc"].includes(leaf))
+    if (leaf === "openclaw.json" || OPENCLAW_CONFIG_BACKUP.test(leaf) ||
+        [".npmrc", ".pypirc", ".netrc", ".git-credentials", "application_default_credentials.json"].includes(leaf) ||
+        lowered.some((segment, index) => segment === ".config" && lowered[index + 1] === "gcloud"))
         return null;
     if (relative.length === 1 && /^(credentials?|secrets?)([._-].*)?$/.test(leaf))
         return null;

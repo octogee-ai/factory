@@ -77,7 +77,14 @@ describe("agent import config artifacts", () => {
     });
     expect(artifacts.doctorCandidate).toEqual({
       meta: { lastTouchedVersion: "2025.4.3" },
-      agents: { list: [expect.objectContaining({ id: "moof", name: "Moof" })] },
+      agents: {
+        defaults: expect.objectContaining({ timeoutSeconds: 120 }),
+        list: [expect.objectContaining({
+          id: "moof",
+          name: "Moof",
+          futureSetting: { enabled: true },
+        })],
+      },
     });
     expect(artifacts.configInventory).toContainEqual({
       path: "channels.discord.token",
@@ -93,6 +100,25 @@ describe("agent import config artifacts", () => {
     });
     expect(JSON.stringify(artifacts)).not.toContain(SECRET);
     expect(JSON.stringify(artifacts)).not.toContain("C:\\Users\\jack");
+    expect(JSON.stringify(artifacts.doctorCandidate)).not.toContain('"tools"');
+  });
+
+  it("preserves value-bearing legacy agent fields for current Doctor migration", () => {
+    const artifacts = buildAgentImportConfigArtifacts({
+      meta: { lastTouchedVersion: "2026.5.5" },
+      agents: {
+        defaults: { llm: "openai-codex/gpt-5.5" },
+        list: [{ id: "moof", legacyRuntimeSetting: { enabled: true } }],
+      },
+    }, "moof");
+
+    expect(artifacts.doctorCandidate).toEqual({
+      meta: { lastTouchedVersion: "2026.5.5" },
+      agents: {
+        defaults: { llm: "openai-codex/gpt-5.5" },
+        list: [{ id: "moof", legacyRuntimeSetting: { enabled: true } }],
+      },
+    });
   });
 
   it("rejects a missing or duplicate selected agent id", () => {
@@ -116,6 +142,73 @@ describe("agent import config artifacts", () => {
     })).toThrowError(expect.objectContaining({ code: "unsafe_config_artifact" }));
     expect(() => validateAgentImportConfigArtifacts({ ...artifacts, extra: true }))
       .toThrowError(AgentImportConfigError);
+  });
+
+  it("rejects credential values hidden inside portable free-form fields", () => {
+    const artifacts = buildAgentImportConfigArtifacts({
+      agents: {
+        list: [{
+          id: "moof",
+          name: "Moof",
+          persona: "Use sk-ant-api03-0123456789abcdefghijklmnop for emergencies",
+        }],
+      },
+    }, "moof");
+
+    expect(() => validateAgentImportConfigArtifacts(artifacts))
+      .toThrowError(expect.objectContaining({ code: "unsafe_config_artifact" }));
+  });
+
+  it("never transports credentials or email addresses used as config map keys", () => {
+    const dynamicMapKey = "sk-project-AbCdEfGhIjKlMnOpQrStUvWxYz012345";
+    const artifacts = buildAgentImportConfigArtifacts({
+      agents: { list: [{ id: "moof" }] },
+      providers: { accounts: {
+        [dynamicMapKey]: { enabled: true },
+        "jack@example.com": { enabled: true },
+      } },
+    }, "moof");
+
+    expect(JSON.stringify(artifacts)).not.toContain(dynamicMapKey);
+    expect(JSON.stringify(artifacts)).not.toContain("jack@example.com");
+    expect(artifacts.configInventory).toContainEqual(expect.objectContaining({
+      path: "providers.accounts.$key.enabled",
+      classification: "credential",
+    }));
+
+    const injected = structuredClone(artifacts);
+    injected.configInventory[0] = { ...injected.configInventory[0], path: `providers.accounts.${dynamicMapKey}` };
+    expect(() => validateAgentImportConfigArtifacts(injected))
+      .toThrowError(expect.objectContaining({ code: "unsafe_config_artifact" }));
+    injected.configInventory[0] = { ...injected.configInventory[0], path: "providers.accounts.jack@example.com.enabled" };
+    expect(() => validateAgentImportConfigArtifacts(injected))
+      .toThrowError(expect.objectContaining({ code: "unsafe_config_artifact" }));
+  });
+
+  it("strips common camelCase credential fields from Doctor input", () => {
+    const artifacts = buildAgentImportConfigArtifacts({
+      agents: { list: [{
+        id: "moof",
+        legacyProvider: {
+          clientSecret: "short-client-secret",
+          accessToken: "short-access-token",
+          refreshToken: "short-refresh-token",
+          webhookSecret: "short-webhook-secret",
+          label: "Jack's provider",
+        },
+      }] },
+    }, "moof");
+
+    expect(JSON.stringify(artifacts.doctorCandidate)).not.toContain("short-");
+    expect(artifacts.doctorCandidate).toMatchObject({
+      agents: { list: [{ id: "moof", legacyProvider: { label: "Jack's provider" } }] },
+    });
+    expect(artifacts.configInventory).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "agents.list[0].legacyProvider.clientSecret", classification: "credential" }),
+      expect.objectContaining({ path: "agents.list[0].legacyProvider.accessToken", classification: "credential" }),
+      expect.objectContaining({ path: "agents.list[0].legacyProvider.refreshToken", classification: "credential" }),
+      expect.objectContaining({ path: "agents.list[0].legacyProvider.webhookSecret", classification: "credential" }),
+    ]));
   });
 });
 
@@ -172,6 +265,30 @@ describe("agent import config plan", () => {
 });
 
 describe("agent import transport contracts", () => {
+  it("caps configuration inventory below the Firestore record and UI rendering limit", () => {
+    const base = buildAgentImportConfigArtifacts({ agents: { list: [{ id: "moof" }] } }, "moof");
+    expect(() => validateAgentImportConfigArtifacts({
+      ...base,
+      configInventory: Array.from({ length: 501 }, (_, index) => ({
+        path: `plugins.item${index}`,
+        valueType: "string",
+        classification: "unknown",
+        sourceAgent: false,
+      })),
+    })).toThrow(/bounded array/);
+  });
+
+  it("summarizes oversized source config instead of blocking safe workspace import", () => {
+    const artifacts = buildAgentImportConfigArtifacts({
+      agents: { list: [{ id: "moof" }] },
+      plugins: Object.fromEntries(Array.from({ length: 600 }, (_, index) => [`plugin${index}`, { enabled: true }])),
+    }, "moof");
+
+    expect(artifacts.configInventory).toHaveLength(500);
+    expect(artifacts.configInventory.at(-1)?.path).toMatch(/^\$inventory\.truncated\[/);
+    expect(() => validateAgentImportConfigArtifacts(artifacts)).not.toThrow();
+  });
+
   it("allows only normalized workspace and safe git database entries", () => {
     expect(classifyAgentImportArchivePath("workspace/MEMORY.md")).toBe("workspace");
     expect(classifyAgentImportArchivePath("git/objects/aa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")).toBe("git");
@@ -182,6 +299,13 @@ describe("agent import transport contracts", () => {
     expect(classifyAgentImportArchivePath("workspace/credentials/provider.json")).toBeNull();
     expect(classifyAgentImportArchivePath("workspace/credentials.json")).toBeNull();
     expect(classifyAgentImportArchivePath("workspace/.npmrc")).toBeNull();
+    expect(classifyAgentImportArchivePath("workspace/backup/credentials/custom.key")).toBeNull();
+    expect(classifyAgentImportArchivePath("workspace/foo/sessions/session.json")).toBeNull();
+    expect(classifyAgentImportArchivePath("workspace/archive/openclaw.json.bak")).toBeNull();
+    expect(classifyAgentImportArchivePath("workspace/nested/.KUBE/config")).toBeNull();
+    expect(classifyAgentImportArchivePath("workspace/.docker/config.json")).toBeNull();
+    expect(classifyAgentImportArchivePath("workspace/.config/gcloud/application_default_credentials.json")).toBeNull();
+    expect(classifyAgentImportArchivePath("workspace/nested/.GIT-CREDENTIALS")).toBeNull();
     expect(classifyAgentImportArchivePath("workspace/../openclaw.json")).toBeNull();
     expect(classifyAgentImportArchivePath("workspace/MEMORY\nsecret.md")).toBeNull();
   });
