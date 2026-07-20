@@ -24,6 +24,7 @@ export const OCTOGEE_WORKFLOW_TOOLS = [
   "octogee_chat_set_identity",
   "octogee_status",
   "octogee_ask_ops",
+  "octogee_google_calendar_list",
 ];
 const CONNECTOR_TOOLS_PLUGIN = "octogee-connector-tools";
 const PROJECT_TOOLS_PLUGIN = "octogee-project-tools";

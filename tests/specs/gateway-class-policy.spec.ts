@@ -24,6 +24,7 @@ const workflowTools = [
   "octogee_chat_set_identity",
   "octogee_status",
   "octogee_ask_ops",
+  "octogee_google_calendar_list",
 ];
 
 function runPolicy(gatewayClass: string, config: Record<string, unknown>) {
@@ -82,6 +83,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.plugins.entries.codex.config.appServer.sandbox).toBe("workspace-write");
     expect(out.plugins.entries.codex.config.appServer.approvalPolicy).toBe("never");
     expect(out.plugins.entries["octogee-connector-tools"].enabled).toBe(false);
+    expect(out.tools.alsoAllow).toContain("octogee_google_calendar_list");
     expect(out.plugins.entries["octogee-project-tools"].enabled).toBe(true);
     expect(out.plugins.entries["octogee-ops-tools"]).toEqual({ enabled: true, config: {} });
     expect(out.plugins.entries["octogee-access-tools"]).toEqual({ enabled: true, config: {} });
@@ -156,6 +158,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       enabled: true,
       config: { timeoutMs: 1500, baseUrl: "http://connector-tools" },
     });
+    expect(out.tools.alsoAllow).toContain("octogee_google_calendar_list");
     expect(out.plugins.entries["octogee-project-tools"]).toEqual({
       enabled: true,
       config: {},

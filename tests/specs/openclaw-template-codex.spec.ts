@@ -20,6 +20,7 @@ const workflowTools = [
   "octogee_chat_set_identity",
   "octogee_status",
   "octogee_ask_ops",
+  "octogee_google_calendar_list",
 ];
 
 function readTemplate() {
@@ -63,5 +64,12 @@ describe("infra/gateway/openclaw.template.json — standard gateway exec-off pos
 
     expect(template.plugins.allow).not.toContain("octogee-connector-tools");
     expect(template.plugins.entries["octogee-connector-tools"]).toBeUndefined();
+  });
+
+  it("declares the Calendar list tool without enabling its owner-only plugin in shared base", () => {
+    const template = readTemplate();
+
+    expect(template.tools.alsoAllow).toContain("octogee_google_calendar_list");
+    expect(template.plugins.allow).not.toContain("octogee-connector-tools");
   });
 });
