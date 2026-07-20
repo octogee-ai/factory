@@ -25,7 +25,6 @@ function mutableConfigHash(config) {
         serviceAccount: config.serviceAccount,
         operatorAccess: config.operatorAccess,
         ownerUid: config.ownerUid,
-        coOwnerUids: config.coOwnerUids,
         builderSlug: config.builderSlug,
         openclawOverrides: config.openclawOverrides,
         modelBrokerLimits: config.modelBrokerLimits,

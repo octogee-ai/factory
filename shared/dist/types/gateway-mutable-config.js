@@ -126,7 +126,6 @@ function hasLockedTrialOperatorRuntime(value) {
         value.serviceAccountName.startsWith(GATEWAY_SERVICE_ACCOUNT_PREFIX) &&
         isCanonicalLockedServiceAccount(value.serviceAccount) &&
         isCanonicalLockedOperatorAccess(value.operatorAccess) &&
-        Array.isArray(value.coOwnerUids) && value.coOwnerUids.length === 0 &&
         value.openclawOverrides === null &&
         value.modelBrokerLimits === null &&
         value.preemption === null;
@@ -177,7 +176,8 @@ export function isBareGatewayId(value) {
 export function isGatewayMutableConfig(value) {
     if (!isRecord(value) || value.configSchemaVersion !== GATEWAY_CONFIG_SCHEMA_VERSION)
         return false;
-    if (Object.prototype.hasOwnProperty.call(value, "byosub"))
+    if (Object.prototype.hasOwnProperty.call(value, "byosub") ||
+        Object.prototype.hasOwnProperty.call(value, "coOwnerUids"))
         return false;
     return ((value.profile === null || isGatewayProfile(value.profile)) &&
         isGatewayClass(value.gatewayClass) &&
@@ -190,7 +190,6 @@ export function isGatewayMutableConfig(value) {
         isNullableServiceAccount(value.serviceAccount) &&
         isNullableOperatorAccess(value.operatorAccess) &&
         isNullableString(value.ownerUid) &&
-        isStringArray(value.coOwnerUids) &&
         isNullableString(value.builderSlug) &&
         isNullableRecord(value.openclawOverrides) &&
         isNullableModelBrokerLimits(value.modelBrokerLimits) &&

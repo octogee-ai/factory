@@ -13,6 +13,15 @@ import {
   type OpenClawControlTicketRejectionReason,
 } from "@octogee/core/openclaw-control-tickets";
 import { isOpenClawControlRevisionRuntimeReady } from "@octogee/core/openclaw-control-runtime-ready";
+import {
+  GATEWAY_ACCESS_GRANTS_COLLECTION,
+  gatewayAccessGrantId,
+  permissionSetIds,
+  resolveGatewayPrincipalAccess,
+  type GatewayPermissionSetId,
+  type OpenClawBrokerProfile,
+  type ResolvedGatewayAccess,
+} from "@octogee/core/gateway-principal-access";
 import { isGatewayDesiredDoc, isGatewayRuntimeDoc } from "@octogee/shared/types/gateway-releases";
 import { isGatewayClassControlUiAccessEnabled, resolveGatewayClass } from "@octogee/shared/types/glm";
 import { revisionIdFromGatewayPodName } from "../lib/gateway-pod-revision.js";
@@ -75,6 +84,9 @@ interface ControlSession {
   uid: string;
   gatewayId: string;
   revisionId: string;
+  brokerProfile: OpenClawBrokerProfile;
+  permissionSetIds: GatewayPermissionSetId[];
+  grantRevision: number | null;
   expiresAt: number;
 }
 
@@ -143,11 +155,15 @@ function boundGateway(req: Request, res: Response): GatewayBinding | null {
   return authenticated.bound;
 }
 
-function controlUiAuthorization(root: unknown, gatewayId: string, uid: string) {
+function controlUiAuthorization(
+  root: unknown,
+  gatewayId: string,
+  access: ResolvedGatewayAccess,
+) {
   const authorization = gatewayAuthorizationFromRootDocument(root, gatewayId);
   if (!authorization) return null;
   const config = authorization.config;
-  if (config.ownerUid !== uid && !config.coOwnerUids.includes(uid)) return null;
+  if (!access.dashboard || !access.brokerProfile) return null;
   const gatewayClass = resolveGatewayClass({
     gatewayClass: config.gatewayClass,
     profile: config.profile ?? undefined,
@@ -156,6 +172,55 @@ function controlUiAuthorization(root: unknown, gatewayId: string, uid: string) {
   return isGatewayClassControlUiAccessEnabled(gatewayClass, config.operatorAccess ?? undefined)
     ? authorization
     : null;
+}
+
+function accessBindingMatches(
+  access: ResolvedGatewayAccess,
+  binding: Pick<ControlSession, "brokerProfile" | "permissionSetIds" | "grantRevision">,
+): boolean {
+  return access.brokerProfile === binding.brokerProfile &&
+    access.grantRevision === binding.grantRevision &&
+    access.permissionSetIds.length === binding.permissionSetIds.length &&
+    access.permissionSetIds.every((id, index) => id === binding.permissionSetIds[index]);
+}
+
+async function storedPrincipalAccess(args: {
+  db: Firestore;
+  tx: Transaction;
+  root: unknown;
+  gatewayId: string;
+  uid: string;
+  now: number;
+}): Promise<ResolvedGatewayAccess | null> {
+  const authorization = gatewayAuthorizationFromRootDocument(args.root, args.gatewayId);
+  if (!authorization) return null;
+  const ownerUid = authorization.config.ownerUid;
+  const workspaceSlug = authorization.config.builderSlug;
+  if (ownerUid === args.uid) {
+    const owner = resolveGatewayPrincipalAccess({
+      gateway: { gatewayId: args.gatewayId, ownerUid, workspaceSlug },
+      uid: args.uid,
+      grant: null,
+      isWorkspaceMember: false,
+      now: args.now,
+    });
+    return owner.kind === "denied" ? null : owner;
+  }
+  if (!workspaceSlug) return null;
+  const [grantSnap, memberSnap] = await Promise.all([
+    args.tx.get(args.db.doc(
+      `${GATEWAY_ACCESS_GRANTS_COLLECTION}/${gatewayAccessGrantId(args.gatewayId, args.uid)}`,
+    )),
+    args.tx.get(args.db.doc(`workspaces/${workspaceSlug}/members/${args.uid}`)),
+  ]);
+  const delegated = resolveGatewayPrincipalAccess({
+    gateway: { gatewayId: args.gatewayId, ownerUid, workspaceSlug },
+    uid: args.uid,
+    grant: grantSnap.exists ? grantSnap.data() : null,
+    isWorkspaceMember: memberSnap.exists,
+    now: args.now,
+  });
+  return delegated.kind === "denied" ? null : delegated;
 }
 
 function isReadyLiveServingRevision(
@@ -190,8 +255,20 @@ function parseSession(
   const item = record(value);
   if (!item) return null;
   const uid = boundedString(item.uid, 128);
+  const profile = item.brokerProfile === "native-owner" || item.brokerProfile === "native-co-owner" ||
+    item.brokerProfile === "delegated-config" || item.brokerProfile === "delegated-read"
+    ? item.brokerProfile
+    : null;
+  const ids = Array.isArray(item.permissionSetIds) && item.permissionSetIds.length === 0
+    ? []
+    : permissionSetIds(item.permissionSetIds);
+  const ownerBinding = profile === "native-owner" && ids?.length === 0 && item.grantRevision === null;
+  const delegateBinding = profile !== "native-owner" && ids !== null &&
+    Number.isSafeInteger(item.grantRevision) && (item.grantRevision as number) >= 1;
   if (
     !uid ||
+    !profile ||
+    (!ownerBinding && !delegateBinding) ||
     item.gatewayId !== gatewayId ||
     item.revisionId !== revisionId ||
     typeof item.expiresAt !== "number" ||
@@ -200,7 +277,15 @@ function parseSession(
   ) {
     return null;
   }
-  return { uid, gatewayId, revisionId, expiresAt: item.expiresAt };
+  return {
+    uid,
+    gatewayId,
+    revisionId,
+    brokerProfile: profile,
+    permissionSetIds: ids!,
+    grantRevision: ownerBinding ? null : item.grantRevision as number,
+    expiresAt: item.expiresAt,
+  };
 }
 
 function parseAuditEvent(value: unknown): AuditEvent | null {
@@ -277,7 +362,18 @@ async function sessionAccessInTransaction(args: {
   );
   if (!session) return { kind: "session-invalid" };
   const root = rootSnap.data();
-  const authorization = controlUiAuthorization(root, args.gatewayId, session.uid);
+  const principal = await storedPrincipalAccess({
+    db: args.db,
+    tx: args.tx,
+    root,
+    gatewayId: args.gatewayId,
+    uid: session.uid,
+    now: args.now,
+  });
+  if (!principal || !accessBindingMatches(principal, session)) {
+    return { kind: CAPABILITY_DISABLED };
+  }
+  const authorization = controlUiAuthorization(root, args.gatewayId, principal);
   if (!authorization) return { kind: CAPABILITY_DISABLED };
   const ownerUid = authorization.config.ownerUid;
   if (typeof ownerUid !== "string") return { kind: ASSIGNMENT_MISSING };
@@ -543,12 +639,18 @@ async function redeemAttemptInTransaction(
       return { kind: "session-conflict" };
     }
     const root = rootSnap.data();
-    const authorization = controlUiAuthorization(
+    const principal = await storedPrincipalAccess({
+      db: context.db,
+      tx,
       root,
-      authenticated.bound.gatewayId,
-      inspected.uid,
-    );
-    if (!authorization) {
+      gatewayId: authenticated.bound.gatewayId,
+      uid: inspected.uid,
+      now: attemptAt,
+    });
+    const authorization = principal
+      ? controlUiAuthorization(root, authenticated.bound.gatewayId, principal)
+      : null;
+    if (!authorization || !principal || !accessBindingMatches(principal, inspected)) {
       setRedeemAudit(context, tx, {
         ...baseAudit,
         uid: inspected.uid,
@@ -598,6 +700,9 @@ async function redeemAttemptInTransaction(
       uid: inspected.uid,
       gatewayId: authenticated.bound.gatewayId,
       revisionId,
+      brokerProfile: inspected.brokerProfile,
+      permissionSetIds: inspected.permissionSetIds,
+      grantRevision: inspected.grantRevision,
       createdAt: attemptAt,
       expiresAt,
       expireAt: Timestamp.fromMillis(expiresAt),

@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { reconcilePlatformInvariants } from "@octogee/core/system-config-invariants";
+import delegatedInventory from "./openclaw-2026.7.1-delegated-dashboard-inventory.json" with { type: "json" };
 
 import {
   OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS,
   evaluateNativeOpenClawControlRpc,
+  evaluateDelegatedOpenClawControlRpc,
+  projectOpenClawHelloForProfile,
   evaluateOpenClawControlRpc,
   installedMethodsFromHello,
   openClawControlRpcPolicyMode,
@@ -127,6 +130,68 @@ describe("OpenClaw Dashboard RPC policy", () => {
       expect(evaluateOpenClawControlRpc(request(method), policyContext()), method)
         .toMatchObject({ allowed: false, category: "forbidden_mutation" });
     }
+  });
+
+  it("gives viewers reads only and Trusted Helpers invariant-safe config without tools", () => {
+    expect(evaluateDelegatedOpenClawControlRpc(
+      request("status"),
+      policyContext(),
+      "delegated-read",
+    )).toMatchObject({ allowed: true, category: "read" });
+    expect(evaluateDelegatedOpenClawControlRpc(
+      request("config.patch", { raw: "{}", baseHash: "hash" }),
+      policyContext(),
+      "delegated-read",
+    )).toMatchObject({ allowed: false, category: "config_mutation" });
+    expect(evaluateDelegatedOpenClawControlRpc(
+      request("tools.invoke", { name: "memory_search", args: { query: "safe" } }),
+      policyContext(),
+      "delegated-config",
+    )).toMatchObject({ allowed: false, category: "tools_invoke" });
+  });
+
+  it("pins the captured delegated Dashboard inventory to the exact runtime contract", () => {
+    expect(delegatedInventory.runtimeVersion).toBe("2026.7.1");
+    expect(delegatedInventory.capturedRoutes).toEqual([
+      "/overview", "/agents", "/channels", "/models", "/config",
+    ]);
+    expect(delegatedInventory.delegatedConfigMethods).toEqual([
+      ...delegatedInventory.delegatedReadMethods,
+      "config.set",
+      "config.apply",
+      "config.patch",
+    ]);
+    for (const method of [
+      ...delegatedInventory.delegatedConfigMethods,
+      ...delegatedInventory.explicitlyExcludedMethods,
+    ]) {
+      expect(OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS).toContain(method);
+    }
+    expect(delegatedInventory.explicitlyExcludedMethods).toEqual(expect.arrayContaining([
+      "tools.invoke", "sessions.list", "terminal.open", "secrets.resolve",
+    ]));
+  });
+
+  it("filters hello discovery to the exact methods honest for each delegated profile", () => {
+    const hello = {
+      type: "res",
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        features: { methods: [...OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS] },
+      },
+    };
+    const viewer = projectOpenClawHelloForProfile(hello, "delegated-read");
+    const helper = projectOpenClawHelloForProfile(hello, "delegated-config");
+    expect((viewer.payload as any).features.methods).toContain("config.get");
+    expect((viewer.payload as any).features.methods).not.toContain("config.patch");
+    expect((helper.payload as any).features.methods).toContain("config.patch");
+    expect((helper.payload as any).features.methods).not.toContain("tools.invoke");
+    expect((helper.payload as any).features.octogeeAccess).toEqual({
+      profile: "delegated-config",
+      canConfigure: true,
+      canUseShell: false,
+    });
   });
 
   it("preserves native baseHash and replacePaths while validating the exact proposed candidate", () => {

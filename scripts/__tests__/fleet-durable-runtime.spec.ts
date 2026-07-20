@@ -32,7 +32,6 @@ function gatewayRoot(
     serviceAccount: null,
     operatorAccess: null,
     ownerUid: null,
-    coOwnerUids: [],
     builderSlug: null,
     openclawOverrides: null,
     modelBrokerLimits: null,

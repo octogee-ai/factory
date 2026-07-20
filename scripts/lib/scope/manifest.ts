@@ -13,6 +13,7 @@ export const JOBS = {
   shared: "shared",
   testHelpers: "test-helpers",
   octogeeChatTools: "octogee-chat-tools",
+  octogeeAccessTools: "octogee-access-tools",
   octogeePublishTools: "octogee-publish-tools",
   octogeeConnectorTools: "octogee-connector-tools",
   octogeeProjectTools: "octogee-project-tools",
@@ -73,6 +74,11 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
   { name: JOBS.tests, dir: "tests", typecheck: TYPECHECK },
   { name: JOBS.acceptance, dir: "acceptance", typecheck: TYPECHECK },
   { name: JOBS.scripts, dir: "scripts", typecheck: "npx tsc --noEmit" },
+  {
+    name: JOBS.octogeeAccessTools,
+    dir: "infra/gateway/extensions/octogee-access-tools",
+    typecheck: 'echo "octogee-access-tools — no tsconfig; vitest is the gate"',
+  },
   {
     name: JOBS.octogeeChatTools,
     dir: "infra/gateway/extensions/octogee-chat-tools",
@@ -142,6 +148,10 @@ export const OWNERSHIP: readonly Ownership[] = [
   { dir: "tests/", jobs: [JOBS.tests] },
   { dir: "acceptance/", jobs: [JOBS.acceptance] },
   { dir: "scripts/", jobs: [JOBS.scripts, JOBS.customerLifecycleEmulator] },
+  {
+    dir: "infra/gateway/extensions/octogee-access-tools/",
+    jobs: [JOBS.octogeeAccessTools],
+  },
   {
     dir: "infra/gateway/extensions/octogee-chat-tools/",
     jobs: [JOBS.octogeeChatTools],

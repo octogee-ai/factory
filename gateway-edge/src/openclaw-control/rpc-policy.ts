@@ -3,7 +3,9 @@ import {
   type SystemConfigInvariantContext,
 } from "@octogee/core/system-config-invariants";
 import JSON5 from "json5";
+import type { OpenClawBrokerProfile } from "@octogee/core/gateway-principal-access";
 import advertisedMethods from "./openclaw-2026.7.1-advertised-methods.json" with { type: "json" };
+import delegatedInventory from "./openclaw-2026.7.1-delegated-dashboard-inventory.json" with { type: "json" };
 
 export const OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS = Object.freeze(
   advertisedMethods as readonly string[],
@@ -75,6 +77,7 @@ const READ_METHODS = new Set([
 ]);
 
 const CONFIG_MUTATION_METHODS = new Set(["config.set", "config.apply", "config.patch"]);
+const DELEGATED_READ_METHODS = new Set(delegatedInventory.delegatedReadMethods);
 const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
 const ARRAY_IDENTITY_KEYS = ["id", "agentId", "accountId", "key"] as const;
@@ -395,6 +398,43 @@ export function evaluateNativeOpenClawControlRpc(
   else if (method === "tools.invoke") category = "tools_invoke";
   else if (READ_METHODS.has(method)) category = "read";
   return { allowed: true, category, outbound: structuredClone(request) };
+}
+
+export function evaluateDelegatedOpenClawControlRpc(
+  frame: unknown,
+  context: OpenClawControlRpcPolicyContext,
+  profile: "delegated-read" | "delegated-config",
+): OpenClawControlRpcDecision {
+  const decision = evaluateOpenClawControlRpc(frame, context);
+  if (!decision.allowed) return decision;
+  const request = record(frame);
+  const method = typeof request?.method === "string" ? request.method : "";
+  if (decision.category === "read" && DELEGATED_READ_METHODS.has(method)) return decision;
+  if (profile === "delegated-config" && decision.category === "config_mutation") return decision;
+  return { allowed: false, category: decision.category, reason: "method-unavailable" };
+}
+
+export function projectOpenClawHelloForProfile(
+  frame: Record<string, unknown>,
+  profile: OpenClawBrokerProfile,
+): Record<string, unknown> {
+  const projected = structuredClone(frame);
+  if (profile === "native-owner" || profile === "native-co-owner") return projected;
+  const payload = record(projected.payload);
+  const features = record(payload?.features);
+  if (payload?.type !== "hello-ok" || !Array.isArray(features?.methods)) return projected;
+  const allowed = profile === "delegated-config"
+    ? new Set([...DELEGATED_READ_METHODS, ...CONFIG_MUTATION_METHODS])
+    : DELEGATED_READ_METHODS;
+  features.methods = features.methods.filter(
+    (method): method is string => typeof method === "string" && allowed.has(method),
+  );
+  features.octogeeAccess = {
+    profile,
+    canConfigure: profile === "delegated-config",
+    canUseShell: false,
+  };
+  return projected;
 }
 
 export function openClawConfigSnapshotFromGetResponse(

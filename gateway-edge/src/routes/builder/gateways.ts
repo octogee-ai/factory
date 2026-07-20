@@ -26,6 +26,13 @@ import {
   OPENCLAW_CONTROL_TICKETS_COLLECTION,
   createOpenClawControlTicket,
 } from "@octogee/core/openclaw-control-tickets";
+import {
+  GATEWAY_ACCESS_GRANTS_COLLECTION,
+  gatewayAccessGrantId,
+  resolveGatewayPrincipalAccess,
+  type GatewayPrincipalAccess,
+  type ResolvedGatewayAccess,
+} from "@octogee/core/gateway-principal-access";
 import { userAssignmentMatchesGateway } from "@octogee/core/assigned-roster";
 import { isOpenClawControlRevisionRuntimeReady } from "../../openclaw-control/runtime-ready.js";
 
@@ -46,7 +53,7 @@ const openClawTicketRateLimit = rateLimit({
 
 function builderViewOf(
   authorization: Extract<GatewayAuthorization, { kind: "durable" }>,
-  via: "owner" | "co-owner",
+  access: ResolvedGatewayAccess,
   imageTag: string | undefined,
   heartbeat: Record<string, unknown> | null,
   isCurrentAssignment: boolean,
@@ -73,25 +80,69 @@ function builderViewOf(
     imageProfile,
     desiredStatus: gateway.desiredStatus,
     imageTag,
-    shellsEnabled: isGatewayClassShellAccessEnabled(gatewayClass, config.operatorAccess ?? undefined),
-    controlUiEnabled: isGatewayClassControlUiAccessEnabled(
+    shellsEnabled: access.shell && isGatewayClassShellAccessEnabled(
+      gatewayClass,
+      config.operatorAccess ?? undefined,
+    ),
+    controlUiEnabled: access.dashboard && isGatewayClassControlUiAccessEnabled(
       gatewayClass,
       config.operatorAccess ?? undefined,
     ),
     isCurrentAssignment,
     ...(configStatus ? { configStatus } : {}),
-    via,
+    via: access.kind === "owner"
+      ? "owner"
+      : access.permissionSetIds.includes("co-owner.v1")
+        ? "co-owner"
+        : access.permissionSetIds.includes("trusted-helper.v1")
+          ? "trusted-helper"
+          : access.permissionSetIds.includes("agent-viewer.v1")
+            ? "agent-viewer"
+            : "shell-only",
+    permissionSetIds: access.permissionSetIds,
+    capabilities: {
+      dashboard: access.dashboard,
+      config: access.config,
+      shell: access.shell,
+      workspaceManagement: access.workspaceManagement,
+    },
+    grantRevision: access.grantRevision,
+    accessExpiresAt: access.expiresAt === null
+      ? null
+      : new Date(access.expiresAt).toISOString(),
   };
 }
 
-function gatewayAccessVia(
-  ownerUid: string | null,
-  coOwnerUids: readonly string[],
+async function principalAccess(
+  authorization: Extract<GatewayAuthorization, { kind: "durable" }>,
   uid: string,
-): "owner" | "co-owner" | null {
-  if (ownerUid === uid) return "owner";
-  if (coOwnerUids.includes(uid)) return "co-owner";
-  return null;
+  get: (path: string) => Promise<{ exists: boolean; data(): unknown }>,
+  now = Date.now(),
+): Promise<GatewayPrincipalAccess> {
+  const { gatewayId } = authorization.gateway;
+  const workspaceSlug = authorization.config.builderSlug;
+  const ownerUid = authorization.config.ownerUid;
+  if (ownerUid === uid) {
+    return resolveGatewayPrincipalAccess({
+      gateway: { gatewayId, ownerUid, workspaceSlug },
+      uid,
+      grant: null,
+      isWorkspaceMember: false,
+      now,
+    });
+  }
+  if (!workspaceSlug) return { kind: "denied", reason: "gateway_unowned" };
+  const [grantSnap, membershipSnap] = await Promise.all([
+    get(`${GATEWAY_ACCESS_GRANTS_COLLECTION}/${gatewayAccessGrantId(gatewayId, uid)}`),
+    get(`workspaces/${workspaceSlug}/members/${uid}`),
+  ]);
+  return resolveGatewayPrincipalAccess({
+    gateway: { gatewayId, ownerUid, workspaceSlug },
+    uid,
+    grant: grantSnap.exists ? grantSnap.data() : null,
+    isWorkspaceMember: membershipSnap.exists,
+    now,
+  });
 }
 
 router.get("/gateways/me", async (req: Request, res: Response, next: NextFunction) => {
@@ -99,17 +150,29 @@ router.get("/gateways/me", async (req: Request, res: Response, next: NextFunctio
     const uid = req.uid!;
     const seen = new Set<string>();
     const out: BuilderGatewayListEntry[] = [];
-    const [ownedSnap, coOwnedSnap] = await Promise.all([
+    const [ownedSnap, grantSnap] = await Promise.all([
       db.collection("gateways").where("ownerUid", "==", uid).get(),
-      db.collection("gateways").where("coOwnerUids", "array-contains", uid).get(),
+      db.collection(GATEWAY_ACCESS_GRANTS_COLLECTION)
+        .where("granteeUid", "==", uid)
+        .where("state", "==", "active")
+        .get(),
     ]);
-    for (const doc of [...ownedSnap.docs, ...coOwnedSnap.docs]) {
+    const delegatedRoots = await Promise.all(grantSnap.docs.map(async (grant) => {
+      const gatewayId = grant.data().gatewayId;
+      return typeof gatewayId === "string" ? db.doc(`gateways/${gatewayId}`).get() : null;
+    }));
+    for (const doc of [...ownedSnap.docs, ...delegatedRoots.filter((item) => item?.exists)]) {
+      if (!doc) continue;
       const authorization = gatewayAuthorizationFromRootDocument(doc.data(), doc.id);
       if (!authorization) continue;
-      const { ownerUid, coOwnerUids } = authorization.config;
-      const via = gatewayAccessVia(ownerUid, coOwnerUids, uid);
-      if (!via || seen.has(authorization.gateway.gatewayId)) continue;
+      const access = await principalAccess(
+        authorization,
+        uid,
+        (path) => db.doc(path).get(),
+      );
+      if (access.kind === "denied" || seen.has(authorization.gateway.gatewayId)) continue;
       seen.add(authorization.gateway.gatewayId);
+      const ownerUid = authorization.config.ownerUid;
       const ownerAssignmentPromise = typeof ownerUid === "string"
         ? db.collection("users").doc(ownerUid).get()
         : Promise.resolve(null);
@@ -129,7 +192,7 @@ router.get("/gateways/me", async (req: Request, res: Response, next: NextFunctio
       );
       out.push(builderViewOf(
         authorization,
-        via,
+        access,
         artifact?.imageTag,
         heartbeat,
         isCurrentAssignment,
@@ -157,13 +220,9 @@ type TicketResult =
 
 function controlUiAccess(
   authorization: Extract<GatewayAuthorization, { kind: "durable" }>,
-  uid: string,
+  access: GatewayPrincipalAccess,
 ): "allowed" | typeof NOT_FOUND | typeof CAPABILITY_DISABLED {
-  if (!gatewayAccessVia(
-    authorization.config.ownerUid,
-    authorization.config.coOwnerUids,
-    uid,
-  )) return NOT_FOUND;
+  if (access.kind === "denied" || !access.dashboard || !access.brokerProfile) return NOT_FOUND;
   const gatewayClass = resolveGatewayClass({
     gatewayClass: authorization.config.gatewayClass,
     profile: authorization.config.profile ?? undefined,
@@ -192,7 +251,16 @@ async function mintOpenClawTicket(gatewayId: string, uid: string): Promise<Ticke
       ? gatewayAuthorizationFromRootDocument(rootSnap.data(), gatewayId)
       : null;
     if (!serving) return { kind: NOT_READY };
-    const access = controlUiAccess(serving, uid);
+    const principal = await principalAccess(
+      serving,
+      uid,
+      async (path) => {
+        const snap = await tx.get(db.doc(path));
+        return { exists: snap.exists, data: () => snap.data() };
+      },
+    );
+    if (principal.kind === "denied" || !principal.brokerProfile) return { kind: NOT_FOUND };
+    const access = controlUiAccess(serving, principal);
     if (access !== "allowed") return { kind: access };
     const ownerUid = serving.config.ownerUid;
     const ownerAssignmentSnap = typeof ownerUid === "string"
@@ -210,7 +278,14 @@ async function mintOpenClawTicket(gatewayId: string, uid: string): Promise<Ticke
       revisionSnap.exists ? revisionSnap.data() : undefined,
       { gatewayId, revisionId },
     )) return { kind: NOT_READY };
-    const minted = createOpenClawControlTicket({ uid, gatewayId, revisionId });
+    const minted = createOpenClawControlTicket({
+      uid,
+      gatewayId,
+      revisionId,
+      brokerProfile: principal.brokerProfile,
+      permissionSetIds: principal.permissionSetIds,
+      grantRevision: principal.grantRevision,
+    });
     tx.set(db.collection(OPENCLAW_CONTROL_TICKETS_COLLECTION).doc(minted.ticketHash), {
       ...minted.document,
       createdAt: FieldValue.serverTimestamp(),
@@ -223,6 +298,9 @@ async function mintOpenClawTicket(gatewayId: string, uid: string): Promise<Ticke
       event: "ticket_mint",
       outcome: "ok",
       reason: "none",
+      brokerProfile: principal.brokerProfile,
+      permissionSetIds: principal.permissionSetIds,
+      grantRevision: principal.grantRevision,
       createdAt: FieldValue.serverTimestamp(),
     });
     return { kind: "minted" as const, minted };
@@ -245,7 +323,12 @@ router.post(
         res.status(404).json({ error: "not-found" });
         return;
       }
-      const access = controlUiAccess(authorization, uid);
+      const principal = await principalAccess(
+        authorization,
+        uid,
+        (path) => db.doc(path).get(),
+      );
+      const access = controlUiAccess(authorization, principal);
       if (access === NOT_FOUND) {
         res.status(404).json({ error: "not-found" });
         return;

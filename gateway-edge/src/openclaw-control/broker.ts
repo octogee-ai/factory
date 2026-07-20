@@ -1,9 +1,17 @@
 import { internalFetch } from "../lib/internal-fetch.js";
+import {
+  permissionSetIds,
+  type GatewayPermissionSetId,
+  type OpenClawBrokerProfile,
+} from "@octogee/core/gateway-principal-access";
 
 export interface OpenClawControlRedemptionResponse {
   uid: string;
   gatewayId: string;
   revisionId: string;
+  brokerProfile: OpenClawBrokerProfile;
+  permissionSetIds: GatewayPermissionSetId[];
+  grantRevision: number | null;
   expiresAt: number;
 }
 
@@ -48,9 +56,18 @@ function boundedIdentifier(value: unknown, maxLength: number): value is string {
 function validRedemptionResponse(value: unknown): value is OpenClawControlRedemptionResponse {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const item = value as Record<string, unknown>;
+  const profile = item.brokerProfile;
+  const ids = Array.isArray(item.permissionSetIds) && item.permissionSetIds.length === 0
+    ? []
+    : permissionSetIds(item.permissionSetIds);
+  const owner = profile === "native-owner" && ids?.length === 0 && item.grantRevision === null;
+  const delegated = (profile === "native-co-owner" || profile === "delegated-config" ||
+    profile === "delegated-read") && ids !== null && Number.isSafeInteger(item.grantRevision) &&
+    (item.grantRevision as number) >= 1;
   return boundedIdentifier(item.uid, 256) &&
     boundedIdentifier(item.gatewayId, 128) &&
     boundedIdentifier(item.revisionId, 128) &&
+    (owner || delegated) &&
     typeof item.expiresAt === "number" &&
     Number.isFinite(item.expiresAt) &&
     item.expiresAt > 0;
@@ -80,6 +97,9 @@ export async function redeemOpenClawControlTicket(args: {
     uid: body.uid,
     gatewayId: body.gatewayId,
     revisionId: body.revisionId,
+    brokerProfile: body.brokerProfile,
+    permissionSetIds: body.permissionSetIds,
+    grantRevision: body.grantRevision,
     expiresAt: body.expiresAt,
   };
 }

@@ -14,6 +14,7 @@ export const OCTOGEE_WORKFLOW_TOOLS = [
   "octogee_project_create",
   "octogee_project_commit",
   "octogee_project_list",
+  "delegated_access",
   "workspace_commit",
   "brave_search",
   "tavily_search",
@@ -27,6 +28,7 @@ export const OCTOGEE_WORKFLOW_TOOLS = [
 const CONNECTOR_TOOLS_PLUGIN = "octogee-connector-tools";
 const PROJECT_TOOLS_PLUGIN = "octogee-project-tools";
 const OPS_TOOLS_PLUGIN = "octogee-ops-tools";
+const ACCESS_TOOLS_PLUGIN = "octogee-access-tools";
 const CODEX_PROFILE = "openai-codex:default";
 const RUNTIME_CODEX_SANDBOX = "danger-full-access";
 const RUNTIME_CODEX_APPROVAL_POLICY = "never";
@@ -130,6 +132,13 @@ function enableOpsTools(config) {
   config.plugins.entries[OPS_TOOLS_PLUGIN].config ??= {};
 }
 
+function enableAccessTools(config) {
+  allowPlugin(config, ACCESS_TOOLS_PLUGIN);
+  config.plugins.entries[ACCESS_TOOLS_PLUGIN] ??= {};
+  config.plugins.entries[ACCESS_TOOLS_PLUGIN].enabled = true;
+  config.plugins.entries[ACCESS_TOOLS_PLUGIN].config ??= {};
+}
+
 function enableRuntimePlugins(config) {
   removePolicyCodexAuthPlaceholder(config);
   enableCodexAppServer(config);
@@ -177,6 +186,7 @@ function applySharedPolicy(config) {
   allowOctogeeWorkflowTools(config);
   enableProjectTools(config);
   enableOpsTools(config);
+  enableAccessTools(config);
   sandboxCodex(config);
   disableConnectorTools(config);
 }
@@ -191,6 +201,7 @@ function applyBuilderPolicy(config) {
   allowOctogeeWorkflowTools(config);
   enableProjectTools(config);
   enableOpsTools(config);
+  enableAccessTools(config);
   enableRuntimePlugins(config);
 }
 

@@ -15,7 +15,6 @@ export interface GatewayMutableConfig {
     serviceAccount: GatewayServiceAccountSpec | null;
     operatorAccess: OperatorGatewayAccessSpec | null;
     ownerUid: string | null;
-    coOwnerUids: string[];
     builderSlug: string | null;
     openclawOverrides: Record<string, unknown> | null;
     modelBrokerLimits: GatewayModelBrokerLimits | null;

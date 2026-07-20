@@ -37,7 +37,6 @@ function gateway(overrides: Partial<DurableGateway> = {}): DurableGateway {
     serviceAccount: null,
     operatorAccess: null,
     ownerUid: null,
-    coOwnerUids: [],
     builderSlug: null,
     openclawOverrides: null,
     modelBrokerLimits: null,

@@ -1,4 +1,9 @@
 import { createHash, randomBytes } from "node:crypto";
+import {
+  permissionSetIds,
+  type GatewayPermissionSetId,
+  type OpenClawBrokerProfile,
+} from "./gateway-principal-access.js";
 
 export const OPENCLAW_CONTROL_TICKETS_COLLECTION = "openclawControlTickets";
 export const OPENCLAW_CONTROL_AUDIT_COLLECTION = "openclawControlAudit";
@@ -8,6 +13,9 @@ export interface OpenClawControlTicketDocument {
   uid: string;
   gatewayId: string;
   revisionId: string;
+  brokerProfile: OpenClawBrokerProfile;
+  permissionSetIds: GatewayPermissionSetId[];
+  grantRevision: number | null;
   expiresAt: number;
   createdAt: unknown;
   redeemedAt?: number;
@@ -17,6 +25,9 @@ export interface OpenClawControlRedemption {
   uid: string;
   gatewayId: string;
   revisionId: string;
+  brokerProfile: OpenClawBrokerProfile;
+  permissionSetIds: GatewayPermissionSetId[];
+  grantRevision: number | null;
   expiresAt: number;
 }
 
@@ -43,6 +54,9 @@ export function createOpenClawControlTicket(args: {
   uid: string;
   gatewayId: string;
   revisionId: string;
+  brokerProfile: OpenClawBrokerProfile;
+  permissionSetIds: GatewayPermissionSetId[];
+  grantRevision: number | null;
   now?: number;
   random?: (size: number) => Buffer;
 }): { ticket: string; ticketHash: string; document: OpenClawControlTicketDocument } {
@@ -55,6 +69,9 @@ export function createOpenClawControlTicket(args: {
       uid: args.uid,
       gatewayId: args.gatewayId,
       revisionId: args.revisionId,
+      brokerProfile: args.brokerProfile,
+      permissionSetIds: args.permissionSetIds,
+      grantRevision: args.grantRevision,
       expiresAt: now + OPENCLAW_CONTROL_TICKET_TTL_MS,
       createdAt: now,
     },
@@ -73,6 +90,9 @@ export function redeemableOpenClawControlTicket(args: {
         uid: inspected.uid,
         gatewayId: inspected.gatewayId,
         revisionId: inspected.revisionId,
+        brokerProfile: inspected.brokerProfile,
+        permissionSetIds: inspected.permissionSetIds,
+        grantRevision: inspected.grantRevision,
         expiresAt: inspected.expiresAt,
       }
     : null;
@@ -82,6 +102,9 @@ interface ParsedOpenClawControlTicket {
   uid: string;
   gatewayId: string;
   revisionId: string;
+  brokerProfile: OpenClawBrokerProfile;
+  permissionSetIds: GatewayPermissionSetId[];
+  grantRevision: number | null;
   expiresAt: number;
   redeemedAt: unknown;
 }
@@ -94,20 +117,53 @@ function finiteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+function brokerProfile(value: unknown): OpenClawBrokerProfile | null {
+  return value === "native-owner" || value === "native-co-owner" ||
+    value === "delegated-config" || value === "delegated-read"
+    ? value
+    : null;
+}
+
 function parseOpenClawControlTicket(
   document: Record<string, unknown> | undefined,
 ): ParsedOpenClawControlTicket | null {
   if (!document) return null;
-  const { uid, gatewayId, revisionId, expiresAt, redeemedAt } = document;
+  const {
+    uid,
+    gatewayId,
+    revisionId,
+    brokerProfile: rawProfile,
+    permissionSetIds: rawPermissionSetIds,
+    grantRevision,
+    expiresAt,
+    redeemedAt,
+  } = document;
+  const profile = brokerProfile(rawProfile);
+  const ids = rawPermissionSetIds === undefined ? null : permissionSetIds(rawPermissionSetIds);
+  const ownerBinding = profile === "native-owner" && Array.isArray(rawPermissionSetIds) &&
+    rawPermissionSetIds.length === 0 && grantRevision === null;
+  const delegateBinding = profile !== "native-owner" && ids !== null &&
+    Number.isSafeInteger(grantRevision) && (grantRevision as number) >= 1;
   if (
     !nonEmptyString(uid) ||
     !nonEmptyString(gatewayId) ||
     !nonEmptyString(revisionId) ||
-    !finiteNumber(expiresAt)
+    !finiteNumber(expiresAt) ||
+    !profile ||
+    (!ownerBinding && !delegateBinding)
   ) {
     return null;
   }
-  return { uid, gatewayId, revisionId, expiresAt, redeemedAt };
+  return {
+    uid,
+    gatewayId,
+    revisionId,
+    brokerProfile: profile,
+    permissionSetIds: ownerBinding ? [] : ids!,
+    grantRevision: ownerBinding ? null : grantRevision as number,
+    expiresAt,
+    redeemedAt,
+  };
 }
 
 export function inspectOpenClawControlTicket(args: {
@@ -137,6 +193,9 @@ export function inspectOpenClawControlTicket(args: {
     uid: ticket.uid,
     gatewayId: args.gatewayId,
     revisionId: args.revisionId,
+    brokerProfile: ticket.brokerProfile,
+    permissionSetIds: ticket.permissionSetIds,
+    grantRevision: ticket.grantRevision,
     expiresAt: ticket.expiresAt,
   };
 }

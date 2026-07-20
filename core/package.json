@@ -156,6 +156,10 @@
       "types": "./dist/gateway-live-release.d.ts",
       "default": "./dist/gateway-live-release.js"
     },
+    "./gateway-principal-access": {
+      "types": "./dist/gateway-principal-access.d.ts",
+      "default": "./dist/gateway-principal-access.js"
+    },
     "./gateway-rpc": {
       "types": "./dist/gateway-rpc.d.ts",
       "default": "./dist/gateway-rpc.js"
@@ -437,6 +441,9 @@
       ],
       "gateway-live-release": [
         "dist/gateway-live-release.d.ts"
+      ],
+      "gateway-principal-access": [
+        "dist/gateway-principal-access.d.ts"
       ],
       "gateway-retirement-claim": [
         "dist/gateway-retirement-claim.d.ts"

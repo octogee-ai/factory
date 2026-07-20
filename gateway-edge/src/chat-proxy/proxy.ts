@@ -1036,7 +1036,7 @@ export async function attachBuilderShellRoute(
     );
     return;
   }
-  const { buildRedeemFetcher } = await import("./builder-shell/redeem.js");
+  const { buildRedeemFetcher, buildSessionAuthorizer } = await import("./builder-shell/redeem.js");
   const { buildConnectUpstream } = await import("./builder-shell/upstream.js");
   const { attachBuilderShellUpgrade } = await import("./builder-shell/upgrade.js");
   const router = (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter;
@@ -1070,6 +1070,10 @@ export async function attachBuilderShellRoute(
       }),
       routeOpts.upgradeGate ?? null,
     ),
+    authorize: buildSessionAuthorizer({
+      baseUrl: gatewayEdgeUrl,
+      ...redeemAuth,
+    }),
     connectUpstream: buildConnectUpstream({
       namespace,
       internalServiceKey: upstreamInternalServiceKey,

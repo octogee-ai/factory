@@ -47,7 +47,6 @@ export interface GatewayMutableConfig {
   serviceAccount: GatewayServiceAccountSpec | null;
   operatorAccess: OperatorGatewayAccessSpec | null;
   ownerUid: string | null;
-  coOwnerUids: string[];
   builderSlug: string | null;
   openclawOverrides: Record<string, unknown> | null;
   modelBrokerLimits: GatewayModelBrokerLimits | null;
@@ -189,7 +188,6 @@ function hasLockedTrialOperatorRuntime(value: Record<string, unknown>): boolean 
     value.serviceAccountName.startsWith(GATEWAY_SERVICE_ACCOUNT_PREFIX) &&
     isCanonicalLockedServiceAccount(value.serviceAccount) &&
     isCanonicalLockedOperatorAccess(value.operatorAccess) &&
-    Array.isArray(value.coOwnerUids) && value.coOwnerUids.length === 0 &&
     value.openclawOverrides === null &&
     value.modelBrokerLimits === null &&
     value.preemption === null;
@@ -243,7 +241,10 @@ export function isBareGatewayId(value: unknown): value is string {
 // eslint-disable-next-line complexity
 export function isGatewayMutableConfig(value: unknown): value is GatewayMutableConfig {
   if (!isRecord(value) || value.configSchemaVersion !== GATEWAY_CONFIG_SCHEMA_VERSION) return false;
-  if (Object.prototype.hasOwnProperty.call(value, "byosub")) return false;
+  if (
+    Object.prototype.hasOwnProperty.call(value, "byosub") ||
+    Object.prototype.hasOwnProperty.call(value, "coOwnerUids")
+  ) return false;
   return (
     (value.profile === null || isGatewayProfile(value.profile)) &&
     isGatewayClass(value.gatewayClass) &&
@@ -256,7 +257,6 @@ export function isGatewayMutableConfig(value: unknown): value is GatewayMutableC
     isNullableServiceAccount(value.serviceAccount) &&
     isNullableOperatorAccess(value.operatorAccess) &&
     isNullableString(value.ownerUid) &&
-    isStringArray(value.coOwnerUids) &&
     isNullableString(value.builderSlug) &&
     isNullableRecord(value.openclawOverrides) &&
     isNullableModelBrokerLimits(value.modelBrokerLimits) &&

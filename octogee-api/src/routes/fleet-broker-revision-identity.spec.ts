@@ -73,7 +73,6 @@ function durableGatewayState(overrides: Record<string, unknown> = {}): Record<st
     serviceAccount: null,
     operatorAccess: null,
     ownerUid: null,
-    coOwnerUids: [],
     builderSlug: null,
     openclawOverrides: null,
     modelBrokerLimits: null,

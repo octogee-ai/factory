@@ -64,7 +64,6 @@ async function seedDedicatedGateway({
     serviceAccount: null,
     operatorAccess: null,
     ownerUid: "caller-uid",
-    coOwnerUids: [],
     builderSlug: "alice",
     openclawOverrides: null,
     modelBrokerLimits: null,

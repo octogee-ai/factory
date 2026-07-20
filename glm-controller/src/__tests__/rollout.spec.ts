@@ -25,7 +25,6 @@ function mkPayload(overrides: Partial<ReleasePayload> = {}): ReleasePayload {
     serviceAccount: null,
     operatorAccess: null,
     ownerUid: null,
-    coOwnerUids: [],
     builderSlug: null,
     openclawOverrides: null,
     modelBrokerLimits: null,

@@ -40,7 +40,6 @@ export interface GatewayDesiredState {
     } | null;
     openclawOverrides?: Record<string, unknown>;
     ownerUid?: string;
-    coOwnerUids?: string[];
     builderSlug?: string;
     sizingTier?: SizingTier;
     computeClass?: string;
@@ -140,7 +139,6 @@ export declare function resolveUserGatewayShellState(data: {
     profile?: unknown;
     imageProfile?: unknown;
     ownerUid?: unknown;
-    coOwnerUids?: unknown;
     operatorAccess?: OperatorGatewayAccessSpec;
 } | undefined, uid: string): {
     gatewayProfile: GatewayProfile;

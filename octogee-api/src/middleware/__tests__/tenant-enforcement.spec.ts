@@ -118,6 +118,9 @@ function app(opts: {
   a.post("/internal/openclaw/previews/authorize", enforcement, handler);
   a.post("/internal/agent-projects/create", enforcement, handler);
   a.post("/internal/agent-projects/list", enforcement, handler);
+  a.get("/internal/agent-access/context", enforcement, handler);
+  a.post("/internal/agent-access/prepare", enforcement, handler);
+  a.get("/internal/agent-access/approvals/:approvalId/status", enforcement, handler);
   a.post("/internal/fleet/agent/web-search", enforcement, handler);
   a.post("/internal/fleet/agent/web-extract", enforcement, handler);
   a.post("/internal/fleet/configured-builder-bootstrap", enforcement, handler);
@@ -181,7 +184,6 @@ function configuredBender(overrides: Record<string, unknown> = {}) {
     serviceAccount: null,
     operatorAccess: null,
     ownerUid: "owner-bender",
-    coOwnerUids: [],
     builderSlug: "victim",
     openclawOverrides: null,
     modelBrokerLimits: null,
@@ -353,6 +355,23 @@ describe("tenant enforcement middleware", () => {
 
     expect(stale.status).toBe(200);
     expect(foreignGateway.status).toBe(403);
+  });
+
+  it("lets the delegated-access broker perform its own assigned-agent authorization", async () => {
+    const target = app({ boundTenant: BENDER });
+    const context = await request(target)
+      .get("/internal/agent-access/context")
+      .query({ agentId: "octogee-alice-coach" });
+    const prepare = await request(target)
+      .post("/internal/agent-access/prepare")
+      .send({ agentId: "octogee-alice-coach", granteeUid: "victim" });
+    const status = await request(target)
+      .get("/internal/agent-access/approvals/approval-1/status")
+      .query({ agentId: "octogee-alice-coach" });
+
+    expect(context.status).toBe(200);
+    expect(prepare.status).toBe(200);
+    expect(status.status).toBe(200);
   });
 
   it("lets the byosub flow broker perform its own roster authorization for new flows", async () => {

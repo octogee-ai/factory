@@ -152,8 +152,8 @@ schemas and detail; ask `octogee_ask_ops` when unsure.
 - Projects: `octogee_project_create`, `octogee_project_list`, `octogee_project_commit`.
 - Deliver: `workspace_commit`; `preview_start`, `preview_list`, `preview_stop`;
   `octogee_publish`.
-- Account: `octogee_status`; `octogee_connector_materialize` only when exposed on a
-  dedicated gateway.
+- Account: `octogee_status`; `delegated_access` for owner-requested temporary access;
+  `octogee_connector_materialize` only when exposed on a dedicated gateway.
 - Dedicated runtime: `exec`, `process`, `sessions_spawn`, `sessions_yield`, `subagents`
   only when exposed; use for commands or genuinely parallel work.
 

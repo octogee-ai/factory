@@ -30,18 +30,17 @@ import {
 } from "./connect-rewrite.js";
 import {
   evaluateNativeOpenClawControlRpc,
-  evaluateOpenClawControlRpc,
+  evaluateDelegatedOpenClawControlRpc,
   installedMethodsFromHello,
   isOpenClawControlMutation,
   openClawConfigSnapshotFromGetResponse,
-  openClawControlRpcPolicyMode,
   openClawControlPolicyError,
   openClawControlTimeoutError,
   pinnedOpenClawRuntimeMatches,
+  projectOpenClawHelloForProfile,
   type OpenClawConfigSnapshot,
   type OpenClawControlRpcDecision,
   type OpenClawControlRpcCategory,
-  type OpenClawControlRpcPolicyMode,
 } from "./rpc-policy.js";
 import {
   OpenClawControlResourceLimiter,
@@ -194,7 +193,7 @@ function securityHeaders(res: Response | http.ServerResponse, frameAncestor: str
     `${CSP_BEFORE_FRAME_ANCESTORS} ${frameAncestor}${CSP_AFTER_FRAME_ANCESTORS}`,
   );
   res.setHeader("cross-origin-opener-policy", "same-origin");
-  res.setHeader("cross-origin-resource-policy", "same-origin");
+  res.setHeader("cross-origin-resource-policy", "same-site");
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader("x-content-type-options", "nosniff");
   res.removeHeader("x-frame-options");
@@ -357,6 +356,9 @@ export function createOpenClawControlHttpRouter(
         uid: redeemed.uid,
         gatewayId,
         revisionId,
+        brokerProfile: redeemed.brokerProfile,
+        permissionSetIds: redeemed.permissionSetIds,
+        grantRevision: redeemed.grantRevision,
         absoluteExpiresAt: redeemed.expiresAt,
       });
       securityHeaders(res, frameAncestor);
@@ -580,7 +582,6 @@ function browserRpcFrame(data: RawData): BrowserRpcFrame | null {
 class OpenClawControlSocketBridge {
   private readonly identity: OpenClawControlResourceIdentity;
   private readonly metricsIdentity: OpenClawControlMetricIdentity;
-  private readonly rpcPolicyMode: OpenClawControlRpcPolicyMode;
   private activeSession: OpenClawControlSession;
   private gatewayToken = "";
   private upstream?: WebSocket;
@@ -604,7 +605,6 @@ class OpenClawControlSocketBridge {
       sessionId: args.session.sessionId,
     };
     this.metricsIdentity = metricIdentity(args.env);
-    this.rpcPolicyMode = openClawControlRpcPolicyMode(args.env);
   }
 
   async start(): Promise<void> {
@@ -858,14 +858,20 @@ class OpenClawControlSocketBridge {
     this.recordUpstreamResult(frame, request);
     this.refreshConfigAfterMutation(frame, request);
     if (!request?.internal && this.args.browser.readyState === WebSocket.OPEN) {
-      this.args.browser.send(sanitizeOpenClawControlServerFrame(frame, [this.gatewayToken]));
+      const projected = projectOpenClawHelloForProfile(
+        frame,
+        this.activeSession.brokerProfile,
+      );
+      this.args.browser.send(sanitizeOpenClawControlServerFrame(projected, [this.gatewayToken]));
     }
   }
 
   private acceptInstalledMethods(frame: Record<string, unknown>, id: string | undefined): boolean {
     const methods = installedMethodsFromHello(frame);
     if (!methods) return true;
-    if (this.rpcPolicyMode === "sanitized" && !pinnedOpenClawRuntimeMatches(methods)) {
+    const delegated = this.activeSession.brokerProfile === "delegated-config" ||
+      this.activeSession.brokerProfile === "delegated-read";
+    if (delegated && !pinnedOpenClawRuntimeMatches(methods)) {
       if (this.args.browser.readyState === WebSocket.OPEN) {
         this.args.browser.send(openClawControlPolicyError({ id, type: "req" }, "runtime-drift"));
       }
@@ -916,14 +922,39 @@ class OpenClawControlSocketBridge {
     }
     if (this.rejectQuarantined(frame) || this.rejectPending(frame)) return;
     if (frame.method === "connect") {
-      this.forwardConnect(frame);
+      this.authorizeAndForward(frame);
       return;
     }
     if (!this.installedMethods) {
       this.args.browser.send(openClawControlPolicyError(frame, "connect-state"));
       return;
     }
-    this.evaluateAndForward(frame);
+    this.authorizeAndForward(frame);
+  }
+
+  private authorizeAndForward(frame: BrowserRpcFrame): void {
+    this.admittingIds.add(frame.id);
+    void this.args.authorize({
+      sessionId: this.activeSession.sessionId,
+      gatewayId: this.activeSession.gatewayId,
+      revisionId: this.activeSession.revisionId,
+      env: this.args.env,
+    }).then((allowed) => {
+      this.admittingIds.delete(frame.id);
+      this.args.metrics?.session(this.metricsIdentity, "authorize", allowed ? "ok" : "denied");
+      if (this.closing) return;
+      if (!allowed) {
+        this.args.sessions.revoke(this.activeSession.sessionId);
+        this.audit("rpc_deny", "unknown", "denied", "capability-revoked");
+        this.closeBoth("capability-revoked");
+        return;
+      }
+      if (frame.method === "connect") this.forwardConnect(frame);
+      else this.evaluateAndForward(frame);
+    }).catch(() => {
+      this.admittingIds.delete(frame.id);
+      this.closeBoth("capability-unavailable");
+    });
   }
 
   private rejectQuarantined(frame: BrowserRpcFrame): boolean {
@@ -970,14 +1001,19 @@ class OpenClawControlSocketBridge {
   }
 
   private evaluateAndForward(frame: BrowserRpcFrame): void {
-    const decision = this.rpcPolicyMode === "native"
+    const profile = this.activeSession.brokerProfile;
+    const decision = profile === "native-owner" || profile === "native-co-owner"
       ? evaluateNativeOpenClawControlRpc(frame, { installedMethods: this.installedMethods! })
-      : evaluateOpenClawControlRpc(frame, {
-        installedMethods: this.installedMethods!,
-        invariantContext: invariantContext(this.args.env, this.activeSession.gatewayId),
-        currentConfig: this.currentConfig,
-        configFrozen: configFrozen(this.args.env),
-      });
+      : evaluateDelegatedOpenClawControlRpc(
+        frame,
+        {
+          installedMethods: this.installedMethods!,
+          invariantContext: invariantContext(this.args.env, this.activeSession.gatewayId),
+          currentConfig: this.currentConfig,
+          configFrozen: configFrozen(this.args.env),
+        },
+        profile,
+      );
     if (!decision.allowed) {
       this.deny(frame, decision, decision.reason ?? "method-denied");
       return;

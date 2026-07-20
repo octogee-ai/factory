@@ -56,8 +56,6 @@ export interface GatewayDesiredState {
 
   ownerUid?: string;
 
-  coOwnerUids?: string[];
-
   builderSlug?: string;
 
   sizingTier?: SizingTier;
@@ -302,7 +300,6 @@ export function resolveUserGatewayShellState(
         profile?: unknown;
         imageProfile?: unknown;
         ownerUid?: unknown;
-        coOwnerUids?: unknown;
         operatorAccess?: OperatorGatewayAccessSpec;
       }
     | undefined,
@@ -313,8 +310,7 @@ export function resolveUserGatewayShellState(
     profile: isGatewayProfile(data?.profile) ? data.profile : undefined,
     imageProfile: isGatewayProfile(data?.imageProfile) ? data.imageProfile : undefined,
   });
-  const coOwnerUids = Array.isArray(data?.coOwnerUids) ? (data.coOwnerUids as unknown[]) : [];
-  const userOwns = data?.ownerUid === uid || coOwnerUids.includes(uid);
+  const userOwns = data?.ownerUid === uid;
   return {
     gatewayProfile: gatewayClass === "operator" ? "operator" : "standard",
     shellsEnabled: userOwns && isGatewayClassShellAccessEnabled(gatewayClass, data?.operatorAccess),

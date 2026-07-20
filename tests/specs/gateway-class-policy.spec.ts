@@ -14,6 +14,7 @@ const workflowTools = [
   "octogee_project_create",
   "octogee_project_commit",
   "octogee_project_list",
+  "delegated_access",
   "workspace_commit",
   "brave_search",
   "tavily_search",
@@ -76,12 +77,14 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "codex",
       "octogee-project-tools",
       "octogee-ops-tools",
+      "octogee-access-tools",
     ]);
     expect(out.plugins.entries.codex.config.appServer.sandbox).toBe("workspace-write");
     expect(out.plugins.entries.codex.config.appServer.approvalPolicy).toBe("never");
     expect(out.plugins.entries["octogee-connector-tools"].enabled).toBe(false);
     expect(out.plugins.entries["octogee-project-tools"].enabled).toBe(true);
     expect(out.plugins.entries["octogee-ops-tools"]).toEqual({ enabled: true, config: {} });
+    expect(out.plugins.entries["octogee-access-tools"]).toEqual({ enabled: true, config: {} });
   });
 
   it("shared class keeps the default Codex plugin disabled without disabled-plugin config", () => {
@@ -94,6 +97,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
 
     expect(out.plugins.entries.codex).toEqual({ enabled: false });
+    expect(out.plugins.entries["octogee-access-tools"]).toEqual({ enabled: true, config: {} });
   });
 
   it("builder class enables OpenClaw exec/process/subagents plus runtime plugins", () => {
@@ -141,6 +145,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "octogee-connector-tools",
       "octogee-project-tools",
       "octogee-ops-tools",
+      "octogee-access-tools",
     ]);
     expect(out.plugins.entries.codex.enabled).toBe(true);
     expect(out.plugins.entries.codex.config.appServer).toEqual({
@@ -156,6 +161,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       config: {},
     });
     expect(out.plugins.entries["octogee-ops-tools"]).toEqual({ enabled: true, config: {} });
+    expect(out.plugins.entries["octogee-access-tools"]).toEqual({ enabled: true, config: {} });
     expect(out.auth.profiles["openai-codex:default"]).toBeUndefined();
     expect(out.agents.defaults.models["openai/gpt-5.5"]).toEqual({
       agentRuntime: { id: "codex" },
