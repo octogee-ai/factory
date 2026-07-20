@@ -8,11 +8,18 @@ import { storeWorkspaceBlob, removeWorkspaceBlob } from "./workspace-blob.js";
 export interface CoachIdentityPatch {
   name?: string;
   persona?: string;
+  emoji?: string;
   avatarPng?: Buffer;
 }
 
 export interface CoachIdentityContext {
   slug?: string;
+}
+
+export interface CoachTextIdentitySnapshot {
+  name: string | null;
+  persona: string | null;
+  emoji: string | null;
 }
 
 export function avatarFileName(name: string): string {
@@ -43,6 +50,10 @@ function applyTextIdentity(
   if (typeof patch.persona === "string") {
     update.persona = patch.persona;
     updated.push("persona");
+  }
+  if (typeof patch.emoji === "string" && patch.emoji) {
+    update.avatarEmoji = patch.emoji;
+    updated.push("emoji");
   }
 }
 
@@ -106,6 +117,21 @@ export async function syncCoachIdentity(
     await syncCoachToMattermost(uid, patch, agent);
   }
   return updated;
+}
+
+export async function replaceCoachTextIdentity(
+  uid: string,
+  identity: CoachTextIdentitySnapshot,
+): Promise<void> {
+  const agent = await readAgent(uid);
+  await db.doc(`agents/${uid}`).set({
+    id: uid,
+    updatedAt: FieldValue.serverTimestamp(),
+    name: identity.name ?? FieldValue.delete(),
+    persona: identity.persona ?? FieldValue.delete(),
+    avatarEmoji: identity.emoji ?? FieldValue.delete(),
+  }, { merge: true });
+  await syncCoachToMattermost(uid, { name: identity.name ?? "Coach" }, agent);
 }
 
 async function syncCoachToMattermost(

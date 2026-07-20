@@ -244,6 +244,19 @@ resource "google_project_iam_member" "functions_firebaseauth_viewer" {
   member  = "serviceAccount:${data.google_project.this.number}-compute@developer.gserviceaccount.com"
 }
 
+resource "google_project_iam_custom_role" "functions_storage_cleanup" {
+  project     = var.project_id
+  role_id     = "functionsStorageCleanup"
+  title       = "Functions storage cleanup"
+  permissions = ["storage.objects.list", "storage.objects.delete"]
+}
+
+resource "google_storage_bucket_iam_member" "functions_storage_cleanup" {
+  bucket = "${var.project_id}.firebasestorage.app"
+  role   = google_project_iam_custom_role.functions_storage_cleanup.id
+  member = "serviceAccount:${data.google_project.this.number}-compute@developer.gserviceaccount.com"
+}
+
 # ── Service Account: firebase-deployer (CI `firebase deploy`) ────────────────
 # Dedicated least-privilege identity for the GitHub Actions firebase-tools
 # deploy steps (firestore rules, hosting, functions). firebase-tools reads a

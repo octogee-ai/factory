@@ -10,6 +10,7 @@ export interface Agent {
     id: string;
     name: string;
     persona: string;
+    avatarEmoji?: string;
     avatar?: AgentAvatar;
     avatarVersion?: number;
     mattermost: AgentMattermost;

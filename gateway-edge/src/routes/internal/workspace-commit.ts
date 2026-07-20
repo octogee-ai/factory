@@ -91,6 +91,10 @@ router.post("/commit", async (req: Request, res: Response) => {
   });
   if (!r.ok) {
     logger.warn(`internal/workspace/commit: git error slug=${slug} code=${r.error.code}`);
+    if (r.error.code === "WORKSPACE_BUSY") {
+      res.status(409).json({ error: "Workspace is busy; retry shortly.", code: r.error.code });
+      return;
+    }
     res.status(500).json({ error: "git command failed", code: r.error.code });
     return;
   }

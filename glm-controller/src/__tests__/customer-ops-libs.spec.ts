@@ -232,6 +232,7 @@ describe("deleteCustomerStorageObjects", () => {
     expect(deleteFiles.mock.calls.map(([arg]) => arg)).toEqual([
       { prefix: "avatars/uid-alice/" },
       { prefix: "post-covers/uid-alice/" },
+      { prefix: "agent-imports/uid-alice/" },
       { prefix: "customers/alice/" },
       { prefix: `chat-artifacts/${"a".repeat(64)}/` },
       { prefix: "agent-imports/import-1/" },
@@ -244,6 +245,7 @@ describe("deleteCustomerStorageObjects", () => {
     expect(deleteFiles.mock.calls.map(([arg]) => arg)).toEqual([
       { prefix: "avatars/uid-lite/" },
       { prefix: "post-covers/uid-lite/" },
+      { prefix: "agent-imports/uid-lite/" },
     ]);
   });
 
@@ -260,6 +262,6 @@ describe("deleteCustomerStorageObjects", () => {
         ["import-1"],
       ),
     ).resolves.toEqual(["gcs/post-covers/uid-alice/cover.jpg"]);
-    expect(getFiles).toHaveBeenCalledTimes(5);
+    expect(getFiles).toHaveBeenCalledTimes(6);
   });
 });

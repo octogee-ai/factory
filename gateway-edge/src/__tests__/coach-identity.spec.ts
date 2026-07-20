@@ -14,6 +14,7 @@ vi.mock("../lib/db.js", () => ({
   FieldValue: {
     serverTimestamp: () => ({ __op: "ts" }),
     increment: (n: number) => ({ __op: "inc", n }),
+    delete: () => ({ __op: "delete" }),
   },
 }));
 vi.mock("../middleware/logging.js", () => ({
@@ -34,7 +35,7 @@ vi.mock("../lib/workspace-blob.js", () => ({
   removeWorkspaceBlob: (...a: unknown[]) => mockRemoveWorkspaceBlob(...a),
 }));
 
-import { syncCoachIdentity, avatarFileName } from "../lib/coach-identity.js";
+import { replaceCoachTextIdentity, syncCoachIdentity, avatarFileName } from "../lib/coach-identity.js";
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
 
@@ -58,6 +59,16 @@ describe("avatarFileName", () => {
 });
 
 describe("syncCoachIdentity", () => {
+  it("persists an imported emoji without treating it as a credential or Mattermost mutation", async () => {
+    const updated = await syncCoachIdentity("u1", { emoji: "🐮" });
+    expect(updated).toEqual(["emoji"]);
+    expect(mockSet).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "u1", avatarEmoji: "🐮" }),
+      { merge: true },
+    );
+    expect(mockMmApi).not.toHaveBeenCalled();
+  });
+
   it("writes name to agents/{uid} and pushes the MM bot display_name", async () => {
     const updated = await syncCoachIdentity("u1", { name: "Scout" });
     expect(updated).toEqual(["name"]);
@@ -139,5 +150,20 @@ describe("syncCoachIdentity", () => {
     const updated = await syncCoachIdentity("u1", {});
     expect(updated).toEqual([]);
     expect(mockSet).not.toHaveBeenCalled();
+  });
+});
+
+describe("replaceCoachTextIdentity", () => {
+  it("deletes identity fields absent from the checkpoint and resets the Mattermost name", async () => {
+    await replaceCoachTextIdentity("u1", { name: null, persona: null, emoji: null });
+
+    expect(mockSet).toHaveBeenCalledWith({
+      id: "u1",
+      updatedAt: { __op: "ts" },
+      name: { __op: "delete" },
+      persona: { __op: "delete" },
+      avatarEmoji: { __op: "delete" },
+    }, { merge: true });
+    expect(mockMmApi).toHaveBeenCalledWith("/bots/coach-mm-u1", "PUT", { display_name: "Coach" });
   });
 });

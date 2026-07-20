@@ -30,6 +30,8 @@ import internalProjectPublishRoutes from "./routes/internal/project-publish.js";
 import internalGiteaAdminRoutes from "./routes/internal/gitea-admin.js";
 import internalByotSyncRoutes from "./routes/internal/byot-sync.js";
 import internalConnectorRoutes from "./routes/internal/connectors.js";
+import { createAgentImportsRouter } from "./routes/agent-imports.js";
+import { createAgentImportRuntime } from "./lib/agent-import-runtime.js";
 import { mountClusterRoutes } from "./routes/mount-cluster-routes.js";
 import { createGatewayRouter } from "./public-router.js";
 import {
@@ -241,6 +243,13 @@ function mountSidecarLocalitySurface(app: Express, options: {
   automationsLocality.use(requireAuthenticatedUid);
   automationsLocality.use(automationsRoutes);
   mountApi(app, "/automations", automationsLocality);
+  const agentImportsLocality = Router({ mergeParams: true });
+  agentImportsLocality.use(requireAuthenticatedUid);
+  agentImportsLocality.use(createAgentImportsRouter({
+    createRuntime: createAgentImportRuntime,
+    localGatewayId: () => process.env.GATEWAY_ID ?? null,
+  }));
+  mountApi(app, "/agent-imports", agentImportsLocality);
   // connect/status/sso-submit run HERE (the customer's own pod) so the in-pod
   // claude-sso/device-auth managers accept the pod's OPENCLAW_GATEWAY_TOKEN —
   // octogee-api can't hold a per-gateway token. The flow write brokers back.

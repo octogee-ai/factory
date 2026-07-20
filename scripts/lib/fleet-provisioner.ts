@@ -55,6 +55,11 @@ import { mountByosubDeviceAuth } from "./byosub-device-auth-http.js";
 import { createClaudeSsoManager } from "./claude-sso-auth.js";
 import { realClaudeSsoDeps } from "./claude-sso-auth-io.js";
 import { mountClaudeSsoAuth } from "./claude-sso-auth-http.js";
+import {
+  createAgentImportDoctorHandler,
+  runAgentImportDoctor,
+  type AgentImportDoctorResult,
+} from "./agent-import-doctor.js";
 
 const RECONCILE_LOOP_INTERVAL_MS = 15 * 1000;
 
@@ -203,16 +208,32 @@ export interface StartFleetOptions {
   /** Trusted-side reconcile error mirror used when the pod has no Firestore. */
   recordReconcileError?: (slug: string, message: string) => Promise<void>;
   clearReconcileError?: (slug: string) => Promise<void>;
-  
   openclawDir?: string;
+  internalServiceKey?: string;
+  agentImportDoctorToken?: string;
+  runAgentImportDoctor?: (candidate: unknown) => Promise<AgentImportDoctorResult>;
+  flushLocalState?: (input: {
+    slug: string;
+    reason: string;
+  }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
+}
 
-internalServiceKey?: string;
-
-flushLocalState?: (input: {
-  slug: string;
-  reason: string;
-}) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
-
+export function registerAgentImportDoctor(
+  app: express.Express,
+  opts: Pick<StartFleetOptions, "agentImportDoctorToken" | "runAgentImportDoctor" | "log">,
+): void {
+  const token = opts.agentImportDoctorToken ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
+  if (!token) {
+    app.post("/agent-import/doctor", (_req, res) => {
+      res.status(503).json({ error: "agent import doctor is not configured" });
+    });
+    opts.log?.("[agent-import] doctor endpoint disabled: OPENCLAW_GATEWAY_TOKEN is unavailable");
+    return;
+  }
+  app.post("/agent-import/doctor", createAgentImportDoctorHandler({
+    token,
+    runDoctor: opts.runAgentImportDoctor ?? runAgentImportDoctor,
+  }));
 }
 
 export function reconcileAddCustomerOptions(
@@ -963,6 +984,7 @@ const waitForGatewayReady = async (): Promise<void> => {
   app.post("/unmount/:gatewayId", gatewayIdGuard, createUnmountHandler(migrationDeps));
 
   registerByosubDeviceAuth(app, opts);
+  registerAgentImportDoctor(app, opts);
 
   const stopReconcileLoop = startMaybeReconcileLoop({
     provision: caps.provision,

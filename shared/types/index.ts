@@ -31,6 +31,28 @@ export type {
 } from './agent.js';
 
 export type {
+  AgentImportApprovalFields,
+  AgentImportConfigArtifacts,
+  AgentImportConfigDecision,
+  AgentImportConfigDisposition,
+  AgentImportConfigInventoryEntry,
+  AgentImportConfigPlan,
+  AgentImportDoctorOutcome,
+  AgentImportInventoryClassification,
+  AgentImportModelHint,
+  AgentImportPortableAgent,
+} from './agent-import.js';
+export {
+  AGENT_IMPORT_FORMAT_VERSION,
+  AgentImportConfigError,
+  buildAgentImportApprovalInput,
+  buildAgentImportConfigArtifacts,
+  classifyAgentImportArchivePath,
+  planAgentImportConfig,
+  validateAgentImportConfigArtifacts,
+} from './agent-import.js';
+
+export type {
   Workspace,
   WorkspaceVisibility,
   WorkspaceMattermost,

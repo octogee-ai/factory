@@ -57,7 +57,8 @@ const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
 
 function isSelfScopedInternalBrokerRoute(path: string): boolean {
   return SELF_SCOPED_INTERNAL_BROKER_ROUTES.has(path) ||
-    path === "/internal/agent-access" || path.startsWith("/internal/agent-access/");
+    path === "/internal/agent-access" || path.startsWith("/internal/agent-access/") ||
+    path === "/internal/agent-imports" || path.startsWith("/internal/agent-imports/");
 }
 
 function stringValue(value: unknown): string | null {

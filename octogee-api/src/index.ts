@@ -30,6 +30,7 @@ import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
 import { createBuilderShellBrokerRoutes } from "./routes/builder-shell-broker.js";
 import { createOpenClawControlBrokerRoutes } from "./routes/openclaw-control-broker.js";
 import { createAutomationAuthorizationBrokerRoutes } from "./routes/automation-authorization-broker.js";
+import { createAgentImportBrokerRoutes } from "./routes/agent-import-broker.js";
 import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
 import { createLinkPreviewRoutes } from "./routes/link-preview.js";
 import {
@@ -45,6 +46,10 @@ import {
 } from "./lib/chat-artifact-adapters.js";
 import { resolveActiveArtifactWorkspaceSlug } from "./lib/chat-artifact-workspace.js";
 import { db, storage } from "../../gateway-edge/src/lib/db.js";
+import { readConnectorAccessToken } from "../../gateway-edge/src/lib/connector-tokens.js";
+import { githubListRepos, githubRepoApi } from "../../gateway-edge/src/lib/github.js";
+import { readAgent } from "../../gateway-edge/src/lib/firestoreReads.js";
+import { replaceCoachTextIdentity, syncCoachIdentity } from "../../gateway-edge/src/lib/coach-identity.js";
 import { requireAuth, requireAuthenticatedUid } from "../../gateway-edge/src/middleware/auth.js";
 import { createKubernetesTokenReviewer } from "./lib/token-review.js";
 import {
@@ -160,6 +165,17 @@ export function createApp(opts: CreateAppOptions = {}) {
   validateStripePriceIds();
 
   const app = express();
+  let agentImportBucket: ReturnType<typeof storage.bucket> | undefined;
+  const importBucket = {
+    file(path: string) {
+      agentImportBucket ??= storage.bucket();
+      return agentImportBucket.file(path);
+    },
+    deleteFiles(options: { prefix: string }) {
+      agentImportBucket ??= storage.bucket();
+      return agentImportBucket.deleteFiles(options);
+    },
+  };
   // client → GCLB (appends client-ip, lb-ip) → this app
   app.set("trust proxy", 2);
 
@@ -316,6 +332,43 @@ export function createApp(opts: CreateAppOptions = {}) {
     "/internal/automations",
     requireAuthenticatedUid,
     createAutomationAuthorizationBrokerRoutes({ db }),
+  );
+  app.use(
+    "/internal/agent-imports",
+    requireAuthenticatedUid,
+    createAgentImportBrokerRoutes({
+      db,
+      bucket: importBucket,
+      readGithubToken: (uid) => readConnectorAccessToken(uid, "github"),
+      listGithubRepos: githubListRepos,
+      readGithubRepoSize: async (owner, repo, token) => {
+        const value = await githubRepoApi(owner, repo, token);
+        const size = value && typeof value === "object" && !Array.isArray(value)
+          ? (value as Record<string, unknown>).size
+          : undefined;
+        if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0) {
+          throw new Error("GitHub repository size is unavailable");
+        }
+        return size;
+      },
+      readIdentity: async (uid) => {
+        const agent = await readAgent(uid);
+        return {
+          name: agent?.name ?? null,
+          persona: typeof agent?.persona === "string" ? agent.persona : null,
+          emoji: typeof agent?.avatarEmoji === "string" ? agent.avatarEmoji : null,
+        };
+      },
+      syncIdentity: async (uid, identity) => {
+        await syncCoachIdentity(uid, {
+          ...(identity.name ? { name: identity.name } : {}),
+          ...(identity.persona !== undefined ? { persona: identity.persona } : {}),
+          ...(identity.emoji ? { emoji: identity.emoji } : {}),
+        });
+      },
+      replaceIdentity: replaceCoachTextIdentity,
+      now: () => new Date(),
+    }),
   );
   // octogee-api-only: mint/revoke opaque model broker tokens. GLM mirrors
   // these into per-gateway K8s secrets, but the values are no longer provider

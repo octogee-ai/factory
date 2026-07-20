@@ -15,6 +15,7 @@ function customerStoragePrefixes(
   return [
     `avatars/${uid}/`,
     `post-covers/${uid}/`,
+    `agent-imports/${uid}/`,
     ...(slug ? [`customers/${slug}/`] : []),
     ...chatArtifactIds.map((artifactId) => `chat-artifacts/${artifactId}/`),
     ...agentImportIds.map((importId) => `agent-imports/${importId}/`),

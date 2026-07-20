@@ -57,6 +57,13 @@ function advertisedGatewayBasePackages(): string[] {
 }
 
 describe("gateway base image", () => {
+  it("pins gitleaks in gateway-edge for fail-closed agent import scanning", () => {
+    const dockerfile = readRepoFile("gateway-edge/Dockerfile");
+    expect(dockerfile).toContain("ARG GITLEAKS_VERSION=8.30.1");
+    expect(dockerfile).toContain("gitleaks_${GITLEAKS_VERSION}_linux_${GITLEAKS_ARCH}.tar.gz");
+    expect(dockerfile).toContain("/usr/local/bin/gitleaks");
+  });
+
   it("keeps Chromium out of the shared gateway base image", () => {
     const installed = installedAptPackages("infra/gateway/Dockerfile.base");
     const advertised = advertisedGatewayBasePackages();

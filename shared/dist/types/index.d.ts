@@ -2,6 +2,8 @@ export type { Project, ProjectRepoSource, ProjectVisibility, ProjectStatus, Proj
 export type { LegalDocId, LegalDoc, LegalAcceptanceContext, LegalAcceptanceMethod, LegalAcceptanceRecord, LegalAcceptanceClaim, } from './legal.js';
 export { LEGAL_DOCS, ALL_LEGAL_DOC_IDS, REGISTRATION_DOCS, isLegalDocId, currentVersion, isCurrentVersion, acceptanceDocId, } from './legal.js';
 export type { Agent, AgentMattermost, } from './agent.js';
+export type { AgentImportApprovalFields, AgentImportConfigArtifacts, AgentImportConfigDecision, AgentImportConfigDisposition, AgentImportConfigInventoryEntry, AgentImportConfigPlan, AgentImportDoctorOutcome, AgentImportInventoryClassification, AgentImportModelHint, AgentImportPortableAgent, } from './agent-import.js';
+export { AGENT_IMPORT_FORMAT_VERSION, AgentImportConfigError, buildAgentImportApprovalInput, buildAgentImportConfigArtifacts, classifyAgentImportArchivePath, planAgentImportConfig, validateAgentImportConfigArtifacts, } from './agent-import.js';
 export type { Workspace, WorkspaceVisibility, WorkspaceMattermost, WorkspaceGitea, } from './workspace.js';
 export type { WorkspaceVibe, WorkspaceChannelKind } from './display-names.js';
 export { WORKSPACE_VIBE_PRESETS, DEFAULT_VIBE_NOUN, WORKSPACE_CHANNEL_DISPLAY_NAMES, TYPING_PHRASES_BY_VIBE, DEFAULT_TYPING_PHRASES, isWorkspaceVibe, titleCaseVibe, computeWorkspaceDisplayName, computeProjectChannelDisplayName, } from './display-names.js';

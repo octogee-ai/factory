@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
+import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
+
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const GIT_TIMEOUT_MS = 5_000;
 
@@ -20,6 +22,7 @@ export type WorkspaceGitError =
   | { code: "TIMEOUT"; cwd: string; durationMs: number }
   | { code: "GIT_FAILED"; cwd: string; status: number; stderr: string }
   | { code: "OUTPUT_TOO_LARGE"; cwd: string; cap: number }
+  | { code: "WORKSPACE_BUSY"; cwd: string }
   | { code: "INTERNAL"; message: string };
 
 export interface WorkspaceGitStatusEntry {
@@ -194,7 +197,14 @@ export interface CommitAndPushResult {
 export interface CommitAndPushDeps {
   gitCommit: typeof gitCommit;
   gitPush: typeof gitPush;
+  acquireMutationLease: typeof acquireWorkspaceMutationLeaseSync;
 }
+
+const COMMIT_AND_PUSH_DEPS: CommitAndPushDeps = {
+  gitCommit,
+  gitPush,
+  acquireMutationLease: acquireWorkspaceMutationLeaseSync,
+};
 
 /**
  * Commit local workspace changes and push them — the explicit "save now" an
@@ -207,26 +217,32 @@ export interface CommitAndPushDeps {
 export async function commitAndPushWorkspace(
   customerDir: string,
   options: { message: string; author: CommitAuthor; excludePathspecs?: string[] },
-  deps: CommitAndPushDeps = { gitCommit, gitPush },
+  deps: CommitAndPushDeps = COMMIT_AND_PUSH_DEPS,
 ): Promise<{ ok: true; result: CommitAndPushResult } | { ok: false; error: WorkspaceGitError }> {
-  const commitRes = await deps.gitCommit(customerDir, options);
-  if (!commitRes.ok) return commitRes;
-  if (commitRes.result.empty) {
-    return { ok: true, result: { committed: false, pushed: false, nothingToCommit: true } };
+  const lease = deps.acquireMutationLease({ workspaceDir: customerDir });
+  if (!lease) return { ok: false, error: { code: "WORKSPACE_BUSY", cwd: customerDir } };
+  try {
+    const commitRes = await deps.gitCommit(customerDir, options);
+    if (!commitRes.ok) return commitRes;
+    if (commitRes.result.empty) {
+      return { ok: true, result: { committed: false, pushed: false, nothingToCommit: true } };
+    }
+    const pushRes = await deps.gitPush(customerDir, {});
+    if (!pushRes.ok) {
+      return {
+        ok: true,
+        result: {
+          committed: true,
+          pushed: false,
+          nothingToCommit: false,
+          pushError: describeGitError(pushRes.error),
+        },
+      };
+    }
+    return { ok: true, result: { committed: true, pushed: true, nothingToCommit: false } };
+  } finally {
+    lease.release();
   }
-  const pushRes = await deps.gitPush(customerDir, {});
-  if (!pushRes.ok) {
-    return {
-      ok: true,
-      result: {
-        committed: true,
-        pushed: false,
-        nothingToCommit: false,
-        pushError: describeGitError(pushRes.error),
-      },
-    };
-  }
-  return { ok: true, result: { committed: true, pushed: true, nothingToCommit: false } };
 }
 
 function describeGitError(err: WorkspaceGitError): string {
@@ -237,6 +253,8 @@ function describeGitError(err: WorkspaceGitError): string {
       return "git push timed out";
     case "NOT_A_REPO":
       return "not a git repository";
+    case "WORKSPACE_BUSY":
+      return "workspace is busy";
     default:
       return err.code;
   }
