@@ -172,10 +172,11 @@ async function main(): Promise<void> {
       return runGatewayPreStopFlush({
         gatewayId: entrypointConfig.gatewayId,
         gatewayClass: GATEWAY_CLASS,
-        syncWorkspaces: syncAllWorkspaces,
+        syncWorkspaces: () => syncAllWorkspaces({ strict: true }),
         syncBlobs: operator
           ? undefined
           : () => blobSyncAllWithOptions({
+              strict: true,
               storeForSlug: () => createBrokeredBlobStore(brokerClient),
             }),
         syncSystemConfig: createFleetSystemConfigFlush(entrypointConfig.builderSlug),

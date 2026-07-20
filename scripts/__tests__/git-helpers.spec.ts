@@ -127,6 +127,17 @@ describe("runWorkspaceSyncMutation", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("workspace busy"));
   });
 
+  it("fails a strict durability flush while another writer holds the workspace lease", () => {
+    expect(() => runWorkspaceSyncMutation(
+      "/customers/acme",
+      "acme",
+      vi.fn(),
+      () => null,
+      vi.fn(),
+      true,
+    )).toThrow(/acme.*lease unavailable/i);
+  });
+
   it("holds the lease through autosave work and releases it afterward", () => {
     const release = vi.fn();
     const work = vi.fn();

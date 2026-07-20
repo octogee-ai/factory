@@ -58,8 +58,44 @@ describe("prestop-flush entrypoint config", () => {
   it("fails loud instead of reporting cleanup when the local public key is missing", async () => {
     const release = createPreStopGiteaKeyRelease("alice", {
       readLocalCustomerPubKey: () => null,
+      listLocalCustomerPubKeys: () => [],
       releaseGiteaUserKey: vi.fn(async () => {}),
     });
     await expect(release?.()).rejects.toThrow(/local SSH public key is missing/);
+  });
+
+  it("releases every exact local customer key from a retiring shared gateway", async () => {
+    const releaseGiteaUserKey = vi.fn(async () => {});
+    const release = createPreStopGiteaKeyRelease("", {
+      readLocalCustomerPubKey: () => null,
+      listLocalCustomerPubKeys: () => [
+        { slug: "alice", pubKey: "ssh-ed25519 ALICE predecessor" },
+        { slug: "bob", pubKey: "ssh-ed25519 BOB predecessor" },
+      ],
+      releaseGiteaUserKey,
+    });
+
+    await release?.();
+    expect(releaseGiteaUserKey.mock.calls).toEqual([
+      ["alice", "ssh-ed25519 ALICE predecessor"],
+      ["bob", "ssh-ed25519 BOB predecessor"],
+    ]);
+  });
+
+  it("reports shared-gateway key cleanup failure after attempting every local customer", async () => {
+    const releaseGiteaUserKey = vi.fn(async (slug: string) => {
+      if (slug === "alice") throw new Error("broker unavailable");
+    });
+    const release = createPreStopGiteaKeyRelease("", {
+      readLocalCustomerPubKey: () => null,
+      listLocalCustomerPubKeys: () => [
+        { slug: "alice", pubKey: "ssh-ed25519 ALICE predecessor" },
+        { slug: "bob", pubKey: "ssh-ed25519 BOB predecessor" },
+      ],
+      releaseGiteaUserKey,
+    });
+
+    await expect(release?.()).rejects.toThrow(/alice.*broker unavailable/i);
+    expect(releaseGiteaUserKey).toHaveBeenCalledTimes(2);
   });
 });
