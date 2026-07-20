@@ -145,6 +145,10 @@ function sandboxCodex(config) {
   }
   config.plugins.entries ??= {};
   config.plugins.entries.codex ??= { enabled: false };
+  if (config.plugins.entries.codex.enabled === false) {
+    delete config.plugins.entries.codex.config;
+    return;
+  }
   config.plugins.entries.codex.config ??= {};
   config.plugins.entries.codex.config.appServer ??= {};
   config.plugins.entries.codex.config.appServer.sandbox = SHARED_CODEX_SANDBOX;

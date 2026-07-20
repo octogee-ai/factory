@@ -77,6 +77,18 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.plugins.entries["octogee-project-tools"].enabled).toBe(true);
   });
 
+  it("shared class keeps the default Codex plugin disabled without disabled-plugin config", () => {
+    const out = runPolicy("shared", {
+      plugins: {
+        entries: {
+          codex: { enabled: false },
+        },
+      },
+    });
+
+    expect(out.plugins.entries.codex).toEqual({ enabled: false });
+  });
+
   it("builder class enables OpenClaw exec/process/subagents plus runtime plugins", () => {
     const out = runPolicy("builder", {
       auth: { profiles: {} },
