@@ -96,6 +96,13 @@ spec:
                   key: {{ .secretKey }}
                   optional: {{ .optional | default false }}
             {{- end }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.healthCheck.path }}
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 24
           readinessProbe:
             httpGet:
               path: {{ .Values.healthCheck.path }}
