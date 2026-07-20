@@ -153,6 +153,20 @@ sync_secret_manager_value() {
   ok "Secret Manager: $name"
 }
 
+resolve_environment_secret_value() {
+  local initial="$1"
+  local sm_name="$2"
+  local k8s_secret="$3"
+  local k8s_key="$4"
+  local normalizer="$5"
+  local env_value secret_manager_value kubernetes_value
+  env_value="$("$normalizer" "$initial")"
+  secret_manager_value="$("$normalizer" "$(sm_get "$sm_name" "$FIREBASE_PROJECT")")"
+  kubernetes_value="$("$normalizer" "$(ksecret_key "$k8s_secret" "$k8s_key")")"
+  select_environment_secret_value \
+    "$ENV" "$secret_manager_value" "$env_value" "$kubernetes_value"
+}
+
 # Load env file
 set +u
 load_env_file "$ENV_FILE"
@@ -465,20 +479,18 @@ persist_google_env() {
   save_env_file_value "$env_file" GOOGLE_PICKER_APP_ID "$G_PICKER_APP"
 }
 
-G_ID="$(configured_secret_value "${GOOGLE_CLIENT_ID:-}")"
-G_SEC="$(configured_secret_value "${GOOGLE_CLIENT_SECRET:-}")"
-G_PICKER_KEY="$(configured_secret_value "${GOOGLE_PICKER_API_KEY:-}")"
-G_PICKER_APP="$(configured_secret_value "${GOOGLE_PICKER_APP_ID:-}")"
-[[ -z "$G_ID" ]]         && G_ID="$(configured_secret_value "$(sm_get GOOGLE_CLIENT_ID "$FIREBASE_PROJECT")")"
-[[ -z "$G_SEC" ]]        && G_SEC="$(configured_secret_value "$(sm_get GOOGLE_CLIENT_SECRET "$FIREBASE_PROJECT")")"
-[[ -z "$G_PICKER_KEY" ]] && G_PICKER_KEY="$(configured_secret_value "$(sm_get GOOGLE_PICKER_API_KEY "$FIREBASE_PROJECT")")"
-[[ -z "$G_PICKER_APP" ]] && G_PICKER_APP="$(configured_secret_value "$(sm_get GOOGLE_PICKER_APP_ID "$FIREBASE_PROJECT")")"
+G_ID="$(resolve_environment_secret_value "${GOOGLE_CLIENT_ID:-}" GOOGLE_CLIENT_ID google-oauth client_id configured_secret_value)"
+G_SEC="$(resolve_environment_secret_value "${GOOGLE_CLIENT_SECRET:-}" GOOGLE_CLIENT_SECRET google-oauth client_secret configured_secret_value)"
+G_PICKER_KEY="$(resolve_environment_secret_value "${GOOGLE_PICKER_API_KEY:-}" GOOGLE_PICKER_API_KEY google-oauth picker_api_key configured_secret_value)"
+G_PICKER_APP="$(resolve_environment_secret_value "${GOOGLE_PICKER_APP_ID:-}" GOOGLE_PICKER_APP_ID google-oauth picker_app_id configured_secret_value)"
 [[ -z "$G_ID" || -z "$G_SEC" ]] && warn "GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET not set — Google connect disabled"
 [[ -z "$G_PICKER_KEY" || -z "$G_PICKER_APP" ]] && warn "GOOGLE_PICKER_API_KEY/GOOGLE_PICKER_APP_ID not set — Drive picker disabled"
-[[ -n "$G_ID" ]] && sync_secret_manager_value GOOGLE_CLIENT_ID "$G_ID" "$FIREBASE_PROJECT"
-[[ -n "$G_SEC" ]] && sync_secret_manager_value GOOGLE_CLIENT_SECRET "$G_SEC" "$FIREBASE_PROJECT"
-[[ -n "$G_PICKER_KEY" ]] && sync_secret_manager_value GOOGLE_PICKER_API_KEY "$G_PICKER_KEY" "$FIREBASE_PROJECT"
-[[ -n "$G_PICKER_APP" ]] && sync_secret_manager_value GOOGLE_PICKER_APP_ID "$G_PICKER_APP" "$FIREBASE_PROJECT"
+if [[ "$ENV" != "custom" ]]; then
+  [[ -n "$G_ID" ]] && sync_secret_manager_value GOOGLE_CLIENT_ID "$G_ID" "$FIREBASE_PROJECT"
+  [[ -n "$G_SEC" ]] && sync_secret_manager_value GOOGLE_CLIENT_SECRET "$G_SEC" "$FIREBASE_PROJECT"
+  [[ -n "$G_PICKER_KEY" ]] && sync_secret_manager_value GOOGLE_PICKER_API_KEY "$G_PICKER_KEY" "$FIREBASE_PROJECT"
+  [[ -n "$G_PICKER_APP" ]] && sync_secret_manager_value GOOGLE_PICKER_APP_ID "$G_PICKER_APP" "$FIREBASE_PROJECT"
+fi
 if [[ -n "$G_ID" && -n "$G_SEC" && -n "$G_PICKER_KEY" && -n "$G_PICKER_APP" ]]; then
   persist_google_env "$ENV_FILE"
   [[ "$ENV" == "test" ]] && persist_google_env "$REPO_DIR/.env.local"
@@ -743,35 +755,37 @@ done
 # Required by octogee-api at startup (not optional). Use placeholder if not
 # configured yet — billing is sandbox mode until real keys are set.
 info "stripe-secrets"
-STRIPE_SECRET_KEY="$(configured_secret_value "${STRIPE_SECRET_KEY:-}")"
-STRIPE_WEBHOOK_SECRET="$(configured_secret_value "${STRIPE_WEBHOOK_SECRET:-}")"
-STRIPE_PRICE_IDS="$(configured_secret_value "${STRIPE_PRICE_IDS:-}")"
-[[ -z "$STRIPE_SECRET_KEY" ]] && STRIPE_SECRET_KEY="$(configured_secret_value "$(sm_get STRIPE_SECRET_KEY "$FIREBASE_PROJECT")")"
-[[ -z "$STRIPE_WEBHOOK_SECRET" ]] && STRIPE_WEBHOOK_SECRET="$(configured_secret_value "$(sm_get STRIPE_WEBHOOK_SECRET "$FIREBASE_PROJECT")")"
-[[ -z "$STRIPE_PRICE_IDS" ]] && STRIPE_PRICE_IDS="$(configured_secret_value "$(sm_get STRIPE_PRICE_IDS "$FIREBASE_PROJECT")")"
-[[ -z "$STRIPE_SECRET_KEY" ]] && STRIPE_SECRET_KEY="$(configured_secret_value "$(ksecret_key stripe-secrets secret_key)")"
-[[ -z "$STRIPE_WEBHOOK_SECRET" ]] && STRIPE_WEBHOOK_SECRET="$(configured_secret_value "$(ksecret_key stripe-secrets webhook_secret)")"
-[[ -z "$STRIPE_PRICE_IDS" ]] && STRIPE_PRICE_IDS="$(configured_secret_value "$(ksecret_key stripe-secrets price_ids)")"
-[[ "$STRIPE_PRICE_IDS" == "{}" ]] && STRIPE_PRICE_IDS=""
+STRIPE_SECRET_KEY="$(resolve_environment_secret_value "${STRIPE_SECRET_KEY:-}" STRIPE_SECRET_KEY stripe-secrets secret_key configured_secret_value)"
+STRIPE_WEBHOOK_SECRET="$(resolve_environment_secret_value "${STRIPE_WEBHOOK_SECRET:-}" STRIPE_WEBHOOK_SECRET stripe-secrets webhook_secret configured_secret_value)"
+STRIPE_PRICE_IDS="$(resolve_environment_secret_value "${STRIPE_PRICE_IDS:-}" STRIPE_PRICE_IDS stripe-secrets price_ids configured_stripe_price_ids_value)"
 [[ -z "$STRIPE_SECRET_KEY" ]]    && warn "STRIPE_SECRET_KEY not found — using placeholder (billing disabled)"
 [[ -z "$STRIPE_WEBHOOK_SECRET" ]] && warn "STRIPE_WEBHOOK_SECRET not found — using placeholder"
 [[ -z "$STRIPE_PRICE_IDS" ]] && warn "STRIPE_PRICE_IDS not found — checkout plans remain unavailable"
 if [[ -n "$STRIPE_SECRET_KEY" ]]; then
-  sync_secret_manager_value STRIPE_SECRET_KEY "$STRIPE_SECRET_KEY" "$FIREBASE_PROJECT"
+  validate_stripe_secret_key_mode "$ENV" "$STRIPE_SECRET_KEY" \
+    || fail "STRIPE_SECRET_KEY mode does not match --env=$ENV"
 fi
 if [[ -n "$STRIPE_WEBHOOK_SECRET" ]]; then
-  sync_secret_manager_value STRIPE_WEBHOOK_SECRET "$STRIPE_WEBHOOK_SECRET" "$FIREBASE_PROJECT"
+  validate_stripe_webhook_secret "$STRIPE_WEBHOOK_SECRET" \
+    || fail "STRIPE_WEBHOOK_SECRET must be a Stripe whsec_ signing secret"
+fi
+if [[ "$ENV" != "custom" ]]; then
+  [[ -n "$STRIPE_SECRET_KEY" ]] && sync_secret_manager_value STRIPE_SECRET_KEY "$STRIPE_SECRET_KEY" "$FIREBASE_PROJECT"
+  [[ -n "$STRIPE_WEBHOOK_SECRET" ]] && sync_secret_manager_value STRIPE_WEBHOOK_SECRET "$STRIPE_WEBHOOK_SECRET" "$FIREBASE_PROJECT"
 fi
 if [[ -n "$STRIPE_PRICE_IDS" ]]; then
   validate_stripe_price_ids_json "$STRIPE_PRICE_IDS" \
-    || fail "STRIPE_PRICE_IDS must be a non-empty JSON object of known price keys to Stripe price IDs"
-  sync_secret_manager_value STRIPE_PRICE_IDS "$STRIPE_PRICE_IDS" "$FIREBASE_PROJECT"
+    || fail "STRIPE_PRICE_IDS must map every supported plan and credit key to a Stripe price ID"
+  if [[ "$ENV" != "custom" ]]; then
+    sync_secret_manager_value STRIPE_PRICE_IDS "$STRIPE_PRICE_IDS" "$FIREBASE_PROJECT"
+  fi
   save_env_file_value "$ENV_FILE" STRIPE_PRICE_IDS "$STRIPE_PRICE_IDS"
 fi
+STRIPE_PRICE_IDS_MATERIALIZED="$(materialize_stripe_price_ids_json "$STRIPE_PRICE_IDS")"
 ksecret stripe-secrets \
   --from-literal=secret_key="${STRIPE_SECRET_KEY:-placeholder}" \
   --from-literal=webhook_secret="${STRIPE_WEBHOOK_SECRET:-placeholder}" \
-  --from-literal=price_ids="${STRIPE_PRICE_IDS:-{}}"
+  --from-literal=price_ids="$STRIPE_PRICE_IDS_MATERIALIZED"
 
 # ── 11. Resend secrets (email digest delivery — P6) ──────────────────────
 # Used by gateway-edge for email digest delivery via Resend.

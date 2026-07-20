@@ -158,8 +158,18 @@ for entry in "${REQUIRED_KEYS[@]}"; do
   VALUE=""
   [[ -n "$VAL_B64" ]] && VALUE="$(printf '%s' "$VAL_B64" | base64 -d 2>/dev/null || true)"
 
-  if [[ -z "$VALUE" || "$VALUE" == "placeholder" ]]; then
+  if [[ -z "$(configured_secret_value "$VALUE")" ]]; then
     echo -e "  ${RED}✗${NC} ${secret}/${key} — ${RED}EMPTY${NC}"
+    echo -e "    Fix: ${fix}"
+    FAILURES=$((FAILURES + 1))
+  elif [[ "$secret:$key" == "stripe-secrets:secret_key" ]] \
+    && ! validate_stripe_secret_key_mode "$ENV" "$VALUE"; then
+    echo -e "  ${RED}✗${NC} ${secret}/${key} — ${RED}INVALID MODE${NC}"
+    echo -e "    Fix: ${fix}"
+    FAILURES=$((FAILURES + 1))
+  elif [[ "$secret:$key" == "stripe-secrets:webhook_secret" ]] \
+    && ! validate_stripe_webhook_secret "$VALUE"; then
+    echo -e "  ${RED}✗${NC} ${secret}/${key} — ${RED}INVALID${NC}"
     echo -e "    Fix: ${fix}"
     FAILURES=$((FAILURES + 1))
   elif [[ "$secret:$key" == "stripe-secrets:price_ids" ]] \

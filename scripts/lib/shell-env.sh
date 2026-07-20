@@ -48,8 +48,54 @@ load_env_file() {
 configured_secret_value() {
   local value
   value="$(normalise_env_value "$1")"
-  [[ -z "$value" || "$value" == "placeholder" ]] && return 0
+  case "$value" in
+    ""|[Pp][Ll][Aa][Cc][Ee][Hh][Oo][Ll][Dd][Ee][Rr]|[Pp][Ll][Aa][Cc][Ee][Hh][Oo][Ll][Dd][Ee][Rr]-*) return 0 ;;
+  esac
   printf '%s' "$value"
+}
+
+configured_stripe_price_ids_value() {
+  local value
+  value="$(configured_secret_value "$1")"
+  [[ -z "$value" || "$value" == "{}" ]] && return 0
+  printf '%s' "$value"
+}
+
+materialize_stripe_price_ids_json() {
+  if [[ -n "$1" ]]; then
+    printf '%s' "$1"
+  else
+    printf '{}'
+  fi
+}
+
+validate_stripe_secret_key_mode() {
+  local env="$1"
+  local key="$2"
+  case "$env" in
+    prod) [[ "$key" == sk_live_?* ]] ;;
+    test|custom) [[ "$key" == sk_test_?* ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+validate_stripe_webhook_secret() {
+  local value
+  value="$(configured_secret_value "$1")"
+  [[ "$value" == whsec_?* ]]
+}
+
+select_environment_secret_value() {
+  local env="$1"
+  local secret_manager="$2"
+  local env_file="$3"
+  local kubernetes="$4"
+
+  if [[ "$env" == "custom" ]]; then
+    printf '%s' "${kubernetes:-${secret_manager:-$env_file}}"
+  else
+    printf '%s' "${secret_manager:-${env_file:-$kubernetes}}"
+  fi
 }
 
 save_env_file_value() {
@@ -61,8 +107,10 @@ save_env_file_value() {
 
   local tmp_file
   tmp_file="$(mktemp "${env_file}.tmp.XXXXXX")"
-  if [[ -f "$env_file" ]]; then
-    grep -v "^${key}=" "$env_file" > "$tmp_file" || true
+  if [[ -f "$env_file" ]] \
+    && ! awk -v key="$key" 'index($0, key "=") != 1' "$env_file" > "$tmp_file"; then
+    rm -f "$tmp_file"
+    return 1
   fi
   if ! printf '%s=%s\n' "$key" "$value" >> "$tmp_file" \
     || ! chmod 600 "$tmp_file" \
@@ -98,7 +146,7 @@ try {
   const entries = parsed && typeof parsed === "object" && !Array.isArray(parsed)
     ? Object.entries(parsed)
     : [];
-  const valid = entries.length > 0 && entries.every(
+  const valid = entries.length === allowed.size && entries.every(
     ([key, value]) => allowed.has(key) && typeof value === "string" && /^price_[A-Za-z0-9]+$/.test(value),
   );
   process.exit(valid ? 0 : 1);
