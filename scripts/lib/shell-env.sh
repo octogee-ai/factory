@@ -69,6 +69,16 @@ materialize_stripe_price_ids_json() {
   fi
 }
 
+canonicalize_stripe_price_ids_json() {
+  node - "$1" <<'NODE'
+try {
+  process.stdout.write(JSON.stringify(JSON.parse(process.argv[2])));
+} catch {
+  process.exit(1);
+}
+NODE
+}
+
 validate_stripe_secret_key_mode() {
   local env="$1"
   local key="$2"
@@ -96,6 +106,25 @@ select_environment_secret_value() {
   else
     printf '%s' "${secret_manager:-${env_file:-$kubernetes}}"
   fi
+}
+
+secret_manager_secret_state() {
+  local name="$1"
+  local project="$2"
+  local listed candidate
+  if ! listed="$(gcloud secrets list \
+    --project="$project" \
+    --format='value(name)' 2>/dev/null)"; then
+    printf error
+    return 0
+  fi
+  while IFS= read -r candidate; do
+    if [[ "$candidate" == "$name" ]]; then
+      printf present
+      return 0
+    fi
+  done <<< "$listed"
+  printf absent
 }
 
 save_env_file_value() {

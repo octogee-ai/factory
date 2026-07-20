@@ -131,26 +131,51 @@ sync_secret_manager_value() {
   local name="$1"
   local value="$2"
   local project="${3:-$SM_PROJECT}"
+  local normalizer="${4:-configured_secret_value}"
   [[ -n "$value" ]] || fail "Refusing to persist empty Secret Manager value: $name"
 
-  local current
-  current="$(sm_get "$name" "$project")"
-  if [[ "$current" == "$value" ]]; then
-    ok "Secret Manager: $name"
-    return 0
-  fi
+  local state current normalized_current normalized_value
+  state="$(secret_manager_secret_state "$name" "$project")"
+  case "$state" in
+    present)
+      current="$(gcloud secrets versions access latest \
+        --secret="$name" --project="$project" 2>/dev/null)" \
+        || fail "Could not read existing Secret Manager value: $name"
+      normalized_current="$("$normalizer" "$current")" \
+        || fail "Existing Secret Manager value is invalid: $name"
+      normalized_value="$("$normalizer" "$value")" \
+        || fail "Proposed Secret Manager value is invalid: $name"
+      [[ "$normalized_current" == "$normalized_value" ]] \
+        || fail "Secret Manager is authoritative for $name; rotate it there before running setup-secrets.sh"
+      ok "Secret Manager: $name"
+      ;;
+    absent)
+      printf '%s' "$value" | gcloud secrets create "$name" \
+        --data-file=- --project="$project" \
+        --replication-policy=user-managed --locations=us-central1 --quiet >/dev/null \
+        || fail "Could not create absent Secret Manager value: $name"
+      ok "Secret Manager: $name"
+      ;;
+    *) fail "Could not establish Secret Manager state: $name" ;;
+  esac
+}
 
-  if gcloud secrets describe "$name" --project="$project" >/dev/null 2>&1; then
-    printf '%s' "$value" | gcloud secrets versions add "$name" \
-      --data-file=- --project="$project" --quiet >/dev/null \
-      || fail "Could not update Secret Manager value: $name"
-  else
-    printf '%s' "$value" | gcloud secrets create "$name" \
-      --data-file=- --project="$project" \
-      --replication-policy=user-managed --locations=us-central1 --quiet >/dev/null \
-      || fail "Could not create Secret Manager value: $name"
-  fi
-  ok "Secret Manager: $name"
+read_authoritative_secret_manager_value() {
+  local name="$1"
+  local project="$2"
+  local normalizer="$3"
+  local state raw
+  state="$(secret_manager_secret_state "$name" "$project")"
+  case "$state" in
+    present)
+      raw="$(gcloud secrets versions access latest \
+        --secret="$name" --project="$project" 2>/dev/null)" \
+        || { echo "Could not read authoritative Secret Manager value: $name" >&2; return 1; }
+      "$normalizer" "$raw"
+      ;;
+    absent) return 0 ;;
+    *) echo "Could not establish authoritative Secret Manager state: $name" >&2; return 1 ;;
+  esac
 }
 
 resolve_environment_secret_value() {
@@ -161,8 +186,19 @@ resolve_environment_secret_value() {
   local normalizer="$5"
   local env_value secret_manager_value kubernetes_value
   env_value="$("$normalizer" "$initial")"
-  secret_manager_value="$("$normalizer" "$(sm_get "$sm_name" "$FIREBASE_PROJECT")")"
   kubernetes_value="$("$normalizer" "$(ksecret_key "$k8s_secret" "$k8s_key")")"
+  if [[ "$ENV" == "custom" ]]; then
+    if [[ -n "$kubernetes_value" ]]; then
+      printf '%s' "$kubernetes_value"
+      return 0
+    fi
+    secret_manager_value="$("$normalizer" "$(sm_get "$sm_name" "$FIREBASE_PROJECT")")"
+    select_environment_secret_value \
+      "$ENV" "$secret_manager_value" "$env_value" "$kubernetes_value"
+    return 0
+  fi
+  secret_manager_value="$(read_authoritative_secret_manager_value \
+    "$sm_name" "$FIREBASE_PROJECT" "$normalizer")" || return 1
   select_environment_secret_value \
     "$ENV" "$secret_manager_value" "$env_value" "$kubernetes_value"
 }
@@ -776,8 +812,10 @@ fi
 if [[ -n "$STRIPE_PRICE_IDS" ]]; then
   validate_stripe_price_ids_json "$STRIPE_PRICE_IDS" \
     || fail "STRIPE_PRICE_IDS must map every supported plan and credit key to a Stripe price ID"
+  STRIPE_PRICE_IDS="$(canonicalize_stripe_price_ids_json "$STRIPE_PRICE_IDS")" \
+    || fail "STRIPE_PRICE_IDS could not be canonicalized"
   if [[ "$ENV" != "custom" ]]; then
-    sync_secret_manager_value STRIPE_PRICE_IDS "$STRIPE_PRICE_IDS" "$FIREBASE_PROJECT"
+    sync_secret_manager_value STRIPE_PRICE_IDS "$STRIPE_PRICE_IDS" "$FIREBASE_PROJECT" canonicalize_stripe_price_ids_json
   fi
   save_env_file_value "$ENV_FILE" STRIPE_PRICE_IDS "$STRIPE_PRICE_IDS"
 fi

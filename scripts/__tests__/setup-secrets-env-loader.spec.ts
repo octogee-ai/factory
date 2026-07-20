@@ -45,16 +45,39 @@ function runLoader(envFile: string, env: Record<string, string> = {}): string {
   return res.stdout;
 }
 
-function runShell(script: string): string {
+function runShell(script: string, env: Record<string, string> = {}): string {
   const res = spawnSync("bash", ["-euo", "pipefail", "-c", script], {
     cwd: repoRoot,
-    env: process.env,
+    env: { ...process.env, ...env },
     encoding: "utf-8",
   });
   if (res.status !== 0) {
     throw new Error(`shell failed:\nstdout=${res.stdout}\nstderr=${res.stderr}`);
   }
   return res.stdout;
+}
+
+function secretManagerState(mode: "present" | "absent" | "error"): string {
+  const dir = mkdtempSync(path.join(tmpdir(), "octogee-secret-manager-state-"));
+  const gcloud = path.join(dir, "gcloud");
+  writeFileSync(gcloud, [
+    "#!/usr/bin/env bash",
+    "[[ \"$*\" == *\"secrets list\"* ]] || exit 1",
+    "case \"$FAKE_GCLOUD_MODE\" in",
+    "  present) printf 'GOOGLE_CLIENT_ID\\n' ;;",
+    "  absent) exit 0 ;;",
+    "  error) exit 1 ;;",
+    "esac",
+  ].join("\n"));
+  chmodSync(gcloud, 0o755);
+
+  return runShell([
+    `source ${JSON.stringify(helperPath)}`,
+    "secret_manager_secret_state GOOGLE_CLIENT_ID octogee-test",
+  ].join("\n"), {
+    FAKE_GCLOUD_MODE: mode,
+    PATH: `${dir}:${process.env.PATH}`,
+  });
 }
 
 function runShellStatus(script: string, env: Record<string, string> = {}): number | null {
@@ -92,6 +115,13 @@ function configuredStripePriceMap(value: string): string {
     `source ${JSON.stringify(helperPath)}`,
     `configured_stripe_price_ids_value ${JSON.stringify(value)}`,
   ].join("\n"));
+}
+
+function canonicalizedStripePriceMap(value: string): string {
+  return runShell([
+    `source ${JSON.stringify(helperPath)}`,
+    'canonicalize_stripe_price_ids_json "$STRIPE_PRICE_MAP"',
+  ].join("\n"), { STRIPE_PRICE_MAP: value });
 }
 
 function stripeKeyModeValidity(env: string, value: string): string {
@@ -195,11 +225,13 @@ describe("setup-secrets env loader", () => {
 
   it("materializes a configured Stripe map byte-for-byte and defaults only an empty map", () => {
     const configured = completeStripePriceMap;
+    const pretty = JSON.stringify(JSON.parse(completeStripePriceMap), null, 2);
 
     expect(materializedStripePriceMap(configured)).toBe(configured);
     expect(materializedStripePriceMap("")).toBe("{}");
     expect(configuredStripePriceMap("{}")).toBe("");
     expect(configuredStripePriceMap(configured)).toBe(configured);
+    expect(canonicalizedStripePriceMap(pretty)).toBe(completeStripePriceMap);
   });
 
   it("rejects Stripe secret keys from the wrong environment mode", () => {
@@ -223,6 +255,12 @@ describe("setup-secrets env loader", () => {
     expect(selectedSecretValue("custom", "from-sm", "from-env", "")).toBe("from-sm");
   });
 
+  it("distinguishes confirmed Secret Manager absence from access failures", () => {
+    expect(secretManagerState("present")).toBe("present");
+    expect(secretManagerState("absent")).toBe("absent");
+    expect(secretManagerState("error")).toBe("error");
+  });
+
   it("persists resolved Google credentials to the selected env and mirrors TEST to local only", () => {
     const setup = readFileSync(setupSecretsPath, "utf-8");
 
@@ -239,11 +277,17 @@ describe("setup-secrets env loader", () => {
   it("captures the Stripe price map durably and verifies all runtime keys", () => {
     const setup = readFileSync(setupSecretsPath, "utf-8");
     const verify = readFileSync(verifySecretsPath, "utf-8");
+    const managedSecretSync = setup.slice(
+      setup.indexOf("sync_secret_manager_value()"),
+      setup.indexOf("read_authoritative_secret_manager_value()"),
+    );
 
     expect(setup).toContain('resolve_environment_secret_value "${STRIPE_PRICE_IDS:-}" STRIPE_PRICE_IDS stripe-secrets price_ids configured_stripe_price_ids_value');
     expect(setup).toContain('sync_secret_manager_value STRIPE_PRICE_IDS "$STRIPE_PRICE_IDS" "$FIREBASE_PROJECT"');
     expect(setup).toContain('--from-literal=price_ids="$STRIPE_PRICE_IDS_MATERIALIZED"');
     expect(setup).toContain('[[ "$ENV" != "custom" ]]');
+    expect(setup).toContain("Secret Manager is authoritative for $name; rotate it there before running setup-secrets.sh");
+    expect(managedSecretSync).not.toContain('gcloud secrets versions add "$name"');
     expect(verify).toContain('validate_stripe_secret_key_mode "$ENV" "$VALUE"');
     expect(verify).toContain('validate_stripe_webhook_secret "$VALUE"');
     for (const entry of [
