@@ -26,7 +26,11 @@ class ArtifactContractError extends Error {
 }
 
 export interface ArtifactAccessAuthorizer {
-  authorizeRequest(mattermostUserId: string, request: unknown): Promise<unknown>;
+  authorizeRequest(mattermostUserId: string, request: unknown): Promise<{
+    request: unknown;
+    workspaceSlug: string;
+    workspaceOwnerUid: string;
+  }>;
   assertChannelMember(mattermostUserId: string, channelId: string): Promise<void>;
 }
 
@@ -39,11 +43,34 @@ export interface ArtifactBlobStore {
     body: Buffer;
     sha256: string;
   }): Promise<ArtifactOutputObject>;
+  delete(output: ArtifactOutputObject): Promise<void>;
   open(output: ArtifactOutputObject): Promise<{
     stream: Readable;
     byteLength: number;
     mediaType: string;
   }>;
+}
+
+async function stageStoredOutput(
+  deps: WorkerRoutesDeps,
+  artifactId: string,
+  workerId: string,
+  token: string,
+  output: ArtifactOutputObject,
+): Promise<void> {
+  try {
+    await deps.registry.stageOutput(artifactId, workerId, token, output);
+  } catch (error) {
+    try {
+      await deps.blobs.delete(output);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "artifact output publication and compensating deletion failed",
+      );
+    }
+    throw error;
+  }
 }
 
 export interface ArtifactSourceReader {
@@ -170,7 +197,12 @@ export function createChatArtifactRoutes(deps: PublicRoutesDeps): Router {
       throw new ArtifactContractError(error instanceof Error ? error.message : "invalid artifact request");
     }
     const authorized = await deps.access.authorizeRequest(mattermostUserId(req), parsed);
-    const job = await deps.registry.enqueue(parseArtifactRequest(authorized));
+    if (!req.uid) throw new Error("authenticated artifact owner is missing");
+    const job = await deps.registry.enqueue(parseArtifactRequest(authorized.request), {
+      ownerUid: req.uid,
+      workspaceSlug: authorized.workspaceSlug,
+      workspaceOwnerUid: authorized.workspaceOwnerUid,
+    });
     res.status(job.status === "queued" || job.status === "processing" ? 202 : 200).json(publicJob(job));
   }));
 
@@ -366,7 +398,7 @@ export function createChatArtifactWorkerRoutes(deps: WorkerRoutesDeps): Router {
       body: output.body,
       sha256: output.digest,
     });
-    await deps.registry.stageOutput(id, lease.workerId, lease.token, stored);
+    await stageStoredOutput(deps, id, lease.workerId, lease.token, stored);
     res.status(201).json(stored);
   }));
 
@@ -391,7 +423,7 @@ export function createChatArtifactWorkerRoutes(deps: WorkerRoutesDeps): Router {
       body: output.body,
       sha256: output.digest,
     });
-    await deps.registry.stageOutput(id, lease.workerId, lease.token, stored);
+    await stageStoredOutput(deps, id, lease.workerId, lease.token, stored);
     res.status(201).json(stored);
   }));
 

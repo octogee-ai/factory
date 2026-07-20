@@ -33,9 +33,15 @@ vi.mock('../middleware/logging', () => ({
   logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
-import { requireAuth, requireAuthenticatedUid } from '../middleware/auth.js';
+import {
+  requireAuth,
+  requireAuthAllowUnregistered,
+  requireAuthenticatedUid,
+} from '../middleware/auth.js';
 
-function runAuth(): Promise<{ req: Request; nextCalled: boolean; status?: number }> {
+function runAuth(
+  middleware: typeof requireAuth = requireAuth,
+): Promise<{ req: Request; nextCalled: boolean; status?: number }> {
   return new Promise((resolve) => {
     const req = { headers: { authorization: 'Bearer fake' } } as unknown as Request;
     let status: number | undefined;
@@ -46,7 +52,7 @@ function runAuth(): Promise<{ req: Request; nextCalled: boolean; status?: number
       },
       json: () => resolve({ req, nextCalled: false, status }),
     } as unknown as Response;
-    requireAuth(req, res, () => resolve({ req, nextCalled: true, status }));
+    middleware(req, res, () => resolve({ req, nextCalled: true, status }));
   });
 }
 
@@ -122,4 +128,34 @@ describe('requireAuthenticatedUid', () => {
     expect(result.nextCalled).toBe(false);
     expect(result.status).toBe(403);
   });
+});
+
+describe('requireAuthAllowUnregistered', () => {
+  beforeEach(() => {
+    mockDocs.clear();
+    reads.length = 0;
+    verifyIdToken.mockReset().mockResolvedValue({ uid: 'u1' });
+  });
+
+  it('accepts a non-revoked Firebase user before their Firestore user is created', async () => {
+    const result = await runAuth(requireAuthAllowUnregistered);
+
+    expect(result.nextCalled).toBe(true);
+    expect(result.req.uid).toBe('u1');
+    expect(result.req.user).toBeUndefined();
+    expect(result.req.workspaceSlug).toBeNull();
+    expect(verifyIdToken).toHaveBeenCalledWith('fake', true);
+  });
+
+  it.each(['suspended', 'deletion_scheduled', 'erasing'])(
+    'still rejects an existing account whose lifecycle is %s',
+    async (status) => {
+      mockDocs.set('users/u1', { accountLifecycle: { status } });
+
+      const result = await runAuth(requireAuthAllowUnregistered);
+
+      expect(result.nextCalled).toBe(false);
+      expect(result.status).toBe(403);
+    },
+  );
 });

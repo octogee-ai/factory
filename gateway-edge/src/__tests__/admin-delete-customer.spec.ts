@@ -18,11 +18,14 @@ const loggedWarnings: string[] = [];
 
 vi.mock("../lib/db", () => {
   let autoId = 0;
+  let transactionTail = Promise.resolve();
   function whereChain(
     collectionName: string,
     filters: Array<{ field: string; value: unknown }> = [],
   ) {
     return {
+      __collection: collectionName,
+      __filters: filters,
       where: (field: string, _op: string, value: unknown) =>
         whereChain(collectionName, [...filters, { field, value }]),
       orderBy: () => whereChain(collectionName, filters),
@@ -89,8 +92,46 @@ vi.mock("../lib/db", () => {
   return {
     db: {
       collection,
+      collectionGroup: (name: string) => whereChain(name),
       doc: () => ({}),
       getAll: async () => [],
+      runTransaction: <T>(callback: (transaction: {
+        get: (target: any) => Promise<any>;
+        set: (target: any, data: Record<string, unknown>) => void;
+        update: (target: any, data: Record<string, unknown>) => void;
+        delete: (target: any) => void;
+      }) => Promise<T>) => {
+        const transaction = {
+          get: async (target: any) => {
+            if (target.__collection === "users" && typeof target.id === "string") {
+              const data = usersDocs[target.id];
+              return { exists: data !== undefined, data: () => data };
+            }
+            if (typeof target.get === "function") return target.get();
+            throw new Error("unexpected transaction read");
+          },
+          set: (ref: { id: string; __collection?: string }, data: Record<string, unknown>) => {
+            const collectionName = ref.__collection ?? "unknown";
+            fsCalls.push({ collection: collectionName, op: "batch.set", docId: ref.id, data });
+            if (collectionName === "glmOperations") {
+              glmOperationsDocs.unshift({ id: ref.id, data });
+            }
+          },
+          update: (ref: { id: string; __collection?: string }, data: Record<string, unknown>) => {
+            const collectionName = ref.__collection ?? "unknown";
+            fsCalls.push({ collection: collectionName, op: "batch.update", docId: ref.id, data });
+            if (collectionName === "users") {
+              usersDocs[ref.id] = { ...usersDocs[ref.id], ...data };
+            }
+          },
+          delete: (ref: { id: string; __collection?: string }) => {
+            fsCalls.push({ collection: ref.__collection ?? "unknown", op: "batch.delete", docId: ref.id });
+          },
+        };
+        const execution = transactionTail.then(() => callback(transaction));
+        transactionTail = execution.then(() => undefined, () => undefined);
+        return execution;
+      },
       batch: () => ({
         set: (ref: { id: string; __collection?: string }, data: Record<string, unknown>) => {
           fsCalls.push({ collection: ref.__collection ?? "unknown", op: "batch.set", docId: ref.id, data });
@@ -291,8 +332,12 @@ describe("POST /api/admin/customer/:uid/delete — Stripe cleanup context", () =
       email: "alice@example.com",
       provisioning: { openclaw: { slug: "alice" } },
       subscription: {
-        stripeSubscriptionId: "sub_123",
+        stripeSubscriptionId: "sub_personal",
         stripeCustomerId: "cus_abc",
+        status: "active",
+      },
+      builderSubscription: {
+        stripeSubscriptionId: "sub_builder",
         status: "active",
       },
     };
@@ -301,8 +346,8 @@ describe("POST /api/admin/customer/:uid/delete — Stripe cleanup context", () =
       (call) => call.collection === "customerDeletionJobs" && call.op === "batch.set",
     );
     expect(job?.data).toMatchObject({
-      stripeCustomerId: "cus_abc",
-      stripeSubscriptionId: "sub_123",
+      stripeCustomerIds: ["cus_abc"],
+      stripeSubscriptionIds: ["sub_personal", "sub_builder"],
     });
     expect(loggedWarnings).toEqual([]);
   });

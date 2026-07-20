@@ -2,7 +2,7 @@ import express, { type RequestHandler } from "express";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import request from "supertest";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ArtifactRegistry, type ArtifactJobStore } from "../lib/chat-artifact-registry.js";
 import type { ArtifactJob, ArtifactOutputObject } from "../lib/chat-artifacts.js";
 import {
@@ -85,6 +85,10 @@ class MemoryBlobs implements ArtifactBlobStore {
       mediaType: value.output.mediaType,
     };
   }
+
+  async delete(output: ArtifactOutputObject): Promise<void> {
+    this.values.delete(output.objectPath);
+  }
 }
 
 function harness() {
@@ -97,12 +101,17 @@ function harness() {
   });
   const firebaseAuth: RequestHandler = (req, _res, next) => {
     req.uid = "builder-1";
+    req.workspaceSlug = "builder-one";
     req.user = { mattermost: { userId: "u".repeat(26) } };
     next();
   };
   const workerAuth: RequestHandler = (_req, _res, next) => next();
   const access: ArtifactAccessAuthorizer = {
-    authorizeRequest: async (_mmUserId: string, value: unknown) => value,
+    authorizeRequest: async (_mmUserId: string, value: unknown) => ({
+      request: value,
+      workspaceSlug: "channel-workspace",
+      workspaceOwnerUid: "workspace-owner",
+    }),
     assertChannelMember: async () => undefined,
   };
   const source = {
@@ -123,7 +132,7 @@ function harness() {
   app.use((error: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     res.status(500).json({ error: error.message });
   });
-  return { app, store, blobs, access };
+  return { app, store, blobs, access, registry };
 }
 
 function artifactRequest() {
@@ -175,6 +184,11 @@ describe("chat artifact routes", () => {
     expect(first.body.artifactId).toBe(second.body.artifactId);
     expect(first.body.status).toBe("queued");
     expect(h.store.jobs).toHaveLength(1);
+    expect(h.store.jobs.values().next().value).toMatchObject({
+      ownerUid: "builder-1",
+      workspaceSlug: "channel-workspace",
+      workspaceOwnerUid: "workspace-owner",
+    });
   });
 
   it("checks current channel membership before returning job state", async () => {
@@ -299,6 +313,30 @@ describe("chat artifact routes", () => {
       .set("x-artifact-lease", "wrong")
       .expect(409);
     expect(response.body.error).toContain("lease");
+  });
+
+  it("deletes a just-written derivative when lifecycle fencing rejects publication", async () => {
+    const h = harness();
+    const created = await request(h.app).post("/api/chat/artifacts").send(artifactRequest()).expect(202);
+    const claim = await request(h.app)
+      .post("/internal/chat-artifacts/claim")
+      .send({ workerId: "pdf-worker-1" })
+      .expect(200);
+    vi.spyOn(h.registry, "stageOutput").mockRejectedValueOnce(
+      new Error("artifact workspace owner is not active"),
+    );
+    const markdown = Buffer.from("# Extracted\n");
+
+    await request(h.app)
+      .put(`/internal/chat-artifacts/${created.body.artifactId}/outputs/markdown`)
+      .set("x-artifact-worker-id", "pdf-worker-1")
+      .set("x-artifact-lease", claim.body.leaseToken)
+      .set("x-content-sha256", createHash("sha256").update(markdown).digest("hex"))
+      .set("content-type", "application/octet-stream")
+      .send(markdown)
+      .expect(500);
+
+    expect(h.blobs.values).toHaveLength(0);
   });
 
   it("rejects output bytes that do not match the declared derivative format", async () => {

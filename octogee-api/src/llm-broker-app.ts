@@ -1187,6 +1187,46 @@ async function fetchUpstreamHeaders(args: {
   }
 }
 
+function reportBrokerResolutionError(deps: LlmBrokerAppDeps, error: unknown): void {
+  deps.onMeteringError?.(error);
+}
+
+async function ownerAllowsBrokerRequest(
+  deps: LlmBrokerAppDeps,
+  record: ModelBrokerTokenRecord,
+  res: ExpressResponse,
+): Promise<boolean> {
+  if (!deps.resolveOwnerAccess) return true;
+  try {
+    const active = await deps.resolveOwnerAccess({
+      gatewayId: record.gatewayId,
+      ownerUid: record.ownerUid,
+    });
+    if (active) return true;
+    res.status(403).json({ error: "model broker owner is not active" });
+    return false;
+  } catch (error) {
+    reportBrokerResolutionError(deps, error);
+    res.status(503).json({ error: "model broker owner resolution failed" });
+    return false;
+  }
+}
+
+async function resolveGrantForBrokerRequest(
+  deps: LlmBrokerAppDeps,
+  record: ModelBrokerTokenRecord,
+  now: number,
+  res: ExpressResponse,
+): Promise<OwnerModelBrokerGrant | null> {
+  try {
+    return await grantForRecord(deps, record, now);
+  } catch (error) {
+    reportBrokerResolutionError(deps, error);
+    res.status(503).json({ error: "model broker grant resolution failed" });
+    return null;
+  }
+}
+
 export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
   const app = express();
   const fetchImpl = deps.fetchImpl ?? fetch;
@@ -1259,23 +1299,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
           res.status(401).json({ error: "invalid broker token" });
           return;
         }
-        if (deps.resolveOwnerAccess) {
-          let ownerActive: boolean;
-          try {
-            ownerActive = await deps.resolveOwnerAccess({
-              gatewayId: record.gatewayId,
-              ownerUid: record.ownerUid,
-            });
-          } catch (err) {
-            (deps.onMeteringError ?? (() => undefined))(err);
-            res.status(503).json({ error: "model broker owner resolution failed" });
-            return;
-          }
-          if (!ownerActive) {
-            res.status(403).json({ error: "model broker owner is not active" });
-            return;
-          }
-        }
+        if (!(await ownerAllowsBrokerRequest(deps, record, res))) return;
         if (!providerAllowedEndpoint(record.provider, req, url)) {
           res.status(404).json({ error: "unsupported LLM broker endpoint" });
           return;
@@ -1290,14 +1314,8 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
           res.status(503).json({ error: `${record.provider} upstream is not configured` });
           return;
         }
-        let grant: OwnerModelBrokerGrant;
-        try {
-          grant = await grantForRecord(deps, record, now());
-        } catch (err) {
-          (deps.onMeteringError ?? (() => undefined))(err);
-          res.status(503).json({ error: "model broker grant resolution failed" });
-          return;
-        }
+        const grant = await resolveGrantForBrokerRequest(deps, record, now(), res);
+        if (!grant) return;
         const requestModel = readRequestMetadata(req.body).model;
         const logGate: GateLogger = (decision, extra = {}) => {
           deps.log?.("llm-broker gate", {

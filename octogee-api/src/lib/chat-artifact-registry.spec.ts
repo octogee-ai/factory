@@ -16,6 +16,11 @@ const REQUEST = parseArtifactRequest({
   mediaType: "application/pdf",
   byteLength: 4096,
 });
+const OWNERSHIP = {
+  ownerUid: "uid-alice",
+  workspaceSlug: "alice",
+  workspaceOwnerUid: "uid-alice",
+};
 
 class MemoryStore implements ArtifactJobStore {
   readonly jobs = new Map<string, ArtifactJob>();
@@ -64,16 +69,16 @@ function registry(store = new MemoryStore()) {
 describe("ArtifactRegistry", () => {
   it("enqueues idempotently without replacing terminal state", async () => {
     const harness = registry();
-    const first = await harness.registry.enqueue(REQUEST);
+    const first = await harness.registry.enqueue(REQUEST, OWNERSHIP);
     harness.store.jobs.set(first.artifactId, { ...first, status: "ready" });
-    const again = await harness.registry.enqueue(REQUEST);
+    const again = await harness.registry.enqueue(REQUEST, OWNERSHIP);
     expect(again.status).toBe("ready");
     expect(harness.store.jobs).toHaveLength(1);
   });
 
   it("leases queued work and returns the plaintext token only to the claimant", async () => {
     const harness = registry();
-    const queued = await harness.registry.enqueue(REQUEST);
+    const queued = await harness.registry.enqueue(REQUEST, OWNERSHIP);
     const claimed = await harness.registry.claimNext("pdf-worker-1");
     expect(claimed?.job.artifactId).toBe(queued.artifactId);
     expect(claimed?.leaseToken).toMatch(/^lease-/);
@@ -83,7 +88,7 @@ describe("ArtifactRegistry", () => {
 
   it("reclaims an expired processing lease", async () => {
     const harness = registry();
-    const queued = await harness.registry.enqueue(REQUEST);
+    const queued = await harness.registry.enqueue(REQUEST, OWNERSHIP);
     harness.store.jobs.set(queued.artifactId, {
       ...queued,
       status: "processing",
@@ -101,7 +106,7 @@ describe("ArtifactRegistry", () => {
 
   it("dead-letters work after the capped number of crashed attempts", async () => {
     const harness = registry();
-    const queued = await harness.registry.enqueue(REQUEST);
+    const queued = await harness.registry.enqueue(REQUEST, OWNERSHIP);
     harness.store.jobs.set(queued.artifactId, {
       ...queued,
       status: "processing",
@@ -123,16 +128,16 @@ describe("ArtifactRegistry", () => {
 
   it("rejects missing and non-string worker identities before claiming work", async () => {
     const harness = registry();
-    await harness.registry.enqueue(REQUEST);
+    await harness.registry.enqueue(REQUEST, OWNERSHIP);
 
     await expect(harness.registry.claimNext(undefined as never)).rejects.toThrow("worker id");
     await expect(harness.registry.claimNext(123 as never)).rejects.toThrow("worker id");
-    expect((await harness.registry.get((await harness.registry.enqueue(REQUEST)).artifactId))?.status).toBe("queued");
+    expect((await harness.registry.get((await harness.registry.enqueue(REQUEST, OWNERSHIP)).artifactId))?.status).toBe("queued");
   });
 
   it("renews only the active worker lease", async () => {
     const harness = registry();
-    await harness.registry.enqueue(REQUEST);
+    await harness.registry.enqueue(REQUEST, OWNERSHIP);
     const claimed = (await harness.registry.claimNext("pdf-worker-1"))!;
     const renewed = await harness.registry.renewLease(
       claimed.job.artifactId,
@@ -147,7 +152,7 @@ describe("ArtifactRegistry", () => {
 
   it("rejects output from a different or expired lease", async () => {
     const harness = registry();
-    await harness.registry.enqueue(REQUEST);
+    await harness.registry.enqueue(REQUEST, OWNERSHIP);
     const claimed = (await harness.registry.claimNext("pdf-worker-1"))!;
     await expect(
       harness.registry.stageOutput(claimed.job.artifactId, "pdf-worker-1", "wrong-token", {
@@ -162,7 +167,7 @@ describe("ArtifactRegistry", () => {
 
   it("records a trusted checksum only when the canonical source length matches Mattermost", async () => {
     const harness = registry();
-    await harness.registry.enqueue(REQUEST);
+    await harness.registry.enqueue(REQUEST, OWNERSHIP);
     const claimed = (await harness.registry.claimNext("pdf-worker-1"))!;
     await expect(harness.registry.verifySource(
       claimed.job.artifactId,
@@ -181,7 +186,7 @@ describe("ArtifactRegistry", () => {
 
   it("preserves the first canonical source digest across a reclaimed attempt", async () => {
     const harness = registry();
-    await harness.registry.enqueue(REQUEST);
+    await harness.registry.enqueue(REQUEST, OWNERSHIP);
     const first = (await harness.registry.claimNext("pdf-worker-1"))!;
     await harness.registry.verifySource(
       first.job.artifactId,
@@ -207,7 +212,7 @@ describe("ArtifactRegistry", () => {
 
   it("publishes staged outputs under the active lease", async () => {
     const harness = registry();
-    await harness.registry.enqueue(REQUEST);
+    await harness.registry.enqueue(REQUEST, OWNERSHIP);
     const claimed = (await harness.registry.claimNext("pdf-worker-1"))!;
     const auth = [claimed.job.artifactId, "pdf-worker-1", claimed.leaseToken] as const;
     await harness.registry.verifySource(...auth, { sha256: "a".repeat(64), byteLength: 4096 });
@@ -239,6 +244,7 @@ describe("ArtifactRegistry", () => {
 describe("Firestore artifact job store", () => {
   it("creates atomically and refuses a corrupt stored idempotency key", async () => {
     const documents = new Map<string, Record<string, unknown>>();
+    documents.set("users/uid-alice", { accountLifecycle: { status: "active" } });
     const snapshot = (path: string) => ({
       exists: documents.has(path),
       data: () => documents.get(path),
@@ -263,10 +269,49 @@ describe("Firestore artifact job store", () => {
       now: () => new Date("2026-07-13T12:00:00.000Z"),
       leaseToken: () => `lease-${"x".repeat(32)}`,
     });
-    const created = await firestoreRegistry.enqueue(REQUEST);
+    const created = await firestoreRegistry.enqueue(REQUEST, OWNERSHIP);
     expect((await store.get(created.artifactId))?.status).toBe("queued");
     const path = `chatArtifactJobs/${created.artifactId}`;
     documents.set(path, { ...documents.get(path), artifactId: "0".repeat(64) });
     await expect(store.get(created.artifactId)).rejects.toThrow("idempotency");
+  });
+
+  it("hides existing jobs and rejects worker transactions after the workspace owner is suspended", async () => {
+    const documents = new Map<string, Record<string, unknown>>();
+    documents.set("users/uid-alice", { accountLifecycle: { status: "active" } });
+    const snapshot = (path: string) => ({
+      exists: documents.has(path),
+      data: () => documents.get(path),
+    });
+    const emptyQuery = {
+      where: () => emptyQuery,
+      limit: () => ({ get: async () => ({ docs: [] }) }),
+    };
+    const db = {
+      doc: (path: string) => ({ path, get: async () => snapshot(path) }),
+      runTransaction: async <T>(run: (tx: {
+        get(ref: { path: string }): Promise<ReturnType<typeof snapshot>>;
+        set(ref: { path: string }, value: Record<string, unknown>): void;
+      }) => Promise<T>) => run({
+        get: async (ref) => snapshot(ref.path),
+        set: (ref, value) => { documents.set(ref.path, structuredClone(value)); },
+      }),
+      collection: () => emptyQuery,
+    };
+    const store = createFirestoreArtifactJobStore(db);
+    const firestoreRegistry = new ArtifactRegistry(store, {
+      now: () => new Date("2026-07-13T12:00:00.000Z"),
+      leaseToken: () => `lease-${"x".repeat(32)}`,
+    });
+    const created = await firestoreRegistry.enqueue(REQUEST, OWNERSHIP);
+
+    documents.set("users/uid-alice", {
+      accountLifecycle: { status: "deletion_scheduled" },
+    });
+
+    await expect(store.get(created.artifactId)).resolves.toBeNull();
+    await expect(
+      store.transact(created.artifactId, (job) => ({ ...job!, status: "failed" })),
+    ).rejects.toThrow("workspace owner is not active");
   });
 });

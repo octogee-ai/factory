@@ -11,7 +11,8 @@ export interface ErasureDeletionJob {
   uid: string;
   status: string;
   eraseAfter: number;
-  stripeCustomerId: string | null;
+  stripeCustomerIds: string[];
+  archiveId: string | null;
   cleanupContext: CustomerCleanupContext | null;
 }
 
@@ -19,17 +20,19 @@ export interface EraseCustomerDeps {
   loadDeletionJob: (deletionId: string) => Promise<ErasureDeletionJob | null>;
   ensureAnonymousArchive: (deletionId: string) => Promise<string>;
   deleteStripeCustomer: (customerId: string) => Promise<void>;
+  discoverStripeCustomerIds: (uid: string) => Promise<string[]>;
+  persistStripeCustomerIds: (deletionId: string, customerIds: string[]) => Promise<void>;
   ensureDedicatedGatewayRetired: (
     cleanup: CustomerCleanupContext,
     deletionId: string,
   ) => Promise<"not-owned" | "retirement-pending" | "retired">;
+  findUndrainedArtifactIds: (artifactIds: string[]) => Promise<string[]>;
   cloudErase: (
     cleanup: CustomerCleanupContext,
     currentOperationId: string,
   ) => Promise<NukeCloudStepResult[]>;
   verifyErasure: (
-    uid: string,
-    slug: string,
+    cleanup: CustomerCleanupContext,
     currentOperationId: string,
   ) => Promise<string[]>;
   finalizeVerifiedErasure: (
@@ -53,50 +56,135 @@ async function report(
   await ctx.reportStep({ completedAt: deps.now(), ...step });
 }
 
-export function createEraseCustomerHandler(deps: EraseCustomerDeps): OperationHandler {
-  return async (op: Operation, ctx: OperationContext): Promise<OperationResult> => {
-    const input = op.input as EraseInput;
-    const uid = typeof input.uid === "string" ? input.uid : null;
-    const deletionId = typeof input.deletionId === "string" ? input.deletionId : null;
-    if (!uid || !deletionId) {
-      return { steps: [], success: false, error: "missing uid or deletionId in op.input" };
-    }
-    const job = await deps.loadDeletionJob(deletionId);
-    if (!job || job.uid !== uid) {
-      return { steps: [], success: false, error: `deletion job not found or mismatched: ${deletionId}` };
-    }
-    if (deps.now() < job.eraseAfter) {
-      return { steps: [], success: false, error: "erasure started before the retention deadline" };
-    }
-    if (!job.cleanupContext || job.status !== "hibernating") {
-      return {
+interface EraseCustomerContext {
+  deletionId: string;
+  job: ErasureDeletionJob;
+  cleanup: CustomerCleanupContext;
+}
+
+type EraseCustomerLoadResult =
+  | { kind: "context"; context: EraseCustomerContext }
+  | { kind: "error"; error: OperationResult }
+  | { kind: "verified"; deletionId: string; archiveId: string };
+
+async function loadEraseCustomerContext(
+  op: Operation,
+  deps: EraseCustomerDeps,
+): Promise<EraseCustomerLoadResult> {
+  const input = op.input as EraseInput;
+  const uid = typeof input.uid === "string" ? input.uid : null;
+  const deletionId = typeof input.deletionId === "string" ? input.deletionId : null;
+  if (!uid || !deletionId) {
+    return { kind: "error", error: { steps: [], success: false, error: "missing uid or deletionId in op.input" } };
+  }
+  const job = await deps.loadDeletionJob(deletionId);
+  if (!job || job.uid !== uid) {
+    return { kind: "error", error: { steps: [], success: false, error: `deletion job not found or mismatched: ${deletionId}` } };
+  }
+  if (deps.now() < job.eraseAfter) {
+    return { kind: "error", error: { steps: [], success: false, error: "erasure started before the retention deadline" } };
+  }
+  if (job.status === "verified_pending_completion" && job.archiveId) {
+    return { kind: "verified", deletionId, archiveId: job.archiveId };
+  }
+  if (!job.cleanupContext || job.status !== "hibernating") {
+    return {
+      kind: "error",
+      error: {
         steps: [],
         success: false,
         error: "customer suspension cleanup context pending",
         output: { deletionFencePending: { deletionId } },
-      };
+      },
+    };
+  }
+  return { kind: "context", context: { deletionId, job, cleanup: job.cleanupContext } };
+}
+
+function cleanupRetry(deletionId: string, error: string): OperationResult {
+  return {
+    steps: [],
+    success: false,
+    error,
+    output: { deletionCleanupRetry: { deletionId } },
+  };
+}
+
+function verifiedErasureResult(deletionId: string, archiveId: string): OperationResult {
+  return {
+    steps: [],
+    success: true,
+    output: { archiveId, verifiedDeletion: { deletionId, archiveId } },
+    scrubInputOnSuccess: true,
+  };
+}
+
+async function eraseStripeCustomers(
+  context: EraseCustomerContext,
+  ctx: OperationContext,
+  deps: EraseCustomerDeps,
+): Promise<OperationResult | null> {
+  try {
+    const customerIds = [...new Set([
+      ...context.job.stripeCustomerIds,
+      ...await deps.discoverStripeCustomerIds(context.job.uid),
+    ])].sort();
+    await deps.persistStripeCustomerIds(context.deletionId, customerIds);
+    for (const customerId of customerIds) await deps.deleteStripeCustomer(customerId);
+    const remaining = await deps.discoverStripeCustomerIds(context.job.uid);
+    if (remaining.length > 0) {
+      throw new Error(`Stripe customers remain: ${remaining.sort().join(", ")}`);
     }
+    await report(ctx, deps, {
+      name: "delete-stripe-customers",
+      status: customerIds.length > 0 ? "done" : "skipped",
+    });
+    return null;
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    await report(ctx, deps, { name: "delete-stripe-customers", status: "failed", error });
+    return cleanupRetry(context.deletionId, error);
+  }
+}
+
+function cloudStepStatus(result: NukeCloudStepResult): OperationStep["status"] {
+  if (result.skipped) return "skipped";
+  return result.ok ? "done" : "failed";
+}
+
+async function reportCloudErasure(
+  results: NukeCloudStepResult[],
+  ctx: OperationContext,
+  deps: EraseCustomerDeps,
+): Promise<void> {
+  for (const result of results) {
+    await report(ctx, deps, {
+      name: result.key,
+      status: cloudStepStatus(result),
+      ...(result.error ? { error: result.error } : {}),
+    });
+  }
+}
+
+async function runEraseCustomer(
+  op: Operation,
+  ctx: OperationContext,
+  deps: EraseCustomerDeps,
+): Promise<OperationResult> {
+  const loaded = await loadEraseCustomerContext(op, deps);
+  if (loaded.kind === "error") return loaded.error;
+  if (loaded.kind === "verified") {
+    return verifiedErasureResult(loaded.deletionId, loaded.archiveId);
+  }
+    const { deletionId, cleanup } = loaded.context;
 
     const archiveId = await deps.ensureAnonymousArchive(deletionId);
     await report(ctx, deps, { name: "archive-operational-data", status: "done" });
 
-    if (job.stripeCustomerId) {
-      try {
-        await deps.deleteStripeCustomer(job.stripeCustomerId);
-        await report(ctx, deps, { name: "delete-stripe-customer", status: "done" });
-      } catch (err) {
-        const error = err instanceof Error ? err.message : String(err);
-        await report(ctx, deps, { name: "delete-stripe-customer", status: "failed", error });
-        return { steps: [], success: false, error };
-      }
-    } else {
-      await report(ctx, deps, { name: "delete-stripe-customer", status: "skipped" });
-    }
+    const stripeFailure = await eraseStripeCustomers(loaded.context, ctx, deps);
+    if (stripeFailure) return stripeFailure;
 
-    const retirement = await deps.ensureDedicatedGatewayRetired(
-      job.cleanupContext,
-      deletionId,
-    );
+    const retirement = await deps.ensureDedicatedGatewayRetired(cleanup, deletionId);
     if (retirement === "retirement-pending") {
       await report(ctx, deps, { name: "retire-dedicated-gateway", status: "running" });
       return {
@@ -111,39 +199,44 @@ export function createEraseCustomerHandler(deps: EraseCustomerDeps): OperationHa
       status: retirement === "not-owned" ? "skipped" : "done",
     });
 
-    const cloudResults = await deps.cloudErase(job.cleanupContext, op.id);
-    for (const result of cloudResults) {
-      await report(ctx, deps, {
-        name: result.key,
-        status: result.skipped ? "skipped" : result.ok ? "done" : "failed",
-        ...(result.error ? { error: result.error } : {}),
-      });
+    const undrainedArtifactIds = await deps.findUndrainedArtifactIds(cleanup.chatArtifactIds);
+    if (undrainedArtifactIds.length > 0) {
+      await report(ctx, deps, { name: "drain-artifact-workers", status: "running" });
+      return {
+        steps: [],
+        success: false,
+        error: `artifact workers still hold leases: ${undrainedArtifactIds.join(", ")}`,
+        output: { artifactDrainPending: { deletionId } },
+      };
     }
+    await report(ctx, deps, {
+      name: "drain-artifact-workers",
+      status: cleanup.chatArtifactIds.length > 0 ? "done" : "skipped",
+    });
+
+    const cloudResults = await deps.cloudErase(cleanup, op.id);
+    await reportCloudErasure(cloudResults, ctx, deps);
     const failures = cloudResults.filter((result) => !result.ok && !result.skipped);
     if (failures.length > 0) {
-      return {
-        steps: [],
-        success: false,
-        error: failures.map((result) => `${result.key}: ${result.error}`).join("; "),
-      };
+      return cleanupRetry(
+        deletionId,
+        failures.map((result) => `${result.key}: ${result.error}`).join("; "),
+      );
     }
 
-    const remaining = await deps.verifyErasure(uid, job.cleanupContext.slug, op.id);
+    const remaining = await deps.verifyErasure(cleanup, op.id);
     if (remaining.length > 0) {
-      return {
-        steps: [],
-        success: false,
-        error: `erasure verification found identifying references: ${remaining.join(", ")}`,
-      };
+      return cleanupRetry(
+        deletionId,
+        `erasure verification found identifying references: ${remaining.join(", ")}`,
+      );
     }
     await report(ctx, deps, { name: "verify-erasure", status: "done" });
     await deps.finalizeVerifiedErasure(deletionId, archiveId, op.id);
     await report(ctx, deps, { name: "destroy-identity-mapping", status: "done" });
-    return {
-      steps: [],
-      success: true,
-      output: { archiveId },
-      scrubInputOnSuccess: true,
-    };
-  };
+    return verifiedErasureResult(deletionId, archiveId);
+}
+
+export function createEraseCustomerHandler(deps: EraseCustomerDeps): OperationHandler {
+  return (op, ctx) => runEraseCustomer(op, ctx, deps);
 }

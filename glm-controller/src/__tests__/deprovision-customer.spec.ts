@@ -39,12 +39,17 @@ function mkCleanup(overrides: Partial<CustomerCleanupContext> = {}): CustomerCle
     email: "alice@example.com",
     giteaOrg: "alice",
     repoNames: ["workspace", "blog"],
+    projectSlugs: ["blog"],
     workspaceTeamId: "team-1",
     mmUserId: "mm-u-1",
     mmCoachUserId: "mm-coach-1",
     adminChannelId: "mm-c-admin",
     currentGatewayId: "gw-test",
     credentialSecretNames: [],
+    projectAgentMmUserIds: ["mm-project-1"],
+    projectAgentCredentialDocPaths: [
+      "users/uid-alice/secrets/projectAgentMattermost-blog",
+    ],
     ...overrides,
   };
 }
@@ -64,6 +69,7 @@ function mkDeps(overrides: Partial<DeprovisionCustomerDeps> = {}): DeprovisionCu
         destroyChannel: vi.fn(async () => undefined),
         destroyTeam: vi.fn(async () => undefined),
         getUserChannels: vi.fn(async () => []),
+        userExists: vi.fn(async () => false),
       },
       nukeUserFirestore: vi.fn(async () => undefined),
       deleteCustomerStorage: vi.fn(async () => undefined),
@@ -182,6 +188,7 @@ describe("createDeprovisionCustomerHandler — cloud step failure", () => {
           destroyChannel: vi.fn(),
           destroyTeam: vi.fn(),
           getUserChannels: vi.fn(async () => []),
+          userExists: vi.fn(async () => false),
         },
         nukeUserFirestore: vi.fn(),
         deleteCustomerStorage: vi.fn(),

@@ -8,8 +8,8 @@ interface CustomerDeletionPlanInput {
   deletionId: string;
   suspensionOperationId: string;
   erasureOperationId: string;
-  stripeCustomerId: string | null;
-  stripeSubscriptionId: string | null;
+  stripeCustomerIds: string[];
+  stripeSubscriptionIds: string[];
 }
 
 function operationRecord(input: {
@@ -60,8 +60,8 @@ export function buildCustomerDeletionPlan(input: CustomerDeletionPlanInput): {
       requestedAt: input.requestedAt,
       eraseAfter: input.eraseAfter,
       currentGatewayId: input.currentGatewayId,
-      stripeCustomerId: input.stripeCustomerId,
-      stripeSubscriptionId: input.stripeSubscriptionId,
+      stripeCustomerIds: input.stripeCustomerIds,
+      stripeSubscriptionIds: input.stripeSubscriptionIds,
       suspensionOperationId: input.suspensionOperationId,
       erasureOperationId: input.erasureOperationId,
     },

@@ -252,6 +252,7 @@ async function writeProvisioningProject(
   await projectRef.set({
     id: plan.slug,
     ownerUid: plan.uid,
+    ownerActive: true,
     workspaceId: plan.workspaceId,
     slug: plan.slug,
     name: plan.trimmedName,

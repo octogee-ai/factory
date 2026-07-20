@@ -491,14 +491,24 @@ if (!admin.apps.length) {
 }
 const db = admin.firestore();
 
-export async function verifyAuth(req: http.IncomingMessage): Promise<string | null> {
+function proxyAuthToken(req: http.IncomingMessage): string | null {
   const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith("Bearer ") || authHeader?.startsWith("BEARER ")) {
+    return authHeader.slice(7);
+  }
+  return authHeader?.startsWith("Token ") ? authHeader.slice(6) : null;
+}
 
-  let token: string | null = null;
-  if (authHeader?.startsWith("Bearer ")) token = authHeader.slice(7);
-  else if (authHeader?.startsWith("BEARER ")) token = authHeader.slice(7);
-  else if (authHeader?.startsWith("Token ")) token = authHeader.slice(6);
+function authFailureMessage(error: unknown): string {
+  if (typeof error === "object" && error !== null) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string" && code.length > 0) return code;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
 
+export async function verifyAuth(req: http.IncomingMessage): Promise<string | null> {
+  const token = proxyAuthToken(req);
   if (!token) return null;
 
   try {
@@ -508,12 +518,8 @@ export async function verifyAuth(req: http.IncomingMessage): Promise<string | nu
     return userData && accountAllowsInteractiveAccess(userData)
       ? decoded.uid
       : null;
-  } catch (e) {
-    const code =
-      typeof e === 'object' && e !== null
-        ? (e as { code?: string }).code
-        : undefined;
-    console.error(`[proxy] auth failed: ${code || (e instanceof Error ? e.message : String(e))}`);
+  } catch (error) {
+    console.error(`[proxy] auth failed: ${authFailureMessage(error)}`);
     return null;
   }
 }

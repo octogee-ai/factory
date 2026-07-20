@@ -34,6 +34,41 @@ function month(value: number | null): string | null {
   return new Date(value).toISOString().slice(0, 7);
 }
 
+function canonicalAnthropicModel(raw: string): string {
+  if (raw.includes("fable")) return "fable";
+  if (raw.includes("mythos")) return "mythos";
+  if (raw.includes("sonnet")) return "sonnet";
+  if (raw.includes("haiku-3-5") || raw.includes("haiku-3.5")) return "haiku-3.5";
+  if (raw.includes("haiku")) return "haiku-4.5";
+  if (raw.includes("opus-4-1") || raw.includes("opus-4-0")) return "opus-legacy";
+  if (raw.includes("opus")) return "opus-latest";
+  return "unknown-fable-fallback";
+}
+
+function canonicalProviderModel(provider: string, raw: string): string {
+  if (provider === "anthropic") return canonicalAnthropicModel(raw);
+  if (provider === "openrouter") {
+    const known = raw === "z-ai/glm-5.2" || raw === "deepseek/deepseek-v4-pro";
+    return known ? `openrouter:${raw}` : "openrouter:unknown-fallback";
+  }
+  if (provider === "openai") {
+    return raw.startsWith("gpt-5.4-mini")
+      ? "openai:gpt-5.4-mini"
+      : "openai:unknown-fallback";
+  }
+  if (provider === "brave") return raw === "brave/web-search" ? raw : "brave/unknown";
+  if (provider === "tavily") {
+    const known = [
+      "tavily/search-basic",
+      "tavily/search-advanced",
+      "tavily/extract-basic",
+      "tavily/extract-advanced",
+    ].includes(raw);
+    return known ? raw : "tavily/unknown";
+  }
+  return "unknown";
+}
+
 function canonicalModelDimension(
   providerValue: unknown,
   modelValue: unknown,
@@ -44,34 +79,7 @@ function canonicalModelDimension(
     return { provider, model: billingModelValue as string };
   }
   const raw = typeof modelValue === "string" ? modelValue.toLowerCase() : "";
-  let model = "unknown";
-  if (provider === "anthropic") {
-    if (raw.includes("fable")) model = "fable";
-    else if (raw.includes("mythos")) model = "mythos";
-    else if (raw.includes("sonnet")) model = "sonnet";
-    else if (raw.includes("haiku-3-5") || raw.includes("haiku-3.5")) model = "haiku-3.5";
-    else if (raw.includes("haiku")) model = "haiku-4.5";
-    else if (raw.includes("opus-4-1") || raw.includes("opus-4-0")) model = "opus-legacy";
-    else if (raw.includes("opus")) model = "opus-latest";
-    else model = "unknown-fable-fallback";
-  } else if (provider === "openrouter") {
-    model = raw === "z-ai/glm-5.2" || raw === "deepseek/deepseek-v4-pro"
-      ? `openrouter:${raw}`
-      : "openrouter:unknown-fallback";
-  } else if (provider === "openai") {
-    model = raw.startsWith("gpt-5.4-mini")
-      ? "openai:gpt-5.4-mini"
-      : "openai:unknown-fallback";
-  } else if (provider === "brave") {
-    model = raw === "brave/web-search" ? raw : "brave/unknown";
-  } else if (provider === "tavily") {
-    model = [
-      "tavily/search-basic",
-      "tavily/search-advanced",
-      "tavily/extract-basic",
-      "tavily/extract-advanced",
-    ].includes(raw) ? raw : "tavily/unknown";
-  }
+  const model = canonicalProviderModel(provider, raw);
   return isAnonymousOperationalModelDimension(provider, model)
     ? { provider, model }
     : { provider: "unknown", model: "unknown" };

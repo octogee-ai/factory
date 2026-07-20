@@ -8,8 +8,8 @@ interface CustomerDeletionPlanInput {
     deletionId: string;
     suspensionOperationId: string;
     erasureOperationId: string;
-    stripeCustomerId: string | null;
-    stripeSubscriptionId: string | null;
+    stripeCustomerIds: string[];
+    stripeSubscriptionIds: string[];
 }
 export declare function buildCustomerDeletionPlan(input: CustomerDeletionPlanInput): {
     lifecycle: Record<string, unknown>;

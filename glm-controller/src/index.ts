@@ -107,8 +107,9 @@ import {
 } from "./operation-queue.js";
 import {
   buildOperationCompletionUpdate,
-  operationNeedsDurableCustomerMigrationV2Resume,
+  operationNeedsDurableRestartResume,
   shouldPersistClaimedOperationCompletion,
+  verifiedDeletionCompletion,
 } from "./operation-retry.js";
 import { completeOperatorReservationAfterMigration } from "./operator-reservation-completion.js";
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
@@ -202,6 +203,11 @@ import {
   cancelStripeSubscription,
   deleteStripeCustomer,
   disableCreditAutoTopUp,
+  expireStripeCheckoutSession,
+  invalidatePendingCredentialFlows,
+  listLiveStripeSubscriptionIds,
+  listOpenStripeCheckoutSessionIds,
+  listStripeCustomerIdsForUid,
   pauseOwnedDedicatedGateway,
   revokeOwnerModelBrokerTokens,
 } from "./lib/customer-ops/customer-suspension-runtime.js";
@@ -1205,11 +1211,16 @@ export const OPERATION_QUEUE_DRAIN_MS_DEFAULT = 20_000;
 
 // Restart re-drive candidates. The predicate below admits only migrations with
 // the durable V2 state machine; legacy rollout sub-operations remain rollout-owned.
-const RESUMABLE_OP_KINDS: ReadonlySet<string> = new Set(["rollout", MIGRATE_CUSTOMER_KIND]);
+const RESUMABLE_OP_KINDS: ReadonlySet<string> = new Set([
+  "rollout",
+  MIGRATE_CUSTOMER_KIND,
+  "suspend-customer",
+  "erase-customer",
+]);
 
 function operationIsRestartResumable(op: Operation): boolean {
   if (op.kind === "rollout") return true;
-  return operationNeedsDurableCustomerMigrationV2Resume(op);
+  return operationNeedsDurableRestartResume(op);
 }
 
 // Claim, queue, or skip a pending op in one transaction: reads the OTHER
@@ -1461,6 +1472,7 @@ async function runClaimedOperation(
     if (!shouldPersistClaimedOperationCompletion(status)) return null;
     const completion = buildOperationCompletionUpdate({
       op: {
+        kind: freshOp?.kind,
         attempts: freshOp?.attempts,
         attemptHistory: freshOp?.attemptHistory,
         startedAt: freshOp?.startedAt,
@@ -1470,6 +1482,27 @@ async function runClaimedOperation(
       steps,
       now: Date.now(),
     });
+    const verifiedDeletion = verifiedDeletionCompletion(result);
+    if (verifiedDeletion) {
+      txn.set(
+        deps.db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(verifiedDeletion.deletionId),
+        {
+          status: "verified",
+          archiveId: verifiedDeletion.archiveId,
+          completedAt: Date.now(),
+          uid: FieldValue.delete(),
+          slug: FieldValue.delete(),
+          requestedBy: FieldValue.delete(),
+          currentGatewayId: FieldValue.delete(),
+          stripeCustomerIds: FieldValue.delete(),
+          stripeSubscriptionIds: FieldValue.delete(),
+          cleanupContext: FieldValue.delete(),
+          suspensionOperationId: FieldValue.delete(),
+          erasureOperationId: FieldValue.delete(),
+        },
+        { merge: true },
+      );
+    }
     txn.update(ref, completion);
     return completion;
   });
@@ -2608,6 +2641,29 @@ function deletionEnvironment(): string {
     : "prod";
 }
 
+function deletionPlanTier(user: Record<string, unknown> | undefined): string | null {
+  if (typeof user?.selectedTier === "string") return user.selectedTier;
+  const subscription = user?.subscription as Record<string, unknown> | undefined;
+  return typeof subscription?.tier === "string" ? subscription.tier : null;
+}
+
+function deletionGatewayClass(gateway: Record<string, unknown> | undefined): string | null {
+  if (!gateway) return null;
+  const gatewayClass = isGatewayClass(gateway.gatewayClass) ? gateway.gatewayClass : undefined;
+  const profile = isGatewayProfile(gateway.profile) ? gateway.profile : undefined;
+  const imageProfile = isGatewayProfile(gateway.imageProfile) ? gateway.imageProfile : undefined;
+  return resolveGatewayClass({ gatewayClass, profile, imageProfile });
+}
+
+async function deletionGateway(
+  db: Firestore,
+  currentGatewayId: unknown,
+): Promise<Record<string, unknown> | undefined> {
+  if (typeof currentGatewayId !== "string") return undefined;
+  const snapshot = await db.collection(GATEWAYS_COLLECTION).doc(currentGatewayId).get();
+  return snapshot.data() as Record<string, unknown> | undefined;
+}
+
 async function ensureAnonymousDeletionArchive(
   db: Firestore,
   deletionId: string,
@@ -2621,35 +2677,20 @@ async function ensureAnonymousDeletionArchive(
   }
   if (typeof job.uid !== "string") throw new Error(`deletion job ${deletionId} has no uid`);
   const uid = job.uid;
-  const [userSnap, rollupSnap, gatewaySnap] = await Promise.all([
+  const [userSnap, rollupSnap, gateway] = await Promise.all([
     db.collection("users").doc(uid).get(),
     db.collection(MODEL_BROKER_USAGE_ROLLUPS_COLLECTION).doc(uid).get(),
-    typeof job.currentGatewayId === "string"
-      ? db.collection(GATEWAYS_COLLECTION).doc(job.currentGatewayId).get()
-      : Promise.resolve(null),
+    deletionGateway(db, job.currentGatewayId),
   ]);
   const user = userSnap.data() as Record<string, unknown> | undefined;
-  const subscription = user?.subscription as Record<string, unknown> | undefined;
-  const gateway = gatewaySnap?.data() as Record<string, unknown> | undefined;
   const archiveRef = db.collection(ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION).doc();
   const archive = buildAnonymousOperationalArchive({
     archivedAt: Date.now(),
     createdAt: timestampMillis(user?.createdAt),
     deletionRequestedAt: timestampMillis(job.requestedAt) ?? Date.now(),
     environment: deletionEnvironment(),
-    planTier:
-      typeof user?.selectedTier === "string"
-        ? user.selectedTier
-        : typeof subscription?.tier === "string"
-          ? subscription.tier
-          : null,
-    gatewayClass: gateway
-      ? resolveGatewayClass({
-          gatewayClass: isGatewayClass(gateway.gatewayClass) ? gateway.gatewayClass : undefined,
-          profile: isGatewayProfile(gateway.profile) ? gateway.profile : undefined,
-          imageProfile: isGatewayProfile(gateway.imageProfile) ? gateway.imageProfile : undefined,
-        })
-      : null,
+    planTier: deletionPlanTier(user),
+    gatewayClass: deletionGatewayClass(gateway),
     rollup: (rollupSnap.data() ?? {}) as Record<string, unknown>,
   });
   const batch = db.batch();
@@ -2724,8 +2765,12 @@ function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void) 
         uid: data.uid,
         status: typeof data.status === "string" ? data.status : "malformed",
         eraseAfter: data.eraseAfter,
-        stripeCustomerId:
-          typeof data.stripeCustomerId === "string" ? data.stripeCustomerId : null,
+        stripeCustomerIds: Array.isArray(data.stripeCustomerIds)
+          ? data.stripeCustomerIds.filter(
+              (value): value is string => typeof value === "string" && value.length > 0,
+            )
+          : [],
+        archiveId: typeof data.archiveId === "string" ? data.archiveId : null,
         cleanupContext:
           data.cleanupContext && typeof data.cleanupContext === "object"
             ? data.cleanupContext as CustomerCleanupContext
@@ -2739,21 +2784,64 @@ function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void) 
         requireEnv("STRIPE_SECRET_KEY", "customer erasure must delete Stripe PII"),
         customerId,
       ),
+    discoverStripeCustomerIds: (uid) =>
+      listStripeCustomerIdsForUid(
+        fetch,
+        requireEnv("STRIPE_SECRET_KEY", "customer erasure must discover Stripe PII"),
+        uid,
+      ),
+    persistStripeCustomerIds: async (deletionId, customerIds) => {
+      await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).set({
+        stripeCustomerIds: customerIds,
+        updatedAt: Date.now(),
+      }, { merge: true });
+    },
     ensureDedicatedGatewayRetired: (cleanup, deletionId) =>
       ensureDeletionGatewayRetired(db, cleanup, deletionId),
+    findUndrainedArtifactIds: async (artifactIds) => {
+      const snapshots = await Promise.all(
+        artifactIds.map((artifactId) => db.collection("chatArtifactJobs").doc(artifactId).get()),
+      );
+      const now = Date.now();
+      return snapshots.flatMap((snapshot, index) => {
+        if (!snapshot.exists) return [];
+        const data = snapshot.data() as Record<string, unknown>;
+        if (!data.lease || typeof data.lease !== "object") return [];
+        const expiresAt = (data.lease as Record<string, unknown>).expiresAt;
+        if (typeof expiresAt !== "string" || !Number.isFinite(Date.parse(expiresAt))) {
+          throw new Error(`chat artifact lease is malformed: ${snapshot.ref.path}`);
+        }
+        return Date.parse(expiresAt) + 60_000 > now ? [artifactIds[index]] : [];
+      });
+    },
     cloudErase: (cleanup, currentOperationId) =>
       nukeUserCloudSide({ ...cleanup, currentOperationId }, cloudCleanup),
-    verifyErasure: async (uid, slug, currentOperationId) => {
+    verifyErasure: async (cleanup, currentOperationId) => {
       const remaining = await verifyCustomerFirestoreErasure(
         db,
-        uid,
-        slug,
+        cleanup.uid,
+        cleanup.slug,
+        cleanup.email,
         currentOperationId,
       );
-      remaining.push(...await verifyCustomerStorageErasure(getStorage().bucket(), uid, slug));
+      remaining.push(...await verifyCustomerStorageErasure(
+        getStorage().bucket(),
+        cleanup.uid,
+        cleanup.slug,
+        cleanup.chatArtifactIds,
+      ));
+      for (const userId of [
+        cleanup.mmUserId,
+        cleanup.mmCoachUserId,
+        ...cleanup.projectAgentMmUserIds,
+      ]) {
+        if (userId && await cloudCleanup.mattermost.userExists(userId)) {
+          remaining.push(`mattermost/users/${userId}`);
+        }
+      }
       try {
-        await getAuth().getUser(uid);
-        remaining.push(`firebaseAuth/${uid}`);
+        await getAuth().getUser(cleanup.uid);
+        remaining.push(`firebaseAuth/${cleanup.uid}`);
       } catch (err) {
         const code = (err as { code?: string } | null | undefined)?.code;
         if (code !== "auth/user-not-found") throw err;
@@ -2766,18 +2854,9 @@ function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void) 
       const batch = db.batch();
       batch.set(archiveRef, { cleanupOutcomeCodes: ["verified_erasure"] }, { merge: true });
       batch.set(jobRef, {
-        status: "verified",
+        status: "verified_pending_completion",
         archiveId,
         verifiedAt: Date.now(),
-        uid: FieldValue.delete(),
-        slug: FieldValue.delete(),
-        requestedBy: FieldValue.delete(),
-        currentGatewayId: FieldValue.delete(),
-        stripeCustomerId: FieldValue.delete(),
-        stripeSubscriptionId: FieldValue.delete(),
-        cleanupContext: FieldValue.delete(),
-        suspensionOperationId: FieldValue.delete(),
-        erasureOperationId: FieldValue.delete(),
       }, { merge: true });
       await batch.commit();
     },
@@ -2802,8 +2881,16 @@ function buildSuspendCustomerHandler(
         slug: typeof data.slug === "string" ? data.slug : null,
         currentGatewayId:
           typeof data.currentGatewayId === "string" ? data.currentGatewayId : null,
-        stripeSubscriptionId:
-          typeof data.stripeSubscriptionId === "string" ? data.stripeSubscriptionId : null,
+        stripeCustomerIds: Array.isArray(data.stripeCustomerIds)
+          ? data.stripeCustomerIds.filter(
+              (value): value is string => typeof value === "string" && value.length > 0,
+            )
+          : [],
+        stripeSubscriptionIds: Array.isArray(data.stripeSubscriptionIds)
+          ? data.stripeSubscriptionIds.filter(
+              (value): value is string => typeof value === "string" && value.length > 0,
+            )
+          : [],
         cleanupContext:
           data.cleanupContext && typeof data.cleanupContext === "object"
             ? data.cleanupContext as CustomerCleanupContext
@@ -2818,6 +2905,7 @@ function buildSuspendCustomerHandler(
       );
     },
     suspendAuthUser: (uid) => disableAuthUserAndRevokeSessions(uid, getAuth()),
+    invalidatePendingCredentialFlows: (uid) => invalidatePendingCredentialFlows(db, uid),
     unmountFromGateway: createCustomerDeletionUnmount(db, privateKey, logFn, kubeOps),
     cancelStripeSubscription: (subscriptionId) =>
       cancelStripeSubscription(
@@ -2825,6 +2913,37 @@ function buildSuspendCustomerHandler(
         requireEnv("STRIPE_SECRET_KEY", "customer suspension must cancel Stripe billing"),
         subscriptionId,
       ),
+    listStripeCustomerIdsForUid: (uid) =>
+      listStripeCustomerIdsForUid(
+        fetch,
+        requireEnv("STRIPE_SECRET_KEY", "customer suspension must discover Stripe billing"),
+        uid,
+      ),
+    listLiveStripeSubscriptionIds: (customerId) =>
+      listLiveStripeSubscriptionIds(
+        fetch,
+        requireEnv("STRIPE_SECRET_KEY", "customer suspension must verify Stripe billing"),
+        customerId,
+      ),
+    listOpenStripeCheckoutSessionIds: (customerId) =>
+      listOpenStripeCheckoutSessionIds(
+        fetch,
+        requireEnv("STRIPE_SECRET_KEY", "customer suspension must close Stripe checkout"),
+        customerId,
+      ),
+    expireStripeCheckoutSession: (sessionId) =>
+      expireStripeCheckoutSession(
+        fetch,
+        requireEnv("STRIPE_SECRET_KEY", "customer suspension must close Stripe checkout"),
+        sessionId,
+      ),
+    persistStripeBillingRefs: async (deletionId, customerIds, subscriptionIds) => {
+      await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).set({
+        stripeCustomerIds: customerIds,
+        stripeSubscriptionIds: subscriptionIds,
+        updatedAt: Date.now(),
+      }, { merge: true });
+    },
     revokeConnectorGrants: (uid) =>
       revokeAllConnectorGrantsForUser(uid, CONNECTOR_OAUTH_REVOCATION_TARGETS, {
         db,
@@ -2836,6 +2955,19 @@ function buildSuspendCustomerHandler(
     disableAutoTopUp: (uid) => disableCreditAutoTopUp(db, uid, Date.now()),
     deleteCredentialSecrets: async (secretNames) => {
       for (const secretName of secretNames) await deleteSecret(secretName);
+    },
+    retireProjectAgentMattermostUsers: async (userIds) => {
+      const mattermost = createMmCleanupClient({
+        baseUrl: requireEnv("MM_URL", "project-agent suspension requires Mattermost"),
+        adminToken: requireEnv("MM_ADMIN_TOKEN", "project-agent suspension requires Mattermost"),
+        log: logFn,
+      });
+      for (const userId of userIds) await mattermost.destroyUser(userId);
+    },
+    deleteProjectAgentCredentialDocs: async (docPaths) => {
+      const batch = db.batch();
+      for (const docPath of docPaths) batch.delete(db.doc(docPath));
+      await batch.commit();
     },
     pauseOwnedDedicatedGateway: (gatewayId, uid) =>
       pauseOwnedDedicatedGateway(db, gatewayId, uid, Date.now()),
@@ -2924,10 +3056,14 @@ function buildCustomerCloudCleanupDeps(db: Firestore, logFn: (msg: string) => vo
   return {
     gitea,
     mattermost,
-    nukeUserFirestore: (uid: string, slug: string, currentOperationId: string) =>
-      eraseCustomerFirestore(db, uid, slug, currentOperationId),
-    deleteCustomerStorage: (uid: string, slug: string) =>
-      deleteCustomerStorageObjects(getStorage().bucket(), uid, slug),
+    nukeUserFirestore: (
+      uid: string,
+      slug: string,
+      email: string | null,
+      currentOperationId: string,
+    ) => eraseCustomerFirestore(db, uid, slug, email, currentOperationId),
+    deleteCustomerStorage: (uid: string, slug: string, chatArtifactIds: string[]) =>
+      deleteCustomerStorageObjects(getStorage().bucket(), uid, slug, chatArtifactIds),
     deleteCredentialSecrets: async (secretNames: string[]) => {
       for (const secretName of secretNames) await deleteSecret(secretName);
     },

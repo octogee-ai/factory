@@ -43,6 +43,9 @@ export type ArtifactJobStatus =
 export interface ArtifactJob {
   schemaVersion: 1;
   artifactId: string;
+  ownerUid: string;
+  workspaceSlug: string;
+  workspaceOwnerUid: string;
   request: ArtifactRequest;
   status: ArtifactJobStatus;
   attempt: number;

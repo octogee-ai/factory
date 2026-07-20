@@ -22,6 +22,9 @@ projectSlugs: string[];
   
   adminChannelId: string | null;
   credentialSecretNames: string[];
+  projectAgentMmUserIds: string[];
+  projectAgentCredentialDocPaths: string[];
+  chatArtifactIds: string[];
   
   skipHosting?: boolean;
   
@@ -51,10 +54,15 @@ export interface NukeCloudDeps {
   nukeUserFirestore: (
     uid: string,
     slug: string,
+    email: string | null,
     currentOperationId: string,
   ) => Promise<void>;
 
-  deleteCustomerStorage: (uid: string, slug: string) => Promise<void>;
+  deleteCustomerStorage: (
+    uid: string,
+    slug: string,
+    chatArtifactIds: string[],
+  ) => Promise<void>;
 
   deleteCredentialSecrets: (secretNames: string[]) => Promise<void>;
 
@@ -103,6 +111,9 @@ results.push(
       if (ctx.mmCoachUserId) {
         await deps.mattermost.destroyUser(ctx.mmCoachUserId);
       }
+      for (const userId of ctx.projectAgentMmUserIds) {
+        await deps.mattermost.destroyUser(userId);
+      }
       if (ctx.workspaceTeamId) {
         await deps.mattermost.destroyTeam(ctx.workspaceTeamId);
       }
@@ -111,7 +122,7 @@ results.push(
 
 results.push(
     await runStep("storage", log, async () => {
-      await deps.deleteCustomerStorage(ctx.uid, ctx.slug);
+      await deps.deleteCustomerStorage(ctx.uid, ctx.slug, ctx.chatArtifactIds);
     }),
   );
 
@@ -133,11 +144,12 @@ if (ctx.skipHosting || !deps.deleteHostingSites || !ctx.slug) {
 
   results.push(
     await runStep("firestore", log, async () => {
-      await deps.nukeUserFirestore(ctx.uid, ctx.slug, ctx.currentOperationId);
+      await deps.nukeUserFirestore(ctx.uid, ctx.slug, ctx.email, ctx.currentOperationId);
     }),
   );
 
-if (ctx.skipAuth) {
+const earlierFailure = results.some((result) => !result.ok && !result.skipped);
+if (ctx.skipAuth || earlierFailure) {
     results.push({ key: "auth", ok: true, skipped: true });
   } else {
     results.push(

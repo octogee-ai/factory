@@ -51,16 +51,27 @@ describe("Mattermost artifact access", () => {
       if (url.endsWith(`/channels/${CHANNEL_ID}/members/${USER_ID}`)) {
         return new Response(JSON.stringify({ channel_id: CHANNEL_ID, user_id: USER_ID }));
       }
+      if (url.endsWith(`/channels/${CHANNEL_ID}`)) {
+        return new Response(JSON.stringify({ id: CHANNEL_ID, team_id: "team-1" }));
+      }
       return new Response("missing", { status: 404 });
     });
     const access = createMattermostArtifactAccess({
       mattermostBaseUrl: MM_URL,
       adminToken: MM_TOKEN,
       fetchImpl: fetchImpl as typeof fetch,
+      resolveWorkspaceSlugForTeamId: async () => ({
+        workspaceSlug: "channel-workspace",
+        workspaceOwnerUid: "workspace-owner",
+      }),
     });
     const authorized = await access.authorizeRequest(USER_ID, request());
-    expect(authorized).toMatchObject({ filename: "canonical-report.pdf", byteLength: 4096 });
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(authorized).toMatchObject({
+      request: { filename: "canonical-report.pdf", byteLength: 4096 },
+      workspaceSlug: "channel-workspace",
+      workspaceOwnerUid: "workspace-owner",
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
   });
 
   it("rejects a file that is not attached to the claimed post", async () => {
@@ -84,6 +95,10 @@ describe("Mattermost artifact access", () => {
       mattermostBaseUrl: MM_URL,
       adminToken: MM_TOKEN,
       fetchImpl: fetchImpl as typeof fetch,
+      resolveWorkspaceSlugForTeamId: async () => ({
+        workspaceSlug: "channel-workspace",
+        workspaceOwnerUid: "workspace-owner",
+      }),
     });
     await expect(access.authorizeRequest(USER_ID, request())).rejects.toThrow("attached");
   });
@@ -115,6 +130,10 @@ describe("Mattermost artifact access", () => {
       mattermostBaseUrl: MM_URL,
       adminToken: MM_TOKEN,
       fetchImpl: fetchImpl as typeof fetch,
+      resolveWorkspaceSlugForTeamId: async () => ({
+        workspaceSlug: "channel-workspace",
+        workspaceOwnerUid: "workspace-owner",
+      }),
     });
     await expect(access.authorizeRequest(USER_ID, request())).rejects.toThrow("run root");
   });
@@ -155,6 +174,7 @@ describe("GCS artifact outputs", () => {
           metadata: (saved.get(path)?.metadata.metadata as Record<string, unknown> | undefined),
         }],
         createReadStream: () => Readable.from(saved.get(path)?.body ?? Buffer.alloc(0)),
+        delete: async () => { saved.delete(path); },
       }),
     };
     const blobs = createGcsArtifactBlobStore(bucket);
@@ -174,6 +194,8 @@ describe("GCS artifact outputs", () => {
     });
     expect(saveOptions[0]).toMatchObject({ preconditionOpts: { ifGenerationMatch: 0 } });
     expect((await blobs.open(output)).byteLength).toBe(4);
+    await blobs.delete(output);
+    expect(saved.has(output.objectPath)).toBe(false);
   });
 
   it("refuses to serve an object whose stored digest disagrees with the published result", async () => {
@@ -186,6 +208,7 @@ describe("GCS artifact outputs", () => {
           metadata: { sha256: "e".repeat(64) },
         }],
         createReadStream: () => Readable.from(Buffer.from("page")),
+        delete: vi.fn(),
       }),
     };
     const blobs = createGcsArtifactBlobStore(bucket);

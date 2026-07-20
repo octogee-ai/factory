@@ -10,6 +10,7 @@ import {
   type ArtifactPageObject,
   type ArtifactRequest,
 } from "./chat-artifacts.js";
+import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 
 interface FirestoreArtifactSnapshot {
   exists: boolean;
@@ -63,6 +64,12 @@ export interface ArtifactRegistryOptions {
   leaseToken?: () => string;
   leaseMs?: number;
   maxAttempts?: number;
+}
+
+export interface ArtifactOwnership {
+  ownerUid: string;
+  workspaceSlug: string;
+  workspaceOwnerUid: string;
 }
 
 interface VerifiedArtifactSource {
@@ -151,11 +158,26 @@ export class ArtifactRegistry {
     }
   }
 
-  async enqueue(request: ArtifactRequest): Promise<ArtifactJob> {
+  async enqueue(
+    request: ArtifactRequest,
+    ownership: ArtifactOwnership,
+  ): Promise<ArtifactJob> {
+    if (typeof ownership.ownerUid !== "string" || ownership.ownerUid.length === 0) {
+      throw new Error("invalid artifact owner uid");
+    }
+    if (typeof ownership.workspaceSlug !== "string" || ownership.workspaceSlug.length === 0) {
+      throw new Error("invalid artifact workspace slug");
+    }
+    if (typeof ownership.workspaceOwnerUid !== "string" || ownership.workspaceOwnerUid.length === 0) {
+      throw new Error("invalid artifact workspace owner uid");
+    }
     const now = this.now().toISOString();
     return this.store.createIfAbsent({
       schemaVersion: 1,
       artifactId: artifactJobId(request),
+      ownerUid: ownership.ownerUid,
+      workspaceSlug: ownership.workspaceSlug,
+      workspaceOwnerUid: ownership.workspaceOwnerUid,
       request,
       status: "queued",
       attempt: 0,
@@ -342,6 +364,10 @@ function validIso(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
 
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
 function parsedOutput(artifactId: string, value: unknown): ArtifactOutputObject {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("invalid artifact output record");
@@ -359,6 +385,9 @@ function parseJobEnvelope(data: Record<string, unknown>): ArtifactJob {
   }
   if (
     data.schemaVersion !== 1 ||
+    !nonEmptyString(data.ownerUid) ||
+    !nonEmptyString(data.workspaceSlug) ||
+    !nonEmptyString(data.workspaceOwnerUid) ||
     typeof data.status !== "string" ||
     !ARTIFACT_STATUSES.has(data.status) ||
     !Number.isSafeInteger(data.attempt) ||
@@ -459,14 +488,25 @@ export function createFirestoreArtifactJobStore(db: FirestoreArtifactDb): Artifa
     createIfAbsent(job) {
       return db.runTransaction(async (transaction) => {
         const jobRef = ref(job.artifactId);
-        const existing = firestoreJob(await transaction.get(jobRef));
+        const ownerRef = db.doc(`users/${job.workspaceOwnerUid}`);
+        const [existing, owner] = await Promise.all([
+          transaction.get(jobRef).then(firestoreJob),
+          transaction.get(ownerRef),
+        ]);
+        if (!owner.exists || !accountAllowsInteractiveAccess(owner.data())) {
+          throw new Error("artifact workspace owner is not active");
+        }
         if (existing) return existing;
         transaction.set(jobRef, firestoreWrite(job));
         return job;
       });
     },
     async get(artifactId) {
-      return firestoreJob(await ref(artifactId).get());
+      const job = firestoreJob(await ref(artifactId).get());
+      if (!job) return null;
+      const owner = await db.doc(`users/${job.workspaceOwnerUid}`).get();
+      if (!owner.exists || !accountAllowsInteractiveAccess(owner.data())) return null;
+      return job;
     },
     async findClaimable(now, limit) {
       const collection = db.collection(ARTIFACT_COLLECTION);
@@ -488,7 +528,13 @@ export function createFirestoreArtifactJobStore(db: FirestoreArtifactDb): Artifa
     transact(artifactId, update) {
       return db.runTransaction(async (transaction) => {
         const jobRef = ref(artifactId);
-        const next = update(firestoreJob(await transaction.get(jobRef)));
+        const current = firestoreJob(await transaction.get(jobRef));
+        if (!current) return update(null);
+        const owner = await transaction.get(db.doc(`users/${current.workspaceOwnerUid}`));
+        if (!owner.exists || !accountAllowsInteractiveAccess(owner.data())) {
+          throw new Error("artifact workspace owner is not active");
+        }
+        const next = update(current);
         transaction.set(jobRef, firestoreWrite(next));
         return next;
       });

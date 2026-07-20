@@ -112,6 +112,24 @@ describe("runStuckOpReaperTick", () => {
     expect(ops[0].updated).toBeUndefined();
   });
 
+  it.each(["suspend-customer", "erase-customer"])(
+    "does not terminalize a stale restart-resumable %s operation",
+    async (kind) => {
+      const ops: FakeOpDoc[] = [{
+        id: `op-${kind}`,
+        data: { status: "running", kind, startedAt: NOW - 60 * 60_000 },
+      }];
+      const result = await runStuckOpReaperTick({
+        db: makeFakeDb(ops) as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+        log: vi.fn(),
+        now: () => NOW,
+        stalenessMs: 15 * 60_000,
+      });
+      expect(result).toEqual({ scanned: 1, reaped: 0 });
+      expect(ops[0].updated).toBeUndefined();
+    },
+  );
+
   it.each(["checkpointed", "promotionIntent", "finalized", "complete", "aborted"])(
     "never reaps a durable migration V2 operation held in %s for restart recovery",
     async (phase) => {

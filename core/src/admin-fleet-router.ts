@@ -1443,9 +1443,8 @@ const OP_STATUSES = new Set([
 ]);
 
 interface StripeRefs {
-  customerId: string | null;
-  subscriptionId: string | null;
-  subscriptionStatus: string | null;
+  customerIds: string[];
+  subscriptionIds: string[];
 }
 
 interface DrawerMountedCustomer {
@@ -2351,20 +2350,24 @@ function resolveCustomerSlug(
 function resolveStripeRefs(userData: Record<string, unknown>): StripeRefs {
   const subscription =
     (userData.subscription as Record<string, unknown> | undefined) ?? {};
+  const builderSubscription =
+    (userData.builderSubscription as Record<string, unknown> | undefined) ?? {};
   const billing =
     (userData.billing as Record<string, unknown> | undefined) ?? {};
-  return {
-    customerId:
-      asStringOrNull(subscription.stripeCustomerId) ??
-      asStringOrNull(userData.stripeCustomerId) ??
-      asStringOrNull(billing.stripeCustomerId),
-    subscriptionId:
-      asStringOrNull(subscription.stripeSubscriptionId) ??
+  const subscriptionIds = [
+    asStringOrNull(subscription.stripeSubscriptionId) ??
       asStringOrNull(subscription.id) ??
       asStringOrNull(billing.subscriptionId),
-    subscriptionStatus:
-      asStringOrNull(subscription.status) ??
-      asStringOrNull(billing.subscriptionStatus),
+    asStringOrNull(builderSubscription.stripeSubscriptionId) ??
+      asStringOrNull(builderSubscription.id),
+  ].filter((value): value is string => value !== null);
+  return {
+    customerIds: [...new Set([
+      asStringOrNull(subscription.stripeCustomerId),
+      asStringOrNull(userData.stripeCustomerId),
+      asStringOrNull(billing.stripeCustomerId),
+    ].filter((value): value is string => value !== null))],
+    subscriptionIds: [...new Set(subscriptionIds)],
   };
 }
 
@@ -3634,6 +3637,205 @@ export function buildBuilderCandidates(opts: {
   return candidates;
 }
 
+async function accelerateScheduledCustomerErasure(opts: {
+  db: Firestore;
+  userRef: DocumentReference;
+  lifecycle: Record<string, unknown>;
+  res: Response;
+}): Promise<void> {
+  const deletionId = asStringOrNull(opts.lifecycle.deletionId);
+  if (!deletionId) {
+    opts.res.status(409).json({ error: "Scheduled deletion is missing its deletion id" });
+    return;
+  }
+  const deletionRef = opts.db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId);
+  const deletionSnap = await deletionRef.get();
+  const deletion = deletionSnap.data() as Record<string, unknown> | undefined;
+  const erasureOperationId = asStringOrNull(deletion?.erasureOperationId);
+  if (!deletionSnap.exists || !erasureOperationId) {
+    opts.res.status(409).json({
+      error: "Scheduled deletion is missing its durable erasure operation",
+      deletionId,
+    });
+    return;
+  }
+  const erasureRef = opts.db.collection(GLM_OPERATIONS_COLLECTION).doc(erasureOperationId);
+  const erasureSnap = await erasureRef.get();
+  const erasure = erasureSnap.data() as Record<string, unknown> | undefined;
+  const runnable = erasureSnap.exists &&
+    erasure?.kind === "erase-customer" &&
+    (erasure.status === "pending" || erasure.status === "running");
+  if (!runnable) {
+    opts.res.status(409).json({
+      error: "Scheduled erasure operation is not runnable",
+      deletionId,
+      erasureOperationId,
+    });
+    return;
+  }
+  const now = Date.now();
+  const batch = opts.db.batch();
+  batch.update(opts.userRef, { "accountLifecycle.eraseAfter": now });
+  batch.update(deletionRef, { eraseAfter: now, updatedAt: now });
+  batch.update(erasureRef, { nextAttemptAt: now });
+  await batch.commit();
+  opts.res.status(202).json({
+    status: "erasure_requested",
+    deletionId,
+    erasureOperationId,
+    eraseAfter: now,
+  });
+}
+
+async function handleExistingCustomerDeletion(opts: {
+  db: Firestore;
+  userRef: DocumentReference;
+  lifecycle: Record<string, unknown> | undefined;
+  eraseNow: boolean;
+  res: Response;
+}): Promise<boolean> {
+  const status = opts.lifecycle?.status;
+  if (status !== "deletion_scheduled" && status !== "erasing") return false;
+  if (status === "deletion_scheduled" && opts.eraseNow) {
+    await accelerateScheduledCustomerErasure({
+      db: opts.db,
+      userRef: opts.userRef,
+      lifecycle: opts.lifecycle!,
+      res: opts.res,
+    });
+    return true;
+  }
+  opts.res.status(409).json({
+    error: "Cleanup already in progress",
+    deletionId: opts.lifecycle?.deletionId ?? null,
+  });
+  return true;
+}
+
+type CustomerDeletionAdmission =
+  | { kind: "not-found" }
+  | { kind: "conflict"; deletionId: string | null; operationId: string | null }
+  | {
+      kind: "created";
+      deletionId: string;
+      suspensionOperationId: string;
+      erasureOperationId: string;
+      eraseAfter: number;
+      slug: string | null;
+    };
+
+async function claimCustomerDeletion(opts: {
+  db: Firestore;
+  uid: string;
+  requestedBy: string;
+  eraseNow: boolean;
+  workspaceSlugsForUser: FleetRouterDeps["workspaceSlugsForUser"];
+}): Promise<CustomerDeletionAdmission> {
+  const userRef = opts.db.collection("users").doc(opts.uid);
+  const deletionRef = opts.db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc();
+  const suspensionRef = opts.db.collection(GLM_OPERATIONS_COLLECTION).doc();
+  const erasureRef = opts.db.collection(GLM_OPERATIONS_COLLECTION).doc();
+  return opts.db.runTransaction(async (transaction) => {
+    const userSnap = await transaction.get(userRef);
+    if (!userSnap.exists) return { kind: "not-found" };
+    const userData = userSnap.data() ?? {};
+    const lifecycle = isPlainRecord(userData.accountLifecycle)
+      ? userData.accountLifecycle
+      : undefined;
+    if (lifecycle?.status === "deletion_scheduled" || lifecycle?.status === "erasing") {
+      return {
+        kind: "conflict",
+        deletionId: asStringOrNull(lifecycle.deletionId),
+        operationId: null,
+      };
+    }
+    const inFlight = await transaction.get(
+      opts.db.collection(GLM_OPERATIONS_COLLECTION).where("inputUid", "==", opts.uid),
+    );
+    const conflict = inFlight.docs.find((doc) => {
+      const data = doc.data() as { kind?: unknown; status?: unknown };
+      return (
+        (data.kind === "suspend-customer" || data.kind === "erase-customer") &&
+        (data.status === "pending" || data.status === "running")
+      );
+    });
+    if (conflict) {
+      return {
+        kind: "conflict",
+        deletionId: null,
+        operationId: conflict.id,
+      };
+    }
+    const [workspaces, projects, posts, ...socialReferences] = await Promise.all([
+      transaction.get(opts.db.collection("workspaces").where("ownerUid", "==", opts.uid)),
+      transaction.get(opts.db.collectionGroup("projects").where("ownerUid", "==", opts.uid)),
+      transaction.get(opts.db.collection("posts").where("authorUid", "==", opts.uid)),
+      transaction.get(opts.db.collection("feed").where("actorUid", "==", opts.uid)),
+      transaction.get(opts.db.collection("feed").where("targetUid", "==", opts.uid)),
+      transaction.get(opts.db.collection("stars").where("actorUid", "==", opts.uid)),
+      transaction.get(opts.db.collection("stars").where("target.ownerUid", "==", opts.uid)),
+      transaction.get(opts.db.collection("follows").where("actorUid", "==", opts.uid)),
+      transaction.get(opts.db.collection("follows").where("target.ownerUid", "==", opts.uid)),
+    ]);
+    const now = Date.now();
+    const schedule = buildCustomerDeletionSchedule({ now, eraseNow: opts.eraseNow });
+    const slug = resolveCustomerSlug(userData, opts.workspaceSlugsForUser);
+    const currentGatewayId = readUserGatewayId(userData);
+    const stripe = resolveStripeRefs(userData);
+    const plan = buildCustomerDeletionPlan({
+      uid: opts.uid,
+      slug,
+      currentGatewayId,
+      requestedBy: opts.requestedBy,
+      requestedAt: schedule.requestedAt,
+      eraseAfter: schedule.eraseAfter,
+      deletionId: deletionRef.id,
+      suspensionOperationId: suspensionRef.id,
+      erasureOperationId: erasureRef.id,
+      stripeCustomerIds: stripe.customerIds,
+      stripeSubscriptionIds: stripe.subscriptionIds,
+    });
+    transaction.update(userRef, {
+      accountLifecycle: plan.lifecycle,
+      ...(currentGatewayId
+        ? {
+            "provisioning.openclaw.gatewayId": FieldValue.delete(),
+            "provisioning.openclaw.gatewayAssignedAt": FieldValue.delete(),
+            "provisioning.openclaw.gatewayProfile": FieldValue.delete(),
+            "provisioning.openclaw.shellsEnabled": FieldValue.delete(),
+          }
+        : {}),
+    });
+    transaction.set(deletionRef, plan.job);
+    transaction.set(suspensionRef, plan.suspensionOperation);
+    transaction.set(erasureRef, plan.erasureOperation);
+    for (const doc of [...workspaces.docs, ...projects.docs, ...posts.docs]) {
+      transaction.update(doc.ref, { ownerActive: false });
+    }
+    const socialRefs = new Map(
+      socialReferences.flatMap((snapshot) => snapshot.docs).map((doc) => [doc.ref.path, doc.ref]),
+    );
+    for (const ref of socialRefs.values()) transaction.delete(ref);
+    if (currentGatewayId) {
+      transaction.delete(
+        opts.db
+          .collection(GATEWAYS_COLLECTION)
+          .doc(currentGatewayId)
+          .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
+          .doc(opts.uid),
+      );
+    }
+    return {
+      kind: "created",
+      deletionId: deletionRef.id,
+      suspensionOperationId: suspensionRef.id,
+      erasureOperationId: erasureRef.id,
+      eraseAfter: schedule.eraseAfter,
+      slug,
+    };
+  });
+}
+
 // eslint-disable-next-line max-lines-per-function -- factory mounts ~15 admin routes; splitting it would scatter the contract across files for no readability gain
 export function addAdminFleetRoutes(
   router: Router,
@@ -3661,149 +3863,47 @@ router.post(
         const existingLifecycle = userData.accountLifecycle as
           | Record<string, unknown>
           | undefined;
-        if (
-          existingLifecycle?.status === "deletion_scheduled" ||
-          existingLifecycle?.status === "erasing"
-        ) {
-          if (existingLifecycle.status === "deletion_scheduled" && body.eraseNow === true) {
-            const deletionId = asStringOrNull(existingLifecycle.deletionId);
-            if (!deletionId) {
-              res.status(409).json({ error: "Scheduled deletion is missing its deletion id" });
-              return;
-            }
-            const deletionRef = db
-              .collection(CUSTOMER_DELETION_JOBS_COLLECTION)
-              .doc(deletionId);
-            const deletionSnap = await deletionRef.get();
-            const deletion = deletionSnap.data() as Record<string, unknown> | undefined;
-            const erasureOperationId = asStringOrNull(deletion?.erasureOperationId);
-            if (!deletionSnap.exists || !erasureOperationId) {
-              res.status(409).json({
-                error: "Scheduled deletion is missing its durable erasure operation",
-                deletionId,
-              });
-              return;
-            }
-            const erasureRef = db
-              .collection(GLM_OPERATIONS_COLLECTION)
-              .doc(erasureOperationId);
-            const erasureSnap = await erasureRef.get();
-            const erasure = erasureSnap.data() as Record<string, unknown> | undefined;
-            if (
-              !erasureSnap.exists ||
-              erasure?.kind !== "erase-customer" ||
-              (erasure.status !== "pending" && erasure.status !== "running")
-            ) {
-              res.status(409).json({
-                error: "Scheduled erasure operation is not runnable",
-                deletionId,
-                erasureOperationId,
-              });
-              return;
-            }
-            const now = Date.now();
-            const batch = db.batch();
-            batch.update(userRef, {
-              "accountLifecycle.eraseAfter": now,
-            });
-            batch.update(deletionRef, { eraseAfter: now, updatedAt: now });
-            batch.update(erasureRef, { nextAttemptAt: now });
-            await batch.commit();
-            res.status(202).json({
-              status: "erasure_requested",
-              deletionId,
-              erasureOperationId,
-              eraseAfter: now,
-            });
-            return;
-          }
-          res.status(409).json({
-            error: "Cleanup already in progress",
-            deletionId: existingLifecycle.deletionId ?? null,
-          });
-          return;
-        }
-        const slug = resolveCustomerSlug(userData, deps.workspaceSlugsForUser);
-        const inFlight = await db
-          .collection(GLM_OPERATIONS_COLLECTION)
-          .where("inputUid", "==", uid)
-          .get();
-        const conflict = inFlight.docs.find((doc) => {
-          const data = doc.data() as { kind?: unknown; status?: unknown };
-          return (
-            (data.kind === "suspend-customer" || data.kind === "erase-customer") &&
-            (data.status === "pending" || data.status === "running")
-          );
-        });
-        if (conflict) {
-          res.status(409).json({
-            error: "Cleanup already in progress",
-            operationId: conflict.id,
-          });
-          return;
-        }
-        const actor = req as ActorRequest;
-        const now = Date.now();
-        const schedule = buildCustomerDeletionSchedule({
-          now,
+        const handledExisting = await handleExistingCustomerDeletion({
+          db,
+          userRef,
+          lifecycle: existingLifecycle,
           eraseNow: body.eraseNow === true,
+          res,
         });
-        const deletionRef = db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc();
-        const suspensionRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
-        const erasureRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
-        const currentGatewayId = readUserGatewayId(userData);
-        const stripe = resolveStripeRefs(userData);
-        const plan = buildCustomerDeletionPlan({
+        if (handledExisting) return;
+        const actor = req as ActorRequest;
+        const admission = await claimCustomerDeletion({
+          db,
           uid,
-          slug,
-          currentGatewayId,
           requestedBy: actor.uid ?? "unknown",
-          requestedAt: schedule.requestedAt,
-          eraseAfter: schedule.eraseAfter,
-          deletionId: deletionRef.id,
-          suspensionOperationId: suspensionRef.id,
-          erasureOperationId: erasureRef.id,
-          stripeCustomerId: stripe.customerId,
-          stripeSubscriptionId: stripe.subscriptionId,
+          eraseNow: body.eraseNow === true,
+          workspaceSlugsForUser: deps.workspaceSlugsForUser,
         });
-        const batch = db.batch();
-        batch.update(userRef, {
-          accountLifecycle: plan.lifecycle,
-          ...(currentGatewayId
-            ? {
-                "provisioning.openclaw.gatewayId": FieldValue.delete(),
-                "provisioning.openclaw.gatewayAssignedAt": FieldValue.delete(),
-                "provisioning.openclaw.gatewayProfile": FieldValue.delete(),
-                "provisioning.openclaw.shellsEnabled": FieldValue.delete(),
-              }
-            : {}),
-        });
-        batch.set(deletionRef, plan.job);
-        batch.set(suspensionRef, plan.suspensionOperation);
-        batch.set(erasureRef, plan.erasureOperation);
-        if (currentGatewayId) {
-          batch.delete(
-            db
-              .collection(GATEWAYS_COLLECTION)
-              .doc(currentGatewayId)
-              .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
-              .doc(uid),
-          );
+        if (admission.kind === "not-found") {
+          res.status(404).json({ error: "User not found", uid });
+          return;
         }
-        await batch.commit();
+        if (admission.kind === "conflict") {
+          res.status(409).json({
+            error: "Cleanup already in progress",
+            ...(admission.deletionId ? { deletionId: admission.deletionId } : {}),
+            ...(admission.operationId ? { operationId: admission.operationId } : {}),
+          });
+          return;
+        }
 
         await deps.suspendAuthUser(uid);
         await deps.revokeConnectorGrantsForUser(uid);
         logger.info(
-          `[admin-delete] scheduled deletion=${deletionRef.id} uid=${uid} eraseAfter=${schedule.eraseAfter}`,
+          `[admin-delete] scheduled deletion=${admission.deletionId} uid=${uid} eraseAfter=${admission.eraseAfter}`,
         );
         res.status(202).json({
           status: "deletion_scheduled",
-          deletionId: deletionRef.id,
-          suspensionOperationId: suspensionRef.id,
-          erasureOperationId: erasureRef.id,
-          eraseAfter: schedule.eraseAfter,
-          slug,
+          deletionId: admission.deletionId,
+          suspensionOperationId: admission.suspensionOperationId,
+          erasureOperationId: admission.erasureOperationId,
+          eraseAfter: admission.eraseAfter,
+          slug: admission.slug,
         });
       } catch (e) {
         next(e);

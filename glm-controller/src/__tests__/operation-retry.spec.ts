@@ -7,7 +7,27 @@ import {
   retryBackoffMs,
   shouldPersistClaimedOperationCompletion,
   supersededRollMigrationAction,
+  operationNeedsDurableRestartResume,
+  verifiedDeletionCompletion,
 } from "../operation-retry";
+
+describe("verifiedDeletionCompletion", () => {
+  it("returns the durable deletion mapping only for a successful verified erasure", () => {
+    expect(verifiedDeletionCompletion({
+      steps: [],
+      success: true,
+      output: {
+        archiveId: "archive-1",
+        verifiedDeletion: { deletionId: "delete-1", archiveId: "archive-1" },
+      },
+    })).toEqual({ deletionId: "delete-1", archiveId: "archive-1" });
+    expect(verifiedDeletionCompletion({
+      steps: [],
+      success: false,
+      output: { verifiedDeletion: { deletionId: "delete-1", archiveId: "archive-1" } },
+    })).toBeNull();
+  });
+});
 
 describe("supersededRollMigrationAction", () => {
   it("cancels unstarted work but waits for running or cleanup-pending workers to finish", () => {
@@ -28,6 +48,15 @@ describe("shouldPersistClaimedOperationCompletion", () => {
     expect(shouldPersistClaimedOperationCompletion("rolled-back")).toBe(false);
     expect(shouldPersistClaimedOperationCompletion("failed")).toBe(false);
   });
+});
+
+describe("operationNeedsDurableRestartResume", () => {
+  it.each(["suspend-customer", "erase-customer"])(
+    "keeps an interrupted %s operation available for restart re-drive",
+    (kind) => {
+      expect(operationNeedsDurableRestartResume({ kind })).toBe(true);
+    },
+  );
 });
 
 describe("classifyOperationFailure", () => {
@@ -212,6 +241,23 @@ describe("buildOperationCompletionUpdate", () => {
 
     expect(update.status).toBe("pending");
     expect(update.output).toEqual({ deletionFencePending });
+  });
+
+  it("keeps an ordinary customer cleanup failure level-triggered after the normal retry cap", () => {
+    const deletionCleanupRetry = { deletionId: "delete-1" };
+    const update = buildOperationCompletionUpdate({
+      op: { attempts: MAX_OPERATION_ATTEMPTS, attemptHistory: [] },
+      result: {
+        steps: [],
+        success: false,
+        error: "mattermost: service unavailable",
+        output: { deletionCleanupRetry },
+      },
+      steps: [],
+      now,
+    });
+    expect(update.status).toBe("pending");
+    expect(update.output).toEqual({ deletionCleanupRetry });
   });
 
   it("terminalizes a definitive unsupported or wrong-owner cleanup even when the obligation is retained for audit", () => {

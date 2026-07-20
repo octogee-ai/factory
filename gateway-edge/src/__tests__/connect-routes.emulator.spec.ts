@@ -80,7 +80,7 @@ const realFetch: typeof fetch = globalThis.fetch.bind(globalThis);
 
 interface ProviderStub {
   url: RegExp;
-  respond: (init?: RequestInit) => unknown;
+  respond: (init?: RequestInit) => unknown | Promise<unknown>;
 }
 
 function stubProviderFetch(stubs: ProviderStub[]): { calls: { url: string; init?: RequestInit }[] } {
@@ -96,7 +96,7 @@ function stubProviderFetch(stubs: ProviderStub[]): { calls: { url: string; init?
     calls.push({ url: u, init });
     const stub = stubs.find((s) => s.url.test(u));
     if (!stub) throw new Error(`unexpected fetch: ${u}`);
-    return new Response(JSON.stringify(stub.respond(init)), {
+    return new Response(JSON.stringify(await stub.respond(init)), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
@@ -116,8 +116,12 @@ const githubHappyStubs: ProviderStub[] = [
   { url: /api\.github\.com\/user$/, respond: () => ({ login: "chris-e" }) },
 ];
 
-beforeEach(() => {
+beforeEach(async () => {
   _setKmsClientForTesting(deterministicMockKms());
+  await Promise.all([
+    db.doc(`users/${UID}`).set({ accountLifecycle: { status: "active" } }, { merge: true }),
+    db.doc(`users/${OTHER_UID}`).set({ accountLifecycle: { status: "active" } }, { merge: true }),
+  ]);
 });
 
 afterEach(() => {
@@ -331,6 +335,34 @@ describe("connect — callback state verification (the security regression)", ()
     );
     expect(replay.headers.location).toContain("connect_error=invalid_state");
     expect(await readSecret(UID, "github")).toBeUndefined();
+  });
+
+  it("does not persist exchanged credentials when deletion starts during the provider callback", async () => {
+    stubProviderFetch([
+      {
+        url: /github\.com\/login\/oauth\/access_token/,
+        respond: () => ({ access_token: PLAINTEXT_GH_TOKEN, token_type: "bearer", scope: "repo" }),
+      },
+      {
+        url: /api\.github\.com\/user$/,
+        respond: async () => {
+          await db.doc(`users/${UID}`).set(
+            { accountLifecycle: { status: "deletion_scheduled" } },
+            { merge: true },
+          );
+          return { login: "chris-e" };
+        },
+      },
+    ]);
+    const { state } = await mintAuthUrlState();
+
+    const res = await request(createApp()).get(
+      `/api/connect/github/callback?code=good-code&state=${encodeURIComponent(state)}`,
+    );
+
+    expect(res.headers.location).toContain("connect_error=account_inactive");
+    expect(await readSecret(UID, "github")).toBeUndefined();
+    expect(await readStatus(UID, "github")).toBeUndefined();
   });
 
   it("redirects with cancelled (and stores nothing) when the provider returns an error", async () => {
@@ -798,6 +830,34 @@ describe("connect — google platform capability flow", () => {
     const status = await readStatus(UID, "google");
     expect(status?.scopes).toEqual([CAL, GMAIL, EMAIL]);
     expect(status?.accountLabel).toBe("g@x.com");
+  });
+
+  it("revokes exchanged Google tokens when deletion wins the callback commit race", async () => {
+    await setGoogleStage("on");
+    const provider = stubProviderFetch([
+      googleTokenStub(`${CAL} ${EMAIL}`),
+      {
+        ...googleUserinfoStub,
+        respond: async () => {
+          await db.doc(`users/${UID}`).set(
+            { accountLifecycle: { status: "deletion_scheduled" } },
+            { merge: true },
+          );
+          return { email: "g@x.com" };
+        },
+      },
+      { url: /oauth2\.googleapis\.com\/revoke/, respond: () => ({}) },
+    ]);
+    const { state } = await mintAuthUrlState("google", "&capability=calendar");
+
+    const res = await request(createApp()).get(
+      `/api/connect/google/callback?code=c&state=${encodeURIComponent(state)}`,
+    );
+
+    expect(res.headers.location).toContain("connect_error=account_inactive");
+    const revoke = provider.calls.find(({ url }) => url.includes("/revoke"));
+    expect(String(revoke?.init?.body)).toContain(`token=${encodeURIComponent(PLAINTEXT_GOOGLE_REFRESH)}`);
+    expect(await readSecret(UID, "google")).toBeUndefined();
   });
 
   it("incremental consent preserves the durable refresh token and Drive picked-file registry", async () => {

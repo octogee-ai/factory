@@ -626,6 +626,7 @@ describe("account deletion revokes connector grants at the provider first", () =
     const remaining = { ...users };
     const added: Record<string, unknown>[] = [];
     let autoId = 0;
+    let transactionTail = Promise.resolve();
     const ref = (path: string) => ({
       id: path.split("/").at(-1)!,
       path,
@@ -637,6 +638,40 @@ describe("account deletion revokes connector grants at the provider first", () =
       collection: (name: string) => ref(`${path}/${name}`),
       doc: (id = `auto-${++autoId}`) => ref(`${path}/${id}`),
     });
+    const queryCollection = (
+      name: string,
+      collectionGroup: boolean,
+      filters: Array<{ field: string; value: unknown }> = [],
+    ) => {
+      const chain = {
+        collectionName: name,
+        where: (field: string, _op: string, value: unknown) =>
+          queryCollection(name, collectionGroup, [...filters, { field, value }]),
+        get: async () => ({
+          docs: Object.entries(otherDocs)
+            .filter(([path, data]) => {
+              const parts = path.split("/");
+              const inCollection = collectionGroup
+                ? parts.at(-2) === name
+                : parts.length === 2 && parts[0] === name;
+              return inCollection && filters.every(({ field, value }) => {
+                const actual = field.split(".").reduce<unknown>((current, part) =>
+                  current && typeof current === "object"
+                    ? (current as Record<string, unknown>)[part]
+                    : undefined, data);
+                return actual === value;
+              });
+            })
+            .map(([path, data]) => ({
+              id: path.split("/").at(-1)!,
+              ref: ref(path),
+              data: () => data,
+            })),
+        }),
+        doc: (id = `op-${++autoId}`) => ref(`${name}/${id}`),
+      };
+      return chain;
+    };
     const db = {
       collection: (name: string) => {
         if (name === "users") {
@@ -653,18 +688,9 @@ describe("account deletion revokes connector grants at the provider first", () =
             }),
           };
         }
-        if (name === GLM_OPERATIONS_COLLECTION) {
-          const chain = {
-            where: () => chain,
-            get: async () => ({ docs: [] as unknown[] }),
-            doc: (id = `op-${++autoId}`) => ref(`${name}/${id}`),
-          };
-          return chain;
-        }
-        return {
-          doc: (id = `auto-${++autoId}`) => ref(`${name}/${id}`),
-        };
+        return queryCollection(name, false);
       },
+      collectionGroup: (name: string) => queryCollection(name, true),
       batch: () => ({
         update: (target: { path?: string }, data: Record<string, unknown>) => {
           calls.push(`batch:update:${target.path ?? "unknown"}`);
@@ -681,6 +707,47 @@ describe("account deletion revokes connector grants at the provider first", () =
           calls.push("batch:commit");
         },
       }),
+      runTransaction: <T>(callback: (transaction: {
+        get: (target: { path?: string; collectionName?: string }) => Promise<unknown>;
+        update: (target: { path: string }, data: Record<string, unknown>) => void;
+        set: (target: { path: string }, data: Record<string, unknown>) => void;
+        delete: (target: { path: string }) => void;
+      }) => Promise<T>) => {
+        const transaction = {
+          get: async (target: { path?: string; collectionName?: string }) => {
+            if (target.path?.startsWith("users/")) {
+              const id = target.path.split("/")[1]!;
+              return { exists: id in remaining, data: () => remaining[id] };
+            }
+            if (typeof (target as { get?: unknown }).get === "function") {
+              return (target as { get(): Promise<unknown> }).get();
+            }
+            throw new Error("unexpected transaction read");
+          },
+          update: (target: { path: string }, data: Record<string, unknown>) => {
+            calls.push(`batch:update:${target.path}`);
+            added.push(data);
+            if (target.path.startsWith("users/")) {
+              const id = target.path.split("/")[1]!;
+              remaining[id] = { ...remaining[id], ...data };
+            } else if (target.path in otherDocs) {
+              otherDocs[target.path] = { ...otherDocs[target.path], ...data };
+            }
+          },
+          set: (target: { path: string }, data: Record<string, unknown>) => {
+            calls.push(`batch:set:${target.path.split("/")[0]}`);
+            added.push(data);
+            otherDocs[target.path] = data;
+          },
+          delete: (target: { path: string }) => {
+            calls.push(`batch:delete:${target.path}`);
+            delete otherDocs[target.path];
+          },
+        };
+        const execution = transactionTail.then(() => callback(transaction));
+        transactionTail = execution.then(() => undefined, () => undefined);
+        return execution;
+      },
     } as unknown as Firestore;
 
     const app = express();
@@ -729,6 +796,42 @@ describe("account deletion revokes connector grants at the provider first", () =
     ]));
     expect(calls.at(-2)).toBe("suspend-auth:u2");
     expect(calls.at(-1)).toBe("revoke:u2");
+  });
+
+  it("atomically admits one deletion when two requests race for the same user", async () => {
+    const { app, added } = makeDeleteApp({
+      u2: { username: "acme", email: "c@d.co" },
+    });
+
+    const responses = await Promise.all([
+      request(app).post("/customer/u2/delete"),
+      request(app).post("/customer/u2/delete"),
+    ]);
+
+    expect(responses.map((response) => response.status).sort()).toEqual([202, 409]);
+    expect(added.filter((data) => data.kind === "suspend-customer")).toHaveLength(1);
+    expect(added.filter((data) => data.kind === "erase-customer")).toHaveLength(1);
+  });
+
+  it("atomically hides public projections and removes identifying social edges", async () => {
+    const publicDocs = {
+      "workspaces/acme": { ownerUid: "u2", ownerActive: true },
+      "workspaces/acme/projects/project-one": { ownerUid: "u2", ownerActive: true },
+      "posts/post-one": { authorUid: "u2", ownerActive: true },
+      "feed/feed-one": { actorUid: "u2" },
+      "stars/star-one": { target: { ownerUid: "u2" } },
+      "follows/follow-one": { actorUid: "u2" },
+    };
+    const { app } = makeDeleteApp({ u2: { username: "acme" } }, publicDocs);
+
+    await request(app).post("/customer/u2/delete").expect(202);
+
+    expect(publicDocs["workspaces/acme"].ownerActive).toBe(false);
+    expect(publicDocs["workspaces/acme/projects/project-one"].ownerActive).toBe(false);
+    expect(publicDocs["posts/post-one"].ownerActive).toBe(false);
+    expect(publicDocs).not.toHaveProperty("feed/feed-one");
+    expect(publicDocs).not.toHaveProperty("stars/star-one");
+    expect(publicDocs).not.toHaveProperty("follows/follow-one");
   });
 
   it("does not revoke or delete when the user does not exist", async () => {

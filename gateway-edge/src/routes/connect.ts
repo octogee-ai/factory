@@ -6,6 +6,7 @@ import {
   type ConnectorCaptureMethod,
 } from "@octogee/shared/types/connectors";
 import { googleConnectAllowed } from "@octogee/shared/types/platform-config";
+import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { revokeProviderGrant } from "@octogee/core/connector-revocation";
 import { requireAuth } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";
@@ -46,6 +47,13 @@ class GoogleAccountMismatchError extends Error {
   constructor() {
     super("google_account_mismatch");
     this.name = "GoogleAccountMismatchError";
+  }
+}
+
+class InactiveConnectorOwnerError extends Error {
+  constructor() {
+    super("connector owner is not active");
+    this.name = "InactiveConnectorOwnerError";
   }
 }
 
@@ -127,8 +135,9 @@ async function storeConnectorTokens(args: {
     refreshTokenPatch.encryptedRefreshToken = null;
   }
 
-  await userCol(uid, "secrets").doc(def.meta.id).set(
-    {
+  const secretRef = userCol(uid, "secrets").doc(def.meta.id);
+  const integrationRef = userCol(uid, "integrations").doc(def.meta.id);
+  const secret = {
       provider: def.meta.id,
       tokens: {
         encryptedAccessToken,
@@ -137,9 +146,7 @@ async function storeConnectorTokens(args: {
         tokenType: tokens.token_type ?? "bearer",
       },
       updatedAt: FieldValue.serverTimestamp(),
-    },
-    { merge: true },
-  );
+    };
 
   const integration = {
     provider: def.meta.id,
@@ -150,18 +157,23 @@ async function storeConnectorTokens(args: {
     connectedAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
   };
-  if (def.meta.id === "google") {
-    await userCol(uid, "integrations").doc(def.meta.id).set(
-      {
+  await db.runTransaction(async (tx) => {
+    const ownerRef = db.collection("users").doc(uid);
+    const owner = await tx.get(ownerRef);
+    if (!owner.exists || !accountAllowsInteractiveAccess(owner.data())) {
+      throw new InactiveConnectorOwnerError();
+    }
+    tx.set(secretRef, secret, { merge: true });
+    if (def.meta.id === "google") {
+      tx.set(integrationRef, {
         ...integration,
         error: FieldValue.delete(),
         verifiedAt: FieldValue.delete(),
-      },
-      { merge: true },
-    );
-  } else {
-    await userCol(uid, "integrations").doc(def.meta.id).set(integration);
-  }
+      }, { merge: true });
+    } else {
+      tx.set(integrationRef, integration);
+    }
+  });
 
   logger.info(`[connect] ${def.meta.id} connected for uid=${uid} via ${captureMethod}`);
 }
@@ -196,6 +208,36 @@ async function exchangeAuthCode(
     throw new Error(`token exchange rejected: ${tokens.error ?? "no access_token"}`);
   }
   return tokens;
+}
+
+async function revokeFreshConnectorGrant(def: ConnectorDef, tokens: TokenResponse): Promise<void> {
+  if (!def.oauth?.revocationUrl) return;
+  const token = tokens.refresh_token ?? tokens.access_token;
+  const response = await fetch(def.oauth.revocationUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ token }),
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (!response.ok) {
+    throw new Error(`provider revoke returned ${response.status}`);
+  }
+}
+
+async function cleanupInactiveConnectorCallback(
+  error: unknown,
+  def: ConnectorDef,
+  tokens: TokenResponse | null,
+  uid: string,
+): Promise<void> {
+  if (!(error instanceof InactiveConnectorOwnerError) || !tokens) return;
+  try {
+    await revokeFreshConnectorGrant(def, tokens);
+  } catch (cleanupError) {
+    logger.error(
+      `[connect] ${def.meta.id} inactive callback revoke failed for uid=${uid}: ${String(cleanupError)}`,
+    );
+  }
 }
 
 router.post(
@@ -533,7 +575,10 @@ async function consumeFlowNonce(
 ): Promise<{ requestedScopes: string[] | null; codeVerifier: string | null }> {
   return db.runTransaction(async (tx) => {
     const ref = flowsCol().doc(payload.nonce);
-    const snap = await tx.get(ref);
+    const [snap, owner] = await Promise.all([
+      tx.get(ref),
+      tx.get(db.collection("users").doc(payload.uid)),
+    ]);
     const flow = snap.data() as
       | {
           uid?: string;
@@ -545,6 +590,9 @@ async function consumeFlowNonce(
       | undefined;
     if (!snap.exists || !flow || flow.consumedAt || flow.uid !== payload.uid || flow.connector !== connectorId) {
       throw new Error("state nonce unknown or already consumed");
+    }
+    if (!owner.exists || !accountAllowsInteractiveAccess(owner.data())) {
+      throw new InactiveConnectorOwnerError();
     }
     tx.set(ref, { consumedAt: FieldValue.serverTimestamp() }, { merge: true });
     return {
@@ -568,6 +616,12 @@ async function redirectOAuthCallbackFailure(
       buildOAuthRedirect(payload.returnUrl, APP_URL, {
         connect_error: "google_account_mismatch",
       }),
+    );
+    return;
+  }
+  if (err instanceof InactiveConnectorOwnerError) {
+    res.redirect(
+      buildOAuthRedirect(payload.returnUrl, APP_URL, { connect_error: "account_inactive" }),
     );
     return;
   }
@@ -626,12 +680,14 @@ router.get("/:connector/callback", async (req: Request, res: Response) => {
     return;
   }
 
+  let exchangedTokens: TokenResponse | null = null;
   try {
     const creds = readConnectorClientCreds(def);
     if (!creds) {
       throw new Error("connector client credentials missing at exchange time");
     }
     const tokens = await exchangeAuthCode(def, code, creds, flow.codeVerifier);
+    exchangedTokens = tokens;
     const identity = await def.fetchIdentity(tokens.access_token);
     if (def.meta.id === "google") {
       await enforceGoogleAccountContinuity(payload.uid, identity.accountLabel);
@@ -650,6 +706,7 @@ router.get("/:connector/callback", async (req: Request, res: Response) => {
       }),
     );
   } catch (err) {
+    await cleanupInactiveConnectorCallback(err, def, exchangedTokens, payload.uid);
     await redirectOAuthCallbackFailure(res, def, payload, err);
   }
 });
