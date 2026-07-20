@@ -118,6 +118,7 @@ function app(opts: {
   a.post("/internal/openclaw/previews/authorize", enforcement, handler);
   a.post("/internal/agent-projects/create", enforcement, handler);
   a.post("/internal/agent-projects/list", enforcement, handler);
+  a.post("/internal/agent-productivity/google/calendar/events", enforcement, handler);
   a.get("/internal/agent-access/context", enforcement, handler);
   a.post("/internal/agent-access/prepare", enforcement, handler);
   a.get("/internal/agent-access/approvals/:approvalId/status", enforcement, handler);
@@ -480,6 +481,18 @@ describe("tenant enforcement middleware", () => {
       expect(ownedGateway.status, route).toBe(200);
       expect(foreignGateway.status, route).toBe(403);
     }
+  });
+
+  it("delegates bearer-blind productivity routes only for the bound gateway tenant", async () => {
+    const ownedGateway = await request(app({ boundTenant: BENDER }))
+      .post("/internal/agent-productivity/google/calendar/events")
+      .send({ agentId: "octogee-alice-coach", params: {} });
+    const foreignGateway = await request(app({ boundTenant: BENDER }))
+      .post("/internal/agent-productivity/google/calendar/events")
+      .send({ gatewayId: "other", agentId: "octogee-alice-coach", params: {} });
+
+    expect(ownedGateway.status).toBe(200);
+    expect(foreignGateway.status).toBe(403);
   });
 
   it("allows a gateway-bound caller to target only slugs assigned to that gateway", async () => {

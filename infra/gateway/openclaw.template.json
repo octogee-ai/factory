@@ -195,6 +195,7 @@
       "anthropic",
       "memory-core",
       "octogee-chat-tools",
+      "octogee-connector-tools",
       "octogee-access-tools",
       "octogee-preview-tools",
       "octogee-project-tools",
@@ -223,6 +224,13 @@
           "brokerUrl": "${FLEET_BROKER_URL}",
           "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}",
           "customersRoot": "${CUSTOMERS_DIR}"
+        }
+      },
+      "octogee-connector-tools": {
+        "enabled": true,
+        "config": {
+          "brokerUrl": "${FLEET_BROKER_URL}",
+          "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}"
         }
       },
       "octogee-access-tools": {

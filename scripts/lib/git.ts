@@ -573,19 +573,25 @@ interface WorkspaceSyncLease {
 
 type WorkspaceSyncLeaseFactory = (workspaceDir: string) => WorkspaceSyncLease | null;
 
+export interface WorkspaceSyncMutationOptions {
+  acquire?: WorkspaceSyncLeaseFactory;
+  log?: (message: string) => void;
+  strict?: boolean;
+}
+
 export function runWorkspaceSyncMutation(
   coachDir: string,
   slug: string,
   work: () => void,
-  acquire: WorkspaceSyncLeaseFactory = (workspaceDir) =>
-    acquireWorkspaceMutationLeaseSync({ workspaceDir }),
-  logFn: (message: string) => void = dlog,
-  strict = false,
+  opts: WorkspaceSyncMutationOptions = {},
 ): boolean {
+  const acquire = opts.acquire ?? ((workspaceDir) =>
+    acquireWorkspaceMutationLeaseSync({ workspaceDir }));
+  const logFn = opts.log ?? dlog;
   const lease = acquire(coachDir);
   if (!lease) {
     logFn(`[git-sync] ${slug}: workspace busy — autosave deferred`);
-    if (strict) throw new Error(`${slug}: workspace mutation lease unavailable`);
+    if (opts.strict) throw new Error(`${slug}: workspace mutation lease unavailable`);
     return false;
   }
   try {
@@ -625,7 +631,7 @@ function syncOneWorkspace(slug: string, strict: boolean): void {
       const pushed = pushAndLog(coachDir, slug, keyArg);
       if (!pushed && strict) throw new Error(`${slug}: git push failed`);
     }
-  }, undefined, dlog, strict);
+  }, { strict });
 }
 
 // Workspace auto-sync is pure SSH/git on the per-customer key — no admin token.

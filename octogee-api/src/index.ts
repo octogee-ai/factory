@@ -24,6 +24,7 @@ import { createConnectorTokenBrokerRoutes } from "./routes/connector-token-broke
 import { createGatewayPodOwnerIdentityReader } from "./lib/gateway-pod-owner-identity.js";
 import { createByokBrokerRoutes } from "./routes/byok-broker.js";
 import { createAgentProjectRoutes } from "./routes/agent-projects.js";
+import { createAgentProductivityRoutes } from "./routes/agent-productivity.js";
 import { createAgentSupportRoutes } from "./routes/agent-support.js";
 import { createAgentAccessRoutes } from "./routes/agent-access.js";
 import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
@@ -304,6 +305,7 @@ export function createApp(opts: CreateAppOptions = {}) {
   // the owner + workspace derive from the pod's assignment, and plan
   // entitlements are enforced by the same service the UI create uses.
   app.use("/internal/agent-projects", createAgentProjectRoutes({ db }));
+  app.use("/internal/agent-productivity", createAgentProductivityRoutes({ db }));
   app.use(
     "/internal/agent-support",
     createAgentSupportRoutes({

@@ -62,16 +62,6 @@ function allowOctogeeWorkflowTools(config) {
   config.tools.alsoAllow = addTools(config.tools.alsoAllow, OCTOGEE_WORKFLOW_TOOLS);
 }
 
-function disableConnectorTools(config) {
-  config.plugins ??= {};
-  if (Array.isArray(config.plugins.allow)) {
-    config.plugins.allow = config.plugins.allow.filter((id) => id !== CONNECTOR_TOOLS_PLUGIN);
-  }
-  config.plugins.entries ??= {};
-  config.plugins.entries[CONNECTOR_TOOLS_PLUGIN] ??= {};
-  config.plugins.entries[CONNECTOR_TOOLS_PLUGIN].enabled = false;
-}
-
 function isPolicyCodexAuthProfile(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   return (
@@ -188,8 +178,8 @@ function applySharedPolicy(config) {
   enableProjectTools(config);
   enableOpsTools(config);
   enableAccessTools(config);
+  enableConnectorTools(config);
   sandboxCodex(config);
-  disableConnectorTools(config);
 }
 
 function applyBuilderPolicy(config) {

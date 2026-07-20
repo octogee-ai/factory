@@ -228,8 +228,7 @@ describe('readConnectorAccessToken', () => {
     expect(decryptSecret).toHaveBeenCalledWith('ENC:gho_direct');
   });
 
-  it('authority direct owner-runtime reads refresh expired OAuth tokens', async () => {
-    process.env.CONNECTOR_TOKEN_AUTHORITY = '1';
+  it('trusted token refresh rotates an expired OAuth access token', async () => {
     process.env.GOOGLE_CLIENT_ID = 'client-id';
     process.env.GOOGLE_CLIENT_SECRET = 'client-secret';
     vi.stubGlobal(
@@ -253,9 +252,10 @@ describe('readConnectorAccessToken', () => {
       },
     };
 
-    await expect(
-      readConnectorAccessToken('uid-owner', 'google', { kind: 'owner-runtime', builderSlug: 'alice' }),
-    ).resolves.toBe('fresh_google');
+    await expect(getFreshAccessToken('uid-owner', getConnector('google')!)).resolves.toEqual({
+      ok: true,
+      accessToken: 'fresh_google',
+    });
 
     expect(docWrites[0]).toMatchObject({
       path: 'users/uid-owner/secrets/google',
@@ -270,8 +270,7 @@ describe('readConnectorAccessToken', () => {
     });
   });
 
-  it('authority direct owner-runtime reads surface refresh failures distinctly', async () => {
-    process.env.CONNECTOR_TOKEN_AUTHORITY = '1';
+  it('trusted token refresh surfaces reauthorization without decrypting the stale access token', async () => {
     process.env.GOOGLE_CLIENT_ID = 'client-id';
     process.env.GOOGLE_CLIENT_SECRET = 'client-secret';
     vi.stubGlobal(
@@ -291,18 +290,9 @@ describe('readConnectorAccessToken', () => {
       },
     };
 
-    const err = await readConnectorAccessToken(
-      'uid-owner',
-      'google',
-      { kind: 'owner-runtime', builderSlug: 'alice' },
-    ).then(
-      () => null,
-      (e: unknown) => e,
-    );
-
-    expect(err).toMatchObject({
-      status: 409,
-      errorCode: 'reauth_required',
+    await expect(getFreshAccessToken('uid-owner', getConnector('google')!)).resolves.toEqual({
+      ok: false,
+      reason: 'reauth_required',
     });
     expect(decryptSecret).not.toHaveBeenCalledWith('ENC:expired_google');
   });
