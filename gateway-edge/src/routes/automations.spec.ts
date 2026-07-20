@@ -51,6 +51,7 @@ function appForTest(overrides: Partial<Parameters<typeof createAutomationsRouter
       authorizeOwner: async () => ({ kind: "authorized", slug: "alice", gatewayId: "gw-alice" }),
       localGatewayId: () => "gw-alice",
       openclawDir: () => openclawDir,
+      resolveCoachChannelId: async () => "mm-coach-alice",
       invoke,
       ...overrides,
     }),
@@ -132,6 +133,16 @@ describe("automations locality broker", () => {
           return {
             jobs: [
               safeJob,
+              {
+                ...safeJob,
+                id: "morning-brief",
+                delivery: {
+                  mode: "announce",
+                  channel: "mattermost",
+                  accountId: "alice-coach",
+                  to: "channel:mm-coach-alice",
+                },
+              },
               { ...safeJob, id: "legacy-command", payload: { kind: "command", argv: ["env"] } },
             ],
             deliveryPreviews: { "daily-digest": { detail: "https://secret.example/hook" } },
@@ -156,6 +167,16 @@ describe("automations locality broker", () => {
           wakeMode: "now",
           payload: { kind: "agentTurn", message: "Summarize the day." },
           delivery: { mode: "none" },
+          state: { nextRunAtMs: 1_783_820_800_000, lastRunStatus: "ok" },
+        }, {
+          id: "morning-brief",
+          name: "Daily digest",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "Summarize the day." },
+          delivery: { mode: "announce", channel: "mattermost", to: "channel:coach" },
           state: { nextRunAtMs: 1_783_820_800_000, lastRunStatus: "ok" },
         }],
       },
@@ -220,7 +241,53 @@ describe("automations locality broker", () => {
       sessionTarget: "isolated",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "Summarize the day." },
-      delivery: { mode: "announce", channel: "mattermost", to: "channel:coach" },
+      delivery: {
+        mode: "announce",
+        channel: "mattermost",
+        accountId: "alice-coach",
+        to: "channel:mm-coach-alice",
+      },
+    });
+  });
+
+  it("retargets delivery edits to the authoritative coach channel", async () => {
+    const resolveCoachChannelId = vi.fn(async () => "mm-coach-alice");
+    const current = {
+      id: "daily-digest",
+      agentId: "octogee-alice-coach",
+      name: "Daily digest",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "agentTurn", message: "Summarize the day." },
+      delivery: { mode: "none" },
+    };
+    const { app, invoke } = appForTest({
+      resolveCoachChannelId,
+      invoke: vi.fn(async (method: string) => method === "cron.get" ? { job: current } : { ok: true }),
+    });
+
+    const response = await request(app)
+      .post("/api/g/gw-alice/automations/rpc")
+      .send({
+        method: "cron.update",
+        params: {
+          id: "daily-digest",
+          patch: { delivery: { mode: "announce", channel: "slack", to: "#outside" } },
+        },
+      });
+
+    expect(response.status).toBe(200);
+    expect(resolveCoachChannelId).toHaveBeenCalledWith("alice");
+    expect(invoke).toHaveBeenCalledWith("cron.update", {
+      id: "daily-digest",
+      patch: {
+        delivery: {
+          mode: "announce",
+          channel: "mattermost",
+          accountId: "alice-coach",
+          to: "channel:mm-coach-alice",
+        },
+      },
     });
   });
 

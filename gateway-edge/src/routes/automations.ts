@@ -13,6 +13,7 @@ import {
   authorizeAutomationOwner,
   type AutomationAuthorizationOutcome,
 } from "../lib/automation-authorization-broker.js";
+import { db } from "../lib/db.js";
 import type { ResolvedGateway } from "../lib/user-gateway.js";
 
 const MAX_CRON_NAME_LENGTH = 160;
@@ -83,6 +84,7 @@ export interface AutomationsRouterDeps {
   }): Promise<AutomationAuthorizationOutcome>;
   localGatewayId(): string | null;
   openclawDir(): string;
+  resolveCoachChannelId(slug: string): Promise<string>;
   invoke(method: string, params: Record<string, unknown>): Promise<unknown>;
 }
 
@@ -186,13 +188,25 @@ function cronPayload(value: unknown): Record<string, unknown> | null {
   return { kind: "agentTurn", message };
 }
 
-function cronDelivery(value: unknown): Record<string, unknown> | null {
+interface CoachDeliveryTarget {
+  accountId: string;
+  to: string;
+}
+
+function cronDelivery(
+  value: unknown,
+  coachTarget?: CoachDeliveryTarget,
+): Record<string, unknown> | null {
   if (value === undefined) return { mode: "none" };
   const delivery = record(value);
   if (!delivery || typeof delivery.mode !== "string") return null;
   if (delivery.mode === "none" && hasOnlyKeys(delivery, ["mode"])) return { mode: "none" };
-  if (delivery.mode === "announce" && hasOnlyKeys(delivery, ["mode", "channel", "to"])) {
-    return { mode: "announce", channel: "mattermost", to: "channel:coach" };
+  if (delivery.mode === "announce" && hasOnlyKeys(delivery, ["mode", "channel", "to", "accountId"])) {
+    return {
+      mode: "announce",
+      channel: "mattermost",
+      ...(coachTarget ?? { to: "channel:coach" }),
+    };
   }
   return null;
 }
@@ -233,13 +247,17 @@ function automationJob(value: unknown, agentId: string): Record<string, unknown>
   };
 }
 
-function cronDefinition(value: unknown, agentId: string): Record<string, unknown> | null {
+function cronDefinition(
+  value: unknown,
+  agentId: string,
+  coachTarget?: CoachDeliveryTarget,
+): Record<string, unknown> | null {
   const definition = record(value);
   if (!definition) return null;
   const name = nonEmptyString(definition.name);
   const schedule = cronSchedule(definition.schedule);
   const payload = cronPayload(definition.payload);
-  const delivery = cronDelivery(definition.delivery);
+  const delivery = cronDelivery(definition.delivery, coachTarget);
   if (!name || name.length > MAX_CRON_NAME_LENGTH || typeof definition.enabled !== "boolean" || !schedule || !payload || !delivery) {
     return null;
   }
@@ -298,9 +316,13 @@ function writePayloadPatch(patch: Record<string, unknown>, next: Record<string, 
   return true;
 }
 
-function writeDeliveryPatch(patch: Record<string, unknown>, next: Record<string, unknown>): boolean {
+function writeDeliveryPatch(
+  patch: Record<string, unknown>,
+  next: Record<string, unknown>,
+  coachTarget?: CoachDeliveryTarget,
+): boolean {
   if (!Object.hasOwn(patch, "delivery")) return true;
-  const delivery = cronDelivery(patch.delivery);
+  const delivery = cronDelivery(patch.delivery, coachTarget);
   if (!delivery) return false;
   next.delivery = delivery;
   return true;
@@ -312,14 +334,15 @@ const CRON_PATCH_WRITERS: CronPatchWriter[] = [
   writeEnabledPatch,
   writeSchedulePatch,
   writePayloadPatch,
-  writeDeliveryPatch,
 ];
 
-function cronPatch(value: unknown): Record<string, unknown> | null {
+function cronPatch(value: unknown, coachTarget?: CoachDeliveryTarget): Record<string, unknown> | null {
   const patch = record(value);
   if (!patch || !hasOnlyKeys(patch, ["name", "description", "enabled", "schedule", "payload", "delivery"])) return null;
   const next: Record<string, unknown> = {};
-  return CRON_PATCH_WRITERS.every((writer) => writer(patch, next)) && Object.keys(next).length > 0 ? next : null;
+  const valid = CRON_PATCH_WRITERS.every((writer) => writer(patch, next)) &&
+    writeDeliveryPatch(patch, next, coachTarget);
+  return valid && Object.keys(next).length > 0 ? next : null;
 }
 
 function cronId(params: Record<string, unknown>): string | null {
@@ -417,11 +440,23 @@ async function addCronJob(
   deps: AutomationsRouterDeps,
   params: Record<string, unknown> | null,
   agentId: string,
+  slug: string,
 ): Promise<BrokerResponse> {
-  const definition = cronDefinition(params, agentId);
+  const coachTarget = await coachDeliveryTarget(deps, params?.delivery, slug);
+  const definition = cronDefinition(params, agentId, coachTarget);
   return definition
     ? brokerResult(await deps.invoke("cron.add", definition))
     : brokerError(400, "invalid automation definition");
+}
+
+async function coachDeliveryTarget(
+  deps: AutomationsRouterDeps,
+  delivery: unknown,
+  slug: string,
+): Promise<CoachDeliveryTarget | undefined> {
+  if (cronDelivery(delivery)?.mode !== "announce") return undefined;
+  const channelId = await deps.resolveCoachChannelId(slug);
+  return { accountId: `${slug}-coach`, to: `channel:${channelId}` };
 }
 
 async function existingCronJobOperation(
@@ -429,12 +464,13 @@ async function existingCronJobOperation(
   method: string,
   params: Record<string, unknown> | null,
   agentId: string,
+  slug: string,
 ): Promise<BrokerResponse> {
   const id = params ? cronId(params) : null;
   if (!params || !id) return brokerError(400, "invalid automation id");
   const current = await callerJob(deps, id, agentId);
   if (!current) return brokerError(404, "not_found");
-  if (method === "cron.update") return updateCronJob(deps, id, params);
+  if (method === "cron.update") return updateCronJob(deps, id, params, slug);
   if (method === "cron.run") return brokerResult(await deps.invoke("cron.run", { id, mode: "force" }));
   return brokerResult(await deps.invoke("cron.runs", { id, limit: 20, sortDir: "desc" }));
 }
@@ -443,8 +479,11 @@ async function updateCronJob(
   deps: AutomationsRouterDeps,
   id: string,
   params: Record<string, unknown>,
+  slug: string,
 ): Promise<BrokerResponse> {
-  const patch = cronPatch(params.patch);
+  const patchValue = record(params.patch);
+  const coachTarget = await coachDeliveryTarget(deps, patchValue?.delivery, slug);
+  const patch = cronPatch(params.patch, coachTarget);
   return patch
     ? brokerResult(await deps.invoke("cron.update", { id, patch }))
     : brokerError(400, "invalid automation update");
@@ -487,8 +526,8 @@ async function automationResponse(
   const agentId = coachAgentId(resolved.slug);
   if (method === "cron.list") return listCronJobs(deps, agentId);
   const params = record(body.params);
-  if (method === "cron.add") return addCronJob(deps, params, agentId);
-  if (cronJobOperation(method)) return existingCronJobOperation(deps, method, params, agentId);
+  if (method === "cron.add") return addCronJob(deps, params, agentId, resolved.slug);
+  if (cronJobOperation(method)) return existingCronJobOperation(deps, method, params, agentId, resolved.slug);
   if (method === "heartbeat.get") return heartbeatGet(deps, agentId);
   if (method === "heartbeat.update") return heartbeatUpdate(deps, body, agentId);
   return brokerError(400, "unsupported automation operation");
@@ -553,10 +592,18 @@ export async function invokeLocalOpenClaw(
   }
 }
 
+async function resolveStoredCoachChannelId(slug: string): Promise<string> {
+  const snapshot = await db.doc(`workspaces/${slug}/channels/coach-dm`).get();
+  const channelId = nonEmptyString(record(snapshot.data()?.mattermost)?.channelId);
+  if (!channelId) throw new Error(`coach Mattermost channel is not provisioned for ${slug}`);
+  return channelId;
+}
+
 const automationsRouter = createAutomationsRouter({
   authorizeOwner: authorizeAutomationOwner,
   localGatewayId: () => process.env.GATEWAY_ID ?? null,
   openclawDir: () => process.env.OPENCLAW_DIR ?? "/home/node/.openclaw",
+  resolveCoachChannelId: resolveStoredCoachChannelId,
   invoke: invokeLocalOpenClaw,
 });
 

@@ -350,8 +350,6 @@ type UpgradeStringOption = {
     BuildUpgradeArgsOpts,
     | "chartFingerprint"
     | "deploymentIntentFingerprint"
-    | "ownerUid"
-    | "builderSlug"
     | "profile"
     | "gatewayClass"
     | "imageProfile"
@@ -380,8 +378,6 @@ type UpgradeJsonOption = {
 const UPGRADE_STRING_OPTIONS: UpgradeStringOption[] = [
   { option: "chartFingerprint", key: "chartFingerprint" },
   { option: "deploymentIntentFingerprint", key: "deploymentIntentFingerprint" },
-  { option: "ownerUid", key: "ownerUid" },
-  { option: "builderSlug", key: "builderSlug" },
   { option: "profile", key: "profile" },
   { option: "gatewayClass", key: "gatewayClass" },
   { option: "imageProfile", key: "imageProfile" },
@@ -415,6 +411,10 @@ function baseUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
     `imageTag=${opts.imageTag}`,
     HELM_SET_STRING,
     `image.repository=${opts.imageRepository}`,
+    HELM_SET_STRING,
+    `ownerUid=${opts.ownerUid ?? ""}`,
+    HELM_SET_STRING,
+    `builderSlug=${opts.builderSlug ?? ""}`,
   ];
   // Revision-aware render: pass the disposable revision id so per-instance
   // resource names key off it. Omitted → chart defaults revisionId to gatewayId
