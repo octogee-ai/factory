@@ -28,6 +28,11 @@ output "llm_broker_sa_name" {
   value       = google_service_account.llm_broker.name
 }
 
+output "ops_agent_sa_email" {
+  description = "Ops Agent service account email"
+  value       = google_service_account.ops_agent.email
+}
+
 output "glm_controller_sa_email" {
   description = "Cowboy / glm-controller dedicated service account email"
   value       = google_service_account.glm_controller.email

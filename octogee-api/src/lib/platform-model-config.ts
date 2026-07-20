@@ -2,21 +2,33 @@ import type { Firestore } from "firebase-admin/firestore";
 
 import {
   DEFAULT_FREE_TIER_MODEL_REF,
+  DEFAULT_OPS_AGENT_MODEL_REF,
   PLATFORM_CONFIG_COLLECTION,
   PLATFORM_MODEL_CONFIG_DOC,
   parsePlatformModelConfig,
   resolveFreeTierModel,
+  resolveOpsAgentModel,
   type ResolvedFreeTierModel,
+  type ResolvedOpsAgentModel,
 } from "@octogee/shared/types/platform-config";
 
 const DEFAULT_TTL_MS = 60_000;
 
 export type FreeTierModelResolver = () => Promise<ResolvedFreeTierModel>;
+export type OpsAgentModelResolver = () => Promise<ResolvedOpsAgentModel>;
 
 function mustResolve(ref: string): ResolvedFreeTierModel {
   const resolved = resolveFreeTierModel(ref);
   if (!resolved) {
     throw new Error(`compiled default free-tier model ref is not in the catalog: ${ref}`);
+  }
+  return resolved;
+}
+
+function mustResolveOpsAgent(ref: string): ResolvedOpsAgentModel {
+  const resolved = resolveOpsAgentModel(ref);
+  if (!resolved) {
+    throw new Error(`compiled default Ops Agent model ref is not an OpenRouter catalog model: ${ref}`);
   }
   return resolved;
 }
@@ -56,6 +68,50 @@ export function createCachedFreeTierModelResolver(opts: {
               `platformConfig/models freeTierModelRef is not a catalog ref: ${JSON.stringify(
                 (data as { freeTierModelRef?: unknown }).freeTierModelRef,
               )} — serving ${DEFAULT_FREE_TIER_MODEL_REF}`,
+            ),
+          );
+        }
+      }
+      cached = { value, resolvedAt: at };
+      return value;
+    } catch (err) {
+      opts.onError?.(err);
+      return cached?.value ?? fallback;
+    }
+  };
+}
+
+export function createCachedOpsAgentModelResolver(opts: {
+  db: Pick<Firestore, "collection">;
+  ttlMs?: number;
+  now?: () => number;
+  onError?: (err: unknown) => void;
+}): OpsAgentModelResolver {
+  const ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
+  const now = opts.now ?? Date.now;
+  const fallback = mustResolveOpsAgent(DEFAULT_OPS_AGENT_MODEL_REF);
+  let cached: { value: ResolvedOpsAgentModel; resolvedAt: number } | null = null;
+
+  return async () => {
+    const at = now();
+    if (cached && at - cached.resolvedAt < ttlMs) return cached.value;
+    try {
+      const snap = await opts.db
+        .collection(PLATFORM_CONFIG_COLLECTION)
+        .doc(PLATFORM_MODEL_CONFIG_DOC)
+        .get();
+      const data = snap.data();
+      let value = fallback;
+      if (data !== undefined) {
+        const parsed = parsePlatformModelConfig(data);
+        if (parsed) {
+          value = mustResolveOpsAgent(parsed.opsAgentModelRef);
+        } else {
+          opts.onError?.(
+            new Error(
+              `platformConfig/models opsAgentModelRef is not an OpenRouter catalog ref: ${JSON.stringify(
+                (data as { opsAgentModelRef?: unknown }).opsAgentModelRef,
+              )} — serving ${DEFAULT_OPS_AGENT_MODEL_REF}`,
             ),
           );
         }

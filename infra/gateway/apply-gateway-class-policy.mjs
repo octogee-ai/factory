@@ -21,9 +21,12 @@ export const OCTOGEE_WORKFLOW_TOOLS = [
   "octogee_chat_search",
   "octogee_chat_history",
   "octogee_chat_set_identity",
+  "octogee_status",
+  "octogee_ask_ops",
 ];
 const CONNECTOR_TOOLS_PLUGIN = "octogee-connector-tools";
 const PROJECT_TOOLS_PLUGIN = "octogee-project-tools";
+const OPS_TOOLS_PLUGIN = "octogee-ops-tools";
 const CODEX_MODEL = "openai/gpt-5.5";
 const CODEX_PROFILE = "openai-codex:default";
 const RUNTIME_CODEX_SANDBOX = "danger-full-access";
@@ -121,6 +124,13 @@ function enableProjectTools(config) {
   config.plugins.entries[PROJECT_TOOLS_PLUGIN].config ??= {};
 }
 
+function enableOpsTools(config) {
+  allowPlugin(config, OPS_TOOLS_PLUGIN);
+  config.plugins.entries[OPS_TOOLS_PLUGIN] ??= {};
+  config.plugins.entries[OPS_TOOLS_PLUGIN].enabled = true;
+  config.plugins.entries[OPS_TOOLS_PLUGIN].config ??= {};
+}
+
 function enableRuntimePlugins(config) {
   ensureCodexAuthProfile(config);
   ensureCodexRuntimeModel(config);
@@ -164,6 +174,7 @@ function applySharedPolicy(config) {
   removeSharedSubagentDefaults(config);
   allowOctogeeWorkflowTools(config);
   enableProjectTools(config);
+  enableOpsTools(config);
   sandboxCodex(config);
   disableConnectorTools(config);
 }
@@ -177,6 +188,7 @@ function applyBuilderPolicy(config) {
   config.tools.subagents.tools.deny = removeDeniedTools(config.tools.subagents.tools.deny, EXEC_TOOLS);
   allowOctogeeWorkflowTools(config);
   enableProjectTools(config);
+  enableOpsTools(config);
   enableRuntimePlugins(config);
 }
 

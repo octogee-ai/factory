@@ -52,9 +52,11 @@ export function googleConnectAllowed(
 // The free-tier house model: DeepSeek V4 Pro on the OpenRouter platform key
 // (operator default 2026-07-08; the dial can point anywhere in the catalog).
 export const DEFAULT_FREE_TIER_MODEL_REF = "platform-openrouter/deepseek/deepseek-v4-pro";
+export const DEFAULT_OPS_AGENT_MODEL_REF = "platform-openrouter/z-ai/glm-5.2";
 
 export interface PlatformModelConfig {
   freeTierModelRef: string;
+  opsAgentModelRef: string;
 }
 
 export interface ResolvedFreeTierModel {
@@ -63,11 +65,24 @@ export interface ResolvedFreeTierModel {
   upstreamModelId: string;
 }
 
+export interface ResolvedOpsAgentModel extends ResolvedFreeTierModel {
+  runtimeModelRef: string;
+}
+
 export function parsePlatformModelConfig(value: unknown): PlatformModelConfig | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const ref = (value as { freeTierModelRef?: unknown }).freeTierModelRef;
-  if (typeof ref !== "string" || resolveFreeTierModel(ref) === null) return null;
-  return { freeTierModelRef: ref };
+  const config = value as { freeTierModelRef?: unknown; opsAgentModelRef?: unknown };
+  if (
+    typeof config.freeTierModelRef !== "string" ||
+    resolveFreeTierModel(config.freeTierModelRef) === null
+  ) {
+    return null;
+  }
+  const opsAgentModelRef = config.opsAgentModelRef ?? DEFAULT_OPS_AGENT_MODEL_REF;
+  if (typeof opsAgentModelRef !== "string" || resolveOpsAgentModel(opsAgentModelRef) === null) {
+    return null;
+  }
+  return { freeTierModelRef: config.freeTierModelRef, opsAgentModelRef };
 }
 
 // Split a catalog model ref into what each dial consumer needs: the broker
@@ -81,5 +96,14 @@ export function resolveFreeTierModel(ref: string): ResolvedFreeTierModel | null 
     provider: entry.provider,
     upstreamModelId:
       entry.provider === "anthropic" ? entry.id.replace(/^anthropic\//, "") : entry.id,
+  };
+}
+
+export function resolveOpsAgentModel(ref: string): ResolvedOpsAgentModel | null {
+  const resolved = resolveFreeTierModel(ref);
+  if (!resolved || resolved.provider !== "openrouter") return null;
+  return {
+    ...resolved,
+    runtimeModelRef: `openrouter/${resolved.upstreamModelId}`,
   };
 }

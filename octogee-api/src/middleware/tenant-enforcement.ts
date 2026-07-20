@@ -48,6 +48,7 @@ const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/openclaw-control/redeem",
   "/internal/openclaw-control/authorize",
   "/internal/openclaw-control/audit",
+  "/internal/agent-support/ask",
 ]);
 
 function stringValue(value: unknown): string | null {

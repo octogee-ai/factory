@@ -112,7 +112,9 @@
       "tavily_extract",
       "octogee_chat_search",
       "octogee_chat_history",
-      "octogee_chat_set_identity"
+      "octogee_chat_set_identity",
+      "octogee_status",
+      "octogee_ask_ops"
     ],
     "web": {
       "search": {
@@ -195,6 +197,7 @@
       "octogee-preview-tools",
       "octogee-project-tools",
       "octogee-status-tools",
+      "octogee-ops-tools",
       "octogee-web-tools",
       "octogee-workspace-tools",
       "octogee-publish-tools",
@@ -237,6 +240,13 @@
           "brokerUrl": "${FLEET_BROKER_URL}",
           "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}",
           "gatewayClass": "${GATEWAY_CLASS}"
+        }
+      },
+      "octogee-ops-tools": {
+        "enabled": true,
+        "config": {
+          "brokerUrl": "${FLEET_BROKER_URL}",
+          "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}"
         }
       },
       "octogee-web-tools": {

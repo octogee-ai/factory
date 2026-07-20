@@ -342,11 +342,8 @@ set -u
 [[ -z "$OPENROUTER_API_KEY" && -n "$OPENROUTER_PLATFORM_API_KEY" ]] && OPENROUTER_API_KEY="$OPENROUTER_PLATFORM_API_KEY"
 [[ -z "$OPENROUTER_API_KEY" ]] && OPENROUTER_API_KEY=$(sm_get OPENROUTER_API_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
 [[ -z "$OPENROUTER_API_KEY" ]] && OPENROUTER_API_KEY=$(sm_get OPENROUTER_PLATFORM_API_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
-if [[ -n "$OPENROUTER_API_KEY" ]]; then
-  ksecret octogee-openrouter --from-literal=api_key="$OPENROUTER_API_KEY"
-else
-  warn "OPENROUTER_API_KEY not found in .env or Secret Manager — skipping optional octogee-openrouter"
-fi
+[[ -n "$OPENROUTER_API_KEY" ]] || fail "OPENROUTER_API_KEY not found in .env or Secret Manager"
+ksecret octogee-openrouter --from-literal=api_key="$OPENROUTER_API_KEY"
 
 # ── 6c. OpenAI API key (llm-broker platform provider + embeddings) ────────
 info "OPENAI_API_KEY (llm-broker platform provider + memory search embeddings)"
@@ -508,6 +505,25 @@ if [[ -z "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" ]]; then
   fi
 fi
 ksecret gateway-model-key-issuer --from-literal=bearer_token="$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN"
+
+# ── 9a2. Ops Agent bearer (octogee-api → octogee-ops-agent) ─────────────
+info "ops-agent-bearer"
+OPS_AGENT_BEARER_TOKEN=$(sm_get "OPS_AGENT_BEARER_TOKEN" "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+if [[ -z "$OPS_AGENT_BEARER_TOKEN" ]]; then
+  OPS_AGENT_BEARER_TOKEN=$(ksecret_key ops-agent-bearer bearer_token)
+  [[ -n "$OPS_AGENT_BEARER_TOKEN" ]] || OPS_AGENT_BEARER_TOKEN=$(openssl rand -hex 32)
+  if echo -n "$OPS_AGENT_BEARER_TOKEN" | gcloud secrets create "OPS_AGENT_BEARER_TOKEN" \
+       --data-file=- --project="$FIREBASE_PROJECT" \
+       --replication-policy=user-managed --locations=us-central1 --quiet 2>/dev/null; then
+    ok "  Created SM secret: OPS_AGENT_BEARER_TOKEN"
+  elif echo -n "$OPS_AGENT_BEARER_TOKEN" | gcloud secrets versions add "OPS_AGENT_BEARER_TOKEN" \
+       --data-file=- --project="$FIREBASE_PROJECT" --quiet >/dev/null; then
+    ok "  Updated SM secret: OPS_AGENT_BEARER_TOKEN"
+  else
+    fail "Could not persist OPS_AGENT_BEARER_TOKEN to Secret Manager ($FIREBASE_PROJECT)"
+  fi
+fi
+ksecret ops-agent-bearer --from-literal=bearer_token="$OPS_AGENT_BEARER_TOKEN"
 
 # ── 9a2. Social notification bearer (Cloud Functions → octogee-api /social) ─
 # Dedicated bearer for the out-of-cluster social inbox producer — the only auth
@@ -829,6 +845,7 @@ status "mattermost-gateway / admin_pass" "${MM_ADMIN_PASS:-}"
 status "mattermost-gateway / admin_user_id" "${MM_ADMIN_USER_ID:-}"
 status "mattermost-gateway / team_id" "${MM_TEAM_ID:-}"
 status "gateway-model-key-issuer" "${GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN:-}"
+status "ops-agent-bearer" "${OPS_AGENT_BEARER_TOKEN:-}"
 status "social-notification-bearer" "${SOCIAL_NOTIFICATION_BEARER:-}"
 status "octogee-anthropic" "${ANTHROPIC_API_KEY:-}"
 status "octogee-openrouter" "${OPENROUTER_API_KEY:-}"

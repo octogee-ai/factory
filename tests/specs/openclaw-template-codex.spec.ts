@@ -18,6 +18,8 @@ const workflowTools = [
   "octogee_chat_search",
   "octogee_chat_history",
   "octogee_chat_set_identity",
+  "octogee_status",
+  "octogee_ask_ops",
 ];
 
 function readTemplate() {

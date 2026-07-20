@@ -39,13 +39,20 @@ export function googleConnectAllowed(config, uid) {
 // The free-tier house model: DeepSeek V4 Pro on the OpenRouter platform key
 // (operator default 2026-07-08; the dial can point anywhere in the catalog).
 export const DEFAULT_FREE_TIER_MODEL_REF = "platform-openrouter/deepseek/deepseek-v4-pro";
+export const DEFAULT_OPS_AGENT_MODEL_REF = "platform-openrouter/z-ai/glm-5.2";
 export function parsePlatformModelConfig(value) {
     if (!value || typeof value !== "object" || Array.isArray(value))
         return null;
-    const ref = value.freeTierModelRef;
-    if (typeof ref !== "string" || resolveFreeTierModel(ref) === null)
+    const config = value;
+    if (typeof config.freeTierModelRef !== "string" ||
+        resolveFreeTierModel(config.freeTierModelRef) === null) {
         return null;
-    return { freeTierModelRef: ref };
+    }
+    const opsAgentModelRef = config.opsAgentModelRef ?? DEFAULT_OPS_AGENT_MODEL_REF;
+    if (typeof opsAgentModelRef !== "string" || resolveOpsAgentModel(opsAgentModelRef) === null) {
+        return null;
+    }
+    return { freeTierModelRef: config.freeTierModelRef, opsAgentModelRef };
 }
 // Split a catalog model ref into what each dial consumer needs: the broker
 // provider profile the traffic rides, and the model id the upstream API
@@ -58,5 +65,14 @@ export function resolveFreeTierModel(ref) {
         ref,
         provider: entry.provider,
         upstreamModelId: entry.provider === "anthropic" ? entry.id.replace(/^anthropic\//, "") : entry.id,
+    };
+}
+export function resolveOpsAgentModel(ref) {
+    const resolved = resolveFreeTierModel(ref);
+    if (!resolved || resolved.provider !== "openrouter")
+        return null;
+    return {
+        ...resolved,
+        runtimeModelRef: `openrouter/${resolved.upstreamModelId}`,
     };
 }

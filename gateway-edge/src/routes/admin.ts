@@ -19,6 +19,7 @@ import { CONNECTOR_OAUTH_REVOCATION_TARGETS } from "@octogee/shared/types/connec
 import { modelRefForCatalogEntry } from "@octogee/shared/types/agent-models";
 import {
   DEFAULT_FREE_TIER_MODEL_REF,
+  DEFAULT_OPS_AGENT_MODEL_REF,
   PLATFORM_CONFIG_COLLECTION,
   PLATFORM_MODEL_CONFIG_DOC,
   parsePlatformConnectConfig,
@@ -61,31 +62,32 @@ addAdminFleetRoutes(router, {
     }),
 });
 
-// The operator's platform model dials (platformConfig/models). Today one dial:
-// the free-tier house model — the broker's free-degrade target and the pod-side
-// house pin both follow it. GET always reports the EFFECTIVE value (a stored
-// ref that left the catalog reads as the compiled default, same as the broker
-// resolves it).
 const platformModelDoc = () =>
   db.collection(PLATFORM_CONFIG_COLLECTION).doc(PLATFORM_MODEL_CONFIG_DOC);
+
+const platformCatalog = MODEL_CATALOG.map((entry) => ({
+  ref: modelRefForCatalogEntry(entry),
+  label: entry.label,
+  provider: entry.provider,
+}));
 
 router.get("/platform-config", async (_req, res) => {
   try {
     const snap = await platformModelDoc().get();
     const parsed = parsePlatformModelConfig(snap.data());
     if (snap.data() !== undefined && !parsed) {
-      logger.warn("[admin] platformConfig/models carries a non-catalog freeTierModelRef — serving the compiled default", {
+      logger.warn("[admin] platformConfig/models carries an invalid model ref — serving compiled defaults", {
         freeTierModelRef: (snap.data() as { freeTierModelRef?: unknown })?.freeTierModelRef,
+        opsAgentModelRef: (snap.data() as { opsAgentModelRef?: unknown })?.opsAgentModelRef,
       });
     }
     res.json({
       freeTierModelRef: parsed?.freeTierModelRef ?? DEFAULT_FREE_TIER_MODEL_REF,
       defaultFreeTierModelRef: DEFAULT_FREE_TIER_MODEL_REF,
-      catalog: MODEL_CATALOG.map((entry) => ({
-        ref: modelRefForCatalogEntry(entry),
-        label: entry.label,
-        provider: entry.provider,
-      })),
+      opsAgentModelRef: parsed?.opsAgentModelRef ?? DEFAULT_OPS_AGENT_MODEL_REF,
+      defaultOpsAgentModelRef: DEFAULT_OPS_AGENT_MODEL_REF,
+      catalog: platformCatalog,
+      opsCatalog: platformCatalog.filter((entry) => entry.provider === "openrouter"),
     });
   } catch (err) {
     logger.error("[admin] platform-config read failed", { err });
@@ -103,16 +105,22 @@ router.put("/platform-config", async (req, res) => {
     await platformModelDoc().set(
       {
         freeTierModelRef: parsed.freeTierModelRef,
+        opsAgentModelRef: parsed.opsAgentModelRef,
         updatedAt: FieldValue.serverTimestamp(),
         updatedBy: req.uid ?? null,
       },
       { merge: true },
     );
-    logger.info("[admin] free-tier model dial set", {
+    logger.info("[admin] platform model dials set", {
       freeTierModelRef: parsed.freeTierModelRef,
+      opsAgentModelRef: parsed.opsAgentModelRef,
       updatedBy: req.uid,
     });
-    res.json({ ok: true, freeTierModelRef: parsed.freeTierModelRef });
+    res.json({
+      ok: true,
+      freeTierModelRef: parsed.freeTierModelRef,
+      opsAgentModelRef: parsed.opsAgentModelRef,
+    });
   } catch (err) {
     logger.error("[admin] platform-config write failed", { err });
     res.status(500).json({ error: "platform_config_write_failed" });

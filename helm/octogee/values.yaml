@@ -312,6 +312,34 @@ artifactWorker:
       memory: 1536Mi
       ephemeral-storage: 1Gi
 
+opsAgent:
+  enabled: true
+  nodeLocalDnsCidr: 169.254.20.10/32
+  image:
+    repository: us-central1-docker.pkg.dev/octogee/octogee/octogee-ops-agent
+    tag: latest
+  replicas: 1
+  port: 3010
+  serviceAccountName: octogee-ops-agent
+  gcpServiceAccount: octogee-ops-agent@octogee.iam.gserviceaccount.com
+  loggingProjectId: octogee
+  appUrl: https://app.octogee.com
+  openrouterSecret:
+    name: octogee-openrouter
+    key: api_key
+  bearerSecret:
+    name: ops-agent-bearer
+    key: bearer_token
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+      ephemeral-storage: 256Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+      ephemeral-storage: 1Gi
+
 # ── Service Account ──────────────────────────────────────────────────────────
 serviceAccount:
   gcpServiceAccount: "octogee-gateway@octogee.iam.gserviceaccount.com"

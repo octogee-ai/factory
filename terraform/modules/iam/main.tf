@@ -31,6 +31,12 @@ resource "google_service_account" "llm_broker" {
   project      = var.project_id
 }
 
+resource "google_service_account" "ops_agent" {
+  account_id   = var.ops_agent_sa_name
+  display_name = "Octogee Ops Agent (${var.environment})"
+  project      = var.project_id
+}
+
 # ── Workload Identity bindings ──────────────────────────────────────────────
 # Allows K8s SA "octogee-gateway" in namespace to act as the cattle GCP SA.
 # The WI pool is always in the cluster project (octogee), even when the SA
@@ -51,6 +57,18 @@ resource "google_service_account_iam_member" "workload_identity_llm_broker" {
   service_account_id = google_service_account.llm_broker.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "serviceAccount:${var.cluster_project_id}.svc.id.goog[${var.namespace}/llm-broker]"
+}
+
+resource "google_service_account_iam_member" "workload_identity_ops_agent" {
+  service_account_id = google_service_account.ops_agent.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "serviceAccount:${var.cluster_project_id}.svc.id.goog[${var.namespace}/octogee-ops-agent]"
+}
+
+resource "google_project_iam_member" "ops_agent_logging_viewer" {
+  project = var.cluster_project_id
+  role    = "roles/logging.viewer"
+  member  = "serviceAccount:${google_service_account.ops_agent.email}"
 }
 
 # ── Cloud SQL Client role ───────────────────────────────────────────────────
