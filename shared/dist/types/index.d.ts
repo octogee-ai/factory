@@ -11,6 +11,7 @@ export { WINDOW_LENGTH_HOURS, WINDOWS_PER_DAY, WINDOWS_PER_WEEK, WINDOW_BURST_MU
 export type { BillingProfile, BillingRail, EffectivePlan, PlanInputs, TierResolvable, TrialGrant, } from './billing.js';
 export type { PlatformTrialConfig, TrialBuilderTier } from './platform-config.js';
 export { DEFAULT_PLATFORM_TRIAL_CONFIG, PLATFORM_TRIAL_CONFIG_DOC, TRIAL_CONFIG_SCHEMA_VERSION, parsePlatformTrialConfig, trialConfigHash, } from './platform-config.js';
+export { redactSecrets, redactStructuredSecrets } from './secret-redaction.js';
 export type { NotificationCategory, DeliveryChannel, NotificationAction, InboxDocument, } from './notifications.js';
 export type { GatewayStatus, GatewayState, GatewayLastError, CustomerSnapshot, } from './fleet-controller.js';
 export { CANONICAL_OPENCLAW_FORK_SHA, CANONICAL_OPENCLAW_VERSION, } from './openclaw-release.js';

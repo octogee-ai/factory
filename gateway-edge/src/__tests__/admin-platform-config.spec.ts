@@ -97,21 +97,47 @@ describe("admin platform-config", () => {
     expect(res.status).toBe(200);
     expect(res.body.freeTierModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
     expect(res.body.defaultFreeTierModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
+    expect(res.body.opsAgentModelRef).toBe("platform-openrouter/z-ai/glm-5.2");
+    expect(res.body.defaultOpsAgentModelRef).toBe("platform-openrouter/z-ai/glm-5.2");
     const refs = res.body.catalog.map((c: { ref: string }) => c.ref);
     expect(refs).toContain("anthropic/claude-haiku-4-5");
     expect(refs).toContain("platform-openrouter/z-ai/glm-5.2");
     expect(refs).toContain("platform-openrouter/deepseek/deepseek-v4-pro");
     const haiku = res.body.catalog.find((c: { ref: string }) => c.ref === "anthropic/claude-haiku-4-5");
     expect(haiku).toMatchObject({ label: "Claude Haiku 4.5", provider: "anthropic" });
+    expect(res.body.opsCatalog.map((c: { ref: string }) => c.ref)).toEqual(
+      expect.arrayContaining(["platform-openrouter/z-ai/glm-5.2"]),
+    );
+    expect(res.body.opsCatalog.every((c: { provider: string }) => c.provider === "openrouter")).toBe(true);
   });
 
   it("GET serves the configured dial when the doc exists", async () => {
     platformDocs["platformConfig/models"] = {
       freeTierModelRef: "anthropic/claude-haiku-4-5",
+      opsAgentModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
     };
     const res = await request(app).get("/api/admin/platform-config");
     expect(res.status).toBe(200);
     expect(res.body.freeTierModelRef).toBe("anthropic/claude-haiku-4-5");
+    expect(res.body.opsAgentModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
+  });
+
+  it("GET resolves each model dial independently when its sibling is invalid", async () => {
+    platformDocs["platformConfig/models"] = {
+      freeTierModelRef: "anthropic/claude-haiku-4-5",
+      opsAgentModelRef: "anthropic/claude-haiku-4-5",
+    };
+    let res = await request(app).get("/api/admin/platform-config");
+    expect(res.body.freeTierModelRef).toBe("anthropic/claude-haiku-4-5");
+    expect(res.body.opsAgentModelRef).toBe("platform-openrouter/z-ai/glm-5.2");
+
+    platformDocs["platformConfig/models"] = {
+      freeTierModelRef: "invalid/model",
+      opsAgentModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+    };
+    res = await request(app).get("/api/admin/platform-config");
+    expect(res.body.freeTierModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
+    expect(res.body.opsAgentModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
   });
 
   it("GET falls back to the default when the stored ref left the catalog", async () => {
@@ -124,16 +150,21 @@ describe("admin platform-config", () => {
   it("PUT writes the dial with audit fields and echoes the new value", async () => {
     const res = await request(app)
       .put("/api/admin/platform-config")
-      .send({ freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro" });
+      .send({
+        freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+        opsAgentModelRef: "platform-openrouter/z-ai/glm-5.2",
+      });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       ok: true,
       freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+      opsAgentModelRef: "platform-openrouter/z-ai/glm-5.2",
     });
     expect(setCalls).toHaveLength(1);
     expect(setCalls[0].path).toBe("platformConfig/models");
     expect(setCalls[0].data).toMatchObject({
       freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+      opsAgentModelRef: "platform-openrouter/z-ai/glm-5.2",
       updatedBy: "admin-user",
       updatedAt: "server-now",
     });
@@ -143,6 +174,16 @@ describe("admin platform-config", () => {
     const res = await request(app)
       .put("/api/admin/platform-config")
       .send({ freeTierModelRef: "anthropic/claude-opus-4-8" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_model_ref");
+    expect(setCalls).toHaveLength(0);
+  });
+
+  it("PUT rejects an Ops model outside the platform OpenRouter catalog", async () => {
+    const res = await request(app).put("/api/admin/platform-config").send({
+      freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+      opsAgentModelRef: "anthropic/claude-haiku-4-5",
+    });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_model_ref");
     expect(setCalls).toHaveLength(0);

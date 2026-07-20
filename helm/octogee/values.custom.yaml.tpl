@@ -85,3 +85,9 @@ gateway:
 
 serviceAccount:
   gcpServiceAccount: "octogee-gateway@octogee-test.iam.gserviceaccount.com"
+
+opsAgent:
+  gcpServiceAccount: octogee-ops-agent@octogee-test.iam.gserviceaccount.com
+  loggingProjectId: octogee
+  loggingResourceName: projects/octogee/locations/global/buckets/ops-agent-test/views/ops-agent
+  appUrl: https://app-octogee-test.web.app

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_FREE_TIER_MODEL_REF,
+  DEFAULT_OPS_AGENT_MODEL_REF,
   DEFAULT_PLATFORM_CONNECT_CONFIG,
   DEFAULT_PLATFORM_TRIAL_CONFIG,
   PLATFORM_CONNECT_CONFIG_DOC,
@@ -12,6 +13,7 @@ import {
   parsePlatformModelConfig,
   parsePlatformTrialConfig,
   resolveFreeTierModel,
+  resolveOpsAgentModel,
   trialConfigHash,
 } from "./platform-config";
 
@@ -91,12 +93,40 @@ describe("DEFAULT_FREE_TIER_MODEL_REF", () => {
 
 describe("parsePlatformModelConfig", () => {
   it("accepts a catalog model ref", () => {
-    expect(parsePlatformModelConfig({ freeTierModelRef: "anthropic/claude-haiku-4-5" })).toEqual({
+    expect(parsePlatformModelConfig({
       freeTierModelRef: "anthropic/claude-haiku-4-5",
+      opsAgentModelRef: "platform-openrouter/z-ai/glm-5.2",
+    })).toEqual({
+      freeTierModelRef: "anthropic/claude-haiku-4-5",
+      opsAgentModelRef: "platform-openrouter/z-ai/glm-5.2",
     });
     expect(
-      parsePlatformModelConfig({ freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro" }),
-    ).toEqual({ freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro" });
+      parsePlatformModelConfig({
+        freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+        opsAgentModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+      }),
+    ).toEqual({
+      freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+      opsAgentModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+    });
+  });
+
+  it("defaults the new Ops dial for an existing free-tier-only document", () => {
+    expect(parsePlatformModelConfig({ freeTierModelRef: "anthropic/claude-haiku-4-5" })).toEqual({
+      freeTierModelRef: "anthropic/claude-haiku-4-5",
+      opsAgentModelRef: DEFAULT_OPS_AGENT_MODEL_REF,
+    });
+  });
+
+  it("accepts only OpenRouter catalog models for the Ops Agent", () => {
+    expect(parsePlatformModelConfig({
+      freeTierModelRef: DEFAULT_FREE_TIER_MODEL_REF,
+      opsAgentModelRef: "anthropic/claude-haiku-4-5",
+    })).toBeNull();
+    expect(parsePlatformModelConfig({
+      freeTierModelRef: DEFAULT_FREE_TIER_MODEL_REF,
+      opsAgentModelRef: "platform-openrouter/gone/model",
+    })).toBeNull();
   });
 
   it("rejects refs outside the catalog", () => {
@@ -107,6 +137,23 @@ describe("parsePlatformModelConfig", () => {
     expect(parsePlatformModelConfig({})).toBeNull();
     expect(parsePlatformModelConfig(null)).toBeNull();
     expect(parsePlatformModelConfig("anthropic/claude-haiku-4-5")).toBeNull();
+  });
+});
+
+describe("DEFAULT_OPS_AGENT_MODEL_REF", () => {
+  it("defaults to GLM 5.2 on the platform OpenRouter key and maps to the OpenClaw runtime ref", () => {
+    expect(DEFAULT_OPS_AGENT_MODEL_REF).toBe("platform-openrouter/z-ai/glm-5.2");
+    expect(resolveOpsAgentModel(DEFAULT_OPS_AGENT_MODEL_REF)).toEqual({
+      ref: "platform-openrouter/z-ai/glm-5.2",
+      provider: "openrouter",
+      upstreamModelId: "z-ai/glm-5.2",
+      runtimeModelRef: "openrouter/z-ai/glm-5.2",
+    });
+  });
+
+  it("rejects non-OpenRouter models", () => {
+    expect(resolveOpsAgentModel("anthropic/claude-haiku-4-5")).toBeNull();
+    expect(resolveOpsAgentModel("platform-openai/gpt-5.4-mini")).toBeNull();
   });
 });
 

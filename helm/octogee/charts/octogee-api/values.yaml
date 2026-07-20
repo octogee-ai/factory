@@ -56,11 +56,16 @@ env:
   MODEL_BROKER_REQUESTS_PER_MINUTE: "60"
   BRAVE_SEARCH_COST_PER_REQUEST_USD: "0.005"
   PLATFORM_WEB_MARKUP_MULTIPLIER: "1.25"
+  OPS_AGENT_URL: "http://octogee-ops-agent:3010"
 
 # Mirrors gateway-edge's secret list — same routes, same secret needs.
 # When gateway-edge is later renamed gateway-edge and slimmed to ~3
 # locality routes, this list shrinks back to only what octogee-api needs.
 secrets:
+  - envName: OPS_AGENT_BEARER_TOKEN
+    secretName: ops-agent-bearer
+    secretKey: bearer_token
+    optional: true
   - envName: STRIPE_SECRET_KEY
     secretName: stripe-secrets
     secretKey: secret_key

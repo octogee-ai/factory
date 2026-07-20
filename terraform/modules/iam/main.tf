@@ -31,6 +31,12 @@ resource "google_service_account" "llm_broker" {
   project      = var.project_id
 }
 
+resource "google_service_account" "ops_agent" {
+  account_id   = var.ops_agent_sa_name
+  display_name = "Octogee Ops Agent (${var.environment})"
+  project      = var.project_id
+}
+
 # ── Workload Identity bindings ──────────────────────────────────────────────
 # Allows K8s SA "octogee-gateway" in namespace to act as the cattle GCP SA.
 # The WI pool is always in the cluster project (octogee), even when the SA
@@ -51,6 +57,49 @@ resource "google_service_account_iam_member" "workload_identity_llm_broker" {
   service_account_id = google_service_account.llm_broker.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "serviceAccount:${var.cluster_project_id}.svc.id.goog[${var.namespace}/llm-broker]"
+}
+
+resource "google_service_account_iam_member" "workload_identity_ops_agent" {
+  service_account_id = google_service_account.ops_agent.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "serviceAccount:${var.cluster_project_id}.svc.id.goog[${var.namespace}/octogee-ops-agent]"
+}
+
+resource "google_logging_project_bucket_config" "ops_agent" {
+  project        = var.cluster_project_id
+  location       = "global"
+  bucket_id      = "ops-agent-${var.environment}"
+  retention_days = 7
+}
+
+resource "google_logging_project_sink" "ops_agent" {
+  project                = var.cluster_project_id
+  name                   = "ops-agent-${var.environment}"
+  destination            = "logging.googleapis.com/${google_logging_project_bucket_config.ops_agent.id}"
+  filter                 = "resource.type=\"k8s_container\" AND resource.labels.namespace_name=\"${var.namespace}\""
+  unique_writer_identity = true
+}
+
+resource "google_project_iam_member" "ops_agent_sink_writer" {
+  project = var.cluster_project_id
+  role    = "roles/logging.bucketWriter"
+  member  = google_logging_project_sink.ops_agent.writer_identity
+}
+
+resource "google_logging_log_view" "ops_agent" {
+  name        = "ops-agent"
+  bucket      = google_logging_project_bucket_config.ops_agent.id
+  description = "Read-only ${var.environment} namespace logs for the Octogee Ops Agent"
+  filter      = "resource.type=\"k8s_container\""
+}
+
+resource "google_logging_log_view_iam_member" "ops_agent" {
+  parent   = google_logging_log_view.ops_agent.parent
+  location = google_logging_log_view.ops_agent.location
+  bucket   = google_logging_log_view.ops_agent.bucket
+  name     = google_logging_log_view.ops_agent.name
+  role     = "roles/logging.viewAccessor"
+  member   = "serviceAccount:${google_service_account.ops_agent.email}"
 }
 
 # ── Cloud SQL Client role ───────────────────────────────────────────────────

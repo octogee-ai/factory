@@ -94,6 +94,7 @@ export {
   parsePlatformTrialConfig,
   trialConfigHash,
 } from './platform-config.js';
+export { redactSecrets, redactStructuredSecrets } from './secret-redaction.js';
 
 export type {
   NotificationCategory,

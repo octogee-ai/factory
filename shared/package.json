@@ -133,6 +133,10 @@
       "types": "./dist/types/platform-config.d.ts",
       "default": "./dist/types/platform-config.js"
     },
+    "./types/secret-redaction": {
+      "types": "./dist/types/secret-redaction.d.ts",
+      "default": "./dist/types/secret-redaction.js"
+    },
     "./types/openclaw-wire": {
       "types": "./dist/types/openclaw-wire.d.ts",
       "default": "./dist/types/openclaw-wire.js"
@@ -262,6 +266,9 @@
       ],
       "types/notifications": [
         "dist/types/notifications.d.ts"
+      ],
+      "types/secret-redaction": [
+        "dist/types/secret-redaction.d.ts"
       ],
       "types/openclaw-wire": [
         "dist/types/openclaw-wire.d.ts"

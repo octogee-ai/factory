@@ -24,6 +24,7 @@ import { createConnectorTokenBrokerRoutes } from "./routes/connector-token-broke
 import { createGatewayPodOwnerIdentityReader } from "./lib/gateway-pod-owner-identity.js";
 import { createByokBrokerRoutes } from "./routes/byok-broker.js";
 import { createAgentProjectRoutes } from "./routes/agent-projects.js";
+import { createAgentSupportRoutes } from "./routes/agent-support.js";
 import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
 import { createBuilderShellBrokerRoutes } from "./routes/builder-shell-broker.js";
 import { createOpenClawControlBrokerRoutes } from "./routes/openclaw-control-broker.js";
@@ -53,6 +54,14 @@ import {
 } from "./middleware/tenant-binding.js";
 import { createTenantEnforcementMiddleware } from "./middleware/tenant-enforcement.js";
 import type { ModelBrokerTokenStore } from "./lib/model-broker-tokens.js";
+import {
+  createOpsAgentHttpClient,
+  type AskOpsAgent,
+} from "./lib/ops-agent-client.js";
+import {
+  createCachedOpsAgentModelResolver,
+  type OpsAgentModelResolver,
+} from "./lib/platform-model-config.js";
 import { normalizeTenantPolicyPath } from "./lib/tenant-route-policy.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
@@ -72,6 +81,8 @@ export interface CreateAppOptions {
   modelKeyTokenStore?: ModelBrokerTokenStore;
   modelKeyIssuerBearerToken?: string;
   modelKeyIssuerTtlSeconds?: number | null;
+  askOpsAgent?: AskOpsAgent;
+  resolveOpsAgentModel?: OpsAgentModelResolver;
 }
 
 function defaultChatArtifactRoutes() {
@@ -268,6 +279,25 @@ export function createApp(opts: CreateAppOptions = {}) {
   // the owner + workspace derive from the pod's assignment, and plan
   // entitlements are enforced by the same service the UI create uses.
   app.use("/internal/agent-projects", createAgentProjectRoutes({ db }));
+  app.use(
+    "/internal/agent-support",
+    createAgentSupportRoutes({
+      db,
+      askOps:
+        opts.askOpsAgent ??
+        createOpsAgentHttpClient({
+          baseUrl: process.env.OPS_AGENT_URL,
+          bearerToken: process.env.OPS_AGENT_BEARER_TOKEN,
+        }),
+      resolveModel:
+        opts.resolveOpsAgentModel ??
+        createCachedOpsAgentModelResolver({
+          db,
+          onError: (error) => logger.error("Ops Agent model resolution failed", { error }),
+        }),
+      logError: (message, fields) => logger.error(message, fields),
+    }),
+  );
   // octogee-api-only: broker BuilderShell ticket, presence, and audit
   // Firestore writes so operator gateway pods can stay datastore.viewer-only.
   app.use("/internal/builder-shell", createBuilderShellBrokerRoutes());

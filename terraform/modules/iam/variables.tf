@@ -31,6 +31,12 @@ variable "llm_broker_sa_name" {
   default     = "octogee-llm-broker"
 }
 
+variable "ops_agent_sa_name" {
+  description = "Service account ID for the read-only Ops Agent"
+  type        = string
+  default     = "octogee-ops-agent"
+}
+
 variable "cloudsql_project_id" {
   description = "Project ID that owns the Cloud SQL instance (always 'octogee')"
   type        = string

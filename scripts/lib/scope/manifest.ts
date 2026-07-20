@@ -17,6 +17,9 @@ export const JOBS = {
   octogeeConnectorTools: "octogee-connector-tools",
   octogeeProjectTools: "octogee-project-tools",
   octogeeWebTools: "octogee-web-tools",
+  octogeeOpsTools: "octogee-ops-tools",
+  opsAgent: "ops-agent",
+  opsAgentRuntimeTools: "ops-agent-runtime-tools",
   functions: "functions",
   site: "site",
   app: "app",
@@ -37,6 +40,7 @@ export interface UnitPackage {
   name: JobKey;
   dir: string;
   typecheck: string;
+  nodeVersion?: number;
 }
 
 // The dynamic `test` matrix entries. `typecheck` runs after `npm ci`, before `npm test`.
@@ -59,6 +63,13 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
   { name: JOBS.gatewayEdge, dir: "gateway-edge", typecheck: TYPECHECK },
   { name: JOBS.octogeeApi, dir: "octogee-api", typecheck: TYPECHECK },
   { name: JOBS.glmController, dir: "glm-controller", typecheck: TYPECHECK },
+  { name: JOBS.opsAgent, dir: "ops-agent", typecheck: TYPECHECK, nodeVersion: 24 },
+  {
+    name: JOBS.opsAgentRuntimeTools,
+    dir: "ops-agent/extensions/octogee-ops-runtime-tools",
+    typecheck: 'echo "ops-agent-runtime-tools — no tsconfig; vitest is the gate"',
+    nodeVersion: 24,
+  },
   { name: JOBS.tests, dir: "tests", typecheck: TYPECHECK },
   { name: JOBS.acceptance, dir: "acceptance", typecheck: TYPECHECK },
   { name: JOBS.scripts, dir: "scripts", typecheck: "npx tsc --noEmit" },
@@ -86,6 +97,11 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
     name: JOBS.octogeeWebTools,
     dir: "infra/gateway/extensions/octogee-web-tools",
     typecheck: 'echo "octogee-web-tools — no tsconfig; vitest is the gate"',
+  },
+  {
+    name: JOBS.octogeeOpsTools,
+    dir: "infra/gateway/extensions/octogee-ops-tools",
+    typecheck: 'echo "octogee-ops-tools — no tsconfig; vitest is the gate"',
   },
   { name: JOBS.functions, dir: "functions", typecheck: TYPECHECK },
   { name: JOBS.site, dir: "site", typecheck: TYPECHECK },
@@ -118,6 +134,11 @@ export const OWNERSHIP: readonly Ownership[] = [
   { dir: "gateway-edge/", jobs: [JOBS.gatewayEdge, JOBS.gatewayEdgeEmulator] },
   { dir: "octogee-api/", jobs: [JOBS.octogeeApi, JOBS.octogeeApiEmulator] },
   { dir: "glm-controller/", jobs: [JOBS.glmController] },
+  {
+    dir: "ops-agent/extensions/octogee-ops-runtime-tools/",
+    jobs: [JOBS.opsAgentRuntimeTools, JOBS.tests],
+  },
+  { dir: "ops-agent/", jobs: [JOBS.opsAgent, JOBS.tests] },
   { dir: "tests/", jobs: [JOBS.tests] },
   { dir: "acceptance/", jobs: [JOBS.acceptance] },
   { dir: "scripts/", jobs: [JOBS.scripts, JOBS.customerLifecycleEmulator] },
@@ -140,6 +161,10 @@ export const OWNERSHIP: readonly Ownership[] = [
   {
     dir: "infra/gateway/extensions/octogee-web-tools/",
     jobs: [JOBS.octogeeWebTools],
+  },
+  {
+    dir: "infra/gateway/extensions/octogee-ops-tools/",
+    jobs: [JOBS.octogeeOpsTools, JOBS.tests],
   },
   { dir: "functions/", jobs: [JOBS.functions, JOBS.functionsEmulator] },
   { dir: "site/", jobs: [JOBS.site] },

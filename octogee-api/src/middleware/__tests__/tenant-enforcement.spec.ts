@@ -114,6 +114,7 @@ function app(opts: {
   a.post("/internal/openclaw-control/redeem", enforcement, handler);
   a.post("/internal/openclaw-control/authorize", enforcement, handler);
   a.post("/internal/openclaw-control/audit", enforcement, handler);
+  a.post("/internal/agent-support/ask", enforcement, handler);
   a.post("/internal/openclaw/previews/authorize", enforcement, handler);
   a.post("/internal/agent-projects/create", enforcement, handler);
   a.post("/internal/agent-projects/list", enforcement, handler);
@@ -377,6 +378,18 @@ describe("tenant enforcement middleware", () => {
         agentId: "octogee-alice-coach",
         provider: "openai",
       });
+
+    expect(ownedGateway.status).toBe(200);
+    expect(foreignGateway.status).toBe(403);
+  });
+
+  it("passes agent support to route-level roster authorization without trusting body context", async () => {
+    const ownedGateway = await request(app({ boundTenant: BENDER }))
+      .post("/internal/agent-support/ask")
+      .send({ agentId: "octogee-alice-coach", question: "Help", uid: "victim" });
+    const foreignGateway = await request(app({ boundTenant: BENDER }))
+      .post("/internal/agent-support/ask")
+      .send({ gatewayId: "other", agentId: "octogee-alice-coach", question: "Help" });
 
     expect(ownedGateway.status).toBe(200);
     expect(foreignGateway.status).toBe(403);
