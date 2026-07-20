@@ -52,6 +52,13 @@ spec:
                 secretKeyRef:
                   name: agent-control-router
                   key: secret
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 24
           readinessProbe:
             httpGet:
               path: /health
