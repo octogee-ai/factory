@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 process.env.NODE_ENV = 'test';
@@ -52,7 +53,10 @@ vi.mock('../openclaw/upstream.js', () => ({
   openUpstream: h.ctl.openUpstream,
 }));
 
-const { establishUpstreamWithRotation } = await import('../proxy.js');
+const {
+  establishUpstreamWithRotation,
+  openBackgroundBridgeUpstream,
+} = await import('../proxy.js');
 
 function fakeUpstream(label: string) {
   return { label };
@@ -132,5 +136,87 @@ describe('establishUpstreamWithRotation', () => {
 
     expect(result).toEqual({ ok: false, httpStatus: '503 Service Unavailable' });
     expect(h.ctl.invalidatedGateways).toEqual(['gw-1']);
+  });
+});
+
+describe('openBackgroundBridgeUpstream', () => {
+  beforeEach(() => {
+    h.ctl.fetchAuth.mockReset();
+    h.ctl.openUpstream.mockReset();
+    h.ctl.invalidatedGateways = [];
+    h.ctl.clearedDeviceToken = 0;
+  });
+
+  it('rotates a stale device token once and reconnects without interactive traffic', async () => {
+    const recovered = fakeUpstream('background-recovered');
+    const setBootStatus = vi.fn();
+    h.ctl.fetchAuth
+      .mockResolvedValueOnce({ source: 'device-token-file', deviceToken: 'stale-device-token' })
+      .mockResolvedValueOnce({ source: 'legacy-token', token: 'fresh-legacy-token' });
+    h.ctl.openUpstream
+      .mockRejectedValueOnce(new h.OpenclawWireError('auth-failed'))
+      .mockResolvedValueOnce(recovered);
+
+    await expect(openBackgroundBridgeUpstream(
+      'eggman-devdays',
+      'ws://gateway',
+      { set: setBootStatus },
+    )).resolves.toBe(recovered);
+
+    expect(h.ctl.clearedDeviceToken).toBe(1);
+    expect(h.ctl.fetchAuth).toHaveBeenCalledTimes(2);
+    expect(h.ctl.openUpstream).toHaveBeenCalledTimes(2);
+    expect(setBootStatus).not.toHaveBeenCalled();
+  });
+
+  it('maps a second authentication failure after the one rotation attempt', async () => {
+    const setBootStatus = vi.fn();
+    h.ctl.fetchAuth
+      .mockResolvedValueOnce({ source: 'device-token-file', deviceToken: 'stale-device-token' })
+      .mockResolvedValueOnce({ source: 'legacy-token', token: 'fresh-legacy-token' });
+    h.ctl.openUpstream.mockRejectedValue(new h.OpenclawWireError('auth-failed'));
+
+    await expect(openBackgroundBridgeUpstream(
+      'eggman-devdays',
+      'ws://gateway',
+      { set: setBootStatus },
+    )).rejects.toMatchObject({ code: 'auth-failed' });
+
+    expect(h.ctl.fetchAuth).toHaveBeenCalledTimes(2);
+    expect(h.ctl.openUpstream).toHaveBeenCalledTimes(2);
+    expect(setBootStatus).toHaveBeenCalledOnce();
+    expect(setBootStatus).toHaveBeenCalledWith('auth-failed');
+  });
+
+  it('maps non-authentication reconnect failures to unreachable without rotation', async () => {
+    const setBootStatus = vi.fn();
+    h.ctl.fetchAuth.mockResolvedValueOnce({
+      source: 'device-token-file',
+      deviceToken: 'current-device-token',
+    });
+    h.ctl.openUpstream.mockRejectedValueOnce(new h.OpenclawWireError('handshake-timeout'));
+
+    await expect(openBackgroundBridgeUpstream(
+      'eggman-devdays',
+      'ws://gateway',
+      { set: setBootStatus },
+    )).rejects.toMatchObject({ code: 'handshake-timeout' });
+
+    expect(h.ctl.fetchAuth).toHaveBeenCalledTimes(1);
+    expect(h.ctl.openUpstream).toHaveBeenCalledTimes(1);
+    expect(setBootStatus).toHaveBeenCalledWith('unreachable');
+  });
+
+  it('owns authentication for both background reconnect paths', () => {
+    const source = readFileSync(new URL('../proxy.ts', import.meta.url), 'utf8');
+    const runLiveStart = source.indexOf('async function startRunLiveProjectionBackground');
+    const publisherStart = source.indexOf('export async function startChatProxyBackground');
+    const runLive = source.slice(runLiveStart, publisherStart);
+    const publisher = source.slice(publisherStart);
+
+    expect(runLive).toContain('openBackgroundBridgeUpstream(');
+    expect(publisher).toContain('openBackgroundBridgeUpstream(');
+    expect(runLive).not.toContain('fetchGatewayAuth(');
+    expect(publisher).not.toContain('fetchGatewayAuth(');
   });
 });

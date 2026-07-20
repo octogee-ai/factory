@@ -3,6 +3,7 @@ import {
   gatewayDeploymentIntentFingerprint,
   deploymentIntentFingerprintForComparison,
   gatewayUpsertOptsFromRelease,
+  isOwnerlessOperatorPrewarm,
   orderGatewaysForConvergence,
   planGatewayConvergence,
   provisioningRuntimeDoc,
@@ -179,6 +180,39 @@ describe("surge customer migration boundary", () => {
       liveRelease: 1,
       desiredRelease: 2,
       desiredStatus: "paused",
+    }))).toBe(false);
+  });
+
+  it("identifies only an ownerless trial Operator gateway as a prewarm", () => {
+    expect(isOwnerlessOperatorPrewarm(gateway({
+      gatewayId: "trial-op-000001",
+      gatewayClass: "operator",
+      profile: "operator",
+      imageProfile: "operator",
+      allocation: { kind: "trial", state: "warming", configHash: "trial-config" },
+    }))).toBe(true);
+    expect(isOwnerlessOperatorPrewarm(gateway({
+      gatewayId: "trial-op-000001",
+      gatewayClass: "operator",
+      ownerUid: "owner-1",
+      builderSlug: "alice",
+      allocation: {
+        kind: "trial",
+        state: "claimed",
+        configHash: "trial-config",
+        claimedAt: 1,
+        claimedByUid: "owner-1",
+      },
+    }))).toBe(false);
+    expect(isOwnerlessOperatorPrewarm(gateway({
+      gatewayId: "operator",
+      gatewayClass: "operator",
+      allocation: { kind: "trial", state: "warming", configHash: "trial-config" },
+    }))).toBe(false);
+    expect(isOwnerlessOperatorPrewarm(gateway({
+      gatewayId: "trial-op-000001",
+      gatewayClass: "builder",
+      allocation: { kind: "trial", state: "warming", configHash: "trial-config" },
     }))).toBe(false);
   });
 });

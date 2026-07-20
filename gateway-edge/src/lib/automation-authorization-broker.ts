@@ -1,0 +1,153 @@
+import { isValidGatewayId } from "@octogee/shared/types/glm";
+import { isValidUsername } from "@octogee/shared/types/identity";
+import { AUTOMATION_AUTHORIZATION_TIMEOUT_MS } from "@octogee/shared/types/automations";
+
+import { internalFetch } from "./internal-fetch.js";
+
+export type AutomationAuthorizationOutcome =
+  | { kind: "authorized"; slug: string; gatewayId: string }
+  | { kind: "unauthenticated" }
+  | { kind: "forbidden" }
+  | { kind: "not_found" };
+
+function nonBlank(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end -= 1;
+  return value.slice(0, end);
+}
+
+function trustedBrokerBaseUrl(
+  value: string,
+  env: Record<string, string | undefined>,
+): string {
+  const baseUrl = trimTrailingSlashes(value.trim());
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error("automation authorization broker URL must be an absolute http(s) URL");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("automation authorization broker URL must be an absolute http(s) URL");
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  const namespace = nonBlank(env.K8S_NAMESPACE);
+  const namespacedService = namespace &&
+    /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(namespace) &&
+    hostname === `octogee-api.${namespace}.svc.cluster.local`;
+  if (
+    hostname !== "octogee-api" &&
+    !namespacedService &&
+    hostname !== "localhost" &&
+    hostname !== "127.0.0.1"
+  ) {
+    throw new Error("automation authorization broker URL must target octogee-api or localhost");
+  }
+  return baseUrl;
+}
+
+export function automationAuthorizationBrokerBaseUrlFromEnv(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const value = nonBlank(env.AUTOMATIONS_BROKER_URL) ?? nonBlank(env.OPENCLAW_RUNTIME_BROKER_URL);
+  if (!value) {
+    throw new Error("AUTOMATIONS_BROKER_URL or OPENCLAW_RUNTIME_BROKER_URL is required");
+  }
+  return trustedBrokerBaseUrl(value, env);
+}
+
+function authorizedResponse(value: unknown, requestedGatewayId: string): AutomationAuthorizationOutcome | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const body = value as Record<string, unknown>;
+  if (
+    body.gatewayId !== requestedGatewayId ||
+    typeof body.slug !== "string" ||
+    !isValidUsername(body.slug)
+  ) return null;
+  return { kind: "authorized", slug: body.slug, gatewayId: requestedGatewayId };
+}
+
+async function outcomeFromBrokerResponse(
+  response: Response,
+  gatewayId: string,
+  timeout: Promise<never>,
+  signal: AbortSignal,
+): Promise<AutomationAuthorizationOutcome> {
+  if (response.status === 401) return { kind: "unauthenticated" };
+  if (response.status === 403) return { kind: "forbidden" };
+  if (response.status === 404) return { kind: "not_found" };
+  if (!response.ok) {
+    throw new Error(`automation authorization broker returned ${response.status}`);
+  }
+  let body: unknown;
+  try {
+    body = await Promise.race([response.json(), timeout]);
+  } catch (error) {
+    if (signal.aborted) throw error;
+    throw new Error("automation authorization broker returned malformed authorization response");
+  }
+  const authorized = authorizedResponse(body, gatewayId);
+  if (!authorized) {
+    throw new Error("automation authorization broker returned malformed authorization response");
+  }
+  return authorized;
+}
+
+export async function authorizeAutomationOwner(args: {
+  gatewayId: string;
+  authorization?: string;
+  baseUrl?: string;
+  env?: Record<string, string | undefined>;
+  tokenPath?: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+}): Promise<AutomationAuthorizationOutcome> {
+  if (!isValidGatewayId(args.gatewayId)) return { kind: "not_found" };
+  if (!args.authorization?.startsWith("Bearer ")) return { kind: "unauthenticated" };
+  const timeoutMs = args.timeoutMs ?? AUTOMATION_AUTHORIZATION_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new Error("automation authorization broker timeout must be a positive integer");
+  }
+  const baseUrl = args.baseUrl
+    ? trustedBrokerBaseUrl(args.baseUrl, args.env ?? process.env)
+    : automationAuthorizationBrokerBaseUrlFromEnv(args.env);
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(`automation authorization broker timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+  try {
+    const response = await Promise.race([
+      internalFetch(
+        `${baseUrl}/internal/automations/authorize`,
+        {
+          method: "POST",
+          headers: {
+            authorization: args.authorization,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ gatewayId: args.gatewayId }),
+          redirect: "error",
+          signal: controller.signal,
+        },
+        {
+          tokenPath: args.tokenPath,
+          fetchImpl: args.fetchImpl,
+          requireProjectedToken: true,
+        },
+      ),
+      timeout,
+    ]);
+    return await outcomeFromBrokerResponse(response, args.gatewayId, timeout, controller.signal);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}

@@ -5,9 +5,9 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
 import admin from "firebase-admin";
 import { Registry, Counter, Gauge, Histogram } from "prom-client";
-import { generateIdentity, type DeviceIdentity } from "@octogee/shared/types/device-identity";
 import { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
 import { openUpstream, OpenclawWireError } from "./openclaw/upstream.js";
+import { getOpenClawDeviceIdentity } from "./openclaw/device-identity.js";
 import {
   clearGatewayDeviceToken,
   fetchGatewayAuth,
@@ -18,6 +18,7 @@ import {
 } from "./openclaw/gateway-token.js";
 import { resolveBridgeGatewayId } from "./openclaw/bridge-gateway-id.js";
 import { startBridgeUpstreamReconnectLoop } from "./openclaw/bridge-reconnect.js";
+import { openAuthenticatedUpstream } from "./openclaw/authenticated-upstream.js";
 import { shouldForwardFrame } from "./openclaw/frame-filter.js";
 import {
   createGateState,
@@ -53,6 +54,7 @@ import { attachMmWsBridge, createMmWsRegistry } from "./mm-proxy/ws.js";
 import {
   createBridgeBootStatus,
   bridgeHealthBody,
+  type BridgeBootState,
 } from "./openclaw/bridge-boot-status.js";
 import {
   createOpenClawRuntimeBrokerFromEnv,
@@ -102,6 +104,10 @@ const bridgeLog = (msg: string): void =>
 const MM_PUBLIC_URL = MM_INTERNAL_URL;
 const BRIDGE_UNSYNCHRONIZED = 'unsynchronized' as const;
 const AUTH_FAILED = 'auth-failed' as const;
+
+interface BridgeBootStatusSetter {
+  set(status: BridgeBootState): void;
+}
 
 const MM_INTERNAL_WS_URL = MM_INTERNAL_URL.replace(/^http/, "ws") + "/api/v4/websocket";
 
@@ -373,6 +379,20 @@ const bridgeBootStatus = createBridgeBootStatus({
   log: bridgeLog,
 });
 
+export async function openBackgroundBridgeUpstream(
+  gatewayId: string,
+  url: string,
+  bootStatus: BridgeBootStatusSetter = bridgeBootStatus,
+): Promise<WebSocket> {
+  try {
+    return await openAuthenticatedUpstream({ gatewayId, url });
+  } catch (error) {
+    const code = error instanceof OpenclawWireError ? error.code : undefined;
+    bootStatus.set(code === AUTH_FAILED ? AUTH_FAILED : 'unreachable');
+    throw error;
+  }
+}
+
 let mattermostInteractionProxyHandler:
   | ((req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>)
   | null = null;
@@ -430,12 +450,6 @@ function normalizeWsData(data: unknown): Buffer {
   if (Array.isArray(data)) return Buffer.concat(data as Buffer[]);
   if (data instanceof ArrayBuffer) return Buffer.from(data);
   return Buffer.from(String(data));
-}
-
-let openclawIdentity: DeviceIdentity | null = null;
-function getOpenClawIdentity(): DeviceIdentity {
-  if (!openclawIdentity) openclawIdentity = generateIdentity();
-  return openclawIdentity;
 }
 
 let openclawRuntimeBroker: OpenClawRuntimeBroker | undefined;
@@ -676,7 +690,7 @@ async function tryOpenGatewayUpstream(
       url: gatewayUrl,
       token: auth.token,
       deviceToken: auth.deviceToken,
-      identity: getOpenClawIdentity(),
+      identity: getOpenClawDeviceIdentity(),
       onDeviceToken: async (issued) => {
         await persistGatewayDeviceToken({ token: issued.deviceToken });
       },
@@ -1308,23 +1322,10 @@ async function startRunLiveProjectionBackground(
     probeIntervalMs: 500,
     openOnce: async () => {
       bridgeBootStatus.set(BRIDGE_UNSYNCHRONIZED);
-      let ws: Awaited<ReturnType<typeof openUpstream>>;
-      try {
-        const auth = await fetchGatewayAuth({ gatewayId, allowLegacyFallback: true });
-        ws = await openUpstream({
-          url: process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
-          token: auth.token,
-          deviceToken: auth.deviceToken,
-          identity: getOpenClawIdentity(),
-          onDeviceToken: async (issued) => {
-            await persistGatewayDeviceToken({ token: issued.deviceToken });
-          },
-        });
-      } catch (error) {
-        const code = error instanceof OpenclawWireError ? error.code : undefined;
-        bridgeBootStatus.set(code === AUTH_FAILED ? AUTH_FAILED : 'unreachable');
-        throw error;
-      }
+      const ws = await openBackgroundBridgeUpstream(
+        gatewayId,
+        process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
+      );
       let closed = false;
       let onClose: (() => void) | undefined;
       ws.on('close', () => {
@@ -1541,7 +1542,7 @@ export async function startChatProxyBackground(): Promise<void> {
         runtimeBroker,
         upstreamUrl: process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
         gatewayToken: '',
-        identity: getOpenClawIdentity(),
+        identity: getOpenClawDeviceIdentity(),
         mmBaseUrl: MM_PUBLIC_URL,
         metrics: { ...bridgeMetrics, approvalDropped: approvalDroppedCounter },
         log: bridgeLog,
@@ -1588,24 +1589,10 @@ export async function startChatProxyBackground(): Promise<void> {
       probeReady: () => probeGatewayReady(healthUrl),
       probeIntervalMs: 500,
       openOnce: async () => {
-        let authResolved: GatewayOpenClawAuth;
-        let ws: Awaited<ReturnType<typeof openUpstream>>;
-        try {
-          authResolved = await fetchGatewayAuth({ gatewayId, allowLegacyFallback: true });
-          ws = await openUpstream({
-            url: process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
-            token: authResolved.token,
-            deviceToken: authResolved.deviceToken,
-            identity: getOpenClawIdentity(),
-            onDeviceToken: async (issued) => {
-              await persistGatewayDeviceToken({ token: issued.deviceToken });
-            },
-          });
-        } catch (err) {
-          const code = err instanceof OpenclawWireError ? err.code : undefined;
-          bridgeBootStatus.set(code === AUTH_FAILED ? AUTH_FAILED : 'unreachable');
-          throw err;
-        }
+        const ws = await openBackgroundBridgeUpstream(
+          gatewayId,
+          process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
+        );
         let closed = false;
         let registered: (() => void) | null = null;
         ws.on('close', () => {

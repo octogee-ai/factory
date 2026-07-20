@@ -238,7 +238,7 @@ function mountSidecarLocalitySurface(app: Express, options: {
   byosubLocality.use(byosubHealthRoutes);
   mountApi(app, "/byosub", byosubLocality);
   const automationsLocality = Router({ mergeParams: true });
-  automationsLocality.use(requireAuth);
+  automationsLocality.use(requireAuthenticatedUid);
   automationsLocality.use(automationsRoutes);
   mountApi(app, "/automations", automationsLocality);
   // connect/status/sso-submit run HERE (the customer's own pod) so the in-pod

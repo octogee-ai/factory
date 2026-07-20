@@ -390,6 +390,7 @@ function buildDb(store: FakeStore) {
         return { docs: [], size: 0 };
       },
     }),
+    collectionGroup: (name: string) => makeQuery(name, store),
   };
 }
 
