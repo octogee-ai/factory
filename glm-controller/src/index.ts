@@ -62,6 +62,7 @@ import {
 import {
   gatewayUpsertOptsFromRelease,
   isOwnerlessOperatorPrewarm,
+  markLiveRuntimePatch,
   deploymentIntentFingerprintForComparison,
   planGatewayConvergence,
   provisioningRuntimeDoc,
@@ -965,7 +966,8 @@ async function convergeOneGateway(
           { liveRelease: gateway.desiredRelease, updatedAt: Date.now(), updatedBy: "converge-gateway" },
           { merge: true },
         );
-        txn.set(glmRef, { lifecycle: "serving", release: gateway.desiredRelease }, { merge: true });
+        const runtimePatch = markLiveRuntimePatch(gateway);
+        if (runtimePatch) txn.set(glmRef, runtimePatch, { merge: true });
       });
       return;
     }
