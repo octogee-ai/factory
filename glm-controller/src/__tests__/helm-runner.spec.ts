@@ -128,6 +128,28 @@ describe("helm-runner helpers", () => {
     expect(args).toContain("--timeout=10m");
   });
 
+  it("clears a previous trial claim identity when the gateway returns to ownerless prewarm", () => {
+    const args = buildUpgradeArgs({
+      release: "octogee-gw-trial-op-000001",
+      chartPath: "/charts/octogee-gateway",
+      namespace: "octogee-test",
+      gatewayId: "trial-op-000001",
+      imageTag: "abc1234",
+      imageRepository: REPO,
+      upgradeTimeout: "10m",
+      gatewayClass: "operator",
+    });
+
+    const stringPair = (key: string): string | undefined => {
+      const index = args.findIndex(
+        (arg, position) => arg === "--set-string" && args[position + 1]?.startsWith(`${key}=`),
+      );
+      return index === -1 ? undefined : args[index + 1];
+    };
+    expect(stringPair("ownerUid")).toBe("ownerUid=");
+    expect(stringPair("builderSlug")).toBe("builderSlug=");
+  });
+
   // Regression: a leftover resource (e.g. a hand-created operator WI SA) without
   // Helm ownership metadata wedged a bender blue/green roll forever. Cowboy owns
   // every gateway resource, so the upgrade must ALWAYS --take-ownership, with no
