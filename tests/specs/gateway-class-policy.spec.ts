@@ -144,26 +144,9 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       config: {},
     });
     expect(out.auth.profiles["openai-codex:default"]).toBeUndefined();
-    expect(out.agents.defaults.models["openai/gpt-5.5"]).toBeUndefined();
-  });
-
-  it("builder class preserves a selected Codex runtime model", () => {
-    const out = runPolicy("builder", {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-          },
-        },
-        list: [{ id: "octogee-jack-coach", model: "openai/gpt-5.5" }],
-      },
-      plugins: { entries: { codex: { enabled: false } } },
-    });
-
     expect(out.agents.defaults.models["openai/gpt-5.5"]).toEqual({
       agentRuntime: { id: "codex" },
     });
-    expect(out.plugins.entries.codex.enabled).toBe(true);
   });
 
   it("operator class leaves the config untouched for the operator-image patcher", () => {
