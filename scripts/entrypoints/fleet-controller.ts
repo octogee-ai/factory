@@ -17,6 +17,7 @@ import { buildBrokeredLifecycleAdapter } from "../lib/customer-lifecycle-broker-
 import { blobSyncAllWithOptions } from "../lib/blob-sync.js";
 import { createBrokeredBlobStore } from "../lib/blob-sync-broker.js";
 import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
+import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import { startFleetController } from "../lib/fleet-provisioner.js";
 import { desiredFingerprints } from "../lib/snapshot-fingerprint.js";
 import { probeOpenClawVersion } from "../lib/probe-openclaw-version.js";
@@ -54,7 +55,7 @@ export function resolveFleetControllerEntrypointConfig(
     builderSlug: env.GATEWAY_BUILDER_SLUG?.trim() ?? "",
     port: parseInt(env.FLEET_CONTROLLER_PORT ?? "3003", 10),
     publicKey: env.FLEET_CONTROLLER_PUBLIC_KEY || "",
-    version: env.BUILD_SHA ?? "unknown",
+    version: env.GATEWAY_IMAGE_TAG?.trim() || env.BUILD_SHA || "unknown",
   };
 }
 
@@ -66,6 +67,16 @@ export function createFleetSystemConfigFlush(
   if (!builderSlug) return undefined;
   return async () => {
     checkpointDurableSystemConfigForSlug(builderSlug, { log: logFn }, sync);
+  };
+}
+
+export function createAssignedFingerprintReader(
+  brokerClient: Pick<FleetBrokerClient, "assignedUsers">,
+  seedSnapshot: Parameters<typeof desiredFingerprints>[1],
+): () => Promise<Map<string, string>> {
+  return async () => {
+    const users = await brokerClient.assignedUsers({ completeOnly: false });
+    return desiredFingerprints(users, seedSnapshot);
   };
 }
 
@@ -141,28 +152,10 @@ async function main(): Promise<void> {
     openclawDir: OPENCLAW_DIR,
     platformState: !operator,
     localReconcile: true,
-    // Non-operator (shared/builder) gateways always re-apply the config patch on ensure,
-    // so a fingerprint drift can reconverge a mounted customer — this is what makes a
-    // project-agent toggle land without a remount. Operator gateways short-circuit a
-    // coach-wired resync in addCustomerToGateway, where a recorded "applied" fingerprint
-    // would falsely mark an unpatched config current; they fall back to slug-only roster
-    // and reconverge on remount.
-    ...(operator
-      ? {
-          readDesiredSlugs: async () => {
-            const users = await brokerClient.assignedUsers({ completeOnly: false });
-            return users.map((user) => user.slug);
-          },
-        }
-      : {
-          readDesiredFingerprints: async () => {
-            const users = await brokerClient.assignedUsers({ completeOnly: false });
-            // Seed the adapter's snapshot cache from the same fetch: the ensure a
-            // fingerprint drift triggers must apply exactly the content that was
-            // fingerprinted, not whatever the TTL-less cache still holds.
-            return desiredFingerprints(users, adapter.seedUserSnapshotForMigration);
-          },
-        }),
+    readDesiredFingerprints: createAssignedFingerprintReader(
+      brokerClient,
+      adapter.seedUserSnapshotForMigration,
+    ),
     stampMounted: (uid, mounted) => brokerClient.setMounted(uid, mounted),
     recordReconcileError: (slug, message) => brokerClient.recordReconcileError(slug, message),
     clearReconcileError: (slug) => brokerClient.clearReconcileError(slug),

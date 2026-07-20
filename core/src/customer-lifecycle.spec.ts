@@ -698,6 +698,43 @@ const cloneIdx = state.calls.indexOf("cloneWorkspaceRepo");
 });
 
 describe("addCustomerToGateway — operator gateway short-circuits when status=complete", () => {
+  it("runs full content convergence for a mounted operator when its assigned snapshot changed", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        agentIds: ["octogee-test-coach"],
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user-existing",
+        greetingPosted: true,
+      }),
+      {
+        customerDir: true,
+        workspaceGitDir: true,
+        gitRemote: true,
+        sshKey: true,
+        templatesWritten: true,
+        repoHasCommits: true,
+      },
+    );
+    state.giteaRegisteredPubKey = "ssh-pubkey";
+    state.pendingProjects = [
+      { projectSlug: "launchroom", giteaRepoName: "launchroom" },
+    ];
+    const adapter = makeAdapter(state);
+    adapter.isOperatorGateway = () => true;
+    adapter.customerCoachWiredInOpenclawConfig = () => true;
+
+    const result = await addCustomerToGateway(adapter, "uid-test", {
+      convergeContent: true,
+    });
+
+    expect(result.steps).toContain("project-clone");
+    expect(result.steps).toContain("config-patch");
+    expect(result.pendingProjectClones).toEqual([]);
+    expect(state.calls).toContain("cloneProjectRepo");
+    expect(state.calls).toContain("applyAddCustomerConfigPatch");
+  });
+
   it("verifies the SSH key but skips unrelated convergence when the durable workspace is ready", async () => {
     const state = makeState(
       snap({

@@ -205,6 +205,7 @@ export interface AddCustomerOptions {
     verifyTimeoutMs?: number;
     customersDir?: string;
     mountDeadlineMs?: number;
+    convergeContent?: boolean;
     signal?: AbortSignal;
     onSignalCreated?: (signal: AbortSignal) => void;
 }

@@ -290,6 +290,7 @@ export interface AddCustomerOptions {
   verifyTimeoutMs?: number;
   customersDir?: string;
   mountDeadlineMs?: number;
+  convergeContent?: boolean;
 
 signal?: AbortSignal;
 
@@ -459,10 +460,30 @@ function throwIfAborted(signal: AbortSignal | undefined, uid: string): void {
   throw new Error(`[add:${uid}] aborted: ${String(reason ?? "operation cancelled")}`);
 }
 
+function operatorGatewayIsReadyForFastAttach(
+  adapter: CustomerLifecycleAdapter,
+  snapshot: UserSnapshot,
+  convergeContent: boolean | undefined,
+): boolean {
+  const { slug } = snapshot;
+  return snapshot.status === "complete"
+    && !convergeContent
+    && Boolean(adapter.isOperatorGateway?.())
+    && Boolean(adapter.customerCoachWiredInOpenclawConfig?.(slug))
+    && Boolean(adapter.hasCustomerAgentRuntime?.(slug))
+    && adapter.hasWorkspaceGitDir(slug)
+    && adapter.hasGitRemote(slug);
+}
+
 async function addCustomerToGatewayInner(
   adapter: CustomerLifecycleAdapter,
   uid: string,
-  opts: { verifyTimeoutMs?: number; customersDir?: string; signal?: AbortSignal } = {},
+  opts: {
+    verifyTimeoutMs?: number;
+    customersDir?: string;
+    signal?: AbortSignal;
+    convergeContent?: boolean;
+  } = {},
 ): Promise<AddCustomerResult> {
   const verifyTimeoutMs = opts.verifyTimeoutMs ?? VERIFY_ACCOUNT_TIMEOUT_MS;
   const customersDir = opts.customersDir ?? "/home/node/.openclaw/customers";
@@ -476,14 +497,7 @@ async function addCustomerToGatewayInner(
   const { ctx, newCustomer } = prepared;
   const { slug } = snapshot;
 
-  if (
-    snapshot.status === "complete"
-    && adapter.isOperatorGateway?.()
-    && adapter.customerCoachWiredInOpenclawConfig?.(slug)
-    && adapter.hasCustomerAgentRuntime?.(slug)
-    && adapter.hasWorkspaceGitDir(slug)
-    && adapter.hasGitRemote(slug)
-  ) {
+  if (operatorGatewayIsReadyForFastAttach(adapter, snapshot, opts.convergeContent)) {
     steps.push(...(await ensureSshKeyAndGitea(adapter, slug)));
     throwIfAborted(signal, uid);
     adapter.log(

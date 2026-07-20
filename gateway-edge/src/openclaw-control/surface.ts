@@ -140,6 +140,14 @@ export function openClawControlUpstreamBase(env: NodeJS.ProcessEnv): URL {
   return url;
 }
 
+function isNativeChatSessionSelector(parsed: URL, key: string): boolean {
+  const chatSessions = parsed.searchParams.getAll(key);
+  return parsed.pathname.endsWith("/openclaw/chat") &&
+    key === "session" &&
+    chatSessions.length === 1 &&
+    /^[A-Za-z0-9:_-]{1,256}$/u.test(chatSessions[0] ?? "");
+}
+
 export function openClawControlUpstreamPath(originalUrl: string, gatewayId: string): string {
   const rawPath = originalUrl.split("?", 1)[0] ?? "";
   if (!rawPath.startsWith("/") || rawPath.includes("\\") || rawPath.includes("..") ||
@@ -148,6 +156,7 @@ export function openClawControlUpstreamPath(originalUrl: string, gatewayId: stri
   }
   const parsed = new URL(originalUrl, "https://octogee.invalid");
   for (const key of parsed.searchParams.keys()) {
+    if (isNativeChatSessionSelector(parsed, key)) continue;
     if (/(?:token|ticket|secret|session|auth|key)/iu.test(key)) {
       throw new Error("OpenClaw Dashboard request contains a sensitive query parameter");
     }
@@ -185,13 +194,18 @@ function httpAssetOutcome(statusCode: number): "ok" | "timeout" | "error" {
   return statusCode === 504 ? "timeout" : "error";
 }
 
-function requestHeaders(req: Request, env: NodeJS.ProcessEnv): http.OutgoingHttpHeaders {
+function requestHeaders(
+  req: Request,
+  env: NodeJS.ProcessEnv,
+  gatewayToken: string,
+): http.OutgoingHttpHeaders {
   const headers: http.OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(req.headers)) {
     if (ALLOWED_REQUEST_HEADERS.has(name.toLowerCase())) headers[name] = value;
   }
   headers.host = openClawControlUpstreamBase(env).host;
   headers.origin = apiOrigin(env);
+  headers.authorization = `Bearer ${gatewayToken}`;
   headers["accept-encoding"] = "identity";
   return headers;
 }
@@ -230,6 +244,7 @@ export interface CreateOpenClawControlHttpRouterOptions {
   sessions?: OpenClawControlSessionManager;
   redeem?: typeof redeemOpenClawControlTicket;
   authorize?: typeof authorizeOpenClawControlSession;
+  loadGatewayToken?: typeof fetchGatewayToken;
   httpTimeoutMs?: number;
   metrics?: OpenClawControlMetrics;
 }
@@ -241,6 +256,7 @@ export function createOpenClawControlHttpRouter(
   const sessions = options.sessions ?? defaultSessions;
   const redeem = options.redeem ?? redeemOpenClawControlTicket;
   const authorize = options.authorize ?? authorizeOpenClawControlSession;
+  const loadGatewayToken = options.loadGatewayToken ?? fetchGatewayToken;
   const httpTimeoutMs = options.httpTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
   const metrics = options.metrics;
   const identity = metricIdentity(env);
@@ -322,6 +338,7 @@ export function createOpenClawControlHttpRouter(
         unauthorized(res);
         return;
       }
+      const gatewayToken = await loadGatewayToken({ gatewayId });
       const base = openClawControlUpstreamBase(env);
       let timedOut = false;
       let settled = false;
@@ -331,7 +348,7 @@ export function createOpenClawControlHttpRouter(
         port: base.port,
         method: req.method,
         path: openClawControlUpstreamPath(req.originalUrl, gatewayId),
-        headers: requestHeaders(req, env),
+        headers: requestHeaders(req, env, gatewayToken),
       }, (upstream) => {
         settled = true;
         res.status(upstream.statusCode ?? 502);
@@ -340,7 +357,7 @@ export function createOpenClawControlHttpRouter(
         }
         securityHeaders(res);
         res.setHeader("set-cookie", touched.cookie);
-        upstream.pipe(credentialScrubber([env.OPENCLAW_GATEWAY_TOKEN ?? ""])).pipe(res);
+        upstream.pipe(credentialScrubber([gatewayToken])).pipe(res);
       });
       proxy.setTimeout(httpTimeoutMs, () => {
         timedOut = true;
@@ -510,10 +527,7 @@ class OpenClawControlSocketBridge {
     const base = openClawControlUpstreamBase(this.args.env);
     const upstreamUrl = new URL(this.args.requestPath, base);
     upstreamUrl.protocol = "ws:";
-    this.upstream = new WebSocket(upstreamUrl, {
-      maxPayload: MAX_WS_FRAME_BYTES,
-      origin: apiOrigin(this.args.env),
-    });
+    this.upstream = new WebSocket(upstreamUrl, { maxPayload: MAX_WS_FRAME_BYTES });
     this.args.metrics?.ws(this.metricsIdentity, "open", "ok");
     this.startAuthorizationChecks();
     this.attachSocketHandlers();
@@ -616,7 +630,7 @@ class OpenClawControlSocketBridge {
       this.socketReleased = true;
       this.args.socketLease.release();
     }
-    this.terminate(this.args.browser);
+    this.closeBrowser(reason);
     if (this.upstream) this.terminate(this.upstream);
     logger.debug("OpenClaw Dashboard socket closed", {
       gatewayId: this.activeSession.gatewayId,
@@ -628,6 +642,18 @@ class OpenClawControlSocketBridge {
 
   private terminate(socket: WebSocket): void {
     if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) socket.terminate();
+  }
+
+  private closeBrowser(reason: string): void {
+    if (this.args.browser.readyState === WebSocket.CONNECTING) {
+      this.args.browser.terminate();
+      return;
+    }
+    if (this.args.browser.readyState !== WebSocket.OPEN) return;
+    const policyFailure = reason === "session-expired" || reason === "capability-revoked" ||
+      reason === "invalid-dashboard-frame" || reason === "protocol-invalid" ||
+      reason === "runtime-drift";
+    this.args.browser.close(policyFailure ? 1008 : 1011, reason);
   }
 
   private retainUncertainLeases(reason: string): void {

@@ -14,4 +14,12 @@ export function isGatewayImageTag(value) {
     return (IMAGE_DIGEST_PATTERN.test(digest) &&
         (LEGACY_IMAGE_TAG_PATTERN.test(imageTag) || W9_CANDIDATE_IMAGE_NAME_PATTERN.test(imageTag)));
 }
+export function gatewayHeartbeatMatchesImageTag(heartbeatVersion, imageTag) {
+    if (!heartbeatVersion)
+        return false;
+    if (heartbeatVersion === imageTag)
+        return true;
+    const [reference] = imageTag.split("@", 1);
+    return heartbeatVersion === reference;
+}
 export const IMAGE_TAG_PATTERN = { test: isGatewayImageTag };

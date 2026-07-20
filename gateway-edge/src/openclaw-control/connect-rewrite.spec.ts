@@ -56,11 +56,20 @@ describe("trusted OpenClaw Dashboard connect rewrite", () => {
       type: "res",
       payload: {
         type: "hello-ok",
-        auth: { token: gatewayToken },
+        auth: {
+          role: "operator",
+          scopes: ["operator.read", "operator.write"],
+          token: gatewayToken,
+          deviceToken: "server-device-token",
+        },
         nested: `prefix-${gatewayToken}-suffix`,
       },
-    }, [gatewayToken]);
+    }, [gatewayToken, "server-device-token"]);
     expect(sanitized).not.toContain(gatewayToken);
-    expect(JSON.parse(sanitized).payload).not.toHaveProperty("auth");
+    expect(sanitized).not.toContain("server-device-token");
+    expect(JSON.parse(sanitized).payload.auth).toEqual({
+      role: "operator",
+      scopes: ["operator.read", "operator.write"],
+    });
   });
 });

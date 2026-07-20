@@ -40,6 +40,7 @@ export type RedeemOpenClawWsOutcome =
 
 export interface OpenClawRuntimeBroker {
   redeemOpenClawWs(ticketId: string): Promise<RedeemOpenClawWsOutcome>;
+  authorizePreviewAccess(uid: string, workspaceSlug: string, projectSlug: string | null): Promise<boolean>;
   getUserGatewayId(uid: string): Promise<string | null>;
   resolveAgentIdentity(agentId: string): Promise<AgentIdentity | null>;
   resolveChannelPair(primaryChannelId: string): Promise<ChannelPair | null>;
@@ -299,6 +300,23 @@ export function createOpenClawRuntimeBroker(opts: {
         kind: "redeemed",
         redeemed: { uid, gatewayId: redeemedGatewayId, gatewayUrl, expectedAgentId },
       };
+    },
+    async authorizePreviewAccess(
+      uid: string,
+      workspaceSlug: string,
+      projectSlug: string | null,
+    ): Promise<boolean> {
+      const res = await post(
+        "/internal/openclaw/previews/authorize",
+        { uid, workspaceSlug, projectSlug },
+        new Set([200, 403]),
+      );
+      if (res.status === 403) return false;
+      const body = await readJsonOrNull(res);
+      if (typeof body?.authorized !== "boolean") {
+        throw new OpenClawRuntimeBrokerError(502, "malformed preview authorization response");
+      }
+      return body.authorized;
     },
     async getUserGatewayId(uid: string): Promise<string | null> {
       const body = await postJson(

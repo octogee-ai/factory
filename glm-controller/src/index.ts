@@ -15,6 +15,7 @@ import {
   type Operation,
 } from "@octogee/shared/types/glm";
 import type { GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
+import { gatewayHeartbeatMatchesImageTag } from "@octogee/shared/types/image-tag";
 import {
   parseHealthResponse,
   startOperatorHeartbeatPoller,
@@ -403,8 +404,7 @@ function gatewayServiceInternalUrl(gatewayId: string): string {
 export function versionFromImageTag(imageTag: string | undefined): string {
   if (!imageTag) return "unknown";
   const [reference] = imageTag.split("@", 1);
-  const [buildSha] = reference.split("-oc");
-  return buildSha || reference;
+  return reference;
 }
 
 function parseNonNegativeInt(raw: string | undefined, fallback: number): number {
@@ -749,7 +749,7 @@ interface GatewayConvergencePassDeps {
   ) => Promise<T>;
   reconcileSurgeHandoff: (input: {
     gatewayId: string;
-    desiredVersion: string;
+    desiredImageTag: string;
     requiresCustomerMigration: boolean;
   }) => Promise<{ ready: boolean }>;
   log: (msg: string) => void;
@@ -766,7 +766,7 @@ function runtimeReportsDesiredBuild(
   if (!runtime) return false;
   return (
     runtime.heartbeat.status === "ready" &&
-    runtime.heartbeat.version === versionFromImageTag(artifact.imageTag)
+    gatewayHeartbeatMatchesImageTag(runtime.heartbeat.version, artifact.imageTag)
   );
 }
 
@@ -793,7 +793,7 @@ export async function refineGatewayConvergenceAction(input: {
   }
   const handoff = await passDeps.reconcileSurgeHandoff({
     gatewayId: gateway.gatewayId,
-    desiredVersion: versionFromImageTag(artifact.imageTag),
+    desiredImageTag: artifact.imageTag,
     requiresCustomerMigration: requiresSurgeCustomerMigration(gateway),
   });
   return planGatewayConvergence({

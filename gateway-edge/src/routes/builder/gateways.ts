@@ -49,6 +49,7 @@ function builderViewOf(
   via: "owner" | "co-owner",
   imageTag: string | undefined,
   heartbeat: Record<string, unknown> | null,
+  isCurrentAssignment: boolean,
 ): BuilderGatewayListEntry {
   const { gateway, config } = authorization;
   const explicitProfile = config.profile ?? undefined;
@@ -77,6 +78,7 @@ function builderViewOf(
       gatewayClass,
       config.operatorAccess ?? undefined,
     ),
+    isCurrentAssignment,
     ...(configStatus ? { configStatus } : {}),
     via,
   };
@@ -108,15 +110,30 @@ router.get("/gateways/me", async (req: Request, res: Response, next: NextFunctio
       const via = gatewayAccessVia(ownerUid, coOwnerUids, uid);
       if (!via || seen.has(authorization.gateway.gatewayId)) continue;
       seen.add(authorization.gateway.gatewayId);
-      const [artifact, heartbeat] = await Promise.all([
+      const ownerAssignmentPromise = typeof ownerUid === "string"
+        ? db.collection("users").doc(ownerUid).get()
+        : Promise.resolve(null);
+      const [artifact, heartbeat, ownerAssignment] = await Promise.all([
         readGatewayArtifact(
           db,
           authorization.gateway.gatewayId,
           authorization.gateway.liveRelease,
         ),
         readGatewayRuntimeHeartbeat(db, authorization.gateway),
+        ownerAssignmentPromise,
       ]);
-      out.push(builderViewOf(authorization, via, artifact?.imageTag, heartbeat));
+      const isCurrentAssignment = ownerAssignment?.exists === true && userAssignmentMatchesGateway(
+        ownerAssignment.data(),
+        authorization.gateway.gatewayId,
+        authorization.config.builderSlug,
+      );
+      out.push(builderViewOf(
+        authorization,
+        via,
+        artifact?.imageTag,
+        heartbeat,
+        isCurrentAssignment,
+      ));
     }
     out.sort((a, b) => a.gatewayId.localeCompare(b.gatewayId));
     const body: BuilderGatewaysMeResponse = { gateways: out };

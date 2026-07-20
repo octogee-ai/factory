@@ -7,6 +7,7 @@ import {
   type OperationStep,
   type StepStatus,
 } from "@octogee/shared/types/glm";
+import { gatewayHeartbeatMatchesImageTag } from "@octogee/shared/types/image-tag";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import type { HelmRunner } from "../helm-runner.js";
 import type { KubeOps } from "../lib/kube-ops.js";
@@ -76,32 +77,13 @@ interface RevisionAddGatewayPlan extends AddGatewayPlan {
 }
 
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
-const PINNED_OC_MARKER = "-oc";
-
 function deploymentNameForGateway(gatewayId: string): string {
   return `octogee-gateway-${gatewayId}`;
 }
 
 function heartbeatMatchesImageTag(version: string | null | undefined, imageTag: string | undefined): boolean {
   if (!imageTag) return true;
-  if (!version) return false;
-  if (version === imageTag) return true;
-  const at = imageTag.indexOf("@");
-  if (at > 0 && version === imageTag.slice(0, at)) return true;
-  const marker = imageTag.indexOf(PINNED_OC_MARKER);
-  if (marker < 7 || marker > 40) return false;
-  const buildSha = imageTag.slice(0, marker);
-  return isLowerHex(buildSha) && version === buildSha;
-}
-
-function isLowerHex(value: string): boolean {
-  for (let i = 0; i < value.length; i++) {
-    const code = value.charCodeAt(i);
-    const isDigit = code >= 48 && code <= 57;
-    const isLowerAF = code >= 97 && code <= 102;
-    if (!isDigit && !isLowerAF) return false;
-  }
-  return true;
+  return gatewayHeartbeatMatchesImageTag(version, imageTag);
 }
 
 export function createAddGatewayHandler(deps: AddGatewayDeps): OperationHandler {

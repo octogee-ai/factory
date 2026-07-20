@@ -44,6 +44,7 @@ import {
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 import { buildProductionLifecycleAdapter } from "./customer-lifecycle-prod-adapter.js";
 import { addCustomerToGateway, removeCustomerFromGateway } from "./customer-lifecycle.js";
+import type { AddCustomerOptions } from "./customer-lifecycle.js";
 import type { AddCustomerResult, CustomerLifecycleAdapter } from "./customer-lifecycle.js";
 import { startReconcileLoop } from "./reconcile-loop.js";
 import { selectStale } from "./content-convergence.js";
@@ -195,9 +196,7 @@ export interface StartFleetOptions {
    *  slice (see snapshot-fingerprint.ts). When provided, it BOTH drives the desired
    *  roster (its keys) and lets the reconcile re-ensure an already-mounted customer whose
    *  fingerprint drifted — the level-triggered path a project-agent toggle rides. Takes
-   *  precedence over readDesiredSlugs. Left unset on gateways whose add-path short-circuits
-   *  a coach-wired resync (operator), where a false "applied" fingerprint would mask an
-   *  unpatched config. */
+   *  precedence over readDesiredSlugs. */
   readDesiredFingerprints?: () => Promise<Map<string, string>>;
   /** Trusted-side mounted mirror writer used when the pod has no Firestore. */
   stampMounted?: (uid: string, mounted: boolean) => Promise<void>;
@@ -214,6 +213,12 @@ flushLocalState?: (input: {
   reason: string;
 }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
 
+}
+
+export function reconcileAddCustomerOptions(
+  contentConvergenceEnabled: boolean,
+): AddCustomerOptions {
+  return contentConvergenceEnabled ? { convergeContent: true } : {};
 }
 
 export interface StartedFleetController {
@@ -577,7 +582,11 @@ function startMaybeReconcileLoop(params: {
     ensureSlug: async (slug: string) => {
       const uid = await wrappedAdapter.uidForSlug(slug);
       if (!uid) throw new Error(`no user doc for assigned slug ${slug}`);
-      const result = await addCustomerToGateway(wrappedAdapter, uid);
+      const result = await addCustomerToGateway(
+        wrappedAdapter,
+        uid,
+        reconcileAddCustomerOptions(fingerprintSource !== undefined),
+      );
       await stampMounted(uid, true);
       // LAST step (after add succeeds AND the mounted mirror is stamped): write the on-disk
       // completion marker so mount-observed now includes this slug. Until it lands, a

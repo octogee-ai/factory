@@ -227,13 +227,26 @@ export async function cloneProjectRepo(
     return false;
   }
 
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-
-  const result = gitExec(path.dirname(dest), ["clone", sshRemoteUrl(org, giteaRepoName), projectSlug], sshKey);
+  const parent = path.dirname(dest);
+  fs.mkdirSync(parent, { recursive: true });
+  const cloneDir = fs.existsSync(dest)
+    ? fs.mkdtempSync(path.join(parent, `.${projectSlug}-clone-`))
+    : dest;
+  const result = gitExec(parent, ["clone", sshRemoteUrl(org, giteaRepoName), cloneDir], sshKey);
   if (result === null) {
     log(`⚠ [git] Clone failed for ${slug}/${projectSlug}`);
-    try { fs.rmSync(dest, { recursive: true, force: true }); } catch {}
+    fs.rmSync(cloneDir, { recursive: true, force: true });
     return false;
+  }
+
+  if (cloneDir !== dest) {
+    try {
+      adoptProjectClone(cloneDir, dest);
+    } catch (err) {
+      log(`⚠ [git] Failed to adopt clone for ${slug}/${projectSlug}: ${errMessage(err)}`);
+      fs.rmSync(cloneDir, { recursive: true, force: true });
+      return false;
+    }
   }
 
   gitExec(dest, ["config", "user.email", `${slug}@octogee.com`]);
@@ -243,6 +256,28 @@ export async function cloneProjectRepo(
 
   log(`[git] ✅ Cloned ${org}/${giteaRepoName} → customers/${slug}/projects/${projectSlug}/`);
   return true;
+}
+
+function copyMissingCloneTree(source: string, dest: string): void {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+    if (entry.name === ".git") continue;
+    const sourcePath = path.join(source, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (!fs.existsSync(destPath)) {
+      fs.cpSync(sourcePath, destPath, { recursive: true, preserveTimestamps: true });
+      continue;
+    }
+    if (entry.isDirectory() && fs.statSync(destPath).isDirectory()) {
+      copyMissingCloneTree(sourcePath, destPath);
+    }
+  }
+}
+
+export function adoptProjectClone(cloneDir: string, dest: string): void {
+  copyMissingCloneTree(cloneDir, dest);
+  fs.renameSync(path.join(cloneDir, ".git"), path.join(dest, ".git"));
+  fs.rmSync(cloneDir, { recursive: true, force: true });
 }
 
 export async function initWorkspaceRepo(coachDir: string, slug: string): Promise<string | null> {

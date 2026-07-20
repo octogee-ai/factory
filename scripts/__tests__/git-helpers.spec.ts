@@ -1,4 +1,8 @@
 import { describe, it, expect } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { execFileSync } from "node:child_process";
 
 // Mock the config module before importing git.ts (which imports it at load
 // time and would otherwise read env vars / hit the real filesystem).
@@ -18,7 +22,41 @@ const {
   execErrStderr,
   listOnDiskCustomerSlugs,
   customerSshKeyPath,
+  adoptProjectClone,
 } = await import("../lib/git.js");
+
+describe("adoptProjectClone", () => {
+  it("attaches the canonical Git checkout to an existing local prototype without losing either tree", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "project-clone-adopt-"));
+    const cloneDir = path.join(root, "clone");
+    const dest = path.join(root, "launchroom");
+    fs.mkdirSync(path.join(cloneDir, "docs"), { recursive: true });
+    fs.writeFileSync(path.join(cloneDir, "README.md"), "canonical\n");
+    fs.writeFileSync(path.join(cloneDir, "docs", "brief.md"), "brief\n");
+    execFileSync("git", ["init", "-b", "main", cloneDir]);
+    execFileSync("git", ["config", "user.email", "test@octogee.test"], { cwd: cloneDir });
+    execFileSync("git", ["config", "user.name", "Octogee Test"], { cwd: cloneDir });
+    execFileSync("git", ["add", "-A"], { cwd: cloneDir });
+    execFileSync("git", ["commit", "-m", "canonical"], { cwd: cloneDir });
+    fs.mkdirSync(dest, { recursive: true });
+    fs.writeFileSync(path.join(dest, "README.md"), "local prototype\n");
+    fs.writeFileSync(path.join(dest, "index.html"), "<h1>Launch Room</h1>\n");
+
+    try {
+      adoptProjectClone(cloneDir, dest);
+
+      expect(fs.readFileSync(path.join(dest, "README.md"), "utf8")).toBe("local prototype\n");
+      expect(fs.readFileSync(path.join(dest, "index.html"), "utf8")).toContain("Launch Room");
+      expect(fs.readFileSync(path.join(dest, "docs", "brief.md"), "utf8")).toBe("brief\n");
+      expect(fs.existsSync(path.join(dest, ".git"))).toBe(true);
+      expect(fs.existsSync(cloneDir)).toBe(false);
+      expect(execFileSync("git", ["status", "--short"], { cwd: dest, encoding: "utf8" }))
+        .toBe(" M README.md\n?? index.html\n");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("errMessage", () => {
   it("returns .message for Error instances", () => {
