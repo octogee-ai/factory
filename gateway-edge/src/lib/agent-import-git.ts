@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
 import { classifyAgentImportArchivePath } from "@octogee/shared/types/agent-import";
 import { getExtension, getMimeType, isTextFile } from "../routes/workspace/helpers.js";
 
@@ -99,7 +100,7 @@ interface CommandResult {
 type CommandRunner = (
   command: string,
   args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string | Buffer },
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string | Buffer; maxOutput?: number },
 ) => CommandResult | Promise<CommandResult>;
 
 export function buildAgentImportGitEnvironment(
@@ -189,7 +190,7 @@ async function runChild(
 async function defaultRun(
   command: string,
   args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string | Buffer },
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string | Buffer; maxOutput?: number },
 ): Promise<CommandResult> {
   const result = await runChild(command, args, options);
   return {
@@ -228,6 +229,11 @@ async function readRef(cwd: string, ref: string): Promise<string | null> {
   if (!result.error && (result.status === 1 || result.status === 128)) return null;
   if (result.error || result.status !== 0) throw safeCommandError("git ref lookup", result);
   return requireSha(result.stdout.trim(), "git ref");
+}
+
+export async function agentImportRepositoryApplied(targetDir: string, importId: string): Promise<boolean> {
+  const checkedId = checkedImportId(importId);
+  return await readRef(targetDir, `refs/octogee/imports/${checkedId}/commit`) !== null;
 }
 
 function requireSha(value: string, label: string): string {
@@ -713,6 +719,36 @@ interface TargetUpdate {
   push: boolean;
 }
 
+interface WorkspaceMutationLease {
+  release(): void;
+}
+
+type WorkspaceMutationLeaseFactory = (workspaceDir: string) => WorkspaceMutationLease | null;
+
+async function withWorkspaceMutationLease<T>(
+  workspaceDir: string,
+  acquire: WorkspaceMutationLeaseFactory,
+  work: () => Promise<T>,
+): Promise<T> {
+  const lease = acquire(workspaceDir);
+  if (!lease) throw new AgentImportGitError("workspace_busy", "workspace is busy; retry the import shortly");
+  let result: T;
+  try {
+    result = await work();
+  } catch (error) {
+    try {
+      lease.release();
+    } catch (releaseError) {
+      throw new AggregateError([error, releaseError], "workspace mutation and lease release both failed", {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  lease.release();
+  return result;
+}
+
 async function remoteRefsMatch(targetDir: string, refs: PublishedRef[]): Promise<boolean> {
   const output = await git(
     targetDir,
@@ -758,7 +794,7 @@ function targetRefs(options: TargetUpdate): PublishedRef[] {
 
 async function restoreTarget(options: TargetUpdate, refs: PublishedRef[]): Promise<void> {
   await git(options.targetDir, ["update-ref", MAIN_REF, options.destinationHead, options.nextHead]);
-  await git(options.targetDir, ["reset", "--hard", options.destinationHead]);
+  await git(options.targetDir, ["read-tree", "-u", "-m", options.nextHead, options.destinationHead]);
   for (const { ref, expected } of refs.slice(1)) {
     await git(options.targetDir, ["update-ref", "-d", ref, expected]);
   }
@@ -771,7 +807,7 @@ async function updateTarget(options: TargetUpdate): Promise<void> {
     for (const { ref, expected } of refs.slice(1)) {
       await git(options.targetDir, ["update-ref", ref, expected, EMPTY_REF]);
     }
-    await git(options.targetDir, ["reset", "--hard", options.nextHead]);
+    await git(options.targetDir, ["read-tree", "-u", "-m", options.destinationHead, options.nextHead]);
     if (options.push) await publishRefs(options.targetDir, refs);
   } catch (error) {
     if (error instanceof AgentImportGitError && error.code === "push_outcome_unknown") throw error;
@@ -784,7 +820,7 @@ async function updateTarget(options: TargetUpdate): Promise<void> {
   }
 }
 
-export async function applyAgentImportRepository(options: {
+interface ApplyAgentImportRepositoryOptions {
   sourceDir: string;
   sourceHead: string;
   targetDir: string;
@@ -794,7 +830,56 @@ export async function applyAgentImportRepository(options: {
   storeBlob: (filePath: string, contents: Buffer, mimeType: string) => Promise<AgentImportManifestEntry>;
   cleanupBlobs: () => Promise<void>;
   push?: boolean;
-}): Promise<{ importCommit: string; sourceRef: string }> {
+  acquireMutationLease?: WorkspaceMutationLeaseFactory;
+  beforeTargetUpdate?: () => void;
+}
+
+async function resumeAgentImportRepository(
+  options: ApplyAgentImportRepositoryOptions,
+  refs: {
+    sourceHead: string;
+    destinationHead: string;
+    importId: string;
+    sourceRef: string;
+    importRef: string;
+    currentHead: string;
+  },
+): Promise<{ importCommit: string; sourceRef: string } | null> {
+  if (refs.currentHead === refs.destinationHead) return null;
+  const parents = (await git(options.targetDir, ["rev-list", "--parents", "-n", "1", refs.currentHead])).split(" ");
+  const subject = await git(options.targetDir, ["show", "-s", "--format=%s", refs.currentHead]);
+  const matches =
+    await readRef(options.targetDir, refs.sourceRef) === refs.sourceHead &&
+    await readRef(options.targetDir, refs.importRef) === refs.currentHead &&
+    parents.length === 3 &&
+    parents[1] === refs.destinationHead &&
+    parents[2] === refs.sourceHead &&
+    subject === `Import agent workspace (${refs.importId})`;
+  if (!matches) {
+    throw new AgentImportGitError("destination_changed", "destination workspace changed after preview");
+  }
+  if (options.push !== false) {
+    await withWorkspaceMutationLease(
+      options.targetDir,
+      options.acquireMutationLease ?? ((workspaceDir) => acquireWorkspaceMutationLeaseSync({ workspaceDir })),
+      async () => {
+        if (await currentMainHead(options.targetDir) !== refs.currentHead) {
+          throw new AgentImportGitError("destination_changed", "destination workspace changed after preview");
+        }
+        await publishRefs(options.targetDir, [
+          { ref: MAIN_REF, expected: refs.currentHead },
+          { ref: refs.sourceRef, expected: refs.sourceHead },
+          { ref: refs.importRef, expected: refs.currentHead },
+        ]);
+      },
+    );
+  }
+  return { importCommit: refs.currentHead, sourceRef: refs.sourceRef };
+}
+
+export async function applyAgentImportRepository(
+  options: ApplyAgentImportRepositoryOptions,
+): Promise<{ importCommit: string; sourceRef: string }> {
   const sourceHead = requireSha(options.sourceHead, "source head");
   const destinationHead = requireSha(options.destinationHead, "destination head");
   const importId = checkedImportId(options.importId);
@@ -806,28 +891,10 @@ export async function applyAgentImportRepository(options: {
   }
   await trackedTree(options.sourceDir, sourceHead);
   const currentHead = await currentMainHead(options.targetDir);
-  if (currentHead !== destinationHead) {
-    const parents = (await git(options.targetDir, ["rev-list", "--parents", "-n", "1", currentHead])).split(" ");
-    const subject = await git(options.targetDir, ["show", "-s", "--format=%s", currentHead]);
-    if (
-      await readRef(options.targetDir, sourceRef) === sourceHead &&
-      await readRef(options.targetDir, importRef) === currentHead &&
-      parents.length === 3 &&
-      parents[1] === destinationHead &&
-      parents[2] === sourceHead &&
-      subject === `Import agent workspace (${importId})`
-    ) {
-      if (options.push !== false) {
-        await publishRefs(options.targetDir, [
-          { ref: MAIN_REF, expected: currentHead },
-          { ref: sourceRef, expected: sourceHead },
-          { ref: importRef, expected: currentHead },
-        ]);
-      }
-      return { importCommit: currentHead, sourceRef };
-    }
-    throw new AgentImportGitError("destination_changed", "destination workspace changed after preview");
-  }
+  const resumed = await resumeAgentImportRepository(options, {
+    sourceHead, destinationHead, importId, sourceRef, importRef, currentHead,
+  });
+  if (resumed) return resumed;
   const stageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-agent-import-apply-"));
   const stageDir = path.join(stageRoot, "source");
   let retainBlobs = false;
@@ -849,16 +916,26 @@ export async function applyAgentImportRepository(options: {
       `Import agent workspace (${importId})`,
     );
     await git(options.targetDir, ["fetch", "--quiet", "--no-tags", stageDir, importCommit]);
-    await ensureCleanDestination(options.targetDir);
-    await updateTarget({
-      targetDir: options.targetDir,
-      destinationHead,
-      nextHead: importCommit,
-      sourceHead,
-      sourceRef,
-      importRef,
-      push: options.push !== false,
-    });
+    await withWorkspaceMutationLease(
+      options.targetDir,
+      options.acquireMutationLease ?? ((workspaceDir) => acquireWorkspaceMutationLeaseSync({ workspaceDir })),
+      async () => {
+        await ensureCleanDestination(options.targetDir);
+        if (await currentMainHead(options.targetDir) !== destinationHead) {
+          throw new AgentImportGitError("destination_changed", "destination workspace changed after preview");
+        }
+        options.beforeTargetUpdate?.();
+        await updateTarget({
+          targetDir: options.targetDir,
+          destinationHead,
+          nextHead: importCommit,
+          sourceHead,
+          sourceRef,
+          importRef,
+          push: options.push !== false,
+        });
+      },
+    );
     retainBlobs = true;
     return { importCommit, sourceRef };
   } catch (error) {
@@ -884,6 +961,8 @@ export async function rollbackAgentImportRepository(options: {
   destinationHead: string;
   importId: string;
   push?: boolean;
+  acquireMutationLease?: WorkspaceMutationLeaseFactory;
+  beforeTargetUpdate?: () => void;
 }): Promise<{ rollbackCommit: string }> {
   const importCommit = requireSha(options.importCommit, "import commit");
   const destinationHead = requireSha(options.destinationHead, "destination head");
@@ -904,10 +983,19 @@ export async function rollbackAgentImportRepository(options: {
       currentTree === destinationTree
     ) {
       if (options.push !== false) {
-        await publishRefs(options.targetDir, [
-          { ref: MAIN_REF, expected: current },
-          { ref: rollbackRef, expected: current },
-        ]);
+        await withWorkspaceMutationLease(
+          options.targetDir,
+          options.acquireMutationLease ?? ((workspaceDir) => acquireWorkspaceMutationLeaseSync({ workspaceDir })),
+          async () => {
+            if (await currentMainHead(options.targetDir) !== current) {
+              throw new AgentImportGitError("rollback_window_closed", "workspace changed after import");
+            }
+            await publishRefs(options.targetDir, [
+              { ref: MAIN_REF, expected: current },
+              { ref: rollbackRef, expected: current },
+            ]);
+          },
+        );
       }
       return { rollbackCommit: current };
     }
@@ -921,13 +1009,24 @@ export async function rollbackAgentImportRepository(options: {
     [importCommit],
     `Rollback agent import (${importId})`,
   );
-  await updateTarget({
-    targetDir: options.targetDir,
-    destinationHead: importCommit,
-    nextHead: rollbackCommit,
-    rollbackRef,
-    push: options.push !== false,
-  });
+  await withWorkspaceMutationLease(
+    options.targetDir,
+    options.acquireMutationLease ?? ((workspaceDir) => acquireWorkspaceMutationLeaseSync({ workspaceDir })),
+    async () => {
+      await ensureCleanDestination(options.targetDir);
+      if (await currentMainHead(options.targetDir) !== importCommit) {
+        throw new AgentImportGitError("rollback_window_closed", "workspace changed after import");
+      }
+      options.beforeTargetUpdate?.();
+      await updateTarget({
+        targetDir: options.targetDir,
+        destinationHead: importCommit,
+        nextHead: rollbackCommit,
+        rollbackRef,
+        push: options.push !== false,
+      });
+    },
+  );
   return { rollbackCommit };
 }
 
@@ -936,7 +1035,6 @@ export async function scanAgentImportSecrets(
   options: { currentOnly?: boolean; run?: CommandRunner; configPath?: string } = {},
 ): Promise<AgentImportSecretFinding[]> {
   const reportDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-agent-import-scan-"));
-  const reportPath = path.join(reportDir, "report.json");
   const ignorePath = path.join(reportDir, "trusted-empty-ignore");
   try {
     fs.writeFileSync(ignorePath, "", { mode: 0o600 });
@@ -948,7 +1046,7 @@ export async function scanAgentImportSecrets(
       "--ignore-gitleaks-allow",
       "--redact",
       "--report-format", "json",
-      "--report-path", reportPath,
+      "--report-path", "/dev/stdout",
       "--exit-code", "1",
       ...(options.currentOnly ? ["--no-git"] : []),
     ];
@@ -957,17 +1055,21 @@ export async function scanAgentImportSecrets(
       env: buildAgentImportGitEnvironment(process.env, {
         HOME: reportDir,
       }),
+      maxOutput: MAX_SECRET_REPORT_BYTES,
     });
+    if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOBUFS") {
+      throw new AgentImportGitError("secret_findings", "source repository contains too many credential-like findings");
+    }
     if (result.error || (result.status !== 0 && result.status !== 1)) {
       throw new AgentImportGitError("secret_scan_failed", "secret scanner failed closed");
     }
     if (result.status === 0) return [];
-    if (!fs.existsSync(reportPath) || fs.statSync(reportPath).size > MAX_SECRET_REPORT_BYTES) {
+    if (Buffer.byteLength(result.stdout) > MAX_SECRET_REPORT_BYTES) {
       throw new AgentImportGitError("secret_findings", "source repository contains too many credential-like findings");
     }
     let raw: unknown;
     try {
-      raw = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+      raw = JSON.parse(result.stdout);
     } catch {
       throw new AgentImportGitError("secret_scan_failed", "secret scanner returned no valid report");
     }

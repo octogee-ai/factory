@@ -341,6 +341,54 @@ function registerRecordRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps)
       next(error);
     }
   });
+
+  router.post("/records/:importId/abandon", async (req, res, next) => {
+    try {
+      const id = importId(req, res);
+      if (!id) return;
+      const owner = context(res);
+      const requested = ownedPayload(req.body, owner);
+      if (
+        !requested || requested.id !== id || requested.status !== "abandoned" ||
+        typeof requested.updatedAt !== "string" || requested.updatedAt.length > 100
+      ) {
+        res.status(400).json({ error: "invalid_import_record" });
+        return;
+      }
+      const recordRef = deps.db.doc(`users/${owner.uid}/agentImports/${id}`);
+      const pointerRef = deps.db.doc(`users/${owner.uid}/agentImportState/latest`);
+      const abandoned = await deps.db.runTransaction(async (transaction) => {
+        const [recordSnapshot, pointerSnapshot] = await Promise.all([
+          transaction.get(recordRef),
+          transaction.get(pointerRef),
+        ]);
+        const current = recordSnapshot.exists ? ownedPayload(recordSnapshot.data(), owner) : null;
+        if (!current || current.id !== id) {
+          throw Object.assign(new Error("agent import was not found"), { status: 404, code: "not_found" });
+        }
+        if (current.importCommit || !["previewed", "workspace", "failed", "abandoned"].includes(String(current.status))) {
+          throw Object.assign(new Error("an applied workspace import cannot be abandoned"), {
+            status: 409,
+            code: "invalid_import_state",
+          });
+        }
+        const payload: JsonObject = {
+          ...current,
+          status: "abandoned",
+          updatedAt: requested.updatedAt,
+        };
+        delete payload.error;
+        const next = durableRecord(payload, deps.now());
+        transaction.set(recordRef, next);
+        const pointer = pointerSnapshot.exists ? ownedPayload(pointerSnapshot.data(), owner) : null;
+        if (pointer?.id === id) transaction.delete(pointerRef);
+        return publicRecord(next);
+      });
+      res.json(abandoned);
+    } catch (error) {
+      next(error);
+    }
+  });
 }
 
 function registerPlanRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps): void {

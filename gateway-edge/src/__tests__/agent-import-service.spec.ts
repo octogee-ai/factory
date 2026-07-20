@@ -78,6 +78,8 @@ function harness(overrides: Partial<AgentImportServiceDeps> = {}) {
     getArchive: vi.fn(async (id) => archives.get(id) ? Buffer.from(archives.get(id)!) : null),
     deleteStaging: vi.fn(async (id) => { plans.delete(id); archives.delete(id); }),
     deleteImportBlobs: vi.fn(async () => undefined),
+    abandonRecord: vi.fn(async (record) => { records.set(record.id, structuredClone(record)); }),
+    hasRepositoryImport: vi.fn(async () => false),
     applyRepository: vi.fn(async () => ({ importCommit: IMPORT_COMMIT, sourceRef: "refs/octogee/imports/import-1/source" })),
     rollbackRepository: vi.fn(async () => ({ rollbackCommit: "e".repeat(40) })),
     readIdentity: vi.fn(async () => ({ name: "Octo", persona: "Default", emoji: "🐙" })),
@@ -289,6 +291,63 @@ describe("AgentImportService preview", () => {
 });
 
 describe("AgentImportService apply and rollback", () => {
+  it("abandons an unrecoverable pre-commit failure and clears its staged state", async () => {
+    const h = harness();
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack", slug: "jack", gatewayId: "shared-1", owner: "jack", repo: "moof", branch: "main",
+      artifacts: artifacts(),
+    });
+    const failed = h.records.get(preview.id)!;
+    h.records.set(preview.id, {
+      ...failed,
+      status: "failed",
+      error: { code: "source_changed", message: "source changed after preview" },
+    });
+
+    const abandoned = await h.service.abandon({ uid: "uid-jack", importId: preview.id });
+
+    expect(abandoned).toMatchObject({ id: preview.id, status: "abandoned" });
+    expect(h.deps.deleteStaging).toHaveBeenCalledWith(preview.id);
+    expect(h.deps.deleteImportBlobs).toHaveBeenCalledWith(preview.id);
+    expect(h.deps.abandonRecord).toHaveBeenCalledWith(expect.objectContaining({ status: "abandoned" }));
+  });
+
+  it("refuses to abandon after the workspace import commit exists", async () => {
+    const h = harness();
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack", slug: "jack", gatewayId: "shared-1", owner: "jack", repo: "moof", branch: "main",
+      artifacts: artifacts(),
+    });
+    h.records.set(preview.id, {
+      ...h.records.get(preview.id)!,
+      status: "failed",
+      importCommit: IMPORT_COMMIT,
+    });
+
+    await expect(h.service.abandon({ uid: "uid-jack", importId: preview.id }))
+      .rejects.toMatchObject({ code: "invalid_import_state" });
+    expect(h.deps.deleteStaging).not.toHaveBeenCalled();
+  });
+
+  it("refuses to abandon when repository provenance exists before the checkpoint is stored", async () => {
+    const h = harness({ hasRepositoryImport: vi.fn(async () => true) });
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack", slug: "jack", gatewayId: "shared-1", owner: "jack", repo: "moof", branch: "main",
+      artifacts: artifacts(),
+    });
+    h.records.set(preview.id, {
+      ...h.records.get(preview.id)!,
+      status: "failed",
+      error: { code: "checkpoint_failed", message: "checkpoint write failed" },
+    });
+
+    await expect(h.service.abandon({ uid: "uid-jack", importId: preview.id }))
+      .rejects.toMatchObject({ code: "invalid_import_state" });
+    expect(h.deps.hasRepositoryImport).toHaveBeenCalledWith({ targetDir: "/target", importId: preview.id });
+    expect(h.deps.deleteStaging).not.toHaveBeenCalled();
+    expect(h.deps.deleteImportBlobs).not.toHaveBeenCalled();
+  });
+
   it("rechecks GitHub repository size before the apply clone", async () => {
     const readGithubRepoSize = vi.fn()
       .mockResolvedValueOnce(12)

@@ -235,6 +235,13 @@ export function createAgentImportStore(deps: StoreDeps) {
       await jsonRequest(`/blobs/${requireId(id)}`, { method: "DELETE" });
     },
 
+    async abandonRecord(record: AgentImportRecord): Promise<void> {
+      await jsonRequest(`/records/${requireId(record.id)}/abandon`, {
+        method: "POST",
+        ...jsonBody(record),
+      });
+    },
+
     async storeBlob(
       id: string,
       filePath: string,

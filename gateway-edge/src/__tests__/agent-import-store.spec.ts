@@ -75,6 +75,7 @@ describe("agent import broker client", () => {
     await expect(store.getArchive("imp-1")).resolves.toEqual(Buffer.from("zip"));
     await store.deleteStaging("imp-1");
     await store.deleteImportBlobs("imp-1");
+    await store.abandonRecord({ ...record, status: "abandoned" });
     await expect(store.storeBlob("imp-1", "image.png", Buffer.from("png"), "image/png"))
       .resolves.toMatchObject({ size: 3, mimeType: "image/png" });
     await expect(store.readIdentity()).resolves.toEqual({ name: "Octo", persona: null, emoji: null });
@@ -83,6 +84,11 @@ describe("agent import broker client", () => {
     await expect(store.listGithubSources()).resolves.toEqual({ repos: [], truncated: false });
     await expect(store.readGithubToken()).resolves.toBe("github-oauth");
     await expect(store.readGithubRepoSize("jack", "moof")).resolves.toBe(12);
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      expect.stringContaining("/records/imp-1/abandon"),
+      expect.objectContaining({ method: "POST" }),
+    );
 
     expect(fetchImpl).toHaveBeenCalled();
     for (const [, init] of vi.mocked(fetchImpl).mock.calls) {

@@ -60,7 +60,8 @@ export type AgentImportStatus =
   | "failed"
   | "rolling_back"
   | "rollback_failed"
-  | "rolled_back";
+  | "rolled_back"
+  | "abandoned";
 
 const APPLYABLE_STATUSES = new Set<AgentImportStatus>([
   "previewed", "workspace", "identity", "config", "verifying", "failed",
@@ -138,6 +139,8 @@ export interface AgentImportServiceDeps {
   getArchive(id: string): Promise<Buffer | null>;
   deleteStaging(id: string): Promise<void>;
   deleteImportBlobs(id: string): Promise<void>;
+  abandonRecord(record: AgentImportRecord): Promise<void>;
+  hasRepositoryImport(input: { targetDir: string; importId: string }): Promise<boolean>;
   applyRepository(input: {
     sourceDir: string;
     sourceHead: string;
@@ -710,6 +713,38 @@ export class AgentImportService {
 
   async rollback(input: { uid: string; importId: string }): Promise<AgentImportRecord> {
     return this.serializeMutation(input.uid, input.importId, () => this.rollbackOnce(input));
+  }
+
+  async abandon(input: { uid: string; importId: string }): Promise<AgentImportRecord> {
+    return this.serializeMutation(input.uid, input.importId, () => this.abandonOnce(input));
+  }
+
+  private async abandonOnce(input: { uid: string; importId: string }): Promise<AgentImportRecord> {
+    const current = await this.ownedRecord(input.importId, input.uid);
+    if (current.status === "abandoned") return current;
+    if (current.importCommit || !["previewed", "workspace", "failed"].includes(current.status)) {
+      throw new AgentImportServiceError(
+        "invalid_import_state",
+        "only an import that has not changed the workspace can be abandoned",
+      );
+    }
+    const workspace = await this.deps.workspaceState(current.slug);
+    if (await this.deps.hasRepositoryImport({ targetDir: workspace.targetDir, importId: current.id })) {
+      throw new AgentImportServiceError(
+        "invalid_import_state",
+        "only an import that has not changed the workspace can be abandoned",
+      );
+    }
+    await this.deps.deleteStaging(current.id);
+    await this.deps.deleteImportBlobs(current.id);
+    const abandoned: AgentImportRecord = {
+      ...current,
+      status: "abandoned",
+      updatedAt: this.deps.now().toISOString(),
+    };
+    delete abandoned.error;
+    await this.deps.abandonRecord(abandoned);
+    return abandoned;
   }
 
   private async rollbackOnce(input: { uid: string; importId: string }): Promise<AgentImportRecord> {

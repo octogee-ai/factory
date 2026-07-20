@@ -26,6 +26,7 @@ import {
 } from "./gitea-naming.js";
 import * as giteaBroker from "./gitea-admin-broker-client.js";
 import { notesWelcomeSeed } from "@octogee/core/templates/project-seeds";
+import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
 
 export function errMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -521,32 +522,60 @@ function pushAndLog(coachDir: string, slug: string, keyArg: string | undefined):
   }
 }
 
+interface WorkspaceSyncLease {
+  release(): void;
+}
+
+type WorkspaceSyncLeaseFactory = (workspaceDir: string) => WorkspaceSyncLease | null;
+
+export function runWorkspaceSyncMutation(
+  coachDir: string,
+  slug: string,
+  work: () => void,
+  acquire: WorkspaceSyncLeaseFactory = (workspaceDir) =>
+    acquireWorkspaceMutationLeaseSync({ workspaceDir }),
+  logFn: (message: string) => void = dlog,
+): boolean {
+  const lease = acquire(coachDir);
+  if (!lease) {
+    logFn(`[git-sync] ${slug}: workspace busy — autosave deferred`);
+    return false;
+  }
+  try {
+    work();
+    return true;
+  } finally {
+    lease.release();
+  }
+}
+
 function syncOneWorkspace(slug: string): void {
   const coachDir = path.join(CUSTOMERS_DIR, slug);
   const gitDir = path.join(coachDir, ".git");
   if (!fs.existsSync(gitDir)) return;
+  runWorkspaceSyncMutation(coachDir, slug, () => {
+    setRepoSshCommand(coachDir, slug);
 
-  setRepoSshCommand(coachDir, slug);
+    const sshKey = customerSshKeyPath(slug);
+    const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
 
-  const sshKey = customerSshKeyPath(slug);
-  const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
+    const remoteCheck = getOriginRemoteSilent(coachDir);
+    if (remoteCheck === null) {
+      dlog(`[git-sync] ${slug}: no remote — skipping (lifecycle contract will heal on next restore)`);
+      return;
+    }
 
-  const remoteCheck = getOriginRemoteSilent(coachDir);
-  if (remoteCheck === null) {
-    dlog(`[git-sync] ${slug}: no remote — skipping (lifecycle contract will heal on next restore)`);
-    return;
-  }
+    if (remoteCheck.startsWith("http")) {
+      migrateHttpRemoteToSsh(coachDir, slug);
+    }
 
-  if (remoteCheck.startsWith("http")) {
-    migrateHttpRemoteToSsh(coachDir, slug);
-  }
+    const committed = commitLocalChanges(coachDir);
+    rebaseFromOriginIfPresent(coachDir, keyArg);
 
-  const committed = commitLocalChanges(coachDir);
-  rebaseFromOriginIfPresent(coachDir, keyArg);
-
-  if (committed) {
-    pushAndLog(coachDir, slug, keyArg);
-  }
+    if (committed) {
+      pushAndLog(coachDir, slug, keyArg);
+    }
+  });
 }
 
 // Workspace auto-sync is pure SSH/git on the per-customer key — no admin token.

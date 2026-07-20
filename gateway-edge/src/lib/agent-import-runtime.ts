@@ -10,6 +10,7 @@ import { fetchGatewayAuth, persistGatewayDeviceToken } from "../chat-proxy/openc
 import { openUpstream } from "../chat-proxy/openclaw/upstream.js";
 import { agentImportBrokerBaseUrlFromEnv, createAgentImportStore } from "./agent-import-store.js";
 import {
+  agentImportRepositoryApplied,
   applyAgentImportRepository,
   compareAgentImportWorkspaces,
   inspectAgentImportRepository,
@@ -196,6 +197,7 @@ export function createAgentImportRuntime(options: {
     syncIdentity: (_uid, identity) => store.syncIdentity(identity),
     replaceIdentity: (_uid, identity) => store.replaceIdentity(identity),
     deleteImportBlobs: (id) => store.deleteImportBlobs(id),
+    hasRepositoryImport: ({ targetDir, importId }) => agentImportRepositoryApplied(targetDir, importId),
     withConfigLock,
     invokeOpenClaw: invokeLocalOpenClaw,
   });

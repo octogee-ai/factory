@@ -144,6 +144,23 @@ describe("agent import config artifacts", () => {
       .toThrowError(AgentImportConfigError);
   });
 
+  it.each(["key", "authKey", "sharedKey", "passphrase"])(
+    "rejects the common credential field %s before it enters an import artifact",
+    (field) => {
+      const source = sourceConfig();
+      const selected = (source.agents as { list: Array<Record<string, unknown>> }).list[1];
+      selected[field] = "short-but-still-a-secret";
+
+      const artifacts = buildAgentImportConfigArtifacts(source, "moof");
+
+      expect(JSON.stringify(artifacts.doctorCandidate)).not.toContain(field);
+      expect(artifacts.configInventory).toContainEqual(expect.objectContaining({
+        path: `agents.list[1].${field}`,
+        classification: "credential",
+      }));
+    },
+  );
+
   it("rejects credential values hidden inside portable free-form fields", () => {
     const artifacts = buildAgentImportConfigArtifacts({
       agents: {
@@ -183,6 +200,33 @@ describe("agent import config artifacts", () => {
     injected.configInventory[0] = { ...injected.configInventory[0], path: "providers.accounts.jack@example.com.enabled" };
     expect(() => validateAgentImportConfigArtifacts(injected))
       .toThrowError(expect.objectContaining({ code: "unsafe_config_artifact" }));
+  });
+
+  it("calls out unsupported leaves nested under otherwise portable sections", () => {
+    const artifacts = buildAgentImportConfigArtifacts({
+      agents: {
+        list: [{
+          id: "moof",
+          identity: { name: "Moof", avatarUrl: "https://example.test/moof.png" },
+          heartbeat: { every: "30m", legacyMode: true },
+        }],
+      },
+    }, "moof");
+
+    const plan = planAgentImportConfig(artifacts, { doctorOutcome: "unchanged" });
+
+    expect(plan.decisions).toContainEqual({
+      path: "agents.list[0].identity.avatarUrl",
+      disposition: "drop_unsupported",
+      reason: "field is not in the portable allowlist",
+    });
+    expect(plan.decisions).toContainEqual({
+      path: "agents.list[0].heartbeat.legacyMode",
+      disposition: "drop_unsupported",
+      reason: "field is not in the portable allowlist",
+    });
+    expect(plan.decisions).toContainEqual(expect.objectContaining({ path: "identity.name", disposition: "apply" }));
+    expect(plan.decisions).toContainEqual(expect.objectContaining({ path: "heartbeat.every", disposition: "apply" }));
   });
 
   it("strips common camelCase credential fields from Doctor input", () => {

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   AgentImportGitError,
+  agentImportRepositoryApplied,
   applyAgentImportRepository,
   assertAgentImportRepositoryExpansionSafe,
   buildAgentImportGitEnvironment,
@@ -237,6 +238,8 @@ describe("applyAgentImportRepository", () => {
       push: false,
     });
 
+    expect(await agentImportRepositoryApplied(target, "import-123")).toBe(true);
+
     expect(git(target, "rev-list", "--parents", "-n", "1", applied.importCommit).split(" "))
       .toEqual([applied.importCommit, destinationHead, sourceHead]);
     expect(fs.readFileSync(path.join(target, "AGENTS.md"), "utf8")).toBe("# Moof\n");
@@ -252,6 +255,12 @@ describe("applyAgentImportRepository", () => {
     expect(fs.readFileSync(path.join(target, ".gitignore"), "utf8")).toContain("projects/*/.git/");
     expect(storeBlob).toHaveBeenCalledWith("photo.png", expect.any(Buffer), "image/png");
     expect(git(target, "rev-parse", "refs/octogee/imports/import-123/source")).toBe(sourceHead);
+  });
+
+  it("reports no repository provenance before an import is applied", async () => {
+    const target = repo("agent-import-provenance-target", { "README.md": "starter\n" });
+
+    expect(await agentImportRepositoryApplied(target, "import-not-applied")).toBe(false);
   });
 
   it("removes a stale destination blob manifest entry when source imports text at the same path", async () => {
@@ -358,6 +367,77 @@ describe("applyAgentImportRepository", () => {
     })).rejects.toMatchObject({ code: "destination_dirty" });
     expect(git(target, "rev-parse", "HEAD")).toBe(destinationHead);
     expect(fs.readFileSync(path.join(target, "README.md"), "utf8")).toBe("builder edit\n");
+  });
+
+  it("preserves a workspace write injected after the final cleanliness check", async () => {
+    const source = repo("agent-import-final-write-source", { "AGENTS.md": "Moof\n" });
+    const target = repo("agent-import-final-write-target", { "README.md": "starter\n" });
+    const destinationHead = git(target, "rev-parse", "HEAD");
+
+    await expect(applyAgentImportRepository({
+      sourceDir: source,
+      sourceHead: git(source, "rev-parse", "HEAD"),
+      targetDir: target,
+      destinationHead,
+      importId: "import-final-write",
+      slug: "jack",
+      storeBlob: vi.fn(),
+      cleanupBlobs: vi.fn(),
+      push: false,
+      beforeTargetUpdate: () => {
+        fs.writeFileSync(path.join(target, "README.md"), "builder write after check\n");
+      },
+    })).rejects.toBeInstanceOf(AgentImportGitError);
+
+    expect(git(target, "rev-parse", "HEAD")).toBe(destinationHead);
+    expect(fs.readFileSync(path.join(target, "README.md"), "utf8")).toBe("builder write after check\n");
+  });
+
+  it("preserves a workspace commit injected after the final cleanliness check", async () => {
+    const source = repo("agent-import-final-commit-source", { "AGENTS.md": "Moof\n" });
+    const target = repo("agent-import-final-commit-target", { "README.md": "starter\n" });
+    const destinationHead = git(target, "rev-parse", "HEAD");
+    let concurrentCommit = "";
+
+    await expect(applyAgentImportRepository({
+      sourceDir: source,
+      sourceHead: git(source, "rev-parse", "HEAD"),
+      targetDir: target,
+      destinationHead,
+      importId: "import-final-commit",
+      slug: "jack",
+      storeBlob: vi.fn(),
+      cleanupBlobs: vi.fn(),
+      push: false,
+      beforeTargetUpdate: () => {
+        fs.writeFileSync(path.join(target, "builder.md"), "concurrent commit\n");
+        git(target, "add", "builder.md");
+        git(target, "commit", "-q", "-m", "concurrent builder commit");
+        concurrentCommit = git(target, "rev-parse", "HEAD");
+      },
+    })).rejects.toBeInstanceOf(AgentImportGitError);
+
+    expect(concurrentCommit).not.toBe(destinationHead);
+    expect(git(target, "rev-parse", "HEAD")).toBe(concurrentCommit);
+    expect(fs.readFileSync(path.join(target, "builder.md"), "utf8")).toBe("concurrent commit\n");
+  });
+
+  it("returns a retryable error while another workspace writer holds the shared lease", async () => {
+    const source = repo("agent-import-busy-source", { "AGENTS.md": "Moof\n" });
+    const target = repo("agent-import-busy-target", { "README.md": "starter\n" });
+
+    await expect(applyAgentImportRepository({
+      sourceDir: source,
+      sourceHead: git(source, "rev-parse", "HEAD"),
+      targetDir: target,
+      destinationHead: git(target, "rev-parse", "HEAD"),
+      importId: "import-busy",
+      slug: "jack",
+      storeBlob: vi.fn(),
+      cleanupBlobs: vi.fn(),
+      push: false,
+      acquireMutationLease: () => null,
+    })).rejects.toMatchObject({ code: "workspace_busy" });
   });
 
   it("returns the exact prior import when a checkpoint retry sees its own merge commit", async () => {
@@ -488,20 +568,20 @@ describe("scanAgentImportSecrets", () => {
       ".gitleaks.toml": "[allowlist]\npaths=['MEMORY.md']\n",
       ".gitleaksignore": "a:MEMORY.md:github-pat:1\n",
     });
-    const run = vi.fn((_command: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => {
+    const run = vi.fn((_command: string, args: string[], options: { env?: NodeJS.ProcessEnv; maxOutput?: number }) => {
       expect(options.env).not.toHaveProperty("OPENCLAW_GATEWAY_TOKEN");
+      expect(options.maxOutput).toBe(4 * 1024 * 1024);
       expect(args).toContain("--ignore-gitleaks-allow");
       expect(args[args.indexOf("--config") + 1]).toBe("/gateway-edge/agent-import-gitleaks.toml");
       expect(args[args.indexOf("--gitleaks-ignore-path") + 1]).not.toContain(source);
-      const reportPath = args[args.indexOf("--report-path") + 1];
-      fs.writeFileSync(reportPath, JSON.stringify([{
+      expect(args[args.indexOf("--report-path") + 1]).toBe("/dev/stdout");
+      return { status: 1, stdout: JSON.stringify([{
         RuleID: "github-pat",
         File: "MEMORY.md",
         Commit: "a".repeat(40),
         Secret: "ghp_must_not_escape",
         Match: "ghp_must_not_escape",
-      }]));
-      return { status: 1, stdout: "", stderr: "" };
+      }]), stderr: "" };
     });
 
     const prior = process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -524,13 +604,17 @@ describe("scanAgentImportSecrets", () => {
     })).rejects.toBeInstanceOf(AgentImportGitError);
   });
 
-  it("rejects an oversized scanner report without reading it into memory", async () => {
+  it("terminates an oversized scanner report at the streaming byte cap", async () => {
     const source = repo("agent-import-scan-large", { "MEMORY.md": "memory\n" });
     await expect(scanAgentImportSecrets(source, {
-      run: vi.fn((_command, args: string[]) => {
-        const reportPath = args[args.indexOf("--report-path") + 1];
-        fs.writeFileSync(reportPath, Buffer.alloc(4 * 1024 * 1024 + 1));
-        return { status: 1, stdout: "", stderr: "" };
+      run: vi.fn((_command, _args, options: { maxOutput?: number }) => {
+        expect(options.maxOutput).toBe(4 * 1024 * 1024);
+        return {
+          status: null,
+          stdout: "",
+          stderr: "",
+          error: Object.assign(new Error("command output exceeded limit"), { code: "ENOBUFS" }),
+        };
       }),
     })).rejects.toMatchObject({ code: "secret_findings", findings: undefined });
   });
@@ -538,10 +622,7 @@ describe("scanAgentImportSecrets", () => {
   it("fails closed when status one has no reported findings", async () => {
     const source = repo("agent-import-scan-empty", { "MEMORY.md": "memory\n" });
     await expect(scanAgentImportSecrets(source, {
-      run: vi.fn((_command, args: string[]) => {
-        fs.writeFileSync(args[args.indexOf("--report-path") + 1], "[]");
-        return { status: 1, stdout: "", stderr: "" };
-      }),
+      run: vi.fn(() => ({ status: 1, stdout: "[]", stderr: "" })),
     })).rejects.toMatchObject({ code: "secret_scan_failed" });
   });
 });

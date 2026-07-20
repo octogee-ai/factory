@@ -137,6 +137,20 @@ describe("internal workspace commit route", () => {
     });
     expect(h.warn).toHaveBeenCalledWith(expect.stringContaining("committed but push failed slug=acme: rejected"));
   });
+
+  it("returns a retryable conflict while an import holds the workspace lease", async () => {
+    h.commitAndPushWorkspace.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "WORKSPACE_BUSY", cwd: "/customers/acme" },
+    });
+
+    const response = await request(app()).post("/internal/workspace/commit").send({ slug: "acme" }).expect(409, {
+      error: "Workspace is busy; retry shortly.",
+      code: "WORKSPACE_BUSY",
+    });
+
+    expect(response.body.code).toBe("WORKSPACE_BUSY");
+  });
 });
 
 describe("internal workspace commit route — Vegas project lane", () => {

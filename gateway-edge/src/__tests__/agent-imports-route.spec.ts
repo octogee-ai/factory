@@ -19,6 +19,7 @@ function harness() {
     get: vi.fn().mockResolvedValue({ id: "imp-1", status: "previewed" }),
     latest: vi.fn().mockResolvedValue({ id: "imp-1", status: "complete", importCommit: "c".repeat(40) }),
     rollback: vi.fn().mockResolvedValue({ id: "imp-1", status: "rolled_back" }),
+    abandon: vi.fn().mockResolvedValue({ id: "imp-1", status: "abandoned" }),
   };
   const authorize = vi.fn().mockResolvedValue({ slug: "alice", gatewayId: "gw-alice" });
   const listGithubSources = vi.fn().mockResolvedValue({
@@ -55,9 +56,20 @@ describe("agent imports route", () => {
       "invalid_import_id", "invalid_import_state", "invalid_platform_manifest", "invalid_source_config",
       "local_archive_missing", "rollback_window_closed", "secret_scan_failed", "source_agent_ambiguous",
       "source_agent_not_found", "source_changed", "unsafe_archive_entry", "unsafe_config_artifact",
-      "unsafe_git_entry", "unsafe_platform_path",
+      "unsafe_git_entry", "unsafe_platform_path", "workspace_busy",
     ];
     expect(codes.filter((code) => !AGENT_IMPORT_ERROR_STATUS[code])).toEqual([]);
+  });
+
+  it("abandons a pre-commit recovery record for the authenticated owner", async () => {
+    const { app, service } = harness();
+
+    await request(app)
+      .post("/api/g/gw-alice/agent-imports/imp-1/abandon")
+      .send({})
+      .expect(200, { id: "imp-1", status: "abandoned" });
+
+    expect(service.abandon).toHaveBeenCalledWith({ uid: "uid-alice", importId: "imp-1" });
   });
 
   it("previews a GitHub repository for the authenticated local gateway owner", async () => {

@@ -88,6 +88,10 @@
       "types": "./dist/system-config-mutation-lease.d.ts",
       "default": "./dist/system-config-mutation-lease.js"
     },
+    "./workspace-mutation-lease": {
+      "types": "./dist/workspace-mutation-lease.d.ts",
+      "default": "./dist/workspace-mutation-lease.js"
+    },
     "./context-file-convergence": {
       "types": "./dist/context-file-convergence.d.ts",
       "default": "./dist/context-file-convergence.js"

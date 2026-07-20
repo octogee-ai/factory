@@ -106,8 +106,9 @@ function valueType(value) {
     return typeof value;
 }
 const CREDENTIAL_SEGMENTS = new Set([
-    "apikey", "api_key", "authtoken", "cookie", "credential", "credentials", "oauth",
-    "password", "privatekey", "private_key", "secret", "secrets", "token",
+    "apikey", "api_key", "authkey", "authtoken", "cookie", "credential", "credentials", "key",
+    "oauth", "passphrase", "password", "privatekey", "private_key", "secret", "secrets",
+    "sharedkey", "token",
 ]);
 const PLATFORM_ROOTS = new Set([
     "bindings", "channels", "cron", "discovery", "env", "gateway", "hooks", "logging",
@@ -115,7 +116,7 @@ const PLATFORM_ROOTS = new Set([
 ]);
 const HOST_FIELDS = new Set(["agentdir", "workspace", "workspacedir", "statepath", "homedir"]);
 const PORTABLE_AGENT_FIELDS = new Set([
-    "name", "persona", "identity", "heartbeat", "bootstrapmaxchars", "bootstraptotalmaxchars",
+    "id", "name", "persona", "identity", "heartbeat", "bootstrapmaxchars", "bootstraptotalmaxchars",
     "thinkingdefault", "verbosedefault", "timeoutseconds", "model",
 ]);
 const FORBIDDEN_DOCTOR_KEYS = new Set(["__proto__", "constructor", "prototype"]);
@@ -197,8 +198,14 @@ function inventoryClassification(path, sourcePrefix) {
     if (PLATFORM_ROOTS.has(root))
         return "platform";
     if (path.startsWith(`${sourcePrefix}.`)) {
-        const relative = path.slice(sourcePrefix.length + 1).split(".", 1)[0].split("[", 1)[0].toLowerCase();
-        return PORTABLE_AGENT_FIELDS.has(relative) ? "customer" : "unknown";
+        const relative = path.slice(sourcePrefix.length + 1).toLowerCase().replace(/[-_]/g, "");
+        const root = relative.split(".", 1)[0].split("[", 1)[0];
+        const portableLeaf = /^(?:id|name|persona|bootstrapmaxchars|bootstraptotalmaxchars|thinkingdefault|verbosedefault|timeoutseconds)$/u.test(relative) ||
+            /^identity(?:\.(?:name|emoji))?$/u.test(relative) ||
+            /^heartbeat(?:\.(?:every|lightcontext))?$/u.test(relative) ||
+            /^heartbeat\.activehours(?:\.(?:start|end|timezone))?$/u.test(relative) ||
+            /^model(?:\.primary|\.fallbacks(?:\[\d+\])?)?$/u.test(relative);
+        return PORTABLE_AGENT_FIELDS.has(root) && portableLeaf ? "customer" : "unknown";
     }
     return "unknown";
 }

@@ -15,7 +15,7 @@ const COMMIT_RE = /^[0-9a-f]{40}$/;
 
 interface AgentImportsRouterDeps {
   createRuntime(input: { authorization: string; gatewayId: string }): {
-    service: Pick<AgentImportService, "previewGithub" | "previewLocal" | "apply" | "get" | "latest" | "rollback">;
+    service: Pick<AgentImportService, "previewGithub" | "previewLocal" | "apply" | "get" | "latest" | "rollback" | "abandon">;
     authorize(): Promise<{ slug: string; gatewayId: string }>;
     listGithubSources(): Promise<unknown>;
   };
@@ -84,6 +84,7 @@ export const AGENT_IMPORT_ERROR_STATUS: Record<string, number> = {
   import_not_found: 404,
   forbidden: 404,
   openclaw_not_ready: 409,
+  workspace_busy: 409,
 };
 
 function publicFindings(value: unknown): Array<{ ruleId: string; path: string; commit: string | null }> | undefined {
@@ -343,6 +344,18 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
       const id = importId(req, res);
       if (!id) return;
       res.json(await authorized.runtime.service.rollback({ importId: id, uid: req.uid! }));
+    } catch (error) {
+      handleImportError(error, res, next);
+    }
+  });
+
+  router.post("/:importId/abandon", async (req, res, next) => {
+    try {
+      const authorized = await authorize(req, res, deps);
+      if (!authorized) return;
+      const id = importId(req, res);
+      if (!id) return;
+      res.json(await authorized.runtime.service.abandon({ importId: id, uid: req.uid! }));
     } catch (error) {
       handleImportError(error, res, next);
     }

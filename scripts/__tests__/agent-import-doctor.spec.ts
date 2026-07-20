@@ -87,6 +87,17 @@ describe("runAgentImportDoctor", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it.each(["key", "authKey", "sharedKey", "passphrase"])(
+    "rejects the common credential field %s before invoking OpenClaw",
+    async (field) => {
+      const run = vi.fn();
+      await expect(runAgentImportDoctor({
+        agents: { list: [{ id: "moof", [field]: "short-but-still-a-secret" }] },
+      }, { tmpRoot: tempRoot(), run })).rejects.toThrow(/credential-bearing/i);
+      expect(run).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects credential fields introduced by Doctor output", async () => {
     const root = tempRoot();
     const run = vi.fn(async (_command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {

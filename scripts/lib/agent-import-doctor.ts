@@ -34,8 +34,8 @@ interface AgentImportDoctorOptions {
 }
 
 const CREDENTIAL_KEYS = new Set([
-  "apikey", "cookie", "credential", "credentials", "env", "oauth", "password",
-  "privatekey", "secret", "secrets", "token",
+  "apikey", "authkey", "cookie", "credential", "credentials", "env", "key", "oauth",
+  "passphrase", "password", "privatekey", "secret", "secrets", "sharedkey", "token",
 ]);
 
 function credentialKey(key: string): boolean {
