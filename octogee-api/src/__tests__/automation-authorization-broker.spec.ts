@@ -14,6 +14,21 @@ import { createTenantEnforcementMiddleware } from "../middleware/tenant-enforcem
 import type { Reviewer } from "../lib/token-review.js";
 import { requireAuthenticatedUid } from "../../../gateway-edge/src/middleware/auth.js";
 
+vi.mock("../../../gateway-edge/src/middleware/auth.js", () => ({
+  requireAuthenticatedUid: (
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ) => {
+    if (!req.headers.authorization?.startsWith("Bearer ")) {
+      res.status(401).json({ error: "Unauthenticated" });
+      return;
+    }
+    req.uid = "hermetic-uid";
+    next();
+  },
+}));
+
 const WELL_FORMED_SA_TOKEN = [
   "eyJhbGciOiJSUzI1NiIsImtpZCI6InRlc3Qta2V5LWlkIn0",
   "eyJhdWQiOlsib2N0b2dlZS1hcGkiXSwiZXhwIjoxNzUyODAwMDAwLCJpc3MiOiJrOHMifQ",

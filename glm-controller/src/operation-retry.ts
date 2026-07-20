@@ -69,6 +69,15 @@ export function operationNeedsDurableCustomerMigrationV2Resume(op: {
   return op.kind === "migrate-customer" && op.customerMigrationV2 !== undefined;
 }
 
+export function operationNeedsDurableRestartResume(op: {
+  kind?: string;
+  customerMigrationV2?: CustomerMigrationV2State;
+}): boolean {
+  return op.kind === "suspend-customer" ||
+    op.kind === "erase-customer" ||
+    operationNeedsDurableCustomerMigrationV2Resume(op);
+}
+
 export function supersededRollMigrationAction(op: {
   status: string;
   output?: Record<string, unknown>;
@@ -83,6 +92,7 @@ export function supersededRollMigrationAction(op: {
 
 export interface OperationCompletionInput {
   op: {
+    kind?: string;
     attempts?: number;
     attemptHistory?: OperationAttemptRecord[];
     startedAt?: number | null;
@@ -91,6 +101,128 @@ export interface OperationCompletionInput {
   result: OperationResult;
   steps: OperationStep[];
   now: number;
+}
+
+export function verifiedDeletionCompletion(
+  result: OperationResult,
+): { deletionId: string; archiveId: string } | null {
+  if (!result.success) return null;
+  const value = result.output?.verifiedDeletion;
+  if (!value || typeof value !== "object") return null;
+  const deletionId = (value as { deletionId?: unknown }).deletionId;
+  const archiveId = (value as { archiveId?: unknown }).archiveId;
+  return typeof deletionId === "string" && typeof archiveId === "string"
+    ? { deletionId, archiveId }
+    : null;
+}
+
+function resultOutput(result: OperationResult): Record<string, unknown> {
+  return { output: result.output ?? FieldValue.delete() };
+}
+
+function successfulCompletion(
+  input: OperationCompletionInput,
+  persistedSteps: OperationStep[],
+  attempts: number,
+): Record<string, unknown> {
+  const scrubbedInput = input.result.scrubInputOnSuccess
+    ? { input: FieldValue.delete(), inputUid: FieldValue.delete() }
+    : {};
+  return {
+    status: "succeeded",
+    completedAt: input.now,
+    attempts,
+    steps: persistedSteps,
+    error: FieldValue.delete(),
+    rolledBack: false,
+    nextAttemptAt: FieldValue.delete(),
+    waitingOn: FieldValue.delete(),
+    ...resultOutput(input.result),
+    ...scrubbedInput,
+  };
+}
+
+function recordOutput(value: unknown): boolean {
+  return value !== null && typeof value === "object";
+}
+
+function hasLevelTriggeredFence(input: OperationCompletionInput): boolean {
+  const { op, result } = input;
+  return recordOutput(result.output?.retirementFencePending) ||
+    recordOutput(result.output?.deletionFencePending) ||
+    recordOutput(result.output?.deletionCleanupRetry) ||
+    op.kind === "suspend-customer" ||
+    op.kind === "erase-customer";
+}
+
+interface FailureCompletionContext {
+  error: string;
+  classification: OperationFailureClassification;
+  attemptHistory: OperationAttemptRecord[];
+  levelTriggeredFence: boolean;
+}
+
+function failureCompletionContext(
+  input: OperationCompletionInput,
+  persistedSteps: OperationStep[],
+  attempts: number,
+): FailureCompletionContext {
+  const error = input.result.error ?? "unknown error";
+  const levelTriggeredFence = hasLevelTriggeredFence(input);
+  const classification = levelTriggeredFence ? "transient" : classifyOperationFailure(error);
+  const attemptRecord: OperationAttemptRecord = {
+    attempt: attempts,
+    startedAt: input.op.startedAt ?? input.now,
+    completedAt: input.now,
+    error,
+    classification,
+    steps: persistedSteps,
+  };
+  return {
+    error,
+    classification,
+    levelTriggeredFence,
+    attemptHistory: [...(input.op.attemptHistory ?? []), attemptRecord],
+  };
+}
+
+function pendingCompletion(
+  input: OperationCompletionInput,
+  attempts: number,
+  failure: FailureCompletionContext,
+): Record<string, unknown> {
+  const backoffMs = retryBackoffMs(attempts);
+  return {
+    status: "pending",
+    startedAt: null,
+    steps: [],
+    attempts,
+    attemptHistory: failure.attemptHistory,
+    nextAttemptAt: input.now + backoffMs,
+    waitingOn: FieldValue.delete(),
+    error: `attempt ${attempts} failed (transient): ${failure.error} — retrying in ${Math.round(backoffMs / 1000)}s`,
+    ...resultOutput(input.result),
+  };
+}
+
+function failedCompletion(
+  input: OperationCompletionInput,
+  persistedSteps: OperationStep[],
+  attempts: number,
+  failure: FailureCompletionContext,
+): Record<string, unknown> {
+  return {
+    status: "failed",
+    completedAt: input.now,
+    attempts,
+    attemptHistory: failure.attemptHistory,
+    steps: persistedSteps,
+    error: failure.error,
+    rolledBack: input.result.rolledBack ?? false,
+    nextAttemptAt: FieldValue.delete(),
+    waitingOn: FieldValue.delete(),
+    ...resultOutput(input.result),
+  };
 }
 
 // Decides, and builds the Firestore update for, what happens after a claimed
@@ -103,69 +235,22 @@ export interface OperationCompletionInput {
 export function buildOperationCompletionUpdate(
   input: OperationCompletionInput,
 ): Record<string, unknown> {
-  const { op, result, steps, now } = input;
+  const { op, result, steps } = input;
   const persistedSteps = steps.length > 0 ? steps : result.steps;
   const attempts = (op.attempts ?? 0) + 1;
-  const output = { output: result.output ?? FieldValue.delete() };
+  if (result.success) return successfulCompletion(input, persistedSteps, attempts);
 
-  if (result.success) {
-    return {
-      status: "succeeded",
-      completedAt: now,
-      attempts,
-      steps: persistedSteps,
-      error: FieldValue.delete(),
-      rolledBack: false,
-      nextAttemptAt: FieldValue.delete(),
-      waitingOn: FieldValue.delete(),
-      ...output,
-    };
-  }
-
-  const error = result.error ?? "unknown error";
-  const hasRetirementFencePending =
-    result.output?.retirementFencePending !== null &&
-    typeof result.output?.retirementFencePending === "object";
-  const classification = hasRetirementFencePending
-    ? "transient"
-    : classifyOperationFailure(error);
-  const attemptRecord: OperationAttemptRecord = {
-    attempt: attempts,
-    startedAt: op.startedAt ?? now,
-    completedAt: now,
-    error,
-    classification,
-    steps: persistedSteps,
-  };
-  const attemptHistory = [...(op.attemptHistory ?? []), attemptRecord];
-
-  if (shouldRetry(op, result, classification, attempts, hasRetirementFencePending)) {
-    const backoffMs = retryBackoffMs(attempts);
-    return {
-      status: "pending",
-      startedAt: null,
-      steps: [],
-      attempts,
-      attemptHistory,
-      nextAttemptAt: now + backoffMs,
-      waitingOn: FieldValue.delete(),
-      error: `attempt ${attempts} failed (transient): ${error} — retrying in ${Math.round(backoffMs / 1000)}s`,
-      ...output,
-    };
-  }
-
-  return {
-    status: "failed",
-    completedAt: now,
+  const failure = failureCompletionContext(input, persistedSteps, attempts);
+  const retry = shouldRetry(
+    op,
+    result,
+    failure.classification,
     attempts,
-    attemptHistory,
-    steps: persistedSteps,
-    error,
-    rolledBack: result.rolledBack ?? false,
-    nextAttemptAt: FieldValue.delete(),
-    waitingOn: FieldValue.delete(),
-    ...output,
-  };
+    failure.levelTriggeredFence,
+  );
+  return retry
+    ? pendingCompletion(input, attempts, failure)
+    : failedCompletion(input, persistedSteps, attempts, failure);
 }
 
 function shouldRetry(
@@ -173,7 +258,7 @@ function shouldRetry(
   result: OperationResult,
   classification: OperationFailureClassification,
   attempts: number,
-  hasRetirementFencePending: boolean,
+  hasLevelTriggeredFence: boolean,
 ): boolean {
   if (classification !== "transient") return false;
   const hasDurableCleanup =
@@ -185,6 +270,6 @@ function shouldRetry(
     activeMigration.phase !== "aborted";
   return attempts < MAX_OPERATION_ATTEMPTS ||
     hasDurableCleanup ||
-    hasRetirementFencePending ||
+    hasLevelTriggeredFence ||
     hasActiveCustomerMigrationV2;
 }

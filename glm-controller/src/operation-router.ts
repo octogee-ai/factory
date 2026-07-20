@@ -11,6 +11,7 @@ export interface OperationResult {
   error?: string;
   rolledBack?: boolean;
   output?: Record<string, unknown>;
+  scrubInputOnSuccess?: boolean;
 }
 
 export interface OperationContext {

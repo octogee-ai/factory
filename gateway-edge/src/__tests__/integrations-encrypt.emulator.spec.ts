@@ -37,8 +37,12 @@ setupEmulatorTest({
 });
 const auth = useAuthToken(UID);
 
-beforeEach(() => {
+beforeEach(async () => {
   _setKmsClientForTesting(deterministicMockKms());
+  await db.doc(`users/${UID}`).set(
+    { accountLifecycle: { status: "active" } },
+    { merge: true },
+  );
 });
 
 afterEach(() => {

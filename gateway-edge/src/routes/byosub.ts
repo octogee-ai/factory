@@ -1,13 +1,16 @@
 import { Router, Request, Response, NextFunction } from "express";
+import { randomUUID } from "node:crypto";
 import * as fs from "fs";
 import * as os from "os";
 import { FieldValue } from "firebase-admin/firestore";
 import { requireAuth, requireInternalServiceAuth } from "../middleware/auth.js";
 import { db } from "../lib/db.js";
 import {
+  deleteSecret,
   writeSecret,
   addSecretVersionIfExists,
 } from "@octogee/core/secret-manager";
+import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import {
   byosubSecretName,
   validateCodexCredential,
@@ -112,6 +115,7 @@ interface FlowDoc {
   modelCredentialProvider?: string;
   consumedAt?: number;
   expireAt?: number;
+  captureClaimId?: string;
 }
 
 async function readFlow(flowId: string): Promise<FlowDoc | null> {
@@ -337,6 +341,123 @@ async function writeByosubIntegration(args: {
       },
       { merge: true },
     );
+}
+
+async function commitByosubCapture(args: {
+  flowId: string;
+  flow: FlowDoc;
+  provider: ByosubProvider;
+  modelCredentialProvider: ModelCredentialOAuthProviderId;
+  secretName: string;
+  captureClaimId?: string;
+}): Promise<void> {
+  const ownerRef = db.collection("users").doc(args.flow.uid);
+  const configRef = ownerRef.collection("system").doc("config");
+  const integrationRef = ownerRef.collection("integrations").doc("byosub");
+  const flowRef = db.collection("byosubFlows").doc(args.flowId);
+  const addedAt = FieldValue.serverTimestamp();
+  await db.runTransaction(async (tx) => {
+    const [owner, currentFlowSnap] = await Promise.all([
+      tx.get(ownerRef),
+      tx.get(flowRef),
+    ]);
+    const currentFlow = currentFlowSnap.data() as FlowDoc | undefined;
+    if (!owner.exists || !accountAllowsInteractiveAccess(owner.data())) {
+      throw new Error("BYOS credential owner is not active");
+    }
+    if (
+      !currentFlowSnap.exists ||
+      !currentFlow ||
+      currentFlow.uid !== args.flow.uid ||
+      currentFlow.gatewayId !== args.flow.gatewayId ||
+      currentFlow.agentId !== args.flow.agentId ||
+      (args.captureClaimId
+        ? currentFlow.consumedAt !== undefined || currentFlow.captureClaimId !== args.captureClaimId
+        : !currentFlow.consumedAt)
+    ) {
+      throw new Error("BYOS credential flow changed before commit");
+    }
+    tx.set(configRef, {
+      byot: {
+        provider: args.modelCredentialProvider,
+        secretName: FieldValue.delete(),
+        fingerprint: FieldValue.delete(),
+        keyHash: FieldValue.delete(),
+        status: FieldValue.delete(),
+        addedAt: FieldValue.delete(),
+        lastUsedAt: FieldValue.delete(),
+        baseUrl: FieldValue.delete(),
+        model: FieldValue.delete(),
+      },
+      modelCredential: {
+        ...modelCredentialOAuthState({
+          provider: args.modelCredentialProvider,
+          secretName: args.secretName,
+          addedAt,
+        }),
+        fingerprint: FieldValue.delete(),
+        keyHash: FieldValue.delete(),
+        baseUrl: FieldValue.delete(),
+        model: FieldValue.delete(),
+      },
+    }, { merge: true });
+    tx.set(ownerRef, { byotActive: true }, { merge: true });
+    tx.set(integrationRef, {
+      connected: true,
+      gatewayId: args.flow.gatewayId,
+      providers: {
+        [args.provider]: {
+          provider: args.provider,
+          modelCredentialProvider: args.modelCredentialProvider,
+          status: "connected",
+          connected: true,
+          gatewayId: args.flow.gatewayId,
+          flowId: args.flowId,
+          reason: FieldValue.delete(),
+        },
+      },
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    if (!args.flow.consumedAt) {
+      tx.set(flowRef, {
+        consumedAt: Date.now(),
+        captureClaimId: FieldValue.delete(),
+        captureClaimedAt: FieldValue.delete(),
+      }, { merge: true });
+    }
+  });
+}
+
+async function claimByosubCapture(flowId: string, flow: FlowDoc): Promise<string> {
+  const claimId = randomUUID();
+  const ownerRef = db.collection("users").doc(flow.uid);
+  const flowRef = db.collection("byosubFlows").doc(flowId);
+  await db.runTransaction(async (tx) => {
+    const [owner, currentFlowSnap] = await Promise.all([
+      tx.get(ownerRef),
+      tx.get(flowRef),
+    ]);
+    const currentFlow = currentFlowSnap.data() as FlowDoc | undefined;
+    if (!owner.exists || !accountAllowsInteractiveAccess(owner.data())) {
+      throw new Error("BYOS credential owner is not active");
+    }
+    if (
+      !currentFlowSnap.exists ||
+      !currentFlow ||
+      currentFlow.uid !== flow.uid ||
+      currentFlow.gatewayId !== flow.gatewayId ||
+      currentFlow.agentId !== flow.agentId ||
+      currentFlow.consumedAt ||
+      currentFlow.captureClaimId
+    ) {
+      throw new Error("BYOS credential flow is not claimable");
+    }
+    tx.set(flowRef, {
+      captureClaimId: claimId,
+      captureClaimedAt: Date.now(),
+    }, { merge: true });
+  });
+  return claimId;
 }
 
 interface ResolvedUserGateway {
@@ -581,15 +702,12 @@ router.post(
       const secretName = byosubSecretName(flow.uid, secretProvider);
 
       if (flow.consumedAt) {
-        await flipUnifiedByosSignal(flow.uid, signalProvider, secretName);
-        await writeByosubIntegration({
-          uid: flow.uid,
+        await commitByosubCapture({
+          flowId: b.flowId,
+          flow,
           provider: secretProvider,
           modelCredentialProvider: signalProvider,
-          status: "connected",
-          connected: true,
-          gatewayId: flow.gatewayId,
-          flowId: b.flowId,
+          secretName,
         });
         triggerUnifiedByosSyncForFlow(flow, signalProvider);
         res.json({ ok: true, secretName, alreadyConsumed: true });
@@ -600,27 +718,33 @@ router.post(
         res.status(400).json({ error: `invalid credential: ${v.reason}` });
         return;
       }
+      const captureClaimId = await claimByosubCapture(b.flowId, flow);
       await writeSecret({
         name: secretName,
         value: b.credential,
         labels: { byosub: "true", provider: secretProvider },
       });
-      await flipUnifiedByosSignal(flow.uid, signalProvider, secretName);
-      await writeByosubIntegration({
-        uid: flow.uid,
-        provider: secretProvider,
-        modelCredentialProvider: signalProvider,
-        status: "connected",
-        connected: true,
-        gatewayId: flow.gatewayId,
-        flowId: b.flowId,
-      });
+      try {
+        await commitByosubCapture({
+          flowId: b.flowId,
+          flow,
+          provider: secretProvider,
+          modelCredentialProvider: signalProvider,
+          secretName,
+          captureClaimId,
+        });
+      } catch (error) {
+        try {
+          await deleteSecret(secretName);
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "BYOS credential commit and compensating deletion failed",
+          );
+        }
+        throw error;
+      }
       triggerUnifiedByosSyncForFlow(flow, signalProvider);
-
-      await db
-        .collection("byosubFlows")
-        .doc(b.flowId)
-        .set({ consumedAt: Date.now() }, { merge: true });
       res.json({ ok: true, secretName });
     } catch (e) {
       next(e);

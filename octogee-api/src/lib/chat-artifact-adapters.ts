@@ -20,6 +20,13 @@ interface MattermostAdapterOptions {
   fetchImpl?: typeof fetch;
 }
 
+interface MattermostAccessOptions extends MattermostAdapterOptions {
+  resolveWorkspaceSlugForTeamId: (teamId: string) => Promise<{
+    workspaceSlug: string;
+    workspaceOwnerUid: string;
+  } | null>;
+}
+
 function object(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`invalid ${label}`);
   return value as Record<string, unknown>;
@@ -134,7 +141,7 @@ function artifactFileMetadata(file: Record<string, unknown>): { filename: string
 }
 
 export function createMattermostArtifactAccess(
-  options: MattermostAdapterOptions,
+  options: MattermostAccessOptions,
 ): ArtifactAccessAuthorizer {
   const client = mattermostClient(options);
   return {
@@ -151,12 +158,24 @@ export function createMattermostArtifactAccess(
       const octogee = octogeePostProps(post);
       assertRunBinding(request, post, octogee);
       const metadata = artifactFileMetadata(file);
+      const channelValue = await client.requestJson("GET", ["channels", request.channelId]);
+      const channel = object(channelValue, "Mattermost artifact channel");
+      if (channel.id !== request.channelId || typeof channel.team_id !== "string") {
+        throw new ArtifactAccessDeniedError("Mattermost artifact channel is not workspace-bound");
+      }
+      const workspace = await options.resolveWorkspaceSlugForTeamId(channel.team_id);
+      if (!workspace) {
+        throw new ArtifactAccessDeniedError("Mattermost artifact workspace is not active");
+      }
       return {
-        ...request,
-        filename: metadata.filename,
-        mediaType: "application/pdf",
-        byteLength: metadata.byteLength,
-        runId: typeof octogee.runId === "string" ? octogee.runId : undefined,
+        request: {
+          ...request,
+          filename: metadata.filename,
+          mediaType: "application/pdf",
+          byteLength: metadata.byteLength,
+          runId: typeof octogee.runId === "string" ? octogee.runId : undefined,
+        },
+        ...workspace,
       };
     },
     assertChannelMember(mattermostUserId, channelId) {
@@ -211,6 +230,7 @@ interface GcsFile {
   ): Promise<unknown>;
   getMetadata(): Promise<unknown[]>;
   createReadStream(): Readable;
+  delete(options: { ignoreNotFound: true }): Promise<unknown>;
 }
 
 interface GcsBucket {
@@ -298,6 +318,16 @@ export function createGcsArtifactBlobStore(bucket: GcsBucket): ArtifactBlobStore
         throw new Error("invalid artifact object metadata");
       }
       return { stream: file.createReadStream(), byteLength, mediaType: output.mediaType };
+    },
+    async delete(output) {
+      const expected = outputPath({
+        artifactId: output.objectPath.split("/")[1] ?? "",
+        attempt: Number(output.objectPath.split("/")[3]),
+        kind: output.kind,
+        ...(output.kind === "page" ? { pageNumber: output.pageNumber } : {}),
+      });
+      if (expected.path !== output.objectPath) throw new Error("invalid artifact object path");
+      await bucket.file(output.objectPath).delete({ ignoreNotFound: true });
     },
   };
 }

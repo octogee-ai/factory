@@ -43,6 +43,7 @@ import {
   readOpenclawConfig,
   coachWiredInParsedConfig,
 } from "@octogee/core/local-coach-wired";
+import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 
 // The operator pod holds no platform credentials, so the bridge's coach reconcile
 // derives the mounted set locally (PVC + openclaw config) instead of reading
@@ -504,25 +505,35 @@ if (!admin.apps.length) {
 }
 const db = admin.firestore();
 
-export async function verifyAuth(req: http.IncomingMessage): Promise<string | null> {
+function proxyAuthToken(req: http.IncomingMessage): string | null {
   const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith("Bearer ") || authHeader?.startsWith("BEARER ")) {
+    return authHeader.slice(7);
+  }
+  return authHeader?.startsWith("Token ") ? authHeader.slice(6) : null;
+}
 
-  let token: string | null = null;
-  if (authHeader?.startsWith("Bearer ")) token = authHeader.slice(7);
-  else if (authHeader?.startsWith("BEARER ")) token = authHeader.slice(7);
-  else if (authHeader?.startsWith("Token ")) token = authHeader.slice(6);
+function authFailureMessage(error: unknown): string {
+  if (typeof error === "object" && error !== null) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string" && code.length > 0) return code;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
 
+export async function verifyAuth(req: http.IncomingMessage): Promise<string | null> {
+  const token = proxyAuthToken(req);
   if (!token) return null;
 
   try {
-    const decoded = await admin.auth().verifyIdToken(token);
-    return decoded.uid;
-  } catch (e) {
-    const code =
-      typeof e === 'object' && e !== null
-        ? (e as { code?: string }).code
-        : undefined;
-    console.error(`[proxy] auth failed: ${code || (e instanceof Error ? e.message : String(e))}`);
+    const decoded = await admin.auth().verifyIdToken(token, true);
+    const userSnap = await db.collection("users").doc(decoded.uid).get();
+    const userData = userSnap.exists ? userSnap.data() : undefined;
+    return userData && accountAllowsInteractiveAccess(userData)
+      ? decoded.uid
+      : null;
+  } catch (error) {
+    console.error(`[proxy] auth failed: ${authFailureMessage(error)}`);
     return null;
   }
 }

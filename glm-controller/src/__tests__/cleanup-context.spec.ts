@@ -16,6 +16,9 @@ interface DocRef {
 interface CollectionRef {
   doc: (id: string) => DocRef;
   get: () => Promise<{ docs: Array<DocSnap & { id: string; data: () => unknown }> }>;
+  where: (field: string, op: "==", value: unknown) => {
+    get: () => Promise<{ docs: Array<DocSnap & { id: string; data: () => unknown }> }>;
+  };
 }
 
 interface DbStub {
@@ -52,6 +55,23 @@ function buildDb(initialDocs: Record<string, Record<string, unknown> | undefined
             }));
           return { docs: matches as Array<DocSnap & { id: string; data: () => unknown }> };
         },
+        where: (field: string, _op: "==", value: unknown) => ({
+          get: async () => {
+            const prefix = `${path}/`;
+            const matches = Object.entries(initialDocs)
+              .filter(([key, data]) =>
+                data !== undefined &&
+                key.startsWith(prefix) &&
+                !key.slice(prefix.length).includes("/") &&
+                data[field] === value)
+              .map(([key, data]) => ({
+                id: key.slice(prefix.length),
+                exists: true,
+                data: () => data,
+              }));
+            return { docs: matches as Array<DocSnap & { id: string; data: () => unknown }> };
+          },
+        }),
       };
     },
     doc(path: string): DocRef {
@@ -88,6 +108,18 @@ describe("loadCustomerCleanupContext", () => {
     );
     expect(ctx?.slug).toBe("alice-canon");
     expect(ctx?.currentGatewayId).toBe("gw-test");
+    expect(ctx?.email).toBe("alice@example.com");
+  });
+
+  it("normalizes the captured email used to erase email-indexed PII", async () => {
+    const db = buildDb({
+      "users/uid-alice": { username: "alice", email: " Alice@Example.COM " },
+    });
+    const ctx = await loadCustomerCleanupContext(
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      "uid-alice",
+    );
+    expect(ctx?.email).toBe("alice@example.com");
   });
 
   it("falls back to username when openclaw.slug is missing", async () => {
@@ -233,5 +265,108 @@ const db = buildDb({
       currentGatewayId: "gw-test",
       giteaOrg: "alice",
     });
+  });
+
+  it("captures every persisted model credential secret name before deletion", async () => {
+    const db = buildDb({
+      "users/uid-alice": { username: "alice" },
+      "users/uid-alice/system/config": {
+        modelCredential: { secretName: "byok-alice-openai-compatible" },
+      },
+      "users/uid-alice/integrations/byosub": {
+        providers: {
+          openai: { provider: "openai", connected: true, status: "connected" },
+          anthropic: { provider: "anthropic", connected: true, status: "connected" },
+        },
+      },
+    });
+    const ctx = await loadCustomerCleanupContext(
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      "uid-alice",
+    );
+    expect(ctx?.credentialSecretNames).toEqual([
+      "byok-alice-openai-compatible",
+      "byosub-uid-alice-anthropic",
+      "byosub-uid-alice-openai",
+    ]);
+  });
+
+  it("captures deterministic BYOS secret names even when a callback has not persisted its integration", async () => {
+    const db = buildDb({ "users/uid-alice": { username: "alice" } });
+
+    const ctx = await loadCustomerCleanupContext(
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      "uid-alice",
+    );
+
+    expect(ctx?.credentialSecretNames).toEqual([
+      "byosub-uid-alice-anthropic",
+      "byosub-uid-alice-openai",
+    ]);
+  });
+
+  it("captures every project-agent Mattermost user and credential document before suspension", async () => {
+    const db = buildDb({
+      "users/uid-alice": { username: "alice" },
+      "users/uid-alice/secrets/projectAgentMattermost-orbit": {
+        mmUserId: "mm-project-orbit",
+        personalToken: "secret-orbit",
+      },
+      "users/uid-alice/secrets/projectAgentMattermost-labs": {
+        mmUserId: "mm-project-labs",
+        personalToken: "secret-labs",
+      },
+      "users/uid-alice/secrets/coachMattermost": {
+        coachMmUserId: "mm-coach",
+      },
+    });
+    const ctx = await loadCustomerCleanupContext(
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      "uid-alice",
+    );
+    expect(ctx?.projectAgentMmUserIds).toEqual(["mm-project-labs", "mm-project-orbit"]);
+    expect(ctx?.projectAgentCredentialDocPaths).toEqual([
+      "users/uid-alice/secrets/projectAgentMattermost-labs",
+      "users/uid-alice/secrets/projectAgentMattermost-orbit",
+    ]);
+  });
+
+  it("captures artifact object IDs owned by the user or their workspace", async () => {
+    const db = buildDb({
+      "users/uid-alice": { username: "alice" },
+      "chatArtifactJobs/aaa": {
+        artifactId: "a".repeat(64),
+        ownerUid: "uid-alice",
+        workspaceSlug: "other",
+      },
+      "chatArtifactJobs/bbb": {
+        artifactId: "b".repeat(64),
+        ownerUid: "uid-collaborator",
+        workspaceSlug: "alice",
+      },
+      "chatArtifactJobs/ccc": {
+        artifactId: "c".repeat(64),
+        ownerUid: "uid-other",
+        workspaceSlug: "other",
+      },
+    });
+    const ctx = await loadCustomerCleanupContext(
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      "uid-alice",
+    );
+    expect(ctx?.chatArtifactIds).toEqual(["a".repeat(64), "b".repeat(64)]);
+  });
+
+  it("fails context capture when a connected credential leaf is malformed", async () => {
+    const db = buildDb({
+      "users/uid-alice": { username: "alice" },
+      "users/uid-alice/integrations/byosub": {
+        providers: { openai: { connected: true, status: "connected" } },
+      },
+    });
+    await expect(loadCustomerCleanupContext(
+      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      "uid-alice",
+    )).rejects.toThrow(/malformed provider leaf/);
   });
 });

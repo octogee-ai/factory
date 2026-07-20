@@ -42,7 +42,7 @@ export interface FleetRouterDeps {
         limit: number;
     }) => Promise<unknown[]>;
     readGatewayPodDiagnostics?: (gatewayId: string) => Promise<GatewayPodDiagnostics>;
-    deleteAuthUserTolerantOfMissing: (uid: string) => Promise<void>;
+    suspendAuthUser: (uid: string) => Promise<void>;
     revokeConnectorGrantsForUser: (uid: string) => Promise<void>;
     dedicatedGatewayIdleDefaultMs?: number;
     dedicatedGatewayIdleSweepMs?: number;

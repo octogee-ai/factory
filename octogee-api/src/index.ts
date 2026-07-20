@@ -42,6 +42,7 @@ import {
   createMattermostArtifactAccess,
   createMattermostArtifactSourceReader,
 } from "./lib/chat-artifact-adapters.js";
+import { resolveActiveArtifactWorkspaceSlug } from "./lib/chat-artifact-workspace.js";
 import { db, storage } from "../../gateway-edge/src/lib/db.js";
 import { requireAuth, requireAuthenticatedUid } from "../../gateway-edge/src/middleware/auth.js";
 import { createKubernetesTokenReviewer } from "./lib/token-review.js";
@@ -98,12 +99,18 @@ function defaultChatArtifactRoutes() {
       blobs ??= createGcsArtifactBlobStore(storage.bucket());
       return blobs.open(output);
     },
+    delete(output: Parameters<ReturnType<typeof createGcsArtifactBlobStore>["delete"]>[0]) {
+      blobs ??= createGcsArtifactBlobStore(storage.bucket());
+      return blobs.delete(output);
+    },
   };
   let access: ReturnType<typeof createMattermostArtifactAccess> | undefined;
   let source: ReturnType<typeof createMattermostArtifactSourceReader> | undefined;
   const mattermostOptions = () => ({
     mattermostBaseUrl: process.env.MM_INTERNAL_URL ?? "",
     adminToken: process.env.MM_ADMIN_TOKEN ?? "",
+    resolveWorkspaceSlugForTeamId: (teamId: string) =>
+      resolveActiveArtifactWorkspaceSlug(db, teamId),
   });
   return {
     public: createChatArtifactRoutes({

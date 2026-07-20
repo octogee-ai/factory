@@ -21,6 +21,14 @@ function buildApp() {
   return app;
 }
 
+async function getActiveIdToken(uid: string): Promise<string> {
+  await db.doc(`users/${uid}`).set(
+    { accountLifecycle: { status: "active" } },
+    { merge: true },
+  );
+  return getIdTokenForUid(uid);
+}
+
 async function seedDedicatedGateway({
   gatewayId,
   gatewayClass,
@@ -123,7 +131,7 @@ describe("POST /api/openclaw/ticket — real Firebase Auth + Firestore (emulator
   });
 
   it("returns a ticket + proxy URL on a valid Firebase token", async () => {
-    const token = await getIdTokenForUid("caller-uid");
+    const token = await getActiveIdToken("caller-uid");
     const res = await request(buildApp())
       .post("/api/openclaw/ticket")
       .set("Authorization", `Bearer ${token}`);
@@ -133,7 +141,7 @@ describe("POST /api/openclaw/ticket — real Firebase Auth + Firestore (emulator
   });
 
   it("writes an ocTickets/{uuid} doc with uid + ~30s expiry — visible in real Firestore", async () => {
-    const token = await getIdTokenForUid("caller-uid");
+    const token = await getActiveIdToken("caller-uid");
     const before = Date.now();
     const res = await request(buildApp())
       .post("/api/openclaw/ticket")
@@ -152,7 +160,7 @@ describe("POST /api/openclaw/ticket — real Firebase Auth + Firestore (emulator
   });
 
   it("issues distinct tickets across calls", async () => {
-    const token = await getIdTokenForUid("caller-uid");
+    const token = await getActiveIdToken("caller-uid");
     const a = await request(buildApp())
       .post("/api/openclaw/ticket")
       .set("Authorization", `Bearer ${token}`);
@@ -166,7 +174,7 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
     await db.doc("users/caller-uid").set({
       provisioning: { openclaw: { gatewayId: "gw-bender" } },
     });
-    const token = await getIdTokenForUid("caller-uid");
+    const token = await getActiveIdToken("caller-uid");
     const res = await request(buildApp())
       .post("/api/openclaw/ticket")
       .set("Authorization", `Bearer ${token}`);
@@ -176,7 +184,7 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
 
   it("returns gatewayId='' when the user doc has no openclaw provisioning (legacy / pre-provisioning fallback to bare /api path)", async () => {
     
-    const token = await getIdTokenForUid("no-provisioning-uid");
+    const token = await getActiveIdToken("no-provisioning-uid");
     const res = await request(buildApp())
       .post("/api/openclaw/ticket")
       .set("Authorization", `Bearer ${token}`);
@@ -196,7 +204,7 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
       heartbeatStatus: "ready",
     });
 
-    const token = await getIdTokenForUid("caller-uid");
+    const token = await getActiveIdToken("caller-uid");
     const res = await request(buildApp())
       .post("/api/openclaw/ticket")
       .set("Authorization", `Bearer ${token}`);
@@ -240,7 +248,7 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
       heartbeatStatus: "unknown",
     });
 
-    const token = await getIdTokenForUid("caller-uid");
+    const token = await getActiveIdToken("caller-uid");
     const res = await request(buildApp())
       .post("/api/openclaw/ticket")
       .set("Authorization", `Bearer ${token}`);
@@ -272,7 +280,7 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
       heartbeatStatus: "ready",
     });
 
-    const token = await getIdTokenForUid("caller-uid");
+    const token = await getActiveIdToken("caller-uid");
     const res = await request(buildApp())
       .post("/api/openclaw/ticket")
       .set("Authorization", `Bearer ${token}`);

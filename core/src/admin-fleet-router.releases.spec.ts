@@ -219,7 +219,7 @@ function mkApp(
       ? vi.fn((input) => opts.provisionGatewayAuthSecret!(input))
       : vi.fn(async () => ({})),
     listGatewayBuilds: vi.fn(async () => []),
-    deleteAuthUserTolerantOfMissing: vi.fn(async () => undefined),
+    suspendAuthUser: vi.fn(async () => undefined),
     revokeConnectorGrantsForUser: vi.fn(async () => undefined),
   });
   return { app, store };

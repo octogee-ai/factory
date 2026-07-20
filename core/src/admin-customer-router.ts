@@ -23,9 +23,63 @@ import {
   usageWindowStartMs,
   weekWindowStartMs,
 } from "@octogee/shared/types/model-broker-usage";
+import {
+  ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION,
+  anonymousOperationalEnvironment,
+  anonymousOperationalGatewayClass,
+  anonymousOperationalPlanTier,
+  isAnonymousOperationalModelDimension,
+} from "@octogee/shared/types/account-lifecycle";
 
 function financeNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function operationalNumber(value: unknown): number {
+  return Math.max(0, financeNumber(value));
+}
+
+function archiveMonth(value: unknown): string | null {
+  return typeof value === "string" && /^\d{4}-\d{2}$/.test(value) ? value : null;
+}
+
+function projectAnonymousArchive(id: string, data: Record<string, unknown>) {
+  const rawTotals = data.totals && typeof data.totals === "object" && !Array.isArray(data.totals)
+    ? data.totals as Record<string, unknown>
+    : {};
+  const models = Array.isArray(data.models)
+    ? data.models.flatMap((raw) => {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+        const model = raw as Record<string, unknown>;
+        if (!isAnonymousOperationalModelDimension(model.provider, model.model)) return [];
+        return [{
+          provider: model.provider,
+          model: model.model,
+          costUsd: operationalNumber(model.costUsd),
+          totalTokens: operationalNumber(model.totalTokens),
+          requestCount: operationalNumber(model.requestCount),
+        }];
+      })
+    : [];
+  return {
+    id,
+    schemaVersion: data.schemaVersion === 1 ? 1 : 0,
+    archivedAt: operationalNumber(data.archivedAt),
+    accountCreatedMonth: archiveMonth(data.accountCreatedMonth),
+    deletionRequestedMonth: archiveMonth(data.deletionRequestedMonth),
+    environment: anonymousOperationalEnvironment(data.environment),
+    planTier: anonymousOperationalPlanTier(data.planTier),
+    gatewayClass: anonymousOperationalGatewayClass(data.gatewayClass),
+    totals: {
+      costUsd: operationalNumber(rawTotals.costUsd),
+      totalTokens: operationalNumber(rawTotals.totalTokens),
+      requestCount: operationalNumber(rawTotals.requestCount),
+    },
+    models,
+    cleanupOutcomeCodes: Array.isArray(data.cleanupOutcomeCodes)
+      ? data.cleanupOutcomeCodes.filter((value) => value === "verified_erasure")
+      : [],
+  };
 }
 
 // Admin USD figures come exclusively from the broker ledger; one getAll pulls
@@ -372,6 +426,30 @@ export function addAdminCustomerRoutes(
 ): Router {
   const { db, logger, FieldValue } = deps;
 
+  router.get(
+    "/customer-archives",
+    async (_req: Request, res: Response, next: NextFunction) => {
+      try {
+        const snap = await db
+          .collection(ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION)
+          .orderBy("archivedAt", "desc")
+          .get();
+        const archives = snap.docs.map((doc) =>
+          projectAnonymousArchive(doc.id, doc.data() as Record<string, unknown>));
+        const summary = archives.reduce(
+          (total, archive) => ({
+            archiveCount: total.archiveCount + 1,
+            totalCostUsd: total.totalCostUsd + archive.totals.costUsd,
+            totalTokens: total.totalTokens + archive.totals.totalTokens,
+            requestCount: total.requestCount + archive.totals.requestCount,
+          }),
+          { archiveCount: 0, totalCostUsd: 0, totalTokens: 0, requestCount: 0 },
+        );
+        res.json({ archives, summary, generatedAt: new Date().toISOString() });
+      } catch (e) { next(e); }
+    },
+  );
+
 router.get(
     "/customers/:uid/broker-diagnostics",
     async (req: Request, res: Response, next: NextFunction) => {
@@ -598,6 +676,7 @@ router.get(
 
         res.json({
           summary,
+          accountLifecycle: d.accountLifecycle ?? { status: "active" },
           subscription: {
             status: subscription.status || "none",
             stripeCustomerId: subscription.stripeCustomerId || null,

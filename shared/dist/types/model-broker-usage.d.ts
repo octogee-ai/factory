@@ -5,6 +5,8 @@ export declare const MODEL_BROKER_WEEK_WINDOWS_COLLECTION = "modelBrokerWeekWind
 export declare const MODEL_BROKER_RATE_WINDOWS_COLLECTION = "modelBrokerRateWindows";
 export declare const MODEL_BROKER_CREDITS_COLLECTION = "modelBrokerCredits";
 export declare const MODEL_BROKER_CREDIT_TOPUPS_COLLECTION = "modelBrokerCreditTopups";
+export declare const MODEL_BROKER_TOKENS_COLLECTION = "modelBrokerTokens";
+export declare const MODEL_BROKER_GATEWAY_POINTERS_COLLECTION = "modelBrokerGatewayTokens";
 export type ModelBrokerCreditTopUpSource = "checkout" | "auto_top_up";
 export interface ModelBrokerCreditAutoTopUp {
     enabled: boolean;

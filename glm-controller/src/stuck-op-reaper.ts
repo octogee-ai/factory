@@ -1,6 +1,6 @@
 import type { Firestore } from "firebase-admin/firestore";
 import { GLM_OPERATIONS_COLLECTION, type Operation } from "@octogee/shared/types/glm";
-import { operationNeedsDurableCustomerMigrationV2Resume } from "./operation-retry.js";
+import { operationNeedsDurableRestartResume } from "./operation-retry.js";
 
 export interface StuckOpReaperDeps {
   db: Firestore;
@@ -38,7 +38,7 @@ export async function runStuckOpReaperTick(
   for (const doc of snap.docs) {
     const data = doc.data() as Operation | undefined;
     if (!data) continue;
-    if (operationNeedsDurableCustomerMigrationV2Resume(data)) continue;
+    if (operationNeedsDurableRestartResume(data)) continue;
 
     // Liveness = the most recent of (last step progress, claim, creation). A long or
     // resumed roll that is still stepping keeps lastProgressAt fresh and is NOT reaped;

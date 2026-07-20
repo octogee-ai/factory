@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 interface FsCall {
   collection: string;
-  op: "add" | "doc.delete" | "doc.update";
+  op: "add" | "doc.delete" | "doc.update" | "batch.set" | "batch.update" | "batch.delete";
   docId?: string;
   data?: Record<string, unknown>;
 }
@@ -11,16 +11,21 @@ interface FsCall {
 const fsCalls: FsCall[] = [];
 let usersDocs: Record<string, Record<string, unknown>> = {};
 let glmOperationsDocs: Array<{ id: string; data: Record<string, unknown> }> = [];
-const authDeletedUids: string[] = [];
+const authDisabledUids: string[] = [];
+const authRevokedUids: string[] = [];
 let authNextError: Error | null = null;
 const loggedWarnings: string[] = [];
 
 vi.mock("../lib/db", () => {
+  let autoId = 0;
+  let transactionTail = Promise.resolve();
   function whereChain(
     collectionName: string,
     filters: Array<{ field: string; value: unknown }> = [],
   ) {
     return {
+      __collection: collectionName,
+      __filters: filters,
       where: (field: string, _op: string, value: unknown) =>
         whereChain(collectionName, [...filters, { field, value }]),
       orderBy: () => whereChain(collectionName, filters),
@@ -54,8 +59,11 @@ vi.mock("../lib/db", () => {
         if (name === "glmOperations") glmOperationsDocs.unshift({ id, data });
         return { id };
       },
-      doc: (docId: string) => ({
+      doc: (requestedId?: string) => {
+        const docId = requestedId ?? `auto-${++autoId}`;
+        return {
         id: docId,
+        __collection: name,
         get: async () => {
           if (name === "users") {
             const data = usersDocs[docId];
@@ -71,7 +79,8 @@ vi.mock("../lib/db", () => {
         update: async (data: Record<string, unknown>) => {
           fsCalls.push({ collection: name, op: "doc.update", docId, data });
         },
-      }),
+        };
+      },
       where: (field: string, op: string, value: unknown) =>
         whereChain(name, [{ field, value }]),
       orderBy: () => whereChain(name),
@@ -81,22 +90,77 @@ vi.mock("../lib/db", () => {
   }
 
   return {
-    db: { collection, doc: () => ({}), getAll: async () => [] },
-    FieldValue: { serverTimestamp: () => "now" },
+    db: {
+      collection,
+      collectionGroup: (name: string) => whereChain(name),
+      doc: () => ({}),
+      getAll: async () => [],
+      runTransaction: <T>(callback: (transaction: {
+        get: (target: any) => Promise<any>;
+        set: (target: any, data: Record<string, unknown>) => void;
+        update: (target: any, data: Record<string, unknown>) => void;
+        delete: (target: any) => void;
+      }) => Promise<T>) => {
+        const transaction = {
+          get: async (target: any) => {
+            if (target.__collection === "users" && typeof target.id === "string") {
+              const data = usersDocs[target.id];
+              return { exists: data !== undefined, data: () => data };
+            }
+            if (typeof target.get === "function") return target.get();
+            throw new Error("unexpected transaction read");
+          },
+          set: (ref: { id: string; __collection?: string }, data: Record<string, unknown>) => {
+            const collectionName = ref.__collection ?? "unknown";
+            fsCalls.push({ collection: collectionName, op: "batch.set", docId: ref.id, data });
+            if (collectionName === "glmOperations") {
+              glmOperationsDocs.unshift({ id: ref.id, data });
+            }
+          },
+          update: (ref: { id: string; __collection?: string }, data: Record<string, unknown>) => {
+            const collectionName = ref.__collection ?? "unknown";
+            fsCalls.push({ collection: collectionName, op: "batch.update", docId: ref.id, data });
+            if (collectionName === "users") {
+              usersDocs[ref.id] = { ...usersDocs[ref.id], ...data };
+            }
+          },
+          delete: (ref: { id: string; __collection?: string }) => {
+            fsCalls.push({ collection: ref.__collection ?? "unknown", op: "batch.delete", docId: ref.id });
+          },
+        };
+        const execution = transactionTail.then(() => callback(transaction));
+        transactionTail = execution.then(() => undefined, () => undefined);
+        return execution;
+      },
+      batch: () => ({
+        set: (ref: { id: string; __collection?: string }, data: Record<string, unknown>) => {
+          fsCalls.push({ collection: ref.__collection ?? "unknown", op: "batch.set", docId: ref.id, data });
+        },
+        update: (ref: { id: string; __collection?: string }, data: Record<string, unknown>) => {
+          fsCalls.push({ collection: ref.__collection ?? "unknown", op: "batch.update", docId: ref.id, data });
+        },
+        delete: (ref: { id: string; __collection?: string }) => {
+          fsCalls.push({ collection: ref.__collection ?? "unknown", op: "batch.delete", docId: ref.id });
+        },
+        commit: async () => undefined,
+      }),
+    },
+    FieldValue: { serverTimestamp: () => "now", delete: () => "delete" },
     Timestamp: { now: () => ({ toDate: () => new Date() }) },
   };
 });
 
 vi.mock("firebase-admin/auth", () => ({
   getAuth: () => ({
-    deleteUser: async (uid: string) => {
+    updateUser: async (uid: string) => {
       if (authNextError) {
         const e = authNextError;
         authNextError = null;
         throw e;
       }
-      authDeletedUids.push(uid);
+      authDisabledUids.push(uid);
     },
+    revokeRefreshTokens: async (uid: string) => { authRevokedUids.push(uid); },
   }),
 }));
 
@@ -134,7 +198,8 @@ beforeEach(() => {
   fsCalls.length = 0;
   usersDocs = {};
   glmOperationsDocs = [];
-  authDeletedUids.length = 0;
+  authDisabledUids.length = 0;
+  authRevokedUids.length = 0;
   authNextError = null;
   loggedWarnings.length = 0;
 });
@@ -146,13 +211,13 @@ describe("POST /api/admin/customer/:uid/delete — 404 + 409 paths", () => {
     expect(res.body.error).toMatch(/not found/i);
   });
 
-  it("409 when a deprovision-customer op is already pending for this uid", async () => {
+  it("409 when a suspension op is already pending for this uid", async () => {
     usersDocs["uid-alice"] = { username: "alice", email: "alice@example.com" };
     glmOperationsDocs = [
       {
         id: "op-existing",
         data: {
-          kind: "deprovision-customer",
+          kind: "suspend-customer",
           status: "pending",
           inputUid: "uid-alice",
           input: { uid: "uid-alice" },
@@ -165,10 +230,10 @@ describe("POST /api/admin/customer/:uid/delete — 404 + 409 paths", () => {
     expect(res.body.operationId).toBe("op-existing");
   });
 
-  it("409 when a deprovision-customer op is already running", async () => {
+  it("409 when an erasure op is already running", async () => {
     usersDocs["uid-alice"] = { username: "alice" };
     glmOperationsDocs = [
-      { id: "op-running", data: { kind: "deprovision-customer", status: "running", inputUid: "uid-alice", input: { uid: "uid-alice" } } },
+      { id: "op-running", data: { kind: "erase-customer", status: "running", inputUid: "uid-alice", input: { uid: "uid-alice" } } },
     ];
     const res = await request(buildApp()).post("/api/admin/customer/uid-alice/delete");
     expect(res.status).toBe(409);
@@ -176,7 +241,7 @@ describe("POST /api/admin/customer/:uid/delete — 404 + 409 paths", () => {
 });
 
 describe("POST /api/admin/customer/:uid/delete — has-slug branch", () => {
-  it("enqueues a deprovision-customer op with uid + slug, returns 202 + operationId + slug", async () => {
+  it("enqueues suspension and retained erasure operations, returning their durable ids", async () => {
     usersDocs["uid-alice"] = {
       username: "alice",
       email: "alice@example.com",
@@ -185,18 +250,18 @@ describe("POST /api/admin/customer/:uid/delete — has-slug branch", () => {
     const res = await request(buildApp()).post("/api/admin/customer/uid-alice/delete");
     expect(res.status).toBe(202);
     expect(res.body).toMatchObject({
-      status: "queued",
+      status: "deletion_scheduled",
       slug: "alice",
+      suspensionOperationId: expect.any(String),
+      erasureOperationId: expect.any(String),
     });
-    expect(res.body.operationId).toBeTruthy();
-    const opAdd = fsCalls.find((c) => c.collection === "glmOperations" && c.op === "add");
-    expect(opAdd?.data).toMatchObject({
-      kind: "deprovision-customer",
-      status: "pending",
-      createdBy: "admin-uid",
-      input: { uid: "uid-alice", slug: "alice" },
-      inputUid: "uid-alice",
-    });
+    const operationWrites = fsCalls.filter(
+      (call) => call.collection === "glmOperations" && call.op === "batch.set",
+    );
+    expect(operationWrites.map((call) => call.data)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "suspend-customer", inputUid: "uid-alice" }),
+      expect.objectContaining({ kind: "erase-customer", inputUid: "uid-alice" }),
+    ]));
   });
 
   it("uses provisioning.openclaw.slug as canonical when username is absent", async () => {
@@ -208,7 +273,8 @@ usersDocs["uid-alice"] = {
     expect(res.status).toBe(202);
     expect(res.body.slug).toBe("alice-via-onboarding");
     
-    expect(authDeletedUids).toEqual([]);
+    expect(authDisabledUids).toEqual(["uid-alice"]);
+    expect(authRevokedUids).toEqual(["uid-alice"]);
   });
 
   it("does NOT delete the user doc inline when slug is present (handler does that)", async () => {
@@ -217,28 +283,29 @@ usersDocs["uid-alice"] = {
       provisioning: { openclaw: { slug: "alice" } },
     };
     await request(buildApp()).post("/api/admin/customer/uid-alice/delete");
-    expect(authDeletedUids).toEqual([]);
+    expect(authDisabledUids).toEqual(["uid-alice"]);
     expect(fsCalls.find((c) => c.collection === "users" && c.op === "doc.delete")).toBeUndefined();
   });
 });
 
-describe("POST /api/admin/customer/:uid/delete — no-slug inline branch", () => {
-  it("deletes the Auth user + user doc inline, returns 200 + deleted-inline status", async () => {
+describe("POST /api/admin/customer/:uid/delete — no-slug lifecycle", () => {
+  it("schedules retention and suspends Auth without deleting identity inline", async () => {
     usersDocs["uid-bob"] = { email: "bob@example.com" };
     const res = await request(buildApp()).post("/api/admin/customer/uid-bob/delete");
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ status: "deleted-inline", uid: "uid-bob" });
-    expect(authDeletedUids).toEqual(["uid-bob"]);
-    expect(fsCalls.some((c) => c.collection === "users" && c.op === "doc.delete" && c.docId === "uid-bob")).toBe(true);
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({ status: "deletion_scheduled", slug: null });
+    expect(authDisabledUids).toEqual(["uid-bob"]);
+    expect(authRevokedUids).toEqual(["uid-bob"]);
+    expect(fsCalls.some((c) => c.collection === "users" && c.op === "doc.delete")).toBe(false);
   });
 
-  it("swallows auth user-not-found (matches on err.code, not message substring)", async () => {
+  it("treats an already-missing Auth account as an idempotent suspension success", async () => {
     usersDocs["uid-bob"] = { email: "bob@example.com" };
     const e = Object.assign(new Error("user not found"), { code: "auth/user-not-found" });
     authNextError = e;
     const res = await request(buildApp()).post("/api/admin/customer/uid-bob/delete");
-    expect(res.status).toBe(200);
-    expect(fsCalls.some((c) => c.collection === "users" && c.op === "doc.delete")).toBe(true);
+    expect(res.status).toBe(202);
+    expect(fsCalls.some((c) => c.collection === "glmOperations" && c.op === "batch.set")).toBe(true);
   });
 
   it("does NOT swallow other auth errors (e.g. quota) just because they mention 'user-not-found'", async () => {
@@ -251,27 +318,38 @@ describe("POST /api/admin/customer/:uid/delete — no-slug inline branch", () =>
     expect(res.status).toBe(500);
   });
 
-  it("does NOT enqueue a glmOperations op for the no-slug branch", async () => {
+  it("enqueues lifecycle operations even when provisioning never produced a slug", async () => {
     usersDocs["uid-bob"] = { email: "bob@example.com" };
     await request(buildApp()).post("/api/admin/customer/uid-bob/delete");
-    expect(fsCalls.some((c) => c.collection === "glmOperations" && c.op === "add")).toBe(false);
+    expect(fsCalls.filter((c) => c.collection === "glmOperations" && c.op === "batch.set")).toHaveLength(2);
   });
 });
 
-describe("POST /api/admin/customer/:uid/delete — Stripe stub", () => {
-  it("logs a WARN with stripe IDs when subscription.id is set", async () => {
+describe("POST /api/admin/customer/:uid/delete — Stripe cleanup context", () => {
+  it("persists Stripe ids for the suspension worker instead of logging a manual-cleanup warning", async () => {
     usersDocs["uid-alice"] = {
       username: "alice",
       email: "alice@example.com",
       provisioning: { openclaw: { slug: "alice" } },
-      subscription: { id: "sub_123", status: "active" },
-      stripeCustomerId: "cus_abc",
+      subscription: {
+        stripeSubscriptionId: "sub_personal",
+        stripeCustomerId: "cus_abc",
+        status: "active",
+      },
+      builderSubscription: {
+        stripeSubscriptionId: "sub_builder",
+        status: "active",
+      },
     };
     await request(buildApp()).post("/api/admin/customer/uid-alice/delete");
-    expect(loggedWarnings.length).toBe(1);
-    expect(loggedWarnings[0]).toMatch(/STRIPE NOT CANCELLED/);
-    expect(loggedWarnings[0]).toMatch(/cus_abc/);
-    expect(loggedWarnings[0]).toMatch(/sub_123/);
+    const job = fsCalls.find(
+      (call) => call.collection === "customerDeletionJobs" && call.op === "batch.set",
+    );
+    expect(job?.data).toMatchObject({
+      stripeCustomerIds: ["cus_abc"],
+      stripeSubscriptionIds: ["sub_personal", "sub_builder"],
+    });
+    expect(loggedWarnings).toEqual([]);
   });
 
   it("does NOT log when no stripe IDs are present", async () => {

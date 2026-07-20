@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { deleteAvatarObjects } from "../lib/customer-ops/avatars";
+import {
+  deleteAvatarObjects,
+  deleteCustomerStorageObjects,
+  verifyCustomerStorageErasure,
+} from "../lib/customer-ops/avatars";
 import { createGiteaCleanupClient, giteaUsername } from "../lib/customer-ops/gitea";
 import { createMmCleanupClient } from "../lib/customer-ops/mattermost";
 
@@ -150,6 +154,13 @@ describe("createMmCleanupClient", () => {
     await expect(client.destroyUser("u1")).rejects.toThrow(/500.*down/);
   });
 
+  it("verifies a user is gone only when Mattermost returns 404", async () => {
+    const missing = setup([{ status: 404 }]).client;
+    const present = setup([{ status: 200, body: JSON.stringify({ id: "u1" }) }]).client;
+    expect(await missing.userExists("u1")).toBe(false);
+    expect(await present.userExists("u1")).toBe(true);
+  });
+
   it("revokes only the matching PATs for a resolved bot username", async () => {
     const { client, calls } = setup([
       { status: 200, body: JSON.stringify({ id: "mac-user" }) },
@@ -205,5 +216,47 @@ describe("deleteAvatarObjects", () => {
     const deleteFiles = vi.fn(async () => undefined);
     await deleteAvatarObjects({ deleteFiles }, "uid-alice");
     expect(deleteFiles).toHaveBeenCalledWith({ prefix: "avatars/uid-alice/" });
+  });
+});
+
+describe("deleteCustomerStorageObjects", () => {
+  it("deletes avatars, post covers, and the complete workspace/project blob tree", async () => {
+    const deleteFiles = vi.fn(async () => undefined);
+    await deleteCustomerStorageObjects(
+      { deleteFiles },
+      "uid-alice",
+      "alice",
+      ["a".repeat(64)],
+    );
+    expect(deleteFiles.mock.calls.map(([arg]) => arg)).toEqual([
+      { prefix: "avatars/uid-alice/" },
+      { prefix: "post-covers/uid-alice/" },
+      { prefix: "customers/alice/" },
+      { prefix: `chat-artifacts/${"a".repeat(64)}/` },
+    ]);
+  });
+
+  it("skips only the slug prefix for a pre-provisioning account", async () => {
+    const deleteFiles = vi.fn(async () => undefined);
+    await deleteCustomerStorageObjects({ deleteFiles }, "uid-lite", "", []);
+    expect(deleteFiles.mock.calls.map(([arg]) => arg)).toEqual([
+      { prefix: "avatars/uid-lite/" },
+      { prefix: "post-covers/uid-lite/" },
+    ]);
+  });
+
+  it("reports any object that remains under an identifying customer prefix", async () => {
+    const getFiles = vi.fn(async ({ prefix }: { prefix: string }) => [
+      prefix === "post-covers/uid-alice/" ? [{ name: `${prefix}cover.jpg` }] : [],
+    ]);
+    await expect(
+      verifyCustomerStorageErasure(
+        { getFiles },
+        "uid-alice",
+        "alice",
+        ["a".repeat(64)],
+      ),
+    ).resolves.toEqual(["gcs/post-covers/uid-alice/cover.jpg"]);
+    expect(getFiles).toHaveBeenCalledTimes(4);
   });
 });

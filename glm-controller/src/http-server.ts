@@ -80,7 +80,7 @@ export interface HttpServerDeps {
     limit: number;
   }) => Promise<unknown[]>;
   readGatewayPodDiagnostics?: (gatewayId: string) => Promise<GatewayPodDiagnostics>;
-  deleteAuthUserTolerantOfMissing: (uid: string) => Promise<void>;
+  suspendAuthUser: (uid: string) => Promise<void>;
   revokeConnectorGrantsForUser: (uid: string) => Promise<void>;
   dedicatedGatewayIdleDefaultMs?: number;
   dedicatedGatewayIdleSweepMs?: number;
@@ -215,7 +215,7 @@ export function createHttpServer(deps: HttpServerDeps): Express {
     provisionGatewayAuthSecret: deps.provisionGatewayAuthSecret,
     listGatewayBuilds: deps.listGatewayBuilds,
     readGatewayPodDiagnostics: deps.readGatewayPodDiagnostics,
-    deleteAuthUserTolerantOfMissing: deps.deleteAuthUserTolerantOfMissing,
+    suspendAuthUser: deps.suspendAuthUser,
     revokeConnectorGrantsForUser: deps.revokeConnectorGrantsForUser,
     dedicatedGatewayIdleDefaultMs: deps.dedicatedGatewayIdleDefaultMs,
     dedicatedGatewayIdleSweepMs: deps.dedicatedGatewayIdleSweepMs,

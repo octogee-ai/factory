@@ -4,6 +4,7 @@ import { nukeUserCloudSide, type NukeCloudCtx, type NukeCloudDeps } from "../lib
 function mkCtx(overrides: Partial<NukeCloudCtx> = {}): NukeCloudCtx {
   return {
     uid: "uid-alice",
+    currentOperationId: "erase-1",
     slug: "alice",
     email: "alice@example.com",
     giteaOrg: "alice",
@@ -13,6 +14,12 @@ function mkCtx(overrides: Partial<NukeCloudCtx> = {}): NukeCloudCtx {
     mmUserId: "mm-u-1",
     mmCoachUserId: "mm-coach-1",
     adminChannelId: "mm-c-admin",
+    credentialSecretNames: [],
+    projectAgentMmUserIds: ["mm-project-1", "mm-project-2"],
+    projectAgentCredentialDocPaths: [
+      "users/uid-alice/secrets/projectAgentMattermost-blog",
+    ],
+    chatArtifactIds: ["a".repeat(64)],
     ...overrides,
   };
 }
@@ -29,9 +36,11 @@ function mkDeps(overrides: Partial<NukeCloudDeps> = {}): NukeCloudDeps {
       destroyChannel: vi.fn(async () => undefined),
       destroyTeam: vi.fn(async () => undefined),
       getUserChannels: vi.fn(async () => ["mm-c-1", "mm-c-2"]),
+      userExists: vi.fn(async () => false),
     },
     nukeUserFirestore: vi.fn(async () => undefined),
-    deleteAvatar: vi.fn(async () => undefined),
+    deleteCustomerStorage: vi.fn(async () => undefined),
+    deleteCredentialSecrets: vi.fn(async () => undefined),
     deleteAuthUser: vi.fn(async () => undefined),
     log: vi.fn(),
     ...overrides,
@@ -39,15 +48,16 @@ function mkDeps(overrides: Partial<NukeCloudDeps> = {}): NukeCloudDeps {
 }
 
 describe("nukeUserCloudSide — happy path", () => {
-  it("runs all six steps and reports each as ok", async () => {
+  it("runs all seven erasure steps and reports each as ok", async () => {
     const deps = mkDeps();
     const results = await nukeUserCloudSide(mkCtx(), deps);
     expect(results.map((r) => `${r.key}:${r.ok}`)).toEqual([
       "gitea:true",
       "mattermost:true",
-      "firestore:true",
       "storage:true",
       "hosting:true",
+      "credentials:true",
+      "firestore:true",
       "auth:true",
     ]);
     
@@ -73,6 +83,8 @@ describe("nukeUserCloudSide — happy path", () => {
     expect(deps.mattermost.destroyChannel).toHaveBeenCalledWith("mm-c-admin");
     expect(deps.mattermost.destroyUser).toHaveBeenCalledWith("mm-u-1");
     expect(deps.mattermost.destroyUser).toHaveBeenCalledWith("mm-coach-1");
+    expect(deps.mattermost.destroyUser).toHaveBeenCalledWith("mm-project-1");
+    expect(deps.mattermost.destroyUser).toHaveBeenCalledWith("mm-project-2");
     expect(deps.mattermost.destroyTeam).toHaveBeenCalledWith("team-1");
   });
 
@@ -84,12 +96,23 @@ describe("nukeUserCloudSide — happy path", () => {
         mmUserId: null,
         mmCoachUserId: null,
         adminChannelId: null,
+        projectAgentMmUserIds: [],
       }),
       deps,
     );
     expect(deps.mattermost.destroyUser).not.toHaveBeenCalled();
     expect(deps.mattermost.destroyTeam).not.toHaveBeenCalled();
     expect(deps.mattermost.destroyChannel).not.toHaveBeenCalled();
+  });
+
+  it("permanently deletes a known Mattermost user even when the workspace team is already gone", async () => {
+    const deps = mkDeps();
+    await nukeUserCloudSide(
+      mkCtx({ workspaceTeamId: null, mmUserId: "mm-u-orphan" }),
+      deps,
+    );
+    expect(deps.mattermost.getUserChannels).not.toHaveBeenCalled();
+    expect(deps.mattermost.destroyUser).toHaveBeenCalledWith("mm-u-orphan");
   });
 });
 
@@ -109,6 +132,11 @@ describe("nukeUserCloudSide — partial failure", () => {
     expect(gitea?.error).toMatch(/gitea down/);
     
     expect(deps.nukeUserFirestore).toHaveBeenCalled();
+    expect(deps.deleteAuthUser).not.toHaveBeenCalled();
+    expect(results.find((r) => r.key === "auth")).toMatchObject({
+      ok: true,
+      skipped: true,
+    });
   });
 
   it("auth step error doesn't block the orchestrator from completing", async () => {
@@ -119,7 +147,7 @@ describe("nukeUserCloudSide — partial failure", () => {
     });
     const results = await nukeUserCloudSide(mkCtx(), deps);
     expect(results.find((r) => r.key === "auth")?.ok).toBe(false);
-    expect(results).toHaveLength(6);
+    expect(results).toHaveLength(7);
   });
 });
 
@@ -193,6 +221,28 @@ describe("nukeUserCloudSide — firestore step", () => {
   it("passes uid AND slug so the workspace + agent docs get deleted, not just the user subtree", async () => {
     const deps = mkDeps();
     await nukeUserCloudSide(mkCtx(), deps);
-    expect(deps.nukeUserFirestore).toHaveBeenCalledWith("uid-alice", "alice");
+    expect(deps.nukeUserFirestore).toHaveBeenCalledWith(
+      "uid-alice",
+      "alice",
+      "alice@example.com",
+      "erase-1",
+    );
+  });
+
+  it("deletes all customer storage prefixes and credential secrets before Firestore", async () => {
+    const order: string[] = [];
+    const deps = mkDeps({
+      deleteCustomerStorage: vi.fn(async () => { order.push("storage"); }),
+      deleteCredentialSecrets: vi.fn(async () => { order.push("credentials"); }),
+      nukeUserFirestore: vi.fn(async () => { order.push("firestore"); }),
+    });
+    await nukeUserCloudSide(mkCtx({ credentialSecretNames: ["byosub-1"] }), deps);
+    expect(deps.deleteCustomerStorage).toHaveBeenCalledWith(
+      "uid-alice",
+      "alice",
+      ["a".repeat(64)],
+    );
+    expect(deps.deleteCredentialSecrets).toHaveBeenCalledWith(["byosub-1"]);
+    expect(order).toEqual(["storage", "credentials", "firestore"]);
   });
 });

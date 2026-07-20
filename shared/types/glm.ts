@@ -328,7 +328,9 @@ export type OperationKind =
   | "restart-gateway"
   | "recycle-gateway"
   | "rollout"
-  | "deprovision-customer";
+  | "deprovision-customer"
+  | "suspend-customer"
+  | "erase-customer";
 
 export type OperationStatus =
   | "pending"

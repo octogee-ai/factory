@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeAll, beforeEach, afterEach } from 'vitest';
+import admin from 'firebase-admin';
 import { getIdTokenForUid, requireEmulator, resetEmulator } from "@octogee/test-helpers/firestore-emulator";
 
 process.env.NODE_ENV = 'test';
@@ -44,6 +45,7 @@ describe('chat-proxy helper coverage', () => {
   });
 
   it('accepts Bearer and BEARER tokens, rejects missing auth', async () => {
+    await admin.firestore().doc('users/user-1').set({ accountLifecycle: { status: 'active' } });
     const idToken = await getIdTokenForUid('user-1');
     await expect(
       verifyAuth({ headers: { authorization: `Bearer ${idToken}` } } as never),
@@ -52,6 +54,16 @@ describe('chat-proxy helper coverage', () => {
       verifyAuth({ headers: { authorization: `BEARER ${idToken}` } } as never),
     ).resolves.toBe('user-1');
     await expect(verifyAuth({ headers: {} } as never)).resolves.toBeNull();
+  });
+
+  it('rejects a deletion-scheduled user even with a valid unexpired token', async () => {
+    await admin.firestore().doc('users/user-1').set({
+      accountLifecycle: { status: 'deletion_scheduled' },
+    });
+    const idToken = await getIdTokenForUid('user-1');
+    await expect(
+      verifyAuth({ headers: { authorization: `Bearer ${idToken}` } } as never),
+    ).resolves.toBeNull();
   });
 
   it('rejects invalid auth tokens', async () => {

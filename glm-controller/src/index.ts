@@ -11,6 +11,8 @@ import {
   GLM_OPERATIONS_COLLECTION,
   operatorGatewayServiceAccountName,
   resolveGatewayClass,
+  isGatewayClass,
+  isGatewayProfile,
   type HelmInstancesMap,
   type Operation,
 } from "@octogee/shared/types/glm";
@@ -106,13 +108,15 @@ import {
 } from "./operation-queue.js";
 import {
   buildOperationCompletionUpdate,
-  operationNeedsDurableCustomerMigrationV2Resume,
+  operationNeedsDurableRestartResume,
   shouldPersistClaimedOperationCompletion,
+  verifiedDeletionCompletion,
 } from "./operation-retry.js";
 import { completeOperatorReservationAfterMigration } from "./operator-reservation-completion.js";
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import {
+  claimGatewayRetirementAtomic,
   verifyGatewayRetirementClaimAtomic,
 } from "@octogee/core/gateway-retirement-claim";
 import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
@@ -120,13 +124,26 @@ import { createGatewayServiceAccountTeardown } from "./lib/gateway-gsa.js";
 import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
 import { createRecycleGatewayHandler } from "./handlers/recycle-gateway.js";
 import { createRolloutHandler } from "./handlers/rollout.js";
-import { createDeprovisionCustomerHandler } from "./handlers/deprovision-customer.js";
-import { deleteAvatarObjects } from "./lib/customer-ops/avatars.js";
+import {
+  createDeprovisionCustomerHandler,
+  type CustomerCleanupContext,
+} from "./handlers/deprovision-customer.js";
+import { createSuspendCustomerHandler } from "./handlers/suspend-customer.js";
+import { createEraseCustomerHandler } from "./handlers/erase-customer.js";
+import {
+  deleteCustomerStorageObjects,
+  verifyCustomerStorageErasure,
+} from "./lib/customer-ops/avatars.js";
 import { loadCustomerCleanupContext } from "./lib/customer-ops/cleanup-context.js";
 import { createGiteaCleanupClient } from "./lib/customer-ops/gitea.js";
 import { createMmCleanupClient } from "./lib/customer-ops/mattermost.js";
-import { deleteCustomerFirestoreData } from "./lib/customer-ops/customer-firestore-cleanup.js";
 import { createUnmountFromGateway } from "./lib/customer-ops/unmount-gateway.js";
+import { nukeUserCloudSide } from "./lib/customer-ops/nuke-cloud.js";
+import { buildAnonymousOperationalArchive } from "./lib/customer-ops/deletion-archive.js";
+import {
+  eraseCustomerFirestore,
+  verifyCustomerFirestoreErasure,
+} from "./lib/customer-ops/customer-firestore-erasure.js";
 import { resolveDefaultStorageBucket } from "./gcp-project.js";
 import { signFleetRequest } from "@octogee/core/fleet-signature";
 import {
@@ -173,13 +190,33 @@ import {
 import { listGatewayBuilds } from "@octogee/core/artifact-registry";
 import { reconcileImagePins } from "./reconcile-image-pins.js";
 import { workspaceSlugsForUser } from "@octogee/core/workspace-slugs";
-import { deleteAuthUserTolerantOfMissing } from "@octogee/core/firebase-auth-helpers";
+import {
+  deleteAuthUserTolerantOfMissing,
+  disableAuthUserAndRevokeSessions,
+} from "@octogee/core/firebase-auth-helpers";
 import { revokeAllConnectorGrantsForUser } from "@octogee/core/connector-revocation";
 import { CONNECTOR_OAUTH_REVOCATION_TARGETS } from "@octogee/shared/types/connectors";
 import { deleteHostingSitesForCustomer } from "@octogee/core/firebase-hosting";
 import { GoogleAuth } from "google-auth-library";
 import { startHttpServer, startMaintenanceHttpServer } from "./http-server.js";
 import { createConnectorSecretDecryptor } from "./connector-secret-decryption.js";
+import {
+  cancelStripeSubscription,
+  deleteStripeCustomer,
+  disableCreditAutoTopUp,
+  expireStripeCheckoutSession,
+  invalidatePendingCredentialFlows,
+  listLiveStripeSubscriptionIds,
+  listOpenStripeCheckoutSessionIds,
+  listStripeCustomerIdsForUid,
+  pauseOwnedDedicatedGateway,
+  revokeOwnerModelBrokerTokens,
+} from "./lib/customer-ops/customer-suspension-runtime.js";
+import {
+  ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION,
+  CUSTOMER_DELETION_JOBS_COLLECTION,
+} from "@octogee/shared/types/account-lifecycle";
+import { MODEL_BROKER_USAGE_ROLLUPS_COLLECTION } from "@octogee/shared/types/model-broker-usage";
 import { recordReconcile } from "./metrics.js";
 import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
@@ -1177,11 +1214,16 @@ export const OPERATION_QUEUE_DRAIN_MS_DEFAULT = 20_000;
 
 // Restart re-drive candidates. The predicate below admits only migrations with
 // the durable V2 state machine; legacy rollout sub-operations remain rollout-owned.
-const RESUMABLE_OP_KINDS: ReadonlySet<string> = new Set(["rollout", MIGRATE_CUSTOMER_KIND]);
+const RESUMABLE_OP_KINDS: ReadonlySet<string> = new Set([
+  "rollout",
+  MIGRATE_CUSTOMER_KIND,
+  "suspend-customer",
+  "erase-customer",
+]);
 
 function operationIsRestartResumable(op: Operation): boolean {
   if (op.kind === "rollout") return true;
-  return operationNeedsDurableCustomerMigrationV2Resume(op);
+  return operationNeedsDurableRestartResume(op);
 }
 
 // Claim, queue, or skip a pending op in one transaction: reads the OTHER
@@ -1433,6 +1475,7 @@ async function runClaimedOperation(
     if (!shouldPersistClaimedOperationCompletion(status)) return null;
     const completion = buildOperationCompletionUpdate({
       op: {
+        kind: freshOp?.kind,
         attempts: freshOp?.attempts,
         attemptHistory: freshOp?.attemptHistory,
         startedAt: freshOp?.startedAt,
@@ -1442,6 +1485,27 @@ async function runClaimedOperation(
       steps,
       now: Date.now(),
     });
+    const verifiedDeletion = verifiedDeletionCompletion(result);
+    if (verifiedDeletion) {
+      txn.set(
+        deps.db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(verifiedDeletion.deletionId),
+        {
+          status: "verified",
+          archiveId: verifiedDeletion.archiveId,
+          completedAt: Date.now(),
+          uid: FieldValue.delete(),
+          slug: FieldValue.delete(),
+          requestedBy: FieldValue.delete(),
+          currentGatewayId: FieldValue.delete(),
+          stripeCustomerIds: FieldValue.delete(),
+          stripeSubscriptionIds: FieldValue.delete(),
+          cleanupContext: FieldValue.delete(),
+          suspensionOperationId: FieldValue.delete(),
+          erasureOperationId: FieldValue.delete(),
+        },
+        { merge: true },
+      );
+    }
     txn.update(ref, completion);
     return completion;
   });
@@ -1664,7 +1728,7 @@ function startControllerBackgroundTasks({
     log,
     port: HTTP_PORT,
     verifyIdToken: async (token) => {
-      const decoded = await getAuth().verifyIdToken(token);
+      const decoded = await getAuth().verifyIdToken(token, true);
       return { uid: decoded.uid };
     },
     workspaceSlugsForUser,
@@ -1676,7 +1740,7 @@ function startControllerBackgroundTasks({
             httpKubeOps.readGatewayPodDiagnostics({ namespace: NAMESPACE, gatewayId }),
         }
       : {}),
-    deleteAuthUserTolerantOfMissing: (uid) => deleteAuthUserTolerantOfMissing(uid, getAuth()),
+    suspendAuthUser: (uid) => disableAuthUserAndRevokeSessions(uid, getAuth()),
     revokeConnectorGrantsForUser: (uid) =>
       revokeAllConnectorGrantsForUser(uid, CONNECTOR_OAUTH_REVOCATION_TARGETS, {
         db,
@@ -2494,6 +2558,13 @@ async function buildHandlers(
     logFn,
     kubeOps,
   );
+  const suspendCustomer = buildSuspendCustomerHandler(
+    db,
+    privateKey,
+    logFn,
+    kubeOps,
+  );
+  const eraseCustomer = buildEraseCustomerHandler(db, logFn);
 
   const restartGateway = createRestartGatewayHandler({
     kubeOps,
@@ -2552,7 +2623,405 @@ async function buildHandlers(
     "recycle-gateway": recycleGateway,
     rollout,
     "deprovision-customer": deprovisionCustomer,
+    "suspend-customer": suspendCustomer,
+    "erase-customer": eraseCustomer,
   };
+}
+
+function timestampMillis(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (value instanceof Date) return value.getTime();
+  if (
+    value &&
+    typeof value === "object" &&
+    typeof (value as { toMillis?: unknown }).toMillis === "function"
+  ) {
+    const result = (value as { toMillis: () => unknown }).toMillis();
+    return typeof result === "number" && Number.isFinite(result) ? result : null;
+  }
+  return null;
+}
+
+function deletionEnvironment(): string {
+  return (process.env.GOOGLE_CLOUD_PROJECT ?? "").endsWith("-test")
+    ? "test"
+    : "prod";
+}
+
+function deletionPlanTier(user: Record<string, unknown> | undefined): string | null {
+  if (typeof user?.selectedTier === "string") return user.selectedTier;
+  const subscription = user?.subscription as Record<string, unknown> | undefined;
+  return typeof subscription?.tier === "string" ? subscription.tier : null;
+}
+
+function deletionGatewayClass(gateway: Record<string, unknown> | undefined): string | null {
+  if (!gateway) return null;
+  const gatewayClass = isGatewayClass(gateway.gatewayClass) ? gateway.gatewayClass : undefined;
+  const profile = isGatewayProfile(gateway.profile) ? gateway.profile : undefined;
+  const imageProfile = isGatewayProfile(gateway.imageProfile) ? gateway.imageProfile : undefined;
+  return resolveGatewayClass({ gatewayClass, profile, imageProfile });
+}
+
+async function deletionGateway(
+  db: Firestore,
+  currentGatewayId: unknown,
+): Promise<Record<string, unknown> | undefined> {
+  if (typeof currentGatewayId !== "string") return undefined;
+  const snapshot = await db.collection(GATEWAYS_COLLECTION).doc(currentGatewayId).get();
+  return snapshot.data() as Record<string, unknown> | undefined;
+}
+
+async function ensureAnonymousDeletionArchive(
+  db: Firestore,
+  deletionId: string,
+): Promise<string> {
+  const jobRef = db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId);
+  const jobSnap = await jobRef.get();
+  if (!jobSnap.exists) throw new Error(`deletion job missing: ${deletionId}`);
+  const job = jobSnap.data() as Record<string, unknown>;
+  if (typeof job.archiveId === "string" && job.archiveId.length > 0) {
+    return job.archiveId;
+  }
+  if (typeof job.uid !== "string") throw new Error(`deletion job ${deletionId} has no uid`);
+  const uid = job.uid;
+  const [userSnap, rollupSnap, gateway] = await Promise.all([
+    db.collection("users").doc(uid).get(),
+    db.collection(MODEL_BROKER_USAGE_ROLLUPS_COLLECTION).doc(uid).get(),
+    deletionGateway(db, job.currentGatewayId),
+  ]);
+  const user = userSnap.data() as Record<string, unknown> | undefined;
+  const archiveRef = db.collection(ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION).doc();
+  const archive = buildAnonymousOperationalArchive({
+    archivedAt: Date.now(),
+    createdAt: timestampMillis(user?.createdAt),
+    deletionRequestedAt: timestampMillis(job.requestedAt) ?? Date.now(),
+    environment: deletionEnvironment(),
+    planTier: deletionPlanTier(user),
+    gatewayClass: deletionGatewayClass(gateway),
+    rollup: (rollupSnap.data() ?? {}) as Record<string, unknown>,
+  });
+  const batch = db.batch();
+  batch.create(archiveRef, archive);
+  batch.set(jobRef, { archiveId: archiveRef.id, updatedAt: Date.now() }, { merge: true });
+  await batch.commit();
+  return archiveRef.id;
+}
+
+async function ensureDeletionGatewayRetired(
+  db: Firestore,
+  cleanup: CustomerCleanupContext,
+  deletionId: string,
+): Promise<"not-owned" | "retirement-pending" | "retired"> {
+  const gatewayId = cleanup.currentGatewayId;
+  if (!gatewayId) return "not-owned";
+  const rootRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+  const rootSnap = await rootRef.get();
+  if (!rootSnap.exists) return "retired";
+  const root = rootSnap.data() as Record<string, unknown>;
+  if (root.ownerUid !== cleanup.uid) return "not-owned";
+  const retirementOperationId = `delete-retire-${deletionId}`;
+  if (root.desiredStatus === "retired") {
+    const operationSnap = await db
+      .collection(GLM_OPERATIONS_COLLECTION)
+      .doc(retirementOperationId)
+      .get();
+    const operation = operationSnap.data() as Record<string, unknown> | undefined;
+    if (operation?.status === "failed") {
+      throw new Error(`dedicated gateway retirement failed: ${String(operation.error ?? "unknown")}`);
+    }
+    if (operation?.status !== "succeeded") return "retirement-pending";
+    await db.recursiveDelete(rootRef);
+    await db.recursiveDelete(operationSnap.ref);
+    return "retired";
+  }
+  await claimGatewayRetirementAtomic({
+    db,
+    gatewayId,
+    operationId: retirementOperationId,
+    operation: {
+      kind: "retire-gateway",
+      status: "pending",
+      createdBy: "customer-deletion-lifecycle",
+      createdAt: Date.now(),
+      startedAt: null,
+      completedAt: null,
+      input: { gatewayId },
+      steps: [],
+      gatewayId,
+    },
+    now: Date.now(),
+    updatedBy: "customer-deletion-lifecycle",
+  });
+  return "retirement-pending";
+}
+
+function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void) {
+  const cloudCleanup = buildCustomerCloudCleanupDeps(db, logFn);
+  return createEraseCustomerHandler({
+    loadDeletionJob: async (deletionId) => {
+      const snap = await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).get();
+      if (!snap.exists) return null;
+      const data = snap.data() as Record<string, unknown>;
+      if (
+        typeof data.uid !== "string" ||
+        typeof data.eraseAfter !== "number"
+      ) {
+        throw new Error(`deletion job ${deletionId} is malformed`);
+      }
+      return {
+        uid: data.uid,
+        status: typeof data.status === "string" ? data.status : "malformed",
+        eraseAfter: data.eraseAfter,
+        stripeCustomerIds: Array.isArray(data.stripeCustomerIds)
+          ? data.stripeCustomerIds.filter(
+              (value): value is string => typeof value === "string" && value.length > 0,
+            )
+          : [],
+        archiveId: typeof data.archiveId === "string" ? data.archiveId : null,
+        cleanupContext:
+          data.cleanupContext && typeof data.cleanupContext === "object"
+            ? data.cleanupContext as CustomerCleanupContext
+            : null,
+      };
+    },
+    ensureAnonymousArchive: (deletionId) => ensureAnonymousDeletionArchive(db, deletionId),
+    deleteStripeCustomer: (customerId) =>
+      deleteStripeCustomer(
+        fetch,
+        requireEnv("STRIPE_SECRET_KEY", "customer erasure must delete Stripe PII"),
+        customerId,
+      ),
+    discoverStripeCustomerIds: (uid) =>
+      listStripeCustomerIdsForUid(
+        fetch,
+        requireEnv("STRIPE_SECRET_KEY", "customer erasure must discover Stripe PII"),
+        uid,
+      ),
+    persistStripeCustomerIds: async (deletionId, customerIds) => {
+      await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).set({
+        stripeCustomerIds: customerIds,
+        updatedAt: Date.now(),
+      }, { merge: true });
+    },
+    ensureDedicatedGatewayRetired: (cleanup, deletionId) =>
+      ensureDeletionGatewayRetired(db, cleanup, deletionId),
+    findUndrainedArtifactIds: async (artifactIds) => {
+      const snapshots = await Promise.all(
+        artifactIds.map((artifactId) => db.collection("chatArtifactJobs").doc(artifactId).get()),
+      );
+      const now = Date.now();
+      return snapshots.flatMap((snapshot, index) => {
+        if (!snapshot.exists) return [];
+        const data = snapshot.data() as Record<string, unknown>;
+        if (!data.lease || typeof data.lease !== "object") return [];
+        const expiresAt = (data.lease as Record<string, unknown>).expiresAt;
+        if (typeof expiresAt !== "string" || !Number.isFinite(Date.parse(expiresAt))) {
+          throw new Error(`chat artifact lease is malformed: ${snapshot.ref.path}`);
+        }
+        return Date.parse(expiresAt) + 60_000 > now ? [artifactIds[index]] : [];
+      });
+    },
+    cloudErase: (cleanup, currentOperationId) =>
+      nukeUserCloudSide({ ...cleanup, currentOperationId }, cloudCleanup),
+    verifyErasure: async (cleanup, currentOperationId) => {
+      const remaining = await verifyCustomerFirestoreErasure(
+        db,
+        cleanup.uid,
+        cleanup.slug,
+        cleanup.email,
+        currentOperationId,
+      );
+      remaining.push(...await verifyCustomerStorageErasure(
+        getStorage().bucket(),
+        cleanup.uid,
+        cleanup.slug,
+        cleanup.chatArtifactIds,
+      ));
+      for (const userId of [
+        cleanup.mmUserId,
+        cleanup.mmCoachUserId,
+        ...cleanup.projectAgentMmUserIds,
+      ]) {
+        if (userId && await cloudCleanup.mattermost.userExists(userId)) {
+          remaining.push(`mattermost/users/${userId}`);
+        }
+      }
+      try {
+        await getAuth().getUser(cleanup.uid);
+        remaining.push(`firebaseAuth/${cleanup.uid}`);
+      } catch (err) {
+        const code = (err as { code?: string } | null | undefined)?.code;
+        if (code !== "auth/user-not-found") throw err;
+      }
+      return remaining;
+    },
+    finalizeVerifiedErasure: async (deletionId, archiveId) => {
+      const jobRef = db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId);
+      const archiveRef = db.collection(ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION).doc(archiveId);
+      const batch = db.batch();
+      batch.set(archiveRef, { cleanupOutcomeCodes: ["verified_erasure"] }, { merge: true });
+      batch.set(jobRef, {
+        status: "verified_pending_completion",
+        archiveId,
+        verifiedAt: Date.now(),
+      }, { merge: true });
+      await batch.commit();
+    },
+    now: () => Date.now(),
+  });
+}
+
+function buildSuspendCustomerHandler(
+  db: Firestore,
+  privateKey: string,
+  logFn: (msg: string) => void,
+  kubeOps: Pick<KubeOps, "readAvailableReplicas">,
+) {
+  const decryptConnectorSecret = createConnectorSecretDecryptor();
+  return createSuspendCustomerHandler({
+    loadDeletionJob: async (deletionId) => {
+      const snap = await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).get();
+      if (!snap.exists) return null;
+      const data = snap.data() as Record<string, unknown>;
+      return {
+        uid: typeof data.uid === "string" ? data.uid : "",
+        slug: typeof data.slug === "string" ? data.slug : null,
+        currentGatewayId:
+          typeof data.currentGatewayId === "string" ? data.currentGatewayId : null,
+        stripeCustomerIds: Array.isArray(data.stripeCustomerIds)
+          ? data.stripeCustomerIds.filter(
+              (value): value is string => typeof value === "string" && value.length > 0,
+            )
+          : [],
+        stripeSubscriptionIds: Array.isArray(data.stripeSubscriptionIds)
+          ? data.stripeSubscriptionIds.filter(
+              (value): value is string => typeof value === "string" && value.length > 0,
+            )
+          : [],
+        cleanupContext:
+          data.cleanupContext && typeof data.cleanupContext === "object"
+            ? data.cleanupContext as CustomerCleanupContext
+            : null,
+      };
+    },
+    loadCleanupContext: (uid) => loadCustomerCleanupContext({ db }, uid),
+    persistCleanupContext: async (deletionId, cleanupContext) => {
+      await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).set(
+        { cleanupContext, status: "suspending", updatedAt: Date.now() },
+        { merge: true },
+      );
+    },
+    suspendAuthUser: (uid) => disableAuthUserAndRevokeSessions(uid, getAuth()),
+    invalidatePendingCredentialFlows: (uid) => invalidatePendingCredentialFlows(db, uid),
+    unmountFromGateway: createCustomerDeletionUnmount(db, privateKey, logFn, kubeOps),
+    cancelStripeSubscription: (subscriptionId) =>
+      cancelStripeSubscription(
+        fetch,
+        requireEnv("STRIPE_SECRET_KEY", "customer suspension must cancel Stripe billing"),
+        subscriptionId,
+      ),
+    listStripeCustomerIdsForUid: (uid) =>
+      listStripeCustomerIdsForUid(
+        fetch,
+        requireEnv("STRIPE_SECRET_KEY", "customer suspension must discover Stripe billing"),
+        uid,
+      ),
+    listLiveStripeSubscriptionIds: (customerId) =>
+      listLiveStripeSubscriptionIds(
+        fetch,
+        requireEnv("STRIPE_SECRET_KEY", "customer suspension must verify Stripe billing"),
+        customerId,
+      ),
+    listOpenStripeCheckoutSessionIds: (customerId) =>
+      listOpenStripeCheckoutSessionIds(
+        fetch,
+        requireEnv("STRIPE_SECRET_KEY", "customer suspension must close Stripe checkout"),
+        customerId,
+      ),
+    expireStripeCheckoutSession: (sessionId) =>
+      expireStripeCheckoutSession(
+        fetch,
+        requireEnv("STRIPE_SECRET_KEY", "customer suspension must close Stripe checkout"),
+        sessionId,
+      ),
+    persistStripeBillingRefs: async (deletionId, customerIds, subscriptionIds) => {
+      await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).set({
+        stripeCustomerIds: customerIds,
+        stripeSubscriptionIds: subscriptionIds,
+        updatedAt: Date.now(),
+      }, { merge: true });
+    },
+    revokeConnectorGrants: (uid) =>
+      revokeAllConnectorGrantsForUser(uid, CONNECTOR_OAUTH_REVOCATION_TARGETS, {
+        db,
+        decryptSecret: decryptConnectorSecret,
+        logger: { warn: logFn },
+      }),
+    revokeModelBrokerAccess: (uid) =>
+      revokeOwnerModelBrokerTokens(db, uid, Date.now()),
+    disableAutoTopUp: (uid) => disableCreditAutoTopUp(db, uid, Date.now()),
+    deleteCredentialSecrets: async (secretNames) => {
+      for (const secretName of secretNames) await deleteSecret(secretName);
+    },
+    retireProjectAgentMattermostUsers: async (userIds) => {
+      const mattermost = createMmCleanupClient({
+        baseUrl: requireEnv("MM_URL", "project-agent suspension requires Mattermost"),
+        adminToken: requireEnv("MM_ADMIN_TOKEN", "project-agent suspension requires Mattermost"),
+        log: logFn,
+      });
+      for (const userId of userIds) await mattermost.destroyUser(userId);
+    },
+    deleteProjectAgentCredentialDocs: async (docPaths) => {
+      const batch = db.batch();
+      for (const docPath of docPaths) batch.delete(db.doc(docPath));
+      await batch.commit();
+    },
+    pauseOwnedDedicatedGateway: (gatewayId, uid) =>
+      pauseOwnedDedicatedGateway(db, gatewayId, uid, Date.now()),
+    markSuspended: async (deletionId) => {
+      await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).set(
+        { status: "hibernating", suspendedAt: Date.now(), updatedAt: Date.now() },
+        { merge: true },
+      );
+    },
+    now: () => Date.now(),
+  });
+}
+
+function createCustomerDeletionUnmount(
+  db: Firestore,
+  privateKey: string,
+  logFn: (msg: string) => void,
+  kubeOps: Pick<KubeOps, "readAvailableReplicas">,
+) {
+  return createUnmountFromGateway({
+    resolveGatewayUnmountTarget: async (gatewayId) => {
+      const rootSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+      const authorization = gatewayAuthorizationFromRootDocument(
+        rootSnap.exists ? rootSnap.data() : undefined,
+        gatewayId,
+      );
+      if (!authorization) return null;
+      const runtimeSnap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
+      const runtime = runtimeSnap.exists ? runtimeSnap.data() : undefined;
+      if (!isGatewayRuntimeDoc(runtime) || runtime.lifecycle !== "serving") return null;
+      return {
+        gatewayId,
+        revisionId: gatewayId,
+        profile: authorization.config.profile ?? "standard",
+      };
+    },
+    readAvailableReplicas: (revisionId) =>
+      kubeOps.readAvailableReplicas({
+        namespace: NAMESPACE,
+        name: deploymentNameForInstance(revisionId),
+      }),
+    unmountRpc: ({ gatewayId, slug }) =>
+      callUnmountRpc(db, { privateKey, gatewayId, slug, log: logFn }),
+    wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    now: () => Date.now(),
+    log: logFn,
+  });
 }
 
 function requireEnv(name: string, why: string): string {
@@ -2569,8 +3038,18 @@ function buildDeprovisionCustomerHandler(
   logFn: (msg: string) => void,
   kubeOps: Pick<KubeOps, "readAvailableReplicas">,
 ) {
+  return createDeprovisionCustomerHandler({
+    loadCleanupContext: (uid) => loadCustomerCleanupContext({ db }, uid),
+    unmountFromGateway: createCustomerDeletionUnmount(db, privateKey, logFn, kubeOps),
+    cloudCleanup: buildCustomerCloudCleanupDeps(db, logFn),
+    now: () => Date.now(),
+    log: logFn,
+  });
+}
+
+function buildCustomerCloudCleanupDeps(db: Firestore, logFn: (msg: string) => void) {
   const cleanupEnv = (name: string) =>
-    requireEnv(name, "deprovision-customer cloud cleanup requires it");
+    requireEnv(name, "customer erasure cloud cleanup requires it");
   const gitea = createGiteaCleanupClient({
     apiUrl: cleanupEnv("GIT_API_URL"),
     token: cleanupEnv("GIT_API_TOKEN"),
@@ -2581,85 +3060,46 @@ function buildDeprovisionCustomerHandler(
     adminToken: cleanupEnv("MM_ADMIN_TOKEN"),
     log: logFn,
   });
-
-  return createDeprovisionCustomerHandler({
-    loadCleanupContext: (uid) => loadCustomerCleanupContext({ db }, uid),
-    unmountFromGateway: createUnmountFromGateway({
-      resolveGatewayUnmountTarget: async (gatewayId) => {
-        const rootSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-        const authorization = gatewayAuthorizationFromRootDocument(
-          rootSnap.exists ? rootSnap.data() : undefined,
-          gatewayId,
-        );
-        if (!authorization) return null;
-        const runtimeSnap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-        const runtime = runtimeSnap.exists ? runtimeSnap.data() : undefined;
-        if (!isGatewayRuntimeDoc(runtime) || runtime.lifecycle !== "serving") return null;
-        return {
-          gatewayId,
-          revisionId: gatewayId,
-          profile: authorization.config.profile ?? "standard",
-        };
-      },
-      readAvailableReplicas: (revisionId) =>
-        kubeOps.readAvailableReplicas({
-          namespace: NAMESPACE,
-          name: deploymentNameForInstance(revisionId),
-        }),
-      unmountRpc: ({ gatewayId, slug }) =>
-        callUnmountRpc(db, { privateKey, gatewayId, slug, log: logFn }),
-      wait: (ms) => new Promise((r) => setTimeout(r, ms)),
-      now: () => Date.now(),
-      log: logFn,
-    }),
-    cloudCleanup: {
-      gitea,
-      mattermost,
-      nukeUserFirestore: (uid, slug) =>
-        deleteCustomerFirestoreData(db, uid, slug),
-      deleteAvatar: (uid) => deleteAvatarObjects(getStorage().bucket(), uid),
-      deleteAuthUser: async (uid) => {
-        try {
-          await getAuth().deleteUser(uid);
-        } catch (err) {
-
-const code = (err as { code?: string } | null | undefined)?.code;
-          if (code === "auth/user-not-found") return;
-          throw err;
-        }
-      },
-
-deleteHostingSites: async (slug, projectSlugs) => {
-        const auth = new GoogleAuth({
-
-scopes: ["https://www.googleapis.com/auth/firebase.hosting"],
-        });
-        const projectId = requireEnv(
-          "GOOGLE_CLOUD_PROJECT",
-          "hosting-site deletion must target this env's Firebase project",
-        );
-        const result = await deleteHostingSitesForCustomer(
-          {
-            projectId,
-            getAccessToken: async () => {
-              const token = await auth.getAccessToken();
-              if (!token) {
-                throw new Error("firebase-hosting: no access token from ADC");
-              }
-              return token;
-            },
-            log: logFn,
-          },
-          slug,
-          projectSlugs,
-        );
-        return { deleted: result.deleted };
-      },
-      log: logFn,
+  return {
+    gitea,
+    mattermost,
+    nukeUserFirestore: (
+      uid: string,
+      slug: string,
+      email: string | null,
+      currentOperationId: string,
+    ) => eraseCustomerFirestore(db, uid, slug, email, currentOperationId),
+    deleteCustomerStorage: (uid: string, slug: string, chatArtifactIds: string[]) =>
+      deleteCustomerStorageObjects(getStorage().bucket(), uid, slug, chatArtifactIds),
+    deleteCredentialSecrets: async (secretNames: string[]) => {
+      for (const secretName of secretNames) await deleteSecret(secretName);
     },
-    now: () => Date.now(),
+    deleteAuthUser: (uid: string) => deleteAuthUserTolerantOfMissing(uid, getAuth()),
+    deleteHostingSites: async (slug: string, projectSlugs: string[]) => {
+      const auth = new GoogleAuth({
+        scopes: ["https://www.googleapis.com/auth/firebase.hosting"],
+      });
+      const projectId = requireEnv(
+        "GOOGLE_CLOUD_PROJECT",
+        "hosting-site deletion must target this env's Firebase project",
+      );
+      const result = await deleteHostingSitesForCustomer(
+        {
+          projectId,
+          getAccessToken: async () => {
+            const token = await auth.getAccessToken();
+            if (!token) throw new Error("firebase-hosting: no access token from ADC");
+            return token;
+          },
+          log: logFn,
+        },
+        slug,
+        projectSlugs,
+      );
+      return { deleted: result.deleted };
+    },
     log: logFn,
-  });
+  };
 }
 
 export async function callUnmountRpc(

@@ -54,6 +54,9 @@ describe("artifact completion", () => {
   const processingJob: ArtifactJob = {
     schemaVersion: 1,
     artifactId: "artifact-1",
+    ownerUid: "uid-alice",
+    workspaceSlug: "alice",
+    workspaceOwnerUid: "uid-alice",
     request: parseArtifactRequest(request()),
     status: "processing",
     attempt: 1,

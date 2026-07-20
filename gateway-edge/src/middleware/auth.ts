@@ -3,6 +3,7 @@ import { Request, Response, NextFunction } from "express";
 import { auth, db } from "../lib/db.js";
 import { resolveCanonicalWorkspaceSlug } from "../lib/canonical-workspace.js";
 import { logger } from "./logging.js";
+import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -16,7 +17,12 @@ declare global {
   }
 }
 
-export function requireAuthenticatedUid(req: Request, res: Response, next: NextFunction): void {
+function authenticateUid(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+  allowUnregistered: boolean,
+): void {
   const header = req.headers.authorization;
   if (!header?.startsWith("Bearer ")) {
     res.status(401).json({ error: "Unauthenticated" });
@@ -24,40 +30,75 @@ export function requireAuthenticatedUid(req: Request, res: Response, next: NextF
   }
 
   const token = header.slice(7);
-  auth
-    .verifyIdToken(token)
-    .then((decoded) => {
-      req.uid = decoded.uid;
-      next();
-    })
-    .catch((err) => {
-      logger.warn(`Auth failed: ${err.message}`);
+  void (async () => {
+    let uid: string;
+    try {
+      uid = (await auth.verifyIdToken(token, true)).uid;
+    } catch (err) {
+      logger.warn(`Auth failed: ${(err as Error).message}`);
       res.status(401).json({ error: "Invalid token" });
-    });
+      return;
+    }
+    try {
+      const userSnap = await db.collection("users").doc(uid).get();
+      if (!userSnap.exists) {
+        if (allowUnregistered) {
+          req.uid = uid;
+          req.user = undefined;
+          next();
+          return;
+        }
+        res.status(403).json({ error: "Account is not active" });
+        return;
+      }
+      const userData = userSnap.data()!;
+      if (!accountAllowsInteractiveAccess(userData)) {
+        res.status(403).json({ error: "Account is not active" });
+        return;
+      }
+      req.uid = uid;
+      req.user = userData;
+      next();
+    } catch (err) {
+      logger.warn(`Auth lookup failed: ${(err as Error).message}`);
+      res.status(503).json({ error: "Authentication lookup unavailable" });
+    }
+  })();
+}
+
+export function requireAuthenticatedUid(req: Request, res: Response, next: NextFunction): void {
+  authenticateUid(req, res, next, false);
+}
+
+function attachAuthContext(req: Request, res: Response, next: NextFunction): void {
+  const uid = req.uid!;
+  void (async () => {
+    req.workspaceSlug = await resolveCanonicalWorkspaceSlug(uid, req.user);
+    try {
+      const configSnap = await db.collection("users").doc(uid).collection("system").doc("config").get();
+      req.isAdmin = configSnap.exists && configSnap.data()?.role === "admin";
+    } catch {
+      req.isAdmin = false;
+    }
+    next();
+  })().catch((err) => {
+    logger.warn(`Auth lookup failed: ${err.message}`);
+    res.status(503).json({ error: "Authentication lookup unavailable" });
+  });
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  requireAuthenticatedUid(req, res, () => {
-    const uid = req.uid!;
-    void (async () => {
-      const userSnap = await db.collection("users").doc(uid).get();
-      if (userSnap.exists) {
-        const userData = userSnap.data();
-        req.user = userData;
-        req.workspaceSlug = await resolveCanonicalWorkspaceSlug(uid, userData);
-      }
-      try {
-        const configSnap = await db.collection("users").doc(uid).collection("system").doc("config").get();
-        req.isAdmin = configSnap.exists && configSnap.data()?.role === "admin";
-      } catch {
-        req.isAdmin = false;
-      }
-      next();
-    })().catch((err) => {
-      logger.warn(`Auth lookup failed: ${err.message}`);
-      res.status(503).json({ error: "Authentication lookup unavailable" });
-    });
-  });
+  requireAuthenticatedUid(req, res, () => attachAuthContext(req, res, next));
+}
+
+export function requireAuthAllowUnregistered(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  authenticateUid(req, res, () => {
+    attachAuthContext(req, res, next);
+  }, true);
 }
 
 export function requireAdmin(req: Request, res: Response, next: NextFunction): void {

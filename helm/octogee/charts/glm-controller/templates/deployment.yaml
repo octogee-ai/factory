@@ -79,6 +79,11 @@ spec:
                 secretKeyRef:
                   name: mattermost-gateway
                   key: admin_token
+            - name: STRIPE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: stripe-secrets
+                  key: secret_key
             - name: HTTP_PORT
               value: {{ .Values.http.port | quote }}
             - name: ACTIVATION_LEASE_SWEEP_MS

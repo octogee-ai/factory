@@ -465,6 +465,7 @@ function modelTotals(input: {
   existing: Record<string, unknown>;
   modelKey: string;
   model: string;
+  provider: ModelBrokerUsageProvider;
   usage: AnthropicTokenUsage;
   cost: ModelBrokerUsageCost;
   chargeUsd: number;
@@ -474,7 +475,9 @@ function modelTotals(input: {
   return {
     ...models,
     [input.modelKey]: {
+      provider: input.provider,
       model: input.model,
+      billingModel: input.cost.pricingModel,
       totalTokens: numberField(current, "totalTokens") + totalTokens(input.usage),
       costUsd: numberField(current, "costUsd") + input.cost.total,
       chargeUsd: chargeField(current) + input.chargeUsd,
@@ -594,6 +597,15 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
       costUsd: existing.costUsd + cost.total,
       chargeUsd: existing.chargeUsd + chargeUsd,
       requestCount: existing.requestCount + 1,
+      models: modelTotals({
+        existing,
+        modelKey: modelRollupKey(input.model),
+        model: input.model,
+        provider: input.provider,
+        usage: input.usage,
+        cost,
+        chargeUsd,
+      }),
       ...latestTraceFields(input),
     });
     if (input.countsTowardSpendWindow !== false) {
@@ -753,6 +765,7 @@ function applyUsageWrites(t: Transaction, a: UsageWriteArgs): void {
         existing: snaps.rollup,
         modelKey: a.modelKey,
         model: input.model,
+        provider: input.provider,
         usage: input.usage,
         cost,
         chargeUsd,

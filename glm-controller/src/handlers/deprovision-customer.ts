@@ -29,6 +29,10 @@ projectSlugs: string[];
   adminChannelId: string | null;
   
   currentGatewayId: string | null;
+  credentialSecretNames: string[];
+  projectAgentMmUserIds: string[];
+  projectAgentCredentialDocPaths: string[];
+  chatArtifactIds: string[];
 }
 
 export interface DeprovisionCustomerDeps {
@@ -74,6 +78,7 @@ export function createDeprovisionCustomerHandler(
       };
     }
 
+let unmountFailure: string | null = null;
 if (cleanup.currentGatewayId) {
       const startedAt = deps.now();
       await reportStep(ctx, { name: "unmount-gateway", status: "running", startedAt });
@@ -87,6 +92,7 @@ if (cleanup.currentGatewayId) {
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        unmountFailure = message;
 
 deps.log(`[deprovision] unmount RPC failed for ${cleanup.slug} on ${cleanup.currentGatewayId}: ${message}`);
         await reportStep(ctx, {
@@ -108,6 +114,7 @@ deps.log(`[deprovision] unmount RPC failed for ${cleanup.slug} on ${cleanup.curr
 
 const nukeCtx: NukeCloudCtx = {
       uid: cleanup.uid,
+      currentOperationId: op.id,
       slug: cleanup.slug,
       email: cleanup.email,
       giteaOrg: cleanup.giteaOrg,
@@ -117,6 +124,10 @@ const nukeCtx: NukeCloudCtx = {
       mmUserId: cleanup.mmUserId,
       mmCoachUserId: cleanup.mmCoachUserId,
       adminChannelId: cleanup.adminChannelId,
+      credentialSecretNames: cleanup.credentialSecretNames,
+      projectAgentMmUserIds: cleanup.projectAgentMmUserIds,
+      projectAgentCredentialDocPaths: cleanup.projectAgentCredentialDocPaths,
+      chatArtifactIds: cleanup.chatArtifactIds,
       skipAuth,
       skipHosting,
     };
@@ -126,8 +137,11 @@ const nukeCtx: NukeCloudCtx = {
     }
 
     const failed = stepResults.filter((r) => !r.ok && !r.skipped);
-    if (failed.length > 0) {
-      const summary = failed.map((r) => `${r.key}: ${r.error}`).join("; ");
+    if (failed.length > 0 || unmountFailure) {
+      const summary = [
+        ...(unmountFailure ? [`unmount-gateway: ${unmountFailure}`] : []),
+        ...failed.map((r) => `${r.key}: ${r.error}`),
+      ].join("; ");
       return { steps: [], success: false, error: `cloud cleanup partial failure — ${summary}` };
     }
     return { steps: [], success: true };

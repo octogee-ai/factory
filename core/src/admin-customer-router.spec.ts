@@ -98,6 +98,21 @@ function customerDoc(overrides: DocData = {}): DocData {
 }
 
 describe("GET /api/admin/customer/:uid — model credential state", () => {
+  it("returns the deletion lifecycle so the admin UI cannot present a suspended account as active", async () => {
+    const accountLifecycle = {
+      status: "deletion_scheduled",
+      deletionId: "delete-uid-1",
+      eraseAfter: 1_783_000_000_000,
+    };
+    const app = makeApp({
+      "users/uid-1": customerDoc({ accountLifecycle }),
+    });
+
+    const res = await request(app).get("/api/admin/customer/uid-1").expect(200);
+
+    expect(res.body.accountLifecycle).toEqual(accountLifecycle);
+  });
+
   it("returns sanitized modelCredential metadata and keeps byot as an active compatibility alias", async () => {
     const app = makeApp({
       "users/uid-1": customerDoc({ byotActive: false }),
@@ -146,6 +161,66 @@ describe("GET /api/admin/customer/:uid — model credential state", () => {
     expect(res.body.byot).toEqual({ active: true });
   });
 
+});
+
+describe("GET /api/admin/customer-archives", () => {
+  it("returns retained operational totals while dropping unexpected identifying fields", async () => {
+    const app = makeApp({
+      "anonymousOperationalArchives/random-1": {
+        schemaVersion: 1,
+        archivedAt: 1_784_000_000_000,
+        accountCreatedMonth: "2025-01",
+        deletionRequestedMonth: "2026-07",
+        environment: "must-not-leak@example.com",
+        planTier: "must-not-leak@example.com",
+        gatewayClass: "must-not-leak@example.com",
+        totals: { costUsd: 12.34, totalTokens: 987_654, requestCount: 321 },
+        models: [
+          {
+            provider: "anthropic",
+            model: "sonnet",
+            costUsd: 12.34,
+            totalTokens: 987_654,
+            requestCount: 321,
+          },
+          {
+            provider: "must-not-leak@example.com",
+            model: "must-not-leak@example.com",
+            costUsd: 99,
+            totalTokens: 99,
+            requestCount: 99,
+          },
+        ],
+        cleanupOutcomeCodes: ["verified_erasure"],
+        uid: "must-not-leak",
+        email: "must-not-leak@example.com",
+      },
+    });
+
+    const res = await request(app).get("/api/admin/customer-archives").expect(200);
+
+    expect(res.body.summary).toEqual({
+      archiveCount: 1,
+      totalCostUsd: 12.34,
+      totalTokens: 987_654,
+      requestCount: 321,
+    });
+    expect(res.body.archives[0]).toMatchObject({
+      id: "random-1",
+      environment: "unknown",
+      planTier: null,
+      gatewayClass: null,
+      totals: { costUsd: 12.34, totalTokens: 987_654, requestCount: 321 },
+    });
+    expect(JSON.stringify(res.body)).not.toContain("must-not-leak");
+    expect(res.body.archives[0].models).toEqual([{
+      provider: "anthropic",
+      model: "sonnet",
+      costUsd: 12.34,
+      totalTokens: 987_654,
+      requestCount: 321,
+    }]);
+  });
 });
 
 describe("mergeDailyUsage", () => {

@@ -305,6 +305,32 @@ describe("platform web usage charges", () => {
     });
     expect(await store.readCreditBalance("uid-a")).toBeCloseTo(0.99);
   });
+
+  it("retains each model provider in the operational rollup", async () => {
+    const store = new InMemoryModelBrokerUsageStore();
+    await store.recordUsage({
+      ...baseRecord,
+      eventId: "provider-rollup-1",
+      ownerUid: "uid-a",
+      provider: "tavily",
+      model: "tavily/search-basic",
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+      },
+      reportedCostUsd: 0.008,
+      chargeUsd: 0.01,
+    });
+
+    const modelKey = modelRollupKey("tavily/search-basic");
+    expect(store.rollups.get("uid-a")?.models[modelKey]).toMatchObject({
+      provider: "tavily",
+      model: "tavily/search-basic",
+      billingModel: "tavily/search-basic",
+    });
+  });
 });
 
 describe("weekly spend ledger", () => {

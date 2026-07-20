@@ -96,6 +96,10 @@
       "types": "./dist/customer-lifecycle.d.ts",
       "default": "./dist/customer-lifecycle.js"
     },
+    "./customer-deletion-plan": {
+      "types": "./dist/customer-deletion-plan.d.ts",
+      "default": "./dist/customer-deletion-plan.js"
+    },
     "./customer-snapshot-mapping": {
       "types": "./dist/customer-snapshot-mapping.d.ts",
       "default": "./dist/customer-snapshot-mapping.js"
