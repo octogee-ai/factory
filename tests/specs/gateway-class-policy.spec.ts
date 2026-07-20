@@ -91,10 +91,16 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
 
   it("builder class enables OpenClaw exec/process/subagents plus runtime plugins", () => {
     const out = runPolicy("builder", {
-      auth: { profiles: {} },
+      auth: {
+        profiles: {
+          "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+        },
+      },
       agents: {
         defaults: {
-          models: {},
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+          },
           subagents: { maxConcurrent: 8, model: "anthropic/claude-sonnet-4-6" },
         },
       },
@@ -137,13 +143,27 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       enabled: true,
       config: {},
     });
-    expect(out.auth.profiles["openai-codex:default"]).toEqual({
-      provider: "openai-codex",
-      mode: "oauth",
+    expect(out.auth.profiles["openai-codex:default"]).toBeUndefined();
+    expect(out.agents.defaults.models["openai/gpt-5.5"]).toBeUndefined();
+  });
+
+  it("builder class preserves a selected Codex runtime model", () => {
+    const out = runPolicy("builder", {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+          },
+        },
+        list: [{ id: "octogee-jack-coach", model: "openai/gpt-5.5" }],
+      },
+      plugins: { entries: { codex: { enabled: false } } },
     });
+
     expect(out.agents.defaults.models["openai/gpt-5.5"]).toEqual({
       agentRuntime: { id: "codex" },
     });
+    expect(out.plugins.entries.codex.enabled).toBe(true);
   });
 
   it("operator class leaves the config untouched for the operator-image patcher", () => {

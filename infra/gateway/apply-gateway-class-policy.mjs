@@ -67,20 +67,53 @@ function disableConnectorTools(config) {
   config.plugins.entries[CONNECTOR_TOOLS_PLUGIN].enabled = false;
 }
 
-function ensureCodexAuthProfile(config) {
-  config.auth ??= {};
-  config.auth.profiles ??= {};
-  config.auth.profiles[CODEX_PROFILE] = {
-    provider: "openai-codex",
-    mode: "oauth",
-  };
+function exactObject(value, expected) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  const expectedKeys = Object.keys(expected);
+  return (
+    keys.length === expectedKeys.length &&
+    expectedKeys.every((key) => Object.prototype.hasOwnProperty.call(value, key)) &&
+    expectedKeys.every((key) => {
+      const expectedValue = expected[key];
+      return expectedValue !== null && typeof expectedValue === "object"
+        ? exactObject(value[key], expectedValue)
+        : value[key] === expectedValue;
+    })
+  );
 }
 
-function ensureCodexRuntimeModel(config) {
-  config.agents ??= {};
-  config.agents.defaults ??= {};
-  config.agents.defaults.models ??= {};
-  config.agents.defaults.models[CODEX_MODEL] = { agentRuntime: { id: "codex" } };
+function modelSelectionUses(value, model) {
+  if (value === model) return true;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  if (value.primary === model) return true;
+  return Array.isArray(value.fallbacks) && value.fallbacks.includes(model);
+}
+
+function codexRuntimeModelIsSelected(config) {
+  const defaults = config.agents?.defaults;
+  if (modelSelectionUses(defaults?.model, CODEX_MODEL)) return true;
+  if (modelSelectionUses(defaults?.subagents?.model, CODEX_MODEL)) return true;
+  return (config.agents?.list ?? []).some(
+    (agent) =>
+      modelSelectionUses(agent?.model, CODEX_MODEL) ||
+      modelSelectionUses(agent?.subagents?.model, CODEX_MODEL),
+  );
+}
+
+export function removePolicyCodexCredentialPlaceholders(config) {
+  const profile = config.auth?.profiles?.[CODEX_PROFILE];
+  if (exactObject(profile, { provider: "openai-codex", mode: "oauth" })) {
+    delete config.auth.profiles[CODEX_PROFILE];
+  }
+
+  const runtimeModel = config.agents?.defaults?.models?.[CODEX_MODEL];
+  if (
+    !codexRuntimeModelIsSelected(config) &&
+    exactObject(runtimeModel, { agentRuntime: { id: "codex" } })
+  ) {
+    delete config.agents.defaults.models[CODEX_MODEL];
+  }
 }
 
 function allowPlugin(config, id) {
@@ -122,8 +155,7 @@ function enableProjectTools(config) {
 }
 
 function enableRuntimePlugins(config) {
-  ensureCodexAuthProfile(config);
-  ensureCodexRuntimeModel(config);
+  removePolicyCodexCredentialPlaceholders(config);
   enableCodexAppServer(config);
   enableConnectorTools(config);
 }
