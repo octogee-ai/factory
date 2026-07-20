@@ -6,18 +6,18 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import type { AgentImportConfigArtifacts } from "@octogee/shared/types/agent-import";
-import type { ResolvedGateway } from "../lib/user-gateway.js";
 import type { AgentImportService } from "../lib/agent-import-service.js";
 
 const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
 const IMPORT_ID_RE = /^[A-Za-z0-9_-]{1,160}$/;
 
 interface AgentImportsRouterDeps {
-  service: Pick<AgentImportService, "previewGithub" | "previewLocal" | "apply" | "get" | "rollback">;
+  createRuntime(input: { authorization: string; gatewayId: string }): {
+    service: Pick<AgentImportService, "previewGithub" | "previewLocal" | "apply" | "get" | "rollback">;
+    authorize(): Promise<{ slug: string; gatewayId: string }>;
+    listGithubSources(): Promise<unknown>;
+  };
   localGatewayId(): string | null;
-  resolveUserGateway(uid: string): Promise<ResolvedGateway | null>;
-  isProvisioned(uid: string): Promise<boolean>;
-  listGithubSources(uid: string): Promise<unknown>;
 }
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -49,6 +49,7 @@ const IMPORT_ERROR_STATUS: Record<string, number> = {
   local_archive_missing: 410,
   import_not_found: 404,
   forbidden: 404,
+  openclaw_not_ready: 409,
 };
 
 function handleImportError(error: unknown, res: Response, next: NextFunction): void {
@@ -74,22 +75,26 @@ async function authorize(
   req: Request,
   res: Response,
   deps: AgentImportsRouterDeps,
-): Promise<ResolvedGateway | null> {
+): Promise<{
+  slug: string;
+  gatewayId: string;
+  runtime: ReturnType<AgentImportsRouterDeps["createRuntime"]>;
+} | null> {
   const requested = requestedGatewayId(req);
   if (!requested || deps.localGatewayId() !== requested) {
+    req.resume();
     res.status(404).json({ error: "not_found" });
     return null;
   }
-  const resolved = await deps.resolveUserGateway(req.uid!);
-  if (!resolved || resolved.gatewayId !== requested) {
-    res.status(404).json({ error: "not_found" });
-    return null;
+  const authorization = req.get("authorization");
+  if (!authorization) throw Object.assign(new Error("Firebase authorization is required"), { code: "forbidden" });
+  try {
+    const runtime = deps.createRuntime({ authorization, gatewayId: requested });
+    return { ...await runtime.authorize(), runtime };
+  } catch (error) {
+    req.resume();
+    throw error;
   }
-  if (!await deps.isProvisioned(req.uid!)) {
-    res.status(409).json({ error: "openclaw_not_ready" });
-    return null;
-  }
-  return resolved;
 }
 
 function importId(req: Request, res: Response): string | null {
@@ -122,6 +127,7 @@ function localArchive(req: Request): Promise<StagedLocalArchive> {
     try {
       parser = Busboy({ headers: req.headers, limits: { files: 1, fileSize: MAX_ARCHIVE_BYTES, fields: 0 } });
     } catch {
+      req.resume();
       fail(Object.assign(new Error("invalid multipart archive"), { code: "invalid_local_archive" }));
       return;
     }
@@ -178,8 +184,9 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
 
   router.get("/sources/github", async (req, res, next) => {
     try {
-      if (!await authorize(req, res, deps)) return;
-      res.json(await deps.listGithubSources(req.uid!));
+      const authorized = await authorize(req, res, deps);
+      if (!authorized) return;
+      res.json(await authorized.runtime.listGithubSources());
     } catch (error) {
       handleImportError(error, res, next);
     }
@@ -197,7 +204,7 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
         res.status(400).json({ error: "invalid_import_source" });
         return;
       }
-      const preview = await deps.service.previewGithub({
+      const preview = await resolved.runtime.service.previewGithub({
         uid: req.uid!,
         slug: resolved.slug,
         gatewayId: resolved.gatewayId,
@@ -226,7 +233,7 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
       localImportActive = true;
       acquired = true;
       archive = await localArchive(req);
-      const preview = await deps.service.previewLocal({
+      const preview = await resolved.runtime.service.previewLocal({
         uid: req.uid!,
         slug: resolved.slug,
         gatewayId: resolved.gatewayId,
@@ -243,7 +250,8 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
 
   router.post("/:importId/apply", async (req, res, next) => {
     try {
-      if (!await authorize(req, res, deps)) return;
+      const authorized = await authorize(req, res, deps);
+      if (!authorized) return;
       const id = importId(req, res);
       const body = object(req.body);
       if (!id) return;
@@ -251,7 +259,7 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
         res.status(400).json({ error: "approval_hash_required" });
         return;
       }
-      res.json(await deps.service.apply({ importId: id, uid: req.uid!, approvalHash: body.approvalHash }));
+      res.json(await authorized.runtime.service.apply({ importId: id, uid: req.uid!, approvalHash: body.approvalHash }));
     } catch (error) {
       handleImportError(error, res, next);
     }
@@ -259,10 +267,11 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
 
   router.get("/:importId", async (req, res, next) => {
     try {
-      if (!await authorize(req, res, deps)) return;
+      const authorized = await authorize(req, res, deps);
+      if (!authorized) return;
       const id = importId(req, res);
       if (!id) return;
-      res.json(await deps.service.get({ importId: id, uid: req.uid! }));
+      res.json(await authorized.runtime.service.get({ importId: id, uid: req.uid! }));
     } catch (error) {
       handleImportError(error, res, next);
     }
@@ -270,10 +279,11 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
 
   router.post("/:importId/rollback", async (req, res, next) => {
     try {
-      if (!await authorize(req, res, deps)) return;
+      const authorized = await authorize(req, res, deps);
+      if (!authorized) return;
       const id = importId(req, res);
       if (!id) return;
-      res.json(await deps.service.rollback({ importId: id, uid: req.uid! }));
+      res.json(await authorized.runtime.service.rollback({ importId: id, uid: req.uid! }));
     } catch (error) {
       handleImportError(error, res, next);
     }

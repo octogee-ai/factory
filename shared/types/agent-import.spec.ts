@@ -158,6 +158,17 @@ describe("agent import config plan", () => {
       disposition: "manual_review",
     }));
   });
+
+  it("reports an unchanged config when there is no portable runtime delta", () => {
+    const artifacts = buildAgentImportConfigArtifacts({
+      agents: { list: [{ id: "moof", name: "Moof" }] },
+    }, "moof");
+
+    const plan = planAgentImportConfig(artifacts, { doctorOutcome: "unchanged" });
+
+    expect(plan.runtimePatch).toEqual({});
+    expect(plan.effectiveOutcome).toBe("unchanged");
+  });
 });
 
 describe("agent import transport contracts", () => {
@@ -173,6 +184,12 @@ describe("agent import transport contracts", () => {
     expect(classifyAgentImportArchivePath("workspace/.npmrc")).toBeNull();
     expect(classifyAgentImportArchivePath("workspace/../openclaw.json")).toBeNull();
     expect(classifyAgentImportArchivePath("workspace/MEMORY\nsecret.md")).toBeNull();
+  });
+
+  it("does not reject ordinary source paths merely named auth, token, or state", () => {
+    expect(classifyAgentImportArchivePath("workspace/src/auth.ts")).toBe("workspace");
+    expect(classifyAgentImportArchivePath("workspace/src/token-counter.ts")).toBe("workspace");
+    expect(classifyAgentImportArchivePath("workspace/src/state.ts")).toBe("workspace");
   });
 
   it("canonicalizes the approval-bound preview inputs independent of object insertion order", () => {

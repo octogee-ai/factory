@@ -52,7 +52,7 @@ export interface AgentImportConfigDecision {
 export interface AgentImportConfigPlan {
     analyzer: "octogee-policy-v1";
     doctorOutcome: AgentImportDoctorOutcome;
-    effectiveOutcome: "applied" | "safe_baseline";
+    effectiveOutcome: "applied" | "safe_baseline" | "unchanged";
     identity: {
         name?: string;
         persona?: string;

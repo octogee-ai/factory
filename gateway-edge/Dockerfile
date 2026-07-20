@@ -27,7 +27,7 @@ RUN npm run build
 
 FROM node:26-slim
 WORKDIR /gateway-edge
-ARG TARGETARCH
+ARG TARGETARCH=amd64
 ARG GITLEAKS_VERSION=8.21.2
 # git + openssh-client are required for the Phase 6 working-tree
 # routes (`gateway-edge/src/lib/workspace-git.ts`). Without them

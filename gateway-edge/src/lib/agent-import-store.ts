@@ -1,26 +1,32 @@
-import type { AgentImportRecord, StoredAgentImportPlan } from "./agent-import-service.js";
+import { isValidGatewayId } from "@octogee/shared/types/glm";
+import { isValidUsername } from "@octogee/shared/types/identity";
+
+import { internalFetch } from "./internal-fetch.js";
+import type { AgentImportManifestEntry } from "./agent-import-git.js";
+import type {
+  AgentImportIdentity,
+  AgentImportRecord,
+  StoredAgentImportPlan,
+} from "./agent-import-service.js";
 
 const IMPORT_ID_RE = /^[A-Za-z0-9_-]{1,160}$/;
-
-interface DocumentSnapshotLike {
-  exists: boolean;
-  data(): unknown;
-}
+const DEFAULT_TIMEOUT_MS = 120_000;
 
 interface StoreDeps {
-  db: {
-    doc(path: string): {
-      set(value: unknown): Promise<unknown>;
-      get(): Promise<DocumentSnapshotLike>;
-    };
-  };
-  bucket: {
-    file(path: string): {
-      save(value: Buffer | string, options?: unknown): Promise<unknown>;
-      download(): Promise<[Buffer]>;
-    };
-    deleteFiles(options: { prefix: string }): Promise<unknown>;
-  };
+  baseUrl: string;
+  authorization: string;
+  gatewayId: string;
+  tokenPath?: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+}
+
+type JsonObject = Record<string, unknown>;
+
+function object(value: unknown): JsonObject | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as JsonObject
+    : null;
 }
 
 function requireId(id: string): string {
@@ -28,87 +34,243 @@ function requireId(id: string): string {
   return id;
 }
 
-function recordPath(id: string): string {
-  return `agentImports/${requireId(id)}`;
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end -= 1;
+  return value.slice(0, end);
 }
 
-function stagingPath(id: string, name: string): string {
-  return `agent-imports/${requireId(id)}/${name}`;
+function trustedBaseUrl(value: string): string {
+  const normalized = trimTrailingSlashes(value.trim());
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    throw new Error("agent import broker URL must be an absolute http(s) URL");
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error("agent import broker URL must be an absolute http(s) URL");
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  if (
+    hostname !== "octogee-api" && hostname !== "localhost" && hostname !== "127.0.0.1" &&
+    !/^octogee-api\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.svc\.cluster\.local$/u.test(hostname)
+  ) {
+    throw new Error("agent import broker URL must target octogee-api or localhost");
+  }
+  return normalized;
 }
 
-function object(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
+function brokerBaseUrlFromEnv(env: Record<string, string | undefined> = process.env): string {
+  const value = env.AGENT_IMPORT_BROKER_URL?.trim() || env.OPENCLAW_RUNTIME_BROKER_URL?.trim();
+  if (!value) throw new Error("AGENT_IMPORT_BROKER_URL or OPENCLAW_RUNTIME_BROKER_URL is required");
+  return trustedBaseUrl(value);
 }
 
-function validRecord(value: unknown, id: string): AgentImportRecord | null {
+async function brokerError(response: Response): Promise<Error> {
+  let body: JsonObject | null = null;
+  try {
+    body = object(await response.json());
+  } catch {
+    body = null;
+  }
+  const code = typeof body?.error === "string" ? body.error : "agent_import_broker_failed";
+  const message = typeof body?.message === "string"
+    ? body.message
+    : `agent import broker returned ${response.status}`;
+  return Object.assign(new Error(message), { code, status: response.status });
+}
+
+function validRecord(value: unknown, id: string): AgentImportRecord {
   const data = object(value);
-  return data?.id === id && typeof data.uid === "string" && typeof data.status === "string"
-    ? data as unknown as AgentImportRecord
-    : null;
+  if (data?.id !== id || typeof data.uid !== "string" || typeof data.status !== "string") {
+    throw new Error("agent import broker returned an invalid record");
+  }
+  return data as unknown as AgentImportRecord;
 }
 
-function validPlan(value: unknown): StoredAgentImportPlan | null {
+function validPlan(value: unknown): StoredAgentImportPlan {
   const data = object(value);
-  return typeof data?.uid === "string" && typeof data.slug === "string" &&
-    typeof data.gatewayId === "string" && typeof data.approvalHash === "string"
-    ? data as unknown as StoredAgentImportPlan
-    : null;
+  if (
+    typeof data?.uid !== "string" || typeof data.slug !== "string" ||
+    typeof data.gatewayId !== "string" || typeof data.approvalHash !== "string"
+  ) {
+    throw new Error("agent import broker returned an invalid plan");
+  }
+  return data as unknown as StoredAgentImportPlan;
 }
 
-function missingObject(error: unknown): boolean {
-  const code = object(error)?.code;
-  return code === 404 || code === "404";
+function validIdentity(value: unknown): AgentImportIdentity {
+  const data = object(value);
+  if (!data || Object.keys(data).some((key) => !["name", "persona", "emoji"].includes(key))) {
+    throw new Error("agent import broker returned an invalid identity");
+  }
+  if (Object.values(data).some((entry) => typeof entry !== "string")) {
+    throw new Error("agent import broker returned an invalid identity");
+  }
+  return data as AgentImportIdentity;
+}
+
+function validManifest(value: unknown): AgentImportManifestEntry {
+  const data = object(value);
+  if (
+    data?.type !== "blob" || typeof data.gcsPath !== "string" ||
+    typeof data.size !== "number" || typeof data.mimeType !== "string" ||
+    typeof data.uploadedAt !== "string"
+  ) {
+    throw new Error("agent import broker returned an invalid blob manifest");
+  }
+  return data as unknown as AgentImportManifestEntry;
 }
 
 export function createAgentImportStore(deps: StoreDeps) {
+  if (!deps.authorization.startsWith("Bearer ")) {
+    throw new Error("Firebase authorization is required for the agent import broker");
+  }
+  if (!isValidGatewayId(deps.gatewayId)) throw new Error("agent import gateway id is invalid");
+  const baseUrl = trustedBaseUrl(deps.baseUrl);
+  const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error("agent import broker timeout is invalid");
+
+  const request = async (pathname: string, init: RequestInit = {}): Promise<Response> => {
+    const headers = new Headers(init.headers);
+    headers.set("authorization", deps.authorization);
+    const response = await internalFetch(`${baseUrl}/internal/agent-imports${pathname}`, {
+      ...init,
+      headers,
+      redirect: "error",
+      signal: AbortSignal.timeout(timeoutMs),
+    }, {
+      tokenPath: deps.tokenPath,
+      fetchImpl: deps.fetchImpl,
+      requireProjectedToken: true,
+    });
+    return response;
+  };
+
+  const jsonRequest = async (pathname: string, init: RequestInit = {}): Promise<unknown> => {
+    const response = await request(pathname, init);
+    if (!response.ok) throw await brokerError(response);
+    if (response.status === 204) return null;
+    try {
+      return await response.json();
+    } catch {
+      throw new Error("agent import broker returned malformed JSON");
+    }
+  };
+
+  const jsonBody = (value: unknown): RequestInit => ({
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(value),
+  });
+
   return {
+    async authorize(): Promise<{ slug: string; gatewayId: string }> {
+      const value = object(await jsonRequest("/authorize", {
+        method: "POST",
+        ...jsonBody({ gatewayId: deps.gatewayId }),
+      }));
+      if (!value || !isValidUsername(value.slug) || value.gatewayId !== deps.gatewayId) {
+        throw new Error("agent import broker returned malformed authorization");
+      }
+      return { slug: value.slug, gatewayId: deps.gatewayId };
+    },
+
     async putRecord(record: AgentImportRecord): Promise<void> {
-      await deps.db.doc(recordPath(record.id)).set(record);
+      await jsonRequest(`/records/${requireId(record.id)}`, { method: "PUT", ...jsonBody(record) });
     },
 
     async getRecord(id: string): Promise<AgentImportRecord | null> {
-      const snapshot = await deps.db.doc(recordPath(id)).get();
-      return snapshot.exists ? validRecord(snapshot.data(), id) : null;
+      const safeId = requireId(id);
+      const response = await request(`/records/${safeId}`);
+      if (response.status === 404) return null;
+      if (!response.ok) throw await brokerError(response);
+      return validRecord(await response.json(), safeId);
     },
 
     async putPlan(id: string, plan: StoredAgentImportPlan): Promise<void> {
-      await deps.bucket.file(stagingPath(id, "plan.json")).save(JSON.stringify(plan), {
-        contentType: "application/json",
-        resumable: false,
-      });
+      await jsonRequest(`/plans/${requireId(id)}`, { method: "PUT", ...jsonBody(plan) });
     },
 
     async getPlan(id: string): Promise<StoredAgentImportPlan | null> {
-      try {
-        const [contents] = await deps.bucket.file(stagingPath(id, "plan.json")).download();
-        return validPlan(JSON.parse(contents.toString("utf8")));
-      } catch (error) {
-        if (missingObject(error)) return null;
-        throw error;
-      }
+      const response = await request(`/plans/${requireId(id)}`);
+      if (response.status === 404) return null;
+      if (!response.ok) throw await brokerError(response);
+      return validPlan(await response.json());
     },
 
     async putArchive(id: string, archive: Buffer): Promise<void> {
-      await deps.bucket.file(stagingPath(id, "source.zip")).save(archive, {
-        contentType: "application/zip",
-        resumable: true,
+      await jsonRequest(`/archives/${requireId(id)}`, {
+        method: "PUT",
+        headers: { "content-type": "application/zip" },
+        body: archive.buffer.slice(archive.byteOffset, archive.byteOffset + archive.byteLength) as ArrayBuffer,
       });
     },
 
     async getArchive(id: string): Promise<Buffer | null> {
-      try {
-        const [contents] = await deps.bucket.file(stagingPath(id, "source.zip")).download();
-        return contents;
-      } catch (error) {
-        if (missingObject(error)) return null;
-        throw error;
-      }
+      const response = await request(`/archives/${requireId(id)}`);
+      if (response.status === 404) return null;
+      if (!response.ok) throw await brokerError(response);
+      return Buffer.from(await response.arrayBuffer());
     },
 
     async deleteStaging(id: string): Promise<void> {
-      await deps.bucket.deleteFiles({ prefix: stagingPath(id, "") });
+      await jsonRequest(`/staging/${requireId(id)}`, { method: "DELETE" });
+    },
+
+    async deleteImportBlobs(id: string): Promise<void> {
+      await jsonRequest(`/blobs/${requireId(id)}`, { method: "DELETE" });
+    },
+
+    async storeBlob(
+      id: string,
+      filePath: string,
+      contents: Buffer,
+      mimeType: string,
+    ): Promise<AgentImportManifestEntry> {
+      const value = await jsonRequest(`/blobs/${requireId(id)}?path=${encodeURIComponent(filePath)}`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/octet-stream",
+          "x-agent-import-mime": mimeType,
+        },
+        body: contents.buffer.slice(contents.byteOffset, contents.byteOffset + contents.byteLength) as ArrayBuffer,
+      });
+      return validManifest(value);
+    },
+
+    async readIdentity(): Promise<AgentImportIdentity> {
+      return validIdentity(await jsonRequest("/identity"));
+    },
+
+    async syncIdentity(value: AgentImportIdentity): Promise<void> {
+      await jsonRequest("/identity", { method: "PATCH", ...jsonBody(value) });
+    },
+
+    async listGithubSources(): Promise<unknown> {
+      return jsonRequest("/github/sources");
+    },
+
+    async readGithubToken(): Promise<string | null> {
+      const value = object(await jsonRequest("/github/token"));
+      if (!value || typeof value.token !== "string" || !value.token) {
+        throw new Error("agent import broker returned an invalid GitHub token response");
+      }
+      return value.token;
+    },
+
+    async readGithubRepoSize(owner: string, repo: string): Promise<number> {
+      const value = object(await jsonRequest(`/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/size`));
+      if (!value || typeof value.sizeKiB !== "number" || !Number.isSafeInteger(value.sizeKiB) || value.sizeKiB < 0) {
+        throw new Error("agent import broker returned an invalid GitHub repository size");
+      }
+      return value.sizeKiB;
     },
   };
+}
+
+export function agentImportBrokerBaseUrlFromEnv(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return brokerBaseUrlFromEnv(env);
 }

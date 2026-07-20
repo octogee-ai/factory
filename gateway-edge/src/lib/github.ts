@@ -242,6 +242,7 @@ export interface GithubRepoSummary {
   description: string | null;
   updatedAt: string;
   defaultBranch: string;
+  sizeKiB: number;
 }
 
 interface GithubRepoRaw {
@@ -251,6 +252,7 @@ interface GithubRepoRaw {
   description: string | null;
   updated_at: string;
   default_branch: string;
+  size: number;
   owner: { login: string };
 }
 
@@ -270,6 +272,7 @@ export function toRepoSummary(r: GithubRepoRaw): GithubRepoSummary {
     description: r.description,
     updatedAt: r.updated_at,
     defaultBranch: r.default_branch,
+    sizeKiB: r.size,
   };
 }
 

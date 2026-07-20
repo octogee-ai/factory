@@ -403,7 +403,11 @@ export function planAgentImportConfig(input, options) {
     return {
         analyzer: "octogee-policy-v1",
         doctorOutcome: options.doctorOutcome,
-        effectiveOutcome: doctorSafe && Object.keys(planned.runtimePatch).length > 0 ? "applied" : "safe_baseline",
+        effectiveOutcome: Object.keys(planned.runtimePatch).length > 0
+            ? "applied"
+            : runtimeEntries(portable).length === 0
+                ? "unchanged"
+                : "safe_baseline",
         identity,
         runtimePatch: planned.runtimePatch,
         decisions,
@@ -413,9 +417,7 @@ export function planAgentImportConfig(input, options) {
 const ARCHIVE_METADATA = new Set([
     "manifest.json", "portable-agent.json", "config-inventory.json", "doctor-candidate.json",
 ]);
-const BLOCKED_WORKSPACE_SEGMENTS = new Set([
-    ".git", ".ssh", "auth", "auth-profiles", "credentials", "secrets", "sessions", "state",
-]);
+const BLOCKED_WORKSPACE_SEGMENTS = new Set([".git", ".ssh", ".openclaw"]);
 function hasControlCharacter(value) {
     for (const character of value) {
         const code = character.charCodeAt(0);
@@ -450,10 +452,12 @@ function classifyWorkspaceArchivePath(relative) {
         return null;
     if (lowered.some((segment) => segment === ".env" || segment.startsWith(".env.")))
         return null;
+    if (["credentials", "secrets", "auth-profiles"].includes(lowered[0]))
+        return null;
     const leaf = lowered[lowered.length - 1];
     if (leaf === "openclaw.json" || [".npmrc", ".pypirc", ".netrc"].includes(leaf))
         return null;
-    if (/^(credentials?|secrets?|tokens?|auth(?:-profiles?)?)([._-].*)?$/.test(leaf))
+    if (relative.length === 1 && /^(credentials?|secrets?)([._-].*)?$/.test(leaf))
         return null;
     if (/(^|[._-])(id_rsa|id_ed25519|private[-_.]?key)([._-]|$)/.test(leaf))
         return null;

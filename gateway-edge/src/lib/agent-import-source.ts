@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -63,19 +63,38 @@ function sourceGitEnvironment(
   };
 }
 
-function runGit(cwd: string, args: string[], env: NodeJS.ProcessEnv = sourceGitEnvironment()): string {
-  const result = spawnSync("/usr/bin/git", args, {
-    cwd,
-    env,
-    encoding: "utf8",
-    timeout: 120_000,
-    maxBuffer: 16 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "pipe"],
+function runGit(cwd: string, args: string[], env: NodeJS.ProcessEnv = sourceGitEnvironment()): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("/usr/bin/git", args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let size = 0;
+    let failure: Error | null = null;
+    const timer = setTimeout(() => {
+      failure = new Error("source git operation timed out");
+      child.kill("SIGKILL");
+    }, 120_000);
+    const collect = (target: Buffer[], chunk: Buffer) => {
+      size += chunk.length;
+      if (size > 16 * 1024 * 1024) {
+        failure = new Error("source git output exceeded limit");
+        child.kill("SIGKILL");
+      } else {
+        target.push(chunk);
+      }
+    };
+    child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
+    child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
+    child.on("error", (error) => { failure = error; });
+    child.on("close", (status) => {
+      clearTimeout(timer);
+      if (failure || status !== 0) {
+        reject(new AgentImportSourceError("git_source_invalid", `source git operation failed (exit ${String(status)})`));
+        return;
+      }
+      resolve(Buffer.concat(stdout).toString("utf8").trim());
+    });
   });
-  if (result.error || result.status !== 0) {
-    throw new AgentImportSourceError("git_source_invalid", `source git operation failed (exit ${String(result.status)})`);
-  }
-  return (result.stdout ?? "").trim();
 }
 
 function validBranch(branch: string): boolean {
@@ -105,33 +124,28 @@ export function githubAgentImportCloneEnvironment(
   });
 }
 
-export function cloneGithubAgentImportSource(options: {
+export async function cloneGithubAgentImportSource(options: {
   owner: string;
   repo: string;
   branch: string;
   token: string;
   tmpRoot?: string;
-}): ClonedGithubAgentImportSource {
+}): Promise<ClonedGithubAgentImportSource> {
   if (!validBranch(options.branch)) {
     throw new AgentImportSourceError("invalid_github_source", "GitHub branch is invalid");
   }
   const root = fs.mkdtempSync(path.join(options.tmpRoot ?? os.tmpdir(), "octogee-agent-import-github-"));
   const repoDir = path.join(root, "source");
   try {
-    const result = spawnSync("/usr/bin/git", [
+    try {
+      await runGit(root, [
       "clone", "--quiet", "--single-branch", "--no-tags", "--branch", options.branch,
-      githubAgentImportCloneUrl(options.owner, options.repo), repoDir,
-    ], {
-      env: githubAgentImportCloneEnvironment(options.token),
-      encoding: "utf8",
-      timeout: 120_000,
-      maxBuffer: 16 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    if (result.error || result.status !== 0) {
+        githubAgentImportCloneUrl(options.owner, options.repo), repoDir,
+      ], githubAgentImportCloneEnvironment(options.token));
+    } catch {
       throw new AgentImportSourceError("github_clone_failed", "GitHub repository could not be cloned");
     }
-    const sourceHead = runGit(repoDir, ["rev-parse", "HEAD"]);
+    const sourceHead = await runGit(repoDir, ["rev-parse", "HEAD"]);
     if (!SHA_RE.test(sourceHead)) throw new AgentImportSourceError("git_source_invalid", "GitHub source has no commit");
     return {
       repoDir,
@@ -270,9 +284,9 @@ function clearRepoWorktree(repoDir: string): void {
   }
 }
 
-function commitCurrentTip(repoDir: string, message: string): string {
-  runGit(repoDir, ["add", "--all", "--force", "--", "."]);
-  const status = runGit(repoDir, ["status", "--porcelain", "--untracked-files=all"]);
+async function commitCurrentTip(repoDir: string, message: string): Promise<string> {
+  await runGit(repoDir, ["add", "--all", "--force", "--", "."]);
+  const status = await runGit(repoDir, ["status", "--porcelain", "--untracked-files=all"]);
   if (status) {
     const env = sourceGitEnvironment(process.env, {
       GIT_AUTHOR_NAME: "Octogee Agent Import",
@@ -280,9 +294,9 @@ function commitCurrentTip(repoDir: string, message: string): string {
       GIT_COMMITTER_NAME: "Octogee Agent Import",
       GIT_COMMITTER_EMAIL: "agent-import@octogee.invalid",
     });
-    runGit(repoDir, ["commit", "--quiet", "-m", message], env);
+    await runGit(repoDir, ["commit", "--quiet", "-m", message], env);
   }
-  const head = runGit(repoDir, ["rev-parse", "HEAD"]);
+  const head = await runGit(repoDir, ["rev-parse", "HEAD"]);
   if (!SHA_RE.test(head)) throw new AgentImportSourceError("git_source_invalid", "local source has no commit");
   return head;
 }
@@ -324,19 +338,19 @@ export async function extractLocalAgentImportArchive(
         if (entry === "git/packed-refs") validatePackedRefs(contents);
         writeEntry(path.join(repoDir, ".git"), entry.slice("git/".length), contents);
       }
-      runGit(repoDir, ["fsck", "--strict", "--no-dangling"]);
-      const committedHead = runGit(repoDir, ["rev-parse", "HEAD"]);
+      await runGit(repoDir, ["fsck", "--strict", "--no-dangling"]);
+      const committedHead = await runGit(repoDir, ["rev-parse", "HEAD"]);
       if (!SHA_RE.test(committedHead)) throw new AgentImportSourceError("git_source_invalid", "local Git HEAD is invalid");
-      runGit(repoDir, ["reset", "--hard", committedHead]);
+      await runGit(repoDir, ["reset", "--hard", committedHead]);
       clearRepoWorktree(repoDir);
     } else {
-      runGit(repoDir, ["init", "--quiet", "--initial-branch", "main"]);
+      await runGit(repoDir, ["init", "--quiet", "--initial-branch", "main"]);
     }
     for (const [entry, contents] of entries) {
       if (!entry.startsWith("workspace/")) continue;
       writeEntry(repoDir, entry.slice("workspace/".length), contents);
     }
-    const sourceHead = commitCurrentTip(
+    const sourceHead = await commitCurrentTip(
       repoDir,
       manifest.hadGit ? "Capture imported local workspace changes" : "Import local agent workspace",
     );

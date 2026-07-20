@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createAgentImportDoctorClient,
   readAgentImportWorkspaceState,
-  storeAgentImportBlob,
 } from "../lib/agent-import-runtime.js";
 
 const roots: string[] = [];
@@ -61,37 +60,16 @@ describe("agent import runtime", () => {
     await expect(run({ agents: {} })).rejects.toThrow("doctor rejected candidate (503)");
   });
 
-  it("reports the exact clean main workspace head used by preview", () => {
+  it("reports the exact clean main workspace head used by preview", async () => {
     const targetDir = repo();
-    expect(readAgentImportWorkspaceState("alice", { customersRoot: path.dirname(targetDir), targetDir })).toMatchObject({
+    await expect(readAgentImportWorkspaceState("alice", { customersRoot: path.dirname(targetDir), targetDir })).resolves.toMatchObject({
       targetDir,
       clean: true,
       head: expect.stringMatching(/^[0-9a-f]{40}$/),
     });
     fs.writeFileSync(path.join(targetDir, "README.md"), "changed\n");
-    expect(readAgentImportWorkspaceState("alice", { customersRoot: path.dirname(targetDir), targetDir }).clean).toBe(false);
+    await expect(readAgentImportWorkspaceState("alice", { customersRoot: path.dirname(targetDir), targetDir }))
+      .resolves.toMatchObject({ clean: false });
   });
 
-  it("stores imported binary data in the tenant workspace prefix", async () => {
-    const save = vi.fn().mockResolvedValue(undefined);
-    const bucket = { file: vi.fn(() => ({ save })) };
-    const result = await storeAgentImportBlob({
-      bucket,
-      slug: "alice",
-      importId: "imp-1",
-      filePath: "images/moof.png",
-      contents: Buffer.from("png"),
-      mimeType: "image/png",
-      now: new Date("2026-07-20T12:00:00Z"),
-    });
-    expect(bucket.file).toHaveBeenCalledWith("customers/alice/agent-imports/imp-1/images/moof.png");
-    expect(save).toHaveBeenCalledWith(Buffer.from("png"), { metadata: { contentType: "image/png" } });
-    expect(result).toEqual({
-      type: "blob",
-      gcsPath: "customers/alice/agent-imports/imp-1/images/moof.png",
-      size: 3,
-      mimeType: "image/png",
-      uploadedAt: "2026-07-20T12:00:00.000Z",
-    });
-  });
 });

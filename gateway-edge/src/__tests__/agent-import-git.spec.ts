@@ -80,7 +80,10 @@ describe("inspectAgentImportRepository", () => {
     git(source, "commit", "-q", "-m", "remove credential file");
 
     await expect(inspectAgentImportRepository(source, { scanSecrets: async () => [] }))
-      .rejects.toMatchObject({ code: "unsafe_git_entry" });
+      .rejects.toMatchObject({
+        code: "unsafe_git_entry",
+        message: expect.stringMatching(/\.env.*[0-9a-f]{40}/),
+      });
   });
 
   it("does not expose pod credentials to imported Git operations", () => {
@@ -117,6 +120,33 @@ describe("inspectAgentImportRepository", () => {
 });
 
 describe("applyAgentImportRepository", () => {
+  it("deletes uploaded import blobs when repository construction fails before publication", async () => {
+    const source = repo("agent-import-cleanup-source", {
+      "a.png": Buffer.from([0, 1, 2]),
+      "b.png": Buffer.from([0, 3, 4]),
+    });
+    const target = repo("agent-import-cleanup-target", { "README.md": "starter\n" });
+    const cleanupBlobs = vi.fn(async () => undefined);
+    const storeBlob = vi.fn()
+      .mockResolvedValueOnce({
+        type: "blob", gcsPath: "customers/jack/a.png", size: 3, mimeType: "image/png", uploadedAt: "now",
+      })
+      .mockRejectedValueOnce(new Error("GCS unavailable"));
+
+    await expect(applyAgentImportRepository({
+      sourceDir: source,
+      sourceHead: git(source, "rev-parse", "HEAD"),
+      targetDir: target,
+      destinationHead: git(target, "rev-parse", "HEAD"),
+      importId: "import-cleanup",
+      slug: "jack",
+      storeBlob,
+      cleanupBlobs,
+      push: false,
+    })).rejects.toThrow("GCS unavailable");
+    expect(cleanupBlobs).toHaveBeenCalledOnce();
+  });
+
   it("creates a two-parent import commit, preserves platform paths, and normalizes binaries", async () => {
     const source = repo("agent-import-source", {
       "AGENTS.md": "# Moof\n",
@@ -149,6 +179,7 @@ describe("applyAgentImportRepository", () => {
       importId: "import-123",
       slug: "jack",
       storeBlob,
+      cleanupBlobs: vi.fn(),
       push: false,
     });
 
@@ -187,6 +218,7 @@ describe("applyAgentImportRepository", () => {
       importId: "import-push",
       slug: "jack",
       storeBlob: vi.fn(),
+      cleanupBlobs: vi.fn(),
     });
 
     expect(git(remote, "rev-parse", "refs/heads/main")).toBe(applied.importCommit);
@@ -210,6 +242,7 @@ describe("applyAgentImportRepository", () => {
       importId: "import-stale",
       slug: "jack",
       storeBlob: vi.fn(),
+      cleanupBlobs: vi.fn(),
       push: false,
     })).rejects.toMatchObject({ code: "destination_changed" });
   });
@@ -228,6 +261,7 @@ describe("applyAgentImportRepository", () => {
       importId: "import-retry",
       slug: "jack",
       storeBlob,
+      cleanupBlobs: vi.fn(),
       push: false,
     });
 
@@ -239,6 +273,7 @@ describe("applyAgentImportRepository", () => {
       importId: "import-retry",
       slug: "jack",
       storeBlob,
+      cleanupBlobs: vi.fn(),
       push: false,
     });
 
@@ -264,6 +299,7 @@ describe("applyAgentImportRepository", () => {
       importId: "import-crash",
       slug: "jack",
       storeBlob: vi.fn(),
+      cleanupBlobs: vi.fn(),
       push: false,
     });
 
@@ -275,6 +311,7 @@ describe("applyAgentImportRepository", () => {
       importId: "import-crash",
       slug: "jack",
       storeBlob: vi.fn(),
+      cleanupBlobs: vi.fn(),
     });
 
     expect(retried).toEqual(first);
@@ -295,6 +332,7 @@ describe("applyAgentImportRepository", () => {
       importId: "import-rollback",
       slug: "jack",
       storeBlob: vi.fn(),
+      cleanupBlobs: vi.fn(),
       push: false,
     });
 

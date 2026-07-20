@@ -19,21 +19,24 @@ function harness() {
     get: vi.fn().mockResolvedValue({ id: "imp-1", status: "previewed" }),
     rollback: vi.fn().mockResolvedValue({ id: "imp-1", status: "rolled_back" }),
   };
+  const authorize = vi.fn().mockResolvedValue({ slug: "alice", gatewayId: "gw-alice" });
+  const listGithubSources = vi.fn().mockResolvedValue({
+    repos: [{ owner: "jack", repo: "moof", defaultBranch: "main" }],
+    truncated: false,
+  });
   const deps = {
-    service,
+    createRuntime: vi.fn(() => ({ service, authorize, listGithubSources })),
     localGatewayId: () => "gw-alice",
-    resolveUserGateway: vi.fn().mockResolvedValue({ slug: "alice", gatewayId: "gw-alice" }),
-    isProvisioned: vi.fn().mockResolvedValue(true),
-    listGithubSources: vi.fn().mockResolvedValue({ repos: [{ owner: "jack", repo: "moof", defaultBranch: "main" }], truncated: false }),
   };
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
     req.uid = "uid-alice";
+    req.headers.authorization = "Bearer firebase-token";
     next();
   });
   app.use("/api/g/:gatewayId/agent-imports", createAgentImportsRouter(deps));
-  return { app, deps, service };
+  return { app, deps, service, authorize, listGithubSources };
 }
 
 describe("agent imports route", () => {
@@ -58,35 +61,36 @@ describe("agent imports route", () => {
   });
 
   it("does not reveal whether an import exists across gateway boundaries", async () => {
-    const { app, deps, service } = harness();
-    deps.resolveUserGateway.mockResolvedValue({ slug: "alice", gatewayId: "gw-other" });
+    const { app, service } = harness();
 
-    await request(app).get("/api/g/gw-alice/agent-imports/imp-1").expect(404, { error: "not_found" });
+    await request(app).get("/api/g/gw-other/agent-imports/imp-1").expect(404, { error: "not_found" });
     expect(service.get).not.toHaveBeenCalled();
   });
 
   it("requires completed OpenClaw provisioning", async () => {
-    const { app, deps } = harness();
-    deps.isProvisioned.mockResolvedValue(false);
+    const { app, authorize } = harness();
+    authorize.mockRejectedValue(Object.assign(new Error("OpenClaw not ready"), {
+      code: "openclaw_not_ready",
+    }));
     const response = await request(app)
       .post("/api/g/gw-alice/agent-imports/preview/github")
       .send({ owner: "jack", repo: "moof", branch: "main", artifacts })
-      .expect(409, { error: "openclaw_not_ready" });
-    expect(response.body).toEqual({ error: "openclaw_not_ready" });
+      .expect(409, { error: "openclaw_not_ready", message: "OpenClaw not ready" });
+    expect(response.body).toEqual({ error: "openclaw_not_ready", message: "OpenClaw not ready" });
   });
 
   it("lists import-only GitHub sources with the existing connector", async () => {
-    const { app, deps } = harness();
+    const { app, listGithubSources } = harness();
     await request(app).get("/api/g/gw-alice/agent-imports/sources/github").expect(200, {
       repos: [{ owner: "jack", repo: "moof", defaultBranch: "main" }],
       truncated: false,
     });
-    expect(deps.listGithubSources).toHaveBeenCalledWith("uid-alice");
+    expect(listGithubSources).toHaveBeenCalledOnce();
   });
 
   it("returns a typed reconnect response without leaking connector failures", async () => {
-    const { app, deps } = harness();
-    deps.listGithubSources.mockRejectedValue(Object.assign(new Error("GitHub not connected"), { code: "github_not_connected" }));
+    const { app, listGithubSources } = harness();
+    listGithubSources.mockRejectedValue(Object.assign(new Error("GitHub not connected"), { code: "github_not_connected" }));
     await request(app).get("/api/g/gw-alice/agent-imports/sources/github").expect(422, {
       error: "github_not_connected",
       message: "GitHub not connected",

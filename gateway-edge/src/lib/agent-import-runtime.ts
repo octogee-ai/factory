@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
@@ -8,17 +8,11 @@ import { generateIdentity, type DeviceIdentity } from "@octogee/shared/types/dev
 import { attachUpstreamRpcClient } from "../chat-proxy/openclaw/bridge-upstream-rpc.js";
 import { fetchGatewayAuth, persistGatewayDeviceToken } from "../chat-proxy/openclaw/gateway-token.js";
 import { openUpstream } from "../chat-proxy/openclaw/upstream.js";
-import { db, storage } from "./db.js";
-import { readConnectorAccessToken } from "./connector-tokens.js";
-import { githubListRepos } from "./github.js";
-import { readAgent } from "./firestoreReads.js";
-import { syncCoachIdentity } from "./coach-identity.js";
-import { createAgentImportStore } from "./agent-import-store.js";
+import { agentImportBrokerBaseUrlFromEnv, createAgentImportStore } from "./agent-import-store.js";
 import {
   applyAgentImportRepository,
   inspectAgentImportRepository,
   rollbackAgentImportRepository,
-  type AgentImportManifestEntry,
 } from "./agent-import-git.js";
 import { cloneGithubAgentImportSource, extractLocalAgentImportArchive } from "./agent-import-source.js";
 import {
@@ -74,62 +68,54 @@ export function createAgentImportDoctorClient(options: DoctorClientOptions) {
   };
 }
 
-function git(targetDir: string, args: string[]): string {
-  const result = spawnSync("/usr/bin/git", args, {
-    cwd: targetDir,
-    encoding: "utf8",
-    timeout: 30_000,
-    maxBuffer: 16 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "pipe"],
+function git(targetDir: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("/usr/bin/git", args, {
+      cwd: targetDir,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const output: Buffer[] = [];
+    let size = 0;
+    let failure: Error | null = null;
+    const timer = setTimeout(() => {
+      failure = new Error("workspace git inspection timed out");
+      child.kill("SIGKILL");
+    }, 30_000);
+    child.stdout.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > 16 * 1024 * 1024) {
+        failure = new Error("workspace git inspection output exceeded limit");
+        child.kill("SIGKILL");
+      } else {
+        output.push(chunk);
+      }
+    });
+    child.on("error", (error) => { failure = error; });
+    child.on("close", (status) => {
+      clearTimeout(timer);
+      if (failure || status !== 0) {
+        reject(new Error(`workspace git inspection failed (exit ${String(status)})`));
+        return;
+      }
+      resolve(Buffer.concat(output).toString("utf8").trim());
+    });
   });
-  if (result.error || result.status !== 0) {
-    throw new Error(`workspace git inspection failed (exit ${String(result.status)})`);
-  }
-  return (result.stdout ?? "").trim();
 }
 
-export function readAgentImportWorkspaceState(
+export async function readAgentImportWorkspaceState(
   slug: string,
   options: { customersRoot?: string; targetDir?: string } = {},
-): { targetDir: string; head: string; clean: boolean } {
+): Promise<{ targetDir: string; head: string; clean: boolean }> {
   const targetDir = options.targetDir ?? path.join(
     options.customersRoot ?? process.env.CUSTOMERS_DIR ?? "/home/node/.openclaw/customers",
     slug,
   );
-  const branch = git(targetDir, ["symbolic-ref", "--short", "HEAD"]);
+  const branch = await git(targetDir, ["symbolic-ref", "--short", "HEAD"]);
   if (branch !== "main") throw new Error("workspace import requires the main branch");
   return {
     targetDir,
-    head: git(targetDir, ["rev-parse", "HEAD"]),
-    clean: git(targetDir, ["status", "--porcelain", "--untracked-files=all"]) === "",
-  };
-}
-
-interface ImportBlobBucket {
-  file(path: string): {
-    save(contents: Buffer, options: { metadata: { contentType: string } }): Promise<unknown>;
-  };
-}
-
-interface StoreAgentImportBlobInput {
-  bucket: ImportBlobBucket;
-  slug: string;
-  importId: string;
-  filePath: string;
-  contents: Buffer;
-  mimeType: string;
-  now?: Date;
-}
-
-export async function storeAgentImportBlob(input: StoreAgentImportBlobInput): Promise<AgentImportManifestEntry> {
-  const gcsPath = `customers/${input.slug}/agent-imports/${input.importId}/${input.filePath}`;
-  await input.bucket.file(gcsPath).save(input.contents, { metadata: { contentType: input.mimeType } });
-  return {
-    type: "blob",
-    gcsPath,
-    size: input.contents.length,
-    mimeType: input.mimeType,
-    uploadedAt: (input.now ?? new Date()).toISOString(),
+    head: await git(targetDir, ["rev-parse", "HEAD"]),
+    clean: await git(targetDir, ["status", "--porcelain", "--untracked-files=all"]) === "",
   };
 }
 
@@ -169,31 +155,20 @@ async function withConfigLock<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
-async function readIdentity(uid: string): Promise<AgentImportIdentity> {
-  const agent = await readAgent(uid);
-  return agent ? {
-    ...(agent.name ? { name: agent.name } : {}),
-    ...(typeof agent.persona === "string" ? { persona: agent.persona } : {}),
-    ...(typeof agent.avatarEmoji === "string" ? { emoji: agent.avatarEmoji } : {}),
-  } : {};
-}
-
-async function isProvisioned(uid: string): Promise<boolean> {
-  const snapshot = await db.doc(`users/${uid}`).get();
-  const user = object(snapshot.data());
-  const provisioning = object(user?.provisioning);
-  return object(provisioning?.openclaw)?.status === "complete";
-}
-
-async function listGithubSources(uid: string): Promise<unknown> {
-  const token = await readConnectorAccessToken(uid, "github");
-  if (!token) return Promise.reject(Object.assign(new Error("GitHub not connected"), { status: 422, code: "github_not_connected" }));
-  return githubListRepos(token);
-}
-
-export function createAgentImportRuntime() {
-  const bucket = storage.bucket();
-  const store = createAgentImportStore({ db, bucket });
+export function createAgentImportRuntime(options: {
+  authorization: string;
+  gatewayId: string;
+  brokerBaseUrl?: string;
+  tokenPath?: string;
+  fetchImpl?: typeof fetch;
+}) {
+  const store = createAgentImportStore({
+    baseUrl: options.brokerBaseUrl ?? agentImportBrokerBaseUrlFromEnv(),
+    authorization: options.authorization,
+    gatewayId: options.gatewayId,
+    tokenPath: options.tokenPath,
+    fetchImpl: options.fetchImpl,
+  });
   const runDoctor = createAgentImportDoctorClient({
     baseUrl: `http://127.0.0.1:${process.env.FLEET_CONTROLLER_PORT ?? "3003"}`,
     token: process.env.OPENCLAW_GATEWAY_TOKEN ?? "",
@@ -201,35 +176,30 @@ export function createAgentImportRuntime() {
   const service = new AgentImportService({
     newId: randomUUID,
     now: () => new Date(),
-    readGithubToken: (uid) => readConnectorAccessToken(uid, "github"),
+    ...store,
+    readGithubToken: () => store.readGithubToken(),
+    readGithubRepoSize: (owner, repo) => store.readGithubRepoSize(owner, repo),
     cloneGithubSource: cloneGithubAgentImportSource,
     extractLocalSource: extractLocalAgentImportArchive,
     inspectSource: inspectAgentImportRepository,
     workspaceState: (slug) => readAgentImportWorkspaceState(slug),
     runDoctor,
-    ...store,
     applyRepository: (input) => applyAgentImportRepository({
       ...input,
-      storeBlob: (filePath, contents, mimeType) => storeAgentImportBlob({
-        bucket,
-        slug: input.slug,
-        importId: input.importId,
-        filePath,
-        contents,
-        mimeType,
-      }),
+      storeBlob: (filePath, contents, mimeType) =>
+        store.storeBlob(input.importId, filePath, contents, mimeType),
+      cleanupBlobs: () => store.deleteImportBlobs(input.importId),
     }),
     rollbackRepository: rollbackAgentImportRepository,
-    readIdentity,
-    syncIdentity: async (uid, identity) => {
-      await syncCoachIdentity(uid, {
-        ...(identity.name ? { name: identity.name } : {}),
-        ...(identity.persona !== undefined ? { persona: identity.persona } : {}),
-        ...(identity.emoji ? { emoji: identity.emoji } : {}),
-      });
-    },
+    readIdentity: () => store.readIdentity(),
+    syncIdentity: (_uid, identity) => store.syncIdentity(identity),
+    deleteImportBlobs: (id) => store.deleteImportBlobs(id),
     withConfigLock,
     invokeOpenClaw: invokeLocalOpenClaw,
   });
-  return { service, isProvisioned, listGithubSources };
+  return {
+    service,
+    authorize: () => store.authorize(),
+    listGithubSources: () => store.listGithubSources(),
+  };
 }

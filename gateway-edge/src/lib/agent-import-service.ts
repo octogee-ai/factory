@@ -63,6 +63,7 @@ const APPLYABLE_STATUSES = new Set<AgentImportStatus>([
   "previewed", "workspace", "identity", "config", "verifying", "failed",
 ]);
 const CONFIG_GET_METHOD = "config.get";
+const MAX_GITHUB_REPO_KIB = 128 * 1024;
 
 export interface AgentImportRecord {
   id: string;
@@ -79,7 +80,7 @@ export interface AgentImportRecord {
   completedAt: string | null;
   importCommit?: string;
   rollbackCommit?: string;
-  configOutcome?: "applied" | "safe_baseline";
+  configOutcome?: "applied" | "safe_baseline" | "unchanged";
   warnings: string[];
   previousIdentity?: AgentImportIdentity;
   previousRuntime?: JsonObject;
@@ -107,15 +108,16 @@ export interface AgentImportServiceDeps {
   newId(): string;
   now(): Date;
   readGithubToken(uid: string): Promise<string | null>;
+  readGithubRepoSize(owner: string, repo: string): Promise<number>;
   cloneGithubSource(input: {
     owner: string;
     repo: string;
     branch: string;
     token: string;
-  }): { repoDir: string; sourceHead: string; cleanup(): void };
+  }): Promise<{ repoDir: string; sourceHead: string; cleanup(): void }>;
   extractLocalSource(archive: Buffer): Promise<ExtractedAgentImportSource>;
   inspectSource(repoDir: string): Promise<AgentImportRepositoryInspection>;
-  workspaceState(slug: string): { targetDir: string; head: string; clean: boolean };
+  workspaceState(slug: string): Promise<{ targetDir: string; head: string; clean: boolean }>;
   runDoctor(candidate: JsonObject): Promise<AgentImportDoctorResult>;
   putRecord(record: AgentImportRecord): Promise<void>;
   getRecord(id: string): Promise<AgentImportRecord | null>;
@@ -124,6 +126,7 @@ export interface AgentImportServiceDeps {
   putArchive(id: string, archive: Buffer): Promise<void>;
   getArchive(id: string): Promise<Buffer | null>;
   deleteStaging(id: string): Promise<void>;
+  deleteImportBlobs(id: string): Promise<void>;
   applyRepository(input: {
     sourceDir: string;
     sourceHead: string;
@@ -276,9 +279,44 @@ function assertRuntimeRestored(config: JsonObject, coachId: string, previous: Js
   }
 }
 
+function patchedAgentList(
+  config: JsonObject,
+  coachId: string,
+  patch: JsonObject,
+  removeNulls = false,
+): JsonObject[] {
+  const agents = record(config.agents);
+  const list = agents?.list;
+  if (!Array.isArray(list)) {
+    throw new AgentImportServiceError("coach_config_missing", "OpenClaw config has no agent list");
+  }
+  let found = 0;
+  const result = list.map((entry) => {
+    const agent = record(entry);
+    if (!agent || agent.id !== coachId) return cloneValue(entry) as JsonObject;
+    found += 1;
+    const next = { ...cloneValue(agent), ...cloneValue(patch) };
+    if (removeNulls) {
+      for (const [key, value] of Object.entries(patch)) if (value === null) delete next[key];
+    }
+    return next;
+  });
+  if (found !== 1) {
+    throw new AgentImportServiceError("coach_config_missing", "Octogee coach config is missing or ambiguous");
+  }
+  return result;
+}
+
+function assertAgentList(config: JsonObject, expected: JsonObject[]): void {
+  const list = record(config.agents)?.list;
+  if (!deepEqual(list, expected)) {
+    throw new AgentImportServiceError("config_readback_failed", "OpenClaw did not retain the complete agent list");
+  }
+}
+
 export class AgentImportService {
-  private readonly activeApplies = new Map<string, Promise<AgentImportRecord>>();
-  private readonly activeRollbacks = new Map<string, Promise<AgentImportRecord>>();
+  private static readonly activeApplies = new Map<string, Promise<AgentImportRecord>>();
+  private static readonly activeRollbacks = new Map<string, Promise<AgentImportRecord>>();
 
   constructor(private readonly deps: AgentImportServiceDeps) {}
 
@@ -294,7 +332,14 @@ export class AgentImportService {
     const artifacts = validateAgentImportConfigArtifacts(input.artifacts);
     const token = await this.deps.readGithubToken(input.uid);
     if (!token) throw new AgentImportServiceError("github_not_connected", "GitHub is not connected");
-    const source = this.deps.cloneGithubSource({
+    const repoSizeKiB = await this.deps.readGithubRepoSize(input.owner, input.repo);
+    if (!Number.isSafeInteger(repoSizeKiB) || repoSizeKiB < 0) {
+      throw new AgentImportServiceError("invalid_github_source", "GitHub repository size is invalid");
+    }
+    if (repoSizeKiB > MAX_GITHUB_REPO_KIB) {
+      throw new AgentImportServiceError("archive_too_large", "GitHub repository exceeds the 128 MiB import limit");
+    }
+    const source = await this.deps.cloneGithubSource({
       owner: input.owner,
       repo: input.repo,
       branch: input.branch,
@@ -366,7 +411,7 @@ export class AgentImportService {
     source: AgentImportSource;
     archive?: Buffer;
   }): Promise<AgentImportPreview> {
-    const destination = this.deps.workspaceState(input.slug);
+    const destination = await this.deps.workspaceState(input.slug);
     if (!destination.clean) {
       throw new AgentImportServiceError("destination_dirty", "commit or discard Octogee workspace changes before import");
     }
@@ -443,14 +488,14 @@ export class AgentImportService {
 
   async apply(input: { uid: string; importId: string; approvalHash: string }): Promise<AgentImportRecord> {
     const key = `${input.uid}\0${input.importId}\0${input.approvalHash}`;
-    const active = this.activeApplies.get(key);
+    const active = AgentImportService.activeApplies.get(key);
     if (active) return active;
     const work = this.applyOnce(input);
-    this.activeApplies.set(key, work);
+    AgentImportService.activeApplies.set(key, work);
     try {
       return await work;
     } finally {
-      if (this.activeApplies.get(key) === work) this.activeApplies.delete(key);
+      if (AgentImportService.activeApplies.get(key) === work) AgentImportService.activeApplies.delete(key);
     }
   }
 
@@ -473,14 +518,22 @@ export class AgentImportService {
       current = await this.applyConfig(current, plan);
       return await this.completeApply(current, input.importId);
     } catch (error) {
-      const checkpoint = await this.ownedRecord(input.importId, input.uid);
-      await this.update(checkpoint, {
-        status: "failed",
-        error: {
-          code: error instanceof AgentImportServiceError ? error.code : "agent_import_failed",
-          message: error instanceof Error ? error.message : String(error),
-        },
-      });
+      try {
+        const checkpoint = await this.ownedRecord(input.importId, input.uid);
+        await this.update(checkpoint, {
+          status: "failed",
+          error: {
+            code: error instanceof AgentImportServiceError ? error.code : "agent_import_failed",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        });
+      } catch (checkpointError) {
+        throw new AggregateError(
+          [error, checkpointError],
+          `agent import failed and failure checkpointing also failed: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
+      }
       throw error;
     }
   }
@@ -497,7 +550,7 @@ export class AgentImportService {
       if (inspected.head !== plan.source.head) {
         throw new AgentImportServiceError("source_changed", "source changed after preview");
       }
-      const destination = this.deps.workspaceState(plan.slug);
+      const destination = await this.deps.workspaceState(plan.slug);
       if (!destination.clean) {
         throw new AgentImportServiceError("destination_changed", "Octogee workspace changed after preview");
       }
@@ -572,14 +625,14 @@ export class AgentImportService {
 
   async rollback(input: { uid: string; importId: string }): Promise<AgentImportRecord> {
     const key = `${input.uid}\0${input.importId}`;
-    const active = this.activeRollbacks.get(key);
+    const active = AgentImportService.activeRollbacks.get(key);
     if (active) return active;
     const work = this.rollbackOnce(input);
-    this.activeRollbacks.set(key, work);
+    AgentImportService.activeRollbacks.set(key, work);
     try {
       return await work;
     } finally {
-      if (this.activeRollbacks.get(key) === work) this.activeRollbacks.delete(key);
+      if (AgentImportService.activeRollbacks.get(key) === work) AgentImportService.activeRollbacks.delete(key);
     }
   }
 
@@ -594,7 +647,7 @@ export class AgentImportService {
     }
     try {
       if (!current.rollbackCommit) {
-        const target = this.deps.workspaceState(current.slug);
+        const target = await this.deps.workspaceState(current.slug);
         const result = await this.deps.rollbackRepository({
           targetDir: target.targetDir,
           importCommit: current.importCommit,
@@ -610,6 +663,7 @@ export class AgentImportService {
       if (current.previousRuntime && Object.keys(current.previousRuntime).length > 0) {
         await this.patchRuntime(current.slug, current.previousRuntime);
       }
+      await this.deps.deleteImportBlobs(current.id);
       current = await this.update(current, {
         status: "rolled_back",
       });
@@ -637,7 +691,7 @@ export class AgentImportService {
     if (plan.source.kind === "github") {
       const token = await this.deps.readGithubToken(plan.uid);
       if (!token) throw new AgentImportServiceError("github_not_connected", "GitHub was disconnected after preview");
-      return this.deps.cloneGithubSource({
+      return await this.deps.cloneGithubSource({
         owner: plan.source.owner,
         repo: plan.source.repo,
         branch: plan.source.branch,
@@ -656,33 +710,37 @@ export class AgentImportService {
     runtimePatch: JsonObject,
     checkpointedPrevious: JsonObject | undefined,
     checkpoint: (previous: JsonObject) => Promise<void>,
-  ): Promise<{ outcome: "applied" | "safe_baseline"; previous: JsonObject }> {
+  ): Promise<{ outcome: "applied" | "safe_baseline" | "unchanged"; previous: JsonObject }> {
     if (Object.keys(runtimePatch).length === 0) {
       if (!checkpointedPrevious) await checkpoint({});
-      return { outcome: "safe_baseline", previous: checkpointedPrevious ?? {} };
+      return { outcome: "unchanged", previous: checkpointedPrevious ?? {} };
     }
     const coachId = `octogee-${slug}-coach`;
     return this.deps.withConfigLock(async () => {
       const before = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
       const previous = checkpointedPrevious ?? previousRuntime(coachFromConfig(before.config, coachId), runtimePatch);
       if (!checkpointedPrevious) await checkpoint(previous);
+      const nextList = patchedAgentList(before.config, coachId, runtimePatch);
       try {
         await this.deps.invokeOpenClaw("config.patch", {
-          raw: JSON.stringify({ agents: { list: [{ id: coachId, ...runtimePatch }] } }),
+          raw: JSON.stringify({ agents: { list: nextList } }),
           baseHash: before.hash,
         });
         const after = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
         assertRuntimeApplied(after.config, coachId, runtimePatch);
+        assertAgentList(after.config, nextList);
         await this.deps.invokeOpenClaw("health", {});
         return { outcome: "applied", previous };
       } catch {
         const rollbackBase = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
+        const restoredList = patchedAgentList(before.config, coachId, previous, true);
         await this.deps.invokeOpenClaw("config.patch", {
-          raw: JSON.stringify({ agents: { list: [{ id: coachId, ...previous }] } }),
+          raw: JSON.stringify({ agents: { list: restoredList } }),
           baseHash: rollbackBase.hash,
         });
         const restored = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
         assertRuntimeRestored(restored.config, coachId, previous);
+        assertAgentList(restored.config, restoredList);
         await this.deps.invokeOpenClaw("health", {});
         return { outcome: "safe_baseline", previous };
       }
@@ -694,12 +752,14 @@ export class AgentImportService {
     const coachId = `octogee-${slug}-coach`;
     await this.deps.withConfigLock(async () => {
       const before = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
+      const restoredList = patchedAgentList(before.config, coachId, patch, true);
       await this.deps.invokeOpenClaw("config.patch", {
-        raw: JSON.stringify({ agents: { list: [{ id: coachId, ...patch }] } }),
+        raw: JSON.stringify({ agents: { list: restoredList } }),
         baseHash: before.hash,
       });
       const after = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
       assertRuntimeRestored(after.config, coachId, patch);
+      assertAgentList(after.config, restoredList);
       await this.deps.invokeOpenClaw("health", {});
     });
   }

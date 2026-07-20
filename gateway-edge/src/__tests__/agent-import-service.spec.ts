@@ -38,7 +38,8 @@ function harness(overrides: Partial<AgentImportServiceDeps> = {}) {
     newId: () => "import-1",
     now: () => new Date("2026-07-20T12:00:00.000Z"),
     readGithubToken: vi.fn(async () => "github-oauth"),
-    cloneGithubSource: vi.fn(() => ({ repoDir: "/source", sourceHead: SOURCE_HEAD, cleanup })),
+    readGithubRepoSize: vi.fn(async () => 12),
+    cloneGithubSource: vi.fn(async () => ({ repoDir: "/source", sourceHead: SOURCE_HEAD, cleanup })),
     extractLocalSource: vi.fn(async () => ({
       repoDir: "/source",
       sourceHead: SOURCE_HEAD,
@@ -54,7 +55,7 @@ function harness(overrides: Partial<AgentImportServiceDeps> = {}) {
       workspaceDigest: `sha256:${"d".repeat(64)}`,
       secretFindings: [],
     })),
-    workspaceState: vi.fn(() => ({ targetDir: "/target", head: DESTINATION_HEAD, clean: true })),
+    workspaceState: vi.fn(async () => ({ targetDir: "/target", head: DESTINATION_HEAD, clean: true })),
     runDoctor: vi.fn(async () => ({
       outcome: "migrated",
       doctorVersion: "2026.7.2",
@@ -69,6 +70,7 @@ function harness(overrides: Partial<AgentImportServiceDeps> = {}) {
     putArchive: vi.fn(async (id, archive) => { archives.set(id, Buffer.from(archive)); }),
     getArchive: vi.fn(async (id) => archives.get(id) ? Buffer.from(archives.get(id)!) : null),
     deleteStaging: vi.fn(async (id) => { plans.delete(id); archives.delete(id); }),
+    deleteImportBlobs: vi.fn(async () => undefined),
     applyRepository: vi.fn(async () => ({ importCommit: IMPORT_COMMIT, sourceRef: "refs/octogee/imports/import-1/source" })),
     rollbackRepository: vi.fn(async () => ({ rollbackCommit: "e".repeat(40) })),
     readIdentity: vi.fn(async () => ({ name: "Octo", persona: "Default", emoji: "🐙" })),
@@ -101,6 +103,21 @@ function harness(overrides: Partial<AgentImportServiceDeps> = {}) {
 }
 
 describe("AgentImportService preview", () => {
+  it("rejects an oversized GitHub repository before starting a clone", async () => {
+    const h = harness({ readGithubRepoSize: vi.fn(async () => 128 * 1024 + 1) });
+
+    await expect(h.service.previewGithub({
+      uid: "uid-jack",
+      slug: "jack",
+      gatewayId: "shared-1",
+      owner: "jack",
+      repo: "moof",
+      branch: "main",
+      artifacts: artifacts(),
+    })).rejects.toMatchObject({ code: "archive_too_large" });
+    expect(h.deps.cloneGithubSource).not.toHaveBeenCalled();
+  });
+
   it("previews GitHub history with current Doctor and stores no OAuth token or source credential", async () => {
     const h = harness();
     const preview = await h.service.previewGithub({
@@ -206,6 +223,71 @@ describe("AgentImportService preview", () => {
 });
 
 describe("AgentImportService apply and rollback", () => {
+  it("treats an empty portable runtime patch as unchanged without warning", async () => {
+    const emptyArtifacts = buildAgentImportConfigArtifacts({
+      agents: { list: [{ id: "moof", name: "Moof" }] },
+    }, "moof");
+    const h = harness({
+      runDoctor: vi.fn(async () => ({
+        outcome: "unchanged",
+        doctorVersion: "2026.7.2",
+        changedPaths: [],
+        diagnostics: [],
+        repairedCandidate: emptyArtifacts.doctorCandidate,
+      })),
+    });
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack",
+      slug: "jack",
+      gatewayId: "shared-1",
+      owner: "jack",
+      repo: "moof",
+      branch: "main",
+      artifacts: emptyArtifacts,
+    });
+
+    const completed = await h.service.apply({
+      uid: "uid-jack",
+      importId: preview.id,
+      approvalHash: preview.approvalHash,
+    });
+
+    expect(completed.configOutcome).toBe("unchanged");
+    expect(completed.warnings).not.toContain("config_delta_rejected");
+    expect(h.deps.invokeOpenClaw).not.toHaveBeenCalled();
+  });
+
+  it("preserves sibling agents and unpatched coach fields in config.patch", async () => {
+    const before = {
+      agents: { list: [
+        { id: "other", name: "Other", tools: { profile: "full" } },
+        { id: "octogee-jack-coach", name: "Octo", tools: { profile: "safe" }, heartbeat: { every: "60m" } },
+      ] },
+    };
+    const after = {
+      agents: { list: [
+        before.agents.list[0],
+        { ...before.agents.list[1], heartbeat: { every: "30m", lightContext: true } },
+      ] },
+    };
+    const invokeOpenClaw = vi.fn()
+      .mockResolvedValueOnce({ hash: "before", config: before })
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ hash: "after", config: after })
+      .mockResolvedValueOnce({ status: "ok" });
+    const h = harness({ invokeOpenClaw });
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack", slug: "jack", gatewayId: "shared-1", owner: "jack", repo: "moof", branch: "main",
+      artifacts: artifacts(),
+    });
+
+    await h.service.apply({ uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash });
+
+    expect(invokeOpenClaw).toHaveBeenNthCalledWith(2, "config.patch", {
+      raw: JSON.stringify({ agents: { list: after.agents.list } }),
+      baseHash: "before",
+    });
+  });
   it("requires the exact preview hash, imports history, updates identity, and patches only the Octogee coach", async () => {
     const h = harness();
     const preview = await h.service.previewGithub({
@@ -406,7 +488,7 @@ describe("AgentImportService apply and rollback", () => {
       return { importCommit: IMPORT_COMMIT, sourceRef: "refs/octogee/imports/import-1/source" };
     });
     const h = harness({
-      workspaceState: vi.fn(() => ({ targetDir: "/target", head: workspaceHead, clean: true })),
+      workspaceState: vi.fn(async () => ({ targetDir: "/target", head: workspaceHead, clean: true })),
       applyRepository,
     });
     const preview = await h.service.previewGithub({
@@ -487,6 +569,29 @@ describe("AgentImportService apply and rollback", () => {
     expect(applyRepository).toHaveBeenCalledOnce();
   });
 
+  it("coalesces concurrent apply requests across request-scoped service instances", async () => {
+    let release!: () => void;
+    const blocked = new Promise<{ importCommit: string; sourceRef: string }>((resolve) => {
+      release = () => resolve({ importCommit: IMPORT_COMMIT, sourceRef: "refs/octogee/imports/import-1/source" });
+    });
+    const applyRepository = vi.fn(() => blocked);
+    const h = harness({ applyRepository });
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack", slug: "jack", gatewayId: "shared-1", owner: "jack", repo: "moof", branch: "main",
+      artifacts: artifacts(),
+    });
+    const secondService = new AgentImportService(h.deps);
+
+    const first = h.service.apply({ uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash });
+    while (applyRepository.mock.calls.length === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+    const second = secondService.apply({ uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash });
+    expect(applyRepository).toHaveBeenCalledOnce();
+    release();
+
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+    expect(applyRepository).toHaveBeenCalledOnce();
+  });
+
   it("rolls back the workspace and prior identity without deleting imported history", async () => {
     const h = harness();
     const preview = await h.service.previewGithub({
@@ -511,6 +616,7 @@ describe("AgentImportService apply and rollback", () => {
       emoji: "🐙",
     });
     expect(rolledBack.status).toBe("rolled_back");
+    expect(h.deps.deleteImportBlobs).toHaveBeenCalledWith("import-1");
   });
 
   it("resumes rollback after Git succeeded but its checkpoint write was interrupted", async () => {

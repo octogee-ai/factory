@@ -32,7 +32,6 @@ import internalByotSyncRoutes from "./routes/internal/byot-sync.js";
 import internalConnectorRoutes from "./routes/internal/connectors.js";
 import { createAgentImportsRouter } from "./routes/agent-imports.js";
 import { createAgentImportRuntime } from "./lib/agent-import-runtime.js";
-import { resolveUserGateway } from "./lib/user-gateway.js";
 import { mountClusterRoutes } from "./routes/mount-cluster-routes.js";
 import { createGatewayRouter } from "./public-router.js";
 import {
@@ -244,25 +243,11 @@ function mountSidecarLocalitySurface(app: Express, options: {
   automationsLocality.use(requireAuthenticatedUid);
   automationsLocality.use(automationsRoutes);
   mountApi(app, "/automations", automationsLocality);
-  let agentImportRuntime: ReturnType<typeof createAgentImportRuntime> | null = null;
-  const importRuntime = () => {
-    agentImportRuntime ??= createAgentImportRuntime();
-    return agentImportRuntime;
-  };
   const agentImportsLocality = Router({ mergeParams: true });
-  agentImportsLocality.use(requireAuth);
+  agentImportsLocality.use(requireAuthenticatedUid);
   agentImportsLocality.use(createAgentImportsRouter({
-    service: {
-      previewGithub: (input) => importRuntime().service.previewGithub(input),
-      previewLocal: (input) => importRuntime().service.previewLocal(input),
-      apply: (input) => importRuntime().service.apply(input),
-      get: (input) => importRuntime().service.get(input),
-      rollback: (input) => importRuntime().service.rollback(input),
-    },
-    isProvisioned: (uid) => importRuntime().isProvisioned(uid),
-    listGithubSources: (uid) => importRuntime().listGithubSources(uid),
+    createRuntime: createAgentImportRuntime,
     localGatewayId: () => process.env.GATEWAY_ID ?? null,
-    resolveUserGateway,
   }));
   mountApi(app, "/agent-imports", agentImportsLocality);
   // connect/status/sso-submit run HERE (the customer's own pod) so the in-pod
