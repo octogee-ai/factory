@@ -100,8 +100,10 @@ vi.mock("@octogee/core/assigned-roster", () => ({
 }));
 
 vi.mock("../lib/gitea-admin.js", () => ({
+  deleteGiteaUserPubKey: vi.fn(async () => {}),
   ensureGiteaUser: vi.fn(async () => {}),
-  readGiteaUserPubKey: vi.fn(async () => "ssh-ed25519 KEY octogee"),
+  readGiteaUserPubKey: vi.fn(async () => "ssh-ed25519 OLD predecessor"),
+  readGiteaUserPubKeys: vi.fn(async () => ["ssh-ed25519 OLD predecessor", "ssh-ed25519 KEY octogee"]),
   ensureGiteaOrgForWorkspace: vi.fn(async () => {}),
   ensureWorkspaceRepo: vi.fn(async () => {}),
   ensureSystemConfigRepo: vi.fn(async () => {}),
@@ -194,6 +196,17 @@ describe("internal gitea-admin route", () => {
     expect(res.status).toBe(204);
     expect(readAssignedSlugsForGateway).toHaveBeenCalledWith(expect.anything(), "bender");
     expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith("acme", "ssh-ed25519 AAA");
+  });
+
+  it("release-user-key removes only the authenticated gateway pod's submitted key", async () => {
+    const res = await authed(
+      request(app()).post("/internal/gitea/release-user-key"),
+    ).send({ slug: "acme", pubKey: "ssh-ed25519 OLD predecessor" });
+    expect(res.status).toBe(204);
+    expect(giteaAdmin.deleteGiteaUserPubKey).toHaveBeenCalledWith(
+      "acme",
+      "ssh-ed25519 OLD predecessor",
+    );
   });
 
   it("uses the bound gateway identity from octogee-api TokenReview instead of GATEWAY_ID env", async () => {
@@ -335,18 +348,27 @@ describe("internal gitea-admin route", () => {
     expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
   });
 
-  it("user-pubkey → 200 { pubKey } from the lib", async () => {
+  it("user-pubkey keeps the singular response for a predecessor image during a roll", async () => {
     const res = await authed(request(app()).get("/internal/gitea/user-pubkey").query({ slug: "acme" }));
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ pubKey: "ssh-ed25519 KEY octogee" });
+    expect(res.body).toEqual({ pubKey: "ssh-ed25519 OLD predecessor" });
     expect(giteaAdmin.readGiteaUserPubKey).toHaveBeenCalledWith("acme");
   });
 
-  it("user-pubkey → 200 { pubKey: null } when the lib returns null", async () => {
+  it("user-pubkey → 200 { pubKey: null } when no managed key exists", async () => {
     vi.mocked(giteaAdmin.readGiteaUserPubKey).mockResolvedValueOnce(null);
     const res = await authed(request(app()).get("/internal/gitea/user-pubkey").query({ slug: "acme" }));
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ pubKey: null });
+  });
+
+  it("user-pubkeys → 200 { pubKeys } for surge-safe membership checks", async () => {
+    const res = await authed(request(app()).get("/internal/gitea/user-pubkeys").query({ slug: "acme" }));
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      pubKeys: ["ssh-ed25519 OLD predecessor", "ssh-ed25519 KEY octogee"],
+    });
+    expect(giteaAdmin.readGiteaUserPubKeys).toHaveBeenCalledWith("acme");
   });
 
   it("ensure-org → 204 and calls the lib with slug", async () => {

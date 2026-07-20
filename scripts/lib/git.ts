@@ -27,6 +27,7 @@ import {
 import * as giteaBroker from "./gitea-admin-broker-client.js";
 import { notesWelcomeSeed } from "@octogee/core/templates/project-seeds";
 import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
+import { pubKeysMatch } from "@octogee/core/customer-lifecycle";
 
 export function errMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -98,7 +99,16 @@ export function generateCustomerSshKey(slug: string): string {
 // admin broker — used by the mount flow to detect SSH-key drift. Returns null
 // when the user/key is absent.
 export async function readGiteaCustomerPubKey(slug: string): Promise<string | null> {
-  return giteaBroker.readGiteaUserPubKey(slug);
+  const localPubKey = readLocalCustomerPubKey(slug);
+  if (localPubKey === null) return null;
+  return findMatchingGiteaPubKey(localPubKey, await giteaBroker.readGiteaUserPubKeys(slug));
+}
+
+export function findMatchingGiteaPubKey(
+  localPubKey: string,
+  registeredPubKeys: readonly string[],
+): string | null {
+  return registeredPubKeys.find((candidate) => pubKeysMatch(candidate, localPubKey)) ?? null;
 }
 
 export async function deleteCustomerSshKey(slug: string): Promise<void> {

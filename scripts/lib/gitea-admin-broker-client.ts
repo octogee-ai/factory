@@ -38,11 +38,15 @@ export async function ensureGiteaUser(slug: string, pubKey: string): Promise<voi
   await postVoid("/internal/gitea/ensure-user", { slug, pubKey });
 }
 
-export async function readGiteaUserPubKey(slug: string): Promise<string | null> {
+export async function releaseGiteaUserKey(slug: string, pubKey: string): Promise<void> {
+  await postVoid("/internal/gitea/release-user-key", { slug, pubKey });
+}
+
+export async function readGiteaUserPubKeys(slug: string): Promise<string[]> {
   const data = (await getJson(
-    `/internal/gitea/user-pubkey?slug=${encodeURIComponent(slug)}`,
-  )) as { pubKey: string | null };
-  return data.pubKey;
+    `/internal/gitea/user-pubkeys?slug=${encodeURIComponent(slug)}`,
+  )) as { pubKeys: string[] };
+  return data.pubKeys;
 }
 
 export async function ensureGiteaOrgForWorkspace(slug: string): Promise<void> {

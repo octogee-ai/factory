@@ -7,7 +7,8 @@ import {
 import { createBrokeredBlobStore } from "../lib/blob-sync-broker.js";
 import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
 import { runGatewayPreStopFlush } from "../lib/gateway-prestop-flush.js";
-import { syncAllWorkspaces } from "../lib/git.js";
+import { readLocalCustomerPubKey, syncAllWorkspaces } from "../lib/git.js";
+import { releaseGiteaUserKey } from "../lib/gitea-admin-broker-client.js";
 import {
   checkpointDurableSystemConfigForSlug,
   syncSystemConfigForSlug,
@@ -46,6 +47,23 @@ export function createPreStopSystemConfigFlush(
   };
 }
 
+export function createPreStopGiteaKeyRelease(
+  builderSlug: string,
+  deps: {
+    readLocalCustomerPubKey: typeof readLocalCustomerPubKey;
+    releaseGiteaUserKey: typeof releaseGiteaUserKey;
+  } = { readLocalCustomerPubKey, releaseGiteaUserKey },
+): (() => Promise<void>) | undefined {
+  if (!builderSlug) return undefined;
+  return async () => {
+    const pubKey = deps.readLocalCustomerPubKey(builderSlug);
+    if (pubKey === null) {
+      throw new Error(`[prestop-flush] local SSH public key is missing for ${builderSlug}`);
+    }
+    await deps.releaseGiteaUserKey(builderSlug, pubKey);
+  };
+}
+
 async function main(): Promise<void> {
   const { builderSlug, gatewayClass, gatewayId } = resolvePreStopFlushConfig();
   const brokerClient = createFleetBrokerClient(gatewayId);
@@ -68,6 +86,7 @@ async function main(): Promise<void> {
       storeForSlug: () => createBrokeredBlobStore(brokerClient),
     }),
     syncSystemConfig: createPreStopSystemConfigFlush(builderSlug),
+    releaseGiteaKey: createPreStopGiteaKeyRelease(builderSlug),
     log,
   });
   await brokerClient
