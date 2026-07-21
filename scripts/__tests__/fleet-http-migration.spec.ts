@@ -866,6 +866,41 @@ describe("queued-rsync migration control handlers", () => {
     });
   });
 
+  it.each(["pre", "final"] as const)(
+    "createExportPathsHandler keeps pod-local customer keys out of %s surge state",
+    async (mode) => {
+      const adapter = mkAdapter({
+        listExportPaths: vi.fn(async () => [
+          { cwd: "/state", path: "agents/octogee-chris-coach" },
+          { cwd: "/openclaw", path: "customers/chris" },
+          { cwd: "/openclaw", path: "customer-keys/chris" },
+        ]),
+      });
+      const body: ExportPathsRequestBody = {
+        migrationId: "mig-1",
+        slug: "chris",
+        mode,
+      };
+      const rawBody = JSON.stringify(body);
+      const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+      const handler = createExportPathsHandler(mkDeps({ adapter }));
+      const req = mkRequest(body, { signature: sig });
+      const { res, getStatus, getBody } = mkResponse();
+
+      await handler(req, res, vi.fn());
+
+      expect(getStatus()).toBe(200);
+      expect(getBody()).toEqual({
+        migrationId: "mig-1",
+        slug: "chris",
+        sources: [
+          { cwd: "/state", path: "agents/octogee-chris-coach" },
+          { cwd: "/openclaw", path: "customers/chris" },
+        ],
+      });
+    },
+  );
+
   it("createExportPathsHandler rejects a missing/invalid transfer mode", async () => {
     const adapter = mkAdapter({
       listExportPaths: vi.fn(async () => [
@@ -1089,6 +1124,7 @@ describe("queued-rsync migration control handlers", () => {
       listExportPaths: vi.fn(async () => [
         { cwd: "/state", path: "agents/octogee-chris-coach" },
         { cwd: "/openclaw", path: "customers/chris" },
+        { cwd: "/openclaw", path: "customer-keys/chris" },
       ]),
       exportOpenClawActivationManifest: vi.fn(async () => ({
         version: 1,
@@ -1126,6 +1162,7 @@ describe("queued-rsync migration control handlers", () => {
     expect(args).toContain("--relative");
     expect(args).toContain("/state/./agents/octogee-chris-coach");
     expect(args).toContain("/openclaw/./customers/chris");
+    expect(args).not.toContain("/openclaw/./customer-keys/chris");
     expect(args.some((arg) => arg.endsWith("/./.octogee-migration-activation/chris/activation.json"))).toBe(true);
     expect(args).toContain(`rsync://migration@${TARGET_POD_IP}:30873/state/`);
   });
@@ -1892,6 +1929,15 @@ describe("findPathTraversalViolation", () => {
       "customer-keys/chris/id_ed25519",
     ], slug, "keys")).toBeNull();
   });
+
+  it.each(["pre", "final"] as const)(
+    "rejects pod-local customer keys during %s surge import",
+    (mode) => {
+      expect(findPathTraversalViolation([
+        "customer-keys/chris/id_ed25519",
+      ], slug, mode)).toContain("outside the per-slug allowlist");
+    },
+  );
 
   it("rejects an absolute-path entry", () => {
     expect(findPathTraversalViolation(["/etc/passwd"], slug)).toContain("absolute path");

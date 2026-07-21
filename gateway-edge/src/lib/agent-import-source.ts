@@ -121,10 +121,11 @@ export function githubAgentImportCloneEnvironment(
   if (!token || /[\r\n]/.test(token)) {
     throw new AgentImportSourceError("invalid_github_token", "GitHub OAuth token is invalid");
   }
+  const authorization = Buffer.from("octogee:" + token).toString("base64");
   return sourceGitEnvironment(source, {
     GIT_CONFIG_COUNT: "1",
     GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
-    GIT_CONFIG_VALUE_0: `Authorization: Bearer ${token}`,
+    GIT_CONFIG_VALUE_0: `Authorization: Basic ${authorization}`,
   });
 }
 

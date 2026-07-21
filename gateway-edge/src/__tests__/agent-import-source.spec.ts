@@ -95,7 +95,7 @@ describe("GitHub agent import source", () => {
       GIT_TERMINAL_PROMPT: "0",
       GIT_CONFIG_COUNT: "1",
       GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
-      GIT_CONFIG_VALUE_0: "Authorization: Bearer gho_private",
+      GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from("octogee:gho_private").toString("base64")}`,
     });
     expect(env).not.toHaveProperty("OTHER_SECRET");
     expect(githubAgentImportCloneUrl("jack", "moof")).not.toContain("gho_private");

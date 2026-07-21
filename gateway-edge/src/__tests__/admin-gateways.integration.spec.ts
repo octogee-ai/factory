@@ -199,7 +199,7 @@ describe("GET /api/admin/gateways", () => {
     const res = await request(app).get("/api/admin/gateways");
     expect(res.status).toBe(200);
     expect(res.body.stats).toMatchObject({
-      gateways: { total: 3, ready: 2, unreachable: 1 },
+      gateways: { total: 3, ready: 2, paused: 0, unreachable: 1 },
       customersMounted: 4,
     });
   });

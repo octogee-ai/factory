@@ -522,6 +522,52 @@ describe("fleet gateway projection", () => {
       "default",
     ]);
   });
+
+  it("counts intentionally paused gateways separately from unreachable gateways", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "default", overrides: {} },
+      users: {},
+      gateways: {
+        default: durableGatewayRoot("default", { liveRelease: 1 }),
+        standby: durableGatewayRoot("standby", { desiredStatus: "paused", liveRelease: 1 }),
+      },
+      glmGateways: {
+        default: {
+          docKind: "runtime",
+          gatewayId: "default",
+          release: 1,
+          lifecycle: "serving",
+          desiredStatus: "running",
+          helm: {
+            imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
+            imageTag: "1234567",
+          },
+          heartbeat: { status: "ready", mountedCustomers: [], lastHeartbeatAt: Date.now() },
+        },
+        standby: {
+          docKind: "runtime",
+          gatewayId: "standby",
+          release: 1,
+          lifecycle: "serving",
+          desiredStatus: "paused",
+          helm: {
+            imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
+            imageTag: "1234567",
+          },
+          heartbeat: { status: "ready", mountedCustomers: [], lastHeartbeatAt: 1 },
+        },
+      },
+    });
+
+    const res = await request(app).get("/gateways").expect(200);
+
+    expect(res.body.stats.gateways).toEqual({
+      total: 2,
+      ready: 1,
+      paused: 1,
+      unreachable: 0,
+    });
+  });
 });
 
 describe("onboarding placement (post-cohorts)", () => {

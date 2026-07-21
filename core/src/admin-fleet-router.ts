@@ -1351,7 +1351,7 @@ export function projectGatewaySummary(
 function rollupFleetStats(
   gateways: ReadonlyArray<ReturnType<typeof projectGatewaySummary>>,
 ): {
-  gateways: { total: number; ready: number; unreachable: number };
+  gateways: { total: number; ready: number; paused: number; unreachable: number };
   customersMounted: number;
   fleetCost: {
     monthlyUsd: number;
@@ -1366,7 +1366,7 @@ function rollupFleetStats(
     }>;
   };
 } {
-  let ready = 0, unreachable = 0, customersMounted = 0, fleetMonthlyUsd = 0, fleetOnDemandUsd = 0;
+  let ready = 0, paused = 0, unreachable = 0, customersMounted = 0, fleetMonthlyUsd = 0, fleetOnDemandUsd = 0;
   const byTier: Record<string, {
     count: number;
     subtotalUsd: number;
@@ -1379,7 +1379,8 @@ function rollupFleetStats(
     // a gateway whose heartbeat has aged out is unreachable, whatever its last
     // self-reported status said. See FLEET-RECONCILE-SPEC.
     const stale = g.heartbeatAgeMs != null && g.heartbeatAgeMs > GATEWAY_UNREACHABLE_AFTER_MS;
-    if (stale) unreachable++;
+    if (g.desiredStatus === "paused") paused++;
+    else if (stale) unreachable++;
     else if (g.status === "ready") ready++;
     customersMounted += g.mountedCustomers.length;
     fleetMonthlyUsd += g.sizing.monthlyCostUsd.compute;
@@ -1399,7 +1400,7 @@ function rollupFleetStats(
     byTier[g.sizing.tier] = entry;
   }
   return {
-    gateways: { total: gateways.length, ready, unreachable },
+    gateways: { total: gateways.length, ready, paused, unreachable },
     customersMounted,
     fleetCost: {
       monthlyUsd: fleetMonthlyUsd,
