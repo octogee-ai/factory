@@ -1048,7 +1048,7 @@ describe("queued-rsync migration control handlers", () => {
     await handler(req, res, vi.fn());
 
     expect(getStatus()).toBe(200);
-    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris");
+    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris", "pre");
     expect(markCustomerMigratingIn).toHaveBeenCalledWith("chris");
   });
 
@@ -1142,7 +1142,7 @@ describe("queued-rsync migration control handlers", () => {
       port: 30873,
       module: "state",
     });
-    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris");
+    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris", "pre");
     expect(adapter.markCustomerMigratingIn).toHaveBeenCalledWith("chris");
     expect(waitForRsyncReady).toHaveBeenCalledWith(30873);
     expect(String(spawnMock.mock.calls[0][0])).toMatch(/\/rsync$/);
@@ -1767,7 +1767,7 @@ describe("createImportHandler", () => {
       slug: "chris",
       imported: true,
     });
-    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris");
+    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris", "default");
     expect(adapter.activateImportedCustomer).toHaveBeenCalledWith(
       "chris",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
@@ -1847,6 +1847,7 @@ describe("createImportHandler", () => {
     const req = mkImportRequest({
       migrationId: "mig-1",
       slug: "chris",
+      mode: "final",
       signature: sig,
     });
     const { res, getStatus, getBody } = mkResponse();
@@ -1857,7 +1858,7 @@ describe("createImportHandler", () => {
       slug: "chris",
       imported: true,
     });
-    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris");
+    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris", "final");
     expect(adapter.activateImportedCustomer).toHaveBeenCalledWith(
       "chris",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),

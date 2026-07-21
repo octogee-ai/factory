@@ -154,8 +154,11 @@ describe("customer lifecycle config patch agent directories", () => {
     await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
       process.env.OPENCLAW_STATE_DIR = tempRoot;
       const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
+      const customerKey = path.join(tempRoot, "customer-keys", "alice", "id_ed25519");
       await fs.mkdir(agentDir, { recursive: true });
       await fs.writeFile(path.join(agentDir, "stale.json"), "stale");
+      await fs.mkdir(path.dirname(customerKey), { recursive: true });
+      await fs.writeFile(customerKey, "private-key");
       const { buildBrokeredLifecycleAdapter } = await import(
         "../lib/customer-lifecycle-broker-adapter.js"
       );
@@ -165,10 +168,11 @@ describe("customer lifecycle config patch agent directories", () => {
         log: vi.fn(),
       });
 
-      await adapter.prepareImportDir("alice");
+      await adapter.prepareImportDir("alice", "pre");
 
       expect(fsSync.existsSync(agentDir)).toBe(true);
       expect(fsSync.existsSync(path.join(agentDir, "stale.json"))).toBe(false);
+      expect(fsSync.existsSync(customerKey)).toBe(true);
     });
   });
 
@@ -176,8 +180,11 @@ describe("customer lifecycle config patch agent directories", () => {
     await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
       process.env.OPENCLAW_STATE_DIR = tempRoot;
       const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
+      const customerKey = path.join(tempRoot, "customer-keys", "alice", "id_ed25519");
       await fs.mkdir(agentDir, { recursive: true });
       await fs.writeFile(path.join(agentDir, "stale.json"), "stale");
+      await fs.mkdir(path.dirname(customerKey), { recursive: true });
+      await fs.writeFile(customerKey, "private-key");
       const { buildProductionLifecycleAdapter } = await import(
         "../lib/customer-lifecycle-prod-adapter.js"
       );
@@ -187,10 +194,31 @@ describe("customer lifecycle config patch agent directories", () => {
         log: vi.fn(),
       });
 
-      await adapter.prepareImportDir("alice");
+      await adapter.prepareImportDir("alice", "pre");
 
       expect(fsSync.existsSync(agentDir)).toBe(true);
       expect(fsSync.existsSync(path.join(agentDir, "stale.json"))).toBe(false);
+      expect(fsSync.existsSync(customerKey)).toBe(true);
+    });
+  });
+
+  it("local import preparation preserves the transferred customer key during state sync", async () => {
+    await withRuntimeMock(async ({ tempRoot }) => {
+      process.env.OPENCLAW_STATE_DIR = tempRoot;
+      const customerKey = path.join(tempRoot, "customer-keys", "alice", "id_ed25519");
+      await fs.mkdir(path.dirname(customerKey), { recursive: true });
+      await fs.writeFile(customerKey, "private-key");
+      const { buildLocalMigrationAdapter } = await import(
+        "../lib/fleet-local-migration-adapter.js"
+      );
+      const adapter = buildLocalMigrationAdapter({
+        rpc: {} as GatewayRpcClient,
+        log: vi.fn(),
+      });
+
+      await adapter.prepareImportDir("alice", "final");
+
+      expect(fsSync.existsSync(customerKey)).toBe(true);
     });
   });
 });

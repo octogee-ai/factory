@@ -215,7 +215,7 @@ quiesceCustomer: (
 
 listExportPaths: (slug: string) => Promise<Array<{ cwd: string; path: string }>>;
 
-prepareImportDir: (slug: string) => Promise<string>;
+prepareImportDir: (slug: string, mode: CustomerStateImportMode) => Promise<string>;
 prepareKeyImportDir: (slug: string) => Promise<string>;
 
   activateImportedCustomer: (slug: string, opts?: { signal?: AbortSignal }) => Promise<void>;
@@ -224,6 +224,8 @@ prepareKeyImportDir: (slug: string) => Promise<string>;
 
   removeImportedCustomerBySlug?: (slug: string) => Promise<RemoveCustomerResult>;
 }
+
+export type CustomerStateImportMode = "pre" | "final" | "default";
 
 export type AddCustomerStep =
   | "claim-slot"

@@ -172,7 +172,7 @@ export interface CustomerLifecycleAdapter {
         cwd: string;
         path: string;
     }>>;
-    prepareImportDir: (slug: string) => Promise<string>;
+    prepareImportDir: (slug: string, mode: CustomerStateImportMode) => Promise<string>;
     prepareKeyImportDir: (slug: string) => Promise<string>;
     activateImportedCustomer: (slug: string, opts?: {
         signal?: AbortSignal;
@@ -180,6 +180,7 @@ export interface CustomerLifecycleAdapter {
     exportOpenClawActivationManifest?: (slug: string) => Promise<MigrationActivationManifest>;
     removeImportedCustomerBySlug?: (slug: string) => Promise<RemoveCustomerResult>;
 }
+export type CustomerStateImportMode = "pre" | "final" | "default";
 export type AddCustomerStep = "claim-slot" | "ensure-dir" | "write-templates" | "clone-workspace-repo" | "init-workspace-repo" | "ssh-key" | "ssh-key-resync" | "blob-sync" | "byosub-restore" | "byot-reassert" | "context-files-reassert" | "project-clone" | "mattermost-provision" | "config-patch" | "verify-channel-ready" | "schedule-greeting-cron" | "mark-complete" | "notify-ops";
 export interface AddCustomerResult {
     newCustomer: boolean;

@@ -551,7 +551,7 @@ export function createPrepareImportHandler(deps: MigrationHandlerDeps): RequestH
     try {
       const importDir = mode === "keys"
         ? await deps.adapter.prepareKeyImportDir(body.slug)
-        : await deps.adapter.prepareImportDir(body.slug);
+        : await deps.adapter.prepareImportDir(body.slug, mode);
       if (mode !== "keys") deps.adapter.markCustomerMigratingIn?.(body.slug);
       log(
         `[migration-http] prepare-import mode=${mode} migrationId=${body.migrationId} slug=${body.slug} dir=${importDir}`,
@@ -1100,7 +1100,7 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
       await stopConflictingRsyncSession(key, port);
       const importDir = mode === "keys"
         ? await deps.adapter.prepareKeyImportDir(body.slug)
-        : await deps.adapter.prepareImportDir(body.slug);
+        : await deps.adapter.prepareImportDir(body.slug, mode);
       if (mode !== "keys") deps.adapter.markCustomerMigratingIn?.(body.slug);
       const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `migration-rsync-${body.migrationId}-`));
       const stageDir = path.join(tmpDir, "stage");
@@ -1548,7 +1548,7 @@ export function createImportHandler(deps: MigrationHandlerDeps): RequestHandler 
       if (controller.signal.aborted) throw controller.signal.reason ?? new Error("aborted");
       const importDir = mode === "keys"
         ? await deps.adapter.prepareKeyImportDir(slug)
-        : await deps.adapter.prepareImportDir(slug);
+        : await deps.adapter.prepareImportDir(slug, mode);
       log(
         `[migration-http] import mode=${mode} migrationId=${migrationId} slug=${slug} unpacking → ${importDir}`,
       );
