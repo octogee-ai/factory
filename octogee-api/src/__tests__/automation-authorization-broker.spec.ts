@@ -34,6 +34,7 @@ const WELL_FORMED_SA_TOKEN = [
   "eyJhdWQiOlsib2N0b2dlZS1hcGkiXSwiZXhwIjoxNzUyODAwMDAwLCJpc3MiOiJrOHMifQ",
   "c2lnbmF0dXJlLXNlZ21lbnQtZm9yLXRlc3RpbmctcHVycG9zZXMtb25seQ",
 ].join(".");
+const COACH_CHANNEL_ID = "c".repeat(26);
 
 interface FakeDoc {
   exists: boolean;
@@ -97,6 +98,9 @@ function middlewareStackApp(saName: string) {
       provisioning: { openclaw: { slug: "eggman", gatewayId: "default" } },
     },
     "workspaces/eggman": { ownerUid: "hermetic-uid" },
+    "workspaces/eggman/channels/coach-dm": {
+      mattermost: { channelId: COACH_CHANNEL_ID },
+    },
   });
   const reviewer: Reviewer = async () => ({
     authenticated: true,
@@ -152,7 +156,11 @@ describe("POST /internal/automations/authorize", () => {
       .send({ gatewayId: "default" });
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ slug: "eggman", gatewayId: "default" });
+    expect(response.body).toEqual({
+      slug: "eggman",
+      gatewayId: "default",
+      coachChannelId: COACH_CHANNEL_ID,
+    });
   });
 
   it("requires Firebase identity after a valid gateway KSA is tenant-bound", async () => {
@@ -191,6 +199,9 @@ describe("POST /internal/automations/authorize", () => {
           provisioning: { openclaw: { slug: "eggman", gatewayId: "eggman-devdays" } },
         },
         "workspaces/eggman": { ownerUid: "eggman-uid" },
+        "workspaces/eggman/channels/coach-dm": {
+          mattermost: { channelId: COACH_CHANNEL_ID },
+        },
       },
     });
 
@@ -199,7 +210,56 @@ describe("POST /internal/automations/authorize", () => {
       .send({ gatewayId: "eggman-devdays" });
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ slug: "eggman", gatewayId: "eggman-devdays" });
+    expect(response.body).toEqual({
+      slug: "eggman",
+      gatewayId: "eggman-devdays",
+      coachChannelId: COACH_CHANNEL_ID,
+    });
+  });
+
+  it("reports a not-ready coach channel instead of granting incomplete automation context", async () => {
+    const { app } = appForTest({
+      uid: "eggman-uid",
+      boundGatewayId: "eggman-devdays",
+      docs: {
+        "users/eggman-uid": {
+          username: "eggman",
+          provisioning: { openclaw: { slug: "eggman", gatewayId: "eggman-devdays" } },
+        },
+        "workspaces/eggman": { ownerUid: "eggman-uid" },
+      },
+    });
+
+    const response = await request(app)
+      .post("/internal/automations/authorize")
+      .send({ gatewayId: "eggman-devdays" });
+
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({ error: "coach_channel_not_ready" });
+  });
+
+  it("rejects a stored coach channel outside the Mattermost ID contract", async () => {
+    const { app } = appForTest({
+      uid: "eggman-uid",
+      boundGatewayId: "eggman-devdays",
+      docs: {
+        "users/eggman-uid": {
+          username: "eggman",
+          provisioning: { openclaw: { slug: "eggman", gatewayId: "eggman-devdays" } },
+        },
+        "workspaces/eggman": { ownerUid: "eggman-uid" },
+        "workspaces/eggman/channels/coach-dm": {
+          mattermost: { channelId: "mm-coach-eggman" },
+        },
+      },
+    });
+
+    const response = await request(app)
+      .post("/internal/automations/authorize")
+      .send({ gatewayId: "eggman-devdays" });
+
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({ error: "coach_channel_not_ready" });
   });
 
   it.each(["suspended", "deletion_scheduled", "erasing"])(

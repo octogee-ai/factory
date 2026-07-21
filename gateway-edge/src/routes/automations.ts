@@ -13,8 +13,6 @@ import {
   authorizeAutomationOwner,
   type AutomationAuthorizationOutcome,
 } from "../lib/automation-authorization-broker.js";
-import { db } from "../lib/db.js";
-import type { ResolvedGateway } from "../lib/user-gateway.js";
 
 const MAX_CRON_NAME_LENGTH = 160;
 const MAX_CRON_PROMPT_LENGTH = 20_000;
@@ -84,8 +82,13 @@ export interface AutomationsRouterDeps {
   }): Promise<AutomationAuthorizationOutcome>;
   localGatewayId(): string | null;
   openclawDir(): string;
-  resolveCoachChannelId(slug: string): Promise<string>;
   invoke(method: string, params: Record<string, unknown>): Promise<unknown>;
+}
+
+interface AuthorizedAutomationOwner {
+  slug: string;
+  gatewayId: string;
+  coachChannelId: string;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -369,7 +372,7 @@ async function authorize(
   req: Request,
   res: Response,
   deps: Pick<AutomationsRouterDeps, "authorizeOwner" | "localGatewayId">,
-): Promise<ResolvedGateway | null> {
+): Promise<AuthorizedAutomationOwner | null> {
   const gatewayId = requestedGatewayId(req);
   if (!gatewayId || deps.localGatewayId() !== gatewayId) {
     res.status(404).json({ error: "not_found" });
@@ -392,7 +395,15 @@ async function authorize(
     res.status(403).json({ error: "forbidden" });
     return null;
   }
-  return { slug: outcome.slug, gatewayId: outcome.gatewayId };
+  if (outcome.kind === "coach_channel_not_ready") {
+    res.status(409).json({ error: "coach_channel_not_ready" });
+    return null;
+  }
+  return {
+    slug: outcome.slug,
+    gatewayId: outcome.gatewayId,
+    coachChannelId: outcome.coachChannelId,
+  };
 }
 
 interface BrokerResponse {
@@ -441,22 +452,22 @@ async function addCronJob(
   params: Record<string, unknown> | null,
   agentId: string,
   slug: string,
+  coachChannelId: string,
 ): Promise<BrokerResponse> {
-  const coachTarget = await coachDeliveryTarget(deps, params?.delivery, slug);
+  const coachTarget = coachDeliveryTarget(params?.delivery, slug, coachChannelId);
   const definition = cronDefinition(params, agentId, coachTarget);
   return definition
     ? brokerResult(await deps.invoke("cron.add", definition))
     : brokerError(400, "invalid automation definition");
 }
 
-async function coachDeliveryTarget(
-  deps: AutomationsRouterDeps,
+function coachDeliveryTarget(
   delivery: unknown,
   slug: string,
-): Promise<CoachDeliveryTarget | undefined> {
+  coachChannelId: string,
+): CoachDeliveryTarget | undefined {
   if (cronDelivery(delivery)?.mode !== "announce") return undefined;
-  const channelId = await deps.resolveCoachChannelId(slug);
-  return { accountId: `${slug}-coach`, to: `channel:${channelId}` };
+  return { accountId: `${slug}-coach`, to: `channel:${coachChannelId}` };
 }
 
 async function existingCronJobOperation(
@@ -464,13 +475,15 @@ async function existingCronJobOperation(
   method: string,
   params: Record<string, unknown> | null,
   agentId: string,
-  slug: string,
+  resolved: AuthorizedAutomationOwner,
 ): Promise<BrokerResponse> {
   const id = params ? cronId(params) : null;
   if (!params || !id) return brokerError(400, "invalid automation id");
   const current = await callerJob(deps, id, agentId);
   if (!current) return brokerError(404, "not_found");
-  if (method === "cron.update") return updateCronJob(deps, id, params, slug);
+  if (method === "cron.update") {
+    return updateCronJob(deps, id, params, resolved.slug, resolved.coachChannelId);
+  }
   if (method === "cron.run") return brokerResult(await deps.invoke("cron.run", { id, mode: "force" }));
   return brokerResult(await deps.invoke("cron.runs", { id, limit: 20, sortDir: "desc" }));
 }
@@ -480,9 +493,10 @@ async function updateCronJob(
   id: string,
   params: Record<string, unknown>,
   slug: string,
+  coachChannelId: string,
 ): Promise<BrokerResponse> {
   const patchValue = record(params.patch);
-  const coachTarget = await coachDeliveryTarget(deps, patchValue?.delivery, slug);
+  const coachTarget = coachDeliveryTarget(patchValue?.delivery, slug, coachChannelId);
   const patch = cronPatch(params.patch, coachTarget);
   return patch
     ? brokerResult(await deps.invoke("cron.update", { id, patch }))
@@ -518,7 +532,7 @@ async function heartbeatUpdate(
 
 async function automationResponse(
   body: Record<string, unknown>,
-  resolved: ResolvedGateway,
+  resolved: AuthorizedAutomationOwner,
   deps: AutomationsRouterDeps,
 ): Promise<BrokerResponse> {
   const method = typeof body.method === "string" ? body.method : "";
@@ -526,8 +540,18 @@ async function automationResponse(
   const agentId = coachAgentId(resolved.slug);
   if (method === "cron.list") return listCronJobs(deps, agentId);
   const params = record(body.params);
-  if (method === "cron.add") return addCronJob(deps, params, agentId, resolved.slug);
-  if (cronJobOperation(method)) return existingCronJobOperation(deps, method, params, agentId, resolved.slug);
+  if (method === "cron.add") {
+    return addCronJob(deps, params, agentId, resolved.slug, resolved.coachChannelId);
+  }
+  if (cronJobOperation(method)) {
+    return existingCronJobOperation(
+      deps,
+      method,
+      params,
+      agentId,
+      resolved,
+    );
+  }
   if (method === "heartbeat.get") return heartbeatGet(deps, agentId);
   if (method === "heartbeat.update") return heartbeatUpdate(deps, body, agentId);
   return brokerError(400, "unsupported automation operation");
@@ -592,18 +616,10 @@ export async function invokeLocalOpenClaw(
   }
 }
 
-async function resolveStoredCoachChannelId(slug: string): Promise<string> {
-  const snapshot = await db.doc(`workspaces/${slug}/channels/coach-dm`).get();
-  const channelId = nonEmptyString(record(snapshot.data()?.mattermost)?.channelId);
-  if (!channelId) throw new Error(`coach Mattermost channel is not provisioned for ${slug}`);
-  return channelId;
-}
-
 const automationsRouter = createAutomationsRouter({
   authorizeOwner: authorizeAutomationOwner,
   localGatewayId: () => process.env.GATEWAY_ID ?? null,
   openclawDir: () => process.env.OPENCLAW_DIR ?? "/home/node/.openclaw",
-  resolveCoachChannelId: resolveStoredCoachChannelId,
   invoke: invokeLocalOpenClaw,
 });
 
