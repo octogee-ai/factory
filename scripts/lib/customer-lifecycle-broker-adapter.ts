@@ -19,6 +19,7 @@ import {
 import {
   type CustomerContext,
   type CustomerLifecycleAdapter,
+  type CustomerStateImportMode,
   type MmUpdate,
   type RemoveCustomerResult,
   type UserSnapshot,
@@ -46,7 +47,7 @@ import {
   generateCustomerSshKey,
   gitExec,
   initWorkspaceRepo,
-  readGiteaCustomerPubKey,
+  readGiteaCustomerPubKeys,
   readLocalCustomerPubKey,
 } from "./git.js";
 import { ensureGiteaOrgForWorkspace } from "./gitea-admin-broker-client.js";
@@ -496,18 +497,24 @@ async function listExportPaths(slug: string): Promise<Array<{ cwd: string; path:
   return sources;
 }
 
-async function prepareImportDir(slug: string): Promise<string> {
+async function prepareImportDir(
+  slug: string,
+  mode: CustomerStateImportMode,
+): Promise<string> {
   const stateDir = resolveOpenClawStateDir();
   const agentId = customerCoachAgentId(slug);
-  for (const p of [
+  const wipePaths = [
     path.join(stateDir, "agents", agentId),
     path.join(stateDir, "memory", `${agentId}.sqlite`),
     path.join(stateDir, "memory", `${agentId}.sqlite-wal`),
     path.join(stateDir, "memory", `${agentId}.sqlite-shm`),
     path.join(OPENCLAW_DIR, "customers", slug),
-    path.join(OPENCLAW_DIR, "customer-keys", slug),
     path.join(OPENCLAW_DIR, MIGRATION_ACTIVATION_DIR, slug),
-  ]) {
+  ];
+  if (mode === "default") {
+    wipePaths.push(path.join(OPENCLAW_DIR, "customer-keys", slug));
+  }
+  for (const p of wipePaths) {
     await fsp.rm(p, { recursive: true, force: true }).catch(() => undefined);
   }
   await fsp.mkdir(path.join(stateDir, "agents"), { recursive: true });
@@ -656,7 +663,7 @@ export function buildBrokeredLifecycleAdapter(
     createGiteaUser,
     ensureGiteaOrg: ensureGiteaOrgForWorkspace,
     readLocalCustomerPubKey,
-    readGiteaCustomerPubKey,
+    readGiteaCustomerPubKeys,
     deleteCustomerSshKey,
     blobSyncForSlug: async (slug) => {
       await blobSyncForSlug(slug, { store: createBrokeredBlobStore(opts.client) });

@@ -40,9 +40,12 @@ import {
 } from "./system-config-invariants.js";
 import {
   attributedCommitArgs,
+  convergeSystemConfigToRemoteCommit,
   recoverSystemConfigHead,
   type SystemConfigCommitSource,
   type SystemConfigRecoveryResult,
+  type SystemConfigRemoteConvergenceOptions,
+  type SystemConfigRemoteConvergenceResult,
 } from "./system-config-recovery.js";
 import {
   readSystemConfigStatus,
@@ -117,6 +120,10 @@ export interface SystemConfigSyncOptions {
   source?: SystemConfigCommitSource;
   lockHeld?: boolean;
   readCommitBlob?: ReadSystemConfigCommitBlob;
+  expectedRemoteCommit?: string;
+  convergeRemoteCommit?: (
+    options: SystemConfigRemoteConvergenceOptions,
+  ) => SystemConfigRemoteConvergenceResult;
 }
 
 interface SystemConfigAuditOptions {
@@ -1194,6 +1201,7 @@ function commitValidatedCandidate(
       `${source}: sync openclaw config ${context.now().toISOString()}`,
       source,
       context.env,
+      context.opts.expectedRemoteCommit,
     ),
     context.keyPath,
   );
@@ -1236,6 +1244,39 @@ function syncPreparedSystemConfig(context: SystemConfigSyncContext): SystemConfi
   );
 }
 
+function convergeExpectedRemoteSystemConfig(
+  slug: string,
+  opts: SystemConfigSyncOptions,
+  context: Pick<SystemConfigSyncContext, "openclawDir" | "repoDir" | "repoConfigPath" | "env" | "execGit" | "keyPath" | "now">,
+): SystemConfigSyncResult | null {
+  if (!opts.expectedRemoteCommit) return null;
+  const convergence = (opts.convergeRemoteCommit ?? convergeSystemConfigToRemoteCommit)({
+    slug,
+    openclawDir: context.openclawDir,
+    repoDir: context.repoDir,
+    configPath: context.repoConfigPath,
+    expectedCommit: opts.expectedRemoteCommit,
+    env: context.env,
+    gitExec: opts.gitExec,
+    validateConfig: opts.validateConfig ?? validateOpenClawConfig,
+    keyPath: context.keyPath,
+    readCommitBlob: opts.readCommitBlob,
+  });
+  if (convergence.outcome !== "unavailable") return null;
+  if (opts.durablePolicy) {
+    recordSyncError(context.openclawDir, convergence.errorCode, context.now);
+  }
+  (opts.log ?? defaultLog)(
+    `[system_config] ${slug}: migration convergence failed (${convergence.errorCode})`,
+  );
+  return {
+    committed: false,
+    pushed: false,
+    pending: true,
+    errorCode: convergence.errorCode,
+  };
+}
+
 function syncSystemConfigUnlocked(
   slug: string,
   opts: SystemConfigSyncOptions,
@@ -1252,19 +1293,33 @@ function syncSystemConfigUnlocked(
   const repoConfigPath = systemConfigPath(openclawDir);
   const configureSsh = opts.setRepoSshCommand ?? setRepoSshCommand;
   configureSsh(repoDir, slug);
+  const execGit = opts.gitExec ?? gitExec;
+  const keyPath = (opts.customerSshKeyPath ?? customerSshKeyPath)(slug);
+  const now = opts.now ?? (() => new Date());
+  const env = opts.env ?? process.env;
+  const convergenceFailure = convergeExpectedRemoteSystemConfig(slug, opts, {
+    openclawDir,
+    repoDir,
+    repoConfigPath,
+    env,
+    execGit,
+    keyPath,
+    now,
+  });
+  if (convergenceFailure) return convergenceFailure;
   return syncPreparedSystemConfig({
     slug,
     opts,
     pushWhenClean,
     log: opts.log ?? defaultLog,
-    now: opts.now ?? (() => new Date()),
-    env: opts.env ?? process.env,
+    now,
+    env,
     openclawDir,
     repoDir,
     repoConfigPath,
     initialFingerprint: systemConfigFingerprint(repoConfigPath),
-    execGit: opts.gitExec ?? gitExec,
-    keyPath: (opts.customerSshKeyPath ?? customerSshKeyPath)(slug),
+    execGit,
+    keyPath,
   });
 }
 
@@ -1706,7 +1761,7 @@ export function checkpointDurableSystemConfigForSlug(
   const result = sync(slug, {
     ...opts,
     durablePolicy: true,
-    source: opts.source ?? "auto-watch",
+    source: opts.source ?? (opts.expectedRemoteCommit ? "migration-checkpoint" : "auto-watch"),
   });
   if (!result.pushed || result.pending || result.rejected || result.skipped ||
       result.errorCode || !result.acceptedCommit) {

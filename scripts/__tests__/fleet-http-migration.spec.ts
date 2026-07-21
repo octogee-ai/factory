@@ -507,6 +507,59 @@ describe("createFlushHandler", () => {
     expect(getStatus()).toBe(501);
     expect(getBody()).toEqual({ error: "flush not configured" });
   });
+
+  it("passes the signed source checkpoint into the target migration-converge flush", async () => {
+    const expectedSystemConfigCommit = "a".repeat(40);
+    const flushLocalState = vi.fn(async () => ({
+      ok: true,
+      durationMs: 12,
+      steps: [],
+      systemConfigCommit: "b".repeat(40),
+    }));
+    const handler = createFlushHandler(mkDeps({ flushLocalState }));
+    const body = {
+      migrationId: "mig-1",
+      slug: "chris",
+      reason: "migration-converge",
+      expectedSystemConfigCommit,
+    };
+    const req = mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+    });
+    const { res, getStatus } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(flushLocalState).toHaveBeenCalledWith({
+      slug: "chris",
+      reason: "migration-converge",
+      expectedSystemConfigCommit,
+    });
+  });
+
+  it.each([
+    {},
+    { expectedSystemConfigCommit: "not-a-sha" },
+  ])("rejects target convergence without a valid accepted commit: %o", async (extra) => {
+    const flushLocalState = vi.fn();
+    const handler = createFlushHandler(mkDeps({ flushLocalState }));
+    const body = {
+      migrationId: "mig-1",
+      slug: "chris",
+      reason: "migration-converge",
+      ...extra,
+    };
+    const req = mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+    });
+    const { res, getStatus } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(400);
+    expect(flushLocalState).not.toHaveBeenCalled();
+  });
 });
 
 describe("createVerifyHandler", () => {
@@ -590,7 +643,7 @@ describe("createRestoreHandler", () => {
       }),
       hasCustomerSshKey: vi.fn(() => true),
       readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 local"),
-      readGiteaCustomerPubKey: vi.fn(async () => "ssh-ed25519 local"),
+      readGiteaCustomerPubKeys: vi.fn(async () => ["ssh-ed25519 local"]),
       ensureGiteaOrg: vi.fn(async () => undefined),
       hasWorkspaceGitDir: vi.fn(() => false),
       cloneWorkspaceRepo: vi.fn(async () => true),
@@ -661,7 +714,7 @@ describe("createRestoreHandler", () => {
       loadUserSnapshot: vi.fn(async () => currentSnapshot),
       hasCustomerSshKey: vi.fn(() => true),
       readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 local"),
-      readGiteaCustomerPubKey: vi.fn(async () => "ssh-ed25519 local"),
+      readGiteaCustomerPubKeys: vi.fn(async () => ["ssh-ed25519 local"]),
       ensureGiteaOrg: vi.fn(async () => undefined),
       hasWorkspaceGitDir: vi.fn(() => false),
       cloneWorkspaceRepo: vi.fn(async () => true),
@@ -995,7 +1048,7 @@ describe("queued-rsync migration control handlers", () => {
     await handler(req, res, vi.fn());
 
     expect(getStatus()).toBe(200);
-    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris");
+    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris", "pre");
     expect(markCustomerMigratingIn).toHaveBeenCalledWith("chris");
   });
 
@@ -1089,7 +1142,7 @@ describe("queued-rsync migration control handlers", () => {
       port: 30873,
       module: "state",
     });
-    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris");
+    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris", "pre");
     expect(adapter.markCustomerMigratingIn).toHaveBeenCalledWith("chris");
     expect(waitForRsyncReady).toHaveBeenCalledWith(30873);
     expect(String(spawnMock.mock.calls[0][0])).toMatch(/\/rsync$/);
@@ -1714,7 +1767,7 @@ describe("createImportHandler", () => {
       slug: "chris",
       imported: true,
     });
-    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris");
+    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris", "default");
     expect(adapter.activateImportedCustomer).toHaveBeenCalledWith(
       "chris",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
@@ -1794,6 +1847,7 @@ describe("createImportHandler", () => {
     const req = mkImportRequest({
       migrationId: "mig-1",
       slug: "chris",
+      mode: "final",
       signature: sig,
     });
     const { res, getStatus, getBody } = mkResponse();
@@ -1804,7 +1858,7 @@ describe("createImportHandler", () => {
       slug: "chris",
       imported: true,
     });
-    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris");
+    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris", "final");
     expect(adapter.activateImportedCustomer).toHaveBeenCalledWith(
       "chris",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),

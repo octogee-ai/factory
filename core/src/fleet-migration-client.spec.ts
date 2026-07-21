@@ -276,6 +276,47 @@ describe("MigrationClient — transport/tenant split", () => {
   });
 });
 
+describe("MigrationClient.flushGateway", () => {
+  it("binds the source's accepted system-config commit into the signed target converge request", async () => {
+    const acceptedCommit = "a".repeat(40);
+    const { calls, fakeFetch } = captureFetch(() =>
+      new Response(
+        JSON.stringify({
+          migrationId: "m1",
+          slug: "alice",
+          ok: true,
+          durationMs: 1,
+          steps: [],
+          systemConfigCommit: acceptedCommit,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://target.example.com",
+      fetch: fakeFetch,
+    });
+
+    await client.flushGateway({
+      migrationId: "m1",
+      gatewayId: "target",
+      slug: "alice",
+      reason: "migration-converge",
+      expectedSystemConfigCommit: acceptedCommit,
+    });
+
+    expect(JSON.parse(calls[0].body!)).toEqual({
+      migrationId: "m1",
+      slug: "alice",
+      reason: "migration-converge",
+      expectedSystemConfigCommit: acceptedCommit,
+    });
+    expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()])
+      .toBe(signFleetRequest(PRIVATE_KEY, "m1", calls[0].body!));
+  });
+});
+
 describe("MigrationClient.unmount", () => {
   it("POSTs JSON to /unmount/{gatewayId} signed identically to quiesce", async () => {
     const { calls, fakeFetch } = captureFetch(() =>

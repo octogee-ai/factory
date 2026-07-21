@@ -38,7 +38,13 @@ const CREDENTIAL_KEYS = new Set([
   "passphrase", "password", "privatekey", "secret", "secrets", "sharedkey", "token",
 ]);
 
-function credentialKey(key: string): boolean {
+function registryEntryIdentifier(path: readonly string[]): boolean {
+  return path.length === 2 && path[1] === "entries" &&
+    (path[0] === "plugins" || path[0] === "skills");
+}
+
+function credentialKey(key: string, path: readonly string[]): boolean {
+  if (registryEntryIdentifier(path)) return false;
   const normalized = key.toLowerCase().replace(/[-_]/g, "");
   return CREDENTIAL_KEYS.has(normalized) ||
     /(?:token|secret|password|passwd|credential|credentials|cookie|authorization|authheader|oauth|bearer|auth)$/.test(normalized) ||
@@ -51,18 +57,18 @@ function record(value: unknown): JsonObject | null {
     : null;
 }
 
-function assertSecretFree(value: unknown): void {
+function assertSecretFree(value: unknown, path: readonly string[] = []): void {
   if (Array.isArray(value)) {
-    value.forEach(assertSecretFree);
+    value.forEach((entry) => assertSecretFree(entry, path));
     return;
   }
   const object = record(value);
   if (!object) return;
   for (const [key, entry] of Object.entries(object)) {
-    if (credentialKey(key)) {
+    if (credentialKey(key, path)) {
       throw new Error("agent import doctor candidate contains a credential-bearing path");
     }
-    assertSecretFree(entry);
+    assertSecretFree(entry, [...path, key]);
   }
 }
 

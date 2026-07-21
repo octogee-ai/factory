@@ -1,8 +1,32 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildProvisioningContext,
   buildRemoveCustomerConfig,
   buildRemoveCustomerPatch,
+  buildUserOperationalFields,
 } from "./provisionSteps.js";
+
+describe("buildUserOperationalFields", () => {
+  it("binds the provisioned user to the workspace used by agent tools", () => {
+    const ctx = buildProvisioningContext("uid-1", {
+      username: "octogeedemo",
+      tier: "trial",
+    });
+
+    expect(
+      buildUserOperationalFields(
+        ctx,
+        { status: "complete", slug: "octogeedemo", agentIds: ["octogee-octogeedemo-coach"] },
+        { "mattermost.teamId": "team-1" },
+      ),
+    ).toMatchObject({
+      workspaceId: "octogeedemo",
+      tier: "trial",
+      "provisioning.openclaw.slug": "octogeedemo",
+      "mattermost.teamId": "team-1",
+    });
+  });
+});
 
 describe("buildRemoveCustomerPatch", () => {
   const current = {

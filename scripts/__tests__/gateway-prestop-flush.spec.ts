@@ -46,7 +46,10 @@ describe("runGatewayPreStopFlush", () => {
       gatewayClass: "builder",
       syncWorkspaces: vi.fn(async () => { calls.push("workspaces"); }),
       syncBlobs: vi.fn(async () => { calls.push("blobs"); }),
-      syncSystemConfig: vi.fn(async () => { calls.push("system_config"); }),
+      syncSystemConfig: vi.fn(async () => {
+        calls.push("system_config");
+        return { acceptedCommit: "a".repeat(40) };
+      }),
       log: (msg) => logs.push(msg),
       now: () => {
         now += 10;
@@ -56,6 +59,7 @@ describe("runGatewayPreStopFlush", () => {
 
     expect(calls).toEqual(["workspaces", "blobs", "system_config"]);
     expect(result.ok).toBe(true);
+    expect(result.systemConfigCommit).toBe("a".repeat(40));
     expect(result.steps.map((step) => step.status)).toEqual([
       "done",
       "done",

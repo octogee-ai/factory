@@ -8,6 +8,7 @@ import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 import { Registry, Counter, Gauge, Histogram } from "prom-client";
 import { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
+import { publicAppOrigins } from "@octogee/core/deployment-environment";
 import { openUpstream, OpenclawWireError } from "./openclaw/upstream.js";
 import { getOpenClawDeviceIdentity } from "./openclaw/device-identity.js";
 import {
@@ -467,6 +468,7 @@ function watchBrokerGatewayIdChange(
   uid: string,
   initialGatewayId: string,
   onChange: (newGatewayId: string | null) => void,
+  intervalMs: number = 30_000,
 ): () => void {
   let fired = false;
   const timer = setInterval(() => {
@@ -489,7 +491,7 @@ function watchBrokerGatewayIdChange(
           }`,
         );
       });
-  }, 30_000);
+  }, intervalMs);
   timer.unref?.();
   return () => clearInterval(timer);
 }
@@ -540,19 +542,7 @@ export async function verifyAuth(req: http.IncomingMessage): Promise<string | nu
   }
 }
 
-const ALLOWED_ORIGINS = new Set([
-  "https://octogee.web.app",
-  "https://octogee-test.web.app",
-  "https://app-octogee.web.app",
-  "https://app-octogee-test.web.app",
-  "https://octogee.firebaseapp.com",
-  "https://octogee-test.firebaseapp.com",
-  "https://app-octogee.firebaseapp.com",
-  "https://app-octogee-test.firebaseapp.com",
-  "https://octogee.com",
-  "https://www.octogee.com",
-  "https://app.octogee.com",
-]);
+const ALLOWED_ORIGINS = new Set(publicAppOrigins());
 
 function isAllowedOrigin(origin: string): boolean {
   return ALLOWED_ORIGINS.has(origin) || isAllowedLocalhostOrigin(origin);
@@ -740,8 +730,13 @@ function handleOpenClawWsUpgrade(
   req: http.IncomingMessage,
   socket: Duplex,
   head: Buffer,
-  upgradeGate: RollRosterUpgradeGate | null = null,
+  options: {
+    upgradeGate: RollRosterUpgradeGate | null;
+    runtimeBroker?: OpenClawRuntimeBroker;
+    gatewayWatchIntervalMs?: number;
+  },
 ): void {
+  const { upgradeGate, runtimeBroker: runtimeBrokerOverride, gatewayWatchIntervalMs } = options;
   const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
   if (!isAllowedWsOrigin(origin)) {
     ocWsHandshakeTotal.inc({ outcome: "fail:origin-rejected" });
@@ -764,7 +759,7 @@ function handleOpenClawWsUpgrade(
 
   (async () => {
     try {
-      const runtimeBroker = getOpenClawRuntimeBroker();
+      const runtimeBroker = runtimeBrokerOverride ?? getOpenClawRuntimeBroker();
       const redeemOutcome = await runtimeBroker.redeemOpenClawWs(ticket);
       if (redeemOutcome.kind === "unauthorized") {
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
@@ -834,6 +829,7 @@ function handleOpenClawWsUpgrade(
               // best-effort
             }
           },
+          gatewayWatchIntervalMs,
         );
 
         clientWs.on("message", (data, isBinary) => {
@@ -928,6 +924,8 @@ export interface AttachChatProxyWsUpgradeOptions {
   // one shared upgrade handler — BEFORE any dispatch, so every current and
   // future upgrade route is covered by construction.
   upgradeGate?: RollRosterUpgradeGate | null;
+  runtimeBroker?: OpenClawRuntimeBroker;
+  gatewayWatchIntervalMs?: number;
 }
 
 // mmUserId → Firebase uid for the roll-roster verdict. The mapping is written
@@ -968,7 +966,17 @@ export function attachChatProxyWsUpgrade(
 
     const urlPath = applyGatewayPrefixStripInPlace(req);
     if (urlPath.startsWith("/api/openclaw/ws/")) {
-      handleOpenClawWsUpgrade(wss, req, socket, head, upgradeGate);
+      handleOpenClawWsUpgrade(
+        wss,
+        req,
+        socket,
+        head,
+        {
+          upgradeGate,
+          runtimeBroker: opts.runtimeBroker,
+          gatewayWatchIntervalMs: opts.gatewayWatchIntervalMs,
+        },
+      );
       return;
     }
     if (urlPath === "/api/v4/websocket") {

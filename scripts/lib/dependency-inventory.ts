@@ -71,6 +71,7 @@ export interface CoverageValidationResult extends ValidationResult {
 type DependencyProbe = NonNullable<CoverageValidationResult["probe"]>;
 
 const skippedDirectories = new Set([
+  ".claude",
   ".git",
   ".astro",
   ".firebase",

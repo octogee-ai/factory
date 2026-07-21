@@ -464,13 +464,14 @@ async function writeSystemConfig(ctx: ProvisioningContext): Promise<void> {
   await db.doc(`users/${ctx.uid}/system/config`).set(systemConfigData, { merge: true });
 }
 
-async function writeUserOperationalFields(
+export function buildUserOperationalFields(
   ctx: ProvisioningContext,
   provisioningObj: Record<string, unknown>,
   mmUpdate: MmUpdate,
-): Promise<void> {
+): Record<string, unknown> {
   const operationalFields: Record<string, unknown> = {
     tier: ctx.tier,
+    workspaceId: ctx.slug,
   };
   for (const [key, value] of Object.entries(provisioningObj)) {
     if (key === "status") continue;
@@ -481,6 +482,15 @@ async function writeUserOperationalFields(
       operationalFields[key] = value;
     }
   }
+  return operationalFields;
+}
+
+async function writeUserOperationalFields(
+  ctx: ProvisioningContext,
+  provisioningObj: Record<string, unknown>,
+  mmUpdate: MmUpdate,
+): Promise<void> {
+  const operationalFields = buildUserOperationalFields(ctx, provisioningObj, mmUpdate);
   await db.collection("users").doc(ctx.uid).update(operationalFields);
 }
 

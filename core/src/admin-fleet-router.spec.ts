@@ -22,11 +22,15 @@ import {
 describe("projectGatewayReservation — Spot is the default for every class", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("a PROD operator gateway with no scheduling override projects spot", () => {
-    vi.stubEnv("K8S_NAMESPACE", "octogee");
+  it.each([
+    ["PROD", "octogee", "octogee-gateway-spot"],
+    ["TEST", "octogee-test", "octogee-gateway-test-spot"],
+    ["Build Week", "octogee-build-week", "octogee-gateway-build-week-spot"],
+  ])("%s operator gateways use the environment spot class", (_label, namespace, computeClass) => {
+    vi.stubEnv("K8S_NAMESPACE", namespace);
     const r = projectGatewayReservation({ profile: "operator", gatewayClass: "operator" });
     expect(r.type).toBe("spot");
-    expect(r.computeClass).toBe("octogee-gateway-spot");
+    expect(r.computeClass).toBe(computeClass);
   });
 
   it("an explicit on-demand scheduling override still wins", () => {
@@ -35,12 +39,6 @@ describe("projectGatewayReservation — Spot is the default for every class", ()
     expect(r.type).toBe("on-demand");
   });
 
-  it("TEST gateways resolve the env-specific spot class", () => {
-    vi.stubEnv("K8S_NAMESPACE", "octogee-test");
-    const r = projectGatewayReservation({ profile: "operator", gatewayClass: "operator" });
-    expect(r.type).toBe("spot");
-    expect(r.computeClass).toBe("octogee-gateway-test-spot");
-  });
 });
 
 // Step 1 of the Fleet regroup (GATEWAY-RELEASES-SPEC): every row projects its

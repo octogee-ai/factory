@@ -45,11 +45,11 @@ for arg in "$@"; do
     --env=*)       ENV="${arg#*=}" ;;
     --namespace=*) CUSTOM_NS="${arg#*=}" ;;
     --yes|-y)      YES=true ;;
-    --help|-h) echo "Usage: $0 --env=prod|test|custom [--namespace=NAME] [--yes]"; exit 0 ;;
+    --help|-h) echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--yes]"; exit 0 ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
-[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|custom [--namespace=NAME] [--yes]"; exit 1; }
+[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--yes]"; exit 1; }
 
 case "$ENV" in
   prod)
@@ -73,6 +73,17 @@ case "$ENV" in
     ENV_LABEL="🟡 TEST"
     SM_PROJECT="octogee"  # Cloud SQL + shared secrets live in octogee project
     NS_SLUG="test"
+    ;;
+  build-week)
+    K8S_NAMESPACE="octogee-build-week"
+    CLUSTER_PROJECT="octogee"
+    CLUSTER_NAME="octogee-gateway"
+    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
+    FIREBASE_PROJECT="octogee-build-week"
+    ENV_FILE="$REPO_DIR/.env.build-week"
+    ENV_LABEL="🟣 BUILD WEEK"
+    SM_PROJECT="octogee"
+    NS_SLUG="build_week"
     ;;
   custom)
     # Ephemeral/feature namespaces sharing the octogee-test Firebase project.
@@ -602,21 +613,14 @@ ksecret gateway-model-key-issuer --from-literal=bearer_token="$GATEWAY_MODEL_KEY
 
 # ── 9a2. Ops Agent bearer (octogee-api → octogee-ops-agent) ─────────────
 info "ops-agent-bearer"
-OPS_AGENT_BEARER_TOKEN=$(sm_get "OPS_AGENT_BEARER_TOKEN" "$FIREBASE_PROJECT" 2>/dev/null || echo "")
-if [[ -z "$OPS_AGENT_BEARER_TOKEN" ]]; then
-  OPS_AGENT_BEARER_TOKEN=$(ksecret_key ops-agent-bearer bearer_token)
-  [[ -n "$OPS_AGENT_BEARER_TOKEN" ]] || OPS_AGENT_BEARER_TOKEN=$(openssl rand -hex 32)
-  if echo -n "$OPS_AGENT_BEARER_TOKEN" | gcloud secrets create "OPS_AGENT_BEARER_TOKEN" \
-       --data-file=- --project="$FIREBASE_PROJECT" \
-       --replication-policy=user-managed --locations=us-central1 --quiet 2>/dev/null; then
-    ok "  Created SM secret: OPS_AGENT_BEARER_TOKEN"
-  elif echo -n "$OPS_AGENT_BEARER_TOKEN" | gcloud secrets versions add "OPS_AGENT_BEARER_TOKEN" \
-       --data-file=- --project="$FIREBASE_PROJECT" --quiet >/dev/null; then
-    ok "  Updated SM secret: OPS_AGENT_BEARER_TOKEN"
-  else
-    fail "Could not persist OPS_AGENT_BEARER_TOKEN to Secret Manager ($FIREBASE_PROJECT)"
-  fi
+OPS_AGENT_BEARER_TOKEN="$(configured_secret_value "${OPS_AGENT_BEARER_TOKEN:-}")"
+[[ -n "$OPS_AGENT_BEARER_TOKEN" ]] || OPS_AGENT_BEARER_TOKEN=$(sm_get "OPS_AGENT_BEARER_TOKEN" "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+[[ -n "$OPS_AGENT_BEARER_TOKEN" ]] || OPS_AGENT_BEARER_TOKEN=$(ksecret_key ops-agent-bearer bearer_token)
+[[ -n "$OPS_AGENT_BEARER_TOKEN" ]] || OPS_AGENT_BEARER_TOKEN=$(openssl rand -hex 32)
+if [[ "$ENV" != "custom" ]]; then
+  sync_secret_manager_value OPS_AGENT_BEARER_TOKEN "$OPS_AGENT_BEARER_TOKEN" "$FIREBASE_PROJECT"
 fi
+save_env_file_value "$ENV_FILE" OPS_AGENT_BEARER_TOKEN "$OPS_AGENT_BEARER_TOKEN"
 ksecret ops-agent-bearer --from-literal=bearer_token="$OPS_AGENT_BEARER_TOKEN"
 
 # ── 9a2. Social notification bearer (Cloud Functions → octogee-api /social) ─
@@ -729,6 +733,7 @@ info "gateway-auth-token (Secret Manager, per-gatewayId)"
 case "$ENV" in
   prod)      GATEWAY_IDS=("default") ;;
   test)      GATEWAY_IDS=("default") ;;
+  build-week) GATEWAY_IDS=("default") ;;
   custom)    GATEWAY_IDS=("default") ;;
 esac
 
@@ -908,6 +913,7 @@ info "octogee-sa-key"
 case "$ENV" in
   prod)   SA_KEY_PATH="$HOME/.openclaw/secrets/octogee-sa-key.json" ;;
   test)   SA_KEY_PATH="$HOME/.openclaw/secrets/octogee-test-sa-key.json" ;;
+  build-week) SA_KEY_PATH="$HOME/.openclaw/secrets/octogee-build-week-sa-key.json" ;;
   custom) SA_KEY_PATH="$HOME/.openclaw/secrets/octogee-test-sa-key.json" ;;  # reuse test SA
 esac
 if [[ -f "$SA_KEY_PATH" ]]; then
@@ -922,6 +928,46 @@ fi
 # K8s secrets directly where possible.
 info "Pre-creating Firebase function secrets in Secret Manager (suppress deploy prompts)..."
 SM_PROJECT_CF="$FIREBASE_PROJECT"  # Functions run in the Firebase project (octogee-test for test, octogee for prod)
+
+function_secret_value() {
+  case "$1" in
+    SOCIAL_NOTIFICATION_BEARER_TOKEN) configured_secret_value "${SOCIAL_NOTIFICATION_BEARER:-}" ;;
+    GITEA_TOKEN) configured_secret_value "${GIT_API_TOKEN:-}" ;;
+    *)
+      set +u
+      local value="${!1:-}"
+      set -u
+      configured_secret_value "$value"
+      ;;
+  esac
+}
+
+sync_function_secret() {
+  local secret="$1" configured="$2" current
+  if gcloud secrets describe "$secret" --project="$SM_PROJECT_CF" >/dev/null 2>&1; then
+    if [[ -z "$configured" ]]; then
+      info "  $secret already exists in SM ($SM_PROJECT_CF)"
+      return 0
+    fi
+    current="$(sm_get "$secret" "$SM_PROJECT_CF" 2>/dev/null || echo "")"
+    if [[ "$current" == "$configured" ]]; then
+      info "  $secret already configured in SM ($SM_PROJECT_CF)"
+      return 0
+    fi
+    printf '%s' "$configured" | gcloud secrets versions add "$secret" \
+      --data-file=- --project="$SM_PROJECT_CF" --quiet >/dev/null
+    ok "  Updated SM secret: $secret"
+    return 0
+  fi
+
+  [[ -n "$configured" ]] || configured="placeholder"
+  printf '%s' "$configured" | gcloud secrets create "$secret" \
+    --data-file=- \
+    --project="$SM_PROJECT_CF" \
+    --replication-policy=user-managed --locations=us-central1 \
+    --quiet >/dev/null
+  ok "  Created SM secret: $secret"
+}
 
 # Full list of all defineSecret() references in Cloud Functions — must exist before firebase deploy
 for sm_secret in \
@@ -942,15 +988,8 @@ for sm_secret in \
   OCTOGEE_GUILD_ID \
   RESEND_API_KEY \
   RESEND_FROM_EMAIL; do
-  if gcloud secrets describe "$sm_secret" --project="$SM_PROJECT_CF" >/dev/null 2>&1; then
-    info "  $sm_secret already exists in SM ($SM_PROJECT_CF)"
-  else
-    echo -n "placeholder" | gcloud secrets create "$sm_secret" \
-      --data-file=- \
-      --project="$SM_PROJECT_CF" \
-      --replication-policy=user-managed --locations=us-central1 \
-      --quiet 2>/dev/null && ok "  Created SM secret: $sm_secret" || warn "  Could not create $sm_secret"
-  fi
+  function_value="$(function_secret_value "$sm_secret")"
+  sync_function_secret "$sm_secret" "$function_value" || warn "  Could not sync $sm_secret"
 done
 
 # ── Done ──────────────────────────────────────────────────────────────────

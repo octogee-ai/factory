@@ -47,6 +47,15 @@ describe('sanitizeReturnUrl — existing contract pins', () => {
     expect(sanitizeReturnUrl('/\\evil.com')).toBe('/dashboard');
     expect(sanitizeReturnUrl('/\\\\evil.com')).toBe('/dashboard');
   });
+
+  it('allows the isolated Build Week app and site origins', () => {
+    expect(sanitizeReturnUrl('https://app-octogee-build-week.web.app/@me')).toBe(
+      'https://app-octogee-build-week.web.app/@me',
+    );
+    expect(sanitizeReturnUrl('https://octogee-build-week.web.app/dashboard')).toBe(
+      'https://octogee-build-week.web.app/dashboard',
+    );
+  });
 });
 
 describe('sanitizeReturnUrl — localhost is gated out of production builds', () => {

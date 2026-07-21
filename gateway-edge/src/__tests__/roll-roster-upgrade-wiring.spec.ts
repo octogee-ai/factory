@@ -22,7 +22,7 @@ describe("roll-roster upgrade gate wiring (Codex P0)", () => {
   it("the shared upgrade handler gates BEFORE any dispatch (openclaw + MM + wsRouter/builder-shell)", () => {
     const handlerStart = proxySource.indexOf('server.on("upgrade"');
     const gateCall = proxySource.indexOf("guardUpgradeRequest(", handlerStart);
-    const firstDispatch = proxySource.indexOf("handleOpenClawWsUpgrade(wss", handlerStart);
+    const firstDispatch = proxySource.indexOf("handleOpenClawWsUpgrade(", handlerStart);
     expect(handlerStart).toBeGreaterThan(-1);
     expect(gateCall).toBeGreaterThan(handlerStart);
     expect(gateCall).toBeLessThan(firstDispatch);

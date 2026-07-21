@@ -28,6 +28,7 @@ export interface MigrationClient {
         transportId?: string;
         slug: string;
         reason: string;
+        expectedSystemConfigCommit?: string;
     }): Promise<FlushGatewayResponse>;
     restoreTarget(opts: {
         migrationId: string;

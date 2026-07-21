@@ -49,6 +49,23 @@ interface SystemConfigRecoveryOptions {
   readCommitBlob?: ReadSystemConfigCommitBlob;
 }
 
+export type SystemConfigRemoteConvergenceResult =
+  | { outcome: "adopted"; adoptedCommit: string }
+  | { outcome: "unavailable"; errorCode: string };
+
+export interface SystemConfigRemoteConvergenceOptions {
+  slug: string;
+  openclawDir: string;
+  repoDir: string;
+  configPath: string;
+  expectedCommit: string;
+  env?: NodeJS.ProcessEnv;
+  gitExec?: GitExec;
+  validateConfig: (configPath: string) => void;
+  keyPath?: string;
+  readCommitBlob?: ReadSystemConfigCommitBlob;
+}
+
 interface DurableCandidate {
   config: Buffer;
   metadata: Buffer;
@@ -79,13 +96,20 @@ export function attributedCommitArgs(
   subject: string,
   source: SystemConfigCommitSource,
   env: NodeJS.ProcessEnv = process.env,
+  migrationSourceCommit?: string,
 ): string[] {
+  if (migrationSourceCommit !== undefined && !GIT_SHA_RE.test(migrationSourceCommit)) {
+    throw new Error("migration source commit must be a valid git SHA");
+  }
+  const migrationTrailer = migrationSourceCommit
+    ? `\nOctogee-Migration-Source: ${migrationSourceCommit}`
+    : "";
   return [
     "commit",
     "-m",
     subject,
     "-m",
-    `Octogee-Config-Source: ${source}\nOctogee-Gateway: ${safeTrailerValue(env.GATEWAY_ID)}\nOpenClaw-Version: ${safeTrailerValue(env.OPENCLAW_VERSION)}`,
+    `Octogee-Config-Source: ${source}\nOctogee-Gateway: ${safeTrailerValue(env.GATEWAY_ID)}\nOpenClaw-Version: ${safeTrailerValue(env.OPENCLAW_VERSION)}${migrationTrailer}`,
   ];
 }
 
@@ -209,6 +233,96 @@ function restoreValidCommittedHead(
   atomicWrite(path.join(options.repoDir, SYSTEM_CONFIG_GITIGNORE_FILENAME), candidate.gitignore);
   atomicWrite(options.configPath, candidate.config);
   return true;
+}
+
+function isAttributedMigrationReplay(
+  options: SystemConfigRemoteConvergenceOptions,
+  execGit: GitExec,
+  keyPath: string,
+  commit: string,
+): boolean {
+  if (!GIT_SHA_RE.test(commit) || !options.env?.GATEWAY_ID?.trim()) return false;
+  if (execGit(options.repoDir, ["rev-parse", `${commit}^`], keyPath) !== options.expectedCommit) {
+    return false;
+  }
+  const message = execGit(options.repoDir, ["show", "-s", "--format=%B", commit], keyPath);
+  if (message === null) return false;
+  const lines = new Set(message.split("\n").map((line) => line.trim()));
+  const targetGateway = lines.has(
+    `Octogee-Gateway: ${safeTrailerValue(options.env.GATEWAY_ID)}`,
+  );
+  const migrationCheckpoint =
+    lines.has("Octogee-Config-Source: migration-checkpoint") &&
+    lines.has(`Octogee-Migration-Source: ${options.expectedCommit}`);
+  const bootCheckpoint = lines.has("Octogee-Config-Source: boot-migration");
+  return targetGateway && (migrationCheckpoint || bootCheckpoint);
+}
+
+export function convergeSystemConfigToRemoteCommit(
+  options: SystemConfigRemoteConvergenceOptions,
+): SystemConfigRemoteConvergenceResult {
+  if (!GIT_SHA_RE.test(options.expectedCommit)) {
+    return { outcome: "unavailable", errorCode: "invalid-expected-commit" };
+  }
+  const execGit = options.gitExec ?? defaultGitExec;
+  const keyPath = options.keyPath ?? customerSshKeyPath(options.slug);
+  if (execGit(options.repoDir, ["fetch", "origin", "main"], keyPath) === null) {
+    return { outcome: "unavailable", errorCode: "remote-fetch-failed" };
+  }
+  const fetchedCommit = execGit(options.repoDir, ["rev-parse", "FETCH_HEAD"], keyPath);
+  const replayedTargetCommit = fetchedCommit !== null && fetchedCommit !== options.expectedCommit &&
+    isAttributedMigrationReplay(options, execGit, keyPath, fetchedCommit);
+  if (fetchedCommit !== options.expectedCommit && !replayedTargetCommit) {
+    return { outcome: "unavailable", errorCode: "remote-commit-mismatch" };
+  }
+  const adoptedCommit = replayedTargetCommit ? fetchedCommit : options.expectedCommit;
+  const candidate = historyCandidate(
+    {
+      ...options,
+      now: undefined,
+      acceptCurrent: false,
+    },
+    execGit,
+    keyPath,
+    adoptedCommit,
+  );
+  if (!candidate) {
+    return { outcome: "unavailable", errorCode: "remote-durable-set-unavailable" };
+  }
+  const candidatePath = path.join(
+    options.openclawDir,
+    "system_config.migration-converge-candidate.json",
+  );
+  const normalizedConfig = normalizedCandidate(
+    candidate,
+    candidatePath,
+    options.env ?? process.env,
+    options.validateConfig,
+    !replayedTargetCommit,
+  );
+  if (normalizedConfig === null) {
+    return { outcome: "unavailable", errorCode: "remote-config-invalid" };
+  }
+  if (execGit(
+    options.repoDir,
+    ["reset", "--hard", adoptedCommit],
+    keyPath,
+  ) === null) {
+    return { outcome: "unavailable", errorCode: "remote-adoption-failed" };
+  }
+  atomicWrite(options.configPath, normalizedConfig);
+  atomicWrite(
+    path.join(options.repoDir, SYSTEM_CONFIG_METADATA_FILENAME),
+    candidate.metadata,
+  );
+  atomicWrite(
+    path.join(options.repoDir, SYSTEM_CONFIG_GITIGNORE_FILENAME),
+    candidate.gitignore,
+  );
+  if (execGit(options.repoDir, ["rev-parse", "HEAD"], keyPath) !== adoptedCommit) {
+    return { outcome: "unavailable", errorCode: "remote-adoption-unverified" };
+  }
+  return { outcome: "adopted", adoptedCommit };
 }
 
 export function recoverSystemConfigHead(

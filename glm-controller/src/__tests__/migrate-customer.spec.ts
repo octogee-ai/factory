@@ -6,6 +6,8 @@ import type { OperationContext } from "../operation-router";
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 
+const SOURCE_SYSTEM_CONFIG_COMMIT = "a".repeat(40);
+
 const SNAPSHOT: FleetBrokerUserSnapshot = {
   uid: "uid-alice",
   slug: "alice",
@@ -72,7 +74,14 @@ function happyClient(): MigrationClient & { calls: string[] } {
       calls.push(`quiesce:${gatewayId}`);
       return { migrationId: "mig-op-1", slug, drained: true, runningCount: 0 };
     }) as MigrationClient["quiesce"],
-    flushGateway: vi.fn() as unknown as MigrationClient["flushGateway"],
+    flushGateway: vi.fn(async ({ migrationId, slug }) => ({
+      migrationId,
+      slug,
+      ok: true,
+      durationMs: 1,
+      systemConfigCommit: SOURCE_SYSTEM_CONFIG_COMMIT,
+      steps: [],
+    })) as MigrationClient["flushGateway"],
     transferState: vi.fn(async ({ fromGatewayId, toGatewayId, slug, mode }) => {
       calls.push(`transfer:${mode ?? "default"}:${fromGatewayId}->${toGatewayId}`);
       return { migrationId: "mig-op-1", slug, imported: true };
@@ -271,6 +280,11 @@ describe("migrate-customer — durable V2 migration", () => {
       "unmount:gw-blue",
     ]);
     expect(events).toContain("v2-cutover:gw-blue->gw-green");
+    expect(client.flushGateway).toHaveBeenLastCalledWith(expect.objectContaining({
+      gatewayId: "gw-green",
+      expectedSystemConfigCommit: SOURCE_SYSTEM_CONFIG_COMMIT,
+      reason: "migration-converge",
+    }));
   });
 
   it("refuses initialization when the source root ownership changed", async () => {
@@ -301,6 +315,7 @@ describe("migrate-customer — durable V2 migration", () => {
       sourceRelease: 1,
       sourceEpoch: 4,
       sourceAssignmentMode: "assigned" as const,
+      sourceSystemConfigCommit: SOURCE_SYSTEM_CONFIG_COMMIT,
       sourceRootFence: gatewayRootFence("gw-blue"),
       targetGatewayId: "gw-green",
       targetRelease: 2,

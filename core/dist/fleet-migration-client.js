@@ -94,8 +94,13 @@ export function createMigrationClient(deps) {
             log(`[migration-client] ✅ quiesce ok migrationId=${migrationId} slug=${slug}`);
             return res;
         },
-        async flushGateway({ migrationId, gatewayId, transportId, slug, reason }) {
-            const res = await postSignedJson(transportId ?? gatewayId, `/flush/${gatewayId}`, migrationId, { migrationId, slug, reason }, transferMs);
+        async flushGateway({ migrationId, gatewayId, transportId, slug, reason, expectedSystemConfigCommit, }) {
+            const res = await postSignedJson(transportId ?? gatewayId, `/flush/${gatewayId}`, migrationId, {
+                migrationId,
+                slug,
+                reason,
+                ...(expectedSystemConfigCommit ? { expectedSystemConfigCommit } : {}),
+            }, transferMs);
             log(`[migration-client] ✅ flushGateway migrationId=${migrationId} slug=${slug} gateway=${gatewayId} ok=${res.ok}`);
             return res;
         },

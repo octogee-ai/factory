@@ -1,13 +1,5 @@
 {{- if .Values.edgeIngress.enabled }}
 {{- $name := .Values.edgeIngress.name | default "octogee-edge-ingress" -}}
-# Metadata-only Ingress. Helm owns the object, its annotations (managed certs,
-# static IP, ingress class) and ingressClassName, but deliberately NOT
-# .spec.rules: that is an atomic server-side-apply field with a single owner,
-# and Cowboy (glm-controller) is that owner. It applies the full rule set —
-# the static base routes (octogee.edgeBaseRoutes, published via the
-# octogee-edge-routes ConfigMap) plus the per-gateway locality paths — so the
-# umbrella deploy never fights Cowboy over spec.rules. On a fresh install the
-# LB provisions once Cowboy writes the first rules.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -18,4 +10,9 @@ metadata:
     kubernetes.io/ingress.global-static-ip-name: {{ .Values.edgeIngress.staticIpName }}
 spec:
   ingressClassName: gce
+  defaultBackend:
+    service:
+      name: octogee-api
+      port:
+        name: http
 {{- end }}

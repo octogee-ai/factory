@@ -103,6 +103,29 @@ describe("fleet-controller entrypoint config", () => {
     }));
   });
 
+  it("converges to the controller-pinned remote config commit inside the durable checkpoint", async () => {
+    const expectedSystemConfigCommit = "a".repeat(40);
+    const acceptedCommit = "b".repeat(40);
+    const sync = vi.fn(() => ({
+      committed: true,
+      pushed: true,
+      acceptedCommit,
+    }));
+    const flush = createFleetSystemConfigFlush(
+      "alice",
+      () => {},
+      sync,
+      expectedSystemConfigCommit,
+    );
+
+    await expect(flush?.()).resolves.toEqual({ acceptedCommit });
+    expect(sync).toHaveBeenCalledWith("alice", expect.objectContaining({
+      durablePolicy: true,
+      expectedRemoteCommit: expectedSystemConfigCommit,
+      source: "migration-checkpoint",
+    }));
+  });
+
   it("ignores a leftover roll-era freeze marker — identity-pure mutation (GATEWAY-SIMPLE-ROLL-SPEC)", async () => {
     const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-entrypoint-freeze-"));
     const configApply = vi.fn(async () => ({ ok: true as const, hash: "next" }));

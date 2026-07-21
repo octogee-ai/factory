@@ -14,6 +14,8 @@ import type {
   CustomerMigrationV2State,
 } from "@octogee/shared/types/glm";
 
+const SOURCE_SYSTEM_CONFIG_COMMIT = "a".repeat(40);
+
 function gatewayRootFence(
   gatewayId: string,
   release: number,
@@ -34,7 +36,7 @@ function gatewayRootFence(
 function state(
   phase: CustomerMigrationV2State["phase"] = "initialized",
 ): CustomerMigrationV2State {
-  return {
+  const value: CustomerMigrationV2State = {
     phase,
     operationId: "op-1",
     migrationId: "mig-op-1",
@@ -49,6 +51,10 @@ function state(
     targetRelease: 3,
     targetRootFence: gatewayRootFence("target", 3),
   };
+  if (["sourceQuiesced", "finalSynced", "targetVerified", "cutover", "sourceRetired", "complete"].includes(phase)) {
+    value.sourceSystemConfigCommit = SOURCE_SYSTEM_CONFIG_COMMIT;
+  }
+  return value;
 }
 
 function deps(): CustomerMigrationV2Deps {
@@ -62,6 +68,7 @@ function deps(): CustomerMigrationV2Deps {
       ok: true,
       durationMs: 1,
       steps: [],
+      systemConfigCommit: SOURCE_SYSTEM_CONFIG_COMMIT,
     })),
     verifyTarget: vi.fn(async () => ({ migrationId: "mig-op-1", slug: "alice", ready: true })),
     unmount: vi.fn(async () => ({ migrationId: "mig-op-1", slug: "alice", unmounted: true })),
@@ -165,6 +172,7 @@ describe("advanceCustomerMigrationV2", () => {
         transportId: "target",
         slug: "alice",
         reason: "migration-converge",
+        expectedSystemConfigCommit: SOURCE_SYSTEM_CONFIG_COMMIT,
       },
     ]);
     expect(d.commitCutover).toHaveBeenCalledWith({
@@ -200,13 +208,48 @@ describe("advanceCustomerMigrationV2", () => {
 
     client.flushGateway.mockImplementation(async () => {
       order.push("source-flush");
-      return { migrationId: "mig-op-1", slug: "alice", ok: true, durationMs: 1, steps: [] };
+      return {
+        migrationId: "mig-op-1",
+        slug: "alice",
+        ok: true,
+        durationMs: 1,
+        steps: [],
+        systemConfigCommit: SOURCE_SYSTEM_CONFIG_COMMIT,
+      };
     });
 
     await advanceCustomerMigrationV2(state("preSynced"), d);
 
     expect(order).toEqual(["assignment-quiescing", "quiesce-rpc", "source-flush"]);
   });
+
+  it("persists the source's exact accepted config commit before final transfer", async () => {
+    const d = deps();
+
+    await expect(advanceCustomerMigrationV2(state("preSynced"), d)).resolves.toMatchObject({
+      phase: "sourceQuiesced",
+      sourceSystemConfigCommit: SOURCE_SYSTEM_CONFIG_COMMIT,
+    });
+  });
+
+  it.each([undefined, "not-a-commit"])(
+    "fails closed when source flush does not prove an accepted config commit (%s)",
+    async (systemConfigCommit) => {
+      const d = deps();
+      const client = d.client as unknown as Record<string, ReturnType<typeof vi.fn>>;
+      client.flushGateway.mockResolvedValueOnce({
+        migrationId: "mig-op-1",
+        slug: "alice",
+        ok: true,
+        durationMs: 1,
+        steps: [],
+        ...(systemConfigCommit === undefined ? {} : { systemConfigCommit }),
+      });
+
+      await expect(advanceCustomerMigrationV2(state("preSynced"), d))
+        .rejects.toThrow(/accepted system.config commit/iu);
+    },
+  );
 
   it("converges target config after final transfer and before target verification", async () => {
     const d = deps();

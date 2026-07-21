@@ -15,7 +15,7 @@ describe("gateway-edge emulator vitest config", () => {
     const cfg = config as VitestConfig;
 
     expect(cfg.test).toMatchObject({
-      include: ["src/__tests__/**/*.emulator.spec.ts"],
+      include: ["src/**/__tests__/**/*.emulator.spec.ts"],
       fileParallelism: false,
       testTimeout: 15_000,
     });

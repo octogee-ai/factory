@@ -38,6 +38,10 @@ import {
   type OperatorGatewayReservationSpec,
   type OperatorGatewayReservationRequest,
 } from "@octogee/shared/types/glm";
+import {
+  deploymentEnvironmentForNamespace,
+  deploymentEnvironmentSettings,
+} from "./deployment-environment.js";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
 import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 import { builderGatewayIdForSlug } from "@octogee/shared/types/builder-gateway-id";
@@ -1273,9 +1277,10 @@ function projectGatewayStorage(
 }
 
 function gatewayComputeClassBase(): string {
-  return resolveFleetNamespace() === "octogee-test"
-    ? "octogee-gateway-test"
-    : "octogee-gateway";
+  const environment = deploymentEnvironmentForNamespace(resolveFleetNamespace());
+  return environment === "unknown"
+    ? deploymentEnvironmentSettings("prod").computeClass
+    : deploymentEnvironmentSettings(environment).computeClass;
 }
 
 export function projectGatewayReservation(

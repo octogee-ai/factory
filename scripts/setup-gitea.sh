@@ -16,6 +16,7 @@ set -euo pipefail
 # Usage:
 #   ./scripts/setup-gitea.sh --env=test [--yes]
 #   ./scripts/setup-gitea.sh --env=prod
+#   ./scripts/setup-gitea.sh --env=build-week
 # ═══════════════════════════════════════════════════════════════════════════
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -39,14 +40,14 @@ for arg in "$@"; do
     --namespace=*) CUSTOM_NS="${arg#*=}" ;;
     --yes|-y)      YES=true ;;
     --help|-h)
-      echo "Usage: $0 --env=prod|test|custom [--namespace=NAME] [--yes]"
+      echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--yes]"
       exit 0
       ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
 
-[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|custom [--namespace=NAME] [--yes]"; exit 1; }
+[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--yes]"; exit 1; }
 
 case "$ENV" in
   prod)
@@ -67,6 +68,16 @@ case "$ENV" in
     K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
     ENV_FILE="$REPO_DIR/.env.test"
     ENV_LABEL="🟡 TEST"
+    GITEA_SVC="octogee-gitea-http"
+    ;;
+  build-week)
+    K8S_NAMESPACE="octogee-build-week"
+    GCP_PROJECT="octogee-build-week"
+    CLUSTER_PROJECT="octogee"
+    CLUSTER_NAME="octogee-gateway"
+    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
+    ENV_FILE="$REPO_DIR/.env.build-week"
+    ENV_LABEL="🟣 BUILD WEEK"
     GITEA_SVC="octogee-gitea-http"
     ;;
   custom)
@@ -107,6 +118,24 @@ save_env() {
   else
     echo "${key}=${val}" >> "$ENV_FILE"
   fi
+}
+
+gitea_field() {
+  local response="$1" field="$2" json_file value
+  json_file=$(mktemp)
+  chmod 600 "$json_file"
+  printf '%s' "$response" > "$json_file"
+  if ! value=$(python3 -c '
+import json, sys
+with open(sys.argv[2], encoding="utf-8") as source:
+    payload = json.load(source)
+print(payload.get(sys.argv[1], "") if isinstance(payload, dict) else "")
+' "$field" "$json_file" 2>/dev/null); then
+    rm -f "$json_file"
+    return 1
+  fi
+  rm -f "$json_file"
+  printf '%s\n' "$value"
 }
 
 echo ""
@@ -192,8 +221,10 @@ info "Checking 'octogee' org..."
 ORG_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
   -u "octogee-admin:$GITEA_ADMIN_PASS" \
   "http://localhost:13000/api/v1/orgs/octogee" 2>/dev/null || echo "000")
+ORG_REACHABLE=""
 
 if [[ "$ORG_STATUS" == "200" ]]; then
+  ORG_REACHABLE="octogee"
   ok "Org 'octogee' already exists"
 else
   ORG_RESP=$(curl -s -w "\n%{http_code}" -X POST \
@@ -203,6 +234,7 @@ else
     -d '{"username":"octogee","visibility":"private","repo_admin_change_team_access":true}' 2>/dev/null)
   ORG_CODE=$(echo "$ORG_RESP" | tail -1)
   [[ "$ORG_CODE" == "201" ]] || fail "Failed to create org (HTTP $ORG_CODE): $ORG_RESP"
+  ORG_REACHABLE="octogee"
   ok "Org 'octogee' created"
 fi
 
@@ -216,10 +248,10 @@ CACHED_TOKEN=$(kubectl get secret gitea-token -n "$K8S_NAMESPACE" \
 token_is_valid() {
   local tok="$1"
   [[ -z "$tok" ]] && return 1
-  local who issue_status
-  who=$(curl -s -H "Authorization: token $tok" \
-    "http://localhost:13000/api/v1/user" 2>/dev/null \
-    | python3 -c "import sys,json; print(json.load(sys.stdin).get('login',''))" 2>/dev/null || echo "")
+  local who who_response issue_status
+  who_response=$(curl -s -H "Authorization: token $tok" \
+    "http://localhost:13000/api/v1/user" 2>/dev/null || true)
+  who=$(gitea_field "$who_response" login 2>/dev/null || echo "")
   issue_status=$(curl -s -o /dev/null -w "%{http_code}" \
     -H "Authorization: token $tok" \
     "http://localhost:13000/api/v1/repos/issues/search?limit=1" 2>/dev/null || echo "000")
@@ -244,9 +276,9 @@ else
   TOKEN_CODE=$(echo "$TOKEN_RESP" | tail -1)
   TOKEN_BODY=$(echo "$TOKEN_RESP" | head -1)
 
-  [[ "$TOKEN_CODE" == "201" ]] || fail "Failed to create token (HTTP $TOKEN_CODE): $TOKEN_BODY"
-  GIT_API_TOKEN=$(echo "$TOKEN_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('sha1',''))" 2>/dev/null || echo "")
-  [[ -n "$GIT_API_TOKEN" ]] || fail "Token created but sha1 missing: $TOKEN_BODY"
+  [[ "$TOKEN_CODE" == "201" ]] || fail "Failed to create token (HTTP $TOKEN_CODE)"
+  GIT_API_TOKEN=$(gitea_field "$TOKEN_BODY" sha1 2>/dev/null || echo "")
+  [[ -n "$GIT_API_TOKEN" ]] || fail "Token created but sha1 missing"
   ok "API token created"
 fi
 
@@ -277,7 +309,7 @@ trap - EXIT
 echo ""
 echo -e "${CYAN}Gitea bootstrap summary${NC}"
 status "Gitea admin password present" "$GITEA_ADMIN_PASS"
-status "Org 'octogee' reachable" "$(curl -s -u "octogee-admin:$GITEA_ADMIN_PASS" http://localhost:13000/api/v1/orgs/octogee 2>/dev/null | grep -o '"username":"octogee"' || true)"
+status "Org 'octogee' reachable" "$ORG_REACHABLE"
 status "GIT_API_TOKEN created" "$GIT_API_TOKEN"
 status "gitea-token secret materialized" "$(kubectl get secret gitea-token -n "$K8S_NAMESPACE" -o jsonpath='{.metadata.name}' 2>/dev/null || true)"
 

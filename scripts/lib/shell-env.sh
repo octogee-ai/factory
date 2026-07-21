@@ -88,7 +88,7 @@ validate_stripe_secret_key_mode() {
   local key="$2"
   case "$env" in
     prod) [[ "$key" == sk_live_?* ]] ;;
-    test|custom) [[ "$key" == sk_test_?* ]] ;;
+    test|build-week|custom) [[ "$key" == sk_test_?* ]] ;;
     *) return 1 ;;
   esac
 }

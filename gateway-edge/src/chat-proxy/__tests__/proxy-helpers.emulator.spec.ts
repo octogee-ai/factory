@@ -31,6 +31,20 @@ describe('chat-proxy helper coverage', () => {
     expect(headers.get('Access-Control-Allow-Credentials')).toBe('true');
   });
 
+  it('sets CORS for the isolated Build Week app origin', () => {
+    const headers = new Map<string, string>();
+    const req = { headers: { origin: 'https://app-octogee-build-week.web.app' } } as never;
+    const res = {
+      setHeader: (key: string, value: string) => headers.set(key, value),
+    } as never;
+
+    setCors(req, res);
+
+    expect(headers.get('Access-Control-Allow-Origin')).toBe(
+      'https://app-octogee-build-week.web.app',
+    );
+  });
+
   it('does not set allow-origin for disallowed origins', () => {
     const headers = new Map<string, string>();
     const req = { headers: { origin: 'https://evil.example.com' } } as never;

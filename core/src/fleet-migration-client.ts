@@ -55,6 +55,7 @@ export interface MigrationClient {
     transportId?: string;
     slug: string;
     reason: string;
+    expectedSystemConfigCommit?: string;
   }): Promise<FlushGatewayResponse>;
 
   restoreTarget(opts: {
@@ -232,12 +233,24 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       return res;
     },
 
-    async flushGateway({ migrationId, gatewayId, transportId, slug, reason }) {
+    async flushGateway({
+      migrationId,
+      gatewayId,
+      transportId,
+      slug,
+      reason,
+      expectedSystemConfigCommit,
+    }) {
       const res = await postSignedJson<FlushGatewayResponse>(
         transportId ?? gatewayId,
         `/flush/${gatewayId}`,
         migrationId,
-        { migrationId, slug, reason },
+        {
+          migrationId,
+          slug,
+          reason,
+          ...(expectedSystemConfigCommit ? { expectedSystemConfigCommit } : {}),
+        },
         transferMs,
       );
       log(

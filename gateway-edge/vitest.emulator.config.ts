@@ -12,7 +12,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["src/__tests__/**/*.emulator.spec.ts"],
+    include: ["src/**/__tests__/**/*.emulator.spec.ts"],
     // Each emulator spec calls resetEmulator() in beforeEach, so running
     // them in parallel within one file is fine — but across files we
     // share one emulator, so sequential file execution avoids interference.

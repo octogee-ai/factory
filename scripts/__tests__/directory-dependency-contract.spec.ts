@@ -134,6 +134,26 @@ describe("directory dependency repository contract", () => {
     }
   });
 
+  it("excludes local environment secrets from Cloud Build uploads", () => {
+    const lines = fs
+      .readFileSync(path.join(root, ".gcloudignore"), "utf8")
+      .split("\n")
+      .map((line) => line.trim());
+
+    expect(lines).toContain(".env*");
+    expect(lines).toContain("**/.env*");
+    expect(lines).toContain("**/secrets");
+  });
+
+  it("keeps the Helm charts required by the controller image in Cloud Build uploads", () => {
+    const lines = fs
+      .readFileSync(path.join(root, ".gcloudignore"), "utf8")
+      .split("\n")
+      .map((line) => line.trim());
+
+    expect(lines).not.toContain("helm/");
+  });
+
   it("retires tarball transport and its maintenance commands", () => {
     for (const filePath of [
       "core/octogee-core.tgz",

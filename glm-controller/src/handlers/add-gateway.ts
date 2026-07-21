@@ -81,7 +81,7 @@ function deploymentNameForGateway(gatewayId: string): string {
   return `octogee-gateway-${gatewayId}`;
 }
 
-function heartbeatMatchesImageTag(version: string | null | undefined, imageTag: string | undefined): boolean {
+export function heartbeatMatchesImageTag(version: string | null | undefined, imageTag: string | undefined): boolean {
   if (!imageTag) return true;
   return gatewayHeartbeatMatchesImageTag(version, imageTag);
 }

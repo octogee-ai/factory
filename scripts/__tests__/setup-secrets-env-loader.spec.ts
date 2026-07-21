@@ -243,6 +243,7 @@ describe("setup-secrets env loader", () => {
 
   it("rejects Stripe secret keys from the wrong environment mode", () => {
     expect(stripeKeyModeValidity("test", "sk_test_example")).toBe("valid");
+    expect(stripeKeyModeValidity("build-week", "sk_test_example")).toBe("valid");
     expect(stripeKeyModeValidity("custom", "sk_test_example")).toBe("valid");
     expect(stripeKeyModeValidity("prod", "sk_live_example")).toBe("valid");
     expect(stripeKeyModeValidity("test", "sk_live_example")).toBe("invalid");
@@ -309,6 +310,28 @@ describe("setup-secrets env loader", () => {
     ]) {
       expect(verify).toContain(entry);
     }
+  });
+
+  it("captures the Ops Agent bearer in the selected environment file", () => {
+    const setup = readFileSync(setupSecretsPath, "utf-8");
+
+    expect(setup).toContain('configured_secret_value "${OPS_AGENT_BEARER_TOKEN:-}"');
+    expect(setup).toContain('save_env_file_value "$ENV_FILE" OPS_AGENT_BEARER_TOKEN "$OPS_AGENT_BEARER_TOKEN"');
+  });
+
+  it("materializes the default gateway auth secret for Build Week", () => {
+    const setup = readFileSync(setupSecretsPath, "utf-8");
+
+    expect(setup).toContain('build-week) GATEWAY_IDS=("default")');
+  });
+
+  it("syncs configured Cloud Functions values instead of preserving placeholder secret versions", () => {
+    const setup = readFileSync(setupSecretsPath, "utf-8");
+
+    expect(setup).toContain("function_secret_value()");
+    expect(setup).toContain('GITEA_TOKEN) configured_secret_value "${GIT_API_TOKEN:-}"');
+    expect(setup).toContain('sync_function_secret "$sm_secret" "$function_value"');
+    expect(setup).toContain('gcloud secrets versions add "$secret"');
   });
 
   it("documents all server-only Google OAuth values as blank placeholders", () => {

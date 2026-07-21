@@ -574,14 +574,17 @@ describe("scanAgentImportSecrets", () => {
       expect(args).toContain("--ignore-gitleaks-allow");
       expect(args[args.indexOf("--config") + 1]).toBe("/gateway-edge/agent-import-gitleaks.toml");
       expect(args[args.indexOf("--gitleaks-ignore-path") + 1]).not.toContain(source);
-      expect(args[args.indexOf("--report-path") + 1]).toBe("/dev/stdout");
-      return { status: 1, stdout: JSON.stringify([{
+      const reportPath = args[args.indexOf("--report-path") + 1];
+      expect(reportPath).not.toBe("/dev/stdout");
+      expect(path.dirname(reportPath)).not.toBe(source);
+      fs.writeFileSync(reportPath, JSON.stringify([{
         RuleID: "github-pat",
         File: "MEMORY.md",
         Commit: "a".repeat(40),
         Secret: "ghp_must_not_escape",
         Match: "ghp_must_not_escape",
-      }]), stderr: "" };
+      }]));
+      return { status: 1, stdout: "", stderr: "" };
     });
 
     const prior = process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -604,7 +607,7 @@ describe("scanAgentImportSecrets", () => {
     })).rejects.toBeInstanceOf(AgentImportGitError);
   });
 
-  it("terminates an oversized scanner report at the streaming byte cap", async () => {
+  it("terminates oversized scanner process output at the streaming byte cap", async () => {
     const source = repo("agent-import-scan-large", { "MEMORY.md": "memory\n" });
     await expect(scanAgentImportSecrets(source, {
       run: vi.fn((_command, _args, options: { maxOutput?: number }) => {
@@ -615,6 +618,18 @@ describe("scanAgentImportSecrets", () => {
           stderr: "",
           error: Object.assign(new Error("command output exceeded limit"), { code: "ENOBUFS" }),
         };
+      }),
+    })).rejects.toMatchObject({ code: "secret_findings", findings: undefined });
+  });
+
+  it("rejects a scanner report larger than the report byte cap before reading it", async () => {
+    const source = repo("agent-import-scan-report-large", { "MEMORY.md": "memory\n" });
+    await expect(scanAgentImportSecrets(source, {
+      run: vi.fn((_command, args) => {
+        const reportPath = args[args.indexOf("--report-path") + 1];
+        fs.writeFileSync(reportPath, "");
+        fs.truncateSync(reportPath, (4 * 1024 * 1024) + 1);
+        return { status: 1, stdout: "", stderr: "" };
       }),
     })).rejects.toMatchObject({ code: "secret_findings", findings: undefined });
   });

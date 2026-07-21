@@ -3,6 +3,7 @@ import http from 'node:http';
 import { EventEmitter } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { WebSocket as WsClient } from 'ws';
+import type { OpenClawRuntimeBroker } from '../openclaw/runtime-broker.js';
 import {
   getAdminDb,
   requireEmulator,
@@ -51,7 +52,7 @@ const ctl: {
     inboundAccept: boolean;
     forwardOutbound: boolean;
     invalidatedGateways: string[];
-    gatewayIdChangeCb: ((next: string) => void) | null;
+    userGatewayId: string | null;
     lastUpstream: { close: ReturnType<typeof vi.fn> } | null;
   } = {
     originAllowed: true,
@@ -62,7 +63,7 @@ const ctl: {
     inboundAccept: true,
     forwardOutbound: true,
     invalidatedGateways: [],
-    gatewayIdChangeCb: null,
+    userGatewayId: 'gw-1',
     lastUpstream: null,
   };
 
@@ -129,20 +130,6 @@ vi.mock('../openclaw/upstream.js', () => ({
     h.ctl.openUpstream(deviceToken ?? token ?? ''),
 }));
 
-vi.mock('../openclaw/gateway-id-watcher.js', () => ({
-  watchGatewayIdChange: (
-    _db: unknown,
-    _uid: string,
-    _gatewayId: string,
-    cb: (next: string) => void,
-  ) => {
-    h.ctl.gatewayIdChangeCb = cb;
-    return () => {
-      h.ctl.gatewayIdChangeCb = null;
-    };
-  },
-}));
-
 vi.mock('../openclaw/inbound-gate.js', () => ({
   createGateState: () => ({}),
   evaluateInboundFrame: () => ({
@@ -152,28 +139,61 @@ vi.mock('../openclaw/inbound-gate.js', () => ({
   observeOutboundForState: () => {},
 }));
 
-const { createServer, createMetricsServer } = await import('../proxy');
+const {
+  attachChatProxyWsUpgrade,
+  chatProxyHandleRequest,
+  chatProxyMetricsRegistry,
+} = await import('../proxy');
+
+const runtimeBroker = {
+  async redeemOpenClawWs(ticketId: string) {
+    const ref = getAdminDb().collection(TICKETS_COLLECTION).doc(ticketId);
+    const snap = await ref.get();
+    const data = snap.data();
+    if (!snap.exists || typeof data?.uid !== 'string' || Number(data.expiresAt) <= Date.now()) {
+      return { kind: 'unauthorized' as const };
+    }
+    await ref.delete();
+    try {
+      const resolved = h.ctl.resolve();
+      return {
+        kind: 'redeemed' as const,
+        redeemed: {
+          uid: data.uid,
+          gatewayId: resolved.gatewayId,
+          gatewayUrl: resolved.url,
+          expectedAgentId: h.ctl.deriveAgentId(),
+        },
+      };
+    } catch (error) {
+      if (error instanceof h.GatewayResolveError) {
+        return { kind: 'revision-unavailable' as const, reason: error.code };
+      }
+      throw error;
+    }
+  },
+  async getUserGatewayId() {
+    return h.ctl.userGatewayId;
+  },
+} as unknown as OpenClawRuntimeBroker;
 
 let server: http.Server;
 let port: number;
-let metricsServer: http.Server;
-let metricsPort: number;
 
 beforeAll(async () => {
-  server = createServer();
+  server = http.createServer((req, res) => {
+    void chatProxyHandleRequest(req, res);
+  });
+  attachChatProxyWsUpgrade(server, {
+    runtimeBroker,
+    gatewayWatchIntervalMs: 10,
+  });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   port = (server.address() as AddressInfo).port;
-
-metricsServer = createMetricsServer();
-  await new Promise<void>((resolve) =>
-    metricsServer.listen(0, '127.0.0.1', resolve),
-  );
-  metricsPort = (metricsServer.address() as AddressInfo).port;
 });
 
 afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
-  await new Promise<void>((resolve) => metricsServer.close(() => resolve()));
 });
 
 async function seedTicket(opts: { expiresAt?: number; uid?: string | null } = {}): Promise<void> {
@@ -206,7 +226,7 @@ beforeEach(async () => {
   h.ctl.inboundAccept = true;
   h.ctl.forwardOutbound = true;
   h.ctl.invalidatedGateways = [];
-  h.ctl.gatewayIdChangeCb = null;
+  h.ctl.userGatewayId = 'gw-1';
   h.ctl.lastUpstream = null;
 });
 
@@ -237,8 +257,7 @@ function connect(opts: { ticketPath?: string; origin?: string } = {}): Promise<
 }
 
 async function readMetrics(): Promise<string> {
-  const res = await fetch(`http://127.0.0.1:${metricsPort}/metrics`);
-  return res.text();
+  return chatProxyMetricsRegistry.metrics();
 }
 function metricValue(text: string, linePrefix: string): number {
   const line = text.split('\n').find((l) => l.startsWith(linePrefix));
@@ -289,20 +308,20 @@ describe('OC WS upgrade — refusal decision table (security boundary)', () => {
     expect(r).toEqual({ kind: 'rejected', status: 401 });
   });
 
-  it('maps an unprovisioned gateway (GatewayResolveError) to 502', async () => {
+  it('maps an unprovisioned gateway to a retryable 503', async () => {
     h.ctl.resolve = () => {
       throw new h.GatewayResolveError('not-provisioned');
     };
     const r = await connect();
-    expect(r).toEqual({ kind: 'rejected', status: 502 });
+    expect(r).toEqual({ kind: 'rejected', status: 503 });
   });
 
-  it('maps an agent-id derivation failure to 502', async () => {
+  it('fails closed when the broker returns malformed agent identity data', async () => {
     h.ctl.deriveAgentId = () => {
       throw new h.ExpectedAgentIdError('no agent');
     };
     const r = await connect();
-    expect(r).toEqual({ kind: 'rejected', status: 502 });
+    expect(r).toEqual({ kind: 'rejected', status: 500 });
   });
 
   it('maps a gateway-token fetch failure to 503', async () => {
@@ -457,8 +476,7 @@ describe('OC WS upgrade — happy path frame proxying & teardown', () => {
     expect(r.kind).toBe('open');
     if (r.kind !== 'open') return;
     const closed = new Promise<number>((res) => r.ws.once('close', (code) => res(code)));
-    await vi.waitFor(() => expect(h.ctl.gatewayIdChangeCb).not.toBeNull());
-    h.ctl.gatewayIdChangeCb!('gw-2');
+    h.ctl.userGatewayId = 'gw-2';
     expect(await closed).toBe(1001); 
     await settle(r);
   });
