@@ -251,6 +251,12 @@ export const EDGES: readonly ScopeEdge[] = [
       "tests/specs imports app/src source directly (app-route-helpers.spec.ts → routes/appRoutes, context-channel-selection.spec.ts → lib/contextChannelSelection, deferred-action.spec.ts → lib/deferredAction, sizing-cost-lockstep.spec.ts → lib/sizing, activity-wire-contract.spec.ts → hooks/useActivityChannel + activity-rows/ActivityRow)",
   },
   {
+    when: "app/public/",
+    jobs: [JOBS.tests],
+    reason:
+      "tests/specs/first-party-assets.spec.ts verifies the founder-avatar asset names and first-party provenance",
+  },
+  {
     when: "site/",
     jobs: [JOBS.tests],
     reason:
@@ -261,6 +267,12 @@ export const EDGES: readonly ScopeEdge[] = [
     jobs: [JOBS.tests],
     reason:
       "tests/specs reads scripts/ source directly beyond lib/: scripts/lib/* (byot-auth-profiles, byot-sync, auth-profile-sqlite, key-fingerprint, model-credential-materializer, usage-log-line specs), scripts/secret-resolver.mjs + scripts/entrypoints/fleet-controller.ts (byok-provider-registry-parity, gateway-entrypoint, gateway-rpc-local-exceptions specs), scripts/setup-secrets.sh + scripts/verify-secrets.sh (byot-sync-secret-management, openrouter-platform-secret-management specs), scripts/rebuild-matrix-bases.sh (gateway-base-refresh.spec.ts), and internal-routing-guard.spec.ts walks the entire scripts/ tree",
+  },
+  {
+    when: "scripts/lib/vite-third-party-licenses.",
+    jobs: [JOBS.app, JOBS.site],
+    reason:
+      "the app and site production builds both import the shared third-party license artifact plugin",
   },
   {
     when: "functions/",
