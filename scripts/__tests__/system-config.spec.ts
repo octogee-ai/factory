@@ -1190,6 +1190,35 @@ describe("system_config restore", () => {
     expect(fs.existsSync(lockPath)).toBe(false);
   });
 
+  it("keeps the default text git executor out of exact remote blob recovery", () => {
+    const configPath = path.join(repoDir, "openclaw.json");
+    writeJson(configPath, { version: 1 });
+    fs.writeFileSync(path.join(repoDir, ".octogee.json"), '{"schemaVersion":1}\n');
+    fs.writeFileSync(path.join(repoDir, ".gitignore"), "*.bak\n*.tmp\n");
+    const sourceCommit = "a".repeat(40);
+    const targetCommit = "b".repeat(40);
+    const convergeRemoteCommit = vi.fn((options) => {
+      expect(options.gitExec).toBeUndefined();
+      return { outcome: "adopted" as const, adoptedCommit: sourceCommit };
+    });
+    vi.mocked(gitExec).mockImplementation((_cwd: string, argsArgv: string[]) => {
+      const args = argsArgv.join(" ");
+      if (args === "status --porcelain -- openclaw.json .octogee.json .gitignore") return "";
+      if (args === "push origin main") return "";
+      if (args === "rev-parse HEAD") return targetCommit;
+      return null;
+    });
+
+    expect(syncSystemConfigForSlug("acme", {
+      openclawDir,
+      expectedRemoteCommit: sourceCommit,
+      convergeRemoteCommit,
+      log: () => {},
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+    })).toMatchObject({ pushed: true, acceptedCommit: targetCommit });
+  });
+
   it("fails the checkpoint without pushing when pinned remote adoption is unavailable", () => {
     writeJson(path.join(repoDir, "openclaw.json"), { version: 1 });
     const git = vi.fn();

@@ -1257,7 +1257,7 @@ function convergeExpectedRemoteSystemConfig(
     configPath: context.repoConfigPath,
     expectedCommit: opts.expectedRemoteCommit,
     env: context.env,
-    gitExec: context.execGit,
+    gitExec: opts.gitExec,
     validateConfig: opts.validateConfig ?? validateOpenClawConfig,
     keyPath: context.keyPath,
     readCommitBlob: opts.readCommitBlob,
