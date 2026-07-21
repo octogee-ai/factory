@@ -1201,6 +1201,7 @@ function commitValidatedCandidate(
       `${source}: sync openclaw config ${context.now().toISOString()}`,
       source,
       context.env,
+      context.opts.expectedRemoteCommit,
     ),
     context.keyPath,
   );
@@ -1745,7 +1746,7 @@ export function checkpointDurableSystemConfigForSlug(
   const result = sync(slug, {
     ...opts,
     durablePolicy: true,
-    source: opts.source ?? "auto-watch",
+    source: opts.source ?? (opts.expectedRemoteCommit ? "migration-checkpoint" : "auto-watch"),
   });
   if (!result.pushed || result.pending || result.rejected || result.skipped ||
       result.errorCode || !result.acceptedCommit) {

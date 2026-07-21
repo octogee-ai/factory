@@ -122,6 +122,7 @@ describe("fleet-controller entrypoint config", () => {
     expect(sync).toHaveBeenCalledWith("alice", expect.objectContaining({
       durablePolicy: true,
       expectedRemoteCommit: expectedSystemConfigCommit,
+      source: "migration-checkpoint",
     }));
   });
 

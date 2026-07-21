@@ -1214,6 +1214,41 @@ describe("system_config restore", () => {
     expect(git).not.toHaveBeenCalled();
   });
 
+  it("attributes a target normalization commit to the exact source checkpoint", () => {
+    writeJson(path.join(repoDir, "openclaw.json"), { version: 1 });
+    fs.writeFileSync(path.join(repoDir, ".octogee.json"), '{"schemaVersion":1}\n');
+    fs.writeFileSync(path.join(repoDir, ".gitignore"), "*.bak\n*.tmp\n");
+    const sourceCommit = "a".repeat(40);
+    const targetCommit = "b".repeat(40);
+    const commands: string[] = [];
+    const git = vi.fn((_cwd: string, argsArgv: string[]) => {
+      const command = argsArgv.join(" ");
+      commands.push(command);
+      if (command === "status --porcelain -- openclaw.json .octogee.json .gitignore") {
+        return " M openclaw.json";
+      }
+      if (command === "rev-parse HEAD") return targetCommit;
+      return "";
+    });
+
+    expect(syncSystemConfigForSlug("acme", {
+      openclawDir,
+      expectedRemoteCommit: sourceCommit,
+      source: "migration-checkpoint",
+      convergeRemoteCommit: () => ({
+        outcome: "adopted",
+        adoptedCommit: sourceCommit,
+      }),
+      log: () => {},
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      gitExec: git,
+    })).toMatchObject({ pushed: true, acceptedCommit: targetCommit });
+    const commit = commands.find((command) => command.startsWith("commit "));
+    expect(commit).toContain("Octogee-Config-Source: migration-checkpoint");
+    expect(commit).toContain(`Octogee-Migration-Source: ${sourceCommit}`);
+  });
+
   it("syncs through a leftover roll-era freeze marker — the freeze plane is retired", () => {
     const configPath = path.join(repoDir, "openclaw.json");
     writeJson(configPath, { version: 1 });

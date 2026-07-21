@@ -117,6 +117,90 @@ describe("system config accepted-head recovery", () => {
     expect(commands.join("\n")).not.toMatch(/^(?:add|commit|push) /mu);
   });
 
+  it("accepts a replayed target checkpoint only when it is the attributed child of the source pin", () => {
+    const h = fixture(validConfig({ staleTarget: true }));
+    const sourceCommit = "a".repeat(40);
+    const targetCommit = "b".repeat(40);
+    const targetConfig = validConfig({ sourceFinal: true });
+    const commitMessage = [
+      "migration-checkpoint: sync openclaw config 2026-07-21T10:00:00.000Z",
+      "",
+      "Octogee-Config-Source: migration-checkpoint",
+      "Octogee-Gateway: bender",
+      "OpenClaw-Version: 2026.7.1",
+      `Octogee-Migration-Source: ${sourceCommit}`,
+    ].join("\n");
+    const commands: string[] = [];
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
+      commands.push(command);
+      if (command === "fetch origin main") return "";
+      if (command === "rev-parse FETCH_HEAD") return targetCommit;
+      if (command === `rev-parse ${targetCommit}^`) return sourceCommit;
+      if (command === `show -s --format=%B ${targetCommit}`) return commitMessage;
+      if (command === `show ${targetCommit}:openclaw.json`) return targetConfig;
+      if (command === `show ${targetCommit}:.octogee.json`) return '{"schemaVersion":1}\n';
+      if (command === `show ${targetCommit}:.gitignore`) return "*.bak\n*.tmp\n";
+      if (command === `reset --hard ${targetCommit}`) return "";
+      if (command === "rev-parse HEAD") return targetCommit;
+      return null;
+    });
+
+    expect(convergeSystemConfigToRemoteCommit({
+      ...h,
+      slug: "ceckert",
+      expectedCommit: sourceCommit,
+      env,
+      gitExec,
+      validateConfig: vi.fn(),
+    })).toEqual({ outcome: "adopted", adoptedCommit: targetCommit });
+    expect(commands).toContain(`reset --hard ${targetCommit}`);
+  });
+
+  it.each([
+    ["a non-direct descendant", "c".repeat(40), "migration-checkpoint", "bender", "a".repeat(40)],
+    ["another gateway", "a".repeat(40), "migration-checkpoint", "other", "a".repeat(40)],
+    ["an ordinary config commit", "a".repeat(40), "auto-watch", "bender", "a".repeat(40)],
+    ["another source pin", "a".repeat(40), "migration-checkpoint", "bender", "c".repeat(40)],
+  ])("rejects a fetched target tip attributed to %s", (
+    _case,
+    parentCommit,
+    source,
+    gatewayId,
+    migrationSourceCommit,
+  ) => {
+    const h = fixture(validConfig({ staleTarget: true }));
+    const sourceCommit = "a".repeat(40);
+    const targetCommit = "b".repeat(40);
+    const message = [
+      `Octogee-Config-Source: ${source}`,
+      `Octogee-Gateway: ${gatewayId}`,
+      `Octogee-Migration-Source: ${migrationSourceCommit}`,
+    ].join("\n");
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
+      if (command === "fetch origin main") return "";
+      if (command === "rev-parse FETCH_HEAD") return targetCommit;
+      if (command === `rev-parse ${targetCommit}^`) return parentCommit;
+      if (command === `show -s --format=%B ${targetCommit}`) return message;
+      return null;
+    });
+
+    expect(convergeSystemConfigToRemoteCommit({
+      ...h,
+      slug: "ceckert",
+      expectedCommit: sourceCommit,
+      env,
+      gitExec,
+      validateConfig: vi.fn(),
+    })).toEqual({ outcome: "unavailable", errorCode: "remote-commit-mismatch" });
+    expect(gitExec).not.toHaveBeenCalledWith(
+      h.repoDir,
+      ["reset", "--hard", targetCommit],
+      expect.any(String),
+    );
+  });
+
   it("rejects an invalid pinned commit before fetching or changing the checkout", () => {
     const h = fixture(validConfig({ staleTarget: true }));
     const gitExec = vi.fn();

@@ -96,13 +96,20 @@ export function attributedCommitArgs(
   subject: string,
   source: SystemConfigCommitSource,
   env: NodeJS.ProcessEnv = process.env,
+  migrationSourceCommit?: string,
 ): string[] {
+  if (migrationSourceCommit !== undefined && !GIT_SHA_RE.test(migrationSourceCommit)) {
+    throw new Error("migration source commit must be a valid git SHA");
+  }
+  const migrationTrailer = migrationSourceCommit
+    ? `\nOctogee-Migration-Source: ${migrationSourceCommit}`
+    : "";
   return [
     "commit",
     "-m",
     subject,
     "-m",
-    `Octogee-Config-Source: ${source}\nOctogee-Gateway: ${safeTrailerValue(env.GATEWAY_ID)}\nOpenClaw-Version: ${safeTrailerValue(env.OPENCLAW_VERSION)}`,
+    `Octogee-Config-Source: ${source}\nOctogee-Gateway: ${safeTrailerValue(env.GATEWAY_ID)}\nOpenClaw-Version: ${safeTrailerValue(env.OPENCLAW_VERSION)}${migrationTrailer}`,
   ];
 }
 
@@ -228,6 +235,24 @@ function restoreValidCommittedHead(
   return true;
 }
 
+function isAttributedMigrationReplay(
+  options: SystemConfigRemoteConvergenceOptions,
+  execGit: GitExec,
+  keyPath: string,
+  commit: string,
+): boolean {
+  if (!GIT_SHA_RE.test(commit) || !options.env?.GATEWAY_ID?.trim()) return false;
+  if (execGit(options.repoDir, ["rev-parse", `${commit}^`], keyPath) !== options.expectedCommit) {
+    return false;
+  }
+  const message = execGit(options.repoDir, ["show", "-s", "--format=%B", commit], keyPath);
+  if (message === null) return false;
+  const lines = new Set(message.split("\n").map((line) => line.trim()));
+  return lines.has("Octogee-Config-Source: migration-checkpoint") &&
+    lines.has(`Octogee-Gateway: ${safeTrailerValue(options.env.GATEWAY_ID)}`) &&
+    lines.has(`Octogee-Migration-Source: ${options.expectedCommit}`);
+}
+
 export function convergeSystemConfigToRemoteCommit(
   options: SystemConfigRemoteConvergenceOptions,
 ): SystemConfigRemoteConvergenceResult {
@@ -240,9 +265,12 @@ export function convergeSystemConfigToRemoteCommit(
     return { outcome: "unavailable", errorCode: "remote-fetch-failed" };
   }
   const fetchedCommit = execGit(options.repoDir, ["rev-parse", "FETCH_HEAD"], keyPath);
-  if (fetchedCommit !== options.expectedCommit) {
+  const replayedTargetCommit = fetchedCommit !== null && fetchedCommit !== options.expectedCommit &&
+    isAttributedMigrationReplay(options, execGit, keyPath, fetchedCommit);
+  if (fetchedCommit !== options.expectedCommit && !replayedTargetCommit) {
     return { outcome: "unavailable", errorCode: "remote-commit-mismatch" };
   }
+  const adoptedCommit = replayedTargetCommit ? fetchedCommit : options.expectedCommit;
   const candidate = historyCandidate(
     {
       ...options,
@@ -251,7 +279,7 @@ export function convergeSystemConfigToRemoteCommit(
     },
     execGit,
     keyPath,
-    options.expectedCommit,
+    adoptedCommit,
   );
   if (!candidate) {
     return { outcome: "unavailable", errorCode: "remote-durable-set-unavailable" };
@@ -265,14 +293,14 @@ export function convergeSystemConfigToRemoteCommit(
     candidatePath,
     options.env ?? process.env,
     options.validateConfig,
-    true,
+    !replayedTargetCommit,
   );
   if (normalizedConfig === null) {
     return { outcome: "unavailable", errorCode: "remote-config-invalid" };
   }
   if (execGit(
     options.repoDir,
-    ["reset", "--hard", options.expectedCommit],
+    ["reset", "--hard", adoptedCommit],
     keyPath,
   ) === null) {
     return { outcome: "unavailable", errorCode: "remote-adoption-failed" };
@@ -286,10 +314,10 @@ export function convergeSystemConfigToRemoteCommit(
     path.join(options.repoDir, SYSTEM_CONFIG_GITIGNORE_FILENAME),
     candidate.gitignore,
   );
-  if (execGit(options.repoDir, ["rev-parse", "HEAD"], keyPath) !== options.expectedCommit) {
+  if (execGit(options.repoDir, ["rev-parse", "HEAD"], keyPath) !== adoptedCommit) {
     return { outcome: "unavailable", errorCode: "remote-adoption-unverified" };
   }
-  return { outcome: "adopted", adoptedCommit: options.expectedCommit };
+  return { outcome: "adopted", adoptedCommit };
 }
 
 export function recoverSystemConfigHead(
