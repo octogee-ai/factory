@@ -117,6 +117,47 @@ describe("runAgentImportDoctor", () => {
     )).rejects.toThrow(/credential-bearing/i);
     expect(fs.readdirSync(root)).toEqual([]);
   });
+
+  it("accepts Doctor-generated skill identifiers that contain credential words", async () => {
+    const root = tempRoot();
+    const run = vi.fn(async (_command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
+      if (args[0] === "--version") return result(0, "OpenClaw 2026.7.2\n");
+      if (args[0] === "doctor") {
+        const configPath = options.env.OPENCLAW_CONFIG_PATH!;
+        const candidate = JSON.parse(fs.readFileSync(configPath, "utf8"));
+        candidate.skills = { entries: { "1password": { enabled: false } } };
+        fs.writeFileSync(configPath, `${JSON.stringify(candidate)}\n`);
+      }
+      return result(0);
+    });
+
+    await expect(runAgentImportDoctor({}, { tmpRoot: root, run })).resolves.toMatchObject({
+      outcome: "migrated",
+      doctorVersion: "2026.7.2",
+      repairedCandidate: {
+        skills: { entries: { "1password": { enabled: false } } },
+      },
+    });
+    expect(fs.readdirSync(root)).toEqual([]);
+  });
+
+  it("still rejects credentials beneath a credential-shaped skill identifier", async () => {
+    const root = tempRoot();
+    const run = vi.fn(async (_command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
+      if (args[0] === "--version") return result(0, "OpenClaw 2026.7.2\n");
+      if (args[0] === "doctor") {
+        const configPath = options.env.OPENCLAW_CONFIG_PATH!;
+        const candidate = JSON.parse(fs.readFileSync(configPath, "utf8"));
+        candidate.skills = { entries: { "1password": { accessToken: "still-a-secret" } } };
+        fs.writeFileSync(configPath, `${JSON.stringify(candidate)}\n`);
+      }
+      return result(0);
+    });
+
+    await expect(runAgentImportDoctor({}, { tmpRoot: root, run }))
+      .rejects.toThrow(/credential-bearing/i);
+    expect(fs.readdirSync(root)).toEqual([]);
+  });
 });
 
 describe("agent import doctor HTTP handler", () => {
