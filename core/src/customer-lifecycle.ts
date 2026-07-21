@@ -141,7 +141,7 @@ ensureGiteaOrg: (slug: string) => Promise<void>;
 
 readLocalCustomerPubKey: (slug: string) => string | null;
 
-readGiteaCustomerPubKey: (slug: string) => Promise<string | null>;
+readGiteaCustomerPubKeys: (slug: string) => Promise<string[]>;
 
 deleteCustomerSshKey: (slug: string) => Promise<void>;
 
@@ -598,10 +598,10 @@ async function registerFirstTimeSshKey(
   const pubKey = adapter.generateCustomerSshKey(slug);
   try {
     await adapter.createGiteaUser(slug, pubKey);
-    const giteaPub = await adapter.readGiteaCustomerPubKey(slug);
-    if (giteaPub === null || !pubKeysMatch(giteaPub, pubKey)) {
+    const giteaPubKeys = await adapter.readGiteaCustomerPubKeys(slug);
+    if (!giteaPubKeys.some((candidate) => pubKeysMatch(candidate, pubKey))) {
       throw new Error(
-        `Gitea did not register the new SSH key (giteaPub=${giteaPub === null ? "absent" : "mismatch"})`,
+        `Gitea did not register the new SSH key (giteaPub=${giteaPubKeys.length === 0 ? "absent" : "mismatch"})`,
       );
     }
   } catch (err) {
@@ -622,14 +622,14 @@ async function resyncSshKeyIfDrifted(
       `[add:${slug}] SSH key dir exists but pubkey is unreadable; cleared, retry will regenerate`,
     );
   }
-  const giteaPub = await adapter.readGiteaCustomerPubKey(slug);
-  if (giteaPub !== null && pubKeysMatch(giteaPub, localPub)) return [];
+  const giteaPubKeys = await adapter.readGiteaCustomerPubKeys(slug);
+  if (giteaPubKeys.some((candidate) => pubKeysMatch(candidate, localPub))) return [];
 
-  const driftDetail = giteaPub === null ? "absent" : "mismatch";
+  const driftDetail = giteaPubKeys.length === 0 ? "absent" : "mismatch";
   adapter.log(`[add:${slug}] resync triggered: SSH key drift (giteaPub=${driftDetail})`);
   await adapter.createGiteaUser(slug, localPub);
-  const recheck = await adapter.readGiteaCustomerPubKey(slug);
-  if (recheck === null || !pubKeysMatch(recheck, localPub)) {
+  const recheck = await adapter.readGiteaCustomerPubKeys(slug);
+  if (!recheck.some((candidate) => pubKeysMatch(candidate, localPub))) {
     throw new Error(`[add:${slug}] SSH key resync did not persist in Gitea`);
   }
   return ["ssh-key-resync"];

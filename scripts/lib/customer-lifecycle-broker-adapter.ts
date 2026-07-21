@@ -46,7 +46,7 @@ import {
   generateCustomerSshKey,
   gitExec,
   initWorkspaceRepo,
-  readGiteaCustomerPubKey,
+  readGiteaCustomerPubKeys,
   readLocalCustomerPubKey,
 } from "./git.js";
 import { ensureGiteaOrgForWorkspace } from "./gitea-admin-broker-client.js";
@@ -656,7 +656,7 @@ export function buildBrokeredLifecycleAdapter(
     createGiteaUser,
     ensureGiteaOrg: ensureGiteaOrgForWorkspace,
     readLocalCustomerPubKey,
-    readGiteaCustomerPubKey,
+    readGiteaCustomerPubKeys,
     deleteCustomerSshKey,
     blobSyncForSlug: async (slug) => {
       await blobSyncForSlug(slug, { store: createBrokeredBlobStore(opts.client) });

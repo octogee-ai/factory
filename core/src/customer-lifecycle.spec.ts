@@ -38,6 +38,8 @@ cloneSimulatesEmptyRepo: boolean;
 
 giteaRegisteredPubKey: string | null;
 
+giteaRegisteredPubKeys?: string[];
+
 giteaReadShouldThrow: boolean;
 
   blobSyncShouldFail: boolean;
@@ -130,17 +132,24 @@ return "ssh-pubkey";
         throw new Error("gitea register failed");
       }
 
-state.giteaRegisteredPubKey = pubKey;
+      if (state.giteaRegisteredPubKeys) {
+        if (!state.giteaRegisteredPubKeys.includes(pubKey)) {
+          state.giteaRegisteredPubKeys.push(pubKey);
+        }
+      } else {
+        state.giteaRegisteredPubKey = pubKey;
+      }
     },
     ensureGiteaOrg: async () => {
       record("ensureGiteaOrg");
     },
     readLocalCustomerPubKey: () => (state.disk.sshKey ? "ssh-pubkey" : null),
-    readGiteaCustomerPubKey: async () => {
+    readGiteaCustomerPubKeys: async () => {
       if (state.giteaReadShouldThrow) {
         throw new Error("Gitea key read failed (test transient)");
       }
-      return state.giteaRegisteredPubKey;
+      return state.giteaRegisteredPubKeys ??
+        (state.giteaRegisteredPubKey === null ? [] : [state.giteaRegisteredPubKey]);
     },
     deleteCustomerSshKey: async () => {
       record("deleteCustomerSshKey");
@@ -1080,6 +1089,59 @@ expect(state.calls).toContain("createGiteaUser");
     expect(state.giteaRegisteredPubKey).toBe("ssh-pubkey");
   });
 
+  it("accepts the local key when an older rollout key is listed first", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user",
+        greetingPosted: true,
+      }),
+      {
+        ...emptyDisk(),
+        customerDir: true,
+        workspaceGitDir: true,
+        gitRemote: true,
+        sshKey: true,
+        repoHasCommits: true,
+      },
+    );
+    state.giteaRegisteredPubKeys = ["ssh-stale-from-old-pod"];
+
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    expect(result.steps).toContain("ssh-key-resync");
+    expect(state.giteaRegisteredPubKeys).toEqual([
+      "ssh-stale-from-old-pod",
+      "ssh-pubkey",
+    ]);
+  });
+
+  it("does not resync when the local key follows an older rollout key", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user",
+        greetingPosted: true,
+      }),
+      {
+        ...emptyDisk(),
+        customerDir: true,
+        workspaceGitDir: true,
+        gitRemote: true,
+        sshKey: true,
+        repoHasCommits: true,
+      },
+    );
+    state.giteaRegisteredPubKeys = ["ssh-stale-from-old-pod", "ssh-pubkey"];
+
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    expect(result.steps).not.toContain("ssh-key-resync");
+    expect(state.calls).not.toContain("createGiteaUser");
+  });
+
   it("does NOT resync when local + Gitea keys match (healthy state)", async () => {
     const state = makeState(
       snap({
@@ -1503,7 +1565,7 @@ describe("restoreCustomerRuntimeFromSnapshot — same-uid in-flight dedup", () =
       ...realAdapter,
       hasCustomerSshKey: () => true,
       readLocalCustomerPubKey: () => "ssh-pubkey",
-      readGiteaCustomerPubKey: async () => new Promise(() => {}),
+      readGiteaCustomerPubKeys: async () => new Promise(() => {}),
     };
 
     await expect(
@@ -1575,7 +1637,7 @@ const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
     createGiteaUser: false,
     ensureGiteaOrg: false,
     readLocalCustomerPubKey: false,
-    readGiteaCustomerPubKey: false,
+    readGiteaCustomerPubKeys: false,
     deleteCustomerSshKey: false,
     blobSyncForSlug: false,
     restoreByosubForAgent: false,

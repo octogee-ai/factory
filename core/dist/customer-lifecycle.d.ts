@@ -112,7 +112,7 @@ export interface CustomerLifecycleAdapter {
     createGiteaUser: (slug: string, pubKey: string) => Promise<void>;
     ensureGiteaOrg: (slug: string) => Promise<void>;
     readLocalCustomerPubKey: (slug: string) => string | null;
-    readGiteaCustomerPubKey: (slug: string) => Promise<string | null>;
+    readGiteaCustomerPubKeys: (slug: string) => Promise<string[]>;
     deleteCustomerSshKey: (slug: string) => Promise<void>;
     blobSyncForSlug: (slug: string) => Promise<void>;
     restoreByosubForAgent: (slug: string) => Promise<{
