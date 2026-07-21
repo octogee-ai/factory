@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Octogee local tooling scripts",
   "private": true,
+  "license": "UNLICENSED",
   "type": "module",
   "scripts": {
     "provision": "tsx entrypoints/fleet-controller.ts",

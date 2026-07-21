@@ -2,6 +2,8 @@
   "name": "@octogee/gateway-edge",
   "version": "1.0.0",
   "description": "Octogee gateway-edge sidecar — locality-bound HTTP routes (ESM)",
+  "private": true,
+  "license": "UNLICENSED",
   "type": "module",
   "main": "dist/gateway-edge/src/index.js",
   "scripts": {
