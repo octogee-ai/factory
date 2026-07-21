@@ -544,6 +544,13 @@ export interface CommitPlacementParams {
   mirrorPatch: Record<string, unknown>;
   updatedByOperationId?: string | null;
   assignmentWrite?: "upsert" | "create-if-missing";
+  companionWrites?: ReadonlyArray<{
+    collection: string;
+    docId: string;
+    data: Record<string, unknown>;
+    mode?: "upsert" | "create-if-missing";
+    mirrorPatchIfWritten?: Record<string, unknown>;
+  }>;
 }
 
 export type PlacementRejectReason =
@@ -590,6 +597,44 @@ async function preserveExistingAssignment(
   return true;
 }
 
+interface PreparedCompanionWrite {
+  ref: PlacementDocRef;
+  data: Record<string, unknown>;
+  mirrorPatch: Record<string, unknown>;
+}
+
+async function preparePlacementCompanionWrites(
+  db: PlacementFirestore,
+  txn: PlacementTxn,
+  params: CommitPlacementParams,
+): Promise<PreparedCompanionWrite[]> {
+  const prepared: PreparedCompanionWrite[] = [];
+  for (const write of params.companionWrites ?? []) {
+    const ref = db.collection(write.collection).doc(write.docId);
+    if (write.mode === "create-if-missing" && (await txn.get(ref)).exists) continue;
+    prepared.push({
+      ref,
+      data: write.data,
+      mirrorPatch: write.mirrorPatchIfWritten ?? {},
+    });
+  }
+  return prepared;
+}
+
+function commitPlacementCompanionWrites(
+  txn: PlacementTxn,
+  writes: readonly PreparedCompanionWrite[],
+): void {
+  for (const write of writes) txn.set(write.ref, write.data);
+}
+
+function placementMirrorPatch(
+  params: CommitPlacementParams,
+  writes: readonly PreparedCompanionWrite[],
+): Record<string, unknown> {
+  return Object.assign({}, params.mirrorPatch, ...writes.map((write) => write.mirrorPatch));
+}
+
 export async function commitPlacementAtomic(
   db: PlacementFirestore,
   params: CommitPlacementParams,
@@ -601,10 +646,13 @@ export async function commitPlacementAtomic(
     .doc(params.uid);
   return db.runTransaction<CommitPlacementResult>(async (txn) => {
     const gatewaySnap = await txn.get(gatewayRef);
+    const companionWrites = await preparePlacementCompanionWrites(db, txn, params);
+    const mirrorPatch = placementMirrorPatch(params, companionWrites);
     const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
 
     if (!gatewaySnap.exists) {
-      txn.update(userRef, params.mirrorPatch);
+      txn.update(userRef, mirrorPatch);
+      commitPlacementCompanionWrites(txn, companionWrites);
       return { kind: "mirror-only" };
     }
     if (!isDurablePlacementRoot(gatewayData, params.gatewayId)) {
@@ -613,7 +661,13 @@ export async function commitPlacementAtomic(
     if (gatewayData.desiredStatus !== "running") {
       return { kind: "rejected", reason: "gateway-not-running" };
     }
-    if (await preserveExistingAssignment(txn, assignmentRef, userRef, params)) {
+    if (await preserveExistingAssignment(
+      txn,
+      assignmentRef,
+      userRef,
+      { ...params, mirrorPatch },
+    )) {
+      commitPlacementCompanionWrites(txn, companionWrites);
       return { kind: "assignment-preserved" };
     }
 
@@ -630,7 +684,7 @@ export async function commitPlacementAtomic(
 
     // Mirror + assignment are all-or-nothing: a serving assignment at epoch 0
     // (the steady baseline before any migration cutover bumps the epoch).
-    txn.update(userRef, params.mirrorPatch);
+    txn.update(userRef, mirrorPatch);
     const assignmentDoc: AssignmentDoc = {
       uid: params.uid,
       slug: params.slug,
@@ -642,6 +696,7 @@ export async function commitPlacementAtomic(
       updatedByOperationId: params.updatedByOperationId ?? null,
     };
     txn.set(assignmentRef, assignmentDoc as unknown as Record<string, unknown>);
+    commitPlacementCompanionWrites(txn, companionWrites);
     return { kind: "assigned", release: gatewayData.liveRelease };
   });
 }

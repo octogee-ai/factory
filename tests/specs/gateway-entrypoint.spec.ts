@@ -67,50 +67,15 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(restoreBlock).toMatch(/GATEWAY_BUILDER_SLUG/);
   });
 
-  it("uses an ephemeral template only for the explicit ownerless operator prewarm", () => {
-    const prewarmSnapshotIdx = entrypoint.indexOf(
-      'PLATFORM_UNOWNED_OPERATOR_PREWARM="${GATEWAY_UNOWNED_OPERATOR_PREWARM:-false}"',
-    );
-    const operatorEnvIdx = entrypoint.indexOf('OPERATOR_ENV="${OPENCLAW_DIR}/secrets/operator.env"');
-    expect(prewarmSnapshotIdx).toBeGreaterThan(-1);
-    expect(prewarmSnapshotIdx).toBeLessThan(operatorEnvIdx);
-
+  it("requires a builder slug for every dedicated gateway", () => {
     const identityBlock = entrypoint.slice(
       entrypoint.indexOf("GATEWAY_ID is set by the deployment's env block"),
       entrypoint.indexOf("BuilderShell comes up before the durable restore"),
     );
     expect(identityBlock).toMatch(
-      /GATEWAY_CLASS_EFFECTIVE" = "operator"[\s\S]*PLATFORM_UNOWNED_OPERATOR_PREWARM[\s\S]*= "true"/,
-    );
-    expect(identityBlock).not.toMatch(/GATEWAY_UNOWNED_OPERATOR_PREWARM:-/);
-    expect(identityBlock).toMatch(/UNOWNED_OPERATOR_PREWARM=true/);
-    expect(identityBlock).toMatch(
-      /UNOWNED_OPERATOR_PREWARM" = "true"[\s\S]*OPENCLAW_CONFIG_PATH="\$OPENCLAW_DIR\/openclaw\.json"/,
-    );
-    expect(identityBlock).toMatch(
       /FATAL: GATEWAY_BUILDER_SLUG is required for \$\{GATEWAY_CLASS_EFFECTIVE\} durable config/,
     );
-
-    const restoreBlock = entrypoint.slice(
-      entrypoint.indexOf("Dedicated gateway system_config restore"),
-      entrypoint.indexOf("Expose staged plugin roots beside the active config"),
-    );
-    expect(restoreBlock).toMatch(
-      /UNOWNED_OPERATOR_PREWARM" = "true"[\s\S]*cp \/octogee\/infra\/gateway\/openclaw\.template\.json "\$OPENCLAW_CONFIG_PATH"/,
-    );
-    expect(restoreBlock).toMatch(
-      /elif \[ "\$GATEWAY_CLASS_EFFECTIVE" != "shared" \][\s\S]*system-config-restore\.ts/,
-    );
-
-    const durableRepair = entrypoint.slice(
-      entrypoint.indexOf("Repair + accept the durable config"),
-      entrypoint.indexOf("In-pod runners"),
-    );
-    expect(durableRepair).toMatch(/UNOWNED_OPERATOR_PREWARM" != "true"/);
-
-    const watcherIdx = entrypoint.indexOf("supervise_runner system-config-watch");
-    const watcherGuard = entrypoint.slice(entrypoint.lastIndexOf("if [", watcherIdx), watcherIdx);
-    expect(watcherGuard).toMatch(/UNOWNED_OPERATOR_PREWARM" != "true"/);
+    expect(entrypoint).not.toMatch(/UNOWNED_OPERATOR_PREWARM/);
   });
 
   it("retries restore and hydration against the data plane without exiting", () => {

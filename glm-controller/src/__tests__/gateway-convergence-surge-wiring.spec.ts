@@ -85,32 +85,4 @@ describe("gateway convergence surge wiring", () => {
     })).resolves.toEqual({ kind: "steady" });
   });
 
-  it("identifies the empty ownerless Operator prewarm from the durable gateway root", async () => {
-    const reconcileSurgeHandoff = vi.fn(async () => ({ ready: false }));
-
-    await refineGatewayConvergenceAction({
-      passDeps: { reconcileSurgeHandoff },
-      gateway: {
-        ...gateway(),
-        gatewayId: "trial-op-000001",
-        gatewayClass: "operator",
-        profile: "operator",
-        imageProfile: "operator",
-        ownerUid: null,
-        builderSlug: null,
-        allocation: { kind: "trial", state: "warming", configHash: "trial-config" },
-      },
-      artifact,
-      runtime: runtime("def5678-oc2026.7.1"),
-      helmObserved: { imageRepository: repository, imageTag: artifact.imageTag, replicas: 1 },
-      action: { kind: "steady" },
-    });
-
-    expect(reconcileSurgeHandoff).toHaveBeenCalledWith({
-      gatewayId: "trial-op-000001",
-      desiredImageTag: "def5678-oc2026.7.1",
-      requiresCustomerMigration: true,
-      ownerlessOperatorPrewarm: true,
-    });
-  });
 });

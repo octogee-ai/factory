@@ -33,15 +33,6 @@ export function requiresSurgeCustomerMigration(gateway: DurableGateway): boolean
     gateway.liveRelease !== gateway.desiredRelease;
 }
 
-export function isOwnerlessOperatorPrewarm(gateway: DurableGateway): boolean {
-  return resolveGatewayClass(classKnobs(gateway)) === "operator" &&
-    gateway.gatewayId.startsWith("trial-op-") &&
-    !gateway.ownerUid &&
-    !gateway.builderSlug &&
-    gateway.allocation?.kind === "trial" &&
-    gateway.allocation.state === "warming";
-}
-
 export function orderGatewaysForConvergence(
   gateways: readonly DurableGateway[],
 ): DurableGateway[] {

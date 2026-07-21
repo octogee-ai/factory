@@ -5,7 +5,6 @@ import {
   decodeFrame,
   encodeStdin,
   GATEWAY_CLASSES,
-  GATEWAY_POOLS_COLLECTION,
   isLegalDocId,
   modelCredentialEntryById,
   OPENCLAW_PROTOCOL_VERSION,
@@ -13,7 +12,6 @@ import {
   PTY_FRAME,
   resolveGatewayClass,
   resolveSizingTier,
-  isTrialGatewayPoolState,
   type Agent,
   type Project,
   type PtyFrame,
@@ -26,15 +24,6 @@ describe("shared type barrel", () => {
     expect(GATEWAY_CLASSES).toContain("operator");
     expect(resolveGatewayClass({ gatewayClass: "operator" })).toBe("operator");
     expect(resolveSizingTier({ sizingTier: "medium" }).tier).toBe("medium");
-    expect(GATEWAY_POOLS_COLLECTION).toBe("gatewayPools");
-    expect(isTrialGatewayPoolState({
-      schemaVersion: 1,
-      availableGatewayId: null,
-      preparingGatewayId: null,
-      nextSequence: 1,
-      lastError: null,
-      updatedAt: 1,
-    })).toBe(true);
     expect(modelCredentialEntryById("openai").displayName).toBe("OpenAI API key");
     expect(OPENCLAW_PROTOCOL_VERSION).toBe(4);
     expect(new OpenclawWireError("timeout", "late").code).toBe("timeout");

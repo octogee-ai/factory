@@ -29,6 +29,10 @@ function helmTemplate(setValues: Record<string, string> = {}): string {
     "--namespace=octogee-test",
   ];
   const merged = { ...REQUIRED_VALUES, ...setValues };
+  if (setValues.profile === "operator") {
+    merged.ownerUid = "test-owner";
+    merged.builderSlug = "test-builder";
+  }
   for (const [k, v] of Object.entries(merged)) {
     args.push("--set", `${k}=${v}`);
   }

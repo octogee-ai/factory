@@ -139,7 +139,7 @@ describe("infra/gateway/entrypoint.sh — gateway token Secret Manager publish b
   });
 });
 
-function runOperatorMutationBlock(unownedOperatorPrewarm: boolean): string[] {
+function runOperatorMutationBlock(): string[] {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "operator-mutations-"));
   try {
     const marker = path.join(tmp, "node-calls");
@@ -159,7 +159,6 @@ function runOperatorMutationBlock(unownedOperatorPrewarm: boolean): string[] {
       log() { :; }
       node() { basename "$1" >> "${marker}"; }
       export GATEWAY_PROFILE=operator
-      export UNOWNED_OPERATOR_PREWARM=${unownedOperatorPrewarm ? "true" : "false"}
       ${block}
     `;
     const result = spawnSync("sh", ["-c", script], {
@@ -176,12 +175,8 @@ function runOperatorMutationBlock(unownedOperatorPrewarm: boolean): string[] {
 }
 
 describe("infra/gateway/entrypoint.sh — operator mutation runtime boundary", () => {
-  it("skips credential and Codex config mutations for an ownerless prewarm", () => {
-    expect(runOperatorMutationBlock(true)).toEqual([]);
-  });
-
-  it("runs credential and Codex config mutations after the operator is tenant-bound", () => {
-    expect(runOperatorMutationBlock(false)).toEqual([
+  it("runs credential and Codex config mutations for an Operator gateway", () => {
+    expect(runOperatorMutationBlock()).toEqual([
       "stamp-claude-first-run.mjs",
       "apply-operator-codex-sandbox.mjs",
     ]);

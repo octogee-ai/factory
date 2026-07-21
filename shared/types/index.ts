@@ -314,21 +314,15 @@ export {
 export type {
   TrialGatewayAllocationState,
   TrialGatewayAllocation,
-  TrialGatewayPoolError,
-  TrialGatewayPoolState,
   TrialGatewayClaimStatus,
   TrialGatewayClaimError,
   TrialGatewayClaim,
 } from './trial-gateway.js';
 export {
   TRIAL_GATEWAY_ALLOCATION_STATES,
-  GATEWAY_POOLS_COLLECTION,
-  TRIAL_GATEWAY_POOL_DOC,
-  TRIAL_GATEWAY_POOL_SCHEMA_VERSION,
   TRIAL_GATEWAY_CLAIMS_COLLECTION,
   isTimestampLike,
   isTrialGatewayAllocation,
-  isTrialGatewayPoolState,
   isTrialGatewayClaim,
 } from './trial-gateway.js';
 

@@ -36,13 +36,9 @@ import {
   resolveOpsAgentModel,
 } from "@octogee/shared/types/platform-config";
 import {
-  GATEWAY_POOLS_COLLECTION,
   TRIAL_GATEWAY_CLAIMS_COLLECTION,
-  TRIAL_GATEWAY_POOL_DOC,
   isTrialGatewayClaim,
-  isTrialGatewayPoolState,
   type TrialGatewayClaimError,
-  type TrialGatewayPoolState,
 } from "@octogee/shared/types/trial-gateway";
 import {
   platformConnectDoc,
@@ -203,17 +199,6 @@ router.put("/platform-connect-config", async (req, res) => {
 const platformTrialDoc = () =>
   db.collection(PLATFORM_CONFIG_COLLECTION).doc(PLATFORM_TRIAL_CONFIG_DOC);
 
-function trialPoolState(
-  snapshot: { exists: boolean; data(): unknown },
-): TrialGatewayPoolState | null {
-  const storedPool = snapshot.data();
-  if (isTrialGatewayPoolState(storedPool)) return storedPool;
-  logger.error("[admin] trial gateway pool state is missing or invalid", {
-    exists: snapshot.exists,
-  });
-  return null;
-}
-
 function failedClaimHealth(
   doc: { id: string; data(): unknown } | undefined,
 ): { builderUid: string | null; lastError: TrialGatewayClaimError | null } {
@@ -235,45 +220,56 @@ function failedClaimHealth(
   return { builderUid: doc.id, lastError: claim.lastError as TrialGatewayClaimError };
 }
 
-async function readTrialPoolHealth() {
+function queuedClaimError(
+  doc: { id: string; data(): unknown } | undefined,
+): TrialGatewayClaimError | null {
+  if (!doc) return null;
+  const claim = doc.data();
+  if (!isTrialGatewayClaim(claim) || claim.status !== "waiting") {
+    logger.error("[admin] oldest waiting trial gateway claim is invalid", {
+      builderUid: doc.id,
+    });
+    return {
+      at: Date.now(),
+      code: "trial_claim_invalid",
+      message: `trialGatewayClaims/${doc.id} is invalid`,
+    };
+  }
+  return claim.lastError ?? null;
+}
+
+async function readTrialProvisioningHealth() {
   const claims = db.collection(TRIAL_GATEWAY_CLAIMS_COLLECTION);
   const [
-    poolSnap,
     waitingCountSnap,
     claimedCountSnap,
     failedCountSnap,
     oldestWaitingSnap,
     oldestFailedSnap,
   ] = await Promise.all([
-    db.collection(GATEWAY_POOLS_COLLECTION).doc(TRIAL_GATEWAY_POOL_DOC).get(),
     claims.where("status", "==", "waiting").count().get(),
     claims.where("status", "==", "claimed").count().get(),
     claims.where("status", "==", "failed").count().get(),
     claims.where("status", "==", "waiting").orderBy("requestedAt", "asc").limit(1).get(),
     claims.where("status", "==", "failed").orderBy("requestedAt", "asc").limit(1).get(),
   ]);
-  const pool = trialPoolState(poolSnap);
   const failed = failedClaimHealth(oldestFailedSnap.docs[0]);
   return {
-    availableGatewayId: pool?.availableGatewayId ?? null,
-    preparingGatewayId: pool?.preparingGatewayId ?? null,
     waitingClaims: waitingCountSnap.data().count,
-    claimedCount: claimedCountSnap.data().count,
+    provisionedCount: claimedCountSnap.data().count,
     failedClaims: failedCountSnap.data().count,
     oldestQueuedBuilderUid: oldestWaitingSnap.docs[0]?.id ?? null,
+    oldestQueuedClaimError: queuedClaimError(oldestWaitingSnap.docs[0]),
     oldestFailedBuilderUid: failed.builderUid,
     oldestFailedClaimError: failed.lastError,
-    lastError: pool === null ? (
-      { at: Date.now(), code: "pool_state_invalid", message: "trial gateway pool state is missing or invalid" }
-    ) : pool.lastError,
   };
 }
 
 router.get("/platform-trial-config", async (_req, res) => {
   try {
-    const [configSnap, pool] = await Promise.all([
+    const [configSnap, provisioning] = await Promise.all([
       platformTrialDoc().get(),
-      readTrialPoolHealth(),
+      readTrialProvisioningHealth(),
     ]);
     const config = parsePlatformTrialConfig(configSnap.data());
     if (!config) {
@@ -294,7 +290,7 @@ router.get("/platform-trial-config", async (_req, res) => {
         displayName: BUILDER_TIERS[name as keyof typeof BUILDER_TIERS].displayName,
         sizingTier: BUILDER_TIERS[name as keyof typeof BUILDER_TIERS].instance,
       })),
-      pool,
+      provisioning,
     });
   } catch (err) {
     logger.error("[admin] platform-trial-config read failed", { err });

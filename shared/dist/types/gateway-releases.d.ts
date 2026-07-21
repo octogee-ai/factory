@@ -195,6 +195,13 @@ export interface CommitPlacementParams {
     mirrorPatch: Record<string, unknown>;
     updatedByOperationId?: string | null;
     assignmentWrite?: "upsert" | "create-if-missing";
+    companionWrites?: ReadonlyArray<{
+        collection: string;
+        docId: string;
+        data: Record<string, unknown>;
+        mode?: "upsert" | "create-if-missing";
+        mirrorPatchIfWritten?: Record<string, unknown>;
+    }>;
 }
 export type PlacementRejectReason = "gateway-root-invalid" | "gateway-not-running" | "gateway-not-serving";
 export type CommitPlacementResult = {

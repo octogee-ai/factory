@@ -61,7 +61,6 @@ import {
 } from "@octogee/shared/types/gateway-releases";
 import {
   gatewayUpsertOptsFromRelease,
-  isOwnerlessOperatorPrewarm,
   markLiveRuntimePatch,
   deploymentIntentFingerprintForComparison,
   planGatewayConvergence,
@@ -250,10 +249,10 @@ import {
   type ControllerMaintenanceGate,
 } from "./maintenance-gate.js";
 import {
-  TRIAL_GATEWAY_POOL_RECONCILE_MS_DEFAULT,
-  createFirestoreTrialGatewayPoolDeps,
-  startTrialGatewayPoolReconciler,
-} from "./trial-gateway-pool.js";
+  TRIAL_GATEWAY_PROVISION_RECONCILE_MS_DEFAULT,
+  createFirestoreTrialGatewayProvisionerDeps,
+  startTrialGatewayProvisioner,
+} from "./trial-gateway-provisioner.js";
 import type {
   FleetBrokerChannelBinding,
   FleetBrokerProjectRestore,
@@ -313,9 +312,9 @@ const PREEMPTION_HANDOFF_SWEEP_MS = parseNonNegativeInt(
   process.env.PREEMPTION_HANDOFF_SWEEP_MS,
   PREEMPTION_HANDOFF_SWEEP_MS_DEFAULT,
 );
-const TRIAL_GATEWAY_POOL_RECONCILE_MS = parseNonNegativeInt(
-  process.env.TRIAL_GATEWAY_POOL_RECONCILE_MS,
-  TRIAL_GATEWAY_POOL_RECONCILE_MS_DEFAULT,
+const TRIAL_GATEWAY_PROVISION_RECONCILE_MS = parseNonNegativeInt(
+  process.env.TRIAL_GATEWAY_PROVISION_RECONCILE_MS,
+  TRIAL_GATEWAY_PROVISION_RECONCILE_MS_DEFAULT,
 );
 const HELM_RECOVERY_SWEEP_MS = parseNonNegativeInt(
   process.env.HELM_RECOVERY_SWEEP_MS,
@@ -843,7 +842,7 @@ export async function refineGatewayConvergenceAction(input: {
     gatewayId: gateway.gatewayId,
     desiredImageTag: artifact.imageTag,
     requiresCustomerMigration: requiresSurgeCustomerMigration(gateway),
-    ownerlessOperatorPrewarm: isOwnerlessOperatorPrewarm(gateway),
+    ownerlessOperatorPrewarm: false,
   });
   return planGatewayConvergence({
     gateway,
@@ -1722,16 +1721,16 @@ function startControllerBackgroundTasks({
     { db, now: () => Date.now(), log },
     PREEMPTION_HANDOFF_SWEEP_MS,
   );
-  const stopTrialGatewayPool = startTrialGatewayPoolReconciler(
-    createFirestoreTrialGatewayPoolDeps({
+  const stopTrialGatewayProvisioner = startTrialGatewayProvisioner(
+    createFirestoreTrialGatewayProvisionerDeps({
       db,
       namespace: NAMESPACE,
-      kubeOps: deps.kubeOps,
       ensureAuthSecret: deps.ensureGatewayAuthSecret,
+      workspaceSlugsForUser,
       now: () => Date.now(),
       log,
     }),
-    TRIAL_GATEWAY_POOL_RECONCILE_MS,
+    TRIAL_GATEWAY_PROVISION_RECONCILE_MS,
   );
   const httpKubeOps = deps.kubeOps;
   const decryptConnectorSecret = createConnectorSecretDecryptor();
@@ -1775,7 +1774,7 @@ function startControllerBackgroundTasks({
     stopActivationSweeper,
     stopIdleSweeper,
     stopPreemptionHandoffSweeper,
-    stopTrialGatewayPool,
+    stopTrialGatewayProvisioner,
     stopHttp,
   ];
 }

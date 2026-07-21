@@ -146,7 +146,6 @@ export OPENCLAW_GATEWAY_TOKEN
 #
 # See infra/gateway/operator-env.example for format + the kubectl debug-pod
 # recipe for editing the file on a running gateway's PVC.
-PLATFORM_UNOWNED_OPERATOR_PREWARM="${GATEWAY_UNOWNED_OPERATOR_PREWARM:-false}"
 OPERATOR_ENV="${OPENCLAW_DIR}/secrets/operator.env"
 if [ -f "$OPERATOR_ENV" ]; then
   log "Sourcing operator env: $OPERATOR_ENV"
@@ -160,21 +159,12 @@ fi
 # GATEWAY_ID is set by the deployment's env block. Fail fast if it is missing.
 export GATEWAY_ID="${GATEWAY_ID:?GATEWAY_ID env var is required (set via Helm values.env.gatewayId)}"
 
-UNOWNED_OPERATOR_PREWARM=false
-if [ "$GATEWAY_CLASS_EFFECTIVE" = "operator" ] && [ "$PLATFORM_UNOWNED_OPERATOR_PREWARM" = "true" ]; then
-  if [ -n "${GATEWAY_BUILDER_SLUG:-}" ]; then
-    log "FATAL: unowned operator prewarm cannot carry GATEWAY_BUILDER_SLUG"
-    exit 1
-  fi
-  UNOWNED_OPERATOR_PREWARM=true
-elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ -z "${GATEWAY_BUILDER_SLUG:-}" ]; then
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ -z "${GATEWAY_BUILDER_SLUG:-}" ]; then
   log "FATAL: GATEWAY_BUILDER_SLUG is required for ${GATEWAY_CLASS_EFFECTIVE} durable config"
   exit 1
 fi
 
-if [ "$UNOWNED_OPERATOR_PREWARM" = "true" ]; then
-  export OPENCLAW_CONFIG_PATH="$OPENCLAW_DIR/openclaw.json"
-elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   export OPENCLAW_CONFIG_PATH="$OPENCLAW_DIR/system_config/openclaw.json"
 else
   export OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$OPENCLAW_DIR/openclaw.json}"
@@ -194,17 +184,9 @@ fi
 
 # ── Dedicated gateway system_config restore ─────────────────────────────────
 # Builder/operator gateways run the tracked Gitea checkout as OpenClaw's active
-# regular config file once tenant-bound. An unowned operator prewarm has no
-# tenant repo yet, so it boots the image template only long enough for Cowboy to
-# prove an empty ready runtime and pause it. Copy the raw template: OpenClaw
-# resolves ${ENV} and SecretRefs in memory; envsubst would materialize
-# credentials onto disk. Restore includes the idempotent schema migration
+# regular config file. Restore includes the idempotent schema migration
 # (roll-forward only; reconcileSystemConfigSchema).
-if [ "$UNOWNED_OPERATOR_PREWARM" = "true" ]; then
-  mkdir -p "$(dirname "$OPENCLAW_CONFIG_PATH")"
-  cp /octogee/infra/gateway/openclaw.template.json "$OPENCLAW_CONFIG_PATH"
-  log "Pre-boot: staged ephemeral config for unowned operator prewarm ${GATEWAY_ID}"
-elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   log "Pre-boot: restoring system_config for builder slug ${GATEWAY_BUILDER_SLUG}..."
   until "$TSX" /octogee/scripts/entrypoints/system-config-restore.ts; do
     log "Pre-boot: system_config restore unavailable; retrying in 5s..."
@@ -224,7 +206,7 @@ else
 fi
 
 # ── Expose staged plugin roots beside the active config ────────────────────
-if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ "$UNOWNED_OPERATOR_PREWARM" != "true" ]; then
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   OPENCLAW_CONFIG_DIR=$(dirname "$OPENCLAW_CONFIG_PATH")
   if [ "$OPENCLAW_CONFIG_DIR" != "$OPENCLAW_DIR" ]; then
     RUNTIME_ROOT_QUARANTINE=""
@@ -324,11 +306,11 @@ fi
 #     completion without underlying OAuth)
 #   - PRESERVES every other key in ~/.claude.json
 #   - is idempotent across reboots
-# Tenant-bound operator only by the GATEWAY_PROFILE/prewarm gates and by
+# Operator only by the GATEWAY_PROFILE gate and by
 # COPY-set (only Dockerfile.operator-base ships the script). See
 # tests/specs/stamp-claude-first-run.spec.ts.
 STAMPER=/octogee/infra/gateway/stamp-claude-first-run.mjs
-if [ "${GATEWAY_PROFILE:-}" = "operator" ] && [ "$UNOWNED_OPERATOR_PREWARM" != "true" ] && [ -f "$STAMPER" ]; then
+if [ "${GATEWAY_PROFILE:-}" = "operator" ] && [ -f "$STAMPER" ]; then
   # The stamper writes ~/.claude.json itself with 0600 — the
   # file-permission hardening block below does NOT cover it. If that
   # invariant ever moves to the entrypoint, add an explicit chmod here.
@@ -344,7 +326,7 @@ fi
 # Idempotent + non-fatal.
 # See tests/specs/apply-operator-codex-sandbox.spec.ts.
 CODEX_YOLO=/octogee/infra/gateway/apply-operator-codex-sandbox.mjs
-if [ "${GATEWAY_PROFILE:-}" = "operator" ] && [ "$UNOWNED_OPERATOR_PREWARM" != "true" ] && [ -f "$CODEX_YOLO" ]; then
+if [ "${GATEWAY_PROFILE:-}" = "operator" ] && [ -f "$CODEX_YOLO" ]; then
   node "$CODEX_YOLO" || log "apply-operator-codex-sandbox: non-fatal failure"
 fi
 
@@ -412,12 +394,12 @@ fi
 # bring back an old auth profile, but ANTHROPIC_BASE_URL is env-owned and is
 # what keeps capped broker tokens from being sent directly to Anthropic.
 # pre-boot-config.ts gates its optional Firestore-backed overrides internally.
-if { [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ] || [ "$UNOWNED_OPERATOR_PREWARM" = "true" ]; } && [ -f "$OPENCLAW_CONFIG_PATH" ]; then
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ] && [ -f "$OPENCLAW_CONFIG_PATH" ]; then
   log "Pre-boot: applying env/runtime config patches..."
   "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts || log "Pre-boot: non-fatal, continuing..."
 fi
 
-if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ "$UNOWNED_OPERATOR_PREWARM" != "true" ]; then
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   log "Pre-boot: hydrating native GitHub CLI auth from connector state..."
   timeout -k 5s 20s "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts || log "github-cli-auth-hydrate: non-fatal failure"
 fi
@@ -449,7 +431,7 @@ run_openclaw_doctor() {
 # (recovery + commit + push) retry as one unit until the accepted config is
 # durable in Gitea. The loop consults nothing but the data plane and retries
 # until the startup probe's ten-minute budget begins a fresh container attempt.
-if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ "$UNOWNED_OPERATOR_PREWARM" != "true" ]; then
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   export OPENCLAW_SERVICE_REPAIR_POLICY=external
   while true; do
     REPAIR_OK=true
@@ -498,7 +480,7 @@ supervise_runner preview-proxy 5000 "$TSX" /octogee/scripts/entrypoints/preview-
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "operator" ]; then
   supervise_runner byosub-syncback 30000 "$TSX" /octogee/scripts/entrypoints/byosub-syncback-runner.ts
 fi
-if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ "$UNOWNED_OPERATOR_PREWARM" != "true" ]; then
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   supervise_runner system-config-watch 5000 "$TSX" /octogee/scripts/entrypoints/system-config-watch.ts
 fi
 

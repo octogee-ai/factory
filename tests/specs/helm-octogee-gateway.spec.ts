@@ -35,6 +35,14 @@ function helmTemplate(
     "--namespace=octogee-test",
   ];
   const merged = { ...REQUIRED_VALUES, ...setValues };
+  const dedicated = setValues.gatewayClass === "builder" ||
+    setValues.gatewayClass === "operator" ||
+    setValues.profile === "operator" ||
+    setValues.imageProfile === "operator";
+  if (dedicated && !Object.prototype.hasOwnProperty.call(setValues, "ownerUid")) {
+    merged.ownerUid = "test-owner";
+    merged.builderSlug = "test-builder";
+  }
   for (const [k, v] of Object.entries(merged)) {
     args.push("--set", `${k}=${v}`);
   }
@@ -175,24 +183,14 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     })).toThrow(/ownerUid and builderSlug must be provided together/);
   });
 
-  it("marks only an ownerless operator gateway as an ephemeral prewarm", () => {
-    const prewarm = findDoc(helmTemplate("octogee-gw-trial-op-000001", {
-      gatewayId: "trial-op-000001",
+  it("rejects ownerless Operator gateways and renders owned Operators normally", () => {
+    expect(() => helmTemplate("octogee-gw-builder-alice", {
+      gatewayId: "builder-alice",
       gatewayClass: "operator",
       imageProfile: "operator",
-    }), "Deployment", "octogee-gateway-trial-op-000001") ?? "";
-    expect(containerBlock(prewarm, "gateway")).toMatch(
-      /name:\s*GATEWAY_UNOWNED_OPERATOR_PREWARM[\s\S]*?value:\s*"true"/,
-    );
-    expect(containerBlock(prewarm, "gateway")).not.toMatch(
-      /name:\s*OPENCLAW_DASHBOARD_BRIDGE_REQUIRED/,
-    );
-    expect(containerBlock(prewarm, "gateway-edge")).not.toMatch(
-      /name:\s*OPENCLAW_DASHBOARD_BRIDGE_ENABLED/,
-    );
-    expect(containerBlock(prewarm, "gateway-edge")).toMatch(
-      /name:\s*OPENCLAW_CONFIG[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/openclaw\.json"/,
-    );
+      ownerUid: "",
+      builderSlug: "",
+    })).toThrow(/ownerUid and builderSlug are required for dedicated gateways/);
 
     const owned = findDoc(helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
@@ -201,48 +199,18 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
       gatewayClass: "operator",
       imageProfile: "operator",
     }), "Deployment", "octogee-gateway-bender") ?? "";
-    expect(containerBlock(owned, "gateway")).toMatch(
-      /name:\s*GATEWAY_UNOWNED_OPERATOR_PREWARM[\s\S]*?value:\s*"false"/,
-    );
+    expect(containerBlock(owned, "gateway")).not.toMatch(/GATEWAY_UNOWNED_OPERATOR_PREWARM/);
     expect(containerBlock(owned, "gateway-edge")).toMatch(
       /name:\s*OPENCLAW_CONFIG[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/system_config\/openclaw\.json"/,
     );
-
-    const claimedTrial = findDoc(helmTemplate("octogee-gw-trial-op-000001", {
-      gatewayId: "trial-op-000001",
-      ownerUid: "uid-alice",
-      builderSlug: "alice",
-      gatewayClass: "operator",
-      imageProfile: "operator",
-    }), "Deployment", "octogee-gateway-trial-op-000001") ?? "";
-    expect(containerBlock(claimedTrial, "gateway")).toMatch(
-      /name:\s*GATEWAY_UNOWNED_OPERATOR_PREWARM[\s\S]*?value:\s*"false"/,
-    );
-    expect(containerBlock(claimedTrial, "gateway")).toMatch(
+    expect(containerBlock(owned, "gateway")).toMatch(
       /name:\s*OPENCLAW_DASHBOARD_BRIDGE_REQUIRED[\s\S]*?value:\s*"true"/,
     );
-    expect(containerBlock(claimedTrial, "gateway-edge")).toMatch(
+    expect(containerBlock(owned, "gateway-edge")).toMatch(
       /name:\s*OPENCLAW_DASHBOARD_BRIDGE_ENABLED[\s\S]*?value:\s*"true"/,
     );
-    expect(containerBlock(claimedTrial, "gateway-edge")).toMatch(
-      /name:\s*OPENCLAW_CONFIG[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/system_config\/openclaw\.json"/,
-    );
-    expect(containerBlock(claimedTrial, "gateway-edge")).toMatch(
+    expect(containerBlock(owned, "gateway-edge")).toMatch(
       /name:\s*OPENCLAW_CONFIG_PATH[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/system_config\/openclaw\.json"/,
-    );
-
-    const unownedNonTrial = findDoc(helmTemplate("octogee-gw-bender", {
-      gatewayId: "bender",
-      gatewayClass: "operator",
-      imageProfile: "operator",
-    }), "Deployment", "octogee-gateway-bender") ?? "";
-    expect(containerBlock(unownedNonTrial, "gateway")).toMatch(
-      /name:\s*GATEWAY_UNOWNED_OPERATOR_PREWARM[\s\S]*?value:\s*"false"/,
-    );
-
-    const shared = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
-    expect(containerBlock(shared, "gateway")).toMatch(
-      /name:\s*GATEWAY_UNOWNED_OPERATOR_PREWARM[\s\S]*?value:\s*"false"/,
     );
   });
 
@@ -1755,6 +1723,30 @@ describe("helm/octogee-gateway/ — GCP_PROJECT_ID on gateway-edge", () => {
   });
 });
 
+describe("helm/octogee-gateway/ — platform model catalog convergence", () => {
+  it("gives gateway-edge the broker catalog endpoints used after a customer is mounted", () => {
+    const dep = findDoc(
+      helmTemplate("octogee-gw-builder-alice", {
+        gatewayId: "builder-alice",
+        ownerUid: "uid-alice",
+        builderSlug: "alice",
+        gatewayClass: "operator",
+        imageProfile: "operator",
+      }),
+      "Deployment",
+      "octogee-gateway-builder-alice",
+    ) ?? "";
+    const edge = containerBlock(dep, "gateway-edge");
+
+    expect(edge).toMatch(
+      /name:\s*OPENROUTER_BASE_URL[\s\S]*?value:\s*"http:\/\/llm-broker\.octogee-test\.svc\.cluster\.local:3010\/v1"/,
+    );
+    expect(edge).toMatch(
+      /name:\s*PLATFORM_OPENAI_BASE_URL[\s\S]*?value:\s*"http:\/\/llm-broker\.octogee-test\.svc\.cluster\.local:3010\/v1"/,
+    );
+  });
+});
+
 // ── Profile-aware render-time assertions ───────────────────────────────────
 // Gateway-edge platform secrets are no longer render-required. Routes that still
 // need platform authority fail closed until they move behind octogee-api/Cowboy.
@@ -1786,7 +1778,11 @@ describe("helm/octogee-gateway/ — platform secret render assertions", () => {
   }
 
   it("renders operator profile when legacy gatewayEdge.secrets omits INTERNAL_SERVICE_KEY", () => {
-    const result = templateWithLegacyGatewayEdgeSecrets({ profile: "operator" });
+    const result = templateWithLegacyGatewayEdgeSecrets({
+      profile: "operator",
+      ownerUid: "test-owner",
+      builderSlug: "test-builder",
+    });
     expect(result.status).toBe(0);
   });
 

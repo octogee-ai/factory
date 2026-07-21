@@ -98,41 +98,6 @@ function isNullableModelBrokerLimits(value) {
 function isOptionalTrialGatewayAllocation(value) {
     return value === undefined || value === null || isTrialGatewayAllocation(value);
 }
-function hasOnlyFields(value, fields) {
-    const allowed = new Set(fields);
-    return Object.keys(value).every((field) => allowed.has(field));
-}
-function isCanonicalLockedOperatorAccess(value) {
-    return isRecord(value) &&
-        hasOnlyFields(value, ["shellsEnabled", "controlUiEnabled", "reason"]) &&
-        value.shellsEnabled === false &&
-        value.controlUiEnabled === false &&
-        value.reason === "runtime-trust-boundary-not-provisioned";
-}
-function isCanonicalLockedServiceAccount(value) {
-    return isRecord(value) && hasOnlyFields(value, ["create"]) && value.create === true;
-}
-function hasLockedTrialOperatorIdentity(value) {
-    return value.gatewayClass === "operator" &&
-        value.profile === "operator" &&
-        value.imageProfile === "operator" &&
-        value.sizingTier !== null &&
-        value.computeClass === null &&
-        value.gcpProject === null;
-}
-function hasLockedTrialOperatorRuntime(value) {
-    return value.gatewayContainerSecurityContext === null &&
-        typeof value.serviceAccountName === "string" &&
-        value.serviceAccountName.startsWith(GATEWAY_SERVICE_ACCOUNT_PREFIX) &&
-        isCanonicalLockedServiceAccount(value.serviceAccount) &&
-        isCanonicalLockedOperatorAccess(value.operatorAccess) &&
-        value.openclawOverrides === null &&
-        value.modelBrokerLimits === null &&
-        value.preemption === null;
-}
-function isLockedTrialOperator(value) {
-    return hasLockedTrialOperatorIdentity(value) && hasLockedTrialOperatorRuntime(value);
-}
 function isOwnedGateway(value) {
     return typeof value.ownerUid === "string" && value.ownerUid.length > 0 &&
         typeof value.builderSlug === "string" && value.builderSlug.length > 0;
@@ -142,32 +107,14 @@ function hasLegalOwnedAllocation(value) {
     if (allocation === undefined || allocation === null)
         return true;
     return isTrialGatewayAllocation(allocation) &&
-        allocation.state !== "warming" && allocation.state !== "standby" &&
         allocation.claimedByUid === value.ownerUid;
-}
-function hasLegalUnownedTrialAllocation(value) {
-    const allocation = value.allocation;
-    const isUnownedTrial = value.ownerUid === null && value.builderSlug === null &&
-        isTrialGatewayAllocation(allocation) &&
-        (allocation.state === "warming" || allocation.state === "standby") &&
-        isLockedTrialOperator(value);
-    if (!isUnownedTrial)
-        return false;
-    const desiredStatus = value.desiredStatus;
-    if (desiredStatus === undefined || desiredStatus === "retired")
-        return true;
-    return allocation.state === "warming"
-        ? desiredStatus === "running" || desiredStatus === "paused"
-        : desiredStatus === "paused";
 }
 function hasLegalOwnershipAndAllocation(value) {
     if (value.gatewayClass === "shared") {
         return value.ownerUid === null && value.builderSlug === null &&
             (value.allocation === undefined || value.allocation === null);
     }
-    return isOwnedGateway(value)
-        ? hasLegalOwnedAllocation(value)
-        : hasLegalUnownedTrialAllocation(value);
+    return isOwnedGateway(value) && hasLegalOwnedAllocation(value);
 }
 export function isBareGatewayId(value) {
     return isValidGatewayId(value) && !REVISION_GATEWAY_ID_RE.test(value);
@@ -226,17 +173,6 @@ export function projectGatewayMutableConfigForGateway(value, gatewayId) {
     const projected = { ...value };
     delete projected.coOwnerUids;
     return isGatewayMutableConfigForGateway(projected, gatewayId) ? projected : null;
-}
-export function isCanonicalTrialStandbyMutableConfigForGateway(value, gatewayId) {
-    if (!isGatewayMutableConfigForGateway(value, gatewayId))
-        return false;
-    const record = value;
-    return value.ownerUid === null &&
-        value.builderSlug === null &&
-        isTrialGatewayAllocation(value.allocation) &&
-        value.allocation.state === "standby" &&
-        record.desiredStatus === "paused" &&
-        isLockedTrialOperator(record);
 }
 export function effectiveGatewayServiceAccountNameForGateway(config, gatewayId) {
     return config.serviceAccountName || operatorGatewayServiceAccountName(gatewayId);

@@ -31,8 +31,8 @@ export type { GatewayLifecycleStatus, GatewayIdleSleepStatus, GatewayIdleSleepSt
 export { GATEWAY_RELEASES_SUBCOLLECTION, GATEWAY_ASSIGNMENTS_SUBCOLLECTION, RELEASE_FIELDS, GATEWAY_MUTABLE_FIELDS, helmReleaseNameForGateway, gatewayEdgeServiceName, gatewayPodServiceName, isGatewayRuntimeDoc, releasePayloadHash, classifyGatewayField, } from './gateway-releases.js';
 export type { GatewayMutableConfig } from './gateway-mutable-config.js';
 export { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, } from './gateway-mutable-config.js';
-export type { TrialGatewayAllocationState, TrialGatewayAllocation, TrialGatewayPoolError, TrialGatewayPoolState, TrialGatewayClaimStatus, TrialGatewayClaimError, TrialGatewayClaim, } from './trial-gateway.js';
-export { TRIAL_GATEWAY_ALLOCATION_STATES, GATEWAY_POOLS_COLLECTION, TRIAL_GATEWAY_POOL_DOC, TRIAL_GATEWAY_POOL_SCHEMA_VERSION, TRIAL_GATEWAY_CLAIMS_COLLECTION, isTimestampLike, isTrialGatewayAllocation, isTrialGatewayPoolState, isTrialGatewayClaim, } from './trial-gateway.js';
+export type { TrialGatewayAllocationState, TrialGatewayAllocation, TrialGatewayClaimStatus, TrialGatewayClaimError, TrialGatewayClaim, } from './trial-gateway.js';
+export { TRIAL_GATEWAY_ALLOCATION_STATES, TRIAL_GATEWAY_CLAIMS_COLLECTION, isTimestampLike, isTrialGatewayAllocation, isTrialGatewayClaim, } from './trial-gateway.js';
 export type { SizingTier, SizingTierPreset, TierResources, TierNodeRuntime, TierCapacity, TierResolvedFrom, ResolveSizingTierInput, ResolvedSizingTier, } from './sizing.js';
 export { SIZING_TIERS, TIER_PRESETS, GATEWAY_CLASS_DEFAULT_TIER, PROFILE_DEFAULT_TIER, FALLBACK_DEFAULT_TIER, resolveSizingTier, } from './sizing.js';
 export type { GatewayMonthlyCost, FleetMonthlyCost } from './cost-estimator.js';

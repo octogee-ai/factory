@@ -417,6 +417,68 @@ describe("commitPlacementAtomic", () => {
     expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
   });
 
+  it("commits an onboarding companion document with the placement transaction", async () => {
+    const { db, store } = mkDb({
+      "users/u1": { tier: "trial" },
+      "gateways/default": backfilled(),
+      "glmGateways/default": runtimeDoc(),
+    });
+
+    await commitPlacementAtomic(db, {
+      uid: "u1",
+      slug: "s1",
+      gatewayId: "default",
+      source: "onboarding",
+      now: 100,
+      mirrorPatch: mirror,
+      companionWrites: [{
+        collection: "trialGatewayClaims",
+        docId: "u1",
+        data: { uid: "u1", slug: "s1", status: "waiting" },
+        mirrorPatchIfWritten: { trialStartedAt: 100 },
+      }],
+    });
+
+    expect(store.get("trialGatewayClaims/u1")).toEqual({
+      uid: "u1",
+      slug: "s1",
+      status: "waiting",
+    });
+    expect(store.get("users/u1")).toMatchObject({ trialStartedAt: 100 });
+  });
+
+  it("does not apply a companion mirror patch when create-if-missing preserves the document", async () => {
+    const { db, store } = mkDb({
+      "users/u1": { trialStartedAt: 50 },
+      "gateways/default": backfilled(),
+      "glmGateways/default": runtimeDoc(),
+      "trialGatewayClaims/u1": { uid: "u1", slug: "s1", status: "claimed" },
+    });
+
+    await commitPlacementAtomic(db, {
+      uid: "u1",
+      slug: "s1",
+      gatewayId: "default",
+      source: "repair",
+      now: 100,
+      mirrorPatch: mirror,
+      companionWrites: [{
+        collection: "trialGatewayClaims",
+        docId: "u1",
+        data: { uid: "u1", slug: "s1", status: "waiting" },
+        mode: "create-if-missing",
+        mirrorPatchIfWritten: { trialStartedAt: 100 },
+      }],
+    });
+
+    expect(store.get("users/u1")).toMatchObject({ trialStartedAt: 50 });
+    expect(store.get("trialGatewayClaims/u1")).toEqual({
+      uid: "u1",
+      slug: "s1",
+      status: "claimed",
+    });
+  });
+
   it("rejects an existing malformed root instead of falling back to a mirror-only legacy write", async () => {
     const { db, store } = mkDb({
       "users/u1": { tier: "trial" },

@@ -4,8 +4,9 @@ import {
   startReconciler,
 } from "../index";
 import {
-  buildWarmingTrialGateway,
-} from "../trial-gateway-pool.js";
+  buildOwnedTrialGateway,
+} from "../trial-gateway-provisioner.js";
+import { DEFAULT_PLATFORM_TRIAL_CONFIG } from "@octogee/shared/types/platform-config";
 
 function durableRoot(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -292,10 +293,12 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
   });
 
   it("pins the effective operator gateway image instead of the standard release repository", async () => {
-    const gatewayId = "trial-op-000001";
+    const gatewayId = "builder-alice";
     const callbacks: SnapshotCallbacks = {};
     const reconcileImagePins = vi.fn(async () => {});
-    const operatorRoot = buildWarmingTrialGateway({
+    const operatorRoot = buildOwnedTrialGateway({
+      uid: "uid-alice",
+      slug: "alice",
       gatewayId,
       source: {
         gatewayId: "default",
@@ -305,8 +308,7 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
           imageTag: "abc1234",
         },
       },
-      sizingTier: "nano",
-      configHash: "0123456789abcdef",
+      config: DEFAULT_PLATFORM_TRIAL_CONFIG,
       now: 1,
     }).root;
     const stop = startReconciler({

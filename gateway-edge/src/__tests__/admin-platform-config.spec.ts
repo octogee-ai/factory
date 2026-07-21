@@ -341,24 +341,28 @@ describe("admin platform-trial-config", () => {
     setCalls.length = 0;
   });
 
-  it("GET returns the strict defaults, concrete plan choices, and live standby health", async () => {
+  it("GET returns the strict defaults, concrete plan choices, and provisioning health", async () => {
     platformDocs["platformConfig/trial"] = {
       schemaVersion: 1,
       defaultPersonalTier: "personal_pro",
       defaultBuilderTier: "pro",
       releaseSourceGatewayId: "default",
     };
-    platformDocs["gatewayPools/trial"] = {
-      schemaVersion: 1,
-      availableGatewayId: "trial-op-000001",
-      preparingGatewayId: null,
-      nextSequence: 2,
-      lastError: null,
-      updatedAt: 100,
-    };
     queryDocs["trialGatewayClaims:status:waiting"] = [
-      { id: "waiting-user", data: { requestedAt: 90, status: "waiting" } },
-      { id: "waiting-user-2", data: { requestedAt: 100, status: "waiting" } },
+      {
+        id: "waiting-user",
+        data: {
+          uid: "waiting-user",
+          slug: "waiting-builder",
+          requestedAt: 90,
+          status: "waiting",
+          lastError: { at: 102, code: "release_source_unavailable", message: "source unavailable" },
+        },
+      },
+      {
+        id: "waiting-user-2",
+        data: { uid: "waiting-user-2", slug: "waiting-builder-2", requestedAt: 100, status: "waiting" },
+      },
     ];
     queryDocs["trialGatewayClaims:status:claimed"] = [
       { id: "claimed-user", data: { status: "claimed" } },
@@ -392,20 +396,22 @@ describe("admin platform-trial-config", () => {
       sizingTier: "nano",
     });
     expect(res.body.builderPlans.map((plan: { name: string }) => plan.name)).not.toContain("enterprise");
-    expect(res.body.pool).toMatchObject({
-      availableGatewayId: "trial-op-000001",
-      preparingGatewayId: null,
+    expect(res.body.provisioning).toMatchObject({
       waitingClaims: 2,
-      claimedCount: 1,
+      provisionedCount: 1,
       failedClaims: 1,
       oldestQueuedBuilderUid: "waiting-user",
+      oldestQueuedClaimError: {
+        at: 102,
+        code: "release_source_unavailable",
+        message: "source unavailable",
+      },
       oldestFailedBuilderUid: "failed-user",
       oldestFailedClaimError: {
         at: 101,
         code: "trial_config_missing",
         message: "trial config unavailable",
       },
-      lastError: null,
     });
     expect(aggregateCalls).toEqual([
       "trialGatewayClaims:status:waiting",

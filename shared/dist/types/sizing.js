@@ -27,7 +27,7 @@ export const TIER_PRESETS = {
         capacity: { targetActiveBuilders: 1, typicalBuilders: 1 },
     },
     mini: {
-        description: 'Warm standby — one active builder with cold-start headroom',
+        description: 'One active builder with extra runtime headroom',
         resources: {
             requests: { cpu: '1000m', memory: '4Gi', 'ephemeral-storage': '4Gi' },
             limits: { cpu: '1000m', memory: '4Gi', 'ephemeral-storage': '6Gi' },
