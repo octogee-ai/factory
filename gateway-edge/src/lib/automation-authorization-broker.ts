@@ -4,11 +4,14 @@ import { AUTOMATION_AUTHORIZATION_TIMEOUT_MS } from "@octogee/shared/types/autom
 
 import { internalFetch } from "./internal-fetch.js";
 
+const MATTERMOST_ID = /^[a-z0-9]{26}$/;
+
 export type AutomationAuthorizationOutcome =
-  | { kind: "authorized"; slug: string; gatewayId: string }
+  | { kind: "authorized"; slug: string; gatewayId: string; coachChannelId: string }
   | { kind: "unauthenticated" }
   | { kind: "forbidden" }
-  | { kind: "not_found" };
+  | { kind: "not_found" }
+  | { kind: "coach_channel_not_ready" };
 
 function nonBlank(value: string | undefined): string | null {
   const trimmed = value?.trim();
@@ -67,9 +70,16 @@ function authorizedResponse(value: unknown, requestedGatewayId: string): Automat
   if (
     body.gatewayId !== requestedGatewayId ||
     typeof body.slug !== "string" ||
-    !isValidUsername(body.slug)
+    !isValidUsername(body.slug) ||
+    typeof body.coachChannelId !== "string" ||
+    !MATTERMOST_ID.test(body.coachChannelId)
   ) return null;
-  return { kind: "authorized", slug: body.slug, gatewayId: requestedGatewayId };
+  return {
+    kind: "authorized",
+    slug: body.slug,
+    gatewayId: requestedGatewayId,
+    coachChannelId: body.coachChannelId,
+  };
 }
 
 async function outcomeFromBrokerResponse(
@@ -81,6 +91,7 @@ async function outcomeFromBrokerResponse(
   if (response.status === 401) return { kind: "unauthenticated" };
   if (response.status === 403) return { kind: "forbidden" };
   if (response.status === 404) return { kind: "not_found" };
+  if (response.status === 409) return { kind: "coach_channel_not_ready" };
   if (!response.ok) {
     throw new Error(`automation authorization broker returned ${response.status}`);
   }

@@ -9,6 +9,7 @@ import {
 } from "../automation-authorization-broker.js";
 
 const dirs: string[] = [];
+const COACH_CHANNEL_ID = "c".repeat(26);
 
 afterEach(() => {
   vi.useRealTimers();
@@ -28,7 +29,11 @@ describe("automation authorization broker client", () => {
     const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
       expect(init).toEqual(expect.objectContaining({ method: "POST", redirect: "error" }));
       return new Response(
-        JSON.stringify({ slug: "eggman", gatewayId: "eggman-devdays" }),
+        JSON.stringify({
+          slug: "eggman",
+          gatewayId: "eggman-devdays",
+          coachChannelId: COACH_CHANNEL_ID,
+        }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
     });
@@ -42,7 +47,12 @@ describe("automation authorization broker client", () => {
       fetchImpl: fetchImpl as typeof fetch,
     });
 
-    expect(result).toEqual({ kind: "authorized", slug: "eggman", gatewayId: "eggman-devdays" });
+    expect(result).toEqual({
+      kind: "authorized",
+      slug: "eggman",
+      gatewayId: "eggman-devdays",
+      coachChannelId: COACH_CHANNEL_ID,
+    });
     expect(fetchImpl).toHaveBeenCalledWith(
       "http://octogee-api.octogee-test.svc.cluster.local:3001/internal/automations/authorize",
       expect.objectContaining({ method: "POST", redirect: "error" }),
@@ -58,6 +68,7 @@ describe("automation authorization broker client", () => {
     [401, { kind: "unauthenticated" }],
     [403, { kind: "forbidden" }],
     [404, { kind: "not_found" }],
+    [409, { kind: "coach_channel_not_ready" }],
   ] as const)("maps broker status %s without granting access", async (status, expected) => {
     const result = await authorizeAutomationOwner({
       gatewayId: "eggman-devdays",
@@ -78,6 +89,36 @@ describe("automation authorization broker client", () => {
       tokenPath: projectedTokenPath(),
       fetchImpl: vi.fn(async () => new Response(
         JSON.stringify({ slug: "someone-else", gatewayId: "default" }),
+        { status: 200 },
+      )) as typeof fetch,
+    })).rejects.toThrow("malformed authorization response");
+  });
+
+  it("rejects authorization success without an authoritative coach channel", async () => {
+    await expect(authorizeAutomationOwner({
+      gatewayId: "eggman-devdays",
+      authorization: "Bearer firebase-id-token",
+      baseUrl: "http://octogee-api",
+      tokenPath: projectedTokenPath(),
+      fetchImpl: vi.fn(async () => new Response(
+        JSON.stringify({ slug: "eggman", gatewayId: "eggman-devdays" }),
+        { status: 200 },
+      )) as typeof fetch,
+    })).rejects.toThrow("malformed authorization response");
+  });
+
+  it("rejects a brokered coach channel outside the Mattermost ID contract", async () => {
+    await expect(authorizeAutomationOwner({
+      gatewayId: "eggman-devdays",
+      authorization: "Bearer firebase-id-token",
+      baseUrl: "http://octogee-api",
+      tokenPath: projectedTokenPath(),
+      fetchImpl: vi.fn(async () => new Response(
+        JSON.stringify({
+          slug: "eggman",
+          gatewayId: "eggman-devdays",
+          coachChannelId: "mm-coach-eggman",
+        }),
         { status: 200 },
       )) as typeof fetch,
     })).rejects.toThrow("malformed authorization response");

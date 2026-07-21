@@ -48,10 +48,14 @@ function appForTest(overrides: Partial<Parameters<typeof createAutomationsRouter
   app.use(
     "/api/g/:gatewayId/automations",
     createAutomationsRouter({
-      authorizeOwner: async () => ({ kind: "authorized", slug: "alice", gatewayId: "gw-alice" }),
+      authorizeOwner: async () => ({
+        kind: "authorized",
+        slug: "alice",
+        gatewayId: "gw-alice",
+        coachChannelId: "mm-coach-alice",
+      }),
       localGatewayId: () => "gw-alice",
       openclawDir: () => openclawDir,
-      resolveCoachChannelId: async () => "mm-coach-alice",
       invoke,
       ...overrides,
     }),
@@ -65,6 +69,7 @@ describe("automations locality broker", () => {
       kind: "authorized" as const,
       slug: "alice",
       gatewayId: "gw-alice",
+      coachChannelId: "mm-coach-alice",
     }));
     const { app } = appForTest({ authorizeOwner });
 
@@ -93,6 +98,20 @@ describe("automations locality broker", () => {
 
     expect(response.status).toBe(403);
     expect(response.body).toEqual({ error: "forbidden" });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("preserves the not-ready coach channel state without invoking OpenClaw", async () => {
+    const { app, invoke } = appForTest({
+      authorizeOwner: vi.fn(async () => ({ kind: "coach_channel_not_ready" as const })),
+    });
+
+    const response = await request(app)
+      .post("/api/g/gw-alice/automations/rpc")
+      .send({ method: "cron.list" });
+
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({ error: "coach_channel_not_ready" });
     expect(invoke).not.toHaveBeenCalled();
   });
 
@@ -251,7 +270,6 @@ describe("automations locality broker", () => {
   });
 
   it("retargets delivery edits to the authoritative coach channel", async () => {
-    const resolveCoachChannelId = vi.fn(async () => "mm-coach-alice");
     const current = {
       id: "daily-digest",
       agentId: "octogee-alice-coach",
@@ -262,7 +280,12 @@ describe("automations locality broker", () => {
       delivery: { mode: "none" },
     };
     const { app, invoke } = appForTest({
-      resolveCoachChannelId,
+      authorizeOwner: vi.fn(async () => ({
+        kind: "authorized" as const,
+        slug: "alice",
+        gatewayId: "gw-alice",
+        coachChannelId: "mm-coach-broker",
+      })),
       invoke: vi.fn(async (method: string) => method === "cron.get" ? { job: current } : { ok: true }),
     });
 
@@ -277,7 +300,6 @@ describe("automations locality broker", () => {
       });
 
     expect(response.status).toBe(200);
-    expect(resolveCoachChannelId).toHaveBeenCalledWith("alice");
     expect(invoke).toHaveBeenCalledWith("cron.update", {
       id: "daily-digest",
       patch: {
@@ -285,7 +307,7 @@ describe("automations locality broker", () => {
           mode: "announce",
           channel: "mattermost",
           accountId: "alice-coach",
-          to: "channel:mm-coach-alice",
+          to: "channel:mm-coach-broker",
         },
       },
     });

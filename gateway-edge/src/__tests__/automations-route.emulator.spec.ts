@@ -81,7 +81,11 @@ describe("POST /api/g/:gatewayId/automations/rpc", () => {
     await seedActiveUser(OWNER_UID);
     const authorization = await authHeader(OWNER_UID);
     vi.stubGlobal("fetch", vi.fn(async () => new Response(
-      JSON.stringify({ slug: WORKSPACE_SLUG, gatewayId: GATEWAY_ID }),
+      JSON.stringify({
+        slug: WORKSPACE_SLUG,
+        gatewayId: GATEWAY_ID,
+        coachChannelId: "c".repeat(26),
+      }),
       { status: 200, headers: { "content-type": "application/json" } },
     )));
 
