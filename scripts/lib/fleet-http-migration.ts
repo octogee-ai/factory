@@ -55,6 +55,8 @@ import {
   writeActivationManifest,
 } from "./migration-activation-manifest.js";
 
+const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
+
 export interface MigrationHandlerDeps {
   publicKey: string;
   gatewayId: string;
@@ -77,6 +79,7 @@ waitForRsyncReady?: (port: number) => Promise<void>;
 flushLocalState?: (input: {
   slug: string;
   reason: string;
+  expectedSystemConfigCommit?: string;
 }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
 releaseSurgeReadiness?: (input: { targetPodUid: string }) => Promise<void>;
 }
@@ -268,10 +271,28 @@ export function createFlushHandler(deps: MigrationHandlerDeps): RequestHandler {
       return;
     }
 
+    const reason = typeof body.reason === "string" && body.reason
+      ? body.reason
+      : "controller";
+    const expectedSystemConfigCommit = body.expectedSystemConfigCommit;
+    if (
+      reason === "migration-converge" &&
+      (typeof expectedSystemConfigCommit !== "string" ||
+        !SYSTEM_CONFIG_COMMIT.test(expectedSystemConfigCommit))
+    ) {
+      res.status(400).json({ error: "invalid expectedSystemConfigCommit" });
+      return;
+    }
+    if (reason !== "migration-converge" && expectedSystemConfigCommit !== undefined) {
+      res.status(400).json({ error: "unexpected expectedSystemConfigCommit" });
+      return;
+    }
+
     try {
       const result = await deps.flushLocalState({
         slug: body.slug,
-        reason: typeof body.reason === "string" && body.reason ? body.reason : "controller",
+        reason,
+        ...(expectedSystemConfigCommit ? { expectedSystemConfigCommit } : {}),
       });
       const response: FlushGatewayResponse = {
         migrationId: body.migrationId,

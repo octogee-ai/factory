@@ -1150,6 +1150,70 @@ describe("system_config restore", () => {
     expect(fs.existsSync(path.join(openclawDir, "system_config.sync.lock"))).toBe(true);
   });
 
+  it("adopts the pinned remote commit under the config writer lock before checkpointing", () => {
+    const configPath = path.join(repoDir, "openclaw.json");
+    writeJson(configPath, { version: 1 });
+    fs.writeFileSync(path.join(repoDir, ".octogee.json"), '{"schemaVersion":1}\n');
+    fs.writeFileSync(path.join(repoDir, ".gitignore"), "*.bak\n*.tmp\n");
+    const sourceCommit = "a".repeat(40);
+    const targetCommit = "b".repeat(40);
+    const lockPath = path.join(openclawDir, "system_config.sync.lock");
+    const convergeRemoteCommit = vi.fn(() => {
+      expect(fs.existsSync(lockPath)).toBe(true);
+      return { outcome: "adopted" as const, adoptedCommit: sourceCommit };
+    });
+    const git = vi.fn((_cwd: string, argsArgv: string[]) => {
+      const args = argsArgv.join(" ");
+      if (args === "status --porcelain -- openclaw.json .octogee.json .gitignore") return "";
+      if (args === "push origin main") return "";
+      if (args === "rev-parse HEAD") return targetCommit;
+      return null;
+    });
+
+    const result = syncSystemConfigForSlug("acme", {
+      openclawDir,
+      expectedRemoteCommit: sourceCommit,
+      convergeRemoteCommit,
+      log: () => {},
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      gitExec: git,
+    });
+
+    expect(convergeRemoteCommit).toHaveBeenCalledWith(expect.objectContaining({
+      slug: "acme",
+      expectedCommit: sourceCommit,
+      repoDir,
+      configPath,
+    }));
+    expect(result).toMatchObject({ pushed: true, acceptedCommit: targetCommit });
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
+
+  it("fails the checkpoint without pushing when pinned remote adoption is unavailable", () => {
+    writeJson(path.join(repoDir, "openclaw.json"), { version: 1 });
+    const git = vi.fn();
+
+    expect(syncSystemConfigForSlug("acme", {
+      openclawDir,
+      expectedRemoteCommit: "a".repeat(40),
+      convergeRemoteCommit: () => ({
+        outcome: "unavailable",
+        errorCode: "remote-commit-mismatch",
+      }),
+      log: () => {},
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      gitExec: git,
+    })).toMatchObject({
+      committed: false,
+      pushed: false,
+      pending: true,
+      errorCode: "remote-commit-mismatch",
+    });
+    expect(git).not.toHaveBeenCalled();
+  });
+
   it("syncs through a leftover roll-era freeze marker — the freeze plane is retired", () => {
     const configPath = path.join(repoDir, "openclaw.json");
     writeJson(configPath, { version: 1 });

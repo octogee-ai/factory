@@ -17,6 +17,15 @@ import {
   type MigrationClient,
 } from "./fleet-migration-client.js";
 
+const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
+
+function acceptedSystemConfigCommit(value: unknown): string {
+  if (typeof value !== "string" || !SYSTEM_CONFIG_COMMIT.test(value)) {
+    throw new Error("customer migration V2 source flush did not prove an accepted system-config commit");
+  }
+  return value;
+}
+
 export interface CustomerMigrationV2CutoverFence {
   operationId: string;
   migrationId: string;
@@ -204,15 +213,22 @@ async function advanceForward(
         transportId: state.sourceGatewayId,
         slug: state.slug,
       });
-      await deps.client.flushGateway({
+      const flush = await deps.client.flushGateway({
         migrationId: state.migrationId,
         gatewayId: state.sourceGatewayId,
         transportId: state.sourceGatewayId,
         slug: state.slug,
         reason: "migration-final",
       });
-      return { ...state, phase: "sourceQuiesced" };
-    case "sourceQuiesced":
+      return {
+        ...state,
+        phase: "sourceQuiesced",
+        sourceSystemConfigCommit: acceptedSystemConfigCommit(flush.systemConfigCommit),
+      };
+    case "sourceQuiesced": {
+      const expectedSystemConfigCommit = acceptedSystemConfigCommit(
+        state.sourceSystemConfigCommit,
+      );
       await deps.client.transferState({
         migrationId: state.migrationId,
         fromGatewayId: state.sourceGatewayId,
@@ -229,8 +245,10 @@ async function advanceForward(
         transportId: state.targetGatewayId,
         slug: state.slug,
         reason: "migration-converge",
+        expectedSystemConfigCommit,
       });
       return { ...state, phase: "finalSynced" };
+    }
     case "finalSynced":
       await deps.client.verifyTarget({
         migrationId: state.migrationId,

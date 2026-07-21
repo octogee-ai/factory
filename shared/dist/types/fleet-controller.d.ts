@@ -146,12 +146,14 @@ export interface QuiesceResponse {
 }
 export interface FlushGatewayRequestBody extends MigrationRequestBody {
     reason?: string;
+    expectedSystemConfigCommit?: string;
 }
 export interface FlushGatewayResponse {
     migrationId: string;
     slug: string;
     ok: boolean;
     durationMs: number;
+    systemConfigCommit?: string;
     steps: Array<{
         name: string;
         status: "done" | "failed" | "skipped";

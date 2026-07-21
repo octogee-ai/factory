@@ -6,7 +6,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { reconcilePlatformInvariants } from "../lib/system-config-invariants.js";
 import { readSystemConfigCommitBlob } from "../lib/system-config-durable-files.js";
-import { recoverSystemConfigHead } from "../lib/system-config-recovery.js";
+import {
+  convergeSystemConfigToRemoteCommit,
+  recoverSystemConfigHead,
+} from "../lib/system-config-recovery.js";
 import { readSystemConfigStatus } from "../lib/system-config-status.js";
 import { checkpointBootSystemConfigForSlug } from "../lib/system-config.js";
 
@@ -63,6 +66,72 @@ afterEach(() => {
 });
 
 describe("system config accepted-head recovery", () => {
+  it("validates and adopts the exact fetched source commit without touching external secrets", () => {
+    const h = fixture(validConfig({ staleTarget: true }));
+    const expectedCommit = "a".repeat(40);
+    const secretsPath = path.join(h.openclawDir, "secrets", "mattermost-accounts.json");
+    fs.mkdirSync(path.dirname(secretsPath), { recursive: true });
+    fs.writeFileSync(secretsPath, '{"alice-coach":"secret-token"}\n', { mode: 0o600 });
+    const commands: string[] = [];
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
+      commands.push(command);
+      if (command === "fetch origin main") return "";
+      if (command === "rev-parse FETCH_HEAD") return expectedCommit;
+      if (command === `show ${expectedCommit}:openclaw.json`) {
+        return JSON.stringify({ sourceFinal: true });
+      }
+      if (command === `show ${expectedCommit}:.octogee.json`) return '{"schemaVersion":1}\n';
+      if (command === `show ${expectedCommit}:.gitignore`) return "*.bak\n*.tmp\n";
+      if (command === `reset --hard ${expectedCommit}`) return "";
+      if (command === "rev-parse HEAD") return expectedCommit;
+      return null;
+    });
+
+    expect(convergeSystemConfigToRemoteCommit({
+      ...h,
+      slug: "ceckert",
+      expectedCommit,
+      env,
+      gitExec,
+      validateConfig: vi.fn(),
+    })).toEqual({ outcome: "adopted", adoptedCommit: expectedCommit });
+    expect(JSON.parse(fs.readFileSync(h.configPath, "utf8"))).toMatchObject({
+      sourceFinal: true,
+      gateway: {
+        port: 18789,
+        controlUi: { basePath: "/g/bender/openclaw" },
+      },
+    });
+    expect(fs.readFileSync(secretsPath, "utf8"))
+      .toBe('{"alice-coach":"secret-token"}\n');
+    expect(commands).toEqual([
+      "fetch origin main",
+      "rev-parse FETCH_HEAD",
+      `show ${expectedCommit}:openclaw.json`,
+      `show ${expectedCommit}:.octogee.json`,
+      `show ${expectedCommit}:.gitignore`,
+      `reset --hard ${expectedCommit}`,
+      "rev-parse HEAD",
+    ]);
+    expect(commands.join("\n")).not.toMatch(/^(?:add|commit|push) /mu);
+  });
+
+  it("rejects an invalid pinned commit before fetching or changing the checkout", () => {
+    const h = fixture(validConfig({ staleTarget: true }));
+    const gitExec = vi.fn();
+
+    expect(convergeSystemConfigToRemoteCommit({
+      ...h,
+      slug: "ceckert",
+      expectedCommit: "--upload-pack=evil",
+      env,
+      gitExec,
+      validateConfig: vi.fn(),
+    })).toEqual({ outcome: "unavailable", errorCode: "invalid-expected-commit" });
+    expect(gitExec).not.toHaveBeenCalled();
+  });
+
   it("reads exact committed durable blobs without trimming trailing newlines", () => {
     const h = realGitFixture();
 

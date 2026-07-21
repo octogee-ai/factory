@@ -40,9 +40,12 @@ import {
 } from "./system-config-invariants.js";
 import {
   attributedCommitArgs,
+  convergeSystemConfigToRemoteCommit,
   recoverSystemConfigHead,
   type SystemConfigCommitSource,
   type SystemConfigRecoveryResult,
+  type SystemConfigRemoteConvergenceOptions,
+  type SystemConfigRemoteConvergenceResult,
 } from "./system-config-recovery.js";
 import {
   readSystemConfigStatus,
@@ -117,6 +120,10 @@ export interface SystemConfigSyncOptions {
   source?: SystemConfigCommitSource;
   lockHeld?: boolean;
   readCommitBlob?: ReadSystemConfigCommitBlob;
+  expectedRemoteCommit?: string;
+  convergeRemoteCommit?: (
+    options: SystemConfigRemoteConvergenceOptions,
+  ) => SystemConfigRemoteConvergenceResult;
 }
 
 interface SystemConfigAuditOptions {
@@ -1252,19 +1259,51 @@ function syncSystemConfigUnlocked(
   const repoConfigPath = systemConfigPath(openclawDir);
   const configureSsh = opts.setRepoSshCommand ?? setRepoSshCommand;
   configureSsh(repoDir, slug);
+  const execGit = opts.gitExec ?? gitExec;
+  const keyPath = (opts.customerSshKeyPath ?? customerSshKeyPath)(slug);
+  const now = opts.now ?? (() => new Date());
+  const env = opts.env ?? process.env;
+  if (opts.expectedRemoteCommit) {
+    const convergence = (opts.convergeRemoteCommit ?? convergeSystemConfigToRemoteCommit)({
+      slug,
+      openclawDir,
+      repoDir,
+      configPath: repoConfigPath,
+      expectedCommit: opts.expectedRemoteCommit,
+      env,
+      gitExec: execGit,
+      validateConfig: opts.validateConfig ?? validateOpenClawConfig,
+      keyPath,
+      readCommitBlob: opts.readCommitBlob,
+    });
+    if (convergence.outcome === "unavailable") {
+      if (opts.durablePolicy) {
+        recordSyncError(openclawDir, convergence.errorCode, now);
+      }
+      (opts.log ?? defaultLog)(
+        `[system_config] ${slug}: migration convergence failed (${convergence.errorCode})`,
+      );
+      return {
+        committed: false,
+        pushed: false,
+        pending: true,
+        errorCode: convergence.errorCode,
+      };
+    }
+  }
   return syncPreparedSystemConfig({
     slug,
     opts,
     pushWhenClean,
     log: opts.log ?? defaultLog,
-    now: opts.now ?? (() => new Date()),
-    env: opts.env ?? process.env,
+    now,
+    env,
     openclawDir,
     repoDir,
     repoConfigPath,
     initialFingerprint: systemConfigFingerprint(repoConfigPath),
-    execGit: opts.gitExec ?? gitExec,
-    keyPath: (opts.customerSshKeyPath ?? customerSshKeyPath)(slug),
+    execGit,
+    keyPath,
   });
 }
 

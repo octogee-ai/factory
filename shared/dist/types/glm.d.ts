@@ -201,6 +201,7 @@ export interface CustomerMigrationV2State {
     targetGatewayId: string;
     targetRelease: number;
     targetRootFence: CustomerMigrationV2GatewayRootFence;
+    sourceSystemConfigCommit?: string;
     cutoverAt?: number;
     sourceRetiredAt?: number;
     completedAt?: number;

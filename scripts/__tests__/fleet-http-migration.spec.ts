@@ -507,6 +507,59 @@ describe("createFlushHandler", () => {
     expect(getStatus()).toBe(501);
     expect(getBody()).toEqual({ error: "flush not configured" });
   });
+
+  it("passes the signed source checkpoint into the target migration-converge flush", async () => {
+    const expectedSystemConfigCommit = "a".repeat(40);
+    const flushLocalState = vi.fn(async () => ({
+      ok: true,
+      durationMs: 12,
+      steps: [],
+      systemConfigCommit: "b".repeat(40),
+    }));
+    const handler = createFlushHandler(mkDeps({ flushLocalState }));
+    const body = {
+      migrationId: "mig-1",
+      slug: "chris",
+      reason: "migration-converge",
+      expectedSystemConfigCommit,
+    };
+    const req = mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+    });
+    const { res, getStatus } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(flushLocalState).toHaveBeenCalledWith({
+      slug: "chris",
+      reason: "migration-converge",
+      expectedSystemConfigCommit,
+    });
+  });
+
+  it.each([
+    {},
+    { expectedSystemConfigCommit: "not-a-sha" },
+  ])("rejects target convergence without a valid accepted commit: %o", async (extra) => {
+    const flushLocalState = vi.fn();
+    const handler = createFlushHandler(mkDeps({ flushLocalState }));
+    const body = {
+      migrationId: "mig-1",
+      slug: "chris",
+      reason: "migration-converge",
+      ...extra,
+    };
+    const req = mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+    });
+    const { res, getStatus } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(400);
+    expect(flushLocalState).not.toHaveBeenCalled();
+  });
 });
 
 describe("createVerifyHandler", () => {

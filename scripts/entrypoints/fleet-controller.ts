@@ -71,10 +71,15 @@ export function createFleetSystemConfigFlush(
   builderSlug: string,
   logFn: (message: string) => void = log,
   sync: typeof syncSystemConfigForSlug = syncSystemConfigForSlug,
-): (() => Promise<void>) | undefined {
+  expectedRemoteCommit?: string,
+): (() => Promise<{ acceptedCommit: string }>) | undefined {
   if (!builderSlug) return undefined;
   return async () => {
-    checkpointDurableSystemConfigForSlug(builderSlug, { log: logFn }, sync);
+    const result = checkpointDurableSystemConfigForSlug(builderSlug, {
+      log: logFn,
+      ...(expectedRemoteCommit ? { expectedRemoteCommit } : {}),
+    }, sync);
+    return { acceptedCommit: result.acceptedCommit! };
   };
 }
 
@@ -167,7 +172,7 @@ async function main(): Promise<void> {
     stampMounted: (uid, mounted) => brokerClient.setMounted(uid, mounted),
     recordReconcileError: (slug, message) => brokerClient.recordReconcileError(slug, message),
     clearReconcileError: (slug) => brokerClient.clearReconcileError(slug),
-    flushLocalState: async ({ reason }) => {
+    flushLocalState: async ({ reason, expectedSystemConfigCommit }) => {
       log(`[fleet] controller-requested flush reason=${reason}`);
       return runGatewayPreStopFlush({
         gatewayId: entrypointConfig.gatewayId,
@@ -179,7 +184,12 @@ async function main(): Promise<void> {
               strict: true,
               storeForSlug: () => createBrokeredBlobStore(brokerClient),
             }),
-        syncSystemConfig: createFleetSystemConfigFlush(entrypointConfig.builderSlug),
+        syncSystemConfig: createFleetSystemConfigFlush(
+          entrypointConfig.builderSlug,
+          log,
+          syncSystemConfigForSlug,
+          expectedSystemConfigCommit,
+        ),
         log,
       });
     },

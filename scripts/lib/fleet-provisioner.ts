@@ -215,6 +215,7 @@ export interface StartFleetOptions {
   flushLocalState?: (input: {
     slug: string;
     reason: string;
+    expectedSystemConfigCommit?: string;
   }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
 }
 
