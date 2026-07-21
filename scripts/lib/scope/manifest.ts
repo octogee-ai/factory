@@ -298,6 +298,12 @@ export const EDGES: readonly ScopeEdge[] = [
     reason:
       "tests/specs/firebase-admin-major-alignment.spec.ts sweeps acceptance/package.json's firebase-admin range",
   },
+  {
+    when: "firestore-rules-tests/",
+    jobs: [JOBS.tests],
+    reason:
+      "tests/specs/transitive-security.spec.ts verifies the Firebase tooling dependency overrides recorded in firestore-rules-tests/package-lock.json",
+  },
 ];
 
 // Repo-wide blast radius → run everything. Exact root-file names (so app/package.json

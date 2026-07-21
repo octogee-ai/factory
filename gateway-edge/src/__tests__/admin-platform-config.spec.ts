@@ -122,6 +122,7 @@ describe("admin platform-config", () => {
   it("GET serves the compiled default plus the full catalog when no doc exists", async () => {
     const res = await request(app).get("/api/admin/platform-config");
     expect(res.status).toBe(200);
+    expect(res.headers["cache-control"]).toBe("no-store");
     expect(res.body.freeTierModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
     expect(res.body.defaultFreeTierModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
     expect(res.body.opsAgentModelRef).toBe("platform-openrouter/z-ai/glm-5.2");

@@ -46,6 +46,10 @@ import {
 } from "../lib/platform-connect-config.js";
 
 const router = Router();
+router.use((_req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
 router.use(requireAdmin);
 
 addAdminCustomerRoutes(router, {
