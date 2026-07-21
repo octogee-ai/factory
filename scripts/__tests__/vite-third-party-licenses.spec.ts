@@ -1,20 +1,58 @@
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createThirdPartyLicenseReport,
   thirdPartyLicenses,
 } from "../lib/vite-third-party-licenses.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
-const reactModule = path.join(repoRoot, "app/node_modules/react/index.js");
-const domPurifyModule = path.join(
-  repoRoot,
-  "app/node_modules/dompurify/dist/purify.es.mjs",
-);
-const firebaseAppModule = path.join(
-  repoRoot,
-  "app/node_modules/@firebase/app/dist/esm/index.esm.js",
-);
+let fixtureRoot: string;
+let reactModule: string;
+let domPurifyModule: string;
+let firebaseAppModule: string;
+
+function writePackage(
+  name: string,
+  version: string,
+  options: { license?: string; licenseText?: string } = {},
+): string {
+  const directory = path.join(fixtureRoot, "node_modules", ...name.split("/"));
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(
+    path.join(directory, "package.json"),
+    JSON.stringify({
+      name,
+      version,
+      license: options.license ?? "MIT",
+      repository: `https://example.test/${name}.git`,
+    }),
+  );
+  writeFileSync(path.join(directory, "index.js"), "export {};\n");
+  if (options.licenseText) {
+    writeFileSync(path.join(directory, "LICENSE"), options.licenseText);
+  }
+  return path.join(directory, "index.js");
+}
+
+beforeAll(() => {
+  fixtureRoot = mkdtempSync(path.join(os.tmpdir(), "octogee-license-plugin-"));
+  reactModule = writePackage("react", "19.2.7", {
+    licenseText: "Permission is hereby granted to use this test fixture.",
+  });
+  domPurifyModule = writePackage("dompurify", "3.4.12", {
+    license: "(MPL-2.0 OR Apache-2.0)",
+    licenseText: "Apache License test fixture.",
+  });
+  firebaseAppModule = writePackage("@firebase/app", "0.15.1", {
+    license: "Apache-2.0",
+  });
+});
+
+afterAll(() => {
+  rmSync(fixtureRoot, { recursive: true, force: true });
+});
 
 function bundleWith(...moduleIds: string[]) {
   return {
