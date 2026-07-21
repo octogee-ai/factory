@@ -157,10 +157,52 @@ describe("system config accepted-head recovery", () => {
     expect(commands).toContain(`reset --hard ${targetCommit}`);
   });
 
+  it("accepts the target boot checkpoint when activation normalized the exact source pin", () => {
+    const h = fixture(validConfig({ staleTarget: true }));
+    const sourceCommit = "a".repeat(40);
+    const targetCommit = "b".repeat(40);
+    const targetConfig = validConfig({ sourceFinal: true });
+    const commitMessage = [
+      "boot-migration: sync openclaw config 2026-07-21T10:00:00.000Z",
+      "",
+      "Octogee-Config-Source: boot-migration",
+      "Octogee-Gateway: bender",
+      "OpenClaw-Version: 2026.7.1",
+    ].join("\n");
+    const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
+      if (command === "fetch origin main") return "";
+      if (command === "rev-parse FETCH_HEAD") return targetCommit;
+      if (command === `rev-parse ${targetCommit}^`) return sourceCommit;
+      if (command === `show -s --format=%B ${targetCommit}`) return commitMessage;
+      if (command === `show ${targetCommit}:openclaw.json`) return targetConfig;
+      if (command === `show ${targetCommit}:.octogee.json`) return '{"schemaVersion":1}\n';
+      if (command === `show ${targetCommit}:.gitignore`) return "*.bak\n*.tmp\n";
+      if (command === `reset --hard ${targetCommit}`) return "";
+      if (command === "rev-parse HEAD") return targetCommit;
+      return null;
+    });
+
+    expect(convergeSystemConfigToRemoteCommit({
+      ...h,
+      slug: "ceckert",
+      expectedCommit: sourceCommit,
+      env,
+      gitExec,
+      validateConfig: vi.fn(),
+    })).toEqual({ outcome: "adopted", adoptedCommit: targetCommit });
+    expect(gitExec).toHaveBeenCalledWith(
+      h.repoDir,
+      ["reset", "--hard", targetCommit],
+      expect.any(String),
+    );
+  });
+
   it.each([
     ["a non-direct descendant", "c".repeat(40), "migration-checkpoint", "bender", "a".repeat(40)],
     ["another gateway", "a".repeat(40), "migration-checkpoint", "other", "a".repeat(40)],
     ["an ordinary config commit", "a".repeat(40), "auto-watch", "bender", "a".repeat(40)],
+    ["another gateway boot checkpoint", "a".repeat(40), "boot-migration", "other", "a".repeat(40)],
     ["another source pin", "a".repeat(40), "migration-checkpoint", "bender", "c".repeat(40)],
   ])("rejects a fetched target tip attributed to %s", (
     _case,

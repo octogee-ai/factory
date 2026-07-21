@@ -248,9 +248,14 @@ function isAttributedMigrationReplay(
   const message = execGit(options.repoDir, ["show", "-s", "--format=%B", commit], keyPath);
   if (message === null) return false;
   const lines = new Set(message.split("\n").map((line) => line.trim()));
-  return lines.has("Octogee-Config-Source: migration-checkpoint") &&
-    lines.has(`Octogee-Gateway: ${safeTrailerValue(options.env.GATEWAY_ID)}`) &&
+  const targetGateway = lines.has(
+    `Octogee-Gateway: ${safeTrailerValue(options.env.GATEWAY_ID)}`,
+  );
+  const migrationCheckpoint =
+    lines.has("Octogee-Config-Source: migration-checkpoint") &&
     lines.has(`Octogee-Migration-Source: ${options.expectedCommit}`);
+  const bootCheckpoint = lines.has("Octogee-Config-Source: boot-migration");
+  return targetGateway && (migrationCheckpoint || bootCheckpoint);
 }
 
 export function convergeSystemConfigToRemoteCommit(
