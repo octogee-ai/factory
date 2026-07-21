@@ -185,6 +185,13 @@ describe("resolveScope — cross-package hazard edges", () => {
     );
   });
 
+  it("third-party license plugin changes run both production web surfaces", () => {
+    expectJobs(
+      ["scripts/lib/vite-third-party-licenses.mjs"],
+      ["app", "site", "scripts", "customer-lifecycle-emulator", "tests"],
+    );
+  });
+
   it("records ownership and edge reasons for diagnostics", () => {
     const result = resolveScope(["gateway-edge/src/routes/git.ts"]);
 
