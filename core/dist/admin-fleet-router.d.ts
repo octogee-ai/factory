@@ -42,6 +42,7 @@ export interface FleetRouterDeps {
         limit: number;
     }) => Promise<unknown[]>;
     readGatewayPodDiagnostics?: (gatewayId: string) => Promise<GatewayPodDiagnostics>;
+    readGatewayPodDiagnosticsBatch?: (gatewayIds: readonly string[]) => Promise<Record<string, GatewayPodDiagnostics>>;
     suspendAuthUser: (uid: string) => Promise<void>;
     revokeConnectorGrantsForUser: (uid: string) => Promise<void>;
     dedicatedGatewayIdleDefaultMs?: number;

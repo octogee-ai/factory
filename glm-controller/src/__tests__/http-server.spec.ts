@@ -647,6 +647,57 @@ describe("createHttpServer — admin gateway routes", () => {
     });
   });
 
+  it("batches pod diagnostics for every gateway into one fleet read", async () => {
+    store.gateways["alpha"] = durableSharedGateway("alpha");
+    store.glmGateways["alpha"] = servingRuntime("alpha");
+    store.gateways["bravo"] = durableSharedGateway("bravo");
+    store.glmGateways["bravo"] = servingRuntime("bravo");
+    const readGatewayPodDiagnostics = vi.fn();
+    const readGatewayPodDiagnosticsBatch = vi.fn(async () => ({
+      alpha: {
+        status: "ready" as const,
+        totalPods: 1,
+        readyPods: 1,
+        totalRestarts: 0,
+        pods: [],
+      },
+      bravo: {
+        status: "missing" as const,
+        totalPods: 0,
+        readyPods: 0,
+        totalRestarts: 0,
+        pods: [],
+      },
+    }));
+    const app = createHttpServer(buildDeps(store, {
+      readGatewayPodDiagnostics,
+      readGatewayPodDiagnosticsBatch,
+    }));
+
+    const res = await request(app)
+      .get("/api/admin/gateways")
+      .set("Authorization", "Bearer admin-token");
+
+    expect(res.status).toBe(200);
+    expect(readGatewayPodDiagnosticsBatch).toHaveBeenCalledTimes(1);
+    expect(readGatewayPodDiagnosticsBatch).toHaveBeenCalledWith(
+      expect.arrayContaining(["alpha", "bravo"]),
+    );
+    expect(readGatewayPodDiagnostics).not.toHaveBeenCalled();
+    expect(res.body.gateways).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          gatewayId: "alpha",
+          podDiagnostics: expect.objectContaining({ status: "ready" }),
+        }),
+        expect.objectContaining({
+          gatewayId: "bravo",
+          podDiagnostics: expect.objectContaining({ status: "missing" }),
+        }),
+      ]),
+    );
+  });
+
   it("serves gateways requested by Cowboy before their heartbeat docs exist", async () => {
     store.glmGateways["canary"] = {
       gatewayId: "canary",

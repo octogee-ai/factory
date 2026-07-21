@@ -80,6 +80,9 @@ export interface HttpServerDeps {
     limit: number;
   }) => Promise<unknown[]>;
   readGatewayPodDiagnostics?: (gatewayId: string) => Promise<GatewayPodDiagnostics>;
+  readGatewayPodDiagnosticsBatch?: (
+    gatewayIds: readonly string[],
+  ) => Promise<Record<string, GatewayPodDiagnostics>>;
   suspendAuthUser: (uid: string) => Promise<void>;
   revokeConnectorGrantsForUser: (uid: string) => Promise<void>;
   dedicatedGatewayIdleDefaultMs?: number;
@@ -215,6 +218,7 @@ export function createHttpServer(deps: HttpServerDeps): Express {
     provisionGatewayAuthSecret: deps.provisionGatewayAuthSecret,
     listGatewayBuilds: deps.listGatewayBuilds,
     readGatewayPodDiagnostics: deps.readGatewayPodDiagnostics,
+    readGatewayPodDiagnosticsBatch: deps.readGatewayPodDiagnosticsBatch,
     suspendAuthUser: deps.suspendAuthUser,
     revokeConnectorGrantsForUser: deps.revokeConnectorGrantsForUser,
     dedicatedGatewayIdleDefaultMs: deps.dedicatedGatewayIdleDefaultMs,
