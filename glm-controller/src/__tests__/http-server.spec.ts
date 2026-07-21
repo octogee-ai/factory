@@ -531,6 +531,7 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(res.body.stats.gateways).toEqual({
       total: 0,
       ready: 0,
+      paused: 0,
       unreachable: 0,
     });
   });
@@ -596,6 +597,7 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(res.body.stats.gateways).toEqual({
       total: 2,
       ready: 1,
+      paused: 0,
       unreachable: 1,
     });
     expect(res.body.stats.customersMounted).toBe(2);
@@ -749,6 +751,7 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(res.body.stats.gateways).toEqual({
       total: 1,
       ready: 0,
+      paused: 0,
       unreachable: 0,
     });
   });

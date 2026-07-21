@@ -828,14 +828,16 @@ export function projectGatewaySummary(doc, glmDoc, now) {
     };
 }
 function rollupFleetStats(gateways) {
-    let ready = 0, unreachable = 0, customersMounted = 0, fleetMonthlyUsd = 0, fleetOnDemandUsd = 0;
+    let ready = 0, paused = 0, unreachable = 0, customersMounted = 0, fleetMonthlyUsd = 0, fleetOnDemandUsd = 0;
     const byTier = {};
     for (const g of gateways) {
         // Derived reachability (replaces the deleted Cloud-Function "unreachable" writer):
         // a gateway whose heartbeat has aged out is unreachable, whatever its last
         // self-reported status said. See FLEET-RECONCILE-SPEC.
         const stale = g.heartbeatAgeMs != null && g.heartbeatAgeMs > GATEWAY_UNREACHABLE_AFTER_MS;
-        if (stale)
+        if (g.desiredStatus === "paused")
+            paused++;
+        else if (stale)
             unreachable++;
         else if (g.status === "ready")
             ready++;
@@ -859,7 +861,7 @@ function rollupFleetStats(gateways) {
         byTier[g.sizing.tier] = entry;
     }
     return {
-        gateways: { total: gateways.length, ready, unreachable },
+        gateways: { total: gateways.length, ready, paused, unreachable },
         customersMounted,
         fleetCost: {
             monthlyUsd: fleetMonthlyUsd,

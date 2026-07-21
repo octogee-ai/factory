@@ -726,9 +726,12 @@ function sourcesForPushMode(
   slug: string,
   mode: PushStateRequestBody["mode"],
 ): Array<{ cwd: string; path: string }> {
-  if (mode !== "keys") return sources;
   const keyPath = path.join("customer-keys", slug);
-  return sources.filter((source) => source.path === keyPath);
+  if (mode === "keys") return sources.filter((source) => source.path === keyPath);
+  if (mode === "pre" || mode === "final") {
+    return sources.filter((source) => source.path !== keyPath);
+  }
+  return sources;
 }
 
 async function finishPushStateAlreadyMounted(
@@ -1632,15 +1635,15 @@ export function findPathTraversalViolation(
   slug: string,
   mode: MigrationImportMode = "default",
 ): string | null {
-  const allowedPrefixes = mode === "keys"
-    ? [`customer-keys/${slug}/`]
-    : [
-        `agents/octogee-${slug}-coach/`,
-        `memory/octogee-${slug}-coach.sqlite`,
-        `customers/${slug}/`,
-        `customer-keys/${slug}/`,
-        `${MIGRATION_ACTIVATION_DIR}/${slug}/`,
-      ];
+  const durablePrefixes = [
+    `agents/octogee-${slug}-coach/`,
+    `memory/octogee-${slug}-coach.sqlite`,
+    `customers/${slug}/`,
+    `${MIGRATION_ACTIVATION_DIR}/${slug}/`,
+  ];
+  let allowedPrefixes = [...durablePrefixes, `customer-keys/${slug}/`];
+  if (mode === "keys") allowedPrefixes = [`customer-keys/${slug}/`];
+  if (mode === "pre" || mode === "final") allowedPrefixes = durablePrefixes;
   for (const raw of entries) {
     const entry = raw.endsWith("/") ? raw.slice(0, -1) : raw;
     if (entry.startsWith("/")) {
@@ -1652,9 +1655,7 @@ export function findPathTraversalViolation(
     }
     const allowed = allowedPrefixes.some((p) => matchesAllowedMigrationPath(raw, entry, p));
     if (!allowed) {
-      const allowlist = mode === "keys"
-        ? `customer-keys/${slug}`
-        : `agents/octogee-${slug}-coach, memory/octogee-${slug}-coach.sqlite*, customers/${slug}, customer-keys/${slug}, ${MIGRATION_ACTIVATION_DIR}/${slug}`;
+      const allowlist = allowedPrefixes.map((prefix) => prefix.replace(/\/$/u, "")).join(", ");
       return `path '${raw}' is outside the per-slug allowlist (${allowlist})`;
     }
   }
