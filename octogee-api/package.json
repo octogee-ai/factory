@@ -2,6 +2,8 @@
   "name": "@octogee/octogee-api",
   "version": "1.0.0",
   "description": "Octogee cluster-singleton API — non-locality routes lifted out of gateway-edge (POST-BENDER-CLEANUP-SPEC §2)",
+  "private": true,
+  "license": "UNLICENSED",
   "type": "module",
   "main": "dist/octogee-api/src/index.js",
   "scripts": {

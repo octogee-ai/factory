@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Octogee shared runtime — consumers depend on its built interface, never its source.",
   "private": true,
+  "license": "UNLICENSED",
   "type": "module",
   "files": [
     "dist"

@@ -2,6 +2,7 @@
   "name": "@octogee/test-helpers",
   "version": "1.0.0",
   "private": true,
+  "license": "UNLICENSED",
   "type": "module",
   "main": "dist/firestore-emulator.js",
   "types": "dist/firestore-emulator.d.ts",
