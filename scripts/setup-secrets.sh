@@ -613,21 +613,14 @@ ksecret gateway-model-key-issuer --from-literal=bearer_token="$GATEWAY_MODEL_KEY
 
 # ── 9a2. Ops Agent bearer (octogee-api → octogee-ops-agent) ─────────────
 info "ops-agent-bearer"
-OPS_AGENT_BEARER_TOKEN=$(sm_get "OPS_AGENT_BEARER_TOKEN" "$FIREBASE_PROJECT" 2>/dev/null || echo "")
-if [[ -z "$OPS_AGENT_BEARER_TOKEN" ]]; then
-  OPS_AGENT_BEARER_TOKEN=$(ksecret_key ops-agent-bearer bearer_token)
-  [[ -n "$OPS_AGENT_BEARER_TOKEN" ]] || OPS_AGENT_BEARER_TOKEN=$(openssl rand -hex 32)
-  if echo -n "$OPS_AGENT_BEARER_TOKEN" | gcloud secrets create "OPS_AGENT_BEARER_TOKEN" \
-       --data-file=- --project="$FIREBASE_PROJECT" \
-       --replication-policy=user-managed --locations=us-central1 --quiet 2>/dev/null; then
-    ok "  Created SM secret: OPS_AGENT_BEARER_TOKEN"
-  elif echo -n "$OPS_AGENT_BEARER_TOKEN" | gcloud secrets versions add "OPS_AGENT_BEARER_TOKEN" \
-       --data-file=- --project="$FIREBASE_PROJECT" --quiet >/dev/null; then
-    ok "  Updated SM secret: OPS_AGENT_BEARER_TOKEN"
-  else
-    fail "Could not persist OPS_AGENT_BEARER_TOKEN to Secret Manager ($FIREBASE_PROJECT)"
-  fi
+OPS_AGENT_BEARER_TOKEN="$(configured_secret_value "${OPS_AGENT_BEARER_TOKEN:-}")"
+[[ -n "$OPS_AGENT_BEARER_TOKEN" ]] || OPS_AGENT_BEARER_TOKEN=$(sm_get "OPS_AGENT_BEARER_TOKEN" "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+[[ -n "$OPS_AGENT_BEARER_TOKEN" ]] || OPS_AGENT_BEARER_TOKEN=$(ksecret_key ops-agent-bearer bearer_token)
+[[ -n "$OPS_AGENT_BEARER_TOKEN" ]] || OPS_AGENT_BEARER_TOKEN=$(openssl rand -hex 32)
+if [[ "$ENV" != "custom" ]]; then
+  sync_secret_manager_value OPS_AGENT_BEARER_TOKEN "$OPS_AGENT_BEARER_TOKEN" "$FIREBASE_PROJECT"
 fi
+save_env_file_value "$ENV_FILE" OPS_AGENT_BEARER_TOKEN "$OPS_AGENT_BEARER_TOKEN"
 ksecret ops-agent-bearer --from-literal=bearer_token="$OPS_AGENT_BEARER_TOKEN"
 
 # ── 9a2. Social notification bearer (Cloud Functions → octogee-api /social) ─
