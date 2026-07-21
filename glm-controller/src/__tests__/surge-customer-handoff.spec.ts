@@ -122,7 +122,7 @@ function harness(input: {
 }
 
 describe("surge customer handoff", () => {
-  it("accepts the short build heartbeat for a pinned OpenClaw image tag", async () => {
+  it("rejects the ambiguous short heartbeat for a pinned OpenClaw image tag", async () => {
     const h = harness({
       pods: [{ ...targetPod, ready: true }],
       assignments: [],
@@ -133,7 +133,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "27b966b-oc2026.7.1",
       requiresCustomerMigration: false,
-    })).resolves.toEqual({ ready: true });
+    })).resolves.toEqual({ ready: false });
   });
 
   it("refuses to hand off a user mirror that has no exact assignment document", () => {
