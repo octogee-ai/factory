@@ -205,7 +205,7 @@ async function advanceForward(
   deps: CustomerMigrationV2Deps,
 ): Promise<CustomerMigrationV2State> {
   switch (state.phase) {
-    case "preSynced":
+    case "preSynced": {
       await deps.setSourceAssignmentState("quiescing");
       await deps.client.quiesce({
         migrationId: state.migrationId,
@@ -225,6 +225,7 @@ async function advanceForward(
         phase: "sourceQuiesced",
         sourceSystemConfigCommit: acceptedSystemConfigCommit(flush.systemConfigCommit),
       };
+    }
     case "sourceQuiesced": {
       const expectedSystemConfigCommit = acceptedSystemConfigCommit(
         state.sourceSystemConfigCommit,

@@ -1244,6 +1244,39 @@ function syncPreparedSystemConfig(context: SystemConfigSyncContext): SystemConfi
   );
 }
 
+function convergeExpectedRemoteSystemConfig(
+  slug: string,
+  opts: SystemConfigSyncOptions,
+  context: Pick<SystemConfigSyncContext, "openclawDir" | "repoDir" | "repoConfigPath" | "env" | "execGit" | "keyPath" | "now">,
+): SystemConfigSyncResult | null {
+  if (!opts.expectedRemoteCommit) return null;
+  const convergence = (opts.convergeRemoteCommit ?? convergeSystemConfigToRemoteCommit)({
+    slug,
+    openclawDir: context.openclawDir,
+    repoDir: context.repoDir,
+    configPath: context.repoConfigPath,
+    expectedCommit: opts.expectedRemoteCommit,
+    env: context.env,
+    gitExec: context.execGit,
+    validateConfig: opts.validateConfig ?? validateOpenClawConfig,
+    keyPath: context.keyPath,
+    readCommitBlob: opts.readCommitBlob,
+  });
+  if (convergence.outcome !== "unavailable") return null;
+  if (opts.durablePolicy) {
+    recordSyncError(context.openclawDir, convergence.errorCode, context.now);
+  }
+  (opts.log ?? defaultLog)(
+    `[system_config] ${slug}: migration convergence failed (${convergence.errorCode})`,
+  );
+  return {
+    committed: false,
+    pushed: false,
+    pending: true,
+    errorCode: convergence.errorCode,
+  };
+}
+
 function syncSystemConfigUnlocked(
   slug: string,
   opts: SystemConfigSyncOptions,
@@ -1264,34 +1297,16 @@ function syncSystemConfigUnlocked(
   const keyPath = (opts.customerSshKeyPath ?? customerSshKeyPath)(slug);
   const now = opts.now ?? (() => new Date());
   const env = opts.env ?? process.env;
-  if (opts.expectedRemoteCommit) {
-    const convergence = (opts.convergeRemoteCommit ?? convergeSystemConfigToRemoteCommit)({
-      slug,
-      openclawDir,
-      repoDir,
-      configPath: repoConfigPath,
-      expectedCommit: opts.expectedRemoteCommit,
-      env,
-      gitExec: execGit,
-      validateConfig: opts.validateConfig ?? validateOpenClawConfig,
-      keyPath,
-      readCommitBlob: opts.readCommitBlob,
-    });
-    if (convergence.outcome === "unavailable") {
-      if (opts.durablePolicy) {
-        recordSyncError(openclawDir, convergence.errorCode, now);
-      }
-      (opts.log ?? defaultLog)(
-        `[system_config] ${slug}: migration convergence failed (${convergence.errorCode})`,
-      );
-      return {
-        committed: false,
-        pushed: false,
-        pending: true,
-        errorCode: convergence.errorCode,
-      };
-    }
-  }
+  const convergenceFailure = convergeExpectedRemoteSystemConfig(slug, opts, {
+    openclawDir,
+    repoDir,
+    repoConfigPath,
+    env,
+    execGit,
+    keyPath,
+    now,
+  });
+  if (convergenceFailure) return convergenceFailure;
   return syncPreparedSystemConfig({
     slug,
     opts,

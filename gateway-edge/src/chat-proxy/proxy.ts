@@ -468,6 +468,7 @@ function watchBrokerGatewayIdChange(
   uid: string,
   initialGatewayId: string,
   onChange: (newGatewayId: string | null) => void,
+  intervalMs: number = 30_000,
 ): () => void {
   let fired = false;
   const timer = setInterval(() => {
@@ -490,7 +491,7 @@ function watchBrokerGatewayIdChange(
           }`,
         );
       });
-  }, 30_000);
+  }, intervalMs);
   timer.unref?.();
   return () => clearInterval(timer);
 }
@@ -729,8 +730,13 @@ function handleOpenClawWsUpgrade(
   req: http.IncomingMessage,
   socket: Duplex,
   head: Buffer,
-  upgradeGate: RollRosterUpgradeGate | null = null,
+  options: {
+    upgradeGate: RollRosterUpgradeGate | null;
+    runtimeBroker?: OpenClawRuntimeBroker;
+    gatewayWatchIntervalMs?: number;
+  },
 ): void {
+  const { upgradeGate, runtimeBroker: runtimeBrokerOverride, gatewayWatchIntervalMs } = options;
   const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
   if (!isAllowedWsOrigin(origin)) {
     ocWsHandshakeTotal.inc({ outcome: "fail:origin-rejected" });
@@ -753,7 +759,7 @@ function handleOpenClawWsUpgrade(
 
   (async () => {
     try {
-      const runtimeBroker = getOpenClawRuntimeBroker();
+      const runtimeBroker = runtimeBrokerOverride ?? getOpenClawRuntimeBroker();
       const redeemOutcome = await runtimeBroker.redeemOpenClawWs(ticket);
       if (redeemOutcome.kind === "unauthorized") {
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
@@ -823,6 +829,7 @@ function handleOpenClawWsUpgrade(
               // best-effort
             }
           },
+          gatewayWatchIntervalMs,
         );
 
         clientWs.on("message", (data, isBinary) => {
@@ -917,6 +924,8 @@ export interface AttachChatProxyWsUpgradeOptions {
   // one shared upgrade handler — BEFORE any dispatch, so every current and
   // future upgrade route is covered by construction.
   upgradeGate?: RollRosterUpgradeGate | null;
+  runtimeBroker?: OpenClawRuntimeBroker;
+  gatewayWatchIntervalMs?: number;
 }
 
 // mmUserId → Firebase uid for the roll-roster verdict. The mapping is written
@@ -957,7 +966,17 @@ export function attachChatProxyWsUpgrade(
 
     const urlPath = applyGatewayPrefixStripInPlace(req);
     if (urlPath.startsWith("/api/openclaw/ws/")) {
-      handleOpenClawWsUpgrade(wss, req, socket, head, upgradeGate);
+      handleOpenClawWsUpgrade(
+        wss,
+        req,
+        socket,
+        head,
+        {
+          upgradeGate,
+          runtimeBroker: opts.runtimeBroker,
+          gatewayWatchIntervalMs: opts.gatewayWatchIntervalMs,
+        },
+      );
       return;
     }
     if (urlPath === "/api/v4/websocket") {

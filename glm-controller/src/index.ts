@@ -115,10 +115,7 @@ import {
   verifiedDeletionCompletion,
 } from "./operation-retry.js";
 import { completeOperatorReservationAfterMigration } from "./operator-reservation-completion.js";
-import {
-  createAddGatewayHandler,
-  heartbeatMatchesImageTag,
-} from "./handlers/add-gateway.js";
+import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import {
   claimGatewayRetirementAtomic,
