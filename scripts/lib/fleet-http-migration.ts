@@ -1674,7 +1674,8 @@ export function findPathTraversalViolation(
     if (entry.split("/").includes("..")) {
       return `path traversal '..' in tarball: ${raw}`;
     }
-    const allowed = allowedPrefixes.some((p) => matchesAllowedMigrationPath(raw, entry, p));
+    const allowed = allowedPrefixes.some((p) => matchesAllowedMigrationPath(raw, entry, p)) ||
+      ((mode === "pre" || mode === "final") && raw === "customer-keys/");
     if (!allowed) {
       const allowlist = allowedPrefixes.map((prefix) => prefix.replace(/\/$/u, "")).join(", ");
       return `path '${raw}' is outside the per-slug allowlist (${allowlist})`;

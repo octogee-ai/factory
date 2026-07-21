@@ -1985,6 +1985,15 @@ describe("findPathTraversalViolation", () => {
   });
 
   it.each(["pre", "final"] as const)(
+    "accepts an empty customer-keys parent during %s surge import",
+    (mode) => {
+      expect(findPathTraversalViolation([
+        "customer-keys/",
+      ], slug, mode)).toBeNull();
+    },
+  );
+
+  it.each(["pre", "final"] as const)(
     "rejects pod-local customer keys during %s surge import",
     (mode) => {
       expect(findPathTraversalViolation([
