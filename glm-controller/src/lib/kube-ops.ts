@@ -20,6 +20,10 @@ export interface KubeOps {
     namespace: string;
     gatewayId: string;
   }): Promise<GatewayPodDiagnostics>;
+  readGatewayPodDiagnosticsBatch(opts: {
+    namespace: string;
+    gatewayIds: readonly string[];
+  }): Promise<Record<string, GatewayPodDiagnostics>>;
   deletePersistentVolumeClaim(opts: {
     namespace: string;
     name: string;
@@ -171,9 +175,14 @@ function summarizePodDiagnostics(
   if (!isRecord(parsed) || !Array.isArray(parsed.items)) {
     throw new Error("kubectl get pods returned invalid JSON shape");
   }
-  const pods = parsed.items
-    .filter(isRecord)
-    .map((pod) => projectPodDiagnostic(pod, now));
+  return summarizePodRecords(parsed.items.filter(isRecord), now);
+}
+
+function summarizePodRecords(
+  podRecords: readonly Record<string, unknown>[],
+  now: number,
+): GatewayPodDiagnostics {
+  const pods = podRecords.map((pod) => projectPodDiagnostic(pod, now));
   const totalPods = pods.length;
   const readyPods = pods.filter(
     (pod) =>
@@ -195,6 +204,38 @@ function summarizePodDiagnostics(
     totalRestarts,
     pods,
   };
+}
+
+function gatewayIdForPod(pod: Record<string, unknown>): string | null {
+  const metadata = isRecord(pod.metadata) ? pod.metadata : {};
+  const labels = isRecord(metadata.labels) ? metadata.labels : {};
+  return stringOrNull(labels["gateway-instance"]);
+}
+
+function summarizeGatewayPodDiagnosticsBatch(
+  stdout: string,
+  gatewayIds: readonly string[],
+  now: number,
+): Record<string, GatewayPodDiagnostics> {
+  const parsed = JSON.parse(stdout) as unknown;
+  if (!isRecord(parsed) || !Array.isArray(parsed.items)) {
+    throw new Error("kubectl get pods returned invalid JSON shape");
+  }
+  const requested = new Set(gatewayIds);
+  const podsByGatewayId = new Map<string, Record<string, unknown>[]>();
+  for (const pod of parsed.items.filter(isRecord)) {
+    const gatewayId = gatewayIdForPod(pod);
+    if (!gatewayId || !requested.has(gatewayId)) continue;
+    const pods = podsByGatewayId.get(gatewayId) ?? [];
+    pods.push(pod);
+    podsByGatewayId.set(gatewayId, pods);
+  }
+  return Object.fromEntries(
+    gatewayIds.map((gatewayId) => [
+      gatewayId,
+      summarizePodRecords(podsByGatewayId.get(gatewayId) ?? [], now),
+    ]),
+  );
 }
 
 function unknownPodDiagnostics(error?: string): GatewayPodDiagnostics {
@@ -360,6 +401,40 @@ export function createKubeSubprocessRunner(deps: KubeOpsRunnerDeps): KubeOps {
       return summarizePodDiagnostics(result.stdout, deps.now?.() ?? Date.now());
     },
 
+    async readGatewayPodDiagnosticsBatch({ namespace, gatewayIds }) {
+      const args = [
+        "-n",
+        namespace,
+        "get",
+        "pods",
+        "-l",
+        "app=octogee-gateway",
+        "-o",
+        "json",
+      ];
+      const result = await deps.runKubectl(args);
+      if (result.code !== 0) {
+        if (isNotFound(result.stderr)) {
+          return Object.fromEntries(
+            gatewayIds.map((gatewayId) => [
+              gatewayId,
+              unknownPodDiagnostics("pods not found"),
+            ]),
+          );
+        }
+        throw new Error(
+          `kubectl get gateway pods ns=${namespace} failed (code=${result.code}): ${
+            result.stderr.trim() || result.stdout.trim()
+          }`,
+        );
+      }
+      return summarizeGatewayPodDiagnosticsBatch(
+        result.stdout,
+        gatewayIds,
+        deps.now?.() ?? Date.now(),
+      );
+    },
+
     async deletePersistentVolumeClaim({ namespace, name }) {
       await deleteKubeResource(deps, "pvc", { namespace, name });
     },
@@ -397,6 +472,14 @@ export function createLoggingKubeOps(log: (msg: string) => void): KubeOps {
     readGatewayPodDiagnostics: async ({ namespace, gatewayId }) => {
       log(`[kube-ops:stub] readGatewayPodDiagnostics ns=${namespace} ${gatewayId} — returning unknown`);
       return unknownPodDiagnostics();
+    },
+    readGatewayPodDiagnosticsBatch: async ({ namespace, gatewayIds }) => {
+      log(
+        `[kube-ops:stub] readGatewayPodDiagnosticsBatch ns=${namespace} gateways=${gatewayIds.join(",")} — returning unknown`,
+      );
+      return Object.fromEntries(
+        gatewayIds.map((gatewayId) => [gatewayId, unknownPodDiagnostics()]),
+      );
     },
     deletePersistentVolumeClaim: async ({ namespace, name }) => {
       log(`[kube-ops:stub] delete pvc ns=${namespace} ${name} — no exec`);

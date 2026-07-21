@@ -397,6 +397,77 @@ describe("createKubeSubprocessRunner — readGatewayPodDiagnostics", () => {
       pods: [{ phase: "Pending", reason: "CrashLoopBackOff" }],
     });
   });
+
+  it("reads every gateway's pod diagnostics with one kubectl invocation", async () => {
+    const { runKubectl, calls } = mockSubprocess([
+      {
+        stdout: JSON.stringify({
+          items: [
+            {
+              metadata: {
+                name: "octogee-gateway-alpha-abc",
+                labels: { "gateway-instance": "alpha" },
+              },
+              status: {
+                phase: "Running",
+                containerStatuses: [
+                  { name: "gateway", ready: true, restartCount: 0 },
+                  { name: "gateway-edge", ready: true, restartCount: 0 },
+                ],
+              },
+            },
+            {
+              metadata: {
+                name: "octogee-gateway-bravo-def",
+                labels: { "gateway-instance": "bravo" },
+              },
+              status: {
+                phase: "Pending",
+                containerStatuses: [
+                  {
+                    name: "gateway",
+                    ready: false,
+                    restartCount: 1,
+                    state: { waiting: { reason: "ContainerCreating" } },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      },
+    ]);
+    const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
+
+    const diagnostics = await kube.readGatewayPodDiagnosticsBatch({
+      namespace: "octogee-test",
+      gatewayIds: ["alpha", "bravo", "charlie"],
+    });
+
+    expect(calls).toEqual([
+      [
+        "-n",
+        "octogee-test",
+        "get",
+        "pods",
+        "-l",
+        "app=octogee-gateway",
+        "-o",
+        "json",
+      ],
+    ]);
+    expect(diagnostics).toMatchObject({
+      alpha: { status: "ready", totalPods: 1, readyPods: 1 },
+      bravo: {
+        status: "not-ready",
+        totalPods: 1,
+        readyPods: 0,
+        totalRestarts: 1,
+        pods: [{ reason: "ContainerCreating" }],
+      },
+      charlie: { status: "missing", totalPods: 0, readyPods: 0 },
+    });
+  });
 });
 
 describe("createKubeSubprocessRunner — deletePersistentVolumeClaim", () => {

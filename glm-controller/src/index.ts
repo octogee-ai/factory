@@ -1745,6 +1745,8 @@ function startControllerBackgroundTasks({
       ? {
           readGatewayPodDiagnostics: (gatewayId: string) =>
             httpKubeOps.readGatewayPodDiagnostics({ namespace: NAMESPACE, gatewayId }),
+          readGatewayPodDiagnosticsBatch: (gatewayIds: readonly string[]) =>
+            httpKubeOps.readGatewayPodDiagnosticsBatch({ namespace: NAMESPACE, gatewayIds }),
         }
       : {}),
     suspendAuthUser: (uid) => disableAuthUserAndRevokeSessions(uid, getAuth()),

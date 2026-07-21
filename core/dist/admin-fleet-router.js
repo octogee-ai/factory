@@ -1686,6 +1686,34 @@ async function projectGatewaySummaryWithDiagnostics(deps, doc, glmDoc, now) {
         };
     }
 }
+function unknownGatewayPodDiagnostics(error) {
+    return {
+        status: "unknown",
+        totalPods: 0,
+        readyPods: 0,
+        totalRestarts: 0,
+        pods: [],
+        error,
+    };
+}
+async function projectGatewaySummariesWithDiagnostics(deps, summaries, readBatch) {
+    try {
+        const diagnostics = await readBatch(summaries.map((summary) => summary.gatewayId));
+        return summaries.map((summary) => ({
+            ...summary,
+            podDiagnostics: diagnostics[summary.gatewayId] ??
+                unknownGatewayPodDiagnostics("gateway missing from batched pod diagnostics"),
+        }));
+    }
+    catch (error) {
+        const message = error?.message ?? String(error);
+        deps.logger.warn("gateway pod diagnostics batch failed", { error: message });
+        return summaries.map((summary) => ({
+            ...summary,
+            podDiagnostics: unknownGatewayPodDiagnostics(message),
+        }));
+    }
+}
 function operationGatewayId(input) {
     for (const field of ["gatewayId", "toGatewayId", "fromGatewayId"]) {
         const value = input[field];
@@ -2744,17 +2772,20 @@ export function addAdminFleetRoutes(router, deps) {
             });
             const gatewayIds = new Set(glmByGatewayId.keys());
             const now = Date.now();
-            const gateways = await Promise.all([...gatewayIds].flatMap((gatewayId) => {
+            const gatewayInputs = [...gatewayIds].flatMap((gatewayId) => {
                 const glmDoc = glmByGatewayId.get(gatewayId);
                 if (projectDesiredStatus(glmDoc) === "retired")
                     return [];
                 const doc = effectiveHeartbeatDoc(gatewayId, glmDoc);
                 if (!doc && !shouldProjectDesiredOnlyGateway(glmDoc))
                     return [];
-                return [
-                    projectGatewaySummaryWithDiagnostics(deps, doc ?? syntheticGatewayDoc(gatewayId), glmDoc, now),
-                ];
-            }));
+                return [{ doc: doc ?? syntheticGatewayDoc(gatewayId), glmDoc }];
+            });
+            const summaries = gatewayInputs.map(({ doc, glmDoc }) => projectGatewaySummary(doc, glmDoc, now));
+            const readBatch = deps.readGatewayPodDiagnosticsBatch;
+            const gateways = readBatch
+                ? await projectGatewaySummariesWithDiagnostics(deps, summaries, readBatch)
+                : await Promise.all(gatewayInputs.map(({ doc, glmDoc }) => projectGatewaySummaryWithDiagnostics(deps, doc, glmDoc, now)));
             res.json({
                 gateways,
                 stats: rollupFleetStats(gateways),
