@@ -1030,12 +1030,35 @@ export async function rollbackAgentImportRepository(options: {
   return { rollbackCommit };
 }
 
+function readAgentImportSecretReport(reportPath: string): unknown {
+  let report: string;
+  try {
+    const stat = fs.lstatSync(reportPath);
+    if (!stat.isFile()) {
+      throw new AgentImportGitError("secret_scan_failed", "secret scanner returned no valid report");
+    }
+    if (stat.size > MAX_SECRET_REPORT_BYTES) {
+      throw new AgentImportGitError("secret_findings", "source repository contains too many credential-like findings");
+    }
+    report = fs.readFileSync(reportPath, "utf8");
+  } catch (error) {
+    if (error instanceof AgentImportGitError) throw error;
+    throw new AgentImportGitError("secret_scan_failed", "secret scanner returned no valid report");
+  }
+  try {
+    return JSON.parse(report);
+  } catch {
+    throw new AgentImportGitError("secret_scan_failed", "secret scanner returned no valid report");
+  }
+}
+
 export async function scanAgentImportSecrets(
   repoDir: string,
   options: { currentOnly?: boolean; run?: CommandRunner; configPath?: string } = {},
 ): Promise<AgentImportSecretFinding[]> {
   const reportDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-agent-import-scan-"));
   const ignorePath = path.join(reportDir, "trusted-empty-ignore");
+  const reportPath = path.join(reportDir, "report.json");
   try {
     fs.writeFileSync(ignorePath, "", { mode: 0o600 });
     const args = [
@@ -1046,7 +1069,7 @@ export async function scanAgentImportSecrets(
       "--ignore-gitleaks-allow",
       "--redact",
       "--report-format", "json",
-      "--report-path", "/dev/stdout",
+      "--report-path", reportPath,
       "--exit-code", "1",
       ...(options.currentOnly ? ["--no-git"] : []),
     ];
@@ -1064,15 +1087,7 @@ export async function scanAgentImportSecrets(
       throw new AgentImportGitError("secret_scan_failed", "secret scanner failed closed");
     }
     if (result.status === 0) return [];
-    if (Buffer.byteLength(result.stdout) > MAX_SECRET_REPORT_BYTES) {
-      throw new AgentImportGitError("secret_findings", "source repository contains too many credential-like findings");
-    }
-    let raw: unknown;
-    try {
-      raw = JSON.parse(result.stdout);
-    } catch {
-      throw new AgentImportGitError("secret_scan_failed", "secret scanner returned no valid report");
-    }
+    const raw = readAgentImportSecretReport(reportPath);
     if (!Array.isArray(raw)) {
       throw new AgentImportGitError("secret_scan_failed", "secret scanner report is invalid");
     }
