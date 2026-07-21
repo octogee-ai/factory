@@ -93,4 +93,5 @@ export declare function upsertMattermostBindingByAgentAndPeer(bindings: AgentBin
 export declare function wireCoachMattermostBindings(config: OpenclawConfigShape, coachAgentId: string, slug: string, mmUpdate: MmUpdate): void;
 export declare function wireCoachMattermostAccount(config: OpenclawConfigShape, slug: string, mmUpdate: MmUpdate): void;
 export declare function markProvisioningComplete(ctx: ProvisioningContext, mmUpdate: MmUpdate, allAgentIds: string[]): Promise<void>;
+export declare function buildUserOperationalFields(ctx: ProvisioningContext, provisioningObj: Record<string, unknown>, mmUpdate: MmUpdate): Record<string, unknown>;
 export declare function notifyOpsOfSignup(ctx: ProvisioningContext): Promise<void>;

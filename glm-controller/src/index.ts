@@ -115,7 +115,10 @@ import {
   verifiedDeletionCompletion,
 } from "./operation-retry.js";
 import { completeOperatorReservationAfterMigration } from "./operator-reservation-completion.js";
-import { createAddGatewayHandler } from "./handlers/add-gateway.js";
+import {
+  createAddGatewayHandler,
+  heartbeatMatchesImageTag,
+} from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import {
   claimGatewayRetirementAtomic,
@@ -190,6 +193,10 @@ import {
   writeSecret,
 } from "@octogee/core/secret-manager";
 import { listGatewayBuilds } from "@octogee/core/artifact-registry";
+import {
+  deploymentEnvironmentForNamespace,
+  deploymentEnvironmentSettings,
+} from "@octogee/core/deployment-environment";
 import { reconcileImagePins } from "./reconcile-image-pins.js";
 import { workspaceSlugsForUser } from "@octogee/core/workspace-slugs";
 import {
@@ -269,17 +276,18 @@ const MAINTENANCE_GATE_POLL_MS = 5_000;
 
 const GATEWAY_CHART = process.env.GATEWAY_CHART ?? "/charts/octogee-gateway";
 const ORCHESTRATOR_CONFIG_DOC_PATH = "config/orchestrator";
+const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
+const RESOLVED_ENVIRONMENT = deploymentEnvironmentForNamespace(NAMESPACE);
+const ENVIRONMENT_SETTINGS = deploymentEnvironmentSettings(
+  RESOLVED_ENVIRONMENT === "unknown" ? "test" : RESOLVED_ENVIRONMENT,
+);
 
 const GATEWAY_VALUES_FILE = (function () {
   const explicit = process.env.GATEWAY_VALUES_FILE;
   if (explicit) return explicit;
-  const ns = process.env.K8S_NAMESPACE ?? "octogee";
-  return ns === "octogee"
-    ? `${GATEWAY_CHART}/values.prod.yaml`
-    : `${GATEWAY_CHART}/values.test.yaml`;
+  return `${GATEWAY_CHART}/${ENVIRONMENT_SETTINGS.gatewayValuesFile}`;
 })();
-const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
-const PIN_ENV = NAMESPACE === "octogee" ? "prod" : "test";
+const PIN_ENV = ENVIRONMENT_SETTINGS.pinEnvironment;
 
 const AUTO_ROLL_ON_CHART_DRIFT = NAMESPACE !== "octogee";
 const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";

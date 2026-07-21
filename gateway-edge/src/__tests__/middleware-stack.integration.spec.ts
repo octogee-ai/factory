@@ -95,6 +95,18 @@ describe('gateway-edge middleware stack', () => {
     expect(res.headers['access-control-allow-origin']).toBe('https://octogee.web.app');
   });
 
+  it('allows the isolated Build Week app origin', async () => {
+    const app = createSidecarApp();
+    const res = await request(app)
+      .get('/health')
+      .set('Origin', 'https://app-octogee-build-week.web.app');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['access-control-allow-origin']).toBe(
+      'https://app-octogee-build-week.web.app',
+    );
+  });
+
   it('exposes metrics endpoint', async () => {
     const app = createSidecarApp();
     const res = await request(app).get('/metrics');

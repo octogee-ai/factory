@@ -1,5 +1,6 @@
 import { FieldValue, } from "firebase-admin/firestore";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, OPERATOR_GATEWAY_RESERVATIONS_COLLECTION, defaultOperatorGatewayAccess, resolveUserGatewayShellState, OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT, isValidNewGatewayId, isGatewayClass, isGatewayProfile, operatorGatewayServiceAccountName, resolveGatewayClass, resolveGatewayImageProfile, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
+import { deploymentEnvironmentForNamespace, deploymentEnvironmentSettings, } from "./deployment-environment.js";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
 import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 import { builderGatewayIdForSlug } from "@octogee/shared/types/builder-gateway-id";
@@ -781,9 +782,10 @@ function projectGatewayStorage(_gatewayId, _glmDoc) {
     return emptyDirGatewayStorage();
 }
 function gatewayComputeClassBase() {
-    return resolveFleetNamespace() === "octogee-test"
-        ? "octogee-gateway-test"
-        : "octogee-gateway";
+    const environment = deploymentEnvironmentForNamespace(resolveFleetNamespace());
+    return environment === "unknown"
+        ? deploymentEnvironmentSettings("prod").computeClass
+        : deploymentEnvironmentSettings(environment).computeClass;
 }
 export function projectGatewayReservation(glmDoc) {
     const explicitComputeClass = typeof glmDoc?.computeClass === "string" && glmDoc.computeClass.length > 0

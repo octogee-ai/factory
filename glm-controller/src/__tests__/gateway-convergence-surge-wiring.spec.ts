@@ -45,6 +45,15 @@ describe("gateway convergence surge wiring", () => {
       ownerlessOperatorPrewarm: false,
     });
 
+    await expect(refineGatewayConvergenceAction({
+      passDeps: { reconcileSurgeHandoff },
+      gateway: gateway(),
+      artifact,
+      runtime: runtime("def5678-oc2026.7.1"),
+      helmObserved: { imageRepository: repository, imageTag: artifact.imageTag, replicas: 1 },
+      action: { kind: "steady" },
+    })).resolves.toEqual({ kind: "mark-live" });
+
     reconcileSurgeHandoff.mockResolvedValueOnce({ ready: false });
     await expect(refineGatewayConvergenceAction({
       passDeps: { reconcileSurgeHandoff },

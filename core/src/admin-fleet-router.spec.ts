@@ -41,6 +41,13 @@ describe("projectGatewayReservation — Spot is the default for every class", ()
     expect(r.type).toBe("spot");
     expect(r.computeClass).toBe("octogee-gateway-test-spot");
   });
+
+  it("Build Week gateways resolve their isolated spot class", () => {
+    vi.stubEnv("K8S_NAMESPACE", "octogee-build-week");
+    const r = projectGatewayReservation({ profile: "operator", gatewayClass: "operator" });
+    expect(r.type).toBe("spot");
+    expect(r.computeClass).toBe("octogee-gateway-build-week-spot");
+  });
 });
 
 // Step 1 of the Fleet regroup (GATEWAY-RELEASES-SPEC): every row projects its

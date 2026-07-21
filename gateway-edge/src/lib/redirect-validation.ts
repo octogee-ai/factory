@@ -1,13 +1,7 @@
 import { isAllowedLocalhostHostname } from "./dev-origins.js";
+import { publicAppHosts } from "@octogee/core/deployment-environment";
 
-const ALLOWED_HOSTS = new Set([
-  "octogee.com",
-  "www.octogee.com",
-  "octogee.web.app",
-  "octogee-test.web.app",
-  "octogee.firebaseapp.com",
-  "octogee-test.firebaseapp.com",
-]);
+const ALLOWED_HOSTS = new Set(publicAppHosts());
 
 export function sanitizeReturnUrl(
   returnUrl: string | undefined,

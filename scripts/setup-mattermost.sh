@@ -42,14 +42,14 @@ for arg in "$@"; do
     --namespace=*) CUSTOM_NS="${arg#*=}" ;;
     --yes|-y)      YES=true ;;
     --help|-h)
-      echo "Usage: $0 --env=prod|test|custom [--namespace=NAME] [--yes]"
+      echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--yes]"
       exit 0
       ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
 
-[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|custom [--namespace=NAME] [--yes]"; exit 1; }
+[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--yes]"; exit 1; }
 
 case "$ENV" in
   prod)
@@ -72,6 +72,17 @@ case "$ENV" in
     ENV_FILE="$REPO_DIR/.env.test"
     ENV_LABEL="🟡 TEST"
     MM_DB_NAME="mattermost_test"
+    MM_DB_USER="mattermost"
+    ;;
+  build-week)
+    K8S_NAMESPACE="octogee-build-week"
+    GCP_PROJECT="octogee-build-week"
+    CLUSTER_PROJECT="octogee"
+    CLUSTER_NAME="octogee-gateway"
+    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
+    ENV_FILE="$REPO_DIR/.env.build-week"
+    ENV_LABEL="🟣 BUILD WEEK"
+    MM_DB_NAME="mattermost_build_week"
     MM_DB_USER="mattermost"
     ;;
   custom)
@@ -129,18 +140,85 @@ ksecret_key() {
 }
 
 mm_field() {
-  local response="$1" field="$2"
-  echo "$response" | python3 -c '
+  local response="$1" field="$2" json_file value
+  json_file=$(mktemp)
+  chmod 600 "$json_file"
+  printf '%s' "$response" > "$json_file"
+  if ! value=$(python3 -c '
 import sys, json
 field = sys.argv[1]
 try:
-    r = json.load(sys.stdin)
+    with open(sys.argv[2], encoding="utf-8") as source:
+        r = json.load(source)
 except Exception:
     sys.exit(1)
 if isinstance(r, dict) and isinstance(r.get("status_code"), int) and r["status_code"] >= 400:
     sys.exit(1)
 print(r.get(field, "") if isinstance(r, dict) else "")
-' "$field" 2>/dev/null
+' "$field" "$json_file" 2>/dev/null); then
+    rm -f "$json_file"
+    return 1
+  fi
+  rm -f "$json_file"
+  printf '%s\n' "$value"
+}
+
+mm_gateway_pat_ids() {
+  local response="$1" json_file value
+  json_file=$(mktemp)
+  chmod 600 "$json_file"
+  printf '%s' "$response" > "$json_file"
+  if ! value=$(python3 -c '
+import sys, json
+with open(sys.argv[1], encoding="utf-8") as source:
+    tokens = json.load(source)
+for token in tokens:
+    if "gateway-edge" in token.get("description", ""):
+        print(token["id"])
+' "$json_file" 2>/dev/null); then
+    rm -f "$json_file"
+    return 1
+  fi
+  rm -f "$json_file"
+  printf '%s\n' "$value"
+}
+
+mm_pat_is_valid() {
+  local token="$1" expected_user_id="$2" response user_id
+  [[ -n "$token" && -n "$expected_user_id" ]] || return 1
+  response=$(curl -s "http://localhost:8065/api/v4/users/me" \
+    -H "Authorization: Bearer $token" 2>/dev/null || true)
+  user_id=$(mm_field "$response" id || true)
+  [[ "$user_id" == "$expected_user_id" ]]
+}
+
+ensure_mm_team() {
+  local response team_id membership membership_user_id
+  response=$(curl -s "http://localhost:8065/api/v4/teams/name/octogee" \
+    -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null || true)
+  team_id=$(mm_field "$response" id || true)
+  if [[ -z "$team_id" ]]; then
+    response=$(curl -s -X POST "http://localhost:8065/api/v4/teams" \
+      -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{"name":"octogee","display_name":"Octogee","type":"I"}' 2>/dev/null)
+    team_id=$(mm_field "$response" id || true)
+    [[ -n "$team_id" ]] || fail "Failed to create team: $response"
+    ok "Team created: $team_id"
+  else
+    ok "Team discovered: $team_id"
+  fi
+
+  MM_TEAM_ID="$team_id"
+  save_env "MM_TEAM_ID" "$MM_TEAM_ID"
+  curl -s -X POST "http://localhost:8065/api/v4/teams/$MM_TEAM_ID/members" \
+    -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"team_id\":\"$MM_TEAM_ID\",\"user_id\":\"$MM_ADMIN_USER_ID\"}" >/dev/null 2>&1 || true
+  membership=$(curl -s "http://localhost:8065/api/v4/teams/$MM_TEAM_ID/members/$MM_ADMIN_USER_ID" \
+    -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null || true)
+  membership_user_id=$(mm_field "$membership" user_id || true)
+  [[ "$membership_user_id" == "$MM_ADMIN_USER_ID" ]] || fail "Admin team membership verification failed"
 }
 
 load_env() {
@@ -334,13 +412,7 @@ if [[ "$ADMIN_CHECK" == "200" ]]; then
     EXISTING_PATS=$(\
       curl -s "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens" \
       -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null)
-    OLD_PAT_IDS=$(echo "$EXISTING_PATS" | python3 -c "
-import sys, json
-tokens = json.load(sys.stdin)
-for t in tokens:
-    if 'gateway-edge' in t.get('description', ''):
-        print(t['id'])
-" 2>/dev/null || echo "")
+    OLD_PAT_IDS=$(mm_gateway_pat_ids "$EXISTING_PATS" || true)
     REVOKED=0
     for pat_id in $OLD_PAT_IDS; do
       \
@@ -367,18 +439,8 @@ for t in tokens:
     fi
   fi
 
-  # ── Discover existing team (may be missing from env/secret) ──────────────
   info "Discovering team state..."
-  TEAM_RESP=$(curl -s "http://localhost:8065/api/v4/teams/name/octogee" \
-    -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null)
-  TEAM_ID_FROM_API=$(mm_field "$TEAM_RESP" id || true)
-  if [[ -n "$TEAM_ID_FROM_API" ]]; then
-    MM_TEAM_ID="$TEAM_ID_FROM_API"
-    save_env "MM_TEAM_ID" "$MM_TEAM_ID"
-    ok "Team discovered: $MM_TEAM_ID"
-  else
-    warn "Could not discover Octogee team — MM_TEAM_ID will be empty"
-  fi
+  ensure_mm_team
 
 else
   info "Fresh Mattermost — bootstrapping admin via mmctl --local..."
@@ -410,16 +472,7 @@ else
   save_env "MM_ADMIN_USER_ID" "$MM_ADMIN_USER_ID"
   ok "Admin ID: $MM_ADMIN_USER_ID"
 
-  # Team
-  TEAM_RESP=$(\
-    curl -s -X POST "http://localhost:8065/api/v4/teams" \
-    -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d '{"name":"octogee","display_name":"Octogee","type":"I"}' 2>/dev/null)
-  MM_TEAM_ID=$(mm_field "$TEAM_RESP" id) && [[ -n "$MM_TEAM_ID" ]] \
-    || fail "Failed to create team: $TEAM_RESP"
-  save_env "MM_TEAM_ID" "$MM_TEAM_ID"
-  ok "Team created: $MM_TEAM_ID"
+  ensure_mm_team
 
   # Enable bots + personal access tokens
   \
@@ -428,14 +481,6 @@ else
     -H "Content-Type: application/json" \
     -d '{"ServiceSettings":{"EnableBotAccountCreation":true,"EnableUserAccessTokens":true}}' >/dev/null 2>&1
   ok "Bot accounts + PATs enabled"
-
-  # Add admin to team
-  \
-    curl -s -X POST "http://localhost:8065/api/v4/teams/$MM_TEAM_ID/members" \
-    -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{\"team_id\":\"$MM_TEAM_ID\",\"user_id\":\"$MM_ADMIN_USER_ID\"}" >/dev/null 2>&1
-  ok "Admin added to team"
 
   # Admin personal access token (PAT) for the platform API and controller
   info "Creating platform admin personal access token (PAT)..."

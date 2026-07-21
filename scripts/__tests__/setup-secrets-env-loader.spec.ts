@@ -311,6 +311,21 @@ describe("setup-secrets env loader", () => {
     }
   });
 
+  it("materializes the default gateway auth secret for Build Week", () => {
+    const setup = readFileSync(setupSecretsPath, "utf-8");
+
+    expect(setup).toContain('build-week) GATEWAY_IDS=("default")');
+  });
+
+  it("syncs configured Cloud Functions values instead of preserving placeholder secret versions", () => {
+    const setup = readFileSync(setupSecretsPath, "utf-8");
+
+    expect(setup).toContain("function_secret_value()");
+    expect(setup).toContain('GITEA_TOKEN) configured_secret_value "${GIT_API_TOKEN:-}"');
+    expect(setup).toContain('sync_function_secret "$sm_secret" "$function_value"');
+    expect(setup).toContain('gcloud secrets versions add "$secret"');
+  });
+
   it("documents all server-only Google OAuth values as blank placeholders", () => {
     const example = readFileSync(envExamplePath, "utf-8");
 

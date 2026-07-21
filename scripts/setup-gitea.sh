@@ -16,6 +16,7 @@ set -euo pipefail
 # Usage:
 #   ./scripts/setup-gitea.sh --env=test [--yes]
 #   ./scripts/setup-gitea.sh --env=prod
+#   ./scripts/setup-gitea.sh --env=build-week
 # ═══════════════════════════════════════════════════════════════════════════
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -39,14 +40,14 @@ for arg in "$@"; do
     --namespace=*) CUSTOM_NS="${arg#*=}" ;;
     --yes|-y)      YES=true ;;
     --help|-h)
-      echo "Usage: $0 --env=prod|test|custom [--namespace=NAME] [--yes]"
+      echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--yes]"
       exit 0
       ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
 
-[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|custom [--namespace=NAME] [--yes]"; exit 1; }
+[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--yes]"; exit 1; }
 
 case "$ENV" in
   prod)
@@ -67,6 +68,16 @@ case "$ENV" in
     K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
     ENV_FILE="$REPO_DIR/.env.test"
     ENV_LABEL="🟡 TEST"
+    GITEA_SVC="octogee-gitea-http"
+    ;;
+  build-week)
+    K8S_NAMESPACE="octogee-build-week"
+    GCP_PROJECT="octogee-build-week"
+    CLUSTER_PROJECT="octogee"
+    CLUSTER_NAME="octogee-gateway"
+    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
+    ENV_FILE="$REPO_DIR/.env.build-week"
+    ENV_LABEL="🟣 BUILD WEEK"
     GITEA_SVC="octogee-gitea-http"
     ;;
   custom)

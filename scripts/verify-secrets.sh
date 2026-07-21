@@ -42,12 +42,12 @@ for arg in "$@"; do
     --env=*)       ENV="${arg#*=}" ;;
     --namespace=*) CUSTOM_NS="${arg#*=}" ;;
     --context=*)   KUBE_CTX="${arg#*=}" ;;
-    --help|-h)     echo "Usage: $0 --env=prod|test|custom [--namespace=NAME] [--context=<kube-context>]"; exit 0 ;;
+    --help|-h)     echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--context=<kube-context>]"; exit 0 ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
 
-[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|custom [--namespace=NAME]"; exit 1; }
+[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME]"; exit 1; }
 
 case "$ENV" in
   prod)
@@ -56,6 +56,10 @@ case "$ENV" in
     ;;
   test)
     NS="octogee-test"
+    [[ -z "$KUBE_CTX" ]] && KUBE_CTX="gke_octogee_us-central1_octogee-gateway"
+    ;;
+  build-week)
+    NS="octogee-build-week"
     [[ -z "$KUBE_CTX" ]] && KUBE_CTX="gke_octogee_us-central1_octogee-gateway"
     ;;
   custom)

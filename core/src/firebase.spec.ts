@@ -66,6 +66,15 @@ describe("core firebase bootstrap", () => {
     expect(mocks.getFirestore).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves the isolated Build Week Firebase project", async () => {
+    vi.stubEnv("FIREBASE_PROJECT_ID", "octogee-build-week");
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const { module } = await loadFirebase([{ name: "existing" }]);
+
+    expect(module.OCTOGEE_ENV).toBe("build-week");
+  });
+
   it("omits projectId so firebase-admin auto-resolves when no project env is set", async () => {
     vi.stubEnv("FIREBASE_PROJECT_ID", "");
     vi.stubEnv("GCLOUD_PROJECT", "");

@@ -8,6 +8,7 @@ import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 import { Registry, Counter, Gauge, Histogram } from "prom-client";
 import { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
+import { publicAppOrigins } from "@octogee/core/deployment-environment";
 import { openUpstream, OpenclawWireError } from "./openclaw/upstream.js";
 import { getOpenClawDeviceIdentity } from "./openclaw/device-identity.js";
 import {
@@ -540,19 +541,7 @@ export async function verifyAuth(req: http.IncomingMessage): Promise<string | nu
   }
 }
 
-const ALLOWED_ORIGINS = new Set([
-  "https://octogee.web.app",
-  "https://octogee-test.web.app",
-  "https://app-octogee.web.app",
-  "https://app-octogee-test.web.app",
-  "https://octogee.firebaseapp.com",
-  "https://octogee-test.firebaseapp.com",
-  "https://app-octogee.firebaseapp.com",
-  "https://app-octogee-test.firebaseapp.com",
-  "https://octogee.com",
-  "https://www.octogee.com",
-  "https://app.octogee.com",
-]);
+const ALLOWED_ORIGINS = new Set(publicAppOrigins());
 
 function isAllowedOrigin(origin: string): boolean {
   return ALLOWED_ORIGINS.has(origin) || isAllowedLocalhostOrigin(origin);

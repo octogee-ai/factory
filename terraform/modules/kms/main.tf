@@ -60,7 +60,7 @@ resource "google_kms_crypto_key_iam_member" "workspace_api_encdec" {
 # only by an audited recovery script). Empty by default — append only
 # when a use case is justified by an audit trail.
 resource "google_kms_crypto_key_iam_member" "extra_decrypters" {
-  for_each      = toset(var.additional_decrypter_sas)
+  for_each      = { for index, email in var.additional_decrypter_sas : tostring(index) => email }
   crypto_key_id = google_kms_crypto_key.creds_at_rest.id
   role          = "roles/cloudkms.cryptoKeyDecrypter"
   member        = "serviceAccount:${each.value}"

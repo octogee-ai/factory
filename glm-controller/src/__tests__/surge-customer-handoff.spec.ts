@@ -122,6 +122,20 @@ function harness(input: {
 }
 
 describe("surge customer handoff", () => {
+  it("accepts the short build heartbeat for a pinned OpenClaw image tag", async () => {
+    const h = harness({
+      pods: [{ ...targetPod, ready: true }],
+      assignments: [],
+      targetVersion: "27b966b",
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "27b966b-oc2026.7.1",
+      requiresCustomerMigration: false,
+    })).resolves.toEqual({ ready: true });
+  });
+
   it("refuses to hand off a user mirror that has no exact assignment document", () => {
     expect(() => assertSurgeAssignmentCoverage(
       [assignment("u1", "alice")],

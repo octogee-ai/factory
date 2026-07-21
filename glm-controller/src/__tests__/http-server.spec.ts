@@ -450,6 +450,17 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(res.headers["vary"]).toContain("Origin");
   });
 
+  it("sets CORS headers for the isolated Build Week app", async () => {
+    const app = createHttpServer(buildDeps(store));
+    const res = await request(app)
+      .get("/healthz")
+      .set("Origin", "https://app-octogee-build-week.web.app");
+    expect(res.status).toBe(200);
+    expect(res.headers["access-control-allow-origin"]).toBe(
+      "https://app-octogee-build-week.web.app",
+    );
+  });
+
   it("answers OPTIONS preflight with 204 + CORS headers (no auth needed)", async () => {
     const app = createHttpServer(buildDeps(store));
     const res = await request(app)

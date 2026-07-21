@@ -279,9 +279,10 @@ async function writeSystemConfig(ctx) {
     }
     await db.doc(`users/${ctx.uid}/system/config`).set(systemConfigData, { merge: true });
 }
-async function writeUserOperationalFields(ctx, provisioningObj, mmUpdate) {
+export function buildUserOperationalFields(ctx, provisioningObj, mmUpdate) {
     const operationalFields = {
         tier: ctx.tier,
+        workspaceId: ctx.slug,
     };
     for (const [key, value] of Object.entries(provisioningObj)) {
         if (key === "status")
@@ -293,6 +294,10 @@ async function writeUserOperationalFields(ctx, provisioningObj, mmUpdate) {
             operationalFields[key] = value;
         }
     }
+    return operationalFields;
+}
+async function writeUserOperationalFields(ctx, provisioningObj, mmUpdate) {
+    const operationalFields = buildUserOperationalFields(ctx, provisioningObj, mmUpdate);
     await db.collection("users").doc(ctx.uid).update(operationalFields);
 }
 async function writeWorkspaceDoc(ctx, mmUpdate) {

@@ -71,14 +71,14 @@ for arg in "$@"; do
     --namespace=*) CUSTOM_NS="${arg#*=}" ;;
     --fix)         FIX=true ;;
     --help|-h)
-      echo "Usage: $0 --env=prod|test|custom [--namespace=NAME] [--fix]"
+      echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--fix]"
       exit 0 ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
 
 if [[ -z "$ENV" ]]; then
-  echo "Usage: $0 --env=prod|test|custom [--namespace=NAME] [--fix]"
+  echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--fix]"
   exit 1
 fi
 
@@ -110,6 +110,19 @@ case "$ENV" in
     AR_IMAGE_BASE="us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway"
     CF_SAMPLE="onSignup"
     ;;
+  build-week)
+    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
+    CLUSTER_NAME="octogee-gateway"
+    CLUSTER_PROJECT="octogee"
+    NAMESPACE="octogee-build-week"
+    GCP_PROJECT="octogee-build-week"
+    FIREBASE_PROJECT="octogee-build-week"
+    SITE_URL="https://octogee-build-week.web.app"
+    ENV_LABEL="🟣 BUILD WEEK"
+    ENV_COLOR="$BLUE"
+    AR_IMAGE_BASE="us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway"
+    CF_SAMPLE="onSignup"
+    ;;
   custom)
     [[ -z "$CUSTOM_NS" ]] && { echo "--env=custom requires --namespace=NAME"; exit 1; }
     [[ "$CUSTOM_NS" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || { echo "Invalid namespace '$CUSTOM_NS'"; exit 1; }
@@ -126,7 +139,7 @@ case "$ENV" in
     CF_SAMPLE="onSignup"
     ;;
   *)
-    echo "Unknown environment: $ENV (use prod, test, or custom)"
+    echo "Unknown environment: $ENV (use prod, test, build-week, or custom)"
     exit 1 ;;
 esac
 
@@ -480,7 +493,7 @@ fi
 set_section infra
 header "5f. Fleet-control signing keypair"
 
-if [[ "$NAMESPACE" != "octogee" && "$NAMESPACE" != "octogee-test" ]]; then
+if [[ "$NAMESPACE" != "octogee" && "$NAMESPACE" != "octogee-test" && "$NAMESPACE" != "octogee-build-week" ]]; then
   warn "Unknown namespace '$NAMESPACE' — skipping fleet-control secret checks"
 else
 
@@ -714,21 +727,21 @@ header "8b. Orchestrator Config"
 if [[ "$ENV" == "custom" ]]; then
   info "Custom namespaces don't use config/orchestrator — skipping"
 else
-  ORCH_OUTPUT=$( (cd "$REPO_DIR/scripts" && npx tsx ops/seed-orchestrator-config.ts --env="$ENV" --dry-run) 2>&1 || true)
+  ORCH_OUTPUT=$(node "$REPO_DIR/scripts/node_modules/tsx/dist/cli.mjs" "$REPO_DIR/scripts/ops/seed-orchestrator-config.ts" --env="$ENV" --dry-run 2>&1 || true)
   if echo "$ORCH_OUTPUT" | grep -q "already seeded"; then
     pass "config/orchestrator.defaultGatewayId = default (matches expected)"
   elif echo "$ORCH_OUTPUT" | grep -q "(DRY-RUN) seeding"; then
     fail "config/orchestrator missing — every new signup will stall with reason 'config-missing'"
     if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} (cd scripts && npx tsx ops/seed-orchestrator-config.ts --env=$ENV)"
-      echo -e "  ${YELLOW}     ${NC} then re-fire any pending placements: (cd scripts && npx tsx ops/assign-customer-gateway.ts --env=$ENV --all)"
+      echo -e "  ${YELLOW}FIX:${NC} node scripts/node_modules/tsx/dist/cli.mjs scripts/ops/seed-orchestrator-config.ts --env=$ENV"
+      echo -e "  ${YELLOW}     ${NC} then re-fire pending placements with the same tsx CLI and scripts/ops/assign-customer-gateway.ts --env=$ENV --all"
     fi
   elif echo "$ORCH_OUTPUT" | grep -q "OVERWRITING\|Refusing to overwrite"; then
     DRIFT_LINE=$(echo "$ORCH_OUTPUT" | grep -E "Refusing|OVERWRITING" | head -1)
     fail "config/orchestrator drift: $DRIFT_LINE"
     if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} review: (cd scripts && npx tsx ops/seed-orchestrator-config.ts --env=$ENV --dry-run)"
-      echo -e "  ${YELLOW}     ${NC} overwrite if intentional: (cd scripts && npx tsx ops/seed-orchestrator-config.ts --env=$ENV --force)"
+      echo -e "  ${YELLOW}FIX:${NC} review with node scripts/node_modules/tsx/dist/cli.mjs scripts/ops/seed-orchestrator-config.ts --env=$ENV --dry-run"
+      echo -e "  ${YELLOW}     ${NC} overwrite if intentional by replacing --dry-run with --force"
     fi
   elif echo "$ORCH_OUTPUT" | grep -q "SA key not found"; then
     warn "Cannot verify orchestrator config — SA key not found at ~/.openclaw/secrets/octogee*-sa-key.json"

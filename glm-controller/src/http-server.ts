@@ -2,6 +2,7 @@
 
 import express, { Router, type Express, type Request, type Response, type NextFunction } from "express";
 import type { Server } from "node:http";
+import { publicAppOrigins } from "@octogee/core/deployment-environment";
 import { renderMetrics } from "./metrics.js";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import {
@@ -23,19 +24,7 @@ import {
   type RequireAdminDeps,
 } from "./middleware/auth.js";
 
-const ALLOWED_ORIGINS = new Set([
-  "https://octogee.web.app",
-  "https://octogee-test.web.app",
-  "https://app-octogee.web.app",
-  "https://app-octogee-test.web.app",
-  "https://octogee.firebaseapp.com",
-  "https://octogee-test.firebaseapp.com",
-  "https://app-octogee.firebaseapp.com",
-  "https://app-octogee-test.firebaseapp.com",
-  "https://octogee.com",
-  "https://www.octogee.com",
-  "https://app.octogee.com",
-]);
+const ALLOWED_ORIGINS = new Set(publicAppOrigins());
 
 function isAllowedOrigin(origin: string): boolean {
   return ALLOWED_ORIGINS.has(origin) ||

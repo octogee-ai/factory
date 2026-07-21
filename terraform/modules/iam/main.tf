@@ -221,8 +221,8 @@ resource "google_project_iam_member" "glm_controller_gateway_sa_teardown" {
 }
 
 # ── Cloud Functions runtime SA: Firebase Auth read ──────────────────────────
-# Firestore triggers run as the project's default compute SA, which carries
-# datastore.user but no Firebase Auth reach. onUserComplete re-checks the
+# Firestore triggers run as the project's default compute SA. onUserComplete
+# writes provisioning state and re-checks the
 # Firebase Auth `emailVerified` flag (getAuth().getUser()) as the signup
 # email-verification gate — the client-side onboarding AuthGuard is bypassable, so the
 # server is the authority. Without this read grant that lookup throws before the
@@ -249,6 +249,42 @@ resource "google_storage_bucket_iam_member" "functions_storage_cleanup" {
   bucket = "${var.project_id}.firebasestorage.app"
   role   = google_project_iam_custom_role.functions_storage_cleanup.id
   member = "serviceAccount:${data.google_project.this.number}-compute@developer.gserviceaccount.com"
+}
+
+resource "google_project_iam_member" "functions_datastore_user" {
+  project = var.project_id
+  role    = "roles/datastore.user"
+  member  = "serviceAccount:${data.google_project.this.number}-compute@developer.gserviceaccount.com"
+}
+
+resource "google_project_iam_member" "functions_pubsub_token_creator" {
+  project = var.project_id
+  role    = "roles/iam.serviceAccountTokenCreator"
+  member  = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+resource "google_project_iam_member" "functions_run_invoker" {
+  project = var.project_id
+  role    = "roles/run.invoker"
+  member  = "serviceAccount:${data.google_project.this.number}-compute@developer.gserviceaccount.com"
+}
+
+resource "google_project_iam_member" "functions_eventarc_receiver" {
+  project = var.project_id
+  role    = "roles/eventarc.eventReceiver"
+  member  = "serviceAccount:${data.google_project.this.number}-compute@developer.gserviceaccount.com"
+}
+
+resource "google_project_iam_member" "functions_eventarc_service_agent" {
+  project = var.project_id
+  role    = "roles/eventarc.serviceAgent"
+  member  = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-eventarc.iam.gserviceaccount.com"
+}
+
+resource "google_project_iam_member" "functions_cloudbuild_builder" {
+  project = var.project_id
+  role    = "roles/cloudbuild.builds.builder"
+  member  = "serviceAccount:${data.google_project.this.number}-compute@developer.gserviceaccount.com"
 }
 
 # ── Service Account: firebase-deployer (CI `firebase deploy`) ────────────────
