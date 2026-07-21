@@ -77,13 +77,7 @@ resource "google_logging_project_sink" "ops_agent" {
   name                   = "ops-agent-${var.environment}"
   destination            = "logging.googleapis.com/${google_logging_project_bucket_config.ops_agent.id}"
   filter                 = "resource.type=\"k8s_container\" AND resource.labels.namespace_name=\"${var.namespace}\""
-  unique_writer_identity = true
-}
-
-resource "google_project_iam_member" "ops_agent_sink_writer" {
-  project = var.cluster_project_id
-  role    = "roles/logging.bucketWriter"
-  member  = google_logging_project_sink.ops_agent.writer_identity
+  unique_writer_identity = false
 }
 
 resource "google_logging_log_view" "ops_agent" {
