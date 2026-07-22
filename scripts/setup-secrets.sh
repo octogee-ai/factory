@@ -25,7 +25,7 @@ set -euo pipefail
 # Canonical sequence printed by ./scripts/teardown-env.sh.
 #
 # Usage:
-#   ./scripts/setup-secrets.sh --env=test [--yes]
+#   ./scripts/setup-secrets.sh --env=test [--deployment-target=test-west] [--yes]
 #   ./scripts/setup-secrets.sh --env=prod
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -40,22 +40,32 @@ source "$SCRIPT_DIR/lib/deployment-target.sh"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
-ENV=""; YES=false; CUSTOM_NS=""
+ENV=""; YES=false; CUSTOM_NS=""; DEPLOYMENT_TARGET=""
 
 for arg in "$@"; do
   case $arg in
     --env=*)       ENV="${arg#*=}" ;;
+    --deployment-target=*) DEPLOYMENT_TARGET="${arg#*=}" ;;
     --namespace=*) CUSTOM_NS="${arg#*=}" ;;
     --yes|-y)      YES=true ;;
-    --help|-h) echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--yes]"; exit 0 ;;
+    --help|-h) echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--yes]"; exit 0 ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
-[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--yes]"; exit 1; }
+[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--yes]"; exit 1; }
 
 TARGET_ENV="$ENV"
 [[ "$TARGET_ENV" == "custom" ]] && TARGET_ENV="test"
-octogee_load_deployment_target "--environment=$TARGET_ENV"
+if [[ -n "$DEPLOYMENT_TARGET" ]]; then
+  [[ "$ENV" == "custom" ]] && { echo "--deployment-target cannot be used with --env=custom"; exit 1; }
+  octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"
+  [[ "$TARGET_ENVIRONMENT" != "$TARGET_ENV" ]] && {
+    echo "Deployment target '$DEPLOYMENT_TARGET' does not belong to environment '$ENV'"
+    exit 1
+  }
+else
+  octogee_load_deployment_target "--environment=$TARGET_ENV"
+fi
 K8S_NAMESPACE="$TARGET_NAMESPACE"
 CLUSTER_PROJECT="$TARGET_CLUSTER_PROJECT"
 CLUSTER_NAME="$TARGET_CLUSTER_NAME"

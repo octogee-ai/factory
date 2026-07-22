@@ -92,6 +92,29 @@ describe("deployment target consumers", () => {
     expect(verifySecrets).toContain('octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"');
   });
 
+  it("lets canonical bootstrap and base-image tools select candidate targets", () => {
+    for (const script of [
+      "scripts/setup-secrets.sh",
+      "scripts/setup-mattermost.sh",
+      "scripts/setup-gitea.sh",
+    ]) {
+      const contents = source(script);
+      expect(contents, script).toContain("--deployment-target=*)");
+      expect(contents, script).toContain(
+        'octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"',
+      );
+      expect(contents, script).toContain("does not belong to environment");
+    }
+
+    const workflow = source(".github/workflows/gateway-base-rebuild.yml");
+    const script = source("scripts/rebuild-matrix-bases.sh");
+    expect(workflow).toContain("deployment_target:");
+    expect(workflow).toContain("./.github/actions/resolve-deployment-target");
+    expect(workflow).toContain('--deployment-target="${{ steps.target.outputs.target_id }}"');
+    expect(script).toContain("--deployment-target=*)");
+    expect(script).toContain('octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"');
+  });
+
   it("selects public Firebase credentials by exact deployment target", () => {
     const workflow = source(".github/workflows/site.yml");
     const gateway = source(".github/workflows/gateway-build-operator-base.yml");
