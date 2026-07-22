@@ -27,6 +27,12 @@ const TARGET_STRING_FIELDS = [
     "computeClass",
     "pinEnvironment",
 ];
+const INGRESS_STRING_FIELDS = [
+    "edgeStaticIpName",
+    "mattermostStaticIpName",
+    "giteaStaticIpName",
+    "previewStaticIpName",
+];
 function record(value, label) {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
         throw new Error(`${label} must be an object`);
@@ -65,6 +71,24 @@ function validatePromotionSources(targets) {
         }
         if (source.environment !== "test") {
             throw new Error(`deployment target ${targetId}.promotionSourceTargetId must belong to test`);
+        }
+    }
+}
+function validateIngressIdentityUniqueness(targets) {
+    const identitiesByProject = new Map();
+    for (const [targetId, value] of Object.entries(targets)) {
+        const target = value;
+        const projectId = target.clusterProjectId;
+        const ingress = target.ingress;
+        const identities = identitiesByProject.get(projectId) ?? new Map();
+        identitiesByProject.set(projectId, identities);
+        for (const field of INGRESS_STRING_FIELDS) {
+            const identity = ingress[field];
+            const owner = identities.get(identity);
+            if (owner) {
+                throw new Error(`deployment target ${targetId} ingress identity ${identity} is already used by ${owner}`);
+            }
+            identities.set(identity, `${targetId}.${field}`);
         }
     }
 }
@@ -108,8 +132,10 @@ export function validateDeploymentTargetsDocument(document) {
         }
         stringFields(record(target.kms, `deployment target ${targetId}.kms`), ["projectId", "location", "keyRing", "key"], `deployment target ${targetId}.kms`);
         stringFields(record(target.storage, `deployment target ${targetId}.storage`), ["projectId", "location"], `deployment target ${targetId}.storage`);
+        stringFields(record(target.ingress, `deployment target ${targetId}.ingress`), INGRESS_STRING_FIELDS, `deployment target ${targetId}.ingress`);
     }
     validatePromotionSources(targets);
+    validateIngressIdentityUniqueness(targets);
     for (const environment of DEPLOYMENT_ENVIRONMENTS) {
         const targetId = activeTargets[environment];
         const target = targets[targetId];
@@ -157,6 +183,10 @@ function settings(targetId, target) {
         kmsKeyName: `projects/${target.kms.projectId}/locations/${target.kms.location}/keyRings/${target.kms.keyRing}/cryptoKeys/${target.kms.key}`,
         storageProjectId: target.storage.projectId,
         storageLocation: target.storage.location,
+        edgeStaticIpName: target.ingress.edgeStaticIpName,
+        mattermostStaticIpName: target.ingress.mattermostStaticIpName,
+        giteaStaticIpName: target.ingress.giteaStaticIpName,
+        previewStaticIpName: target.ingress.previewStaticIpName,
         siteOrigin: target.siteOrigin,
         appOrigin: target.appOrigin,
         apiOrigin: target.apiOrigin,

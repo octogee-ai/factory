@@ -41,6 +41,12 @@
         "projectId": "octogee",
         "location": "us-central1"
       },
+      "ingress": {
+        "edgeStaticIpName": "workspace-api-ip",
+        "mattermostStaticIpName": "mattermost-ip",
+        "giteaStaticIpName": "gitea-ip",
+        "previewStaticIpName": "preview-ip"
+      },
       "siteOrigin": "https://octogee.com",
       "appOrigin": "https://app.octogee.com",
       "apiOrigin": "https://api.octogee.com",
@@ -86,6 +92,12 @@
         "projectId": "octogee-data-prod",
         "location": "us-west1"
       },
+      "ingress": {
+        "edgeStaticIpName": "workspace-api-ip-west",
+        "mattermostStaticIpName": "mattermost-ip-west",
+        "giteaStaticIpName": "gitea-ip-west",
+        "previewStaticIpName": "preview-ip-west"
+      },
       "siteOrigin": "https://octogee.com",
       "appOrigin": "https://app.octogee.com",
       "apiOrigin": "https://api.octogee.com",
@@ -129,6 +141,12 @@
       "storage": {
         "projectId": "octogee-test",
         "location": "us-central1"
+      },
+      "ingress": {
+        "edgeStaticIpName": "workspace-api-ip-test",
+        "mattermostStaticIpName": "mattermost-ip-test",
+        "giteaStaticIpName": "gitea-ip-test",
+        "previewStaticIpName": "preview-ip-test"
       },
       "siteOrigin": "https://octogee-test.web.app",
       "appOrigin": "https://app-octogee-test.web.app",
@@ -174,6 +192,12 @@
         "projectId": "octogee-data-test",
         "location": "us-west1"
       },
+      "ingress": {
+        "edgeStaticIpName": "workspace-api-ip-test-west",
+        "mattermostStaticIpName": "mattermost-ip-test-west",
+        "giteaStaticIpName": "gitea-ip-test-west",
+        "previewStaticIpName": "preview-ip-test-west"
+      },
       "siteOrigin": "https://octogee-test.web.app",
       "appOrigin": "https://app-octogee-test.web.app",
       "apiOrigin": "https://api-test.octogee.com",
@@ -217,6 +241,12 @@
       "storage": {
         "projectId": "octogee-build-week",
         "location": "us-central1"
+      },
+      "ingress": {
+        "edgeStaticIpName": "workspace-api-ip-build-week",
+        "mattermostStaticIpName": "mattermost-ip-build-week",
+        "giteaStaticIpName": "gitea-ip-build-week",
+        "previewStaticIpName": "preview-ip-build-week"
       },
       "siteOrigin": "https://octogee-build-week.web.app",
       "appOrigin": "https://app-octogee-build-week.web.app",

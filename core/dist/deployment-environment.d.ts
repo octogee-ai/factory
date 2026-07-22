@@ -25,6 +25,12 @@ interface StorageDocument {
     projectId: string;
     location: string;
 }
+interface IngressDocument {
+    edgeStaticIpName: string;
+    mattermostStaticIpName: string;
+    giteaStaticIpName: string;
+    previewStaticIpName: string;
+}
 interface DeploymentTargetDocument {
     environment: DeploymentEnvironment;
     promotionSourceTargetId?: string;
@@ -40,6 +46,7 @@ interface DeploymentTargetDocument {
     cloudSql: CloudSqlDocument;
     kms: KmsDocument;
     storage: StorageDocument;
+    ingress: IngressDocument;
     siteOrigin: string;
     appOrigin: string;
     apiOrigin: string;
@@ -87,6 +94,10 @@ export interface DeploymentEnvironmentSettings {
     kmsKeyName: string;
     storageProjectId: string;
     storageLocation: string;
+    edgeStaticIpName: string;
+    mattermostStaticIpName: string;
+    giteaStaticIpName: string;
+    previewStaticIpName: string;
     siteOrigin: string;
     appOrigin: string;
     apiOrigin: string;

@@ -21,9 +21,22 @@ export function renderDeploymentTargetHelmValues(
   deploymentProjectId: ${quoted(dataProject)}
 cloud-sql-proxy:
   connectionName: ${quoted(settings.cloudSqlConnectionName)}
+edgeIngress:
+  staticIpName: ${quoted(settings.edgeStaticIpName)}
 gateway-edge:
+  ingress:
+    staticIpName: ${quoted(settings.edgeStaticIpName)}
   image:
     repository: ${quoted(`${registry}/gateway-edge`)}
+mattermost:
+  ingress:
+    staticIpName: ${quoted(settings.mattermostStaticIpName)}
+gitea:
+  webIngress:
+    staticIpName: ${quoted(settings.giteaStaticIpName)}
+gatewayFleet:
+  previewIngress:
+    staticIpName: ${quoted(settings.previewStaticIpName)}
 octogee-api:
   image:
     repository: ${quoted(`${registry}/octogee-api`)}

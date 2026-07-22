@@ -32,6 +32,13 @@ interface StorageDocument {
   location: string;
 }
 
+interface IngressDocument {
+  edgeStaticIpName: string;
+  mattermostStaticIpName: string;
+  giteaStaticIpName: string;
+  previewStaticIpName: string;
+}
+
 interface DeploymentTargetDocument {
   environment: DeploymentEnvironment;
   promotionSourceTargetId?: string;
@@ -47,6 +54,7 @@ interface DeploymentTargetDocument {
   cloudSql: CloudSqlDocument;
   kms: KmsDocument;
   storage: StorageDocument;
+  ingress: IngressDocument;
   siteOrigin: string;
   appOrigin: string;
   apiOrigin: string;
@@ -96,6 +104,10 @@ export interface DeploymentEnvironmentSettings {
   kmsKeyName: string;
   storageProjectId: string;
   storageLocation: string;
+  edgeStaticIpName: string;
+  mattermostStaticIpName: string;
+  giteaStaticIpName: string;
+  previewStaticIpName: string;
   siteOrigin: string;
   appOrigin: string;
   apiOrigin: string;
@@ -134,6 +146,12 @@ const TARGET_STRING_FIELDS = [
   "gatewayValuesFile",
   "computeClass",
   "pinEnvironment",
+] as const;
+const INGRESS_STRING_FIELDS = [
+  "edgeStaticIpName",
+  "mattermostStaticIpName",
+  "giteaStaticIpName",
+  "previewStaticIpName",
 ] as const;
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -190,6 +208,27 @@ function validatePromotionSources(targets: Record<string, unknown>): void {
       throw new Error(
         `deployment target ${targetId}.promotionSourceTargetId must belong to test`,
       );
+    }
+  }
+}
+
+function validateIngressIdentityUniqueness(targets: Record<string, unknown>): void {
+  const identitiesByProject = new Map<string, Map<string, string>>();
+  for (const [targetId, value] of Object.entries(targets)) {
+    const target = value as Record<string, unknown>;
+    const projectId = target.clusterProjectId as string;
+    const ingress = target.ingress as Record<string, unknown>;
+    const identities = identitiesByProject.get(projectId) ?? new Map<string, string>();
+    identitiesByProject.set(projectId, identities);
+    for (const field of INGRESS_STRING_FIELDS) {
+      const identity = ingress[field] as string;
+      const owner = identities.get(identity);
+      if (owner) {
+        throw new Error(
+          `deployment target ${targetId} ingress identity ${identity} is already used by ${owner}`,
+        );
+      }
+      identities.set(identity, `${targetId}.${field}`);
     }
   }
 }
@@ -259,9 +298,15 @@ export function validateDeploymentTargetsDocument(document: unknown): asserts do
       ["projectId", "location"],
       `deployment target ${targetId}.storage`,
     );
+    stringFields(
+      record(target.ingress, `deployment target ${targetId}.ingress`),
+      INGRESS_STRING_FIELDS,
+      `deployment target ${targetId}.ingress`,
+    );
   }
 
   validatePromotionSources(targets);
+  validateIngressIdentityUniqueness(targets);
 
   for (const environment of DEPLOYMENT_ENVIRONMENTS) {
     const targetId = activeTargets[environment] as string;
@@ -316,6 +361,10 @@ function settings(
     kmsKeyName: `projects/${target.kms.projectId}/locations/${target.kms.location}/keyRings/${target.kms.keyRing}/cryptoKeys/${target.kms.key}`,
     storageProjectId: target.storage.projectId,
     storageLocation: target.storage.location,
+    edgeStaticIpName: target.ingress.edgeStaticIpName,
+    mattermostStaticIpName: target.ingress.mattermostStaticIpName,
+    giteaStaticIpName: target.ingress.giteaStaticIpName,
+    previewStaticIpName: target.ingress.previewStaticIpName,
     siteOrigin: target.siteOrigin,
     appOrigin: target.appOrigin,
     apiOrigin: target.apiOrigin,

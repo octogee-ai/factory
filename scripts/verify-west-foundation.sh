@@ -85,6 +85,12 @@ gcloud sql instances describe "${SQL_INSTANCE}" \
 
 jq -e --arg network "${NETWORK_NAME}" --arg region "${REGION}" '
   .region == $region and
+  .settings.backupConfiguration.enabled == true and
+  .settings.backupConfiguration.pointInTimeRecoveryEnabled == true and
+  .settings.backupConfiguration.transactionLogRetentionDays >= 7 and
+  .settings.backupConfiguration.backupRetentionSettings.retainedBackups >= 7 and
+  .settings.retainBackupsOnDelete == true and
+  .settings.deletionProtectionEnabled == true and
   .settings.ipConfiguration.ipv4Enabled == false and
   (.settings.ipConfiguration.privateNetwork | endswith("/networks/" + $network)) and
   ([.ipAddresses[] | select(.type != "PRIVATE")] | length) == 0
@@ -132,4 +138,4 @@ fi
 kubectl get node "${NODE_NAME}" --context="${KUBE_CONTEXT}" -o json >"${NODE_JSON}"
 jq -e '[.status.addresses[] | select(.type == "ExternalIP")] | length == 0' "${NODE_JSON}" >/dev/null
 
-echo "WEST foundation verified: DNS-only control plane, private node, scoped NAT, and private Cloud SQL."
+echo "WEST foundation verified: DNS-only control plane, private node, scoped NAT, protected Cloud SQL, backups, and PITR."

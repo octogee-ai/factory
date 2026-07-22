@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import deploymentTargetsDocument from "./deployment-targets.json" with { type: "json" };
+
 import {
   BUILD_WEEK_ENVIRONMENT,
   deploymentEnvironmentForNamespace,
@@ -10,6 +12,7 @@ import {
   deploymentTargetSettings,
   deploymentTargetsForEnvironment,
   publicAppOrigins,
+  validateDeploymentTargetsDocument,
 } from "./deployment-environment.js";
 
 describe("deployment environment registry", () => {
@@ -54,6 +57,10 @@ describe("deployment environment registry", () => {
       secretNameSuffix: "prod",
       promotionSourceTargetId: "test-central",
       cloudSqlPointInTimeRecoveryEnabled: false,
+      edgeStaticIpName: "workspace-api-ip",
+      mattermostStaticIpName: "mattermost-ip",
+      giteaStaticIpName: "gitea-ip",
+      previewStaticIpName: "preview-ip",
     });
 
     expect(deploymentTargetSettings("prod-west")).toMatchObject({
@@ -77,6 +84,10 @@ describe("deployment environment registry", () => {
       cloudSqlPointInTimeRecoveryEnabled: true,
       kmsLocation: "us-west1",
       storageLocation: "us-west1",
+      edgeStaticIpName: "workspace-api-ip-west",
+      mattermostStaticIpName: "mattermost-ip-west",
+      giteaStaticIpName: "gitea-ip-west",
+      previewStaticIpName: "preview-ip-west",
     });
 
     expect(deploymentTargetSettings("test-west")).toMatchObject({
@@ -90,7 +101,45 @@ describe("deployment environment registry", () => {
       cloudSqlGiteaPasswordSecretName: "gitea-db-password-octogee-pg-west",
       cloudSqlConnectionNameSecretName: "cloud-sql-connection-name-octogee-pg-west",
       secretNameSuffix: "test-west",
+      edgeStaticIpName: "workspace-api-ip-test-west",
+      mattermostStaticIpName: "mattermost-ip-test-west",
+      giteaStaticIpName: "gitea-ip-test-west",
+      previewStaticIpName: "preview-ip-test-west",
     });
+  });
+
+  it("rejects a candidate target that reuses an active ingress identity", () => {
+    const candidate = structuredClone(deploymentTargetsDocument) as {
+      targets: Record<string, {
+        ingress: {
+          edgeStaticIpName: string;
+        };
+      }>;
+    };
+    candidate.targets["test-west"].ingress.edgeStaticIpName =
+      candidate.targets["test-central"].ingress.edgeStaticIpName;
+
+    expect(() => validateDeploymentTargetsDocument(candidate)).toThrow(
+      "deployment target test-west ingress identity workspace-api-ip-test is already used",
+    );
+  });
+
+  it.each([
+    ["another target role", "gitea-ip-west"],
+    ["one of its own roles", "gitea-ip-test-west"],
+  ])("rejects a candidate target that reuses %s", (_label, staticIpName) => {
+    const candidate = structuredClone(deploymentTargetsDocument) as {
+      targets: Record<string, {
+        ingress: {
+          edgeStaticIpName: string;
+        };
+      }>;
+    };
+    candidate.targets["test-west"].ingress.edgeStaticIpName = staticIpName;
+
+    expect(() => validateDeploymentTargetsDocument(candidate)).toThrow(
+      `deployment target test-west ingress identity ${staticIpName} is already used`,
+    );
   });
 
   it("freezes Build Week in central and gives it no west candidate", () => {

@@ -30,9 +30,44 @@ describe("deployment target Helm values", () => {
     expect(rendered).toContain(
       'loggingResourceName: "projects/octogee/locations/global/buckets/ops-agent-test-west/views/ops-agent"',
     );
+    expect(rendered).toContain(`edgeIngress:
+  staticIpName: "workspace-api-ip-test-west"`);
+    expect(rendered).toContain(`gateway-edge:
+  ingress:
+    staticIpName: "workspace-api-ip-test-west"`);
+    expect(rendered).toContain(`mattermost:
+  ingress:
+    staticIpName: "mattermost-ip-test-west"`);
+    expect(rendered).toContain(`gitea:
+  webIngress:
+    staticIpName: "gitea-ip-test-west"`);
+    expect(rendered).toContain(`gatewayFleet:
+  previewIngress:
+    staticIpName: "preview-ip-test-west"`);
     expect(rendered).not.toContain("mattermost.octogee-test.svc.cluster.local");
     expect(rendered).not.toContain("buckets/ops-agent-test/views/ops-agent");
     expect(rendered).not.toContain("us-central1");
     expect(rendered).not.toContain("@octogee-test.iam.gserviceaccount.com");
   });
+
+  it.each([
+    ["prod-central", "workspace-api-ip", "mattermost-ip", "gitea-ip", "preview-ip"],
+    ["prod-west", "workspace-api-ip-west", "mattermost-ip-west", "gitea-ip-west", "preview-ip-west"],
+    ["test-central", "workspace-api-ip-test", "mattermost-ip-test", "gitea-ip-test", "preview-ip-test"],
+    ["test-west", "workspace-api-ip-test-west", "mattermost-ip-test-west", "gitea-ip-test-west", "preview-ip-test-west"],
+    ["build-week-central", "workspace-api-ip-build-week", "mattermost-ip-build-week", "gitea-ip-build-week", "preview-ip-build-week"],
+  ])(
+    "renders the canonical ingress identities for %s",
+    (targetId, edge, mattermost, gitea, preview) => {
+      const rendered = renderDeploymentTargetHelmValues(
+        deploymentTargetSettings(targetId),
+      );
+
+      expect(rendered).toContain(`edgeIngress:\n  staticIpName: "${edge}"`);
+      expect(rendered).toContain(`gateway-edge:\n  ingress:\n    staticIpName: "${edge}"`);
+      expect(rendered).toContain(`mattermost:\n  ingress:\n    staticIpName: "${mattermost}"`);
+      expect(rendered).toContain(`gitea:\n  webIngress:\n    staticIpName: "${gitea}"`);
+      expect(rendered).toContain(`gatewayFleet:\n  previewIngress:\n    staticIpName: "${preview}"`);
+    },
+  );
 });

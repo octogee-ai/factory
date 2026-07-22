@@ -8,6 +8,8 @@ PROTECTION_TARGET_SELECTOR="${REPO_ROOT}/scripts/ops/terraform-protection-target
 VERIFY_SCRIPT="${REPO_ROOT}/scripts/verify-west-foundation.sh"
 TERRAFORM_BIN="$("${REPO_ROOT}/scripts/ops/terraform-bin.sh")"
 PROJECT_ID="octogee"
+REGION="us-west1"
+CLUSTER_NAME="octogee-gateway"
 SQL_INSTANCE="octogee-pg-west"
 EXPECTED_CONFIRMATION="octogee/us-west1/octogee-gateway"
 RECEIPT_BUCKET="gs://octogee-terraform-state/receipts/west-platform"
@@ -58,6 +60,8 @@ done
 TEMP_DIR="$(mktemp -d -t octogee-west-platform.XXXXXX)"
 PRE_APPLY_PLAN="${TEMP_DIR}/pre-apply.tfplan"
 PRE_APPLY_RECEIPT="${TEMP_DIR}/pre-apply.json"
+POST_RETIREMENT_PLAN="${TEMP_DIR}/post-retirement.tfplan"
+POST_RETIREMENT_RECEIPT="${TEMP_DIR}/post-retirement.json"
 PROTECTION_PLAN="${TEMP_DIR}/protection.tfplan"
 PROTECTION_RECEIPT="${TEMP_DIR}/protection.json"
 ZERO_DRIFT_PLAN="${TEMP_DIR}/zero-drift.tfplan"
@@ -70,6 +74,7 @@ PROTECTION_TARGETS="${TEMP_DIR}/terraform-protection-targets.txt"
 RUN_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
 PROTECTION_REQUIRED=false
+APPLY_PLAN="${PRE_APPLY_PLAN}"
 
 DESTRUCTIVE_ADDRESSES=(
   'google_compute_address.west_private_service["gitea"]'
@@ -83,6 +88,14 @@ REBUILD_CHANGE_ADDRESSES=(
   'google_compute_address.west_private_service["gitea"]'
   'google_compute_address.west_private_service["mattermost"]'
   'google_compute_global_address.private_services'
+  'google_compute_global_address.west_ingress["gitea-ip-test-west"]'
+  'google_compute_global_address.west_ingress["gitea-ip-west"]'
+  'google_compute_global_address.west_ingress["mattermost-ip-test-west"]'
+  'google_compute_global_address.west_ingress["mattermost-ip-west"]'
+  'google_compute_global_address.west_ingress["preview-ip-test-west"]'
+  'google_compute_global_address.west_ingress["preview-ip-west"]'
+  'google_compute_global_address.west_ingress["workspace-api-ip-test-west"]'
+  'google_compute_global_address.west_ingress["workspace-api-ip-west"]'
   'google_compute_network.west'
   'google_compute_router.west'
   'google_compute_router_nat.west'
@@ -146,6 +159,66 @@ upload_receipt() {
   gcloud storage cp \
     "${receipt_file}" \
     "${RECEIPT_BUCKET}/${RUN_TIMESTAMP}-${phase}-${GIT_COMMIT}.json"
+}
+
+receipt_requires_deletion() {
+  local receipt_file="$1"
+  local address="$2"
+  jq -e \
+    --arg address "${address}" \
+    'any(.changes[]?; .address == $address and (.actions | index("delete") != null))' \
+    "${receipt_file}" >/dev/null
+}
+
+retire_replaced_foundation() {
+  if [[ "${CLUSTER_REPLACEMENT_REQUIRED}" == "true" ]]; then
+    local cluster_name
+    cluster_name="$(gcloud container clusters list \
+      --project="${PROJECT_ID}" \
+      --filter="name=${CLUSTER_NAME} AND location=${REGION}" \
+      --format='value(name)')"
+    if [[ "${cluster_name}" == "${CLUSTER_NAME}" ]]; then
+      gcloud container clusters delete "${CLUSTER_NAME}" \
+        --project="${PROJECT_ID}" \
+        --region="${REGION}" \
+        --quiet
+    elif [[ -n "${cluster_name}" ]]; then
+      echo "Unexpected WEST cluster inventory: ${cluster_name}" >&2
+      return 1
+    fi
+  fi
+
+  if [[ "${SQL_REPLACEMENT_REQUIRED}" == "true" ]]; then
+    local sql_instance
+    sql_instance="$(gcloud sql instances list \
+      --project="${PROJECT_ID}" \
+      --filter="name=${SQL_INSTANCE}" \
+      --format='value(name)')"
+    if [[ "${sql_instance}" == "${SQL_INSTANCE}" ]]; then
+      gcloud sql instances patch "${SQL_INSTANCE}" \
+        --project="${PROJECT_ID}" \
+        --no-deletion-protection \
+        --retain-backups-on-delete \
+        --quiet
+      if ! gcloud sql instances delete "${SQL_INSTANCE}" \
+        --project="${PROJECT_ID}" \
+        --enable-final-backup \
+        --final-backup-description="private-west-foundation-rebuild-${RUN_TIMESTAMP}" \
+        --final-backup-retention-days=30 \
+        --quiet; then
+        echo "Cloud SQL retirement failed; restoring API deletion protection" >&2
+        gcloud sql instances patch "${SQL_INSTANCE}" \
+          --project="${PROJECT_ID}" \
+          --deletion-protection \
+          --retain-backups-on-delete \
+          --quiet
+        return 1
+      fi
+    elif [[ -n "${sql_instance}" ]]; then
+      echo "Unexpected WEST Cloud SQL inventory: ${sql_instance}" >&2
+      return 1
+    fi
+  fi
 }
 
 protect_foundation() {
@@ -266,10 +339,21 @@ if [[ "${APPLY}" != "true" ]]; then
   exit 0
 fi
 
-SQL_REPLACEMENT_REQUIRED="$(jq -r \
-  --arg address 'google_sql_database_instance.west' \
-  'any(.changes[]?; .address == $address and (.actions | index("delete") != null))' \
-  "${PRE_APPLY_RECEIPT}")"
+if receipt_requires_deletion \
+  "${PRE_APPLY_RECEIPT}" \
+  'google_container_cluster.west'; then
+  CLUSTER_REPLACEMENT_REQUIRED=true
+else
+  CLUSTER_REPLACEMENT_REQUIRED=false
+fi
+
+if receipt_requires_deletion \
+  "${PRE_APPLY_RECEIPT}" \
+  'google_sql_database_instance.west'; then
+  SQL_REPLACEMENT_REQUIRED=true
+else
+  SQL_REPLACEMENT_REQUIRED=false
+fi
 
 if [[ "${SQL_REPLACEMENT_REQUIRED}" == "true" ]]; then
   gcloud sql instances describe "${SQL_INSTANCE}" \
@@ -315,8 +399,22 @@ if [[ "${SQL_REPLACEMENT_REQUIRED}" == "true" ]]; then
 fi
 
 upload_receipt "pre-apply" "${PRE_APPLY_RECEIPT}"
+if [[ "${CLUSTER_REPLACEMENT_REQUIRED}" == "true" || "${SQL_REPLACEMENT_REQUIRED}" == "true" ]]; then
+  retire_replaced_foundation
+  "${TERRAFORM_BIN}" plan \
+    -input=false \
+    -var=foundation_rebuild=true \
+    -out="${POST_RETIREMENT_PLAN}"
+  write_receipt \
+    "${POST_RETIREMENT_PLAN}" \
+    "post-retirement" \
+    "${POST_RETIREMENT_RECEIPT}" \
+    rebuild
+  upload_receipt "post-retirement" "${POST_RETIREMENT_RECEIPT}"
+  APPLY_PLAN="${POST_RETIREMENT_PLAN}"
+fi
 PROTECTION_REQUIRED=true
-"${TERRAFORM_BIN}" apply -input=false "${PRE_APPLY_PLAN}"
+"${TERRAFORM_BIN}" apply -input=false "${APPLY_PLAN}"
 protect_foundation "protection"
 PROTECTION_REQUIRED=false
 "${REPO_ROOT}/scripts/setup-cloud-sql.sh" --target=test-west --rotate
