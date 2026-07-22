@@ -16,6 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/deployment-target.sh"
 
 SELECTOR=""
+FORCE_ROTATE=false
 for arg in "$@"; do
   case "$arg" in
     --env=*)
@@ -26,8 +27,9 @@ for arg in "$@"; do
       [[ -n "$SELECTOR" ]] && { echo "Exactly one --env or --target is required" >&2; exit 1; }
       SELECTOR="$arg"
       ;;
+    --rotate) FORCE_ROTATE=true ;;
     --help|-h)
-      echo "Usage: $0 --env=prod|test|build-week | --target=TARGET_ID"
+      echo "Usage: $0 --env=prod|test|build-week | --target=TARGET_ID [--rotate]"
       exit 0
       ;;
     *) echo "Unknown argument: $arg" >&2; exit 1 ;;
@@ -51,24 +53,40 @@ GREEN='\033[0;32m'; BLUE='\033[0;34m'; YELLOW='\033[1;33m'; NC='\033[0m'
 log()  { echo -e "${BLUE}[cloud-sql]${NC} $*"; }
 ok()   { echo -e "${GREEN}[cloud-sql]${NC} ✅ $*"; }
 warn() { echo -e "${YELLOW}[cloud-sql]${NC} ⚠️  $*"; }
+CLOUD_SQL_READY_MAX_ATTEMPTS=80
+
+wait_for_cloud_sql() {
+  local attempt state
+  for ((attempt = 1; attempt <= CLOUD_SQL_READY_MAX_ATTEMPTS; attempt += 1)); do
+    if ! state=$(gcloud sql instances describe "$INSTANCE" --project="$PROJECT" \
+      --format="value(state)"); then
+      echo "Could not read Cloud SQL instance state for $INSTANCE" >&2
+      return 1
+    fi
+    if [[ "$state" == "RUNNABLE" ]]; then
+      ok "Instance is RUNNABLE"
+      return 0
+    fi
+    if [[ "$attempt" -eq "$CLOUD_SQL_READY_MAX_ATTEMPTS" ]]; then
+      echo "Cloud SQL instance did not become RUNNABLE after $CLOUD_SQL_READY_MAX_ATTEMPTS attempts: $state" >&2
+      return 1
+    fi
+    echo "  State: $state — waiting 15s..."
+    sleep 15
+  done
+}
 
 # ── Wait for instance to be ready ────────────────────────────────────────────
 log "Waiting for $INSTANCE to be RUNNABLE..."
-while true; do
-  STATE=$(gcloud sql instances describe "$INSTANCE" --project="$PROJECT" \
-    --format="value(state)" 2>/dev/null || echo "PENDING")
-  if [[ "$STATE" == "RUNNABLE" ]]; then
-    ok "Instance is RUNNABLE"
-    break
-  fi
-  echo "  State: $STATE — waiting 15s..."
-  sleep 15
-done
+wait_for_cloud_sql
 
 # ── Enforce PITR policy (idempotent) ─────────────────────────────────────────
 log "Checking PITR setting..."
-CURRENT_PITR=$(gcloud sql instances describe "$INSTANCE" --project="$PROJECT" \
-  --format="value(settings.backupConfiguration.pointInTimeRecoveryEnabled)" 2>/dev/null || echo "")
+if ! CURRENT_PITR=$(gcloud sql instances describe "$INSTANCE" --project="$PROJECT" \
+  --format="value(settings.backupConfiguration.pointInTimeRecoveryEnabled)"); then
+  echo "Could not read Cloud SQL PITR setting for $INSTANCE" >&2
+  exit 1
+fi
 # gcloud renders the bool as "True"/"False" — normalize.
 CURRENT_PITR_NORM=$(echo "$CURRENT_PITR" | tr '[:upper:]' '[:lower:]')
 
@@ -83,9 +101,7 @@ else
     gcloud sql instances patch "$INSTANCE" --project="$PROJECT" --enable-point-in-time-recovery --quiet
   fi
   log "Waiting for instance to settle..."
-  while [[ "$(gcloud sql instances describe "$INSTANCE" --project="$PROJECT" --format='value(state)')" != "RUNNABLE" ]]; do
-    sleep 5
-  done
+  wait_for_cloud_sql
   ok "PITR set to $DESIRED_PITR"
 fi
 
@@ -106,14 +122,6 @@ done
 # secret's latest version, since MM and Gitea pods mount the SM value to
 # authenticate.
 #
-# First-time path: generate a random password, create the DB user with it,
-# write the SAME value to Secret Manager. Atomic per user.
-#
-# Re-run path: do nothing. The DB user already has whatever password
-# matches the existing SM value (assuming a prior first-time run did its
-# job). Generating a fresh password and re-writing only SM — what an
-# earlier version of this script did — leaves DB and SM diverged and
-# kills MM/Gitea on the next pod restart.
 log "Ensuring database users + Secret Manager passwords..."
 
 grant_secret_accessor() {
@@ -159,13 +167,6 @@ secret_name_for() {
   esac
 }
 
-# Two paths per user:
-#   - Fresh env (no enabled SM version + no SQL user): generate random password,
-#     create the SQL user, write to SM. Both sides aligned by construction.
-#   - Re-run (user exists OR enabled SM version exists): regenerate password so a
-#     stale half-pair (one side missing) doesn't leave the env wedged.
-#     `set-password` works whether or not the user existed previously;
-#     `store_secret` adds a version to the SM entry or creates it.
 for USER in mattermost gitea; do
   SECRET_NAME=$(secret_name_for "$USER")
   USER_EXISTS=false
@@ -178,14 +179,14 @@ for USER in mattermost gitea; do
       --project="$PROJECT" --format='value(state)' 2>/dev/null || true)" == "ENABLED" ]]; then
     SECRET_HAS_VERSION=true
   fi
-  if $USER_EXISTS && $SECRET_HAS_VERSION; then
+  if ! $FORCE_ROTATE && $USER_EXISTS && $SECRET_HAS_VERSION; then
     ok "User '$USER' + enabled secret '$SECRET_NAME' both present — preserving (no rotation)"
     continue
   fi
 
   PASS=$(openssl rand -hex 16)
   if $USER_EXISTS; then
-    log "User '$USER' exists but secret '$SECRET_NAME' missing — rotating password to realign"
+    log "Rotating password for user '$USER'"
     gcloud sql users set-password "$USER" \
       --instance="$INSTANCE" --project="$PROJECT" --password="$PASS"
     ok "Rotated password for user: $USER"

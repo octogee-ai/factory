@@ -190,7 +190,18 @@ describe("deployment target consumers", () => {
   it("enforces the Cloud SQL recovery policy declared by the selected target", () => {
     const setup = source("scripts/setup-cloud-sql.sh");
     expect(setup).toContain('DESIRED_PITR="$TARGET_CLOUD_SQL_PITR_ENABLED"');
+    expect(setup).toContain("Could not read Cloud SQL PITR setting");
+    expect(setup).not.toContain('2>/dev/null || echo ""');
     expect(setup).not.toContain('DESIRED_PITR="false"');
+  });
+
+  it("forces rebuild credential rotation so a rerun repairs a half-written SQL pair", () => {
+    const setup = source("scripts/setup-cloud-sql.sh");
+    const bootstrap = source("scripts/bootstrap-west-platform.sh");
+
+    expect(setup).toContain("--rotate) FORCE_ROTATE=true");
+    expect(setup).toContain('if ! $FORCE_ROTATE && $USER_EXISTS && $SECRET_HAS_VERSION; then');
+    expect(bootstrap).toContain('setup-cloud-sql.sh" --target=test-west --rotate');
   });
 
   it("reserves central and west deployment namespaces from custom provisioning", () => {

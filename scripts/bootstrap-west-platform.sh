@@ -3,26 +3,322 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TERRAFORM_ROOT="${REPO_ROOT}/terraform/environments/west-platform"
+RECEIPT_GENERATOR="${REPO_ROOT}/scripts/ops/terraform-plan-receipt.mjs"
+PROTECTION_TARGET_SELECTOR="${REPO_ROOT}/scripts/ops/terraform-protection-targets.mjs"
+VERIFY_SCRIPT="${REPO_ROOT}/scripts/verify-west-foundation.sh"
+TERRAFORM_BIN="$("${REPO_ROOT}/scripts/ops/terraform-bin.sh")"
+PROJECT_ID="octogee"
+SQL_INSTANCE="octogee-pg-west"
+EXPECTED_CONFIRMATION="octogee/us-west1/octogee-gateway"
+RECEIPT_BUCKET="gs://octogee-terraform-state/receipts/west-platform"
 APPLY=false
+VERIFY_ONLY=false
+CONFIRMATION=""
 
 for arg in "$@"; do
   case "${arg}" in
     --apply) APPLY=true ;;
+    --verify-only) VERIFY_ONLY=true ;;
+    --confirm=*) CONFIRMATION="${arg#--confirm=}" ;;
     *) echo "Unknown argument: ${arg}" >&2; exit 2 ;;
   esac
 done
 
-PLAN_FILE="$(mktemp -t octogee-west-platform.tfplan.XXXXXX)"
-trap 'rm -f "${PLAN_FILE}"' EXIT
+if [[ "${APPLY}" == "true" && "${VERIFY_ONLY}" == "true" ]]; then
+  echo "--apply and --verify-only cannot be combined" >&2
+  exit 2
+fi
 
-(
-  cd "${TERRAFORM_ROOT}"
-  terraform init -reconfigure
-  terraform plan -input=false -out="${PLAN_FILE}"
-  terraform show -no-color "${PLAN_FILE}"
+if [[ "${APPLY}" == "true" && "${CONFIRMATION}" != "${EXPECTED_CONFIRMATION}" ]]; then
+  echo "Apply requires --confirm=octogee/us-west1/octogee-gateway" >&2
+  exit 2
+fi
 
-  if [[ "${APPLY}" == "true" ]]; then
-    terraform apply -input=false "${PLAN_FILE}"
-    "${REPO_ROOT}/scripts/setup-cloud-sql.sh" --target=test-west
+if [[ "${APPLY}" == "true" || "${VERIFY_ONLY}" == "true" ]]; then
+  if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain)" ]]; then
+    echo "WEST foundation working tree must be clean before apply" >&2
+    exit 2
   fi
+  git -C "${REPO_ROOT}" fetch --quiet origin main
+  CURRENT_HEAD="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+  ORIGIN_MAIN_HEAD="$(git -C "${REPO_ROOT}" rev-parse refs/remotes/origin/main)"
+  if [[ "${CURRENT_HEAD}" != "${ORIGIN_MAIN_HEAD}" ]]; then
+    echo "Apply requires the exact merged origin/main commit" >&2
+    exit 2
+  fi
+fi
+
+for command in gcloud jq node; do
+  if ! command -v "${command}" >/dev/null 2>&1; then
+    echo "Required command is unavailable: ${command}" >&2
+    exit 1
+  fi
+done
+
+TEMP_DIR="$(mktemp -d -t octogee-west-platform.XXXXXX)"
+PRE_APPLY_PLAN="${TEMP_DIR}/pre-apply.tfplan"
+PRE_APPLY_RECEIPT="${TEMP_DIR}/pre-apply.json"
+PROTECTION_PLAN="${TEMP_DIR}/protection.tfplan"
+PROTECTION_RECEIPT="${TEMP_DIR}/protection.json"
+ZERO_DRIFT_PLAN="${TEMP_DIR}/zero-drift.tfplan"
+ZERO_DRIFT_RECEIPT="${TEMP_DIR}/zero-drift.json"
+BACKUP_RECEIPT="${TEMP_DIR}/pre-replacement-backup.json"
+BACKUP_JSON="${TEMP_DIR}/pre-replacement-backup-source.json"
+BACKUP_VERIFICATION_JSON="${TEMP_DIR}/pre-replacement-backup-verification.json"
+STATE_ADDRESSES="${TEMP_DIR}/terraform-state-addresses.txt"
+PROTECTION_TARGETS="${TEMP_DIR}/terraform-protection-targets.txt"
+RUN_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+PROTECTION_REQUIRED=false
+
+DESTRUCTIVE_ADDRESSES=(
+  'google_compute_address.west_private_service["gitea"]'
+  'google_compute_address.west_private_service["mattermost"]'
+  'google_container_cluster.west'
+  'google_sql_database_instance.west'
+  'google_vpc_access_connector.west'
 )
+
+REBUILD_CHANGE_ADDRESSES=(
+  'google_compute_address.west_private_service["gitea"]'
+  'google_compute_address.west_private_service["mattermost"]'
+  'google_compute_global_address.private_services'
+  'google_compute_network.west'
+  'google_compute_router.west'
+  'google_compute_router_nat.west'
+  'google_compute_subnetwork.connector'
+  'google_compute_subnetwork.gke'
+  'google_container_cluster.west'
+  'google_monitoring_alert_policy.gke_notifications'
+  'google_monitoring_notification_channel.operator_email'
+  'google_project_service.required["pubsub.googleapis.com"]'
+  'google_pubsub_subscription.gke_notifications_archive'
+  'google_pubsub_topic.gke_notifications'
+  'google_service_networking_connection.private_services'
+  'google_sql_database_instance.west'
+  'google_vpc_access_connector.west'
+)
+
+PROTECTION_CHANGE_ADDRESSES=(
+  'google_container_cluster.west'
+  'google_sql_database_instance.west'
+  'google_vpc_access_connector.west'
+)
+
+write_receipt() {
+  local plan_file="$1"
+  local phase="$2"
+  local receipt_file="$3"
+  local review_scope="$4"
+  local receipt_arguments=(
+    "--target=west-platform"
+    "--phase=${phase}"
+    "--git-commit=${GIT_COMMIT}"
+  )
+
+  if [[ "${review_scope}" == "rebuild" ]]; then
+    local address
+    for address in "${DESTRUCTIVE_ADDRESSES[@]}"; do
+      receipt_arguments+=("--allow-destroy=${address}")
+    done
+    for address in "${REBUILD_CHANGE_ADDRESSES[@]}"; do
+      receipt_arguments+=("--allow-change=${address}")
+    done
+  elif [[ "${review_scope}" == "protection" ]]; then
+    local address
+    for address in "${PROTECTION_CHANGE_ADDRESSES[@]}"; do
+      receipt_arguments+=("--allow-change=${address}")
+    done
+  elif [[ "${review_scope}" != "zero-drift" ]]; then
+    echo "Unknown WEST receipt review scope: ${review_scope}" >&2
+    return 1
+  fi
+
+  "${TERRAFORM_BIN}" show -json "${plan_file}" \
+    | node "${RECEIPT_GENERATOR}" "${receipt_arguments[@]}" \
+    >"${receipt_file}"
+  jq . "${receipt_file}"
+}
+
+upload_receipt() {
+  local phase="$1"
+  local receipt_file="$2"
+  gcloud storage cp \
+    "${receipt_file}" \
+    "${RECEIPT_BUCKET}/${RUN_TIMESTAMP}-${phase}-${GIT_COMMIT}.json"
+}
+
+protect_foundation() {
+  local phase="$1"
+  shift
+
+  "${TERRAFORM_BIN}" plan \
+    -input=false \
+    -var=foundation_rebuild=false \
+    "$@" \
+    -out="${PROTECTION_PLAN}" || return 1
+  write_receipt "${PROTECTION_PLAN}" "${phase}" "${PROTECTION_RECEIPT}" protection || return 1
+  "${TERRAFORM_BIN}" apply -input=false "${PROTECTION_PLAN}" || return 1
+  upload_receipt "${phase}" "${PROTECTION_RECEIPT}" || return 1
+}
+
+emergency_protect_foundation() {
+  local selector_arguments=()
+  local address
+  local phase
+  local protection_failed=false
+  local target_index=0
+
+  "${TERRAFORM_BIN}" state list >"${STATE_ADDRESSES}" || return 1
+  for address in "${PROTECTION_CHANGE_ADDRESSES[@]}"; do
+    selector_arguments+=("--candidate=${address}")
+  done
+  node "${PROTECTION_TARGET_SELECTOR}" "${selector_arguments[@]}" \
+    <"${STATE_ADDRESSES}" \
+    >"${PROTECTION_TARGETS}" || return 1
+
+  if [[ ! -s "${PROTECTION_TARGETS}" ]]; then
+    echo "No protection-capable WEST resources are present in Terraform state" >&2
+    PROTECTION_REQUIRED=false
+    return 0
+  fi
+
+  while IFS= read -r address; do
+    [[ -z "${address}" ]] && continue
+    target_index=$((target_index + 1))
+    phase="emergency-protection-${target_index}"
+    if ! protect_foundation "${phase}" "-target=${address}"; then
+      echo "Emergency protection failed for ${address}" >&2
+      protection_failed=true
+    fi
+  done <"${PROTECTION_TARGETS}"
+
+  if [[ "${protection_failed}" == "true" ]]; then
+    return 1
+  fi
+  PROTECTION_REQUIRED=false
+}
+
+cleanup() {
+  local status=$?
+  trap - EXIT
+
+  if [[ "${PROTECTION_REQUIRED}" == "true" ]]; then
+    echo "Restoring WEST foundation deletion protection after an interrupted rebuild" >&2
+    if ! emergency_protect_foundation; then
+      echo "CRITICAL: WEST foundation deletion protection could not be restored" >&2
+      status=1
+    fi
+  fi
+
+  if ! find "${TEMP_DIR}" -type f -delete; then
+    echo "Failed to remove WEST foundation temporary files" >&2
+    status=1
+  fi
+  if ! rmdir "${TEMP_DIR}"; then
+    echo "Failed to remove WEST foundation temporary directory" >&2
+    status=1
+  fi
+  exit "${status}"
+}
+trap cleanup EXIT
+
+verify_zero_drift() {
+  "${VERIFY_SCRIPT}"
+
+  set +e
+  "${TERRAFORM_BIN}" plan \
+    -input=false \
+    -detailed-exitcode \
+    -out="${ZERO_DRIFT_PLAN}"
+  ZERO_DRIFT_STATUS=$?
+  set -e
+
+  if [[ "${ZERO_DRIFT_STATUS}" -ne 0 ]]; then
+    if [[ "${ZERO_DRIFT_STATUS}" -eq 2 ]]; then
+      "${TERRAFORM_BIN}" show -no-color "${ZERO_DRIFT_PLAN}" >&2
+      echo "WEST foundation verification found Terraform drift" >&2
+    fi
+    exit "${ZERO_DRIFT_STATUS}"
+  fi
+
+  write_receipt "${ZERO_DRIFT_PLAN}" "zero-drift" "${ZERO_DRIFT_RECEIPT}" zero-drift
+  upload_receipt "zero-drift" "${ZERO_DRIFT_RECEIPT}"
+}
+
+cd "${TERRAFORM_ROOT}"
+"${TERRAFORM_BIN}" init -reconfigure
+
+if [[ "${VERIFY_ONLY}" == "true" ]]; then
+  verify_zero_drift
+  echo "WEST foundation verified and drift-free."
+  exit 0
+fi
+
+"${TERRAFORM_BIN}" plan \
+  -input=false \
+  -var=foundation_rebuild=true \
+  -out="${PRE_APPLY_PLAN}"
+write_receipt "${PRE_APPLY_PLAN}" "pre-apply" "${PRE_APPLY_RECEIPT}" rebuild
+
+if [[ "${APPLY}" != "true" ]]; then
+  echo "Plan only. Re-run with --apply --confirm=${EXPECTED_CONFIRMATION} after review."
+  exit 0
+fi
+
+SQL_REPLACEMENT_REQUIRED="$(jq -r \
+  --arg address 'google_sql_database_instance.west' \
+  'any(.changes[]?; .address == $address and (.actions | index("delete") != null))' \
+  "${PRE_APPLY_RECEIPT}")"
+
+if [[ "${SQL_REPLACEMENT_REQUIRED}" == "true" ]]; then
+  gcloud sql instances describe "${SQL_INSTANCE}" \
+    --project="${PROJECT_ID}" \
+    --format=json >"${BACKUP_JSON}"
+  BACKUP_DESCRIPTION="pre-private-west-foundation-${RUN_TIMESTAMP}"
+  gcloud sql instances patch "${SQL_INSTANCE}" \
+    --project="${PROJECT_ID}" \
+    --retain-backups-on-delete \
+    --quiet
+  gcloud sql backups create \
+    --instance="${SQL_INSTANCE}" \
+    --project="${PROJECT_ID}" \
+    --description="${BACKUP_DESCRIPTION}" \
+    --quiet
+  BACKUP_ID="$(gcloud sql backups list \
+    --instance="${SQL_INSTANCE}" \
+    --project="${PROJECT_ID}" \
+    --filter="description=${BACKUP_DESCRIPTION}" \
+    --limit=1 \
+    --format='value(id)')"
+  if [[ -z "${BACKUP_ID}" ]]; then
+    echo "Cloud SQL did not return the pre-replacement backup ID" >&2
+    exit 1
+  fi
+  gcloud sql backups describe "${BACKUP_ID}" \
+    --instance="${SQL_INSTANCE}" \
+    --project="${PROJECT_ID}" \
+    --format=json >"${BACKUP_VERIFICATION_JSON}"
+  if ! jq -e '.status == "SUCCESSFUL"' "${BACKUP_VERIFICATION_JSON}" >/dev/null; then
+    echo "Cloud SQL pre-replacement backup is not successful" >&2
+    jq '{id, status, description}' "${BACKUP_VERIFICATION_JSON}" >&2
+    exit 1
+  fi
+  jq -n \
+    --arg backupId "${BACKUP_ID}" \
+    --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg gitCommit "${GIT_COMMIT}" \
+    --arg instance "${SQL_INSTANCE}" \
+    '{schemaVersion: 1, target: "west-platform", phase: "pre-replacement-backup", generatedAt: $createdAt, gitCommit: $gitCommit, instance: $instance, backupId: $backupId, retainBackupsOnDelete: true}' \
+    >"${BACKUP_RECEIPT}"
+  upload_receipt "pre-replacement-backup" "${BACKUP_RECEIPT}"
+fi
+
+upload_receipt "pre-apply" "${PRE_APPLY_RECEIPT}"
+PROTECTION_REQUIRED=true
+"${TERRAFORM_BIN}" apply -input=false "${PRE_APPLY_PLAN}"
+protect_foundation "protection"
+PROTECTION_REQUIRED=false
+"${REPO_ROOT}/scripts/setup-cloud-sql.sh" --target=test-west --rotate
+verify_zero_drift
+echo "WEST foundation rebuilt, verified, protected, and drift-free."
