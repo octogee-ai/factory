@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  cancelCustomerMigrationsForSuspension,
   cancelStripeSubscription,
   deactivateCustomerVisibility,
   deleteStripeCustomer,
@@ -169,6 +170,75 @@ describe("deleteStripeCustomer", () => {
 });
 
 describe("Firestore suspension fences", () => {
+  it("terminally cancels queued Builder migrations and requests cancellation for started work", async () => {
+    const writes: Array<{ id: string; data: Record<string, unknown> }> = [];
+    const operations = [
+      {
+        id: "queued-migration",
+        kind: "migrate-customer",
+        status: "pending",
+        inputUid: "uid-1",
+        input: { uid: "uid-1", fromGatewayId: "default", toGatewayId: "builder-1" },
+      },
+      {
+        id: "started-migration",
+        kind: "migrate-customer",
+        status: "running",
+        inputUid: "uid-1",
+        input: { uid: "uid-1", fromGatewayId: "default", toGatewayId: "builder-1" },
+        customerMigrationV2: { phase: "initialized" },
+      },
+      {
+        id: "other-builder",
+        kind: "migrate-customer",
+        status: "pending",
+        inputUid: "uid-2",
+        input: { uid: "uid-2", fromGatewayId: "default", toGatewayId: "builder-2" },
+      },
+    ];
+    const refs = new Map(operations.map((operation) => [operation.id, { id: operation.id }]));
+    const db = {
+      collection: () => ({
+        where: () => ({
+          get: async () => ({
+            docs: operations.map((operation) => ({
+              id: operation.id,
+              ref: refs.get(operation.id),
+              data: () => operation,
+            })),
+          }),
+        }),
+      }),
+      runTransaction: async (run: (transaction: {
+        get: (ref: { id: string }) => Promise<{ exists: boolean; data: () => Record<string, unknown> }>;
+        update: (ref: { id: string }, data: Record<string, unknown>) => void;
+      }) => Promise<void>) => run({
+        get: async (ref) => ({
+          exists: true,
+          data: () => operations.find((operation) => operation.id === ref.id)!,
+        }),
+        update: (ref, data) => { writes.push({ id: ref.id, data }); },
+      }),
+    };
+
+    await cancelCustomerMigrationsForSuspension(db as never, "uid-1", 80);
+
+    expect(writes).toHaveLength(2);
+    expect(writes).toContainEqual({
+      id: "queued-migration",
+      data: expect.objectContaining({
+        status: "failed",
+        completedAt: 80,
+        error: "customer migration cancelled because the account was suspended",
+        rolledBack: false,
+      }),
+    });
+    expect(writes).toContainEqual({
+      id: "started-migration",
+      data: { cancellationRequestedAt: 80 },
+    });
+  });
+
   it("deactivates every public projection and deletes social edges in bounded batches", async () => {
     const refs = (prefix: string) => Array.from({ length: 250 }, (_, index) => ({
       ref: { path: `${prefix}/${index}` },

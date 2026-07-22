@@ -204,6 +204,7 @@ import { startHttpServer, startMaintenanceHttpServer } from "./http-server.js";
 import { createConnectorSecretDecryptor } from "./connector-secret-decryption.js";
 import {
   cancelStripeSubscription,
+  cancelCustomerMigrationsForSuspension,
   deactivateCustomerVisibility,
   deleteStripeCustomer,
   disableCreditAutoTopUp,
@@ -2894,6 +2895,8 @@ function buildSuspendCustomerHandler(
       );
     },
     suspendAuthUser: (uid) => disableAuthUserAndRevokeSessions(uid, getAuth()),
+    cancelCustomerMigrations: (uid) =>
+      cancelCustomerMigrationsForSuspension(db, uid, Date.now()),
     deactivateCustomerVisibility: (uid) => deactivateCustomerVisibility(db, uid),
     invalidatePendingCredentialFlows: (uid) => invalidatePendingCredentialFlows(db, uid),
     unmountFromGateway: createCustomerDeletionUnmount(db, privateKey, logFn, kubeOps),

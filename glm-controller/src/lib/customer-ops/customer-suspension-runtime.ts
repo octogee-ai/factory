@@ -1,9 +1,10 @@
-import type { DocumentReference, Firestore } from "firebase-admin/firestore";
+import { FieldValue, type DocumentReference, type Firestore } from "firebase-admin/firestore";
 import {
   MODEL_BROKER_CREDITS_COLLECTION,
   MODEL_BROKER_GATEWAY_POINTERS_COLLECTION,
   MODEL_BROKER_TOKENS_COLLECTION,
 } from "@octogee/shared/types/model-broker-usage";
+import { GLM_OPERATIONS_COLLECTION } from "@octogee/shared/types/glm";
 
 const TERMINAL_STRIPE_SUBSCRIPTION_STATUSES = new Set(["canceled", "incomplete_expired"]);
 const FIRESTORE_VISIBILITY_BATCH_SIZE = 400;
@@ -12,6 +13,59 @@ type VisibilityWrite = {
   kind: "update" | "delete";
   ref: DocumentReference;
 };
+
+function migrationOwnerUid(operation: Record<string, unknown>): string | null {
+  if (typeof operation.inputUid === "string") return operation.inputUid;
+  const input = operation.input;
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const uid = (input as Record<string, unknown>).uid;
+  return typeof uid === "string" ? uid : null;
+}
+
+function migrationNeedsCancellationRequest(operation: Record<string, unknown>): boolean {
+  if (operation.status === "running" || operation.customerMigrationV2 !== undefined) return true;
+  const output = operation.output;
+  if (!output || typeof output !== "object" || Array.isArray(output)) return false;
+  const cleanup = (output as Record<string, unknown>).configCleanup;
+  return cleanup !== null && typeof cleanup === "object";
+}
+
+export async function cancelCustomerMigrationsForSuspension(
+  db: Pick<Firestore, "collection" | "runTransaction">,
+  uid: string,
+  now: number,
+): Promise<void> {
+  const snapshot = await db
+    .collection(GLM_OPERATIONS_COLLECTION)
+    .where("status", "in", ["pending", "running"])
+    .get();
+  for (const doc of snapshot.docs) {
+    const operation = doc.data() as Record<string, unknown>;
+    if (operation.kind !== "migrate-customer" || migrationOwnerUid(operation) !== uid) continue;
+    await db.runTransaction(async (transaction) => {
+      const fresh = await transaction.get(doc.ref);
+      if (!fresh.exists) return;
+      const current = fresh.data() as Record<string, unknown>;
+      if (
+        current.kind !== "migrate-customer" ||
+        migrationOwnerUid(current) !== uid ||
+        (current.status !== "pending" && current.status !== "running")
+      ) return;
+      if (migrationNeedsCancellationRequest(current)) {
+        transaction.update(doc.ref, { cancellationRequestedAt: now });
+        return;
+      }
+      transaction.update(doc.ref, {
+        status: "failed",
+        completedAt: now,
+        error: "customer migration cancelled because the account was suspended",
+        rolledBack: false,
+        nextAttemptAt: FieldValue.delete(),
+        waitingOn: FieldValue.delete(),
+      });
+    });
+  }
+}
 
 export async function deactivateCustomerVisibility(
   db: Pick<Firestore, "collection" | "collectionGroup" | "batch">,

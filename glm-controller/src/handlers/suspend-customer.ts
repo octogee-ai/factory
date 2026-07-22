@@ -26,6 +26,7 @@ export interface CustomerSuspensionDeps {
     cleanup: CustomerCleanupContext,
   ) => Promise<void>;
   suspendAuthUser: (uid: string) => Promise<void>;
+  cancelCustomerMigrations: (uid: string) => Promise<void>;
   deactivateCustomerVisibility: (uid: string) => Promise<void>;
   invalidatePendingCredentialFlows: (uid: string) => Promise<void>;
   unmountFromGateway: (
@@ -114,6 +115,7 @@ export function createSuspendCustomerHandler(
     const skip = (name: string) => report(ctx, deps, { name, status: "skipped" });
 
     await run("suspend-auth", () => deps.suspendAuthUser(uid));
+    await run("cancel-customer-migrations", () => deps.cancelCustomerMigrations(uid));
     await run("deactivate-customer-visibility", () =>
       deps.deactivateCustomerVisibility(uid));
     await run("invalidate-pending-credential-flows", () =>
