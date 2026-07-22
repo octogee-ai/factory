@@ -196,7 +196,7 @@ restoreByosubForAgent: (slug: string) => Promise<{ restored: boolean; present: b
     mmUpdate: MmUpdate | null,
 
 opts?: { signal?: AbortSignal; byosActive?: boolean },
-  ) => Promise<{ elapsedMs: number }>;
+  ) => Promise<{ elapsedMs: number; appliedFingerprint?: string }>;
   applyRemoveCustomerConfigPatch: (slug: string, agentId: string) => Promise<void>;
 
   waitForAccountHealthy: (params: { slug: string; timeoutMs: number }) => Promise<boolean>;
@@ -250,6 +250,7 @@ export type AddCustomerStep =
 export interface AddCustomerResult {
   newCustomer: boolean;
   steps: AddCustomerStep[];
+  appliedFingerprint?: string;
   // Active projects whose pod checkout is STILL absent after this converge. Non-empty means
   // the converge did not reach desired state, so the caller must not record its fingerprint
   // as applied: doing so marks the customer clean and strands the checkout — and with it the
@@ -543,7 +544,13 @@ async function addCustomerToGatewayInner(
   steps.push(...mm.steps);
   throwIfAborted(signal, uid);
 
-  await applyConfigPatchAndMount(adapter, snapshot, mm.mmUpdate, byos.present, signal);
+  const appliedFingerprint = await applyConfigPatchAndMount(
+    adapter,
+    snapshot,
+    mm.mmUpdate,
+    byos.present,
+    signal,
+  );
   steps.push("config-patch");
   throwIfAborted(signal, uid);
 
@@ -562,7 +569,12 @@ async function addCustomerToGatewayInner(
   steps.push(...(await markCompleteIfNeeded(adapter, uid, snapshot, newCustomer)));
   steps.push(...(await notifyOpsIfNew(adapter, ctx, newCustomer)));
 
-  return { newCustomer, steps, pendingProjectClones: projectClones.pending };
+  return {
+    newCustomer,
+    steps,
+    pendingProjectClones: projectClones.pending,
+    ...(appliedFingerprint ? { appliedFingerprint } : {}),
+  };
 }
 
 async function loadAndPrepareForMount(
@@ -885,13 +897,14 @@ async function applyConfigPatchAndMount(
   mmUpdate: MmUpdate | null,
   byosActive: boolean,
   signal: AbortSignal | undefined,
-): Promise<void> {
+): Promise<string | undefined> {
   const patchResult = await adapter.applyAddCustomerConfigPatch(snapshot, mmUpdate, {
     signal,
     byosActive,
   });
   adapter.log(`[add:${snapshot.slug}] config patch in ${patchResult.elapsedMs}ms`);
   if (adapter.onMounted) adapter.onMounted(snapshot.slug);
+  return patchResult.appliedFingerprint;
 }
 
 async function verifyChannelReady(

@@ -73,7 +73,7 @@ describe("settleConvergence — the applied-fingerprint gate", () => {
       },
       h,
     );
-    expect(h.recordApplied).toHaveBeenCalledWith("alice");
+    expect(h.recordApplied).toHaveBeenCalledWith("alice", "fp1");
     expect(h.forgetRetry).toHaveBeenCalledWith("alice");
     expect(h.rememberRetry).not.toHaveBeenCalled();
   });
@@ -92,6 +92,25 @@ describe("settleConvergence — the applied-fingerprint gate", () => {
       nextAt: 1_000 + cloneRetryDelayMs(1),
       fingerprint: "fp1",
     });
+  });
+
+  it("records the post-attach fingerprint instead of relaunching a newly provisioned customer as stale", () => {
+    const h = hooks();
+    settleConvergence(
+      {
+        now: 1_000,
+        slug: "alice",
+        desiredFingerprint: "before-mattermost",
+        prior: undefined,
+        result: {
+          pendingProjectClones: [],
+          appliedFingerprint: "after-mattermost",
+        },
+      },
+      h,
+    );
+
+    expect(h.recordApplied).toHaveBeenCalledWith("alice", "after-mattermost");
   });
 
   it("lengthens the backoff on repeat and caps it — never abandons, never hot-loops", () => {

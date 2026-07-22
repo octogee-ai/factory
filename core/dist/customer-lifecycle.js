@@ -187,7 +187,7 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     snapshot = mm.snapshot;
     steps.push(...mm.steps);
     throwIfAborted(signal, uid);
-    await applyConfigPatchAndMount(adapter, snapshot, mm.mmUpdate, byos.present, signal);
+    const appliedFingerprint = await applyConfigPatchAndMount(adapter, snapshot, mm.mmUpdate, byos.present, signal);
     steps.push("config-patch");
     throwIfAborted(signal, uid);
     steps.push(...(await reassertConvergedState(adapter, snapshot)));
@@ -199,7 +199,12 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     steps.push(...(await scheduleGreetingIfNeeded(adapter, uid, snapshot)));
     steps.push(...(await markCompleteIfNeeded(adapter, uid, snapshot, newCustomer)));
     steps.push(...(await notifyOpsIfNew(adapter, ctx, newCustomer)));
-    return { newCustomer, steps, pendingProjectClones: projectClones.pending };
+    return {
+        newCustomer,
+        steps,
+        pendingProjectClones: projectClones.pending,
+        ...(appliedFingerprint ? { appliedFingerprint } : {}),
+    };
 }
 async function loadAndPrepareForMount(adapter, uid, customersDir) {
     const snapshot = await adapter.loadUserSnapshot(uid);
@@ -439,6 +444,7 @@ async function applyConfigPatchAndMount(adapter, snapshot, mmUpdate, byosActive,
     adapter.log(`[add:${snapshot.slug}] config patch in ${patchResult.elapsedMs}ms`);
     if (adapter.onMounted)
         adapter.onMounted(snapshot.slug);
+    return patchResult.appliedFingerprint;
 }
 async function verifyChannelReady(adapter, slug, verifyTimeoutMs) {
     adapter.log(`[add:${slug}] verify: waiting for coach MM account to report running+connected (timeoutMs=${verifyTimeoutMs})`);

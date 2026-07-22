@@ -93,6 +93,7 @@ import {
   mattermostProjectAccountSecretChange,
   updateMattermostAccountSecrets,
 } from "./mattermost-account-secrets.js";
+import { snapshotConfigFingerprint } from "./snapshot-fingerprint.js";
 
 const DEFAULT_COACH = {
   name: "Octo",
@@ -365,7 +366,12 @@ async function applyAddCustomerConfigPatch(
       signal: callOpts?.signal,
     },
   );
-  return { elapsedMs: Date.now() - startedAt };
+  return {
+    elapsedMs: Date.now() - startedAt,
+    ...(brokerSnapshot
+      ? { appliedFingerprint: snapshotConfigFingerprint(brokerSnapshot) }
+      : {}),
+  };
 }
 
 async function applyRemoveCustomerConfigPatch(

@@ -15,6 +15,7 @@ import {
   platformOpenAiEmbeddingSecretId,
 } from "../lib/openclaw-config-builders.js";
 import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
+import { snapshotConfigFingerprint } from "../lib/snapshot-fingerprint.js";
 
 const mocks = vi.hoisted(() => ({
   readActivationManifest: vi.fn(),
@@ -431,6 +432,40 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(args.buildReplacePaths?.(current)).toEqual(
       customerConfigFullAgentListReplacePaths(current, "alice"),
     );
+  });
+
+  it("receipts the post-provision snapshot whose Mattermost identity was applied", async () => {
+    const snapshot: FleetBrokerUserSnapshot = {
+      uid: "uid-alice",
+      slug: "alice",
+      tier: "pro",
+      gatewayId: "default",
+      status: "provisioning",
+      agentIds: [],
+      repoUrl: "https://gitea.test/octogee/alice-workspace.git",
+      mattermostUserId: "mm-alice",
+      customerMmUserId: "mm-alice",
+      greetingPosted: false,
+      channels: [{ scope: "coach", kind: "direct", channelId: "dm-alice" }],
+      projects: [],
+      ownerName: "Alice",
+      coachToken: "pat-after-provision",
+      coachMmUserId: "mm-alice-coach",
+      trialGrant: { gatewayId: "builder-alice" },
+    };
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
+    });
+    adapter.seedUserSnapshotForMigration?.(snapshot);
+
+    const result = await adapter.applyAddCustomerConfigPatch(
+      snapshot,
+      { _coachPersonalToken: "pat-after-provision" },
+    );
+
+    expect(result.appliedFingerprint).toBe(snapshotConfigFingerprint(snapshot));
   });
 
   it("rebinds carried-forward coaches' shifted platform embedding refs to their OWN agent ids on mount", async () => {

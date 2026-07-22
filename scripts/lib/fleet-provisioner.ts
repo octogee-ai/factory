@@ -98,7 +98,7 @@ export function cloneRetryReady(
 }
 
 export interface ConvergenceHooks {
-  recordApplied: (slug: string) => void;
+  recordApplied: (slug: string, fingerprint: string | undefined) => void;
   rememberRetry: (slug: string, state: CloneRetryState) => void;
   forgetRetry: (slug: string) => void;
 }
@@ -108,7 +108,7 @@ export interface SettleConvergenceInput {
   slug: string;
   desiredFingerprint: string | undefined;
   prior: CloneRetryState | undefined;
-  result: Pick<AddCustomerResult, "pendingProjectClones">;
+  result: Pick<AddCustomerResult, "pendingProjectClones" | "appliedFingerprint">;
 }
 
 // A converge that left a project checkout absent has NOT reached desired state, so its
@@ -124,7 +124,7 @@ export function settleConvergence(input: SettleConvergenceInput, hooks: Converge
   const { now, slug, desiredFingerprint, prior, result } = input;
   if (result.pendingProjectClones.length === 0) {
     hooks.forgetRetry(slug);
-    hooks.recordApplied(slug);
+    hooks.recordApplied(slug, result.appliedFingerprint ?? desiredFingerprint);
     return;
   }
   const attempts = (prior?.attempts ?? 0) + 1;
@@ -663,9 +663,8 @@ function startMaybeReconcileLoop(params: {
         prior: cloneRetry.get(slug),
         result,
       }, {
-        recordApplied: (s) => {
+        recordApplied: (s, fp) => {
           if (!fingerprintSource) return;
-          const fp = desiredFp.get(s);
           if (fp !== undefined) {
             appliedFp.set(s, fp);
             persistAppliedFp();

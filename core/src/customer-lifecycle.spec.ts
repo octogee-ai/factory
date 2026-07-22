@@ -49,6 +49,7 @@ giteaReadShouldThrow: boolean;
   reassertContextFilesUserData?: Record<string, unknown>;
   byosub?: { restored: boolean; present: boolean };
   lastConfigPatchByosActive?: boolean;
+  configPatchFingerprint?: string;
   healthy: boolean;
   pendingProjects: Array<{ projectSlug: string; giteaRepoName: string }>;
   cloneProjectThrows?: boolean;
@@ -207,7 +208,12 @@ return "ssh-pubkey";
     applyAddCustomerConfigPatch: async (_snap, _mm, opts) => {
       record("applyAddCustomerConfigPatch");
       state.lastConfigPatchByosActive = opts?.byosActive ?? false;
-      return { elapsedMs: 42 };
+      return {
+        elapsedMs: 42,
+        ...(state.configPatchFingerprint
+          ? { appliedFingerprint: state.configPatchFingerprint }
+          : {}),
+      };
     },
     applyRemoveCustomerConfigPatch: async () => {
       record("applyRemoveCustomerConfigPatch");
@@ -611,6 +617,14 @@ if (ensureIdx !== -1) {
     expect(state.calls).toContain("applyAddCustomerConfigPatch");
     expect(state.calls).toContain("waitForAccountHealthy");
     expect(result.steps).toContain("verify-channel-ready");
+  });
+
+  it("returns the exact snapshot fingerprint applied by the successful config patch", async () => {
+    state.configPatchFingerprint = "post-mattermost-fingerprint";
+
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    expect(result.appliedFingerprint).toBe("post-mattermost-fingerprint");
   });
 
   it("refreshes the customer snapshot before reasserting cohort model state", async () => {
