@@ -13,6 +13,7 @@ import {
   type W9TestPublisherLiveExperiment,
 } from "@octogee/shared/types/gateway-releases";
 import { isW9CandidateImageTag } from "@octogee/shared/types/image-tag";
+import { deploymentEnvironmentForNamespace } from "@octogee/core/deployment-environment";
 
 export interface HelmRunner {
 
@@ -494,7 +495,7 @@ function validateW9TestExperimentRender(opts: BuildUpgradeArgsOpts): void {
     return;
   }
   if (
-    opts.namespace !== "octogee-test" ||
+    deploymentEnvironmentForNamespace(opts.namespace) !== "test" ||
     mode !== "publisher-live" ||
     !isW9CandidateImageTag(opts.imageTag) ||
     !isW9GatewayEdgeImage(

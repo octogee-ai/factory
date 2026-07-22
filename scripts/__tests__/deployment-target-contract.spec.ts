@@ -311,6 +311,14 @@ describe("deployment target consumers", () => {
     expect(verify).toContain("--env=$ENV$TARGET_ARG");
   });
 
+  it("runs fleet-control keypair verification for central and west targets", () => {
+    const verify = source("scripts/verify-env.sh");
+
+    expect(verify).toContain('if [[ "$ENV" == "custom" ]]');
+    expect(verify).not.toContain('if [[ "$NAMESPACE" != "octogee"');
+    expect(verify).not.toContain("Unknown namespace '$NAMESPACE' — skipping fleet-control secret checks");
+  });
+
   it("resolves registry paths in gateway promotion code", () => {
     for (const script of [
       "scripts/ops/promote-gateway.ts",

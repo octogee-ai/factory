@@ -6,9 +6,9 @@ and tracing/. Edit the panel definitions here and re-run to regenerate; the
 sidecar deploy (setup-monitoring.sh) wraps each JSON in a folder-annotated
 ConfigMap. Folders are derived from the output subdirectory.
 
-All dashboards template `$datasource` (Prometheus) + `$namespace` (octogee |
-octogee-test, default octogee = PROD) so the same board serves both envs from
-the one shared Grafana. Gateway boards add a `$gateway` job selector.
+All dashboards template `$datasource` (Prometheus) + `$namespace` across the
+central and west PROD/TEST namespaces so one shared Grafana serves both regions.
+Gateway boards add a `$gateway` job selector.
 """
 import json
 import os
@@ -38,7 +38,7 @@ def tmpl_namespace():
         "name": "namespace", "label": "Namespace", "type": "query",
         "datasource": ds(),
         "query": {"query": "label_values(kube_pod_info, namespace)", "refId": "ns"},
-        "regex": "/^(octogee|octogee-test)$/",
+        "regex": "/^(octogee|octogee-west|octogee-test|octogee-test-west)$/",
         "current": {"text": "octogee", "value": "octogee"},
         "includeAll": False, "multi": False, "refresh": 2, "sort": 1,
     }

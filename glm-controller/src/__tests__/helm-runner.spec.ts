@@ -250,6 +250,9 @@ describe("helm-runner helpers", () => {
 
     const args = buildUpgradeArgs({ ...base, namespace: "octogee-test" });
     expect(args).toContain("conversationExperiment.mode=publisher-live");
+    expect(buildUpgradeArgs({ ...base, namespace: "octogee-test-west" })).toContain(
+      "conversationExperiment.mode=publisher-live",
+    );
     expect(args).toContain(
       "gatewayEdge.image.repository=us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
     );

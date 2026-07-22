@@ -63,7 +63,7 @@
           "query": "label_values(kube_pod_info, namespace)",
           "refId": "ns"
         },
-        "regex": "/^(octogee|octogee-test)$/",
+        "regex": "/^(octogee|octogee-west|octogee-test|octogee-test-west)$/",
         "current": {
           "text": "octogee",
           "value": "octogee"
