@@ -204,17 +204,6 @@ CONN_NAME=$(gcloud sql instances describe "$INSTANCE" --project="$PROJECT" \
   --format="value(connectionName)")
 store_secret "$CONNECTION_NAME_SECRET" "$CONN_NAME"
 
-# ── Grant Cloud SQL Client role to GKE Workload Identity SA ──────────────────
-log "Granting Cloud SQL Client role to Workload Identity service accounts..."
-
-# Get the GKE project SA (Workload Identity for octogee namespace)
-for SA in "octogee@octogee.iam.gserviceaccount.com"; do
-  gcloud projects add-iam-policy-binding "$PROJECT" \
-    --member="serviceAccount:$SA" \
-    --role="roles/cloudsql.client" \
-    --quiet 2>/dev/null || warn "Could not grant cloudsql.client to $SA — may need manual setup"
-done
-
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}═══════════════════════════════════════════════════${NC}"
