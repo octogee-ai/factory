@@ -256,12 +256,18 @@ describe("directory local file dependencies", () => {
     const sourceDir = writePackage(root, "source", "@octogee/source");
     const consumerDir = writeConsumer(root);
 
-    execFileSync(NPM_BIN, ["install", "--package-lock-only", "--ignore-scripts"], {
+    execFileSync(NPM_BIN, [
+      "install",
+      "--package-lock-only",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+    ], {
       cwd: consumerDir,
       stdio: "pipe",
     });
     const lockBefore = fs.readFileSync(path.join(consumerDir, "package-lock.json"), "utf8");
-    execFileSync(NPM_BIN, ["ci", "--ignore-scripts"], {
+    execFileSync(NPM_BIN, ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], {
       cwd: consumerDir,
       stdio: "pipe",
     });
@@ -269,7 +275,7 @@ describe("directory local file dependencies", () => {
     const installed = path.join(consumerDir, "node_modules", "@octogee", "source");
     expect(fs.lstatSync(installed).isSymbolicLink()).toBe(false);
     fs.writeFileSync(path.join(sourceDir, "dist", "index.js"), "export const value = 2;\n");
-    execFileSync(NPM_BIN, ["ci", "--ignore-scripts"], {
+    execFileSync(NPM_BIN, ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], {
       cwd: consumerDir,
       stdio: "pipe",
     });
@@ -278,7 +284,7 @@ describe("directory local file dependencies", () => {
       "export const value = 2;\n",
     );
     expect(fs.readFileSync(path.join(consumerDir, "package-lock.json"), "utf8")).toBe(lockBefore);
-  });
+  }, 30_000);
 
   it("refreshes producer metadata while preserving every consumer dependency section pin", () => {
     const root = fixture();
