@@ -5,6 +5,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TERRAFORM_ROOT="${REPO_ROOT}/terraform/environments/west-platform"
 RECEIPT_GENERATOR="${REPO_ROOT}/scripts/ops/terraform-plan-receipt.mjs"
 PROTECTION_TARGET_SELECTOR="${REPO_ROOT}/scripts/ops/terraform-protection-targets.mjs"
+SQL_STATE_RECONCILER="${REPO_ROOT}/scripts/ops/reconcile-deleted-sql-child-state.sh"
 VERIFY_SCRIPT="${REPO_ROOT}/scripts/verify-west-foundation.sh"
 TERRAFORM_BIN="$("${REPO_ROOT}/scripts/ops/terraform-bin.sh")"
 PROJECT_ID="octogee"
@@ -118,6 +119,13 @@ PROTECTION_CHANGE_ADDRESSES=(
   'google_vpc_access_connector.west'
 )
 
+SQL_CHILD_STATE_ADDRESSES=(
+  'google_sql_database.environment["gitea_prod"]'
+  'google_sql_database.environment["gitea_test"]'
+  'google_sql_database.environment["mattermost_prod"]'
+  'google_sql_database.environment["mattermost_test"]'
+)
+
 write_receipt() {
   local plan_file="$1"
   local phase="$2"
@@ -170,6 +178,24 @@ receipt_requires_deletion() {
     "${receipt_file}" >/dev/null
 }
 
+reconcile_deleted_sql_child_state() {
+  local arguments=(
+    "--project=${PROJECT_ID}"
+    "--instance=${SQL_INSTANCE}"
+    "--terraform-bin=${TERRAFORM_BIN}"
+    "--selector=${PROTECTION_TARGET_SELECTOR}"
+    "--receipt-bucket=${RECEIPT_BUCKET}"
+    "--run-timestamp=${RUN_TIMESTAMP}"
+    "--git-commit=${GIT_COMMIT}"
+    "--temp-dir=${TEMP_DIR}"
+  )
+  local address
+  for address in "${SQL_CHILD_STATE_ADDRESSES[@]}"; do
+    arguments+=("--candidate=${address}")
+  done
+  "${SQL_STATE_RECONCILER}" "${arguments[@]}"
+}
+
 retire_replaced_foundation() {
   if [[ "${CLUSTER_REPLACEMENT_REQUIRED}" == "true" ]]; then
     local cluster_name
@@ -218,6 +244,7 @@ retire_replaced_foundation() {
       echo "Unexpected WEST Cloud SQL inventory: ${sql_instance}" >&2
       return 1
     fi
+    reconcile_deleted_sql_child_state
   fi
 }
 
@@ -326,6 +353,10 @@ if [[ "${VERIFY_ONLY}" == "true" ]]; then
   verify_zero_drift
   echo "WEST foundation verified and drift-free."
   exit 0
+fi
+
+if [[ "${APPLY}" == "true" ]]; then
+  reconcile_deleted_sql_child_state
 fi
 
 "${TERRAFORM_BIN}" plan \
