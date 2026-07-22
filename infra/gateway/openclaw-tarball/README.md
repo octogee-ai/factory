@@ -545,20 +545,22 @@ in both files. Don't commit yet.
 
 ### Step 12b — Rotate slots in `oc-build-matrix.yaml`
 
-We carry three rotating slots — `preview`, `current`, `previous` — in
-both blocks of `oc-build-matrix.yaml`. Which slot you're touching this
-cycle determines what you edit. CI builds the gateway against every
-entry in `versions:` on every push to main, alongside the version
-pinned in `cloudbuild.yaml`.
+We carry three STANDING slots — `current`, `preview`, `dev` — in both
+blocks of `oc-build-matrix.yaml` (operator directive, Chris, 2026-07-22;
+the old rotating `previous` slot is retired — it was never used, and AR
+tags of old currents stay immutable and rollable without a matrix row).
+Which slot you're touching this cycle determines what you edit. CI
+builds the gateway against every entry in `versions:` on every push to
+main, alongside the version pinned in `cloudbuild.yaml`.
 
-| Slot | What it tracks | When to touch |
-|---|---|---|
-| `preview` | upstream's next stable in flight (whatever upstream cuts) | refresh in place each time upstream cuts a new pre-stable; empty between cycles |
-| `current` | the stable canonical (the cloudbuild.yaml `_OPENCLAW_VERSION` pin) | replaced when you promote a preview to GA |
-| `previous` | the just-replaced current (rollback safety net + A/B baseline) | set at promotion time; the old `previous` is dropped at the next promotion |
+| Slot | What it tracks | Ceremony | When to touch |
+|---|---|---|---|
+| `current` | the latest OpenClaw GA (the cloudbuild.yaml `_OPENCLAW_VERSION` pin) | standard | replaced when you promote a preview to GA |
+| `preview` | the latest tagged upstream pre-stable with published npm companions | standard 2-artifact | refresh in place each time upstream cuts a new pre-stable |
+| `dev` | a pinned upstream-main SHA — LATEST at cut time unless the operator overrides | ALL-SOURCE (see below) | refresh on operator ask |
 
-`bases:` always carries entries for every slot that exists. `versions:`
-carries `preview` + `previous` (gateway-build-operator-base.yml excludes the
+`bases:` always carries entries for every slot. `versions:` carries
+`preview` + `dev` (gateway-build-operator-base.yml excludes the
 `current` version since the main `build` job already produces it as the
 bare `:<sha>` image — listing it here would double-build).
 
@@ -567,27 +569,51 @@ bare `:<sha>` image — listing it here would double-build).
 
 - `versions:` — replace the existing `preview` entry's `version` (and
   if you re-cut the integration branch, you also bump `forkSha` in the
-  matching `bases:` row below). Keep the `previous` entry untouched.
+  matching `bases:` row below). Keep the `dev` entry untouched.
 - `bases:` — replace the `preview` entry's `version` + `forkSha`.
   `config: cloudbuild-base-beta.yaml` stays (no `:latest` clobber).
-  Keep the `current` + `previous` entries untouched.
+  Keep the `current` + `dev` entries untouched.
 - ⚠ Skip Step 12 entirely — `cloudbuild.yaml` does NOT change on a
   preview refresh. The whole point of `preview` is to test an upstream
   pre-stable without disturbing the production `current`.
 
+**This cycle is a dev refresh** (the operator asked for a new
+upstream-main snapshot):
+
+- Cut the branch from the pinned main SHA (default: latest), branch name
+  `octogee/gateway-scaling-patches-main-<sha8>` where `<sha8>` is the
+  UPSTREAM commit. Stamp `package.json` + `npm-shrinkwrap.json` with the
+  synthetic version `<main-pkg-version>-main.<sha8>` → the version
+  string can never masquerade as a real upstream release.
+- ⚠ ALSO stamp the three shipped extensions' plugin-API floors:
+  `extensions/{codex,parallel,mattermost}/package.json`
+  `openclaw.compat.pluginApi` → `>=<main-pkg-version>-main`. The synthetic
+  version is a semver PRERELEASE, and a plain `>=X.Y.Z` range can never be
+  satisfied by a prerelease of X.Y.Z (upstream's suffix normalizer only
+  strips `-N`/`-alpha.N`/`-beta.N`/`-rc.N`) — without this, every plugin
+  install fails at image build with "requires plugin API >=X.Y.Z".
+  Same-tuple prerelease floors are honored
+  (`shouldPreservePluginApiPrereleaseFloor`). Commit BEFORE `pnpm build`
+  so the embedded build stamp matches the final fork SHA.
+- The pack is ALL-SOURCE: `pack-fork-tarball.sh` vendors `@openclaw/ai`
+  (`file:` dep) plus `@openclaw/codex` + `@openclaw/parallel-plugin`
+  tarballs inside the fork tarball (nothing at this version exists on
+  npm, ever). Mattermost ships as its own Step 7b artifact as always.
+  Verify with the vendored-companion install variant (Step 7's ⚠ block).
+- `versions:` + `bases:` — replace the `dev` rows' `version` + fork SHAs.
+  `config: cloudbuild-base-beta.yaml`. Keep `current` + `preview`
+  untouched; skip Step 12.
+
 **This cycle is a preview-to-current promotion** (upstream cut a stable
 we're adopting):
 
-- `versions:` — DROP the entry for the old `previous` (no longer
-  needed), CHANGE the old `previous` entry to track what was `current`
-  (its row already exists if `current` was rotated in correctly last
-  cycle — otherwise add it now), and DROP the entry for the new
-  `current` (which is what `preview` was — gateway-build-operator-base.yml will
-  exclude it via the cloudbuild.yaml pin).
-- `bases:` — drop the old `previous` row; relabel the old `current` row
-  to `previous`; relabel the old `preview` row to `current` and switch
+- `versions:` — DROP the entry for the new `current` (which is what
+  `preview` was — gateway-build-operator-base.yml will exclude it via
+  the cloudbuild.yaml pin). Keep the `dev` entry untouched.
+- `bases:` — relabel the old `preview` row to `current` and switch
   its `config:` from `cloudbuild-base-beta.yaml` to `cloudbuild-base.yaml`
-  (now that it gets `:latest`). Keep its `version` + `forkSha`.
+  (now that it gets `:latest`). Keep its `version` + `forkSha`. The old
+  `current` row is dropped (no `previous` slot to rotate into).
 - Step 12 IS required this cycle — `cloudbuild.yaml` and
   `cloudbuild-base.yaml` both bump to the promoted version + fork SHA.
 
@@ -621,7 +647,7 @@ scripts/rebuild-matrix-bases.sh --apply    # submits all base builds (async)
 ```
 
 This rebuilds **every** base in the `bases:` block (`current` +
-`previous` + `preview`, plus any ad-hoc diag entries) from the current
+`preview` + `dev`, plus any ad-hoc diag entries) from the current
 checkout with the correct per-base config and fork SHA. Poll until the
 `current` slot's base is `SUCCESS`:
 
