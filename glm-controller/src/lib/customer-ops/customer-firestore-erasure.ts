@@ -94,6 +94,7 @@ export const CUSTOMER_SLUG_REFERENCE_QUERIES = policyQueries("slugFields");
 
 export const CUSTOMER_GROUP_REFERENCE_QUERIES = [
   { collectionGroup: "members", field: "id" },
+  { collectionGroup: "assignments", field: "uid" },
 ] as const;
 
 export const CUSTOMER_ARRAY_REFERENCE_QUERIES = policyArrayQueries("uidArrayFields");
