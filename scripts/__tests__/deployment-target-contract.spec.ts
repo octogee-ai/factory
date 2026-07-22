@@ -128,6 +128,12 @@ describe("deployment target consumers", () => {
     expect(workflow).toContain("FIREBASE_DEPLOYER_KEY_PROD_WEST");
     expect(gateway).toContain("FIREBASE_DEPLOYER_KEY_TEST_WEST");
     expect(gateway).toContain("FIREBASE_DEPLOYER_KEY_PROD_WEST");
+    expect(workflow).toContain(
+      "for value_name in api_key app_id sender_id mm_team_id; do",
+    );
+    expect(workflow).not.toContain(
+      "for value_name in api_key app_id sender_id measurement_id mm_team_id; do",
+    );
     expect(workflow).toContain("No Firebase deployer key slot for deployment target");
     expect(gateway).toContain("No Firebase deployer key slot for deployment target");
   });
