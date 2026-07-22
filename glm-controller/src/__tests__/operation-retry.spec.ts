@@ -194,6 +194,7 @@ describe("buildOperationCompletionUpdate", () => {
     expect(update).toMatchObject({ status: "succeeded", output: { archiveId: "archive-random" } });
     expect(update.input).toEqual(FieldValue.delete());
     expect(update.inputUid).toEqual(FieldValue.delete());
+    expect(update.createdBy).toEqual(FieldValue.delete());
     expect(update.attemptHistory).toEqual(FieldValue.delete());
     expect(update.steps).toEqual([]);
   });
