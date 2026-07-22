@@ -10,6 +10,9 @@ interface CloudSqlDocument {
     projectId: string;
     region: string;
     instance: string;
+    mattermostPasswordSecret: string;
+    giteaPasswordSecret: string;
+    connectionNameSecret: string;
     pointInTimeRecoveryEnabled: boolean;
 }
 interface KmsDocument {
@@ -69,6 +72,9 @@ export interface DeploymentEnvironmentSettings {
     cloudSqlRegion: string;
     cloudSqlInstanceName: string;
     cloudSqlConnectionName: string;
+    cloudSqlMattermostPasswordSecretName: string;
+    cloudSqlGiteaPasswordSecretName: string;
+    cloudSqlConnectionNameSecretName: string;
     cloudSqlPointInTimeRecoveryEnabled: boolean;
     kmsProjectId: string;
     kmsLocation: string;

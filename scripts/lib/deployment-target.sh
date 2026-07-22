@@ -33,6 +33,9 @@ octogee_load_deployment_target() {
       cloud_sql_region) TARGET_CLOUD_SQL_REGION="$value" ;;
       cloud_sql_instance_name) TARGET_CLOUD_SQL_INSTANCE="$value" ;;
       cloud_sql_connection_name) TARGET_CLOUD_SQL_CONNECTION="$value" ;;
+      cloud_sql_mattermost_password_secret_name) TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET="$value" ;;
+      cloud_sql_gitea_password_secret_name) TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET="$value" ;;
+      cloud_sql_connection_name_secret_name) TARGET_CLOUD_SQL_CONNECTION_NAME_SECRET="$value" ;;
       cloud_sql_point_in_time_recovery_enabled) TARGET_CLOUD_SQL_PITR_ENABLED="$value" ;;
       kms_project_id) TARGET_KMS_PROJECT="$value" ;;
       kms_location) TARGET_KMS_LOCATION="$value" ;;
@@ -57,6 +60,8 @@ octogee_load_deployment_target() {
   export TARGET_AR_PROJECT TARGET_AR_LOCATION TARGET_AR_NAME TARGET_AR_REPOSITORY
   export TARGET_CLOUD_SQL_PROJECT TARGET_CLOUD_SQL_REGION
   export TARGET_CLOUD_SQL_INSTANCE TARGET_CLOUD_SQL_CONNECTION TARGET_CLOUD_SQL_PITR_ENABLED
+  export TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET
+  export TARGET_CLOUD_SQL_CONNECTION_NAME_SECRET
   export TARGET_KMS_PROJECT TARGET_KMS_LOCATION TARGET_KMS_KEY_NAME
   export TARGET_STORAGE_PROJECT TARGET_STORAGE_LOCATION
   export TARGET_SITE_ORIGIN TARGET_APP_ORIGIN TARGET_API_ORIGIN

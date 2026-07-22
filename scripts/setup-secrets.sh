@@ -259,8 +259,8 @@ echo ""
 
 # ── 1. Mattermost DB password ─────────────────────────────────────────────
 info "mattermost-cloud-sql"
-MM_DB_PASSWORD=$(sm_get MM_DB_PASSWORD octogee)
-[[ -n "$MM_DB_PASSWORD" ]] || fail "MM_DB_PASSWORD not in Secret Manager (octogee project)"
+MM_DB_PASSWORD=$(sm_get "$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET" "$SM_PROJECT")
+[[ -n "$MM_DB_PASSWORD" ]] || fail "$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET not in Secret Manager ($SM_PROJECT project)"
 ksecret mattermost-cloud-sql --from-literal=password="$MM_DB_PASSWORD"
 
 # ── 2. Mattermost gateway creds ───────────────────────────────────────────
@@ -377,8 +377,8 @@ ksecret gitea-admin \
 # rotate across rebuilds — Gitea encrypts persisted data with them. First
 # install: generate. Re-run: reuse what's already in the K8s secret.
 info "gitea-credentials"
-GITEA_DB_PASS=$(sm_get gitea-db-password octogee)
-[[ -n "$GITEA_DB_PASS" ]] || fail "gitea-db-password not in Secret Manager"
+GITEA_DB_PASS=$(sm_get "$TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET" "$SM_PROJECT")
+[[ -n "$GITEA_DB_PASS" ]] || fail "$TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET not in Secret Manager"
 
 EXISTING_SECRET_KEY=$(ksecret_key gitea-credentials secret-key)
 EXISTING_INTERNAL_TOKEN=$(ksecret_key gitea-credentials internal-token)
@@ -1036,7 +1036,7 @@ VALUES_FILE="values.${ENV}.yaml"
 echo "  Canonical sequence (run teardown-env.sh --env=$ENV to see all 9 steps)."
 echo ""
 echo "  Next (Phase 1 → Helm):"
-    echo "    GITEA_DB_PASS=\$(gcloud secrets versions access latest --secret=gitea-db-password --project=$SM_PROJECT)"
+    echo "    GITEA_DB_PASS=\$(gcloud secrets versions access latest --secret=$TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET --project=$SM_PROJECT)"
 echo "    helm upgrade --install octogee helm/octogee \\"
 echo "      --server-side=true --force-conflicts \\"
 echo "      -f helm/octogee/$VALUES_FILE \\"

@@ -71,6 +71,10 @@ function deploymentTargetOutput(
     cloud_sql_region: settings.cloudSqlRegion,
     cloud_sql_instance_name: settings.cloudSqlInstanceName,
     cloud_sql_connection_name: settings.cloudSqlConnectionName,
+    cloud_sql_mattermost_password_secret_name:
+      settings.cloudSqlMattermostPasswordSecretName,
+    cloud_sql_gitea_password_secret_name: settings.cloudSqlGiteaPasswordSecretName,
+    cloud_sql_connection_name_secret_name: settings.cloudSqlConnectionNameSecretName,
     cloud_sql_point_in_time_recovery_enabled: String(
       settings.cloudSqlPointInTimeRecoveryEnabled,
     ),

@@ -14,6 +14,9 @@ interface CloudSqlDocument {
   projectId: string;
   region: string;
   instance: string;
+  mattermostPasswordSecret: string;
+  giteaPasswordSecret: string;
+  connectionNameSecret: string;
   pointInTimeRecoveryEnabled: boolean;
 }
 
@@ -78,6 +81,9 @@ export interface DeploymentEnvironmentSettings {
   cloudSqlRegion: string;
   cloudSqlInstanceName: string;
   cloudSqlConnectionName: string;
+  cloudSqlMattermostPasswordSecretName: string;
+  cloudSqlGiteaPasswordSecretName: string;
+  cloudSqlConnectionNameSecretName: string;
   cloudSqlPointInTimeRecoveryEnabled: boolean;
   kmsProjectId: string;
   kmsLocation: string;
@@ -189,7 +195,14 @@ export function validateDeploymentTargetsDocument(document: unknown): asserts do
     const cloudSql = record(target.cloudSql, `deployment target ${targetId}.cloudSql`);
     stringFields(
       cloudSql,
-      ["projectId", "region", "instance"],
+      [
+        "projectId",
+        "region",
+        "instance",
+        "mattermostPasswordSecret",
+        "giteaPasswordSecret",
+        "connectionNameSecret",
+      ],
       `deployment target ${targetId}.cloudSql`,
     );
     if (typeof cloudSql.pointInTimeRecoveryEnabled !== "boolean") {
@@ -249,6 +262,9 @@ function settings(
     cloudSqlRegion: target.cloudSql.region,
     cloudSqlInstanceName: target.cloudSql.instance,
     cloudSqlConnectionName: `${target.cloudSql.projectId}:${target.cloudSql.region}:${target.cloudSql.instance}`,
+    cloudSqlMattermostPasswordSecretName: target.cloudSql.mattermostPasswordSecret,
+    cloudSqlGiteaPasswordSecretName: target.cloudSql.giteaPasswordSecret,
+    cloudSqlConnectionNameSecretName: target.cloudSql.connectionNameSecret,
     cloudSqlPointInTimeRecoveryEnabled: target.cloudSql.pointInTimeRecoveryEnabled,
     kmsProjectId: target.kms.projectId,
     kmsLocation: target.kms.location,

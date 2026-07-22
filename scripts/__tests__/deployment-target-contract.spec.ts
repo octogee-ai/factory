@@ -180,6 +180,25 @@ describe("deployment target consumers", () => {
     expect(setup).not.toContain('DESIRED_PITR="false"');
   });
 
+  it("keeps west Cloud SQL bootstrap away from central Secret Manager slots", () => {
+    const setupCloudSql = source("scripts/setup-cloud-sql.sh");
+    const setupSecrets = source("scripts/setup-secrets.sh");
+    const setupMattermost = source("scripts/setup-mattermost.sh");
+    const provisionNamespace = source("scripts/provision-namespace.sh");
+    const platformWorkflow = source(".github/workflows/build-and-deploy.yml");
+
+    expect(setupCloudSql).toContain('MATTERMOST_PASSWORD_SECRET="$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET"');
+    expect(setupCloudSql).toContain('GITEA_PASSWORD_SECRET="$TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET"');
+    expect(setupCloudSql).toContain('CONNECTION_NAME_SECRET="$TARGET_CLOUD_SQL_CONNECTION_NAME_SECRET"');
+    expect(setupSecrets).toContain('sm_get "$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET" "$SM_PROJECT"');
+    expect(setupSecrets).toContain('sm_get "$TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET" "$SM_PROJECT"');
+    expect(setupMattermost).toContain('--secret="$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET"');
+    expect(setupMattermost).toContain('--instance="$TARGET_CLOUD_SQL_INSTANCE"');
+    expect(provisionNamespace).toContain('MM_DB_PASSWORD_SECRET="$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET"');
+    expect(provisionNamespace).toContain('GITEA_DB_PASSWORD_SECRET="$TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET"');
+    expect(platformWorkflow).toContain('steps.target.outputs.cloud_sql_gitea_password_secret_name');
+  });
+
   it("resolves registry paths in gateway promotion code", () => {
     for (const script of [
       "scripts/ops/promote-gateway.ts",

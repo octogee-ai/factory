@@ -24,6 +24,9 @@
                 "projectId": "octogee",
                 "region": "us-central1",
                 "instance": "octogee-pg",
+                "mattermostPasswordSecret": "MM_DB_PASSWORD",
+                "giteaPasswordSecret": "gitea-db-password",
+                "connectionNameSecret": "cloud-sql-connection-name",
                 "pointInTimeRecoveryEnabled": false
             },
             "kms": {
@@ -64,6 +67,9 @@
                 "projectId": "octogee",
                 "region": "us-west1",
                 "instance": "octogee-pg-west",
+                "mattermostPasswordSecret": "MM_DB_PASSWORD-octogee-pg-west",
+                "giteaPasswordSecret": "gitea-db-password-octogee-pg-west",
+                "connectionNameSecret": "cloud-sql-connection-name-octogee-pg-west",
                 "pointInTimeRecoveryEnabled": true
             },
             "kms": {
@@ -104,6 +110,9 @@
                 "projectId": "octogee",
                 "region": "us-central1",
                 "instance": "octogee-pg",
+                "mattermostPasswordSecret": "MM_DB_PASSWORD",
+                "giteaPasswordSecret": "gitea-db-password",
+                "connectionNameSecret": "cloud-sql-connection-name",
                 "pointInTimeRecoveryEnabled": false
             },
             "kms": {
@@ -144,6 +153,9 @@
                 "projectId": "octogee",
                 "region": "us-west1",
                 "instance": "octogee-pg-west",
+                "mattermostPasswordSecret": "MM_DB_PASSWORD-octogee-pg-west",
+                "giteaPasswordSecret": "gitea-db-password-octogee-pg-west",
+                "connectionNameSecret": "cloud-sql-connection-name-octogee-pg-west",
                 "pointInTimeRecoveryEnabled": true
             },
             "kms": {
@@ -184,6 +196,9 @@
                 "projectId": "octogee",
                 "region": "us-central1",
                 "instance": "octogee-pg",
+                "mattermostPasswordSecret": "MM_DB_PASSWORD",
+                "giteaPasswordSecret": "gitea-db-password",
+                "connectionNameSecret": "cloud-sql-connection-name",
                 "pointInTimeRecoveryEnabled": false
             },
             "kms": {

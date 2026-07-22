@@ -48,6 +48,9 @@ describe("deployment environment registry", () => {
       kubeContext: "gke_octogee_us-central1_octogee-gateway",
       artifactRegistryRepository: "us-central1-docker.pkg.dev/octogee/octogee",
       cloudSqlConnectionName: "octogee:us-central1:octogee-pg",
+      cloudSqlMattermostPasswordSecretName: "MM_DB_PASSWORD",
+      cloudSqlGiteaPasswordSecretName: "gitea-db-password",
+      cloudSqlConnectionNameSecretName: "cloud-sql-connection-name",
       cloudSqlPointInTimeRecoveryEnabled: false,
     });
 
@@ -63,6 +66,9 @@ describe("deployment environment registry", () => {
       kubeContext: "gke_octogee_us-west1_octogee-gateway",
       artifactRegistryRepository: "us-west1-docker.pkg.dev/octogee/octogee",
       cloudSqlConnectionName: "octogee:us-west1:octogee-pg-west",
+      cloudSqlMattermostPasswordSecretName: "MM_DB_PASSWORD-octogee-pg-west",
+      cloudSqlGiteaPasswordSecretName: "gitea-db-password-octogee-pg-west",
+      cloudSqlConnectionNameSecretName: "cloud-sql-connection-name-octogee-pg-west",
       cloudSqlPointInTimeRecoveryEnabled: true,
       kmsLocation: "us-west1",
       storageLocation: "us-west1",
@@ -74,6 +80,9 @@ describe("deployment environment registry", () => {
       lifecycle: "candidate",
       firebaseProjectId: "octogee-data-test",
       region: "us-west1",
+      cloudSqlMattermostPasswordSecretName: "MM_DB_PASSWORD-octogee-pg-west",
+      cloudSqlGiteaPasswordSecretName: "gitea-db-password-octogee-pg-west",
+      cloudSqlConnectionNameSecretName: "cloud-sql-connection-name-octogee-pg-west",
     });
   });
 

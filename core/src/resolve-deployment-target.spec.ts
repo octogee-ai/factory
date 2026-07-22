@@ -58,6 +58,15 @@ describe("deployment target resolver", () => {
       "artifact_registry_repository=us-west1-docker.pkg.dev/octogee/octogee\n",
     );
     expect(output).toContain("cloud_sql_connection_name=octogee:us-west1:octogee-pg-west\n");
+    expect(output).toContain(
+      "cloud_sql_mattermost_password_secret_name=MM_DB_PASSWORD-octogee-pg-west\n",
+    );
+    expect(output).toContain(
+      "cloud_sql_gitea_password_secret_name=gitea-db-password-octogee-pg-west\n",
+    );
+    expect(output).toContain(
+      "cloud_sql_connection_name_secret_name=cloud-sql-connection-name-octogee-pg-west\n",
+    );
     expect(output).toContain("cloud_sql_point_in_time_recovery_enabled=true\n");
     expect(output).toContain(
       "kms_key_name=projects/octogee-data-prod/locations/us-west1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest\n",

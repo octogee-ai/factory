@@ -39,6 +39,9 @@ PROJECT="$TARGET_CLOUD_SQL_PROJECT"
 INSTANCE="$TARGET_CLOUD_SQL_INSTANCE"
 REGION="$TARGET_CLOUD_SQL_REGION"
 DESIRED_PITR="$TARGET_CLOUD_SQL_PITR_ENABLED"
+MATTERMOST_PASSWORD_SECRET="$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET"
+GITEA_PASSWORD_SECRET="$TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET"
+CONNECTION_NAME_SECRET="$TARGET_CLOUD_SQL_CONNECTION_NAME_SECRET"
 [[ "$DESIRED_PITR" == "true" || "$DESIRED_PITR" == "false" ]] || {
   echo "Invalid Cloud SQL PITR setting for deployment target $TARGET_ID: $DESIRED_PITR" >&2
   exit 1
@@ -165,8 +168,8 @@ store_secret() {
 # under bash 3.2 (the system shell on macOS).
 secret_name_for() {
   case "$1" in
-    mattermost) echo "MM_DB_PASSWORD" ;;
-    gitea)      echo "gitea-db-password" ;;
+    mattermost) echo "$MATTERMOST_PASSWORD_SECRET" ;;
+    gitea)      echo "$GITEA_PASSWORD_SECRET" ;;
     *)          echo ""; return 1 ;;
   esac
 }
@@ -213,7 +216,7 @@ done
 log "Storing Cloud SQL connection name in Secret Manager..."
 CONN_NAME=$(gcloud sql instances describe "$INSTANCE" --project="$PROJECT" \
   --format="value(connectionName)")
-store_secret "cloud-sql-connection-name" "$CONN_NAME"
+store_secret "$CONNECTION_NAME_SECRET" "$CONN_NAME"
 
 # ── Grant Cloud SQL Client role to GKE Workload Identity SA ──────────────────
 log "Granting Cloud SQL Client role to Workload Identity service accounts..."

@@ -277,15 +277,17 @@ fi
 save_env "MM_ADMIN_PASS" "$MM_ADMIN_PASS"
 
 # DB password always comes from Secret Manager (octogee project owns Cloud SQL)
-SM_PASS=$(gcloud secrets versions access latest --secret=MM_DB_PASSWORD --project=octogee 2>/dev/null || echo "")
+SM_PASS=$(gcloud secrets versions access latest \
+  --secret="$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET" \
+  --project="$TARGET_CLOUD_SQL_PROJECT" 2>/dev/null || echo "")
 if [[ -n "$SM_PASS" ]]; then
   MM_DB_PASSWORD="$SM_PASS"
-  info "MM_DB_PASSWORD from Secret Manager (octogee project)"
+  info "MM_DB_PASSWORD from Secret Manager ($TARGET_CLOUD_SQL_PROJECT project)"
 elif [[ -n "${MM_DB_PASSWORD:-}" ]]; then
   info "MM_DB_PASSWORD from env file"
 else
   MM_DB_PASSWORD=$(openssl rand -hex 24)
-  warn "MM_DB_PASSWORD not in Secret Manager — generated new. Store it: printf '%s' \"\$MM_DB_PASSWORD\" | gcloud secrets create MM_DB_PASSWORD --data-file=- --project=octogee"
+  warn "MM_DB_PASSWORD not in Secret Manager — generated new. Store it in $TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET."
 fi
 save_env "MM_DB_PASSWORD" "$MM_DB_PASSWORD"
 set -u
@@ -293,8 +295,8 @@ set -u
 # ── 2. Sync DB password to Cloud SQL ─────────────────────────────────────
 info "Syncing DB password to Cloud SQL user '$MM_DB_USER'..."
 if gcloud sql users set-password "$MM_DB_USER" \
-    --instance=octogee-pg \
-    --project=octogee \
+    --instance="$TARGET_CLOUD_SQL_INSTANCE" \
+    --project="$TARGET_CLOUD_SQL_PROJECT" \
     --password="$MM_DB_PASSWORD" 2>&1; then
   ok "Cloud SQL user '$MM_DB_USER' password synced"
 else

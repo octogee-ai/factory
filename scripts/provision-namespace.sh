@@ -158,6 +158,8 @@ octogee_load_deployment_target --environment=test
 CLUSTER_PROJECT="$TARGET_CLUSTER_PROJECT"
 CLOUDSQL_PROJECT="$TARGET_CLOUD_SQL_PROJECT"
 CLOUDSQL_INSTANCE="$TARGET_CLOUD_SQL_INSTANCE"
+MM_DB_PASSWORD_SECRET="$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET"
+GITEA_DB_PASSWORD_SECRET="$TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET"
 CLUSTER_NAME="$TARGET_CLUSTER_NAME"
 K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
 FIREBASE_PROJECT="$TARGET_FIREBASE_PROJECT"
@@ -285,8 +287,8 @@ destroy_namespace() {
 }
 
 drop_cloud_sql_dbs() {
-  MM_DB_PASS=$(gcloud secrets versions access latest --secret=MM_DB_PASSWORD --project="$CLOUDSQL_PROJECT" 2>/dev/null || echo "")
-  GITEA_DB_PASS=$(gcloud secrets versions access latest --secret=gitea-db-password --project="$CLOUDSQL_PROJECT" 2>/dev/null || echo "")
+  MM_DB_PASS=$(gcloud secrets versions access latest --secret="$MM_DB_PASSWORD_SECRET" --project="$CLOUDSQL_PROJECT" 2>/dev/null || echo "")
+  GITEA_DB_PASS=$(gcloud secrets versions access latest --secret="$GITEA_DB_PASSWORD_SECRET" --project="$CLOUDSQL_PROJECT" 2>/dev/null || echo "")
   [[ -z "$MM_DB_PASS" || -z "$GITEA_DB_PASS" ]] && {
     warn "Could not read DB passwords from Secret Manager — skipping DB drop"
     return
@@ -337,8 +339,8 @@ fi
 if $SKIP_TERRAFORM; then
   step "Phase 2a: Skipping Terraform (--skip-terraform) — creating DBs via gcloud"
   PROXY_BIN=$(command -v cloud-sql-proxy 2>/dev/null || ls /opt/homebrew/bin/cloud-sql-proxy 2>/dev/null || echo "")
-  MM_DB_PASS=$(gcloud secrets versions access latest --secret=MM_DB_PASSWORD --project="$CLOUDSQL_PROJECT")
-  GITEA_DB_PASS=$(gcloud secrets versions access latest --secret=gitea-db-password --project="$CLOUDSQL_PROJECT")
+  MM_DB_PASS=$(gcloud secrets versions access latest --secret="$MM_DB_PASSWORD_SECRET" --project="$CLOUDSQL_PROJECT")
+  GITEA_DB_PASS=$(gcloud secrets versions access latest --secret="$GITEA_DB_PASSWORD_SECRET" --project="$CLOUDSQL_PROJECT")
   "$PROXY_BIN" "$TARGET_CLOUD_SQL_CONNECTION" --port=5434 &
   PROXY_PID=$!
   sleep 4
@@ -401,7 +403,7 @@ step "Phase 2d: Materializing K8s secrets"
 
 # ── 2f. Helm install ───────────────────────────────────────────────────────
 step "Phase 2e: Helm install"
-GITEA_DB_PASS=$(gcloud secrets versions access latest --secret=gitea-db-password --project="$CLOUDSQL_PROJECT")
+GITEA_DB_PASS=$(gcloud secrets versions access latest --secret="$GITEA_DB_PASSWORD_SECRET" --project="$CLOUDSQL_PROJECT")
 helm upgrade --install octogee "$REPO_DIR/helm/octogee" \
   --server-side=true --force-conflicts \
   -f "$VALUES_OUT" \

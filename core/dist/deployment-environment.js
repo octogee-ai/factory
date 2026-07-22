@@ -70,7 +70,14 @@ export function validateDeploymentTargetsDocument(document) {
         stringFields(target, TARGET_STRING_FIELDS, `deployment target ${targetId}`);
         stringFields(record(target.artifactRegistry, `deployment target ${targetId}.artifactRegistry`), ["projectId", "location", "repository"], `deployment target ${targetId}.artifactRegistry`);
         const cloudSql = record(target.cloudSql, `deployment target ${targetId}.cloudSql`);
-        stringFields(cloudSql, ["projectId", "region", "instance"], `deployment target ${targetId}.cloudSql`);
+        stringFields(cloudSql, [
+            "projectId",
+            "region",
+            "instance",
+            "mattermostPasswordSecret",
+            "giteaPasswordSecret",
+            "connectionNameSecret",
+        ], `deployment target ${targetId}.cloudSql`);
         if (typeof cloudSql.pointInTimeRecoveryEnabled !== "boolean") {
             throw new Error(`deployment target ${targetId}.cloudSql.pointInTimeRecoveryEnabled must be a boolean`);
         }
@@ -111,6 +118,9 @@ function settings(targetId, target) {
         cloudSqlRegion: target.cloudSql.region,
         cloudSqlInstanceName: target.cloudSql.instance,
         cloudSqlConnectionName: `${target.cloudSql.projectId}:${target.cloudSql.region}:${target.cloudSql.instance}`,
+        cloudSqlMattermostPasswordSecretName: target.cloudSql.mattermostPasswordSecret,
+        cloudSqlGiteaPasswordSecretName: target.cloudSql.giteaPasswordSecret,
+        cloudSqlConnectionNameSecretName: target.cloudSql.connectionNameSecret,
         cloudSqlPointInTimeRecoveryEnabled: target.cloudSql.pointInTimeRecoveryEnabled,
         kmsProjectId: target.kms.projectId,
         kmsLocation: target.kms.location,
