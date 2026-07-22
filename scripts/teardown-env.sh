@@ -40,6 +40,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=scripts/lib/deployment-target.sh
+source "$SCRIPT_DIR/lib/deployment-target.sh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -49,18 +51,19 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 ENV="prod"
+DEPLOYMENT_TARGET=""
 FORCE=false
 FULL=false
 PROXY_PID=""
-REGION="us-central1"
 
 for arg in "$@"; do
   case $arg in
     --env=*)        ENV="${arg#*=}" ;;
+    --deployment-target=*) DEPLOYMENT_TARGET="${arg#*=}" ;;
     --force|--yes|-y) FORCE=true ;;
     --full)         FULL=true ;;
     --help|-h)
-      echo "Usage: $0 [--env=prod|test] [--force|--yes] [--full]"
+      echo "Usage: $0 [--env=prod|test] [--deployment-target=TARGET] [--force|--yes] [--full]"
       echo ""
       echo "  (default)  helm uninstall only — preserves PVCs, K8s secrets,"
       echo "             namespace, Secret Manager, Cloud SQL, Firestore, Auth"
@@ -76,13 +79,30 @@ for arg in "$@"; do
 done
 
 case "$ENV" in
+  prod|test)
+    if [[ -n "$DEPLOYMENT_TARGET" ]]; then
+      octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"
+      [[ "$TARGET_ENVIRONMENT" == "$ENV" ]] || {
+        echo "Deployment target '$DEPLOYMENT_TARGET' does not belong to environment '$ENV'"
+        exit 1
+      }
+    else
+      octogee_load_deployment_target "--environment=$ENV"
+    fi
+    ;;
+  *) echo "Unknown environment: $ENV (use prod or test)"; exit 1 ;;
+esac
+GCP_PROJECT="$TARGET_FIREBASE_PROJECT"
+FIREBASE_PROJECT="$TARGET_FIREBASE_PROJECT"
+CLUSTER_PROJECT="$TARGET_CLUSTER_PROJECT"
+CLUSTER_NAME="$TARGET_CLUSTER_NAME"
+K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
+K8S_NAMESPACE="$TARGET_NAMESPACE"
+REGION="$TARGET_REGION"
+TARGET_ARG=" --deployment-target=$TARGET_ID"
+
+case "$ENV" in
   prod)
-    GCP_PROJECT="octogee"
-    FIREBASE_PROJECT="octogee"
-    CLUSTER_PROJECT="octogee"
-    CLUSTER_NAME="octogee-gateway"
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    K8S_NAMESPACE="octogee"
     ENV_FILE="$REPO_DIR/.env"
     SA_KEY_DEFAULT="$HOME/.openclaw/secrets/octogee-sa-key.json"
     ENV_LABEL="🔴 PRODUCTION"
@@ -90,12 +110,6 @@ case "$ENV" in
     GITEA_DB_NAME="gitea_prod"
     ;;
   test)
-    GCP_PROJECT="octogee-test"
-    FIREBASE_PROJECT="octogee-test"
-    CLUSTER_PROJECT="octogee"
-    CLUSTER_NAME="octogee-gateway"
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    K8S_NAMESPACE="octogee-test"
     ENV_FILE="$REPO_DIR/.env.test"
     SA_KEY_DEFAULT="$HOME/.openclaw/secrets/octogee-test-sa-key.json"
     ENV_LABEL="🟡 TEST"
@@ -107,6 +121,11 @@ case "$ENV" in
     exit 1
     ;;
 esac
+case "$TARGET_ID" in
+  prod-central|test-central|build-week-central) ;;
+  *) ENV_FILE="$REPO_DIR/.env.$TARGET_ID" ;;
+esac
+SA_KEY_DEFAULT="$HOME/.openclaw/secrets/$TARGET_FIREBASE_PROJECT-sa-key.json"
 
 ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
 info() { echo -e "  ${BLUE}ℹ️  $1${NC}"; }
@@ -157,7 +176,7 @@ if ! $FULL; then
 fi
 echo "    • Namespace: $K8S_NAMESPACE"
 echo "    • Secret Manager: infra entries (DB passwords, API keys, tokens) — wipe via gcloud manually if needed"
-echo "    • Cloud SQL instance (octogee-pg)"
+echo "    • Cloud SQL instance ($TARGET_CLOUD_SQL_INSTANCE)"
 echo "    • GCP projects, GKE cluster, AR repo"
 echo "    • Firebase project, IAM, Service Accounts"
 if ! $FULL; then
@@ -185,7 +204,7 @@ fi
 # ── Context guard ─────────────────────────────────────────────────────────
 echo ""
 info "Setting kubectl context..."
-gcloud container clusters get-credentials "$CLUSTER_NAME" --region us-central1 --project "$CLUSTER_PROJECT" 2>/dev/null || true
+gcloud container clusters get-credentials "$CLUSTER_NAME" --region "$TARGET_REGION" --project "$CLUSTER_PROJECT" 2>/dev/null || true
 kubectl config use-context "$K8S_CONTEXT" >/dev/null
 CURRENT_CTX=$(kubectl config current-context)
 [[ "$CURRENT_CTX" == "$K8S_CONTEXT" ]] || { echo -e "  ${RED}❌ Wrong context: $CURRENT_CTX${NC}"; exit 1; }
@@ -331,7 +350,7 @@ if $FULL; then
     local secret_name="$1"
     local stderr_file
     stderr_file=$(mktemp)
-    gcloud secrets versions access latest --secret="$secret_name" --project=octogee 2>"$stderr_file"
+    gcloud secrets versions access latest --secret="$secret_name" --project="$TARGET_CLOUD_SQL_PROJECT" 2>"$stderr_file"
     local rc=$?
     if [[ $rc -eq 0 ]]; then
       rm -f "$stderr_file"
@@ -349,23 +368,23 @@ if $FULL; then
 
   MM_DB_PASS=""
   MM_DB_PASS_STATUS="present"
-  if ! MM_DB_PASS=$(sm_read MM_DB_PASSWORD); then
+  if ! MM_DB_PASS=$(sm_read "$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET"); then
     rc=$?
     if [[ $rc -eq 1 ]]; then
       MM_DB_PASS_STATUS="absent"
     else
-      die "MM_DB_PASSWORD read failed (gcloud auth or network). Fix and re-run."
+      die "$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET read failed (gcloud auth or network). Fix and re-run."
     fi
   fi
 
   GITEA_DB_PASS=""
   GITEA_DB_PASS_STATUS="present"
-  if ! GITEA_DB_PASS=$(sm_read gitea-db-password); then
+  if ! GITEA_DB_PASS=$(sm_read "$TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET"); then
     rc=$?
     if [[ $rc -eq 1 ]]; then
       GITEA_DB_PASS_STATUS="absent"
     else
-      die "gitea-db-password read failed (gcloud auth or network). Fix and re-run."
+      die "$TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET read failed (gcloud auth or network). Fix and re-run."
     fi
   fi
 
@@ -407,7 +426,7 @@ if $FULL; then
   fi
 
   PROXY_LOG=$(mktemp -t cloud-sql-proxy-teardown.XXXXX)
-  "$PROXY_BIN" octogee:us-central1:octogee-pg --port=5433 >"$PROXY_LOG" 2>&1 &
+  "$PROXY_BIN" "$TARGET_CLOUD_SQL_CONNECTION" --port=5433 >"$PROXY_LOG" 2>&1 &
   PROXY_PID=$!
   trap '[[ -n "${PROXY_PID:-}" ]] && kill "$PROXY_PID" 2>/dev/null' EXIT
 
@@ -645,20 +664,20 @@ echo "     • run #2 (post-bootstrap) — re-materializes the same secrets"
 echo "       now that setup-mattermost + setup-gitea wrote real values"
 echo "       to .env, then validates everything"
 echo ""
-echo "  GITEA_DB_PASS=\$(gcloud secrets versions access latest --secret=gitea-db-password --project=octogee)"
+echo "  GITEA_DB_PASS=\$(gcloud secrets versions access latest --secret=$TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET --project=$TARGET_CLOUD_SQL_PROJECT)"
 echo ""
 echo "  # 0. Cloud SQL instance settings (right-size + databases + users + creds)"
 echo "  #    Idempotent — patches tier/PITR only if they drift, runs once across"
 echo "  #    both envs (instance is shared)."
-echo "  ./scripts/setup-cloud-sql.sh"
+echo "  ./scripts/setup-cloud-sql.sh --target=$TARGET_ID"
 echo ""
 echo "  # 1. Pre-helm secrets (boot prereqs)"
-echo "  ./scripts/setup-secrets.sh --env=$ENV${YES_FLAG}"
+echo "  ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG${YES_FLAG}"
 echo ""
 echo "  # (No step 1b needed: glm-controller self-seeds config/orchestrator"
 echo "  #  from K8S_NAMESPACE on first bootstrap tick. Run the seed script"
 echo "  #  by hand only for non-default canary placements:"
-echo "  #    (cd scripts && npx tsx ops/seed-orchestrator-config.ts --env=$ENV --default-gateway=gw-${ENV}-canary)"
+echo "  #    (cd scripts && npx tsx ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG --default-gateway=gw-${ENV}-canary)"
 echo "  #  Or when re-running into an env whose deployed glm-controller image predates"
 echo "  #  d9cfd313 (in that case run it once to unblock).)"
 echo ""
@@ -666,19 +685,20 @@ echo "  # 2. Helm install (gateway, gateway-edge, chat-proxy sidecar, MM, Gitea)
 echo "  helm upgrade --install octogee helm/octogee \\"
 echo "    --server-side=true --force-conflicts \\"
 echo "    -f helm/octogee/values.${ENV}.yaml \\"
+echo "    -f <(node core/dist/render-deployment-target-helm-values.js --target=$TARGET_ID) \\"
 echo "    -n $K8S_NAMESPACE \\"
 echo "    --set \"gitea.gitea.config.database.PASSWD=\$GITEA_DB_PASS\" \\"
 echo "    --kube-context $K8S_CONTEXT \\"
 echo "    --wait --timeout=10m"
 echo ""
 echo "  # 3. Bootstrap Mattermost (admin user, team, bot, PATs)"
-echo "  ./scripts/setup-mattermost.sh --env=$ENV${YES_FLAG}"
+echo "  ./scripts/setup-mattermost.sh --env=$ENV$TARGET_ARG${YES_FLAG}"
 echo ""
 echo "  # 4. Bootstrap Gitea (org, admin token)"
-echo "  ./scripts/setup-gitea.sh --env=$ENV${YES_FLAG}"
+echo "  ./scripts/setup-gitea.sh --env=$ENV$TARGET_ARG${YES_FLAG}"
 echo ""
 echo "  # 5. Post-bootstrap secrets (picks up the values steps 3+4 wrote to .env)"
-echo "  ./scripts/setup-secrets.sh --env=$ENV${YES_FLAG}"
+echo "  ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG${YES_FLAG}"
 echo ""
 echo "  # 6. Roll pods so they pick up the freshly-populated secret env vars"
 echo "  kubectl rollout restart deploy -n $K8S_NAMESPACE"
@@ -686,13 +706,13 @@ echo "  # Cowboy auto-installs octogee-gw-default after step 2 — may take ~60s
 echo "  kubectl rollout status deploy/octogee-gateway-default -n $K8S_NAMESPACE --timeout=180s"
 echo ""
 echo "  # 6b. Apply Firestore TTL policies (idempotent; one-time per env)"
-echo "  ./scripts/setup-firestore-ttls.sh --env=$ENV"
+echo "  ./scripts/setup-firestore-ttls.sh --env=$ENV$TARGET_ARG"
 echo ""
 echo "  # 7. Deploy Firebase functions"
 echo "  firebase deploy --project $FIREBASE_PROJECT"
 echo ""
 echo "  # 8. Verify"
-echo "  ./scripts/verify-env.sh --env=$ENV$(if [[ "$ENV" == "test" ]]; then echo " --fix"; fi)"
+echo "  ./scripts/verify-env.sh --env=$ENV$TARGET_ARG$(if [[ "$ENV" == "test" ]]; then echo " --fix"; fi)"
 echo ""
 echo "  ──────────────────────────────────────────────────────────────────"
 echo "  In-pod smoke checks (run after step 6):"
@@ -721,11 +741,11 @@ echo ""
 echo "    Pod stuck in Init:0/1?"
 echo "      kubectl describe pod -n $K8S_NAMESPACE -l app=octogee-gateway"
 echo "      → Usually missing gitea-ssh-key secret. First-install only:"
-echo "      ./scripts/setup-secrets.sh --env=$ENV   (bootstrap mode)"
+echo "      ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG   (bootstrap mode)"
 echo ""
 echo "    CreateContainerConfigError?"
 echo "      → Missing required secret (first install). Run:"
-echo "      ./scripts/setup-secrets.sh --env=$ENV   (bootstrap mode)"
+echo "      ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG   (bootstrap mode)"
 echo ""
 echo "    Gateway 0/1 Running (not Ready)?"
 echo "      → Startup is still in progress. Wait or check:"
@@ -745,7 +765,8 @@ echo "      kubectl annotate svc mattermost -n $K8S_NAMESPACE cloud.google.com/n
 echo "      kubectl annotate svc octogee-gateway -n $K8S_NAMESPACE cloud.google.com/neg-status-"
 echo "      # Then helm upgrade to recreate ingresses with fresh NEGs:"
 echo "      helm upgrade octogee helm/octogee --server-side=true --force-conflicts \\"
-echo "        -f helm/octogee/values.${ENV}.yaml -n $K8S_NAMESPACE \\"
+echo "        -f helm/octogee/values.${ENV}.yaml \\"
+echo "        -f <(node core/dist/render-deployment-target-helm-values.js --target=$TARGET_ID) -n $K8S_NAMESPACE \\"
 echo "        --set \"gitea.gitea.config.database.PASSWD=\$GITEA_DB_PASS\" --kube-context $K8S_CONTEXT"
 echo ""
 echo "    Gitea setup-gitea.sh returns 403?"

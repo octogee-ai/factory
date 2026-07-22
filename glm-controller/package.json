@@ -12,7 +12,7 @@
     "dev": "OCTOGEE_ALLOW_LOCAL_ORIGINS=true tsx src/index.ts",
     "start": "node dist/glm-controller/src/index.js",
     "pretest": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
-    "test": "vitest run",
+    "test": "K8S_NAMESPACE=octogee vitest run",
     "pretypecheck": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "typecheck": "tsc --noEmit"
   },

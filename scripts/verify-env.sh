@@ -26,6 +26,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=scripts/lib/deployment-target.sh
+source "$SCRIPT_DIR/lib/deployment-target.sh"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'
@@ -60,6 +62,7 @@ WARNINGS=()
 FIX=false
 ENV=""
 CUSTOM_NS=""
+DEPLOYMENT_TARGET=""
 INFRA_FAILS=0
 SECRET_FAILS=0
 BOOTSTRAP_FAILS=0
@@ -68,75 +71,65 @@ CONTEXT_SECTION=""
 for arg in "$@"; do
   case $arg in
     --env=*)       ENV="${arg#*=}" ;;
+    --deployment-target=*) DEPLOYMENT_TARGET="${arg#*=}" ;;
     --namespace=*) CUSTOM_NS="${arg#*=}" ;;
     --fix)         FIX=true ;;
     --help|-h)
-      echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--fix]"
+      echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--fix]"
       exit 0 ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
 
 if [[ -z "$ENV" ]]; then
-  echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--fix]"
+  echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--fix]"
   exit 1
 fi
+
+TARGET_ENV="$ENV"
+[[ "$TARGET_ENV" == "custom" ]] && TARGET_ENV="test"
+if [[ -n "$DEPLOYMENT_TARGET" ]]; then
+  [[ "$ENV" == "custom" ]] && { echo "--deployment-target cannot be used with --env=custom"; exit 1; }
+  octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"
+  [[ "$TARGET_ENVIRONMENT" == "$TARGET_ENV" ]] || {
+    echo "Deployment target '$DEPLOYMENT_TARGET' does not belong to environment '$ENV'"
+    exit 1
+  }
+else
+  octogee_load_deployment_target "--environment=$TARGET_ENV"
+fi
+K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
+CLUSTER_NAME="$TARGET_CLUSTER_NAME"
+CLUSTER_PROJECT="$TARGET_CLUSTER_PROJECT"
+NAMESPACE="$TARGET_NAMESPACE"
+GCP_PROJECT="$TARGET_FIREBASE_PROJECT"
+FIREBASE_PROJECT="$TARGET_FIREBASE_PROJECT"
+SITE_URL="$TARGET_SITE_ORIGIN"
+AR_IMAGE_BASE="$TARGET_AR_REPOSITORY/octogee-gateway"
+CF_SAMPLE="onSignup"
+TARGET_ARG=" --deployment-target=$TARGET_ID"
 
 # ── Per-env config ────────────────────────────────────────────────────────────
 case "$ENV" in
   prod)
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    CLUSTER_NAME="octogee-gateway"
-    CLUSTER_PROJECT="octogee"
-    NAMESPACE="octogee"
-    GCP_PROJECT="octogee"
-    FIREBASE_PROJECT="octogee"
-    SITE_URL="https://octogee.web.app"
     ENV_LABEL="🔴 PRODUCTION"
     ENV_COLOR="$RED"
-    AR_IMAGE_BASE="us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway"
-    CF_SAMPLE="onSignup"
     ;;
   test)
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    CLUSTER_NAME="octogee-gateway"
-    CLUSTER_PROJECT="octogee"
-    NAMESPACE="octogee-test"
-    GCP_PROJECT="octogee-test"
-    FIREBASE_PROJECT="octogee-test"
-    SITE_URL="https://octogee-test.web.app"
     ENV_LABEL="🟡 TEST"
     ENV_COLOR="$YELLOW"
-    AR_IMAGE_BASE="us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway"
-    CF_SAMPLE="onSignup"
     ;;
   build-week)
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    CLUSTER_NAME="octogee-gateway"
-    CLUSTER_PROJECT="octogee"
-    NAMESPACE="octogee-build-week"
-    GCP_PROJECT="octogee-build-week"
-    FIREBASE_PROJECT="octogee-build-week"
-    SITE_URL="https://octogee-build-week.web.app"
     ENV_LABEL="🟣 BUILD WEEK"
     ENV_COLOR="$BLUE"
-    AR_IMAGE_BASE="us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway"
-    CF_SAMPLE="onSignup"
     ;;
   custom)
     [[ -z "$CUSTOM_NS" ]] && { echo "--env=custom requires --namespace=NAME"; exit 1; }
     [[ "$CUSTOM_NS" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || { echo "Invalid namespace '$CUSTOM_NS'"; exit 1; }
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    CLUSTER_NAME="octogee-gateway"
-    CLUSTER_PROJECT="octogee"
     NAMESPACE="$CUSTOM_NS"
-    GCP_PROJECT="octogee-test"      # custom namespaces share the test Firebase project
-    FIREBASE_PROJECT="octogee-test"
-    SITE_URL="https://octogee-test.web.app"
     ENV_LABEL="🟣 CUSTOM ($CUSTOM_NS)"
     ENV_COLOR="$BLUE"
-    AR_IMAGE_BASE="us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway"
-    CF_SAMPLE="onSignup"
+    TARGET_ARG=""
     ;;
   *)
     echo "Unknown environment: $ENV (use prod, test, build-week, or custom)"
@@ -175,7 +168,7 @@ echo -e "  Time:      $(date '+%Y-%m-%d %H:%M:%S %Z')"
 set_section infra
 header "1. kubectl Context"
 gcloud container clusters get-credentials "$CLUSTER_NAME" \
-  --region us-central1 --project "$CLUSTER_PROJECT" 2>/dev/null || true
+  --region "$TARGET_REGION" --project "$CLUSTER_PROJECT" 2>/dev/null || true
 kubectl config use-context "$K8S_CONTEXT" >/dev/null 2>&1 || true
 
 CURRENT_CTX=$(kubectl config current-context 2>/dev/null || echo "NONE")
@@ -201,7 +194,7 @@ if [[ "${PROXY_READY:-0}" -ge 1 ]]; then
 else
   fail "cloud-sql-proxy not ready (readyReplicas=${PROXY_READY:-0})"
   if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee --server-side=true --force-conflicts -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
+    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee --server-side=true --force-conflicts -f ${HELM_VALUES_FILE} -f <(node core/dist/render-deployment-target-helm-values.js --target=$TARGET_ID) -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
   fi
 fi
 
@@ -474,7 +467,7 @@ else
       fail "$CERT_NAME ($CERT_DOMAIN): $CERT_STATUS"
       if $FIX; then
         echo -e "  ${YELLOW}FIX:${NC} Delete and recreate: kubectl delete managedcertificate $CERT_NAME -n $NAMESPACE"
-        echo -e "  ${YELLOW}     ${NC} Then: helm upgrade --install octogee helm/octogee --server-side=true --force-conflicts -f ${HELM_VALUES_FILE} -n $NAMESPACE"
+        echo -e "  ${YELLOW}     ${NC} Then: helm upgrade --install octogee helm/octogee --server-side=true --force-conflicts -f ${HELM_VALUES_FILE} -f <(node core/dist/render-deployment-target-helm-values.js --target=$TARGET_ID) -n $NAMESPACE"
       fi
     fi
   done
@@ -514,27 +507,27 @@ else
   if [[ "$K8S_PRIV_LEN" == "0" || "$K8S_PUB_LEN" == "0" ]]; then
     fail "K8s Secret octogee-fleet-controller missing private-key/public-key in $NAMESPACE — migration RPC auth will fail"
     if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV"
+      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG"
     fi
   elif [[ "$SM_PRIV_LEN" == "0" || "$SM_PUB_LEN" == "0" ]]; then
     fail "Secret Manager fleet controller keypair missing in $FIREBASE_PROJECT — K8s Secret cannot be synced from SM"
     if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV"
+      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG"
     fi
   elif ! openssl pkey -in "$tmp_sm_priv" -pubout -out "$tmp_derived_pub" >/dev/null 2>&1; then
     fail "FLEET_CONTROLLER_PRIVATE_KEY is not a valid private key"
     if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} rotate FLEET_CONTROLLER_PRIVATE_KEY, then ./scripts/setup-secrets.sh --env=$ENV"
+      echo -e "  ${YELLOW}FIX:${NC} rotate FLEET_CONTROLLER_PRIVATE_KEY, then ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG"
     fi
   elif ! cmp -s "$tmp_sm_pub" "$tmp_derived_pub"; then
     fail "FLEET_CONTROLLER_PUBLIC_KEY does not derive from FLEET_CONTROLLER_PRIVATE_KEY"
     if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV (re-derives public key)"
+      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG (re-derives public key)"
     fi
   elif [[ "$K8S_PRIV_HASH" != "$SM_PRIV_HASH" || "$K8S_PUB_HASH" != "$SM_PUB_HASH" ]]; then
     fail "octogee-fleet-controller keypair drift: K8s private=$K8S_PRIV_HASH public=$K8S_PUB_HASH vs SM private=$SM_PRIV_HASH public=$SM_PUB_HASH"
     if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV (SM is source of truth; rewrites K8s)"
+      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG (SM is source of truth; rewrites K8s)"
     fi
   else
     pass "Fleet controller keypair synced (private $K8S_PRIV_LEN bytes, public $K8S_PUB_LEN bytes, public=$K8S_PUB_HASH...)"
@@ -643,7 +636,7 @@ fi
 set_section infra
 header "7. Cloud Functions"
 CF_COUNT=$(gcloud run services list --project="$GCP_PROJECT" \
-  --region=us-central1 --format="value(name)" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+  --region="$TARGET_REGION" --format="value(name)" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
 
 if [[ "$CF_COUNT" -ge 10 ]]; then
   pass "$CF_COUNT Cloud Run services deployed"
@@ -727,24 +720,24 @@ header "8b. Orchestrator Config"
 if [[ "$ENV" == "custom" ]]; then
   info "Custom namespaces don't use config/orchestrator — skipping"
 else
-  ORCH_OUTPUT=$(node "$REPO_DIR/scripts/node_modules/tsx/dist/cli.mjs" "$REPO_DIR/scripts/ops/seed-orchestrator-config.ts" --env="$ENV" --dry-run 2>&1 || true)
+  ORCH_OUTPUT=$(node "$REPO_DIR/scripts/node_modules/tsx/dist/cli.mjs" "$REPO_DIR/scripts/ops/seed-orchestrator-config.ts" --env="$ENV" --deployment-target="$TARGET_ID" --dry-run 2>&1 || true)
   if echo "$ORCH_OUTPUT" | grep -q "already seeded"; then
     pass "config/orchestrator.defaultGatewayId = default (matches expected)"
   elif echo "$ORCH_OUTPUT" | grep -q "(DRY-RUN) seeding"; then
     fail "config/orchestrator missing — every new signup will stall with reason 'config-missing'"
     if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} node scripts/node_modules/tsx/dist/cli.mjs scripts/ops/seed-orchestrator-config.ts --env=$ENV"
+      echo -e "  ${YELLOW}FIX:${NC} node scripts/node_modules/tsx/dist/cli.mjs scripts/ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG"
       echo -e "  ${YELLOW}     ${NC} then re-fire pending placements with the same tsx CLI and scripts/ops/assign-customer-gateway.ts --env=$ENV --all"
     fi
   elif echo "$ORCH_OUTPUT" | grep -q "OVERWRITING\|Refusing to overwrite"; then
     DRIFT_LINE=$(echo "$ORCH_OUTPUT" | grep -E "Refusing|OVERWRITING" | head -1)
     fail "config/orchestrator drift: $DRIFT_LINE"
     if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} review with node scripts/node_modules/tsx/dist/cli.mjs scripts/ops/seed-orchestrator-config.ts --env=$ENV --dry-run"
+      echo -e "  ${YELLOW}FIX:${NC} review with node scripts/node_modules/tsx/dist/cli.mjs scripts/ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG --dry-run"
       echo -e "  ${YELLOW}     ${NC} overwrite if intentional by replacing --dry-run with --force"
     fi
   elif echo "$ORCH_OUTPUT" | grep -q "SA key not found"; then
-    warn "Cannot verify orchestrator config — SA key not found at ~/.openclaw/secrets/octogee*-sa-key.json"
+    warn "Cannot verify orchestrator config — SA key not found at ~/.openclaw/secrets/$TARGET_FIREBASE_PROJECT-sa-key.json"
   else
     warn "Orchestrator config probe failed unexpectedly: $(echo "$ORCH_OUTPUT" | head -1)"
   fi
@@ -770,7 +763,7 @@ elif [[ -z "$GW_DEPLOYMENT" ]]; then
 else
   fail "gateway-edge missing MM_INTERNAL_URL — the WS bridge will boot-fail. Re-render helm with values.${ENV}.yaml."
   if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee --server-side=true --force-conflicts -f ${HELM_VALUES_FILE} -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
+    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee --server-side=true --force-conflicts -f ${HELM_VALUES_FILE} -f <(node core/dist/render-deployment-target-helm-values.js --target=$TARGET_ID) -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
   fi
 fi
 set_section infra

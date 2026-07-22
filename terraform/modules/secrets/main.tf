@@ -18,7 +18,7 @@ resource "google_secret_manager_secret" "mm_db_password" {
   replication {
     user_managed {
       replicas {
-        location = "us-central1"
+        location = var.region
       }
     }
   }
@@ -37,7 +37,7 @@ resource "google_secret_manager_secret" "gitea_db_password" {
   replication {
     user_managed {
       replicas {
-        location = "us-central1"
+        location = var.region
       }
     }
   }
@@ -56,7 +56,7 @@ resource "google_secret_manager_secret" "cloudsql_connection" {
   replication {
     user_managed {
       replicas {
-        location = "us-central1"
+        location = var.region
       }
     }
   }

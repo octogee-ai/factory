@@ -17,12 +17,14 @@ set -euo pipefail
 # On an existing environment: re-run to refresh K8s secrets or re-bootstrap.
 #
 # Usage:
-#   ./scripts/setup-mattermost.sh --env=test [--yes]
+#   ./scripts/setup-mattermost.sh --env=test [--deployment-target=test-west] [--yes]
 #   ./scripts/setup-mattermost.sh --env=prod
 # ═══════════════════════════════════════════════════════════════════════════
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=scripts/lib/deployment-target.sh
+source "$SCRIPT_DIR/lib/deployment-target.sh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -35,51 +37,57 @@ NC='\033[0m'
 ENV=""
 YES=false
 CUSTOM_NS=""
+DEPLOYMENT_TARGET=""
 
 for arg in "$@"; do
   case $arg in
     --env=*)       ENV="${arg#*=}" ;;
+    --deployment-target=*) DEPLOYMENT_TARGET="${arg#*=}" ;;
     --namespace=*) CUSTOM_NS="${arg#*=}" ;;
     --yes|-y)      YES=true ;;
     --help|-h)
-      echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--yes]"
+      echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--yes]"
       exit 0
       ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
 
-[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--yes]"; exit 1; }
+[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--yes]"; exit 1; }
+
+TARGET_ENV="$ENV"
+[[ "$TARGET_ENV" == "custom" ]] && TARGET_ENV="test"
+if [[ -n "$DEPLOYMENT_TARGET" ]]; then
+  [[ "$ENV" == "custom" ]] && { echo "--deployment-target cannot be used with --env=custom"; exit 1; }
+  octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"
+  [[ "$TARGET_ENVIRONMENT" != "$TARGET_ENV" ]] && {
+    echo "Deployment target '$DEPLOYMENT_TARGET' does not belong to environment '$ENV'"
+    exit 1
+  }
+else
+  octogee_load_deployment_target "--environment=$TARGET_ENV"
+fi
+K8S_NAMESPACE="$TARGET_NAMESPACE"
+GCP_PROJECT="$TARGET_FIREBASE_PROJECT"
+CLUSTER_PROJECT="$TARGET_CLUSTER_PROJECT"
+CLUSTER_NAME="$TARGET_CLUSTER_NAME"
+K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
+TARGET_ARG=" --deployment-target=$TARGET_ID"
 
 case "$ENV" in
   prod)
-    K8S_NAMESPACE="octogee"
-    GCP_PROJECT="octogee"
-    CLUSTER_PROJECT="octogee"
-    CLUSTER_NAME="octogee-gateway"
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
     ENV_FILE="$REPO_DIR/.env"
     ENV_LABEL="🔴 PRODUCTION"
     MM_DB_NAME="mattermost_prod"
     MM_DB_USER="mattermost"
     ;;
   test)
-    K8S_NAMESPACE="octogee-test"
-    GCP_PROJECT="octogee-test"
-    CLUSTER_PROJECT="octogee"
-    CLUSTER_NAME="octogee-gateway"
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
     ENV_FILE="$REPO_DIR/.env.test"
     ENV_LABEL="🟡 TEST"
     MM_DB_NAME="mattermost_test"
     MM_DB_USER="mattermost"
     ;;
   build-week)
-    K8S_NAMESPACE="octogee-build-week"
-    GCP_PROJECT="octogee-build-week"
-    CLUSTER_PROJECT="octogee"
-    CLUSTER_NAME="octogee-gateway"
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
     ENV_FILE="$REPO_DIR/.env.build-week"
     ENV_LABEL="🟣 BUILD WEEK"
     MM_DB_NAME="mattermost_build_week"
@@ -89,16 +97,17 @@ case "$ENV" in
     [[ -z "$CUSTOM_NS" ]] && { echo "--env=custom requires --namespace=NAME"; exit 1; }
     [[ "$CUSTOM_NS" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || { echo "Invalid namespace '$CUSTOM_NS'"; exit 1; }
     K8S_NAMESPACE="$CUSTOM_NS"
-    GCP_PROJECT="octogee-test"
-    CLUSTER_PROJECT="octogee"
-    CLUSTER_NAME="octogee-gateway"
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
     ENV_FILE="$REPO_DIR/.env.$CUSTOM_NS"
     ENV_LABEL="🟣 CUSTOM ($CUSTOM_NS)"
     MM_DB_NAME="mattermost_${CUSTOM_NS//-/_}"
     MM_DB_USER="mattermost"
+    TARGET_ARG=""
     ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
+esac
+case "$TARGET_ID" in
+  prod-central|test-central|build-week-central) ;;
+  *) ENV_FILE="$REPO_DIR/.env.$TARGET_ID" ;;
 esac
 
 ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
@@ -245,7 +254,7 @@ echo ""
 
 # ── 0. kubectl context ────────────────────────────────────────────────────
 info "Setting kubectl context: $K8S_CONTEXT"
-gcloud container clusters get-credentials "$CLUSTER_NAME" --region us-central1 --project "$CLUSTER_PROJECT" 2>/dev/null || true
+gcloud container clusters get-credentials "$CLUSTER_NAME" --region "$TARGET_REGION" --project "$CLUSTER_PROJECT" 2>/dev/null || true
 kubectl config use-context "$K8S_CONTEXT"
 CURRENT_CTX=$(kubectl config current-context)
 [[ "$CURRENT_CTX" == "$K8S_CONTEXT" ]] || fail "kubectl context is '$CURRENT_CTX', expected '$K8S_CONTEXT'."
@@ -274,15 +283,17 @@ fi
 save_env "MM_ADMIN_PASS" "$MM_ADMIN_PASS"
 
 # DB password always comes from Secret Manager (octogee project owns Cloud SQL)
-SM_PASS=$(gcloud secrets versions access latest --secret=MM_DB_PASSWORD --project=octogee 2>/dev/null || echo "")
+SM_PASS=$(gcloud secrets versions access latest \
+  --secret="$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET" \
+  --project="$TARGET_CLOUD_SQL_PROJECT" 2>/dev/null || echo "")
 if [[ -n "$SM_PASS" ]]; then
   MM_DB_PASSWORD="$SM_PASS"
-  info "MM_DB_PASSWORD from Secret Manager (octogee project)"
+  info "MM_DB_PASSWORD from Secret Manager ($TARGET_CLOUD_SQL_PROJECT project)"
 elif [[ -n "${MM_DB_PASSWORD:-}" ]]; then
   info "MM_DB_PASSWORD from env file"
 else
   MM_DB_PASSWORD=$(openssl rand -hex 24)
-  warn "MM_DB_PASSWORD not in Secret Manager — generated new. Store it: printf '%s' \"\$MM_DB_PASSWORD\" | gcloud secrets create MM_DB_PASSWORD --data-file=- --project=octogee"
+  warn "MM_DB_PASSWORD not in Secret Manager — generated new. Store it in $TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET."
 fi
 save_env "MM_DB_PASSWORD" "$MM_DB_PASSWORD"
 set -u
@@ -290,8 +301,8 @@ set -u
 # ── 2. Sync DB password to Cloud SQL ─────────────────────────────────────
 info "Syncing DB password to Cloud SQL user '$MM_DB_USER'..."
 if gcloud sql users set-password "$MM_DB_USER" \
-    --instance=octogee-pg \
-    --project=octogee \
+    --instance="$TARGET_CLOUD_SQL_INSTANCE" \
+    --project="$TARGET_CLOUD_SQL_PROJECT" \
     --password="$MM_DB_PASSWORD" 2>&1; then
   ok "Cloud SQL user '$MM_DB_USER' password synced"
 else
@@ -315,6 +326,7 @@ if ! kubectl get deployment mattermost -n "$K8S_NAMESPACE" >/dev/null 2>&1; then
   echo "  helm upgrade --install octogee helm/octogee \\"
   echo "    --server-side=true --force-conflicts \\"
   echo "    -f helm/octogee/values.${ENV}.yaml \\"
+  echo "    -f <(node core/dist/render-deployment-target-helm-values.js --target=$TARGET_ID) \\"
   echo "    -n $K8S_NAMESPACE --create-namespace \\"
   echo "    --set \"gitea.gitea.config.database.PASSWD=\$GITEA_DB_PASS\" \\"
   echo "    --kube-context $K8S_CONTEXT"
@@ -565,9 +577,9 @@ echo ""
 if [[ -n "${MM_ADMIN_PAT:-}" && -n "${MM_TEAM_ID:-}" && -n "${MM_ADMIN_USER_ID:-}" ]]; then
   ok "mattermost-gateway inputs are complete"
   echo ""
-  echo "  Next (canonical sequence — see teardown-env.sh --env=$ENV for the full 9 steps):"
-  echo "    4. ./scripts/setup-gitea.sh --env=$ENV"
-  echo "    5. ./scripts/setup-secrets.sh --env=$ENV   # Phase 2 — re-materialize with real MM/Gitea values"
+  echo "  Next (canonical sequence — see teardown-env.sh --env=$ENV$TARGET_ARG for the full 9 steps):"
+  echo "    4. ./scripts/setup-gitea.sh --env=$ENV$TARGET_ARG"
+  echo "    5. ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG   # Phase 2 — re-materialize with real MM/Gitea values"
   echo "    6. kubectl rollout restart deploy -n $K8S_NAMESPACE   # pods pick up new secret env"
   echo ""
   echo "  octogee-api and glm-controller read mattermost-gateway directly."
@@ -582,7 +594,7 @@ else
   echo ""
   echo "  Next steps:"
   echo "    1. Review warnings above"
-  echo "    2. Re-run ./scripts/setup-mattermost.sh --env=$ENV"
+  echo "    2. Re-run ./scripts/setup-mattermost.sh --env=$ENV$TARGET_ARG"
   echo "    3. Do NOT trust admin chat until the missing values are fixed"
 fi
 
@@ -591,5 +603,5 @@ echo -e "${GREEN}═════════════════════
 echo -e "${BOLD}  Mattermost setup complete!${NC}"
 echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
 echo ""
-echo "  Next (canonical step 4): ./scripts/setup-gitea.sh --env=$ENV"
+echo "  Next (canonical step 4): ./scripts/setup-gitea.sh --env=$ENV$TARGET_ARG"
 echo ""

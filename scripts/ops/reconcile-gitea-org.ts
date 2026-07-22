@@ -3,6 +3,10 @@
 import { initializeApp, applicationDefault } from "firebase-admin/app";
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
 import {
+  deploymentEnvironmentSettings,
+  deploymentSettingsForRuntime,
+} from "@octogee/core/deployment-environment";
+import {
   planGiteaReconcile,
   type ReconcileAction,
   type ReconcileState,
@@ -61,10 +65,21 @@ export function rewriteRepoUrl(
   return oldUrl; 
 }
 
-const FIREBASE_PROJECT: Record<string, string> = {
-  test: "octogee-test",
-  prod: "octogee",
-};
+export function resolveReconcileFirebaseProject(
+  environment: "test" | "prod",
+  runtimeEnv: NodeJS.ProcessEnv = process.env,
+): string {
+  const target = deploymentSettingsForRuntime({
+    namespace: runtimeEnv.K8S_NAMESPACE ?? deploymentEnvironmentSettings(environment).namespace,
+    targetId: runtimeEnv.DEPLOYMENT_TARGET_ID,
+  });
+  if (target.name !== environment) {
+    throw new Error(
+      `Deployment target ${target.targetId} belongs to ${target.name}, not ${environment}`,
+    );
+  }
+  return target.firebaseProjectId;
+}
 
 interface GiteaIO {
   api: string;
@@ -283,7 +298,7 @@ async function main(): Promise<void> {
   const io = giteaIO();
   initializeApp({
     credential: applicationDefault(),
-    projectId: FIREBASE_PROJECT[args.env],
+    projectId: resolveReconcileFirebaseProject(args.env),
   });
   const db = getFirestore();
 

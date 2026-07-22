@@ -25,10 +25,25 @@ set -euo pipefail
 # `set -u`. Same derivation as setup-monitoring.sh.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=scripts/lib/deployment-target.sh
+source "$SCRIPT_DIR/lib/deployment-target.sh"
 
-PROJECT="octogee"
-REGION="us-central1"
-CLUSTER="octogee-gateway"
+SELECTOR="--environment=prod"
+FORWARD_SELECTOR="--env=prod"
+for arg in "$@"; do
+  case "$arg" in
+    --env=*) SELECTOR="--environment=${arg#*=}"; FORWARD_SELECTOR="$arg" ;;
+    --target=*) SELECTOR="$arg"; FORWARD_SELECTOR="$arg" ;;
+    --help|-h) echo "Usage: $0 [--env=prod|test|build-week | --target=TARGET_ID]"; exit 0 ;;
+    *) echo "Unknown arg: $arg" >&2; exit 1 ;;
+  esac
+done
+octogee_load_deployment_target "$SELECTOR"
+
+PROJECT="$TARGET_CLUSTER_PROJECT"
+REGION="$TARGET_REGION"
+CLUSTER="$TARGET_CLUSTER_NAME"
+K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
 NAMESPACE="monitoring"
 DOMAIN="monitoring.octogee.com"
 STATIC_IP_NAME="grafana-ip"
@@ -49,7 +64,9 @@ command -v kubectl >/dev/null || fail "kubectl not found"
 command -v helm >/dev/null || fail "helm not found"
 
 gcloud config set project "$PROJECT" --quiet
-kubectl config use-context "$(kubectl config get-contexts -o name | grep "$CLUSTER" | head -1)" 2>/dev/null || true
+gcloud container clusters get-credentials "$CLUSTER" --region "$REGION" --project "$PROJECT" >/dev/null
+kubectl config use-context "$K8S_CONTEXT" >/dev/null
+[[ "$(kubectl config current-context)" == "$K8S_CONTEXT" ]] || fail "Wrong kubectl context"
 log "Project: $PROJECT | Cluster: $CLUSTER | Namespace: $NAMESPACE"
 
 # ── Step 1: Deploy monitoring stack if not present ───────────────────────────
@@ -57,7 +74,7 @@ step 1 "Deploy Prometheus + Grafana (if needed)"
 
 if ! helm status grafana -n "$NAMESPACE" &>/dev/null; then
   log "Grafana not deployed — running setup-monitoring.sh..."
-  ./scripts/setup-monitoring.sh --env=prod
+  ./scripts/setup-monitoring.sh "$FORWARD_SELECTOR"
   ok "Monitoring stack deployed"
 else
   ok "Grafana already deployed — skipping"

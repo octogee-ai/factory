@@ -6,7 +6,6 @@ variable "project_id" {
 variable "region" {
   description = "GCP region"
   type        = string
-  default     = "us-central1"
 }
 
 variable "connector_name" {
@@ -26,4 +25,3 @@ variable "ip_cidr_range" {
   type        = string
   default     = "10.10.0.0/28"
 }
-

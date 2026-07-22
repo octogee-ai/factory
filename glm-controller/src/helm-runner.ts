@@ -53,6 +53,10 @@ sizingTier?: SizingTier;
 replicas?: number;
 
 gcpProject?: string;
+kmsKeyName?: string;
+deploymentTargetId?: string;
+deploymentProjectId?: string;
+gatewayServiceAccount?: string;
     rollStrategy?: "recreate" | "surge";
     waitForReady?: boolean;
   }): Promise<void>;
@@ -340,6 +344,10 @@ export interface BuildUpgradeArgsOpts {
   operatorAccess?: HelmInstancesMap[string]["operatorAccess"];
   computeClassOverride?: string;
   gcpProject?: string;
+  kmsKeyName?: string;
+  deploymentTargetId?: string;
+  deploymentProjectId?: string;
+  gatewayServiceAccount?: string;
   valuesFile?: string;
   rollStrategy?: "recreate" | "surge";
   waitForReady?: boolean;
@@ -357,6 +365,10 @@ type UpgradeStringOption = {
     | "serviceAccountName"
     | "computeClassOverride"
     | "gcpProject"
+    | "kmsKeyName"
+    | "deploymentTargetId"
+    | "deploymentProjectId"
+    | "gatewayServiceAccount"
     | "conversationExperimentMode"
     | "gatewayEdgeImageRepository"
     | "gatewayEdgeImageTag"
@@ -384,7 +396,15 @@ const UPGRADE_STRING_OPTIONS: UpgradeStringOption[] = [
   { option: "sizingTier", key: "sizingTier" },
   { option: "serviceAccountName", key: "serviceAccountName" },
   { option: "computeClassOverride", key: "computeClassOverride" },
+  { option: "deploymentTargetId", key: "gatewayEdge.env.DEPLOYMENT_TARGET_ID" },
+  { option: "deploymentProjectId", key: "env.gcloudProject" },
+  { option: "deploymentProjectId", key: "env.firebaseProjectId" },
+  { option: "deploymentProjectId", key: "gatewayEdge.env.FIREBASE_PROJECT_ID" },
+  { option: "deploymentProjectId", key: "gatewayEdge.env.GCLOUD_PROJECT" },
+  { option: "deploymentProjectId", key: "gatewayEdge.env.GCP_PROJECT_ID" },
   { option: "gcpProject", key: "gatewayEdge.env.GCP_PROJECT_ID" },
+  { option: "kmsKeyName", key: "gatewayEdge.env.OCTOGEE_KMS_KEY_NAME" },
+  { option: "gatewayServiceAccount", key: "gatewayEdge.env.GATEWAY_SERVICE_ACCOUNT" },
   { option: "conversationExperimentMode", key: "conversationExperiment.mode" },
   { option: "gatewayEdgeImageRepository", key: "gatewayEdge.image.repository" },
   { option: "gatewayEdgeImageTag", key: "gatewayEdge.image.tag" },
@@ -465,7 +485,6 @@ function validateW9TestExperimentRender(opts: BuildUpgradeArgsOpts): void {
   if (testExperiment === undefined && mode === undefined) {
     if (
       isW9CandidateImageTag(opts.imageTag) ||
-      opts.gatewayEdgeImageRepository !== undefined ||
       opts.gatewayEdgeImageTag !== undefined
     ) {
       throw new Error("digest-bound W9 candidate image requires its W9 test experiment");
@@ -484,6 +503,7 @@ function validateW9TestExperimentRender(opts: BuildUpgradeArgsOpts): void {
             imageTag: opts.gatewayEdgeImageTag,
           },
       opts.imageTag,
+      opts.imageRepository,
     ) ||
     !isW9TestPublisherLiveExperiment(testExperiment)
   ) {

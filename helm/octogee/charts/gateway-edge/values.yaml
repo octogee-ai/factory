@@ -1,5 +1,5 @@
 image:
-  repository: us-central1-docker.pkg.dev/octogee/octogee/gateway-edge
+  repository: ""
   tag: latest
 
 replicas: 1

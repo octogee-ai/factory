@@ -27,7 +27,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: glm-controller
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ required "glm-controller.image.repository is required" .Values.image.repository }}:{{ .Values.image.tag }}"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -37,6 +37,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            - name: DEPLOYMENT_TARGET_ID
+              value: {{ required "global.deploymentTargetId is required" (.Values.global).deploymentTargetId | quote }}
             # GATEWAY_CHART tells the controller where the standalone
             # per-instance chart is baked in the image (Dockerfile copies
             # helm/octogee-gateway/ → /charts/octogee-gateway). The
@@ -47,9 +49,9 @@ spec:
             - name: GATEWAY_CHART
               value: {{ .Values.gatewayChart | default "/charts/octogee-gateway" | quote }}
             - name: GOOGLE_CLOUD_PROJECT
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
+              value: {{ required "global.deploymentProjectId is required" (.Values.global).deploymentProjectId | quote }}
+            - name: GCP_PROJECT_ID
+              value: {{ required "global.deploymentProjectId is required" (.Values.global).deploymentProjectId | quote }}
             - name: OCTOGEE_KMS_KEY_NAME
               value: {{ required "glm-controller.kmsKeyName is required" .Values.kmsKeyName | quote }}
             - name: GKE_WORKLOAD_IDENTITY_PROJECT
@@ -142,7 +144,7 @@ spec:
             - name: BOOTSTRAP_DEFAULT_GATEWAY
               value: {{ (.Values.bootstrapDefaultGateway).enabled | default false | quote }}
             - name: BOOTSTRAP_IMAGE_REPOSITORY
-              value: {{ (.Values.bootstrapDefaultGateway).imageRepository | default "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway" | quote }}
+              value: {{ required "glm-controller.bootstrapDefaultGateway.imageRepository is required" (.Values.bootstrapDefaultGateway).imageRepository | quote }}
             - name: BOOTSTRAP_IMAGE_TAG
               value: {{ (.Values.bootstrapDefaultGateway).imageTag | default "latest" | quote }}
           ports:

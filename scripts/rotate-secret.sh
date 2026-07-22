@@ -43,6 +43,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=scripts/lib/deployment-target.sh
+source "$SCRIPT_DIR/lib/deployment-target.sh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -75,21 +77,20 @@ done
   exit 1
 }
 
+if [[ "$ENV" == "prod" || "$ENV" == "test" ]]; then
+  octogee_load_deployment_target "--environment=$ENV"
+  K8S_NAMESPACE="$TARGET_NAMESPACE"
+  FIREBASE_PROJECT="$TARGET_FIREBASE_PROJECT"
+  CLUSTER_PROJECT="$TARGET_CLUSTER_PROJECT"
+  CLUSTER_NAME="$TARGET_CLUSTER_NAME"
+  K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
+fi
+
 case "$ENV" in
   prod)
-    K8S_NAMESPACE="octogee"
-    FIREBASE_PROJECT="octogee"
-    CLUSTER_PROJECT="octogee"
-    CLUSTER_NAME="octogee-gateway"
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
     ENV_LABEL="🔴 PRODUCTION"
     ;;
   test)
-    K8S_NAMESPACE="octogee-test"
-    FIREBASE_PROJECT="octogee-test"
-    CLUSTER_PROJECT="octogee"
-    CLUSTER_NAME="octogee-gateway"
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
     ENV_LABEL="🟡 TEST"
     ;;
   custom)
@@ -139,7 +140,7 @@ echo -e "${CYAN}═════════════════════�
 echo ""
 
 # ── kubectl context ────────────────────────────────────────────────────────
-gcloud container clusters get-credentials "$CLUSTER_NAME" --region us-central1 --project "$CLUSTER_PROJECT" 2>/dev/null || true
+gcloud container clusters get-credentials "$CLUSTER_NAME" --region "$TARGET_REGION" --project "$CLUSTER_PROJECT" 2>/dev/null || true
 kubectl config use-context "$K8S_CONTEXT" >/dev/null
 [[ "$(kubectl config current-context)" == "$K8S_CONTEXT" ]] || fail "Wrong kubectl context"
 ok "kubectl context: $K8S_CONTEXT"
@@ -196,7 +197,7 @@ case "$SECRET" in
       --data-file=- --project="$FIREBASE_PROJECT" 2>/dev/null || \
     echo -n "$NEW_VALUE" | gcloud secrets create ANTHROPIC_API_KEY \
       --data-file=- --project="$FIREBASE_PROJECT" \
-      --replication-policy=user-managed --locations=us-central1 2>/dev/null || \
+      --replication-policy=user-managed --locations="$TARGET_REGION" 2>/dev/null || \
       fail "Could not write to Secret Manager"
     ok "Secret Manager updated"
 
@@ -234,7 +235,7 @@ case "$SECRET" in
       --data-file=- --project="$FIREBASE_PROJECT" 2>/dev/null || \
     echo -n "$NEW_VALUE" | gcloud secrets create GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN \
       --data-file=- --project="$FIREBASE_PROJECT" \
-      --replication-policy=user-managed --locations=us-central1 2>/dev/null || \
+      --replication-policy=user-managed --locations="$TARGET_REGION" 2>/dev/null || \
       fail "Could not write to Secret Manager"
     ok "Secret Manager updated"
 
@@ -260,7 +261,7 @@ case "$SECRET" in
       --data-file=- --project="$FIREBASE_PROJECT" 2>/dev/null || \
     echo -n "$NEW_VALUE" | gcloud secrets create SOCIAL_NOTIFICATION_BEARER_TOKEN \
       --data-file=- --project="$FIREBASE_PROJECT" \
-      --replication-policy=user-managed --locations=us-central1 2>/dev/null || \
+      --replication-policy=user-managed --locations="$TARGET_REGION" 2>/dev/null || \
       fail "Could not write to Secret Manager"
     ok "Secret Manager updated"
 
@@ -351,7 +352,7 @@ print(json.dumps(d))
       --data-file=- --project="$FIREBASE_PROJECT" 2>/dev/null || \
     echo -n "$NEW_VALUE" | gcloud secrets create DISCORD_OPS_WEBHOOK_URL \
       --data-file=- --project="$FIREBASE_PROJECT" \
-      --replication-policy=user-managed --locations=us-central1 2>/dev/null || \
+      --replication-policy=user-managed --locations="$TARGET_REGION" 2>/dev/null || \
       fail "Could not write to Secret Manager"
     ok "Secret Manager updated"
 

@@ -169,6 +169,10 @@ export interface GatewayUpsertOpts {
   sizingTier?: HelmInstanceValue["sizingTier"];
   replicas?: number;
   gcpProject?: string;
+  kmsKeyName?: string;
+  deploymentTargetId?: string;
+  deploymentProjectId?: string;
+  gatewayServiceAccount?: string;
   rollStrategy: "surge";
   waitForReady: false;
   deploymentIntentFingerprint: string;
@@ -240,7 +244,11 @@ function w9TestExperimentForNamespace(input: {
   if (
     input.namespace !== "octogee-test" ||
     !isW9CandidateImageTag(input.artifact.imageTag) ||
-    !isW9GatewayEdgeImage(input.artifact.gatewayEdgeImage, input.artifact.imageTag) ||
+    !isW9GatewayEdgeImage(
+      input.artifact.gatewayEdgeImage,
+      input.artifact.imageTag,
+      input.artifact.imageRepository,
+    ) ||
     !isW9TestPublisherLiveExperiment(testExperiment)
   ) {
     throw new Error("publisher-live W9 experiment is TEST-only and requires its digest-bound candidate");
@@ -263,9 +271,18 @@ export function gatewayUpsertOptsFromRelease(input: {
   chartPath: string;
   valuesFile?: string;
   chartFingerprint?: string;
+  kmsKeyName?: string;
+  defaultGatewayEdgeImageRepository?: string;
+  deploymentTargetId?: string;
+  deploymentProjectId?: string;
+  gatewayServiceAccount?: string;
 }): GatewayUpsertOpts {
   const { gateway, artifact } = input;
   const gatewayClass = resolveGatewayClass(classKnobs(gateway));
+  const experiment = w9TestExperimentForNamespace({
+    namespace: input.namespace,
+    artifact,
+  });
   const intent: Omit<GatewayUpsertOpts, "deploymentIntentFingerprint"> = {
     namespace: input.namespace,
     gatewayId: gateway.gatewayId,
@@ -273,7 +290,9 @@ export function gatewayUpsertOptsFromRelease(input: {
     builderSlug: gateway.builderSlug ?? undefined,
     imageRepository: imageRepositoryFor(gateway, artifact),
     imageTag: artifact.imageTag,
-    ...w9TestExperimentForNamespace({ namespace: input.namespace, artifact }),
+    gatewayEdgeImageRepository:
+      experiment.gatewayEdgeImageRepository ?? input.defaultGatewayEdgeImageRepository,
+    ...experiment,
     serviceAccountName: gatewayServiceAccountName(gateway),
     serviceAccount: gateway.serviceAccount ?? undefined,
     gatewayContainerSecurityContext: gateway.gatewayContainerSecurityContext ?? undefined,
@@ -288,6 +307,10 @@ export function gatewayUpsertOptsFromRelease(input: {
     sizingTier: gateway.sizingTier ?? undefined,
     replicas: input.replicas,
     gcpProject: gateway.gcpProject ?? undefined,
+    kmsKeyName: input.kmsKeyName,
+    deploymentTargetId: input.deploymentTargetId,
+    deploymentProjectId: input.deploymentProjectId,
+    gatewayServiceAccount: input.gatewayServiceAccount,
     rollStrategy: "surge",
     waitForReady: false,
   };

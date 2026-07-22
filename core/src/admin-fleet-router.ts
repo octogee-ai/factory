@@ -39,8 +39,8 @@ import {
   type OperatorGatewayReservationRequest,
 } from "@octogee/shared/types/glm";
 import {
-  deploymentEnvironmentForNamespace,
-  deploymentEnvironmentSettings,
+  deploymentSettingsForRuntime,
+  deploymentTargetsForEnvironment,
 } from "./deployment-environment.js";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
 import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
@@ -278,6 +278,20 @@ export function resolveFleetNamespace(env: NodeJS.ProcessEnv = process.env): str
   return typeof ns === "string" && ns.length > 0 ? ns : "octogee";
 }
 
+export function resolveFleetDeploymentSettings(
+  namespace = resolveFleetNamespace(),
+  targetId = process.env.DEPLOYMENT_TARGET_ID,
+) {
+  try {
+    return deploymentSettingsForRuntime({ namespace, targetId });
+  } catch (error) {
+    if (targetId === undefined && error instanceof Error && error.message.startsWith("Unknown deployment environment")) {
+      throw new Error(`Unknown deployment environment for fleet namespace: ${namespace}`);
+    }
+    throw error;
+  }
+}
+
 type GlmDoc = Record<string, unknown>;
 interface FirestoreDocLike { id: string; data(): GlmDoc }
 type DurableGatewayRoot = GatewayDoc & GatewayMutableConfig;
@@ -301,6 +315,7 @@ export interface DedicatedGatewayIdleSettings {
 }
 
 export interface FleetRuntimeSettings {
+  gatewayImageRepository: string;
   dedicatedGatewayIdle: DedicatedGatewayIdleSettings;
 }
 
@@ -1027,7 +1042,9 @@ async function readAdminOnboardingPlacementResponse(
 async function readFleetRuntimeSettings(deps: FleetRouterDeps): Promise<FleetRuntimeSettings> {
   const snap = await deps.db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).get();
   const data = snap.exists ? (snap.data() as Record<string, unknown> | undefined) : undefined;
+  const deployment = resolveFleetDeploymentSettings();
   return {
+    gatewayImageRepository: `${deployment.artifactRegistryRepository}/octogee-gateway`,
     dedicatedGatewayIdle: projectDedicatedGatewayIdleSettings(
       data,
       deps.dedicatedGatewayIdleDefaultMs,
@@ -1277,10 +1294,7 @@ function projectGatewayStorage(
 }
 
 function gatewayComputeClassBase(): string {
-  const environment = deploymentEnvironmentForNamespace(resolveFleetNamespace());
-  return environment === "unknown"
-    ? deploymentEnvironmentSettings("prod").computeClass
-    : deploymentEnvironmentSettings(environment).computeClass;
+  return resolveFleetDeploymentSettings().computeClass;
 }
 
 export function projectGatewayReservation(
@@ -1421,8 +1435,13 @@ const ERR_GATEWAY_OPERATION_IN_FLIGHT =
   "another operation is already pending or running for this gateway";
 const ERR_OWNER_USER_NOT_FOUND = "owner user not found";
 const OP_KIND_MIGRATE_CUSTOMER = "migrate-customer";
-const GATEWAY_IMAGE_REPO_PREFIX =
-  "us-central1-docker.pkg.dev/octogee/octogee/";
+const GATEWAY_IMAGE_REPO_PREFIXES = [...new Set(
+  (["prod", "test", "build-week"] as const).flatMap((environment) =>
+    deploymentTargetsForEnvironment(environment).map(
+      (target) => `${target.artifactRegistryRepository}/`,
+    ),
+  ),
+)];
 const BUILDS_SERVICE_ALLOWLIST = new Set([
   "octogee-gateway",
   "gateway-edge",
@@ -1588,7 +1607,7 @@ function ageMsOrNull(ms: number | null, now: number): number | null {
 }
 
 function isValidGatewayImageRepository(repo: string): boolean {
-  return repo.startsWith(GATEWAY_IMAGE_REPO_PREFIX);
+  return GATEWAY_IMAGE_REPO_PREFIXES.some((prefix) => repo.startsWith(prefix));
 }
 
 function isNonEmptyString(v: unknown): v is string {
@@ -1683,7 +1702,7 @@ export function validateRolloutBody(
         body: {
           error:
             "imageRepository must be the canonical Octogee Artifact Registry repo",
-          expectedPrefix: GATEWAY_IMAGE_REPO_PREFIX,
+          expectedPrefixes: GATEWAY_IMAGE_REPO_PREFIXES,
           got: body.imageRepository,
         },
       },
@@ -3044,7 +3063,7 @@ function validateArtifact(artifact: GatewayArtifact): RolloutBodyError | null {
       status: 400,
       body: {
         error: "imageRepository must be the canonical Octogee Artifact Registry repo",
-        expectedPrefix: GATEWAY_IMAGE_REPO_PREFIX,
+        expectedPrefixes: GATEWAY_IMAGE_REPO_PREFIXES,
         got: artifact.imageRepository,
       },
     };

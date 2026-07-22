@@ -1,5 +1,5 @@
 image:
-  repository: us-central1-docker.pkg.dev/octogee/octogee/glm-controller
+  repository: ""
   tag: latest
 
 # Workload Identity binding — KSA `glm-controller` impersonates THIS GSA:

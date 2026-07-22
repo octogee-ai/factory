@@ -86,11 +86,8 @@ export const W9_CANDIDATE_MANIFEST_PATH =
   "infra/gateway/openclaw-candidates/agent-conversation.json";
 export const W9_MATTERMOST_OVERLAY_VALUES_PATH =
   "infra/candidates/values.mattermost-silent-post.yaml";
-export const W9_GATEWAY_EDGE_IMAGE_REPOSITORY =
-  "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge";
-
 export interface W9GatewayEdgeImage {
-  imageRepository: typeof W9_GATEWAY_EDGE_IMAGE_REPOSITORY;
+  imageRepository: string;
   imageTag: string;
 }
 
@@ -166,7 +163,7 @@ export function isReleasePayload(value: unknown): value is ReleasePayload {
   return (
     isW9CandidateImageTag(value.imageTag) &&
     isW9TestPublisherLiveExperiment(value.testExperiment) &&
-    isW9GatewayEdgeImage(value.gatewayEdgeImage, value.imageTag)
+    isW9GatewayEdgeImage(value.gatewayEdgeImage, value.imageTag, value.imageRepository)
   );
 }
 
@@ -228,7 +225,9 @@ function hasReleasePayloadShape(value: Record<string, unknown>): boolean {
   );
 }
 
-function hasReleasePayloadIdentity(value: Record<string, unknown>): boolean {
+function hasReleasePayloadIdentity(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & { imageRepository: string; imageTag: string } {
   return (
     typeof value.imageRepository === "string" &&
     value.imageRepository.length > 0 &&
@@ -245,10 +244,15 @@ function w9CandidateImageName(imageTag: string): string {
 export function isW9GatewayEdgeImage(
   value: unknown,
   gatewayImageTag: string,
+  gatewayImageRepository: string,
 ): value is W9GatewayEdgeImage {
+  const gatewayPackageSuffix = "/octogee-gateway";
+  const expectedRepository = gatewayImageRepository.endsWith(gatewayPackageSuffix)
+    ? `${gatewayImageRepository.slice(0, -gatewayPackageSuffix.length)}/gateway-edge`
+    : "";
   return (
     isPlainRecord(value) &&
-    value.imageRepository === W9_GATEWAY_EDGE_IMAGE_REPOSITORY &&
+    value.imageRepository === expectedRepository &&
     typeof value.imageTag === "string" &&
     isW9CandidateImageTag(value.imageTag) &&
     isW9CandidateImageTag(gatewayImageTag) &&

@@ -63,6 +63,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=scripts/lib/deployment-target.sh
+source "$SCRIPT_DIR/lib/deployment-target.sh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -152,12 +154,15 @@ case "$NAMESPACE" in
 esac
 
 # ── Constants (shared cluster + test Firebase project) ─────────────────────
-CLUSTER_PROJECT="octogee"
-CLOUDSQL_PROJECT="octogee"
-CLOUDSQL_INSTANCE="octogee-pg"
-CLUSTER_NAME="octogee-gateway"
-K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-FIREBASE_PROJECT="octogee-test"
+octogee_load_deployment_target --environment=test
+CLUSTER_PROJECT="$TARGET_CLUSTER_PROJECT"
+CLOUDSQL_PROJECT="$TARGET_CLOUD_SQL_PROJECT"
+CLOUDSQL_INSTANCE="$TARGET_CLOUD_SQL_INSTANCE"
+MM_DB_PASSWORD_SECRET="$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET"
+GITEA_DB_PASSWORD_SECRET="$TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET"
+CLUSTER_NAME="$TARGET_CLUSTER_NAME"
+K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
+FIREBASE_PROJECT="$TARGET_FIREBASE_PROJECT"
 TF_DIR="$REPO_DIR/terraform/environments/custom"
 VALUES_TPL="$REPO_DIR/helm/octogee/values.custom.yaml.tpl"
 VALUES_OUT="$REPO_DIR/helm/octogee/values.$NAMESPACE.yaml"
@@ -222,7 +227,7 @@ ok "All required tools present"
 
 # ── kubectl context ────────────────────────────────────────────────────────
 step "Setting kubectl context"
-gcloud container clusters get-credentials "$CLUSTER_NAME" --region us-central1 --project "$CLUSTER_PROJECT" 2>/dev/null || true
+gcloud container clusters get-credentials "$CLUSTER_NAME" --region "$TARGET_REGION" --project "$CLUSTER_PROJECT" 2>/dev/null || true
 kubectl config use-context "$K8S_CONTEXT" >/dev/null
 [[ "$(kubectl config current-context)" == "$K8S_CONTEXT" ]] || fail "Wrong kubectl context"
 ok "kubectl context: $K8S_CONTEXT"
@@ -282,8 +287,8 @@ destroy_namespace() {
 }
 
 drop_cloud_sql_dbs() {
-  MM_DB_PASS=$(gcloud secrets versions access latest --secret=MM_DB_PASSWORD --project="$CLOUDSQL_PROJECT" 2>/dev/null || echo "")
-  GITEA_DB_PASS=$(gcloud secrets versions access latest --secret=gitea-db-password --project="$CLOUDSQL_PROJECT" 2>/dev/null || echo "")
+  MM_DB_PASS=$(gcloud secrets versions access latest --secret="$MM_DB_PASSWORD_SECRET" --project="$CLOUDSQL_PROJECT" 2>/dev/null || echo "")
+  GITEA_DB_PASS=$(gcloud secrets versions access latest --secret="$GITEA_DB_PASSWORD_SECRET" --project="$CLOUDSQL_PROJECT" 2>/dev/null || echo "")
   [[ -z "$MM_DB_PASS" || -z "$GITEA_DB_PASS" ]] && {
     warn "Could not read DB passwords from Secret Manager — skipping DB drop"
     return
@@ -292,7 +297,7 @@ drop_cloud_sql_dbs() {
   PROXY_BIN=$(command -v cloud-sql-proxy 2>/dev/null || ls /opt/homebrew/bin/cloud-sql-proxy 2>/dev/null || echo "")
   [[ -z "$PROXY_BIN" ]] && { warn "cloud-sql-proxy not found — skipping DB drop"; return; }
 
-  "$PROXY_BIN" "$CLOUDSQL_PROJECT:us-central1:$CLOUDSQL_INSTANCE" --port=5434 &
+  "$PROXY_BIN" "$TARGET_CLOUD_SQL_CONNECTION" --port=5434 &
   PROXY_PID=$!
   sleep 4
   trap 'kill "$PROXY_PID" 2>/dev/null || true' EXIT
@@ -334,9 +339,9 @@ fi
 if $SKIP_TERRAFORM; then
   step "Phase 2a: Skipping Terraform (--skip-terraform) — creating DBs via gcloud"
   PROXY_BIN=$(command -v cloud-sql-proxy 2>/dev/null || ls /opt/homebrew/bin/cloud-sql-proxy 2>/dev/null || echo "")
-  MM_DB_PASS=$(gcloud secrets versions access latest --secret=MM_DB_PASSWORD --project="$CLOUDSQL_PROJECT")
-  GITEA_DB_PASS=$(gcloud secrets versions access latest --secret=gitea-db-password --project="$CLOUDSQL_PROJECT")
-  "$PROXY_BIN" "$CLOUDSQL_PROJECT:us-central1:$CLOUDSQL_INSTANCE" --port=5434 &
+  MM_DB_PASS=$(gcloud secrets versions access latest --secret="$MM_DB_PASSWORD_SECRET" --project="$CLOUDSQL_PROJECT")
+  GITEA_DB_PASS=$(gcloud secrets versions access latest --secret="$GITEA_DB_PASSWORD_SECRET" --project="$CLOUDSQL_PROJECT")
+  "$PROXY_BIN" "$TARGET_CLOUD_SQL_CONNECTION" --port=5434 &
   PROXY_PID=$!
   sleep 4
   trap 'kill "$PROXY_PID" 2>/dev/null || true' EXIT
@@ -352,8 +357,13 @@ else
     cd "$TF_DIR"
     info "terraform init (backend prefix: custom/$NAMESPACE)..."
     terraform init -reconfigure -backend-config="prefix=custom/$NAMESPACE" -input=false
-    info "terraform apply -var=namespace=$NAMESPACE..."
-    terraform apply -var="namespace=$NAMESPACE" -auto-approve -input=false
+    info "terraform apply -var=namespace=$NAMESPACE -var=region=$TARGET_REGION -var=cloudsql_project_id=$TARGET_CLOUD_SQL_PROJECT..."
+    terraform apply \
+      -var="namespace=$NAMESPACE" \
+      -var="region=$TARGET_REGION" \
+      -var="cloudsql_project_id=$TARGET_CLOUD_SQL_PROJECT" \
+      -auto-approve \
+      -input=false
   )
   ok "Terraform apply complete"
 fi
@@ -368,6 +378,12 @@ step "Phase 2c: Rendering helm values"
 [[ -f "$VALUES_TPL" ]] || fail "Values template missing: $VALUES_TPL"
 sed -e "s|__NAMESPACE__|$NAMESPACE|g" \
     -e "s|__DB_SLUG__|$DB_SLUG|g" \
+    -e "s|__TARGET_ID__|$TARGET_ID|g" \
+    -e "s|__FIREBASE_PROJECT__|$TARGET_FIREBASE_PROJECT|g" \
+    -e "s|__AR_REPOSITORY__|$TARGET_AR_REPOSITORY|g" \
+    -e "s|__CLOUD_SQL_CONNECTION__|$TARGET_CLOUD_SQL_CONNECTION|g" \
+    -e "s|__KMS_KEY_NAME__|$TARGET_KMS_KEY_NAME|g" \
+    -e "s|__CLUSTER_PROJECT__|$TARGET_CLUSTER_PROJECT|g" \
     "$VALUES_TPL" > "$VALUES_OUT"
 ok "Rendered: $VALUES_OUT"
 
@@ -387,7 +403,7 @@ step "Phase 2d: Materializing K8s secrets"
 
 # ── 2f. Helm install ───────────────────────────────────────────────────────
 step "Phase 2e: Helm install"
-GITEA_DB_PASS=$(gcloud secrets versions access latest --secret=gitea-db-password --project="$CLOUDSQL_PROJECT")
+GITEA_DB_PASS=$(gcloud secrets versions access latest --secret="$GITEA_DB_PASSWORD_SECRET" --project="$CLOUDSQL_PROJECT")
 helm upgrade --install octogee "$REPO_DIR/helm/octogee" \
   --server-side=true --force-conflicts \
   -f "$VALUES_OUT" \

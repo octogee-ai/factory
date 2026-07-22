@@ -21,9 +21,11 @@ beforeEach(() => {
   getAccessTokenCalls = 0;
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
+  vi.stubEnv("K8S_NAMESPACE", "octogee");
 });
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 function makeArResponse(items: Array<{ name: string; tags: string[]; uploadTime: string }>) {
@@ -159,6 +161,25 @@ describe("listGatewayBuilds — Artifact Registry adapter", () => {
     const url = fetchMock.mock.calls[0][0] as string;
     expect(url).toContain(
       "/v1/projects/octogee/locations/us-central1/repositories/octogee/dockerImages",
+    );
+  });
+
+  it("targets the exact candidate registry when the runtime target is explicit", async () => {
+    vi.stubEnv("K8S_NAMESPACE", "octogee");
+    vi.stubEnv("DEPLOYMENT_TARGET_ID", "prod-west");
+    fetchMock.mockResolvedValueOnce(makeArResponse([]));
+    await listGatewayBuilds({ service: "octogee-gateway" });
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain(
+      "/v1/projects/octogee/locations/us-west1/repositories/octogee/dockerImages",
+    );
+  });
+
+  it("fails closed when runtime registry coordinates have no deployment context", async () => {
+    vi.unstubAllEnvs();
+    delete process.env.K8S_NAMESPACE;
+    await expect(listGatewayBuilds({ service: "octogee-gateway" })).rejects.toThrow(
+      "K8S_NAMESPACE is required when Artifact Registry coordinates are incomplete",
     );
   });
 

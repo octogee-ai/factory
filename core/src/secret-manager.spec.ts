@@ -26,7 +26,7 @@ import {
   writeSecret,
   provisionGatewayAuthSecret,
   deleteSecret,
-  SINGLE_REGION_REPLICATION,
+  secretReplicationPolicy,
 } from "./secret-manager.js";
 
 beforeEach(() => {
@@ -61,10 +61,16 @@ describe("deleteSecret — hard delete, idempotent (decommission teardown)", () 
   });
 });
 
-describe("secret-manager replication policy is single-region (automatic = ~25× storage cost)", () => {
-  it("SINGLE_REGION_REPLICATION pins us-central1 user-managed, never multi-region automatic", () => {
-    expect(SINGLE_REGION_REPLICATION).toEqual({
+describe("secret-manager replication policy follows the exact deployment project", () => {
+  it("pins the central target without a regional fallback", () => {
+    expect(secretReplicationPolicy("octogee")).toEqual({
       userManaged: { replicas: [{ location: "us-central1" }] },
+    });
+  });
+
+  it("pins the fresh prod data project to Oregon", () => {
+    expect(secretReplicationPolicy("octogee-data-prod")).toEqual({
+      userManaged: { replicas: [{ location: "us-west1" }] },
     });
   });
 
@@ -72,7 +78,7 @@ describe("secret-manager replication policy is single-region (automatic = ~25× 
     await writeSecret({ name: "FOO", value: "bar" });
     expect(mocks.createSecret).toHaveBeenCalledWith(
       expect.objectContaining({
-        secret: expect.objectContaining({ replication: SINGLE_REGION_REPLICATION }),
+        secret: expect.objectContaining({ replication: secretReplicationPolicy("octogee") }),
       }),
     );
   });
@@ -84,7 +90,7 @@ describe("secret-manager replication policy is single-region (automatic = ~25× 
     });
     expect(mocks.createSecret).toHaveBeenCalledWith(
       expect.objectContaining({
-        secret: expect.objectContaining({ replication: SINGLE_REGION_REPLICATION }),
+        secret: expect.objectContaining({ replication: secretReplicationPolicy("octogee") }),
       }),
     );
   });

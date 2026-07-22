@@ -90,7 +90,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: fix-perms
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Values.imageTag }}"
+          image: "{{ required "image.repository is required" .Values.image.repository }}:{{ .Values.image.tag | default .Values.imageTag }}"
           command:
             - sh
             - -c
@@ -129,7 +129,7 @@ spec:
               memory: "32Mi"
       containers:
         - name: gateway
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Values.imageTag }}"
+          image: "{{ required "image.repository is required" .Values.image.repository }}:{{ .Values.image.tag | default .Values.imageTag }}"
           ports:
             - containerPort: 18789
             - containerPort: 9092
@@ -393,7 +393,7 @@ spec:
         # chat-proxy folded in — one container, one port (3001) serves the
         # API, the chat WS surface, and /metrics (POST-BENDER-CLEANUP-SPEC §2.6).
         - name: gateway-edge
-          image: "{{ .Values.gatewayEdge.image.repository }}:{{ .Values.gatewayEdge.image.tag | default .Values.imageTag }}"
+          image: "{{ required "gatewayEdge.image.repository is required" .Values.gatewayEdge.image.repository }}:{{ .Values.gatewayEdge.image.tag | default .Values.imageTag }}"
           ports:
             - containerPort: {{ .Values.gatewayEdge.port }}
               name: gateway-edge

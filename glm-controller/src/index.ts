@@ -53,7 +53,6 @@ import {
   isGatewayDesiredDoc,
   isGatewayRuntimeDoc,
   projectGatewayDesiredRootForGateway,
-  W9_GATEWAY_EDGE_IMAGE_REPOSITORY,
   type GatewayDoc,
   type GatewayRuntimeDoc,
   type ReleasePayload,
@@ -190,8 +189,7 @@ import {
 } from "@octogee/core/secret-manager";
 import { listGatewayBuilds } from "@octogee/core/artifact-registry";
 import {
-  deploymentEnvironmentForNamespace,
-  deploymentEnvironmentSettings,
+  deploymentSettingsForRuntime,
 } from "@octogee/core/deployment-environment";
 import { reconcileImagePins } from "./reconcile-image-pins.js";
 import { workspaceSlugsForUser } from "@octogee/core/workspace-slugs";
@@ -272,11 +270,17 @@ const MAINTENANCE_GATE_POLL_MS = 5_000;
 
 const GATEWAY_CHART = process.env.GATEWAY_CHART ?? "/charts/octogee-gateway";
 const ORCHESTRATOR_CONFIG_DOC_PATH = "config/orchestrator";
-const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
-const RESOLVED_ENVIRONMENT = deploymentEnvironmentForNamespace(NAMESPACE);
-const ENVIRONMENT_SETTINGS = deploymentEnvironmentSettings(
-  RESOLVED_ENVIRONMENT === "unknown" ? "test" : RESOLVED_ENVIRONMENT,
-);
+const NAMESPACE = (function () {
+  const namespace = process.env.K8S_NAMESPACE;
+  if (!namespace) {
+    throw new Error("K8S_NAMESPACE is required for glm-controller");
+  }
+  return namespace;
+})();
+const ENVIRONMENT_SETTINGS = deploymentSettingsForRuntime({
+  namespace: NAMESPACE,
+  targetId: process.env.DEPLOYMENT_TARGET_ID,
+});
 
 const GATEWAY_VALUES_FILE = (function () {
   const explicit = process.env.GATEWAY_VALUES_FILE;
@@ -743,7 +747,7 @@ async function readDurableReleaseArtifacts(
       // gateway imageTag), so its image must be pinned even when the release
       // payload carries no explicit gatewayEdgeImage.
       const gatewayEdgeImage = artifact.gatewayEdgeImage ?? {
-        imageRepository: W9_GATEWAY_EDGE_IMAGE_REPOSITORY,
+        imageRepository: `${ENVIRONMENT_SETTINGS.artifactRegistryRepository}/gateway-edge`,
         imageTag: artifact.imageTag,
       };
       artifacts.push({
@@ -1009,6 +1013,13 @@ async function prepareDesiredGatewayIntent(input: {
     chartPath: GATEWAY_CHART,
     valuesFile: GATEWAY_VALUES_FILE,
     chartFingerprint: passDeps.chartFingerprint,
+    kmsKeyName: ENVIRONMENT_SETTINGS.kmsKeyName,
+    defaultGatewayEdgeImageRepository:
+      `${ENVIRONMENT_SETTINGS.artifactRegistryRepository}/gateway-edge`,
+    deploymentTargetId: ENVIRONMENT_SETTINGS.targetId,
+    deploymentProjectId: ENVIRONMENT_SETTINGS.firebaseProjectId,
+    gatewayServiceAccount:
+      `octogee-gateway@${ENVIRONMENT_SETTINGS.firebaseProjectId}.iam.gserviceaccount.com`,
   });
   return {
     opts,

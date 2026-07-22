@@ -1,4 +1,5 @@
 import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
+import { deploymentTargetForFirebaseProject } from "./deployment-environment.js";
 const clientSingleton = { value: null };
 function client() {
     if (!clientSingleton.value) {
@@ -16,14 +17,10 @@ function projectId() {
 function fqSecretName(name) {
     return `projects/${projectId()}/secrets/${name}`;
 }
-// Single-region (us-central1) replication. The platform lives entirely in
-// us-central1, so multi-region "automatic" replication adds no real
-// availability (region down ⇒ cluster down too) and costs ~25× the
-// per-version storage. All programmatic secret creation must use this. See
-// DECISIONS.md.
-export const SINGLE_REGION_REPLICATION = {
-    userManaged: { replicas: [{ location: "us-central1" }] },
-};
+export function secretReplicationPolicy(targetProjectId) {
+    const target = deploymentTargetForFirebaseProject(targetProjectId);
+    return { userManaged: { replicas: [{ location: target.region }] } };
+}
 export async function writeSecret(params) {
     const parent = `projects/${projectId()}`;
     const secretName = fqSecretName(params.name);
@@ -32,7 +29,7 @@ export async function writeSecret(params) {
             parent,
             secretId: params.name,
             secret: {
-                replication: SINGLE_REGION_REPLICATION,
+                replication: secretReplicationPolicy(projectId()),
                 labels: params.labels,
             },
         });
@@ -149,7 +146,7 @@ export async function provisionGatewayAuthSecret(params) {
         await client().createSecret({
             parent,
             secretId,
-            secret: { replication: SINGLE_REGION_REPLICATION },
+            secret: { replication: secretReplicationPolicy(projectId()) },
         });
     }
     catch (err) {

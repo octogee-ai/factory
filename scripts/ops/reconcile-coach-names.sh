@@ -14,33 +14,26 @@
 #   scripts/ops/reconcile-coach-names.sh --env=prod --clear-onboarding-name --apply jack michael
 set -euo pipefail
 
-ENV=""
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/lib/deployment-target.sh
+source "$SCRIPTS_DIR/lib/deployment-target.sh"
+
+SELECTOR=""
 PASSTHRU=()
 for arg in "$@"; do
   case "$arg" in
-    --env=*) ENV="${arg#*=}" ;;
+    --env=*) SELECTOR="--environment=${arg#*=}" ;;
+    --target=*) SELECTOR="$arg" ;;
     *) PASSTHRU+=("$arg") ;;
   esac
 done
 
-case "$ENV" in
-  prod)
-    K8S_NAMESPACE="octogee"
-    GCP_PROJECT="octogee"
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    ;;
-  test)
-    K8S_NAMESPACE="octogee-test"
-    GCP_PROJECT="octogee-test"
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    ;;
-  *)
-    echo "Usage: $0 --env=prod|test [--apply] [slug ...]" >&2
-    exit 1
-    ;;
-esac
-
-SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+[[ -z "$SELECTOR" ]] && { echo "Usage: $0 --env=prod|test | --target=TARGET_ID [--apply] [slug ...]" >&2; exit 1; }
+octogee_load_deployment_target "$SELECTOR"
+ENV="$TARGET_ENVIRONMENT"
+K8S_NAMESPACE="$TARGET_NAMESPACE"
+GCP_PROJECT="$TARGET_FIREBASE_PROJECT"
+K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
 
 echo "==> kubectl context: $K8S_CONTEXT (namespace $K8S_NAMESPACE)"
 kubectl config use-context "$K8S_CONTEXT" >/dev/null
@@ -82,6 +75,8 @@ $PF_READY || { echo "port-forward did not establish on localhost:8065" >&2; exit
 export MM_URL="http://localhost:8065"
 export MM_ADMIN_TOKEN
 export GOOGLE_CLOUD_PROJECT="$GCP_PROJECT"
+export K8S_NAMESPACE
+export DEPLOYMENT_TARGET_ID="$TARGET_ID"
 unset GOOGLE_APPLICATION_CREDENTIALS  # use gcloud application-default credentials
 
 echo "==> Running reconcile (env=$ENV)"

@@ -221,6 +221,11 @@ describe("gatewayUpsertOptsFromRelease", () => {
       artifact: artifact(),
       replicas: 1,
       chartPath: "/charts/octogee-gateway",
+      kmsKeyName: "projects/octogee-test/locations/us-central1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest",
+      defaultGatewayEdgeImageRepository: "us-west1-docker.pkg.dev/octogee/octogee/gateway-edge",
+      deploymentTargetId: "test-west",
+      deploymentProjectId: "octogee-data-test",
+      gatewayServiceAccount: "octogee-gateway@octogee-data-test.iam.gserviceaccount.com",
     });
     expect(opts).toMatchObject({
       gatewayId: "bender",
@@ -229,6 +234,11 @@ describe("gatewayUpsertOptsFromRelease", () => {
       serviceAccountName: "octogee-gw-bender",
       replicas: 1,
       rollStrategy: "surge",
+      kmsKeyName: "projects/octogee-test/locations/us-central1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest",
+      gatewayEdgeImageRepository: "us-west1-docker.pkg.dev/octogee/octogee/gateway-edge",
+      deploymentTargetId: "test-west",
+      deploymentProjectId: "octogee-data-test",
+      gatewayServiceAccount: "octogee-gateway@octogee-data-test.iam.gserviceaccount.com",
       waitForReady: false,
       deploymentIntentFingerprint: expect.any(String),
     });

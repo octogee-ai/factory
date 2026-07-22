@@ -40,6 +40,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"          # …/scripts/ops
 SCRIPTS_DIR="$(dirname "$SCRIPT_DIR")"               # …/scripts
+# shellcheck source=scripts/lib/deployment-target.sh
+source "$SCRIPTS_DIR/lib/deployment-target.sh"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -48,38 +50,36 @@ warn() { echo -e "  ${YELLOW}⚠️  $1${NC}"; }
 fail() { echo -e "  ${RED}❌ $1${NC}"; exit 1; }
 info() { echo -e "  ${BLUE}ℹ️  $1${NC}"; }
 
-ENV=""; SLUGS_RAW=""; APPLY=false; YES=false
+SELECTOR=""; SLUGS_RAW=""; APPLY=false; YES=false
 for arg in "$@"; do
   case $arg in
-    --env=*)  ENV="${arg#*=}" ;;
+    --env=*)  SELECTOR="--environment=${arg#*=}" ;;
+    --target=*) SELECTOR="$arg" ;;
     --slug=*) SLUGS_RAW="${SLUGS_RAW:+$SLUGS_RAW,}${arg#*=}" ;;
     --apply)  APPLY=true ;;
     --yes|-y) YES=true ;;
     --help|-h)
-      echo "Usage: $0 --env=prod|test --slug=a[,b] [--apply] [--yes]"
+      echo "Usage: $0 (--env=prod|test | --target=TARGET_ID) --slug=a[,b] [--apply] [--yes]"
       exit 0 ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
-[[ -n "$ENV"       ]] || fail "Usage: $0 --env=prod|test --slug=a[,b] [--apply] [--yes]"
+[[ -n "$SELECTOR"  ]] || fail "Usage: $0 (--env=prod|test | --target=TARGET_ID) --slug=a[,b] [--apply] [--yes]"
 [[ -n "$SLUGS_RAW" ]] || fail "Usage: $0 --env=prod|test --slug=a[,b] [--apply] [--yes]"
 
+octogee_load_deployment_target "$SELECTOR"
+ENV="$TARGET_ENVIRONMENT"
+K8S_NAMESPACE="$TARGET_NAMESPACE"
+FIREBASE_PROJECT="$TARGET_FIREBASE_PROJECT"
+CLUSTER_PROJECT="$TARGET_CLUSTER_PROJECT"
+CLUSTER_NAME="$TARGET_CLUSTER_NAME"
+K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
+REGION="$TARGET_REGION"
 case "$ENV" in
-  prod)
-    K8S_NAMESPACE="octogee"
-    FIREBASE_PROJECT="octogee"
-    ENV_LABEL="🔴 PRODUCTION"
-    ;;
-  test)
-    K8S_NAMESPACE="octogee-test"
-    FIREBASE_PROJECT="octogee-test"
-    ENV_LABEL="🟡 TEST"
-    ;;
-  *) fail "--env must be prod or test (matches FIREBASE_PROJECT in reconcile-gitea-org.ts)" ;;
+  prod) ENV_LABEL="🔴 PRODUCTION" ;;
+  test) ENV_LABEL="🟡 TEST" ;;
+  *) fail "reconcile-gitea-org supports prod and test targets" ;;
 esac
-CLUSTER_PROJECT="octogee"
-CLUSTER_NAME="octogee-gateway"
-K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
 GITEA_SVC="octogee-gitea-http"
 
 IFS=',' read -r -a SLUGS <<< "$SLUGS_RAW"
@@ -103,7 +103,7 @@ fi
 # ── 0. kubectl context ────────────────────────────────────────────────────
 info "Setting kubectl context: $K8S_CONTEXT"
 gcloud container clusters get-credentials "$CLUSTER_NAME" \
-  --region us-central1 --project "$CLUSTER_PROJECT" 2>/dev/null || true
+  --region "$REGION" --project "$CLUSTER_PROJECT" 2>/dev/null || true
 kubectl config use-context "$K8S_CONTEXT" >/dev/null
 CURRENT_CTX=$(kubectl config current-context)
 [[ "$CURRENT_CTX" == "$K8S_CONTEXT" ]] || fail "kubectl context mismatch: '$CURRENT_CTX'"
@@ -155,6 +155,8 @@ ok "Gitea admin token valid (octogee-admin)"
 
 export GITEA_API_URL="http://localhost:13000/api/v1"
 export GITEA_ADMIN_TOKEN
+export K8S_NAMESPACE
+export DEPLOYMENT_TARGET_ID="$TARGET_ID"
 
 # ── 5. Run the tested reconcile tool, per slug ────────────────────────────
 TOOL_ARGS=""

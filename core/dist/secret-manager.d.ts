@@ -1,4 +1,4 @@
-export declare const SINGLE_REGION_REPLICATION: {
+export declare function secretReplicationPolicy(targetProjectId: string): {
     userManaged: {
         replicas: {
             location: string;

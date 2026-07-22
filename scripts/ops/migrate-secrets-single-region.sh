@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Migrate Secret Manager secrets from automatic (all-region) replication to
-# single-region (us-central1). Replication is immutable, so each secret is
+# the selected target's single region. Replication is immutable, so each secret is
 # recreated IN PLACE (same name): read value (+ per-secret IAM) -> delete ->
 # recreate single-region -> re-add value -> restore IAM -> verify the value.
 # Idempotent — skips secrets that are already single-region.
@@ -13,15 +13,29 @@
 # Terraform state.
 #
 # Why: automatic replication stores every version in ~26 regions at
-# $0.06/version/region. The platform is single-region (us-central1), so this
+# $0.06/version/region. Each platform target is single-region, so this
 # buys no real availability (region down => cluster down) and costs ~25x.
 # See DECISIONS.md. bash 3.2 compatible (macOS default).
 set -uo pipefail
 
-PROJECT="${PROJECT:-octogee}"
-REGION="${REGION:-us-central1}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/lib/deployment-target.sh
+source "$SCRIPT_DIR/../lib/deployment-target.sh"
+
+SELECTOR=""
 APPLY=false
-[[ "${1:-}" == "--apply" ]] && APPLY=true
+for arg in "$@"; do
+  case "$arg" in
+    --env=*) SELECTOR="--environment=${arg#*=}" ;;
+    --target=*) SELECTOR="$arg" ;;
+    --apply) APPLY=true ;;
+    *) echo "Usage: $0 (--env=prod|test|build-week | --target=TARGET_ID) [--apply]" >&2; exit 1 ;;
+  esac
+done
+[[ -n "$SELECTOR" ]] || { echo "Usage: $0 (--env=prod|test|build-week | --target=TARGET_ID) [--apply]" >&2; exit 1; }
+octogee_load_deployment_target "$SELECTOR"
+PROJECT="$TARGET_FIREBASE_PROJECT"
+REGION="$TARGET_REGION"
 
 TF_MANAGED="mattermost-db-password gitea-db-password cloud-sql-connection-name"
 is_tf_managed() { case " $TF_MANAGED " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }

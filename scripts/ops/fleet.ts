@@ -15,6 +15,7 @@ import {
   readGatewayAuthorization,
   readGatewayRuntimeHeartbeat,
 } from "@octogee/core/gateway-live-release";
+import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 import {
   type MigrationState,
   fullPlan,
@@ -146,6 +147,19 @@ const VERBS: readonly VerbHelp[] = [
 const verbsByName = new Map<string, VerbHelp>(VERBS.map((v) => [v.verb, v]));
 
 export type FleetCredentialMode = "service-account-key" | "application-default";
+
+export function resolveFleetDeploymentTarget(environment: "test" | "prod"): {
+  projectId: string;
+  namespace: string;
+  kubeContext: string;
+} {
+  const target = deploymentEnvironmentSettings(environment);
+  return {
+    projectId: target.firebaseProjectId,
+    namespace: target.namespace,
+    kubeContext: target.kubeContext,
+  };
+}
 
 function parsedVerb(args: ParsedFleetArgs): VerbHelp | null {
   const [verb, sub] = args.positional;
@@ -294,7 +308,8 @@ function initializeFleetCli(argv: string[]): void {
   }
 
   const credentialMode = resolveFleetCredentialMode(args);
-  const projectId = args.env === "prod" ? "octogee" : `octogee-${args.env}`;
+  const target = resolveFleetDeploymentTarget(args.env);
+  const projectId = target.projectId;
   const envSuffix = args.env === "prod" ? "" : `-${args.env}`;
   const saPath = path.join(
     process.env.HOME ?? "",
@@ -316,11 +331,12 @@ function initializeFleetCli(argv: string[]): void {
     console.error(dim(`  fleet writes use Application Default Credentials for ${projectId}.`));
   }
   db = getFirestore();
-  KUBE_NS = args.env === "prod" ? "octogee" : "octogee-test";
+  KUBE_CONTEXT = target.kubeContext;
+  KUBE_NS = target.namespace;
 }
 
-const KUBE_CONTEXT = "gke_octogee_us-central1_octogee-gateway";
-let KUBE_NS = "octogee-test";
+let KUBE_CONTEXT = resolveFleetDeploymentTarget("test").kubeContext;
+let KUBE_NS = resolveFleetDeploymentTarget("test").namespace;
 
 type FirestoreTs = { toMillis(): number };
 

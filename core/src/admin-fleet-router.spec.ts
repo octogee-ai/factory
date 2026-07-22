@@ -10,6 +10,7 @@ import {
   projectDedicatedGatewayIdleSettings,
   projectGatewayReservation,
   projectGatewaySummary,
+  resolveFleetDeploymentSettings,
 } from "./admin-fleet-router.js";
 import {
   GLM_GATEWAYS_COLLECTION,
@@ -39,6 +40,28 @@ describe("projectGatewayReservation — Spot is the default for every class", ()
     expect(r.type).toBe("on-demand");
   });
 
+});
+
+describe("resolveFleetDeploymentSettings", () => {
+  it("uses the active deployment target for the fleet namespace", () => {
+    expect(resolveFleetDeploymentSettings("octogee-test")).toMatchObject({
+      targetId: "test-central",
+      artifactRegistryRepository: "us-central1-docker.pkg.dev/octogee/octogee",
+    });
+  });
+
+  it("uses an explicit candidate target before the environment pointer flips", () => {
+    expect(resolveFleetDeploymentSettings("octogee-test", "test-west")).toMatchObject({
+      targetId: "test-west",
+      artifactRegistryRepository: "us-west1-docker.pkg.dev/octogee/octogee",
+    });
+  });
+
+  it("fails closed for a namespace outside the deployment contract", () => {
+    expect(() => resolveFleetDeploymentSettings("feat-alice")).toThrow(
+      "Unknown deployment environment for fleet namespace: feat-alice",
+    );
+  });
 });
 
 // Step 1 of the Fleet regroup (GATEWAY-RELEASES-SPEC): every row projects its

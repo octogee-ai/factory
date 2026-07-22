@@ -4,9 +4,8 @@ variable "project_id" {
 }
 
 variable "region" {
-  description = "GCP region for the key ring (us-central1 matches the rest of the platform)"
+  description = "GCP region for the key ring"
   type        = string
-  default     = "us-central1"
 }
 
 variable "key_ring_name" {

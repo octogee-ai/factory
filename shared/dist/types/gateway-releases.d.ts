@@ -46,9 +46,8 @@ export interface GatewayDoc {
 }
 export declare const W9_CANDIDATE_MANIFEST_PATH = "infra/gateway/openclaw-candidates/agent-conversation.json";
 export declare const W9_MATTERMOST_OVERLAY_VALUES_PATH = "infra/candidates/values.mattermost-silent-post.yaml";
-export declare const W9_GATEWAY_EDGE_IMAGE_REPOSITORY = "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge";
 export interface W9GatewayEdgeImage {
-    imageRepository: typeof W9_GATEWAY_EDGE_IMAGE_REPOSITORY;
+    imageRepository: string;
     imageTag: string;
 }
 export interface W9TestPublisherLiveExperiment {
@@ -85,7 +84,7 @@ export type ReleasePayloadSchemaUpgrade = {
     reason: "payload-hash-mismatch" | "unsupported-payload-schema";
 };
 export declare function upgradeReleasePayloadSchema(payload: unknown, persistedPayloadHash: unknown): ReleasePayloadSchemaUpgrade;
-export declare function isW9GatewayEdgeImage(value: unknown, gatewayImageTag: string): value is W9GatewayEdgeImage;
+export declare function isW9GatewayEdgeImage(value: unknown, gatewayImageTag: string, gatewayImageRepository: string): value is W9GatewayEdgeImage;
 export interface ReleaseDoc {
     gatewayId: string;
     release: number;

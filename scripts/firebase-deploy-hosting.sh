@@ -15,7 +15,7 @@
 # This wrapper swallows ONLY that specific no-op and propagates every other
 # failure unchanged.
 #
-# Usage: firebase-deploy-hosting.sh <site|app> <firebase-project-id>
+# Usage: firebase-deploy-hosting.sh <site|app> <firebase-project-id> [site-SSR-region]
 # Override the deploy command in tests with DEPLOY_CMD.
 set -euo pipefail
 
@@ -23,12 +23,37 @@ target="${1:?usage: firebase-deploy-hosting.sh <site|app> <firebase-project-id>}
 project="${2:?usage: firebase-deploy-hosting.sh <site|app> <firebase-project-id>}"
 
 log="$(mktemp)"
-trap 'rm -f "$log"' EXIT
+rendered_config=""
+cleanup() {
+  status=$?
+  rm -f "$log"
+  if [ -n "$rendered_config" ]; then
+    rm -f "$rendered_config"
+  fi
+  trap - EXIT
+  exit "$status"
+}
+trap cleanup EXIT
+
+config_args=()
+if [ "$target" = "site" ]; then
+  ssr_region="${3:-}"
+  if [ -z "$ssr_region" ]; then
+    echo "site deployment requires an explicit SSR region" >&2
+    exit 2
+  fi
+  rendered_config="$(mktemp)"
+  jq --arg region "$ssr_region" '
+    (.hosting[] | select(.target == "site") | .rewrites[] | select(.run.serviceId == "site-ssr") | .run.region) = $region
+  ' firebase.json > "$rendered_config"
+  config_args=("--config" "$rendered_config")
+fi
 
 deploy_cmd=("npm" "run" "deploy:hosting:${target}" "--" "--project" "$project" "--non-interactive")
 if [ -n "${DEPLOY_CMD:-}" ]; then
   read -r -a deploy_cmd <<<"$DEPLOY_CMD"
 fi
+deploy_cmd+=("${config_args[@]}")
 
 if "${deploy_cmd[@]}" 2>&1 | tee "$log"; then
   exit 0
