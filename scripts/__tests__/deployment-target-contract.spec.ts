@@ -45,6 +45,70 @@ describe("deployment target consumers", () => {
     }
   });
 
+  it("passes the selected registry location into every Cloud Build", () => {
+    const platform = source(".github/workflows/build-and-deploy.yml");
+    const gateway = source(".github/workflows/gateway-build-operator-base.yml");
+    const pinnedGateway = source("scripts/build-pinned-gateway.sh");
+    const matrixBases = source("scripts/rebuild-matrix-bases.sh");
+
+    expect(platform.match(/_REGION=\$\{\{ steps\.target\.outputs\.artifact_registry_location \}\}/g))
+      .toHaveLength(5);
+    expect(gateway.match(/_REGION=\$\{\{ needs\.matrix-setup\.outputs\.ar_location \}\}/g))
+      .toHaveLength(7);
+    expect(pinnedGateway).toContain("_REGION=${TARGET_AR_LOCATION}");
+    expect(matrixBases).toContain("_REGION=${TARGET_AR_LOCATION}");
+
+    for (const config of [
+      "artifact-worker/cloudbuild.yaml",
+      "cloudbuild-base-beta.yaml",
+      "cloudbuild-base.yaml",
+      "cloudbuild-gateway-candidate.yaml",
+      "cloudbuild-operator-base-extra.yaml",
+      "cloudbuild-operator-base.yaml",
+      "cloudbuild-operator-final-extra.yaml",
+      "cloudbuild-operator-final.yaml",
+      "cloudbuild-operator-toolkit.yaml",
+      "cloudbuild.yaml",
+      "gateway-edge/cloudbuild-candidate.yaml",
+      "gateway-edge/cloudbuild.yaml",
+      "glm-controller/cloudbuild.yaml",
+      "octogee-api/cloudbuild.yaml",
+      "ops-agent/cloudbuild.yaml",
+    ]) {
+      expect(source(config), config).not.toContain('  _REGION: "us-central1"');
+    }
+  });
+
+  it("passes exact targets into promotion and secret preflight", () => {
+    const gateway = source(".github/workflows/gateway-build-operator-base.yml");
+    const platform = source(".github/workflows/build-and-deploy.yml");
+    const verifySecrets = source("scripts/verify-secrets.sh");
+
+    expect(gateway).toContain('--deployment-target="${DEPLOYMENT_TARGET}"');
+    expect(platform).toContain(
+      "--deployment-target=${{ steps.target.outputs.target_id }}",
+    );
+    expect(verifySecrets).toContain("--deployment-target=*)");
+    expect(verifySecrets).toContain('octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"');
+  });
+
+  it("selects public Firebase credentials by exact deployment target", () => {
+    const workflow = source(".github/workflows/site.yml");
+    const gateway = source(".github/workflows/gateway-build-operator-base.yml");
+
+    expect(workflow).toContain('case "${{ steps.target.outputs.target_id }}" in');
+    expect(workflow).toContain("PUBLIC_FIREBASE_API_KEY_TEST_WEST");
+    expect(workflow).toContain("PUBLIC_FIREBASE_API_KEY_PROD_WEST");
+    expect(workflow).toContain("PUBLIC_MM_TEAM_ID_TEST_WEST");
+    expect(workflow).toContain("PUBLIC_MM_TEAM_ID_PROD_WEST");
+    expect(workflow).toContain("FIREBASE_DEPLOYER_KEY_TEST_WEST");
+    expect(workflow).toContain("FIREBASE_DEPLOYER_KEY_PROD_WEST");
+    expect(gateway).toContain("FIREBASE_DEPLOYER_KEY_TEST_WEST");
+    expect(gateway).toContain("FIREBASE_DEPLOYER_KEY_PROD_WEST");
+    expect(workflow).toContain("No Firebase deployer key slot for deployment target");
+    expect(gateway).toContain("No Firebase deployer key slot for deployment target");
+  });
+
   it("does not embed the active cluster context in fleet operations", () => {
     for (const script of [
       "scripts/ops/fleet.ts",

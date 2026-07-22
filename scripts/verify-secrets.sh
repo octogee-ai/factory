@@ -17,8 +17,8 @@ set -euo pipefail
 #   - gateway-edge/templates/cronjob-*  (secretKeyRef)
 #
 # Usage:
-#   ./scripts/verify-secrets.sh --env=prod [--context=<kube-context>]
-#   ./scripts/verify-secrets.sh --env=test
+#   ./scripts/verify-secrets.sh --env=prod [--deployment-target=prod-west]
+#   ./scripts/verify-secrets.sh --env=test [--context=<kube-context>]
 #   ./scripts/verify-secrets.sh --env=custom --namespace=feat-alice
 #
 # Exit codes:
@@ -38,13 +38,15 @@ source "$SCRIPT_DIR/lib/deployment-target.sh"
 ENV=""
 KUBE_CTX=""
 CUSTOM_NS=""
+DEPLOYMENT_TARGET=""
 
 for arg in "$@"; do
   case $arg in
     --env=*)       ENV="${arg#*=}" ;;
+    --deployment-target=*) DEPLOYMENT_TARGET="${arg#*=}" ;;
     --namespace=*) CUSTOM_NS="${arg#*=}" ;;
     --context=*)   KUBE_CTX="${arg#*=}" ;;
-    --help|-h)     echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--context=<kube-context>]"; exit 0 ;;
+    --help|-h)     echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--context=<kube-context>]"; exit 0 ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
@@ -53,7 +55,16 @@ done
 
 TARGET_ENV="$ENV"
 [[ "$TARGET_ENV" == "custom" ]] && TARGET_ENV="test"
-octogee_load_deployment_target "--environment=$TARGET_ENV"
+if [[ -n "$DEPLOYMENT_TARGET" ]]; then
+  [[ "$ENV" == "custom" ]] && { echo "--deployment-target cannot be used with --env=custom"; exit 1; }
+  octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"
+  [[ "$TARGET_ENVIRONMENT" != "$TARGET_ENV" ]] && {
+    echo "Deployment target '$DEPLOYMENT_TARGET' does not belong to environment '$ENV'"
+    exit 1
+  }
+else
+  octogee_load_deployment_target "--environment=$TARGET_ENV"
+fi
 NS="$TARGET_NAMESPACE"
 [[ -z "$KUBE_CTX" ]] && KUBE_CTX="$TARGET_KUBE_CONTEXT"
 
