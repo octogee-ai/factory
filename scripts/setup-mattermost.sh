@@ -105,6 +105,7 @@ case "$ENV" in
     ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
 esac
+[[ "$TARGET_LIFECYCLE" == "candidate" ]] && ENV_FILE="$REPO_DIR/.env.$TARGET_ID"
 
 ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
 warn() { echo -e "  ${YELLOW}⚠️  $1${NC}"; }
@@ -322,6 +323,7 @@ if ! kubectl get deployment mattermost -n "$K8S_NAMESPACE" >/dev/null 2>&1; then
   echo "  helm upgrade --install octogee helm/octogee \\"
   echo "    --server-side=true --force-conflicts \\"
   echo "    -f helm/octogee/values.${ENV}.yaml \\"
+  echo "    -f <(node core/dist/render-deployment-target-helm-values.js --target=$TARGET_ID) \\"
   echo "    -n $K8S_NAMESPACE --create-namespace \\"
   echo "    --set \"gitea.gitea.config.database.PASSWD=\$GITEA_DB_PASS\" \\"
   echo "    --kube-context $K8S_CONTEXT"

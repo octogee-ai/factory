@@ -8,6 +8,7 @@
   "targets": {
     "prod-central": {
       "environment": "prod",
+      "promotionSourceTargetId": "test-central",
       "lifecycle": "active",
       "secretNameSuffix": "prod",
       "clusterProjectId": "octogee",
@@ -52,6 +53,7 @@
     },
     "prod-west": {
       "environment": "prod",
+      "promotionSourceTargetId": "test-west",
       "lifecycle": "candidate",
       "secretNameSuffix": "prod-west",
       "clusterProjectId": "octogee",

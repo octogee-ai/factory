@@ -101,6 +101,7 @@ case "$ENV" in
     ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
 esac
+[[ "$TARGET_LIFECYCLE" == "candidate" ]] && ENV_FILE="$REPO_DIR/.env.$TARGET_ID"
 
 ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
 warn() { echo -e "  ${YELLOW}⚠️  $1${NC}"; }

@@ -121,6 +121,8 @@ case "$ENV" in
     exit 1
     ;;
 esac
+[[ "$TARGET_LIFECYCLE" == "candidate" ]] && ENV_FILE="$REPO_DIR/.env.$TARGET_ID"
+[[ "$TARGET_LIFECYCLE" == "candidate" ]] && SA_KEY_DEFAULT="$HOME/.openclaw/secrets/$TARGET_FIREBASE_PROJECT-sa-key.json"
 
 ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
 info() { echo -e "  ${BLUE}ℹ️  $1${NC}"; }
@@ -680,6 +682,7 @@ echo "  # 2. Helm install (gateway, gateway-edge, chat-proxy sidecar, MM, Gitea)
 echo "  helm upgrade --install octogee helm/octogee \\"
 echo "    --server-side=true --force-conflicts \\"
 echo "    -f helm/octogee/values.${ENV}.yaml \\"
+echo "    -f <(node core/dist/render-deployment-target-helm-values.js --target=$TARGET_ID) \\"
 echo "    -n $K8S_NAMESPACE \\"
 echo "    --set \"gitea.gitea.config.database.PASSWD=\$GITEA_DB_PASS\" \\"
 echo "    --kube-context $K8S_CONTEXT \\"
@@ -735,11 +738,11 @@ echo ""
 echo "    Pod stuck in Init:0/1?"
 echo "      kubectl describe pod -n $K8S_NAMESPACE -l app=octogee-gateway"
 echo "      → Usually missing gitea-ssh-key secret. First-install only:"
-echo "      ./scripts/setup-secrets.sh --env=$ENV   (bootstrap mode)"
+echo "      ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG   (bootstrap mode)"
 echo ""
 echo "    CreateContainerConfigError?"
 echo "      → Missing required secret (first install). Run:"
-echo "      ./scripts/setup-secrets.sh --env=$ENV   (bootstrap mode)"
+echo "      ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG   (bootstrap mode)"
 echo ""
 echo "    Gateway 0/1 Running (not Ready)?"
 echo "      → Startup is still in progress. Wait or check:"
@@ -759,7 +762,8 @@ echo "      kubectl annotate svc mattermost -n $K8S_NAMESPACE cloud.google.com/n
 echo "      kubectl annotate svc octogee-gateway -n $K8S_NAMESPACE cloud.google.com/neg-status-"
 echo "      # Then helm upgrade to recreate ingresses with fresh NEGs:"
 echo "      helm upgrade octogee helm/octogee --server-side=true --force-conflicts \\"
-echo "        -f helm/octogee/values.${ENV}.yaml -n $K8S_NAMESPACE \\"
+echo "        -f helm/octogee/values.${ENV}.yaml \\"
+echo "        -f <(node core/dist/render-deployment-target-helm-values.js --target=$TARGET_ID) -n $K8S_NAMESPACE \\"
 echo "        --set \"gitea.gitea.config.database.PASSWD=\$GITEA_DB_PASS\" --kube-context $K8S_CONTEXT"
 echo ""
 echo "    Gitea setup-gitea.sh returns 403?"

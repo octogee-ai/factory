@@ -64,6 +64,12 @@ export function validateDeploymentTargetsDocument(document) {
         if (!DEPLOYMENT_ENVIRONMENTS.includes(environment)) {
             throw new Error(`deployment target ${targetId}.environment is invalid: ${environment}`);
         }
+        if (environment === "prod") {
+            stringField(target, "promotionSourceTargetId", `deployment target ${targetId}`);
+        }
+        else if (target.promotionSourceTargetId !== undefined) {
+            throw new Error(`deployment target ${targetId}.promotionSourceTargetId is only valid for prod`);
+        }
         const lifecycle = stringField(target, "lifecycle", `deployment target ${targetId}`);
         if (!TARGET_LIFECYCLES.includes(lifecycle)) {
             throw new Error(`deployment target ${targetId}.lifecycle is invalid: ${lifecycle}`);
@@ -85,6 +91,19 @@ export function validateDeploymentTargetsDocument(document) {
         stringFields(record(target.kms, `deployment target ${targetId}.kms`), ["projectId", "location", "keyRing", "key"], `deployment target ${targetId}.kms`);
         stringFields(record(target.storage, `deployment target ${targetId}.storage`), ["projectId", "location"], `deployment target ${targetId}.storage`);
     }
+    for (const [targetId, value] of Object.entries(targets)) {
+        const target = value;
+        if (target.environment !== "prod")
+            continue;
+        const sourceTargetId = target.promotionSourceTargetId;
+        const source = targets[sourceTargetId];
+        if (!source) {
+            throw new Error(`deployment target ${targetId}.promotionSourceTargetId does not exist: ${sourceTargetId}`);
+        }
+        if (source.environment !== "test") {
+            throw new Error(`deployment target ${targetId}.promotionSourceTargetId must belong to test`);
+        }
+    }
     for (const environment of DEPLOYMENT_ENVIRONMENTS) {
         const targetId = activeTargets[environment];
         const target = targets[targetId];
@@ -102,6 +121,7 @@ const MANIFEST = deploymentTargetsDocument;
 function settings(targetId, target) {
     return {
         name: target.environment,
+        promotionSourceTargetId: target.promotionSourceTargetId,
         targetId,
         lifecycle: target.lifecycle,
         secretNameSuffix: target.secretNameSuffix,

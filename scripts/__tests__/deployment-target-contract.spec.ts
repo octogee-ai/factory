@@ -242,6 +242,39 @@ describe("deployment target consumers", () => {
     }
   });
 
+  it("layers exact target Helm values into every canonical install", () => {
+    const renderer = "core/dist/render-deployment-target-helm-values.js";
+    for (const script of [
+      "scripts/setup-secrets.sh",
+      "scripts/setup-mattermost.sh",
+      "scripts/teardown-env.sh",
+    ]) {
+      const contents = source(script);
+      expect(contents, script).toContain(renderer);
+      expect(contents, script).toContain("--target=$TARGET_ID");
+    }
+    expect(source(".github/workflows/build-and-deploy.yml")).toContain(renderer);
+  });
+
+  it("keeps candidate local bootstrap state out of central env files", () => {
+    for (const script of [
+      "scripts/setup-secrets.sh",
+      "scripts/setup-mattermost.sh",
+      "scripts/setup-gitea.sh",
+      "scripts/teardown-env.sh",
+    ]) {
+      expect(source(script), script).toContain(
+        '[[ "$TARGET_LIFECYCLE" == "candidate" ]] && ENV_FILE="$REPO_DIR/.env.$TARGET_ID"',
+      );
+    }
+  });
+
+  it("preserves the candidate target in verification probes and repairs", () => {
+    const verify = source("scripts/verify-env.sh");
+    expect(verify).toContain('--deployment-target="$TARGET_ID" --dry-run');
+    expect(verify).toContain("--env=$ENV$TARGET_ARG");
+  });
+
   it("resolves registry paths in gateway promotion code", () => {
     for (const script of [
       "scripts/ops/promote-gateway.ts",

@@ -52,6 +52,7 @@ describe("deployment environment registry", () => {
       cloudSqlGiteaPasswordSecretName: "gitea-db-password",
       cloudSqlConnectionNameSecretName: "cloud-sql-connection-name",
       secretNameSuffix: "prod",
+      promotionSourceTargetId: "test-central",
       cloudSqlPointInTimeRecoveryEnabled: false,
     });
 
@@ -71,6 +72,7 @@ describe("deployment environment registry", () => {
       cloudSqlGiteaPasswordSecretName: "gitea-db-password-octogee-pg-west",
       cloudSqlConnectionNameSecretName: "cloud-sql-connection-name-octogee-pg-west",
       secretNameSuffix: "prod-west",
+      promotionSourceTargetId: "test-west",
       cloudSqlPointInTimeRecoveryEnabled: true,
       kmsLocation: "us-west1",
       storageLocation: "us-west1",

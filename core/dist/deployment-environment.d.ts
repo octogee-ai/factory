@@ -27,6 +27,7 @@ interface StorageDocument {
 }
 interface DeploymentTargetDocument {
     environment: DeploymentEnvironment;
+    promotionSourceTargetId?: string;
     lifecycle: DeploymentTargetLifecycle;
     secretNameSuffix: string;
     clusterProjectId: string;
@@ -56,6 +57,7 @@ interface DeploymentTargetsDocument {
 }
 export interface DeploymentEnvironmentSettings {
     name: DeploymentEnvironment;
+    promotionSourceTargetId?: string;
     targetId: string;
     lifecycle: DeploymentTargetLifecycle;
     secretNameSuffix: string;

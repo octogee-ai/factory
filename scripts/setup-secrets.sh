@@ -105,6 +105,7 @@ case "$ENV" in
     ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
 esac
+[[ "$TARGET_LIFECYCLE" == "candidate" ]] && ENV_FILE="$REPO_DIR/.env.$TARGET_ID"
 
 ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
 warn() { echo -e "  ${YELLOW}⚠️  $1${NC}"; }
@@ -921,6 +922,7 @@ case "$ENV" in
   build-week) SA_KEY_PATH="$HOME/.openclaw/secrets/octogee-build-week-sa-key.json" ;;
   custom) SA_KEY_PATH="$HOME/.openclaw/secrets/octogee-test-sa-key.json" ;;  # reuse test SA
 esac
+[[ "$TARGET_LIFECYCLE" == "candidate" ]] && SA_KEY_PATH="$HOME/.openclaw/secrets/$TARGET_FIREBASE_PROJECT-sa-key.json"
 if [[ -f "$SA_KEY_PATH" ]]; then
   ksecret octogee-sa-key --from-file=key.json="$SA_KEY_PATH"
 else
@@ -1046,6 +1048,7 @@ echo "  Next (Phase 1 → Helm):"
 echo "    helm upgrade --install octogee helm/octogee \\"
 echo "      --server-side=true --force-conflicts \\"
 echo "      -f helm/octogee/$VALUES_FILE \\"
+echo "      -f <(node core/dist/render-deployment-target-helm-values.js --target=$TARGET_ID) \\"
 echo "      -n $K8S_NAMESPACE \\"
 echo "      --set \"gitea.gitea.config.database.PASSWD=\$GITEA_DB_PASS\" \\"
 echo "      --kube-context $K8S_CONTEXT \\"
