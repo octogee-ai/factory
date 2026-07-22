@@ -41,4 +41,15 @@ describe("deployment target shell loader", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("Unknown deployment environment: dev");
   });
+
+  it("fails immediately when the resolver exits successfully without output", () => {
+    const result = bash(`
+      node() { return 0; }
+      source "${helper}"
+      octogee_load_deployment_target --target=prod-west
+    `);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("deployment target resolver returned empty output");
+  });
 });

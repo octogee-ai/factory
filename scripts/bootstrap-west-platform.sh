@@ -109,6 +109,10 @@ REBUILD_CHANGE_ADDRESSES=(
   'google_pubsub_subscription.gke_notifications_archive'
   'google_pubsub_topic.gke_notifications'
   'google_service_networking_connection.private_services'
+  'google_sql_database.environment["gitea_prod"]'
+  'google_sql_database.environment["gitea_test"]'
+  'google_sql_database.environment["mattermost_prod"]'
+  'google_sql_database.environment["mattermost_test"]'
   'google_sql_database_instance.west'
   'google_vpc_access_connector.west'
 )

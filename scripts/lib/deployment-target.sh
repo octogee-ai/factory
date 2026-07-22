@@ -12,6 +12,10 @@ octogee_load_deployment_target() {
   if ! output="$(node "$repo_root/core/dist/resolve-deployment-target.js" "$1")"; then
     return 1
   fi
+  if [ -z "$output" ]; then
+    echo "deployment target resolver returned empty output" >&2
+    return 1
+  fi
 
   while IFS='=' read -r key value; do
     case "$key" in

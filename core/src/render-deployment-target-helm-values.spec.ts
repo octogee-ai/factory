@@ -1,3 +1,7 @@
+import { mkdtempSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 import { deploymentTargetSettings } from "./deployment-environment.js";
@@ -70,4 +74,20 @@ describe("deployment target Helm values", () => {
       expect(rendered).toContain(`gatewayFleet:\n  previewIngress:\n    staticIpName: "${preview}"`);
     },
   );
+
+  it("runs through a symlinked temporary-worktree entrypoint", () => {
+    const temp = mkdtempSync(path.join(tmpdir(), "octogee-helm-renderer-entrypoint-"));
+    const linkedEntrypoint = path.join(temp, "render-deployment-target-helm-values.js");
+    symlinkSync(
+      path.resolve(import.meta.dirname, "../dist/render-deployment-target-helm-values.js"),
+      linkedEntrypoint,
+    );
+
+    const result = spawnSync(process.execPath, [linkedEntrypoint, "--target=test-west"], {
+      encoding: "utf8",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('deploymentTargetId: "test-west"');
+  });
 });

@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-import { pathToFileURL } from "node:url";
-import { resolveDeploymentTargetArguments } from "./resolve-deployment-target.js";
+import { isDeploymentTargetResolverEntrypoint, resolveDeploymentTargetArguments, } from "./resolve-deployment-target.js";
 function quoted(value) {
     return JSON.stringify(value);
 }
@@ -67,7 +66,7 @@ glm-controller:
     imageRepository: ${quoted(`${registry}/octogee-gateway`)}
 `;
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isDeploymentTargetResolverEntrypoint(import.meta.url, process.argv[1])) {
     try {
         process.stdout.write(renderDeploymentTargetHelmValues(resolveDeploymentTargetArguments(process.argv.slice(2))));
     }

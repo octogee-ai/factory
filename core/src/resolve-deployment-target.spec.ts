@@ -1,7 +1,12 @@
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
   formatDeploymentTargetOutput,
+  isDeploymentTargetResolverEntrypoint,
   resolveDeploymentTargetArguments,
   runDeploymentTargetResolver,
 } from "./resolve-deployment-target.js";
@@ -96,5 +101,29 @@ describe("deployment target resolver", () => {
       "--environment=test",
       "--format=dotenv",
     ])).toThrow("Unknown output format: dotenv");
+  });
+
+  it("recognizes a symlinked macOS-style entrypoint path by canonical real path", () => {
+    const temp = mkdtempSync(path.join(tmpdir(), "octogee-resolver-entrypoint-"));
+    const privateTemp = path.join(temp, "private", "tmp");
+    const publicTemp = path.join(temp, "tmp");
+    const resolver = path.join(privateTemp, "resolve-deployment-target.js");
+    mkdirSync(privateTemp, { recursive: true });
+    writeFileSync(resolver, "");
+    symlinkSync(privateTemp, publicTemp);
+
+    expect(realpathSync(path.join(publicTemp, "resolve-deployment-target.js")))
+      .toBe(realpathSync(resolver));
+    expect(isDeploymentTargetResolverEntrypoint(
+      pathToFileURL(resolver).href,
+      path.join(publicTemp, "resolve-deployment-target.js"),
+    )).toBe(true);
+  });
+
+  it("does not throw when an entrypoint path no longer exists", () => {
+    expect(isDeploymentTargetResolverEntrypoint(
+      pathToFileURL("/private/tmp/missing-resolver.js").href,
+      "/tmp/missing-resolver.js",
+    )).toBe(false);
   });
 });

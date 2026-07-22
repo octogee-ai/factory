@@ -1,6 +1,20 @@
 #!/usr/bin/env node
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { deploymentEnvironmentSettings, deploymentTargetSettings, } from "./deployment-environment.js";
+export function isDeploymentTargetResolverEntrypoint(moduleUrl, entrypoint) {
+    if (!entrypoint)
+        return false;
+    try {
+        return realpathSync(fileURLToPath(moduleUrl)) === realpathSync(entrypoint);
+    }
+    catch (error) {
+        if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") {
+            throw error;
+        }
+        return moduleUrl === pathToFileURL(entrypoint).href;
+    }
+}
 const DEPLOYMENT_ENVIRONMENTS = [
     "prod",
     "test",
@@ -106,7 +120,7 @@ export function runDeploymentTargetResolver(argv) {
     }
     return formatDeploymentTargetOutput(resolveDeploymentTargetArguments(selectorArguments), format);
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isDeploymentTargetResolverEntrypoint(import.meta.url, process.argv[1])) {
     try {
         process.stdout.write(runDeploymentTargetResolver(process.argv.slice(2)));
     }
