@@ -10,6 +10,8 @@ NAT_NAME="octogee-west"
 SQL_INSTANCE="octogee-pg-west"
 SMOKE_POD="octogee-west-foundation-smoke"
 SMOKE_IMAGE="registry.k8s.io/e2e-test-images/busybox@sha256:2e0f836850e09b8b7cc937681d6194537a09fbd5f6b9e08f4d646a85128e8937"
+WEST_SMOKE_EXEC_MAX_ATTEMPTS="${WEST_SMOKE_EXEC_MAX_ATTEMPTS:-30}"
+WEST_SMOKE_EXEC_RETRY_SECONDS="${WEST_SMOKE_EXEC_RETRY_SECONDS:-10}"
 KUBE_CONTEXT="gke_${PROJECT_ID}_${REGION}_${CLUSTER_NAME}"
 SMOKE_CREATED=false
 TEMP_DIR="$(mktemp -d -t octogee-west-foundation-verify.XXXXXX)"
@@ -36,6 +38,14 @@ for command in gcloud jq kubectl; do
     exit 1
   fi
 done
+if [[ ! "${WEST_SMOKE_EXEC_MAX_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "WEST_SMOKE_EXEC_MAX_ATTEMPTS must be a positive integer" >&2
+  exit 2
+fi
+if [[ ! "${WEST_SMOKE_EXEC_RETRY_SECONDS}" =~ ^[0-9]+$ ]]; then
+  echo "WEST_SMOKE_EXEC_RETRY_SECONDS must be a non-negative integer" >&2
+  exit 2
+fi
 
 CLUSTER_JSON="${TEMP_DIR}/cluster.json"
 NAT_JSON="${TEMP_DIR}/nat.json"
@@ -48,14 +58,21 @@ gcloud container clusters describe "${CLUSTER_NAME}" \
   --region="${REGION}" \
   --format=json >"${CLUSTER_JSON}"
 
-jq -e --arg network "${NETWORK_NAME}" '
+if ! jq -e \
+  --arg network "${NETWORK_NAME}" \
+  --arg resourceName "projects/${PROJECT_ID}/global/networks/${NETWORK_NAME}" \
+  --arg selfLink "https://www.googleapis.com/compute/v1/projects/${PROJECT_ID}/global/networks/${NETWORK_NAME}" '
   .controlPlaneEndpointsConfig.dnsEndpointConfig.allowExternalTraffic == true and
   (.controlPlaneEndpointsConfig.dnsEndpointConfig.enableK8sCertsViaDns // false) == false and
   (.controlPlaneEndpointsConfig.dnsEndpointConfig.enableK8sTokensViaDns // false) == false and
   (.controlPlaneEndpointsConfig.ipEndpointsConfig.enabled // false) == false and
   .privateClusterConfig.enablePrivateNodes == true and
-  (.network | endswith("/networks/" + $network))
-' "${CLUSTER_JSON}" >/dev/null
+  (.network == $network or .network == $resourceName or .network == $selfLink) and
+  (.networkConfig.network == $resourceName or .networkConfig.network == $selfLink)
+' "${CLUSTER_JSON}" >/dev/null; then
+  echo "GKE cluster foundation invariants failed" >&2
+  exit 1
+fi
 
 gcloud container clusters get-credentials "${CLUSTER_NAME}" \
   --project="${PROJECT_ID}" \
@@ -69,7 +86,7 @@ gcloud compute routers nats describe "${NAT_NAME}" \
   --region="${REGION}" \
   --format=json >"${NAT_JSON}"
 
-jq -e '
+if ! jq -e '
   .enableDynamicPortAllocation == true and
   .enableEndpointIndependentMapping == false and
   .minPortsPerVm == 64 and
@@ -77,13 +94,19 @@ jq -e '
   .natIpAllocateOption == "AUTO_ONLY" and
   .sourceSubnetworkIpRangesToNat == "LIST_OF_SUBNETWORKS" and
   (.subnetworks | length) == 2
-' "${NAT_JSON}" >/dev/null
+' "${NAT_JSON}" >/dev/null; then
+  echo "Cloud NAT foundation invariants failed" >&2
+  exit 1
+fi
 
 gcloud sql instances describe "${SQL_INSTANCE}" \
   --project="${PROJECT_ID}" \
   --format=json >"${SQL_JSON}"
 
-jq -e --arg network "${NETWORK_NAME}" --arg region "${REGION}" '
+if ! jq -e \
+  --arg region "${REGION}" \
+  --arg resourceName "projects/${PROJECT_ID}/global/networks/${NETWORK_NAME}" \
+  --arg selfLink "https://www.googleapis.com/compute/v1/projects/${PROJECT_ID}/global/networks/${NETWORK_NAME}" '
   .region == $region and
   .settings.backupConfiguration.enabled == true and
   .settings.backupConfiguration.pointInTimeRecoveryEnabled == true and
@@ -92,9 +115,12 @@ jq -e --arg network "${NETWORK_NAME}" --arg region "${REGION}" '
   .settings.retainBackupsOnDelete == true and
   .settings.deletionProtectionEnabled == true and
   .settings.ipConfiguration.ipv4Enabled == false and
-  (.settings.ipConfiguration.privateNetwork | endswith("/networks/" + $network)) and
+  (.settings.ipConfiguration.privateNetwork == $resourceName or .settings.ipConfiguration.privateNetwork == $selfLink) and
   ([.ipAddresses[] | select(.type != "PRIVATE")] | length) == 0
-' "${SQL_JSON}" >/dev/null
+' "${SQL_JSON}" >/dev/null; then
+  echo "Cloud SQL foundation invariants failed" >&2
+  exit 1
+fi
 
 gcloud beta monitoring channels list \
   --project="${PROJECT_ID}" \
@@ -125,10 +151,20 @@ kubectl wait \
   --for=condition=Ready \
   pod/octogee-west-foundation-smoke \
   --timeout=15m
-kubectl exec "${SMOKE_POD}" \
+smoke_exec_attempt=1
+while ! kubectl exec "${SMOKE_POD}" \
   --context="${KUBE_CONTEXT}" \
+  --request-timeout=45s \
   -- wget -qO- -T 30 http://connectivitycheck.gstatic.com/generate_204 \
-  >/dev/null
+  >/dev/null; do
+  if [[ "${smoke_exec_attempt}" -ge "${WEST_SMOKE_EXEC_MAX_ATTEMPTS}" ]]; then
+    echo "WEST foundation smoke egress failed after ${WEST_SMOKE_EXEC_MAX_ATTEMPTS} attempts" >&2
+    exit 1
+  fi
+  echo "WEST smoke exec attempt ${smoke_exec_attempt} of ${WEST_SMOKE_EXEC_MAX_ATTEMPTS} failed; retrying" >&2
+  smoke_exec_attempt=$((smoke_exec_attempt + 1))
+  sleep "${WEST_SMOKE_EXEC_RETRY_SECONDS}"
+done
 
 NODE_NAME="$(kubectl get pod "${SMOKE_POD}" --context="${KUBE_CONTEXT}" -o jsonpath='{.spec.nodeName}')"
 if [[ -z "${NODE_NAME}" ]]; then
@@ -136,6 +172,9 @@ if [[ -z "${NODE_NAME}" ]]; then
   exit 1
 fi
 kubectl get node "${NODE_NAME}" --context="${KUBE_CONTEXT}" -o json >"${NODE_JSON}"
-jq -e '[.status.addresses[] | select(.type == "ExternalIP")] | length == 0' "${NODE_JSON}" >/dev/null
+if ! jq -e '[.status.addresses[] | select(.type == "ExternalIP")] | length == 0' "${NODE_JSON}" >/dev/null; then
+  echo "GKE smoke node has an external IP address" >&2
+  exit 1
+fi
 
 echo "WEST foundation verified: DNS-only control plane, private node, scoped NAT, protected Cloud SQL, backups, and PITR."
