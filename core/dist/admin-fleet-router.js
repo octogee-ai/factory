@@ -1,21 +1,20 @@
 import { FieldValue, } from "firebase-admin/firestore";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, OPERATOR_GATEWAY_RESERVATIONS_COLLECTION, defaultOperatorGatewayAccess, resolveUserGatewayShellState, OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT, isValidNewGatewayId, isGatewayClass, isGatewayProfile, operatorGatewayServiceAccountName, resolveGatewayClass, resolveGatewayImageProfile, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
 import { deploymentSettingsForRuntime, deploymentTargetsForEnvironment, } from "./deployment-environment.js";
-import { resolveBuilderTier } from "@octogee/shared/types/billing";
+import { resolveBuilderTier, resolvePaidBuilderTier } from "@octogee/shared/types/billing";
 import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 import { builderGatewayIdForSlug } from "@octogee/shared/types/builder-gateway-id";
+import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, GATEWAY_RELEASES_SUBCOLLECTION, commitPlacementAtomic, isReleasePayload, releasePayloadHash, isGatewayDesiredDoc, isGatewayRuntimeDoc, upgradeReleasePayloadSchema, } from "@octogee/shared/types/gateway-releases";
 import { parseAssignmentDoc, readAssignmentDocsForGateway } from "./assignment-doc.js";
 import { GATEWAY_CONFIG_SCHEMA_VERSION, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, } from "./gateway-live-release.js";
 import { projectReleaseHistory } from "./gateway-release-history.js";
-import { resolveOnboardingPlacementForUid, } from "@octogee/shared/types/orchestrator-placement";
 import { SIZING_TIERS, isSizingTier, resolveSizingTier, } from "@octogee/shared/types/sizing";
 import { SPOT_PRICE_MULTIPLIER, estimateGatewayMonthlyCost, } from "@octogee/shared/types/cost-estimator";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 import { findPendingActivationOperation, requestBuilderActivationLease, } from "./builder-activation-lease.js";
-import { resolveUidForSlug } from "./assigned-roster.js";
 import { GatewayRetirementConflictError, claimGatewayRetirementAtomic, } from "./gateway-retirement-claim.js";
 import { findActiveGatewayMigration, GatewayMigrationInFlightError, } from "./fleet-operation-lock.js";
 import { CUSTOMER_DELETION_JOBS_COLLECTION, buildCustomerDeletionSchedule, } from "@octogee/shared/types/account-lifecycle";
@@ -162,21 +161,9 @@ export function parseDedicatedGatewayIdlePatch(body) {
     }
     return { ok: value };
 }
-function normalizeStringMap(value) {
-    if (!isPlainRecord(value))
-        return {};
-    const out = {};
-    for (const [key, raw] of Object.entries(value)) {
-        if (key.length > 0 && typeof raw === "string" && raw.length > 0) {
-            out[key] = raw;
-        }
-    }
-    return out;
-}
 function normalizeOnboardingRuntimeConfig(data) {
     return {
         defaultGatewayId: asStringOrNull(data?.defaultGatewayId) ?? "",
-        overrides: normalizeStringMap(data?.overrides),
     };
 }
 async function readOnboardingRuntimeConfig(deps) {
@@ -268,9 +255,9 @@ function mountedGatewayBySlug(gatewayById) {
     return out;
 }
 function shouldIncludeOnboardingCustomer(input) {
-    return (asStringOrNull(input.data.username) !== null ||
-        readUserGatewayId(input.data) !== null ||
-        Boolean(input.config.overrides?.[input.uid]));
+    return (accountAllowsInteractiveAccess(input.data) &&
+        (asStringOrNull(input.data.username) !== null ||
+            readUserGatewayId(input.data) !== null));
 }
 // eslint-disable-next-line complexity -- Warning projection intentionally enumerates each drift state with its distinct operator message.
 function userPlacementWarnings(input) {
@@ -312,24 +299,43 @@ function userPlacementWarnings(input) {
             uid: input.uid,
             slug: input.slug ?? undefined,
             operationId: input.latestOperation.id,
-            message: `${input.latestOperation.kind} ${input.latestOperation.id} is ${input.latestOperation.status}`,
+            message: `${input.latestOperation.kind} ${input.slug ?? "unresolved-builder"} (${input.uid}) is ${input.latestOperation.status}`,
         });
     }
     return warnings;
 }
-// eslint-disable-next-line complexity -- Drift classification is a prioritized decision table.
+function accountLifecycleWarning(input) {
+    const lifecycle = isPlainRecord(input.data.accountLifecycle)
+        ? input.data.accountLifecycle
+        : null;
+    if (lifecycle?.status !== "deletion_scheduled" && lifecycle?.status !== "erasing") {
+        return null;
+    }
+    const operation = latestOperation(input.operations, (candidate) => candidate.kind === "erase-customer" && operationUid(candidate) === input.uid);
+    const slug = resolveCustomerSlug(input.data, (data) => asStringOrNull(data.username) ? [asStringOrNull(data.username)] : []) ?? asStringOrNull(operation?.input.builderSlug);
+    const expiresAt = toMillis(lifecycle.eraseAfter);
+    return {
+        code: "account-deletion-pending",
+        severity: "info",
+        uid: input.uid,
+        slug: slug ?? undefined,
+        ...(operation ? { operationId: operation.id } : {}),
+        ...(expiresAt !== null ? { expiresAt } : {}),
+        message: `${slug ?? "unresolved-builder"} (${input.uid}) is ${lifecycle.status === "erasing" ? "being deleted" : "scheduled for deletion"}`,
+    };
+}
+function accountLifecycleWarnings(userDocs, operations) {
+    return userDocs
+        .map((userDoc) => accountLifecycleWarning({
+        uid: userDoc.id,
+        data: userDoc.data(),
+        operations,
+    }))
+        .filter((warning) => warning !== null);
+}
 function driftStateForCustomer(input) {
     if (isInFlightOperation(input.latestOperation))
         return "in-flight";
-    const assignedGateway = input.assignedGatewayId
-        ? input.glmByGatewayId.get(input.assignedGatewayId)
-        : undefined;
-    const assignedGatewayClass = assignedGateway ? normalizeGatewayClass(assignedGateway) : "shared";
-    if (input.assignedGatewayId &&
-        input.mountedGatewayId === input.assignedGatewayId &&
-        assignedGatewayClass !== "shared") {
-        return "healthy";
-    }
     if (input.policyTargetGatewayId &&
         (!input.glmByGatewayId.has(input.policyTargetGatewayId) ||
             projectDesiredStatus(input.glmByGatewayId.get(input.policyTargetGatewayId)) === "retired")) {
@@ -353,16 +359,49 @@ function driftStateForCustomer(input) {
     }
     return "healthy";
 }
+function entitledDedicatedGatewayCandidate(input) {
+    if (resolvePaidBuilderTier(input.data) !== null) {
+        const reservation = input.reservationByUid.get(input.uid)?.data();
+        const status = asStringOrNull(reservation?.status);
+        return status === "provisioning" || status === "fulfilled"
+            ? asStringOrNull(reservation?.gatewayId)
+            : null;
+    }
+    if (resolveBuilderTier(input.data) === null)
+        return null;
+    const trialGrant = isPlainRecord(input.data.trialGrant) ? input.data.trialGrant : {};
+    return asStringOrNull(trialGrant.gatewayId);
+}
+function dedicatedPolicyGatewayId(input) {
+    const candidate = entitledDedicatedGatewayCandidate(input);
+    if (!candidate)
+        return null;
+    const gateway = input.glmByGatewayId.get(candidate);
+    if (!gateway ||
+        normalizeGatewayClass(gateway) === "shared" ||
+        asStringOrNull(gateway.ownerUid) !== input.uid ||
+        projectDesiredStatus(gateway) !== "running") {
+        return null;
+    }
+    const ready = asStringOrNull(effectiveHeartbeatDoc(candidate, gateway)?.data()?.status) === "ready";
+    return ready || input.assignedGatewayId === candidate ? candidate : null;
+}
 function buildCustomerPlacementProjection(input) {
     const slug = resolveCustomerSlug(input.data, (userData) => asStringOrNull(userData.username) ? [asStringOrNull(userData.username)] : []);
     const assignedGatewayId = readUserGatewayId(input.data);
-    const decision = resolveOnboardingPlacementForUid(input.uid, input.config);
+    const policyTargetGatewayId = dedicatedPolicyGatewayId({
+        uid: input.uid,
+        data: input.data,
+        assignedGatewayId,
+        reservationByUid: input.reservationByUid,
+        glmByGatewayId: input.glmByGatewayId,
+    }) ?? input.config.defaultGatewayId;
     const mountedGatewayId = slug ? input.mountedBySlug.get(slug) ?? null : null;
     const latestOp = latestOperation(input.operations, (operation) => operationUid(operation) === input.uid);
     const driftState = driftStateForCustomer({
         assignedGatewayId,
         mountedGatewayId,
-        policyTargetGatewayId: decision.gatewayId,
+        policyTargetGatewayId,
         latestOperation: latestOp,
         glmByGatewayId: input.glmByGatewayId,
     });
@@ -371,7 +410,7 @@ function buildCustomerPlacementProjection(input) {
         slug,
         assignedGatewayId,
         mountedGatewayId,
-        policyTargetGatewayId: decision.gatewayId,
+        policyTargetGatewayId,
         driftState,
         latestOperation: latestOp,
     });
@@ -381,8 +420,7 @@ function buildCustomerPlacementProjection(input) {
         username: asStringOrNull(input.data.username) ?? "",
         email: asStringOrNull(input.data.email) ?? "",
         slug,
-        overrideGatewayId: input.config.overrides?.[input.uid] ?? null,
-        policyTargetGatewayId: decision.gatewayId,
+        policyTargetGatewayId,
         assignedGatewayId,
         mountedGatewayId,
         provisioningStatus: readProvisioningStatus(input.data),
@@ -418,16 +456,13 @@ function buildOnboardingPlacementResponse(opts) {
         glmDocs: opts.glmDocs,
     });
     const heartbeatByGatewayId = indexFirestoreDocs(opts.gatewayDocs);
-    const usersById = indexFirestoreDocs(opts.userDocs);
     const assignmentByUid = indexAssignmentDocs(opts.assignmentDocs);
-    const gatewayOverrides = opts.config.overrides ?? {};
+    const reservationByUid = indexFirestoreDocs(opts.reservationDocs);
     const operations = opts.operationDocs.map((doc) => shapeOnboardingOperation(doc.id, doc.data()));
     const mountedBySlug = mountedGatewayBySlug(glmByGatewayId);
     const customers = opts.userDocs
         .filter((doc) => shouldIncludeOnboardingCustomer({
-        uid: doc.id,
         data: doc.data(),
-        config: opts.config,
     }))
         .map((doc) => buildCustomerPlacementProjection({
         uid: doc.id,
@@ -436,6 +471,7 @@ function buildOnboardingPlacementResponse(opts) {
         mountedBySlug,
         operations,
         glmByGatewayId,
+        reservationByUid,
         assignmentByUid,
     }))
         .sort((a, b) => (a.slug ?? a.username ?? a.email ?? a.uid).localeCompare(b.slug ?? b.username ?? b.email ?? b.uid, undefined, { sensitivity: "base" }));
@@ -467,7 +503,6 @@ function buildOnboardingPlacementResponse(opts) {
     const gatewayIds = new Set([
         ...glmByGatewayId.keys(),
         ...heartbeatByGatewayId.keys(),
-        ...Object.values(gatewayOverrides),
         ...customers.flatMap((customer) => [
             customer.policyTargetGatewayId,
             customer.assignedGatewayId,
@@ -479,6 +514,7 @@ function buildOnboardingPlacementResponse(opts) {
         const heartbeat = effectiveHeartbeatDoc(gatewayId, glmDoc)?.data();
         const desiredStatus = projectDesiredStatus(glmDoc);
         const gatewayClass = normalizeGatewayClass(glmDoc);
+        const status = asStringOrNull(heartbeat?.status);
         const warnings = customers
             .filter((customer) => [
             customer.policyTargetGatewayId,
@@ -490,10 +526,13 @@ function buildOnboardingPlacementResponse(opts) {
             gatewayId,
             gatewayClass,
             desiredStatus,
-            status: asStringOrNull(heartbeat?.status),
+            status,
             imageTag: projectImageTag(heartbeat ?? {}, glmDoc),
             openclawVersion: projectOpenclawVersion(heartbeat ?? {}, glmDoc),
-            assignableAsDefault: Boolean(glmDoc) && gatewayClass === "shared" && desiredStatus !== "retired",
+            assignableAsDefault: Boolean(glmDoc) &&
+                gatewayClass === "shared" &&
+                desiredStatus === "running" &&
+                status === "ready",
             defaultTarget: opts.config.defaultGatewayId === gatewayId,
             assignedCount: assignedCountsByGateway[gatewayId] ?? 0,
             mountedCount: mountedCountsByGateway[gatewayId] ?? 0,
@@ -502,19 +541,6 @@ function buildOnboardingPlacementResponse(opts) {
             lastOperation: latestOperation(operations, (operation) => operationTouchesGateway(operation, gatewayId)),
         };
     });
-    const overrides = Object.entries(gatewayOverrides)
-        .map(([uid, gatewayId]) => {
-        const userData = usersById.get(uid)?.data() ?? {};
-        return {
-            uid,
-            gatewayId,
-            username: asStringOrNull(userData.username) ?? "",
-            email: asStringOrNull(userData.email) ?? "",
-            slug: resolveCustomerSlug(userData, (data) => asStringOrNull(data.username) ? [asStringOrNull(data.username)] : []),
-            currentGatewayId: readUserGatewayId(userData),
-        };
-    })
-        .sort((a, b) => (a.username || a.email || a.uid).localeCompare(b.username || b.email || b.uid, undefined, { sensitivity: "base" }));
     const warnings = [];
     const defaultGatewayId = opts.config.defaultGatewayId || null;
     if (defaultGatewayId) {
@@ -551,25 +577,13 @@ function buildOnboardingPlacementResponse(opts) {
             message: "No default onboarding gateway is configured",
         });
     }
-    for (const [uid, gatewayId] of Object.entries(gatewayOverrides)) {
-        if (glmByGatewayId.has(gatewayId))
-            continue;
-        warnings.push({
-            code: "override-gateway-missing",
-            severity: "error",
-            uid,
-            gatewayId,
-            message: `Override for ${uid} points at missing gateway ${gatewayId}`,
-        });
-    }
+    warnings.push(...accountLifecycleWarnings(opts.userDocs, operations));
     for (const customer of customers)
         warnings.push(...customer.warnings);
     return {
         config: {
             defaultGatewayId,
-            overrides: gatewayOverrides,
         },
-        overrides,
         gateways,
         customers,
         driftSummary,
@@ -578,7 +592,7 @@ function buildOnboardingPlacementResponse(opts) {
     };
 }
 async function readAdminOnboardingPlacementResponse(deps) {
-    const [config, glmSnap, gatewaySnap, usersSnap, operationsSnap, assignmentSnap] = await Promise.all([
+    const [config, glmSnap, gatewaySnap, usersSnap, operationsSnap, reservationsSnap, assignmentSnap,] = await Promise.all([
         readOnboardingRuntimeConfig(deps),
         deps.db.collection(GLM_GATEWAYS_COLLECTION).get(),
         deps.db.collection("gateways").get(),
@@ -588,6 +602,7 @@ async function readAdminOnboardingPlacementResponse(deps) {
             .orderBy("createdAt", "desc")
             .limit(200)
             .get(),
+        deps.db.collection(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION).get(),
         // One collection-group read pulls every gateways/{gw}/assignments/{uid}
         // across the fleet — the durable roster the panel reads (PR7).
         deps.db.collectionGroup(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).get(),
@@ -598,6 +613,7 @@ async function readAdminOnboardingPlacementResponse(deps) {
         gatewayDocs: gatewaySnap.docs,
         userDocs: usersSnap.docs,
         operationDocs: operationsSnap.docs,
+        reservationDocs: reservationsSnap.docs,
         assignmentDocs: assignmentSnap.docs,
     });
 }
@@ -1740,6 +1756,116 @@ async function createOperation(db, opts) {
     const ref = await db.collection(GLM_OPERATIONS_COLLECTION).add(operationDoc(opts, Date.now()));
     return ref.id;
 }
+function defaultGatewayUserDecision(input) {
+    if (!accountAllowsInteractiveAccess(input.data))
+        return { kind: "ignore" };
+    const currentGatewayId = readUserGatewayId(input.data);
+    if (!currentGatewayId) {
+        return { kind: "blocked", reason: "unassigned", currentGatewayId: null };
+    }
+    const currentGateway = input.gatewaysById.get(currentGatewayId);
+    if (!currentGateway) {
+        return { kind: "blocked", reason: "current-gateway-missing", currentGatewayId };
+    }
+    if (currentGateway.gatewayClass !== "shared")
+        return { kind: "dedicated" };
+    if (currentGatewayId === input.targetGatewayId)
+        return { kind: "already-on-target" };
+    if (input.pending?.toGatewayId === input.targetGatewayId) {
+        return { kind: "adopt", operationId: input.pending.id };
+    }
+    if (input.pending) {
+        return {
+            kind: "blocked",
+            reason: "migration-in-flight",
+            currentGatewayId,
+            operationId: input.pending.id,
+        };
+    }
+    return {
+        kind: "enqueue",
+        currentGatewayId,
+        builderSlug: resolveCustomerSlug(input.data, input.workspaceSlugsForUser),
+    };
+}
+function indexPendingMigrations(docs) {
+    const pendingByUid = new Map();
+    for (const operation of docs) {
+        const data = operation.data();
+        if (data.kind !== OP_KIND_MIGRATE_CUSTOMER)
+            continue;
+        const operationInput = isPlainRecord(data.input) ? data.input : {};
+        const uid = asStringOrNull(data.inputUid) ?? asStringOrNull(operationInput.uid);
+        if (!uid || pendingByUid.has(uid))
+            continue;
+        pendingByUid.set(uid, {
+            id: operation.id,
+            toGatewayId: asStringOrNull(operationInput.toGatewayId),
+        });
+    }
+    return pendingByUid;
+}
+async function convergeDefaultGatewayChange(input) {
+    const [usersSnap, pendingOpsSnap] = await Promise.all([
+        input.deps.db.collection("users").get(),
+        input.deps.db
+            .collection(GLM_OPERATIONS_COLLECTION)
+            .where("status", "in", ["pending", "running"])
+            .get(),
+    ]);
+    const pendingByUid = indexPendingMigrations(pendingOpsSnap.docs);
+    const result = {
+        previousGatewayId: input.previousGatewayId,
+        targetGatewayId: input.targetGatewayId,
+        enqueued: [],
+        adopted: [],
+        blocked: [],
+        dedicatedUntouched: 0,
+    };
+    const users = [...usersSnap.docs].sort((a, b) => a.id.localeCompare(b.id));
+    for (const user of users) {
+        const data = user.data();
+        const decision = defaultGatewayUserDecision({
+            data,
+            gatewaysById: input.gatewaysById,
+            pending: pendingByUid.get(user.id),
+            targetGatewayId: input.targetGatewayId,
+            workspaceSlugsForUser: input.deps.workspaceSlugsForUser,
+        });
+        if (decision.kind === "ignore" || decision.kind === "already-on-target")
+            continue;
+        if (decision.kind === "dedicated") {
+            result.dedicatedUntouched += 1;
+            continue;
+        }
+        if (decision.kind === "blocked") {
+            result.blocked.push({
+                uid: user.id,
+                reason: decision.reason,
+                currentGatewayId: decision.currentGatewayId,
+                ...(decision.operationId ? { operationId: decision.operationId } : {}),
+            });
+            continue;
+        }
+        if (decision.kind === "adopt") {
+            result.adopted.push({ uid: user.id, operationId: decision.operationId });
+            continue;
+        }
+        const operationId = await createOperation(input.deps.db, {
+            kind: OP_KIND_MIGRATE_CUSTOMER,
+            createdBy: input.createdBy,
+            input: {
+                uid: user.id,
+                ...(decision.builderSlug ? { builderSlug: decision.builderSlug } : {}),
+                fromGatewayId: decision.currentGatewayId,
+                toGatewayId: input.targetGatewayId,
+                source: "platform-default-change",
+            },
+        });
+        result.enqueued.push({ uid: user.id, operationId });
+    }
+    return result;
+}
 function operationDoc(opts, createdAt) {
     const gatewayId = operationGatewayId(opts.input);
     const inputUid = typeof opts.input.uid === "string" ? opts.input.uid : null;
@@ -2841,103 +2967,41 @@ export function addAdminFleetRoutes(router, deps) {
     });
     router.patch("/onboarding-placement", async (req, res, next) => {
         try {
-            const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).get();
-            const parsed = parsePlacementPatch(req.body, indexDurableGatewayRoots(gatewaySnap.docs));
+            const [gatewaySnap, config] = await Promise.all([
+                db.collection(GATEWAYS_COLLECTION).get(),
+                readOnboardingRuntimeConfig(deps),
+            ]);
+            const gatewaysById = indexDurableGatewayRoots(gatewaySnap.docs);
+            const parsed = parsePlacementPatch(req.body, gatewaysById);
             if ("error" in parsed) {
                 res.status(parsed.error.status).json(parsed.error.body);
                 return;
             }
+            const target = await readGatewayRegistrationReadiness(db, parsed.ok.defaultGatewayId);
+            if (target.status !== "ready") {
+                res.status(409).json({
+                    error: "default gateway must be ready",
+                    gatewayId: parsed.ok.defaultGatewayId,
+                    status: target.status ?? "unknown",
+                });
+                return;
+            }
             const actor = req;
+            const createdBy = actor.uid ?? "unknown";
             await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set({
                 defaultGatewayId: parsed.ok.defaultGatewayId,
                 placementUpdatedAt: Date.now(),
-                placementUpdatedBy: actor.uid ?? "unknown",
+                placementUpdatedBy: createdBy,
             }, { merge: true });
-            res.json(await readAdminOnboardingPlacementResponse(deps));
-        }
-        catch (e) {
-            next(e);
-        }
-    });
-    router.put("/onboarding-placement/overrides/by-slug/:slug", async (req, res, next) => {
-        try {
-            const slug = req.params.slug;
-            const gatewayId = asStringOrNull(req.body.gatewayId);
-            if (!gatewayId) {
-                res.status(400).json({ error: "gatewayId is required" });
-                return;
-            }
-            const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).get();
-            const gatewayError = validatePlacementGateway(gatewayId, indexDurableGatewayRoots(gatewaySnap.docs));
-            if (gatewayError) {
-                res.status(gatewayError.status).json(gatewayError.body);
-                return;
-            }
-            const uid = await resolveUidForSlug(db, slug);
-            if (!uid) {
-                res.status(404).json({ error: "builder slug not found", slug });
-                return;
-            }
-            const config = await readOnboardingRuntimeConfig(deps);
-            const actor = req;
-            await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set({
-                overrides: { ...(config.overrides ?? {}), [uid]: gatewayId },
-                placementUpdatedAt: Date.now(),
-                placementUpdatedBy: actor.uid ?? "unknown",
-            }, { merge: true });
-            res.json(await readAdminOnboardingPlacementResponse(deps));
-        }
-        catch (e) {
-            next(e);
-        }
-    });
-    router.put("/onboarding-placement/overrides/:uid", async (req, res, next) => {
-        try {
-            const uid = req.params.uid;
-            const gatewayId = asStringOrNull(req.body.gatewayId);
-            if (!gatewayId) {
-                res.status(400).json({ error: "gatewayId is required" });
-                return;
-            }
-            const [gatewaySnap, userSnap, config] = await Promise.all([
-                db.collection(GATEWAYS_COLLECTION).get(),
-                db.collection("users").doc(uid).get(),
-                readOnboardingRuntimeConfig(deps),
-            ]);
-            const gatewayError = validatePlacementGateway(gatewayId, indexDurableGatewayRoots(gatewaySnap.docs));
-            if (gatewayError) {
-                res.status(gatewayError.status).json(gatewayError.body);
-                return;
-            }
-            if (!userSnap.exists) {
-                res.status(404).json({ error: "user not found", uid });
-                return;
-            }
-            const actor = req;
-            await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set({
-                overrides: { ...(config.overrides ?? {}), [uid]: gatewayId },
-                placementUpdatedAt: Date.now(),
-                placementUpdatedBy: actor.uid ?? "unknown",
-            }, { merge: true });
-            res.json(await readAdminOnboardingPlacementResponse(deps));
-        }
-        catch (e) {
-            next(e);
-        }
-    });
-    router.delete("/onboarding-placement/overrides/:uid", async (req, res, next) => {
-        try {
-            const uid = req.params.uid;
-            const config = await readOnboardingRuntimeConfig(deps);
-            const nextOverrides = { ...(config.overrides ?? {}) };
-            delete nextOverrides[uid];
-            const actor = req;
-            await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set({
-                overrides: nextOverrides,
-                placementUpdatedAt: Date.now(),
-                placementUpdatedBy: actor.uid ?? "unknown",
-            }, { merge: true });
-            res.json(await readAdminOnboardingPlacementResponse(deps));
+            const defaultChange = await convergeDefaultGatewayChange({
+                deps,
+                gatewaysById,
+                previousGatewayId: config.defaultGatewayId || null,
+                targetGatewayId: parsed.ok.defaultGatewayId,
+                createdBy,
+            });
+            const response = await readAdminOnboardingPlacementResponse(deps);
+            res.json({ ...response, defaultChange });
         }
         catch (e) {
             next(e);

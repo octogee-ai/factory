@@ -151,12 +151,6 @@ export {
 
 export type {
   OnboardingOrchestratorConfig,
-  OnboardingPlacementDecision,
-  PlacementPointerRewriteResult,
-} from './orchestrator-placement.js';
-export {
-  resolveOnboardingPlacementForUid,
-  rewritePlacementGatewayPointers,
 } from './orchestrator-placement.js';
 export type {
   ModelCatalogProvider,

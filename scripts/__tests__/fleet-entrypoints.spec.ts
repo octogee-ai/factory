@@ -18,7 +18,6 @@ import {
   isBulkAssignmentCandidate,
   parseAssignCustomerGatewayArgs,
   readGatewayProfile,
-  resolveOpsAssignmentTarget,
 } from "../ops/assign-customer-gateway.js";
 import {
   buildFleetMigrateOperationInput,
@@ -349,21 +348,6 @@ describe("assign-customer-gateway args", () => {
     expect(ASSIGN_CUSTOMER_GATEWAY_USAGE).toContain("--uid=UID");
   });
 
-  it("resolves the default gateway with per-uid overrides (cohorts are dead)", () => {
-    const config = {
-      defaultGatewayId: "default",
-      overrides: { "uid-pinned": "glm-shared" },
-    };
-
-    expect(resolveOpsAssignmentTarget("uid-anyone", config)).toEqual({
-      kind: "default",
-      gatewayId: "default",
-    });
-    expect(resolveOpsAssignmentTarget("uid-pinned", config)).toEqual({
-      kind: "gateway-override",
-      gatewayId: "glm-shared",
-    });
-  });
 });
 
 describe("assign-customer-gateway root config", () => {

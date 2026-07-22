@@ -1,18 +1,6 @@
-// Onboarding gateway placement: which gateway a new customer lands on.
-// config/orchestrator holds ONE default plus per-uid overrides, and it is
-// PLACEMENT ONLY — no model, tier, or billing meaning ever rides this doc.
-// Entitlements resolve from the account (resolveEffectivePlan); gateway class
-// is capacity/security topology. Whys: DECISIONS.md 2026-07-03.
-
 export interface OnboardingOrchestratorConfig {
   defaultGatewayId: string;
-  overrides?: Record<string, string>;
-  onboardingCohorts?: Record<string, { gatewayId?: string; [key: string]: unknown }>;
 }
-
-export type OnboardingPlacementDecision =
-  | { kind: "gateway-override"; gatewayId: string }
-  | { kind: "default"; gatewayId: string };
 
 export type OnboardingPlacementEligibility =
   | { eligible: true; slug: string }
@@ -37,63 +25,4 @@ export function resolveOnboardingPlacementEligibility(
   return slug
     ? { eligible: true, slug }
     : { eligible: false, reason: "builder-slug-missing" };
-}
-
-export interface PlacementPointerRewriteResult {
-  config: OnboardingOrchestratorConfig;
-  changedPointers: string[];
-}
-
-export function resolveOnboardingPlacementForUid(
-  uid: string,
-  config: OnboardingOrchestratorConfig,
-): OnboardingPlacementDecision {
-  const override = config.overrides?.[uid];
-  if (override) return { kind: "gateway-override", gatewayId: override };
-  return { kind: "default", gatewayId: config.defaultGatewayId };
-}
-
-export function rewritePlacementGatewayPointers(
-  config: OnboardingOrchestratorConfig,
-  sourceGatewayId: string,
-  targetGatewayId: string,
-): PlacementPointerRewriteResult {
-  const changedPointers: string[] = [];
-  const next: OnboardingOrchestratorConfig = {
-    ...config,
-    ...(config.overrides ? { overrides: { ...config.overrides } } : {}),
-    ...(config.onboardingCohorts
-      ? {
-          onboardingCohorts: Object.fromEntries(
-            Object.entries(config.onboardingCohorts).map(([name, cohort]) => [
-              name,
-              { ...cohort },
-            ]),
-          ),
-        }
-      : {}),
-  };
-
-  if (next.defaultGatewayId === sourceGatewayId) {
-    next.defaultGatewayId = targetGatewayId;
-    changedPointers.unshift("defaultGatewayId");
-  }
-
-  if (next.overrides) {
-    for (const [uid, gatewayId] of Object.entries(next.overrides)) {
-      if (gatewayId !== sourceGatewayId) continue;
-      next.overrides[uid] = targetGatewayId;
-      changedPointers.push(`overrides.${uid}`);
-    }
-  }
-
-  if (next.onboardingCohorts) {
-    for (const [name, cohort] of Object.entries(next.onboardingCohorts)) {
-      if (cohort.gatewayId !== sourceGatewayId) continue;
-      cohort.gatewayId = targetGatewayId;
-      changedPointers.push(`onboardingCohorts.${name}.gatewayId`);
-    }
-  }
-
-  return { config: next, changedPointers };
 }

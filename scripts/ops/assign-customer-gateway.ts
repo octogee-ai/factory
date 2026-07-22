@@ -12,9 +12,7 @@ import {
 import { readGatewayAuthorization } from "@octogee/core/gateway-live-release";
 import {
   resolveOnboardingPlacementEligibility,
-  resolveOnboardingPlacementForUid,
   type OnboardingOrchestratorConfig,
-  type OnboardingPlacementDecision,
 } from "../../shared/types/orchestrator-placement.js";
 import {
   commitPlacementAtomic,
@@ -32,15 +30,7 @@ async function readOrchestratorConfig(db: Firestore): Promise<OnboardingOrchestr
   if (!isValidGatewayId(data?.defaultGatewayId)) {
     return null;
   }
-  const overrides =
-    data.overrides && typeof data.overrides === "object"
-      ? Object.fromEntries(
-          Object.entries(data.overrides).filter(
-            ([, v]) => isValidGatewayId(v),
-          ),
-        )
-      : undefined;
-  return { defaultGatewayId: data.defaultGatewayId, overrides };
+  return { defaultGatewayId: data.defaultGatewayId };
 }
 
 type AssignResult =
@@ -61,21 +51,12 @@ export async function readGatewayProfile(
   return normalizeGatewayProfile(authorization.config.profile);
 }
 
-export type OpsAssignmentTarget = OnboardingPlacementDecision;
-
 export function isBulkAssignmentCandidate(data: Record<string, unknown>): boolean {
   const eligibility = resolveOnboardingPlacementEligibility(data);
   if (!eligibility.eligible) return false;
   const provisioning = data.provisioning as Record<string, unknown>;
   const openclaw = provisioning.openclaw as Record<string, unknown> | undefined;
   return typeof openclaw?.gatewayId !== "string";
-}
-
-export function resolveOpsAssignmentTarget(
-  uid: string,
-  config: OnboardingOrchestratorConfig,
-): OpsAssignmentTarget {
-  return resolveOnboardingPlacementForUid(uid, config);
 }
 
 // Cohort-era stamps are dead — assignment strips any left on the doc.
@@ -118,8 +99,7 @@ export async function assignOne(
   if (config === null) {
     return { kind: "not-ready", uid, slug, reason: "config-missing" };
   }
-  const placement = resolveOnboardingPlacementForUid(uid, config);
-  const target = placement.gatewayId;
+  const target = config.defaultGatewayId;
   const targetProfile = await readGatewayProfile(db, target);
   if (targetProfile === null) {
     return { kind: "not-ready", uid, slug, reason: "gateway-config-missing" };

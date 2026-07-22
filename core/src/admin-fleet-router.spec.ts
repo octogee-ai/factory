@@ -147,21 +147,40 @@ function docsFrom(records: Record<string, Record<string, unknown>>) {
   return Object.entries(records).map(([id, data]) => ({ id, data: () => data }));
 }
 
-function mkCollection(records: Record<string, Record<string, unknown>>) {
-  const query = (filters: Array<{ field: string; value: unknown }> = []) => ({
-    where: vi.fn((field: string, _op: string, value: unknown) =>
-      query([...filters, { field, value }]),
+function mkCollection(
+  records: Record<string, Record<string, unknown>>,
+  createId?: () => string,
+) {
+  const query = (filters: Array<{ field: string; op: string; value: unknown }> = []) => ({
+    where: vi.fn((field: string, op: string, value: unknown) =>
+      query([...filters, { field, op, value }]),
     ),
     orderBy: vi.fn(() => query(filters)),
     limit: vi.fn(() => query(filters)),
     get: vi.fn(async () => ({
       docs: docsFrom(records).filter((doc) =>
-        filters.every((filter) => valueAtPath(doc.data(), filter.field) === filter.value),
+        filters.every((filter) => {
+          const actual = valueAtPath(doc.data(), filter.field);
+          return filter.op === "in" && Array.isArray(filter.value)
+            ? filter.value.includes(actual)
+            : actual === filter.value;
+        }),
       ),
       size: docsFrom(records).filter((doc) =>
-        filters.every((filter) => valueAtPath(doc.data(), filter.field) === filter.value),
+        filters.every((filter) => {
+          const actual = valueAtPath(doc.data(), filter.field);
+          return filter.op === "in" && Array.isArray(filter.value)
+            ? filter.value.includes(actual)
+            : actual === filter.value;
+        }),
       ).length,
     })),
+    add: vi.fn(async (data: Record<string, unknown>) => {
+      if (!createId) throw new Error("collection is read-only in this test harness");
+      const id = createId();
+      records[id] = data;
+      return { id };
+    }),
     doc: vi.fn((id: string) => ({
       get: vi.fn(async () => ({
         id,
@@ -181,6 +200,7 @@ function mkAdminFleetRouteApp(opts: {
   users: Record<string, Record<string, unknown>>;
   glmGateways?: Record<string, Record<string, unknown>>;
   gateways?: Record<string, Record<string, unknown>>;
+  operations?: Record<string, Record<string, unknown>>;
   reservations?: Record<string, Record<string, unknown>>;
   // gateways/{gatewayId}/assignments/{uid} durable roster docs (PR7).
   assignments?: Record<string, Record<string, Record<string, unknown>>>;
@@ -188,8 +208,10 @@ function mkAdminFleetRouteApp(opts: {
   const state = {
     config: { ...opts.config },
     users: { ...opts.users },
+    operations: { ...(opts.operations ?? {}) },
     reservations: { ...(opts.reservations ?? {}) },
   };
+  let operationId = 0;
   const assignmentDocs = Object.values(opts.assignments ?? {}).flatMap((byUid) =>
     Object.entries(byUid).map(([uid, data]) => ({ id: uid, data: () => data })),
   );
@@ -210,7 +232,9 @@ function mkAdminFleetRouteApp(opts: {
       if (name === "users") return mkCollection(state.users);
       if (name === GLM_GATEWAYS_COLLECTION) return mkCollection(opts.glmGateways ?? {});
       if (name === "gateways") return mkCollection(opts.gateways ?? {});
-      if (name === GLM_OPERATIONS_COLLECTION) return mkCollection({});
+      if (name === GLM_OPERATIONS_COLLECTION) {
+        return mkCollection(state.operations, () => `operation-${++operationId}`);
+      }
       if (name === "operatorGatewayReservations") {
         return mkCollection(state.reservations);
       }
@@ -373,7 +397,7 @@ function durableGatewayRoot(
 describe("fleet gateway projection", () => {
   it("does not revive stale bare runtime state when an existing root is malformed", async () => {
     const { app } = mkAdminFleetRouteApp({
-      config: { defaultGatewayId: "default", overrides: {} },
+      config: { defaultGatewayId: "default" },
       users: {
         "uid-alice": {
           username: "alice",
@@ -419,7 +443,7 @@ describe("fleet gateway projection", () => {
 
   it("keeps the durable gateway ID while reading telemetry from its exact live revision", async () => {
     const { app } = mkAdminFleetRouteApp({
-      config: { defaultGatewayId: "default", overrides: {} },
+      config: { defaultGatewayId: "default" },
       users: {
         "uid-alice": {
           username: "alice",
@@ -494,7 +518,7 @@ describe("fleet gateway projection", () => {
 
   it("renders one fleet entry per durable gateway from its bare-id runtime doc", async () => {
     const { app } = mkAdminFleetRouteApp({
-      config: { defaultGatewayId: "default", overrides: {} },
+      config: { defaultGatewayId: "default" },
       users: {},
       gateways: {
         default: durableGatewayRoot("default", {
@@ -546,7 +570,7 @@ describe("fleet gateway projection", () => {
 
   it("counts intentionally paused gateways separately from unreachable gateways", async () => {
     const { app } = mkAdminFleetRouteApp({
-      config: { defaultGatewayId: "default", overrides: {} },
+      config: { defaultGatewayId: "default" },
       users: {},
       gateways: {
         default: durableGatewayRoot("default", { liveRelease: 1 }),
@@ -592,9 +616,97 @@ describe("fleet gateway projection", () => {
 });
 
 describe("onboarding placement (post-cohorts)", () => {
+  it("labels in-flight operations with the builder slug and uid", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "default" },
+      users: {
+        "uid-alice": {
+          username: "alice",
+          email: "alice@example.com",
+          provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
+        },
+      },
+      glmGateways: { default: { gatewayClass: "shared", desiredStatus: "running" } },
+      operations: {
+        "operation-opaque-id": {
+          kind: "migrate-customer",
+          status: "pending",
+          inputUid: "uid-alice",
+          createdAt: 1_000,
+        },
+      },
+    });
+
+    const res = await request(app).get("/onboarding-placement").expect(200);
+
+    expect(res.body.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "migration-in-flight",
+          operationId: "operation-opaque-id",
+          message: "migrate-customer alice (uid-alice) is pending",
+        }),
+      ]),
+    );
+  });
+
+  it("excludes non-interactive accounts from the active Builder roster", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "default" },
+      users: {
+        "uid-active": {
+          username: "active-builder",
+          provisioning: { openclaw: { slug: "active-builder", gatewayId: "default" } },
+        },
+        "uid-scheduled": {
+          username: "scheduled-builder",
+          accountLifecycle: { status: "deletion_scheduled", eraseAfter: 1_800_000_000_000 },
+          provisioning: { openclaw: { slug: "scheduled-builder", gatewayId: "default" } },
+        },
+        "uid-erasing": {
+          username: "erasing-builder",
+          accountLifecycle: { status: "erasing" },
+          provisioning: { openclaw: { slug: "erasing-builder", gatewayId: "default" } },
+        },
+        "uid-suspended": {
+          username: "suspended-builder",
+          accountLifecycle: { status: "suspended" },
+          provisioning: { openclaw: { slug: "suspended-builder", gatewayId: "default" } },
+        },
+      },
+      glmGateways: { default: { gatewayClass: "shared", desiredStatus: "running" } },
+      operations: {
+        "erase-operation": {
+          kind: "erase-customer",
+          status: "pending",
+          inputUid: "uid-scheduled",
+          createdAt: 1_000,
+        },
+      },
+    });
+
+    const res = await request(app).get("/onboarding-placement").expect(200);
+
+    expect(res.body.customers.map((customer: { uid: string }) => customer.uid)).toEqual([
+      "uid-active",
+    ]);
+    expect(res.body.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "account-deletion-pending",
+          uid: "uid-scheduled",
+          slug: "scheduled-builder",
+          operationId: "erase-operation",
+          expiresAt: 1_800_000_000_000,
+          message: "scheduled-builder (uid-scheduled) is scheduled for deletion",
+        }),
+      ]),
+    );
+  });
+
   it("returns the placement config with default-gateway warnings", async () => {
     const { app } = mkAdminFleetRouteApp({
-      config: { defaultGatewayId: "gw-missing", overrides: {} },
+      config: { defaultGatewayId: "gw-missing" },
       users: {},
       glmGateways: {
         "gw-shared": { gatewayClass: "shared", desiredStatus: "running" },
@@ -603,7 +715,7 @@ describe("onboarding placement (post-cohorts)", () => {
 
     const res = await request(app).get("/onboarding-placement").expect(200);
 
-    expect(res.body.config).toEqual({ defaultGatewayId: "gw-missing", overrides: {} });
+    expect(res.body.config).toEqual({ defaultGatewayId: "gw-missing" });
     expect(res.body.warnings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ code: "default-gateway-missing", gatewayId: "gw-missing" }),
@@ -612,12 +724,12 @@ describe("onboarding placement (post-cohorts)", () => {
     const shared = res.body.gateways.find(
       (g: { gatewayId: string }) => g.gatewayId === "gw-shared",
     );
-    expect(shared).toMatchObject({ assignableAsDefault: true, defaultTarget: false });
+    expect(shared).toMatchObject({ assignableAsDefault: false, defaultTarget: false });
   });
 
   it("surfaces the DURABLE roster state + epoch from the assignment doc", async () => {
     const { app } = mkAdminFleetRouteApp({
-      config: { defaultGatewayId: "default", overrides: {} },
+      config: { defaultGatewayId: "default" },
       users: {
         "uid-a": {
           username: "alice",
@@ -650,7 +762,7 @@ describe("onboarding placement (post-cohorts)", () => {
 
   it("reports null roster fields for a customer with no assignment doc (legacy/un-backfilled)", async () => {
     const { app } = mkAdminFleetRouteApp({
-      config: { defaultGatewayId: "default", overrides: {} },
+      config: { defaultGatewayId: "default" },
       users: {
         "uid-a": {
           username: "alice",
@@ -669,20 +781,65 @@ describe("onboarding placement (post-cohorts)", () => {
     });
   });
 
-  it("PATCH accepts only a strict durable shared root, never a bare glm desired doc", async () => {
+  it("PATCH validates the target and queues active shared Builders without moving dedicated Builders", async () => {
     const { app, state } = mkAdminFleetRouteApp({
-      config: { defaultGatewayId: "gw-old", overrides: {} },
-      users: {},
+      config: { defaultGatewayId: "gw-old" },
+      users: {
+        "uid-shared": {
+          username: "shared-builder",
+          provisioning: { openclaw: { slug: "shared-builder", gatewayId: "gw-old" } },
+        },
+        "uid-dedicated": {
+          username: "dedicated-builder",
+          provisioning: { openclaw: { slug: "dedicated-builder", gatewayId: "gw-operator" } },
+        },
+        "uid-adopted": {
+          username: "adopted-builder",
+          provisioning: { openclaw: { slug: "adopted-builder", gatewayId: "gw-old" } },
+        },
+        "uid-deleting": {
+          username: "deleting-builder",
+          accountLifecycle: { status: "deletion_scheduled" },
+          provisioning: { openclaw: { slug: "deleting-builder", gatewayId: "gw-old" } },
+        },
+      },
       glmGateways: {
         "gw-bare": { gatewayClass: "shared", desiredStatus: "running" },
+        "gw-new": {
+          docKind: "runtime",
+          gatewayId: "gw-new",
+          release: 1,
+          lifecycle: "serving",
+          helm: { imageRepository: "gateway", imageTag: "1234567" },
+          heartbeat: { status: "ready", mountedCustomers: [] },
+          lastError: { message: null, at: null },
+        },
       },
       gateways: {
+        "gw-old": durableGatewayRoot("gw-old"),
         "gw-new": durableGatewayRoot("gw-new"),
         "gw-builder": durableGatewayRoot("gw-builder", {
           gatewayClass: "builder",
           ownerUid: "uid-builder",
           builderSlug: "builder",
         }),
+        "gw-operator": durableGatewayRoot("gw-operator", {
+          gatewayClass: "operator",
+          ownerUid: "uid-dedicated",
+          builderSlug: "dedicated-builder",
+        }),
+      },
+      operations: {
+        "existing-migration": {
+          kind: "migrate-customer",
+          status: "running",
+          inputUid: "uid-adopted",
+          input: {
+            uid: "uid-adopted",
+            fromGatewayId: "gw-old",
+            toGatewayId: "gw-new",
+          },
+        },
       },
     });
 
@@ -698,16 +855,35 @@ describe("onboarding placement (post-cohorts)", () => {
       .expect(400);
     expect(bare.body.error).toContain("desired state not found");
 
-    await request(app)
+    const response = await request(app)
       .patch("/onboarding-placement")
       .send({ defaultGatewayId: "gw-new" })
       .expect(200);
     expect(state.config.defaultGatewayId).toBe("gw-new");
+    expect(response.body.defaultChange).toMatchObject({
+      previousGatewayId: "gw-old",
+      targetGatewayId: "gw-new",
+      enqueued: [{ uid: "uid-shared", operationId: "operation-1" }],
+      adopted: [{ uid: "uid-adopted", operationId: "existing-migration" }],
+      blocked: [],
+      dedicatedUntouched: 1,
+    });
+    expect(state.operations["operation-1"]).toMatchObject({
+      kind: "migrate-customer",
+      status: "pending",
+      input: {
+        uid: "uid-shared",
+        builderSlug: "shared-builder",
+        fromGatewayId: "gw-old",
+        toGatewayId: "gw-new",
+        source: "platform-default-change",
+      },
+    });
   });
 
-  it("stores a per-uid gateway override after resolving the builder slug server-side", async () => {
-    const { app, state } = mkAdminFleetRouteApp({
-      config: { defaultGatewayId: "gw-default", overrides: {} },
+  it("ignores retired override data and exposes no override API", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "gw-default", overrides: { "uid-alice": "gw-canary" } },
       users: {
         "uid-alice": {
           username: "alice-old",
@@ -721,25 +897,28 @@ describe("onboarding placement (post-cohorts)", () => {
       },
     });
 
-    const res = await request(app)
+    const res = await request(app).get("/onboarding-placement").expect(200);
+
+    expect(res.body.config).toEqual({ defaultGatewayId: "gw-default" });
+    expect(res.body).not.toHaveProperty("overrides");
+    expect(res.body.customers[0]).not.toHaveProperty("overrideGatewayId");
+
+    await request(app)
       .put("/onboarding-placement/overrides/by-slug/alice")
       .send({ gatewayId: "gw-canary" })
-      .expect(200);
+      .expect(404);
 
-    expect(state.config.overrides).toEqual({ "uid-alice": "gw-canary" });
-    expect(res.body.config.overrides).toEqual({ "uid-alice": "gw-canary" });
-
-    await request(app).delete("/onboarding-placement/overrides/uid-alice").expect(200);
-    expect(state.config.overrides).toEqual({});
+    await request(app).delete("/onboarding-placement/overrides/uid-alice").expect(404);
   });
 
   it("does not report pointer drift for an operator-owned dedicated gateway outside onboarding placement", async () => {
     const { app } = mkAdminFleetRouteApp({
-      config: { defaultGatewayId: "default-blue", overrides: {} },
+      config: { defaultGatewayId: "default-blue" },
       users: {
         "uid-ceckert": {
           username: "ceckert",
           email: "ceckert@example.com",
+          builderSubscription: { tier: "pro", status: "active" },
           provisioning: {
             openclaw: {
               slug: "ceckert",
@@ -766,6 +945,18 @@ describe("onboarding placement (post-cohorts)", () => {
           heartbeat: { status: "ready", mountedCustomers: ["ceckert"] },
         },
       },
+      reservations: {
+        "uid-ceckert": {
+          uid: "uid-ceckert",
+          builderSlug: "ceckert",
+          requestedSizingTier: "nano",
+          status: "fulfilled",
+          billingStatus: "active",
+          requestedAt: 1_000,
+          updatedAt: 2_000,
+          gatewayId: "bender-blue",
+        },
+      },
     });
 
     const res = await request(app).get("/onboarding-placement").expect(200);
@@ -775,13 +966,45 @@ describe("onboarding placement (post-cohorts)", () => {
       uid: "uid-ceckert",
       assignedGatewayId: "bender-blue",
       mountedGatewayId: "bender-blue",
-      policyTargetGatewayId: "default-blue",
+      policyTargetGatewayId: "bender-blue",
       driftState: "healthy",
     });
     expect(customer.warnings).toEqual([]);
     expect(res.body.driftSummary).toMatchObject({
       healthy: 1,
       "pointer-drift": 0,
+    });
+  });
+
+  it("targets the Platform default when a stale dedicated assignment has no live entitlement", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "default-blue" },
+      users: {
+        "uid-stale": {
+          username: "stale",
+          provisioning: { openclaw: { slug: "stale", gatewayId: "stale-operator" } },
+        },
+      },
+      glmGateways: {
+        "default-blue": { gatewayId: "default-blue", gatewayClass: "shared", desiredStatus: "running" },
+        "stale-operator": {
+          gatewayId: "stale-operator",
+          gatewayClass: "operator",
+          desiredStatus: "running",
+          ownerUid: "uid-stale",
+          builderSlug: "stale",
+          heartbeat: { status: "ready", mountedCustomers: ["stale"] },
+        },
+      },
+    });
+
+    const res = await request(app).get("/onboarding-placement").expect(200);
+
+    expect(res.body.customers[0]).toMatchObject({
+      uid: "uid-stale",
+      policyTargetGatewayId: "default-blue",
+      assignedGatewayId: "stale-operator",
+      driftState: "pointer-drift",
     });
   });
 });

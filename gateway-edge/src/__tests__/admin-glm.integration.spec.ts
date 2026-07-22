@@ -532,7 +532,6 @@ describe("Admin onboarding placement", () => {
   it("projects policy target, assigned gateway, mounted gateway, and pointer drift separately", async () => {
     configDocs.orchestrator = {
       defaultGatewayId: "gw-target",
-      overrides: {},
     };
     seedDurableGateway("gw-source", {
       imageTag: "oldsha1",
@@ -557,7 +556,7 @@ describe("Admin onboarding placement", () => {
     const res = await request(buildApp()).get("/api/admin/onboarding-placement");
 
     expect(res.status).toBe(200);
-    expect(res.body.config).toEqual({ defaultGatewayId: "gw-target", overrides: {} });
+    expect(res.body.config).toEqual({ defaultGatewayId: "gw-target" });
     expect(res.body.driftSummary["pointer-drift"]).toBe(1);
     expect(res.body.customers).toEqual([
       expect.objectContaining({
@@ -589,9 +588,9 @@ describe("Admin onboarding placement", () => {
     );
   });
 
-  it("persists a validated default gateway and per-uid overrides", async () => {
-    configDocs.orchestrator = { defaultGatewayId: "gw-old", overrides: {} };
-    seedDurableGateway("gw-new");
+  it("persists a validated ready default gateway and rejects retired override endpoints", async () => {
+    configDocs.orchestrator = { defaultGatewayId: "gw-old" };
+    seedRetirableGateway("gw-new");
     usersDocs = {
       "uid-alice": {
         username: "alice",
@@ -605,21 +604,19 @@ describe("Admin onboarding placement", () => {
     expect(patched.status).toBe(200);
     expect(configDocs.orchestrator).toMatchObject({ defaultGatewayId: "gw-new" });
 
-    const pinned = await request(buildApp())
+    const retiredPut = await request(buildApp())
       .put("/api/admin/onboarding-placement/overrides/uid-alice")
       .send({ gatewayId: "gw-new" });
-    expect(pinned.status).toBe(200);
-    expect(configDocs.orchestrator).toMatchObject({ overrides: { "uid-alice": "gw-new" } });
+    expect(retiredPut.status).toBe(404);
 
-    const cleared = await request(buildApp()).delete(
+    const retiredDelete = await request(buildApp()).delete(
       "/api/admin/onboarding-placement/overrides/uid-alice",
     );
-    expect(cleared.status).toBe(200);
-    expect((configDocs.orchestrator as { overrides?: Record<string, string> }).overrides).toEqual({});
+    expect(retiredDelete.status).toBe(404);
   });
 
   it("rejects a default gateway pointed at a dedicated (non-shared) gateway", async () => {
-    configDocs.orchestrator = { defaultGatewayId: "gw-old", overrides: {} };
+    configDocs.orchestrator = { defaultGatewayId: "gw-old" };
     seedDurableGateway("gw-builder", {
       root: {
         gatewayClass: "builder",
