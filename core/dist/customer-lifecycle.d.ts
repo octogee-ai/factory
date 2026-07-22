@@ -154,6 +154,7 @@ export interface CustomerLifecycleAdapter {
         byosActive?: boolean;
     }) => Promise<{
         elapsedMs: number;
+        appliedFingerprint?: string;
     }>;
     applyRemoveCustomerConfigPatch: (slug: string, agentId: string) => Promise<void>;
     waitForAccountHealthy: (params: {
@@ -185,6 +186,7 @@ export type AddCustomerStep = "claim-slot" | "ensure-dir" | "write-templates" | 
 export interface AddCustomerResult {
     newCustomer: boolean;
     steps: AddCustomerStep[];
+    appliedFingerprint?: string;
     pendingProjectClones: string[];
 }
 export interface RestoreCustomerRuntimeResult {
