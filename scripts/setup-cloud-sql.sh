@@ -116,32 +116,17 @@ done
 # kills MM/Gitea on the next pod restart.
 log "Ensuring database users + Secret Manager passwords..."
 
-# Service accounts that need to read the DB-password secrets at runtime
-# or during the canonical install sequence. Each gets `secretAccessor` on
-# every secret store_secret creates — bindings are idempotent (add same
-# member+role twice = single binding), so re-running setup-cloud-sql.sh
-# is safe.
-#
-# Why this matters: a fresh `gcloud secrets create` starts with NO IAM
-# bindings. The previous-life secrets had bindings accumulated over time;
-# deleting + recreating during the 2026-05-14 right-sizing pass dropped
-# them, and the Release workflow's deploy step (gha SA reads MM_DB_PASSWORD
-# + gitea-db-password) auth-failed until the bindings were restored.
-SECRET_ACCESSOR_SAS=(
-  "github-actions@octogee.iam.gserviceaccount.com"
-)
-
 grant_secret_accessor() {
   local name="$1"
-  for sa in "${SECRET_ACCESSOR_SAS[@]}"; do
+  if [[ "$name" == "$GITEA_PASSWORD_SECRET" ]]; then
     gcloud secrets add-iam-policy-binding "$name" \
-      --member="serviceAccount:$sa" \
+      --member="serviceAccount:github-actions@octogee.iam.gserviceaccount.com" \
       --role="roles/secretmanager.secretAccessor" \
       --project="$PROJECT" \
       --quiet >/dev/null 2>&1 \
-      && ok "Granted secretAccessor on $name to $sa" \
-      || warn "Could not grant secretAccessor on $name to $sa — may need manual setup"
-  done
+      && ok "Granted secretAccessor on $name to GitHub Actions" \
+      || warn "Could not grant secretAccessor on $name to GitHub Actions — may need manual setup"
+  fi
 }
 
 store_secret() {
@@ -175,29 +160,30 @@ secret_name_for() {
 }
 
 # Two paths per user:
-#   - Fresh env (no SM secret + no SQL user): generate random password,
+#   - Fresh env (no enabled SM version + no SQL user): generate random password,
 #     create the SQL user, write to SM. Both sides aligned by construction.
-#   - Re-run (user exists OR SM secret exists): regenerate password so a
+#   - Re-run (user exists OR enabled SM version exists): regenerate password so a
 #     stale half-pair (one side missing) doesn't leave the env wedged.
 #     `set-password` works whether or not the user existed previously;
 #     `store_secret` adds a version to the SM entry or creates it.
 for USER in mattermost gitea; do
   SECRET_NAME=$(secret_name_for "$USER")
   USER_EXISTS=false
-  SECRET_EXISTS=false
+  SECRET_HAS_VERSION=false
   if gcloud sql users list --instance="$INSTANCE" --project="$PROJECT" 2>/dev/null \
       | awk 'NR>1 {print $1}' | grep -qx "$USER"; then
     USER_EXISTS=true
   fi
-  if gcloud secrets describe "$SECRET_NAME" --project="$PROJECT" &>/dev/null; then
-    SECRET_EXISTS=true
+  if [[ "$(gcloud secrets versions describe latest --secret="$SECRET_NAME" \
+      --project="$PROJECT" --format='value(state)' 2>/dev/null || true)" == "ENABLED" ]]; then
+    SECRET_HAS_VERSION=true
   fi
-  if $USER_EXISTS && $SECRET_EXISTS; then
-    ok "User '$USER' + secret '$SECRET_NAME' both present — preserving (no rotation)"
+  if $USER_EXISTS && $SECRET_HAS_VERSION; then
+    ok "User '$USER' + enabled secret '$SECRET_NAME' both present — preserving (no rotation)"
     continue
   fi
 
-  PASS=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 32)
+  PASS=$(openssl rand -hex 16)
   if $USER_EXISTS; then
     log "User '$USER' exists but secret '$SECRET_NAME' missing — rotating password to realign"
     gcloud sql users set-password "$USER" \

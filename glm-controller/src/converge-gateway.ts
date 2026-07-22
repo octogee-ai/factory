@@ -17,6 +17,7 @@ import {
 import { isW9CandidateImageTag } from "@octogee/shared/types/image-tag";
 import type { GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
 import type { W9TestPublisherLiveExperiment } from "@octogee/shared/types/gateway-releases";
+import { deploymentEnvironmentForNamespace } from "@octogee/core/deployment-environment";
 import { resolveGatewayImageRepository } from "./gateway-profiles.js";
 
 // The simple-roll convergence arm (GATEWAY-SIMPLE-ROLL-SPEC): every gateway has
@@ -242,7 +243,7 @@ function w9TestExperimentForNamespace(input: {
     return {};
   }
   if (
-    input.namespace !== "octogee-test" ||
+    deploymentEnvironmentForNamespace(input.namespace) !== "test" ||
     !isW9CandidateImageTag(input.artifact.imageTag) ||
     !isW9GatewayEdgeImage(
       input.artifact.gatewayEdgeImage,

@@ -51,7 +51,7 @@ describe("resolveFleetDeploymentSettings", () => {
   });
 
   it("uses an explicit candidate target before the environment pointer flips", () => {
-    expect(resolveFleetDeploymentSettings("octogee-test", "test-west")).toMatchObject({
+    expect(resolveFleetDeploymentSettings("octogee-test-west", "test-west")).toMatchObject({
       targetId: "test-west",
       artifactRegistryRepository: "us-west1-docker.pkg.dev/octogee/octogee",
     });

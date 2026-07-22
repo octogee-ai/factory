@@ -486,8 +486,8 @@ fi
 set_section infra
 header "5f. Fleet-control signing keypair"
 
-if [[ "$NAMESPACE" != "octogee" && "$NAMESPACE" != "octogee-test" && "$NAMESPACE" != "octogee-build-week" ]]; then
-  warn "Unknown namespace '$NAMESPACE' — skipping fleet-control secret checks"
+if [[ "$ENV" == "custom" ]]; then
+  info "Custom namespaces don't use the fleet-control keypair — skipping"
 else
 
   tmp_k8s_priv=$(mktemp) && tmp_k8s_pub=$(mktemp) && tmp_sm_priv=$(mktemp) && tmp_sm_pub=$(mktemp) && tmp_derived_pub=$(mktemp)

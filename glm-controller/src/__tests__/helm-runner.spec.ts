@@ -145,6 +145,26 @@ describe("helm-runner helpers", () => {
     expect(args).toContain("--timeout=10m");
   });
 
+  it("overrides inherited Mattermost DNS with the exact release namespace", () => {
+    const args = buildUpgradeArgs({
+      release: "octogee-gw-default",
+      chartPath: "/charts/octogee-gateway",
+      namespace: "octogee-test-west",
+      gatewayId: "default",
+      imageTag: "abc1234",
+      imageRepository: REPO,
+      upgradeTimeout: "10m",
+      valuesFile: "/charts/octogee-gateway/values.test.yaml",
+    });
+
+    expect(args).toContain(
+      "env.mmInternalUrl=http://mattermost.octogee-test-west.svc.cluster.local:8065",
+    );
+    expect(args).not.toContain(
+      "env.mmInternalUrl=http://mattermost.octogee-test.svc.cluster.local:8065",
+    );
+  });
+
   it("clears a previous trial claim identity when the gateway returns to ownerless prewarm", () => {
     const args = buildUpgradeArgs({
       release: "octogee-gw-trial-op-000001",
@@ -230,6 +250,9 @@ describe("helm-runner helpers", () => {
 
     const args = buildUpgradeArgs({ ...base, namespace: "octogee-test" });
     expect(args).toContain("conversationExperiment.mode=publisher-live");
+    expect(buildUpgradeArgs({ ...base, namespace: "octogee-test-west" })).toContain(
+      "conversationExperiment.mode=publisher-live",
+    );
     expect(args).toContain(
       "gatewayEdge.image.repository=us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
     );

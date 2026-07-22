@@ -437,6 +437,38 @@ describe("gatewayUpsertOptsFromRelease", () => {
       }),
     ).toThrow(/W9/);
   });
+
+  it("accepts the digest-bound W9 TEST experiment in the west TEST target", () => {
+    const imageTag = `agent-conversation-w9a-8c356bb1@sha256:${"a".repeat(64)}`;
+    const opts = gatewayUpsertOptsFromRelease({
+      namespace: "octogee-test-west",
+      gateway: gateway(),
+      artifact: artifact({
+        imageRepository: "us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+        imageTag,
+        gatewayEdgeImage: {
+          imageRepository: "us-west1-docker.pkg.dev/octogee/octogee/gateway-edge",
+          imageTag: `agent-conversation-w9a-8c356bb1@sha256:${"d".repeat(64)}`,
+        },
+        testExperiment: {
+          kind: "w9-agent-conversation",
+          mode: "publisher-live",
+          candidateManifest: {
+            path: "infra/gateway/openclaw-candidates/agent-conversation.json",
+            sha256: "b".repeat(64),
+          },
+          mattermostOverlay: {
+            valuesPath: "infra/candidates/values.mattermost-silent-post.yaml",
+            imageReference: `mattermostdevelopment/mattermost-team-edition:cce485f@sha256:${"c".repeat(64)}`,
+          },
+        },
+      }),
+      replicas: 1,
+      chartPath: "/charts/octogee-gateway",
+    });
+
+    expect(opts.conversationExperimentMode).toBe("publisher-live");
+  });
 });
 
 describe("provisioningRuntimeDoc", () => {

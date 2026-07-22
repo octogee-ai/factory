@@ -61,7 +61,7 @@
       "hostingProjectId": "octogee",
       "region": "us-west1",
       "clusterName": "octogee-gateway",
-      "namespace": "octogee",
+      "namespace": "octogee-west",
       "artifactRegistry": {
         "projectId": "octogee",
         "location": "us-west1",
@@ -149,7 +149,7 @@
       "hostingProjectId": "octogee-test",
       "region": "us-west1",
       "clusterName": "octogee-gateway",
-      "namespace": "octogee-test",
+      "namespace": "octogee-test-west",
       "artifactRegistry": {
         "projectId": "octogee",
         "location": "us-west1",
