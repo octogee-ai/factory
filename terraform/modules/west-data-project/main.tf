@@ -1,8 +1,9 @@
 terraform {
   required_providers {
     google = {
-      source  = "hashicorp/google"
-      version = "~> 5.0"
+      source                = "hashicorp/google"
+      version               = "~> 5.0"
+      configuration_aliases = [google.bootstrap]
     }
     google-beta = {
       source  = "hashicorp/google-beta"
@@ -23,6 +24,7 @@ locals {
     "eventarc.googleapis.com",
     "firebase.googleapis.com",
     "firebaseextensions.googleapis.com",
+    "firebasestorage.googleapis.com",
     "firebaserules.googleapis.com",
     "firestore.googleapis.com",
     "iam.googleapis.com",
@@ -41,6 +43,8 @@ locals {
 }
 
 resource "google_project" "data" {
+  provider = google.bootstrap
+
   name                = var.project_name
   project_id          = var.project_id
   org_id              = var.organization_id
@@ -66,6 +70,14 @@ resource "google_project_service" "required" {
 resource "google_firebase_project" "data" {
   provider = google-beta
   project  = google_project.data.project_id
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_project_service_identity" "eventarc" {
+  provider = google-beta
+  project  = google_project.data.project_id
+  service  = "eventarc.googleapis.com"
 
   depends_on = [google_project_service.required]
 }
@@ -101,9 +113,6 @@ resource "google_identity_platform_config" "default" {
       password_required = true
     }
 
-    phone_number {
-      enabled = false
-    }
   }
 
   monitoring {
