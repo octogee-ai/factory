@@ -170,6 +170,14 @@ async function emailArrayReferenceDocs(
   return snapshots.flatMap((snapshot) => snapshot.docs);
 }
 
+async function ownedGatewayDocs(
+  db: VerificationFirestore,
+  uid: string,
+) {
+  const snapshot = await db.collection("gateways").where("ownerUid", "==", uid).get();
+  return snapshot.docs;
+}
+
 function normalizedEmail(email: string | null): string | null {
   const normalized = email?.trim().toLowerCase() ?? "";
   return normalized.length > 0 ? normalized : null;
@@ -210,11 +218,12 @@ export async function verifyCustomerFirestoreErasure(
 ): Promise<string[]> {
   const normalized = normalizedEmail(email);
   const refs = customerRootRefs(db, uid, slug, normalized);
-  const [rootSnaps, references, arrays, emailArrays] = await Promise.all([
+  const [rootSnaps, references, arrays, emailArrays, ownedGateways] = await Promise.all([
     Promise.all(refs.map((ref) => ref.get())),
     referenceDocs(db, uid, slug, normalized),
     arrayReferenceDocs(db, uid),
     emailArrayReferenceDocs(db, normalized),
+    ownedGatewayDocs(db, uid),
   ]);
   const remaining = refs
     .filter((_ref, index) => rootSnaps[index]?.exists)
@@ -226,5 +235,6 @@ export async function verifyCustomerFirestoreErasure(
   }
   for (const doc of arrays) remaining.push(doc.ref.path);
   for (const doc of emailArrays) remaining.push(doc.ref.path);
+  for (const doc of ownedGateways) remaining.push(doc.ref.path);
   return Array.from(new Set(remaining)).sort();
 }

@@ -304,25 +304,23 @@ export async function disableCreditAutoTopUp(
   );
 }
 
-export async function pauseOwnedDedicatedGateway(
+export async function pauseOwnedDedicatedGateways(
   db: Pick<Firestore, "collection">,
-  gatewayId: string,
   uid: string,
   now: number,
 ): Promise<void> {
-  const ref = db.collection("gateways").doc(gatewayId);
-  const snap = await ref.get();
-  if (!snap.exists) return;
-  const data = snap.data() as Record<string, unknown>;
-  const coOwners = Array.isArray(data.coOwnerUids) ? data.coOwnerUids : [];
-  const ownerOnly = data.ownerUid === uid && coOwners.length === 0;
-  if (!ownerOnly || data.gatewayClass === "shared") return;
-  await ref.set(
-    {
-      desiredStatus: "paused",
-      updatedAt: now,
-      updatedBy: "customer-deletion-lifecycle",
-    },
-    { merge: true },
-  );
+  const snapshot = await db.collection("gateways").where("ownerUid", "==", uid).get();
+  for (const doc of snapshot.docs) {
+    const data = doc.data() as Record<string, unknown>;
+    const coOwners = Array.isArray(data.coOwnerUids) ? data.coOwnerUids : [];
+    if (coOwners.length > 0 || data.gatewayClass === "shared") continue;
+    await doc.ref.set(
+      {
+        desiredStatus: "paused",
+        updatedAt: now,
+        updatedBy: "customer-deletion-lifecycle",
+      },
+      { merge: true },
+    );
+  }
 }

@@ -9,7 +9,7 @@ import {
   listOpenStripeCheckoutSessionIds,
   listLiveStripeSubscriptionIds,
   listStripeCustomerIdsForUid,
-  pauseOwnedDedicatedGateway,
+  pauseOwnedDedicatedGateways,
   revokeOwnerModelBrokerTokens,
 } from "../lib/customer-ops/customer-suspension-runtime.js";
 
@@ -250,29 +250,39 @@ describe("Firestore suspension fences", () => {
     }, { merge: true });
   });
 
-  it("pauses an owner-only dedicated gateway but leaves a shared gateway running", async () => {
+  it("pauses every owner-only dedicated gateway even when the customer is currently on shared", async () => {
     const dedicatedSet = vi.fn(async () => undefined);
     const sharedSet = vi.fn(async () => undefined);
+    const coOwnedSet = vi.fn(async () => undefined);
     const db = {
       collection: () => ({
-        doc: (id: string) => ({
+        where: () => ({
           get: async () => ({
-            exists: true,
-            data: () => id === "dedicated"
-              ? { ownerUid: "uid-1", coOwnerUids: [], gatewayClass: "builder" }
-              : { ownerUid: null, coOwnerUids: [], gatewayClass: "shared" },
+            docs: [
+              {
+                data: () => ({ ownerUid: "uid-1", coOwnerUids: [], gatewayClass: "operator" }),
+                ref: { set: dedicatedSet },
+              },
+              {
+                data: () => ({ ownerUid: "uid-1", coOwnerUids: [], gatewayClass: "shared" }),
+                ref: { set: sharedSet },
+              },
+              {
+                data: () => ({ ownerUid: "uid-1", coOwnerUids: ["uid-2"], gatewayClass: "builder" }),
+                ref: { set: coOwnedSet },
+              },
+            ],
           }),
-          set: id === "dedicated" ? dedicatedSet : sharedSet,
         }),
       }),
     };
-    await pauseOwnedDedicatedGateway(db as never, "dedicated", "uid-1", 70);
-    await pauseOwnedDedicatedGateway(db as never, "shared", "uid-1", 70);
+    await pauseOwnedDedicatedGateways(db as never, "uid-1", 70);
     expect(dedicatedSet).toHaveBeenCalledWith({
       desiredStatus: "paused",
       updatedAt: 70,
       updatedBy: "customer-deletion-lifecycle",
     }, { merge: true });
     expect(sharedSet).not.toHaveBeenCalled();
+    expect(coOwnedSet).not.toHaveBeenCalled();
   });
 });

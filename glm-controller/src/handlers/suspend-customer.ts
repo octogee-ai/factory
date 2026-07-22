@@ -48,7 +48,7 @@ export interface CustomerSuspensionDeps {
   deleteCredentialSecrets: (secretNames: string[]) => Promise<void>;
   retireProjectAgentMattermostUsers: (userIds: string[]) => Promise<void>;
   deleteProjectAgentCredentialDocs: (docPaths: string[]) => Promise<void>;
-  pauseOwnedDedicatedGateway: (gatewayId: string, uid: string) => Promise<void>;
+  pauseOwnedDedicatedGateways: (uid: string) => Promise<void>;
   markSuspended: (deletionId: string) => Promise<void>;
   now: () => number;
 }
@@ -121,12 +121,11 @@ export function createSuspendCustomerHandler(
     if (cleanup.currentGatewayId && cleanup.slug) {
       await run("unmount-gateway", () =>
         deps.unmountFromGateway(cleanup.currentGatewayId!, cleanup.slug));
-      await run("pause-dedicated-gateway", () =>
-        deps.pauseOwnedDedicatedGateway(cleanup.currentGatewayId!, uid));
     } else {
       await skip("unmount-gateway");
-      await skip("pause-dedicated-gateway");
     }
+    await run("pause-dedicated-gateway", () =>
+      deps.pauseOwnedDedicatedGateways(uid));
     let stripeCustomerIds = job.stripeCustomerIds;
     let stripeSubscriptionIds = job.stripeSubscriptionIds;
     await run("discover-stripe-billing", async () => {

@@ -116,7 +116,6 @@ import { completeOperatorReservationAfterMigration } from "./operator-reservatio
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import {
-  claimGatewayRetirementAtomic,
   verifyGatewayRetirementClaimAtomic,
 } from "@octogee/core/gateway-retirement-claim";
 import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
@@ -213,9 +212,10 @@ import {
   listLiveStripeSubscriptionIds,
   listOpenStripeCheckoutSessionIds,
   listStripeCustomerIdsForUid,
-  pauseOwnedDedicatedGateway,
+  pauseOwnedDedicatedGateways,
   revokeOwnerModelBrokerTokens,
 } from "./lib/customer-ops/customer-suspension-runtime.js";
+import { ensureOwnedDedicatedGatewaysRetired } from "./lib/customer-ops/customer-gateway-retirement.js";
 import {
   ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION,
   CUSTOMER_DELETION_JOBS_COLLECTION,
@@ -2731,54 +2731,6 @@ async function ensureAnonymousDeletionArchive(
   return archiveRef.id;
 }
 
-async function ensureDeletionGatewayRetired(
-  db: Firestore,
-  cleanup: CustomerCleanupContext,
-  deletionId: string,
-): Promise<"not-owned" | "retirement-pending" | "retired"> {
-  const gatewayId = cleanup.currentGatewayId;
-  if (!gatewayId) return "not-owned";
-  const rootRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
-  const rootSnap = await rootRef.get();
-  if (!rootSnap.exists) return "retired";
-  const root = rootSnap.data() as Record<string, unknown>;
-  if (root.ownerUid !== cleanup.uid) return "not-owned";
-  const retirementOperationId = `delete-retire-${deletionId}`;
-  if (root.desiredStatus === "retired") {
-    const operationSnap = await db
-      .collection(GLM_OPERATIONS_COLLECTION)
-      .doc(retirementOperationId)
-      .get();
-    const operation = operationSnap.data() as Record<string, unknown> | undefined;
-    if (operation?.status === "failed") {
-      throw new Error(`dedicated gateway retirement failed: ${String(operation.error ?? "unknown")}`);
-    }
-    if (operation?.status !== "succeeded") return "retirement-pending";
-    await db.recursiveDelete(rootRef);
-    await db.recursiveDelete(operationSnap.ref);
-    return "retired";
-  }
-  await claimGatewayRetirementAtomic({
-    db,
-    gatewayId,
-    operationId: retirementOperationId,
-    operation: {
-      kind: "retire-gateway",
-      status: "pending",
-      createdBy: "customer-deletion-lifecycle",
-      createdAt: Date.now(),
-      startedAt: null,
-      completedAt: null,
-      input: { gatewayId },
-      steps: [],
-      gatewayId,
-    },
-    now: Date.now(),
-    updatedBy: "customer-deletion-lifecycle",
-  });
-  return "retirement-pending";
-}
-
 function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void) {
   const cloudCleanup = buildCustomerCloudCleanupDeps(db, logFn);
   return createEraseCustomerHandler({
@@ -2828,7 +2780,12 @@ function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void) 
       }, { merge: true });
     },
     ensureDedicatedGatewayRetired: (cleanup, deletionId) =>
-      ensureDeletionGatewayRetired(db, cleanup, deletionId),
+      ensureOwnedDedicatedGatewaysRetired({
+        db,
+        uid: cleanup.uid,
+        deletionId,
+        now: Date.now(),
+      }),
     findUndrainedArtifactIds: async (artifactIds) => {
       const snapshots = await Promise.all(
         artifactIds.map((artifactId) => db.collection("chatArtifactJobs").doc(artifactId).get()),
@@ -3002,8 +2959,8 @@ function buildSuspendCustomerHandler(
       for (const docPath of docPaths) batch.delete(db.doc(docPath));
       await batch.commit();
     },
-    pauseOwnedDedicatedGateway: (gatewayId, uid) =>
-      pauseOwnedDedicatedGateway(db, gatewayId, uid, Date.now()),
+    pauseOwnedDedicatedGateways: (uid) =>
+      pauseOwnedDedicatedGateways(db, uid, Date.now()),
     markSuspended: async (deletionId) => {
       await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).set(
         { status: "hibernating", suspendedAt: Date.now(), updatedAt: Date.now() },
