@@ -1,5 +1,6 @@
 # ── Terraform GCS Backend ────────────────────────────────────────────────────
-# State bucket: gs://octogee-terraform-state (created manually, versioning on)
+# State bucket: gs://octogee-terraform-state (owned by the control-plane root)
+# Bootstrap/adoption/verification: ./scripts/bootstrap-control-plane.sh
 # Each environment uses a separate prefix (prod/ or test/) for full isolation.
 #
 # Usage:
