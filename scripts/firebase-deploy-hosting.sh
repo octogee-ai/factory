@@ -21,6 +21,7 @@ set -euo pipefail
 
 target="${1:?usage: firebase-deploy-hosting.sh <site|app> <firebase-project-id>}"
 project="${2:?usage: firebase-deploy-hosting.sh <site|app> <firebase-project-id>}"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 log="$(mktemp)"
 rendered_config=""
@@ -42,10 +43,10 @@ if [ "$target" = "site" ]; then
     echo "site deployment requires an explicit SSR region" >&2
     exit 2
   fi
-  rendered_config="$(mktemp)"
+  rendered_config="$(mktemp "${repo_root}/.firebase-hosting.XXXXXX.json")"
   jq --arg region "$ssr_region" '
     (.hosting[] | select(.target == "site") | .rewrites[] | select(.run.serviceId == "site-ssr") | .run.region) = $region
-  ' firebase.json > "$rendered_config"
+  ' "${repo_root}/firebase.json" > "$rendered_config"
   config_args=("--config" "$rendered_config")
 fi
 
