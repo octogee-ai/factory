@@ -389,37 +389,42 @@ commit** (amend the stack). Do not pack a tarball over a red Step 6b.
 
 ### Step 7 — Pack the tarball
 
-Since 7.1, root `package.json` carries `"@openclaw/ai": "workspace:*"` — a
-pnpm-workspace spec that `npm pack` never resolves (upstream's own npm
-release locks it via `prepare-openclaw-npm-shrinkwrap.ts` at publish time;
-a plain pack ships it verbatim and the base image's `npm install -g` dies
-on it, ~2 min in, with an opaque npm error). Rewrite it to the concrete
-published version for the pack, then restore:
+Run the pack script — it produces a SELF-CONTAINED tarball regardless of
+npm publication state:
 
 ▸
 ```bash
-node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('package.json','utf8'));
-  if (p.dependencies['@openclaw/ai']!=='workspace:*') throw new Error('spec drifted: '+p.dependencies['@openclaw/ai']);
-  p.dependencies['@openclaw/ai']='${NEW_TAG#v}'; fs.writeFileSync('package.json', JSON.stringify(p,null,2)+'\n');"
-mkdir -p /tmp/openclaw-fork
-npm pack --pack-destination /tmp/openclaw-fork --ignore-scripts   # ⚠ NOT pnpm pack
-git checkout -- package.json
-ls -la /tmp/openclaw-fork/
-# Confirm the tarball carries the concrete spec (not workspace:*):
-tar -xzOf /tmp/openclaw-fork/openclaw-*.tgz package/package.json | grep '"@openclaw/ai"'
+bash ~/workspace/octogee-ai/octogee/infra/gateway/openclaw-tarball/pack-fork-tarball.sh . /tmp/openclaw-fork
+# Confirm the workspace spec was resolved (file:vendor/... or a concrete version):
+tar -xzOf /tmp/openclaw-fork/openclaw-[0-9]*.tgz package/package.json | grep '"@openclaw/ai"'
 ```
 
-Pre-flight for the version: every companion the base image installs must be
-published at `${NEW_TAG#v}` (previews can lag — the beta.3 saga):
+What it does (and why — the two publication gaps that used to stop rolls):
 
-```bash
-for p in @openclaw/codex @openclaw/mattermost @openclaw/ai; do
-  npm view "$p@${NEW_TAG#v}" version || echo "❌ $p NOT PUBLISHED — stop; see gateway/openclaw-companion-vendoring branch"
-done
-```
+- **`workspace:*` root deps** (since 7.1: `@openclaw/ai`) — `npm pack` ships
+  the specifier verbatim (upstream's own release rewrites it via
+  `prepare-openclaw-npm-shrinkwrap.ts` at publish time) and the base image's
+  `npm install -g` dies on it ~2 min in with an opaque npm error. The script
+  vendors each one into `vendor/<name>/` inside the tarball and rewrites the
+  spec to `file:vendor/<name>`. NOT `bundleDependencies` — on a pnpm
+  workspace that drags the whole transitive closure out of the symlink farm
+  and ships an empty `@modelcontextprotocol/sdk` (installs green,
+  crash-loops the codex-plugin install).
+- **Unpublished companions** (`@openclaw/codex`, `@openclaw/parallel-plugin`)
+  — tagged releases publish them in lockstep (sometimes lagging by a day —
+  the beta.3 saga); a dev-slot snapshot of upstream main never publishes.
+  When the exact version is missing from npm the script compiles each via
+  upstream's `plugin-npm-publish.sh --pack` into `vendor/<pkg>.tgz`;
+  `Dockerfile.base` prefers the vendored tarball and falls back to npm.
+  Published versions vendor nothing — the same tarball ceremony covers every
+  slot with no per-cycle Dockerfile edits.
 
-✓ A single `openclaw-<version>.tgz` file, ~20-25 MB, ~7-10k files, with the
-concrete `@openclaw/ai` version inside; working tree restored to `workspace:*`.
+`@openclaw/mattermost` is NOT vendored — the fork always patches it, so it
+ships as its own content-addressed artifact (Step 7b) on every slot.
+
+✓ A single `openclaw-<version>.tgz` file, ~20-32 MB, ~7-10k files, with the
+`@openclaw/ai` spec resolved inside; working tree left clean (the script
+restores `package.json` and removes `vendor/` on exit).
 
 > ⚠ **Verify with a real plugin install, not `--version`.** After Step 9's
 > upload (or before, locally): `npm install -g` the tarball into a scratch
@@ -450,9 +455,16 @@ source-only).
 > Dockerfile commands:
 > ```bash
 > SCRATCH=$(mktemp -d)
-> npm install -g --prefix "$SCRATCH" /tmp/openclaw-fork/openclaw-*.tgz
+> npm install -g --prefix "$SCRATCH" /tmp/openclaw-fork/openclaw-[0-9]*.tgz
 > HOME="$SCRATCH" "$SCRATCH/bin/openclaw" plugins install @openclaw/codex@${NEW_TAG#v}
-> HOME="$SCRATCH" "$SCRATCH/bin/openclaw" plugins install "npm-pack:/tmp/openclaw-fork/openclaw-mattermost-*.tgz"
+> HOME="$SCRATCH" "$SCRATCH/bin/openclaw" plugins install "npm-pack:/tmp/openclaw-fork/openclaw-mattermost-*.tgz" --force
+> ```
+> On a **dev slot** (or any version whose companions aren't on npm) the
+> `@openclaw/codex@<version>` install can't resolve — verify the vendored
+> tarball instead, which IS the Dockerfile's vendored branch:
+> ```bash
+> HOME="$SCRATCH" "$SCRATCH/bin/openclaw" plugins install \
+>   "npm-pack:$SCRATCH/lib/node_modules/openclaw/vendor/openclaw-codex.tgz" --force
 > ```
 > The 2026.7.1-beta.6 roll skipped the second install and cost a base-build
 > cycle. The Mattermost pin is content-addressed: first 8 of the tgz's
@@ -473,7 +485,7 @@ echo $SHA
 
 ▸
 ```bash
-gcloud storage cp /tmp/openclaw-fork/openclaw-*.tgz \
+gcloud storage cp /tmp/openclaw-fork/openclaw-[0-9]*.tgz \
   gs://octogee-openclaw-fork/openclaw-fork-${SHA}.tgz \
   --project=octogee
 gcloud storage ls -L gs://octogee-openclaw-fork/openclaw-fork-${SHA}.tgz \

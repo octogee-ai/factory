@@ -131,12 +131,31 @@ ENV HOME=/home/node
 # mattermost-only npm bump can't drift past the host pluginApi. The canonical
 # fork can pin a compiled local Mattermost artifact while matrix slots without
 # a channel patch keep the published package.
+# Companion installs prefer a tarball VENDORED inside the fork tarball
+# (vendor/, written by pack-fork-tarball.sh only when the exact version is
+# missing from npm — the dev slot's upstream-main snapshots are never
+# published). Published slots ship no vendored companion tarballs and fall
+# through to the npm path unchanged, so current/preview bases rebuild
+# byte-identically.
 RUN set -e; \
-    openclaw plugins install @openclaw/codex > /tmp/oc-plugin.log 2>&1 \
-      || { echo "FATAL: @openclaw/codex install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+    OC_VENDOR="$(npm root -g)/openclaw/vendor"; \
+    if [ -f "$OC_VENDOR/openclaw-codex.tgz" ]; then \
+      echo "codex: installing vendored fork tarball (@${OPENCLAW_VERSION} not on npm)"; \
+      openclaw plugins install "npm-pack:$OC_VENDOR/openclaw-codex.tgz" --force > /tmp/oc-plugin.log 2>&1 \
+        || { echo "FATAL: vendored @openclaw/codex install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+    else \
+      openclaw plugins install @openclaw/codex > /tmp/oc-plugin.log 2>&1 \
+        || { echo "FATAL: @openclaw/codex install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+    fi; \
     tail -n 3 /tmp/oc-plugin.log; \
-    openclaw plugins install "@openclaw/parallel-plugin@${OPENCLAW_VERSION}" > /tmp/oc-plugin.log 2>&1 \
-      || { echo "FATAL: @openclaw/parallel-plugin install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+    if [ -f "$OC_VENDOR/openclaw-parallel-plugin.tgz" ]; then \
+      echo "parallel: installing vendored fork tarball (@${OPENCLAW_VERSION} not on npm)"; \
+      openclaw plugins install "npm-pack:$OC_VENDOR/openclaw-parallel-plugin.tgz" --force > /tmp/oc-plugin.log 2>&1 \
+        || { echo "FATAL: vendored @openclaw/parallel-plugin install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+    else \
+      openclaw plugins install "@openclaw/parallel-plugin@${OPENCLAW_VERSION}" > /tmp/oc-plugin.log 2>&1 \
+        || { echo "FATAL: @openclaw/parallel-plugin install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+    fi; \
     tail -n 3 /tmp/oc-plugin.log; \
     MM_STAGED=0; \
     if [ -d "$(npm root -g)/openclaw/dist/extensions/mattermost" ]; then \
