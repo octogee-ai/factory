@@ -404,7 +404,9 @@ step "Phase 2d: Materializing K8s secrets"
 # ── 2f. Helm install ───────────────────────────────────────────────────────
 step "Phase 2e: Helm install"
 GITEA_DB_PASS=$(gcloud secrets versions access latest --secret="$GITEA_DB_PASSWORD_SECRET" --project="$CLOUDSQL_PROJECT")
-helm upgrade --install octogee "$REPO_DIR/helm/octogee" \
+UMBRELLA_CHART_DIR="$(mktemp -d)"
+UMBRELLA_CHART="$("$SCRIPT_DIR/package-umbrella-chart.sh" --output-dir "$UMBRELLA_CHART_DIR")"
+helm upgrade --install octogee "$UMBRELLA_CHART" \
   --server-side=true --force-conflicts \
   -f "$VALUES_OUT" \
   -n "$NAMESPACE" \

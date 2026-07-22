@@ -58,6 +58,7 @@ function packageFileGroups(value: unknown, groups: PackageFileGroup[]): void {
 }
 
 function referenceKind(manager: string): string {
+  if (["custom.regex", "regex"].includes(manager)) return "annotated";
   if (manager === "dockerfile") return "dockerfile";
   if (manager === "github-actions") return "github-action";
   if (manager === "helmv3") return "helm-chart";
@@ -120,8 +121,17 @@ function dependencyReference(
   const packageName = raw.depName ?? raw.packageName;
   const currentValue = raw.currentValue ?? raw.currentVersion;
   if (typeof packageName !== "string" || typeof currentValue !== "string") return undefined;
+  if (!packageName.trim() || !currentValue.trim()) return undefined;
   const managerData = isRecord(raw.managerData) ? raw.managerData : {};
-  const explicitKey = typeof raw.octogeeKey === "string" ? raw.octogeeKey : undefined;
+  let explicitKey: string | undefined;
+  if (typeof raw.octogeeKey === "string") {
+    explicitKey = raw.octogeeKey;
+  } else if (
+    ["custom.regex", "regex"].includes(group.manager)
+    && typeof raw.depType === "string"
+  ) {
+    explicitKey = raw.depType;
+  }
   const kind = referenceKind(group.manager);
   return {
     referenceKind: kind,

@@ -47,7 +47,8 @@ edgeIngress:
 cloud-sql-proxy:
   image:
     repository: gcr.io/cloud-sql-connectors/cloud-sql-proxy
-    tag: "2.11.4"
+    tag: "2.23.0"
+    digest: "sha256:54e23cad9aeeedbf88ab75f993146631b878035f702b31c51885a932e0c7286c"
   connectionName: ""
   usePrivateIp: true
   serviceAccountName: octogee-api

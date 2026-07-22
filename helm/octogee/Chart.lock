@@ -7,7 +7,7 @@ dependencies:
   version: 0.1.0
 - name: gitea
   repository: https://dl.gitea.com/charts/
-  version: 12.6.0
+  version: 12.7.0
 - name: gateway-edge
   repository: file://charts/gateway-edge
   version: 0.1.0
@@ -17,5 +17,5 @@ dependencies:
 - name: glm-controller
   repository: file://charts/glm-controller
   version: 0.1.0
-digest: sha256:1bf3bbf447439e399b04418a9d524732d2f31fdaf532f3e06e2683e1351c3a22
-generated: "2026-06-16T10:55:14.052725-07:00"
+digest: sha256:70a326b67412bb89f74074f61cf14aba80587721730bf2495fc849b7d4003a61
+generated: "2026-07-22T09:22:12.217689-07:00"

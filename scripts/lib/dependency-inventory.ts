@@ -548,6 +548,7 @@ function scanAnnotations(root: string, files: string[], references: DependencyRe
   const pattern = /octogee:dependency\s+kind=([^\s]+)\s+key=([^\s]+)\s+packageName=([^\s]+)\s+currentValue=([^\s]+)/g;
   for (const file of files.filter((candidate) => textExtensions.has(path.extname(candidate)))) {
     const relativePath = posixPath(path.relative(root, file));
+    if (relativePath === ".github/renovate.json5") continue;
     const source = readFileSync(file, "utf8");
     for (const match of source.matchAll(pattern)) {
       references.push({

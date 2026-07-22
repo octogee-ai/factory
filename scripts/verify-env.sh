@@ -194,7 +194,7 @@ if [[ "${PROXY_READY:-0}" -ge 1 ]]; then
 else
   fail "cloud-sql-proxy not ready (readyReplicas=${PROXY_READY:-0})"
   if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee --server-side=true --force-conflicts -f ${HELM_VALUES_FILE} -f <(node core/dist/render-deployment-target-helm-values.js --target=$TARGET_ID) -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
+    echo -e "  ${YELLOW}FIX:${NC} UMBRELLA_CHART_DIR=\$(mktemp -d); UMBRELLA_CHART=\$(./scripts/package-umbrella-chart.sh --output-dir \"\$UMBRELLA_CHART_DIR\"); helm upgrade --install octogee \"\$UMBRELLA_CHART\" --server-side=true --force-conflicts -f ${HELM_VALUES_FILE} -f <(node core/dist/render-deployment-target-helm-values.js --target=$TARGET_ID) -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
   fi
 fi
 
@@ -467,7 +467,7 @@ else
       fail "$CERT_NAME ($CERT_DOMAIN): $CERT_STATUS"
       if $FIX; then
         echo -e "  ${YELLOW}FIX:${NC} Delete and recreate: kubectl delete managedcertificate $CERT_NAME -n $NAMESPACE"
-        echo -e "  ${YELLOW}     ${NC} Then: helm upgrade --install octogee helm/octogee --server-side=true --force-conflicts -f ${HELM_VALUES_FILE} -f <(node core/dist/render-deployment-target-helm-values.js --target=$TARGET_ID) -n $NAMESPACE"
+        echo -e "  ${YELLOW}     ${NC} Then: UMBRELLA_CHART_DIR=\$(mktemp -d); UMBRELLA_CHART=\$(./scripts/package-umbrella-chart.sh --output-dir \"\$UMBRELLA_CHART_DIR\"); helm upgrade --install octogee \"\$UMBRELLA_CHART\" --server-side=true --force-conflicts -f ${HELM_VALUES_FILE} -f <(node core/dist/render-deployment-target-helm-values.js --target=$TARGET_ID) -n $NAMESPACE"
       fi
     fi
   done
@@ -763,7 +763,7 @@ elif [[ -z "$GW_DEPLOYMENT" ]]; then
 else
   fail "gateway-edge missing MM_INTERNAL_URL — the WS bridge will boot-fail. Re-render helm with values.${ENV}.yaml."
   if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} helm upgrade --install octogee helm/octogee --server-side=true --force-conflicts -f ${HELM_VALUES_FILE} -f <(node core/dist/render-deployment-target-helm-values.js --target=$TARGET_ID) -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
+    echo -e "  ${YELLOW}FIX:${NC} UMBRELLA_CHART_DIR=\$(mktemp -d); UMBRELLA_CHART=\$(./scripts/package-umbrella-chart.sh --output-dir \"\$UMBRELLA_CHART_DIR\"); helm upgrade --install octogee \"\$UMBRELLA_CHART\" --server-side=true --force-conflicts -f ${HELM_VALUES_FILE} -f <(node core/dist/render-deployment-target-helm-values.js --target=$TARGET_ID) -n ${NAMESPACE} --kube-context ${K8S_CONTEXT}"
   fi
 fi
 set_section infra

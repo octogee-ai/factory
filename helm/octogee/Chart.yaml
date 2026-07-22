@@ -16,7 +16,7 @@ dependencies:
     condition: mattermost.enabled
 
   - name: gitea
-    version: "12.6.0"
+    version: "12.7.0"
     repository: "https://dl.gitea.com/charts/"
 
   - name: gateway-edge

@@ -29,7 +29,8 @@ re-run, so it produced under-provisioned environments. Use the canonical
 sequence instead:
 
   1. ./scripts/setup-secrets.sh   --env=ENV
-  2. helm upgrade --install octogee helm/octogee -f helm/octogee/values.ENV.yaml ...
+  2. UMBRELLA_CHART=$(./scripts/package-umbrella-chart.sh --output-dir "$(mktemp -d)")
+     helm upgrade --install octogee "$UMBRELLA_CHART" -f helm/octogee/values.ENV.yaml ...
   3. ./scripts/setup-mattermost.sh --env=ENV
   4. ./scripts/setup-gitea.sh      --env=ENV
   5. ./scripts/setup-secrets.sh    --env=ENV
@@ -192,7 +193,9 @@ if (cd "$SCRIPT_DIR" && npx tsx ops/seed-orchestrator-config.ts --env="$ENV"); t
   echo -e "${GREEN}${BOLD}Bootstrap complete — environment is ready for helm upgrade.${NC}"
   echo ""
   echo "  Next steps:"
-  echo "    helm upgrade --install octogee helm/octogee \\"
+  echo "    UMBRELLA_CHART_DIR=\$(mktemp -d)"
+  echo "    UMBRELLA_CHART=\$(./scripts/package-umbrella-chart.sh --output-dir \"\$UMBRELLA_CHART_DIR\")"
+  echo "    helm upgrade --install octogee \"\$UMBRELLA_CHART\" \\"
   echo "      --server-side=true --force-conflicts \\"
   echo "      -f helm/octogee/values.${ENV}.yaml \\"
   echo "      -n <namespace> --create-namespace"
