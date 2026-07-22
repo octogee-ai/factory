@@ -1,6 +1,6 @@
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
@@ -45,7 +45,9 @@ describe("firebase hosting deploy wrapper", () => {
     );
 
     expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(argsPath, "utf8")).toContain("--config\n");
+    const args = readFileSync(argsPath, "utf8").trim().split("\n");
+    const configArgument = args[args.indexOf("--config") + 1];
+    expect(dirname(configArgument)).toBe(repoRoot);
     const config = JSON.parse(readFileSync(configPath, "utf8"));
     const site = config.hosting.find((entry: { target: string }) => entry.target === "site");
     expect(site.rewrites[0].run.region).toBe("us-west1");
