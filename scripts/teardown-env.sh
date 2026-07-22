@@ -121,8 +121,11 @@ case "$ENV" in
     exit 1
     ;;
 esac
-[[ "$TARGET_LIFECYCLE" == "candidate" ]] && ENV_FILE="$REPO_DIR/.env.$TARGET_ID"
-[[ "$TARGET_LIFECYCLE" == "candidate" ]] && SA_KEY_DEFAULT="$HOME/.openclaw/secrets/$TARGET_FIREBASE_PROJECT-sa-key.json"
+case "$TARGET_ID" in
+  prod-central|test-central|build-week-central) ;;
+  *) ENV_FILE="$REPO_DIR/.env.$TARGET_ID" ;;
+esac
+SA_KEY_DEFAULT="$HOME/.openclaw/secrets/$TARGET_FIREBASE_PROJECT-sa-key.json"
 
 ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
 info() { echo -e "  ${BLUE}ℹ️  $1${NC}"; }

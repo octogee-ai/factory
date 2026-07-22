@@ -105,7 +105,10 @@ case "$ENV" in
     ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
 esac
-[[ "$TARGET_LIFECYCLE" == "candidate" ]] && ENV_FILE="$REPO_DIR/.env.$TARGET_ID"
+case "$TARGET_ID" in
+  prod-central|test-central|build-week-central) ;;
+  *) ENV_FILE="$REPO_DIR/.env.$TARGET_ID" ;;
+esac
 
 ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
 warn() { echo -e "  ${YELLOW}⚠️  $1${NC}"; }
@@ -916,13 +919,7 @@ fi
 # Used by gateway-edge and gateway for GCP API access (Workload Identity
 # preferred on prod; SA key is a fallback for services that need it directly).
 info "octogee-sa-key"
-case "$ENV" in
-  prod)   SA_KEY_PATH="$HOME/.openclaw/secrets/octogee-sa-key.json" ;;
-  test)   SA_KEY_PATH="$HOME/.openclaw/secrets/octogee-test-sa-key.json" ;;
-  build-week) SA_KEY_PATH="$HOME/.openclaw/secrets/octogee-build-week-sa-key.json" ;;
-  custom) SA_KEY_PATH="$HOME/.openclaw/secrets/octogee-test-sa-key.json" ;;  # reuse test SA
-esac
-[[ "$TARGET_LIFECYCLE" == "candidate" ]] && SA_KEY_PATH="$HOME/.openclaw/secrets/$TARGET_FIREBASE_PROJECT-sa-key.json"
+SA_KEY_PATH="$HOME/.openclaw/secrets/$TARGET_FIREBASE_PROJECT-sa-key.json"
 if [[ -f "$SA_KEY_PATH" ]]; then
   ksecret octogee-sa-key --from-file=key.json="$SA_KEY_PATH"
 else

@@ -256,17 +256,30 @@ describe("deployment target consumers", () => {
     expect(source(".github/workflows/build-and-deploy.yml")).toContain(renderer);
   });
 
-  it("keeps candidate local bootstrap state out of central env files", () => {
+  it("keeps regional bootstrap state isolated after target activation", () => {
     for (const script of [
       "scripts/setup-secrets.sh",
       "scripts/setup-mattermost.sh",
       "scripts/setup-gitea.sh",
       "scripts/teardown-env.sh",
     ]) {
-      expect(source(script), script).toContain(
-        '[[ "$TARGET_LIFECYCLE" == "candidate" ]] && ENV_FILE="$REPO_DIR/.env.$TARGET_ID"',
+      const contents = source(script);
+      expect(contents, script).toContain(
+        "prod-central|test-central|build-week-central) ;;",
+      );
+      expect(contents, script).toContain(
+        '*) ENV_FILE="$REPO_DIR/.env.$TARGET_ID" ;;',
+      );
+      expect(contents, script).not.toContain(
+        '[[ "$TARGET_LIFECYCLE" == "candidate" ]] && ENV_FILE=',
       );
     }
+    expect(source("scripts/setup-secrets.sh")).toContain(
+      'SA_KEY_PATH="$HOME/.openclaw/secrets/$TARGET_FIREBASE_PROJECT-sa-key.json"',
+    );
+    expect(source("scripts/teardown-env.sh")).toContain(
+      'SA_KEY_DEFAULT="$HOME/.openclaw/secrets/$TARGET_FIREBASE_PROJECT-sa-key.json"',
+    );
   });
 
   it("preserves the candidate target in verification probes and repairs", () => {
