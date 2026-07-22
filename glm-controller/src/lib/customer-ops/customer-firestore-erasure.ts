@@ -43,7 +43,7 @@ export const CUSTOMER_ERASURE_COLLECTION_POLICIES = {
   },
   channelInvites: { uidFields: ["createdBy"] },
   posts: { uidFields: ["authorUid"] },
-  glmOperations: { uidFields: ["inputUid"] },
+  glmOperations: { uidFields: ["inputUid", "createdBy"] },
   feed: { uidFields: ["actorUid", "targetUid"] },
   stars: { uidFields: ["actorUid", "target.ownerUid"] },
   follows: { uidFields: ["actorUid", "target.ownerUid"] },

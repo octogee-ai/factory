@@ -129,6 +129,7 @@ function successfulCompletion(
     ? {
         input: FieldValue.delete(),
         inputUid: FieldValue.delete(),
+        createdBy: FieldValue.delete(),
         attemptHistory: FieldValue.delete(),
         steps: [],
       }
