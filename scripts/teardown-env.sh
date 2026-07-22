@@ -40,6 +40,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=scripts/lib/deployment-target.sh
+source "$SCRIPT_DIR/lib/deployment-target.sh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -52,7 +54,6 @@ ENV="prod"
 FORCE=false
 FULL=false
 PROXY_PID=""
-REGION="us-central1"
 
 for arg in "$@"; do
   case $arg in
@@ -76,13 +77,19 @@ for arg in "$@"; do
 done
 
 case "$ENV" in
+  prod|test) octogee_load_deployment_target "--environment=$ENV" ;;
+  *) echo "Unknown environment: $ENV (use prod or test)"; exit 1 ;;
+esac
+GCP_PROJECT="$TARGET_FIREBASE_PROJECT"
+FIREBASE_PROJECT="$TARGET_FIREBASE_PROJECT"
+CLUSTER_PROJECT="$TARGET_CLUSTER_PROJECT"
+CLUSTER_NAME="$TARGET_CLUSTER_NAME"
+K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
+K8S_NAMESPACE="$TARGET_NAMESPACE"
+REGION="$TARGET_REGION"
+
+case "$ENV" in
   prod)
-    GCP_PROJECT="octogee"
-    FIREBASE_PROJECT="octogee"
-    CLUSTER_PROJECT="octogee"
-    CLUSTER_NAME="octogee-gateway"
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    K8S_NAMESPACE="octogee"
     ENV_FILE="$REPO_DIR/.env"
     SA_KEY_DEFAULT="$HOME/.openclaw/secrets/octogee-sa-key.json"
     ENV_LABEL="🔴 PRODUCTION"
@@ -90,12 +97,6 @@ case "$ENV" in
     GITEA_DB_NAME="gitea_prod"
     ;;
   test)
-    GCP_PROJECT="octogee-test"
-    FIREBASE_PROJECT="octogee-test"
-    CLUSTER_PROJECT="octogee"
-    CLUSTER_NAME="octogee-gateway"
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    K8S_NAMESPACE="octogee-test"
     ENV_FILE="$REPO_DIR/.env.test"
     SA_KEY_DEFAULT="$HOME/.openclaw/secrets/octogee-test-sa-key.json"
     ENV_LABEL="🟡 TEST"
@@ -157,7 +158,7 @@ if ! $FULL; then
 fi
 echo "    • Namespace: $K8S_NAMESPACE"
 echo "    • Secret Manager: infra entries (DB passwords, API keys, tokens) — wipe via gcloud manually if needed"
-echo "    • Cloud SQL instance (octogee-pg)"
+echo "    • Cloud SQL instance ($TARGET_CLOUD_SQL_INSTANCE)"
 echo "    • GCP projects, GKE cluster, AR repo"
 echo "    • Firebase project, IAM, Service Accounts"
 if ! $FULL; then
@@ -185,7 +186,7 @@ fi
 # ── Context guard ─────────────────────────────────────────────────────────
 echo ""
 info "Setting kubectl context..."
-gcloud container clusters get-credentials "$CLUSTER_NAME" --region us-central1 --project "$CLUSTER_PROJECT" 2>/dev/null || true
+gcloud container clusters get-credentials "$CLUSTER_NAME" --region "$TARGET_REGION" --project "$CLUSTER_PROJECT" 2>/dev/null || true
 kubectl config use-context "$K8S_CONTEXT" >/dev/null
 CURRENT_CTX=$(kubectl config current-context)
 [[ "$CURRENT_CTX" == "$K8S_CONTEXT" ]] || { echo -e "  ${RED}❌ Wrong context: $CURRENT_CTX${NC}"; exit 1; }
@@ -407,7 +408,7 @@ if $FULL; then
   fi
 
   PROXY_LOG=$(mktemp -t cloud-sql-proxy-teardown.XXXXX)
-  "$PROXY_BIN" octogee:us-central1:octogee-pg --port=5433 >"$PROXY_LOG" 2>&1 &
+  "$PROXY_BIN" "$TARGET_CLOUD_SQL_CONNECTION" --port=5433 >"$PROXY_LOG" 2>&1 &
   PROXY_PID=$!
   trap '[[ -n "${PROXY_PID:-}" ]] && kill "$PROXY_PID" 2>/dev/null' EXIT
 

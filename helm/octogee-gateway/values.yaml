@@ -35,7 +35,7 @@ builderSlug: ""
 imageTag: "latest"
 
 image:
-  repository: us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway
+  repository: ""
   # Inherits from .Values.imageTag when empty. Override only for an
   # emergency hotfix.
   tag: ""
@@ -368,7 +368,7 @@ pdb:
 gatewayEdge:
   enabled: true
   image:
-    repository: us-central1-docker.pkg.dev/octogee/octogee/gateway-edge
+    repository: ""
     tag: ""  # inherits from imageTag
   port: 3001
   env:

@@ -2,7 +2,7 @@ image:
   repository: gcr.io/cloud-sql-connectors/cloud-sql-proxy
   tag: "2.11.4"
 
-connectionName: "octogee:us-central1:octogee-pg"
+connectionName: ""
 usePrivateIp: true
 
 serviceAccountName: octogee-api

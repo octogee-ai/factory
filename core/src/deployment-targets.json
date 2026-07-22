@@ -1,0 +1,210 @@
+{
+  "schemaVersion": 1,
+  "activeTargets": {
+    "prod": "prod-central",
+    "test": "test-central",
+    "build-week": "build-week-central"
+  },
+  "targets": {
+    "prod-central": {
+      "environment": "prod",
+      "lifecycle": "active",
+      "clusterProjectId": "octogee",
+      "firebaseProjectId": "octogee",
+      "hostingProjectId": "octogee",
+      "region": "us-central1",
+      "clusterName": "octogee-gateway",
+      "namespace": "octogee",
+      "artifactRegistry": {
+        "projectId": "octogee",
+        "location": "us-central1",
+        "repository": "octogee"
+      },
+      "cloudSql": {
+        "projectId": "octogee",
+        "region": "us-central1",
+        "instance": "octogee-pg",
+        "pointInTimeRecoveryEnabled": false
+      },
+      "kms": {
+        "projectId": "octogee",
+        "location": "us-central1",
+        "keyRing": "octogee-creds",
+        "key": "integrations-at-rest"
+      },
+      "storage": {
+        "projectId": "octogee",
+        "location": "us-central1"
+      },
+      "siteOrigin": "https://octogee.com",
+      "appOrigin": "https://app.octogee.com",
+      "apiOrigin": "https://api.octogee.com",
+      "gitOrigin": "https://git.octogee.com",
+      "mattermostOrigin": "https://mattermost.octogee.com",
+      "previewOrigin": "https://preview.octogee.com",
+      "gatewayValuesFile": "values.prod.yaml",
+      "computeClass": "octogee-gateway",
+      "pinEnvironment": "prod"
+    },
+    "prod-west": {
+      "environment": "prod",
+      "lifecycle": "candidate",
+      "clusterProjectId": "octogee",
+      "firebaseProjectId": "octogee-data-prod",
+      "hostingProjectId": "octogee",
+      "region": "us-west1",
+      "clusterName": "octogee-gateway",
+      "namespace": "octogee",
+      "artifactRegistry": {
+        "projectId": "octogee",
+        "location": "us-west1",
+        "repository": "octogee"
+      },
+      "cloudSql": {
+        "projectId": "octogee",
+        "region": "us-west1",
+        "instance": "octogee-pg-west",
+        "pointInTimeRecoveryEnabled": true
+      },
+      "kms": {
+        "projectId": "octogee-data-prod",
+        "location": "us-west1",
+        "keyRing": "octogee-creds",
+        "key": "integrations-at-rest"
+      },
+      "storage": {
+        "projectId": "octogee-data-prod",
+        "location": "us-west1"
+      },
+      "siteOrigin": "https://octogee.com",
+      "appOrigin": "https://app.octogee.com",
+      "apiOrigin": "https://api.octogee.com",
+      "gitOrigin": "https://git.octogee.com",
+      "mattermostOrigin": "https://mattermost.octogee.com",
+      "previewOrigin": "https://preview.octogee.com",
+      "gatewayValuesFile": "values.prod.yaml",
+      "computeClass": "octogee-gateway",
+      "pinEnvironment": "prod"
+    },
+    "test-central": {
+      "environment": "test",
+      "lifecycle": "active",
+      "clusterProjectId": "octogee",
+      "firebaseProjectId": "octogee-test",
+      "hostingProjectId": "octogee-test",
+      "region": "us-central1",
+      "clusterName": "octogee-gateway",
+      "namespace": "octogee-test",
+      "artifactRegistry": {
+        "projectId": "octogee",
+        "location": "us-central1",
+        "repository": "octogee"
+      },
+      "cloudSql": {
+        "projectId": "octogee",
+        "region": "us-central1",
+        "instance": "octogee-pg",
+        "pointInTimeRecoveryEnabled": false
+      },
+      "kms": {
+        "projectId": "octogee-test",
+        "location": "us-central1",
+        "keyRing": "octogee-creds",
+        "key": "integrations-at-rest"
+      },
+      "storage": {
+        "projectId": "octogee-test",
+        "location": "us-central1"
+      },
+      "siteOrigin": "https://octogee-test.web.app",
+      "appOrigin": "https://app-octogee-test.web.app",
+      "apiOrigin": "https://api-test.octogee.com",
+      "gitOrigin": "https://git-test.octogee.com",
+      "mattermostOrigin": "https://mattermost-test.octogee.com",
+      "previewOrigin": "https://preview-test.octogee.com",
+      "gatewayValuesFile": "values.test.yaml",
+      "computeClass": "octogee-gateway-test",
+      "pinEnvironment": "test"
+    },
+    "test-west": {
+      "environment": "test",
+      "lifecycle": "candidate",
+      "clusterProjectId": "octogee",
+      "firebaseProjectId": "octogee-data-test",
+      "hostingProjectId": "octogee-test",
+      "region": "us-west1",
+      "clusterName": "octogee-gateway",
+      "namespace": "octogee-test",
+      "artifactRegistry": {
+        "projectId": "octogee",
+        "location": "us-west1",
+        "repository": "octogee"
+      },
+      "cloudSql": {
+        "projectId": "octogee",
+        "region": "us-west1",
+        "instance": "octogee-pg-west",
+        "pointInTimeRecoveryEnabled": true
+      },
+      "kms": {
+        "projectId": "octogee-data-test",
+        "location": "us-west1",
+        "keyRing": "octogee-creds",
+        "key": "integrations-at-rest"
+      },
+      "storage": {
+        "projectId": "octogee-data-test",
+        "location": "us-west1"
+      },
+      "siteOrigin": "https://octogee-test.web.app",
+      "appOrigin": "https://app-octogee-test.web.app",
+      "apiOrigin": "https://api-test.octogee.com",
+      "gitOrigin": "https://git-test.octogee.com",
+      "mattermostOrigin": "https://mattermost-test.octogee.com",
+      "previewOrigin": "https://preview-test.octogee.com",
+      "gatewayValuesFile": "values.test.yaml",
+      "computeClass": "octogee-gateway-test",
+      "pinEnvironment": "test"
+    },
+    "build-week-central": {
+      "environment": "build-week",
+      "lifecycle": "frozen",
+      "clusterProjectId": "octogee",
+      "firebaseProjectId": "octogee-build-week",
+      "hostingProjectId": "octogee-build-week",
+      "region": "us-central1",
+      "clusterName": "octogee-gateway",
+      "namespace": "octogee-build-week",
+      "artifactRegistry": {
+        "projectId": "octogee",
+        "location": "us-central1",
+        "repository": "octogee"
+      },
+      "cloudSql": {
+        "projectId": "octogee",
+        "region": "us-central1",
+        "instance": "octogee-pg",
+        "pointInTimeRecoveryEnabled": false
+      },
+      "kms": {
+        "projectId": "octogee-build-week",
+        "location": "us-central1",
+        "keyRing": "octogee-creds",
+        "key": "integrations-at-rest"
+      },
+      "storage": {
+        "projectId": "octogee-build-week",
+        "location": "us-central1"
+      },
+      "siteOrigin": "https://octogee-build-week.web.app",
+      "appOrigin": "https://app-octogee-build-week.web.app",
+      "apiOrigin": "https://api-build-week.octogee.com",
+      "gitOrigin": "https://git-build-week.octogee.com",
+      "mattermostOrigin": "https://mattermost-build-week.octogee.com",
+      "previewOrigin": "https://preview-build-week.octogee.com",
+      "gatewayValuesFile": "values.build-week.yaml",
+      "computeClass": "octogee-gateway-build-week",
+      "pinEnvironment": "build-week"
+    }
+  }
+}

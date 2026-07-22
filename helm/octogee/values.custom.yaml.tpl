@@ -1,12 +1,17 @@
 # ── Custom Namespace Overrides (template) ──────────────────────────────────
 # Rendered by scripts/provision-namespace.sh into values.${NAMESPACE}.yaml.
-# Placeholders (all lowercase): __NAMESPACE__, __DB_SLUG__
+# Placeholders are rendered from the selected TEST deployment target.
 #
 # Design: custom namespaces are internal-only, share the octogee-test Firebase
 # project, have no public ingress, no Cloud Armor, no preview host. Access is
 # via `kubectl port-forward`. Cheap, isolated, and disposable.
 
+global:
+  deploymentTargetId: "__TARGET_ID__"
+  deploymentProjectId: "__FIREBASE_PROJECT__"
+
 cloud-sql-proxy:
+  connectionName: "__CLOUD_SQL_CONNECTION__"
   usePrivateIp: true
 
 mattermost:
@@ -47,10 +52,10 @@ gateway-edge:
   cloudArmor:
     enabled: false
   image:
-    repository: us-central1-docker.pkg.dev/octogee/octogee/gateway-edge
+    repository: __AR_REPOSITORY__/gateway-edge
   env:
-    FIREBASE_PROJECT_ID: "octogee-test"
-    GCLOUD_PROJECT: "octogee-test"
+    FIREBASE_PROJECT_ID: "__FIREBASE_PROJECT__"
+    GCLOUD_PROJECT: "__FIREBASE_PROJECT__"
     APP_URL: "https://app-octogee-test.web.app"
     SITE_URL: "https://octogee-test.web.app"
     K8S_NAMESPACE: "__NAMESPACE__"
@@ -63,7 +68,14 @@ gateway-edge:
 # has no public ingress here (port-forward for local testing), so the
 # test app URL is the safe non-prod placeholder.
 octogee-api:
+  image:
+    repository: __AR_REPOSITORY__/octogee-api
+  gatewayServiceAccount: octogee-gateway@__FIREBASE_PROJECT__.iam.gserviceaccount.com
+  serviceAccount:
+    annotations:
+      iam.gke.io/gcp-service-account: octogee-api@__FIREBASE_PROJECT__.iam.gserviceaccount.com
   env:
+    OCTOGEE_KMS_KEY_NAME: "__KMS_KEY_NAME__"
     API_PUBLIC_URL: "https://octogee-test.web.app"
     MM_INTERNAL_URL: "http://mattermost.__NAMESPACE__.svc.cluster.local:8065"
 
@@ -73,21 +85,42 @@ gateway:
   preview:
     enabled: false
   image:
-    repository: us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway
+    repository: __AR_REPOSITORY__/octogee-gateway
   env:
-    gcloudProject: "octogee-test"
-    firebaseProjectId: "octogee-test"
-    githubOrg: "octogee-test"
+    gcloudProject: "__FIREBASE_PROJECT__"
+    firebaseProjectId: "__FIREBASE_PROJECT__"
+    githubOrg: "__FIREBASE_PROJECT__"
     mmUrl: ""  # auto-computed from release namespace
   resources:
     limits:
       ephemeral-storage: "10Gi"
 
 serviceAccount:
-  gcpServiceAccount: "octogee-gateway@octogee-test.iam.gserviceaccount.com"
+  gcpServiceAccount: "octogee-gateway@__FIREBASE_PROJECT__.iam.gserviceaccount.com"
+
+glm-controller:
+  image:
+    repository: __AR_REPOSITORY__/glm-controller
+  gcpServiceAccount: octogee-glm-controller@__FIREBASE_PROJECT__.iam.gserviceaccount.com
+  gatewayServiceAccount: octogee-gateway@__FIREBASE_PROJECT__.iam.gserviceaccount.com
+  workloadIdentityProject: "__CLUSTER_PROJECT__"
+  kmsKeyName: "__KMS_KEY_NAME__"
+  bootstrapDefaultGateway:
+    imageRepository: __AR_REPOSITORY__/octogee-gateway
+
+llmBroker:
+  image:
+    repository: __AR_REPOSITORY__/octogee-api
+  gcpServiceAccount: octogee-llm-broker@__FIREBASE_PROJECT__.iam.gserviceaccount.com
+
+artifactWorker:
+  image:
+    repository: __AR_REPOSITORY__/artifact-worker
 
 opsAgent:
-  gcpServiceAccount: octogee-ops-agent@octogee-test.iam.gserviceaccount.com
-  loggingProjectId: octogee
-  loggingResourceName: projects/octogee/locations/global/buckets/ops-agent-test/views/ops-agent
+  image:
+    repository: __AR_REPOSITORY__/octogee-ops-agent
+  gcpServiceAccount: octogee-ops-agent@__FIREBASE_PROJECT__.iam.gserviceaccount.com
+  loggingProjectId: __CLUSTER_PROJECT__
+  loggingResourceName: projects/__CLUSTER_PROJECT__/locations/global/buckets/ops-agent-test/views/ops-agent
   appUrl: https://app-octogee-test.web.app

@@ -99,6 +99,10 @@ describe("helm-runner helpers", () => {
       operatorAccess: { enabled: true },
       computeClassOverride: "octogee-gateway-spot",
       gcpProject: "builder-bender",
+      kmsKeyName: "projects/octogee-data-prod/locations/us-west1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest",
+      deploymentTargetId: "prod-west",
+      deploymentProjectId: "octogee-data-prod",
+      gatewayServiceAccount: "octogee-gateway@octogee-data-prod.iam.gserviceaccount.com",
       valuesFile: "/charts/octogee-gateway/values.prod.yaml",
     });
 
@@ -113,6 +117,19 @@ describe("helm-runner helpers", () => {
       `deploymentIntentFingerprint=${"d".repeat(64)}`,
     );
     expect(stringPair("rollStrategy")).toBe("rollStrategy=surge");
+    expect(stringPair("gatewayEdge.env.OCTOGEE_KMS_KEY_NAME")).toBe(
+      "gatewayEdge.env.OCTOGEE_KMS_KEY_NAME=projects/octogee-data-prod/locations/us-west1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest",
+    );
+    expect(stringPair("env.firebaseProjectId")).toBe("env.firebaseProjectId=octogee-data-prod");
+    expect(stringPair("gatewayEdge.env.FIREBASE_PROJECT_ID")).toBe(
+      "gatewayEdge.env.FIREBASE_PROJECT_ID=octogee-data-prod",
+    );
+    expect(stringPair("gatewayEdge.env.DEPLOYMENT_TARGET_ID")).toBe(
+      "gatewayEdge.env.DEPLOYMENT_TARGET_ID=prod-west",
+    );
+    expect(stringPair("gatewayEdge.env.GATEWAY_SERVICE_ACCOUNT")).toBe(
+      "gatewayEdge.env.GATEWAY_SERVICE_ACCOUNT=octogee-gateway@octogee-data-prod.iam.gserviceaccount.com",
+    );
     expect(args).toContain("--set");
     expect(args).toContain("replicas=0");
     expect(args).toContain(

@@ -23,6 +23,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=scripts/lib/deployment-target.sh
+source "$SCRIPT_DIR/lib/deployment-target.sh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -51,35 +53,29 @@ done
 
 [[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--yes]"; exit 1; }
 
+TARGET_ENV="$ENV"
+[[ "$TARGET_ENV" == "custom" ]] && TARGET_ENV="test"
+octogee_load_deployment_target "--environment=$TARGET_ENV"
+K8S_NAMESPACE="$TARGET_NAMESPACE"
+GCP_PROJECT="$TARGET_FIREBASE_PROJECT"
+CLUSTER_PROJECT="$TARGET_CLUSTER_PROJECT"
+CLUSTER_NAME="$TARGET_CLUSTER_NAME"
+K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
+
 case "$ENV" in
   prod)
-    K8S_NAMESPACE="octogee"
-    GCP_PROJECT="octogee"
-    CLUSTER_PROJECT="octogee"
-    CLUSTER_NAME="octogee-gateway"
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
     ENV_FILE="$REPO_DIR/.env"
     ENV_LABEL="🔴 PRODUCTION"
     MM_DB_NAME="mattermost_prod"
     MM_DB_USER="mattermost"
     ;;
   test)
-    K8S_NAMESPACE="octogee-test"
-    GCP_PROJECT="octogee-test"
-    CLUSTER_PROJECT="octogee"
-    CLUSTER_NAME="octogee-gateway"
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
     ENV_FILE="$REPO_DIR/.env.test"
     ENV_LABEL="🟡 TEST"
     MM_DB_NAME="mattermost_test"
     MM_DB_USER="mattermost"
     ;;
   build-week)
-    K8S_NAMESPACE="octogee-build-week"
-    GCP_PROJECT="octogee-build-week"
-    CLUSTER_PROJECT="octogee"
-    CLUSTER_NAME="octogee-gateway"
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
     ENV_FILE="$REPO_DIR/.env.build-week"
     ENV_LABEL="🟣 BUILD WEEK"
     MM_DB_NAME="mattermost_build_week"
@@ -89,10 +85,6 @@ case "$ENV" in
     [[ -z "$CUSTOM_NS" ]] && { echo "--env=custom requires --namespace=NAME"; exit 1; }
     [[ "$CUSTOM_NS" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || { echo "Invalid namespace '$CUSTOM_NS'"; exit 1; }
     K8S_NAMESPACE="$CUSTOM_NS"
-    GCP_PROJECT="octogee-test"
-    CLUSTER_PROJECT="octogee"
-    CLUSTER_NAME="octogee-gateway"
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
     ENV_FILE="$REPO_DIR/.env.$CUSTOM_NS"
     ENV_LABEL="🟣 CUSTOM ($CUSTOM_NS)"
     MM_DB_NAME="mattermost_${CUSTOM_NS//-/_}"
@@ -245,7 +237,7 @@ echo ""
 
 # ── 0. kubectl context ────────────────────────────────────────────────────
 info "Setting kubectl context: $K8S_CONTEXT"
-gcloud container clusters get-credentials "$CLUSTER_NAME" --region us-central1 --project "$CLUSTER_PROJECT" 2>/dev/null || true
+gcloud container clusters get-credentials "$CLUSTER_NAME" --region "$TARGET_REGION" --project "$CLUSTER_PROJECT" 2>/dev/null || true
 kubectl config use-context "$K8S_CONTEXT"
 CURRENT_CTX=$(kubectl config current-context)
 [[ "$CURRENT_CTX" == "$K8S_CONTEXT" ]] || fail "kubectl context is '$CURRENT_CTX', expected '$K8S_CONTEXT'."

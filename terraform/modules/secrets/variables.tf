@@ -3,6 +3,11 @@ variable "project_id" {
   type        = string
 }
 
+variable "region" {
+  description = "GCP region for user-managed secret replication"
+  type        = string
+}
+
 variable "mm_db_password" {
   description = "Mattermost database password"
   type        = string

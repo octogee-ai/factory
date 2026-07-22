@@ -1,57 +1,184 @@
-const ENVIRONMENTS = {
-    prod: {
-        name: "prod",
-        namespace: "octogee",
-        firebaseProjectId: "octogee",
-        siteOrigin: "https://octogee.com",
-        appOrigin: "https://app.octogee.com",
-        apiOrigin: "https://api.octogee.com",
-        gitOrigin: "https://git.octogee.com",
-        mattermostOrigin: "https://mattermost.octogee.com",
-        previewOrigin: "https://preview.octogee.com",
-        gatewayValuesFile: "values.prod.yaml",
-        computeClass: "octogee-gateway",
-        pinEnvironment: "prod",
-    },
-    test: {
-        name: "test",
-        namespace: "octogee-test",
-        firebaseProjectId: "octogee-test",
-        siteOrigin: "https://octogee-test.web.app",
-        appOrigin: "https://app-octogee-test.web.app",
-        apiOrigin: "https://api-test.octogee.com",
-        gitOrigin: "https://git-test.octogee.com",
-        mattermostOrigin: "https://mattermost-test.octogee.com",
-        previewOrigin: "https://preview-test.octogee.com",
-        gatewayValuesFile: "values.test.yaml",
-        computeClass: "octogee-gateway-test",
-        pinEnvironment: "test",
-    },
-    "build-week": {
-        name: "build-week",
-        namespace: "octogee-build-week",
-        firebaseProjectId: "octogee-build-week",
-        siteOrigin: "https://octogee-build-week.web.app",
-        appOrigin: "https://app-octogee-build-week.web.app",
-        apiOrigin: "https://api-build-week.octogee.com",
-        gitOrigin: "https://git-build-week.octogee.com",
-        mattermostOrigin: "https://mattermost-build-week.octogee.com",
-        previewOrigin: "https://preview-build-week.octogee.com",
-        gatewayValuesFile: "values.build-week.yaml",
-        computeClass: "octogee-gateway-build-week",
-        pinEnvironment: "build-week",
-    },
-};
+import deploymentTargetsDocument from "./deployment-targets.json" with { type: "json" };
+const DEPLOYMENT_ENVIRONMENTS = [
+    "prod",
+    "test",
+    "build-week",
+];
+const TARGET_LIFECYCLES = [
+    "active",
+    "candidate",
+    "frozen",
+];
+const TARGET_STRING_FIELDS = [
+    "clusterProjectId",
+    "firebaseProjectId",
+    "hostingProjectId",
+    "region",
+    "clusterName",
+    "namespace",
+    "siteOrigin",
+    "appOrigin",
+    "apiOrigin",
+    "gitOrigin",
+    "mattermostOrigin",
+    "previewOrigin",
+    "gatewayValuesFile",
+    "computeClass",
+    "pinEnvironment",
+];
+function record(value, label) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        throw new Error(`${label} must be an object`);
+    }
+    return value;
+}
+function stringField(value, field, label) {
+    const fieldValue = value[field];
+    if (typeof fieldValue !== "string" || fieldValue.length === 0) {
+        throw new Error(`${label}.${field} must be a non-empty string`);
+    }
+    return fieldValue;
+}
+function stringFields(value, fields, label) {
+    for (const field of fields) {
+        stringField(value, field, label);
+    }
+}
+export function validateDeploymentTargetsDocument(document) {
+    const manifest = record(document, "deployment targets manifest");
+    if (manifest.schemaVersion !== 1) {
+        throw new Error("deployment targets manifest.schemaVersion must be 1");
+    }
+    const activeTargets = record(manifest.activeTargets, "deployment targets manifest.activeTargets");
+    const targets = record(manifest.targets, "deployment targets manifest.targets");
+    for (const environment of DEPLOYMENT_ENVIRONMENTS) {
+        const targetId = stringField(activeTargets, environment, "deployment targets manifest.activeTargets");
+        if (!(targetId in targets)) {
+            throw new Error(`Active deployment target does not exist: ${targetId}`);
+        }
+    }
+    for (const [targetId, value] of Object.entries(targets)) {
+        const target = record(value, `deployment target ${targetId}`);
+        const environment = stringField(target, "environment", `deployment target ${targetId}`);
+        if (!DEPLOYMENT_ENVIRONMENTS.includes(environment)) {
+            throw new Error(`deployment target ${targetId}.environment is invalid: ${environment}`);
+        }
+        const lifecycle = stringField(target, "lifecycle", `deployment target ${targetId}`);
+        if (!TARGET_LIFECYCLES.includes(lifecycle)) {
+            throw new Error(`deployment target ${targetId}.lifecycle is invalid: ${lifecycle}`);
+        }
+        stringFields(target, TARGET_STRING_FIELDS, `deployment target ${targetId}`);
+        stringFields(record(target.artifactRegistry, `deployment target ${targetId}.artifactRegistry`), ["projectId", "location", "repository"], `deployment target ${targetId}.artifactRegistry`);
+        const cloudSql = record(target.cloudSql, `deployment target ${targetId}.cloudSql`);
+        stringFields(cloudSql, ["projectId", "region", "instance"], `deployment target ${targetId}.cloudSql`);
+        if (typeof cloudSql.pointInTimeRecoveryEnabled !== "boolean") {
+            throw new Error(`deployment target ${targetId}.cloudSql.pointInTimeRecoveryEnabled must be a boolean`);
+        }
+        stringFields(record(target.kms, `deployment target ${targetId}.kms`), ["projectId", "location", "keyRing", "key"], `deployment target ${targetId}.kms`);
+        stringFields(record(target.storage, `deployment target ${targetId}.storage`), ["projectId", "location"], `deployment target ${targetId}.storage`);
+    }
+    for (const environment of DEPLOYMENT_ENVIRONMENTS) {
+        const targetId = activeTargets[environment];
+        const target = targets[targetId];
+        if (target.environment !== environment) {
+            throw new Error(`Active deployment target ${targetId} belongs to ${String(target.environment)}`);
+        }
+        const expectedLifecycle = environment === "build-week" ? "frozen" : "active";
+        if (target.lifecycle !== expectedLifecycle) {
+            throw new Error(`Active deployment target ${targetId} must be ${expectedLifecycle}`);
+        }
+    }
+}
+validateDeploymentTargetsDocument(deploymentTargetsDocument);
+const MANIFEST = deploymentTargetsDocument;
+function settings(targetId, target) {
+    return {
+        name: target.environment,
+        targetId,
+        lifecycle: target.lifecycle,
+        clusterProjectId: target.clusterProjectId,
+        firebaseProjectId: target.firebaseProjectId,
+        hostingProjectId: target.hostingProjectId,
+        region: target.region,
+        clusterName: target.clusterName,
+        kubeContext: `gke_${target.clusterProjectId}_${target.region}_${target.clusterName}`,
+        namespace: target.namespace,
+        artifactRegistryProjectId: target.artifactRegistry.projectId,
+        artifactRegistryLocation: target.artifactRegistry.location,
+        artifactRegistryName: target.artifactRegistry.repository,
+        artifactRegistryRepository: `${target.artifactRegistry.location}-docker.pkg.dev/${target.artifactRegistry.projectId}/${target.artifactRegistry.repository}`,
+        cloudSqlProjectId: target.cloudSql.projectId,
+        cloudSqlRegion: target.cloudSql.region,
+        cloudSqlInstanceName: target.cloudSql.instance,
+        cloudSqlConnectionName: `${target.cloudSql.projectId}:${target.cloudSql.region}:${target.cloudSql.instance}`,
+        cloudSqlPointInTimeRecoveryEnabled: target.cloudSql.pointInTimeRecoveryEnabled,
+        kmsProjectId: target.kms.projectId,
+        kmsLocation: target.kms.location,
+        kmsKeyRing: target.kms.keyRing,
+        kmsKey: target.kms.key,
+        kmsKeyName: `projects/${target.kms.projectId}/locations/${target.kms.location}/keyRings/${target.kms.keyRing}/cryptoKeys/${target.kms.key}`,
+        storageProjectId: target.storage.projectId,
+        storageLocation: target.storage.location,
+        siteOrigin: target.siteOrigin,
+        appOrigin: target.appOrigin,
+        apiOrigin: target.apiOrigin,
+        gitOrigin: target.gitOrigin,
+        mattermostOrigin: target.mattermostOrigin,
+        previewOrigin: target.previewOrigin,
+        gatewayValuesFile: target.gatewayValuesFile,
+        computeClass: target.computeClass,
+        pinEnvironment: target.pinEnvironment,
+    };
+}
+const TARGETS = Object.fromEntries(Object.entries(MANIFEST.targets).map(([targetId, target]) => [
+    targetId,
+    settings(targetId, target),
+]));
+const ENVIRONMENTS = Object.fromEntries(DEPLOYMENT_ENVIRONMENTS.map((environment) => [
+    environment,
+    TARGETS[MANIFEST.activeTargets[environment]],
+]));
 export const BUILD_WEEK_ENVIRONMENT = ENVIRONMENTS["build-week"];
 export function deploymentEnvironmentSettings(environment) {
     return ENVIRONMENTS[environment];
 }
+export function deploymentTargetSettings(targetId) {
+    const target = TARGETS[targetId];
+    if (!target) {
+        throw new Error(`Unknown deployment target: ${targetId}`);
+    }
+    return target;
+}
+export function deploymentSettingsForRuntime(input) {
+    if (input.targetId !== undefined) {
+        const target = deploymentTargetSettings(input.targetId);
+        if (target.namespace !== input.namespace) {
+            throw new Error(`Deployment target ${input.targetId} belongs to namespace ${target.namespace}, not ${input.namespace}`);
+        }
+        return target;
+    }
+    const environment = deploymentEnvironmentForNamespace(input.namespace);
+    if (environment === "unknown") {
+        throw new Error(`Unknown deployment environment for namespace: ${input.namespace}`);
+    }
+    return deploymentEnvironmentSettings(environment);
+}
+export function deploymentTargetForFirebaseProject(projectId) {
+    const target = Object.values(TARGETS).find((candidate) => candidate.firebaseProjectId === projectId);
+    if (!target) {
+        throw new Error(`Unknown Firebase deployment project: ${projectId}`);
+    }
+    return target;
+}
+export function deploymentTargetsForEnvironment(environment) {
+    return Object.values(TARGETS).filter((target) => target.name === environment);
+}
 export function deploymentEnvironmentForNamespace(namespace) {
-    const entry = Object.values(ENVIRONMENTS).find((value) => value.namespace === namespace);
+    const entry = Object.values(TARGETS).find((value) => value.namespace === namespace);
     return entry?.name ?? "unknown";
 }
 export function deploymentEnvironmentForProject(projectId) {
-    const entry = Object.values(ENVIRONMENTS).find((value) => value.firebaseProjectId === projectId);
+    const entry = Object.values(TARGETS).find((value) => value.firebaseProjectId === projectId);
     return entry?.name ?? "unknown";
 }
 function hostingOrigins(settings) {
@@ -75,8 +202,7 @@ function hostingOrigins(settings) {
     ];
 }
 export function publicAppOrigins() {
-    return [...new Set(Object.keys(ENVIRONMENTS)
-            .flatMap((environment) => hostingOrigins(ENVIRONMENTS[environment])))];
+    return [...new Set(DEPLOYMENT_ENVIRONMENTS.flatMap((environment) => hostingOrigins(ENVIRONMENTS[environment])))];
 }
 export function publicAppHosts() {
     return publicAppOrigins().map((origin) => new URL(origin).hostname);

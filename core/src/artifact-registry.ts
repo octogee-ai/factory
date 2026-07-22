@@ -1,5 +1,6 @@
 import { GoogleAuth } from "google-auth-library";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
+import { deploymentSettingsForRuntime } from "./deployment-environment.js";
 
 export interface GatewayBuild {
   tag: string;
@@ -13,6 +14,41 @@ interface ListOpts {
   project?: string;
   location?: string;
   repository?: string;
+}
+
+interface RegistryCoordinates {
+  project: string;
+  location: string;
+  repository: string;
+}
+
+function registryCoordinates(overrides: {
+  project?: string;
+  location?: string;
+  repository?: string;
+}): RegistryCoordinates {
+  if (overrides.project && overrides.location && overrides.repository) {
+    return {
+      project: overrides.project,
+      location: overrides.location,
+      repository: overrides.repository,
+    };
+  }
+  const namespace = process.env.K8S_NAMESPACE;
+  if (!namespace) {
+    throw new Error(
+      "K8S_NAMESPACE is required when Artifact Registry coordinates are incomplete",
+    );
+  }
+  const runtime = deploymentSettingsForRuntime({
+    namespace,
+    targetId: process.env.DEPLOYMENT_TARGET_ID,
+  });
+  return {
+    project: overrides.project ?? runtime.artifactRegistryProjectId,
+    location: overrides.location ?? runtime.artifactRegistryLocation,
+    repository: overrides.repository ?? runtime.artifactRegistryName,
+  };
 }
 
 interface DockerImageItem {
@@ -114,9 +150,7 @@ function mergeNewerBuilds(
 }
 
 export async function listGatewayBuilds(opts: ListOpts): Promise<GatewayBuild[]> {
-  const project = opts.project ?? process.env.GCP_PROJECT ?? "octogee";
-  const location = opts.location ?? process.env.GAR_LOCATION ?? "us-central1";
-  const repository = opts.repository ?? process.env.GAR_REPO ?? "octogee";
+  const { project, location, repository } = registryCoordinates(opts);
   const limit = opts.limit ?? DEFAULT_LIMIT;
 
 const enoughDeduped = limit * 3;
@@ -177,9 +211,7 @@ interface PinOpts extends PinCoords {
 }
 
 function packagesBase(c: PinCoords): string {
-  const project = c.project ?? process.env.GCP_PROJECT ?? "octogee";
-  const location = c.location ?? process.env.GAR_LOCATION ?? "us-central1";
-  const repository = c.repository ?? process.env.GAR_REPO ?? "octogee";
+  const { project, location, repository } = registryCoordinates(c);
   return (
     `https://artifactregistry.googleapis.com/v1` +
     `/projects/${project}/locations/${location}/repositories/${repository}/packages`

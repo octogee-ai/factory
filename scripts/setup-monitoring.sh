@@ -22,20 +22,26 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=scripts/lib/deployment-target.sh
+source "$SCRIPT_DIR/lib/deployment-target.sh"
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 UNINSTALL=false
+SELECTOR="--environment=prod"
 ENV_FILE="$REPO_DIR/.env"  # monitoring is shared — use prod env for passwords
 
 for arg in "$@"; do
   case $arg in
     --uninstall) UNINSTALL=true ;;
-    --help|-h) echo "Usage: $0 [--uninstall]"; exit 0 ;;
+    --env=*) SELECTOR="--environment=${arg#*=}" ;;
+    --target=*) SELECTOR="$arg" ;;
+    --help|-h) echo "Usage: $0 [--env=prod|test|build-week | --target=TARGET_ID] [--uninstall]"; exit 0 ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
+octogee_load_deployment_target "$SELECTOR"
 
 ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
 info() { echo -e "  ${BLUE}ℹ️  $1${NC}"; }
@@ -54,8 +60,7 @@ save_env() {
   fi
 }
 
-# Use prod cluster (monitoring is shared infra)
-K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
+K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
 
 echo ""
 echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
@@ -65,7 +70,7 @@ echo ""
 
 # ── kubectl context ───────────────────────────────────────────────────────
 info "Setting kubectl context: $K8S_CONTEXT"
-gcloud container clusters get-credentials octogee-gateway --region us-central1 --project octogee 2>/dev/null || true
+gcloud container clusters get-credentials "$TARGET_CLUSTER_NAME" --region "$TARGET_REGION" --project "$TARGET_CLUSTER_PROJECT" 2>/dev/null || true
 kubectl config use-context "$K8S_CONTEXT" >/dev/null
 [[ "$(kubectl config current-context)" == "$K8S_CONTEXT" ]] || fail "Wrong kubectl context"
 ok "kubectl context: $K8S_CONTEXT"

@@ -75,6 +75,7 @@ declare function resolveSizingForResponse(glmDoc: Record<string, unknown> | unde
     };
 };
 export declare function resolveFleetNamespace(env?: NodeJS.ProcessEnv): string;
+export declare function resolveFleetDeploymentSettings(namespace?: string, targetId?: string | undefined): import("./deployment-environment.js").DeploymentEnvironmentSettings;
 type GlmDoc = Record<string, unknown>;
 interface FirestoreDocLike {
     id: string;
@@ -89,6 +90,7 @@ export interface DedicatedGatewayIdleSettings {
     disabled: boolean;
 }
 export interface FleetRuntimeSettings {
+    gatewayImageRepository: string;
     dedicatedGatewayIdle: DedicatedGatewayIdleSettings;
 }
 type AdminGatewayDesiredStatus = "running" | "paused" | "draining" | "retired";

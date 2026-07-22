@@ -24,6 +24,7 @@ import {
   buildFleetMigrateOperationInput,
   parseFleetArgs,
   resolveFleetCredentialMode,
+  resolveFleetDeploymentTarget,
 } from "../ops/fleet.js";
 
 describe("fleet-controller entrypoint config", () => {
@@ -424,6 +425,14 @@ describe("assign-customer-gateway root config", () => {
 });
 
 describe("fleet CLI args", () => {
+  it("resolves Firestore and Kubernetes from the active deployment target", () => {
+    expect(resolveFleetDeploymentTarget("test")).toEqual({
+      projectId: "octogee-test",
+      namespace: "octogee-test",
+      kubeContext: "gke_octogee_us-central1_octogee-gateway",
+    });
+  });
+
   it("binds migration operations to the source and target gateways before enqueue", () => {
     expect(buildFleetMigrateOperationInput("uid-alice", "bender", "operator-green")).toEqual({
       uid: "uid-alice",

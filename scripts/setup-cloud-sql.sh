@@ -2,28 +2,47 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # setup-cloud-sql.sh — Configure Cloud SQL instance after creation
 #
-# Assumes octogee-pg instance already exists (created async above).
+# Assumes the selected target's Cloud SQL instance already exists.
 # Run once after instance is RUNNABLE.
 #
 # Usage:
-#   ./scripts/setup-cloud-sql.sh
+#   ./scripts/setup-cloud-sql.sh --env=prod
+#   ./scripts/setup-cloud-sql.sh --target=prod-west
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-PROJECT="octogee"
-INSTANCE="octogee-pg"
-REGION="us-central1"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/lib/deployment-target.sh
+source "$SCRIPT_DIR/lib/deployment-target.sh"
 
-# PITR adds WAL archive storage cost (~few $/mo for MM activity). Pre-customer
-# we don't need point-in-time restore — the 7 daily backups already cover the
-# rollback envelope. Sized in 2026-05-14 right-sizing pass.
-#
-# Tier-drift detection was considered but dropped: Cloud SQL Postgres has a
-# 3840 MiB minimum per vCPU, and shared-core tiers are deprecated for new
-# Postgres instances. The current db-custom-1-3840 IS the floor for 1 vCPU,
-# so there's no smaller-tier knob to enforce. Re-introduce a tier check if
-# we ever scale vCPUs up and want a guard against accidental over-provision.
-DESIRED_PITR="false"
+SELECTOR=""
+for arg in "$@"; do
+  case "$arg" in
+    --env=*)
+      [[ -n "$SELECTOR" ]] && { echo "Exactly one --env or --target is required" >&2; exit 1; }
+      SELECTOR="--environment=${arg#*=}"
+      ;;
+    --target=*)
+      [[ -n "$SELECTOR" ]] && { echo "Exactly one --env or --target is required" >&2; exit 1; }
+      SELECTOR="$arg"
+      ;;
+    --help|-h)
+      echo "Usage: $0 --env=prod|test|build-week | --target=TARGET_ID"
+      exit 0
+      ;;
+    *) echo "Unknown argument: $arg" >&2; exit 1 ;;
+  esac
+done
+[[ -z "$SELECTOR" ]] && { echo "Exactly one --env or --target is required" >&2; exit 1; }
+octogee_load_deployment_target "$SELECTOR"
+PROJECT="$TARGET_CLOUD_SQL_PROJECT"
+INSTANCE="$TARGET_CLOUD_SQL_INSTANCE"
+REGION="$TARGET_CLOUD_SQL_REGION"
+DESIRED_PITR="$TARGET_CLOUD_SQL_PITR_ENABLED"
+[[ "$DESIRED_PITR" == "true" || "$DESIRED_PITR" == "false" ]] || {
+  echo "Invalid Cloud SQL PITR setting for deployment target $TARGET_ID: $DESIRED_PITR" >&2
+  exit 1
+}
 
 GREEN='\033[0;32m'; BLUE='\033[0;34m'; YELLOW='\033[1;33m'; NC='\033[0m'
 log()  { echo -e "${BLUE}[cloud-sql]${NC} $*"; }
@@ -43,7 +62,7 @@ while true; do
   sleep 15
 done
 
-# ── Enforce PITR off (idempotent) ────────────────────────────────────────────
+# ── Enforce PITR policy (idempotent) ─────────────────────────────────────────
 log "Checking PITR setting..."
 CURRENT_PITR=$(gcloud sql instances describe "$INSTANCE" --project="$PROJECT" \
   --format="value(settings.backupConfiguration.pointInTimeRecoveryEnabled)" 2>/dev/null || echo "")

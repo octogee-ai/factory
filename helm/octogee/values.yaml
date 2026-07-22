@@ -3,6 +3,8 @@
 
 # ── Global values (shared across sub-charts) ────────────────────────────────
 global:
+  deploymentTargetId: ""
+  deploymentProjectId: ""
   mattermost:
     # K8s Secret containing admin credentials for Mattermost.
     # This secret MUST exist before `helm upgrade`. Create it via:
@@ -46,7 +48,7 @@ cloud-sql-proxy:
   image:
     repository: gcr.io/cloud-sql-connectors/cloud-sql-proxy
     tag: "2.11.4"
-  connectionName: "octogee:us-central1:octogee-pg"
+  connectionName: ""
   usePrivateIp: true
   serviceAccountName: octogee-api
   resources:
@@ -184,7 +186,7 @@ gitea:
 # ── gateway-edge ────────────────────────────────────────────────────────
 gateway-edge:
   image:
-    repository: us-central1-docker.pkg.dev/octogee/octogee/gateway-edge
+    repository: ""
     tag: latest
   replicas: 1
   port: 3001
@@ -255,7 +257,7 @@ gatewayFleet:
 llmBroker:
   enabled: true
   image:
-    repository: us-central1-docker.pkg.dev/octogee/octogee/octogee-api
+    repository: ""
     tag: latest
   replicas: 2
   port: 3010
@@ -289,7 +291,7 @@ artifactWorker:
   enabled: true
   nodeLocalDnsCidr: 169.254.20.10/32
   image:
-    repository: us-central1-docker.pkg.dev/octogee/octogee/artifact-worker
+    repository: ""
     tag: latest
   replicas: 1
   serviceAccountName: octogee-artifact-worker
@@ -316,7 +318,7 @@ opsAgent:
   enabled: true
   nodeLocalDnsCidr: 169.254.20.10/32
   image:
-    repository: us-central1-docker.pkg.dev/octogee/octogee/octogee-ops-agent
+    repository: ""
     tag: latest
   replicas: 1
   port: 3010
@@ -356,7 +358,7 @@ serviceAccount:
 # pods. Per-env override in values.test.yaml swaps to the env's GSA.
 glm-controller:
   gcpServiceAccount: "octogee-glm-controller@octogee.iam.gserviceaccount.com"
-  kmsKeyName: "projects/octogee/locations/us-central1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest"
+  kmsKeyName: ""
   # Gateway-pod consumer GSA for new per-gateway auth-token secrets (NOT Cowboy's).
   gatewayServiceAccount: "octogee-gateway@octogee.iam.gserviceaccount.com"
   workloadIdentityProject: "octogee"

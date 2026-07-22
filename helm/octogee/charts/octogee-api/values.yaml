@@ -1,5 +1,5 @@
 image:
-  repository: us-central1-docker.pkg.dev/octogee/octogee/octogee-api
+  repository: ""
   tag: latest
 
 replicas: 1
@@ -41,7 +41,7 @@ env:
   MM_INTERNAL_URL: "http://mattermost.octogee.svc.cluster.local:8065"
   # Envelope-encryption key for per-user connector tokens (users/{uid}/secrets/*).
   # TEST override lives in helm/octogee/values.test.yaml.
-  OCTOGEE_KMS_KEY_NAME: "projects/octogee/locations/us-central1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest"
+  OCTOGEE_KMS_KEY_NAME: ""
   # octogee-api holds the connector secrets + KMS key and serves the broker route, so it
   # reads connector tokens directly. Cattle gateways carry no creds and set
   # CONNECTOR_TOKEN_BROKER_URL instead; they never get this flag.

@@ -23,6 +23,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/lib/deployment-target.sh
+source "$SCRIPT_DIR/lib/deployment-target.sh"
+
 ENV="test"
 LOCAL_PORT=18789
 OPEN_BROWSER=false
@@ -41,13 +45,10 @@ for arg in "$@"; do
 done
 
 case "$ENV" in
-  prod)
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    NAMESPACE="octogee"
-    ;;
-  test)
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    NAMESPACE="octogee-test"
+  prod|test)
+    octogee_load_deployment_target "--environment=$ENV"
+    K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
+    NAMESPACE="$TARGET_NAMESPACE"
     ;;
   *)
     echo "Usage: $0 --env=prod|test [--port=LOCAL_PORT] [--open]"
@@ -61,7 +62,7 @@ export USE_GKE_GCLOUD_AUTH_PLUGIN=True
 # silently fails the same way, but with a confusing error much later).
 if ! kubectl --context="$K8S_CONTEXT" get svc octogee-gateway -n "$NAMESPACE" >/dev/null 2>&1; then
   echo "❌ Can't reach octogee-gateway in namespace=$NAMESPACE (context=$K8S_CONTEXT)" >&2
-  echo "   Try: gcloud auth login && gcloud container clusters get-credentials octogee-gateway --region us-central1 --project octogee" >&2
+  echo "   Try: gcloud auth login && gcloud container clusters get-credentials $TARGET_CLUSTER_NAME --region $TARGET_REGION --project $TARGET_CLUSTER_PROJECT" >&2
   exit 1
 fi
 

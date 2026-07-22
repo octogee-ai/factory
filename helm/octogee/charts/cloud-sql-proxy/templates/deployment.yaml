@@ -31,7 +31,7 @@ spec:
             {{- if .Values.usePrivateIp }}
             - "--private-ip"
             {{- end }}
-            - {{ .Values.connectionName | quote }}
+            - {{ required "cloud-sql-proxy.connectionName is required" .Values.connectionName | quote }}
           ports:
             - containerPort: 5432
           readinessProbe:

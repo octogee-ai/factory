@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   parseReconcileArgs,
+  resolveReconcileFirebaseProject,
   rewriteRepoUrl,
 } from "../ops/reconcile-gitea-org.js";
 
@@ -26,6 +27,15 @@ describe("parseReconcileArgs", () => {
     expect(() =>
       parseReconcileArgs(["--env=test", "--slug=x", "--force"]),
     ).toThrow(/Unknown arg/);
+  });
+});
+
+describe("resolveReconcileFirebaseProject", () => {
+  it("uses the exact candidate target selected by the shell runner", () => {
+    expect(resolveReconcileFirebaseProject("test", {
+      K8S_NAMESPACE: "octogee-test",
+      DEPLOYMENT_TARGET_ID: "test-west",
+    })).toBe("octogee-data-test");
   });
 });
 

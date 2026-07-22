@@ -4,6 +4,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/lib/deployment-target.sh
+source "$SCRIPT_DIR/lib/deployment-target.sh"
+
 ENV="prod"
 for arg in "$@"; do
   case $arg in
@@ -13,13 +17,10 @@ for arg in "$@"; do
 done
 
 case "$ENV" in
-  prod)
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    NAMESPACE="octogee"
-    ;;
-  test)
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    NAMESPACE="octogee-test"
+  prod|test)
+    octogee_load_deployment_target "--environment=$ENV"
+    K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
+    NAMESPACE="$TARGET_NAMESPACE"
     ;;
   *)
     echo "Usage: $0 --env=prod|test"

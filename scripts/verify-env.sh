@@ -26,6 +26,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=scripts/lib/deployment-target.sh
+source "$SCRIPT_DIR/lib/deployment-target.sh"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'
@@ -82,61 +84,39 @@ if [[ -z "$ENV" ]]; then
   exit 1
 fi
 
+TARGET_ENV="$ENV"
+[[ "$TARGET_ENV" == "custom" ]] && TARGET_ENV="test"
+octogee_load_deployment_target "--environment=$TARGET_ENV"
+K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
+CLUSTER_NAME="$TARGET_CLUSTER_NAME"
+CLUSTER_PROJECT="$TARGET_CLUSTER_PROJECT"
+NAMESPACE="$TARGET_NAMESPACE"
+GCP_PROJECT="$TARGET_FIREBASE_PROJECT"
+FIREBASE_PROJECT="$TARGET_FIREBASE_PROJECT"
+SITE_URL="$TARGET_SITE_ORIGIN"
+AR_IMAGE_BASE="$TARGET_AR_REPOSITORY/octogee-gateway"
+CF_SAMPLE="onSignup"
+
 # ── Per-env config ────────────────────────────────────────────────────────────
 case "$ENV" in
   prod)
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    CLUSTER_NAME="octogee-gateway"
-    CLUSTER_PROJECT="octogee"
-    NAMESPACE="octogee"
-    GCP_PROJECT="octogee"
-    FIREBASE_PROJECT="octogee"
-    SITE_URL="https://octogee.web.app"
     ENV_LABEL="🔴 PRODUCTION"
     ENV_COLOR="$RED"
-    AR_IMAGE_BASE="us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway"
-    CF_SAMPLE="onSignup"
     ;;
   test)
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    CLUSTER_NAME="octogee-gateway"
-    CLUSTER_PROJECT="octogee"
-    NAMESPACE="octogee-test"
-    GCP_PROJECT="octogee-test"
-    FIREBASE_PROJECT="octogee-test"
-    SITE_URL="https://octogee-test.web.app"
     ENV_LABEL="🟡 TEST"
     ENV_COLOR="$YELLOW"
-    AR_IMAGE_BASE="us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway"
-    CF_SAMPLE="onSignup"
     ;;
   build-week)
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    CLUSTER_NAME="octogee-gateway"
-    CLUSTER_PROJECT="octogee"
-    NAMESPACE="octogee-build-week"
-    GCP_PROJECT="octogee-build-week"
-    FIREBASE_PROJECT="octogee-build-week"
-    SITE_URL="https://octogee-build-week.web.app"
     ENV_LABEL="🟣 BUILD WEEK"
     ENV_COLOR="$BLUE"
-    AR_IMAGE_BASE="us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway"
-    CF_SAMPLE="onSignup"
     ;;
   custom)
     [[ -z "$CUSTOM_NS" ]] && { echo "--env=custom requires --namespace=NAME"; exit 1; }
     [[ "$CUSTOM_NS" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || { echo "Invalid namespace '$CUSTOM_NS'"; exit 1; }
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    CLUSTER_NAME="octogee-gateway"
-    CLUSTER_PROJECT="octogee"
     NAMESPACE="$CUSTOM_NS"
-    GCP_PROJECT="octogee-test"      # custom namespaces share the test Firebase project
-    FIREBASE_PROJECT="octogee-test"
-    SITE_URL="https://octogee-test.web.app"
     ENV_LABEL="🟣 CUSTOM ($CUSTOM_NS)"
     ENV_COLOR="$BLUE"
-    AR_IMAGE_BASE="us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway"
-    CF_SAMPLE="onSignup"
     ;;
   *)
     echo "Unknown environment: $ENV (use prod, test, build-week, or custom)"
@@ -175,7 +155,7 @@ echo -e "  Time:      $(date '+%Y-%m-%d %H:%M:%S %Z')"
 set_section infra
 header "1. kubectl Context"
 gcloud container clusters get-credentials "$CLUSTER_NAME" \
-  --region us-central1 --project "$CLUSTER_PROJECT" 2>/dev/null || true
+  --region "$TARGET_REGION" --project "$CLUSTER_PROJECT" 2>/dev/null || true
 kubectl config use-context "$K8S_CONTEXT" >/dev/null 2>&1 || true
 
 CURRENT_CTX=$(kubectl config current-context 2>/dev/null || echo "NONE")
@@ -643,7 +623,7 @@ fi
 set_section infra
 header "7. Cloud Functions"
 CF_COUNT=$(gcloud run services list --project="$GCP_PROJECT" \
-  --region=us-central1 --format="value(name)" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+  --region="$TARGET_REGION" --format="value(name)" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
 
 if [[ "$CF_COUNT" -ge 10 ]]; then
   pass "$CF_COUNT Cloud Run services deployed"

@@ -101,6 +101,18 @@ describe("isReleasePayload", () => {
     expect(isReleasePayload(candidate)).toBe(true);
     expect(isReleasePayload({
       ...candidate,
+      imageRepository: "us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+      gatewayEdgeImage: {
+        ...candidate.gatewayEdgeImage,
+        imageRepository: "us-west1-docker.pkg.dev/octogee/octogee/gateway-edge",
+      },
+    })).toBe(true);
+    expect(isReleasePayload({
+      ...candidate,
+      imageRepository: "us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+    })).toBe(false);
+    expect(isReleasePayload({
+      ...candidate,
       gatewayEdgeImage: undefined,
     })).toBe(false);
     expect(isReleasePayload({

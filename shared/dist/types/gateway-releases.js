@@ -13,7 +13,6 @@ export const GATEWAY_RELEASES_SUBCOLLECTION = "releases";
 export const GATEWAY_ASSIGNMENTS_SUBCOLLECTION = "assignments";
 export const W9_CANDIDATE_MANIFEST_PATH = "infra/gateway/openclaw-candidates/agent-conversation.json";
 export const W9_MATTERMOST_OVERLAY_VALUES_PATH = "infra/candidates/values.mattermost-silent-post.yaml";
-export const W9_GATEWAY_EDGE_IMAGE_REPOSITORY = "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge";
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const DIGEST_BOUND_IMAGE_REFERENCE_PATTERN = /^[a-z0-9][a-z0-9./_-]*:[a-z0-9][a-z0-9._-]*@sha256:[a-f0-9]{64}$/;
 export function isW9TestPublisherLiveExperiment(value) {
@@ -54,7 +53,7 @@ export function isReleasePayload(value) {
     }
     return (isW9CandidateImageTag(value.imageTag) &&
         isW9TestPublisherLiveExperiment(value.testExperiment) &&
-        isW9GatewayEdgeImage(value.gatewayEdgeImage, value.imageTag));
+        isW9GatewayEdgeImage(value.gatewayEdgeImage, value.imageTag, value.imageRepository));
 }
 export function upgradeReleasePayloadSchema(payload, persistedPayloadHash) {
     if (typeof persistedPayloadHash !== "string" ||
@@ -94,9 +93,13 @@ function hasReleasePayloadIdentity(value) {
 function w9CandidateImageName(imageTag) {
     return imageTag.slice(0, imageTag.indexOf("@"));
 }
-export function isW9GatewayEdgeImage(value, gatewayImageTag) {
+export function isW9GatewayEdgeImage(value, gatewayImageTag, gatewayImageRepository) {
+    const gatewayPackageSuffix = "/octogee-gateway";
+    const expectedRepository = gatewayImageRepository.endsWith(gatewayPackageSuffix)
+        ? `${gatewayImageRepository.slice(0, -gatewayPackageSuffix.length)}/gateway-edge`
+        : "";
     return (isPlainRecord(value) &&
-        value.imageRepository === W9_GATEWAY_EDGE_IMAGE_REPOSITORY &&
+        value.imageRepository === expectedRepository &&
         typeof value.imageTag === "string" &&
         isW9CandidateImageTag(value.imageTag) &&
         isW9CandidateImageTag(gatewayImageTag) &&

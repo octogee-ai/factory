@@ -17,7 +17,7 @@ set -euo pipefail
 #   - gateway-edge/templates/cronjob-*  (secretKeyRef)
 #
 # Usage:
-#   ./scripts/verify-secrets.sh --env=prod [--context=gke_octogee_us-central1_octogee-gateway]
+#   ./scripts/verify-secrets.sh --env=prod [--context=<kube-context>]
 #   ./scripts/verify-secrets.sh --env=test
 #   ./scripts/verify-secrets.sh --env=custom --namespace=feat-alice
 #
@@ -32,6 +32,8 @@ BOLD='\033[1m'; NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/lib/shell-env.sh
 source "$SCRIPT_DIR/lib/shell-env.sh"
+# shellcheck source=scripts/lib/deployment-target.sh
+source "$SCRIPT_DIR/lib/deployment-target.sh"
 
 ENV=""
 KUBE_CTX=""
@@ -49,24 +51,18 @@ done
 
 [[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME]"; exit 1; }
 
+TARGET_ENV="$ENV"
+[[ "$TARGET_ENV" == "custom" ]] && TARGET_ENV="test"
+octogee_load_deployment_target "--environment=$TARGET_ENV"
+NS="$TARGET_NAMESPACE"
+[[ -z "$KUBE_CTX" ]] && KUBE_CTX="$TARGET_KUBE_CONTEXT"
+
 case "$ENV" in
-  prod)
-    NS="octogee"
-    [[ -z "$KUBE_CTX" ]] && KUBE_CTX="gke_octogee_us-central1_octogee-gateway"
-    ;;
-  test)
-    NS="octogee-test"
-    [[ -z "$KUBE_CTX" ]] && KUBE_CTX="gke_octogee_us-central1_octogee-gateway"
-    ;;
-  build-week)
-    NS="octogee-build-week"
-    [[ -z "$KUBE_CTX" ]] && KUBE_CTX="gke_octogee_us-central1_octogee-gateway"
-    ;;
+  prod|test|build-week) ;;
   custom)
     [[ -z "$CUSTOM_NS" ]] && { echo "--env=custom requires --namespace=NAME"; exit 1; }
     [[ "$CUSTOM_NS" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || { echo "Invalid namespace '$CUSTOM_NS'"; exit 1; }
     NS="$CUSTOM_NS"
-    [[ -z "$KUBE_CTX" ]] && KUBE_CTX="gke_octogee_us-central1_octogee-gateway"
     ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
 esac

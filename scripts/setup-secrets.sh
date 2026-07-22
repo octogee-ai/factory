@@ -34,6 +34,8 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 
 # shellcheck source=scripts/lib/shell-env.sh
 source "$SCRIPT_DIR/lib/shell-env.sh"
+# shellcheck source=scripts/lib/deployment-target.sh
+source "$SCRIPT_DIR/lib/deployment-target.sh"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -51,38 +53,30 @@ for arg in "$@"; do
 done
 [[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--yes]"; exit 1; }
 
+TARGET_ENV="$ENV"
+[[ "$TARGET_ENV" == "custom" ]] && TARGET_ENV="test"
+octogee_load_deployment_target "--environment=$TARGET_ENV"
+K8S_NAMESPACE="$TARGET_NAMESPACE"
+CLUSTER_PROJECT="$TARGET_CLUSTER_PROJECT"
+CLUSTER_NAME="$TARGET_CLUSTER_NAME"
+K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
+FIREBASE_PROJECT="$TARGET_FIREBASE_PROJECT"
+SM_PROJECT="$TARGET_CLOUD_SQL_PROJECT"
+
 case "$ENV" in
   prod)
-    K8S_NAMESPACE="octogee"
-    CLUSTER_PROJECT="octogee"
-    CLUSTER_NAME="octogee-gateway"
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    FIREBASE_PROJECT="octogee"
     ENV_FILE="$REPO_DIR/.env"
     ENV_LABEL="🔴 PRODUCTION"
-    SM_PROJECT="octogee"
     NS_SLUG="prod"
     ;;
   test)
-    K8S_NAMESPACE="octogee-test"
-    CLUSTER_PROJECT="octogee"
-    CLUSTER_NAME="octogee-gateway"
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    FIREBASE_PROJECT="octogee-test"
     ENV_FILE="$REPO_DIR/.env.test"
     ENV_LABEL="🟡 TEST"
-    SM_PROJECT="octogee"  # Cloud SQL + shared secrets live in octogee project
     NS_SLUG="test"
     ;;
   build-week)
-    K8S_NAMESPACE="octogee-build-week"
-    CLUSTER_PROJECT="octogee"
-    CLUSTER_NAME="octogee-gateway"
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    FIREBASE_PROJECT="octogee-build-week"
     ENV_FILE="$REPO_DIR/.env.build-week"
     ENV_LABEL="🟣 BUILD WEEK"
-    SM_PROJECT="octogee"
     NS_SLUG="build_week"
     ;;
   custom)
@@ -91,13 +85,8 @@ case "$ENV" in
     [[ "$CUSTOM_NS" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || { echo "Invalid namespace '$CUSTOM_NS'"; exit 1; }
     [[ ${#CUSTOM_NS} -le 63 ]] || { echo "Namespace too long (max 63)"; exit 1; }
     K8S_NAMESPACE="$CUSTOM_NS"
-    CLUSTER_PROJECT="octogee"
-    CLUSTER_NAME="octogee-gateway"
-    K8S_CONTEXT="gke_octogee_us-central1_octogee-gateway"
-    FIREBASE_PROJECT="octogee-test"  # custom namespaces share test Firebase
     ENV_FILE="$REPO_DIR/.env.$CUSTOM_NS"
     ENV_LABEL="🟣 CUSTOM ($CUSTOM_NS)"
-    SM_PROJECT="octogee"
     NS_SLUG="${CUSTOM_NS//-/_}"
     ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
@@ -163,7 +152,7 @@ sync_secret_manager_value() {
     absent)
       printf '%s' "$value" | gcloud secrets create "$name" \
         --data-file=- --project="$project" \
-        --replication-policy=user-managed --locations=us-central1 --quiet >/dev/null \
+        --replication-policy=user-managed --locations="$TARGET_REGION" --quiet >/dev/null \
         || fail "Could not create absent Secret Manager value: $name"
       ok "Secret Manager: $name"
       ;;
@@ -229,7 +218,7 @@ echo ""
 
 # ── kubectl context ───────────────────────────────────────────────────────
 info "Setting kubectl context: $K8S_CONTEXT"
-gcloud container clusters get-credentials "$CLUSTER_NAME" --region us-central1 --project "$CLUSTER_PROJECT" 2>/dev/null || true
+gcloud container clusters get-credentials "$CLUSTER_NAME" --region "$TARGET_REGION" --project "$CLUSTER_PROJECT" 2>/dev/null || true
 kubectl config use-context "$K8S_CONTEXT" >/dev/null
 [[ "$(kubectl config current-context)" == "$K8S_CONTEXT" ]] || fail "Wrong kubectl context"
 ok "kubectl context: $K8S_CONTEXT"
@@ -306,7 +295,7 @@ if [[ -z "$AGENT_CONTROL_SIGNING_SECRET" ]]; then
   info "  Generated new agent-control-signing secret — saving to Secret Manager..."
   if echo -n "$AGENT_CONTROL_SIGNING_SECRET" | gcloud secrets create "$AGENT_CONTROL_SIGNING_SM_KEY" \
        --data-file=- --project=octogee \
-       --replication-policy=user-managed --locations=us-central1 2>/dev/null; then
+       --replication-policy=user-managed --locations="$TARGET_REGION" 2>/dev/null; then
     :
   else
     # Already exists — add a new version so we can read it back next run.
@@ -327,7 +316,7 @@ if [[ -z "$AGENT_CONTROL_ROUTER_SECRET" ]]; then
   info "  Generated new agent-control-router secret — saving to Secret Manager..."
   if echo -n "$AGENT_CONTROL_ROUTER_SECRET" | gcloud secrets create "$AGENT_CONTROL_ROUTER_SM_KEY" \
        --data-file=- --project=octogee \
-       --replication-policy=user-managed --locations=us-central1 2>/dev/null; then
+       --replication-policy=user-managed --locations="$TARGET_REGION" 2>/dev/null; then
     :
   else
     echo -n "$AGENT_CONTROL_ROUTER_SECRET" | gcloud secrets versions add "$AGENT_CONTROL_ROUTER_SM_KEY" \
@@ -347,7 +336,7 @@ if [[ -z "$BYOT_SYNC_INTERNAL_SECRET" ]]; then
   info "  Generated new BYOT sync signing secret — saving to Secret Manager..."
   if echo -n "$BYOT_SYNC_INTERNAL_SECRET" | gcloud secrets create "$BYOT_SYNC_INTERNAL_SM_KEY" \
        --data-file=- --project=octogee \
-       --replication-policy=user-managed --locations=us-central1 2>/dev/null; then
+       --replication-policy=user-managed --locations="$TARGET_REGION" 2>/dev/null; then
     :
   else
     echo -n "$BYOT_SYNC_INTERNAL_SECRET" | gcloud secrets versions add "$BYOT_SYNC_INTERNAL_SM_KEY" \
@@ -365,7 +354,7 @@ if [[ -z "$GITEA_ADMIN_PASS" ]]; then
   info "  Generated new Gitea admin password — saving to Secret Manager..."
   echo -n "$GITEA_ADMIN_PASS" | gcloud secrets create "gitea-admin-password-${ENV}" \
     --data-file=- --project=octogee \
-    --replication-policy=user-managed --locations=us-central1 2>/dev/null || \
+    --replication-policy=user-managed --locations="$TARGET_REGION" 2>/dev/null || \
   echo -n "$GITEA_ADMIN_PASS" | gcloud secrets versions add "gitea-admin-password-${ENV}" \
     --data-file=- --project=octogee 2>/dev/null || true
 fi
@@ -454,7 +443,7 @@ if [[ -n "$OPENAI_API_KEY" ]]; then
       echo -n "$OPENAI_API_KEY" | gcloud secrets create OPENAI_API_KEY \
         --data-file=- \
         --project="$FIREBASE_PROJECT" \
-        --replication-policy=user-managed --locations=us-central1 >/dev/null
+        --replication-policy=user-managed --locations="$TARGET_REGION" >/dev/null
     fi
   fi
   ok "Secret Manager: OPENAI_API_KEY"
@@ -568,7 +557,7 @@ if [[ -z "$CONNECT_STATE_SECRET" ]]; then
   info "  Generated new connect-state secret — saving to Secret Manager..."
   if echo -n "$CONNECT_STATE_SECRET" | gcloud secrets create "$CONNECT_STATE_SM_KEY" \
        --data-file=- --project=octogee \
-       --replication-policy=user-managed --locations=us-central1 2>/dev/null; then
+       --replication-policy=user-managed --locations="$TARGET_REGION" 2>/dev/null; then
     :
   else
     echo -n "$CONNECT_STATE_SECRET" | gcloud secrets versions add "$CONNECT_STATE_SM_KEY" \
@@ -591,7 +580,7 @@ if [[ -z "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" ]]; then
     GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN="$EXISTING_MODEL_ISSUER"
     echo -n "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" | gcloud secrets create "GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" \
       --data-file=- --project="$FIREBASE_PROJECT" \
-      --replication-policy=user-managed --locations=us-central1 --quiet 2>/dev/null || \
+      --replication-policy=user-managed --locations="$TARGET_REGION" --quiet 2>/dev/null || \
     echo -n "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" | gcloud secrets versions add "GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" \
       --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null || true
   else
@@ -599,7 +588,7 @@ if [[ -z "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" ]]; then
     info "  First install — generating GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN, saving to Secret Manager ($FIREBASE_PROJECT)"
     if echo -n "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" | gcloud secrets create "GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" \
          --data-file=- --project="$FIREBASE_PROJECT" \
-         --replication-policy=user-managed --locations=us-central1 --quiet 2>/dev/null; then
+         --replication-policy=user-managed --locations="$TARGET_REGION" --quiet 2>/dev/null; then
       ok "  Created SM secret: GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN"
     elif echo -n "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" | gcloud secrets versions add "GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" \
          --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null; then
@@ -637,7 +626,7 @@ if [[ -z "$SOCIAL_NOTIFICATION_BEARER" ]]; then
     SOCIAL_NOTIFICATION_BEARER="$EXISTING_SNB"
     echo -n "$SOCIAL_NOTIFICATION_BEARER" | gcloud secrets create "SOCIAL_NOTIFICATION_BEARER_TOKEN" \
       --data-file=- --project="$FIREBASE_PROJECT" \
-      --replication-policy=user-managed --locations=us-central1 --quiet 2>/dev/null || \
+      --replication-policy=user-managed --locations="$TARGET_REGION" --quiet 2>/dev/null || \
     echo -n "$SOCIAL_NOTIFICATION_BEARER" | gcloud secrets versions add "SOCIAL_NOTIFICATION_BEARER_TOKEN" \
       --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null || true
   else
@@ -645,7 +634,7 @@ if [[ -z "$SOCIAL_NOTIFICATION_BEARER" ]]; then
     info "  First install — generating social bearer, saving to Secret Manager ($FIREBASE_PROJECT)"
     if echo -n "$SOCIAL_NOTIFICATION_BEARER" | gcloud secrets create "SOCIAL_NOTIFICATION_BEARER_TOKEN" \
          --data-file=- --project="$FIREBASE_PROJECT" \
-         --replication-policy=user-managed --locations=us-central1 --quiet 2>/dev/null; then
+         --replication-policy=user-managed --locations="$TARGET_REGION" --quiet 2>/dev/null; then
       ok "  Created SM secret: SOCIAL_NOTIFICATION_BEARER_TOKEN"
     elif echo -n "$SOCIAL_NOTIFICATION_BEARER" | gcloud secrets versions add "SOCIAL_NOTIFICATION_BEARER_TOKEN" \
          --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null; then
@@ -674,7 +663,7 @@ persist_sm_file() {
     ok "  Updated SM secret: $name"
   else
     gcloud secrets create "$name" --data-file="$file" --project="$FIREBASE_PROJECT" \
-      --replication-policy=user-managed --locations=us-central1 --quiet >/dev/null
+      --replication-policy=user-managed --locations="$TARGET_REGION" --quiet >/dev/null
     ok "  Created SM secret: $name"
   fi
 }
@@ -760,7 +749,7 @@ for gw_id in "${GATEWAY_IDS[@]}"; do
     if echo -n "placeholder-awaiting-gateway-boot" | gcloud secrets create "$SECRET_NAME" \
          --data-file=- \
          --project="$FIREBASE_PROJECT" \
-         --replication-policy=user-managed --locations=us-central1 \
+         --replication-policy=user-managed --locations="$TARGET_REGION" \
          --quiet 2>/dev/null; then
       ok "  Created SM secret: $SECRET_NAME (placeholder)"
     else
@@ -964,7 +953,7 @@ sync_function_secret() {
   printf '%s' "$configured" | gcloud secrets create "$secret" \
     --data-file=- \
     --project="$SM_PROJECT_CF" \
-    --replication-policy=user-managed --locations=us-central1 \
+    --replication-policy=user-managed --locations="$TARGET_REGION" \
     --quiet >/dev/null
   ok "  Created SM secret: $secret"
 }
@@ -1037,7 +1026,7 @@ VALUES_FILE="values.${ENV}.yaml"
 echo "  Canonical sequence (run teardown-env.sh --env=$ENV to see all 9 steps)."
 echo ""
 echo "  Next (Phase 1 → Helm):"
-echo "    GITEA_DB_PASS=\$(gcloud secrets versions access latest --secret=gitea-db-password --project=octogee)"
+    echo "    GITEA_DB_PASS=\$(gcloud secrets versions access latest --secret=gitea-db-password --project=$SM_PROJECT)"
 echo "    helm upgrade --install octogee helm/octogee \\"
 echo "      --server-side=true --force-conflicts \\"
 echo "      -f helm/octogee/$VALUES_FILE \\"

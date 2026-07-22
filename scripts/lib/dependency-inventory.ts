@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { deploymentTargetsForEnvironment } from "@octogee/core/deployment-environment";
 
 export interface DependencyReferenceIdentity {
   referenceKind: string;
@@ -160,8 +161,16 @@ function firstYamlScalar(lines: string[], key: string): string | undefined {
   return undefined;
 }
 
+const INTERNAL_ARTIFACT_REGISTRY_PREFIXES = [...new Set(
+  (["prod", "test", "build-week"] as const).flatMap((environment) =>
+    deploymentTargetsForEnvironment(environment).map(
+      (target) => `${target.artifactRegistryRepository}/`,
+    ),
+  ),
+)];
+
 function isInternalImage(value: string): boolean {
-  return value.startsWith("us-central1-docker.pkg.dev/octogee/octogee/") ||
+  return INTERNAL_ARTIFACT_REGISTRY_PREFIXES.some((prefix) => value.startsWith(prefix)) ||
     value.includes("gcr.io/$PROJECT_ID/") || value.includes("${_REGION}-docker.pkg.dev/$PROJECT_ID/");
 }
 

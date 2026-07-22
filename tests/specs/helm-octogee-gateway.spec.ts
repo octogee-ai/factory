@@ -14,12 +14,14 @@ beforeAll(() => {
     throw new Error(`octogee-gateway chart not found at ${CHART_PATH}`);
   }
 
-spawnSync("helm", ["template", "warmup", CHART_PATH, "--set", "gatewayId=warmup", "--set", "imageTag=warmup", "--set", "env.mmSiteUrl=https://example.com", "--set", "env.mmInternalUrl=http://example"], { encoding: "utf-8" });
+spawnSync("helm", ["template", "warmup", CHART_PATH, "--set", "gatewayId=warmup", "--set", "imageTag=warmup", "--set", "image.repository=registry.example/octogee-gateway", "--set", "gatewayEdge.image.repository=registry.example/gateway-edge", "--set", "env.mmSiteUrl=https://example.com", "--set", "env.mmInternalUrl=http://example"], { encoding: "utf-8" });
 }, 60_000);
 
 const REQUIRED_VALUES: Record<string, string> = {
   gatewayId: "default",
   imageTag: "abc1234",
+  "image.repository": "registry.example/octogee-gateway",
+  "gatewayEdge.image.repository": "registry.example/gateway-edge",
   "env.mmSiteUrl": "https://mm-test.example.com",
   "env.mmInternalUrl": "http://mattermost.octogee-test.svc.cluster.local:8065",
 };
@@ -314,7 +316,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     const label = gatewayImageLabel(dep);
 
     expect(dep).toContain(
-      `image: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway:${candidateTag}"`,
+      `image: "registry.example/octogee-gateway:${candidateTag}"`,
     );
     expect(label).toBe(
       `sha256-${createHash("sha256").update(candidateTag).digest("hex").slice(0, 56)}`,
@@ -1764,6 +1766,10 @@ describe("helm/octogee-gateway/ — platform secret render assertions", () => {
       "gatewayId=default",
       "--set",
       "imageTag=abc",
+      "--set",
+      "image.repository=registry.example/octogee-gateway",
+      "--set",
+      "gatewayEdge.image.repository=registry.example/gateway-edge",
       "--set",
       "env.mmInternalUrl=http://x",
       "--set",
