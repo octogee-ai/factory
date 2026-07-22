@@ -8,6 +8,12 @@ variable "region" {
   type        = string
 }
 
+variable "automatic_replication" {
+  description = "Use automatic replication instead of a regional replica"
+  type        = bool
+  default     = false
+}
+
 variable "mm_db_password" {
   description = "Mattermost database password"
   type        = string

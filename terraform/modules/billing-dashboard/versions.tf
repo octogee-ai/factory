@@ -16,15 +16,11 @@
  */
 
 terraform {
-  required_version = ">= 0.13"
+  required_version = ">= 1.15.8"
   required_providers {
     google = {
-      source = "hashicorp/google"
-      # Upstream pinned "< 5.0"; relaxed for this stack's google ~> 5.0. The
-      # module's resources (bigquery_table view, service_account, iam_binding)
-      # are stable across v4→v5. Vendored from GoogleCloudPlatform/
-      # terraform-google-billing-dashboard @ 4872a84.
-      version = ">= 3.53"
+      source  = "hashicorp/google"
+      version = ">= 7.40.0"
     }
   }
 

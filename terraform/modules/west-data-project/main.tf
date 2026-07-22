@@ -2,12 +2,12 @@ terraform {
   required_providers {
     google = {
       source                = "hashicorp/google"
-      version               = "~> 5.0"
+      version               = ">= 7.40.0"
       configuration_aliases = [google.bootstrap]
     }
     google-beta = {
       source  = "hashicorp/google-beta"
-      version = "~> 5.0"
+      version = ">= 7.40.0"
     }
   }
 }

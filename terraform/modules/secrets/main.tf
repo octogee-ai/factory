@@ -5,7 +5,7 @@ terraform {
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = "~> 5.0"
+      version = ">= 7.40.0"
     }
   }
 }
@@ -16,9 +16,16 @@ resource "google_secret_manager_secret" "mm_db_password" {
   project   = var.project_id
 
   replication {
-    user_managed {
-      replicas {
-        location = var.region
+    dynamic "auto" {
+      for_each = var.automatic_replication ? [true] : []
+      content {}
+    }
+    dynamic "user_managed" {
+      for_each = var.automatic_replication ? [] : [true]
+      content {
+        replicas {
+          location = var.region
+        }
       }
     }
   }
@@ -35,9 +42,16 @@ resource "google_secret_manager_secret" "gitea_db_password" {
   project   = var.project_id
 
   replication {
-    user_managed {
-      replicas {
-        location = var.region
+    dynamic "auto" {
+      for_each = var.automatic_replication ? [true] : []
+      content {}
+    }
+    dynamic "user_managed" {
+      for_each = var.automatic_replication ? [] : [true]
+      content {
+        replicas {
+          location = var.region
+        }
       }
     }
   }
@@ -54,9 +68,16 @@ resource "google_secret_manager_secret" "cloudsql_connection" {
   project   = var.project_id
 
   replication {
-    user_managed {
-      replicas {
-        location = var.region
+    dynamic "auto" {
+      for_each = var.automatic_replication ? [true] : []
+      content {}
+    }
+    dynamic "user_managed" {
+      for_each = var.automatic_replication ? [] : [true]
+      content {
+        replicas {
+          location = var.region
+        }
       }
     }
   }
