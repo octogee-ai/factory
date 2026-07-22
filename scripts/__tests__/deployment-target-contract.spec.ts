@@ -79,6 +79,13 @@ describe("deployment target consumers", () => {
     }
   });
 
+  it("passes the selected region into every platform Cloud Build waiter", () => {
+    const platform = source(".github/workflows/build-and-deploy.yml");
+
+    expect(platform.match(/--region="\$\{\{ steps\.target\.outputs\.region \}\}"/g))
+      .toHaveLength(5);
+  });
+
   it("passes exact targets into promotion and secret preflight", () => {
     const gateway = source(".github/workflows/gateway-build-operator-base.yml");
     const platform = source(".github/workflows/build-and-deploy.yml");
