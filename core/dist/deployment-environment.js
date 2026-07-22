@@ -10,6 +10,7 @@ const TARGET_LIFECYCLES = [
     "frozen",
 ];
 const TARGET_STRING_FIELDS = [
+    "secretNameSuffix",
     "clusterProjectId",
     "firebaseProjectId",
     "hostingProjectId",
@@ -103,6 +104,7 @@ function settings(targetId, target) {
         name: target.environment,
         targetId,
         lifecycle: target.lifecycle,
+        secretNameSuffix: target.secretNameSuffix,
         clusterProjectId: target.clusterProjectId,
         firebaseProjectId: target.firebaseProjectId,
         hostingProjectId: target.hostingProjectId,

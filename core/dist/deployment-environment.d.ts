@@ -28,6 +28,7 @@ interface StorageDocument {
 interface DeploymentTargetDocument {
     environment: DeploymentEnvironment;
     lifecycle: DeploymentTargetLifecycle;
+    secretNameSuffix: string;
     clusterProjectId: string;
     firebaseProjectId: string;
     hostingProjectId: string;
@@ -57,6 +58,7 @@ export interface DeploymentEnvironmentSettings {
     name: DeploymentEnvironment;
     targetId: string;
     lifecycle: DeploymentTargetLifecycle;
+    secretNameSuffix: string;
     clusterProjectId: string;
     firebaseProjectId: string;
     hostingProjectId: string;

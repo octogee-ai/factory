@@ -35,6 +35,7 @@ interface StorageDocument {
 interface DeploymentTargetDocument {
   environment: DeploymentEnvironment;
   lifecycle: DeploymentTargetLifecycle;
+  secretNameSuffix: string;
   clusterProjectId: string;
   firebaseProjectId: string;
   hostingProjectId: string;
@@ -66,6 +67,7 @@ export interface DeploymentEnvironmentSettings {
   name: DeploymentEnvironment;
   targetId: string;
   lifecycle: DeploymentTargetLifecycle;
+  secretNameSuffix: string;
   clusterProjectId: string;
   firebaseProjectId: string;
   hostingProjectId: string;
@@ -114,6 +116,7 @@ const TARGET_LIFECYCLES: DeploymentTargetLifecycle[] = [
   "frozen",
 ];
 const TARGET_STRING_FIELDS = [
+  "secretNameSuffix",
   "clusterProjectId",
   "firebaseProjectId",
   "hostingProjectId",
@@ -247,6 +250,7 @@ function settings(
     name: target.environment,
     targetId,
     lifecycle: target.lifecycle,
+    secretNameSuffix: target.secretNameSuffix,
     clusterProjectId: target.clusterProjectId,
     firebaseProjectId: target.firebaseProjectId,
     hostingProjectId: target.hostingProjectId,

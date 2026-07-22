@@ -199,6 +199,49 @@ describe("deployment target consumers", () => {
     expect(platformWorkflow).toContain('steps.target.outputs.cloud_sql_gitea_password_secret_name');
   });
 
+  it("scopes internal bootstrap credentials to the exact target", () => {
+    const setupSecrets = source("scripts/setup-secrets.sh");
+    const setupGitea = source("scripts/setup-gitea.sh");
+
+    expect(setupSecrets).toContain('INTERNAL_SECRET_SUFFIX="$TARGET_SECRET_NAME_SUFFIX"');
+    expect(setupSecrets).toContain('GITEA_API_TOKEN_SM_KEY="gitea-api-token-${INTERNAL_SECRET_SUFFIX}"');
+    expect(setupSecrets).toContain('GITEA_ADMIN_PASSWORD_SM_KEY="gitea-admin-password-${INTERNAL_SECRET_SUFFIX}"');
+    expect(setupSecrets).not.toContain('gitea-api-token-${ENV}');
+    expect(setupGitea).toContain('GITEA_API_TOKEN_SM_KEY="gitea-api-token-${TARGET_SECRET_NAME_SUFFIX}"');
+    expect(setupGitea).toContain('GITEA_ADMIN_PASSWORD_SM_KEY="gitea-admin-password-${TARGET_SECRET_NAME_SUFFIX}"');
+    expect(setupGitea).not.toContain('gitea-api-token-${ENV}');
+  });
+
+  it("preserves exact targets through the canonical bootstrap handoff", () => {
+    for (const script of [
+      "scripts/setup-secrets.sh",
+      "scripts/setup-mattermost.sh",
+      "scripts/setup-gitea.sh",
+    ]) {
+      expect(source(script), script).toContain('TARGET_ARG=" --deployment-target=$TARGET_ID"');
+    }
+
+    const teardown = source("scripts/teardown-env.sh");
+    expect(teardown).toContain("--deployment-target=*)");
+    expect(teardown).toContain('octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"');
+    expect(teardown).toContain('./scripts/setup-cloud-sql.sh --target=$TARGET_ID');
+    expect(teardown).toContain('TARGET_ARG=" --deployment-target=$TARGET_ID"');
+  });
+
+  it("selects candidate data and cluster targets in canonical finalizers", () => {
+    for (const script of [
+      "scripts/setup-firestore-ttls.sh",
+      "scripts/verify-env.sh",
+    ]) {
+      const contents = source(script);
+      expect(contents, script).toContain("--deployment-target=*)");
+      expect(contents, script).toContain(
+        'octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"',
+      );
+      expect(contents, script).toContain("does not belong to environment");
+    }
+  });
+
   it("resolves registry paths in gateway promotion code", () => {
     for (const script of [
       "scripts/ops/promote-gateway.ts",

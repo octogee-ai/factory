@@ -70,6 +70,8 @@ GCP_PROJECT="$TARGET_FIREBASE_PROJECT"
 CLUSTER_PROJECT="$TARGET_CLUSTER_PROJECT"
 CLUSTER_NAME="$TARGET_CLUSTER_NAME"
 K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
+INTERNAL_SECRET_SUFFIX="$TARGET_SECRET_NAME_SUFFIX"
+TARGET_ARG=" --deployment-target=$TARGET_ID"
 
 case "$ENV" in
   prod)
@@ -94,6 +96,8 @@ case "$ENV" in
     ENV_FILE="$REPO_DIR/.env.$CUSTOM_NS"
     ENV_LABEL="🟣 CUSTOM ($CUSTOM_NS)"
     GITEA_SVC="octogee-gitea-http"
+    INTERNAL_SECRET_SUFFIX="custom"
+    TARGET_ARG=""
     ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
 esac
@@ -158,8 +162,14 @@ info "This script owns Gitea bootstrap/app state: admin token, org existence, an
 
 # ── 1. Get Gitea admin password ───────────────────────────────────────────
 info "Reading Gitea admin password from Secret Manager..."
+GITEA_ADMIN_PASSWORD_SM_KEY="gitea-admin-password-${TARGET_SECRET_NAME_SUFFIX}"
+GITEA_API_TOKEN_SM_KEY="gitea-api-token-${TARGET_SECRET_NAME_SUFFIX}"
+if [[ "$ENV" == "custom" ]]; then
+  GITEA_ADMIN_PASSWORD_SM_KEY="gitea-admin-password-${INTERNAL_SECRET_SUFFIX}"
+  GITEA_API_TOKEN_SM_KEY="gitea-api-token-${INTERNAL_SECRET_SUFFIX}"
+fi
 GITEA_ADMIN_PASS=$(gcloud secrets versions access latest \
-  --secret="gitea-admin-password-${ENV}" --project=octogee 2>/dev/null || echo "")
+  --secret="$GITEA_ADMIN_PASSWORD_SM_KEY" --project=octogee 2>/dev/null || echo "")
 
 if [[ -z "$GITEA_ADMIN_PASS" ]]; then
   # Fall back to the secret embedded in the K8s secret
@@ -167,7 +177,7 @@ if [[ -z "$GITEA_ADMIN_PASS" ]]; then
     -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
 fi
 
-[[ -n "$GITEA_ADMIN_PASS" ]] || fail "Could not find Gitea admin password. Check Secret Manager: gitea-admin-password-${ENV}"
+[[ -n "$GITEA_ADMIN_PASS" ]] || fail "Could not find Gitea admin password. Check Secret Manager: $GITEA_ADMIN_PASSWORD_SM_KEY"
 ok "Admin password retrieved"
 
 # ── 2. Wait for Gitea ────────────────────────────────────────────────────
@@ -290,13 +300,13 @@ save_env "GIT_API_TOKEN" "$GIT_API_TOKEN"
 ok "Token saved to $ENV_FILE"
 
 # Store in Secret Manager (safe to re-add same version)
-echo -n "$GIT_API_TOKEN" | gcloud secrets versions add "gitea-api-token-${ENV}" \
+echo -n "$GIT_API_TOKEN" | gcloud secrets versions add "$GITEA_API_TOKEN_SM_KEY" \
   --data-file=- --project=octogee 2>/dev/null || \
-echo -n "$GIT_API_TOKEN" | gcloud secrets create "gitea-api-token-${ENV}" \
+echo -n "$GIT_API_TOKEN" | gcloud secrets create "$GITEA_API_TOKEN_SM_KEY" \
   --data-file=- --project=octogee \
   --replication-policy=user-managed --locations="$TARGET_REGION" 2>/dev/null || \
 warn "Could not save token to Secret Manager — it's in .env file"
-ok "Token saved to Secret Manager: gitea-api-token-${ENV}"
+ok "Token saved to Secret Manager: $GITEA_API_TOKEN_SM_KEY"
 
 # ── 7. Apply K8s secret (atomic) ─────────────────────────────────────────
 info "Applying gitea-token K8s secret..."
@@ -320,18 +330,18 @@ echo ""
 if [[ -n "$GIT_API_TOKEN" ]]; then
   ok "Gitea bootstrap state looks healthy"
   echo ""
-  echo "  Next (canonical sequence — see teardown-env.sh --env=$ENV for the full 9 steps):"
-  echo "    5. ./scripts/setup-secrets.sh --env=$ENV   # Phase 2 — re-materialize gitea-token + mattermost-gateway"
+  echo "  Next (canonical sequence — see teardown-env.sh --env=$ENV$TARGET_ARG for the full 9 steps):"
+  echo "    5. ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG   # Phase 2 — re-materialize gitea-token + mattermost-gateway"
   echo "    6. kubectl rollout restart deploy -n $K8S_NAMESPACE"
   echo "    7. firebase deploy --project $GCP_PROJECT"
-  echo "    8. (cd scripts && npx tsx ops/seed-orchestrator-config.ts --env=$ENV)"
-  echo "    9. ./scripts/verify-env.sh --env=$ENV"
+  echo "    8. (cd scripts && npx tsx ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG)"
+  echo "    9. ./scripts/verify-env.sh --env=$ENV$TARGET_ARG"
 else
   warn "Gitea bootstrap is incomplete"
   echo ""
   echo "  Next steps:"
   echo "    1. Review the token/org warnings above"
-  echo "    2. Re-run ./scripts/setup-gitea.sh --env=$ENV"
+  echo "    2. Re-run ./scripts/setup-gitea.sh --env=$ENV$TARGET_ARG"
   echo "    3. Do not trust repo provisioning until gitea-token is present"
 fi
 
@@ -343,5 +353,5 @@ echo ""
 echo "  Org:    octogee"
 echo "  Token:  saved to $ENV_FILE + Secret Manager"
 echo ""
-echo "  Next (canonical step 5): ./scripts/setup-secrets.sh --env=$ENV"
+echo "  Next (canonical step 5): ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG"
 echo ""

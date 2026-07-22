@@ -9,6 +9,7 @@
         "prod-central": {
             "environment": "prod",
             "lifecycle": "active",
+            "secretNameSuffix": "prod",
             "clusterProjectId": "octogee",
             "firebaseProjectId": "octogee",
             "hostingProjectId": "octogee",
@@ -52,6 +53,7 @@
         "prod-west": {
             "environment": "prod",
             "lifecycle": "candidate",
+            "secretNameSuffix": "prod-west",
             "clusterProjectId": "octogee",
             "firebaseProjectId": "octogee-data-prod",
             "hostingProjectId": "octogee",
@@ -95,6 +97,7 @@
         "test-central": {
             "environment": "test",
             "lifecycle": "active",
+            "secretNameSuffix": "test",
             "clusterProjectId": "octogee",
             "firebaseProjectId": "octogee-test",
             "hostingProjectId": "octogee-test",
@@ -138,6 +141,7 @@
         "test-west": {
             "environment": "test",
             "lifecycle": "candidate",
+            "secretNameSuffix": "test-west",
             "clusterProjectId": "octogee",
             "firebaseProjectId": "octogee-data-test",
             "hostingProjectId": "octogee-test",
@@ -181,6 +185,7 @@
         "build-week-central": {
             "environment": "build-week",
             "lifecycle": "frozen",
+            "secretNameSuffix": "build-week",
             "clusterProjectId": "octogee",
             "firebaseProjectId": "octogee-build-week",
             "hostingProjectId": "octogee-build-week",

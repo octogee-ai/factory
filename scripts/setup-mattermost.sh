@@ -72,6 +72,7 @@ GCP_PROJECT="$TARGET_FIREBASE_PROJECT"
 CLUSTER_PROJECT="$TARGET_CLUSTER_PROJECT"
 CLUSTER_NAME="$TARGET_CLUSTER_NAME"
 K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
+TARGET_ARG=" --deployment-target=$TARGET_ID"
 
 case "$ENV" in
   prod)
@@ -100,6 +101,7 @@ case "$ENV" in
     ENV_LABEL="🟣 CUSTOM ($CUSTOM_NS)"
     MM_DB_NAME="mattermost_${CUSTOM_NS//-/_}"
     MM_DB_USER="mattermost"
+    TARGET_ARG=""
     ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
 esac
@@ -570,9 +572,9 @@ echo ""
 if [[ -n "${MM_ADMIN_PAT:-}" && -n "${MM_TEAM_ID:-}" && -n "${MM_ADMIN_USER_ID:-}" ]]; then
   ok "mattermost-gateway inputs are complete"
   echo ""
-  echo "  Next (canonical sequence — see teardown-env.sh --env=$ENV for the full 9 steps):"
-  echo "    4. ./scripts/setup-gitea.sh --env=$ENV"
-  echo "    5. ./scripts/setup-secrets.sh --env=$ENV   # Phase 2 — re-materialize with real MM/Gitea values"
+  echo "  Next (canonical sequence — see teardown-env.sh --env=$ENV$TARGET_ARG for the full 9 steps):"
+  echo "    4. ./scripts/setup-gitea.sh --env=$ENV$TARGET_ARG"
+  echo "    5. ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG   # Phase 2 — re-materialize with real MM/Gitea values"
   echo "    6. kubectl rollout restart deploy -n $K8S_NAMESPACE   # pods pick up new secret env"
   echo ""
   echo "  octogee-api and glm-controller read mattermost-gateway directly."
@@ -587,7 +589,7 @@ else
   echo ""
   echo "  Next steps:"
   echo "    1. Review warnings above"
-  echo "    2. Re-run ./scripts/setup-mattermost.sh --env=$ENV"
+  echo "    2. Re-run ./scripts/setup-mattermost.sh --env=$ENV$TARGET_ARG"
   echo "    3. Do NOT trust admin chat until the missing values are fixed"
 fi
 
@@ -596,5 +598,5 @@ echo -e "${GREEN}═════════════════════
 echo -e "${BOLD}  Mattermost setup complete!${NC}"
 echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
 echo ""
-echo "  Next (canonical step 4): ./scripts/setup-gitea.sh --env=$ENV"
+echo "  Next (canonical step 4): ./scripts/setup-gitea.sh --env=$ENV$TARGET_ARG"
 echo ""

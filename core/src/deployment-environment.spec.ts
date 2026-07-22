@@ -51,6 +51,7 @@ describe("deployment environment registry", () => {
       cloudSqlMattermostPasswordSecretName: "MM_DB_PASSWORD",
       cloudSqlGiteaPasswordSecretName: "gitea-db-password",
       cloudSqlConnectionNameSecretName: "cloud-sql-connection-name",
+      secretNameSuffix: "prod",
       cloudSqlPointInTimeRecoveryEnabled: false,
     });
 
@@ -69,6 +70,7 @@ describe("deployment environment registry", () => {
       cloudSqlMattermostPasswordSecretName: "MM_DB_PASSWORD-octogee-pg-west",
       cloudSqlGiteaPasswordSecretName: "gitea-db-password-octogee-pg-west",
       cloudSqlConnectionNameSecretName: "cloud-sql-connection-name-octogee-pg-west",
+      secretNameSuffix: "prod-west",
       cloudSqlPointInTimeRecoveryEnabled: true,
       kmsLocation: "us-west1",
       storageLocation: "us-west1",
@@ -83,6 +85,7 @@ describe("deployment environment registry", () => {
       cloudSqlMattermostPasswordSecretName: "MM_DB_PASSWORD-octogee-pg-west",
       cloudSqlGiteaPasswordSecretName: "gitea-db-password-octogee-pg-west",
       cloudSqlConnectionNameSecretName: "cloud-sql-connection-name-octogee-pg-west",
+      secretNameSuffix: "test-west",
     });
   });
 

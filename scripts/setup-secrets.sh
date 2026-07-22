@@ -72,6 +72,8 @@ CLUSTER_NAME="$TARGET_CLUSTER_NAME"
 K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
 FIREBASE_PROJECT="$TARGET_FIREBASE_PROJECT"
 SM_PROJECT="$TARGET_CLOUD_SQL_PROJECT"
+INTERNAL_SECRET_SUFFIX="$TARGET_SECRET_NAME_SUFFIX"
+TARGET_ARG=" --deployment-target=$TARGET_ID"
 
 case "$ENV" in
   prod)
@@ -98,6 +100,8 @@ case "$ENV" in
     ENV_FILE="$REPO_DIR/.env.$CUSTOM_NS"
     ENV_LABEL="🟣 CUSTOM ($CUSTOM_NS)"
     NS_SLUG="${CUSTOM_NS//-/_}"
+    INTERNAL_SECRET_SUFFIX="custom"
+    TARGET_ARG=""
     ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
 esac
@@ -281,7 +285,7 @@ ksecret mattermost-gateway \
   --from-literal=admin_user_id="$MM_ADMIN_USER_ID"
 
 if [[ -z "$MM_ADMIN_TOKEN" || -z "$MM_TEAM_ID" || -z "$MM_ADMIN_USER_ID" ]]; then
-  warn "mattermost-gateway contains blank bootstrap values. Run ./scripts/setup-mattermost.sh --env=$ENV before trusting this environment."
+  warn "mattermost-gateway contains blank bootstrap values. Run ./scripts/setup-mattermost.sh --env=$ENV$TARGET_ARG before trusting this environment."
 fi
 
 info "approval-signing"
@@ -297,7 +301,7 @@ ksecret approval-signing --from-literal=secret="$APPROVAL_SIGNING_SECRET"
 # buttons users haven't clicked yet. First install:
 # generate. Re-run: reuse what's already in Secret Manager.
 info "agent-control-signing"
-AGENT_CONTROL_SIGNING_SM_KEY="agent-control-signing-${ENV}"
+AGENT_CONTROL_SIGNING_SM_KEY="agent-control-signing-${INTERNAL_SECRET_SUFFIX}"
 [[ "$ENV" == "custom" ]] && AGENT_CONTROL_SIGNING_SM_KEY="agent-control-signing-custom-${CUSTOM_NS}"
 AGENT_CONTROL_SIGNING_SECRET=$(sm_get "$AGENT_CONTROL_SIGNING_SM_KEY" octogee 2>/dev/null || echo "")
 if [[ -z "$AGENT_CONTROL_SIGNING_SECRET" ]]; then
@@ -318,7 +322,7 @@ ksecret agent-control-signing --from-literal=secret="$AGENT_CONTROL_SIGNING_SECR
 
 # ── 2c. Mattermost callback router signing secret ─────────────────────────
 info "agent-control-router"
-AGENT_CONTROL_ROUTER_SM_KEY="agent-control-router-${ENV}"
+AGENT_CONTROL_ROUTER_SM_KEY="agent-control-router-${INTERNAL_SECRET_SUFFIX}"
 [[ "$ENV" == "custom" ]] && AGENT_CONTROL_ROUTER_SM_KEY="agent-control-router-custom-${CUSTOM_NS}"
 AGENT_CONTROL_ROUTER_SECRET=$(sm_get "$AGENT_CONTROL_ROUTER_SM_KEY" octogee 2>/dev/null || echo "")
 if [[ -z "$AGENT_CONTROL_ROUTER_SECRET" ]]; then
@@ -338,7 +342,7 @@ ksecret agent-control-router --from-literal=secret="$AGENT_CONTROL_ROUTER_SECRET
 
 # ── 2d. BYOT sync internal signing secret ─────────────────────────────────
 info "byot-sync-internal"
-BYOT_SYNC_INTERNAL_SM_KEY="byot-sync-internal-${ENV}"
+BYOT_SYNC_INTERNAL_SM_KEY="byot-sync-internal-${INTERNAL_SECRET_SUFFIX}"
 [[ "$ENV" == "custom" ]] && BYOT_SYNC_INTERNAL_SM_KEY="byot-sync-internal-custom-${CUSTOM_NS}"
 BYOT_SYNC_INTERNAL_SECRET=$(sm_get "$BYOT_SYNC_INTERNAL_SM_KEY" octogee 2>/dev/null || echo "")
 if [[ -z "$BYOT_SYNC_INTERNAL_SECRET" ]]; then
@@ -358,14 +362,15 @@ ksecret byot-sync-internal --from-literal=secret="$BYOT_SYNC_INTERNAL_SECRET"
 
 # ── 3. Gitea admin ────────────────────────────────────────────────────────
 info "gitea-admin"
-GITEA_ADMIN_PASS=$(sm_get "gitea-admin-password-${ENV}" octogee 2>/dev/null || echo "")
+GITEA_ADMIN_PASSWORD_SM_KEY="gitea-admin-password-${INTERNAL_SECRET_SUFFIX}"
+GITEA_ADMIN_PASS=$(sm_get "$GITEA_ADMIN_PASSWORD_SM_KEY" octogee 2>/dev/null || echo "")
 if [[ -z "$GITEA_ADMIN_PASS" ]]; then
   GITEA_ADMIN_PASS=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 32)
   info "  Generated new Gitea admin password — saving to Secret Manager..."
-  echo -n "$GITEA_ADMIN_PASS" | gcloud secrets create "gitea-admin-password-${ENV}" \
+  echo -n "$GITEA_ADMIN_PASS" | gcloud secrets create "$GITEA_ADMIN_PASSWORD_SM_KEY" \
     --data-file=- --project=octogee \
     --replication-policy=user-managed --locations="$TARGET_REGION" 2>/dev/null || \
-  echo -n "$GITEA_ADMIN_PASS" | gcloud secrets versions add "gitea-admin-password-${ENV}" \
+  echo -n "$GITEA_ADMIN_PASS" | gcloud secrets versions add "$GITEA_ADMIN_PASSWORD_SM_KEY" \
     --data-file=- --project=octogee 2>/dev/null || true
 fi
 ksecret gitea-admin \
@@ -401,11 +406,12 @@ ksecret gitea-credentials \
 
 # ── 5. Gitea API token (may not exist yet — created by setup-gitea.sh) ────
 info "gitea-token"
-GIT_API_TOKEN=$(sm_get "gitea-api-token-${ENV}" octogee 2>/dev/null || echo "")
+GITEA_API_TOKEN_SM_KEY="gitea-api-token-${INTERNAL_SECRET_SUFFIX}"
+GIT_API_TOKEN=$(sm_get "$GITEA_API_TOKEN_SM_KEY" octogee 2>/dev/null || echo "")
 if [[ -n "$GIT_API_TOKEN" ]]; then
   ksecret gitea-token --from-literal=token="$GIT_API_TOKEN"
 else
-  warn "gitea-api-token-${ENV} not in Secret Manager yet — run setup-gitea.sh after Helm to create it"
+  warn "$GITEA_API_TOKEN_SM_KEY not in Secret Manager yet — run setup-gitea.sh after Helm to create it"
   ksecret gitea-token --from-literal=token=""
 fi
 
@@ -559,7 +565,7 @@ ksecret google-oauth \
 # generate. Re-run: reuse what's already in Secret Manager. Its absence makes
 # every connect throw "CONNECT_STATE_SECRET environment variable is required".
 info "connect-state-secret"
-CONNECT_STATE_SM_KEY="connect-state-secret-${ENV}"
+CONNECT_STATE_SM_KEY="connect-state-secret-${INTERNAL_SECRET_SUFFIX}"
 [[ "$ENV" == "custom" ]] && CONNECT_STATE_SM_KEY="connect-state-secret-custom-${CUSTOM_NS}"
 CONNECT_STATE_SECRET=$(sm_get "$CONNECT_STATE_SM_KEY" octogee 2>/dev/null || echo "")
 if [[ -z "$CONNECT_STATE_SECRET" ]]; then
@@ -1019,8 +1025,8 @@ if [[ -z "${MM_ADMIN_TOKEN:-}" || -z "${MM_TEAM_ID:-}" || -z "${MM_ADMIN_USER_ID
   warn "Mattermost-related secret state is incomplete"
   echo ""
   echo "  Next steps:"
-  echo "    1. Run ./scripts/setup-mattermost.sh --env=$ENV"
-  echo "    2. Re-run ./scripts/setup-secrets.sh --env=$ENV $(if [[ "$YES" == "true" ]]; then echo "--yes"; fi) if you want a clean re-materialization"
+  echo "    1. Run ./scripts/setup-mattermost.sh --env=$ENV$TARGET_ARG"
+  echo "    2. Re-run ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG $(if [[ "$YES" == "true" ]]; then echo "--yes"; fi) if you want a clean re-materialization"
   echo "    3. Do not trust customer provisioning until those values are present"
 else
   ok "Required Mattermost secret inputs are present"
@@ -1033,7 +1039,7 @@ echo -e "${GREEN}═════════════════════
 echo ""
 VALUES_FILE="values.${ENV}.yaml"
 [[ "$ENV" == "custom" ]] && VALUES_FILE="values.$CUSTOM_NS.yaml (rendered from template)"
-echo "  Canonical sequence (run teardown-env.sh --env=$ENV to see all 9 steps)."
+echo "  Canonical sequence (run teardown-env.sh --env=$ENV$TARGET_ARG to see all 9 steps)."
 echo ""
 echo "  Next (Phase 1 → Helm):"
     echo "    GITEA_DB_PASS=\$(gcloud secrets versions access latest --secret=$TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET --project=$SM_PROJECT)"

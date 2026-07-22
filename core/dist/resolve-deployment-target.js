@@ -39,6 +39,7 @@ function deploymentTargetOutput(settings) {
         environment: settings.name,
         target_id: settings.targetId,
         lifecycle: settings.lifecycle,
+        secret_name_suffix: settings.secretNameSuffix,
         cluster_project_id: settings.clusterProjectId,
         firebase_project_id: settings.firebaseProjectId,
         hosting_project_id: settings.hostingProjectId,

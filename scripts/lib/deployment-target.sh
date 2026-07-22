@@ -18,6 +18,7 @@ octogee_load_deployment_target() {
       environment) TARGET_ENVIRONMENT="$value" ;;
       target_id) TARGET_ID="$value" ;;
       lifecycle) TARGET_LIFECYCLE="$value" ;;
+      secret_name_suffix) TARGET_SECRET_NAME_SUFFIX="$value" ;;
       cluster_project_id) TARGET_CLUSTER_PROJECT="$value" ;;
       firebase_project_id) TARGET_FIREBASE_PROJECT="$value" ;;
       hosting_project_id) TARGET_HOSTING_PROJECT="$value" ;;
@@ -54,7 +55,7 @@ octogee_load_deployment_target() {
     esac
   done <<< "$output"
 
-  export TARGET_ENVIRONMENT TARGET_ID TARGET_LIFECYCLE
+  export TARGET_ENVIRONMENT TARGET_ID TARGET_LIFECYCLE TARGET_SECRET_NAME_SUFFIX
   export TARGET_CLUSTER_PROJECT TARGET_FIREBASE_PROJECT TARGET_HOSTING_PROJECT
   export TARGET_REGION TARGET_CLUSTER_NAME TARGET_KUBE_CONTEXT TARGET_NAMESPACE
   export TARGET_AR_PROJECT TARGET_AR_LOCATION TARGET_AR_NAME TARGET_AR_REPOSITORY

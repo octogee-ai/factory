@@ -62,6 +62,7 @@ WARNINGS=()
 FIX=false
 ENV=""
 CUSTOM_NS=""
+DEPLOYMENT_TARGET=""
 INFRA_FAILS=0
 SECRET_FAILS=0
 BOOTSTRAP_FAILS=0
@@ -70,23 +71,33 @@ CONTEXT_SECTION=""
 for arg in "$@"; do
   case $arg in
     --env=*)       ENV="${arg#*=}" ;;
+    --deployment-target=*) DEPLOYMENT_TARGET="${arg#*=}" ;;
     --namespace=*) CUSTOM_NS="${arg#*=}" ;;
     --fix)         FIX=true ;;
     --help|-h)
-      echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--fix]"
+      echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--fix]"
       exit 0 ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
 
 if [[ -z "$ENV" ]]; then
-  echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME] [--fix]"
+  echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--fix]"
   exit 1
 fi
 
 TARGET_ENV="$ENV"
 [[ "$TARGET_ENV" == "custom" ]] && TARGET_ENV="test"
-octogee_load_deployment_target "--environment=$TARGET_ENV"
+if [[ -n "$DEPLOYMENT_TARGET" ]]; then
+  [[ "$ENV" == "custom" ]] && { echo "--deployment-target cannot be used with --env=custom"; exit 1; }
+  octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"
+  [[ "$TARGET_ENVIRONMENT" == "$TARGET_ENV" ]] || {
+    echo "Deployment target '$DEPLOYMENT_TARGET' does not belong to environment '$ENV'"
+    exit 1
+  }
+else
+  octogee_load_deployment_target "--environment=$TARGET_ENV"
+fi
 K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
 CLUSTER_NAME="$TARGET_CLUSTER_NAME"
 CLUSTER_PROJECT="$TARGET_CLUSTER_PROJECT"

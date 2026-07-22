@@ -51,7 +51,14 @@ describe("seed-orchestrator-config args", () => {
       "--dry-run",
     ])).toEqual({
       kind: "ok",
-      args: { env: "test", defaultGateway: "canary", force: true, dryRun: true },
+      args: {
+        env: "test",
+        deploymentTargetId: "test-central",
+        firebaseProjectId: "octogee-test",
+        defaultGateway: "canary",
+        force: true,
+        dryRun: true,
+      },
     });
     expect(parseSeedOrchestratorConfigArgs([])).toMatchObject({ kind: "error" });
     expect(parseSeedOrchestratorConfigArgs(["--help"])).toEqual({ kind: "help" });
