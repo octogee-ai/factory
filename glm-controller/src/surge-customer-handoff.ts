@@ -53,6 +53,8 @@ interface SessionDigest {
   sha256: string;
 }
 
+class SurgeTargetCleanupError extends Error {}
+
 export interface SurgeCustomerHandoffDeps {
   listPods: (gatewayId: string) => Promise<SurgePodSnapshot>;
   readPodHealth: (pod: SurgePod) => Promise<SurgePodHealth | null>;
@@ -235,35 +237,57 @@ async function transferAssignments(
 ): Promise<void> {
   const { input, assignments, sourcePod, targetPod, ownedBy } = context;
   for (const assignment of assignments) {
-    await deps.quiesce({
-      gatewayId: input.gatewayId,
-      slug: assignment.slug,
-      operationId: ownedBy,
-      sourcePod,
-    });
-    await deps.transfer({
-      gatewayId: input.gatewayId,
-      slug: assignment.slug,
-      operationId: ownedBy,
-      sourcePod,
-      targetPod,
-    });
-    const [sourceDigest, targetDigest] = await Promise.all([
-      deps.readDurableSessionDigest({
+    let targetTouched = false;
+    try {
+      await deps.quiesce({
         gatewayId: input.gatewayId,
         slug: assignment.slug,
         operationId: ownedBy,
-        pod: sourcePod,
-      }),
-      deps.readDurableSessionDigest({
+        sourcePod,
+      });
+      targetTouched = true;
+      await deps.transfer({
         gatewayId: input.gatewayId,
         slug: assignment.slug,
         operationId: ownedBy,
-        pod: targetPod,
-      }),
-    ]);
-    if (!sameDigest(sourceDigest, targetDigest)) {
-      throw new Error(`durable session digest mismatch for ${assignment.slug}`);
+        sourcePod,
+        targetPod,
+      });
+      const [sourceDigest, targetDigest] = await Promise.all([
+        deps.readDurableSessionDigest({
+          gatewayId: input.gatewayId,
+          slug: assignment.slug,
+          operationId: ownedBy,
+          pod: sourcePod,
+        }),
+        deps.readDurableSessionDigest({
+          gatewayId: input.gatewayId,
+          slug: assignment.slug,
+          operationId: ownedBy,
+          pod: targetPod,
+        }),
+      ]);
+      if (!sameDigest(sourceDigest, targetDigest)) {
+        throw new Error(`durable session digest mismatch for ${assignment.slug}`);
+      }
+    } catch (error) {
+      if (targetTouched) {
+        try {
+          await deps.discardTargetCustomer({
+            gatewayId: input.gatewayId,
+            slug: assignment.slug,
+            operationId: ownedBy,
+            targetPod,
+          });
+        } catch (cleanupError) {
+          throw new SurgeTargetCleanupError(
+            `surge target cleanup failed; admission remains closed: ` +
+            `${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+            { cause: error },
+          );
+        }
+      }
+      throw error;
     }
   }
 }
@@ -358,22 +382,7 @@ async function migrateAssignmentsAndReleaseTarget(
       ownedBy,
     });
   } catch (error) {
-    try {
-      for (const assignment of assignments) {
-        await deps.discardTargetCustomer({
-          gatewayId: input.gatewayId,
-          slug: assignment.slug,
-          operationId: ownedBy,
-          targetPod,
-        });
-      }
-    } catch (cleanupError) {
-      throw new Error(
-        `surge target cleanup failed; admission remains closed: ` +
-        `${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
-        { cause: error },
-      );
-    }
+    if (error instanceof SurgeTargetCleanupError) throw error;
     await restoreOwnedAssignments(deps, input.gatewayId, assignments, ownedBy);
     throw error;
   }

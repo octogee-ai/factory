@@ -172,6 +172,8 @@ function authed(req: request.Test) {
   return req;
 }
 
+const BENDER_KEY_OWNER = "bender/octogee-gateway-bender-5bc5949d46-p946t";
+
 describe("internal gitea-admin route", () => {
   beforeEach(() => {
     process.env.GATEWAY_ID = "bender";
@@ -195,7 +197,11 @@ describe("internal gitea-admin route", () => {
     ).send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
     expect(res.status).toBe(204);
     expect(readAssignedSlugsForGateway).toHaveBeenCalledWith(expect.anything(), "bender");
-    expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith("acme", "ssh-ed25519 AAA");
+    expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith(
+      "acme",
+      "ssh-ed25519 AAA",
+      BENDER_KEY_OWNER,
+    );
   });
 
   it("release-user-key removes only the authenticated gateway pod's submitted key", async () => {
@@ -206,6 +212,21 @@ describe("internal gitea-admin route", () => {
     expect(giteaAdmin.deleteGiteaUserPubKey).toHaveBeenCalledWith(
       "acme",
       "ssh-ed25519 OLD predecessor",
+      BENDER_KEY_OWNER,
+    );
+  });
+
+  it("lets a predecessor pod release only its owner-bound key after cutover", async () => {
+    const res = await authed(
+      request(app()).post("/internal/gitea/release-user-key"),
+    ).send({ slug: "acme", pubKey: "ssh-ed25519 OLD predecessor" });
+
+    expect(res.status).toBe(204);
+    expect(readAssignedSlugsForGateway).not.toHaveBeenCalled();
+    expect(giteaAdmin.deleteGiteaUserPubKey).toHaveBeenCalledWith(
+      "acme",
+      "ssh-ed25519 OLD predecessor",
+      BENDER_KEY_OWNER,
     );
   });
 
@@ -219,7 +240,11 @@ describe("internal gitea-admin route", () => {
 
     expect(res.status).toBe(204);
     expect(readAssignedSlugsForGateway).toHaveBeenCalledWith(expect.anything(), "bender");
-    expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith("acme", "ssh-ed25519 AAA");
+    expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith(
+      "acme",
+      "ssh-ed25519 AAA",
+      BENDER_KEY_OWNER,
+    );
   });
 
   it("ensure-user → 403 when slug is not assigned to this gateway, before touching Gitea", async () => {
@@ -256,7 +281,11 @@ describe("internal gitea-admin route", () => {
     ).send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
 
     expect(res.status).toBe(204);
-    expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith("acme", "ssh-ed25519 AAA");
+    expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith(
+      "acme",
+      "ssh-ed25519 AAA",
+      BENDER_KEY_OWNER,
+    );
   });
 
   it("denies a pod outside the gateway's own Deployment from bootstrapping the configured builder", async () => {
@@ -286,7 +315,11 @@ describe("internal gitea-admin route", () => {
       .send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
 
     expect(res.status).toBe(204);
-    expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith("acme", "ssh-ed25519 AAA");
+    expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith(
+      "acme",
+      "ssh-ed25519 AAA",
+      BENDER_KEY_OWNER,
+    );
   });
 
   it("denies bootstrap without an authenticated pod identity", async () => {
@@ -314,7 +347,11 @@ describe("internal gitea-admin route", () => {
       .send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
 
     expect(res.status).toBe(204);
-    expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith("acme", "ssh-ed25519 AAA");
+    expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith(
+      "acme",
+      "ssh-ed25519 AAA",
+      BENDER_KEY_OWNER,
+    );
   });
 
   it("denies unassigned slugs when the inbound migration helper does not allow them", async () => {

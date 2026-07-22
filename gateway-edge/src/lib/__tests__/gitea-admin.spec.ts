@@ -102,6 +102,28 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
+    it("replaces only the retrying pod's prior key and keeps the predecessor key", async () => {
+      fetchMock
+        .mockResolvedValueOnce(res(422, {}))
+        .mockResolvedValueOnce(res(200, [
+          { id: 7, title: "octogee-gateway-predecessor", key: "ssh-ed25519 OLD" },
+          { id: 9, title: "octogee-gateway-b1171f5ba2aca02a", key: "ssh-ed25519 STALE" },
+        ]))
+        .mockResolvedValueOnce(res(204))
+        .mockResolvedValueOnce(res(201, {}));
+      const { ensureGiteaUser } = await import("../gitea-admin.js");
+      await ensureGiteaUser("acme", "ssh-ed25519 NEW", "bender/pod-new");
+
+      const calls = callsTo(fetchMock);
+      expect(calls.filter((call) => call.method === "DELETE")).toEqual([
+        expect.objectContaining({ url: `${BASE}/admin/users/ws-acme/keys/9` }),
+      ]);
+      expect(calls.at(-1)).toMatchObject({
+        method: "POST",
+        body: { title: "octogee-gateway-b1171f5ba2aca02a", key: "ssh-ed25519 NEW" },
+      });
+    });
+
     it("accepts a concurrent registration only after confirming the requested key exists", async () => {
       fetchMock
         .mockResolvedValueOnce(res(422, {}))
@@ -211,6 +233,16 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
           method: "DELETE",
         }),
       ]);
+    });
+
+    it("cannot delete another pod's managed key even when its public key is submitted", async () => {
+      fetchMock.mockResolvedValueOnce(res(200, [
+        { id: 7, title: "octogee-gateway-predecessor", key: "ssh-ed25519 OLD" },
+      ]));
+      const { deleteGiteaUserPubKey } = await import("../gitea-admin.js");
+      await deleteGiteaUserPubKey("acme", "ssh-ed25519 OLD", "bender/pod-new");
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
     it("treats an already-cleaned retiring key as an idempotent success", async () => {

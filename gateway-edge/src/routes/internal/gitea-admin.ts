@@ -92,6 +92,15 @@ function gatewayCallerForRequest(req: Request): GatewayCaller | null {
   return null;
 }
 
+function gatewayKeyOwnerForRequest(req: Request, res: Response): string | null {
+  const caller = gatewayCallerForRequest(req);
+  if (!caller?.podName) {
+    res.status(403).json({ error: "gateway pod identity is required for SSH key ownership" });
+    return null;
+  }
+  return `${caller.gatewayId}/${caller.podName}`;
+}
+
 async function requireAssignedHere(req: Request, res: Response, slug: string): Promise<boolean> {
   const caller = gatewayCallerForRequest(req);
   if (!caller) {
@@ -142,7 +151,9 @@ router.post("/ensure-user", async (req: Request, res: Response) => {
     return;
   }
   if (!(await requireAssignedHere(req, res, slug))) return;
-  await broker(res, "ensure-user", () => ensureGiteaUser(slug, pubKey));
+  const keyOwner = gatewayKeyOwnerForRequest(req, res);
+  if (!keyOwner) return;
+  await broker(res, "ensure-user", () => ensureGiteaUser(slug, pubKey, keyOwner));
 });
 
 router.post("/release-user-key", async (req: Request, res: Response) => {
@@ -152,8 +163,9 @@ router.post("/release-user-key", async (req: Request, res: Response) => {
     res.status(400).json({ error: "pubKey must be a valid SSH public key" });
     return;
   }
-  if (!(await requireAssignedHere(req, res, slug))) return;
-  await broker(res, "release-user-key", () => deleteGiteaUserPubKey(slug, pubKey));
+  const keyOwner = gatewayKeyOwnerForRequest(req, res);
+  if (!keyOwner) return;
+  await broker(res, "release-user-key", () => deleteGiteaUserPubKey(slug, pubKey, keyOwner));
 });
 
 router.get("/user-pubkey", async (req: Request, res: Response) => {

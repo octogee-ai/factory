@@ -10,7 +10,6 @@ export interface PlatformTrialConfig {
     schemaVersion: typeof TRIAL_CONFIG_SCHEMA_VERSION;
     defaultPersonalTier: PersonalTierName;
     defaultBuilderTier: TrialBuilderTier;
-    releaseSourceGatewayId: string;
     updatedAt?: unknown;
     updatedBy?: string;
 }

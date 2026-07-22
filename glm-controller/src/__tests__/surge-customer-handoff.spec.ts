@@ -44,6 +44,7 @@ function harness(input: {
   assignments?: SurgeAssignment[];
   targetReleased?: boolean;
   transferError?: Error;
+  transferErrorSlug?: string;
   discardError?: Error;
   markErrorUid?: string;
   releaseErrorBeforeCommit?: Error;
@@ -89,7 +90,9 @@ function harness(input: {
     }),
     transfer: vi.fn(async ({ slug }) => {
       events.push(`transfer:${slug}`);
-      if (input.transferError) throw input.transferError;
+      if (input.transferError && (!input.transferErrorSlug || input.transferErrorSlug === slug)) {
+        throw input.transferError;
+      }
     }),
     discardTargetCustomer: vi.fn(async ({ slug }) => {
       events.push(`discard:${slug}`);
@@ -533,6 +536,33 @@ describe("surge customer handoff", () => {
     ]);
   });
 
+  it("preserves completed target builders when a later transfer fails", async () => {
+    const h = harness({
+      transferError: new Error("bob rsync failed"),
+      transferErrorSlug: "bob",
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+    })).rejects.toThrow("bob rsync failed");
+
+    expect(h.events).toEqual([
+      "assignment:u1:quiescing",
+      "assignment:u2:quiescing",
+      "quiesce:alice",
+      "transfer:alice",
+      "digest:old-uid:alice",
+      "digest:target-uid:alice",
+      "quiesce:bob",
+      "transfer:bob",
+      "discard:bob",
+      "assignment:u1:serving",
+      "assignment:u2:serving",
+    ]);
+  });
+
   it("rolls back an earlier roster gate when a later gate write fails", async () => {
     const h = harness({ markErrorUid: "u2" });
 
@@ -544,8 +574,6 @@ describe("surge customer handoff", () => {
     expect(h.events).toEqual([
       "assignment:u1:quiescing",
       "assignment:u2:quiescing",
-      "discard:alice",
-      "discard:bob",
       "assignment:u1:serving",
     ]);
   });

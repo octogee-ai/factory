@@ -146,12 +146,24 @@ else
   HELM_VALUES_FILE="helm/octogee/values.$ENV.yaml"
 fi
 
-# Per-gateway deployment name (Cowboy installs
-# octogee-gateway-<gatewayId>; the shared gateway id is "default").
-# Resolve via label selector so we don't hardcode the gateway id.
-# Empty when no gateway is deployed yet (Cowboy hasn't reconciled).
+gcloud container clusters get-credentials "$CLUSTER_NAME" \
+  --region "$TARGET_REGION" --project "$CLUSTER_PROJECT" 2>/dev/null || true
+kubectl config use-context "$K8S_CONTEXT" >/dev/null 2>&1 || true
+
+ORCH_OUTPUT=""
+DEFAULT_GATEWAY_ID=""
+if [[ "$ENV" == "custom" ]]; then
+  DEFAULT_GATEWAY_ID="default"
+else
+  ORCH_OUTPUT=$(node "$REPO_DIR/scripts/node_modules/tsx/dist/cli.mjs" "$REPO_DIR/scripts/ops/seed-orchestrator-config.ts" --env="$ENV" --deployment-target="$TARGET_ID" --dry-run 2>&1 || true)
+  DEFAULT_GATEWAY_ID=$(echo "$ORCH_OUTPUT" | sed -nE \
+    -e 's/.*already seeded with ([a-z0-9-]+).*/\1/p' \
+    -e "s/.*defaultGatewayId is '([a-z0-9-]+)'.*/\1/p" | head -1)
+fi
+
 GW_DEPLOYMENT=$(kubectl get deploy -n "$NAMESPACE" --context "$K8S_CONTEXT" \
-  -l app=octogee-gateway -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+  -l "app=octogee-gateway,gateway-instance=$DEFAULT_GATEWAY_ID" \
+  -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
 
 # ── Header ────────────────────────────────────────────────────────────────────
 echo ""
@@ -167,10 +179,6 @@ echo -e "  Time:      $(date '+%Y-%m-%d %H:%M:%S %Z')"
 # ── 1. kubectl context ────────────────────────────────────────────────────────
 set_section infra
 header "1. kubectl Context"
-gcloud container clusters get-credentials "$CLUSTER_NAME" \
-  --region "$TARGET_REGION" --project "$CLUSTER_PROJECT" 2>/dev/null || true
-kubectl config use-context "$K8S_CONTEXT" >/dev/null 2>&1 || true
-
 CURRENT_CTX=$(kubectl config current-context 2>/dev/null || echo "NONE")
 if [[ "$CURRENT_CTX" == "$K8S_CONTEXT" ]]; then
   pass "Context: $CURRENT_CTX"
@@ -330,7 +338,8 @@ else
       warn "Build: $GW_SHA (HEAD is $LATEST_SHA — image may be stale)"
     fi
     # Check for crash loop
-    GW_RESTARTS=$(kubectl get pods -n "$NAMESPACE" -l app=octogee-gateway \
+    GW_RESTARTS=$(kubectl get pods -n "$NAMESPACE" \
+      -l "app=octogee-gateway,gateway-instance=$DEFAULT_GATEWAY_ID" \
       -o jsonpath='{.items[0].status.containerStatuses[?(@.name=="gateway")].restartCount}' \
       2>/dev/null || echo "0")
     if [[ "${GW_RESTARTS:-0}" -gt 5 ]]; then
@@ -352,7 +361,8 @@ else
     fi
   else
     fail "Gateway not ready (readyReplicas=${GW_READY:-0}, desired=${GW_DESIRED:-0})"
-    GW_POD_STATUS=$(kubectl get pods -n "$NAMESPACE" -l app=octogee-gateway \
+    GW_POD_STATUS=$(kubectl get pods -n "$NAMESPACE" \
+      -l "app=octogee-gateway,gateway-instance=$DEFAULT_GATEWAY_ID" \
       -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "unknown")
     info "Pod status: $GW_POD_STATUS"
     if $FIX; then
@@ -712,29 +722,19 @@ fi
 # verify-env confirms it independently so setup drift is caught before a
 # builder is assigned.
 #
-# Probes via the seed script's --dry-run, which already encodes the right
-# defaultGatewayId per env and surfaces drift vs. missing distinctly.
 set_section bootstrap
 header "8b. Orchestrator Config"
 
 if [[ "$ENV" == "custom" ]]; then
   info "Custom namespaces don't use config/orchestrator — skipping"
 else
-  ORCH_OUTPUT=$(node "$REPO_DIR/scripts/node_modules/tsx/dist/cli.mjs" "$REPO_DIR/scripts/ops/seed-orchestrator-config.ts" --env="$ENV" --deployment-target="$TARGET_ID" --dry-run 2>&1 || true)
-  if echo "$ORCH_OUTPUT" | grep -q "already seeded"; then
-    pass "config/orchestrator.defaultGatewayId = default (matches expected)"
+  if [[ -n "$DEFAULT_GATEWAY_ID" ]]; then
+    pass "config/orchestrator.defaultGatewayId = $DEFAULT_GATEWAY_ID"
   elif echo "$ORCH_OUTPUT" | grep -q "(DRY-RUN) seeding"; then
     fail "config/orchestrator missing — every new signup will stall with reason 'config-missing'"
     if $FIX; then
       echo -e "  ${YELLOW}FIX:${NC} node scripts/node_modules/tsx/dist/cli.mjs scripts/ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG"
       echo -e "  ${YELLOW}     ${NC} then re-fire pending placements with the same tsx CLI and scripts/ops/assign-customer-gateway.ts --env=$ENV --all"
-    fi
-  elif echo "$ORCH_OUTPUT" | grep -q "OVERWRITING\|Refusing to overwrite"; then
-    DRIFT_LINE=$(echo "$ORCH_OUTPUT" | grep -E "Refusing|OVERWRITING" | head -1)
-    fail "config/orchestrator drift: $DRIFT_LINE"
-    if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} review with node scripts/node_modules/tsx/dist/cli.mjs scripts/ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG --dry-run"
-      echo -e "  ${YELLOW}     ${NC} overwrite if intentional by replacing --dry-run with --force"
     fi
   elif echo "$ORCH_OUTPUT" | grep -q "SA key not found"; then
     warn "Cannot verify orchestrator config — SA key not found at ~/.openclaw/secrets/$TARGET_FIREBASE_PROJECT-sa-key.json"

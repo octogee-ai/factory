@@ -19,11 +19,6 @@ import { CONNECTOR_OAUTH_REVOCATION_TARGETS } from "@octogee/shared/types/connec
 import { modelRefForCatalogEntry } from "@octogee/shared/types/agent-models";
 import { BUILDER_TIERS, TIERS } from "@octogee/shared/types/billing-tiers";
 import {
-  GATEWAY_RELEASES_SUBCOLLECTION,
-  isReleasePayload,
-  projectGatewayDesiredRootForGateway,
-} from "@octogee/shared/types/gateway-releases";
-import {
   DEFAULT_FREE_TIER_MODEL_REF,
   DEFAULT_OPS_AGENT_MODEL_REF,
   PLATFORM_CONFIG_COLLECTION,
@@ -309,42 +304,16 @@ router.put("/platform-trial-config", async (req, res) => {
     return;
   }
   try {
-    const sourceRef = db.collection("gateways").doc(config.releaseSourceGatewayId);
-    const sourceSnap = await sourceRef.get();
-    const source = projectGatewayDesiredRootForGateway(
-      sourceSnap.data(),
-      config.releaseSourceGatewayId,
-    );
-    if (source === null || source.desiredStatus === "retired") {
-      res.status(400).json({ error: "invalid_release_source" });
-      return;
-    }
-    const releaseSnap = await sourceRef
-      .collection(GATEWAY_RELEASES_SUBCOLLECTION)
-      .doc(String(source.desiredRelease))
-      .get();
-    const release = releaseSnap.data();
-    if (
-      !releaseSnap.exists ||
-      release?.gatewayId !== config.releaseSourceGatewayId ||
-      release.release !== source.desiredRelease ||
-      !isReleasePayload(release.payload)
-    ) {
-      res.status(400).json({ error: "invalid_release_source" });
-      return;
-    }
     await platformTrialDoc().set({
       schemaVersion: config.schemaVersion,
       defaultPersonalTier: config.defaultPersonalTier,
       defaultBuilderTier: config.defaultBuilderTier,
-      releaseSourceGatewayId: config.releaseSourceGatewayId,
       updatedAt: FieldValue.serverTimestamp(),
       updatedBy: req.uid ?? null,
     });
     logger.info("[admin] trial defaults set", {
       defaultPersonalTier: config.defaultPersonalTier,
       defaultBuilderTier: config.defaultBuilderTier,
-      releaseSourceGatewayId: config.releaseSourceGatewayId,
       updatedBy: req.uid,
     });
     res.json({ ok: true });

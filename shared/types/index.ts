@@ -152,6 +152,10 @@ export {
 export type {
   OnboardingOrchestratorConfig,
 } from './orchestrator-placement.js';
+export {
+  resolveContinuousBuilderPlacement,
+  resolveEntitledOwnedGatewayId,
+} from './orchestrator-placement.js';
 export type {
   ModelCatalogProvider,
   ModelCatalogSource,

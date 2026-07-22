@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+
 import {
+  resolveContinuousBuilderPlacement,
   resolveOnboardingPlacementEligibility,
-} from "./orchestrator-placement";
+} from "./orchestrator-placement.js";
 
 describe("onboarding placement eligibility", () => {
   it("accepts only completed identity onboarding with a server-started provisioning state", () => {
@@ -31,5 +33,78 @@ describe("onboarding placement eligibility", () => {
       onboardingStep: "complete",
       provisioning: { status: "queued" },
     })).toEqual({ eligible: false, reason: "provisioning-not-started" });
+  });
+});
+
+const trialBuilder = {
+  trialGrant: {
+    schemaVersion: 1,
+    personalTier: "personal_pro",
+    builderTier: "pro",
+    gatewayId: "builder-alice",
+    configHash: "grant-hash",
+    claimedAt: 1_000,
+  },
+};
+
+describe("resolveContinuousBuilderPlacement", () => {
+  it("moves a live trial Builder to their ready owned gateway", () => {
+    expect(resolveContinuousBuilderPlacement({
+      uid: "uid-alice",
+      userData: trialBuilder,
+      reservation: null,
+      currentGatewayId: "shared-blue",
+      defaultGatewayId: "shared-blue",
+      ownedGateway: {
+        gatewayId: "builder-alice",
+        gatewayClass: "operator",
+        ownerUid: "uid-alice",
+        desiredStatus: "running",
+        ready: true,
+      },
+      now: new Date(1_000),
+    })).toEqual({ targetGatewayId: "builder-alice", ownedGatewayId: "builder-alice" });
+  });
+
+  it("returns expired and unentitled Builders to the configured default", () => {
+    expect(resolveContinuousBuilderPlacement({
+      uid: "uid-alice",
+      userData: trialBuilder,
+      reservation: null,
+      currentGatewayId: "builder-alice",
+      defaultGatewayId: "shared-blue",
+      ownedGateway: null,
+      now: new Date("2027-01-01T00:00:00.000Z"),
+    })).toEqual({ targetGatewayId: "shared-blue", ownedGatewayId: null });
+  });
+
+  it("reports a missing paid gateway so provisioning can be retried", () => {
+    expect(resolveContinuousBuilderPlacement({
+      uid: "uid-paid",
+      userData: { builderSubscription: { tier: "pro", status: "active" } },
+      reservation: { status: "provisioning", gatewayId: "builder-paid" },
+      currentGatewayId: "shared-blue",
+      defaultGatewayId: "shared-blue",
+      ownedGateway: null,
+      now: new Date(1_000),
+    })).toEqual({ targetGatewayId: "shared-blue", ownedGatewayId: "builder-paid" });
+  });
+
+  it("keeps an already assigned owned gateway stable during a heartbeat outage", () => {
+    expect(resolveContinuousBuilderPlacement({
+      uid: "uid-alice",
+      userData: trialBuilder,
+      reservation: null,
+      currentGatewayId: "builder-alice",
+      defaultGatewayId: "shared-blue",
+      ownedGateway: {
+        gatewayId: "builder-alice",
+        gatewayClass: "operator",
+        ownerUid: "uid-alice",
+        desiredStatus: "running",
+        ready: false,
+      },
+      now: new Date(1_000),
+    })).toEqual({ targetGatewayId: "builder-alice", ownedGatewayId: "builder-alice" });
   });
 });

@@ -429,6 +429,26 @@ describe("commitPlacementAtomic", () => {
     expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
   });
 
+  it("strict placement rejects a missing gateway without changing the user mirror", async () => {
+    const { db, store } = mkDb({
+      "users/u1": { tier: "trial" },
+    });
+
+    const result = await commitPlacementAtomic(db, {
+      uid: "u1",
+      slug: "s1",
+      gatewayId: "default",
+      source: "repair",
+      now: 100,
+      mirrorPatch: mirror,
+      requireDurableGateway: true,
+    });
+
+    expect(result).toEqual({ kind: "rejected", reason: "gateway-root-invalid" });
+    expect(store.get("users/u1")).toEqual({ tier: "trial" });
+    expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
+  });
+
   it("commits an onboarding companion document with the placement transaction", async () => {
     const { db, store } = mkDb({
       "users/u1": { tier: "trial" },

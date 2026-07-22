@@ -208,6 +208,35 @@ describe("system config cross-container mutation lease", () => {
     lease?.release();
   });
 
+  it("retries when a released lease owner disappears between directory listing and stat", () => {
+    const openclawDir = tempDir();
+    const lockPath = systemConfigSyncLockPath(openclawDir);
+    const ownerToken = "00000000-0000-4000-8000-000000000001";
+    const ownerPath = path.join(lockPath, ownerToken);
+    fs.mkdirSync(lockPath);
+    fs.writeFileSync(ownerPath, `${ownerToken}\n`);
+    const statSync = fs.statSync.bind(fs);
+    let raced = false;
+    vi.spyOn(fs, "statSync").mockImplementation(((target: fs.PathLike) => {
+      if (!raced && target === ownerPath) {
+        raced = true;
+        fs.unlinkSync(ownerPath);
+        fs.rmdirSync(lockPath);
+      }
+      return statSync(target);
+    }) as typeof fs.statSync);
+
+    const lease = acquireSystemConfigSyncLeaseSync({
+      openclawDir,
+      heartbeatMs: 100,
+      staleAfterMs: 1_000,
+    });
+
+    expect(raced).toBe(true);
+    expect(lease).not.toBeNull();
+    lease?.release();
+  });
+
   it("does not reclaim a live lease while the writer blocks the main thread beyond staleAfterMs", async () => {
     const openclawDir = tempDir();
     const lockPath = systemConfigSyncLockPath(openclawDir);

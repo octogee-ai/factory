@@ -1,0 +1,353 @@
+import { gatewayHeartbeatMatchesImageTag } from "@octogee/shared/types/image-tag";
+
+export interface ReleaseConvergenceBaseline {
+  configuredDefaultGatewayId: string;
+  predecessorPodUids: string[];
+  capturedAt: number;
+}
+
+export interface ReleaseConvergenceGateway {
+  gatewayId: string;
+  desiredStatus: string;
+  gatewayClass: string;
+  desiredRelease: number;
+  liveRelease: number | null;
+  desiredImageTag: string | null;
+}
+
+export interface ReleaseConvergenceRolloutOperation {
+  id: string;
+  gatewayId: string;
+  imageTag: string;
+  status: string;
+  error: string | null;
+}
+
+export interface ReleaseConvergenceRuntime {
+  gatewayId: string;
+  release: number;
+  lifecycle: string;
+  heartbeatStatus: string;
+  heartbeatVersion: string | null;
+  mountedCustomers: string[];
+}
+
+export interface ReleaseConvergenceDeployment {
+  name: string;
+  replicas: number;
+  updatedReplicas: number;
+  readyReplicas: number;
+  availableReplicas: number;
+}
+
+export interface ReleaseConvergencePod {
+  uid: string;
+  name: string;
+  phase: string;
+  ready: boolean;
+  images: Record<string, string>;
+}
+
+export interface ReleaseConvergenceReplicaSet {
+  name: string;
+  current: boolean;
+  desiredReplicas: number;
+  replicas: number;
+}
+
+export interface ReleaseConvergenceSnapshot {
+  expectedImageTag: string;
+  configuredDefaultGatewayId: string;
+  gateways: ReleaseConvergenceGateway[];
+  rolloutOperations: ReleaseConvergenceRolloutOperation[];
+  defaultRuntime: ReleaseConvergenceRuntime | null;
+  defaultAssignments: string[];
+  defaultAssignmentsServing: boolean;
+  deployment: ReleaseConvergenceDeployment | null;
+  pods: ReleaseConvergencePod[];
+  replicaSets: ReleaseConvergenceReplicaSet[];
+}
+
+export interface ReleaseConvergenceAssessment {
+  converged: boolean;
+  failures: string[];
+}
+
+function sortedUnique(values: readonly string[]): string[] {
+  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+}
+
+function difference(left: readonly string[], right: readonly string[]): string[] {
+  const rightSet = new Set(right);
+  return left.filter((value) => !rightSet.has(value));
+}
+
+function displayValues(values: readonly string[]): string {
+  return values.length === 0 ? "none" : values.join(", ");
+}
+
+function imageHasTag(image: string | undefined, expectedImageTag: string): boolean {
+  if (!image) return false;
+  const withoutDigest = image.split("@", 1)[0] ?? "";
+  return withoutDigest.endsWith(`:${expectedImageTag}`);
+}
+
+export function assessReleaseConvergence(
+  snapshot: ReleaseConvergenceSnapshot,
+  baseline: ReleaseConvergenceBaseline,
+): ReleaseConvergenceAssessment {
+  const failures: string[] = [];
+  assessDefaultPointer(snapshot, baseline, failures);
+  const activeGateways = assessFleet(snapshot, failures);
+  assessRolloutOperations(snapshot, failures);
+  const defaultGateway = assessDefaultGateway(snapshot, activeGateways, failures);
+  assessDefaultRuntime(snapshot, defaultGateway, failures);
+  assessDefaultDeployment(snapshot, baseline, failures);
+  assessReplicaSets(snapshot, failures);
+  return { converged: failures.length === 0, failures };
+}
+
+function assessDefaultPointer(
+  snapshot: ReleaseConvergenceSnapshot,
+  baseline: ReleaseConvergenceBaseline,
+  failures: string[],
+): void {
+  if (snapshot.configuredDefaultGatewayId !== baseline.configuredDefaultGatewayId) {
+    failures.push(
+      `configured default changed during release: ${baseline.configuredDefaultGatewayId} -> ${snapshot.configuredDefaultGatewayId}`,
+    );
+  }
+}
+
+function assessFleet(
+  snapshot: ReleaseConvergenceSnapshot,
+  failures: string[],
+): ReleaseConvergenceGateway[] {
+  const activeGateways = snapshot.gateways.filter(
+    (gateway) => gateway.desiredStatus !== "retired",
+  );
+  for (const gateway of activeGateways) {
+    if (gateway.desiredImageTag !== snapshot.expectedImageTag) {
+      failures.push(
+        `gateway ${gateway.gatewayId} desired release is not tagged ${snapshot.expectedImageTag}`,
+      );
+    }
+    if (gateway.desiredRelease !== gateway.liveRelease) {
+      const liveRelease = gateway.liveRelease ?? "none";
+      failures.push(
+        `gateway ${gateway.gatewayId} desired/live release drift: ${gateway.desiredRelease}/${liveRelease}`,
+      );
+    }
+  }
+  return activeGateways;
+}
+
+function assessRolloutOperations(
+  snapshot: ReleaseConvergenceSnapshot,
+  failures: string[],
+): void {
+  for (const operation of snapshot.rolloutOperations) {
+    if (operation.imageTag !== snapshot.expectedImageTag) continue;
+    if (operation.status === "succeeded") continue;
+    const suffix = operation.status === "failed" && operation.error
+      ? `: ${operation.error}`
+      : "";
+    const status = operation.status === "failed" ? "failed" : `is ${operation.status}`;
+    failures.push(
+      `rollout ${operation.id} for ${operation.gatewayId} ${status}${suffix}`,
+    );
+  }
+}
+
+function assessDefaultGateway(
+  snapshot: ReleaseConvergenceSnapshot,
+  activeGateways: ReleaseConvergenceGateway[],
+  failures: string[],
+): ReleaseConvergenceGateway | undefined {
+  const defaultGateway = activeGateways.find(
+    (gateway) => gateway.gatewayId === snapshot.configuredDefaultGatewayId,
+  );
+  if (!defaultGateway) {
+    failures.push(`configured default gateway ${snapshot.configuredDefaultGatewayId} is missing`);
+  } else {
+    if (defaultGateway.desiredStatus !== "running") {
+      failures.push(`configured default gateway is ${defaultGateway.desiredStatus}, not running`);
+    }
+    if (defaultGateway.gatewayClass !== "shared") {
+      failures.push(`configured default gateway class is ${defaultGateway.gatewayClass}, not shared`);
+    }
+    if (defaultGateway.desiredRelease !== defaultGateway.liveRelease) {
+      const liveRelease = defaultGateway.liveRelease ?? "none";
+      failures.push(
+        `configured default desired/live release drift: ${defaultGateway.desiredRelease}/${liveRelease}`,
+      );
+    }
+  }
+  return defaultGateway;
+}
+
+function assessDefaultRuntime(
+  snapshot: ReleaseConvergenceSnapshot,
+  defaultGateway: ReleaseConvergenceGateway | undefined,
+  failures: string[],
+): void {
+  const runtime = snapshot.defaultRuntime;
+  if (!snapshot.defaultAssignmentsServing) {
+    failures.push("configured default has a non-serving assignment");
+  }
+  if (!runtime || runtime.gatewayId !== snapshot.configuredDefaultGatewayId) {
+    failures.push("configured default runtime observation is missing");
+  } else {
+    if (defaultGateway && runtime.release !== defaultGateway.desiredRelease) {
+      failures.push(
+        `configured default runtime release ${runtime.release} is not desired release ${defaultGateway.desiredRelease}`,
+      );
+    }
+    if (runtime.lifecycle !== "serving") {
+      failures.push(`configured default runtime lifecycle is ${runtime.lifecycle}, not serving`);
+    }
+    if (runtime.heartbeatStatus !== "ready") {
+      failures.push(`configured default heartbeat is ${runtime.heartbeatStatus}, not ready`);
+    }
+    if (!gatewayHeartbeatMatchesImageTag(
+      runtime.heartbeatVersion,
+      snapshot.expectedImageTag,
+    )) {
+      failures.push(
+        `configured default heartbeat is not tagged ${snapshot.expectedImageTag}`,
+      );
+    }
+
+    const assigned = sortedUnique(snapshot.defaultAssignments);
+    const mounted = sortedUnique(runtime.mountedCustomers);
+    const missing = difference(assigned, mounted);
+    const orphan = difference(mounted, assigned);
+    if (missing.length > 0 || orphan.length > 0) {
+      failures.push(
+        `default assignment roster does not equal mounted customers (missing: ${displayValues(missing)}; orphan: ${displayValues(orphan)})`,
+      );
+    }
+  }
+}
+
+function deploymentIsSingleReadyReplica(deployment: ReleaseConvergenceDeployment): boolean {
+  return deployment.replicas === 1 &&
+    deployment.updatedReplicas === 1 &&
+    deployment.readyReplicas === 1 &&
+    deployment.availableReplicas === 1;
+}
+
+function assessDefaultDeployment(
+  snapshot: ReleaseConvergenceSnapshot,
+  baseline: ReleaseConvergenceBaseline,
+  failures: string[],
+): void {
+  const deployment = snapshot.deployment;
+  if (!deployment) {
+    failures.push("configured default Deployment is missing");
+  } else if (!deploymentIsSingleReadyReplica(deployment)) {
+    failures.push(
+      "default Deployment does not have exactly one desired, updated, Ready, available replica",
+    );
+  }
+
+  const readyPods = snapshot.pods.filter(
+    (pod) => pod.phase === "Running" && pod.ready,
+  );
+  if (readyPods.length !== 1) {
+    failures.push("default Deployment does not have exactly one Ready current pod");
+  }
+  for (const pod of snapshot.pods) {
+    for (const container of ["gateway", "gateway-edge"] as const) {
+      if (!imageHasTag(pod.images[container], snapshot.expectedImageTag)) {
+        failures.push(
+          `pod ${pod.name} ${container} image is not tagged ${snapshot.expectedImageTag}`,
+        );
+      }
+    }
+  }
+
+  const remainingPredecessors = baseline.predecessorPodUids.filter(
+    (uid) => snapshot.pods.some((pod) => pod.uid === uid),
+  );
+  if (remainingPredecessors.length > 0) {
+    failures.push(`predecessor pods remain: ${remainingPredecessors.join(", ")}`);
+  }
+}
+
+function assessReplicaSets(
+  snapshot: ReleaseConvergenceSnapshot,
+  failures: string[],
+): void {
+  const currentReplicaSets = snapshot.replicaSets.filter((replicaSet) => replicaSet.current);
+  if (currentReplicaSets.length !== 1) {
+    failures.push("default Deployment does not have exactly one current ReplicaSet");
+  }
+  for (const replicaSet of snapshot.replicaSets) {
+    if (
+      !replicaSet.current &&
+      (replicaSet.desiredReplicas !== 0 || replicaSet.replicas !== 0)
+    ) {
+      failures.push(
+        `old ReplicaSet ${replicaSet.name} still has pods (desired=${replicaSet.desiredReplicas}, observed=${replicaSet.replicas})`,
+      );
+    }
+  }
+}
+
+export interface ReleaseConvergenceAlertInput {
+  environment: string;
+  tag: string;
+  commit: string;
+  workflowUrl: string;
+  failures: string[];
+  forbiddenValues: string[];
+  webhookUrl: string;
+  claim: () => Promise<boolean>;
+  post: (url: string, body: string) => Promise<void>;
+}
+
+function redact(value: string, forbiddenValues: readonly string[]): string {
+  const forbiddenRedacted = forbiddenValues.reduce(
+    (text, forbidden) => forbidden.length === 0
+      ? text
+      : text.split(forbidden).join("[redacted]"),
+    value,
+  );
+  return forbiddenRedacted.split(/(\s+)/u).map((token) => {
+    const at = token.indexOf("@");
+    const dot = token.indexOf(".", at + 2);
+    return at > 0 && dot > at + 1 && dot < token.length - 1 ? "[redacted-email]" : token;
+  }).join("");
+}
+
+export async function deliverReleaseConvergenceAlert(
+  input: ReleaseConvergenceAlertInput,
+): Promise<void> {
+  const claimed = await input.claim();
+  if (!claimed) return;
+
+  const originalFailure = input.failures.join("; ");
+  try {
+    if (!input.webhookUrl) {
+      throw new Error("webhook is missing");
+    }
+    const failureLines = input.failures.map(
+      (failure) => `- ${redact(failure, input.forbiddenValues)}`,
+    );
+    const body = [
+      `Octogee release convergence failed in ${input.environment}`,
+      `Tag: ${input.tag}`,
+      `Commit: ${input.commit}`,
+      `Workflow: ${input.workflowUrl}`,
+      ...failureLines,
+    ].join("\n").slice(0, 1900);
+    await input.post(input.webhookUrl, body);
+  } catch (error) {
+    throw new Error(
+      `${originalFailure}\nDiscord alert delivery failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}

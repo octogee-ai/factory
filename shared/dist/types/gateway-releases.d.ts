@@ -194,6 +194,7 @@ export interface CommitPlacementParams {
     mirrorPatch: Record<string, unknown>;
     updatedByOperationId?: string | null;
     assignmentWrite?: "upsert" | "create-if-missing";
+    requireDurableGateway?: boolean;
     companionWrites?: ReadonlyArray<{
         collection: string;
         docId: string;

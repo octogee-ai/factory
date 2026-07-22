@@ -159,17 +159,6 @@ async function advancePreparation(
 ): Promise<CustomerMigrationV2State> {
   switch (state.phase) {
     case "initialized":
-      await deps.client.transferState({
-        migrationId: state.migrationId,
-        fromGatewayId: state.sourceGatewayId,
-        toGatewayId: state.targetGatewayId,
-        fromTransportId: state.sourceGatewayId,
-        toTransportId: state.targetGatewayId,
-        slug: state.slug,
-        mode: "keys",
-        includeActivationManifest: true,
-      });
-      return { ...state, phase: "keysSynced" };
     case "keysSynced":
       if (!deps.restoreSnapshot) {
         throw new Error("customer migration V2 restore phase lacks its durable snapshot");
@@ -341,7 +330,7 @@ export function isCustomerMigrationV2PostIntent(state: CustomerMigrationV2State)
 }
 
 const NEXT_PHASE: Readonly<Partial<Record<CustomerMigrationV2Phase, CustomerMigrationV2Phase>>> = {
-  initialized: "keysSynced",
+  initialized: "targetRestored",
   keysSynced: "targetRestored",
   targetRestored: "preSynced",
   preSynced: "sourceQuiesced",

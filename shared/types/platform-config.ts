@@ -5,7 +5,6 @@ import {
   type BuilderTierName,
   type PersonalTierName,
 } from "./billing-tiers.js";
-import { isBareGatewayId } from "./gateway-mutable-config.js";
 import type { ModelCatalogProvider } from "./model-catalog.js";
 
 // Operator dials for platform-wide model policy, stored at platformConfig/models
@@ -26,7 +25,6 @@ export interface PlatformTrialConfig {
   schemaVersion: typeof TRIAL_CONFIG_SCHEMA_VERSION;
   defaultPersonalTier: PersonalTierName;
   defaultBuilderTier: TrialBuilderTier;
-  releaseSourceGatewayId: string;
   updatedAt?: unknown;
   updatedBy?: string;
 }
@@ -35,7 +33,6 @@ export const DEFAULT_PLATFORM_TRIAL_CONFIG: PlatformTrialConfig = {
   schemaVersion: TRIAL_CONFIG_SCHEMA_VERSION,
   defaultPersonalTier: "personal_pro",
   defaultBuilderTier: "pro",
-  releaseSourceGatewayId: "default",
 };
 
 function isPersonalTier(value: unknown): value is PersonalTierName {
@@ -57,7 +54,6 @@ export function parsePlatformTrialConfig(value: unknown): PlatformTrialConfig | 
     raw.schemaVersion !== TRIAL_CONFIG_SCHEMA_VERSION ||
     !isPersonalTier(raw.defaultPersonalTier) ||
     !isTrialBuilderTier(raw.defaultBuilderTier) ||
-    !isBareGatewayId(raw.releaseSourceGatewayId) ||
     (raw.updatedBy !== undefined && typeof raw.updatedBy !== "string")
   ) {
     return null;
@@ -66,7 +62,6 @@ export function parsePlatformTrialConfig(value: unknown): PlatformTrialConfig | 
     schemaVersion: TRIAL_CONFIG_SCHEMA_VERSION,
     defaultPersonalTier: raw.defaultPersonalTier,
     defaultBuilderTier: raw.defaultBuilderTier,
-    releaseSourceGatewayId: raw.releaseSourceGatewayId,
     ...(raw.updatedAt !== undefined ? { updatedAt: raw.updatedAt } : {}),
     ...(raw.updatedBy !== undefined ? { updatedBy: raw.updatedBy } : {}),
   };
@@ -88,7 +83,6 @@ export function trialConfigHash(config: PlatformTrialConfig): string {
     schemaVersion: config.schemaVersion,
     defaultPersonalTier: config.defaultPersonalTier,
     defaultBuilderTier: config.defaultBuilderTier,
-    releaseSourceGatewayId: config.releaseSourceGatewayId,
   }));
 }
 

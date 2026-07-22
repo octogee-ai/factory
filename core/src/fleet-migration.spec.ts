@@ -23,18 +23,17 @@ function s(phase: MigrationPhase): MigrationState {
 }
 
 describe("nextMigrationStep — forward path", () => {
-  it("initial → seed per-customer SSH key on target", () => {
+  it("initial → restore target, which creates target-owned credentials", () => {
     const step = nextMigrationStep(s("initial"));
     expect(step).toEqual({
-      action: "sync-state",
-      mode: "keys",
-      from: "gw-prod",
-      to: "gw-prod-v2",
+      action: "restore-target",
+      gateway: "gw-prod-v2",
+      uid: "uid-ceckert",
       slug: "ceckert",
     });
   });
 
-  it("keys-synced → restore durable state on target", () => {
+  it("resumes a legacy keys-synced operation by restoring the target", () => {
     const step = nextMigrationStep(s("keys-synced"));
     expect(step).toEqual({
       action: "restore-target",
@@ -115,7 +114,7 @@ describe("nextMigrationStep — forward path", () => {
 
 describe("advancePhase", () => {
   it("walks the canonical sequence", () => {
-    expect(advancePhase("initial")).toBe("keys-synced");
+    expect(advancePhase("initial")).toBe("target-restored");
     expect(advancePhase("keys-synced")).toBe("target-restored");
     expect(advancePhase("target-restored")).toBe("pre-synced");
     expect(advancePhase("pre-synced")).toBe("source-quiesced");
@@ -136,11 +135,10 @@ describe("advancePhase", () => {
 });
 
 describe("fullPlan", () => {
-  it("from initial → 8 steps in canonical order", () => {
+  it("from initial → 7 steps in canonical order", () => {
     const plan = fullPlan(s("initial"));
-    expect(plan).toHaveLength(8);
+    expect(plan).toHaveLength(7);
     expect(plan.map((p) => p.action === "sync-state" ? `${p.mode}-sync-state` : p.action)).toEqual([
-      "keys-sync-state",
       "restore-target",
       "pre-sync-state",
       "quiesce-source",

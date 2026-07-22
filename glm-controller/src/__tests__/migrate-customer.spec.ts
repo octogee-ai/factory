@@ -217,7 +217,6 @@ describe("migrate-customer — legacy data-plane migration (shared class)", () =
 
     expect(result).toMatchObject({ success: true, rolledBack: false });
     expect(client.calls).toEqual([
-      "transfer:keys:gw-blue->gw-green",
       "restore:gw-green",
       "transfer:pre:gw-blue->gw-green",
       "quiesce:gw-blue",
@@ -267,11 +266,10 @@ describe("migrate-customer — durable V2 migration", () => {
       targetRelease: 2,
     });
     expect(persisted.map((state) => state.phase)).toEqual([
-      "initialized", "keysSynced", "targetRestored", "preSynced", "sourceQuiesced",
+      "initialized", "targetRestored", "preSynced", "sourceQuiesced",
       "finalSynced", "targetVerified", "cutover", "sourceRetired", "complete",
     ]);
     expect(client.calls).toEqual([
-      "transfer:keys:gw-blue->gw-green",
       "restore:gw-green",
       "transfer:pre:gw-blue->gw-green",
       "quiesce:gw-blue",
@@ -374,7 +372,7 @@ describe("migrate-customer — durable V2 migration", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/retry pending: status 503/u);
-    expect(persisted.map((state) => state.phase)).toEqual(["initialized"]);
+    expect(persisted.map((state) => state.phase)).toEqual(["initialized", "targetRestored"]);
   });
 
   it("aborts on a terminal mid-flight failure: unmounts the target and restores the source", async () => {
@@ -389,7 +387,7 @@ describe("migrate-customer — durable V2 migration", () => {
 
     expect(result).toMatchObject({ success: false, rolledBack: true });
     expect(persisted.map((state) => state.phase)).toEqual([
-      "initialized", "keysSynced", "targetRestored", "preSynced", "sourceQuiesced",
+      "initialized", "targetRestored", "preSynced", "sourceQuiesced",
       "finalSynced", "abortIntent", "abortTargetUnmounted", "aborted",
     ]);
     expect(c.calls.filter((call) => call.startsWith("unmount:"))).toEqual(["unmount:gw-green"]);

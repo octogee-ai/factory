@@ -252,6 +252,11 @@ import {
   createFirestoreTrialGatewayProvisionerDeps,
   startTrialGatewayProvisioner,
 } from "./trial-gateway-provisioner.js";
+import {
+  PLACEMENT_POLICY_RECONCILE_MS_DEFAULT,
+  createFirestorePlacementPolicyReconcilerDeps,
+  startPlacementPolicyReconciler,
+} from "./placement-policy-reconciler.js";
 import type {
   FleetBrokerChannelBinding,
   FleetBrokerProjectRestore,
@@ -320,6 +325,10 @@ const PREEMPTION_HANDOFF_SWEEP_MS = parseNonNegativeInt(
 const TRIAL_GATEWAY_PROVISION_RECONCILE_MS = parseNonNegativeInt(
   process.env.TRIAL_GATEWAY_PROVISION_RECONCILE_MS,
   TRIAL_GATEWAY_PROVISION_RECONCILE_MS_DEFAULT,
+);
+const PLACEMENT_POLICY_RECONCILE_MS = parseNonNegativeInt(
+  process.env.PLACEMENT_POLICY_RECONCILE_MS,
+  PLACEMENT_POLICY_RECONCILE_MS_DEFAULT,
 );
 const HELM_RECOVERY_SWEEP_MS = parseNonNegativeInt(
   process.env.HELM_RECOVERY_SWEEP_MS,
@@ -1744,6 +1753,18 @@ function startControllerBackgroundTasks({
     }),
     TRIAL_GATEWAY_PROVISION_RECONCILE_MS,
   );
+  const stopPlacementPolicyReconciler = startPlacementPolicyReconciler(
+    createFirestorePlacementPolicyReconcilerDeps({
+      db,
+      ensureAuthSecret: (gatewayId) => deps.ensureGatewayAuthSecret({
+        namespace: NAMESPACE,
+        gatewayId,
+      }),
+      now: () => Date.now(),
+      log,
+    }),
+    PLACEMENT_POLICY_RECONCILE_MS,
+  );
   const httpKubeOps = deps.kubeOps;
   const decryptConnectorSecret = createConnectorSecretDecryptor();
   const stopHttp = startHttpServer({
@@ -1787,6 +1808,7 @@ function startControllerBackgroundTasks({
     stopIdleSweeper,
     stopPreemptionHandoffSweeper,
     stopTrialGatewayProvisioner,
+    stopPlacementPolicyReconciler,
     stopHttp,
   ];
 }

@@ -127,7 +127,12 @@ function quarantineExpiredLease(lockPath: string, staleAfterMs: number, now: num
   if (stat.isDirectory()) {
     const entries = fs.readdirSync(lockPath);
     if (entries.length === 1 && OWNER_TOKEN_RE.test(entries[0])) {
-      heartbeatMtimeMs = fs.statSync(path.join(lockPath, entries[0])).mtimeMs;
+      try {
+        heartbeatMtimeMs = fs.statSync(path.join(lockPath, entries[0])).mtimeMs;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+        throw error;
+      }
     }
   }
   if (now - heartbeatMtimeMs <= staleAfterMs) return false;

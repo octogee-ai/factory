@@ -34,13 +34,6 @@ export type MigrationStep =
 export function nextMigrationStep(state: MigrationState): MigrationStep {
   switch (state.phase) {
     case "initial":
-      return {
-        action: "sync-state",
-        mode: "keys",
-        from: state.fromGatewayId,
-        to: state.toGatewayId,
-        slug: state.slug,
-      };
     case "keys-synced":
       return {
         action: "restore-target",
@@ -96,25 +89,30 @@ export function nextMigrationStep(state: MigrationState): MigrationStep {
   }
 }
 
-const PHASE_ORDER: readonly MigrationPhase[] = [
-  "initial",
-  "keys-synced",
-  "target-restored",
-  "pre-synced",
-  "source-quiesced",
-  "final-synced",
-  "target-verified",
-  "cutover-done",
-  "source-unmounted",
-  "done",
-];
-
 export function advancePhase(p: MigrationPhase): MigrationPhase {
-  const i = PHASE_ORDER.indexOf(p);
-  if (i === -1) {
-    throw new Error(`Unknown phase: ${p}`);
+  switch (p) {
+    case "initial":
+    case "keys-synced":
+      return "target-restored";
+    case "target-restored":
+      return "pre-synced";
+    case "pre-synced":
+      return "source-quiesced";
+    case "source-quiesced":
+      return "final-synced";
+    case "final-synced":
+      return "target-verified";
+    case "target-verified":
+      return "cutover-done";
+    case "cutover-done":
+      return "source-unmounted";
+    case "source-unmounted":
+      return "done";
+    case "done":
+      return "done";
+    default:
+      throw new Error(`Unknown phase: ${p satisfies never}`);
   }
-  return PHASE_ORDER[Math.min(i + 1, PHASE_ORDER.length - 1)];
 }
 
 export function fullPlan(state: MigrationState): MigrationStep[] {

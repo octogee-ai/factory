@@ -1,6 +1,5 @@
 import { catalogEntryForModelRef } from "./agent-models.js";
 import { BUILDER_TIERS, TIERS, } from "./billing-tiers.js";
-import { isBareGatewayId } from "./gateway-mutable-config.js";
 // Operator dials for platform-wide model policy, stored at platformConfig/models
 // (server-only collection; admin reads/writes go through the API). Absent or
 // invalid doc → the compiled default below, so the free tier always has a
@@ -14,7 +13,6 @@ export const DEFAULT_PLATFORM_TRIAL_CONFIG = {
     schemaVersion: TRIAL_CONFIG_SCHEMA_VERSION,
     defaultPersonalTier: "personal_pro",
     defaultBuilderTier: "pro",
-    releaseSourceGatewayId: "default",
 };
 function isPersonalTier(value) {
     return typeof value === "string" && value in TIERS && value !== "builder" && value !== "operator";
@@ -31,7 +29,6 @@ export function parsePlatformTrialConfig(value) {
     if (raw.schemaVersion !== TRIAL_CONFIG_SCHEMA_VERSION ||
         !isPersonalTier(raw.defaultPersonalTier) ||
         !isTrialBuilderTier(raw.defaultBuilderTier) ||
-        !isBareGatewayId(raw.releaseSourceGatewayId) ||
         (raw.updatedBy !== undefined && typeof raw.updatedBy !== "string")) {
         return null;
     }
@@ -39,7 +36,6 @@ export function parsePlatformTrialConfig(value) {
         schemaVersion: TRIAL_CONFIG_SCHEMA_VERSION,
         defaultPersonalTier: raw.defaultPersonalTier,
         defaultBuilderTier: raw.defaultBuilderTier,
-        releaseSourceGatewayId: raw.releaseSourceGatewayId,
         ...(raw.updatedAt !== undefined ? { updatedAt: raw.updatedAt } : {}),
         ...(raw.updatedBy !== undefined ? { updatedBy: raw.updatedBy } : {}),
     };
@@ -59,7 +55,6 @@ export function trialConfigHash(config) {
         schemaVersion: config.schemaVersion,
         defaultPersonalTier: config.defaultPersonalTier,
         defaultBuilderTier: config.defaultBuilderTier,
-        releaseSourceGatewayId: config.releaseSourceGatewayId,
     }));
 }
 export const DEFAULT_PLATFORM_CONNECT_CONFIG = {

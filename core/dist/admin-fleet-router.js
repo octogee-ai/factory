@@ -1,7 +1,7 @@
 import { FieldValue, } from "firebase-admin/firestore";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, OPERATOR_GATEWAY_RESERVATIONS_COLLECTION, defaultOperatorGatewayAccess, resolveUserGatewayShellState, OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT, isValidNewGatewayId, isGatewayClass, isGatewayProfile, operatorGatewayServiceAccountName, resolveGatewayClass, resolveGatewayImageProfile, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
 import { deploymentSettingsForRuntime, deploymentTargetsForEnvironment, } from "./deployment-environment.js";
-import { resolveBuilderTier, resolvePaidBuilderTier } from "@octogee/shared/types/billing";
+import { resolveBuilderTier } from "@octogee/shared/types/billing";
 import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 import { builderGatewayIdForSlug } from "@octogee/shared/types/builder-gateway-id";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
@@ -10,6 +10,7 @@ import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, GATEWAY_RELEASES_SUBCOLLECTION, comm
 import { parseAssignmentDoc, readAssignmentDocsForGateway } from "./assignment-doc.js";
 import { GATEWAY_CONFIG_SCHEMA_VERSION, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, } from "./gateway-live-release.js";
 import { projectReleaseHistory } from "./gateway-release-history.js";
+import { resolveContinuousBuilderPlacement, resolveEntitledOwnedGatewayId, } from "@octogee/shared/types/orchestrator-placement";
 import { SIZING_TIERS, isSizingTier, resolveSizingTier, } from "@octogee/shared/types/sizing";
 import { SPOT_PRICE_MULTIPLIER, estimateGatewayMonthlyCost, } from "@octogee/shared/types/cost-estimator";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
@@ -359,32 +360,27 @@ function driftStateForCustomer(input) {
     }
     return "healthy";
 }
-function entitledDedicatedGatewayCandidate(input) {
-    if (resolvePaidBuilderTier(input.data) !== null) {
-        const reservation = input.reservationByUid.get(input.uid)?.data();
-        const status = asStringOrNull(reservation?.status);
-        return status === "provisioning" || status === "fulfilled"
-            ? asStringOrNull(reservation?.gatewayId)
-            : null;
-    }
-    if (resolveBuilderTier(input.data) === null)
-        return null;
-    const trialGrant = isPlainRecord(input.data.trialGrant) ? input.data.trialGrant : {};
-    return asStringOrNull(trialGrant.gatewayId);
-}
 function dedicatedPolicyGatewayId(input) {
-    const candidate = entitledDedicatedGatewayCandidate(input);
-    if (!candidate)
-        return null;
-    const gateway = input.glmByGatewayId.get(candidate);
-    if (!gateway ||
-        normalizeGatewayClass(gateway) === "shared" ||
-        asStringOrNull(gateway.ownerUid) !== input.uid ||
-        projectDesiredStatus(gateway) !== "running") {
-        return null;
-    }
-    const ready = asStringOrNull(effectiveHeartbeatDoc(candidate, gateway)?.data()?.status) === "ready";
-    return ready || input.assignedGatewayId === candidate ? candidate : null;
+    const reservation = input.reservationByUid.get(input.uid)?.data() ?? null;
+    const candidate = resolveEntitledOwnedGatewayId({ userData: input.data, reservation });
+    const gateway = candidate ? input.glmByGatewayId.get(candidate) : undefined;
+    const placement = resolveContinuousBuilderPlacement({
+        uid: input.uid,
+        userData: input.data,
+        reservation,
+        currentGatewayId: input.assignedGatewayId,
+        defaultGatewayId: "",
+        ownedGateway: candidate && gateway
+            ? {
+                gatewayId: candidate,
+                gatewayClass: normalizeGatewayClass(gateway),
+                ownerUid: asStringOrNull(gateway.ownerUid),
+                desiredStatus: projectDesiredStatus(gateway) ?? "invalid",
+                ready: asStringOrNull(effectiveHeartbeatDoc(candidate, gateway)?.data()?.status) === "ready",
+            }
+            : null,
+    });
+    return placement.targetGatewayId || null;
 }
 function buildCustomerPlacementProjection(input) {
     const slug = resolveCustomerSlug(input.data, (userData) => asStringOrNull(userData.username) ? [asStringOrNull(userData.username)] : []);

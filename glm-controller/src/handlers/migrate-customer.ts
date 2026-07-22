@@ -380,10 +380,11 @@ async function buildV2DriverDeps(
     }
     return url;
   });
-  const restoreSnapshot = state.phase === "keysSynced"
+  const needsRestoreSnapshot = state.phase === "initialized" || state.phase === "keysSynced";
+  const restoreSnapshot = needsRestoreSnapshot
     ? await deps.readUserSnapshot(state.uid)
     : undefined;
-  if (state.phase === "keysSynced" && !restoreSnapshot) {
+  if (needsRestoreSnapshot && !restoreSnapshot) {
     throw new Error(`durable snapshot not found for ${state.uid}`);
   }
   return {

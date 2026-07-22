@@ -278,6 +278,9 @@ export async function commitPlacementAtomic(db, params) {
         const mirrorPatch = placementMirrorPatch(params, companionWrites);
         const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
         if (!gatewaySnap.exists) {
+            if (params.requireDurableGateway) {
+                return { kind: "rejected", reason: "gateway-root-invalid" };
+            }
             txn.update(userRef, mirrorPatch);
             commitPlacementCompanionWrites(txn, companionWrites);
             return { kind: "mirror-only" };

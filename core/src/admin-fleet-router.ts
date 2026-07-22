@@ -42,7 +42,7 @@ import {
   deploymentSettingsForRuntime,
   deploymentTargetsForEnvironment,
 } from "./deployment-environment.js";
-import { resolveBuilderTier, resolvePaidBuilderTier } from "@octogee/shared/types/billing";
+import { resolveBuilderTier } from "@octogee/shared/types/billing";
 import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 import { builderGatewayIdForSlug } from "@octogee/shared/types/builder-gateway-id";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
@@ -76,6 +76,8 @@ import {
 } from "./gateway-live-release.js";
 import { projectReleaseHistory } from "./gateway-release-history.js";
 import {
+  resolveContinuousBuilderPlacement,
+  resolveEntitledOwnedGatewayId,
   type OnboardingOrchestratorConfig,
 } from "@octogee/shared/types/orchestrator-placement";
 import {
@@ -756,23 +758,6 @@ function driftStateForCustomer(input: {
   return "healthy";
 }
 
-function entitledDedicatedGatewayCandidate(input: {
-  uid: string;
-  data: Record<string, unknown>;
-  reservationByUid: ReadonlyMap<string, FirestoreDocLike>;
-}): string | null {
-  if (resolvePaidBuilderTier(input.data) !== null) {
-    const reservation = input.reservationByUid.get(input.uid)?.data();
-    const status = asStringOrNull(reservation?.status);
-    return status === "provisioning" || status === "fulfilled"
-      ? asStringOrNull(reservation?.gatewayId)
-      : null;
-  }
-  if (resolveBuilderTier(input.data) === null) return null;
-  const trialGrant = isPlainRecord(input.data.trialGrant) ? input.data.trialGrant : {};
-  return asStringOrNull(trialGrant.gatewayId);
-}
-
 function dedicatedPolicyGatewayId(input: {
   uid: string;
   data: Record<string, unknown>;
@@ -780,19 +765,26 @@ function dedicatedPolicyGatewayId(input: {
   reservationByUid: ReadonlyMap<string, FirestoreDocLike>;
   glmByGatewayId: ReadonlyMap<string, GlmDoc>;
 }): string | null {
-  const candidate = entitledDedicatedGatewayCandidate(input);
-  if (!candidate) return null;
-  const gateway = input.glmByGatewayId.get(candidate);
-  if (
-    !gateway ||
-    normalizeGatewayClass(gateway) === "shared" ||
-    asStringOrNull(gateway.ownerUid) !== input.uid ||
-    projectDesiredStatus(gateway) !== "running"
-  ) {
-    return null;
-  }
-  const ready = asStringOrNull(effectiveHeartbeatDoc(candidate, gateway)?.data()?.status) === "ready";
-  return ready || input.assignedGatewayId === candidate ? candidate : null;
+  const reservation = input.reservationByUid.get(input.uid)?.data() ?? null;
+  const candidate = resolveEntitledOwnedGatewayId({ userData: input.data, reservation });
+  const gateway = candidate ? input.glmByGatewayId.get(candidate) : undefined;
+  const placement = resolveContinuousBuilderPlacement({
+    uid: input.uid,
+    userData: input.data,
+    reservation,
+    currentGatewayId: input.assignedGatewayId,
+    defaultGatewayId: "",
+    ownedGateway: candidate && gateway
+      ? {
+          gatewayId: candidate,
+          gatewayClass: normalizeGatewayClass(gateway),
+          ownerUid: asStringOrNull(gateway.ownerUid),
+          desiredStatus: projectDesiredStatus(gateway) ?? "invalid",
+          ready: asStringOrNull(effectiveHeartbeatDoc(candidate, gateway)?.data()?.status) === "ready",
+        }
+      : null,
+  });
+  return placement.targetGatewayId || null;
 }
 
 function buildCustomerPlacementProjection(input: {

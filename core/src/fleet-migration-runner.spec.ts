@@ -97,14 +97,13 @@ function harness(options: HarnessOptions = {}) {
 }
 
 describe("runMigration — happy path", () => {
-  it("executes the data-plane flow in order with no config steps: keys → restore → pre → quiesce → final → verify → cutover → unmount", async () => {
+  it("executes restore → pre → quiesce → final → verify → cutover → unmount without copying source credentials", async () => {
     const { client, deps, input } = harness();
 
     const result = await runMigration(input, deps);
 
     expect(result).toMatchObject({ success: true, finalPhase: "done", rolledBack: false });
     expect(client.calls).toEqual([
-      "transfer:alice:keys",
       "restore:alice",
       "transfer:alice:pre",
       "quiesce:alice",
@@ -122,7 +121,6 @@ describe("runMigration — happy path", () => {
 
     const reports = events.filter((event) => event.startsWith("report:"));
     expect(reports).toEqual([
-      "report:keys-sync-state:running", "report:keys-sync-state:done",
       "report:restore-target:running", "report:restore-target:done",
       "report:pre-sync-state:running", "report:pre-sync-state:done",
       "report:quiesce-source:running", "report:quiesce-source:done",

@@ -548,6 +548,7 @@ export interface CommitPlacementParams {
   mirrorPatch: Record<string, unknown>;
   updatedByOperationId?: string | null;
   assignmentWrite?: "upsert" | "create-if-missing";
+  requireDurableGateway?: boolean;
   companionWrites?: ReadonlyArray<{
     collection: string;
     docId: string;
@@ -655,6 +656,9 @@ export async function commitPlacementAtomic(
     const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
 
     if (!gatewaySnap.exists) {
+      if (params.requireDurableGateway) {
+        return { kind: "rejected", reason: "gateway-root-invalid" };
+      }
       txn.update(userRef, mirrorPatch);
       commitPlacementCompanionWrites(txn, companionWrites);
       return { kind: "mirror-only" };

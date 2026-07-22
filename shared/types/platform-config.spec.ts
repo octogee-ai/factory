@@ -23,7 +23,6 @@ describe("parsePlatformTrialConfig", () => {
       schemaVersion: 1,
       defaultPersonalTier: "personal_pro",
       defaultBuilderTier: "pro",
-      releaseSourceGatewayId: "default",
     });
     expect(PLATFORM_TRIAL_CONFIG_DOC).toBe("trial");
     expect(TRIAL_CONFIG_SCHEMA_VERSION).toBe(1);
@@ -54,13 +53,11 @@ describe("parsePlatformTrialConfig", () => {
     ).toBeNull();
   });
 
-  it("rejects malformed, unsupported, and revision-source configs", () => {
+  it("rejects malformed and unsupported configs", () => {
     expect(parsePlatformTrialConfig(null)).toBeNull();
     expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, schemaVersion: 2 })).toBeNull();
     expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, defaultPersonalTier: "pro" })).toBeNull();
     expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, defaultBuilderTier: "max" })).toBeNull();
-    expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, releaseSourceGatewayId: "" })).toBeNull();
-    expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, releaseSourceGatewayId: "default-r1" })).toBeNull();
   });
 
   it("hashes only the canonical grant-shaping fields", () => {
@@ -68,7 +65,6 @@ describe("parsePlatformTrialConfig", () => {
     expect(hash).toMatch(/^[0-9a-f]{16}$/);
     expect(
       trialConfigHash({
-        releaseSourceGatewayId: "default",
         defaultBuilderTier: "pro",
         defaultPersonalTier: "personal_pro",
         schemaVersion: 1,
