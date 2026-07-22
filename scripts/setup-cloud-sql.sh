@@ -116,32 +116,17 @@ done
 # kills MM/Gitea on the next pod restart.
 log "Ensuring database users + Secret Manager passwords..."
 
-# Service accounts that need to read the DB-password secrets at runtime
-# or during the canonical install sequence. Each gets `secretAccessor` on
-# every secret store_secret creates — bindings are idempotent (add same
-# member+role twice = single binding), so re-running setup-cloud-sql.sh
-# is safe.
-#
-# Why this matters: a fresh `gcloud secrets create` starts with NO IAM
-# bindings. The previous-life secrets had bindings accumulated over time;
-# deleting + recreating during the 2026-05-14 right-sizing pass dropped
-# them, and the Release workflow's deploy step (gha SA reads MM_DB_PASSWORD
-# + gitea-db-password) auth-failed until the bindings were restored.
-SECRET_ACCESSOR_SAS=(
-  "github-actions@octogee.iam.gserviceaccount.com"
-)
-
 grant_secret_accessor() {
   local name="$1"
-  for sa in "${SECRET_ACCESSOR_SAS[@]}"; do
+  if [[ "$name" == "$GITEA_PASSWORD_SECRET" ]]; then
     gcloud secrets add-iam-policy-binding "$name" \
-      --member="serviceAccount:$sa" \
+      --member="serviceAccount:github-actions@octogee.iam.gserviceaccount.com" \
       --role="roles/secretmanager.secretAccessor" \
       --project="$PROJECT" \
       --quiet >/dev/null 2>&1 \
-      && ok "Granted secretAccessor on $name to $sa" \
-      || warn "Could not grant secretAccessor on $name to $sa — may need manual setup"
-  done
+      && ok "Granted secretAccessor on $name to GitHub Actions" \
+      || warn "Could not grant secretAccessor on $name to GitHub Actions — may need manual setup"
+  fi
 }
 
 store_secret() {

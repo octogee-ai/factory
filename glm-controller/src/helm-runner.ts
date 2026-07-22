@@ -435,6 +435,8 @@ function baseUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
     `ownerUid=${opts.ownerUid ?? ""}`,
     HELM_SET_STRING,
     `builderSlug=${opts.builderSlug ?? ""}`,
+    HELM_SET_STRING,
+    `env.mmInternalUrl=http://mattermost.${opts.namespace}.svc.cluster.local:8065`,
   ];
   // Revision-aware render: pass the disposable revision id so per-instance
   // resource names key off it. Omitted → chart defaults revisionId to gatewayId

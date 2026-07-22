@@ -21,6 +21,17 @@ describe("deployment target Helm values", () => {
     expect(rendered).toContain(
       'gcpServiceAccount: "octogee-glm-controller@octogee-data-test.iam.gserviceaccount.com"',
     );
+    expect(rendered).toContain(
+      'MM_URL: "http://mattermost.octogee-test-west.svc.cluster.local:8065"',
+    );
+    expect(rendered).toContain(
+      'MM_INTERNAL_URL: "http://mattermost.octogee-test-west.svc.cluster.local:8065"',
+    );
+    expect(rendered).toContain(
+      'loggingResourceName: "projects/octogee/locations/global/buckets/ops-agent-test-west/views/ops-agent"',
+    );
+    expect(rendered).not.toContain("mattermost.octogee-test.svc.cluster.local");
+    expect(rendered).not.toContain("buckets/ops-agent-test/views/ops-agent");
     expect(rendered).not.toContain("us-central1");
     expect(rendered).not.toContain("@octogee-test.iam.gserviceaccount.com");
   });
