@@ -60,6 +60,7 @@ describe("deployment environment registry", () => {
       name: "prod",
       targetId: "prod-west",
       lifecycle: "candidate",
+      namespace: "octogee-west",
       clusterProjectId: "octogee",
       firebaseProjectId: "octogee-data-prod",
       hostingProjectId: "octogee",
@@ -82,6 +83,7 @@ describe("deployment environment registry", () => {
       name: "test",
       targetId: "test-west",
       lifecycle: "candidate",
+      namespace: "octogee-test-west",
       firebaseProjectId: "octogee-data-test",
       region: "us-west1",
       cloudSqlMattermostPasswordSecretName: "MM_DB_PASSWORD-octogee-pg-west",
@@ -109,7 +111,7 @@ describe("deployment environment registry", () => {
 
   it("lets a candidate cluster select its exact target before the active pointer flips", () => {
     expect(deploymentSettingsForRuntime({
-      namespace: "octogee-test",
+      namespace: "octogee-test-west",
       targetId: "test-west",
     })).toMatchObject({
       targetId: "test-west",
@@ -120,9 +122,9 @@ describe("deployment environment registry", () => {
 
   it("rejects a runtime target that belongs to another namespace", () => {
     expect(() => deploymentSettingsForRuntime({
-      namespace: "octogee-test",
+      namespace: "octogee-test-west",
       targetId: "prod-west",
-    })).toThrow("Deployment target prod-west belongs to namespace octogee");
+    })).toThrow("Deployment target prod-west belongs to namespace octogee-west");
   });
 
   it("resolves Secret Manager placement from the exact Firebase project target", () => {

@@ -193,6 +193,16 @@ describe("deployment target consumers", () => {
     expect(setup).not.toContain('DESIRED_PITR="false"');
   });
 
+  it("reserves central and west deployment namespaces from custom provisioning", () => {
+    const provision = source("scripts/provision-namespace.sh");
+    const terraform = source("terraform/environments/custom/variables.tf");
+
+    for (const namespace of ["octogee", "octogee-test", "octogee-west", "octogee-test-west"]) {
+      expect(provision).toContain(namespace);
+      expect(terraform).toContain(`"${namespace}"`);
+    }
+  });
+
   it("keeps west Cloud SQL bootstrap away from central Secret Manager slots", () => {
     const setupCloudSql = source("scripts/setup-cloud-sql.sh");
     const setupSecrets = source("scripts/setup-secrets.sh");

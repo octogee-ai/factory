@@ -53,9 +53,9 @@ set -euo pipefail
 #   ./scripts/provision-namespace.sh feat-alice --skip-terraform
 #
 # SAFETY GATES:
-#   - `octogee` requires typed 'DESTROY PROD NAMESPACE' confirmation,
+#   - PROD deployment namespaces require typed 'DESTROY PROD NAMESPACE' confirmation,
 #     refuses --yes outright.
-#   - `octogee-test` is rejected entirely (use the canonical install sequence
+#   - TEST deployment namespaces are rejected entirely (use the canonical install sequence
 #     printed by ./scripts/teardown-env.sh).
 #   - Reserved K8s namespaces (kube-*, default, gke-*) are rejected.
 #   - Any other existing namespace IS DELETED. There is no "merge" path.
@@ -114,10 +114,10 @@ DB_SLUG="${NAMESPACE//-/_}"
 
 # ── Safety gate: reserved namespace handling ───────────────────────────────
 case "$NAMESPACE" in
-  octogee)
+  octogee|octogee-west)
     echo ""
     echo -e "${RED}${BOLD}═══════════════════════════════════════════════════════════${NC}"
-    echo -e "${RED}${BOLD}  ⚠️  NAMESPACE 'octogee' IS PRODUCTION${NC}"
+    echo -e "${RED}${BOLD}  ⚠️  NAMESPACE '$NAMESPACE' IS PRODUCTION${NC}"
     echo -e "${RED}${BOLD}═══════════════════════════════════════════════════════════${NC}"
     echo ""
     echo -e "  ${RED}This script will NUKE the namespace and all its data."
@@ -131,14 +131,14 @@ case "$NAMESPACE" in
       read -r confirmation
       [[ "$confirmation" == "DESTROY PROD NAMESPACE" ]] || { echo "  Cancelled."; exit 1; }
     else
-      echo -e "  ${RED}${BOLD}--yes is forbidden with namespace=octogee. Refusing.${NC}"
+      echo -e "  ${RED}${BOLD}--yes is forbidden with namespace=$NAMESPACE. Refusing.${NC}"
       exit 1
     fi
     ;;
-  octogee-test)
+  octogee-test|octogee-test-west)
     echo ""
     echo -e "${YELLOW}${BOLD}═══════════════════════════════════════════════════════════${NC}"
-    echo -e "${YELLOW}${BOLD}  ⚠️  NAMESPACE 'octogee-test' IS THE SHARED TEST ENV${NC}"
+    echo -e "${YELLOW}${BOLD}  ⚠️  NAMESPACE '$NAMESPACE' IS A SHARED TEST ENV${NC}"
     echo -e "${YELLOW}${BOLD}═══════════════════════════════════════════════════════════${NC}"
     echo ""
     echo "  This script is for ISOLATED custom namespaces. To rebuild the"

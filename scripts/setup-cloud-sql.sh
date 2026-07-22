@@ -175,29 +175,30 @@ secret_name_for() {
 }
 
 # Two paths per user:
-#   - Fresh env (no SM secret + no SQL user): generate random password,
+#   - Fresh env (no enabled SM version + no SQL user): generate random password,
 #     create the SQL user, write to SM. Both sides aligned by construction.
-#   - Re-run (user exists OR SM secret exists): regenerate password so a
+#   - Re-run (user exists OR enabled SM version exists): regenerate password so a
 #     stale half-pair (one side missing) doesn't leave the env wedged.
 #     `set-password` works whether or not the user existed previously;
 #     `store_secret` adds a version to the SM entry or creates it.
 for USER in mattermost gitea; do
   SECRET_NAME=$(secret_name_for "$USER")
   USER_EXISTS=false
-  SECRET_EXISTS=false
+  SECRET_HAS_VERSION=false
   if gcloud sql users list --instance="$INSTANCE" --project="$PROJECT" 2>/dev/null \
       | awk 'NR>1 {print $1}' | grep -qx "$USER"; then
     USER_EXISTS=true
   fi
-  if gcloud secrets describe "$SECRET_NAME" --project="$PROJECT" &>/dev/null; then
-    SECRET_EXISTS=true
+  if [[ "$(gcloud secrets versions describe latest --secret="$SECRET_NAME" \
+      --project="$PROJECT" --format='value(state)' 2>/dev/null || true)" == "ENABLED" ]]; then
+    SECRET_HAS_VERSION=true
   fi
-  if $USER_EXISTS && $SECRET_EXISTS; then
-    ok "User '$USER' + secret '$SECRET_NAME' both present — preserving (no rotation)"
+  if $USER_EXISTS && $SECRET_HAS_VERSION; then
+    ok "User '$USER' + enabled secret '$SECRET_NAME' both present — preserving (no rotation)"
     continue
   fi
 
-  PASS=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 32)
+  PASS=$(openssl rand -hex 16)
   if $USER_EXISTS; then
     log "User '$USER' exists but secret '$SECRET_NAME' missing — rotating password to realign"
     gcloud sql users set-password "$USER" \

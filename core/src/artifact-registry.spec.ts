@@ -165,7 +165,7 @@ describe("listGatewayBuilds — Artifact Registry adapter", () => {
   });
 
   it("targets the exact candidate registry when the runtime target is explicit", async () => {
-    vi.stubEnv("K8S_NAMESPACE", "octogee");
+    vi.stubEnv("K8S_NAMESPACE", "octogee-west");
     vi.stubEnv("DEPLOYMENT_TARGET_ID", "prod-west");
     fetchMock.mockResolvedValueOnce(makeArResponse([]));
     await listGatewayBuilds({ service: "octogee-gateway" });

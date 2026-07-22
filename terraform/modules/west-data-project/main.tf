@@ -19,6 +19,7 @@ locals {
     "cloudkms.googleapis.com",
     "cloudresourcemanager.googleapis.com",
     "cloudscheduler.googleapis.com",
+    "compute.googleapis.com",
     "eventarc.googleapis.com",
     "firebase.googleapis.com",
     "firebaseextensions.googleapis.com",
@@ -35,8 +36,6 @@ locals {
     "storage.googleapis.com",
   ])
   github_actions_roles = toset([
-    "roles/iam.serviceAccountUser",
-    "roles/run.admin",
     "roles/serviceusage.serviceUsageConsumer",
   ])
 }
