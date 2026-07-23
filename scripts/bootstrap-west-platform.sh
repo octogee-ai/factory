@@ -125,6 +125,7 @@ REBUILD_CHANGE_ADDRESSES=(
   'google_compute_global_address.west_ingress["workspace-api-ip-west"]'
   'google_compute_network.west'
   'google_compute_resource_policy.west_pvc_snapshots'
+  'google_project_iam_custom_role.west_image_pin_manager'
   'google_compute_router.west'
   'google_compute_router_nat.west'
   'google_compute_subnetwork.connector'
