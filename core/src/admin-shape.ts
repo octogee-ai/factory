@@ -1,6 +1,6 @@
 import { getTierConfig } from "@octogee/shared/types/billing-tiers";
 import {
-  resolveEffectivePlan,
+  resolveBillingProfile,
   spendDegradeState,
   spendWindowPercentUsed,
 } from "@octogee/shared/types/billing";
@@ -108,7 +108,7 @@ export function buildCustomerSummary(
 ): CustomerSummary {
   const subscription = objectAt(d, "subscription");
   const now = broker.now ?? Date.now();
-  const plan = resolveEffectivePlan(d, new Date(now));
+  const plan = resolveBillingProfile(d, new Date(now));
   const tierConfig = getTierConfig(plan.tier);
   const subscriptionStatus = stringAt(subscription, "status", "trial");
   const usage = objectAt(d, "usage");
@@ -129,6 +129,7 @@ export function buildCustomerSummary(
     weekCostUsd,
     weekBudgetUsd: plan.weeklyBudgetUsd,
     onOwnerCredential,
+    houseFallback: plan.houseFallback,
   }).degraded;
   const agentIds = stringArrayAt(openclaw, "agentIds");
   const revenueUsd: number = isActiveStatus(subscriptionStatus)
@@ -170,4 +171,3 @@ export function buildCustomerSummary(
       nullableStringAt(provisioning, "status"),
   };
 }
-

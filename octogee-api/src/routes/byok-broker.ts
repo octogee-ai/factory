@@ -12,9 +12,10 @@ import { isSafeAgentId } from "@octogee/core/byosub-restore";
 import { readAssignedSlugsForGateway } from "@octogee/core/assigned-roster";
 import { readGatewayAuthorization } from "@octogee/core/gateway-live-release";
 import {
-  resolveEffectivePlan,
+  resolveBillingProfile,
   spendDegradeState,
   spendWindowPercentUsed,
+  type BillingProfile,
 } from "@octogee/shared/types/billing";
 import {
   MODEL_BROKER_CREDITS_COLLECTION,
@@ -207,6 +208,48 @@ function credentialPathFor(
     : { path: "byosub", provider };
 }
 
+function deriveSpendStatus(input: {
+  plan: BillingProfile;
+  credentialPath: string;
+  windowData: Record<string, unknown> | undefined;
+  weekData: Record<string, unknown> | undefined;
+  creditData: Record<string, unknown> | undefined;
+}) {
+  const { plan } = input;
+  const windowCostUsd = financeNumber(
+    input.windowData?.chargeUsd ?? input.windowData?.costUsd,
+  );
+  const weekCostUsd = financeNumber(
+    input.weekData?.chargeUsd ?? input.weekData?.costUsd,
+  );
+  const onOwnerCredential =
+    input.credentialPath === "byosub" || input.credentialPath === "byok_api_key";
+  const creditBalanceUsd = financeNumber(input.creditData?.balanceUsd);
+  const throttle = spendDegradeState({
+    modelAccess: plan.modelAccess,
+    windowCostUsd,
+    windowBudgetUsd: plan.windowBudgetUsd,
+    weekCostUsd,
+    weekBudgetUsd: plan.weeklyBudgetUsd,
+    onOwnerCredential,
+    houseFallback: plan.houseFallback,
+    creditBalanceUsd,
+  });
+  const subscriptionUsingCredits =
+    plan.rail === "subscription" &&
+    !plan.houseFallback &&
+    !onOwnerCredential &&
+    (weekCostUsd >= plan.weeklyBudgetUsd || windowCostUsd >= plan.windowBudgetUsd);
+  return {
+    windowCostUsd,
+    weekCostUsd,
+    onOwnerCredential,
+    creditBalanceUsd,
+    throttle,
+    subscriptionUsingCredits,
+  };
+}
+
 async function agentUsageStatusPayload(
   db: Firestore,
   gatewayId: string,
@@ -236,7 +279,7 @@ async function agentUsageStatusPayload(
     ]);
 
   const userData = assigned.data;
-  const plan = resolveEffectivePlan(userData, new Date(nowMs));
+  const plan = resolveBillingProfile(userData, new Date(nowMs));
   if (!authorization) {
     throw new Error(
       `durable root config unavailable for gateways/${gatewayId}`,
@@ -248,21 +291,12 @@ async function agentUsageStatusPayload(
     (configSnap.data() ?? {}) as Record<string, unknown>,
     gatewayClass,
   );
-  const windowCostUsd = financeNumber(
-    windowSnap.data()?.chargeUsd ?? windowSnap.data()?.costUsd,
-  );
-  const weekCostUsd = financeNumber(
-    weekSnap.data()?.chargeUsd ?? weekSnap.data()?.costUsd,
-  );
-  const onOwnerCredential =
-    credential.path === "byosub" || credential.path === "byok_api_key";
-  const throttle = spendDegradeState({
-    modelAccess: plan.modelAccess,
-    windowCostUsd,
-    windowBudgetUsd: plan.windowBudgetUsd,
-    weekCostUsd,
-    weekBudgetUsd: plan.weeklyBudgetUsd,
-    onOwnerCredential,
+  const spend = deriveSpendStatus({
+    plan,
+    credentialPath: credential.path,
+    windowData: windowSnap.data(),
+    weekData: weekSnap.data(),
+    creditData: creditSnap.data(),
   });
 
   return {
@@ -271,28 +305,27 @@ async function agentUsageStatusPayload(
     effectiveTier: plan.effectiveTier,
     trialDaysRemaining: plan.trialDaysRemaining,
     week: {
-      percentUsed: onOwnerCredential
+      percentUsed: spend.onOwnerCredential
         ? 0
-        : spendWindowPercentUsed(weekCostUsd, plan.weeklyBudgetUsd),
+        : spendWindowPercentUsed(spend.weekCostUsd, plan.weeklyBudgetUsd),
       resetAt: new Date(
         weekStartMs + MODEL_BROKER_WEEK_WINDOW_MS,
       ).toISOString(),
     },
     window: {
-      percentUsed: onOwnerCredential
+      percentUsed: spend.onOwnerCredential
         ? 0
-        : spendWindowPercentUsed(windowCostUsd, plan.windowBudgetUsd),
+        : spendWindowPercentUsed(spend.windowCostUsd, plan.windowBudgetUsd),
       nextRefillAt: new Date(
         windowStartMs + MODEL_BROKER_USAGE_WINDOW_MS,
       ).toISOString(),
-      degraded: throttle.degraded,
-      blocked: throttle.blocked,
-      reason: throttle.reason,
+      degraded: spend.throttle.degraded,
+      blocked: spend.throttle.blocked,
+      reason: spend.throttle.reason,
     },
-    // Builders ride the prepaid rail — their platform-model gate is the balance.
     credits:
-      plan.tier === "builder"
-        ? { balanceUsd: financeNumber(creditSnap.data()?.balanceUsd) }
+      plan.rail === "prepaid_credits" || spend.subscriptionUsingCredits
+        ? { balanceUsd: spend.creditBalanceUsd }
         : null,
     credential,
   };

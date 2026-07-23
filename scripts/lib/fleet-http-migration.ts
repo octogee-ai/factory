@@ -43,6 +43,7 @@ import {
   MIGRATION_SLUG_HEADER,
 } from "../../shared/types/fleet-controller.js";
 import { isValidUsername } from "../../shared/types/identity.js";
+import { pickPlanInputs } from "../../shared/types/billing.js";
 import { verifyFleetRequest } from "./fleet-signature.js";
 import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
 import {
@@ -331,6 +332,9 @@ function snapshotFromRestoreBody(body: RestoreMigrationRequestBody): UserSnapsho
     channels: Array.isArray(snapshot.channels) ? snapshot.channels as UserSnapshot["channels"] : [],
     ownerName: typeof snapshot.ownerName === "string" ? snapshot.ownerName : body.slug,
     projects: Array.isArray(snapshot.projects) ? snapshot.projects as UserSnapshot["projects"] : [],
+    ...pickPlanInputs(snapshot),
+    freeTierModelRef:
+      typeof snapshot.freeTierModelRef === "string" ? snapshot.freeTierModelRef : undefined,
     byotActive: snapshot.byotActive === true,
     systemConfig: isRecord(snapshot.systemConfig)
       ? (snapshot.systemConfig as UserSnapshot["systemConfig"])

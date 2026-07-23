@@ -57,8 +57,15 @@ describe("buildCustomerSummary", () => {
     // paid tier: under both budgets vs over the burst window vs over the week
     const paid = { selectedTier: "pro", subscription: { tier: "pro" } };
     expect(buildCustomerSummary("u", paid, { windowCostUsd: 0, now: NOW }).degraded).toBe(false);
-    expect(buildCustomerSummary("u", paid, { windowCostUsd: 9999, now: NOW }).degraded).toBe(true);
-    expect(buildCustomerSummary("u", paid, { weekCostUsd: 9999, now: NOW }).degraded).toBe(true);
+    expect(buildCustomerSummary("u", paid, { windowCostUsd: 9999, now: NOW }).degraded).toBe(false);
+    expect(buildCustomerSummary("u", paid, { weekCostUsd: 9999, now: NOW }).degraded).toBe(false);
+  });
+
+  it("does not label an exhausted active trial as running on HOUSE", () => {
+    const trial = { subscription: { tier: "trial", trialStartedAt: new Date(NOW) } };
+    expect(
+      buildCustomerSummary("u", trial, { windowCostUsd: 9999, now: NOW }).degraded,
+    ).toBe(false);
   });
 
   it("shows 0% (not a zero-budget 100%) for owner-credential customers — mirrors the customer surfaces", () => {

@@ -662,6 +662,17 @@ describe("createRestoreHandler", () => {
       uid: "uid-chris",
       snapshot: {
         ...RESTORE_SNAPSHOT,
+        selectedTier: "personal_free",
+        builderSubscription: { tier: "pro", status: "trialing" },
+        trialGrant: {
+          schemaVersion: 1,
+          personalTier: "personal_pro",
+          builderTier: "pro",
+          gatewayId: "trial-op-000001",
+          configHash: "trial-config-a",
+          claimedAt: "2026-07-22T00:00:00.000Z",
+        },
+        freeTierModelRef: "platform-openrouter/moonshotai/kimi-k2",
         byotActive: true,
         systemConfig: { byot: { provider: "anthropic" } },
       },
@@ -691,6 +702,17 @@ describe("createRestoreHandler", () => {
       expect(adapter.reassertByotForCustomer).toHaveBeenCalledWith(
         expect.objectContaining({
           byotActive: true,
+          selectedTier: "personal_free",
+          builderSubscription: { tier: "pro", status: "trialing" },
+          trialGrant: {
+            schemaVersion: 1,
+            personalTier: "personal_pro",
+            builderTier: "pro",
+            gatewayId: "trial-op-000001",
+            configHash: "trial-config-a",
+            claimedAt: "2026-07-22T00:00:00.000Z",
+          },
+          freeTierModelRef: "platform-openrouter/moonshotai/kimi-k2",
           systemConfig: { byot: { provider: "anthropic" } },
           provisioning: { openclaw: { status: "complete" } },
         }),

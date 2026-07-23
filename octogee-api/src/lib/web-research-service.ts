@@ -95,6 +95,16 @@ async function requireAllowance(input: {
     throw new WebResearchError("billing_unavailable", 503, "Platform allowance gate unavailable");
   }
   if (state.exhausted) {
+    if (input.grant.policy.houseFallback === false) {
+      if (!input.usageStore.readCreditBalance) {
+        throw new WebResearchError("billing_unavailable", 503, "Platform Credit gate unavailable");
+      }
+      const balance = await input.usageStore.readCreditBalance(input.ownerUid);
+      if (balance <= 0) {
+        throw new WebResearchError("credits_exhausted", 402, "Platform Credits exhausted");
+      }
+      return { debitsCreditBalance: true, countsTowardSpendWindow: false };
+    }
     throw new WebResearchError("allowance_exhausted", 429, "Platform allowance exhausted");
   }
   return { debitsCreditBalance: false, countsTowardSpendWindow: true };

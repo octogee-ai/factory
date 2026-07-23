@@ -808,8 +808,39 @@ async function freeTierGateOutcome(
   };
 }
 
-// A prepaid builder degrades once their balance is dry; a subscription plan
-// degrades once its weekly ledger or burst window is spent.
+function deniedNoTokenPath(): DegradeOutcome {
+  return {
+    kind: "denied",
+    decision: {
+      allowed: false,
+      status: 402,
+      error:
+        "no active token path — upgrade to a paid Personal plan, add prepaid credits, or bring your own subscription",
+    },
+  };
+}
+
+async function purchasedCreditOutcome(input: PreflightGateInput): Promise<DegradeOutcome> {
+  if (!input.usageStore?.readCreditBalance) {
+    return {
+      kind: "denied",
+      decision: { allowed: false, status: 503, error: "model broker credit gate unavailable" },
+    };
+  }
+  const creditBalanceUsd = await input.usageStore.readCreditBalance(
+    input.record.ownerUid as string,
+  );
+  if (creditBalanceUsd <= 0) return deniedNoTokenPath();
+  return {
+    kind: "state",
+    degrade: false,
+    degradeReason: null,
+    windowCostUsd: null,
+    weekCostUsd: null,
+    creditBalanceUsd,
+  };
+}
+
 async function degradeStateForGrant(
   input: PreflightGateInput,
   prepaid: boolean,
@@ -834,15 +865,7 @@ async function degradeStateForGrant(
     // (and no attached paid Personal plan or BYOSUB) is a hard deny, not a
     // degrade — pricing v3's "paying customers pay for tokens" rule.
     if (dry && input.grant.policy.houseFallback === false) {
-      return {
-        kind: "denied",
-        decision: {
-          allowed: false,
-          status: 402,
-          error:
-            "no active token path — attach a paid Personal plan, add prepaid credits, or bring your own subscription",
-        },
-      };
+      return deniedNoTokenPath();
     }
     return {
       kind: "state",
@@ -856,6 +879,9 @@ async function degradeStateForGrant(
   if (spendWindowUsd !== null || spendWeekUsd !== null) {
     const spend = await spendWindowGate(input, spendWindowUsd, spendWeekUsd);
     if ("allowed" in spend) return { kind: "denied", decision: spend };
+    if (spend.degrade && input.grant.policy.houseFallback === false) {
+      return purchasedCreditOutcome(input);
+    }
     return {
       kind: "state",
       degrade: spend.degrade,
@@ -1067,6 +1093,7 @@ async function forwardAllowed(args: {
 }): Promise<void> {
   const { req, res, url, record, providerKey, gate } = args;
   const prepaid = args.rail === "prepaid_credits" && Boolean(record.ownerUid);
+  const usingCredits = prepaid || gate.creditBalanceUsd !== null;
   const rewrittenBody = rewriteRequestBody({
     body: req.body,
     degradeModel: gate.degrade ? args.houseModel : null,
@@ -1122,10 +1149,10 @@ async function forwardAllowed(args: {
         // its traffic debits the weekly allowance ledger.
         countsTowardSpendWindow:
           providerKey.source !== "owner_model_credential" &&
-          !prepaid &&
+          !usingCredits &&
           (!gate.degrade || gate.degradeReason === "free"),
         debitsCreditBalance:
-          prepaid && providerKey.source !== "owner_model_credential" && !gate.degrade,
+          usingCredits && providerKey.source !== "owner_model_credential" && !gate.degrade,
       }
     : undefined;
   await writeUpstreamResponse(upstream, res, metering);
