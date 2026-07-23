@@ -99,6 +99,13 @@ function saveEnvValue(envFile: string, key: string, value: string): string {
   ].join("\n"));
 }
 
+function readEnvValue(envFile: string, key: string): string {
+  return runShell([
+    `source ${JSON.stringify(helperPath)}`,
+    `read_env_file_value ${JSON.stringify(envFile)} ${JSON.stringify(key)}`,
+  ].join("\n"));
+}
+
 function stripePriceMapValidity(value: string): string {
   return runShell([
     `source ${JSON.stringify(helperPath)}`,
@@ -154,6 +161,29 @@ function selectedSecretValue(
 }
 
 describe("setup-secrets env loader", () => {
+  it("reads one named env value without exporting unrelated secrets", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "octogee-env-reader-"));
+    const envFile = path.join(dir, ".env.test-west");
+    writeFileSync(envFile, [
+      "UNRELATED_SECRET=do-not-export",
+      'MM_TEAM_ID="team-id"',
+      "",
+    ].join("\n"));
+
+    expect(readEnvValue(envFile, "MM_TEAM_ID")).toBe("team-id");
+  });
+
+  it("rejects duplicate named env values", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "octogee-env-reader-"));
+    const envFile = path.join(dir, ".env.test-west");
+    writeFileSync(envFile, "MM_TEAM_ID=first\nMM_TEAM_ID=second\n");
+
+    expect(runShellStatus([
+      `source ${JSON.stringify(helperPath)}`,
+      `read_env_file_value ${JSON.stringify(envFile)} MM_TEAM_ID`,
+    ].join("\n"))).not.toBe(0);
+  });
+
   it("removes surrounding .env quotes before values are materialized into Kubernetes secrets", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "octogee-env-loader-"));
     const envFile = path.join(dir, ".env.test");

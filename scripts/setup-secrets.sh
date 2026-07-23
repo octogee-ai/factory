@@ -57,10 +57,9 @@ done
 TARGET_ENV="$ENV"
 [[ "$TARGET_ENV" == "custom" ]] && TARGET_ENV="test"
 if [[ -n "$DEPLOYMENT_TARGET" ]]; then
-  [[ "$ENV" == "custom" ]] && { echo "--deployment-target cannot be used with --env=custom"; exit 1; }
   octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"
   [[ "$TARGET_ENVIRONMENT" != "$TARGET_ENV" ]] && {
-    echo "Deployment target '$DEPLOYMENT_TARGET' does not belong to environment '$ENV'"
+    echo "Deployment target '$DEPLOYMENT_TARGET' does not belong to environment '$TARGET_ENV'"
     exit 1
   }
 else
@@ -105,10 +104,12 @@ case "$ENV" in
     ;;
   *) echo "Unknown environment: $ENV"; exit 1 ;;
 esac
-case "$TARGET_ID" in
-  prod-central|test-central|build-week-central) ;;
-  *) ENV_FILE="$REPO_DIR/.env.$TARGET_ID" ;;
-esac
+if [[ "$ENV" != "custom" ]]; then
+  case "$TARGET_ID" in
+    prod-central|test-central|build-week-central) ;;
+    *) ENV_FILE="$REPO_DIR/.env.$TARGET_ID" ;;
+  esac
+fi
 
 ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
 warn() { echo -e "  ${YELLOW}⚠️  $1${NC}"; }

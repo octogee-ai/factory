@@ -45,6 +45,43 @@ load_env_file() {
   done < "$env_file"
 }
 
+read_env_file_value() {
+  local env_file="$1"
+  local requested_key="$2"
+  [[ "$requested_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || {
+    echo "Invalid env key: $requested_key" >&2
+    return 1
+  }
+  [[ -f "$env_file" ]] || {
+    echo "Env file does not exist: $env_file" >&2
+    return 1
+  }
+
+  local line trimmed key raw_key raw_value value="" match_count=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    trimmed="$(trim_env_whitespace "$line")"
+    [[ -z "$trimmed" || "${trimmed:0:1}" == "#" ]] && continue
+    [[ "$trimmed" != *=* ]] && continue
+
+    raw_key="${trimmed%%=*}"
+    key="$(trim_env_whitespace "$raw_key")"
+    [[ "$key" == "$requested_key" ]] || continue
+    raw_value="${trimmed#*=}"
+    value="$(normalise_env_value "$raw_value")"
+    match_count=$((match_count + 1))
+  done < "$env_file"
+
+  [[ "$match_count" == "1" ]] || {
+    echo "Expected exactly one $requested_key entry in $env_file; found $match_count" >&2
+    return 1
+  }
+  [[ -n "$value" ]] || {
+    echo "$requested_key is empty in $env_file" >&2
+    return 1
+  }
+  printf '%s' "$value"
+}
+
 configured_secret_value() {
   local value
   value="$(normalise_env_value "$1")"

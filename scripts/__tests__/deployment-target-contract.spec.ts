@@ -286,6 +286,26 @@ describe("deployment target consumers", () => {
     expect(teardown).toContain('TARGET_ARG=" --deployment-target=$TARGET_ID"');
   });
 
+  it("lets custom namespace provisioning select and retain its exact test target", () => {
+    const provision = source("scripts/provision-namespace.sh");
+
+    expect(provision).toContain("--deployment-target=*)");
+    expect(provision).toContain('octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"');
+    expect(provision).toContain("does not belong to environment 'test'");
+    expect(provision.match(/--env=custom --namespace="\$NAMESPACE" --yes --deployment-target="\$TARGET_ID"/g)).toHaveLength(4);
+
+    for (const script of [
+      "scripts/setup-secrets.sh",
+      "scripts/setup-mattermost.sh",
+      "scripts/setup-gitea.sh",
+    ]) {
+      const contents = source(script);
+      expect(contents, script).not.toContain('"--deployment-target cannot be used with --env=custom"');
+      expect(contents, script).toContain('[[ "$TARGET_ENVIRONMENT" != "$TARGET_ENV" ]]');
+      expect(contents, script).toContain('if [[ "$ENV" != "custom" ]]; then');
+    }
+  });
+
   it("selects candidate data and cluster targets in canonical finalizers", () => {
     for (const script of [
       "scripts/setup-firestore-ttls.sh",

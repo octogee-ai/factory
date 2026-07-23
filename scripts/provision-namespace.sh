@@ -51,6 +51,7 @@ set -euo pipefail
 #   ./scripts/provision-namespace.sh feat-alice --yes    # non-interactive
 #   ./scripts/provision-namespace.sh --destroy feat-alice
 #   ./scripts/provision-namespace.sh feat-alice --skip-terraform
+#   ./scripts/provision-namespace.sh feat-alice --deployment-target=test-west
 #
 # SAFETY GATES:
 #   - PROD deployment namespaces require typed 'DESTROY PROD NAMESPACE' confirmation,
@@ -78,12 +79,14 @@ NAMESPACE=""
 YES=false
 DESTROY_ONLY=false
 SKIP_TERRAFORM=false
+DEPLOYMENT_TARGET=""
 
 for arg in "$@"; do
   case $arg in
     --yes|-y)        YES=true ;;
     --destroy)       DESTROY_ONLY=true ;;
     --skip-terraform) SKIP_TERRAFORM=true ;;
+    --deployment-target=*) DEPLOYMENT_TARGET="${arg#*=}" ;;
     --help|-h)
       sed -n '4,36p' "$0"
       exit 0
@@ -94,7 +97,7 @@ for arg in "$@"; do
 done
 
 [[ -z "$NAMESPACE" ]] && {
-  echo "Usage: $0 <namespace> [--yes] [--destroy] [--skip-terraform]"
+  echo "Usage: $0 <namespace> [--deployment-target=TARGET] [--yes] [--destroy] [--skip-terraform]"
   exit 1
 }
 
@@ -154,7 +157,15 @@ case "$NAMESPACE" in
 esac
 
 # ── Constants (shared cluster + test Firebase project) ─────────────────────
-octogee_load_deployment_target --environment=test
+if [[ -n "$DEPLOYMENT_TARGET" ]]; then
+  octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"
+  [[ "$TARGET_ENVIRONMENT" == "test" ]] || {
+    echo "Deployment target '$DEPLOYMENT_TARGET' does not belong to environment 'test'"
+    exit 1
+  }
+else
+  octogee_load_deployment_target --environment=test
+fi
 CLUSTER_PROJECT="$TARGET_CLUSTER_PROJECT"
 CLOUDSQL_PROJECT="$TARGET_CLOUD_SQL_PROJECT"
 CLOUDSQL_INSTANCE="$TARGET_CLOUD_SQL_INSTANCE"
@@ -399,7 +410,7 @@ fi
 
 # ── 2e. Materialize K8s secrets ────────────────────────────────────────────
 step "Phase 2d: Materializing K8s secrets"
-"$SCRIPT_DIR/setup-secrets.sh" --env=custom --namespace="$NAMESPACE" --yes
+"$SCRIPT_DIR/setup-secrets.sh" --env=custom --namespace="$NAMESPACE" --yes --deployment-target="$TARGET_ID"
 
 # ── 2f. Helm install ───────────────────────────────────────────────────────
 step "Phase 2e: Helm install"
@@ -417,15 +428,15 @@ ok "Helm install complete"
 
 # ── 2g. Bootstrap Mattermost ───────────────────────────────────────────────
 step "Phase 2f: Bootstrapping Mattermost (admin, team, bot, PAT)"
-"$SCRIPT_DIR/setup-mattermost.sh" --env=custom --namespace="$NAMESPACE" --yes
+"$SCRIPT_DIR/setup-mattermost.sh" --env=custom --namespace="$NAMESPACE" --yes --deployment-target="$TARGET_ID"
 
 # setup-secrets again to pick up MM_* tokens that setup-mattermost wrote to .env
 info "Re-materializing K8s secrets with fresh MM tokens..."
-"$SCRIPT_DIR/setup-secrets.sh" --env=custom --namespace="$NAMESPACE" --yes
+"$SCRIPT_DIR/setup-secrets.sh" --env=custom --namespace="$NAMESPACE" --yes --deployment-target="$TARGET_ID"
 
 # ── 2h. Bootstrap Gitea ────────────────────────────────────────────────────
 step "Phase 2g: Bootstrapping Gitea (org + API token)"
-"$SCRIPT_DIR/setup-gitea.sh" --env=custom --namespace="$NAMESPACE" --yes
+"$SCRIPT_DIR/setup-gitea.sh" --env=custom --namespace="$NAMESPACE" --yes --deployment-target="$TARGET_ID"
 
 # ── 2i. Restart everything to pick up final secrets ────────────────────────
 step "Phase 2h: Rolling restart"
