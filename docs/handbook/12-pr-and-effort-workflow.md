@@ -4,8 +4,8 @@ slug: 12-pr-and-effort-workflow
 order: 12
 part: Dev Workflow
 audience: [agent]
-description: Spec-first for larger efforts, fewer PRs off main, the per-PR review agent, severity-tiered fixups, and the git-hygiene rules (branch protection, squash-merge cleanup, origin/main freshness).
-updated: 2026-07-08
+description: Spec-first for larger efforts, fewer PRs off main, acceptance plans, per-PR review, severity-tiered fixups, and git hygiene.
+updated: 2026-07-23
 ---
 
 # PR & Effort Workflow
@@ -30,8 +30,11 @@ work that **spans more than one PR or touches multiple subsystems**.
 4. **Per-PR flow:**
    - Code the feature per the spec (TDD for logic — see [10](10-engineering-principles.md)).
    - Run the full suite + typecheck locally. Don't push if either is red.
+   - For customer/operator journeys needing live UI proof, add a Browser-driven Markdown
+     plan under [`acceptance/plans/`](../../acceptance/plans/README.md). Keep it at the
+     promise-and-evidence level; the Browser driver owns tool calls.
    - Open the PR with a body: spec ref, architecture summary, TDD coverage,
-     acceptance steps, explicit non-goals.
+     acceptance-plan ref or concise acceptance steps, explicit non-goals.
    - **Launch the review agent** (Agent tool, `general-purpose` subagent) using
      the canonical prompt in [`review_prompt_template`](#review-prompt) — don't
      re-derive it (criteria drift). Post the review as a PR comment.
