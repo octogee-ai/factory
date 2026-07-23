@@ -17,11 +17,11 @@ function readTemplate() {
 }
 
 describe("infra/gateway/openclaw.template.json — platform default model", () => {
-  it("defaults customer-facing agents and subagents to GLM 5.2 via the platform OpenRouter provider", () => {
+  it("does not assign the unauthenticated bootstrap agent a platform-funded model", () => {
     const template = readTemplate();
 
-    expect(template.agents.defaults.model.primary).toBe(DEFAULT_MODEL_REF);
-    expect(template.agents.defaults.subagents.model).toBe(DEFAULT_MODEL_REF);
+    expect(template.agents.defaults).not.toHaveProperty("model");
+    expect(template.agents.defaults.subagents).not.toHaveProperty("model");
   });
 
   it("keys the default off the shared model catalog", () => {
@@ -31,7 +31,7 @@ describe("infra/gateway/openclaw.template.json — platform default model", () =
     expect(modelRefForCatalogEntry(entry!)).toBe(DEFAULT_MODEL_REF);
   });
 
-  it("carries the catalog's default reasoning effort on the default-model allowlist entry", () => {
+  it("keeps the platform model allowlist metadata for mounted customer agents", () => {
     const template = readTemplate();
     const entry = catalogEntryForModelRef(DEFAULT_MODEL_REF)!;
 

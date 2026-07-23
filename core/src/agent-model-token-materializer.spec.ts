@@ -183,11 +183,25 @@ describe("model-readiness: openrouter catalog upsert", () => {
     expect(upsertOpenRouterBrokerCatalog(agentDir, "octogee-a-coach", CATALOG)).toBe(true);
     const models = JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"));
     const provider = models.providers[OPENROUTER_BROKER_PROVIDER_ID];
-    expect(provider.apiKey).toBe(OPENROUTER_BROKER_PROFILE_ID);
-    expect(provider.models.map((m: { id: string }) => m.id)).toEqual([
-      "z-ai/glm-5.2",
-      "minimax/minimax-m3",
-    ]);
+    expect(provider).toMatchObject({
+      api: "openai-completions",
+      baseUrl: CATALOG.baseUrl,
+      apiKey: OPENROUTER_BROKER_PROFILE_ID,
+      models: [
+        {
+          id: "z-ai/glm-5.2",
+          name: "z-ai/glm-5.2",
+          contextTokens: 1_048_576,
+          contextWindow: 1_048_576,
+        },
+        {
+          id: "minimax/minimax-m3",
+          name: "minimax/minimax-m3",
+          contextTokens: 524_288,
+          contextWindow: 524_288,
+        },
+      ],
+    });
     const store = readAuthProfileStore(agentDir) as {
       profiles: Record<string, { provider: string; keyRef: { id: string } }>;
     };

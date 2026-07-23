@@ -49,9 +49,6 @@
   },
   "agents": {
     "defaults": {
-      "model": {
-        "primary": "platform-openrouter/z-ai/glm-5.2"
-      },
       "models": {
         "platform-openrouter/z-ai/glm-5.2": {
           "alias": "glm",
@@ -86,7 +83,6 @@
       "maxConcurrent": 8,
       "subagents": {
         "maxConcurrent": 8,
-        "model": "platform-openrouter/z-ai/glm-5.2",
         "runTimeoutSeconds": 900
       }
     },
