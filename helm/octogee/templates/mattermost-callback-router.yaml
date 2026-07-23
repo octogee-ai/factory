@@ -38,7 +38,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: router
-          image: "{{ $gatewayEdge.image.repository }}:{{ $gatewayEdge.image.tag }}"
+          image: "{{ $gatewayEdge.image.repository }}:{{ $gatewayEdge.image.tag }}@{{ required "gateway-edge.image.digest is required" $gatewayEdge.image.digest }}"
           ports:
             - name: http
               containerPort: 3001

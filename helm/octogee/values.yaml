@@ -28,6 +28,10 @@ global:
   # credentials, target opens a temporary rsync daemon on this port, source
   # streams directly to the target pod IP. Workspace bytes never transit GLM.
   migrationRsyncPort: "30873"
+  utilityImage:
+    repository: curlimages/curl
+    tag: "8.7.1"
+    digest: "sha256:25d29daeb9b14b89e2fa8cc17c70e4b188bca1466086907c2d9a4b56b59d8e21"
 
 # Single shared GKE Ingress for the public app hosts. When disabled, the
 # legacy per-host Ingresses render exactly as before. When enabled, this
@@ -116,10 +120,12 @@ mattermost:
 # ── gitea (upstream chart) ──────────────────────────────────────────────────
 # networkPolicy is managed in the parent chart (templates/gitea-network-policy.yaml)
 # because Gitea is a packaged upstream chart — can't inject templates into .tgz
-# We do NOT pin gitea.image.tag: it defaults to the chart's appVersion, so the
-# `gitea` dependency version in Chart.yaml is the single version knob — Renovate
-# bumps the chart and the matching binary rides along (.github/renovate.json5).
+# The upstream chart supports tag plus digest. Keep both explicit: the tag remains
+# readable release metadata while the digest is the immutable runtime identity.
 gitea:
+  image:
+    tag: "1.27.0"
+    digest: "sha256:414ba5b2b1163480e9ed4213a989cd798579cfa88582a2359303273009b2b852"
   # The chart's helm-test hook (a busybox wget → gitea:3000) can't pass under the
   # networkPolicy below, which intentionally blocks arbitrary pods — and it adds
   # no signal over gitea's own readiness probe + the deploy's `helm --wait` gate.
@@ -205,6 +211,7 @@ gateway-edge:
   image:
     repository: ""
     tag: latest
+    digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   replicas: 1
   port: 3001
   serviceAccountName: octogee-gateway
@@ -282,6 +289,7 @@ llmBroker:
   image:
     repository: ""
     tag: latest
+    digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   replicas: 2
   port: 3010
   serviceAccountName: llm-broker
@@ -316,6 +324,7 @@ artifactWorker:
   image:
     repository: ""
     tag: latest
+    digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   replicas: 1
   serviceAccountName: octogee-artifact-worker
   supervisorResources:
@@ -343,6 +352,7 @@ opsAgent:
   image:
     repository: ""
     tag: latest
+    digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   replicas: 1
   port: 3010
   serviceAccountName: octogee-ops-agent

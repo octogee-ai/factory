@@ -1,6 +1,7 @@
 image:
   repository: ""
   tag: latest
+  digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 replicas: 1
 port: 3001

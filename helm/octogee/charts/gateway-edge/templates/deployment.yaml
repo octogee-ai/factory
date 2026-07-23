@@ -43,7 +43,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: gateway-router
-          image: "{{ required "gateway-edge.image.repository is required" .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ required "gateway-edge.image.repository is required" .Values.image.repository }}:{{ required "gateway-edge.image.tag is required" .Values.image.tag }}@{{ required "gateway-edge.image.digest is required" .Values.image.digest }}"
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

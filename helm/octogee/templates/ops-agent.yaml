@@ -45,7 +45,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: ops-agent
-          image: "{{ required "opsAgent.image.repository is required" .Values.opsAgent.image.repository }}:{{ .Values.opsAgent.image.tag }}"
+          image: "{{ required "opsAgent.image.repository is required" .Values.opsAgent.image.repository }}:{{ required "opsAgent.image.tag is required" .Values.opsAgent.image.tag }}@{{ required "opsAgent.image.digest is required" .Values.opsAgent.image.digest }}"
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false

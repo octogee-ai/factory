@@ -35,7 +35,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: octogee-api
-          image: "{{ required "octogee-api.image.repository is required" .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ required "octogee-api.image.repository is required" .Values.image.repository }}:{{ required "octogee-api.image.tag is required" .Values.image.tag }}@{{ required "octogee-api.image.digest is required" .Values.image.digest }}"
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false

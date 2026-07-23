@@ -1,6 +1,7 @@
 image:
   repository: ""
   tag: latest
+  digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 # Workload Identity binding — KSA `glm-controller` impersonates THIS GSA:
 # Cowboy's own dedicated identity (octogee-glm-controller), which carries the

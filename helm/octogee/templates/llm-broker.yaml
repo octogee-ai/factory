@@ -49,7 +49,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: llm-broker
-          image: "{{ required "llmBroker.image.repository is required" .Values.llmBroker.image.repository }}:{{ .Values.llmBroker.image.tag }}"
+          image: "{{ required "llmBroker.image.repository is required" .Values.llmBroker.image.repository }}:{{ required "llmBroker.image.tag is required" .Values.llmBroker.image.tag }}@{{ required "llmBroker.image.digest is required" .Values.llmBroker.image.digest }}"
           imagePullPolicy: Always
           command:
             - node

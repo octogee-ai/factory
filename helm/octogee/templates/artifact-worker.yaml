@@ -46,7 +46,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: artifact-worker
-          image: "{{ required "artifactWorker.image.repository is required" .Values.artifactWorker.image.repository }}:{{ .Values.artifactWorker.image.tag }}"
+          image: "{{ required "artifactWorker.image.repository is required" .Values.artifactWorker.image.repository }}:{{ required "artifactWorker.image.tag is required" .Values.artifactWorker.image.tag }}@{{ required "artifactWorker.image.digest is required" .Values.artifactWorker.image.digest }}"
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
@@ -73,7 +73,7 @@ spec:
               mountPath: /var/run/secrets/octogee-api
               readOnly: true
         - name: artifact-parser
-          image: "{{ required "artifactWorker.image.repository is required" .Values.artifactWorker.image.repository }}:{{ .Values.artifactWorker.image.tag }}"
+          image: "{{ required "artifactWorker.image.repository is required" .Values.artifactWorker.image.repository }}:{{ required "artifactWorker.image.tag is required" .Values.artifactWorker.image.tag }}@{{ required "artifactWorker.image.digest is required" .Values.artifactWorker.image.digest }}"
           imagePullPolicy: Always
           command: ["node", "dist/parser-main.js"]
           securityContext:
