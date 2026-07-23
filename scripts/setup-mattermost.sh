@@ -38,15 +38,19 @@ ENV=""
 YES=false
 CUSTOM_NS=""
 DEPLOYMENT_TARGET=""
+ROTATE_PLATFORM_CREDENTIALS=false
+CONFIRM_PLATFORM_MIGRATION=""
 
 for arg in "$@"; do
   case $arg in
     --env=*)       ENV="${arg#*=}" ;;
     --deployment-target=*) DEPLOYMENT_TARGET="${arg#*=}" ;;
     --namespace=*) CUSTOM_NS="${arg#*=}" ;;
+    --rotate-platform-credentials) ROTATE_PLATFORM_CREDENTIALS=true ;;
+    --confirm-platform-migration=*) CONFIRM_PLATFORM_MIGRATION="${arg#*=}" ;;
     --yes|-y)      YES=true ;;
     --help|-h)
-      echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--yes]"
+      echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--rotate-platform-credentials --confirm-platform-migration=TARGET] [--yes]"
       exit 0
       ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
@@ -109,6 +113,17 @@ case "$TARGET_ID" in
   prod-central|test-central|build-week-central) ;;
   *) ENV_FILE="$REPO_DIR/.env.$TARGET_ID" ;;
 esac
+
+if $ROTATE_PLATFORM_CREDENTIALS; then
+  case "$TARGET_ID" in
+    test-west|prod-west) ;;
+    *) echo "Platform credential rotation is restricted to WEST platform migration targets" >&2; exit 1 ;;
+  esac
+  [[ "$CONFIRM_PLATFORM_MIGRATION" == "$TARGET_ID" ]] || {
+    echo "Platform credential rotation requires --confirm-platform-migration=$TARGET_ID" >&2
+    exit 1
+  }
+fi
 
 ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
 warn() { echo -e "  ${YELLOW}⚠️  $1${NC}"; }
@@ -276,7 +291,10 @@ info "MM URL: $MM_URL"
 save_env "MM_ADMIN_USER" "$MM_ADMIN_USER"
 info "Admin user: $MM_ADMIN_USER"
 
-if [[ -z "${MM_ADMIN_PASS:-}" ]]; then
+if $ROTATE_PLATFORM_CREDENTIALS; then
+  MM_ADMIN_PASS="$(openssl rand -base64 48 | tr -d '\n')"
+  info "Generated new WEST platform admin password"
+elif [[ -z "${MM_ADMIN_PASS:-}" ]]; then
   MM_ADMIN_PASS="Octogee$(openssl rand -hex 4)!"
   info "Generated admin password"
 fi
@@ -341,6 +359,16 @@ info "Waiting for Mattermost (up to 120s)..."
 kubectl wait --for=condition=available deployment/mattermost \
   -n "$K8S_NAMESPACE" --timeout=120s 2>/dev/null || fail "Mattermost not ready after 120s"
 ok "Mattermost deployment ready"
+
+if $ROTATE_PLATFORM_CREDENTIALS; then
+  info "Rotating restored Mattermost admin password through the local control socket..."
+  kubectl exec -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" deploy/mattermost -c mattermost -- \
+    /mattermost/bin/mmctl --local user change-password "$MM_ADMIN_USER" \
+      --password "$MM_ADMIN_PASS" >/dev/null \
+    || fail "Could not rotate the restored Mattermost admin password"
+  save_env "MM_ADMIN_PASS" "$MM_ADMIN_PASS"
+  ok "Restored Mattermost admin password rotated"
+fi
 
 # ── 4b. Port-forward to MM (distroless image — no in-pod curl) ────────────
 # MM 11.x ships a distroless image without curl/sh, so we can't `kubectl exec
@@ -416,6 +444,7 @@ if [[ "$ADMIN_CHECK" == "200" ]]; then
 
   # ── Admin PAT: test cached value first, only rotate if it's broken ──────
   CACHED_ADMIN_PAT=$(ksecret_key mattermost-gateway admin_token)
+  $ROTATE_PLATFORM_CREDENTIALS && CACHED_ADMIN_PAT=""
   if mm_pat_is_valid "$CACHED_ADMIN_PAT" "$MM_ADMIN_USER_ID"; then
     ok "Cached admin PAT still valid — skipping rotation"
     MM_ADMIN_PAT="$CACHED_ADMIN_PAT"

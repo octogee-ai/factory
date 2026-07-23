@@ -18,3 +18,7 @@ output "firestore_database" {
 output "firebase_storage_bucket" {
   value = google_storage_bucket.firebase.name
 }
+
+output "firebase_web_app_id" {
+  value = google_firebase_web_app.platform.app_id
+}

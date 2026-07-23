@@ -271,7 +271,7 @@ const db = buildDb({
     const db = buildDb({
       "users/uid-alice": { username: "alice" },
       "users/uid-alice/system/config": {
-        modelCredential: { secretName: "byok-alice-openai-compatible" },
+        modelCredential: { secretName: "untrusted-firestore-secret-name" },
       },
       "users/uid-alice/integrations/byosub": {
         providers: {
@@ -285,7 +285,12 @@ const db = buildDb({
       "uid-alice",
     );
     expect(ctx?.credentialSecretNames).toEqual([
+      "byok-alice-anthropic",
+      "byok-alice-grok",
+      "byok-alice-minimax",
+      "byok-alice-openai",
       "byok-alice-openai-compatible",
+      "byok-alice-openrouter",
       "byosub-uid-alice-anthropic",
       "byosub-uid-alice-openai",
     ]);
@@ -300,6 +305,12 @@ const db = buildDb({
     );
 
     expect(ctx?.credentialSecretNames).toEqual([
+      "byok-alice-anthropic",
+      "byok-alice-grok",
+      "byok-alice-minimax",
+      "byok-alice-openai",
+      "byok-alice-openai-compatible",
+      "byok-alice-openrouter",
       "byosub-uid-alice-anthropic",
       "byosub-uid-alice-openai",
     ]);

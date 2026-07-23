@@ -156,6 +156,25 @@ describe("deployment target consumers", () => {
     }
   });
 
+  it("keeps the platform credential reset out of ordinary deploy and gateway migration paths", () => {
+    const resetScript = "reset-platform-builder-credentials";
+    for (const path of [
+      ".github/workflows/releasev2.yml",
+      ".github/workflows/build-and-deploy.yml",
+      ".github/workflows/gateway-build-operator-base.yml",
+      "scripts/ops/fleet.ts",
+      "scripts/ops/cutover-simple-roll.ts",
+    ]) {
+      expect(source(path), path).not.toContain(resetScript);
+    }
+
+    const handbook = source("docs/handbook/40-credential-rotation.md");
+    expect(handbook).toContain("Platform-region migration only");
+    expect(handbook).toContain("reset-platform-builder-credentials.ts");
+    expect(handbook).toContain("ordinary gateway");
+    expect(handbook).toContain("content fingerprint");
+  });
+
   it("loads setup and verification topology from the shell target contract", () => {
     for (const script of [
       "scripts/setup-secrets.sh",
@@ -293,6 +312,47 @@ describe("deployment target consumers", () => {
       expect(contents, script).toContain("--target=$TARGET_ID");
     }
     expect(source(".github/workflows/build-and-deploy.yml")).toContain(renderer);
+  });
+
+  it("reconciles WEST durable PVC snapshot schedules after every platform release", () => {
+    const workflow = source(".github/workflows/build-and-deploy.yml");
+
+    expect(workflow).toContain("reconcile-west-pvc-snapshot-schedules.sh");
+    expect(workflow).toContain("--target=${{ steps.target.outputs.target_id }}");
+    expect(workflow).toContain("--apply");
+    expect(workflow).toContain("steps.target.outputs.region == 'us-west1'");
+  });
+
+  it("documents the automated WEST snapshot and tested restore operator paths", () => {
+    const handbook = source("docs/handbook/53-observability-and-data.md");
+    const security = source("docs/operations/SECURITY.md");
+
+    expect(handbook).toContain("reconcile-west-pvc-snapshot-schedules.sh");
+    expect(handbook).toContain("prove-west-pvc-restore.sh");
+    expect(handbook).toContain("prove-west-cloud-sql-recovery.sh");
+    expect(handbook).toContain("--confirm=octogee/test-west/cloud-sql/gitea");
+    expect(handbook).toContain("14-day retention");
+    expect(handbook).toContain("applies that retention window after source-disk deletion");
+    expect(handbook).not.toContain("Not yet automated (TODO):** daily scheduled snapshots");
+    expect(security).toContain("octogee-west-pvc-daily");
+    expect(security).toContain("prove-west-pvc-restore.sh");
+    expect(security).not.toContain("Current:** Manual snapshots for durable PVCs only");
+  });
+
+  it("documents two-phase secret rotation with bounded superseded versions", () => {
+    const rotation = source("docs/handbook/40-credential-rotation.md");
+    const retention = source("docs/operations/DATA-RETENTION.md");
+
+    for (const contents of [rotation, retention]) {
+      expect(contents).toContain("prune-secret-manager-versions.sh");
+      expect(contents).toContain("provider-side");
+    }
+    expect(rotation).toContain("--project=octogee-data-test");
+    expect(rotation).toContain("--confirm=octogee/secret-versions/octogee-data-test");
+    expect(rotation.toLowerCase()).toContain("after every consumer has been verified");
+    expect(rotation).toContain("Builder-owned credentials are excluded");
+    expect(retention).toContain("Builder-owned credential versions are excluded");
+    expect(rotation).not.toContain("never part of teardown/rebuild");
   });
 
   it("keeps regional bootstrap state isolated after target activation", () => {

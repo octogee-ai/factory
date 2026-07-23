@@ -16,7 +16,7 @@ set -euo pipefail
 #
 #   Phase 2 (post-bootstrap): re-reads .env after setup-mattermost.sh +
 #                        setup-gitea.sh have populated MM_TEAM_ID,
-#                        MM_ADMIN_TOKEN, GIT_API_TOKEN, etc., and re-materializes
+#                        MM_ADMIN_PAT, GIT_API_TOKEN, etc., and re-materializes
 #                        mattermost-gateway + gitea-token with REAL values.
 #                        kubectl rollout restart afterwards picks them up.
 #
@@ -277,18 +277,18 @@ set +u
 MM_ADMIN_USER="${MM_ADMIN_USER:-$(ksecret_key mattermost-gateway admin_user)}"
 MM_ADMIN_USER="${MM_ADMIN_USER:-octogee-admin}"
 MM_ADMIN_PASS="${MM_ADMIN_PASS:-$(ksecret_key mattermost-gateway admin_pass)}"
-MM_ADMIN_TOKEN="${MM_ADMIN_TOKEN:-$(ksecret_key mattermost-gateway admin_token)}"
+MM_ADMIN_PAT="${MM_ADMIN_PAT:-$(ksecret_key mattermost-gateway admin_token)}"
 MM_TEAM_ID="${MM_TEAM_ID:-$(ksecret_key mattermost-gateway team_id)}"
 MM_ADMIN_USER_ID="${MM_ADMIN_USER_ID:-$(ksecret_key mattermost-gateway admin_user_id)}"
 set -u
 ksecret mattermost-gateway \
   --from-literal=admin_user="$MM_ADMIN_USER" \
   --from-literal=admin_pass="$MM_ADMIN_PASS" \
-  --from-literal=admin_token="$MM_ADMIN_TOKEN" \
+  --from-literal=admin_token="$MM_ADMIN_PAT" \
   --from-literal=team_id="$MM_TEAM_ID" \
   --from-literal=admin_user_id="$MM_ADMIN_USER_ID"
 
-if [[ -z "$MM_ADMIN_TOKEN" || -z "$MM_TEAM_ID" || -z "$MM_ADMIN_USER_ID" ]]; then
+if [[ -z "$MM_ADMIN_PAT" || -z "$MM_TEAM_ID" || -z "$MM_ADMIN_USER_ID" ]]; then
   warn "mattermost-gateway contains blank bootstrap values. Run ./scripts/setup-mattermost.sh --env=$ENV$TARGET_ARG before trusting this environment."
 fi
 
@@ -1001,6 +1001,7 @@ echo ""
 echo -e "${CYAN}Secret completeness summary${NC}"
 status "mattermost-gateway / admin_user" "${MM_ADMIN_USER:-}"
 status "mattermost-gateway / admin_pass" "${MM_ADMIN_PASS:-}"
+status "mattermost-gateway / admin_pat" "${MM_ADMIN_PAT:-}"
 status "mattermost-gateway / admin_user_id" "${MM_ADMIN_USER_ID:-}"
 status "mattermost-gateway / team_id" "${MM_TEAM_ID:-}"
 status "gateway-model-key-issuer" "${GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN:-}"
@@ -1020,7 +1021,7 @@ status "stripe-secrets / webhook_secret" "${STRIPE_WEBHOOK_SECRET:-}"
 status "stripe-secrets / price_ids" "${STRIPE_PRICE_IDS:-}"
 
 echo ""
-if [[ -z "${MM_ADMIN_TOKEN:-}" || -z "${MM_TEAM_ID:-}" || -z "${MM_ADMIN_USER_ID:-}" ]]; then
+if [[ -z "${MM_ADMIN_PAT:-}" || -z "${MM_TEAM_ID:-}" || -z "${MM_ADMIN_USER_ID:-}" ]]; then
   warn "Mattermost-related secret state is incomplete"
   echo ""
   echo "  Next steps:"

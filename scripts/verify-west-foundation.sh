@@ -51,7 +51,8 @@ CLUSTER_JSON="${TEMP_DIR}/cluster.json"
 NAT_JSON="${TEMP_DIR}/nat.json"
 SQL_JSON="${TEMP_DIR}/sql.json"
 NODE_JSON="${TEMP_DIR}/node.json"
-CHANNEL_JSON="${TEMP_DIR}/notification-channel.json"
+EMAIL_CHANNEL_JSON="${TEMP_DIR}/email-notification-channel.json"
+SMS_CHANNEL_JSON="${TEMP_DIR}/sms-notification-channel.json"
 
 gcloud container clusters describe "${CLUSTER_NAME}" \
   --project="${PROJECT_ID}" \
@@ -125,13 +126,30 @@ fi
 gcloud beta monitoring channels list \
   --project="${PROJECT_ID}" \
   --filter='type="email" AND labels.email_address="ops@octogee.com"' \
-  --format=json >"${CHANNEL_JSON}"
+  --format=json >"${EMAIL_CHANNEL_JSON}"
 if ! jq -e '
   length == 1 and
+  .[0].type == "email" and
   .[0].enabled == true and
   .[0].verificationStatus == "VERIFIED"
-' "${CHANNEL_JSON}" >/dev/null; then
+' "${EMAIL_CHANNEL_JSON}" >/dev/null; then
   echo "Verify the ops@octogee.com Cloud Monitoring notification channel, then rerun bootstrap-west-platform.sh --verify-only" >&2
+  exit 1
+fi
+
+gcloud beta monitoring channels list \
+  --project="${PROJECT_ID}" \
+  --filter='type="sms"' \
+  --format=json >"${SMS_CHANNEL_JSON}"
+if ! jq -e '
+  map(select(
+    .displayName == "Octogee Ops" and
+    .type == "sms" and
+    .enabled == true and
+    .verificationStatus == "VERIFIED"
+  )) | length == 1
+' "${SMS_CHANNEL_JSON}" >/dev/null; then
+  echo "Verify the Octogee Ops SMS Cloud Monitoring notification channel, then rerun bootstrap-west-platform.sh --verify-only" >&2
   exit 1
 fi
 

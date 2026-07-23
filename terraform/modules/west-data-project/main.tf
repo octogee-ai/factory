@@ -74,6 +74,22 @@ resource "google_firebase_project" "data" {
   depends_on = [google_project_service.required]
 }
 
+resource "google_firebase_web_app" "platform" {
+  provider = google-beta
+  project  = google_project.data.project_id
+
+  display_name    = "Octogee ${var.deployment_target}"
+  deletion_policy = "PREVENT"
+
+  depends_on = [google_firebase_project.data]
+}
+
+data "google_firebase_web_app_config" "platform" {
+  provider   = google-beta
+  project    = google_project.data.project_id
+  web_app_id = google_firebase_web_app.platform.app_id
+}
+
 resource "google_project_service_identity" "eventarc" {
   provider = google-beta
   project  = google_project.data.project_id

@@ -11,6 +11,8 @@ TERRAFORM_BIN="$("${REPO_ROOT}/scripts/ops/terraform-bin.sh")"
 PROJECT_ID="octogee"
 REGION="us-west1"
 CLUSTER_NAME="octogee-gateway"
+GENERATED_KUBE_CONTEXT="gke_${PROJECT_ID}_${REGION}_${CLUSTER_NAME}"
+SHORT_KUBE_CONTEXT="gke_us-west1_octogee"
 SQL_INSTANCE="octogee-pg-west"
 EXPECTED_CONFIRMATION="octogee/us-west1/octogee-gateway"
 RECEIPT_BUCKET="gs://octogee-terraform-state/receipts/west-platform"
@@ -51,12 +53,35 @@ if [[ "${APPLY}" == "true" || "${VERIFY_ONLY}" == "true" ]]; then
   fi
 fi
 
-for command in gcloud jq node; do
+for command in gcloud jq kubectl node; do
   if ! command -v "${command}" >/dev/null 2>&1; then
     echo "Required command is unavailable: ${command}" >&2
     exit 1
   fi
 done
+
+configure_operator_kube_context() {
+  local cluster
+  local user
+
+  gcloud container clusters get-credentials "${CLUSTER_NAME}" \
+    --region="${REGION}" \
+    --project="${PROJECT_ID}" >/dev/null
+  cluster="$(kubectl config view --raw -o json \
+    | jq -r --arg context "${GENERATED_KUBE_CONTEXT}" \
+      '.contexts[] | select(.name == $context) | .context.cluster')"
+  user="$(kubectl config view --raw -o json \
+    | jq -r --arg context "${GENERATED_KUBE_CONTEXT}" \
+      '.contexts[] | select(.name == $context) | .context.user')"
+  if [[ -z "${cluster}" || -z "${user}" ]]; then
+    echo "gcloud did not create the expected WEST kube context" >&2
+    return 1
+  fi
+  kubectl config set-context "${SHORT_KUBE_CONTEXT}" \
+    --cluster="${cluster}" \
+    --user="${user}" >/dev/null
+  kubectl --context "${SHORT_KUBE_CONTEXT}" cluster-info >/dev/null
+}
 
 TEMP_DIR="$(mktemp -d -t octogee-west-platform.XXXXXX)"
 PRE_APPLY_PLAN="${TEMP_DIR}/pre-apply.tfplan"
@@ -98,6 +123,7 @@ REBUILD_CHANGE_ADDRESSES=(
   'google_compute_global_address.west_ingress["workspace-api-ip-test-west"]'
   'google_compute_global_address.west_ingress["workspace-api-ip-west"]'
   'google_compute_network.west'
+  'google_compute_resource_policy.west_pvc_snapshots'
   'google_compute_router.west'
   'google_compute_router_nat.west'
   'google_compute_subnetwork.connector'
@@ -105,7 +131,10 @@ REBUILD_CHANGE_ADDRESSES=(
   'google_container_cluster.west'
   'google_monitoring_alert_policy.gke_notifications'
   'google_monitoring_notification_channel.operator_email'
+  'google_project_iam_custom_role.github_actions_west_pvc_snapshots'
+  'google_project_iam_member.github_actions_west_pvc_snapshots'
   'google_project_service.required["pubsub.googleapis.com"]'
+  'google_project_service.required["storage.googleapis.com"]'
   'google_pubsub_subscription.gke_notifications_archive'
   'google_pubsub_topic.gke_notifications'
   'google_service_networking_connection.private_services'
@@ -114,6 +143,8 @@ REBUILD_CHANGE_ADDRESSES=(
   'google_sql_database.environment["mattermost_prod"]'
   'google_sql_database.environment["mattermost_test"]'
   'google_sql_database_instance.west'
+  'google_storage_bucket.west_recovery'
+  'google_storage_bucket_iam_member.cloud_sql_recovery'
   'google_vpc_access_connector.west'
 )
 
@@ -348,6 +379,7 @@ verify_zero_drift() {
 
   write_receipt "${ZERO_DRIFT_PLAN}" "zero-drift" "${ZERO_DRIFT_RECEIPT}" zero-drift
   upload_receipt "zero-drift" "${ZERO_DRIFT_RECEIPT}"
+  configure_operator_kube_context
 }
 
 cd "${TERRAFORM_ROOT}"

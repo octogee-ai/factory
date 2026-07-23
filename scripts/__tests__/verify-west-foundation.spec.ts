@@ -13,6 +13,7 @@ type RunOptions = {
   invalidNat?: boolean;
   invalidSql?: boolean;
   externalNodeIp?: boolean;
+  invalidSmsChannel?: boolean;
   execFailures?: number;
   execMaxAttempts?: number;
 };
@@ -49,7 +50,13 @@ case "$*" in
     fi
     ;;
   "beta monitoring channels list "*)
-    printf '%s\n' '[{"enabled":true,"verificationStatus":"VERIFIED"}]'
+    if [[ "$*" == *'type="sms"'* && "$FAKE_INVALID_SMS_CHANNEL" == "true" ]]; then
+      printf '%s\n' '[]'
+    elif [[ "$*" == *'type="sms"'* ]]; then
+      printf '%s\n' '[{"displayName":"Octogee Ops","type":"sms","enabled":true,"verificationStatus":"VERIFIED"}]'
+    else
+      printf '%s\n' '[{"type":"email","enabled":true,"verificationStatus":"VERIFIED"}]'
+    fi
     ;;
   *)
     printf 'unexpected gcloud call: %s\n' "$*" >&2
@@ -99,6 +106,7 @@ esac
       FAKE_INVALID_NAT: options.invalidNat ? "true" : "false",
       FAKE_INVALID_SQL: options.invalidSql ? "true" : "false",
       FAKE_EXTERNAL_NODE_IP: options.externalNodeIp ? "true" : "false",
+      FAKE_INVALID_SMS_CHANNEL: options.invalidSmsChannel ? "true" : "false",
       FAKE_EXEC_FAILURES: String(options.execFailures ?? 0),
       FAKE_EXEC_COUNT_FILE: execCountFile,
       WEST_SMOKE_EXEC_MAX_ATTEMPTS: String(options.execMaxAttempts ?? 3),
@@ -157,6 +165,13 @@ describe("WEST foundation runtime verifier", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("GKE smoke node has an external IP address");
+  });
+
+  it("requires the verified Octogee Ops SMS channel", () => {
+    const result = runVerifier({ invalidSmsChannel: true });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Verify the Octogee Ops SMS Cloud Monitoring notification channel");
   });
 
   it("retries transient new-node exec tunnel failures", () => {

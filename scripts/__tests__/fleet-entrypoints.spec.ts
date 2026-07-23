@@ -411,9 +411,9 @@ describe("assign-customer-gateway root config", () => {
 describe("fleet CLI args", () => {
   it("resolves Firestore and Kubernetes from the active deployment target", () => {
     expect(resolveFleetDeploymentTarget("test")).toEqual({
-      projectId: "octogee-test",
-      namespace: "octogee-test",
-      kubeContext: "gke_octogee_us-central1_octogee-gateway",
+      projectId: "octogee-data-test",
+      namespace: "octogee-test-west",
+      kubeContext: "gke_octogee_us-west1_octogee-gateway",
     });
   });
 

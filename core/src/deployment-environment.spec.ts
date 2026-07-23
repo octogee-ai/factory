@@ -41,32 +41,33 @@ describe("deployment environment registry", () => {
     expect(deploymentEnvironmentForProject("local-dev")).toBe("unknown");
   });
 
-  it("keeps central active while declaring the fresh west launch targets", () => {
+  it("makes west active while retaining central as the frozen rollback source", () => {
     expect(deploymentEnvironmentSettings("prod")).toMatchObject({
-      targetId: "prod-central",
+      targetId: "prod-west",
       lifecycle: "active",
       clusterProjectId: "octogee",
-      region: "us-central1",
+      firebaseProjectId: "octogee-data-prod",
+      region: "us-west1",
       clusterName: "octogee-gateway",
-      kubeContext: "gke_octogee_us-central1_octogee-gateway",
-      artifactRegistryRepository: "us-central1-docker.pkg.dev/octogee/octogee",
-      cloudSqlConnectionName: "octogee:us-central1:octogee-pg",
-      cloudSqlMattermostPasswordSecretName: "MM_DB_PASSWORD",
-      cloudSqlGiteaPasswordSecretName: "gitea-db-password",
-      cloudSqlConnectionNameSecretName: "cloud-sql-connection-name",
-      secretNameSuffix: "prod",
-      promotionSourceTargetId: "test-central",
-      cloudSqlPointInTimeRecoveryEnabled: false,
-      edgeStaticIpName: "workspace-api-ip",
-      mattermostStaticIpName: "mattermost-ip",
-      giteaStaticIpName: "gitea-ip",
-      previewStaticIpName: "preview-ip",
+      kubeContext: "gke_octogee_us-west1_octogee-gateway",
+      artifactRegistryRepository: "us-west1-docker.pkg.dev/octogee/octogee",
+      cloudSqlConnectionName: "octogee:us-west1:octogee-pg-west",
+      cloudSqlMattermostPasswordSecretName: "MM_DB_PASSWORD-octogee-pg-west",
+      cloudSqlGiteaPasswordSecretName: "gitea-db-password-octogee-pg-west",
+      cloudSqlConnectionNameSecretName: "cloud-sql-connection-name-octogee-pg-west",
+      secretNameSuffix: "prod-west",
+      promotionSourceTargetId: "test-west",
+      cloudSqlPointInTimeRecoveryEnabled: true,
+      edgeStaticIpName: "workspace-api-ip-west",
+      mattermostStaticIpName: "mattermost-ip-west",
+      giteaStaticIpName: "gitea-ip-west",
+      previewStaticIpName: "preview-ip-west",
     });
 
     expect(deploymentTargetSettings("prod-west")).toMatchObject({
       name: "prod",
       targetId: "prod-west",
-      lifecycle: "candidate",
+      lifecycle: "active",
       namespace: "octogee-west",
       clusterProjectId: "octogee",
       firebaseProjectId: "octogee-data-prod",
@@ -93,7 +94,7 @@ describe("deployment environment registry", () => {
     expect(deploymentTargetSettings("test-west")).toMatchObject({
       name: "test",
       targetId: "test-west",
-      lifecycle: "candidate",
+      lifecycle: "active",
       namespace: "octogee-test-west",
       firebaseProjectId: "octogee-data-test",
       region: "us-west1",
@@ -106,9 +107,20 @@ describe("deployment environment registry", () => {
       giteaStaticIpName: "gitea-ip-test-west",
       previewStaticIpName: "preview-ip-test-west",
     });
+
+    expect(deploymentTargetSettings("prod-central")).toMatchObject({
+      lifecycle: "frozen",
+      region: "us-central1",
+      namespace: "octogee",
+    });
+    expect(deploymentTargetSettings("test-central")).toMatchObject({
+      lifecycle: "frozen",
+      region: "us-central1",
+      namespace: "octogee-test",
+    });
   });
 
-  it("rejects a candidate target that reuses an active ingress identity", () => {
+  it("rejects a target that reuses another ingress identity", () => {
     const candidate = structuredClone(deploymentTargetsDocument) as {
       targets: Record<string, {
         ingress: {
@@ -127,7 +139,7 @@ describe("deployment environment registry", () => {
   it.each([
     ["another target role", "gitea-ip-west"],
     ["one of its own roles", "gitea-ip-test-west"],
-  ])("rejects a candidate target that reuses %s", (_label, staticIpName) => {
+  ])("rejects a target that reuses %s", (_label, staticIpName) => {
     const candidate = structuredClone(deploymentTargetsDocument) as {
       targets: Record<string, {
         ingress: {

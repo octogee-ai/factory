@@ -53,8 +53,8 @@ describe("seed-orchestrator-config args", () => {
       kind: "ok",
       args: {
         env: "test",
-        deploymentTargetId: "test-central",
-        firebaseProjectId: "octogee-test",
+        deploymentTargetId: "test-west",
+        firebaseProjectId: "octogee-data-test",
         defaultGateway: "canary",
         force: true,
         dryRun: true,

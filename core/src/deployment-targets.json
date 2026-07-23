@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
   "activeTargets": {
-    "prod": "prod-central",
-    "test": "test-central",
+    "prod": "prod-west",
+    "test": "test-west",
     "build-week": "build-week-central"
   },
   "targets": {
     "prod-central": {
       "environment": "prod",
       "promotionSourceTargetId": "test-central",
-      "lifecycle": "active",
+      "lifecycle": "frozen",
       "secretNameSuffix": "prod",
       "clusterProjectId": "octogee",
       "firebaseProjectId": "octogee",
@@ -60,7 +60,7 @@
     "prod-west": {
       "environment": "prod",
       "promotionSourceTargetId": "test-west",
-      "lifecycle": "candidate",
+      "lifecycle": "active",
       "secretNameSuffix": "prod-west",
       "clusterProjectId": "octogee",
       "firebaseProjectId": "octogee-data-prod",
@@ -110,7 +110,7 @@
     },
     "test-central": {
       "environment": "test",
-      "lifecycle": "active",
+      "lifecycle": "frozen",
       "secretNameSuffix": "test",
       "clusterProjectId": "octogee",
       "firebaseProjectId": "octogee-test",
@@ -160,7 +160,7 @@
     },
     "test-west": {
       "environment": "test",
-      "lifecycle": "candidate",
+      "lifecycle": "active",
       "secretNameSuffix": "test-west",
       "clusterProjectId": "octogee",
       "firebaseProjectId": "octogee-data-test",

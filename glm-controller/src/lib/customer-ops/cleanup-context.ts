@@ -4,6 +4,7 @@ import type { Firestore } from "firebase-admin/firestore";
 import { SYSTEM_CONFIG_REPO, WORKSPACE_REPO } from "@octogee/core/gitea-naming";
 import type { CustomerCleanupContext } from "../../handlers/deprovision-customer.js";
 import {
+  MODEL_CREDENTIAL_STATIC_PROVIDER_IDS,
   byosubSecretNameForUser,
   MODEL_CREDENTIAL_SUBSCRIPTION_PROVIDER_IDS,
   resolveUserByosubCredentialRefs,
@@ -113,20 +114,17 @@ async function resolveProjectSlugs(db: Firestore, slug: string): Promise<string[
 async function resolveCredentialSecretNames(
   db: Firestore,
   uid: string,
+  slug: string,
 ): Promise<string[]> {
-  const [configSnap, integrationSnap] = await Promise.all([
-    db.doc(`users/${uid}/system/config`).get(),
-    db.doc(`users/${uid}/integrations/byosub`).get(),
-  ]);
-  const config = configSnap.data() as Record<string, unknown> | undefined;
-  const modelCredential = config?.modelCredential as Record<string, unknown> | undefined;
-  const configured = asString(modelCredential?.secretName);
+  const integrationSnap = await db.doc(`users/${uid}/integrations/byosub`).get();
   const byosub = resolveUserByosubCredentialRefs(uid, integrationSnap.data());
   if (byosub.skipped.length > 0) {
     throw new Error(`credential cleanup context invalid: ${byosub.skipped.join("; ")}`);
   }
   return Array.from(new Set([
-    ...(configured ? [configured] : []),
+    ...(slug ? MODEL_CREDENTIAL_STATIC_PROVIDER_IDS.map(
+      (provider) => `byok-${slug}-${provider}`,
+    ) : []),
     ...byosub.refs.map((ref) => ref.secretName),
     ...MODEL_CREDENTIAL_SUBSCRIPTION_PROVIDER_IDS.map((provider) => {
       const secretName = byosubSecretNameForUser(uid, provider);
@@ -214,7 +212,7 @@ export async function loadCustomerCleanupContext(
       resolveAdminChannelId(deps.db, slug),
       resolveRepoNames(deps.db, slug),
       resolveProjectSlugs(deps.db, slug),
-      resolveCredentialSecretNames(deps.db, uid),
+      resolveCredentialSecretNames(deps.db, uid, slug),
       resolveProjectAgentCleanup(deps.db, uid),
       resolveChatArtifactIds(deps.db, uid, slug),
       resolveAgentImportIds(deps.db, uid),
