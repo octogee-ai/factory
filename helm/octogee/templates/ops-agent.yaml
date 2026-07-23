@@ -30,6 +30,10 @@ spec:
         app: octogee-ops-agent
     spec:
       serviceAccountName: {{ .Values.opsAgent.serviceAccountName }}
+      {{- with .Values.global.platformComputeClass }}
+      nodeSelector:
+        cloud.google.com/compute-class: {{ . | quote }}
+      {{- end }}
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
       securityContext:

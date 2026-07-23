@@ -26,6 +26,10 @@ spec:
         app: mattermost-callback-router
     spec:
       serviceAccountName: mattermost-callback-router
+      {{- with .Values.global.platformComputeClass }}
+      nodeSelector:
+        cloud.google.com/compute-class: {{ . | quote }}
+      {{- end }}
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true

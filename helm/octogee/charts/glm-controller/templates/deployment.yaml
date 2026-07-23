@@ -20,6 +20,10 @@ spec:
         app: glm-controller
     spec:
       serviceAccountName: glm-controller
+      {{- with .Values.global.platformComputeClass }}
+      nodeSelector:
+        cloud.google.com/compute-class: {{ . | quote }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

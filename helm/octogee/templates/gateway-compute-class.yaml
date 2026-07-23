@@ -30,24 +30,41 @@ spec:
   # true last resort — not a routine path for the big tiers.
   priorities:
     - machineType: c2d-standard-4
+      spot: false
     - machineType: n2d-standard-4
+      spot: false
     - machineType: n2-standard-4
+      spot: false
     - machineType: c2d-standard-8
+      spot: false
     - machineType: n2d-standard-8
+      spot: false
     - machineType: n2-standard-8
+      spot: false
     - machineType: c2d-standard-16
+      spot: false
     - machineType: n2d-standard-16
+      spot: false
     - machineType: n2-standard-16
+      spot: false
     - machineType: c2d-standard-32
+      spot: false
     - machineType: n2d-standard-32
+      spot: false
     - machineType: n2-standard-32
+      spot: false
     # xlarge (32-vCPU pod) needs a 48/56-core node; c2d's ladder has no 48
     - machineType: n2d-standard-48
+      spot: false
     - machineType: n2-standard-48
+      spot: false
     - machineType: c2d-standard-56
+      spot: false
     # 2xlarge (56-vCPU pod) needs a 64-core node; c2d skips 64 (jumps to 112)
     - machineType: n2d-standard-64
+      spot: false
     - machineType: n2-standard-64
+      spot: false
   # When a pod lands on a lower-priority (bigger) node because the preferred
   # one was momentarily unavailable, migrate it back onto a higher-priority
   # node once one can be provisioned — so oversizing self-heals instead of
@@ -83,8 +100,11 @@ spec:
     - machineType: n2-standard-4
       spot: true
     - machineType: c2d-standard-4
+      spot: false
     - machineType: n2d-standard-4
+      spot: false
     - machineType: n2-standard-4
+      spot: false
     - machineType: c2d-standard-8
       spot: true
     - machineType: n2d-standard-8
@@ -92,8 +112,11 @@ spec:
     - machineType: n2-standard-8
       spot: true
     - machineType: c2d-standard-8
+      spot: false
     - machineType: n2d-standard-8
+      spot: false
     - machineType: n2-standard-8
+      spot: false
     - machineType: c2d-standard-16
       spot: true
     - machineType: n2d-standard-16
@@ -101,8 +124,11 @@ spec:
     - machineType: n2-standard-16
       spot: true
     - machineType: c2d-standard-16
+      spot: false
     - machineType: n2d-standard-16
+      spot: false
     - machineType: n2-standard-16
+      spot: false
     - machineType: c2d-standard-32
       spot: true
     - machineType: n2d-standard-32
@@ -110,8 +136,11 @@ spec:
     - machineType: n2-standard-32
       spot: true
     - machineType: c2d-standard-32
+      spot: false
     - machineType: n2d-standard-32
+      spot: false
     - machineType: n2-standard-32
+      spot: false
     - machineType: n2d-standard-48
       spot: true
     - machineType: n2-standard-48
@@ -119,14 +148,47 @@ spec:
     - machineType: c2d-standard-56
       spot: true
     - machineType: n2d-standard-48
+      spot: false
     - machineType: n2-standard-48
+      spot: false
     - machineType: c2d-standard-56
+      spot: false
     - machineType: n2d-standard-64
       spot: true
     - machineType: n2-standard-64
       spot: true
     - machineType: n2d-standard-64
+      spot: false
     - machineType: n2-standard-64
+      spot: false
+  activeMigration:
+    optimizeRulePriority: true
+  nodePoolAutoCreation:
+    enabled: true
+  whenUnsatisfiable: ScaleUpAnyway
+{{- end }}
+{{- with .Values.global.platformComputeClass }}
+---
+apiVersion: cloud.google.com/v1
+kind: ComputeClass
+metadata:
+  name: {{ . }}
+  labels:
+    {{- include "octogee.labels" $ | nindent 4 }}
+spec:
+  priorities:
+    - machineType: c2d-standard-4
+      spot: true
+    - machineType: n2d-standard-4
+      spot: true
+    - machineType: n2-standard-4
+      spot: true
+    - machineType: c2d-standard-4
+      spot: false
+    - machineType: n2d-standard-4
+      spot: false
+    - machineType: n2-standard-4
+      spot: false
   activeMigration:
     optimizeRulePriority: true
   nodePoolAutoCreation:

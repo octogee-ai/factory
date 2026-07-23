@@ -21,6 +21,10 @@ spec:
         app: cloud-sql-proxy
     spec:
       serviceAccountName: {{ .Values.serviceAccountName }}
+      {{- with .Values.global.platformComputeClass }}
+      nodeSelector:
+        cloud.google.com/compute-class: {{ . | quote }}
+      {{- end }}
       containers:
         - name: cloud-sql-proxy
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}@{{ .Values.image.digest }}"

@@ -5,6 +5,7 @@
 global:
   deploymentTargetId: ""
   deploymentProjectId: ""
+  platformComputeClass: ""
   mattermost:
     # K8s Secret containing admin credentials for Mattermost.
     # This secret MUST exist before `helm upgrade`. Create it via:

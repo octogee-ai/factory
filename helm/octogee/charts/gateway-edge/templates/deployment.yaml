@@ -1,4 +1,5 @@
 {{- $router := .Values.router | default dict -}}
+{{- $global := .Values.global | default dict -}}
 {{- $routerEnabled := true -}}
 {{- if hasKey $router "enabled" -}}
 {{- $routerEnabled = $router.enabled -}}
@@ -30,6 +31,10 @@ spec:
     spec:
       terminationGracePeriodSeconds: 30
       serviceAccountName: {{ .Values.serviceAccountName }}
+      {{- with $global.platformComputeClass }}
+      nodeSelector:
+        cloud.google.com/compute-class: {{ . | quote }}
+      {{- end }}
       containers:
         - name: gateway-router
           image: "{{ required "gateway-edge.image.repository is required" .Values.image.repository }}:{{ .Values.image.tag }}"
