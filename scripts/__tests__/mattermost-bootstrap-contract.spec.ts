@@ -2,8 +2,16 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { buildPlanReceipt } from "../ops/terraform-plan-receipt.mjs";
+
 const repoRoot = path.resolve(__dirname, "../..");
 const read = (relativePath: string) => readFileSync(path.join(repoRoot, relativePath), "utf8");
+
+function rebuildChangeAddresses(script: string): Set<string> {
+  const match = script.match(/REBUILD_CHANGE_ADDRESSES=\(\n(?<addresses>(?:\s+'[^']+'\n)+)\)/u);
+  if (!match?.groups?.addresses) throw new Error("REBUILD_CHANGE_ADDRESSES is missing");
+  return new Set([...match.groups.addresses.matchAll(/'([^']+)'/gu)].map(([, address]) => address));
+}
 
 describe("Mattermost fresh-database bootstrap contract", () => {
   it("reuses the materialized admin password and restarts Mattermost before bootstrap", () => {
@@ -63,6 +71,42 @@ describe("Mattermost fresh-database bootstrap contract", () => {
     expect(westPlatform).toContain('github_actions_mattermost');
     expect(westPlatform).toContain('google_secret_manager_secret.cloud_sql["mattermost"].secret_id');
     expect(westPlatform).not.toContain('roles/cloudsql.admin');
+  });
+
+  it("accepts the declared Mattermost secret accessor but rejects arbitrary WEST rebuild changes", () => {
+    const bootstrap = read("scripts/bootstrap-west-platform.sh");
+    const westPlatform = read("terraform/environments/west-platform/main.tf");
+    const expectedAddress = "google_secret_manager_secret_iam_member.github_actions_mattermost";
+    const options = {
+      target: "west-platform",
+      phase: "pre-apply",
+      generatedAt: "2026-07-23T19:00:00.000Z",
+      gitCommit: "abc123",
+      allowedDestructiveAddresses: new Set<string>(),
+      allowedChangeAddresses: rebuildChangeAddresses(bootstrap),
+    };
+
+    expect(westPlatform).toContain(
+      'resource "google_secret_manager_secret_iam_member" "github_actions_mattermost"',
+    );
+    expect(options.allowedChangeAddresses).toContain(expectedAddress);
+    expect(
+      buildPlanReceipt({
+        format_version: "1.2",
+        terraform_version: "1.15.8",
+        resource_changes: [{ address: expectedAddress, change: { actions: ["create"] } }],
+      }, options).summary,
+    ).toEqual({ create: 1, update: 0, delete: 0, replace: 0 });
+    expect(() =>
+      buildPlanReceipt({
+        format_version: "1.2",
+        terraform_version: "1.15.8",
+        resource_changes: [{
+          address: "google_secret_manager_secret_iam_member.unexpected",
+          change: { actions: ["create"] },
+        }],
+      }, options),
+    ).toThrow("Plan contains an unauthorized change: google_secret_manager_secret_iam_member.unexpected");
   });
 
   it("documents the foundation IAM apply required before the release can read the password", () => {

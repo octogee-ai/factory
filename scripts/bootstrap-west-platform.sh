@@ -144,6 +144,7 @@ REBUILD_CHANGE_ADDRESSES=(
   'google_project_service.required["iap.googleapis.com"]'
   'google_project_service.required["servicehealth.googleapis.com"]'
   'google_project_service.required["storage.googleapis.com"]'
+  'google_secret_manager_secret_iam_member.github_actions_mattermost'
   'google_monitoring_alert_policy.service_health'
   'google_pubsub_subscription.gke_notifications_archive'
   'google_pubsub_topic.gke_notifications'
