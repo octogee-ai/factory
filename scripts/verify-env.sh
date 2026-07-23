@@ -371,6 +371,46 @@ else
   fi
 fi
 
+# ── 5c. Cowboy gateway ServiceAccount ownership ──────────────────────────────
+set_section infra
+header "5c. Cowboy gateway ServiceAccount ownership"
+if KSA_OWNERSHIP_ERRORS=$(kubectl --context "$K8S_CONTEXT" get serviceaccounts -n "$NAMESPACE" -o json 2>/dev/null | \
+  python3 -c '
+import json
+import sys
+
+target = sys.argv[1]
+payload = json.load(sys.stdin)
+errors = []
+for item in payload.get("items", []):
+    metadata = item.get("metadata", {})
+    name = metadata.get("name", "")
+    if not name.startswith("octogee-gw-"):
+        continue
+    gateway_id = name.removeprefix("octogee-gw-")
+    labels = metadata.get("labels", {})
+    expected = {
+        "app.kubernetes.io/managed-by": "glm-controller",
+        "octogee.ai/controller": "cowboy",
+        "octogee.ai/deployment-target": target,
+        "octogee.ai/gateway-id": gateway_id,
+        "octogee.ai/release": name,
+        "octogee.ai/lifecycle-identity": f"gateway-{gateway_id}",
+    }
+    invalid = [key for key, value in expected.items() if labels.get(key) != value]
+    if invalid:
+        summary = ", ".join(invalid)
+        errors.append(f"{name}: missing or invalid {summary}")
+print("\n".join(errors))
+sys.exit(1 if errors else 0)
+' "$TARGET_ID"); then
+  pass "all dynamic gateway KSAs are explicitly Cowboy-owned"
+elif [[ -n "$KSA_OWNERSHIP_ERRORS" ]]; then
+  fail "unlabeled or incorrectly owned dynamic gateway KSA: $KSA_OWNERSHIP_ERRORS"
+else
+  fail "could not verify dynamic gateway KSA ownership in $NAMESPACE"
+fi
+
 # ── 5e. Gateway Storage Mode ──────────────────────────────────────────────────
 # Gateway is always emptyDir. Pod-local state is disposable: the fleet
 # controller restores customer workspaces from Gitea post-boot, MEMORY.md

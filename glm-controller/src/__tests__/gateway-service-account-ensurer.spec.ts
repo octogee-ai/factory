@@ -9,9 +9,16 @@ function ok(stdout = ""): KubectlSubprocessResult {
   return { stdout, stderr: "", code: 0 };
 }
 
+const identity = {
+  gatewayId: "default",
+  deploymentTargetId: "prod-west",
+  releaseName: "octogee-gw-default",
+  lifecycleIdentity: "gateway-default",
+};
+
 describe("serviceAccountManifest", () => {
   it("always renders Helm's keep policy on the gateway-scoped ServiceAccount", () => {
-    const m = serviceAccountManifest({ namespace: "octogee", serviceAccountName: "octogee-gw-default" });
+    const m = serviceAccountManifest({ namespace: "octogee", serviceAccountName: "octogee-gw-default", identity });
     expect(m).toContain("kind: ServiceAccount");
     expect(m).toContain("name: octogee-gw-default");
     expect(m).toContain("namespace: octogee");
@@ -23,10 +30,51 @@ describe("serviceAccountManifest", () => {
     const m = serviceAccountManifest({
       namespace: "octogee",
       serviceAccountName: "octogee-gw-bender",
+      identity: { ...identity, gatewayId: "bender", releaseName: "octogee-gw-bender", lifecycleIdentity: "gateway-bender" },
       annotations: { "iam.gke.io/gcp-service-account": "gw@proj.iam.gserviceaccount.com" },
     });
     expect(m).toContain("iam.gke.io/gcp-service-account: gw@proj.iam.gserviceaccount.com");
     expect(m).toContain("helm.sh/resource-policy: keep");
+  });
+
+  it("stamps Cowboy lifecycle ownership onto every dynamic gateway KSA", () => {
+    const m = serviceAccountManifest({
+      namespace: "octogee-test-west",
+      serviceAccountName: "octogee-gw-builder-a",
+      identity: {
+        gatewayId: "builder-a",
+        deploymentTargetId: "test-west",
+        releaseName: "octogee-gw-builder-a",
+        lifecycleIdentity: "gateway-builder-a",
+      },
+    });
+
+    expect(m).toContain("app.kubernetes.io/managed-by: glm-controller");
+    expect(m).toContain("octogee.ai/controller: cowboy");
+    expect(m).toContain("octogee.ai/gateway-id: builder-a");
+    expect(m).toContain("octogee.ai/deployment-target: test-west");
+    expect(m).toContain("octogee.ai/release: octogee-gw-builder-a");
+    expect(m).toContain("octogee.ai/lifecycle-identity: gateway-builder-a");
+    expect(m).toContain("octogee.ai/controller: cowboy");
+  });
+
+  it("does not allow caller annotations to override reserved ownership metadata", () => {
+    const m = serviceAccountManifest({
+      namespace: "octogee-test-west",
+      serviceAccountName: "octogee-gw-default",
+      identity,
+      annotations: {
+        "helm.sh/resource-policy": "delete",
+        "iam.gke.io/gcp-service-account": "gw@proj.iam.gserviceaccount.com",
+        "octogee.ai/controller": "other-controller",
+      },
+    });
+
+    expect(m).toContain("helm.sh/resource-policy: keep");
+    expect(m).toContain("iam.gke.io/gcp-service-account: gw@proj.iam.gserviceaccount.com");
+    expect(m).toContain("octogee.ai/controller: cowboy");
+    expect(m).not.toContain("delete");
+    expect(m).not.toContain("other-controller");
   });
 });
 
@@ -39,6 +87,7 @@ describe("createGatewayServiceAccountEnsurer", () => {
     await ensurer.ensureServiceAccount({
       namespace: "octogee",
       serviceAccountName: "octogee-gw-default",
+      identity,
     });
 
     expect(runKubectl).toHaveBeenCalledTimes(1);
@@ -54,6 +103,7 @@ describe("createGatewayServiceAccountEnsurer", () => {
     await ensurer.ensureServiceAccount({
       namespace: "octogee",
       serviceAccountName: "octogee-gw-bender",
+      identity: { ...identity, gatewayId: "bender", releaseName: "octogee-gw-bender", lifecycleIdentity: "gateway-bender" },
       annotations: { "iam.gke.io/gcp-service-account": "gw@proj.iam.gserviceaccount.com" },
     });
 
@@ -66,7 +116,7 @@ describe("createGatewayServiceAccountEnsurer", () => {
     const ensurer = createGatewayServiceAccountEnsurer({ runKubectl, log: vi.fn() });
 
     await expect(
-      ensurer.ensureServiceAccount({ namespace: "octogee", serviceAccountName: "octogee-gw-default" }),
+      ensurer.ensureServiceAccount({ namespace: "octogee", serviceAccountName: "octogee-gw-default", identity }),
     ).rejects.toThrow(/octogee-gw-default/);
   });
 });

@@ -13,7 +13,11 @@ import {
   type W9TestPublisherLiveExperiment,
 } from "@octogee/shared/types/gateway-releases";
 import { isW9CandidateImageTag } from "@octogee/shared/types/image-tag";
-import { deploymentEnvironmentForNamespace } from "@octogee/core/deployment-environment";
+import {
+  deploymentEnvironmentForNamespace,
+  deploymentSettingsForRuntime,
+} from "@octogee/core/deployment-environment";
+import type { GatewayServiceAccountIdentity } from "./gateway-service-account-ensurer.js";
 
 export interface HelmRunner {
 
@@ -117,6 +121,7 @@ export interface HelmSubprocessRunnerDeps {
   ensureServiceAccount?: (opts: {
     namespace: string;
     serviceAccountName: string;
+    identity: GatewayServiceAccountIdentity;
     annotations?: Record<string, string>;
   }) => Promise<void>;
 }
@@ -135,6 +140,22 @@ export function effectiveGatewayServiceAccountName(
     return `${RELEASE_PREFIX}${gatewayId}`;
   }
   return requested;
+}
+
+function gatewayServiceAccountIdentity(opts: {
+  namespace: string;
+  gatewayId: string;
+  deploymentTargetId?: string;
+}): GatewayServiceAccountIdentity {
+  return {
+    gatewayId: opts.gatewayId,
+    deploymentTargetId: deploymentSettingsForRuntime({
+      namespace: opts.namespace,
+      targetId: opts.deploymentTargetId,
+    }).targetId,
+    lifecycleIdentity: `gateway-${opts.gatewayId}`,
+    releaseName: releaseNameForGateway(opts.gatewayId),
+  };
 }
 
 const NOT_FOUND_PATTERNS = [
@@ -725,9 +746,19 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
 
       const ensureServiceAccount = async () => {
         if (!deps.ensureServiceAccount) return;
+        const serviceAccountName = effectiveGatewayServiceAccountName(
+          gatewayId,
+          opts.serviceAccountName,
+        );
+        if (serviceAccountName !== releaseNameForGateway(gatewayId)) return;
         await deps.ensureServiceAccount({
           namespace,
-          serviceAccountName: effectiveGatewayServiceAccountName(gatewayId, opts.serviceAccountName),
+          serviceAccountName,
+          identity: gatewayServiceAccountIdentity({
+            namespace,
+            gatewayId,
+            deploymentTargetId: opts.deploymentTargetId,
+          }),
           annotations: opts.serviceAccount?.annotations,
         });
       };

@@ -8,6 +8,7 @@ export interface ServiceAccountEnsurer {
   ensureServiceAccount(opts: {
     namespace: string;
     serviceAccountName: string;
+    identity: GatewayServiceAccountIdentity;
     annotations?: Record<string, string>;
   }): Promise<void>;
 }
@@ -15,6 +16,25 @@ export interface ServiceAccountEnsurer {
 export interface ServiceAccountEnsurerDeps {
   runKubectl: KubectlSubprocess;
   log: (msg: string) => void;
+}
+
+export interface GatewayServiceAccountIdentity {
+  gatewayId: string;
+  deploymentTargetId: string;
+  releaseName: string;
+  lifecycleIdentity: string;
+}
+
+function ownershipMetadata(identity: GatewayServiceAccountIdentity): Record<string, string> {
+  return {
+    "app.kubernetes.io/managed-by": "glm-controller",
+    "app.kubernetes.io/part-of": "octogee",
+    "octogee.ai/controller": "cowboy",
+    "octogee.ai/deployment-target": identity.deploymentTargetId,
+    "octogee.ai/gateway-id": identity.gatewayId,
+    "octogee.ai/lifecycle-identity": identity.lifecycleIdentity,
+    "octogee.ai/release": identity.releaseName,
+  };
 }
 
 /**
@@ -27,10 +47,13 @@ export interface ServiceAccountEnsurerDeps {
 export function serviceAccountManifest(opts: {
   namespace: string;
   serviceAccountName: string;
+  identity: GatewayServiceAccountIdentity;
   annotations?: Record<string, string>;
 }): string {
+  const ownership = ownershipMetadata(opts.identity);
   const annotations: Record<string, string> = {
     ...opts.annotations,
+    ...ownership,
     "helm.sh/resource-policy": "keep",
   };
   const lines = [
@@ -40,6 +63,13 @@ export function serviceAccountManifest(opts: {
     `  name: ${opts.serviceAccountName}`,
     `  namespace: ${opts.namespace}`,
   ];
+  const labelKeys = Object.keys(ownership);
+  if (labelKeys.length > 0) {
+    lines.push("  labels:");
+    for (const key of labelKeys.sort()) {
+      lines.push(`    ${key}: ${ownership[key]}`);
+    }
+  }
   const keys = Object.keys(annotations);
   if (keys.length > 0) {
     lines.push("  annotations:");
@@ -64,8 +94,8 @@ export function createGatewayServiceAccountEnsurer(
   deps: ServiceAccountEnsurerDeps,
 ): ServiceAccountEnsurer {
   return {
-    async ensureServiceAccount({ namespace, serviceAccountName, annotations }) {
-      const manifest = serviceAccountManifest({ namespace, serviceAccountName, annotations });
+    async ensureServiceAccount({ namespace, serviceAccountName, identity, annotations }) {
+      const manifest = serviceAccountManifest({ namespace, serviceAccountName, identity, annotations });
       const result = await deps.runKubectl(["apply", "-n", namespace, "-f", "-"], {
         stdin: manifest,
       });

@@ -1448,6 +1448,70 @@ expect(calls.map((c) => c[0])).toEqual(["status"]);
 });
 
 describe("createHelmSubprocessRunner — gateway ServiceAccount ownership", () => {
+  it("leaves a static platform ServiceAccount solely Helm-owned", async () => {
+    const ensureServiceAccount = vi.fn(async () => undefined);
+    const { runHelm } = mockSubprocess([{ stdout: "ok" }]);
+    const runner = createHelmSubprocessRunner({
+      runHelm: withPreflightStatusNotFound(runHelm),
+      ensureServiceAccount,
+      log: vi.fn(),
+    });
+
+    await runner.upsertInstance({
+      namespace: "octogee-test-west",
+      gatewayId: "builder-a",
+      imageRepository: REPO,
+      imageTag: "newtag",
+      chartPath: "/charts/octogee-gateway",
+      serviceAccountName: "octogee-api",
+    });
+
+    expect(ensureServiceAccount).not.toHaveBeenCalled();
+  });
+
+  it("leaves a prefixed but non-generated ServiceAccount outside Cowboy ownership", async () => {
+    const ensureServiceAccount = vi.fn(async () => undefined);
+    const { runHelm } = mockSubprocess([{ stdout: "ok" }]);
+    const runner = createHelmSubprocessRunner({
+      runHelm: withPreflightStatusNotFound(runHelm),
+      ensureServiceAccount,
+      log: vi.fn(),
+    });
+
+    await runner.upsertInstance({
+      namespace: "octogee-test-west",
+      gatewayId: "builder-a",
+      imageRepository: REPO,
+      imageTag: "newtag",
+      chartPath: "/charts/octogee-gateway",
+      serviceAccountName: "octogee-gw-other-gateway",
+    });
+
+    expect(ensureServiceAccount).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the exact active deployment target for the namespace", async () => {
+    const ensureServiceAccount = vi.fn(async () => undefined);
+    const { runHelm } = mockSubprocess([{ stdout: "ok" }]);
+    const runner = createHelmSubprocessRunner({
+      runHelm: withPreflightStatusNotFound(runHelm),
+      ensureServiceAccount,
+      log: vi.fn(),
+    });
+
+    await runner.upsertInstance({
+      namespace: "octogee-test-west",
+      gatewayId: "builder-a",
+      imageRepository: REPO,
+      imageTag: "newtag",
+      chartPath: "/charts/octogee-gateway",
+    });
+
+    expect(ensureServiceAccount).toHaveBeenCalledWith(expect.objectContaining({
+      identity: expect.objectContaining({ deploymentTargetId: "test-west" }),
+    }));
+  });
+
   it("re-ensures the KSA after a failed Helm apply that pruned it", async () => {
     const order: string[] = [];
     const ensureServiceAccount = vi.fn(async () => {
@@ -1471,18 +1535,25 @@ describe("createHelmSubprocessRunner — gateway ServiceAccount ownership", () =
 
     await expect(
       runner.upsertInstance({
-        namespace: "octogee-test",
+        namespace: "octogee-test-west",
         gatewayId: "default-green",
         imageRepository: REPO,
         imageTag: "newtag",
         chartPath: "/charts/octogee-gateway",
+        deploymentTargetId: "test-west",
       }),
     ).rejects.toThrow(/Deployment not ready/);
 
     expect(order).toEqual(["ensure-ksa", "helm-upgrade", "ensure-ksa"]);
     expect(ensureServiceAccount).toHaveBeenLastCalledWith({
-      namespace: "octogee-test",
+      namespace: "octogee-test-west",
       serviceAccountName: "octogee-gw-default-green",
+      identity: {
+        gatewayId: "default-green",
+        deploymentTargetId: "test-west",
+        lifecycleIdentity: "gateway-default-green",
+        releaseName: "octogee-gw-default-green",
+      },
       annotations: undefined,
     });
   });
