@@ -996,6 +996,7 @@ export function createActivityIntakeHttpHandler(
   }
   return async (req, res) => {
     let parsed: MultipartActivityBody | undefined;
+    let response: { status: number; body: Record<string, unknown> } | undefined;
     try {
       if (rejectUnsupportedHttpRequest(req, res)) return;
       if (!isLoopback(req.socket.remoteAddress)) {
@@ -1013,7 +1014,7 @@ export function createActivityIntakeHttpHandler(
         },
         deps,
       );
-      writeJsonResponse(res, result.status, result.body);
+      response = result;
     } catch (error) {
       const intakeError = normalizeHttpIntakeError(error);
       const log = deps.log ?? ((event: string, meta: Record<string, unknown>) => {
@@ -1026,14 +1027,17 @@ export function createActivityIntakeHttpHandler(
         error: error instanceof Error ? error.message : String(error),
       });
       if (!res.headersSent) {
-        writeJsonResponse(res, intakeError.status, {
-          error: intakeError.code,
-          retryable: intakeError.retryable,
-        });
-        return;
+        response = {
+          status: intakeError.status,
+          body: {
+            error: intakeError.code,
+            retryable: intakeError.retryable,
+          },
+        };
       }
     } finally {
       await disposeParsedAttachment(parsed, deps.log);
     }
+    if (response && !res.headersSent) writeJsonResponse(res, response.status, response.body);
   };
 }

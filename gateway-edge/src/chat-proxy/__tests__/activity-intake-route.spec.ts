@@ -53,15 +53,23 @@ function envelopeWithAttachment(bytes?: Uint8Array): AgentActivityEnvelopeV1 {
   };
 }
 
-async function withServer(run: (baseUrl: string) => Promise<void>): Promise<void> {
+async function withServer(
+  run: (baseUrl: string, responseEnded: () => boolean) => Promise<void>,
+): Promise<void> {
+  let responseEnded = false;
   const server = http.createServer((req, res) => {
+    const end = res.end.bind(res);
+    res.end = ((...args: Parameters<typeof res.end>) => {
+      responseEnded = true;
+      return end(...args);
+    }) as typeof res.end;
     void chatProxyHandleRequest(req, res);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("missing server port");
   try {
-    await run(`http://127.0.0.1:${address.port}`);
+    await run(`http://127.0.0.1:${address.port}`, () => responseEnded);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
@@ -199,15 +207,29 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
     });
   });
 
-  it("spools multipart detail to a bounded source, validates transport metadata, and cleans it up", async () => {
+  it("spools multipart detail to a bounded source, validates transport metadata, and cleans it up before responding", async () => {
     const bytes = Buffer.from("streamed detail");
     const envelope = envelopeWithAttachment(bytes);
     let source: ActivityAttachmentSource | undefined;
+    let releaseDisposal: (() => void) | undefined;
+    const disposalReleased = new Promise<void>((resolve) => {
+      releaseDisposal = resolve;
+    });
+    let disposalStarted: (() => void) | undefined;
+    const disposalStartedPromise = new Promise<void>((resolve) => {
+      disposalStarted = resolve;
+    });
     const append = vi.fn(async (input: { attachment?: Uint8Array | ActivityAttachmentSource }) => {
       expect(input.attachment).not.toBeInstanceOf(Uint8Array);
       source = input.attachment as ActivityAttachmentSource;
       expect(source.byteLength).toBe(bytes.byteLength);
       expect(Buffer.from(await source.read(0, 8)).toString("utf8")).toBe("streamed");
+      const dispose = source.dispose.bind(source);
+      source.dispose = vi.fn(async () => {
+        disposalStarted?.();
+        await disposalReleased;
+        await dispose();
+      });
       return {
         outcome: "persisted" as const,
         postIds: ["post-1"],
@@ -234,6 +256,61 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
       sinkFor: () => ({ append }),
     }, { maxAttachmentBytes: 1024 }));
 
+    await withServer(async (baseUrl, responseEnded) => {
+      const form = new FormData();
+      form.set("envelope", JSON.stringify(envelope));
+      form.set("detail", new Blob([bytes], { type: "text/plain" }), "tool.txt");
+      const responsePromise = fetch(`${baseUrl}/internal/openclaw/activity/v1/events`, {
+        method: "POST",
+        body: form,
+      });
+      await disposalStartedPromise;
+      expect(responseEnded()).toBe(false);
+      releaseDisposal?.();
+      const response = await responsePromise;
+      expect(response.status).toBe(201);
+    });
+    await expect(source?.read(0, 1)).rejects.toThrow();
+  });
+
+  it("logs an attachment cleanup failure before returning the intake response", async () => {
+    const bytes = Buffer.from("streamed detail");
+    const envelope = envelopeWithAttachment(bytes);
+    const log = vi.fn();
+    const append = vi.fn(async (input: { attachment?: Uint8Array | ActivityAttachmentSource }) => {
+      const source = input.attachment as ActivityAttachmentSource;
+      const dispose = source.dispose.bind(source);
+      source.dispose = vi.fn(async () => {
+        await dispose();
+        throw new Error("temporary attachment cleanup failed");
+      });
+      return {
+        outcome: "persisted" as const,
+        postIds: ["post-1"],
+        receipt: {
+          eventKey: envelope.eventKey,
+          postId: "post-1",
+          activityChannelId: "activity-1",
+          activityRootPostId: "activity-root-1",
+        },
+      };
+    });
+    installActivityIntakeHandler(createActivityIntakeHttpHandler({
+      registry: {
+        readiness: () => "ready",
+        resolve: vi.fn(async () => ({
+          ...envelope.ref,
+          activityChannelId: "activity-1",
+          channelDocPath: "workspaces/acme/channels/build",
+          channelCreateAt: 1,
+          coachToken: "token",
+          attentionMention: "@builder",
+        })),
+      },
+      sinkFor: () => ({ append }),
+      log,
+    }));
+
     await withServer(async (baseUrl) => {
       const form = new FormData();
       form.set("envelope", JSON.stringify(envelope));
@@ -244,7 +321,9 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
       });
       expect(response.status).toBe(201);
     });
-    await expect(source?.read(0, 1)).rejects.toThrow();
+    expect(log).toHaveBeenCalledWith("activity_attachment_cleanup_error", {
+      error: "temporary attachment cleanup failed",
+    });
   });
 
   it("returns JSON 413 before parsing a declared oversized body", async () => {
