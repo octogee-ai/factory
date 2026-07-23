@@ -139,6 +139,19 @@ describe("setProjectAgentEnabled — enable", () => {
     expect(h.createProjectAgentBot).not.toHaveBeenCalled();
   });
 
+  it("does not materialize a project Agent for an archived project", async () => {
+    seedProject({ commercialLifecycle: { status: "archived" } });
+
+    const result = await setProjectAgentEnabled(actor(), "orbit", true);
+
+    expect(result).toEqual({
+      status: 409,
+      body: { error: "Project is archived" },
+    });
+    expect(h.sets).toEqual([]);
+    expect(h.createProjectAgentBot).not.toHaveBeenCalled();
+  });
+
   it("404s for a missing project and 400s for an invalid id", async () => {
     await expect(setProjectAgentEnabled(actor(), "orbit", true)).resolves.toEqual({
       status: 404,

@@ -94,6 +94,28 @@ async function fetchRawManifestAllowNotFound(
   };
 }
 
+export async function getManifestForQuota(
+  sudoUser: string,
+  org: string,
+  repoName: string,
+): Promise<Manifest> {
+  const raw = await fetchRawManifestAllowNotFound(sudoUser, org, repoName);
+  if (!raw) return {};
+  for (const [path, value] of Object.entries(raw.manifest)) {
+    const entry = value as Partial<ManifestEntry> | null;
+    if (
+      !entry ||
+      entry.type !== "blob" ||
+      typeof entry.size !== "number" ||
+      !Number.isSafeInteger(entry.size) ||
+      entry.size !== Math.abs(entry.size)
+    ) {
+      throw new Error(`invalid blob manifest entry at ${path}`);
+    }
+  }
+  return raw.manifest as Manifest;
+}
+
 export async function updateManifest(
   sudoUser: string,
   org: string,

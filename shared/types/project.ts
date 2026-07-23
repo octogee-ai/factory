@@ -32,6 +32,10 @@ provisioningError?: string | null;
 pendingVisibility?: ProjectVisibility | null;
   giteaRepoName: string | null;
   repoSource?: ProjectRepoSource | null;
+  commercialLifecycle?: {
+    status: "active" | "archived";
+    archivedAt?: unknown;
+  };
 
 canvasFile: string;
   publishedUrl: string | null;

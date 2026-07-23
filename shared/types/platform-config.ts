@@ -15,14 +15,51 @@ import type { ModelCatalogProvider } from "./model-catalog.js";
 export const PLATFORM_CONFIG_COLLECTION = "platformConfig";
 export const PLATFORM_MODEL_CONFIG_DOC = "models";
 export const PLATFORM_CONNECT_CONFIG_DOC = "connect";
+export const PLATFORM_FREE_CONFIG_DOC = "free";
 export const PLATFORM_TRIAL_CONFIG_DOC = "trial";
 
-export const TRIAL_CONFIG_SCHEMA_VERSION = 1 as const;
+export const TRIAL_CONFIG_SCHEMA_VERSION = 2 as const;
+
+export interface PlatformFreeConfig {
+  schemaVersion: 1;
+  workspaceStorageGb: number;
+  updatedAt?: unknown;
+  updatedBy?: string;
+}
+
+export const DEFAULT_PLATFORM_FREE_CONFIG: PlatformFreeConfig = {
+  schemaVersion: 1,
+  workspaceStorageGb: 10,
+};
+
+export function parsePlatformFreeConfig(value: unknown): PlatformFreeConfig | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (
+    raw.schemaVersion !== 1 ||
+    typeof raw.workspaceStorageGb !== "number" ||
+    !Number.isFinite(raw.workspaceStorageGb) ||
+    raw.workspaceStorageGb <= 0 ||
+    raw.workspaceStorageGb > 1000 ||
+    (raw.updatedBy !== undefined && typeof raw.updatedBy !== "string")
+  ) {
+    return null;
+  }
+  return {
+    schemaVersion: 1,
+    workspaceStorageGb: raw.workspaceStorageGb,
+    ...(raw.updatedAt !== undefined ? { updatedAt: raw.updatedAt } : {}),
+    ...(raw.updatedBy !== undefined ? { updatedBy: raw.updatedBy } : {}),
+  };
+}
 
 export type TrialBuilderTier = Exclude<BuilderTierName, "enterprise">;
 
 export interface PlatformTrialConfig {
   schemaVersion: typeof TRIAL_CONFIG_SCHEMA_VERSION;
+  offerId: string;
+  offerVersion: number;
+  durationDays: number;
   defaultPersonalTier: PersonalTierName;
   defaultBuilderTier: TrialBuilderTier;
   updatedAt?: unknown;
@@ -31,8 +68,11 @@ export interface PlatformTrialConfig {
 
 export const DEFAULT_PLATFORM_TRIAL_CONFIG: PlatformTrialConfig = {
   schemaVersion: TRIAL_CONFIG_SCHEMA_VERSION,
-  defaultPersonalTier: "personal_pro",
-  defaultBuilderTier: "pro",
+  offerId: "builder-signup",
+  offerVersion: 1,
+  durationDays: 7,
+  defaultPersonalTier: "personal",
+  defaultBuilderTier: "hobby",
 };
 
 function isPersonalTier(value: unknown): value is PersonalTierName {
@@ -47,23 +87,45 @@ function isTrialBuilderTier(value: unknown): value is TrialBuilderTier {
   );
 }
 
+function validTrialOfferIdentity(raw: Record<string, unknown>): boolean {
+  return raw.schemaVersion === TRIAL_CONFIG_SCHEMA_VERSION &&
+    typeof raw.offerId === "string" &&
+    raw.offerId.trim().length > 0 &&
+    Number.isInteger(raw.offerVersion) &&
+    (raw.offerVersion as number) >= 1;
+}
+
+function validTrialOfferTerms(raw: Record<string, unknown>): boolean {
+  return Number.isInteger(raw.durationDays) &&
+    (raw.durationDays as number) >= 1 &&
+    (raw.durationDays as number) <= 30 &&
+    isPersonalTier(raw.defaultPersonalTier) &&
+    isTrialBuilderTier(raw.defaultBuilderTier);
+}
+
+function validConfigEditor(value: unknown): boolean {
+  return value === undefined || typeof value === "string";
+}
+
 export function parsePlatformTrialConfig(value: unknown): PlatformTrialConfig | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
   if (
-    raw.schemaVersion !== TRIAL_CONFIG_SCHEMA_VERSION ||
-    !isPersonalTier(raw.defaultPersonalTier) ||
-    !isTrialBuilderTier(raw.defaultBuilderTier) ||
-    (raw.updatedBy !== undefined && typeof raw.updatedBy !== "string")
+    !validTrialOfferIdentity(raw) ||
+    !validTrialOfferTerms(raw) ||
+    !validConfigEditor(raw.updatedBy)
   ) {
     return null;
   }
   return {
     schemaVersion: TRIAL_CONFIG_SCHEMA_VERSION,
-    defaultPersonalTier: raw.defaultPersonalTier,
-    defaultBuilderTier: raw.defaultBuilderTier,
+    offerId: raw.offerId as string,
+    offerVersion: raw.offerVersion as number,
+    durationDays: raw.durationDays as number,
+    defaultPersonalTier: raw.defaultPersonalTier as PersonalTierName,
+    defaultBuilderTier: raw.defaultBuilderTier as TrialBuilderTier,
     ...(raw.updatedAt !== undefined ? { updatedAt: raw.updatedAt } : {}),
-    ...(raw.updatedBy !== undefined ? { updatedBy: raw.updatedBy } : {}),
+    ...(raw.updatedBy !== undefined ? { updatedBy: raw.updatedBy as string } : {}),
   };
 }
 
@@ -81,6 +143,9 @@ function fnv1a64Hex(input: string): string {
 export function trialConfigHash(config: PlatformTrialConfig): string {
   return fnv1a64Hex(JSON.stringify({
     schemaVersion: config.schemaVersion,
+    offerId: config.offerId,
+    offerVersion: config.offerVersion,
+    durationDays: config.durationDays,
     defaultPersonalTier: config.defaultPersonalTier,
     defaultBuilderTier: config.defaultBuilderTier,
   }));

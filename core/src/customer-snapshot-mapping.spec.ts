@@ -103,12 +103,15 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
 
   it("carries every plan-resolution input, including the immutable trial grant", () => {
     const trialGrant = {
-      schemaVersion: 1,
-      personalTier: "personal_pro",
-      builderTier: "pro",
+      schemaVersion: 2,
+      offerId: "builder-signup",
+      offerVersion: 1,
+      personalTier: "personal",
+      builderTier: "hobby",
       gatewayId: "trial-op-000001",
       configHash: "config-a",
       claimedAt: "2026-07-08T00:00:00.000Z",
+      endsAt: "2026-07-15T00:00:00.000Z",
     };
     const snap = mapUserDocToSnapshot(
       "u1",
@@ -118,7 +121,6 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
         selectedTier: "personal_pro",
         subscription: { tier: "personal_pro", status: "active" },
         builderSubscription: { tier: "hobby", status: "active" },
-        trialStartedAt: "2026-07-08T00:00:00.000Z",
         trialGrant,
       },
       ch,
@@ -126,7 +128,6 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
     expect(snap.selectedTier).toBe("personal_pro");
     expect(snap.subscription).toEqual({ tier: "personal_pro", status: "active" });
     expect(snap.builderSubscription).toEqual({ tier: "hobby", status: "active" });
-    expect(snap.trialStartedAt).toBe("2026-07-08T00:00:00.000Z");
     expect(snap.trialGrant).toBe(trialGrant);
   });
 
@@ -135,7 +136,6 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
     expect("selectedTier" in snap).toBe(false);
     expect("subscription" in snap).toBe(false);
     expect("builderSubscription" in snap).toBe(false);
-    expect("trialStartedAt" in snap).toBe(false);
     expect("trialGrant" in snap).toBe(false);
   });
 });
@@ -255,6 +255,24 @@ describe("mapProjectAgentState", () => {
       enabled: true,
       mmUserId: null,
       token: null,
+    });
+  });
+
+  it("projects an archived project's agent as retire-pending instead of runnable", () => {
+    expect(
+      mapProjectAgentState(
+        "orbit",
+        {
+          agent: { enabled: true },
+          commercialLifecycle: { status: "archived" },
+        },
+        { mmUserId: "bot-1", personalToken: "pat-1" },
+      ),
+    ).toEqual({
+      projectId: "orbit",
+      enabled: false,
+      mmUserId: "bot-1",
+      token: "pat-1",
     });
   });
 

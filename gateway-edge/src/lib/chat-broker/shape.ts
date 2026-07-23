@@ -31,6 +31,7 @@ export interface MmChannelMeta {
   name: string;
   display_name: string;
   team_id?: string;
+  delete_at?: number;
 }
 
 export interface MmUserMeta {

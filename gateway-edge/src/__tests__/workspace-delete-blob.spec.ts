@@ -9,6 +9,7 @@ const h = vi.hoisted(() => {
     existsByPath,
     deletes,
     removeFromManifest: vi.fn(),
+    removeWorkspaceBlob: vi.fn(),
     bucketFile: vi.fn((path: string) => ({
       exists: vi.fn(async () => [existsByPath.get(path) ?? false]),
       delete: vi.fn(async () => {
@@ -46,6 +47,9 @@ vi.mock("../lib/fileTarget.js", () => ({
 vi.mock("../lib/manifest.js", () => ({
   removeFromManifest: (...args: unknown[]) => h.removeFromManifest(...args),
 }));
+vi.mock("../lib/workspace-blob.js", () => ({
+  removeWorkspaceBlob: (...args: unknown[]) => h.removeWorkspaceBlob(...args),
+}));
 
 const { default: deleteBlobRoutes } = await import("../routes/workspace/delete-blob.js");
 
@@ -61,6 +65,7 @@ beforeEach(() => {
   h.deletes.length = 0;
   h.bucketFile.mockClear();
   h.removeFromManifest.mockReset().mockResolvedValue(undefined);
+  h.removeWorkspaceBlob.mockReset().mockResolvedValue(undefined);
 });
 
 describe("workspace delete-blob route", () => {
@@ -74,16 +79,9 @@ describe("workspace delete-blob route", () => {
       .expect(200);
 
     expect(res.body).toEqual({ success: true, deleted: "assets/photo.png" });
-    expect(h.deletes).toEqual([
-      "customers/mira/assets/photo.png",
-      "customers/mira/.thumbs/assets/photo.png.png",
-    ]);
-    expect(h.removeFromManifest).toHaveBeenCalledWith(
-      "ws-mira",
-      "mira",
-      "workspace",
+    expect(h.removeWorkspaceBlob).toHaveBeenCalledWith(
+      h.target,
       "assets/photo.png",
-      "blob: removed assets/photo.png",
     );
   });
 
@@ -93,13 +91,9 @@ describe("workspace delete-blob route", () => {
       .send({ path: "assets/missing.png" })
       .expect(200, { success: true, deleted: "assets/missing.png" });
 
-    expect(h.deletes).toEqual([]);
-    expect(h.removeFromManifest).toHaveBeenCalledWith(
-      "ws-mira",
-      "mira",
-      "workspace",
+    expect(h.removeWorkspaceBlob).toHaveBeenCalledWith(
+      h.target,
       "assets/missing.png",
-      "blob: removed assets/missing.png",
     );
   });
 
@@ -114,7 +108,6 @@ describe("workspace delete-blob route", () => {
       .send({ path: "../secret.png" })
       .expect(400);
 
-    expect(h.bucketFile).not.toHaveBeenCalled();
-    expect(h.removeFromManifest).not.toHaveBeenCalled();
+    expect(h.removeWorkspaceBlob).not.toHaveBeenCalled();
   });
 });

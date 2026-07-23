@@ -75,6 +75,13 @@ export async function setProjectAgentEnabled(
     return bad(403, "Only the project owner can manage its agent");
   }
 
+  if (
+    enabled &&
+    projectSnap.data()?.commercialLifecycle?.status === "archived"
+  ) {
+    return bad(409, "Project is archived");
+  }
+
   if (enabled && !isPaidTier(actor.userData)) {
     return bad(402, "Project agents are available on paid plans");
   }

@@ -317,9 +317,12 @@ describe("admin platform-trial-config", () => {
 
   it("GET returns the strict defaults, concrete plan choices, and provisioning health", async () => {
     platformDocs["platformConfig/trial"] = {
-      schemaVersion: 1,
-      defaultPersonalTier: "personal_pro",
-      defaultBuilderTier: "pro",
+      schemaVersion: 2,
+      offerId: "builder-signup",
+      offerVersion: 1,
+      durationDays: 7,
+      defaultPersonalTier: "personal",
+      defaultBuilderTier: "hobby",
     };
     queryDocs["trialGatewayClaims:status:waiting"] = [
       {
@@ -357,9 +360,12 @@ describe("admin platform-trial-config", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.config).toEqual({
-      schemaVersion: 1,
-      defaultPersonalTier: "personal_pro",
-      defaultBuilderTier: "pro",
+      schemaVersion: 2,
+      offerId: "builder-signup",
+      offerVersion: 1,
+      durationDays: 7,
+      defaultPersonalTier: "personal",
+      defaultBuilderTier: "hobby",
     });
     expect(res.body.personalPlans).toContainEqual({ name: "personal_pro", displayName: "Personal Pro" });
     expect(res.body.builderPlans).toContainEqual({
@@ -402,7 +408,10 @@ describe("admin platform-trial-config", () => {
     const res = await request(app)
       .put("/api/admin/platform-trial-config")
       .send({
-        schemaVersion: 1,
+        schemaVersion: 2,
+        offerId: "builder-signup",
+        offerVersion: 2,
+        durationDays: 14,
         defaultPersonalTier: "personal_pro_max",
         defaultBuilderTier: "team",
       });
@@ -412,7 +421,10 @@ describe("admin platform-trial-config", () => {
     expect(setCalls[0]).toMatchObject({
       path: "platformConfig/trial",
       data: {
-        schemaVersion: 1,
+        schemaVersion: 2,
+        offerId: "builder-signup",
+        offerVersion: 2,
+        durationDays: 14,
         defaultPersonalTier: "personal_pro_max",
         defaultBuilderTier: "team",
         updatedAt: "server-now",
@@ -425,13 +437,57 @@ describe("admin platform-trial-config", () => {
     const enterprise = await request(app)
       .put("/api/admin/platform-trial-config")
       .send({
-        schemaVersion: 1,
+        schemaVersion: 2,
+        offerId: "builder-signup",
+        offerVersion: 1,
+        durationDays: 7,
         defaultPersonalTier: "personal_pro",
         defaultBuilderTier: "enterprise",
       });
     expect(enterprise.status).toBe(400);
     expect(enterprise.body.error).toBe("invalid_trial_config");
 
+    expect(setCalls).toHaveLength(0);
+  });
+});
+
+describe("admin platform-free-config", () => {
+  let app: express.Express;
+
+  beforeEach(() => {
+    app = buildApp();
+    for (const key of Object.keys(platformDocs)) delete platformDocs[key];
+    setCalls.length = 0;
+  });
+
+  it("GET returns the compiled allowance when the document is absent", async () => {
+    const res = await request(app).get("/api/admin/platform-free-config");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ schemaVersion: 1, workspaceStorageGb: 10 });
+  });
+
+  it("PUT stores a validated workspace allowance with audit fields", async () => {
+    const res = await request(app)
+      .put("/api/admin/platform-free-config")
+      .send({ schemaVersion: 1, workspaceStorageGb: 2.5 });
+    expect(res.status).toBe(200);
+    expect(setCalls).toContainEqual({
+      path: "platformConfig/free",
+      data: {
+        schemaVersion: 1,
+        workspaceStorageGb: 2.5,
+        updatedAt: "server-now",
+        updatedBy: "admin-user",
+      },
+      opts: undefined,
+    });
+  });
+
+  it("PUT rejects an invalid allowance", async () => {
+    const res = await request(app)
+      .put("/api/admin/platform-free-config")
+      .send({ schemaVersion: 1, workspaceStorageGb: 0 });
+    expect(res.status).toBe(400);
     expect(setCalls).toHaveLength(0);
   });
 });

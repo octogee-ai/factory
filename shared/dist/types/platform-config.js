@@ -7,12 +7,39 @@ import { BUILDER_TIERS, TIERS, } from "./billing-tiers.js";
 export const PLATFORM_CONFIG_COLLECTION = "platformConfig";
 export const PLATFORM_MODEL_CONFIG_DOC = "models";
 export const PLATFORM_CONNECT_CONFIG_DOC = "connect";
+export const PLATFORM_FREE_CONFIG_DOC = "free";
 export const PLATFORM_TRIAL_CONFIG_DOC = "trial";
-export const TRIAL_CONFIG_SCHEMA_VERSION = 1;
+export const TRIAL_CONFIG_SCHEMA_VERSION = 2;
+export const DEFAULT_PLATFORM_FREE_CONFIG = {
+    schemaVersion: 1,
+    workspaceStorageGb: 10,
+};
+export function parsePlatformFreeConfig(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+        return null;
+    const raw = value;
+    if (raw.schemaVersion !== 1 ||
+        typeof raw.workspaceStorageGb !== "number" ||
+        !Number.isFinite(raw.workspaceStorageGb) ||
+        raw.workspaceStorageGb <= 0 ||
+        raw.workspaceStorageGb > 1000 ||
+        (raw.updatedBy !== undefined && typeof raw.updatedBy !== "string")) {
+        return null;
+    }
+    return {
+        schemaVersion: 1,
+        workspaceStorageGb: raw.workspaceStorageGb,
+        ...(raw.updatedAt !== undefined ? { updatedAt: raw.updatedAt } : {}),
+        ...(raw.updatedBy !== undefined ? { updatedBy: raw.updatedBy } : {}),
+    };
+}
 export const DEFAULT_PLATFORM_TRIAL_CONFIG = {
     schemaVersion: TRIAL_CONFIG_SCHEMA_VERSION,
-    defaultPersonalTier: "personal_pro",
-    defaultBuilderTier: "pro",
+    offerId: "builder-signup",
+    offerVersion: 1,
+    durationDays: 7,
+    defaultPersonalTier: "personal",
+    defaultBuilderTier: "hobby",
 };
 function isPersonalTier(value) {
     return typeof value === "string" && value in TIERS && value !== "builder" && value !== "operator";
@@ -22,18 +49,37 @@ function isTrialBuilderTier(value) {
         value in BUILDER_TIERS &&
         BUILDER_TIERS[value].instance !== null);
 }
+function validTrialOfferIdentity(raw) {
+    return raw.schemaVersion === TRIAL_CONFIG_SCHEMA_VERSION &&
+        typeof raw.offerId === "string" &&
+        raw.offerId.trim().length > 0 &&
+        Number.isInteger(raw.offerVersion) &&
+        raw.offerVersion >= 1;
+}
+function validTrialOfferTerms(raw) {
+    return Number.isInteger(raw.durationDays) &&
+        raw.durationDays >= 1 &&
+        raw.durationDays <= 30 &&
+        isPersonalTier(raw.defaultPersonalTier) &&
+        isTrialBuilderTier(raw.defaultBuilderTier);
+}
+function validConfigEditor(value) {
+    return value === undefined || typeof value === "string";
+}
 export function parsePlatformTrialConfig(value) {
     if (!value || typeof value !== "object" || Array.isArray(value))
         return null;
     const raw = value;
-    if (raw.schemaVersion !== TRIAL_CONFIG_SCHEMA_VERSION ||
-        !isPersonalTier(raw.defaultPersonalTier) ||
-        !isTrialBuilderTier(raw.defaultBuilderTier) ||
-        (raw.updatedBy !== undefined && typeof raw.updatedBy !== "string")) {
+    if (!validTrialOfferIdentity(raw) ||
+        !validTrialOfferTerms(raw) ||
+        !validConfigEditor(raw.updatedBy)) {
         return null;
     }
     return {
         schemaVersion: TRIAL_CONFIG_SCHEMA_VERSION,
+        offerId: raw.offerId,
+        offerVersion: raw.offerVersion,
+        durationDays: raw.durationDays,
         defaultPersonalTier: raw.defaultPersonalTier,
         defaultBuilderTier: raw.defaultBuilderTier,
         ...(raw.updatedAt !== undefined ? { updatedAt: raw.updatedAt } : {}),
@@ -53,6 +99,9 @@ function fnv1a64Hex(input) {
 export function trialConfigHash(config) {
     return fnv1a64Hex(JSON.stringify({
         schemaVersion: config.schemaVersion,
+        offerId: config.offerId,
+        offerVersion: config.offerVersion,
+        durationDays: config.durationDays,
         defaultPersonalTier: config.defaultPersonalTier,
         defaultBuilderTier: config.defaultBuilderTier,
     }));

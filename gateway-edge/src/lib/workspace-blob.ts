@@ -1,6 +1,10 @@
-import { storage } from "./db.js";
+import { db, storage } from "./db.js";
 import { logger } from "../middleware/logging.js";
-import { updateManifest, removeFromManifest } from "./manifest.js";
+import {
+  getManifestForQuota,
+  updateManifest,
+  removeFromManifest,
+} from "./manifest.js";
 import type { FileTarget } from "./fileTarget.js";
 import {
   getExtension,
@@ -9,6 +13,20 @@ import {
   giteaSudoUser,
 } from "../routes/workspace/helpers.js";
 import { invalidateWorkspaceFileResponseCache } from "../routes/workspace/file-response-cache.js";
+import { freeWorkspaceStorageLimitBytes } from "./free-storage.js";
+import {
+  DEFAULT_PLATFORM_FREE_CONFIG,
+  parsePlatformFreeConfig,
+} from "@octogee/shared/types/platform-config";
+import {
+  finalizeWorkspaceStorageReservation,
+  releaseWorkspaceStorage,
+  reserveWorkspaceStorage,
+  rollbackWorkspaceStorageReservation,
+  type WorkspaceStorageReservation,
+} from "./workspace-storage-quota.js";
+
+export { WorkspaceStorageQuotaError } from "./workspace-storage-quota.js";
 
 export interface StoredWorkspaceBlob {
   gcsPath: string;
@@ -17,7 +35,109 @@ export interface StoredWorkspaceBlob {
   thumbnailError?: string;
 }
 
+export interface WorkspaceBlobOptions {
+  maxStorageBytes?: number;
+}
+
 const THUMB_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+interface ThumbnailResult {
+  thumbnailUrl?: string;
+  thumbnailError?: string;
+}
+
+async function configuredWorkspaceStorageLimitBytes(
+  target: FileTarget,
+): Promise<number | undefined> {
+  if (target.projectSlug !== null) return undefined;
+  const workspace = await db.doc(`workspaces/${target.slug}`).get();
+  const ownerUid = workspace.data()?.ownerUid;
+  if (typeof ownerUid !== "string" || !ownerUid) {
+    throw new Error(`workspace ${target.slug} has no storage owner`);
+  }
+  const [owner, configSnapshot] = await Promise.all([
+    db.doc(`users/${ownerUid}`).get(),
+    db.doc("platformConfig/free").get(),
+  ]);
+  if (!owner.exists) throw new Error(`workspace storage owner ${ownerUid} was not found`);
+  const config = parsePlatformFreeConfig(configSnapshot.data());
+  if (!config) {
+    logger.warn("platformConfig/free missing or invalid; using compiled Free storage allowance");
+  }
+  return freeWorkspaceStorageLimitBytes(
+    owner.data() ?? {},
+    false,
+    config ?? DEFAULT_PLATFORM_FREE_CONFIG,
+  );
+}
+
+async function reserveBlobStorage(
+  target: FileTarget,
+  filePath: string,
+  fileSize: number,
+  limitBytes: number | undefined,
+): Promise<WorkspaceStorageReservation | null> {
+  if (limitBytes === undefined) return null;
+  const manifest = await getManifestForQuota(
+    giteaSudoUser(target),
+    target.org,
+    target.repoName,
+  );
+  const currentBytes = Object.values(manifest)
+    .reduce((sum, entry) => sum + entry.size, 0);
+  return reserveWorkspaceStorage(db, {
+    slug: target.slug,
+    path: filePath,
+    newSize: fileSize,
+    manifestBytes: currentBytes,
+    manifestPathBytes: manifest[filePath]?.size ?? 0,
+    limitBytes,
+  });
+}
+
+async function createBlobThumbnail(
+  target: FileTarget,
+  filePath: string,
+  fileBuffer: Buffer,
+  extension: string,
+  bucket: ReturnType<typeof storage.bucket>,
+): Promise<ThumbnailResult> {
+  if (!IMAGE_EXTENSIONS.has(extension)) return {};
+  try {
+    const sharp = (await import("sharp")).default;
+    const thumbBuffer = await sharp(fileBuffer)
+      .resize(128, 128, { fit: "inside" })
+      .png()
+      .toBuffer();
+    const thumbFile = bucket.file(`${target.gcsPrefix}/.thumbs/${filePath}.png`);
+    await thumbFile.save(thumbBuffer, { metadata: { contentType: "image/png" } });
+    const [thumbnailUrl] = await thumbFile.getSignedUrl({
+      action: "read",
+      expires: Date.now() + THUMB_TTL_MS,
+    });
+    return { thumbnailUrl };
+  } catch (error) {
+    const thumbnailError = error instanceof Error ? error.message : String(error);
+    logger.warn(`Thumbnail generation failed for ${filePath}: ${thumbnailError}`);
+    return { thumbnailError };
+  }
+}
+
+async function rollbackReservation(
+  reservation: WorkspaceStorageReservation | null,
+  error: unknown,
+): Promise<never> {
+  if (!reservation) throw error;
+  try {
+    await rollbackWorkspaceStorageReservation(db, reservation);
+  } catch (rollbackError) {
+    throw new AggregateError(
+      [error, rollbackError],
+      "workspace blob write failed and its storage reservation could not be rolled back",
+    );
+  }
+  throw error;
+}
 
 /**
  * The single way a binary lands in a workspace: save to GCS, generate a 128²
@@ -31,55 +151,62 @@ export async function storeWorkspaceBlob(
   filePath: string,
   fileBuffer: Buffer,
   mimeType?: string,
+  options: WorkspaceBlobOptions = {},
 ): Promise<StoredWorkspaceBlob> {
-  const bucket = storage.bucket();
-  const gcsPath = `${target.gcsPrefix}/${filePath}`;
-  const ext = getExtension(filePath);
-  const contentType = mimeType || getMimeType(ext);
+  const maxStorageBytes = options.maxStorageBytes ??
+    await configuredWorkspaceStorageLimitBytes(target);
+  const reservation = await reserveBlobStorage(
+    target,
+    filePath,
+    fileBuffer.length,
+    maxStorageBytes,
+  );
+  try {
+    const bucket = storage.bucket();
+    const gcsPath = `${target.gcsPrefix}/${filePath}`;
+    const ext = getExtension(filePath);
+    const contentType = mimeType || getMimeType(ext);
 
-  await bucket.file(gcsPath).save(fileBuffer, { metadata: { contentType } });
+    await bucket.file(gcsPath).save(fileBuffer, { metadata: { contentType } });
 
-  let thumbnailUrl: string | undefined;
-  let thumbnailError: string | undefined;
-  if (IMAGE_EXTENSIONS.has(ext)) {
-    try {
-      const sharp = (await import("sharp")).default;
-      const thumbBuffer = await sharp(fileBuffer).resize(128, 128, { fit: "inside" }).png().toBuffer();
-      const thumbFile = bucket.file(`${target.gcsPrefix}/.thumbs/${filePath}.png`);
-      await thumbFile.save(thumbBuffer, { metadata: { contentType: "image/png" } });
-      const [signedUrl] = await thumbFile.getSignedUrl({
-        action: "read",
-        expires: Date.now() + THUMB_TTL_MS,
-      });
-      thumbnailUrl = signedUrl;
-    } catch (e) {
-      thumbnailError = e instanceof Error ? e.message : String(e);
-      logger.warn(`Thumbnail generation failed for ${filePath}: ${thumbnailError}`);
-    }
-  }
+    const { thumbnailUrl, thumbnailError } = await createBlobThumbnail(
+      target,
+      filePath,
+      fileBuffer,
+      ext,
+      bucket,
+    );
 
-  await updateManifest(giteaSudoUser(target), target.org, target.repoName, {
-    [filePath]: {
-      type: "blob",
+    await updateManifest(giteaSudoUser(target), target.org, target.repoName, {
+      [filePath]: {
+        type: "blob",
+        gcsPath,
+        size: fileBuffer.length,
+        mimeType: contentType,
+        ...(thumbnailUrl ? { thumbnailUrl } : {}),
+        uploadedAt: new Date().toISOString(),
+      },
+    });
+    if (reservation) await finalizeWorkspaceStorageReservation(db, reservation);
+    invalidateWorkspaceFileResponseCache(target);
+
+    return {
       gcsPath,
       size: fileBuffer.length,
-      mimeType: contentType,
       ...(thumbnailUrl ? { thumbnailUrl } : {}),
-      uploadedAt: new Date().toISOString(),
-    },
-  });
-  invalidateWorkspaceFileResponseCache(target);
-
-  return {
-    gcsPath,
-    size: fileBuffer.length,
-    ...(thumbnailUrl ? { thumbnailUrl } : {}),
-    ...(thumbnailError ? { thumbnailError } : {}),
-  };
+      ...(thumbnailError ? { thumbnailError } : {}),
+    };
+  } catch (error) {
+    return rollbackReservation(reservation, error);
+  }
 }
 
 /** Remove a workspace blob, its thumbnail, and its manifest entry — no orphans. */
 export async function removeWorkspaceBlob(target: FileTarget, filePath: string): Promise<void> {
+  const manifest = target.projectSlug === null
+    ? await getManifestForQuota(giteaSudoUser(target), target.org, target.repoName)
+    : {};
+  const removedBytes = manifest[filePath]?.size ?? 0;
   const bucket = storage.bucket();
   const ext = getExtension(filePath);
   await bucket.file(`${target.gcsPrefix}/${filePath}`).delete({ ignoreNotFound: true });
@@ -87,5 +214,12 @@ export async function removeWorkspaceBlob(target: FileTarget, filePath: string):
     await bucket.file(`${target.gcsPrefix}/.thumbs/${filePath}.png`).delete({ ignoreNotFound: true });
   }
   await removeFromManifest(giteaSudoUser(target), target.org, target.repoName, filePath);
+  if (target.projectSlug === null && removedBytes > 0) {
+    await releaseWorkspaceStorage(db, {
+      slug: target.slug,
+      path: filePath,
+      removedBytes,
+    });
+  }
   invalidateWorkspaceFileResponseCache(target);
 }

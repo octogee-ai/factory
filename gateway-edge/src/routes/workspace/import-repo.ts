@@ -1,9 +1,12 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { storage } from "../../lib/db.js";
 import { logger } from "../../middleware/logging.js";
-import { updateManifest } from "../../lib/manifest.js";
 import { giteaApiAsUser } from "../../lib/gitea.js";
 import { workspaceGiteaOrg, workspaceRepoName } from "../../lib/gitea-naming.js";
+import {
+  storeWorkspaceBlob,
+  WorkspaceStorageQuotaError,
+} from "../../lib/workspace-blob.js";
+import type { FileTarget } from "../../lib/fileTarget.js";
 import {
   ensureSlug,
   getExtension,
@@ -43,11 +46,11 @@ interface ImportRepoContext extends ImportRepoRequest {
   sudoUser: string;
   workspaceRepo: string;
   headers: Record<string, string>;
+  target: FileTarget;
 }
 
 interface ImportedRepoResult {
   fileCount: number;
-  manifestEntries: Record<string, unknown>;
 }
 
 function errorMessage(e: unknown): string {
@@ -164,26 +167,16 @@ async function writeBlobImport(
   blob: GitHubTreeEntry,
   targetPath: string,
   content: string,
-  manifestEntries: Record<string, unknown>,
 ): Promise<void> {
   const fileBuffer = Buffer.from(content, "base64");
   const ext = getExtension(blob.path);
-  const gcsPath = `customers/${context.slug}/${targetPath}`;
   const mimeType = getMimeType(ext);
-  await storage.bucket().file(gcsPath).save(fileBuffer, { metadata: { contentType: mimeType } });
-  manifestEntries[targetPath] = {
-    type: "blob",
-    gcsPath,
-    size: fileBuffer.length,
-    mimeType,
-    uploadedAt: new Date().toISOString(),
-  };
+  await storeWorkspaceBlob(context.target, targetPath, fileBuffer, mimeType);
 }
 
 async function importGitHubBlob(
   context: ImportRepoContext,
   blob: GitHubTreeEntry,
-  manifestEntries: Record<string, unknown>,
 ): Promise<boolean> {
   const targetPath = importTargetPath(context.targetDir, blob.path);
   if (!targetPath) return false;
@@ -194,7 +187,7 @@ async function importGitHubBlob(
   if (isTextFile(blob.path)) {
     await writeTextImport(context, blob, targetPath, content);
   } else {
-    await writeBlobImport(context, blob, targetPath, content, manifestEntries);
+    await writeBlobImport(context, blob, targetPath, content);
   }
 
   return true;
@@ -204,15 +197,14 @@ async function importGitHubRepo(context: ImportRepoContext, res: Response): Prom
   const tree = await fetchGitHubTree(context, res);
   if (!tree) return null;
 
-  const manifestEntries: Record<string, unknown> = {};
   let fileCount = 0;
   for (const blob of tree.filter(importableGitHubBlob)) {
-    if (await importGitHubBlob(context, blob, manifestEntries)) {
+    if (await importGitHubBlob(context, blob)) {
       fileCount += 1;
     }
   }
 
-  return { fileCount, manifestEntries };
+  return { fileCount };
 }
 
 function importRepoContext(slug: string, request: ImportRepoRequest): ImportRepoContext {
@@ -223,6 +215,17 @@ function importRepoContext(slug: string, request: ImportRepoRequest): ImportRepo
     sudoUser: `ws-${slug}`,
     workspaceRepo: workspaceRepoName(),
     headers: githubHeaders(),
+    target: {
+      slug,
+      projectSlug: null,
+      provider: "gitea",
+      org: workspaceGiteaOrg(slug),
+      repoName: workspaceRepoName(),
+      gcsPrefix: `customers/${slug}`,
+      sudoUser: `ws-${slug}`,
+      brokered: false,
+      canvasFile: "README.md",
+    },
   };
 }
 
@@ -259,10 +262,6 @@ async function handleImportRepo(req: Request, res: Response): Promise<void> {
   const result = await importGitHubRepo(context, res);
   if (!result) return;
 
-  if (Object.keys(result.manifestEntries).length > 0) {
-    await updateManifest(context.sudoUser, context.org, context.workspaceRepo, result.manifestEntries);
-  }
-
   res.json({ success: true, targetDir: context.targetDir, fileCount: result.fileCount });
 }
 
@@ -270,6 +269,15 @@ router.post("/import-repo", async (req: Request, res: Response, next: NextFuncti
   try {
     await handleImportRepo(req, res);
   } catch (e) {
+    if (e instanceof WorkspaceStorageQuotaError) {
+      res.status(413).json({
+        error: "Free workspace storage allowance exceeded",
+        code: e.code,
+        limitBytes: e.limitBytes,
+        projectedBytes: e.projectedBytes,
+      });
+      return;
+    }
     next(e);
   }
 });

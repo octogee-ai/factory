@@ -363,6 +363,16 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
       expect(c.body).toMatchObject({ archived: true });
     });
 
+    it("PATCHes archived:false when paid project access returns", async () => {
+      fetchMock.mockResolvedValueOnce(res(200, {}));
+      const { setRepoArchived } = await import("../gitea-admin.js");
+      await setRepoArchived("acme", "workspace", false);
+
+      const c = callsTo(fetchMock)[0];
+      expect(c).toMatchObject({ url: `${BASE}/repos/acme/workspace`, method: "PATCH" });
+      expect(c.body).toEqual({ archived: false });
+    });
+
     it("tolerates 404 (repo already gone) as a no-op", async () => {
       fetchMock.mockResolvedValueOnce(res(404, {}));
       const { archiveRepo } = await import("../gitea-admin.js");

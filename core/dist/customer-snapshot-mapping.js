@@ -27,7 +27,12 @@ export function mapProjectChannelDoc(projectId, data) {
 // a disabled-with-secret entry survives so the reconcile can retire it.
 export function mapProjectAgentState(projectId, projectData, secretData) {
     const agent = projectData.agent;
-    const enabled = !!agent && typeof agent === "object" && agent.enabled === true;
+    const requestedEnabled = !!agent && typeof agent === "object" && agent.enabled === true;
+    const commercialLifecycle = projectData.commercialLifecycle;
+    const archived = !!commercialLifecycle &&
+        typeof commercialLifecycle === "object" &&
+        commercialLifecycle.status === "archived";
+    const enabled = requestedEnabled && !archived;
     const mmUserId = typeof secretData?.mmUserId === "string" && secretData.mmUserId ? secretData.mmUserId : null;
     const token = typeof secretData?.personalToken === "string" && secretData.personalToken
         ? secretData.personalToken

@@ -66,7 +66,11 @@ export async function resolveChannelId(
   pat: string,
   teamId: string,
   channelName: string,
-  opts: { ttlSeconds: number; now?: () => number },
+  opts: {
+    ttlSeconds: number;
+    now?: () => number;
+    includeDeleted?: boolean;
+  },
 ): Promise<string> {
   // Pass-through: if the caller already has an id, don't burn an MM call.
   // MM channel ids are 26-char lowercase alphanum. Names use the URL slug
@@ -74,14 +78,16 @@ export async function resolveChannelId(
   if (/^[a-z0-9]{26}$/.test(channelName)) return channelName;
 
   const now = (opts.now ?? Date.now)();
-  const key = `${teamId}/${channelName}`;
+  const key = `${teamId}/${channelName}/${opts.includeDeleted === true ? "with-deleted" : "active"}`;
   const hit = channelCache.get(key);
   if (hit && hit.expiresAtMs > now) return hit.value;
 
   let ch: unknown;
   try {
     ch = await fetcher.get(
-      `/api/v4/teams/${teamId}/channels/name/${encodeURIComponent(channelName)}`,
+      `/api/v4/teams/${teamId}/channels/name/${encodeURIComponent(channelName)}${
+        opts.includeDeleted === true ? "?include_deleted=true" : ""
+      }`,
       pat,
     );
   } catch (err) {

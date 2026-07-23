@@ -598,12 +598,15 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
 
   it("loadUserSnapshot carries the trial grant into the pod-side lifecycle snapshot", async () => {
     const trialGrant = {
-      schemaVersion: 1,
-      personalTier: "personal_pro",
-      builderTier: "pro",
+      schemaVersion: 2,
+      offerId: "builder-signup",
+      offerVersion: 1,
+      personalTier: "personal",
+      builderTier: "hobby",
       gatewayId: "trial-op-000001",
       configHash: "config-a",
       claimedAt: { _seconds: 1_783_500_000 },
+      endsAt: { _seconds: 1_784_104_800 },
     };
     const client = mkClient({
       userSnapshot: vi.fn(async () => fullSnapshot({ trialGrant })),

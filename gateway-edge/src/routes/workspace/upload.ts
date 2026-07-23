@@ -1,9 +1,19 @@
 import { Router, Request, Response, NextFunction } from "express";
 import Busboy from "busboy";
-import { storage } from "../../lib/db.js";
+import { db, storage } from "../../lib/db.js";
 import { validateFilePath } from "../../lib/path-validation.js";
 import { resolveFileTarget, withGiteaTarget, type FileTarget } from "../../lib/fileTarget.js";
-import { storeWorkspaceBlob } from "../../lib/workspace-blob.js";
+import {
+  storeWorkspaceBlob,
+  WorkspaceStorageQuotaError,
+} from "../../lib/workspace-blob.js";
+import { freeWorkspaceStorageLimitBytes } from "../../lib/free-storage.js";
+import {
+  DEFAULT_PLATFORM_FREE_CONFIG,
+  PLATFORM_CONFIG_COLLECTION,
+  PLATFORM_FREE_CONFIG_DOC,
+  parsePlatformFreeConfig,
+} from "@octogee/shared/types/platform-config";
 import { logger } from "../../middleware/logging.js";
 import {
   targetGiteaApi,
@@ -14,6 +24,31 @@ import {
 import { invalidateWorkspaceFileResponseCache } from "./file-response-cache.js";
 
 const router = Router();
+
+async function uploadStorageLimitBytes(
+  userData: FirebaseFirestore.DocumentData | undefined,
+  target: FileTarget,
+): Promise<number | undefined> {
+  const compiledLimit = freeWorkspaceStorageLimitBytes(
+    userData ?? {},
+    target.projectSlug !== null,
+    DEFAULT_PLATFORM_FREE_CONFIG,
+  );
+  if (compiledLimit === undefined) return undefined;
+  const snap = await db
+    .collection(PLATFORM_CONFIG_COLLECTION)
+    .doc(PLATFORM_FREE_CONFIG_DOC)
+    .get();
+  const config = parsePlatformFreeConfig(snap.data());
+  if (!config) {
+    logger.warn("platformConfig/free missing or invalid; using compiled Free storage allowance");
+  }
+  return freeWorkspaceStorageLimitBytes(
+    userData ?? {},
+    false,
+    config ?? DEFAULT_PLATFORM_FREE_CONFIG,
+  );
+}
 
 router.post("/upload", withGiteaTarget(async (req, res, _next, target) => {
   const { files } = req.body as {
@@ -61,7 +96,7 @@ router.post("/upload", withGiteaTarget(async (req, res, _next, target) => {
 
   if (uploaded) invalidateWorkspaceFileResponseCache(target);
   res.json({ results });
-}));
+}, { access: "write" }));
 
 interface ParsedUpload {
   slug: string;
@@ -138,7 +173,7 @@ router.post("/upload-blob", async (req: Request, res: Response, next: NextFuncti
       projectSlug: parsed.projectSlug,
       callerUid: req.uid,
       callerWorkspaceSlug: req.workspaceSlug,
-    });
+    }, { access: "write" });
     if (!targetResult.ok) {
       res.status(targetResult.status).json({ error: targetResult.error });
       return;
@@ -152,7 +187,14 @@ router.post("/upload-blob", async (req: Request, res: Response, next: NextFuncti
     const pathError = validateFilePath(filePath);
     if (pathError) { res.status(400).json({ error: pathError }); return; }
 
-    const stored = await storeWorkspaceBlob(target, filePath, fileBuffer, mimeType);
+    const maxStorageBytes = await uploadStorageLimitBytes(req.user, target);
+    const stored = await storeWorkspaceBlob(
+      target,
+      filePath,
+      fileBuffer,
+      mimeType,
+      { maxStorageBytes },
+    );
     invalidateWorkspaceFileResponseCache(target);
 
     res.json({
@@ -164,6 +206,15 @@ router.post("/upload-blob", async (req: Request, res: Response, next: NextFuncti
       manifestUpdated: true,
     });
   } catch (e) {
+    if (e instanceof WorkspaceStorageQuotaError) {
+      res.status(413).json({
+        error: "Free workspace storage allowance exceeded",
+        code: e.code,
+        limitBytes: e.limitBytes,
+        projectedBytes: e.projectedBytes,
+      });
+      return;
+    }
     next(e);
   }
 });

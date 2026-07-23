@@ -51,4 +51,61 @@ describe("executeChatHistory — unread runs under the agent bot's own PAT", () 
     expect(postsCall).toBeDefined();
     expect(postsCall!.pat).toBe("builder-pat");
   });
+
+  it("reads a natively archived channel only during the granted archive window", async () => {
+    const calls: Array<{ path: string; pat: string }> = [];
+    const mm = fakeMm(calls);
+    mm.get = async (path: string, pat: string) => {
+      calls.push({ path, pat });
+      if (path.startsWith("/api/v4/teams/name/")) return { id: "team-1" };
+      if (path.includes("/channels/name/")) return { id: "abcdefghijklmnopqrstuvwxyz" };
+      if (path.includes("/posts")) return { posts: {}, order: [] };
+      if (path.startsWith("/api/v4/channels/")) {
+        return {
+          id: "abcdefghijklmnopqrstuvwxyz",
+          name: "alice-proj-camp-general",
+          display_name: "Camp",
+          delete_at: 1,
+        };
+      }
+      return {};
+    };
+
+    await expect(executeChatHistory(
+      { ...IDENTITY, includeArchivedProjectHistory: true },
+      { channel: "alice-proj-camp-general", direction: "latest" },
+      mm,
+    )).resolves.toMatchObject({ messages: [] });
+
+    expect(calls).toContainEqual({
+      path: "/api/v4/teams/team-1/channels/name/alice-proj-camp-general?include_deleted=true",
+      pat: "builder-pat",
+    });
+  });
+
+  it("denies direct archived-channel history when the archive grant is absent", async () => {
+    const calls: Array<{ path: string; pat: string }> = [];
+    const mm = fakeMm(calls);
+    mm.get = async (path: string, pat: string) => {
+      calls.push({ path, pat });
+      if (path.startsWith("/api/v4/teams/name/")) return { id: "team-1" };
+      if (path.startsWith("/api/v4/channels/")) {
+        return {
+          id: "abcdefghijklmnopqrstuvwxyz",
+          name: "alice-proj-camp-general",
+          display_name: "Camp",
+          delete_at: 1,
+        };
+      }
+      if (path.includes("/posts")) return { posts: {}, order: [] };
+      return {};
+    };
+
+    await expect(executeChatHistory(
+      IDENTITY,
+      { channel: "abcdefghijklmnopqrstuvwxyz", direction: "latest" },
+      mm,
+    )).rejects.toMatchObject({ code: "archived-channel" });
+    expect(calls.some((call) => call.path.includes("/posts?"))).toBe(false);
+  });
 });

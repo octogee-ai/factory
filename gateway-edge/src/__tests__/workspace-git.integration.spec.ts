@@ -123,7 +123,12 @@ afterAll(async () => {
 
 beforeEach(() => {
   for (const k of Object.keys(firestoreData)) delete firestoreData[k];
-  firestoreData[`users/caller-uid`] = { uid: "caller-uid", username: SLUG, workspaceId: SLUG };
+  firestoreData[`users/caller-uid`] = {
+    uid: "caller-uid",
+    username: SLUG,
+    workspaceId: SLUG,
+    subscription: { tier: "personal", status: "active" },
+  };
   firestoreData[`users/caller-uid/system/config`] = { role: "user" };
   firestoreData[`workspaces/${SLUG}`] = { id: SLUG, ownerUid: "caller-uid", slug: SLUG };
 });

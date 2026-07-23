@@ -17,7 +17,12 @@ const PID = "ghproj";
 
 async function seedGithubProject(): Promise<void> {
   await db.collection("workspaces").doc(WS).set({ id: WS, slug: WS, ownerUid: UID });
-  await db.collection("users").doc(UID).set({ uid: UID, username: WS, workspaceId: WS });
+  await db.collection("users").doc(UID).set({
+    uid: UID,
+    username: WS,
+    workspaceId: WS,
+    subscription: { tier: "personal", status: "active" },
+  });
   await db.collection("users").doc(UID).collection("system").doc("config").set({ role: "admin" });
   await db.doc(`workspaces/${WS}/projects/${PID}`).set({
     id: PID,

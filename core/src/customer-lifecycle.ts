@@ -28,13 +28,12 @@ export interface UserSnapshot {
   projectAgents?: FleetBrokerProjectAgent[];
   byotActive?: boolean;
   // Plan-resolution inputs (TierResolvable): resolveEffectivePlan on the gateway needs
-  // these to grant a trial/paid user their catalog access at mount-time reassert;
-  // Timestamps arrive JSON-serialized and asDate parses those shapes.
+  // these to grant signup-offer/paid access at mount-time reassert.
   selectedTier?: unknown;
   subscription?: unknown;
   builderSubscription?: unknown;
-  trialStartedAt?: unknown;
   trialGrant?: unknown;
+  signupOfferConvertedAt?: unknown;
   // The operator's free-tier model dial, stamped by the fleet broker; drives
   // the house pin and the BYOK fallback baseline at mount-time reassert.
   freeTierModelRef?: string;
@@ -158,7 +157,7 @@ restoreByosubForAgent: (slug: string) => Promise<{ restored: boolean; present: b
   // Re-assert the platform-managed context files (AGENTS.md/TOOLS.md) for house_only
   // plans — the same convergence semantics as reassertByotForCustomer: idempotent,
   // only-on-drift, runs at provision AND on fresh-pod re-mount. A no-op for any plan
-  // with catalog model access (paid, or a live trial boost), including a customer who
+  // with catalog model access (paid, or a live Signup Offer), including a customer who
   // WAS house_only and has since upgraded — that's how ownership returns to them.
   reassertConvergedContextFilesForCustomer: (userData: Record<string, unknown>) => Promise<void>;
 

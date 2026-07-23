@@ -196,6 +196,9 @@ describe("POST /internal/project/publish (octogee_publish tool endpoint, no-auth
   const ORIG_KEY = process.env.INTERNAL_SERVICE_KEY;
 
   beforeEach(async () => {
+    await db.doc("users/owner-uid").set({
+      subscription: { tier: "personal", status: "active" },
+    });
     await seedProject("alice", "mygame", {
       id: "mygame",
       ownerUid: "owner-uid",

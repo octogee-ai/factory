@@ -66,6 +66,7 @@ async function seedUser(
     email,
     workspaceId: username,
     provisioning: { openclaw: { slug: username } },
+    subscription: { tier: "personal", status: "active" },
   });
   await db.doc(`users/${uid}/system/config`).set({ role: "user" });
   await db.doc(`users/${uid}/secrets/gitea`).set({ token: `${username}-gitea-token` });

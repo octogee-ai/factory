@@ -30,6 +30,7 @@ export interface SearchParams {
   limit?: number;
   /** Required when `scope === "current_channel"`. Channel name (the agent's current). */
   currentChannelName?: string;
+  includeDeletedChannels?: boolean;
 }
 
 export interface SearchResponse {
@@ -85,7 +86,7 @@ export async function mmSearch(
     {
       terms,
       is_or_search: false,
-      include_deleted_channels: false,
+      include_deleted_channels: params.includeDeletedChannels === true,
       page: 0,
       per_page: limit,
     },

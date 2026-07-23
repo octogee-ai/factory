@@ -21,10 +21,13 @@ import { BUILDER_TIERS, TIERS } from "@octogee/shared/types/billing-tiers";
 import {
   DEFAULT_FREE_TIER_MODEL_REF,
   DEFAULT_OPS_AGENT_MODEL_REF,
+  DEFAULT_PLATFORM_FREE_CONFIG,
   PLATFORM_CONFIG_COLLECTION,
+  PLATFORM_FREE_CONFIG_DOC,
   PLATFORM_MODEL_CONFIG_DOC,
   PLATFORM_TRIAL_CONFIG_DOC,
   parsePlatformConnectConfig,
+  parsePlatformFreeConfig,
   parsePlatformModelConfig,
   parsePlatformTrialConfig,
   resolveFreeTierModel,
@@ -78,6 +81,8 @@ addAdminFleetRoutes(router, {
 
 const platformModelDoc = () =>
   db.collection(PLATFORM_CONFIG_COLLECTION).doc(PLATFORM_MODEL_CONFIG_DOC);
+const platformFreeDoc = () =>
+  db.collection(PLATFORM_CONFIG_COLLECTION).doc(PLATFORM_FREE_CONFIG_DOC);
 
 const platformCatalog = MODEL_CATALOG.map((entry) => ({
   ref: modelRefForCatalogEntry(entry),
@@ -150,6 +155,41 @@ router.put("/platform-config", async (req, res) => {
   } catch (err) {
     logger.error("[admin] platform-config write failed", { err });
     res.status(500).json({ error: "platform_config_write_failed" });
+  }
+});
+
+router.get("/platform-free-config", async (_req, res) => {
+  try {
+    const snap = await platformFreeDoc().get();
+    const config = parsePlatformFreeConfig(snap.data()) ?? DEFAULT_PLATFORM_FREE_CONFIG;
+    res.json(config);
+  } catch (err) {
+    logger.error("[admin] platform-free-config read failed", { err });
+    res.status(500).json({ error: "free_config_read_failed" });
+  }
+});
+
+router.put("/platform-free-config", async (req, res) => {
+  const config = parsePlatformFreeConfig(req.body);
+  if (!config) {
+    res.status(400).json({ error: "invalid_free_config" });
+    return;
+  }
+  try {
+    await platformFreeDoc().set({
+      schemaVersion: config.schemaVersion,
+      workspaceStorageGb: config.workspaceStorageGb,
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: req.uid ?? null,
+    });
+    logger.info("[admin] Free defaults set", {
+      workspaceStorageGb: config.workspaceStorageGb,
+      updatedBy: req.uid,
+    });
+    res.json({ ok: true, ...config });
+  } catch (err) {
+    logger.error("[admin] platform-free-config write failed", { err });
+    res.status(500).json({ error: "free_config_write_failed" });
   }
 });
 
@@ -306,12 +346,18 @@ router.put("/platform-trial-config", async (req, res) => {
   try {
     await platformTrialDoc().set({
       schemaVersion: config.schemaVersion,
+      offerId: config.offerId,
+      offerVersion: config.offerVersion,
+      durationDays: config.durationDays,
       defaultPersonalTier: config.defaultPersonalTier,
       defaultBuilderTier: config.defaultBuilderTier,
       updatedAt: FieldValue.serverTimestamp(),
       updatedBy: req.uid ?? null,
     });
     logger.info("[admin] trial defaults set", {
+      offerId: config.offerId,
+      offerVersion: config.offerVersion,
+      durationDays: config.durationDays,
       defaultPersonalTier: config.defaultPersonalTier,
       defaultBuilderTier: config.defaultBuilderTier,
       updatedBy: req.uid,

@@ -4,6 +4,7 @@ import { db } from "./db.js";
 import { readProject } from "./firestoreReads.js";
 import { logger } from "../middleware/logging.js";
 import { isValidProjectId, USERNAME_RE } from "@octogee/shared/types/identity";
+import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
 
 export type ProjectCtx = {
   projectRef: FirebaseFirestore.DocumentReference;
@@ -17,9 +18,34 @@ export type WithProjectOptions = {
   ownerOnly?: boolean;
   ownerErrorMessage?: string;
   allowStates?: string[];
+  requireActive?: boolean;
   logTag?: string;
   errorMessage?: string;
 };
+
+function invalidProjectIdentifier(wid: string, pid: string): boolean {
+  return !USERNAME_RE.test(wid) || !isValidProjectId(pid);
+}
+
+function ownerForbidden(
+  opts: WithProjectOptions,
+  project: Project,
+  uid: string | undefined,
+): boolean {
+  return opts.ownerOnly === true && project.ownerUid !== uid;
+}
+
+function stateForbidden(opts: WithProjectOptions, project: Project): boolean {
+  return opts.allowStates !== undefined &&
+    !opts.allowStates.includes(project.provisioningState);
+}
+
+async function projectIsArchived(project: Project): Promise<boolean> {
+  if (project.commercialLifecycle?.status === "archived") return true;
+  const owner = await db.doc(`users/${project.ownerUid}`).get();
+  const ownerData = owner.exists ? owner.data() ?? {} : {};
+  return resolveCommercialEntitlements(ownerData).projectMode !== "active";
+}
 
 // eslint-disable-next-line max-params -- Route wrapper API keeps call sites readable until route handlers are split.
 export async function withProject(
@@ -32,7 +58,7 @@ export async function withProject(
 ): Promise<void> {
   const logTag = opts.logTag ?? "[projects]";
   try {
-    if (!USERNAME_RE.test(wid) || !isValidProjectId(pid)) {
+    if (invalidProjectIdentifier(wid, pid)) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
@@ -44,7 +70,7 @@ export async function withProject(
       return;
     }
 
-    if (opts.ownerOnly && project.ownerUid !== req.uid) {
+    if (ownerForbidden(opts, project, req.uid)) {
       res.status(403).json({
         error:
           opts.ownerErrorMessage ??
@@ -53,9 +79,17 @@ export async function withProject(
       return;
     }
 
-    if (opts.allowStates && !opts.allowStates.includes(project.provisioningState)) {
+    if (stateForbidden(opts, project)) {
       res.status(409).json({
         error: `Project is not in a valid state for this action (current: ${project.provisioningState ?? "unknown"})`,
+      });
+      return;
+    }
+
+    if (opts.requireActive && await projectIsArchived(project)) {
+      res.status(409).json({
+        error: "Project is archived",
+        code: "PROJECT_ARCHIVED",
       });
       return;
     }

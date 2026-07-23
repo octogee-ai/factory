@@ -70,6 +70,19 @@ describe("resolveChannelId", () => {
     expect(id).toBe("ch1id26charlongabcdefghijk");
   });
 
+  it("uses Mattermost's native deleted-channel lookup only for archive reads", async () => {
+    const f = makeFetcher({
+      "/api/v4/teams/team-1/channels/name/builder-pulse?include_deleted=true": {
+        id: "ch1id26charlongabcdefghijk",
+      },
+    });
+    const id = await resolveChannelId(f, "PAT", "team-1", "builder-pulse", {
+      ttlSeconds: 300,
+      includeDeleted: true,
+    });
+    expect(id).toBe("ch1id26charlongabcdefghijk");
+  });
+
   it("caches per (team, name) pair", async () => {
     const f = makeFetcher({
       "/api/v4/teams/team-1/channels/name/builder-pulse": { id: "ch1id26charlongabcdefghijk" },

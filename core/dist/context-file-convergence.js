@@ -29,7 +29,7 @@ function writeAtomic(target, content) {
 // USER.md, MEMORY.md, memory/*.md) stays customer-owned: PLATFORM_CONVERGED_CONTEXT_FILES
 // is the single list this function and the seed-once writer both honor, so the
 // two can never drift apart on which files are platform-owned. A plan that is not
-// house_only (paid, or a live trial boost) is a no-op — including for a
+// house_only (paid, or a live Signup Offer) is a no-op — including for a
 // customer who WAS house_only and has since upgraded, which is how ownership
 // returns to the customer without deleting anything they wrote.
 export function reassertConvergedContextFiles(slug, customerDir, userData, vars = {}) {

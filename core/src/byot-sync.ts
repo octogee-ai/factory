@@ -288,8 +288,8 @@ export function deriveDesiredByotState(userData: {
   // Builder infra subscription (pricing v3): resolveBillingProfile reads it so a
   // credits-rail builder resolves catalog, not house_only.
   builderSubscription?: unknown;
-  trialStartedAt?: unknown;
   trialGrant?: unknown;
+  signupOfferConvertedAt?: unknown;
   // The operator's free-tier model dial, stamped on the snapshot by the
   // trusted side; revalidated here against the catalog.
   freeTierModelRef?: unknown;
@@ -331,7 +331,7 @@ export function platformCoachModelInputForUser(
 }
 
 
-// House-only (Personal Free with no live trial boost) pins the coach to the
+// House-only (Personal Free with no live Signup Offer) pins the coach to the
 // house model. The broker would degrade anyway; pinning keeps the config
 // honest so /status and the agent's self-report agree with the wire.
 function freeTierCoachModelInput(

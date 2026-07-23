@@ -71,6 +71,7 @@ async function seedCaller(uid: string, username = "bob", mmUserId = "mm-bob"): P
   await db.collection("users").doc(uid).set({
     username,
     mattermost: { userId: mmUserId },
+    subscription: { tier: "personal", status: "active" },
   });
   await db
     .collection("users")
@@ -116,6 +117,7 @@ async function seedPublicAliceGame(
   await db.collection("users").doc("alice-uid").set({
     username: "alice",
     mattermost: { userId: "mm-alice" },
+    subscription: { tier: "personal", status: "active" },
   });
 }
 

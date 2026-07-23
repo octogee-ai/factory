@@ -2,6 +2,17 @@ import { describe, expect, it } from "vitest";
 import { buildCustomerSummary } from "./admin-shape.js";
 
 const NOW = Date.UTC(2026, 6, 2, 13, 30);
+const LIVE_SIGNUP_OFFER = {
+  schemaVersion: 2,
+  offerId: "builder-signup",
+  offerVersion: 1,
+  personalTier: "personal",
+  builderTier: "hobby",
+  gatewayId: "trial-op-000001",
+  configHash: "config-a",
+  claimedAt: new Date(NOW),
+  endsAt: new Date(NOW + 7 * 24 * 60 * 60 * 1000),
+};
 
 describe("buildCustomerSummary", () => {
   it("normalizes malformed nested customer fields instead of leaking them", () => {
@@ -62,7 +73,7 @@ describe("buildCustomerSummary", () => {
   });
 
   it("does not label an exhausted active trial as running on HOUSE", () => {
-    const trial = { subscription: { tier: "trial", trialStartedAt: new Date(NOW) } };
+    const trial = { trialGrant: LIVE_SIGNUP_OFFER };
     expect(
       buildCustomerSummary("u", trial, { windowCostUsd: 9999, now: NOW }).degraded,
     ).toBe(false);
@@ -85,7 +96,7 @@ describe("buildCustomerSummary", () => {
     const summary = buildCustomerSummary(
       "u",
       {
-        subscription: { tier: "trial", trialStartedAt: new Date(NOW) },
+        trialGrant: LIVE_SIGNUP_OFFER,
         usage: { windowTokensUsed: 676_435, totalTokensUsed: 1_145_873 },
       },
       { windowCostUsd: 0.008, weekCostUsd: 2.07, now: NOW },
@@ -93,15 +104,14 @@ describe("buildCustomerSummary", () => {
 
     expect(summary.windowCostUsd).toBe(0.008);
     expect(summary.weekCostUsd).toBe(2.07);
-    // legacy "trial" maps to personal_free + the 7-day Personal Pro boost
     expect(summary.tier).toBe("personal_free");
-    expect(summary.effectiveTier).toBe("personal_pro");
+    expect(summary.effectiveTier).toBe("personal");
     expect(summary.trialDaysRemaining).toBe(7);
     // TokenMath v2: weekly defining limit, burst window = weekly × 3 / 42
-    expect(summary.weekBudgetUsd).toBeCloseTo((90 * 7) / 30.44, 4);
-    expect(summary.windowBudgetUsd).toBeCloseTo(((90 * 7) / 30.44) * (3 / 42), 4);
-    expect(summary.weekPercentUsed).toBe(10); // $2.07 of the ~$20.70 Personal Pro weekly ledger
-    expect(summary.percentUsed).toBe(1); // $0.008 of the ~$1.48 Personal Pro burst window
+    expect(summary.weekBudgetUsd).toBeCloseTo((15 * 7) / 30.44, 4);
+    expect(summary.windowBudgetUsd).toBeCloseTo(((15 * 7) / 30.44) * (3 / 42), 4);
+    expect(summary.weekPercentUsed).toBe(60);
+    expect(summary.percentUsed).toBe(3);
     expect(summary.degraded).toBe(false);
     // legacy token-window fields are gone from the admin contract
     expect(summary).not.toHaveProperty("windowTokensUsed");
@@ -133,7 +143,7 @@ describe("buildCustomerSummary", () => {
   it("reports the epoch-aligned 4h window refill time", () => {
     const summary = buildCustomerSummary(
       "u",
-      { subscription: { tier: "trial", trialStartedAt: new Date(NOW) } },
+      { trialGrant: LIVE_SIGNUP_OFFER },
       { windowCostUsd: 0, now: NOW },
     );
     // 13:30Z sits in the 12:00–16:00Z window → refill at 16:00Z

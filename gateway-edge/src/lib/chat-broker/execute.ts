@@ -40,6 +40,7 @@ export interface ChatBrokerIdentity {
   slug: string;
   /** Public chat URL for permalink construction. */
   siteUrl: string;
+  includeArchivedProjectHistory?: true;
 }
 
 export interface ChatSearchParams {
@@ -93,7 +94,13 @@ export async function executeChatSearch(
       ? await maybeResolveCurrentChannelName(mm, pat, params.currentChannelId)
       : undefined;
 
-  const result = await mmSearch(mm, pat, teamId, { query, scope, limit, currentChannelName });
+  const result = await mmSearch(mm, pat, teamId, {
+    query,
+    scope,
+    limit,
+    currentChannelName,
+    includeDeletedChannels: identity.includeArchivedProjectHistory === true,
+  });
 
   // MM 11.5 /search omits inline channels/users — hydrate.
   const { channels, users } = await hydrate(mm, pat, result.bundle);
@@ -125,9 +132,7 @@ export async function executeChatHistory(
   const direction = validDirection(params.direction);
   const limit = clamp(params.limit ?? 25, 1, 50);
   const { pat, slug } = identity;
-  const fromUsername = params.fromUsername?.startsWith("@")
-    ? params.fromUsername.slice(1)
-    : params.fromUsername;
+  const fromUsername = normalizedUsername(params.fromUsername);
 
   const teamId = await resolveTeamId({ get: mm.get }, pat, slug, { ttlSeconds: RESOLVE_TTL_SECONDS });
 
@@ -140,14 +145,12 @@ export async function executeChatHistory(
   }
   const channelId = await resolveChannelId({ get: mm.get }, pat, teamId, channelName, {
     ttlSeconds: RESOLVE_TTL_SECONDS,
+    includeDeleted: identity.includeArchivedProjectHistory === true,
   });
 
-  let userIndex: Map<string, string> | undefined;
-  if (fromUsername) {
-    const u = await fetchUserByUsername(mm, pat, fromUsername);
-    userIndex = new Map();
-    if (u) userIndex.set(fromUsername, u.id);
-  }
+  const channelMeta = await fetchChannelMeta(mm, pat, channelId);
+  assertArchivedHistoryReadable(channelMeta, identity);
+  const userIndex = await historyUserIndex(mm, pat, fromUsername);
 
   // `unread` is the agent bot's own read cursor — that one direction runs under the
   // bot's PAT (see ChatBrokerIdentity.unread); every other read stays on the lane PAT.
@@ -162,7 +165,6 @@ export async function executeChatHistory(
     userIndex,
   });
 
-  const channelMeta = await fetchChannelMeta(mm, pat, channelId);
   const channels = new Map<string, MmChannelMeta>();
   if (channelMeta) channels.set(channelId, channelMeta);
   const users = await hydrateUsersForBundle(mm, pat, result.bundle);
@@ -186,6 +188,34 @@ export async function executeChatHistory(
     has_more: result.hasMore,
     took_ms: Date.now() - t0,
   };
+}
+
+function normalizedUsername(value: string | undefined): string | undefined {
+  return value?.startsWith("@") ? value.slice(1) : value;
+}
+
+function assertArchivedHistoryReadable(
+  channelMeta: MmChannelMeta | undefined,
+  identity: ChatBrokerIdentity,
+): void {
+  const archived = typeof channelMeta?.delete_at === "number" && channelMeta.delete_at > 0;
+  if (!archived || identity.includeArchivedProjectHistory === true) return;
+  throw new HistoryParamError(
+    "archived-channel",
+    "archived project history is unavailable to this identity",
+  );
+}
+
+async function historyUserIndex(
+  mm: MmClient,
+  pat: string,
+  fromUsername: string | undefined,
+): Promise<Map<string, string> | undefined> {
+  if (!fromUsername) return undefined;
+  const user = await fetchUserByUsername(mm, pat, fromUsername);
+  const index = new Map<string, string>();
+  if (user) index.set(fromUsername, user.id);
+  return index;
 }
 
 /**
@@ -244,6 +274,8 @@ async function fetchChannelMeta(
       name,
       display_name: stringField(ch, "display_name") ?? name,
       team_id: stringField(ch, "team_id"),
+      delete_at:
+        typeof ch?.delete_at === "number" ? ch.delete_at : undefined,
     };
   } catch {
     return undefined;

@@ -46,6 +46,19 @@ describe("mmSearch", () => {
     });
   });
 
+  it("includes native archived channels only when the broker grants archive reads", async () => {
+    const c = makeClient({
+      [`POST /api/v4/teams/${TEAM}/posts/search`]: { posts: {}, order: [] },
+    });
+
+    await mmSearch(c, "PAT", TEAM, {
+      query: "decision",
+      includeDeletedChannels: true,
+    });
+
+    expect(c.calls[0].body).toMatchObject({ include_deleted_channels: true });
+  });
+
   it("appends in:<channel> for current_channel scope", async () => {
     const c = makeClient({
       [`POST /api/v4/teams/${TEAM}/posts/search`]: { posts: {}, order: [] },

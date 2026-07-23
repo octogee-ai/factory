@@ -81,6 +81,18 @@ const ON = {
   provisioning: { openclaw: { status: "complete" } },
 };
 
+const LIVE_SIGNUP_OFFER = {
+  schemaVersion: 2 as const,
+  offerId: "builder-signup",
+  offerVersion: 1,
+  personalTier: "personal" as const,
+  builderTier: "hobby" as const,
+  gatewayId: "trial-op-000001",
+  configHash: "config-a",
+  claimedAt: new Date(),
+  endsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+};
+
 const jwt = (claims: Record<string, unknown>) =>
   "e30." + Buffer.from(JSON.stringify(claims)).toString("base64url") + ".s";
 const codexBlob = () =>
@@ -163,7 +175,7 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
       ...ON,
       byotActive: false,
       selectedTier: "personal_free",
-      subscription: { trialStartedAt: new Date() },
+      trialGrant: LIVE_SIGNUP_OFFER,
     });
     expect(desired.enabled).toBe(false);
     expect(desired.input).toBeNull();
@@ -176,12 +188,15 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
       byotActive: false,
       tier: "trial",
       trialGrant: {
-        schemaVersion: 1,
+        schemaVersion: 2,
+        offerId: "builder-pro-preview",
+        offerVersion: 1,
         personalTier: "personal_pro",
         builderTier: "pro",
         gatewayId: "builder-tester-70",
         configHash: "trial-config",
         claimedAt: new Date(),
+        endsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       },
     });
     expect(desired.enabled).toBe(false);
@@ -1499,7 +1514,7 @@ describe("standard gateway — BYOS materialization", () => {
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
         selectedTier: "personal_free",
-        subscription: { trialStartedAt: new Date() },
+        trialGrant: LIVE_SIGNUP_OFFER,
       },
       {
         isOperatorGateway: () => false,

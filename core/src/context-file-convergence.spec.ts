@@ -36,6 +36,21 @@ function customerDir(name = "alice"): string {
   return dir;
 }
 
+function liveSignupOffer(): Record<string, unknown> {
+  const claimedAt = new Date();
+  return {
+    schemaVersion: 2,
+    offerId: "builder-signup",
+    offerVersion: 1,
+    personalTier: "personal",
+    builderTier: "hobby",
+    gatewayId: "trial-op-000001",
+    configHash: "config-a",
+    claimedAt,
+    endsAt: new Date(claimedAt.getTime() + 7 * 24 * 60 * 60 * 1000),
+  };
+}
+
 describe("reassertConvergedContextFiles", () => {
   it("writes AGENTS.md and TOOLS.md from the free template for a house-only plan with no prior files", () => {
     const dir = customerDir();
@@ -97,13 +112,13 @@ describe("reassertConvergedContextFiles", () => {
     );
   });
 
-  it("does not converge a live trial boost (catalog access), even though the base tier is personal_free", () => {
+  it("does not converge a live Signup Offer (catalog access), even though the base tier is personal_free", () => {
     const dir = customerDir();
     fs.writeFileSync(path.join(dir, "AGENTS.md"), "trial customer's own AGENTS.md\n", "utf-8");
 
     const changed = reassertConvergedContextFiles("alice", dir, {
       tier: "personal_free",
-      trialStartedAt: new Date().toISOString(),
+      trialGrant: liveSignupOffer(),
     });
 
     expect(changed).toEqual([]);
@@ -160,12 +175,12 @@ describe("reassertConvergedContextFiles", () => {
     expect(fs.existsSync(path.join(dir, "BOOTSTRAP.md"))).toBe(true);
   });
 
-  it("does not converge a snapshot from the direct Firestore mapping when the user doc carries a live trial boost", () => {
+  it("does not converge a snapshot from the direct Firestore mapping when the user doc carries a live Signup Offer", () => {
     const dir = customerDir();
     fs.writeFileSync(path.join(dir, "AGENTS.md"), "trial customer's own AGENTS.md\n", "utf-8");
     const snapshot = mapUserDocToSnapshot(
       "u1",
-      { username: "alice", tier: "personal_free", trialStartedAt: new Date().toISOString() },
+      { username: "alice", tier: "personal_free", trialGrant: liveSignupOffer() },
       [],
     );
 

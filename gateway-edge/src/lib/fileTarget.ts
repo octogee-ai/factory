@@ -5,6 +5,7 @@ import { USERNAME_RE } from "@octogee/shared/types/identity";
 import { readConnectorAccessToken } from "./connector-tokens.js";
 import { workspaceGiteaOrg, workspaceRepoName, projectRepoName } from "./gitea-naming.js";
 import { logger } from "../middleware/logging.js";
+import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
 
 export interface FileTarget {
   slug: string;
@@ -36,11 +37,12 @@ export interface FileTargetInput {
 
 export type FileTargetResult =
   | { ok: true; target: FileTarget }
-  | { ok: false; status: 400 | 403 | 404 | 422; error: string; reason?: string };
+  | { ok: false; status: 400 | 403 | 404 | 409 | 422; error: string; reason?: string };
 
 export interface ResolveFileTargetOpts {
   resolveGithubToken?: boolean;
   allowWorkspaceMembers?: boolean;
+  access?: "read" | "write";
 }
 
 export async function resolveFileTarget(
@@ -77,6 +79,14 @@ async function resolveProjectTarget(
   if (!isOwner && !isMember) {
     return { ok: false, status: 403, error: "Forbidden" };
   }
+  if (opts.access === "write" && await projectMutationIsBlocked(project)) {
+    return {
+      ok: false,
+      status: 409,
+      error: "Project is archived",
+      reason: "project_archived",
+    };
+  }
   const github = project.repoSource?.provider === "github" ? project.repoSource : null;
   if (github) {
     return resolveGithubProjectTarget({
@@ -92,6 +102,15 @@ async function resolveProjectTarget(
     ok: true,
     target: giteaProjectTarget(slug, projectSlug, callerWorkspaceSlug, project.canvasFile),
   };
+}
+
+async function projectMutationIsBlocked(
+  project: { ownerUid: string; commercialLifecycle?: { status?: unknown } },
+): Promise<boolean> {
+  if (project.commercialLifecycle?.status === "archived") return true;
+  const owner = await db.doc(`users/${project.ownerUid}`).get();
+  const ownerData = owner.exists ? owner.data() ?? {} : {};
+  return resolveCommercialEntitlements(ownerData).projectMode !== "active";
 }
 
 function giteaProjectTarget(
@@ -244,7 +263,10 @@ export function withFileTarget(
   };
 }
 
-export function withGiteaTarget(handler: TargetedHandler): RequestHandler {
+export function withGiteaTarget(
+  handler: TargetedHandler,
+  opts: ResolveFileTargetOpts = {},
+): RequestHandler {
   return withFileTarget(
     async (req, res, next, target) => {
       if (target.provider !== "gitea") {
@@ -256,6 +278,6 @@ export function withGiteaTarget(handler: TargetedHandler): RequestHandler {
       }
       await handler(req, res, next, target);
     },
-    { resolveGithubToken: false },
+    { ...opts, resolveGithubToken: false },
   );
 }

@@ -38,12 +38,15 @@ describe("onboarding placement eligibility", () => {
 
 const trialBuilder = {
   trialGrant: {
-    schemaVersion: 1,
-    personalTier: "personal_pro",
-    builderTier: "pro",
+    schemaVersion: 2,
+    offerId: "builder-signup",
+    offerVersion: 1,
+    personalTier: "personal",
+    builderTier: "hobby",
     gatewayId: "builder-alice",
     configHash: "grant-hash",
     claimedAt: 1_000,
+    endsAt: 604_801_000,
   },
 };
 

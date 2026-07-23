@@ -14,6 +14,7 @@
  */
 
 import { parseAgentId } from "@octogee/shared/types/identity";
+import { parseProjectRetention } from "@octogee/shared/types/project-retention";
 import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
 
 export type ChatPatErrorCode =
@@ -21,7 +22,8 @@ export type ChatPatErrorCode =
   | "foreign-agent"
   | "no-builder-pat"
   | "no-coach-identity"
-  | "no-project-pat";
+  | "no-project-pat"
+  | "project-archived";
 
 export class ChatPatError extends Error {
   constructor(
@@ -54,6 +56,7 @@ export interface ResolvedChatIdentity {
    *  running unread under the builder PAT would either 403 (coach id) or advance the
    *  HUMAN's read marker (`me`), silently clearing their unread badges. */
   unread: { pat: string; mmUserId: string };
+  includeArchivedProjectHistory?: true;
 }
 
 async function secretData(
@@ -67,6 +70,24 @@ async function secretData(
 
 function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+async function projectArchiveAccess(
+  db: SecretsDb,
+  uid: string,
+): Promise<{ blocksProjectAgent: boolean; historyReadable: boolean }> {
+  const user = await db.doc(`users/${uid}`).get();
+  const retention = parseProjectRetention(user.data()?.projectRetention);
+  if (!retention || retention.status === "active") {
+    return { blocksProjectAgent: false, historyReadable: false };
+  }
+  return {
+    blocksProjectAgent: true,
+    historyReadable:
+      retention.status === "archived" &&
+      retention.deleteAfter !== null &&
+      retention.deleteAfter.getTime() > Date.now(),
+  };
 }
 
 export async function resolveChatIdentity(
@@ -84,7 +105,15 @@ export async function resolveChatIdentity(
     );
   }
 
+  const archiveAccess = await projectArchiveAccess(db, input.uid);
+
   if (parsed.kind === "project") {
+    if (archiveAccess.blocksProjectAgent) {
+      throw new ChatPatError(
+        "project-archived",
+        `project agent ${input.agentId} is disabled while its owner is on Free`,
+      );
+    }
     const secret = await secretData(
       db,
       input.uid,
@@ -128,5 +157,6 @@ export async function resolveChatIdentity(
     pat: builderPat,
     coachMmUserId,
     unread: { pat: coachPat, mmUserId: coachMmUserId },
+    ...(archiveAccess.historyReadable ? { includeArchivedProjectHistory: true as const } : {}),
   };
 }

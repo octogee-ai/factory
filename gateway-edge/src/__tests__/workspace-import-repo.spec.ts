@@ -10,8 +10,10 @@ vi.mock("../lib/gitea", () => ({
   giteaApiAsUser: vi.fn(),
 }));
 
-vi.mock("../lib/manifest", () => ({
-  updateManifest: vi.fn(),
+const storeWorkspaceBlob = vi.fn();
+vi.mock("../lib/workspace-blob.js", () => ({
+  storeWorkspaceBlob: (...args: unknown[]) => storeWorkspaceBlob(...args),
+  WorkspaceStorageQuotaError: class WorkspaceStorageQuotaError extends Error {},
 }));
 
 vi.mock("../middleware/logging.js", () => ({
@@ -25,7 +27,6 @@ import importRepoRouter, {
 } from "../routes/workspace/import-repo.js";
 import { storage } from "../lib/db.js";
 import { giteaApiAsUser } from "../lib/gitea.js";
-import { updateManifest } from "../lib/manifest.js";
 import { logger } from "../middleware/logging.js";
 
 const mockFetch = vi.fn();
@@ -57,6 +58,10 @@ beforeEach(() => {
   vi.mocked(storage.bucket).mockReturnValue({
     file: mockBucketFile,
   } as unknown as ReturnType<typeof storage.bucket>);
+  storeWorkspaceBlob.mockResolvedValue({
+    gcsPath: "customers/alice/imports/demo/assets/logo.png",
+    size: 3,
+  });
 });
 
 describe("workspace import-repo helpers", () => {
@@ -147,18 +152,12 @@ describe("POST /import-repo", () => {
         sha: "existing-readme-sha",
       },
     );
-    expect(mockBucketFile).toHaveBeenCalledWith("customers/alice/imports/demo/assets/logo.png");
-    expect(mockBlobSave).toHaveBeenCalledWith(Buffer.from([1, 2, 3]), {
-      metadata: { contentType: "image/png" },
-    });
-    expect(updateManifest).toHaveBeenCalledWith("ws-alice", "alice", "workspace", {
-      "imports/demo/assets/logo.png": expect.objectContaining({
-        type: "blob",
-        gcsPath: "customers/alice/imports/demo/assets/logo.png",
-        size: 3,
-        mimeType: "image/png",
-      }),
-    });
+    expect(storeWorkspaceBlob).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: "alice", projectSlug: null, repoName: "workspace" }),
+      "imports/demo/assets/logo.png",
+      Buffer.from([1, 2, 3]),
+      "image/png",
+    );
   });
 
   it("logs non-404 existing text lookup failures and imports without an overwrite sha", async () => {

@@ -105,17 +105,17 @@ describe("snapshotConfigFingerprint", () => {
       snapshotConfigFingerprint(snap({ builderSubscription: { tier: "pro", status: "active" } })),
     ).not.toBe(base);
     expect(
-      snapshotConfigFingerprint(snap({ trialStartedAt: { _seconds: 1_783_500_000 } })),
-    ).not.toBe(base);
-    expect(
       snapshotConfigFingerprint(snap({
         trialGrant: {
-          schemaVersion: 1,
-          personalTier: "personal_pro",
-          builderTier: "pro",
+          schemaVersion: 2,
+          offerId: "builder-signup",
+          offerVersion: 1,
+          personalTier: "personal",
+          builderTier: "hobby",
           gatewayId: "trial-op-000001",
           configHash: "config-a",
           claimedAt: { _seconds: 1_783_500_000 },
+          endsAt: { _seconds: 1_784_104_800 },
         },
       })),
     ).not.toBe(base);

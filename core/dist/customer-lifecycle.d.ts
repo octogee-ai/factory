@@ -20,8 +20,8 @@ export interface UserSnapshot {
     selectedTier?: unknown;
     subscription?: unknown;
     builderSubscription?: unknown;
-    trialStartedAt?: unknown;
     trialGrant?: unknown;
+    signupOfferConvertedAt?: unknown;
     freeTierModelRef?: string;
     systemConfig?: {
         byot?: {

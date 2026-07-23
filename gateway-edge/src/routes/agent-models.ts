@@ -90,11 +90,11 @@ function triggerAgentModelSync(args: {
     selectedTier?: unknown;
     subscription?: unknown;
     builderSubscription?: unknown;
-    trialStartedAt?: unknown;
     trialGrant?: unknown;
+    signupOfferConvertedAt?: unknown;
   };
   // The gateway re-runs resolveBillingProfile on this payload before applying the picks.
-  // Every plan input travels: a trial user's catalog access hangs on trialStartedAt and a
+  // Every plan input travels: signup-offer catalog access hangs on the immutable receipt and a
   // builder's on builderSubscription — an omission silently degrades the sync to house_only
   // ("agent-model overrides deferred") while this PUT reports success (pickPlanInputs is the
   // single forwarding point that keeps that from recurring per-field).

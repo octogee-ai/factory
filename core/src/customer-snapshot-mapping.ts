@@ -40,8 +40,14 @@ export function mapProjectAgentState(
   secretData: Record<string, unknown> | undefined,
 ): { projectId: string; enabled: boolean; mmUserId: string | null; token: string | null } | null {
   const agent = projectData.agent;
-  const enabled =
+  const requestedEnabled =
     !!agent && typeof agent === "object" && (agent as { enabled?: unknown }).enabled === true;
+  const commercialLifecycle = projectData.commercialLifecycle;
+  const archived =
+    !!commercialLifecycle &&
+    typeof commercialLifecycle === "object" &&
+    (commercialLifecycle as { status?: unknown }).status === "archived";
+  const enabled = requestedEnabled && !archived;
   const mmUserId =
     typeof secretData?.mmUserId === "string" && secretData.mmUserId ? secretData.mmUserId : null;
   const token =

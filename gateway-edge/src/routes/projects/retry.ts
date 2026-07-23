@@ -236,6 +236,7 @@ router.post("/:wid/:pid/retry-provisioning", strictRateLimit, async (req: Reques
   const { wid, pid } = req.params as { wid: string; pid: string };
   await withProject(req, res, wid, pid, {
     ownerOnly: true,
+    requireActive: true,
     ownerErrorMessage: "Only the project owner can retry provisioning",
     logTag: "[projects] Retry provisioning crashed for",
     errorMessage: "Retry provisioning failed",

@@ -169,6 +169,6 @@ router.post("/save", withFileTarget(async (req, res, _next, target) => {
   const result = await saveTarget(target, request, savePayload(req, target, request));
   invalidateWorkspaceFileResponseCache(target);
   res.json(result);
-}, { allowWorkspaceMembers: true }));
+}, { allowWorkspaceMembers: true, access: "write" }));
 
 export default router;

@@ -12,6 +12,7 @@ import { projectRepoName } from "./gitea-naming.js";
 import { provisionProjectRepo } from "../routes/projects/provisioning.js";
 import { isValidGithubRepoSource } from "./github.js";
 import { resolveEntitlements } from "@octogee/shared/types/billing";
+import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
 import type { FleetBrokerProjectCreateInput } from "@octogee/shared/types/fleet-broker";
 
 const RESERVED_PROJECT_SLUGS = new Set([
@@ -147,6 +148,11 @@ export async function createProjectForActor(
 async function enforceProjectLimit(
   plan: ProjectCreatePlan,
 ): Promise<ProjectCreateResult | null> {
+  if (resolveCommercialEntitlements(plan.userData ?? {}).projectMode !== "active") {
+    return bad(402, "Projects are available on paid plans — upgrade to start building", {
+      maxProjects: 0,
+    });
+  }
   const maxProjects = resolveEntitlements(plan.userData ?? {}).maxProjects;
   if (maxProjects === "unlimited") return null;
 

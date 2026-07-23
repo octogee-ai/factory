@@ -13,7 +13,12 @@ vi.mock("../lib/gitea", () => ({
 
 vi.mock("../lib/manifest", () => ({
   removeFromManifest: vi.fn(),
-  updateManifest: vi.fn(),
+}));
+
+const storeWorkspaceBlob = vi.fn();
+vi.mock("../lib/workspace-blob.js", () => ({
+  storeWorkspaceBlob: (...args: unknown[]) => storeWorkspaceBlob(...args),
+  WorkspaceStorageQuotaError: class WorkspaceStorageQuotaError extends Error {},
 }));
 
 import {
@@ -24,7 +29,7 @@ import {
 import extractZipRouter from "../routes/workspace/extract-zip.js";
 import { storage } from "../lib/db.js";
 import { giteaApiAsUser } from "../lib/gitea.js";
-import { removeFromManifest, updateManifest } from "../lib/manifest.js";
+import { removeFromManifest } from "../lib/manifest.js";
 
 function zipEntry(dir = false): ZipEntryLike {
   return {
@@ -70,6 +75,10 @@ beforeEach(() => {
   vi.mocked(storage.bucket).mockReturnValue({
     file: mockBucketFile,
   } as unknown as ReturnType<typeof storage.bucket>);
+  storeWorkspaceBlob.mockResolvedValue({
+    gcsPath: "customers/alice/imports/site/assets/logo.png",
+    size: 3,
+  });
 });
 
 describe("workspace extract-zip helpers", () => {
@@ -158,18 +167,12 @@ describe("POST /extract-zip", () => {
         sha: "existing-text-sha",
       },
     );
-    expect(mockBucketFile).toHaveBeenCalledWith("customers/alice/imports/site/assets/logo.png");
-    expect(mockBlobSave).toHaveBeenCalledWith(Buffer.from([1, 2, 3]), {
-      metadata: { contentType: "image/png" },
-    });
-    expect(updateManifest).toHaveBeenCalledWith("ws-alice", "alice", "workspace", {
-      "imports/site/assets/logo.png": expect.objectContaining({
-        type: "blob",
-        gcsPath: "customers/alice/imports/site/assets/logo.png",
-        size: 3,
-        mimeType: "image/png",
-      }),
-    });
+    expect(storeWorkspaceBlob).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: "alice", projectSlug: null, repoName: "workspace" }),
+      "imports/site/assets/logo.png",
+      Buffer.from([1, 2, 3]),
+      "image/png",
+    );
     expect(mockZipDelete).toHaveBeenCalled();
     expect(removeFromManifest).toHaveBeenCalledWith(
       "ws-alice",

@@ -38,7 +38,12 @@ export interface HistoryResponse {
 
 export class HistoryParamError extends Error {
   constructor(
-    public readonly code: "missing-cursor" | "missing-channel" | "invalid-direction" | "invalid-limit",
+    public readonly code:
+      | "missing-cursor"
+      | "missing-channel"
+      | "invalid-direction"
+      | "invalid-limit"
+      | "archived-channel",
     message: string,
   ) {
     super(message);

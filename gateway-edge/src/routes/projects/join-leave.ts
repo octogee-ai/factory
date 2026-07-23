@@ -140,6 +140,7 @@ async function joinProject(ctx: ProjectCtx, res: Response): Promise<void> {
 router.post("/:wid/:pid/join", strictRateLimit, async (req: Request, res: Response) => {
   const { wid, pid } = req.params as { wid: string; pid: string };
   await withProject(req, res, wid, pid, {
+    requireActive: true,
     logTag: "[projects] Join failed for",
     errorMessage: "Failed to join project",
   }, async (ctx) => joinProject(ctx, res));

@@ -106,6 +106,7 @@ interface ChatBrokerIdentity {
   unread: { pat: string; mmUserId: string };
   slug: string;
   siteUrl: string;
+  includeArchivedProjectHistory?: true;
 }
 
 type ExecuteChatSearch = (
@@ -138,6 +139,7 @@ type ResolveChatIdentity = (
   pat: string;
   coachMmUserId: string;
   unread: { pat: string; mmUserId: string };
+  includeArchivedProjectHistory?: true;
 }>;
 
 interface FleetBrokerRouteDeps {
@@ -1667,6 +1669,29 @@ function installGatewayOpsRoutes(
 // agent id parses AND belongs to that workspace with a minted PAT
 // (resolveChatIdentity — the secret's existence IS the capability, so a
 // disabled project agent gets a refusal, never a broader token).
+function validChatBrokerSiteUrl(value: unknown): string | null {
+  return typeof value === "string" && /^https?:\/\//.test(value) ? value : null;
+}
+
+function forbiddenChatIdentityCode(code: unknown): boolean {
+  return code === "foreign-agent" ||
+    code === "no-builder-pat" ||
+    code === "no-coach-identity" ||
+    code === "no-project-pat" ||
+    code === "project-archived";
+}
+
+function respondChatIdentityError(res: Response, error: unknown): boolean {
+  const code = (error as { code?: unknown }).code;
+  if (code === "invalid-agent") {
+    res.status(400).json({ error: "invalid_agent_id", code });
+    return true;
+  }
+  if (!forbiddenChatIdentityCode(code)) return false;
+  res.status(403).json({ error: "forbidden", code });
+  return true;
+}
+
 async function requireAssignedChatIdentity(
   deps: ResolvedFleetBrokerRouteDeps,
   req: Request,
@@ -1685,10 +1710,7 @@ async function requireAssignedChatIdentity(
     res.status(400).json({ error: "invalid_agent_id" });
     return null;
   }
-  // Strict scheme check — the value lands in permalinks returned to the agent.
-  const siteUrl = typeof body.siteUrl === "string" && /^https?:\/\//.test(body.siteUrl)
-    ? body.siteUrl
-    : "";
+  const siteUrl = validChatBrokerSiteUrl(body.siteUrl);
   if (!siteUrl) {
     res.status(400).json({ error: "invalid_site_url" });
     return null;
@@ -1708,23 +1730,13 @@ async function requireAssignedChatIdentity(
         unread: resolved.unread,
         slug,
         siteUrl,
+        ...(resolved.includeArchivedProjectHistory === true
+          ? { includeArchivedProjectHistory: true as const }
+          : {}),
       },
     };
   } catch (err) {
-    const code = (err as { code?: unknown }).code;
-    if (code === "invalid-agent") {
-      res.status(400).json({ error: "invalid_agent_id", code });
-      return null;
-    }
-    if (
-      code === "foreign-agent" ||
-      code === "no-builder-pat" ||
-      code === "no-coach-identity" ||
-      code === "no-project-pat"
-    ) {
-      res.status(403).json({ error: "forbidden", code });
-      return null;
-    }
+    if (respondChatIdentityError(res, err)) return null;
     throw err;
   }
 }

@@ -380,18 +380,20 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
   });
 
   it("forwards the trial grant to the reassert so its configured plans survive the mount boundary", async () => {
-    const trialStartedAt = { _seconds: Math.floor(Date.now() / 1000) - 2 * 86_400, _nanoseconds: 0 };
+    const claimedSeconds = Math.floor(Date.now() / 1000) - 2 * 86_400;
     const trialGrant = {
-      schemaVersion: 1,
-      personalTier: "personal_pro",
-      builderTier: "pro",
+      schemaVersion: 2,
+      offerId: "builder-signup",
+      offerVersion: 1,
+      personalTier: "personal",
+      builderTier: "hobby",
       gatewayId: "trial-op-000001",
       configHash: "config-a",
-      claimedAt: trialStartedAt,
+      claimedAt: { _seconds: claimedSeconds, _nanoseconds: 0 },
+      endsAt: { _seconds: claimedSeconds + 7 * 86_400, _nanoseconds: 0 },
     };
     state.user = snap({
-      tier: "trial",
-      subscription: { trialStartedAt },
+      tier: "personal_free",
       trialGrant,
       systemConfig: {
         agentModels: { "octogee-test-coach": { primary: "platform-openrouter/minimax/minimax-m3", fallbacks: [] } },
@@ -400,8 +402,7 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
     await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     const ud = state.reassertByotUserData ?? {};
-    expect(ud.tier).toBe("trial");
-    expect(ud.subscription).toEqual({ trialStartedAt });
+    expect(ud.tier).toBe("personal_free");
     expect(ud.trialGrant).toBe(trialGrant);
   });
 

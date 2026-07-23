@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import type { Firestore, Transaction } from "firebase-admin/firestore";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
+import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
 
 import {
   isValidCustomChannelName,
@@ -113,17 +114,24 @@ async function previewAccessAuthorized(
     : `workspaces/${workspaceSlug}`;
   const target = await db.doc(path).get();
   if (!target.exists) return false;
-  const ownerUid = target.data()?.ownerUid;
+  const targetData = target.data() ?? {};
+  const ownerUid = targetData.ownerUid;
   if (typeof ownerUid !== "string") return false;
   const [caller, owner, member] = await Promise.all([
     db.doc(`users/${uid}`).get(),
     db.doc(`users/${ownerUid}`).get(),
     db.doc(`${path}/members/${uid}`).get(),
   ]);
-  return caller.exists &&
+  const ownerData = owner.data() ?? {};
+  const archivedProject = projectSlug !== null && (
+    (targetData.commercialLifecycle as { status?: unknown } | undefined)?.status === "archived" ||
+    resolveCommercialEntitlements(ownerData).projectMode !== "active"
+  );
+  return !archivedProject &&
+    caller.exists &&
     owner.exists &&
     accountAllowsInteractiveAccess(caller.data()) &&
-    accountAllowsInteractiveAccess(owner.data()) &&
+    accountAllowsInteractiveAccess(ownerData) &&
     (ownerUid === uid || member.exists);
 }
 

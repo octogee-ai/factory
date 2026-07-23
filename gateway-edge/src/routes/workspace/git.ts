@@ -293,7 +293,7 @@ router.post(
       res.json({ sha: r.result.sha, empty: r.result.empty });
     });
     logger.info(`git/commit slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
-  }),
+  }, { access: "write" }),
 );
 
 router.post(
@@ -320,7 +320,7 @@ router.post(
       res.json({ ok: true });
     });
     logger.info(`git/push slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
-  }),
+  }, { access: "write" }),
 );
 
 router.post(
@@ -348,7 +348,7 @@ router.post(
       res.json({ ok: true, branch });
     });
     logger.info(`git/branch/checkout slug=${target.slug} project=${target.projectSlug ?? "-"} branch=${branch} create=${create} dur=${Date.now() - start}ms status=${res.statusCode}`);
-  }),
+  }, { access: "write" }),
 );
 
 export default router;

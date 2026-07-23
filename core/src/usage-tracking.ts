@@ -13,7 +13,6 @@ import {
 } from "./usage-log-tailer.js";
 import {
   WINDOW_LENGTH_HOURS,
-  resolveTier,
 } from "@octogee/shared/types/billing";
 import { isValidUsername } from "@octogee/shared/types/identity";
 export { extractRole, findSessionFiles, parseLineForUsage } from "./usage-log-tailer.js";
@@ -87,21 +86,6 @@ export interface StartUsageTrackingOptions {
 
 type FirestoreUpdate = Record<string, unknown>;
 
-// The 7-day Personal trial clock starts at first real usage — a fresh
-// personal_free owner with no trialStartedAt gets one stamped here, and
-// resolveEffectivePlan boosts them to the Personal grant for TRIAL_LENGTH_DAYS.
-function decideTrialBackfill(
-  data: FirebaseFirestore.DocumentData,
-  trialStartedAt: Date | null,
-  byotActive: boolean,
-  now: Date,
-): { trialStartedAt: Date | null; update: FirestoreUpdate } {
-  if (resolveTier(data) === "personal_free" && !trialStartedAt && !byotActive) {
-    return { trialStartedAt: now, update: { "subscription.trialStartedAt": now } };
-  }
-  return { trialStartedAt, update: {} };
-}
-
 // Legacy telemetry only: token counts for surfaces that also cover BYOSUB
 // traffic. USD budgets and throttling live at the broker; nothing reads the
 // old usage.windowCostUsd/windowBudgetUsd fields anymore.
@@ -164,24 +148,17 @@ function usageTransactionState(args: {
   usage: UsageData;
   log: LogFn;
 }): UsageTransactionState {
-  const { data, uid, agentId, usage, log } = args;
+  const { data, agentId, usage } = args;
   const workspaceId = workspaceIdFromUserData(data, agentId);
   const usageData = data.usage || {};
-  const byotActive = data.byotActive === true;
   const now = new Date();
-
-  const initialTrialStartedAt = data.subscription?.trialStartedAt?.toDate?.() ?? null;
-  const backfill = decideTrialBackfill(data, initialTrialStartedAt, byotActive, now);
-  if (Object.keys(backfill.update).length) {
-    log(`usage: started the 7-day Personal trial clock for ${uid} (first usage, no trialStartedAt)`);
-  }
 
   const startedAt = usageData.windowStartedAt?.toDate?.() ?? null;
   const { windowUpdates } = buildWindowUpdates(usage, { windowStartedAt: startedAt }, now);
 
   return {
     workspaceId,
-    windowUpdates: { ...windowUpdates, ...backfill.update },
+    windowUpdates,
   };
 }
 

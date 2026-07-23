@@ -70,6 +70,10 @@
       "types": "./dist/types/connectors.d.ts",
       "default": "./dist/types/connectors.js"
     },
+    "./types/commercial-entitlements": {
+      "types": "./dist/types/commercial-entitlements.d.ts",
+      "default": "./dist/types/commercial-entitlements.js"
+    },
     "./types/cost-estimator": {
       "types": "./dist/types/cost-estimator.d.ts",
       "default": "./dist/types/cost-estimator.js"
@@ -174,6 +178,10 @@
       "types": "./dist/types/project.d.ts",
       "default": "./dist/types/project.js"
     },
+    "./types/project-retention": {
+      "types": "./dist/types/project-retention.d.ts",
+      "default": "./dist/types/project-retention.js"
+    },
     "./types/shells": {
       "types": "./dist/types/shells.d.ts",
       "default": "./dist/types/shells.js"
@@ -235,6 +243,9 @@
       ],
       "types/connectors": [
         "dist/types/connectors.d.ts"
+      ],
+      "types/commercial-entitlements": [
+        "dist/types/commercial-entitlements.d.ts"
       ],
       "types/cost-estimator": [
         "dist/types/cost-estimator.d.ts"
@@ -310,6 +321,9 @@
       ],
       "types/project": [
         "dist/types/project.d.ts"
+      ],
+      "types/project-retention": [
+        "dist/types/project-retention.d.ts"
       ],
       "types/shells": [
         "dist/types/shells.d.ts"

@@ -23,13 +23,13 @@ export interface ModelCredentialSyncUserData {
   // Plan inputs travel as-is (pickPlanInputs); the resolver tolerates non-string
   // shapes, so they mirror subscription/builderSubscription as `unknown`.
   selectedTier?: unknown;
-  // resolveBillingProfile derives trial + builder state from these on the
-  // gateway side; serialize them through (Timestamps → JSON) as-is — asDate
+  // resolveBillingProfile derives signup-offer + builder state from these on the
+  // gateway side; serialize the receipt (Timestamps → JSON) as-is — asDate
   // parses the serialized {_seconds}/{seconds}/ISO shapes.
   subscription?: unknown;
   builderSubscription?: unknown;
-  trialStartedAt?: unknown;
   trialGrant?: unknown;
+  signupOfferConvertedAt?: unknown;
   provisioning?: { openclaw?: { status?: string } };
   systemConfig?: {
     byot?: { provider?: string; baseUrl?: string; model?: string };

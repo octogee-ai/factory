@@ -219,7 +219,7 @@ export function deriveDesiredByotState(userData) {
 export function platformCoachModelInputForUser(slug, userData) {
     return freeTierCoachModelInput(slug, userData);
 }
-// House-only (Personal Free with no live trial boost) pins the coach to the
+// House-only (Personal Free with no live Signup Offer) pins the coach to the
 // house model. The broker would degrade anyway; pinning keeps the config
 // honest so /status and the agent's self-report agree with the wire.
 function freeTierCoachModelInput(slug, userData) {

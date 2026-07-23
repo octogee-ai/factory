@@ -72,11 +72,10 @@ export function desiredFingerprints(
 
 function planSubscriptionSlice(subscription: unknown): Record<string, unknown> | null {
   if (!subscription || typeof subscription !== "object" || Array.isArray(subscription)) return null;
-  const sub = subscription as { tier?: unknown; status?: unknown; trialStartedAt?: unknown };
+  const sub = subscription as { tier?: unknown; status?: unknown };
   return {
     tier: sub.tier ?? null,
     status: sub.status ?? null,
-    trialStartedAt: sub.trialStartedAt ?? null,
   };
 }
 
@@ -104,15 +103,15 @@ export function snapshotConfigFingerprint(snapshot: FleetBrokerUserSnapshot): st
     systemConfig: snapshot.systemConfig ?? null,
     byotActive: snapshot.byotActive ?? false,
     // Plan fields shape the effective model config through the ensure's byot reassert —
-    // an upgrade (or trial grant) must reconverge a mounted customer's model picks.
+    // an upgrade (or signup-offer grant) must reconverge a mounted customer's model picks.
     // Only the fields plan resolution reads: hashing the whole subscription object would
     // re-ensure every customer on routine Stripe churn (currentPeriodEnd on renewal).
     tier: snapshot.tier,
     selectedTier: snapshot.selectedTier ?? null,
     subscription: planSubscriptionSlice(snapshot.subscription),
     builderSubscription: planSubscriptionSlice(snapshot.builderSubscription),
-    trialStartedAt: snapshot.trialStartedAt ?? null,
     trialGrant: snapshot.trialGrant ?? null,
+    signupOfferConvertedAt: snapshot.signupOfferConvertedAt ?? null,
     // The operator's free-tier dial: a flip must re-ensure every mounted
     // house-only customer, not wait for the next roll.
     freeTierModelRef: snapshot.freeTierModelRef ?? null,

@@ -2,9 +2,14 @@ import { Router, Request, Response, NextFunction } from "express";
 import JSZip from "jszip";
 import { storage } from "../../lib/db.js";
 import { logger } from "../../middleware/logging.js";
-import { updateManifest, removeFromManifest } from "../../lib/manifest.js";
+import { removeFromManifest } from "../../lib/manifest.js";
 import { giteaApiAsUser } from "../../lib/gitea.js";
 import { workspaceGiteaOrg, workspaceRepoName } from "../../lib/gitea-naming.js";
+import {
+  storeWorkspaceBlob,
+  WorkspaceStorageQuotaError,
+} from "../../lib/workspace-blob.js";
+import type { FileTarget } from "../../lib/fileTarget.js";
 import {
   ensureSlug,
   getExtension,
@@ -46,12 +51,12 @@ interface ExtractZipContext {
   org: string;
   sudoUser: string;
   repoName: string;
+  target: FileTarget;
 }
 
 interface ExtractZipResult {
   gitPaths: string[];
   blobPaths: string[];
-  manifestEntries: Record<string, unknown>;
 }
 
 interface WrittenEntry {
@@ -114,6 +119,17 @@ function extractZipContext(slug: string, zipPath: string): ExtractZipContext {
     org: workspaceGiteaOrg(slug),
     sudoUser: `ws-${slug}`,
     repoName: workspaceRepoName(),
+    target: {
+      slug,
+      projectSlug: null,
+      provider: "gitea",
+      org: workspaceGiteaOrg(slug),
+      repoName: workspaceRepoName(),
+      gcsPrefix: `customers/${slug}`,
+      sudoUser: `ws-${slug}`,
+      brokered: false,
+      canvasFile: "README.md",
+    },
   };
 }
 
@@ -177,19 +193,10 @@ async function writeBlobEntry(
   context: ExtractZipContext,
   entry: SafeZipEntry<ZipEntryLike>,
   fileBuffer: Buffer,
-  manifestEntries: Record<string, unknown>,
 ): Promise<WrittenEntry> {
   const ext = getExtension(entry.relativePath);
-  const gcsPath = `customers/${context.slug}/${entry.targetPath}`;
   const mimeType = getMimeType(ext);
-  await context.bucket.file(gcsPath).save(fileBuffer, { metadata: { contentType: mimeType } });
-  manifestEntries[entry.targetPath] = {
-    type: "blob",
-    gcsPath,
-    size: fileBuffer.length,
-    mimeType,
-    uploadedAt: new Date().toISOString(),
-  };
+  await storeWorkspaceBlob(context.target, entry.targetPath, fileBuffer, mimeType);
 
   return { kind: "blob", path: entry.targetPath };
 }
@@ -198,13 +205,12 @@ async function writeExtractedEntry(
   context: ExtractZipContext,
   entry: SafeZipEntry<ZipEntryLike>,
   fileBuffer: Buffer,
-  manifestEntries: Record<string, unknown>,
 ): Promise<WrittenEntry> {
   if (isTextFile(entry.relativePath)) {
     return writeTextEntry(context, entry, fileBuffer);
   }
 
-  return writeBlobEntry(context, entry, fileBuffer, manifestEntries);
+  return writeBlobEntry(context, entry, fileBuffer);
 }
 
 function entrySizeError(relativePath: string, fileSize: number, totalSize: number): string | null {
@@ -224,7 +230,7 @@ async function extractEntries(
   entries: Array<SafeZipEntry<ZipEntryLike>>,
   res: Response,
 ): Promise<ExtractZipResult | null> {
-  const result: ExtractZipResult = { gitPaths: [], blobPaths: [], manifestEntries: {} };
+  const result: ExtractZipResult = { gitPaths: [], blobPaths: [] };
   let totalDecompressedBytes = 0;
 
   for (const entry of entries) {
@@ -237,7 +243,7 @@ async function extractEntries(
       return null;
     }
 
-    const written = await writeExtractedEntry(context, entry, fileBuffer, result.manifestEntries);
+    const written = await writeExtractedEntry(context, entry, fileBuffer);
     if (written.kind === "git") {
       result.gitPaths.push(written.path);
     } else {
@@ -256,11 +262,7 @@ async function deleteOriginalZip(context: ExtractZipContext): Promise<void> {
   }
 }
 
-async function finalizeExtraction(context: ExtractZipContext, result: ExtractZipResult): Promise<void> {
-  if (Object.keys(result.manifestEntries).length > 0) {
-    await updateManifest(context.sudoUser, context.org, context.repoName, result.manifestEntries);
-  }
-
+async function finalizeExtraction(context: ExtractZipContext): Promise<void> {
   await deleteOriginalZip(context);
   await removeFromManifest(
     context.sudoUser,
@@ -291,7 +293,7 @@ async function extractZip(req: Request, res: Response): Promise<void> {
   const result = await extractEntries(context, validation.entries, res);
   if (!result) return;
 
-  await finalizeExtraction(context, result);
+  await finalizeExtraction(context);
   res.json({ success: true, extracted: { git: result.gitPaths, blob: result.blobPaths } });
 }
 
@@ -299,6 +301,15 @@ router.post("/extract-zip", async (req: Request, res: Response, next: NextFuncti
   try {
     await extractZip(req, res);
   } catch (e) {
+    if (e instanceof WorkspaceStorageQuotaError) {
+      res.status(413).json({
+        error: "Free workspace storage allowance exceeded",
+        code: e.code,
+        limitBytes: e.limitBytes,
+        projectedBytes: e.projectedBytes,
+      });
+      return;
+    }
     next(e);
   }
 });

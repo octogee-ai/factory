@@ -8,6 +8,19 @@ export type {
 } from './project.js';
 
 export type {
+  ProjectRetentionPlan,
+  ProjectRetentionState,
+  ProjectRetentionStatus,
+} from './project-retention.js';
+export {
+  PROJECT_ARCHIVE_DAYS,
+  PROJECT_ARCHIVE_WARNING_DAYS,
+  parseProjectRetention,
+  planProjectRetention,
+  projectArchiveWarningDue,
+} from './project-retention.js';
+
+export type {
   LegalDocId,
   LegalDoc,
   LegalAcceptanceContext,
@@ -88,7 +101,6 @@ export {
   WINDOWS_PER_DAY,
   WINDOWS_PER_WEEK,
   WINDOW_BURST_MULTIPLIER,
-  TRIAL_LENGTH_DAYS,
   planWeeklyBudgetUsd,
   planWindowBudgetUsd,
   resolveEffectivePlan,
@@ -96,8 +108,6 @@ export {
   resolvePaidBuilderTier,
   resolvePaidPersonalTier,
   resolveTier,
-  trialDayN,
-  trialDaysRemaining,
 } from './billing.js';
 export type {
   BillingProfile,
@@ -108,11 +118,24 @@ export type {
   TrialGrant,
 } from './billing.js';
 
-export type { PlatformTrialConfig, TrialBuilderTier } from './platform-config.js';
+export type {
+  CommercialEntitlements,
+  ProjectCommercialMode,
+} from './commercial-entitlements.js';
+export { resolveCommercialEntitlements } from './commercial-entitlements.js';
+
+export type {
+  PlatformFreeConfig,
+  PlatformTrialConfig,
+  TrialBuilderTier,
+} from './platform-config.js';
 export {
+  DEFAULT_PLATFORM_FREE_CONFIG,
   DEFAULT_PLATFORM_TRIAL_CONFIG,
+  PLATFORM_FREE_CONFIG_DOC,
   PLATFORM_TRIAL_CONFIG_DOC,
   TRIAL_CONFIG_SCHEMA_VERSION,
+  parsePlatformFreeConfig,
   parsePlatformTrialConfig,
   trialConfigHash,
 } from './platform-config.js';

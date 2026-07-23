@@ -34,6 +34,7 @@ import { createAutomationAuthorizationBrokerRoutes } from "./routes/automation-a
 import { createAgentImportBrokerRoutes } from "./routes/agent-import-broker.js";
 import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
 import { createLinkPreviewRoutes } from "./routes/link-preview.js";
+import { createSignupOfferRoutes } from "./routes/signup-offer.js";
 import {
   createChatArtifactRoutes,
   createChatArtifactWorkerRoutes,
@@ -250,6 +251,7 @@ export function createApp(opts: CreateAppOptions = {}) {
   };
   app.get("/health", healthHandler);
   app.get("/api/health", healthHandler);
+  app.use("/api/signup-offer", createSignupOfferRoutes({ db }));
 
   app.use((req, res, next) => {
     if (!shouldAttemptTenantBinding(req.path)) {

@@ -4,12 +4,15 @@ import {
   DEFAULT_FREE_TIER_MODEL_REF,
   DEFAULT_OPS_AGENT_MODEL_REF,
   DEFAULT_PLATFORM_CONNECT_CONFIG,
+  DEFAULT_PLATFORM_FREE_CONFIG,
   DEFAULT_PLATFORM_TRIAL_CONFIG,
   PLATFORM_CONNECT_CONFIG_DOC,
+  PLATFORM_FREE_CONFIG_DOC,
   PLATFORM_TRIAL_CONFIG_DOC,
   TRIAL_CONFIG_SCHEMA_VERSION,
   googleConnectAllowed,
   parsePlatformConnectConfig,
+  parsePlatformFreeConfig,
   parsePlatformModelConfig,
   parsePlatformTrialConfig,
   resolveFreeTierModel,
@@ -17,15 +20,42 @@ import {
   trialConfigHash,
 } from "./platform-config";
 
-describe("parsePlatformTrialConfig", () => {
-  it("accepts the seeded Personal Pro + Builder Pro defaults", () => {
-    expect(parsePlatformTrialConfig(DEFAULT_PLATFORM_TRIAL_CONFIG)).toEqual({
+describe("parsePlatformFreeConfig", () => {
+  it("ships a configurable workspace-file allowance without making it a plan constant", () => {
+    expect(DEFAULT_PLATFORM_FREE_CONFIG).toEqual({
       schemaVersion: 1,
-      defaultPersonalTier: "personal_pro",
-      defaultBuilderTier: "pro",
+      workspaceStorageGb: 10,
+    });
+    expect(parsePlatformFreeConfig(DEFAULT_PLATFORM_FREE_CONFIG)).toEqual(
+      DEFAULT_PLATFORM_FREE_CONFIG,
+    );
+    expect(PLATFORM_FREE_CONFIG_DOC).toBe("free");
+  });
+
+  it("accepts bounded fractional allowances and rejects malformed values", () => {
+    expect(parsePlatformFreeConfig({ schemaVersion: 1, workspaceStorageGb: 2.5 })).toEqual({
+      schemaVersion: 1,
+      workspaceStorageGb: 2.5,
+    });
+    expect(parsePlatformFreeConfig({ schemaVersion: 1, workspaceStorageGb: 0 })).toBeNull();
+    expect(parsePlatformFreeConfig({ schemaVersion: 1, workspaceStorageGb: 1001 })).toBeNull();
+    expect(parsePlatformFreeConfig({ schemaVersion: 2, workspaceStorageGb: 10 })).toBeNull();
+    expect(parsePlatformFreeConfig(null)).toBeNull();
+  });
+});
+
+describe("parsePlatformTrialConfig", () => {
+  it("seeds the seven-day Personal + Builder Hobby signup offer", () => {
+    expect(parsePlatformTrialConfig(DEFAULT_PLATFORM_TRIAL_CONFIG)).toEqual({
+      schemaVersion: 2,
+      offerId: "builder-signup",
+      offerVersion: 1,
+      durationDays: 7,
+      defaultPersonalTier: "personal",
+      defaultBuilderTier: "hobby",
     });
     expect(PLATFORM_TRIAL_CONFIG_DOC).toBe("trial");
-    expect(TRIAL_CONFIG_SCHEMA_VERSION).toBe(1);
+    expect(TRIAL_CONFIG_SCHEMA_VERSION).toBe(2);
   });
 
   it("accepts every Personal tier and only concrete Builder tiers", () => {
@@ -55,9 +85,13 @@ describe("parsePlatformTrialConfig", () => {
 
   it("rejects malformed and unsupported configs", () => {
     expect(parsePlatformTrialConfig(null)).toBeNull();
-    expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, schemaVersion: 2 })).toBeNull();
+    expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, schemaVersion: 1 })).toBeNull();
     expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, defaultPersonalTier: "pro" })).toBeNull();
     expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, defaultBuilderTier: "max" })).toBeNull();
+    expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, offerId: "" })).toBeNull();
+    expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, offerVersion: 0 })).toBeNull();
+    expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, durationDays: 0 })).toBeNull();
+    expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, durationDays: 31 })).toBeNull();
   });
 
   it("hashes only the canonical grant-shaping fields", () => {
@@ -65,14 +99,18 @@ describe("parsePlatformTrialConfig", () => {
     expect(hash).toMatch(/^[0-9a-f]{16}$/);
     expect(
       trialConfigHash({
-        defaultBuilderTier: "pro",
-        defaultPersonalTier: "personal_pro",
-        schemaVersion: 1,
+        ...DEFAULT_PLATFORM_TRIAL_CONFIG,
         updatedBy: "operator-2",
       }),
     ).toBe(hash);
     expect(
       trialConfigHash({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, defaultBuilderTier: "team" }),
+    ).not.toBe(hash);
+    expect(
+      trialConfigHash({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, durationDays: 14 }),
+    ).not.toBe(hash);
+    expect(
+      trialConfigHash({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, offerVersion: 2 }),
     ).not.toBe(hash);
   });
 });

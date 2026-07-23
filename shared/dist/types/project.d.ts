@@ -24,6 +24,10 @@ export interface Project {
     pendingVisibility?: ProjectVisibility | null;
     giteaRepoName: string | null;
     repoSource?: ProjectRepoSource | null;
+    commercialLifecycle?: {
+        status: "active" | "archived";
+        archivedAt?: unknown;
+    };
     canvasFile: string;
     publishedUrl: string | null;
     starCount: number;

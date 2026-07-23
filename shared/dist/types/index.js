@@ -1,8 +1,10 @@
+export { PROJECT_ARCHIVE_DAYS, PROJECT_ARCHIVE_WARNING_DAYS, parseProjectRetention, planProjectRetention, projectArchiveWarningDue, } from './project-retention.js';
 export { LEGAL_DOCS, ALL_LEGAL_DOC_IDS, REGISTRATION_DOCS, isLegalDocId, currentVersion, isCurrentVersion, acceptanceDocId, } from './legal.js';
 export { AGENT_IMPORT_FORMAT_VERSION, AgentImportConfigError, buildAgentImportApprovalInput, buildAgentImportConfigArtifacts, classifyAgentImportArchivePath, planAgentImportConfig, validateAgentImportConfigArtifacts, } from './agent-import.js';
 export { WORKSPACE_VIBE_PRESETS, DEFAULT_VIBE_NOUN, WORKSPACE_CHANNEL_DISPLAY_NAMES, TYPING_PHRASES_BY_VIBE, DEFAULT_TYPING_PHRASES, isWorkspaceVibe, titleCaseVibe, computeWorkspaceDisplayName, computeProjectChannelDisplayName, } from './display-names.js';
-export { WINDOW_LENGTH_HOURS, WINDOWS_PER_DAY, WINDOWS_PER_WEEK, WINDOW_BURST_MULTIPLIER, TRIAL_LENGTH_DAYS, planWeeklyBudgetUsd, planWindowBudgetUsd, resolveEffectivePlan, resolveBuilderTier, resolvePaidBuilderTier, resolvePaidPersonalTier, resolveTier, trialDayN, trialDaysRemaining, } from './billing.js';
-export { DEFAULT_PLATFORM_TRIAL_CONFIG, PLATFORM_TRIAL_CONFIG_DOC, TRIAL_CONFIG_SCHEMA_VERSION, parsePlatformTrialConfig, trialConfigHash, } from './platform-config.js';
+export { WINDOW_LENGTH_HOURS, WINDOWS_PER_DAY, WINDOWS_PER_WEEK, WINDOW_BURST_MULTIPLIER, planWeeklyBudgetUsd, planWindowBudgetUsd, resolveEffectivePlan, resolveBuilderTier, resolvePaidBuilderTier, resolvePaidPersonalTier, resolveTier, } from './billing.js';
+export { resolveCommercialEntitlements } from './commercial-entitlements.js';
+export { DEFAULT_PLATFORM_FREE_CONFIG, DEFAULT_PLATFORM_TRIAL_CONFIG, PLATFORM_FREE_CONFIG_DOC, PLATFORM_TRIAL_CONFIG_DOC, TRIAL_CONFIG_SCHEMA_VERSION, parsePlatformFreeConfig, parsePlatformTrialConfig, trialConfigHash, } from './platform-config.js';
 export { redactSecrets, redactStructuredSecrets } from './secret-redaction.js';
 export { CANONICAL_OPENCLAW_FORK_SHA, CANONICAL_OPENCLAW_VERSION, } from './openclaw-release.js';
 export { GATEWAY_HEARTBEAT_INTERVAL_MS, GATEWAY_UNREACHABLE_AFTER_MS, VERIFY_ACCOUNT_TIMEOUT_MS, CONFIG_PATCH_DEADLINE_MS, ADD_CUSTOMER_DEADLINE_MS, MIGRATION_QUIESCE_TIMEOUT_MS, MIGRATION_TRANSFER_TIMEOUT_MS, MIGRATION_UNMOUNT_TIMEOUT_MS, MIGRATING_IN_PIN_TTL_MS, SIGNATURE_HEADER, GATEWAYS_COLLECTION, } from './fleet-controller.js';

@@ -205,8 +205,8 @@ function toUserSnapshot(snapshot: FleetBrokerUserSnapshot): UserSnapshot {
     selectedTier: snapshot.selectedTier,
     subscription: snapshot.subscription,
     builderSubscription: snapshot.builderSubscription,
-    trialStartedAt: snapshot.trialStartedAt,
     trialGrant: snapshot.trialGrant,
+    signupOfferConvertedAt: snapshot.signupOfferConvertedAt,
     freeTierModelRef: snapshot.freeTierModelRef,
     systemConfig: snapshot.systemConfig,
   };

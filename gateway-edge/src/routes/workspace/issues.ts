@@ -49,7 +49,7 @@ router.post(
     }
     const issue = await createIssue(target, { title, body, status });
     res.status(201).json({ issue });
-  }),
+  }, { access: "write" }),
 );
 
 router.patch(
@@ -77,7 +77,7 @@ router.patch(
       }
       throw e;
     }
-  }),
+  }, { access: "write" }),
 );
 
 export default router;
