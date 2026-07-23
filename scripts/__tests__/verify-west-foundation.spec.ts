@@ -17,6 +17,11 @@ type RunOptions = {
   invalidWorkloadPolicy?: boolean;
   trailingWorkloadQueryNewline?: boolean;
   mode?: "--read-only" | "--plan";
+  invalidServiceHealthApi?: boolean;
+  invalidServiceHealthPolicy?: boolean;
+  invalidServiceHealthSchema?: boolean;
+  invalidServiceHealthCategory?: boolean;
+  invalidServiceHealthChannels?: boolean;
   execFailures?: number;
   execMaxAttempts?: number;
 };
@@ -63,15 +68,47 @@ case "$*" in
       printf '%s\n' '[{"name":"projects/octogee/notificationChannels/email","type":"email","enabled":true,"verificationStatus":"VERIFIED"}]'
     fi
     ;;
+  "services list "*)
+    if [[ "$FAKE_INVALID_SERVICE_HEALTH_API" == "true" ]]; then
+      printf '%s\n' '[]'
+    else
+      printf '%s\n' '[{"config":{"name":"servicehealth.googleapis.com"},"state":"ENABLED"}]'
+    fi
+    ;;
   "monitoring policies list "*)
     if [[ "$FAKE_INVALID_WORKLOAD_POLICY" == "true" ]]; then
       printf '%s\n' '[{"displayName":"Octogee WEST workload critical","enabled":true,"notificationChannels":["projects/octogee/notificationChannels/email"],"conditions":[{"conditionPrometheusQueryLanguage":{"query":"ALERTS{location=\\"us-central1\\", alertstate=\\"firing\\", severity=\\"critical\\"}"}}]}]'
     else
       query_suffix=""
       if [[ "$FAKE_TRAILING_WORKLOAD_QUERY_NEWLINE" == "true" ]]; then
-        query_suffix='\\n'
+        query_suffix=$'\\x0a'
       fi
-      printf '%s\n' '[{"displayName":"Octogee WEST GKE notifications","enabled":true,"notificationChannels":["projects/octogee/notificationChannels/email","projects/octogee/notificationChannels/sms"],"conditions":[{"conditionMatchedLog":{}}]},{"displayName":"Octogee WEST workload critical","enabled":true,"notificationChannels":["projects/octogee/notificationChannels/email","projects/octogee/notificationChannels/sms"],"conditions":[{"conditionPrometheusQueryLanguage":{"query":"max by (alertname, severity, namespace, gateway_id) (ALERTS{project_id=\\"octogee\\", location=\\"us-west1\\", cluster=\\"octogee-gateway\\", alertstate=\\"firing\\", severity=\\"critical\\"})'"$query_suffix"'","duration":"0s","evaluationInterval":"30s"}}]},{"displayName":"Octogee WEST workload warning","enabled":true,"notificationChannels":["projects/octogee/notificationChannels/email","projects/octogee/notificationChannels/sms"],"conditions":[{"conditionPrometheusQueryLanguage":{"query":"max by (alertname, severity, namespace, gateway_id) (ALERTS{project_id=\\"octogee\\", location=\\"us-west1\\", cluster=\\"octogee-gateway\\", alertstate=\\"firing\\", severity=\\"warning\\"})'"$query_suffix"'","duration":"0s","evaluationInterval":"30s"}}]}]'
+      service_health_filter='resource.type="servicehealth.googleapis.com/Event" AND jsonPayload.@type="type.googleapis.com/google.cloud.servicehealth.logging.v1.EventLog" AND jsonPayload.category="INCIDENT" AND (jsonPayload.state="ACTIVE" OR jsonPayload.detailedCategory="EMERGING_INCIDENT" OR jsonPayload.detailedCategory="CONFIRMED_INCIDENT")'
+      service_health_channels='["projects/octogee/notificationChannels/email","projects/octogee/notificationChannels/sms"]'
+      service_health_enabled=true
+      if [[ "$FAKE_INVALID_SERVICE_HEALTH_SCHEMA" == "true" ]]; then
+        service_health_filter='resource.type="servicehealth.googleapis.com/Event" AND jsonPayload.@type="type.googleapis.com/google.cloud.servicehealth.logging.v1beta.EventLog"'
+      fi
+      if [[ "$FAKE_INVALID_SERVICE_HEALTH_CATEGORY" == "true" ]]; then
+        service_health_filter='resource.type="servicehealth.googleapis.com/Event" AND jsonPayload.@type="type.googleapis.com/google.cloud.servicehealth.logging.v1.EventLog" AND (jsonPayload.state="ACTIVE" OR jsonPayload.detailedCategory="EMERGING_INCIDENT" OR jsonPayload.detailedCategory="CONFIRMED_INCIDENT")'
+      fi
+      if [[ "$FAKE_INVALID_SERVICE_HEALTH_CHANNELS" == "true" ]]; then
+        service_health_channels='["projects/octogee/notificationChannels/email"]'
+      fi
+      if [[ "$FAKE_INVALID_SERVICE_HEALTH_POLICY" == "true" ]]; then
+        service_health_enabled=false
+      fi
+      jq -cn \
+        --arg filter "$service_health_filter" \
+        --argjson channels "$service_health_channels" \
+        --argjson serviceHealthEnabled "$service_health_enabled" \
+        --arg querySuffix "$query_suffix" \
+        '[
+          {displayName: "Octogee WEST GKE notifications", enabled: true, notificationChannels: ["projects/octogee/notificationChannels/email", "projects/octogee/notificationChannels/sms"], conditions: [{conditionMatchedLog: {}}]},
+          (if $serviceHealthEnabled then {displayName: "Octogee WEST Google Service Health incidents", enabled: true, notificationChannels: $channels, conditions: [{conditionMatchedLog: {filter: $filter, labelExtractors: {description: "EXTRACT(jsonPayload.description)", detailed_state: "EXTRACT(jsonPayload.detailedState)", impacted_locations: "EXTRACT(jsonPayload.impactedLocations)", impacted_products: "EXTRACT(jsonPayload.impactedProducts)", start_time: "EXTRACT(jsonPayload.startTime)", state: "EXTRACT(jsonPayload.state)", title: "EXTRACT(jsonPayload.title)"}}}], alertStrategy: {autoClose: "1800s", notificationRateLimit: {period: "300s"}}, documentation: {content: "https://console.cloud.google.com/servicehealth/incidentDetails/"}} else empty end),
+          {displayName: "Octogee WEST workload critical", enabled: true, notificationChannels: ["projects/octogee/notificationChannels/email", "projects/octogee/notificationChannels/sms"], conditions: [{conditionPrometheusQueryLanguage: {query: ("max by (alertname, severity, namespace, gateway_id) (ALERTS{project_id=\\"octogee\\", location=\\"us-west1\\", cluster=\\"octogee-gateway\\", alertstate=\\"firing\\", severity=\\"critical\\"})" + $querySuffix), duration: "0s", evaluationInterval: "30s"}}]},
+          {displayName: "Octogee WEST workload warning", enabled: true, notificationChannels: ["projects/octogee/notificationChannels/email", "projects/octogee/notificationChannels/sms"], conditions: [{conditionPrometheusQueryLanguage: {query: ("max by (alertname, severity, namespace, gateway_id) (ALERTS{project_id=\\"octogee\\", location=\\"us-west1\\", cluster=\\"octogee-gateway\\", alertstate=\\"firing\\", severity=\\"warning\\"})" + $querySuffix), duration: "0s", evaluationInterval: "30s"}}]}
+        ]'
     fi
     ;;
   *)
@@ -126,6 +163,11 @@ esac
       FAKE_INVALID_SMS_CHANNEL: options.invalidSmsChannel ? "true" : "false",
       FAKE_INVALID_WORKLOAD_POLICY: options.invalidWorkloadPolicy ? "true" : "false",
       FAKE_TRAILING_WORKLOAD_QUERY_NEWLINE: options.trailingWorkloadQueryNewline ? "true" : "false",
+      FAKE_INVALID_SERVICE_HEALTH_API: options.invalidServiceHealthApi ? "true" : "false",
+      FAKE_INVALID_SERVICE_HEALTH_POLICY: options.invalidServiceHealthPolicy ? "true" : "false",
+      FAKE_INVALID_SERVICE_HEALTH_SCHEMA: options.invalidServiceHealthSchema ? "true" : "false",
+      FAKE_INVALID_SERVICE_HEALTH_CATEGORY: options.invalidServiceHealthCategory ? "true" : "false",
+      FAKE_INVALID_SERVICE_HEALTH_CHANNELS: options.invalidServiceHealthChannels ? "true" : "false",
       FAKE_EXEC_FAILURES: String(options.execFailures ?? 0),
       FAKE_EXEC_COUNT_FILE: execCountFile,
       FAKE_KUBECTL_CALLS_FILE: kubectlCallsFile,
@@ -215,6 +257,19 @@ describe("WEST foundation runtime verifier", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("WEST foundation read-only verification passed");
     expect(result.kubectlCalls).toBe("");
+  });
+
+  it.each([
+    ["the enabled Personalized Service Health API", { invalidServiceHealthApi: true }],
+    ["the Service Health alert policy", { invalidServiceHealthPolicy: true }],
+    ["the current Service Health EventLog v1 schema", { invalidServiceHealthSchema: true }],
+    ["the Service Health INCIDENT category", { invalidServiceHealthCategory: true }],
+    ["both verified channels on the Service Health alert", { invalidServiceHealthChannels: true }],
+  ])("requires %s", (_name, options) => {
+    const result = runVerifier(options);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Personalized Service Health alert invariants failed");
   });
 
   it("retries transient new-node exec tunnel failures", () => {

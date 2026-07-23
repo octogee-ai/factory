@@ -79,6 +79,7 @@ SQL_JSON="${TEMP_DIR}/sql.json"
 NODE_JSON="${TEMP_DIR}/node.json"
 EMAIL_CHANNEL_JSON="${TEMP_DIR}/email-notification-channel.json"
 SMS_CHANNEL_JSON="${TEMP_DIR}/sms-notification-channel.json"
+SERVICE_HEALTH_API_JSON="${TEMP_DIR}/service-health-api.json"
 ALERT_POLICIES_JSON="${TEMP_DIR}/alert-policies.json"
 
 gcloud container clusters describe "${CLUSTER_NAME}" \
@@ -185,6 +186,20 @@ SMS_CHANNEL_NAME="$(
   ' "${SMS_CHANNEL_JSON}"
 )"
 
+gcloud services list \
+  --enabled \
+  --project="${PROJECT_ID}" \
+  --filter='config.name="servicehealth.googleapis.com"' \
+  --format=json >"${SERVICE_HEALTH_API_JSON}"
+if ! jq -e '
+  length == 1 and
+  .[0].config.name == "servicehealth.googleapis.com" and
+  .[0].state == "ENABLED"
+' "${SERVICE_HEALTH_API_JSON}" >/dev/null; then
+  echo "Personalized Service Health alert invariants failed: servicehealth.googleapis.com is not enabled" >&2
+  exit 1
+fi
+
 gcloud monitoring policies list \
   --project="${PROJECT_ID}" \
   --filter='userLabels.deployment-target="west-platform"' \
@@ -221,6 +236,44 @@ if ! jq -e \
   workload_policy("Octogee WEST workload warning"; "warning")
 ' "${ALERT_POLICIES_JSON}" >/dev/null; then
   echo "WEST workload alert-policy invariants failed" >&2
+  exit 1
+fi
+
+if ! jq -e \
+  --arg email "${EMAIL_CHANNEL_NAME}" \
+  --arg sms "${SMS_CHANNEL_NAME}" '
+  def routed_to_both:
+    .notificationChannels as $channels |
+    ($channels | length) == 2 and
+    ($channels | index($email)) != null and
+    ($channels | index($sms)) != null;
+  map(select(
+    .displayName == "Octogee WEST Google Service Health incidents" and
+    .enabled == true and
+    routed_to_both and
+    (.conditions | length) == 1 and
+    ((.conditions[0].conditionMatchedLog.filter // "") as $filter |
+      ($filter | contains("resource.type=\"servicehealth.googleapis.com/Event\"")) and
+      ($filter | contains("jsonPayload.@type=\"type.googleapis.com/google.cloud.servicehealth.logging.v1.EventLog\"")) and
+      ($filter | contains("jsonPayload.category=\"INCIDENT\"")) and
+      ($filter | contains("jsonPayload.state=\"ACTIVE\"")) and
+      ($filter | contains("jsonPayload.detailedCategory=\"EMERGING_INCIDENT\"")) and
+      ($filter | contains("jsonPayload.detailedCategory=\"CONFIRMED_INCIDENT\"")) and
+      .conditions[0].conditionMatchedLog.labelExtractors == {
+        description: "EXTRACT(jsonPayload.description)",
+        detailed_state: "EXTRACT(jsonPayload.detailedState)",
+        impacted_locations: "EXTRACT(jsonPayload.impactedLocations)",
+        impacted_products: "EXTRACT(jsonPayload.impactedProducts)",
+        start_time: "EXTRACT(jsonPayload.startTime)",
+        state: "EXTRACT(jsonPayload.state)",
+        title: "EXTRACT(jsonPayload.title)"
+      } and
+      .alertStrategy.autoClose == "1800s" and
+      .alertStrategy.notificationRateLimit.period == "300s" and
+      ((.documentation.content // "") | contains("https://console.cloud.google.com/servicehealth/incidentDetails/")))
+  )) | length == 1
+' "${ALERT_POLICIES_JSON}" >/dev/null; then
+  echo "Personalized Service Health alert invariants failed: policy, EventLog v1 filter, extractors, channels, rate limit, auto-close, or dashboard link drifted" >&2
   exit 1
 fi
 
@@ -277,4 +330,4 @@ if ! jq -e '[.status.addresses[] | select(.type == "ExternalIP")] | length == 0'
   exit 1
 fi
 
-echo "WEST foundation verified: DNS-only control plane, private node, scoped NAT, protected Cloud SQL, backups, PITR, and email/SMS paging."
+echo "WEST foundation verified: DNS-only control plane, private node, scoped NAT, protected Cloud SQL, backups, PITR, and GKE/Service Health email/SMS paging."
