@@ -129,6 +129,10 @@ resource "google_identity_platform_config" "default" {
       password_required = true
     }
 
+    phone_number {
+      enabled            = false
+      test_phone_numbers = {}
+    }
   }
 
   monitoring {
