@@ -133,6 +133,9 @@ export function validateDeploymentTargetsDocument(document) {
         stringFields(record(target.kms, `deployment target ${targetId}.kms`), ["projectId", "location", "keyRing", "key"], `deployment target ${targetId}.kms`);
         stringFields(record(target.storage, `deployment target ${targetId}.storage`), ["projectId", "location"], `deployment target ${targetId}.storage`);
         stringFields(record(target.ingress, `deployment target ${targetId}.ingress`), INGRESS_STRING_FIELDS, `deployment target ${targetId}.ingress`);
+        if (target.networkBoundary !== undefined) {
+            stringFields(record(target.networkBoundary, `deployment target ${targetId}.networkBoundary`), ["controlPlaneCidr", "privateServicesCidr"], `deployment target ${targetId}.networkBoundary`);
+        }
     }
     validatePromotionSources(targets);
     validateIngressIdentityUniqueness(targets);
@@ -187,6 +190,7 @@ function settings(targetId, target) {
         mattermostStaticIpName: target.ingress.mattermostStaticIpName,
         giteaStaticIpName: target.ingress.giteaStaticIpName,
         previewStaticIpName: target.ingress.previewStaticIpName,
+        networkBoundary: target.networkBoundary,
         siteOrigin: target.siteOrigin,
         appOrigin: target.appOrigin,
         apiOrigin: target.apiOrigin,

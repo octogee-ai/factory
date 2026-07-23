@@ -20,6 +20,7 @@ spec:
         app: glm-controller
     spec:
       serviceAccountName: glm-controller
+      automountServiceAccountToken: true
       {{- with .Values.global.platformComputeClass }}
       nodeSelector:
         cloud.google.com/compute-class: {{ . | quote }}

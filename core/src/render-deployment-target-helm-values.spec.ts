@@ -16,6 +16,10 @@ describe("deployment target Helm values", () => {
     expect(rendered).toContain('deploymentTargetId: "test-west"');
     expect(rendered).toContain('deploymentProjectId: "octogee-data-test"');
     expect(rendered).toContain('platformComputeClass: "octogee-platform-test-spot"');
+    expect(rendered).toContain(`networkPolicy:
+  enforceDefaultDeny: true
+  controlPlaneCidr: "172.20.16.16/28"
+  privateServicesCidr: "172.24.0.0/16"`);
     expect(rendered).toContain('connectionName: "octogee:us-west1:octogee-pg-west"');
     expect(rendered).toContain(
       'repository: "us-west1-docker.pkg.dev/octogee/octogee/octogee-api"',
@@ -73,6 +77,14 @@ describe("deployment target Helm values", () => {
       expect(rendered).toContain(`mattermost:\n  ingress:\n    staticIpName: "${mattermost}"`);
       expect(rendered).toContain(`gitea:\n  webIngress:\n    staticIpName: "${gitea}"`);
       expect(rendered).toContain(`gatewayFleet:\n  previewIngress:\n    staticIpName: "${preview}"`);
+    },
+  );
+
+  it.each(["prod-central", "test-central", "build-week-central"])(
+    "does not enable the WEST network boundary for frozen central target %s",
+    (targetId) => {
+      const rendered = renderDeploymentTargetHelmValues(deploymentTargetSettings(targetId));
+      expect(rendered).toContain("enforceDefaultDeny: false");
     },
   );
 

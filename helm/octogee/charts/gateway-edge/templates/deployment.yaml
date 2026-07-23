@@ -31,14 +31,24 @@ spec:
     spec:
       terminationGracePeriodSeconds: 30
       serviceAccountName: {{ .Values.serviceAccountName }}
+      automountServiceAccountToken: false
       {{- with $global.platformComputeClass }}
       nodeSelector:
         cloud.google.com/compute-class: {{ . | quote }}
       {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: gateway-router
           image: "{{ required "gateway-edge.image.repository is required" .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           lifecycle:
             preStop:
               exec:

@@ -75,6 +75,9 @@ describe("deployment target resolver", () => {
     expect(output).toContain("secret_name_suffix=prod-west\n");
     expect(output).toContain("cloud_sql_point_in_time_recovery_enabled=true\n");
     expect(output).toContain("platform_compute_class=octogee-platform-spot\n");
+    expect(output).toContain("network_policy_enforce_default_deny=true\n");
+    expect(output).toContain("network_policy_control_plane_cidr=172.20.16.16/28\n");
+    expect(output).toContain("network_policy_private_services_cidr=172.24.0.0/16\n");
     expect(output).toContain(
       "kms_key_name=projects/octogee-data-prod/locations/us-west1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest\n",
     );

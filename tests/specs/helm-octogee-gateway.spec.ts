@@ -606,6 +606,35 @@ const out = helmTemplate();
     expect(svc).toMatch(/name:\s*builder-shell\s*\n\s*port:\s*3005\s*\n\s*targetPort:\s*3005/);
   });
 
+  it("runs exec-capable builder gateways in the registered gVisor RuntimeClass", () => {
+    const builder = findDoc(helmTemplate("octogee-gw-builder", {
+      gatewayId: "builder",
+      gatewayClass: "builder",
+    }), "Deployment", "octogee-gateway-builder") ?? "";
+    const shared = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+
+    expect(builder).toMatch(/^ {6}runtimeClassName:\s*gvisor\s*$/m);
+    expect(shared).not.toMatch(/^ {6}runtimeClassName:/m);
+  });
+
+  it("renders every builder-gateway container and init container Restricted-compliant", () => {
+    const output = helmTemplate("octogee-gw-builder", {
+      gatewayId: "builder",
+      gatewayClass: "builder",
+    });
+    const deployment = parseAllDocuments(output)
+      .map((document) => document.toJSON() as { kind?: string; metadata?: { name?: string }; spec?: { template?: { spec?: { securityContext?: Record<string, unknown>; containers?: Array<{ securityContext?: Record<string, unknown> }>; initContainers?: Array<{ securityContext?: Record<string, unknown> }> } } } })
+      .find((document) => document.kind === "Deployment" && document.metadata?.name === "octogee-gateway-builder");
+    const pod = deployment?.spec?.template?.spec;
+
+    expect(pod?.securityContext?.runAsNonRoot).toBe(true);
+    expect(pod?.securityContext?.seccompProfile).toEqual({ type: "RuntimeDefault" });
+    for (const container of [...(pod?.initContainers ?? []), ...(pod?.containers ?? [])]) {
+      expect(container.securityContext?.allowPrivilegeEscalation).toBe(false);
+      expect(container.securityContext?.capabilities).toEqual({ drop: ["ALL"] });
+    }
+  });
+
   it("renders a PodDisruptionBudget keyed by gateway-instance", () => {
     const out = helmTemplate();
     const pdb = findDoc(out, "PodDisruptionBudget", "octogee-gateway-default");
@@ -941,15 +970,18 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     expect(init).not.toMatch(/name:\s*MM_BOT_TOKEN\b/);
   });
 
-  it("renders an init container that runs as root to seed + chown /home/node", () => {
+  it("renders a Restricted-compatible init container that seeds /home/node", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     expect(dep).toMatch(/initContainers:[\s\S]*?- name:\s*fix-perms/);
-    expect(dep).toMatch(/runAsUser:\s*0[\s\S]*?runAsNonRoot:\s*false/);
-
-expect(dep).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
-    expect(dep).toMatch(/chown -R 1000:1000 \/home\/node\b/);
-    expect(dep).not.toMatch(/chown -R 1000:1000 \/home\/node\/\.openclaw\b/);
+    const init = dep.match(/- name:\s*fix-perms\s*[\s\S]*?(?=\n {8}- name:|\n {6}containers:)/)?.[0] ?? "";
+    expect(init).toMatch(/runAsNonRoot:\s*true/);
+    expect(init).toMatch(/allowPrivilegeEscalation:\s*false/);
+    expect(init).toMatch(/drop:\s*\[ALL\]/);
+    expect(init).not.toMatch(/runAsUser:\s*0/);
+    expect(init).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
+    expect(init).not.toContain("|| true");
+    expect(init).not.toMatch(/chown\s/);
   });
 
   it("mounts the data volume at /home/node (whole home, not just .openclaw)", () => {

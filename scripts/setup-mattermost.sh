@@ -283,15 +283,20 @@ echo ""
 
 # ── 0. kubectl context ────────────────────────────────────────────────────
 info "Setting kubectl context: $K8S_CONTEXT"
-gcloud container clusters get-credentials "$CLUSTER_NAME" --region "$TARGET_REGION" --project "$CLUSTER_PROJECT" 2>/dev/null || true
+gcloud container clusters get-credentials "$CLUSTER_NAME" --region "$TARGET_REGION" --project "$CLUSTER_PROJECT"
 kubectl config use-context "$K8S_CONTEXT"
 CURRENT_CTX=$(kubectl config current-context)
 [[ "$CURRENT_CTX" == "$K8S_CONTEXT" ]] || fail "kubectl context is '$CURRENT_CTX', expected '$K8S_CONTEXT'."
+kubectl --context "$K8S_CONTEXT" cluster-info >/dev/null
 ok "kubectl context: $CURRENT_CTX"
 info "This script owns Mattermost bootstrap/app state: admin user, admin PAT, team, and the mattermost-gateway secret inputs."
 
 # Ensure namespace exists
-kubectl get namespace "$K8S_NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$K8S_NAMESPACE"
+if [[ "$ENV" == "custom" ]]; then
+  kubectl get namespace "$K8S_NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$K8S_NAMESPACE"
+else
+  "$SCRIPT_DIR/ensure-namespace-security.sh" --deployment-target="$TARGET_ID" --mode=enforce
+fi
 
 # ── 1. Credentials ────────────────────────────────────────────────────────
 set +u

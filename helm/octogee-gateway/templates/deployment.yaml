@@ -82,10 +82,16 @@ spec:
         cloud.google.com/machine-family: {{ .Values.machineFamily | quote }}
         {{- end }}
       serviceAccountName: {{ include "octogee-gateway.serviceAccountName" . }}
+      {{- if eq $gatewayClass "builder" }}
+      runtimeClassName: gvisor
+      {{- end }}
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       initContainers:
@@ -95,15 +101,15 @@ spec:
             - sh
             - -c
             - |
+              set -eu
               # First-boot seed: copy shell defaults (.bashrc, .profile,
               # .bash_logout) into the data volume the first time home is
               # empty. `cp -an` is archive + no-clobber → idempotent, so
               # subsequent boots leave existing local files alone. Durable
               # state must come from the substrate; this volume is a cache
               # unless a gateway explicitly opts into legacy persistence.
-              cp -an /etc/skel/. /home/node/ 2>/dev/null || true
-              chown -R 1000:1000 /home/node || true
-              mkdir -p /home/node/.npm-cache && chown -R 1000:1000 /home/node/.npm-cache || true
+              cp -an /etc/skel/. /home/node/
+              mkdir -p /home/node/.npm-cache
           env:
             # OPENCLAW_GATEWAY_TOKEN is platform-owned: Cowboy creates the
             # per-gateway K8s secret `gateway-auth-token-<gatewayId>` with a
@@ -118,8 +124,10 @@ spec:
                   name: gateway-auth-token-{{ .Values.gatewayId }}
                   key: token
           securityContext:
-            runAsUser: 0
-            runAsNonRoot: false
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           volumeMounts:
             - name: data
               mountPath: /home/node

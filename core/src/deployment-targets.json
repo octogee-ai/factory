@@ -99,6 +99,10 @@
         "giteaStaticIpName": "gitea-ip-west",
         "previewStaticIpName": "preview-ip-west"
       },
+      "networkBoundary": {
+        "controlPlaneCidr": "172.20.16.16/28",
+        "privateServicesCidr": "172.24.0.0/16"
+      },
       "siteOrigin": "https://octogee.com",
       "appOrigin": "https://app.octogee.com",
       "apiOrigin": "https://api.octogee.com",
@@ -200,6 +204,10 @@
         "mattermostStaticIpName": "mattermost-ip-test-west",
         "giteaStaticIpName": "gitea-ip-test-west",
         "previewStaticIpName": "preview-ip-test-west"
+      },
+      "networkBoundary": {
+        "controlPlaneCidr": "172.20.16.16/28",
+        "privateServicesCidr": "172.24.0.0/16"
       },
       "siteOrigin": "https://octogee-test.web.app",
       "appOrigin": "https://app-octogee-test.web.app",

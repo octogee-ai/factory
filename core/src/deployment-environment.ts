@@ -39,6 +39,11 @@ interface IngressDocument {
   previewStaticIpName: string;
 }
 
+interface NetworkBoundaryDocument {
+  controlPlaneCidr: string;
+  privateServicesCidr: string;
+}
+
 interface DeploymentTargetDocument {
   environment: DeploymentEnvironment;
   promotionSourceTargetId?: string;
@@ -55,6 +60,7 @@ interface DeploymentTargetDocument {
   kms: KmsDocument;
   storage: StorageDocument;
   ingress: IngressDocument;
+  networkBoundary?: NetworkBoundaryDocument;
   siteOrigin: string;
   appOrigin: string;
   apiOrigin: string;
@@ -109,6 +115,7 @@ export interface DeploymentEnvironmentSettings {
   mattermostStaticIpName: string;
   giteaStaticIpName: string;
   previewStaticIpName: string;
+  networkBoundary?: NetworkBoundaryDocument;
   siteOrigin: string;
   appOrigin: string;
   apiOrigin: string;
@@ -305,6 +312,13 @@ export function validateDeploymentTargetsDocument(document: unknown): asserts do
       INGRESS_STRING_FIELDS,
       `deployment target ${targetId}.ingress`,
     );
+    if (target.networkBoundary !== undefined) {
+      stringFields(
+        record(target.networkBoundary, `deployment target ${targetId}.networkBoundary`),
+        ["controlPlaneCidr", "privateServicesCidr"],
+        `deployment target ${targetId}.networkBoundary`,
+      );
+    }
   }
 
   validatePromotionSources(targets);
@@ -367,6 +381,7 @@ function settings(
     mattermostStaticIpName: target.ingress.mattermostStaticIpName,
     giteaStaticIpName: target.ingress.giteaStaticIpName,
     previewStaticIpName: target.ingress.previewStaticIpName,
+    networkBoundary: target.networkBoundary,
     siteOrigin: target.siteOrigin,
     appOrigin: target.appOrigin,
     apiOrigin: target.apiOrigin,

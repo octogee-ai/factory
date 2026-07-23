@@ -88,6 +88,9 @@ function deploymentTargetOutput(settings) {
         compute_class: settings.computeClass,
         platform_compute_class: settings.platformComputeClass ?? "",
         pin_environment: settings.pinEnvironment,
+        network_policy_enforce_default_deny: String(settings.networkBoundary !== undefined),
+        network_policy_control_plane_cidr: settings.networkBoundary?.controlPlaneCidr ?? "",
+        network_policy_private_services_cidr: settings.networkBoundary?.privateServicesCidr ?? "",
     };
 }
 export function formatDeploymentTargetOutput(settings, format) {

@@ -256,14 +256,19 @@ echo ""
 
 # ── kubectl context ───────────────────────────────────────────────────────
 info "Setting kubectl context: $K8S_CONTEXT"
-gcloud container clusters get-credentials "$CLUSTER_NAME" --region "$TARGET_REGION" --project "$CLUSTER_PROJECT" 2>/dev/null || true
+gcloud container clusters get-credentials "$CLUSTER_NAME" --region "$TARGET_REGION" --project "$CLUSTER_PROJECT"
 kubectl config use-context "$K8S_CONTEXT" >/dev/null
 [[ "$(kubectl config current-context)" == "$K8S_CONTEXT" ]] || fail "Wrong kubectl context"
+kubectl --context "$K8S_CONTEXT" cluster-info >/dev/null
 ok "kubectl context: $K8S_CONTEXT"
 info "This script owns secret materialization into Kubernetes. It does not fully repair Mattermost/Gitea bootstrap state by itself."
 
 # Ensure namespace
-kubectl get namespace "$K8S_NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$K8S_NAMESPACE"
+if [[ "$ENV" == "custom" ]]; then
+  kubectl get namespace "$K8S_NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$K8S_NAMESPACE"
+else
+  "$SCRIPT_DIR/ensure-namespace-security.sh" --deployment-target="$TARGET_ID" --mode=enforce
+fi
 ok "Namespace: $K8S_NAMESPACE"
 echo ""
 

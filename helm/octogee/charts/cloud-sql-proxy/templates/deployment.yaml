@@ -21,10 +21,15 @@ spec:
         app: cloud-sql-proxy
     spec:
       serviceAccountName: {{ .Values.serviceAccountName }}
+      automountServiceAccountToken: true
       {{- with .Values.global.platformComputeClass }}
       nodeSelector:
         cloud.google.com/compute-class: {{ . | quote }}
       {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: cloud-sql-proxy
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}@{{ .Values.image.digest }}"
@@ -57,5 +62,7 @@ spec:
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           resources:
             {{- toYaml .Values.resources | nindent 12 }}

@@ -11,10 +11,20 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   serviceAccountName: octogee-gateway
+  automountServiceAccountToken: false
   restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
   containers:
     - name: test-mm-token
       image: curlimages/curl:8.7.1
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
       command:
         - sh
         - -ec

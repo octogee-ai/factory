@@ -57,6 +57,9 @@ octogee_load_deployment_target() {
       compute_class) TARGET_COMPUTE_CLASS="$value" ;;
       platform_compute_class) TARGET_PLATFORM_COMPUTE_CLASS="$value" ;;
       pin_environment) TARGET_PIN_ENVIRONMENT="$value" ;;
+      network_policy_enforce_default_deny) TARGET_NETWORK_POLICY_ENFORCE_DEFAULT_DENY="$value" ;;
+      network_policy_control_plane_cidr) TARGET_NETWORK_POLICY_CONTROL_PLANE_CIDR="$value" ;;
+      network_policy_private_services_cidr) TARGET_NETWORK_POLICY_PRIVATE_SERVICES_CIDR="$value" ;;
     esac
   done <<< "$output"
 
@@ -73,4 +76,5 @@ octogee_load_deployment_target() {
   export TARGET_SITE_ORIGIN TARGET_APP_ORIGIN TARGET_API_ORIGIN
   export TARGET_GIT_ORIGIN TARGET_MATTERMOST_ORIGIN TARGET_PREVIEW_ORIGIN
   export TARGET_GATEWAY_VALUES_FILE TARGET_COMPUTE_CLASS TARGET_PLATFORM_COMPUTE_CLASS TARGET_PIN_ENVIRONMENT
+  export TARGET_NETWORK_POLICY_ENFORCE_DEFAULT_DENY TARGET_NETWORK_POLICY_CONTROL_PLANE_CIDR TARGET_NETWORK_POLICY_PRIVATE_SERVICES_CIDR
 }

@@ -31,6 +31,10 @@ interface IngressDocument {
     giteaStaticIpName: string;
     previewStaticIpName: string;
 }
+interface NetworkBoundaryDocument {
+    controlPlaneCidr: string;
+    privateServicesCidr: string;
+}
 interface DeploymentTargetDocument {
     environment: DeploymentEnvironment;
     promotionSourceTargetId?: string;
@@ -47,6 +51,7 @@ interface DeploymentTargetDocument {
     kms: KmsDocument;
     storage: StorageDocument;
     ingress: IngressDocument;
+    networkBoundary?: NetworkBoundaryDocument;
     siteOrigin: string;
     appOrigin: string;
     apiOrigin: string;
@@ -99,6 +104,7 @@ export interface DeploymentEnvironmentSettings {
     mattermostStaticIpName: string;
     giteaStaticIpName: string;
     previewStaticIpName: string;
+    networkBoundary?: NetworkBoundaryDocument;
     siteOrigin: string;
     appOrigin: string;
     apiOrigin: string;

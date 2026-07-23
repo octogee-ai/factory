@@ -20,10 +20,15 @@ export function renderDeploymentTargetHelmValues(
   const iapOAuthClientCredentialsSecretName = settings.region === "us-west1"
     ? ""
     : "iap-oauth-credentials";
+  const networkBoundary = settings.networkBoundary;
   return `global:
   deploymentTargetId: ${quoted(settings.targetId)}
   deploymentProjectId: ${quoted(dataProject)}
   platformComputeClass: ${quoted(settings.platformComputeClass ?? "")}
+networkPolicy:
+  enforceDefaultDeny: ${networkBoundary !== undefined}
+  controlPlaneCidr: ${quoted(networkBoundary?.controlPlaneCidr ?? "")}
+  privateServicesCidr: ${quoted(networkBoundary?.privateServicesCidr ?? "")}
 cloud-sql-proxy:
   connectionName: ${quoted(settings.cloudSqlConnectionName)}
 edgeIngress:
