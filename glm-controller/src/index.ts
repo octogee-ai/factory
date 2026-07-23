@@ -16,8 +16,14 @@ import {
   type HelmInstancesMap,
   type Operation,
 } from "@octogee/shared/types/glm";
-import type { GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
-import { gatewayHeartbeatMatchesImageTag } from "@octogee/shared/types/image-tag";
+import {
+  GATEWAY_CONFIG_SCHEMA_VERSION,
+  type GatewayMutableConfig,
+} from "@octogee/shared/types/gateway-mutable-config";
+import {
+  gatewayHeartbeatMatchesImageTag,
+  isGatewayImageTag,
+} from "@octogee/shared/types/image-tag";
 import {
   parseHealthResponse,
   startOperatorHeartbeatPoller,
@@ -53,6 +59,7 @@ import {
   isGatewayDesiredDoc,
   isGatewayRuntimeDoc,
   projectGatewayDesiredRootForGateway,
+  GATEWAY_RELEASES_SUBCOLLECTION,
   type GatewayDoc,
   type GatewayRuntimeDoc,
   type ReleasePayload,
@@ -164,8 +171,10 @@ import {
   SIGNATURE_HEADER,
 } from "@octogee/shared/types/fleet-controller";
 import {
+  InitialGatewayReleaseConflictError,
   gatewayAuthorizationFromRootDocument,
   readGatewayArtifact,
+  writeInitialGatewayRelease,
 } from "@octogee/core/gateway-live-release";
 import { getStorage } from "firebase-admin/storage";
 import { getAuth } from "firebase-admin/auth";
@@ -299,6 +308,7 @@ const AUTO_ROLL_ON_CHART_DRIFT = NAMESPACE !== "octogee";
 const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
 const OPERATOR_HEARTBEAT_POLL_MS = 15_000;
 const OPERATOR_HEALTH_TIMEOUT_MS = 5_000;
+export const ADD_GATEWAY_DEPLOYMENT_READY_TIMEOUT_MS = 30 * 60_000;
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
 
 // Lets out-of-loop callers (the roll arm's pacing, the rollout op handler)
@@ -2124,7 +2134,107 @@ export async function bootstrapGlmGateways(deps: ControllerDeps): Promise<void> 
 
 export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<void> {
   if (await controllerWorkFrozen(deps, "default gateway bootstrap")) return;
-  deps.log("[glm-controller] legacy default gateway bootstrap disabled; create a durable root explicitly");
+  if (process.env.BOOTSTRAP_DEFAULT_GATEWAY !== "true") {
+    deps.log("[glm-controller] durable default gateway bootstrap disabled");
+    return;
+  }
+
+  const gatewayId = "default";
+  const gatewayRef = deps.db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+  const releaseRef = gatewayRef
+    .collection(GATEWAY_RELEASES_SUBCOLLECTION)
+    .doc("1");
+  const durableDefaultExists = async (): Promise<boolean> => {
+    const [gateway, release] = await Promise.all([
+      gatewayRef.get(),
+      releaseRef.get(),
+    ]);
+    if (gateway.exists !== release.exists) {
+      throw new Error(
+        "default gateway bootstrap found an incomplete durable root/release pair",
+      );
+    }
+    return gateway.exists;
+  };
+
+  if (await durableDefaultExists()) {
+    deps.log("[glm-controller] durable default gateway already exists");
+    return;
+  }
+
+  const imageRepository = process.env.BOOTSTRAP_IMAGE_REPOSITORY?.trim();
+  if (!imageRepository) {
+    throw new Error("BOOTSTRAP_IMAGE_REPOSITORY is required when default gateway bootstrap is enabled");
+  }
+  const imageTag = process.env.BOOTSTRAP_IMAGE_TAG?.trim();
+  if (!imageTag || !isGatewayImageTag(imageTag)) {
+    throw new Error("BOOTSTRAP_IMAGE_TAG must be an immutable gateway image tag");
+  }
+
+  await deps.ensureGatewayAuthSecret({
+    namespace: NAMESPACE,
+    gatewayId,
+  });
+  const now = Date.now();
+  const createdBy = "glm-controller-bootstrap";
+  const operationRef = deps.db.collection(GLM_OPERATIONS_COLLECTION).doc();
+  try {
+    await writeInitialGatewayRelease(deps.db, {
+      gatewayId,
+      createdBy,
+      now,
+      desiredStatus: "running",
+      config: {
+        configSchemaVersion: GATEWAY_CONFIG_SCHEMA_VERSION,
+        profile: null,
+        gatewayClass: "shared",
+        imageProfile: "standard",
+        sizingTier: null,
+        computeClass: null,
+        gcpProject: null,
+        gatewayContainerSecurityContext: null,
+        serviceAccountName: null,
+        serviceAccount: null,
+        operatorAccess: null,
+        ownerUid: null,
+        builderSlug: null,
+        openclawOverrides: null,
+        modelBrokerLimits: null,
+        preemption: null,
+      },
+      artifact: { imageRepository, imageTag },
+      writeAdditional: (transaction) => {
+        transaction.set(operationRef, {
+          kind: "add-gateway",
+          status: "pending",
+          createdBy,
+          createdAt: now,
+          startedAt: null,
+          completedAt: null,
+          gatewayId,
+          input: {
+            gatewayId,
+            imageTag,
+            gatewayClass: "shared",
+            source: "default-gateway-bootstrap",
+          },
+          steps: [],
+        });
+      },
+    });
+  } catch (error) {
+    if (
+      error instanceof InitialGatewayReleaseConflictError &&
+      await durableDefaultExists()
+    ) {
+      deps.log("[glm-controller] durable default gateway already exists");
+      return;
+    }
+    throw error;
+  }
+  deps.log(
+    `[glm-controller] queued durable default gateway release 1 (${imageTag})`,
+  );
 }
 
 function createMigrationClientBuilder(
@@ -2332,7 +2442,7 @@ async function buildHandlers(
     syncFleetIngress: fleetOps.syncFleetIngress,
     revisionMaterializationTimeoutMs: 120_000,
     helmRenderTimeoutMs: 600_000,
-    deploymentReadyTimeoutMs: 600_000,
+    deploymentReadyTimeoutMs: ADD_GATEWAY_DEPLOYMENT_READY_TIMEOUT_MS,
     heartbeatTimeoutMs: 240_000,
     pollIntervalMs: 5_000,
     now: () => Date.now(),

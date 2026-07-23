@@ -94,6 +94,7 @@ export const FREE_TIER_COACH_TOOLS: FreeTierCoachToolsBlock = {
     "octogee_chat_search",
     "octogee_chat_history",
     "octogee_chat_set_identity",
+    "octogee_ask_ops",
     "workspace_commit",
     "preview_start",
     "preview_stop",

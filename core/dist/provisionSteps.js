@@ -268,7 +268,6 @@ function buildProvisioningSnapshot(ctx, allAgentIds, mmUpdate) {
 }
 async function writeSystemConfig(ctx) {
     const systemConfigData = {
-        role: "user",
         updatedAt: FieldValue.serverTimestamp(),
     };
     if (ctx.tier === "trial") {
@@ -277,7 +276,14 @@ async function writeSystemConfig(ctx) {
         systemConfigData.trialExpiresAt = expiresAt;
         log(`Trial expires: ${expiresAt.toISOString().slice(0, 10)} for ${ctx.slug}`);
     }
-    await db.doc(`users/${ctx.uid}/system/config`).set(systemConfigData, { merge: true });
+    const configRef = db.doc(`users/${ctx.uid}/system/config`);
+    await db.runTransaction(async (transaction) => {
+        const current = await transaction.get(configRef);
+        if (current.data()?.role === undefined) {
+            systemConfigData.role = "user";
+        }
+        transaction.set(configRef, systemConfigData, { merge: true });
+    });
 }
 export function buildUserOperationalFields(ctx, provisioningObj, mmUpdate) {
     const operationalFields = {

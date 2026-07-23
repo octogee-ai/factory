@@ -193,6 +193,23 @@ describe("migrate-customer — input validation", () => {
     expect(result.error).toMatch(/already on gw-green/u);
   });
 
+  it("converges a stale builder activation migration after another controller reaches its target", async () => {
+    const { deps, ctx, client } = mkDeps({ sourceGatewayId: "gw-green" });
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({
+      input: {
+        uid: "uid-alice",
+        fromGatewayId: "gw-blue",
+        toGatewayId: "gw-green",
+        source: "builder-activation-lease",
+      },
+    }), ctx);
+
+    expect(result).toEqual({ steps: [], success: true, rolledBack: false });
+    expect(client.calls).toEqual([]);
+  });
+
   it("fails when the target placement is rejected", async () => {
     const { deps, ctx } = mkDeps();
     (deps.resolveTargetPlacement as ReturnType<typeof vi.fn>).mockResolvedValue({

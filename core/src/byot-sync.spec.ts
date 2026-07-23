@@ -66,6 +66,7 @@ import {
   syncByotForCustomer,
   applyAgentModelOverrides,
   agentIdsForSlug,
+  refreshCoachRuntimeSessions,
 } from "./byot-sync-runtime";
 import { internalFetch } from "./internal-fetch.js";
 import { codexAuthJsonPath, codexAgentDir } from "./byosub-restore.js";
@@ -163,6 +164,25 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
       byotActive: false,
       selectedTier: "personal_free",
       subscription: { trialStartedAt: new Date() },
+    });
+    expect(desired.enabled).toBe(false);
+    expect(desired.input).toBeNull();
+    expect(desired.coachModelInput).toBeNull();
+  });
+
+  it("trial grant personal pro + builder pro keeps the inherited tool surface", () => {
+    const desired = deriveDesiredByotState({
+      ...ON,
+      byotActive: false,
+      tier: "trial",
+      trialGrant: {
+        schemaVersion: 1,
+        personalTier: "personal_pro",
+        builderTier: "pro",
+        gatewayId: "builder-tester-70",
+        configHash: "trial-config",
+        claimedAt: new Date(),
+      },
     });
     expect(desired.enabled).toBe(false);
     expect(desired.input).toBeNull();
@@ -752,6 +772,7 @@ describe("tier-derived coach tools — house_only trims the model-visible tool s
         "octogee_chat_search",
         "octogee_chat_history",
         "octogee_chat_set_identity",
+        "octogee_ask_ops",
         "workspace_commit",
         "preview_start",
         "preview_stop",
@@ -1331,6 +1352,84 @@ describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", ()
   });
 });
 
+describe("coach runtime session policy refresh", () => {
+  it("resets only this coach's sessions once for each policy transition, including upgrade and downgrade", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-coach-runtime-policy-"));
+    const agentDir = path.join(root, "agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    const coachId = "octogee-tester-70-coach";
+    const rpc = {
+      sessionsList: vi.fn(async () => ({
+        sessions: [
+          { key: `agent:${coachId}:mattermost:group:one`, agentId: coachId },
+          { key: "agent:octogee-someone-else-coach:mattermost:group:two", agentId: "octogee-someone-else-coach" },
+        ],
+      })),
+      sessionsReset: vi.fn(async () => ({ ok: true as const })),
+      close: vi.fn(async () => {}),
+    };
+    const free = {
+      tools: { profile: "minimal", alsoAllow: ["octogee_ask_ops"] },
+      agents: { list: [{ id: coachId, model: "platform-openrouter/deepseek/deepseek-v4-pro" }] },
+    };
+    const trial = {
+      tools: { profile: "coding", alsoAllow: ["octogee_ask_ops"] },
+      agents: { list: [{ id: coachId, model: "platform-openrouter/z-ai/glm-5.2" }] },
+    };
+
+    try {
+      await expect(refreshCoachRuntimeSessions("tester-70", { agentDir, config: free, rpc })).resolves.toEqual({
+        refreshed: true,
+        resetCount: 1,
+      });
+      await expect(refreshCoachRuntimeSessions("tester-70", { agentDir, config: free, rpc })).resolves.toEqual({
+        refreshed: false,
+        resetCount: 0,
+      });
+      await expect(refreshCoachRuntimeSessions("tester-70", { agentDir, config: trial, rpc })).resolves.toEqual({
+        refreshed: true,
+        resetCount: 1,
+      });
+      await expect(refreshCoachRuntimeSessions("tester-70", { agentDir, config: free, rpc })).resolves.toEqual({
+        refreshed: true,
+        resetCount: 1,
+      });
+
+      expect(rpc.sessionsReset).toHaveBeenCalledTimes(3);
+      expect(rpc.sessionsReset).toHaveBeenCalledWith({
+        key: `agent:${coachId}:mattermost:group:one`, agentId: coachId, reason: "reset",
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves its marker unchanged when an active coach session cannot safely reset", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-coach-runtime-policy-"));
+    const agentDir = path.join(root, "agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    const coachId = "octogee-tester-70-coach";
+    const rpc = {
+      sessionsList: vi.fn(async () => ({
+        sessions: [{ key: `agent:${coachId}:mattermost:group:one`, agentId: coachId, hasActiveRun: true }],
+      })),
+      sessionsReset: vi.fn(async () => ({ ok: true as const })),
+      close: vi.fn(async () => {}),
+    };
+    const config = { agents: { list: [{ id: coachId }] } };
+
+    try {
+      await expect(refreshCoachRuntimeSessions("tester-70", { agentDir, config, rpc })).rejects.toThrow(
+        "active runtime session",
+      );
+      expect(rpc.sessionsReset).not.toHaveBeenCalled();
+      expect(fs.existsSync(path.join(agentDir, ".octogee-session-policy.json"))).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("standard gateway — BYOS materialization", () => {
   it("threads an injected config writer through the default coach model patch", async () => {
     const configWriter = vi.fn(async () => ({ mode: "rpc" as const, attempts: 1 }));
@@ -1392,6 +1491,7 @@ describe("standard gateway — BYOS materialization", () => {
     const applyCoachModelPatchFn = vi.fn(async () => true);
     const applyCoachToolsConvergenceFn = vi.fn(async () => true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
+    const refreshCoachRuntimeSessionsFn = vi.fn(async () => ({ refreshed: true, resetCount: 1 }));
 
     await syncByotForCustomer(
       {
@@ -1407,6 +1507,7 @@ describe("standard gateway — BYOS materialization", () => {
         applyCoachModelPatch: applyCoachModelPatchFn,
         applyCoachToolsConvergence: applyCoachToolsConvergenceFn,
         triggerSecretsReload: triggerSecretsReloadFn,
+        refreshCoachRuntimeSessions: refreshCoachRuntimeSessionsFn,
       },
     );
 
@@ -1414,6 +1515,7 @@ describe("standard gateway — BYOS materialization", () => {
     expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
     expect(applyCoachToolsConvergenceFn).toHaveBeenCalledWith("tester-70", false);
     expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
+    expect(refreshCoachRuntimeSessionsFn).toHaveBeenCalledWith("tester-70");
   });
 
   it("broker-token gateway: anthropic BYOT is broker-resolved, not materialized locally", async () => {

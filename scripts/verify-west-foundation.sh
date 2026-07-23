@@ -53,6 +53,7 @@ SQL_JSON="${TEMP_DIR}/sql.json"
 NODE_JSON="${TEMP_DIR}/node.json"
 EMAIL_CHANNEL_JSON="${TEMP_DIR}/email-notification-channel.json"
 SMS_CHANNEL_JSON="${TEMP_DIR}/sms-notification-channel.json"
+ALERT_POLICIES_JSON="${TEMP_DIR}/alert-policies.json"
 
 gcloud container clusters describe "${CLUSTER_NAME}" \
   --project="${PROJECT_ID}" \
@@ -136,6 +137,7 @@ if ! jq -e '
   echo "Verify the ops@octogee.com Cloud Monitoring notification channel, then rerun bootstrap-west-platform.sh --verify-only" >&2
   exit 1
 fi
+EMAIL_CHANNEL_NAME="$(jq -er '.[0].name' "${EMAIL_CHANNEL_JSON}")"
 
 gcloud beta monitoring channels list \
   --project="${PROJECT_ID}" \
@@ -150,6 +152,55 @@ if ! jq -e '
   )) | length == 1
 ' "${SMS_CHANNEL_JSON}" >/dev/null; then
   echo "Verify the Octogee Ops SMS Cloud Monitoring notification channel, then rerun bootstrap-west-platform.sh --verify-only" >&2
+  exit 1
+fi
+SMS_CHANNEL_NAME="$(
+  jq -er '
+    map(select(
+      .displayName == "Octogee Ops" and
+      .type == "sms" and
+      .enabled == true and
+      .verificationStatus == "VERIFIED"
+    ))[0].name
+  ' "${SMS_CHANNEL_JSON}"
+)"
+
+gcloud monitoring policies list \
+  --project="${PROJECT_ID}" \
+  --filter='userLabels.deployment-target="west-platform"' \
+  --format=json >"${ALERT_POLICIES_JSON}"
+if ! jq -e \
+  --arg email "${EMAIL_CHANNEL_NAME}" \
+  --arg sms "${SMS_CHANNEL_NAME}" \
+  --arg project "${PROJECT_ID}" \
+  --arg region "${REGION}" \
+  --arg cluster "${CLUSTER_NAME}" '
+  def routed_to_both:
+    .notificationChannels as $channels |
+    ($channels | length) == 2 and
+    ($channels | index($email)) != null and
+    ($channels | index($sms)) != null;
+  def enabled_policy($display_name):
+    map(select(
+      .displayName == $display_name and
+      .enabled == true and
+      routed_to_both
+    )) | length == 1;
+  def workload_policy($display_name; $severity):
+    map(select(
+      .displayName == $display_name and
+      .enabled == true and
+      routed_to_both and
+      .conditions[0].conditionPrometheusQueryLanguage.query ==
+        "max by (alertname, severity, namespace, gateway_id) (ALERTS{project_id=\"\($project)\", location=\"\($region)\", cluster=\"\($cluster)\", alertstate=\"firing\", severity=\"\($severity)\"})" and
+      (.conditions[0].conditionPrometheusQueryLanguage.duration // "0s") == "0s" and
+      .conditions[0].conditionPrometheusQueryLanguage.evaluationInterval == "30s"
+    )) | length == 1;
+  enabled_policy("Octogee WEST GKE notifications") and
+  workload_policy("Octogee WEST workload critical"; "critical") and
+  workload_policy("Octogee WEST workload warning"; "warning")
+' "${ALERT_POLICIES_JSON}" >/dev/null; then
+  echo "WEST workload alert-policy invariants failed" >&2
   exit 1
 fi
 
@@ -195,4 +246,4 @@ if ! jq -e '[.status.addresses[] | select(.type == "ExternalIP")] | length == 0'
   exit 1
 fi
 
-echo "WEST foundation verified: DNS-only control plane, private node, scoped NAT, protected Cloud SQL, backups, and PITR."
+echo "WEST foundation verified: DNS-only control plane, private node, scoped NAT, protected Cloud SQL, backups, PITR, and email/SMS paging."

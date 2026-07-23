@@ -1,8 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   assessReleaseConvergence,
-  deliverReleaseConvergenceAlert,
   type ReleaseConvergenceSnapshot,
 } from "../lib/release-convergence.js";
 
@@ -262,68 +261,5 @@ describe("assessReleaseConvergence", () => {
       "predecessor pods remain: old-pod",
       "old ReplicaSet predecessor still has pods (desired=1, observed=1)",
     ]));
-  });
-});
-
-describe("deliverReleaseConvergenceAlert", () => {
-  it("claims and delivers one redacted Discord alert", async () => {
-    const claim = vi.fn().mockResolvedValue(true);
-    const post = vi.fn().mockResolvedValue(undefined);
-
-    await deliverReleaseConvergenceAlert({
-      environment: "test",
-      tag: "v0.3.0",
-      commit: "abc1234",
-      workflowUrl: "https://github.test/run/1",
-      failures: [
-        "roster missing jack",
-        "uid secret-uid must never appear",
-        "owner@example.com must never appear",
-      ],
-      forbiddenValues: ["secret-uid"],
-      webhookUrl: "https://discord.test/webhook-secret",
-      claim,
-      post,
-    });
-
-    expect(claim).toHaveBeenCalledOnce();
-    expect(post).toHaveBeenCalledOnce();
-    const [, body] = post.mock.calls[0];
-    expect(body).toContain("roster missing jack");
-    expect(body).not.toContain("secret-uid");
-    expect(body).not.toContain("owner@example.com");
-    expect(body).not.toContain("webhook-secret");
-  });
-
-  it("does not redeliver an already claimed alert", async () => {
-    const post = vi.fn();
-    await deliverReleaseConvergenceAlert({
-      environment: "prod",
-      tag: "v0.3.0",
-      commit: "abc1234",
-      workflowUrl: "https://github.test/run/2",
-      failures: ["timeout"],
-      forbiddenValues: [],
-      webhookUrl: "https://discord.test/webhook",
-      claim: async () => false,
-      post,
-    });
-    expect(post).not.toHaveBeenCalled();
-  });
-
-  it("preserves Discord delivery failure as a second explicit error", async () => {
-    await expect(deliverReleaseConvergenceAlert({
-      environment: "prod",
-      tag: "v0.3.0",
-      commit: "abc1234",
-      workflowUrl: "https://github.test/run/2",
-      failures: ["release convergence timed out"],
-      forbiddenValues: [],
-      webhookUrl: "",
-      claim: async () => true,
-      post: async () => undefined,
-    })).rejects.toThrow(
-      /release convergence timed out.*Discord alert delivery failed: webhook is missing/s,
-    );
   });
 });

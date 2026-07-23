@@ -42,6 +42,19 @@ export interface SecretsReloadResult {
 export interface GatewayRestartRequestResult {
     [extra: string]: unknown;
 }
+export interface GatewaySessionSummary {
+    key: string;
+    agentId?: string;
+    hasActiveRun?: boolean;
+}
+export interface GatewaySessionsListResult {
+    sessions: GatewaySessionSummary[];
+    [extra: string]: unknown;
+}
+export interface GatewaySessionsResetResult {
+    ok: true;
+    [extra: string]: unknown;
+}
 export interface CronAddSpec {
     name: string;
     description?: string;
@@ -99,6 +112,14 @@ export interface GatewayRpcClient {
         reason: string;
         skipDeferral?: boolean;
     }): Promise<GatewayRestartRequestResult>;
+    sessionsList(params: {
+        agentId: string;
+    }): Promise<GatewaySessionsListResult>;
+    sessionsReset(params: {
+        key: string;
+        agentId: string;
+        reason: "new" | "reset";
+    }): Promise<GatewaySessionsResetResult>;
     cronAdd(spec: CronAddSpec): Promise<CronAddResult>;
     isGatewayUp(timeoutMs?: number): Promise<boolean>;
     close(): Promise<void>;

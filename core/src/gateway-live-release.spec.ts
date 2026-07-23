@@ -7,6 +7,7 @@ import {
   isGatewayMutableConfig,
   isGatewayMutableConfigForGateway,
   gatewayAuthorizationFromRootDocument,
+  initialGatewayReleaseDocuments,
   podBelongsToGateway,
   readGatewayArtifact,
   readGatewayAuthorization,
@@ -199,6 +200,52 @@ function servingRuntime(overrides: Record<string, unknown> = {}): Record<string,
     ...overrides,
   };
 }
+
+describe("initialGatewayReleaseDocuments", () => {
+  it("materializes one durable root and its immutable first release", () => {
+    const config = mutableConfig({
+      profile: null,
+      gatewayClass: "shared",
+      imageProfile: "standard",
+      sizingTier: null,
+      operatorAccess: null,
+      ownerUid: null,
+      builderSlug: null,
+    });
+    const result = initialGatewayReleaseDocuments({
+      gatewayId: "default",
+      config,
+      artifact: {
+        imageRepository: "us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+        imageTag: "753c212",
+      },
+      createdBy: "glm-controller-bootstrap",
+      now: 42,
+      desiredStatus: "running",
+    });
+
+    expect(result.gatewayDoc).toMatchObject({
+      gatewayId: "default",
+      latestRelease: 1,
+      desiredRelease: 1,
+      liveRelease: null,
+      desiredStatus: "running",
+      gatewayClass: "shared",
+    });
+    expect(result.releaseDoc).toMatchObject({
+      gatewayId: "default",
+      release: 1,
+      sourceRelease: null,
+      payload: {
+        imageRepository: "us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+        imageTag: "753c212",
+      },
+    });
+    expect(result.releaseDoc.payloadHash).toBe(
+      releasePayloadHash(result.releaseDoc.payload),
+    );
+  });
+});
 
 describe("gateway durable configuration authorization", () => {
   it("authorizes a durable root document without issuing a second Firestore read", () => {

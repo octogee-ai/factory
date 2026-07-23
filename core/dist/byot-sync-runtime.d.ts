@@ -1,4 +1,5 @@
 import { applyByotState, deriveDesiredByotState, type CoachModelInput } from "./byot-sync.js";
+import { type GatewayRpcClient } from "./gateway-rpc.js";
 import { type ByosubProvider } from "./byosub-restore.js";
 import { applyConfigPatch } from "./apply-config-patch.js";
 import { type AgentModelSelections } from "@octogee/shared/types/agent-models";
@@ -65,6 +66,7 @@ export interface SyncByotForCustomerDeps {
     triggerSecretsReload?: typeof triggerSecretsReload;
     materializeAnthropicBroker?: (slug: string) => boolean;
     applyAgentModelOverrides?: typeof applyAgentModelOverrides;
+    refreshCoachRuntimeSessions?: typeof refreshCoachRuntimeSessions;
     hasPendingPlatformCatalogRestart?: () => boolean;
     markPlatformCatalogRestartPending?: () => void;
     clearPlatformCatalogRestartPending?: () => void;
@@ -72,6 +74,15 @@ export interface SyncByotForCustomerDeps {
 type DesiredByotState = ReturnType<typeof deriveDesiredByotState>;
 type SyncByotUserData = Parameters<typeof deriveDesiredByotState>[0];
 export declare function agentIdsForSlug(slug: string, config: unknown): string[];
+type SessionPolicyRpc = Pick<GatewayRpcClient, "sessionsList" | "sessionsReset" | "close">;
+export declare function refreshCoachRuntimeSessions(slug: string, deps?: {
+    agentDir?: string;
+    config?: unknown;
+    rpc?: SessionPolicyRpc;
+}): Promise<{
+    refreshed: boolean;
+    resetCount: number;
+}>;
 export declare function gateSharedByosub(desired: DesiredByotState, userData: SyncByotUserData, logFn: (m: string) => void): {
     desired: DesiredByotState;
     suppressed: boolean;

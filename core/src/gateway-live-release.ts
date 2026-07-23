@@ -1,4 +1,4 @@
-import type { Firestore } from "firebase-admin/firestore";
+import type { Firestore, Transaction } from "firebase-admin/firestore";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GLM_GATEWAYS_COLLECTION } from "@octogee/shared/types/glm";
 import {
@@ -15,8 +15,11 @@ import {
   isGatewayRuntimeDoc,
   isReleasePayload,
   projectGatewayDesiredRootForGateway,
+  releasePayloadHash,
   upgradeReleasePayloadSchema,
   type GatewayDoc,
+  type GatewayLifecycleStatus,
+  type ReleaseDoc,
   type ReleasePayload,
   type W9GatewayEdgeImage,
   type W9TestPublisherLiveExperiment,
@@ -94,6 +97,84 @@ export interface GatewayArtifact {
   imageTag: string;
   gatewayEdgeImage?: W9GatewayEdgeImage;
   testExperiment?: W9TestPublisherLiveExperiment;
+}
+
+export interface InitialGatewayReleaseArgs {
+  gatewayId: string;
+  config: GatewayMutableConfig;
+  artifact: GatewayArtifact;
+  createdBy: string;
+  now: number;
+  desiredStatus: GatewayLifecycleStatus;
+  validateAdditional?: (transaction: Transaction) => Promise<void>;
+  writeAdditional?: (transaction: Transaction) => void;
+}
+
+export function initialGatewayReleaseDocuments(
+  args: InitialGatewayReleaseArgs,
+): {
+  gatewayDoc: GatewayDoc & GatewayMutableConfig;
+  releaseDoc: ReleaseDoc;
+} {
+  const gatewayDoc: GatewayDoc & GatewayMutableConfig = {
+    gatewayId: args.gatewayId,
+    createdAt: args.now,
+    createdBy: args.createdBy,
+    updatedAt: args.now,
+    updatedBy: args.createdBy,
+    latestRelease: 1,
+    desiredRelease: 1,
+    liveRelease: null,
+    desiredStatus: args.desiredStatus,
+    ...args.config,
+  };
+  const payload: ReleasePayload = { ...args.artifact };
+  const releaseDoc: ReleaseDoc = {
+    gatewayId: args.gatewayId,
+    release: 1,
+    createdAt: args.now,
+    createdBy: args.createdBy,
+    sourceRelease: null,
+    note: null,
+    payloadHash: releasePayloadHash(payload),
+    payload,
+  };
+  return { gatewayDoc, releaseDoc };
+}
+
+export class InitialGatewayReleaseConflictError extends Error {
+  constructor(readonly gatewayId: string) {
+    super(`gateway ${gatewayId} already exists`);
+  }
+}
+
+export async function writeInitialGatewayRelease(
+  db: Firestore,
+  args: InitialGatewayReleaseArgs,
+): Promise<void> {
+  const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(args.gatewayId);
+  const releaseRef = gatewayRef
+    .collection(GATEWAY_RELEASES_SUBCOLLECTION)
+    .doc("1");
+  const { gatewayDoc, releaseDoc } = initialGatewayReleaseDocuments(args);
+  await db.runTransaction(async (transaction) => {
+    const existing = await transaction.get(gatewayRef);
+    const releaseExisting = await transaction.get(releaseRef);
+    await args.validateAdditional?.(transaction);
+    if (existing.exists || releaseExisting.exists) {
+      throw new InitialGatewayReleaseConflictError(args.gatewayId);
+    }
+    transaction.set(
+      gatewayRef,
+      gatewayDoc as unknown as Record<string, unknown>,
+      { merge: true },
+    );
+    transaction.set(
+      releaseRef,
+      releaseDoc as unknown as Record<string, unknown>,
+    );
+    args.writeAdditional?.(transaction);
+  });
 }
 
 export interface RenderedGatewayConfig

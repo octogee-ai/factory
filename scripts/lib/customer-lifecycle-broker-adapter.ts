@@ -74,7 +74,10 @@ import {
   resolveCoachIdentity,
 } from "./openclaw-config-builders.js";
 import { scheduleBootGreetingCron as scheduleBootGreetingCronImpl } from "./boot-greeting-cron.js";
-import { syncModelCredentialsForCustomer } from "./model-credential-sync-runtime.js";
+import {
+  refreshModelCredentialRuntimeSessions,
+  syncModelCredentialsForCustomer,
+} from "./model-credential-sync-runtime.js";
 import { blobSyncForSlug } from "./blob-sync.js";
 import { createBrokeredBlobStore } from "./blob-sync-broker.js";
 import {
@@ -681,6 +684,7 @@ export function buildBrokeredLifecycleAdapter(
         {
           applyConfigPatch: (args, options) =>
             applyConfigPatch(args, { ...options, rpc: ctx.rpc }),
+          refreshCoachRuntimeSessions: refreshModelCredentialRuntimeSessions,
         },
       ),
     reassertConvergedContextFilesForCustomer: async (userData) => {

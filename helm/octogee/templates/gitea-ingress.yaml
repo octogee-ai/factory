@@ -19,7 +19,7 @@ spec:
   # Same fix as mattermost-ingress.yaml.
   iap:
     enabled: {{ .Values.gitea.webIngress.iap.enabled | default false }}
-    {{- if .Values.gitea.webIngress.iap.enabled }}
+    {{- if and .Values.gitea.webIngress.iap.enabled .Values.gitea.webIngress.iap.oauthClientCredentialsSecretName }}
     oauthclientCredentials:
       secretName: {{ .Values.gitea.webIngress.iap.oauthClientCredentialsSecretName }}
     {{- end }}

@@ -3,6 +3,7 @@ import * as os from "os";
 import * as fs from "fs";
 import { applyByotState, byosCoachConfigPatch, coachFullAgentList, deriveDesiredByotState, FREE_TIER_COACH_TOOLS, isPlatformProviderRef, platformCoachModelInputForUser, STANDARD_CODEX_APP_SERVER, } from "./byot-sync.js";
 import { createGatewayRpc, OpenclawWireError } from "./gateway-rpc.js";
+import { fingerprintCoachRuntimePolicy, reconcileCoachRuntimeSessionPolicy, } from "./coach-session-policy.js";
 import { internalFetch } from "./internal-fetch.js";
 import { claudeCliRuntimeConfig, codexRuntimeConfig, isModelCredentialOauthProvider, } from "./model-credential-materializer.js";
 import { codexAuthJsonPath, restoreByosubCredentials, } from "./byosub-restore.js";
@@ -384,6 +385,43 @@ export function agentIdsForSlug(slug, config) {
         return typeof agentId === "string" && agentIdBelongsToSlug(agentId, slug) ? [agentId] : [];
     })));
 }
+function coachSessionsForAgent(sessions, agentId) {
+    const prefix = `agent:${agentId}:`;
+    return sessions.filter((session) => session.agentId === agentId && session.key.startsWith(prefix));
+}
+export async function refreshCoachRuntimeSessions(slug, deps) {
+    const agentId = `octogee-${slug}-coach`;
+    const config = deps?.config ?? readOpenClawConfig();
+    const agentDir = deps?.agentDir ?? path.join(AGENTS_DIR, agentId, "agent");
+    const suppliedRpc = deps?.rpc;
+    const rpc = suppliedRpc ?? createGatewayRpc({
+        allowLegacyGatewayTokenFallback: true,
+        connectTimeoutMs: 10_000,
+        callTimeoutMs: 10_000,
+    });
+    try {
+        const fingerprint = fingerprintCoachRuntimePolicy(config, agentId);
+        return await reconcileCoachRuntimeSessionPolicy({
+            agentDir,
+            fingerprint,
+            resetSessions: async () => {
+                const response = await rpc.sessionsList({ agentId });
+                const sessions = coachSessionsForAgent(response.sessions, agentId);
+                if (sessions.some((session) => session.hasActiveRun === true)) {
+                    throw new Error(`coach runtime policy: ${agentId} has an active runtime session`);
+                }
+                for (const session of sessions) {
+                    await rpc.sessionsReset({ key: session.key, agentId, reason: "reset" });
+                }
+                return sessions.length;
+            },
+        });
+    }
+    finally {
+        if (!suppliedRpc)
+            await rpc.close();
+    }
+}
 function mountedAgentIdsForSlug(slug) {
     try {
         const mounted = agentIdsForSlug(slug, readOpenClawConfig());
@@ -445,6 +483,9 @@ function syncActions(deps) {
         materializeAnthropicBroker: deps?.materializeAnthropicBroker ?? materializeAnthropicBroker,
         applyAgentModelOverrides: deps?.applyAgentModelOverrides ??
             ((slug, agentModels, opts) => applyAgentModelOverrides(slug, agentModels, opts, patchDeps)),
+        ...(deps?.refreshCoachRuntimeSessions
+            ? { refreshCoachRuntimeSessions: deps.refreshCoachRuntimeSessions }
+            : {}),
         hasPendingPlatformCatalogRestart: deps?.hasPendingPlatformCatalogRestart ?? hasPendingPlatformCatalogRestart,
         markPlatformCatalogRestartPending: deps?.markPlatformCatalogRestartPending ?? markPlatformCatalogRestartPending,
         clearPlatformCatalogRestartPending: deps?.clearPlatformCatalogRestartPending ?? clearPlatformCatalogRestartPending,
@@ -589,6 +630,17 @@ export async function syncByotForCustomer(userData, deps) {
     await actions.applyAgentModelOverrides(slug, userData.systemConfig?.agentModels, {
         houseOnly: resolveBillingProfile(userData).modelAccess === "house_only",
     });
+    await refreshProvisionedCoachRuntimeSessions(slug, userData, actions, deps?.logFn ?? log);
+}
+async function refreshProvisionedCoachRuntimeSessions(slug, userData, actions, logFn) {
+    if (userData.provisioning?.openclaw?.status !== "complete")
+        return;
+    if (!actions.refreshCoachRuntimeSessions)
+        return;
+    const sessionRefresh = await actions.refreshCoachRuntimeSessions(slug);
+    if (sessionRefresh.refreshed) {
+        logFn(`[byot-sync] ${slug}: refreshed ${sessionRefresh.resetCount} coach runtime session(s) for current policy`);
+    }
 }
 // When a coach-model patch ships it converges tools inline; whenever no patch
 // will ship — config-default coach (catalog, no BYOK, no pick) OR a

@@ -102,6 +102,9 @@ describe("snapshotConfigFingerprint", () => {
       snapshotConfigFingerprint(snap({ subscription: { tier: "personal_pro", status: "active" } })),
     ).not.toBe(base);
     expect(
+      snapshotConfigFingerprint(snap({ builderSubscription: { tier: "pro", status: "active" } })),
+    ).not.toBe(base);
+    expect(
       snapshotConfigFingerprint(snap({ trialStartedAt: { _seconds: 1_783_500_000 } })),
     ).not.toBe(base);
     expect(

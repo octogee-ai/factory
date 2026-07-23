@@ -8,14 +8,14 @@ import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-li
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, GATEWAY_RELEASES_SUBCOLLECTION, commitPlacementAtomic, isReleasePayload, releasePayloadHash, isGatewayDesiredDoc, isGatewayRuntimeDoc, upgradeReleasePayloadSchema, } from "@octogee/shared/types/gateway-releases";
 import { parseAssignmentDoc, readAssignmentDocsForGateway } from "./assignment-doc.js";
-import { GATEWAY_CONFIG_SCHEMA_VERSION, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, } from "./gateway-live-release.js";
+import { GATEWAY_CONFIG_SCHEMA_VERSION, InitialGatewayReleaseConflictError, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, writeInitialGatewayRelease, } from "./gateway-live-release.js";
 import { projectReleaseHistory } from "./gateway-release-history.js";
 import { resolveContinuousBuilderPlacement, resolveEntitledOwnedGatewayId, } from "@octogee/shared/types/orchestrator-placement";
 import { SIZING_TIERS, isSizingTier, resolveSizingTier, } from "@octogee/shared/types/sizing";
 import { SPOT_PRICE_MULTIPLIER, estimateGatewayMonthlyCost, } from "@octogee/shared/types/cost-estimator";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
-import { findPendingActivationOperation, requestBuilderActivationLease, } from "./builder-activation-lease.js";
+import { findPendingMigrationToGateway, requestBuilderActivationLease, } from "./builder-activation-lease.js";
 import { GatewayRetirementConflictError, claimGatewayRetirementAtomic, } from "./gateway-retirement-claim.js";
 import { findActiveGatewayMigration, GatewayMigrationInFlightError, } from "./fleet-operation-lock.js";
 import { CUSTOMER_DELETION_JOBS_COLLECTION, buildCustomerDeletionSchedule, } from "@octogee/shared/types/account-lifecycle";
@@ -1948,39 +1948,6 @@ function sameArtifact(left, right) {
     return (left.imageRepository === right.imageRepository &&
         left.imageTag === right.imageTag);
 }
-function initialGatewayReleaseDocuments(args) {
-    const gatewayDoc = {
-        gatewayId: args.gatewayId,
-        createdAt: args.now,
-        createdBy: args.createdBy,
-        updatedAt: args.now,
-        updatedBy: args.createdBy,
-        latestRelease: 1,
-        desiredRelease: 1,
-        liveRelease: null,
-        desiredStatus: args.desiredStatus,
-        ...args.config,
-    };
-    const payload = asReleaseArtifactPayload(args.artifact);
-    const releaseDoc = {
-        gatewayId: args.gatewayId,
-        release: 1,
-        createdAt: args.now,
-        createdBy: args.createdBy,
-        sourceRelease: null,
-        note: null,
-        payloadHash: releasePayloadHash(payload),
-        payload,
-    };
-    return { gatewayDoc, releaseDoc };
-}
-class InitialGatewayReleaseConflictError extends Error {
-    gatewayId;
-    constructor(gatewayId) {
-        super(`gateway ${gatewayId} already exists`);
-        this.gatewayId = gatewayId;
-    }
-}
 class InitialGatewayReleaseRequestError extends Error {
     status;
     body;
@@ -1989,22 +1956,6 @@ class InitialGatewayReleaseRequestError extends Error {
         this.status = status;
         this.body = body;
     }
-}
-async function writeInitialGatewayRelease(db, args) {
-    const gwRef = db.collection(GATEWAYS_COLLECTION).doc(args.gatewayId);
-    const relRef = gwRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc("1");
-    const { gatewayDoc, releaseDoc } = initialGatewayReleaseDocuments(args);
-    await db.runTransaction(async (txn) => {
-        const existing = await txn.get(gwRef);
-        const relExisting = await txn.get(relRef);
-        await args.validateAdditional?.(txn);
-        if (existing.exists || relExisting.exists) {
-            throw new InitialGatewayReleaseConflictError(args.gatewayId);
-        }
-        txn.set(gwRef, gatewayDoc, { merge: true });
-        txn.set(relRef, releaseDoc);
-        args.writeAdditional?.(txn);
-    });
 }
 async function appendGatewayRelease(db, args) {
     const gwRef = db.collection(GATEWAYS_COLLECTION).doc(args.gateway.gatewayId);
@@ -3413,7 +3364,7 @@ export function addAdminFleetRoutes(router, deps) {
                 });
                 return;
             }
-            const existingActivation = findPendingActivationOperation(pendingOpsSnap.docs, uid, reservation.ok.gatewayId, "operator-gateway-reservation");
+            const existingActivation = findPendingMigrationToGateway(pendingOpsSnap.docs, uid, reservation.ok.gatewayId);
             if (existingActivation) {
                 res.status(409).json({
                     error: "operator gateway activation is already running",

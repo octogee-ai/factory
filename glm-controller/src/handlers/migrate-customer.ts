@@ -410,6 +410,13 @@ interface MigrateCustomerInput {
   uid?: unknown;
   fromGatewayId?: unknown;
   toGatewayId?: unknown;
+  source?: unknown;
+}
+
+function isControllerConvergenceSource(source: unknown): boolean {
+  return source === "builder-activation-lease" ||
+    source === "continuous-placement-policy" ||
+    source === "operator-gateway-reservation";
 }
 
 function reportedStatusToStepStatus(reported: ReportedStep["status"]): StepStatus {
@@ -592,6 +599,12 @@ async function prepareMigration(
     return { error: error instanceof Error ? error.message : String(error) };
   }
   if (!user) return { error: `user not found: ${request.uid}` };
+  if (
+    user.currentGatewayId === request.toGatewayId &&
+    isControllerConvergenceSource(migrationInput.source)
+  ) {
+    return { result: { steps: [], success: true, rolledBack: false } };
+  }
   const migrationId = deps.genMigrationId(op.id);
 
   try {

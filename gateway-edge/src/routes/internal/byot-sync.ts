@@ -1,6 +1,9 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { applyConfigPatch } from "@octogee/core/apply-config-patch";
-import { syncModelCredentialsForCustomer } from "@octogee/core/model-credential-sync-runtime";
+import {
+  refreshModelCredentialRuntimeSessions,
+  syncModelCredentialsForCustomer,
+} from "@octogee/core/model-credential-sync-runtime";
 import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
 import { requireByotSyncInternalAuth } from "../../middleware/byot-sync-auth.js";
 
@@ -66,6 +69,7 @@ router.post(
       }
       await syncModelCredentialsForCustomer(req.body, {
         applyConfigPatch: modelConfigWriter,
+        refreshCoachRuntimeSessions: refreshModelCredentialRuntimeSessions,
       });
       res.json({ ok: true });
     } catch (e) {

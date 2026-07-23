@@ -24,7 +24,7 @@ function resolveCustomerSlug(userData, workspaceSlugsForUser) {
         workspaceSlugsForUser(userData)[0] ??
         null);
 }
-export function findPendingActivationOperation(docs, uid, gatewayId, source) {
+export function findPendingMigrationToGateway(docs, uid, gatewayId) {
     for (const doc of docs) {
         const data = doc.data();
         const input = typeof data.input === "object" && data.input !== null
@@ -32,8 +32,7 @@ export function findPendingActivationOperation(docs, uid, gatewayId, source) {
             : {};
         if (data.kind === "migrate-customer" &&
             input.uid === uid &&
-            input.toGatewayId === gatewayId &&
-            input.source === source) {
+            input.toGatewayId === gatewayId) {
             return { id: doc.id, kind: data.kind };
         }
     }
@@ -208,7 +207,7 @@ export function resolveBuilderActivationPlan(opts) {
             return { ok: { action: "already-active", target } };
         return { ok: { action: "wake", target, status: targetStatus } };
     }
-    const existing = findPendingActivationOperation(opts.pendingOps, opts.uid, target.gatewayId, "builder-activation-lease");
+    const existing = findPendingMigrationToGateway(opts.pendingOps, opts.uid, target.gatewayId);
     if (existing) {
         return {
             error: {

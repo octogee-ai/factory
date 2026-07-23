@@ -17,6 +17,9 @@ export function renderDeploymentTargetHelmValues(
   const dataProject = settings.firebaseProjectId;
   const mattermostInternalUrl = `http://mattermost.${settings.namespace}.svc.cluster.local:8065`;
   const opsAgentLoggingResourceName = `projects/${settings.clusterProjectId}/locations/global/buckets/ops-agent-${settings.secretNameSuffix}/views/ops-agent`;
+  const iapOAuthClientCredentialsSecretName = settings.region === "us-west1"
+    ? ""
+    : "iap-oauth-credentials";
   return `global:
   deploymentTargetId: ${quoted(settings.targetId)}
   deploymentProjectId: ${quoted(dataProject)}
@@ -32,9 +35,13 @@ gateway-edge:
 mattermost:
   ingress:
     staticIpName: ${quoted(settings.mattermostStaticIpName)}
+    iap:
+      oauthClientCredentialsSecretName: ${quoted(iapOAuthClientCredentialsSecretName)}
 gitea:
   webIngress:
     staticIpName: ${quoted(settings.giteaStaticIpName)}
+    iap:
+      oauthClientCredentialsSecretName: ${quoted(iapOAuthClientCredentialsSecretName)}
 gatewayFleet:
   previewIngress:
     staticIpName: ${quoted(settings.previewStaticIpName)}

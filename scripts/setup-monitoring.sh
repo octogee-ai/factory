@@ -10,7 +10,7 @@ set -euo pipefail
 #   • System metrics (cAdvisor/kubelet) — collected by GMP managed collection.
 #   • kube-state-metrics — standalone KSM scraped via ClusterPodMonitoring.
 #   • App metrics (octogee_*) — ClusterPodMonitoring per target.
-#   • Alerting — ClusterRules → managed rule-evaluator → managed Alertmanager.
+#   • Alerting — ClusterRules → ALERTS metric → Cloud Monitoring email/SMS.
 #   • Grafana reads it all through the gmp-frontend ("Managed Prometheus" ds).
 #
 # Helm values + manifests live in helm/monitoring/. Shared across prod + test.
@@ -102,7 +102,7 @@ info "Ensuring monitoring namespace..."
 kubectl get namespace monitoring >/dev/null 2>&1 || kubectl create namespace monitoring
 ok "Namespace: monitoring"
 
-# ── Env (Grafana password + Discord webhook) ──────────────────────────────
+# ── Env (Grafana password) ─────────────────────────────────────────────────
 set +u
 if [[ -f "$ENV_FILE" ]]; then
   source <(grep -v '^#' "$ENV_FILE" | grep '=' | grep -v '^$')
@@ -128,34 +128,23 @@ info "Applying app ClusterPodMonitorings..."
 kubectl apply -f "$REPO_DIR/helm/monitoring/gmp-podmonitorings.yaml" >/dev/null
 info "Applying alert ClusterRules..."
 kubectl apply -f "$REPO_DIR/helm/monitoring/gmp-rules.yaml" >/dev/null
+info "Waiting for the managed rule evaluator..."
+kubectl wait \
+  -n gke-gmp-system \
+  --for=jsonpath='{.status.availableReplicas}' \
+  deployment/rule-evaluator \
+  --timeout=5m >/dev/null
 ok "GMP collection + rules applied"
 
 # ── GMP ingestion cost filter ───────────────────────────────────────────────
 # gmp-public/config is a GKE-managed singleton (mode=EnsureExists — created
 # once, not continuously reconciled like the ClusterNodeMonitoring CRs, so a
-# merge patch here is stable). A merge patch (not `apply`) so this only ever
-# touches spec.collection.filter, leaving managedAlertmanager.configSecret
-# (set separately, below) untouched.
+# merge patch here is stable). A merge patch (not `apply`) limits this mutation
+# to spec.collection.filter.
 info "Applying GMP collection filter (cost)..."
 kubectl patch operatorconfig config -n gmp-public --type=merge \
   --patch-file="$REPO_DIR/helm/monitoring/gmp-collection-filter.yaml" >/dev/null
 ok "GMP collection filter applied"
-
-# ── Managed Alertmanager (Discord) ─────────────────────────────────────────
-# The gmp-public OperatorConfig points managedAlertmanager.configSecret at
-# name=alertmanager,key=alertmanager.yaml. Substitute the Discord webhook and
-# create that secret; the managed rule-evaluator routes firing alerts there.
-# Delivery no-ops on the placeholder until a real DISCORD_OPS_WEBHOOK_URL lands.
-info "Configuring managed Alertmanager (Discord)..."
-set +u; AM_DISCORD_URL="${DISCORD_OPS_WEBHOOK_URL:-}"; set -u
-[[ "$AM_DISCORD_URL" == https://discord*/api/webhooks/* ]] || AM_DISCORD_URL="https://discord.invalid/not-configured"
-am_tmp="$(mktemp)"
-sed "s#__DISCORD_OPS_WEBHOOK_URL__#${AM_DISCORD_URL}#" \
-  "$REPO_DIR/helm/monitoring/gmp-alertmanager.yaml" > "$am_tmp"
-kubectl create secret generic alertmanager -n gmp-public \
-  --from-file=alertmanager.yaml="$am_tmp" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-rm -f "$am_tmp"
-ok "Managed Alertmanager configured"
 
 # ── Grafana ───────────────────────────────────────────────────────────────
 info "Deploying Grafana..."

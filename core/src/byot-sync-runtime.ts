@@ -12,7 +12,11 @@ import {
   STANDARD_CODEX_APP_SERVER,
   type CoachModelInput,
 } from "./byot-sync.js";
-import { createGatewayRpc, OpenclawWireError } from "./gateway-rpc.js";
+import { createGatewayRpc, OpenclawWireError, type GatewayRpcClient } from "./gateway-rpc.js";
+import {
+  fingerprintCoachRuntimePolicy,
+  reconcileCoachRuntimeSessionPolicy,
+} from "./coach-session-policy.js";
 import { internalFetch } from "./internal-fetch.js";
 import {
   claudeCliRuntimeConfig,
@@ -541,6 +545,7 @@ export interface SyncByotForCustomerDeps {
   triggerSecretsReload?: typeof triggerSecretsReload;
   materializeAnthropicBroker?: (slug: string) => boolean;
   applyAgentModelOverrides?: typeof applyAgentModelOverrides;
+  refreshCoachRuntimeSessions?: typeof refreshCoachRuntimeSessions;
   hasPendingPlatformCatalogRestart?: () => boolean;
   markPlatformCatalogRestartPending?: () => void;
   clearPlatformCatalogRestartPending?: () => void;
@@ -559,6 +564,7 @@ interface SyncByotActions {
   triggerSecretsReload: typeof triggerSecretsReload;
   materializeAnthropicBroker: (slug: string) => boolean;
   applyAgentModelOverrides: typeof applyAgentModelOverrides;
+  refreshCoachRuntimeSessions?: typeof refreshCoachRuntimeSessions;
   hasPendingPlatformCatalogRestart: () => boolean;
   markPlatformCatalogRestartPending: () => void;
   clearPlatformCatalogRestartPending: () => void;
@@ -575,6 +581,55 @@ export function agentIdsForSlug(slug: string, config: unknown): string[] {
     const agentId = (entry as { id?: unknown } | null)?.id;
     return typeof agentId === "string" && agentIdBelongsToSlug(agentId, slug) ? [agentId] : [];
   })));
+}
+
+type SessionPolicyRpc = Pick<GatewayRpcClient, "sessionsList" | "sessionsReset" | "close">;
+
+function coachSessionsForAgent(
+  sessions: Awaited<ReturnType<GatewayRpcClient["sessionsList"]>>["sessions"],
+  agentId: string,
+) {
+  const prefix = `agent:${agentId}:`;
+  return sessions.filter((session) => session.agentId === agentId && session.key.startsWith(prefix));
+}
+
+export async function refreshCoachRuntimeSessions(
+  slug: string,
+  deps?: {
+    agentDir?: string;
+    config?: unknown;
+    rpc?: SessionPolicyRpc;
+  },
+): Promise<{ refreshed: boolean; resetCount: number }> {
+  const agentId = `octogee-${slug}-coach`;
+  const config = deps?.config ?? readOpenClawConfig();
+  const agentDir = deps?.agentDir ?? path.join(AGENTS_DIR, agentId, "agent");
+  const suppliedRpc = deps?.rpc;
+  const rpc = suppliedRpc ?? createGatewayRpc({
+    allowLegacyGatewayTokenFallback: true,
+    connectTimeoutMs: 10_000,
+    callTimeoutMs: 10_000,
+  });
+  try {
+    const fingerprint = fingerprintCoachRuntimePolicy(config, agentId);
+    return await reconcileCoachRuntimeSessionPolicy({
+      agentDir,
+      fingerprint,
+      resetSessions: async () => {
+        const response = await rpc.sessionsList({ agentId });
+        const sessions = coachSessionsForAgent(response.sessions, agentId);
+        if (sessions.some((session) => session.hasActiveRun === true)) {
+          throw new Error(`coach runtime policy: ${agentId} has an active runtime session`);
+        }
+        for (const session of sessions) {
+          await rpc.sessionsReset({ key: session.key, agentId, reason: "reset" });
+        }
+        return sessions.length;
+      },
+    });
+  } finally {
+    if (!suppliedRpc) await rpc.close();
+  }
 }
 
 function mountedAgentIdsForSlug(slug: string): string[] {
@@ -644,6 +699,9 @@ function syncActions(deps?: SyncByotForCustomerDeps): SyncByotActions {
     applyAgentModelOverrides:
       deps?.applyAgentModelOverrides ??
       ((slug, agentModels, opts) => applyAgentModelOverrides(slug, agentModels, opts, patchDeps)),
+    ...(deps?.refreshCoachRuntimeSessions
+      ? { refreshCoachRuntimeSessions: deps.refreshCoachRuntimeSessions }
+      : {}),
     hasPendingPlatformCatalogRestart:
       deps?.hasPendingPlatformCatalogRestart ?? hasPendingPlatformCatalogRestart,
     markPlatformCatalogRestartPending:
@@ -885,6 +943,24 @@ export async function syncByotForCustomer(
   await actions.applyAgentModelOverrides(slug, userData.systemConfig?.agentModels, {
     houseOnly: resolveBillingProfile(userData).modelAccess === "house_only",
   });
+
+  await refreshProvisionedCoachRuntimeSessions(slug, userData, actions, deps?.logFn ?? log);
+}
+
+async function refreshProvisionedCoachRuntimeSessions(
+  slug: string,
+  userData: SyncByotUserData,
+  actions: SyncByotActions,
+  logFn: (message: string) => void,
+): Promise<void> {
+  if (userData.provisioning?.openclaw?.status !== "complete") return;
+  if (!actions.refreshCoachRuntimeSessions) return;
+  const sessionRefresh = await actions.refreshCoachRuntimeSessions(slug);
+  if (sessionRefresh.refreshed) {
+    logFn(
+      `[byot-sync] ${slug}: refreshed ${sessionRefresh.resetCount} coach runtime session(s) for current policy`,
+    );
+  }
 }
 
 // When a coach-model patch ships it converges tools inline; whenever no patch

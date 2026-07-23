@@ -22,7 +22,7 @@ spec:
   # stopped declaring an iap block — Apr 30 2026.)
   iap:
     enabled: {{ .Values.mattermost.ingress.iap.enabled | default false }}
-    {{- if .Values.mattermost.ingress.iap.enabled }}
+    {{- if and .Values.mattermost.ingress.iap.enabled .Values.mattermost.ingress.iap.oauthClientCredentialsSecretName }}
     oauthclientCredentials:
       secretName: {{ .Values.mattermost.ingress.iap.oauthClientCredentialsSecretName }}
     {{- end }}

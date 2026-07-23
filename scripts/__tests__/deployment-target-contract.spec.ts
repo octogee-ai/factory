@@ -450,6 +450,29 @@ describe("deployment target consumers", () => {
     expect(controller).not.toContain('process.env.K8S_NAMESPACE ?? "octogee"');
   });
 
+  it("seeds a fresh default gateway from the immutable platform release tag", () => {
+    const workflow = source(".github/workflows/build-and-deploy.yml");
+
+    expect(workflow).toContain(
+      "--set glm-controller.bootstrapDefaultGateway.imageTag=${GLM_TAG}",
+    );
+    expect(workflow).toContain(
+      "--set glm-controller.bootstrapDefaultGateway.imageRepository=${{ steps.target.outputs.artifact_registry_repository }}/octogee-gateway",
+    );
+  });
+
+  it("prints a full-rebuild recipe that requires an immutable default-gateway tag", () => {
+    const teardown = source("scripts/teardown-env.sh");
+
+    expect(teardown).toContain("BOOTSTRAP_GATEWAY_TAG=<immutable release SHA>");
+    expect(teardown).toContain(
+      "glm-controller.bootstrapDefaultGateway.imageTag=\\$BOOTSTRAP_GATEWAY_TAG",
+    );
+    expect(teardown).not.toContain(
+      "Cowboy auto-installs octogee-gw-default after step 2",
+    );
+  });
+
   it("keeps generated custom values and dependency inventory target-driven", () => {
     const customValues = source("helm/octogee/values.custom.yaml.tpl");
     const inventory = source("scripts/lib/dependency-inventory.ts");

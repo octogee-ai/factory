@@ -35,11 +35,11 @@ set -euo pipefail
 #     1. Terraform apply (per-namespace state prefix) → fresh Cloud SQL DBs
 #     2. kubectl create namespace
 #     3. Render helm values from template
-#     4. setup-secrets.sh        → fresh K8s secrets
+#     4. setup-secrets.sh --phase=bootstrap → boot prerequisite secrets
 #     5. helm upgrade --install  → fresh deployments
 #     6. setup-mattermost.sh     → fresh admin/team/bot
-#     7. setup-secrets.sh again  → pick up fresh MM tokens
-#     8. setup-gitea.sh          → fresh org + API token
+#     7. setup-gitea.sh          → fresh org + API token
+#     8. setup-secrets.sh --phase=launch → materialize generated tokens
 #     9. rollout restart + verify pods running
 #
 # Access is INTERNAL ONLY. Use port-forward:
@@ -410,7 +410,7 @@ fi
 
 # ── 2e. Materialize K8s secrets ────────────────────────────────────────────
 step "Phase 2d: Materializing K8s secrets"
-"$SCRIPT_DIR/setup-secrets.sh" --env=custom --namespace="$NAMESPACE" --yes --deployment-target="$TARGET_ID"
+"$SCRIPT_DIR/setup-secrets.sh" --env=custom --namespace="$NAMESPACE" --yes --deployment-target="$TARGET_ID" --phase=bootstrap
 
 # ── 2f. Helm install ───────────────────────────────────────────────────────
 step "Phase 2e: Helm install"
@@ -430,13 +430,12 @@ ok "Helm install complete"
 step "Phase 2f: Bootstrapping Mattermost (admin, team, bot, PAT)"
 "$SCRIPT_DIR/setup-mattermost.sh" --env=custom --namespace="$NAMESPACE" --yes --deployment-target="$TARGET_ID"
 
-# setup-secrets again to pick up MM_* tokens that setup-mattermost wrote to .env
-info "Re-materializing K8s secrets with fresh MM tokens..."
-"$SCRIPT_DIR/setup-secrets.sh" --env=custom --namespace="$NAMESPACE" --yes --deployment-target="$TARGET_ID"
-
 # ── 2h. Bootstrap Gitea ────────────────────────────────────────────────────
 step "Phase 2g: Bootstrapping Gitea (org + API token)"
 "$SCRIPT_DIR/setup-gitea.sh" --env=custom --namespace="$NAMESPACE" --yes --deployment-target="$TARGET_ID"
+
+info "Re-materializing K8s secrets with fresh Mattermost and Gitea tokens..."
+"$SCRIPT_DIR/setup-secrets.sh" --env=custom --namespace="$NAMESPACE" --yes --deployment-target="$TARGET_ID" --phase=launch
 
 # ── 2i. Restart everything to pick up final secrets ────────────────────────
 step "Phase 2h: Rolling restart"

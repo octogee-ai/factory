@@ -36,7 +36,7 @@ export type BuilderActivationLeaseResult = {
 type WorkspaceSlugsForUser = (data: {
     username?: string | null;
 }) => string[];
-export declare function findPendingActivationOperation(docs: ReadonlyArray<FirestoreDocLike>, uid: string, gatewayId: string, source: string): {
+export declare function findPendingMigrationToGateway(docs: ReadonlyArray<FirestoreDocLike>, uid: string, gatewayId: string): {
     id: string;
     kind: unknown;
 } | null;

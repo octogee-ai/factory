@@ -448,7 +448,6 @@ function buildProvisioningSnapshot(
 
 async function writeSystemConfig(ctx: ProvisioningContext): Promise<void> {
   const systemConfigData: Record<string, unknown> = {
-    role: "user",
     updatedAt: FieldValue.serverTimestamp(),
   };
 
@@ -461,7 +460,14 @@ async function writeSystemConfig(ctx: ProvisioningContext): Promise<void> {
     );
   }
 
-  await db.doc(`users/${ctx.uid}/system/config`).set(systemConfigData, { merge: true });
+  const configRef = db.doc(`users/${ctx.uid}/system/config`);
+  await db.runTransaction(async (transaction) => {
+    const current = await transaction.get(configRef);
+    if (current.data()?.role === undefined) {
+      systemConfigData.role = "user";
+    }
+    transaction.set(configRef, systemConfigData, { merge: true });
+  });
 }
 
 export function buildUserOperationalFields(

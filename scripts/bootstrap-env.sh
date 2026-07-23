@@ -28,12 +28,12 @@ This wrapper omitted setup-gitea.sh and the post-bootstrap setup-secrets
 re-run, so it produced under-provisioned environments. Use the canonical
 sequence instead:
 
-  1. ./scripts/setup-secrets.sh   --env=ENV
+  1. ./scripts/setup-secrets.sh   --env=ENV --phase=bootstrap
   2. UMBRELLA_CHART=$(./scripts/package-umbrella-chart.sh --output-dir "$(mktemp -d)")
      helm upgrade --install octogee "$UMBRELLA_CHART" -f helm/octogee/values.ENV.yaml ...
   3. ./scripts/setup-mattermost.sh --env=ENV
   4. ./scripts/setup-gitea.sh      --env=ENV
-  5. ./scripts/setup-secrets.sh    --env=ENV
+  5. ./scripts/setup-secrets.sh    --env=ENV --phase=launch
   6. kubectl rollout restart deploy -n NAMESPACE
   7. firebase deploy --project FIREBASE_PROJECT
   8. (cd scripts && npx tsx ops/seed-orchestrator-config.ts --env=ENV)

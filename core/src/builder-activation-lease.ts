@@ -96,11 +96,10 @@ function resolveCustomerSlug(
   );
 }
 
-export function findPendingActivationOperation(
+export function findPendingMigrationToGateway(
   docs: ReadonlyArray<FirestoreDocLike>,
   uid: string,
   gatewayId: string,
-  source: string,
 ): { id: string; kind: unknown } | null {
   for (const doc of docs) {
     const data = doc.data();
@@ -111,8 +110,7 @@ export function findPendingActivationOperation(
     if (
       data.kind === "migrate-customer" &&
       input.uid === uid &&
-      input.toGatewayId === gatewayId &&
-      input.source === source
+      input.toGatewayId === gatewayId
     ) {
       return { id: doc.id, kind: data.kind };
     }
@@ -339,11 +337,10 @@ export function resolveBuilderActivationPlan(opts: {
     return { ok: { action: "wake", target, status: targetStatus } };
   }
 
-  const existing = findPendingActivationOperation(
+  const existing = findPendingMigrationToGateway(
     opts.pendingOps,
     opts.uid,
     target.gatewayId,
-    "builder-activation-lease",
   );
   if (existing) {
     return {

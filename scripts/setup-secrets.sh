@@ -25,8 +25,9 @@ set -euo pipefail
 # Canonical sequence printed by ./scripts/teardown-env.sh.
 #
 # Usage:
-#   ./scripts/setup-secrets.sh --env=test [--deployment-target=test-west] [--yes]
-#   ./scripts/setup-secrets.sh --env=prod
+#   ./scripts/setup-secrets.sh --env=test [--deployment-target=test-west] --phase=bootstrap [--yes]
+#   ./scripts/setup-secrets.sh --env=test [--deployment-target=test-west] --phase=launch [--yes]
+#   ./scripts/setup-secrets.sh --env=prod --phase=launch
 # ═══════════════════════════════════════════════════════════════════════════
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -36,23 +37,33 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 source "$SCRIPT_DIR/lib/shell-env.sh"
 # shellcheck source=scripts/lib/deployment-target.sh
 source "$SCRIPT_DIR/lib/deployment-target.sh"
+# shellcheck source=scripts/lib/github-oauth-redirect.sh
+source "$SCRIPT_DIR/lib/github-oauth-redirect.sh"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
-ENV=""; YES=false; CUSTOM_NS=""; DEPLOYMENT_TARGET=""
+# shellcheck source=scripts/lib/secret-completeness.sh
+source "$SCRIPT_DIR/lib/secret-completeness.sh"
+
+ENV=""; YES=false; CUSTOM_NS=""; DEPLOYMENT_TARGET=""; SECRET_SETUP_PHASE="launch"
 
 for arg in "$@"; do
   case $arg in
     --env=*)       ENV="${arg#*=}" ;;
     --deployment-target=*) DEPLOYMENT_TARGET="${arg#*=}" ;;
     --namespace=*) CUSTOM_NS="${arg#*=}" ;;
+    --phase=*)     SECRET_SETUP_PHASE="${arg#*=}" ;;
     --yes|-y)      YES=true ;;
-    --help|-h) echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--yes]"; exit 0 ;;
+    --help|-h) echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--phase=bootstrap|launch] [--yes]"; exit 0 ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
-[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--yes]"; exit 1; }
+[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--phase=bootstrap|launch] [--yes]"; exit 1; }
+case "$SECRET_SETUP_PHASE" in
+  bootstrap|launch) ;;
+  *) echo "--phase must be bootstrap or launch"; exit 1 ;;
+esac
 
 TARGET_ENV="$ENV"
 [[ "$TARGET_ENV" == "custom" ]] && TARGET_ENV="test"
@@ -111,18 +122,16 @@ if [[ "$ENV" != "custom" ]]; then
   esac
 fi
 
+GITHUB_OAUTH_PEER_ENV_FILE=""
+case "$TARGET_ID" in
+  test-west) GITHUB_OAUTH_PEER_ENV_FILE="$REPO_DIR/.env.prod-west" ;;
+  prod-west) GITHUB_OAUTH_PEER_ENV_FILE="$REPO_DIR/.env.test-west" ;;
+esac
+
 ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
 warn() { echo -e "  ${YELLOW}⚠️  $1${NC}"; }
 fail() { echo -e "  ${RED}❌ $1${NC}"; exit 1; }
 info() { echo -e "  ${BLUE}ℹ️  $1${NC}"; }
-status() {
-  local label="$1" value="$2"
-  if [[ -n "$value" ]]; then
-    echo -e "  ${GREEN}✓${NC} $label"
-  else
-    echo -e "  ${RED}✗${NC} $label"
-  fi
-}
 
 ksecret() {
   # Atomic idempotent apply — no delete + create window, no pod-mount failure
@@ -226,6 +235,16 @@ resolve_environment_secret_value() {
 set +u
 load_env_file "$ENV_FILE"
 set -u
+
+if [[ -n "$GITHUB_OAUTH_PEER_ENV_FILE" && -f "$GITHUB_OAUTH_PEER_ENV_FILE" ]]; then
+  CURRENT_GITHUB_CLIENT_ID="$(github_oauth_configured_client_id "$ENV_FILE")"
+  PEER_GITHUB_CLIENT_ID="$(github_oauth_configured_client_id "$GITHUB_OAUTH_PEER_ENV_FILE")"
+  github_oauth_require_distinct_client_ids \
+    "$CURRENT_GITHUB_CLIENT_ID" \
+    "$PEER_GITHUB_CLIENT_ID" \
+    "$TARGET_ID" \
+    "$(basename "$GITHUB_OAUTH_PEER_ENV_FILE" | sed 's/^\.env\.//')"
+fi
 
 [[ "$ENV" == "prod" && "$YES" == "true" ]] && fail "--yes cannot be used with prod."
 
@@ -512,8 +531,12 @@ fi
 # Connections connector, so the per-provider OAuth client secrets are
 # established here — a regression caused "GitHub connection is not configured".
 oauth_secret() {
-  local secret="$1" id_var="$2" sec_var="$3"
+  local provider="$1" secret="$2" id_var="$3" sec_var="$4"
   info "$secret"
+  if [[ "$(octogee_oauth_provider_requirement "$provider")" == "disabled" ]]; then
+    info "  skipped — provider disabled"
+    return 0
+  fi
   set +u; local id="${!id_var:-}" sec="${!sec_var:-}"; set -u
   [[ -z "$id" ]]  && id=$(sm_get "$id_var" 2>/dev/null || echo "")
   [[ -z "$sec" ]] && sec=$(sm_get "$sec_var" 2>/dev/null || echo "")
@@ -524,8 +547,8 @@ oauth_secret() {
     ksecret "$secret" --from-literal=client_id="" --from-literal=client_secret=""
   fi
 }
-oauth_secret github-oauth    GITHUB_CLIENT_ID    GITHUB_CLIENT_SECRET
-oauth_secret microsoft-oauth MICROSOFT_CLIENT_ID MICROSOFT_CLIENT_SECRET
+oauth_secret github    github-oauth    GITHUB_CLIENT_ID    GITHUB_CLIENT_SECRET
+oauth_secret microsoft microsoft-oauth MICROSOFT_CLIENT_ID MICROSOFT_CLIENT_SECRET
 
 info "google-oauth"
 persist_google_env() {
@@ -561,6 +584,25 @@ ksecret google-oauth \
   --from-literal=client_secret="$G_SEC" \
   --from-literal=picker_api_key="$G_PICKER_KEY" \
   --from-literal=picker_app_id="$G_PICKER_APP"
+
+# ── 8a. Firebase Auth login providers (WEST data projects only) ──────────
+case "$TARGET_ID" in
+  test-west|prod-west)
+    info "identity-platform-login"
+    FIREBASE_AUTH_GOOGLE_CLIENT_ID="$(resolve_environment_secret_value "${FIREBASE_AUTH_GOOGLE_CLIENT_ID:-}" FIREBASE_AUTH_GOOGLE_CLIENT_ID identity-platform-login FIREBASE_AUTH_GOOGLE_CLIENT_ID configured_secret_value)"
+    FIREBASE_AUTH_GOOGLE_CLIENT_SECRET="$(resolve_environment_secret_value "${FIREBASE_AUTH_GOOGLE_CLIENT_SECRET:-}" FIREBASE_AUTH_GOOGLE_CLIENT_SECRET identity-platform-login FIREBASE_AUTH_GOOGLE_CLIENT_SECRET configured_secret_value)"
+    FIREBASE_AUTH_GITHUB_CLIENT_ID="$(resolve_environment_secret_value "${FIREBASE_AUTH_GITHUB_CLIENT_ID:-}" FIREBASE_AUTH_GITHUB_CLIENT_ID identity-platform-login FIREBASE_AUTH_GITHUB_CLIENT_ID configured_secret_value)"
+    FIREBASE_AUTH_GITHUB_CLIENT_SECRET="$(resolve_environment_secret_value "${FIREBASE_AUTH_GITHUB_CLIENT_SECRET:-}" FIREBASE_AUTH_GITHUB_CLIENT_SECRET identity-platform-login FIREBASE_AUTH_GITHUB_CLIENT_SECRET configured_secret_value)"
+    [[ -n "$FIREBASE_AUTH_GOOGLE_CLIENT_ID" ]] || fail "FIREBASE_AUTH_GOOGLE_CLIENT_ID is required for $TARGET_ID"
+    [[ -n "$FIREBASE_AUTH_GOOGLE_CLIENT_SECRET" ]] || fail "FIREBASE_AUTH_GOOGLE_CLIENT_SECRET is required for $TARGET_ID"
+    [[ -n "$FIREBASE_AUTH_GITHUB_CLIENT_ID" ]] || fail "FIREBASE_AUTH_GITHUB_CLIENT_ID is required for $TARGET_ID"
+    [[ -n "$FIREBASE_AUTH_GITHUB_CLIENT_SECRET" ]] || fail "FIREBASE_AUTH_GITHUB_CLIENT_SECRET is required for $TARGET_ID"
+    sync_secret_manager_value FIREBASE_AUTH_GOOGLE_CLIENT_ID "$FIREBASE_AUTH_GOOGLE_CLIENT_ID" "$FIREBASE_PROJECT"
+    sync_secret_manager_value FIREBASE_AUTH_GOOGLE_CLIENT_SECRET "$FIREBASE_AUTH_GOOGLE_CLIENT_SECRET" "$FIREBASE_PROJECT"
+    sync_secret_manager_value FIREBASE_AUTH_GITHUB_CLIENT_ID "$FIREBASE_AUTH_GITHUB_CLIENT_ID" "$FIREBASE_PROJECT"
+    sync_secret_manager_value FIREBASE_AUTH_GITHUB_CLIENT_SECRET "$FIREBASE_AUTH_GITHUB_CLIENT_SECRET" "$FIREBASE_PROJECT"
+    ;;
+esac
 
 # ── 8b. Connect-state signing secret (octogee-api OAuth state HMAC) ────────
 # HMAC secret that signs the OAuth `state` round-tripped through the provider
@@ -884,38 +926,6 @@ set -u
 [[ -z "$INVITE_SECRET" ]] && warn "INVITE_SECRET not found — invite links will fail until configured"
 ksecret invite-secret --from-literal=secret="${INVITE_SECRET:-placeholder}"
 
-# ── 11b. Discord ops webhook (optional) ──────────────────────────────────
-# Used by gateway to post operational events (agent provisioning, errors,
-# deploy notifications) to a single Discord channel. Optional: if unset,
-# the helm chart mounts the K8s Secret as optional=true and the gateway
-# silently no-ops Discord posts.
-#
-# K8s Secret: discord-ops-webhook
-#   url → DISCORD_OPS_WEBHOOK_URL (full https://discord.com/api/webhooks/... URL)
-#
-# Rotate: delete + recreate the webhook in Discord server settings, then
-# `rotate-secret.sh --env=ENV discord-ops-webhook`. See docs/RUNBOOK.md.
-info "discord-ops-webhook"
-set +u
-DISCORD_OPS_WEBHOOK_URL="${DISCORD_OPS_WEBHOOK_URL:-}"
-set -u
-[[ -z "$DISCORD_OPS_WEBHOOK_URL" ]] && DISCORD_OPS_WEBHOOK_URL=$(sm_get DISCORD_OPS_WEBHOOK_URL "$FIREBASE_PROJECT" 2>/dev/null || echo "")
-# The SM secret is pre-created with the literal "placeholder" (so firebase
-# deploy doesn't prompt). Only materialize the K8s secrets when it's a REAL
-# Discord webhook — otherwise onSignup + Alertmanager would consume junk.
-if [[ "$DISCORD_OPS_WEBHOOK_URL" == https://discord*/api/webhooks/* ]]; then
-  ksecret discord-ops-webhook --from-literal=url="$DISCORD_OPS_WEBHOOK_URL"
-  # Alertmanager runs in the shared `monitoring` namespace and reads the same
-  # webhook (mounted via alertmanagerSpec.secrets). Mirror it there. Idempotent.
-  kubectl create secret generic discord-ops-webhook -n monitoring \
-    --from-literal=url="$DISCORD_OPS_WEBHOOK_URL" \
-    --dry-run=client -o yaml | kubectl apply -f - >/dev/null \
-    && info "  mirrored discord-ops-webhook → monitoring ns (Alertmanager)" \
-    || info "  WARN: failed to mirror discord-ops-webhook to monitoring ns"
-else
-  info "  DISCORD_OPS_WEBHOOK_URL unset/placeholder — skipping (signup + Alertmanager no-op until a real webhook is set)"
-fi
-
 # ── 12. GCP Service Account key ───────────────────────────────────────────
 # Used by gateway-edge and gateway for GCP API access (Workload Identity
 # preferred on prod; SA key is a fallback for services that need it directly).
@@ -937,7 +947,6 @@ SM_PROJECT_CF="$FIREBASE_PROJECT"  # Functions run in the Firebase project (octo
 function_secret_value() {
   case "$1" in
     SOCIAL_NOTIFICATION_BEARER_TOKEN) configured_secret_value "${SOCIAL_NOTIFICATION_BEARER:-}" ;;
-    GITEA_TOKEN) configured_secret_value "${GIT_API_TOKEN:-}" ;;
     *)
       set +u
       local value="${!1:-}"
@@ -977,22 +986,7 @@ sync_function_secret() {
 # Full list of all defineSecret() references in Cloud Functions — must exist before firebase deploy
 for sm_secret in \
   SOCIAL_NOTIFICATION_BEARER_TOKEN \
-  GITEA_TOKEN \
-  STRIPE_SECRET_KEY \
-  STRIPE_WEBHOOK_SECRET \
-  DISCORD_OPS_WEBHOOK_URL \
-  GOOGLE_CLIENT_ID \
-  GOOGLE_CLIENT_SECRET \
-  MICROSOFT_CLIENT_ID \
-  MICROSOFT_CLIENT_SECRET \
-  DISCORD_MAC_TOKEN \
-  DISCORD_COACH_TOKEN \
-  DISCORD_BOT_APP_ID \
-  DISCORD_CLIENT_SECRET \
-  ANTHROPIC_API_KEY \
-  OCTOGEE_GUILD_ID \
-  RESEND_API_KEY \
-  RESEND_FROM_EMAIL; do
+  DISCORD_OPS_WEBHOOK_URL; do
   function_value="$(function_secret_value "$sm_secret")"
   sync_function_secret "$sm_secret" "$function_value" || warn "  Could not sync $sm_secret"
 done
@@ -1000,48 +994,102 @@ done
 # ── Done ──────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${CYAN}Secret completeness summary${NC}"
-status "mattermost-gateway / admin_user" "${MM_ADMIN_USER:-}"
-status "mattermost-gateway / admin_pass" "${MM_ADMIN_PASS:-}"
-status "mattermost-gateway / admin_pat" "${MM_ADMIN_PAT:-}"
-status "mattermost-gateway / admin_user_id" "${MM_ADMIN_USER_ID:-}"
-status "mattermost-gateway / team_id" "${MM_TEAM_ID:-}"
-status "gateway-model-key-issuer" "${GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN:-}"
-status "ops-agent-bearer" "${OPS_AGENT_BEARER_TOKEN:-}"
-status "social-notification-bearer" "${SOCIAL_NOTIFICATION_BEARER:-}"
-status "octogee-anthropic" "${ANTHROPIC_API_KEY:-}"
-status "octogee-openrouter" "${OPENROUTER_API_KEY:-}"
-status "openai-embeddings" "${OPENAI_API_KEY:-}"
-status "resend-secrets / api_key" "${RESEND_API_KEY:-}"
-status "resend-secrets / from_email" "${RESEND_FROM_EMAIL:-}"
-status "github-oauth / client_id" "${GITHUB_CLIENT_ID:-}"
-status "google-oauth / client_id" "${GOOGLE_CLIENT_ID:-}"
-status "microsoft-oauth / client_id" "${MICROSOFT_CLIENT_ID:-}"
-status "connect-state-secret" "${CONNECT_STATE_SECRET:-}"
-status "stripe-secrets / secret_key" "${STRIPE_SECRET_KEY:-}"
-status "stripe-secrets / webhook_secret" "${STRIPE_WEBHOOK_SECRET:-}"
-status "stripe-secrets / price_ids" "${STRIPE_PRICE_IDS:-}"
+OCTOGEE_SECRET_COMPLETENESS_FAILURES=0
+COMPLETENESS_LABELS=(
+  "mattermost-gateway / admin_user"
+  "mattermost-gateway / admin_pass"
+  "mattermost-gateway / admin_pat"
+  "mattermost-gateway / admin_user_id"
+  "mattermost-gateway / team_id"
+  "gitea-token"
+  "gateway-model-key-issuer"
+  "ops-agent-bearer"
+  "social-notification-bearer"
+  "octogee-anthropic"
+  "octogee-openrouter"
+  "openai-embeddings"
+  "resend-secrets / api_key"
+  "resend-secrets / from_email"
+  "github-oauth / client_id"
+  "github-oauth / client_secret"
+  "google-oauth / client_id"
+  "google-oauth / client_secret"
+  "google-oauth / picker_api_key"
+  "google-oauth / picker_app_id"
+  "microsoft-oauth / client_id"
+  "microsoft-oauth / client_secret"
+  "connect-state-secret"
+  "stripe-secrets / secret_key"
+  "stripe-secrets / webhook_secret"
+  "stripe-secrets / price_ids"
+)
+COMPLETENESS_VALUES=(
+  "${MM_ADMIN_USER:-}" "${MM_ADMIN_PASS:-}" "${MM_ADMIN_PAT:-}" "${MM_ADMIN_USER_ID:-}" "${MM_TEAM_ID:-}"
+  "${GIT_API_TOKEN:-}" "${GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN:-}" "${OPS_AGENT_BEARER_TOKEN:-}"
+  "${SOCIAL_NOTIFICATION_BEARER:-}" "${ANTHROPIC_API_KEY:-}" "${OPENROUTER_API_KEY:-}" "${OPENAI_API_KEY:-}"
+  "${RESEND_API_KEY:-}" "${RESEND_FROM_EMAIL:-}" "${GITHUB_CLIENT_ID:-}" "${GITHUB_CLIENT_SECRET:-}"
+  "${G_ID:-}" "${G_SEC:-}" "${G_PICKER_KEY:-}" "${G_PICKER_APP:-}"
+  "${MICROSOFT_CLIENT_ID:-}" "${MICROSOFT_CLIENT_SECRET:-}" "${CONNECT_STATE_SECRET:-}"
+  "${STRIPE_SECRET_KEY:-}" "${STRIPE_WEBHOOK_SECRET:-}" "${STRIPE_PRICE_IDS:-}"
+)
+COMPLETENESS_REQUIREMENTS=(
+  post-bootstrap post-bootstrap post-bootstrap post-bootstrap post-bootstrap post-bootstrap
+  launch launch launch launch launch optional launch launch
+  "$(octogee_oauth_provider_requirement github)" "$(octogee_oauth_provider_requirement github)"
+  "$(octogee_oauth_provider_requirement google)" "$(octogee_oauth_provider_requirement google)"
+  "$(octogee_oauth_provider_requirement google)" "$(octogee_oauth_provider_requirement google)"
+  "$(octogee_oauth_provider_requirement microsoft)" "$(octogee_oauth_provider_requirement microsoft)"
+  launch launch launch launch
+)
+case "$TARGET_ID" in
+  test-west|prod-west)
+    COMPLETENESS_LABELS+=(
+      "identity-platform-login / google client_id"
+      "identity-platform-login / google client_secret"
+      "identity-platform-login / github client_id"
+      "identity-platform-login / github client_secret"
+    )
+    COMPLETENESS_VALUES+=(
+      "${FIREBASE_AUTH_GOOGLE_CLIENT_ID:-}"
+      "${FIREBASE_AUTH_GOOGLE_CLIENT_SECRET:-}"
+      "${FIREBASE_AUTH_GITHUB_CLIENT_ID:-}"
+      "${FIREBASE_AUTH_GITHUB_CLIENT_SECRET:-}"
+    )
+    COMPLETENESS_REQUIREMENTS+=(launch launch launch launch)
+    ;;
+esac
+for index in "${!COMPLETENESS_LABELS[@]}"; do
+  octogee_secret_completeness_entry \
+    "${COMPLETENESS_LABELS[$index]}" \
+    "${COMPLETENESS_VALUES[$index]}" \
+    "${COMPLETENESS_REQUIREMENTS[$index]}" \
+    "$TARGET_LIFECYCLE" \
+    "$SECRET_SETUP_PHASE"
+done
 
 echo ""
-if [[ -z "${MM_ADMIN_PAT:-}" || -z "${MM_TEAM_ID:-}" || -z "${MM_ADMIN_USER_ID:-}" ]]; then
-  warn "Mattermost-related secret state is incomplete"
-  echo ""
-  echo "  Next steps:"
-  echo "    1. Run ./scripts/setup-mattermost.sh --env=$ENV$TARGET_ARG"
-  echo "    2. Re-run ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG $(if [[ "$YES" == "true" ]]; then echo "--yes"; fi) if you want a clean re-materialization"
-  echo "    3. Do not trust customer provisioning until those values are present"
-else
-  ok "Required Mattermost secret inputs are present"
+if [[ "$OCTOGEE_SECRET_COMPLETENESS_FAILURES" -gt 0 ]]; then
+  echo -e "${RED}${BOLD}  Secret setup incomplete — ${OCTOGEE_SECRET_COMPLETENESS_FAILURES} required launch input(s) missing${NC}"
+  echo "  Do not deploy $TARGET_ID until every required launch input is configured."
+  exit 1
 fi
 
-echo ""
 echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
-echo -e "${BOLD}  All secrets created — ${ENV_LABEL}${NC}"
+if [[ "$SECRET_SETUP_PHASE" == "bootstrap" ]]; then
+  echo -e "${BOLD}  Bootstrap secrets created — ${ENV_LABEL}${NC}"
+else
+  echo -e "${BOLD}  All launch secrets materialized — ${ENV_LABEL}${NC}"
+fi
 echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
 echo ""
 VALUES_FILE="values.${ENV}.yaml"
 [[ "$ENV" == "custom" ]] && VALUES_FILE="values.$CUSTOM_NS.yaml (rendered from template)"
 echo "  Canonical sequence (run teardown-env.sh --env=$ENV$TARGET_ARG to see all 9 steps)."
 echo ""
+if [[ "$SECRET_SETUP_PHASE" == "launch" ]]; then
+  echo "  Next: restart workloads, then run verify-env.sh for $TARGET_ID."
+  exit 0
+fi
 echo "  Next (Phase 1 → Helm):"
     echo "    GITEA_DB_PASS=\$(gcloud secrets versions access latest --secret=$TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET --project=$SM_PROJECT)"
 echo "    UMBRELLA_CHART_DIR=\$(mktemp -d)"

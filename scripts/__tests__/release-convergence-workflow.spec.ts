@@ -10,6 +10,10 @@ const verifyEnv = readFileSync(
   path.resolve(__dirname, "../verify-env.sh"),
   "utf8",
 );
+const verifyRelease = readFileSync(
+  path.resolve(__dirname, "../ops/verify-release-convergence.ts"),
+  "utf8",
+);
 
 describe("tagged gateway release convergence workflow", () => {
   it("captures the configured default baseline before desired state is promoted", () => {
@@ -44,9 +48,11 @@ describe("tagged gateway release convergence workflow", () => {
     }
   });
 
-  it("reads the environment Discord Ops webhook for failed convergence", () => {
-    expect(workflow).toContain("secret/discord-ops-webhook");
-    expect(workflow).toContain("DISCORD_OPS_WEBHOOK_URL");
+  it("surfaces convergence failures through GitHub Actions without retired Discord monitoring", () => {
+    expect(workflow).not.toContain("secret/discord-ops-webhook");
+    expect(workflow).not.toContain("DISCORD_OPS_WEBHOOK_URL");
+    expect(verifyRelease).not.toContain("DISCORD_OPS_WEBHOOK_URL");
+    expect(verifyRelease).not.toContain("deliverReleaseConvergenceAlert");
   });
 });
 

@@ -73,6 +73,22 @@ export interface GatewayRestartRequestResult {
   [extra: string]: unknown;
 }
 
+export interface GatewaySessionSummary {
+  key: string;
+  agentId?: string;
+  hasActiveRun?: boolean;
+}
+
+export interface GatewaySessionsListResult {
+  sessions: GatewaySessionSummary[];
+  [extra: string]: unknown;
+}
+
+export interface GatewaySessionsResetResult {
+  ok: true;
+  [extra: string]: unknown;
+}
+
 export interface CronAddSpec {
   name: string;
   description?: string;
@@ -120,6 +136,12 @@ export interface GatewayRpcClient {
   channelsStatus(): Promise<unknown>;
   secretsReload(): Promise<SecretsReloadResult>;
   gatewayRestartRequest(params: { reason: string; skipDeferral?: boolean }): Promise<GatewayRestartRequestResult>;
+  sessionsList(params: { agentId: string }): Promise<GatewaySessionsListResult>;
+  sessionsReset(params: {
+    key: string;
+    agentId: string;
+    reason: "new" | "reset";
+  }): Promise<GatewaySessionsResetResult>;
   cronAdd(spec: CronAddSpec): Promise<CronAddResult>;
   isGatewayUp(timeoutMs?: number): Promise<boolean>;
   close(): Promise<void>;
@@ -295,6 +317,31 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
         );
       }
       return payload as GatewayRestartRequestResult;
+    },
+
+    async sessionsList(params) {
+      const payload = await call("sessions.list", params);
+      if (!payload || typeof payload !== "object") {
+        throw new OpenclawWireError(INVALID_RESPONSE, "sessions.list returned non-object payload");
+      }
+      const sessions = (payload as { sessions?: unknown }).sessions;
+      if (!Array.isArray(sessions)) {
+        throw new OpenclawWireError(INVALID_RESPONSE, "sessions.list payload missing `sessions` array");
+      }
+      for (const session of sessions) {
+        if (!session || typeof session !== "object" || typeof (session as { key?: unknown }).key !== "string") {
+          throw new OpenclawWireError(INVALID_RESPONSE, "sessions.list returned a session without string `key`");
+        }
+      }
+      return payload as GatewaySessionsListResult;
+    },
+
+    async sessionsReset(params) {
+      const payload = await call("sessions.reset", params);
+      if (!payload || typeof payload !== "object" || (payload as { ok?: unknown }).ok !== true) {
+        throw new OpenclawWireError(INVALID_RESPONSE, "sessions.reset payload missing `ok: true`");
+      }
+      return payload as GatewaySessionsResetResult;
     },
 
     async cronAdd(spec) {

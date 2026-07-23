@@ -312,6 +312,26 @@ describe("setup-secrets env loader", () => {
     expect(setup).toContain('export GOOGLE_CLIENT_ID="$G_ID"');
   });
 
+  it("materializes dedicated WEST login provider credentials into the target data project", () => {
+    const setup = readFileSync(setupSecretsPath, "utf-8");
+    const example = readFileSync(envExamplePath, "utf-8");
+
+    for (const key of [
+      "FIREBASE_AUTH_GOOGLE_CLIENT_ID",
+      "FIREBASE_AUTH_GOOGLE_CLIENT_SECRET",
+      "FIREBASE_AUTH_GITHUB_CLIENT_ID",
+      "FIREBASE_AUTH_GITHUB_CLIENT_SECRET",
+    ]) {
+      expect(setup).toContain(
+        `resolve_environment_secret_value "\${${key}:-}" ${key} identity-platform-login ${key} configured_secret_value`,
+      );
+      expect(setup).toContain(`sync_secret_manager_value ${key} "$${key}" "$FIREBASE_PROJECT"`);
+      expect(example).toContain(`${key}=\n`);
+    }
+    expect(setup).toContain('case "$TARGET_ID" in');
+    expect(setup).toContain("test-west|prod-west)");
+  });
+
   it("captures the Stripe price map durably and verifies all runtime keys", () => {
     const setup = readFileSync(setupSecretsPath, "utf-8");
     const verify = readFileSync(verifySecretsPath, "utf-8");
@@ -355,13 +375,33 @@ describe("setup-secrets env loader", () => {
     expect(setup).toContain('build-week) GATEWAY_IDS=("default")');
   });
 
-  it("syncs configured Cloud Functions values instead of preserving placeholder secret versions", () => {
+  it("syncs only Cloud Functions secrets that remain consumed", () => {
     const setup = readFileSync(setupSecretsPath, "utf-8");
 
     expect(setup).toContain("function_secret_value()");
-    expect(setup).toContain('GITEA_TOKEN) configured_secret_value "${GIT_API_TOKEN:-}"');
+    expect(setup).toContain('SOCIAL_NOTIFICATION_BEARER_TOKEN) configured_secret_value "${SOCIAL_NOTIFICATION_BEARER:-}"');
+    expect(setup).toContain("DISCORD_OPS_WEBHOOK_URL");
     expect(setup).toContain('sync_function_secret "$sm_secret" "$function_value"');
     expect(setup).toContain('gcloud secrets versions add "$secret"');
+    for (const staleSecret of [
+      "GITEA_TOKEN",
+      "STRIPE_SECRET_KEY",
+      "STRIPE_WEBHOOK_SECRET",
+      "GOOGLE_CLIENT_ID",
+      "GOOGLE_CLIENT_SECRET",
+      "MICROSOFT_CLIENT_ID",
+      "MICROSOFT_CLIENT_SECRET",
+      "DISCORD_MAC_TOKEN",
+      "DISCORD_COACH_TOKEN",
+      "DISCORD_BOT_APP_ID",
+      "DISCORD_CLIENT_SECRET",
+      "ANTHROPIC_API_KEY",
+      "OCTOGEE_GUILD_ID",
+      "RESEND_API_KEY",
+      "RESEND_FROM_EMAIL",
+    ]) {
+      expect(setup).not.toContain(`  ${staleSecret} \\\\`);
+    }
   });
 
   it("documents all server-only Google OAuth values as blank placeholders", () => {

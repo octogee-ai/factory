@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   activationLeaseMissCanMintTicket,
-  findPendingActivationOperation,
+  findPendingMigrationToGateway,
   requestBuilderActivationLease,
   resolveBuilderActivationPlan,
   type FirestoreDocLike,
@@ -63,10 +63,10 @@ function plan(overrides: Partial<Parameters<typeof resolveBuilderActivationPlan>
   });
 }
 
-describe("findPendingActivationOperation", () => {
-  it("matches only pending migration operations for the requested user, gateway, and source", () => {
+describe("findPendingMigrationToGateway", () => {
+  it("matches a pending migration for the requested user and gateway regardless of controller source", () => {
     expect(
-      findPendingActivationOperation(
+      findPendingMigrationToGateway(
         [
           doc("wrong-source", {
             kind: "migrate-customer",
@@ -83,13 +83,33 @@ describe("findPendingActivationOperation", () => {
         ],
         "u-1",
         "gw-builder",
-        "builder-activation-lease",
       ),
-    ).toEqual({ id: "op-1", kind: "migrate-customer" });
+    ).toEqual({ id: "wrong-source", kind: "migrate-customer" });
   });
 });
 
 describe("resolveBuilderActivationPlan", () => {
+  it("adopts a same-target migration from the placement policy", () => {
+    expect(plan({
+      pendingOps: [doc("placement-op", {
+        kind: "migrate-customer",
+        input: {
+          uid: "u-1",
+          toGatewayId: "gw-builder",
+          source: "continuous-placement-policy",
+        },
+      })],
+    })).toEqual({
+      error: {
+        status: 409,
+        body: expect.objectContaining({
+          code: "builder-activation-already-running",
+          operationId: "placement-op",
+        }),
+      },
+    });
+  });
+
   it("rejects users with no current assignment before inspecting candidate gateways", () => {
     expect(plan({ currentGatewayId: null })).toEqual({
       error: {

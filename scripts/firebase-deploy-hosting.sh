@@ -36,7 +36,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-config_args=()
 if [ "$target" = "site" ]; then
   ssr_region="${3:-}"
   if [ -z "$ssr_region" ]; then
@@ -47,14 +46,15 @@ if [ "$target" = "site" ]; then
   jq --arg region "$ssr_region" '
     (.hosting[] | select(.target == "site") | .rewrites[] | select(.run.serviceId == "site-ssr") | .run.region) = $region
   ' "${repo_root}/firebase.json" > "$rendered_config"
-  config_args=("--config" "$rendered_config")
 fi
 
 deploy_cmd=("npm" "run" "deploy:hosting:${target}" "--" "--project" "$project" "--non-interactive")
 if [ -n "${DEPLOY_CMD:-}" ]; then
   read -r -a deploy_cmd <<<"$DEPLOY_CMD"
 fi
-deploy_cmd+=("${config_args[@]}")
+if [ "$target" = "site" ]; then
+  deploy_cmd+=("--config" "$rendered_config")
+fi
 
 if "${deploy_cmd[@]}" 2>&1 | tee "$log"; then
   exit 0

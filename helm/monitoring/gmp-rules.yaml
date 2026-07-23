@@ -1,9 +1,8 @@
 # Octogee alert rules — GMP managed rule evaluation. Ported from the retired
-# PrometheusRule (kube-prometheus-stack). The managed rule-evaluator (auto-
-# deployed with GMP managed collection) evaluates these against Monarch and
-# routes firing alerts to the managed Alertmanager (Discord receiver, configured
-# by setup-monitoring.sh into the gmp-public/alertmanager secret). Same exprs as
-# before — every metric (up/kube_*/octogee_*/kubelet_*) now lives in GMP.
+# PrometheusRule (kube-prometheus-stack). The managed rule-evaluator evaluates
+# these against Monarch and writes their state to the ALERTS metric. WEST
+# Terraform Cloud Monitoring policies select firing critical/warning ALERTS
+# series and notify the verified operator email and SMS channels.
 apiVersion: monitoring.googleapis.com/v1
 kind: ClusterRules
 metadata:

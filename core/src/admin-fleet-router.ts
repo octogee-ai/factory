@@ -59,7 +59,6 @@ import {
   type AssignmentDoc,
   type AssignmentState,
   type GatewayDoc,
-  type GatewayLifecycleStatus,
   type GatewayRuntimeDoc,
   type PlacementFirestore,
   type ReleaseDoc,
@@ -68,11 +67,14 @@ import {
 import { parseAssignmentDoc, readAssignmentDocsForGateway } from "./assignment-doc.js";
 import {
   GATEWAY_CONFIG_SCHEMA_VERSION,
+  InitialGatewayReleaseConflictError,
   gatewayArtifactFromReleasePayload,
   isGatewayMutableConfigForGateway,
   projectGatewayMutableConfigForGateway,
+  writeInitialGatewayRelease,
   type GatewayArtifact,
   type GatewayMutableConfig,
+  type InitialGatewayReleaseArgs,
 } from "./gateway-live-release.js";
 import { projectReleaseHistory } from "./gateway-release-history.js";
 import {
@@ -94,7 +96,7 @@ import {
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 import {
-  findPendingActivationOperation,
+  findPendingMigrationToGateway,
   requestBuilderActivationLease,
 } from "./builder-activation-lease.js";
 import {
@@ -2915,53 +2917,6 @@ function sameArtifact(left: GatewayArtifact, right: GatewayArtifact): boolean {
   );
 }
 
-interface InitialGatewayReleaseArgs {
-  gatewayId: string;
-  config: GatewayMutableConfig;
-  artifact: GatewayArtifact;
-  createdBy: string;
-  now: number;
-  desiredStatus: GatewayLifecycleStatus;
-  validateAdditional?: (transaction: Transaction) => Promise<void>;
-  writeAdditional?: (transaction: Transaction) => void;
-}
-
-function initialGatewayReleaseDocuments(args: InitialGatewayReleaseArgs): {
-  gatewayDoc: GatewayDoc & GatewayMutableConfig;
-  releaseDoc: ReleaseDoc;
-} {
-  const gatewayDoc: GatewayDoc & GatewayMutableConfig = {
-    gatewayId: args.gatewayId,
-    createdAt: args.now,
-    createdBy: args.createdBy,
-    updatedAt: args.now,
-    updatedBy: args.createdBy,
-    latestRelease: 1,
-    desiredRelease: 1,
-    liveRelease: null,
-    desiredStatus: args.desiredStatus,
-    ...args.config,
-  };
-  const payload = asReleaseArtifactPayload(args.artifact);
-  const releaseDoc: ReleaseDoc = {
-    gatewayId: args.gatewayId,
-    release: 1,
-    createdAt: args.now,
-    createdBy: args.createdBy,
-    sourceRelease: null,
-    note: null,
-    payloadHash: releasePayloadHash(payload),
-    payload,
-  };
-  return { gatewayDoc, releaseDoc };
-}
-
-class InitialGatewayReleaseConflictError extends Error {
-  constructor(readonly gatewayId: string) {
-    super(`gateway ${gatewayId} already exists`);
-  }
-}
-
 class InitialGatewayReleaseRequestError extends Error {
   constructor(
     readonly status: number,
@@ -2969,26 +2924,6 @@ class InitialGatewayReleaseRequestError extends Error {
   ) {
     super(typeof body.error === "string" ? body.error : "initial gateway release rejected");
   }
-}
-
-async function writeInitialGatewayRelease(
-  db: Firestore,
-  args: InitialGatewayReleaseArgs,
-): Promise<void> {
-  const gwRef = db.collection(GATEWAYS_COLLECTION).doc(args.gatewayId);
-  const relRef = gwRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc("1");
-  const { gatewayDoc, releaseDoc } = initialGatewayReleaseDocuments(args);
-  await db.runTransaction(async (txn) => {
-    const existing = await txn.get(gwRef);
-    const relExisting = await txn.get(relRef);
-    await args.validateAdditional?.(txn);
-    if (existing.exists || relExisting.exists) {
-      throw new InitialGatewayReleaseConflictError(args.gatewayId);
-    }
-    txn.set(gwRef, gatewayDoc as unknown as Record<string, unknown>, { merge: true });
-    txn.set(relRef, releaseDoc as unknown as Record<string, unknown>);
-    args.writeAdditional?.(txn);
-  });
 }
 
 async function appendGatewayRelease(
@@ -4732,11 +4667,10 @@ router.post(
           return;
         }
 
-        const existingActivation = findPendingActivationOperation(
+        const existingActivation = findPendingMigrationToGateway(
           pendingOpsSnap.docs,
           uid,
           reservation.ok.gatewayId,
-          "operator-gateway-reservation",
         );
         if (existingActivation) {
           res.status(409).json({

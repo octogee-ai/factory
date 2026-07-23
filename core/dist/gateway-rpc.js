@@ -159,6 +159,29 @@ export function createGatewayRpc(opts = {}) {
             }
             return payload;
         },
+        async sessionsList(params) {
+            const payload = await call("sessions.list", params);
+            if (!payload || typeof payload !== "object") {
+                throw new OpenclawWireError(INVALID_RESPONSE, "sessions.list returned non-object payload");
+            }
+            const sessions = payload.sessions;
+            if (!Array.isArray(sessions)) {
+                throw new OpenclawWireError(INVALID_RESPONSE, "sessions.list payload missing `sessions` array");
+            }
+            for (const session of sessions) {
+                if (!session || typeof session !== "object" || typeof session.key !== "string") {
+                    throw new OpenclawWireError(INVALID_RESPONSE, "sessions.list returned a session without string `key`");
+                }
+            }
+            return payload;
+        },
+        async sessionsReset(params) {
+            const payload = await call("sessions.reset", params);
+            if (!payload || typeof payload !== "object" || payload.ok !== true) {
+                throw new OpenclawWireError(INVALID_RESPONSE, "sessions.reset payload missing `ok: true`");
+            }
+            return payload;
+        },
         async cronAdd(spec) {
             const payload = await call("cron.add", spec);
             if (!payload || typeof payload !== "object") {

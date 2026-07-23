@@ -618,7 +618,7 @@ if [[ -n "${MM_ADMIN_PAT:-}" && -n "${MM_TEAM_ID:-}" && -n "${MM_ADMIN_USER_ID:-
   echo ""
   echo "  Next (canonical sequence — see teardown-env.sh --env=$ENV$TARGET_ARG for the full 9 steps):"
   echo "    4. ./scripts/setup-gitea.sh --env=$ENV$TARGET_ARG"
-  echo "    5. ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG   # Phase 2 — re-materialize with real MM/Gitea values"
+  echo "    5. ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG --phase=launch"
   echo "    6. kubectl rollout restart deploy -n $K8S_NAMESPACE   # pods pick up new secret env"
   echo ""
   echo "  octogee-api and glm-controller read mattermost-gateway directly."

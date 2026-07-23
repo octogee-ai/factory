@@ -165,7 +165,7 @@ case "$SECRET" in
     echo "    social-notification-bearer — SOCIAL_NOTIFICATION_BEARER_TOKEN, consumers: octogee-api /social, social functions"
     echo "    mm-admin-pat          — MM admin PAT, consumers: octogee-api, glm-controller"
     echo "    gitea-pat             — Gitea API token, consumers: octogee-api, glm-controller"
-    echo "    discord-ops-webhook   — DISCORD_OPS_WEBHOOK_URL, consumer: octogee-gateway"
+    echo "    discord-ops-webhook   — DISCORD_OPS_WEBHOOK_URL, consumer: onSignup Cloud Function"
     echo ""
     echo "  For rarer rotations (Gitea SSH host key, Firebase SA key, DB passwords,"
     echo "  Stripe webhook secret, etc.) see RUNBOOK.md → 'Credential Rotation (Full Playbook)'."
@@ -345,7 +345,7 @@ print(json.dumps(d))
     [[ -z "$NEW_VALUE" ]] && fail "No value provided"
     [[ "$NEW_VALUE" =~ ^https://discord\.com/api/webhooks/ ]] || warn "URL does not match Discord webhook format — proceeding anyway"
 
-    confirm "Rotate DISCORD_OPS_WEBHOOK_URL in $FIREBASE_PROJECT and restart gateway?" || { info "Cancelled"; exit 0; }
+    confirm "Rotate the onSignup Discord webhook in $FIREBASE_PROJECT and redeploy that function?" || { info "Cancelled"; exit 0; }
 
     info "Writing new version to Secret Manager ($FIREBASE_PROJECT)..."
     echo -n "$NEW_VALUE" | gcloud secrets versions add DISCORD_OPS_WEBHOOK_URL \
@@ -356,15 +356,9 @@ print(json.dumps(d))
       fail "Could not write to Secret Manager"
     ok "Secret Manager updated"
 
-    info "Updating K8s secret discord-ops-webhook..."
-    kubectl create secret generic discord-ops-webhook -n "$K8S_NAMESPACE" \
-      --from-literal=url="$NEW_VALUE" \
-      --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-    ok "K8s secret discord-ops-webhook updated"
-
-    info "Restarting gateway to pick up new webhook URL..."
-    rollout_restart octogee-gateway
-    ok "Rotation complete — verify by checking Discord for the next ops event"
+    info "Redeploying onSignup so new instances bind the replacement secret version..."
+    npx firebase deploy --only functions:onSignup --project "$FIREBASE_PROJECT"
+    ok "Rotation complete — onSignup uses the replacement Secret Manager version"
     ;;
 
   *)

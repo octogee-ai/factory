@@ -1,6 +1,6 @@
-import type { Firestore } from "firebase-admin/firestore";
+import type { Firestore, Transaction } from "firebase-admin/firestore";
 import { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, type GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
-import { type GatewayDoc, type ReleasePayload, type W9GatewayEdgeImage, type W9TestPublisherLiveExperiment } from "@octogee/shared/types/gateway-releases";
+import { type GatewayDoc, type GatewayLifecycleStatus, type ReleaseDoc, type ReleasePayload, type W9GatewayEdgeImage, type W9TestPublisherLiveExperiment } from "@octogee/shared/types/gateway-releases";
 export { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, };
 export type { GatewayMutableConfig };
 type FirestoreReader = Pick<Firestore, "doc">;
@@ -22,6 +22,25 @@ export interface GatewayArtifact {
     gatewayEdgeImage?: W9GatewayEdgeImage;
     testExperiment?: W9TestPublisherLiveExperiment;
 }
+export interface InitialGatewayReleaseArgs {
+    gatewayId: string;
+    config: GatewayMutableConfig;
+    artifact: GatewayArtifact;
+    createdBy: string;
+    now: number;
+    desiredStatus: GatewayLifecycleStatus;
+    validateAdditional?: (transaction: Transaction) => Promise<void>;
+    writeAdditional?: (transaction: Transaction) => void;
+}
+export declare function initialGatewayReleaseDocuments(args: InitialGatewayReleaseArgs): {
+    gatewayDoc: GatewayDoc & GatewayMutableConfig;
+    releaseDoc: ReleaseDoc;
+};
+export declare class InitialGatewayReleaseConflictError extends Error {
+    readonly gatewayId: string;
+    constructor(gatewayId: string);
+}
+export declare function writeInitialGatewayRelease(db: Firestore, args: InitialGatewayReleaseArgs): Promise<void>;
 export interface RenderedGatewayConfig extends Omit<GatewayMutableConfig, "configSchemaVersion">, GatewayArtifact {
 }
 export interface GatewayAuthorization {

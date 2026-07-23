@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { createHash } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
@@ -22,7 +21,6 @@ import {
 } from "@octogee/shared/types/glm";
 import {
   assessReleaseConvergence,
-  deliverReleaseConvergenceAlert,
   type ReleaseConvergenceBaseline,
   type ReleaseConvergenceDeployment,
   type ReleaseConvergenceGateway,
@@ -41,8 +39,6 @@ interface VerifyOptions {
   baseline: string;
   timeoutMs: number;
   releaseTag: string;
-  commit: string;
-  workflowUrl: string;
 }
 
 function parseArgs(argv: readonly string[]): VerifyOptions {
@@ -59,22 +55,18 @@ function parseArgs(argv: readonly string[]): VerifyOptions {
   const expectedImageTag = values.get("expected-image-tag");
   const baseline = values.get("baseline");
   const releaseTag = values.get("release-tag");
-  const commit = values.get("commit");
-  const workflowUrl = values.get("workflow-url");
   const timeoutMs = Number(values.get("timeout-ms"));
   if (
     !deploymentTarget ||
     !expectedImageTag ||
     !baseline ||
     !releaseTag ||
-    !commit ||
-    !workflowUrl ||
     !Number.isInteger(timeoutMs) ||
     timeoutMs <= 0 ||
-    values.size !== 7
+    values.size !== 5
   ) {
     throw new Error(
-      "--deployment-target, --expected-image-tag, --baseline, --timeout-ms, --release-tag, --commit, and --workflow-url are required",
+      "--deployment-target, --expected-image-tag, --baseline, --timeout-ms, and --release-tag are required",
     );
   }
   return {
@@ -83,8 +75,6 @@ function parseArgs(argv: readonly string[]): VerifyOptions {
     baseline,
     timeoutMs,
     releaseTag,
-    commit,
-    workflowUrl,
   };
 }
 
@@ -236,12 +226,11 @@ async function readSnapshot(input: {
   expectedImageTag: string;
   kubeContext: string;
   namespace: string;
-}): Promise<{ snapshot: ReleaseConvergenceSnapshot; forbiddenValues: string[] }> {
-  const [config, gatewayDocuments, operationDocuments, userDocuments] = await Promise.all([
+}): Promise<{ snapshot: ReleaseConvergenceSnapshot }> {
+  const [config, gatewayDocuments, operationDocuments] = await Promise.all([
     input.db.doc("config/orchestrator").get(),
     input.db.collection(GATEWAYS_COLLECTION).get(),
     input.db.collection(GLM_OPERATIONS_COLLECTION).get(),
-    input.db.collection("users").get(),
   ]);
   const configuredDefaultGatewayId = config.data()?.defaultGatewayId;
   if (!isBareGatewayId(configuredDefaultGatewayId)) {
@@ -343,36 +332,7 @@ async function readSnapshot(input: {
       defaultAssignmentsServing,
       ...kubernetes,
     },
-    forbiddenValues: [
-      ...userDocuments.docs.map((document) => document.id),
-      ...assignmentDocuments.docs.map((document) => document.id),
-    ],
   };
-}
-
-async function claimAlert(
-  db: Firestore,
-  alertId: string,
-  metadata: Record<string, unknown>,
-): Promise<boolean> {
-  const reference = db.collection("releaseConvergenceAlerts").doc(alertId);
-  return db.runTransaction(async (transaction) => {
-    const existing = await transaction.get(reference);
-    if (existing.exists) return false;
-    transaction.create(reference, { ...metadata, status: "claimed", claimedAt: Date.now() });
-    return true;
-  });
-}
-
-async function postDiscord(url: string, body: string): Promise<void> {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ content: body }),
-  });
-  if (!response.ok) {
-    throw new Error(`Discord returned HTTP ${response.status}`);
-  }
 }
 
 async function run(): Promise<void> {
@@ -387,7 +347,6 @@ async function run(): Promise<void> {
   const db = getFirestore(app);
   const deadline = Date.now() + options.timeoutMs;
   let failures = ["release convergence has not been observed"];
-  let forbiddenValues: string[] = [];
 
   while (Date.now() < deadline) {
     try {
@@ -397,7 +356,6 @@ async function run(): Promise<void> {
         kubeContext: settings.kubeContext,
         namespace: settings.namespace,
       });
-      forbiddenValues = observed.forbiddenValues;
       const assessment = assessReleaseConvergence(observed.snapshot, baselineValue);
       if (assessment.converged) {
         process.stdout.write(
@@ -420,27 +378,6 @@ async function run(): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
 
-  const alertId = createHash("sha256")
-    .update(`${settings.targetId}\n${options.releaseTag}\n${options.commit}`)
-    .digest("hex");
-  await deliverReleaseConvergenceAlert({
-    environment: settings.name,
-    tag: options.releaseTag,
-    commit: options.commit,
-    workflowUrl: options.workflowUrl,
-    failures,
-    forbiddenValues,
-    webhookUrl: process.env.DISCORD_OPS_WEBHOOK_URL ?? "",
-    claim: () => claimAlert(db, alertId, {
-      environment: settings.name,
-      deploymentTarget: settings.targetId,
-      releaseTag: options.releaseTag,
-      commit: options.commit,
-      workflowUrl: options.workflowUrl,
-      failureCount: failures.length,
-    }),
-    post: postDiscord,
-  });
   throw new Error(`Release convergence failed: ${failures.join("; ")}`);
 }
 

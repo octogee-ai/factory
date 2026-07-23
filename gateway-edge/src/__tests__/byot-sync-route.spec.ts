@@ -3,6 +3,7 @@ import * as crypto from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const syncModelCredentialsForCustomerSpy = vi.fn(async () => {});
+const refreshModelCredentialRuntimeSessionsSpy = vi.fn(async () => ({ refreshed: false, resetCount: 0 }));
 const applyConfigPatchSpy = vi.fn(async () => ({ mode: "rpc" as const, attempts: 1 }));
 const releaseLeaseSpy = vi.fn(async () => {});
 const acquireLeaseSpy = vi.fn(async () => ({
@@ -15,6 +16,7 @@ vi.mock("@octogee/core/model-credential-sync-runtime", () => ({
     userData: Record<string, unknown>,
     deps?: Record<string, unknown>,
   ) => syncModelCredentialsForCustomerSpy(userData, deps),
+  refreshModelCredentialRuntimeSessions: refreshModelCredentialRuntimeSessionsSpy,
 }));
 vi.mock("@octogee/core/apply-config-patch", () => ({
   applyConfigPatch: (...args: unknown[]) => applyConfigPatchSpy(...args),
@@ -86,6 +88,7 @@ function byotSyncHeaders(body: unknown, secret = "byot-sync-secret", timestamp =
 describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
   beforeEach(() => {
     syncModelCredentialsForCustomerSpy.mockClear();
+    refreshModelCredentialRuntimeSessionsSpy.mockClear();
     applyConfigPatchSpy.mockClear();
     releaseLeaseSpy.mockClear();
     acquireLeaseSpy.mockClear();
@@ -137,7 +140,10 @@ describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
     expect(res.body).toEqual({ ok: true });
     expect(syncModelCredentialsForCustomerSpy).toHaveBeenCalledWith(
       userData,
-      expect.objectContaining({ applyConfigPatch: expect.any(Function) }),
+      expect.objectContaining({
+        applyConfigPatch: expect.any(Function),
+        refreshCoachRuntimeSessions: refreshModelCredentialRuntimeSessionsSpy,
+      }),
     );
 
     const deps = syncModelCredentialsForCustomerSpy.mock.calls[0]?.[1];

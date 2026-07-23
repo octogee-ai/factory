@@ -130,6 +130,8 @@ REBUILD_CHANGE_ADDRESSES=(
   'google_compute_subnetwork.gke'
   'google_container_cluster.west'
   'google_monitoring_alert_policy.gke_notifications'
+  'google_monitoring_alert_policy.workload_critical'
+  'google_monitoring_alert_policy.workload_warning'
   'google_monitoring_notification_channel.operator_email'
   'google_project_iam_custom_role.github_actions_west_pvc_snapshots'
   'google_project_iam_member.github_actions_west_pvc_snapshots'

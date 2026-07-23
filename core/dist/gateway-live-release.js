@@ -1,7 +1,7 @@
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GLM_GATEWAYS_COLLECTION } from "@octogee/shared/types/glm";
 import { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, } from "@octogee/shared/types/gateway-mutable-config";
-import { GATEWAY_RELEASES_SUBCOLLECTION, isGatewayRuntimeDoc, isReleasePayload, projectGatewayDesiredRootForGateway, upgradeReleasePayloadSchema, } from "@octogee/shared/types/gateway-releases";
+import { GATEWAY_RELEASES_SUBCOLLECTION, isGatewayRuntimeDoc, isReleasePayload, projectGatewayDesiredRootForGateway, releasePayloadHash, upgradeReleasePayloadSchema, } from "@octogee/shared/types/gateway-releases";
 export { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, };
 // A gateway's pods are named octogee-gateway-<id>-<replicaset>-<pod> by the
 // stable-name Deployment. Pod identity binds to the gateway alone — never to a
@@ -32,6 +32,57 @@ function eligibleConfiguredBuilderGateway(value, input) {
 export function configuredBuilderCredentialBootstrapAllowed(value, input) {
     const gateway = eligibleConfiguredBuilderGateway(value, input);
     return gateway !== null && gateway.ownerUid === input.uid;
+}
+export function initialGatewayReleaseDocuments(args) {
+    const gatewayDoc = {
+        gatewayId: args.gatewayId,
+        createdAt: args.now,
+        createdBy: args.createdBy,
+        updatedAt: args.now,
+        updatedBy: args.createdBy,
+        latestRelease: 1,
+        desiredRelease: 1,
+        liveRelease: null,
+        desiredStatus: args.desiredStatus,
+        ...args.config,
+    };
+    const payload = { ...args.artifact };
+    const releaseDoc = {
+        gatewayId: args.gatewayId,
+        release: 1,
+        createdAt: args.now,
+        createdBy: args.createdBy,
+        sourceRelease: null,
+        note: null,
+        payloadHash: releasePayloadHash(payload),
+        payload,
+    };
+    return { gatewayDoc, releaseDoc };
+}
+export class InitialGatewayReleaseConflictError extends Error {
+    gatewayId;
+    constructor(gatewayId) {
+        super(`gateway ${gatewayId} already exists`);
+        this.gatewayId = gatewayId;
+    }
+}
+export async function writeInitialGatewayRelease(db, args) {
+    const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(args.gatewayId);
+    const releaseRef = gatewayRef
+        .collection(GATEWAY_RELEASES_SUBCOLLECTION)
+        .doc("1");
+    const { gatewayDoc, releaseDoc } = initialGatewayReleaseDocuments(args);
+    await db.runTransaction(async (transaction) => {
+        const existing = await transaction.get(gatewayRef);
+        const releaseExisting = await transaction.get(releaseRef);
+        await args.validateAdditional?.(transaction);
+        if (existing.exists || releaseExisting.exists) {
+            throw new InitialGatewayReleaseConflictError(args.gatewayId);
+        }
+        transaction.set(gatewayRef, gatewayDoc, { merge: true });
+        transaction.set(releaseRef, releaseDoc);
+        args.writeAdditional?.(transaction);
+    });
 }
 function isRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);

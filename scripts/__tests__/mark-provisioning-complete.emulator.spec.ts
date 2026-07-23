@@ -211,6 +211,22 @@ describe("markProvisioningComplete — system/config (privilege fields only)", (
     expect(cfg?.selectedTier).toBeUndefined();
   });
 
+  it("preserves an admin role granted before late provisioning completes", async () => {
+    const { uid, slug } = freshIds();
+    await seedUser(uid, { username: slug });
+    await db.doc(`users/${uid}/system/config`).set({ role: "admin" });
+
+    await markProvisioningComplete(
+      baseCtx(uid, slug, "pro"),
+      fullMmUpdate(slug),
+      [`octogee-${slug}-coach`],
+    );
+
+    const cfg = await readDoc(`users/${uid}/system/config`);
+    expect(cfg).toMatchObject({ role: "admin" });
+    expect(cfg?.updatedAt).toBeDefined();
+  });
+
   it("sets trialExpiresAt 7 days out for tier=trial", async () => {
     const { uid, slug } = freshIds();
     await seedUser(uid, { username: slug });

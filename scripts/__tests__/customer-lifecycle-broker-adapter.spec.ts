@@ -704,7 +704,10 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
     expect(modelCredentialMocks.syncModelCredentialsForCustomer).toHaveBeenCalledTimes(1);
     expect(modelCredentialMocks.syncModelCredentialsForCustomer).toHaveBeenCalledWith(
       userData,
-      expect.objectContaining({ applyConfigPatch: expect.any(Function) }),
+      expect.objectContaining({
+        applyConfigPatch: expect.any(Function),
+        refreshCoachRuntimeSessions: expect.any(Function),
+      }),
     );
 
     const deps = modelCredentialMocks.syncModelCredentialsForCustomer.mock.calls[0]?.[1];

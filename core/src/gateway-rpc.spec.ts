@@ -325,6 +325,34 @@ describe("gateway-rpc", () => {
     });
   });
 
+  describe("sessions", () => {
+    it("lists and resets the agent's runtime sessions through the official gateway API", async () => {
+      server.setHandler("sessions.list", (params) => ({
+        ok: true,
+        payload: {
+          sessions: [{ key: "agent:octogee-alice-coach:mattermost:group:channel", agentId: "octogee-alice-coach" }],
+          ...params as object,
+        },
+      }));
+      server.setHandler("sessions.reset", (params) => ({
+        ok: true,
+        payload: { ok: true, ...params as object },
+      }));
+
+      await expect(client.sessionsList({ agentId: "octogee-alice-coach" })).resolves.toEqual({
+        sessions: [{ key: "agent:octogee-alice-coach:mattermost:group:channel", agentId: "octogee-alice-coach" }],
+        agentId: "octogee-alice-coach",
+      });
+      await expect(
+        client.sessionsReset({
+          key: "agent:octogee-alice-coach:mattermost:group:channel",
+          agentId: "octogee-alice-coach",
+          reason: "reset",
+        }),
+      ).resolves.toMatchObject({ ok: true });
+    });
+  });
+
   describe("cronAdd", () => {
     it("calls `cron.add` with the job spec verbatim and returns the server payload", async () => {
       let captured: unknown = "not-called";

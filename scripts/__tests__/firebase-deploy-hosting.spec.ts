@@ -74,4 +74,22 @@ describe("firebase hosting deploy wrapper", () => {
     });
     expect(result.status, result.stderr).toBe(0);
   });
+
+  it("invokes an app deploy without site config under strict Bash", () => {
+    const directory = mkdtempSync(join(tmpdir(), "octogee-hosting-"));
+    const argsPath = join(directory, "args.txt");
+    const result = spawnSync("bash", [script, "app", "octogee-test"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CAPTURE_ARGS: argsPath,
+        CAPTURE_CONFIG: join(directory, "firebase.json"),
+        DEPLOY_CMD: fakeDeploy(directory),
+      },
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(argsPath, "utf8")).toBe("\n");
+  });
 });
