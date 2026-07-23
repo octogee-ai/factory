@@ -27,6 +27,23 @@ describe("tagged gateway release convergence workflow", () => {
     expect(workflow).toContain("ops/verify-release-convergence.ts");
   });
 
+  it("installs the GKE credential plugin before each convergence cluster selection", () => {
+    for (const [job, nextJob] of [
+      ["capture-release-convergence-baseline:", "update-environment-desired-state:"],
+      ["verify-release-convergence:", undefined],
+    ]) {
+      const jobSource = workflow.slice(
+        workflow.indexOf(job),
+        nextJob ? workflow.indexOf(nextJob) : workflow.length,
+      );
+
+      expect(jobSource.indexOf("Install gke-gcloud-auth-plugin")).toBeGreaterThan(-1);
+      expect(jobSource.indexOf("Install gke-gcloud-auth-plugin")).toBeLessThan(
+        jobSource.indexOf("Select cluster"),
+      );
+    }
+  });
+
   it("reads the environment Discord Ops webhook for failed convergence", () => {
     expect(workflow).toContain("secret/discord-ops-webhook");
     expect(workflow).toContain("DISCORD_OPS_WEBHOOK_URL");

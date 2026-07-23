@@ -40,6 +40,7 @@ locals {
     "storage.googleapis.com",
   ])
   github_actions_roles = toset([
+    "roles/run.viewer",
     "roles/serviceusage.serviceUsageConsumer",
   ])
   firestore_ttl_fields = {

@@ -362,13 +362,20 @@ kubectl wait --for=condition=available deployment/mattermost \
 ok "Mattermost deployment ready"
 
 if $ROTATE_PLATFORM_CREDENTIALS; then
-  info "Rotating restored Mattermost admin password through the local control socket..."
-  kubectl exec -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" deploy/mattermost -c mattermost -- \
-    /mattermost/bin/mmctl --local user change-password "$MM_ADMIN_USER" \
-      --password "$MM_ADMIN_PASS" >/dev/null \
-    || fail "Could not rotate the restored Mattermost admin password"
-  save_env "MM_ADMIN_PASS" "$MM_ADMIN_PASS"
-  ok "Restored Mattermost admin password rotated"
+  if MM_USER_GET=$(kubectl exec -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" deploy/mattermost -c mattermost -- \
+    /mattermost/bin/mmctl --local user get "$MM_ADMIN_USER" 2>&1); then
+    info "Rotating restored Mattermost admin password through the local control socket..."
+    kubectl exec -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" deploy/mattermost -c mattermost -- \
+      /mattermost/bin/mmctl --local user change-password "$MM_ADMIN_USER" \
+        --password "$MM_ADMIN_PASS" >/dev/null \
+      || fail "Could not rotate the restored Mattermost admin password"
+    save_env "MM_ADMIN_PASS" "$MM_ADMIN_PASS"
+    ok "Restored Mattermost admin password rotated"
+  elif [[ "$MM_USER_GET" == *"not found"* ]]; then
+    info "Fresh Mattermost admin is not present; bootstrap will create it with the rotated credential"
+  else
+    fail "Could not inspect the restored Mattermost admin: $MM_USER_GET"
+  fi
 fi
 
 # ── 4b. Port-forward to MM (distroless image — no in-pod curl) ────────────
