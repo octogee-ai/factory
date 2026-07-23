@@ -58,6 +58,7 @@ locals {
     "modelBrokerHouseDayWindows.expiresAt" = { collection = "modelBrokerHouseDayWindows", field = "expiresAt", disable_indexes = true }
     "modelBrokerRateWindows.expiresAt"     = { collection = "modelBrokerRateWindows", field = "expiresAt", disable_indexes = true }
     "usage_models.expiresAt"               = { collection = "usage_models", field = "expiresAt", disable_indexes = true }
+    "productivityApprovals.expireAt"       = { collection = "productivityApprovals", field = "expireAt" }
   }
 }
 
