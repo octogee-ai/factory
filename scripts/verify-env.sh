@@ -28,6 +28,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 # shellcheck source=scripts/lib/deployment-target.sh
 source "$SCRIPT_DIR/lib/deployment-target.sh"
+# shellcheck source=scripts/lib/ready-assigned-gateway-probe.sh
+source "$SCRIPT_DIR/lib/ready-assigned-gateway-probe.sh"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'
@@ -272,13 +274,10 @@ if [[ "${GITEA_READY:-0}" -ge 1 ]]; then
     pass "API token secret present"
 
     set_section bootstrap
-    if [[ -n "$GW_DEPLOYMENT" ]]; then
-      GITEA_BROKER_CHECK=$(kubectl exec "deployment/$GW_DEPLOYMENT" -n "$NAMESPACE" -c gateway -- \
-        sh -c 'node -e "const safe=!!process.env.GITEA_ADMIN_BROKER_URL&&!process.env.GIT_API_TOKEN;process.exit(safe?0:1)" && exec /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/gitea-broker-probe.ts' \
-        >/dev/null 2>&1 && echo ok || echo "")
-      status "Authenticated Gitea admin broker read passed from assigned gateway tenant" "Gitea admin broker contract failed in gateway pod" "$GITEA_BROKER_CHECK"
+    if GITEA_BROKER_DEPLOYMENT="$(probe_ready_assigned_gateway_gitea_broker "$K8S_CONTEXT" "$NAMESPACE")"; then
+      pass "Authenticated Gitea admin broker read passed from assigned gateway tenant ($GITEA_BROKER_DEPLOYMENT)"
     else
-      info "Skipping Gitea-from-gateway trust check — no gateway deployment yet"
+      fail "Gitea admin broker contract failed; see the preceding Ready assigned-gateway probe error"
     fi
     set_section infra
   else

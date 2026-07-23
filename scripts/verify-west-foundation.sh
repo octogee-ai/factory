@@ -14,6 +14,32 @@ WEST_SMOKE_EXEC_MAX_ATTEMPTS="${WEST_SMOKE_EXEC_MAX_ATTEMPTS:-30}"
 WEST_SMOKE_EXEC_RETRY_SECONDS="${WEST_SMOKE_EXEC_RETRY_SECONDS:-10}"
 KUBE_CONTEXT="gke_${PROJECT_ID}_${REGION}_${CLUSTER_NAME}"
 SMOKE_CREATED=false
+READ_ONLY=false
+
+usage() {
+  cat <<'EOF'
+Usage: verify-west-foundation.sh [--read-only|--plan]
+
+  --read-only, --plan  Verify GCP foundation and alert-policy invariants without
+                       obtaining cluster credentials or creating a smoke pod.
+EOF
+}
+
+for argument in "$@"; do
+  case "$argument" in
+    --read-only|--plan) READ_ONLY=true ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $argument" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
 TEMP_DIR="$(mktemp -d -t octogee-west-foundation-verify.XXXXXX)"
 export KUBECONFIG="${TEMP_DIR}/kubeconfig"
 
@@ -75,12 +101,6 @@ if ! jq -e \
   echo "GKE cluster foundation invariants failed" >&2
   exit 1
 fi
-
-gcloud container clusters get-credentials "${CLUSTER_NAME}" \
-  --project="${PROJECT_ID}" \
-  --region="${REGION}" \
-  --dns-endpoint
-kubectl cluster-info --context="${KUBE_CONTEXT}" >/dev/null
 
 gcloud compute routers nats describe "${NAT_NAME}" \
   --router="${ROUTER_NAME}" \
@@ -191,7 +211,7 @@ if ! jq -e \
       .displayName == $display_name and
       .enabled == true and
       routed_to_both and
-      .conditions[0].conditionPrometheusQueryLanguage.query ==
+      (.conditions[0].conditionPrometheusQueryLanguage.query | rtrimstr("\n")) ==
         "max by (alertname, severity, namespace, gateway_id) (ALERTS{project_id=\"\($project)\", location=\"\($region)\", cluster=\"\($cluster)\", alertstate=\"firing\", severity=\"\($severity)\"})" and
       (.conditions[0].conditionPrometheusQueryLanguage.duration // "0s") == "0s" and
       .conditions[0].conditionPrometheusQueryLanguage.evaluationInterval == "30s"
@@ -203,6 +223,17 @@ if ! jq -e \
   echo "WEST workload alert-policy invariants failed" >&2
   exit 1
 fi
+
+if [[ "${READ_ONLY}" == "true" ]]; then
+  echo "WEST foundation read-only verification passed: cloud foundation and alert-policy invariants are healthy; cluster connectivity, smoke egress, and node external-IP checks were skipped."
+  exit 0
+fi
+
+gcloud container clusters get-credentials "${CLUSTER_NAME}" \
+  --project="${PROJECT_ID}" \
+  --region="${REGION}" \
+  --dns-endpoint
+kubectl cluster-info --context="${KUBE_CONTEXT}" >/dev/null
 
 kubectl delete pod "${SMOKE_POD}" \
   --context="${KUBE_CONTEXT}" \

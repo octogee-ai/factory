@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -15,6 +15,8 @@ type RunOptions = {
   externalNodeIp?: boolean;
   invalidSmsChannel?: boolean;
   invalidWorkloadPolicy?: boolean;
+  trailingWorkloadQueryNewline?: boolean;
+  mode?: "--read-only" | "--plan";
   execFailures?: number;
   execMaxAttempts?: number;
 };
@@ -27,7 +29,9 @@ function executable(file: string, source: string): void {
 function runVerifier(options: RunOptions = {}) {
   const temp = mkdtempSync(path.join(tmpdir(), "octogee-west-foundation-verifier-"));
   const execCountFile = path.join(temp, "exec-count");
+  const kubectlCallsFile = path.join(temp, "kubectl-calls");
   writeFileSync(execCountFile, "0\n");
+  writeFileSync(kubectlCallsFile, "");
 
   executable(path.join(temp, "gcloud"), `#!/usr/bin/env bash
 set -euo pipefail
@@ -63,7 +67,11 @@ case "$*" in
     if [[ "$FAKE_INVALID_WORKLOAD_POLICY" == "true" ]]; then
       printf '%s\n' '[{"displayName":"Octogee WEST workload critical","enabled":true,"notificationChannels":["projects/octogee/notificationChannels/email"],"conditions":[{"conditionPrometheusQueryLanguage":{"query":"ALERTS{location=\\"us-central1\\", alertstate=\\"firing\\", severity=\\"critical\\"}"}}]}]'
     else
-      printf '%s\n' '[{"displayName":"Octogee WEST GKE notifications","enabled":true,"notificationChannels":["projects/octogee/notificationChannels/email","projects/octogee/notificationChannels/sms"],"conditions":[{"conditionMatchedLog":{}}]},{"displayName":"Octogee WEST workload critical","enabled":true,"notificationChannels":["projects/octogee/notificationChannels/email","projects/octogee/notificationChannels/sms"],"conditions":[{"conditionPrometheusQueryLanguage":{"query":"max by (alertname, severity, namespace, gateway_id) (ALERTS{project_id=\\"octogee\\", location=\\"us-west1\\", cluster=\\"octogee-gateway\\", alertstate=\\"firing\\", severity=\\"critical\\"})","duration":"0s","evaluationInterval":"30s"}}]},{"displayName":"Octogee WEST workload warning","enabled":true,"notificationChannels":["projects/octogee/notificationChannels/email","projects/octogee/notificationChannels/sms"],"conditions":[{"conditionPrometheusQueryLanguage":{"query":"max by (alertname, severity, namespace, gateway_id) (ALERTS{project_id=\\"octogee\\", location=\\"us-west1\\", cluster=\\"octogee-gateway\\", alertstate=\\"firing\\", severity=\\"warning\\"})","duration":"0s","evaluationInterval":"30s"}}]}]'
+      query_suffix=""
+      if [[ "$FAKE_TRAILING_WORKLOAD_QUERY_NEWLINE" == "true" ]]; then
+        query_suffix='\\n'
+      fi
+      printf '%s\n' '[{"displayName":"Octogee WEST GKE notifications","enabled":true,"notificationChannels":["projects/octogee/notificationChannels/email","projects/octogee/notificationChannels/sms"],"conditions":[{"conditionMatchedLog":{}}]},{"displayName":"Octogee WEST workload critical","enabled":true,"notificationChannels":["projects/octogee/notificationChannels/email","projects/octogee/notificationChannels/sms"],"conditions":[{"conditionPrometheusQueryLanguage":{"query":"max by (alertname, severity, namespace, gateway_id) (ALERTS{project_id=\\"octogee\\", location=\\"us-west1\\", cluster=\\"octogee-gateway\\", alertstate=\\"firing\\", severity=\\"critical\\"})'"$query_suffix"'","duration":"0s","evaluationInterval":"30s"}}]},{"displayName":"Octogee WEST workload warning","enabled":true,"notificationChannels":["projects/octogee/notificationChannels/email","projects/octogee/notificationChannels/sms"],"conditions":[{"conditionPrometheusQueryLanguage":{"query":"max by (alertname, severity, namespace, gateway_id) (ALERTS{project_id=\\"octogee\\", location=\\"us-west1\\", cluster=\\"octogee-gateway\\", alertstate=\\"firing\\", severity=\\"warning\\"})'"$query_suffix"'","duration":"0s","evaluationInterval":"30s"}}]}]'
     fi
     ;;
   *)
@@ -75,6 +83,7 @@ esac
 
   executable(path.join(temp, "kubectl"), `#!/usr/bin/env bash
 set -euo pipefail
+printf '%s\\n' "$*" >> "$FAKE_KUBECTL_CALLS_FILE"
 case "$*" in
   "cluster-info "*|"delete pod "*|"run octogee-west-foundation-smoke "*|"wait "*) ;;
   "exec "*)
@@ -104,7 +113,7 @@ case "$*" in
 esac
 `);
 
-  const result = spawnSync("bash", [script], {
+  const result = spawnSync("bash", [script, ...(options.mode ? [options.mode] : [])], {
     cwd: repoRoot,
     env: {
       ...process.env,
@@ -116,15 +125,18 @@ esac
       FAKE_EXTERNAL_NODE_IP: options.externalNodeIp ? "true" : "false",
       FAKE_INVALID_SMS_CHANNEL: options.invalidSmsChannel ? "true" : "false",
       FAKE_INVALID_WORKLOAD_POLICY: options.invalidWorkloadPolicy ? "true" : "false",
+      FAKE_TRAILING_WORKLOAD_QUERY_NEWLINE: options.trailingWorkloadQueryNewline ? "true" : "false",
       FAKE_EXEC_FAILURES: String(options.execFailures ?? 0),
       FAKE_EXEC_COUNT_FILE: execCountFile,
+      FAKE_KUBECTL_CALLS_FILE: kubectlCallsFile,
       WEST_SMOKE_EXEC_MAX_ATTEMPTS: String(options.execMaxAttempts ?? 3),
       WEST_SMOKE_EXEC_RETRY_SECONDS: "0",
     },
     encoding: "utf8",
   });
+  const kubectlCalls = readFileSync(kubectlCallsFile, "utf8");
   rmSync(temp, { recursive: true, force: true });
-  return result;
+  return { ...result, kubectlCalls };
 }
 
 describe("WEST foundation runtime verifier", () => {
@@ -188,6 +200,21 @@ describe("WEST foundation runtime verifier", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("WEST workload alert-policy invariants failed");
+  });
+
+  it("accepts the Terraform-rendered trailing newline on workload queries", () => {
+    const result = runVerifier({ trailingWorkloadQueryNewline: true });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("WEST foundation verified");
+  });
+
+  it.each(["--read-only", "--plan"] as const)("verifies cloud foundation invariants without accessing the cluster in %s mode", (mode) => {
+    const result = runVerifier({ mode });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("WEST foundation read-only verification passed");
+    expect(result.kubectlCalls).toBe("");
   });
 
   it("retries transient new-node exec tunnel failures", () => {
