@@ -62,6 +62,7 @@ RUN_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
 
 INGRESS_CHANGE_ADDRESSES=(
+  'google_compute_global_address.west_ingress["grafana-ip"]'
   'google_compute_global_address.west_ingress["gitea-ip-test-west"]'
   'google_compute_global_address.west_ingress["gitea-ip-west"]'
   'google_compute_global_address.west_ingress["mattermost-ip-test-west"]'

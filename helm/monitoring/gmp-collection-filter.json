@@ -1,0 +1,17 @@
+{
+  "collection": {
+    "filter": {
+      "matchOneOf": [
+        "{__name__=~\"container_(cpu_(cfs_(periods_total|throttled_periods_total)|usage_seconds_total)|memory_working_set_bytes|network_(receive|transmit)_(bytes_total|packets_dropped_total|packets_total))\", job=\"gmp-kubelet-cadvisor\"}",
+        "{__name__=~\"kubelet_volume_stats_(capacity_bytes|inodes|inodes_used|used_bytes)\", job=\"gmp-kubelet-metrics\"}",
+        "{job=\"gmp-kube-state-metrics\"}",
+        "{job=\"octogee-api\"}",
+        "{job=\"octogee-gateway\"}",
+        "{job=\"gateway-edge\"}",
+        "{job=\"gitea\"}",
+        "{job=\"mattermost\"}",
+        "{job=\"glm-controller\"}"
+      ]
+    }
+  }
+}

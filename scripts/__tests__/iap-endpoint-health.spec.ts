@@ -16,6 +16,14 @@ function isExpectedIapRedirect(code: string, redirectUrl: string) {
   return spawnSync("bash", ["-c", 'source "$1"; is_expected_iap_redirect "$2" "$3"', "--", library, code, redirectUrl]).status === 0;
 }
 
+function runLibrary(functionName: string, ...args: string[]) {
+  return spawnSync(
+    "bash",
+    ["-c", `source "$1"; shift; ${functionName} "$@"`, "--", library, ...args],
+    { encoding: "utf8" },
+  );
+}
+
 describe("IAP endpoint health classification", () => {
   it("recognizes the consolidated TEST admin hosts without treating public hosts as IAP-only", () => {
     expect(existsSync(library)).toBe(true);
@@ -23,6 +31,7 @@ describe("IAP endpoint health classification", () => {
     expect(requiresIap("mattermost-test.octogee.com")).toBe(true);
     expect(requiresIap("git.octogee.com")).toBe(true);
     expect(requiresIap("mattermost.octogee.com")).toBe(true);
+    expect(requiresIap("monitoring.octogee.com")).toBe(true);
     expect(requiresIap("api-test.octogee.com")).toBe(false);
     expect(requiresIap("preview-test.octogee.com")).toBe(false);
   });
@@ -38,5 +47,57 @@ describe("IAP endpoint health classification", () => {
     expect(isExpectedIapRedirect("302", "https://accounts.google.com/o/oauth2/v2/auth")).toBe(true);
     expect(isExpectedIapRedirect("302", "https://example.test/login")).toBe(false);
     expect(isExpectedIapRedirect("200", "")).toBe(false);
+  });
+
+  it("extracts one healthy GKE backend and rejects incomplete ingress state", () => {
+    const healthy = runLibrary(
+      "iap_backend_from_ingress_annotation",
+      '{"k8s1-monitoring-backend":"HEALTHY"}',
+    );
+    expect(healthy.status).toBe(0);
+    expect(healthy.stdout.trim()).toBe("k8s1-monitoring-backend");
+    expect(
+      runLibrary(
+        "iap_backend_from_ingress_annotation",
+        '{"k8s1-monitoring-backend":"UNHEALTHY"}',
+      ).status,
+    ).not.toBe(0);
+    expect(
+      runLibrary(
+        "iap_backend_from_ingress_annotation",
+        '{"one":"HEALTHY","two":"HEALTHY"}',
+      ).status,
+    ).not.toBe(0);
+  });
+
+  it("verifies backend enforcement and the exact declared IAP principal", () => {
+    expect(
+      runLibrary("is_iap_enabled_backend_json", '{"iap":{"enabled":true}}').status,
+    ).toBe(0);
+    expect(
+      runLibrary("is_iap_enabled_backend_json", '{"iap":{"enabled":false}}').status,
+    ).not.toBe(0);
+    const policy = JSON.stringify({
+      bindings: [
+        {
+          role: "roles/iap.httpsResourceAccessor",
+          members: ["user:operator@example.com"],
+        },
+      ],
+    });
+    expect(
+      runLibrary(
+        "iap_policy_grants_principal",
+        policy,
+        "user:operator@example.com",
+      ).status,
+    ).toBe(0);
+    expect(
+      runLibrary(
+        "iap_policy_grants_principal",
+        policy,
+        "user:somebody-else@example.com",
+      ).status,
+    ).not.toBe(0);
   });
 });

@@ -1,0 +1,100 @@
+gmp:
+  projectId: octogee
+  frontend:
+    image: gke.gcr.io/prometheus-engine/frontend:v0.18.0-gke.2
+    replicas: 2
+
+iap:
+  enabled: false
+  domain: monitoring.octogee.com
+  staticIpName: grafana-ip
+  oauthSecretName: grafana-iap-oauth
+
+grafana:
+  rbac:
+    namespaced: true
+    useExistingRole: octogee-monitoring-grafana-dashboard-reader
+  replicas: 1
+  deploymentStrategy:
+    type: Recreate
+  extraLabels:
+    app.kubernetes.io/part-of: octogee-monitoring
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 472
+    runAsGroup: 472
+    fsGroup: 472
+    fsGroupChangePolicy: OnRootMismatch
+  initChownData:
+    enabled: false
+  plugins:
+    - googlecloud-logging-datasource
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      deleteDatasources:
+        - name: Cloud Logging
+          orgId: 1
+      datasources:
+        - name: Managed Prometheus
+          type: prometheus
+          url: http://gmp-frontend.monitoring.svc.cluster.local:9090
+          access: proxy
+          isDefault: true
+        - name: Cloud Monitoring
+          type: stackdriver
+          access: proxy
+          jsonData:
+            authenticationType: gce
+            defaultProject: octogee
+        - name: Cloud Logging
+          type: googlecloud-logging-datasource
+          access: proxy
+          jsonData:
+            authenticationType: gce
+            defaultProject: octogee
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+        allowUiUpdates: true
+      searchNamespace: monitoring
+      resource: configmap
+  serviceAccount:
+    create: true
+    name: grafana
+    annotations:
+      iam.gke.io/gcp-service-account: monitoring-grafana@octogee.iam.gserviceaccount.com
+  adminUser: admin
+  admin:
+    existingSecret: grafana-admin
+    passwordKey: admin-password
+  sessionExpireTime: 720h
+  users:
+    auto_assign_org: true
+    auto_assign_org_id: 1
+    auto_assign_org_role: Viewer
+  persistence:
+    enabled: true
+    type: pvc
+    storageClassName: standard-rwo
+    accessModes:
+      - ReadWriteOnce
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 3000
+  ingress:
+    enabled: false

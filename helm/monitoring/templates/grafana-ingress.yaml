@@ -1,3 +1,4 @@
+{{- if .Values.iap.enabled }}
 # ─────────────────────────────────────────────────────────────────────────────
 # Grafana IAP Ingress — exposes Grafana at https://monitoring.octogee.com behind
 # Google IAP (only IAP-allowlisted Google accounts can reach it).
@@ -17,12 +18,13 @@ apiVersion: cloud.google.com/v1
 kind: BackendConfig
 metadata:
   name: grafana-iap
-  namespace: monitoring
+  labels:
+    {{- include "octogee-monitoring.labels" . | nindent 4 }}
 spec:
   iap:
     enabled: true
     oauthclientCredentials:
-      secretName: grafana-iap-oauth
+      secretName: {{ required "iap.oauthSecretName is required when IAP is enabled" .Values.iap.oauthSecretName }}
 
 ---
 # ── NodePort service (GKE Ingress requires NodePort/LoadBalancer) ────────────
@@ -30,7 +32,8 @@ apiVersion: v1
 kind: Service
 metadata:
   name: grafana-nodeport
-  namespace: monitoring
+  labels:
+    {{- include "octogee-monitoring.labels" . | nindent 4 }}
   annotations:
     cloud.google.com/backend-config: '{"default": "grafana-iap"}'
     cloud.google.com/neg: '{"ingress": true}'
@@ -51,10 +54,11 @@ apiVersion: networking.gke.io/v1
 kind: ManagedCertificate
 metadata:
   name: grafana-cert
-  namespace: monitoring
+  labels:
+    {{- include "octogee-monitoring.labels" . | nindent 4 }}
 spec:
   domains:
-    - monitoring.octogee.com
+    - {{ required "iap.domain is required when IAP is enabled" .Values.iap.domain }}
 
 ---
 # ── Ingress ──────────────────────────────────────────────────────────────────
@@ -62,14 +66,15 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: grafana
-  namespace: monitoring
+  labels:
+    {{- include "octogee-monitoring.labels" . | nindent 4 }}
   annotations:
-    kubernetes.io/ingress.global-static-ip-name: grafana-ip
+    kubernetes.io/ingress.global-static-ip-name: {{ required "iap.staticIpName is required when IAP is enabled" .Values.iap.staticIpName }}
     networking.gke.io/managed-certificates: grafana-cert
     kubernetes.io/ingress.class: "gce"
 spec:
   rules:
-    - host: monitoring.octogee.com
+    - host: {{ .Values.iap.domain }}
       http:
         paths:
           - path: /
@@ -79,3 +84,4 @@ spec:
                 name: grafana-nodeport
                 port:
                   number: 80
+{{- end }}

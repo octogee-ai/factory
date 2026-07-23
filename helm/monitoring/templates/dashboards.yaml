@@ -1,0 +1,18 @@
+{{- range $path, $bytes := .Files.Glob "dashboards/**/*.json" }}
+{{- $group := base (dir $path) }}
+{{- $folder := title $group }}
+{{- $name := printf "grafana-dash-%s" (trimSuffix ".json" (base $path)) | lower | replace "_" "-" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  labels:
+    grafana_dashboard: "1"
+    {{- include "octogee-monitoring.labels" $ | nindent 4 }}
+  annotations:
+    grafana_folder: {{ $folder | quote }}
+data:
+  {{ base $path }}: |-
+{{ $bytes | toString | nindent 4 }}
+{{- end }}

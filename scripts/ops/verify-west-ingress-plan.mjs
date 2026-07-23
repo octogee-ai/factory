@@ -4,6 +4,7 @@ import { isIPv4 } from "node:net";
 import { pathToFileURL } from "node:url";
 
 const INGRESS_NAMES = [
+  "grafana-ip",
   "gitea-ip-test-west",
   "gitea-ip-west",
   "mattermost-ip-test-west",
@@ -58,20 +59,20 @@ export const verifyWestIngressPlan = (receipt) => {
       change.actions.length === 1 &&
       change.actions[0] === "create",
   );
-  const summaryIsEightCreates =
-    summary?.create === 8 &&
+  const summaryIsNineCreates =
+    summary?.create === 9 &&
     summary?.update === 0 &&
     summary?.delete === 0 &&
     summary?.replace === 0;
 
   if (
-    changes.length !== 8 ||
+    changes.length !== 9 ||
     !exactStrings(addresses, [...EXPECTED_ADDRESSES].sort()) ||
     !actionsAreCreates ||
-    !summaryIsEightCreates
+    !summaryIsNineCreates
   ) {
     throw new Error(
-      "WEST ingress plan must be either zero-change or exactly eight address creates",
+      "WEST ingress plan must be either zero-change or exactly nine address creates",
     );
   }
   return "create";
@@ -80,7 +81,7 @@ export const verifyWestIngressPlan = (receipt) => {
 export const verifyWestIngressAddresses = (outputs) => {
   if (typeof outputs !== "object" || outputs === null || Array.isArray(outputs)) {
     throw new Error(
-      "WEST ingress Terraform output must contain eight unique public IPv4 addresses",
+      "WEST ingress Terraform output must contain nine unique public IPv4 addresses",
     );
   }
   const names = Object.keys(outputs).sort();
@@ -91,7 +92,7 @@ export const verifyWestIngressAddresses = (outputs) => {
     new Set(addresses).size !== INGRESS_NAMES.length
   ) {
     throw new Error(
-      "WEST ingress Terraform output must contain eight unique public IPv4 addresses",
+      "WEST ingress Terraform output must contain nine unique public IPv4 addresses",
     );
   }
   return outputs;

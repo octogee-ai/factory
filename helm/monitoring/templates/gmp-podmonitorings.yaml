@@ -10,6 +10,8 @@ apiVersion: monitoring.googleapis.com/v1
 kind: ClusterPodMonitoring
 metadata:
   name: octogee-api
+  labels:
+    {{- include "octogee-monitoring.labels" . | nindent 4 }}
 spec:
   selector:
     matchLabels:
@@ -24,6 +26,8 @@ apiVersion: monitoring.googleapis.com/v1
 kind: ClusterPodMonitoring
 metadata:
   name: octogee-gateway
+  labels:
+    {{- include "octogee-monitoring.labels" . | nindent 4 }}
 spec:
   selector:
     matchLabels:
@@ -39,6 +43,8 @@ apiVersion: monitoring.googleapis.com/v1
 kind: ClusterPodMonitoring
 metadata:
   name: gateway-edge
+  labels:
+    {{- include "octogee-monitoring.labels" . | nindent 4 }}
 spec:
   selector:
     matchLabels:
@@ -54,6 +60,8 @@ apiVersion: monitoring.googleapis.com/v1
 kind: ClusterPodMonitoring
 metadata:
   name: gitea
+  labels:
+    {{- include "octogee-monitoring.labels" . | nindent 4 }}
 spec:
   selector:
     matchLabels:
@@ -68,6 +76,8 @@ apiVersion: monitoring.googleapis.com/v1
 kind: ClusterPodMonitoring
 metadata:
   name: mattermost
+  labels:
+    {{- include "octogee-monitoring.labels" . | nindent 4 }}
 spec:
   selector:
     matchLabels:
@@ -81,6 +91,8 @@ apiVersion: monitoring.googleapis.com/v1
 kind: ClusterPodMonitoring
 metadata:
   name: glm-controller
+  labels:
+    {{- include "octogee-monitoring.labels" . | nindent 4 }}
 spec:
   selector:
     matchLabels:
