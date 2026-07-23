@@ -133,6 +133,7 @@ REBUILD_CHANGE_ADDRESSES=(
   'google_monitoring_notification_channel.operator_email'
   'google_project_iam_custom_role.github_actions_west_pvc_snapshots'
   'google_project_iam_member.github_actions_west_pvc_snapshots'
+  'google_project_service_identity.cloud_sql'
   'google_project_service.required["pubsub.googleapis.com"]'
   'google_project_service.required["storage.googleapis.com"]'
   'google_pubsub_subscription.gke_notifications_archive'
