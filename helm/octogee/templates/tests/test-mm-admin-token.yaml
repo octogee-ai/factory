@@ -21,12 +21,12 @@ spec:
         - |
           echo "=== Validating MM_ADMIN_TOKEN against Mattermost API ==="
 
-          if [ -z "$MM_ADMIN_TOKEN" ]; then
-            echo "FAIL: MM_ADMIN_TOKEN is empty or not injected"
+          if [ -z "$MM_ADMIN_TOKEN" ] || [ -z "$MM_ADMIN_USER" ] || [ -z "$MM_ADMIN_USER_ID" ]; then
+            echo "FAIL: Mattermost admin contract inputs are empty or not injected"
             exit 1
           fi
 
-          echo "Token present (length: $(printf '%s' "$MM_ADMIN_TOKEN" | wc -c | tr -d ' '))"
+          echo "Admin contract inputs present"
 
           HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
             -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
@@ -35,7 +35,16 @@ spec:
           echo "Mattermost /api/v4/users/me → HTTP $HTTP_CODE"
 
           if [ "$HTTP_CODE" = "200" ]; then
-            echo "PASS: Admin token is valid"
+            MM_ME=$(curl -s \
+              -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
+              "http://mattermost.{{ .Release.Namespace }}.svc.cluster.local:8065/api/v4/users/me")
+            if ! printf '%s' "$MM_ME" | grep -Fq "\"id\":\"$MM_ADMIN_USER_ID\"" \
+              || ! printf '%s' "$MM_ME" | grep -Fq "\"username\":\"$MM_ADMIN_USER\"" \
+              || ! printf '%s' "$MM_ME" | grep -Fq 'system_admin'; then
+              echo "FAIL: Admin token does not resolve to the configured system administrator"
+              exit 1
+            fi
+            echo "PASS: Admin token resolves to the configured system administrator"
             exit 0
           elif [ "$HTTP_CODE" = "401" ]; then
             echo "FAIL: Token is expired or revoked (401 Unauthorized)"
@@ -51,4 +60,14 @@ spec:
             secretKeyRef:
               name: {{ .Values.global.mattermost.adminSecret.name }}
               key: {{ .Values.global.mattermost.adminSecret.tokenKey | default "admin_token" }}
+        - name: MM_ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.global.mattermost.adminSecret.name }}
+              key: admin_user
+        - name: MM_ADMIN_USER_ID
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.global.mattermost.adminSecret.name }}
+              key: admin_user_id
 {{- end }}

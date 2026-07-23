@@ -40,6 +40,7 @@ CUSTOM_NS=""
 DEPLOYMENT_TARGET=""
 ROTATE_PLATFORM_CREDENTIALS=false
 CONFIRM_PLATFORM_MIGRATION=""
+SKIP_CLOUD_SQL_PASSWORD_SYNC=false
 
 for arg in "$@"; do
   case $arg in
@@ -48,9 +49,10 @@ for arg in "$@"; do
     --namespace=*) CUSTOM_NS="${arg#*=}" ;;
     --rotate-platform-credentials) ROTATE_PLATFORM_CREDENTIALS=true ;;
     --confirm-platform-migration=*) CONFIRM_PLATFORM_MIGRATION="${arg#*=}" ;;
+    --skip-cloud-sql-password-sync) SKIP_CLOUD_SQL_PASSWORD_SYNC=true ;;
     --yes|-y)      YES=true ;;
     --help|-h)
-      echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--rotate-platform-credentials --confirm-platform-migration=TARGET] [--yes]"
+      echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--rotate-platform-credentials --confirm-platform-migration=TARGET] [--skip-cloud-sql-password-sync] [--yes]"
       exit 0
       ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
@@ -209,12 +211,23 @@ for token in tokens:
 }
 
 mm_pat_is_valid() {
-  local token="$1" expected_user_id="$2" response user_id
-  [[ -n "$token" && -n "$expected_user_id" ]] || return 1
+  local token="$1" expected_username="$2" expected_user_id="$3" response
+  [[ -n "$token" && -n "$expected_username" && -n "$expected_user_id" ]] || return 1
   response=$(curl -s "http://localhost:8065/api/v4/users/me" \
     -H "Authorization: Bearer $token" 2>/dev/null || true)
-  user_id=$(mm_field "$response" id || true)
-  [[ "$user_id" == "$expected_user_id" ]]
+  python3 -c '
+import json, sys
+try:
+    user = json.loads(sys.stdin.read())
+except json.JSONDecodeError:
+    raise SystemExit(1)
+roles = user.get("roles", "")
+raise SystemExit(not (
+    user.get("id") == sys.argv[1]
+    and user.get("username") == sys.argv[2]
+    and "system_admin" in roles.split()
+))
+' "$expected_user_id" "$expected_username" <<<"$response"
 }
 
 ensure_mm_team() {
@@ -288,14 +301,18 @@ MM_URL="${MM_URL:-$MM_URL_DEFAULT}"
 save_env "MM_URL" "$MM_URL"
 info "MM URL: $MM_URL"
 
-[[ -z "${MM_ADMIN_USER:-}" ]] && MM_ADMIN_USER="octogee-admin"
+MM_ADMIN_USER="${MM_ADMIN_USER:-$(ksecret_key mattermost-gateway admin_user)}"
+[[ -z "$MM_ADMIN_USER" ]] && MM_ADMIN_USER="octogee-admin"
 save_env "MM_ADMIN_USER" "$MM_ADMIN_USER"
 info "Admin user: $MM_ADMIN_USER"
 
 if $ROTATE_PLATFORM_CREDENTIALS; then
   MM_ADMIN_PASS="$(openssl rand -base64 48 | tr -d '\n')"
   info "Generated new WEST platform admin password"
-elif [[ -z "${MM_ADMIN_PASS:-}" ]]; then
+else
+  MM_ADMIN_PASS="${MM_ADMIN_PASS:-$(ksecret_key mattermost-gateway admin_pass)}"
+fi
+if [[ -z "$MM_ADMIN_PASS" ]]; then
   MM_ADMIN_PASS="Octogee$(openssl rand -hex 4)!"
   info "Generated admin password"
 fi
@@ -308,32 +325,33 @@ SM_PASS=$(gcloud secrets versions access latest \
 if [[ -n "$SM_PASS" ]]; then
   MM_DB_PASSWORD="$SM_PASS"
   info "MM_DB_PASSWORD from Secret Manager ($TARGET_CLOUD_SQL_PROJECT project)"
-elif [[ -n "${MM_DB_PASSWORD:-}" ]]; then
-  info "MM_DB_PASSWORD from env file"
 else
-  MM_DB_PASSWORD=$(openssl rand -hex 24)
-  warn "MM_DB_PASSWORD not in Secret Manager — generated new. Store it in $TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET."
+  fail "Secret Manager password is required before Mattermost bootstrap: $TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET"
 fi
 save_env "MM_DB_PASSWORD" "$MM_DB_PASSWORD"
 set -u
 
 # ── 2. Sync DB password to Cloud SQL ─────────────────────────────────────
-info "Syncing DB password to Cloud SQL user '$MM_DB_USER'..."
-if gcloud sql users set-password "$MM_DB_USER" \
-    --instance="$TARGET_CLOUD_SQL_INSTANCE" \
-    --project="$TARGET_CLOUD_SQL_PROJECT" \
-    --password="$MM_DB_PASSWORD" 2>&1; then
-  ok "Cloud SQL user '$MM_DB_USER' password synced"
+if $SKIP_CLOUD_SQL_PASSWORD_SYNC; then
+  info "Using the existing Cloud SQL password from Secret Manager"
 else
-  warn "Could not sync Cloud SQL password — check IAM"
+  info "Syncing DB password to Cloud SQL user '$MM_DB_USER'..."
+  if gcloud sql users set-password "$MM_DB_USER" \
+      --instance="$TARGET_CLOUD_SQL_INSTANCE" \
+      --project="$TARGET_CLOUD_SQL_PROJECT" \
+      --password="$MM_DB_PASSWORD" 2>&1; then
+    ok "Cloud SQL user '$MM_DB_USER' password synced"
+  else
+    fail "Could not sync Cloud SQL password — refusing to bootstrap against an unknown database credential"
+  fi
 fi
 
 # ── 3. Create K8s secrets ─────────────────────────────────────────────────
 info "Creating K8s secrets..."
-kubectl delete secret mattermost-cloud-sql -n "$K8S_NAMESPACE" 2>/dev/null || true
 kubectl create secret generic mattermost-cloud-sql -n "$K8S_NAMESPACE" \
-  --from-literal=password="$MM_DB_PASSWORD"
-ok "mattermost-cloud-sql secret created"
+  --from-literal=password="$MM_DB_PASSWORD" \
+  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+ok "mattermost-cloud-sql secret materialized from Secret Manager"
 
 # ── 4. Wait for Mattermost (Helm must already be deployed or running) ─────
 info "Checking if Mattermost is deployed..."
@@ -356,10 +374,14 @@ if ! kubectl get deployment mattermost -n "$K8S_NAMESPACE" >/dev/null 2>&1; then
   exit 0
 fi
 
-info "Waiting for Mattermost (up to 120s)..."
-kubectl wait --for=condition=available deployment/mattermost \
-  -n "$K8S_NAMESPACE" --timeout=120s 2>/dev/null || fail "Mattermost not ready after 120s"
-ok "Mattermost deployment ready"
+info "Restarting Mattermost so it reads the authoritative Cloud SQL password..."
+kubectl rollout restart deployment/mattermost -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" >/dev/null \
+  || fail "Could not restart Mattermost after materializing its Cloud SQL password"
+info "Waiting for the restarted Mattermost rollout (up to 120s)..."
+kubectl rollout status deployment/mattermost \
+  -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" --timeout=120s \
+  || fail "Mattermost rollout did not complete after 120s"
+ok "Mattermost rollout complete"
 
 if $ROTATE_PLATFORM_CREDENTIALS; then
   if MM_USER_GET=$(kubectl exec -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" deploy/mattermost -c mattermost -- \
@@ -453,7 +475,7 @@ if [[ "$ADMIN_CHECK" == "200" ]]; then
   # ── Admin PAT: test cached value first, only rotate if it's broken ──────
   CACHED_ADMIN_PAT=$(ksecret_key mattermost-gateway admin_token)
   $ROTATE_PLATFORM_CREDENTIALS && CACHED_ADMIN_PAT=""
-  if mm_pat_is_valid "$CACHED_ADMIN_PAT" "$MM_ADMIN_USER_ID"; then
+  if mm_pat_is_valid "$CACHED_ADMIN_PAT" "$MM_ADMIN_USER" "$MM_ADMIN_USER_ID"; then
     ok "Cached admin PAT still valid — skipping rotation"
     MM_ADMIN_PAT="$CACHED_ADMIN_PAT"
     save_env "MM_ADMIN_PAT" "$MM_ADMIN_PAT"
@@ -494,7 +516,14 @@ if [[ "$ADMIN_CHECK" == "200" ]]; then
   ensure_mm_team
 
 else
-  info "Fresh Mattermost — bootstrapping admin via mmctl --local..."
+  if MM_USER_GET=$(kubectl exec -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" deploy/mattermost -c mattermost -- \
+    /mattermost/bin/mmctl --local user get "$MM_ADMIN_USER" 2>&1); then
+    fail "Admin exists but API login failed; refusing to treat an active database as fresh"
+  elif [[ "$MM_USER_GET" == *"not found"* ]]; then
+    info "Fresh Mattermost admin is not present; creating it through mmctl --local..."
+  else
+    fail "Could not inspect Mattermost admin state: $MM_USER_GET"
+  fi
 
   MMCTL_ERR=$(kubectl exec -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" deploy/mattermost -c mattermost -- \
     /mattermost/bin/mmctl --local user create \
@@ -564,10 +593,7 @@ for var_name in MM_ADMIN_USER MM_ADMIN_PASS MM_ADMIN_USER_ID MM_ADMIN_PAT MM_TEA
   fi
 done
 
-if [[ "$WRITE_ERRORS" -gt 0 ]]; then
-  warn "$WRITE_ERRORS value(s) missing — writing partial secret"
-  warn "octogee-api and glm-controller may fail to start (MM_ADMIN_TOKEN is required)"
-fi
+[[ "$WRITE_ERRORS" -eq 0 ]] || fail "$WRITE_ERRORS Mattermost bootstrap value(s) missing — refusing to write a partial secret"
 
 # ── 8. Atomic K8s secret write (dry-run + apply) ────────────────────────
 # Uses dry-run + apply instead of delete + create to avoid a window where
@@ -597,11 +623,10 @@ for key in admin_user admin_pass admin_token admin_user_id team_id; do
   fi
 done
 
-if [[ "$VERIFY_ERRORS" -gt 0 ]]; then
-  warn "$VERIFY_ERRORS key(s) empty after write — investigate above warnings"
-else
-  ok "All 5 keys verified non-empty"
-fi
+[[ "$VERIFY_ERRORS" -eq 0 ]] || fail "$VERIFY_ERRORS Mattermost gateway secret key(s) empty after write"
+mm_pat_is_valid "$MM_ADMIN_PAT" "$MM_ADMIN_USER" "$MM_ADMIN_USER_ID" \
+  || fail "PAT does not resolve to the active system administrator"
+ok "Mattermost gateway secret matches the active system administrator"
 set -u
 
 echo ""

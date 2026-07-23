@@ -248,7 +248,69 @@ if [[ "${MM_READY:-0}" -ge 1 ]]; then
   status "mattermost-gateway admin_user_id present" "mattermost-gateway admin_user_id missing" "$MM_ADMIN_USER_ID"
   status "mattermost-gateway team_id present" "mattermost-gateway team_id missing" "$MM_TEAM_ID"
   status "gitea-token present" "gitea-token missing" "$GITEA_TOKEN"
+
+  MM_K8S_PASSWORD_FILE=$(mktemp)
+  MM_SM_PASSWORD_FILE=$(mktemp)
+  kubectl get secret mattermost-cloud-sql -n "$NAMESPACE" --context "$K8S_CONTEXT" \
+    -o jsonpath='{.data.password}' 2>/dev/null | base64 -d > "$MM_K8S_PASSWORD_FILE" 2>/dev/null || true
+  gcloud secrets versions access latest \
+    --secret="$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET" \
+    --project="$TARGET_CLOUD_SQL_PROJECT" > "$MM_SM_PASSWORD_FILE" 2>/dev/null || true
+  if [[ ! -s "$MM_K8S_PASSWORD_FILE" || ! -s "$MM_SM_PASSWORD_FILE" ]]; then
+    fail "mattermost-cloud-sql/password or its Secret Manager source is missing"
+  elif ! cmp -s "$MM_K8S_PASSWORD_FILE" "$MM_SM_PASSWORD_FILE"; then
+    fail "mattermost-cloud-sql/password does not match Secret Manager"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-mattermost.sh --env=$ENV$TARGET_ARG"
+    fi
+  else
+    pass "mattermost-cloud-sql/password matches Secret Manager"
+  fi
+  rm -f "$MM_K8S_PASSWORD_FILE" "$MM_SM_PASSWORD_FILE"
+
   set_section bootstrap
+  header "Mattermost authenticated admin contract"
+  MM_PORT_FORWARD_LOG=$(mktemp)
+  kubectl port-forward --address 127.0.0.1 -n "$NAMESPACE" --context "$K8S_CONTEXT" \
+    svc/mattermost 0:8065 > "$MM_PORT_FORWARD_LOG" 2>&1 &
+  MM_PORT_FORWARD_PID=$!
+  MM_LOCAL_PORT=""
+  for _ in $(seq 1 10); do
+    MM_LOCAL_PORT=$(sed -nE 's/.*127\\.0\\.0\\.1:([0-9]+).*/\1/p' "$MM_PORT_FORWARD_LOG" | head -1)
+    [[ -n "$MM_LOCAL_PORT" ]] && break
+    sleep 1
+  done
+  if [[ -z "$MM_LOCAL_PORT" ]]; then
+    fail "Mattermost authenticated admin contract could not establish a port-forward"
+  else
+    MM_ME_RESPONSE=$(curl -s --max-time 10 "http://127.0.0.1:$MM_LOCAL_PORT/api/v4/users/me" \
+      -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null || true)
+    if python3 -c '
+import json, sys
+try:
+    user = json.loads(sys.stdin.read())
+except json.JSONDecodeError:
+    raise SystemExit(1)
+roles = user.get("roles", "")
+raise SystemExit(not (
+    user.get("id") == sys.argv[1]
+    and user.get("username") == sys.argv[2]
+    and "system_admin" in roles.split()
+))
+' "$MM_ADMIN_USER_ID" "$MM_ADMIN_USER" <<<"$MM_ME_RESPONSE"; then
+      pass "Mattermost authenticated admin contract verified"
+    else
+      fail "Mattermost authenticated admin contract failed: admin PAT does not resolve to the secret's system administrator"
+      if $FIX; then
+        echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-mattermost.sh --env=$ENV$TARGET_ARG"
+      fi
+    fi
+  fi
+  if kill -0 "$MM_PORT_FORWARD_PID" 2>/dev/null; then
+    kill "$MM_PORT_FORWARD_PID" 2>/dev/null || true
+    wait "$MM_PORT_FORWARD_PID" 2>/dev/null || true
+  fi
+  rm -f "$MM_PORT_FORWARD_LOG"
 else
   fail "Mattermost not ready (readyReplicas=${MM_READY:-0})"
   if $FIX; then

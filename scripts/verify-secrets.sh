@@ -193,6 +193,30 @@ for entry in "${REQUIRED_KEYS[@]}"; do
   fi
 done
 
+MM_K8S_PASSWORD_FILE=$(mktemp)
+MM_SM_PASSWORD_FILE=$(mktemp)
+kubectl get secret mattermost-cloud-sql -n "$NS" --context "$KUBE_CTX" \
+  -o jsonpath='{.data.password}' 2>/dev/null | base64 -d > "$MM_K8S_PASSWORD_FILE" 2>/dev/null || true
+gcloud secrets versions access latest \
+  --secret="$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET" \
+  --project="$TARGET_CLOUD_SQL_PROJECT" > "$MM_SM_PASSWORD_FILE" 2>/dev/null || true
+
+if [[ ! -s "$MM_K8S_PASSWORD_FILE" ]]; then
+  echo -e "  ${RED}✗${NC} mattermost-cloud-sql/password — ${RED}MISSING OR EMPTY${NC}"
+  echo -e "    Fix: ./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
+  FAILURES=$((FAILURES + 1))
+elif [[ ! -s "$MM_SM_PASSWORD_FILE" ]]; then
+  echo -e "  ${RED}✗${NC} ${TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET} — ${RED}MISSING OR EMPTY${NC}"
+  FAILURES=$((FAILURES + 1))
+elif ! cmp -s "$MM_K8S_PASSWORD_FILE" "$MM_SM_PASSWORD_FILE"; then
+  echo -e "  ${RED}✗${NC} mattermost-cloud-sql/password differs from Secret Manager"
+  echo -e "    Fix: ./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
+  FAILURES=$((FAILURES + 1))
+else
+  echo -e "  ${GREEN}✓${NC} mattermost-cloud-sql/password matches Secret Manager"
+fi
+rm -f "$MM_K8S_PASSWORD_FILE" "$MM_SM_PASSWORD_FILE"
+
 # ── Optional-but-important secrets (warn only) ──────────────────────────────
 OPTIONAL_SECRETS=(
   "mattermost-cloud-sql"
