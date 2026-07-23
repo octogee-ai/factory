@@ -776,10 +776,8 @@ else
       echo -e "  ${YELLOW}FIX:${NC} node scripts/node_modules/tsx/dist/cli.mjs scripts/ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG"
       echo -e "  ${YELLOW}     ${NC} then re-fire pending placements with the same tsx CLI and scripts/ops/assign-customer-gateway.ts --env=$ENV --all"
     fi
-  elif echo "$ORCH_OUTPUT" | grep -q "SA key not found"; then
-    warn "Cannot verify orchestrator config — SA key not found at ~/.openclaw/secrets/$TARGET_FIREBASE_PROJECT-sa-key.json"
   else
-    warn "Orchestrator config probe failed unexpectedly: $(echo "$ORCH_OUTPUT" | head -1)"
+    warn "Orchestrator config probe failed; verify operator ADC: $(echo "$ORCH_OUTPUT" | head -1)"
   fi
 fi
 
