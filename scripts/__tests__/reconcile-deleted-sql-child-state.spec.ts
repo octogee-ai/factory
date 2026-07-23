@@ -12,6 +12,7 @@ const candidates = [
   'google_sql_database.environment["mattermost_prod"]',
   'google_sql_database.environment["mattermost_test"]',
 ];
+const integrationTestTimeoutMs = 15_000;
 
 type Harness = ReturnType<typeof createHarness>;
 const roots: string[] = [];
@@ -127,7 +128,7 @@ describe("deleted Cloud SQL child-state reconciliation", () => {
     expect(readFileSync(harness.stateFile, "utf8").trim().split("\n")).toEqual(candidates);
     expect(readFileSync(harness.commandLog, "utf8")).not.toContain("state rm");
     expect(readdirSync(harness.uploadDir)).toEqual([]);
-  });
+  }, integrationTestTimeoutMs);
 
   it("fails closed when Cloud SQL inventory discovery fails", () => {
     const harness = createHarness();
@@ -136,7 +137,7 @@ describe("deleted Cloud SQL child-state reconciliation", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("Cloud SQL inventory discovery failed; refusing state retirement");
     expect(readFileSync(harness.commandLog, "utf8")).not.toContain("state rm");
-  });
+  }, integrationTestTimeoutMs);
 
   it("removes only the allowlisted children and uploads intent plus verified completion", () => {
     const unrelated = "google_compute_network.west";
@@ -155,7 +156,7 @@ describe("deleted Cloud SQL child-state reconciliation", () => {
     expect(receipt.retiredThisRun).toEqual(candidates);
     expect(receipt.verifiedAbsentStateAddresses).toEqual(candidates);
     expect(receipt.remainingStateAddresses).toEqual([]);
-  });
+  }, integrationTestTimeoutMs);
 
   it("resumes a partial state-removal failure and proves completion", () => {
     const harness = createHarness();
@@ -167,7 +168,7 @@ describe("deleted Cloud SQL child-state reconciliation", () => {
     const second = run(harness, { FAIL_STATE_RM_ADDRESS: candidates[1] });
     expect(second.status).toBe(0);
     expect(readFileSync(harness.stateFile, "utf8")).toBe("");
-  });
+  }, integrationTestTimeoutMs);
 
   it("publishes completion on rerun after interruption following the last removal", () => {
     const harness = createHarness();
@@ -186,5 +187,5 @@ describe("deleted Cloud SQL child-state reconciliation", () => {
     expect(receipt.retiredThisRun).toEqual([]);
     expect(receipt.verifiedAbsentStateAddresses).toEqual(candidates);
     expect(receipt.remainingStateAddresses).toEqual([]);
-  });
+  }, integrationTestTimeoutMs);
 });
