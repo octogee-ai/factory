@@ -192,8 +192,6 @@ describe("deployment target consumers", () => {
       "scripts/shell-gateway-ui.sh",
       "scripts/setup-monitoring.sh",
       "scripts/setup-monitoring-iap.sh",
-      "scripts/setup-deprovision-iam.sh",
-      "scripts/fix-functions-iam.sh",
       "scripts/ops/reconcile-coach-names.sh",
       "scripts/ops/reconcile-gitea-org.sh",
       "scripts/ops/migrate-secrets-single-region.sh",
@@ -307,10 +305,7 @@ describe("deployment target consumers", () => {
   });
 
   it("selects candidate data and cluster targets in canonical finalizers", () => {
-    for (const script of [
-      "scripts/setup-firestore-ttls.sh",
-      "scripts/verify-env.sh",
-    ]) {
+    for (const script of ["scripts/verify-env.sh"]) {
       const contents = source(script);
       expect(contents, script).toContain("--deployment-target=*)");
       expect(contents, script).toContain(

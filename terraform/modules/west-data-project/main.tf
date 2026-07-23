@@ -40,6 +40,21 @@ locals {
   github_actions_roles = toset([
     "roles/serviceusage.serviceUsageConsumer",
   ])
+  firestore_ttl_fields = {
+    "ocTickets.expiresAt"                  = { collection = "ocTickets", field = "expiresAt" }
+    "gatewayTickets.expireAt"              = { collection = "gatewayTickets", field = "expireAt" }
+    "gatewayTicketMintLog.expireAt"        = { collection = "gatewayTicketMintLog", field = "expireAt" }
+    "connectFlows.expireAt"                = { collection = "connectFlows", field = "expireAt" }
+    "builderShellMintLog.expireAt"         = { collection = "builderShellMintLog", field = "expireAt" }
+    "openclawControlTickets.expireAt"      = { collection = "openclawControlTickets", field = "expireAt" }
+    "openclawControlSessions.expireAt"     = { collection = "openclawControlSessions", field = "expireAt" }
+    "modelBrokerUsageEvents.expiresAt"     = { collection = "modelBrokerUsageEvents", field = "expiresAt" }
+    "modelBrokerUsageWindows.expiresAt"    = { collection = "modelBrokerUsageWindows", field = "expiresAt" }
+    "modelBrokerWeekWindows.expiresAt"     = { collection = "modelBrokerWeekWindows", field = "expiresAt" }
+    "modelBrokerHouseDayWindows.expiresAt" = { collection = "modelBrokerHouseDayWindows", field = "expiresAt" }
+    "modelBrokerRateWindows.expiresAt"     = { collection = "modelBrokerRateWindows", field = "expiresAt" }
+    "usage_models.expiresAt"               = { collection = "usage_models", field = "expiresAt" }
+  }
 }
 
 resource "google_project" "data" {
@@ -110,6 +125,18 @@ resource "google_firestore_database" "default" {
   deletion_policy                   = "ABANDON"
 
   depends_on = [google_firebase_project.data]
+}
+
+resource "google_firestore_field" "ttl" {
+  for_each = local.firestore_ttl_fields
+
+  project         = google_project.data.project_id
+  database        = google_firestore_database.default.name
+  collection      = each.value.collection
+  field           = each.value.field
+  deletion_policy = "ABANDON"
+
+  ttl_config {}
 }
 
 resource "google_identity_platform_config" "default" {

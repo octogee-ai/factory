@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // One-shot for the usage-ledger TTL retrofit. Run ONCE per project after the
-// retrofit ships (and after configure-firestore-ttls.sh enables the policies):
+// Terraform-owned TTL policies converge:
 //   npx tsx scripts/ops/cleanup-usage-ledgers.ts --dry-run
 //   npx tsx scripts/ops/cleanup-usage-ledgers.ts --execute
 //

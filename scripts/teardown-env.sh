@@ -600,7 +600,6 @@ if $FULL; then
       done
       wait
       ok "Cloud Functions deleted (chat proxy preserved)"
-      warn "After 'firebase deploy --only functions', run scripts/fix-functions-iam.sh to restore allUsers invoker binding (firebase deploy doesn't restore IAM)"
     else
       info "No Cloud Functions found"
     fi
@@ -706,9 +705,6 @@ echo "  # 6. Roll pods so they pick up the freshly-populated secret env vars"
 echo "  kubectl rollout restart deploy -n $K8S_NAMESPACE"
 echo "  # Cowboy auto-installs octogee-gw-default after step 2 — may take ~60s"
 echo "  kubectl rollout status deploy/octogee-gateway-default -n $K8S_NAMESPACE --timeout=180s"
-echo ""
-echo "  # 6b. Apply Firestore TTL policies (idempotent; one-time per env)"
-echo "  ./scripts/setup-firestore-ttls.sh --env=$ENV$TARGET_ARG"
 echo ""
 echo "  # 7. Deploy Firebase functions"
 echo "  firebase deploy --project $FIREBASE_PROJECT"
