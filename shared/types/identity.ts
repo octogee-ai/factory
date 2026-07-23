@@ -121,6 +121,14 @@ export function workspaceCoachMmUsername(username: string): string {
   return `${username}${AGENT_ID_SUFFIX}`;
 }
 
+export function isAgentMmUsername(username: unknown): boolean {
+  return (
+    typeof username === 'string' &&
+    username.length > AGENT_ID_SUFFIX.length &&
+    username.endsWith(AGENT_ID_SUFFIX)
+  );
+}
+
 export function projectAgentMmUsername(username: string, project: string): string {
   return `${username}-${PROJECT_DISCRIMINATOR}-${project}${AGENT_ID_SUFFIX}`;
 }

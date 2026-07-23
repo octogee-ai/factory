@@ -32,6 +32,7 @@ import {
   workspaceCoachMmUsername,
   projectAgentMmUsername,
   parseAgentId,
+  isAgentMmUsername,
 } from './identity.js';
 
 const MM_TEAM_NAME_RE = /^[a-z0-9]+([a-z\-0-9]+|(__)?)[a-z0-9]+$/;
@@ -586,5 +587,24 @@ describe('agent ids: MM username envelope', () => {
     );
     expect(worst.length).toBe(52);
     expect(worst.length).toBeLessThanOrEqual(64);
+  });
+});
+
+describe('identity: isAgentMmUsername', () => {
+  it('matches workspace coach and project agent MM usernames', () => {
+    expect(isAgentMmUsername(workspaceCoachMmUsername('alice'))).toBe(true);
+    expect(isAgentMmUsername(projectAgentMmUsername('alice', 'app'))).toBe(true);
+  });
+
+  it('rejects human usernames — "coach" is a reserved segment so no builder can collide', () => {
+    expect(isValidUsername('matt-coach')).toBe(false);
+    expect(isAgentMmUsername('alice')).toBe(false);
+    expect(isAgentMmUsername('coachella')).toBe(false);
+  });
+
+  it('rejects a bare suffix and non-strings', () => {
+    expect(isAgentMmUsername('-coach')).toBe(false);
+    expect(isAgentMmUsername(undefined)).toBe(false);
+    expect(isAgentMmUsername(null)).toBe(false);
   });
 });
