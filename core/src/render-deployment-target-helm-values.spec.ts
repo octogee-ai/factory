@@ -15,6 +15,7 @@ describe("deployment target Helm values", () => {
 
     expect(rendered).toContain('deploymentTargetId: "test-west"');
     expect(rendered).toContain('deploymentProjectId: "octogee-data-test"');
+    expect(rendered).toContain('platformComputeClass: "octogee-platform-test-spot"');
     expect(rendered).toContain('connectionName: "octogee:us-west1:octogee-pg-west"');
     expect(rendered).toContain(
       'repository: "us-west1-docker.pkg.dev/octogee/octogee/octogee-api"',

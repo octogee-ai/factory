@@ -55,6 +55,7 @@
       "previewOrigin": "https://preview.octogee.com",
       "gatewayValuesFile": "values.prod.yaml",
       "computeClass": "octogee-gateway",
+      "platformComputeClass": "octogee-platform-spot",
       "pinEnvironment": "prod"
     },
     "prod-west": {
@@ -106,6 +107,7 @@
       "previewOrigin": "https://preview.octogee.com",
       "gatewayValuesFile": "values.prod.yaml",
       "computeClass": "octogee-gateway",
+      "platformComputeClass": "octogee-platform-spot",
       "pinEnvironment": "prod"
     },
     "test-central": {
@@ -156,6 +158,7 @@
       "previewOrigin": "https://preview-test.octogee.com",
       "gatewayValuesFile": "values.test.yaml",
       "computeClass": "octogee-gateway-test",
+      "platformComputeClass": "octogee-platform-test-spot",
       "pinEnvironment": "test"
     },
     "test-west": {
@@ -206,6 +209,7 @@
       "previewOrigin": "https://preview-test.octogee.com",
       "gatewayValuesFile": "values.test.yaml",
       "computeClass": "octogee-gateway-test",
+      "platformComputeClass": "octogee-platform-test-spot",
       "pinEnvironment": "test"
     },
     "build-week-central": {

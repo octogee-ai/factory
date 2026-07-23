@@ -55,6 +55,7 @@ octogee_load_deployment_target() {
       preview_origin) TARGET_PREVIEW_ORIGIN="$value" ;;
       gateway_values_file) TARGET_GATEWAY_VALUES_FILE="$value" ;;
       compute_class) TARGET_COMPUTE_CLASS="$value" ;;
+      platform_compute_class) TARGET_PLATFORM_COMPUTE_CLASS="$value" ;;
       pin_environment) TARGET_PIN_ENVIRONMENT="$value" ;;
     esac
   done <<< "$output"
@@ -71,5 +72,5 @@ octogee_load_deployment_target() {
   export TARGET_STORAGE_PROJECT TARGET_STORAGE_LOCATION
   export TARGET_SITE_ORIGIN TARGET_APP_ORIGIN TARGET_API_ORIGIN
   export TARGET_GIT_ORIGIN TARGET_MATTERMOST_ORIGIN TARGET_PREVIEW_ORIGIN
-  export TARGET_GATEWAY_VALUES_FILE TARGET_COMPUTE_CLASS TARGET_PIN_ENVIRONMENT
+  export TARGET_GATEWAY_VALUES_FILE TARGET_COMPUTE_CLASS TARGET_PLATFORM_COMPUTE_CLASS TARGET_PIN_ENVIRONMENT
 }

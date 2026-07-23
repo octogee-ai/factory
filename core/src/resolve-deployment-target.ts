@@ -108,6 +108,7 @@ function deploymentTargetOutput(
     preview_origin: settings.previewOrigin,
     gateway_values_file: settings.gatewayValuesFile,
     compute_class: settings.computeClass,
+    platform_compute_class: settings.platformComputeClass ?? "",
     pin_environment: settings.pinEnvironment,
   };
 }

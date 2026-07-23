@@ -26,6 +26,7 @@ describe("deployment environment registry", () => {
       previewOrigin: "https://preview-build-week.octogee.com",
       gatewayValuesFile: "values.build-week.yaml",
       computeClass: "octogee-gateway-build-week",
+      platformComputeClass: undefined,
       pinEnvironment: "build-week",
     });
   });
@@ -62,6 +63,7 @@ describe("deployment environment registry", () => {
       mattermostStaticIpName: "mattermost-ip-west",
       giteaStaticIpName: "gitea-ip-west",
       previewStaticIpName: "preview-ip-west",
+      platformComputeClass: "octogee-platform-spot",
     });
 
     expect(deploymentTargetSettings("prod-west")).toMatchObject({
@@ -106,6 +108,7 @@ describe("deployment environment registry", () => {
       mattermostStaticIpName: "mattermost-ip-test-west",
       giteaStaticIpName: "gitea-ip-test-west",
       previewStaticIpName: "preview-ip-test-west",
+      platformComputeClass: "octogee-platform-test-spot",
     });
 
     expect(deploymentTargetSettings("prod-central")).toMatchObject({

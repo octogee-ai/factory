@@ -29,42 +29,13 @@ spec:
   # shared/types/sizing.ts) has a fitting rule, so ScaleUpAnyway below is a
   # true last resort — not a routine path for the big tiers.
   priorities:
-    - machineType: c2d-standard-4
+    {{- range $machineType := list "c2d-standard-4" "n2d-standard-4" "n2-standard-4" "c2d-standard-8" "n2d-standard-8" "n2-standard-8" "c2d-standard-16" "n2d-standard-16" "n2-standard-16" "c2d-standard-32" "n2d-standard-32" "n2-standard-32" "n2d-standard-48" "n2-standard-48" "c2d-standard-56" "n2d-standard-64" "n2-standard-64" }}
+    - machineType: {{ $machineType }}
       spot: false
-    - machineType: n2d-standard-4
-      spot: false
-    - machineType: n2-standard-4
-      spot: false
-    - machineType: c2d-standard-8
-      spot: false
-    - machineType: n2d-standard-8
-      spot: false
-    - machineType: n2-standard-8
-      spot: false
-    - machineType: c2d-standard-16
-      spot: false
-    - machineType: n2d-standard-16
-      spot: false
-    - machineType: n2-standard-16
-      spot: false
-    - machineType: c2d-standard-32
-      spot: false
-    - machineType: n2d-standard-32
-      spot: false
-    - machineType: n2-standard-32
-      spot: false
-    # xlarge (32-vCPU pod) needs a 48/56-core node; c2d's ladder has no 48
-    - machineType: n2d-standard-48
-      spot: false
-    - machineType: n2-standard-48
-      spot: false
-    - machineType: c2d-standard-56
-      spot: false
-    # 2xlarge (56-vCPU pod) needs a 64-core node; c2d skips 64 (jumps to 112)
-    - machineType: n2d-standard-64
-      spot: false
-    - machineType: n2-standard-64
-      spot: false
+      storage:
+        bootDiskType: pd-balanced
+        bootDiskSize: 10
+    {{- end }}
   # When a pod lands on a lower-priority (bigger) node because the preferred
   # one was momentarily unavailable, migrate it back onto a higher-priority
   # node once one can be provisioned — so oversizing self-heals instead of
@@ -93,74 +64,22 @@ metadata:
     {{- include "octogee.labels" . | nindent 4 }}
 spec:
   priorities:
-    - machineType: c2d-standard-4
+    {{- range $tier := list (list "c2d-standard-4" "n2d-standard-4" "n2-standard-4") (list "c2d-standard-8" "n2d-standard-8" "n2-standard-8") (list "c2d-standard-16" "n2d-standard-16" "n2-standard-16") (list "c2d-standard-32" "n2d-standard-32" "n2-standard-32") (list "n2d-standard-48" "n2-standard-48" "c2d-standard-56") (list "n2d-standard-64" "n2-standard-64") }}
+    {{- range $machineType := $tier }}
+    - machineType: {{ $machineType }}
       spot: true
-    - machineType: n2d-standard-4
-      spot: true
-    - machineType: n2-standard-4
-      spot: true
-    - machineType: c2d-standard-4
+      storage:
+        bootDiskType: pd-balanced
+        bootDiskSize: 10
+    {{- end }}
+    {{- range $machineType := $tier }}
+    - machineType: {{ $machineType }}
       spot: false
-    - machineType: n2d-standard-4
-      spot: false
-    - machineType: n2-standard-4
-      spot: false
-    - machineType: c2d-standard-8
-      spot: true
-    - machineType: n2d-standard-8
-      spot: true
-    - machineType: n2-standard-8
-      spot: true
-    - machineType: c2d-standard-8
-      spot: false
-    - machineType: n2d-standard-8
-      spot: false
-    - machineType: n2-standard-8
-      spot: false
-    - machineType: c2d-standard-16
-      spot: true
-    - machineType: n2d-standard-16
-      spot: true
-    - machineType: n2-standard-16
-      spot: true
-    - machineType: c2d-standard-16
-      spot: false
-    - machineType: n2d-standard-16
-      spot: false
-    - machineType: n2-standard-16
-      spot: false
-    - machineType: c2d-standard-32
-      spot: true
-    - machineType: n2d-standard-32
-      spot: true
-    - machineType: n2-standard-32
-      spot: true
-    - machineType: c2d-standard-32
-      spot: false
-    - machineType: n2d-standard-32
-      spot: false
-    - machineType: n2-standard-32
-      spot: false
-    - machineType: n2d-standard-48
-      spot: true
-    - machineType: n2-standard-48
-      spot: true
-    - machineType: c2d-standard-56
-      spot: true
-    - machineType: n2d-standard-48
-      spot: false
-    - machineType: n2-standard-48
-      spot: false
-    - machineType: c2d-standard-56
-      spot: false
-    - machineType: n2d-standard-64
-      spot: true
-    - machineType: n2-standard-64
-      spot: true
-    - machineType: n2d-standard-64
-      spot: false
-    - machineType: n2-standard-64
-      spot: false
+      storage:
+        bootDiskType: pd-balanced
+        bootDiskSize: 10
+    {{- end }}
+    {{- end }}
   activeMigration:
     optimizeRulePriority: true
   nodePoolAutoCreation:
@@ -177,18 +96,20 @@ metadata:
     {{- include "octogee.labels" $ | nindent 4 }}
 spec:
   priorities:
-    - machineType: c2d-standard-4
+    {{- range $machineType := list "c2d-standard-4" "n2d-standard-4" "n2-standard-4" }}
+    - machineType: {{ $machineType }}
       spot: true
-    - machineType: n2d-standard-4
-      spot: true
-    - machineType: n2-standard-4
-      spot: true
-    - machineType: c2d-standard-4
+      storage:
+        bootDiskType: pd-balanced
+        bootDiskSize: 10
+    {{- end }}
+    {{- range $machineType := list "c2d-standard-4" "n2d-standard-4" "n2-standard-4" }}
+    - machineType: {{ $machineType }}
       spot: false
-    - machineType: n2d-standard-4
-      spot: false
-    - machineType: n2-standard-4
-      spot: false
+      storage:
+        bootDiskType: pd-balanced
+        bootDiskSize: 10
+    {{- end }}
   activeMigration:
     optimizeRulePriority: true
   nodePoolAutoCreation:

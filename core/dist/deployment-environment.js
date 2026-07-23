@@ -195,6 +195,7 @@ function settings(targetId, target) {
         previewOrigin: target.previewOrigin,
         gatewayValuesFile: target.gatewayValuesFile,
         computeClass: target.computeClass,
+        platformComputeClass: target.platformComputeClass,
         pinEnvironment: target.pinEnvironment,
     };
 }

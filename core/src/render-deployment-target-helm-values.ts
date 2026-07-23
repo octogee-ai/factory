@@ -23,6 +23,7 @@ export function renderDeploymentTargetHelmValues(
   return `global:
   deploymentTargetId: ${quoted(settings.targetId)}
   deploymentProjectId: ${quoted(dataProject)}
+  platformComputeClass: ${quoted(settings.platformComputeClass ?? "")}
 cloud-sql-proxy:
   connectionName: ${quoted(settings.cloudSqlConnectionName)}
 edgeIngress:

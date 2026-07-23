@@ -63,6 +63,7 @@ interface DeploymentTargetDocument {
   previewOrigin: string;
   gatewayValuesFile: string;
   computeClass: string;
+  platformComputeClass?: string;
   pinEnvironment: string;
 }
 
@@ -116,6 +117,7 @@ export interface DeploymentEnvironmentSettings {
   previewOrigin: string;
   gatewayValuesFile: string;
   computeClass: string;
+  platformComputeClass?: string;
   pinEnvironment: string;
 }
 
@@ -373,6 +375,7 @@ function settings(
     previewOrigin: target.previewOrigin,
     gatewayValuesFile: target.gatewayValuesFile,
     computeClass: target.computeClass,
+    platformComputeClass: target.platformComputeClass,
     pinEnvironment: target.pinEnvironment,
   };
 }
