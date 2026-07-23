@@ -30,6 +30,8 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 source "$SCRIPT_DIR/lib/deployment-target.sh"
 # shellcheck source=scripts/lib/ready-assigned-gateway-probe.sh
 source "$SCRIPT_DIR/lib/ready-assigned-gateway-probe.sh"
+# shellcheck source=scripts/lib/iap-endpoint-health.sh
+source "$SCRIPT_DIR/lib/iap-endpoint-health.sh"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'
@@ -618,6 +620,10 @@ for INGRESS_NAME in octogee-edge-ingress gateway-edge-ingress mattermost-ingress
   esac
   while IFS= read -r HOST; do
     [[ -z "$HOST" ]] && continue
+    HOST_EXPECT_IAP_REDIRECT="$EXPECT_IAP_REDIRECT"
+    if is_iap_protected_admin_host "$HOST"; then
+      HOST_EXPECT_IAP_REDIRECT=true
+    fi
     if [[ "$INGRESS_NAME" == "octogee-edge-ingress" ]]; then
       case "$HOST" in
         git*) HEALTH_PATH="/" ;;
@@ -629,10 +635,14 @@ for INGRESS_NAME in octogee-edge-ingress gateway-edge-ingress mattermost-ingress
     PROBE=$(curl -sk -o /dev/null -w "%{http_code} %{redirect_url}" --max-time 5 "$URL" 2>/dev/null || echo "000 ")
     HTTP_CODE="${PROBE%% *}"
     REDIRECT_URL="${PROBE#* }"
-    if [[ "$HTTP_CODE" == "200" ]]; then
-      pass "$URL → $HTTP_CODE"
-    elif [[ "$EXPECT_IAP_REDIRECT" == "true" && "$HTTP_CODE" == "302" && "$REDIRECT_URL" == *"accounts.google.com"* ]]; then
+    if [[ "$HOST_EXPECT_IAP_REDIRECT" == "true" ]] && is_expected_iap_redirect "$HTTP_CODE" "$REDIRECT_URL"; then
       pass "$URL → $HTTP_CODE (IAP login redirect — admin access gated, expected)"
+    elif [[ "$HOST_EXPECT_IAP_REDIRECT" == "true" && "$HTTP_CODE" == "200" ]]; then
+      warn "$URL → $HTTP_CODE (expected IAP login redirect — admin access may be ungated)"
+    elif [[ "$HOST_EXPECT_IAP_REDIRECT" == "true" && "$HTTP_CODE" == "302" ]]; then
+      warn "$URL → $HTTP_CODE (expected Google IAP login redirect)"
+    elif [[ "$HTTP_CODE" == "200" ]]; then
+      pass "$URL → $HTTP_CODE"
     elif [[ "$HTTP_CODE" == "000" ]]; then
       warn "$URL → unreachable (TLS or DNS issue)"
     else
