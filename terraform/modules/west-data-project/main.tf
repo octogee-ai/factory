@@ -15,6 +15,7 @@ terraform {
 locals {
   required_services = toset([
     "artifactregistry.googleapis.com",
+    "cloudbilling.googleapis.com",
     "cloudbuild.googleapis.com",
     "cloudfunctions.googleapis.com",
     "cloudkms.googleapis.com",
@@ -35,6 +36,7 @@ locals {
     "run.googleapis.com",
     "secretmanager.googleapis.com",
     "serviceusage.googleapis.com",
+    "sqladmin.googleapis.com",
     "storage.googleapis.com",
   ])
   github_actions_roles = toset([
@@ -48,12 +50,13 @@ locals {
     "builderShellMintLog.expireAt"         = { collection = "builderShellMintLog", field = "expireAt" }
     "openclawControlTickets.expireAt"      = { collection = "openclawControlTickets", field = "expireAt" }
     "openclawControlSessions.expireAt"     = { collection = "openclawControlSessions", field = "expireAt" }
-    "modelBrokerUsageEvents.expiresAt"     = { collection = "modelBrokerUsageEvents", field = "expiresAt" }
-    "modelBrokerUsageWindows.expiresAt"    = { collection = "modelBrokerUsageWindows", field = "expiresAt" }
-    "modelBrokerWeekWindows.expiresAt"     = { collection = "modelBrokerWeekWindows", field = "expiresAt" }
-    "modelBrokerHouseDayWindows.expiresAt" = { collection = "modelBrokerHouseDayWindows", field = "expiresAt" }
-    "modelBrokerRateWindows.expiresAt"     = { collection = "modelBrokerRateWindows", field = "expiresAt" }
-    "usage_models.expiresAt"               = { collection = "usage_models", field = "expiresAt" }
+    "agentControls.gcAt"                   = { collection = "agentControls", field = "gcAt", disable_indexes = true }
+    "modelBrokerUsageEvents.expiresAt"     = { collection = "modelBrokerUsageEvents", field = "expiresAt", disable_indexes = true }
+    "modelBrokerUsageWindows.expiresAt"    = { collection = "modelBrokerUsageWindows", field = "expiresAt", disable_indexes = true }
+    "modelBrokerWeekWindows.expiresAt"     = { collection = "modelBrokerWeekWindows", field = "expiresAt", disable_indexes = true }
+    "modelBrokerHouseDayWindows.expiresAt" = { collection = "modelBrokerHouseDayWindows", field = "expiresAt", disable_indexes = true }
+    "modelBrokerRateWindows.expiresAt"     = { collection = "modelBrokerRateWindows", field = "expiresAt", disable_indexes = true }
+    "usage_models.expiresAt"               = { collection = "usage_models", field = "expiresAt", disable_indexes = true }
   }
 }
 
@@ -137,6 +140,11 @@ resource "google_firestore_field" "ttl" {
   deletion_policy = "ABANDON"
 
   ttl_config {}
+
+  dynamic "index_config" {
+    for_each = try(each.value.disable_indexes, false) ? [true] : []
+    content {}
+  }
 }
 
 resource "google_identity_platform_config" "default" {
