@@ -88,10 +88,10 @@ describe("resolveScope — ownership", () => {
     );
   });
 
-  it("octogee-connector-tools resolves to its own job", () => {
+  it("octogee-connector-tools resolves to its own job and cross-package contracts", () => {
     expectJobs(
       ["infra/gateway/extensions/octogee-connector-tools/connector-client.ts"],
-      ["octogee-connector-tools"],
+      ["octogee-connector-tools", "tests"],
     );
   });
 
@@ -275,6 +275,10 @@ describe("resolveScope — inert paths run nothing", () => {
 
   it("root markdown (README) runs nothing", () => {
     expectJobs(["README.md"], []);
+  });
+
+  it("manual acceptance plan bookkeeping runs nothing", () => {
+    expectJobs(["acceptance/plans/google-productivity-suite.md"], []);
   });
 
   it("inert + a real package change runs only the package (+ its cross-package edges)", () => {

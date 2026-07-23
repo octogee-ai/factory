@@ -21,6 +21,18 @@ const workflowTools = [
   "octogee_status",
   "octogee_ask_ops",
   "octogee_google_calendar_list",
+  "octogee_google_calendar_read",
+  "octogee_google_calendar_write",
+  "octogee_google_gmail_read",
+  "octogee_google_gmail_write",
+  "octogee_google_drive_read",
+  "octogee_google_docs_read",
+  "octogee_google_docs_write",
+  "octogee_google_contacts_read",
+  "octogee_google_tasks_read",
+  "octogee_google_tasks_write",
+  "octogee_google_sheets_read",
+  "octogee_google_sheets_write",
 ];
 
 function readTemplate() {
@@ -71,5 +83,7 @@ describe("infra/gateway/openclaw.template.json — standard gateway exec-off pos
         tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
       },
     });
+    expect(template.plugins.entries["octogee-connector-tools"].config)
+      .not.toHaveProperty("requireWriteApproval");
   });
 });

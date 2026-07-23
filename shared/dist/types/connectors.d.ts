@@ -21,7 +21,7 @@ export interface ConnectorMeta {
     captureFields?: ConnectorCaptureField[];
     implemented: boolean;
 }
-export type GoogleCapability = 'calendar' | 'gmail' | 'drive';
+export type GoogleCapability = 'calendar' | 'gmail' | 'drive' | 'tasks' | 'contacts';
 export declare const GOOGLE_CAPABILITY_ORDER: readonly GoogleCapability[];
 export declare const GOOGLE_CAPABILITY_SCOPES: Record<GoogleCapability, string[]>;
 export declare const GOOGLE_IDENTITY_SCOPE = "https://www.googleapis.com/auth/userinfo.email";

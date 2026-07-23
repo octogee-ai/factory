@@ -1,9 +1,17 @@
 const AGENT_RUNTIME = 'agent-runtime';
-export const GOOGLE_CAPABILITY_ORDER = ['calendar', 'gmail', 'drive'];
+export const GOOGLE_CAPABILITY_ORDER = [
+    'calendar',
+    'gmail',
+    'drive',
+    'tasks',
+    'contacts',
+];
 export const GOOGLE_CAPABILITY_SCOPES = {
     calendar: ['https://www.googleapis.com/auth/calendar.events'],
     gmail: ['https://www.googleapis.com/auth/gmail.modify'],
     drive: ['https://www.googleapis.com/auth/drive.file'],
+    tasks: ['https://www.googleapis.com/auth/tasks'],
+    contacts: ['https://www.googleapis.com/auth/contacts.readonly'],
 };
 export const GOOGLE_IDENTITY_SCOPE = 'https://www.googleapis.com/auth/userinfo.email';
 export const GOOGLE_DRIVE_FULL_READ_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
@@ -223,7 +231,7 @@ export const CONNECTOR_CATALOG = [
     },
     {
         id: 'google',
-        tagline: 'Drive, Gmail and Calendar for your agent',
+        tagline: 'Drive, Gmail, Calendar and more for your agent',
         displayName: 'Google',
         family: 'productivity',
         captureMethods: ['oauth-web'],

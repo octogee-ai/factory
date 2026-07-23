@@ -35,7 +35,10 @@ function platformBindingAuthorized(bound: PlatformBinding, path: string): boolea
   return PLATFORM_INTERNAL_ROUTES.has(path);
 }
 
-const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
+// Exported so agent-productivity-enforcement.spec.ts can pin this allowlist
+// in lockstep with the route manifest createAgentProductivityRoutes exports —
+// exact strings on both sides; this list is never merged or prefix-matched.
+export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/connectors/access-token",
   "/internal/byok/byosub-cred",
   "/internal/byok/api-key",
@@ -54,6 +57,26 @@ const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/agent-projects/create",
   "/internal/agent-projects/list",
   "/internal/agent-productivity/google/calendar/events",
+  "/internal/agent-productivity/google/gmail/search",
+  "/internal/agent-productivity/google/gmail/read",
+  "/internal/agent-productivity/google/gmail/triage",
+  "/internal/agent-productivity/google/gmail/drafts/create",
+  "/internal/agent-productivity/google/gmail/send",
+  "/internal/agent-productivity/google/drive/search",
+  "/internal/agent-productivity/google/drive/read",
+  "/internal/agent-productivity/google/docs/create",
+  "/internal/agent-productivity/google/docs/read",
+  "/internal/agent-productivity/google/docs/append",
+  "/internal/agent-productivity/google/contacts/search",
+  "/internal/agent-productivity/google/calendar/events/create",
+  "/internal/agent-productivity/google/calendar/events/update",
+  "/internal/agent-productivity/google/calendar/events/delete",
+  "/internal/agent-productivity/google/tasks/list",
+  "/internal/agent-productivity/google/tasks/create",
+  "/internal/agent-productivity/google/tasks/update",
+  "/internal/agent-productivity/google/sheets/create",
+  "/internal/agent-productivity/google/sheets/read",
+  "/internal/agent-productivity/google/sheets/append",
 ]);
 
 function isSelfScopedInternalBrokerRoute(path: string): boolean {

@@ -190,6 +190,28 @@ describe("system_config restore", () => {
     expect(fs.readFileSync(path.join(repoDir, ".gitignore"), "utf-8")).toContain("*.tmp");
   });
 
+  it("does not force shared-class Google write approval into a new Builder system config", async () => {
+    templatePath = path.resolve(__dirname, "../../infra/gateway/openclaw.template.json");
+    vi.mocked(gitExec).mockImplementation((_cwd: string, argv: string[]) =>
+      argv.join(" ") === "rev-parse --verify HEAD" ? null : "ok"
+    );
+
+    await restoreSystemConfigForSlug("acme", {
+      openclawDir,
+      templatePath,
+      env: {
+        GATEWAY_CLASS: "builder",
+        GATEWAY_ID: "builder-green",
+        GATEWAY_BUILDER_SLUG: "acme",
+      },
+      log: () => {},
+    });
+
+    const seeded = JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"));
+    expect(seeded.plugins.entries["octogee-connector-tools"].config)
+      .not.toHaveProperty("requireWriteApproval");
+  });
+
   it("does not report a seeded durable config until its initial commit is pushed", async () => {
     fs.rmSync(repoDir, { recursive: true, force: true });
     fs.mkdirSync(path.join(repoDir, ".git"), { recursive: true });

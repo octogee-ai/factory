@@ -109,6 +109,40 @@ describe("connector provider definitions", () => {
     );
   });
 
+  it("probes Tasks through an endpoint authorized by the tasks scope", async () => {
+    h.fetch.mockResolvedValue(response(200, { items: [] }));
+
+    await expect(
+      googleConnector.deepProbe?.("google-token", ["https://www.googleapis.com/auth/tasks"]),
+    ).resolves.toEqual({
+      probe: "tasks.tasklists",
+      detail: "tasks",
+    });
+
+    expect(h.fetch).toHaveBeenCalledWith(
+      "https://tasks.googleapis.com/tasks/v1/users/@me/lists?maxResults=1",
+      { headers: { Authorization: "Bearer google-token" } },
+    );
+  });
+
+  it("probes Contacts through an endpoint authorized by contacts.readonly", async () => {
+    h.fetch.mockResolvedValue(response(200, { connections: [] }));
+
+    await expect(
+      googleConnector.deepProbe?.("google-token", [
+        "https://www.googleapis.com/auth/contacts.readonly",
+      ]),
+    ).resolves.toEqual({
+      probe: "people.connections",
+      detail: "contacts",
+    });
+
+    expect(h.fetch).toHaveBeenCalledWith(
+      "https://people.googleapis.com/v1/people/me/connections?personFields=names&pageSize=1",
+      { headers: { Authorization: "Bearer google-token" } },
+    );
+  });
+
   it("uses Microsoft mail first and userPrincipalName as fallback", async () => {
     h.fetch
       .mockResolvedValueOnce(response(200, { mail: "mail@example.com", userPrincipalName: "upn@example.com" }))

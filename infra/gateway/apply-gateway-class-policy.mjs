@@ -25,6 +25,18 @@ export const OCTOGEE_WORKFLOW_TOOLS = [
   "octogee_status",
   "octogee_ask_ops",
   "octogee_google_calendar_list",
+  "octogee_google_calendar_read",
+  "octogee_google_calendar_write",
+  "octogee_google_gmail_read",
+  "octogee_google_gmail_write",
+  "octogee_google_drive_read",
+  "octogee_google_docs_read",
+  "octogee_google_docs_write",
+  "octogee_google_contacts_read",
+  "octogee_google_tasks_read",
+  "octogee_google_tasks_write",
+  "octogee_google_sheets_read",
+  "octogee_google_sheets_write",
 ];
 const CONNECTOR_TOOLS_PLUGIN = "octogee-connector-tools";
 const PROJECT_TOOLS_PLUGIN = "octogee-project-tools";
@@ -105,6 +117,11 @@ function enableConnectorTools(config) {
   config.plugins.entries[CONNECTOR_TOOLS_PLUGIN].config ??= {};
 }
 
+function requireConnectorWriteApproval(config) {
+  enableConnectorTools(config);
+  config.plugins.entries[CONNECTOR_TOOLS_PLUGIN].config.requireWriteApproval = true;
+}
+
 // Preserved/restored configs predate the plugin; converge it at boot so both
 // shared and builder classes gain project CRUD without waiting for a fresh
 // template render. The client resolves brokerUrl/tokenPath from env when the
@@ -178,7 +195,7 @@ function applySharedPolicy(config) {
   enableProjectTools(config);
   enableOpsTools(config);
   enableAccessTools(config);
-  enableConnectorTools(config);
+  requireConnectorWriteApproval(config);
   sandboxCodex(config);
 }
 

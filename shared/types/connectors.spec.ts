@@ -19,6 +19,8 @@ describe("google capability bundles", () => {
       calendar: ["https://www.googleapis.com/auth/calendar.events"],
       gmail: ["https://www.googleapis.com/auth/gmail.modify"],
       drive: ["https://www.googleapis.com/auth/drive.file"],
+      tasks: ["https://www.googleapis.com/auth/tasks"],
+      contacts: ["https://www.googleapis.com/auth/contacts.readonly"],
     });
   });
 
@@ -36,6 +38,17 @@ describe("google capability bundles", () => {
     ]);
   });
 
+  it("auth requests add the identity scope to the tasks and contacts bundles", () => {
+    expect(googleAuthRequestScopes("tasks")).toEqual([
+      "https://www.googleapis.com/auth/tasks",
+      GOOGLE_IDENTITY_SCOPE,
+    ]);
+    expect(googleAuthRequestScopes("contacts")).toEqual([
+      "https://www.googleapis.com/auth/contacts.readonly",
+      GOOGLE_IDENTITY_SCOPE,
+    ]);
+  });
+
   it("drive full read is declared for verification but part of no default bundle", () => {
     expect(GOOGLE_DRIVE_FULL_READ_SCOPE).toBe("https://www.googleapis.com/auth/drive.readonly");
     for (const cap of Object.keys(GOOGLE_CAPABILITY_SCOPES) as GoogleCapability[]) {
@@ -48,6 +61,8 @@ describe("google capability bundles", () => {
       "https://www.googleapis.com/auth/calendar.events",
       "https://www.googleapis.com/auth/gmail.modify",
       "https://www.googleapis.com/auth/drive.file",
+      "https://www.googleapis.com/auth/tasks",
+      "https://www.googleapis.com/auth/contacts.readonly",
       GOOGLE_IDENTITY_SCOPE,
     ]);
   });
@@ -78,14 +93,28 @@ describe("googleCapabilitiesFromScopes", () => {
     expect(googleCapabilitiesFromScopes(null)).toEqual([]);
   });
 
-  it("orders capabilities stably: calendar, gmail, drive", () => {
+  it("recognizes tasks and contacts from their granted data scopes", () => {
+    expect(
+      googleCapabilitiesFromScopes(["https://www.googleapis.com/auth/tasks", GOOGLE_IDENTITY_SCOPE]),
+    ).toEqual(["tasks"]);
     expect(
       googleCapabilitiesFromScopes([
+        "https://www.googleapis.com/auth/contacts.readonly",
+        GOOGLE_IDENTITY_SCOPE,
+      ]),
+    ).toEqual(["contacts"]);
+  });
+
+  it("orders capabilities stably: calendar, gmail, drive, tasks, contacts", () => {
+    expect(
+      googleCapabilitiesFromScopes([
+        "https://www.googleapis.com/auth/contacts.readonly",
+        "https://www.googleapis.com/auth/tasks",
         "https://www.googleapis.com/auth/drive.file",
         "https://www.googleapis.com/auth/gmail.modify",
         "https://www.googleapis.com/auth/calendar.events",
       ]),
-    ).toEqual(["calendar", "gmail", "drive"]);
+    ).toEqual(["calendar", "gmail", "drive", "tasks", "contacts"]);
   });
 });
 
@@ -97,6 +126,11 @@ describe("google catalog entry — platform client", () => {
     expect(google.consumption).toBe("agent-runtime");
     expect(google.implemented).toBe(true);
     expect(google.scopes).toEqual(GOOGLE_SCOPES);
+  });
+
+  it("the tagline gestures at the wider suite in eight words or fewer", () => {
+    expect(google.tagline.split(" ").length).toBeLessThanOrEqual(8);
+    expect(google.tagline).toMatch(/more/i);
   });
 
   it("the per-user client concept is gone from the catalog shape", () => {

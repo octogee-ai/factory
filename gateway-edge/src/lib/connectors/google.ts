@@ -22,6 +22,14 @@ const CAPABILITY_PROBES: Record<GoogleCapability, { name: string; url: string }>
     name: "drive.about",
     url: "https://www.googleapis.com/drive/v3/about?fields=user",
   },
+  tasks: {
+    name: "tasks.tasklists",
+    url: "https://tasks.googleapis.com/tasks/v1/users/@me/lists?maxResults=1",
+  },
+  contacts: {
+    name: "people.connections",
+    url: "https://people.googleapis.com/v1/people/me/connections?personFields=names&pageSize=1",
+  },
 };
 
 async function probeCapability(accessToken: string, capability: GoogleCapability): Promise<void> {

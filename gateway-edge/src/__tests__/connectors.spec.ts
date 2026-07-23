@@ -107,6 +107,8 @@ describe('connector registry (gateway-edge)', () => {
       'https://www.googleapis.com/auth/calendar.events',
       'https://www.googleapis.com/auth/gmail.modify',
       'https://www.googleapis.com/auth/drive.file',
+      'https://www.googleapis.com/auth/tasks',
+      'https://www.googleapis.com/auth/contacts.readonly',
       'https://www.googleapis.com/auth/userinfo.email',
     ]);
     expect(isConnectorAgentRuntimeTokenMaterializable('google')).toBe(false);
@@ -129,6 +131,14 @@ describe('connector registry (gateway-edge)', () => {
     const google = getConnector('google')!;
     expect(google.capabilityRequestScopes!('gmail')).toEqual([
       'https://www.googleapis.com/auth/gmail.modify',
+      'https://www.googleapis.com/auth/userinfo.email',
+    ]);
+    expect(google.capabilityRequestScopes!('tasks')).toEqual([
+      'https://www.googleapis.com/auth/tasks',
+      'https://www.googleapis.com/auth/userinfo.email',
+    ]);
+    expect(google.capabilityRequestScopes!('contacts')).toEqual([
+      'https://www.googleapis.com/auth/contacts.readonly',
       'https://www.googleapis.com/auth/userinfo.email',
     ]);
     expect(google.capabilityRequestScopes!('drive-full')).toEqual([
@@ -164,19 +174,54 @@ describe('connector registry (gateway-edge)', () => {
         auth: 'Bearer g-tok',
         body: { user: { emailAddress: 'dan@x.com' } },
       },
+      {
+        url: /tasks\.googleapis\.com\/tasks\/v1\/users\/@me\/lists/,
+        auth: 'Bearer g-tok',
+        body: { items: [] },
+      },
+      {
+        url: /people\.googleapis\.com\/v1\/people\/me\/connections/,
+        auth: 'Bearer g-tok',
+        body: { connections: [] },
+      },
     ]);
     await expect(
       getConnector('google')!.deepProbe!('g-tok', [
         'https://www.googleapis.com/auth/calendar.events',
         'https://www.googleapis.com/auth/gmail.modify',
         'https://www.googleapis.com/auth/drive.file',
+        'https://www.googleapis.com/auth/tasks',
+        'https://www.googleapis.com/auth/contacts.readonly',
         'https://www.googleapis.com/auth/userinfo.email',
       ]),
     ).resolves.toEqual({
-      probe: 'calendar.events+gmail.profile+drive.about',
-      detail: 'calendar, gmail, drive',
+      probe: 'calendar.events+gmail.profile+drive.about+tasks.tasklists+people.connections',
+      detail: 'calendar, gmail, drive, tasks, contacts',
     });
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(5);
+  });
+
+  // tests/live/google-connector-durability.live.spec.ts hand-maintains a
+  // CAPABILITY_PROBE_RE mirror of these names (that package never imports
+  // gateway-edge source) — update both together when a probe is added or renamed.
+  it('names exactly five capability probes', async () => {
+    const probeNameByScope: [string, string][] = [
+      ['https://www.googleapis.com/auth/calendar.events', 'calendar.events'],
+      ['https://www.googleapis.com/auth/gmail.modify', 'gmail.profile'],
+      ['https://www.googleapis.com/auth/drive.file', 'drive.about'],
+      ['https://www.googleapis.com/auth/tasks', 'tasks.tasklists'],
+      ['https://www.googleapis.com/auth/contacts.readonly', 'people.connections'],
+    ];
+    const names = new Set<string>();
+    for (const [scope, expectedName] of probeNameByScope) {
+      mockFetchJson([{ url: /.*/, body: {} }]);
+      const result = await getConnector('google')!.deepProbe!('g-tok', [scope]);
+      expect(result.probe).toBe(expectedName);
+      names.add(result.probe);
+    }
+    expect(names).toEqual(
+      new Set(['calendar.events', 'gmail.profile', 'drive.about', 'tasks.tasklists', 'people.connections']),
+    );
   });
 
   it('google deep probe only probes the granted capability', async () => {
@@ -192,6 +237,36 @@ describe('connector registry (gateway-edge)', () => {
         'https://www.googleapis.com/auth/gmail.modify',
       ]),
     ).resolves.toEqual({ probe: 'gmail.profile', detail: 'gmail' });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('google deep probe with only tasks granted probes tasklists alone', async () => {
+    const calls = mockFetchJson([
+      {
+        url: /tasks\.googleapis\.com\/tasks\/v1\/users\/@me\/lists/,
+        auth: 'Bearer g-tok',
+        body: { items: [] },
+      },
+    ]);
+    await expect(
+      getConnector('google')!.deepProbe!('g-tok', ['https://www.googleapis.com/auth/tasks']),
+    ).resolves.toEqual({ probe: 'tasks.tasklists', detail: 'tasks' });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('google deep probe with only contacts granted probes people connections alone', async () => {
+    const calls = mockFetchJson([
+      {
+        url: /people\.googleapis\.com\/v1\/people\/me\/connections/,
+        auth: 'Bearer g-tok',
+        body: { connections: [] },
+      },
+    ]);
+    await expect(
+      getConnector('google')!.deepProbe!('g-tok', [
+        'https://www.googleapis.com/auth/contacts.readonly',
+      ]),
+    ).resolves.toEqual({ probe: 'people.connections', detail: 'contacts' });
     expect(calls).toHaveLength(1);
   });
 

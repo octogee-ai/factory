@@ -25,6 +25,18 @@ const workflowTools = [
   "octogee_status",
   "octogee_ask_ops",
   "octogee_google_calendar_list",
+  "octogee_google_calendar_read",
+  "octogee_google_calendar_write",
+  "octogee_google_gmail_read",
+  "octogee_google_gmail_write",
+  "octogee_google_drive_read",
+  "octogee_google_docs_read",
+  "octogee_google_docs_write",
+  "octogee_google_contacts_read",
+  "octogee_google_tasks_read",
+  "octogee_google_tasks_write",
+  "octogee_google_sheets_read",
+  "octogee_google_sheets_write",
 ];
 
 function runPolicy(gatewayClass: string, config: Record<string, unknown>) {
@@ -83,7 +95,10 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     ]);
     expect(out.plugins.entries.codex.config.appServer.sandbox).toBe("workspace-write");
     expect(out.plugins.entries.codex.config.appServer.approvalPolicy).toBe("never");
-    expect(out.plugins.entries["octogee-connector-tools"]).toEqual({ enabled: true, config: {} });
+    expect(out.plugins.entries["octogee-connector-tools"]).toEqual({
+      enabled: true,
+      config: { requireWriteApproval: true },
+    });
     expect(out.tools.alsoAllow).toContain("octogee_google_calendar_list");
     expect(out.plugins.entries["octogee-project-tools"].enabled).toBe(true);
     expect(out.plugins.entries["octogee-ops-tools"]).toEqual({ enabled: true, config: {} });
@@ -100,7 +115,10 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
 
     expect(out.plugins.entries.codex).toEqual({ enabled: false });
-    expect(out.plugins.entries["octogee-connector-tools"]).toEqual({ enabled: true, config: {} });
+    expect(out.plugins.entries["octogee-connector-tools"]).toEqual({
+      enabled: true,
+      config: { requireWriteApproval: true },
+    });
     expect(out.plugins.entries["octogee-access-tools"]).toEqual({ enabled: true, config: {} });
   });
 
@@ -130,7 +148,11 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
           codex: { enabled: true },
           "octogee-connector-tools": {
             enabled: false,
-            config: { timeoutMs: 1500, baseUrl: "http://connector-tools" },
+            config: {
+              timeoutMs: 1500,
+              baseUrl: "http://connector-tools",
+              requireWriteApproval: false,
+            },
           },
         },
       },
@@ -158,7 +180,11 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
     expect(out.plugins.entries["octogee-connector-tools"]).toEqual({
       enabled: true,
-      config: { timeoutMs: 1500, baseUrl: "http://connector-tools" },
+      config: {
+        timeoutMs: 1500,
+        baseUrl: "http://connector-tools",
+        requireWriteApproval: false,
+      },
     });
     expect(out.tools.alsoAllow).toContain("octogee_google_calendar_list");
     expect(out.plugins.entries["octogee-project-tools"]).toEqual({

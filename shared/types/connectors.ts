@@ -54,14 +54,22 @@ export interface ConnectorMeta {
   implemented: boolean;
 }
 
-export type GoogleCapability = 'calendar' | 'gmail' | 'drive';
+export type GoogleCapability = 'calendar' | 'gmail' | 'drive' | 'tasks' | 'contacts';
 
-export const GOOGLE_CAPABILITY_ORDER: readonly GoogleCapability[] = ['calendar', 'gmail', 'drive'];
+export const GOOGLE_CAPABILITY_ORDER: readonly GoogleCapability[] = [
+  'calendar',
+  'gmail',
+  'drive',
+  'tasks',
+  'contacts',
+];
 
 export const GOOGLE_CAPABILITY_SCOPES: Record<GoogleCapability, string[]> = {
   calendar: ['https://www.googleapis.com/auth/calendar.events'],
   gmail: ['https://www.googleapis.com/auth/gmail.modify'],
   drive: ['https://www.googleapis.com/auth/drive.file'],
+  tasks: ['https://www.googleapis.com/auth/tasks'],
+  contacts: ['https://www.googleapis.com/auth/contacts.readonly'],
 };
 
 export const GOOGLE_IDENTITY_SCOPE = 'https://www.googleapis.com/auth/userinfo.email';
@@ -303,7 +311,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
   },
   {
     id: 'google',
-    tagline: 'Drive, Gmail and Calendar for your agent',
+    tagline: 'Drive, Gmail, Calendar and more for your agent',
     displayName: 'Google',
     family: 'productivity',
     captureMethods: ['oauth-web'],
