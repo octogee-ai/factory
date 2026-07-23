@@ -24,6 +24,7 @@ import agentRoutes from "./agents.js";
 import builderGatewaysRoutes from "./builder/gateways.js";
 import gatewayAccessRoutes from "./gateway-access.js";
 import accessApprovalRoutes from "./access-approvals.js";
+import productivityApprovalRoutes from "./productivity-approvals.js";
 import shellsRoutes from "./shells.js";
 
 import workspaceDisplayNameRoutes from "./workspace/display-name.js";
@@ -112,6 +113,7 @@ const PUBLIC_API_ROUTES: readonly (readonly [string, RouteHandler])[] = [
   ["/api/builder", builderGatewaysRoutes],
   ["/api/gateways", gatewayAccessRoutes],
   ["/api/access-approvals", accessApprovalRoutes],
+  ["/api/productivity-approvals", productivityApprovalRoutes],
   ["/api/shells", shellsRoutes],
 ];
 
