@@ -29,7 +29,6 @@ export declare const AGENT_ID_SUFFIX: '-coach';
 export declare function workspaceCoachAgentId(username: string): string;
 export declare function projectAgentId(username: string, project: string): string;
 export declare function workspaceCoachMmUsername(username: string): string;
-export declare function isAgentMmUsername(username: unknown): boolean;
 export declare function projectAgentMmUsername(username: string, project: string): string;
 export type ParsedAgentId = {
     kind: 'coach';
