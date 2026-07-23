@@ -107,6 +107,7 @@ DESTRUCTIVE_ADDRESSES=(
   'google_compute_address.west_private_service["mattermost"]'
   'google_container_cluster.west'
   'google_sql_database_instance.west'
+  'google_storage_bucket_iam_member.cloud_sql_recovery'
   'google_vpc_access_connector.west'
 )
 

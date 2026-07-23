@@ -67,6 +67,35 @@ describe("Terraform plan receipt", () => {
     ).toThrow("Plan contains an unauthorized destructive change");
   });
 
+  it("permits the reviewed Cloud SQL recovery IAM replacement but no other IAM replacement", () => {
+    const reviewedAddress = "google_storage_bucket_iam_member.cloud_sql_recovery";
+    const options = {
+      target: "west-platform",
+      phase: "pre-apply",
+      generatedAt: "2026-07-23T19:00:00.000Z",
+      gitCommit: "abc123",
+      allowedDestructiveAddresses: new Set([reviewedAddress]),
+    };
+
+    expect(
+      buildPlanReceipt(
+        plan([{ address: reviewedAddress, change: { actions: ["delete", "create"] } }]),
+        options,
+      ).summary,
+    ).toEqual({ create: 0, update: 0, delete: 0, replace: 1 });
+    expect(() =>
+      buildPlanReceipt(
+        plan([
+          {
+            address: "google_storage_bucket_iam_member.unexpected",
+            change: { actions: ["delete", "create"] },
+          },
+        ]),
+        options,
+      ),
+    ).toThrow("Plan contains an unauthorized destructive change");
+  });
+
   it("fails closed on every unreviewed mutation when a change allowlist is supplied", () => {
     expect(() =>
       buildPlanReceipt(

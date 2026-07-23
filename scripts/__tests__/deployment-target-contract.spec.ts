@@ -226,6 +226,17 @@ describe("deployment target consumers", () => {
     expect(bootstrap).toContain('setup-cloud-sql.sh" --target=test-west --rotate');
   });
 
+  it("permits only the reviewed Cloud SQL recovery IAM replacement during a WEST rebuild", () => {
+    const bootstrap = source("scripts/bootstrap-west-platform.sh");
+    const destructiveAddresses = bootstrap
+      .split("DESTRUCTIVE_ADDRESSES=(", 2)[1]
+      ?.split("\n)", 1)[0];
+
+    expect(destructiveAddresses).toContain(
+      "'google_storage_bucket_iam_member.cloud_sql_recovery'",
+    );
+  });
+
   it("reserves central and west deployment namespaces from custom provisioning", () => {
     const provision = source("scripts/provision-namespace.sh");
     const terraform = source("terraform/environments/custom/variables.tf");
