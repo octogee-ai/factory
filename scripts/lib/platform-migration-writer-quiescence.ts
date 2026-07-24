@@ -203,9 +203,11 @@ export interface PlatformMigrationWriterQuiescenceDependencies {
     settings: DeploymentEnvironmentSettings,
     receipt: PlatformMigrationWriterReceipt,
   ): Promise<void>;
+  validateGiteaTokenConsumers(settings: DeploymentEnvironmentSettings): Promise<void>;
   readReceipt(uri: string): Promise<PlatformMigrationWriterReceipt | null>;
   writeReceipt(uri: string, receipt: PlatformMigrationWriterReceipt): Promise<void>;
   assertRequiredMigrationReceipts(receipt: PlatformMigrationWriterReceipt): Promise<void>;
+  assertMigrationActivation(receipt: PlatformMigrationWriterReceipt): Promise<void>;
   assertPairedCentralQuiesced(receipt: PlatformMigrationWriterReceipt): Promise<void>;
   settingsForTarget(targetId: PlatformMigrationWriterTargetId): DeploymentEnvironmentSettings;
   receiptUri(receipt: Pick<PlatformMigrationWriterReceipt, "targetId" | "migrationId">): string;
@@ -1025,6 +1027,7 @@ async function executeRestore(
   assertReceipt(existing, args, revision);
   assertScheduledWriterReceiptMatchesTarget(existing, settings);
   await dependencies.assertRequiredMigrationReceipts(existing);
+  await dependencies.assertMigrationActivation(existing);
   await dependencies.assertPairedCentralQuiesced(existing);
   if (!equal(maintenance, frozenMaintenance())) {
     throw new Error("restore requires the writer-quiescence maintenance state to remain frozen");
@@ -1041,6 +1044,7 @@ async function executeRestore(
     await dependencies.scaleWorkload(settings, workload, workload.replicas);
   }
   await dependencies.waitForWritersReady(settings, existing);
+  await dependencies.validateGiteaTokenConsumers(settings);
   for (const job of scheduledWriterReceipt(existing).jobs) {
     if (job.priorState === "ENABLED") await dependencies.resumeScheduledWriter(settings, job);
   }

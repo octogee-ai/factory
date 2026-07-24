@@ -19,11 +19,14 @@ const identity = {
 describe("serviceAccountManifest", () => {
   it("always renders Helm's keep policy on the gateway-scoped ServiceAccount", () => {
     const m = serviceAccountManifest({ namespace: "octogee", serviceAccountName: "octogee-gw-default", identity });
-    expect(m).toContain("kind: ServiceAccount");
-    expect(m).toContain("name: octogee-gw-default");
-    expect(m).toContain("namespace: octogee");
-    expect(m).toContain("annotations:");
-    expect(m).toContain("helm.sh/resource-policy: keep");
+    expect(JSON.parse(m)).toMatchObject({
+      kind: "ServiceAccount",
+      metadata: {
+        name: "octogee-gw-default",
+        namespace: "octogee",
+        annotations: { "helm.sh/resource-policy": "keep" },
+      },
+    });
   });
 
   it("renders the Workload Identity annotation for operator gateways", () => {
@@ -33,8 +36,10 @@ describe("serviceAccountManifest", () => {
       identity: { ...identity, gatewayId: "bender", releaseName: "octogee-gw-bender", lifecycleIdentity: "gateway-bender" },
       annotations: { "iam.gke.io/gcp-service-account": "gw@proj.iam.gserviceaccount.com" },
     });
-    expect(m).toContain("iam.gke.io/gcp-service-account: gw@proj.iam.gserviceaccount.com");
-    expect(m).toContain("helm.sh/resource-policy: keep");
+    expect(JSON.parse(m).metadata.annotations).toMatchObject({
+      "iam.gke.io/gcp-service-account": "gw@proj.iam.gserviceaccount.com",
+      "helm.sh/resource-policy": "keep",
+    });
   });
 
   it("stamps Cowboy lifecycle ownership onto every dynamic gateway KSA", () => {
@@ -49,13 +54,14 @@ describe("serviceAccountManifest", () => {
       },
     });
 
-    expect(m).toContain("app.kubernetes.io/managed-by: glm-controller");
-    expect(m).toContain("octogee.ai/controller: cowboy");
-    expect(m).toContain("octogee.ai/gateway-id: builder-a");
-    expect(m).toContain("octogee.ai/deployment-target: test-west");
-    expect(m).toContain("octogee.ai/release: octogee-gw-builder-a");
-    expect(m).toContain("octogee.ai/lifecycle-identity: gateway-builder-a");
-    expect(m).toContain("octogee.ai/controller: cowboy");
+    expect(JSON.parse(m).metadata.labels).toMatchObject({
+      "app.kubernetes.io/managed-by": "glm-controller",
+      "octogee.ai/controller": "cowboy",
+      "octogee.ai/gateway-id": "builder-a",
+      "octogee.ai/deployment-target": "test-west",
+      "octogee.ai/release": "octogee-gw-builder-a",
+      "octogee.ai/lifecycle-identity": "gateway-builder-a",
+    });
   });
 
   it("does not allow caller annotations to override reserved ownership metadata", () => {
@@ -70,11 +76,32 @@ describe("serviceAccountManifest", () => {
       },
     });
 
-    expect(m).toContain("helm.sh/resource-policy: keep");
-    expect(m).toContain("iam.gke.io/gcp-service-account: gw@proj.iam.gserviceaccount.com");
-    expect(m).toContain("octogee.ai/controller: cowboy");
-    expect(m).not.toContain("delete");
-    expect(m).not.toContain("other-controller");
+    const annotations = JSON.parse(m).metadata.annotations;
+    expect(annotations).toMatchObject({
+      "helm.sh/resource-policy": "keep",
+      "iam.gke.io/gcp-service-account": "gw@proj.iam.gserviceaccount.com",
+      "octogee.ai/controller": "cowboy",
+    });
+    expect(annotations["helm.sh/resource-policy"]).not.toBe("delete");
+    expect(annotations["octogee.ai/controller"]).not.toBe("other-controller");
+  });
+
+  it("renders untrusted annotation strings as one JSON manifest", () => {
+    const annotationValue = "gw@example.iam.gserviceaccount.com\n---\napiVersion: batch/v1\nkind: Job";
+    const manifest = serviceAccountManifest({
+      namespace: "octogee",
+      serviceAccountName: "octogee-gw-default",
+      identity,
+      annotations: { "iam.gke.io/gcp-service-account": annotationValue },
+    });
+
+    expect(JSON.parse(manifest)).toMatchObject({
+      apiVersion: "v1",
+      kind: "ServiceAccount",
+      metadata: {
+        annotations: { "iam.gke.io/gcp-service-account": annotationValue },
+      },
+    });
   });
 });
 
@@ -93,7 +120,7 @@ describe("createGatewayServiceAccountEnsurer", () => {
     expect(runKubectl).toHaveBeenCalledTimes(1);
     const [args, opts] = runKubectl.mock.calls[0];
     expect(args).toEqual(["apply", "-n", "octogee", "-f", "-"]);
-    expect(opts?.stdin).toContain("name: octogee-gw-default");
+    expect(JSON.parse(opts?.stdin ?? "")).toMatchObject({ metadata: { name: "octogee-gw-default" } });
   });
 
   it("passes the operator Workload Identity annotation into the applied manifest", async () => {
@@ -108,7 +135,11 @@ describe("createGatewayServiceAccountEnsurer", () => {
     });
 
     const [, opts] = runKubectl.mock.calls[0];
-    expect(opts?.stdin).toContain("iam.gke.io/gcp-service-account: gw@proj.iam.gserviceaccount.com");
+    expect(JSON.parse(opts?.stdin ?? "")).toMatchObject({
+      metadata: {
+        annotations: { "iam.gke.io/gcp-service-account": "gw@proj.iam.gserviceaccount.com" },
+      },
+    });
   });
 
   it("throws (no silent failure) when kubectl apply fails", async () => {

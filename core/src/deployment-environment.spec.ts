@@ -42,84 +42,85 @@ describe("deployment environment registry", () => {
     expect(deploymentEnvironmentForProject("local-dev")).toBe("unknown");
   });
 
-  it("makes west active while retaining central as the frozen rollback source", () => {
+  it("makes central active while retaining west as the candidate rollback target", () => {
     expect(deploymentEnvironmentSettings("prod")).toMatchObject({
-      targetId: "prod-west",
+      targetId: "prod-central",
       lifecycle: "active",
       clusterProjectId: "octogee",
-      firebaseProjectId: "octogee-data-prod",
-      region: "us-west1",
+      firebaseProjectId: "octogee",
+      region: "us-central1",
       clusterName: "octogee-gateway",
-      kubeContext: "gke_octogee_us-west1_octogee-gateway",
+      kubeContext: "gke_octogee_us-central1_octogee-gateway",
       artifactRegistryRepository: "us-west1-docker.pkg.dev/octogee/octogee",
-      cloudSqlConnectionName: "octogee:us-west1:octogee-pg-west",
-      cloudSqlMattermostPasswordSecretName: "MM_DB_PASSWORD-octogee-pg-west",
-      cloudSqlGiteaPasswordSecretName: "gitea-db-password-octogee-pg-west",
-      cloudSqlConnectionNameSecretName: "cloud-sql-connection-name-octogee-pg-west",
-      secretNameSuffix: "prod-west",
-      promotionSourceTargetId: "test-west",
-      cloudSqlPointInTimeRecoveryEnabled: true,
-      edgeStaticIpName: "workspace-api-ip-west",
-      mattermostStaticIpName: "mattermost-ip-west",
-      giteaStaticIpName: "gitea-ip-west",
-      previewStaticIpName: "preview-ip-west",
+      cloudSqlConnectionName: "octogee:us-central1:octogee-pg",
+      cloudSqlMattermostPasswordSecretName: "MM_DB_PASSWORD",
+      cloudSqlGiteaPasswordSecretName: "gitea-db-password",
+      cloudSqlConnectionNameSecretName: "cloud-sql-connection-name",
+      secretNameSuffix: "prod",
+      promotionSourceTargetId: "test-central",
+      cloudSqlPointInTimeRecoveryEnabled: false,
+      edgeStaticIpName: "workspace-api-ip",
+      mattermostStaticIpName: "mattermost-ip",
+      giteaStaticIpName: "gitea-ip",
+      previewStaticIpName: "preview-ip",
       platformComputeClass: "octogee-platform-spot",
     });
 
-    expect(deploymentTargetSettings("prod-west")).toMatchObject({
+    expect(deploymentTargetSettings("prod-central")).toMatchObject({
       name: "prod",
-      targetId: "prod-west",
+      targetId: "prod-central",
       lifecycle: "active",
-      namespace: "octogee-west",
+      namespace: "octogee",
       clusterProjectId: "octogee",
-      firebaseProjectId: "octogee-data-prod",
+      firebaseProjectId: "octogee",
       hostingProjectId: "octogee",
-      region: "us-west1",
+      region: "us-central1",
       clusterName: "octogee-gateway",
-      kubeContext: "gke_octogee_us-west1_octogee-gateway",
+      kubeContext: "gke_octogee_us-central1_octogee-gateway",
       artifactRegistryRepository: "us-west1-docker.pkg.dev/octogee/octogee",
-      cloudSqlConnectionName: "octogee:us-west1:octogee-pg-west",
-      cloudSqlMattermostPasswordSecretName: "MM_DB_PASSWORD-octogee-pg-west",
-      cloudSqlGiteaPasswordSecretName: "gitea-db-password-octogee-pg-west",
-      cloudSqlConnectionNameSecretName: "cloud-sql-connection-name-octogee-pg-west",
-      secretNameSuffix: "prod-west",
-      promotionSourceTargetId: "test-west",
-      cloudSqlPointInTimeRecoveryEnabled: true,
-      kmsLocation: "us-west1",
-      storageLocation: "us-west1",
-      edgeStaticIpName: "workspace-api-ip-west",
-      mattermostStaticIpName: "mattermost-ip-west",
-      giteaStaticIpName: "gitea-ip-west",
-      previewStaticIpName: "preview-ip-west",
+      cloudSqlConnectionName: "octogee:us-central1:octogee-pg",
+      cloudSqlMattermostPasswordSecretName: "MM_DB_PASSWORD",
+      cloudSqlGiteaPasswordSecretName: "gitea-db-password",
+      cloudSqlConnectionNameSecretName: "cloud-sql-connection-name",
+      secretNameSuffix: "prod",
+      promotionSourceTargetId: "test-central",
+      cloudSqlPointInTimeRecoveryEnabled: false,
+      kmsLocation: "us-central1",
+      storageLocation: "us-central1",
+      edgeStaticIpName: "workspace-api-ip",
+      mattermostStaticIpName: "mattermost-ip",
+      giteaStaticIpName: "gitea-ip",
+      previewStaticIpName: "preview-ip",
     });
 
-    expect(deploymentTargetSettings("test-west")).toMatchObject({
+    expect(deploymentTargetSettings("test-central")).toMatchObject({
       name: "test",
-      targetId: "test-west",
+      targetId: "test-central",
       lifecycle: "active",
-      namespace: "octogee-test-west",
-      firebaseProjectId: "octogee-data-test",
-      region: "us-west1",
-      cloudSqlMattermostPasswordSecretName: "MM_DB_PASSWORD-octogee-pg-west",
-      cloudSqlGiteaPasswordSecretName: "gitea-db-password-octogee-pg-west",
-      cloudSqlConnectionNameSecretName: "cloud-sql-connection-name-octogee-pg-west",
-      secretNameSuffix: "test-west",
-      edgeStaticIpName: "workspace-api-ip-test-west",
-      mattermostStaticIpName: "workspace-api-ip-test-west",
-      giteaStaticIpName: "workspace-api-ip-test-west",
-      previewStaticIpName: "workspace-api-ip-test-west",
+      namespace: "octogee-test",
+      firebaseProjectId: "octogee-test",
+      region: "us-central1",
+      artifactRegistryRepository: "us-west1-docker.pkg.dev/octogee/octogee",
+      cloudSqlMattermostPasswordSecretName: "MM_DB_PASSWORD",
+      cloudSqlGiteaPasswordSecretName: "gitea-db-password",
+      cloudSqlConnectionNameSecretName: "cloud-sql-connection-name",
+      secretNameSuffix: "test",
+      edgeStaticIpName: "workspace-api-ip-test",
+      mattermostStaticIpName: "mattermost-ip-test",
+      giteaStaticIpName: "gitea-ip-test",
+      previewStaticIpName: "preview-ip-test",
       platformComputeClass: "octogee-platform-test-spot",
     });
 
-    expect(deploymentTargetSettings("prod-central")).toMatchObject({
-      lifecycle: "frozen",
-      region: "us-central1",
-      namespace: "octogee",
+    expect(deploymentTargetSettings("prod-west")).toMatchObject({
+      lifecycle: "candidate",
+      region: "us-west1",
+      namespace: "octogee-west",
     });
-    expect(deploymentTargetSettings("test-central")).toMatchObject({
-      lifecycle: "frozen",
-      region: "us-central1",
-      namespace: "octogee-test",
+    expect(deploymentTargetSettings("test-west")).toMatchObject({
+      lifecycle: "candidate",
+      region: "us-west1",
+      namespace: "octogee-test-west",
     });
   });
 
@@ -209,7 +210,7 @@ describe("deployment environment registry", () => {
     );
   });
 
-  it("lets a candidate cluster select its exact target before the active pointer flips", () => {
+  it("lets a caller select an exact target independent of the active pointer", () => {
     expect(deploymentSettingsForRuntime({
       namespace: "octogee-test-west",
       targetId: "test-west",

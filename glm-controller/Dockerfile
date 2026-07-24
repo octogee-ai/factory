@@ -1,4 +1,4 @@
-FROM node:26-slim
+FROM node:26-slim@sha256:715e55e4b84e4bb0ff48e49b398a848f08e55daed8eb6a0ea1839ae53bc57583
 ARG NPM_VERSION=12.0.1
 RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund
 
@@ -9,9 +9,14 @@ RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fun
 # server-side-apply semantics. helm-runner.ts relies on v4's `--server-side=true
 # --force-conflicts` string-flag syntax + `--take-ownership` (adopts leftover
 # unowned resources rather than wedging a roll); the build verifies all three
-# flags below before publishing. Bump all three sites together. kubectl tracks
-# stable (it is not SSA-version-sensitive).
+# flags below before publishing. Bump all three sites together. kubectl is
+# also pinned — resolving it from dl.k8s.io/release/stable.txt at build time
+# made this image's bytes depend on an untracked, time-varying network read,
+# which the per-image build-fingerprint (.github/actions/build-image-fingerprint/)
+# can't see: two builds from an identical git tree could silently get
+# different kubectl versions, defeating fingerprint-based reuse.
 ARG HELM_VERSION=v4.2.2
+ARG KUBECTL_VERSION=v1.36.3
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl tini \
@@ -21,7 +26,6 @@ RUN apt-get update \
        | tar -xz -C /tmp \
   && mv "/tmp/linux-$(dpkg --print-architecture)/helm" /usr/local/bin/helm \
   && rm -rf "/tmp/linux-$(dpkg --print-architecture)" \
-  && KUBECTL_VERSION="$(curl -fsSL https://dl.k8s.io/release/stable.txt)" \
   && echo "Installing kubectl ${KUBECTL_VERSION}" \
   && curl -fsSL -o /usr/local/bin/kubectl \
        "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/$(dpkg --print-architecture)/kubectl" \

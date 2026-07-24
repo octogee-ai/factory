@@ -27,6 +27,7 @@ import {
   type PlatformMigrationWriterQuiescenceDependencies,
   type PlatformMigrationWriterReceipt,
 } from "../lib/platform-migration-writer-quiescence.js";
+import { assertPlatformMigrationActivationReceipt } from "../lib/platform-migration-activation.js";
 import {
   MIGRATION_RECEIPT_BUCKET,
   MigrationReceiptCollisionError,
@@ -40,6 +41,7 @@ import {
 const RECEIPT_PREFIX = "platform-migration-writer-quiescence";
 const CONTENT_RECEIPT_PREFIX = "platform-content-migration";
 const FIREBASE_RECEIPT_PREFIX = "platform-firestore-auth-west-migration";
+const ACTIVATION_RECEIPT_PREFIX = "platform-migration-activation";
 const MAINTENANCE_DOCUMENT = "config/glmMaintenance";
 const QUIESCE_TIMEOUT_MILLISECONDS = 120_000;
 const QUIESCE_POLL_MILLISECONDS = 1_000;
@@ -369,7 +371,54 @@ export function assertRequiredMigrationReceipts(
   assertRequiredPlatformMigrationReceipts(receipt, content, firebase);
 }
 
-async function assertPairedCentralQuiesced(receipt: PlatformMigrationWriterReceipt): Promise<void> {
+export function assertMigrationActivation(receipt: PlatformMigrationWriterReceipt, runner: CommandRunner = run): void {
+  const { source, target } = migrationEndpoints(receipt);
+  const uri = immutableMigrationReceiptUri(`${ACTIVATION_RECEIPT_PREFIX}/${source}-to-${target}/${receipt.migrationId}.json`);
+  const activation = readImmutableMigrationReceipt(uri, {
+    schemaVersion: 1,
+    kind: "platform-migration-activation-receipt",
+    migrationId: receipt.migrationId,
+    source,
+    target,
+    revision: receipt.revision,
+    credentials: "migration-only-mattermost-and-target-gitea",
+    secrets: "rematerialized-and-verified",
+    verified: true,
+  }, runner).receipt;
+  assertPlatformMigrationActivationReceipt(activation, {
+    migrationId: receipt.migrationId,
+    source,
+    target,
+    revision: receipt.revision,
+  });
+}
+
+export function validateRestoredGiteaTokenConsumers(
+  settings: DeploymentEnvironmentSettings,
+  repoRoot: string,
+  runner: CommandRunner = run,
+): void {
+  const script = [
+    "set -euo pipefail",
+    'K8S_NAMESPACE="$1"',
+    'K8S_CONTEXT="$2"',
+    'fail() { printf "%s\\n" "$1" >&2; return 1; }',
+    "info() { :; }",
+    "ok() { :; }",
+    'source "$3"',
+    "validate_gitea_token_consumers",
+  ].join("\n");
+  runner("bash", [
+    "-c",
+    script,
+    "validate-restored-gitea-token-consumers",
+    settings.namespace,
+    settings.kubeContext,
+    path.join(repoRoot, "scripts/lib/gitea-token-convergence.sh"),
+  ]);
+}
+
+export async function assertPairedCentralQuiesced(receipt: PlatformMigrationWriterReceipt): Promise<void> {
   const { source } = migrationEndpoints(receipt);
   const centralReceipt = readPlatformMigrationWriterReceipt(
     platformMigrationWriterReceiptUri({
@@ -403,6 +452,24 @@ async function assertPairedCentralQuiesced(receipt: PlatformMigrationWriterRecei
     pollMilliseconds: QUIESCE_POLL_MILLISECONDS,
   });
   await waitForScheduledWriters(settings, centralReceipt, false);
+}
+
+export async function assertTargetWriterQuiesced(receipt: PlatformMigrationWriterReceipt): Promise<void> {
+  const settings = deploymentTargetSettings(receipt.targetId);
+  const maintenance = await dependenciesForPairedMaintenance(settings);
+  if (maintenance?.mode !== FROZEN_MAINTENANCE_MODE || maintenance.managedBy !== QUIESCENCE_MANAGER) {
+    throw new Error("target writer quiescence maintenance state is not frozen");
+  }
+  await waitForPlatformMigrationWriterQuiescence({
+    receipt,
+    readWorkloads: async () => workloads(settings),
+    readPods: async () => pods(settings),
+    now: () => Date.now(),
+    sleep,
+    timeoutMilliseconds: 0,
+    pollMilliseconds: QUIESCE_POLL_MILLISECONDS,
+  });
+  await waitForScheduledWriters(settings, receipt, false);
 }
 
 async function dependenciesForPairedMaintenance(
@@ -460,6 +527,8 @@ function dependencies(repoRoot: string): PlatformMigrationWriterQuiescenceDepend
         pollMilliseconds: QUIESCE_POLL_MILLISECONDS,
       });
     },
+    validateGiteaTokenConsumers: async (settings) =>
+      validateRestoredGiteaTokenConsumers(settings, repoRoot),
     waitForScheduledWritersQuiesced: async (settings, receipt) => waitForScheduledWriters(settings, receipt, false),
     waitForScheduledWriterAttemptsDrained: async (_settings, receipt) => {
       await waitForPlatformMigrationScheduledAttemptDrain({
@@ -473,6 +542,7 @@ function dependencies(repoRoot: string): PlatformMigrationWriterQuiescenceDepend
     writeReceipt: async (uri, receipt) =>
       writePlatformMigrationWriterReceipt(uri, receipt),
     assertRequiredMigrationReceipts: async (receipt) => assertRequiredMigrationReceipts(receipt),
+    assertMigrationActivation: async (receipt) => assertMigrationActivation(receipt),
     assertPairedCentralQuiesced: async (receipt) => assertPairedCentralQuiesced(receipt),
     settingsForTarget: (targetId) => deploymentTargetSettings(targetId),
     receiptUri: platformMigrationWriterReceiptUri,
