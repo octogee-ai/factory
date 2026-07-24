@@ -9,7 +9,7 @@
 #
 # Mirror of gateway-edge's build pattern: rootDir=.. so tsc emits
 # dist/octogee-api/src/ alongside dist/gateway-edge/src/ (the routes).
-FROM node:26-slim AS builder
+FROM node:26-slim@sha256:715e55e4b84e4bb0ff48e49b398a848f08e55daed8eb6a0ea1839ae53bc57583 AS builder
 WORKDIR /octogee-api
 
 # Packed internal directory dependencies must be present at their declared sibling paths.
@@ -36,7 +36,7 @@ COPY gateway-edge/src/ /gateway-edge/src/
 RUN npm run build
 
 # ── Runtime stage ────────────────────────────────────────────────────
-FROM node:26-slim
+FROM node:26-slim@sha256:715e55e4b84e4bb0ff48e49b398a848f08e55daed8eb6a0ea1839ae53bc57583
 WORKDIR /octogee-api
 ARG NPM_VERSION=12.0.1
 RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund
