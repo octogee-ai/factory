@@ -354,7 +354,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
   beforeEach(() => {
     patchMocks.applyConfigPatch.mockClear();
     vi.stubEnv("OPENAI_EMBEDDINGS_ENABLED", "true");
-    vi.stubEnv("OPENAI_EMBEDDINGS_BASE_URL", "https://api.openai.com/v1");
     vi.stubEnv("OPENAI_EMBEDDINGS_MODEL", "text-embedding-3-small");
   });
 
@@ -420,11 +419,11 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(rebuiltCoach?.memorySearch).toEqual({
       provider: "openai-compatible",
       remote: {
-        baseUrl: "https://api.openai.com/v1",
+        baseUrl: "http://llm-broker:3010/v1",
         apiKey: {
           source: "exec",
           provider: "gcp-secret-manager",
-          id: "platform-openai-embedding-octogee-alice-coach",
+          id: "agent-model-token-openai-octogee-alice-coach",
         },
       },
       model: "text-embedding-3-small",

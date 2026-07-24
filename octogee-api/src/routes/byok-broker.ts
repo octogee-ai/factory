@@ -80,7 +80,6 @@ function parseByokApiKeyId(
 // keyRef; a generous TTL spans a normal agent session (so it is not re-minted
 // mid-session) while still bounding how long stale tokens linger before TTL cleanup.
 const AGENT_MODEL_TOKEN_TTL_SECONDS = 24 * 60 * 60;
-const DEFAULT_PLATFORM_OPENAI_EMBEDDING_SECRET_NAME = "OPENAI_API_KEY";
 
 // Mirrors gateway-edge/src/routes/byosub.ts: a byosub OAuth flow is short-lived.
 const BYOSUB_FLOW_TTL_MS = 60 * 60 * 1000;
@@ -154,19 +153,6 @@ function requestedModelProvider(value: unknown): ModelBrokerProvider | null {
   return value === "anthropic" || value === "openrouter" || value === "openai"
     ? value
     : null;
-}
-
-function requestedEmbeddingProvider(value: unknown): "openai" | null {
-  return value === "openai" ? "openai" : null;
-}
-
-function platformOpenAiEmbeddingSecretName(
-  env: NodeJS.ProcessEnv = process.env,
-): string {
-  const configured = env.OPENAI_EMBEDDINGS_SECRET_NAME?.trim();
-  return configured && configured.length > 0
-    ? configured
-    : DEFAULT_PLATFORM_OPENAI_EMBEDDING_SECRET_NAME;
 }
 
 function financeNumber(value: unknown): number {
@@ -448,50 +434,6 @@ async function handleApiKeyCredential(
   res.json({ value });
 }
 
-async function handlePlatformEmbeddingKey(
-  db: Firestore,
-  readPlatformSecret: (name: string, version?: string) => Promise<string>,
-  req: Request,
-  res: Response,
-): Promise<void> {
-  const bound = boundGateway(req, res);
-  if (!bound) return;
-
-  const agentId = (req.body as { agentId?: unknown } | undefined)?.agentId;
-  if (typeof agentId !== "string" || !isSafeAgentId(agentId)) {
-    res.status(400).json(VALID_AGENT_ID_REQUIRED);
-    return;
-  }
-  const provider = requestedEmbeddingProvider(
-    (req.body as { provider?: unknown } | undefined)?.provider,
-  );
-  if (!provider) {
-    res.status(400).json(UNSUPPORTED_PROVIDER);
-    return;
-  }
-
-  const assigned =
-    await findAssignedOrInboundMigratingOrConfiguredUserByAgentId(
-      db,
-      bound.gatewayId,
-      bound.podName,
-      agentId,
-    );
-  if (!assigned) {
-    res.status(403).json(FORBIDDEN);
-    return;
-  }
-
-  const value = (
-    await readPlatformSecret(platformOpenAiEmbeddingSecretName(), "latest")
-  ).trim();
-  if (!value) {
-    res.status(500).json({ error: "empty platform embedding key" });
-    return;
-  }
-  res.json({ value, provider });
-}
-
 function registerCredentialMaterializationRoutes(
   router: Router,
   db: Firestore,
@@ -517,10 +459,6 @@ function registerCredentialMaterializationRoutes(
 
   router.post("/api-key", async (req, res) => {
     await handleApiKeyCredential(db, readCredentialSecret, req, res);
-  });
-
-  router.post("/platform-embedding-key", async (req, res) => {
-    await handlePlatformEmbeddingKey(db, readCredentialSecret, req, res);
   });
 }
 

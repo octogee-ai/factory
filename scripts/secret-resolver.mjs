@@ -109,8 +109,6 @@ function parseByokApiKeyId(id) {
 // id IS the per-agent scope — and the slug is allowlisted exactly like byok.
 const AGENT_MODEL_TOKEN_ID_RE =
   /^agent-model-token-(?:(?<provider>openrouter|openai)-)?(?<agentId>octogee-(?<slug>[a-z0-9][a-z0-9-]{0,62})-coach)$/;
-const PLATFORM_OPENAI_EMBEDDING_ID_RE =
-  /^platform-openai-embedding-(?<agentId>octogee-(?<slug>[a-z0-9][a-z0-9-]{0,62})-coach)$/;
 
 /** Scan AGENTS_DIR once at startup for the set of provisioned slugs. The
  *  gateway pod spawns a fresh resolver per resolve call (per OpenClaw's
@@ -151,15 +149,14 @@ function audit(line) {
 }
 
 const VALID_ID_GRAMMAR_MESSAGE =
-  "id does not match byok-{slug}-{provider}[/version], agent-model-token-octogee-{slug}-coach, agent-model-token-{openrouter|openai}-octogee-{slug}-coach, or platform-openai-embedding-octogee-{slug}-coach";
+  "id does not match byok-{slug}-{provider}[/version], agent-model-token-octogee-{slug}-coach, or agent-model-token-{openrouter|openai}-octogee-{slug}-coach";
 
 function scopedSlugForId(id) {
   const byok = parseByokApiKeyId(id);
   if (byok) return byok.slug;
   const agentToken = id.match(AGENT_MODEL_TOKEN_ID_RE);
   if (agentToken?.groups) return agentToken.groups.slug;
-  const platformEmbedding = id.match(PLATFORM_OPENAI_EMBEDDING_ID_RE);
-  return platformEmbedding?.groups?.slug ?? null;
+  return null;
 }
 
 /** Validate a single id against grammar + known-slug allowlist. Returns
@@ -206,7 +203,6 @@ export async function resolveOne(id, deps = {}) {
   // other id is a byok-* key. Both routes return { value } and roster-scope
   // server-side (the resolver holds no GCP creds and no agent identity).
   const agentToken = id.match(AGENT_MODEL_TOKEN_ID_RE);
-  const platformEmbedding = id.match(PLATFORM_OPENAI_EMBEDDING_ID_RE);
   let route = "/internal/byok/api-key";
   let payload = { id };
   if (agentToken) {
@@ -214,12 +210,6 @@ export async function resolveOne(id, deps = {}) {
     payload = {
       agentId: agentToken.groups.agentId,
       ...(agentToken.groups.provider ? { provider: agentToken.groups.provider } : {}),
-    };
-  } else if (platformEmbedding) {
-    route = "/internal/byok/platform-embedding-key";
-    payload = {
-      agentId: platformEmbedding.groups.agentId,
-      provider: "openai",
     };
   }
   const res = await fetchImpl(`${BROKER_BASE_URL}${route}`, {

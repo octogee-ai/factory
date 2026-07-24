@@ -91,16 +91,21 @@ const ALLOWED_ANTHROPIC_ENDPOINTS = new Set([
   "POST /v1/messages/count_tokens",
 ]);
 
-// OpenAI and OpenRouter both speak the openai-completions surface — one
-// endpoint set serves both providers.
 const ALLOWED_OPENROUTER_ENDPOINTS = new Set([
   "GET /v1/models",
   "POST /v1/chat/completions",
 ]);
 
+const ALLOWED_OPENAI_ENDPOINTS = new Set([
+  "GET /v1/models",
+  "POST /v1/chat/completions",
+  "POST /v1/embeddings",
+]);
+
 const ALLOWED_LLM_ENDPOINTS = new Set([
   ...ALLOWED_ANTHROPIC_ENDPOINTS,
   ...ALLOWED_OPENROUTER_ENDPOINTS,
+  ...ALLOWED_OPENAI_ENDPOINTS,
 ]);
 
 const FORBIDDEN_RESPONSE_HEADERS = new Set([
@@ -163,7 +168,9 @@ function providerAllowedEndpoint(
   const key = `${req.method.toUpperCase()} ${url.pathname}`;
   return provider === "anthropic"
     ? ALLOWED_ANTHROPIC_ENDPOINTS.has(key)
-    : ALLOWED_OPENROUTER_ENDPOINTS.has(key);
+    : provider === "openai"
+      ? ALLOWED_OPENAI_ENDPOINTS.has(key)
+      : ALLOWED_OPENROUTER_ENDPOINTS.has(key);
 }
 
 function upstreamHeaders(req: Request, apiKey: string, provider: ModelBrokerProvider): Headers {
@@ -1096,7 +1103,8 @@ async function forwardAllowed(args: {
   const usingCredits = prepaid || gate.creditBalanceUsd !== null;
   const rewrittenBody = rewriteRequestBody({
     body: req.body,
-    degradeModel: gate.degrade ? args.houseModel : null,
+    degradeModel:
+      gate.degrade && url.pathname !== "/v1/embeddings" ? args.houseModel : null,
     includeOpenRouterUsage:
       record.provider === "openrouter" &&
       req.method.toUpperCase() === "POST" &&

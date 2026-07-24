@@ -110,7 +110,6 @@ function app(opts: {
   a.post("/internal/probe/:uid", enforcement, handler);
   a.post("/internal/connectors/access-token", enforcement, handler);
   a.post("/internal/byok/byosub-flow", enforcement, handler);
-  a.post("/internal/byok/platform-embedding-key", enforcement, handler);
   a.post("/internal/openclaw-control/redeem", enforcement, handler);
   a.post("/internal/openclaw-control/authorize", enforcement, handler);
   a.post("/internal/openclaw-control/audit", enforcement, handler);
@@ -396,26 +395,6 @@ describe("tenant enforcement middleware", () => {
         flowId: "fresh-flow-123",
         agentId: "octogee-alice-coach",
         provider: "anthropic",
-      });
-
-    expect(ownedGateway.status).toBe(200);
-    expect(foreignGateway.status).toBe(403);
-  });
-
-  it("lets the platform embedding broker perform its own agent assignment authorization", async () => {
-    const ownedGateway = await request(app({ boundTenant: BENDER }))
-      .post("/internal/byok/platform-embedding-key")
-      .send({
-        agentId: "octogee-alice-coach",
-        provider: "openai",
-      });
-
-    const foreignGateway = await request(app({ boundTenant: BENDER }))
-      .post("/internal/byok/platform-embedding-key")
-      .send({
-        gatewayId: "other",
-        agentId: "octogee-alice-coach",
-        provider: "openai",
       });
 
     expect(ownedGateway.status).toBe(200);

@@ -103,11 +103,11 @@ describe("buildCustomerAgent", () => {
     expect(agent.memorySearch).toEqual({
       provider: "openai-compatible",
       remote: {
-        baseUrl: "https://api.openai.com/v1",
+        baseUrl: "http://llm-broker:3010/v1",
         apiKey: {
           source: "exec",
           provider: "gcp-secret-manager",
-          id: "platform-openai-embedding-octogee-chris-builds-a3f2-coach",
+          id: "agent-model-token-openai-octogee-chris-builds-a3f2-coach",
         },
       },
       model: "text-embedding-3-small",
@@ -119,17 +119,17 @@ describe("platformOpenAiEmbeddingMemorySearch", () => {
   it("normalizes the operator-selected endpoint and model", () => {
     expect(
       platformOpenAiEmbeddingMemorySearch("octogee-alice-coach", {
-        OPENAI_EMBEDDINGS_BASE_URL: "https://embeddings.example.test/v1/",
+        PLATFORM_OPENAI_BASE_URL: "https://llm-broker.example.test/v1/",
         OPENAI_EMBEDDINGS_MODEL: "custom-embed-v1",
       }),
     ).toEqual({
       provider: "openai-compatible",
       remote: {
-        baseUrl: "https://embeddings.example.test/v1",
+        baseUrl: "https://llm-broker.example.test/v1",
         apiKey: {
           source: "exec",
           provider: "gcp-secret-manager",
-          id: "platform-openai-embedding-octogee-alice-coach",
+          id: "agent-model-token-openai-octogee-alice-coach",
         },
       },
       model: "custom-embed-v1",
