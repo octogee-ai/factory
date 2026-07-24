@@ -54,6 +54,7 @@ export interface FleetBrokerClient {
   setRepoUrl(uid: string, repoUrl: string): Promise<void>;
   provisionMattermost(uid: string): Promise<FleetBrokerMattermostUpdate>;
   setMattermostFields(uid: string, mmUpdate: FleetBrokerMattermostUpdate): Promise<void>;
+  ensureCommunityMembership(uid: string): Promise<void>;
   setGreetingResult(uid: string, result: FleetBrokerGreetingResult): Promise<void>;
   setAgentIds(uid: string, agentIds: string[]): Promise<void>;
   setMounted(uid: string, mounted: boolean): Promise<void>;
@@ -149,6 +150,9 @@ export function createFleetBrokerClient(gatewayId: string, revisionId = gatewayI
         uid,
         mmUpdate,
       });
+    },
+    ensureCommunityMembership(uid) {
+      return postNoContent("/internal/fleet/ensure-community-membership", { gatewayId, uid });
     },
     setGreetingResult(uid, result) {
       return postNoContent("/internal/fleet/set-greeting-result", {

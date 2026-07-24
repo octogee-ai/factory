@@ -698,6 +698,7 @@ export function buildBrokeredLifecycleAdapter(
     listProjectsNeedingClone: (slug) => listProjectsNeedingClone(ctx, slug),
     cloneProjectRepo,
     provisionMattermostUser: (customerCtx) => opts.client.provisionMattermost(customerCtx.uid),
+    reconcileCommunityMembership: (customerCtx) => opts.client.ensureCommunityMembership(customerCtx.uid),
     scheduleBootGreetingCron: (params) => scheduleBootGreetingCron(ctx, params),
     applyAddCustomerConfigPatch: (snapshot, mmUpdate, callOpts) =>
       applyAddCustomerConfigPatch(ctx, snapshot, mmUpdate, callOpts),
