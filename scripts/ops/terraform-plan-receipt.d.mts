@@ -9,6 +9,7 @@ export interface TerraformPlan {
   checks?: Array<{ status?: string }>;
   resource_changes?: Array<{
     address: string;
+    type?: string;
     change?: {
       actions?: TerraformPlanAction[];
       before?: unknown;
@@ -49,7 +50,10 @@ export interface TerraformPlanReceipt {
   changes: Array<{ address: string; actions: TerraformPlanAction[] }>;
   knownVolatileMetadataExceptions?: Array<{
     source: "resource_drift";
-    address: "module.data_project.google_firestore_database.default";
+    address:
+      | "module.data_project.google_firestore_database.default"
+      | "module.iam.google_project_iam_member.cloudsql_client";
+    resourceType: "google_firestore_database" | "google_project_iam_member";
     actions: ["update"];
     changedTopLevelPaths: ["etag"];
   }>;
