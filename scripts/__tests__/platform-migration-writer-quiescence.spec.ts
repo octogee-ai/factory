@@ -170,6 +170,7 @@ function dependencies(overrides: Partial<Parameters<typeof executePlatformMigrat
         receipt = next;
       },
       assertRequiredMigrationReceipts: async () => undefined,
+      assertMigrationActivation: async () => undefined,
       assertPairedCentralQuiesced: async () => undefined,
       settingsForTarget: () => ({ targetId, namespace: "octogee-test", region: "us-west1", firebaseProjectId: "octogee-data-test" }) as never,
       receiptUri: (next: { targetId: string; migrationId: string }) =>
@@ -678,6 +679,14 @@ describe("platform migration writer quiescence", () => {
       "Deployment/octogee-gateway-builder-ada=1",
     ]);
     expect(state.maintenanceWrites.at(-1)).toEqual({ mode: "open", reason: "normal operation", updatedAt: 1, updatedBy: "operator" });
+  });
+
+  it("refuses writer restore until receipt-bound durable-service activation succeeds", async () => {
+    const state = dependencies({ assertMigrationActivation: async () => { throw new Error("activation receipt missing"); } });
+    await executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies);
+    await expect(executePlatformMigrationWriterQuiescence(args("restore"), state.dependencies))
+      .rejects.toThrow("activation receipt missing");
+    expect(state.scales).not.toContain("Deployment/gateway-router=2");
   });
 
   it("requires an all-zero and podless WEST target before restore", async () => {

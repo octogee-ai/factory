@@ -206,6 +206,7 @@ export interface PlatformMigrationWriterQuiescenceDependencies {
   readReceipt(uri: string): Promise<PlatformMigrationWriterReceipt | null>;
   writeReceipt(uri: string, receipt: PlatformMigrationWriterReceipt): Promise<void>;
   assertRequiredMigrationReceipts(receipt: PlatformMigrationWriterReceipt): Promise<void>;
+  assertMigrationActivation(receipt: PlatformMigrationWriterReceipt): Promise<void>;
   assertPairedCentralQuiesced(receipt: PlatformMigrationWriterReceipt): Promise<void>;
   settingsForTarget(targetId: PlatformMigrationWriterTargetId): DeploymentEnvironmentSettings;
   receiptUri(receipt: Pick<PlatformMigrationWriterReceipt, "targetId" | "migrationId">): string;
@@ -1025,6 +1026,7 @@ async function executeRestore(
   assertReceipt(existing, args, revision);
   assertScheduledWriterReceiptMatchesTarget(existing, settings);
   await dependencies.assertRequiredMigrationReceipts(existing);
+  await dependencies.assertMigrationActivation(existing);
   await dependencies.assertPairedCentralQuiesced(existing);
   if (!equal(maintenance, frozenMaintenance())) {
     throw new Error("restore requires the writer-quiescence maintenance state to remain frozen");
