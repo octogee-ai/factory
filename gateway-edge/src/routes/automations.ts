@@ -20,58 +20,24 @@ const MAX_CRON_INTERVAL_MS = 365 * 24 * 60 * 60 * 1_000;
 
 const HEARTBEAT_FIELDS = new Set([
   "every",
-  "activeHours",
-  "model",
-  "session",
   "target",
-  "to",
-  "accountId",
   "prompt",
-  "ackMaxChars",
-  "suppressToolErrorWarnings",
-  "timeoutSeconds",
   "lightContext",
-  "isolatedSession",
-  "skipWhenBusy",
-  "includeReasoning",
 ]);
 
 const HEARTBEAT_STRING_FIELDS = new Set([
   "every",
-  "model",
-  "session",
   "target",
-  "to",
-  "accountId",
   "prompt",
 ]);
 
-const HEARTBEAT_BOOLEAN_FIELDS = new Set([
-  "suppressToolErrorWarnings",
-  "lightContext",
-  "isolatedSession",
-  "skipWhenBusy",
-  "includeReasoning",
-]);
-
-const HEARTBEAT_NUMBER_FIELDS = new Set(["ackMaxChars", "timeoutSeconds"]);
+const HEARTBEAT_BOOLEAN_FIELDS = new Set(["lightContext"]);
 
 export interface AutomationHeartbeat {
   every: string;
-  activeHours?: { start?: string; end?: string; timezone?: string };
-  model?: string;
-  session?: string;
   target?: string;
-  to?: string;
-  accountId?: string;
   prompt?: string;
-  ackMaxChars?: number;
-  suppressToolErrorWarnings?: boolean;
-  timeoutSeconds?: number;
   lightContext?: boolean;
-  isolatedSession?: boolean;
-  skipWhenBusy?: boolean;
-  includeReasoning?: boolean;
 }
 
 export interface AutomationsRouterDeps {
@@ -118,15 +84,6 @@ function heartbeatFromConfig(config: unknown, agentId: string): AutomationHeartb
   ));
 }
 
-function validActiveHours(value: unknown): value is NonNullable<AutomationHeartbeat["activeHours"]> {
-  const activeHours = record(value);
-  if (!activeHours) return false;
-  const allowed = new Set(["start", "end", "timezone"]);
-  return Object.entries(activeHours).every(
-    ([key, entry]) => allowed.has(key) && typeof entry === "string",
-  );
-}
-
 export function sanitizeHeartbeat(value: unknown): AutomationHeartbeat | null {
   const heartbeat = record(value);
   if (!heartbeat || typeof heartbeat.every !== "string" || !heartbeat.every.trim()) return null;
@@ -140,8 +97,7 @@ function validHeartbeatField(key: string, value: unknown): boolean {
   if (!HEARTBEAT_FIELDS.has(key)) return false;
   if (HEARTBEAT_STRING_FIELDS.has(key)) return typeof value === "string";
   if (HEARTBEAT_BOOLEAN_FIELDS.has(key)) return typeof value === "boolean";
-  if (HEARTBEAT_NUMBER_FIELDS.has(key)) return typeof value === "number" && Number.isInteger(value) && value >= 0;
-  return key !== "activeHours" || validActiveHours(value);
+  return false;
 }
 
 function coachAgentId(slug: string): string {

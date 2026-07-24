@@ -502,6 +502,24 @@ describe("automations locality broker", () => {
     if (after.ok) await after.lease.release();
   });
 
+  it.each(["accountId", "to", "model", "session"])(
+    "rejects sensitive heartbeat field %s outside the Automation editor contract",
+    async (field) => {
+      const { app, invoke } = appForTest();
+
+      const response = await request(app)
+        .post("/api/g/gw-alice/automations/rpc")
+        .send({
+          method: "heartbeat.update",
+          baseHash: "before-hash",
+          heartbeat: { every: "60m", [field]: "attacker-controlled" },
+        });
+
+      expect(response.status).toBe(400);
+      expect(invoke).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects heartbeat fields outside the narrow Automation editor contract", async () => {
     const { app, invoke } = appForTest();
 
