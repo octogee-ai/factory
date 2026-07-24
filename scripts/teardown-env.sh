@@ -10,11 +10,8 @@ set -euo pipefail
 # releases behind made Cowboy re-register them on the next install via
 # bootstrapGlmGateways with whatever stale image tag was last deployed.
 #
-# Design intent: teardown never touches PVCs. The gateway runs on
-# emptyDir (cattle); Mattermost and Gitea are install-once pets backed by
-# PVCs that persist across teardown/setup cycles. If you ever need to wipe
-# a PVC deliberately, snapshot the disk first and delete it manually — see
-# RUNBOOK.md → Known-Good Reset.
+# Default teardown preserves PVCs. Full teardown deletes the two durable
+# application PVCs together with its other clean-slate data boundaries.
 #
 # Default (no flags): `helm uninstall` and nothing else.
 #   Preserves: all PVCs, K8s secrets, namespace, Secret Manager, Cloud SQL,
@@ -22,12 +19,11 @@ set -euo pipefail
 #
 # --full: also drops the per-env Cloud SQL databases, wipes Firestore
 #         collections, deletes per-env Cloud Functions (chat proxy
-#         preserved), and deletes Firebase Auth users.
-#         Still preserves: all PVCs, all K8s secrets, namespace, Secret
-#         Manager. Secret rotation is never part of teardown.
+#         preserved), Firebase Auth users, and durable application PVCs.
+#         Still preserves: K8s secrets, namespace, and Secret Manager.
 #
 # Does NOT delete (ever): GCP projects, GKE clusters, AR repos,
-#   Firebase projects, GCP Service Accounts, IAM bindings, any PVC,
+#   Firebase projects, GCP Service Accounts, IAM bindings,
 #   any K8s secret, any Secret Manager entry, the namespace itself.
 # To rotate a secret, use scripts/rotate-secret.sh.
 #
@@ -68,8 +64,8 @@ for arg in "$@"; do
       echo "  (default)  helm uninstall only — preserves PVCs, K8s secrets,"
       echo "             namespace, Secret Manager, Cloud SQL, Firestore, Auth"
       echo "  --full     Also drops Cloud SQL DBs + wipes Firestore + Cloud"
-      echo "             Functions + Auth users. Still preserves PVCs, K8s"
-      echo "             secrets, Secret Manager, and the namespace."
+      echo "             Functions + Auth users + deletes durable PVCs."
+      echo "             Still preserves K8s secrets, Secret Manager, and namespace."
       echo ""
       echo "  To rotate a secret: scripts/rotate-secret.sh"
       exit 0
@@ -225,21 +221,49 @@ ok "kubectl context: $CURRENT_CTX"
 # step) drains the pods that hold them, at which point finalizers
 # complete and the PVs (Delete reclaim policy on standard-rwo) are GC'd
 # by GKE. Re-introduce preservation when F&F users have data on disk.
+inspect_pvc() {
+  local pvc="$1"
+  local output
+  if ! output=$(kubectl get pvc "$pvc" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
+      --ignore-not-found -o name 2>&1); then
+    [[ -n "$output" ]] && echo "$output" >&2
+    die "could not inspect PVC $pvc"
+  fi
+  PVC_INSPECTION="$output"
+}
+
 if $FULL; then
   echo ""
   info "Deleting PVCs (Helm-recreated on rebuild)..."
   for pvc in gitea-shared-storage mattermost-data; do
-    if kubectl get pvc "$pvc" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
-        >/dev/null 2>&1; then
+    inspect_pvc "$pvc"
+    if [[ -n "$PVC_INSPECTION" ]]; then
       kubectl delete pvc "$pvc" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
         --wait=false >/dev/null 2>&1 \
-        && ok "PVC $pvc deletion requested (will finalize after Helm uninstall)" \
-        || warn "PVC $pvc delete request failed — non-fatal; Helm uninstall continues"
+        || die "delete request failed for PVC $pvc"
+      ok "PVC $pvc deletion requested (will finalize after Helm uninstall)"
     else
       info "PVC $pvc not present — already gone"
     fi
   done
 fi
+
+verify_durable_pvcs_absent() {
+  local pvc
+  for pvc in gitea-shared-storage mattermost-data; do
+    inspect_pvc "$pvc"
+    if [[ -n "$PVC_INSPECTION" ]]; then
+      kubectl wait --for=delete "pvc/$pvc" -n "$K8S_NAMESPACE" \
+        --context "$K8S_CONTEXT" --timeout=120s >/dev/null 2>&1 \
+        || die "PVC $pvc did not finalize"
+    fi
+    inspect_pvc "$pvc"
+    if [[ -n "$PVC_INSPECTION" ]]; then
+      die "PVC $pvc still exists after deletion wait"
+    fi
+  done
+  ok "Durable PVCs confirmed absent"
+}
 
 uninstall_per_instance_gateways() {
   local timeout_flag="$1"
@@ -265,8 +289,8 @@ uninstall_per_instance_gateways() {
 # ── 1. Helm uninstall + resource cleanup ─────────────────────────────────
 echo ""
 if $FORCE && [[ "$ENV" == "test" ]]; then
-  # Fast path for test --yes: force-delete gateway/app resources only.
-  # PVCs and namespace are preserved.
+  # Fast path for test --yes: force-delete gateway/app resources. --full
+  # has already requested deletion of the durable PVCs in step 1a.
   info "Fast teardown (test + --yes)..."
   uninstall_per_instance_gateways 1m --no-hooks
   helm uninstall octogee -n "$K8S_NAMESPACE" \
@@ -298,13 +322,16 @@ else
     --timeout=90s 2>/dev/null || true
   ok "Pods terminated"
 
-  # ── 2. PVCs preserved ───────────────────────────────────────────────────
-  # Helm leaves PVCs intentionally (data safety) and we don't override that.
-  # Test gateway runs on emptyDir (cattle), MM + Gitea PVCs are install-once
-  # pets. If you need to wipe any PVC deliberately, snapshot the disk first
-  # and delete it manually — see RUNBOOK.md → Known-Good Reset.
   echo ""
-  info "Preserving all PVCs"
+  if $FULL; then
+    info "Durable PVC deletion requested; finalizers complete after Helm holders drain"
+  else
+    info "Preserving all PVCs"
+  fi
+fi
+
+if $FULL; then
+  verify_durable_pvcs_absent
 fi
 
 if [[ "${FAST_DONE:-}" != "true" ]]; then
