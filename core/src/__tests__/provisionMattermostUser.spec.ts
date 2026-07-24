@@ -38,7 +38,6 @@ vi.mock("../mattermost/coach-pat.js", () => ({
 vi.mock("../mattermost/channels.js", () => ({
   createOrRestoreChannel: h.createOrRestoreChannel,
 }));
-vi.mock("../mattermost/community.js", () => ({ communityChannelIds: [] }));
 vi.mock("../mattermost/avatars.js", () => ({ mmUploadAvatar: h.mmUploadAvatar }));
 
 import { provisionMattermostUser } from "../mattermost/provision.js";
@@ -118,6 +117,17 @@ describe("provisionMattermostUser — new builder (happy path)", () => {
     expect(h.setSpy).toHaveBeenCalledWith(
       expect.objectContaining({ personalToken: "builder-token" }),
     );
+  });
+
+  it("never reads MM_COMMUNITY_TEAM_ID — community membership is reconciled separately, not during MM account provisioning", async () => {
+    process.env.MM_COMMUNITY_TEAM_ID = "legacy-community-team";
+    try {
+      await call(HAPPY);
+    } finally {
+      delete process.env.MM_COMMUNITY_TEAM_ID;
+    }
+
+    expect(seq()).not.toContain("POST /teams/legacy-community-team/members");
   });
 });
 
