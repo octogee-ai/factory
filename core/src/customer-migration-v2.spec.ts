@@ -327,6 +327,17 @@ describe("advanceCustomerMigrationV2", () => {
     expect(current.abortedAt).toBe(1_000);
     expect(d.setSourceAssignmentState).toHaveBeenCalledWith("serving");
   });
+
+  it("restores source serving before a retryable target-unmount failure can return", async () => {
+    const d = deps();
+    const client = d.client as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    client.unmount.mockRejectedValueOnce(new Error("target unavailable"));
+
+    await expect(advanceCustomerMigrationV2(state("abortIntent"), d))
+      .rejects.toThrow(/target unavailable/u);
+
+    expect(d.setSourceAssignmentState).toHaveBeenCalledWith("serving");
+  });
 });
 
 describe("customer migration V2 failure boundary", () => {

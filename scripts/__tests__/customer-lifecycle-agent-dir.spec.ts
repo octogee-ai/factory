@@ -221,4 +221,31 @@ describe("customer lifecycle config patch agent directories", () => {
       expect(fsSync.existsSync(customerKey)).toBe(true);
     });
   });
+
+  it("preserves a dedicated builder key while unmounting its migrated customer", async () => {
+    await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
+      process.env.OPENCLAW_STATE_DIR = tempRoot;
+      vi.stubEnv("GATEWAY_BUILDER_SLUG", "alice");
+      const customerDir = path.join(tempRoot, "customers", "alice");
+      const customerKey = path.join(tempRoot, "customer-keys", "alice", "id_ed25519");
+      const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
+      await fs.mkdir(customerDir, { recursive: true });
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.mkdir(path.dirname(customerKey), { recursive: true });
+      await fs.writeFile(customerKey, "private-key");
+      const { buildBrokeredLifecycleAdapter } = await import(
+        "../lib/customer-lifecycle-broker-adapter.js"
+      );
+      const adapter = buildBrokeredLifecycleAdapter({
+        client: mkClient(brokerSnapshot),
+        rpc: {} as GatewayRpcClient,
+        log: vi.fn(),
+      });
+
+      await adapter.removeImportedCustomerBySlug("alice");
+
+      expect(fsSync.existsSync(customerDir)).toBe(false);
+      expect(fsSync.existsSync(customerKey)).toBe(true);
+    });
+  });
 });

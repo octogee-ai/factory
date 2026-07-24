@@ -90,6 +90,7 @@ import {
   exportActivationManifestWithSecret,
   materializeActivationManifestSecret,
 } from "./migration-activation-secrets.js";
+import { isConfiguredGatewayBuilder } from "./system-config-watch-state.js";
 import { writeTierTemplateFiles } from "./tier-template-files.js";
 import { reassertConvergedContextFilesForSlug } from "./context-file-convergence.js";
 import {
@@ -586,7 +587,9 @@ async function removeImportedCustomerBySlug(
   if (!wasMounted) return { wasMounted: false, steps: [] };
   await applyRemoveCustomerConfigPatch(ctx, slug, agentId);
   await fsp.rm(path.join(CUSTOMERS_DIR, slug), { recursive: true, force: true });
-  await fsp.rm(path.join(CUSTOMER_KEYS_DIR, slug), { recursive: true, force: true });
+  if (!isConfiguredGatewayBuilder(slug)) {
+    await fsp.rm(path.join(CUSTOMER_KEYS_DIR, slug), { recursive: true, force: true });
+  }
   await fsp.rm(path.join(resolveOpenClawStateDir(), "agents", agentId), {
     recursive: true,
     force: true,

@@ -1,6 +1,8 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { acquireSystemConfigSyncLeaseSync } from "@octogee/core/system-config-mutation-lease";
+
 import { openClawConfigPath } from "../lib/openclaw-config-path.js";
 import { validateOpenClawConfig } from "../lib/openclaw-config-validation.js";
 import {
@@ -8,6 +10,7 @@ import {
   syncSystemConfigForSlug,
 } from "../lib/system-config.js";
 import { createSystemConfigWatcher } from "../lib/system-config-watcher.js";
+import { isSystemConfigWatchDisabled } from "../lib/system-config-watch-state.js";
 import {
   readSystemConfigStatus,
   updateSystemConfigStatus,
@@ -40,6 +43,7 @@ interface RunSystemConfigWatchOptions {
   createWatcher?: typeof createSystemConfigWatcher;
   sync?: typeof syncSystemConfigForSlug;
   audit?: typeof auditSystemConfigForSlug;
+  acquireSyncLease?: typeof acquireSystemConfigSyncLeaseSync;
   installSignalHandlers?: boolean;
 }
 
@@ -50,14 +54,44 @@ export function runSystemConfigWatch(options: RunSystemConfigWatchOptions = {}):
   const openclawDir = path.dirname(path.dirname(plan.configPath));
   const watcher = (options.createWatcher ?? createSystemConfigWatcher)({
     configPath: plan.configPath,
-    sync: async () => (options.sync ?? syncSystemConfigForSlug)(plan.slug, {
-      log: (message) => console.log(message),
-      validateConfig: validateOpenClawConfig,
-      durablePolicy: true,
-      env,
-      source: "auto-watch",
-    }),
-    audit: async () => (options.audit ?? auditSystemConfigForSlug)(plan.slug),
+    sync: async () => {
+      if (isSystemConfigWatchDisabled(openclawDir, plan.slug)) {
+        return { committed: false, pushed: true };
+      }
+      const lease = (options.acquireSyncLease ?? acquireSystemConfigSyncLeaseSync)({
+        openclawDir,
+      });
+      if (!lease) {
+        return {
+          committed: false,
+          pushed: false,
+          pending: true,
+          errorCode: "writer-lock-busy",
+        };
+      }
+      try {
+        if (isSystemConfigWatchDisabled(openclawDir, plan.slug)) {
+          return { committed: false, pushed: true };
+        }
+        return (options.sync ?? syncSystemConfigForSlug)(plan.slug, {
+          openclawDir,
+          log: (message) => console.log(message),
+          validateConfig: validateOpenClawConfig,
+          durablePolicy: true,
+          env,
+          source: "auto-watch",
+          lockHeld: true,
+        });
+      } finally {
+        lease.release();
+      }
+    },
+    audit: async () => {
+      if (isSystemConfigWatchDisabled(openclawDir, plan.slug)) {
+        return { state: "clean", needsSync: false };
+      }
+      return (options.audit ?? auditSystemConfigForSlug)(plan.slug);
+    },
     log: (message) => console.error(message),
     onStatusChange: (status) => {
       const current = readSystemConfigStatus(openclawDir);

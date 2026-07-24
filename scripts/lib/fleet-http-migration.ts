@@ -55,6 +55,13 @@ import {
   MIGRATION_ACTIVATION_DIR,
   writeActivationManifest,
 } from "./migration-activation-manifest.js";
+import {
+  disableSystemConfigWatch,
+  enableSystemConfigWatch,
+  isConfiguredGatewayBuilder,
+  readSystemConfigWatchFenceGeneration,
+} from "./system-config-watch-state.js";
+import { OPENCLAW_DIR } from "./config.js";
 
 const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
 
@@ -83,6 +90,104 @@ flushLocalState?: (input: {
   expectedSystemConfigCommit?: string;
 }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
 releaseSurgeReadiness?: (input: { targetPodUid: string }) => Promise<void>;
+pauseSystemConfigWatch?: (slug: string) => Promise<string | void>;
+readSystemConfigWatchFence?: (slug: string) => Promise<string | null>;
+resumeSystemConfigWatch?: (
+  slug: string,
+  expectedGeneration?: string | null,
+) => Promise<boolean | void>;
+}
+
+async function pauseSystemConfigWatchForBuilder(
+  deps: MigrationHandlerDeps,
+  slug: string,
+): Promise<string | undefined> {
+  if (deps.pauseSystemConfigWatch) {
+    return (await deps.pauseSystemConfigWatch(slug)) ?? undefined;
+  }
+  const configuredBuilder = process.env.GATEWAY_BUILDER_SLUG?.trim();
+  if (!configuredBuilder) return undefined;
+  if (!isConfiguredGatewayBuilder(slug)) {
+    throw new Error(
+      `system config watcher belongs to ${configuredBuilder}, not migration builder ${slug}`,
+    );
+  }
+  return disableSystemConfigWatch(OPENCLAW_DIR, slug);
+}
+
+async function readSystemConfigWatchFenceForBuilder(
+  deps: MigrationHandlerDeps,
+  slug: string,
+): Promise<string | null | undefined> {
+  if (deps.readSystemConfigWatchFence) {
+    return deps.readSystemConfigWatchFence(slug);
+  }
+  const configuredBuilder = process.env.GATEWAY_BUILDER_SLUG?.trim();
+  if (!configuredBuilder) return undefined;
+  if (!isConfiguredGatewayBuilder(slug)) {
+    throw new Error(
+      `system config watcher belongs to ${configuredBuilder}, not migration builder ${slug}`,
+    );
+  }
+  return readSystemConfigWatchFenceGeneration(OPENCLAW_DIR, slug);
+}
+
+async function resumeSystemConfigWatchForBuilder(
+  deps: MigrationHandlerDeps,
+  slug: string,
+  expectedGeneration?: string | null,
+): Promise<void> {
+  if (deps.resumeSystemConfigWatch) {
+    if (expectedGeneration === undefined) {
+      await deps.resumeSystemConfigWatch(slug);
+    } else {
+      await deps.resumeSystemConfigWatch(slug, expectedGeneration);
+    }
+    return;
+  }
+  const configuredBuilder = process.env.GATEWAY_BUILDER_SLUG?.trim();
+  if (!configuredBuilder) return;
+  if (!isConfiguredGatewayBuilder(slug)) {
+    throw new Error(
+      `system config watcher belongs to ${configuredBuilder}, not migration builder ${slug}`,
+    );
+  }
+  await enableSystemConfigWatch(OPENCLAW_DIR, slug, expectedGeneration);
+}
+
+async function activateImportedCustomerForMigration(input: {
+  deps: MigrationHandlerDeps;
+  slug: string;
+  mode: MigrationImportMode;
+  signal?: AbortSignal;
+}): Promise<void> {
+  const { deps, slug, mode, signal } = input;
+  const fenceGeneration = await pauseSystemConfigWatchForBuilder(deps, slug);
+  if (signal) await deps.adapter.activateImportedCustomer(slug, { signal });
+  else await deps.adapter.activateImportedCustomer(slug);
+  if (mode === "default") {
+    await resumeSystemConfigWatchForBuilder(deps, slug, fenceGeneration);
+  }
+}
+
+async function removeCustomerWithSystemConfigWatchPaused<T extends { wasMounted: boolean }>(input: {
+  deps: MigrationHandlerDeps;
+  slug: string;
+  remove: () => Promise<T>;
+}): Promise<T> {
+  await pauseSystemConfigWatchForBuilder(input.deps, input.slug);
+  return input.remove();
+}
+
+async function resumeSystemConfigWatchAfterConvergence(
+  deps: MigrationHandlerDeps,
+  slug: string,
+  reason: string,
+  flushSucceeded: boolean,
+  expectedGeneration?: string | null,
+): Promise<void> {
+  if (reason !== "migration-converge" || !flushSucceeded) return;
+  await resumeSystemConfigWatchForBuilder(deps, slug, expectedGeneration);
 }
 
 function rejectInvalidSlug(slug: string, res: Response): boolean {
@@ -290,11 +395,21 @@ export function createFlushHandler(deps: MigrationHandlerDeps): RequestHandler {
     }
 
     try {
+      const fenceGeneration = reason === "migration-converge"
+        ? await readSystemConfigWatchFenceForBuilder(deps, body.slug)
+        : undefined;
       const result = await deps.flushLocalState({
         slug: body.slug,
         reason,
         ...(expectedSystemConfigCommit ? { expectedSystemConfigCommit } : {}),
       });
+      await resumeSystemConfigWatchAfterConvergence(
+        deps,
+        body.slug,
+        reason,
+        result.ok,
+        fenceGeneration,
+      );
       const response: FlushGatewayResponse = {
         migrationId: body.migrationId,
         slug: body.slug,
@@ -363,6 +478,7 @@ export function createRestoreHandler(deps: MigrationHandlerDeps): RequestHandler
     }
 
     try {
+      await pauseSystemConfigWatchForBuilder(deps, body.slug);
       deps.adapter.markCustomerMigratingIn?.(body.slug);
       deps.adapter.seedUserSnapshotForMigration?.(body.snapshot);
       const adapter: CustomerLifecycleAdapter = {
@@ -589,7 +705,11 @@ export function createActivateImportHandler(deps: MigrationHandlerDeps): Request
 
     try {
       deps.adapter.markCustomerMigratingIn?.(body.slug);
-      await deps.adapter.activateImportedCustomer(body.slug);
+      await activateImportedCustomerForMigration({
+        deps,
+        slug: body.slug,
+        mode: "default",
+      });
       deps.adapter.writeMountMarker?.(body.slug);
       deps.adapter.onMounted?.(body.slug);
       const response: ImportResponse = {
@@ -1281,7 +1401,12 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
       await copyStageToOpenClaw(session.stageDir, session.importDir);
       if (mode !== "keys") {
         deps.adapter.markCustomerMigratingIn?.(body.slug);
-        await deps.adapter.activateImportedCustomer(body.slug, { signal: controller.signal });
+        await activateImportedCustomerForMigration({
+          deps,
+          slug: body.slug,
+          mode,
+          signal: controller.signal,
+        });
         deps.adapter.writeMountMarker?.(body.slug);
         deps.adapter.onMounted?.(body.slug);
       }
@@ -1588,7 +1713,12 @@ export function createImportHandler(deps: MigrationHandlerDeps): RequestHandler 
       // yet made it desired-on-this-gateway. The pin keeps the reconcile evict direction
       // from draining the fresh import during that window. Self-expiring (see the pin's TTL).
       deps.adapter.markCustomerMigratingIn?.(slug);
-      await deps.adapter.activateImportedCustomer(slug, { signal: controller.signal });
+      await activateImportedCustomerForMigration({
+        deps,
+        slug,
+        mode,
+        signal: controller.signal,
+      });
       deps.adapter.writeMountMarker?.(slug);
       deps.adapter.onMounted?.(slug);
 
@@ -1706,7 +1836,11 @@ export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler
 
     try {
       if (deps.adapter.removeImportedCustomerBySlug) {
-        const result = await deps.adapter.removeImportedCustomerBySlug(body.slug);
+        const result = await removeCustomerWithSystemConfigWatchPaused({
+          deps,
+          slug: body.slug,
+          remove: () => deps.adapter.removeImportedCustomerBySlug!(body.slug),
+        });
         if (result.wasMounted) deps.adapter.onUnmounted?.(body.slug);
         const response: UnmountResponse = {
           migrationId: body.migrationId,
@@ -1722,7 +1856,7 @@ export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler
 
       const uid = await deps.adapter.uidForSlug(body.slug);
       if (!uid) {
-        
+        await pauseSystemConfigWatchForBuilder(deps, body.slug);
         const response: UnmountResponse = {
           migrationId: body.migrationId,
           slug: body.slug,
@@ -1734,7 +1868,11 @@ export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler
         res.status(200).json(response);
         return;
       }
-      const result = await removeCustomerFromGateway(deps.adapter, uid);
+      const result = await removeCustomerWithSystemConfigWatchPaused({
+        deps,
+        slug: body.slug,
+        remove: () => removeCustomerFromGateway(deps.adapter, uid),
+      });
       const response: UnmountResponse = {
         migrationId: body.migrationId,
         slug: body.slug,

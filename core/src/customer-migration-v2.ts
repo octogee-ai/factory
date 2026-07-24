@@ -282,6 +282,7 @@ async function advanceAbort(
 ): Promise<CustomerMigrationV2State> {
   switch (state.phase) {
     case "abortIntent":
+      await deps.setSourceAssignmentState("serving");
       await deps.client.unmount({
         migrationId: state.migrationId,
         gatewayId: state.targetGatewayId,
@@ -290,7 +291,6 @@ async function advanceAbort(
       });
       return { ...state, phase: "abortTargetUnmounted" };
     case "abortTargetUnmounted":
-      await deps.setSourceAssignmentState("serving");
       return { ...state, phase: "aborted", abortedAt: deps.now() };
     default:
       throw new Error(`customer migration V2 abort path cannot advance ${state.phase}`);

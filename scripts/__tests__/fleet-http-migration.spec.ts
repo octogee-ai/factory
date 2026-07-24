@@ -1,6 +1,6 @@
 
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import type { Request, Response } from "express";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
@@ -293,6 +293,10 @@ beforeEach(() => {
   spawnMock.mockReset();
 });
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("surge handoff control", () => {
   it("opens pod readiness only for a signed request", async () => {
     const releaseSurgeReadiness = vi.fn(async () => undefined);
@@ -516,7 +520,11 @@ describe("createFlushHandler", () => {
       steps: [],
       systemConfigCommit: "b".repeat(40),
     }));
-    const handler = createFlushHandler(mkDeps({ flushLocalState }));
+    const resumeSystemConfigWatch = vi.fn(async (_slug: string) => undefined);
+    const handler = createFlushHandler(mkDeps({
+      flushLocalState,
+      resumeSystemConfigWatch,
+    }));
     const body = {
       migrationId: "mig-1",
       slug: "chris",
@@ -536,6 +544,158 @@ describe("createFlushHandler", () => {
       reason: "migration-converge",
       expectedSystemConfigCommit,
     });
+    expect(resumeSystemConfigWatch).toHaveBeenCalledWith("chris");
+    expect(flushLocalState.mock.invocationCallOrder[0]).toBeLessThan(
+      resumeSystemConfigWatch.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("keeps the target watcher fenced when migration convergence fails", async () => {
+    const expectedSystemConfigCommit = "a".repeat(40);
+    const flushLocalState = vi.fn(async () => {
+      throw new Error("durable checkpoint unavailable");
+    });
+    const resumeSystemConfigWatch = vi.fn(async (_slug: string) => undefined);
+    const handler = createFlushHandler(mkDeps({
+      flushLocalState,
+      resumeSystemConfigWatch,
+    }));
+    const body = {
+      migrationId: "mig-1",
+      slug: "chris",
+      reason: "migration-converge",
+      expectedSystemConfigCommit,
+    };
+    const req = mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+    });
+    const { res, getStatus } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(500);
+    expect(resumeSystemConfigWatch).not.toHaveBeenCalled();
+  });
+
+  it("keeps the target watcher fenced when a convergence step reports failure", async () => {
+    const expectedSystemConfigCommit = "a".repeat(40);
+    const flushLocalState = vi.fn(async () => ({
+      ok: false,
+      durationMs: 12,
+      steps: [{
+        name: "system-config",
+        status: "failed" as const,
+        error: "writer-lock-busy",
+        durationMs: 12,
+      }],
+    }));
+    const resumeSystemConfigWatch = vi.fn(async (_slug: string) => undefined);
+    const handler = createFlushHandler(mkDeps({
+      flushLocalState,
+      resumeSystemConfigWatch,
+    }));
+    const body = {
+      migrationId: "mig-1",
+      slug: "chris",
+      reason: "migration-converge",
+      expectedSystemConfigCommit,
+    };
+    const req = mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+    });
+    const { res, getStatus } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(500);
+    expect(resumeSystemConfigWatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["an existing import fence", "import-fence"],
+    ["no initial fence", null],
+  ])("does not let a delayed convergence flush from %s clear a concurrent unmount fence", async (
+    _label,
+    initialFence,
+  ) => {
+    let finishFlush: () => void = () => {};
+    const flushBlocked = new Promise<void>((resolve) => {
+      finishFlush = resolve;
+    });
+    let flushStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      flushStarted = resolve;
+    });
+    let activeFence: string | null = initialFence;
+    const flushLocalState = vi.fn(async () => {
+      flushStarted();
+      await flushBlocked;
+      return { ok: true, durationMs: 12, steps: [] };
+    });
+    const readSystemConfigWatchFence = vi.fn(async () => activeFence);
+    const resumeSystemConfigWatch = vi.fn(
+      async (_slug: string, expectedGeneration?: string | null) => {
+        if (activeFence === expectedGeneration) activeFence = null;
+      },
+    );
+    const pauseSystemConfigWatch = vi.fn(async () => {
+      activeFence = "unmount-fence";
+      return activeFence;
+    });
+    const removeImportedCustomerBySlug = vi.fn(async () => ({
+      wasMounted: true,
+      steps: [],
+    }));
+    const deps = mkDeps({
+      flushLocalState,
+      readSystemConfigWatchFence,
+      resumeSystemConfigWatch,
+      pauseSystemConfigWatch,
+      adapter: mkAdapter({ removeImportedCustomerBySlug }),
+    });
+    const flushBody = {
+      migrationId: "mig-1",
+      slug: "chris",
+      reason: "migration-converge",
+      expectedSystemConfigCommit: "a".repeat(40),
+    };
+    const flushResponse = mkResponse();
+    const flushing = createFlushHandler(deps)(
+      mkRequest(flushBody, {
+        signature: signFleetRequest(
+          PRIVATE_KEY,
+          flushBody.migrationId,
+          JSON.stringify(flushBody),
+        ),
+      }),
+      flushResponse.res,
+      vi.fn(),
+    );
+    await started;
+
+    const unmountRaw = JSON.stringify(SAMPLE_UNMOUNT);
+    const unmountResponse = mkResponse();
+    await createUnmountHandler(deps)(
+      mkRequest(SAMPLE_UNMOUNT, {
+        signature: signFleetRequest(
+          PRIVATE_KEY,
+          SAMPLE_UNMOUNT.migrationId,
+          unmountRaw,
+        ),
+      }),
+      unmountResponse.res,
+      vi.fn(),
+    );
+    finishFlush();
+    await flushing;
+
+    expect(unmountResponse.getStatus()).toBe(200);
+    expect(flushResponse.getStatus()).toBe(200);
+    expect(resumeSystemConfigWatch).toHaveBeenCalledWith(
+      "chris",
+      initialFence,
+    );
+    expect(activeFence).toBe("unmount-fence");
   });
 
   it.each([
@@ -637,6 +797,11 @@ describe("createRestoreHandler", () => {
 
   it("restores runtime state from the controller-provided durable snapshot and leaves the mount marker intact", async () => {
     const customersDir = await fs.mkdtemp(path.join(os.tmpdir(), "restore-marker-"));
+    let watcherFenced = false;
+    const pauseSystemConfigWatch = vi.fn(async (slug: string) => {
+      expect(slug).toBe("chris");
+      watcherFenced = true;
+    });
     const adapter = mkAdapter({
       loadUserSnapshot: vi.fn(async () => {
         throw new Error("restore should use the signed snapshot, not broker lookup");
@@ -651,11 +816,14 @@ describe("createRestoreHandler", () => {
       writeCustomerTemplateFiles: vi.fn(async () => undefined),
       blobSyncForSlug: vi.fn(async () => undefined),
       restoreByosubForAgent: vi.fn(async () => ({ restored: false, present: false })),
-      applyAddCustomerConfigPatch: vi.fn(async () => ({ elapsedMs: 1 })),
+      applyAddCustomerConfigPatch: vi.fn(async () => {
+        expect(watcherFenced).toBe(true);
+        return { elapsedMs: 1 };
+      }),
       writeMountMarker: vi.fn((slug) => writeMountedMarker(customersDir, slug)),
       markCustomerMigratingIn: vi.fn((slug) => writeMigratingInPin(customersDir, slug)),
     });
-    const handler = createRestoreHandler(mkDeps({ adapter }));
+    const handler = createRestoreHandler(mkDeps({ adapter, pauseSystemConfigWatch }));
     const body = {
       migrationId: "mig-1",
       slug: "chris",
@@ -726,6 +894,7 @@ describe("createRestoreHandler", () => {
       expect(adapter.writeMountMarker).toHaveBeenCalledWith("chris");
       expect(adapter.markCustomerMigratingIn).toHaveBeenCalledTimes(1);
       expect(adapter.markCustomerMigratingIn).toHaveBeenCalledWith("chris");
+      expect(pauseSystemConfigWatch).toHaveBeenCalledOnce();
       expect(hasMountedMarker(customersDir, "chris")).toBe(true);
     } finally {
       await fs.rm(customersDir, { recursive: true, force: true });
@@ -827,7 +996,13 @@ describe("createUnmountHandler", () => {
     const adapter = mkAdapter({
       uidForSlug: vi.fn(async () => null),
     });
-    const handler = createUnmountHandler(mkDeps({ adapter }));
+    const pauseSystemConfigWatch = vi.fn(async (_slug: string) => undefined);
+    const resumeSystemConfigWatch = vi.fn(async (_slug: string) => undefined);
+    const handler = createUnmountHandler(mkDeps({
+      adapter,
+      pauseSystemConfigWatch,
+      resumeSystemConfigWatch,
+    }));
     const rawBody = JSON.stringify(SAMPLE_UNMOUNT);
     const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_UNMOUNT.migrationId, rawBody);
     const req = mkRequest(SAMPLE_UNMOUNT, { signature: sig });
@@ -839,12 +1014,59 @@ describe("createUnmountHandler", () => {
       slug: "chris",
       unmounted: false,
     });
+    expect(pauseSystemConfigWatch).toHaveBeenCalledWith("chris");
+    expect(resumeSystemConfigWatch).not.toHaveBeenCalled();
+  });
+
+  it("keeps a duplicate imported-customer unmount fenced after response loss", async () => {
+    const adapter = mkAdapter({
+      removeImportedCustomerBySlug: vi.fn(async () => ({ wasMounted: false, steps: [] })),
+    });
+    const pauseSystemConfigWatch = vi.fn(async (_slug: string) => undefined);
+    const resumeSystemConfigWatch = vi.fn(async (_slug: string) => undefined);
+    const handler = createUnmountHandler(mkDeps({
+      adapter,
+      pauseSystemConfigWatch,
+      resumeSystemConfigWatch,
+    }));
+    const rawBody = JSON.stringify(SAMPLE_UNMOUNT);
+    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_UNMOUNT.migrationId, rawBody);
+    const req = mkRequest(SAMPLE_UNMOUNT, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(getBody()).toMatchObject({ unmounted: false });
+    expect(pauseSystemConfigWatch).toHaveBeenCalledWith("chris");
+    expect(resumeSystemConfigWatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unmount that crosses the dedicated watcher tenant boundary", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "alice");
+    const removeImportedCustomerBySlug = vi.fn(async () => ({ wasMounted: false, steps: [] }));
+    const adapter = mkAdapter({ removeImportedCustomerBySlug });
+    const handler = createUnmountHandler(mkDeps({ adapter }));
+    const rawBody = JSON.stringify(SAMPLE_UNMOUNT);
+    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_UNMOUNT.migrationId, rawBody);
+    const req = mkRequest(SAMPLE_UNMOUNT, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(500);
+    expect(getBody()).toMatchObject({
+      error: "unmount failed",
+      message: "system config watcher belongs to alice, not migration builder chris",
+    });
+    expect(removeImportedCustomerBySlug).not.toHaveBeenCalled();
   });
 
   it("returns 200 + unmounted:true when removeCustomerFromGateway succeeded", async () => {
 
 const adapter = mkAdapter();
-    const handler = createUnmountHandler(mkDeps({ adapter }));
+    const pauseSystemConfigWatch = vi.fn(async (_slug: string) => undefined);
+    const handler = createUnmountHandler(mkDeps({ adapter, pauseSystemConfigWatch }));
     const rawBody = JSON.stringify(SAMPLE_UNMOUNT);
     const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_UNMOUNT.migrationId, rawBody);
     const req = mkRequest(SAMPLE_UNMOUNT, { signature: sig });
@@ -854,6 +1076,35 @@ const adapter = mkAdapter();
     expect(getBody()).toMatchObject({ unmounted: true });
     expect(adapter.applyRemoveCustomerConfigPatch).toHaveBeenCalled();
     expect(adapter.deleteCustomerDir).toHaveBeenCalled();
+    expect(pauseSystemConfigWatch).toHaveBeenCalledWith("chris");
+  });
+
+  it("keeps the retired watcher fenced when unmount fails after an ambiguous partial removal", async () => {
+    let removalPatchApplied = false;
+    const adapter = mkAdapter({
+      removeImportedCustomerBySlug: vi.fn(async () => {
+        removalPatchApplied = true;
+        throw new Error("response lost after config remove");
+      }),
+    });
+    const pauseSystemConfigWatch = vi.fn(async (_slug: string) => undefined);
+    const resumeSystemConfigWatch = vi.fn(async (_slug: string) => undefined);
+    const handler = createUnmountHandler(mkDeps({
+      adapter,
+      pauseSystemConfigWatch,
+      resumeSystemConfigWatch,
+    }));
+    const rawBody = JSON.stringify(SAMPLE_UNMOUNT);
+    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_UNMOUNT.migrationId, rawBody);
+    const req = mkRequest(SAMPLE_UNMOUNT, { signature: sig });
+    const { res, getStatus } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(500);
+    expect(removalPatchApplied).toBe(true);
+    expect(pauseSystemConfigWatch).toHaveBeenCalledWith("chris");
+    expect(resumeSystemConfigWatch).not.toHaveBeenCalled();
   });
 });
 
@@ -1271,6 +1522,8 @@ describe("queued-rsync migration control handlers", () => {
       adapter,
       migrationRsyncPort: 30873,
       waitForRsyncReady: vi.fn(async () => undefined),
+      pauseSystemConfigWatch: vi.fn(async (_slug: string) => undefined),
+      resumeSystemConfigWatch: vi.fn(async (_slug: string) => undefined),
     });
     const prepareHandler = createPrepareRsyncImportHandler(deps);
     const prepareReq = mkRequest(prepareBody, {
@@ -1309,6 +1562,8 @@ describe("queued-rsync migration control handlers", () => {
     expect(getBody()).toMatchObject({ migrationId: "mig-finish", slug: "chris", imported: true });
     expect(daemon.kill).toHaveBeenCalled();
     expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris", expect.any(Object));
+    expect(deps.pauseSystemConfigWatch).toHaveBeenCalledWith("chris");
+    expect(deps.resumeSystemConfigWatch).not.toHaveBeenCalled();
     expect(adapter.writeMountMarker).toHaveBeenCalledWith("chris");
     expect(adapter.onMounted).toHaveBeenCalledWith("chris");
     const [copyCommand, copyArgs] = spawnMock.mock.calls[1] as [string, string[]];
@@ -1868,8 +2123,15 @@ describe("createImportHandler", () => {
     });
     const fakeExtractChild = mkFakeChild({ exitCode: 0 });
     spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild);
+    const pauseSystemConfigWatch = vi.fn(async (_slug: string) => undefined);
+    const resumeSystemConfigWatch = vi.fn(async (_slug: string) => undefined);
     const handler = createImportHandler(
-      mkDeps({ adapter, getMountedCustomers: () => ["chris"] }),
+      mkDeps({
+        adapter,
+        getMountedCustomers: () => ["chris"],
+        pauseSystemConfigWatch,
+        resumeSystemConfigWatch,
+      }),
     );
     const sig = signFleetRequest(PRIVATE_KEY, "mig-1", "chris");
     const req = mkImportRequest({
@@ -1890,6 +2152,11 @@ describe("createImportHandler", () => {
     expect(adapter.activateImportedCustomer).toHaveBeenCalledWith(
       "chris",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(pauseSystemConfigWatch).toHaveBeenCalledWith("chris");
+    expect(resumeSystemConfigWatch).not.toHaveBeenCalled();
+    expect(pauseSystemConfigWatch.mock.invocationCallOrder[0]).toBeLessThan(
+      adapter.activateImportedCustomer.mock.invocationCallOrder[0],
     );
     expect(spawnMock.mock.calls.length).toBe(2);
   });

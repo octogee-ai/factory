@@ -251,7 +251,8 @@ async function ordinaryV2IterationFailure(
   execution: OrdinaryV2Execution,
   error: unknown,
 ): Promise<OperationResult | "continue"> {
-  if (classifyCustomerMigrationV2Error(error) === "retry") {
+  const retryable = classifyCustomerMigrationV2Error(error) === "retry";
+  if (retryable && !requiresSourceResumeBeforeRetry(execution.state.phase)) {
     return { steps: [], success: false, error: v2RetryError(error), rolledBack: false };
   }
   const message = error instanceof Error ? error.message : String(error);
@@ -281,6 +282,14 @@ async function ordinaryV2IterationFailure(
   );
   await persistV2(execution.input.ctx, execution.state);
   return "continue";
+}
+
+function requiresSourceResumeBeforeRetry(
+  phase: CustomerMigrationV2State["phase"],
+): boolean {
+  return phase === "preSynced" ||
+    phase === "sourceQuiesced" ||
+    phase === "finalSynced";
 }
 
 async function runOrdinaryV2Iteration(

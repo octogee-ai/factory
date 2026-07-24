@@ -392,6 +392,57 @@ describe("migrate-customer — durable V2 migration", () => {
     expect(persisted.map((state) => state.phase)).toEqual(["initialized", "targetRestored"]);
   });
 
+  it("aborts a transient final-sync failure after source quiesce before returning retry", async () => {
+    const client = happyClient();
+    (client.transferState as ReturnType<typeof vi.fn>).mockImplementation(async ({ mode }) => {
+      if (mode === "final") {
+        throw Object.assign(
+          new Error("system config mutation unavailable: writer-lock-busy"),
+          { retryable: true },
+        );
+      }
+      return { migrationId: "mig-op-1", slug: "alice", imported: true };
+    });
+    const { deps, ctx, events, persisted } = mkDeps({ durable: true, client });
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({}), ctx);
+
+    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(persisted.map((state) => state.phase)).toEqual([
+      "initialized", "targetRestored", "preSynced", "sourceQuiesced",
+      "abortIntent", "abortTargetUnmounted", "aborted",
+    ]);
+    expect(client.calls.filter((call) => call.startsWith("unmount:"))).toEqual(["unmount:gw-green"]);
+    expect(events).toContain("assignment:gw-blue:serving");
+  });
+
+  it("replays an ambiguous cutover commit instead of aborting the canonical target", async () => {
+    const { deps, ctx, client, persisted } = mkDeps({ durable: true });
+    const commitV2Cutover = deps.commitV2Cutover as ReturnType<typeof vi.fn>;
+    commitV2Cutover.mockRejectedValueOnce(
+      Object.assign(new Error("cutover response unavailable"), { retryable: true }),
+    );
+    const handler = createMigrateCustomerHandler(deps);
+
+    const first = await handler(mkOp({}), ctx);
+
+    expect(first).toMatchObject({ success: false, rolledBack: false });
+    expect(first.error).toMatch(/retry pending: status 503/u);
+    expect(persisted.at(-1)?.phase).toBe("targetVerified");
+    expect(client.calls.filter((call) => call.startsWith("unmount:"))).toEqual([]);
+
+    const replay = await handler(mkOp({
+      customerMigrationV2: persisted.at(-1),
+    }), ctx);
+
+    expect(replay).toMatchObject({ success: true, rolledBack: false });
+    expect(commitV2Cutover).toHaveBeenCalledTimes(2);
+    expect(client.calls.filter((call) => call.startsWith("unmount:"))).toEqual([
+      "unmount:gw-blue",
+    ]);
+  });
+
   it("aborts on a terminal mid-flight failure: unmounts the target and restores the source", async () => {
     const client = happyClient();
     (client.verifyTarget as ReturnType<typeof vi.fn>).mockRejectedValue(
