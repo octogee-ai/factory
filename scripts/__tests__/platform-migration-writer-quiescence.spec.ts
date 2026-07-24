@@ -7,10 +7,13 @@ import {
   PLATFORM_MIGRATION_WRITER_READINESS_TIMEOUT_MILLISECONDS,
   platformMigrationWriterQuiescenceConfirmation,
   PLATFORM_MIGRATION_CRONJOB_WRITERS,
+  PLATFORM_MIGRATION_SCHEDULER_ATTEMPT_DEADLINE_MILLISECONDS,
   platformMigrationScheduledWriterNames,
+  assertPlatformMigrationScheduledWritersQuiesced,
   selectPlatformCredentialWriterWorkloads,
   waitForPlatformMigrationWriterQuiescence,
   waitForPlatformMigrationWriterReadiness,
+  waitForPlatformMigrationScheduledAttemptDrain,
 } from "../lib/platform-migration-writer-quiescence.js";
 
 const migrationId = "west-cutover-20260724";
@@ -20,6 +23,9 @@ const partnerTargetId = "test-central";
 const scheduledWriters = platformMigrationScheduledWriterNames("us-west1").map((name) => ({
   name,
   state: "ENABLED" as const,
+  attemptDeadline: "180s",
+  retryConfig: {},
+  targetType: "HTTP" as const,
 }));
 
 const cronJobs = PLATFORM_MIGRATION_CRONJOB_WRITERS.map((name) => ({
@@ -144,6 +150,7 @@ function dependencies(overrides: Partial<Parameters<typeof executePlatformMigrat
           : current);
       },
       readCronJobs: async () => kubernetesCronJobs(cronJobState),
+      readCronJobJobs: async () => [],
       setCronJobSuspended: async (_settings: unknown, cronJob: { name: string }, suspended: boolean) => {
         cronSuspensions.push(`${cronJob.name}=${suspended}`);
         cronJobState = cronJobState.map((current) => current.name === cronJob.name
@@ -151,6 +158,7 @@ function dependencies(overrides: Partial<Parameters<typeof executePlatformMigrat
           : current);
       },
       waitForScheduledWritersQuiesced: async () => undefined,
+      waitForScheduledWriterAttemptsDrained: async () => undefined,
       waitForScheduledWritersReady: async () => undefined,
       waitForWritersQuiesced: async () => undefined,
       waitForWritersReady: async () => undefined,
@@ -178,6 +186,79 @@ function dependencies(overrides: Partial<Parameters<typeof executePlatformMigrat
 describe("platform migration writer quiescence", () => {
   it("gives restored writers the Helm-consistent bounded ten-minute readiness window", () => {
     expect(PLATFORM_MIGRATION_WRITER_READINESS_TIMEOUT_MILLISECONDS).toBe(600_000);
+  });
+
+  it("waits the complete reviewed Scheduler attempt bound after pause", async () => {
+    let clock = 12_000;
+    const sleeps: number[] = [];
+    await waitForPlatformMigrationScheduledAttemptDrain({
+      attemptDeadlineMilliseconds: PLATFORM_MIGRATION_SCHEDULER_ATTEMPT_DEADLINE_MILLISECONDS,
+      now: () => clock,
+      sleep: async (milliseconds) => {
+        sleeps.push(milliseconds);
+        clock += milliseconds;
+      },
+    });
+    expect(sleeps).toEqual([180_000]);
+    expect(clock).toBe(192_000);
+  });
+
+  it("rejects retrying or unbounded Scheduler attempts before freezing maintenance", async () => {
+    for (const drift of [
+      { retryConfig: { retryCount: 1 } },
+      { retryConfig: { maxRetryDuration: "60s" } },
+      { attemptDeadline: "0s" },
+      { attemptDeadline: "181s" },
+      { targetType: "PUBSUB" },
+    ]) {
+      const state = dependencies({
+        readScheduledWriters: async () => [
+          { ...scheduledWriters[0]!, ...drift },
+          ...scheduledWriters.slice(1),
+        ],
+      });
+      await expect(executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies))
+        .rejects.toThrow(/Scheduler|scheduled writer/i);
+      expect(state.maintenanceWrites).toEqual([]);
+    }
+  });
+
+  it("does not claim CronJob quiescence while an owned Job can still write", () => {
+    const state = dependencies();
+    return executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies)
+      .then(() => {
+        expect(() => assertPlatformMigrationScheduledWritersQuiesced(
+          state.dependencies.settingsForTarget(targetId),
+          state.getReceipt() as never,
+          scheduledWriters.map((writer) => ({ ...writer, state: "PAUSED" })),
+          kubernetesCronJobs(cronJobs.map((cronJob) => ({ ...cronJob, suspended: true }))),
+          [{
+            metadata: {
+              name: "trial-expiry-29182",
+              ownerReferences: [{ kind: "CronJob", name: "trial-expiry" }],
+            },
+            status: { active: 1 },
+          }],
+        )).toThrow("still active");
+
+        expect(() => assertPlatformMigrationScheduledWritersQuiesced(
+          state.dependencies.settingsForTarget(targetId),
+          state.getReceipt() as never,
+          scheduledWriters.map((writer) => ({ ...writer, state: "PAUSED" })),
+          kubernetesCronJobs(cronJobs.map((cronJob) => ({ ...cronJob, suspended: true }))),
+          [{
+            metadata: {
+              name: "trial-expiry-29182",
+              ownerReferences: [{ kind: "CronJob", name: "trial-expiry" }],
+            },
+            status: {
+              active: 0,
+              succeeded: 1,
+              conditions: [{ type: "Complete", status: "True" }],
+            },
+          }],
+        )).not.toThrow();
+      });
   });
 
   it("binds both completed migration receipts to the exact writer-quiescence revision", () => {
@@ -256,6 +337,12 @@ describe("platform migration writer quiescence", () => {
           name: writer.name,
           priorState: "ENABLED",
           quiescedState: "PAUSED",
+          targetType: "HTTP",
+          attemptDeadlineMilliseconds: 180_000,
+          retryConfig: {
+            retryCount: 0,
+            maxRetryDurationMilliseconds: 0,
+          },
         })),
       },
       cronJobs: sortedCronJobs.map((cronJob) => ({
@@ -293,6 +380,21 @@ describe("platform migration writer quiescence", () => {
     });
     await expect(executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies))
       .rejects.toThrow("scheduled writer state did not quiesce");
+    expect(state.maintenanceWrites.at(-1)).toEqual({
+      mode: "frozen",
+      managedBy: "platform-migration-writer-quiescence",
+    });
+  });
+
+  it("does not stop Kubernetes writers until the Scheduler attempt window has drained", async () => {
+    const state = dependencies({
+      waitForScheduledWriterAttemptsDrained: async () => {
+        throw new Error("Scheduler attempt drain incomplete");
+      },
+    });
+    await expect(executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies))
+      .rejects.toThrow("Scheduler attempt drain incomplete");
+    expect(state.scales).toEqual([]);
     expect(state.maintenanceWrites.at(-1)).toEqual({
       mode: "frozen",
       managedBy: "platform-migration-writer-quiescence",

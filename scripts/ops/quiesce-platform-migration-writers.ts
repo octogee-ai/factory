@@ -18,7 +18,10 @@ import {
   waitForPlatformMigrationWriterReadiness,
   assertPlatformMigrationScheduledWritersQuiesced,
   assertPlatformMigrationScheduledWritersReady,
+  platformMigrationScheduledAttemptDeadlineMilliseconds,
+  waitForPlatformMigrationScheduledAttemptDrain,
   type KubernetesCronJob,
+  type KubernetesCronJobJob,
   type KubernetesPodList,
   type KubernetesWorkload,
   type PlatformMigrationScheduledWriter,
@@ -120,6 +123,12 @@ function cronJobs(settings: DeploymentEnvironmentSettings): KubernetesCronJob[] 
   return listing.items as KubernetesCronJob[];
 }
 
+function cronJobJobs(settings: DeploymentEnvironmentSettings): KubernetesCronJobJob[] {
+  const listing = parseRecord(kubectl(settings, ["get", "jobs", "-o", "json"]), "Kubernetes Jobs");
+  if (!Array.isArray(listing.items)) throw new Error("Kubernetes Jobs returned no items array");
+  return listing.items as KubernetesCronJobJob[];
+}
+
 function scheduledWriters(settings: DeploymentEnvironmentSettings): PlatformMigrationScheduledWriter[] {
   const output = run("gcloud", [
     "scheduler",
@@ -127,7 +136,7 @@ function scheduledWriters(settings: DeploymentEnvironmentSettings): PlatformMigr
     "list",
     `--project=${settings.firebaseProjectId}`,
     `--location=${settings.region}`,
-    "--format=json(name,state)",
+    "--format=json(name,state,attemptDeadline,retryConfig,httpTarget)",
   ]);
   let listing: unknown;
   try {
@@ -138,12 +147,26 @@ function scheduledWriters(settings: DeploymentEnvironmentSettings): PlatformMigr
   if (!Array.isArray(listing)) throw new Error("Cloud Scheduler jobs returned no array");
   return listing.map((candidate, index) => {
     const job = record(candidate, `Cloud Scheduler job ${index}`);
-    if (typeof job.name !== "string" || job.name.length === 0 || typeof job.state !== "string") {
+    if (
+      typeof job.name !== "string" ||
+      job.name.length === 0 ||
+      typeof job.state !== "string" ||
+      typeof job.attemptDeadline !== "string"
+    ) {
       throw new Error(`Cloud Scheduler job ${index} is malformed`);
     }
     const name = job.name.split("/").at(-1);
     if (!name) throw new Error(`Cloud Scheduler job ${index} has no terminal name`);
-    return { name, state: job.state };
+    const retryConfig = job.retryConfig === undefined
+      ? undefined
+      : record(job.retryConfig, `Cloud Scheduler job ${index} retryConfig`);
+    return {
+      name,
+      state: job.state,
+      attemptDeadline: job.attemptDeadline,
+      retryConfig,
+      targetType: job.httpTarget === undefined ? "UNSUPPORTED" : "HTTP",
+    };
   });
 }
 
@@ -196,10 +219,22 @@ async function waitForScheduledWriters(
   let lastFailure = "not checked";
   while (true) {
     try {
-      const assertion = ready
-        ? assertPlatformMigrationScheduledWritersReady
-        : assertPlatformMigrationScheduledWritersQuiesced;
-      assertion(settings, receipt, scheduledWriters(settings), cronJobs(settings));
+      if (ready) {
+        assertPlatformMigrationScheduledWritersReady(
+          settings,
+          receipt,
+          scheduledWriters(settings),
+          cronJobs(settings),
+        );
+      } else {
+        assertPlatformMigrationScheduledWritersQuiesced(
+          settings,
+          receipt,
+          scheduledWriters(settings),
+          cronJobs(settings),
+          cronJobJobs(settings),
+        );
+      }
       return;
     } catch (error) {
       lastFailure = error instanceof Error ? error.message : String(error);
@@ -339,6 +374,7 @@ function dependencies(repoRoot: string): PlatformMigrationWriterQuiescenceDepend
     pauseScheduledWriter: async (settings, writer) => pauseScheduledWriter(settings, writer),
     resumeScheduledWriter: async (settings, writer) => resumeScheduledWriter(settings, writer),
     readCronJobs: async (settings) => cronJobs(settings),
+    readCronJobJobs: async (settings) => cronJobJobs(settings),
     setCronJobSuspended: async (settings, cronJob, suspended) => setCronJobSuspended(settings, cronJob, suspended),
     waitForWritersQuiesced: async (settings, receipt) => {
       await waitForPlatformMigrationWriterQuiescence({
@@ -363,6 +399,13 @@ function dependencies(repoRoot: string): PlatformMigrationWriterQuiescenceDepend
       });
     },
     waitForScheduledWritersQuiesced: async (settings, receipt) => waitForScheduledWriters(settings, receipt, false),
+    waitForScheduledWriterAttemptsDrained: async (_settings, receipt) => {
+      await waitForPlatformMigrationScheduledAttemptDrain({
+        attemptDeadlineMilliseconds: platformMigrationScheduledAttemptDeadlineMilliseconds(receipt),
+        now: () => Date.now(),
+        sleep,
+      });
+    },
     waitForScheduledWritersReady: async (settings, receipt) => waitForScheduledWriters(settings, receipt, true),
     readReceipt: async (uri) => readReceipt(uri),
     writeReceipt: async (uri, receipt) => writeReceipt(uri, receipt),

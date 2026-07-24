@@ -9,6 +9,7 @@ export const PLATFORM_CREDENTIAL_WRITER_CONTAINERS = new Set([
   "provisioner",
 ]);
 export const PLATFORM_MIGRATION_WRITER_READINESS_TIMEOUT_MILLISECONDS = 600_000;
+export const PLATFORM_MIGRATION_SCHEDULER_ATTEMPT_DEADLINE_MILLISECONDS = 180_000;
 export const PLATFORM_MIGRATION_SCHEDULED_WRITER_FUNCTIONS = [
   "cleanupFeedRetention",
   "reapExpiredRunLiveDocs",
@@ -25,7 +26,7 @@ export const PLATFORM_MIGRATION_CRONJOB_WRITERS = [
 ] as const;
 
 export function platformMigrationScheduledWriterNames(region: string): string[] {
-  if (!/^[a-z]+-[a-z]+[0-9]$/.test(region)) throw new Error(`invalid Scheduler region: ${region}`);
+  if (!/^[a-z]+-[a-z]+\d$/.test(region)) throw new Error(`invalid Scheduler region: ${region}`);
   return PLATFORM_MIGRATION_SCHEDULED_WRITER_FUNCTIONS
     .map((functionName) => `firebase-schedule-${functionName}-${region}`)
     .sort();
@@ -78,6 +79,12 @@ export interface WriterWorkload {
 export interface PlatformMigrationScheduledWriter {
   name: string;
   state: string;
+  attemptDeadline: string;
+  retryConfig?: {
+    retryCount?: unknown;
+    maxRetryDuration?: unknown;
+  };
+  targetType: string;
 }
 
 export interface KubernetesCronJob {
@@ -85,10 +92,33 @@ export interface KubernetesCronJob {
   spec?: { suspend?: unknown };
 }
 
+export interface KubernetesCronJobJob {
+  metadata?: {
+    name?: unknown;
+    ownerReferences?: Array<{ kind?: unknown; name?: unknown }>;
+  };
+  status?: {
+    active?: unknown;
+    succeeded?: unknown;
+    failed?: unknown;
+    conditions?: Array<{ type?: unknown; status?: unknown }>;
+  };
+}
+
 export interface ScheduledWriterReceipt {
   projectId: string;
   region: string;
-  jobs: Array<{ name: string; priorState: "ENABLED" | "PAUSED"; quiescedState: "PAUSED" }>;
+  jobs: Array<{
+    name: string;
+    priorState: "ENABLED" | "PAUSED";
+    quiescedState: "PAUSED";
+    targetType: "HTTP";
+    attemptDeadlineMilliseconds: number;
+    retryConfig: {
+      retryCount: 0;
+      maxRetryDurationMilliseconds: 0;
+    };
+  }>;
 }
 
 export interface CronJobReceipt {
@@ -146,12 +176,17 @@ export interface PlatformMigrationWriterQuiescenceDependencies {
     writer: Pick<PlatformMigrationScheduledWriter, "name">,
   ): Promise<void>;
   readCronJobs(settings: DeploymentEnvironmentSettings): Promise<KubernetesCronJob[]>;
+  readCronJobJobs(settings: DeploymentEnvironmentSettings): Promise<KubernetesCronJobJob[]>;
   setCronJobSuspended(
     settings: DeploymentEnvironmentSettings,
     cronJob: Pick<CronJobReceipt, "name">,
     suspended: boolean,
   ): Promise<void>;
   waitForScheduledWritersQuiesced(
+    settings: DeploymentEnvironmentSettings,
+    receipt: PlatformMigrationWriterReceipt,
+  ): Promise<void>;
+  waitForScheduledWriterAttemptsDrained(
     settings: DeploymentEnvironmentSettings,
     receipt: PlatformMigrationWriterReceipt,
   ): Promise<void>;
@@ -319,6 +354,32 @@ function schedulerState(value: unknown, label: string): "ENABLED" | "PAUSED" {
   throw new Error(`${label} must be ENABLED or PAUSED`);
 }
 
+function durationMilliseconds(value: unknown, label: string): number {
+  if (typeof value !== "string") throw new Error(`${label} must be a duration`);
+  const match = /^(\d+)(?:\.(\d{1,9}))?s$/.exec(value);
+  if (!match) throw new Error(`${label} must be a seconds duration`);
+  const wholeMilliseconds = Number(match[1]) * 1_000;
+  const fractionalMilliseconds = Number(`0.${match[2] ?? "0"}`) * 1_000;
+  const milliseconds = Math.ceil(wholeMilliseconds + fractionalMilliseconds);
+  if (!Number.isSafeInteger(milliseconds)) throw new Error(`${label} exceeds a safe duration`);
+  return milliseconds;
+}
+
+function zeroRetryConfig(
+  retryConfig: PlatformMigrationScheduledWriter["retryConfig"],
+  label: string,
+): { retryCount: 0; maxRetryDurationMilliseconds: 0 } {
+  const retryCount = retryConfig?.retryCount ?? 0;
+  if (retryCount !== 0) throw new Error(`${label} has nonzero Scheduler retryCount`);
+  const maxRetryDurationMilliseconds = retryConfig?.maxRetryDuration === undefined
+    ? 0
+    : durationMilliseconds(retryConfig.maxRetryDuration, `${label} maxRetryDuration`);
+  if (maxRetryDurationMilliseconds !== 0) {
+    throw new Error(`${label} has nonzero or unbounded Scheduler retry duration`);
+  }
+  return { retryCount: 0, maxRetryDurationMilliseconds: 0 };
+}
+
 function expectedScheduledWriterNames(settings: DeploymentEnvironmentSettings): string[] {
   return platformMigrationScheduledWriterNames(settings.region);
 }
@@ -334,11 +395,27 @@ export function selectPlatformMigrationScheduledWriters(
       throw new Error("Cloud Scheduler writer job has no name");
     }
     const state = schedulerState(job.state, `Cloud Scheduler job ${job.name} state`);
-    if (discovered.has(job.name)) throw new Error(`ambiguous Cloud Scheduler job: ${job.name}`);
-    discovered.set(job.name, { name: job.name, state });
-    if (!expected.has(job.name) && state === "ENABLED") {
-      throw new Error(`unknown enabled scheduled writer: ${job.name}`);
+    if (!expected.has(job.name)) {
+      if (state === "ENABLED") throw new Error(`unknown enabled scheduled writer: ${job.name}`);
+      continue;
     }
+    if (job.targetType !== "HTTP") throw new Error(`Cloud Scheduler job ${job.name} is not an HTTP target`);
+    const attemptDeadlineMilliseconds = durationMilliseconds(
+      job.attemptDeadline,
+      `Cloud Scheduler job ${job.name} attemptDeadline`,
+    );
+    if (attemptDeadlineMilliseconds !== PLATFORM_MIGRATION_SCHEDULER_ATTEMPT_DEADLINE_MILLISECONDS) {
+      throw new Error(`Cloud Scheduler job ${job.name} attemptDeadline is outside the reviewed 180s contract`);
+    }
+    zeroRetryConfig(job.retryConfig, `Cloud Scheduler job ${job.name}`);
+    if (discovered.has(job.name)) throw new Error(`ambiguous Cloud Scheduler job: ${job.name}`);
+    discovered.set(job.name, {
+      name: job.name,
+      state,
+      attemptDeadline: job.attemptDeadline,
+      retryConfig: job.retryConfig,
+      targetType: job.targetType,
+    });
   }
   for (const name of expected) {
     if (!discovered.has(name)) throw new Error(`required scheduled writer is missing: ${name}`);
@@ -368,6 +445,20 @@ export function selectPlatformMigrationCronJobs(
   return [...expected].sort().map((name) => discovered.get(name)!);
 }
 
+function validScheduledWriterReceiptJob(
+  job: ScheduledWriterReceipt["jobs"][number] | undefined,
+  expectedName: string,
+): boolean {
+  return job !== undefined &&
+    job.name === expectedName &&
+    (job.priorState === "ENABLED" || job.priorState === "PAUSED") &&
+    job.quiescedState === "PAUSED" &&
+    job.targetType === "HTTP" &&
+    job.attemptDeadlineMilliseconds === PLATFORM_MIGRATION_SCHEDULER_ATTEMPT_DEADLINE_MILLISECONDS &&
+    job.retryConfig?.retryCount === 0 &&
+    job.retryConfig?.maxRetryDurationMilliseconds === 0;
+}
+
 function scheduledWriterReceipt(receipt: PlatformMigrationWriterReceipt): ScheduledWriterReceipt {
   const scheduled = receipt.scheduledWriters;
   if (!scheduled || typeof scheduled.projectId !== "string" || typeof scheduled.region !== "string") {
@@ -377,11 +468,8 @@ function scheduledWriterReceipt(receipt: PlatformMigrationWriterReceipt): Schedu
     throw new Error("writer quiescence receipt has an invalid scheduled writer set");
   }
   const expected = platformMigrationScheduledWriterNames(scheduled.region);
-  for (let index = 0; index < expected.length; index += 1) {
-    const job = scheduled.jobs[index];
-    if (!job || job.name !== expected[index] || (job.priorState !== "ENABLED" && job.priorState !== "PAUSED") || job.quiescedState !== "PAUSED") {
-      throw new Error("writer quiescence receipt has an invalid scheduled writer state");
-    }
+  if (!expected.every((name, index) => validScheduledWriterReceiptJob(scheduled.jobs[index], name))) {
+    throw new Error("writer quiescence receipt has an invalid scheduled writer state");
   }
   return scheduled;
 }
@@ -422,7 +510,22 @@ function assertCurrentScheduledWriters(
   for (let index = 0; index < scheduled.jobs.length; index += 1) {
     const expected = scheduled.jobs[index]!;
     const current = observed[index]!;
-    if (current.name !== expected.name || !allowedStates(expected.priorState).includes(schedulerState(current.state, `Cloud Scheduler job ${current.name} state`))) {
+    const currentAttemptDeadline = durationMilliseconds(
+      current.attemptDeadline,
+      `Cloud Scheduler job ${current.name} attemptDeadline`,
+    );
+    const currentRetryConfig = zeroRetryConfig(
+      current.retryConfig,
+      `Cloud Scheduler job ${current.name}`,
+    );
+    if (
+      current.name !== expected.name ||
+      current.targetType !== expected.targetType ||
+      currentAttemptDeadline !== expected.attemptDeadlineMilliseconds ||
+      currentRetryConfig.retryCount !== expected.retryConfig.retryCount ||
+      currentRetryConfig.maxRetryDurationMilliseconds !== expected.retryConfig.maxRetryDurationMilliseconds ||
+      !allowedStates(expected.priorState).includes(schedulerState(current.state, `Cloud Scheduler job ${current.name} state`))
+    ) {
       throw new Error(`scheduled writer drifted from the quiescence receipt: ${expected.name}`);
     }
   }
@@ -444,11 +547,55 @@ function assertCurrentCronJobs(
   }
 }
 
+function terminalCronJobJob(job: KubernetesCronJobJob, label: string): boolean {
+  nonNegativeInteger(job.status?.succeeded ?? 0, `${label} succeeded`);
+  nonNegativeInteger(job.status?.failed ?? 0, `${label} failed`);
+  return (job.status?.conditions ?? []).some((condition) =>
+    (condition.type === "Complete" || condition.type === "Failed") && condition.status === "True");
+}
+
+function cronJobOwner(job: KubernetesCronJobJob, name: string): string | null {
+  const owners = (job.metadata?.ownerReferences ?? []).filter((owner) => owner.kind === "CronJob");
+  if (owners.length === 0) return null;
+  const owner = owners.length === 1 ? owners[0]?.name : null;
+  if (typeof owner !== "string" || owner.length === 0) {
+    throw new Error(`Kubernetes Job ${name} has an ambiguous CronJob owner`);
+  }
+  return owner;
+}
+
+function assertCronJobJobDrained(
+  job: KubernetesCronJobJob,
+  declared: ReadonlySet<string>,
+): void {
+  const name = job.metadata?.name;
+  if (typeof name !== "string" || name.length === 0) throw new Error("Kubernetes Job has no name");
+  const owner = cronJobOwner(job, name);
+  if (owner === null) return;
+  const active = nonNegativeInteger(job.status?.active ?? 0, `Kubernetes Job ${name} active`);
+  const terminal = terminalCronJobJob(job, `Kubernetes Job ${name}`);
+  if (!declared.has(owner)) {
+    if (active > 0 || !terminal) throw new Error(`unknown CronJob Job can still write: ${name}`);
+    return;
+  }
+  if (active > 0) throw new Error(`CronJob Job ${name} is still active`);
+  if (!terminal) throw new Error(`CronJob Job ${name} is not terminal`);
+}
+
+function assertCronJobJobsDrained(
+  jobs: readonly KubernetesCronJobJob[],
+  receipt: PlatformMigrationWriterReceipt,
+): void {
+  const declared = new Set(cronJobReceipt(receipt).map((cronJob) => cronJob.name));
+  for (const job of jobs) assertCronJobJobDrained(job, declared);
+}
+
 export function assertPlatformMigrationScheduledWritersQuiesced(
   settings: DeploymentEnvironmentSettings,
   receipt: PlatformMigrationWriterReceipt,
   schedulerJobs: readonly PlatformMigrationScheduledWriter[],
   cronJobs: readonly KubernetesCronJob[],
+  cronJobJobs: readonly KubernetesCronJobJob[],
 ): void {
   assertScheduledWriterReceiptMatchesTarget(receipt, settings);
   assertCurrentScheduledWriters(
@@ -457,6 +604,7 @@ export function assertPlatformMigrationScheduledWritersQuiesced(
     () => ["PAUSED"],
   );
   assertCurrentCronJobs(selectPlatformMigrationCronJobs(cronJobs), receipt, () => [true]);
+  assertCronJobJobsDrained(cronJobJobs, receipt);
 }
 
 export function assertPlatformMigrationScheduledWritersReady(
@@ -476,6 +624,32 @@ export function assertPlatformMigrationScheduledWritersReady(
     receipt,
     (prior) => [prior],
   );
+}
+
+export async function waitForPlatformMigrationScheduledAttemptDrain(input: {
+  attemptDeadlineMilliseconds: number;
+  now(): number;
+  sleep(milliseconds: number): Promise<void>;
+}): Promise<void> {
+  if (
+    !Number.isSafeInteger(input.attemptDeadlineMilliseconds) ||
+    input.attemptDeadlineMilliseconds <= 0 ||
+    input.attemptDeadlineMilliseconds > PLATFORM_MIGRATION_SCHEDULER_ATTEMPT_DEADLINE_MILLISECONDS
+  ) {
+    throw new Error("Scheduler attempt drain requires the reviewed bounded deadline");
+  }
+  const startedAt = input.now();
+  const drainedAt = startedAt + input.attemptDeadlineMilliseconds;
+  if (!Number.isSafeInteger(drainedAt)) throw new Error("Scheduler attempt drain deadline overflowed");
+  while (input.now() < drainedAt) {
+    await input.sleep(drainedAt - input.now());
+  }
+}
+
+export function platformMigrationScheduledAttemptDeadlineMilliseconds(
+  receipt: PlatformMigrationWriterReceipt,
+): number {
+  return Math.max(...scheduledWriterReceipt(receipt).jobs.map((job) => job.attemptDeadlineMilliseconds));
 }
 
 export function activePlatformCredentialWriters(
@@ -798,6 +972,7 @@ async function executeQuiesce(
     if (!current.suspended) await dependencies.setCronJobSuspended(settings, cronJob, true);
   }
   await dependencies.waitForScheduledWritersQuiesced(settings, activeReceipt);
+  await dependencies.waitForScheduledWriterAttemptsDrained(settings, activeReceipt);
   for (const workload of observed) {
     if (workload.replicas !== 0) {
       await dependencies.scaleWorkload(settings, workload, 0);
@@ -902,6 +1077,9 @@ export async function executePlatformMigrationWriterQuiescence(
         name: job.name,
         priorState: schedulerState(job.state, `Cloud Scheduler job ${job.name} state`),
         quiescedState: "PAUSED" as const,
+        targetType: "HTTP" as const,
+        attemptDeadlineMilliseconds: PLATFORM_MIGRATION_SCHEDULER_ATTEMPT_DEADLINE_MILLISECONDS,
+        retryConfig: zeroRetryConfig(job.retryConfig, `Cloud Scheduler job ${job.name}`),
       })),
     },
     cronJobs: cronJobs.map((cronJob) => ({
