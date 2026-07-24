@@ -282,7 +282,6 @@ export function createOpenClawControlHttpRouter(
   const sessions = options.sessions ?? defaultSessions;
   const redeem = options.redeem ?? redeemOpenClawControlTicket;
   const authorize = options.authorize ?? authorizeOpenClawControlSession;
-  const loadGatewayToken = options.loadGatewayToken ?? fetchGatewayToken;
   const httpTimeoutMs = options.httpTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
   const metrics = options.metrics;
   const identity = metricIdentity(env);
