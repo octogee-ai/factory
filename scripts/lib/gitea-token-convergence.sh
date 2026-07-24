@@ -33,6 +33,11 @@ if (body.login !== "octogee-admin") throw new Error("Gitea authentication did no
   done <<< "$pods"
 }
 
+validate_gitea_token_consumers() {
+  validate_gitea_token_consumer octogee-api GITEA_TOKEN GITEA_URL "api/v1/user"
+  validate_gitea_token_consumer glm-controller GIT_API_TOKEN GIT_API_URL "user"
+}
+
 restart_gitea_token_consumers() {
   local deployment
   info "Restarting and authenticating Gitea token consumers serially: octogee-api and glm-controller"

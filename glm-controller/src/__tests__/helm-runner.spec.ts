@@ -1500,7 +1500,7 @@ describe("createHelmSubprocessRunner — gateway ServiceAccount ownership", () =
     });
 
     await runner.upsertInstance({
-      namespace: "octogee-test-west",
+      namespace: "octogee-test",
       gatewayId: "builder-a",
       imageRepository: REPO,
       imageTag: "newtag",
@@ -1508,7 +1508,7 @@ describe("createHelmSubprocessRunner — gateway ServiceAccount ownership", () =
     });
 
     expect(ensureServiceAccount).toHaveBeenCalledWith(expect.objectContaining({
-      identity: expect.objectContaining({ deploymentTargetId: "test-west" }),
+      identity: expect.objectContaining({ deploymentTargetId: "test-central" }),
     }));
   });
 
