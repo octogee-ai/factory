@@ -2,10 +2,8 @@
  * Lane-aware PAT resolution for the chat broker.
  *
  * The PAT is the capability boundary (DECISIONS "Vegas: per-project agents"):
- *   - The WORKSPACE agent acts on behalf of the Builder, so it reads with the
- *     Builder's own MM PAT — the human's full context (workspace + any project
- *     channels they are in), which is exactly what "the user's agent always has
- *     the user's context" means.
+ *   - The WORKSPACE agent reads with its own bot PAT, limited to channels where
+ *     it is a member.
  *   - A PROJECT agent reads with its own bot PAT, whose MM channel membership
  *     is that project's channels ONLY. Under injection it cannot reach what the
  *     PAT cannot see.
@@ -20,7 +18,6 @@ import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent"
 export type ChatPatErrorCode =
   | "invalid-agent"
   | "foreign-agent"
-  | "no-builder-pat"
   | "no-coach-identity"
   | "no-project-pat"
   | "project-archived";
@@ -135,14 +132,6 @@ export async function resolveChatIdentity(
     };
   }
 
-  const builderSecret = await secretData(db, input.uid, "mattermost");
-  const builderPat = nonEmptyString(builderSecret.personalToken);
-  if (!builderPat) {
-    throw new ChatPatError(
-      "no-builder-pat",
-      `no builder MM PAT at users/{uid}/secrets/mattermost for ${input.slug} — re-run provisioning`,
-    );
-  }
   const coachSecret = await secretData(db, input.uid, "coachMattermost");
   const coachMmUserId = nonEmptyString(coachSecret.coachMmUserId);
   const coachPat = nonEmptyString(coachSecret.personalToken);
@@ -154,7 +143,7 @@ export async function resolveChatIdentity(
   }
   return {
     lane: "workspace",
-    pat: builderPat,
+    pat: coachPat,
     coachMmUserId,
     unread: { pat: coachPat, mmUserId: coachMmUserId },
     ...(archiveAccess.historyReadable ? { includeArchivedProjectHistory: true as const } : {}),

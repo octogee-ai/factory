@@ -18,13 +18,8 @@ const UID = "uid-1";
 const SLUG = "alice";
 
 describe("resolveChatIdentity", () => {
-  it("workspace coach agent reads with the BUILDER's PAT and self-labels the coach bot's posts", async () => {
-    // The workspace agent acts on behalf of the human — the Builder's own MM
-    // membership (workspace + project channels) is exactly the context the
-    // user's agent should see. The self-label id is still the coach BOT (the
-    // agent's own authored posts), which the builder PAT cannot report as "me".
+  it("workspace coach agent reads with its own PAT", async () => {
     const db = dbOf({
-      [`users/${UID}/secrets/mattermost`]: { personalToken: "builder-pat" },
       [`users/${UID}/secrets/coachMattermost`]: {
         personalToken: "coach-pat",
         coachMmUserId: "mm-coach-bot",
@@ -37,12 +32,8 @@ describe("resolveChatIdentity", () => {
     });
     expect(identity).toEqual({
       lane: "workspace",
-      pat: "builder-pat",
+      pat: "coach-pat",
       coachMmUserId: "mm-coach-bot",
-      // The `unread` direction is the AGENT's catch-up cursor, so it runs under
-      // the coach bot's own PAT — MM only serves a user's unread state to that
-      // user, and running it under the builder PAT would either 403 (coach id)
-      // or silently clobber the HUMAN's unread badges (`me`).
       unread: { pat: "coach-pat", mmUserId: "mm-coach-bot" },
     });
   });
@@ -140,18 +131,6 @@ describe("resolveChatIdentity", () => {
     await expect(
       resolveChatIdentity(dbOf({}), { uid: UID, slug: SLUG, agentId: "not-an-agent" }),
     ).rejects.toMatchObject({ code: "invalid-agent" });
-  });
-
-  it("fails loud when the builder PAT is missing (no admin/coach fallback)", async () => {
-    const db = dbOf({
-      [`users/${UID}/secrets/coachMattermost`]: {
-        personalToken: "coach-pat",
-        coachMmUserId: "mm-coach-bot",
-      },
-    });
-    await expect(
-      resolveChatIdentity(db, { uid: UID, slug: SLUG, agentId: "octogee-alice-coach" }),
-    ).rejects.toMatchObject({ code: "no-builder-pat" });
   });
 
   it("fails loud when the project agent secret is missing — a disabled agent has NO read capability", async () => {
