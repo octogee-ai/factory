@@ -13,8 +13,8 @@ export {
 
 export {
   COMMUNITY_CHANNELS,
-  communityChannelIds,
-  ensureCommunityChannels,
+  COMMUNITY_TEAM_NAME,
+  joinCommunityMembership,
 } from "./mattermost/community.js";
 
 export type { CoachPatMintDeps } from "./mattermost/coach-pat.js";
