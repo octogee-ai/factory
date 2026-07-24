@@ -54,7 +54,9 @@ describe("deployment target consumers", () => {
     expect(platform.match(/_REGION=\$\{\{ steps\.target\.outputs\.artifact_registry_location \}\}/g))
       .toHaveLength(5);
     expect(gateway.match(/_REGION=\$\{\{ needs\.matrix-setup\.outputs\.ar_location \}\}/g))
-      .toHaveLength(7);
+      .toHaveLength(4);
+    expect(gateway).not.toContain("build-gateway-extra-oc");
+    expect(gateway).not.toContain("build-operator-extra-oc");
     expect(pinnedGateway).toContain("_REGION=${TARGET_AR_LOCATION}");
     expect(matrixBases).toContain("_REGION=${TARGET_AR_LOCATION}");
 

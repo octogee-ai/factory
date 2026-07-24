@@ -153,6 +153,11 @@ export async function executePlatformMigrationActivation(args: PlatformMigration
   const services = await dependencies.readServices(settings);
   assertServices(services);
   if (!args.apply) return { receipt: receiptUri, status: "dry-run" };
+  const activationReceipt: PlatformMigrationActivationReceipt = {
+    schemaVersion: 1, kind: "platform-migration-activation-receipt", migrationId: args.migrationId, source: args.source, target: args.target, revision,
+    completedAt: new Date().toISOString(), services: services.map(({ service, kind, name }) => ({ service, kind, name })),
+    credentials: "migration-only-mattermost-and-target-gitea", secrets: "rematerialized-and-verified", verified: true,
+  };
   try {
     for (const service of services) if (service.replicas === 0) await dependencies.scaleService(settings, service, 1);
     await dependencies.waitForServicesReady(settings, services);
@@ -160,11 +165,14 @@ export async function executePlatformMigrationActivation(args: PlatformMigration
     await dependencies.resetGitea(settings);
     await dependencies.rematerializeSecrets(settings);
     await dependencies.verifySecrets(settings);
-    await dependencies.writeReceipt(receiptUri, {
-      schemaVersion: 1, kind: "platform-migration-activation-receipt", migrationId: args.migrationId, source: args.source, target: args.target, revision,
-      completedAt: new Date().toISOString(), services: services.map(({ service, kind, name }) => ({ service, kind, name })),
-      credentials: "migration-only-mattermost-and-target-gitea", secrets: "rematerialized-and-verified", verified: true,
-    });
+    try {
+      await dependencies.writeReceipt(receiptUri, activationReceipt);
+    } catch (error) {
+      const committed = await dependencies.readReceipt(receiptUri);
+      if (committed === null) throw error;
+      assertPlatformMigrationActivationReceipt(committed, { ...args, revision });
+      return { receipt: receiptUri, status: "complete" };
+    }
   } catch (error) {
     const rollbackErrors: unknown[] = [];
     for (const service of services) {

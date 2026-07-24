@@ -55,6 +55,7 @@ function dependencies(overrides: Partial<Parameters<typeof executePlatformMigrat
     },
     events,
     receipt: () => receipt,
+    setReceipt: (next: unknown) => { receipt = next; },
     services: () => services,
   };
 }
@@ -113,6 +114,36 @@ describe("platform migration activation", () => {
     const state = dependencies({ writeReceipt: async () => { throw new Error("receipt collision"); } });
     await expect(executePlatformMigrationActivation(args(), state.dependencies)).rejects.toThrow("receipt collision");
     expect(state.events).toEqual(expect.arrayContaining(["secrets-verified", "scale:mattermost=0", "scale:octogee-gitea=0", "stopped"]));
+    expect(state.services().map((service) => service.replicas)).toEqual([0, 0]);
+  });
+
+  it("treats a matching receipt discovered after a write acknowledgement failure as committed", async () => {
+    const state = dependencies({
+      writeReceipt: async (_uri, next) => {
+        state.setReceipt(next);
+        throw new Error("receipt acknowledgement unavailable");
+      },
+    });
+
+    await expect(executePlatformMigrationActivation(args(), state.dependencies)).resolves.toEqual({
+      receipt: "gs://receipts/activation.json",
+      status: "complete",
+    });
+    expect(state.events).not.toContain("scale:mattermost=0");
+    expect(state.services().map((service) => service.replicas)).toEqual([1, 1]);
+  });
+
+  it("rolls both services back when a write error reveals mismatched immutable evidence", async () => {
+    const state = dependencies({
+      writeReceipt: async (_uri, next) => {
+        state.setReceipt({ ...next, revision: "b".repeat(40) });
+        throw new Error("receipt collision");
+      },
+    });
+
+    await expect(executePlatformMigrationActivation(args(), state.dependencies))
+      .rejects.toThrow("activation receipt does not match");
+    expect(state.events).toEqual(expect.arrayContaining(["scale:mattermost=0", "scale:octogee-gitea=0", "stopped"]));
     expect(state.services().map((service) => service.replicas)).toEqual([0, 0]);
   });
 
