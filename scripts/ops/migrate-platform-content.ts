@@ -3,10 +3,13 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { deploymentTargetSettings, type DeploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 import { createPlatformContentMigrationPlan, parsePlatformContentMigrationArguments } from "../lib/platform-content-migration.js";
+import {
+  assertMigrationReceiptBucket,
+  immutableMigrationReceiptUri,
+  writeImmutableMigrationReceipt,
+} from "../lib/migration-receipts.js";
 
-const CONTROL_BUCKET = "gs://octogee-terraform-state";
 const SQL_TRANSFER_BUCKET = "gs://octogee-west-recovery";
-const receiptPrefix = "receipts/platform-content-migration";
 const POSTGRES_IMAGE = "postgres:16.14-alpine3.24@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777";
 const KUBECTL = "kubectl";
 const KUBE_CONTEXT_ARG = "--context";
@@ -369,7 +372,9 @@ function migrateDatabase(source: DeploymentEnvironmentSettings, target: Deployme
   }
 }
 
-function receiptUri(source: string, target: string, migrationId: string): string { return `${CONTROL_BUCKET}/${receiptPrefix}/${source}-to-${target}/${migrationId}.json`; }
+function receiptUri(source: string, target: string, migrationId: string): string {
+  return immutableMigrationReceiptUri(`platform-content-migration/${source}-to-${target}/${migrationId}.json`);
+}
 
 function receiptExists(uri: string): boolean {
   try {
@@ -385,6 +390,7 @@ function main(): void {
   const plan = createPlatformContentMigrationPlan(parsePlatformContentMigrationArguments(process.argv.slice(2)));
   const receipt = receiptUri(plan.source, plan.target, plan.migrationId);
   if (plan.dryRun) { process.stdout.write(`${JSON.stringify({ ...plan, receipt, safety: ["Cloud SQL database-only export/import; no role/password copy", "discovered workload PVCs and PD CSI disks", "snapshot restore copied inside one target pod", "content-bearing archive digest verification", "source and target Mattermost/Gitea quiesced before any transfer"] }, null, 2)}\n`); return; }
+  assertMigrationReceiptBucket();
   const revision = assertExactMergedMain(fileURLToPath(new URL("../..", import.meta.url)));
   if (receiptExists(receipt)) throw new Error("migration receipt already exists; completed migrations cannot be replayed");
   const source = deploymentTargetSettings(plan.source); const target = deploymentTargetSettings(plan.target);
@@ -406,7 +412,10 @@ function main(): void {
   for (const state of states) migrateDatabase(source, target, state.service, plan.migrationId);
   const databaseAfter = states.map((state) => ({ service: state.service, target: databaseMetadata(target, state.targetWorkload, state.service, plan.migrationId) }));
   for (const state of databaseBefore) { const after = databaseAfter.find((value) => value.service === state.service)!; if (JSON.stringify(state.source) !== JSON.stringify(after.target)) throw new Error(`${state.service} database metadata differs after import`); }
-  run("gcloud", ["storage", "cp", "-", receipt], `${JSON.stringify({ schemaVersion: 1, migrationId: plan.migrationId, source: plan.source, target: plan.target, revision, completedAt: new Date().toISOString(), transfer: plan.transfer, targetCredentials: "preserved-platform-generated", targetPreflight, services: transferred })}\n`);
+  writeImmutableMigrationReceipt(
+    `platform-content-migration/${plan.source}-to-${plan.target}/${plan.migrationId}.json`,
+    { schemaVersion: 1, kind: "platform-content-migration-receipt", migrationId: plan.migrationId, source: plan.source, target: plan.target, revision, completedAt: new Date().toISOString(), transfer: plan.transfer, targetCredentials: "preserved-platform-generated", verified: true, targetPreflight, services: transferred },
+  );
   process.stdout.write(`${JSON.stringify({ migrationId: plan.migrationId, receipt, status: "complete", workloads: "left-quiesced-for-explicit-cutover" })}\n`);
 }
 

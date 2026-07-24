@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applicationDefault, getApps, initializeApp } from "firebase-admin/app";
@@ -28,11 +27,19 @@ import {
   type PlatformMigrationWriterQuiescenceDependencies,
   type PlatformMigrationWriterReceipt,
 } from "../lib/platform-migration-writer-quiescence.js";
+import {
+  MIGRATION_RECEIPT_BUCKET,
+  MigrationReceiptCollisionError,
+  assertMigrationReceiptBucket,
+  immutableMigrationReceiptUri,
+  readImmutableMigrationReceipt,
+  writeImmutableMigrationReceipt,
+  type CommandRunner,
+} from "../lib/migration-receipts.js";
 
-const CONTROL_BUCKET = "gs://octogee-terraform-state";
-const RECEIPT_PREFIX = "receipts/platform-migration-writer-quiescence";
-const CONTENT_RECEIPT_PREFIX = "receipts/platform-content-migration";
-const FIREBASE_RECEIPT_PREFIX = "receipts/platform-firestore-auth-west-migration";
+const RECEIPT_PREFIX = "platform-migration-writer-quiescence";
+const CONTENT_RECEIPT_PREFIX = "platform-content-migration";
+const FIREBASE_RECEIPT_PREFIX = "platform-firestore-auth-west-migration";
 const MAINTENANCE_DOCUMENT = "config/glmMaintenance";
 const QUIESCE_TIMEOUT_MILLISECONDS = 120_000;
 const QUIESCE_POLL_MILLISECONDS = 1_000;
@@ -261,34 +268,51 @@ function firestore(settings: DeploymentEnvironmentSettings) {
   return getFirestore(app);
 }
 
-function receiptUri(receipt: Pick<PlatformMigrationWriterReceipt, "targetId" | "migrationId">): string {
-  return `${CONTROL_BUCKET}/${RECEIPT_PREFIX}/${receipt.migrationId}/${receipt.targetId}.json`;
+export function platformMigrationWriterReceiptUri(
+  receipt: Pick<PlatformMigrationWriterReceipt, "targetId" | "migrationId">,
+): string {
+  return immutableMigrationReceiptUri(
+    `${RECEIPT_PREFIX}/${receipt.migrationId}/${receipt.targetId}.json`,
+  );
 }
 
-function readReceipt(uri: string): PlatformMigrationWriterReceipt | null {
+export function readPlatformMigrationWriterReceipt(
+  uri: string,
+  runner: CommandRunner = run,
+): PlatformMigrationWriterReceipt | null {
   try {
-    return parseRecord(run("gcloud", ["storage", "cat", uri]), "writer quiescence receipt") as unknown as PlatformMigrationWriterReceipt;
+    return readImmutableMigrationReceipt(uri, {
+      schemaVersion: 1,
+      kind: "platform-migration-writer-quiescence-receipt",
+    }, runner).receipt as unknown as PlatformMigrationWriterReceipt;
   } catch (error) {
     if (isMissingObject(error)) return null;
     throw error;
   }
 }
 
-function writeReceipt(uri: string, receipt: PlatformMigrationWriterReceipt): void {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-writer-quiescence."));
-  const file = path.join(directory, "receipt.json");
+export function writePlatformMigrationWriterReceipt(
+  uri: string,
+  receipt: PlatformMigrationWriterReceipt,
+  runner: CommandRunner = run,
+): void {
+  const expectedUri = platformMigrationWriterReceiptUri(receipt);
+  if (uri !== expectedUri) {
+    throw new Error("writer quiescence receipt URI does not match its target and migration");
+  }
   try {
-    fs.writeFileSync(file, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
-    try {
-      run("gcloud", ["storage", "cp", "--if-generation-match=0", file, uri]);
-    } catch (error) {
-      if (error instanceof Error && /conditionNotMet|precondition|generation/i.test(error.message)) {
-        throw new Error("writer quiescence receipt already exists and is immutable");
-      }
-      throw error;
+    writeImmutableMigrationReceipt(
+      `${RECEIPT_PREFIX}/${receipt.migrationId}/${receipt.targetId}.json`,
+      { ...receipt },
+      runner,
+    );
+  } catch (error) {
+    if (error instanceof MigrationReceiptCollisionError) {
+      throw new Error("writer quiescence receipt already exists and is immutable", {
+        cause: error,
+      });
     }
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
+    throw error;
   }
 }
 
@@ -306,21 +330,53 @@ function migrationEndpoints(receipt: PlatformMigrationWriterReceipt): {
   return { source, target };
 }
 
-function assertRequiredMigrationReceipts(receipt: PlatformMigrationWriterReceipt): void {
+export function assertRequiredMigrationReceipts(
+  receipt: PlatformMigrationWriterReceipt,
+  runner: CommandRunner = run,
+): void {
   const { source, target } = migrationEndpoints(receipt);
-  const contentUri = `${CONTROL_BUCKET}/${CONTENT_RECEIPT_PREFIX}/${source}-to-${target}/${receipt.migrationId}.json`;
-  const content = parseRecord(run("gcloud", ["storage", "cat", contentUri]), "platform content migration receipt");
-  const pattern = `${CONTROL_BUCKET}/${FIREBASE_RECEIPT_PREFIX}/${receipt.migrationId}-${source}-${target}-*-complete.json`;
-  const candidates = run("gcloud", ["storage", "ls", pattern]).split("\n").filter(Boolean).sort();
+  const contentUri = immutableMigrationReceiptUri(
+    `${CONTENT_RECEIPT_PREFIX}/${source}-to-${target}/${receipt.migrationId}.json`,
+  );
+  const content = readImmutableMigrationReceipt(contentUri, {
+    schemaVersion: 1,
+    kind: "platform-content-migration-receipt",
+    migrationId: receipt.migrationId,
+    source,
+    target,
+    revision: receipt.revision,
+    verified: true,
+  }, runner).receipt;
+  const pattern =
+    `${MIGRATION_RECEIPT_BUCKET}/receipts/${FIREBASE_RECEIPT_PREFIX}/` +
+    `${receipt.migrationId}-${source}-${target}-*-complete.json`;
+  const candidates = runner("gcloud", ["storage", "ls", pattern])
+    .split("\n")
+    .filter(Boolean)
+    .sort();
   if (candidates.length === 0) throw new Error("verified Firebase/Auth/Storage migration receipt is required before restore");
   const firebase = candidates.map((uri) =>
-    parseRecord(run("gcloud", ["storage", "cat", uri]), "Firebase/Auth/Storage migration receipt"));
+    readImmutableMigrationReceipt(uri, {
+      schemaVersion: 1,
+      kind: "platform-firestore-auth-west-migration-receipt",
+      mode: "apply",
+      migrationId: receipt.migrationId,
+      sourceTargetId: source,
+      targetTargetId: target,
+      gitCommit: receipt.revision,
+      verified: true,
+    }, runner).receipt);
   assertRequiredPlatformMigrationReceipts(receipt, content, firebase);
 }
 
 async function assertPairedCentralQuiesced(receipt: PlatformMigrationWriterReceipt): Promise<void> {
   const { source } = migrationEndpoints(receipt);
-  const centralReceipt = readReceipt(receiptUri({ targetId: source, migrationId: receipt.migrationId }));
+  const centralReceipt = readPlatformMigrationWriterReceipt(
+    platformMigrationWriterReceiptUri({
+      targetId: source,
+      migrationId: receipt.migrationId,
+    }),
+  );
   if (
     centralReceipt === null ||
     centralReceipt.schemaVersion !== 1 ||
@@ -358,6 +414,7 @@ async function dependenciesForPairedMaintenance(
 
 function dependencies(repoRoot: string): PlatformMigrationWriterQuiescenceDependencies {
   return {
+    assertReceiptStorage: async () => assertMigrationReceiptBucket(run),
     assertExactMergedMain: async () => assertExactMergedMain(repoRoot),
     readWorkloads: async (settings) => workloads(settings),
     readMaintenance: async (settings) => {
@@ -412,12 +469,13 @@ function dependencies(repoRoot: string): PlatformMigrationWriterQuiescenceDepend
       });
     },
     waitForScheduledWritersReady: async (settings, receipt) => waitForScheduledWriters(settings, receipt, true),
-    readReceipt: async (uri) => readReceipt(uri),
-    writeReceipt: async (uri, receipt) => writeReceipt(uri, receipt),
+    readReceipt: async (uri) => readPlatformMigrationWriterReceipt(uri),
+    writeReceipt: async (uri, receipt) =>
+      writePlatformMigrationWriterReceipt(uri, receipt),
     assertRequiredMigrationReceipts: async (receipt) => assertRequiredMigrationReceipts(receipt),
     assertPairedCentralQuiesced: async (receipt) => assertPairedCentralQuiesced(receipt),
     settingsForTarget: (targetId) => deploymentTargetSettings(targetId),
-    receiptUri,
+    receiptUri: platformMigrationWriterReceiptUri,
   };
 }
 
