@@ -87,6 +87,7 @@ function mkClient(overrides: Partial<FleetBrokerClient> = {}): FleetBrokerClient
     setRepoUrl: vi.fn(async () => undefined),
     provisionMattermost: vi.fn(async () => ({})),
     setMattermostFields: vi.fn(async () => undefined),
+    ensureCommunityMembership: vi.fn(async () => undefined),
     setGreetingResult: vi.fn(async () => undefined),
     setAgentIds: vi.fn(async () => undefined),
     setMounted: vi.fn(async () => undefined),
@@ -720,6 +721,29 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
       { buildPatch: expect.any(Function) },
       expect.objectContaining({ maxRetries: 2, rpc }),
     );
+  });
+
+  it("reconcileCommunityMembership delegates to the fleet broker's ensure-community-membership RPC (no admin creds in-pod)", async () => {
+    const ensureCommunityMembership = vi.fn(async () => undefined);
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient({ ensureCommunityMembership }),
+      rpc: {} as unknown as GatewayRpcClient,
+      log: vi.fn(),
+    });
+
+    await adapter.reconcileCommunityMembership?.({
+      uid: "uid-tester10",
+      slug: "tester10",
+      tier: "trial",
+      ownerName: "Tester",
+      customerDir: "/home/node/.openclaw/customers/tester10",
+      today: "2026-07-24",
+      username: "tester10",
+      templateVars: {},
+      userData: {},
+    });
+
+    expect(ensureCommunityMembership).toHaveBeenCalledWith("uid-tester10");
   });
 });
 

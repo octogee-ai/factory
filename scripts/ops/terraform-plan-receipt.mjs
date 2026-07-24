@@ -7,6 +7,22 @@ import { isDeepStrictEqual } from "node:util";
 const MUTATING_ACTIONS = new Set(["create", "update", "delete"]);
 const FIRESTORE_DATABASE_ADDRESS = "module.data_project.google_firestore_database.default";
 const FIRESTORE_SENSITIVITY_SHAPE = { cmek_config: [] };
+const CLOUDSQL_CLIENT_IAM_ADDRESS = "module.iam.google_project_iam_member.cloudsql_client";
+const CLOUDSQL_CLIENT_IAM_ATTRIBUTE_KEYS = ["condition", "etag", "id", "member", "project", "role"];
+const CLOUDSQL_CLIENT_IAM_SENSITIVITY_SHAPE = { condition: [] };
+const KNOWN_VOLATILE_ETAG_EXCEPTIONS = [
+  {
+    address: FIRESTORE_DATABASE_ADDRESS,
+    resourceType: "google_firestore_database",
+    sensitivityShape: FIRESTORE_SENSITIVITY_SHAPE,
+  },
+  {
+    address: CLOUDSQL_CLIENT_IAM_ADDRESS,
+    resourceType: "google_project_iam_member",
+    attributeKeys: CLOUDSQL_CLIENT_IAM_ATTRIBUTE_KEYS,
+    sensitivityShape: CLOUDSQL_CLIENT_IAM_SENSITIVITY_SHAPE,
+  },
+];
 
 const countAction = (actions) => {
   const creates = actions.includes("create");
@@ -32,7 +48,12 @@ const isReadOnly = (actions) => Array.isArray(actions)
 
 const isNonemptyString = (value) => typeof value === "string" && value.length > 0;
 
-const knownVolatileFirestoreEtagException = (resource) => {
+const knownVolatileEtagException = (resource) => {
+  const exception = KNOWN_VOLATILE_ETAG_EXCEPTIONS.find(
+    ({ address, resourceType }) => resource.address === address && resource.type === resourceType,
+  );
+  if (!exception) return null;
+
   const change = resource.change ?? {};
   const allowedChangeKeys = [
     "actions",
@@ -43,8 +64,7 @@ const knownVolatileFirestoreEtagException = (resource) => {
     "before_sensitive",
   ];
 
-  return resource.address === FIRESTORE_DATABASE_ADDRESS
-    && isDeepStrictEqual(Object.keys(change).sort(), allowedChangeKeys)
+  const isExactEtagVolatility = isDeepStrictEqual(Object.keys(change).sort(), allowedChangeKeys)
     && Array.isArray(change.actions)
     && change.actions.length === 1
     && change.actions[0] === "update"
@@ -57,9 +77,16 @@ const knownVolatileFirestoreEtagException = (resource) => {
     && change.before.etag !== change.after.etag
     && isPlainObject(change.after_unknown)
     && Object.keys(change.after_unknown).length === 0
-    && isDeepStrictEqual(change.before_sensitive, FIRESTORE_SENSITIVITY_SHAPE)
-    && isDeepStrictEqual(change.after_sensitive, FIRESTORE_SENSITIVITY_SHAPE)
-    && isDeepStrictEqual(changedTopLevelPaths(change.before, change.after), ["etag"]);
+    && isDeepStrictEqual(change.before_sensitive, exception.sensitivityShape)
+    && isDeepStrictEqual(change.after_sensitive, exception.sensitivityShape)
+    && isDeepStrictEqual(changedTopLevelPaths(change.before, change.after), ["etag"])
+    && (exception.attributeKeys === undefined
+      || (
+        isDeepStrictEqual(Object.keys(change.before).sort(), exception.attributeKeys)
+        && isDeepStrictEqual(Object.keys(change.after).sort(), exception.attributeKeys)
+      ));
+
+  return isExactEtagVolatility ? exception : null;
 };
 
 const assertNoMutatingResourceDrift = (plan) => {
@@ -91,20 +118,22 @@ const convergenceExceptions = (plan) => {
   if (outputChanges.some((output) => !isReadOnly(output?.actions ?? []))) {
     throw new Error("Plan contains output changes; convergence evidence requires none");
   }
-  if (resourceDrift.length > 1) {
-    throw new Error("Plan contains multiple provider-reported resource drift entries");
-  }
   if (resourceDrift.length === 0) return [];
-  if (!knownVolatileFirestoreEtagException(resourceDrift[0])) {
+  const exceptions = resourceDrift.map(knownVolatileEtagException);
+  if (exceptions.some((exception) => exception === null)) {
     throw new Error("Plan contains unsupported provider-reported resource drift");
   }
+  if (new Set(exceptions.map(({ address }) => address)).size !== exceptions.length) {
+    throw new Error("Plan contains duplicate provider-reported resource drift entries");
+  }
 
-  return [{
+  return exceptions.map(({ address, resourceType }) => ({
     source: "resource_drift",
-    address: FIRESTORE_DATABASE_ADDRESS,
+    address,
+    resourceType,
     actions: ["update"],
     changedTopLevelPaths: ["etag"],
-  }];
+  }));
 };
 
 export const buildPlanReceipt = (plan, options) => {

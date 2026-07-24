@@ -33,6 +33,7 @@ const convergenceOptions = {
 
 const firestoreEtagDrift = {
   address: "module.data_project.google_firestore_database.default",
+  type: "google_firestore_database",
   change: {
     actions: ["update" as const],
     before: { etag: "before", location_id: "us-west1" },
@@ -40,6 +41,33 @@ const firestoreEtagDrift = {
     after_unknown: {},
     before_sensitive: { cmek_config: [] },
     after_sensitive: { cmek_config: [] },
+  },
+};
+
+const cloudSqlClientEtagDrift = {
+  address: "module.iam.google_project_iam_member.cloudsql_client",
+  type: "google_project_iam_member",
+  change: {
+    actions: ["update" as const],
+    before: {
+      condition: [],
+      etag: "before",
+      id: "octogee-data-test/roles/cloudsql.client/serviceAccount:cloudsql@test",
+      member: "serviceAccount:cloudsql@test",
+      project: "octogee-data-test",
+      role: "roles/cloudsql.client",
+    },
+    after: {
+      condition: [],
+      etag: "after",
+      id: "octogee-data-test/roles/cloudsql.client/serviceAccount:cloudsql@test",
+      member: "serviceAccount:cloudsql@test",
+      project: "octogee-data-test",
+      role: "roles/cloudsql.client",
+    },
+    after_unknown: {},
+    before_sensitive: { condition: [] },
+    after_sensitive: { condition: [] },
   },
 };
 
@@ -200,6 +228,7 @@ describe("Terraform plan receipt", () => {
       knownVolatileMetadataExceptions: [{
         source: "resource_drift",
         address: "module.data_project.google_firestore_database.default",
+        resourceType: "google_firestore_database",
         actions: ["update"],
         changedTopLevelPaths: ["etag"],
       }],
@@ -208,9 +237,46 @@ describe("Terraform plan receipt", () => {
     expect(JSON.stringify(receipt)).not.toContain("after");
   });
 
+  it("records both independently understood etag-only provider drifts in the schema-v2 convergence receipt", () => {
+    const receipt = buildPlanReceipt(
+      convergencePlan({ resource_drift: [firestoreEtagDrift, cloudSqlClientEtagDrift] }),
+      convergenceOptions,
+    );
+
+    expect(receipt.knownVolatileMetadataExceptions).toEqual([
+      {
+        source: "resource_drift",
+        address: "module.data_project.google_firestore_database.default",
+        resourceType: "google_firestore_database",
+        actions: ["update"],
+        changedTopLevelPaths: ["etag"],
+      },
+      {
+        source: "resource_drift",
+        address: "module.iam.google_project_iam_member.cloudsql_client",
+        resourceType: "google_project_iam_member",
+        actions: ["update"],
+        changedTopLevelPaths: ["etag"],
+      },
+    ]);
+  });
+
   it.each([
     ["a matching resource change", convergencePlan({ resource_changes: [firestoreEtagDrift] })],
-    ["two matching drift entries", convergencePlan({ resource_drift: [firestoreEtagDrift, firestoreEtagDrift] })],
+    ["a duplicate exact drift entry", convergencePlan({ resource_drift: [firestoreEtagDrift, firestoreEtagDrift] })],
+    ["an unexpected provider type", convergencePlan({
+      resource_drift: [{ ...firestoreEtagDrift, type: "google_project_iam_member" }],
+    })],
+    ["unreviewed IAM metadata that remains equal on both sides", convergencePlan({
+      resource_drift: [{
+        ...cloudSqlClientEtagDrift,
+        change: {
+          ...cloudSqlClientEtagDrift.change,
+          before: { ...cloudSqlClientEtagDrift.change.before, unreviewed_metadata: "same" },
+          after: { ...cloudSqlClientEtagDrift.change.after, unreviewed_metadata: "same" },
+        },
+      }],
+    })],
     ["an incomplete plan", convergencePlan({ complete: false })],
     ["an errored plan", convergencePlan({ errored: true })],
     ["a failed check", convergencePlan({ checks: [{ status: "fail" }] })],

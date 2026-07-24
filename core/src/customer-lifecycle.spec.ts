@@ -47,6 +47,7 @@ giteaReadShouldThrow: boolean;
   reassertByotUserData?: Record<string, unknown>;
   reassertContextFilesShouldFail?: boolean;
   reassertContextFilesUserData?: Record<string, unknown>;
+  communityMembershipCtx?: { uid: string; slug: string };
   byosub?: { restored: boolean; present: boolean };
   lastConfigPatchByosActive?: boolean;
   configPatchFingerprint?: string;
@@ -462,6 +463,40 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
     expect(result.steps).toContain("byot-reassert");
     expect(result.steps).not.toContain("context-files-reassert");
+  });
+
+  it("is a no-op when the adapter does not implement community membership reconciliation (optional method)", async () => {
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+    expect(result.steps).not.toContain("community-membership");
+  });
+
+  it("reconciles community membership on first-time provisioning when the adapter supports it", async () => {
+    const adapter = {
+      ...makeAdapter(state),
+      reconcileCommunityMembership: async (ctx: { uid: string; slug: string }) => {
+        state.calls.push("reconcileCommunityMembership");
+        state.communityMembershipCtx = ctx;
+      },
+    };
+    const result = await addCustomerToGateway(adapter, "uid-test");
+    expect(state.calls).toContain("reconcileCommunityMembership");
+    expect(result.steps).toContain("community-membership");
+    expect(state.communityMembershipCtx?.uid).toBe("uid-test");
+    expect(state.communityMembershipCtx?.slug).toBe("test");
+  });
+
+  it("a community membership reconcile failure is non-fatal — the mount still completes", async () => {
+    const adapter = {
+      ...makeAdapter(state),
+      reconcileCommunityMembership: async () => {
+        state.calls.push("reconcileCommunityMembership");
+        throw new Error("community reconcile failed");
+      },
+    };
+    const result = await addCustomerToGateway(adapter, "uid-test");
+    expect(state.calls).toContain("reconcileCommunityMembership");
+    expect(result.steps).not.toContain("community-membership");
+    expect(result.steps).toContain("verify-channel-ready");
   });
 
   it("writes provisioning.git.repoUrl IMMEDIATELY after the repo init succeeds", async () => {
@@ -1565,6 +1600,23 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
       state.calls.indexOf("cloneWorkspaceRepo"),
     );
     expect(result.steps).toContain("clone-workspace-repo");
+  });
+
+  it("reconciles community membership on restore — an existing Builder self-heals after a gateway restart", async () => {
+    const state = makeState(snap({ status: "complete" }), emptyDisk());
+    const adapter = {
+      ...makeAdapter(state),
+      reconcileCommunityMembership: async (ctx: { uid: string; slug: string }) => {
+        state.calls.push("reconcileCommunityMembership");
+        state.communityMembershipCtx = ctx;
+      },
+    };
+
+    const result = await restoreCustomerRuntimeFromSnapshot(adapter, state.user!);
+
+    expect(state.calls).toContain("reconcileCommunityMembership");
+    expect(result.steps).toContain("community-membership");
+    expect(state.communityMembershipCtx?.uid).toBe(state.user!.uid);
   });
 });
 

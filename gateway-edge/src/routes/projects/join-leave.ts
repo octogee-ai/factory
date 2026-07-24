@@ -126,9 +126,10 @@ async function joinProject(ctx: ProjectCtx, res: Response): Promise<void> {
   if (!memberRef) return;
 
   const actor = await readProjectActor(ctx.uid);
+  const { addActivityPairMember, ensureActiveMattermostUser } = await import("../../lib/activityPair.js");
+  if (actor.mmUserId) await ensureActiveMattermostUser(actor.mmUserId);
   if (!(await ensureProjectJoinerTeamMember(ctx, actor, res))) return;
 
-  const { addActivityPairMember } = await import("../../lib/activityPair.js");
   await addActivityPairMember(`${ctx.projectRef.path}/channels/general`, actor.mmUserId!);
   await writeProjectJoin(ctx, memberRef);
   await grantProjectGiteaAccess(ctx, actor);
