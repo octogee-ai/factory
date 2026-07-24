@@ -123,9 +123,6 @@ spec:
             - name: kubernetes-api-identity
               mountPath: /var/run/secrets/kubernetes-api
               readOnly: true
-            - name: k8s-api-token
-              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
-              readOnly: true
       volumes:
         - name: octogee-api-sa-token
           projected:
@@ -135,17 +132,6 @@ spec:
                   audience: octogee-api
                   expirationSeconds: 3600
         - name: kubernetes-api-identity
-          projected:
-            sources:
-              - serviceAccountToken:
-                  path: token
-                  expirationSeconds: 3600
-              - configMap:
-                  name: kube-root-ca.crt
-                  items:
-                    - key: ca.crt
-                      path: ca.crt
-        - name: k8s-api-token
           projected:
             sources:
               - serviceAccountToken:

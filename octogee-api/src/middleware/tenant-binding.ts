@@ -9,6 +9,8 @@ import {
 } from "../lib/sa-to-tenant.js";
 import {
   createKubernetesTokenReviewer,
+  IN_CLUSTER_IDENTITY_CA_PATH,
+  IN_CLUSTER_IDENTITY_TOKEN_PATH,
   type Reviewer,
 } from "../lib/token-review.js";
 import { logger as defaultLogger } from "../../../gateway-edge/src/middleware/logging.js";
@@ -83,7 +85,10 @@ function warn(
 export function createTenantBindingMiddleware(
   opts: TenantBindingMiddlewareOptions,
 ): (req: Request, res: Response, next: NextFunction) => void {
-  const reviewer = opts.reviewer ?? createKubernetesTokenReviewer();
+  const reviewer = opts.reviewer ?? createKubernetesTokenReviewer({
+    reviewerTokenPath: IN_CLUSTER_IDENTITY_TOKEN_PATH,
+    caPath: IN_CLUSTER_IDENTITY_CA_PATH,
+  });
   const db = opts.db ?? defaultDb;
   const logger = opts.logger ?? defaultLogger;
   const namespace = opts.namespace ?? process.env.K8S_NAMESPACE ?? "octogee";
