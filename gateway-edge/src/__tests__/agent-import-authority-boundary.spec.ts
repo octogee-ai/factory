@@ -25,6 +25,7 @@ describe("agent import sidecar authority boundary", () => {
     expect(`${runtime}\n${store}`).not.toMatch(/storage\.bucket\(|db\.doc\(/);
     expect(`${runtime}\n${store}`).toContain("internalFetch");
     expect(`${runtime}\n${git}\n${importSource}`).not.toContain("spawnSync");
-    expect(dockerfile).toContain("ARG TARGETARCH=amd64");
+    expect(dockerfile).toContain("CGO_ENABLED=0 go install");
+    expect(dockerfile).toContain("COPY --from=gitleaks-builder /go/bin/gitleaks /usr/local/bin/gitleaks");
   });
 });

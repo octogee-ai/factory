@@ -20,6 +20,8 @@
 # Node 22 — they're separate deploy surfaces with their own runtime
 # constraints (Firebase Functions Node 24 support lags the runtime).
 FROM node:24-bookworm-slim
+ARG NPM_VERSION=12.0.1
+RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 

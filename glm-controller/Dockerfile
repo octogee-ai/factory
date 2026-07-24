@@ -1,4 +1,6 @@
 FROM node:26-slim
+ARG NPM_VERSION=12.0.1
+RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund
 
 # Helm is PINNED to one version across every path that runs `helm upgrade`
 # against the cluster — CI's azure/setup-helm (.github/workflows/build-and-deploy.yml)

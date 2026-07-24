@@ -38,11 +38,8 @@ RUN npm run build
 # ── Runtime stage ────────────────────────────────────────────────────
 FROM node:26-slim
 WORKDIR /octogee-api
-
-# sharp (image processing for workspace/upload thumbnails) needs libvips.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libvips-dev \
-    && rm -rf /var/lib/apt/lists/*
+ARG NPM_VERSION=12.0.1
+RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund
 
 # The runtime install also packs the direct internal directory dependencies.
 COPY core/package.json /core/package.json
