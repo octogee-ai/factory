@@ -15,7 +15,11 @@ import {
   waitForPlatformMigrationWriterReadiness,
   waitForPlatformMigrationScheduledAttemptDrain,
 } from "../lib/platform-migration-writer-quiescence.js";
-import { parsePlatformMigrationScheduledWritersListing } from "../ops/quiesce-platform-migration-writers.js";
+import {
+  assertMigrationActivation,
+  parsePlatformMigrationScheduledWritersListing,
+  validateRestoredGiteaTokenConsumers,
+} from "../ops/quiesce-platform-migration-writers.js";
 
 const migrationId = "west-cutover-20260724";
 const targetId = "test-west";
@@ -122,6 +126,7 @@ function dependencies(overrides: Partial<Parameters<typeof executePlatformMigrat
   const schedulerResumes: string[] = [];
   const cronSuspensions: string[] = [];
   const maintenanceWrites: Array<Record<string, unknown> | null> = [];
+  const restoreEvents: string[] = [];
   return {
     dependencies: {
       assertReceiptStorage: async () => undefined,
@@ -161,15 +166,17 @@ function dependencies(overrides: Partial<Parameters<typeof executePlatformMigrat
       },
       waitForScheduledWritersQuiesced: async () => undefined,
       waitForScheduledWriterAttemptsDrained: async () => undefined,
-      waitForScheduledWritersReady: async () => undefined,
+      waitForScheduledWritersReady: async () => { restoreEvents.push("scheduled-ready"); },
       waitForWritersQuiesced: async () => undefined,
-      waitForWritersReady: async () => undefined,
+      waitForWritersReady: async () => { restoreEvents.push("writers-ready"); },
+      validateGiteaTokenConsumers: async () => { restoreEvents.push("gitea-authenticated"); },
       readReceipt: async () => receipt as never,
       writeReceipt: async (_uri: string, next: unknown) => {
         if (receipt !== null) throw new Error("receipt already exists");
         receipt = next;
       },
       assertRequiredMigrationReceipts: async () => undefined,
+      assertMigrationActivation: async () => undefined,
       assertPairedCentralQuiesced: async () => undefined,
       settingsForTarget: () => ({ targetId, namespace: "octogee-test", region: "us-west1", firebaseProjectId: "octogee-data-test" }) as never,
       receiptUri: (next: { targetId: string; migrationId: string }) =>
@@ -181,6 +188,7 @@ function dependencies(overrides: Partial<Parameters<typeof executePlatformMigrat
     schedulerResumes,
     cronSuspensions,
     maintenanceWrites,
+    restoreEvents,
     getReceipt: () => receipt,
   };
 }
@@ -678,6 +686,86 @@ describe("platform migration writer quiescence", () => {
       "Deployment/octogee-gateway-builder-ada=1",
     ]);
     expect(state.maintenanceWrites.at(-1)).toEqual({ mode: "open", reason: "normal operation", updatedAt: 1, updatedBy: "operator" });
+    expect(state.restoreEvents).toEqual(["writers-ready", "gitea-authenticated", "scheduled-ready"]);
+  });
+
+  it("rejects corrupt activation service evidence before writer restore", () => {
+    const receipt = {
+      schemaVersion: 1 as const,
+      kind: "platform-migration-writer-quiescence-receipt" as const,
+      targetId,
+      partnerTargetId,
+      migrationId,
+      revision: "a".repeat(40),
+      priorMaintenance: { mode: "open" },
+      writerWorkloads: [],
+    };
+    const activation = (services: unknown[]) => ({
+      schemaVersion: 1,
+      kind: "platform-migration-activation-receipt",
+      migrationId,
+      source: partnerTargetId,
+      target: targetId,
+      revision: receipt.revision,
+      credentials: "migration-only-mattermost-and-target-gitea",
+      secrets: "rematerialized-and-verified",
+      services,
+      verified: true,
+    });
+    const runner = (value: unknown) => (_command: string, commandArgs: readonly string[]) =>
+      commandArgs.includes("describe") ? JSON.stringify({ generation: "1" }) : JSON.stringify(value);
+
+    expect(() => assertMigrationActivation(receipt, runner(activation([
+      { service: "mattermost", kind: "Deployment", name: "mattermost" },
+      { service: "rogue", kind: "Deployment", name: "octogee-gitea" },
+    ])))).toThrow("exact Mattermost and Gitea service set");
+    expect(() => assertMigrationActivation(receipt, runner(activation([
+      { service: "mattermost", kind: "Deployment", name: "mattermost" },
+      { service: "gitea", kind: "CronJob", name: "octogee-gitea" },
+    ])))).toThrow("valid workload identity");
+  });
+
+  it("invokes the no-restart Gitea consumer validator with the exact target context", () => {
+    const calls: Array<{ command: string; args: readonly string[] }> = [];
+    validateRestoredGiteaTokenConsumers({
+      namespace: "octogee-test-west",
+      kubeContext: "gke_octogee_us-west1_octogee-gateway",
+    } as never, "/repo", (command, commandArgs) => {
+      calls.push({ command, args: commandArgs });
+      return "";
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.command).toBe("bash");
+    expect(calls[0]?.args).toEqual(expect.arrayContaining([
+      "octogee-test-west",
+      "gke_octogee_us-west1_octogee-gateway",
+      "/repo/scripts/lib/gitea-token-convergence.sh",
+    ]));
+    expect(calls[0]?.args[1]).toContain("validate_gitea_token_consumers");
+    expect(calls[0]?.args[1]).not.toContain("restart_gitea_token_consumers");
+  });
+
+  it("keeps maintenance and schedules frozen when restored Gitea consumer auth fails", async () => {
+    const state = dependencies({
+      validateGiteaTokenConsumers: async () => { throw new Error("Gitea consumer authentication failed"); },
+    });
+    await executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies);
+    await expect(executePlatformMigrationWriterQuiescence(args("restore"), state.dependencies))
+      .rejects.toThrow("Gitea consumer authentication failed");
+    expect(state.schedulerResumes).toEqual([]);
+    expect(state.maintenanceWrites.at(-1)).toEqual({
+      mode: "frozen",
+      managedBy: "platform-migration-writer-quiescence",
+    });
+  });
+
+  it("refuses writer restore until receipt-bound durable-service activation succeeds", async () => {
+    const state = dependencies({ assertMigrationActivation: async () => { throw new Error("activation receipt missing"); } });
+    await executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies);
+    await expect(executePlatformMigrationWriterQuiescence(args("restore"), state.dependencies))
+      .rejects.toThrow("activation receipt missing");
+    expect(state.scales).not.toContain("Deployment/gateway-router=2");
   });
 
   it("requires an all-zero and podless WEST target before restore", async () => {

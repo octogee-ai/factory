@@ -119,4 +119,21 @@ describe("Gitea platform-token convergence", () => {
     ]);
     expect(result.calls.join("\n")).not.toContain("octogee-gateway");
   });
+
+  it("authenticates both restored consumers without restarting them", () => {
+    const result = run("validate_gitea_token_consumers");
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.calls.map((call) => {
+      if (call.includes("get pods")) return `pods:${call.match(/app=(\S+)/)?.[1]}`;
+      if (call.includes("exec ")) return `exec:${call.match(/ (octogee-api|glm-controller)-1 /)?.[1]}`;
+      return call;
+    })).toEqual([
+      "pods:octogee-api",
+      "exec:octogee-api",
+      "pods:glm-controller",
+      "exec:glm-controller",
+    ]);
+    expect(result.calls.join("\n")).not.toContain("rollout");
+  });
 });
