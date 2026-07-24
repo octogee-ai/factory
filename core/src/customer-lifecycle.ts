@@ -171,6 +171,15 @@ restoreByosubForAgent: (slug: string) => Promise<{ restored: boolean; present: b
   ) => Promise<boolean>;
 
   provisionMattermostUser: (ctx: CustomerContext) => Promise<MmUpdate>;
+
+  /**
+   * Idempotently ensure this Builder is a member of the shared Octogee Community
+   * team + chat channels. Optional — adapters that don't own Mattermost community
+   * reconciliation (migration/local tooling) may omit it. Runs at provision AND on
+   * every re-mount (gateway restart), so an existing Builder self-heals without a
+   * fresh MM-provisioning event.
+   */
+  reconcileCommunityMembership?: (ctx: CustomerContext) => Promise<void>;
   scheduleBootGreetingCron: (params: {
     slug: string;
     agentId: string;
@@ -240,6 +249,7 @@ export type AddCustomerStep =
   | "context-files-reassert"
   | "project-clone"
   | "mattermost-provision"
+  | "community-membership"
   | "config-patch"
   | "verify-channel-ready"
   | "schedule-greeting-cron"
@@ -422,6 +432,9 @@ async function restoreCustomerRuntimeFromSnapshotInner(
   steps.push(...(await reassertConvergedState(adapter, snapshot)));
   throwIfAborted(signal, uid);
 
+  steps.push(...(await reconcileCommunityMembershipIfSupported(adapter, ctx)));
+  throwIfAborted(signal, uid);
+
   await verifyChannelReady(adapter, slug, verifyTimeoutMs);
   steps.push("verify-channel-ready");
   adapter.writeMountMarker?.(slug);
@@ -554,6 +567,9 @@ async function addCustomerToGatewayInner(
   throwIfAborted(signal, uid);
 
   steps.push(...(await reassertConvergedState(adapter, snapshot)));
+  throwIfAborted(signal, uid);
+
+  steps.push(...(await reconcileCommunityMembershipIfSupported(adapter, ctx)));
   throwIfAborted(signal, uid);
 
   await verifyChannelReady(adapter, slug, verifyTimeoutMs);
@@ -838,6 +854,22 @@ async function reassertConvergedState(
   }
 
   return steps;
+}
+
+async function reconcileCommunityMembershipIfSupported(
+  adapter: CustomerLifecycleAdapter,
+  ctx: CustomerContext,
+): Promise<AddCustomerStep[]> {
+  if (!adapter.reconcileCommunityMembership) return [];
+  try {
+    await adapter.reconcileCommunityMembership(ctx);
+    return ["community-membership"];
+  } catch (err) {
+    adapter.log(
+      `[add:${ctx.slug}] ⚠ community membership reconcile failed (non-fatal; retry on next sync/re-mount): ${String(err)}`,
+    );
+    return [];
+  }
 }
 
 async function cloneMissingProjects(

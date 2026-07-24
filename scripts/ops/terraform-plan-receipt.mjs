@@ -2,8 +2,27 @@
 
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
 const MUTATING_ACTIONS = new Set(["create", "update", "delete"]);
+const FIRESTORE_DATABASE_ADDRESS = "module.data_project.google_firestore_database.default";
+const FIRESTORE_SENSITIVITY_SHAPE = { cmek_config: [] };
+const CLOUDSQL_CLIENT_IAM_ADDRESS = "module.iam.google_project_iam_member.cloudsql_client";
+const CLOUDSQL_CLIENT_IAM_ATTRIBUTE_KEYS = ["condition", "etag", "id", "member", "project", "role"];
+const CLOUDSQL_CLIENT_IAM_SENSITIVITY_SHAPE = { condition: [] };
+const KNOWN_VOLATILE_ETAG_EXCEPTIONS = [
+  {
+    address: FIRESTORE_DATABASE_ADDRESS,
+    resourceType: "google_firestore_database",
+    sensitivityShape: FIRESTORE_SENSITIVITY_SHAPE,
+  },
+  {
+    address: CLOUDSQL_CLIENT_IAM_ADDRESS,
+    resourceType: "google_project_iam_member",
+    attributeKeys: CLOUDSQL_CLIENT_IAM_ATTRIBUTE_KEYS,
+    sensitivityShape: CLOUDSQL_CLIENT_IAM_SENSITIVITY_SHAPE,
+  },
+];
 
 const countAction = (actions) => {
   const creates = actions.includes("create");
@@ -16,7 +35,111 @@ const countAction = (actions) => {
   return null;
 };
 
+const isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+
+const changedTopLevelPaths = (before, after) => {
+  const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort();
+  return keys.filter((key) => !isDeepStrictEqual(before[key], after[key]));
+};
+
+const isReadOnly = (actions) => Array.isArray(actions)
+  && actions.length > 0
+  && actions.every((action) => action === "no-op" || action === "read");
+
+const isNonemptyString = (value) => typeof value === "string" && value.length > 0;
+
+const knownVolatileEtagException = (resource) => {
+  const exception = KNOWN_VOLATILE_ETAG_EXCEPTIONS.find(
+    ({ address, resourceType }) => resource.address === address && resource.type === resourceType,
+  );
+  if (!exception) return null;
+
+  const change = resource.change ?? {};
+  const allowedChangeKeys = [
+    "actions",
+    "after",
+    "after_sensitive",
+    "after_unknown",
+    "before",
+    "before_sensitive",
+  ];
+
+  const isExactEtagVolatility = isDeepStrictEqual(Object.keys(change).sort(), allowedChangeKeys)
+    && Array.isArray(change.actions)
+    && change.actions.length === 1
+    && change.actions[0] === "update"
+    && isPlainObject(change.before)
+    && isPlainObject(change.after)
+    && Object.hasOwn(change.before, "etag")
+    && Object.hasOwn(change.after, "etag")
+    && isNonemptyString(change.before.etag)
+    && isNonemptyString(change.after.etag)
+    && change.before.etag !== change.after.etag
+    && isPlainObject(change.after_unknown)
+    && Object.keys(change.after_unknown).length === 0
+    && isDeepStrictEqual(change.before_sensitive, exception.sensitivityShape)
+    && isDeepStrictEqual(change.after_sensitive, exception.sensitivityShape)
+    && isDeepStrictEqual(changedTopLevelPaths(change.before, change.after), ["etag"])
+    && (exception.attributeKeys === undefined
+      || (
+        isDeepStrictEqual(Object.keys(change.before).sort(), exception.attributeKeys)
+        && isDeepStrictEqual(Object.keys(change.after).sort(), exception.attributeKeys)
+      ));
+
+  return isExactEtagVolatility ? exception : null;
+};
+
+const assertNoMutatingResourceDrift = (plan) => {
+  for (const resource of plan.resource_drift ?? []) {
+    const actions = resource.change?.actions ?? [];
+    if (!isReadOnly(actions)) {
+      throw new Error(`Plan contains provider-reported resource drift: ${resource.address}`);
+    }
+  }
+};
+
+const convergenceExceptions = (plan) => {
+  const resourceChanges = plan.resource_changes ?? [];
+  const outputChanges = Object.values(plan.output_changes ?? {});
+  const resourceDrift = plan.resource_drift ?? [];
+
+  if (plan.complete !== true || plan.errored !== false) {
+    throw new Error("Plan is not complete and error-free");
+  }
+  if (plan.deferred_changes !== undefined) {
+    throw new Error("Plan contains deferred changes");
+  }
+  if (!Array.isArray(plan.checks) || plan.checks.some((check) => check.status !== "pass")) {
+    throw new Error("Plan contains a check that did not pass");
+  }
+  if (resourceChanges.some((resource) => !isReadOnly(resource.change?.actions ?? []))) {
+    throw new Error("Plan contains resource changes; convergence evidence requires none");
+  }
+  if (outputChanges.some((output) => !isReadOnly(output?.actions ?? []))) {
+    throw new Error("Plan contains output changes; convergence evidence requires none");
+  }
+  if (resourceDrift.length === 0) return [];
+  const exceptions = resourceDrift.map(knownVolatileEtagException);
+  if (exceptions.some((exception) => exception === null)) {
+    throw new Error("Plan contains unsupported provider-reported resource drift");
+  }
+  if (new Set(exceptions.map(({ address }) => address)).size !== exceptions.length) {
+    throw new Error("Plan contains duplicate provider-reported resource drift entries");
+  }
+
+  return exceptions.map(({ address, resourceType }) => ({
+    source: "resource_drift",
+    address,
+    resourceType,
+    actions: ["update"],
+    changedTopLevelPaths: ["etag"],
+  }));
+};
+
 export const buildPlanReceipt = (plan, options) => {
+  const knownVolatileMetadataExceptions = options.preReleaseConvergence
+    ? convergenceExceptions(plan)
+    : (assertNoMutatingResourceDrift(plan), []);
   const changes = [];
   const summary = { create: 0, update: 0, delete: 0, replace: 0 };
 
@@ -49,7 +172,7 @@ export const buildPlanReceipt = (plan, options) => {
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion: options.preReleaseConvergence ? 2 : 1,
     target: options.target,
     phase: options.phase,
     generatedAt: options.generatedAt,
@@ -59,6 +182,7 @@ export const buildPlanReceipt = (plan, options) => {
     planSha256: createHash("sha256").update(JSON.stringify(plan)).digest("hex"),
     summary,
     changes,
+    ...(options.preReleaseConvergence ? { knownVolatileMetadataExceptions } : {}),
   };
 };
 
@@ -70,6 +194,10 @@ const parseArguments = (args) => {
   };
 
   for (const arg of args) {
+    if (arg === "--pre-release-convergence") {
+      values.preReleaseConvergence = true;
+      continue;
+    }
     const [name, ...valueParts] = arg.split("=");
     const value = valueParts.join("=");
     if (!value) throw new Error(`Argument requires a value: ${name}`);
