@@ -1,3 +1,4 @@
+{{- $platformComputeClass := required "platformComputeClass is required" .Values.platformComputeClass }}
 # GMP query frontend — proxies PromQL to Google Managed Service for Prometheus
 # (Monarch). On Autopilot the self-managed kube-prometheus-stack cannot scrape
 # the kubelet (no kubelet/cAdvisor targets), so container CPU/memory live only in
@@ -26,6 +27,7 @@ spec:
       automountServiceAccountToken: true
       nodeSelector:
         kubernetes.io/os: linux
+        cloud.google.com/compute-class: {{ $platformComputeClass | quote }}
       containers:
         - name: frontend
           image: {{ .Values.gmp.frontend.image | quote }}

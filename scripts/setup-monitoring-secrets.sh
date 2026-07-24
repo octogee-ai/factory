@@ -43,6 +43,7 @@ IAP_CLIENT_ID_SECRET="GRAFANA_IAP_CLIENT_ID-${TARGET_CLUSTER_NAME}-${TARGET_REGI
 IAP_CLIENT_SECRET_SECRET="GRAFANA_IAP_CLIENT_SECRET-${TARGET_CLUSTER_NAME}-${TARGET_REGION}"
 NAMESPACE="monitoring"
 K8S_SECRET="grafana-admin"
+GRAFANA_ADMIN_USER="admin"
 
 gcloud container clusters get-credentials "$TARGET_CLUSTER_NAME" \
   --region "$TARGET_REGION" --project "$TARGET_CLUSTER_PROJECT" >/dev/null
@@ -90,12 +91,19 @@ esac
 [[ -n "$password" ]] || { echo "Refusing to materialize an empty Grafana password" >&2; exit 1; }
 kubectl create namespace "$NAMESPACE" --context "$TARGET_KUBE_CONTEXT" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 kubectl create secret generic "$K8S_SECRET" --namespace "$NAMESPACE" --context "$TARGET_KUBE_CONTEXT" \
+  --from-literal=admin-user="$GRAFANA_ADMIN_USER" \
   --from-literal=admin-password="$password" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
+materialized_user="$(kubectl get secret "$K8S_SECRET" --namespace "$NAMESPACE" --context "$TARGET_KUBE_CONTEXT" \
+  -o jsonpath='{.data.admin-user}' | base64 --decode)" \
+  || { echo "Could not verify $NAMESPACE/$K8S_SECRET admin user" >&2; exit 1; }
 materialized="$(kubectl get secret "$K8S_SECRET" --namespace "$NAMESPACE" --context "$TARGET_KUBE_CONTEXT" \
   -o jsonpath='{.data.admin-password}' | base64 --decode)" \
   || { echo "Could not verify $NAMESPACE/$K8S_SECRET" >&2; exit 1; }
-[[ "$materialized" == "$password" ]] || { echo "Grafana secret materialization drifted" >&2; exit 1; }
+[[ "$materialized_user" == "$GRAFANA_ADMIN_USER" && "$materialized" == "$password" ]] || {
+  echo "Grafana secret materialization drifted" >&2
+  exit 1
+}
 
 if $IAP; then
   iap_id_state="$(secret_manager_secret_state "$IAP_CLIENT_ID_SECRET" "$SECRET_MANAGER_PROJECT")"

@@ -1,3 +1,4 @@
+{{- $platformComputeClass := required "platformComputeClass is required" .Values.platformComputeClass }}
 # Standalone kube-state-metrics scraped INTO GMP. The kube-prometheus-stack
 # bundled a KSM, but that stack is retired (it can't scrape kubelets on
 # Autopilot); GMP is the single source of truth now. Distinct `app:
@@ -103,6 +104,7 @@ spec:
       automountServiceAccountToken: true
       nodeSelector:
         kubernetes.io/os: linux
+        cloud.google.com/compute-class: {{ $platformComputeClass | quote }}
       containers:
         - name: kube-state-metrics
           image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.0

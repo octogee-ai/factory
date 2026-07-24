@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parseAllDocuments } from "yaml";
 
 const root = resolve(__dirname, "../..");
 const setupMonitoring = readFileSync(
@@ -25,6 +26,32 @@ function chart(path: string): string {
   return readFileSync(resolve(root, "helm/monitoring", path), "utf8");
 }
 
+function renderedDeployment(name: string): Record<string, unknown> {
+  const rendered = execFileSync(
+    "helm",
+    [
+      "template",
+      "grafana",
+      resolve(root, "helm/monitoring"),
+      "--namespace",
+      "monitoring",
+      "--set-string",
+      "platformComputeClass=octogee-platform-test-spot",
+      "--set-string",
+      "grafana.nodeSelector.cloud\\.google\\.com/compute-class=octogee-platform-test-spot",
+    ],
+    { encoding: "utf8" },
+  );
+  const deployment = parseAllDocuments(rendered)
+    .map((document) => document.toJSON() as Record<string, unknown> | null)
+    .find((document) =>
+      document?.kind === "Deployment" &&
+      (document.metadata as Record<string, unknown> | undefined)?.name === name,
+    );
+  if (!deployment) throw new Error(`Deployment ${name} did not render`);
+  return deployment;
+}
+
 describe("monitoring setup", () => {
   it("adopts all first-party monitoring objects through one pinned Helm release", () => {
     expect(chart("Chart.yaml")).toContain("name: octogee-monitoring");
@@ -42,6 +69,12 @@ describe("monitoring setup", () => {
     expect(setupMonitoringIap).not.toContain("gcloud compute addresses create");
   });
 
+  it("passes the selected platform ComputeClass to monitoring Helm and rejects an active target without one", () => {
+    expect(setupMonitoring).toContain('platformComputeClass=$TARGET_PLATFORM_COMPUTE_CLASS');
+    expect(setupMonitoring).toContain('grafana.nodeSelector.cloud\\\\.google\\\\.com/compute-class=$TARGET_PLATFORM_COMPUTE_CLASS');
+    expect(setupMonitoring).toContain("requires a platform ComputeClass");
+  });
+
   it("uses the tested secret materializer instead of a workstation environment file", () => {
     expect(setupMonitoring).toContain("setup-monitoring-secrets.sh");
     expect(setupMonitoring).not.toContain("ENV_FILE=");
@@ -51,6 +84,32 @@ describe("monitoring setup", () => {
     expect(setupMonitoringSecrets).toContain("--adopt-existing-secret");
     expect(setupMonitoringSecrets).toContain("--bootstrap-secret");
     expect(setupMonitoringSecrets).not.toContain(".env");
+  });
+
+  it("materializes the exact Grafana admin secret contract without exposing credentials", () => {
+    const values = chart("values.yaml");
+    const grafana = renderedDeployment("grafana");
+    const containers = ((grafana.spec as { template: { spec: { containers: Array<{
+      name: string;
+      env?: Array<{ name: string; valueFrom?: { secretKeyRef?: unknown } }>;
+    }> } } }).template.spec.containers);
+    const server = containers.find((container) => container.name === "grafana");
+    const secretRef = (name: string) => server?.env?.find((entry) => entry.name === name)?.valueFrom?.secretKeyRef;
+
+    expect(values).toContain("userKey: admin-user");
+    expect(values).toContain("passwordKey: admin-password");
+    expect(secretRef("GF_SECURITY_ADMIN_USER")).toEqual({
+      key: "admin-user",
+      name: "grafana-admin",
+    });
+    expect(secretRef("GF_SECURITY_ADMIN_PASSWORD")).toEqual({
+      key: "admin-password",
+      name: "grafana-admin",
+    });
+    expect(setupMonitoringSecrets).toContain('GRAFANA_ADMIN_USER="admin"');
+    expect(setupMonitoringSecrets).toContain('--from-literal=admin-user="$GRAFANA_ADMIN_USER"');
+    expect(setupMonitoringSecrets).toContain(".data.admin-user");
+    expect(setupMonitoringSecrets).not.toContain("set -x");
   });
 
   it("grants the dashboard sidecar only namespace-scoped ConfigMap access", () => {
@@ -127,6 +186,10 @@ describe("monitoring setup", () => {
         resolve(root, "helm/monitoring"),
         "--namespace",
         "monitoring",
+        "--set-string",
+        "platformComputeClass=octogee-platform-test-spot",
+        "--set-string",
+        "grafana.nodeSelector.cloud\\.google\\.com/compute-class=octogee-platform-test-spot",
       ],
       { encoding: "utf8" },
     );
@@ -144,5 +207,19 @@ describe("monitoring setup", () => {
     expect(values).not.toContain("commonLabels:");
     expect(verifyMonitoring).toContain("kubectl exec deployment/grafana");
     expect(verifyMonitoring).toContain("test -w /var/lib/grafana");
+  });
+
+  it("places every monitoring workload on the target platform ComputeClass", () => {
+    const expectedSelector = {
+      "cloud.google.com/compute-class": "octogee-platform-test-spot",
+      "kubernetes.io/os": "linux",
+    };
+
+    for (const name of ["grafana", "gmp-frontend", "gmp-kube-state-metrics"]) {
+      const spec = renderedDeployment(name).spec as {
+        template: { spec: { nodeSelector: Record<string, string> } };
+      };
+      expect(spec.template.spec.nodeSelector).toEqual(expectedSelector);
+    }
   });
 });

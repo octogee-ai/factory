@@ -33,6 +33,10 @@ octogee_load_deployment_target "$SELECTOR"
   echo "Monitoring only supports active deployment targets; $TARGET_ID is $TARGET_LIFECYCLE" >&2
   exit 1
 }
+[[ -n "${TARGET_PLATFORM_COMPUTE_CLASS:-}" ]] || {
+  echo "Active monitoring target $TARGET_ID requires a platform ComputeClass" >&2
+  exit 1
+}
 
 for command in gcloud kubectl helm node; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
@@ -55,7 +59,11 @@ secret_args=(--target="$TARGET_ID")
 [[ -n "$SECRET_MODE" ]] && secret_args+=("$SECRET_MODE")
 "$SCRIPT_DIR/setup-monitoring-secrets.sh" "${secret_args[@]}"
 
-helm_values=(--set "gmp.projectId=$TARGET_CLUSTER_PROJECT")
+helm_values=(
+  --set "gmp.projectId=$TARGET_CLUSTER_PROJECT"
+  --set-string "platformComputeClass=$TARGET_PLATFORM_COMPUTE_CLASS"
+  --set-string "grafana.nodeSelector.cloud\\.google\\.com/compute-class=$TARGET_PLATFORM_COMPUTE_CLASS"
+)
 $IAP_ENABLED && helm_values+=(--set iap.enabled=true)
 
 helm upgrade --install grafana "$REPO_DIR/helm/monitoring" \
