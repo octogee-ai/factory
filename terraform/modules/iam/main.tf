@@ -305,7 +305,8 @@ resource "google_service_account" "firebase_deployer" {
 
 resource "google_project_iam_member" "firebase_deployer" {
   for_each = toset([
-    "roles/firebase.admin",                    # firestore rules + hosting + project resolution
+    "roles/firebase.admin", # firestore rules + hosting + project resolution
+    "roles/datastore.indexAdmin",
     "roles/cloudfunctions.admin",              # functions deploy (control plane)
     "roles/run.admin",                         # Gen2 functions back onto Cloud Run
     "roles/cloudscheduler.admin",              # onSchedule functions create Cloud Scheduler jobs
