@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   MIGRATION_RECEIPT_OPERATOR_MEMBERS,
+  MIGRATION_RECEIPT_BUCKET_CONTROL_ROLE,
   MIGRATION_RECEIPT_BUCKET,
   MIGRATION_RECEIPT_WORM_PROOF_PRINCIPAL,
   MigrationReceiptCollisionError,
@@ -30,6 +31,10 @@ describe("immutable migration receipts", () => {
   };
   const receiptPolicy = {
     bindings: [
+      {
+        role: "roles/storage.legacyBucketOwner",
+        members: MIGRATION_RECEIPT_OPERATOR_MEMBERS,
+      },
       {
         role: "roles/storage.objectCreator",
         members: MIGRATION_RECEIPT_OPERATOR_MEMBERS,
@@ -95,11 +100,10 @@ describe("immutable migration receipts", () => {
       receiptBucket,
       {
         bindings: [
-          ...receiptPolicy.bindings,
-          { role: "roles/storage.objectAdmin", members: MIGRATION_RECEIPT_OPERATOR_MEMBERS },
+          ...receiptPolicy.bindings.filter((binding) => binding.role !== "roles/storage.legacyBucketOwner"),
         ],
       },
-    ))).toThrow(/exact roles/i);
+    ))).toThrow(/roles\/storage\.legacyBucketOwner/i);
     expect(() => assertMigrationReceiptBucket(postureRunner(
       receiptBucket,
       {
@@ -109,6 +113,18 @@ describe("immutable migration receipts", () => {
         })),
       },
     ))).toThrow(/exact members/i);
+    expect(() => assertMigrationReceiptBucket(postureRunner(
+      receiptBucket,
+      {
+        bindings: receiptPolicy.bindings.map((binding) => ({
+          ...binding,
+          condition: {
+            title: "unexpected",
+            expression: "request.time < timestamp('2026-07-25T00:00:00Z')",
+          },
+        })),
+      },
+    ))).toThrow(/unconditional/i);
   });
 
   it("rejects mutable or retention-locked Terraform state posture", () => {
@@ -124,41 +140,32 @@ describe("immutable migration receipts", () => {
     ))).toThrow(/Terraform state.*retention policy/i);
   });
 
-  it("separates project-owner WORM proof authority from bucket-local receipt IAM", () => {
+  it("requires the explicit bucket controller as the non-impersonated WORM proof principal", () => {
     const run = vi.fn((_command: string, args: readonly string[]) => {
       if (args.includes("get-value")) {
         return args.at(-1) === "account"
           ? "christopher.k.eckert@squarepointconsulting.com\n"
           : "(unset)\n";
       }
-      return JSON.stringify({
-        bindings: [{
-          role: "roles/owner",
-          members: [MIGRATION_RECEIPT_WORM_PROOF_PRINCIPAL],
-        }],
-      });
+      return "";
     });
 
-    expect(() => assertMigrationReceiptWormProofAuthority(run)).not.toThrow();
-    expect(run).toHaveBeenCalledWith("gcloud", [
-      "projects", "get-iam-policy", "octogee", "--format=json",
-    ]);
+    expect(assertMigrationReceiptWormProofAuthority(run)).toEqual({
+      principal: MIGRATION_RECEIPT_WORM_PROOF_PRINCIPAL,
+      bucket: MIGRATION_RECEIPT_BUCKET,
+      role: MIGRATION_RECEIPT_BUCKET_CONTROL_ROLE,
+    });
 
-    const leastPrivilege = vi.fn((_command: string, args: readonly string[]) => {
+    const wrongPrincipal = vi.fn((_command: string, args: readonly string[]) => {
       if (args.includes("get-value")) {
         return args.at(-1) === "account"
-          ? "christopher.k.eckert@squarepointconsulting.com\n"
+          ? "someone-else@example.com\n"
           : "(unset)\n";
       }
-      return JSON.stringify({
-        bindings: [{
-          role: "roles/storage.objectCreator",
-          members: MIGRATION_RECEIPT_OPERATOR_MEMBERS,
-        }],
-      });
+      return "";
     });
-    expect(() => assertMigrationReceiptWormProofAuthority(leastPrivilege))
-      .toThrow(/project owner proof principal/i);
+    expect(() => assertMigrationReceiptWormProofAuthority(wrongPrincipal))
+      .toThrow(/bucket controller proof principal/i);
 
     const impersonated = vi.fn((_command: string, args: readonly string[]) => {
       if (args.includes("get-value")) {
@@ -169,12 +176,7 @@ describe("immutable migration receipts", () => {
           ? "other-owner@example.test\n"
           : "(unset)\n";
       }
-      return JSON.stringify({
-        bindings: [{
-          role: "roles/owner",
-          members: [MIGRATION_RECEIPT_WORM_PROOF_PRINCIPAL],
-        }],
-      });
+      return "";
     });
     expect(() => assertMigrationReceiptWormProofAuthority(impersonated))
       .toThrow(/configured gcloud authority override/i);

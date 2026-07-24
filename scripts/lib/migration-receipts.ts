@@ -8,12 +8,13 @@ export const TERRAFORM_STATE_BUCKET = "gs://octogee-terraform-state";
 export const MIGRATION_RECEIPT_OPERATOR_MEMBERS = [
   "user:christopher.k.eckert@squarepointconsulting.com",
 ] as const;
+export const MIGRATION_RECEIPT_BUCKET_CONTROL_ROLE = "roles/storage.legacyBucketOwner";
 export const MIGRATION_RECEIPT_WORM_PROOF_PRINCIPAL =
   "user:christopher.k.eckert@squarepointconsulting.com";
 export const MIGRATION_RECEIPT_WORM_PROOF_AUTHORITY = {
   principal: MIGRATION_RECEIPT_WORM_PROOF_PRINCIPAL,
-  projectId: "octogee",
-  role: "roles/owner",
+  bucket: MIGRATION_RECEIPT_BUCKET,
+  role: MIGRATION_RECEIPT_BUCKET_CONTROL_ROLE,
 } as const;
 const RECEIPT_PREFIX = "receipts/";
 const RETENTION_SECONDS = 400 * 24 * 60 * 60;
@@ -144,6 +145,7 @@ function assertBucketLocalIamPolicy(policy: JsonRecord): void {
   const bindings = policy.bindings;
   if (!Array.isArray(bindings)) throw new Error("migration receipt bucket IAM policy has no bindings");
   const expectedRoles = [
+    MIGRATION_RECEIPT_BUCKET_CONTROL_ROLE,
     "roles/storage.objectCreator",
     "roles/storage.objectViewer",
   ];
@@ -152,6 +154,9 @@ function assertBucketLocalIamPolicy(policy: JsonRecord): void {
     const binding = record(bindingValue, "migration receipt bucket IAM binding");
     if (typeof binding.role !== "string") {
       throw new Error("migration receipt bucket-local IAM binding has no role");
+    }
+    if (binding.condition !== undefined) {
+      throw new Error(`migration receipt bucket-local IAM ${binding.role} must be unconditional`);
     }
     actualRoles.push(binding.role);
     const members = binding.members;
@@ -167,6 +172,11 @@ function assertBucketLocalIamPolicy(policy: JsonRecord): void {
   if (
     JSON.stringify(actualRoles.sort()) !== JSON.stringify(expectedRoles.sort())
   ) {
+    if (!actualRoles.includes(MIGRATION_RECEIPT_BUCKET_CONTROL_ROLE)) {
+      throw new Error(
+        `migration receipt bucket-local IAM must retain ${MIGRATION_RECEIPT_BUCKET_CONTROL_ROLE} for its explicit controller`,
+      );
+    }
     throw new Error("migration receipt bucket-local IAM must have exact roles");
   }
 }
@@ -182,26 +192,7 @@ export function assertMigrationReceiptWormProofAuthority(
   }
   const activeAccount = run("gcloud", ["config", "get-value", "account"]).trim();
   if (`user:${activeAccount}` !== MIGRATION_RECEIPT_WORM_PROOF_AUTHORITY.principal) {
-    throw new Error("migration receipt WORM proof requires the configured project owner proof principal");
-  }
-  const projectPolicy = parseJson(run("gcloud", [
-    "projects",
-    "get-iam-policy",
-    MIGRATION_RECEIPT_WORM_PROOF_AUTHORITY.projectId,
-    JSON_FORMAT,
-  ]), "migration receipt WORM proof project IAM policy");
-  const bindings = projectPolicy.bindings;
-  if (!Array.isArray(bindings)) {
-    throw new Error("migration receipt WORM proof project IAM policy has no bindings");
-  }
-  const hasProofAuthority = bindings.some((bindingValue) => {
-    const binding = record(bindingValue, "migration receipt WORM proof project IAM binding");
-    return binding.role === MIGRATION_RECEIPT_WORM_PROOF_AUTHORITY.role &&
-      Array.isArray(binding.members) &&
-      binding.members.includes(MIGRATION_RECEIPT_WORM_PROOF_AUTHORITY.principal);
-  });
-  if (!hasProofAuthority) {
-    throw new Error("migration receipt WORM proof requires the configured project owner proof principal");
+    throw new Error("migration receipt WORM proof requires the configured bucket controller proof principal");
   }
   return MIGRATION_RECEIPT_WORM_PROOF_AUTHORITY;
 }
