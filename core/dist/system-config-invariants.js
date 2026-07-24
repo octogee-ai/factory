@@ -4,6 +4,7 @@ const REQUIRED_PLUGINS = [
     "anthropic",
     "memory-core",
     "octogee-chat-tools",
+    "octogee-access-tools",
     "octogee-preview-tools",
     "octogee-project-tools",
     "octogee-status-tools",
@@ -13,27 +14,33 @@ const REQUIRED_PLUGINS = [
 ];
 const RETIRED_PLUGINS = ["octogee-mattermost-tools", "octogee-router"];
 const PLUGIN_ENTRIES = REQUIRED_PLUGINS.filter((id) => id !== "memory-core");
+const FLEET_BROKER_URL_PLACEHOLDER = "${FLEET_BROKER_URL}";
+const OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER = "${OCTOGEE_API_SA_TOKEN_PATH}";
 const PLATFORM_PLUGIN_CONFIGS = {
     "octogee-chat-tools": {
         siteUrl: "${MM_SITE_URL}",
-        brokerUrl: "${FLEET_BROKER_URL}",
-        tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+        brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,
+        tokenPath: OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
         customersRoot: "${CUSTOMERS_DIR}",
+    },
+    "octogee-access-tools": {
+        brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,
+        tokenPath: OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
     },
     "octogee-preview-tools": {},
     "octogee-project-tools": {
-        brokerUrl: "${FLEET_BROKER_URL}",
-        tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+        brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,
+        tokenPath: OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
     },
     "octogee-status-tools": {
-        brokerUrl: "${FLEET_BROKER_URL}",
-        tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+        brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,
+        tokenPath: OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
         gatewayClass: "${GATEWAY_CLASS}",
     },
     "octogee-web-tools": {
-        brokerUrl: "${FLEET_BROKER_URL}",
+        brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,
         gatewayId: "${GATEWAY_ID}",
-        tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+        tokenPath: OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
     },
     "octogee-workspace-tools": {},
     "octogee-publish-tools": {},
