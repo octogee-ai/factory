@@ -1,6 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  assertPlatformMigrationActivationReceipt,
   executePlatformMigrationActivation,
   parsePlatformMigrationActivationArgs,
   platformMigrationActivationConfirmation,
@@ -57,6 +60,18 @@ function dependencies(overrides: Partial<Parameters<typeof executePlatformMigrat
 }
 
 describe("platform migration activation", () => {
+  it("uses the explicitly confirmed Gitea migration mode that leaves credential writers stopped", () => {
+    const repoRoot = path.resolve(import.meta.dirname, "../..");
+    const setup = fs.readFileSync(path.join(repoRoot, "scripts/setup-gitea.sh"), "utf8");
+    const operator = fs.readFileSync(path.join(repoRoot, "scripts/ops/activate-platform-migration-services.ts"), "utf8");
+
+    expect(setup).toContain("--migration-quiesced");
+    expect(setup).toContain("Migration-quiesced Gitea setup requires --confirm-platform-migration=$TARGET_ID");
+    expect(setup).toContain("if $MIGRATION_QUIESCED; then");
+    expect(operator).toContain('"--migration-quiesced"');
+    expect(operator).toContain("`--confirm-platform-migration=${args.target}`");
+  });
+
   it("selects only the two PVC-backed durable services, never the Mattermost callback workload", () => {
     const workload = (kind: string, name: string, claims: number) => ({ kind, metadata: { name }, spec: { replicas: 0, template: { spec: { volumes: Array.from({ length: claims }, (_, index) => ({ persistentVolumeClaim: { claimName: `${name}-${index}` } })) } } }, status: {} });
     expect(discoverActivationServices({ items: [
@@ -94,6 +109,13 @@ describe("platform migration activation", () => {
     expect(state.services().map((service) => service.replicas)).toEqual([0, 0]);
   });
 
+  it("returns both services to zero when immutable receipt creation fails", async () => {
+    const state = dependencies({ writeReceipt: async () => { throw new Error("receipt collision"); } });
+    await expect(executePlatformMigrationActivation(args(), state.dependencies)).rejects.toThrow("receipt collision");
+    expect(state.events).toEqual(expect.arrayContaining(["secrets-verified", "scale:mattermost=0", "scale:octogee-gitea=0", "stopped"]));
+    expect(state.services().map((service) => service.replicas)).toEqual([0, 0]);
+  });
+
   it("is retry-safe after an interrupted activation left a durable service running", async () => {
     const state = dependencies({ readServices: async () => [
       { service: "mattermost", kind: "Deployment", name: "mattermost", replicas: 1, readyReplicas: 1, pods: 1 },
@@ -105,7 +127,7 @@ describe("platform migration activation", () => {
   });
 
   it("treats matching immutable evidence as a no-op", async () => {
-    const existing = { schemaVersion: 1, kind: "platform-migration-activation-receipt", migrationId, source: "test-central", target: "test-west", revision, credentials: "migration-only-mattermost-and-target-gitea", secrets: "rematerialized-and-verified", services: [{ service: "mattermost" }, { service: "gitea" }], verified: true };
+    const existing = { schemaVersion: 1, kind: "platform-migration-activation-receipt", migrationId, source: "test-central", target: "test-west", revision, credentials: "migration-only-mattermost-and-target-gitea", secrets: "rematerialized-and-verified", services: [{ service: "mattermost", kind: "Deployment", name: "mattermost" }, { service: "gitea", kind: "Deployment", name: "octogee-gitea" }], verified: true };
     const state = dependencies({ readReceipt: async () => existing as never });
     await executePlatformMigrationActivation(args(), state.dependencies);
     expect(state.events).toEqual(["storage", "preconditions"]);
@@ -115,5 +137,24 @@ describe("platform migration activation", () => {
     const existing = { schemaVersion: 1, kind: "platform-migration-activation-receipt", migrationId, source: "test-central", target: "test-west", revision, verified: true };
     const state = dependencies({ readReceipt: async () => existing as never });
     await expect(executePlatformMigrationActivation(args(), state.dependencies)).rejects.toThrow("activation receipt does not match");
+  });
+
+  it.each([
+    [[{ service: "mattermost", kind: "Deployment", name: "mattermost" }, { service: "rogue", kind: "Deployment", name: "octogee-gitea" }], "exact Mattermost and Gitea service set"],
+    [[{ service: "mattermost", kind: "Job", name: "mattermost" }, { service: "gitea", kind: "Deployment", name: "octogee-gitea" }], "valid workload identity"],
+    [[{ service: "mattermost", kind: "Deployment", name: "../mattermost" }, { service: "gitea", kind: "Deployment", name: "octogee-gitea" }], "valid workload identity"],
+  ])("rejects corrupt immutable service evidence %#", (services, message) => {
+    expect(() => assertPlatformMigrationActivationReceipt({
+      schemaVersion: 1,
+      kind: "platform-migration-activation-receipt",
+      migrationId,
+      source: "test-central",
+      target: "test-west",
+      revision,
+      credentials: "migration-only-mattermost-and-target-gitea",
+      secrets: "rematerialized-and-verified",
+      services,
+      verified: true,
+    }, { migrationId, source: "test-central", target: "test-west", revision })).toThrow(message);
   });
 });

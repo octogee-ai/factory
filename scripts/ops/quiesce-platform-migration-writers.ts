@@ -27,6 +27,7 @@ import {
   type PlatformMigrationWriterQuiescenceDependencies,
   type PlatformMigrationWriterReceipt,
 } from "../lib/platform-migration-writer-quiescence.js";
+import { assertPlatformMigrationActivationReceipt } from "../lib/platform-migration-activation.js";
 import {
   MIGRATION_RECEIPT_BUCKET,
   MigrationReceiptCollisionError,
@@ -384,10 +385,37 @@ export function assertMigrationActivation(receipt: PlatformMigrationWriterReceip
     secrets: "rematerialized-and-verified",
     verified: true,
   }, runner).receipt;
-  const services = record(activation, "platform migration activation receipt").services;
-  if (!Array.isArray(services) || services.length !== 2 || new Set(services.map((service) => record(service, "activation service").service)).size !== 2) {
-    throw new Error("activation receipt does not prove both restored services");
-  }
+  assertPlatformMigrationActivationReceipt(activation, {
+    migrationId: receipt.migrationId,
+    source,
+    target,
+    revision: receipt.revision,
+  });
+}
+
+export function validateRestoredGiteaTokenConsumers(
+  settings: DeploymentEnvironmentSettings,
+  repoRoot: string,
+  runner: CommandRunner = run,
+): void {
+  const script = [
+    "set -euo pipefail",
+    'K8S_NAMESPACE="$1"',
+    'K8S_CONTEXT="$2"',
+    'fail() { printf "%s\\n" "$1" >&2; return 1; }',
+    "info() { :; }",
+    "ok() { :; }",
+    'source "$3"',
+    "validate_gitea_token_consumers",
+  ].join("\n");
+  runner("bash", [
+    "-c",
+    script,
+    "validate-restored-gitea-token-consumers",
+    settings.namespace,
+    settings.kubeContext,
+    path.join(repoRoot, "scripts/lib/gitea-token-convergence.sh"),
+  ]);
 }
 
 export async function assertPairedCentralQuiesced(receipt: PlatformMigrationWriterReceipt): Promise<void> {
@@ -499,6 +527,8 @@ function dependencies(repoRoot: string): PlatformMigrationWriterQuiescenceDepend
         pollMilliseconds: QUIESCE_POLL_MILLISECONDS,
       });
     },
+    validateGiteaTokenConsumers: async (settings) =>
+      validateRestoredGiteaTokenConsumers(settings, repoRoot),
     waitForScheduledWritersQuiesced: async (settings, receipt) => waitForScheduledWriters(settings, receipt, false),
     waitForScheduledWriterAttemptsDrained: async (_settings, receipt) => {
       await waitForPlatformMigrationScheduledAttemptDrain({

@@ -54,6 +54,51 @@ export interface PlatformMigrationActivationDependencies {
 
 const MIGRATION_ID = /^[a-z0-9][a-z0-9-]{2,79}$/;
 const PAIRS = new Set(["test-central:test-west", "prod-central:prod-west"]);
+const KUBERNETES_NAME = /^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/;
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+export function assertPlatformMigrationActivationReceipt(
+  value: unknown,
+  expected: Pick<PlatformMigrationActivationArgs, "source" | "target" | "migrationId"> & { revision: string },
+): asserts value is PlatformMigrationActivationReceipt {
+  const receipt = record(value);
+  if (
+    receipt === null ||
+    receipt.schemaVersion !== 1 ||
+    receipt.kind !== "platform-migration-activation-receipt" ||
+    receipt.migrationId !== expected.migrationId ||
+    receipt.source !== expected.source ||
+    receipt.target !== expected.target ||
+    receipt.revision !== expected.revision ||
+    receipt.credentials !== "migration-only-mattermost-and-target-gitea" ||
+    receipt.secrets !== "rematerialized-and-verified" ||
+    receipt.verified !== true
+  ) {
+    throw new Error("activation receipt does not match the exact migration and revision");
+  }
+  if (!Array.isArray(receipt.services) || receipt.services.length !== 2) {
+    throw new Error("activation receipt does not prove the exact Mattermost and Gitea service set");
+  }
+  const services = receipt.services.map((candidate) => record(candidate));
+  const names = services.map((service) => service?.service);
+  if (services.some((service) => service === null) || new Set(names).size !== 2 || !names.includes("mattermost") || !names.includes("gitea")) {
+    throw new Error("activation receipt does not prove the exact Mattermost and Gitea service set");
+  }
+  for (const service of services as Record<string, unknown>[]) {
+    const name = service.name;
+    const matchesService = service.service === "mattermost"
+      ? typeof name === "string" && /(^|-)mattermost($|-)/.test(name)
+      : typeof name === "string" && /(^|-)gitea($|-)/.test(name);
+    if ((service.kind !== "Deployment" && service.kind !== "StatefulSet") || typeof name !== "string" || !KUBERNETES_NAME.test(name) || !matchesService) {
+      throw new Error("activation receipt service does not have a valid workload identity");
+    }
+  }
+}
 
 function value(args: readonly string[], name: string): string | null {
   const prefix = `--${name}=`;
@@ -94,10 +139,6 @@ function assertServices(services: readonly PlatformMigrationActivationService[])
   }
 }
 
-function matchingReceipt(value: PlatformMigrationActivationReceipt, args: PlatformMigrationActivationArgs, revision: string): boolean {
-  return value.schemaVersion === 1 && value.kind === "platform-migration-activation-receipt" && value.migrationId === args.migrationId && value.source === args.source && value.target === args.target && value.revision === revision && value.credentials === "migration-only-mattermost-and-target-gitea" && value.secrets === "rematerialized-and-verified" && Array.isArray(value.services) && value.services.length === 2 && new Set(value.services.map((service) => service.service)).size === 2 && value.verified === true;
-}
-
 export async function executePlatformMigrationActivation(args: PlatformMigrationActivationArgs, dependencies: PlatformMigrationActivationDependencies): Promise<{ receipt: string; status: "complete" | "dry-run" }> {
   await dependencies.assertReceiptStorage();
   const revision = await dependencies.assertExactMergedMain();
@@ -105,7 +146,7 @@ export async function executePlatformMigrationActivation(args: PlatformMigration
   const receiptUri = dependencies.receiptUri(args);
   const existing = await dependencies.readReceipt(receiptUri);
   if (existing !== null) {
-    if (!matchingReceipt(existing, args, revision)) throw new Error("activation receipt does not match the exact migration and revision");
+    assertPlatformMigrationActivationReceipt(existing, { ...args, revision });
     return { receipt: receiptUri, status: "complete" };
   }
   const settings = dependencies.settingsForTarget(args.target);
@@ -119,6 +160,11 @@ export async function executePlatformMigrationActivation(args: PlatformMigration
     await dependencies.resetGitea(settings);
     await dependencies.rematerializeSecrets(settings);
     await dependencies.verifySecrets(settings);
+    await dependencies.writeReceipt(receiptUri, {
+      schemaVersion: 1, kind: "platform-migration-activation-receipt", migrationId: args.migrationId, source: args.source, target: args.target, revision,
+      completedAt: new Date().toISOString(), services: services.map(({ service, kind, name }) => ({ service, kind, name })),
+      credentials: "migration-only-mattermost-and-target-gitea", secrets: "rematerialized-and-verified", verified: true,
+    });
   } catch (error) {
     const rollbackErrors: unknown[] = [];
     for (const service of services) {
@@ -130,10 +176,5 @@ export async function executePlatformMigrationActivation(args: PlatformMigration
     if (rollbackErrors.length > 0) throw new AggregateError([error, ...rollbackErrors], "activation failed and target service rollback was not proven");
     throw error;
   }
-  await dependencies.writeReceipt(receiptUri, {
-    schemaVersion: 1, kind: "platform-migration-activation-receipt", migrationId: args.migrationId, source: args.source, target: args.target, revision,
-    completedAt: new Date().toISOString(), services: services.map(({ service, kind, name }) => ({ service, kind, name })),
-    credentials: "migration-only-mattermost-and-target-gitea", secrets: "rematerialized-and-verified", verified: true,
-  });
   return { receipt: receiptUri, status: "complete" };
 }

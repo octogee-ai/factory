@@ -203,6 +203,7 @@ export interface PlatformMigrationWriterQuiescenceDependencies {
     settings: DeploymentEnvironmentSettings,
     receipt: PlatformMigrationWriterReceipt,
   ): Promise<void>;
+  validateGiteaTokenConsumers(settings: DeploymentEnvironmentSettings): Promise<void>;
   readReceipt(uri: string): Promise<PlatformMigrationWriterReceipt | null>;
   writeReceipt(uri: string, receipt: PlatformMigrationWriterReceipt): Promise<void>;
   assertRequiredMigrationReceipts(receipt: PlatformMigrationWriterReceipt): Promise<void>;
@@ -1043,6 +1044,7 @@ async function executeRestore(
     await dependencies.scaleWorkload(settings, workload, workload.replicas);
   }
   await dependencies.waitForWritersReady(settings, existing);
+  await dependencies.validateGiteaTokenConsumers(settings);
   for (const job of scheduledWriterReceipt(existing).jobs) {
     if (job.priorState === "ENABLED") await dependencies.resumeScheduledWriter(settings, job);
   }
