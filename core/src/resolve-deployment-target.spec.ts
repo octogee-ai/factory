@@ -12,22 +12,22 @@ import {
 } from "./resolve-deployment-target.js";
 
 describe("deployment target resolver", () => {
-  it("resolves a logical environment to its active west target", () => {
+  it("resolves a logical environment to its active central target", () => {
     expect(resolveDeploymentTargetArguments(["--environment=test"])).toMatchObject({
       name: "test",
-      targetId: "test-west",
+      targetId: "test-central",
       lifecycle: "active",
-      region: "us-west1",
+      region: "us-central1",
     });
   });
 
-  it("allows the explicit frozen central rollback target", () => {
-    expect(resolveDeploymentTargetArguments(["--target=test-central"])).toMatchObject({
+  it("allows the explicit candidate west target", () => {
+    expect(resolveDeploymentTargetArguments(["--target=test-west"])).toMatchObject({
       name: "test",
-      targetId: "test-central",
-      lifecycle: "frozen",
-      firebaseProjectId: "octogee-test",
-      region: "us-central1",
+      targetId: "test-west",
+      lifecycle: "candidate",
+      firebaseProjectId: "octogee-data-test",
+      region: "us-west1",
     });
   });
 
