@@ -6,6 +6,8 @@ TERRAFORM_ROOT="${REPO_ROOT}/terraform/environments/west-platform"
 TERRAFORM_BIN="$("${REPO_ROOT}/scripts/ops/terraform-bin.sh")"
 RECEIPT_GENERATOR="${REPO_ROOT}/scripts/ops/terraform-plan-receipt.mjs"
 PLAN_VERIFIER="${REPO_ROOT}/scripts/ops/verify-west-ingress-plan.mjs"
+INGRESS_STATE_ADOPTER="${REPO_ROOT}/scripts/ops/adopt-west-ingress-addresses.sh"
+RETIREMENT_PREFLIGHT="${REPO_ROOT}/scripts/ops/verify-retired-west-ingress-unused.sh"
 EXPECTED_CONFIRMATION="octogee/us-west1/ingress-addresses"
 RECEIPT_BUCKET="gs://octogee-terraform-state/receipts/west-platform"
 APPLY=false
@@ -58,6 +60,7 @@ PRE_APPLY_RECEIPT="${TEMP_DIR}/pre-apply.json"
 ZERO_DRIFT_PLAN="${TEMP_DIR}/zero-drift.tfplan"
 ZERO_DRIFT_RECEIPT="${TEMP_DIR}/zero-drift.json"
 ADDRESS_RECEIPT="${TEMP_DIR}/addresses.json"
+DNS_INVENTORY_RECEIPT="${TEMP_DIR}/dns-inventory.json"
 RUN_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
 
@@ -71,6 +74,11 @@ INGRESS_CHANGE_ADDRESSES=(
   'google_compute_global_address.west_ingress["preview-ip-west"]'
   'google_compute_global_address.west_ingress["workspace-api-ip-test-west"]'
   'google_compute_global_address.west_ingress["workspace-api-ip-west"]'
+)
+INGRESS_DESTRUCTIVE_ADDRESSES=(
+  'google_compute_global_address.west_ingress["gitea-ip-test-west"]'
+  'google_compute_global_address.west_ingress["mattermost-ip-test-west"]'
+  'google_compute_global_address.west_ingress["preview-ip-test-west"]'
 )
 
 cleanup() {
@@ -102,6 +110,9 @@ write_receipt() {
     for address in "${INGRESS_CHANGE_ADDRESSES[@]}"; do
       receipt_arguments+=("--allow-change=${address}")
     done
+    for address in "${INGRESS_DESTRUCTIVE_ADDRESSES[@]}"; do
+      receipt_arguments+=("--allow-destroy=${address}")
+    done
   fi
   "${TERRAFORM_BIN}" show -json "${plan_file}" \
     | node "${RECEIPT_GENERATOR}" "${receipt_arguments[@]}" \
@@ -123,6 +134,12 @@ verify_addresses() {
 
 cd "${TERRAFORM_ROOT}"
 "${TERRAFORM_BIN}" init -reconfigure
+if [[ "${APPLY}" == "true" ]]; then
+  "${INGRESS_STATE_ADOPTER}" \
+    "--project=octogee" \
+    "--terraform-bin=${TERRAFORM_BIN}" \
+    "--confirm=octogee/us-west1/octogee-gateway"
+fi
 "${TERRAFORM_BIN}" plan \
   -input=false \
   -var=foundation_rebuild=false \
@@ -146,8 +163,28 @@ if [[ "${APPLY}" != "true" ]]; then
   exit 0
 fi
 
+if [[ "${PLAN_RESULT}" == "retire" || "${PLAN_RESULT}" == "reconcile" ]]; then
+  "${RETIREMENT_PREFLIGHT}" \
+    "--project=octogee" \
+    "--shared-address=workspace-api-ip-test-west" \
+    "--cloudflare-zone-id=${CLOUDFLARE_ZONE_ID:-}" \
+    "--cloudflare-zone-name=octogee.com" \
+    "--kube-context=gke_us-west1_octogee" \
+    "--namespace=octogee-test-west" \
+    "--ingress-name=octogee-edge-ingress" \
+    "--receipt=${DNS_INVENTORY_RECEIPT}" \
+    "--retired-address=gitea-ip-test-west" \
+    "--retired-address=mattermost-ip-test-west" \
+    "--retired-address=preview-ip-test-west" \
+    "--hostname=api-test.octogee.com" \
+    "--hostname=git-test.octogee.com" \
+    "--hostname=mattermost-test.octogee.com" \
+    "--hostname=preview-test.octogee.com"
+  upload_receipt dns-inventory "${DNS_INVENTORY_RECEIPT}"
+fi
+
 upload_receipt pre-apply "${PRE_APPLY_RECEIPT}"
-if [[ "${PLAN_RESULT}" == "create" ]]; then
+if [[ "${PLAN_RESULT}" != "unchanged" ]]; then
   "${TERRAFORM_BIN}" apply -input=false "${PRE_APPLY_PLAN}"
 fi
 
@@ -172,4 +209,4 @@ node "${PLAN_VERIFIER}" --plan <"${ZERO_DRIFT_RECEIPT}" >/dev/null
 verify_addresses
 upload_receipt zero-drift "${ZERO_DRIFT_RECEIPT}"
 upload_receipt addresses "${ADDRESS_RECEIPT}"
-echo "WEST ingress addresses reserved, verified, and drift-free."
+echo "WEST ingress addresses reconciled, verified, and drift-free."

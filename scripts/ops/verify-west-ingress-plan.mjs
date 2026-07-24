@@ -5,17 +5,22 @@ import { pathToFileURL } from "node:url";
 
 const INGRESS_NAMES = [
   "grafana-ip",
-  "gitea-ip-test-west",
   "gitea-ip-west",
-  "mattermost-ip-test-west",
   "mattermost-ip-west",
-  "preview-ip-test-west",
   "preview-ip-west",
   "workspace-api-ip-test-west",
   "workspace-api-ip-west",
 ];
+const RETIRED_INGRESS_NAMES = [
+  "gitea-ip-test-west",
+  "mattermost-ip-test-west",
+  "preview-ip-test-west",
+];
 
 const EXPECTED_ADDRESSES = INGRESS_NAMES.map(
+  (name) => `google_compute_global_address.west_ingress["${name}"]`,
+);
+const RETIRED_ADDRESSES = RETIRED_INGRESS_NAMES.map(
   (name) => `google_compute_global_address.west_ingress["${name}"]`,
 );
 
@@ -49,39 +54,55 @@ export const verifyWestIngressPlan = (receipt) => {
     summary?.replace === 0;
   if (unchanged) return "unchanged";
 
-  const addresses = changes
-    .map((change) => change?.address)
-    .filter((address) => typeof address === "string")
-    .sort();
-  const actionsAreCreates = changes.every(
-    (change) =>
-      Array.isArray(change?.actions) &&
-      change.actions.length === 1 &&
-      change.actions[0] === "create",
-  );
-  const summaryIsNineCreates =
-    summary?.create === 9 &&
+  const createAddresses = [];
+  const deleteAddresses = [];
+  for (const change of changes) {
+    if (
+      typeof change?.address !== "string" ||
+      !Array.isArray(change?.actions) ||
+      change.actions.length !== 1
+    ) {
+      throw new Error("WEST ingress plan contains an undeclared address reconciliation");
+    }
+    if (change.actions[0] === "create") {
+      createAddresses.push(change.address);
+    } else if (change.actions[0] === "delete") {
+      deleteAddresses.push(change.address);
+    } else {
+      throw new Error("WEST ingress plan contains an undeclared address reconciliation");
+    }
+  }
+
+  const desiredAddressSet = new Set(EXPECTED_ADDRESSES);
+  const retiredAddressSet = new Set(RETIRED_ADDRESSES);
+  const createsDeclaredAddresses =
+    createAddresses.length === new Set(createAddresses).size &&
+    createAddresses.every((address) => desiredAddressSet.has(address));
+  const deletesRetiredAddresses =
+    deleteAddresses.length === new Set(deleteAddresses).size &&
+    deleteAddresses.every((address) => retiredAddressSet.has(address));
+  const summaryMatchesActions =
+    summary?.create === createAddresses.length &&
     summary?.update === 0 &&
-    summary?.delete === 0 &&
+    summary?.delete === deleteAddresses.length &&
     summary?.replace === 0;
 
   if (
-    changes.length !== 9 ||
-    !exactStrings(addresses, [...EXPECTED_ADDRESSES].sort()) ||
-    !actionsAreCreates ||
-    !summaryIsNineCreates
+    createAddresses.length + deleteAddresses.length === 0 ||
+    !createsDeclaredAddresses ||
+    !deletesRetiredAddresses ||
+    !summaryMatchesActions
   ) {
-    throw new Error(
-      "WEST ingress plan must be either zero-change or exactly nine address creates",
-    );
+    throw new Error("WEST ingress plan contains an undeclared address reconciliation");
   }
-  return "create";
+  if (createAddresses.length > 0 && deleteAddresses.length > 0) return "reconcile";
+  return createAddresses.length > 0 ? "create" : "retire";
 };
 
 export const verifyWestIngressAddresses = (outputs) => {
   if (typeof outputs !== "object" || outputs === null || Array.isArray(outputs)) {
     throw new Error(
-      "WEST ingress Terraform output must contain nine unique public IPv4 addresses",
+      "WEST ingress Terraform output must contain six unique public IPv4 addresses",
     );
   }
   const names = Object.keys(outputs).sort();
@@ -92,7 +113,7 @@ export const verifyWestIngressAddresses = (outputs) => {
     new Set(addresses).size !== INGRESS_NAMES.length
   ) {
     throw new Error(
-      "WEST ingress Terraform output must contain nine unique public IPv4 addresses",
+      "WEST ingress Terraform output must contain six unique public IPv4 addresses",
     );
   }
   return outputs;

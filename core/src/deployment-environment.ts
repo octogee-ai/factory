@@ -222,22 +222,43 @@ function validatePromotionSources(targets: Record<string, unknown>): void {
 }
 
 function validateIngressIdentityUniqueness(targets: Record<string, unknown>): void {
-  const identitiesByProject = new Map<string, Map<string, string>>();
+  const identitiesByProject = new Map<
+    string,
+    Map<string, { targetId: string; field: string }>
+  >();
   for (const [targetId, value] of Object.entries(targets)) {
     const target = value as Record<string, unknown>;
     const projectId = target.clusterProjectId as string;
     const ingress = target.ingress as Record<string, unknown>;
-    const identities = identitiesByProject.get(projectId) ?? new Map<string, string>();
+    const identities = identitiesByProject.get(projectId) ??
+      new Map<string, { targetId: string; field: string }>();
     identitiesByProject.set(projectId, identities);
     for (const field of INGRESS_STRING_FIELDS) {
       const identity = ingress[field] as string;
       const owner = identities.get(identity);
-      if (owner) {
+      if (owner && owner.targetId !== targetId) {
         throw new Error(
-          `deployment target ${targetId} ingress identity ${identity} is already used by ${owner}`,
+          `deployment target ${targetId} ingress identity ${identity} is already used by ${owner.targetId}.${owner.field}`,
         );
       }
-      identities.set(identity, `${targetId}.${field}`);
+      if (!owner) identities.set(identity, { targetId, field });
+    }
+    const targetIdentities = INGRESS_STRING_FIELDS.map(
+      (field) => ingress[field] as string,
+    );
+    const distinctTargetIdentities = new Set(targetIdentities);
+    if (
+      distinctTargetIdentities.size !== INGRESS_STRING_FIELDS.length &&
+      !(
+        distinctTargetIdentities.size === 1 &&
+        targetIdentities.every(
+          (identity) => identity === ingress.edgeStaticIpName,
+        )
+      )
+    ) {
+      throw new Error(
+        `deployment target ${targetId} ingress must use either four distinct identities or one shared edge identity`,
+      );
     }
   }
 }

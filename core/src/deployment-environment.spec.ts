@@ -105,9 +105,9 @@ describe("deployment environment registry", () => {
       cloudSqlConnectionNameSecretName: "cloud-sql-connection-name-octogee-pg-west",
       secretNameSuffix: "test-west",
       edgeStaticIpName: "workspace-api-ip-test-west",
-      mattermostStaticIpName: "mattermost-ip-test-west",
-      giteaStaticIpName: "gitea-ip-test-west",
-      previewStaticIpName: "preview-ip-test-west",
+      mattermostStaticIpName: "workspace-api-ip-test-west",
+      giteaStaticIpName: "workspace-api-ip-test-west",
+      previewStaticIpName: "workspace-api-ip-test-west",
       platformComputeClass: "octogee-platform-test-spot",
     });
 
@@ -139,10 +139,8 @@ describe("deployment environment registry", () => {
     );
   });
 
-  it.each([
-    ["another target role", "gitea-ip-west"],
-    ["one of its own roles", "gitea-ip-test-west"],
-  ])("rejects a target that reuses %s", (_label, staticIpName) => {
+  it("rejects a target that reuses another target role", () => {
+    const staticIpName = "gitea-ip-west";
     const candidate = structuredClone(deploymentTargetsDocument) as {
       targets: Record<string, {
         ingress: {
@@ -154,6 +152,44 @@ describe("deployment environment registry", () => {
 
     expect(() => validateDeploymentTargetsDocument(candidate)).toThrow(
       `deployment target test-west ingress identity ${staticIpName} is already used`,
+    );
+  });
+
+  it("accepts one shared ingress identity for every role within a target", () => {
+    const candidate = structuredClone(deploymentTargetsDocument) as {
+      targets: Record<string, {
+        ingress: {
+          edgeStaticIpName: string;
+          mattermostStaticIpName: string;
+          giteaStaticIpName: string;
+          previewStaticIpName: string;
+        };
+      }>;
+    };
+    const ingress = candidate.targets["test-west"].ingress;
+    ingress.mattermostStaticIpName = ingress.edgeStaticIpName;
+    ingress.giteaStaticIpName = ingress.edgeStaticIpName;
+    ingress.previewStaticIpName = ingress.edgeStaticIpName;
+
+    expect(() => validateDeploymentTargetsDocument(candidate)).not.toThrow();
+  });
+
+  it("rejects partial ingress identity sharing within a target", () => {
+    const candidate = structuredClone(deploymentTargetsDocument) as {
+      targets: Record<string, {
+        ingress: {
+          edgeStaticIpName: string;
+          mattermostStaticIpName: string;
+          giteaStaticIpName: string;
+          previewStaticIpName: string;
+        };
+      }>;
+    };
+    const ingress = candidate.targets["prod-west"].ingress;
+    ingress.giteaStaticIpName = ingress.edgeStaticIpName;
+
+    expect(() => validateDeploymentTargetsDocument(candidate)).toThrow(
+      "must use either four distinct identities or one shared edge identity",
     );
   });
 

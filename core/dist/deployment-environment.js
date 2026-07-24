@@ -80,15 +80,24 @@ function validateIngressIdentityUniqueness(targets) {
         const target = value;
         const projectId = target.clusterProjectId;
         const ingress = target.ingress;
-        const identities = identitiesByProject.get(projectId) ?? new Map();
+        const identities = identitiesByProject.get(projectId) ??
+            new Map();
         identitiesByProject.set(projectId, identities);
         for (const field of INGRESS_STRING_FIELDS) {
             const identity = ingress[field];
             const owner = identities.get(identity);
-            if (owner) {
-                throw new Error(`deployment target ${targetId} ingress identity ${identity} is already used by ${owner}`);
+            if (owner && owner.targetId !== targetId) {
+                throw new Error(`deployment target ${targetId} ingress identity ${identity} is already used by ${owner.targetId}.${owner.field}`);
             }
-            identities.set(identity, `${targetId}.${field}`);
+            if (!owner)
+                identities.set(identity, { targetId, field });
+        }
+        const targetIdentities = INGRESS_STRING_FIELDS.map((field) => ingress[field]);
+        const distinctTargetIdentities = new Set(targetIdentities);
+        if (distinctTargetIdentities.size !== INGRESS_STRING_FIELDS.length &&
+            !(distinctTargetIdentities.size === 1 &&
+                targetIdentities.every((identity) => identity === ingress.edgeStaticIpName))) {
+            throw new Error(`deployment target ${targetId} ingress must use either four distinct identities or one shared edge identity`);
         }
     }
 }

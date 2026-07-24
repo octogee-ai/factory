@@ -201,9 +201,9 @@
             },
             "ingress": {
                 "edgeStaticIpName": "workspace-api-ip-test-west",
-                "mattermostStaticIpName": "mattermost-ip-test-west",
-                "giteaStaticIpName": "gitea-ip-test-west",
-                "previewStaticIpName": "preview-ip-test-west"
+                "mattermostStaticIpName": "workspace-api-ip-test-west",
+                "giteaStaticIpName": "workspace-api-ip-test-west",
+                "previewStaticIpName": "workspace-api-ip-test-west"
             },
             "networkBoundary": {
                 "controlPlaneCidr": "172.20.16.16/28",
