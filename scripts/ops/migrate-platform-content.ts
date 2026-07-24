@@ -116,10 +116,10 @@ function quiesce(settings: DeploymentEnvironmentSettings, target: Workload): voi
 }
 
 export function readCanonicalOpenclawVersion(repoRoot: string): string {
-  const configuration = fs.readFileSync(path.join(repoRoot, "infra/gateway/cloudbuild.yaml"), "utf8");
+  const configuration = fs.readFileSync(path.join(repoRoot, "cloudbuild.yaml"), "utf8");
   const match = /^\s*_OPENCLAW_VERSION:\s*"([^"]+)"\s*$/m.exec(configuration);
   if (!match || !/^\d{4}\.\d+\.\d+(?:-[A-Za-z0-9.]+)?$/.test(match[1]!)) {
-    throw new Error("could not resolve the canonical OpenClaw version from infra/gateway/cloudbuild.yaml");
+    throw new Error("could not resolve the canonical OpenClaw version from cloudbuild.yaml");
   }
   return match[1]!;
 }

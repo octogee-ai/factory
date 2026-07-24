@@ -16,6 +16,7 @@ import {
   databaseProbeManifest,
   discoverDisk,
   discoverWorkload,
+  readCanonicalOpenclawVersion,
   targetInventoryProbeManifest,
 } from '../ops/migrate-platform-content.js'
 
@@ -49,6 +50,10 @@ describe('platform content migration plan', () => {
         '--project=octogee', '--format=json',
       ],
     }])
+  })
+
+  it('reads the canonical OpenClaw version from the real repository layout', () => {
+    expect(readCanonicalOpenclawVersion(path.resolve(process.cwd(), '..'))).toBe('2026.7.1')
   })
 
   it.each([
