@@ -160,17 +160,19 @@ function allowedEndpoint(req: Request, url: URL): boolean {
   return ALLOWED_LLM_ENDPOINTS.has(`${req.method.toUpperCase()} ${url.pathname}`);
 }
 
+const ALLOWED_ENDPOINTS_BY_PROVIDER: Record<ModelBrokerProvider, ReadonlySet<string>> = {
+  anthropic: ALLOWED_ANTHROPIC_ENDPOINTS,
+  openai: ALLOWED_OPENAI_ENDPOINTS,
+  openrouter: ALLOWED_OPENROUTER_ENDPOINTS,
+};
+
 function providerAllowedEndpoint(
   provider: ModelBrokerProvider,
   req: Request,
   url: URL,
 ): boolean {
   const key = `${req.method.toUpperCase()} ${url.pathname}`;
-  return provider === "anthropic"
-    ? ALLOWED_ANTHROPIC_ENDPOINTS.has(key)
-    : provider === "openai"
-      ? ALLOWED_OPENAI_ENDPOINTS.has(key)
-      : ALLOWED_OPENROUTER_ENDPOINTS.has(key);
+  return ALLOWED_ENDPOINTS_BY_PROVIDER[provider].has(key);
 }
 
 function upstreamHeaders(req: Request, apiKey: string, provider: ModelBrokerProvider): Headers {
@@ -1081,6 +1083,66 @@ async function logAndForwardAllowed(args: {
   await forwardAllowed({ ...args, houseModel });
 }
 
+function degradeModelForRequest(
+  gate: GateDecisionAllowed,
+  url: URL,
+  houseModel: string,
+): string | null {
+  return gate.degrade && url.pathname !== "/v1/embeddings" ? houseModel : null;
+}
+
+function includeOpenRouterUsageForRequest(
+  record: ModelBrokerTokenRecord,
+  req: Request,
+  url: URL,
+): boolean {
+  return (
+    record.provider === "openrouter" &&
+    req.method.toUpperCase() === "POST" &&
+    url.pathname === "/v1/chat/completions"
+  );
+}
+
+function meteringContextFor(args: {
+  req: Request;
+  url: URL;
+  record: ModelBrokerTokenRecord;
+  requestId: string;
+  requestModel: string | null;
+  cacheWriteTtl: AnthropicCacheWriteTtl;
+  usageStore?: ModelBrokerUsageStore;
+  providerKey: ModelBrokerProviderKey;
+  gate: GateDecisionAllowed;
+  now: () => number;
+  onMeteringError: (err: unknown) => void;
+  usingCredits: boolean;
+}): MeteringContext {
+  const { providerKey, gate, usingCredits } = args;
+  return {
+    req: args.req,
+    url: args.url,
+    record: args.record,
+    requestId: args.requestId,
+    requestModel: args.requestModel,
+    cacheWriteTtl: args.cacheWriteTtl,
+    usageStore: args.usageStore,
+    providerKey,
+    degraded: gate.degrade,
+    now: args.now,
+    onMeteringError: args.onMeteringError,
+    // Prepaid traffic debits the credit balance; only subscription traffic
+    // counts toward spend windows. A paid plan's degraded house traffic is
+    // on the house — but for the free tier the house model IS the plan, so
+    // its traffic debits the weekly allowance ledger.
+    countsTowardSpendWindow:
+      providerKey.source !== "owner_model_credential" &&
+      !usingCredits &&
+      (!gate.degrade || gate.degradeReason === "free"),
+    debitsCreditBalance:
+      usingCredits && providerKey.source !== "owner_model_credential" && !gate.degrade,
+  };
+}
+
 async function forwardAllowed(args: {
   req: Request;
   res: ExpressResponse;
@@ -1103,12 +1165,8 @@ async function forwardAllowed(args: {
   const usingCredits = prepaid || gate.creditBalanceUsd !== null;
   const rewrittenBody = rewriteRequestBody({
     body: req.body,
-    degradeModel:
-      gate.degrade && url.pathname !== "/v1/embeddings" ? args.houseModel : null,
-    includeOpenRouterUsage:
-      record.provider === "openrouter" &&
-      req.method.toUpperCase() === "POST" &&
-      url.pathname === "/v1/chat/completions",
+    degradeModel: degradeModelForRequest(gate, url, args.houseModel),
+    includeOpenRouterUsage: includeOpenRouterUsageForRequest(record, req, url),
   });
   const effectiveBody = rewrittenBody ?? req.body;
   const body =
@@ -1139,7 +1197,7 @@ async function forwardAllowed(args: {
     },
   });
   const metering: MeteringContext | undefined = shouldMeter(record.provider, req, url, upstream)
-    ? {
+    ? meteringContextFor({
         req,
         url,
         record,
@@ -1148,20 +1206,11 @@ async function forwardAllowed(args: {
         cacheWriteTtl: requestMetadata.cacheWriteTtl,
         usageStore: args.usageStore,
         providerKey,
-        degraded: gate.degrade,
+        gate,
         now: args.now,
         onMeteringError: args.onMeteringError,
-        // Prepaid traffic debits the credit balance; only subscription traffic
-        // counts toward spend windows. A paid plan's degraded house traffic is
-        // on the house — but for the free tier the house model IS the plan, so
-        // its traffic debits the weekly allowance ledger.
-        countsTowardSpendWindow:
-          providerKey.source !== "owner_model_credential" &&
-          !usingCredits &&
-          (!gate.degrade || gate.degradeReason === "free"),
-        debitsCreditBalance:
-          usingCredits && providerKey.source !== "owner_model_credential" && !gate.degrade,
-      }
+        usingCredits,
+      })
     : undefined;
   await writeUpstreamResponse(upstream, res, metering);
 }

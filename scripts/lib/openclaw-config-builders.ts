@@ -5,6 +5,9 @@ import {
 } from "./mattermost-account-secrets.js";
 
 const PLATFORM_EMBEDDING_PROVIDER = "openai-compatible";
+// In-cluster K8s Service DNS (llm-broker), same as the Helm default it
+// mirrors; no cross-network hop, no plaintext-in-transit exposure.
+// eslint-disable-next-line sonarjs/no-clear-text-protocols
 const DEFAULT_OPENAI_EMBEDDINGS_BASE_URL = "http://llm-broker:3010/v1";
 const DEFAULT_OPENAI_EMBEDDINGS_MODEL = "text-embedding-3-small";
 
@@ -49,7 +52,7 @@ export function platformOpenAiEmbeddingsEnabled(
   return /^(1|true|yes|on)$/iu.test(env.OPENAI_EMBEDDINGS_ENABLED ?? "");
 }
 
-const PLATFORM_EMBEDDING_SECRET_PREFIX = "agent-model-token-openai-";
+export const PLATFORM_EMBEDDING_SECRET_PREFIX = "agent-model-token-openai-";
 const OPENCLAW_REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
