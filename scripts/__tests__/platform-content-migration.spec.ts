@@ -207,6 +207,8 @@ describe('platform content migration plan', () => {
   it('uses the regional no-soft-delete recovery bucket and target service database owner', () => {
     const source = fs.readFileSync(path.join(process.cwd(), 'ops/migrate-platform-content.ts'), 'utf8')
     expect(source).toContain('gs://octogee-west-recovery')
+    expect(source).toContain('assertMigrationReceiptBucket')
+    expect(source).toContain('writeImmutableMigrationReceipt')
     expect(source).toContain('`--user=${service}`')
     expect(source).toContain('"sql", "databases", "delete"')
     expect(source.indexOf('assertFreshTargetDatabase')).toBeLessThan(source.indexOf('resetTargetDatabase(target'))
