@@ -152,6 +152,7 @@ interface FleetBrokerRouteDeps {
     userData: Record<string, unknown>;
     mmUpdate: FleetBrokerMattermostUpdate;
   }) => Promise<void>;
+  ensureCommunityMembership?: (input: { mmUserId: string }) => Promise<void>;
   notifyOpsOfSignup?: (input: {
     uid: string;
     userData: Record<string, unknown>;
@@ -177,6 +178,11 @@ async function defaultProvisionMattermost(input: {
     "@octogee/core/provisionSteps"
   );
   return provisionMattermost(buildProvisioningContext(input.uid, input.userData));
+}
+
+async function defaultEnsureCommunityMembership(input: { mmUserId: string }): Promise<void> {
+  const { joinCommunityMembership } = await import("@octogee/core/mattermost");
+  await joinCommunityMembership(input.mmUserId);
 }
 
 async function defaultMarkProvisioningComplete(input: {
@@ -1089,6 +1095,7 @@ type ResolvedFleetBrokerRouteDeps = {
   resolveFreeTierModel: FreeTierModelResolver;
   provisionMattermost: NonNullable<FleetBrokerRouteDeps["provisionMattermost"]>;
   markProvisioningComplete: NonNullable<FleetBrokerRouteDeps["markProvisioningComplete"]>;
+  ensureCommunityMembership: NonNullable<FleetBrokerRouteDeps["ensureCommunityMembership"]>;
   notifyOpsOfSignup: NonNullable<FleetBrokerRouteDeps["notifyOpsOfSignup"]>;
   recordUsageEvent: RecordUsageEvent;
   renderAvatar: RenderAvatar;
@@ -1112,6 +1119,8 @@ function resolveFleetBrokerRouteDeps(
     provisionMattermost: opts.provisionMattermost ?? defaultProvisionMattermost,
     markProvisioningComplete:
       opts.markProvisioningComplete ?? defaultMarkProvisioningComplete,
+    ensureCommunityMembership:
+      opts.ensureCommunityMembership ?? defaultEnsureCommunityMembership,
     notifyOpsOfSignup: opts.notifyOpsOfSignup ?? defaultNotifyOpsOfSignup,
     recordUsageEvent: opts.recordUsageEvent ?? defaultRecordUsageEvent,
     renderAvatar: opts.renderAvatar ?? defaultRenderAvatar,
@@ -1321,7 +1330,7 @@ function installProvisioningRoutes(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,
 ): void {
-  const { db, provisionMattermost, markProvisioningComplete, notifyOpsOfSignup } = deps;
+  const { db, provisionMattermost, markProvisioningComplete, notifyOpsOfSignup, ensureCommunityMembership } = deps;
 
   router.post("/set-provisioning-status", async (req, res) => {
     const assigned = await requireAssignedUser(db, req, res);
@@ -1382,6 +1391,18 @@ function installProvisioningRoutes(
         userData: assigned.data,
         mmUpdate,
       });
+      res.status(204).end();
+    });
+  });
+
+  router.post("/ensure-community-membership", async (req, res) => {
+    const assigned = await requireAssignedUser(db, req, res);
+    if (!assigned) return;
+    const mmUserId = stringAt(assigned.data, "mattermost.userId");
+    await runBrokered(res, async () => {
+      if (mmUserId) {
+        await ensureCommunityMembership({ mmUserId });
+      }
       res.status(204).end();
     });
   });

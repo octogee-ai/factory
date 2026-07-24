@@ -28,10 +28,14 @@ vi.mock("../lib/gitea", () => ({
 
 const mockAddActivityPairMember = vi.fn();
 const mockRemoveActivityPairMember = vi.fn();
-vi.mock("../lib/activityPair", () => ({
-  addActivityPairMember: (...args: unknown[]) => mockAddActivityPairMember(...args),
-  removeActivityPairMember: (...args: unknown[]) => mockRemoveActivityPairMember(...args),
-}));
+vi.mock("../lib/activityPair", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/activityPair")>();
+  return {
+    ...actual,
+    addActivityPairMember: (...args: unknown[]) => mockAddActivityPairMember(...args),
+    removeActivityPairMember: (...args: unknown[]) => mockRemoveActivityPairMember(...args),
+  };
+});
 
 import { createApp } from "../index.js";
 import projectJoinLeaveRoutes from "../routes/projects/join-leave.js";
@@ -259,6 +263,7 @@ describe("POST /api/projects/:wid/:pid/join", () => {
   it("adds the caller as a member + increments memberCount on first join", async () => {
     await seedPublicAliceGame();
     mockMmApi.mockImplementation(async (path: string, method?: string) => {
+      if (path === "/users/mm-bob" && (!method || method === "GET")) return { id: "mm-bob", delete_at: 0 };
       if (method === "POST" && path === "/teams/team-alice/members") return { ok: true };
       if (method === "POST" && path.includes("/channels/ch-alice-game/members")) return { ok: true };
       const err = new Error("not found") as Error & { status?: number };
@@ -288,7 +293,10 @@ describe("POST /api/projects/:wid/:pid/join", () => {
   it("adds the caller to the activity sibling channel on first join", async () => {
     await seedPublicAliceGame();
     await seedProjectActivityChannel();
-    mockMmApi.mockResolvedValue({ ok: true });
+    mockMmApi.mockImplementation(async (path: string, method?: string) => {
+      if (path === "/users/mm-bob" && (!method || method === "GET")) return { id: "mm-bob", delete_at: 0 };
+      return { ok: true };
+    });
 
     const app = createApp();
     const res = await request(app)
@@ -301,6 +309,56 @@ describe("POST /api/projects/:wid/:pid/join", () => {
       "workspaces/alice/projects/game/channels/general",
       "mm-bob",
     );
+  });
+
+  it("returns 422 and leaves the caller unjoined when the Mattermost identity is missing", async () => {
+    await seedPublicAliceGame();
+    await seedProjectActivityChannel();
+    const { MattermostIdentityMissingError } = await import("../lib/activityPair.js");
+    mockMmApi.mockImplementation(async (path: string, method?: string) => {
+      if (method === "POST" && path === "/teams/team-alice/members") return { ok: true };
+      const err = new Error("not found") as Error & { status?: number };
+      err.status = 404;
+      throw err;
+    });
+    mockAddActivityPairMember.mockRejectedValueOnce(
+      new MattermostIdentityMissingError("Mattermost user mm-bob was not found"),
+    );
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects/alice/game/join")
+      .set(await authHeader())
+      .send({});
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(/chat account|identity/i);
+    expect(await getMemberDoc(CALLER_UID)).toBeUndefined();
+  });
+
+  it("resolves the caller's Mattermost identity before adding them to the chat team", async () => {
+    await seedPublicAliceGame();
+    await seedProjectActivityChannel();
+    const teamAddCalls: string[] = [];
+    mockMmApi.mockImplementation(async (path: string, method = "GET") => {
+      if (path === "/users/mm-bob" && method === "GET") {
+        const err = new Error("not found") as Error & { status?: number };
+        err.status = 404;
+        throw err;
+      }
+      if (path.includes("/teams/") && path.includes("/members")) teamAddCalls.push(`${method} ${path}`);
+      return { ok: true };
+    });
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/projects/alice/game/join")
+      .set(await authHeader())
+      .send({});
+
+    expect(res.status).toBe(422);
+    expect(teamAddCalls).toHaveLength(0);
+    expect(mockAddActivityPairMember).not.toHaveBeenCalled();
   });
 });
 

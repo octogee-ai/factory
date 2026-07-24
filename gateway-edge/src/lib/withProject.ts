@@ -3,6 +3,7 @@ import type { Project } from "@octogee/shared/types/index";
 import { db } from "./db.js";
 import { readProject } from "./firestoreReads.js";
 import { logger } from "../middleware/logging.js";
+import { mapActivityPairError } from "./activityPair.js";
 import { isValidProjectId, USERNAME_RE } from "@octogee/shared/types/identity";
 import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
 
@@ -45,6 +46,12 @@ async function projectIsArchived(project: Project): Promise<boolean> {
   const owner = await db.doc(`users/${project.ownerUid}`).get();
   const ownerData = owner.exists ? owner.data() ?? {} : {};
   return resolveCommercialEntitlements(ownerData).projectMode !== "active";
+}
+
+function respondToHandlerError(res: Response, err: unknown, fallbackErrorMessage: string): void {
+  if (res.headersSent) return;
+  const mapped = mapActivityPairError(err);
+  res.status(mapped?.status ?? 500).json(mapped?.body ?? { error: fallbackErrorMessage });
 }
 
 // eslint-disable-next-line max-params -- Route wrapper API keeps call sites readable until route handlers are split.
@@ -97,8 +104,6 @@ export async function withProject(
     await handler({ projectRef, project, uid: req.uid!, wid, pid });
   } catch (err: unknown) {
     logger.error(`${logTag} ${wid}/${pid}:`, { err });
-    if (!res.headersSent) {
-      res.status(500).json({ error: opts.errorMessage ?? "Operation failed" });
-    }
+    respondToHandlerError(res, err, opts.errorMessage ?? "Operation failed");
   }
 }

@@ -9,6 +9,17 @@ export const DEFAULT_K8S_SA_TOKEN_PATH =
 export const DEFAULT_K8S_CA_PATH =
   "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt";
 
+// octogee-api's own reviewer identity — the custom-path
+// kubernetes-api-identity projected volume, not the well-known default
+// path above. automountServiceAccountToken: false deliberately leaves that
+// default path empty (defense-in-depth against a dependency's default
+// in-cluster-config auto-discovery); the reviewer must opt into a token
+// explicitly instead of relying on it.
+export const IN_CLUSTER_IDENTITY_TOKEN_PATH =
+  "/var/run/secrets/kubernetes-api/token";
+export const IN_CLUSTER_IDENTITY_CA_PATH =
+  "/var/run/secrets/kubernetes-api/ca.crt";
+
 export type ReviewResult =
   | { authenticated: false }
   | {

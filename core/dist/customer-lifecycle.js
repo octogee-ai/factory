@@ -99,6 +99,8 @@ async function restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts) 
     throwIfAborted(signal, uid);
     steps.push(...(await reassertConvergedState(adapter, snapshot)));
     throwIfAborted(signal, uid);
+    steps.push(...(await reconcileCommunityMembershipIfSupported(adapter, ctx)));
+    throwIfAborted(signal, uid);
     await verifyChannelReady(adapter, slug, verifyTimeoutMs);
     steps.push("verify-channel-ready");
     adapter.writeMountMarker?.(slug);
@@ -191,6 +193,8 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     steps.push("config-patch");
     throwIfAborted(signal, uid);
     steps.push(...(await reassertConvergedState(adapter, snapshot)));
+    throwIfAborted(signal, uid);
+    steps.push(...(await reconcileCommunityMembershipIfSupported(adapter, ctx)));
     throwIfAborted(signal, uid);
     await verifyChannelReady(adapter, slug, verifyTimeoutMs);
     steps.push("verify-channel-ready");
@@ -397,6 +401,18 @@ async function reassertConvergedState(adapter, snapshot) {
         adapter.log(`[add:${snapshot.slug}] ⚠ context-file re-assert failed (non-fatal; retry on next sync/re-mount): ${String(err)}`);
     }
     return steps;
+}
+async function reconcileCommunityMembershipIfSupported(adapter, ctx) {
+    if (!adapter.reconcileCommunityMembership)
+        return [];
+    try {
+        await adapter.reconcileCommunityMembership(ctx);
+        return ["community-membership"];
+    }
+    catch (err) {
+        adapter.log(`[add:${ctx.slug}] ⚠ community membership reconcile failed (non-fatal; retry on next sync/re-mount): ${String(err)}`);
+        return [];
+    }
 }
 async function cloneMissingProjects(adapter, slug) {
     const toClone = await adapter.listProjectsNeedingClone(slug);
