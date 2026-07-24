@@ -95,6 +95,10 @@ secrets:
     secretName: google-oauth
     secretKey: client_secret
     optional: true
+  - envName: GOOGLE_PICKER_CLIENT_ID
+    secretName: google-oauth
+    secretKey: picker_client_id
+    optional: true
   - envName: GOOGLE_PICKER_API_KEY
     secretName: google-oauth
     secretKey: picker_api_key

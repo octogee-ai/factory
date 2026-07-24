@@ -67,6 +67,7 @@ setupEmulatorTest({
     GITHUB_CLIENT_SECRET: "gh-client-secret",
     GOOGLE_CLIENT_ID: "google-client-id",
     GOOGLE_CLIENT_SECRET: "google-client-secret",
+    GOOGLE_PICKER_CLIENT_ID: "google-picker-client-id",
     GOOGLE_PICKER_API_KEY: "picker-key",
     GOOGLE_PICKER_APP_ID: "123456789",
     MICROSOFT_CLIENT_ID: "ms-client-id",
@@ -1342,7 +1343,7 @@ describe("connect — google drive picker + full-read escalation", () => {
     expect(calendarOnly.body.reason).toBe("drive_not_connected");
   });
 
-  it("picker-token 503s when the picker env is unset", async () => {
+  it("picker-token 503s when the dedicated picker client is unset or reused", async () => {
     await setGoogleStage("on");
     await grantGoogle("drive", `${DRIVE} ${EMAIL}`);
     const saved = process.env.GOOGLE_PICKER_API_KEY;
@@ -1355,9 +1356,20 @@ describe("connect — google drive picker + full-read escalation", () => {
     } finally {
       process.env.GOOGLE_PICKER_API_KEY = saved;
     }
+
+    const savedPickerClient = process.env.GOOGLE_PICKER_CLIENT_ID;
+    try {
+      process.env.GOOGLE_PICKER_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+      const res = await request(createApp())
+        .get("/api/connect/google/picker-token")
+        .set("Authorization", auth.bearer());
+      expect(res.status).toBe(503);
+    } finally {
+      process.env.GOOGLE_PICKER_CLIENT_ID = savedPickerClient;
+    }
   });
 
-  it("picker-token returns picker configuration without exposing the stored Google credential", async () => {
+  it("picker-token returns a dedicated browser client without exposing the stored Google credential", async () => {
     await setGoogleStage("on");
     await grantGoogle("drive", `${DRIVE} ${EMAIL}`);
     const res = await request(createApp())
@@ -1365,8 +1377,10 @@ describe("connect — google drive picker + full-read escalation", () => {
       .set("Authorization", auth.bearer());
     expect(res.status, res.text).toBe(200);
     expect(res.body).toEqual({
+      clientId: "google-picker-client-id",
       apiKey: "picker-key",
       appId: "123456789",
+      accountHint: "g@x.com",
     });
     expect(res.text).not.toContain(PLAINTEXT_GOOGLE_ACCESS);
     expect(res.headers["cache-control"]).toContain("no-store");

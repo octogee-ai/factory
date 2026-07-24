@@ -129,6 +129,7 @@ REQUIRED_KEYS=(
   "stripe-secrets:price_ids:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "google-oauth:client_id:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "google-oauth:client_secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+  "google-oauth:picker_client_id:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "google-oauth:picker_api_key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "google-oauth:picker_app_id:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "connect-state-secret:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"

@@ -82,6 +82,10 @@ function sendRouteError(res: Response, error: RouteError): void {
   res.status(error.status).json(error.body);
 }
 
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
 function flowsCol() {
   return db.collection("connectFlows");
 }
@@ -402,10 +406,14 @@ router.post(
   },
 );
 
-function googlePickerEnv(): { apiKey: string; appId: string } | null {
+function googlePickerEnv(): { clientId: string; apiKey: string; appId: string } | null {
+  const clientId = configuredEnvValue(process.env.GOOGLE_PICKER_CLIENT_ID);
+  const serverClientId = configuredEnvValue(process.env.GOOGLE_CLIENT_ID);
   const apiKey = configuredEnvValue(process.env.GOOGLE_PICKER_API_KEY);
   const appId = configuredEnvValue(process.env.GOOGLE_PICKER_APP_ID);
-  return apiKey && appId ? { apiKey, appId } : null;
+  return clientId && clientId !== serverClientId && apiKey && appId
+    ? { clientId, apiKey, appId }
+    : null;
 }
 
 router.get(
@@ -416,7 +424,7 @@ router.get(
       const picker = googlePickerEnv();
       if (!picker) {
         logger.error(
-          "[connect] google picker unavailable: GOOGLE_PICKER_API_KEY/GOOGLE_PICKER_APP_ID is not set",
+          "[connect] google picker unavailable: dedicated GOOGLE_PICKER_CLIENT_ID, GOOGLE_PICKER_API_KEY, and GOOGLE_PICKER_APP_ID are required",
         );
         res.status(503).json({ error: "Google Drive picker is not configured" });
         return;
@@ -427,9 +435,28 @@ router.get(
         res.status(422).json({ ok: false, reason: "drive_not_connected" });
         return;
       }
+      const fresh = await getFreshAccessToken(req.uid!, def);
+      if (!fresh.ok) {
+        res
+          .status(fresh.reason === "reauth_required" ? 409 : 422)
+          .json({ ok: false, reason: fresh.reason });
+        return;
+      }
+      const integration = await userCol(req.uid!, "integrations").doc("google").get();
+      const accountHint = nonEmptyString(integration.data()?.accountLabel);
+      if (!accountHint) {
+        logger.error(`[connect] google picker unavailable: account label missing for uid=${req.uid!}`);
+        res.status(422).json({ ok: false, reason: "google_account_unknown" });
+        return;
+      }
       res.set("Cache-Control", "no-store");
       res.set("Pragma", "no-cache");
-      res.json({ apiKey: picker.apiKey, appId: picker.appId });
+      res.json({
+        clientId: picker.clientId,
+        apiKey: picker.apiKey,
+        appId: picker.appId,
+        accountHint,
+      });
     } catch (e) {
       next(e);
     }
