@@ -171,6 +171,12 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
     expect(result.calls).toContainEqual(expect.stringContaining("kubectl wait --for=delete pvc/gitea-shared-storage"));
     expect(result.calls).toContainEqual(expect.stringContaining("kubectl wait --for=delete pvc/mattermost-data"));
     expect(result.stdout).toContain("Durable PVCs confirmed absent");
+    expect(result.stdout).toContain(
+      "BOOTSTRAP_GATEWAY_IMAGE=<tested release SHA>@sha256:<octogee-gateway digest from release receipt>",
+    );
+    expect(result.stdout).toContain(
+      "glm-controller.bootstrapDefaultGateway.imageTag=$BOOTSTRAP_GATEWAY_IMAGE",
+    );
   });
 
   it.each([
