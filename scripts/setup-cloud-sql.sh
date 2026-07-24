@@ -273,4 +273,4 @@ jq -cn \
   --arg mattermost "$MATTERMOST_RESULT" \
   --arg gitea "$GITEA_RESULT" \
   --arg connection "$CONNECTION_RESULT" \
-  '{target:$target,project:$project,instance:$instance,infrastructureVerified:true,credentialMaterialVerified:true,users:{mattermost:$mattermost,gitea:$gitea},connectionNameSecret:$connection}'
+  '{target:$target,project:$project,instance:$instance,infrastructureVerified:true,credentialMaterialVerified:false,credentialMaterialStatus:"reconciled-not-authenticated",users:{mattermost:$mattermost,gitea:$gitea},connectionNameSecret:$connection}'

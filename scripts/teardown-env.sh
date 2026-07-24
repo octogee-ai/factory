@@ -406,61 +406,124 @@ if $FULL; then
     exit 1
   fi
 
-  # ── 5b. cloud-sql-proxy — local binary + port + listener + alive checks.
-  PROXY_BIN=$(command -v cloud-sql-proxy 2>/dev/null || \
-    ls /opt/homebrew/bin/cloud-sql-proxy 2>/dev/null || \
-    ls /opt/homebrew/share/google-cloud-sdk/bin/cloud-sql-proxy 2>/dev/null || \
-    echo "")
-  if [[ -z "$PROXY_BIN" ]] && command -v brew >/dev/null 2>&1; then
-    info "cloud-sql-proxy not found — installing via Homebrew..."
-    brew install cloud-sql-proxy >/dev/null 2>&1 && PROXY_BIN=$(command -v cloud-sql-proxy 2>/dev/null || echo "")
-    [[ -n "$PROXY_BIN" ]] && ok "cloud-sql-proxy installed: $PROXY_BIN"
-  fi
-  if [[ -z "$PROXY_BIN" ]]; then
-    die "cloud-sql-proxy not found and --full requested. Install it (brew install cloud-sql-proxy) or run DB drops manually and rerun without --full."
-  fi
+  database_exists() {
+    local dbname="$1" stderr_file rc
+    stderr_file=$(mktemp)
+    gcloud sql databases describe "$dbname" --instance="$TARGET_CLOUD_SQL_INSTANCE" \
+      --project="$TARGET_CLOUD_SQL_PROJECT" --format='value(name)' >/dev/null 2>"$stderr_file"
+    rc=$?
+    if [[ $rc -eq 0 ]]; then
+      rm -f "$stderr_file"
+      return 0
+    fi
+    if grep -qE "NOT_FOUND|was not found|does not exist" "$stderr_file"; then
+      rm -f "$stderr_file"
+      return 1
+    fi
+    echo -e "  ${RED}❌ Cloud SQL Admin API describe failed for $dbname:${NC}" >&2
+    sed 's/^/      /' "$stderr_file" >&2
+    rm -f "$stderr_file"
+    return 2
+  }
 
-  if lsof -nP -iTCP:5433 -sTCP:LISTEN >/dev/null 2>&1; then
-    holders=$(lsof -nP -iTCP:5433 -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {print $1"("$2")"}' | sort -u | tr '\n' ' ')
-    die "Local port 5433 is already in use by: ${holders:-(unknown)}. Stale cloud-sql-proxy? Kill it (pkill -f 'cloud-sql-proxy.*5433') and rerun."
-  fi
+  reset_database_through_api() {
+    local dbname="$1" exists_rc recreated_name
+    if database_exists "$dbname"; then
+      info "Deleting $dbname through the Cloud SQL Admin API..."
+      gcloud sql databases delete "$dbname" --instance="$TARGET_CLOUD_SQL_INSTANCE" \
+        --project="$TARGET_CLOUD_SQL_PROJECT" --quiet \
+        || die "Cloud SQL Admin API delete failed for $dbname"
+    else
+      exists_rc=$?
+      [[ $exists_rc -eq 1 ]] || die "Cloud SQL Admin API could not inspect $dbname"
+      info "$dbname is absent; creating its required fresh database through the Cloud SQL Admin API..."
+    fi
+    gcloud sql databases create "$dbname" --instance="$TARGET_CLOUD_SQL_INSTANCE" \
+      --project="$TARGET_CLOUD_SQL_PROJECT" --quiet \
+      || die "Cloud SQL Admin API create failed for $dbname"
+    recreated_name="$(gcloud sql databases describe "$dbname" --instance="$TARGET_CLOUD_SQL_INSTANCE" \
+      --project="$TARGET_CLOUD_SQL_PROJECT" --format='value(name)')" \
+      || die "Cloud SQL Admin API verification failed for $dbname"
+    [[ "$recreated_name" == "$dbname" ]] \
+      || die "Cloud SQL Admin API verification returned '$recreated_name' for $dbname"
+    ok "$dbname — Cloud SQL API confirmed a newly-created empty database"
+  }
 
-  PROXY_LOG=$(mktemp -t cloud-sql-proxy-teardown.XXXXX)
-  "$PROXY_BIN" "$TARGET_CLOUD_SQL_CONNECTION" --port=5433 >"$PROXY_LOG" 2>&1 &
-  PROXY_PID=$!
-  trap '[[ -n "${PROXY_PID:-}" ]] && kill "$PROXY_PID" 2>/dev/null' EXIT
+  instance_ip_types="$(gcloud sql instances describe "$TARGET_CLOUD_SQL_INSTANCE" \
+    --project="$TARGET_CLOUD_SQL_PROJECT" --format='value(ipAddresses.type)')" \
+    || die "Cloud SQL instance inspection failed; refusing to classify a transport/config failure as a credential failure"
 
-  info "Waiting for cloud-sql-proxy listener on 127.0.0.1:5433..."
-  PROXY_UP=false
-  for i in $(seq 1 30); do
-    if ! kill -0 "$PROXY_PID" 2>/dev/null; then
-      echo -e "  ${RED}❌ cloud-sql-proxy exited during startup. Last 20 lines of log:${NC}" >&2
+  if [[ "$instance_ip_types" != *"PRIMARY"* ]]; then
+    info "Cloud SQL has no public IP; resetting databases through the Cloud SQL Admin API..."
+    reset_database_through_api "$MM_DB_NAME"
+    reset_database_through_api "$GITEA_DB_NAME"
+    echo ""
+    echo -e "  ${BOLD}Cloud SQL reset complete:${NC}"
+    echo -e "    ${GREEN}✅ Cloud SQL API confirmed both recreated databases are empty${NC}"
+  else
+    PROXY_BIN=$(command -v cloud-sql-proxy 2>/dev/null || \
+      ls /opt/homebrew/bin/cloud-sql-proxy 2>/dev/null || \
+      ls /opt/homebrew/share/google-cloud-sdk/bin/cloud-sql-proxy 2>/dev/null || \
+      echo "")
+    if [[ -z "$PROXY_BIN" ]] && command -v brew >/dev/null 2>&1; then
+      info "cloud-sql-proxy not found — installing via Homebrew..."
+      brew install cloud-sql-proxy >/dev/null 2>&1 && PROXY_BIN=$(command -v cloud-sql-proxy 2>/dev/null || echo "")
+      [[ -n "$PROXY_BIN" ]] && ok "cloud-sql-proxy installed: $PROXY_BIN"
+    fi
+    [[ -n "$PROXY_BIN" ]] || die "cloud-sql-proxy not found and --full requested. Install it (brew install cloud-sql-proxy) or run DB drops manually and rerun without --full."
+
+    if lsof -nP -iTCP:5433 -sTCP:LISTEN >/dev/null 2>&1; then
+      holders=$(lsof -nP -iTCP:5433 -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {print $1"("$2")"}' | sort -u | tr '\n' ' ')
+      die "Local port 5433 is already in use by: ${holders:-(unknown)}. Stale cloud-sql-proxy? Kill it (pkill -f 'cloud-sql-proxy.*5433') and rerun."
+    fi
+
+    PROXY_LOG=$(mktemp -t cloud-sql-proxy-teardown.XXXXX)
+    "$PROXY_BIN" "$TARGET_CLOUD_SQL_CONNECTION" --port=5433 >"$PROXY_LOG" 2>&1 &
+    PROXY_PID=$!
+    trap '[[ -n "${PROXY_PID:-}" ]] && kill "$PROXY_PID" 2>/dev/null' EXIT
+
+    info "Waiting for cloud-sql-proxy listener on 127.0.0.1:5433..."
+    PROXY_UP=false
+    for i in $(seq 1 30); do
+      if ! kill -0 "$PROXY_PID" 2>/dev/null; then
+        echo -e "  ${RED}❌ cloud-sql-proxy exited during startup. Last 20 lines of log:${NC}" >&2
+        tail -20 "$PROXY_LOG" | sed 's/^/      /' >&2
+        die "cloud-sql-proxy died — see above ($PROXY_LOG)"
+      fi
+      if nc -z 127.0.0.1 5433 2>/dev/null; then
+        PROXY_UP=true
+        ok "cloud-sql-proxy listening on :5433 (after ${i}s)"
+        break
+      fi
+      sleep 1
+    done
+    if ! $PROXY_UP; then
+      echo -e "  ${RED}❌ cloud-sql-proxy never started listening on :5433 (30s timeout). Log tail:${NC}" >&2
       tail -20 "$PROXY_LOG" | sed 's/^/      /' >&2
-      die "cloud-sql-proxy died — see above ($PROXY_LOG)"
+      die "cloud-sql-proxy didn't come up — see above"
     fi
-    if nc -z 127.0.0.1 5433 2>/dev/null; then
-      PROXY_UP=true
-      ok "cloud-sql-proxy listening on :5433 (after ${i}s)"
-      break
-    fi
-    sleep 1
-  done
-  if ! $PROXY_UP; then
-    echo -e "  ${RED}❌ cloud-sql-proxy never started listening on :5433 (30s timeout). Log tail:${NC}" >&2
-    tail -20 "$PROXY_LOG" | sed 's/^/      /' >&2
-    die "cloud-sql-proxy didn't come up — see above"
-  fi
 
-  # ── 5c. Auth probe — connect to postgres as each DB user.
-  if ! PGPASSWORD="$MM_DB_PASS" psql -h 127.0.0.1 -p 5433 -U mattermost -d postgres \
-      -tAc "SELECT 1" >/dev/null 2>&1; then
-    die "Authentication failed for 'mattermost' user against $MM_DB_NAME. MM_DB_PASSWORD in Secret Manager may be out of sync with the DB user (e.g. setup-cloud-sql.sh partially completed). Re-run setup-cloud-sql.sh and retry."
-  fi
-  if ! PGPASSWORD="$GITEA_DB_PASS" psql -h 127.0.0.1 -p 5433 -U gitea -d postgres \
-      -tAc "SELECT 1" >/dev/null 2>&1; then
-    die "Authentication failed for 'gitea' user against $GITEA_DB_NAME. gitea-db-password may be out of sync with the DB user."
-  fi
-  ok "Both DB user credentials authenticate against the live instance"
+    probe_database_user() {
+      local user="$1" pass="$2" dbname="$3" error_file
+      error_file=$(mktemp)
+      if PGPASSWORD="$pass" psql -h 127.0.0.1 -p 5433 -U "$user" -d postgres -tAc "SELECT 1" \
+          >/dev/null 2>"$error_file"; then
+        rm -f "$error_file"
+        return 0
+      fi
+      if grep -qiE 'password authentication failed|authentication failed' "$error_file"; then
+        rm -f "$error_file"
+        die "Authentication failed for '$user' user against $dbname. Its Secret Manager password may be out of sync with the DB user."
+      fi
+      echo -e "  ${RED}❌ Database connection probe failed for '$user' against $dbname; this is a transport/config failure, not a credential mismatch:${NC}" >&2
+      sed 's/^/      /' "$error_file" >&2
+      rm -f "$error_file"
+      die "Fix Cloud SQL proxy/private-network reachability and retry."
+    }
+
+    probe_database_user mattermost "$MM_DB_PASS" "$MM_DB_NAME"
+    probe_database_user gitea "$GITEA_DB_PASS" "$GITEA_DB_NAME"
+    ok "Both DB user credentials authenticate against the live instance"
 
   # ── 5d. Pre-drop inventory — operator sees what's about to be nuked.
   inventory_db() {
@@ -512,18 +575,19 @@ if $FULL; then
     ok "$dbname: ${before:-?} tables → 0 (verified empty)"
   }
 
-  drop_and_verify mattermost "$MM_DB_PASS" "$MM_DB_NAME"
-  drop_and_verify gitea      "$GITEA_DB_PASS" "$GITEA_DB_NAME"
+    drop_and_verify mattermost "$MM_DB_PASS" "$MM_DB_NAME"
+    drop_and_verify gitea      "$GITEA_DB_PASS" "$GITEA_DB_NAME"
 
-  kill "$PROXY_PID" 2>/dev/null || true
-  PROXY_PID=""
-  trap - EXIT
-  rm -f "$PROXY_LOG"
+    kill "$PROXY_PID" 2>/dev/null || true
+    PROXY_PID=""
+    trap - EXIT
+    rm -f "$PROXY_LOG"
 
-  echo ""
-  echo -e "  ${BOLD}Cloud SQL reset complete:${NC}"
-  echo -e "    ${GREEN}✅ $MM_DB_NAME — dropped + recreated empty${NC}"
-  echo -e "    ${GREEN}✅ $GITEA_DB_NAME — dropped + recreated empty${NC}"
+    echo ""
+    echo -e "  ${BOLD}Cloud SQL reset complete:${NC}"
+    echo -e "    ${GREEN}✅ $MM_DB_NAME — dropped + recreated empty${NC}"
+    echo -e "    ${GREEN}✅ $GITEA_DB_NAME — dropped + recreated empty${NC}"
+  fi
 fi
 
 # ── 6. Secret Manager: preserve infra secrets, wipe per-customer byok-* ──
