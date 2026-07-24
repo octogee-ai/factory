@@ -11,6 +11,14 @@ export interface PlatformMigrationActivationArgs {
   confirmation: string | null;
 }
 
+type PlatformMigrationActivationIdentity = Pick<
+  PlatformMigrationActivationArgs,
+  "source" | "target" | "migrationId"
+>;
+
+type PlatformMigrationActivationReceiptExpectation =
+  PlatformMigrationActivationIdentity & { revision: string };
+
 export interface PlatformMigrationActivationService {
   service: "mattermost" | "gitea";
   kind: "Deployment" | "StatefulSet";
@@ -48,7 +56,7 @@ export interface PlatformMigrationActivationDependencies {
   verifySecrets(settings: DeploymentEnvironmentSettings): Promise<void>;
   readReceipt(uri: string): Promise<PlatformMigrationActivationReceipt | null>;
   writeReceipt(uri: string, receipt: PlatformMigrationActivationReceipt): Promise<void>;
-  receiptUri(args: Pick<PlatformMigrationActivationArgs, "source" | "target" | "migrationId">): string;
+  receiptUri(args: PlatformMigrationActivationIdentity): string;
   settingsForTarget(target: PlatformMigrationActivationTarget): DeploymentEnvironmentSettings;
 }
 
@@ -62,13 +70,11 @@ function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-export function assertPlatformMigrationActivationReceipt(
-  value: unknown,
-  expected: Pick<PlatformMigrationActivationArgs, "source" | "target" | "migrationId"> & { revision: string },
-): asserts value is PlatformMigrationActivationReceipt {
-  const receipt = record(value);
+function assertActivationReceiptMetadata(
+  receipt: Record<string, unknown>,
+  expected: PlatformMigrationActivationReceiptExpectation,
+): void {
   if (
-    receipt === null ||
     receipt.schemaVersion !== 1 ||
     receipt.kind !== "platform-migration-activation-receipt" ||
     receipt.migrationId !== expected.migrationId ||
@@ -81,23 +87,53 @@ export function assertPlatformMigrationActivationReceipt(
   ) {
     throw new Error("activation receipt does not match the exact migration and revision");
   }
+}
+
+function activationReceiptServices(receipt: Record<string, unknown>): Record<string, unknown>[] {
   if (!Array.isArray(receipt.services) || receipt.services.length !== 2) {
     throw new Error("activation receipt does not prove the exact Mattermost and Gitea service set");
   }
   const services = receipt.services.map((candidate) => record(candidate));
-  const names = services.map((service) => service?.service);
-  if (services.some((service) => service === null) || new Set(names).size !== 2 || !names.includes("mattermost") || !names.includes("gitea")) {
+  if (services.some((service) => service === null)) {
     throw new Error("activation receipt does not prove the exact Mattermost and Gitea service set");
   }
-  for (const service of services as Record<string, unknown>[]) {
-    const name = service.name;
-    const matchesService = service.service === "mattermost"
-      ? typeof name === "string" && /(^|-)mattermost($|-)/.test(name)
-      : typeof name === "string" && /(^|-)gitea($|-)/.test(name);
-    if ((service.kind !== "Deployment" && service.kind !== "StatefulSet") || typeof name !== "string" || !KUBERNETES_NAME.test(name) || !matchesService) {
-      throw new Error("activation receipt service does not have a valid workload identity");
-    }
+  return services as Record<string, unknown>[];
+}
+
+function assertExactActivationServiceSet(services: readonly Record<string, unknown>[]): void {
+  const names = services.map((service) => service.service);
+  if (new Set(names).size !== 2 || !names.includes("mattermost") || !names.includes("gitea")) {
+    throw new Error("activation receipt does not prove the exact Mattermost and Gitea service set");
   }
+}
+
+function matchesActivationServiceName(service: Record<string, unknown>, name: string): boolean {
+  return service.service === "mattermost"
+    ? /(^|-)mattermost($|-)/.test(name)
+    : /(^|-)gitea($|-)/.test(name);
+}
+
+function assertActivationServiceIdentity(service: Record<string, unknown>): void {
+  const name = service.name;
+  const validKind = service.kind === "Deployment" || service.kind === "StatefulSet";
+  const validName = typeof name === "string" && KUBERNETES_NAME.test(name);
+  if (!validKind || !validName || !matchesActivationServiceName(service, name as string)) {
+    throw new Error("activation receipt service does not have a valid workload identity");
+  }
+}
+
+export function assertPlatformMigrationActivationReceipt(
+  value: unknown,
+  expected: PlatformMigrationActivationReceiptExpectation,
+): asserts value is PlatformMigrationActivationReceipt {
+  const receipt = record(value);
+  if (receipt === null) {
+    throw new Error("activation receipt does not match the exact migration and revision");
+  }
+  assertActivationReceiptMetadata(receipt, expected);
+  const services = activationReceiptServices(receipt);
+  assertExactActivationServiceSet(services);
+  services.forEach(assertActivationServiceIdentity);
 }
 
 function value(args: readonly string[], name: string): string | null {
