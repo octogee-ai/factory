@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 source "$SCRIPT_DIR/lib/deployment-target.sh"
+source "$SCRIPT_DIR/lib/monitoring-platform-preflight.sh"
 
 SELECTOR="--environment=prod"
 SECRET_MODE=""
@@ -33,11 +34,6 @@ octogee_load_deployment_target "$SELECTOR"
   echo "Monitoring only supports active deployment targets; $TARGET_ID is $TARGET_LIFECYCLE" >&2
   exit 1
 }
-[[ -n "${TARGET_PLATFORM_COMPUTE_CLASS:-}" ]] || {
-  echo "Active monitoring target $TARGET_ID requires a platform ComputeClass" >&2
-  exit 1
-}
-
 for command in gcloud kubectl helm node; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
 done
@@ -54,6 +50,8 @@ if $UNINSTALL; then
   helm uninstall grafana --namespace monitoring --kube-context "$TARGET_KUBE_CONTEXT" --ignore-not-found
   exit 0
 fi
+
+octogee_preflight_monitoring_platform_compute_class
 
 secret_args=(--target="$TARGET_ID")
 [[ -n "$SECRET_MODE" ]] && secret_args+=("$SECRET_MODE")

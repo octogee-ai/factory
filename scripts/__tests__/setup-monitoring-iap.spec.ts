@@ -32,6 +32,10 @@ function createHarness(): { root: string; script: string; log: string } {
     join(repoRoot, "scripts/setup-monitoring-iap.sh"),
     join(scripts, "setup-monitoring-iap.sh"),
   );
+  copyFileSync(
+    join(repoRoot, "scripts/lib/monitoring-platform-preflight.sh"),
+    join(scripts, "lib/monitoring-platform-preflight.sh"),
+  );
   executable(
     join(scripts, "lib/deployment-target.sh"),
     `octogee_load_deployment_target() {
@@ -41,6 +45,7 @@ function createHarness(): { root: string; script: string; log: string } {
   TARGET_REGION=us-west1
   TARGET_CLUSTER_PROJECT=octogee
   TARGET_KUBE_CONTEXT=gke_us-west1_octogee
+  TARGET_PLATFORM_COMPUTE_CLASS=octogee-platform-test-spot
 }
 `,
   );
@@ -67,6 +72,8 @@ exit 0
     `#!/usr/bin/env bash
 if [[ "$*" == "config current-context" ]]; then
   printf '%s\n' gke_us-west1_octogee
+elif [[ "$*" == get\\ computeclass\\ * ]]; then
+  printf '%s\n' True
 fi
 `,
   );

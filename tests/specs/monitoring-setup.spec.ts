@@ -21,6 +21,10 @@ const setupMonitoringIap = readFileSync(
   resolve(root, "scripts/setup-monitoring-iap.sh"),
   "utf8",
 );
+const monitoringPlatformPreflight = readFileSync(
+  resolve(root, "scripts/lib/monitoring-platform-preflight.sh"),
+  "utf8",
+);
 
 function chart(path: string): string {
   return readFileSync(resolve(root, "helm/monitoring", path), "utf8");
@@ -72,7 +76,41 @@ describe("monitoring setup", () => {
   it("passes the selected platform ComputeClass to monitoring Helm and rejects an active target without one", () => {
     expect(setupMonitoring).toContain('platformComputeClass=$TARGET_PLATFORM_COMPUTE_CLASS');
     expect(setupMonitoring).toContain('grafana.nodeSelector.cloud\\\\.google\\\\.com/compute-class=$TARGET_PLATFORM_COMPUTE_CLASS');
-    expect(setupMonitoring).toContain("requires a platform ComputeClass");
+    expect(monitoringPlatformPreflight).toContain(
+      "requires a platform ComputeClass",
+    );
+    expect(monitoringPlatformPreflight).toContain(
+      'kubectl get computeclass "$TARGET_PLATFORM_COMPUTE_CLASS"',
+    );
+    expect(monitoringPlatformPreflight).toContain(
+      "Platform ComputeClass is unavailable or unhealthy",
+    );
+    expect(setupMonitoring).toContain(
+      'source "$SCRIPT_DIR/lib/monitoring-platform-preflight.sh"',
+    );
+    expect(setupMonitoringIap).toContain(
+      'source "$SCRIPT_DIR/lib/monitoring-platform-preflight.sh"',
+    );
+    const setupPreflight = setupMonitoring.indexOf(
+      "octogee_preflight_monitoring_platform_compute_class",
+    );
+    const secretMaterialization = setupMonitoring.indexOf(
+      '"$SCRIPT_DIR/setup-monitoring-secrets.sh"',
+    );
+    const iapPreflight = setupMonitoringIap.indexOf(
+      "octogee_preflight_monitoring_platform_compute_class",
+    );
+    const iapSecretMaterialization = setupMonitoringIap.indexOf(
+      '"$SCRIPT_DIR/setup-monitoring-secrets.sh"',
+    );
+    const staticIpCheck = setupMonitoringIap.indexOf(
+      "gcloud compute addresses describe",
+    );
+    expect(setupPreflight).toBeGreaterThan(-1);
+    expect(secretMaterialization).toBeGreaterThan(setupPreflight);
+    expect(iapPreflight).toBeGreaterThan(-1);
+    expect(iapSecretMaterialization).toBeGreaterThan(iapPreflight);
+    expect(staticIpCheck).toBeGreaterThan(iapPreflight);
   });
 
   it("uses the tested secret materializer instead of a workstation environment file", () => {
