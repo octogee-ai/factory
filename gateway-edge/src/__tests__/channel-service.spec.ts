@@ -306,7 +306,7 @@ describe("createSessionChannel", () => {
     });
   });
 
-  it("adopts an existing MM channel on a name conflict and re-patches it to the requested values", async () => {
+  it("removes unexpected members before adopting an existing MM channel on a name conflict", async () => {
     h.mmApi.mockReset().mockImplementation(async (path: string, method?: string) => {
       if (method === "POST" && path === "/channels") {
         const err = new Error(
@@ -316,6 +316,10 @@ describe("createSessionChannel", () => {
         throw err;
       }
       if (path === "/teams/team-1/channels/name/mira-patchroll") return { id: "channel-9" };
+      if (path === "/channels/channel-9/members") {
+        return [{ user_id: "attacker-mm" }, { user_id: "owner-mm" }];
+      }
+      if (method === "DELETE" && path === "/channels/channel-9/members/attacker-mm") return { ok: true };
       if (method === "PUT" && path === "/channels/channel-9/patch") return { id: "channel-9" };
       if (method === "POST" && path === "/channels/channel-9/members") return { ok: true };
       throw new Error(`unexpected Mattermost call: ${method ?? "GET"} ${path}`);
@@ -327,6 +331,7 @@ describe("createSessionChannel", () => {
       status: 200,
       body: { success: true, channelId: "channel-9", name: "patchroll" },
     });
+    expect(h.mmApi).toHaveBeenCalledWith("/channels/channel-9/members/attacker-mm", "DELETE");
     expect(h.mmApi).toHaveBeenCalledWith("/channels/channel-9/patch", "PUT", {
       display_name: "OpenClaw Patch Upgrade",
       purpose: "Roll OC patches",
@@ -351,6 +356,7 @@ describe("createSessionChannel", () => {
       if (path === "/teams/team-1/channels/name/mira-patchroll") {
         return { id: "channel-1" };
       }
+      if (path === "/channels/channel-1/members") return [];
       if (method === "PUT" && path === "/channels/channel-1/patch") {
         return { id: "channel-1" };
       }
