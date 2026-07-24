@@ -41,16 +41,35 @@ for command in curl install unzip; do
   fi
 done
 
-TOOL_CACHE_ROOT="${TMPDIR:-/tmp}/octogee-toolchain"
+TOOL_CACHE_ROOT="${XDG_CACHE_HOME:-${HOME:?}/.cache}/octogee-toolchain"
 INSTALL_DIR="${TOOL_CACHE_ROOT}/terraform-${TERRAFORM_VERSION}-${PLATFORM}"
 TERRAFORM_BIN="${INSTALL_DIR}/terraform"
 
-if [[ -x "${TERRAFORM_BIN}" ]] && [[ "$("${TERRAFORM_BIN}" version | sed -n '1s/^Terraform v//p')" == "${TERRAFORM_VERSION}" ]]; then
-  echo "${TERRAFORM_BIN}"
-  exit 0
+path_owner() {
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    stat -f '%u' "$1"
+  else
+    stat -c '%u' "$1"
+  fi
+}
+
+secure_path() {
+  local path="$1"
+  if [[ -L "${path}" ]] || [[ "$(path_owner "${path}")" != "$(id -u)" ]] || find "${path}" -prune \( -perm -002 -o -perm -020 \) -print | grep -q .; then
+    echo "Terraform cache path is not private to the current user: ${path}" >&2
+    exit 1
+  fi
+}
+
+mkdir -p -m 0700 "${TOOL_CACHE_ROOT}" "${INSTALL_DIR}"
+secure_path "${TOOL_CACHE_ROOT}"
+secure_path "${INSTALL_DIR}"
+
+if [[ -e "${TERRAFORM_BIN}" || -L "${TERRAFORM_BIN}" ]]; then
+  secure_path "${TERRAFORM_BIN}"
+  rm "${TERRAFORM_BIN}"
 fi
 
-mkdir -p "${TOOL_CACHE_ROOT}" "${INSTALL_DIR}"
 DOWNLOAD_DIR="$(mktemp -d "${TOOL_CACHE_ROOT}/terraform-download.XXXXXX")"
 ARCHIVE="${DOWNLOAD_DIR}/terraform_${TERRAFORM_VERSION}_${PLATFORM}.zip"
 
@@ -74,5 +93,5 @@ else
 fi
 
 unzip -qq "${ARCHIVE}" terraform -d "${DOWNLOAD_DIR}"
-install -m 0755 "${DOWNLOAD_DIR}/terraform" "${TERRAFORM_BIN}"
+install -m 0700 "${DOWNLOAD_DIR}/terraform" "${TERRAFORM_BIN}"
 echo "${TERRAFORM_BIN}"
