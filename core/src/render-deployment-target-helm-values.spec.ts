@@ -81,7 +81,7 @@ describe("deployment target Helm values", () => {
   );
 
   it.each(["prod-central", "test-central", "build-week-central"])(
-    "does not enable the WEST network boundary for frozen central target %s",
+    "does not enable the WEST network boundary for central target %s",
     (targetId) => {
       const rendered = renderDeploymentTargetHelmValues(deploymentTargetSettings(targetId));
       expect(rendered).toContain("enforceDefaultDeny: false");
