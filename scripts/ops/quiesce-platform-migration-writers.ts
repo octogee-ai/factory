@@ -129,15 +129,9 @@ function cronJobJobs(settings: DeploymentEnvironmentSettings): KubernetesCronJob
   return listing.items as KubernetesCronJobJob[];
 }
 
-function scheduledWriters(settings: DeploymentEnvironmentSettings): PlatformMigrationScheduledWriter[] {
-  const output = run("gcloud", [
-    "scheduler",
-    "jobs",
-    "list",
-    `--project=${settings.firebaseProjectId}`,
-    `--location=${settings.region}`,
-    "--format=json(name,state,attemptDeadline,retryConfig,httpTarget)",
-  ]);
+export function parsePlatformMigrationScheduledWritersListing(
+  output: string,
+): PlatformMigrationScheduledWriter[] {
   let listing: unknown;
   try {
     listing = JSON.parse(output);
@@ -157,7 +151,7 @@ function scheduledWriters(settings: DeploymentEnvironmentSettings): PlatformMigr
     }
     const name = job.name.split("/").at(-1);
     if (!name) throw new Error(`Cloud Scheduler job ${index} has no terminal name`);
-    const retryConfig = job.retryConfig === undefined
+    const retryConfig = job.retryConfig === undefined || job.retryConfig === null
       ? undefined
       : record(job.retryConfig, `Cloud Scheduler job ${index} retryConfig`);
     return {
@@ -168,6 +162,17 @@ function scheduledWriters(settings: DeploymentEnvironmentSettings): PlatformMigr
       targetType: job.httpTarget === undefined ? "UNSUPPORTED" : "HTTP",
     };
   });
+}
+
+function scheduledWriters(settings: DeploymentEnvironmentSettings): PlatformMigrationScheduledWriter[] {
+  return parsePlatformMigrationScheduledWritersListing(run("gcloud", [
+    "scheduler",
+    "jobs",
+    "list",
+    `--project=${settings.firebaseProjectId}`,
+    `--location=${settings.region}`,
+    "--format=json(name,state,attemptDeadline,retryConfig,httpTarget)",
+  ]));
 }
 
 function pauseScheduledWriter(settings: DeploymentEnvironmentSettings, writer: Pick<PlatformMigrationScheduledWriter, "name">): void {

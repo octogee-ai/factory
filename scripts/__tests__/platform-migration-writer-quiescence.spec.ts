@@ -15,6 +15,7 @@ import {
   waitForPlatformMigrationWriterReadiness,
   waitForPlatformMigrationScheduledAttemptDrain,
 } from "../lib/platform-migration-writer-quiescence.js";
+import { parsePlatformMigrationScheduledWritersListing } from "../ops/quiesce-platform-migration-writers.js";
 
 const migrationId = "west-cutover-20260724";
 const targetId = "test-west";
@@ -184,6 +185,22 @@ function dependencies(overrides: Partial<Parameters<typeof executePlatformMigrat
 }
 
 describe("platform migration writer quiescence", () => {
+  it("normalizes the live Scheduler null retryConfig to effective zero retries", () => {
+    expect(parsePlatformMigrationScheduledWritersListing(JSON.stringify([{
+      name: "projects/octogee-data-test/locations/us-west1/jobs/firebase-schedule-cleanupFeedRetention-us-west1",
+      state: "ENABLED",
+      attemptDeadline: "180s",
+      retryConfig: null,
+      httpTarget: { uri: "https://example.run.app" },
+    }]))).toEqual([{
+      name: "firebase-schedule-cleanupFeedRetention-us-west1",
+      state: "ENABLED",
+      attemptDeadline: "180s",
+      retryConfig: undefined,
+      targetType: "HTTP",
+    }]);
+  });
+
   it("gives restored writers the Helm-consistent bounded ten-minute readiness window", () => {
     expect(PLATFORM_MIGRATION_WRITER_READINESS_TIMEOUT_MILLISECONDS).toBe(600_000);
   });
