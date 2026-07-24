@@ -12,17 +12,31 @@ function executable(file: string, source: string): void {
   chmodSync(file, 0o755);
 }
 
-function runPrivateWestTeardown(options: { failDatabaseCreate?: boolean; publicIp?: boolean } = {}) {
+type TeardownOptions = {
+  databaseFailure?: "inspect" | "delete" | "create" | "verify-command" | "verify-value";
+  publicIp?: boolean;
+  secretFailure?: "absent" | "error";
+};
+
+function runPrivateWestTeardown(options: TeardownOptions = {}) {
   const temp = mkdtempSync(path.join(tmpdir(), "octogee-teardown-private-west-"));
   const log = path.join(temp, "calls.log");
+  const describeCount = path.join(temp, "describe-count");
   writeFileSync(log, "");
+  writeFileSync(describeCount, "0");
 
   executable(path.join(temp, "gcloud"), `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$FAKE_CALL_LOG"
 case "$1 $2 $3" in
   "container clusters get-credentials") ;;
-  "secrets versions access") printf 'retained-password' ;;
+  "secrets versions access")
+    case "$FAKE_SECRET_FAILURE" in
+      absent) printf 'NOT_FOUND: secret does not exist\\n' >&2; exit 1 ;;
+      error) printf 'PERMISSION_DENIED\\n' >&2; exit 2 ;;
+      *) printf 'retained-password' ;;
+    esac
+    ;;
   "sql instances describe")
     if [[ "$FAKE_PUBLIC_IP" == "true" ]]; then
       printf 'PRIMARY\\n'
@@ -30,9 +44,30 @@ case "$1 $2 $3" in
       printf '%s\\n' '{"ipAddresses":[{"type":"PRIVATE","ipAddress":"10.0.0.4"}]}'
     fi
     ;;
-  "sql databases delete") ;;
-  "sql databases create") [[ "$FAKE_FAIL_DATABASE_CREATE" != "true" ]] ;;
-  "sql databases describe") printf '%s\\n' "$4" ;;
+  "sql databases delete")
+    [[ "$FAKE_DATABASE_FAILURE" != "delete" ]]
+    ;;
+  "sql databases create")
+    [[ "$FAKE_DATABASE_FAILURE" != "create" ]]
+    ;;
+  "sql databases describe")
+    count="$(cat "$FAKE_DESCRIBE_COUNT")"
+    count=$((count + 1))
+    printf '%s' "$count" > "$FAKE_DESCRIBE_COUNT"
+    if [[ "$FAKE_DATABASE_FAILURE" == "inspect" && "$count" == "1" ]]; then
+      printf 'PERMISSION_DENIED\\n' >&2
+      exit 2
+    fi
+    if [[ "$FAKE_DATABASE_FAILURE" == "verify-command" && "$count" == "2" ]]; then
+      printf 'verification unavailable\\n' >&2
+      exit 2
+    fi
+    if [[ "$FAKE_DATABASE_FAILURE" == "verify-value" && "$count" == "2" ]]; then
+      printf 'wrong_database\\n'
+    else
+      printf '%s\\n' "$4"
+    fi
+    ;;
   "secrets list "*|"run services list "*) ;;
   *) printf 'unexpected gcloud call: %s\\n' "$*" >&2; exit 2 ;;
 esac
@@ -64,8 +99,10 @@ case "$1" in status) exit 1 ;; list) ;; *) ;; esac
       ...process.env,
       PATH: `${temp}:${process.env.PATH ?? "/usr/bin:/bin"}`,
       FAKE_CALL_LOG: log,
-      FAKE_FAIL_DATABASE_CREATE: options.failDatabaseCreate ? "true" : "false",
+      FAKE_DATABASE_FAILURE: options.databaseFailure ?? "",
+      FAKE_DESCRIBE_COUNT: describeCount,
       FAKE_PUBLIC_IP: options.publicIp ? "true" : "false",
+      FAKE_SECRET_FAILURE: options.secretFailure ?? "",
       SA_KEY_PATH: path.join(temp, "missing-service-account.json"),
     },
     encoding: "utf8",
@@ -91,12 +128,35 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
     expect(result.stdout).toContain("Cloud SQL API confirmed both recreated databases");
   });
 
-  it("fails closed when the Cloud SQL Admin API cannot recreate a private database", () => {
-    const result = runPrivateWestTeardown({ failDatabaseCreate: true });
+  it.each([
+    ["inspect", "could not inspect mattermost_test", "sql databases delete mattermost_test"],
+    ["delete", "delete failed for mattermost_test", "sql databases create mattermost_test"],
+    ["create", "create failed for mattermost_test", "sql databases describe gitea_test"],
+    ["verify-command", "verification failed for mattermost_test", "sql databases describe gitea_test"],
+    ["verify-value", "verification returned 'wrong_database' for mattermost_test", "sql databases describe gitea_test"],
+  ] as const)(
+    "fails closed when the Cloud SQL Admin API %s boundary fails",
+    (databaseFailure, message, forbiddenCall) => {
+      const result = runPrivateWestTeardown({ databaseFailure });
 
-    expect(result.status).toBe(1);
-    expect(`${result.stderr}\n${result.stdout}`).toContain("Cloud SQL Admin API create failed for mattermost_test");
-    expect(result.stderr).not.toContain("Authentication failed");
+      expect(result.status).toBe(1);
+      expect(`${result.stderr}\n${result.stdout}`).toContain(message);
+      expect(result.calls).not.toContainEqual(expect.stringContaining(forbiddenCall));
+      expect(result.calls.some((call) => call.startsWith("secrets list"))).toBe(false);
+      expect(result.stderr).not.toContain("Authentication failed");
+    },
+  );
+
+  it("distinguishes an absent password secret from a Secret Manager read failure", () => {
+    const absent = runPrivateWestTeardown({ secretFailure: "absent" });
+    expect(absent.status).toBe(1);
+    expect(absent.stdout).toContain("MM_DB_PASSWORD:    absent");
+    expect(absent.stderr).not.toContain("gcloud auth or network");
+
+    const failed = runPrivateWestTeardown({ secretFailure: "error" });
+    expect(failed.status).toBe(1);
+    expect(failed.stderr).toContain("PERMISSION_DENIED");
+    expect(failed.stderr).toContain("gcloud auth or network");
   });
 
   it("does not mislabel a reachable-proxy transport failure as a password mismatch", () => {

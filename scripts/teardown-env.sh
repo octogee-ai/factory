@@ -332,15 +332,10 @@ fi
 #     "gcloud failed for some other reason" — only the former is allowed.
 #   * The silent "fresh env" skip is gone. If --full is requested and either
 #     password is missing, the script dies with explicit guidance.
-#   * Pre-launch port-5433 check catches stale proxies that would route to
-#     a wrong/unknown Cloud SQL instance.
-#   * cloud-sql-proxy startup waits for the listener (not sleep) + verifies
-#     the proxy process is still alive.
-#   * Authentication is probed against postgres before any DROP.
-#   * Pre + post inventory printed for each DB so the operator can SEE what
-#     was about to be dropped vs what's left.
-#   * psql calls use `-v ON_ERROR_STOP=1` to surface every SQL error as a
-#     non-zero exit (default psql shrugs at some errors).
+#   * Private-only instances reset through the Cloud SQL Admin API and verify
+#     each recreated database before any later environment cleanup.
+#   * Public-IP instances verify the proxy listener and process, authenticate
+#     both users, inventory the databases, and stop on every SQL error.
 if $FULL; then
   echo ""
   info "Resetting Cloud SQL databases ($MM_DB_NAME, $GITEA_DB_NAME)..."
@@ -368,7 +363,9 @@ if $FULL; then
 
   MM_DB_PASS=""
   MM_DB_PASS_STATUS="present"
-  if ! MM_DB_PASS=$(sm_read "$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET"); then
+  if MM_DB_PASS=$(sm_read "$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET"); then
+    :
+  else
     rc=$?
     if [[ $rc -eq 1 ]]; then
       MM_DB_PASS_STATUS="absent"
@@ -379,7 +376,9 @@ if $FULL; then
 
   GITEA_DB_PASS=""
   GITEA_DB_PASS_STATUS="present"
-  if ! GITEA_DB_PASS=$(sm_read "$TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET"); then
+  if GITEA_DB_PASS=$(sm_read "$TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET"); then
+    :
+  else
     rc=$?
     if [[ $rc -eq 1 ]]; then
       GITEA_DB_PASS_STATUS="absent"
