@@ -155,6 +155,9 @@ function assertBucketLocalIamPolicy(policy: JsonRecord): void {
     if (typeof binding.role !== "string") {
       throw new Error("migration receipt bucket-local IAM binding has no role");
     }
+    if (binding.condition !== undefined) {
+      throw new Error(`migration receipt bucket-local IAM ${binding.role} must be unconditional`);
+    }
     actualRoles.push(binding.role);
     const members = binding.members;
     if (

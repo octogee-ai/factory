@@ -113,6 +113,18 @@ describe("immutable migration receipts", () => {
         })),
       },
     ))).toThrow(/exact members/i);
+    expect(() => assertMigrationReceiptBucket(postureRunner(
+      receiptBucket,
+      {
+        bindings: receiptPolicy.bindings.map((binding) => ({
+          ...binding,
+          condition: {
+            title: "unexpected",
+            expression: "request.time < timestamp('2026-07-25T00:00:00Z')",
+          },
+        })),
+      },
+    ))).toThrow(/unconditional/i);
   });
 
   it("rejects mutable or retention-locked Terraform state posture", () => {
