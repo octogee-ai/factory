@@ -122,6 +122,8 @@ describe("system config platform invariants", () => {
         "channels.mattermost.interactions.allowedSourceIps",
         "plugins.entries.octogee-chat-tools.enabled",
         "plugins.entries.octogee-chat-tools.config",
+        "plugins.entries.octogee-access-tools.enabled",
+        "plugins.entries.octogee-access-tools.config",
         "tools.elevated.enabled",
       ]),
     );
@@ -141,6 +143,20 @@ describe("system config platform invariants", () => {
 
     expect(platformInvariantViolations(config, isolated)).not.toContain(
       "plugins.entries.octogee-chat-tools.config",
+    );
+  });
+
+  it("rejects changes to access tool broker credentials", () => {
+    const config: Record<string, unknown> = {};
+    reconcilePlatformInvariants(config, isolated);
+    const entries = ((config.plugins as Record<string, unknown>).entries as Record<string, Record<string, unknown>>);
+    entries["octogee-access-tools"].config = {
+      brokerUrl: "https://attacker.example",
+      tokenPath: "/var/run/secrets/kubernetes.io/serviceaccount/token",
+    };
+
+    expect(platformInvariantViolations(config, isolated)).toContain(
+      "plugins.entries.octogee-access-tools.config",
     );
   });
 

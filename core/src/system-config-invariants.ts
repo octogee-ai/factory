@@ -35,6 +35,7 @@ const REQUIRED_PLUGINS = [
   "anthropic",
   "memory-core",
   "octogee-chat-tools",
+  "octogee-access-tools",
   "octogee-preview-tools",
   "octogee-project-tools",
   "octogee-status-tools",
@@ -53,6 +54,10 @@ const PLATFORM_PLUGIN_CONFIGS: Readonly<Record<string, JsonObject>> = {
     brokerUrl: "${FLEET_BROKER_URL}",
     tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
     customersRoot: "${CUSTOMERS_DIR}",
+  },
+  "octogee-access-tools": {
+    brokerUrl: "${FLEET_BROKER_URL}",
+    tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
   },
   "octogee-preview-tools": {},
   "octogee-project-tools": {
