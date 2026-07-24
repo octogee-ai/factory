@@ -31,7 +31,23 @@ describe('platform content migration plan', () => {
       canonicalOpenclawVersion: '2026.7.1',
       run: (command, args) => {
         commands.push({ command, args })
-        return JSON.stringify({ image_summary: { digest: `sha256:${'b'.repeat(64)}` } })
+        if (args[0] === 'artifacts') {
+          return JSON.stringify({ image_summary: { digest: `sha256:${'b'.repeat(64)}` } })
+        }
+        return JSON.stringify([{
+          status: 'SUCCESS',
+          substitutions: {
+            COMMIT_SHA: 'a'.repeat(40),
+            _IMAGE_TAG: 'aaaaaaa',
+            _OPENCLAW_VERSION: '2026.7.1',
+          },
+          results: {
+            images: [{
+              name: 'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator:aaaaaaa',
+              digest: `sha256:${'b'.repeat(64)}`,
+            }],
+          },
+        }])
       },
     })
 
@@ -42,14 +58,27 @@ describe('platform content migration plan', () => {
       digest: `sha256:${'b'.repeat(64)}`,
       reference: `us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator:aaaaaaa-oc2026.7.1@sha256:${'b'.repeat(64)}`,
     })
-    expect(commands).toEqual([{
-      command: 'gcloud',
-      args: [
-        'artifacts', 'docker', 'images', 'describe',
-        'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator:aaaaaaa-oc2026.7.1',
-        '--project=octogee', '--format=json',
-      ],
-    }])
+    expect(commands).toEqual([
+      {
+        command: 'gcloud',
+        args: [
+          'artifacts', 'docker', 'images', 'describe',
+          'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator:aaaaaaa-oc2026.7.1',
+          '--project=octogee', '--format=json',
+        ],
+      },
+      {
+        command: 'gcloud',
+        args: [
+          'builds', 'list',
+          '--project=octogee',
+          '--region=us-west1',
+          `--filter=status=SUCCESS AND results.images.digest="sha256:${'b'.repeat(64)}"`,
+          '--limit=100',
+          '--format=json(status,substitutions,results.images)',
+        ],
+      },
+    ])
   })
 
   it('reads the canonical OpenClaw version from the real repository layout', () => {
@@ -68,6 +97,48 @@ describe('platform content migration plan', () => {
       canonicalOpenclawVersion: '2026.7.1',
       run: () => output,
     })).toThrow('did not resolve to an immutable digest')
+  })
+
+  it.each([
+    ['no Cloud Build record', []],
+    ['a different full commit', [{
+      status: 'SUCCESS',
+      substitutions: {
+        COMMIT_SHA: 'c'.repeat(40),
+        _IMAGE_TAG: 'aaaaaaa',
+        _OPENCLAW_VERSION: '2026.7.1',
+      },
+      results: { images: [{ name: 'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator:aaaaaaa', digest: `sha256:${'b'.repeat(64)}` }] },
+    }]],
+    ['a different OpenClaw version', [{
+      status: 'SUCCESS',
+      substitutions: {
+        COMMIT_SHA: 'a'.repeat(40),
+        _IMAGE_TAG: 'aaaaaaa',
+        _OPENCLAW_VERSION: '2026.7.0',
+      },
+      results: { images: [{ name: 'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator:aaaaaaa', digest: `sha256:${'b'.repeat(64)}` }] },
+    }]],
+    ['a different image digest', [{
+      status: 'SUCCESS',
+      substitutions: {
+        COMMIT_SHA: 'a'.repeat(40),
+        _IMAGE_TAG: 'aaaaaaa',
+        _OPENCLAW_VERSION: '2026.7.1',
+      },
+      results: { images: [{ name: 'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator:aaaaaaa', digest: `sha256:${'c'.repeat(64)}` }] },
+    }]],
+  ])('rejects an operator digest backed by %s', (_label, builds) => {
+    expect(() => resolvePlatformContentMigrationOperatorImage({
+      artifactRegistryLocation: 'us-west1',
+      artifactRegistryProjectId: 'octogee',
+      artifactRegistryRepository: 'octogee',
+      releaseCommit: 'a'.repeat(40),
+      canonicalOpenclawVersion: '2026.7.1',
+      run: (_command, args) => args[0] === 'artifacts'
+        ? JSON.stringify({ image_summary: { digest: `sha256:${'b'.repeat(64)}` } })
+        : JSON.stringify(builds),
+    })).toThrow('does not have trusted exact-source Cloud Build provenance')
   })
 
   it('rejects a non-release commit or canonical version before querying Artifact Registry', () => {

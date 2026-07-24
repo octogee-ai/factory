@@ -31,6 +31,13 @@ function record(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function records(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) {
+    throw new Error("operator image build metadata must be an array");
+  }
+  return value.map(record);
+}
+
 export function resolvePlatformContentMigrationOperatorImage(
   input: ResolvePlatformContentMigrationOperatorImageInput,
 ): PlatformContentMigrationOperatorImage {
@@ -59,6 +66,34 @@ export function resolvePlatformContentMigrationOperatorImage(
   }
   if (typeof digest !== "string" || !DIGEST.test(digest)) {
     throw new Error(`operator image ${image} did not resolve to an immutable digest`);
+  }
+  const sourceImage = `${input.artifactRegistryLocation}-docker.pkg.dev/${input.artifactRegistryProjectId}/${input.artifactRegistryRepository}/octogee-gateway-operator:${input.releaseCommit.slice(0, 7)}`;
+  let builds: Array<Record<string, unknown>>;
+  try {
+    builds = records(JSON.parse(input.run("gcloud", [
+      "builds",
+      "list",
+      `--project=${input.artifactRegistryProjectId}`,
+      `--region=${input.artifactRegistryLocation}`,
+      `--filter=status=SUCCESS AND results.images.digest="${digest}"`,
+      "--limit=100",
+      "--format=json(status,substitutions,results.images)",
+    ])));
+  } catch {
+    throw new Error(`operator image ${image} does not have trusted exact-source Cloud Build provenance`);
+  }
+  const trustedBuild = builds.some((build) => {
+    const substitutions = record(build.substitutions);
+    const results = record(build.results);
+    const images = records(results.images);
+    return build.status === "SUCCESS"
+      && substitutions.COMMIT_SHA === input.releaseCommit
+      && substitutions._IMAGE_TAG === input.releaseCommit.slice(0, 7)
+      && substitutions._OPENCLAW_VERSION === input.canonicalOpenclawVersion
+      && images.some((candidate) => candidate.name === sourceImage && candidate.digest === digest);
+  });
+  if (!trustedBuild) {
+    throw new Error(`operator image ${image} does not have trusted exact-source Cloud Build provenance`);
   }
   return {
     releaseCommit: input.releaseCommit,
