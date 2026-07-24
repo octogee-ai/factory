@@ -14,6 +14,7 @@ import {
 
 const MM_DISPLAY_NAME_MAX_LENGTH = 64;
 const MM_PURPOSE_MAX_LENGTH = 250;
+const MM_MEMBER_PAGE_SIZE = 200;
 
 export interface SessionChannelActor {
   uid: string;
@@ -315,15 +316,38 @@ async function removeUnexpectedChannelMembers(
   allowedMemberIds: Array<string | null>,
 ): Promise<void> {
   const allowed = new Set(allowedMemberIds.filter((memberId): memberId is string => memberId !== null));
-  const members = (await mmApi(`/channels/${channelId}/members`)) as Array<{ user_id?: unknown }>;
-  if (!Array.isArray(members)) throw new Error(`MM returned invalid members for channel ${channelId}`);
-  for (const member of members) {
-    if (typeof member.user_id !== "string") {
-      throw new Error(`MM returned member without user id for channel ${channelId}`);
+  const members = await listChannelMemberIds(channelId);
+  for (const memberId of members) {
+    if (!allowed.has(memberId)) {
+      await mmApi(`/channels/${channelId}/members/${memberId}`, "DELETE");
     }
-    if (!allowed.has(member.user_id)) {
-      await mmApi(`/channels/${channelId}/members/${member.user_id}`, "DELETE");
+  }
+  const verifiedMembers = await listChannelMemberIds(channelId);
+  if (verifiedMembers.some((memberId) => !allowed.has(memberId))) {
+    throw new Error(`MM channel ${channelId} membership changed during adoption`);
+  }
+}
+
+async function listChannelMemberIds(channelId: string): Promise<string[]> {
+  const memberIds: string[] = [];
+  let page = 0;
+  while (true) {
+    const members = (await mmApi(
+      `/channels/${channelId}/members?page=${page}&per_page=${MM_MEMBER_PAGE_SIZE}`,
+    )) as Array<{ user_id?: unknown }>;
+    if (!Array.isArray(members)) {
+      throw new Error(`MM returned invalid members for channel ${channelId}`);
     }
+    for (const member of members) {
+      if (typeof member.user_id !== "string") {
+        throw new Error(`MM returned member without user id for channel ${channelId}`);
+      }
+      memberIds.push(member.user_id);
+    }
+    if (members.length < MM_MEMBER_PAGE_SIZE) {
+      return memberIds;
+    }
+    page += 1;
   }
 }
 
