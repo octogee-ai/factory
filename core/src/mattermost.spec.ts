@@ -13,7 +13,7 @@ describe("mattermost public barrel", () => {
       destroyMmChannel: expect.any(Function),
       destroyMmUser: expect.any(Function),
       ensureAdminCredentials: expect.any(Function),
-      ensureCommunityChannels: expect.any(Function),
+      joinCommunityMembership: expect.any(Function),
       getMmAdminToken: expect.any(Function),
       getMmUserChannels: expect.any(Function),
       mintAndPersistCoachToken: expect.any(Function),
