@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 
 export const MIGRATION_RECEIPT_BUCKET = "gs://octogee-migration-receipts";
+export const TERRAFORM_STATE_BUCKET = "gs://octogee-terraform-state";
+export const MIGRATION_RECEIPT_OPERATOR_MEMBERS = [
+  "user:christopher.k.eckert@squarepointconsulting.com",
+] as const;
 const RECEIPT_PREFIX = "receipts/";
 const RETENTION_SECONDS = 400 * 24 * 60 * 60;
 const OBJECT_NAME = /^[a-z0-9][a-z0-9._/-]{0,500}\.json$/;
@@ -15,6 +19,15 @@ export type ImmutableMigrationReceipt = {
   uri: string;
   generation: string;
 };
+
+export class MigrationReceiptCollisionError extends Error {
+  readonly code = "MIGRATION_RECEIPT_COLLISION";
+
+  constructor(readonly uri: string, options: ErrorOptions) {
+    super(`immutable migration receipt already exists: ${uri}`, options);
+    this.name = "MigrationReceiptCollisionError";
+  }
+}
 
 function record(value: unknown, description: string): JsonRecord {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -75,8 +88,11 @@ function assertBucketConfiguration(bucket: JsonRecord): void {
   if (valueAt(bucket, "iamConfiguration", "publicAccessPrevention") !== "enforced") {
     throw new Error("migration receipt bucket must enforce public access prevention");
   }
-  if (valueAt(bucket, "versioning", "enabled") !== true) {
-    throw new Error("migration receipt bucket must enable versioning");
+  if (bucket.versioning !== undefined) {
+    const versioning = record(bucket.versioning, "migration receipt bucket versioning");
+    if (versioning.enabled !== false) {
+      throw new Error("migration receipt bucket versioning must be disabled");
+    }
   }
   if (numberValue(valueAt(bucket, "retentionPolicy", "retentionPeriod")) !== RETENTION_SECONDS) {
     throw new Error("migration receipt bucket must retain objects for exactly 400 days");
@@ -87,23 +103,65 @@ function assertBucketConfiguration(bucket: JsonRecord): void {
   if (numberValue(valueAt(bucket, "softDeletePolicy", "retentionDurationSeconds")) !== 0) {
     throw new Error("migration receipt bucket soft delete must be disabled");
   }
+  const lifecycle = record(bucket.lifecycle, "migration receipt bucket lifecycle");
+  const rules = lifecycle.rule;
+  if (!Array.isArray(rules) || rules.length !== 1) {
+    throw new Error("migration receipt bucket must have exactly one lifecycle rule");
+  }
+  const rule = record(rules[0], "migration receipt bucket lifecycle rule");
+  const action = record(rule.action, "migration receipt bucket lifecycle action");
+  const condition = record(rule.condition, "migration receipt bucket lifecycle condition");
+  if (action.type !== "Delete" || numberValue(condition.age) !== 400) {
+    throw new Error("migration receipt bucket lifecycle must delete at age 400 days");
+  }
 }
 
 function assertBucketIamBoundary(policy: JsonRecord): void {
   const bindings = policy.bindings;
   if (!Array.isArray(bindings)) throw new Error("migration receipt bucket IAM policy has no bindings");
-  const roles = new Set<string>();
+  const expectedRoles = [
+    "roles/storage.objectCreator",
+    "roles/storage.objectViewer",
+  ];
+  const actualRoles: string[] = [];
   for (const bindingValue of bindings) {
     const binding = record(bindingValue, "migration receipt bucket IAM binding");
-    if (typeof binding.role === "string") roles.add(binding.role);
+    if (typeof binding.role !== "string") {
+      throw new Error("migration receipt bucket IAM binding has no role");
+    }
+    actualRoles.push(binding.role);
     const members = binding.members;
-    if (!Array.isArray(members)) continue;
-    if (members.some((member) => member === "allUsers" || member === "allAuthenticatedUsers")) {
-      throw new Error("migration receipt bucket IAM must not grant public access");
+    if (
+      !Array.isArray(members) ||
+      members.some((member) => typeof member !== "string") ||
+      JSON.stringify([...members].sort()) !==
+        JSON.stringify([...MIGRATION_RECEIPT_OPERATOR_MEMBERS].sort())
+    ) {
+      throw new Error(`migration receipt bucket IAM ${binding.role} must have exact members`);
     }
   }
-  for (const role of ["roles/storage.objectCreator", "roles/storage.objectViewer"]) {
-    if (!roles.has(role)) throw new Error(`migration receipt bucket IAM lacks ${role}`);
+  if (
+    JSON.stringify(actualRoles.sort()) !== JSON.stringify(expectedRoles.sort())
+  ) {
+    throw new Error("migration receipt bucket IAM must have exact roles");
+  }
+}
+
+function assertTerraformStateBucket(bucket: JsonRecord): void {
+  if (valueAt(bucket, "iamConfiguration", "uniformBucketLevelAccess", "enabled") !== true) {
+    throw new Error("Terraform state bucket must enforce uniform bucket-level access");
+  }
+  if (valueAt(bucket, "iamConfiguration", "publicAccessPrevention") !== "enforced") {
+    throw new Error("Terraform state bucket must enforce public access prevention");
+  }
+  if (valueAt(bucket, "versioning", "enabled") !== true) {
+    throw new Error("Terraform state bucket must enable versioning");
+  }
+  if (numberValue(valueAt(bucket, "softDeletePolicy", "retentionDurationSeconds")) !== 604800) {
+    throw new Error("Terraform state bucket must retain soft-deleted objects for seven days");
+  }
+  if (bucket.retentionPolicy !== undefined && bucket.retentionPolicy !== null) {
+    throw new Error("Terraform state bucket must have no retention policy");
   }
 }
 
@@ -116,6 +174,10 @@ export function assertMigrationReceiptBucket(run: CommandRunner = runMigrationRe
     "storage", "buckets", "get-iam-policy", MIGRATION_RECEIPT_BUCKET, "--format=json",
   ]), "migration receipt bucket IAM policy");
   assertBucketIamBoundary(policy);
+  const terraformState = parseJson(run("gcloud", [
+    "storage", "buckets", "describe", TERRAFORM_STATE_BUCKET, "--format=json",
+  ]), "Terraform state bucket describe");
+  assertTerraformStateBucket(terraformState);
 }
 
 function generationFor(uri: string, run: CommandRunner): string {
@@ -137,7 +199,18 @@ export function writeImmutableMigrationReceipt(
   const receiptFile = path.join(directory, "receipt.json");
   try {
     fs.writeFileSync(receiptFile, `${JSON.stringify(receipt)}\n`, { mode: 0o600 });
-    run("gcloud", ["storage", "cp", "--if-generation-match=0", receiptFile, uri]);
+    try {
+      run("gcloud", ["storage", "cp", "--if-generation-match=0", receiptFile, uri]);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        /(?:\b412\b|conditionnotmet|pre-?condition).*(?:ifgenerationmatch|generation|specified did not hold)|ifgenerationmatch.*(?:\b412\b|conditionnotmet|pre-?condition)/i
+          .test(error.message)
+      ) {
+        throw new MigrationReceiptCollisionError(uri, { cause: error });
+      }
+      throw error;
+    }
     return { uri, generation: generationFor(uri, run) };
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
