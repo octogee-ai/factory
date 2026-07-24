@@ -4,6 +4,7 @@ const h = vi.hoisted(() => ({
   docs: new Map<string, Record<string, unknown>>(),
   sets: [] as Array<{ path: string; data: Record<string, unknown>; options?: Record<string, unknown> }>,
   mmApi: vi.fn(),
+  addActivityPairMember: vi.fn(),
   createProjectAgentBot: vi.fn(),
   retireProjectAgentBot: vi.fn(),
   logger: { error: vi.fn(), info: vi.fn() },
@@ -44,6 +45,10 @@ vi.mock("../lib/mattermost.js", () => ({
   mmApi: (...args: unknown[]) => h.mmApi(...args),
 }));
 
+vi.mock("../lib/activityPair.js", () => ({
+  addActivityPairMember: (...args: unknown[]) => h.addActivityPairMember(...args),
+}));
+
 vi.mock("@octogee/core/mattermost/project-agent", () => ({
   createProjectAgentBot: (...args: unknown[]) => h.createProjectAgentBot(...args),
   retireProjectAgentBot: (...args: unknown[]) => h.retireProjectAgentBot(...args),
@@ -77,6 +82,7 @@ beforeEach(() => {
   h.docs.clear();
   h.sets.length = 0;
   h.mmApi.mockReset();
+  h.addActivityPairMember.mockReset().mockResolvedValue(undefined);
   h.createProjectAgentBot.mockReset().mockResolvedValue({ mmUserId: "bot-1", token: "pat-1" });
   h.retireProjectAgentBot.mockReset().mockResolvedValue(undefined);
   h.logger.error.mockReset();
@@ -163,7 +169,7 @@ describe("setProjectAgentEnabled — enable", () => {
     });
   });
 
-  it("writes the flag, mints the bot into the project's channels, and reports active", async () => {
+  it("writes the flag, mints the bot, converges every project activity pair, and reports active", async () => {
     seedProject();
 
     const result = await setProjectAgentEnabled(actor(), "orbit", true);
@@ -181,6 +187,10 @@ describe("setProjectAgentEnabled — enable", () => {
       displayName: "BenderEcho",
       projectChannelIds: ["po-1"],
     });
+    expect(h.addActivityPairMember).toHaveBeenCalledWith(
+      `${PROJECT_PATH}/channels/general`,
+      "bot-1",
+    );
     expect(result).toEqual({
       status: 200,
       body: { success: true, enabled: true, provisioned: true },
@@ -194,6 +204,20 @@ describe("setProjectAgentEnabled — enable", () => {
     const result = await setProjectAgentEnabled(actor(), "orbit", true);
 
     expect(h.sets.some((s) => s.path === PROJECT_PATH)).toBe(true);
+    expect(result).toEqual({
+      status: 502,
+      body: { error: "Agent enabled, but provisioning failed - toggle again to retry" },
+    });
+    expect(h.logger.error).toHaveBeenCalled();
+  });
+
+  it("keeps the flag but reports 502 when activity-pair membership cannot converge", async () => {
+    seedProject();
+    h.addActivityPairMember.mockRejectedValue(new Error("activity pair mismatch"));
+
+    const result = await setProjectAgentEnabled(actor(), "orbit", true);
+
+    expect(h.createProjectAgentBot).toHaveBeenCalled();
     expect(result).toEqual({
       status: 502,
       body: { error: "Agent enabled, but provisioning failed - toggle again to retry" },

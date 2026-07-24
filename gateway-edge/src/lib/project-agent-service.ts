@@ -9,6 +9,7 @@ import {
 } from "@octogee/core/mattermost/project-agent";
 import { isValidProjectId } from "@octogee/shared/types/identity";
 import { isPaidTier } from "./billing-tier.js";
+import { addActivityPairMember } from "./activityPair.js";
 
 export interface ProjectAgentActor {
   uid: string;
@@ -34,17 +35,31 @@ const coreDeps = (): ProjectAgentDeps => ({
   log: (msg: string) => logger.info(msg),
 });
 
-async function projectChannelIds(workspaceId: string, project: string): Promise<string[]> {
+interface ProjectChannelBinding {
+  channelId: string;
+  docPath: string;
+}
+
+async function projectChannelBindings(
+  workspaceId: string,
+  project: string,
+): Promise<ProjectChannelBinding[]> {
+  const projectPath = `workspaces/${workspaceId}/projects/${project}`;
   const snap = await db
-    .doc(`workspaces/${workspaceId}/projects/${project}`)
+    .doc(projectPath)
     .collection("channels")
     .get();
-  const ids: string[] = [];
+  const bindings: ProjectChannelBinding[] = [];
   for (const doc of snap.docs) {
     const channelId = (doc.data()?.mattermost as { channelId?: unknown } | undefined)?.channelId;
-    if (typeof channelId === "string" && channelId) ids.push(channelId);
+    if (typeof channelId === "string" && channelId) {
+      bindings.push({
+        channelId,
+        docPath: `${projectPath}/channels/${doc.id}`,
+      });
+    }
   }
-  return ids;
+  return bindings;
 }
 
 async function coachDisplayName(uid: string): Promise<string> {
@@ -108,14 +123,18 @@ async function enableProjectAgent(
     return bad(502, "Agent enabled, but provisioning failed - toggle again to retry");
   }
   try {
-    await createProjectAgentBot(coreDeps(), {
+    const channelBindings = await projectChannelBindings(workspaceId, project);
+    const minted = await createProjectAgentBot(coreDeps(), {
       uid: actor.uid,
       username: workspaceId,
       project,
       teamId,
       displayName: await coachDisplayName(actor.uid),
-      projectChannelIds: await projectChannelIds(workspaceId, project),
+      projectChannelIds: channelBindings.map((binding) => binding.channelId),
     });
+    for (const binding of channelBindings) {
+      await addActivityPairMember(binding.docPath, minted.mmUserId);
+    }
   } catch (err) {
     logger.error(`[project-agent] mint failed for ${workspaceId}/${project}:`, { err });
     return bad(502, "Agent enabled, but provisioning failed - toggle again to retry");
