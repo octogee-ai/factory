@@ -15,6 +15,7 @@ function executable(file: string, source: string): void {
 type TeardownOptions = {
   databaseFailure?: "inspect" | "delete" | "create" | "verify-command" | "verify-value";
   publicIp?: boolean;
+  pvcFailure?: "inspect" | "delete" | "finalize";
   secretFailure?: "absent" | "error";
 };
 
@@ -22,8 +23,10 @@ function runPrivateWestTeardown(options: TeardownOptions = {}) {
   const temp = mkdtempSync(path.join(tmpdir(), "octogee-teardown-private-west-"));
   const log = path.join(temp, "calls.log");
   const describeCount = path.join(temp, "describe-count");
+  const deletedPvcs = path.join(temp, "deleted-pvcs");
   writeFileSync(log, "");
   writeFileSync(describeCount, "0");
+  writeFileSync(deletedPvcs, "");
 
   executable(path.join(temp, "gcloud"), `#!/usr/bin/env bash
 set -euo pipefail
@@ -75,10 +78,36 @@ esac
 
   executable(path.join(temp, "kubectl"), `#!/usr/bin/env bash
 set -euo pipefail
+printf 'kubectl %s\\n' "$*" >> "$FAKE_CALL_LOG"
 case "$1 $2" in
   "config use-context") ;;
   "config current-context") printf 'gke_octogee_us-west1_octogee-gateway\\n' ;;
-  "get pvc") exit 1 ;;
+  "get pvc")
+    pvc="$3"
+    if [[ "$FAKE_PVC_FAILURE" == "inspect" && "$pvc" == "gitea-shared-storage" ]]; then
+      printf 'persistentvolumeclaims is forbidden\\n' >&2
+      exit 2
+    fi
+    if grep -Fxq "finalized:$pvc" "$FAKE_DELETED_PVCS"; then
+      exit 0
+    fi
+    printf 'persistentvolumeclaim/%s\\n' "$pvc"
+    ;;
+  "delete pvc")
+    pvc="$3"
+    if [[ "$FAKE_PVC_FAILURE" == "delete" && "$pvc" == "gitea-shared-storage" ]]; then
+      printf 'delete forbidden\\n' >&2
+      exit 1
+    fi
+    printf 'deleted:%s\\n' "$pvc" >> "$FAKE_DELETED_PVCS"
+    ;;
+  "wait --for=delete")
+    if [[ "$FAKE_PVC_FAILURE" == "finalize" && "$3" == "pvc/mattermost-data" ]]; then
+      printf 'timed out waiting for PVC deletion\\n' >&2
+      exit 1
+    fi
+    printf 'finalized:%s\\n' "\${3#pvc/}" >> "$FAKE_DELETED_PVCS"
+    ;;
   *) ;;
 esac
 `);
@@ -101,7 +130,9 @@ case "$1" in status) exit 1 ;; list) ;; *) ;; esac
       FAKE_CALL_LOG: log,
       FAKE_DATABASE_FAILURE: options.databaseFailure ?? "",
       FAKE_DESCRIBE_COUNT: describeCount,
+      FAKE_DELETED_PVCS: deletedPvcs,
       FAKE_PUBLIC_IP: options.publicIp ? "true" : "false",
+      FAKE_PVC_FAILURE: options.pvcFailure ?? "",
       FAKE_SECRET_FAILURE: options.secretFailure ?? "",
       SA_KEY_PATH: path.join(temp, "missing-service-account.json"),
     },
@@ -115,6 +146,17 @@ case "$1" in status) exit 1 ;; list) ;; *) ;; esac
 }
 
 describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => {
+  it("describes full teardown as deleting its durable PVCs", () => {
+    const result = spawnSync("bash", [teardown, "--help"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("deletes durable PVCs");
+    expect(result.stdout).not.toContain("Still preserves PVCs");
+  });
+
   it("resets test-west through the Cloud SQL Admin API without a local proxy", () => {
     const result = runPrivateWestTeardown();
 
@@ -126,6 +168,21 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
     expect(result.calls).toContainEqual(expect.stringContaining("sql databases create gitea_test"));
     expect(result.calls).toContainEqual(expect.stringContaining("sql databases describe gitea_test"));
     expect(result.stdout).toContain("Cloud SQL API confirmed both recreated databases");
+    expect(result.calls).toContainEqual(expect.stringContaining("kubectl wait --for=delete pvc/gitea-shared-storage"));
+    expect(result.calls).toContainEqual(expect.stringContaining("kubectl wait --for=delete pvc/mattermost-data"));
+    expect(result.stdout).toContain("Durable PVCs confirmed absent");
+  });
+
+  it.each([
+    ["inspect", "could not inspect PVC gitea-shared-storage"],
+    ["delete", "delete request failed for PVC gitea-shared-storage"],
+    ["finalize", "PVC mattermost-data did not finalize"],
+  ] as const)("fails closed when durable PVC %s fails", (pvcFailure, message) => {
+    const result = runPrivateWestTeardown({ pvcFailure });
+
+    expect(result.status).toBe(1);
+    expect(`${result.stderr}\n${result.stdout}`).toContain(message);
+    expect(result.calls.some((call) => call.startsWith("sql databases"))).toBe(false);
   });
 
   it.each([
