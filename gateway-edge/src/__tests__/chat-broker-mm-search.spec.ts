@@ -128,6 +128,18 @@ describe("mmSearch", () => {
     expect(c.calls[2].body.per_page).toBe(10);
   });
 
+  it("supports a bounded candidate scan for post-authorization filtering", async () => {
+    const c = makeClient({
+      [`POST /api/v4/teams/${TEAM}/posts/search`]: { posts: {}, order: [] },
+    });
+    await mmSearch(c, "PAT", TEAM, {
+      query: "x",
+      limit: 5,
+      candidateLimit: 999,
+    });
+    expect(c.calls[0].body.per_page).toBe(100);
+  });
+
   it("returns empty bundle when MM returns null/garbage", async () => {
     const c = makeClient({
       [`POST /api/v4/teams/${TEAM}/posts/search`]: null,

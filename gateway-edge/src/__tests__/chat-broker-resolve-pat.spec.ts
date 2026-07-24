@@ -7,9 +7,37 @@ import {
 type Docs = Record<string, Record<string, unknown> | undefined>;
 
 function dbOf(docs: Docs) {
+  function fieldValue(data: Record<string, unknown> | undefined, field: string): unknown {
+    return field.split(".").reduce<unknown>(
+      (value, part) =>
+        value && typeof value === "object"
+          ? (value as Record<string, unknown>)[part]
+          : undefined,
+      data,
+    );
+  }
+
   return {
     doc: (path: string) => ({
-      get: async () => ({ data: () => docs[path] }),
+      get: async () => ({
+        exists: docs[path] !== undefined,
+        data: () => docs[path],
+      }),
+    }),
+    collectionGroup: (name: string) => ({
+      where: (field: string, _op: "==", expected: unknown) => ({
+        get: async () => ({
+          docs: Object.entries(docs)
+            .filter(([path, data]) => {
+              const parts = path.split("/");
+              return parts.at(-2) === name && fieldValue(data, field) === expected;
+            })
+            .map(([path, data]) => ({
+              ref: { path },
+              data: () => data,
+            })),
+        }),
+      }),
     }),
   };
 }
@@ -18,11 +46,38 @@ const UID = "uid-1";
 const SLUG = "alice";
 
 describe("resolveChatIdentity", () => {
-  it("workspace coach agent reads with its own PAT", async () => {
+  it("keeps the Builder context but admits only canonical non-admin channels", async () => {
+    const generalId = "g".repeat(26);
+    const adminId = "a".repeat(26);
+    const joinedProjectId = "j".repeat(26);
+    const foreignProjectId = "f".repeat(26);
     const db = dbOf({
+      [`users/${UID}/secrets/mattermost`]: { personalToken: "builder-pat" },
       [`users/${UID}/secrets/coachMattermost`]: {
         personalToken: "coach-pat",
         coachMmUserId: "mm-coach-bot",
+      },
+      [`workspaces/${SLUG}/channels/general`]: {
+        mattermost: { channelId: generalId },
+      },
+      [`workspaces/${SLUG}/channels/admin`]: {
+        mattermost: { channelId: adminId },
+      },
+      "workspaces/bob/projects/roadmap": {
+        ownerUid: "uid-bob",
+      },
+      [`workspaces/bob/projects/roadmap/members/${UID}`]: {
+        id: UID,
+        role: "member",
+      },
+      "workspaces/bob/projects/roadmap/channels/general": {
+        mattermost: { channelId: joinedProjectId },
+      },
+      "workspaces/carol/projects/private": {
+        ownerUid: "uid-carol",
+      },
+      "workspaces/carol/projects/private/channels/general": {
+        mattermost: { channelId: foreignProjectId },
       },
     });
     const identity = await resolveChatIdentity(db, {
@@ -30,12 +85,17 @@ describe("resolveChatIdentity", () => {
       slug: SLUG,
       agentId: "octogee-alice-coach",
     });
-    expect(identity).toEqual({
+    expect(identity).toMatchObject({
       lane: "workspace",
-      pat: "coach-pat",
+      pat: "builder-pat",
       coachMmUserId: "mm-coach-bot",
       unread: { pat: "coach-pat", mmUserId: "mm-coach-bot" },
     });
+    expect(await identity.canReadChannel(generalId)).toBe(true);
+    expect(await identity.canReadChannel(adminId)).toBe(false);
+    expect(await identity.canReadChannel(joinedProjectId)).toBe(true);
+    expect(await identity.canReadChannel(foreignProjectId)).toBe(false);
+    expect(await identity.canReadChannel("d".repeat(26))).toBe(false);
   });
 
   it("lets only the workspace coach retrieve archived project history before the deadline", async () => {
@@ -131,6 +191,18 @@ describe("resolveChatIdentity", () => {
     await expect(
       resolveChatIdentity(dbOf({}), { uid: UID, slug: SLUG, agentId: "not-an-agent" }),
     ).rejects.toMatchObject({ code: "invalid-agent" });
+  });
+
+  it("fails loud when the Builder PAT is missing", async () => {
+    const db = dbOf({
+      [`users/${UID}/secrets/coachMattermost`]: {
+        personalToken: "coach-pat",
+        coachMmUserId: "mm-coach-bot",
+      },
+    });
+    await expect(
+      resolveChatIdentity(db, { uid: UID, slug: SLUG, agentId: "octogee-alice-coach" }),
+    ).rejects.toMatchObject({ code: "no-builder-pat" });
   });
 
   it("fails loud when the project agent secret is missing — a disabled agent has NO read capability", async () => {
