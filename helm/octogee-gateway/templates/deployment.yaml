@@ -102,13 +102,9 @@ spec:
             - -c
             - |
               set -eu
-              # First-boot seed: copy shell defaults (.bashrc, .profile,
-              # .bash_logout) into the data volume the first time home is
-              # empty. `cp -an` is archive + no-clobber → idempotent, so
-              # subsequent boots leave existing local files alone. Durable
-              # state must come from the substrate; this volume is a cache
-              # unless a gateway explicitly opts into legacy persistence.
-              cp -an /etc/skel/. /home/node/
+              # -rn, not -a/-p: fsGroup owns /home/node, and preserving
+              # source owner/timestamps needs FOWNER, which restricted PSA denies.
+              cp -rn /etc/skel/. /home/node/
               mkdir -p /home/node/.npm-cache
           env:
             # OPENCLAW_GATEWAY_TOKEN is platform-owned: Cowboy creates the
