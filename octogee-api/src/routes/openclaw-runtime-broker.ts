@@ -176,6 +176,7 @@ interface BoundChannelPath {
   ownerPath: string;
   channelName: string;
   lane: "workspace" | "project";
+  projectSlug?: string;
 }
 
 type ChannelLookupDocument = {
@@ -229,6 +230,7 @@ function projectChannelBinding(parts: string[]): BoundChannelPath | null {
     ownerPath: `workspaces/${parts[1]}/projects/${parts[3]}`,
     channelName,
     lane: "project",
+    projectSlug: parts[3],
   };
 }
 
@@ -388,6 +390,91 @@ async function resolveChannelPair(
   const activityChannelId = readPath(data, "mattermost.activityChannelId");
   if (typeof activityChannelId !== "string" || !activityChannelId) return null;
   return { primaryChannelId, activityChannelId, channelDocPath: channelDocPath! };
+}
+
+type SessionContextLookup = { purpose: string } | null | "forbidden";
+
+type SessionChannelLookup =
+  | {
+      binding: BoundChannelPath;
+      data: Record<string, unknown>;
+    }
+  | null
+  | "forbidden";
+
+async function resolveSessionChannel(
+  db: Firestore,
+  channelId: string,
+): Promise<SessionChannelLookup> {
+  const snap = await db
+    .collectionGroup("channels")
+    .where("mattermost.channelId", "==", channelId)
+    .limit(2)
+    .get();
+  if (snap.docs.length > 1) return "forbidden";
+  const doc = snap.docs[0];
+  if (!doc) return null;
+  const binding = boundChannelPath(extractRefPath((doc as { ref?: unknown }).ref));
+  if (!binding) return "forbidden";
+  return { binding, data: doc.data() ?? {} };
+}
+
+function agentCanReadSession(
+  agentId: string,
+  workspaceSlug: string,
+  binding: BoundChannelPath,
+): boolean {
+  if (binding.workspaceSlug !== workspaceSlug) return false;
+  const parsed = parseAgentId(agentId);
+  return (
+    parsed.kind !== "project" ||
+    (binding.lane === "project" && binding.projectSlug === parsed.project)
+  );
+}
+
+async function sessionOwnerIsActive(
+  db: Firestore,
+  binding: BoundChannelPath,
+): Promise<boolean> {
+  if (binding.lane !== "project") return true;
+  const project = await db.doc(binding.ownerPath).get();
+  return (
+    project.exists &&
+    readPath(project.data() ?? {}, "commercialLifecycle.status") !== "archived"
+  );
+}
+
+function readableSessionPurpose(
+  data: Record<string, unknown>,
+): { purpose: string } | null {
+  if (
+    data.kind !== "session" ||
+    data.archivedAt ||
+    readPath(data, "mattermost.activityPair.desired") === "archived"
+  ) {
+    return null;
+  }
+  const purpose = typeof data.purpose === "string" ? data.purpose : "";
+  return purpose.length > 0 ? { purpose } : null;
+}
+
+async function resolveSessionContext(
+  db: Firestore,
+  gatewayId: string,
+  agentId: string,
+  channelId: string,
+): Promise<SessionContextLookup> {
+  if (!agentId || !channelId) return null;
+  const identity = await resolveAgentIdentity(db, gatewayId, agentId);
+  if (identity === "forbidden") return identity;
+  if (!identity) return null;
+
+  const channel = await resolveSessionChannel(db, channelId);
+  if (channel === "forbidden") return channel;
+  if (!channel) return null;
+  if (!agentCanReadSession(agentId, identity.workspaceSlug, channel.binding)) return "forbidden";
+  if (!(await sessionOwnerIsActive(db, channel.binding))) return null;
+  return readableSessionPurpose(channel.data);
 }
 
 function runLivePathIdentity(path: string): {
@@ -887,6 +974,28 @@ function mountUserAndWsRoutes(router: Router, db: Firestore): void {
   });
 }
 
+function mountSessionContextRoute(router: Router, db: Firestore): void {
+  router.post("/activity/session-context", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const context = await resolveSessionContext(
+      db,
+      bound.gatewayId,
+      stringBody(req, "agentId"),
+      stringBody(req, "channelId"),
+    );
+    if (context === "forbidden") {
+      forbidden(res);
+      return;
+    }
+    if (!context) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    res.json(context);
+  });
+}
+
 function mountActivityRoutes(router: Router, db: Firestore): void {
   router.post("/activity/agent-identity", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -917,6 +1026,8 @@ function mountActivityRoutes(router: Router, db: Firestore): void {
     }
     res.json({ pair });
   });
+
+  mountSessionContextRoute(router, db);
 
   router.post("/activity/run-live", async (req, res) => {
     const bound = boundGateway(req, res);

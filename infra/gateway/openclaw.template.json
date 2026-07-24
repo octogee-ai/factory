@@ -227,6 +227,12 @@
       },
       "octogee-chat-tools": {
         "enabled": true,
+        "hooks": {
+          "allowPromptInjection": true,
+          "timeouts": {
+            "before_prompt_build": 3000
+          }
+        },
         "config": {
           "siteUrl": "${MM_SITE_URL}",
           "brokerUrl": "${FLEET_BROKER_URL}",

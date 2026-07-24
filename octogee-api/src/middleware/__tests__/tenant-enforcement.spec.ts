@@ -114,6 +114,7 @@ function app(opts: {
   a.post("/internal/openclaw-control/redeem", enforcement, handler);
   a.post("/internal/openclaw-control/authorize", enforcement, handler);
   a.post("/internal/openclaw-control/audit", enforcement, handler);
+  a.post("/internal/openclaw/activity/session-context", enforcement, handler);
   a.post("/internal/agent-support/ask", enforcement, handler);
   a.post("/internal/openclaw/previews/authorize", enforcement, handler);
   a.post("/internal/agent-projects/create", enforcement, handler);
@@ -431,6 +432,34 @@ describe("tenant enforcement middleware", () => {
 
     expect(ownedGateway.status).toBe(200);
     expect(foreignGateway.status).toBe(403);
+  });
+
+  it("passes session context to route-level agent and channel authorization", async () => {
+    const ownedGateway = await request(app({ boundTenant: BENDER }))
+      .post("/internal/openclaw/activity/session-context")
+      .send({
+        agentId: "octogee-alice-coach",
+        channelId: "mattermost-task-channel",
+      });
+    const foreignGateway = await request(app({ boundTenant: BENDER }))
+      .post("/internal/openclaw/activity/session-context")
+      .send({
+        gatewayId: "other",
+        agentId: "octogee-alice-coach",
+        channelId: "mattermost-task-channel",
+      });
+    const platform = await request(
+      app({ boundTenant: { kind: "platform", actor: "cron" } }),
+    )
+      .post("/internal/openclaw/activity/session-context")
+      .send({
+        agentId: "octogee-alice-coach",
+        channelId: "mattermost-task-channel",
+      });
+
+    expect(ownedGateway.status).toBe(200);
+    expect(foreignGateway.status).toBe(403);
+    expect(platform.status).toBe(403);
   });
 
   it("delegates exact OpenClaw Control routes only for the bound gateway tenant", async () => {

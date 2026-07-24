@@ -147,6 +147,7 @@ async function createSessionChannelImpl(
     id: normalized.name,
     kind: "session",
     name: normalized.name,
+    purpose: normalized.purpose,
     mattermost: { channelId },
     createdBy: actor.uid,
     createdAt: FieldValue.serverTimestamp(),
@@ -397,16 +398,14 @@ async function renameSessionChannelImpl(
   if (!actor.workspaceId) return bad(422, "Workspace not provisioned");
   const scope = laneScope(actor.workspaceId, project, name);
 
+  if (patch.purpose !== undefined) {
+    return bad(400, "Task purpose cannot be changed after creation");
+  }
   const displayName = stringValue(patch.displayName).trim();
-  const purpose = stringValue(patch.purpose).trim();
   const hasDisplayName = patch.displayName !== undefined && displayName.length > 0;
-  const hasPurpose = patch.purpose !== undefined;
-  if (!hasDisplayName && !hasPurpose) return bad(400, "Nothing to update");
+  if (!hasDisplayName) return bad(400, "Nothing to update");
   if (displayName.length > MM_DISPLAY_NAME_MAX_LENGTH) {
     return bad(400, `Channel display name must be at most ${MM_DISPLAY_NAME_MAX_LENGTH} characters`);
-  }
-  if (purpose.length > MM_PURPOSE_MAX_LENGTH) {
-    return bad(400, `Channel purpose must be at most ${MM_PURPOSE_MAX_LENGTH} characters`);
   }
 
   const found = await readSessionChannel(actor.workspaceId, project, name);
@@ -416,8 +415,7 @@ async function renameSessionChannelImpl(
 
   try {
     await mmApi(`/channels/${found.channelId}/patch`, "PUT", {
-      ...(hasDisplayName ? { display_name: displayName } : {}),
-      ...(hasPurpose ? { purpose } : {}),
+      display_name: displayName,
     });
   } catch (err) {
     logger.error(`[channels] MM channel patch failed for ${scope}:`, { err });

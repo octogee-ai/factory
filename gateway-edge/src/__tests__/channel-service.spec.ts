@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   docs: new Map<string, Record<string, unknown>>(),
   writes: [] as Write[],
   updates: [] as Update[],
+  setError: null as Error | null,
   getWorkspaceMmContext: vi.fn(),
   mmApi: vi.fn(),
   reconcileActivityPair: vi.fn(),
@@ -33,6 +34,7 @@ function docRef(path: string) {
       return { exists: data !== undefined, data: () => data };
     },
     set: async (data: Record<string, unknown>, options?: Record<string, unknown>) => {
+      if (h.setError) throw h.setError;
       h.writes.push({ path, data, options });
     },
     update: async (data: Record<string, unknown>) => {
@@ -121,6 +123,7 @@ beforeEach(() => {
   h.docs.clear();
   h.writes.length = 0;
   h.updates.length = 0;
+  h.setError = null;
   h.getWorkspaceMmContext.mockReset().mockResolvedValue({
     teamId: "team-1",
     userId: "owner-mm",
@@ -290,6 +293,7 @@ describe("createSessionChannel", () => {
           id: "patchroll",
           kind: "session",
           name: "patchroll",
+          purpose: "Roll OC patches",
           mattermost: { channelId: "channel-1" },
           createdBy: "owner-1",
           createdAt: "SERVER_TS",
@@ -329,6 +333,57 @@ describe("createSessionChannel", () => {
     });
     expect(h.writes[0]?.data).toEqual(
       expect.objectContaining({ mattermost: { channelId: "channel-9" } }),
+    );
+  });
+
+  it("recovers a Firestore write failure by adopting the exact Mattermost Task on retry", async () => {
+    let channelCreateAttempts = 0;
+    h.mmApi.mockReset().mockImplementation(async (path: string, method?: string) => {
+      if (method === "POST" && path === "/channels") {
+        channelCreateAttempts += 1;
+        if (channelCreateAttempts === 1) return { id: "channel-1" };
+        const err = new Error(
+          'MM API 400: {"id":"store.sql_channel.save_channel.exists.app_error"}',
+        ) as Error & { status: number };
+        err.status = 400;
+        throw err;
+      }
+      if (path === "/teams/team-1/channels/name/mira-patchroll") {
+        return { id: "channel-1" };
+      }
+      if (method === "PUT" && path === "/channels/channel-1/patch") {
+        return { id: "channel-1" };
+      }
+      if (method === "POST" && path === "/channels/channel-1/members") {
+        return { ok: true };
+      }
+      throw new Error(`unexpected Mattermost call: ${method ?? "GET"} ${path}`);
+    });
+    h.setError = new Error("Firestore unavailable");
+
+    await expect(createSessionChannel(actor(), input)).rejects.toThrow(
+      "Firestore unavailable",
+    );
+    expect(h.writes).toEqual([]);
+
+    h.setError = null;
+    await expect(createSessionChannel(actor(), input)).resolves.toEqual({
+      status: 200,
+      body: { success: true, channelId: "channel-1", name: "patchroll" },
+    });
+    expect(h.mmApi).toHaveBeenCalledWith(
+      "/channels/channel-1/patch",
+      "PUT",
+      {
+        display_name: "OpenClaw Patch Upgrade",
+        purpose: "Roll OC patches",
+      },
+    );
+    expect(h.writes[0]?.data).toEqual(
+      expect.objectContaining({
+        purpose: "Roll OC patches",
+        mattermost: { channelId: "channel-1" },
+      }),
     );
   });
 
@@ -373,6 +428,21 @@ describe("createSessionChannel", () => {
 });
 
 describe("renameSessionChannel", () => {
+  it("keeps Task purpose immutable after creation", async () => {
+    seedSessionDoc({ purpose: "Standing context" });
+
+    const result = await renameSessionChannel(actor(), "patchroll", {
+      purpose: "Different context",
+    });
+
+    expect(result).toEqual({
+      status: 400,
+      body: { error: "Task purpose cannot be changed after creation" },
+    });
+    expect(h.mmApi).not.toHaveBeenCalled();
+    expect(h.updates).toEqual([]);
+  });
+
   it("refuses when the doc's MM channel does not belong to the caller's workspace naming lane", async () => {
     // Channel docs are server-managed (rules deny client writes), but the
     // admin-token MM call must hold the boundary on its own: never act on a
@@ -414,7 +484,7 @@ describe("renameSessionChannel", () => {
     expect(h.mmApi).not.toHaveBeenCalled();
   });
 
-  it("400s when neither displayName nor purpose is provided", async () => {
+  it("400s when no display name is provided", async () => {
     seedSessionDoc();
     await expect(renameSessionChannel(actor(), "patchroll", {})).resolves.toEqual({
       status: 400,
@@ -422,20 +492,19 @@ describe("renameSessionChannel", () => {
     });
   });
 
-  it("patches the MM channel display name and purpose", async () => {
+  it("patches the MM channel display name", async () => {
     seedSessionDoc();
     mockVerifiedMmChannel({ "/channels/channel-1/patch": { id: "channel-1" } });
 
     const result = await renameSessionChannel(actor(), "patchroll", {
       displayName: "OC Patch Upgrade",
-      purpose: "Rolls",
     });
 
     expect(result).toEqual({ status: 200, body: { success: true } });
     expect(h.mmApi).toHaveBeenCalledWith("/channels/channel-1/patch", "PUT", {
       display_name: "OC Patch Upgrade",
-      purpose: "Rolls",
     });
+    expect(h.updates).toEqual([]);
   });
 
   it("surfaces a failed MM binding lookup as 502", async () => {
@@ -617,6 +686,7 @@ describe("createProjectSessionChannel", () => {
           id: "patchroll",
           kind: "session",
           name: "patchroll",
+          purpose: "Rolls",
           mattermost: { channelId: "channel-1" },
           createdBy: "owner-1",
           createdAt: "SERVER_TS",
