@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import {
   MigrationReceiptCollisionError,
   assertMigrationReceiptBucket,
+  assertMigrationReceiptWormProofAuthority,
   runMigrationReceiptCommand,
   writeImmutableMigrationReceipt,
   type CommandRunner,
@@ -124,6 +125,7 @@ export function executeMigrationReceiptWormProof(
   const now = dependencies.now ?? (() => new Date());
   const uuid = dependencies.uuid ?? randomUUID;
   assertMigrationReceiptBucket(run);
+  const proofAuthority = assertMigrationReceiptWormProofAuthority(run);
   const createdAt = now().toISOString();
   const objectName =
     `migration-receipt-worm-proof/test/${createdAt.replaceAll(/[:.]/g, "-").toLowerCase()}-${uuid()}.json`;
@@ -134,6 +136,7 @@ export function executeMigrationReceiptWormProof(
     createdAt,
     lifecycleAgeDays: 400,
     secretFree: true,
+    proofAuthority,
   }, run);
   const original = describeObject(receipt.uri, receipt.generation, run);
 

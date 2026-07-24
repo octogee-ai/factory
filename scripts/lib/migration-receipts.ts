@@ -8,9 +8,28 @@ export const TERRAFORM_STATE_BUCKET = "gs://octogee-terraform-state";
 export const MIGRATION_RECEIPT_OPERATOR_MEMBERS = [
   "user:christopher.k.eckert@squarepointconsulting.com",
 ] as const;
+export const MIGRATION_RECEIPT_WORM_PROOF_PRINCIPAL =
+  "user:christopher.k.eckert@squarepointconsulting.com";
+export const MIGRATION_RECEIPT_WORM_PROOF_AUTHORITY = {
+  principal: MIGRATION_RECEIPT_WORM_PROOF_PRINCIPAL,
+  projectId: "octogee",
+  role: "roles/owner",
+} as const;
 const RECEIPT_PREFIX = "receipts/";
 const RETENTION_SECONDS = 400 * 24 * 60 * 60;
 const OBJECT_NAME = /^[a-z0-9][a-z0-9._/-]{0,500}\.json$/;
+const JSON_FORMAT = "--format=json";
+const GCLOUD_AUTHORITY_OVERRIDE_ENVIRONMENT_VARIABLES = [
+  "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE",
+  "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE",
+  "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT",
+  "CLOUDSDK_CORE_ACCOUNT",
+] as const;
+const GCLOUD_AUTHORITY_OVERRIDE_PROPERTIES = [
+  "auth/credential_file_override",
+  "auth/access_token_file",
+  "auth/impersonate_service_account",
+] as const;
 
 type JsonRecord = Record<string, unknown>;
 export type CommandRunner = (command: string, args: readonly string[]) => string;
@@ -49,8 +68,13 @@ export function runMigrationReceiptCommand(
   command: string,
   args: readonly string[],
 ): string {
+  const env = { ...process.env };
+  for (const name of GCLOUD_AUTHORITY_OVERRIDE_ENVIRONMENT_VARIABLES) {
+    delete env[name];
+  }
   const result = spawnSync(command, args, {
     encoding: "utf8",
+    env,
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (result.error) throw result.error;
@@ -116,7 +140,7 @@ function assertBucketConfiguration(bucket: JsonRecord): void {
   }
 }
 
-function assertBucketIamBoundary(policy: JsonRecord): void {
+function assertBucketLocalIamPolicy(policy: JsonRecord): void {
   const bindings = policy.bindings;
   if (!Array.isArray(bindings)) throw new Error("migration receipt bucket IAM policy has no bindings");
   const expectedRoles = [
@@ -127,7 +151,7 @@ function assertBucketIamBoundary(policy: JsonRecord): void {
   for (const bindingValue of bindings) {
     const binding = record(bindingValue, "migration receipt bucket IAM binding");
     if (typeof binding.role !== "string") {
-      throw new Error("migration receipt bucket IAM binding has no role");
+      throw new Error("migration receipt bucket-local IAM binding has no role");
     }
     actualRoles.push(binding.role);
     const members = binding.members;
@@ -137,14 +161,49 @@ function assertBucketIamBoundary(policy: JsonRecord): void {
       JSON.stringify([...members].sort()) !==
         JSON.stringify([...MIGRATION_RECEIPT_OPERATOR_MEMBERS].sort())
     ) {
-      throw new Error(`migration receipt bucket IAM ${binding.role} must have exact members`);
+      throw new Error(`migration receipt bucket-local IAM ${binding.role} must have exact members`);
     }
   }
   if (
     JSON.stringify(actualRoles.sort()) !== JSON.stringify(expectedRoles.sort())
   ) {
-    throw new Error("migration receipt bucket IAM must have exact roles");
+    throw new Error("migration receipt bucket-local IAM must have exact roles");
   }
+}
+
+export function assertMigrationReceiptWormProofAuthority(
+  run: CommandRunner = runMigrationReceiptCommand,
+): typeof MIGRATION_RECEIPT_WORM_PROOF_AUTHORITY {
+  for (const property of GCLOUD_AUTHORITY_OVERRIDE_PROPERTIES) {
+    const value = run("gcloud", ["config", "get-value", property]).trim();
+    if (value !== "" && value !== "(unset)") {
+      throw new Error("migration receipt WORM proof refuses a configured gcloud authority override");
+    }
+  }
+  const activeAccount = run("gcloud", ["config", "get-value", "account"]).trim();
+  if (`user:${activeAccount}` !== MIGRATION_RECEIPT_WORM_PROOF_AUTHORITY.principal) {
+    throw new Error("migration receipt WORM proof requires the configured project owner proof principal");
+  }
+  const projectPolicy = parseJson(run("gcloud", [
+    "projects",
+    "get-iam-policy",
+    MIGRATION_RECEIPT_WORM_PROOF_AUTHORITY.projectId,
+    JSON_FORMAT,
+  ]), "migration receipt WORM proof project IAM policy");
+  const bindings = projectPolicy.bindings;
+  if (!Array.isArray(bindings)) {
+    throw new Error("migration receipt WORM proof project IAM policy has no bindings");
+  }
+  const hasProofAuthority = bindings.some((bindingValue) => {
+    const binding = record(bindingValue, "migration receipt WORM proof project IAM binding");
+    return binding.role === MIGRATION_RECEIPT_WORM_PROOF_AUTHORITY.role &&
+      Array.isArray(binding.members) &&
+      binding.members.includes(MIGRATION_RECEIPT_WORM_PROOF_AUTHORITY.principal);
+  });
+  if (!hasProofAuthority) {
+    throw new Error("migration receipt WORM proof requires the configured project owner proof principal");
+  }
+  return MIGRATION_RECEIPT_WORM_PROOF_AUTHORITY;
 }
 
 function assertTerraformStateBucket(bucket: JsonRecord): void {
@@ -167,22 +226,22 @@ function assertTerraformStateBucket(bucket: JsonRecord): void {
 
 export function assertMigrationReceiptBucket(run: CommandRunner = runMigrationReceiptCommand): void {
   const bucket = parseJson(run("gcloud", [
-    "storage", "buckets", "describe", MIGRATION_RECEIPT_BUCKET, "--format=json", "--raw",
+    "storage", "buckets", "describe", MIGRATION_RECEIPT_BUCKET, JSON_FORMAT, "--raw",
   ]), "migration receipt bucket describe");
   assertBucketConfiguration(bucket);
   const policy = parseJson(run("gcloud", [
-    "storage", "buckets", "get-iam-policy", MIGRATION_RECEIPT_BUCKET, "--format=json",
+    "storage", "buckets", "get-iam-policy", MIGRATION_RECEIPT_BUCKET, JSON_FORMAT,
   ]), "migration receipt bucket IAM policy");
-  assertBucketIamBoundary(policy);
+  assertBucketLocalIamPolicy(policy);
   const terraformState = parseJson(run("gcloud", [
-    "storage", "buckets", "describe", TERRAFORM_STATE_BUCKET, "--format=json", "--raw",
+    "storage", "buckets", "describe", TERRAFORM_STATE_BUCKET, JSON_FORMAT, "--raw",
   ]), "Terraform state bucket describe");
   assertTerraformStateBucket(terraformState);
 }
 
 function generationFor(uri: string, run: CommandRunner): string {
   const metadata = parseJson(run("gcloud", [
-    "storage", "objects", "describe", uri, "--format=json", "--raw",
+    "storage", "objects", "describe", uri, JSON_FORMAT, "--raw",
   ]), "migration receipt metadata");
   const generation = metadata.generation;
   if (typeof generation !== "string" || !/^\d+$/.test(generation) || generation === "0") {

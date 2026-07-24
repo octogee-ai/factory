@@ -2,11 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   MIGRATION_RECEIPT_OPERATOR_MEMBERS,
   MIGRATION_RECEIPT_BUCKET,
+  MIGRATION_RECEIPT_WORM_PROOF_PRINCIPAL,
   MigrationReceiptCollisionError,
   TERRAFORM_STATE_BUCKET,
   assertMigrationReceiptBucket,
+  assertMigrationReceiptWormProofAuthority,
   immutableMigrationReceiptUri,
   readImmutableMigrationReceipt,
+  runMigrationReceiptCommand,
   writeImmutableMigrationReceipt,
 } from "../lib/migration-receipts.js";
 
@@ -119,6 +122,94 @@ describe("immutable migration receipts", () => {
       receiptPolicy,
       { ...terraformStateBucket, retentionPolicy: { retentionPeriod: "1" } },
     ))).toThrow(/Terraform state.*retention policy/i);
+  });
+
+  it("separates project-owner WORM proof authority from bucket-local receipt IAM", () => {
+    const run = vi.fn((_command: string, args: readonly string[]) => {
+      if (args.includes("get-value")) {
+        return args.at(-1) === "account"
+          ? "christopher.k.eckert@squarepointconsulting.com\n"
+          : "(unset)\n";
+      }
+      return JSON.stringify({
+        bindings: [{
+          role: "roles/owner",
+          members: [MIGRATION_RECEIPT_WORM_PROOF_PRINCIPAL],
+        }],
+      });
+    });
+
+    expect(() => assertMigrationReceiptWormProofAuthority(run)).not.toThrow();
+    expect(run).toHaveBeenCalledWith("gcloud", [
+      "projects", "get-iam-policy", "octogee", "--format=json",
+    ]);
+
+    const leastPrivilege = vi.fn((_command: string, args: readonly string[]) => {
+      if (args.includes("get-value")) {
+        return args.at(-1) === "account"
+          ? "christopher.k.eckert@squarepointconsulting.com\n"
+          : "(unset)\n";
+      }
+      return JSON.stringify({
+        bindings: [{
+          role: "roles/storage.objectCreator",
+          members: MIGRATION_RECEIPT_OPERATOR_MEMBERS,
+        }],
+      });
+    });
+    expect(() => assertMigrationReceiptWormProofAuthority(leastPrivilege))
+      .toThrow(/project owner proof principal/i);
+
+    const impersonated = vi.fn((_command: string, args: readonly string[]) => {
+      if (args.includes("get-value")) {
+        if (args.at(-1) === "account") {
+          return "christopher.k.eckert@squarepointconsulting.com\n";
+        }
+        return args.at(-1) === "auth/impersonate_service_account"
+          ? "other-owner@example.test\n"
+          : "(unset)\n";
+      }
+      return JSON.stringify({
+        bindings: [{
+          role: "roles/owner",
+          members: [MIGRATION_RECEIPT_WORM_PROOF_PRINCIPAL],
+        }],
+      });
+    });
+    expect(() => assertMigrationReceiptWormProofAuthority(impersonated))
+      .toThrow(/configured gcloud authority override/i);
+  });
+
+  it("clears gcloud authority overrides while preserving the selected Cloud SDK config", () => {
+    const names = [
+      "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE",
+      "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE",
+      "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT",
+      "CLOUDSDK_CORE_ACCOUNT",
+      "CLOUDSDK_CONFIG",
+    ] as const;
+    const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    try {
+      process.env.CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE = "/hostile/credentials.json";
+      process.env.CLOUDSDK_AUTH_ACCESS_TOKEN_FILE = "/hostile/access-token";
+      process.env.CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT = "hostile@example.test";
+      process.env.CLOUDSDK_CORE_ACCOUNT = "hostile@example.test";
+      process.env.CLOUDSDK_CONFIG = "/intended/operator-config";
+
+      const output = runMigrationReceiptCommand("/usr/bin/env", []);
+
+      expect(output).toContain("CLOUDSDK_CONFIG=/intended/operator-config");
+      expect(output).not.toContain("CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE=");
+      expect(output).not.toContain("CLOUDSDK_AUTH_ACCESS_TOKEN_FILE=");
+      expect(output).not.toContain("CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT=");
+      expect(output).not.toContain("CLOUDSDK_CORE_ACCOUNT=");
+    } finally {
+      for (const name of names) {
+        const value = previous[name];
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
   });
 
   it("creates receipts once with generation zero and reports the immutable generation", () => {
