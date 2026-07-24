@@ -56,28 +56,16 @@ export function serviceAccountManifest(opts: {
     ...ownership,
     "helm.sh/resource-policy": "keep",
   };
-  const lines = [
-    "apiVersion: v1",
-    "kind: ServiceAccount",
-    "metadata:",
-    `  name: ${opts.serviceAccountName}`,
-    `  namespace: ${opts.namespace}`,
-  ];
-  const labelKeys = Object.keys(ownership);
-  if (labelKeys.length > 0) {
-    lines.push("  labels:");
-    for (const key of labelKeys.sort()) {
-      lines.push(`    ${key}: ${ownership[key]}`);
-    }
-  }
-  const keys = Object.keys(annotations);
-  if (keys.length > 0) {
-    lines.push("  annotations:");
-    for (const key of keys.sort()) {
-      lines.push(`    ${key}: ${annotations[key]}`);
-    }
-  }
-  return lines.join("\n") + "\n";
+  return `${JSON.stringify({
+    apiVersion: "v1",
+    kind: "ServiceAccount",
+    metadata: {
+      name: opts.serviceAccountName,
+      namespace: opts.namespace,
+      labels: ownership,
+      annotations,
+    },
+  })}\n`;
 }
 
 /**

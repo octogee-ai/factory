@@ -53,7 +53,11 @@ import { githubListRepos, githubRepoApi } from "../../gateway-edge/src/lib/githu
 import { readAgent } from "../../gateway-edge/src/lib/firestoreReads.js";
 import { replaceCoachTextIdentity, syncCoachIdentity } from "../../gateway-edge/src/lib/coach-identity.js";
 import { requireAuth, requireAuthenticatedUid } from "../../gateway-edge/src/middleware/auth.js";
-import { createKubernetesTokenReviewer } from "./lib/token-review.js";
+import {
+  createKubernetesTokenReviewer,
+  IN_CLUSTER_IDENTITY_CA_PATH,
+  IN_CLUSTER_IDENTITY_TOKEN_PATH,
+} from "./lib/token-review.js";
 import {
   createTenantBindingHealthState,
   startTenantBindingSelfCheck,
@@ -201,7 +205,10 @@ export function createApp(opts: CreateAppOptions = {}) {
 
   setEmailMetrics(createEmailMetrics(metricsRegistry));
   const tenantBindingMetrics = createTenantBindingMetrics(metricsRegistry);
-  const tenantBindingReviewer = opts.tenantBindingReviewer ?? createKubernetesTokenReviewer();
+  const tenantBindingReviewer = opts.tenantBindingReviewer ?? createKubernetesTokenReviewer({
+    reviewerTokenPath: IN_CLUSTER_IDENTITY_TOKEN_PATH,
+    caPath: IN_CLUSTER_IDENTITY_CA_PATH,
+  });
   const tenantBindingHealth = createTenantBindingHealthState();
   const tenantBindingMiddleware = createTenantBindingMiddleware({
     reviewer: tenantBindingReviewer,
