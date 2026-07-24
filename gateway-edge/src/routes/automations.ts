@@ -72,12 +72,19 @@ function requestedGatewayId(req: Request): string | null {
   return isValidGatewayId(gatewayId) ? gatewayId : null;
 }
 
-function heartbeatFromConfig(config: unknown, agentId: string): AutomationHeartbeat | null {
+function heartbeatRecordFromConfig(
+  config: unknown,
+  agentId: string,
+): Record<string, unknown> | null {
   const agents = record(config)?.agents;
   const list = record(agents)?.list;
   if (!Array.isArray(list)) return null;
   const agent = list.find((candidate) => record(candidate)?.id === agentId);
-  const heartbeat = record(record(agent)?.heartbeat);
+  return record(record(agent)?.heartbeat);
+}
+
+function heartbeatFromConfig(config: unknown, agentId: string): AutomationHeartbeat | null {
+  const heartbeat = heartbeatRecordFromConfig(config, agentId);
   if (!heartbeat) return null;
   return sanitizeHeartbeat(Object.fromEntries(
     Object.entries(heartbeat).filter(([key]) => HEARTBEAT_FIELDS.has(key)),
@@ -474,12 +481,29 @@ async function heartbeatUpdate(
   const baseHash = nonEmptyString(body.baseHash);
   const heartbeat = sanitizeHeartbeat(body.heartbeat);
   if (!baseHash || !heartbeat) return brokerError(400, "invalid heartbeat update");
-  const patch = { agents: { list: [{ id: agentId, heartbeat }] } };
   const acquired = await acquireSystemConfigMutationLease({ openclawDir: deps.openclawDir() });
   if (!acquired.ok) {
     throw new Error("system config writer lock is busy");
   }
   try {
+    const configResult = record(await deps.invoke("config.get", {}));
+    const currentHash = nonEmptyString(configResult?.hash);
+    if (!configResult || !currentHash) throw new Error("config.get returned no config hash");
+    if (currentHash !== baseHash) return brokerError(409, "config_changed");
+    const currentHeartbeat = heartbeatRecordFromConfig(configResult.config, agentId) ?? {};
+    const removedFields = Object.fromEntries(
+      Object.keys(currentHeartbeat)
+        .filter((key) => !(key in heartbeat))
+        .map((key) => [key, null]),
+    );
+    const patch = {
+      agents: {
+        list: [{
+          id: agentId,
+          heartbeat: { ...heartbeat, ...removedFields },
+        }],
+      },
+    };
     return brokerResult(await deps.invoke("config.patch", { raw: JSON.stringify(patch), baseHash }));
   } finally {
     await acquired.lease.release();

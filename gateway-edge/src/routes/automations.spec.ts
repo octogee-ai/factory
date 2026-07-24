@@ -399,10 +399,29 @@ describe("automations locality broker", () => {
     expect(invoke).toHaveBeenCalledWith("config.get", {});
   });
 
-  it("hash-CAS patches only the caller's coach heartbeat", async () => {
-    const { app, invoke } = appForTest({
-      invoke: vi.fn(async () => ({ ok: true, hash: "next-hash" })),
+  it("hash-CAS patches only the caller's coach heartbeat and deletes stale fields", async () => {
+    const invoke = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "before-hash",
+          config: {
+            agents: {
+              list: [{
+                id: "octogee-alice-coach",
+                heartbeat: {
+                  every: "30m",
+                  model: "attacker/model",
+                  directPolicy: "allow",
+                  futureSensitiveField: "stale",
+                },
+              }],
+            },
+          },
+        };
+      }
+      return { ok: true, hash: "next-hash" };
     });
+    const { app } = appForTest({ invoke });
 
     const response = await request(app)
       .post("/api/g/gw-alice/automations/rpc")
@@ -418,7 +437,8 @@ describe("automations locality broker", () => {
       });
 
     expect(response.status).toBe(200);
-    expect(invoke).toHaveBeenCalledWith("config.patch", {
+    expect(invoke).toHaveBeenNthCalledWith(1, "config.get", {});
+    expect(invoke).toHaveBeenNthCalledWith(2, "config.patch", {
       raw: JSON.stringify({
         agents: {
           list: [{
@@ -428,12 +448,32 @@ describe("automations locality broker", () => {
               prompt: "Check the release queue.",
               target: "last",
               lightContext: true,
+              model: null,
+              directPolicy: null,
+              futureSensitiveField: null,
             },
           }],
         },
       }),
       baseHash: "before-hash",
     });
+  });
+
+  it("rejects a heartbeat update whose editor hash no longer matches the current config", async () => {
+    const { app, invoke } = appForTest();
+
+    const response = await request(app)
+      .post("/api/g/gw-alice/automations/rpc")
+      .send({
+        method: "heartbeat.update",
+        baseHash: "before-hash",
+        heartbeat: { every: "60m" },
+      });
+
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({ error: "config_changed" });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith("config.get", {});
   });
 
   it("rejects heartbeat updates while the durable config writer lock is busy", async () => {
@@ -467,7 +507,7 @@ describe("automations locality broker", () => {
       .post("/api/g/gw-alice/automations/rpc")
       .send({
         method: "heartbeat.update",
-        baseHash: "before-hash",
+        baseHash: "config-hash",
         heartbeat: { every: "60m" },
       });
 
@@ -477,9 +517,24 @@ describe("automations locality broker", () => {
 
   it("holds the durable writer lease through the awaited heartbeat patch", async () => {
     let resolvePatch: ((value: { ok: true; hash: string }) => void) | undefined;
-    const invoke = vi.fn(() => new Promise<{ ok: true; hash: string }>((resolve) => {
+    const invoke = vi.fn((method: string) => {
+      if (method === "config.get") {
+        return Promise.resolve({
+          hash: "before-hash",
+          config: {
+            agents: {
+              list: [{
+                id: "octogee-alice-coach",
+                heartbeat: { every: "30m" },
+              }],
+            },
+          },
+        });
+      }
+      return new Promise<{ ok: true; hash: string }>((resolve) => {
       resolvePatch = resolve;
-    }));
+      });
+    });
     const { app, openclawDir } = appForTest({ invoke });
 
     const pending = request(app)
@@ -490,7 +545,7 @@ describe("automations locality broker", () => {
         heartbeat: { every: "60m" },
       })
       .then((response) => response);
-    await vi.waitFor(() => expect(invoke).toHaveBeenCalled());
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith("config.patch", expect.anything()));
     await expect(acquireSystemConfigMutationLease({ openclawDir })).resolves.toEqual({
       ok: false,
       code: "writer-lock-busy",
