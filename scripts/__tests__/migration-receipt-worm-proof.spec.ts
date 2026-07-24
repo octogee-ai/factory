@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   MIGRATION_RECEIPT_BUCKET,
+  MIGRATION_RECEIPT_BUCKET_CONTROL_ROLE,
   MIGRATION_RECEIPT_OPERATOR_MEMBERS,
   MIGRATION_RECEIPT_WORM_PROOF_PRINCIPAL,
   TERRAFORM_STATE_BUCKET,
@@ -23,16 +24,9 @@ function proofHarness(mutationDenial: "retention" | "permission" = "retention") 
         ? "christopher.k.eckert@squarepointconsulting.com\n"
         : "(unset)\n";
     }
-    if (args[0] === "projects" && args[1] === "get-iam-policy") {
-      return JSON.stringify({
-        bindings: [{
-          role: "roles/owner",
-          members: [MIGRATION_RECEIPT_WORM_PROOF_PRINCIPAL],
-        }],
-      });
-    }
     if (args[0] === "storage" && args.includes("get-iam-policy")) {
       return JSON.stringify({ bindings: [
+        { role: MIGRATION_RECEIPT_BUCKET_CONTROL_ROLE, members: MIGRATION_RECEIPT_OPERATOR_MEMBERS },
         { role: "roles/storage.objectCreator", members: MIGRATION_RECEIPT_OPERATOR_MEMBERS },
         { role: "roles/storage.objectViewer", members: MIGRATION_RECEIPT_OPERATOR_MEMBERS },
       ] });
@@ -131,7 +125,7 @@ describe("migration receipt WORM proof", () => {
     });
     expect(harness.getOriginalPayload()).toContain('"secretFree":true');
     expect(harness.getOriginalPayload()).toContain(
-      `"proofAuthority":{"principal":"${MIGRATION_RECEIPT_WORM_PROOF_PRINCIPAL}","projectId":"octogee","role":"roles/owner"}`,
+      `"proofAuthority":{"principal":"${MIGRATION_RECEIPT_WORM_PROOF_PRINCIPAL}","bucket":"${MIGRATION_RECEIPT_BUCKET}","role":"${MIGRATION_RECEIPT_BUCKET_CONTROL_ROLE}"}`,
     );
     expect(harness.calls).toContainEqual([
       "storage", "cp", "--if-generation-match=42", expect.any(String), uri,
