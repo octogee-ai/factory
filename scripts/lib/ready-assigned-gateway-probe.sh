@@ -19,7 +19,7 @@ for item in sorted(json.load(sys.stdin).get("items", []), key=lambda value: valu
 
 probe_ready_assigned_gateway_gitea_broker() {
   local context="$1" namespace="$2"
-  local deployments deployment output
+  local deployments deployment broker_output
 
   if ! deployments="$(ready_gateway_deployments "$context" "$namespace")"; then
     echo "Could not list Ready gateway deployments for the Gitea broker probe" >&2
@@ -33,19 +33,19 @@ probe_ready_assigned_gateway_gitea_broker() {
 
   while IFS= read -r deployment; do
     [[ -z "$deployment" ]] && continue
-    if output="$(kubectl --context "$context" exec "deployment/$deployment" -n "$namespace" -c gateway -- \
+    if ! broker_output="$(kubectl --context "$context" exec "deployment/$deployment" -n "$namespace" -c gateway -- \
       sh -c 'node -e "const safe=!!process.env.GITEA_ADMIN_BROKER_URL&&!process.env.GIT_API_TOKEN;process.exit(safe?0:1)" && exec /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/gitea-broker-probe.ts' \
       2>&1)"; then
-      printf '%s\n' "$deployment"
-      return 0
+      if grep -Fq "has no assigned tenant for the Gitea broker probe" <<<"$broker_output"; then
+        continue
+      fi
+
+      echo "Gitea admin broker probe failed on Ready gateway $deployment: $broker_output" >&2
+      return 1
     fi
 
-    if grep -Fq "has no assigned tenant for the Gitea broker probe" <<<"$output"; then
-      continue
-    fi
-
-    echo "Gitea admin broker probe failed on Ready gateway $deployment: $output" >&2
-    return 1
+    printf '%s\n' "$deployment"
+    return 0
   done <<<"$deployments"
 
   echo "No Ready gateway has an assigned tenant for the Gitea broker probe" >&2

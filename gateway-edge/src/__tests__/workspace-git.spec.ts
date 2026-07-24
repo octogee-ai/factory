@@ -8,6 +8,7 @@ import {
   gitBranches,
   gitCheckout,
   gitCommit,
+  commitAndPushWorkspace,
   gitDiff,
   gitLog,
   gitPush,
@@ -403,6 +404,144 @@ await expect(fs.access(canary)).rejects.toThrow();
 try { git(repo, ["remote", "remove", "origin"]); } catch { /* ok */ }
       try { git(repo, ["config", "--unset", "protocol.ext.allow"]); } catch { /* ok */ }
       await fs.rm(canary, { force: true });
+    }
+  });
+});
+
+describe("commitAndPushWorkspace remote convergence", () => {
+  it("converges Canvas races, publishes a new branch, and aborts conflicts safely", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "ws-converge-"));
+    const remote = path.join(root, "remote.git");
+    const seed = path.join(root, "seed");
+    const agent = path.join(root, "agent");
+    const canvas = path.join(root, "canvas");
+    const testSsh = path.join(root, "test-ssh");
+    const originalGitSsh = process.env.GIT_SSH;
+    await fs.mkdir(seed);
+    git(root, ["init", "--bare", "--initial-branch=main", remote]);
+    git(seed, ["init", "--initial-branch=main"]);
+    git(seed, ["config", "user.email", "seed@example.com"]);
+    git(seed, ["config", "user.name", "seed"]);
+    await fs.writeFile(path.join(seed, "README.md"), "seed\n");
+    git(seed, ["add", "."]);
+    git(seed, ["commit", "-m", "seed"]);
+    git(seed, ["remote", "add", "origin", remote]);
+    git(seed, ["push", "-u", "origin", "main"]);
+    git(root, ["clone", remote, agent]);
+    git(root, ["clone", remote, canvas]);
+    await fs.writeFile(testSsh, "#!/bin/sh\nshift\nexec /bin/sh -c \"$1\"\n");
+    await fs.chmod(testSsh, 0o755);
+    git(agent, ["remote", "set-url", "origin", `ssh://git@localhost${remote}`]);
+    process.env.GIT_SSH = testSsh;
+
+    try {
+      git(canvas, ["config", "user.email", "canvas@example.com"]);
+      git(canvas, ["config", "user.name", "canvas"]);
+      await fs.writeFile(path.join(canvas, "canvas.md"), "remote canvas\n");
+      git(canvas, ["add", "."]);
+      git(canvas, ["commit", "-m", "canvas update"]);
+      git(canvas, ["push", "origin", "main"]);
+
+      await fs.writeFile(path.join(agent, "agent.md"), "local agent\n");
+      const result = await commitAndPushWorkspace(agent, {
+        message: "agent update",
+        author: { name: "Agent", email: "agent@octogee.local" },
+      });
+
+      expect(result).toEqual({
+        ok: true,
+        result: { committed: true, pushed: true, nothingToCommit: false },
+      });
+      const remoteFiles = spawnSync(
+        "git",
+        ["--git-dir", remote, "ls-tree", "--name-only", "-r", "main"],
+        { encoding: "utf8" },
+      );
+      expect(remoteFiles.status, remoteFiles.stderr).toBe(0);
+      expect(remoteFiles.stdout.trim().split("\n").sort()).toEqual([
+        "README.md",
+        "agent.md",
+        "canvas.md",
+      ]);
+
+      expect(await gitCheckout(agent, { branch: "feature/agent-edit", create: true })).toEqual({
+        ok: true,
+      });
+      await fs.writeFile(path.join(agent, "feature.md"), "branch edit\n");
+      const branchResult = await commitAndPushWorkspace(agent, {
+        message: "feature update",
+        author: { name: "Agent", email: "agent@octogee.local" },
+      });
+
+      expect(branchResult).toEqual({
+        ok: true,
+        result: { committed: true, pushed: true, nothingToCommit: false },
+      });
+      const upstream = spawnSync(
+        "git",
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+        { cwd: agent, encoding: "utf8" },
+      );
+      expect(upstream.status, upstream.stderr).toBe(0);
+      expect(upstream.stdout.trim()).toBe("origin/feature/agent-edit");
+      const remoteBranchFile = spawnSync(
+        "git",
+        [
+          "--git-dir",
+          remote,
+          "show",
+          "refs/heads/feature/agent-edit:feature.md",
+        ],
+        { encoding: "utf8" },
+      );
+      expect(remoteBranchFile.status, remoteBranchFile.stderr).toBe(0);
+      expect(remoteBranchFile.stdout).toBe("branch edit\n");
+
+      expect(await gitCheckout(agent, { branch: "main" })).toEqual({ ok: true });
+      git(canvas, ["pull", "--ff-only", "origin", "main"]);
+      await fs.writeFile(path.join(canvas, "README.md"), "canvas conflict winner\n");
+      git(canvas, ["add", "."]);
+      git(canvas, ["commit", "-m", "canvas conflicting update"]);
+      git(canvas, ["push", "origin", "main"]);
+      await fs.writeFile(path.join(agent, "README.md"), "agent conflicting edit\n");
+
+      const conflictResult = await commitAndPushWorkspace(agent, {
+        message: "agent conflicting update",
+        author: { name: "Agent", email: "agent@octogee.local" },
+      });
+
+      expect(conflictResult).toEqual({
+        ok: true,
+        result: {
+          committed: true,
+          pushed: false,
+          nothingToCommit: false,
+          pushError: "git failed (status 1)",
+        },
+      });
+      const localSubject = spawnSync("git", ["log", "-1", "--pretty=%s"], {
+        cwd: agent,
+        encoding: "utf8",
+      });
+      expect(localSubject.status, localSubject.stderr).toBe(0);
+      expect(localSubject.stdout.trim()).toBe("agent conflicting update");
+      const localStatus = spawnSync("git", ["status", "--porcelain"], {
+        cwd: agent,
+        encoding: "utf8",
+      });
+      expect(localStatus.status, localStatus.stderr).toBe(0);
+      expect(localStatus.stdout).toBe("");
+      const remoteMainReadme = spawnSync(
+        "git",
+        ["--git-dir", remote, "show", "refs/heads/main:README.md"],
+        { encoding: "utf8" },
+      );
+      expect(remoteMainReadme.status, remoteMainReadme.stderr).toBe(0);
+      expect(remoteMainReadme.stdout).toBe("canvas conflict winner\n");
+    } finally {
+      if (originalGitSsh === undefined) delete process.env.GIT_SSH;
+      else process.env.GIT_SSH = originalGitSsh;
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 });

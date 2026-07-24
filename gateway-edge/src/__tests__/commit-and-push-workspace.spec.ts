@@ -5,6 +5,7 @@ const author = { name: "acme", email: "acme@octogee.local" };
 
 type CommitFn = CommitAndPushDeps["gitCommit"];
 type PushFn = CommitAndPushDeps["gitPush"];
+type PrepareFn = CommitAndPushDeps["gitPreparePush"];
 
 const commitOk = (empty: boolean): CommitFn => async () => ({
   ok: true,
@@ -15,6 +16,10 @@ const commitFail: CommitFn = async () => ({
   error: { code: "GIT_FAILED", cwd: "/d", status: 1, stderr: "boom" },
 });
 const pushOk: PushFn = async () => ({ ok: true });
+const prepareMain: PrepareFn = async () => ({
+  ok: true,
+  target: { branch: "main", setUpstream: false },
+});
 const pushFail: PushFn = async () => ({
   ok: false,
   error: { code: "GIT_FAILED", cwd: "/d", status: 1, stderr: "rejected" },
@@ -23,29 +28,80 @@ const mutationDeps = (
   gitCommit: CommitFn,
   gitPush: PushFn,
   release = vi.fn(),
+  gitPreparePush: PrepareFn = prepareMain,
 ): CommitAndPushDeps => ({
   gitCommit,
   gitPush,
+  gitPreparePush,
   acquireMutationLease: () => ({ ownerToken: "lease", release }),
 });
 
 describe("commitAndPushWorkspace", () => {
-  it("is a clean no-op when there is nothing to commit — and never pushes", async () => {
-    let pushed = false;
+  it("synchronizes and pushes a retained local commit even when there is nothing new to commit", async () => {
+    const order: string[] = [];
+    const prepare: PrepareFn = async () => {
+      order.push("prepare");
+      return { ok: true, target: { branch: "main", setUpstream: false } };
+    };
     const push: PushFn = async () => {
-      pushed = true;
+      order.push("push");
       return { ok: true };
     };
-    const r = await commitAndPushWorkspace("/d", { message: "m", author }, mutationDeps(commitOk(true), push));
-    expect(r).toEqual({ ok: true, result: { committed: false, pushed: false, nothingToCommit: true } });
-    expect(pushed).toBe(false);
+    const r = await commitAndPushWorkspace(
+      "/d",
+      { message: "m", author },
+      mutationDeps(commitOk(true), push, vi.fn(), prepare),
+    );
+    expect(r).toEqual({ ok: true, result: { committed: false, pushed: true, nothingToCommit: true } });
+    expect(order).toEqual(["prepare", "push"]);
   });
 
-  it("commits then pushes on success", async () => {
+  it("commits, rebases onto remote advancement, then pushes on success", async () => {
     const release = vi.fn();
-    const r = await commitAndPushWorkspace("/d", { message: "m", author }, mutationDeps(commitOk(false), pushOk, release));
+    const order: string[] = [];
+    const commit: CommitFn = async () => {
+      order.push("commit");
+      return { ok: true, result: { sha: "abc123", empty: false } };
+    };
+    const prepare: PrepareFn = async () => {
+      order.push("prepare");
+      return { ok: true, target: { branch: "main", setUpstream: false } };
+    };
+    const push: PushFn = async () => {
+      order.push("push");
+      return { ok: true };
+    };
+    const r = await commitAndPushWorkspace(
+      "/d",
+      { message: "m", author },
+      mutationDeps(commit, push, release, prepare),
+    );
     expect(r).toEqual({ ok: true, result: { committed: true, pushed: true, nothingToCommit: false } });
+    expect(order).toEqual(["commit", "prepare", "push"]);
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("pushes the prepared current branch and establishes its missing upstream", async () => {
+    const push = vi.fn<PushFn>(async () => ({ ok: true }));
+    const prepare: PrepareFn = async () => ({
+      ok: true,
+      target: { branch: "feature/agent-edit", setUpstream: true },
+    });
+
+    const result = await commitAndPushWorkspace(
+      "/d",
+      { message: "m", author },
+      mutationDeps(commitOk(false), push, vi.fn(), prepare),
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      result: { committed: true, pushed: true, nothingToCommit: false },
+    });
+    expect(push).toHaveBeenCalledWith("/d", {
+      branch: "feature/agent-edit",
+      setUpstream: true,
+    });
   });
 
   it("forwards excludePathspecs to gitCommit — the workspace-lane projects/ exclusion rides through", async () => {
@@ -71,6 +127,31 @@ describe("commitAndPushWorkspace", () => {
     }
   });
 
+  it("preserves the local commit and reports a remote rebase conflict without pushing", async () => {
+    const push = vi.fn(pushOk);
+    const prepare: PrepareFn = async () => ({
+      ok: false,
+      error: { code: "GIT_FAILED", cwd: "/d", status: 1, stderr: "CONFLICT" },
+    });
+
+    const r = await commitAndPushWorkspace(
+      "/d",
+      { message: "m", author },
+      mutationDeps(commitOk(false), push, vi.fn(), prepare),
+    );
+
+    expect(r).toEqual({
+      ok: true,
+      result: {
+        committed: true,
+        pushed: false,
+        nothingToCommit: false,
+        pushError: "git failed (status 1)",
+      },
+    });
+    expect(push).not.toHaveBeenCalled();
+  });
+
   it("propagates a commit failure as a hard error (no push attempted)", async () => {
     let pushed = false;
     const push: PushFn = async () => {
@@ -86,6 +167,7 @@ describe("commitAndPushWorkspace", () => {
     const commit = commitOk(false);
     const deps: CommitAndPushDeps = {
       gitCommit: vi.fn(commit),
+      gitPreparePush: vi.fn(prepareMain),
       gitPush: vi.fn(pushOk),
       acquireMutationLease: () => null,
     };
@@ -97,6 +179,7 @@ describe("commitAndPushWorkspace", () => {
       error: { code: "WORKSPACE_BUSY", cwd: "/d" },
     });
     expect(deps.gitCommit).not.toHaveBeenCalled();
+    expect(deps.gitPreparePush).not.toHaveBeenCalled();
     expect(deps.gitPush).not.toHaveBeenCalled();
   });
 });

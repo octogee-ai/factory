@@ -196,12 +196,14 @@ export interface CommitAndPushResult {
 
 export interface CommitAndPushDeps {
   gitCommit: typeof gitCommit;
+  gitPreparePush: typeof gitPreparePush;
   gitPush: typeof gitPush;
   acquireMutationLease: typeof acquireWorkspaceMutationLeaseSync;
 }
 
 const COMMIT_AND_PUSH_DEPS: CommitAndPushDeps = {
   gitCommit,
+  gitPreparePush,
   gitPush,
   acquireMutationLease: acquireWorkspaceMutationLeaseSync,
 };
@@ -224,22 +226,35 @@ export async function commitAndPushWorkspace(
   try {
     const commitRes = await deps.gitCommit(customerDir, options);
     if (!commitRes.ok) return commitRes;
-    if (commitRes.result.empty) {
-      return { ok: true, result: { committed: false, pushed: false, nothingToCommit: true } };
+    const committed = !commitRes.result.empty;
+    const prepareRes = await deps.gitPreparePush(customerDir, { author: options.author });
+    if (!prepareRes.ok) {
+      return {
+        ok: true,
+        result: {
+          committed,
+          pushed: false,
+          nothingToCommit: !committed,
+          pushError: describeGitError(prepareRes.error),
+        },
+      };
     }
-    const pushRes = await deps.gitPush(customerDir, {});
+    const pushRes = await deps.gitPush(customerDir, prepareRes.target);
     if (!pushRes.ok) {
       return {
         ok: true,
         result: {
-          committed: true,
+          committed,
           pushed: false,
-          nothingToCommit: false,
+          nothingToCommit: !committed,
           pushError: describeGitError(pushRes.error),
         },
       };
     }
-    return { ok: true, result: { committed: true, pushed: true, nothingToCommit: false } };
+    return {
+      ok: true,
+      result: { committed, pushed: true, nothingToCommit: !committed },
+    };
   } finally {
     lease.release();
   }
@@ -299,14 +314,185 @@ const args: string[] = options.create
 
 export async function gitPush(
   customerDir: string,
-  options: { branch?: string } = {},
+  options: { branch?: string; setUpstream?: boolean } = {},
 ): Promise<{ ok: true } | { ok: false; error: WorkspaceGitError }> {
   const args = options.branch
-    ? ["push", END_OF_OPTIONS, "origin", options.branch]
+    ? [
+        "push",
+        ...(options.setUpstream ? ["--set-upstream"] : []),
+        END_OF_OPTIONS,
+        "origin",
+        `HEAD:refs/heads/${options.branch}`,
+      ]
     : ["push", END_OF_OPTIONS];
   const r = await runGit(customerDir, args, { timeoutMs: GIT_PUSH_TIMEOUT_MS });
   if (!r.ok) return r;
   return { ok: true };
+}
+
+interface WorkspacePushTarget {
+  branch: string;
+  setUpstream: boolean;
+}
+
+type GitFailure = { ok: false; error: WorkspaceGitError };
+type WorkspacePushPreparation =
+  | { ok: true; target: WorkspacePushTarget }
+  | GitFailure;
+
+export async function gitPreparePush(
+  customerDir: string,
+  options: { author: CommitAuthor },
+): Promise<WorkspacePushPreparation> {
+  const branchResult = await runGit(customerDir, ["branch", "--show-current"]);
+  if (!branchResult.ok) return branchResult;
+  const branch = branchResult.stdout.trim();
+  if (!branch) {
+    return {
+      ok: false,
+      error: { code: "INTERNAL", message: "cannot push a detached workspace HEAD" },
+    };
+  }
+
+  const upstreamResult = await readOriginUpstream(customerDir, branch);
+  if (!upstreamResult.ok) return upstreamResult;
+  if (!upstreamResult.branch) {
+    return prepareUntrackedBranchPush(customerDir, {
+      author: options.author,
+      branch,
+    });
+  }
+  const syncResult = await gitRebaseOntoRemoteBranch(customerDir, {
+    author: options.author,
+    branch: upstreamResult.branch,
+  });
+  if (!syncResult.ok) return syncResult;
+  return {
+    ok: true,
+    target: { branch: upstreamResult.branch, setUpstream: false },
+  };
+}
+
+async function readOriginUpstream(
+  customerDir: string,
+  branch: string,
+): Promise<{ ok: true; branch: string | null } | GitFailure> {
+  const remoteConfig = await runGit(customerDir, [
+    "config",
+    "--get",
+    `branch.${branch}.remote`,
+  ]);
+  const mergeConfig = await runGit(customerDir, [
+    "config",
+    "--get",
+    `branch.${branch}.merge`,
+  ]);
+  const remoteMissing = gitConfigIsMissing(remoteConfig);
+  const mergeMissing = gitConfigIsMissing(mergeConfig);
+  if (remoteMissing && mergeMissing) return { ok: true, branch: null };
+  if (remoteMissing || mergeMissing) {
+    return {
+      ok: false,
+      error: { code: "INTERNAL", message: `incomplete upstream configuration for ${branch}` },
+    };
+  }
+  if (!remoteConfig.ok) return remoteConfig;
+  if (!mergeConfig.ok) return mergeConfig;
+  const remote = remoteConfig.stdout.trim();
+  const mergeRef = mergeConfig.stdout.trim();
+  if (remote !== "origin" || !mergeRef.startsWith("refs/heads/")) {
+    return {
+      ok: false,
+      error: { code: "INTERNAL", message: `unsupported upstream for ${branch}` },
+    };
+  }
+  return { ok: true, branch: mergeRef.slice("refs/heads/".length) };
+}
+
+async function prepareUntrackedBranchPush(
+  customerDir: string,
+  options: { author: CommitAuthor; branch: string },
+): Promise<WorkspacePushPreparation> {
+  const remoteBranchResult = await runGit(
+    customerDir,
+    [
+      "ls-remote",
+      "--exit-code",
+      "--heads",
+      END_OF_OPTIONS,
+      "origin",
+      `refs/heads/${options.branch}`,
+    ],
+    { timeoutMs: GIT_PUSH_TIMEOUT_MS },
+  );
+  if (remoteBranchResult.ok) {
+    const syncResult = await gitRebaseOntoRemoteBranch(customerDir, {
+      author: options.author,
+      branch: options.branch,
+    });
+    if (!syncResult.ok) return syncResult;
+  } else if (!remoteBranchIsMissing(remoteBranchResult)) {
+    return remoteBranchResult;
+  }
+  return {
+    ok: true,
+    target: { branch: options.branch, setUpstream: true },
+  };
+}
+
+function remoteBranchIsMissing(result: GitFailure): boolean {
+  return result.error.code === "GIT_FAILED" && result.error.status === 2;
+}
+
+function gitConfigIsMissing(
+  result: GitRunOk | { ok: false; error: WorkspaceGitError },
+): boolean {
+  return !result.ok && result.error.code === "GIT_FAILED" && result.error.status === 1;
+}
+
+async function gitRebaseOntoRemoteBranch(
+  customerDir: string,
+  options: { author: CommitAuthor; branch: string },
+): Promise<{ ok: true } | { ok: false; error: WorkspaceGitError }> {
+  const fetchResult = await runGit(
+    customerDir,
+    [
+      "fetch",
+      "--no-tags",
+      END_OF_OPTIONS,
+      "origin",
+      `+refs/heads/${options.branch}:refs/remotes/origin/${options.branch}`,
+    ],
+    { timeoutMs: GIT_PUSH_TIMEOUT_MS },
+  );
+  if (!fetchResult.ok) return fetchResult;
+
+  const rebaseResult = await runGit(
+    customerDir,
+    [
+      "-c", `user.name=${options.author.name}`,
+      "-c", `user.email=${options.author.email}`,
+      "rebase", END_OF_OPTIONS, `origin/${options.branch}`,
+    ],
+    { timeoutMs: GIT_COMMIT_TIMEOUT_MS },
+  );
+  if (rebaseResult.ok) return { ok: true };
+
+  const abortResult = await runGit(
+    customerDir,
+    ["rebase", "--abort"],
+    { timeoutMs: GIT_COMMIT_TIMEOUT_MS },
+  );
+  if (!abortResult.ok) {
+    return {
+      ok: false,
+      error: {
+        code: "INTERNAL",
+        message: `git rebase failed and abort failed: ${describeGitError(abortResult.error)}`,
+      },
+    };
+  }
+  return rebaseResult;
 }
 
 function clampLimit(n: number): number {

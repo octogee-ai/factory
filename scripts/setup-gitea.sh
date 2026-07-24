@@ -10,7 +10,7 @@ set -euo pipefail
 #   1. Wait for Gitea to be ready (Helm must be deployed first)
 #   2. Create the 'octogee' org if it doesn't exist
 #   3. Create an admin API token (scoped)
-#   4. Create K8s secrets consumed by the gateway
+#   4. Create the K8s secret consumed by platform services
 #   5. Save token to .env file and Secret Manager
 #
 # Usage:
@@ -23,6 +23,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 # shellcheck source=scripts/lib/deployment-target.sh
 source "$SCRIPT_DIR/lib/deployment-target.sh"
+# shellcheck source=scripts/lib/gitea-token-convergence.sh
+source "$SCRIPT_DIR/lib/gitea-token-convergence.sh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -163,7 +165,7 @@ kubectl config use-context "$K8S_CONTEXT"
 CURRENT_CTX=$(kubectl config current-context)
 [[ "$CURRENT_CTX" == "$K8S_CONTEXT" ]] || fail "kubectl context mismatch: '$CURRENT_CTX'"
 ok "kubectl context: $CURRENT_CTX"
-info "This script owns Gitea bootstrap/app state: admin token, org existence, and the gitea-token secret consumed by gateway workflows."
+info "This script owns Gitea bootstrap/app state: admin token, org existence, and the gitea-token secret consumed by platform workflows."
 
 # ── 1. Get Gitea admin password ───────────────────────────────────────────
 info "Reading Gitea admin password from Secret Manager..."
@@ -320,6 +322,8 @@ kubectl create secret generic gitea-token -n "$K8S_NAMESPACE" \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 ok "gitea-token K8s secret applied"
 
+restart_gitea_token_consumers
+
 # Kill port-forward
 kill $PF_PID 2>/dev/null || true
 trap - EXIT
@@ -337,10 +341,9 @@ if [[ -n "$GIT_API_TOKEN" ]]; then
   echo ""
   echo "  Next (canonical sequence — see teardown-env.sh --env=$ENV$TARGET_ARG for the full 9 steps):"
   echo "    5. ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG --phase=launch"
-  echo "    6. kubectl rollout restart deploy -n $K8S_NAMESPACE"
-  echo "    7. firebase deploy --project $GCP_PROJECT"
-  echo "    8. (cd scripts && npx tsx ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG)"
-  echo "    9. ./scripts/verify-env.sh --env=$ENV$TARGET_ARG"
+  echo "    6. firebase deploy --project $GCP_PROJECT"
+  echo "    7. (cd scripts && npx tsx ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG)"
+  echo "    8. ./scripts/verify-env.sh --env=$ENV$TARGET_ARG"
 else
   warn "Gitea bootstrap is incomplete"
   echo ""
