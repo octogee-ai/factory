@@ -1357,7 +1357,7 @@ describe("connect — google drive picker + full-read escalation", () => {
     }
   });
 
-  it("picker-token returns the Builder's fresh access token with the picker client config", async () => {
+  it("picker-token returns picker configuration without exposing the stored Google credential", async () => {
     await setGoogleStage("on");
     await grantGoogle("drive", `${DRIVE} ${EMAIL}`);
     const res = await request(createApp())
@@ -1365,10 +1365,10 @@ describe("connect — google drive picker + full-read escalation", () => {
       .set("Authorization", auth.bearer());
     expect(res.status, res.text).toBe(200);
     expect(res.body).toEqual({
-      accessToken: PLAINTEXT_GOOGLE_ACCESS,
       apiKey: "picker-key",
       appId: "123456789",
     });
+    expect(res.text).not.toContain(PLAINTEXT_GOOGLE_ACCESS);
     expect(res.headers["cache-control"]).toContain("no-store");
   });
 

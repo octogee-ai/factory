@@ -427,16 +427,9 @@ router.get(
         res.status(422).json({ ok: false, reason: "drive_not_connected" });
         return;
       }
-      const fresh = await getFreshAccessToken(req.uid!, def);
-      if (!fresh.ok) {
-        res
-          .status(fresh.reason === "reauth_required" ? 409 : 422)
-          .json({ ok: false, reason: fresh.reason });
-        return;
-      }
       res.set("Cache-Control", "no-store");
       res.set("Pragma", "no-cache");
-      res.json({ accessToken: fresh.accessToken, apiKey: picker.apiKey, appId: picker.appId });
+      res.json({ apiKey: picker.apiKey, appId: picker.appId });
     } catch (e) {
       next(e);
     }
