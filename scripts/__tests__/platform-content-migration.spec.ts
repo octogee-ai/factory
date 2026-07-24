@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -83,6 +84,19 @@ describe('platform content migration plan', () => {
 
   it('reads the canonical OpenClaw version from the real repository layout', () => {
     expect(readCanonicalOpenclawVersion(path.resolve(process.cwd(), '..'))).toBe('2026.7.1')
+  })
+
+  it('rejects duplicate canonical OpenClaw version declarations', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'octogee-openclaw-version-'))
+    fs.writeFileSync(path.join(repo, 'cloudbuild.yaml'), [
+      'substitutions:',
+      '  _OPENCLAW_VERSION: "2026.7.1"',
+      '  _OPENCLAW_VERSION: "2026.7.2"',
+    ].join('\n'))
+
+    expect(() => readCanonicalOpenclawVersion(repo)).toThrow(
+      'could not resolve the canonical OpenClaw version',
+    )
   })
 
   it.each([

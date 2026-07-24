@@ -117,11 +117,23 @@ function quiesce(settings: DeploymentEnvironmentSettings, target: Workload): voi
 
 export function readCanonicalOpenclawVersion(repoRoot: string): string {
   const configuration = fs.readFileSync(path.join(repoRoot, "cloudbuild.yaml"), "utf8");
-  const match = /^\s*_OPENCLAW_VERSION:\s*"([^"]+)"\s*$/m.exec(configuration);
-  if (!match || !/^\d{4}\.\d+\.\d+(?:-[A-Za-z0-9.]+)?$/.test(match[1]!)) {
+  const key = "_OPENCLAW_VERSION:";
+  const declarations = configuration
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith(key));
+  if (declarations.length !== 1) {
     throw new Error("could not resolve the canonical OpenClaw version from cloudbuild.yaml");
   }
-  return match[1]!;
+  const serialized = declarations[0]!.slice(key.length).trim();
+  if (!serialized.startsWith('"') || !serialized.endsWith('"')) {
+    throw new Error("could not resolve the canonical OpenClaw version from cloudbuild.yaml");
+  }
+  const version = serialized.slice(1, -1);
+  if (!/^\d{4}\.\d+\.\d+(?:-[A-Za-z0-9.]+)?$/.test(version)) {
+    throw new Error("could not resolve the canonical OpenClaw version from cloudbuild.yaml");
+  }
+  return version;
 }
 
 function passwordEnvironment(target: Workload, service: "mattermost" | "gitea"): unknown {
