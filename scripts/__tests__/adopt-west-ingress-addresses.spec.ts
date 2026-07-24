@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -60,7 +60,32 @@ function runHarness(
   harness: ReturnType<typeof createHarness>,
   values: Record<string, string>,
 ): string {
-  return execFileSync("bash", [harness.script, "--project=octogee", "--terraform-bin=terraform"], {
+  return execFileSync("bash", [
+    harness.script,
+    "--project=octogee",
+    "--terraform-bin=terraform",
+    "--confirm=octogee/us-west1/octogee-gateway",
+  ], {
+    cwd: harness.root,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ...values,
+      OCTOGEE_TEST_LOG: harness.log,
+      PATH: `${join(harness.root, "bin")}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+    },
+  });
+}
+
+function runWithoutConfirmation(
+  harness: ReturnType<typeof createHarness>,
+  values: Record<string, string>,
+): string {
+  return execFileSync("bash", [
+    harness.script,
+    "--project=octogee",
+    "--terraform-bin=terraform",
+  ], {
     cwd: harness.root,
     encoding: "utf8",
     env: {
@@ -97,6 +122,24 @@ describe("WEST ingress Terraform-state adoption", () => {
     const calls = readFileSync(harness.log, "utf8");
     expect(calls).toContain(`terraform import -var=reserve_ingress_addresses=true ${declaredAddress("preview-ip-west")} projects/octogee/global/addresses/preview-ip-west`);
     expect(calls).not.toContain(`terraform import -var=reserve_ingress_addresses=true ${declaredAddress("grafana-ip")}`);
+  });
+
+  it("requires the bootstrap's exact confirmation before it can import Terraform state", () => {
+    const unconfirmed = createHarness();
+    expect(() => runWithoutConfirmation(unconfirmed, {
+      ...common,
+      OCTOGEE_TEST_EXISTING_NAMES: "preview-ip-west",
+      OCTOGEE_TEST_STATE_ADDRESSES: "",
+    })).toThrow(/--confirm/);
+    expect(existsSync(unconfirmed.log)).toBe(false);
+
+    const confirmed = createHarness();
+    expect(runHarness(confirmed, {
+      ...common,
+      OCTOGEE_TEST_EXISTING_NAMES: "preview-ip-west",
+      OCTOGEE_TEST_STATE_ADDRESSES: "",
+    })).toContain("Adopted existing WEST ingress addresses into Terraform state.");
+    expect(readFileSync(confirmed.log, "utf8")).toContain("terraform import");
   });
 
   it("leaves a fresh environment for Terraform to create", () => {
@@ -140,12 +183,13 @@ describe("WEST ingress Terraform-state adoption", () => {
     expect(readFileSync(harness.log, "utf8")).not.toContain("terraform import");
   });
 
-  it("runs state adoption before the bootstrap creates a plan", () => {
+  it("runs state adoption only in the confirmed apply branch before its plan", () => {
     const bootstrap = readFileSync(join(repoRoot, "scripts/bootstrap-west-platform.sh"), "utf8");
     const invocation = [
       '"${INGRESS_STATE_ADOPTER}" \\',
-      '  "--project=${PROJECT_ID}" \\',
-      '  "--terraform-bin=${TERRAFORM_BIN}"',
+      '    "--project=${PROJECT_ID}" \\',
+      '    "--terraform-bin=${TERRAFORM_BIN}" \\',
+      '    "--confirm=${CONFIRMATION}"',
     ].join("\n");
     const preApplyPlan = [
       '"${TERRAFORM_BIN}" plan \\',
@@ -153,10 +197,32 @@ describe("WEST ingress Terraform-state adoption", () => {
       '  -var=foundation_rebuild=true \\',
       '  -out="${PRE_APPLY_PLAN}"',
     ].join("\n");
+    const confirmedApply = [
+      'if [[ "${APPLY}" == "true" ]]; then',
+      '  reconcile_deleted_sql_child_state',
+      '',
+      '  "${INGRESS_STATE_ADOPTER}" \\',
+      '    "--project=${PROJECT_ID}" \\',
+      '    "--terraform-bin=${TERRAFORM_BIN}" \\',
+      '    "--confirm=${CONFIRMATION}"',
+      'fi',
+    ].join("\n");
+    const applyConfirmation = [
+      'if [[ "${APPLY}" == "true" && "${CONFIRMATION}" != "${EXPECTED_CONFIRMATION}" ]]; then',
+      '  echo "Apply requires --confirm=octogee/us-west1/octogee-gateway" >&2',
+      '  exit 2',
+      'fi',
+    ].join("\n");
 
     expect(bootstrap).toContain(invocation);
+    expect(bootstrap).toContain(confirmedApply);
+    expect(bootstrap).toContain(applyConfirmation);
     expect(bootstrap).toContain(preApplyPlan);
-    expect(bootstrap.indexOf(invocation)).toBeLessThan(
+    expect(bootstrap.match(/INGRESS_STATE_ADOPTER/g)).toHaveLength(2);
+    expect(bootstrap.indexOf(applyConfirmation)).toBeLessThan(
+      bootstrap.indexOf(confirmedApply),
+    );
+    expect(bootstrap.indexOf(confirmedApply)).toBeLessThan(
       bootstrap.indexOf(preApplyPlan),
     );
   });

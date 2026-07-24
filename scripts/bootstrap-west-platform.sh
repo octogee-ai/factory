@@ -396,9 +396,6 @@ verify_zero_drift() {
 
 cd "${TERRAFORM_ROOT}"
 "${TERRAFORM_BIN}" init -reconfigure
-"${INGRESS_STATE_ADOPTER}" \
-  "--project=${PROJECT_ID}" \
-  "--terraform-bin=${TERRAFORM_BIN}"
 
 if [[ "${VERIFY_ONLY}" == "true" ]]; then
   verify_zero_drift
@@ -408,6 +405,11 @@ fi
 
 if [[ "${APPLY}" == "true" ]]; then
   reconcile_deleted_sql_child_state
+
+  "${INGRESS_STATE_ADOPTER}" \
+    "--project=${PROJECT_ID}" \
+    "--terraform-bin=${TERRAFORM_BIN}" \
+    "--confirm=${CONFIRMATION}"
 fi
 
 "${TERRAFORM_BIN}" plan \

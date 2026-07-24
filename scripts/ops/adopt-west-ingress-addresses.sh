@@ -3,17 +3,24 @@ set -euo pipefail
 
 PROJECT_ID=""
 TERRAFORM_BIN="terraform"
+CONFIRMATION=""
+EXPECTED_CONFIRMATION="octogee/us-west1/octogee-gateway"
 
 for arg in "$@"; do
   case "${arg}" in
     --project=*) PROJECT_ID="${arg#--project=}" ;;
     --terraform-bin=*) TERRAFORM_BIN="${arg#--terraform-bin=}" ;;
+    --confirm=*) CONFIRMATION="${arg#--confirm=}" ;;
     *) echo "Unknown argument: ${arg}" >&2; exit 2 ;;
   esac
 done
 
 if [[ -z "${PROJECT_ID}" ]]; then
   echo "--project is required" >&2
+  exit 2
+fi
+if [[ "${CONFIRMATION}" != "${EXPECTED_CONFIRMATION}" ]]; then
+  echo "Ingress state adoption requires --confirm=${EXPECTED_CONFIRMATION}" >&2
   exit 2
 fi
 
