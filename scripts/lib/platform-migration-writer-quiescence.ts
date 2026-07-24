@@ -507,16 +507,30 @@ type ExecutionResult = {
   writerWorkloads: WriterWorkload[];
 };
 
+interface QuiesceExecutionInput {
+  args: PlatformMigrationWriterQuiescenceArgs;
+  dependencies: PlatformMigrationWriterQuiescenceDependencies;
+  settings: DeploymentEnvironmentSettings;
+  observed: WriterWorkload[];
+  maintenance: Record<string, unknown> | null;
+  plannedReceipt: PlatformMigrationWriterReceipt;
+  existing: PlatformMigrationWriterReceipt | null;
+  receiptUri: string;
+}
+
 async function executeQuiesce(
-  args: PlatformMigrationWriterQuiescenceArgs,
-  dependencies: PlatformMigrationWriterQuiescenceDependencies,
-  settings: DeploymentEnvironmentSettings,
-  observed: WriterWorkload[],
-  maintenance: Record<string, unknown> | null,
-  plannedReceipt: PlatformMigrationWriterReceipt,
-  existing: PlatformMigrationWriterReceipt | null,
-  receiptUri: string,
+  input: QuiesceExecutionInput,
 ): Promise<ExecutionResult> {
+  const {
+    args,
+    dependencies,
+    settings,
+    observed,
+    maintenance,
+    plannedReceipt,
+    existing,
+    receiptUri,
+  } = input;
   if (existing === null) {
     await dependencies.writeReceipt(receiptUri, plannedReceipt);
   } else {
@@ -547,16 +561,30 @@ async function executeQuiesce(
   };
 }
 
+interface RestoreExecutionInput {
+  args: PlatformMigrationWriterQuiescenceArgs;
+  dependencies: PlatformMigrationWriterQuiescenceDependencies;
+  settings: DeploymentEnvironmentSettings;
+  observed: WriterWorkload[];
+  maintenance: Record<string, unknown> | null;
+  existing: PlatformMigrationWriterReceipt | null;
+  revision: string;
+  receiptUri: string;
+}
+
 async function executeRestore(
-  args: PlatformMigrationWriterQuiescenceArgs,
-  dependencies: PlatformMigrationWriterQuiescenceDependencies,
-  settings: DeploymentEnvironmentSettings,
-  observed: WriterWorkload[],
-  maintenance: Record<string, unknown> | null,
-  existing: PlatformMigrationWriterReceipt | null,
-  revision: string,
-  receiptUri: string,
+  input: RestoreExecutionInput,
 ): Promise<ExecutionResult> {
+  const {
+    args,
+    dependencies,
+    settings,
+    observed,
+    maintenance,
+    existing,
+    revision,
+    receiptUri,
+  } = input;
   if (!args.targetId.endsWith("-west")) {
     throw new Error("restore supports WEST targets only; CENTRAL rollback requires separate explicit authority");
   }
@@ -605,7 +633,7 @@ export async function executePlatformMigrationWriterQuiescence(
   const plannedReceipt = { ...provisionalReceipt, revision };
   const existing = await dependencies.readReceipt(receiptUri);
   if (args.mode === "quiesce") {
-    return executeQuiesce(
+    return executeQuiesce({
       args,
       dependencies,
       settings,
@@ -614,9 +642,9 @@ export async function executePlatformMigrationWriterQuiescence(
       plannedReceipt,
       existing,
       receiptUri,
-    );
+    });
   }
-  return executeRestore(
+  return executeRestore({
     args,
     dependencies,
     settings,
@@ -625,5 +653,5 @@ export async function executePlatformMigrationWriterQuiescence(
     existing,
     revision,
     receiptUri,
-  );
+  });
 }
