@@ -167,7 +167,7 @@ function assertTerraformStateBucket(bucket: JsonRecord): void {
 
 export function assertMigrationReceiptBucket(run: CommandRunner = runMigrationReceiptCommand): void {
   const bucket = parseJson(run("gcloud", [
-    "storage", "buckets", "describe", MIGRATION_RECEIPT_BUCKET, "--format=json",
+    "storage", "buckets", "describe", MIGRATION_RECEIPT_BUCKET, "--format=json", "--raw",
   ]), "migration receipt bucket describe");
   assertBucketConfiguration(bucket);
   const policy = parseJson(run("gcloud", [
@@ -175,13 +175,15 @@ export function assertMigrationReceiptBucket(run: CommandRunner = runMigrationRe
   ]), "migration receipt bucket IAM policy");
   assertBucketIamBoundary(policy);
   const terraformState = parseJson(run("gcloud", [
-    "storage", "buckets", "describe", TERRAFORM_STATE_BUCKET, "--format=json",
+    "storage", "buckets", "describe", TERRAFORM_STATE_BUCKET, "--format=json", "--raw",
   ]), "Terraform state bucket describe");
   assertTerraformStateBucket(terraformState);
 }
 
 function generationFor(uri: string, run: CommandRunner): string {
-  const metadata = parseJson(run("gcloud", ["storage", "objects", "describe", uri, "--format=json"]), "migration receipt metadata");
+  const metadata = parseJson(run("gcloud", [
+    "storage", "objects", "describe", uri, "--format=json", "--raw",
+  ]), "migration receipt metadata");
   const generation = metadata.generation;
   if (typeof generation !== "string" || !/^\d+$/.test(generation) || generation === "0") {
     throw new Error("migration receipt metadata has no valid generation");

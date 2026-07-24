@@ -70,10 +70,10 @@ describe("immutable migration receipts", () => {
 
     expect(() => assertMigrationReceiptBucket(run)).not.toThrow();
     expect(run).toHaveBeenCalledWith("gcloud", [
-      "storage", "buckets", "describe", MIGRATION_RECEIPT_BUCKET, "--format=json",
+      "storage", "buckets", "describe", MIGRATION_RECEIPT_BUCKET, "--format=json", "--raw",
     ]);
     expect(run).toHaveBeenCalledWith("gcloud", [
-      "storage", "buckets", "describe", TERRAFORM_STATE_BUCKET, "--format=json",
+      "storage", "buckets", "describe", TERRAFORM_STATE_BUCKET, "--format=json", "--raw",
     ]);
     const { versioning: _disabledVersioning, ...withoutVersioning } = receiptBucket;
     expect(() => assertMigrationReceiptBucket(postureRunner(withoutVersioning))).not.toThrow();
@@ -139,6 +139,14 @@ describe("immutable migration receipts", () => {
       "storage", "cp", "--if-generation-match=0",
       "gs://octogee-migration-receipts/receipts/platform-builder-credential-reset/test.json",
     ]));
+    expect(run).toHaveBeenCalledWith("gcloud", [
+      "storage",
+      "objects",
+      "describe",
+      "gs://octogee-migration-receipts/receipts/platform-builder-credential-reset/test.json",
+      "--format=json",
+      "--raw",
+    ]);
   });
 
   it("maps only create-only precondition failures to an explicit collision", () => {
@@ -199,6 +207,9 @@ describe("immutable migration receipts", () => {
       cleanup: "verified",
       verified: true,
     }, run)).toMatchObject({ generation: "42" });
+    expect(run).toHaveBeenCalledWith("gcloud", [
+      "storage", "objects", "describe", uri, "--format=json", "--raw",
+    ]);
     expect(run).toHaveBeenLastCalledWith("gcloud", ["storage", "cat", `${uri}#42`]);
   });
 });

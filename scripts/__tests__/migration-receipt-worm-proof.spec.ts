@@ -104,6 +104,13 @@ describe("migration receipt WORM proof", () => {
     expect(calls).toContainEqual([
       "storage", "cp", "--if-generation-match=42", expect.any(String), uri,
     ]);
+    expect(calls).toContainEqual([
+      "storage", "objects", "describe", uri, "--format=json", "--raw",
+    ]);
+    expect(calls.filter((call) =>
+      JSON.stringify(call) === JSON.stringify([
+        "storage", "objects", "describe", `${uri}#42`, "--format=json", "--raw",
+      ]))).toHaveLength(2);
     expect(calls).toContainEqual(["storage", "rm", `${uri}#42`]);
     expect(calls).toContainEqual(["storage", "ls", "--all-versions", "--json", uri]);
   });

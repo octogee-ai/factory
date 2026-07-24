@@ -68,6 +68,7 @@ function describeObject(
     "describe",
     `${uri}#${generation}`,
     "--format=json",
+    "--raw",
   ]), "synthetic migration receipt metadata");
 }
 
