@@ -45,9 +45,13 @@ vi.mock("../lib/mattermost.js", () => ({
   mmApi: (...args: unknown[]) => h.mmApi(...args),
 }));
 
-vi.mock("../lib/activityPair.js", () => ({
-  addActivityPairMember: (...args: unknown[]) => h.addActivityPairMember(...args),
-}));
+vi.mock("../lib/activityPair.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/activityPair.js")>();
+  return {
+    ...actual,
+    addActivityPairMember: (...args: unknown[]) => h.addActivityPairMember(...args),
+  };
+});
 
 vi.mock("@octogee/core/mattermost/project-agent", () => ({
   createProjectAgentBot: (...args: unknown[]) => h.createProjectAgentBot(...args),
@@ -221,6 +225,23 @@ describe("setProjectAgentEnabled — enable", () => {
     expect(result).toEqual({
       status: 502,
       body: { error: "Agent enabled, but provisioning failed - toggle again to retry" },
+    });
+    expect(h.logger.error).toHaveBeenCalled();
+  });
+
+  it("maps a MattermostIdentityMissingError from activity-pair membership to the sanitized 422 instead of the generic 502", async () => {
+    seedProject();
+    const { MattermostIdentityMissingError } = await import("../lib/activityPair.js");
+    h.addActivityPairMember.mockRejectedValue(
+      new MattermostIdentityMissingError("Mattermost user bot-1 was not found"),
+    );
+
+    const result = await setProjectAgentEnabled(actor(), "orbit", true);
+
+    expect(h.createProjectAgentBot).toHaveBeenCalled();
+    expect(result).toEqual({
+      status: 422,
+      body: { error: "Your chat account could not be found. Please contact support to restore access." },
     });
     expect(h.logger.error).toHaveBeenCalled();
   });
