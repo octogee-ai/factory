@@ -8,6 +8,7 @@ import {
   projectOpenClawHelloForProfile,
   projectOpenClawServerFrameForProfile,
   evaluateOpenClawControlRpc,
+  evaluateOpenClawControlRpcForProfile,
   installedMethodsFromHello,
   openClawConfigSnapshotFromGetResponse,
   pinnedOpenClawRuntimeMatches,
@@ -38,6 +39,27 @@ function policyContext(extra: Record<string, unknown> = {}) {
 }
 
 describe("OpenClaw Dashboard RPC policy", () => {
+  it("retains delegated restrictions while owners use the sanitized policy", () => {
+    const unsafeDelegatedRead = request("config.patch", {
+      raw: JSON.stringify({ agents: { defaults: { timeoutSeconds: 30 } } }),
+      baseHash: "hash-1",
+    });
+    const context = policyContext({
+      currentConfig: { raw: validConfig(), hash: "hash-1" },
+    });
+
+    expect(evaluateOpenClawControlRpcForProfile(
+      unsafeDelegatedRead,
+      context,
+      "delegated-read",
+    )).toMatchObject({ allowed: false, reason: "method-unavailable" });
+    expect(evaluateOpenClawControlRpcForProfile(
+      request("tools.invoke", { name: "exec", args: { command: "id" } }),
+      context,
+      "native-owner",
+    )).toMatchObject({ allowed: false, reason: "tool-denied" });
+  });
+
 
   it("fails closed unless hello advertises the exact pinned runtime method set", () => {
     const methods = [...OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS];

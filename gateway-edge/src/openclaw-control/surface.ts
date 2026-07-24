@@ -29,7 +29,7 @@ import {
   sanitizeOpenClawControlServerFrame,
 } from "./connect-rewrite.js";
 import {
-  evaluateOpenClawControlRpc,
+  evaluateOpenClawControlRpcForProfile,
   installedMethodsFromHello,
   isOpenClawControlMutation,
   openClawConfigSnapshotFromGetResponse,
@@ -982,12 +982,12 @@ class OpenClawControlSocketBridge {
   }
 
   private evaluateAndForward(frame: BrowserRpcFrame): void {
-    const decision = evaluateOpenClawControlRpc(frame, {
+    const decision = evaluateOpenClawControlRpcForProfile(frame, {
       installedMethods: this.installedMethods!,
       invariantContext: invariantContext(this.args.env, this.activeSession.gatewayId),
       currentConfig: this.currentConfig,
       configFrozen: configFrozen(this.args.env),
-    });
+    }, this.activeSession.brokerProfile);
     if (!decision.allowed) {
       this.deny(frame, decision, decision.reason ?? "method-denied");
       return;

@@ -470,6 +470,16 @@ export function evaluateDelegatedOpenClawControlRpc(
   return { allowed: false, category: decision.category, reason: METHOD_UNAVAILABLE };
 }
 
+export function evaluateOpenClawControlRpcForProfile(
+  frame: unknown,
+  context: OpenClawControlRpcPolicyContext,
+  profile: OpenClawBrokerProfile,
+): OpenClawControlRpcDecision {
+  return profile === "delegated-read" || profile === "delegated-config"
+    ? evaluateDelegatedOpenClawControlRpc(frame, context, profile)
+    : evaluateOpenClawControlRpc(frame, context);
+}
+
 export function projectOpenClawHelloForProfile(
   frame: Record<string, unknown>,
   profile: OpenClawBrokerProfile,
