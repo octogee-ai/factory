@@ -21,7 +21,6 @@
 # constraints (Firebase Functions Node 24 support lags the runtime).
 FROM node:24-bookworm-slim
 ARG NPM_VERSION=12.0.1
-RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -192,6 +191,8 @@ RUN set -e; \
       find /opt/openclaw-codex-deps/npm -type d -path '*/node_modules/@openclaw/mattermost' 2>/dev/null | grep -q . \
         || { echo "FATAL: @openclaw/mattermost missing from staged /opt tree"; exit 1; }; \
     fi
+
+RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund
 
 # ── npm cache ownership (prevent EACCES in agent exec calls) ─────────────────
 RUN mkdir -p /home/node/.npm && chown -R node:node /home/node/.npm

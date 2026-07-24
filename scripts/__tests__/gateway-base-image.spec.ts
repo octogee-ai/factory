@@ -80,4 +80,13 @@ describe("gateway base image", () => {
 
     expect(installed.has("chromium")).toBe(true);
   });
+
+  it("upgrades the shipped npm only after OpenClaw stages its plugins", () => {
+    const dockerfile = readRepoFile("infra/gateway/Dockerfile.base");
+    const pluginInstall = dockerfile.indexOf("openclaw plugins install");
+    const npmUpgrade = dockerfile.indexOf("npm install --global npm@${NPM_VERSION}");
+
+    expect(pluginInstall).toBeGreaterThan(-1);
+    expect(npmUpgrade).toBeGreaterThan(pluginInstall);
+  });
 });
