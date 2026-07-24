@@ -25,12 +25,20 @@ const record = {
 } as AgentImportRecord;
 const plan = {
   uid: "uid-jack", slug: "jack", gatewayId: "gw-jack", approvalHash: "sha256:approved",
+  workspacePolicy: { preserveConvergedContextFiles: false },
 } as StoredAgentImportPlan;
 
 describe("agent import broker client", () => {
   it("delegates all platform persistence and identity operations with both caller and pod proofs", async () => {
     const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
+      if (url.endsWith("/authorize")) {
+        return Response.json({
+          slug: "jack",
+          gatewayId: "gw-jack",
+          workspacePolicy: { preserveConvergedContextFiles: false },
+        });
+      }
       if (url.endsWith("/records/latest")) return Response.json(record);
       if (url.endsWith("/records/imp-1") && init?.method !== "PUT") {
         return Response.json(record);
@@ -67,6 +75,11 @@ describe("agent import broker client", () => {
     });
 
     await store.putRecord(record);
+    await expect(store.authorize()).resolves.toEqual({
+      slug: "jack",
+      gatewayId: "gw-jack",
+      workspacePolicy: { preserveConvergedContextFiles: false },
+    });
     await expect(store.getRecord("imp-1")).resolves.toEqual(record);
     await expect(store.getLatestRecord()).resolves.toEqual(record);
     await store.putPlan("imp-1", plan);

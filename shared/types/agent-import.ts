@@ -66,9 +66,14 @@ export interface AgentImportConfigPlan {
   doctorOutcome: AgentImportDoctorOutcome;
   effectiveOutcome: "applied" | "safe_baseline" | "unchanged";
   identity: { name?: string; persona?: string; emoji?: string };
+  workspaceRuntimePatch: JsonObject;
   runtimePatch: JsonObject;
   decisions: AgentImportConfigDecision[];
   reauth: string[];
+}
+
+export interface AgentImportWorkspacePolicy {
+  preserveConvergedContextFiles: boolean;
 }
 
 export interface AgentImportApprovalFields {
@@ -663,7 +668,10 @@ function reauthenticationRequirements(
 
 export function planAgentImportConfig(
   input: AgentImportConfigArtifacts,
-  options: { doctorOutcome: AgentImportDoctorOutcome },
+  options: {
+    doctorOutcome: AgentImportDoctorOutcome;
+    workspacePolicy: AgentImportWorkspacePolicy;
+  },
 ): AgentImportConfigPlan {
   const artifacts = validateAgentImportConfigArtifacts(input);
   const portable = artifacts.portableAgent;
@@ -674,6 +682,13 @@ export function planAgentImportConfig(
     emoji: portable.identity?.emoji,
   });
   const planned = plannedRuntime(portable, doctorSafe);
+  planned.decisions.push({
+    path: "skipBootstrap",
+    disposition: "apply",
+    reason: options.workspacePolicy.preserveConvergedContextFiles
+      ? "OpenClaw converges house-only context files"
+      : "Builder-owned context files must not be recreated after import",
+  });
   const decisions: AgentImportConfigDecision[] = Object.keys(identity).map((path) => ({
     path: `identity.${path}`,
     disposition: "apply",
@@ -686,6 +701,9 @@ export function planAgentImportConfig(
     doctorOutcome: options.doctorOutcome,
     effectiveOutcome: agentImportConfigOutcome(portable, planned.runtimePatch),
     identity,
+    workspaceRuntimePatch: {
+      skipBootstrap: !options.workspacePolicy.preserveConvergedContextFiles,
+    },
     runtimePatch: planned.runtimePatch,
     decisions,
     reauth: reauthenticationRequirements(portable, artifacts.configInventory),

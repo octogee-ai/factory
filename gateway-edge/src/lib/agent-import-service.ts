@@ -8,6 +8,7 @@ import {
   type AgentImportConfigArtifacts,
   type AgentImportConfigPlan,
   type AgentImportDoctorOutcome,
+  type AgentImportWorkspacePolicy,
 } from "@octogee/shared/types/agent-import";
 import type {
   AgentImportRepositoryInspection,
@@ -44,9 +45,11 @@ export interface AgentImportPreview {
     conflicts: string[];
     conflictCount: number;
     conflictDigest: string;
+    preservedPaths: string[];
   };
   doctor: AgentImportDoctorResult;
   config: AgentImportConfigPlan;
+  workspacePolicy: AgentImportWorkspacePolicy;
   approvalHash: string;
 }
 
@@ -100,6 +103,7 @@ export interface StoredAgentImportPlan {
   approvalHash: string;
   artifacts: AgentImportConfigArtifacts;
   config: AgentImportConfigPlan;
+  workspacePolicy: AgentImportWorkspacePolicy;
 }
 
 export interface AgentImportIdentity {
@@ -127,7 +131,11 @@ export interface AgentImportServiceDeps {
   }): Promise<{ repoDir: string; sourceHead: string; cleanup(): void }>;
   extractLocalSource(archive: Buffer): Promise<ExtractedAgentImportSource>;
   inspectSource(repoDir: string): Promise<AgentImportRepositoryInspection>;
-  compareWorkspaces(sourceDir: string, targetDir: string): Promise<AgentImportWorkspaceComparison>;
+  compareWorkspaces(
+    sourceDir: string,
+    targetDir: string,
+    workspacePolicy: AgentImportWorkspacePolicy,
+  ): Promise<AgentImportWorkspaceComparison>;
   workspaceState(slug: string): Promise<{ targetDir: string; head: string; clean: boolean }>;
   runDoctor(candidate: JsonObject): Promise<AgentImportDoctorResult>;
   putRecord(record: AgentImportRecord): Promise<void>;
@@ -148,6 +156,7 @@ export interface AgentImportServiceDeps {
     destinationHead: string;
     importId: string;
     slug: string;
+    workspacePolicy: AgentImportWorkspacePolicy;
   }): Promise<{ importCommit: string; sourceRef: string }>;
   rollbackRepository(input: {
     targetDir: string;
@@ -204,6 +213,7 @@ function approvalHash(input: {
   workspaceDigest: string;
   artifacts: AgentImportConfigArtifacts;
   comparison: AgentImportWorkspaceComparison;
+  workspacePolicy: AgentImportWorkspacePolicy;
 }): string {
   const source = Object.fromEntries(
     Object.entries(input.source).map(([key, value]) => [key, String(value)]),
@@ -213,7 +223,11 @@ function approvalHash(input: {
     destinationHead: input.destinationHead,
     workspaceDigest: input.workspaceDigest,
     configDigest: configDigest(input.artifacts),
-    resolutions: { workspaceConflictDigest: input.comparison.conflictDigest },
+    resolutions: {
+      workspaceConflictDigest: input.comparison.conflictDigest,
+      preserveConvergedContextFiles:
+        String(input.workspacePolicy.preserveConvergedContextFiles),
+    },
   }));
 }
 
@@ -291,6 +305,17 @@ function previousRuntime(coach: JsonObject, patch: JsonObject): JsonObject {
     key,
     restorationValue(coach[key], value, Object.prototype.hasOwnProperty.call(coach, key)),
   ]));
+}
+
+function mergedPreviousRuntime(
+  coach: JsonObject,
+  patch: JsonObject,
+  checkpointedPrevious: JsonObject | undefined,
+): JsonObject {
+  return {
+    ...previousRuntime(coach, patch),
+    ...(checkpointedPrevious ?? {}),
+  };
 }
 
 function deepEqual(left: unknown, right: unknown): boolean {
@@ -417,6 +442,7 @@ export class AgentImportService {
     uid: string;
     slug: string;
     gatewayId: string;
+    workspacePolicy: AgentImportWorkspacePolicy;
     owner: string;
     repo: string;
     branch: string;
@@ -441,6 +467,7 @@ export class AgentImportService {
         uid: input.uid,
         slug: input.slug,
         gatewayId: input.gatewayId,
+        workspacePolicy: input.workspacePolicy,
         artifacts,
         inspected,
         repoDir: source.repoDir,
@@ -462,6 +489,7 @@ export class AgentImportService {
     uid: string;
     slug: string;
     gatewayId: string;
+    workspacePolicy: AgentImportWorkspacePolicy;
     archive: Buffer;
   }): Promise<AgentImportPreview> {
     const extracted = await this.deps.extractLocalSource(input.archive);
@@ -474,6 +502,7 @@ export class AgentImportService {
         uid: input.uid,
         slug: input.slug,
         gatewayId: input.gatewayId,
+        workspacePolicy: input.workspacePolicy,
         artifacts: extracted.artifacts,
         inspected,
         repoDir: extracted.repoDir,
@@ -497,6 +526,7 @@ export class AgentImportService {
     uid: string;
     slug: string;
     gatewayId: string;
+    workspacePolicy: AgentImportWorkspacePolicy;
     artifacts: AgentImportConfigArtifacts;
     inspected: AgentImportRepositoryInspection;
     repoDir: string;
@@ -520,8 +550,15 @@ export class AgentImportService {
       };
     }
     const adapted = adaptedArtifacts(input.artifacts, doctor);
-    const config = planAgentImportConfig(adapted.artifacts, { doctorOutcome: adapted.outcome });
-    const comparison = await this.deps.compareWorkspaces(input.repoDir, destination.targetDir);
+    const config = planAgentImportConfig(adapted.artifacts, {
+      doctorOutcome: adapted.outcome,
+      workspacePolicy: input.workspacePolicy,
+    });
+    const comparison = await this.deps.compareWorkspaces(
+      input.repoDir,
+      destination.targetDir,
+      input.workspacePolicy,
+    );
     const id = this.deps.newId();
     const hash = approvalHash({
       source: input.source,
@@ -529,6 +566,7 @@ export class AgentImportService {
       workspaceDigest: input.inspected.workspaceDigest,
       artifacts: adapted.artifacts,
       comparison,
+      workspacePolicy: input.workspacePolicy,
     });
     const preview: AgentImportPreview = {
       id,
@@ -543,9 +581,11 @@ export class AgentImportService {
         conflicts: comparison.conflicts,
         conflictCount: comparison.conflictCount,
         conflictDigest: comparison.conflictDigest,
+        preservedPaths: comparison.preservedPaths,
       },
       doctor: { ...doctor, ...(adapted.outcome !== doctor.outcome ? { outcome: adapted.outcome } : {}) },
       config,
+      workspacePolicy: input.workspacePolicy,
       approvalHash: hash,
     };
     const timestamp = this.deps.now().toISOString();
@@ -559,6 +599,7 @@ export class AgentImportService {
         approvalHash: hash,
         artifacts: adapted.artifacts,
         config,
+        workspacePolicy: input.workspacePolicy,
       });
       if (input.archive) await this.deps.putArchive(id, input.archive);
       await this.deps.putRecord({
@@ -583,11 +624,21 @@ export class AgentImportService {
     return preview;
   }
 
-  async apply(input: { uid: string; importId: string; approvalHash: string }): Promise<AgentImportRecord> {
+  async apply(input: {
+    uid: string;
+    importId: string;
+    approvalHash: string;
+    workspacePolicy: AgentImportWorkspacePolicy;
+  }): Promise<AgentImportRecord> {
     return this.serializeMutation(input.uid, input.importId, () => this.applyOnce(input));
   }
 
-  private async applyOnce(input: { uid: string; importId: string; approvalHash: string }): Promise<AgentImportRecord> {
+  private async applyOnce(input: {
+    uid: string;
+    importId: string;
+    approvalHash: string;
+    workspacePolicy: AgentImportWorkspacePolicy;
+  }): Promise<AgentImportRecord> {
     let current = await this.ownedRecord(input.importId, input.uid);
     if (current.status === "complete") return current;
     if (!APPLYABLE_STATUSES.has(current.status)) {
@@ -599,6 +650,15 @@ export class AgentImportService {
     const plan = await this.deps.getPlan(input.importId);
     if (!plan || plan.uid !== input.uid || plan.approvalHash !== input.approvalHash) {
       throw new AgentImportServiceError("import_plan_missing", "approved import plan is unavailable");
+    }
+    if (
+      plan.workspacePolicy.preserveConvergedContextFiles !==
+      input.workspacePolicy.preserveConvergedContextFiles
+    ) {
+      throw new AgentImportServiceError(
+        "workspace_policy_changed",
+        "workspace ownership changed after preview; preview the import again",
+      );
     }
     try {
       current = await this.applyWorkspace(current, plan, input.importId);
@@ -650,6 +710,7 @@ export class AgentImportService {
         destinationHead: plan.destinationHead,
         importId,
         slug: plan.slug,
+        workspacePolicy: plan.workspacePolicy,
       });
       return this.update(workspace, { importCommit: applied.importCommit });
     } finally {
@@ -677,10 +738,18 @@ export class AgentImportService {
     plan: StoredAgentImportPlan,
   ): Promise<AgentImportRecord> {
     let checkpoint = current;
+    const workspacePrevious = await this.applyRequiredRuntimeConfig(
+      plan.slug,
+      plan.config.workspaceRuntimePatch,
+      checkpoint.previousRuntime,
+      async (previous) => {
+        checkpoint = await this.update(checkpoint, { status: "config", previousRuntime: previous });
+      },
+    );
     const configured = await this.applyRuntimeConfig(
       plan.slug,
       plan.config.runtimePatch,
-      checkpoint.previousRuntime,
+      workspacePrevious,
       async (previous) => {
         checkpoint = await this.update(checkpoint, { status: "config", previousRuntime: previous });
       },
@@ -693,6 +762,56 @@ export class AgentImportService {
       configOutcome: configured.outcome,
       previousRuntime: configured.previous,
       warnings,
+    });
+  }
+
+  private async applyRequiredRuntimeConfig(
+    slug: string,
+    runtimePatch: JsonObject,
+    checkpointedPrevious: JsonObject | undefined,
+    checkpoint: (previous: JsonObject) => Promise<void>,
+  ): Promise<JsonObject> {
+    if (Object.keys(runtimePatch).length === 0) return checkpointedPrevious ?? {};
+    const coachId = `octogee-${slug}-coach`;
+    return this.deps.withConfigLock(async () => {
+      const before = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
+      const previous = mergedPreviousRuntime(
+        coachFromConfig(before.config, coachId),
+        runtimePatch,
+        checkpointedPrevious,
+      );
+      if (!checkpointedPrevious || !deepEqual(previous, checkpointedPrevious)) {
+        await checkpoint(previous);
+      }
+      if (!safelyIdKeyedAgentList(before.config)) {
+        throw new AgentImportServiceError(
+          "workspace_runtime_policy_failed",
+          "OpenClaw agent list cannot safely enforce workspace ownership",
+        );
+      }
+      try {
+        await this.deps.invokeOpenClaw("config.patch", {
+          raw: JSON.stringify(coachPatch(coachId, runtimePatch)),
+          baseHash: before.hash,
+        });
+      } catch {
+        const current = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
+        const patchState = runtimePatchState(before.config, current.config, coachId, runtimePatch);
+        if (patchState === "unchanged") {
+          throw new AgentImportServiceError(
+            "workspace_runtime_policy_failed",
+            "OpenClaw rejected the required workspace ownership configuration",
+          );
+        }
+        if (patchState === "diverged") {
+          throw new AgentImportServiceError("config_changed", "OpenClaw configuration changed during import");
+        }
+      }
+      const after = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
+      assertRuntimePatchApplied(before.config, after.config, coachId, runtimePatch);
+      assertUnpatchedAgentConfig(before.config, after.config, coachId, runtimePatch);
+      await this.deps.invokeOpenClaw("health", {});
+      return previous;
     });
   }
 
@@ -841,8 +960,15 @@ export class AgentImportService {
     const coachId = `octogee-${slug}-coach`;
     return this.deps.withConfigLock(async () => {
       const before = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
-      const previous = checkpointedPrevious ?? previousRuntime(coachFromConfig(before.config, coachId), runtimePatch);
-      if (!checkpointedPrevious) await checkpoint(previous);
+      const reversePatch = previousRuntime(coachFromConfig(before.config, coachId), runtimePatch);
+      const previous = mergedPreviousRuntime(
+        coachFromConfig(before.config, coachId),
+        runtimePatch,
+        checkpointedPrevious,
+      );
+      if (!checkpointedPrevious || !deepEqual(previous, checkpointedPrevious)) {
+        await checkpoint(previous);
+      }
       if (!safelyIdKeyedAgentList(before.config)) {
         return { outcome: "safe_baseline", previous };
       }
@@ -870,12 +996,12 @@ export class AgentImportService {
           throw new AgentImportServiceError("config_rollback_unsafe", "OpenClaw agent list cannot be safely restored");
         }
         await this.deps.invokeOpenClaw("config.patch", {
-          raw: JSON.stringify(coachPatch(coachId, previous)),
+          raw: JSON.stringify(coachPatch(coachId, reversePatch)),
           baseHash: rollbackBase.hash,
         });
         const restored = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
-        assertRuntimePatchApplied(rollbackBase.config, restored.config, coachId, previous);
-        assertUnpatchedAgentConfig(before.config, restored.config, coachId, previous);
+        assertRuntimePatchApplied(rollbackBase.config, restored.config, coachId, reversePatch);
+        assertUnpatchedAgentConfig(before.config, restored.config, coachId, reversePatch);
         await this.deps.invokeOpenClaw("health", {});
         return { outcome: "safe_baseline", previous };
       }

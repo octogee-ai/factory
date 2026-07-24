@@ -21,7 +21,11 @@ function harness() {
     rollback: vi.fn().mockResolvedValue({ id: "imp-1", status: "rolled_back" }),
     abandon: vi.fn().mockResolvedValue({ id: "imp-1", status: "abandoned" }),
   };
-  const authorize = vi.fn().mockResolvedValue({ slug: "alice", gatewayId: "gw-alice" });
+  const authorize = vi.fn().mockResolvedValue({
+    slug: "alice",
+    gatewayId: "gw-alice",
+    workspacePolicy: { preserveConvergedContextFiles: false },
+  });
   const listGithubSources = vi.fn().mockResolvedValue({
     repos: [{ owner: "jack", repo: "moof", defaultBranch: "main" }],
     truncated: false,
@@ -56,7 +60,7 @@ describe("agent imports route", () => {
       "invalid_import_id", "invalid_import_state", "invalid_platform_manifest", "invalid_source_config",
       "local_archive_missing", "rollback_window_closed", "secret_scan_failed", "source_agent_ambiguous",
       "source_agent_not_found", "source_changed", "unsafe_archive_entry", "unsafe_config_artifact",
-      "unsafe_git_entry", "unsafe_platform_path", "workspace_busy",
+      "unsafe_git_entry", "unsafe_platform_path", "workspace_busy", "workspace_policy_changed",
     ];
     expect(codes.filter((code) => !AGENT_IMPORT_ERROR_STATUS[code])).toEqual([]);
   });
@@ -83,6 +87,7 @@ describe("agent imports route", () => {
       uid: "uid-alice",
       slug: "alice",
       gatewayId: "gw-alice",
+      workspacePolicy: { preserveConvergedContextFiles: false },
       owner: "jack",
       repo: "moof",
       branch: "main",
@@ -189,6 +194,7 @@ describe("agent imports route", () => {
       uid: "uid-alice",
       slug: "alice",
       gatewayId: "gw-alice",
+      workspacePolicy: { preserveConvergedContextFiles: false },
       archive: Buffer.from("normalized"),
     });
   });
@@ -240,7 +246,12 @@ describe("agent imports route", () => {
     await request(app).get("/api/g/gw-alice/agent-imports/latest").expect(200);
     await request(app).post("/api/g/gw-alice/agent-imports/imp-1/rollback").expect(200);
 
-    expect(service.apply).toHaveBeenCalledWith({ importId: "imp-1", uid: "uid-alice", approvalHash: "sha256:approval" });
+    expect(service.apply).toHaveBeenCalledWith({
+      importId: "imp-1",
+      uid: "uid-alice",
+      approvalHash: "sha256:approval",
+      workspacePolicy: { preserveConvergedContextFiles: false },
+    });
     expect(service.get).toHaveBeenCalledWith({ importId: "imp-1", uid: "uid-alice" });
     expect(service.latest).toHaveBeenCalledWith({ uid: "uid-alice" });
     expect(service.rollback).toHaveBeenCalledWith({ importId: "imp-1", uid: "uid-alice" });

@@ -58,9 +58,13 @@ export interface AgentImportConfigPlan {
         persona?: string;
         emoji?: string;
     };
+    workspaceRuntimePatch: JsonObject;
     runtimePatch: JsonObject;
     decisions: AgentImportConfigDecision[];
     reauth: string[];
+}
+export interface AgentImportWorkspacePolicy {
+    preserveConvergedContextFiles: boolean;
 }
 export interface AgentImportApprovalFields {
     source: Record<string, string>;
@@ -77,6 +81,7 @@ export declare function buildAgentImportConfigArtifacts(source: unknown, selecte
 export declare function validateAgentImportConfigArtifacts(value: unknown): AgentImportConfigArtifacts;
 export declare function planAgentImportConfig(input: AgentImportConfigArtifacts, options: {
     doctorOutcome: AgentImportDoctorOutcome;
+    workspacePolicy: AgentImportWorkspacePolicy;
 }): AgentImportConfigPlan;
 export declare function classifyAgentImportArchivePath(path: string): "git" | "metadata" | "workspace" | null;
 export declare function buildAgentImportApprovalInput(fields: AgentImportApprovalFields): string;

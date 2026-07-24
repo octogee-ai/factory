@@ -213,7 +213,10 @@ describe("agent import config artifacts", () => {
       },
     }, "moof");
 
-    const plan = planAgentImportConfig(artifacts, { doctorOutcome: "unchanged" });
+    const plan = planAgentImportConfig(artifacts, {
+      doctorOutcome: "unchanged",
+      workspacePolicy: { preserveConvergedContextFiles: false },
+    });
 
     expect(plan.decisions).toContainEqual({
       path: "agents.list[0].identity.avatarUrl",
@@ -259,7 +262,10 @@ describe("agent import config artifacts", () => {
 describe("agent import config plan", () => {
   it("applies doctor-validated customer fields, routes models to reauth, and drops unsafe inventory", () => {
     const artifacts = buildAgentImportConfigArtifacts(sourceConfig(), "moof");
-    const plan = planAgentImportConfig(artifacts, { doctorOutcome: "migrated" });
+    const plan = planAgentImportConfig(artifacts, {
+      doctorOutcome: "migrated",
+      workspacePolicy: { preserveConvergedContextFiles: false },
+    });
 
     expect(plan.identity).toEqual({
       name: "Moof",
@@ -269,6 +275,12 @@ describe("agent import config plan", () => {
     expect(plan.runtimePatch).toMatchObject({
       heartbeat: { every: "30m", lightContext: false },
       timeoutSeconds: 300,
+    });
+    expect(plan.workspaceRuntimePatch).toEqual({ skipBootstrap: true });
+    expect(plan.decisions).toContainEqual({
+      path: "skipBootstrap",
+      disposition: "apply",
+      reason: "Builder-owned context files must not be recreated after import",
     });
     expect(plan.decisions).toContainEqual(expect.objectContaining({
       path: "model.primary",
@@ -286,8 +298,12 @@ describe("agent import config plan", () => {
 
   it("keeps runtime config on the safe baseline when doctor cannot validate the source", () => {
     const artifacts = buildAgentImportConfigArtifacts(sourceConfig(), "moof");
-    const plan = planAgentImportConfig(artifacts, { doctorOutcome: "unsupported" });
+    const plan = planAgentImportConfig(artifacts, {
+      doctorOutcome: "unsupported",
+      workspacePolicy: { preserveConvergedContextFiles: false },
+    });
 
+    expect(plan.workspaceRuntimePatch).toEqual({ skipBootstrap: true });
     expect(plan.runtimePatch).toEqual({});
     expect(plan.effectiveOutcome).toBe("safe_baseline");
     expect(plan.decisions).toContainEqual(expect.objectContaining({
@@ -301,10 +317,32 @@ describe("agent import config plan", () => {
       agents: { list: [{ id: "moof", name: "Moof" }] },
     }, "moof");
 
-    const plan = planAgentImportConfig(artifacts, { doctorOutcome: "unchanged" });
+    const plan = planAgentImportConfig(artifacts, {
+      doctorOutcome: "unchanged",
+      workspacePolicy: { preserveConvergedContextFiles: false },
+    });
 
+    expect(plan.workspaceRuntimePatch).toEqual({ skipBootstrap: true });
     expect(plan.runtimePatch).toEqual({});
     expect(plan.effectiveOutcome).toBe("unchanged");
+  });
+
+  it("keeps OpenClaw bootstrap convergence enabled for house-only workspaces", () => {
+    const artifacts = buildAgentImportConfigArtifacts({
+      agents: { list: [{ id: "moof", name: "Moof" }] },
+    }, "moof");
+
+    const plan = planAgentImportConfig(artifacts, {
+      doctorOutcome: "unchanged",
+      workspacePolicy: { preserveConvergedContextFiles: true },
+    });
+
+    expect(plan.workspaceRuntimePatch).toEqual({ skipBootstrap: false });
+    expect(plan.decisions).toContainEqual({
+      path: "skipBootstrap",
+      disposition: "apply",
+      reason: "OpenClaw converges house-only context files",
+    });
   });
 });
 

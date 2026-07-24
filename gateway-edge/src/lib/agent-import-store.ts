@@ -1,5 +1,6 @@
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { isValidUsername } from "@octogee/shared/types/identity";
+import type { AgentImportWorkspacePolicy } from "@octogee/shared/types/agent-import";
 
 import { internalFetch } from "./internal-fetch.js";
 import type { AgentImportManifestEntry } from "./agent-import-git.js";
@@ -92,9 +93,11 @@ function validRecord(value: unknown, id: string): AgentImportRecord {
 
 function validPlan(value: unknown): StoredAgentImportPlan {
   const data = object(value);
+  const workspacePolicy = object(data?.workspacePolicy);
   if (
     typeof data?.uid !== "string" || typeof data.slug !== "string" ||
-    typeof data.gatewayId !== "string" || typeof data.approvalHash !== "string"
+    typeof data.gatewayId !== "string" || typeof data.approvalHash !== "string" ||
+    typeof workspacePolicy?.preserveConvergedContextFiles !== "boolean"
   ) {
     throw new Error("agent import broker returned an invalid plan");
   }
@@ -169,15 +172,29 @@ export function createAgentImportStore(deps: StoreDeps) {
   });
 
   return {
-    async authorize(): Promise<{ slug: string; gatewayId: string }> {
+    async authorize(): Promise<{
+      slug: string;
+      gatewayId: string;
+      workspacePolicy: AgentImportWorkspacePolicy;
+    }> {
       const value = object(await jsonRequest("/authorize", {
         method: "POST",
         ...jsonBody({ gatewayId: deps.gatewayId }),
       }));
-      if (!value || !isValidUsername(value.slug) || value.gatewayId !== deps.gatewayId) {
+      const workspacePolicy = object(value?.workspacePolicy);
+      if (
+        !value || !isValidUsername(value.slug) || value.gatewayId !== deps.gatewayId ||
+        typeof workspacePolicy?.preserveConvergedContextFiles !== "boolean"
+      ) {
         throw new Error("agent import broker returned malformed authorization");
       }
-      return { slug: value.slug, gatewayId: deps.gatewayId };
+      return {
+        slug: value.slug,
+        gatewayId: deps.gatewayId,
+        workspacePolicy: {
+          preserveConvergedContextFiles: workspacePolicy.preserveConvergedContextFiles,
+        },
+      };
     },
 
     async putRecord(record: AgentImportRecord): Promise<void> {

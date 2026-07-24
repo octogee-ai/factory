@@ -7,16 +7,37 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AgentImportGitError,
   agentImportRepositoryApplied,
-  applyAgentImportRepository,
+  applyAgentImportRepository as applyAgentImportRepositoryWithPolicy,
   assertAgentImportRepositoryExpansionSafe,
   buildAgentImportGitEnvironment,
-  compareAgentImportWorkspaces,
+  compareAgentImportWorkspaces as compareAgentImportWorkspacesWithPolicy,
   inspectAgentImportRepository,
   rollbackAgentImportRepository,
   scanAgentImportSecrets,
 } from "../lib/agent-import-git.js";
 
 const roots: string[] = [];
+const HOUSE_ONLY_WORKSPACE_POLICY = { preserveConvergedContextFiles: true };
+const BUILDER_OWNED_CONTEXT_POLICY = { preserveConvergedContextFiles: false };
+
+type ApplyOptions = Parameters<typeof applyAgentImportRepositoryWithPolicy>[0];
+
+function applyAgentImportRepository(
+  options: Omit<ApplyOptions, "workspacePolicy"> & Partial<Pick<ApplyOptions, "workspacePolicy">>,
+) {
+  return applyAgentImportRepositoryWithPolicy({
+    workspacePolicy: BUILDER_OWNED_CONTEXT_POLICY,
+    ...options,
+  });
+}
+
+function compareAgentImportWorkspaces(
+  sourceDir: string,
+  targetDir: string,
+  workspacePolicy = BUILDER_OWNED_CONTEXT_POLICY,
+) {
+  return compareAgentImportWorkspacesWithPolicy(sourceDir, targetDir, workspacePolicy);
+}
 
 function temp(name: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`));
@@ -40,6 +61,31 @@ function repo(name: string, files: Record<string, string | Buffer>): string {
   git(dir, "add", "-A");
   git(dir, "commit", "-q", "-m", "initial");
   return dir;
+}
+
+function reconcileOpenClawWorkspace(
+  dir: string,
+  options: { skipBootstrap: boolean },
+): string[] {
+  if (options.skipBootstrap) return [];
+  const statePath = path.join(dir, "openclaw-workspace-state.json");
+  const state = fs.existsSync(statePath)
+    ? JSON.parse(fs.readFileSync(statePath, "utf8")) as { setupCompletedAt?: string }
+    : {};
+  const required = ["AGENTS.md", "TOOLS.md"];
+  const optional = state.setupCompletedAt ? [] : ["IDENTITY.md", "USER.md"];
+  const changed: string[] = [];
+  for (const file of [...required, ...optional]) {
+    const filePath = path.join(dir, file);
+    if (fs.existsSync(filePath)) continue;
+    fs.writeFileSync(filePath, `# OpenClaw ${file}\n`);
+    changed.push(file);
+  }
+  if (!fs.existsSync(statePath)) {
+    fs.writeFileSync(statePath, `${JSON.stringify({ version: 1, setupCompletedAt: "2026-07-20T00:00:00.000Z" })}\n`);
+    changed.push("openclaw-workspace-state.json");
+  }
+  return changed;
 }
 
 afterEach(() => {
@@ -160,6 +206,209 @@ describe("inspectAgentImportRepository", () => {
 });
 
 describe("applyAgentImportRepository", () => {
+  it("keeps a Trial import clean through OpenClaw reconciliation and exact rollback", async () => {
+    const platformFiles = {
+      "AGENTS.md": "# Builder agent instructions\n",
+      "IDENTITY.md": "# Builder identity\n",
+      "TOOLS.md": "# Builder tools\n",
+      "USER.md": "# Builder profile\n",
+      "openclaw-workspace-state.json":
+        "{\"version\":1,\"setupCompletedAt\":\"2026-07-20T00:00:00.000Z\"}\n",
+    };
+    const source = repo("agent-import-managed-source", { "MEMORY.md": "Three minutes.\n" });
+    const target = repo("agent-import-managed-target", {
+      "README.md": "starter\n",
+      ...platformFiles,
+    });
+    const destinationHead = git(target, "rev-parse", "HEAD");
+
+    const preview = await compareAgentImportWorkspaces(
+      source,
+      target,
+      BUILDER_OWNED_CONTEXT_POLICY,
+    );
+    expect(preview.conflicts).toEqual([
+      "delete:AGENTS.md",
+      "delete:IDENTITY.md",
+      "delete:README.md",
+      "delete:TOOLS.md",
+      "delete:USER.md",
+    ]);
+    expect(preview.preservedPaths).toEqual([
+      ".files",
+      "openclaw-workspace-state.json",
+      "projects",
+    ]);
+
+    const applied = await applyAgentImportRepository({
+      sourceDir: source,
+      sourceHead: git(source, "rev-parse", "HEAD"),
+      targetDir: target,
+      destinationHead,
+      importId: "import-managed-files",
+      slug: "jack",
+      storeBlob: vi.fn(),
+      cleanupBlobs: vi.fn(),
+      workspacePolicy: BUILDER_OWNED_CONTEXT_POLICY,
+      push: false,
+    });
+
+    for (const file of ["AGENTS.md", "IDENTITY.md", "TOOLS.md", "USER.md"]) {
+      expect(fs.existsSync(path.join(target, file))).toBe(false);
+    }
+    expect(fs.readFileSync(path.join(target, "openclaw-workspace-state.json"), "utf8"))
+      .toBe(platformFiles["openclaw-workspace-state.json"]);
+    expect(fs.readFileSync(path.join(target, "MEMORY.md"), "utf8")).toBe("Three minutes.\n");
+    expect(git(target, "status", "--porcelain", "--untracked-files=all")).toBe("");
+
+    expect(reconcileOpenClawWorkspace(target, { skipBootstrap: false }))
+      .toEqual(["AGENTS.md", "TOOLS.md"]);
+    expect(git(target, "status", "--porcelain", "--untracked-files=all")).not.toBe("");
+    fs.rmSync(path.join(target, "AGENTS.md"));
+    fs.rmSync(path.join(target, "TOOLS.md"));
+    expect(reconcileOpenClawWorkspace(target, { skipBootstrap: true })).toEqual([]);
+    expect(git(target, "status", "--porcelain", "--untracked-files=all")).toBe("");
+
+    fs.writeFileSync(path.join(target, "builder-note.md"), "do not discard\n");
+    await expect(rollbackAgentImportRepository({
+      targetDir: target,
+      importCommit: applied.importCommit,
+      destinationHead,
+      importId: "import-managed-files",
+      push: false,
+    })).rejects.toMatchObject({ code: "destination_dirty" });
+    fs.rmSync(path.join(target, "builder-note.md"));
+
+    const rolledBack = await rollbackAgentImportRepository({
+      targetDir: target,
+      importCommit: applied.importCommit,
+      destinationHead,
+      importId: "import-managed-files",
+      push: false,
+    });
+    expect(git(target, "rev-parse", `${rolledBack.rollbackCommit}^{tree}`))
+      .toBe(git(target, "rev-parse", `${destinationHead}^{tree}`));
+    expect(git(target, "status", "--porcelain", "--untracked-files=all")).toBe("");
+  });
+
+  it("preserves only exact context files for house-only plans", async () => {
+    const source = repo("agent-import-path-shape-source", { "MEMORY.md": "source\n" });
+    const target = repo("agent-import-path-shape-target", {
+      "AGENTS.md/custom-builder-file": "nested\n",
+      "TOOLS.md": "platform tools\n",
+    });
+
+    const comparison = await compareAgentImportWorkspaces(
+      source,
+      target,
+      HOUSE_ONLY_WORKSPACE_POLICY,
+    );
+
+    expect(comparison.conflicts).toEqual(["delete:AGENTS.md/custom-builder-file"]);
+    expect(comparison.preservedPaths).toEqual([
+      ".files",
+      "AGENTS.md",
+      "TOOLS.md",
+      "openclaw-workspace-state.json",
+      "projects",
+    ]);
+
+    await applyAgentImportRepository({
+      sourceDir: source,
+      sourceHead: git(source, "rev-parse", "HEAD"),
+      targetDir: target,
+      destinationHead: git(target, "rev-parse", "HEAD"),
+      importId: "import-path-shape",
+      slug: "jack",
+      storeBlob: vi.fn(),
+      cleanupBlobs: vi.fn(),
+      workspacePolicy: HOUSE_ONLY_WORKSPACE_POLICY,
+      push: false,
+    });
+
+    expect(fs.existsSync(path.join(target, "AGENTS.md"))).toBe(false);
+    expect(fs.readFileSync(path.join(target, "TOOLS.md"), "utf8")).toBe("platform tools\n");
+  });
+
+  it("removes an imported directory collision at an absent reserved file path", async () => {
+    const source = repo("agent-import-reserved-file-source", {
+      "MEMORY.md": "source\n",
+      "openclaw-workspace-state.json/imported-child": "collision\n",
+    });
+    const target = repo("agent-import-reserved-file-target", { "README.md": "target\n" });
+
+    await applyAgentImportRepository({
+      sourceDir: source,
+      sourceHead: git(source, "rev-parse", "HEAD"),
+      targetDir: target,
+      destinationHead: git(target, "rev-parse", "HEAD"),
+      importId: "import-reserved-file",
+      slug: "jack",
+      storeBlob: vi.fn(),
+      cleanupBlobs: vi.fn(),
+      push: false,
+    });
+
+    expect(fs.existsSync(path.join(target, "openclaw-workspace-state.json"))).toBe(false);
+    expect(fs.readFileSync(path.join(target, "MEMORY.md"), "utf8")).toBe("source\n");
+  });
+
+  it("preserves converged context only for house-only plans", async () => {
+    const source = repo("agent-import-plan-source", {
+      "AGENTS.md": "imported agents\n",
+      "TOOLS.md": "imported tools\n",
+    });
+    const houseTarget = repo("agent-import-house-target", {
+      "AGENTS.md": "free agents\n",
+      "TOOLS.md": "free tools\n",
+    });
+    const trialTarget = repo("agent-import-trial-target", {
+      "AGENTS.md": "trial agents\n",
+      "TOOLS.md": "trial tools\n",
+    });
+
+    expect((await compareAgentImportWorkspaces(
+      source,
+      houseTarget,
+      HOUSE_ONLY_WORKSPACE_POLICY,
+    )).conflicts).toEqual([]);
+    expect((await compareAgentImportWorkspaces(
+      source,
+      trialTarget,
+      BUILDER_OWNED_CONTEXT_POLICY,
+    )).conflicts).toEqual(["overwrite:AGENTS.md", "overwrite:TOOLS.md"]);
+
+    await applyAgentImportRepository({
+      sourceDir: source,
+      sourceHead: git(source, "rev-parse", "HEAD"),
+      targetDir: houseTarget,
+      destinationHead: git(houseTarget, "rev-parse", "HEAD"),
+      importId: "import-house-context",
+      slug: "jack",
+      storeBlob: vi.fn(),
+      cleanupBlobs: vi.fn(),
+      workspacePolicy: HOUSE_ONLY_WORKSPACE_POLICY,
+      push: false,
+    });
+    await applyAgentImportRepository({
+      sourceDir: source,
+      sourceHead: git(source, "rev-parse", "HEAD"),
+      targetDir: trialTarget,
+      destinationHead: git(trialTarget, "rev-parse", "HEAD"),
+      importId: "import-trial-context",
+      slug: "jill",
+      storeBlob: vi.fn(),
+      cleanupBlobs: vi.fn(),
+      workspacePolicy: BUILDER_OWNED_CONTEXT_POLICY,
+      push: false,
+    });
+
+    expect(fs.readFileSync(path.join(houseTarget, "AGENTS.md"), "utf8")).toBe("free agents\n");
+    expect(fs.readFileSync(path.join(houseTarget, "TOOLS.md"), "utf8")).toBe("free tools\n");
+    expect(fs.readFileSync(path.join(trialTarget, "AGENTS.md"), "utf8")).toBe("imported agents\n");
+    expect(fs.readFileSync(path.join(trialTarget, "TOOLS.md"), "utf8")).toBe("imported tools\n");
+  });
+
   it("summarizes destination overwrites and deletions before approval", async () => {
     const source = repo("agent-import-conflicts-source", { "README.md": "source\n" });
     const target = repo("agent-import-conflicts-target", {
@@ -212,6 +461,7 @@ describe("applyAgentImportRepository", () => {
     });
     const sourceHead = git(source, "rev-parse", "HEAD");
     const target = repo("agent-import-target", {
+      "AGENTS.md": "# Octogee instructions\n",
       "README.md": "octogee starter\n",
       ".files/manifest.json": JSON.stringify({ "avatar.png": { type: "blob", gcsPath: "customers/jack/avatar.png" } }),
       "projects/existing/PROJECT.md": "keep project\n",

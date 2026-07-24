@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 
 import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
-import { classifyAgentImportArchivePath } from "@octogee/shared/types/agent-import";
+import {
+  classifyAgentImportArchivePath,
+  type AgentImportWorkspacePolicy,
+} from "@octogee/shared/types/agent-import";
 import { getExtension, getMimeType, isTextFile } from "../routes/workspace/helpers.js";
 
 const SHA_RE = /^[0-9a-f]{40}$/;
@@ -20,6 +23,9 @@ const MAX_SECRET_REPORT_BYTES = 4 * 1024 * 1024;
 const MAX_IMPORT_COMMITS = 10_000;
 const MAIN_REF = "refs/heads/main";
 const EMPTY_REF = "0".repeat(40);
+const PLATFORM_MANAGED_WORKSPACE_DIRECTORIES = [".files", "projects"] as const;
+const OPENCLAW_RUNTIME_WORKSPACE_FILES = ["openclaw-workspace-state.json"] as const;
+const CONVERGED_CONTEXT_FILES = ["AGENTS.md", "TOOLS.md"] as const;
 
 export interface AgentImportSecretFinding {
   ruleId: string;
@@ -53,26 +59,39 @@ function treeEntries(serialized: string): Map<string, string> {
   }));
 }
 
-function platformPreservedPath(relative: string): boolean {
-  return relative === ".files" || relative.startsWith(".files/") ||
-    relative === "projects" || relative.startsWith("projects/");
+function platformPreservedFiles(policy: AgentImportWorkspacePolicy): string[] {
+  return [
+    ...OPENCLAW_RUNTIME_WORKSPACE_FILES,
+    ...(policy.preserveConvergedContextFiles ? CONVERGED_CONTEXT_FILES : []),
+  ];
+}
+
+function platformPreservedPath(
+  relative: string,
+  policy: AgentImportWorkspacePolicy,
+): boolean {
+  return PLATFORM_MANAGED_WORKSPACE_DIRECTORIES.some((platformPath) =>
+    relative === platformPath || relative.startsWith(`${platformPath}/`)
+  ) || platformPreservedFiles(policy).some((platformPath) => platformPath === relative);
 }
 
 export interface AgentImportWorkspaceComparison {
   conflicts: string[];
   conflictCount: number;
   conflictDigest: string;
+  preservedPaths: string[];
 }
 
 export async function compareAgentImportWorkspaces(
   sourceDir: string,
   targetDir: string,
+  workspacePolicy: AgentImportWorkspacePolicy,
 ): Promise<AgentImportWorkspaceComparison> {
   const source = treeEntries(await git(sourceDir, ["ls-tree", "-r", "-l", "-z", "HEAD"]));
   const target = treeEntries(await git(targetDir, ["ls-tree", "-r", "-l", "-z", "HEAD"]));
   const conflicts: string[] = [];
   for (const [relative, metadata] of target) {
-    if (platformPreservedPath(relative)) continue;
+    if (platformPreservedPath(relative, workspacePolicy)) continue;
     const sourceMetadata = source.get(relative);
     if (relative === ".gitignore") {
       if (sourceMetadata !== metadata) conflicts.push("merge:.gitignore");
@@ -87,6 +106,10 @@ export async function compareAgentImportWorkspaces(
     conflicts: sorted.slice(0, 100),
     conflictCount: sorted.length,
     conflictDigest: `sha256:${createHash("sha256").update(sorted.join("\0")).digest("hex")}`,
+    preservedPaths: [
+      ...PLATFORM_MANAGED_WORKSPACE_DIRECTORIES,
+      ...platformPreservedFiles(workspacePolicy),
+    ].sort(),
   };
 }
 
@@ -568,18 +591,32 @@ function clearWorkingTree(repoDir: string): void {
   }
 }
 
-function preserveTargetPath(targetDir: string, stageDir: string, relativePath: string): void {
+function preserveTargetDirectory(targetDir: string, stageDir: string, relativePath: string): void {
   const source = path.join(targetDir, relativePath);
   const destination = path.join(stageDir, relativePath);
   fs.rmSync(destination, { recursive: true, force: true });
   if (!fs.existsSync(source)) return;
   const stat = fs.lstatSync(source);
   if (stat.isSymbolicLink()) throw new AgentImportGitError("unsafe_platform_path", `${relativePath} is a symlink`);
-  if (stat.isDirectory()) readDirectory(source, destination);
-  else {
-    fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.copyFileSync(source, destination);
+  if (!stat.isDirectory()) {
+    throw new AgentImportGitError("unsafe_platform_path", `${relativePath} is not a directory`);
   }
+  readDirectory(source, destination);
+}
+
+function preserveTargetFile(targetDir: string, stageDir: string, relativePath: string): void {
+  const source = path.join(targetDir, relativePath);
+  const destination = path.join(stageDir, relativePath);
+  if (!fs.existsSync(source)) {
+    fs.rmSync(destination, { recursive: true, force: true });
+    return;
+  }
+  const stat = fs.lstatSync(source);
+  if (stat.isSymbolicLink()) throw new AgentImportGitError("unsafe_platform_path", `${relativePath} is a symlink`);
+  if (!stat.isFile()) return;
+  fs.rmSync(destination, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.copyFileSync(source, destination);
 }
 
 function mergeGitignore(targetDir: string, stageDir: string): void {
@@ -827,6 +864,7 @@ interface ApplyAgentImportRepositoryOptions {
   destinationHead: string;
   importId: string;
   slug: string;
+  workspacePolicy: AgentImportWorkspacePolicy;
   storeBlob: (filePath: string, contents: Buffer, mimeType: string) => Promise<AgentImportManifestEntry>;
   cleanupBlobs: () => Promise<void>;
   push?: boolean;
@@ -902,8 +940,12 @@ export async function applyAgentImportRepository(
     await command(GIT_COMMAND, ["clone", "--quiet", "--no-hardlinks", options.sourceDir, stageDir], { label: "source staging clone" });
     clearWorkingTree(stageDir);
     readDirectory(options.sourceDir, stageDir);
-    preserveTargetPath(options.targetDir, stageDir, ".files");
-    preserveTargetPath(options.targetDir, stageDir, "projects");
+    for (const platformPath of PLATFORM_MANAGED_WORKSPACE_DIRECTORIES) {
+      preserveTargetDirectory(options.targetDir, stageDir, platformPath);
+    }
+    for (const platformPath of platformPreservedFiles(options.workspacePolicy)) {
+      preserveTargetFile(options.targetDir, stageDir, platformPath);
+    }
     mergeGitignore(options.targetDir, stageDir);
     await normalizeBinaryTip({ stageDir, targetDir: options.targetDir, storeBlob: options.storeBlob });
     await git(stageDir, ["add", "-A", "--", "."]);

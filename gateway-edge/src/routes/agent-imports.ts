@@ -5,7 +5,10 @@ import path from "node:path";
 import { Router, type NextFunction, type Request, type Response } from "express";
 
 import { isValidGatewayId } from "@octogee/shared/types/glm";
-import type { AgentImportConfigArtifacts } from "@octogee/shared/types/agent-import";
+import type {
+  AgentImportConfigArtifacts,
+  AgentImportWorkspacePolicy,
+} from "@octogee/shared/types/agent-import";
 import type { AgentImportService } from "../lib/agent-import-service.js";
 
 const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
@@ -16,7 +19,11 @@ const COMMIT_RE = /^[0-9a-f]{40}$/;
 interface AgentImportsRouterDeps {
   createRuntime(input: { authorization: string; gatewayId: string }): {
     service: Pick<AgentImportService, "previewGithub" | "previewLocal" | "apply" | "get" | "latest" | "rollback" | "abandon">;
-    authorize(): Promise<{ slug: string; gatewayId: string }>;
+    authorize(): Promise<{
+      slug: string;
+      gatewayId: string;
+      workspacePolicy: AgentImportWorkspacePolicy;
+    }>;
     listGithubSources(): Promise<unknown>;
   };
   localGatewayId(): string | null;
@@ -76,6 +83,7 @@ export const AGENT_IMPORT_ERROR_STATUS: Record<string, number> = {
   config_readback_failed: 503,
   config_rollback_unsafe: 503,
   approval_mismatch: 409,
+  workspace_policy_changed: 409,
   invalid_import_state: 409,
   rollback_window_closed: 409,
   import_plan_missing: 410,
@@ -128,6 +136,7 @@ async function authorize(
 ): Promise<{
   slug: string;
   gatewayId: string;
+  workspacePolicy: AgentImportWorkspacePolicy;
   runtime: ReturnType<AgentImportsRouterDeps["createRuntime"]>;
 } | null> {
   const requested = requestedGatewayId(req);
@@ -258,6 +267,7 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
         uid: req.uid!,
         slug: resolved.slug,
         gatewayId: resolved.gatewayId,
+        workspacePolicy: resolved.workspacePolicy,
         owner: body.owner,
         repo: body.repo,
         branch: body.branch,
@@ -287,6 +297,7 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
         uid: req.uid!,
         slug: resolved.slug,
         gatewayId: resolved.gatewayId,
+        workspacePolicy: resolved.workspacePolicy,
         archive: fs.readFileSync(archive.path),
       });
       res.status(201).json(preview);
@@ -309,7 +320,12 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
         res.status(400).json({ error: "approval_hash_required" });
         return;
       }
-      res.json(await authorized.runtime.service.apply({ importId: id, uid: req.uid!, approvalHash: body.approvalHash }));
+      res.json(await authorized.runtime.service.apply({
+        importId: id,
+        uid: req.uid!,
+        approvalHash: body.approvalHash,
+        workspacePolicy: authorized.workspacePolicy,
+      }));
     } catch (error) {
       handleImportError(error, res, next);
     }

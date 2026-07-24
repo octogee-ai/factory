@@ -6,6 +6,7 @@ import { pipeline } from "node:stream/promises";
 
 import { slugFromAssignedUser } from "@octogee/core/assigned-roster";
 import { classifyAgentImportArchivePath } from "@octogee/shared/types/agent-import";
+import { resolveBillingProfile, type TierResolvable } from "@octogee/shared/types/billing";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { isValidUsername } from "@octogee/shared/types/identity";
 import type { AgentImportManifestEntry } from "../../../gateway-edge/src/lib/agent-import-git.js";
@@ -59,6 +60,7 @@ interface OwnerContext {
   uid: string;
   slug: string;
   gatewayId: string;
+  workspacePolicy: { preserveConvergedContextFiles: boolean };
 }
 
 type BrokerRouter = ReturnType<typeof Router>;
@@ -109,7 +111,15 @@ async function ownerContext(
     res.status(403).json({ error: "forbidden" });
     return null;
   }
-  return { uid, slug, gatewayId: bound.gatewayId };
+  return {
+    uid,
+    slug,
+    gatewayId: bound.gatewayId,
+    workspacePolicy: {
+      preserveConvergedContextFiles:
+        resolveBillingProfile(user as TierResolvable, deps.now()).modelAccess === "house_only",
+    },
+  };
 }
 
 function authenticatedUid(req: Request, res: Response, bound: GatewayBinding): string | null {
@@ -244,7 +254,11 @@ function registerAccessRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps)
       res.status(403).json({ error: "forbidden" });
       return;
     }
-    res.json({ slug: owner.slug, gatewayId: owner.gatewayId });
+    res.json({
+      slug: owner.slug,
+      gatewayId: owner.gatewayId,
+      workspacePolicy: owner.workspacePolicy,
+    });
   });
 
   router.get("/github/sources", async (_req, res, next) => {

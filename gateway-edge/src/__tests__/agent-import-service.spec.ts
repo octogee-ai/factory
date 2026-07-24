@@ -11,6 +11,30 @@ import {
 const SOURCE_HEAD = "a".repeat(40);
 const DESTINATION_HEAD = "b".repeat(40);
 const IMPORT_COMMIT = "c".repeat(40);
+const DEFAULT_WORKSPACE_POLICY = { preserveConvergedContextFiles: false };
+
+class TestAgentImportService extends AgentImportService {
+  override previewGithub(
+    input: Omit<Parameters<AgentImportService["previewGithub"]>[0], "workspacePolicy"> &
+      Partial<Pick<Parameters<AgentImportService["previewGithub"]>[0], "workspacePolicy">>,
+  ) {
+    return super.previewGithub({ workspacePolicy: DEFAULT_WORKSPACE_POLICY, ...input });
+  }
+
+  override previewLocal(
+    input: Omit<Parameters<AgentImportService["previewLocal"]>[0], "workspacePolicy"> &
+      Partial<Pick<Parameters<AgentImportService["previewLocal"]>[0], "workspacePolicy">>,
+  ) {
+    return super.previewLocal({ workspacePolicy: DEFAULT_WORKSPACE_POLICY, ...input });
+  }
+
+  override apply(
+    input: Omit<Parameters<AgentImportService["apply"]>[0], "workspacePolicy"> &
+      Partial<Pick<Parameters<AgentImportService["apply"]>[0], "workspacePolicy">>,
+  ) {
+    return super.apply({ workspacePolicy: DEFAULT_WORKSPACE_POLICY, ...input });
+  }
+}
 
 function artifacts() {
   return buildAgentImportConfigArtifacts({
@@ -29,11 +53,57 @@ function artifacts() {
   }, "moof");
 }
 
+function openClawRuntimeHarness(initialConfig: Record<string, unknown> = {
+  agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m" } }] },
+}) {
+  const config = structuredClone(initialConfig);
+  let revision = 0;
+  const merge = (target: Record<string, unknown>, patch: Record<string, unknown>) => {
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === null) {
+        delete target[key];
+      } else if (
+        typeof value === "object" && value !== null && !Array.isArray(value) &&
+        typeof target[key] === "object" && target[key] !== null && !Array.isArray(target[key])
+      ) {
+        merge(target[key] as Record<string, unknown>, value as Record<string, unknown>);
+      } else {
+        target[key] = structuredClone(value);
+      }
+    }
+  };
+  const invokeOpenClaw = vi.fn(async (method: string, params: Record<string, unknown>) => {
+    if (method === "config.get") {
+      return { hash: `config-${revision}`, config: structuredClone(config) };
+    }
+    if (method === "config.patch") {
+      const raw = JSON.parse(String(params.raw)) as {
+        agents: { list: Array<Record<string, unknown>> };
+      };
+      const agents = (config.agents as { list: Array<Record<string, unknown>> }).list;
+      for (const agentPatch of raw.agents.list) {
+        const agent = agents.find((candidate) => candidate.id === agentPatch.id);
+        if (!agent) throw new Error("missing agent");
+        merge(agent, Object.fromEntries(Object.entries(agentPatch).filter(([key]) => key !== "id")));
+      }
+      revision += 1;
+      return { ok: true };
+    }
+    if (method === "health") return { status: "ok" };
+    throw new Error(`unexpected OpenClaw method ${method}`);
+  });
+  return {
+    invokeOpenClaw,
+    config: () => structuredClone(config),
+  };
+}
+
 function harness(overrides: Partial<AgentImportServiceDeps> = {}) {
   const records = new Map<string, AgentImportRecord>();
   const plans = new Map<string, StoredAgentImportPlan>();
   const archives = new Map<string, Buffer>();
   const cleanup = vi.fn();
+  const openClaw = openClawRuntimeHarness();
   const deps: AgentImportServiceDeps = {
     newId: () => "import-1",
     now: () => new Date("2026-07-20T12:00:00.000Z"),
@@ -57,6 +127,7 @@ function harness(overrides: Partial<AgentImportServiceDeps> = {}) {
     })),
     compareWorkspaces: vi.fn(async () => ({
       conflicts: [], conflictCount: 0, conflictDigest: `sha256:${"0".repeat(64)}`,
+      preservedPaths: [".files", "openclaw-workspace-state.json", "projects"],
     })),
     workspaceState: vi.fn(async () => ({ targetDir: "/target", head: DESTINATION_HEAD, clean: true })),
     runDoctor: vi.fn(async () => ({
@@ -86,33 +157,43 @@ function harness(overrides: Partial<AgentImportServiceDeps> = {}) {
     syncIdentity: vi.fn(async () => undefined),
     replaceIdentity: vi.fn(async () => undefined),
     withConfigLock: vi.fn(async (work) => work()),
-    invokeOpenClaw: vi.fn()
-      .mockResolvedValueOnce({
-        hash: "config-before",
-        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m" } }] } },
-      })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({
-        hash: "config-after",
-        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m", lightContext: true } }] } },
-      })
-      .mockResolvedValueOnce({ status: "ok" })
-      .mockResolvedValueOnce({
-        hash: "config-before-rollback",
-        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m", lightContext: true } }] } },
-      })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({
-        hash: "config-after-rollback",
-        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m" } }] } },
-      })
-      .mockResolvedValueOnce({ status: "ok" }),
+    invokeOpenClaw: openClaw.invokeOpenClaw,
     ...overrides,
   };
-  return { service: new AgentImportService(deps), deps, records, plans, archives, cleanup };
+  return { service: new TestAgentImportService(deps), deps, records, plans, archives, cleanup };
 }
 
 describe("AgentImportService preview", () => {
+  it("uses the authorized workspace ownership policy for preview and apply", async () => {
+    const compareWorkspaces = vi.fn(async () => ({
+      conflicts: [],
+      conflictCount: 0,
+      conflictDigest: `sha256:${"f".repeat(64)}`,
+      preservedPaths: ["openclaw-workspace-state.json"],
+    }));
+    const h = harness({ compareWorkspaces });
+    const workspacePolicy = { preserveConvergedContextFiles: false };
+
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack",
+      slug: "jack",
+      gatewayId: "shared-1",
+      workspacePolicy,
+      owner: "jack",
+      repo: "moof",
+      branch: "main",
+      artifacts: artifacts(),
+    });
+    await h.service.apply({
+      uid: "uid-jack",
+      importId: preview.id,
+      approvalHash: preview.approvalHash,
+    });
+
+    expect(compareWorkspaces).toHaveBeenCalledWith("/source", "/target", workspacePolicy);
+    expect(h.deps.applyRepository).toHaveBeenCalledWith(expect.objectContaining({ workspacePolicy }));
+  });
+
   it("rejects an oversized GitHub repository before starting a clone", async () => {
     const h = harness({ readGithubRepoSize: vi.fn(async () => 128 * 1024 + 1) });
 
@@ -133,6 +214,7 @@ describe("AgentImportService preview", () => {
       conflicts: ["overwrite:README.md", "delete:NOTES.md"],
       conflictCount: 2,
       conflictDigest: `sha256:${"f".repeat(64)}`,
+      preservedPaths: [".files", "openclaw-workspace-state.json", "projects"],
     })) });
     const preview = await h.service.previewGithub({
       uid: "uid-jack",
@@ -364,6 +446,32 @@ describe("AgentImportService apply and rollback", () => {
     expect(h.deps.cloneGithubSource).toHaveBeenCalledOnce();
   });
 
+  it("requires a fresh preview when live workspace ownership changes", async () => {
+    const h = harness();
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack",
+      slug: "jack",
+      gatewayId: "shared-1",
+      workspacePolicy: { preserveConvergedContextFiles: false },
+      owner: "jack",
+      repo: "moof",
+      branch: "main",
+      artifacts: artifacts(),
+    });
+
+    await expect(h.service.apply({
+      uid: "uid-jack",
+      importId: preview.id,
+      approvalHash: preview.approvalHash,
+      workspacePolicy: { preserveConvergedContextFiles: true },
+    })).rejects.toMatchObject({ code: "workspace_policy_changed" });
+
+    expect(h.records.get(preview.id)).toMatchObject({ status: "previewed" });
+    expect(h.deps.applyRepository).not.toHaveBeenCalled();
+    expect(h.deps.syncIdentity).not.toHaveBeenCalled();
+    expect(h.deps.invokeOpenClaw).not.toHaveBeenCalled();
+  });
+
   it("serializes rollback behind an in-flight apply for the same import", async () => {
     let releaseIdentity!: () => void;
     const identityBlocked = new Promise<void>((resolve) => { releaseIdentity = resolve; });
@@ -419,7 +527,12 @@ describe("AgentImportService apply and rollback", () => {
 
     expect(completed.configOutcome).toBe("unchanged");
     expect(completed.warnings).not.toContain("config_delta_rejected");
-    expect(h.deps.invokeOpenClaw).not.toHaveBeenCalled();
+    expect(h.deps.invokeOpenClaw).toHaveBeenCalledTimes(4);
+    expect(h.deps.invokeOpenClaw).toHaveBeenNthCalledWith(2, "config.patch", expect.objectContaining({
+      raw: JSON.stringify({
+        agents: { list: [{ id: "octogee-jack-coach", skipBootstrap: true }] },
+      }),
+    }));
   });
 
   it("patches only the coach and verifies redacted siblings and unpatched coach fields", async () => {
@@ -429,17 +542,8 @@ describe("AgentImportService apply and rollback", () => {
         { id: "octogee-jack-coach", name: "Octo", tools: { profile: "safe" }, heartbeat: { every: "60m", jitter: "5m" } },
       ] },
     };
-    const after = {
-      agents: { list: [
-        before.agents.list[0],
-        { ...before.agents.list[1], heartbeat: { every: "30m", jitter: "5m", lightContext: true } },
-      ] },
-    };
-    const invokeOpenClaw = vi.fn()
-      .mockResolvedValueOnce({ hash: "before", config: before })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ hash: "after", config: after })
-      .mockResolvedValueOnce({ status: "ok" });
+    const runtime = openClawRuntimeHarness(before);
+    const invokeOpenClaw = runtime.invokeOpenClaw;
     const h = harness({ invokeOpenClaw });
     const preview = await h.service.previewGithub({
       uid: "uid-jack", slug: "jack", gatewayId: "shared-1", owner: "jack", repo: "moof", branch: "main",
@@ -448,15 +552,25 @@ describe("AgentImportService apply and rollback", () => {
 
     await h.service.apply({ uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash });
 
-    expect(invokeOpenClaw).toHaveBeenNthCalledWith(2, "config.patch", {
+    expect(invokeOpenClaw).toHaveBeenNthCalledWith(6, "config.patch", {
       raw: JSON.stringify({
         agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m", lightContext: true } }] },
       }),
-      baseHash: "before",
+      baseHash: "config-1",
+    });
+    expect(runtime.config()).toEqual({
+      agents: { list: [
+        before.agents.list[0],
+        {
+          ...before.agents.list[1],
+          skipBootstrap: true,
+          heartbeat: { every: "30m", jitter: "5m", lightContext: true },
+        },
+      ] },
     });
   });
 
-  it("uses the safe baseline without patching an agent list with an id-less sibling", async () => {
+  it("fails when the required workspace policy cannot safely patch an id-less sibling", async () => {
     const invokeOpenClaw = vi.fn().mockResolvedValueOnce({
       hash: "before",
       config: { agents: { list: [
@@ -470,12 +584,9 @@ describe("AgentImportService apply and rollback", () => {
       artifacts: artifacts(),
     });
 
-    const completed = await h.service.apply({
+    await expect(h.service.apply({
       uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash,
-    });
-
-    expect(completed.configOutcome).toBe("safe_baseline");
-    expect(completed.warnings).toContain("config_delta_rejected");
+    })).rejects.toMatchObject({ code: "workspace_runtime_policy_failed" });
     expect(invokeOpenClaw).toHaveBeenCalledTimes(1);
   });
   it("requires the exact preview hash, imports history, updates identity, and patches only the Octogee coach", async () => {
@@ -516,15 +627,21 @@ describe("AgentImportService apply and rollback", () => {
       .toBeLessThan(vi.mocked(h.deps.syncIdentity).mock.invocationCallOrder[0]);
     expect(h.deps.invokeOpenClaw).toHaveBeenNthCalledWith(2, "config.patch", {
       raw: JSON.stringify({
+        agents: { list: [{ id: "octogee-jack-coach", skipBootstrap: true }] },
+      }),
+      baseHash: "config-0",
+    });
+    expect(h.deps.invokeOpenClaw).toHaveBeenNthCalledWith(6, "config.patch", {
+      raw: JSON.stringify({
         agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m", lightContext: true } }] },
       }),
-      baseHash: "config-before",
+      baseHash: "config-1",
     });
     const runtimeCheckpointCall = vi.mocked(h.deps.putRecord).mock.calls.findIndex(([record]) =>
       record.previousRuntime?.heartbeat !== undefined
     );
     expect(vi.mocked(h.deps.putRecord).mock.invocationCallOrder[runtimeCheckpointCall])
-      .toBeLessThan(vi.mocked(h.deps.invokeOpenClaw).mock.invocationCallOrder[1]);
+      .toBeLessThan(vi.mocked(h.deps.invokeOpenClaw).mock.invocationCallOrder[5]);
     expect(completed).toMatchObject({
       status: "complete",
       importCommit: IMPORT_COMMIT,
@@ -539,15 +656,34 @@ describe("AgentImportService apply and rollback", () => {
         hash: "config-before",
         config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m" } }] } },
       })
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({
+        hash: "config-platform",
+        config: { agents: { list: [{
+          id: "octogee-jack-coach", skipBootstrap: true, heartbeat: { every: "60m" },
+        }] } },
+      })
+      .mockResolvedValueOnce({ status: "ok" })
+      .mockResolvedValueOnce({
+        hash: "config-optional-before",
+        config: { agents: { list: [{
+          id: "octogee-jack-coach", skipBootstrap: true, heartbeat: { every: "60m" },
+        }] } },
+      })
       .mockRejectedValueOnce(new Error("config patch rejected"))
       .mockResolvedValueOnce({
         hash: "config-rollback",
-        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m", lightContext: true } }] } },
+        config: { agents: { list: [{
+          id: "octogee-jack-coach", skipBootstrap: true,
+          heartbeat: { every: "30m", lightContext: true },
+        }] } },
       })
       .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({
         hash: "config-restored",
-        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m" } }] } },
+        config: { agents: { list: [{
+          id: "octogee-jack-coach", skipBootstrap: true, heartbeat: { every: "60m" },
+        }] } },
       })
       .mockResolvedValueOnce({ status: "ok" });
     const h = harness({ invokeOpenClaw });
@@ -565,7 +701,7 @@ describe("AgentImportService apply and rollback", () => {
     expect(completed.status).toBe("complete");
     expect(completed.configOutcome).toBe("safe_baseline");
     expect(completed.warnings).toContain("config_delta_rejected");
-    expect(invokeOpenClaw).toHaveBeenNthCalledWith(4, "config.patch", expect.objectContaining({
+    expect(invokeOpenClaw).toHaveBeenNthCalledWith(8, "config.patch", expect.objectContaining({
       raw: JSON.stringify({
         agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m", lightContext: null } }] },
       }),
@@ -578,15 +714,35 @@ describe("AgentImportService apply and rollback", () => {
         hash: "config-before",
         config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m" } }] } },
       })
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({
+        hash: "config-platform",
+        config: { agents: { list: [{
+          id: "octogee-jack-coach", skipBootstrap: true, heartbeat: { every: "60m" },
+        }] } },
+      })
+      .mockResolvedValueOnce({ status: "ok" })
+      .mockResolvedValueOnce({
+        hash: "config-optional-before",
+        config: { agents: { list: [{
+          id: "octogee-jack-coach", skipBootstrap: true, heartbeat: { every: "60m" },
+        }] } },
+      })
       .mockRejectedValueOnce(new Error("config patch rejected"))
       .mockResolvedValueOnce({
         hash: "config-rollback",
-        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m", lightContext: true } }] } },
+        config: { agents: { list: [{
+          id: "octogee-jack-coach", skipBootstrap: true,
+          heartbeat: { every: "30m", lightContext: true },
+        }] } },
       })
       .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({
         hash: "config-still-wrong",
-        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m", lightContext: true } }] } },
+        config: { agents: { list: [{
+          id: "octogee-jack-coach", skipBootstrap: true,
+          heartbeat: { every: "30m", lightContext: true },
+        }] } },
       });
     const h = harness({ invokeOpenClaw });
     const preview = await h.service.previewGithub({
@@ -610,10 +766,26 @@ describe("AgentImportService apply and rollback", () => {
         hash: "before",
         config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m" } }] } },
       })
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({
+        hash: "platform",
+        config: { agents: { list: [{
+          id: "octogee-jack-coach", skipBootstrap: true, heartbeat: { every: "60m" },
+        }] } },
+      })
+      .mockResolvedValueOnce({ status: "ok" })
+      .mockResolvedValueOnce({
+        hash: "optional-before",
+        config: { agents: { list: [{
+          id: "octogee-jack-coach", skipBootstrap: true, heartbeat: { every: "60m" },
+        }] } },
+      })
       .mockRejectedValueOnce(new Error("base hash mismatch"))
       .mockResolvedValueOnce({
         hash: "concurrent",
-        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "45m" } }] } },
+        config: { agents: { list: [{
+          id: "octogee-jack-coach", skipBootstrap: true, heartbeat: { every: "45m" },
+        }] } },
       });
     const h = harness({ invokeOpenClaw });
     const preview = await h.service.previewGithub({
@@ -624,7 +796,7 @@ describe("AgentImportService apply and rollback", () => {
     await expect(h.service.apply({
       uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash,
     })).rejects.toMatchObject({ code: "config_changed" });
-    expect(invokeOpenClaw).toHaveBeenCalledTimes(3);
+    expect(invokeOpenClaw).toHaveBeenCalledTimes(7);
   });
 
   it("resumes from the durable workspace checkpoint after an interrupted apply", async () => {
@@ -674,17 +846,13 @@ describe("AgentImportService apply and rollback", () => {
     expect(h.records.get(preview.id)?.status).toBe("verifying");
 
     h.deps.putRecord = putRecord;
-    h.deps.invokeOpenClaw = vi.fn()
-      .mockResolvedValueOnce({
-        hash: "config-before-retry",
-        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m", lightContext: true } }] } },
-      })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({
-        hash: "config-after-retry",
-        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m", lightContext: true } }] } },
-      })
-      .mockResolvedValueOnce({ status: "ok" });
+    h.deps.invokeOpenClaw = openClawRuntimeHarness({
+      agents: { list: [{
+        id: "octogee-jack-coach",
+        skipBootstrap: true,
+        heartbeat: { every: "30m", lightContext: true },
+      }] },
+    }).invokeOpenClaw;
 
     const completed = await h.service.apply({ uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash });
 
@@ -793,7 +961,7 @@ describe("AgentImportService apply and rollback", () => {
       uid: "uid-jack", slug: "jack", gatewayId: "shared-1", owner: "jack", repo: "moof", branch: "main",
       artifacts: artifacts(),
     });
-    const secondService = new AgentImportService(h.deps);
+    const secondService = new TestAgentImportService(h.deps);
 
     const first = h.service.apply({ uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash });
     while (applyRepository.mock.calls.length === 0) await new Promise((resolve) => setTimeout(resolve, 1));
