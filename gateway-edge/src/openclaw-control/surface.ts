@@ -3,7 +3,6 @@ import fs from "node:fs";
 import http from "node:http";
 import { isIP } from "node:net";
 import path from "node:path";
-import { Transform } from "node:stream";
 import { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
 import {
   acquireSystemConfigMutationLease,
@@ -255,49 +254,15 @@ function httpAssetOutcome(statusCode: number): "ok" | "timeout" | "error" {
   return statusCode === 504 ? "timeout" : "error";
 }
 
-function requestHeaders(
-  req: Request,
-  env: NodeJS.ProcessEnv,
-  gatewayToken: string,
-): http.OutgoingHttpHeaders {
+function requestHeaders(req: Request, env: NodeJS.ProcessEnv): http.OutgoingHttpHeaders {
   const headers: http.OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(req.headers)) {
     if (ALLOWED_REQUEST_HEADERS.has(name.toLowerCase())) headers[name] = value;
   }
   headers.host = openClawControlUpstreamBase(env).host;
   headers.origin = apiOrigin(env);
-  headers.authorization = `Bearer ${gatewayToken}`;
   headers["accept-encoding"] = "identity";
   return headers;
-}
-
-function credentialScrubber(credentials: readonly string[]): Transform {
-  const needles = credentials.filter(Boolean).map((value) => Buffer.from(value)).sort((a, b) => b.length - a.length);
-  const overlap = Math.max(0, ...needles.map((needle) => needle.length - 1));
-  let pending: Buffer<ArrayBufferLike> = Buffer.alloc(0);
-  const scrub = (input: Buffer): Buffer => {
-    const output = Buffer.from(input);
-    for (const needle of needles) {
-      let index = output.indexOf(needle);
-      while (index >= 0) {
-        output.fill(0x2a, index, index + needle.length);
-        index = output.indexOf(needle, index + needle.length);
-      }
-    }
-    return output;
-  };
-  return new Transform({
-    transform(chunk: Buffer, _encoding, callback) {
-      const combined = Buffer.concat([pending, Buffer.from(chunk)]);
-      const safeLength = Math.max(0, combined.length - overlap);
-      const cleaned = scrub(combined);
-      pending = cleaned.subarray(safeLength);
-      callback(null, cleaned.subarray(0, safeLength));
-    },
-    flush(callback) {
-      callback(null, scrub(pending));
-    },
-  });
 }
 
 export interface CreateOpenClawControlHttpRouterOptions {
@@ -410,7 +375,6 @@ export function createOpenClawControlHttpRouter(
         unauthorized(req, res, frameAncestor);
         return;
       }
-      const gatewayToken = await loadGatewayToken({ gatewayId });
       const base = openClawControlUpstreamBase(env);
       let timedOut = false;
       let settled = false;
@@ -420,7 +384,7 @@ export function createOpenClawControlHttpRouter(
         port: base.port,
         method: req.method,
         path: openClawControlUpstreamPath(req.originalUrl, gatewayId),
-        headers: requestHeaders(req, env, gatewayToken),
+        headers: requestHeaders(req, env),
       }, (upstream) => {
         settled = true;
         res.status(upstream.statusCode ?? 502);
@@ -429,7 +393,7 @@ export function createOpenClawControlHttpRouter(
         }
         securityHeaders(res, frameAncestor);
         res.setHeader("set-cookie", touched.cookie);
-        upstream.pipe(credentialScrubber([gatewayToken])).pipe(res);
+        upstream.pipe(res);
       });
       proxy.setTimeout(httpTimeoutMs, () => {
         timedOut = true;

@@ -201,30 +201,27 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     expect(response.text).not.toContain(ticket);
   });
 
-  it("authenticates native HTTP resources without forwarding browser identity or exposing the gateway token", async () => {
+  it("proxies native HTTP resources without forwarding browser or gateway authorization", async () => {
     let captured: http.IncomingHttpHeaders = {};
+    const loadGatewayToken = vi.fn(async () => "gateway-secret");
     const upstream = http.createServer((req, res) => {
       captured = req.headers;
-      if (req.headers.authorization !== "Bearer gateway-secret") {
-        res.statusCode = 401;
-        res.end("missing gateway auth");
-        return;
-      }
       res.setHeader("content-type", "text/javascript");
-      res.setHeader("set-cookie", "openclaw=gateway-secret");
-      res.setHeader("authorization", "Bearer gateway-secret");
-      res.end("native-ui gateway-secret");
+      res.setHeader("set-cookie", "openclaw=upstream-session");
+      res.setHeader("authorization", "Bearer upstream-token");
+      res.end("native-ui loaded");
     });
     const port = await listen(upstream);
     const manager = sessions();
-    const response = await request(appWith({ env: env(port), sessions: manager }))
+    const response = await request(appWith({ env: env(port), sessions: manager, loadGatewayToken }))
       .get("/api/g/bender/openclaw/assets/app.js")
       .set("cookie", issue(manager))
       .set("authorization", "Bearer browser-token")
       .set("x-forwarded-for", "forged")
       .set("x-openclaw-token", "browser-token");
     expect(response.status).toBe(200);
-    expect(captured.authorization).toBe("Bearer gateway-secret");
+    expect(loadGatewayToken).not.toHaveBeenCalled();
+    expect(captured.authorization).toBeUndefined();
     expect(captured.cookie).toBeUndefined();
     expect(captured["x-forwarded-for"]).toBeUndefined();
     expect(captured["x-openclaw-token"]).toBeUndefined();
