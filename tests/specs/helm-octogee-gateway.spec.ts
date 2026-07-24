@@ -979,9 +979,19 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     expect(init).toMatch(/allowPrivilegeEscalation:\s*false/);
     expect(init).toMatch(/drop:\s*\[ALL\]/);
     expect(init).not.toMatch(/runAsUser:\s*0/);
-    expect(init).toMatch(/cp -an \/etc\/skel\/\. \/home\/node\//);
+    expect(init).toMatch(/cp -rn \/etc\/skel\/\. \/home\/node\//);
     expect(init).not.toContain("|| true");
     expect(init).not.toMatch(/chown\s/);
+  });
+
+  it("does not preserve source ownership/timestamps on the fix-perms copy (#2812: cp -a fails 'preserving times' — fsGroup already owns /home/node under restricted PSA)", () => {
+    const out = helmTemplate();
+    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+    const init = dep.match(/- name:\s*fix-perms\s*[\s\S]*?(?=\n {8}- name:|\n {6}containers:)/)?.[0] ?? "";
+    expect(init).not.toMatch(/cp\s+-\w*a\w*\s/);
+    expect(init).not.toMatch(/cp\s+-\w*p\w*\s/);
+    expect(init).not.toMatch(/--preserve/);
+    expect(init).not.toMatch(/--archive/);
   });
 
   it("mounts the data volume at /home/node (whole home, not just .openclaw)", () => {
