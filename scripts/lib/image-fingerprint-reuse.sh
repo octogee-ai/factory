@@ -77,13 +77,22 @@ case "$mode" in
     if_ref="${ar_repo}/${image}:if-${fingerprint}"
     target_ref="${ar_repo}/${image}:${short_sha}"
 
-    if ! gcloud artifacts docker images describe "$if_ref" --quiet >/dev/null 2>&1; then
+    # Capture the digest from the same describe call we'd make anyway (no
+    # extra AR read) so a reuse hit can name it in the notice below.
+    digest=""
+    if ! digest="$(gcloud artifacts docker images describe "$if_ref" --format='value(image_summary.digest)' --quiet 2>/dev/null)"; then
       echo "no cached ${image} image for input fingerprint if-${fingerprint}; will build" >&2
       printf 'exists=false\n'
       exit 0
     fi
 
     if gcloud artifacts docker tags add "$if_ref" "$target_ref" --quiet >&2; then
+      # The reused container's own BUILD_SHA env var still reports whichever
+      # commit originally produced these bytes (#1116) — that's honest, but
+      # it can read as stale/confusing next to the ${short_sha} AR tag now
+      # pointing at it. Surface both identifiers explicitly rather than
+      # rebuilding just to refresh a banner string.
+      echo "::notice::reused ${image} — Artifact Registry digest ${digest} (input fingerprint if-${fingerprint}) already held these bytes; the running container's BUILD_SHA identifies the commit that originally built it, ${short_sha} is only this build's AR tag" >&2
       echo "reused ${image} from unchanged inputs (if-${fingerprint})" >&2
       printf 'exists=true\n'
     else
@@ -101,7 +110,16 @@ case "$mode" in
     src_ref="${ar_repo}/${image}:${short_sha}"
     if_ref="${ar_repo}/${image}:if-${fingerprint}"
 
-    new_digest="$(gcloud artifacts docker images describe "$src_ref" --format='value(image_summary.digest)' --quiet)"
+    # record is best-effort: the image is already built and pushed under
+    # $src_ref by the time this runs, so a transient AR read/write failure
+    # here must never fail the job. Worst case, the if-tag never gets
+    # written and a future build with identical inputs just rebuilds.
+    new_digest=""
+    if ! new_digest="$(gcloud artifacts docker images describe "$src_ref" --format='value(image_summary.digest)' --quiet 2>/dev/null)"; then
+      echo "::warning::could not resolve digest for ${src_ref} after build; skipping fingerprint record (a future build will just rebuild)" >&2
+      exit 0
+    fi
+
     existing_digest=""
     if existing_digest="$(gcloud artifacts docker images describe "$if_ref" --format='value(image_summary.digest)' --quiet 2>/dev/null)"; then
       :
@@ -114,7 +132,10 @@ case "$mode" in
     fi
 
     if [ -z "$existing_digest" ]; then
-      gcloud artifacts docker tags add "$src_ref" "$if_ref" --quiet
+      if ! gcloud artifacts docker tags add "$src_ref" "$if_ref" --quiet; then
+        echo "::warning::failed to tag ${if_ref} from ${src_ref}; skipping fingerprint record (a future build will just rebuild)" >&2
+        exit 0
+      fi
       echo "recorded ${if_ref} -> ${new_digest}" >&2
     else
       echo "${if_ref} already recorded with matching digest" >&2
