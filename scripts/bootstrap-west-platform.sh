@@ -6,6 +6,7 @@ TERRAFORM_ROOT="${REPO_ROOT}/terraform/environments/west-platform"
 RECEIPT_GENERATOR="${REPO_ROOT}/scripts/ops/terraform-plan-receipt.mjs"
 PROTECTION_TARGET_SELECTOR="${REPO_ROOT}/scripts/ops/terraform-protection-targets.mjs"
 SQL_STATE_RECONCILER="${REPO_ROOT}/scripts/ops/reconcile-deleted-sql-child-state.sh"
+INGRESS_STATE_ADOPTER="${REPO_ROOT}/scripts/ops/adopt-west-ingress-addresses.sh"
 VERIFY_SCRIPT="${REPO_ROOT}/scripts/verify-west-foundation.sh"
 TERRAFORM_BIN="$("${REPO_ROOT}/scripts/ops/terraform-bin.sh")"
 PROJECT_ID="octogee"
@@ -395,6 +396,9 @@ verify_zero_drift() {
 
 cd "${TERRAFORM_ROOT}"
 "${TERRAFORM_BIN}" init -reconfigure
+"${INGRESS_STATE_ADOPTER}" \
+  "--project=${PROJECT_ID}" \
+  "--terraform-bin=${TERRAFORM_BIN}"
 
 if [[ "${VERIFY_ONLY}" == "true" ]]; then
   verify_zero_drift
