@@ -16,8 +16,12 @@ import {
   PLATFORM_MIGRATION_WRITER_READINESS_TIMEOUT_MILLISECONDS,
   waitForPlatformMigrationWriterQuiescence,
   waitForPlatformMigrationWriterReadiness,
+  assertPlatformMigrationScheduledWritersQuiesced,
+  assertPlatformMigrationScheduledWritersReady,
+  type KubernetesCronJob,
   type KubernetesPodList,
   type KubernetesWorkload,
+  type PlatformMigrationScheduledWriter,
   type PlatformMigrationWriterQuiescenceDependencies,
   type PlatformMigrationWriterReceipt,
 } from "../lib/platform-migration-writer-quiescence.js";
@@ -110,8 +114,102 @@ function pods(settings: DeploymentEnvironmentSettings): KubernetesPodList {
   return JSON.parse(kubectl(settings, ["get", "pods", "-o", "json"])) as KubernetesPodList;
 }
 
+function cronJobs(settings: DeploymentEnvironmentSettings): KubernetesCronJob[] {
+  const listing = parseRecord(kubectl(settings, ["get", "cronjobs", "-o", "json"]), "Kubernetes CronJobs");
+  if (!Array.isArray(listing.items)) throw new Error("Kubernetes CronJobs returned no items array");
+  return listing.items as KubernetesCronJob[];
+}
+
+function scheduledWriters(settings: DeploymentEnvironmentSettings): PlatformMigrationScheduledWriter[] {
+  const output = run("gcloud", [
+    "scheduler",
+    "jobs",
+    "list",
+    `--project=${settings.firebaseProjectId}`,
+    `--location=${settings.region}`,
+    "--format=json(name,state)",
+  ]);
+  let listing: unknown;
+  try {
+    listing = JSON.parse(output);
+  } catch {
+    throw new Error("Cloud Scheduler jobs were not valid JSON");
+  }
+  if (!Array.isArray(listing)) throw new Error("Cloud Scheduler jobs returned no array");
+  return listing.map((candidate, index) => {
+    const job = record(candidate, `Cloud Scheduler job ${index}`);
+    if (typeof job.name !== "string" || job.name.length === 0 || typeof job.state !== "string") {
+      throw new Error(`Cloud Scheduler job ${index} is malformed`);
+    }
+    const name = job.name.split("/").at(-1);
+    if (!name) throw new Error(`Cloud Scheduler job ${index} has no terminal name`);
+    return { name, state: job.state };
+  });
+}
+
+function pauseScheduledWriter(settings: DeploymentEnvironmentSettings, writer: Pick<PlatformMigrationScheduledWriter, "name">): void {
+  run("gcloud", [
+    "scheduler",
+    "jobs",
+    "pause",
+    writer.name,
+    `--project=${settings.firebaseProjectId}`,
+    `--location=${settings.region}`,
+  ]);
+}
+
+function resumeScheduledWriter(settings: DeploymentEnvironmentSettings, writer: Pick<PlatformMigrationScheduledWriter, "name">): void {
+  run("gcloud", [
+    "scheduler",
+    "jobs",
+    "resume",
+    writer.name,
+    `--project=${settings.firebaseProjectId}`,
+    `--location=${settings.region}`,
+  ]);
+}
+
+function setCronJobSuspended(
+  settings: DeploymentEnvironmentSettings,
+  cronJob: { name: string },
+  suspended: boolean,
+): void {
+  kubectl(settings, [
+    "patch",
+    "cronjob",
+    cronJob.name,
+    "--type=merge",
+    `--patch=${JSON.stringify({ spec: { suspend: suspended } })}`,
+  ]);
+}
+
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function waitForScheduledWriters(
+  settings: DeploymentEnvironmentSettings,
+  receipt: PlatformMigrationWriterReceipt,
+  ready: boolean,
+): Promise<void> {
+  const deadline = Date.now() + (ready ? PLATFORM_MIGRATION_WRITER_READINESS_TIMEOUT_MILLISECONDS : QUIESCE_TIMEOUT_MILLISECONDS);
+  let lastFailure = "not checked";
+  while (true) {
+    try {
+      const assertion = ready
+        ? assertPlatformMigrationScheduledWritersReady
+        : assertPlatformMigrationScheduledWritersQuiesced;
+      assertion(settings, receipt, scheduledWriters(settings), cronJobs(settings));
+      return;
+    } catch (error) {
+      lastFailure = error instanceof Error ? error.message : String(error);
+    }
+    if (Date.now() >= deadline) {
+      const phase = ready ? "become ready" : "quiesce";
+      throw new Error(`scheduled writers did not ${phase} within ${ready ? PLATFORM_MIGRATION_WRITER_READINESS_TIMEOUT_MILLISECONDS : QUIESCE_TIMEOUT_MILLISECONDS}ms: ${lastFailure}`);
+    }
+    await sleep(QUIESCE_POLL_MILLISECONDS);
+  }
 }
 
 function firestore(settings: DeploymentEnvironmentSettings) {
@@ -208,6 +306,7 @@ async function assertPairedCentralQuiesced(receipt: PlatformMigrationWriterRecei
     timeoutMilliseconds: 0,
     pollMilliseconds: QUIESCE_POLL_MILLISECONDS,
   });
+  await waitForScheduledWriters(settings, centralReceipt, false);
 }
 
 async function dependenciesForPairedMaintenance(
@@ -236,6 +335,11 @@ function dependencies(repoRoot: string): PlatformMigrationWriterQuiescenceDepend
     scaleWorkload: async (settings, workload, replicas) => {
       kubectl(settings, ["scale", `${workload.kind.toLowerCase()}/${workload.name}`, `--replicas=${replicas}`]);
     },
+    readScheduledWriters: async (settings) => scheduledWriters(settings),
+    pauseScheduledWriter: async (settings, writer) => pauseScheduledWriter(settings, writer),
+    resumeScheduledWriter: async (settings, writer) => resumeScheduledWriter(settings, writer),
+    readCronJobs: async (settings) => cronJobs(settings),
+    setCronJobSuspended: async (settings, cronJob, suspended) => setCronJobSuspended(settings, cronJob, suspended),
     waitForWritersQuiesced: async (settings, receipt) => {
       await waitForPlatformMigrationWriterQuiescence({
         receipt,
@@ -258,6 +362,8 @@ function dependencies(repoRoot: string): PlatformMigrationWriterQuiescenceDepend
         pollMilliseconds: QUIESCE_POLL_MILLISECONDS,
       });
     },
+    waitForScheduledWritersQuiesced: async (settings, receipt) => waitForScheduledWriters(settings, receipt, false),
+    waitForScheduledWritersReady: async (settings, receipt) => waitForScheduledWriters(settings, receipt, true),
     readReceipt: async (uri) => readReceipt(uri),
     writeReceipt: async (uri, receipt) => writeReceipt(uri, receipt),
     assertRequiredMigrationReceipts: async (receipt) => assertRequiredMigrationReceipts(receipt),

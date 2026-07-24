@@ -9,6 +9,27 @@ export const PLATFORM_CREDENTIAL_WRITER_CONTAINERS = new Set([
   "provisioner",
 ]);
 export const PLATFORM_MIGRATION_WRITER_READINESS_TIMEOUT_MILLISECONDS = 600_000;
+export const PLATFORM_MIGRATION_SCHEDULED_WRITER_FUNCTIONS = [
+  "cleanupFeedRetention",
+  "reapExpiredRunLiveDocs",
+  "reapExpiredAgentImports",
+  "reapGoneGatewayShells",
+  "processGatewayAccessLifecycle",
+] as const;
+export const PLATFORM_MIGRATION_CRONJOB_WRITERS = [
+  "trial-expiry",
+  "notification-digest-daily",
+  "notification-digest-weekly",
+  "credit-auto-top-up",
+  "activity-pair-audit",
+] as const;
+
+export function platformMigrationScheduledWriterNames(region: string): string[] {
+  if (!/^[a-z]+-[a-z]+[0-9]$/.test(region)) throw new Error(`invalid Scheduler region: ${region}`);
+  return PLATFORM_MIGRATION_SCHEDULED_WRITER_FUNCTIONS
+    .map((functionName) => `firebase-schedule-${functionName}-${region}`)
+    .sort();
+}
 
 export type PlatformMigrationWriterTargetId =
   | "test-central"
@@ -54,6 +75,28 @@ export interface WriterWorkload {
   containers: string[];
 }
 
+export interface PlatformMigrationScheduledWriter {
+  name: string;
+  state: string;
+}
+
+export interface KubernetesCronJob {
+  metadata?: { name?: unknown };
+  spec?: { suspend?: unknown };
+}
+
+export interface ScheduledWriterReceipt {
+  projectId: string;
+  region: string;
+  jobs: Array<{ name: string; priorState: "ENABLED" | "PAUSED"; quiescedState: "PAUSED" }>;
+}
+
+export interface CronJobReceipt {
+  name: string;
+  priorSuspended: boolean;
+  quiescedSuspended: true;
+}
+
 export interface PlatformMigrationWriterReceipt {
   schemaVersion: 1;
   kind: "platform-migration-writer-quiescence-receipt";
@@ -63,6 +106,8 @@ export interface PlatformMigrationWriterReceipt {
   revision: string;
   priorMaintenance: Record<string, unknown> | null;
   writerWorkloads: WriterWorkload[];
+  scheduledWriters?: ScheduledWriterReceipt;
+  cronJobs?: CronJobReceipt[];
 }
 
 export interface PlatformMigrationWriterQuiescenceWaitInput {
@@ -90,6 +135,29 @@ export interface PlatformMigrationWriterQuiescenceDependencies {
     settings: DeploymentEnvironmentSettings,
     workload: Pick<WriterWorkload, "kind" | "name">,
     replicas: number,
+  ): Promise<void>;
+  readScheduledWriters(settings: DeploymentEnvironmentSettings): Promise<PlatformMigrationScheduledWriter[]>;
+  pauseScheduledWriter(
+    settings: DeploymentEnvironmentSettings,
+    writer: Pick<PlatformMigrationScheduledWriter, "name">,
+  ): Promise<void>;
+  resumeScheduledWriter(
+    settings: DeploymentEnvironmentSettings,
+    writer: Pick<PlatformMigrationScheduledWriter, "name">,
+  ): Promise<void>;
+  readCronJobs(settings: DeploymentEnvironmentSettings): Promise<KubernetesCronJob[]>;
+  setCronJobSuspended(
+    settings: DeploymentEnvironmentSettings,
+    cronJob: Pick<CronJobReceipt, "name">,
+    suspended: boolean,
+  ): Promise<void>;
+  waitForScheduledWritersQuiesced(
+    settings: DeploymentEnvironmentSettings,
+    receipt: PlatformMigrationWriterReceipt,
+  ): Promise<void>;
+  waitForScheduledWritersReady(
+    settings: DeploymentEnvironmentSettings,
+    receipt: PlatformMigrationWriterReceipt,
   ): Promise<void>;
   waitForWritersQuiesced(
     settings: DeploymentEnvironmentSettings,
@@ -246,6 +314,170 @@ export function selectPlatformCredentialWriterWorkloads(
     `${left.kind}/${left.name}`.localeCompare(`${right.kind}/${right.name}`));
 }
 
+function schedulerState(value: unknown, label: string): "ENABLED" | "PAUSED" {
+  if (value === "ENABLED" || value === "PAUSED") return value;
+  throw new Error(`${label} must be ENABLED or PAUSED`);
+}
+
+function expectedScheduledWriterNames(settings: DeploymentEnvironmentSettings): string[] {
+  return platformMigrationScheduledWriterNames(settings.region);
+}
+
+export function selectPlatformMigrationScheduledWriters(
+  settings: DeploymentEnvironmentSettings,
+  jobs: readonly PlatformMigrationScheduledWriter[],
+): PlatformMigrationScheduledWriter[] {
+  const expected = new Set(expectedScheduledWriterNames(settings));
+  const discovered = new Map<string, PlatformMigrationScheduledWriter>();
+  for (const job of jobs) {
+    if (typeof job.name !== "string" || job.name.length === 0) {
+      throw new Error("Cloud Scheduler writer job has no name");
+    }
+    const state = schedulerState(job.state, `Cloud Scheduler job ${job.name} state`);
+    if (discovered.has(job.name)) throw new Error(`ambiguous Cloud Scheduler job: ${job.name}`);
+    discovered.set(job.name, { name: job.name, state });
+    if (!expected.has(job.name) && state === "ENABLED") {
+      throw new Error(`unknown enabled scheduled writer: ${job.name}`);
+    }
+  }
+  for (const name of expected) {
+    if (!discovered.has(name)) throw new Error(`required scheduled writer is missing: ${name}`);
+  }
+  return [...expected].map((name) => discovered.get(name)!);
+}
+
+export function selectPlatformMigrationCronJobs(
+  cronJobs: readonly KubernetesCronJob[],
+): Array<{ name: string; suspended: boolean }> {
+  const expected = new Set<string>(PLATFORM_MIGRATION_CRONJOB_WRITERS);
+  const discovered = new Map<string, { name: string; suspended: boolean }>();
+  for (const cronJob of cronJobs) {
+    const name = cronJob.metadata?.name;
+    if (typeof name !== "string" || name.length === 0) throw new Error("Kubernetes CronJob has no name");
+    if (typeof cronJob.spec?.suspend !== "boolean" && cronJob.spec?.suspend !== undefined) {
+      throw new Error(`Kubernetes CronJob ${name} suspend must be boolean`);
+    }
+    const suspended = cronJob.spec?.suspend === true;
+    if (discovered.has(name)) throw new Error(`ambiguous Kubernetes CronJob: ${name}`);
+    discovered.set(name, { name, suspended });
+    if (!expected.has(name) && !suspended) throw new Error(`unknown active Kubernetes CronJob: ${name}`);
+  }
+  for (const name of expected) {
+    if (!discovered.has(name)) throw new Error(`required Kubernetes CronJob is missing: ${name}`);
+  }
+  return [...expected].sort().map((name) => discovered.get(name)!);
+}
+
+function scheduledWriterReceipt(receipt: PlatformMigrationWriterReceipt): ScheduledWriterReceipt {
+  const scheduled = receipt.scheduledWriters;
+  if (!scheduled || typeof scheduled.projectId !== "string" || typeof scheduled.region !== "string") {
+    throw new Error("writer quiescence receipt has no scheduled writer contract");
+  }
+  if (!Array.isArray(scheduled.jobs) || scheduled.jobs.length !== PLATFORM_MIGRATION_SCHEDULED_WRITER_FUNCTIONS.length) {
+    throw new Error("writer quiescence receipt has an invalid scheduled writer set");
+  }
+  const expected = platformMigrationScheduledWriterNames(scheduled.region);
+  for (let index = 0; index < expected.length; index += 1) {
+    const job = scheduled.jobs[index];
+    if (!job || job.name !== expected[index] || (job.priorState !== "ENABLED" && job.priorState !== "PAUSED") || job.quiescedState !== "PAUSED") {
+      throw new Error("writer quiescence receipt has an invalid scheduled writer state");
+    }
+  }
+  return scheduled;
+}
+
+function cronJobReceipt(receipt: PlatformMigrationWriterReceipt): CronJobReceipt[] {
+  const cronJobs = receipt.cronJobs;
+  if (!Array.isArray(cronJobs) || cronJobs.length !== PLATFORM_MIGRATION_CRONJOB_WRITERS.length) {
+    throw new Error("writer quiescence receipt has an invalid Kubernetes CronJob set");
+  }
+  const expected = [...PLATFORM_MIGRATION_CRONJOB_WRITERS].sort();
+  for (let index = 0; index < expected.length; index += 1) {
+    const cronJob = cronJobs[index];
+    if (!cronJob || cronJob.name !== expected[index] || typeof cronJob.priorSuspended !== "boolean" || cronJob.quiescedSuspended !== true) {
+      throw new Error("writer quiescence receipt has an invalid Kubernetes CronJob state");
+    }
+  }
+  return cronJobs;
+}
+
+function assertScheduledWriterReceiptMatchesTarget(
+  receipt: PlatformMigrationWriterReceipt,
+  settings: DeploymentEnvironmentSettings,
+): void {
+  const scheduled = scheduledWriterReceipt(receipt);
+  if (scheduled.projectId !== settings.firebaseProjectId || scheduled.region !== settings.region) {
+    throw new Error("writer quiescence receipt scheduled writer target drifted");
+  }
+  cronJobReceipt(receipt);
+}
+
+function assertCurrentScheduledWriters(
+  observed: readonly PlatformMigrationScheduledWriter[],
+  receipt: PlatformMigrationWriterReceipt,
+  allowedStates: (prior: "ENABLED" | "PAUSED") => readonly ("ENABLED" | "PAUSED")[],
+): void {
+  const scheduled = scheduledWriterReceipt(receipt);
+  if (observed.length !== scheduled.jobs.length) throw new Error("scheduled writer set drifted from the quiescence receipt");
+  for (let index = 0; index < scheduled.jobs.length; index += 1) {
+    const expected = scheduled.jobs[index]!;
+    const current = observed[index]!;
+    if (current.name !== expected.name || !allowedStates(expected.priorState).includes(schedulerState(current.state, `Cloud Scheduler job ${current.name} state`))) {
+      throw new Error(`scheduled writer drifted from the quiescence receipt: ${expected.name}`);
+    }
+  }
+}
+
+function assertCurrentCronJobs(
+  observed: readonly { name: string; suspended: boolean }[],
+  receipt: PlatformMigrationWriterReceipt,
+  allowedSuspended: (prior: boolean) => readonly boolean[],
+): void {
+  const expected = cronJobReceipt(receipt);
+  if (observed.length !== expected.length) throw new Error("Kubernetes CronJob set drifted from the quiescence receipt");
+  for (let index = 0; index < expected.length; index += 1) {
+    const prior = expected[index]!;
+    const current = observed[index]!;
+    if (current.name !== prior.name || !allowedSuspended(prior.priorSuspended).includes(current.suspended)) {
+      throw new Error(`Kubernetes CronJob drifted from the quiescence receipt: ${prior.name}`);
+    }
+  }
+}
+
+export function assertPlatformMigrationScheduledWritersQuiesced(
+  settings: DeploymentEnvironmentSettings,
+  receipt: PlatformMigrationWriterReceipt,
+  schedulerJobs: readonly PlatformMigrationScheduledWriter[],
+  cronJobs: readonly KubernetesCronJob[],
+): void {
+  assertScheduledWriterReceiptMatchesTarget(receipt, settings);
+  assertCurrentScheduledWriters(
+    selectPlatformMigrationScheduledWriters(settings, schedulerJobs),
+    receipt,
+    () => ["PAUSED"],
+  );
+  assertCurrentCronJobs(selectPlatformMigrationCronJobs(cronJobs), receipt, () => [true]);
+}
+
+export function assertPlatformMigrationScheduledWritersReady(
+  settings: DeploymentEnvironmentSettings,
+  receipt: PlatformMigrationWriterReceipt,
+  schedulerJobs: readonly PlatformMigrationScheduledWriter[],
+  cronJobs: readonly KubernetesCronJob[],
+): void {
+  assertScheduledWriterReceiptMatchesTarget(receipt, settings);
+  assertCurrentScheduledWriters(
+    selectPlatformMigrationScheduledWriters(settings, schedulerJobs),
+    receipt,
+    (prior) => [prior],
+  );
+  assertCurrentCronJobs(
+    selectPlatformMigrationCronJobs(cronJobs),
+    receipt,
+    (prior) => [prior],
+  );
+}
+
 export function activePlatformCredentialWriters(
   podList: KubernetesPodList,
 ): string[] {
@@ -371,6 +603,8 @@ function assertReceipt(
   if (!Array.isArray(receipt.writerWorkloads) || receipt.writerWorkloads.length === 0) {
     throw new Error("writer quiescence receipt has no writer workloads");
   }
+  scheduledWriterReceipt(receipt);
+  cronJobReceipt(receipt);
 }
 
 function assertCurrentWorkloads(
@@ -512,6 +746,8 @@ interface QuiesceExecutionInput {
   dependencies: PlatformMigrationWriterQuiescenceDependencies;
   settings: DeploymentEnvironmentSettings;
   observed: WriterWorkload[];
+  scheduledWriters: PlatformMigrationScheduledWriter[];
+  cronJobs: Array<{ name: string; suspended: boolean }>;
   maintenance: Record<string, unknown> | null;
   plannedReceipt: PlatformMigrationWriterReceipt;
   existing: PlatformMigrationWriterReceipt | null;
@@ -526,6 +762,8 @@ async function executeQuiesce(
     dependencies,
     settings,
     observed,
+    scheduledWriters,
+    cronJobs,
     maintenance,
     plannedReceipt,
     existing,
@@ -535,10 +773,13 @@ async function executeQuiesce(
     await dependencies.writeReceipt(receiptUri, plannedReceipt);
   } else {
     assertReceipt(existing, args, plannedReceipt.revision);
+    assertScheduledWriterReceiptMatchesTarget(existing, settings);
     if (!equal(existing.priorMaintenance, maintenance) && !equal(maintenance, frozenMaintenance())) {
       throw new Error("maintenance state drifted from the quiescence receipt");
     }
     assertCurrentWorkloads(observed, existing, (replicas) => [0, replicas]);
+    assertCurrentScheduledWriters(scheduledWriters, existing, (state) => [state, "PAUSED"]);
+    assertCurrentCronJobs(cronJobs, existing, (suspended) => [suspended, true]);
   }
   const activeReceipt = existing ?? plannedReceipt;
   if (!equal(maintenance, frozenMaintenance())) {
@@ -547,6 +788,16 @@ async function executeQuiesce(
     }
     await dependencies.writeMaintenance(settings, frozenMaintenance());
   }
+  const scheduled = scheduledWriterReceipt(activeReceipt);
+  for (const job of scheduled.jobs) {
+    const current = scheduledWriters.find((writer) => writer.name === job.name)!;
+    if (current.state !== "PAUSED") await dependencies.pauseScheduledWriter(settings, job);
+  }
+  for (const cronJob of cronJobReceipt(activeReceipt)) {
+    const current = cronJobs.find((candidate) => candidate.name === cronJob.name)!;
+    if (!current.suspended) await dependencies.setCronJobSuspended(settings, cronJob, true);
+  }
+  await dependencies.waitForScheduledWritersQuiesced(settings, activeReceipt);
   for (const workload of observed) {
     if (workload.replicas !== 0) {
       await dependencies.scaleWorkload(settings, workload, 0);
@@ -566,6 +817,8 @@ interface RestoreExecutionInput {
   dependencies: PlatformMigrationWriterQuiescenceDependencies;
   settings: DeploymentEnvironmentSettings;
   observed: WriterWorkload[];
+  scheduledWriters: PlatformMigrationScheduledWriter[];
+  cronJobs: Array<{ name: string; suspended: boolean }>;
   maintenance: Record<string, unknown> | null;
   existing: PlatformMigrationWriterReceipt | null;
   revision: string;
@@ -580,6 +833,8 @@ async function executeRestore(
     dependencies,
     settings,
     observed,
+    scheduledWriters,
+    cronJobs,
     maintenance,
     existing,
     revision,
@@ -590,13 +845,17 @@ async function executeRestore(
   }
   if (existing === null) throw new Error("restore requires an existing writer quiescence receipt");
   assertReceipt(existing, args, revision);
+  assertScheduledWriterReceiptMatchesTarget(existing, settings);
   await dependencies.assertRequiredMigrationReceipts(existing);
   await dependencies.assertPairedCentralQuiesced(existing);
   if (!equal(maintenance, frozenMaintenance())) {
     throw new Error("restore requires the writer-quiescence maintenance state to remain frozen");
   }
   assertCurrentWorkloads(observed, existing, () => [0]);
+  assertCurrentScheduledWriters(scheduledWriters, existing, () => ["PAUSED"]);
+  assertCurrentCronJobs(cronJobs, existing, () => [true]);
   await dependencies.waitForWritersQuiesced(settings, existing);
+  await dependencies.waitForScheduledWritersQuiesced(settings, existing);
   if (!args.apply) {
     return { mode: args.mode, receipt: receiptUri, targetId: args.targetId, writerWorkloads: existing.writerWorkloads };
   }
@@ -604,6 +863,13 @@ async function executeRestore(
     await dependencies.scaleWorkload(settings, workload, workload.replicas);
   }
   await dependencies.waitForWritersReady(settings, existing);
+  for (const job of scheduledWriterReceipt(existing).jobs) {
+    if (job.priorState === "ENABLED") await dependencies.resumeScheduledWriter(settings, job);
+  }
+  for (const cronJob of cronJobReceipt(existing)) {
+    if (!cronJob.priorSuspended) await dependencies.setCronJobSuspended(settings, cronJob, false);
+  }
+  await dependencies.waitForScheduledWritersReady(settings, existing);
   await dependencies.writeMaintenance(settings, existing.priorMaintenance);
   return { mode: args.mode, receipt: receiptUri, targetId: args.targetId, writerWorkloads: existing.writerWorkloads };
 }
@@ -614,6 +880,11 @@ export async function executePlatformMigrationWriterQuiescence(
 ): Promise<ExecutionResult> {
   const settings = dependencies.settingsForTarget(args.targetId);
   const observed = selectPlatformCredentialWriterWorkloads(await dependencies.readWorkloads(settings));
+  const scheduledWriters = selectPlatformMigrationScheduledWriters(
+    settings,
+    await dependencies.readScheduledWriters(settings),
+  );
+  const cronJobs = selectPlatformMigrationCronJobs(await dependencies.readCronJobs(settings));
   const maintenance = receiptSafeMaintenance(await dependencies.readMaintenance(settings));
   const provisionalReceipt = {
     schemaVersion: 1 as const,
@@ -624,6 +895,20 @@ export async function executePlatformMigrationWriterQuiescence(
     revision: "dry-run",
     priorMaintenance: maintenance,
     writerWorkloads: observed,
+    scheduledWriters: {
+      projectId: settings.firebaseProjectId,
+      region: settings.region,
+      jobs: scheduledWriters.map((job) => ({
+        name: job.name,
+        priorState: schedulerState(job.state, `Cloud Scheduler job ${job.name} state`),
+        quiescedState: "PAUSED" as const,
+      })),
+    },
+    cronJobs: cronJobs.map((cronJob) => ({
+      name: cronJob.name,
+      priorSuspended: cronJob.suspended,
+      quiescedSuspended: true as const,
+    })),
   };
   const receiptUri = dependencies.receiptUri(provisionalReceipt);
   if (!args.apply && args.mode === "quiesce") {
@@ -638,6 +923,8 @@ export async function executePlatformMigrationWriterQuiescence(
       dependencies,
       settings,
       observed,
+      scheduledWriters,
+      cronJobs,
       maintenance,
       plannedReceipt,
       existing,
@@ -649,6 +936,8 @@ export async function executePlatformMigrationWriterQuiescence(
     dependencies,
     settings,
     observed,
+    scheduledWriters,
+    cronJobs,
     maintenance,
     existing,
     revision,
