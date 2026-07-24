@@ -12,7 +12,8 @@ import { createEmailMetrics, setEmailMetrics } from "./lib/email-metrics.js";
 import { createNotificationMetrics, setNotificationMetrics } from "./lib/notification-metrics.js";
 import { createActivityPairMetrics, setActivityPairMetrics } from "./lib/activity-pair-metrics.js";
 import { getKiller } from "./lib/shell-kill-fetcher.js";
-import { reconcileDeletingWorkspaceShells } from "./lib/shells.js";
+import { reconcileDeletingWorkspaceShells } from "./lib/shell-deletion-reconciler.js";
+import { createOpenClawRuntimeBrokerFromEnv } from "./chat-proxy/openclaw/runtime-broker.js";
 
 import { mountApi } from "./routes/mount-api.js";
 import automationsRoutes from "./routes/automations.js";
@@ -432,11 +433,12 @@ if (process.env.NODE_ENV !== "test") {
 
 function startDeletingShellReconciliation(gatewayId: string): void {
   if (!gatewayId) return;
+  const broker = createOpenClawRuntimeBrokerFromEnv();
   let stopped = false;
   let timer: NodeJS.Timeout | null = null;
   const run = (): void => {
     if (stopped) return;
-    void reconcileDeletingWorkspaceShells({ gatewayId, kill: getKiller() })
+    void reconcileDeletingWorkspaceShells({ gatewayId, broker, kill: getKiller() })
       .then((result) => {
         if (result.completed || result.pending) {
           logger.info("[shells] deletion reconciliation", { gatewayId, ...result });

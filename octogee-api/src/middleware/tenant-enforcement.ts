@@ -52,6 +52,7 @@ export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/openclaw-control/redeem",
   "/internal/openclaw-control/authorize",
   "/internal/openclaw-control/audit",
+  "/internal/openclaw/shells/deleting/complete",
   "/internal/agent-support/ask",
   "/internal/openclaw/previews/authorize",
   "/internal/agent-projects/create",
