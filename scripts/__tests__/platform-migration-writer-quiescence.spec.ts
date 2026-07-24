@@ -124,6 +124,7 @@ function dependencies(overrides: Partial<Parameters<typeof executePlatformMigrat
   const maintenanceWrites: Array<Record<string, unknown> | null> = [];
   return {
     dependencies: {
+      assertReceiptStorage: async () => undefined,
       assertExactMergedMain: async () => "a".repeat(40),
       readWorkloads: async () => workloads,
       readMaintenance: async () => maintenance,
@@ -199,6 +200,26 @@ describe("platform migration writer quiescence", () => {
       retryConfig: undefined,
       targetType: "HTTP",
     }]);
+  });
+
+  it("blocks dry-run and apply before workload inventory when receipt storage is invalid", async () => {
+    const calls: string[] = [];
+    const blocked = dependencies({
+      assertReceiptStorage: async () => {
+        calls.push("receipt-storage");
+        throw new Error("immutable receipt storage drifted");
+      },
+      readWorkloads: async () => {
+        calls.push("workloads");
+        return [];
+      },
+    });
+
+    await expect(executePlatformMigrationWriterQuiescence(
+      args("quiesce", false),
+      blocked.dependencies,
+    )).rejects.toThrow("receipt storage drifted");
+    expect(calls).toEqual(["receipt-storage"]);
   });
 
   it("gives restored writers the Helm-consistent bounded ten-minute readiness window", () => {
@@ -291,6 +312,8 @@ describe("platform migration writer quiescence", () => {
     };
     const content = {
       schemaVersion: 1,
+      kind: "platform-content-migration-receipt",
+      verified: true,
       migrationId,
       source: "test-central",
       target: "test-west",
@@ -312,6 +335,8 @@ describe("platform migration writer quiescence", () => {
       gitCommit: receipt.revision,
     };
     expect(() => assertRequiredPlatformMigrationReceipts(receipt, content, [firebase])).not.toThrow();
+    expect(() => assertRequiredPlatformMigrationReceipts(receipt, { ...content, kind: "other" }, [firebase])).toThrow("exact completed migration");
+    expect(() => assertRequiredPlatformMigrationReceipts(receipt, { ...content, verified: false }, [firebase])).toThrow("exact completed migration");
     expect(() => assertRequiredPlatformMigrationReceipts(receipt, { ...content, revision: "b".repeat(40) }, [firebase])).toThrow("exact completed migration");
     expect(() => assertRequiredPlatformMigrationReceipts(receipt, content, [{ ...firebase, gitCommit: "b".repeat(40) }])).toThrow("exact writer quiescence revision");
   });

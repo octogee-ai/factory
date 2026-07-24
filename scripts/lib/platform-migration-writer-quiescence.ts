@@ -154,6 +154,7 @@ export type PlatformMigrationWriterReadinessWaitInput =
   PlatformMigrationWriterQuiescenceWaitInput;
 
 export interface PlatformMigrationWriterQuiescenceDependencies {
+  assertReceiptStorage(): Promise<void>;
   assertExactMergedMain(): Promise<string>;
   readWorkloads(settings: DeploymentEnvironmentSettings): Promise<KubernetesWorkload[]>;
   readMaintenance(settings: DeploymentEnvironmentSettings): Promise<Record<string, unknown> | null>;
@@ -704,6 +705,8 @@ function exactContentMigration(
   const serviceNames = services.map((service) =>
     record(service, "platform content migration service").service);
   return content.schemaVersion === 1 &&
+    content.kind === "platform-content-migration-receipt" &&
+    content.verified === true &&
     content.migrationId === receipt.migrationId &&
     content.source === source &&
     content.target === targetId &&
@@ -1053,6 +1056,7 @@ export async function executePlatformMigrationWriterQuiescence(
   args: PlatformMigrationWriterQuiescenceArgs,
   dependencies: PlatformMigrationWriterQuiescenceDependencies,
 ): Promise<ExecutionResult> {
+  await dependencies.assertReceiptStorage();
   const settings = dependencies.settingsForTarget(args.targetId);
   const observed = selectPlatformCredentialWriterWorkloads(await dependencies.readWorkloads(settings));
   const scheduledWriters = selectPlatformMigrationScheduledWriters(

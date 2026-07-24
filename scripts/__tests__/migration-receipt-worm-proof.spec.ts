@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
@@ -58,7 +57,7 @@ describe("migration receipt WORM proof", () => {
           }
           originalPayload = readFileSync(source, "utf8");
           generation = "42";
-          md5Hash = createHash("md5").update(originalPayload).digest("base64");
+          md5Hash = "dGVzdC1yZWNlaXB0";
           return "";
         }
         if (args.includes("--if-generation-match=42")) {
