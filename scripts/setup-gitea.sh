@@ -38,15 +38,19 @@ ENV=""
 YES=false
 CUSTOM_NS=""
 DEPLOYMENT_TARGET=""
+MIGRATION_QUIESCED=false
+CONFIRM_PLATFORM_MIGRATION=""
 
 for arg in "$@"; do
   case $arg in
     --env=*)       ENV="${arg#*=}" ;;
     --deployment-target=*) DEPLOYMENT_TARGET="${arg#*=}" ;;
     --namespace=*) CUSTOM_NS="${arg#*=}" ;;
+    --migration-quiesced) MIGRATION_QUIESCED=true ;;
+    --confirm-platform-migration=*) CONFIRM_PLATFORM_MIGRATION="${arg#*=}" ;;
     --yes|-y)      YES=true ;;
     --help|-h)
-      echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--yes]"
+      echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--migration-quiesced --confirm-platform-migration=TARGET] [--yes]"
       exit 0
       ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
@@ -107,6 +111,17 @@ if [[ "$ENV" != "custom" ]]; then
     prod-central|test-central|build-week-central) ;;
     *) ENV_FILE="$REPO_DIR/.env.$TARGET_ID" ;;
   esac
+fi
+
+if $MIGRATION_QUIESCED; then
+  case "$TARGET_ID" in
+    test-west|prod-west) ;;
+    *) echo "Migration-quiesced Gitea setup is restricted to WEST platform migration targets" >&2; exit 1 ;;
+  esac
+  [[ "$CONFIRM_PLATFORM_MIGRATION" == "$TARGET_ID" ]] || {
+    echo "Migration-quiesced Gitea setup requires --confirm-platform-migration=$TARGET_ID" >&2
+    exit 1
+  }
 fi
 
 ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
@@ -264,6 +279,7 @@ info "Checking Gitea API token state..."
 # Read cached token from K8s secret (empty if missing)
 CACHED_TOKEN=$(kubectl get secret gitea-token -n "$K8S_NAMESPACE" \
   -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+$MIGRATION_QUIESCED && CACHED_TOKEN=""
 
 token_is_valid() {
   local tok="$1"
@@ -322,7 +338,11 @@ kubectl create secret generic gitea-token -n "$K8S_NAMESPACE" \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 ok "gitea-token K8s secret applied"
 
-restart_gitea_token_consumers
+if $MIGRATION_QUIESCED; then
+  info "Leaving Gitea token consumers quiesced for receipt-gated writer restore"
+else
+  restart_gitea_token_consumers
+fi
 
 # Kill port-forward
 kill $PF_PID 2>/dev/null || true

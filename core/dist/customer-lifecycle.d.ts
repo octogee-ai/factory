@@ -127,6 +127,14 @@ export interface CustomerLifecycleAdapter {
     }>>;
     cloneProjectRepo: (customerSlug: string, projectSlug: string, giteaRepoName: string) => Promise<boolean>;
     provisionMattermostUser: (ctx: CustomerContext) => Promise<MmUpdate>;
+    /**
+     * Idempotently ensure this Builder is a member of the shared Octogee Community
+     * team + chat channels. Optional — adapters that don't own Mattermost community
+     * reconciliation (migration/local tooling) may omit it. Runs at provision AND on
+     * every re-mount (gateway restart), so an existing Builder self-heals without a
+     * fresh MM-provisioning event.
+     */
+    reconcileCommunityMembership?: (ctx: CustomerContext) => Promise<void>;
     scheduleBootGreetingCron: (params: {
         slug: string;
         agentId: string;
@@ -182,7 +190,7 @@ export interface CustomerLifecycleAdapter {
     removeImportedCustomerBySlug?: (slug: string) => Promise<RemoveCustomerResult>;
 }
 export type CustomerStateImportMode = "pre" | "final" | "default";
-export type AddCustomerStep = "claim-slot" | "ensure-dir" | "write-templates" | "clone-workspace-repo" | "init-workspace-repo" | "ssh-key" | "ssh-key-resync" | "blob-sync" | "byosub-restore" | "byot-reassert" | "context-files-reassert" | "project-clone" | "mattermost-provision" | "config-patch" | "verify-channel-ready" | "schedule-greeting-cron" | "mark-complete" | "notify-ops";
+export type AddCustomerStep = "claim-slot" | "ensure-dir" | "write-templates" | "clone-workspace-repo" | "init-workspace-repo" | "ssh-key" | "ssh-key-resync" | "blob-sync" | "byosub-restore" | "byot-reassert" | "context-files-reassert" | "project-clone" | "mattermost-provision" | "community-membership" | "config-patch" | "verify-channel-ready" | "schedule-greeting-cron" | "mark-complete" | "notify-ops";
 export interface AddCustomerResult {
     newCustomer: boolean;
     steps: AddCustomerStep[];

@@ -9,7 +9,7 @@ import {
 } from "@octogee/core/mattermost/project-agent";
 import { isValidProjectId } from "@octogee/shared/types/identity";
 import { isPaidTier } from "./billing-tier.js";
-import { addActivityPairMember } from "./activityPair.js";
+import { addActivityPairMember, mapActivityPairError } from "./activityPair.js";
 
 export interface ProjectAgentActor {
   uid: string;
@@ -137,7 +137,7 @@ async function enableProjectAgent(
     }
   } catch (err) {
     logger.error(`[project-agent] mint failed for ${workspaceId}/${project}:`, { err });
-    return bad(502, "Agent enabled, but provisioning failed - toggle again to retry");
+    return mapActivityPairError(err) ?? bad(502, "Agent enabled, but provisioning failed - toggle again to retry");
   }
   logger.info(`[project-agent] enabled + minted ${workspaceId}/${project}`, { uid: actor.uid });
   return { status: 200, body: { success: true, enabled: true, provisioned: true } };

@@ -15,7 +15,6 @@ import { mmApiCall, assertMattermostConfigured } from "./client.js";
 import { customerChannelMembers } from "./channel-members.js";
 import { mintAndPersistCoachToken } from "./coach-pat.js";
 import { createOrRestoreChannel } from "./channels.js";
-import { communityChannelIds } from "./community.js";
 import { mmUploadAvatar } from "./avatars.js";
 
 interface MmEntity {
@@ -171,14 +170,13 @@ async function createOrFindTeam(
   return team;
 }
 
-async function setupTeamAndCommunity(opts: {
+async function setupWorkspaceTeam(opts: {
   teamId: string;
   slug: string;
   builderUserId: string;
   adminUserId?: string;
-  communityTeamId?: string;
 }): Promise<void> {
-  const { teamId, slug, builderUserId, adminUserId, communityTeamId } = opts;
+  const { teamId, slug, builderUserId, adminUserId } = opts;
 
   await mmApiCall("POST", `/teams/${teamId}/members`, {
     team_id: teamId,
@@ -202,11 +200,6 @@ async function setupTeamAndCommunity(opts: {
     await mmApiCall("POST", `/teams/${teamId}/members`, { team_id: teamId, user_id: adminUserId });
     log(`[mattermost] admin bot added to workspace team ${slug}`);
   }
-
-  if (communityTeamId && communityTeamId !== teamId) {
-    await mmApiCall("POST", `/teams/${communityTeamId}/members`, { team_id: communityTeamId, user_id: builderUserId });
-    log(`[mattermost] joined community team ${communityTeamId}`);
-  }
 }
 
 async function uploadBuilderAvatar(builderUserId: string, email: string, photoURL?: string): Promise<void> {
@@ -221,15 +214,6 @@ async function uploadBuilderAvatar(builderUserId: string, email: string, photoUR
     const gravatarUrl = `https://gravatar.com/avatar/${hash}?d=identicon&s=200`;
     const ok = await mmUploadAvatar(builderUserId, gravatarUrl);
     if (ok) log(`[mattermost] avatar uploaded from Gravatar`);
-  }
-}
-
-async function joinCommunityChannels(builderUserId: string): Promise<void> {
-  for (const chId of communityChannelIds) {
-    await mmApiCall("POST", `/channels/${chId}/members`, { user_id: builderUserId });
-  }
-  if (communityChannelIds.length > 0) {
-    log(`[mattermost] joined ${communityChannelIds.length} community chat channels`);
   }
 }
 
@@ -408,7 +392,6 @@ export async function provisionMattermostUser(
 ): Promise<Record<string, unknown>> {
   const { uid, slug, firstName, email, vibe, lastName, photoURL } = input;
   const MM_ADMIN_USER_ID = process.env.MM_ADMIN_USER_ID;
-  const MM_COMMUNITY_TEAM_ID = process.env.MM_COMMUNITY_TEAM_ID;
 
   assertMattermostConfigured();
 
@@ -423,15 +406,13 @@ export async function provisionMattermostUser(
     if (!team) return {};
     const teamId = team.id;
 
-    await setupTeamAndCommunity({
+    await setupWorkspaceTeam({
       teamId,
       slug,
       builderUserId: mmUser.id,
       adminUserId: MM_ADMIN_USER_ID,
-      communityTeamId: MM_COMMUNITY_TEAM_ID,
     });
     await uploadBuilderAvatar(mmUser.id, email, photoURL);
-    await joinCommunityChannels(mmUser.id);
 
     const channels = await createWorkspaceChannels(teamId, slug, firstName, mmUser.id, MM_ADMIN_USER_ID ?? null);
     if (!channels) return {};

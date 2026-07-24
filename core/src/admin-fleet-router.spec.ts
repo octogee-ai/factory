@@ -44,15 +44,15 @@ describe("projectGatewayReservation — Spot is the default for every class", ()
 
 describe("resolveFleetDeploymentSettings", () => {
   it("uses the active deployment target for the fleet namespace", () => {
-    expect(resolveFleetDeploymentSettings("octogee-test-west")).toMatchObject({
-      targetId: "test-west",
+    expect(resolveFleetDeploymentSettings("octogee-test")).toMatchObject({
+      targetId: "test-central",
       artifactRegistryRepository: "us-west1-docker.pkg.dev/octogee/octogee",
     });
   });
 
-  it("uses an explicit frozen target for rollback", () => {
-    expect(resolveFleetDeploymentSettings("octogee-test", "test-central")).toMatchObject({
-      targetId: "test-central",
+  it("uses an explicit target override regardless of the active pointer", () => {
+    expect(resolveFleetDeploymentSettings("octogee-build-week", "build-week-central")).toMatchObject({
+      targetId: "build-week-central",
       artifactRegistryRepository: "us-central1-docker.pkg.dev/octogee/octogee",
     });
   });
