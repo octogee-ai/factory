@@ -6,14 +6,43 @@ import {
   parsePlatformMigrationWriterQuiescenceArgs,
   PLATFORM_MIGRATION_WRITER_READINESS_TIMEOUT_MILLISECONDS,
   platformMigrationWriterQuiescenceConfirmation,
+  PLATFORM_MIGRATION_CRONJOB_WRITERS,
+  PLATFORM_MIGRATION_SCHEDULER_ATTEMPT_DEADLINE_MILLISECONDS,
+  platformMigrationScheduledWriterNames,
+  assertPlatformMigrationScheduledWritersQuiesced,
   selectPlatformCredentialWriterWorkloads,
   waitForPlatformMigrationWriterQuiescence,
   waitForPlatformMigrationWriterReadiness,
+  waitForPlatformMigrationScheduledAttemptDrain,
 } from "../lib/platform-migration-writer-quiescence.js";
+import {
+  assertMigrationActivation,
+  parsePlatformMigrationScheduledWritersListing,
+  validateRestoredGiteaTokenConsumers,
+} from "../ops/quiesce-platform-migration-writers.js";
 
 const migrationId = "west-cutover-20260724";
 const targetId = "test-west";
 const partnerTargetId = "test-central";
+
+const scheduledWriters = platformMigrationScheduledWriterNames("us-west1").map((name) => ({
+  name,
+  state: "ENABLED" as const,
+  attemptDeadline: "180s",
+  retryConfig: {},
+  targetType: "HTTP" as const,
+}));
+
+const cronJobs = PLATFORM_MIGRATION_CRONJOB_WRITERS.map((name) => ({
+  name,
+  suspended: false,
+}));
+const migrationCronJobNames = [...PLATFORM_MIGRATION_CRONJOB_WRITERS].sort();
+const sortedCronJobs = migrationCronJobNames.map((name) => ({ name, suspended: false }));
+
+function kubernetesCronJobs(jobs: readonly { name: string; suspended: boolean }[]) {
+  return jobs.map((job) => ({ metadata: { name: job.name }, spec: { suspend: job.suspended } }));
+}
 
 const writerWorkloads = [
   {
@@ -89,11 +118,18 @@ function args(mode: "quiesce" | "restore", apply = true) {
 function dependencies(overrides: Partial<Parameters<typeof executePlatformMigrationWriterQuiescence>[1]> = {}) {
   let receipt: unknown = null;
   let workloads = [...writerWorkloads, ...preservedWorkloads];
+  let schedulerState = scheduledWriters.map((writer) => ({ ...writer }));
+  let cronJobState = sortedCronJobs.map((cronJob) => ({ ...cronJob }));
   let maintenance: Record<string, unknown> | null = { mode: "open", reason: "normal operation", updatedAt: 1, updatedBy: "operator" };
   const scales: string[] = [];
+  const schedulerPauses: string[] = [];
+  const schedulerResumes: string[] = [];
+  const cronSuspensions: string[] = [];
   const maintenanceWrites: Array<Record<string, unknown> | null> = [];
+  const restoreEvents: string[] = [];
   return {
     dependencies: {
+      assertReceiptStorage: async () => undefined,
       assertExactMergedMain: async () => "a".repeat(40),
       readWorkloads: async () => workloads,
       readMaintenance: async () => maintenance,
@@ -107,29 +143,168 @@ function dependencies(overrides: Partial<Parameters<typeof executePlatformMigrat
           ? { ...current, spec: { ...current.spec, replicas } }
           : current);
       },
+      readScheduledWriters: async () => schedulerState,
+      pauseScheduledWriter: async (_settings: unknown, writer: { name: string }) => {
+        schedulerPauses.push(writer.name);
+        schedulerState = schedulerState.map((current) => current.name === writer.name
+          ? { ...current, state: "PAUSED" }
+          : current);
+      },
+      resumeScheduledWriter: async (_settings: unknown, writer: { name: string }) => {
+        schedulerResumes.push(writer.name);
+        schedulerState = schedulerState.map((current) => current.name === writer.name
+          ? { ...current, state: "ENABLED" }
+          : current);
+      },
+      readCronJobs: async () => kubernetesCronJobs(cronJobState),
+      readCronJobJobs: async () => [],
+      setCronJobSuspended: async (_settings: unknown, cronJob: { name: string }, suspended: boolean) => {
+        cronSuspensions.push(`${cronJob.name}=${suspended}`);
+        cronJobState = cronJobState.map((current) => current.name === cronJob.name
+          ? { ...current, suspended }
+          : current);
+      },
+      waitForScheduledWritersQuiesced: async () => undefined,
+      waitForScheduledWriterAttemptsDrained: async () => undefined,
+      waitForScheduledWritersReady: async () => { restoreEvents.push("scheduled-ready"); },
       waitForWritersQuiesced: async () => undefined,
-      waitForWritersReady: async () => undefined,
+      waitForWritersReady: async () => { restoreEvents.push("writers-ready"); },
+      validateGiteaTokenConsumers: async () => { restoreEvents.push("gitea-authenticated"); },
       readReceipt: async () => receipt as never,
       writeReceipt: async (_uri: string, next: unknown) => {
         if (receipt !== null) throw new Error("receipt already exists");
         receipt = next;
       },
       assertRequiredMigrationReceipts: async () => undefined,
+      assertMigrationActivation: async () => undefined,
       assertPairedCentralQuiesced: async () => undefined,
-      settingsForTarget: () => ({ targetId, namespace: "octogee-test" }) as never,
+      settingsForTarget: () => ({ targetId, namespace: "octogee-test", region: "us-west1", firebaseProjectId: "octogee-data-test" }) as never,
       receiptUri: (next: { targetId: string; migrationId: string }) =>
         `gs://receipts/${next.migrationId}-${next.targetId}.json`,
       ...overrides,
     },
     scales,
+    schedulerPauses,
+    schedulerResumes,
+    cronSuspensions,
     maintenanceWrites,
+    restoreEvents,
     getReceipt: () => receipt,
   };
 }
 
 describe("platform migration writer quiescence", () => {
+  it("normalizes the live Scheduler null retryConfig to effective zero retries", () => {
+    expect(parsePlatformMigrationScheduledWritersListing(JSON.stringify([{
+      name: "projects/octogee-data-test/locations/us-west1/jobs/firebase-schedule-cleanupFeedRetention-us-west1",
+      state: "ENABLED",
+      attemptDeadline: "180s",
+      retryConfig: null,
+      httpTarget: { uri: "https://example.run.app" },
+    }]))).toEqual([{
+      name: "firebase-schedule-cleanupFeedRetention-us-west1",
+      state: "ENABLED",
+      attemptDeadline: "180s",
+      retryConfig: undefined,
+      targetType: "HTTP",
+    }]);
+  });
+
+  it("blocks dry-run and apply before workload inventory when receipt storage is invalid", async () => {
+    const calls: string[] = [];
+    const blocked = dependencies({
+      assertReceiptStorage: async () => {
+        calls.push("receipt-storage");
+        throw new Error("immutable receipt storage drifted");
+      },
+      readWorkloads: async () => {
+        calls.push("workloads");
+        return [];
+      },
+    });
+
+    await expect(executePlatformMigrationWriterQuiescence(
+      args("quiesce", false),
+      blocked.dependencies,
+    )).rejects.toThrow("receipt storage drifted");
+    expect(calls).toEqual(["receipt-storage"]);
+  });
+
   it("gives restored writers the Helm-consistent bounded ten-minute readiness window", () => {
     expect(PLATFORM_MIGRATION_WRITER_READINESS_TIMEOUT_MILLISECONDS).toBe(600_000);
+  });
+
+  it("waits the complete reviewed Scheduler attempt bound after pause", async () => {
+    let clock = 12_000;
+    const sleeps: number[] = [];
+    await waitForPlatformMigrationScheduledAttemptDrain({
+      attemptDeadlineMilliseconds: PLATFORM_MIGRATION_SCHEDULER_ATTEMPT_DEADLINE_MILLISECONDS,
+      now: () => clock,
+      sleep: async (milliseconds) => {
+        sleeps.push(milliseconds);
+        clock += milliseconds;
+      },
+    });
+    expect(sleeps).toEqual([180_000]);
+    expect(clock).toBe(192_000);
+  });
+
+  it("rejects retrying or unbounded Scheduler attempts before freezing maintenance", async () => {
+    for (const drift of [
+      { retryConfig: { retryCount: 1 } },
+      { retryConfig: { maxRetryDuration: "60s" } },
+      { attemptDeadline: "0s" },
+      { attemptDeadline: "181s" },
+      { targetType: "PUBSUB" },
+    ]) {
+      const state = dependencies({
+        readScheduledWriters: async () => [
+          { ...scheduledWriters[0]!, ...drift },
+          ...scheduledWriters.slice(1),
+        ],
+      });
+      await expect(executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies))
+        .rejects.toThrow(/Scheduler|scheduled writer/i);
+      expect(state.maintenanceWrites).toEqual([]);
+    }
+  });
+
+  it("does not claim CronJob quiescence while an owned Job can still write", () => {
+    const state = dependencies();
+    return executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies)
+      .then(() => {
+        expect(() => assertPlatformMigrationScheduledWritersQuiesced(
+          state.dependencies.settingsForTarget(targetId),
+          state.getReceipt() as never,
+          scheduledWriters.map((writer) => ({ ...writer, state: "PAUSED" })),
+          kubernetesCronJobs(cronJobs.map((cronJob) => ({ ...cronJob, suspended: true }))),
+          [{
+            metadata: {
+              name: "trial-expiry-29182",
+              ownerReferences: [{ kind: "CronJob", name: "trial-expiry" }],
+            },
+            status: { active: 1 },
+          }],
+        )).toThrow("still active");
+
+        expect(() => assertPlatformMigrationScheduledWritersQuiesced(
+          state.dependencies.settingsForTarget(targetId),
+          state.getReceipt() as never,
+          scheduledWriters.map((writer) => ({ ...writer, state: "PAUSED" })),
+          kubernetesCronJobs(cronJobs.map((cronJob) => ({ ...cronJob, suspended: true }))),
+          [{
+            metadata: {
+              name: "trial-expiry-29182",
+              ownerReferences: [{ kind: "CronJob", name: "trial-expiry" }],
+            },
+            status: {
+              active: 0,
+              succeeded: 1,
+              conditions: [{ type: "Complete", status: "True" }],
+            },
+          }],
+        )).not.toThrow();
+      });
   });
 
   it("binds both completed migration receipts to the exact writer-quiescence revision", () => {
@@ -145,6 +320,8 @@ describe("platform migration writer quiescence", () => {
     };
     const content = {
       schemaVersion: 1,
+      kind: "platform-content-migration-receipt",
+      verified: true,
       migrationId,
       source: "test-central",
       target: "test-west",
@@ -166,6 +343,8 @@ describe("platform migration writer quiescence", () => {
       gitCommit: receipt.revision,
     };
     expect(() => assertRequiredPlatformMigrationReceipts(receipt, content, [firebase])).not.toThrow();
+    expect(() => assertRequiredPlatformMigrationReceipts(receipt, { ...content, kind: "other" }, [firebase])).toThrow("exact completed migration");
+    expect(() => assertRequiredPlatformMigrationReceipts(receipt, { ...content, verified: false }, [firebase])).toThrow("exact completed migration");
     expect(() => assertRequiredPlatformMigrationReceipts(receipt, { ...content, revision: "b".repeat(40) }, [firebase])).toThrow("exact completed migration");
     expect(() => assertRequiredPlatformMigrationReceipts(receipt, content, [{ ...firebase, gitCommit: "b".repeat(40) }])).toThrow("exact writer quiescence revision");
   });
@@ -191,6 +370,142 @@ describe("platform migration writer quiescence", () => {
     expect(state.getReceipt()).toBeNull();
     expect(state.scales).toEqual([]);
     expect(state.maintenanceWrites).toEqual([]);
+    expect(state.schedulerPauses).toEqual([]);
+    expect(state.cronSuspensions).toEqual([]);
+  });
+
+  it("records and pauses the declared scheduler and CronJob writer sets before claiming quiescence", async () => {
+    const state = dependencies();
+    await executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies);
+    expect(state.schedulerPauses).toEqual(platformMigrationScheduledWriterNames("us-west1"));
+    expect(state.cronSuspensions).toEqual(migrationCronJobNames.map((name) => `${name}=true`));
+    expect(state.getReceipt()).toMatchObject({
+      scheduledWriters: {
+        projectId: "octogee-data-test",
+        region: "us-west1",
+        jobs: scheduledWriters.map((writer) => ({
+          name: writer.name,
+          priorState: "ENABLED",
+          quiescedState: "PAUSED",
+          targetType: "HTTP",
+          attemptDeadlineMilliseconds: 180_000,
+          retryConfig: {
+            retryCount: 0,
+            maxRetryDurationMilliseconds: 0,
+          },
+        })),
+      },
+      cronJobs: sortedCronJobs.map((cronJob) => ({
+        name: cronJob.name,
+        priorSuspended: false,
+        quiescedSuspended: true,
+      })),
+    });
+  });
+
+  it("fails closed for an unknown enabled scheduled writer before freezing maintenance", async () => {
+    const state = dependencies({
+      readScheduledWriters: async () => [...scheduledWriters, { name: "unreviewed-writer", state: "ENABLED" }],
+    });
+    await expect(executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies))
+      .rejects.toThrow("unknown enabled scheduled writer");
+    expect(state.maintenanceWrites).toEqual([]);
+  });
+
+  it("fails closed for an unknown active Kubernetes CronJob before freezing maintenance", async () => {
+    const state = dependencies({
+      readCronJobs: async () => kubernetesCronJobs([
+        ...cronJobs,
+        { name: "unreviewed-writer", suspended: false },
+      ]),
+    });
+    await expect(executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies))
+      .rejects.toThrow("unknown active Kubernetes CronJob");
+    expect(state.maintenanceWrites).toEqual([]);
+  });
+
+  it("keeps maintenance frozen when scheduler pause does not verify", async () => {
+    const state = dependencies({
+      waitForScheduledWritersQuiesced: async () => { throw new Error("scheduled writer state did not quiesce"); },
+    });
+    await expect(executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies))
+      .rejects.toThrow("scheduled writer state did not quiesce");
+    expect(state.maintenanceWrites.at(-1)).toEqual({
+      mode: "frozen",
+      managedBy: "platform-migration-writer-quiescence",
+    });
+  });
+
+  it("does not stop Kubernetes writers until the Scheduler attempt window has drained", async () => {
+    const state = dependencies({
+      waitForScheduledWriterAttemptsDrained: async () => {
+        throw new Error("Scheduler attempt drain incomplete");
+      },
+    });
+    await expect(executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies))
+      .rejects.toThrow("Scheduler attempt drain incomplete");
+    expect(state.scales).toEqual([]);
+    expect(state.maintenanceWrites.at(-1)).toEqual({
+      mode: "frozen",
+      managedBy: "platform-migration-writer-quiescence",
+    });
+  });
+
+  it("leaves a receipt and frozen maintenance when pausing a scheduled writer fails, then resumes deterministically", async () => {
+    const state = dependencies();
+    const pause = state.dependencies.pauseScheduledWriter;
+    let calls = 0;
+    state.dependencies.pauseScheduledWriter = async (settings, writer) => {
+      calls += 1;
+      if (calls === 2) throw new Error("Cloud Scheduler unavailable");
+      await pause(settings, writer);
+    };
+    await expect(executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies))
+      .rejects.toThrow("Cloud Scheduler unavailable");
+    expect(state.getReceipt()).not.toBeNull();
+    expect(state.maintenanceWrites.at(-1)).toEqual({
+      mode: "frozen",
+      managedBy: "platform-migration-writer-quiescence",
+    });
+
+    state.dependencies.pauseScheduledWriter = pause;
+    await executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies);
+    expect(calls).toBe(2);
+    expect(state.schedulerPauses).toEqual(platformMigrationScheduledWriterNames("us-west1"));
+  });
+
+  it("resumes only previously enabled schedules after Kubernetes writers are Ready and verifies them before maintenance reopens", async () => {
+    const state = dependencies({
+      readScheduledWriters: async () => [
+        ...scheduledWriters.slice(0, 1),
+        ...scheduledWriters.slice(1).map((writer) => ({ ...writer, state: "PAUSED" })),
+      ],
+      readCronJobs: async () => kubernetesCronJobs([
+        ...sortedCronJobs.slice(0, 1),
+        ...sortedCronJobs.slice(1).map((cronJob) => ({ ...cronJob, suspended: true })),
+      ]),
+    });
+    await executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies);
+    state.dependencies.readScheduledWriters = async () => scheduledWriters.map((writer) => ({ ...writer, state: "PAUSED" }));
+    state.dependencies.readCronJobs = async () => kubernetesCronJobs(cronJobs.map((cronJob) => ({ ...cronJob, suspended: true })));
+    await executePlatformMigrationWriterQuiescence(args("restore"), state.dependencies);
+    expect(state.schedulerResumes).toEqual([platformMigrationScheduledWriterNames("us-west1")[0]]);
+    expect(state.cronSuspensions.filter((entry) => entry.endsWith("=false"))).toEqual([`${migrationCronJobNames[0]}=false`]);
+    expect(state.maintenanceWrites.at(-1)).toEqual({ mode: "open", reason: "normal operation", updatedAt: 1, updatedBy: "operator" });
+  });
+
+  it("keeps maintenance frozen on a partial scheduler resume", async () => {
+    const state = dependencies();
+    await executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies);
+    state.dependencies.readScheduledWriters = async () => scheduledWriters.map((writer) => ({ ...writer, state: "PAUSED" }));
+    state.dependencies.readCronJobs = async () => kubernetesCronJobs(cronJobs.map((cronJob) => ({ ...cronJob, suspended: true })));
+    state.dependencies.waitForScheduledWritersReady = async () => { throw new Error("scheduler resume verification failed"); };
+    await expect(executePlatformMigrationWriterQuiescence(args("restore"), state.dependencies))
+      .rejects.toThrow("scheduler resume verification failed");
+    expect(state.maintenanceWrites.at(-1)).toEqual({
+      mode: "frozen",
+      managedBy: "platform-migration-writer-quiescence",
+    });
   });
 
   it("refuses to put an unclassified maintenance field into a receipt", async () => {
@@ -371,6 +686,86 @@ describe("platform migration writer quiescence", () => {
       "Deployment/octogee-gateway-builder-ada=1",
     ]);
     expect(state.maintenanceWrites.at(-1)).toEqual({ mode: "open", reason: "normal operation", updatedAt: 1, updatedBy: "operator" });
+    expect(state.restoreEvents).toEqual(["writers-ready", "gitea-authenticated", "scheduled-ready"]);
+  });
+
+  it("rejects corrupt activation service evidence before writer restore", () => {
+    const receipt = {
+      schemaVersion: 1 as const,
+      kind: "platform-migration-writer-quiescence-receipt" as const,
+      targetId,
+      partnerTargetId,
+      migrationId,
+      revision: "a".repeat(40),
+      priorMaintenance: { mode: "open" },
+      writerWorkloads: [],
+    };
+    const activation = (services: unknown[]) => ({
+      schemaVersion: 1,
+      kind: "platform-migration-activation-receipt",
+      migrationId,
+      source: partnerTargetId,
+      target: targetId,
+      revision: receipt.revision,
+      credentials: "migration-only-mattermost-and-target-gitea",
+      secrets: "rematerialized-and-verified",
+      services,
+      verified: true,
+    });
+    const runner = (value: unknown) => (_command: string, commandArgs: readonly string[]) =>
+      commandArgs.includes("describe") ? JSON.stringify({ generation: "1" }) : JSON.stringify(value);
+
+    expect(() => assertMigrationActivation(receipt, runner(activation([
+      { service: "mattermost", kind: "Deployment", name: "mattermost" },
+      { service: "rogue", kind: "Deployment", name: "octogee-gitea" },
+    ])))).toThrow("exact Mattermost and Gitea service set");
+    expect(() => assertMigrationActivation(receipt, runner(activation([
+      { service: "mattermost", kind: "Deployment", name: "mattermost" },
+      { service: "gitea", kind: "CronJob", name: "octogee-gitea" },
+    ])))).toThrow("valid workload identity");
+  });
+
+  it("invokes the no-restart Gitea consumer validator with the exact target context", () => {
+    const calls: Array<{ command: string; args: readonly string[] }> = [];
+    validateRestoredGiteaTokenConsumers({
+      namespace: "octogee-test-west",
+      kubeContext: "gke_octogee_us-west1_octogee-gateway",
+    } as never, "/repo", (command, commandArgs) => {
+      calls.push({ command, args: commandArgs });
+      return "";
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.command).toBe("bash");
+    expect(calls[0]?.args).toEqual(expect.arrayContaining([
+      "octogee-test-west",
+      "gke_octogee_us-west1_octogee-gateway",
+      "/repo/scripts/lib/gitea-token-convergence.sh",
+    ]));
+    expect(calls[0]?.args[1]).toContain("validate_gitea_token_consumers");
+    expect(calls[0]?.args[1]).not.toContain("restart_gitea_token_consumers");
+  });
+
+  it("keeps maintenance and schedules frozen when restored Gitea consumer auth fails", async () => {
+    const state = dependencies({
+      validateGiteaTokenConsumers: async () => { throw new Error("Gitea consumer authentication failed"); },
+    });
+    await executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies);
+    await expect(executePlatformMigrationWriterQuiescence(args("restore"), state.dependencies))
+      .rejects.toThrow("Gitea consumer authentication failed");
+    expect(state.schedulerResumes).toEqual([]);
+    expect(state.maintenanceWrites.at(-1)).toEqual({
+      mode: "frozen",
+      managedBy: "platform-migration-writer-quiescence",
+    });
+  });
+
+  it("refuses writer restore until receipt-bound durable-service activation succeeds", async () => {
+    const state = dependencies({ assertMigrationActivation: async () => { throw new Error("activation receipt missing"); } });
+    await executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies);
+    await expect(executePlatformMigrationWriterQuiescence(args("restore"), state.dependencies))
+      .rejects.toThrow("activation receipt missing");
+    expect(state.scales).not.toContain("Deployment/gateway-router=2");
   });
 
   it("requires an all-zero and podless WEST target before restore", async () => {
@@ -434,6 +829,19 @@ describe("platform migration writer quiescence", () => {
     const blocked = dependencies({ assertRequiredMigrationReceipts: async () => { throw new Error("Firebase receipt missing"); } });
     await executePlatformMigrationWriterQuiescence(args("quiesce"), blocked.dependencies);
     await expect(executePlatformMigrationWriterQuiescence(args("restore"), blocked.dependencies)).rejects.toThrow("Firebase receipt missing");
+  });
+
+  it("binds scheduler state to the exact Firebase project and region in the receipt", async () => {
+    const state = dependencies();
+    await executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies);
+    state.dependencies.settingsForTarget = () => ({
+      targetId,
+      namespace: "octogee-test",
+      region: "us-west1",
+      firebaseProjectId: "unexpected-project",
+    }) as never;
+    await expect(executePlatformMigrationWriterQuiescence(args("restore"), state.dependencies))
+      .rejects.toThrow("scheduled writer target drifted");
   });
 
   it("runs receipt and migration preconditions during restore dry-run", async () => {

@@ -195,9 +195,7 @@ Once Octogee runs fully on OpenClaw we lose the dogfooding signal that
 tells us what best-in-class steering even looks like, so a missed surface
 becomes *silent*. This step forces a look every cycle.
 
-**Cadence:** every preview-to-current promotion cycle (skip preview
-refreshes — those just track upstream's pre-stable iterations on a
-slot that hasn't changed semantically).
+**Cadence:** every current-runtime update.
 **Teeth:** purely advisory — you MUST produce + file the triage table, but
 findings never gate the roll. Recording-with-eyes-on is the protection;
 adoption is a separate, deliberate decision.
@@ -284,9 +282,8 @@ feature in Telegram or Signal that has a MM-primitive analog, we want
 to know — that's the "hoist candidate" backlog the PWA Activity
 Stream and the MM ergonomics roadmap both feed off.
 
-**Cadence:** every cycle (preview refresh + preview-to-current
-promotion alike). Channel plugins iterate independently of OC version
-semantics; even a beta-to-beta delta has signal here.
+**Cadence:** every current-runtime update. Channel plugins iterate
+independently of OpenClaw version semantics.
 **Teeth:** purely advisory, same as Step 5b — produce the triage
 table, file findings, never gates the roll.
 
@@ -384,8 +381,8 @@ commit** (amend the stack). Do not pack a tarball over a red Step 6b.
 >   locally (model-compat/catalog class).
 >
 > Full `pnpm test` is not required per-cycle (it's ~10+ min and upstream
-> `main` CI can be red independent of us) — but run it on preview-to-current
-> **promotion** cycles as the extra safety net.
+> `main` CI can be red independent of us) — but run it for each
+> current-runtime update as the extra safety net.
 
 ### Step 7 — Pack the tarball
 
@@ -459,7 +456,7 @@ source-only).
 > HOME="$SCRATCH" "$SCRATCH/bin/openclaw" plugins install @openclaw/codex@${NEW_TAG#v}
 > HOME="$SCRATCH" "$SCRATCH/bin/openclaw" plugins install "npm-pack:/tmp/openclaw-fork/openclaw-mattermost-*.tgz" --force
 > ```
-> On a **dev slot** (or any version whose companions aren't on npm) the
+> If a version's companions are not on npm, the
 > `@openclaw/codex@<version>` install can't resolve — verify the vendored
 > tarball instead, which IS the Dockerfile's vendored branch:
 > ```bash
@@ -543,90 +540,17 @@ both.**
 ✓ `git diff cloudbuild-base.yaml cloudbuild.yaml` shows version + fork-SHA
 in both files. Don't commit yet.
 
-### Step 12b — Rotate slots in `oc-build-matrix.yaml`
+### Step 12b — Keep `oc-build-matrix.yaml` current-only
 
-We carry three STANDING slots — `current`, `preview`, `dev` — in both
-blocks of `oc-build-matrix.yaml` (operator directive, Chris, 2026-07-22;
-the old rotating `previous` slot is retired — it was never used, and AR
-tags of old currents stay immutable and rollable without a matrix row).
-Which slot you're touching this cycle determines what you edit. CI
-builds the gateway against every entry in `versions:` on every push to
-main, alongside the version pinned in `cloudbuild.yaml`.
+The matrix has one `bases:` row: `label: current`. `versions:` is empty.
+It must exactly match `cloudbuild.yaml`'s `_OPENCLAW_VERSION` and
+`_OPENCLAW_FORK_SHA`; CI rejects any preview, dev, or previous row. When
+the fork changes, update that one row with the two cloudbuild files.
+Historical Artifact Registry tags remain immutable and can be used only
+through the explicit pinned-build recovery path.
 
-| Slot | What it tracks | Ceremony | When to touch |
-|---|---|---|---|
-| `current` | the latest OpenClaw GA (the cloudbuild.yaml `_OPENCLAW_VERSION` pin) | standard | replaced when you promote a preview to GA |
-| `preview` | the latest tagged upstream pre-stable with published npm companions | standard 2-artifact | refresh in place each time upstream cuts a new pre-stable |
-| `dev` | a pinned upstream-main SHA — LATEST at cut time unless the operator overrides | ALL-SOURCE (see below) | refresh on operator ask |
-
-`bases:` always carries entries for every slot. `versions:` carries
-`preview` + `dev` (gateway-build-operator-base.yml excludes the
-`current` version since the main `build` job already produces it as the
-bare `:<sha>` image — listing it here would double-build).
-
-**This cycle is a preview refresh** (upstream cut a new pre-stable but
-`current` is unchanged):
-
-- `versions:` — replace the existing `preview` entry's `version` (and
-  if you re-cut the integration branch, you also bump `forkSha` in the
-  matching `bases:` row below). Keep the `dev` entry untouched.
-- `bases:` — replace the `preview` entry's `version` + `forkSha`.
-  `config: cloudbuild-base-beta.yaml` stays (no `:latest` clobber).
-  Keep the `current` + `dev` entries untouched.
-- ⚠ Skip Step 12 entirely — `cloudbuild.yaml` does NOT change on a
-  preview refresh. The whole point of `preview` is to test an upstream
-  pre-stable without disturbing the production `current`.
-
-**This cycle is a dev refresh** (the operator asked for a new
-upstream-main snapshot):
-
-- Cut the branch from the pinned main SHA (default: latest), branch name
-  `octogee/gateway-scaling-patches-main-<sha8>` where `<sha8>` is the
-  UPSTREAM commit. Stamp `package.json` + `npm-shrinkwrap.json` with the
-  synthetic version `<main-pkg-version>-main.<sha8>` → the version
-  string can never masquerade as a real upstream release.
-- ⚠ ALSO stamp the three shipped extensions' plugin-API floors:
-  `extensions/{codex,parallel,mattermost}/package.json`
-  `openclaw.compat.pluginApi` → `>=<main-pkg-version>-main`. The synthetic
-  version is a semver PRERELEASE, and a plain `>=X.Y.Z` range can never be
-  satisfied by a prerelease of X.Y.Z (upstream's suffix normalizer only
-  strips `-N`/`-alpha.N`/`-beta.N`/`-rc.N`) — without this, every plugin
-  install fails at image build with "requires plugin API >=X.Y.Z".
-  Same-tuple prerelease floors are honored
-  (`shouldPreservePluginApiPrereleaseFloor`). Commit BEFORE `pnpm build`
-  so the embedded build stamp matches the final fork SHA.
-- The pack is ALL-SOURCE: `pack-fork-tarball.sh` vendors `@openclaw/ai`
-  (`file:` dep) plus `@openclaw/codex` + `@openclaw/parallel-plugin`
-  tarballs inside the fork tarball (nothing at this version exists on
-  npm, ever). Mattermost ships as its own Step 7b artifact as always.
-  Verify with the vendored-companion install variant (Step 7's ⚠ block).
-- `versions:` + `bases:` — replace the `dev` rows' `version` + fork SHAs.
-  `config: cloudbuild-base-beta.yaml`. Keep `current` + `preview`
-  untouched; skip Step 12.
-
-**This cycle is a preview-to-current promotion** (upstream cut a stable
-we're adopting):
-
-- `versions:` — DROP the entry for the new `current` (which is what
-  `preview` was — gateway-build-operator-base.yml will exclude it via
-  the cloudbuild.yaml pin). Keep the `dev` entry untouched.
-- `bases:` — relabel the old `preview` row to `current` and switch
-  its `config:` from `cloudbuild-base-beta.yaml` to `cloudbuild-base.yaml`
-  (now that it gets `:latest`). Keep its `version` + `forkSha`. The old
-  `current` row is dropped (no `previous` slot to rotate into).
-- Step 12 IS required this cycle — `cloudbuild.yaml` and
-  `cloudbuild-base.yaml` both bump to the promoted version + fork SHA.
-
-**This cycle is a fork-only refresh on the current slot** (we changed
-patches without bumping the upstream OC tag):
-
-- Bump `_OPENCLAW_FORK_SHA` in `cloudbuild.yaml` + `cloudbuild-base.yaml`
-  (Step 12 still required), bump the `forkSha` field in the `current`
-  row of `bases:`. `versions:` doesn't change (no version-string move).
-
-✓ `git diff infra/gateway/oc-build-matrix.yaml` shows only the slots
-you intended to move. Commit with the cloudbuild bumps (if any) in
-Step 15 (one commit).
+✓ `git diff infra/gateway/oc-build-matrix.yaml` shows the one current row
+matching the cloudbuild pins. Commit it with the cloudbuild bumps in Step 15.
 
 ### Step 13 — Build the base image (via the matrix-bases script)
 
@@ -646,18 +570,15 @@ scripts/rebuild-matrix-bases.sh            # dry-run: prints the plan
 scripts/rebuild-matrix-bases.sh --apply    # submits all base builds (async)
 ```
 
-This rebuilds **every** base in the `bases:` block (`current` +
-`preview` + `dev`, plus any ad-hoc diag entries) from the current
-checkout with the correct per-base config and fork SHA. Poll until the
-`current` slot's base is `SUCCESS`:
+This rebuilds the one current base in the `bases:` block from the current
+checkout with the correct config and fork SHA. Poll until it is `SUCCESS`:
 
 ```bash
 gcloud builds list --project=octogee --ongoing
 # or describe-loop the specific id from the script output
 ```
 
-✓ `octogee-gateway-base:${NEW_TAG#v}` (the `current` slot's version) is
-`SUCCESS` in AR (~10 min/base, parallel-async).
+✓ `octogee-gateway-base:${NEW_TAG#v}` is `SUCCESS` in AR.
 
 > **The post-merge guardrail (don't double-kick).** Step 15's push
 > touches `cloudbuild-base.yaml` + `oc-build-matrix.yaml`, which
@@ -681,11 +602,7 @@ gcloud builds list --project=octogee --ongoing
 > gate left for no-version-bump cycles (the 2026.5.18 `6ed39d7e` case).
 > **Flake recovery — base build `TIMEOUT` on `RUN npm install -g …fork.tgz`
 > (Step 6/23).** This one times out at the 30m wall-clock on the
-> *fork-tarball npm install*. Seen on the 6.9 GA promotion when `rebuild-matrix-bases.sh
-> --apply` fired all three bases at once — registry/network contention
-> stalled one `npm install -g` while the other two sailed through (same
-> Dockerfile, so it's the environment, not the build). Recovery: re-submit
-> **only** the timed-out slot so it builds alone, using the script's own
+> *fork-tarball npm install*. Recovery: re-submit the current base using the script's own
 > invocation with the **real** computed hash (NOT a bare manual build — see
 > next note). Get the hash from the dry-run (`scripts/rebuild-matrix-bases.sh`),
 > then:
@@ -694,9 +611,8 @@ gcloud builds list --project=octogee --ongoing
 >   --config="$PWD/cloudbuild-base.yaml" \
 >   --substitutions="_OPENCLAW_VERSION=<ver>,_OPENCLAW_FORK_SHA=<fork>,_BASE_INPUT_HASH=<computed-hash>"
 > ```
-> Solo it flies (~6-8m). The post-merge `gateway-base-rebuild` guardrail
-> re-fires all three on push regardless — if it re-flakes there it's
-> cosmetic, since the pre-built hash-stamped bases already satisfy the
+> The post-merge `gateway-base-rebuild` guardrail re-fires the current base on
+> push — if it re-flakes there it's cosmetic, since the pre-built hash-stamped base satisfies the
 > Release's poll-gate.
 >
 > **Do NOT trust a manual `gcloud builds submit --config cloudbuild-base.yaml`
@@ -784,8 +700,7 @@ gh run watch <release-run-id> --exit-status
 ✓ All steps green. The CI run ends after the matrix builds finish; the
 new SHA is now in Artifact Registry as `octogee-gateway:<short-sha>` and
 `gateway-edge:<short-sha>` (plus `octogee-gateway-operator:<short-sha>`).
-Matrix extras use `<short-sha>-oc<version>` tags. The image is
-environment-neutral and no desired-state marker is written.
+The image is environment-neutral and no desired-state marker is written.
 
 The release does not roll any pods. Nothing in TEST has moved yet.
 
@@ -802,7 +717,7 @@ git push origin "refs/tags/$TEST_TAG"
 
 The tag workflow drains TEST admission, deploys TEST's platform/controller,
 cuts TEST's gateway release, and reopens admission. Cowboy then performs the
-gateway Helm roll. **For a held preview, stop before this step.**
+gateway Helm roll.
 
 The new pod boots with the build-baked banner:
 
@@ -847,15 +762,12 @@ kubectl --context gke_octogee_us-central1_octogee-gateway -n octogee-test \
 
 ✓ Operator decides this passes.
 
-### Step 19 — Update the patch list (only when the `current` slot changes)
+### Step 19 — Update the patch list when the current runtime changes
 
-[Current patches](#current-patches) anchors to the `current` slot's
-SHAs, not the `preview` slot's. Edit it only when this cycle touched
-`current` — i.e. a preview-to-current promotion, a fork-only refresh
-on `current`, or an actual patch add/drop/policy-flip. **Skip on a pure
-preview refresh** (preview-slot SHAs live in `oc-build-matrix.yaml`'s
-preview entry; the integration branch on ceckert is authoritative).
-Commit the doc update direct to main (same flow as Step 15).
+[Current patches](#current-patches) anchors to the sole current runtime's
+SHAs. Edit it whenever the current OpenClaw version or fork changes, or when
+a patch is added, dropped, or changes policy. Commit the doc update direct to
+main (same flow as Step 15).
 
 ✓ When applicable: this file matches `git log ${NEW_TAG}..octogee/gateway-scaling-patches-${NEW_TAG}` for the `current` slot's `NEW_TAG`.
 
@@ -1094,9 +1006,9 @@ with a Cloud Build timeout right around 10 minutes.
 refactor + added deps); base builds drifted from comfortably-under-10m to
 landing right at the old `timeout: "600s"` cliff.
 
-**Fix (already in place):** all three build configs carry `timeout:
-"1800s"` (30m headroom) — `cloudbuild-base.yaml`, `cloudbuild-base-beta.yaml`,
-`cloudbuild.yaml`. This is a legitimate "the build got bigger" bump, not a
+**Fix (already in place):** both build configs carry `timeout:
+"1800s"` (30m headroom) — `cloudbuild-base.yaml` and `cloudbuild.yaml`.
+This is a legitimate "the build got bigger" bump, not a
 threshold-dodge (the builds succeed, they just need wall-clock). If you
 see timeouts again, the build grew further — bump the headroom, don't
 shave the build.
@@ -1156,13 +1068,11 @@ Live short SHAs at v2026.7.1 GA (top of current's integration branch is `5e38a68
 
 As of the 6.11 line, the Hunk A diagnostic-broadcast + Hunk B execution-phase patches require a manual conflict re-resolve each cherry-pick: upstream `#89912` renamed `onSessionTranscriptUpdate`→`onInternalSessionTranscriptUpdate` (adjacent to Hunk A in `server-runtime-subscriptions.ts`) and `#90439` "embedded run session target seam" rebuilt the `params` construction Hunk B's `onExecutionPhase` wrap follows (`embedded-agent-runner/run.ts`). Both resolve mechanically (keep our block + take upstream's rename; keep upstream's `resolveAgentRunSessionTarget` build + re-anchor our wrap after it) — see the per-cycle note in `cloudbuild-base.yaml`. WATCH (6.9, no movement through 6.11): upstream's `security.event` diagnostic type (`DiagnosticSecurityEvent`, emitted from our own `message-handler.ts`) — adjacent to the device-token + rate-limit patches but **not** session-correlated and not UI-landed, so left un-adopted; a session-correlated variant would be a Hunk-B-style adopt candidate for a PWA security feed.
 
-Per-slot top SHAs:
+Current runtime SHA:
 
 | Slot | Version | Fork SHA |
 |---|---|---|
 | current | 2026.7.1 (GA) | `5e38a689` |
-| previous | 2026.6.11 (GA) | `652ba8cf` |
-| preview | 2026.7.2-beta.3 | `81e0f5f8` |
 
 **Essential:**
 
@@ -1278,7 +1188,7 @@ fresh reset:
 
 Per the [diagnostic-patch policy](#diagnostic-patch-policy): re-port any
 of these to the current tree only if a fresh investigation needs the
-signal. Patch-free vanilla 5.18 was evaluated as a matrix preview and
+signal. Patch-free vanilla 5.18 was evaluated in a historical diagnostic and
 rejected — all 3 essentials remain required (surgical reload's N-tenant
 reconnect blast-radius is not mooted by fast SIGUSR1; isControlUiVisible
 is functional for the PWA activity stream, not perf).
@@ -1352,66 +1262,11 @@ docker build -f infra/gateway/Dockerfile.base .
 
 ---
 
-## Ad-hoc A/B base builds (diagnostic experiments)
+## Diagnostic base builds
 
-The `preview` slot (see Step 12b) handles the routine "upstream cut a
-pre-stable" case. This section covers the **ad-hoc diagnostic** case:
-you need an extra base image carrying an investigation-only patch
-(`<ver>-diag`) for an A/B against the `current` slot — something
-beyond what the three named slots cover.
-
-Both this flow and the `preview` slot share `cloudbuild-base-beta.yaml`
-(committed, tracked) — the production `cloudbuild-base.yaml` minus the
-`:latest` tag/push. It still pushes the version-specific tag, so the
-only difference is the prod base-latest pointer stays clean. Version
-labels can carry `-diag` / `-beta.N` suffixes freely (Cloud Build
-substitutions don't validate them, unlike
-`scripts/build-pinned-gateway.sh`'s regex).
-
-The full A/B flow (real example: 5.12 vs 5.16-beta.6 lockup hunt):
-
-1. **Two fork branches, identical investigation patch.** Branch each off
-   its OC tag, cherry-pick the canonical stack, then cherry-pick the
-   *same* diagnostic commit onto both. Identical instrumentation is what
-   makes the A/B isolate the OC-version delta from instrumentation noise.
-2. **Build + pack + upload + mirror** each (Steps 6–10), distinct fork
-   SHAs.
-3. **Register both blocks of `oc-build-matrix.yaml`** — this is now the
-   driver, not a manual `gcloud builds submit`:
-   - `versions:` — one entry per A/B version, `required: false`
-     (diag/preview must never gate a merge; the beta base may not exist
-     for an arbitrary commit).
-   - `bases:` — matching entry per version: `version`, `forkSha` (the
-     fork SHA from step 2), `config: cloudbuild-base-beta.yaml` (the
-     no-`:latest`-clobber variant — diag/beta must not touch prod tags).
-4. **Base images** — driven from the `bases:` block, not hand-crafted:
-   ```bash
-   scripts/rebuild-matrix-bases.sh --apply   # builds every base incl. the new A/B ones
-   ```
-   (Pushing the `oc-build-matrix.yaml` change also auto-fires
-   `gateway-base-rebuild.yml` which runs the same thing — but build them
-   pre-merge so they exist when the gateway images in step 5 need them.)
-5. **Gateway images** — the `scripts/build-pinned-gateway.sh` mechanic,
-   but its arg regex rejects `-beta.N`/`-diag`, so replicate it inline:
-   `git archive HEAD | tar -x -C $TMP` then from `$TMP`
-   `gcloud builds submit --config cloudbuild.yaml
-   --substitutions=_IMAGE_TAG=<sha>-oc<ver>,_OPENCLAW_VERSION=<ver>,_OPENCLAW_FORK_SHA=<fork>`.
-   (Once the `versions:` entry is merged, CI also regenerates these
-   per-SHA — the inline build is just for getting the first bundle now.)
-6. **Retag the OC-agnostic sidecar** (`gateway-edge` — chat-proxy is folded
-   into it now) from a main SHA that has it to the `<sha>-oc<ver>` bundle
-   tag — it aliases, not rebuilds. Cowboy then deploys gateway + gateway-edge
-   under one `imageTag`.
-7. **Deploy via a canary**, never by rolling `gw-test`/`gw-prod` — Add
-   Gateway in the admin Gateways tab with `imageTag=<sha>-oc<ver>`,
-   migrate one customer, compare. (Cowboy is still the sole deployer.)
-8. **Teardown when the investigation closes** — remove the entries from
-   **both** `versions:` and `bases:` so `rebuild-matrix-bases.sh` stops
-   rebuilding dead bases every cycle.
-
-`cloudbuild-base-beta.yaml` is intentionally generic + tracked because
-this pattern recurs every beta/diagnostic cycle — don't recreate it
-ad-hoc.
+The release pipeline builds only the current OpenClaw runtime. For a
+diagnostic experiment, build a pinned image outside the release workflow and
+keep it out of the deployment aliases; it is not a supported release slot.
 
 ---
 

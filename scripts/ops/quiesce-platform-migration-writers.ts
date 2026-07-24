@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applicationDefault, getApps, initializeApp } from "firebase-admin/app";
@@ -16,16 +15,33 @@ import {
   PLATFORM_MIGRATION_WRITER_READINESS_TIMEOUT_MILLISECONDS,
   waitForPlatformMigrationWriterQuiescence,
   waitForPlatformMigrationWriterReadiness,
+  assertPlatformMigrationScheduledWritersQuiesced,
+  assertPlatformMigrationScheduledWritersReady,
+  platformMigrationScheduledAttemptDeadlineMilliseconds,
+  waitForPlatformMigrationScheduledAttemptDrain,
+  type KubernetesCronJob,
+  type KubernetesCronJobJob,
   type KubernetesPodList,
   type KubernetesWorkload,
+  type PlatformMigrationScheduledWriter,
   type PlatformMigrationWriterQuiescenceDependencies,
   type PlatformMigrationWriterReceipt,
 } from "../lib/platform-migration-writer-quiescence.js";
+import { assertPlatformMigrationActivationReceipt } from "../lib/platform-migration-activation.js";
+import {
+  MIGRATION_RECEIPT_BUCKET,
+  MigrationReceiptCollisionError,
+  assertMigrationReceiptBucket,
+  immutableMigrationReceiptUri,
+  readImmutableMigrationReceipt,
+  writeImmutableMigrationReceipt,
+  type CommandRunner,
+} from "../lib/migration-receipts.js";
 
-const CONTROL_BUCKET = "gs://octogee-terraform-state";
-const RECEIPT_PREFIX = "receipts/platform-migration-writer-quiescence";
-const CONTENT_RECEIPT_PREFIX = "receipts/platform-content-migration";
-const FIREBASE_RECEIPT_PREFIX = "receipts/platform-firestore-auth-west-migration";
+const RECEIPT_PREFIX = "platform-migration-writer-quiescence";
+const CONTENT_RECEIPT_PREFIX = "platform-content-migration";
+const FIREBASE_RECEIPT_PREFIX = "platform-firestore-auth-west-migration";
+const ACTIVATION_RECEIPT_PREFIX = "platform-migration-activation";
 const MAINTENANCE_DOCUMENT = "config/glmMaintenance";
 const QUIESCE_TIMEOUT_MILLISECONDS = 120_000;
 const QUIESCE_POLL_MILLISECONDS = 1_000;
@@ -110,8 +126,139 @@ function pods(settings: DeploymentEnvironmentSettings): KubernetesPodList {
   return JSON.parse(kubectl(settings, ["get", "pods", "-o", "json"])) as KubernetesPodList;
 }
 
+function cronJobs(settings: DeploymentEnvironmentSettings): KubernetesCronJob[] {
+  const listing = parseRecord(kubectl(settings, ["get", "cronjobs", "-o", "json"]), "Kubernetes CronJobs");
+  if (!Array.isArray(listing.items)) throw new Error("Kubernetes CronJobs returned no items array");
+  return listing.items as KubernetesCronJob[];
+}
+
+function cronJobJobs(settings: DeploymentEnvironmentSettings): KubernetesCronJobJob[] {
+  const listing = parseRecord(kubectl(settings, ["get", "jobs", "-o", "json"]), "Kubernetes Jobs");
+  if (!Array.isArray(listing.items)) throw new Error("Kubernetes Jobs returned no items array");
+  return listing.items as KubernetesCronJobJob[];
+}
+
+export function parsePlatformMigrationScheduledWritersListing(
+  output: string,
+): PlatformMigrationScheduledWriter[] {
+  let listing: unknown;
+  try {
+    listing = JSON.parse(output);
+  } catch {
+    throw new Error("Cloud Scheduler jobs were not valid JSON");
+  }
+  if (!Array.isArray(listing)) throw new Error("Cloud Scheduler jobs returned no array");
+  return listing.map((candidate, index) => {
+    const job = record(candidate, `Cloud Scheduler job ${index}`);
+    if (
+      typeof job.name !== "string" ||
+      job.name.length === 0 ||
+      typeof job.state !== "string" ||
+      typeof job.attemptDeadline !== "string"
+    ) {
+      throw new Error(`Cloud Scheduler job ${index} is malformed`);
+    }
+    const name = job.name.split("/").at(-1);
+    if (!name) throw new Error(`Cloud Scheduler job ${index} has no terminal name`);
+    const retryConfig = job.retryConfig === undefined || job.retryConfig === null
+      ? undefined
+      : record(job.retryConfig, `Cloud Scheduler job ${index} retryConfig`);
+    return {
+      name,
+      state: job.state,
+      attemptDeadline: job.attemptDeadline,
+      retryConfig,
+      targetType: job.httpTarget === undefined ? "UNSUPPORTED" : "HTTP",
+    };
+  });
+}
+
+function scheduledWriters(settings: DeploymentEnvironmentSettings): PlatformMigrationScheduledWriter[] {
+  return parsePlatformMigrationScheduledWritersListing(run("gcloud", [
+    "scheduler",
+    "jobs",
+    "list",
+    `--project=${settings.firebaseProjectId}`,
+    `--location=${settings.region}`,
+    "--format=json(name,state,attemptDeadline,retryConfig,httpTarget)",
+  ]));
+}
+
+function pauseScheduledWriter(settings: DeploymentEnvironmentSettings, writer: Pick<PlatformMigrationScheduledWriter, "name">): void {
+  run("gcloud", [
+    "scheduler",
+    "jobs",
+    "pause",
+    writer.name,
+    `--project=${settings.firebaseProjectId}`,
+    `--location=${settings.region}`,
+  ]);
+}
+
+function resumeScheduledWriter(settings: DeploymentEnvironmentSettings, writer: Pick<PlatformMigrationScheduledWriter, "name">): void {
+  run("gcloud", [
+    "scheduler",
+    "jobs",
+    "resume",
+    writer.name,
+    `--project=${settings.firebaseProjectId}`,
+    `--location=${settings.region}`,
+  ]);
+}
+
+function setCronJobSuspended(
+  settings: DeploymentEnvironmentSettings,
+  cronJob: { name: string },
+  suspended: boolean,
+): void {
+  kubectl(settings, [
+    "patch",
+    "cronjob",
+    cronJob.name,
+    "--type=merge",
+    `--patch=${JSON.stringify({ spec: { suspend: suspended } })}`,
+  ]);
+}
+
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function waitForScheduledWriters(
+  settings: DeploymentEnvironmentSettings,
+  receipt: PlatformMigrationWriterReceipt,
+  ready: boolean,
+): Promise<void> {
+  const deadline = Date.now() + (ready ? PLATFORM_MIGRATION_WRITER_READINESS_TIMEOUT_MILLISECONDS : QUIESCE_TIMEOUT_MILLISECONDS);
+  let lastFailure = "not checked";
+  while (true) {
+    try {
+      if (ready) {
+        assertPlatformMigrationScheduledWritersReady(
+          settings,
+          receipt,
+          scheduledWriters(settings),
+          cronJobs(settings),
+        );
+      } else {
+        assertPlatformMigrationScheduledWritersQuiesced(
+          settings,
+          receipt,
+          scheduledWriters(settings),
+          cronJobs(settings),
+          cronJobJobs(settings),
+        );
+      }
+      return;
+    } catch (error) {
+      lastFailure = error instanceof Error ? error.message : String(error);
+    }
+    if (Date.now() >= deadline) {
+      const phase = ready ? "become ready" : "quiesce";
+      throw new Error(`scheduled writers did not ${phase} within ${ready ? PLATFORM_MIGRATION_WRITER_READINESS_TIMEOUT_MILLISECONDS : QUIESCE_TIMEOUT_MILLISECONDS}ms: ${lastFailure}`);
+    }
+    await sleep(QUIESCE_POLL_MILLISECONDS);
+  }
 }
 
 function firestore(settings: DeploymentEnvironmentSettings) {
@@ -123,34 +270,51 @@ function firestore(settings: DeploymentEnvironmentSettings) {
   return getFirestore(app);
 }
 
-function receiptUri(receipt: Pick<PlatformMigrationWriterReceipt, "targetId" | "migrationId">): string {
-  return `${CONTROL_BUCKET}/${RECEIPT_PREFIX}/${receipt.migrationId}/${receipt.targetId}.json`;
+export function platformMigrationWriterReceiptUri(
+  receipt: Pick<PlatformMigrationWriterReceipt, "targetId" | "migrationId">,
+): string {
+  return immutableMigrationReceiptUri(
+    `${RECEIPT_PREFIX}/${receipt.migrationId}/${receipt.targetId}.json`,
+  );
 }
 
-function readReceipt(uri: string): PlatformMigrationWriterReceipt | null {
+export function readPlatformMigrationWriterReceipt(
+  uri: string,
+  runner: CommandRunner = run,
+): PlatformMigrationWriterReceipt | null {
   try {
-    return parseRecord(run("gcloud", ["storage", "cat", uri]), "writer quiescence receipt") as unknown as PlatformMigrationWriterReceipt;
+    return readImmutableMigrationReceipt(uri, {
+      schemaVersion: 1,
+      kind: "platform-migration-writer-quiescence-receipt",
+    }, runner).receipt as unknown as PlatformMigrationWriterReceipt;
   } catch (error) {
     if (isMissingObject(error)) return null;
     throw error;
   }
 }
 
-function writeReceipt(uri: string, receipt: PlatformMigrationWriterReceipt): void {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-writer-quiescence."));
-  const file = path.join(directory, "receipt.json");
+export function writePlatformMigrationWriterReceipt(
+  uri: string,
+  receipt: PlatformMigrationWriterReceipt,
+  runner: CommandRunner = run,
+): void {
+  const expectedUri = platformMigrationWriterReceiptUri(receipt);
+  if (uri !== expectedUri) {
+    throw new Error("writer quiescence receipt URI does not match its target and migration");
+  }
   try {
-    fs.writeFileSync(file, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
-    try {
-      run("gcloud", ["storage", "cp", "--if-generation-match=0", file, uri]);
-    } catch (error) {
-      if (error instanceof Error && /conditionNotMet|precondition|generation/i.test(error.message)) {
-        throw new Error("writer quiescence receipt already exists and is immutable");
-      }
-      throw error;
+    writeImmutableMigrationReceipt(
+      `${RECEIPT_PREFIX}/${receipt.migrationId}/${receipt.targetId}.json`,
+      { ...receipt },
+      runner,
+    );
+  } catch (error) {
+    if (error instanceof MigrationReceiptCollisionError) {
+      throw new Error("writer quiescence receipt already exists and is immutable", {
+        cause: error,
+      });
     }
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
+    throw error;
   }
 }
 
@@ -168,21 +332,100 @@ function migrationEndpoints(receipt: PlatformMigrationWriterReceipt): {
   return { source, target };
 }
 
-function assertRequiredMigrationReceipts(receipt: PlatformMigrationWriterReceipt): void {
+export function assertRequiredMigrationReceipts(
+  receipt: PlatformMigrationWriterReceipt,
+  runner: CommandRunner = run,
+): void {
   const { source, target } = migrationEndpoints(receipt);
-  const contentUri = `${CONTROL_BUCKET}/${CONTENT_RECEIPT_PREFIX}/${source}-to-${target}/${receipt.migrationId}.json`;
-  const content = parseRecord(run("gcloud", ["storage", "cat", contentUri]), "platform content migration receipt");
-  const pattern = `${CONTROL_BUCKET}/${FIREBASE_RECEIPT_PREFIX}/${receipt.migrationId}-${source}-${target}-*-complete.json`;
-  const candidates = run("gcloud", ["storage", "ls", pattern]).split("\n").filter(Boolean).sort();
+  const contentUri = immutableMigrationReceiptUri(
+    `${CONTENT_RECEIPT_PREFIX}/${source}-to-${target}/${receipt.migrationId}.json`,
+  );
+  const content = readImmutableMigrationReceipt(contentUri, {
+    schemaVersion: 1,
+    kind: "platform-content-migration-receipt",
+    migrationId: receipt.migrationId,
+    source,
+    target,
+    revision: receipt.revision,
+    verified: true,
+  }, runner).receipt;
+  const pattern =
+    `${MIGRATION_RECEIPT_BUCKET}/receipts/${FIREBASE_RECEIPT_PREFIX}/` +
+    `${receipt.migrationId}-${source}-${target}-*-complete.json`;
+  const candidates = runner("gcloud", ["storage", "ls", pattern])
+    .split("\n")
+    .filter(Boolean)
+    .sort();
   if (candidates.length === 0) throw new Error("verified Firebase/Auth/Storage migration receipt is required before restore");
   const firebase = candidates.map((uri) =>
-    parseRecord(run("gcloud", ["storage", "cat", uri]), "Firebase/Auth/Storage migration receipt"));
+    readImmutableMigrationReceipt(uri, {
+      schemaVersion: 1,
+      kind: "platform-firestore-auth-west-migration-receipt",
+      mode: "apply",
+      migrationId: receipt.migrationId,
+      sourceTargetId: source,
+      targetTargetId: target,
+      gitCommit: receipt.revision,
+      verified: true,
+    }, runner).receipt);
   assertRequiredPlatformMigrationReceipts(receipt, content, firebase);
 }
 
-async function assertPairedCentralQuiesced(receipt: PlatformMigrationWriterReceipt): Promise<void> {
+export function assertMigrationActivation(receipt: PlatformMigrationWriterReceipt, runner: CommandRunner = run): void {
+  const { source, target } = migrationEndpoints(receipt);
+  const uri = immutableMigrationReceiptUri(`${ACTIVATION_RECEIPT_PREFIX}/${source}-to-${target}/${receipt.migrationId}.json`);
+  const activation = readImmutableMigrationReceipt(uri, {
+    schemaVersion: 1,
+    kind: "platform-migration-activation-receipt",
+    migrationId: receipt.migrationId,
+    source,
+    target,
+    revision: receipt.revision,
+    credentials: "migration-only-mattermost-and-target-gitea",
+    secrets: "rematerialized-and-verified",
+    verified: true,
+  }, runner).receipt;
+  assertPlatformMigrationActivationReceipt(activation, {
+    migrationId: receipt.migrationId,
+    source,
+    target,
+    revision: receipt.revision,
+  });
+}
+
+export function validateRestoredGiteaTokenConsumers(
+  settings: DeploymentEnvironmentSettings,
+  repoRoot: string,
+  runner: CommandRunner = run,
+): void {
+  const script = [
+    "set -euo pipefail",
+    'K8S_NAMESPACE="$1"',
+    'K8S_CONTEXT="$2"',
+    'fail() { printf "%s\\n" "$1" >&2; return 1; }',
+    "info() { :; }",
+    "ok() { :; }",
+    'source "$3"',
+    "validate_gitea_token_consumers",
+  ].join("\n");
+  runner("bash", [
+    "-c",
+    script,
+    "validate-restored-gitea-token-consumers",
+    settings.namespace,
+    settings.kubeContext,
+    path.join(repoRoot, "scripts/lib/gitea-token-convergence.sh"),
+  ]);
+}
+
+export async function assertPairedCentralQuiesced(receipt: PlatformMigrationWriterReceipt): Promise<void> {
   const { source } = migrationEndpoints(receipt);
-  const centralReceipt = readReceipt(receiptUri({ targetId: source, migrationId: receipt.migrationId }));
+  const centralReceipt = readPlatformMigrationWriterReceipt(
+    platformMigrationWriterReceiptUri({
+      targetId: source,
+      migrationId: receipt.migrationId,
+    }),
+  );
   if (
     centralReceipt === null ||
     centralReceipt.schemaVersion !== 1 ||
@@ -208,6 +451,25 @@ async function assertPairedCentralQuiesced(receipt: PlatformMigrationWriterRecei
     timeoutMilliseconds: 0,
     pollMilliseconds: QUIESCE_POLL_MILLISECONDS,
   });
+  await waitForScheduledWriters(settings, centralReceipt, false);
+}
+
+export async function assertTargetWriterQuiesced(receipt: PlatformMigrationWriterReceipt): Promise<void> {
+  const settings = deploymentTargetSettings(receipt.targetId);
+  const maintenance = await dependenciesForPairedMaintenance(settings);
+  if (maintenance?.mode !== FROZEN_MAINTENANCE_MODE || maintenance.managedBy !== QUIESCENCE_MANAGER) {
+    throw new Error("target writer quiescence maintenance state is not frozen");
+  }
+  await waitForPlatformMigrationWriterQuiescence({
+    receipt,
+    readWorkloads: async () => workloads(settings),
+    readPods: async () => pods(settings),
+    now: () => Date.now(),
+    sleep,
+    timeoutMilliseconds: 0,
+    pollMilliseconds: QUIESCE_POLL_MILLISECONDS,
+  });
+  await waitForScheduledWriters(settings, receipt, false);
 }
 
 async function dependenciesForPairedMaintenance(
@@ -219,6 +481,7 @@ async function dependenciesForPairedMaintenance(
 
 function dependencies(repoRoot: string): PlatformMigrationWriterQuiescenceDependencies {
   return {
+    assertReceiptStorage: async () => assertMigrationReceiptBucket(run),
     assertExactMergedMain: async () => assertExactMergedMain(repoRoot),
     readWorkloads: async (settings) => workloads(settings),
     readMaintenance: async (settings) => {
@@ -236,6 +499,12 @@ function dependencies(repoRoot: string): PlatformMigrationWriterQuiescenceDepend
     scaleWorkload: async (settings, workload, replicas) => {
       kubectl(settings, ["scale", `${workload.kind.toLowerCase()}/${workload.name}`, `--replicas=${replicas}`]);
     },
+    readScheduledWriters: async (settings) => scheduledWriters(settings),
+    pauseScheduledWriter: async (settings, writer) => pauseScheduledWriter(settings, writer),
+    resumeScheduledWriter: async (settings, writer) => resumeScheduledWriter(settings, writer),
+    readCronJobs: async (settings) => cronJobs(settings),
+    readCronJobJobs: async (settings) => cronJobJobs(settings),
+    setCronJobSuspended: async (settings, cronJob, suspended) => setCronJobSuspended(settings, cronJob, suspended),
     waitForWritersQuiesced: async (settings, receipt) => {
       await waitForPlatformMigrationWriterQuiescence({
         receipt,
@@ -258,12 +527,25 @@ function dependencies(repoRoot: string): PlatformMigrationWriterQuiescenceDepend
         pollMilliseconds: QUIESCE_POLL_MILLISECONDS,
       });
     },
-    readReceipt: async (uri) => readReceipt(uri),
-    writeReceipt: async (uri, receipt) => writeReceipt(uri, receipt),
+    validateGiteaTokenConsumers: async (settings) =>
+      validateRestoredGiteaTokenConsumers(settings, repoRoot),
+    waitForScheduledWritersQuiesced: async (settings, receipt) => waitForScheduledWriters(settings, receipt, false),
+    waitForScheduledWriterAttemptsDrained: async (_settings, receipt) => {
+      await waitForPlatformMigrationScheduledAttemptDrain({
+        attemptDeadlineMilliseconds: platformMigrationScheduledAttemptDeadlineMilliseconds(receipt),
+        now: () => Date.now(),
+        sleep,
+      });
+    },
+    waitForScheduledWritersReady: async (settings, receipt) => waitForScheduledWriters(settings, receipt, true),
+    readReceipt: async (uri) => readPlatformMigrationWriterReceipt(uri),
+    writeReceipt: async (uri, receipt) =>
+      writePlatformMigrationWriterReceipt(uri, receipt),
     assertRequiredMigrationReceipts: async (receipt) => assertRequiredMigrationReceipts(receipt),
+    assertMigrationActivation: async (receipt) => assertMigrationActivation(receipt),
     assertPairedCentralQuiesced: async (receipt) => assertPairedCentralQuiesced(receipt),
     settingsForTarget: (targetId) => deploymentTargetSettings(targetId),
-    receiptUri,
+    receiptUri: platformMigrationWriterReceiptUri,
   };
 }
 

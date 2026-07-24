@@ -1,15 +1,15 @@
 {
     "schemaVersion": 1,
     "activeTargets": {
-        "prod": "prod-west",
-        "test": "test-west",
+        "prod": "prod-central",
+        "test": "test-central",
         "build-week": "build-week-central"
     },
     "targets": {
         "prod-central": {
             "environment": "prod",
             "promotionSourceTargetId": "test-central",
-            "lifecycle": "frozen",
+            "lifecycle": "active",
             "secretNameSuffix": "prod",
             "clusterProjectId": "octogee",
             "firebaseProjectId": "octogee",
@@ -19,7 +19,7 @@
             "namespace": "octogee",
             "artifactRegistry": {
                 "projectId": "octogee",
-                "location": "us-central1",
+                "location": "us-west1",
                 "repository": "octogee"
             },
             "cloudSql": {
@@ -61,7 +61,7 @@
         "prod-west": {
             "environment": "prod",
             "promotionSourceTargetId": "test-west",
-            "lifecycle": "active",
+            "lifecycle": "candidate",
             "secretNameSuffix": "prod-west",
             "clusterProjectId": "octogee",
             "firebaseProjectId": "octogee-data-prod",
@@ -116,7 +116,7 @@
         },
         "test-central": {
             "environment": "test",
-            "lifecycle": "frozen",
+            "lifecycle": "active",
             "secretNameSuffix": "test",
             "clusterProjectId": "octogee",
             "firebaseProjectId": "octogee-test",
@@ -126,7 +126,7 @@
             "namespace": "octogee-test",
             "artifactRegistry": {
                 "projectId": "octogee",
-                "location": "us-central1",
+                "location": "us-west1",
                 "repository": "octogee"
             },
             "cloudSql": {
@@ -167,7 +167,7 @@
         },
         "test-west": {
             "environment": "test",
-            "lifecycle": "active",
+            "lifecycle": "candidate",
             "secretNameSuffix": "test-west",
             "clusterProjectId": "octogee",
             "firebaseProjectId": "octogee-data-test",
