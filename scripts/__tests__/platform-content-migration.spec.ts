@@ -8,6 +8,9 @@ import {
   parsePlatformContentMigrationArguments,
 } from '../lib/platform-content-migration.js'
 import {
+  resolvePlatformContentMigrationOperatorImage,
+} from '../lib/platform-content-migration-image.js'
+import {
   assertFreshTargetDatabase,
   copyPod,
   databaseProbeManifest,
@@ -17,6 +20,71 @@ import {
 } from '../ops/migrate-platform-content.js'
 
 describe('platform content migration plan', () => {
+  it('resolves the canonical exact-commit operator image to its Artifact Registry digest', () => {
+    const commands: Array<{ command: string; args: readonly string[] }> = []
+    const image = resolvePlatformContentMigrationOperatorImage({
+      artifactRegistryLocation: 'us-west1',
+      artifactRegistryProjectId: 'octogee',
+      artifactRegistryRepository: 'octogee',
+      releaseCommit: 'a'.repeat(40),
+      canonicalOpenclawVersion: '2026.7.1',
+      run: (command, args) => {
+        commands.push({ command, args })
+        return JSON.stringify({ image_summary: { digest: `sha256:${'b'.repeat(64)}` } })
+      },
+    })
+
+    expect(image).toEqual({
+      releaseCommit: 'a'.repeat(40),
+      canonicalOpenclawVersion: '2026.7.1',
+      tag: 'aaaaaaa-oc2026.7.1',
+      digest: `sha256:${'b'.repeat(64)}`,
+      reference: `us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator:aaaaaaa-oc2026.7.1@sha256:${'b'.repeat(64)}`,
+    })
+    expect(commands).toEqual([{
+      command: 'gcloud',
+      args: [
+        'artifacts', 'docker', 'images', 'describe',
+        'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator:aaaaaaa-oc2026.7.1',
+        '--project=octogee', '--format=json',
+      ],
+    }])
+  })
+
+  it.each([
+    ['missing Artifact Registry digest', '{}'],
+    ['mutable digest', JSON.stringify({ image_summary: { digest: 'latest' } })],
+  ])('rejects %s', (_label, output) => {
+    expect(() => resolvePlatformContentMigrationOperatorImage({
+      artifactRegistryLocation: 'us-west1',
+      artifactRegistryProjectId: 'octogee',
+      artifactRegistryRepository: 'octogee',
+      releaseCommit: 'a'.repeat(40),
+      canonicalOpenclawVersion: '2026.7.1',
+      run: () => output,
+    })).toThrow('did not resolve to an immutable digest')
+  })
+
+  it('rejects a non-release commit or canonical version before querying Artifact Registry', () => {
+    expect(() => resolvePlatformContentMigrationOperatorImage({
+      artifactRegistryLocation: 'us-west1',
+      artifactRegistryProjectId: 'octogee',
+      artifactRegistryRepository: 'octogee',
+      releaseCommit: 'short',
+      canonicalOpenclawVersion: '2026.7.1',
+      run: () => { throw new Error('must not query') },
+    })).toThrow('exact 40-character Git commit')
+
+    expect(() => resolvePlatformContentMigrationOperatorImage({
+      artifactRegistryLocation: 'us-west1',
+      artifactRegistryProjectId: 'octogee',
+      artifactRegistryRepository: 'octogee',
+      releaseCommit: 'a'.repeat(40),
+      canonicalOpenclawVersion: 'latest',
+      run: () => { throw new Error('must not query') },
+    })).toThrow('canonical OpenClaw version')
+  })
+
   it('allows only the central-to-west pair for the same environment', () => {
     expect(
       createPlatformContentMigrationPlan({
@@ -213,5 +281,25 @@ describe('platform content migration plan', () => {
     expect(source).toContain('"sql", "databases", "delete"')
     expect(source.indexOf('assertFreshTargetDatabase')).toBeLessThan(source.indexOf('resetTargetDatabase(target'))
     expect(source).not.toContain('${CONTROL_BUCKET}/platform-content-migration')
+  })
+
+  it('derives and receipts the exact-release operator image instead of accepting an environment override', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'ops/migrate-platform-content.ts'), 'utf8')
+    expect(source).toContain('resolvePlatformContentMigrationOperatorImage')
+    expect(source).toContain('readCanonicalOpenclawVersion')
+    expect(source).toContain('operatorImage: image')
+    expect(source).not.toContain('PLATFORM_CONTENT_MIGRATION_COPY_IMAGE')
+  })
+
+  it('documents deterministic image provenance for TEST and PROD plus the generated WEST context', () => {
+    const handbook = fs.readFileSync(path.join(process.cwd(), '../docs/handbook/40-credential-rotation.md'), 'utf8')
+    const environments = fs.readFileSync(path.join(process.cwd(), '../docs/handbook/20-environments.md'), 'utf8')
+
+    expect(handbook).toContain('exact-release operator image')
+    expect(handbook).toContain('test-central/test-west and prod-central/prod-west')
+    expect(handbook).not.toContain('PLATFORM_CONTENT_MIGRATION_COPY_IMAGE')
+    expect(environments).toContain('gke_octogee_us-west1_octogee-gateway')
+    expect(environments).toContain('Migration operators use the\n' +
+      'generated context from the deployment-target registry')
   })
 })

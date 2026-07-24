@@ -1,8 +1,10 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { deploymentTargetSettings, type DeploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 import { createPlatformContentMigrationPlan, parsePlatformContentMigrationArguments } from "../lib/platform-content-migration.js";
+import { resolvePlatformContentMigrationOperatorImage } from "../lib/platform-content-migration-image.js";
 import {
   assertMigrationReceiptBucket,
   immutableMigrationReceiptUri,
@@ -113,10 +115,13 @@ function quiesce(settings: DeploymentEnvironmentSettings, target: Workload): voi
   if (replicas !== 0 || (active !== undefined && active !== 0) || (ready !== undefined && ready !== 0)) throw new Error(`${target.name} is not quiesced`);
 }
 
-function requireImage(variable: string): string {
-  const image = process.env[variable];
-  if (!image || !/^us-west1-docker\.pkg\.dev\/octogee\/octogee\/octogee-gateway-operator:[a-zA-Z0-9._-]+@sha256:[a-f0-9]{64}$/.test(image)) throw new Error(`${variable} must be an approved immutable WEST operator image digest`);
-  return image;
+export function readCanonicalOpenclawVersion(repoRoot: string): string {
+  const configuration = fs.readFileSync(path.join(repoRoot, "infra/gateway/cloudbuild.yaml"), "utf8");
+  const match = /^\s*_OPENCLAW_VERSION:\s*"([^"]+)"\s*$/m.exec(configuration);
+  if (!match || !/^\d{4}\.\d+\.\d+(?:-[A-Za-z0-9.]+)?$/.test(match[1]!)) {
+    throw new Error("could not resolve the canonical OpenClaw version from infra/gateway/cloudbuild.yaml");
+  }
+  return match[1]!;
 }
 
 function passwordEnvironment(target: Workload, service: "mattermost" | "gitea"): unknown {
@@ -395,7 +400,14 @@ function main(): void {
   if (receiptExists(receipt)) throw new Error("migration receipt already exists; completed migrations cannot be replayed");
   const source = deploymentTargetSettings(plan.source); const target = deploymentTargetSettings(plan.target);
   if (!source.region.includes("central") || !target.region.includes("west") || source.name !== target.name) throw new Error("target pair is not an exact same-environment central-to-west migration");
-  const image = requireImage("PLATFORM_CONTENT_MIGRATION_COPY_IMAGE");
+  const image = resolvePlatformContentMigrationOperatorImage({
+    artifactRegistryLocation: target.artifactRegistryLocation,
+    artifactRegistryProjectId: target.artifactRegistryProjectId,
+    artifactRegistryRepository: target.artifactRegistryRepository,
+    releaseCommit: revision,
+    canonicalOpenclawVersion: readCanonicalOpenclawVersion(fileURLToPath(new URL("../..", import.meta.url))),
+    run,
+  });
   const states = (["mattermost", "gitea"] as const).map((service) => { const sourceWorkload = workload(source, service); const targetWorkload = workload(target, service); return { service, sourceWorkload, targetWorkload, sourceDisk: disk(source, sourceWorkload), targetDisk: disk(target, targetWorkload) }; });
   for (const state of states) quiesce(target, state.targetWorkload);
   assertDatabaseProxyReady(source);
@@ -403,18 +415,18 @@ function main(): void {
   const targetPreflight = states.map((state) => {
     const database = databaseMetadata(target, state.targetWorkload, state.service, plan.migrationId);
     assertFreshTargetDatabase(database, state.service);
-    return { service: state.service, database, pvc: assertFreshTargetPvc(target, state.targetWorkload, state.service, plan.migrationId, image) };
+    return { service: state.service, database, pvc: assertFreshTargetPvc(target, state.targetWorkload, state.service, plan.migrationId, image.reference) };
   });
   for (const state of states) quiesce(source, state.sourceWorkload);
   const databaseBefore = states.map((state) => ({ service: state.service, source: databaseMetadata(source, state.sourceWorkload, state.service, plan.migrationId), target: targetPreflight.find((value) => value.service === state.service)!.database }));
   for (const state of states) resetTargetDatabase(target, state.service);
-  const transferred = states.map((state) => ({ service: state.service, files: copyFiles({ source, target, sourceDisk: state.sourceDisk, targetDisk: state.targetDisk, targetWorkload: state.targetWorkload, service: state.service, migrationId: plan.migrationId, image }), database: databaseName(source.name, state.service) }));
+  const transferred = states.map((state) => ({ service: state.service, files: copyFiles({ source, target, sourceDisk: state.sourceDisk, targetDisk: state.targetDisk, targetWorkload: state.targetWorkload, service: state.service, migrationId: plan.migrationId, image: image.reference }), database: databaseName(source.name, state.service) }));
   for (const state of states) migrateDatabase(source, target, state.service, plan.migrationId);
   const databaseAfter = states.map((state) => ({ service: state.service, target: databaseMetadata(target, state.targetWorkload, state.service, plan.migrationId) }));
   for (const state of databaseBefore) { const after = databaseAfter.find((value) => value.service === state.service)!; if (JSON.stringify(state.source) !== JSON.stringify(after.target)) throw new Error(`${state.service} database metadata differs after import`); }
   writeImmutableMigrationReceipt(
     `platform-content-migration/${plan.source}-to-${plan.target}/${plan.migrationId}.json`,
-    { schemaVersion: 1, kind: "platform-content-migration-receipt", migrationId: plan.migrationId, source: plan.source, target: plan.target, revision, completedAt: new Date().toISOString(), transfer: plan.transfer, targetCredentials: "preserved-platform-generated", verified: true, targetPreflight, services: transferred },
+    { schemaVersion: 1, kind: "platform-content-migration-receipt", migrationId: plan.migrationId, source: plan.source, target: plan.target, revision, completedAt: new Date().toISOString(), transfer: plan.transfer, operatorImage: image, targetCredentials: "preserved-platform-generated", verified: true, targetPreflight, services: transferred },
   );
   process.stdout.write(`${JSON.stringify({ migrationId: plan.migrationId, receipt, status: "complete", workloads: "left-quiesced-for-explicit-cutover" })}\n`);
 }
