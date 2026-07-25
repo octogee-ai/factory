@@ -390,7 +390,7 @@ ok "Mattermost rollout complete"
 
 if $ROTATE_PLATFORM_CREDENTIALS; then
   if MM_USER_GET=$(kubectl exec -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" deploy/mattermost -c mattermost -- \
-    /mattermost/bin/mmctl --local user get "$MM_ADMIN_USER" 2>&1); then
+    /mattermost/bin/mmctl --local user search "$MM_ADMIN_USER" 2>&1); then
     info "Rotating restored Mattermost admin password through the local control socket..."
     kubectl exec -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" deploy/mattermost -c mattermost -- \
       /mattermost/bin/mmctl --local user change-password "$MM_ADMIN_USER" \
@@ -522,7 +522,7 @@ if [[ "$ADMIN_CHECK" == "200" ]]; then
 
 else
   if MM_USER_GET=$(kubectl exec -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" deploy/mattermost -c mattermost -- \
-    /mattermost/bin/mmctl --local user get "$MM_ADMIN_USER" 2>&1); then
+    /mattermost/bin/mmctl --local user search "$MM_ADMIN_USER" 2>&1); then
     fail "Admin exists but API login failed; refusing to treat an active database as fresh"
   elif [[ "$MM_USER_GET" == *"not found"* ]]; then
     info "Fresh Mattermost admin is not present; creating it through mmctl --local..."
