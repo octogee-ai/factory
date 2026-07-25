@@ -255,6 +255,11 @@ describe("classifyGatewayField", () => {
     }
   });
 
+  it("no longer classifies the retired computeClass as gateway-mutable", () => {
+    expect(GATEWAY_MUTABLE_FIELDS).not.toContain("computeClass");
+    expect(classifyGatewayField("computeClass")).toBe("release");
+  });
+
   it("classifies all former release policy fields as gateway-mutable", () => {
     expect(classifyGatewayField("operatorAccess")).toBe("gateway-mutable");
     expect(classifyGatewayField("openclawOverrides")).toBe("gateway-mutable");
@@ -375,7 +380,6 @@ describe("commitPlacementAtomic", () => {
     gatewayClass: "shared",
     imageProfile: "standard",
     sizingTier: null,
-    computeClass: null,
     gcpProject: null,
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,

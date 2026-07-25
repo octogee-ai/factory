@@ -163,7 +163,6 @@ function mutableConfig(
     gatewayClass: "operator",
     imageProfile: "operator",
     sizingTier: "l",
-    computeClass: null,
     gcpProject: null,
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
@@ -416,10 +415,9 @@ describe("gateway durable configuration authorization", () => {
     expect(rendered).not.toHaveProperty("configSchemaVersion");
   });
 
-  it("rejects invalid mutable ownership, compute, and preemption values", () => {
+  it("rejects invalid mutable ownership and preemption values", () => {
     expect(isGatewayMutableConfig(mutableConfig({ ownerUid: null }))).toBe(false);
     expect(isGatewayMutableConfig(mutableConfig({ coOwnerUids: [""] }))).toBe(false);
-    expect(isGatewayMutableConfig(mutableConfig({ computeClass: "" }))).toBe(false);
     expect(
       isGatewayMutableConfig(mutableConfig({ preemption: { warmTargetGatewayId: "" } })),
     ).toBe(false);

@@ -15,7 +15,7 @@ describe("deployment target Helm values", () => {
 
     expect(rendered).toContain('deploymentTargetId: "test-west"');
     expect(rendered).toContain('deploymentProjectId: "octogee-data-test"');
-    expect(rendered).toContain('platformComputeClass: "octogee-platform-test-spot"');
+    expect(rendered).not.toContain("platformComputeClass");
     expect(rendered).toContain(`networkPolicy:
   enforceDefaultDeny: true
   controlPlaneCidr: "172.20.16.16/28"
@@ -85,6 +85,14 @@ describe("deployment target Helm values", () => {
     (targetId) => {
       const rendered = renderDeploymentTargetHelmValues(deploymentTargetSettings(targetId));
       expect(rendered).toContain("enforceDefaultDeny: false");
+    },
+  );
+
+  it.each(["prod-central", "prod-west", "test-central", "test-west", "build-week-central"])(
+    "emits no platform compute class for %s",
+    (targetId) => {
+      expect(renderDeploymentTargetHelmValues(deploymentTargetSettings(targetId)))
+        .not.toContain("ComputeClass");
     },
   );
 
