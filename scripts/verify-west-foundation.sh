@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEPLOYMENT_TARGETS="${REPO_ROOT}/core/src/deployment-targets.json"
+DEPLOYMENT_TARGETS="${OCTOGEE_DEPLOYMENT_TARGETS:-${REPO_ROOT}/core/src/deployment-targets.json}"
 PROJECT_ID="octogee"
 REGION="us-west1"
 CLUSTER_NAME="octogee-gateway"
@@ -213,9 +213,9 @@ if [[ -z "${PAGED_LOCATIONS}" || -z "${PAGED_CLUSTERS}" ]]; then
   echo "No non-frozen deployment target to page for; refusing to verify an empty alert scope" >&2
   exit 1
 fi
-if [[ -z "${UNPAGED_NAMESPACES}" ]]; then
-  echo "No frozen deployment target: namespace!~\"\" would drop every cluster-scoped alert" >&2
-  exit 1
+UNPAGED_NAMESPACE_MATCHER=""
+if [[ -n "${UNPAGED_NAMESPACES}" ]]; then
+  UNPAGED_NAMESPACE_MATCHER=", namespace!~\"${UNPAGED_NAMESPACES}\""
 fi
 
 gcloud monitoring policies list \
@@ -228,7 +228,7 @@ if ! jq -e \
   --arg project "${PROJECT_ID}" \
   --arg locations "${PAGED_LOCATIONS}" \
   --arg clusters "${PAGED_CLUSTERS}" \
-  --arg unpaged "${UNPAGED_NAMESPACES}" '
+  --arg unpagedMatcher "${UNPAGED_NAMESPACE_MATCHER}" '
   def routed_to_both:
     .notificationChannels as $channels |
     ($channels | length) == 2 and
@@ -246,7 +246,7 @@ if ! jq -e \
       .enabled == true and
       routed_to_both and
       (.conditions[0].conditionPrometheusQueryLanguage.query | rtrimstr("\n")) ==
-        "max by (alertname, severity, location, namespace, gateway_id) (ALERTS{project_id=\"\($project)\", location=~\"\($locations)\", cluster=~\"\($clusters)\", alertstate=\"firing\", severity=\"\($severity)\", namespace!~\"\($unpaged)\"})" and
+        "max by (alertname, severity, location, namespace, gateway_id) (ALERTS{project_id=\"\($project)\", location=~\"\($locations)\", cluster=~\"\($clusters)\", alertstate=\"firing\", severity=\"\($severity)\"\($unpagedMatcher)})" and
       (.conditions[0].conditionPrometheusQueryLanguage.duration // "0s") == "0s" and
       .conditions[0].conditionPrometheusQueryLanguage.evaluationInterval == "30s"
     )) | length == 1;

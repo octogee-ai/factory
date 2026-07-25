@@ -14,28 +14,55 @@ interface DeploymentTarget {
   namespace: string;
 }
 
-const deploymentTargets = Object.values(
-  (
-    JSON.parse(
-      readFileSync(path.join(repoRoot, "core/src/deployment-targets.json"), "utf8"),
-    ) as { targets: Record<string, DeploymentTarget> }
-  ).targets,
-);
+type Contract = { targets: Record<string, DeploymentTarget> };
 
-const selector = (
-  predicate: (target: DeploymentTarget) => boolean,
-  field: (target: DeploymentTarget) => string,
-): string => [...new Set(deploymentTargets.filter(predicate).map(field))].sort().join("|");
+const repoContract = JSON.parse(
+  readFileSync(path.join(repoRoot, "core/src/deployment-targets.json"), "utf8"),
+) as Contract;
 
-const pagedLocations = selector((t) => t.lifecycle !== "frozen", (t) => t.region);
-const pagedClusters = selector((t) => t.lifecycle !== "frozen", (t) => t.clusterName);
-const unpagedNamespaces = selector((t) => t.lifecycle === "frozen", (t) => t.namespace);
+const queryFor = (contract: Contract, severity: string): string => {
+  const targets = Object.values(contract.targets);
+  const set = (
+    predicate: (target: DeploymentTarget) => boolean,
+    field: (target: DeploymentTarget) => string,
+  ): string => [...new Set(targets.filter(predicate).map(field))].sort().join("|");
 
-const workloadQuery = (severity: string): string =>
-  `max by (alertname, severity, location, namespace, gateway_id) (ALERTS{project_id="octogee", location=~"${pagedLocations}", cluster=~"${pagedClusters}", alertstate="firing", severity="${severity}", namespace!~"${unpagedNamespaces}"})`;
+  const locations = set((t) => t.lifecycle !== "frozen", (t) => t.region);
+  const clusters = set((t) => t.lifecycle !== "frozen", (t) => t.clusterName);
+  const unpaged = set((t) => t.lifecycle === "frozen", (t) => t.namespace);
+  const matcher = unpaged.length > 0 ? `, namespace!~"${unpaged}"` : "";
+
+  return `max by (alertname, severity, location, namespace, gateway_id) (ALERTS{project_id="octogee", location=~"${locations}", cluster=~"${clusters}", alertstate="firing", severity="${severity}"${matcher}})`;
+};
+
+const workloadQuery = (severity: string): string => queryFor(repoContract, severity);
+
+const target = (
+  lifecycle: string,
+  namespace: string,
+): DeploymentTarget => ({
+  lifecycle,
+  region: "us-central1",
+  clusterName: "octogee-gateway",
+  namespace,
+});
+
+const nothingFrozenContract: Contract = {
+  targets: {
+    "prod-central": target("active", "octogee"),
+    "test-central": target("active", "octogee-test"),
+    "build-week-central": target("candidate", "octogee-build-week"),
+  },
+};
 
 const staleWestOnlyQuery = (severity: string): string =>
   `max by (alertname, severity, namespace, gateway_id) (ALERTS{project_id="octogee", location="us-west1", cluster="octogee-gateway", alertstate="firing", severity="${severity}"})`;
+
+const emptyMatcherQuery = (contract: Contract, severity: string): string =>
+  queryFor(contract, severity).replace(
+    `severity="${severity}"`,
+    `severity="${severity}", namespace!~""`,
+  );
 
 type RunOptions = {
   network?: string;
@@ -46,6 +73,8 @@ type RunOptions = {
   invalidSmsChannel?: boolean;
   invalidWorkloadPolicy?: boolean;
   staleWestOnlyWorkloadQuery?: boolean;
+  contract?: Contract;
+  emptyNamespaceMatcherQuery?: boolean;
   trailingWorkloadQueryNewline?: boolean;
   mode?: "--read-only" | "--plan";
   invalidServiceHealthApi?: boolean;
@@ -56,6 +85,12 @@ type RunOptions = {
   execFailures?: number;
   execMaxAttempts?: number;
 };
+
+function liveQuery(options: RunOptions, contract: Contract, severity: string): string {
+  if (options.staleWestOnlyWorkloadQuery) return staleWestOnlyQuery(severity);
+  if (options.emptyNamespaceMatcherQuery) return emptyMatcherQuery(contract, severity);
+  return queryFor(contract, severity);
+}
 
 function executable(file: string, source: string): void {
   writeFileSync(file, source);
@@ -68,6 +103,13 @@ function runVerifier(options: RunOptions = {}) {
   const kubectlCallsFile = path.join(temp, "kubectl-calls");
   writeFileSync(execCountFile, "0\n");
   writeFileSync(kubectlCallsFile, "");
+
+  const contract = options.contract ?? repoContract;
+  let contractFile = path.join(repoRoot, "core/src/deployment-targets.json");
+  if (options.contract) {
+    contractFile = path.join(temp, "deployment-targets.json");
+    writeFileSync(contractFile, JSON.stringify(options.contract));
+  }
 
   executable(path.join(temp, "gcloud"), `#!/usr/bin/env bash
 set -euo pipefail
@@ -195,12 +237,9 @@ esac
       FAKE_EXTERNAL_NODE_IP: options.externalNodeIp ? "true" : "false",
       FAKE_INVALID_SMS_CHANNEL: options.invalidSmsChannel ? "true" : "false",
       FAKE_INVALID_WORKLOAD_POLICY: options.invalidWorkloadPolicy ? "true" : "false",
-      FAKE_CRITICAL_QUERY: options.staleWestOnlyWorkloadQuery
-        ? staleWestOnlyQuery("critical")
-        : workloadQuery("critical"),
-      FAKE_WARNING_QUERY: options.staleWestOnlyWorkloadQuery
-        ? staleWestOnlyQuery("warning")
-        : workloadQuery("warning"),
+      OCTOGEE_DEPLOYMENT_TARGETS: contractFile,
+      FAKE_CRITICAL_QUERY: liveQuery(options, contract, "critical"),
+      FAKE_WARNING_QUERY: liveQuery(options, contract, "warning"),
       FAKE_TRAILING_WORKLOAD_QUERY_NEWLINE: options.trailingWorkloadQueryNewline ? "true" : "false",
       FAKE_INVALID_SERVICE_HEALTH_API: options.invalidServiceHealthApi ? "true" : "false",
       FAKE_INVALID_SERVICE_HEALTH_POLICY: options.invalidServiceHealthPolicy ? "true" : "false",
@@ -297,6 +336,27 @@ describe("WEST foundation runtime verifier", () => {
     const result = runVerifier();
 
     expect(result.status, result.stderr).toBe(0);
+  });
+
+  it('omits the namespace matcher when no target is frozen, never expecting namespace!~""', () => {
+    const expected = queryFor(nothingFrozenContract, "critical");
+
+    expect(expected).not.toContain("namespace!~");
+    expect(expected).toContain('alertstate="firing", severity="critical"})');
+
+    const result = runVerifier({ contract: nothingFrozenContract });
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it('rejects a live policy that still carries an empty namespace!~"" matcher', () => {
+    const result = runVerifier({
+      contract: nothingFrozenContract,
+      emptyNamespaceMatcherQuery: true,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("WEST workload alert-policy invariants failed");
   });
 
   it("accepts the Terraform-rendered trailing newline on workload queries", () => {
