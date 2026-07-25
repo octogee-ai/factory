@@ -688,7 +688,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     },
   );
 
-  it("requires the exact Origin, rewrites connect, forwards native operator RPCs, and scrubs frames/audit", async () => {
+  it("requires the exact Origin, rewrites connect, denies native owner exec tools, and scrubs frames/audit", async () => {
     const upstreamFrames: Array<Record<string, unknown>> = [];
     let upstreamOrigin: string | undefined;
     const upstream = http.createServer();
@@ -715,19 +715,9 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
               type: "hello-ok",
               auth: { token: "gateway-secret" },
               features: {
-                methods: [
-                  ...OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS,
-                  "mattermost.ingress.retry",
-                ],
+                methods: [...OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS],
               },
             },
-          }));
-        } else if (frame.method === "tools.invoke") {
-          ws.send(JSON.stringify({
-            type: "res",
-            id: frame.id,
-            ok: true,
-            payload: { output: "safe result gateway-secret" },
           }));
         }
       });
@@ -809,14 +799,19 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         auth: { token: "gateway-secret" },
       }),
     }));
-    expect(upstreamFrames.some((frame) => frame.id === "owner-tool")).toBe(true);
+    expect(upstreamFrames.some((frame) => frame.id === "owner-tool")).toBe(false);
+    expect(browserFrames).toContainEqual(expect.objectContaining({
+      id: "owner-tool",
+      ok: false,
+      error: expect.objectContaining({ code: "POLICY_DENIED" }),
+    }));
     expect(upstreamOrigin).toBeUndefined();
     expect(JSON.stringify(browserFrames)).not.toContain("gateway-secret");
     expect(JSON.stringify(browserFrames)).not.toContain("browser-token");
     expect(audit).toHaveBeenCalledWith(expect.objectContaining({
       category: "tools_invoke",
-      event: "rpc_allow",
-      outcome: "ok",
+      event: "rpc_deny",
+      outcome: "denied",
     }));
     expect(JSON.stringify(audit.mock.calls)).not.toContain("exec");
     expect(JSON.stringify(audit.mock.calls)).not.toContain("command");

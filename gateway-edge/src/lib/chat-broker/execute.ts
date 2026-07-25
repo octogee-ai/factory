@@ -15,7 +15,12 @@ import { asMmJsonObject, createMmClient, MmFetchError, type MmClient, type MmJso
 import { mmSearch, MmSearchScopeError } from "./mm-search.js";
 import { mmHistory, HistoryParamError, type Direction } from "./mm-history.js";
 import { resolveTeamId, resolveChannelId, MmResolveError } from "./team.js";
-import { shapeBundle, type MmChannelMeta, type MmUserMeta } from "./shape.js";
+import {
+  shapeBundle,
+  type MmChannelMeta,
+  type MmPostsBundle,
+  type MmUserMeta,
+} from "./shape.js";
 
 const RESOLVE_TTL_SECONDS = 300;
 const MM_CHANNEL_ID_RE = /^[a-z0-9]{26}$/;
@@ -40,7 +45,17 @@ export interface ChatBrokerIdentity {
   slug: string;
   /** Public chat URL for permalink construction. */
   siteUrl: string;
+  canReadChannel?: (channelId: string) => Promise<boolean>;
   includeArchivedProjectHistory?: true;
+}
+
+export class ChatChannelAccessError extends Error {
+  readonly code = "channel-forbidden";
+
+  constructor() {
+    super("channel is outside the agent's canonical chat scope");
+    this.name = "ChatChannelAccessError";
+  }
 }
 
 export interface ChatSearchParams {
@@ -91,21 +106,33 @@ export async function executeChatSearch(
   const teamId = await resolveTeamId({ get: mm.get }, pat, slug, { ttlSeconds: RESOLVE_TTL_SECONDS });
   const currentChannelName =
     scope === "current_channel"
-      ? await maybeResolveCurrentChannelName(mm, pat, params.currentChannelId)
+      ? await maybeResolveCurrentChannelName(
+          mm,
+          pat,
+          params.currentChannelId,
+          identity.canReadChannel,
+        )
       : undefined;
 
   const result = await mmSearch(mm, pat, teamId, {
     query,
     scope,
     limit,
+    ...(identity.canReadChannel && scope === "all_visible"
+      ? { candidateLimit: 100 }
+      : {}),
     currentChannelName,
     includeDeletedChannels: identity.includeArchivedProjectHistory === true,
   });
 
-  // MM 11.5 /search omits inline channels/users — hydrate.
-  const { channels, users } = await hydrate(mm, pat, result.bundle);
+  const bundle = await readableBundle(
+    result.bundle,
+    identity.canReadChannel,
+    limit,
+  );
+  const { channels, users } = await hydrate(mm, pat, bundle);
 
-  const shaped = shapeBundle(result.bundle, {
+  const shaped = shapeBundle(bundle, {
     coachMmUserId: identity.coachMmUserId,
     siteUrl: identity.siteUrl,
     teamName: slug,
@@ -147,6 +174,7 @@ export async function executeChatHistory(
     ttlSeconds: RESOLVE_TTL_SECONDS,
     includeDeleted: identity.includeArchivedProjectHistory === true,
   });
+  await assertChannelReadable(channelId, identity.canReadChannel);
 
   const channelMeta = await fetchChannelMeta(mm, pat, channelId);
   assertArchivedHistoryReadable(channelMeta, identity);
@@ -234,6 +262,9 @@ function bucketMmStatus(status: number): string {
 
 /** Map a chat-broker error to the {status, code} pair the route returns. */
 export function chatBrokerErrorStatus(err: unknown): { status: number; code: string } {
+  if (err instanceof ChatChannelAccessError) {
+    return { status: 403, code: err.code };
+  }
   if (err instanceof MmResolveError) return { status: 502, code: `resolve-${err.code}` };
   if (err instanceof MmFetchError) return { status: 502, code: bucketMmStatus(err.status) };
   if (err instanceof MmSearchScopeError) return { status: 400, code: "scope-no-channel" };
@@ -249,14 +280,61 @@ async function maybeResolveCurrentChannelName(
   mm: MmClient,
   pat: string,
   channelId: string | undefined,
+  canReadChannel: ChatBrokerIdentity["canReadChannel"],
 ): Promise<string | undefined> {
   if (!channelId || !MM_CHANNEL_ID_RE.test(channelId)) return undefined;
+  await assertChannelReadable(channelId, canReadChannel);
   try {
     const ch = asMmJsonObject(await mm.get(`/api/v4/channels/${channelId}`, pat));
     return stringField(ch, "name");
   } catch {
     return undefined;
   }
+}
+
+async function assertChannelReadable(
+  channelId: string,
+  canReadChannel: ChatBrokerIdentity["canReadChannel"],
+): Promise<void> {
+  if (canReadChannel && !(await canReadChannel(channelId))) {
+    throw new ChatChannelAccessError();
+  }
+}
+
+async function readableBundle(
+  bundle: MmPostsBundle,
+  canReadChannel: ChatBrokerIdentity["canReadChannel"],
+  limit: number,
+): Promise<MmPostsBundle> {
+  if (!canReadChannel) return {
+    posts: bundle.posts,
+    order: bundle.order.slice(0, limit),
+  };
+  const channelIds = [...new Set(
+    bundle.order
+      .map((postId) => bundle.posts[postId]?.channel_id)
+      .filter((channelId): channelId is string => Boolean(channelId)),
+  )];
+  const decisions = await Promise.all(
+    channelIds.map(async (channelId) => [
+      channelId,
+      await canReadChannel(channelId),
+    ] as const),
+  );
+  const readable = new Set(
+    decisions
+      .filter(([, allowed]) => allowed)
+      .map(([channelId]) => channelId),
+  );
+  const order = bundle.order
+    .filter((postId) => readable.has(bundle.posts[postId]?.channel_id))
+    .slice(0, limit);
+  return {
+    posts: Object.fromEntries(
+      order.map((postId) => [postId, bundle.posts[postId]]),
+    ),
+    order,
+  };
 }
 
 async function fetchChannelMeta(

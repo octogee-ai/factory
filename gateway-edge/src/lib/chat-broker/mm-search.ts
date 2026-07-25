@@ -28,6 +28,8 @@ export interface SearchParams {
   scope?: SearchScope;
   /** Default 10, max 20. */
   limit?: number;
+  /** Internal over-fetch used when the broker must discard unauthorized hits. */
+  candidateLimit?: number;
   /** Required when `scope === "current_channel"`. Channel name (the agent's current). */
   currentChannelName?: string;
   includeDeletedChannels?: boolean;
@@ -58,6 +60,9 @@ export async function mmSearch(
   params: SearchParams,
 ): Promise<SearchResponse> {
   const limit = clamp(params.limit ?? 10, 1, 20);
+  const perPage = params.candidateLimit === undefined
+    ? limit
+    : clamp(params.candidateLimit, limit, 100);
   const scope: SearchScope = params.scope ?? "all_visible";
   let terms = params.query.trim();
   if (scope === "current_channel") {
@@ -88,7 +93,7 @@ export async function mmSearch(
       is_or_search: false,
       include_deleted_channels: params.includeDeletedChannels === true,
       page: 0,
-      per_page: limit,
+      per_page: perPage,
     },
   );
   const tookMs = Date.now() - t0;

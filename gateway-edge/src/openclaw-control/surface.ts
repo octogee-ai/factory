@@ -29,8 +29,7 @@ import {
   sanitizeOpenClawControlServerFrame,
 } from "./connect-rewrite.js";
 import {
-  evaluateNativeOpenClawControlRpc,
-  evaluateDelegatedOpenClawControlRpc,
+  evaluateOpenClawControlRpcForProfile,
   installedMethodsFromHello,
   isOpenClawControlMutation,
   openClawConfigSnapshotFromGetResponse,
@@ -1013,9 +1012,7 @@ class OpenClawControlSocketBridge {
   private acceptInstalledMethods(frame: Record<string, unknown>, id: string | undefined): boolean {
     const methods = installedMethodsFromHello(frame);
     if (!methods) return true;
-    const delegated = this.activeSession.brokerProfile === "delegated-config" ||
-      this.activeSession.brokerProfile === "delegated-read";
-    if (delegated && !pinnedOpenClawRuntimeMatches(methods)) {
+    if (!pinnedOpenClawRuntimeMatches(methods)) {
       if (this.args.browser.readyState === WebSocket.OPEN) {
         this.args.browser.send(openClawControlPolicyError({ id, type: "req" }, "runtime-drift"));
       }
@@ -1120,19 +1117,12 @@ class OpenClawControlSocketBridge {
   }
 
   private evaluateAndForward(frame: BrowserRpcFrame): void {
-    const profile = this.activeSession.brokerProfile;
-    const decision = profile === "native-owner" || profile === "native-co-owner"
-      ? evaluateNativeOpenClawControlRpc(frame, { installedMethods: this.installedMethods! })
-      : evaluateDelegatedOpenClawControlRpc(
-        frame,
-        {
-          installedMethods: this.installedMethods!,
-          invariantContext: invariantContext(this.args.env, this.activeSession.gatewayId),
-          currentConfig: this.currentConfig,
-          configFrozen: configFrozen(this.args.env),
-        },
-        profile,
-      );
+    const decision = evaluateOpenClawControlRpcForProfile(frame, {
+      installedMethods: this.installedMethods!,
+      invariantContext: invariantContext(this.args.env, this.activeSession.gatewayId),
+      currentConfig: this.currentConfig,
+      configFrozen: configFrozen(this.args.env),
+    }, this.activeSession.brokerProfile);
     if (!decision.allowed) {
       this.deny(frame, decision, decision.reason ?? "method-denied");
       return;
