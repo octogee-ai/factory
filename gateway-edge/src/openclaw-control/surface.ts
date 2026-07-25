@@ -3,6 +3,7 @@ import fs from "node:fs";
 import http from "node:http";
 import { isIP } from "node:net";
 import path from "node:path";
+import { Transform } from "node:stream";
 import { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
 import {
   acquireSystemConfigMutationLease,
@@ -79,6 +80,68 @@ const ALLOWED_RESPONSE_HEADERS = new Set([
   "etag",
   "last-modified",
   "vary",
+]);
+const DASHBOARD_ROUTES = new Set([
+  "/activity",
+  "/agents",
+  "/ai-agents",
+  "/appearance",
+  "/automation",
+  "/channels",
+  "/chat",
+  "/communications",
+  "/config",
+  "/cron",
+  "/debug",
+  "/dreaming",
+  "/dreams",
+  "/infrastructure",
+  "/instances",
+  "/logs",
+  "/mcp",
+  "/nodes",
+  "/overview",
+  "/plugin",
+  "/sessions",
+  "/settings/ai-agents",
+  "/settings/appearance",
+  "/settings/automation",
+  "/settings/channels",
+  "/settings/communications",
+  "/settings/general",
+  "/settings/infrastructure",
+  "/settings/mcp",
+  "/settings/worktrees",
+  "/skills",
+  "/skills/workshop",
+  "/tasks",
+  "/usage",
+  "/workboard",
+  "/worktrees",
+]);
+const DASHBOARD_ROOT_ASSETS = new Set([
+  "/apple-touch-icon.png",
+  "/favicon-32.png",
+  "/favicon.ico",
+  "/favicon.svg",
+  "/manifest.webmanifest",
+  "/sw.js",
+]);
+const DASHBOARD_STATIC_EXTENSIONS = new Set([
+  ".css",
+  ".gif",
+  ".ico",
+  ".jpeg",
+  ".jpg",
+  ".js",
+  ".json",
+  ".map",
+  ".png",
+  ".svg",
+  ".txt",
+  ".wasm",
+  ".webmanifest",
+  ".webp",
 ]);
 const defaultSessions = new OpenClawControlSessionManager();
 const defaultLimiter = new OpenClawControlResourceLimiter();
@@ -185,6 +248,52 @@ export function openClawControlUpstreamPath(originalUrl: string, gatewayId: stri
   return `/g/${gatewayId}/openclaw${suffix}${parsed.search}`;
 }
 
+function openClawControlHttpSuffix(originalUrl: string, gatewayId: string): URL {
+  const parsed = new URL(originalUrl, "https://octogee.invalid");
+  const publicBase = `/api/g/${gatewayId}/openclaw`;
+  const strippedBase = "/openclaw";
+  const inboundBase = parsed.pathname === publicBase || parsed.pathname.startsWith(`${publicBase}/`)
+    ? publicBase
+    : strippedBase;
+  parsed.pathname = parsed.pathname.slice(inboundBase.length) || "/";
+  return parsed;
+}
+
+function isDashboardStaticAsset(pathname: string): boolean {
+  if (!pathname.startsWith("/assets/")) return false;
+  const relativePath = pathname.slice("/assets/".length);
+  if (!relativePath || relativePath.split("/").some((segment) =>
+    !/^[A-Za-z0-9@+._-]+$/u.test(segment))) {
+    return false;
+  }
+  return DASHBOARD_STATIC_EXTENSIONS.has(path.extname(relativePath).toLowerCase());
+}
+
+function isDashboardAvatar(parsed: URL): boolean {
+  if (!/^\/avatar\/[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u.test(parsed.pathname)) return false;
+  if (!parsed.search) return true;
+  return parsed.searchParams.size === 1 && parsed.searchParams.get("meta") === "1";
+}
+
+function isDashboardProviderIcon(pathname: string): boolean {
+  return /^\/provider-icons\/ProviderIcon-[A-Za-z0-9_-]+\.svg$/u.test(pathname);
+}
+
+export function isOpenClawControlHttpResource(originalUrl: string, gatewayId: string): boolean {
+  openClawControlUpstreamPath(originalUrl, gatewayId);
+  const parsed = openClawControlHttpSuffix(originalUrl, gatewayId);
+  const route = parsed.pathname.length > 1 && parsed.pathname.endsWith("/")
+    ? parsed.pathname.slice(0, -1)
+    : parsed.pathname;
+  return route === "/" ||
+    route === "/control-ui-config.json" ||
+    DASHBOARD_ROUTES.has(route) ||
+    DASHBOARD_ROOT_ASSETS.has(route) ||
+    isDashboardStaticAsset(route) ||
+    isDashboardAvatar(parsed) ||
+    isDashboardProviderIcon(route);
+}
+
 function securityHeaders(res: Response | http.ServerResponse, frameAncestor: string): void {
   res.setHeader("cache-control", "no-store");
   res.setHeader(
@@ -249,20 +358,81 @@ function unauthorized(req: Request, res: Response, frameAncestor: string): void 
   });
 }
 
+function rejectDashboardHttpRequest(
+  req: Request,
+  res: Response,
+  frameAncestor: string,
+  gatewayId: string,
+): boolean {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    securityHeaders(res, frameAncestor);
+    res.setHeader("allow", "GET, HEAD");
+    res.status(405).json({ error: "method-not-allowed" });
+    return true;
+  }
+  if (!isOpenClawControlHttpResource(req.originalUrl, gatewayId)) {
+    securityHeaders(res, frameAncestor);
+    res.status(404).json({ error: "dashboard-resource-not-found" });
+    return true;
+  }
+  return false;
+}
+
 function httpAssetOutcome(statusCode: number): "ok" | "timeout" | "error" {
   if (statusCode < 400) return "ok";
   return statusCode === 504 ? "timeout" : "error";
 }
 
-function requestHeaders(req: Request, env: NodeJS.ProcessEnv): http.OutgoingHttpHeaders {
+function requestHeaders(
+  req: Request,
+  env: NodeJS.ProcessEnv,
+  gatewayToken: string,
+): http.OutgoingHttpHeaders {
   const headers: http.OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(req.headers)) {
     if (ALLOWED_REQUEST_HEADERS.has(name.toLowerCase())) headers[name] = value;
   }
   headers.host = openClawControlUpstreamBase(env).host;
   headers.origin = apiOrigin(env);
+  headers.authorization = `Bearer ${gatewayToken}`;
   headers["accept-encoding"] = "identity";
   return headers;
+}
+
+function scrubCredentialText(value: string, credentials: readonly string[]): string {
+  return credentials.filter(Boolean).reduce(
+    (cleaned, credential) => cleaned.replaceAll(credential, "*".repeat(credential.length)),
+    value,
+  );
+}
+
+function credentialScrubber(credentials: readonly string[]): Transform {
+  const needles = credentials.filter(Boolean).map((value) => Buffer.from(value)).sort((a, b) => b.length - a.length);
+  const overlap = Math.max(0, ...needles.map((needle) => needle.length - 1));
+  let pending: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+  const scrub = (input: Buffer): Buffer => {
+    const output = Buffer.from(input);
+    for (const needle of needles) {
+      let index = output.indexOf(needle);
+      while (index >= 0) {
+        output.fill(0x2a, index, index + needle.length);
+        index = output.indexOf(needle, index + needle.length);
+      }
+    }
+    return output;
+  };
+  return new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      const combined = Buffer.concat([pending, Buffer.from(chunk)]);
+      const safeLength = Math.max(0, combined.length - overlap);
+      const cleaned = scrub(combined);
+      pending = cleaned.subarray(safeLength);
+      callback(null, cleaned.subarray(0, safeLength));
+    },
+    flush(callback) {
+      callback(null, scrub(pending));
+    },
+  });
 }
 
 export interface CreateOpenClawControlHttpRouterOptions {
@@ -282,6 +452,7 @@ export function createOpenClawControlHttpRouter(
   const sessions = options.sessions ?? defaultSessions;
   const redeem = options.redeem ?? redeemOpenClawControlTicket;
   const authorize = options.authorize ?? authorizeOpenClawControlSession;
+  const loadGatewayToken = options.loadGatewayToken ?? fetchGatewayToken;
   const httpTimeoutMs = options.httpTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
   const metrics = options.metrics;
   const identity = metricIdentity(env);
@@ -363,17 +534,13 @@ export function createOpenClawControlHttpRouter(
         return;
       }
       metrics?.session(identity, "authorize", "ok");
-      if (req.method !== "GET" && req.method !== "HEAD") {
-        securityHeaders(res, frameAncestor);
-        res.setHeader("allow", "GET, HEAD");
-        res.status(405).json({ error: "method-not-allowed" });
-        return;
-      }
+      if (rejectDashboardHttpRequest(req, res, frameAncestor, gatewayId)) return;
       const touched = sessions.touchSession(session);
       if (!touched) {
         unauthorized(req, res, frameAncestor);
         return;
       }
+      const gatewayToken = await loadGatewayToken({ gatewayId });
       const base = openClawControlUpstreamBase(env);
       let timedOut = false;
       let settled = false;
@@ -383,16 +550,21 @@ export function createOpenClawControlHttpRouter(
         port: base.port,
         method: req.method,
         path: openClawControlUpstreamPath(req.originalUrl, gatewayId),
-        headers: requestHeaders(req, env),
+        headers: requestHeaders(req, env, gatewayToken),
       }, (upstream) => {
         settled = true;
         res.status(upstream.statusCode ?? 502);
         for (const [name, value] of Object.entries(upstream.headers)) {
-          if (value !== undefined && ALLOWED_RESPONSE_HEADERS.has(name.toLowerCase())) res.setHeader(name, value);
+          if (value !== undefined && ALLOWED_RESPONSE_HEADERS.has(name.toLowerCase())) {
+            const scrubbed = Array.isArray(value)
+              ? value.map((item) => scrubCredentialText(item, [gatewayToken]))
+              : scrubCredentialText(String(value), [gatewayToken]);
+            res.setHeader(name, scrubbed);
+          }
         }
         securityHeaders(res, frameAncestor);
         res.setHeader("set-cookie", touched.cookie);
-        upstream.pipe(res);
+        upstream.pipe(credentialScrubber([gatewayToken])).pipe(res);
       });
       proxy.setTimeout(httpTimeoutMs, () => {
         timedOut = true;
