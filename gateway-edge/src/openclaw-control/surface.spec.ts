@@ -201,8 +201,9 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     expect(response.text).not.toContain(ticket);
   });
 
-  it("authenticates native HTTP resources without forwarding browser identity or exposing the gateway token", async () => {
+  it("authenticates allowlisted native UI resources without forwarding browser identity or exposing the gateway token", async () => {
     let captured: http.IncomingHttpHeaders = {};
+    const loadGatewayToken = vi.fn(async () => "gateway-secret");
     const upstream = http.createServer((req, res) => {
       captured = req.headers;
       if (req.headers.authorization !== "Bearer gateway-secret") {
@@ -211,19 +212,21 @@ describe("OpenClaw Dashboard HTTP surface", () => {
         return;
       }
       res.setHeader("content-type", "text/javascript");
+      res.setHeader("etag", "gateway-secret");
       res.setHeader("set-cookie", "openclaw=gateway-secret");
       res.setHeader("authorization", "Bearer gateway-secret");
       res.end("native-ui gateway-secret");
     });
     const port = await listen(upstream);
     const manager = sessions();
-    const response = await request(appWith({ env: env(port), sessions: manager }))
+    const response = await request(appWith({ env: env(port), sessions: manager, loadGatewayToken }))
       .get("/api/g/bender/openclaw/assets/app.js")
       .set("cookie", issue(manager))
       .set("authorization", "Bearer browser-token")
       .set("x-forwarded-for", "forged")
       .set("x-openclaw-token", "browser-token");
     expect(response.status).toBe(200);
+    expect(loadGatewayToken).toHaveBeenCalledWith({ gatewayId: "bender" });
     expect(captured.authorization).toBe("Bearer gateway-secret");
     expect(captured.cookie).toBeUndefined();
     expect(captured["x-forwarded-for"]).toBeUndefined();
@@ -237,6 +240,76 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     expect(response.headers["cross-origin-resource-policy"]).toBe("cross-origin");
     expect(JSON.stringify(response.headers)).not.toContain("gateway-secret");
     expect(response.text).not.toContain("gateway-secret");
+  });
+
+  it.each([
+    "/",
+    "/chat?session=agent%3Aoctogee-eggman-coach%3Amain",
+    "/control-ui-config.json",
+    "/avatar/octogee-eggman-coach?meta=1",
+    "/favicon.svg",
+    "/provider-icons/ProviderIcon-openai.svg",
+    "/assets/app-4c3f.js?build=1",
+  ])("forwards the gateway token only for the required UI resource %s", async (suffix) => {
+    let requests = 0;
+    let authorization: string | undefined;
+    const loadGatewayToken = vi.fn(async () => "gateway-secret");
+    const upstream = http.createServer((req, res) => {
+      requests += 1;
+      authorization = req.headers.authorization;
+      if (authorization !== "Bearer gateway-secret") {
+        res.statusCode = 401;
+        res.end("missing gateway auth");
+        return;
+      }
+      res.end("ok");
+    });
+    const port = await listen(upstream);
+    const manager = sessions();
+
+    const response = await request(appWith({
+      env: env(port),
+      sessions: manager,
+      loadGatewayToken,
+    }))
+      .get(`/api/g/bender/openclaw${suffix}`)
+      .set("cookie", issue(manager));
+
+    expect(response.status).toBe(200);
+    expect(requests).toBe(1);
+    expect(authorization).toBe("Bearer gateway-secret");
+    expect(loadGatewayToken).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    "/api",
+    "/hooks",
+    "/plugins/arbitrary",
+    "/__openclaw__/assistant-media",
+    "/avatar/octogee-eggman-coach/extra",
+    "/assets/app.js/extra",
+  ])("rejects non-UI HTTP resource %s before loading or forwarding the gateway token", async (suffix) => {
+    let requests = 0;
+    const loadGatewayToken = vi.fn(async () => "gateway-secret");
+    const upstream = http.createServer((_req, res) => {
+      requests += 1;
+      res.end("unexpected");
+    });
+    const port = await listen(upstream);
+    const manager = sessions();
+
+    const response = await request(appWith({
+      env: env(port),
+      sessions: manager,
+      loadGatewayToken,
+    }))
+      .get(`/api/g/bender/openclaw${suffix}`)
+      .set("cookie", issue(manager));
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: "dashboard-resource-not-found" });
+    expect(requests).toBe(0);
+    expect(loadGatewayToken).not.toHaveBeenCalled();
   });
 
   it("keeps the Dashboard session usable after transient broker readiness uncertainty", async () => {
