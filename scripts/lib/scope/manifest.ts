@@ -42,6 +42,7 @@ export interface UnitPackage {
   dir: string;
   typecheck: string;
   nodeVersion?: number;
+  matchGatewayImageNpm?: boolean;
 }
 
 // The dynamic `test` matrix entries. `typecheck` runs after `npm ci`, before `npm test`.
@@ -73,7 +74,7 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
   },
   { name: JOBS.tests, dir: "tests", typecheck: TYPECHECK },
   { name: JOBS.acceptance, dir: "acceptance", typecheck: TYPECHECK },
-  { name: JOBS.scripts, dir: "scripts", typecheck: "npx tsc --noEmit" },
+  { name: JOBS.scripts, dir: "scripts", typecheck: "npx tsc --noEmit", matchGatewayImageNpm: true },
   {
     name: JOBS.octogeeAccessTools,
     dir: "infra/gateway/extensions/octogee-access-tools",
