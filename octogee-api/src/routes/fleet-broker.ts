@@ -106,6 +106,7 @@ interface ChatBrokerIdentity {
   unread: { pat: string; mmUserId: string };
   slug: string;
   siteUrl: string;
+  canReadChannel?: (channelId: string) => Promise<boolean>;
   includeArchivedProjectHistory?: true;
 }
 
@@ -139,6 +140,7 @@ type ResolveChatIdentity = (
   pat: string;
   coachMmUserId: string;
   unread: { pat: string; mmUserId: string };
+  canReadChannel?: (channelId: string) => Promise<boolean>;
   includeArchivedProjectHistory?: true;
 }>;
 
@@ -1751,6 +1753,9 @@ async function requireAssignedChatIdentity(
         unread: resolved.unread,
         slug,
         siteUrl,
+        ...(resolved.canReadChannel
+          ? { canReadChannel: resolved.canReadChannel }
+          : {}),
         ...(resolved.includeArchivedProjectHistory === true
           ? { includeArchivedProjectHistory: true as const }
           : {}),
