@@ -36,6 +36,8 @@ const REQUIRED_PLUGINS = [
   "memory-core",
   "octogee-chat-tools",
   "octogee-access-tools",
+  "octogee-connector-tools",
+  "octogee-ops-tools",
   "octogee-preview-tools",
   "octogee-project-tools",
   "octogee-status-tools",
@@ -62,6 +64,10 @@ const PLATFORM_PLUGIN_CONFIGS: Readonly<Record<string, JsonObject>> = {
     brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,
     tokenPath: OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
   },
+  "octogee-ops-tools": {
+    brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,
+    tokenPath: OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
+  },
   "octogee-preview-tools": {},
   "octogee-project-tools": {
     brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,
@@ -79,6 +85,13 @@ const PLATFORM_PLUGIN_CONFIGS: Readonly<Record<string, JsonObject>> = {
   },
   "octogee-workspace-tools": {},
   "octogee-publish-tools": {},
+};
+
+const PLATFORM_PLUGIN_CONFIG_FIELDS: Readonly<Record<string, unknown>> = {
+  "plugins.entries.octogee-connector-tools.config.brokerUrl":
+    FLEET_BROKER_URL_PLACEHOLDER,
+  "plugins.entries.octogee-connector-tools.config.tokenPath":
+    OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
 };
 
 function isolatedToolInvariants(): PlatformInvariant[] {
@@ -166,6 +179,11 @@ export function platformInvariantTable(
     ...Object.entries(PLATFORM_PLUGIN_CONFIGS).map<PlatformInvariant>(([id, value]) => ({
       kind: "exact",
       path: `plugins.entries.${id}.config`,
+      value,
+    })),
+    ...Object.entries(PLATFORM_PLUGIN_CONFIG_FIELDS).map<PlatformInvariant>(([path, value]) => ({
+      kind: "exact",
+      path,
       value,
     })),
   ];
