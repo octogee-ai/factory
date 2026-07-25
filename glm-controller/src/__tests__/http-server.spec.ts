@@ -44,7 +44,7 @@ function durableBuilderGateway(
     profile: "standard",
     gatewayClass: "builder",
     imageProfile: "standard",
-    sizingTier: "medium",
+    sizingTier: "m",
     computeClass: "test-spot",
     gcpProject: null,
     gatewayContainerSecurityContext: null,
@@ -75,7 +75,7 @@ function durableSharedGateway(gatewayId: string): Record<string, unknown> {
     profile: "standard",
     gatewayClass: "shared",
     imageProfile: "standard",
-    sizingTier: "medium",
+    sizingTier: "m",
     computeClass: "test-spot",
     gcpProject: null,
     gatewayContainerSecurityContext: null,
@@ -716,7 +716,7 @@ describe("createHttpServer — admin gateway routes", () => {
       gatewayId: "canary",
       desiredStatus: "running",
       imageTag: "8507a63-oc2026.6.10",
-      sizingTier: "micro",
+      sizingTier: "xs",
     };
     const readGatewayPodDiagnostics = vi.fn(async (_gatewayId: string) => ({
       status: "not-ready" as const,

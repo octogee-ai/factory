@@ -112,32 +112,6 @@ gatewayContainerSecurityContext:
     drop:
       - ALL
 
-# GKE Autopilot compute class (selected via nodeSelector on the pod).
-# Built-in classes: "Performance", "Balanced", "Scale-Out", "Accelerator".
-# Real envs override this to the umbrella-owned custom class
-# "octogee-gateway[-test]" (helm/octogee/templates/gateway-compute-class.yaml),
-# which pins the standard machine series across fast families so NAP cannot
-# oversize the node or stall on a single-family stockout. The base default
-# stays on the built-in Performance class (always available for a standalone
-# render) — it keeps the V8 main thread off cost-optimized E-family cores,
-# where model warmup blocked the loop for 25-30s (TEST 2026-05-13); per-core
-# perf on the standard fast families is ≈ 30-50% faster than E2.
-computeClass: "Performance"
-computeClassByClass: {}
-
-# Explicit per-gateway override set by Cowboy from glmGateways/{id}.computeClass.
-# This intentionally sits above computeClassByClass in the helper, while the
-# legacy computeClass remains the environment default.
-computeClassOverride: ""
-
-# Machine-family pin for the bare built-in Performance class. Leave EMPTY
-# when computeClass is a custom class (values.{prod,test}.yaml) — that class
-# already defines its families, and a pin here would fight it. Pinning a
-# single family under the built-in class is what let Autopilot NAP grab
-# oversized nodes and stall on a stockout (see the umbrella's
-# gateway-compute-class.yaml). c2d = AMD EPYC Milan if you ever do pin one.
-machineFamily: ""
-
 # Chart fingerprint — Cowboy passes its SHA-256 of the chart bytes via
 # `--set chartFingerprint=...` so subsequent reconciles can detect chart
 # template drift even when image-tag is unchanged. Stored on the helm
@@ -205,22 +179,25 @@ sizingTier: ""
 
 # Class → default tier mapping. Used when sizingTier is unset.
 classDefaults:
-  shared: "small"
-  builder: "micro"
-  operator: "small"
+  shared: "l"
+  builder: "xs"
+  operator: "l"
 
 # Legacy image-profile → default tier mapping. Used when classDefaults is
 # absent on old releases.
 profileDefaults:
-  standard: "small"
-  operator: "small"
+  standard: "l"
+  operator: "l"
 
-# Tier presets — the canonical sizing matrix. Mirrored in
-# shared/types/sizing.ts (TS SSOT for cost-estimator + admin API);
-# tests/specs/helm-octogee-gateway-sizing.spec.ts asserts the two stay
-# in lockstep. Edit both sides together.
+# Tier presets — the canonical sizing matrix, capped at 4 vCPU so every tier
+# fits Autopilot's general-purpose envelope (30 vCPU / 110 GiB / 10 GiB
+# ephemeral per pod, 1:1–1:6.5 vCPU:GiB). Autopilot rewrites an
+# ephemeral-storage limit that differs from its request, so request == limit
+# here. Mirrored in shared/types/sizing.ts (TS SSOT for cost-estimator +
+# admin API); tests/specs/helm-octogee-gateway-sizing.spec.ts asserts the two
+# stay in lockstep. Edit both sides together.
 tiers:
-  micro:
+  xs:
     resources:
       requests:
         cpu: "500m"
@@ -233,7 +210,7 @@ tiers:
     nodejs:
       uvThreadpoolSize: "4"
       maxOldSpaceSizeMb: "1536"
-  mini:
+  s:
     resources:
       requests:
         cpu: "1000m"
@@ -242,11 +219,11 @@ tiers:
       limits:
         cpu: "1000m"
         memory: "4Gi"
-        ephemeral-storage: "6Gi"
+        ephemeral-storage: "4Gi"
     nodejs:
       uvThreadpoolSize: "4"
       maxOldSpaceSizeMb: "3072"
-  nano:
+  m:
     resources:
       requests:
         cpu: "2000m"
@@ -255,11 +232,11 @@ tiers:
       limits:
         cpu: "2000m"
         memory: "8Gi"
-        ephemeral-storage: "10Gi"
+        ephemeral-storage: "5Gi"
     nodejs:
       uvThreadpoolSize: "4"
       maxOldSpaceSizeMb: "4096"
-  small:
+  l:
     resources:
       requests:
         cpu: "4000m"
@@ -268,62 +245,10 @@ tiers:
       limits:
         cpu: "4000m"
         memory: "16Gi"
-        ephemeral-storage: "10Gi"
+        ephemeral-storage: "5Gi"
     nodejs:
       uvThreadpoolSize: "6"
       maxOldSpaceSizeMb: "10240"
-  medium:
-    resources:
-      requests:
-        cpu: "8000m"
-        memory: "32Gi"
-        ephemeral-storage: "5Gi"
-      limits:
-        cpu: "8000m"
-        memory: "32Gi"
-        ephemeral-storage: "10Gi"
-    nodejs:
-      uvThreadpoolSize: "8"
-      maxOldSpaceSizeMb: "20480"
-  large:
-    resources:
-      requests:
-        cpu: "16000m"
-        memory: "64Gi"
-        ephemeral-storage: "5Gi"
-      limits:
-        cpu: "16000m"
-        memory: "64Gi"
-        ephemeral-storage: "10Gi"
-    nodejs:
-      uvThreadpoolSize: "12"
-      maxOldSpaceSizeMb: "40960"
-  xlarge:
-    resources:
-      requests:
-        cpu: "32000m"
-        memory: "128Gi"
-        ephemeral-storage: "5Gi"
-      limits:
-        cpu: "32000m"
-        memory: "128Gi"
-        ephemeral-storage: "10Gi"
-    nodejs:
-      uvThreadpoolSize: "16"
-      maxOldSpaceSizeMb: "81920"
-  "2xlarge":
-    resources:
-      requests:
-        cpu: "56000m"
-        memory: "224Gi"
-        ephemeral-storage: "5Gi"
-      limits:
-        cpu: "56000m"
-        memory: "224Gi"
-        ephemeral-storage: "10Gi"
-    nodejs:
-      uvThreadpoolSize: "16"
-      maxOldSpaceSizeMb: "147456"
 
 probes:
   # Non-shared startup reaches the fleet controller only after durable-config
@@ -359,7 +284,7 @@ pdb:
   # Legacy only; kept for schema/backward compatibility. The chart now uses
   # maxUnavailable for every gateway class.
   minAvailable: 1
-  # all classes — disruptionsAllowed:1 so ComputeClass activeMigration can right-size
+  # all classes — disruptionsAllowed:1 so Spot preemption evicts gracefully
   maxUnavailable: 1
 
 

@@ -3,7 +3,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/deployment-target.sh"
-source "$SCRIPT_DIR/lib/monitoring-platform-preflight.sh"
 
 SELECTOR="--environment=prod"
 SECRET_MODE=""
@@ -42,8 +41,6 @@ kubectl config use-context "$TARGET_KUBE_CONTEXT" >/dev/null
   echo "Wrong kubectl context" >&2
   exit 1
 }
-
-octogee_preflight_monitoring_platform_compute_class
 
 iap_args=(--target="$TARGET_ID" --iap)
 [[ -n "$SECRET_MODE" ]] && iap_args+=("$SECRET_MODE")

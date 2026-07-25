@@ -21,10 +21,6 @@ spec:
     spec:
       serviceAccountName: glm-controller
       automountServiceAccountToken: true
-      {{- with .Values.global.platformComputeClass }}
-      nodeSelector:
-        cloud.google.com/compute-class: {{ . | quote }}
-      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

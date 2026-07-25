@@ -280,7 +280,7 @@ describe("operator reservation orphan cleanup", () => {
   const reservation = {
     uid: "uid-orphan",
     builderSlug: "orphan",
-    requestedSizingTier: "nano",
+    requestedSizingTier: "m",
     status: "requested",
     billingStatus: "active",
     requestedAt: 1_000,
@@ -949,7 +949,7 @@ describe("onboarding placement (post-cohorts)", () => {
         "uid-ceckert": {
           uid: "uid-ceckert",
           builderSlug: "ceckert",
-          requestedSizingTier: "nano",
+          requestedSizingTier: "m",
           status: "fulfilled",
           billingStatus: "active",
           requestedAt: 1_000,

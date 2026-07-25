@@ -32,10 +32,6 @@ function createHarness(): { root: string; script: string; log: string } {
     join(repoRoot, "scripts/setup-monitoring-iap.sh"),
     join(scripts, "setup-monitoring-iap.sh"),
   );
-  copyFileSync(
-    join(repoRoot, "scripts/lib/monitoring-platform-preflight.sh"),
-    join(scripts, "lib/monitoring-platform-preflight.sh"),
-  );
   executable(
     join(scripts, "lib/deployment-target.sh"),
     `octogee_load_deployment_target() {

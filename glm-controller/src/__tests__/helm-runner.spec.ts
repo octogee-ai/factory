@@ -47,7 +47,7 @@ describe("helm-runner helpers", () => {
       profile: "operator",
       gatewayClass: "operator",
       imageProfile: "operator",
-      sizingTier: "large",
+      sizingTier: "l",
       replicas: 0,
     })).toEqual({
       serviceAccountName: "octogee-gateway-bender",
@@ -58,7 +58,7 @@ describe("helm-runner helpers", () => {
       profile: "operator",
       gatewayClass: "operator",
       imageProfile: "operator",
-      sizingTier: "large",
+      sizingTier: "l",
       replicas: 0,
     });
 
@@ -91,7 +91,7 @@ describe("helm-runner helpers", () => {
       profile: "operator",
       gatewayClass: "operator",
       imageProfile: "operator",
-      sizingTier: "large",
+      sizingTier: "l",
       replicas: 0,
       serviceAccountName: "octogee-gateway-bender",
       serviceAccount: { annotations: { "iam.gke.io/gcp-service-account": "gw@example.iam.gserviceaccount.com" } },
@@ -687,7 +687,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
       imageTag: "3280519", // digits only — would be coerced to number by plain --set
       chartPath: "/charts/octogee-gateway",
       profile: "operator",
-      sizingTier: "large",
+      sizingTier: "l",
       replicas: 1,
     });
 
@@ -702,7 +702,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     expect(stringPair("builderSlug")).toBe("builderSlug=ceckert");
     expect(stringPair("ownerUid")).toBe("ownerUid=uid-ceckert");
     expect(stringPair("profile")).toBe("profile=operator");
-    expect(stringPair("sizingTier")).toBe("sizingTier=large");
+    expect(stringPair("sizingTier")).toBe("sizingTier=l");
     // replicas stays on --set because it's number-typed.
     const replicasIdx = args.findIndex((a, i) => a === "--set" && args[i + 1] === "replicas=1");
     expect(replicasIdx).toBeGreaterThanOrEqual(0);
@@ -720,10 +720,10 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
-      sizingTier: "medium",
+      sizingTier: "m",
     });
 
-    expect(calls[0]).toContain("sizingTier=medium");
+    expect(calls[0]).toContain("sizingTier=m");
   });
 
   it("passes explicit compute-class override via --set-string", async () => {

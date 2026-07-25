@@ -38,8 +38,8 @@ describe("sizingTier transition safety (stale Firestore values)", () => {
   });
 
   it("still forwards a valid sizingTier", () => {
-    const map = buildInstancesMap([mkDesired({ sizingTier: "large" })]);
-    expect(map.default.sizingTier).toBe("large");
+    const map = buildInstancesMap([mkDesired({ sizingTier: "l" })]);
+    expect(map.default.sizingTier).toBe("l");
   });
 
   it("forwards an explicit computeClass as a per-release chart override", () => {
@@ -455,8 +455,8 @@ describe("diffInstancesMap", () => {
   });
 
   it("reports an update when sizingTier flips (change-tier path)", () => {
-    const actual: HelmInstancesMap = { default: { ...baseInstance("abc"), sizingTier: "medium" } };
-    const desired: HelmInstancesMap = { default: { ...baseInstance("abc"), sizingTier: "large" } };
+    const actual: HelmInstancesMap = { default: { ...baseInstance("abc"), sizingTier: "m" } };
+    const desired: HelmInstancesMap = { default: { ...baseInstance("abc"), sizingTier: "l" } };
     const changes = diffInstancesMap(actual, desired);
     expect(changes).toEqual<ReconcileChange[]>([
       { kind: "update", gatewayId: "default", from: actual.default, to: desired.default },
@@ -473,8 +473,8 @@ describe("diffInstancesMap", () => {
   });
 
   it("reports exactly one update when image, sizingTier, and replicas all differ (no double-counting)", () => {
-    const actual: HelmInstancesMap = { default: { ...baseInstance("abc"), sizingTier: "medium", replicas: 1 } };
-    const desired: HelmInstancesMap = { default: { ...baseInstance("def"), sizingTier: "large", replicas: 0 } };
+    const actual: HelmInstancesMap = { default: { ...baseInstance("abc"), sizingTier: "m", replicas: 1 } };
+    const desired: HelmInstancesMap = { default: { ...baseInstance("def"), sizingTier: "l", replicas: 0 } };
     const changes = diffInstancesMap(actual, desired);
     expect(changes).toHaveLength(1);
     expect(changes[0]).toMatchObject({ kind: "update", gatewayId: "default" });
@@ -798,8 +798,8 @@ describe("isReplicasOnlyUpdate", () => {
     const change: ReconcileChange = {
       kind: "update",
       gatewayId: "default",
-      from: { ...base(), sizingTier: "small", replicas: 1 },
-      to: { ...base(), sizingTier: "large", replicas: 0 },
+      from: { ...base(), sizingTier: "l", replicas: 1 },
+      to: { ...base(), sizingTier: "m", replicas: 0 },
     };
     expect(isReplicasOnlyUpdate(change)).toBe(false);
   });

@@ -1,5 +1,3 @@
-platformComputeClass: ""
-
 gmp:
   projectId: octogee
   frontend:

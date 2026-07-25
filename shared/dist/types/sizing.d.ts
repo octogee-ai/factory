@@ -1,5 +1,5 @@
 import type { GatewayClass, GatewayProfile } from './glm.js';
-export declare const SIZING_TIERS: readonly ['micro', 'mini', 'nano', 'small', 'medium', 'large', 'xlarge', '2xlarge'];
+export declare const SIZING_TIERS: readonly ['xs', 's', 'm', 'l'];
 export type SizingTier = (typeof SIZING_TIERS)[number];
 export declare function isSizingTier(value: unknown): value is SizingTier;
 export interface TierResources {

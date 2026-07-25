@@ -77,10 +77,7 @@ spec:
     spec:
       terminationGracePeriodSeconds: {{ .Values.preStopFlush.terminationGracePeriodSeconds | default 30 }}
       nodeSelector:
-        cloud.google.com/compute-class: {{ include "octogee-gateway.computeClass" . | quote }}
-        {{- if .Values.machineFamily }}
-        cloud.google.com/machine-family: {{ .Values.machineFamily | quote }}
-        {{- end }}
+        cloud.google.com/gke-spot: "true"
       serviceAccountName: {{ include "octogee-gateway.serviceAccountName" . }}
       {{- if eq $gatewayClass "builder" }}
       runtimeClassName: gvisor

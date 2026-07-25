@@ -108,37 +108,37 @@ describe("helm/octogee-gateway/ — sizing tier explicit override", () => {
 
   it("explicit sizingTier beats profile-default", () => {
     // both profiles default to small; force medium to prove explicit wins.
-    const out = helmTemplate({ profile: "operator", sizingTier: "medium" });
-    expectResourcesMatchTier(out, "medium");
+    const out = helmTemplate({ profile: "operator", sizingTier: "m" });
+    expectResourcesMatchTier(out, "m");
   });
 });
 
 describe("helm/octogee-gateway/ — sizing tier profile-default fallback", () => {
   it("operator profile without sizingTier renders small (profile default)", () => {
     const out = helmTemplate({ profile: "operator" });
-    expectResourcesMatchTier(out, "small");
+    expectResourcesMatchTier(out, "l");
   });
 
   it("standard profile without sizingTier renders small resources", () => {
     const out = helmTemplate({ profile: "standard" });
-    expectResourcesMatchTier(out, "small");
+    expectResourcesMatchTier(out, "l");
   });
 
   it("empty profile without sizingTier falls back to small", () => {
     const out = helmTemplate({});
-    expectResourcesMatchTier(out, "small");
+    expectResourcesMatchTier(out, "l");
   });
 
   it("operator-profile pod label is the resolved tier, not the bare profile string", () => {
     const out = helmTemplate({ profile: "operator" });
     const c = gatewayContainer(out);
-    expect(c.podLabels.tier).toBe("small");
+    expect(c.podLabels.tier).toBe("l");
   });
 
   it("standard-profile pod label resolves to small", () => {
     const out = helmTemplate({ profile: "standard" });
     const c = gatewayContainer(out);
-    expect(c.podLabels.tier).toBe("small");
+    expect(c.podLabels.tier).toBe("l");
   });
 });
 
