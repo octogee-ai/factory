@@ -76,6 +76,12 @@ Pre-broad-customer, breaking changes are cheap and correctness is the priority.
 - If `npm ci`/CI breaks on latest, **investigate why** — never pin back to silence
   it. A red CI on a fresh install is a signal. (Verify a fresh install + test pass
   for native/build-sensitive deps like node-pty before merging the bump.)
+- A green local install is **not** evidence for a native dep: CI runs Node 22's npm,
+  the gateway image runs npm 12, and npm 12 refuses a dependency's install scripts
+  unless `package.json`'s `allowScripts` names it. Any new dependency with an install
+  script needs an `allowScripts` decision — `scripts/.npmrc`'s `strict-allow-scripts`
+  and the gateway image's `verify-native-modules` gate are what make a missing one
+  loud (#2834).
 
 ## Paying down debt: net-first, then cut
 

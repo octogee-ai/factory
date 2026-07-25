@@ -22,6 +22,14 @@
     "verify:mattermost-capability": "tsx ops/verify-mattermost-capability-artifact.ts",
     "scope": "tsx ops/scope.ts"
   },
+  "allowScripts": {
+    "node-pty": true,
+    "esbuild": true,
+    "protobufjs": true,
+    "@firebase/util": true,
+    "fsevents": true,
+    "re2": false
+  },
   "dependencies": {
     "@octogee/core": "file:../core",
     "@octogee/shared": "file:../shared",
