@@ -132,29 +132,34 @@ export function normalizeModelBrokerTokenPolicy(
   };
 }
 
+function optionalNumber(value: unknown): number | null {
+  return typeof value === "number" ? value : null;
+}
+
+function optionalRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function tokenPurpose(value: unknown): ModelBrokerTokenPurpose {
+  return value === "embeddings" ? "embeddings" : "model";
+}
+
 function parseRecord(data: Record<string, unknown> | undefined): ModelBrokerTokenRecord | null {
   if (!recordHasRequiredShape(data)) return null;
   const ownerUid = typeof data.ownerUid === "string" ? data.ownerUid : null;
-  const expiresAt = typeof data.expiresAt === "number" ? data.expiresAt : null;
-  const revokedAt = typeof data.revokedAt === "number" ? data.revokedAt : undefined;
-  const limits =
-    data.limits && typeof data.limits === "object" && !Array.isArray(data.limits)
-      ? normalizeModelBrokerTokenLimits(data.limits as Partial<ModelBrokerTokenLimits>)
-      : normalizeModelBrokerTokenLimits(null);
-  const policy =
-    data.policy && typeof data.policy === "object" && !Array.isArray(data.policy)
-      ? normalizeModelBrokerTokenPolicy(data.policy as Partial<ModelBrokerTokenPolicy>)
-      : normalizeModelBrokerTokenPolicy(null);
-  const trace =
-    data.trace && typeof data.trace === "object" && !Array.isArray(data.trace)
-      ? normalizeModelBrokerTokenTrace(data.trace as Partial<ModelBrokerTokenTrace>)
-      : null;
+  const expiresAt = optionalNumber(data.expiresAt);
+  const revokedAt = optionalNumber(data.revokedAt);
+  const limits = normalizeModelBrokerTokenLimits(optionalRecord(data.limits));
+  const policy = normalizeModelBrokerTokenPolicy(optionalRecord(data.policy));
+  const trace = normalizeModelBrokerTokenTrace(optionalRecord(data.trace));
   return {
     tokenHash: data.tokenHash,
     gatewayId: data.gatewayId,
     ownerUid,
     provider: data.provider,
-    purpose: data.purpose === "embeddings" ? "embeddings" : "model",
+    purpose: tokenPurpose(data.purpose),
     capped: true,
     secretName: data.secretName,
     createdAt: data.createdAt,
@@ -163,7 +168,7 @@ function parseRecord(data: Record<string, unknown> | undefined): ModelBrokerToke
     policy,
     trace,
     revoked: data.revoked === true,
-    ...(revokedAt === undefined ? {} : { revokedAt }),
+    ...(revokedAt === null ? {} : { revokedAt }),
   };
 }
 

@@ -546,24 +546,7 @@ function registerByosubUserRoute(router: Router, db: Firestore): void {
   });
 }
 
-export function createByokBrokerRoutes(opts: {
-  db: Firestore;
-  now?: () => number;
-  readSecret?: (name: string, version?: string) => Promise<string>;
-}): Router {
-  const router = Router();
-  const { db } = opts;
-  const now = opts.now ?? Date.now;
-  const readCredentialSecret = opts.readSecret ?? readSecret;
-
-  registerCredentialMaterializationRoutes(router, db, readCredentialSecret);
-
-  // Mint an owner-scoped broker token for one customer-agent on a shared
-  // (multi-tenant) gateway. The agent resolves anthropic through the broker with
-  // its OWN token, so the broker resolves per-owner (platform key, or the owner's
-  // byok-<slug>-anthropic), meters per ownerUid, and enforces the owner's tier
-  // spend cap (degrade to the house model when exhausted). Roster-scoped via
-  // assigned roster, or a running inbound migration targeting this gateway.
+function registerAgentModelTokenRoute(router: Router, db: Firestore): void {
   router.post("/agent-model-token", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
@@ -621,16 +604,12 @@ export function createByokBrokerRoutes(opts: {
       ownerUid: assigned.uid,
       provider,
       purpose,
-      // a descriptive label, NOT a readable Secret Manager secret — the broker
-      // resolves the provider key per ownerUid, never via this name.
       secretName: agentModelTokenSecretName({
         gatewayId: bound.gatewayId,
         ownerUid: assigned.uid,
         provider,
         purpose,
       }),
-      // standalone + TTL-bounded: no revoke-on-reissue, so a re-mint can't yank a
-      // still-in-flight token (the prior one expires by TTL instead).
       skipPointer: true,
       ttlSeconds: AGENT_MODEL_TOKEN_TTL_SECONDS,
       limits: grant.limits,
@@ -643,6 +622,20 @@ export function createByokBrokerRoutes(opts: {
     });
     res.json({ value: issued.token, provider, purpose });
   });
+}
+
+export function createByokBrokerRoutes(opts: {
+  db: Firestore;
+  now?: () => number;
+  readSecret?: (name: string, version?: string) => Promise<string>;
+}): Router {
+  const router = Router();
+  const { db } = opts;
+  const now = opts.now ?? Date.now;
+  const readCredentialSecret = opts.readSecret ?? readSecret;
+
+  registerCredentialMaterializationRoutes(router, db, readCredentialSecret);
+  registerAgentModelTokenRoute(router, db);
 
   registerAgentUsageStatusRoute(router, db, now);
 
