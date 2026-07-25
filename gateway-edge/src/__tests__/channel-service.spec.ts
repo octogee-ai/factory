@@ -306,7 +306,8 @@ describe("createSessionChannel", () => {
     });
   });
 
-  it("adopts an existing MM channel on a name conflict and re-patches it to the requested values", async () => {
+  it("removes unexpected members and verifies the channel before adopting it", async () => {
+    let memberReads = 0;
     h.mmApi.mockReset().mockImplementation(async (path: string, method?: string) => {
       if (method === "POST" && path === "/channels") {
         const err = new Error(
@@ -316,6 +317,13 @@ describe("createSessionChannel", () => {
         throw err;
       }
       if (path === "/teams/team-1/channels/name/mira-patchroll") return { id: "channel-9" };
+      if (path === "/channels/channel-9/members?page=0&per_page=200") {
+        memberReads += 1;
+        return memberReads === 1
+          ? [{ user_id: "attacker-mm" }, { user_id: "owner-mm" }]
+          : [{ user_id: "owner-mm" }];
+      }
+      if (method === "DELETE" && path === "/channels/channel-9/members/attacker-mm") return { ok: true };
       if (method === "PUT" && path === "/channels/channel-9/patch") return { id: "channel-9" };
       if (method === "POST" && path === "/channels/channel-9/members") return { ok: true };
       throw new Error(`unexpected Mattermost call: ${method ?? "GET"} ${path}`);
@@ -327,6 +335,8 @@ describe("createSessionChannel", () => {
       status: 200,
       body: { success: true, channelId: "channel-9", name: "patchroll" },
     });
+    expect(h.mmApi).toHaveBeenCalledWith("/channels/channel-9/members/attacker-mm", "DELETE");
+    expect(memberReads).toBe(2);
     expect(h.mmApi).toHaveBeenCalledWith("/channels/channel-9/patch", "PUT", {
       display_name: "OpenClaw Patch Upgrade",
       purpose: "Roll OC patches",
@@ -334,6 +344,74 @@ describe("createSessionChannel", () => {
     expect(h.writes[0]?.data).toEqual(
       expect.objectContaining({ mattermost: { channelId: "channel-9" } }),
     );
+  });
+
+  it("reads every member page before removing an unexpected member", async () => {
+    const firstPage = Array.from({ length: 200 }, () => ({ user_id: "owner-mm" }));
+    let verificationReads = 0;
+    h.mmApi.mockReset().mockImplementation(async (path: string, method?: string) => {
+      if (method === "POST" && path === "/channels") {
+        const err = new Error(
+          'MM API 400: {"id":"store.sql_channel.save_channel.exists.app_error"}',
+        ) as Error & { status: number };
+        err.status = 400;
+        throw err;
+      }
+      if (path === "/teams/team-1/channels/name/mira-patchroll") return { id: "channel-9" };
+      if (path === "/channels/channel-9/members?page=0&per_page=200") {
+        verificationReads += 1;
+        return verificationReads === 1 ? firstPage : [{ user_id: "owner-mm" }];
+      }
+      if (path === "/channels/channel-9/members?page=1&per_page=200") {
+        return [{ user_id: "attacker-mm" }];
+      }
+      if (method === "DELETE" && path === "/channels/channel-9/members/attacker-mm") {
+        return { ok: true };
+      }
+      if (method === "PUT" && path === "/channels/channel-9/patch") return { id: "channel-9" };
+      if (method === "POST" && path === "/channels/channel-9/members") return { ok: true };
+      throw new Error(`unexpected Mattermost call: ${method ?? "GET"} ${path}`);
+    });
+
+    await expect(createSessionChannel(actor(), input)).resolves.toEqual({
+      status: 200,
+      body: { success: true, channelId: "channel-9", name: "patchroll" },
+    });
+    expect(h.mmApi).toHaveBeenCalledWith("/channels/channel-9/members?page=1&per_page=200");
+    expect(h.mmApi).toHaveBeenCalledWith("/channels/channel-9/members/attacker-mm", "DELETE");
+  });
+
+  it("refuses adoption when an unexpected member appears during cleanup", async () => {
+    let memberReads = 0;
+    h.mmApi.mockReset().mockImplementation(async (path: string, method?: string) => {
+      if (method === "POST" && path === "/channels") {
+        const err = new Error(
+          'MM API 400: {"id":"store.sql_channel.save_channel.exists.app_error"}',
+        ) as Error & { status: number };
+        err.status = 400;
+        throw err;
+      }
+      if (path === "/teams/team-1/channels/name/mira-patchroll") return { id: "channel-9" };
+      if (path === "/channels/channel-9/members?page=0&per_page=200") {
+        memberReads += 1;
+        return [{ user_id: memberReads === 1 ? "first-attacker-mm" : "late-attacker-mm" }];
+      }
+      if (method === "DELETE" && path === "/channels/channel-9/members/first-attacker-mm") {
+        return { ok: true };
+      }
+      throw new Error(`unexpected Mattermost call: ${method ?? "GET"} ${path}`);
+    });
+
+    await expect(createSessionChannel(actor(), input)).resolves.toEqual({
+      status: 502,
+      body: { error: "Channel creation failed - could not create chat channel" },
+    });
+    expect(h.mmApi).not.toHaveBeenCalledWith(
+      "/channels/channel-9/patch",
+      "PUT",
+      expect.anything(),
+    );
+    expect(h.writes).toEqual([]);
   });
 
   it("recovers a Firestore write failure by adopting the exact Mattermost Task on retry", async () => {
@@ -351,6 +429,7 @@ describe("createSessionChannel", () => {
       if (path === "/teams/team-1/channels/name/mira-patchroll") {
         return { id: "channel-1" };
       }
+      if (path === "/channels/channel-1/members?page=0&per_page=200") return [];
       if (method === "PUT" && path === "/channels/channel-1/patch") {
         return { id: "channel-1" };
       }

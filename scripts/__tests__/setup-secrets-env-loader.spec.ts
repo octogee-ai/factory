@@ -306,7 +306,9 @@ describe("setup-secrets env loader", () => {
     expect(setup).toContain('[[ "$ENV" == "test" ]] && persist_google_env "$REPO_DIR/.env.local"');
     expect(setup).not.toContain('[[ "$ENV" == "prod" ]] && persist_google_env "$REPO_DIR/.env.local"');
     expect(setup).toContain('resolve_environment_secret_value "${GOOGLE_CLIENT_ID:-}" GOOGLE_CLIENT_ID google-oauth client_id configured_secret_value');
+    expect(setup).toContain('resolve_environment_secret_value "${GOOGLE_PICKER_CLIENT_ID:-}" GOOGLE_PICKER_CLIENT_ID google-oauth picker_client_id configured_secret_value');
     expect(setup).toContain('sync_secret_manager_value GOOGLE_CLIENT_ID "$G_ID" "$FIREBASE_PROJECT"');
+    expect(setup).toContain('sync_secret_manager_value GOOGLE_PICKER_CLIENT_ID "$G_PICKER_ID" "$FIREBASE_PROJECT"');
     expect(setup).toContain("select_environment_secret_value");
     expect(setup).toContain('"$ENV" "$secret_manager_value" "$env_value" "$kubernetes_value"');
     expect(setup).toContain('export GOOGLE_CLIENT_ID="$G_ID"');
@@ -354,6 +356,7 @@ describe("setup-secrets env loader", () => {
       "stripe-secrets:price_ids:",
       "google-oauth:client_id:",
       "google-oauth:client_secret:",
+      "google-oauth:picker_client_id:",
       "google-oauth:picker_api_key:",
       "google-oauth:picker_app_id:",
       "connect-state-secret:secret:",
@@ -410,6 +413,7 @@ describe("setup-secrets env loader", () => {
     for (const key of [
       "GOOGLE_CLIENT_ID",
       "GOOGLE_CLIENT_SECRET",
+      "GOOGLE_PICKER_CLIENT_ID",
       "GOOGLE_PICKER_API_KEY",
       "GOOGLE_PICKER_APP_ID",
     ]) {

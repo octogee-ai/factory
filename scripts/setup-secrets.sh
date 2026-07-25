@@ -560,33 +560,39 @@ persist_google_env() {
   local env_file="$1"
   save_env_file_value "$env_file" GOOGLE_CLIENT_ID "$G_ID"
   save_env_file_value "$env_file" GOOGLE_CLIENT_SECRET "$G_SEC"
+  save_env_file_value "$env_file" GOOGLE_PICKER_CLIENT_ID "$G_PICKER_ID"
   save_env_file_value "$env_file" GOOGLE_PICKER_API_KEY "$G_PICKER_KEY"
   save_env_file_value "$env_file" GOOGLE_PICKER_APP_ID "$G_PICKER_APP"
 }
 
 G_ID="$(resolve_environment_secret_value "${GOOGLE_CLIENT_ID:-}" GOOGLE_CLIENT_ID google-oauth client_id configured_secret_value)"
 G_SEC="$(resolve_environment_secret_value "${GOOGLE_CLIENT_SECRET:-}" GOOGLE_CLIENT_SECRET google-oauth client_secret configured_secret_value)"
+G_PICKER_ID="$(resolve_environment_secret_value "${GOOGLE_PICKER_CLIENT_ID:-}" GOOGLE_PICKER_CLIENT_ID google-oauth picker_client_id configured_secret_value)"
 G_PICKER_KEY="$(resolve_environment_secret_value "${GOOGLE_PICKER_API_KEY:-}" GOOGLE_PICKER_API_KEY google-oauth picker_api_key configured_secret_value)"
 G_PICKER_APP="$(resolve_environment_secret_value "${GOOGLE_PICKER_APP_ID:-}" GOOGLE_PICKER_APP_ID google-oauth picker_app_id configured_secret_value)"
 [[ -z "$G_ID" || -z "$G_SEC" ]] && warn "GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET not set — Google connect disabled"
-[[ -z "$G_PICKER_KEY" || -z "$G_PICKER_APP" ]] && warn "GOOGLE_PICKER_API_KEY/GOOGLE_PICKER_APP_ID not set — Drive picker disabled"
+[[ -n "$G_PICKER_ID" && "$G_PICKER_ID" == "$G_ID" ]] && fail "GOOGLE_PICKER_CLIENT_ID must be a dedicated browser client, not GOOGLE_CLIENT_ID"
+[[ -z "$G_PICKER_ID" || -z "$G_PICKER_KEY" || -z "$G_PICKER_APP" ]] && warn "GOOGLE_PICKER_CLIENT_ID/GOOGLE_PICKER_API_KEY/GOOGLE_PICKER_APP_ID not set — Drive picker disabled"
 if [[ "$ENV" != "custom" ]]; then
   [[ -n "$G_ID" ]] && sync_secret_manager_value GOOGLE_CLIENT_ID "$G_ID" "$FIREBASE_PROJECT"
   [[ -n "$G_SEC" ]] && sync_secret_manager_value GOOGLE_CLIENT_SECRET "$G_SEC" "$FIREBASE_PROJECT"
+  [[ -n "$G_PICKER_ID" ]] && sync_secret_manager_value GOOGLE_PICKER_CLIENT_ID "$G_PICKER_ID" "$FIREBASE_PROJECT"
   [[ -n "$G_PICKER_KEY" ]] && sync_secret_manager_value GOOGLE_PICKER_API_KEY "$G_PICKER_KEY" "$FIREBASE_PROJECT"
   [[ -n "$G_PICKER_APP" ]] && sync_secret_manager_value GOOGLE_PICKER_APP_ID "$G_PICKER_APP" "$FIREBASE_PROJECT"
 fi
-if [[ -n "$G_ID" && -n "$G_SEC" && -n "$G_PICKER_KEY" && -n "$G_PICKER_APP" ]]; then
+if [[ -n "$G_ID" && -n "$G_SEC" && -n "$G_PICKER_ID" && -n "$G_PICKER_KEY" && -n "$G_PICKER_APP" ]]; then
   persist_google_env "$ENV_FILE"
   [[ "$ENV" == "test" ]] && persist_google_env "$REPO_DIR/.env.local"
 fi
 export GOOGLE_CLIENT_ID="$G_ID"
 export GOOGLE_CLIENT_SECRET="$G_SEC"
+export GOOGLE_PICKER_CLIENT_ID="$G_PICKER_ID"
 export GOOGLE_PICKER_API_KEY="$G_PICKER_KEY"
 export GOOGLE_PICKER_APP_ID="$G_PICKER_APP"
 ksecret google-oauth \
   --from-literal=client_id="$G_ID" \
   --from-literal=client_secret="$G_SEC" \
+  --from-literal=picker_client_id="$G_PICKER_ID" \
   --from-literal=picker_api_key="$G_PICKER_KEY" \
   --from-literal=picker_app_id="$G_PICKER_APP"
 
@@ -1019,6 +1025,7 @@ COMPLETENESS_LABELS=(
   "github-oauth / client_secret"
   "google-oauth / client_id"
   "google-oauth / client_secret"
+  "google-oauth / picker_client_id"
   "google-oauth / picker_api_key"
   "google-oauth / picker_app_id"
   "microsoft-oauth / client_id"

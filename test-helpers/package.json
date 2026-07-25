@@ -28,7 +28,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "peerDependencies": {
-    "firebase-admin": "^14.1.0",
+    "firebase-admin": "^14.2.0",
     "vitest": "^4.0.0"
   },
   "peerDependenciesMeta": {
@@ -41,7 +41,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
-    "firebase-admin": "^14.1.0",
+    "firebase-admin": "^14.2.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   },
