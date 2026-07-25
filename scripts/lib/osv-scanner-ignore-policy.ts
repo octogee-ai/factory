@@ -11,29 +11,89 @@ export interface IgnorePolicyViolation {
 
 export const MAX_IGNORE_WINDOW_DAYS = 60;
 
-const ENTRY_BLOCK_PATTERN = /\[\[IgnoredVulns\]\]([^[]*)/g;
-const ID_PATTERN = /^\s*id\s*=\s*"([^"]*)"/m;
-const IGNORE_UNTIL_PATTERN = /^\s*ignoreUntil\s*=\s*(\d{4}-\d{2}-\d{2})/m;
-const REASON_PATTERN = /^\s*reason\s*=\s*"([^"]*)"/m;
+const ENTRY_MARKER = "[[IgnoredVulns]]";
+const TABLE_MARKER = "[[";
 const ISSUE_REFERENCE_PATTERN = /#\d+/;
+
+function extractRawValue(block: string, key: string): string | undefined {
+  for (const rawLine of block.split("\n")) {
+    const line = rawLine.trim();
+    if (!line.startsWith(key)) continue;
+
+    const afterKey = line.slice(key.length).trimStart();
+    if (!afterKey.startsWith("=")) continue;
+
+    return afterKey.slice(1).trim();
+  }
+
+  return undefined;
+}
+
+function unquote(rawValue: string): string | undefined {
+  if (rawValue.length >= 2 && rawValue.startsWith('"') && rawValue.endsWith('"')) {
+    return rawValue.slice(1, -1);
+  }
+
+  return undefined;
+}
+
+function isAllDigits(value: string, start: number, end: number): boolean {
+  for (let i = start; i < end; i++) {
+    const code = value.charCodeAt(i);
+    if (code < 48 || code > 57) return false;
+  }
+
+  return true;
+}
+
+function isIsoDateShape(value: string): boolean {
+  return (
+    value.length === 10 &&
+    value.charAt(4) === "-" &&
+    value.charAt(7) === "-" &&
+    isAllDigits(value, 0, 4) &&
+    isAllDigits(value, 5, 7) &&
+    isAllDigits(value, 8, 10)
+  );
+}
+
+function parseEntryBlock(block: string): Partial<IgnoredVulnEntry> {
+  const entry: Partial<IgnoredVulnEntry> = {};
+
+  const id = extractRawValue(block, "id");
+  if (id !== undefined) {
+    const unquoted = unquote(id);
+    if (unquoted !== undefined) entry.id = unquoted;
+  }
+
+  const ignoreUntil = extractRawValue(block, "ignoreUntil");
+  if (ignoreUntil !== undefined && isIsoDateShape(ignoreUntil)) {
+    entry.ignoreUntil = ignoreUntil;
+  }
+
+  const reason = extractRawValue(block, "reason");
+  if (reason !== undefined) {
+    const unquoted = unquote(reason);
+    if (unquoted !== undefined) entry.reason = unquoted;
+  }
+
+  return entry;
+}
 
 export function parseIgnoredVulns(tomlContent: string): Partial<IgnoredVulnEntry>[] {
   const entries: Partial<IgnoredVulnEntry>[] = [];
+  let searchFrom = 0;
 
-  for (const match of tomlContent.matchAll(ENTRY_BLOCK_PATTERN)) {
-    const block = match[1];
-    const entry: Partial<IgnoredVulnEntry> = {};
+  for (;;) {
+    const start = tomlContent.indexOf(ENTRY_MARKER, searchFrom);
+    if (start === -1) break;
 
-    const id = block.match(ID_PATTERN);
-    if (id) entry.id = id[1];
+    const blockStart = start + ENTRY_MARKER.length;
+    const nextMarker = tomlContent.indexOf(TABLE_MARKER, blockStart);
+    const blockEnd = nextMarker === -1 ? tomlContent.length : nextMarker;
 
-    const ignoreUntil = block.match(IGNORE_UNTIL_PATTERN);
-    if (ignoreUntil) entry.ignoreUntil = ignoreUntil[1];
-
-    const reason = block.match(REASON_PATTERN);
-    if (reason) entry.reason = reason[1];
-
-    entries.push(entry);
+    entries.push(parseEntryBlock(tomlContent.slice(blockStart, blockEnd)));
+    searchFrom = blockEnd;
   }
 
   return entries;
