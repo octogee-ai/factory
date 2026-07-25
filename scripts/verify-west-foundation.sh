@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DEPLOYMENT_TARGETS="${OCTOGEE_DEPLOYMENT_TARGETS:-${REPO_ROOT}/core/src/deployment-targets.json}"
 PROJECT_ID="octogee"
 REGION="us-west1"
 CLUSTER_NAME="octogee-gateway"
@@ -200,6 +202,22 @@ if ! jq -e '
   exit 1
 fi
 
+if [[ ! -f "${DEPLOYMENT_TARGETS}" ]]; then
+  echo "Deployment target contract is unavailable: ${DEPLOYMENT_TARGETS}" >&2
+  exit 1
+fi
+PAGED_LOCATIONS="$(jq -r '[.targets[] | select(.lifecycle != "frozen") | .region] | unique | join("|")' "${DEPLOYMENT_TARGETS}")"
+PAGED_CLUSTERS="$(jq -r '[.targets[] | select(.lifecycle != "frozen") | .clusterName] | unique | join("|")' "${DEPLOYMENT_TARGETS}")"
+UNPAGED_NAMESPACES="$(jq -r '[.targets[] | select(.lifecycle == "frozen") | .namespace] | unique | join("|")' "${DEPLOYMENT_TARGETS}")"
+if [[ -z "${PAGED_LOCATIONS}" || -z "${PAGED_CLUSTERS}" ]]; then
+  echo "No non-frozen deployment target to page for; refusing to verify an empty alert scope" >&2
+  exit 1
+fi
+UNPAGED_NAMESPACE_MATCHER=""
+if [[ -n "${UNPAGED_NAMESPACES}" ]]; then
+  UNPAGED_NAMESPACE_MATCHER=", namespace!~\"${UNPAGED_NAMESPACES}\""
+fi
+
 gcloud monitoring policies list \
   --project="${PROJECT_ID}" \
   --filter='userLabels.deployment-target="west-platform"' \
@@ -208,8 +226,9 @@ if ! jq -e \
   --arg email "${EMAIL_CHANNEL_NAME}" \
   --arg sms "${SMS_CHANNEL_NAME}" \
   --arg project "${PROJECT_ID}" \
-  --arg region "${REGION}" \
-  --arg cluster "${CLUSTER_NAME}" '
+  --arg locations "${PAGED_LOCATIONS}" \
+  --arg clusters "${PAGED_CLUSTERS}" \
+  --arg unpagedMatcher "${UNPAGED_NAMESPACE_MATCHER}" '
   def routed_to_both:
     .notificationChannels as $channels |
     ($channels | length) == 2 and
@@ -227,13 +246,13 @@ if ! jq -e \
       .enabled == true and
       routed_to_both and
       (.conditions[0].conditionPrometheusQueryLanguage.query | rtrimstr("\n")) ==
-        "max by (alertname, severity, namespace, gateway_id) (ALERTS{project_id=\"\($project)\", location=\"\($region)\", cluster=\"\($cluster)\", alertstate=\"firing\", severity=\"\($severity)\"})" and
+        "max by (alertname, severity, location, namespace, gateway_id) (ALERTS{project_id=\"\($project)\", location=~\"\($locations)\", cluster=~\"\($clusters)\", alertstate=\"firing\", severity=\"\($severity)\"\($unpagedMatcher)})" and
       (.conditions[0].conditionPrometheusQueryLanguage.duration // "0s") == "0s" and
       .conditions[0].conditionPrometheusQueryLanguage.evaluationInterval == "30s"
     )) | length == 1;
   enabled_policy("Octogee WEST GKE notifications") and
-  workload_policy("Octogee WEST workload critical"; "critical") and
-  workload_policy("Octogee WEST workload warning"; "warning")
+  workload_policy("Octogee workload critical"; "critical") and
+  workload_policy("Octogee workload warning"; "warning")
 ' "${ALERT_POLICIES_JSON}" >/dev/null; then
   echo "WEST workload alert-policy invariants failed" >&2
   exit 1
