@@ -47,7 +47,7 @@ COPY core/dist /core/dist
 COPY shared/package.json /shared/package.json
 COPY shared/dist /shared/dist
 COPY octogee-api/.npmrc octogee-api/package.json octogee-api/package-lock.json* ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --ignore-scripts
 
 # Runtime module resolution note: the BUILDER stage installs gateway-edge
 # deps at /gateway-edge/node_modules so tsc can resolve npm packages

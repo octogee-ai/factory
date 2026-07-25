@@ -52,7 +52,11 @@ COPY shared/dist /app/shared/dist
 # runtime-only after `tsc` finishes. Avoids `npx tsc` falling back to a
 # downloaded unpinned compiler.
 COPY glm-controller/.npmrc glm-controller/package.json glm-controller/package-lock.json* ./
-RUN npm ci
+# --ignore-scripts for parity with every other service image: nothing here is
+# native, so no dependency install script is load-bearing. npm 12 already
+# blocks them (no allowScripts policy) and says so only in a warning — stating
+# the intent keeps the image independent of which npm builds it (#2834).
+RUN npm ci --ignore-scripts
 
 COPY glm-controller/tsconfig.json ./
 COPY glm-controller/src ./src

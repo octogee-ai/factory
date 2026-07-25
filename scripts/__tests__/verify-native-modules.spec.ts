@@ -1,149 +1,25 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  REQUIRED_NATIVE_MODULES,
+  NATIVE_MODULES,
   describeBindingLayout,
-  discoverNativeModules,
-  nativeModulesToVerify,
   verifyNativeModules,
 } from "../ops/verify-native-modules.mjs";
 
 const packageRoot = "/octogee/scripts";
-const bindingGyp = (name: string) => `${packageRoot}/node_modules/${name}/binding.gyp`;
 
-// node-pty@1.1.0 publishes prebuilds for darwin and win32 only, so on linux the
-// binding exists exclusively as node-gyp output. A lockfile entry that declares
-// `hasInstallScript` AND ships a binding.gyp is exactly the shape that cannot
-// survive a skipped install script.
-const lockfile = {
-  packages: {
-    "": { name: "scripts" },
-    "node_modules/node-pty": { version: "1.1.0", hasInstallScript: true },
-    "node_modules/esbuild": { version: "0.28.1", hasInstallScript: true },
-    "node_modules/protobufjs": { version: "7.6.5", hasInstallScript: true },
-    "node_modules/@firebase/util": { version: "1.15.1", hasInstallScript: true },
-    "node_modules/ws": { version: "8.21.1" },
-  },
-};
-
-describe("discoverNativeModules", () => {
-  it("finds install-script packages that ship a binding.gyp", () => {
-    const found = discoverNativeModules({
-      lockfile,
-      packageRoot,
-      exists: (candidate: string) => candidate === bindingGyp("node-pty"),
-    });
-
-    expect(found).toEqual(["node-pty"]);
-  });
-
-  it("ignores install-script packages that carry no native binding", () => {
-    const found = discoverNativeModules({
-      lockfile,
-      packageRoot,
-      exists: () => false,
-    });
-
-    expect(found).toEqual([]);
-  });
-
-  it("finds scoped packages under their full name", () => {
-    const found = discoverNativeModules({
-      lockfile,
-      packageRoot,
-      exists: (candidate: string) => candidate === bindingGyp("@firebase/util"),
-    });
-
-    expect(found).toEqual(["@firebase/util"]);
-  });
-
-  it("ignores nested node_modules entries, which no bare-name require resolves", () => {
-    const found = discoverNativeModules({
-      lockfile: {
-        packages: {
-          "node_modules/firebase-tools/node_modules/re2": { version: "1.24.1", hasInstallScript: true },
-        },
-      },
-      packageRoot,
-      exists: () => true,
-    });
-
-    expect(found).toEqual([]);
-  });
-
-  // A module the policy denies is never expected to have a binding, so an
-  // unbuilt one is the declared outcome rather than a regression. re2 is the
-  // live case: a firebase-tools devDependency whose native build the gateway
-  // image deliberately skips.
-  it("ignores modules whose install script the policy explicitly denies", () => {
-    const found = discoverNativeModules({
-      lockfile: { packages: { "node_modules/re2": { hasInstallScript: true } } },
-      packageRoot,
-      exists: () => true,
-      policy: { re2: false },
-    });
-
-    expect(found).toEqual([]);
-  });
-
-  it("keeps modules the policy allows", () => {
-    const found = discoverNativeModules({
-      lockfile: { packages: { "node_modules/re2": { hasInstallScript: true } } },
-      packageRoot,
-      exists: () => true,
-      policy: { re2: true },
-    });
-
-    expect(found).toEqual(["re2"]);
-  });
-
-  it("ignores packages absent from disk — pruned devDeps and platform-skipped optionals", () => {
-    const found = discoverNativeModules({
-      lockfile: {
-        packages: {
-          "node_modules/fsevents": { version: "2.3.3", hasInstallScript: true, optional: true },
-        },
-      },
-      packageRoot,
-      exists: () => false,
-    });
-
-    expect(found).toEqual([]);
-  });
-});
-
-describe("nativeModulesToVerify", () => {
-  it("always includes node-pty so a vanished dependency cannot make the check pass vacuously", () => {
-    expect(REQUIRED_NATIVE_MODULES).toContain("node-pty");
-    expect(
-      nativeModulesToVerify({ lockfile: { packages: {} }, packageRoot, exists: () => false }),
-    ).toEqual(["node-pty"]);
-  });
-
-  it("merges discovered modules with the required floor without duplicating", () => {
-    const names = nativeModulesToVerify({
-      lockfile: {
-        packages: {
-          "node_modules/node-pty": { hasInstallScript: true },
-          "node_modules/re2": { hasInstallScript: true },
-        },
-      },
-      packageRoot,
-      exists: () => true,
-    });
-
-    expect(names).toEqual(["node-pty", "re2"]);
-  });
-
-  it("still verifies node-pty even if the policy ever denied it", () => {
-    const names = nativeModulesToVerify({
-      lockfile: { packages: { "node_modules/node-pty": { hasInstallScript: true } } },
-      packageRoot,
-      exists: () => true,
-      policy: { "node-pty": false },
-    });
-
-    expect(names).toEqual(["node-pty"]);
+// The list is explicit rather than derived. Every cheap heuristic for "is this
+// package native" is wrong in both directions in this very tree: fsevents is
+// native but ships neither binding.gyp nor prebuilds/ (just a loose
+// fsevents.node), while bare-fs/bare-os/bare-url do ship prebuilds/ and throw
+// "Bare is not defined" when required under Node — auto-requiring those would
+// fail the image build for packages that were never meant to load here.
+// Detecting a NEW native dependency is npm's job, and npm already does it
+// properly (lockfile hasInstallScript plus its own isNodeGypPackage probe)
+// behind strict-allow-scripts.
+describe("NATIVE_MODULES", () => {
+  it("names node-pty, the only native module in the runtime tree", () => {
+    expect(NATIVE_MODULES).toEqual(["node-pty"]);
   });
 });
 
@@ -184,6 +60,12 @@ describe("verifyNativeModules", () => {
     });
 
     expect(failures.map((failure) => failure.name)).toEqual(["node-pty", "re2"]);
+  });
+
+  it("treats a module that resolves to nothing as a failure", () => {
+    const failures = verifyNativeModules({ names: ["node-pty"], load: () => undefined });
+
+    expect(failures).toEqual([{ name: "node-pty", message: "module resolved to nothing" }]);
   });
 });
 

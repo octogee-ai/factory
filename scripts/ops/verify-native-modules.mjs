@@ -1,44 +1,19 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const REQUIRED_NATIVE_MODULES = ["node-pty"];
-
-const TOP_LEVEL_ENTRY = /^node_modules\/(?:@[^/]+\/)?[^/]+$/;
-
-export function discoverNativeModules({ lockfile, packageRoot, exists = existsSync, policy = {} }) {
-  const packages = lockfile?.packages ?? {};
-  const names = [];
-
-  for (const [key, entry] of Object.entries(packages)) {
-    if (!entry?.hasInstallScript || !TOP_LEVEL_ENTRY.test(key)) {
-      continue;
-    }
-    const name = key.slice("node_modules/".length);
-    if (policy[name] === false) {
-      continue;
-    }
-    if (exists(path.join(packageRoot, "node_modules", name, "binding.gyp"))) {
-      names.push(name);
-    }
-  }
-
-  return names.sort();
-}
-
-export function nativeModulesToVerify({ lockfile, packageRoot, exists = existsSync, policy = {} }) {
-  const discovered = discoverNativeModules({ lockfile, packageRoot, exists, policy });
-  return [...new Set([...REQUIRED_NATIVE_MODULES, ...discovered])].sort();
-}
+export const NATIVE_MODULES = ["node-pty"];
 
 export function verifyNativeModules({ names, load }) {
   const failures = [];
 
   for (const name of names) {
     try {
-      load(name);
+      if (!load(name)) {
+        failures.push({ name, message: "module resolved to nothing" });
+      }
     } catch (error) {
       failures.push({ name, message: error instanceof Error ? error.message : String(error) });
     }
@@ -77,18 +52,14 @@ export function describeBindingLayout({
 }
 
 function main({ packageRoot }) {
-  const lockfile = JSON.parse(readFileSync(path.join(packageRoot, "package-lock.json"), "utf8"));
-  const manifest = JSON.parse(readFileSync(path.join(packageRoot, "package.json"), "utf8"));
   const requireFromPackage = createRequire(path.join(packageRoot, "package.json"));
-  const names = nativeModulesToVerify({
-    lockfile,
-    packageRoot,
-    policy: manifest.allowScripts ?? {},
+  const failures = verifyNativeModules({
+    names: NATIVE_MODULES,
+    load: (name) => requireFromPackage(name),
   });
-  const failures = verifyNativeModules({ names, load: (name) => requireFromPackage(name) });
   const failed = new Set(failures.map((failure) => failure.name));
 
-  for (const name of names) {
+  for (const name of NATIVE_MODULES) {
     if (!failed.has(name)) {
       console.error(`[native-modules] ok: ${name}`);
     }
@@ -96,7 +67,7 @@ function main({ packageRoot }) {
 
   if (failures.length === 0) {
     console.error(
-      `[native-modules] ${names.length} native module(s) load on ${process.platform}-${process.arch}`,
+      `[native-modules] ${NATIVE_MODULES.length} native module(s) load on ${process.platform}-${process.arch}`,
     );
     return;
   }
