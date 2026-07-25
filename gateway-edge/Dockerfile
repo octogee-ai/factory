@@ -52,7 +52,7 @@ COPY core/dist /core/dist
 COPY shared/package.json /shared/package.json
 COPY shared/dist /shared/dist
 COPY gateway-edge/.npmrc gateway-edge/package.json gateway-edge/package-lock.json* ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --ignore-scripts
 COPY --from=builder /gateway-edge/dist ./dist
 COPY gateway-edge/agent-import-gitleaks.toml ./agent-import-gitleaks.toml
 USER node

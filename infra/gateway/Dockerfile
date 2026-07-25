@@ -30,6 +30,17 @@ WORKDIR /octogee/scripts
 # needs it on disk — without it, npx silently fetches the unrelated
 # `tsc@2.0.4` registry package and exits 1. The runtime image stays slim
 # via `npm prune --omit=dev` after the typecheck.
+#
+# Install scripts MUST stay enabled here. node-pty publishes prebuilds for
+# darwin + win32 only, so on linux `build/Release/pty.node` exists solely as
+# output of its `install` script (`node scripts/prebuild.js || node-gyp
+# rebuild`) — the base image's python3 + make + build-essential are what let
+# that fallback compile. npm 12 additionally refuses to run a dependency's
+# install scripts unless `scripts/package.json`'s `allowScripts` names it,
+# and only WARNS when it skips one; that is how #2834 shipped a gateway with
+# an unloadable node-pty while the build stayed green. `.npmrc`'s
+# `strict-allow-scripts=true` turns any future unreviewed install script into
+# a failed install instead of a warning.
 RUN npm install --no-audit --no-fund
 
 COPY --chown=node:node scripts/entrypoints/ /octogee/scripts/entrypoints/
@@ -37,6 +48,7 @@ COPY --chown=node:node scripts/secret-resolver.mjs /octogee/scripts/
 COPY --chown=node:node scripts/publish-gateway-token.mjs /octogee/scripts/
 COPY --chown=node:node scripts/tsconfig.json /octogee/scripts/
 COPY --chown=node:node scripts/lib/ /octogee/scripts/lib/
+COPY --chown=node:node scripts/ops/verify-native-modules.mjs /octogee/scripts/ops/
 
 # ── Canonical identity module (imported via ../../shared/types/identity.js) ──
 # scripts/tsconfig.json rootDir is ".." so it expects shared/ at a sibling
@@ -77,6 +89,14 @@ RUN npx tsc -p tsconfig.json --noEmit 2>&1; \
     npm prune --omit=dev --no-audit --no-fund && \
     cd /octogee/shared && npm prune --omit=dev --no-audit --no-fund
 
+# ── Native-module gate (#2834) ──────────────────────────────────────────────
+# Load every native module in scripts/ for real. A missing binding is
+# invisible to pod readiness — the pod reports 2/2 Ready and the first Builder
+# Shell session is what discovers it — so the require has to happen where a
+# failure can still stop the image from being pushed. Placed AFTER the prune
+# so it covers both halves: the install must produce the binding, and nothing
+# later may remove it.
+RUN node ops/verify-native-modules.mjs
 
 # ── Workspace templates ─────────────────────────────────────────────────────
 COPY --chown=node:node templates/ /octogee/templates/
