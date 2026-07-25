@@ -8,9 +8,9 @@ metadata:
     app: octogee-gateway
     {{- include "octogee-gateway.labels" . | nindent 4 }}
 spec:
-  # All gateway classes are cattle: maxUnavailable:1 => disruptionsAllowed:1.
-  # This lets ComputeClass activeMigration right-size + node drains evict
-  # gracefully. Durability is substrate-backed, not PDB/PVC-backed.
+  # All gateway classes are cattle: maxUnavailable:1 => disruptionsAllowed:1,
+  # so Spot preemption and node drains evict gracefully. Durability is
+  # substrate-backed, not PDB/PVC-backed.
   maxUnavailable: {{ .Values.pdb.maxUnavailable }}
   selector:
     matchLabels:

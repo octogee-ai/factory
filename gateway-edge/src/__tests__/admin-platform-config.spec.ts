@@ -371,7 +371,7 @@ describe("admin platform-trial-config", () => {
     expect(res.body.builderPlans).toContainEqual({
       name: "pro",
       displayName: "Builder Pro",
-      sizingTier: "nano",
+      sizingTier: "m",
     });
     expect(res.body.builderPlans.map((plan: { name: string }) => plan.name)).not.toContain("enterprise");
     expect(res.body.provisioning).toMatchObject({

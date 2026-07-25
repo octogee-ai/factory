@@ -471,7 +471,7 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
       "operatorGatewayReservations/uid-bender": {
         uid: "uid-bender",
         builderSlug: "bender",
-        requestedSizingTier: "small",
+        requestedSizingTier: "l",
         requestedAt: 1,
         status: "requested",
         billingStatus: "active",
@@ -499,7 +499,7 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
       "operatorGatewayReservations/uid-bender": {
         uid: "uid-bender",
         builderSlug: "bender",
-        requestedSizingTier: "small",
+        requestedSizingTier: "l",
         requestedAt: 1,
         status: "requested",
         billingStatus: "active",
@@ -522,7 +522,7 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
       "operatorGatewayReservations/uid-bender": {
         uid: "uid-bender",
         builderSlug: "bender",
-        requestedSizingTier: "small",
+        requestedSizingTier: "l",
         requestedAt: 1,
         status: "requested",
         billingStatus: "active",
@@ -545,7 +545,7 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
       "operatorGatewayReservations/uid-bender": {
         uid: "uid-bender",
         builderSlug: "bender",
-        requestedSizingTier: "small",
+        requestedSizingTier: "l",
         requestedAt: 1,
         status: "requested",
         billingStatus: "active",
@@ -574,7 +574,7 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
       "operatorGatewayReservations/uid-bender": {
         uid: "uid-bender",
         builderSlug: "bender",
-        requestedSizingTier: "small",
+        requestedSizingTier: "l",
         requestedAt: 1,
         status: "requested",
         billingStatus: "active",
@@ -615,7 +615,7 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
       "operatorGatewayReservations/uid-hobby": {
         uid: "uid-hobby",
         builderSlug: "hobby",
-        requestedSizingTier: "micro",
+        requestedSizingTier: "xs",
         requestedAt: 1,
         status: "requested",
         billingStatus: "active",
@@ -647,7 +647,7 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
       "operatorGatewayReservations/uid-bender": {
         uid: "uid-bender",
         builderSlug: "bender",
-        requestedSizingTier: "small",
+        requestedSizingTier: "l",
         requestedAt: 1,
         status: "requested",
         billingStatus: "active",
@@ -694,7 +694,7 @@ describe("POST /operator-gateway-reservations/:uid/fulfill", () => {
       "operatorGatewayReservations/uid-bender": {
         uid: "uid-bender",
         builderSlug: "bender",
-        requestedSizingTier: "small",
+        requestedSizingTier: "l",
         requestedAt: 1,
         status: "requested",
         billingStatus: "active",
@@ -1412,7 +1412,7 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
     seed["gateways/zeta"] = { ...seed["gateways/zeta"], gatewayId: "other" };
     const { app, store } = mkApp(seed);
 
-    const res = await request(app).patch("/gateways/zeta").send({ sizingTier: "medium" });
+    const res = await request(app).patch("/gateways/zeta").send({ sizingTier: "m" });
 
     expect(res.status).toBe(409);
     expect(res.body).toMatchObject({ error: "gateway durable root is invalid", gatewayId: "zeta" });
@@ -1432,7 +1432,7 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
 
       const response = await request(app)
         .patch("/gateways/zeta")
-        .send({ sizingTier: "medium" });
+        .send({ sizingTier: "m" });
 
       expect(response.status).toBe(409);
       expect(response.body.error).toMatch(/customer migration.*in flight/i);
@@ -1617,10 +1617,10 @@ describe("DELETE /gateways/:id — retirement claim", () => {
 describe("PATCH /gateways/:id — payload fields on a new-schema gateway route through releases", () => {
   it("updates sizingTier directly on the durable root without cutting a release", async () => {
     const { app, store } = mkApp(seedNewSchemaGateway("beta", sharedPayload()));
-    const res = await request(app).patch("/gateways/beta").send({ sizingTier: "medium" }).expect(202);
+    const res = await request(app).patch("/gateways/beta").send({ sizingTier: "m" }).expect(202);
     expect(res.body.updated).toContain("sizingTier");
     expect(store.get(`${GLM_GATEWAYS_COLLECTION}/beta`)?.sizingTier).toBeUndefined();
-    expect(store.get("gateways/beta")?.sizingTier).toBe("medium");
+    expect(store.get("gateways/beta")?.sizingTier).toBe("m");
     expect(store.get(`gateways/beta/${GATEWAY_RELEASES_SUBCOLLECTION}/2`)).toBeUndefined();
   });
 
@@ -1640,7 +1640,7 @@ describe("PATCH /gateways/:id — payload fields on a new-schema gateway route t
       },
       "gateways/leg": { gatewayId: "leg", status: "ready" },
     });
-    const res = await request(app).patch("/gateways/leg").send({ sizingTier: "medium" });
+    const res = await request(app).patch("/gateways/leg").send({ sizingTier: "m" });
     expect(res.status).toBe(404);
     expect(store.get(`${GLM_GATEWAYS_COLLECTION}/leg`)?.sizingTier).toBeUndefined();
   });
@@ -1672,7 +1672,7 @@ describe("durable config PATCHes", () => {
 
   it("applies explicit null-clears to the root without a release", async () => {
     const { app, store } = mkApp(
-      seedNewSchemaGateway("beta", sharedPayload(), { sizingTier: "small" }),
+      seedNewSchemaGateway("beta", sharedPayload(), { sizingTier: "l" }),
     );
     const res = await request(app)
       .patch("/gateways/beta")

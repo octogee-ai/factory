@@ -23,7 +23,7 @@ function durableRoot(overrides: Record<string, unknown> = {}): Record<string, un
     profile: "standard",
     gatewayClass: "shared",
     imageProfile: "standard",
-    sizingTier: "medium",
+    sizingTier: "m",
     computeClass: "test-spot",
     gcpProject: null,
     gatewayContainerSecurityContext: null,

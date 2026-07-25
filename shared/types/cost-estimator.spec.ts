@@ -11,8 +11,8 @@ import { TIER_PRESETS, SIZING_TIERS } from "./sizing.js";
 
 describe("estimateGatewayMonthlyCost", () => {
   it("computes compute cost from request CPU + memory at c2d Autopilot rates", () => {
-    // small: 4 vCPU / 16 GiB
-    const result = estimateGatewayMonthlyCost("small");
+    // l: 4 vCPU / 16 GiB
+    const result = estimateGatewayMonthlyCost("l");
     const expected = Math.round(
       4 * C2D_AUTOPILOT_VCPU_USD_PER_HR * HOURS_PER_MONTH +
         16 * C2D_AUTOPILOT_GIB_USD_PER_HR * HOURS_PER_MONTH,
@@ -21,18 +21,18 @@ describe("estimateGatewayMonthlyCost", () => {
   });
 
   it("derives perBuilderAtTarget and perBuilderAtTypical from raw compute and tier capacity", () => {
-    const preset = TIER_PRESETS["small"];
+    const preset = TIER_PRESETS["l"];
     const rawCompute =
       4 * C2D_AUTOPILOT_VCPU_USD_PER_HR * HOURS_PER_MONTH +
       16 * C2D_AUTOPILOT_GIB_USD_PER_HR * HOURS_PER_MONTH;
-    const result = estimateGatewayMonthlyCost("small");
+    const result = estimateGatewayMonthlyCost("l");
     expect(result.perBuilderAtTarget).toBe(Math.round(rawCompute / preset.capacity.targetActiveBuilders));
     expect(result.perBuilderAtTypical).toBe(Math.round(rawCompute / preset.capacity.typicalBuilders));
   });
 
   it("applies the conservative Spot multiplier when pricingMode=spot", () => {
-    const onDemand = estimateGatewayMonthlyCost("small", { pricingMode: "on-demand" });
-    const spot = estimateGatewayMonthlyCost("small", { pricingMode: "spot" });
+    const onDemand = estimateGatewayMonthlyCost("l", { pricingMode: "on-demand" });
+    const spot = estimateGatewayMonthlyCost("l", { pricingMode: "spot" });
     expect(spot.pricingMode).toBe("spot");
     expect(spot.computeUsd).toBe(Math.round(onDemand.onDemandComputeUsd * SPOT_PRICE_MULTIPLIER));
     expect(spot.onDemandComputeUsd).toBe(onDemand.computeUsd);
@@ -57,18 +57,18 @@ describe("estimateGatewayMonthlyCost", () => {
     }
   });
 
-  it("2xlarge is the most expensive tier", () => {
-    const top = estimateGatewayMonthlyCost("2xlarge").computeUsd;
+  it("l is the most expensive tier", () => {
+    const top = estimateGatewayMonthlyCost("l").computeUsd;
     for (const tier of SIZING_TIERS) {
-      if (tier === "2xlarge") continue;
+      if (tier === "l") continue;
       expect(top).toBeGreaterThanOrEqual(estimateGatewayMonthlyCost(tier).computeUsd);
     }
   });
 
-  it("small (the default tier) lands in a sane low range for F&F", () => {
-    // small = 4 vCPU / 16 GiB, the default tier most gateways start on.
+  it("l (the default tier) lands in a sane low range for F&F", () => {
+    // l = 4 vCPU / 16 GiB, the default tier most gateways start on.
     // Anchor sanity: a cheap F&F floor, comfortably under $300/mo.
-    const c = estimateGatewayMonthlyCost("small").computeUsd;
+    const c = estimateGatewayMonthlyCost("l").computeUsd;
     expect(c).toBeGreaterThan(100);
     expect(c).toBeLessThan(300);
   });
@@ -76,38 +76,38 @@ describe("estimateGatewayMonthlyCost", () => {
 
 describe("estimateFleetMonthlyCost", () => {
   it("sums per-pod compute across all input tiers", () => {
-    const result = estimateFleetMonthlyCost(["medium", "large"]);
+    const result = estimateFleetMonthlyCost(["m", "l"]);
     expect(result.totalUsd).toBe(
-      estimateGatewayMonthlyCost("medium").computeUsd +
-        estimateGatewayMonthlyCost("large").computeUsd,
+      estimateGatewayMonthlyCost("m").computeUsd +
+        estimateGatewayMonthlyCost("l").computeUsd,
     );
   });
 
   it("returns per-tier breakdown counts and subtotals", () => {
     const result = estimateFleetMonthlyCost([
-      { tier: "medium", pricingMode: "spot" },
-      "medium",
-      "large",
+      { tier: "m", pricingMode: "spot" },
+      "m",
+      "l",
     ]);
-    expect(result.byTier["medium"]).toEqual({
+    expect(result.byTier["m"]).toEqual({
       count: 2,
       subtotalUsd:
-        estimateGatewayMonthlyCost("medium", { pricingMode: "spot" }).computeUsd +
-        estimateGatewayMonthlyCost("medium").computeUsd,
-      onDemandSubtotalUsd: 2 * estimateGatewayMonthlyCost("medium").computeUsd,
+        estimateGatewayMonthlyCost("m", { pricingMode: "spot" }).computeUsd +
+        estimateGatewayMonthlyCost("m").computeUsd,
+      onDemandSubtotalUsd: 2 * estimateGatewayMonthlyCost("m").computeUsd,
       spotCount: 1,
       onDemandCount: 1,
     });
-    expect(result.byTier.large).toEqual({
+    expect(result.byTier.l).toEqual({
       count: 1,
-      subtotalUsd: estimateGatewayMonthlyCost("large").computeUsd,
-      onDemandSubtotalUsd: estimateGatewayMonthlyCost("large").computeUsd,
+      subtotalUsd: estimateGatewayMonthlyCost("l").computeUsd,
+      onDemandSubtotalUsd: estimateGatewayMonthlyCost("l").computeUsd,
       spotCount: 0,
       onDemandCount: 1,
     });
     expect(result.onDemandTotalUsd).toBe(
-      2 * estimateGatewayMonthlyCost("medium").computeUsd +
-        estimateGatewayMonthlyCost("large").computeUsd,
+      2 * estimateGatewayMonthlyCost("m").computeUsd +
+        estimateGatewayMonthlyCost("l").computeUsd,
     );
     expect(result.savingsUsd).toBeGreaterThan(0);
   });

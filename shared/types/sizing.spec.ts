@@ -12,14 +12,10 @@ import { GATEWAY_CLASSES, GATEWAY_PROFILES } from './glm.js';
 describe('sizing-tier SSOT', () => {
   it('declares tiers in ascending size order', () => {
     expect(SIZING_TIERS).toEqual([
-      'micro',
-      'mini',
-      'nano',
-      'small',
-      'medium',
-      'large',
-      'xlarge',
-      '2xlarge',
+      'xs',
+      's',
+      'm',
+      'l',
     ]);
   });
 
@@ -57,9 +53,9 @@ describe('sizing-tier SSOT', () => {
     }
   });
 
-  it('both profiles default to small', () => {
-    expect(PROFILE_DEFAULT_TIER.operator).toBe('small');
-    expect(PROFILE_DEFAULT_TIER.standard).toBe('small');
+  it('both profiles default to l', () => {
+    expect(PROFILE_DEFAULT_TIER.operator).toBe('l');
+    expect(PROFILE_DEFAULT_TIER.standard).toBe('l');
   });
 
   it('GATEWAY_CLASS_DEFAULT_TIER maps every GatewayClass', () => {
@@ -69,36 +65,36 @@ describe('sizing-tier SSOT', () => {
     }
   });
 
-  it('builder class defaults to micro; shared and operator default to small', () => {
-    expect(GATEWAY_CLASS_DEFAULT_TIER.builder).toBe('micro');
-    expect(GATEWAY_CLASS_DEFAULT_TIER.shared).toBe('small');
-    expect(GATEWAY_CLASS_DEFAULT_TIER.operator).toBe('small');
+  it('builder class defaults to xs; shared and operator default to l', () => {
+    expect(GATEWAY_CLASS_DEFAULT_TIER.builder).toBe('xs');
+    expect(GATEWAY_CLASS_DEFAULT_TIER.shared).toBe('l');
+    expect(GATEWAY_CLASS_DEFAULT_TIER.operator).toBe('l');
   });
 
-  it('mini is the one-builder headroom tier between micro and nano', () => {
-    expect(TIER_PRESETS.mini.resources.requests.cpu).toBe('1000m');
-    expect(TIER_PRESETS.mini.resources.requests.memory).toBe('4Gi');
-    expect(TIER_PRESETS.mini.nodejs.maxOldSpaceSizeMb).toBe('3072');
-    expect(TIER_PRESETS.mini.capacity.targetActiveBuilders).toBe(1);
+  it('s is the one-builder headroom tier between xs and m', () => {
+    expect(TIER_PRESETS.s.resources.requests.cpu).toBe('1000m');
+    expect(TIER_PRESETS.s.resources.requests.memory).toBe('4Gi');
+    expect(TIER_PRESETS.s.nodejs.maxOldSpaceSizeMb).toBe('3072');
+    expect(TIER_PRESETS.s.capacity.targetActiveBuilders).toBe(1);
   });
 });
 
 describe('resolveSizingTier', () => {
   it('returns the explicit tier when set, regardless of profile', () => {
-    const result = resolveSizingTier({ sizingTier: 'medium', profile: 'operator' });
-    expect(result.tier).toBe('medium');
+    const result = resolveSizingTier({ sizingTier: 'm', profile: 'operator' });
+    expect(result.tier).toBe('m');
     expect(result.resolvedFrom).toBe('explicit');
   });
 
   it('falls back to the profile default (small) when sizingTier is missing', () => {
     const result = resolveSizingTier({ sizingTier: undefined, profile: 'operator' });
-    expect(result.tier).toBe('small');
+    expect(result.tier).toBe('l');
     expect(result.resolvedFrom).toBe('profile-default');
   });
 
   it('falls back to small when both sizingTier and profile are missing', () => {
     const result = resolveSizingTier({ sizingTier: undefined, profile: undefined });
-    expect(result.tier).toBe('small');
+    expect(result.tier).toBe('l');
     expect(result.resolvedFrom).toBe('profile-default');
   });
 
@@ -108,13 +104,13 @@ describe('resolveSizingTier', () => {
       gatewayClass: 'builder',
       profile: 'standard',
     });
-    expect(result.tier).toBe('micro');
+    expect(result.tier).toBe('xs');
     expect(result.resolvedFrom).toBe('class-default');
   });
 
   it('narrows to SizingTier (compile-time guard)', () => {
-    const result = resolveSizingTier({ sizingTier: '2xlarge', profile: undefined });
+    const result = resolveSizingTier({ sizingTier: 'l', profile: undefined });
     const tier: SizingTier = result.tier;
-    expect(tier).toBe('2xlarge');
+    expect(tier).toBe('l');
   });
 });

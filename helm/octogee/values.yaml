@@ -5,7 +5,6 @@
 global:
   deploymentTargetId: ""
   deploymentProjectId: ""
-  platformComputeClass: ""
   mattermost:
     # K8s Secret containing admin credentials for Mattermost.
     # This secret MUST exist before `helm upgrade`. Create it via:
@@ -265,13 +264,6 @@ gatewayFleet:
   # template consumes this. Cowboy (glm-controller) owns the dynamic
   # per-instance api/preview Ingress paths via host-scoped JSON patch.
   instances: []
-  # Cluster-scoped custom compute class for gateway nodes (rendered by
-  # templates/gateway-compute-class.yaml). Empty name = not rendered; set
-  # per env to a cluster-unique name the per-gateway chart's
-  # .Values.computeClass matches.
-  computeClass:
-    name: ""
-    spotName: ""
 
 networkPolicy:
   enforceDefaultDeny: false

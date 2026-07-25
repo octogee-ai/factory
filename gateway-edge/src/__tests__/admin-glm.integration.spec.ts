@@ -719,7 +719,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       imageTag: "abc1234",
       profile: "operator",
       ownerUid: "uid-operator",
-      sizingTier: "large",
+      sizingTier: "l",
     });
     expect(res.status).toBe(202);
     const gwWrite = calls.find(
@@ -729,7 +729,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       profile: "operator",
       gatewayClass: "operator",
       imageProfile: "operator",
-      sizingTier: "large",
+      sizingTier: "l",
       operatorAccess: {
         shellsEnabled: true,
         reason: "owned-runtime-gateway",
@@ -1005,7 +1005,7 @@ describe("GET /api/admin/operator-gateway-reservations", () => {
     operatorGatewayReservationsDocs["uid-pending"] = {
       uid: "uid-pending",
       builderSlug: "pending",
-      requestedSizingTier: "large",
+      requestedSizingTier: "l",
       status: "billing_pending",
       billingStatus: "pending",
       currentGatewayId: "default",
@@ -1016,7 +1016,7 @@ describe("GET /api/admin/operator-gateway-reservations", () => {
     operatorGatewayReservationsDocs["uid-ready"] = {
       uid: "uid-ready",
       builderSlug: "ready",
-      requestedSizingTier: "medium",
+      requestedSizingTier: "m",
       status: "requested",
       billingStatus: "active",
       currentGatewayId: "default",
@@ -1027,7 +1027,7 @@ describe("GET /api/admin/operator-gateway-reservations", () => {
     operatorGatewayReservationsDocs["uid-provisioning"] = {
       uid: "uid-provisioning",
       builderSlug: "provisioning",
-      requestedSizingTier: "medium",
+      requestedSizingTier: "m",
       status: "provisioning",
       billingStatus: "active",
       currentGatewayId: "default",
@@ -1052,7 +1052,7 @@ describe("GET /api/admin/operator-gateway-reservations", () => {
     expect(res.body.reservations[0]).toMatchObject({
       uid: "uid-ready",
       builderSlug: "ready",
-      requestedSizingTier: "medium",
+      requestedSizingTier: "m",
       status: "requested",
       billingStatus: "active",
       currentGatewayId: "default",
@@ -1096,7 +1096,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
     operatorGatewayReservationsDocs["admin-user"] = {
       uid: "admin-user",
       builderSlug: "alice",
-      requestedSizingTier: "small",
+      requestedSizingTier: "m",
       status: "billing_pending",
       billingStatus: "pending",
       currentGatewayId: "default",
@@ -1108,12 +1108,12 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
 
     const res = await request(app)
       .post("/api/billing/operator-gateway/reservation")
-      .send({ sizingTier: "large" });
+      .send({ sizingTier: "l" });
 
     expect(res.status).toBe(202);
     expect(res.body.reservation).toMatchObject({
       uid: "admin-user",
-      requestedSizingTier: "large",
+      requestedSizingTier: "l",
       status: "requested",
       billingStatus: "active",
       requestedAt: 1_234,
@@ -1121,7 +1121,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
       currentGatewayProfile: "standard",
     });
     expect(operatorGatewayReservationsDocs["admin-user"]).toMatchObject({
-      requestedSizingTier: "large",
+      requestedSizingTier: "l",
       status: "requested",
       billingStatus: "active",
       requestedAt: 1_234,
@@ -1144,7 +1144,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
     operatorGatewayReservationsDocs["admin-user"] = {
       uid: "admin-user",
       builderSlug: "alice",
-      requestedSizingTier: "large",
+      requestedSizingTier: "l",
       status: "provisioning",
       billingStatus: "active",
       currentGatewayId: "default",
@@ -1159,7 +1159,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
 
     const res = await request(app)
       .post("/api/billing/operator-gateway/reservation")
-      .send({ sizingTier: "small" });
+      .send({ sizingTier: "l" });
 
     expect(res.status).toBe(409);
     expect(res.body).toMatchObject({
@@ -1189,12 +1189,12 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
 
     const requestRes = await request(app)
       .post("/api/billing/operator-gateway/reservation")
-      .send({ sizingTier: "large" });
+      .send({ sizingTier: "l" });
     expect(requestRes.status).toBe(202);
     expect(requestRes.body.reservation).toMatchObject({
       uid: "admin-user",
       builderSlug: "alice",
-      requestedSizingTier: "large",
+      requestedSizingTier: "l",
       status: "requested",
       billingStatus: "active",
       currentGatewayId: "default",
@@ -1207,7 +1207,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
     expect(queueRes.body.reservations[0]).toMatchObject({
       uid: "admin-user",
       builderSlug: "alice",
-      requestedSizingTier: "large",
+      requestedSizingTier: "l",
       readyToFulfill: true,
       fulfillBlockedReason: null,
     });
@@ -1236,7 +1236,7 @@ describe("operator reservation request → Cowboy fulfillment integration", () =
       imageProfile: "operator",
       ownerUid: "admin-user",
       builderSlug: "alice",
-      sizingTier: "large",
+      sizingTier: "l",
       operatorAccess: {
         shellsEnabled: true,
         reason: "owned-runtime-gateway",
@@ -1311,7 +1311,7 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
     operatorGatewayReservationsDocs["uid-alice"] = {
       uid: "uid-alice",
       builderSlug: "alice",
-      requestedSizingTier: "medium",
+      requestedSizingTier: "m",
       status: "requested",
       billingStatus: "active",
       currentGatewayId: "default",
@@ -1360,7 +1360,7 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
       imageProfile: "operator",
       ownerUid: "uid-alice",
       builderSlug: "alice",
-      sizingTier: "medium",
+      sizingTier: "m",
       operatorAccess: {
         shellsEnabled: true,
         reason: "owned-runtime-gateway",
@@ -1406,7 +1406,7 @@ describe("POST /api/admin/operator-gateway-reservations/:uid/fulfill", () => {
         uid: "uid-alice",
         gatewayId: "builder-alice",
         profile: "operator",
-        sizingTier: "medium",
+        sizingTier: "m",
         builderSlug: "alice",
         source: "operator-gateway-reservation",
       },
@@ -1468,7 +1468,7 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     seedDurableGateway("bender", {
       heartbeat: { status: "ready", mountedCustomers: ["alice"] },
       root: {
-        sizingTier: "large",
+        sizingTier: "l",
         profile: "operator",
         gatewayClass: "operator",
         imageProfile: "operator",
@@ -1480,9 +1480,9 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     const res = await request(app).get("/api/admin/gateways");
     expect(res.status).toBe(200);
     const bender = res.body.gateways.find((g: any) => g.gatewayId === "bender");
-    expect(bender.sizing.tier).toBe("large");
+    expect(bender.sizing.tier).toBe("l");
     expect(bender.sizing.resolvedFrom).toBe("explicit");
-    expect(bender.sizing.resources.requests.cpu).toBe("16000m");
+    expect(bender.sizing.resources.requests.cpu).toBe("4000m");
     expect(bender.sizing.monthlyCostUsd.compute).toBeGreaterThan(0);
     expect(bender.desiredStatus).toBe("running");
   });
@@ -1501,24 +1501,24 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
     const g = res.body.gateways.find((x: any) => x.gatewayId === "default");
-    expect(g.sizing.tier).toBe("small");
+    expect(g.sizing.tier).toBe("l");
     expect(g.sizing.resolvedFrom).toBe("class-default");
   });
 
   it("reports compute=0 for paused gateways (no replicas → no node consumption)", async () => {
     seedDurableGateway("paused", {
       heartbeat: { status: "ready", mountedCustomers: [] },
-      root: { sizingTier: "large", desiredStatus: "paused" },
+      root: { sizingTier: "l", desiredStatus: "paused" },
     });
     seedDurableGateway("running", {
       heartbeat: { status: "ready", mountedCustomers: [] },
-      root: { sizingTier: "large" },
+      root: { sizingTier: "l" },
     });
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
     const paused = res.body.gateways.find((g: any) => g.gatewayId === "paused");
     const running = res.body.gateways.find((g: any) => g.gatewayId === "running");
-    expect(paused.sizing.tier).toBe("large");
+    expect(paused.sizing.tier).toBe("l");
     expect(paused.sizing.monthlyCostUsd.compute).toBe(0);
     expect(paused.sizing.monthlyCostUsd.perBuilderAtTarget).toBe(0);
     expect(running.sizing.monthlyCostUsd.compute).toBeGreaterThan(0);
@@ -1534,7 +1534,7 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
         imageProfile: "operator",
         ownerUid: "uid-bender",
         builderSlug: "bender",
-        sizingTier: "nano",
+        sizingTier: "m",
         persistence: {
           enabled: true,
           storageClassName: "premium-rwo",
@@ -1560,7 +1560,7 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
   it("keeps on-demand pricing when a gateway is explicitly on the on-demand compute class", async () => {
     seedDurableGateway("dedicated", {
       heartbeat: { status: "ready", mountedCustomers: [] },
-      root: { sizingTier: "nano", computeClass: "octogee-gateway" },
+      root: { sizingTier: "m", computeClass: "octogee-gateway" },
     });
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
@@ -1579,7 +1579,7 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
   it("defaults shared gateways to Spot pricing", async () => {
     seedDurableGateway("shared", {
       heartbeat: { status: "ready", mountedCustomers: [] },
-      root: { sizingTier: "nano" },
+      root: { sizingTier: "m" },
     });
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
@@ -1597,19 +1597,19 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
   it("rolls up stats.fleetCost.byTier and stats.fleetCost.monthlyUsd across the fleet", async () => {
     seedDurableGateway("bender", {
       heartbeat: { status: "ready", mountedCustomers: [] },
-      root: { sizingTier: "large" },
+      root: { sizingTier: "l" },
     });
     seedDurableGateway("default", {
       heartbeat: { status: "ready", mountedCustomers: [] },
-      root: { sizingTier: "medium" },
+      root: { sizingTier: "m" },
     });
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
     const fc = res.body.stats.fleetCost;
     expect(fc).toBeDefined();
-    expect(fc.byTier.large?.count).toBe(1);
-    expect(fc.byTier["medium"]?.count).toBe(1);
-    expect(fc.monthlyUsd).toBe(fc.byTier.large.subtotalUsd + fc.byTier["medium"].subtotalUsd);
+    expect(fc.byTier.l?.count).toBe(1);
+    expect(fc.byTier["m"]?.count).toBe(1);
+    expect(fc.monthlyUsd).toBe(fc.byTier.l.subtotalUsd + fc.byTier["m"].subtotalUsd);
   });
 });
 
@@ -1679,12 +1679,12 @@ describe("PATCH /api/admin/gateways/:id — update desired state", () => {
     const app = buildApp();
     const res = await request(app)
       .patch("/api/admin/gateways/canary")
-      .send({ sizingTier: "large" });
+      .send({ sizingTier: "l" });
     expect(res.status).toBe(202);
     const update = calls.find(
       (c) => c.collection === "gateways" && c.op === "doc.update",
     );
-    expect(update?.data).toMatchObject({ sizingTier: "large" });
+    expect(update?.data).toMatchObject({ sizingTier: "l" });
   });
 
   it("rejects unknown sizingTier values with 400 (does not write garbage to Firestore)", async () => {
