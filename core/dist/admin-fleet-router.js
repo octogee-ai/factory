@@ -806,9 +806,8 @@ function emptyDirGatewayStorage() {
 function projectGatewayStorage(_gatewayId, _glmDoc) {
     return emptyDirGatewayStorage();
 }
-// Gateway pods select nothing but `cloud.google.com/gke-spot` since the custom
-// ComputeClasses were retired: Spot-only, no on-demand fallback rung. Pricing is
-// therefore always the Spot rate.
+// Gateway pods select nothing but `cloud.google.com/gke-spot`: Spot-only, with
+// no on-demand fallback rung, so pricing is always the Spot rate.
 export function projectGatewayReservation(_glmDoc) {
     return { type: "spot", priceMultiplier: SPOT_PRICE_MULTIPLIER };
 }

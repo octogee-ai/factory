@@ -1,8 +1,7 @@
 import { TIER_PRESETS, } from "./sizing.js";
-// Published GKE Autopilot Pod rates for the DEFAULT general-purpose compute
-// class (us-central1 list price), which is what every workload runs on now that
-// the custom ComputeClasses are retired. Excludes egress, LB, GCS, Firestore -
-// those are app-level metering territory (Phase 5a).
+// Published GKE Autopilot Pod rates for the default general-purpose class
+// (us-central1 list price), which is what every workload is billed at. Excludes
+// egress, LB, GCS, Firestore - those are app-level metering territory (Phase 5a).
 export const AUTOPILOT_GENERAL_PURPOSE_VCPU_USD_PER_HR = 0.0445;
 export const AUTOPILOT_GENERAL_PURPOSE_GIB_USD_PER_HR = 0.0049225;
 export const HOURS_PER_MONTH = 730;
