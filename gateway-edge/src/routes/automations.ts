@@ -20,58 +20,24 @@ const MAX_CRON_INTERVAL_MS = 365 * 24 * 60 * 60 * 1_000;
 
 const HEARTBEAT_FIELDS = new Set([
   "every",
-  "activeHours",
-  "model",
-  "session",
   "target",
-  "to",
-  "accountId",
   "prompt",
-  "ackMaxChars",
-  "suppressToolErrorWarnings",
-  "timeoutSeconds",
   "lightContext",
-  "isolatedSession",
-  "skipWhenBusy",
-  "includeReasoning",
 ]);
 
 const HEARTBEAT_STRING_FIELDS = new Set([
   "every",
-  "model",
-  "session",
   "target",
-  "to",
-  "accountId",
   "prompt",
 ]);
 
-const HEARTBEAT_BOOLEAN_FIELDS = new Set([
-  "suppressToolErrorWarnings",
-  "lightContext",
-  "isolatedSession",
-  "skipWhenBusy",
-  "includeReasoning",
-]);
-
-const HEARTBEAT_NUMBER_FIELDS = new Set(["ackMaxChars", "timeoutSeconds"]);
+const HEARTBEAT_BOOLEAN_FIELDS = new Set(["lightContext"]);
 
 export interface AutomationHeartbeat {
   every: string;
-  activeHours?: { start?: string; end?: string; timezone?: string };
-  model?: string;
-  session?: string;
   target?: string;
-  to?: string;
-  accountId?: string;
   prompt?: string;
-  ackMaxChars?: number;
-  suppressToolErrorWarnings?: boolean;
-  timeoutSeconds?: number;
   lightContext?: boolean;
-  isolatedSession?: boolean;
-  skipWhenBusy?: boolean;
-  includeReasoning?: boolean;
 }
 
 export interface AutomationsRouterDeps {
@@ -106,25 +72,23 @@ function requestedGatewayId(req: Request): string | null {
   return isValidGatewayId(gatewayId) ? gatewayId : null;
 }
 
-function heartbeatFromConfig(config: unknown, agentId: string): AutomationHeartbeat | null {
+function heartbeatRecordFromConfig(
+  config: unknown,
+  agentId: string,
+): Record<string, unknown> | null {
   const agents = record(config)?.agents;
   const list = record(agents)?.list;
   if (!Array.isArray(list)) return null;
   const agent = list.find((candidate) => record(candidate)?.id === agentId);
-  const heartbeat = record(record(agent)?.heartbeat);
+  return record(record(agent)?.heartbeat);
+}
+
+function heartbeatFromConfig(config: unknown, agentId: string): AutomationHeartbeat | null {
+  const heartbeat = heartbeatRecordFromConfig(config, agentId);
   if (!heartbeat) return null;
   return sanitizeHeartbeat(Object.fromEntries(
     Object.entries(heartbeat).filter(([key]) => HEARTBEAT_FIELDS.has(key)),
   ));
-}
-
-function validActiveHours(value: unknown): value is NonNullable<AutomationHeartbeat["activeHours"]> {
-  const activeHours = record(value);
-  if (!activeHours) return false;
-  const allowed = new Set(["start", "end", "timezone"]);
-  return Object.entries(activeHours).every(
-    ([key, entry]) => allowed.has(key) && typeof entry === "string",
-  );
 }
 
 export function sanitizeHeartbeat(value: unknown): AutomationHeartbeat | null {
@@ -140,8 +104,7 @@ function validHeartbeatField(key: string, value: unknown): boolean {
   if (!HEARTBEAT_FIELDS.has(key)) return false;
   if (HEARTBEAT_STRING_FIELDS.has(key)) return typeof value === "string";
   if (HEARTBEAT_BOOLEAN_FIELDS.has(key)) return typeof value === "boolean";
-  if (HEARTBEAT_NUMBER_FIELDS.has(key)) return typeof value === "number" && Number.isInteger(value) && value >= 0;
-  return key !== "activeHours" || validActiveHours(value);
+  return false;
 }
 
 function coachAgentId(slug: string): string {
@@ -518,12 +481,29 @@ async function heartbeatUpdate(
   const baseHash = nonEmptyString(body.baseHash);
   const heartbeat = sanitizeHeartbeat(body.heartbeat);
   if (!baseHash || !heartbeat) return brokerError(400, "invalid heartbeat update");
-  const patch = { agents: { list: [{ id: agentId, heartbeat }] } };
   const acquired = await acquireSystemConfigMutationLease({ openclawDir: deps.openclawDir() });
   if (!acquired.ok) {
     throw new Error("system config writer lock is busy");
   }
   try {
+    const configResult = record(await deps.invoke("config.get", {}));
+    const currentHash = nonEmptyString(configResult?.hash);
+    if (!configResult || !currentHash) throw new Error("config.get returned no config hash");
+    if (currentHash !== baseHash) return brokerError(409, "config_changed");
+    const currentHeartbeat = heartbeatRecordFromConfig(configResult.config, agentId) ?? {};
+    const removedFields = Object.fromEntries(
+      Object.keys(currentHeartbeat)
+        .filter((key) => !(key in heartbeat))
+        .map((key) => [key, null]),
+    );
+    const patch = {
+      agents: {
+        list: [{
+          id: agentId,
+          heartbeat: { ...heartbeat, ...removedFields },
+        }],
+      },
+    };
     return brokerResult(await deps.invoke("config.patch", { raw: JSON.stringify(patch), baseHash }));
   } finally {
     await acquired.lease.release();
