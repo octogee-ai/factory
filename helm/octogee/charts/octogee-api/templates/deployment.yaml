@@ -24,10 +24,6 @@ spec:
       terminationGracePeriodSeconds: 30
       serviceAccountName: {{ .Values.serviceAccountName }}
       automountServiceAccountToken: false
-      {{- with .Values.global.platformComputeClass }}
-      nodeSelector:
-        cloud.google.com/compute-class: {{ . | quote }}
-      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

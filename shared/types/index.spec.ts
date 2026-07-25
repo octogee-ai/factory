@@ -23,7 +23,7 @@ describe("shared type barrel", () => {
     expect(acceptanceDocId("terms", currentVersion("terms"))).toBe("terms@2026-07-23");
     expect(GATEWAY_CLASSES).toContain("operator");
     expect(resolveGatewayClass({ gatewayClass: "operator" })).toBe("operator");
-    expect(resolveSizingTier({ sizingTier: "medium" }).tier).toBe("medium");
+    expect(resolveSizingTier({ sizingTier: "m" }).tier).toBe("m");
     expect(modelCredentialEntryById("openai").displayName).toBe("OpenAI API key");
     expect(OPENCLAW_PROTOCOL_VERSION).toBe(4);
     expect(new OpenclawWireError("timeout", "late").code).toBe("timeout");

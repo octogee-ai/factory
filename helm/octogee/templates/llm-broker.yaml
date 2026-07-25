@@ -37,10 +37,6 @@ spec:
     spec:
       terminationGracePeriodSeconds: 30
       serviceAccountName: {{ .Values.llmBroker.serviceAccountName }}
-      {{- with .Values.global.platformComputeClass }}
-      nodeSelector:
-        cloud.google.com/compute-class: {{ . | quote }}
-      {{- end }}
       automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true

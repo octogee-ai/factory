@@ -1330,12 +1330,11 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
   });
 
   // Gateways must NOT carry cluster-autoscaler.kubernetes.io/safe-to-evict:"false".
-  // GKE Autopilot maps it to the extended-duration-pods feature, which it refuses
-  // to grant to Pods that target a custom compute class (our nodeSelector pins
-  // cloud.google.com/compute-class) — so it warned on every deploy and the 7-day
-  // pin never took. It was a dead no-op: the real voluntary-disruption guard is
-  // the maxUnavailable:1 PDB, unchanged here. All gateways are Spot + emptyDir.
-  it("operator gateway sets no safe-to-evict (extended-duration is unsupported under the CCC and would defeat right-sizing)", () => {
+  // GKE Autopilot maps it to the extended-duration-pods feature, which it never
+  // grants to Spot Pods — so it warned on every deploy and the 7-day pin never
+  // took. The real voluntary-disruption guard is the maxUnavailable:1 PDB,
+  // unchanged here. All gateways are Spot + emptyDir.
+  it("operator gateway sets no safe-to-evict (extended-duration is unsupported on Spot)", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
       profile: "operator",

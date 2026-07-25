@@ -101,22 +101,6 @@ end-to-end on first real exercise.
 {{- end }}
 
 {{/*
-Resolve the GKE ComputeClass. Env values can map class -> compute class so
-shared/builder move to Spot without moving operator/Bender yet. Falls back to
-the legacy single `.Values.computeClass`.
-*/}}
-{{- define "octogee-gateway.computeClass" -}}
-{{- $class := include "octogee-gateway.gatewayClass" . -}}
-{{- if .Values.computeClassOverride -}}
-{{- .Values.computeClassOverride -}}
-{{- else if and .Values.computeClassByClass (index .Values.computeClassByClass $class) -}}
-{{- index .Values.computeClassByClass $class -}}
-{{- else -}}
-{{- .Values.computeClass | default "Performance" -}}
-{{- end -}}
-{{- end }}
-
-{{/*
 Resolve the effective sizing tier for this gateway instance.
 
 Precedence:

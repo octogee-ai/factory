@@ -42,10 +42,6 @@ function createHarness(): {
     join(repoRoot, "scripts/setup-monitoring-iap.sh"),
     join(scripts, "setup-monitoring-iap.sh"),
   );
-  copyFileSync(
-    join(repoRoot, "scripts/lib/monitoring-platform-preflight.sh"),
-    join(scripts, "lib/monitoring-platform-preflight.sh"),
-  );
   executable(
     join(scripts, "lib/deployment-target.sh"),
     `octogee_load_deployment_target() {
@@ -85,10 +81,9 @@ exit 0
     `#!/usr/bin/env bash
 if [[ "$*" == "config current-context" ]]; then
   printf '%s\n' gke_us-west1_octogee
-elif [[ "$*" == *"get computeclass octogee-platform-test-spot"* ]]; then
-  printf 'computeclass:%s\n' "$OCTOGEE_MONITORING_COMPUTE_CLASS" >>"$OCTOGEE_MONITORING_TEST_LOG"
-  [[ "$OCTOGEE_MONITORING_COMPUTE_CLASS" != missing ]] || exit 1
-  [[ "$OCTOGEE_MONITORING_COMPUTE_CLASS" != unhealthy ]] && printf '%s' True || printf '%s' False
+elif [[ "$*" == *"get computeclass"* ]]; then
+  printf 'computeclass:%s\n' "$*" >>"$OCTOGEE_MONITORING_TEST_LOG"
+  printf '%s' True
 fi
 `,
   );
@@ -107,7 +102,6 @@ printf 'helm:%s\n' "$*" >>"$OCTOGEE_MONITORING_TEST_LOG"
 }
 
 function runHarness(
-  computeClass: "healthy" | "missing" | "unhealthy",
   args: string[] = [],
   entrypoint: "setup" | "iap" = "setup",
 ): { status: number | null; calls: string[]; stderr: string } {
@@ -122,7 +116,6 @@ function runHarness(
     {
       env: {
         ...process.env,
-        OCTOGEE_MONITORING_COMPUTE_CLASS: computeClass,
         OCTOGEE_MONITORING_TEST_LOG: harness.log,
         PATH: `${join(harness.root, "bin")}:${process.env.PATH ?? "/usr/bin:/bin"}`,
       },
@@ -145,33 +138,26 @@ afterEach(() => {
 });
 
 describe("monitoring setup", () => {
-  it.each(["missing", "unhealthy"] as const)(
-    "fails before secrets or Helm when the target platform ComputeClass is %s",
-    (computeClass) => {
-      const result = runHarness(computeClass);
-
-      expect(result.status).toBe(1);
-      expect(result.calls).toEqual([`computeclass:${computeClass}`]);
-      expect(result.stderr).toContain(
-        "Platform ComputeClass is unavailable or unhealthy",
-      );
-    },
-  );
-
-  it("preflights the healthy target platform ComputeClass before mutation", () => {
-    const result = runHarness("healthy");
+  it("runs secrets then Helm with no compute-class preflight", () => {
+    const result = runHarness();
 
     expect(result.status).toBe(0);
-    expect(result.calls[0]).toBe("computeclass:healthy");
-    expect(result.calls[1]).toBe("secrets:--target=test-west");
-    expect(result.calls[2]).toContain(
-      "helm:upgrade --install grafana",
-    );
+    expect(result.calls[0]).toBe("secrets:--target=test-west");
+    expect(result.calls[1]).toContain("helm:upgrade --install grafana");
+    expect(result.calls.every((call) => !call.startsWith("computeclass:"))).toBe(true);
     expect(result.calls.at(-1)).toBe("verify:--target=test-west");
   });
 
-  it("keeps uninstall available when the platform ComputeClass is already absent", () => {
-    const result = runHarness("missing", ["--uninstall"]);
+  it("passes no compute class to the monitoring Helm release", () => {
+    const result = runHarness();
+    const helmCall = result.calls.find((call) => call.startsWith("helm:upgrade")) ?? "";
+
+    expect(helmCall).not.toContain("platformComputeClass");
+    expect(helmCall).not.toContain("compute-class");
+  });
+
+  it("keeps uninstall available", () => {
+    const result = runHarness(["--uninstall"]);
 
     expect(result.status).toBe(0);
     expect(result.calls).toEqual([
@@ -179,30 +165,13 @@ describe("monitoring setup", () => {
     ]);
   });
 
-  it.each(["missing", "unhealthy"] as const)(
-    "fails the IAP path before secrets, static IP, or Helm when the target platform ComputeClass is %s",
-    (computeClass) => {
-      const result = runHarness(computeClass, [], "iap");
-
-      expect(result.status).toBe(1);
-      expect(result.calls).toEqual([`computeclass:${computeClass}`]);
-      expect(result.stderr).toContain(
-        "Platform ComputeClass is unavailable or unhealthy",
-      );
-    },
-  );
-
-  it("preflights the healthy IAP path before secrets, static IP, and Helm", () => {
-    const result = runHarness("healthy", [], "iap");
+  it("runs the IAP path through secrets, static IP, then Helm", () => {
+    const result = runHarness([], "iap");
 
     expect(result.status).toBe(0);
-    expect(result.calls[0]).toBe("computeclass:healthy");
-    expect(result.calls[1]).toBe("secrets:--target=test-west --iap");
-    expect(result.calls[2]).toContain(
-      "static-ip:compute addresses describe grafana-ip",
-    );
-    expect(
-      result.calls.findIndex((call) => call.startsWith("helm:")),
-    ).toBeGreaterThan(2);
+    expect(result.calls[0]).toBe("secrets:--target=test-west --iap");
+    expect(result.calls[1]).toContain("static-ip:compute addresses describe grafana-ip");
+    expect(result.calls.findIndex((call) => call.startsWith("helm:"))).toBeGreaterThan(1);
+    expect(result.calls.every((call) => !call.startsWith("computeclass:"))).toBe(true);
   });
 });

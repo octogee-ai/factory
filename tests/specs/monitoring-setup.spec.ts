@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseAllDocuments } from "yaml";
@@ -21,10 +21,6 @@ const setupMonitoringIap = readFileSync(
   resolve(root, "scripts/setup-monitoring-iap.sh"),
   "utf8",
 );
-const monitoringPlatformPreflight = readFileSync(
-  resolve(root, "scripts/lib/monitoring-platform-preflight.sh"),
-  "utf8",
-);
 
 function chart(path: string): string {
   return readFileSync(resolve(root, "helm/monitoring", path), "utf8");
@@ -39,10 +35,6 @@ function renderedDeployment(name: string): Record<string, unknown> {
       resolve(root, "helm/monitoring"),
       "--namespace",
       "monitoring",
-      "--set-string",
-      "platformComputeClass=octogee-platform-test-spot",
-      "--set-string",
-      "grafana.nodeSelector.cloud\\.google\\.com/compute-class=octogee-platform-test-spot",
     ],
     { encoding: "utf8" },
   );
@@ -73,44 +65,20 @@ describe("monitoring setup", () => {
     expect(setupMonitoringIap).not.toContain("gcloud compute addresses create");
   });
 
-  it("passes the selected platform ComputeClass to monitoring Helm and rejects an active target without one", () => {
-    expect(setupMonitoring).toContain('platformComputeClass=$TARGET_PLATFORM_COMPUTE_CLASS');
-    expect(setupMonitoring).toContain('grafana.nodeSelector.cloud\\\\.google\\\\.com/compute-class=$TARGET_PLATFORM_COMPUTE_CLASS');
-    expect(monitoringPlatformPreflight).toContain(
-      "requires a platform ComputeClass",
-    );
-    expect(monitoringPlatformPreflight).toContain(
-      'kubectl get computeclass "$TARGET_PLATFORM_COMPUTE_CLASS"',
-    );
-    expect(monitoringPlatformPreflight).toContain(
-      "Platform ComputeClass is unavailable or unhealthy",
-    );
-    expect(setupMonitoring).toContain(
-      'source "$SCRIPT_DIR/lib/monitoring-platform-preflight.sh"',
-    );
-    expect(setupMonitoringIap).toContain(
-      'source "$SCRIPT_DIR/lib/monitoring-platform-preflight.sh"',
-    );
-    const setupPreflight = setupMonitoring.indexOf(
-      "octogee_preflight_monitoring_platform_compute_class",
-    );
-    const secretMaterialization = setupMonitoring.indexOf(
-      '"$SCRIPT_DIR/setup-monitoring-secrets.sh"',
-    );
-    const iapPreflight = setupMonitoringIap.indexOf(
-      "octogee_preflight_monitoring_platform_compute_class",
-    );
+  it("hands monitoring Helm no compute class and keeps no ComputeClass preflight", () => {
+    for (const script of [setupMonitoring, setupMonitoringIap]) {
+      expect(script).not.toContain("platformComputeClass");
+      expect(script).not.toContain("compute-class");
+      expect(script).not.toContain("octogee_preflight_monitoring_platform_compute_class");
+      expect(script).not.toContain("monitoring-platform-preflight.sh");
+    }
+    expect(existsSync(resolve(root, "scripts/lib/monitoring-platform-preflight.sh"))).toBe(false);
     const iapSecretMaterialization = setupMonitoringIap.indexOf(
       '"$SCRIPT_DIR/setup-monitoring-secrets.sh"',
     );
-    const staticIpCheck = setupMonitoringIap.indexOf(
-      "gcloud compute addresses describe",
-    );
-    expect(setupPreflight).toBeGreaterThan(-1);
-    expect(secretMaterialization).toBeGreaterThan(setupPreflight);
-    expect(iapPreflight).toBeGreaterThan(-1);
-    expect(iapSecretMaterialization).toBeGreaterThan(iapPreflight);
-    expect(staticIpCheck).toBeGreaterThan(iapPreflight);
+    const staticIpCheck = setupMonitoringIap.indexOf("gcloud compute addresses describe");
+    expect(iapSecretMaterialization).toBeGreaterThan(-1);
+    expect(staticIpCheck).toBeGreaterThan(iapSecretMaterialization);
   });
 
   it("uses the tested secret materializer instead of a workstation environment file", () => {
@@ -224,10 +192,6 @@ describe("monitoring setup", () => {
         resolve(root, "helm/monitoring"),
         "--namespace",
         "monitoring",
-        "--set-string",
-        "platformComputeClass=octogee-platform-test-spot",
-        "--set-string",
-        "grafana.nodeSelector.cloud\\.google\\.com/compute-class=octogee-platform-test-spot",
       ],
       { encoding: "utf8" },
     );
@@ -247,9 +211,8 @@ describe("monitoring setup", () => {
     expect(verifyMonitoring).toContain("test -w /var/lib/grafana");
   });
 
-  it("places every monitoring workload on the target platform ComputeClass", () => {
+  it("places every monitoring workload without selecting a compute class", () => {
     const expectedSelector = {
-      "cloud.google.com/compute-class": "octogee-platform-test-spot",
       "kubernetes.io/os": "linux",
     };
 

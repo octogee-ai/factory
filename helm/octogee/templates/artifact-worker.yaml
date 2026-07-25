@@ -34,9 +34,6 @@ spec:
       terminationGracePeriodSeconds: 30
       nodeSelector:
         kubernetes.io/arch: amd64
-        {{- with .Values.global.platformComputeClass }}
-        cloud.google.com/compute-class: {{ . | quote }}
-        {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

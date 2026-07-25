@@ -97,7 +97,7 @@ describe("customerMigrationV2GatewayRootFence", () => {
     profile: "operator",
     gatewayClass: "operator",
     imageProfile: "operator",
-    sizingTier: "small",
+    sizingTier: "l",
     computeClass: null,
     gcpProject: null,
     gatewayContainerSecurityContext: null,
