@@ -141,6 +141,14 @@ spec:
           annotations:
             summary: "PVC {{ $labels.persistentvolumeclaim }} is {{ $value | humanizePercentage }} full"
             description: "PVC in {{ $labels.namespace }} is above 85% capacity. Expand or clean up."
+        - alert: PodStuckPending
+          expr: kube_pod_status_phase{namespace=~"octogee|octogee-west|octogee-test|octogee-test-west", phase="Pending"} == 1
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pod {{ $labels.pod }} has been Pending for 15m"
+            description: "Pod {{ $labels.pod }} in {{ $labels.namespace }} has been Pending for 15+ minutes; normal Autopilot provisioning completes in minutes. Read the pod's scheduler events first. An unsatisfiable compute class or exhausted regional capacity/quota leaves a pod Pending with no scale-up coming, and an unpullable image does the same after scheduling succeeds."
     - name: octogee.runners
       rules:
         - alert: RunnerDown
