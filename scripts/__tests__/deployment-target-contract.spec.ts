@@ -474,13 +474,16 @@ describe("deployment target consumers", () => {
     );
   });
 
-  it("prints a full-rebuild recipe that requires an immutable default-gateway tag", () => {
+  it("prints a full-rebuild recipe that requires a digest-qualified default-gateway image", () => {
     const teardown = source("scripts/teardown-env.sh");
 
-    expect(teardown).toContain("BOOTSTRAP_GATEWAY_TAG=<immutable release SHA>");
     expect(teardown).toContain(
-      "glm-controller.bootstrapDefaultGateway.imageTag=\\$BOOTSTRAP_GATEWAY_TAG",
+      "BOOTSTRAP_GATEWAY_IMAGE=<tested release SHA>@sha256:<octogee-gateway digest from release receipt>",
     );
+    expect(teardown).toContain(
+      "glm-controller.bootstrapDefaultGateway.imageTag=\\$BOOTSTRAP_GATEWAY_IMAGE",
+    );
+    expect(teardown).not.toContain("BOOTSTRAP_GATEWAY_TAG=");
     expect(teardown).not.toContain(
       "Cowboy auto-installs octogee-gw-default after step 2",
     );

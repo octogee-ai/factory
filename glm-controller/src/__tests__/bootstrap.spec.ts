@@ -174,6 +174,56 @@ describe("durable default gateway bootstrap", () => {
       [...deps.store.keys()].filter((path) => path.startsWith("glmOperations/")),
     ).toEqual([]);
   });
+
+  it("leaves a pruned ledger untouched when the referenced release survives (#2821)", async () => {
+    vi.stubEnv("BOOTSTRAP_DEFAULT_GATEWAY", "true");
+    vi.stubEnv(
+      "BOOTSTRAP_IMAGE_REPOSITORY",
+      "us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+    );
+    vi.stubEnv("BOOTSTRAP_IMAGE_TAG", "canonical-test");
+    const deps = controllerDeps({
+      "gateways/default": {
+        gatewayId: "default",
+        latestRelease: 117,
+        desiredRelease: 117,
+      },
+      "gateways/default/releases/117": {
+        gatewayId: "default",
+        release: 117,
+      },
+    });
+
+    await bootstrapDefaultGateway(deps);
+
+    expect(deps.store.has("gateways/default/releases/1")).toBe(false);
+    expect(deps.ensureGatewayAuthSecret).not.toHaveBeenCalled();
+    expect(
+      [...deps.store.keys()].filter((path) => path.startsWith("glmOperations/")),
+    ).toEqual([]);
+  });
+
+  it("fails closed when the durable root references a release that is missing (#2821)", async () => {
+    vi.stubEnv("BOOTSTRAP_DEFAULT_GATEWAY", "true");
+    vi.stubEnv(
+      "BOOTSTRAP_IMAGE_REPOSITORY",
+      "us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+    );
+    vi.stubEnv("BOOTSTRAP_IMAGE_TAG", "canonical-test");
+    const deps = controllerDeps({
+      "gateways/default": {
+        gatewayId: "default",
+        latestRelease: 117,
+        desiredRelease: 117,
+      },
+    });
+
+    await expect(bootstrapDefaultGateway(deps)).rejects.toThrow(
+      "default gateway bootstrap found durable root gateways/default referencing missing release 117",
+    );
+
+    expect(deps.ensureGatewayAuthSecret).not.toHaveBeenCalled();
+  });
 });
 
 describe("versionFromImageTag", () => {

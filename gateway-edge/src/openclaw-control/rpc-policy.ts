@@ -447,26 +447,6 @@ export function evaluateOpenClawControlRpc(
   return { allowed: false, category: "forbidden_mutation", reason: METHOD_UNAVAILABLE };
 }
 
-export function evaluateNativeOpenClawControlRpc(
-  frame: unknown,
-  context: Pick<OpenClawControlRpcPolicyContext, "installedMethods">,
-): OpenClawControlRpcDecision {
-  const request = record(frame);
-  if (!request || request.type !== "req" || !boundedString(request.id, 256) ||
-    !boundedString(request.method, 256) || !record(request.params)) {
-    return { allowed: false, category: "unknown", reason: "invalid-frame" };
-  }
-  const method = request.method as string;
-  if (!context.installedMethods.has(method)) {
-    return { allowed: false, category: "unknown", reason: METHOD_UNAVAILABLE };
-  }
-  let category: OpenClawControlRpcCategory = "unknown";
-  if (CONFIG_MUTATION_METHODS.has(method)) category = "config_mutation";
-  else if (method === "tools.invoke") category = "tools_invoke";
-  else if (READ_METHODS.has(method)) category = "read";
-  return { allowed: true, category, outbound: structuredClone(request) };
-}
-
 export function evaluateDelegatedOpenClawControlRpc(
   frame: unknown,
   context: OpenClawControlRpcPolicyContext,
@@ -488,6 +468,16 @@ export function evaluateDelegatedOpenClawControlRpc(
       : { allowed: false, category: decision.category, reason: "config-unsafe-path" };
   }
   return { allowed: false, category: decision.category, reason: METHOD_UNAVAILABLE };
+}
+
+export function evaluateOpenClawControlRpcForProfile(
+  frame: unknown,
+  context: OpenClawControlRpcPolicyContext,
+  profile: OpenClawBrokerProfile,
+): OpenClawControlRpcDecision {
+  return profile === "delegated-read" || profile === "delegated-config"
+    ? evaluateDelegatedOpenClawControlRpc(frame, context, profile)
+    : evaluateOpenClawControlRpc(frame, context);
 }
 
 export function projectOpenClawHelloForProfile(

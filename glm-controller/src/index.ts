@@ -2141,20 +2141,26 @@ export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<voi
 
   const gatewayId = "default";
   const gatewayRef = deps.db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
-  const releaseRef = gatewayRef
-    .collection(GATEWAY_RELEASES_SUBCOLLECTION)
-    .doc("1");
   const durableDefaultExists = async (): Promise<boolean> => {
-    const [gateway, release] = await Promise.all([
-      gatewayRef.get(),
-      releaseRef.get(),
-    ]);
-    if (gateway.exists !== release.exists) {
+    const gateway = await gatewayRef.get();
+    if (!gateway.exists) return false;
+    const gatewayData = gateway.data() as { desiredRelease?: unknown } | undefined;
+    const desiredRelease = gatewayData?.desiredRelease;
+    if (typeof desiredRelease !== "number") {
       throw new Error(
-        "default gateway bootstrap found an incomplete durable root/release pair",
+        `default gateway bootstrap found durable root gateways/${gatewayId} with a non-numeric desiredRelease`,
       );
     }
-    return gateway.exists;
+    const release = await gatewayRef
+      .collection(GATEWAY_RELEASES_SUBCOLLECTION)
+      .doc(String(desiredRelease))
+      .get();
+    if (!release.exists) {
+      throw new Error(
+        `default gateway bootstrap found durable root gateways/${gatewayId} referencing missing release ${desiredRelease}`,
+      );
+    }
+    return true;
   };
 
   if (await durableDefaultExists()) {
