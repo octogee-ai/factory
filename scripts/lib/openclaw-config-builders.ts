@@ -25,7 +25,7 @@ function normalizedBaseUrl(value: string | undefined): string {
 }
 
 export function platformOpenAiEmbeddingSecretId(agentId: string): string {
-  return `agent-model-token-openai-${agentId}`;
+  return `agent-embedding-token-openai-${agentId}`;
 }
 
 export function platformOpenAiEmbeddingMemorySearch(
@@ -52,7 +52,7 @@ export function platformOpenAiEmbeddingsEnabled(
   return /^(1|true|yes|on)$/iu.test(env.OPENAI_EMBEDDINGS_ENABLED ?? "");
 }
 
-export const PLATFORM_EMBEDDING_SECRET_PREFIX = "agent-model-token-openai-";
+export const PLATFORM_EMBEDDING_SECRET_PREFIX = "agent-embedding-token-openai-";
 const OPENCLAW_REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
 
 function isRecord(value: unknown): value is Record<string, unknown> {

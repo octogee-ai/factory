@@ -424,7 +424,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
         apiKey: {
           source: "exec",
           provider: "gcp-secret-manager",
-          id: "agent-model-token-openai-octogee-alice-coach",
+          id: "agent-embedding-token-openai-octogee-alice-coach",
         },
       },
       model: "text-embedding-3-small",

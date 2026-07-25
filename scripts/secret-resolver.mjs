@@ -109,6 +109,8 @@ function parseByokApiKeyId(id) {
 // id IS the per-agent scope — and the slug is allowlisted exactly like byok.
 const AGENT_MODEL_TOKEN_ID_RE =
   /^agent-model-token-(?:(?<provider>openrouter|openai)-)?(?<agentId>octogee-(?<slug>[a-z0-9][a-z0-9-]{0,62})-coach)$/;
+const AGENT_EMBEDDING_TOKEN_ID_RE =
+  /^agent-embedding-token-openai-(?<agentId>octogee-(?<slug>[a-z0-9][a-z0-9-]{0,62})-coach)$/;
 
 /** Scan AGENTS_DIR once at startup for the set of provisioned slugs. The
  *  gateway pod spawns a fresh resolver per resolve call (per OpenClaw's
@@ -149,13 +151,15 @@ function audit(line) {
 }
 
 const VALID_ID_GRAMMAR_MESSAGE =
-  "id does not match byok-{slug}-{provider}[/version], agent-model-token-octogee-{slug}-coach, or agent-model-token-{openrouter|openai}-octogee-{slug}-coach";
+  "id does not match byok-{slug}-{provider}[/version], an agent model token, or an OpenAI embedding token";
 
 function scopedSlugForId(id) {
   const byok = parseByokApiKeyId(id);
   if (byok) return byok.slug;
   const agentToken = id.match(AGENT_MODEL_TOKEN_ID_RE);
   if (agentToken?.groups) return agentToken.groups.slug;
+  const embeddingToken = id.match(AGENT_EMBEDDING_TOKEN_ID_RE);
+  if (embeddingToken?.groups) return embeddingToken.groups.slug;
   return null;
 }
 
@@ -203,6 +207,7 @@ export async function resolveOne(id, deps = {}) {
   // other id is a byok-* key. Both routes return { value } and roster-scope
   // server-side (the resolver holds no GCP creds and no agent identity).
   const agentToken = id.match(AGENT_MODEL_TOKEN_ID_RE);
+  const embeddingToken = id.match(AGENT_EMBEDDING_TOKEN_ID_RE);
   let route = "/internal/byok/api-key";
   let payload = { id };
   if (agentToken) {
@@ -210,6 +215,13 @@ export async function resolveOne(id, deps = {}) {
     payload = {
       agentId: agentToken.groups.agentId,
       ...(agentToken.groups.provider ? { provider: agentToken.groups.provider } : {}),
+    };
+  } else if (embeddingToken) {
+    route = "/internal/byok/agent-model-token";
+    payload = {
+      agentId: embeddingToken.groups.agentId,
+      provider: "openai",
+      purpose: "embeddings",
     };
   }
   const res = await fetchImpl(`${BROKER_BASE_URL}${route}`, {

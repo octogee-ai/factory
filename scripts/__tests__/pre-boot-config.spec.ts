@@ -352,7 +352,7 @@ describe("applyPreBootPatches — memory search embeddings", () => {
         apiKey: {
           source: "exec",
           provider: "gcp-secret-manager",
-          id: "agent-model-token-openai-octogee-tester20-coach",
+          id: "agent-embedding-token-openai-octogee-tester20-coach",
         },
       },
       model: "text-embedding-3-small",

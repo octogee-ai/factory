@@ -205,6 +205,7 @@ describe("secret-resolver — defense-in-depth", () => {
     "agent-model-token-octogee-alice-coach",
     "agent-model-token-openrouter-octogee-alice-coach",
     "agent-model-token-openai-octogee-alice-coach",
+    "agent-embedding-token-openai-octogee-alice-coach",
   ])("accepts the known ref %s", async (id) => {
     const stdin = JSON.stringify({ protocolVersion: 1, provider: "gcp-secret-manager", ids: [id] });
     const out = await runResolver(envFor(), stdin);
@@ -293,6 +294,24 @@ describe("resolveOne — brokered byok materialization (unit, injected deps)", (
     expect(JSON.parse(seen!.init.body)).toEqual({
       agentId: "octogee-tester5-coach",
       provider: "openai",
+    });
+  });
+
+  it("routes an OpenAI embedding token with an explicit purpose", async () => {
+    let seen: { url: string; init: { body: string } } | undefined;
+    const v = await resolveOne("agent-embedding-token-openai-octogee-tester5-coach", {
+      token: "ksa-tok",
+      fetchImpl: async (url, init) => {
+        seen = { url, init };
+        return { ok: true, status: 200, json: async () => ({ value: "ogk_shared-1_embed" }) };
+      },
+    });
+    expect(v).toBe("ogk_shared-1_embed");
+    expect(seen?.url).toBe(`${BROKER_BASE_URL}/internal/byok/agent-model-token`);
+    expect(JSON.parse(seen!.init.body)).toEqual({
+      agentId: "octogee-tester5-coach",
+      provider: "openai",
+      purpose: "embeddings",
     });
   });
 

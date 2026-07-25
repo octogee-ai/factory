@@ -107,7 +107,7 @@ describe("buildCustomerAgent", () => {
         apiKey: {
           source: "exec",
           provider: "gcp-secret-manager",
-          id: "agent-model-token-openai-octogee-chris-builds-a3f2-coach",
+          id: "agent-embedding-token-openai-octogee-chris-builds-a3f2-coach",
         },
       },
       model: "text-embedding-3-small",
@@ -129,7 +129,7 @@ describe("platformOpenAiEmbeddingMemorySearch", () => {
         apiKey: {
           source: "exec",
           provider: "gcp-secret-manager",
-          id: "agent-model-token-openai-octogee-alice-coach",
+          id: "agent-embedding-token-openai-octogee-alice-coach",
         },
       },
       model: "custom-embed-v1",

@@ -74,6 +74,7 @@ const DEFAULT_OPENAI_UPSTREAM_BASE_URL = "https://api.openai.com";
 const DEFAULT_HOUSE_MODEL = "claude-haiku-4-5";
 const DEFAULT_OPENROUTER_HOUSE_MODEL = "z-ai/glm-5.2";
 const DEFAULT_OPENAI_HOUSE_MODEL = "gpt-5.4-mini";
+const PLATFORM_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small";
 const DEFAULT_BODY_LIMIT = "32mb";
 const DEFAULT_UPSTREAM_HEADER_TIMEOUT_MS = 120_000;
 const MAX_SSE_METERING_BUFFER_CHARS = 1_000_000;
@@ -96,16 +97,20 @@ const ALLOWED_OPENROUTER_ENDPOINTS = new Set([
   "POST /v1/chat/completions",
 ]);
 
-const ALLOWED_OPENAI_ENDPOINTS = new Set([
+const ALLOWED_OPENAI_MODEL_ENDPOINTS = new Set([
   "GET /v1/models",
   "POST /v1/chat/completions",
+]);
+
+const ALLOWED_OPENAI_EMBEDDING_ENDPOINTS = new Set([
   "POST /v1/embeddings",
 ]);
 
 const ALLOWED_LLM_ENDPOINTS = new Set([
   ...ALLOWED_ANTHROPIC_ENDPOINTS,
   ...ALLOWED_OPENROUTER_ENDPOINTS,
-  ...ALLOWED_OPENAI_ENDPOINTS,
+  ...ALLOWED_OPENAI_MODEL_ENDPOINTS,
+  ...ALLOWED_OPENAI_EMBEDDING_ENDPOINTS,
 ]);
 
 const FORBIDDEN_RESPONSE_HEADERS = new Set([
@@ -162,17 +167,20 @@ function allowedEndpoint(req: Request, url: URL): boolean {
 
 const ALLOWED_ENDPOINTS_BY_PROVIDER: Record<ModelBrokerProvider, ReadonlySet<string>> = {
   anthropic: ALLOWED_ANTHROPIC_ENDPOINTS,
-  openai: ALLOWED_OPENAI_ENDPOINTS,
+  openai: ALLOWED_OPENAI_MODEL_ENDPOINTS,
   openrouter: ALLOWED_OPENROUTER_ENDPOINTS,
 };
 
 function providerAllowedEndpoint(
-  provider: ModelBrokerProvider,
+  record: ModelBrokerTokenRecord,
   req: Request,
   url: URL,
 ): boolean {
   const key = `${req.method.toUpperCase()} ${url.pathname}`;
-  return ALLOWED_ENDPOINTS_BY_PROVIDER[provider].has(key);
+  return record.purpose === "embeddings"
+    ? record.provider === "openai" &&
+        ALLOWED_OPENAI_EMBEDDING_ENDPOINTS.has(key)
+    : ALLOWED_ENDPOINTS_BY_PROVIDER[record.provider].has(key);
 }
 
 function upstreamHeaders(req: Request, apiKey: string, provider: ModelBrokerProvider): Headers {
@@ -244,7 +252,8 @@ function shouldMeter(
   if (req.method.toUpperCase() !== "POST" || !upstream.ok) return false;
   return provider === "anthropic"
     ? url.pathname === "/v1/messages"
-    : url.pathname === "/v1/chat/completions";
+    : url.pathname === "/v1/chat/completions" ||
+        (provider === "openai" && url.pathname === "/v1/embeddings");
 }
 
 function readRequestMetadata(body: unknown): {
@@ -633,6 +642,8 @@ async function recordUsage(
       countsTowardSpendWindow: ctx.countsTowardSpendWindow,
       debitsCreditBalance: ctx.debitsCreditBalance,
       reportedCostUsd,
+      usageKind:
+        ctx.record.purpose === "embeddings" ? "embedding" : "model",
     });
   } catch (err) {
     ctx.onMeteringError(err);
@@ -697,6 +708,9 @@ async function rateWindowDenial(
   const rate = await input.usageStore.reserveRateWindow({
     gatewayId: input.record.gatewayId,
     ownerUid: input.record.ownerUid,
+    ...(input.record.purpose === "embeddings"
+      ? { scope: "embedding" as const }
+      : {}),
     now: input.now(),
   });
   return rate.requestCount > requestsPerMinute
@@ -738,7 +752,7 @@ async function grantForRecord(
   record: ModelBrokerTokenRecord,
   nowMs: number,
 ): Promise<OwnerModelBrokerGrant> {
-  if (!deps.resolveGrant) {
+  if (record.purpose === "embeddings" || !deps.resolveGrant) {
     return { limits: record.limits, policy: record.policy, rail: "subscription" };
   }
   return deps.resolveGrant({
@@ -1118,6 +1132,7 @@ function meteringContextFor(args: {
   usingCredits: boolean;
 }): MeteringContext {
   const { providerKey, gate, usingCredits } = args;
+  const platformFundedEmbedding = args.record.purpose === "embeddings";
   return {
     req: args.req,
     url: args.url,
@@ -1135,11 +1150,15 @@ function meteringContextFor(args: {
     // on the house — but for the free tier the house model IS the plan, so
     // its traffic debits the weekly allowance ledger.
     countsTowardSpendWindow:
+      !platformFundedEmbedding &&
       providerKey.source !== "owner_model_credential" &&
       !usingCredits &&
       (!gate.degrade || gate.degradeReason === "free"),
     debitsCreditBalance:
-      usingCredits && providerKey.source !== "owner_model_credential" && !gate.degrade,
+      !platformFundedEmbedding &&
+      usingCredits &&
+      providerKey.source !== "owner_model_credential" &&
+      !gate.degrade,
   };
 }
 
@@ -1384,8 +1403,16 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
           return;
         }
         if (!(await ownerAllowsBrokerRequest(deps, record, res))) return;
-        if (!providerAllowedEndpoint(record.provider, req, url)) {
+        if (!providerAllowedEndpoint(record, req, url)) {
           res.status(404).json({ error: "unsupported LLM broker endpoint" });
+          return;
+        }
+        const requestModel = readRequestMetadata(req.body).model;
+        if (
+          record.purpose === "embeddings" &&
+          requestModel !== PLATFORM_OPENAI_EMBEDDING_MODEL
+        ) {
+          res.status(400).json({ error: "unsupported embedding model" });
           return;
         }
         const providerKey = await resolveProviderKeyForRequest({
@@ -1400,13 +1427,13 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
         }
         const grant = await resolveGrantForBrokerRequest(deps, record, now(), res);
         if (!grant) return;
-        const requestModel = readRequestMetadata(req.body).model;
         const logGate: GateLogger = (decision, extra = {}) => {
           deps.log?.("llm-broker gate", {
             decision,
             gatewayId: record.gatewayId,
             ownerUid: record.ownerUid,
             provider: record.provider,
+            purpose: record.purpose,
             path: url.pathname,
             keySource: providerKey.source,
             spendWindowUsd: grant.limits.spendWindowUsd,

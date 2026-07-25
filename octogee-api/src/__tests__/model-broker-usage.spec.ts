@@ -186,6 +186,21 @@ describe("OpenAI cost estimation", () => {
     expect(cost.total).toBeCloseTo(5.325);
   });
 
+  it("prices text-embedding-3-small at its input-only embedding rate", () => {
+    const cost = estimateModelBrokerCost("openai", "text-embedding-3-small", {
+      inputTokens: 1_000_000,
+      outputTokens: 0,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+    });
+
+    expect(cost.pricingModel).toBe("openai:text-embedding-3-small");
+    expect(cost.input).toBeCloseTo(0.02);
+    expect(cost.output).toBe(0);
+    expect(cost.total).toBeCloseTo(0.02);
+    expect(isUnknownOpenAiPricingModel(cost.pricingModel)).toBe(false);
+  });
+
   it("prices unknown OpenAI models at the fallback rate and flags them", () => {
     const cost = estimateModelBrokerCost("openai", "gpt-99", MILLION_EACH);
     expect(cost.pricingModel).toBe("openai:unknown-fallback");

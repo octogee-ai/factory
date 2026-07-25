@@ -28,7 +28,10 @@ import {
   weekWindowStartMs,
 } from "@octogee/shared/types/model-broker-usage";
 import { createFirestoreModelBrokerTokenStore } from "../lib/model-broker-tokens.js";
-import type { ModelBrokerProvider } from "../lib/model-broker-tokens.js";
+import type {
+  ModelBrokerProvider,
+  ModelBrokerTokenPurpose,
+} from "../lib/model-broker-tokens.js";
 import {
   envDefaultModelBrokerLimits,
   resolveOwnerModelBrokerGrant,
@@ -47,6 +50,7 @@ type GatewayBinding = Extract<
 const FORBIDDEN = { error: "forbidden" } as const;
 const VALID_AGENT_ID_REQUIRED = { error: "valid agentId required" } as const;
 const UNSUPPORTED_PROVIDER = { error: "unsupported provider" } as const;
+const UNSUPPORTED_PURPOSE = { error: "unsupported token purpose" } as const;
 export const BYOK_API_KEY_PROVIDER_IDS = [
   ...MODEL_CREDENTIAL_STATIC_PROVIDER_IDS,
 ];
@@ -80,6 +84,7 @@ function parseByokApiKeyId(
 // keyRef; a generous TTL spans a normal agent session (so it is not re-minted
 // mid-session) while still bounding how long stale tokens linger before TTL cleanup.
 const AGENT_MODEL_TOKEN_TTL_SECONDS = 24 * 60 * 60;
+const AGENT_EMBEDDING_REQUESTS_PER_MINUTE = 60;
 
 // Mirrors gateway-edge/src/routes/byosub.ts: a byosub OAuth flow is short-lived.
 const BYOSUB_FLOW_TTL_MS = 60 * 60 * 1000;
@@ -153,6 +158,11 @@ function requestedModelProvider(value: unknown): ModelBrokerProvider | null {
   return value === "anthropic" || value === "openrouter" || value === "openai"
     ? value
     : null;
+}
+
+function requestedTokenPurpose(value: unknown): ModelBrokerTokenPurpose | null {
+  if (value === undefined || value === null || value === "") return "model";
+  return value === "model" || value === "embeddings" ? value : null;
 }
 
 function financeNumber(value: unknown): number {
@@ -321,7 +331,11 @@ function agentModelTokenSecretName(input: {
   gatewayId: string;
   ownerUid: string;
   provider: ModelBrokerProvider;
+  purpose: ModelBrokerTokenPurpose;
 }): string {
+  if (input.purpose === "embeddings") {
+    return `agent-embedding-token-openai-${input.gatewayId}-${input.ownerUid}`;
+  }
   const prefix =
     input.provider === "anthropic"
       ? "agent-model-token"
@@ -566,6 +580,13 @@ export function createByokBrokerRoutes(opts: {
       res.status(400).json(UNSUPPORTED_PROVIDER);
       return;
     }
+    const purpose = requestedTokenPurpose(
+      (req.body as { purpose?: unknown } | undefined)?.purpose,
+    );
+    if (!purpose || (purpose === "embeddings" && provider !== "openai")) {
+      res.status(400).json(UNSUPPORTED_PURPOSE);
+      return;
+    }
 
     const assigned =
       await findAssignedOrInboundMigratingOrConfiguredUserByAgentId(
@@ -578,23 +599,35 @@ export function createByokBrokerRoutes(opts: {
       res.status(403).json(FORBIDDEN);
       return;
     }
-    const grant = await resolveOwnerModelBrokerGrant({
-      db,
-      gatewayId: bound.gatewayId,
-      ownerUid: assigned.uid,
-      now: Date.now(),
-      defaults: envDefaultModelBrokerLimits(),
-    });
+    const grant =
+      purpose === "embeddings"
+        ? {
+            limits: {
+              spendWindowUsd: null,
+              spendWeekUsd: null,
+              requestsPerMinute: AGENT_EMBEDDING_REQUESTS_PER_MINUTE,
+            },
+            policy: { freeTier: false, houseFallback: true },
+          }
+        : await resolveOwnerModelBrokerGrant({
+            db,
+            gatewayId: bound.gatewayId,
+            ownerUid: assigned.uid,
+            now: Date.now(),
+            defaults: envDefaultModelBrokerLimits(),
+          });
     const issued = await createFirestoreModelBrokerTokenStore(db).issueToken({
       gatewayId: bound.gatewayId,
       ownerUid: assigned.uid,
       provider,
+      purpose,
       // a descriptive label, NOT a readable Secret Manager secret — the broker
       // resolves the provider key per ownerUid, never via this name.
       secretName: agentModelTokenSecretName({
         gatewayId: bound.gatewayId,
         ownerUid: assigned.uid,
         provider,
+        purpose,
       }),
       // standalone + TTL-bounded: no revoke-on-reissue, so a re-mint can't yank a
       // still-in-flight token (the prior one expires by TTL instead).
@@ -608,7 +641,7 @@ export function createByokBrokerRoutes(opts: {
         agentId,
       },
     });
-    res.json({ value: issued.token, provider });
+    res.json({ value: issued.token, provider, purpose });
   });
 
   registerAgentUsageStatusRoute(router, db, now);
