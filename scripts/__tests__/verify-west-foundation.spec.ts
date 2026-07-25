@@ -7,6 +7,36 @@ import { describe, expect, it } from "vitest";
 const repoRoot = path.resolve(__dirname, "../..");
 const script = path.join(repoRoot, "scripts/verify-west-foundation.sh");
 
+interface DeploymentTarget {
+  lifecycle: string;
+  region: string;
+  clusterName: string;
+  namespace: string;
+}
+
+const deploymentTargets = Object.values(
+  (
+    JSON.parse(
+      readFileSync(path.join(repoRoot, "core/src/deployment-targets.json"), "utf8"),
+    ) as { targets: Record<string, DeploymentTarget> }
+  ).targets,
+);
+
+const selector = (
+  predicate: (target: DeploymentTarget) => boolean,
+  field: (target: DeploymentTarget) => string,
+): string => [...new Set(deploymentTargets.filter(predicate).map(field))].sort().join("|");
+
+const pagedLocations = selector((t) => t.lifecycle !== "frozen", (t) => t.region);
+const pagedClusters = selector((t) => t.lifecycle !== "frozen", (t) => t.clusterName);
+const unpagedNamespaces = selector((t) => t.lifecycle === "frozen", (t) => t.namespace);
+
+const workloadQuery = (severity: string): string =>
+  `max by (alertname, severity, location, namespace, gateway_id) (ALERTS{project_id="octogee", location=~"${pagedLocations}", cluster=~"${pagedClusters}", alertstate="firing", severity="${severity}", namespace!~"${unpagedNamespaces}"})`;
+
+const staleWestOnlyQuery = (severity: string): string =>
+  `max by (alertname, severity, namespace, gateway_id) (ALERTS{project_id="octogee", location="us-west1", cluster="octogee-gateway", alertstate="firing", severity="${severity}"})`;
+
 type RunOptions = {
   network?: string;
   networkIdentity?: string;
@@ -15,6 +45,7 @@ type RunOptions = {
   externalNodeIp?: boolean;
   invalidSmsChannel?: boolean;
   invalidWorkloadPolicy?: boolean;
+  staleWestOnlyWorkloadQuery?: boolean;
   trailingWorkloadQueryNewline?: boolean;
   mode?: "--read-only" | "--plan";
   invalidServiceHealthApi?: boolean;
@@ -77,7 +108,7 @@ case "$*" in
     ;;
   "monitoring policies list "*)
     if [[ "$FAKE_INVALID_WORKLOAD_POLICY" == "true" ]]; then
-      printf '%s\n' '[{"displayName":"Octogee WEST workload critical","enabled":true,"notificationChannels":["projects/octogee/notificationChannels/email"],"conditions":[{"conditionPrometheusQueryLanguage":{"query":"ALERTS{location=\\"us-central1\\", alertstate=\\"firing\\", severity=\\"critical\\"}"}}]}]'
+      printf '%s\n' '[{"displayName":"Octogee workload critical","enabled":true,"notificationChannels":["projects/octogee/notificationChannels/email"],"conditions":[{"conditionPrometheusQueryLanguage":{"query":"ALERTS{location=\\"us-central1\\", alertstate=\\"firing\\", severity=\\"critical\\"}"}}]}]'
     else
       query_suffix=""
       if [[ "$FAKE_TRAILING_WORKLOAD_QUERY_NEWLINE" == "true" ]]; then
@@ -103,11 +134,13 @@ case "$*" in
         --argjson channels "$service_health_channels" \
         --argjson serviceHealthEnabled "$service_health_enabled" \
         --arg querySuffix "$query_suffix" \
+        --arg criticalQuery "$FAKE_CRITICAL_QUERY" \
+        --arg warningQuery "$FAKE_WARNING_QUERY" \
         '[
           {displayName: "Octogee WEST GKE notifications", enabled: true, notificationChannels: ["projects/octogee/notificationChannels/email", "projects/octogee/notificationChannels/sms"], conditions: [{conditionMatchedLog: {}}]},
           (if $serviceHealthEnabled then {displayName: "Octogee WEST Google Service Health incidents", enabled: true, notificationChannels: $channels, conditions: [{conditionMatchedLog: {filter: $filter, labelExtractors: {description: "EXTRACT(jsonPayload.description)", detailed_state: "EXTRACT(jsonPayload.detailedState)", impacted_locations: "EXTRACT(jsonPayload.impactedLocations)", impacted_products: "EXTRACT(jsonPayload.impactedProducts)", start_time: "EXTRACT(jsonPayload.startTime)", state: "EXTRACT(jsonPayload.state)", title: "EXTRACT(jsonPayload.title)"}}}], alertStrategy: {autoClose: "1800s", notificationRateLimit: {period: "300s"}}, documentation: {content: "https://console.cloud.google.com/servicehealth/incidentDetails/"}} else empty end),
-          {displayName: "Octogee WEST workload critical", enabled: true, notificationChannels: ["projects/octogee/notificationChannels/email", "projects/octogee/notificationChannels/sms"], conditions: [{conditionPrometheusQueryLanguage: {query: ("max by (alertname, severity, namespace, gateway_id) (ALERTS{project_id=\\"octogee\\", location=\\"us-west1\\", cluster=\\"octogee-gateway\\", alertstate=\\"firing\\", severity=\\"critical\\"})" + $querySuffix), duration: "0s", evaluationInterval: "30s"}}]},
-          {displayName: "Octogee WEST workload warning", enabled: true, notificationChannels: ["projects/octogee/notificationChannels/email", "projects/octogee/notificationChannels/sms"], conditions: [{conditionPrometheusQueryLanguage: {query: ("max by (alertname, severity, namespace, gateway_id) (ALERTS{project_id=\\"octogee\\", location=\\"us-west1\\", cluster=\\"octogee-gateway\\", alertstate=\\"firing\\", severity=\\"warning\\"})" + $querySuffix), duration: "0s", evaluationInterval: "30s"}}]}
+          {displayName: "Octogee workload critical", enabled: true, notificationChannels: ["projects/octogee/notificationChannels/email", "projects/octogee/notificationChannels/sms"], conditions: [{conditionPrometheusQueryLanguage: {query: ($criticalQuery + $querySuffix), duration: "0s", evaluationInterval: "30s"}}]},
+          {displayName: "Octogee workload warning", enabled: true, notificationChannels: ["projects/octogee/notificationChannels/email", "projects/octogee/notificationChannels/sms"], conditions: [{conditionPrometheusQueryLanguage: {query: ($warningQuery + $querySuffix), duration: "0s", evaluationInterval: "30s"}}]}
         ]'
     fi
     ;;
@@ -162,6 +195,12 @@ esac
       FAKE_EXTERNAL_NODE_IP: options.externalNodeIp ? "true" : "false",
       FAKE_INVALID_SMS_CHANNEL: options.invalidSmsChannel ? "true" : "false",
       FAKE_INVALID_WORKLOAD_POLICY: options.invalidWorkloadPolicy ? "true" : "false",
+      FAKE_CRITICAL_QUERY: options.staleWestOnlyWorkloadQuery
+        ? staleWestOnlyQuery("critical")
+        : workloadQuery("critical"),
+      FAKE_WARNING_QUERY: options.staleWestOnlyWorkloadQuery
+        ? staleWestOnlyQuery("warning")
+        : workloadQuery("warning"),
       FAKE_TRAILING_WORKLOAD_QUERY_NEWLINE: options.trailingWorkloadQueryNewline ? "true" : "false",
       FAKE_INVALID_SERVICE_HEALTH_API: options.invalidServiceHealthApi ? "true" : "false",
       FAKE_INVALID_SERVICE_HEALTH_POLICY: options.invalidServiceHealthPolicy ? "true" : "false",
@@ -237,11 +276,27 @@ describe("WEST foundation runtime verifier", () => {
     expect(result.stderr).toContain("Verify the Octogee Ops SMS Cloud Monitoring notification channel");
   });
 
-  it("requires enabled WEST workload policies routed to both verified channels", () => {
+  it("requires enabled workload policies routed to both verified channels", () => {
     const result = runVerifier({ invalidWorkloadPolicy: true });
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("WEST workload alert-policy invariants failed");
+  });
+
+  it("rejects a policy still scoped to us-west1 alone while central hosts the active targets", () => {
+    const result = runVerifier({ staleWestOnlyWorkloadQuery: true });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("WEST workload alert-policy invariants failed");
+  });
+
+  it("expects the query built from the non-frozen deployment targets", () => {
+    expect(workloadQuery("critical")).toContain('location=~"us-central1|us-west1"');
+    expect(workloadQuery("critical")).toContain('namespace!~"octogee-build-week"');
+
+    const result = runVerifier();
+
+    expect(result.status, result.stderr).toBe(0);
   });
 
   it("accepts the Terraform-rendered trailing newline on workload queries", () => {
