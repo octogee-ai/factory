@@ -548,8 +548,10 @@ OPTIONAL `label: preview` base row (operator restore, 2026-07-25).
 `versions:` stays empty — the per-push extras gateway builds removed by
 #2770 stay removed; CI rejects any `versions:` entry and any base label
 other than current + optional preview. A preview base row needs
-`forkSha`, `mattermostForkSha`, `mattermostSha256` (the artifact's full
-sha256), and `config: cloudbuild-base-beta.yaml`. The preview BASE builds
+`forkSha`, `sourceSha` (the FULL 40-hex fork commit), `rootSha256` (the
+root tarball's sha256), `mattermostForkSha`, `mattermostSha256` (the MM
+artifact's sha256), and `config: cloudbuild-base-beta.yaml` — the beta
+config's verified candidate rebuild checks all of them before publishing. The preview BASE builds
 via `rebuild-matrix-bases.sh`; a preview GATEWAY image is built on demand
 with `scripts/build-pinned-gateway.sh` against that base when the
 operator wants to roll it. When the fork changes, update the current row
