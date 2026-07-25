@@ -80,6 +80,68 @@ const ALLOWED_RESPONSE_HEADERS = new Set([
   "last-modified",
   "vary",
 ]);
+const DASHBOARD_ROUTES = new Set([
+  "/activity",
+  "/agents",
+  "/ai-agents",
+  "/appearance",
+  "/automation",
+  "/channels",
+  "/chat",
+  "/communications",
+  "/config",
+  "/cron",
+  "/debug",
+  "/dreaming",
+  "/dreams",
+  "/infrastructure",
+  "/instances",
+  "/logs",
+  "/mcp",
+  "/nodes",
+  "/overview",
+  "/plugin",
+  "/sessions",
+  "/settings/ai-agents",
+  "/settings/appearance",
+  "/settings/automation",
+  "/settings/channels",
+  "/settings/communications",
+  "/settings/general",
+  "/settings/infrastructure",
+  "/settings/mcp",
+  "/settings/worktrees",
+  "/skills",
+  "/skills/workshop",
+  "/tasks",
+  "/usage",
+  "/workboard",
+  "/worktrees",
+]);
+const DASHBOARD_ROOT_ASSETS = new Set([
+  "/apple-touch-icon.png",
+  "/favicon-32.png",
+  "/favicon.ico",
+  "/favicon.svg",
+  "/manifest.webmanifest",
+  "/sw.js",
+]);
+const DASHBOARD_STATIC_EXTENSIONS = new Set([
+  ".css",
+  ".gif",
+  ".ico",
+  ".jpeg",
+  ".jpg",
+  ".js",
+  ".json",
+  ".map",
+  ".png",
+  ".svg",
+  ".txt",
+  ".wasm",
+  ".webmanifest",
+  ".webp",
+]);
 const defaultSessions = new OpenClawControlSessionManager();
 const defaultLimiter = new OpenClawControlResourceLimiter();
 const retainedMutationLeases = new Set<SystemConfigMutationLease>();
@@ -185,6 +247,52 @@ export function openClawControlUpstreamPath(originalUrl: string, gatewayId: stri
   return `/g/${gatewayId}/openclaw${suffix}${parsed.search}`;
 }
 
+function openClawControlHttpSuffix(originalUrl: string, gatewayId: string): URL {
+  const parsed = new URL(originalUrl, "https://octogee.invalid");
+  const publicBase = `/api/g/${gatewayId}/openclaw`;
+  const strippedBase = "/openclaw";
+  const inboundBase = parsed.pathname === publicBase || parsed.pathname.startsWith(`${publicBase}/`)
+    ? publicBase
+    : strippedBase;
+  parsed.pathname = parsed.pathname.slice(inboundBase.length) || "/";
+  return parsed;
+}
+
+function isDashboardStaticAsset(pathname: string): boolean {
+  if (!pathname.startsWith("/assets/")) return false;
+  const relativePath = pathname.slice("/assets/".length);
+  if (!relativePath || relativePath.split("/").some((segment) =>
+    !/^[A-Za-z0-9@+._-]+$/u.test(segment))) {
+    return false;
+  }
+  return DASHBOARD_STATIC_EXTENSIONS.has(path.extname(relativePath).toLowerCase());
+}
+
+function isDashboardAvatar(parsed: URL): boolean {
+  if (!/^\/avatar\/[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u.test(parsed.pathname)) return false;
+  if (!parsed.search) return true;
+  return parsed.searchParams.size === 1 && parsed.searchParams.get("meta") === "1";
+}
+
+function isDashboardProviderIcon(pathname: string): boolean {
+  return /^\/provider-icons\/ProviderIcon-[A-Za-z0-9_-]+\.svg$/u.test(pathname);
+}
+
+export function isOpenClawControlHttpResource(originalUrl: string, gatewayId: string): boolean {
+  openClawControlUpstreamPath(originalUrl, gatewayId);
+  const parsed = openClawControlHttpSuffix(originalUrl, gatewayId);
+  const route = parsed.pathname.length > 1 && parsed.pathname.endsWith("/")
+    ? parsed.pathname.slice(0, -1)
+    : parsed.pathname;
+  return route === "/" ||
+    route === "/control-ui-config.json" ||
+    DASHBOARD_ROUTES.has(route) ||
+    DASHBOARD_ROOT_ASSETS.has(route) ||
+    isDashboardStaticAsset(route) ||
+    isDashboardAvatar(parsed) ||
+    isDashboardProviderIcon(route);
+}
+
 function securityHeaders(res: Response | http.ServerResponse, frameAncestor: string): void {
   res.setHeader("cache-control", "no-store");
   res.setHeader(
@@ -249,6 +357,26 @@ function unauthorized(req: Request, res: Response, frameAncestor: string): void 
   });
 }
 
+function rejectDashboardHttpRequest(
+  req: Request,
+  res: Response,
+  frameAncestor: string,
+  gatewayId: string,
+): boolean {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    securityHeaders(res, frameAncestor);
+    res.setHeader("allow", "GET, HEAD");
+    res.status(405).json({ error: "method-not-allowed" });
+    return true;
+  }
+  if (!isOpenClawControlHttpResource(req.originalUrl, gatewayId)) {
+    securityHeaders(res, frameAncestor);
+    res.status(404).json({ error: "dashboard-resource-not-found" });
+    return true;
+  }
+  return false;
+}
+
 function httpAssetOutcome(statusCode: number): "ok" | "timeout" | "error" {
   if (statusCode < 400) return "ok";
   return statusCode === 504 ? "timeout" : "error";
@@ -268,6 +396,13 @@ function requestHeaders(
   headers.authorization = `Bearer ${gatewayToken}`;
   headers["accept-encoding"] = "identity";
   return headers;
+}
+
+function scrubCredentialText(value: string, credentials: readonly string[]): string {
+  return credentials.filter(Boolean).reduce(
+    (cleaned, credential) => cleaned.replaceAll(credential, "*".repeat(credential.length)),
+    value,
+  );
 }
 
 function credentialScrubber(credentials: readonly string[]): Transform {
@@ -398,12 +533,7 @@ export function createOpenClawControlHttpRouter(
         return;
       }
       metrics?.session(identity, "authorize", "ok");
-      if (req.method !== "GET" && req.method !== "HEAD") {
-        securityHeaders(res, frameAncestor);
-        res.setHeader("allow", "GET, HEAD");
-        res.status(405).json({ error: "method-not-allowed" });
-        return;
-      }
+      if (rejectDashboardHttpRequest(req, res, frameAncestor, gatewayId)) return;
       const touched = sessions.touchSession(session);
       if (!touched) {
         unauthorized(req, res, frameAncestor);
@@ -424,7 +554,12 @@ export function createOpenClawControlHttpRouter(
         settled = true;
         res.status(upstream.statusCode ?? 502);
         for (const [name, value] of Object.entries(upstream.headers)) {
-          if (value !== undefined && ALLOWED_RESPONSE_HEADERS.has(name.toLowerCase())) res.setHeader(name, value);
+          if (value !== undefined && ALLOWED_RESPONSE_HEADERS.has(name.toLowerCase())) {
+            const scrubbed = Array.isArray(value)
+              ? value.map((item) => scrubCredentialText(item, [gatewayToken]))
+              : scrubCredentialText(String(value), [gatewayToken]);
+            res.setHeader(name, scrubbed);
+          }
         }
         securityHeaders(res, frameAncestor);
         res.setHeader("set-cookie", touched.cookie);
