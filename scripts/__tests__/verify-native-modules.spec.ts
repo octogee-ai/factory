@@ -11,9 +11,10 @@ const packageRoot = "/octogee/scripts";
 // The list is explicit rather than derived. Every cheap heuristic for "is this
 // package native" is wrong in both directions in this very tree: fsevents is
 // native but ships neither binding.gyp nor prebuilds/ (just a loose
-// fsevents.node), while bare-fs/bare-os/bare-url do ship prebuilds/ and throw
-// "Bare is not defined" when required under Node — auto-requiring those would
-// fail the image build for packages that were never meant to load here.
+// fsevents.node), while bare-fs/bare-os/bare-url do ship prebuilds/ and each
+// throws when required under Node ("Bare is not defined" for bare-fs and
+// bare-url, "require.addon is not a function" for bare-os) — auto-requiring
+// those would fail the image build for packages never meant to load here.
 // Detecting a NEW native dependency is npm's job, and npm already does it
 // properly (lockfile hasInstallScript plus its own isNodeGypPackage probe)
 // behind strict-allow-scripts.
