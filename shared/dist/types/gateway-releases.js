@@ -197,7 +197,6 @@ export const GATEWAY_MUTABLE_FIELDS = [
     "gatewayClass",
     "imageProfile",
     "sizingTier",
-    "computeClass",
     "gcpProject",
     "gatewayContainerSecurityContext",
     "serviceAccountName",

@@ -59,7 +59,7 @@ the app-shell decomposition (#958). Still no self-merge.
 ## Docs & small-config go direct to main
 
 - Pure docs (`docs/`, `README.md`, code comments, CLAUDE.md, this handbook) and
-  small, easily-revertible ops/helm config (e.g. a compute-class default) →
+  small, easily-revertible ops/helm config (e.g. a chart default value) →
   fresh branch, `git push origin HEAD:main`, **no PR**. Operator policy
   (2026-07-08): PRs burn Copilot review minutes, which are reserved for final
   code PRs. Known documentation-only paths are excluded from release CD; they

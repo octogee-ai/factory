@@ -368,8 +368,8 @@ export {
 
 export type { GatewayMonthlyCost, FleetMonthlyCost } from './cost-estimator.js';
 export {
-  C2D_AUTOPILOT_VCPU_USD_PER_HR,
-  C2D_AUTOPILOT_GIB_USD_PER_HR,
+  AUTOPILOT_GENERAL_PURPOSE_VCPU_USD_PER_HR,
+  AUTOPILOT_GENERAL_PURPOSE_GIB_USD_PER_HR,
   HOURS_PER_MONTH,
   estimateGatewayMonthlyCost,
   estimateFleetMonthlyCost,

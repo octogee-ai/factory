@@ -42,7 +42,6 @@ export interface GatewayDesiredState {
     ownerUid?: string;
     builderSlug?: string;
     sizingTier?: SizingTier;
-    computeClass?: string;
     modelBrokerLimits?: GatewayModelBrokerLimits;
     preemption?: GatewayPreemptionSpec;
     preemptionHandoff?: GatewayPreemptionHandoffSpec;
@@ -237,7 +236,6 @@ export interface HelmInstanceValue {
     ownerUid?: string;
     builderSlug?: string;
     sizingTier?: SizingTier;
-    computeClassOverride?: string;
     replicas?: number;
 }
 export type HelmInstancesMap = Record<string, HelmInstanceValue>;

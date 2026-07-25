@@ -24,7 +24,6 @@ const TARGET_STRING_FIELDS = [
     "mattermostOrigin",
     "previewOrigin",
     "gatewayValuesFile",
-    "computeClass",
     "pinEnvironment",
 ];
 const INGRESS_STRING_FIELDS = [
@@ -207,8 +206,6 @@ function settings(targetId, target) {
         mattermostOrigin: target.mattermostOrigin,
         previewOrigin: target.previewOrigin,
         gatewayValuesFile: target.gatewayValuesFile,
-        computeClass: target.computeClass,
-        platformComputeClass: target.platformComputeClass,
         pinEnvironment: target.pinEnvironment,
     };
 }

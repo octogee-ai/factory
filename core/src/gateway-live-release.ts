@@ -267,7 +267,6 @@ export function mergeGatewayConfigWithArtifact(
     gatewayClass: config.gatewayClass,
     imageProfile: config.imageProfile,
     sizingTier: config.sizingTier,
-    computeClass: config.computeClass,
     gcpProject: config.gcpProject,
     gatewayContainerSecurityContext: config.gatewayContainerSecurityContext,
     serviceAccountName: config.serviceAccountName,

@@ -1,13 +1,13 @@
 import { TIER_PRESETS, } from "./sizing.js";
-// Approximate GKE Autopilot c2d on-demand pricing (us-central1, 2026-05).
-// Anchored to public rates; rounds up conservatively. Excludes egress, LB,
-// GCS, Firestore - those are app-level metering territory (Phase 5a).
-export const C2D_AUTOPILOT_VCPU_USD_PER_HR = 0.0335;
-export const C2D_AUTOPILOT_GIB_USD_PER_HR = 0.00408;
+// Published GKE Autopilot Pod rates for the DEFAULT general-purpose compute
+// class (us-central1 list price), which is what every workload runs on now that
+// the custom ComputeClasses are retired. Excludes egress, LB, GCS, Firestore -
+// those are app-level metering territory (Phase 5a).
+export const AUTOPILOT_GENERAL_PURPOSE_VCPU_USD_PER_HR = 0.0445;
+export const AUTOPILOT_GENERAL_PURPOSE_GIB_USD_PER_HR = 0.0049225;
 export const HOURS_PER_MONTH = 730;
-// Conservative Spot estimate for the gateway ComputeClass. Specs model Spot
-// at roughly 70-90% off; use 70% off so the dashboard does not overstate
-// savings.
+// Google publishes Spot Pods at 60-91% off the corresponding regular rate. Take
+// the conservative end (70% off) so the dashboard never overstates savings.
 export const SPOT_PRICE_MULTIPLIER = 0.3;
 export function estimateGatewayMonthlyCost(tier, opts = {}) {
     const preset = TIER_PRESETS[tier];
@@ -59,8 +59,8 @@ export function estimateFleetMonthlyCost(inputs) {
 function computeMonthlyUsd(preset) {
     const vcpu = parseMillicores(preset.resources.requests.cpu) / 1000;
     const gib = parseGiB(preset.resources.requests.memory);
-    return (vcpu * C2D_AUTOPILOT_VCPU_USD_PER_HR * HOURS_PER_MONTH +
-        gib * C2D_AUTOPILOT_GIB_USD_PER_HR * HOURS_PER_MONTH);
+    return (vcpu * AUTOPILOT_GENERAL_PURPOSE_VCPU_USD_PER_HR * HOURS_PER_MONTH +
+        gib * AUTOPILOT_GENERAL_PURPOSE_GIB_USD_PER_HR * HOURS_PER_MONTH);
 }
 function priceMultiplierFor(mode) {
     return mode === "spot" ? SPOT_PRICE_MULTIPLIER : 1;
