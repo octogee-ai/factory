@@ -28,7 +28,10 @@ import {
   weekWindowStartMs,
 } from "@octogee/shared/types/model-broker-usage";
 import { createFirestoreModelBrokerTokenStore } from "../lib/model-broker-tokens.js";
-import type { ModelBrokerProvider } from "../lib/model-broker-tokens.js";
+import type {
+  ModelBrokerProvider,
+  ModelBrokerTokenPurpose,
+} from "../lib/model-broker-tokens.js";
 import {
   envDefaultModelBrokerLimits,
   resolveOwnerModelBrokerGrant,
@@ -47,6 +50,7 @@ type GatewayBinding = Extract<
 const FORBIDDEN = { error: "forbidden" } as const;
 const VALID_AGENT_ID_REQUIRED = { error: "valid agentId required" } as const;
 const UNSUPPORTED_PROVIDER = { error: "unsupported provider" } as const;
+const UNSUPPORTED_PURPOSE = { error: "unsupported token purpose" } as const;
 export const BYOK_API_KEY_PROVIDER_IDS = [
   ...MODEL_CREDENTIAL_STATIC_PROVIDER_IDS,
 ];
@@ -80,7 +84,7 @@ function parseByokApiKeyId(
 // keyRef; a generous TTL spans a normal agent session (so it is not re-minted
 // mid-session) while still bounding how long stale tokens linger before TTL cleanup.
 const AGENT_MODEL_TOKEN_TTL_SECONDS = 24 * 60 * 60;
-const DEFAULT_PLATFORM_OPENAI_EMBEDDING_SECRET_NAME = "OPENAI_API_KEY";
+const AGENT_EMBEDDING_REQUESTS_PER_MINUTE = 60;
 
 // Mirrors gateway-edge/src/routes/byosub.ts: a byosub OAuth flow is short-lived.
 const BYOSUB_FLOW_TTL_MS = 60 * 60 * 1000;
@@ -156,17 +160,9 @@ function requestedModelProvider(value: unknown): ModelBrokerProvider | null {
     : null;
 }
 
-function requestedEmbeddingProvider(value: unknown): "openai" | null {
-  return value === "openai" ? "openai" : null;
-}
-
-function platformOpenAiEmbeddingSecretName(
-  env: NodeJS.ProcessEnv = process.env,
-): string {
-  const configured = env.OPENAI_EMBEDDINGS_SECRET_NAME?.trim();
-  return configured && configured.length > 0
-    ? configured
-    : DEFAULT_PLATFORM_OPENAI_EMBEDDING_SECRET_NAME;
+function requestedTokenPurpose(value: unknown): ModelBrokerTokenPurpose | null {
+  if (value === undefined || value === null || value === "") return "model";
+  return value === "model" || value === "embeddings" ? value : null;
 }
 
 function financeNumber(value: unknown): number {
@@ -335,7 +331,11 @@ function agentModelTokenSecretName(input: {
   gatewayId: string;
   ownerUid: string;
   provider: ModelBrokerProvider;
+  purpose: ModelBrokerTokenPurpose;
 }): string {
+  if (input.purpose === "embeddings") {
+    return `agent-embedding-token-openai-${input.gatewayId}-${input.ownerUid}`;
+  }
   const prefix =
     input.provider === "anthropic"
       ? "agent-model-token"
@@ -448,50 +448,6 @@ async function handleApiKeyCredential(
   res.json({ value });
 }
 
-async function handlePlatformEmbeddingKey(
-  db: Firestore,
-  readPlatformSecret: (name: string, version?: string) => Promise<string>,
-  req: Request,
-  res: Response,
-): Promise<void> {
-  const bound = boundGateway(req, res);
-  if (!bound) return;
-
-  const agentId = (req.body as { agentId?: unknown } | undefined)?.agentId;
-  if (typeof agentId !== "string" || !isSafeAgentId(agentId)) {
-    res.status(400).json(VALID_AGENT_ID_REQUIRED);
-    return;
-  }
-  const provider = requestedEmbeddingProvider(
-    (req.body as { provider?: unknown } | undefined)?.provider,
-  );
-  if (!provider) {
-    res.status(400).json(UNSUPPORTED_PROVIDER);
-    return;
-  }
-
-  const assigned =
-    await findAssignedOrInboundMigratingOrConfiguredUserByAgentId(
-      db,
-      bound.gatewayId,
-      bound.podName,
-      agentId,
-    );
-  if (!assigned) {
-    res.status(403).json(FORBIDDEN);
-    return;
-  }
-
-  const value = (
-    await readPlatformSecret(platformOpenAiEmbeddingSecretName(), "latest")
-  ).trim();
-  if (!value) {
-    res.status(500).json({ error: "empty platform embedding key" });
-    return;
-  }
-  res.json({ value, provider });
-}
-
 function registerCredentialMaterializationRoutes(
   router: Router,
   db: Firestore,
@@ -517,10 +473,6 @@ function registerCredentialMaterializationRoutes(
 
   router.post("/api-key", async (req, res) => {
     await handleApiKeyCredential(db, readCredentialSecret, req, res);
-  });
-
-  router.post("/platform-embedding-key", async (req, res) => {
-    await handlePlatformEmbeddingKey(db, readCredentialSecret, req, res);
   });
 }
 
@@ -594,24 +546,7 @@ function registerByosubUserRoute(router: Router, db: Firestore): void {
   });
 }
 
-export function createByokBrokerRoutes(opts: {
-  db: Firestore;
-  now?: () => number;
-  readSecret?: (name: string, version?: string) => Promise<string>;
-}): Router {
-  const router = Router();
-  const { db } = opts;
-  const now = opts.now ?? Date.now;
-  const readCredentialSecret = opts.readSecret ?? readSecret;
-
-  registerCredentialMaterializationRoutes(router, db, readCredentialSecret);
-
-  // Mint an owner-scoped broker token for one customer-agent on a shared
-  // (multi-tenant) gateway. The agent resolves anthropic through the broker with
-  // its OWN token, so the broker resolves per-owner (platform key, or the owner's
-  // byok-<slug>-anthropic), meters per ownerUid, and enforces the owner's tier
-  // spend cap (degrade to the house model when exhausted). Roster-scoped via
-  // assigned roster, or a running inbound migration targeting this gateway.
+function registerAgentModelTokenRoute(router: Router, db: Firestore): void {
   router.post("/agent-model-token", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
@@ -628,6 +563,13 @@ export function createByokBrokerRoutes(opts: {
       res.status(400).json(UNSUPPORTED_PROVIDER);
       return;
     }
+    const purpose = requestedTokenPurpose(
+      (req.body as { purpose?: unknown } | undefined)?.purpose,
+    );
+    if (!purpose || (purpose === "embeddings" && provider !== "openai")) {
+      res.status(400).json(UNSUPPORTED_PURPOSE);
+      return;
+    }
 
     const assigned =
       await findAssignedOrInboundMigratingOrConfiguredUserByAgentId(
@@ -640,26 +582,34 @@ export function createByokBrokerRoutes(opts: {
       res.status(403).json(FORBIDDEN);
       return;
     }
-    const grant = await resolveOwnerModelBrokerGrant({
-      db,
-      gatewayId: bound.gatewayId,
-      ownerUid: assigned.uid,
-      now: Date.now(),
-      defaults: envDefaultModelBrokerLimits(),
-    });
+    const grant =
+      purpose === "embeddings"
+        ? {
+            limits: {
+              spendWindowUsd: null,
+              spendWeekUsd: null,
+              requestsPerMinute: AGENT_EMBEDDING_REQUESTS_PER_MINUTE,
+            },
+            policy: { freeTier: false, houseFallback: true },
+          }
+        : await resolveOwnerModelBrokerGrant({
+            db,
+            gatewayId: bound.gatewayId,
+            ownerUid: assigned.uid,
+            now: Date.now(),
+            defaults: envDefaultModelBrokerLimits(),
+          });
     const issued = await createFirestoreModelBrokerTokenStore(db).issueToken({
       gatewayId: bound.gatewayId,
       ownerUid: assigned.uid,
       provider,
-      // a descriptive label, NOT a readable Secret Manager secret — the broker
-      // resolves the provider key per ownerUid, never via this name.
+      purpose,
       secretName: agentModelTokenSecretName({
         gatewayId: bound.gatewayId,
         ownerUid: assigned.uid,
         provider,
+        purpose,
       }),
-      // standalone + TTL-bounded: no revoke-on-reissue, so a re-mint can't yank a
-      // still-in-flight token (the prior one expires by TTL instead).
       skipPointer: true,
       ttlSeconds: AGENT_MODEL_TOKEN_TTL_SECONDS,
       limits: grant.limits,
@@ -670,8 +620,22 @@ export function createByokBrokerRoutes(opts: {
         agentId,
       },
     });
-    res.json({ value: issued.token, provider });
+    res.json({ value: issued.token, provider, purpose });
   });
+}
+
+export function createByokBrokerRoutes(opts: {
+  db: Firestore;
+  now?: () => number;
+  readSecret?: (name: string, version?: string) => Promise<string>;
+}): Router {
+  const router = Router();
+  const { db } = opts;
+  const now = opts.now ?? Date.now;
+  const readCredentialSecret = opts.readSecret ?? readSecret;
+
+  registerCredentialMaterializationRoutes(router, db, readCredentialSecret);
+  registerAgentModelTokenRoute(router, db);
 
   registerAgentUsageStatusRoute(router, db, now);
 

@@ -5,7 +5,10 @@ import {
 } from "./mattermost-account-secrets.js";
 
 const PLATFORM_EMBEDDING_PROVIDER = "openai-compatible";
-const DEFAULT_OPENAI_EMBEDDINGS_BASE_URL = "https://api.openai.com/v1";
+// In-cluster K8s Service DNS (llm-broker), same as the Helm default it
+// mirrors; no cross-network hop, no plaintext-in-transit exposure.
+// eslint-disable-next-line sonarjs/no-clear-text-protocols
+const DEFAULT_OPENAI_EMBEDDINGS_BASE_URL = "http://llm-broker:3010/v1";
 const DEFAULT_OPENAI_EMBEDDINGS_MODEL = "text-embedding-3-small";
 
 function normalizedNonEmpty(value: string | undefined, fallback: string): string {
@@ -22,7 +25,7 @@ function normalizedBaseUrl(value: string | undefined): string {
 }
 
 export function platformOpenAiEmbeddingSecretId(agentId: string): string {
-  return `platform-openai-embedding-${agentId}`;
+  return `agent-embedding-token-openai-${agentId}`;
 }
 
 export function platformOpenAiEmbeddingMemorySearch(
@@ -32,7 +35,7 @@ export function platformOpenAiEmbeddingMemorySearch(
   return {
     provider: PLATFORM_EMBEDDING_PROVIDER,
     remote: {
-      baseUrl: normalizedBaseUrl(env.OPENAI_EMBEDDINGS_BASE_URL),
+      baseUrl: normalizedBaseUrl(env.PLATFORM_OPENAI_BASE_URL),
       apiKey: {
         source: "exec",
         provider: "gcp-secret-manager",
@@ -49,7 +52,7 @@ export function platformOpenAiEmbeddingsEnabled(
   return /^(1|true|yes|on)$/iu.test(env.OPENAI_EMBEDDINGS_ENABLED ?? "");
 }
 
-const PLATFORM_EMBEDDING_SECRET_PREFIX = "platform-openai-embedding-";
+export const PLATFORM_EMBEDDING_SECRET_PREFIX = "agent-embedding-token-openai-";
 const OPENCLAW_REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -77,6 +80,7 @@ export function rebindPlatformEmbeddingRefs(agents: readonly unknown[]): unknown
     const apiKey = remote.apiKey;
     if (!isRecord(apiKey) || typeof apiKey.id !== "string") return entry;
     const platformShaped =
+      apiKey.id.startsWith("platform-openai-embedding-") ||
       apiKey.id.startsWith(PLATFORM_EMBEDDING_SECRET_PREFIX) ||
       (apiKey.id === OPENCLAW_REDACTED_SENTINEL &&
         apiKey.source === "exec" &&

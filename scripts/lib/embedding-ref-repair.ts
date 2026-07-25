@@ -1,5 +1,6 @@
 import type { GatewayDoc } from "../../shared/types/gateway-releases.js";
 import {
+  PLATFORM_EMBEDDING_SECRET_PREFIX,
   platformOpenAiEmbeddingSecretId,
   rebindPlatformEmbeddingRefs,
 } from "./openclaw-config-builders.js";
@@ -10,8 +11,6 @@ import {
 // recipe: hash from rpc.configGet, BASE from the pod's UNREDACTED disk config
 // (configGet output is redacted — full-applying it would clobber literal
 // secrets), rebound agents.list only, then config.apply + rpc-view verify.
-
-const PLATFORM_EMBEDDING_SECRET_PREFIX = "platform-openai-embedding-";
 
 export interface EmbeddingRefMismatch {
   agentId: string;

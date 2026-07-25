@@ -232,14 +232,12 @@ spec:
               value: {{ $llmBrokerUrl | quote }}
             - name: OPENROUTER_BASE_URL
               value: {{ printf "%s/v1" (trimSuffix "/" $llmBrokerUrl) | quote }}
-            # platform-openai broker provider profile. NOT OPENAI_BASE_URL —
-            # that name would repoint BYOK-openai and embeddings at the broker.
+            # OpenAI-compatible traffic that uses platform credentials goes through
+            # the broker; BYOK OpenAI keeps its provider-standard endpoint.
             - name: PLATFORM_OPENAI_BASE_URL
               value: {{ printf "%s/v1" (trimSuffix "/" $llmBrokerUrl) | quote }}
             - name: OPENAI_EMBEDDINGS_ENABLED
               value: {{ .Values.env.openaiEmbeddingsEnabled | toString | quote }}
-            - name: OPENAI_EMBEDDINGS_BASE_URL
-              value: {{ .Values.env.openaiEmbeddingsBaseUrl | toString | quote }}
             - name: OPENAI_EMBEDDINGS_MODEL
               value: {{ .Values.env.openaiEmbeddingsModel | toString | quote }}
             {{- if eq $gatewayClass "shared" }}

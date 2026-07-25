@@ -81,7 +81,7 @@ export interface ModelBrokerUsageRecordInput {
   // over the static pricing table when present — the table is fallback only.
   reportedCostUsd?: number | null;
   chargeUsd?: number;
-  usageKind?: "model" | "web_search" | "web_extract";
+  usageKind?: "model" | "embedding" | "web_search" | "web_extract";
   agentId?: string | null;
   toolName?: string | null;
   providerMetadata?: Record<string, unknown>;
@@ -122,6 +122,7 @@ export interface ModelBrokerUsageWindowSnapshot {
 export interface ModelBrokerRateWindowReserveInput {
   gatewayId: string;
   ownerUid?: string | null;
+  scope?: "embedding";
   now?: number;
 }
 
@@ -176,6 +177,11 @@ const UNKNOWN_OPENROUTER_FALLBACK_PRICING = pricing(1, 5, "openrouter:unknown-fa
 // https://developers.openai.com/api/docs/pricing (cached input = 10% of input).
 const OPENAI_PRICING: Record<string, AnthropicPricing> = {
   "gpt-5.4-mini": pricing(0.75, 4.5, "openai:gpt-5.4-mini"),
+  "text-embedding-3-small": pricing(
+    0.02,
+    0,
+    "openai:text-embedding-3-small",
+  ),
 };
 const UNKNOWN_OPENAI_FALLBACK_PRICING = pricing(2.5, 15, "openai:unknown-fallback");
 
@@ -387,6 +393,11 @@ export function isUnknownOpenRouterPricingModel(pricingModel: string): boolean {
 
 export function modelRollupKey(model: string): string {
   return model.replace(/[/.]/g, "_").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 100) || "unknown";
+}
+
+function rateWindowOwnerKey(input: ModelBrokerRateWindowReserveInput): string {
+  const ownerKey = windowOwnerKey(input);
+  return input.scope ? `${ownerKey}:${input.scope}` : ownerKey;
 }
 
 
@@ -694,7 +705,7 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
   async reserveRateWindow(input: ModelBrokerRateWindowReserveInput): Promise<ModelBrokerRateWindowSnapshot> {
     const now = input.now ?? Date.now();
     const windowStartMs = rateWindowStartMs(now);
-    const ownerKey = windowOwnerKey(input);
+    const ownerKey = rateWindowOwnerKey(input);
     const key = windowDocId(ownerKey, windowStartMs);
     const current = this.rateWindows.get(key) ?? {
       ownerKey,
@@ -926,7 +937,7 @@ export function createFirestoreModelBrokerUsageStore(
     async reserveRateWindow(input) {
       const now = input.now ?? Date.now();
       const windowStartMs = rateWindowStartMs(now);
-      const ownerKey = windowOwnerKey(input);
+      const ownerKey = rateWindowOwnerKey(input);
       const rateRef = db
         .collection(MODEL_BROKER_RATE_WINDOWS_COLLECTION)
         .doc(windowDocId(ownerKey, windowStartMs));

@@ -348,11 +348,11 @@ describe("applyPreBootPatches — memory search embeddings", () => {
     expect(config.agents.list[0].memorySearch).toEqual({
       provider: "openai-compatible",
       remote: {
-        baseUrl: "https://api.openai.com/v1",
+        baseUrl: "http://llm-broker:3010/v1",
         apiKey: {
           source: "exec",
           provider: "gcp-secret-manager",
-          id: "platform-openai-embedding-octogee-tester20-coach",
+          id: "agent-embedding-token-openai-octogee-tester20-coach",
         },
       },
       model: "text-embedding-3-small",
@@ -369,12 +369,12 @@ describe("applyPreBootPatches — memory search embeddings", () => {
 
     applyPreBootPatches(config, {
       OPENAI_EMBEDDINGS_ENABLED: "true",
-      OPENAI_EMBEDDINGS_BASE_URL: "https://embeddings.internal.example/v1/",
+      PLATFORM_OPENAI_BASE_URL: "https://llm-broker.internal.example/v1/",
       OPENAI_EMBEDDINGS_MODEL: "custom-embed-v1",
     });
 
     expect(config.agents.list[0].memorySearch.remote.baseUrl).toBe(
-      "https://embeddings.internal.example/v1",
+      "https://llm-broker.internal.example/v1",
     );
     expect(config.agents.list[0].memorySearch.model).toBe("custom-embed-v1");
   });

@@ -30,6 +30,12 @@ function coach(id: string, memorySearch?: Record<string, unknown>): Record<strin
 }
 
 describe("rebindPlatformEmbeddingRefs (redacted-array round-trip self-heal)", () => {
+  it("uses the purpose-scoped embedding token ref", () => {
+    expect(platformOpenAiEmbeddingSecretId("octogee-alice-coach")).toBe(
+      "agent-embedding-token-openai-octogee-alice-coach",
+    );
+  });
+
   it("rewrites a platform ref copied from ANOTHER agent back to the owning agent id (the r2 shifted-ref corruption)", () => {
     const corrupted = coach("octogee-livefixture-coach", platformRef("octogee-tester5-coach"));
 

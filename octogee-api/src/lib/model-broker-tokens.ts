@@ -11,6 +11,7 @@ export {
 } from "@octogee/shared/types/model-broker-usage";
 
 export type ModelBrokerProvider = "anthropic" | "openrouter" | "openai";
+export type ModelBrokerTokenPurpose = "model" | "embeddings";
 
 export interface ModelBrokerTokenLimits {
   spendWindowUsd: number | null;
@@ -43,6 +44,7 @@ export interface ModelBrokerTokenRecord {
   gatewayId: string;
   ownerUid: string | null;
   provider: ModelBrokerProvider;
+  purpose: ModelBrokerTokenPurpose;
   capped: true;
   secretName: string;
   createdAt: number;
@@ -58,6 +60,7 @@ export interface IssueModelBrokerTokenInput {
   gatewayId: string;
   ownerUid?: string;
   provider: ModelBrokerProvider;
+  purpose?: ModelBrokerTokenPurpose;
   secretName: string;
   // Revocation scope. Defaults to gatewayId (one active token per gateway, for
   // single-tenant builder/operator pods). A multi-tenant shared pod issues one
@@ -129,28 +132,34 @@ export function normalizeModelBrokerTokenPolicy(
   };
 }
 
+function optionalNumber(value: unknown): number | null {
+  return typeof value === "number" ? value : null;
+}
+
+function optionalRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function tokenPurpose(value: unknown): ModelBrokerTokenPurpose {
+  return value === "embeddings" ? "embeddings" : "model";
+}
+
 function parseRecord(data: Record<string, unknown> | undefined): ModelBrokerTokenRecord | null {
   if (!recordHasRequiredShape(data)) return null;
   const ownerUid = typeof data.ownerUid === "string" ? data.ownerUid : null;
-  const expiresAt = typeof data.expiresAt === "number" ? data.expiresAt : null;
-  const revokedAt = typeof data.revokedAt === "number" ? data.revokedAt : undefined;
-  const limits =
-    data.limits && typeof data.limits === "object" && !Array.isArray(data.limits)
-      ? normalizeModelBrokerTokenLimits(data.limits as Partial<ModelBrokerTokenLimits>)
-      : normalizeModelBrokerTokenLimits(null);
-  const policy =
-    data.policy && typeof data.policy === "object" && !Array.isArray(data.policy)
-      ? normalizeModelBrokerTokenPolicy(data.policy as Partial<ModelBrokerTokenPolicy>)
-      : normalizeModelBrokerTokenPolicy(null);
-  const trace =
-    data.trace && typeof data.trace === "object" && !Array.isArray(data.trace)
-      ? normalizeModelBrokerTokenTrace(data.trace as Partial<ModelBrokerTokenTrace>)
-      : null;
+  const expiresAt = optionalNumber(data.expiresAt);
+  const revokedAt = optionalNumber(data.revokedAt);
+  const limits = normalizeModelBrokerTokenLimits(optionalRecord(data.limits));
+  const policy = normalizeModelBrokerTokenPolicy(optionalRecord(data.policy));
+  const trace = normalizeModelBrokerTokenTrace(optionalRecord(data.trace));
   return {
     tokenHash: data.tokenHash,
     gatewayId: data.gatewayId,
     ownerUid,
     provider: data.provider,
+    purpose: tokenPurpose(data.purpose),
     capped: true,
     secretName: data.secretName,
     createdAt: data.createdAt,
@@ -159,7 +168,7 @@ function parseRecord(data: Record<string, unknown> | undefined): ModelBrokerToke
     policy,
     trace,
     revoked: data.revoked === true,
-    ...(revokedAt === undefined ? {} : { revokedAt }),
+    ...(revokedAt === null ? {} : { revokedAt }),
   };
 }
 
@@ -194,7 +203,12 @@ function recordHasRequiredShape(data: Record<string, unknown> | undefined): data
 } {
   if (!data) return false;
   return [
-    data.provider === "anthropic" || data.provider === "openrouter",
+    data.provider === "anthropic" ||
+      data.provider === "openrouter" ||
+      data.provider === "openai",
+    data.purpose === undefined ||
+      data.purpose === "model" ||
+      data.purpose === "embeddings",
     data.capped === true,
     typeof data.tokenHash === "string",
     typeof data.gatewayId === "string" && data.gatewayId.length > 0,
@@ -221,6 +235,7 @@ export class InMemoryModelBrokerTokenStore implements ModelBrokerTokenStore {
       gatewayId: input.gatewayId,
       ownerUid: input.ownerUid ?? null,
       provider: input.provider,
+      purpose: input.purpose ?? "model",
       capped: true,
       secretName: input.secretName,
       createdAt: now,
@@ -286,6 +301,7 @@ export function createFirestoreModelBrokerTokenStore(
         gatewayId: input.gatewayId,
         ownerUid: input.ownerUid ?? null,
         provider: input.provider,
+        purpose: input.purpose ?? "model",
         capped: true,
         secretName: input.secretName,
         createdAt: now,

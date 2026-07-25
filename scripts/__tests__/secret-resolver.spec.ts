@@ -205,7 +205,7 @@ describe("secret-resolver — defense-in-depth", () => {
     "agent-model-token-octogee-alice-coach",
     "agent-model-token-openrouter-octogee-alice-coach",
     "agent-model-token-openai-octogee-alice-coach",
-    "platform-openai-embedding-octogee-alice-coach",
+    "agent-embedding-token-openai-octogee-alice-coach",
   ])("accepts the known ref %s", async (id) => {
     const stdin = JSON.stringify({ protocolVersion: 1, provider: "gcp-secret-manager", ids: [id] });
     const out = await runResolver(envFor(), stdin);
@@ -224,12 +224,12 @@ describe("secret-resolver — defense-in-depth", () => {
     expect(res.errors?.[id]?.message).toMatch(/no provisioned agent dir/);
   });
 
-  it("refuses a platform OpenAI embedding ref for an unknown slug", async () => {
+  it("refuses the retired platform embedding ref grammar", async () => {
     const id = "platform-openai-embedding-octogee-eve-coach";
     const stdin = JSON.stringify({ protocolVersion: 1, provider: "gcp-secret-manager", ids: [id] });
     const out = await runResolver(envFor(), stdin);
     const res = parseResponse(out.stdout);
-    expect(res.errors?.[id]?.message).toMatch(/no provisioned agent dir/);
+    expect(res.errors?.[id]?.message).toMatch(/does not match/);
   });
 });
 
@@ -297,22 +297,24 @@ describe("resolveOne — brokered byok materialization (unit, injected deps)", (
     });
   });
 
-  it("routes a platform OpenAI embedding id to /internal/byok/platform-embedding-key", async () => {
+  it("routes an OpenAI embedding token with an explicit purpose", async () => {
     let seen: { url: string; init: { body: string } } | undefined;
-    const v = await resolveOne("platform-openai-embedding-octogee-tester5-coach", {
+    const v = await resolveOne("agent-embedding-token-openai-octogee-tester5-coach", {
       token: "ksa-tok",
       fetchImpl: async (url, init) => {
         seen = { url, init };
-        return { ok: true, status: 200, json: async () => ({ value: "sk-openai-embedding" }) };
+        return { ok: true, status: 200, json: async () => ({ value: "ogk_shared-1_embed" }) };
       },
     });
-    expect(v).toBe("sk-openai-embedding");
-    expect(seen?.url).toBe(`${BROKER_BASE_URL}/internal/byok/platform-embedding-key`);
+    expect(v).toBe("ogk_shared-1_embed");
+    expect(seen?.url).toBe(`${BROKER_BASE_URL}/internal/byok/agent-model-token`);
     expect(JSON.parse(seen!.init.body)).toEqual({
       agentId: "octogee-tester5-coach",
       provider: "openai",
+      purpose: "embeddings",
     });
   });
+
 
   it("throws on a non-ok broker response (fail loud → surfaces as errors[id], never a silent empty)", async () => {
     await expect(

@@ -350,7 +350,6 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     const gw = containerBlock(dep, "gateway");
 
     expect(gw).toMatch(/name:\s*OPENAI_EMBEDDINGS_ENABLED\s*\n\s*value:\s*"true"/);
-    expect(gw).toMatch(/name:\s*OPENAI_EMBEDDINGS_BASE_URL\s*\n\s*value:\s*"https:\/\/api\.openai\.com\/v1"/);
     expect(gw).toMatch(/name:\s*OPENAI_EMBEDDINGS_MODEL\s*\n\s*value:\s*"text-embedding-3-small"/);
   });
 
