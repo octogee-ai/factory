@@ -169,8 +169,12 @@ else
 fi
 
 GW_DEPLOYMENT=$(kubectl get deploy -n "$NAMESPACE" --context "$K8S_CONTEXT" \
-  -l "app=octogee-gateway,gateway-instance=$DEFAULT_GATEWAY_ID" \
-  -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+  -l "app.kubernetes.io/name=octogee-gateway,gateway-instance=$DEFAULT_GATEWAY_ID" \
+  -o json 2>/dev/null | python3 -c '
+import json, sys
+items = [item for item in json.load(sys.stdin).get("items", []) if not item["metadata"].get("deletionTimestamp")]
+print(items[0]["metadata"]["name"] if items else "")
+' 2>/dev/null || echo "")
 
 # ── Header ────────────────────────────────────────────────────────────────────
 echo ""
@@ -365,7 +369,7 @@ set_section infra
 header "5. Gateway"
 
 if [[ -z "$GW_DEPLOYMENT" ]]; then
-  fail "No gateway deployment found (label app=octogee-gateway). Cowboy hasn't installed a per-instance release yet."
+  fail "No current Cowboy gateway deployment found for default gateway $DEFAULT_GATEWAY_ID."
   if $FIX; then
     echo -e "  ${YELLOW}FIX:${NC} kubectl logs deployment/glm-controller -n $NAMESPACE --tail=50    # check Cowboy reconciler"
     echo -e "  ${YELLOW}FIX:${NC} kubectl get glmgateways or read config/orchestrator.defaultGatewayId in Firestore"
@@ -405,9 +409,13 @@ else
     fi
     # Check for crash loop
     GW_RESTARTS=$(kubectl get pods -n "$NAMESPACE" \
-      -l "app=octogee-gateway,gateway-instance=$DEFAULT_GATEWAY_ID" \
-      -o jsonpath='{.items[0].status.containerStatuses[?(@.name=="gateway")].restartCount}' \
-      2>/dev/null || echo "0")
+      -l "gateway-class,gateway-instance=$DEFAULT_GATEWAY_ID" \
+      -o json 2>/dev/null | python3 -c '
+import json, sys
+items = [item for item in json.load(sys.stdin).get("items", []) if not item["metadata"].get("deletionTimestamp")]
+statuses = items[0].get("status", {}).get("containerStatuses", []) if items else []
+print(next((status.get("restartCount", 0) for status in statuses if status.get("name") == "gateway"), 0))
+' 2>/dev/null || echo "0")
     if [[ "${GW_RESTARTS:-0}" -gt 5 ]]; then
       warn "Gateway has restarted ${GW_RESTARTS} times — possible crash loop"
       if $FIX; then
@@ -428,8 +436,12 @@ else
   else
     fail "Gateway not ready (readyReplicas=${GW_READY:-0}, desired=${GW_DESIRED:-0})"
     GW_POD_STATUS=$(kubectl get pods -n "$NAMESPACE" \
-      -l "app=octogee-gateway,gateway-instance=$DEFAULT_GATEWAY_ID" \
-      -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "unknown")
+      -l "gateway-class,gateway-instance=$DEFAULT_GATEWAY_ID" \
+      -o json 2>/dev/null | python3 -c '
+import json, sys
+items = [item for item in json.load(sys.stdin).get("items", []) if not item["metadata"].get("deletionTimestamp")]
+print(items[0].get("status", {}).get("phase", "unknown") if items else "unknown")
+' 2>/dev/null || echo "unknown")
     info "Pod status: $GW_POD_STATUS"
     if $FIX; then
       echo -e "  ${YELLOW}FIX:${NC} kubectl logs deployment/$GW_DEPLOYMENT -n $NAMESPACE -c gateway --tail=50"
@@ -789,8 +801,8 @@ header "8. chat (gateway-edge sidecar + octogee-api)"
 #     package keeps its own digest (a tag mismatch = a partial/stuck roll).
 # No running gateways is a WARN, not a failure — the fleet can legitimately
 # be scaled to zero (e.g. an idle TEST env).
-GW_PODS=$(kubectl get pods -l app=octogee-gateway -n "$NAMESPACE" -o json 2>/dev/null)
-GW_POD_NAMES=$(echo "$GW_PODS" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(p['metadata']['name']) for p in d.get('items',[])]" 2>/dev/null)
+GW_PODS=$(kubectl get pods -l gateway-class -n "$NAMESPACE" -o json 2>/dev/null)
+GW_POD_NAMES=$(echo "$GW_PODS" | python3 -c "import json,sys; d=json.load(sys.stdin); [print(p['metadata']['name']) for p in d.get('items',[]) if not p['metadata'].get('deletionTimestamp')]" 2>/dev/null)
 if [[ -z "$GW_POD_NAMES" ]]; then
   warn "no running gateway pods in $NAMESPACE — gateway-edge/WS surfaces not serving (OK if the fleet is scaled to zero)"
 else
