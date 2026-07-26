@@ -21,10 +21,15 @@ printf '%s\\n' "$*" >> "$FAKE_KUBECTL_LOG"
 
 if [[ "$*" == *"get pods"* ]]; then
   if [[ "$*" == *"app=octogee-api"* ]]; then
-    printf 'octogee-api-1\\n'
+    app='octogee-api'
   else
-    printf 'glm-controller-1\\n'
+    app='glm-controller'
   fi
+  printf '{"items":['
+  printf '{"metadata":{"name":"%s-old","deletionTimestamp":"2026-07-26T18:00:00Z"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}},' "$app"
+  printf '{"metadata":{"name":"%s-unready"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"False"}]}},' "$app"
+  printf '{"metadata":{"name":"%s-current"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}}' "$app"
+  printf ']}\\n'
   exit 0
 fi
 
@@ -97,6 +102,19 @@ describe("Gitea platform-token convergence", () => {
     expect(result.calls[1]).toContain("exec");
   });
 
+  it("authenticates only the current Ready non-terminating pod after a consumer restart", () => {
+    const result = run(
+      'validate_gitea_token_consumer octogee-api GITEA_TOKEN GITEA_URL "api/v1/user"',
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.calls.filter((call) => call.startsWith("exec "))).toEqual([
+      expect.stringContaining(" octogee-api-current "),
+    ]);
+    expect(result.calls.join("\n")).not.toContain("octogee-api-old");
+    expect(result.calls.join("\n")).not.toContain("octogee-api-unready");
+  });
+
   it("restarts, waits for, and authenticates each real platform-token consumer serially", () => {
     const result = run("restart_gitea_token_consumers");
 
@@ -105,7 +123,7 @@ describe("Gitea platform-token convergence", () => {
       if (call.includes("rollout restart")) return `restart:${call.match(/deployment\/(\S+)/)?.[1]}`;
       if (call.includes("rollout status")) return `status:${call.match(/deployment\/(\S+)/)?.[1]}`;
       if (call.includes("get pods")) return `pods:${call.match(/app=(\S+)/)?.[1]}`;
-      if (call.includes("exec ")) return `exec:${call.match(/ (octogee-api|glm-controller)-1 /)?.[1]}`;
+      if (call.includes("exec ")) return `exec:${call.match(/ (octogee-api|glm-controller)-current /)?.[1]}`;
       return call;
     })).toEqual([
       "restart:octogee-api",
@@ -126,7 +144,7 @@ describe("Gitea platform-token convergence", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.calls.map((call) => {
       if (call.includes("get pods")) return `pods:${call.match(/app=(\S+)/)?.[1]}`;
-      if (call.includes("exec ")) return `exec:${call.match(/ (octogee-api|glm-controller)-1 /)?.[1]}`;
+      if (call.includes("exec ")) return `exec:${call.match(/ (octogee-api|glm-controller)-current /)?.[1]}`;
       return call;
     })).toEqual([
       "pods:octogee-api",

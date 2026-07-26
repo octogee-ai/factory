@@ -41,6 +41,12 @@ export interface GatewayEdgeImage {
     imageRepository: string;
     imageTag: string;
 }
+export interface GatewayProfileImages {
+    operator: {
+        imageRepository: string;
+        imageTag: string;
+    };
+}
 export interface W9TestPublisherLiveExperiment {
     kind: "w9-agent-conversation";
     mode: "publisher-live";
@@ -57,6 +63,7 @@ export declare function isW9TestPublisherLiveExperiment(value: unknown): value i
 export interface ReleasePayload {
     imageRepository: string;
     imageTag: string;
+    profileImages?: GatewayProfileImages;
     gatewayEdgeImage?: GatewayEdgeImage;
     testExperiment?: W9TestPublisherLiveExperiment;
 }

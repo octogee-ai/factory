@@ -297,6 +297,7 @@ export type {
   GatewayLifecycleStatus,
   GatewayDoc,
   ReleasePayload,
+  GatewayProfileImages,
   ReleaseDoc,
   AssignmentSource,
   AssignmentDoc,

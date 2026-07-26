@@ -497,6 +497,32 @@ describe("gateway durable configuration authorization", () => {
     });
   });
 
+  it("preserves the operator package receipt when projecting a release artifact", async () => {
+    const profileImages = {
+      operator: {
+        imageRepository:
+          "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator",
+        imageTag: `deadbee@sha256:${"b".repeat(64)}`,
+      },
+    };
+    const docs: Docs = {
+      "gateways/bender/releases/2": {
+        gatewayId: "bender",
+        release: 2,
+        payload: {
+          imageRepository:
+            "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+          imageTag: `deadbee@sha256:${"a".repeat(64)}`,
+          profileImages,
+        },
+      },
+    };
+
+    await expect(readGatewayArtifact(database(docs) as never, "bender", 2)).resolves.toMatchObject({
+      profileImages,
+    });
+  });
+
   it("reads a hash-verified artifact through the retired Mac schema upgrade", async () => {
     const payload = {
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
