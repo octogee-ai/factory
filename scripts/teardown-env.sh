@@ -418,27 +418,23 @@ spec:
                 sleep 1
               done
               database='${dbname}'
-              owner="\$(psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -At -v database="\$database" <<'SQL'
-              SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = :'database';
-              SQL
+              owner="\$(
+                printf '%s\\n' "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = :'database';" |
+                  psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -At -v database="\$database"
               )"
               case "\$owner" in
                 '')
-                  psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -v database="\$database" <<'SQL'
-                  CREATE DATABASE :"database";
-                  SQL
+                  printf '%s\\n' 'CREATE DATABASE :"database";' |
+                    psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -v database="\$database"
                   owner='${owner}'
                   ;;
                 '${owner}')
-                  psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -v database="\$database" <<'SQL'
-                  SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :'database' AND pid <> pg_backend_pid();
-                  SQL
-                  psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -v database="\$database" <<'SQL'
-                  DROP DATABASE :"database";
-                  SQL
-                  psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -v database="\$database" <<'SQL'
-                  CREATE DATABASE :"database";
-                  SQL
+                  printf '%s\\n' "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :'database' AND pid <> pg_backend_pid();" |
+                    psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -v database="\$database"
+                  printf '%s\\n' 'DROP DATABASE :"database";' |
+                    psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -v database="\$database"
+                  printf '%s\\n' 'CREATE DATABASE :"database";' |
+                    psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -v database="\$database"
                   ;;
                 cloudsqlsuperuser) ;;
                 *) echo "Unexpected owner for ${dbname}: \$owner" >&2; exit 1 ;;

@@ -394,6 +394,19 @@ esac
   };
 }
 
+function resetOwnerScript(manifest: string): string {
+  const resetOwner = manifest.indexOf("      containers:\n        - name: reset-owner\n");
+  if (resetOwner < 0) throw new Error("reset-owner container is missing from private SQL owner manifest");
+  const args = manifest.indexOf("          args:\n            - |\n", resetOwner);
+  if (args < 0) throw new Error("reset-owner script is missing from private SQL owner manifest");
+  const start = args + "          args:\n            - |\n".length;
+  const end = manifest.indexOf("\n          env:\n", start);
+  if (end < 0) throw new Error("reset-owner script has no env boundary in private SQL owner manifest");
+  return manifest.slice(start, end).split("\n").map((line) => line.startsWith("              ")
+    ? line.slice("              ".length)
+    : line).join("\n");
+}
+
 describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => {
   it("quiesces the exact target Gitea deployment before the private SQL owner reset", () => {
     const result = runPrivateCentralTeardown({ giteaWorkloadName: "octogee-gitea" });
@@ -415,7 +428,8 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
     const result = runPrivateCentralTeardown({ giteaWorkloadName: "octogee-gitea" });
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
-    expect(result.sqlOwnerManifest).toContain("-v database=\"$database\" <<'SQL'");
+    expect(result.sqlOwnerManifest).toContain("printf '%s\\n'");
+    expect(result.sqlOwnerManifest).toContain('-v database="$database"');
     expect(result.sqlOwnerManifest).toContain('WHERE datname = :\'database\'');
     expect(result.sqlOwnerManifest).toContain('CREATE DATABASE :"database";');
     expect(result.sqlOwnerManifest).toContain('DROP DATABASE :"database";');
@@ -430,6 +444,16 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
     expect(result.sqlOwnerManifest).toContain("initContainers:\n        - name: cloud-sql-proxy");
     expect(result.sqlOwnerManifest).toContain("restartPolicy: Always");
     expect(result.sqlOwnerManifest).toContain("containers:\n        - name: reset-owner");
+  });
+
+  it("generates a shell-valid reset-owner script without nested SQL heredocs", () => {
+    const result = runPrivateCentralTeardown({ giteaWorkloadName: "octogee-gitea" });
+    const script = resetOwnerScript(result.sqlOwnerManifest);
+    const syntax = spawnSync("sh", ["-n"], { input: script, encoding: "utf8" });
+
+    expect(syntax.status, `${syntax.stderr}\n${script}`).toBe(0);
+    expect(script).not.toContain("<<");
+    expect(script).toContain("printf '%s\\n'");
   });
 
   it("drops app-owned private databases through an exact-target in-cluster owner job before API recreation", () => {
