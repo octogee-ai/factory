@@ -1697,6 +1697,7 @@ function startControllerBackgroundTasks({
       now: () => Date.now(),
       log,
       ensureAuthSecret: deps.ensureGatewayAuthSecret,
+      readDeployedReplicas: deps.kubeOps.readDeployedReplicas,
     }),
     PLACEMENT_POLICY_RECONCILE_MS,
   );
