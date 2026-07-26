@@ -80,3 +80,6 @@ backendConfig:
 
 preemptionHandoff:
   sweepMs: "15000"
+
+disposableGateway:
+  idleMs: "1800000"

@@ -1,10 +1,19 @@
-import type { Firestore, QueryDocumentSnapshot } from "firebase-admin/firestore";
+import type {
+  Firestore,
+  QueryDocumentSnapshot,
+  Transaction,
+} from "firebase-admin/firestore";
 
 import {
   GatewayRetirementConflictError,
   claimGatewayRetirementAtomic,
 } from "@octogee/core/gateway-retirement-claim";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
+import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
+import { resolveBuilderTier } from "@octogee/shared/types/billing";
+import {
+  GATEWAY_UNREACHABLE_AFTER_MS,
+  GATEWAYS_COLLECTION,
+} from "@octogee/shared/types/fleet-controller";
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
@@ -22,9 +31,24 @@ import {
   resolveOnboardingPlacementEligibility,
   type ContinuousPlacementOwnedGateway,
 } from "@octogee/shared/types/orchestrator-placement";
+import type { SizingTier } from "@octogee/shared/types/sizing";
+import type { BuilderTierName } from "@octogee/shared/types/billing-tiers";
+import {
+  advanceActivationLeaseFirestore,
+  allocateDisposableGatewayFirestore,
+  completeActivationLeaseFirestore,
+  failActivationLeaseFirestore,
+  readBuilderActivityFirestore,
+} from "./disposable-gateway-lifecycle.js";
 
 export const PLACEMENT_POLICY_RECONCILE_MS_DEFAULT = 15_000;
+export const DISPOSABLE_GATEWAY_PROVISION_TIMEOUT_MS = 10 * 60_000;
+export const DISPOSABLE_GATEWAY_RECOVERY_RECEIPTS_COLLECTION =
+  "gatewayRecoveryReceipts";
 const PLACEMENT_POLICY_ACTOR = "glm-controller-placement-policy";
+const BUILDER_ACTIVATION_LEASE_SOURCE = "builder-activation-lease";
+const DISPOSABLE_BUILDER_ALLOCATION_KIND = "disposable-builder";
+const ROLLED_BACK_STATUS = "rolled-back";
 
 export interface PlacementPolicyUser {
   uid: string;
@@ -34,7 +58,12 @@ export interface PlacementPolicyUser {
 export interface PlacementPolicyMigration {
   id: string;
   uid: string;
+  builderSlug: string;
+  fromGatewayId: string;
   toGatewayId: string;
+  source: "continuous-placement-policy" | "builder-activation-lease";
+  status: "pending" | "running" | "succeeded" | "failed" | "rolled-back";
+  error?: string;
 }
 
 export interface PlacementPolicyAdmission {
@@ -48,6 +77,8 @@ export interface PlacementPolicyAdmission {
 export interface PlacementPolicySnapshot {
   defaultGatewayId: string;
   admission: PlacementPolicyAdmission | null;
+  idleMs: number;
+  liveRunBuilderSlugs: string[];
   users: PlacementPolicyUser[];
   gateways: ContinuousPlacementOwnedGateway[];
   activeMigrations: PlacementPolicyMigration[];
@@ -58,13 +89,74 @@ export interface EnqueuePlacementMigrationInput {
   builderSlug: string;
   fromGatewayId: string;
   toGatewayId: string;
-  source: "continuous-placement-policy";
+  source: "continuous-placement-policy" | "builder-activation-lease";
+  operationId?: string;
 }
+
+export interface AllocateDisposableGatewayInput {
+  uid: string;
+  builderSlug: string;
+  leaseId: string;
+  generation: number;
+  sourceGatewayId: string;
+  sourceAssignmentEpoch: number;
+  entitlementTier: BuilderTierName;
+  sizingTier: SizingTier;
+}
+
+export interface AdvanceActivationLeaseInput {
+  uid: string;
+  leaseId: string;
+  generation: number;
+  fromStatus: "provisioning" | "activating" | "active";
+  toStatus: "activating" | "active" | "returning";
+  operationId?: string;
+}
+
+export interface CompleteActivationLeaseInput {
+  uid: string;
+  leaseId: string;
+  generation: number;
+  targetGatewayId: string;
+}
+
+export interface FailActivationLeaseInput {
+  uid: string;
+  leaseId: string;
+  generation: number;
+  targetGatewayId: string;
+  operationId: string;
+  message: string;
+}
+
+export interface RecoverUnreachableDisposableGatewayInput {
+  uid: string;
+  builderSlug: string;
+  gatewayId: string;
+  leaseId: string;
+  generation: number;
+  authoritativeGatewayId: string;
+}
+
+export interface BuilderRuntimeActivity {
+  lastActiveAt: number | null;
+  liveRun: boolean;
+  liveShell: boolean;
+}
+
+type AuthoritativeLeaseStatus = "provisioning" | "activating" | "returning";
 
 export interface RetireOwnedGatewayInput {
   uid: string;
   builderSlug: string;
   gatewayId: string;
+  leaseId?: string;
+  generation?: number;
+  telemetryFenceOperationId?: string;
+  telemetryFenceStatus?: "succeeded" | "terminal-failure";
+  authoritativeGatewayId?: string;
+  authoritativeLeaseStatus?: AuthoritativeLeaseStatus;
+  zeroWorkloadRecoveryOperationId?: string;
 }
 
 export interface AssignInitialPlacementInput {
@@ -79,6 +171,20 @@ export interface PlacementPolicyReconcilerDeps {
   log(message: string): void;
   readSnapshot(): Promise<PlacementPolicySnapshot>;
   assignInitialPlacement(input: AssignInitialPlacementInput): Promise<void>;
+  allocateDisposableGateway(input: AllocateDisposableGatewayInput): Promise<string>;
+  advanceActivationLease(input: AdvanceActivationLeaseInput): Promise<void>;
+  completeActivationLease(input: CompleteActivationLeaseInput): Promise<void>;
+  failActivationLease(input: FailActivationLeaseInput): Promise<void>;
+  recoverUnreachableDisposableGateway(
+    input: RecoverUnreachableDisposableGatewayInput,
+  ): Promise<{ recovered: boolean; operationId: string }>;
+  readBuilderActivity(input: {
+    uid: string;
+    builderSlug: string;
+    gatewayId: string;
+    userData: Record<string, unknown>;
+    liveRun: boolean;
+  }): Promise<BuilderRuntimeActivity>;
   enqueueMigration(input: EnqueuePlacementMigrationInput): Promise<string>;
   retireOwnedGateway(input: RetireOwnedGatewayInput): Promise<boolean>;
 }
@@ -104,11 +210,70 @@ function currentGatewayId(data: Record<string, unknown>): string | null {
     : null;
 }
 
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function positiveInteger(value: unknown): number | null {
+  return Number.isSafeInteger(value) && (value as number) > 0 ? value as number : null;
+}
+
+function millis(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (value instanceof Date) return value.getTime();
+  if (
+    value &&
+    typeof value === "object" &&
+    typeof (value as { toMillis?: unknown }).toMillis === "function"
+  ) {
+    const result = (value as { toMillis: () => unknown }).toMillis();
+    return typeof result === "number" && Number.isFinite(result) ? result : null;
+  }
+  return null;
+}
+
+interface BuilderActivationLease {
+  raw: Record<string, unknown>;
+  leaseId: string;
+  generation: number;
+  status: string;
+  targetGatewayId: string | null;
+}
+
+interface ActivationTargetContext {
+  context: PlacementPolicyReconcileContext;
+  user: PlacementPolicyUser;
+  builderSlug: string;
+  current: string | null;
+  lease: BuilderActivationLease;
+  target: ContinuousPlacementOwnedGateway;
+}
+
+function builderActivationLease(data: Record<string, unknown>): BuilderActivationLease | null {
+  const provisioning = record(data.provisioning);
+  const openclaw = record(provisioning?.openclaw);
+  const raw = record(openclaw?.activationLease);
+  const leaseId = nonEmptyString(raw?.leaseId);
+  const generation = positiveInteger(raw?.generation);
+  const status = nonEmptyString(raw?.status);
+  if (!raw || !leaseId || !generation || !status) return null;
+  return {
+    raw,
+    leaseId,
+    generation,
+    status,
+    targetGatewayId: nonEmptyString(raw.targetGatewayId),
+  };
+}
+
 interface PlacementPolicyReconcileContext {
   deps: PlacementPolicyReconcilerDeps;
   state: PlacementPolicySnapshot;
   gateways: Map<string, ContinuousPlacementOwnedGateway>;
   migrations: Map<string, PlacementPolicyMigration>;
+  operations: Map<string, PlacementPolicyMigration>;
   result: PlacementPolicyReconcileResult;
   mutations: number;
   mutationLimitLogged: boolean;
@@ -116,7 +281,7 @@ interface PlacementPolicyReconcileContext {
 
 const PLACEMENT_POLICY_MUTATION_LIMIT = 10;
 
-function claimMutation(context: PlacementPolicyReconcileContext): boolean {
+function claimPlacementMutation(context: PlacementPolicyReconcileContext): boolean {
   if (context.mutations < PLACEMENT_POLICY_MUTATION_LIMIT) {
     context.mutations += 1;
     return true;
@@ -128,6 +293,24 @@ function claimMutation(context: PlacementPolicyReconcileContext): boolean {
     context.mutationLimitLogged = true;
   }
   return false;
+}
+
+function blockPlacement(
+  context: PlacementPolicyReconcileContext,
+  input: {
+    uid: string;
+    code: string;
+    reason: string;
+    lease?: BuilderActivationLease;
+  },
+): void {
+  context.result.blocked += 1;
+  const leaseIdentity = input.lease
+    ? ` lease=${input.lease.leaseId} generation=${input.lease.generation}`
+    : "";
+  context.deps.log(
+    `[placement-policy] blocked code=${input.code} uid=${input.uid}${leaseIdentity}: ${input.reason}`,
+  );
 }
 
 async function retireUnentitledOwnedGateways(
@@ -142,14 +325,20 @@ async function retireUnentitledOwnedGateways(
       gateway.desiredStatus !== "retired",
   );
   for (const gateway of ownedGateways) {
-    if (!claimMutation(context)) return;
+    if (!claimPlacementMutation(context)) return;
     const retired = await context.deps.retireOwnedGateway({
       uid: user.uid,
       builderSlug,
       gatewayId: gateway.gatewayId,
     });
     if (retired) context.result.retired += 1;
-    else context.result.blocked += 1;
+    else {
+      blockPlacement(context, {
+        uid: user.uid,
+        code: "disposable-retirement-fence",
+        reason: `gateway ${gateway.gatewayId} did not satisfy retirement fences`,
+      });
+    }
   }
 }
 
@@ -159,7 +348,7 @@ async function assignMissingPlacement(
   builderSlug: string,
   placement: ReturnType<typeof resolveContinuousBuilderPlacement>,
 ): Promise<void> {
-  if (!claimMutation(context)) return;
+  if (!claimPlacementMutation(context)) return;
   const targetGateway = context.gateways.get(placement.targetGatewayId);
   if (!targetGateway) throw new Error(`placement target ${placement.targetGatewayId} is missing`);
   await context.deps.assignInitialPlacement({
@@ -179,8 +368,800 @@ function adoptActiveMigration(
   const active = context.migrations.get(uid);
   if (!active) return false;
   if (active.toGatewayId === targetGatewayId) context.result.adopted += 1;
-  else context.result.blocked += 1;
+  else {
+    blockPlacement(context, {
+      uid,
+      code: "migration-target-conflict",
+      reason: `active migration ${active.id} targets ${active.toGatewayId}, expected ${targetGatewayId}`,
+    });
+  }
   return true;
+}
+
+function activationMigrationMatches(
+  operation: PlacementPolicyMigration,
+  input: {
+    id: string;
+    uid: string;
+    builderSlug: string;
+    fromGatewayId: string;
+    toGatewayId: string;
+  },
+): boolean {
+  return operation.id === input.id &&
+    operation.uid === input.uid &&
+    operation.builderSlug === input.builderSlug &&
+    operation.fromGatewayId === input.fromGatewayId &&
+    operation.toGatewayId === input.toGatewayId &&
+    operation.source === BUILDER_ACTIVATION_LEASE_SOURCE;
+}
+
+function disposableTargetIdentityMatchesLease(
+  gateway: ContinuousPlacementOwnedGateway,
+  user: PlacementPolicyUser,
+  lease: BuilderActivationLease,
+): boolean {
+  const allocation = gateway.allocation;
+  return gateway.gatewayClass === "operator" &&
+    gateway.ownerUid === user.uid &&
+    gateway.disposable === true &&
+    allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND &&
+    allocation.claimedByUid === user.uid &&
+    allocation.leaseId === lease.leaseId &&
+    allocation.generation === lease.generation;
+}
+
+function disposableTargetMatchesLease(
+  gateway: ContinuousPlacementOwnedGateway,
+  user: PlacementPolicyUser,
+  lease: BuilderActivationLease,
+): boolean {
+  return gateway.desiredStatus === "running" &&
+    disposableTargetIdentityMatchesLease(gateway, user, lease);
+}
+
+function authoritativeLeaseStatus(
+  lease: BuilderActivationLease,
+): AuthoritativeLeaseStatus {
+  if (lease.status === "activating") return "activating";
+  if (lease.status === "returning") return "returning";
+  return "provisioning";
+}
+
+async function recoverAndRetireUnreachableTarget(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  builderSlug: string,
+  lease: BuilderActivationLease,
+  target: ContinuousPlacementOwnedGateway,
+): Promise<string | null> {
+  if (!claimPlacementMutation(context)) return null;
+  const recovery = await context.deps.recoverUnreachableDisposableGateway({
+    uid: user.uid,
+    builderSlug,
+    gatewayId: target.gatewayId,
+    leaseId: lease.leaseId,
+    generation: lease.generation,
+    authoritativeGatewayId: context.state.defaultGatewayId,
+  });
+  if (!recovery.recovered) {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: "unreachable-target-recovery-pending",
+      reason: `target ${target.gatewayId} is quarantined until its pods are absent`,
+    });
+    return null;
+  }
+  const retired = await context.deps.retireOwnedGateway({
+    uid: user.uid,
+    builderSlug,
+    gatewayId: target.gatewayId,
+    leaseId: lease.leaseId,
+    generation: lease.generation,
+    authoritativeGatewayId: context.state.defaultGatewayId,
+    authoritativeLeaseStatus: authoritativeLeaseStatus(lease),
+    zeroWorkloadRecoveryOperationId: recovery.operationId,
+  });
+  if (!retired) {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: "unreachable-target-retirement-fence",
+      reason: `target ${target.gatewayId} did not satisfy recovery retirement fences`,
+    });
+    return null;
+  }
+  context.result.retired += 1;
+  return recovery.operationId;
+}
+
+async function cleanupUnreachableProvisioningTarget(
+  input: ActivationTargetContext,
+): Promise<boolean> {
+  const { context, user, builderSlug, current, lease, target } = input;
+  if (target.desiredStatus === "running" && target.ready) return false;
+  if (target.desiredStatus !== "running" && target.desiredStatus !== "paused") return false;
+  if (current !== context.state.defaultGatewayId) {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: "unreachable-target-authority-fence",
+      reason: `Builder is assigned to ${current ?? "missing"}, not ${context.state.defaultGatewayId}`,
+    });
+    return true;
+  }
+  if (target.desiredStatus === "running") {
+    const provisionedAt = millis(lease.raw.provisionedAt);
+    if (provisionedAt === null) {
+      blockPlacement(context, {
+        uid: user.uid,
+        lease,
+        code: "unreachable-target-timestamp-missing",
+        reason: `target ${target.gatewayId} is not ready and the provisioning timestamp is missing`,
+      });
+      return true;
+    }
+    if (context.deps.now() - provisionedAt < DISPOSABLE_GATEWAY_PROVISION_TIMEOUT_MS) {
+      return true;
+    }
+  }
+  const recoveryOperationId = await recoverAndRetireUnreachableTarget(
+    context,
+    user,
+    builderSlug,
+    lease,
+    target,
+  );
+  if (!recoveryOperationId) return true;
+  await context.deps.failActivationLease({
+    uid: user.uid,
+    leaseId: lease.leaseId,
+    generation: lease.generation,
+    targetGatewayId: target.gatewayId,
+    operationId: recoveryOperationId,
+    message: "disposable gateway did not become reachable before timeout",
+  });
+  return true;
+}
+
+async function reconcileRequestedActivation(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  builderSlug: string,
+  lease: BuilderActivationLease,
+): Promise<void> {
+  const sourceGatewayId = nonEmptyString(lease.raw.sourceGatewayId);
+  const sourceAssignmentEpoch = Number.isSafeInteger(lease.raw.sourceAssignmentEpoch)
+    ? lease.raw.sourceAssignmentEpoch as number
+    : null;
+  const entitlementTier = nonEmptyString(lease.raw.entitlementTier) as BuilderTierName | null;
+  const sizingTier = nonEmptyString(lease.raw.sizingTier) as SizingTier | null;
+  if (
+    !sourceGatewayId ||
+    sourceAssignmentEpoch === null ||
+    !entitlementTier ||
+    !sizingTier
+  ) {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: "requested-lease-invalid",
+      reason: "requested activation lease is missing its source or entitlement snapshot",
+    });
+    return;
+  }
+  if (!claimPlacementMutation(context)) return;
+  await context.deps.allocateDisposableGateway({
+    uid: user.uid,
+    builderSlug,
+    leaseId: lease.leaseId,
+    generation: lease.generation,
+    sourceGatewayId,
+    sourceAssignmentEpoch,
+    entitlementTier,
+    sizingTier,
+  });
+}
+
+async function cleanupUnauthorizedProvisioningTarget(
+  input: ActivationTargetContext,
+): Promise<boolean> {
+  const { context, user, builderSlug, lease, target } = input;
+  const authorized = accountAllowsInteractiveAccess(user.data) &&
+    resolveBuilderTier(user.data, new Date(context.deps.now())) !== null;
+  if (authorized) return false;
+  const retired = target.ready
+    ? await context.deps.retireOwnedGateway({
+        uid: user.uid,
+        builderSlug,
+        gatewayId: target.gatewayId,
+        leaseId: lease.leaseId,
+        generation: lease.generation,
+        authoritativeGatewayId: context.state.defaultGatewayId,
+        authoritativeLeaseStatus: "provisioning",
+      })
+    : Boolean(await recoverAndRetireUnreachableTarget(
+        context,
+        user,
+        builderSlug,
+        lease,
+        target,
+      ));
+  if (!retired) {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: "provisioning-authorization-cleanup-pending",
+      reason: `target ${target.gatewayId} is awaiting safe cleanup after authorization ended`,
+    });
+    return true;
+  }
+  if (target.ready) context.result.retired += 1;
+  await context.deps.failActivationLease({
+    uid: user.uid,
+    leaseId: lease.leaseId,
+    generation: lease.generation,
+    targetGatewayId: target.gatewayId,
+    operationId: `builder-authorization-ended-${target.gatewayId}`,
+    message: "Builder authorization ended before activation cutover",
+  });
+  return true;
+}
+
+async function advanceReadyProvisioningTarget(
+  input: ActivationTargetContext,
+): Promise<void> {
+  const { context, user, builderSlug, current, lease, target } = input;
+  const operationId = `builder-activate-${lease.targetGatewayId!}`;
+  const active = context.migrations.get(user.uid);
+  if (active) {
+    if (!activationMigrationMatches(active, {
+      id: operationId,
+      uid: user.uid,
+      builderSlug,
+      fromGatewayId: current ?? context.state.defaultGatewayId,
+      toGatewayId: target.gatewayId,
+    })) {
+      blockPlacement(context, {
+        uid: user.uid,
+        lease,
+        code: "activation-migration-conflict",
+        reason: `active migration ${active.id} does not match move-in demand`,
+      });
+      return;
+    }
+    context.result.adopted += 1;
+    await context.deps.advanceActivationLease({
+      uid: user.uid,
+      leaseId: lease.leaseId,
+      generation: lease.generation,
+      fromStatus: "provisioning",
+      toStatus: "activating",
+      operationId: active.id,
+    });
+    return;
+  }
+  if (!claimPlacementMutation(context)) return;
+  const enqueuedOperationId = await context.deps.enqueueMigration({
+    uid: user.uid,
+    builderSlug,
+    fromGatewayId: current ?? context.state.defaultGatewayId,
+    toGatewayId: target.gatewayId,
+    source: BUILDER_ACTIVATION_LEASE_SOURCE,
+    operationId,
+  });
+  context.result.enqueued += 1;
+  await context.deps.advanceActivationLease({
+    uid: user.uid,
+    leaseId: lease.leaseId,
+    generation: lease.generation,
+    fromStatus: "provisioning",
+    toStatus: "activating",
+    operationId: enqueuedOperationId,
+  });
+}
+
+async function reconcileProvisioningActivation(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  builderSlug: string,
+  current: string | null,
+  lease: BuilderActivationLease,
+): Promise<void> {
+  const targetGatewayId = lease.targetGatewayId;
+  const target = targetGatewayId ? context.gateways.get(targetGatewayId) : null;
+  if (!target || !disposableTargetIdentityMatchesLease(target, user, lease)) {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: "provisioning-target-fence",
+      reason: `target ${targetGatewayId ?? "missing"} does not match the activation lease`,
+    });
+    return;
+  }
+  if (await cleanupFailedActivation({
+    context,
+    user,
+    builderSlug,
+    current,
+    lease,
+    target,
+  })) return;
+  if (current === targetGatewayId) {
+    await context.deps.advanceActivationLease({
+      uid: user.uid,
+      leaseId: lease.leaseId,
+      generation: lease.generation,
+      fromStatus: "provisioning",
+      toStatus: "active",
+    });
+    return;
+  }
+  if (target.desiredStatus === "retired") {
+    await context.deps.failActivationLease({
+      uid: user.uid,
+      leaseId: lease.leaseId,
+      generation: lease.generation,
+      targetGatewayId: target.gatewayId,
+      operationId: `placement-retire-${user.uid}-${target.gatewayId}`,
+      message: "disposable gateway retired before activation cutover completed",
+    });
+    return;
+  }
+  const targetInput = { context, user, builderSlug, current, lease, target };
+  if (await cleanupUnauthorizedProvisioningTarget(targetInput)) return;
+  if (
+    await cleanupUnreachableProvisioningTarget({
+      context,
+      user,
+      builderSlug,
+      current,
+      lease,
+      target,
+    })
+  ) {
+    return;
+  }
+  if (target.desiredStatus !== "running") {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: "provisioning-target-status",
+      reason: `target ${target.gatewayId} has desired status ${target.desiredStatus}`,
+    });
+    return;
+  }
+  if (!target.ready) return;
+  await advanceReadyProvisioningTarget(targetInput);
+}
+
+async function reconcileActivatingLease(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  builderSlug: string,
+  current: string | null,
+  lease: BuilderActivationLease,
+): Promise<void> {
+  const targetGatewayId = lease.targetGatewayId;
+  const target = targetGatewayId ? context.gateways.get(targetGatewayId) : null;
+  if (!target || !disposableTargetIdentityMatchesLease(target, user, lease)) {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: "activating-target-fence",
+      reason: `target ${targetGatewayId ?? "missing"} does not match the activation lease`,
+    });
+    return;
+  }
+  if (await cleanupFailedActivation({
+    context,
+    user,
+    builderSlug,
+    current,
+    lease,
+    target,
+  })) return;
+  const authorized = accountAllowsInteractiveAccess(user.data) &&
+    resolveBuilderTier(user.data, new Date(context.deps.now())) !== null;
+  if (!authorized && current !== lease.targetGatewayId) {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: "activating-authorization-ended",
+      reason: "activation migration must roll back because Builder authorization ended",
+    });
+    return;
+  }
+  if (current !== lease.targetGatewayId) return;
+  await context.deps.advanceActivationLease({
+    uid: user.uid,
+    leaseId: lease.leaseId,
+    generation: lease.generation,
+    fromStatus: "activating",
+    toStatus: "active",
+  });
+}
+
+async function cleanupFailedActivation(
+  input: ActivationTargetContext,
+): Promise<boolean> {
+  const { context, user, builderSlug, current, lease, target } = input;
+  const operationId = `builder-activate-${target.gatewayId}`;
+  const operation = context.operations.get(operationId);
+  if (!operation || (operation.status !== "failed" && operation.status !== ROLLED_BACK_STATUS)) {
+    return false;
+  }
+  if (target.desiredStatus !== "retired") {
+    const recoveredRetirement =
+      current === context.state.defaultGatewayId && !target.ready;
+    const retired = recoveredRetirement
+      ? Boolean(await recoverAndRetireUnreachableTarget(
+          context,
+          user,
+          builderSlug,
+          lease,
+          target,
+        ))
+      : await context.deps.retireOwnedGateway({
+          uid: user.uid,
+          builderSlug,
+          gatewayId: target.gatewayId,
+          leaseId: lease.leaseId,
+          generation: lease.generation,
+          telemetryFenceOperationId: operationId,
+          telemetryFenceStatus: "terminal-failure",
+        });
+    if (!retired) {
+      blockPlacement(context, {
+        uid: user.uid,
+        lease,
+        code: "failed-activation-cleanup-fence",
+        reason: `target ${target.gatewayId} did not satisfy failure cleanup fences`,
+      });
+      return true;
+    }
+    if (!recoveredRetirement) context.result.retired += 1;
+  }
+  await context.deps.failActivationLease({
+    uid: user.uid,
+    leaseId: lease.leaseId,
+    generation: lease.generation,
+    targetGatewayId: target.gatewayId,
+    operationId,
+    message: operation.error ?? `activation migration ${operation.status}`,
+  });
+  return true;
+}
+
+async function queueLeaseReturn(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  builderSlug: string,
+  lease: BuilderActivationLease,
+): Promise<void> {
+  const targetGatewayId = lease.targetGatewayId!;
+  const active = context.migrations.get(user.uid);
+  if (active) {
+    if (!activationMigrationMatches(active, {
+      id: `builder-return-${targetGatewayId}`,
+      uid: user.uid,
+      builderSlug,
+      fromGatewayId: targetGatewayId,
+      toGatewayId: context.state.defaultGatewayId,
+    })) {
+      blockPlacement(context, {
+        uid: user.uid,
+        lease,
+        code: "return-migration-conflict",
+        reason: `active migration ${active.id} does not match return demand`,
+      });
+      return;
+    }
+    context.result.adopted += 1;
+    await context.deps.advanceActivationLease({
+      uid: user.uid,
+      leaseId: lease.leaseId,
+      generation: lease.generation,
+      fromStatus: "active",
+      toStatus: "returning",
+      operationId: active.id,
+    });
+    return;
+  }
+  if (!claimPlacementMutation(context)) return;
+  const operationId = await context.deps.enqueueMigration({
+    uid: user.uid,
+    builderSlug,
+    fromGatewayId: targetGatewayId,
+    toGatewayId: context.state.defaultGatewayId,
+    source: BUILDER_ACTIVATION_LEASE_SOURCE,
+    operationId: `builder-return-${targetGatewayId}`,
+  });
+  context.result.enqueued += 1;
+  await context.deps.advanceActivationLease({
+    uid: user.uid,
+    leaseId: lease.leaseId,
+    generation: lease.generation,
+    fromStatus: "active",
+    toStatus: "returning",
+    operationId,
+  });
+}
+
+function completedReturnMigration(input: ActivationTargetContext): PlacementPolicyMigration | null {
+  const { context, user, builderSlug, current, lease, target } = input;
+  const operationId = `builder-return-${lease.targetGatewayId!}`;
+  const operation = context.operations.get(operationId);
+  if (
+    current !== context.state.defaultGatewayId ||
+    operation?.status !== "succeeded" ||
+    !disposableTargetIdentityMatchesLease(target, user, lease) ||
+    !activationMigrationMatches(operation, {
+      id: operationId,
+      uid: user.uid,
+      builderSlug,
+      fromGatewayId: target.gatewayId,
+      toGatewayId: context.state.defaultGatewayId,
+    })
+  ) {
+    return null;
+  }
+  return operation;
+}
+
+function builderActivityRequiresRuntime(
+  activity: BuilderRuntimeActivity,
+  now: number,
+  idleMs: number,
+): boolean {
+  return activity.liveRun ||
+    activity.liveShell ||
+    activity.lastActiveAt === null ||
+    now - activity.lastActiveAt < idleMs;
+}
+
+async function reconcileActiveLease(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  builderSlug: string,
+  current: string | null,
+  lease: BuilderActivationLease,
+): Promise<void> {
+  const targetGatewayId = lease.targetGatewayId;
+  const target = targetGatewayId ? context.gateways.get(targetGatewayId) : null;
+  const targetInput = target
+    ? { context, user, builderSlug, current, lease, target }
+    : null;
+  const completedReturn = targetInput ? completedReturnMigration(targetInput) : null;
+  if (completedReturn) {
+    await context.deps.advanceActivationLease({
+      uid: user.uid,
+      leaseId: lease.leaseId,
+      generation: lease.generation,
+      fromStatus: "active",
+      toStatus: "returning",
+      operationId: completedReturn.id,
+    });
+    return;
+  }
+  if (
+    current !== targetGatewayId ||
+    !target ||
+    !disposableTargetMatchesLease(target, user, lease)
+  ) {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: "active-lease-fence",
+      reason: `current gateway ${current ?? "missing"} does not match an active disposable target`,
+    });
+    return;
+  }
+  const authorized = accountAllowsInteractiveAccess(user.data) &&
+    resolveBuilderTier(user.data, new Date(context.deps.now())) !== null;
+  if (!authorized) {
+    await queueLeaseReturn(context, user, builderSlug, lease);
+    return;
+  }
+  if (context.state.idleMs <= 0) return;
+  const activity = await context.deps.readBuilderActivity({
+    uid: user.uid,
+    builderSlug,
+    gatewayId: targetGatewayId!,
+    userData: user.data,
+    liveRun: context.state.liveRunBuilderSlugs.includes(builderSlug),
+  });
+  if (builderActivityRequiresRuntime(activity, context.deps.now(), context.state.idleMs)) return;
+  await queueLeaseReturn(context, user, builderSlug, lease);
+}
+
+async function reconcileReturnMigrationOnTarget(
+  input: ActivationTargetContext,
+): Promise<boolean> {
+  const { context, user, builderSlug, current, lease } = input;
+  const targetGatewayId = lease.targetGatewayId!;
+  if (current !== targetGatewayId) return false;
+  const operationId = `builder-return-${targetGatewayId}`;
+  const returnOperation = context.operations.get(operationId);
+  if (
+    returnOperation?.status === "failed" ||
+    returnOperation?.status === ROLLED_BACK_STATUS
+  ) {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: "return-operation-failed",
+      reason: `return operation ended with ${returnOperation.status}: ${returnOperation.error ?? "unknown error"}`,
+    });
+    return true;
+  }
+  const active = context.migrations.get(user.uid);
+  if (active) {
+    if (activationMigrationMatches(active, {
+      id: operationId,
+      uid: user.uid,
+      builderSlug,
+      fromGatewayId: targetGatewayId,
+      toGatewayId: context.state.defaultGatewayId,
+    })) {
+      context.result.adopted += 1;
+    } else {
+      blockPlacement(context, {
+        uid: user.uid,
+        lease,
+        code: "return-migration-conflict",
+        reason: `active migration ${active.id} does not match return demand`,
+      });
+    }
+    return true;
+  }
+  if (!claimPlacementMutation(context)) return true;
+  await context.deps.enqueueMigration({
+    uid: user.uid,
+    builderSlug,
+    fromGatewayId: targetGatewayId,
+    toGatewayId: context.state.defaultGatewayId,
+    source: BUILDER_ACTIVATION_LEASE_SOURCE,
+    operationId,
+  });
+  context.result.enqueued += 1;
+  return true;
+}
+
+async function completeReturnedLease(
+  input: ActivationTargetContext,
+): Promise<void> {
+  const { context, user, builderSlug, lease, target } = input;
+  const targetGatewayId = lease.targetGatewayId!;
+  if (target.desiredStatus === "retired") {
+    await context.deps.completeActivationLease({
+      uid: user.uid,
+      leaseId: lease.leaseId,
+      generation: lease.generation,
+      targetGatewayId,
+    });
+    return;
+  }
+  if (!target.ready || target.desiredStatus === "paused") {
+    const recoveryOperationId = await recoverAndRetireUnreachableTarget(
+      context,
+      user,
+      builderSlug,
+      lease,
+      target,
+    );
+    if (!recoveryOperationId) return;
+    await context.deps.completeActivationLease({
+      uid: user.uid,
+      leaseId: lease.leaseId,
+      generation: lease.generation,
+      targetGatewayId,
+    });
+    return;
+  }
+  if (target.desiredStatus !== "running") {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: "return-target-status",
+      reason: `target ${target.gatewayId} has desired status ${target.desiredStatus}`,
+    });
+    return;
+  }
+  const retired = await context.deps.retireOwnedGateway({
+    uid: user.uid,
+    builderSlug,
+    gatewayId: targetGatewayId,
+    leaseId: lease.leaseId,
+    generation: lease.generation,
+    telemetryFenceOperationId: `builder-return-${targetGatewayId}`,
+    telemetryFenceStatus: "succeeded",
+    authoritativeGatewayId: context.state.defaultGatewayId,
+  });
+  if (!retired) {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: "return-retirement-fence",
+      reason: `target ${targetGatewayId} did not satisfy retirement fences`,
+    });
+    return;
+  }
+  context.result.retired += 1;
+  await context.deps.completeActivationLease({
+    uid: user.uid,
+    leaseId: lease.leaseId,
+    generation: lease.generation,
+    targetGatewayId,
+  });
+}
+
+async function reconcileReturningLease(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  builderSlug: string,
+  current: string | null,
+  lease: BuilderActivationLease,
+): Promise<void> {
+  const targetGatewayId = lease.targetGatewayId;
+  const target = targetGatewayId ? context.gateways.get(targetGatewayId) : null;
+  if (
+    !targetGatewayId ||
+    !target ||
+    !disposableTargetIdentityMatchesLease(target, user, lease)
+  ) {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: "returning-target-fence",
+      reason: `target ${targetGatewayId ?? "missing"} does not match the returning lease`,
+    });
+    return;
+  }
+  const targetInput = { context, user, builderSlug, current, lease, target };
+  if (await reconcileReturnMigrationOnTarget(targetInput)) return;
+  if (current !== context.state.defaultGatewayId) {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: "return-authority-fence",
+      reason: `Builder is assigned to ${current ?? "missing"}, not ${context.state.defaultGatewayId}`,
+    });
+    return;
+  }
+  await completeReturnedLease(targetInput);
+}
+
+async function reconcileActivationLease(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  builderSlug: string,
+  current: string | null,
+): Promise<boolean> {
+  const lease = builderActivationLease(user.data);
+  if (!lease) return false;
+  if (lease.status === "requested") {
+    await reconcileRequestedActivation(context, user, builderSlug, lease);
+    return true;
+  }
+  if (lease.status === "provisioning") {
+    await reconcileProvisioningActivation(context, user, builderSlug, current, lease);
+    return true;
+  }
+  if (lease.status === "activating") {
+    await reconcileActivatingLease(context, user, builderSlug, current, lease);
+    return true;
+  }
+  if (lease.status === "active") {
+    await reconcileActiveLease(context, user, builderSlug, current, lease);
+    return true;
+  }
+  if (lease.status === "returning") {
+    await reconcileReturningLease(context, user, builderSlug, current, lease);
+    return true;
+  }
+  return false;
 }
 
 async function reconcileEligibleBuilder(
@@ -195,12 +1176,14 @@ async function reconcileEligibleBuilder(
     currentGateway.gatewayClass !== "shared" &&
     currentGateway.disposable !== true
   ) {
-    context.result.blocked += 1;
-    context.deps.log(
-      `[placement-policy] uid=${user.uid} legacy gateway ${currentGateway.gatewayId} requires operator migration`,
-    );
+    blockPlacement(context, {
+      uid: user.uid,
+      code: "legacy-gateway-operator-migration",
+      reason: `legacy gateway ${currentGateway.gatewayId} requires operator migration`,
+    });
     return;
   }
+  if (await reconcileActivationLease(context, user, builderSlug, current)) return;
   const entitledOwned = resolveLiveActivationTargetGatewayId({
     userData: user.data,
     now: new Date(context.deps.now()),
@@ -224,7 +1207,7 @@ async function reconcileEligibleBuilder(
     return;
   }
   if (adoptActiveMigration(context, user.uid, placement.targetGatewayId)) return;
-  if (!claimMutation(context)) return;
+  if (!claimPlacementMutation(context)) return;
   await context.deps.enqueueMigration({
     uid: user.uid,
     builderSlug,
@@ -295,19 +1278,32 @@ export async function reconcilePlacementPolicyOnce(
     );
     return result;
   }
-  const migrations = new Map(state.activeMigrations.map((item) => [item.uid, item]));
+  const migrations = new Map(
+    state.activeMigrations
+      .filter((item) => item.status === "pending" || item.status === "running")
+      .map((item) => [item.uid, item]),
+  );
+  const operations = new Map(state.activeMigrations.map((item) => [item.id, item]));
 
   const context = {
     deps,
     state,
     gateways,
     migrations,
+    operations,
     result,
     mutations: 0,
     mutationLimitLogged: false,
   };
   for (const user of [...state.users].sort((a, b) => a.uid.localeCompare(b.uid))) {
-    await reconcilePlacementUser(context, user);
+    try {
+      await reconcilePlacementUser(context, user);
+    } catch (error) {
+      result.blocked += 1;
+      deps.log(
+        `[placement-policy] ${user.uid}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
   return result;
 }
@@ -316,14 +1312,51 @@ function docsById(docs: QueryDocumentSnapshot[]): Map<string, Record<string, unk
   return new Map(docs.map((doc) => [doc.id, doc.data() as Record<string, unknown>]));
 }
 
+function placementMigrationStatus(
+  value: unknown,
+): PlacementPolicyMigration["status"] | null {
+  if (
+    value === "pending" ||
+    value === "running" ||
+    value === "succeeded" ||
+    value === "failed" ||
+    value === ROLLED_BACK_STATUS
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function placementMigrationSource(
+  value: unknown,
+): PlacementPolicyMigration["source"] | null {
+  if (value === "continuous-placement-policy") return value;
+  if (value === BUILDER_ACTIVATION_LEASE_SOURCE) return value;
+  return null;
+}
+
 function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration | null {
   const data = doc.data() as Record<string, unknown>;
   if (data.kind !== "migrate-customer") return null;
-  const input = data.input;
-  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
-  const uid = nonEmptyString((input as Record<string, unknown>).uid) ?? nonEmptyString(data.inputUid);
-  const toGatewayId = nonEmptyString((input as Record<string, unknown>).toGatewayId);
-  return uid && toGatewayId ? { id: doc.id, uid, toGatewayId } : null;
+  const input = record(data.input);
+  if (!input) return null;
+  const uid = nonEmptyString(input.uid) ?? nonEmptyString(data.inputUid);
+  const builderSlug = nonEmptyString(input.builderSlug);
+  const fromGatewayId = nonEmptyString(input.fromGatewayId);
+  const toGatewayId = nonEmptyString(input.toGatewayId);
+  const source = placementMigrationSource(input.source);
+  const status = placementMigrationStatus(data.status);
+  if (!uid || !builderSlug || !fromGatewayId || !toGatewayId || !source || !status) return null;
+  return {
+    id: doc.id,
+    uid,
+    builderSlug,
+    fromGatewayId,
+    toGatewayId,
+    source,
+    status,
+    ...(typeof data.error === "string" ? { error: data.error } : {}),
+  };
 }
 
 function placementPolicyAdmission(value: unknown): PlacementPolicyAdmission | null {
@@ -356,39 +1389,87 @@ function placementPolicyAdmission(value: unknown): PlacementPolicyAdmission | nu
 
 interface FirestorePlacementPolicyInput {
   db: Firestore;
+  namespace: string;
+  idleMs: number;
   now(): number;
   log(message: string): void;
+  ensureAuthSecret(input: { namespace: string; gatewayId: string }): Promise<unknown>;
+  readGatewayPodDiagnostics(input: {
+    namespace: string;
+    gatewayId: string;
+  }): Promise<{
+    status: string;
+    totalPods: number;
+    error?: string;
+  }>;
 }
 
-async function readPlacementPolicySnapshot(db: Firestore): Promise<PlacementPolicySnapshot> {
-  const [configSnap, usersSnap, gatewaysSnap, runtimeSnap, opsSnap] =
+async function readPlacementPolicySnapshot(
+  db: Firestore,
+  fallbackIdleMs: number,
+  now: number,
+): Promise<PlacementPolicySnapshot> {
+  const [configSnap, usersSnap, gatewaysSnap, runtimeSnap, opsSnap, liveRunsSnap] =
     await Promise.all([
       db.doc("config/orchestrator").get(),
       db.collection("users").get(),
       db.collection(GATEWAYS_COLLECTION).get(),
       db.collection(GLM_GATEWAYS_COLLECTION).get(),
-      db.collection(GLM_OPERATIONS_COLLECTION).where("status", "in", ["pending", "running"]).get(),
+      db.collection(GLM_OPERATIONS_COLLECTION)
+        .where("status", "in", ["pending", "running", "failed", ROLLED_BACK_STATUS])
+        .get(),
+      db.collectionGroup("liveRuns").where("expiresAt", ">", now).get(),
     ]);
   const defaultGatewayId = nonEmptyString(configSnap.data()?.defaultGatewayId);
   if (!defaultGatewayId) throw new Error("config/orchestrator.defaultGatewayId is missing");
+  const completedReturnRefs = usersSnap.docs.flatMap((doc) => {
+    const userData = doc.data() as Record<string, unknown>;
+    const lease = builderActivationLease(userData);
+    return (
+      lease?.status === "active" &&
+      lease.targetGatewayId &&
+      currentGatewayId(userData) === defaultGatewayId
+    )
+      ? [
+          db.collection(GLM_OPERATIONS_COLLECTION)
+            .doc(`builder-return-${lease.targetGatewayId}`),
+        ]
+      : [];
+  });
+  const completedReturnSnapshots = completedReturnRefs.length > 0
+    ? await db.getAll(...completedReturnRefs)
+    : [];
   const admission = placementPolicyAdmission(
     configSnap.data()?.disposableGatewayPlacementAdmission,
   );
+  const configuredIdleMs = configSnap.data()?.disposableGatewayIdleMs;
+  const idleMs = Number.isSafeInteger(configuredIdleMs) && configuredIdleMs >= 0
+    ? configuredIdleMs
+    : fallbackIdleMs;
   const runtimes = docsById(runtimeSnap.docs);
   const gateways = gatewaysSnap.docs.flatMap((doc) => {
     const root = projectGatewayDesiredRootForGateway(doc.data(), doc.id);
     if (!root) return [];
     const runtime = runtimes.get(doc.id);
+    const heartbeatAt = isGatewayRuntimeDoc(runtime)
+      ? millis(runtime.heartbeat.lastHeartbeatAt)
+      : null;
     return [{
       gatewayId: doc.id,
       gatewayClass: root.gatewayClass,
       ownerUid: root.ownerUid,
       desiredStatus: root.desiredStatus,
-      disposable: root.allocation?.kind === "disposable-builder",
+      disposable: root.allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND,
+      allocation: root.allocation ?? null,
       ready: isGatewayRuntimeDoc(runtime) &&
         runtime.gatewayId === doc.id &&
+        root.liveRelease !== null &&
+        root.desiredRelease === root.liveRelease &&
+        runtime.release === root.liveRelease &&
         runtime.lifecycle === "serving" &&
-        runtime.heartbeat.status === "ready",
+        runtime.heartbeat.status === "ready" &&
+        heartbeatAt !== null &&
+        now - heartbeatAt <= GATEWAY_UNREACHABLE_AFTER_MS,
     }];
   });
   const defaultGateway = gateways.find((gateway) => gateway.gatewayId === defaultGatewayId);
@@ -402,9 +1483,19 @@ async function readPlacementPolicySnapshot(db: Firestore): Promise<PlacementPoli
   return {
     defaultGatewayId,
     admission,
+    idleMs,
+    liveRunBuilderSlugs: [...new Set(liveRunsSnap.docs.flatMap((doc) => {
+      const parts = doc.ref.path.split("/");
+      return parts[0] === "workspaces" && parts[1] ? [parts[1]] : [];
+    }))],
     users: usersSnap.docs.map((doc) => ({ uid: doc.id, data: doc.data() as Record<string, unknown> })),
     gateways,
-    activeMigrations: opsSnap.docs.flatMap((doc) => activeMigration(doc) ?? []),
+    activeMigrations: [
+      ...opsSnap.docs,
+      ...completedReturnSnapshots.filter(
+        (snapshot) => snapshot.exists && snapshot.data()?.status === "succeeded",
+      ),
+    ].flatMap((doc) => activeMigration(doc as QueryDocumentSnapshot) ?? []),
   };
 }
 
@@ -436,9 +1527,11 @@ async function enqueuePlacementMigration(
   input: FirestorePlacementPolicyInput,
   request: EnqueuePlacementMigrationInput,
 ): Promise<string> {
-  const ref = input.db.collection(GLM_OPERATIONS_COLLECTION).doc();
+  const ref = request.operationId
+    ? input.db.collection(GLM_OPERATIONS_COLLECTION).doc(request.operationId)
+    : input.db.collection(GLM_OPERATIONS_COLLECTION).doc();
   const now = input.now();
-  await ref.set({
+  const operation = {
     kind: "migrate-customer",
     status: "pending",
     createdBy: PLACEMENT_POLICY_ACTOR,
@@ -455,8 +1548,333 @@ async function enqueuePlacementMigration(
     steps: [],
     gatewayId: request.toGatewayId,
     inputUid: request.uid,
+  };
+  if (!request.operationId) {
+    await ref.set(operation);
+    return ref.id;
+  }
+  await input.db.runTransaction(async (transaction) => {
+    const existing = await transaction.get(ref);
+    if (existing.exists) {
+      const data = existing.data() as Record<string, unknown>;
+      const operationInput = record(data.input);
+      if (
+        data.kind !== "migrate-customer" ||
+        operationInput?.uid !== request.uid ||
+        operationInput.builderSlug !== request.builderSlug ||
+        operationInput.fromGatewayId !== request.fromGatewayId ||
+        operationInput.toGatewayId !== request.toGatewayId ||
+        operationInput.source !== request.source
+      ) {
+        throw new Error(`migration operation ${ref.id} does not match activation demand`);
+      }
+      if (
+        data.status !== "pending" &&
+        data.status !== "running" &&
+        data.status !== "succeeded"
+      ) {
+        throw new Error(`migration operation ${ref.id} ended with status ${String(data.status)}`);
+      }
+      return;
+    }
+    transaction.create(ref, operation);
   });
   return ref.id;
+}
+
+function recoveryTargetMatchesRequest(
+  root: ReturnType<typeof projectGatewayDesiredRootForGateway>,
+  request: RecoverUnreachableDisposableGatewayInput,
+): root is NonNullable<ReturnType<typeof projectGatewayDesiredRootForGateway>> {
+  const allocation = root?.allocation;
+  return root !== null &&
+    root.ownerUid === request.uid &&
+    root.gatewayClass !== "shared" &&
+    root.desiredStatus !== "retired" &&
+    allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND &&
+    allocation.claimedByUid === request.uid &&
+    allocation.leaseId === request.leaseId &&
+    allocation.generation === request.generation;
+}
+
+function recoveryTargetBecameReady(input: {
+  root: NonNullable<ReturnType<typeof projectGatewayDesiredRootForGateway>>;
+  runtime: Record<string, unknown> | undefined;
+  request: RecoverUnreachableDisposableGatewayInput;
+  now: number;
+}): boolean {
+  const { root, runtime, request, now } = input;
+  const heartbeatAt = isGatewayRuntimeDoc(runtime)
+    ? millis(runtime.heartbeat.lastHeartbeatAt)
+    : null;
+  return root.desiredStatus === "running" &&
+    isGatewayRuntimeDoc(runtime) &&
+    runtime.gatewayId === request.gatewayId &&
+    root.liveRelease !== null &&
+    runtime.release === root.liveRelease &&
+    runtime.lifecycle === "serving" &&
+    runtime.heartbeat.status === "ready" &&
+    heartbeatAt !== null &&
+    now - heartbeatAt <= GATEWAY_UNREACHABLE_AFTER_MS;
+}
+
+function recoveryAuthorityMatches(input: {
+  userData: Record<string, unknown> | undefined;
+  assignmentExists: boolean;
+  assignment: Record<string, unknown> | undefined;
+  request: RecoverUnreachableDisposableGatewayInput;
+}): boolean {
+  const { userData, assignmentExists, assignment, request } = input;
+  return currentGatewayId(userData ?? {}) === request.authoritativeGatewayId &&
+    assignmentExists &&
+    assignment?.uid === request.uid &&
+    assignment.gatewayId === request.authoritativeGatewayId &&
+    assignment.state === "serving";
+}
+
+async function recoverUnreachableDisposableGatewayFirestore(
+  input: FirestorePlacementPolicyInput,
+  request: RecoverUnreachableDisposableGatewayInput,
+): Promise<{ recovered: boolean; operationId: string }> {
+  const operationId = `builder-recover-${request.gatewayId}`;
+  const gatewayRef = input.db.collection(GATEWAYS_COLLECTION).doc(request.gatewayId);
+  const userRef = input.db.collection("users").doc(request.uid);
+  const assignmentRef = input.db
+    .collection(GATEWAYS_COLLECTION)
+    .doc(request.authoritativeGatewayId)
+    .collection("assignments")
+    .doc(request.uid);
+  const operationRef = input.db
+    .collection(DISPOSABLE_GATEWAY_RECOVERY_RECEIPTS_COLLECTION)
+    .doc(operationId);
+  const runtimeRef = input.db.collection(GLM_GATEWAYS_COLLECTION).doc(request.gatewayId);
+  const exactRecoveryState = async (
+    transaction: Transaction,
+  ): Promise<void> => {
+    const [gatewaySnapshot, userSnapshot, assignmentSnapshot, runtimeSnapshot] =
+      await Promise.all([
+      transaction.get(gatewayRef),
+      transaction.get(userRef),
+      transaction.get(assignmentRef),
+      transaction.get(runtimeRef),
+    ]);
+    const root = projectGatewayDesiredRootForGateway(
+      gatewaySnapshot.data(),
+      request.gatewayId,
+    );
+    const userData = userSnapshot.data() as Record<string, unknown> | undefined;
+    const assignment = assignmentSnapshot.data() as Record<string, unknown> | undefined;
+    if (!recoveryTargetMatchesRequest(root, request)) {
+      throw new GatewayRetirementConflictError(
+        `gateway ${request.gatewayId} no longer matches unreachable recovery demand`,
+      );
+    }
+    const runtime = runtimeSnapshot.data() as Record<string, unknown> | undefined;
+    if (recoveryTargetBecameReady({
+      root,
+      runtime,
+      request,
+      now: input.now(),
+    })) {
+      throw new GatewayRetirementConflictError(
+        `gateway ${request.gatewayId} became ready before recovery`,
+      );
+    }
+    if (!recoveryAuthorityMatches({
+      userData,
+      assignmentExists: assignmentSnapshot.exists,
+      assignment,
+      request,
+    })) {
+      throw new GatewayRetirementConflictError(
+        `Builder ${request.uid} is no longer authoritative on ${request.authoritativeGatewayId}`,
+      );
+    }
+  };
+  await input.db.runTransaction(async (transaction) => {
+    await exactRecoveryState(transaction);
+    const operationSnapshot = await transaction.get(operationRef);
+    if (operationSnapshot.exists) {
+      const operation = operationSnapshot.data() as Record<string, unknown>;
+      const operationInput = record(operation.input);
+      if (
+        operation.kind !== "recover-unreachable-disposable" ||
+        operationInput?.uid !== request.uid ||
+        operationInput.gatewayId !== request.gatewayId ||
+        operationInput.leaseId !== request.leaseId ||
+        operationInput.generation !== request.generation
+      ) {
+        throw new GatewayRetirementConflictError(
+          `recovery operation ${operationId} does not match unreachable demand`,
+        );
+      }
+      if (operation.status === "succeeded") return;
+      if (operation.status !== "pending") {
+        throw new GatewayRetirementConflictError(
+          `recovery operation ${operationId} ended with ${String(operation.status)}`,
+        );
+      }
+    } else {
+      transaction.create(operationRef, {
+        kind: "recover-unreachable-disposable",
+        status: "pending",
+        createdBy: PLACEMENT_POLICY_ACTOR,
+        createdAt: input.now(),
+        startedAt: input.now(),
+        completedAt: null,
+        input: {
+          uid: request.uid,
+          builderSlug: request.builderSlug,
+          gatewayId: request.gatewayId,
+          leaseId: request.leaseId,
+          generation: request.generation,
+          authoritativeGatewayId: request.authoritativeGatewayId,
+        },
+        steps: [],
+        gatewayId: request.gatewayId,
+        inputUid: request.uid,
+      });
+    }
+    transaction.set(gatewayRef, {
+      desiredStatus: "paused",
+      updatedAt: input.now(),
+      updatedBy: `${PLACEMENT_POLICY_ACTOR}:${operationId}`,
+    }, { merge: true });
+  });
+  const diagnostics = await input.readGatewayPodDiagnostics({
+    namespace: input.namespace,
+    gatewayId: request.gatewayId,
+  });
+  if (
+    diagnostics.error ||
+    diagnostics.status !== "missing" ||
+    diagnostics.totalPods !== 0
+  ) {
+    const diagnosticError = diagnostics.error ? ` error=${diagnostics.error}` : "";
+    input.log(
+      `[placement-policy] recovery ${operationId} waiting for pod absence; status=${diagnostics.status} pods=${diagnostics.totalPods}${diagnosticError}`,
+    );
+    return { recovered: false, operationId };
+  }
+  await input.db.runTransaction(async (transaction) => {
+    await exactRecoveryState(transaction);
+    const operationSnapshot = await transaction.get(operationRef);
+    const operation = operationSnapshot.data() as Record<string, unknown> | undefined;
+    if (!operationSnapshot.exists || operation?.status !== "pending") {
+      if (operation?.status === "succeeded") return;
+      throw new GatewayRetirementConflictError(
+        `recovery operation ${operationId} is unavailable`,
+      );
+    }
+    transaction.update(operationRef, {
+      status: "succeeded",
+      completedAt: input.now(),
+      recoveryReceipt: {
+        schemaVersion: 1,
+        observedAt: input.now(),
+        pods: 0,
+      },
+    });
+  });
+  return { recovered: true, operationId };
+}
+
+function retirementAllocationMatches(
+  root: Record<string, unknown>,
+  request: RetireOwnedGatewayInput,
+): boolean {
+  const allocation = record(root.allocation);
+  const allocationIdentityMatches = request.leaseId === undefined ||
+    (
+      allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND &&
+      allocation.claimedByUid === request.uid &&
+      allocation.leaseId === request.leaseId &&
+      allocation.generation === request.generation
+    );
+  return root.ownerUid === request.uid &&
+    root.gatewayClass !== "shared" &&
+    allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND &&
+    allocationIdentityMatches;
+}
+
+async function assertRetirementAuthorityFence(input: {
+  db: Firestore;
+  transaction: Transaction;
+  request: RetireOwnedGatewayInput;
+}): Promise<void> {
+  const { db, transaction, request } = input;
+  if (!request.authoritativeGatewayId) return;
+  const userRef = db.collection("users").doc(request.uid);
+  const assignmentRef = db
+    .collection(GATEWAYS_COLLECTION)
+    .doc(request.authoritativeGatewayId)
+    .collection("assignments")
+    .doc(request.uid);
+  const [userSnapshot, assignmentSnapshot] = await Promise.all([
+    transaction.get(userRef),
+    transaction.get(assignmentRef),
+  ]);
+  const userData = userSnapshot.data() as Record<string, unknown> | undefined;
+  const assignment = assignmentSnapshot.data() as Record<string, unknown> | undefined;
+  if (!retirementAuthorityFenceAllows({
+    uid: request.uid,
+    authoritativeGatewayId: request.authoritativeGatewayId,
+    targetGatewayId: request.gatewayId,
+    leaseId: request.leaseId,
+    generation: request.generation,
+    expectedLeaseStatus: request.authoritativeLeaseStatus ?? "returning",
+    userExists: userSnapshot.exists,
+    userData,
+    assignmentExists: assignmentSnapshot.exists,
+    assignmentData: assignment,
+  })) {
+    throw new GatewayRetirementConflictError(
+      `Builder ${request.uid} is no longer authoritatively returned to ${request.authoritativeGatewayId}`,
+    );
+  }
+}
+
+function zeroWorkloadRecoveryReceiptMatches(input: {
+  recoveryExists: boolean;
+  recovery: Record<string, unknown> | undefined;
+  request: RetireOwnedGatewayInput;
+}): boolean {
+  const { recoveryExists, recovery, request } = input;
+  const recoveryInput = record(recovery?.input);
+  const receipt = record(recovery?.recoveryReceipt);
+  return recoveryExists &&
+    recovery?.kind === "recover-unreachable-disposable" &&
+    recovery.status === "succeeded" &&
+    recoveryInput?.uid === request.uid &&
+    recoveryInput.gatewayId === request.gatewayId &&
+    recoveryInput.leaseId === request.leaseId &&
+    recoveryInput.generation === request.generation &&
+    receipt?.schemaVersion === 1 &&
+    receipt.pods === 0;
+}
+
+async function assertZeroWorkloadRecoveryReceipt(input: {
+  db: Firestore;
+  transaction: Transaction;
+  request: RetireOwnedGatewayInput;
+}): Promise<void> {
+  const { db, transaction, request } = input;
+  if (!request.zeroWorkloadRecoveryOperationId) return;
+  const recoverySnapshot = await transaction.get(
+    db
+      .collection(DISPOSABLE_GATEWAY_RECOVERY_RECEIPTS_COLLECTION)
+      .doc(request.zeroWorkloadRecoveryOperationId),
+  );
+  const recovery = recoverySnapshot.data() as Record<string, unknown> | undefined;
+  if (!zeroWorkloadRecoveryReceiptMatches({
+    recoveryExists: recoverySnapshot.exists,
+    recovery,
+    request,
+  })) {
+    throw new GatewayRetirementConflictError(
+      `gateway ${request.gatewayId} zero-workload recovery receipt is unavailable`,
+    );
+  }
 }
 
 async function retireOwnedGatewayFirestore(
@@ -465,6 +1883,26 @@ async function retireOwnedGatewayFirestore(
 ): Promise<boolean> {
   const operationId = `placement-retire-${request.uid}-${request.gatewayId}`;
   const now = input.now();
+  let telemetryObservedAfter: number | undefined;
+  if (request.telemetryFenceOperationId !== undefined) {
+    const returnOperationId = request.telemetryFenceOperationId;
+    const returnSnapshot = await input.db
+      .collection(GLM_OPERATIONS_COLLECTION)
+      .doc(returnOperationId)
+      .get();
+    const completedAt = millis(returnSnapshot.data()?.completedAt);
+    const terminalStatus = returnSnapshot.data()?.status;
+    const expectedStatusMatches = request.telemetryFenceStatus === "terminal-failure"
+      ? terminalStatus === "failed" || terminalStatus === ROLLED_BACK_STATUS
+      : terminalStatus === "succeeded";
+    if (!returnSnapshot.exists || !expectedStatusMatches || completedAt === null) {
+      input.log(
+        `[placement-policy] retirement blocked for ${request.gatewayId}: return operation ${returnOperationId} is incomplete`,
+      );
+      return false;
+    }
+    telemetryObservedAfter = completedAt;
+  }
   try {
     await claimGatewayRetirementAtomic({
       db: input.db,
@@ -488,13 +1926,24 @@ async function retireOwnedGatewayFirestore(
       },
       now,
       updatedBy: PLACEMENT_POLICY_ACTOR,
-      claimGuard: ({ root }) => {
-        const record = root as unknown as Record<string, unknown>;
-        if (record.ownerUid !== request.uid || record.gatewayClass === "shared") {
+      ...(telemetryObservedAfter === undefined ? {} : { telemetryObservedAfter }),
+      claimGuard: async ({ transaction, root }) => {
+        const rootRecord = root as unknown as Record<string, unknown>;
+        if (!retirementAllocationMatches(rootRecord, request)) {
           throw new GatewayRetirementConflictError(
-            `gateway ${request.gatewayId} is no longer owned by ${request.uid}`,
+            `gateway ${request.gatewayId} no longer matches disposable allocation for ${request.uid}`,
           );
         }
+        await assertRetirementAuthorityFence({
+          db: input.db,
+          transaction,
+          request,
+        });
+        await assertZeroWorkloadRecoveryReceipt({
+          db: input.db,
+          transaction,
+          request,
+        });
       },
     });
     return true;
@@ -505,14 +1954,65 @@ async function retireOwnedGatewayFirestore(
   }
 }
 
+interface RetirementAuthorityFenceInput {
+  uid: string;
+  authoritativeGatewayId: string;
+  targetGatewayId: string;
+  leaseId: string | undefined;
+  generation: number | undefined;
+  expectedLeaseStatus: AuthoritativeLeaseStatus;
+  userExists: boolean;
+  userData: Record<string, unknown> | undefined;
+  assignmentExists: boolean;
+  assignmentData: Record<string, unknown> | undefined;
+}
+
+function retirementLeaseFenceAllows(
+  input: RetirementAuthorityFenceInput,
+  openclaw: Record<string, unknown> | null,
+  lease: Record<string, unknown> | null,
+): boolean {
+  return input.userExists &&
+    openclaw?.gatewayId === input.authoritativeGatewayId &&
+    lease?.leaseId === input.leaseId &&
+    lease?.generation === input.generation &&
+    lease?.status === input.expectedLeaseStatus &&
+    lease?.targetGatewayId === input.targetGatewayId;
+}
+
+function retirementAssignmentFenceAllows(
+  input: RetirementAuthorityFenceInput,
+): boolean {
+  return input.assignmentExists &&
+    input.assignmentData?.uid === input.uid &&
+    input.assignmentData.gatewayId === input.authoritativeGatewayId &&
+    input.assignmentData.state === "serving";
+}
+
+export function retirementAuthorityFenceAllows(
+  input: RetirementAuthorityFenceInput,
+): boolean {
+  const openclaw = record(record(input.userData?.provisioning)?.openclaw);
+  const lease = record(openclaw?.activationLease);
+  return retirementLeaseFenceAllows(input, openclaw, lease) &&
+    retirementAssignmentFenceAllows(input);
+}
+
 export function createFirestorePlacementPolicyReconcilerDeps(
   input: FirestorePlacementPolicyInput,
 ): PlacementPolicyReconcilerDeps {
   return {
     now: input.now,
     log: input.log,
-    readSnapshot: () => readPlacementPolicySnapshot(input.db),
+    readSnapshot: () => readPlacementPolicySnapshot(input.db, input.idleMs, input.now()),
     assignInitialPlacement: (request) => assignInitialPlacementFirestore(input, request),
+    allocateDisposableGateway: (request) => allocateDisposableGatewayFirestore(input, request),
+    advanceActivationLease: (request) => advanceActivationLeaseFirestore(input, request),
+    completeActivationLease: (request) => completeActivationLeaseFirestore(input, request),
+    failActivationLease: (request) => failActivationLeaseFirestore(input, request),
+    recoverUnreachableDisposableGateway: (request) =>
+      recoverUnreachableDisposableGatewayFirestore(input, request),
+    readBuilderActivity: (request) => readBuilderActivityFirestore(input, request),
     enqueueMigration: (request) => enqueuePlacementMigration(input, request),
     retireOwnedGateway: (request) => retireOwnedGatewayFirestore(input, request),
   };

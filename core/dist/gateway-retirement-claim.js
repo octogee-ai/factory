@@ -43,50 +43,76 @@ function freshObservation(value, now) {
         observedAt <= now + GATEWAY_HEARTBEAT_INTERVAL_MS &&
         now - observedAt <= GATEWAY_UNREACHABLE_AFTER_MS;
 }
+function retirementHeartbeat(value) {
+    if (!isPlainRecord(value) ||
+        !Array.isArray(value.mountedCustomers) ||
+        !value.mountedCustomers.every((customer) => typeof customer === "string" && customer.length > 0)) {
+        return null;
+    }
+    return {
+        heartbeat: value,
+        mountedCustomers: value.mountedCustomers,
+    };
+}
+function liveRuntimeIdentity(heartbeat) {
+    if (typeof heartbeat.startedAt !== "number" ||
+        !Number.isFinite(heartbeat.startedAt) ||
+        !nonEmptyString(heartbeat.version) ||
+        !nonEmptyString(heartbeat.openclawVersion)) {
+        return null;
+    }
+    return {
+        startedAt: heartbeat.startedAt,
+        version: heartbeat.version,
+        openclawVersion: heartbeat.openclawVersion,
+    };
+}
 // A RUNNING gateway may retire only on fresh telemetry proving zero mounted
 // customers. A PAUSED gateway (replicas 0) has no pod, no mounts, and nothing
 // unflushed (the watcher + preStop flush committed durable config at pause) —
 // it retires directly, with no wake.
-function runningRetirementError(gatewayId, runtime, now) {
+function runningRetirementError(gatewayId, runtime, now, expectedRelease, telemetryObservedAfter) {
     if (!isGatewayRuntimeDoc(runtime) || runtime.gatewayId !== gatewayId) {
         return {
             error: `gateway ${gatewayId} runtime telemetry is unavailable`,
             liveRuntimeIdentity: null,
         };
     }
-    const heartbeat = isPlainRecord(runtime.heartbeat) ? runtime.heartbeat : null;
-    const mounted = heartbeat?.mountedCustomers;
-    if (!heartbeat ||
-        !Array.isArray(mounted) ||
-        !mounted.every((customer) => typeof customer === "string" && customer.length > 0)) {
+    if (runtime.release !== expectedRelease) {
+        return {
+            error: `gateway ${gatewayId} runtime release ${runtime.release} does not match live release ${expectedRelease}`,
+            liveRuntimeIdentity: null,
+        };
+    }
+    const telemetry = retirementHeartbeat(runtime.heartbeat);
+    if (!telemetry) {
         return {
             error: `gateway ${gatewayId} mount telemetry is unavailable`,
             liveRuntimeIdentity: null,
         };
     }
-    if (mounted.length > 0) {
+    if (telemetry.mountedCustomers.length > 0) {
         return {
-            error: `gateway ${gatewayId} still has mounted customers: ${mounted.join(", ")}`,
+            error: `gateway ${gatewayId} still has mounted customers: ${telemetry.mountedCustomers.join(", ")}`,
             liveRuntimeIdentity: null,
         };
     }
+    const { heartbeat } = telemetry;
     if (!freshObservation(heartbeat.lastHeartbeatAt, now)) {
         return {
             error: `gateway ${gatewayId} telemetry is stale or unavailable`,
             liveRuntimeIdentity: null,
         };
     }
-    const identity = typeof heartbeat.startedAt === "number" &&
-        Number.isFinite(heartbeat.startedAt) &&
-        nonEmptyString(heartbeat.version) &&
-        nonEmptyString(heartbeat.openclawVersion)
-        ? {
-            startedAt: heartbeat.startedAt,
-            version: heartbeat.version,
-            openclawVersion: heartbeat.openclawVersion,
-        }
-        : null;
-    return { error: null, liveRuntimeIdentity: identity };
+    const observedAt = millis(heartbeat.lastHeartbeatAt);
+    if (telemetryObservedAfter !== undefined &&
+        observedAt <= telemetryObservedAfter) {
+        return {
+            error: `gateway ${gatewayId} telemetry predates retirement fence`,
+            liveRuntimeIdentity: null,
+        };
+    }
+    return { error: null, liveRuntimeIdentity: liveRuntimeIdentity(heartbeat) };
 }
 function readClaim(value) {
     if (!isPlainRecord(value))
@@ -167,7 +193,7 @@ export async function claimGatewayRetirementAtomic(input) {
         let liveRuntimeIdentity = null;
         if (rootData.desiredStatus === "running" && rootData.liveRelease != null) {
             const runtimeSnap = await transaction.get(input.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId));
-            const inspection = runningRetirementError(input.gatewayId, runtimeSnap.exists ? runtimeSnap.data() : undefined, input.now);
+            const inspection = runningRetirementError(input.gatewayId, runtimeSnap.exists ? runtimeSnap.data() : undefined, input.now, rootData.liveRelease, input.telemetryObservedAfter);
             if (inspection.error)
                 throw new GatewayRetirementConflictError(inspection.error);
             liveRuntimeIdentity = inspection.liveRuntimeIdentity;

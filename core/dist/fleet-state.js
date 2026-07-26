@@ -1,6 +1,8 @@
 import { GATEWAYS_COLLECTION, } from "@octogee/shared/types/fleet-controller";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, resolveUserGatewayShellState, } from "@octogee/shared/types/glm";
 import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, } from "@octogee/shared/types/gateway-releases";
+import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
+import { resolveBuilderTier } from "@octogee/shared/types/billing";
 import { customerMigrationV2GatewayRootFenceEqual, customerMigrationV2GatewayRootFenceMatches, } from "./customer-migration-v2.js";
 export async function writeGatewayHeartbeat(deps, snapshot) {
     if (!snapshot.gatewayId) {
@@ -69,6 +71,7 @@ export async function commitCutoverAtomic(deps, params) {
                 params,
                 targetRoot,
                 prior,
+                nowMs,
             });
             if (alreadyCommitted)
                 return;
@@ -96,25 +99,60 @@ function assertTargetAcceptsCutover(targetRoot, gatewayId) {
     }
 }
 async function assertCustomerMigrationV2FenceCurrent(input) {
-    const { txn, db, params, targetRoot, prior } = input;
+    const { txn, db, params, targetRoot, prior, nowMs } = input;
     const fence = params.customerMigrationV2Fence;
     assertCustomerMigrationV2ParametersExact(params, fence);
-    const [operationSnap, targetAssignmentSnap, sourceRootSnap] = await Promise.all([
+    const [operationSnap, targetAssignmentSnap, sourceRootSnap, userSnap] = await Promise.all([
         txn.get(db.collection(GLM_OPERATIONS_COLLECTION).doc(fence.operationId)),
         txn.get(assignmentRef(db, params.toGatewayId, params.uid)),
         txn.get(db.collection(GATEWAYS_COLLECTION).doc(fence.sourceGatewayId)),
+        txn.get(db.collection("users").doc(params.uid)),
     ]);
+    const operation = operationSnap.exists ? operationSnap.data() : undefined;
     assertCustomerMigrationV2ProofsExact({
         fence,
-        operation: operationSnap.exists ? operationSnap.data() : undefined,
+        operation,
         targetRoot,
         sourceRoot: sourceRootSnap.exists ? sourceRootSnap.data() : undefined,
     });
     const targetAssignment = targetAssignmentSnap.exists ? targetAssignmentSnap.data() : undefined;
     if (customerMigrationAlreadyCommitted(prior, targetAssignment, fence))
         return true;
+    assertBuilderActivationCutoverAuthorized({
+        operation,
+        user: userSnap.exists ? userSnap.data() : undefined,
+        targetRoot,
+        fence,
+        nowMs,
+    });
     assertCustomerMigrationSourceAssignmentExact(prior, fence);
     return false;
+}
+function assertBuilderActivationCutoverAuthorized(input) {
+    const operationInput = recordOrEmpty(input.operation?.input);
+    const allocation = recordOrEmpty(input.targetRoot?.allocation);
+    if (operationInput.source !== "builder-activation-lease" ||
+        allocation.kind !== "disposable-builder")
+        return;
+    const user = input.user;
+    const provisioning = recordOrEmpty(user?.provisioning);
+    const openclaw = recordOrEmpty(provisioning.openclaw);
+    const lease = recordOrEmpty(openclaw.activationLease);
+    const authorized = [
+        accountAllowsInteractiveAccess(user),
+        resolveBuilderTier(user ?? {}, new Date(input.nowMs)) !== null,
+        lease.status === "activating",
+        lease.targetGatewayId === input.fence.targetGatewayId,
+        typeof lease.leaseId === "string" && lease.leaseId.length > 0,
+        Number.isSafeInteger(lease.generation) && lease.generation > 0,
+        allocation.kind === "disposable-builder",
+        allocation.claimedByUid === input.fence.uid,
+        allocation.leaseId === lease.leaseId,
+        allocation.generation === lease.generation,
+    ].every(Boolean);
+    if (!authorized) {
+        throw new Error("Builder activation authorization changed before cutover");
+    }
 }
 function assertCustomerMigrationV2ParametersExact(params, fence) {
     const parametersExact = [
