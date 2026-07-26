@@ -1,7 +1,6 @@
 {
   "meta": {
-    "lastTouchedVersion": "2026.4.14",
-    "lastTouchedAt": "2026-04-17T01:04:39.966Z"
+    "lastTouchedVersion": "2026.4.14"
   },
   "discovery": {
     "mdns": {
@@ -37,8 +36,7 @@
           "HOME"
         ],
         "jsonOnly": true,
-        "timeoutMs": 5000,
-        "allowInsecurePath": true
+        "timeoutMs": 5000
       },
       "octogee-mattermost": {
         "source": "file",
@@ -152,8 +150,7 @@
   "commands": {
     "native": "auto",
     "nativeSkills": "auto",
-    "restart": true,
-    "ownerDisplay": "raw"
+    "restart": true
   },
   "session": {
     "dmScope": "per-channel-peer"

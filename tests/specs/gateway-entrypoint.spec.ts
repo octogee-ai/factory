@@ -159,6 +159,15 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(entrypoint).toMatch(/OPENCLAW_DOCTOR_RESULT=error/);
   });
 
+  it("normalizes legacy config before Doctor validates a durable gateway", () => {
+    const repairLoop = entrypoint.slice(
+      entrypoint.indexOf("OPENCLAW_SERVICE_REPAIR_POLICY=external"),
+      entrypoint.indexOf("# ── In-pod runners"),
+    );
+    expect(repairLoop.indexOf('"$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts'))
+      .toBeLessThan(repairLoop.indexOf("run_openclaw_doctor"));
+  });
+
   it("retries the whole repair unit level-triggered without exiting", () => {
     const repairLoop = entrypoint.slice(
       entrypoint.indexOf("OPENCLAW_SERVICE_REPAIR_POLICY=external"),
