@@ -41,6 +41,7 @@ interface ClaimGatewayRetirementInput {
   operation: RetirementOperation;
   now: number;
   updatedBy: string;
+  telemetryObservedAfter?: number;
   claimGuard?: (input: {
     transaction: Transaction;
     root: GatewayDoc & { desiredStatus: "running" | "paused" };
@@ -103,10 +104,18 @@ function runningRetirementError(
   gatewayId: string,
   runtime: unknown,
   now: number,
+  expectedRelease: number,
+  telemetryObservedAfter: number | undefined,
 ): { error: string | null; liveRuntimeIdentity: LiveRuntimeIdentity } {
   if (!isGatewayRuntimeDoc(runtime) || runtime.gatewayId !== gatewayId) {
     return {
       error: `gateway ${gatewayId} runtime telemetry is unavailable`,
+      liveRuntimeIdentity: null,
+    };
+  }
+  if (runtime.release !== expectedRelease) {
+    return {
+      error: `gateway ${gatewayId} runtime release ${runtime.release} does not match live release ${expectedRelease}`,
       liveRuntimeIdentity: null,
     };
   }
@@ -131,6 +140,16 @@ function runningRetirementError(
   if (!freshObservation(heartbeat.lastHeartbeatAt, now)) {
     return {
       error: `gateway ${gatewayId} telemetry is stale or unavailable`,
+      liveRuntimeIdentity: null,
+    };
+  }
+  const observedAt = millis(heartbeat.lastHeartbeatAt)!;
+  if (
+    telemetryObservedAfter !== undefined &&
+    observedAt <= telemetryObservedAfter
+  ) {
+    return {
+      error: `gateway ${gatewayId} telemetry predates retirement fence`,
       liveRuntimeIdentity: null,
     };
   }
@@ -258,6 +277,8 @@ export async function claimGatewayRetirementAtomic(
         input.gatewayId,
         runtimeSnap.exists ? runtimeSnap.data() : undefined,
         input.now,
+        rootData.liveRelease,
+        input.telemetryObservedAfter,
       );
       if (inspection.error) throw new GatewayRetirementConflictError(inspection.error);
       liveRuntimeIdentity = inspection.liveRuntimeIdentity;

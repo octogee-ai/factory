@@ -311,6 +311,10 @@ const PLACEMENT_POLICY_RECONCILE_MS = parseNonNegativeInt(
   process.env.PLACEMENT_POLICY_RECONCILE_MS,
   PLACEMENT_POLICY_RECONCILE_MS_DEFAULT,
 );
+const DISPOSABLE_GATEWAY_IDLE_MS = parseNonNegativeInt(
+  process.env.DISPOSABLE_GATEWAY_IDLE_MS,
+  30 * 60 * 1000,
+);
 const HELM_RECOVERY_SWEEP_MS = parseNonNegativeInt(
   process.env.HELM_RECOVERY_SWEEP_MS,
   3 * 60 * 1000,
@@ -1689,6 +1693,7 @@ function startControllerBackgroundTasks({
     createFirestorePlacementPolicyReconcilerDeps({
       db,
       namespace: NAMESPACE,
+      idleMs: DISPOSABLE_GATEWAY_IDLE_MS,
       now: () => Date.now(),
       log,
       ensureAuthSecret: deps.ensureGatewayAuthSecret,

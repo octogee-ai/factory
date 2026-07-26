@@ -47,10 +47,16 @@ function freshObservation(value, now) {
 // customers. A PAUSED gateway (replicas 0) has no pod, no mounts, and nothing
 // unflushed (the watcher + preStop flush committed durable config at pause) —
 // it retires directly, with no wake.
-function runningRetirementError(gatewayId, runtime, now) {
+function runningRetirementError(gatewayId, runtime, now, expectedRelease, telemetryObservedAfter) {
     if (!isGatewayRuntimeDoc(runtime) || runtime.gatewayId !== gatewayId) {
         return {
             error: `gateway ${gatewayId} runtime telemetry is unavailable`,
+            liveRuntimeIdentity: null,
+        };
+    }
+    if (runtime.release !== expectedRelease) {
+        return {
+            error: `gateway ${gatewayId} runtime release ${runtime.release} does not match live release ${expectedRelease}`,
             liveRuntimeIdentity: null,
         };
     }
@@ -73,6 +79,14 @@ function runningRetirementError(gatewayId, runtime, now) {
     if (!freshObservation(heartbeat.lastHeartbeatAt, now)) {
         return {
             error: `gateway ${gatewayId} telemetry is stale or unavailable`,
+            liveRuntimeIdentity: null,
+        };
+    }
+    const observedAt = millis(heartbeat.lastHeartbeatAt);
+    if (telemetryObservedAfter !== undefined &&
+        observedAt <= telemetryObservedAfter) {
+        return {
+            error: `gateway ${gatewayId} telemetry predates retirement fence`,
             liveRuntimeIdentity: null,
         };
     }
@@ -167,7 +181,7 @@ export async function claimGatewayRetirementAtomic(input) {
         let liveRuntimeIdentity = null;
         if (rootData.desiredStatus === "running" && rootData.liveRelease != null) {
             const runtimeSnap = await transaction.get(input.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId));
-            const inspection = runningRetirementError(input.gatewayId, runtimeSnap.exists ? runtimeSnap.data() : undefined, input.now);
+            const inspection = runningRetirementError(input.gatewayId, runtimeSnap.exists ? runtimeSnap.data() : undefined, input.now, rootData.liveRelease, input.telemetryObservedAfter);
             if (inspection.error)
                 throw new GatewayRetirementConflictError(inspection.error);
             liveRuntimeIdentity = inspection.liveRuntimeIdentity;

@@ -14,6 +14,7 @@ interface ClaimGatewayRetirementInput {
     operation: RetirementOperation;
     now: number;
     updatedBy: string;
+    telemetryObservedAfter?: number;
     claimGuard?: (input: {
         transaction: Transaction;
         root: GatewayDoc & {
