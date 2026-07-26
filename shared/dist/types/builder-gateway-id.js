@@ -37,7 +37,8 @@ export function disposableBuilderGatewayId(slug, generation, leaseId) {
     let shortSlug = slug.slice(0, DISPOSABLE_SLUG_LENGTH);
     while (shortSlug.endsWith("-"))
         shortSlug = shortSlug.slice(0, -1);
-    const id = `run-${shortSlug}-${stableHash(`${slug}:${generation}:${leaseId}`)}`;
+    const runtimeIdentity = `${slug}:${generation}:${leaseId}`;
+    const id = `run-${shortSlug}-${stableHash(runtimeIdentity)}`;
     if (!isValidNewGatewayId(id)) {
         throw new Error("Builder runtime cannot produce a valid gateway id");
     }

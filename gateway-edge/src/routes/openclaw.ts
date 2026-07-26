@@ -31,22 +31,29 @@ export function resolveActivityHistoryTarget(
   return activityChannelId ? { activityChannelId, historyMode: "channel" } : null;
 }
 
+function activationGatewayId(
+  userData: Record<string, unknown> | undefined,
+): string | null {
+  if (!userData || !accountAllowsInteractiveAccess(userData)) return null;
+  const builderTier = resolveBuilderTier(userData);
+  if (!builderTier || BUILDER_TIERS[builderTier].instance === null) return null;
+  const provisioning = userData.provisioning as
+    | { openclaw?: { gatewayId?: unknown; slug?: unknown } }
+    | undefined;
+  const hasSlug =
+    typeof provisioning?.openclaw?.slug === "string" ||
+    typeof userData.username === "string";
+  return hasSlug && isValidGatewayId(provisioning?.openclaw?.gatewayId)
+    ? provisioning.openclaw.gatewayId
+    : null;
+}
+
 async function maybeRequestActivationBeforeTicket(
   uid: string,
   userData: Record<string, unknown> | undefined,
 ): Promise<void> {
-  if (!userData || !accountAllowsInteractiveAccess(userData)) return;
-  const builderTier = resolveBuilderTier(userData);
-  if (!builderTier || BUILDER_TIERS[builderTier].instance === null) return;
-  const provisioning = userData?.provisioning as
-    | { openclaw?: { gatewayId?: unknown; slug?: unknown } }
-    | undefined;
-  const hasGateway = isValidGatewayId(provisioning?.openclaw?.gatewayId);
-  const hasSlug =
-    typeof provisioning?.openclaw?.slug === "string" ||
-    typeof userData?.username === "string";
-  if (!hasGateway || !hasSlug) return;
-  const reportingGatewayId = provisioning!.openclaw!.gatewayId as string;
+  const reportingGatewayId = activationGatewayId(userData);
+  if (!reportingGatewayId) return;
   try {
     const assignmentSnap = await db.doc(
       `gateways/${reportingGatewayId}/assignments/${uid}`,
