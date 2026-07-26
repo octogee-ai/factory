@@ -129,6 +129,27 @@ function demandBody(input: {
   };
 }
 
+function parkedDuplicateBody(
+  lease: Record<string, unknown>,
+): BuilderActivationLeaseResult | null {
+  if (
+    lease.status !== "parked" ||
+    !nonEmptyString(lease.leaseId) ||
+    !positiveInteger(lease.generation)
+  ) {
+    return null;
+  }
+  return {
+    statusCode: 200,
+    body: {
+      status: "parked",
+      leaseId: lease.leaseId,
+      generation: lease.generation,
+      duplicate: true,
+    },
+  };
+}
+
 export async function requestBuilderActivationLease(
   input: BuilderRuntimeDemandRequest,
 ): Promise<BuilderActivationLeaseResult> {
@@ -217,6 +238,13 @@ export async function requestBuilderActivationLease(
       };
     }
     const existing = userLease(userData);
+    if (
+      existing?.eventKey === eventKey ||
+      existing?.lastEventKey === eventKey
+    ) {
+      const duplicate = parkedDuplicateBody(existing);
+      if (duplicate) return duplicate;
+    }
     if (
       existing?.status === "returning" &&
       nonEmptyString(existing.leaseId) &&

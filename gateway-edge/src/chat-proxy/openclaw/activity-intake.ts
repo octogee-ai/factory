@@ -197,6 +197,10 @@ export function freezeActiveActivityRunBinding(
 export interface ActivityIntakeDeps {
   registry: ActivityRuntimeRegistry;
   sinkFor(binding: ActiveActivityRunBinding): Pick<ActivitySink, "append">;
+  requestBuilderActivation?: (input: {
+    agentId: string;
+    runId: string;
+  }) => Promise<unknown>;
   log?: (event: string, meta: Record<string, unknown>) => void;
 }
 
@@ -655,6 +659,12 @@ export async function processActivityIntake(
       runId: envelope.ref.runId,
       itemId: envelope.ref.itemId,
     });
+    if (envelope.type === "turn.started") {
+      await deps.requestBuilderActivation?.({
+        agentId: frozenBinding.agentId,
+        runId: frozenBinding.runId,
+      });
+    }
     if (
       result.receipt.eventKey !== envelope.eventKey ||
       result.receipt.activityChannelId !== frozenBinding.activityChannelId ||
@@ -896,6 +906,10 @@ export interface ProductionActivityIntakeOptions extends ActivityIntakeHttpOptio
   receiptsFor(binding: ActiveActivityRunBinding): ActivityWriteReceiptStore;
   mmClientFor(token: string): ActivityMattermostClient;
   leaseOwner: string;
+  requestBuilderActivation(input: {
+    agentId: string;
+    runId: string;
+  }): Promise<unknown>;
   alerts?: Parameters<typeof createActivitySink>[0]['alerts'];
   controls?: Parameters<typeof createActivitySink>[0]['controls'];
   log?: ActivityIntakeDeps['log'];
@@ -914,6 +928,7 @@ export function createProductionActivityIntakeHandler(
         alerts: options.alerts,
         controls: options.controls,
       }),
+      requestBuilderActivation: options.requestBuilderActivation,
       log: options.log,
     },
     { maxAttachmentBytes: options.maxAttachmentBytes },

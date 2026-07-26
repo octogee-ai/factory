@@ -149,6 +149,44 @@ describe("requestBuilderActivationLease", () => {
     expect(idFactory).toHaveBeenCalledTimes(1);
   });
 
+  it("acknowledges a late duplicate of a parked run without waking a new gateway", async () => {
+    const parked = activeTrial({
+      provisioning: {
+        status: "complete",
+        openclaw: {
+          gatewayId: "shared-blue",
+          slug: "alice",
+          activationLease: {
+            leaseId: "lease-old",
+            generation: 7,
+            status: "parked",
+            eventKey: "run-start:run-1",
+            sizingTier: "xs",
+          },
+        },
+      },
+    });
+    const { db, docs } = state(parked);
+    const idFactory = vi.fn(() => "lease-new");
+
+    await expect(request(db, {
+      eventKey: "run-start:run-1",
+      cause: "run-start",
+      leaseIdFactory: idFactory,
+    })).resolves.toMatchObject({
+      statusCode: 200,
+      body: {
+        status: "parked",
+        leaseId: "lease-old",
+        generation: 7,
+        duplicate: true,
+      },
+    });
+
+    expect(idFactory).not.toHaveBeenCalled();
+    expect(docs["users/uid-alice"]).toEqual(parked);
+  });
+
   it.each([
     ["mirror changed", activeTrial({
       provisioning: {

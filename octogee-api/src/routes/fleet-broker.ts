@@ -37,6 +37,10 @@ import {
   parseAssignmentDoc,
 } from "@octogee/core/assignment-doc";
 import {
+  requestBuilderActivationLease,
+  type BuilderRuntimeDemandRequest,
+} from "@octogee/core/builder-activation-lease";
+import {
   GATEWAYS_COLLECTION,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
@@ -167,6 +171,10 @@ interface FleetBrokerRouteDeps {
   executeChatHistory?: ExecuteChatHistory;
   resolveChatIdentity?: ResolveChatIdentity;
   webResearch?: Pick<ReturnType<typeof createWebResearchService>, "search" | "extract">;
+  requestBuilderActivation?: (
+    input: BuilderRuntimeDemandRequest,
+  ) => ReturnType<typeof requestBuilderActivationLease>;
+  now?: () => number;
 }
 
 const BLOB_SIGNED_URL_TTL_MS = 10 * 60 * 1000;
@@ -1107,6 +1115,10 @@ type ResolvedFleetBrokerRouteDeps = {
   executeChatHistory: ExecuteChatHistory;
   resolveChatIdentity: ResolveChatIdentity;
   webResearch: Pick<ReturnType<typeof createWebResearchService>, "search" | "extract">;
+  requestBuilderActivation: (
+    input: BuilderRuntimeDemandRequest,
+  ) => ReturnType<typeof requestBuilderActivationLease>;
+  now: () => number;
 };
 
 function resolveFleetBrokerRouteDeps(
@@ -1132,6 +1144,9 @@ function resolveFleetBrokerRouteDeps(
     executeChatHistory: opts.executeChatHistory ?? defaultExecuteChatHistory,
     resolveChatIdentity: opts.resolveChatIdentity ?? defaultResolveChatIdentity,
     webResearch: opts.webResearch ?? createDefaultWebResearch(opts.db),
+    requestBuilderActivation:
+      opts.requestBuilderActivation ?? requestBuilderActivationLease,
+    now: opts.now ?? Date.now,
   };
 }
 
@@ -1513,7 +1528,61 @@ function installGatewayOpsRoutes(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,
 ): void {
-  const { db, recordUsageEvent, createBlobSignedUrl } = deps;
+  const {
+    db,
+    recordUsageEvent,
+    createBlobSignedUrl,
+    requestBuilderActivation,
+    now,
+  } = deps;
+
+  router.post("/activity/run-start", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const body = objectBody(req);
+    const allowed = new Set(["gatewayId", "agentId", "runId"]);
+    if (Object.keys(body).some((key) => !allowed.has(key))) {
+      res.status(400).json({ error: "invalid_run_activation" });
+      return;
+    }
+    const agentId = validAgentId(body.agentId);
+    const runId = validAgentId(body.runId);
+    if (!agentId || !runId) {
+      res.status(400).json({ error: "invalid_run_activation" });
+      return;
+    }
+    const assigned = await findAssignedUserByAgentId(
+      db,
+      bound.gatewayId,
+      agentId,
+    );
+    if (!assigned) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+    const assignmentSnapshot = await db.doc(
+      `gateways/${bound.gatewayId}/assignments/${assigned.uid}`,
+    ).get();
+    const assignment = assignmentSnapshot.exists
+      ? assignmentSnapshot.data() as Record<string, unknown>
+      : undefined;
+    const observedAt = now();
+    await runBrokered(res, async () => {
+      const result = await requestBuilderActivation({
+        db,
+        uid: assigned.uid,
+        reportingGatewayId: bound.gatewayId,
+        assignmentEpoch:
+          typeof assignment?.epoch === "number" ? assignment.epoch : undefined,
+        eventKey: `run-start:${runId}`,
+        cause: "run-start",
+        observedAt,
+        createdBy: `openclaw-run:${bound.gatewayId}:${agentId}`,
+        now: observedAt,
+      });
+      res.status(result.statusCode).json(result.body);
+    });
+  });
 
   router.post("/system-config-status", async (req, res) => {
     const bound = boundGateway(req, res);

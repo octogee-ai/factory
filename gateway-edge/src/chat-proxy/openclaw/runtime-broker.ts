@@ -45,6 +45,10 @@ export interface OpenClawRuntimeBroker {
   getUserGatewayId(uid: string): Promise<string | null>;
   resolveAgentIdentity(agentId: string): Promise<AgentIdentity | null>;
   resolveChannelPair(primaryChannelId: string): Promise<ChannelPair | null>;
+  requestBuilderRunActivation(input: {
+    agentId: string;
+    runId: string;
+  }): Promise<Record<string, unknown>>;
   writeRunLiveDoc(path: string, doc: RunLiveDoc | ConversationRunLiveDocV3): Promise<void>;
   deleteRunLiveDoc(path: string): Promise<void>;
   listDeletingShells(limit: number): Promise<BrokeredShellDeletion[]>;
@@ -373,6 +377,17 @@ export function createOpenClawRuntimeBroker(opts: {
         new Set([200, 404]),
       );
       return (body?.pair as ChannelPair | undefined) ?? null;
+    },
+    async requestBuilderRunActivation(input): Promise<Record<string, unknown>> {
+      const body = await postJson(
+        "/internal/openclaw/activity/run-start",
+        input,
+        new Set([200, 202]),
+      );
+      if (!body) {
+        throw new OpenClawRuntimeBrokerError(502, "malformed run activation response");
+      }
+      return body;
     },
     async writeRunLiveDoc(
       path: string,
