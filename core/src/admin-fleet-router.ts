@@ -1334,33 +1334,15 @@ function projectGatewayStorage(
   return emptyDirGatewayStorage();
 }
 
-function gatewayComputeClassBase(): string {
-  return resolveFleetDeploymentSettings().computeClass;
-}
-
+// Gateway pods select nothing but `cloud.google.com/gke-spot`: Spot-only, with
+// no on-demand fallback rung, so pricing is always the Spot rate.
 export function projectGatewayReservation(
-  glmDoc: GlmDoc | undefined,
+  _glmDoc: GlmDoc | undefined,
 ): {
   type: GatewayPricingMode;
-  computeClass: string;
   priceMultiplier: number;
 } {
-  const explicitComputeClass =
-    typeof glmDoc?.computeClass === "string" && glmDoc.computeClass.length > 0
-      ? glmDoc.computeClass
-      : null;
-  const scheduling =
-    glmDoc?.scheduling === "on-demand" || glmDoc?.scheduling === "spot"
-      ? glmDoc.scheduling
-      : "spot";
-  const base = gatewayComputeClassBase();
-  const computeClass = explicitComputeClass ?? (scheduling === "spot" ? `${base}-spot` : base);
-  const type: GatewayPricingMode = computeClass.includes("spot") ? "spot" : "on-demand";
-  return {
-    type,
-    computeClass,
-    priceMultiplier: type === "spot" ? SPOT_PRICE_MULTIPLIER : 1,
-  };
+  return { type: "spot", priceMultiplier: SPOT_PRICE_MULTIPLIER };
 }
 
 export function projectGatewaySummary(
@@ -3084,7 +3066,6 @@ const GATEWAY_MUTABLE_CONFIG_FIELDS = [
   "gatewayClass",
   "imageProfile",
   "sizingTier",
-  "computeClass",
   "gcpProject",
   "gatewayContainerSecurityContext",
   "serviceAccountName",
@@ -3267,7 +3248,6 @@ function buildCreateGatewayConfig(args: {
     gatewayClass: args.gatewayClass,
     imageProfile: args.imageProfile,
     sizingTier: args.body.sizingTier ?? null,
-    computeClass: null,
     gcpProject: null,
     gatewayContainerSecurityContext: null,
     serviceAccountName: args.serviceAccountName ?? null,
@@ -3701,7 +3681,6 @@ function operatorGatewayInitialReleaseFromReservation(opts: {
       gatewayClass: "operator",
       imageProfile: "operator",
       sizingTier: opts.reservation.requestedSizingTier,
-      computeClass: null,
       gcpProject: null,
       gatewayContainerSecurityContext: null,
       serviceAccountName: operatorGatewayServiceAccountName(opts.body.gatewayId),

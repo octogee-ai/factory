@@ -41,7 +41,6 @@ upsertInstance(opts: {
     serviceAccount?: HelmInstancesMap[string]["serviceAccount"];
     gatewayContainerSecurityContext?: Record<string, unknown>;
     operatorAccess?: HelmInstancesMap[string]["operatorAccess"];
-    computeClassOverride?: string;
     chartPath: string;
     valuesFile?: string;
 
@@ -195,7 +194,6 @@ interface PerReleaseValues {
   serviceAccount?: unknown;
   gatewayContainerSecurityContext?: unknown;
   operatorAccess?: unknown;
-  computeClassOverride?: unknown;
   profile?: unknown;
   gatewayClass?: unknown;
   imageProfile?: unknown;
@@ -312,7 +310,6 @@ const PERSONAL_KNOB_READERS: PersonalKnobReader[] = [
     v.gatewayContainerSecurityContext,
   )),
   (v) => knob("operatorAccess", plainObjectKnob<HelmInstancesMap[string]["operatorAccess"]>(v.operatorAccess)),
-  (v) => knob("computeClassOverride", nonEmptyString(v.computeClassOverride)),
   (v) => knob("profile", enumString(v.profile, PROFILE_VALUES)),
   (v) => knob("gatewayClass", enumString(v.gatewayClass, GATEWAY_CLASS_VALUES)),
   (v) => knob("imageProfile", enumString(v.imageProfile, IMAGE_PROFILE_VALUES)),
@@ -364,7 +361,6 @@ export interface BuildUpgradeArgsOpts {
   serviceAccount?: HelmInstancesMap[string]["serviceAccount"];
   gatewayContainerSecurityContext?: Record<string, unknown>;
   operatorAccess?: HelmInstancesMap[string]["operatorAccess"];
-  computeClassOverride?: string;
   gcpProject?: string;
   kmsKeyName?: string;
   deploymentTargetId?: string;
@@ -385,7 +381,6 @@ type UpgradeStringOption = {
     | "imageProfile"
     | "sizingTier"
     | "serviceAccountName"
-    | "computeClassOverride"
     | "gcpProject"
     | "kmsKeyName"
     | "deploymentTargetId"
@@ -417,7 +412,6 @@ const UPGRADE_STRING_OPTIONS: UpgradeStringOption[] = [
   { option: "imageProfile", key: "imageProfile" },
   { option: "sizingTier", key: "sizingTier" },
   { option: "serviceAccountName", key: "serviceAccountName" },
-  { option: "computeClassOverride", key: "computeClassOverride" },
   { option: "deploymentTargetId", key: "gatewayEdge.env.DEPLOYMENT_TARGET_ID" },
   { option: "deploymentProjectId", key: "env.gcloudProject" },
   { option: "deploymentProjectId", key: "env.firebaseProjectId" },

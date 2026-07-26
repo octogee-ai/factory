@@ -18,7 +18,6 @@ function mkPayload(overrides: Partial<ReleasePayload> = {}): ReleasePayload {
     gatewayClass: "shared",
     imageProfile: "standard",
     sizingTier: null,
-    computeClass: null,
     gcpProject: null,
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,

@@ -21,9 +21,6 @@ function isRecord(value) {
 function isNullableString(value) {
     return value === null || typeof value === "string";
 }
-function isNullableNonEmptyString(value) {
-    return value === null || (typeof value === "string" && value.length > 0);
-}
 function isNullableServiceAccountName(value) {
     return (value === null ||
         (typeof value === "string" &&
@@ -130,7 +127,6 @@ export function isGatewayMutableConfig(value) {
         isGatewayClass(value.gatewayClass) &&
         isGatewayProfile(value.imageProfile) &&
         isNullableSizingTier(value.sizingTier) &&
-        isNullableNonEmptyString(value.computeClass) &&
         isNullableString(value.gcpProject) &&
         isNullableRecord(value.gatewayContainerSecurityContext) &&
         isNullableServiceAccountName(value.serviceAccountName) &&

@@ -16,7 +16,7 @@ export { GATEWAY_RELEASES_SUBCOLLECTION, GATEWAY_ASSIGNMENTS_SUBCOLLECTION, RELE
 export { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, } from './gateway-mutable-config.js';
 export { TRIAL_GATEWAY_ALLOCATION_STATES, TRIAL_GATEWAY_CLAIMS_COLLECTION, isTimestampLike, isTrialGatewayAllocation, isTrialGatewayClaim, } from './trial-gateway.js';
 export { SIZING_TIERS, TIER_PRESETS, GATEWAY_CLASS_DEFAULT_TIER, PROFILE_DEFAULT_TIER, FALLBACK_DEFAULT_TIER, resolveSizingTier, } from './sizing.js';
-export { C2D_AUTOPILOT_VCPU_USD_PER_HR, C2D_AUTOPILOT_GIB_USD_PER_HR, HOURS_PER_MONTH, estimateGatewayMonthlyCost, estimateFleetMonthlyCost, } from './cost-estimator.js';
+export { AUTOPILOT_GENERAL_PURPOSE_VCPU_USD_PER_HR, AUTOPILOT_GENERAL_PURPOSE_GIB_USD_PER_HR, HOURS_PER_MONTH, estimateGatewayMonthlyCost, estimateFleetMonthlyCost, } from './cost-estimator.js';
 export { OPENCLAW_PROTOCOL_VERSION } from './openclaw-wire.js';
 export { builderGatewayIdForSlug } from './builder-gateway-id.js';
 export { PTY_FRAME, PTY_SIGNALS, PTY_BUDGET, PTY_DEFAULT, ALLOWED_DRIVER_SIGNALS, encodeStdin, encodeStdout, encodeResize, encodeSignal, encodeExit, encodeError, decodeFrame, } from './builder-shell-pty.js';

@@ -426,7 +426,6 @@ function paidGatewayRoot(input: {
     gatewayClass: "operator",
     imageProfile: "operator",
     sizingTier: input.sizingTier,
-    computeClass: null,
     gcpProject: null,
     gatewayContainerSecurityContext: null,
     serviceAccountName: operatorGatewayServiceAccountName(input.request.gatewayId),

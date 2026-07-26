@@ -66,7 +66,6 @@ function durableGatewayState(overrides: Record<string, unknown> = {}): Record<st
     gatewayClass: "shared",
     imageProfile: "standard",
     sizingTier: null,
-    computeClass: null,
     gcpProject: null,
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,

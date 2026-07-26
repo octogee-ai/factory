@@ -174,9 +174,6 @@ function withOptionalHelmFields(
     out.profile = fields.imageProfile;
   }
   if (isSizingTier(fields.d.sizingTier)) out.sizingTier = fields.d.sizingTier;
-  if (typeof fields.d.computeClass === "string" && fields.d.computeClass.length > 0) {
-    out.computeClassOverride = fields.d.computeClass;
-  }
   return out;
 }
 
@@ -271,7 +268,6 @@ function instanceEqual(
     [a.builderSlug, b.builderSlug],
     [effectiveServiceAccountName(a), effectiveServiceAccountName(b)],
     [a.sizingTier, b.sizingTier],
-    [a.computeClassOverride, b.computeClassOverride],
     [a.replicas, b.replicas],
   ];
   for (const [x, y] of scalars) if (x !== y) return false;
