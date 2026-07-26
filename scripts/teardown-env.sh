@@ -19,12 +19,13 @@ set -euo pipefail
 #
 # --full: also drops the per-env Cloud SQL databases, wipes Firebase Storage
 #         and Firestore collections, deletes per-env Cloud Functions (chat
-#         proxy preserved), Firebase Auth users, and durable application PVCs.
-#         Still preserves: K8s secrets and namespace.
+#         proxy preserved), Firebase Auth users, durable application PVCs,
+#         and dynamic per-gateway K8s ServiceAccounts/auth/model-key secrets.
+#         Still preserves: platform/static K8s secrets and namespace.
 #
 # Does NOT delete (ever): GCP projects, GKE clusters, AR repos,
 #   Firebase projects, GCP Service Accounts, IAM bindings,
-#   any K8s secret, any Secret Manager infra entry, the namespace itself.
+#   platform/static K8s secrets, any Secret Manager infra entry, the namespace itself.
 # To rotate a secret, use scripts/rotate-secret.sh.
 #
 # Usage:
@@ -66,7 +67,8 @@ for arg in "$@"; do
       echo "             namespace, Secret Manager, Cloud SQL, Firebase Storage, Firestore, Auth"
       echo "  --full     Also drops Cloud SQL DBs + wipes Firebase Storage, Firestore + Cloud"
       echo "             Functions + Auth users + deletes durable PVCs."
-      echo "             Still preserves K8s secrets, Secret Manager infra entries, and namespace."
+      echo "             Still preserves platform/static K8s secrets, Secret Manager infra entries,"
+      echo "             and namespace; removes dynamic per-gateway K8s identities/secrets."
       echo ""
       echo "  To rotate a secret: scripts/rotate-secret.sh"
       exit 0
@@ -165,10 +167,15 @@ if $FULL; then
   echo -e "  ${RED}  + Cloud Functions (chat proxy preserved)${NC}"
   echo -e "  ${RED}  + Firebase Auth users (all)${NC}"
   echo -e "  ${RED}  + Secret Manager: byok-* (per-customer BYOK keys orphaned by Firestore wipe)${NC}"
+  echo -e "  ${RED}  + Dynamic gateway K8s ServiceAccounts + auth/model-key secrets${NC}"
 fi
 echo ""
 echo "  Will preserve:"
-echo "    • All K8s secrets in $K8S_NAMESPACE (rotate via scripts/rotate-secret.sh)"
+if $FULL; then
+  echo "    • Platform/static K8s secrets in $K8S_NAMESPACE (rotate via scripts/rotate-secret.sh)"
+else
+  echo "    • All K8s secrets in $K8S_NAMESPACE (rotate via scripts/rotate-secret.sh)"
+fi
 if ! $FULL; then
   echo "    • All PVCs (mattermost-data, gitea-shared-storage)"
 fi
@@ -521,29 +528,177 @@ verify_durable_pvcs_absent() {
   ok "Durable PVCs confirmed absent"
 }
 
+inspect_namespace_resource_names() {
+  local resource_type="$1" description="$2" output
+  if ! output=$(kubectl get "$resource_type" -n "$K8S_NAMESPACE" \
+      --context "$K8S_CONTEXT" \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>&1); then
+    [[ -n "$output" ]] && echo "$output" >&2
+    die "could not inspect $description"
+  fi
+  NAMESPACE_RESOURCE_NAMES="$output"
+}
+
+select_dynamic_gateway_service_accounts() {
+  local name
+  while IFS= read -r name; do
+    case "$name" in
+      octogee-gw-?*) printf '%s\n' "$name" ;;
+    esac
+  done <<<"$1"
+}
+
+select_per_gateway_runtime_secrets() {
+  local name
+  while IFS= read -r name; do
+    case "$name" in
+      gateway-auth-token-?*) printf '%s\n' "$name" ;;
+      gateway-model-key-issuer) ;;
+      gateway-model-key-?*) printf '%s\n' "$name" ;;
+    esac
+  done <<<"$1"
+}
+
+delete_dynamic_gateway_resources() {
+  local resource_type="$1" description="$2" names="$3" name
+  if [[ -z "$names" ]]; then
+    info "No $description to delete"
+    return
+  fi
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    kubectl delete "$resource_type" "$name" -n "$K8S_NAMESPACE" \
+      --context "$K8S_CONTEXT" --wait=true >/dev/null \
+      || die "could not delete $description $name"
+    ok "Deleted $description $name"
+  done <<<"$names"
+}
+
+cleanup_dynamic_gateway_runtime_identities() {
+  local service_accounts secrets residual
+  inspect_namespace_resource_names serviceaccounts "dynamic gateway ServiceAccounts"
+  service_accounts="$(select_dynamic_gateway_service_accounts "$NAMESPACE_RESOURCE_NAMES")"
+  delete_dynamic_gateway_resources serviceaccount "dynamic gateway ServiceAccount" "$service_accounts"
+
+  inspect_namespace_resource_names secrets "per-gateway runtime Secrets"
+  secrets="$(select_per_gateway_runtime_secrets "$NAMESPACE_RESOURCE_NAMES")"
+  delete_dynamic_gateway_resources secret "per-gateway runtime Secret" "$secrets"
+
+  inspect_namespace_resource_names serviceaccounts "dynamic gateway ServiceAccounts"
+  residual="$(select_dynamic_gateway_service_accounts "$NAMESPACE_RESOURCE_NAMES")"
+  [[ -z "$residual" ]] \
+    || die "dynamic gateway ServiceAccounts remain after cleanup: $(printf '%s' "$residual" | tr '\n' ' ')"
+
+  inspect_namespace_resource_names secrets "per-gateway runtime Secrets"
+  residual="$(select_per_gateway_runtime_secrets "$NAMESPACE_RESOURCE_NAMES")"
+  [[ -z "$residual" ]] \
+    || die "per-gateway runtime Secrets remain after cleanup: $(printf '%s' "$residual" | tr '\n' ' ')"
+
+  ok "Dynamic gateway runtime identities confirmed absent"
+}
+
+quiesce_gateway_controller() {
+  local deployment pods
+  if ! deployment=$(kubectl get deployment/glm-controller -n "$K8S_NAMESPACE" \
+      --context "$K8S_CONTEXT" --ignore-not-found -o name 2>&1); then
+    [[ -n "$deployment" ]] && echo "$deployment" >&2
+    die "could not inspect glm-controller before full gateway cleanup"
+  fi
+  if [[ -n "$deployment" ]]; then
+    kubectl scale deployment/glm-controller -n "$K8S_NAMESPACE" \
+      --context "$K8S_CONTEXT" --replicas=0 \
+      || die "could not quiesce glm-controller before full gateway cleanup"
+  fi
+
+  pods=$(kubectl get pods -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
+    -l app=glm-controller -o name) \
+    || die "could not inspect glm-controller pods before full gateway cleanup"
+  if [[ -n "$pods" ]]; then
+    kubectl wait --for=delete pod -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
+      -l app=glm-controller --timeout=120s \
+      || die "glm-controller pods did not terminate before full gateway cleanup"
+  fi
+  pods=$(kubectl get pods -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
+    -l app=glm-controller -o name) \
+    || die "could not verify glm-controller pod termination before full gateway cleanup"
+  [[ -z "$pods" ]] \
+    || die "glm-controller pods remain before full gateway cleanup: $(printf '%s' "$pods" | tr '\n' ' ')"
+  ok "glm-controller quiesced before per-instance Helm removal"
+}
+
+HELM_RELEASE_LIST_PAGE_SIZE=256
+
+inspect_per_instance_gateway_releases() {
+  local offset=0 page page_count inventory=""
+  while true; do
+    if ! page=$(helm list -n "$K8S_NAMESPACE" --kube-context "$K8S_CONTEXT" -q \
+        --filter '^octogee-gw-' \
+        --max "$HELM_RELEASE_LIST_PAGE_SIZE" \
+        --offset "$offset" 2>&1); then
+      GATEWAY_HELM_LIST_ERROR="$page"
+      return 1
+    fi
+    [[ -n "$page" ]] || break
+    if [[ -n "$inventory" ]]; then
+      inventory+=$'\n'
+    fi
+    inventory+="$page"
+    page_count=$(printf '%s\n' "$page" | sed '/^$/d' | wc -l | tr -d ' ')
+    offset=$((offset + page_count))
+    [[ "$page_count" -eq "$HELM_RELEASE_LIST_PAGE_SIZE" ]] || break
+  done
+  GATEWAY_HELM_RELEASES="$inventory"
+  GATEWAY_HELM_LIST_ERROR=""
+}
+
 uninstall_per_instance_gateways() {
   local timeout_flag="$1"
   local hook_flag="${2:-}"
-  local releases
-  releases=$(helm list -n "$K8S_NAMESPACE" --kube-context "$K8S_CONTEXT" -q 2>/dev/null \
-    | grep "^octogee-gw-" || true)
-  if [[ -z "$releases" ]]; then
-    info "No per-instance gateway releases (octogee-gw-*) to uninstall"
+  local releases residual
+  if ! inspect_per_instance_gateway_releases; then
+    [[ -n "$GATEWAY_HELM_LIST_ERROR" ]] && echo "$GATEWAY_HELM_LIST_ERROR" >&2
+    if $FULL; then
+      die "could not list per-instance gateway Helm releases"
+    fi
+    warn "Could not list per-instance gateway Helm releases — continuing ordinary Helm-only teardown"
     return
   fi
-  while IFS= read -r rel; do
-    [[ -z "$rel" ]] && continue
-    info "Uninstalling per-instance gateway release: $rel"
-    # shellcheck disable=SC2086
-    helm uninstall "$rel" -n "$K8S_NAMESPACE" --kube-context "$K8S_CONTEXT" \
-      $hook_flag --wait --timeout="$timeout_flag" 2>&1 \
-      && ok "Uninstalled $rel" \
-      || warn "Failed to uninstall $rel — continuing"
-  done <<<"$releases"
+  releases="$GATEWAY_HELM_RELEASES"
+  if [[ -z "$releases" ]]; then
+    info "No per-instance gateway releases (octogee-gw-*) to uninstall"
+  else
+    while IFS= read -r rel; do
+      [[ -z "$rel" ]] && continue
+      info "Uninstalling per-instance gateway release: $rel"
+      # shellcheck disable=SC2086
+      if helm uninstall "$rel" -n "$K8S_NAMESPACE" --kube-context "$K8S_CONTEXT" \
+          $hook_flag --wait --timeout="$timeout_flag" 2>&1; then
+        ok "Uninstalled $rel"
+      elif $FULL; then
+        die "could not uninstall per-instance gateway release $rel"
+      else
+        warn "Failed to uninstall $rel — continuing ordinary Helm-only teardown"
+      fi
+    done <<<"$releases"
+  fi
+
+  if $FULL; then
+    if ! inspect_per_instance_gateway_releases; then
+      [[ -n "$GATEWAY_HELM_LIST_ERROR" ]] && echo "$GATEWAY_HELM_LIST_ERROR" >&2
+      die "could not verify per-instance gateway Helm release removal"
+    fi
+    residual="$GATEWAY_HELM_RELEASES"
+    [[ -z "$residual" ]] \
+      || die "per-instance gateway Helm releases remain after uninstall: $(printf '%s' "$residual" | tr '\n' ' ')"
+  fi
 }
 
 # ── 1. Helm uninstall + resource cleanup ─────────────────────────────────
 echo ""
+if $FULL; then
+  info "Quiescing glm-controller before per-instance Helm removal..."
+  quiesce_gateway_controller
+fi
 if $FORCE && [[ "$ENV" == "test" ]]; then
   # Fast path for test --yes: force-delete gateway/app resources. --full
   # has already requested deletion of the durable PVCs in step 1a.
@@ -587,16 +742,19 @@ else
 fi
 
 if $FULL; then
+  echo ""
+  info "Deleting dynamic gateway runtime identities retained outside Helm..."
+  cleanup_dynamic_gateway_runtime_identities
   verify_durable_pvcs_absent
 fi
 
 if [[ "${FAST_DONE:-}" != "true" ]]; then
-  # ── 3. Secrets preserved ────────────────────────────────────────────────
-  # Teardown never deletes K8s secrets. The cache in the namespace is still
-  # valid after a helm uninstall + reinstall; helm reuses what's there. If
-  # you need to rotate a specific secret, use scripts/rotate-secret.sh.
   echo ""
-  info "Preserving all K8s secrets"
+  if $FULL; then
+    info "Preserving platform/static K8s secrets"
+  else
+    info "Preserving all K8s secrets"
+  fi
 
   # ── 4. Namespace preserved ──────────────────────────────────────────────
   info "Preserving namespace: $K8S_NAMESPACE"

@@ -28,6 +28,21 @@ type TeardownOptions = {
   functionDeleteFailure?: boolean;
   functions?: Array<{ name: string; generation: "GEN_1" | "GEN_2" }>;
   functionInventory?: string;
+  full?: boolean;
+  gatewayRuntimeFailure?:
+    | "serviceaccount-inspect"
+    | "serviceaccount-delete"
+    | "serviceaccount-residual"
+    | "secret-inspect"
+    | "secret-delete"
+    | "secret-residual";
+  gatewayHelmFailure?:
+    | "list"
+    | "uninstall"
+    | "residual"
+    | "appears-after-empty"
+    | "paginated";
+  gatewayControllerFailure?: "inspect" | "scale" | "pods";
   interactiveInput?: string;
 };
 
@@ -36,12 +51,18 @@ function runPrivateCentralTeardown(options: TeardownOptions = {}) {
   const log = path.join(temp, "calls.log");
   const describeCount = path.join(temp, "describe-count");
   const deletedPvcs = path.join(temp, "deleted-pvcs");
+  const deletedGatewayResources = path.join(temp, "deleted-gateway-resources");
+  const uninstalledGatewayReleases = path.join(temp, "uninstalled-gateway-releases");
+  const helmListCount = path.join(temp, "helm-list-count");
   const storageRemoved = path.join(temp, "storage-removed");
   const sqlOwnerManifest = path.join(temp, "sql-owner-manifest.yaml");
   const serviceAccount = path.join(temp, "service-account.json");
   writeFileSync(log, "");
   writeFileSync(describeCount, "0");
   writeFileSync(deletedPvcs, "");
+  writeFileSync(deletedGatewayResources, "");
+  writeFileSync(uninstalledGatewayReleases, "");
+  writeFileSync(helmListCount, "0");
   writeFileSync(sqlOwnerManifest, "");
   writeFileSync(serviceAccount, '{"project_id":"octogee-data-test"}');
 
@@ -130,10 +151,57 @@ case "$1 $2" in
   "config use-context") ;;
   "config current-context") printf 'gke_octogee_us-central1_octogee-gateway\\n' ;;
   "get serviceaccount") printf 'octogee-api@octogee.iam.gserviceaccount.com\\n' ;;
+  "get serviceaccounts")
+    [[ "$FAKE_GATEWAY_RUNTIME_FAILURE" != "serviceaccount-inspect" ]] || {
+      printf 'serviceaccounts is forbidden\\n' >&2
+      exit 1
+    }
+    printf 'default\\n'
+    printf 'octogee-api\\n'
+    for serviceaccount in octogee-gw-default octogee-gw-builder-one; do
+      if [[ "$FAKE_GATEWAY_RUNTIME_FAILURE" == "serviceaccount-residual" ]] \
+        || ! grep -Fxq "serviceaccount:$serviceaccount" "$FAKE_DELETED_GATEWAY_RESOURCES"; then
+        printf '%s\\n' "$serviceaccount"
+      fi
+    done
+    ;;
+  "get secrets")
+    [[ "$FAKE_GATEWAY_RUNTIME_FAILURE" != "secret-inspect" ]] || {
+      printf 'secrets is forbidden\\n' >&2
+      exit 1
+    }
+    printf 'gateway-model-key-issuer\\n'
+    printf 'gitea-token\\n'
+    for secret in gateway-auth-token-default gateway-auth-token-builder-one gateway-model-key-builder-one; do
+      if [[ "$FAKE_GATEWAY_RUNTIME_FAILURE" == "secret-residual" ]] \
+        || ! grep -Fxq "secret:$secret" "$FAKE_DELETED_GATEWAY_RESOURCES"; then
+        printf '%s\\n' "$secret"
+      fi
+    done
+    ;;
   "get deployment/mattermost") printf 'deployment.apps/mattermost\\n' ;;
   "get deployment/gitea") printf 'deployment.apps/gitea\\n' ;;
+  "get deployment/glm-controller")
+    [[ "$FAKE_GATEWAY_CONTROLLER_FAILURE" != "inspect" ]] || {
+      printf 'glm-controller deployment is forbidden\\n' >&2
+      exit 1
+    }
+    printf 'deployment.apps/glm-controller\\n'
+    ;;
+  "get pods")
+    if [[ "$*" == *"app=glm-controller"* && "$FAKE_GATEWAY_CONTROLLER_FAILURE" == "pods" ]]; then
+      printf 'glm-controller pods are forbidden\\n' >&2
+      exit 1
+    fi
+    ;;
   "get endpoints") printf '10.0.0.4\\n' ;;
   "scale deployment"|"scale statefulset") ;;
+  "scale deployment/glm-controller")
+    [[ "$FAKE_GATEWAY_CONTROLLER_FAILURE" != "scale" ]] || {
+      printf 'glm-controller scale is forbidden\\n' >&2
+      exit 1
+    }
+    ;;
   "apply -f") cat >> "$FAKE_SQL_OWNER_MANIFEST" ;;
   "logs job/"*)
     if [[ "$FAKE_SQL_OWNER_JOB_FAILURE" == "true" ]]; then
@@ -155,6 +223,20 @@ case "$1 $2" in
     esac
     ;;
   "delete job") ;;
+  "delete serviceaccount")
+    [[ "$FAKE_GATEWAY_RUNTIME_FAILURE" != "serviceaccount-delete" ]] || {
+      printf 'serviceaccount delete forbidden\\n' >&2
+      exit 1
+    }
+    printf 'serviceaccount:%s\\n' "$3" >> "$FAKE_DELETED_GATEWAY_RESOURCES"
+    ;;
+  "delete secret")
+    [[ "$FAKE_GATEWAY_RUNTIME_FAILURE" != "secret-delete" ]] || {
+      printf 'secret delete forbidden\\n' >&2
+      exit 1
+    }
+    printf 'secret:%s\\n' "$3" >> "$FAKE_DELETED_GATEWAY_RESOURCES"
+    ;;
   "get pvc")
     pvc="$3"
     if [[ "$FAKE_PVC_FAILURE" == "inspect" && "$pvc" == "gitea-shared-storage" ]]; then
@@ -187,7 +269,54 @@ esac
 
   executable(path.join(temp, "helm"), `#!/usr/bin/env bash
 set -euo pipefail
-case "$1" in status) exit 1 ;; list) ;; *) ;; esac
+printf 'helm %s\\n' "$*" >> "$FAKE_CALL_LOG"
+case "$1" in
+  status) exit 1 ;;
+  list)
+    count="$(cat "$FAKE_HELM_LIST_COUNT")"
+    count=$((count + 1))
+    printf '%s' "$count" > "$FAKE_HELM_LIST_COUNT"
+    [[ "$FAKE_GATEWAY_HELM_FAILURE" != "list" ]] || {
+      printf 'helm list forbidden\\n' >&2
+      exit 1
+    }
+    if [[ "$FAKE_GATEWAY_HELM_FAILURE" == "paginated" ]]; then
+      offset=0
+      previous=""
+      for argument in "$@"; do
+        if [[ "$previous" == "--offset" ]]; then offset="$argument"; fi
+        previous="$argument"
+      done
+      emitted=0
+      for index in $(seq $((offset + 1)) 257); do
+        release="$(printf 'octogee-gw-page-%03d' "$index")"
+        if ! grep -Fxq "$release" "$FAKE_UNINSTALLED_GATEWAY_RELEASES"; then
+          printf '%s\\n' "$release"
+          emitted=$((emitted + 1))
+          [[ "$emitted" -lt 256 ]] || break
+        fi
+      done
+      exit 0
+    fi
+    if [[ "$FAKE_GATEWAY_HELM_FAILURE" == "appears-after-empty" ]]; then
+      [[ "$count" == 1 ]] || printf 'octogee-gw-stale\\n'
+      exit 0
+    fi
+    if [[ "$FAKE_GATEWAY_HELM_FAILURE" == "residual" ]] \
+      || ! grep -Fxq 'octogee-gw-stale' "$FAKE_UNINSTALLED_GATEWAY_RELEASES"; then
+      printf 'octogee-gw-stale\\n'
+    fi
+    ;;
+  uninstall)
+    if [[ "$2" == octogee-gw-* ]]; then
+      [[ "$FAKE_GATEWAY_HELM_FAILURE" != "uninstall" ]] || {
+        printf 'gateway uninstall failed\\n' >&2
+        exit 1
+      }
+      printf '%s\\n' "$2" >> "$FAKE_UNINSTALLED_GATEWAY_RELEASES"
+    fi
+    ;;
+esac
 `);
   executable(path.join(temp, "cloud-sql-proxy"), "#!/usr/bin/env bash\nset -euo pipefail\nsleep 300\n");
   executable(path.join(temp, "lsof"), "#!/usr/bin/env bash\nset -euo pipefail\nexit 1\n");
@@ -196,7 +325,8 @@ case "$1" in status) exit 1 ;; list) ;; *) ;; esac
   executable(path.join(temp, "firebase"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'firebase %s\\n' \"$*\" >> \"$FAKE_CALL_LOG\"\n");
   executable(path.join(temp, "npx"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'npx %s\\n' \"$*\" >> \"$FAKE_CALL_LOG\"\n");
 
-  const args = [teardown, "--env=test", "--deployment-target=test-central", "--full"];
+  const args = [teardown, "--env=test", "--deployment-target=test-central"];
+  if (options.full ?? true) args.push("--full");
   if (!options.interactiveInput) args.push("--yes");
   const result = spawnSync("bash", args, {
     cwd: repoRoot,
@@ -207,6 +337,12 @@ case "$1" in status) exit 1 ;; list) ;; *) ;; esac
       FAKE_DATABASE_FAILURE: options.databaseFailure ?? "",
       FAKE_DESCRIBE_COUNT: describeCount,
       FAKE_DELETED_PVCS: deletedPvcs,
+      FAKE_DELETED_GATEWAY_RESOURCES: deletedGatewayResources,
+      FAKE_GATEWAY_RUNTIME_FAILURE: options.gatewayRuntimeFailure ?? "",
+      FAKE_GATEWAY_HELM_FAILURE: options.gatewayHelmFailure ?? "",
+      FAKE_GATEWAY_CONTROLLER_FAILURE: options.gatewayControllerFailure ?? "",
+      FAKE_HELM_LIST_COUNT: helmListCount,
+      FAKE_UNINSTALLED_GATEWAY_RELEASES: uninstalledGatewayReleases,
       FAKE_PUBLIC_IP: options.publicIp ? "true" : "false",
       FAKE_PVC_FAILURE: options.pvcFailure ?? "",
       FAKE_SECRET_FAILURE: options.secretFailure ?? "",
@@ -254,6 +390,113 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
     expect(result.sqlOwnerManifest).toContain("mattermost_test");
     expect(result.sqlOwnerManifest).toContain("gitea_test");
     expect(result.sqlOwnerManifest).toContain('CREATE DATABASE :\\"database\\";');
+  });
+
+  it("removes only exact-target dynamic gateway identities and secrets during a full reset", () => {
+    const result = runPrivateCentralTeardown();
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    for (const name of ["octogee-gw-default", "octogee-gw-builder-one"]) {
+      expect(result.calls).toContain(
+        `kubectl delete serviceaccount ${name} -n octogee-test --context gke_octogee_us-central1_octogee-gateway --wait=true`,
+      );
+    }
+    for (const name of [
+      "gateway-auth-token-default",
+      "gateway-auth-token-builder-one",
+      "gateway-model-key-builder-one",
+    ]) {
+      expect(result.calls).toContain(
+        `kubectl delete secret ${name} -n octogee-test --context gke_octogee_us-central1_octogee-gateway --wait=true`,
+      );
+    }
+    expect(result.calls).not.toContainEqual(
+      expect.stringContaining("delete secret gateway-model-key-issuer"),
+    );
+    expect(result.calls).not.toContainEqual(
+      expect.stringContaining("delete serviceaccount octogee-api"),
+    );
+    expect(result.calls).not.toContainEqual(
+      expect.stringContaining("delete serviceaccount default"),
+    );
+    expect(result.stdout).toContain("Dynamic gateway runtime identities confirmed absent");
+    expect(result.calls).toContain(
+      "kubectl scale deployment/glm-controller -n octogee-test --context gke_octogee_us-central1_octogee-gateway --replicas=0",
+    );
+  });
+
+  it("preserves dynamic gateway identities during the ordinary Helm-only teardown", () => {
+    const result = runPrivateCentralTeardown({ full: false });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.calls.some((call) => call.includes("get serviceaccounts"))).toBe(false);
+    expect(result.calls.some((call) => call.includes("get secrets"))).toBe(false);
+    expect(result.calls.some((call) => call.includes("delete serviceaccount"))).toBe(false);
+    expect(result.calls.some((call) => call.includes("delete secret"))).toBe(false);
+  });
+
+  it("pages a server-filtered gateway Helm inventory instead of trusting the 256-release default", () => {
+    const source = readFileSync(teardown, "utf8");
+
+    expect(source).toContain("--filter '^octogee-gw-'");
+    expect(source).toContain('--max "$HELM_RELEASE_LIST_PAGE_SIZE"');
+    expect(source).toContain('--offset "$offset"');
+    expect(source).toContain("offset=$((offset + page_count))");
+  });
+
+  it("discovers and removes a gateway Helm release beyond the first 256 results", () => {
+    const result = runPrivateCentralTeardown({ gatewayHelmFailure: "paginated" });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.calls).toContainEqual(
+      expect.stringMatching(/^helm list .*--max 256 --offset 256$/),
+    );
+    expect(result.calls).toContainEqual(
+      expect.stringContaining("helm uninstall octogee-gw-page-257"),
+    );
+  });
+
+  it.each([
+    ["serviceaccount-inspect", "could not inspect dynamic gateway ServiceAccounts"],
+    ["serviceaccount-delete", "could not delete dynamic gateway ServiceAccount octogee-gw-default"],
+    ["serviceaccount-residual", "dynamic gateway ServiceAccounts remain after cleanup"],
+    ["secret-inspect", "could not inspect per-gateway runtime Secrets"],
+    ["secret-delete", "could not delete per-gateway runtime Secret gateway-auth-token-default"],
+    ["secret-residual", "per-gateway runtime Secrets remain after cleanup"],
+  ] as const)("fails closed when gateway runtime cleanup hits %s", (gatewayRuntimeFailure, message) => {
+    const result = runPrivateCentralTeardown({ gatewayRuntimeFailure });
+
+    expect(result.status).toBe(1);
+    expect(`${result.stderr}\n${result.stdout}`).toContain(message);
+    expect(result.calls.some((call) => call.startsWith("firebase firestore:delete"))).toBe(false);
+  });
+
+  it.each([
+    ["list", "could not list per-instance gateway Helm releases"],
+    ["uninstall", "could not uninstall per-instance gateway release octogee-gw-stale"],
+    ["residual", "per-instance gateway Helm releases remain after uninstall"],
+    ["appears-after-empty", "per-instance gateway Helm releases remain after uninstall"],
+  ] as const)("fails before credential cleanup when gateway Helm removal hits %s", (gatewayHelmFailure, message) => {
+    const result = runPrivateCentralTeardown({ gatewayHelmFailure });
+
+    expect(result.status).toBe(1);
+    expect(`${result.stderr}\n${result.stdout}`).toContain(message);
+    expect(result.calls.some((call) => call.includes("delete serviceaccount"))).toBe(false);
+    expect(result.calls.some((call) => call.includes("delete secret"))).toBe(false);
+  });
+
+  it.each([
+    ["inspect", "could not inspect glm-controller before full gateway cleanup"],
+    ["scale", "could not quiesce glm-controller before full gateway cleanup"],
+    ["pods", "could not inspect glm-controller pods before full gateway cleanup"],
+  ] as const)("fails before Helm removal when controller quiescence hits %s", (gatewayControllerFailure, message) => {
+    const result = runPrivateCentralTeardown({ gatewayControllerFailure });
+
+    expect(result.status).toBe(1);
+    expect(`${result.stderr}\n${result.stdout}`).toContain(message);
+    expect(result.calls.some((call) => call.startsWith("helm list"))).toBe(false);
+    expect(result.calls.some((call) => call.includes("delete serviceaccount"))).toBe(false);
+    expect(result.calls.some((call) => call.includes("delete secret"))).toBe(false);
   });
 
   it("fails closed before data cleanup when a private database owner is not the target app user", () => {
