@@ -14,6 +14,7 @@ export const GATEWAY_ASSIGNMENTS_SUBCOLLECTION = "assignments";
 export const W9_CANDIDATE_MANIFEST_PATH = "infra/gateway/openclaw-candidates/agent-conversation.json";
 export const W9_MATTERMOST_OVERLAY_VALUES_PATH = "infra/candidates/values.mattermost-silent-post.yaml";
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
+const DIGEST_BOUND_IMAGE_TAG_PATTERN = /^[a-z0-9][a-z0-9._-]*@sha256:[a-f0-9]{64}$/;
 const DIGEST_BOUND_IMAGE_REFERENCE_PATTERN = /^[a-z0-9][a-z0-9./_-]*:[a-z0-9][a-z0-9._-]*@sha256:[a-f0-9]{64}$/;
 export function isW9TestPublisherLiveExperiment(value) {
     if (!isPlainRecord(value) || value.kind !== "w9-agent-conversation" || value.mode !== "publisher-live") {
@@ -33,6 +34,7 @@ export function isW9TestPublisherLiveExperiment(value) {
 const RELEASE_PAYLOAD_FIELD_NAMES = new Set([
     "imageRepository",
     "imageTag",
+    "profileImages",
     "gatewayEdgeImage",
     "testExperiment",
 ]);
@@ -48,6 +50,10 @@ export function isReleasePayload(value) {
         return false;
     if (!hasReleasePayloadShape(value) || !hasReleasePayloadIdentity(value))
         return false;
+    if (value.profileImages !== undefined &&
+        !isGatewayProfileImages(value.profileImages, value.imageRepository, value.imageTag)) {
+        return false;
+    }
     if (value.testExperiment === undefined) {
         return (!isW9CandidateImageTag(value.imageTag) &&
             (value.gatewayEdgeImage === undefined ||
@@ -57,6 +63,21 @@ export function isReleasePayload(value) {
     return (isW9CandidateImageTag(value.imageTag) &&
         isW9TestPublisherLiveExperiment(value.testExperiment) &&
         isW9GatewayEdgeImage(value.gatewayEdgeImage, value.imageTag, value.imageRepository));
+}
+function isGatewayProfileImages(value, gatewayImageRepository, gatewayImageTag) {
+    if (!isPlainRecord(value) || Object.keys(value).length !== 1)
+        return false;
+    const operator = value.operator;
+    if (!isPlainRecord(operator) || Object.keys(operator).length !== 2)
+        return false;
+    const gatewayPackageSuffix = "/octogee-gateway";
+    const expectedRepository = gatewayImageRepository.endsWith(gatewayPackageSuffix)
+        ? `${gatewayImageRepository.slice(0, -gatewayPackageSuffix.length)}/octogee-gateway-operator`
+        : "";
+    return (operator.imageRepository === expectedRepository &&
+        typeof operator.imageTag === "string" &&
+        DIGEST_BOUND_IMAGE_TAG_PATTERN.test(operator.imageTag) &&
+        operator.imageTag.split("@", 1)[0] === gatewayImageTag.split("@", 1)[0]);
 }
 export function isGatewayEdgeImage(value, gatewayImageRepository) {
     const gatewayPackageSuffix = "/octogee-gateway";
