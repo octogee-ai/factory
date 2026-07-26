@@ -384,7 +384,7 @@ else
   # to 7 but auto-extends to 8 on disambiguation or with core.abbrev
   # raised — comparing 7-char to 8-char would never match even when the
   # deploy is current. Normalize HEAD to GW_SHA's length.
-  GW_SHA=$(echo "$GW_IMAGE" | grep -o ':[a-f0-9]*$' | tr -d ':' || echo "")
+  GW_SHA=$(octogee_gateway_image_release_sha "$GW_IMAGE" || echo "")
   if [[ -n "$GW_SHA" ]]; then
     LATEST_SHA=$(cd "$REPO_DIR" && git rev-parse HEAD 2>/dev/null | head -c "${#GW_SHA}" || echo "unknown")
   else

@@ -54,6 +54,8 @@ imageProfile?: GatewayImageProfile;
 
 sizingTier?: SizingTier;
 
+availabilityProtected?: true;
+
 replicas?: number;
 
 gcpProject?: string;
@@ -356,6 +358,7 @@ export interface BuildUpgradeArgsOpts {
   gatewayClass?: GatewayClass;
   imageProfile?: GatewayImageProfile;
   sizingTier?: SizingTier;
+  availabilityProtected?: true;
   replicas?: number;
   serviceAccountName?: string;
   serviceAccount?: HelmInstancesMap[string]["serviceAccount"];
@@ -477,6 +480,14 @@ function appendOptionalJsonArgs(args: string[], opts: BuildUpgradeArgsOpts): voi
   }
 }
 
+function appendAvailabilityArgs(args: string[], opts: BuildUpgradeArgsOpts): void {
+  if (!opts.availabilityProtected) return;
+  if (!opts.gatewayClass) {
+    throw new Error("protected availability requires gatewayClass");
+  }
+  pushSetJson(args, "availability.protectedClasses", [opts.gatewayClass]);
+}
+
 function appendOptionalNumberArgs(args: string[], opts: BuildUpgradeArgsOpts): void {
   if (opts.replicas !== undefined) args.push(HELM_SET, `replicas=${opts.replicas}`);
 }
@@ -554,6 +565,7 @@ export function buildUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
   appendOptionalStringArgs(args, opts);
   appendOptionalNumberArgs(args, opts);
   appendOptionalJsonArgs(args, opts);
+  appendAvailabilityArgs(args, opts);
   appendOptionalFileArgs(args, opts);
   // Server-side apply + force-conflicts: matches the umbrella install path
   // that the CI deploy job has used since #913 + #1056. Cowboy was left
