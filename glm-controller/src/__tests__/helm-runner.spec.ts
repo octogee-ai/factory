@@ -167,6 +167,22 @@ describe("helm-runner helpers", () => {
     );
   });
 
+  it("passes protected availability as one class-scoped Helm value", () => {
+    const args = buildUpgradeArgs({
+      release: "octogee-gw-default",
+      chartPath: "/charts/octogee-gateway",
+      namespace: "octogee",
+      gatewayId: "default",
+      imageTag: "abc1234",
+      imageRepository: REPO,
+      upgradeTimeout: "10m",
+      gatewayClass: "shared",
+      availabilityProtected: true,
+    });
+
+    expect(args).toContain('availability.protectedClasses=["shared"]');
+  });
+
   it("clears a previous trial claim identity when the gateway returns to ownerless prewarm", () => {
     const args = buildUpgradeArgs({
       release: "octogee-gw-trial-op-000001",
@@ -219,6 +235,26 @@ describe("helm-runner helpers", () => {
     });
     expect(args).not.toContain("--wait");
     expect(args).toContain("--timeout=10m");
+  });
+
+  it("renders a normal digest-bound gateway and gateway-edge release without a W9 experiment", () => {
+    const gatewayTag = `a408f2f-oc2026.7.1@sha256:${"a".repeat(64)}`;
+    const gatewayEdgeTag = `a408f2f-oc2026.7.1@sha256:${"b".repeat(64)}`;
+
+    const args = buildUpgradeArgs({
+      release: "octogee-gw-default",
+      chartPath: "/charts/octogee-gateway",
+      namespace: "octogee-test",
+      gatewayId: "default",
+      imageRepository: REPO,
+      imageTag: gatewayTag,
+      gatewayEdgeImageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
+      gatewayEdgeImageTag: gatewayEdgeTag,
+      upgradeTimeout: "10m",
+    });
+
+    expect(args).toContain(`imageTag=${gatewayTag}`);
+    expect(args).toContain(`gatewayEdge.image.tag=${gatewayEdgeTag}`);
   });
 
   it("renders publisher-live only with the digest-bound TEST W9 candidate handoff", () => {

@@ -91,6 +91,30 @@ describe("assessReleaseConvergence", () => {
     })).toEqual({ converged: true, failures: [] });
   });
 
+  it("accepts digest-pinned desired and heartbeat tags for the expected release tag", () => {
+    const digest = `sha256:${"a".repeat(64)}`;
+    const value = snapshot({
+      gateways: snapshot().gateways.map((gateway) => ({
+        ...gateway,
+        desiredImageTag: `${gateway.desiredImageTag}@${digest}`,
+      })),
+      rolloutOperations: snapshot().rolloutOperations.map((operation) => ({
+        ...operation,
+        imageTag: `${operation.imageTag}@${digest}`,
+      })),
+      defaultRuntime: {
+        ...snapshot().defaultRuntime!,
+        heartbeatVersion: `abc1234-oc2026.7.1@${digest}`,
+      },
+    });
+
+    expect(assessReleaseConvergence(value, {
+      configuredDefaultGatewayId: "shared-blue",
+      predecessorPodUids: ["old-pod"],
+      capturedAt: 1,
+    })).toEqual({ converged: true, failures: [] });
+  });
+
   it("waits for every tagged fleet rollout operation", () => {
     const value = snapshot({
       rolloutOperations: [
@@ -126,12 +150,13 @@ describe("assessReleaseConvergence", () => {
   });
 
   it("reports a failed tagged rollout with its controller error", () => {
+    const digest = `sha256:${"a".repeat(64)}`;
     const value = snapshot({
       rolloutOperations: [
         {
           id: "roll-shared",
           gatewayId: "shared-blue",
-          imageTag: "abc1234-oc2026.7.1",
+          imageTag: `abc1234-oc2026.7.1@${digest}`,
           status: "failed",
           error: "readiness timeout",
         },

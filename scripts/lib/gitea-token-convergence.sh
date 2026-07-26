@@ -4,9 +4,27 @@ validate_gitea_token_consumer() {
   local deployment="$1" token_env="$2" api_url_env="$3" api_path="$4" pods pod
   pods=$(kubectl get pods -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
     -l "app=$deployment" \
-    -o jsonpath='{range .items[?(@.status.phase=="Running")]}{.metadata.name}{"\n"}{end}') \
+    -o json | python3 -c '
+import json
+import sys
+
+for pod in json.load(sys.stdin).get("items", []):
+    metadata = pod.get("metadata", {})
+    status = pod.get("status", {})
+    ready = any(
+        condition.get("type") == "Ready" and condition.get("status") == "True"
+        for condition in status.get("conditions", [])
+    )
+    if (
+        not metadata.get("deletionTimestamp")
+        and status.get("phase") == "Running"
+        and ready
+    ):
+        print(metadata["name"])
+') \
     || fail "Could not list Gitea token consumer pods for $deployment"
-  [[ -n "$pods" ]] || fail "Gitea token consumer validation failed: no Running $deployment pod"
+  [[ -n "$pods" ]] \
+    || fail "Gitea token consumer validation failed: no Ready non-terminating $deployment pod"
 
   while IFS= read -r pod; do
     [[ -n "$pod" ]] || continue
