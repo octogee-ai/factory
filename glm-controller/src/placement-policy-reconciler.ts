@@ -6,7 +6,10 @@ import {
 } from "@octogee/core/gateway-retirement-claim";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
+import {
+  GATEWAY_UNREACHABLE_AFTER_MS,
+  GATEWAYS_COLLECTION,
+} from "@octogee/shared/types/fleet-controller";
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
@@ -45,7 +48,10 @@ export interface PlacementPolicyUser {
 export interface PlacementPolicyMigration {
   id: string;
   uid: string;
+  builderSlug: string;
+  fromGatewayId: string;
   toGatewayId: string;
+  source: "continuous-placement-policy" | "builder-activation-lease";
   status: "pending" | "running" | "failed" | "rolled-back";
   error?: string;
 }
@@ -53,6 +59,7 @@ export interface PlacementPolicyMigration {
 export interface PlacementPolicySnapshot {
   defaultGatewayId: string;
   idleMs: number;
+  liveRunBuilderSlugs: string[];
   users: PlacementPolicyUser[];
   gateways: ContinuousPlacementOwnedGateway[];
   activeMigrations: PlacementPolicyMigration[];
@@ -117,6 +124,7 @@ export interface RetireOwnedGatewayInput {
   generation?: number;
   telemetryFenceOperationId?: string;
   telemetryFenceStatus?: "succeeded" | "terminal-failure";
+  authoritativeGatewayId?: string;
 }
 
 export interface AssignInitialPlacementInput {
@@ -140,6 +148,7 @@ export interface PlacementPolicyReconcilerDeps {
     builderSlug: string;
     gatewayId: string;
     userData: Record<string, unknown>;
+    liveRun: boolean;
   }): Promise<BuilderRuntimeActivity>;
   enqueueMigration(input: EnqueuePlacementMigrationInput): Promise<string>;
   retireOwnedGateway(input: RetireOwnedGatewayInput): Promise<boolean>;
@@ -275,6 +284,24 @@ function adoptActiveMigration(
   return true;
 }
 
+function activationMigrationMatches(
+  operation: PlacementPolicyMigration,
+  input: {
+    id: string;
+    uid: string;
+    builderSlug: string;
+    fromGatewayId: string;
+    toGatewayId: string;
+  },
+): boolean {
+  return operation.id === input.id &&
+    operation.uid === input.uid &&
+    operation.builderSlug === input.builderSlug &&
+    operation.fromGatewayId === input.fromGatewayId &&
+    operation.toGatewayId === input.toGatewayId &&
+    operation.source === "builder-activation-lease";
+}
+
 function disposableTargetIdentityMatchesLease(
   gateway: ContinuousPlacementOwnedGateway,
   user: PlacementPolicyUser,
@@ -363,7 +390,13 @@ async function reconcileProvisioningActivation(
   if (!target.ready) return;
   const active = context.migrations.get(user.uid);
   if (active) {
-    if (active.toGatewayId !== targetGatewayId) {
+    if (!activationMigrationMatches(active, {
+      id: `builder-activate-${targetGatewayId}`,
+      uid: user.uid,
+      builderSlug,
+      fromGatewayId: current ?? context.state.defaultGatewayId,
+      toGatewayId: target.gatewayId,
+    })) {
       context.result.blocked += 1;
       return;
     }
@@ -469,7 +502,13 @@ async function queueLeaseReturn(
   const targetGatewayId = lease.targetGatewayId!;
   const active = context.migrations.get(user.uid);
   if (active) {
-    if (active.toGatewayId !== context.state.defaultGatewayId) {
+    if (!activationMigrationMatches(active, {
+      id: `builder-return-${targetGatewayId}`,
+      uid: user.uid,
+      builderSlug,
+      fromGatewayId: targetGatewayId,
+      toGatewayId: context.state.defaultGatewayId,
+    })) {
       context.result.blocked += 1;
       return;
     }
@@ -532,6 +571,7 @@ async function reconcileActiveLease(
     builderSlug,
     gatewayId: targetGatewayId!,
     userData: user.data,
+    liveRun: context.state.liveRunBuilderSlugs.includes(builderSlug),
   });
   if (
     activity.liveRun ||
@@ -562,10 +602,27 @@ async function reconcileReturningLease(
     return;
   }
   if (current === targetGatewayId) {
+    const returnOperation = context.operations.get(`builder-return-${targetGatewayId}`);
+    if (
+      returnOperation?.status === "failed" ||
+      returnOperation?.status === "rolled-back"
+    ) {
+      context.result.blocked += 1;
+      return;
+    }
     const active = context.migrations.get(user.uid);
     if (active) {
-      if (active.toGatewayId === context.state.defaultGatewayId) context.result.adopted += 1;
-      else context.result.blocked += 1;
+      if (activationMigrationMatches(active, {
+        id: `builder-return-${targetGatewayId}`,
+        uid: user.uid,
+        builderSlug,
+        fromGatewayId: targetGatewayId,
+        toGatewayId: context.state.defaultGatewayId,
+      })) {
+        context.result.adopted += 1;
+      } else {
+        context.result.blocked += 1;
+      }
       return;
     }
     await context.deps.enqueueMigration({
@@ -604,6 +661,7 @@ async function reconcileReturningLease(
     generation: lease.generation,
     telemetryFenceOperationId: `builder-return-${targetGatewayId}`,
     telemetryFenceStatus: "succeeded",
+    authoritativeGatewayId: context.state.defaultGatewayId,
   });
   if (!retired) {
     context.result.blocked += 1;
@@ -720,7 +778,14 @@ export async function reconcilePlacementPolicyOnce(
 
   const context = { deps, state, gateways, migrations, operations, result };
   for (const user of [...state.users].sort((a, b) => a.uid.localeCompare(b.uid))) {
-    await reconcilePlacementUser(context, user);
+    try {
+      await reconcilePlacementUser(context, user);
+    } catch (error) {
+      result.blocked += 1;
+      deps.log(
+        `[placement-policy] ${user.uid}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
   return result;
 }
@@ -735,7 +800,10 @@ function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration |
   const input = data.input;
   if (!input || typeof input !== "object" || Array.isArray(input)) return null;
   const uid = nonEmptyString((input as Record<string, unknown>).uid) ?? nonEmptyString(data.inputUid);
+  const builderSlug = nonEmptyString((input as Record<string, unknown>).builderSlug);
+  const fromGatewayId = nonEmptyString((input as Record<string, unknown>).fromGatewayId);
   const toGatewayId = nonEmptyString((input as Record<string, unknown>).toGatewayId);
+  const source = (input as Record<string, unknown>).source;
   const status = data.status;
   if (
     status !== "pending" &&
@@ -745,11 +813,18 @@ function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration |
   ) {
     return null;
   }
-  return uid && toGatewayId
+  return uid &&
+      builderSlug &&
+      fromGatewayId &&
+      toGatewayId &&
+      (source === "continuous-placement-policy" || source === "builder-activation-lease")
     ? {
         id: doc.id,
         uid,
+        builderSlug,
+        fromGatewayId,
         toGatewayId,
+        source,
         status,
         ...(typeof data.error === "string" ? { error: data.error } : {}),
       }
@@ -768,8 +843,9 @@ interface FirestorePlacementPolicyInput {
 async function readPlacementPolicySnapshot(
   db: Firestore,
   fallbackIdleMs: number,
+  now: number,
 ): Promise<PlacementPolicySnapshot> {
-  const [configSnap, usersSnap, gatewaysSnap, runtimeSnap, opsSnap] =
+  const [configSnap, usersSnap, gatewaysSnap, runtimeSnap, opsSnap, liveRunsSnap] =
     await Promise.all([
       db.doc("config/orchestrator").get(),
       db.collection("users").get(),
@@ -778,6 +854,7 @@ async function readPlacementPolicySnapshot(
       db.collection(GLM_OPERATIONS_COLLECTION)
         .where("status", "in", ["pending", "running", "failed", "rolled-back"])
         .get(),
+      db.collectionGroup("liveRuns").where("expiresAt", ">", now).get(),
     ]);
   const defaultGatewayId = nonEmptyString(configSnap.data()?.defaultGatewayId);
   if (!defaultGatewayId) throw new Error("config/orchestrator.defaultGatewayId is missing");
@@ -790,6 +867,9 @@ async function readPlacementPolicySnapshot(
     const root = projectGatewayDesiredRootForGateway(doc.data(), doc.id);
     if (!root) return [];
     const runtime = runtimes.get(doc.id);
+    const heartbeatAt = isGatewayRuntimeDoc(runtime)
+      ? millis(runtime.heartbeat.lastHeartbeatAt)
+      : null;
     return [{
       gatewayId: doc.id,
       gatewayClass: root.gatewayClass,
@@ -799,8 +879,13 @@ async function readPlacementPolicySnapshot(
       allocation: root.allocation ?? null,
       ready: isGatewayRuntimeDoc(runtime) &&
         runtime.gatewayId === doc.id &&
+        root.liveRelease !== null &&
+        root.desiredRelease === root.liveRelease &&
+        runtime.release === root.liveRelease &&
         runtime.lifecycle === "serving" &&
-        runtime.heartbeat.status === "ready",
+        runtime.heartbeat.status === "ready" &&
+        heartbeatAt !== null &&
+        now - heartbeatAt <= GATEWAY_UNREACHABLE_AFTER_MS,
     }];
   });
   const defaultGateway = gateways.find((gateway) => gateway.gatewayId === defaultGatewayId);
@@ -814,6 +899,10 @@ async function readPlacementPolicySnapshot(
   return {
     defaultGatewayId,
     idleMs,
+    liveRunBuilderSlugs: [...new Set(liveRunsSnap.docs.flatMap((doc) => {
+      const parts = doc.ref.path.split("/");
+      return parts[0] === "workspaces" && parts[1] ? [parts[1]] : [];
+    }))],
     users: usersSnap.docs.map((doc) => ({ uid: doc.id, data: doc.data() as Record<string, unknown> })),
     gateways,
     activeMigrations: opsSnap.docs.flatMap((doc) => activeMigration(doc) ?? []),
@@ -882,6 +971,7 @@ async function enqueuePlacementMigration(
       if (
         data.kind !== "migrate-customer" ||
         operationInput?.uid !== request.uid ||
+        operationInput.builderSlug !== request.builderSlug ||
         operationInput.fromGatewayId !== request.fromGatewayId ||
         operationInput.toGatewayId !== request.toGatewayId ||
         operationInput.source !== request.source
@@ -952,9 +1042,9 @@ async function retireOwnedGatewayFirestore(
       now,
       updatedBy: PLACEMENT_POLICY_ACTOR,
       ...(telemetryObservedAfter === undefined ? {} : { telemetryObservedAfter }),
-      claimGuard: ({ root }) => {
-        const record = root as unknown as Record<string, unknown>;
-        const allocation = record.allocation as Record<string, unknown> | null | undefined;
+      claimGuard: async ({ transaction, root }) => {
+        const rootRecord = root as unknown as Record<string, unknown>;
+        const allocation = rootRecord.allocation as Record<string, unknown> | null | undefined;
         const allocationMismatch = request.leaseId !== undefined &&
           (
             allocation?.kind !== "disposable-builder" ||
@@ -963,14 +1053,46 @@ async function retireOwnedGatewayFirestore(
             allocation.generation !== request.generation
           );
         if (
-          record.ownerUid !== request.uid ||
-          record.gatewayClass === "shared" ||
+          rootRecord.ownerUid !== request.uid ||
+          rootRecord.gatewayClass === "shared" ||
           allocation?.kind !== "disposable-builder" ||
           allocationMismatch
         ) {
           throw new GatewayRetirementConflictError(
             `gateway ${request.gatewayId} no longer matches disposable allocation for ${request.uid}`,
           );
+        }
+        if (request.authoritativeGatewayId) {
+          const userRef = input.db.collection("users").doc(request.uid);
+          const assignmentRef = input.db
+            .collection(GATEWAYS_COLLECTION)
+            .doc(request.authoritativeGatewayId)
+            .collection("assignments")
+            .doc(request.uid);
+          const [userSnapshot, assignmentSnapshot] = await Promise.all([
+            transaction.get(userRef),
+            transaction.get(assignmentRef),
+          ]);
+          const userData = userSnapshot.data() as Record<string, unknown> | undefined;
+          const openclaw = record(record(userData?.provisioning)?.openclaw);
+          const lease = record(openclaw?.activationLease);
+          const assignment = assignmentSnapshot.data() as Record<string, unknown> | undefined;
+          if (
+            !userSnapshot.exists ||
+            openclaw?.gatewayId !== request.authoritativeGatewayId ||
+            lease?.leaseId !== request.leaseId ||
+            lease?.generation !== request.generation ||
+            lease?.status !== "returning" ||
+            lease?.targetGatewayId !== request.gatewayId ||
+            !assignmentSnapshot.exists ||
+            assignment?.uid !== request.uid ||
+            assignment.gatewayId !== request.authoritativeGatewayId ||
+            assignment.state !== "serving"
+          ) {
+            throw new GatewayRetirementConflictError(
+              `Builder ${request.uid} is no longer authoritatively returned to ${request.authoritativeGatewayId}`,
+            );
+          }
         }
       },
     });
@@ -988,7 +1110,7 @@ export function createFirestorePlacementPolicyReconcilerDeps(
   return {
     now: input.now,
     log: input.log,
-    readSnapshot: () => readPlacementPolicySnapshot(input.db, input.idleMs),
+    readSnapshot: () => readPlacementPolicySnapshot(input.db, input.idleMs, input.now()),
     assignInitialPlacement: (request) => assignInitialPlacementFirestore(input, request),
     allocateDisposableGateway: (request) => allocateDisposableGatewayFirestore(input, request),
     advanceActivationLease: (request) => advanceActivationLeaseFirestore(input, request),
