@@ -540,12 +540,22 @@ both.**
 ✓ `git diff cloudbuild-base.yaml cloudbuild.yaml` shows version + fork-SHA
 in both files. Don't commit yet.
 
-### Step 12b — Keep `oc-build-matrix.yaml` current-only
+### Step 12b — `oc-build-matrix.yaml`: current base + optional preview base
 
-The matrix has one `bases:` row: `label: current`. `versions:` is empty.
-It must exactly match `cloudbuild.yaml`'s `_OPENCLAW_VERSION` and
-`_OPENCLAW_FORK_SHA`; CI rejects any preview, dev, or previous row. When
-the fork changes, update that one row with the two cloudbuild files.
+The matrix carries the `label: current` base row (must exactly match
+`cloudbuild.yaml`'s `_OPENCLAW_VERSION` and `_OPENCLAW_FORK_SHA`) plus an
+OPTIONAL `label: preview` base row (operator restore, 2026-07-25).
+`versions:` stays empty — the per-push extras gateway builds removed by
+#2770 stay removed; CI rejects any `versions:` entry and any base label
+other than current + optional preview. A preview base row needs
+`forkSha`, `sourceSha` (the FULL 40-hex fork commit), `rootSha256` (the
+root tarball's sha256), `mattermostForkSha`, `mattermostSha256` (the MM
+artifact's sha256), and `config: cloudbuild-base-beta.yaml` — the beta
+config's verified candidate rebuild checks all of them before publishing. The preview BASE builds
+via `rebuild-matrix-bases.sh`; a preview GATEWAY image is built on demand
+with `scripts/build-pinned-gateway.sh` against that base when the
+operator wants to roll it. When the fork changes, update the current row
+with the two cloudbuild files.
 Historical Artifact Registry tags remain immutable and can be used only
 through the explicit pinned-build recovery path.
 
