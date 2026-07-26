@@ -503,7 +503,8 @@ function validateW9TestExperimentRender(opts: BuildUpgradeArgsOpts): void {
   if (testExperiment === undefined && mode === undefined) {
     if (
       isW9CandidateImageTag(opts.imageTag) ||
-      opts.gatewayEdgeImageTag !== undefined
+      (opts.gatewayEdgeImageTag !== undefined &&
+        isW9CandidateImageTag(opts.gatewayEdgeImageTag))
     ) {
       throw new Error("digest-bound W9 candidate image requires its W9 test experiment");
     }
