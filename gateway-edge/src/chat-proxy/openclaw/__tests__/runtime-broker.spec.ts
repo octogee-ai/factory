@@ -69,6 +69,47 @@ describe("OpenClaw runtime broker env", () => {
     );
   });
 
+  it("requests run activation with only the gateway-bound agent and run identities", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const broker = createOpenClawRuntimeBroker({
+      baseUrl: "http://octogee-api:3001/",
+      gatewayId: "shared-blue",
+      fetchImpl: vi.fn(async (input, init) => {
+        calls.push({
+          url: String(input),
+          body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+        });
+        return new Response(JSON.stringify({
+          status: "requested",
+          leaseId: "lease-1",
+          generation: 1,
+          sizingTier: "xs",
+        }), {
+          status: 202,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    });
+
+    await expect(broker.requestBuilderRunActivation({
+      agentId: "agent-alice",
+      runId: "run-1",
+    })).resolves.toEqual({
+      status: "requested",
+      leaseId: "lease-1",
+      generation: 1,
+      sizingTier: "xs",
+    });
+    expect(calls).toEqual([{
+      url: "http://octogee-api:3001/internal/fleet/activity/run-start",
+      body: {
+        gatewayId: "shared-blue",
+        agentId: "agent-alice",
+        runId: "run-1",
+      },
+    }]);
+  });
+
   it("derives the workspace binding for a root-level liveRuns v3 admission", async () => {
     const calls: Array<Record<string, unknown>> = [];
     const broker = createOpenClawRuntimeBroker({

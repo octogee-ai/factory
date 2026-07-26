@@ -197,6 +197,10 @@ export function freezeActiveActivityRunBinding(
 export interface ActivityIntakeDeps {
   registry: ActivityRuntimeRegistry;
   sinkFor(binding: ActiveActivityRunBinding): Pick<ActivitySink, "append">;
+  requestBuilderActivation?: (input: {
+    agentId: string;
+    runId: string;
+  }) => Promise<unknown>;
   log?: (event: string, meta: Record<string, unknown>) => void;
 }
 
@@ -623,6 +627,66 @@ function mapSinkError(error: unknown): never {
   throw error;
 }
 
+function activationErrorStatus(error: unknown): number | null {
+  if (!error || typeof error !== "object") return null;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" && Number.isInteger(status)
+    ? status
+    : null;
+}
+
+async function requestActivationAfterAppend(
+  deps: ActivityIntakeDeps,
+  binding: ActiveActivityRunBinding,
+): Promise<void> {
+  if (!deps.requestBuilderActivation) return;
+  try {
+    await deps.requestBuilderActivation({
+      agentId: binding.agentId,
+      runId: binding.runId,
+    });
+  } catch (error) {
+    const status = activationErrorStatus(error);
+    if (status !== null && status >= 400 && status < 500) {
+      deps.log?.("builder_activation", {
+        outcome: "rejected",
+        status,
+        agentId: binding.agentId,
+        runId: binding.runId,
+      });
+      return;
+    }
+    deps.log?.("builder_activation", {
+      outcome: "unavailable",
+      status,
+      agentId: binding.agentId,
+      runId: binding.runId,
+    });
+    throw new ActivityIntakeError(503, "activation_unavailable", true);
+  }
+}
+
+function assertActivityAcknowledgement(
+  result: Awaited<ReturnType<ActivitySink["append"]>>,
+  envelope: AgentActivityEnvelopeV1,
+  binding: Readonly<ActiveActivityRunBinding>,
+): void {
+  const receiptMatches =
+    result.receipt.eventKey === envelope.eventKey &&
+    result.receipt.activityChannelId === binding.activityChannelId &&
+    Boolean(result.receipt.activityRootPostId);
+  const turnStartedReceiptMatches = envelope.type !== "turn.started" || (
+    result.postIds.length === 1 &&
+    result.receipt.postId === result.postIds[0] &&
+    result.receipt.activityRootPostId === result.postIds[0]
+  );
+  if (!receiptMatches || !turnStartedReceiptMatches) {
+    throw new ActivitySinkIntegrityError(
+      "Activity acknowledgement failed exact root/channel verification",
+    );
+  }
+}
+
 export async function processActivityIntake(
   request: ActivityIntakeRequest,
   deps: ActivityIntakeDeps,
@@ -655,18 +719,10 @@ export async function processActivityIntake(
       runId: envelope.ref.runId,
       itemId: envelope.ref.itemId,
     });
-    if (
-      result.receipt.eventKey !== envelope.eventKey ||
-      result.receipt.activityChannelId !== frozenBinding.activityChannelId ||
-      !result.receipt.activityRootPostId ||
-      (envelope.type === "turn.started" && (
-        result.postIds.length !== 1 ||
-        result.receipt.postId !== result.postIds[0] ||
-        result.receipt.activityRootPostId !== result.postIds[0]
-      ))
-    ) {
-      throw new ActivitySinkIntegrityError("Activity acknowledgement failed exact root/channel verification");
+    if (envelope.type === "turn.started") {
+      await requestActivationAfterAppend(deps, frozenBinding);
     }
+    assertActivityAcknowledgement(result, envelope, frozenBinding);
     return {
       status: result.outcome === "persisted" ? 201 : 200,
       body: {
@@ -896,6 +952,10 @@ export interface ProductionActivityIntakeOptions extends ActivityIntakeHttpOptio
   receiptsFor(binding: ActiveActivityRunBinding): ActivityWriteReceiptStore;
   mmClientFor(token: string): ActivityMattermostClient;
   leaseOwner: string;
+  requestBuilderActivation(input: {
+    agentId: string;
+    runId: string;
+  }): Promise<unknown>;
   alerts?: Parameters<typeof createActivitySink>[0]['alerts'];
   controls?: Parameters<typeof createActivitySink>[0]['controls'];
   log?: ActivityIntakeDeps['log'];
@@ -914,6 +974,7 @@ export function createProductionActivityIntakeHandler(
         alerts: options.alerts,
         controls: options.controls,
       }),
+      requestBuilderActivation: options.requestBuilderActivation,
       log: options.log,
     },
     { maxAttachmentBytes: options.maxAttachmentBytes },

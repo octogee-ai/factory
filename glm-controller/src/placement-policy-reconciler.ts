@@ -912,13 +912,16 @@ function completedReturnMigration(input: ActivationTargetContext): PlacementPoli
 
 function builderActivityRequiresRuntime(
   activity: BuilderRuntimeActivity,
-  now: number,
+  returnRequested: boolean,
+  now: () => number,
   idleMs: number,
 ): boolean {
   return activity.liveRun ||
     activity.liveShell ||
-    activity.lastActiveAt === null ||
-    now - activity.lastActiveAt < idleMs;
+    (!returnRequested && (
+      activity.lastActiveAt === null ||
+      now() - activity.lastActiveAt < idleMs
+    ));
 }
 
 async function reconcileActiveLease(
@@ -964,7 +967,8 @@ async function reconcileActiveLease(
     await queueLeaseReturn(context, user, builderSlug, lease);
     return;
   }
-  if (context.state.idleMs <= 0) return;
+  const returnRequested = millis(lease.raw.returnRequestedAt) !== null;
+  if (!returnRequested && context.state.idleMs <= 0) return;
   const activity = await context.deps.readBuilderActivity({
     uid: user.uid,
     builderSlug,
@@ -972,7 +976,12 @@ async function reconcileActiveLease(
     userData: user.data,
     liveRun: context.state.liveRunBuilderSlugs.includes(builderSlug),
   });
-  if (builderActivityRequiresRuntime(activity, context.deps.now(), context.state.idleMs)) return;
+  if (builderActivityRequiresRuntime(
+    activity,
+    returnRequested,
+    context.deps.now,
+    context.state.idleMs,
+  )) return;
   await queueLeaseReturn(context, user, builderSlug, lease);
 }
 
@@ -1069,14 +1078,19 @@ async function completeReturnedLease(
     });
     return;
   }
+  const operatorTermination = millis(lease.raw.operatorTerminateRequestedAt) !== null;
   const retired = await context.deps.retireOwnedGateway({
     uid: user.uid,
     builderSlug,
     gatewayId: targetGatewayId,
     leaseId: lease.leaseId,
     generation: lease.generation,
-    telemetryFenceOperationId: `builder-return-${targetGatewayId}`,
-    telemetryFenceStatus: "succeeded",
+    ...(operatorTermination
+      ? {}
+      : {
+          telemetryFenceOperationId: `builder-return-${targetGatewayId}`,
+          telemetryFenceStatus: "succeeded" as const,
+        }),
     authoritativeGatewayId: context.state.defaultGatewayId,
   });
   if (!retired) {
@@ -1601,7 +1615,7 @@ function recoveryTargetBecameReady(input: {
   root: NonNullable<ReturnType<typeof projectGatewayDesiredRootForGateway>>;
   runtime: Record<string, unknown> | undefined;
   request: RecoverUnreachableDisposableGatewayInput;
-  now: number;
+  now: () => number;
 }): boolean {
   const { root, runtime, request, now } = input;
   const heartbeatAt = isGatewayRuntimeDoc(runtime)
@@ -1615,7 +1629,7 @@ function recoveryTargetBecameReady(input: {
     runtime.lifecycle === "serving" &&
     runtime.heartbeat.status === "ready" &&
     heartbeatAt !== null &&
-    now - heartbeatAt <= GATEWAY_UNREACHABLE_AFTER_MS;
+    now() - heartbeatAt <= GATEWAY_UNREACHABLE_AFTER_MS;
 }
 
 function recoveryAuthorityMatches(input: {
@@ -1674,7 +1688,7 @@ async function recoverUnreachableDisposableGatewayFirestore(
       root,
       runtime,
       request,
-      now: input.now(),
+      now: input.now,
     })) {
       throw new GatewayRetirementConflictError(
         `gateway ${request.gatewayId} became ready before recovery`,

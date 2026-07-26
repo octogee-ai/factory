@@ -99,6 +99,11 @@ export declare function projectGatewayReservation(_glmDoc: GlmDoc | undefined): 
     type: GatewayPricingMode;
     priceMultiplier: number;
 };
+declare function projectDisposableRuntime(glmDoc: GlmDoc | undefined): {
+    ownerUid: string;
+    leaseId: string;
+    generation: number;
+} | null;
 export declare function projectGatewaySummary(doc: FirestoreDocLike, glmDoc: GlmDoc | undefined, now: number): {
     gatewayId: string;
     gateway: string;
@@ -118,6 +123,55 @@ export declare function projectGatewaySummary(doc: FirestoreDocLike, glmDoc: Glm
     profile: GatewayProfile;
     gatewayClass: GatewayClass;
     imageProfile: GatewayImageProfile;
+    disposableRuntime: ReturnType<typeof projectDisposableRuntime>;
+};
+export type AdminBuilderRuntimeLifecycle = "requested" | "provisioning" | "activating" | "active" | "returning" | "retiring" | "failed";
+export declare function projectBuilderRuntime(userDoc: FirestoreDocLike, gatewaysById: ReadonlyMap<string, GlmDoc>, operationsById: ReadonlyMap<string, GlmDoc>, now: number): {
+    uid: string;
+    builderSlug: string;
+    lifecycle: AdminBuilderRuntimeLifecycle;
+    phase: "activation" | "runtime" | "return" | "retirement";
+    leaseId: string;
+    generation: number;
+    cause: string | null;
+    currentGatewayId: string | null;
+    sourceGatewayId: string | null;
+    targetGatewayId: string | null;
+    sizingTier: string | null;
+    requestedAt: string | null;
+    wakeDurationMs: number | null;
+    statusAt: string | null;
+    statusAgeMs: number | null;
+    stale: boolean;
+    operationId: string | null;
+    operationStatus: string | null;
+    operationSteps: Array<{
+        name: string;
+        status: string;
+    }>;
+    cleanupOperationId: string | null;
+    cleanupOperationStatus: string | null;
+    cleanupOperationSteps: Array<{
+        name: string;
+        status: string;
+    }>;
+    cleanupError: string | null;
+    error: string | null;
+    terminationAvailable: boolean;
+    retryAvailable: boolean;
+    targetPodStatus: GatewayPodDiagnosticsStatus | null;
+    targetPodCount: number | null;
+} | null;
+export declare function projectDisposableFleetCapacity(gateways: ReadonlyArray<ReturnType<typeof projectGatewaySummary>>, builderRuntimes?: ReadonlyArray<NonNullable<ReturnType<typeof projectBuilderRuntime>>>, parkedBuilders?: number): {
+    disposableInstances: number;
+    stagedInstances: 0;
+    namedReservations: 0;
+    byTier: Record<string, number>;
+    parkedBuilders: number;
+    byLifecycle: Record<AdminBuilderRuntimeLifecycle | "parked", number>;
+    failedBuilders: number;
+    staleActivations: number;
+    oldestActivationAgeMs: number | null;
 };
 interface RolloutBodyError {
     status: number;

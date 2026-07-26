@@ -1246,6 +1246,8 @@ function installProductionActivityIntake(
     receiptsFor: (binding) => runtimeBroker.activityWriteReceiptsFor(binding.channelDocPath),
     mmClientFor,
     leaseOwner: `${process.env.HOSTNAME ?? "gateway-edge"}:${process.pid}`,
+    requestBuilderActivation: (input) =>
+      runtimeBroker.requestBuilderRunActivation(input),
     alerts: {
       attachmentUnknown: () => activityAttachmentUnknownTotal.inc(),
       integrityFailure: ({ reason }) => {

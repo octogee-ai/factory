@@ -103,6 +103,10 @@ vi.mock("../lib/db", () => {
   function collection(path: string): any {
     if (path === "users") {
       return {
+        get: async () => ({
+          docs: Object.keys(users).map((id) => ({ id, data: () => users[id] })),
+          size: Object.keys(users).length,
+        }),
         doc: (uid: string) => ({
           id: uid,
           get: async () => ({ exists: !!users[uid], data: () => users[uid] }),
