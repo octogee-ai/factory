@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 const repoRoot = path.resolve(__dirname, "../..");
-const script = path.join(repoRoot, "scripts/ops/reconcile-west-pvc-snapshot-schedules.sh");
+const script = path.join(repoRoot, "scripts/ops/reconcile-pvc-snapshot-schedules.sh");
 
 type RunOptions = {
   apply?: boolean;
@@ -24,23 +24,28 @@ function runReconciler(options: RunOptions = {}) {
   const temp = mkdtempSync(path.join(tmpdir(), "octogee-west-pvc-snapshots-"));
   const log = path.join(temp, "calls.log");
   writeFileSync(log, "");
+  const target = options.target ?? "test-west";
+  const central = target.endsWith("-central");
+  const region = central ? "us-central1" : "us-west1";
+  const namespace = central ? "octogee-test" : "octogee-test-west";
+  const policyName = central ? "octogee-central-pvc-daily" : "octogee-west-pvc-daily";
 
   executable(path.join(temp, "kubectl"), `#!/usr/bin/env bash
 set -euo pipefail
 printf 'kubectl %s\\n' "$*" >> "$FAKE_CALL_LOG"
 case "$*" in
   *" get pvc gitea-shared-storage "*)
-    printf '%s\\n' '{"metadata":{"name":"gitea-shared-storage","namespace":"octogee-test-west"},"spec":{"volumeName":"pv-gitea"},"status":{"phase":"Bound"}}'
+    printf '{"metadata":{"name":"gitea-shared-storage","namespace":"%s"},"spec":{"volumeName":"pv-gitea"},"status":{"phase":"Bound"}}\\n' "$FAKE_NAMESPACE"
     ;;
   *" get pvc mattermost-data "*)
-    printf '%s\\n' '{"metadata":{"name":"mattermost-data","namespace":"octogee-test-west"},"spec":{"volumeName":"pv-mattermost"},"status":{"phase":"Bound"}}'
+    printf '{"metadata":{"name":"mattermost-data","namespace":"%s"},"spec":{"volumeName":"pv-mattermost"},"status":{"phase":"Bound"}}\\n' "$FAKE_NAMESPACE"
     ;;
   *" get pv pv-gitea "*)
     claim="$([[ "$FAKE_CLAIM_MISMATCH" == "true" ]] && printf other || printf gitea-shared-storage)"
-    printf '{"metadata":{"name":"pv-gitea"},"spec":{"claimRef":{"namespace":"octogee-test-west","name":"%s"},"csi":{"driver":"pd.csi.storage.gke.io","volumeHandle":"projects/octogee/zones/us-west1-a/disks/disk-gitea"}}}\\n' "$claim"
+    printf '{"metadata":{"name":"pv-gitea"},"spec":{"claimRef":{"namespace":"%s","name":"%s"},"csi":{"driver":"pd.csi.storage.gke.io","volumeHandle":"projects/octogee/zones/%s-a/disks/disk-gitea"}}}\\n' "$FAKE_NAMESPACE" "$claim" "$FAKE_REGION"
     ;;
   *" get pv pv-mattermost "*)
-    printf '%s\\n' '{"metadata":{"name":"pv-mattermost"},"spec":{"claimRef":{"namespace":"octogee-test-west","name":"mattermost-data"},"csi":{"driver":"pd.csi.storage.gke.io","volumeHandle":"projects/octogee/zones/us-west1-b/disks/disk-mattermost"}}}'
+    printf '{"metadata":{"name":"pv-mattermost"},"spec":{"claimRef":{"namespace":"%s","name":"mattermost-data"},"csi":{"driver":"pd.csi.storage.gke.io","volumeHandle":"projects/octogee/zones/%s-b/disks/disk-mattermost"}}}\\n' "$FAKE_NAMESPACE" "$FAKE_REGION"
     ;;
   *)
     printf 'unexpected kubectl call: %s\\n' "$*" >&2
@@ -52,7 +57,7 @@ esac
   executable(path.join(temp, "gcloud"), `#!/usr/bin/env bash
 set -euo pipefail
 printf 'gcloud %s\\n' "$*" >> "$FAKE_CALL_LOG"
-EXPECTED='https://www.googleapis.com/compute/v1/projects/octogee/regions/us-west1/resourcePolicies/octogee-west-pvc-daily'
+EXPECTED="https://www.googleapis.com/compute/v1/projects/octogee/regions/$FAKE_REGION/resourcePolicies/$FAKE_POLICY_NAME"
 case "$1 $2 $3" in
   "compute resource-policies describe")
     if [[ "$FAKE_SCHEDULE" == "missing" ]]; then
@@ -60,15 +65,15 @@ case "$1 $2 $3" in
       exit 1
     fi
     if [[ "$FAKE_SCHEDULE" == "unbounded" ]]; then
-      printf '%s\n' '{"name":"octogee-west-pvc-daily","region":"https://www.googleapis.com/compute/v1/projects/octogee/regions/us-west1","snapshotSchedulePolicy":{"schedule":{"dailySchedule":{"daysInCycle":1,"startTime":"08:00"}},"retentionPolicy":{"maxRetentionDays":999,"onSourceDiskDelete":"KEEP_AUTO_SNAPSHOTS"},"snapshotProperties":{"storageLocations":["us-west1"]}}}'
+      printf '{"name":"%s","region":"https://www.googleapis.com/compute/v1/projects/octogee/regions/%s","snapshotSchedulePolicy":{"schedule":{"dailySchedule":{"daysInCycle":1,"startTime":"08:00"}},"retentionPolicy":{"maxRetentionDays":999,"onSourceDiskDelete":"KEEP_AUTO_SNAPSHOTS"},"snapshotProperties":{"storageLocations":["%s"]}}}\\n' "$FAKE_POLICY_NAME" "$FAKE_REGION" "$FAKE_REGION"
     else
-      printf '%s\n' '{"name":"octogee-west-pvc-daily","region":"https://www.googleapis.com/compute/v1/projects/octogee/regions/us-west1","snapshotSchedulePolicy":{"schedule":{"dailySchedule":{"daysInCycle":1,"startTime":"08:00"}},"retentionPolicy":{"maxRetentionDays":14,"onSourceDiskDelete":"APPLY_RETENTION_POLICY"},"snapshotProperties":{"storageLocations":["us-west1"]}}}'
+      printf '{"name":"%s","region":"https://www.googleapis.com/compute/v1/projects/octogee/regions/%s","snapshotSchedulePolicy":{"schedule":{"dailySchedule":{"daysInCycle":1,"startTime":"08:00"}},"retentionPolicy":{"maxRetentionDays":14,"onSourceDiskDelete":"APPLY_RETENTION_POLICY"},"snapshotProperties":{"storageLocations":["%s"]}}}\\n' "$FAKE_POLICY_NAME" "$FAKE_REGION" "$FAKE_REGION"
     fi
     ;;
   "compute disks describe")
     disk="$4"
     if [[ "$FAKE_POLICY" == "unexpected" ]]; then
-      printf '%s\\n' '{"resourcePolicies":["https://www.googleapis.com/compute/v1/projects/octogee/regions/us-west1/resourcePolicies/other-policy"]}'
+      printf '{"resourcePolicies":["https://www.googleapis.com/compute/v1/projects/octogee/regions/%s/resourcePolicies/other-policy"]}\\n' "$FAKE_REGION"
     elif [[ "$FAKE_POLICY" == "expected" ]] || grep -q "^gcloud compute disks add-resource-policies \${disk} " "$FAKE_CALL_LOG"; then
       printf '{"resourcePolicies":["%s"]}\\n' "$EXPECTED"
     else
@@ -84,7 +89,7 @@ case "$1 $2 $3" in
 esac
 `);
 
-  const args = [script, `--target=${options.target ?? "test-west"}`];
+  const args = [script, `--target=${target}`];
   if (options.apply) args.push("--apply");
   const result = spawnSync("bash", args, {
     cwd: repoRoot,
@@ -95,6 +100,9 @@ esac
       FAKE_POLICY: options.policy ?? "absent",
       FAKE_SCHEDULE: options.schedule ?? "expected",
       FAKE_CLAIM_MISMATCH: options.claimMismatch ? "true" : "false",
+      FAKE_NAMESPACE: namespace,
+      FAKE_REGION: region,
+      FAKE_POLICY_NAME: policyName,
     },
     encoding: "utf8",
   });
@@ -107,7 +115,7 @@ esac
   return output;
 }
 
-describe("WEST PVC snapshot schedule reconciliation", () => {
+describe("durable PVC snapshot schedule reconciliation", () => {
   it("verifies both exact PVC disks without mutating an already-converged target", () => {
     const result = runReconciler({ policy: "expected" });
 
@@ -126,11 +134,38 @@ describe("WEST PVC snapshot schedule reconciliation", () => {
     });
   });
 
+  it("verifies Central's exact schedule and PVC disks without mutation", () => {
+    const result = runReconciler({ target: "test-central", policy: "expected" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      target: "test-central",
+      namespace: "octogee-test",
+      mode: "verify",
+      disks: [
+        { pvc: "gitea-shared-storage", disk: "disk-gitea", attachedThisRun: false },
+        { pvc: "mattermost-data", disk: "disk-mattermost", attachedThisRun: false },
+      ],
+    });
+    expect(result.calls).toContain(
+      "gcloud compute resource-policies describe octogee-central-pvc-daily --project=octogee --region=us-central1 --format=json",
+    );
+    expect(result.calls.some((call) => call.includes("octogee-west-pvc-daily"))).toBe(false);
+  });
+
+  it("attaches Central's exact schedule to both fresh PVC disks", () => {
+    const result = runReconciler({ apply: true, target: "test-central" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.calls.filter((call) => call.includes("add-resource-policies"))).toHaveLength(2);
+    expect(result.calls.filter((call) => call.includes("--resource-policies=octogee-central-pvc-daily"))).toHaveLength(2);
+  });
+
   it("refuses to inspect disks when the Terraform-managed schedule is absent", () => {
     const result = runReconciler({ apply: true, schedule: "missing" });
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("WEST snapshot schedule is unavailable");
+    expect(result.stderr).toContain("Durable PVC snapshot schedule is unavailable");
     expect(result.calls.some((call) => call.startsWith("kubectl "))).toBe(false);
     expect(result.calls.some((call) => call.includes("disks "))).toBe(false);
   });
@@ -147,7 +182,7 @@ describe("WEST PVC snapshot schedule reconciliation", () => {
     const result = runReconciler();
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("has no WEST snapshot schedule");
+    expect(result.stderr).toContain("has no durable PVC snapshot schedule");
     expect(result.calls.some((call) => call.includes("add-resource-policies"))).toBe(false);
   });
 
@@ -180,11 +215,11 @@ describe("WEST PVC snapshot schedule reconciliation", () => {
     expect(result.calls.some((call) => call.includes("compute disks"))).toBe(false);
   });
 
-  it("refuses every non-WEST target before querying Kubernetes", () => {
-    const result = runReconciler({ apply: true, target: "test-central" });
+  it("refuses frozen targets before querying Kubernetes", () => {
+    const result = runReconciler({ apply: true, target: "build-week-central" });
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("requires test-west or prod-west");
+    expect(result.stderr).toContain("requires test-central, prod-central, test-west, or prod-west");
     expect(result.calls).toEqual([]);
   });
 });

@@ -4,8 +4,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TARGET_SELECTOR=""
 APPLY=false
-POLICY_NAME="octogee-west-pvc-daily"
-RECEIPT_BUCKET="gs://octogee-terraform-state/receipts/west-pvc-snapshots"
+POLICY_NAME=""
+RECEIPT_BUCKET="gs://octogee-terraform-state/receipts/pvc-snapshot-schedules"
 PVC_NAMES=("gitea-shared-storage" "mattermost-data")
 
 for argument in "$@"; do
@@ -17,7 +17,7 @@ for argument in "$@"; do
 done
 
 if [[ -z "${TARGET_SELECTOR}" ]]; then
-  echo "A --target=test-west or --target=prod-west selector is required" >&2
+  echo "A --target=test-central, --target=prod-central, --target=test-west, or --target=prod-west selector is required" >&2
   exit 2
 fi
 
@@ -25,12 +25,22 @@ fi
 source "${REPO_ROOT}/scripts/lib/deployment-target.sh"
 octogee_load_deployment_target "${TARGET_SELECTOR}"
 
-if [[ "${TARGET_ID}" != "test-west" && "${TARGET_ID}" != "prod-west" ]]; then
-  echo "WEST PVC snapshot reconciliation requires test-west or prod-west; received ${TARGET_ID}" >&2
-  exit 2
-fi
-if [[ "${TARGET_REGION}" != "us-west1" || "${TARGET_CLUSTER_PROJECT}" != "octogee" ]]; then
-  echo "Deployment target ${TARGET_ID} does not resolve to octogee/us-west1" >&2
+case "${TARGET_ID}" in
+  test-central|prod-central)
+    POLICY_NAME="octogee-central-pvc-daily"
+    EXPECTED_REGION="us-central1"
+    ;;
+  test-west|prod-west)
+    POLICY_NAME="octogee-west-pvc-daily"
+    EXPECTED_REGION="us-west1"
+    ;;
+  *)
+    echo "Durable PVC snapshot reconciliation requires test-central, prod-central, test-west, or prod-west; received ${TARGET_ID}" >&2
+    exit 2
+    ;;
+esac
+if [[ "${TARGET_REGION}" != "${EXPECTED_REGION}" || "${TARGET_CLUSTER_PROJECT}" != "octogee" ]]; then
+  echo "Deployment target ${TARGET_ID} does not resolve to octogee/${EXPECTED_REGION}" >&2
   exit 2
 fi
 
@@ -41,7 +51,7 @@ for command in gcloud git jq kubectl; do
   fi
 done
 
-TEMP_DIR="$(mktemp -d -t octogee-west-pvc-snapshots.XXXXXX)"
+TEMP_DIR="$(mktemp -d -t octogee-pvc-snapshot-schedules.XXXXXX)"
 cleanup() {
   find "${TEMP_DIR}" -type f -delete
   rmdir "${TEMP_DIR}"
@@ -57,7 +67,7 @@ if ! schedule_json="$(gcloud compute resource-policies describe "${POLICY_NAME}"
   --project="${TARGET_CLUSTER_PROJECT}" \
   --region="${TARGET_REGION}" \
   --format=json)"; then
-  echo "WEST snapshot schedule is unavailable: ${POLICY_NAME}" >&2
+  echo "Durable PVC snapshot schedule is unavailable: ${POLICY_NAME}" >&2
   exit 1
 fi
 if ! jq -e \
@@ -73,7 +83,7 @@ if ! jq -e \
   .snapshotSchedulePolicy.snapshotProperties.storageLocations == [$storageRegion]
   ' \
   <<<"${schedule_json}" >/dev/null; then
-  echo "WEST snapshot schedule identity or configuration is invalid: ${POLICY_NAME}" >&2
+  echo "Durable PVC snapshot schedule identity or configuration is invalid: ${POLICY_NAME}" >&2
   exit 1
 fi
 
@@ -172,7 +182,7 @@ for pvc_name in "${PVC_NAMES[@]}"; do
   policy_count="$(jq '(.resourcePolicies // []) | length' <<<"${disk_json}")"
   if [[ "${policy_count}" -eq 0 ]]; then
     if [[ "${APPLY}" != "true" ]]; then
-      echo "GCE disk ${disk_name} has no WEST snapshot schedule" >&2
+      echo "GCE disk ${disk_name} has no durable PVC snapshot schedule" >&2
       exit 1
     fi
     gcloud compute disks add-resource-policies "${disk_name}" \
@@ -193,7 +203,7 @@ for pvc_name in "${PVC_NAMES[@]}"; do
     --arg expected "${EXPECTED_POLICY_URI}" \
     '(.resourcePolicies // []) == [$expected]' \
     <<<"${disk_json}" >/dev/null; then
-    echo "GCE disk ${disk_name} did not converge to the exact WEST snapshot schedule" >&2
+    echo "GCE disk ${disk_name} did not converge to the exact durable PVC snapshot schedule" >&2
     exit 1
   fi
 
@@ -222,7 +232,7 @@ jq -n \
   --arg namespace "${TARGET_NAMESPACE}" \
   --arg mode "${MODE}" \
   --slurpfile disks "${DISKS_JSON}" \
-  '{schemaVersion: 1, phase: "west-pvc-snapshot-schedules", generatedAt: $generatedAt, gitCommit: $gitCommit, target: $target, namespace: $namespace, mode: $mode, disks: $disks[0]}' \
+  '{schemaVersion: 1, phase: "pvc-snapshot-schedules", generatedAt: $generatedAt, gitCommit: $gitCommit, target: $target, namespace: $namespace, mode: $mode, disks: $disks[0]}' \
   >"${RECEIPT_FILE}"
 
 if [[ "${APPLY}" == "true" ]]; then

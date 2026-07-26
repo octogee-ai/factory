@@ -342,20 +342,22 @@ describe("deployment target consumers", () => {
     expect(source(".github/workflows/build-and-deploy.yml")).toContain(renderer);
   });
 
-  it("reconciles WEST durable PVC snapshot schedules after every platform release", () => {
+  it("reconciles durable PVC snapshot schedules after every platform release", () => {
     const workflow = source(".github/workflows/build-and-deploy.yml");
 
-    expect(workflow).toContain("reconcile-west-pvc-snapshot-schedules.sh");
+    expect(workflow).toContain("reconcile-pvc-snapshot-schedules.sh");
     expect(workflow).toContain("--target=${{ steps.target.outputs.target_id }}");
     expect(workflow).toContain("--apply");
-    expect(workflow).toContain("steps.target.outputs.region == 'us-west1'");
+    expect(workflow).toContain("needs.build.outputs.env != 'build-week'");
+    expect(workflow).not.toContain("steps.target.outputs.region == 'us-west1'");
   });
 
-  it("documents the automated WEST snapshot and tested restore operator paths", () => {
+  it("documents the automated Central and WEST snapshot and tested restore operator paths", () => {
     const handbook = source("docs/handbook/53-observability-and-data.md");
     const security = source("docs/operations/SECURITY.md");
 
-    expect(handbook).toContain("reconcile-west-pvc-snapshot-schedules.sh");
+    expect(handbook).toContain("reconcile-pvc-snapshot-schedules.sh");
+    expect(handbook).toContain("octogee-central-pvc-daily");
     expect(handbook).toContain("prove-west-pvc-restore.sh");
     expect(handbook).toContain("prove-west-cloud-sql-recovery.sh");
     expect(handbook).toContain("--confirm=octogee/test-west/cloud-sql/gitea");
