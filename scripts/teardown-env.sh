@@ -51,6 +51,7 @@ DEPLOYMENT_TARGET=""
 FORCE=false
 FULL=false
 PROXY_PID=""
+PRIVATE_SQL_OWNER_RESET_DONE=false
 
 for arg in "$@"; do
   case $arg in
@@ -271,6 +272,238 @@ if $FULL; then
   done
 fi
 
+database_exists() {
+  local dbname="$1" stderr_file rc
+  stderr_file=$(mktemp)
+  gcloud sql databases describe "$dbname" --instance="$TARGET_CLOUD_SQL_INSTANCE" \
+    --project="$TARGET_CLOUD_SQL_PROJECT" --format='value(name)' >/dev/null 2>"$stderr_file"
+  rc=$?
+  if [[ $rc -eq 0 ]]; then
+    rm -f "$stderr_file"
+    return 0
+  fi
+  if grep -qE "NOT_FOUND|was not found|does not exist" "$stderr_file"; then
+    rm -f "$stderr_file"
+    return 1
+  fi
+  echo -e "  ${RED}❌ Cloud SQL Admin API describe failed for $dbname:${NC}" >&2
+  sed 's/^/      /' "$stderr_file" >&2
+  rm -f "$stderr_file"
+  return 2
+}
+
+verify_database_through_api() {
+  local dbname="$1" verified_name
+  verified_name="$(gcloud sql databases describe "$dbname" --instance="$TARGET_CLOUD_SQL_INSTANCE" \
+    --project="$TARGET_CLOUD_SQL_PROJECT" --format='value(name)')" \
+    || die "Cloud SQL Admin API verification failed for $dbname"
+  [[ "$verified_name" == "$dbname" ]] \
+    || die "Cloud SQL Admin API verification returned '$verified_name' for $dbname"
+  ok "$dbname — Cloud SQL API confirmed the app-owned recreated database"
+}
+
+quiesce_private_sql_writers() {
+  local resource pods
+  for resource in deployment/mattermost deployment/gitea statefulset/mattermost statefulset/gitea; do
+    if ! kubectl get "$resource" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
+        --ignore-not-found -o name >/dev/null; then
+      die "could not inspect SQL writer $resource before private Cloud SQL reset"
+    fi
+    if kubectl get "$resource" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
+        --ignore-not-found -o name | grep -q .; then
+      kubectl scale "$resource" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" --replicas=0 \
+        || die "could not quiesce SQL writer $resource before private Cloud SQL reset"
+    fi
+  done
+  for selector in 'app=mattermost' 'app.kubernetes.io/name=gitea'; do
+    pods=$(kubectl get pods -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" -l "$selector" -o name) \
+      || die "could not inspect SQL writer pods ($selector) before private Cloud SQL reset"
+    if [[ -n "$pods" ]]; then
+      kubectl wait --for=delete -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
+        -l "$selector" pod --timeout=120s \
+        || die "SQL writer pods ($selector) did not terminate before private Cloud SQL reset"
+    fi
+  done
+}
+
+run_private_sql_owner_job() {
+  local service="$1" dbname="$2" owner="$3" secret_name="$4" secret_key="$5"
+  local job_name logs observed_owner
+  job_name="octogee-sql-reset-${service}-${RANDOM}${RANDOM}"
+
+  kubectl get serviceaccount octogee-api -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
+    -o jsonpath='{.metadata.annotations.iam\\.gke\\.io/gcp-service-account}' | grep -q . \
+    || die "target KSA octogee-api has no Workload Identity credential for private Cloud SQL reset"
+
+  cat <<YAML | kubectl apply -f - --context "$K8S_CONTEXT" >/dev/null \
+    || die "could not create private Cloud SQL owner reset job for $dbname"
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${job_name}
+  namespace: ${K8S_NAMESPACE}
+  labels:
+    app: cloud-sql-proxy
+    octogee.ai/reset: private-sql-owner
+    octogee.ai/deployment-target: ${TARGET_ID}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app: cloud-sql-proxy
+        octogee.ai/reset: private-sql-owner
+    spec:
+      serviceAccountName: octogee-api
+      automountServiceAccountToken: true
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      containers:
+        - name: cloud-sql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.23.0@sha256:54e23cad9aeeedbf88ab75f993146631b878035f702b31c51885a932e0c7286c
+          args:
+            - --private-ip
+            - --address=127.0.0.1
+            - --port=5432
+            - ${TARGET_CLOUD_SQL_CONNECTION}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+        - name: reset-owner
+          image: postgres:16.14-alpine3.24@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+          command: ["/bin/sh", "-ceu"]
+          args:
+            - |
+              for attempt in \$(seq 1 60); do
+                if pg_isready -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres >/dev/null 2>&1; then break; fi
+                if [ "\$attempt" = 60 ]; then echo "Cloud SQL proxy did not become ready" >&2; exit 1; fi
+                sleep 1
+              done
+              owner="\$(psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -At -v database='${dbname}' -c "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = :'database'")"
+              case "\$owner" in
+                '')
+                  psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -v database='${dbname}' -c "CREATE DATABASE :\"database\";"
+                  owner='${owner}'
+                  ;;
+                '${owner}')
+                  psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -v database='${dbname}' -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :'database' AND pid <> pg_backend_pid();"
+                  psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -v database='${dbname}' -c "DROP DATABASE :\"database\";"
+                  psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -v database='${dbname}' -c "CREATE DATABASE :\"database\";"
+                  ;;
+                cloudsqlsuperuser) ;;
+                *) echo "Unexpected owner for ${dbname}: \$owner" >&2; exit 1 ;;
+              esac
+              printf 'OCTOGEE_DATABASE_OWNER=%s\\n' "\$owner"
+              if [ "\$owner" = cloudsqlsuperuser ]; then exit 0; fi
+              tables="\$(psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d "${dbname}" -v ON_ERROR_STOP=1 -At -c "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'")"
+              [ "\$tables" = 0 ] || { echo "Recreated database ${dbname} is not empty (tables=\$tables)" >&2; exit 1; }
+          env:
+            - name: PGUSER
+              value: ${owner}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ${secret_name}
+                  key: ${secret_key}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70
+            runAsGroup: 70
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+YAML
+
+  if ! kubectl wait --for=condition=complete "job/$job_name" -n "$K8S_NAMESPACE" \
+      --context "$K8S_CONTEXT" --timeout=180s >/dev/null; then
+    kubectl logs "job/$job_name" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" --all-containers=true >&2 || true
+    kubectl delete job "$job_name" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" --wait=true >/dev/null 2>&1 || true
+    die "private Cloud SQL owner reset job failed for $dbname"
+  fi
+  if ! logs=$(kubectl logs "job/$job_name" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" -c reset-owner); then
+    kubectl delete job "$job_name" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" --wait=true >/dev/null 2>&1 || true
+    die "could not read private Cloud SQL owner reset job output for $dbname"
+  fi
+  kubectl delete job "$job_name" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" --wait=true >/dev/null \
+    || die "could not clean up private Cloud SQL owner reset job for $dbname"
+  observed_owner=$(printf '%s\n' "$logs" | sed -n 's/^OCTOGEE_DATABASE_OWNER=//p')
+  [[ "$(printf '%s\n' "$observed_owner" | sed '/^$/d' | wc -l | tr -d ' ')" == 1 ]] \
+    || die "private Cloud SQL owner reset job returned an invalid owner record for $dbname"
+  [[ "$observed_owner" == "$owner" || "$observed_owner" == cloudsqlsuperuser ]] \
+    || die "private Cloud SQL owner reset job returned unexpected owner '$observed_owner' for $dbname"
+  printf '%s' "$observed_owner"
+}
+
+reset_private_cloud_sql_databases() {
+  local dbname owner secret_name secret_key observed_owner exists_rc
+  quiesce_private_sql_writers
+  for dbname in "$MM_DB_NAME" "$GITEA_DB_NAME"; do
+    case "$dbname" in
+      "$MM_DB_NAME") owner=mattermost; secret_name=mattermost-cloud-sql; secret_key=password ;;
+      "$GITEA_DB_NAME") owner=gitea; secret_name=gitea-credentials; secret_key=db-password ;;
+      *) die "no private Cloud SQL owner reset credential is configured for $dbname" ;;
+    esac
+    if database_exists "$dbname"; then
+      :
+    else
+      exists_rc=$?
+      [[ $exists_rc -eq 1 ]] || die "Cloud SQL Admin API could not inspect $dbname"
+    fi
+    observed_owner=$(run_private_sql_owner_job "$owner" "$dbname" "$owner" "$secret_name" "$secret_key")
+    if [[ "$observed_owner" == cloudsqlsuperuser ]]; then
+      gcloud sql databases delete "$dbname" --instance="$TARGET_CLOUD_SQL_INSTANCE" \
+        --project="$TARGET_CLOUD_SQL_PROJECT" --quiet \
+        || die "Cloud SQL Admin API delete failed for API-owned $dbname"
+      observed_owner=$(run_private_sql_owner_job "$owner" "$dbname" "$owner" "$secret_name" "$secret_key")
+    fi
+    [[ "$observed_owner" == "$owner" ]] \
+      || die "private Cloud SQL owner reset did not recreate $dbname under $owner"
+    verify_database_through_api "$dbname"
+  done
+}
+
+if $FULL; then
+  instance_ip_types="$(gcloud sql instances describe "$TARGET_CLOUD_SQL_INSTANCE" \
+    --project="$TARGET_CLOUD_SQL_PROJECT" --format='value(ipAddresses.type)')" \
+    || die "Cloud SQL instance inspection failed; refusing to classify a transport/config failure as a credential failure"
+  if [[ "$instance_ip_types" != *"PRIMARY"* ]]; then
+    info "Cloud SQL has no public IP; resetting application-owned databases through exact-target in-cluster credentials..."
+    reset_private_cloud_sql_databases
+    PRIVATE_SQL_OWNER_RESET_DONE=true
+    ok "Private Cloud SQL owner reset completed before Helm uninstall"
+  fi
+fi
+
 verify_durable_pvcs_absent() {
   local pvc
   for pvc in gitea-shared-storage mattermost-data; do
@@ -382,13 +615,18 @@ fi
 #     "gcloud failed for some other reason" — only the former is allowed.
 #   * The silent "fresh env" skip is gone. If --full is requested and either
 #     password is missing, the script dies with explicit guidance.
-#   * Private-only instances reset through the Cloud SQL Admin API and verify
-#     each recreated database before any later environment cleanup.
+#   * Private-only instances use the retained app credentials from the exact
+#     target namespace to drop app-owned databases, then verify each API
+#     recreation before any later environment cleanup.
 #   * Public-IP instances verify the proxy listener and process, authenticate
 #     both users, inventory the databases, and stop on every SQL error.
 if $FULL; then
   echo ""
   info "Resetting Cloud SQL databases ($MM_DB_NAME, $GITEA_DB_NAME)..."
+
+  if $PRIVATE_SQL_OWNER_RESET_DONE; then
+    info "Private Cloud SQL databases were reset through exact-target owner credentials before Helm uninstall"
+  else
 
   # ── 5a. Secret reads — fail loud on anything that isn't a clean NOT_FOUND.
   sm_read() {
@@ -636,6 +874,7 @@ if $FULL; then
     echo -e "  ${BOLD}Cloud SQL reset complete:${NC}"
     echo -e "    ${GREEN}✅ $MM_DB_NAME — dropped + recreated empty${NC}"
     echo -e "    ${GREEN}✅ $GITEA_DB_NAME — dropped + recreated empty${NC}"
+  fi
   fi
 fi
 

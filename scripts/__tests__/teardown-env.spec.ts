@@ -14,6 +14,8 @@ function executable(file: string, source: string): void {
 
 type TeardownOptions = {
   databaseFailure?: "inspect" | "delete" | "create" | "verify-command" | "verify-value";
+  databaseOwner?: "mattermost" | "gitea" | "cloudsqlsuperuser" | "unexpected";
+  sqlOwnerJobFailure?: boolean;
   publicIp?: boolean;
   pvcFailure?: "inspect" | "delete" | "finalize";
   secretFailure?: "absent" | "error";
@@ -29,16 +31,18 @@ type TeardownOptions = {
   interactiveInput?: string;
 };
 
-function runPrivateWestTeardown(options: TeardownOptions = {}) {
-  const temp = mkdtempSync(path.join(tmpdir(), "octogee-teardown-private-west-"));
+function runPrivateCentralTeardown(options: TeardownOptions = {}) {
+  const temp = mkdtempSync(path.join(tmpdir(), "octogee-teardown-private-central-"));
   const log = path.join(temp, "calls.log");
   const describeCount = path.join(temp, "describe-count");
   const deletedPvcs = path.join(temp, "deleted-pvcs");
   const storageRemoved = path.join(temp, "storage-removed");
+  const sqlOwnerManifest = path.join(temp, "sql-owner-manifest.yaml");
   const serviceAccount = path.join(temp, "service-account.json");
   writeFileSync(log, "");
   writeFileSync(describeCount, "0");
   writeFileSync(deletedPvcs, "");
+  writeFileSync(sqlOwnerManifest, "");
   writeFileSync(serviceAccount, '{"project_id":"octogee-data-test"}');
 
   executable(path.join(temp, "gcloud"), `#!/usr/bin/env bash
@@ -124,7 +128,33 @@ set -euo pipefail
 printf 'kubectl %s\\n' "$*" >> "$FAKE_CALL_LOG"
 case "$1 $2" in
   "config use-context") ;;
-  "config current-context") printf 'gke_octogee_us-west1_octogee-gateway\\n' ;;
+  "config current-context") printf 'gke_octogee_us-central1_octogee-gateway\\n' ;;
+  "get serviceaccount") printf 'octogee-api@octogee.iam.gserviceaccount.com\\n' ;;
+  "get deployment/mattermost") printf 'deployment.apps/mattermost\\n' ;;
+  "get deployment/gitea") printf 'deployment.apps/gitea\\n' ;;
+  "get endpoints") printf '10.0.0.4\\n' ;;
+  "scale deployment"|"scale statefulset") ;;
+  "apply -f") cat >> "$FAKE_SQL_OWNER_MANIFEST" ;;
+  "logs job/"*)
+    if [[ "$FAKE_SQL_OWNER_JOB_FAILURE" == "true" ]]; then
+      printf 'owner query failed\\n' >&2
+      exit 1
+    fi
+    case "$2" in
+      *mattermost*)
+        owner="$FAKE_DATABASE_OWNER_MATTERMOST"
+        if [[ "$owner" == cloudsqlsuperuser ]] && grep -q '^sql databases delete mattermost_test ' "$FAKE_CALL_LOG"; then owner=mattermost; fi
+        printf 'OCTOGEE_DATABASE_OWNER=%s\\n' "$owner"
+        ;;
+      *gitea*)
+        owner="$FAKE_DATABASE_OWNER_GITEA"
+        if [[ "$owner" == cloudsqlsuperuser ]] && grep -q '^sql databases delete gitea_test ' "$FAKE_CALL_LOG"; then owner=gitea; fi
+        printf 'OCTOGEE_DATABASE_OWNER=%s\\n' "$owner"
+        ;;
+      *) printf 'unexpected SQL owner job %s\\n' "$2" >&2; exit 2 ;;
+    esac
+    ;;
+  "delete job") ;;
   "get pvc")
     pvc="$3"
     if [[ "$FAKE_PVC_FAILURE" == "inspect" && "$pvc" == "gitea-shared-storage" ]]; then
@@ -166,7 +196,7 @@ case "$1" in status) exit 1 ;; list) ;; *) ;; esac
   executable(path.join(temp, "firebase"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'firebase %s\\n' \"$*\" >> \"$FAKE_CALL_LOG\"\n");
   executable(path.join(temp, "npx"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'npx %s\\n' \"$*\" >> \"$FAKE_CALL_LOG\"\n");
 
-  const args = [teardown, "--env=test", "--deployment-target=test-west", "--full"];
+  const args = [teardown, "--env=test", "--deployment-target=test-central", "--full"];
   if (!options.interactiveInput) args.push("--yes");
   const result = spawnSync("bash", args, {
     cwd: repoRoot,
@@ -185,6 +215,10 @@ case "$1" in status) exit 1 ;; list) ;; *) ;; esac
       FAKE_STORAGE_EMPTY: options.storageEmpty ? "true" : "false",
       FAKE_STORAGE_RESIDUAL: options.storageResidual ? "true" : "false",
       FAKE_STORAGE_REMOVED: storageRemoved,
+      FAKE_SQL_OWNER_MANIFEST: sqlOwnerManifest,
+      FAKE_SQL_OWNER_JOB_FAILURE: options.sqlOwnerJobFailure ? "true" : "false",
+      FAKE_DATABASE_OWNER_MATTERMOST: options.databaseOwner === "unexpected" ? "legacy-owner" : options.databaseOwner ?? "mattermost",
+      FAKE_DATABASE_OWNER_GITEA: options.databaseOwner === "unexpected" ? "legacy-owner" : options.databaseOwner ?? "gitea",
       FAKE_FUNCTION_LIST_FAILURE: options.functionListFailure ? "true" : "false",
       FAKE_FUNCTION_DELETE_FAILURE: options.functionDeleteFailure ? "true" : "false",
       FAKE_FUNCTION_INVENTORY: options.functionInventory
@@ -198,10 +232,55 @@ case "$1" in status) exit 1 ;; list) ;; *) ;; esac
   return {
     ...result,
     calls: readFileSync(log, "utf8").trim().split("\n").filter(Boolean),
+    sqlOwnerManifest: readFileSync(sqlOwnerManifest, "utf8"),
   };
 }
 
 describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => {
+  it("drops app-owned private databases through an exact-target in-cluster owner job before API recreation", () => {
+    const result = runPrivateCentralTeardown();
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.calls).toContainEqual(expect.stringContaining("kubectl scale deployment/mattermost"));
+    expect(result.calls).toContainEqual(expect.stringContaining("kubectl get serviceaccount octogee-api"));
+    expect(result.calls).toContainEqual(expect.stringContaining("kubectl apply -f -"));
+    expect(result.calls).not.toContainEqual(expect.stringContaining("sql databases delete mattermost_test"));
+    expect(result.calls).not.toContainEqual(expect.stringContaining("sql databases delete gitea_test"));
+    expect(result.calls).not.toContainEqual(expect.stringContaining("sql databases create mattermost_test"));
+    expect(result.calls).not.toContainEqual(expect.stringContaining("sql databases create gitea_test"));
+    expect(result.sqlOwnerManifest).toContain("name: mattermost-cloud-sql");
+    expect(result.sqlOwnerManifest).toContain("name: gitea-credentials");
+    expect(result.sqlOwnerManifest).toContain("cloud-sql-proxy");
+    expect(result.sqlOwnerManifest).toContain("mattermost_test");
+    expect(result.sqlOwnerManifest).toContain("gitea_test");
+    expect(result.sqlOwnerManifest).toContain('CREATE DATABASE :\\"database\\";');
+  });
+
+  it("fails closed before data cleanup when a private database owner is not the target app user", () => {
+    const result = runPrivateCentralTeardown({ databaseOwner: "unexpected" });
+
+    expect(result.status).toBe(1);
+    expect(`${result.stderr}\n${result.stdout}`).toContain("private Cloud SQL owner reset job returned unexpected owner 'legacy-owner' for mattermost_test");
+    expect(result.calls.some((call) => call.startsWith("sql databases create"))).toBe(false);
+    expect(result.calls.some((call) => call.startsWith("firebase firestore:delete"))).toBe(false);
+  });
+
+  it("fails closed before data cleanup when the private owner job cannot complete", () => {
+    const result = runPrivateCentralTeardown({ sqlOwnerJobFailure: true });
+
+    expect(result.status).toBe(1);
+    expect(`${result.stderr}\n${result.stdout}`).toContain("could not read private Cloud SQL owner reset job output for mattermost_test");
+    expect(result.calls.some((call) => call.startsWith("sql databases create"))).toBe(false);
+    expect(result.calls.some((call) => call.startsWith("firebase firestore:delete"))).toBe(false);
+  });
+
+  it("uses the Cloud SQL Admin API only when the database is API-owned", () => {
+    const result = runPrivateCentralTeardown({ databaseOwner: "cloudsqlsuperuser" });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.calls).toContainEqual(expect.stringContaining("sql databases delete mattermost_test"));
+    expect(result.calls).toContainEqual(expect.stringContaining("sql databases delete gitea_test"));
+  });
   it("keeps TEST full-reset Secret Manager and Storage mutations inside the resolved data project", () => {
     const source = readFileSync(teardown, "utf8");
 
@@ -227,7 +306,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
   });
 
   it("uses ADC for the Auth preflight when the optional service-account key is absent", () => {
-    const result = runPrivateWestTeardown({ missingServiceAccount: true });
+    const result = runPrivateCentralTeardown({ missingServiceAccount: true });
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     expect(result.calls.some((call) => call.startsWith("npx ") && call.includes("--verify") && !call.includes("--service-account"))).toBe(true);
@@ -235,19 +314,19 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
   });
 
   it("fails before Firestore or Auth cleanup when the target Storage bucket cannot be wiped", () => {
-    const result = runPrivateWestTeardown({ storageFailure: true });
+    const result = runPrivateCentralTeardown({ storageFailure: true });
 
     expect(result.status).toBe(1);
     expect(`${result.stderr}\n${result.stdout}`).toContain("Firebase Storage wipe failed");
     expect(result.calls).toContainEqual(
-      expect.stringContaining("storage rm --all-versions gs://octogee-data-test.firebasestorage.app/** --project=octogee-data-test --quiet"),
+      expect.stringContaining("storage rm --all-versions gs://octogee-test.firebasestorage.app/** --project=octogee-test --quiet"),
     );
     expect(result.calls.some((call) => call.startsWith("firebase firestore:delete"))).toBe(false);
     expect(result.calls.some((call) => call.startsWith("npx ") && !call.includes("--verify"))).toBe(false);
   });
 
   it("allows an already-empty target Storage bucket to complete the reset", () => {
-    const result = runPrivateWestTeardown({ storageEmpty: true });
+    const result = runPrivateCentralTeardown({ storageEmpty: true });
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     expect(result.calls.some((call) => call.startsWith("storage rm"))).toBe(false);
@@ -255,7 +334,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
   });
 
   it("fails closed when target Storage generations cannot be listed", () => {
-    const result = runPrivateWestTeardown({ storageListFailure: true });
+    const result = runPrivateCentralTeardown({ storageListFailure: true });
 
     expect(result.status).toBe(1);
     expect(`${result.stderr}\n${result.stdout}`).toContain("Firebase Storage listing failed");
@@ -265,7 +344,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
   });
 
   it("fails before Firestore or Auth cleanup when generations remain after Storage deletion", () => {
-    const result = runPrivateWestTeardown({ storageResidual: true });
+    const result = runPrivateCentralTeardown({ storageResidual: true });
 
     expect(result.status).toBe(1);
     expect(`${result.stderr}\n${result.stdout}`).toContain("Firebase Storage still contains object generations");
@@ -275,7 +354,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
   });
 
   it("fails closed when Cloud Function discovery is unavailable", () => {
-    const result = runPrivateWestTeardown({ functionListFailure: true });
+    const result = runPrivateCentralTeardown({ functionListFailure: true });
 
     expect(result.status).toBe(1);
     expect(`${result.stderr}\n${result.stdout}`).toContain("could not list Cloud Functions");
@@ -283,7 +362,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
   });
 
   it("fails closed when Cloud Function inventory has an unknown generation", () => {
-    const result = runPrivateWestTeardown({ functionInventory: "mystery,GEN_3\n" });
+    const result = runPrivateCentralTeardown({ functionInventory: "mystery,GEN_3\n" });
 
     expect(result.status).toBe(1);
     expect(`${result.stderr}\n${result.stdout}`).toContain(
@@ -294,7 +373,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
   });
 
   it("waits for every Cloud Function deletion and stops on the first failure", () => {
-    const result = runPrivateWestTeardown({
+    const result = runPrivateCentralTeardown({
       functions: [
         { name: "function-a", generation: "GEN_1" },
         { name: "function-b", generation: "GEN_2" },
@@ -310,14 +389,14 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
   });
 
   it("quiesces Gen 1 and Gen 2 functions before wiping Firebase data and never deletes Cloud Run services", () => {
-    const result = runPrivateWestTeardown({
+    const result = runPrivateCentralTeardown({
       functions: [
         { name: "legacyTrigger", generation: "GEN_1" },
         { name: "onSignup", generation: "GEN_2" },
         { name: "octogee-chat-proxy", generation: "GEN_2" },
       ],
     });
-    const functionList = result.calls.findIndex((call) => call.startsWith("functions list --regions=us-west1"));
+    const functionList = result.calls.findIndex((call) => call.startsWith("functions list --regions=us-central1"));
     const gen1Delete = result.calls.findIndex((call) => call.startsWith("functions delete legacyTrigger"));
     const gen2Delete = result.calls.findIndex((call) => call.startsWith("functions delete onSignup"));
     const storageWipe = result.calls.findIndex((call) => call.startsWith("storage rm"));
@@ -334,7 +413,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
   });
 
   it("aborts an interactive full reset when a required wipe is declined", () => {
-    const result = runPrivateWestTeardown({ interactiveInput: "y\ny\nn\ny\ny\n" });
+    const result = runPrivateCentralTeardown({ interactiveInput: "y\ny\nn\ny\ny\n" });
 
     expect(result.status).toBe(1);
     expect(`${result.stderr}\n${result.stdout}`).toContain("Full teardown cancelled; Firebase Storage objects remain");
@@ -353,17 +432,15 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
     expect(result.stdout).not.toContain("Still preserves PVCs");
   });
 
-  it("resets test-west through the Cloud SQL Admin API without a local proxy", () => {
-    const result = runPrivateWestTeardown();
+  it("resets test-central through target-owned in-cluster credentials without a local proxy", () => {
+    const result = runPrivateCentralTeardown();
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
-    expect(result.calls).toContainEqual(expect.stringContaining("sql databases delete mattermost_test"));
-    expect(result.calls).toContainEqual(expect.stringContaining("sql databases create mattermost_test"));
+    expect(result.calls).not.toContainEqual(expect.stringContaining("sql databases create mattermost_test"));
     expect(result.calls).toContainEqual(expect.stringContaining("sql databases describe mattermost_test"));
-    expect(result.calls).toContainEqual(expect.stringContaining("sql databases delete gitea_test"));
-    expect(result.calls).toContainEqual(expect.stringContaining("sql databases create gitea_test"));
+    expect(result.calls).not.toContainEqual(expect.stringContaining("sql databases create gitea_test"));
     expect(result.calls).toContainEqual(expect.stringContaining("sql databases describe gitea_test"));
-    expect(result.stdout).toContain("Cloud SQL API confirmed both recreated databases");
+    expect(result.stdout).toContain("Private Cloud SQL owner reset completed before Helm uninstall");
     expect(result.calls).toContainEqual(expect.stringContaining("kubectl wait --for=delete pvc/gitea-shared-storage"));
     expect(result.calls).toContainEqual(expect.stringContaining("kubectl wait --for=delete pvc/mattermost-data"));
     expect(result.stdout).toContain("Durable PVCs confirmed absent");
@@ -376,27 +453,29 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
   });
 
   it.each([
-    ["inspect", "could not inspect PVC gitea-shared-storage"],
-    ["delete", "delete request failed for PVC gitea-shared-storage"],
-    ["finalize", "PVC mattermost-data did not finalize"],
-  ] as const)("fails closed when durable PVC %s fails", (pvcFailure, message) => {
-    const result = runPrivateWestTeardown({ pvcFailure });
+    ["inspect", "could not inspect PVC gitea-shared-storage", false],
+    ["delete", "delete request failed for PVC gitea-shared-storage", false],
+    ["finalize", "PVC mattermost-data did not finalize", true],
+  ] as const)("fails closed when durable PVC %s fails", (pvcFailure, message, databaseResetStarted) => {
+    const result = runPrivateCentralTeardown({ pvcFailure });
 
     expect(result.status).toBe(1);
     expect(`${result.stderr}\n${result.stdout}`).toContain(message);
-    expect(result.calls.some((call) => call.startsWith("sql databases"))).toBe(false);
+    expect(result.calls.some((call) => call.startsWith("sql databases"))).toBe(databaseResetStarted);
   });
 
   it.each([
     ["inspect", "could not inspect mattermost_test", "sql databases delete mattermost_test"],
-    ["delete", "delete failed for mattermost_test", "sql databases create mattermost_test"],
-    ["create", "create failed for mattermost_test", "sql databases describe gitea_test"],
+    ["delete", "delete failed for API-owned mattermost_test", "sql databases describe gitea_test"],
     ["verify-command", "verification failed for mattermost_test", "sql databases describe gitea_test"],
     ["verify-value", "verification returned 'wrong_database' for mattermost_test", "sql databases describe gitea_test"],
   ] as const)(
     "fails closed when the Cloud SQL Admin API %s boundary fails",
     (databaseFailure, message, forbiddenCall) => {
-      const result = runPrivateWestTeardown({ databaseFailure });
+      const result = runPrivateCentralTeardown({
+        databaseFailure,
+        databaseOwner: databaseFailure === "delete" ? "cloudsqlsuperuser" : undefined,
+      });
 
       expect(result.status).toBe(1);
       expect(`${result.stderr}\n${result.stdout}`).toContain(message);
@@ -407,19 +486,19 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
   );
 
   it("distinguishes an absent password secret from a Secret Manager read failure", () => {
-    const absent = runPrivateWestTeardown({ secretFailure: "absent" });
+    const absent = runPrivateCentralTeardown({ secretFailure: "absent", publicIp: true });
     expect(absent.status).toBe(1);
     expect(absent.stdout).toContain("MM_DB_PASSWORD:    absent");
     expect(absent.stderr).not.toContain("gcloud auth or network");
 
-    const failed = runPrivateWestTeardown({ secretFailure: "error" });
+    const failed = runPrivateCentralTeardown({ secretFailure: "error", publicIp: true });
     expect(failed.status).toBe(1);
     expect(failed.stderr).toContain("PERMISSION_DENIED");
     expect(failed.stderr).toContain("gcloud auth or network");
   });
 
   it("does not mislabel a reachable-proxy transport failure as a password mismatch", () => {
-    const result = runPrivateWestTeardown({ publicIp: true });
+    const result = runPrivateCentralTeardown({ publicIp: true });
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("transport/config failure, not a credential mismatch");
