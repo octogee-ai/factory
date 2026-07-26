@@ -34,6 +34,8 @@ source "$SCRIPT_DIR/lib/ready-assigned-gateway-probe.sh"
 source "$SCRIPT_DIR/lib/iap-endpoint-health.sh"
 # shellcheck source=scripts/lib/gateway-image-bundle.sh
 source "$SCRIPT_DIR/lib/gateway-image-bundle.sh"
+# shellcheck source=scripts/lib/protected-gateway-placement.sh
+source "$SCRIPT_DIR/lib/protected-gateway-placement.sh"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'
@@ -446,6 +448,22 @@ print(items[0].get("status", {}).get("phase", "unknown") if items else "unknown"
     if $FIX; then
       echo -e "  ${YELLOW}FIX:${NC} kubectl logs deployment/$GW_DEPLOYMENT -n $NAMESPACE -c gateway --tail=50"
     fi
+  fi
+fi
+
+# ── 5a. Protected gateway placement ──────────────────────────────────────────
+set_section infra
+header "5a. Protected gateway placement"
+if [[ "$ENV" != "prod" ]]; then
+  info "Production-only placement policy check — skipping"
+elif [[ -z "$GW_DEPLOYMENT" ]]; then
+  info "Skipping protected placement check — default gateway deployment is absent"
+elif PLACEMENT_RESULT=$(octogee_verify_protected_gateway_placement "$K8S_CONTEXT" "$NAMESPACE" "$GW_DEPLOYMENT" "$DEFAULT_GATEWAY_ID" 2>&1); then
+  pass "$PLACEMENT_RESULT"
+else
+  fail "Protected gateway placement: ${PLACEMENT_RESULT:-verification failed}"
+  if $FIX; then
+    echo -e "  ${YELLOW}FIX:${NC} reconcile the default shared gateway through Cowboy; do not manually patch its Deployment or PDB"
   fi
 fi
 
