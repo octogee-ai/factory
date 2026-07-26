@@ -159,8 +159,9 @@ DEFAULT_GATEWAY_ID=""
 if [[ "$ENV" == "custom" ]]; then
   DEFAULT_GATEWAY_ID="default"
 else
-  ORCH_OUTPUT=$(node "$REPO_DIR/scripts/node_modules/tsx/dist/cli.mjs" "$REPO_DIR/scripts/ops/seed-orchestrator-config.ts" --env="$ENV" --deployment-target="$TARGET_ID" --dry-run 2>&1 || true)
+  ORCH_OUTPUT=$(node "$REPO_DIR/scripts/node_modules/tsx/dist/cli.mjs" "$REPO_DIR/scripts/ops/seed-orchestrator-config.ts" --env="$ENV" --deployment-target="$TARGET_ID" --check 2>&1 || true)
   DEFAULT_GATEWAY_ID=$(echo "$ORCH_OUTPUT" | sed -nE \
+    -e 's/.*defaultGatewayId = ([a-z0-9-]+).*/\1/p' \
     -e 's/.*already seeded with ([a-z0-9-]+).*/\1/p' \
     -e "s/.*defaultGatewayId is '([a-z0-9-]+)'.*/\1/p" | head -1)
 fi
@@ -829,9 +830,9 @@ fi
 # missing the trigger returns `not-ready` with reason: "config-missing" and
 # the customer's gatewayId never gets set. This bit PROD on 2026-04-28 (first
 # setup, never seeded) and 2026-04-29 (--full teardown wiped Firestore, the
-# manual rebuild path forgot to reseed). glm-controller now self-seeds it, but
-# verify-env confirms it independently so setup drift is caught before a
-# builder is assigned.
+# manual rebuild path forgot to reseed). The controller deliberately does not
+# infer placement defaults, so verify-env checks the explicit bootstrap record
+# before a builder is assigned.
 #
 set_section bootstrap
 header "8b. Orchestrator Config"
@@ -841,7 +842,7 @@ if [[ "$ENV" == "custom" ]]; then
 else
   if [[ -n "$DEFAULT_GATEWAY_ID" ]]; then
     pass "config/orchestrator.defaultGatewayId = $DEFAULT_GATEWAY_ID"
-  elif echo "$ORCH_OUTPUT" | grep -q "(DRY-RUN) seeding"; then
+  elif echo "$ORCH_OUTPUT" | grep -q "defaultGatewayId is missing or invalid"; then
     fail "config/orchestrator missing — every new signup will stall with reason 'config-missing'"
     if $FIX; then
       echo -e "  ${YELLOW}FIX:${NC} node scripts/node_modules/tsx/dist/cli.mjs scripts/ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG"

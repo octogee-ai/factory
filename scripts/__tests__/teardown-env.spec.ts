@@ -432,6 +432,18 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
     expect(result.stdout).not.toContain("Still preserves PVCs");
   });
 
+  it("prints the explicit orchestrator seed before Helm so a fresh reset cannot reach release unconfigured", () => {
+    const source = readFileSync(teardown, "utf8");
+    const seed = source.indexOf("# 1b. Seed Firestore bootstrap config");
+    const helm = source.indexOf("# 2. Helm install");
+    expect(seed).toBeGreaterThan(-1);
+    expect(seed).toBeLessThan(helm);
+    expect(source).toContain(
+      "npx tsx ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG",
+    );
+    expect(source).not.toContain("glm-controller self-seeds config/orchestrator");
+  });
+
   it("resets test-central through target-owned in-cluster credentials without a local proxy", () => {
     const result = runPrivateCentralTeardown();
 

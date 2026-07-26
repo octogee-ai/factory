@@ -24,6 +24,18 @@ describe("tagged gateway release convergence workflow", () => {
     expect(workflow).toContain("ops/capture-release-convergence-baseline.ts");
   });
 
+  it("checks the explicit bootstrap configuration before attempting a release baseline", () => {
+    const baselineJob = workflow.slice(
+      workflow.indexOf("capture-release-convergence-baseline:"),
+      workflow.indexOf("update-environment-desired-state:"),
+    );
+
+    expect(baselineJob).toContain("--check");
+    expect(baselineJob.indexOf("seed-orchestrator-config.ts")).toBeLessThan(
+      baselineJob.indexOf("capture-release-convergence-baseline.ts"),
+    );
+  });
+
   it("blocks workflow success on a 45-minute convergence check", () => {
     expect(workflow).toContain("verify-release-convergence:");
     expect(workflow).toContain("timeout-minutes: 50");

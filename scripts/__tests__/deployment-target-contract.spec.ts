@@ -411,7 +411,7 @@ describe("deployment target consumers", () => {
 
   it("preserves the candidate target in verification probes and repairs", () => {
     const verify = source("scripts/verify-env.sh");
-    expect(verify).toContain('--deployment-target="$TARGET_ID" --dry-run');
+    expect(verify).toContain('--deployment-target="$TARGET_ID" --check');
     expect(verify).toContain("--env=$ENV$TARGET_ARG");
   });
 

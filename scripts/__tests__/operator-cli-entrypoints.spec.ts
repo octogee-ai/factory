@@ -58,6 +58,7 @@ describe("seed-orchestrator-config args", () => {
         defaultGateway: "canary",
         force: true,
         dryRun: true,
+        check: false,
       },
     });
     expect(parseSeedOrchestratorConfigArgs([])).toMatchObject({ kind: "error" });
