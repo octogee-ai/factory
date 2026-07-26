@@ -13,10 +13,6 @@ import {
   type OperatorGatewayAccessSpec,
 } from "./glm.js";
 import { isSizingTier, type SizingTier } from "./sizing.js";
-import {
-  isTrialGatewayAllocation,
-  type TrialGatewayAllocation,
-} from "./trial-gateway.js";
 
 export const GATEWAY_CONFIG_SCHEMA_VERSION = 1 as const;
 
@@ -50,7 +46,15 @@ export interface GatewayMutableConfig {
   openclawOverrides: Record<string, unknown> | null;
   modelBrokerLimits: GatewayModelBrokerLimits | null;
   preemption: GatewayPreemptionSpec | null;
-  allocation?: TrialGatewayAllocation | null;
+  allocation?: DisposableBuilderGatewayAllocation | null;
+}
+
+export interface DisposableBuilderGatewayAllocation {
+  kind: "disposable-builder";
+  schemaVersion: 1;
+  leaseId: string;
+  generation: number;
+  claimedByUid: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -145,10 +149,26 @@ function isNullableModelBrokerLimits(value: unknown): value is GatewayModelBroke
   );
 }
 
-function isOptionalTrialGatewayAllocation(
+export function isDisposableBuilderGatewayAllocation(
   value: unknown,
-): value is TrialGatewayAllocation | null | undefined {
-  return value === undefined || value === null || isTrialGatewayAllocation(value);
+): value is DisposableBuilderGatewayAllocation {
+  if (!isRecord(value)) return false;
+  const fields = new Set(["kind", "schemaVersion", "leaseId", "generation", "claimedByUid"]);
+  return Object.keys(value).every((field) => fields.has(field)) &&
+    value.kind === "disposable-builder" &&
+    value.schemaVersion === 1 &&
+    typeof value.leaseId === "string" &&
+    value.leaseId.length > 0 &&
+    Number.isSafeInteger(value.generation) &&
+    (value.generation as number) > 0 &&
+    typeof value.claimedByUid === "string" &&
+    value.claimedByUid.length > 0;
+}
+
+function isOptionalDisposableBuilderGatewayAllocation(
+  value: unknown,
+): value is DisposableBuilderGatewayAllocation | null | undefined {
+  return value === undefined || value === null || isDisposableBuilderGatewayAllocation(value);
 }
 
 function isOwnedGateway(value: Record<string, unknown>): boolean {
@@ -159,7 +179,7 @@ function isOwnedGateway(value: Record<string, unknown>): boolean {
 function hasLegalOwnedAllocation(value: Record<string, unknown>): boolean {
   const allocation = value.allocation;
   if (allocation === undefined || allocation === null) return true;
-  return isTrialGatewayAllocation(allocation) &&
+  return isDisposableBuilderGatewayAllocation(allocation) &&
     allocation.claimedByUid === value.ownerUid;
 }
 
@@ -197,7 +217,7 @@ export function isGatewayMutableConfig(value: unknown): value is GatewayMutableC
     isNullableRecord(value.openclawOverrides) &&
     isNullableModelBrokerLimits(value.modelBrokerLimits) &&
     isNullablePreemption(value.preemption) &&
-    isOptionalTrialGatewayAllocation(value.allocation) &&
+    isOptionalDisposableBuilderGatewayAllocation(value.allocation) &&
     hasLegalOwnershipAndAllocation(value)
   );
 }

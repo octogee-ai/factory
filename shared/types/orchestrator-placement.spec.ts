@@ -38,12 +38,11 @@ describe("onboarding placement eligibility", () => {
 
 const trialBuilder = {
   trialGrant: {
-    schemaVersion: 2,
+    schemaVersion: 3,
     offerId: "builder-signup",
     offerVersion: 1,
     personalTier: "personal",
     builderTier: "hobby",
-    gatewayId: "builder-alice",
     configHash: "grant-hash",
     claimedAt: 1_000,
     endsAt: 604_801_000,
@@ -51,11 +50,10 @@ const trialBuilder = {
 };
 
 describe("resolveContinuousBuilderPlacement", () => {
-  it("moves a live trial Builder to their ready owned gateway", () => {
+  it("keeps an entitled inactive Builder parked on shared", () => {
     expect(resolveContinuousBuilderPlacement({
       uid: "uid-alice",
       userData: trialBuilder,
-      reservation: null,
       currentGatewayId: "shared-blue",
       defaultGatewayId: "shared-blue",
       ownedGateway: {
@@ -66,14 +64,13 @@ describe("resolveContinuousBuilderPlacement", () => {
         ready: true,
       },
       now: new Date(1_000),
-    })).toEqual({ targetGatewayId: "builder-alice", ownedGatewayId: "builder-alice" });
+    })).toEqual({ targetGatewayId: "shared-blue", ownedGatewayId: null });
   });
 
   it("returns expired and unentitled Builders to the configured default", () => {
     expect(resolveContinuousBuilderPlacement({
       uid: "uid-alice",
       userData: trialBuilder,
-      reservation: null,
       currentGatewayId: "builder-alice",
       defaultGatewayId: "shared-blue",
       ownedGateway: null,
@@ -81,23 +78,31 @@ describe("resolveContinuousBuilderPlacement", () => {
     })).toEqual({ targetGatewayId: "shared-blue", ownedGatewayId: null });
   });
 
-  it("reports a missing paid gateway so provisioning can be retried", () => {
+  it("does not treat a paid entitlement as runtime demand", () => {
     expect(resolveContinuousBuilderPlacement({
       uid: "uid-paid",
       userData: { builderSubscription: { tier: "pro", status: "active" } },
-      reservation: { status: "provisioning", gatewayId: "builder-paid" },
       currentGatewayId: "shared-blue",
       defaultGatewayId: "shared-blue",
       ownedGateway: null,
       now: new Date(1_000),
-    })).toEqual({ targetGatewayId: "shared-blue", ownedGatewayId: "builder-paid" });
+    })).toEqual({ targetGatewayId: "shared-blue", ownedGatewayId: null });
   });
 
-  it("keeps an already assigned owned gateway stable during a heartbeat outage", () => {
+  it("keeps an active lease target stable during a heartbeat outage", () => {
     expect(resolveContinuousBuilderPlacement({
       uid: "uid-alice",
-      userData: trialBuilder,
-      reservation: null,
+      userData: {
+        ...trialBuilder,
+        provisioning: {
+          openclaw: {
+            activationLease: {
+              status: "active",
+              targetGatewayId: "builder-alice",
+            },
+          },
+        },
+      },
       currentGatewayId: "builder-alice",
       defaultGatewayId: "shared-blue",
       ownedGateway: {

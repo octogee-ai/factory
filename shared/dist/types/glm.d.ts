@@ -33,7 +33,6 @@ export interface GatewayDesiredState {
     gcpProject?: string;
     gatewayContainerSecurityContext?: Record<string, unknown>;
     operatorAccess?: OperatorGatewayAccessSpec;
-    operatorReservation?: OperatorGatewayReservationSpec;
     lastError?: {
         at: number;
         message: string;
@@ -77,45 +76,6 @@ export interface OperatorGatewayAccessSpec {
     reason?: string;
     verifiedAt?: number;
     verifiedBy?: string;
-}
-export declare const OPERATOR_GATEWAY_RESERVATION_STATUSES: readonly ["reserved", "provisioning", "active", "suspended", "released"];
-export type OperatorGatewayReservationStatus = (typeof OPERATOR_GATEWAY_RESERVATION_STATUSES)[number];
-export declare const OPERATOR_GATEWAY_RESERVATION_BILLING_STATUSES: readonly ["manual", "pending", "active"];
-export type OperatorGatewayReservationBillingStatus = (typeof OPERATOR_GATEWAY_RESERVATION_BILLING_STATUSES)[number];
-export interface OperatorGatewayReservationSpec {
-    status: OperatorGatewayReservationStatus;
-    reservedAt: number;
-    reservedBy: string;
-    billingStatus?: OperatorGatewayReservationBillingStatus;
-    billingVerifiedAt?: number;
-    activatedAt?: number;
-    activatedBy?: string;
-}
-export declare const OPERATOR_GATEWAY_RESERVATIONS_COLLECTION = "operatorGatewayReservations";
-export declare const OPERATOR_GATEWAY_RESERVATION_REQUEST_STATUSES: readonly ["billing_pending", "requested", "provisioning", "fulfilled", "cancelled"];
-export type OperatorGatewayReservationRequestStatus = (typeof OPERATOR_GATEWAY_RESERVATION_REQUEST_STATUSES)[number];
-export interface OperatorGatewayReservationRequest {
-    uid: string;
-    builderSlug: string;
-    requestedSizingTier: SizingTier;
-    status: OperatorGatewayReservationRequestStatus;
-    billingStatus: OperatorGatewayReservationBillingStatus;
-    currentGatewayId?: string;
-    currentGatewayProfile?: GatewayProfile;
-    gatewayId?: string;
-    operationId?: string;
-    provisioningStartedAt?: number;
-    provisioningStartedBy?: string;
-    activationOperationId?: string;
-    activationStartedAt?: number;
-    activationStartedBy?: string;
-    fulfilledAt?: number;
-    fulfilledByOperationId?: string;
-    requestedAt: number;
-    updatedAt: number;
-}
-export interface OperatorGatewayReservationRequestResponse {
-    reservation: OperatorGatewayReservationRequest | null;
 }
 export declare const OPERATOR_GATEWAY_LOCKED_ACCESS: OperatorGatewayAccessSpec;
 export declare function defaultOperatorGatewayAccess(ownerUid: string | null | undefined, shellsEnabled?: boolean): OperatorGatewayAccessSpec;

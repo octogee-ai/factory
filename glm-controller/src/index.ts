@@ -120,7 +120,6 @@ import {
   shouldPersistClaimedOperationCompletion,
   verifiedDeletionCompletion,
 } from "./operation-retry.js";
-import { completeOperatorReservationAfterMigration } from "./operator-reservation-completion.js";
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import {
@@ -240,14 +239,6 @@ import { startStuckOpReaper } from "./stuck-op-reaper.js";
 import { startHelmRecoverySweeper } from "./helm-recovery-sweeper.js";
 import { resumeOrphanedRunningOps } from "./resume-orphaned-ops.js";
 import {
-  ACTIVATION_LEASE_SWEEP_MS_DEFAULT,
-  startBuilderActivationLeaseSweeper,
-} from "./builder-activation-sweeper.js";
-import {
-  DEDICATED_GATEWAY_IDLE_SWEEP_MS_DEFAULT,
-  startDedicatedGatewayIdleSweeper,
-} from "./dedicated-gateway-idle-sweeper.js";
-import {
   PREEMPTION_HANDOFF_SWEEP_MS_DEFAULT,
   startPreemptionHandoffSweeper,
 } from "./preemption-handoff-sweeper.js";
@@ -258,11 +249,6 @@ import {
   startMaintenanceRestartWatcher,
   type ControllerMaintenanceGate,
 } from "./maintenance-gate.js";
-import {
-  TRIAL_GATEWAY_PROVISION_RECONCILE_MS_DEFAULT,
-  createFirestoreTrialGatewayProvisionerDeps,
-  startTrialGatewayProvisioner,
-} from "./trial-gateway-provisioner.js";
 import {
   PLACEMENT_POLICY_RECONCILE_MS_DEFAULT,
   createFirestorePlacementPolicyReconcilerDeps,
@@ -317,26 +303,9 @@ const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
 // nudge the reconciler without holding a reference to its closure; installed by
 // startReconciler.
 const requestReconcileTickRef: { fire?: () => void } = {};
-const ACTIVATION_LEASE_SWEEP_MS = parseNonNegativeInt(
-  process.env.ACTIVATION_LEASE_SWEEP_MS,
-  ACTIVATION_LEASE_SWEEP_MS_DEFAULT,
-);
-const DEDICATED_GATEWAY_IDLE_MS_DEFAULT = 30 * 60 * 1000;
-const DEDICATED_GATEWAY_IDLE_MS = parseNonNegativeInt(
-  process.env.DEDICATED_GATEWAY_IDLE_MS,
-  DEDICATED_GATEWAY_IDLE_MS_DEFAULT,
-);
-const DEDICATED_GATEWAY_IDLE_SWEEP_MS = parseNonNegativeInt(
-  process.env.DEDICATED_GATEWAY_IDLE_SWEEP_MS,
-  DEDICATED_GATEWAY_IDLE_SWEEP_MS_DEFAULT,
-);
 const PREEMPTION_HANDOFF_SWEEP_MS = parseNonNegativeInt(
   process.env.PREEMPTION_HANDOFF_SWEEP_MS,
   PREEMPTION_HANDOFF_SWEEP_MS_DEFAULT,
-);
-const TRIAL_GATEWAY_PROVISION_RECONCILE_MS = parseNonNegativeInt(
-  process.env.TRIAL_GATEWAY_PROVISION_RECONCILE_MS,
-  TRIAL_GATEWAY_PROVISION_RECONCILE_MS_DEFAULT,
 );
 const PLACEMENT_POLICY_RECONCILE_MS = parseNonNegativeInt(
   process.env.PLACEMENT_POLICY_RECONCILE_MS,
@@ -483,16 +452,6 @@ function parseNonNegativeInt(raw: string | undefined, fallback: number): number 
   if (raw == null || raw.trim() === "") return fallback;
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
-}
-
-async function readDedicatedGatewayIdleMs(db: Firestore): Promise<number> {
-  const snap = await db.doc(ORCHESTRATOR_CONFIG_DOC_PATH).get();
-  const value = snap.exists
-    ? (snap.data() as { dedicatedGatewayIdleMs?: unknown } | undefined)?.dedicatedGatewayIdleMs
-    : undefined;
-  return typeof value === "number" && Number.isInteger(value) && value >= 0
-    ? value
-    : DEDICATED_GATEWAY_IDLE_MS;
 }
 
 async function publishPlatformGatewayReady(
@@ -1556,16 +1515,6 @@ async function runClaimedOperation(
   }
 
   if (result.success) {
-    try {
-      await completeOperatorReservationAfterMigration(
-        { db: deps.db, now: () => Date.now(), log: deps.log },
-        op,
-      );
-    } catch (err) {
-      deps.log(
-        `[glm-controller] ⚠ operator reservation completion failed op=${op.id}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
     deps.log(`[glm-controller] op=${op.id} → succeeded`);
     return;
   }
@@ -1732,43 +1681,13 @@ function startControllerBackgroundTasks({
     intervalMs: HELM_RECOVERY_SWEEP_MS,
     log,
   });
-  const stopActivationSweeper = startBuilderActivationLeaseSweeper(
-    { db, workspaceSlugsForUser, now: () => Date.now(), log },
-    ACTIVATION_LEASE_SWEEP_MS,
-  );
-  const stopIdleSweeper = startDedicatedGatewayIdleSweeper(
-    {
-      db,
-      idleMs: DEDICATED_GATEWAY_IDLE_MS,
-      readIdleMs: () => readDedicatedGatewayIdleMs(db),
-      namespace: NAMESPACE,
-      now: () => Date.now(),
-      log,
-    },
-    DEDICATED_GATEWAY_IDLE_SWEEP_MS,
-  );
   const stopPreemptionHandoffSweeper = startPreemptionHandoffSweeper(
     { db, now: () => Date.now(), log },
     PREEMPTION_HANDOFF_SWEEP_MS,
   );
-  const stopTrialGatewayProvisioner = startTrialGatewayProvisioner(
-    createFirestoreTrialGatewayProvisionerDeps({
-      db,
-      namespace: NAMESPACE,
-      ensureAuthSecret: deps.ensureGatewayAuthSecret,
-      workspaceSlugsForUser,
-      now: () => Date.now(),
-      log,
-    }),
-    TRIAL_GATEWAY_PROVISION_RECONCILE_MS,
-  );
   const stopPlacementPolicyReconciler = startPlacementPolicyReconciler(
     createFirestorePlacementPolicyReconcilerDeps({
       db,
-      ensureAuthSecret: (gatewayId) => deps.ensureGatewayAuthSecret({
-        namespace: NAMESPACE,
-        gatewayId,
-      }),
       now: () => Date.now(),
       log,
     }),
@@ -1802,8 +1721,6 @@ function startControllerBackgroundTasks({
         decryptSecret: decryptConnectorSecret,
         logger: { warn: log },
       }),
-    dedicatedGatewayIdleDefaultMs: DEDICATED_GATEWAY_IDLE_MS,
-    dedicatedGatewayIdleSweepMs: DEDICATED_GATEWAY_IDLE_SWEEP_MS,
   });
   return [
     stopReconciler,
@@ -1813,10 +1730,7 @@ function startControllerBackgroundTasks({
     stopReaper,
     stopStuckOpReaper,
     stopHelmRecoverySweeper,
-    stopActivationSweeper,
-    stopIdleSweeper,
     stopPreemptionHandoffSweeper,
-    stopTrialGatewayProvisioner,
     stopPlacementPolicyReconciler,
     stopHttp,
   ];

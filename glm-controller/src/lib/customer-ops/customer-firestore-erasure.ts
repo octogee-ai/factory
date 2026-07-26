@@ -14,8 +14,6 @@ export const CUSTOMER_ERASURE_COLLECTION_POLICIES = {
   customerStats: { customerKey: "uid" },
   agents: { customerKey: "uid" },
   modelBrokerCredits: { customerKey: "uid" },
-  operatorGatewayReservations: { customerKey: "uid" },
-  trialGatewayClaims: { customerKey: "uid" },
   workspaces: { customerKey: "slug" },
   emailSuppressions: { customerKey: "email" },
   modelBrokerUsageEvents: { uidFields: ["ownerUid"] },

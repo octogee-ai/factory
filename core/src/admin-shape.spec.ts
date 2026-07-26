@@ -3,12 +3,11 @@ import { buildCustomerSummary } from "./admin-shape.js";
 
 const NOW = Date.UTC(2026, 6, 2, 13, 30);
 const LIVE_SIGNUP_OFFER = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   offerId: "builder-signup",
   offerVersion: 1,
   personalTier: "personal",
   builderTier: "hobby",
-  gatewayId: "trial-op-000001",
   configHash: "config-a",
   claimedAt: new Date(NOW),
   endsAt: new Date(NOW + 7 * 24 * 60 * 60 * 1000),

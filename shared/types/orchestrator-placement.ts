@@ -1,4 +1,5 @@
-import { resolveBuilderTier, resolvePaidBuilderTier } from "./billing.js";
+import { resolveBuilderTier } from "./billing.js";
+import { accountAllowsInteractiveAccess } from "./account-lifecycle.js";
 
 export interface OnboardingOrchestratorConfig {
   defaultGatewayId: string;
@@ -10,12 +11,12 @@ export interface ContinuousPlacementOwnedGateway {
   ownerUid: string | null;
   desiredStatus: string;
   ready: boolean;
+  disposable?: boolean;
 }
 
 export interface ContinuousBuilderPlacementInput {
   uid: string;
   userData: Record<string, unknown>;
-  reservation: Record<string, unknown> | null;
   currentGatewayId: string | null;
   defaultGatewayId: string;
   ownedGateway: ContinuousPlacementOwnedGateway | null;
@@ -31,27 +32,27 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-export function resolveEntitledOwnedGatewayId(input: Pick<
+export function resolveLiveActivationTargetGatewayId(input: Pick<
   ContinuousBuilderPlacementInput,
-  "userData" | "reservation" | "now"
+  "userData" | "now"
 >): string | null {
-  if (resolvePaidBuilderTier(input.userData) !== null) {
-    const status = input.reservation?.status;
-    return status === "provisioning" || status === "fulfilled"
-      ? nonEmptyString(input.reservation?.gatewayId)
-      : null;
-  }
+  if (!accountAllowsInteractiveAccess(input.userData)) return null;
   if (resolveBuilderTier(input.userData, input.now) === null) return null;
-  const trialGrant = input.userData.trialGrant;
-  return trialGrant && typeof trialGrant === "object" && !Array.isArray(trialGrant)
-    ? nonEmptyString((trialGrant as Record<string, unknown>).gatewayId)
-    : null;
+  const provisioning = input.userData.provisioning;
+  if (!provisioning || typeof provisioning !== "object" || Array.isArray(provisioning)) return null;
+  const openclaw = (provisioning as Record<string, unknown>).openclaw;
+  if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) return null;
+  const lease = (openclaw as Record<string, unknown>).activationLease;
+  if (!lease || typeof lease !== "object" || Array.isArray(lease)) return null;
+  const status = (lease as Record<string, unknown>).status;
+  if (status !== "provisioning" && status !== "activating" && status !== "active") return null;
+  return nonEmptyString((lease as Record<string, unknown>).targetGatewayId);
 }
 
 export function resolveContinuousBuilderPlacement(
   input: ContinuousBuilderPlacementInput,
 ): ContinuousBuilderPlacement {
-  const ownedGatewayId = resolveEntitledOwnedGatewayId(input);
+  const ownedGatewayId = resolveLiveActivationTargetGatewayId(input);
   if (!ownedGatewayId) {
     return { targetGatewayId: input.defaultGatewayId, ownedGatewayId: null };
   }
@@ -61,7 +62,7 @@ export function resolveContinuousBuilderPlacement(
     gateway.gatewayClass !== "shared" &&
     gateway.ownerUid === input.uid &&
     gateway.desiredStatus === "running" &&
-    (gateway.ready || input.currentGatewayId === ownedGatewayId);
+    input.currentGatewayId === ownedGatewayId;
   return {
     targetGatewayId: ownedGatewayIsUsable ? ownedGatewayId : input.defaultGatewayId,
     ownedGatewayId,

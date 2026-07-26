@@ -27,27 +27,6 @@ export const GATEWAY_ASSIGNMENTS_SUBCOLLECTION = "assignments";
 // to zero; retirement is its own terminal state.
 export type GatewayLifecycleStatus = "running" | "paused" | "retired";
 
-export type GatewayIdleSleepStatus =
-  | "paused"
-  | "empty-waiting"
-  | "returning-to-shared";
-
-// Current idle lifecycle state, exactly as the dedicated idle sweeper writes it
-// (glm-controller/src/dedicated-gateway-idle-sweeper.ts). Every field is
-// optional because the sweeper writes a different subset per status; each field
-// when present must match the writer's shape.
-export interface GatewayIdleSleepState {
-  status?: GatewayIdleSleepStatus;
-  action?: string;
-  pausedAt?: number;
-  emptySince?: number;
-  protectedUntil?: number;
-  lastActivityAt?: number | null;
-  requestedAt?: number;
-  operationId?: string;
-  targetGatewayId?: string;
-}
-
 export interface GatewayRetirementClaim {
   operationId: string;
   version: number;
@@ -62,9 +41,8 @@ export interface GatewayRetirementClaim {
   previousDesiredStatus: Exclude<GatewayLifecycleStatus, "retired">;
 }
 
-// gateways/{gatewayId} — durable desired gateway identity. No reservation
-// mirror (operatorGatewayReservations is the sole durable reservation source)
-// and no persistence (all gateways are Spot + emptyDir).
+// gateways/{gatewayId} — durable desired gateway identity. Gateways have no
+// reservation mirror and no persistence (all gateways are Spot + emptyDir).
 export interface GatewayDoc {
   gatewayId: string;
   createdAt: number;
@@ -75,7 +53,6 @@ export interface GatewayDoc {
   desiredRelease: number;
   liveRelease: number | null;
   desiredStatus: GatewayLifecycleStatus;
-  idleSleep?: GatewayIdleSleepState | null;
   preemptionHandoff?: GatewayPreemptionHandoffSpec | null;
   retireAfter?: number | null;
   retirementVersion?: number;
@@ -499,7 +476,6 @@ export const GATEWAY_MUTABLE_FIELDS = [
   "preemption",
   "allocation",
   "desiredStatus",
-  "idleSleep",
   "preemptionHandoff",
   "liveRelease",
   "retireAfter",
@@ -574,13 +550,6 @@ export interface CommitPlacementParams {
   updatedByOperationId?: string | null;
   assignmentWrite?: "upsert" | "create-if-missing";
   requireDurableGateway?: boolean;
-  companionWrites?: ReadonlyArray<{
-    collection: string;
-    docId: string;
-    data: Record<string, unknown>;
-    mode?: "upsert" | "create-if-missing";
-    mirrorPatchIfWritten?: Record<string, unknown>;
-  }>;
 }
 
 export type PlacementRejectReason =
@@ -627,44 +596,6 @@ async function preserveExistingAssignment(
   return true;
 }
 
-interface PreparedCompanionWrite {
-  ref: PlacementDocRef;
-  data: Record<string, unknown>;
-  mirrorPatch: Record<string, unknown>;
-}
-
-async function preparePlacementCompanionWrites(
-  db: PlacementFirestore,
-  txn: PlacementTxn,
-  params: CommitPlacementParams,
-): Promise<PreparedCompanionWrite[]> {
-  const prepared: PreparedCompanionWrite[] = [];
-  for (const write of params.companionWrites ?? []) {
-    const ref = db.collection(write.collection).doc(write.docId);
-    if (write.mode === "create-if-missing" && (await txn.get(ref)).exists) continue;
-    prepared.push({
-      ref,
-      data: write.data,
-      mirrorPatch: write.mirrorPatchIfWritten ?? {},
-    });
-  }
-  return prepared;
-}
-
-function commitPlacementCompanionWrites(
-  txn: PlacementTxn,
-  writes: readonly PreparedCompanionWrite[],
-): void {
-  for (const write of writes) txn.set(write.ref, write.data);
-}
-
-function placementMirrorPatch(
-  params: CommitPlacementParams,
-  writes: readonly PreparedCompanionWrite[],
-): Record<string, unknown> {
-  return Object.assign({}, params.mirrorPatch, ...writes.map((write) => write.mirrorPatch));
-}
-
 export async function commitPlacementAtomic(
   db: PlacementFirestore,
   params: CommitPlacementParams,
@@ -676,16 +607,13 @@ export async function commitPlacementAtomic(
     .doc(params.uid);
   return db.runTransaction<CommitPlacementResult>(async (txn) => {
     const gatewaySnap = await txn.get(gatewayRef);
-    const companionWrites = await preparePlacementCompanionWrites(db, txn, params);
-    const mirrorPatch = placementMirrorPatch(params, companionWrites);
     const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
 
     if (!gatewaySnap.exists) {
       if (params.requireDurableGateway) {
         return { kind: "rejected", reason: "gateway-root-invalid" };
       }
-      txn.update(userRef, mirrorPatch);
-      commitPlacementCompanionWrites(txn, companionWrites);
+      txn.update(userRef, params.mirrorPatch);
       return { kind: "mirror-only" };
     }
     if (!isDurablePlacementRoot(gatewayData, params.gatewayId)) {
@@ -698,9 +626,8 @@ export async function commitPlacementAtomic(
       txn,
       assignmentRef,
       userRef,
-      { ...params, mirrorPatch },
+      params,
     )) {
-      commitPlacementCompanionWrites(txn, companionWrites);
       return { kind: "assignment-preserved" };
     }
 
@@ -717,7 +644,7 @@ export async function commitPlacementAtomic(
 
     // Mirror + assignment are all-or-nothing: a serving assignment at epoch 0
     // (the steady baseline before any migration cutover bumps the epoch).
-    txn.update(userRef, mirrorPatch);
+    txn.update(userRef, params.mirrorPatch);
     const assignmentDoc: AssignmentDoc = {
       uid: params.uid,
       slug: params.slug,
@@ -729,7 +656,6 @@ export async function commitPlacementAtomic(
       updatedByOperationId: params.updatedByOperationId ?? null,
     };
     txn.set(assignmentRef, assignmentDoc as unknown as Record<string, unknown>);
-    commitPlacementCompanionWrites(txn, companionWrites);
     return { kind: "assigned", release: gatewayData.liveRelease };
   });
 }

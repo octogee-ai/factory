@@ -177,7 +177,7 @@ export type {
 } from './orchestrator-placement.js';
 export {
   resolveContinuousBuilderPlacement,
-  resolveEntitledOwnedGatewayId,
+  resolveLiveActivationTargetGatewayId,
 } from './orchestrator-placement.js';
 export type {
   ModelCatalogProvider,
@@ -295,8 +295,6 @@ export {
 
 export type {
   GatewayLifecycleStatus,
-  GatewayIdleSleepStatus,
-  GatewayIdleSleepState,
   GatewayDoc,
   ReleasePayload,
   ReleaseDoc,
@@ -333,21 +331,6 @@ export {
 } from './gateway-mutable-config.js';
 
 export type {
-  TrialGatewayAllocationState,
-  TrialGatewayAllocation,
-  TrialGatewayClaimStatus,
-  TrialGatewayClaimError,
-  TrialGatewayClaim,
-} from './trial-gateway.js';
-export {
-  TRIAL_GATEWAY_ALLOCATION_STATES,
-  TRIAL_GATEWAY_CLAIMS_COLLECTION,
-  isTimestampLike,
-  isTrialGatewayAllocation,
-  isTrialGatewayClaim,
-} from './trial-gateway.js';
-
-export type {
   SizingTier,
   SizingTierPreset,
   TierResources,
@@ -377,7 +360,7 @@ export {
 
 export { OPENCLAW_PROTOCOL_VERSION } from './openclaw-wire.js';
 
-export { builderGatewayIdForSlug } from './builder-gateway-id.js';
+export { builderGatewayIdForSlug, disposableBuilderGatewayId } from './builder-gateway-id.js';
 
 export type {
   DeviceIdentity,

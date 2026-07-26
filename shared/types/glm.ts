@@ -48,8 +48,6 @@ export interface GatewayDesiredState {
 
   operatorAccess?: OperatorGatewayAccessSpec;
 
-  operatorReservation?: OperatorGatewayReservationSpec;
-
   lastError?: { at: number; message: string } | null;
 
   openclawOverrides?: Record<string, unknown>;
@@ -102,72 +100,6 @@ export interface OperatorGatewayAccessSpec {
   reason?: string;
   verifiedAt?: number;
   verifiedBy?: string;
-}
-
-export const OPERATOR_GATEWAY_RESERVATION_STATUSES = [
-  "reserved",
-  "provisioning",
-  "active",
-  "suspended",
-  "released",
-] as const;
-export type OperatorGatewayReservationStatus =
-  (typeof OPERATOR_GATEWAY_RESERVATION_STATUSES)[number];
-
-export const OPERATOR_GATEWAY_RESERVATION_BILLING_STATUSES = [
-  "manual",
-  "pending",
-  "active",
-] as const;
-export type OperatorGatewayReservationBillingStatus =
-  (typeof OPERATOR_GATEWAY_RESERVATION_BILLING_STATUSES)[number];
-
-export interface OperatorGatewayReservationSpec {
-  status: OperatorGatewayReservationStatus;
-  reservedAt: number;
-  reservedBy: string;
-  billingStatus?: OperatorGatewayReservationBillingStatus;
-  billingVerifiedAt?: number;
-  activatedAt?: number;
-  activatedBy?: string;
-}
-
-export const OPERATOR_GATEWAY_RESERVATIONS_COLLECTION =
-  "operatorGatewayReservations";
-
-export const OPERATOR_GATEWAY_RESERVATION_REQUEST_STATUSES = [
-  "billing_pending",
-  "requested",
-  "provisioning",
-  "fulfilled",
-  "cancelled",
-] as const;
-export type OperatorGatewayReservationRequestStatus =
-  (typeof OPERATOR_GATEWAY_RESERVATION_REQUEST_STATUSES)[number];
-
-export interface OperatorGatewayReservationRequest {
-  uid: string;
-  builderSlug: string;
-  requestedSizingTier: SizingTier;
-  status: OperatorGatewayReservationRequestStatus;
-  billingStatus: OperatorGatewayReservationBillingStatus;
-  currentGatewayId?: string;
-  currentGatewayProfile?: GatewayProfile;
-  gatewayId?: string;
-  operationId?: string;
-  provisioningStartedAt?: number;
-  provisioningStartedBy?: string;
-  activationOperationId?: string;
-  activationStartedAt?: number;
-  activationStartedBy?: string;
-  fulfilledAt?: number;
-  fulfilledByOperationId?: string;
-  requestedAt: number;
-  updatedAt: number;
-}
-
-export interface OperatorGatewayReservationRequestResponse {
-  reservation: OperatorGatewayReservationRequest | null;
 }
 
 export const OPERATOR_GATEWAY_LOCKED_ACCESS: OperatorGatewayAccessSpec = {

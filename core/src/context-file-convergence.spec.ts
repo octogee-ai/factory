@@ -39,12 +39,11 @@ function customerDir(name = "alice"): string {
 function liveSignupOffer(): Record<string, unknown> {
   const claimedAt = new Date();
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     offerId: "builder-signup",
     offerVersion: 1,
     personalTier: "personal",
     builderTier: "hobby",
-    gatewayId: "trial-op-000001",
     configHash: "config-a",
     claimedAt,
     endsAt: new Date(claimedAt.getTime() + 7 * 24 * 60 * 60 * 1000),

@@ -5,7 +5,6 @@ import {
   createMaintenanceHttpServer,
   type HttpServerDeps,
 } from "../http-server";
-import { OPERATOR_GATEWAY_RESERVATIONS_COLLECTION } from "@octogee/shared/types/glm";
 
 interface FakeStore {
   users: Record<string, Record<string, unknown>>;
@@ -257,7 +256,9 @@ function buildDb(store: FakeStore) {
       get: async () => {
         const [collection, id] = path.split("/");
         const data =
-          collection === "gateways" && id
+          collection === "users" && id
+            ? store.users[id]
+            : collection === "gateways" && id && path.split("/").length === 2
             ? store.gateways[id]
             : collection === "glmGateways" && id
               ? store.glmGateways[id]
@@ -268,6 +269,16 @@ function buildDb(store: FakeStore) {
         store.configs[path] = opts?.merge
           ? { ...(store.configs[path] ?? {}), ...data }
           : data;
+      },
+      update: async (patch: Record<string, unknown>) => {
+        const [collection, id] = path.split("/");
+        if (collection === "users" && id && store.users[id]) {
+          applyPatch(store.users[id], patch);
+          return;
+        }
+        const current = store.configs[path];
+        if (!current) throw new Error(`missing fake document ${path}`);
+        applyPatch(current, patch);
       },
     }),
     collection: (name: string): unknown => ({
@@ -512,7 +523,7 @@ describe("createHttpServer — admin gateway routes", () => {
       .post("/api/admin/customer/delete-me/delete")
       .set("Authorization", "Bearer admin-token");
 
-    expect(res.status).toBe(202);
+    expect(res.status, JSON.stringify(res.body)).toBe(202);
     expect(order).toEqual(["suspend-auth", "revoke"]);
   });
 
@@ -555,7 +566,7 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(res.status).toBe(200);
     expect(res.text).toContain("event: ready");
     expect(res.text).toContain("event: changed");
-    expect(res.text).toMatch(/"collection":"(users|gateways|config|glmGateways|glmOperations|operatorGatewayReservations)"/);
+    expect(res.text).toMatch(/"collection":"(users|gateways|config|glmGateways|glmOperations)"/);
   });
 
   it("subscribes fleet invalidation events to admin data dependencies", async () => {
@@ -575,7 +586,7 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(res.status).toBe(200);
     expect(watchedCollections).toContain("users");
     expect(watchedCollections).toContain("config");
-    expect(watchedCollections).toContain(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION);
+    expect(watchedCollections).not.toContain("operatorGatewayReservations");
   });
 
   it("serves /api/admin/gateways with populated fleet stats", async () => {
@@ -814,18 +825,17 @@ describe("createHttpServer — admin gateway routes", () => {
     });
   });
 
-  it("queues a builder activation lease migration when the owned builder gateway is ready", async () => {
+  it("records targetless Builder demand without queuing a migration", async () => {
     store.users["uid-alice"] = {
       username: "alice",
+      builderSubscription: { tier: "pro", status: "active" },
       provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
     };
-    store.gateways["gw-alice"] = durableBuilderGateway("gw-alice", "running");
-    store.glmGateways["gw-alice"] = {
-      docKind: "runtime",
-      gatewayId: "gw-alice",
-      release: 1,
-      lifecycle: "serving",
-      heartbeat: { status: "ready", mountedCustomers: [] },
+    store.configs["gateways/default/assignments/uid-alice"] = {
+      uid: "uid-alice",
+      gatewayId: "default",
+      state: "serving",
+      epoch: 4,
     };
 
     const app = createHttpServer(buildDeps(store));
@@ -834,52 +844,42 @@ describe("createHttpServer — admin gateway routes", () => {
       .set("Authorization", "Bearer admin-token")
       .send({ reason: "conversation-start" });
 
-    expect(res.status).toBe(202);
+    expect(res.status, JSON.stringify(res.body)).toBe(202);
     expect(res.body).toMatchObject({
-      uid: "uid-alice",
-      builderSlug: "alice",
-      gatewayId: "gw-alice",
-      gatewayClass: "builder",
-      operationId: "auto-1",
-      status: "activating",
+      generation: 1,
+      sizingTier: "m",
+      status: "requested",
     });
-    expect(store.glmOperations).toHaveLength(1);
-    expect(store.glmOperations[0]).toMatchObject({
-      id: "auto-1",
-      data: {
-        kind: "migrate-customer",
-        status: "pending",
-        gatewayId: "gw-alice",
-        inputUid: "uid-alice",
-        input: {
-          uid: "uid-alice",
-          toGatewayId: "gw-alice",
-          source: "builder-activation-lease",
-          builderSlug: "alice",
-          gatewayClass: "builder",
-          reason: "conversation-start",
-        },
-      },
-    });
+    expect(store.glmOperations).toHaveLength(0);
     expect(store.users["uid-alice"].provisioning).toMatchObject({
       openclaw: {
         activationLease: {
-          gatewayId: "gw-alice",
-          gatewayClass: "builder",
           builderSlug: "alice",
-          status: "activating",
-          operationId: "auto-1",
+          sourceGatewayId: "default",
+          sourceAssignmentEpoch: 4,
+          status: "requested",
         },
       },
     });
+    expect(
+      (store.users["uid-alice"].provisioning as Record<string, any>)
+        .openclaw.activationLease,
+    ).not.toHaveProperty("targetGatewayId");
   });
 
-  it("wakes a paused builder gateway without queuing migration until it is ready", async () => {
+  it("does not wake a legacy paused dedicated gateway when recording demand", async () => {
     store.users["uid-alice"] = {
       username: "alice",
+      builderSubscription: { tier: "pro", status: "active" },
       provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
     };
     store.gateways["gw-alice"] = durableBuilderGateway("gw-alice", "paused");
+    store.configs["gateways/default/assignments/uid-alice"] = {
+      uid: "uid-alice",
+      gatewayId: "default",
+      state: "serving",
+      epoch: 9,
+    };
 
     const app = createHttpServer(buildDeps(store));
     const res = await request(app)
@@ -889,25 +889,10 @@ describe("createHttpServer — admin gateway routes", () => {
 
     expect(res.status).toBe(202);
     expect(res.body).toMatchObject({
-      uid: "uid-alice",
-      gatewayId: "gw-alice",
-      status: "waking",
-      targetStatus: "missing",
-      retryAfterMs: 15_000,
+      status: "requested",
     });
-    expect(store.gateways["gw-alice"].desiredStatus).toBe("running");
+    expect(store.gateways["gw-alice"].desiredStatus).toBe("paused");
     expect(store.glmOperations).toHaveLength(0);
-    expect(store.users["uid-alice"].provisioning).toMatchObject({
-      openclaw: {
-        activationLease: {
-          gatewayId: "gw-alice",
-          gatewayClass: "builder",
-          builderSlug: "alice",
-          status: "waking",
-          targetStatus: "missing",
-        },
-      },
-    });
   });
 
 it("mounts addAdminCustomerRoutes and returns 404 for unknown customer (factory wired)", async () => {

@@ -8,7 +8,6 @@ import {
   getIdTokenForUid,
   setupEmulatorTest,
 } from "@octogee/test-helpers/firestore-emulator";
-import { releasePayloadHash } from "@octogee/shared/types/gateway-releases";
 
 setupEmulatorTest({
   env: { API_PUBLIC_URL: "https://chat-proxy.test.octogee.com" },
@@ -27,92 +26,6 @@ async function getActiveIdToken(uid: string): Promise<string> {
     { merge: true },
   );
   return getIdTokenForUid(uid);
-}
-
-async function seedDedicatedGateway({
-  gatewayId,
-  gatewayClass,
-  desiredStatus,
-  heartbeatStatus,
-}: {
-  gatewayId: string;
-  gatewayClass: "builder" | "operator";
-  desiredStatus: "running" | "paused";
-  heartbeatStatus: "ready" | "unknown";
-}): Promise<void> {
-  const isOperator = gatewayClass === "operator";
-  const replicas = desiredStatus === "running" ? 1 : 0;
-  await db.doc(`gateways/${gatewayId}`).set({
-    gatewayId,
-    createdAt: 1,
-    createdBy: "test",
-    updatedAt: 1,
-    updatedBy: "test",
-    latestRelease: 1,
-    desiredRelease: 1,
-    liveRelease: 1,
-    desiredStatus,
-    configSchemaVersion: 1,
-    profile: isOperator ? "operator" : null,
-    gatewayClass,
-    imageProfile: isOperator ? "operator" : "standard",
-    sizingTier: null,
-    gcpProject: null,
-    gatewayContainerSecurityContext: null,
-    serviceAccountName: null,
-    serviceAccount: null,
-    operatorAccess: null,
-    ownerUid: "caller-uid",
-    builderSlug: "alice",
-    openclawOverrides: null,
-    modelBrokerLimits: null,
-    preemption: null,
-  });
-  const payload = {
-    imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
-    imageTag: "abc1234",
-  };
-  await db.doc(`gateways/${gatewayId}/releases/1`).set({
-    gatewayId,
-    release: 1,
-    createdAt: 1,
-    createdBy: "test",
-    sourceRelease: null,
-    note: null,
-    payloadHash: releasePayloadHash(payload),
-    payload,
-  });
-  await db.doc(`glmGateways/${gatewayId}`).set({
-    docKind: "runtime",
-    gatewayId,
-    release: 1,
-    lifecycle: "serving",
-    createdAt: 1,
-    createdByOperationId: null,
-    helm: {
-      releaseName: `octogee-gw-${gatewayId}`,
-      deploymentName: `octogee-gateway-${gatewayId}`,
-      gatewayServiceName: `octogee-gateway-${gatewayId}`,
-      gatewayEdgeServiceName: `gateway-edge-${gatewayId}`,
-      serviceAccountName: `octogee-gw-${gatewayId}`,
-      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
-      imageTag: "abc1234",
-      replicas,
-      availableReplicas: replicas,
-      lastAppliedAt: 1,
-    },
-    heartbeat: {
-      status: heartbeatStatus,
-      lastHeartbeatAt: 1,
-      version: "abc1234",
-      openclawVersion: null,
-      internalUrl: null,
-      startedAt: 1,
-      mountedCustomers: [],
-      migratingIn: [],
-    },
-    lastError: { message: null, at: null },
-  });
 }
 
 describe("POST /api/openclaw/ticket — real Firebase Auth + Firestore (emulators)", () => {
@@ -190,16 +103,17 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
     expect(res.body.gatewayId).toBe("");
   });
 
-  it("defers the ticket and queues an activation migration when the owned builder gateway is ready", async () => {
+  it("mints on the shared gateway while recording targetless activation demand", async () => {
     await db.doc("users/caller-uid").set({
       username: "alice",
+      builderSubscription: { tier: "pro", status: "active" },
       provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
     });
-    await seedDedicatedGateway({
-      gatewayId: "gw-alice",
-      gatewayClass: "builder",
-      desiredStatus: "running",
-      heartbeatStatus: "ready",
+    await db.doc("gateways/default/assignments/caller-uid").set({
+      uid: "caller-uid",
+      gatewayId: "default",
+      state: "serving",
+      epoch: 7,
     });
 
     const token = await getActiveIdToken("caller-uid");
@@ -207,75 +121,39 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
       .post("/api/openclaw/ticket")
       .set("Authorization", `Bearer ${token}`);
 
-    expect(res.status).toBe(202);
-    expect(res.body).toMatchObject({
-      status: "activating",
-      gatewayId: "gw-alice",
-      gatewayClass: "builder",
-      openclawTicketDeferred: true,
-    });
-    expect(res.body.wsTicket).toBeUndefined();
+    expect(res.status).toBe(200);
+    expect(res.body.gatewayId).toBe("default");
+    expect(res.body.wsTicket).toMatch(/^[0-9a-f-]{36}$/);
 
-    const ops = await db.collection("glmOperations").get();
-    expect(ops.size).toBe(1);
-    expect(ops.docs[0].data()).toMatchObject({
-      kind: "migrate-customer",
-      status: "pending",
-      gatewayId: "gw-alice",
-      inputUid: "caller-uid",
-      input: {
-        uid: "caller-uid",
-        toGatewayId: "gw-alice",
-        source: "builder-activation-lease",
-        builderSlug: "alice",
-        gatewayClass: "builder",
-        reason: "openclaw-ticket",
-      },
+    const user = await db.doc("users/caller-uid").get();
+    expect(user.data()?.provisioning.openclaw.activationLease).toMatchObject({
+      generation: 1,
+      status: "requested",
+      cause: "ticket",
+      builderSlug: "alice",
+      sourceGatewayId: "default",
+      sourceAssignmentEpoch: 7,
+      entitlementTier: "pro",
+      sizingTier: "m",
     });
-  });
-
-  it("wakes a paused dedicated gateway and waits to mint until it reports ready", async () => {
-    await db.doc("users/caller-uid").set({
-      username: "alice",
-      provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
-    });
-    await seedDedicatedGateway({
-      gatewayId: "gw-alice",
-      gatewayClass: "builder",
-      desiredStatus: "paused",
-      heartbeatStatus: "unknown",
-    });
-
-    const token = await getActiveIdToken("caller-uid");
-    const res = await request(buildApp())
-      .post("/api/openclaw/ticket")
-      .set("Authorization", `Bearer ${token}`);
-
-    expect(res.status).toBe(202);
-    expect(res.body).toMatchObject({
-      status: "waking",
-      targetStatus: "unknown",
-      gatewayId: "gw-alice",
-      openclawTicketDeferred: true,
-    });
-    expect(res.body.wsTicket).toBeUndefined();
-
-    const target = await db.doc("gateways/gw-alice").get();
-    expect(target.data()?.desiredStatus).toBe("running");
+    expect(
+      user.data()?.provisioning.openclaw.activationLease,
+    ).not.toHaveProperty("targetGatewayId");
     const ops = await db.collection("glmOperations").get();
     expect(ops.empty).toBe(true);
   });
 
-  it("auto-activates an owned operator gateway when it is the only dedicated target", async () => {
+  it("rejects demand from a non-serving assignment fence", async () => {
     await db.doc("users/caller-uid").set({
       username: "alice",
+      builderSubscription: { tier: "pro", status: "active" },
       provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
     });
-    await seedDedicatedGateway({
-      gatewayId: "bender",
-      gatewayClass: "operator",
-      desiredStatus: "running",
-      heartbeatStatus: "ready",
+    await db.doc("gateways/default/assignments/caller-uid").set({
+      uid: "caller-uid",
+      gatewayId: "default",
+      state: "returning",
+      epoch: 7,
     });
 
     const token = await getActiveIdToken("caller-uid");
@@ -283,22 +161,12 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
       .post("/api/openclaw/ticket")
       .set("Authorization", `Bearer ${token}`);
 
-    expect(res.status).toBe(202);
+    expect(res.status).toBe(409);
     expect(res.body).toMatchObject({
-      status: "activating",
-      gatewayId: "bender",
-      gatewayClass: "operator",
-      openclawTicketDeferred: true,
+      code: "builder-runtime-assignment-stale",
+      reportingGatewayId: "default",
+      assignmentEpoch: 7,
     });
-
-    const ops = await db.collection("glmOperations").get();
-    expect(ops.size).toBe(1);
-    expect(ops.docs[0].data()).toMatchObject({
-      input: {
-        uid: "caller-uid",
-        toGatewayId: "bender",
-        gatewayClass: "operator",
-      },
-    });
+    expect(res.body.wsTicket).toBeUndefined();
   });
 });

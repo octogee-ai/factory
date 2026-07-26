@@ -3,18 +3,6 @@ import type { GatewayPreemptionHandoffSpec } from "./glm.js";
 export declare const GATEWAY_RELEASES_SUBCOLLECTION = "releases";
 export declare const GATEWAY_ASSIGNMENTS_SUBCOLLECTION = "assignments";
 export type GatewayLifecycleStatus = "running" | "paused" | "retired";
-export type GatewayIdleSleepStatus = "paused" | "empty-waiting" | "returning-to-shared";
-export interface GatewayIdleSleepState {
-    status?: GatewayIdleSleepStatus;
-    action?: string;
-    pausedAt?: number;
-    emptySince?: number;
-    protectedUntil?: number;
-    lastActivityAt?: number | null;
-    requestedAt?: number;
-    operationId?: string;
-    targetGatewayId?: string;
-}
 export interface GatewayRetirementClaim {
     operationId: string;
     version: number;
@@ -38,7 +26,6 @@ export interface GatewayDoc {
     desiredRelease: number;
     liveRelease: number | null;
     desiredStatus: GatewayLifecycleStatus;
-    idleSleep?: GatewayIdleSleepState | null;
     preemptionHandoff?: GatewayPreemptionHandoffSpec | null;
     retireAfter?: number | null;
     retirementVersion?: number;
@@ -161,7 +148,7 @@ export declare function gatewayPodServiceName(id: string): string;
 export declare function releasePayloadHash(payload: ReleasePayload): string;
 export type GatewayFieldClassification = "release" | "gateway-mutable";
 export declare const RELEASE_FIELDS: readonly ["imageRepository", "imageTag", "testExperiment"];
-export declare const GATEWAY_MUTABLE_FIELDS: readonly ["profile", "gatewayClass", "imageProfile", "sizingTier", "gcpProject", "gatewayContainerSecurityContext", "serviceAccountName", "serviceAccount", "operatorAccess", "ownerUid", "builderSlug", "openclawOverrides", "modelBrokerLimits", "preemption", "allocation", "desiredStatus", "idleSleep", "preemptionHandoff", "liveRelease", "retireAfter"];
+export declare const GATEWAY_MUTABLE_FIELDS: readonly ["profile", "gatewayClass", "imageProfile", "sizingTier", "gcpProject", "gatewayContainerSecurityContext", "serviceAccountName", "serviceAccount", "operatorAccess", "ownerUid", "builderSlug", "openclawOverrides", "modelBrokerLimits", "preemption", "allocation", "desiredStatus", "preemptionHandoff", "liveRelease", "retireAfter"];
 export declare function classifyGatewayField(field: string): GatewayFieldClassification;
 export interface PlacementDocSnap {
     exists: boolean;
@@ -200,13 +187,6 @@ export interface CommitPlacementParams {
     updatedByOperationId?: string | null;
     assignmentWrite?: "upsert" | "create-if-missing";
     requireDurableGateway?: boolean;
-    companionWrites?: ReadonlyArray<{
-        collection: string;
-        docId: string;
-        data: Record<string, unknown>;
-        mode?: "upsert" | "create-if-missing";
-        mirrorPatchIfWritten?: Record<string, unknown>;
-    }>;
 }
 export type PlacementRejectReason = "gateway-root-invalid" | "gateway-not-running" | "gateway-not-serving";
 export type CommitPlacementResult = {

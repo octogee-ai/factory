@@ -103,12 +103,11 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
 
   it("carries every plan-resolution input, including the immutable trial grant", () => {
     const trialGrant = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       offerId: "builder-signup",
       offerVersion: 1,
       personalTier: "personal",
       builderTier: "hobby",
-      gatewayId: "trial-op-000001",
       configHash: "config-a",
       claimedAt: "2026-07-08T00:00:00.000Z",
       endsAt: "2026-07-15T00:00:00.000Z",

@@ -1,4 +1,5 @@
 import { Router, Request, Response, NextFunction } from "express";
+import { randomUUID } from "node:crypto";
 import { requireAuth } from "../middleware/auth.js";
 import { db } from "../lib/db.js";
 import { mintTicket } from "../lib/gateway-ticket.js";
@@ -29,12 +30,6 @@ export function resolveActivityHistoryTarget(
   return activityChannelId ? { activityChannelId, historyMode: "channel" } : null;
 }
 
-function workspaceSlugsForUser(data: { username?: string | null }): string[] {
-  return typeof data.username === "string" && data.username.length > 0
-    ? [data.username]
-    : [];
-}
-
 async function maybeRequestActivationBeforeTicket(
   uid: string,
   userData: Record<string, unknown> | undefined,
@@ -47,20 +42,28 @@ async function maybeRequestActivationBeforeTicket(
     typeof provisioning?.openclaw?.slug === "string" ||
     typeof userData?.username === "string";
   if (!hasGateway || !hasSlug) return null;
+  const reportingGatewayId = provisioning!.openclaw!.gatewayId as string;
+  const assignmentSnap = await db.doc(
+    `gateways/${reportingGatewayId}/assignments/${uid}`,
+  ).get();
+  const assignmentData = assignmentSnap.exists
+    ? assignmentSnap.data() as Record<string, unknown>
+    : undefined;
+  const observedAt = Date.now();
   const result = await requestBuilderActivationLease({
     db,
     uid,
+    reportingGatewayId,
+    assignmentEpoch:
+      typeof assignmentData?.epoch === "number"
+        ? assignmentData.epoch
+        : undefined,
+    eventKey: `ticket:${randomUUID()}`,
+    cause: "ticket",
+    observedAt,
     createdBy: `openclaw-ticket:${uid}`,
-    reason: "openclaw-ticket",
-    workspaceSlugsForUser,
   });
-  if (result.statusCode === 202) {
-    return {
-      statusCode: 202,
-      body: { ...result.body, openclawTicketDeferred: true },
-    };
-  }
-  if (result.statusCode === 200 || activationLeaseMissCanMintTicket(result)) {
+  if (activationLeaseMissCanMintTicket(result)) {
     return null;
   }
   return result;

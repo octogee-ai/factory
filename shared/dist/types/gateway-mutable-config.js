@@ -1,6 +1,5 @@
 import { GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME, isGatewayClass, isGatewayProfile, isValidGatewayId, operatorGatewayServiceAccountName, } from "./glm.js";
 import { isSizingTier } from "./sizing.js";
-import { isTrialGatewayAllocation, } from "./trial-gateway.js";
 export const GATEWAY_CONFIG_SCHEMA_VERSION = 1;
 const KUBERNETES_SERVICE_ACCOUNT_NAME = /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/u;
 const REVISION_GATEWAY_ID_RE = /-r[1-9]\d*$/u;
@@ -92,8 +91,22 @@ function isNullableModelBrokerLimits(value) {
         isNonNegative(spendWeekUsd) &&
         isNonNegative(requestsPerMinute));
 }
-function isOptionalTrialGatewayAllocation(value) {
-    return value === undefined || value === null || isTrialGatewayAllocation(value);
+export function isDisposableBuilderGatewayAllocation(value) {
+    if (!isRecord(value))
+        return false;
+    const fields = new Set(["kind", "schemaVersion", "leaseId", "generation", "claimedByUid"]);
+    return Object.keys(value).every((field) => fields.has(field)) &&
+        value.kind === "disposable-builder" &&
+        value.schemaVersion === 1 &&
+        typeof value.leaseId === "string" &&
+        value.leaseId.length > 0 &&
+        Number.isSafeInteger(value.generation) &&
+        value.generation > 0 &&
+        typeof value.claimedByUid === "string" &&
+        value.claimedByUid.length > 0;
+}
+function isOptionalDisposableBuilderGatewayAllocation(value) {
+    return value === undefined || value === null || isDisposableBuilderGatewayAllocation(value);
 }
 function isOwnedGateway(value) {
     return typeof value.ownerUid === "string" && value.ownerUid.length > 0 &&
@@ -103,7 +116,7 @@ function hasLegalOwnedAllocation(value) {
     const allocation = value.allocation;
     if (allocation === undefined || allocation === null)
         return true;
-    return isTrialGatewayAllocation(allocation) &&
+    return isDisposableBuilderGatewayAllocation(allocation) &&
         allocation.claimedByUid === value.ownerUid;
 }
 function hasLegalOwnershipAndAllocation(value) {
@@ -137,7 +150,7 @@ export function isGatewayMutableConfig(value) {
         isNullableRecord(value.openclawOverrides) &&
         isNullableModelBrokerLimits(value.modelBrokerLimits) &&
         isNullablePreemption(value.preemption) &&
-        isOptionalTrialGatewayAllocation(value.allocation) &&
+        isOptionalDisposableBuilderGatewayAllocation(value.allocation) &&
         hasLegalOwnershipAndAllocation(value));
 }
 export function isGatewayMutableConfigForGateway(value, gatewayId) {

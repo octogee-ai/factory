@@ -19,7 +19,6 @@ import {
   GATEWAY_IMAGE_PROFILES,
   GATEWAY_PROFILES,
   NEW_GATEWAY_ID_REQUIREMENT,
-  OPERATOR_GATEWAY_RESERVATIONS_COLLECTION,
   defaultOperatorGatewayAccess,
   resolveUserGatewayShellState,
   OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
@@ -35,16 +34,11 @@ import {
   type GatewayProfile,
   type GatewayServiceAccountSpec,
   type OperatorGatewayAccessSpec,
-  type OperatorGatewayReservationSpec,
-  type OperatorGatewayReservationRequest,
 } from "@octogee/shared/types/glm";
 import {
   deploymentSettingsForRuntime,
   deploymentTargetsForEnvironment,
 } from "./deployment-environment.js";
-import { resolveBuilderTier } from "@octogee/shared/types/billing";
-import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
-import { builderGatewayIdForSlug } from "@octogee/shared/types/builder-gateway-id";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
@@ -79,7 +73,7 @@ import {
 import { projectReleaseHistory } from "./gateway-release-history.js";
 import {
   resolveContinuousBuilderPlacement,
-  resolveEntitledOwnedGatewayId,
+  resolveLiveActivationTargetGatewayId,
   type OnboardingOrchestratorConfig,
 } from "@octogee/shared/types/orchestrator-placement";
 import {
@@ -95,10 +89,7 @@ import {
 } from "@octogee/shared/types/cost-estimator";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
-import {
-  findPendingMigrationToGateway,
-  requestBuilderActivationLease,
-} from "./builder-activation-lease.js";
+import { requestBuilderActivationLease } from "./builder-activation-lease.js";
 import {
   GatewayRetirementConflictError,
   claimGatewayRetirementAtomic,
@@ -112,8 +103,6 @@ import {
   buildCustomerDeletionSchedule,
 } from "@octogee/shared/types/account-lifecycle";
 import { buildCustomerDeletionPlan } from "./customer-deletion-plan.js";
-
-export { resolveBuilderActivationPlan } from "./builder-activation-lease.js";
 
 export interface FleetLogger {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -175,8 +164,6 @@ export interface FleetRouterDeps {
 
   suspendAuthUser: (uid: string) => Promise<void>;
   revokeConnectorGrantsForUser: (uid: string) => Promise<void>;
-  dedicatedGatewayIdleDefaultMs?: number;
-  dedicatedGatewayIdleSweepMs?: number;
 }
 
 type ActorRequest = Request & {
@@ -298,6 +285,7 @@ export function resolveFleetDeploymentSettings(
 type GlmDoc = Record<string, unknown>;
 interface FirestoreDocLike { id: string; data(): GlmDoc }
 type DurableGatewayRoot = GatewayDoc & GatewayMutableConfig;
+const FLEET_RUNTIME_CONFIG_DOC_PATH = "config/orchestrator";
 
 interface DurableGatewayRuntime {
   root: DurableGatewayRoot;
@@ -305,21 +293,8 @@ interface DurableGatewayRuntime {
   heartbeat: GlmDoc | null;
 }
 
-const FLEET_RUNTIME_CONFIG_DOC_PATH = "config/orchestrator";
-export const DEDICATED_GATEWAY_IDLE_DEFAULT_MS = 30 * 60 * 1000;
-const DEDICATED_GATEWAY_IDLE_SWEEP_MS_DEFAULT = 60_000;
-
-export interface DedicatedGatewayIdleSettings {
-  configuredMs: number | null;
-  defaultMs: number;
-  effectiveMs: number;
-  sweepMs: number;
-  disabled: boolean;
-}
-
 export interface FleetRuntimeSettings {
   gatewayImageRepository: string;
-  dedicatedGatewayIdle: DedicatedGatewayIdleSettings;
 }
 
 type AdminOnboardingDriftState =
@@ -425,60 +400,6 @@ interface AdminDefaultGatewayChange {
     operationId?: string;
   }>;
   dedicatedUntouched: number;
-}
-
-function normalizedNonNegativeInt(value: unknown): number | null {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
-}
-
-function idleDefaultMs(value: number | undefined): number {
-  return normalizedNonNegativeInt(value) ?? DEDICATED_GATEWAY_IDLE_DEFAULT_MS;
-}
-
-export function projectDedicatedGatewayIdleSettings(
-  docData: Record<string, unknown> | undefined,
-  defaultMs: number | undefined,
-  sweepMs: number | undefined,
-): DedicatedGatewayIdleSettings {
-  const resolvedDefaultMs = idleDefaultMs(defaultMs);
-  const configuredMs = normalizedNonNegativeInt(docData?.dedicatedGatewayIdleMs);
-  const effectiveMs = configuredMs ?? resolvedDefaultMs;
-  return {
-    configuredMs,
-    defaultMs: resolvedDefaultMs,
-    effectiveMs,
-    sweepMs: normalizedNonNegativeInt(sweepMs) ?? DEDICATED_GATEWAY_IDLE_SWEEP_MS_DEFAULT,
-    disabled: effectiveMs === 0,
-  };
-}
-
-export function parseDedicatedGatewayIdlePatch(
-  body: Record<string, unknown>,
-):
-  | { ok: number | null }
-  | { error: { status: number; body: { error: string; got?: unknown } } } {
-  if (!Object.prototype.hasOwnProperty.call(body, "dedicatedGatewayIdleMs")) {
-    return {
-      error: {
-        status: 400,
-        body: { error: "dedicatedGatewayIdleMs is required" },
-      },
-    };
-  }
-  const value = body.dedicatedGatewayIdleMs;
-  if (value === null) return { ok: null };
-  if (normalizedNonNegativeInt(value) === null) {
-    return {
-      error: {
-        status: 400,
-        body: {
-          error: "dedicatedGatewayIdleMs must be a non-negative integer number, or null to reset",
-          got: value,
-        },
-      },
-    };
-  }
-  return { ok: value as number };
 }
 
 function normalizeOnboardingRuntimeConfig(
@@ -760,20 +681,19 @@ function driftStateForCustomer(input: {
   return "healthy";
 }
 
-function dedicatedPolicyGatewayId(input: {
+function activationPolicyGatewayId(input: {
   uid: string;
   data: Record<string, unknown>;
   assignedGatewayId: string | null;
-  reservationByUid: ReadonlyMap<string, FirestoreDocLike>;
   glmByGatewayId: ReadonlyMap<string, GlmDoc>;
 }): string | null {
-  const reservation = input.reservationByUid.get(input.uid)?.data() ?? null;
-  const candidate = resolveEntitledOwnedGatewayId({ userData: input.data, reservation });
+  const candidate = resolveLiveActivationTargetGatewayId({
+    userData: input.data,
+  });
   const gateway = candidate ? input.glmByGatewayId.get(candidate) : undefined;
   const placement = resolveContinuousBuilderPlacement({
     uid: input.uid,
     userData: input.data,
-    reservation,
     currentGatewayId: input.assignedGatewayId,
     defaultGatewayId: "",
     ownedGateway: candidate && gateway
@@ -796,18 +716,16 @@ function buildCustomerPlacementProjection(input: {
   mountedBySlug: Map<string, string>;
   operations: ReadonlyArray<AdminOnboardingLatestOperation>;
   glmByGatewayId: Map<string, GlmDoc>;
-  reservationByUid: Map<string, FirestoreDocLike>;
   assignmentByUid: Map<string, AssignmentDoc>;
 }): AdminOnboardingCustomerProjection {
   const slug = resolveCustomerSlug(input.data, (userData) =>
     asStringOrNull(userData.username) ? [asStringOrNull(userData.username)!] : [],
   );
   const assignedGatewayId = readUserGatewayId(input.data);
-  const policyTargetGatewayId = dedicatedPolicyGatewayId({
+  const policyTargetGatewayId = activationPolicyGatewayId({
     uid: input.uid,
     data: input.data,
     assignedGatewayId,
-    reservationByUid: input.reservationByUid,
     glmByGatewayId: input.glmByGatewayId,
   }) ?? input.config.defaultGatewayId;
   const mountedGatewayId = slug ? input.mountedBySlug.get(slug) ?? null : null;
@@ -879,7 +797,6 @@ function buildOnboardingPlacementResponse(opts: {
   gatewayDocs: ReadonlyArray<FirestoreDocLike>;
   userDocs: ReadonlyArray<FirestoreDocLike>;
   operationDocs: ReadonlyArray<FirestoreDocLike>;
-  reservationDocs: ReadonlyArray<FirestoreDocLike>;
   assignmentDocs: ReadonlyArray<FirestoreDocLike>;
 }): AdminOnboardingPlacementResponse {
   const glmByGatewayId = indexAdminGatewayRuntimeDocs({
@@ -888,7 +805,6 @@ function buildOnboardingPlacementResponse(opts: {
   });
   const heartbeatByGatewayId = indexFirestoreDocs(opts.gatewayDocs);
   const assignmentByUid = indexAssignmentDocs(opts.assignmentDocs);
-  const reservationByUid = indexFirestoreDocs(opts.reservationDocs);
   const operations = opts.operationDocs.map((doc) =>
     shapeOnboardingOperation(doc.id, doc.data()),
   );
@@ -907,7 +823,6 @@ function buildOnboardingPlacementResponse(opts: {
         mountedBySlug,
         operations,
         glmByGatewayId,
-        reservationByUid,
         assignmentByUid,
       }),
     )
@@ -1051,7 +966,6 @@ async function readAdminOnboardingPlacementResponse(
     gatewaySnap,
     usersSnap,
     operationsSnap,
-    reservationsSnap,
     assignmentSnap,
   ] =
     await Promise.all([
@@ -1064,7 +978,6 @@ async function readAdminOnboardingPlacementResponse(
         .orderBy("createdAt", "desc")
         .limit(200)
         .get(),
-      deps.db.collection(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION).get(),
       // One collection-group read pulls every gateways/{gw}/assignments/{uid}
       // across the fleet — the durable roster the panel reads (PR7).
       deps.db.collectionGroup(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).get(),
@@ -1075,22 +988,14 @@ async function readAdminOnboardingPlacementResponse(
     gatewayDocs: gatewaySnap.docs,
     userDocs: usersSnap.docs,
     operationDocs: operationsSnap.docs,
-    reservationDocs: reservationsSnap.docs,
     assignmentDocs: assignmentSnap.docs,
   });
 }
 
-async function readFleetRuntimeSettings(deps: FleetRouterDeps): Promise<FleetRuntimeSettings> {
-  const snap = await deps.db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).get();
-  const data = snap.exists ? (snap.data() as Record<string, unknown> | undefined) : undefined;
+async function readFleetRuntimeSettings(): Promise<FleetRuntimeSettings> {
   const deployment = resolveFleetDeploymentSettings();
   return {
     gatewayImageRepository: `${deployment.artifactRegistryRepository}/octogee-gateway`,
-    dedicatedGatewayIdle: projectDedicatedGatewayIdleSettings(
-      data,
-      deps.dedicatedGatewayIdleDefaultMs,
-      deps.dedicatedGatewayIdleSweepMs,
-    ),
   };
 }
 
@@ -1553,49 +1458,6 @@ interface AddGatewayCreate {
   builderSlug?: string;
 }
 
-interface FulfillOperatorReservationBody {
-  gatewayId: string;
-  imageRepository: string;
-  imageTag: string;
-}
-
-interface FulfillableOperatorReservation {
-  uid: string;
-  builderSlug: string;
-  requestedSizingTier: SizingTier;
-  requestedAt: number;
-}
-
-interface ActivatableOperatorReservation {
-  uid: string;
-  builderSlug: string;
-  gatewayId: string;
-}
-
-interface AdminOperatorGatewayReservationSummary {
-  uid: string;
-  ownerExists: boolean;
-  builderSlug: string | null;
-  requestedSizingTier: SizingTier | null;
-  status: string;
-  billingStatus: string;
-  currentGatewayId: string | null;
-  currentGatewayProfile: GatewayProfile | null;
-  gatewayId: string | null;
-  operationId: string | null;
-  requestedAt: string | null;
-  updatedAt: string | null;
-  provisioningStartedAt: string | null;
-  provisioningStartedBy: string | null;
-  activationOperationId: string | null;
-  activationStartedAt: string | null;
-  activationStartedBy: string | null;
-  fulfilledAt: string | null;
-  fulfilledByOperationId: string | null;
-  readyToFulfill: boolean;
-  fulfillBlockedReason: string | null;
-}
-
 interface CustomerLookupDoc {
   id: string;
   data: () =>
@@ -1997,389 +1859,14 @@ function validateAddGatewayBody(
   };
 }
 
-function validateFulfillOperatorReservationBody(
-  body: Partial<FulfillOperatorReservationBody>,
-): { error: RolloutBodyError } | { ok: FulfillOperatorReservationBody } {
-  const required = validateAddGatewayRequiredFields(body);
-  if ("error" in required) return required;
-  const artifactError = validateArtifact(required.ok);
-  if (artifactError) return { error: artifactError };
-  return { ok: required.ok };
-}
-
-function validateFulfillableOperatorReservation(
-  uid: string,
-  data: Record<string, unknown>,
-): { error: RolloutBodyError } | { ok: FulfillableOperatorReservation } {
-  if (data.uid !== uid) {
-    return {
-      error: {
-        status: 409,
-        body: { error: "reservation uid mismatch", uid, got: data.uid },
-      },
-    };
-  }
-  if (data.status !== "requested" || data.billingStatus !== "active") {
-    return {
-      error: {
-        status: 409,
-        body: {
-          error: "operator gateway reservation is not ready for fulfillment",
-          status: data.status,
-          billingStatus: data.billingStatus,
-        },
-      },
-    };
-  }
-  if (!isNonEmptyString(data.builderSlug)) {
-    return {
-      error: {
-        status: 409,
-        body: { error: "operator gateway reservation is missing builderSlug" },
-      },
-    };
-  }
-  if (!isSizingTier(data.requestedSizingTier)) {
-    return {
-      error: {
-        status: 409,
-        body: {
-          error: "operator gateway reservation has invalid requestedSizingTier",
-          requestedSizingTier: data.requestedSizingTier,
-        },
-      },
-    };
-  }
-  if (typeof data.requestedAt !== "number" || !Number.isFinite(data.requestedAt)) {
-    return {
-      error: {
-        status: 409,
-        body: { error: "operator gateway reservation is missing requestedAt" },
-      },
-    };
-  }
-  return {
-    ok: {
-      uid,
-      builderSlug: data.builderSlug,
-      requestedSizingTier: data.requestedSizingTier,
-      requestedAt: data.requestedAt,
-    },
-  };
-}
-
-function validateOperatorReservationFulfillmentState(input: {
-  uid: string;
-  builderTier: ReturnType<typeof resolveBuilderTier>;
-  reservation: FulfillableOperatorReservation;
-  reservationRef: DocumentReference;
-  userRef: DocumentReference;
-  workspaceRef: DocumentReference;
-}): (transaction: Transaction) => Promise<void> {
-  return async (transaction) => {
-    const { uid, builderTier, reservation, reservationRef, userRef, workspaceRef } = input;
-    const [reservationSnap, userSnap, workspaceSnap] = await Promise.all([
-      transaction.get(reservationRef),
-      transaction.get(userRef),
-      transaction.get(workspaceRef),
-    ]);
-    if (!reservationSnap.exists) {
-      throw new InitialGatewayReleaseRequestError(404, {
-        error: "operator gateway reservation not found",
-        uid,
-      });
-    }
-    if (!userSnap.exists) {
-      throw new InitialGatewayReleaseRequestError(404, {
-        error: ERR_OWNER_USER_NOT_FOUND,
-        uid,
-      });
-    }
-    if (resolveBuilderTier(userSnap.data() as Record<string, unknown>) !== builderTier) {
-      throw new InitialGatewayReleaseRequestError(409, {
-        error: "builder subscription changed during fulfillment",
-        uid,
-      });
-    }
-    const currentReservation = validateFulfillableOperatorReservation(
-      uid,
-      reservationSnap.data() as Record<string, unknown>,
-    );
-    if ("error" in currentReservation) {
-      throw new InitialGatewayReleaseRequestError(
-        currentReservation.error.status,
-        currentReservation.error.body,
-      );
-    }
-    if (
-      currentReservation.ok.builderSlug !== reservation.builderSlug ||
-      currentReservation.ok.requestedSizingTier !== reservation.requestedSizingTier ||
-      currentReservation.ok.requestedAt !== reservation.requestedAt
-    ) {
-      throw new InitialGatewayReleaseRequestError(409, {
-        error: "operator gateway reservation changed during fulfillment",
-        uid,
-      });
-    }
-    const workspaceOwnerError = builderWorkspaceOwnerError(
-      uid,
-      reservation.builderSlug,
-      workspaceSnap.exists
-        ? workspaceSnap.data() as Record<string, unknown>
-        : undefined,
-    );
-    if (workspaceOwnerError) {
-      throw new InitialGatewayReleaseRequestError(
-        workspaceOwnerError.status,
-        workspaceOwnerError.body,
-      );
-    }
-  };
-}
-
-async function provisionGatewayAuthSecretForFulfillment(input: {
-  provisionGatewayAuthSecret: FleetRouterDeps["provisionGatewayAuthSecret"];
-  gatewayId: string;
-  gatewayServiceAccount: string | undefined;
-}): Promise<RolloutBodyError | null> {
-  if (!input.gatewayServiceAccount) {
-    return {
-      status: 500,
-      body: {
-        error:
-          "GATEWAY_SERVICE_ACCOUNT not configured — admin cannot provision gateway auth-token secret",
-      },
-    };
-  }
-  try {
-    await input.provisionGatewayAuthSecret({
-      gatewayId: input.gatewayId,
-      gatewayServiceAccount: input.gatewayServiceAccount,
-    });
-    return null;
-  } catch (err) {
-    return {
-      status: 502,
-      body: {
-        error: "failed to provision gateway auth-token secret",
-        gatewayId: input.gatewayId,
-        detail: err instanceof Error ? err.message : String(err),
-      },
-    };
-  }
-}
-
-function validateActivatableOperatorReservation(
-  uid: string,
-  data: Record<string, unknown>,
-): { error: RolloutBodyError } | { ok: ActivatableOperatorReservation } {
-  if (data.uid !== uid) {
-    return {
-      error: {
-        status: 409,
-        body: { error: "reservation uid mismatch", uid, got: data.uid },
-      },
-    };
-  }
-  if (data.status !== "provisioning") {
-    return {
-      error: {
-        status: 409,
-        body: {
-          error: "operator gateway reservation is not ready for activation",
-          status: data.status,
-          billingStatus: data.billingStatus,
-        },
-      },
-    };
-  }
-  if (data.billingStatus !== "active") {
-    return {
-      error: {
-        status: 409,
-        body: {
-          error: "operator gateway reservation billing is not active",
-          billingStatus: data.billingStatus,
-        },
-      },
-    };
-  }
-  if (!isNonEmptyString(data.builderSlug)) {
-    return {
-      error: {
-        status: 409,
-        body: { error: "operator gateway reservation is missing builderSlug" },
-      },
-    };
-  }
-  if (!isNonEmptyString(data.gatewayId)) {
-    return {
-      error: {
-        status: 409,
-        body: { error: "operator gateway reservation is missing gatewayId" },
-      },
-    };
-  }
-  return {
-    ok: {
-      uid,
-      builderSlug: data.builderSlug,
-      gatewayId: data.gatewayId,
-    },
-  };
-}
-
-function normalizeReservationGatewayProfile(v: unknown): GatewayProfile | null {
-  return typeof v === "string" &&
-    (GATEWAY_PROFILES as readonly string[]).includes(v)
-    ? (v as GatewayProfile)
-    : null;
-}
-
-function fulfillBlockedReason(
-  uid: string,
-  data: Record<string, unknown>,
-  ownerExists: boolean,
+function readUserGatewayId(
+  data: Record<string, unknown> | undefined,
 ): string | null {
-  if (data.uid !== uid) return "reservation uid mismatch";
-  if (!ownerExists) return "owner user is missing";
-  if (data.status !== "requested") return `status is ${String(data.status)}`;
-  if (data.billingStatus !== "active") {
-    return `billing is ${String(data.billingStatus)}`;
-  }
-  if (!isNonEmptyString(data.builderSlug)) return "missing builderSlug";
-  if (!isSizingTier(data.requestedSizingTier)) return "invalid requestedSizingTier";
-  if (typeof data.requestedAt !== "number" || !Number.isFinite(data.requestedAt)) {
-    return "missing requestedAt";
-  }
-  return null;
-}
-
-function projectOperatorGatewayReservation(
-  doc: FirestoreDocLike,
-  ownerExists: boolean,
-): AdminOperatorGatewayReservationSummary {
-  const data = doc.data();
-  const uid = doc.id;
-  const blockedReason = fulfillBlockedReason(uid, data, ownerExists);
-  return {
-    uid,
-    ownerExists,
-    builderSlug: isNonEmptyString(data.builderSlug) ? data.builderSlug : null,
-    requestedSizingTier: isSizingTier(data.requestedSizingTier)
-      ? data.requestedSizingTier
-      : null,
-    status: isNonEmptyString(data.status) ? data.status : "unknown",
-    billingStatus: isNonEmptyString(data.billingStatus)
-      ? data.billingStatus
-      : "unknown",
-    currentGatewayId: asStringOrNull(data.currentGatewayId),
-    currentGatewayProfile: normalizeReservationGatewayProfile(
-      data.currentGatewayProfile,
-    ),
-    gatewayId: asStringOrNull(data.gatewayId),
-    operationId: asStringOrNull(data.operationId),
-    requestedAt: toIso(data.requestedAt),
-    updatedAt: toIso(data.updatedAt),
-    provisioningStartedAt: toIso(data.provisioningStartedAt),
-    provisioningStartedBy: asStringOrNull(data.provisioningStartedBy),
-    activationOperationId: asStringOrNull(data.activationOperationId),
-    activationStartedAt: toIso(data.activationStartedAt),
-    activationStartedBy: asStringOrNull(data.activationStartedBy),
-    fulfilledAt: toIso(data.fulfilledAt),
-    fulfilledByOperationId: asStringOrNull(data.fulfilledByOperationId),
-    readyToFulfill: blockedReason === null,
-    fulfillBlockedReason: blockedReason,
-  };
-}
-
-function readUserGatewayId(data: Record<string, unknown> | undefined): string | null {
   const provisioning =
     (data?.provisioning as Record<string, unknown> | undefined) ?? {};
   const openclaw =
     (provisioning.openclaw as Record<string, unknown> | undefined) ?? {};
   return asStringOrNull(openclaw.gatewayId);
-}
-
-function validateOperatorGatewayOwnership(opts: {
-  uid: string;
-  reservation: ActivatableOperatorReservation;
-  gatewayData: Record<string, unknown>;
-}): RolloutBodyError | null {
-  if (resolveGatewayClass({
-    gatewayClass: isGatewayClass(opts.gatewayData.gatewayClass)
-      ? opts.gatewayData.gatewayClass
-      : undefined,
-    profile: isGatewayProfile(opts.gatewayData.profile)
-      ? opts.gatewayData.profile
-      : undefined,
-    imageProfile: isGatewayProfile(opts.gatewayData.imageProfile)
-      ? opts.gatewayData.imageProfile
-      : undefined,
-  }) !== "operator") {
-    return {
-      status: 409,
-      body: {
-        error: "reserved gateway is not operator class",
-        gatewayId: opts.reservation.gatewayId,
-        gatewayClass: opts.gatewayData.gatewayClass,
-        profile: opts.gatewayData.profile,
-      },
-    };
-  }
-  if (opts.gatewayData.ownerUid !== opts.uid) {
-    return {
-      status: 409,
-      body: {
-        error: "reserved gateway owner does not match reservation uid",
-        gatewayId: opts.reservation.gatewayId,
-        ownerUid: opts.gatewayData.ownerUid,
-      },
-    };
-  }
-  if (opts.gatewayData.builderSlug !== opts.reservation.builderSlug) {
-    return {
-      status: 409,
-      body: {
-        error: "reserved gateway builderSlug does not match reservation",
-        gatewayId: opts.reservation.gatewayId,
-        builderSlug: opts.gatewayData.builderSlug,
-      },
-    };
-  }
-  return null;
-}
-
-function operatorReservationRank(
-  reservation: AdminOperatorGatewayReservationSummary,
-): number {
-  if (reservation.readyToFulfill) return 0;
-  if (reservation.status === "billing_pending" || reservation.billingStatus === "pending") {
-    return 1;
-  }
-  if (reservation.status === "provisioning") return 2;
-  if (reservation.status === "requested") return 3;
-  if (reservation.status === "fulfilled") return 4;
-  if (reservation.status === "cancelled") return 5;
-  return 9;
-}
-
-function reservationSortMs(
-  reservation: AdminOperatorGatewayReservationSummary,
-): number {
-  const parsed = Date.parse(
-    reservation.updatedAt ?? reservation.requestedAt ?? "",
-  );
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function compareOperatorReservations(
-  a: AdminOperatorGatewayReservationSummary,
-  b: AdminOperatorGatewayReservationSummary,
-): number {
-  const rankDelta = operatorReservationRank(a) - operatorReservationRank(b);
-  if (rankDelta !== 0) return rankDelta;
-  return reservationSortMs(b) - reservationSortMs(a);
 }
 
 function resolveCustomerSlug(
@@ -3593,7 +3080,6 @@ async function resolveDedicatedGatewayOwner(opts: {
       ok: {
         ownerUid?: string;
         builderSlug?: string;
-        operatorReservation?: OperatorGatewayReservationSpec;
       };
     }
 > {
@@ -3645,55 +3131,6 @@ async function resolveDedicatedGatewayOwner(opts: {
     ok: {
       ownerUid: body.ownerUid,
       builderSlug,
-      ...(gatewayClass === "operator"
-        ? {
-            operatorReservation: {
-              status: "reserved" as const,
-              reservedAt: opts.now,
-              reservedBy: opts.createdBy,
-              billingStatus: "manual" as const,
-            },
-          }
-        : {}),
-    },
-  };
-}
-
-function operatorGatewayInitialReleaseFromReservation(opts: {
-  body: FulfillOperatorReservationBody;
-  reservation: FulfillableOperatorReservation;
-  shellsEnabled: boolean;
-  createdBy: string;
-  now: number;
-}): InitialGatewayReleaseArgs {
-  return {
-    gatewayId: opts.body.gatewayId,
-    createdBy: opts.createdBy,
-    now: opts.now,
-    desiredStatus: "running",
-    artifact: {
-      imageRepository: opts.body.imageRepository,
-      imageTag: opts.body.imageTag,
-    },
-    config: {
-      configSchemaVersion: GATEWAY_CONFIG_SCHEMA_VERSION,
-      profile: "operator",
-      gatewayClass: "operator",
-      imageProfile: "operator",
-      sizingTier: opts.reservation.requestedSizingTier,
-      gcpProject: null,
-      gatewayContainerSecurityContext: null,
-      serviceAccountName: operatorGatewayServiceAccountName(opts.body.gatewayId),
-      serviceAccount: OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
-      operatorAccess: defaultOperatorGatewayAccess(
-        opts.reservation.uid,
-        opts.shellsEnabled,
-      ),
-      ownerUid: opts.reservation.uid,
-      builderSlug: opts.reservation.builderSlug,
-      openclawOverrides: null,
-      modelBrokerLimits: null,
-      preemption: null,
     },
   };
 }
@@ -3736,7 +3173,6 @@ interface BuilderCandidateDoc {
 export function buildBuilderCandidates(opts: {
   users: BuilderCandidateDoc[];
   gatewayRoots: BuilderCandidateDoc[];
-  reservations: BuilderCandidateDoc[];
   workspaceSlugsForUser: FleetRouterDeps["workspaceSlugsForUser"];
 }): BuilderCandidate[] {
   const assigned = new Set<string>();
@@ -3748,27 +3184,14 @@ export function buildBuilderCandidates(opts: {
     if (ownerUid) assigned.add(ownerUid);
   }
 
-  for (const doc of opts.reservations) {
-    const status = asStringOrNull(doc.data().status);
-    if (status !== "released") assigned.add(doc.id);
-  }
-
   const candidates = opts.users.map((doc) => {
     const data = doc.data();
-    const ownReservation =
-      data.operatorGatewayReservation &&
-      typeof data.operatorGatewayReservation === "object"
-        ? (data.operatorGatewayReservation as { status?: unknown })
-        : null;
-    const ownStatus = asStringOrNull(ownReservation?.status);
-    const isAssigned =
-      assigned.has(doc.id) || (ownReservation !== null && ownStatus !== "released");
     return {
       uid: doc.id,
       username: asStringOrNull(data.username) ?? "",
       email: asStringOrNull(data.email) ?? "",
       slug: resolveCustomerSlug(data, opts.workspaceSlugsForUser),
-      assigned: isAssigned,
+      assigned: assigned.has(doc.id),
     };
   });
 
@@ -4043,7 +3466,7 @@ router.get(
         const [gwSnap, glmSnap, settings] = await Promise.all([
           db.collection("gateways").get(),
           db.collection(GLM_GATEWAYS_COLLECTION).get(),
-          readFleetRuntimeSettings(deps),
+          readFleetRuntimeSettings(),
         ]);
         const glmByGatewayId = indexAdminGatewayRuntimeDocs({
           gatewayDocs: gwSnap.docs,
@@ -4076,31 +3499,6 @@ router.get(
           namespace: resolveFleetNamespace(),
           generatedAt: new Date().toISOString(),
         });
-      } catch (e) {
-        next(e);
-      }
-    },
-  );
-
-router.patch(
-    "/fleet-settings",
-    async (req: Request, res: Response, next: NextFunction) => {
-      try {
-        const parsed = parseDedicatedGatewayIdlePatch(req.body as Record<string, unknown>);
-        if ("error" in parsed) {
-          res.status(parsed.error.status).json(parsed.error.body);
-          return;
-        }
-        const actor = req as ActorRequest;
-        await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set(
-          {
-            dedicatedGatewayIdleMs: parsed.ok,
-            dedicatedGatewayIdleUpdatedAt: Date.now(),
-            dedicatedGatewayIdleUpdatedBy: actor.uid ?? "unknown",
-          },
-          { merge: true },
-        );
-        res.json({ settings: await readFleetRuntimeSettings(deps) });
       } catch (e) {
         next(e);
       }
@@ -4429,283 +3827,16 @@ router.get(
     "/builder-candidates",
     async (_req: Request, res: Response, next: NextFunction) => {
       try {
-        const [usersSnap, gatewaySnap, reservationsSnap] = await Promise.all([
+        const [usersSnap, gatewaySnap] = await Promise.all([
           db.collection("users").get(),
           db.collection(GATEWAYS_COLLECTION).get(),
-          db.collection(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION).get(),
         ]);
         const candidates = buildBuilderCandidates({
           users: usersSnap.docs,
           gatewayRoots: gatewaySnap.docs,
-          reservations: reservationsSnap.docs,
           workspaceSlugsForUser: deps.workspaceSlugsForUser,
         });
         res.json({ candidates, generatedAt: new Date().toISOString() });
-      } catch (e) {
-        next(e);
-      }
-    },
-  );
-
-router.get(
-    "/operator-gateway-reservations",
-    async (_req: Request, res: Response, next: NextFunction) => {
-      try {
-        const snap = await db
-          .collection(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION)
-          .get();
-        const reservations = await Promise.all(snap.docs.map(async (doc) => {
-          const userSnap = await db.collection("users").doc(doc.id).get();
-          return projectOperatorGatewayReservation(doc, userSnap.exists);
-        }));
-        reservations.sort(compareOperatorReservations);
-        res.json({
-          reservations,
-          generatedAt: new Date().toISOString(),
-        });
-      } catch (e) {
-        next(e);
-      }
-    },
-  );
-
-router.delete(
-    "/operator-gateway-reservations/:uid",
-    async (req: Request, res: Response, next: NextFunction) => {
-      try {
-        const uid = req.params.uid as string;
-        const reservationRef = db
-          .collection(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION)
-          .doc(uid);
-        const userRef = db.collection("users").doc(uid);
-        const outcome = await db.runTransaction(async (transaction) => {
-          const [reservationSnap, userSnap] = await Promise.all([
-            transaction.get(reservationRef),
-            transaction.get(userRef),
-          ]);
-          if (!reservationSnap.exists) return "missing";
-          if (userSnap.exists) return "owner-exists";
-          transaction.delete(reservationRef);
-          return "deleted";
-        });
-        if (outcome === "missing") {
-          res.status(404).json({
-            error: "operator gateway reservation not found",
-            uid,
-          });
-          return;
-        }
-        if (outcome === "owner-exists") {
-          res.status(409).json({
-            error: "owner user still exists; reservation cleanup refused",
-            uid,
-          });
-          return;
-        }
-        const actor = req as ActorRequest;
-        deps.logger.info(
-          `[operator-reservation] removed orphan uid=${uid} by=${actor.uid ?? "unknown"}`,
-        );
-        res.json({ status: "deleted", uid });
-      } catch (e) {
-        next(e);
-      }
-    },
-  );
-
-router.post(
-    "/operator-gateway-reservations/:uid/activate",
-    // eslint-disable-next-line complexity -- activation is a single transactional admin boundary with several explicit guard responses; splitting would hide the order of safety checks.
-    async (req: Request, res: Response, next: NextFunction) => {
-      try {
-        const uid = req.params.uid as string;
-        const actor = req as ActorRequest;
-        const createdBy = actor.uid ?? "unknown";
-        const now = Date.now();
-
-        const reservationRef = db
-          .collection(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION)
-          .doc(uid);
-        const userRef = db.collection("users").doc(uid);
-        const [reservationSnap, userSnap] = await Promise.all([
-          reservationRef.get(),
-          userRef.get(),
-        ]);
-        if (!reservationSnap.exists) {
-          res.status(404).json({
-            error: "operator gateway reservation not found",
-            uid,
-          });
-          return;
-        }
-        if (!userSnap.exists) {
-          res.status(404).json({ error: ERR_OWNER_USER_NOT_FOUND, uid });
-          return;
-        }
-
-        const reservationData = reservationSnap.data() as Record<string, unknown>;
-        const userData = userSnap.data() as Record<string, unknown> | undefined;
-        const currentGatewayId = readUserGatewayId(userData);
-        if (
-          reservationData.status === "fulfilled" &&
-          currentGatewayId === reservationData.gatewayId
-        ) {
-          res.status(200).json({
-            uid,
-            gatewayId: reservationData.gatewayId,
-            status: "fulfilled",
-            alreadyActive: true,
-          });
-          return;
-        }
-
-        const reservation = validateActivatableOperatorReservation(
-          uid,
-          reservationData,
-        );
-        if ("error" in reservation) {
-          res.status(reservation.error.status).json(reservation.error.body);
-          return;
-        }
-
-        const [target, pendingOpsSnap] = await Promise.all([
-          readDurableGatewayRuntime(db, reservation.ok.gatewayId),
-          db
-            .collection(GLM_OPERATIONS_COLLECTION)
-            .where("status", "in", ["pending", "running"])
-            .get(),
-        ]);
-        if (!target) {
-          res.status(404).json({
-            error: "reserved gateway desired state not found",
-            gatewayId: reservation.ok.gatewayId,
-          });
-          return;
-        }
-        const ownershipError = validateOperatorGatewayOwnership({
-          uid,
-          reservation: reservation.ok,
-          gatewayData: target.root as unknown as Record<string, unknown>,
-        });
-        if (ownershipError) {
-          res.status(ownershipError.status).json(ownershipError.body);
-          return;
-        }
-        if (target.root.desiredStatus === "retired") {
-          res.status(409).json({
-            error: "reserved gateway is retired",
-            gatewayId: reservation.ok.gatewayId,
-          });
-          return;
-        }
-        const reservedHb = target.heartbeat;
-        if (!reservedHb) {
-          res.status(409).json({
-            error: "reserved gateway has not reported ready yet",
-            gatewayId: reservation.ok.gatewayId,
-            status: "missing",
-          });
-          return;
-        }
-        const targetStatus = asStringOrNull(reservedHb.status);
-        if (targetStatus !== "ready") {
-          res.status(409).json({
-            error: "reserved gateway not ready",
-            gatewayId: reservation.ok.gatewayId,
-            status: targetStatus ?? "unknown",
-          });
-          return;
-        }
-
-        if (currentGatewayId === reservation.ok.gatewayId) {
-          const fulfilledUpdate = {
-            status: "fulfilled" as const,
-            fulfilledAt: now,
-            fulfilledByOperationId:
-              asStringOrNull(reservationData.activationOperationId) ??
-              asStringOrNull(reservationData.operationId) ??
-              "already-active",
-            updatedAt: now,
-          };
-          const batch = db.batch();
-          batch.update(reservationRef, fulfilledUpdate);
-          batch.update(db.collection("users").doc(uid), {
-            "operatorGatewayReservation.status": "fulfilled",
-            "operatorGatewayReservation.fulfilledAt": fulfilledUpdate.fulfilledAt,
-            "operatorGatewayReservation.fulfilledByOperationId":
-              fulfilledUpdate.fulfilledByOperationId,
-            "operatorGatewayReservation.updatedAt": now,
-          });
-          await batch.commit();
-          res.status(200).json({
-            uid,
-            gatewayId: reservation.ok.gatewayId,
-            status: "fulfilled",
-            alreadyActive: true,
-          });
-          return;
-        }
-
-        const existingActivation = findPendingMigrationToGateway(
-          pendingOpsSnap.docs,
-          uid,
-          reservation.ok.gatewayId,
-        );
-        if (existingActivation) {
-          res.status(409).json({
-            error: "operator gateway activation is already running",
-            uid,
-            gatewayId: reservation.ok.gatewayId,
-            operationId: existingActivation.id,
-            kind: existingActivation.kind,
-          });
-          return;
-        }
-
-        const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
-        const operationId = opRef.id;
-        const operationInput = {
-          uid,
-          ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
-          toGatewayId: reservation.ok.gatewayId,
-          source: "operator-gateway-reservation",
-          operatorReservationUid: uid,
-          builderSlug: reservation.ok.builderSlug,
-        };
-        const reservationUpdate: Partial<OperatorGatewayReservationRequest> = {
-          activationOperationId: operationId,
-          activationStartedAt: now,
-          activationStartedBy: createdBy,
-          updatedAt: now,
-        };
-        const batch = db.batch();
-        batch.set(opRef, {
-          kind: OP_KIND_MIGRATE_CUSTOMER,
-          status: "pending",
-          createdBy,
-          createdAt: now,
-          startedAt: null,
-          completedAt: null,
-          input: operationInput,
-          steps: [],
-          gatewayId: reservation.ok.gatewayId,
-          inputUid: uid,
-        });
-        batch.update(reservationRef, reservationUpdate);
-        batch.update(db.collection("users").doc(uid), {
-          "operatorGatewayReservation.activationOperationId": operationId,
-          "operatorGatewayReservation.activationStartedAt": now,
-          "operatorGatewayReservation.activationStartedBy": createdBy,
-          "operatorGatewayReservation.updatedAt": now,
-        });
-        await batch.commit();
-
-        res.status(202).json({
-          uid,
-          gatewayId: reservation.ok.gatewayId,
-          operationId,
-          status: "activating",
-        });
       } catch (e) {
         next(e);
       }
@@ -4822,214 +3953,38 @@ router.post(
         const actor = req as ActorRequest;
         const createdBy = actor.uid ?? "unknown";
         const now = Date.now();
-        const body = req.body as Partial<{
-          gatewayClass: string;
-          reason: string;
-        }>;
-        let requestedGatewayClass: "builder" | "operator" | null = "builder";
-        if (body.gatewayClass === "operator") {
-          requestedGatewayClass = "operator";
-        } else if (
-          body.gatewayClass !== undefined &&
-          body.gatewayClass !== "builder"
-        ) {
-          requestedGatewayClass = null;
-        }
-        if (requestedGatewayClass === null) {
-          res.status(400).json({
-            error: "gatewayClass must be builder or operator",
-            got: body.gatewayClass,
-          });
+        const userSnap = await db.collection("users").doc(uid).get();
+        if (!userSnap.exists) {
+          res.status(404).json({ error: "user not found", uid });
           return;
         }
-
+        const reportingGatewayId = readUserGatewayId(
+          userSnap.data() as Record<string, unknown>,
+        );
+        const assignmentSnap = reportingGatewayId
+          ? await db.doc(
+              `gateways/${reportingGatewayId}/assignments/${uid}`,
+            ).get()
+          : null;
+        const assignmentData = assignmentSnap?.exists
+          ? assignmentSnap.data() as Record<string, unknown>
+          : undefined;
+        const assignmentEpoch =
+          typeof assignmentData?.epoch === "number"
+            ? assignmentData.epoch
+            : undefined;
         const result = await requestBuilderActivationLease({
           db,
           uid,
-          requestedGatewayClass,
+          reportingGatewayId: reportingGatewayId ?? undefined,
+          assignmentEpoch,
+          eventKey: `manual:${createdBy}:${now}`,
+          cause: "manual",
+          observedAt: now,
           createdBy,
-          reason: typeof body.reason === "string" && body.reason.length > 0
-            ? body.reason
-            : "builder-activity",
-          workspaceSlugsForUser: deps.workspaceSlugsForUser,
           now,
         });
         res.status(result.statusCode).json(result.body);
-      } catch (e) {
-        next(e);
-      }
-    },
-  );
-
-router.post(
-    "/operator-gateway-reservations/:uid/fulfill",
-    async (req: Request, res: Response, next: NextFunction) => {
-      try {
-        const uid = req.params.uid as string;
-        const actor = req as ActorRequest;
-        const createdBy = actor.uid ?? "unknown";
-        const now = Date.now();
-
-        const parsed = validateFulfillOperatorReservationBody(
-          req.body as Partial<FulfillOperatorReservationBody>,
-        );
-        if ("error" in parsed) {
-          res.status(parsed.error.status).json(parsed.error.body);
-          return;
-        }
-        const body = parsed.ok;
-
-        const reservationRef = db
-          .collection(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION)
-          .doc(uid);
-        const userRef = db.collection("users").doc(uid);
-        const [reservationSnap, userSnap] = await Promise.all([
-          reservationRef.get(),
-          userRef.get(),
-        ]);
-        if (!reservationSnap.exists) {
-          res.status(404).json({
-            error: "operator gateway reservation not found",
-            uid,
-          });
-          return;
-        }
-        if (!userSnap.exists) {
-          res.status(404).json({ error: ERR_OWNER_USER_NOT_FOUND, uid });
-          return;
-        }
-
-        const reservation = validateFulfillableOperatorReservation(
-          uid,
-          reservationSnap.data() as Record<string, unknown>,
-        );
-        if ("error" in reservation) {
-          res.status(reservation.error.status).json(reservation.error.body);
-          return;
-        }
-        const expectedGatewayId = builderGatewayIdForSlug(reservation.ok.builderSlug);
-        if (body.gatewayId !== expectedGatewayId) {
-          res.status(400).json({
-            error: "gatewayId must match the Builder slug",
-            gatewayId: body.gatewayId,
-            expectedGatewayId,
-          });
-          return;
-        }
-
-        const workspaceRef = db.collection("workspaces").doc(reservation.ok.builderSlug);
-        const workspaceOwnerError = await validateBuilderWorkspaceOwner(
-          db,
-          uid,
-          reservation.ok.builderSlug,
-        );
-        if (workspaceOwnerError) {
-          res.status(workspaceOwnerError.status).json(workspaceOwnerError.body);
-          return;
-        }
-
-        const uniqueness = await ensureGatewayCreateIsUnique(db, body);
-        if ("error" in uniqueness) {
-          res.status(uniqueness.error.status).json(uniqueness.error.body);
-          return;
-        }
-
-        const secretProvisionError = await provisionGatewayAuthSecretForFulfillment({
-          provisionGatewayAuthSecret: deps.provisionGatewayAuthSecret,
-          gatewayId: body.gatewayId,
-          gatewayServiceAccount: process.env.GATEWAY_SERVICE_ACCOUNT,
-        });
-        if (secretProvisionError) {
-          res.status(secretProvisionError.status).json(secretProvisionError.body);
-          return;
-        }
-
-        const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
-        const operationId = opRef.id;
-        const operationInput = {
-          uid,
-          gatewayId: body.gatewayId,
-          imageTag: body.imageTag,
-          profile: "operator",
-          gatewayClass: "operator",
-          imageProfile: "operator",
-          sizingTier: reservation.ok.requestedSizingTier,
-          builderSlug: reservation.ok.builderSlug,
-          source: "operator-gateway-reservation",
-        };
-        const builderTier = resolveBuilderTier(
-          userSnap.data() as Record<string, unknown>,
-        );
-        const shellsEnabled = builderTier === null
-          ? true
-          : BUILDER_TIERS[builderTier].builderShell;
-        const reservationUpdate: Partial<OperatorGatewayReservationRequest> = {
-          status: "provisioning",
-          gatewayId: body.gatewayId,
-          operationId,
-          provisioningStartedAt: now,
-          provisioningStartedBy: createdBy,
-          updatedAt: now,
-        };
-        const initial = operatorGatewayInitialReleaseFromReservation({
-          body,
-          reservation: reservation.ok,
-          shellsEnabled,
-          createdBy,
-          now,
-        });
-        try {
-          await writeInitialGatewayRelease(db, {
-            ...initial,
-            validateAdditional: validateOperatorReservationFulfillmentState({
-              uid,
-              builderTier,
-              reservation: reservation.ok,
-              reservationRef,
-              userRef,
-              workspaceRef,
-            }),
-            writeAdditional: (transaction) => {
-              transaction.set(
-                opRef,
-                addGatewayOperationRecord({
-                  createdBy,
-                  now,
-                  input: operationInput,
-                }),
-              );
-              transaction.update(reservationRef, reservationUpdate);
-              transaction.update(userRef, {
-                "operatorGatewayReservation.status": "provisioning",
-                "operatorGatewayReservation.gatewayId": body.gatewayId,
-                "operatorGatewayReservation.operationId": operationId,
-                "operatorGatewayReservation.provisioningStartedAt": now,
-                "operatorGatewayReservation.provisioningStartedBy": createdBy,
-                "operatorGatewayReservation.updatedAt": now,
-              });
-            },
-          });
-        } catch (e) {
-          if (e instanceof InitialGatewayReleaseConflictError) {
-            res.status(409).json({
-              error: "gateway already exists",
-              gatewayId: e.gatewayId,
-            });
-            return;
-          }
-          if (e instanceof InitialGatewayReleaseRequestError) {
-            res.status(e.status).json(e.body);
-            return;
-          }
-          throw e;
-        }
-
-        res.status(202).json({
-          uid,
-          gatewayId: body.gatewayId,
-          operationId,
-          status: "provisioning",
-        });
       } catch (e) {
         next(e);
       }

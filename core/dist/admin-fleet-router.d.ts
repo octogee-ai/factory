@@ -3,7 +3,6 @@ import { type Firestore } from "firebase-admin/firestore";
 import { type GatewayClass, type GatewayImageProfile, type GatewayProfile } from "@octogee/shared/types/glm";
 import { type SizingTier } from "@octogee/shared/types/sizing";
 import { type GatewayPricingMode } from "@octogee/shared/types/cost-estimator";
-export { resolveBuilderActivationPlan } from "./builder-activation-lease.js";
 export interface FleetLogger {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;
@@ -45,8 +44,6 @@ export interface FleetRouterDeps {
     readGatewayPodDiagnosticsBatch?: (gatewayIds: readonly string[]) => Promise<Record<string, GatewayPodDiagnostics>>;
     suspendAuthUser: (uid: string) => Promise<void>;
     revokeConnectorGrantsForUser: (uid: string) => Promise<void>;
-    dedicatedGatewayIdleDefaultMs?: number;
-    dedicatedGatewayIdleSweepMs?: number;
 }
 declare function resolveSizingForResponse(glmDoc: Record<string, unknown> | undefined, reservation: ReturnType<typeof projectGatewayReservation>): {
     tier: SizingTier;
@@ -81,31 +78,10 @@ interface FirestoreDocLike {
     id: string;
     data(): GlmDoc;
 }
-export declare const DEDICATED_GATEWAY_IDLE_DEFAULT_MS: number;
-export interface DedicatedGatewayIdleSettings {
-    configuredMs: number | null;
-    defaultMs: number;
-    effectiveMs: number;
-    sweepMs: number;
-    disabled: boolean;
-}
 export interface FleetRuntimeSettings {
     gatewayImageRepository: string;
-    dedicatedGatewayIdle: DedicatedGatewayIdleSettings;
 }
 type AdminGatewayDesiredStatus = "running" | "paused" | "draining" | "retired";
-export declare function projectDedicatedGatewayIdleSettings(docData: Record<string, unknown> | undefined, defaultMs: number | undefined, sweepMs: number | undefined): DedicatedGatewayIdleSettings;
-export declare function parseDedicatedGatewayIdlePatch(body: Record<string, unknown>): {
-    ok: number | null;
-} | {
-    error: {
-        status: number;
-        body: {
-            error: string;
-            got?: unknown;
-        };
-    };
-};
 declare function projectLastError(raw: unknown): {
     slug?: string;
     message?: string;
@@ -190,7 +166,7 @@ interface BuilderCandidateDoc {
 export declare function buildBuilderCandidates(opts: {
     users: BuilderCandidateDoc[];
     gatewayRoots: BuilderCandidateDoc[];
-    reservations: BuilderCandidateDoc[];
     workspaceSlugsForUser: FleetRouterDeps["workspaceSlugsForUser"];
 }): BuilderCandidate[];
 export declare function addAdminFleetRoutes(router: Router, deps: FleetRouterDeps): Router;
+export {};
