@@ -1,3 +1,4 @@
+import type { DisposableBuilderGatewayAllocation } from "./gateway-mutable-config.js";
 export interface OnboardingOrchestratorConfig {
     defaultGatewayId: string;
 }
@@ -8,6 +9,7 @@ export interface ContinuousPlacementOwnedGateway {
     desiredStatus: string;
     ready: boolean;
     disposable?: boolean;
+    allocation?: DisposableBuilderGatewayAllocation | null;
 }
 export interface ContinuousBuilderPlacementInput {
     uid: string;

@@ -1688,8 +1688,10 @@ function startControllerBackgroundTasks({
   const stopPlacementPolicyReconciler = startPlacementPolicyReconciler(
     createFirestorePlacementPolicyReconcilerDeps({
       db,
+      namespace: NAMESPACE,
       now: () => Date.now(),
       log,
+      ensureAuthSecret: deps.ensureGatewayAuthSecret,
     }),
     PLACEMENT_POLICY_RECONCILE_MS,
   );

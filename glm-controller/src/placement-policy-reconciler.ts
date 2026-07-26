@@ -23,6 +23,12 @@ import {
   resolveOnboardingPlacementEligibility,
   type ContinuousPlacementOwnedGateway,
 } from "@octogee/shared/types/orchestrator-placement";
+import type { SizingTier } from "@octogee/shared/types/sizing";
+import type { BuilderTierName } from "@octogee/shared/types/billing-tiers";
+import {
+  advanceActivationLeaseFirestore,
+  allocateDisposableGatewayFirestore,
+} from "./disposable-gateway-lifecycle.js";
 
 export const PLACEMENT_POLICY_RECONCILE_MS_DEFAULT = 15_000;
 const PLACEMENT_POLICY_ACTOR = "glm-controller-placement-policy";
@@ -50,7 +56,28 @@ export interface EnqueuePlacementMigrationInput {
   builderSlug: string;
   fromGatewayId: string;
   toGatewayId: string;
-  source: "continuous-placement-policy";
+  source: "continuous-placement-policy" | "builder-activation-lease";
+  operationId?: string;
+}
+
+export interface AllocateDisposableGatewayInput {
+  uid: string;
+  builderSlug: string;
+  leaseId: string;
+  generation: number;
+  sourceGatewayId: string;
+  sourceAssignmentEpoch: number;
+  entitlementTier: BuilderTierName;
+  sizingTier: SizingTier;
+}
+
+export interface AdvanceActivationLeaseInput {
+  uid: string;
+  leaseId: string;
+  generation: number;
+  fromStatus: "provisioning" | "activating";
+  toStatus: "activating" | "active";
+  operationId?: string;
 }
 
 export interface RetireOwnedGatewayInput {
@@ -71,6 +98,8 @@ export interface PlacementPolicyReconcilerDeps {
   log(message: string): void;
   readSnapshot(): Promise<PlacementPolicySnapshot>;
   assignInitialPlacement(input: AssignInitialPlacementInput): Promise<void>;
+  allocateDisposableGateway(input: AllocateDisposableGatewayInput): Promise<string>;
+  advanceActivationLease(input: AdvanceActivationLeaseInput): Promise<void>;
   enqueueMigration(input: EnqueuePlacementMigrationInput): Promise<string>;
   retireOwnedGateway(input: RetireOwnedGatewayInput): Promise<boolean>;
 }
@@ -94,6 +123,41 @@ function currentGatewayId(data: Record<string, unknown>): string | null {
   return openclaw && typeof openclaw === "object" && !Array.isArray(openclaw)
     ? nonEmptyString((openclaw as Record<string, unknown>).gatewayId)
     : null;
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function positiveInteger(value: unknown): number | null {
+  return Number.isSafeInteger(value) && (value as number) > 0 ? value as number : null;
+}
+
+interface BuilderActivationLease {
+  raw: Record<string, unknown>;
+  leaseId: string;
+  generation: number;
+  status: string;
+  targetGatewayId: string | null;
+}
+
+function builderActivationLease(data: Record<string, unknown>): BuilderActivationLease | null {
+  const provisioning = record(data.provisioning);
+  const openclaw = record(provisioning?.openclaw);
+  const raw = record(openclaw?.activationLease);
+  const leaseId = nonEmptyString(raw?.leaseId);
+  const generation = positiveInteger(raw?.generation);
+  const status = nonEmptyString(raw?.status);
+  if (!raw || !leaseId || !generation || !status) return null;
+  return {
+    raw,
+    leaseId,
+    generation,
+    status,
+    targetGatewayId: nonEmptyString(raw.targetGatewayId),
+  };
 }
 
 interface PlacementPolicyReconcileContext {
@@ -155,12 +219,162 @@ function adoptActiveMigration(
   return true;
 }
 
+function disposableTargetMatchesLease(
+  gateway: ContinuousPlacementOwnedGateway,
+  user: PlacementPolicyUser,
+  lease: BuilderActivationLease,
+): boolean {
+  const allocation = gateway.allocation;
+  return gateway.gatewayClass === "operator" &&
+    gateway.ownerUid === user.uid &&
+    gateway.desiredStatus === "running" &&
+    gateway.disposable === true &&
+    allocation?.kind === "disposable-builder" &&
+    allocation.claimedByUid === user.uid &&
+    allocation.leaseId === lease.leaseId &&
+    allocation.generation === lease.generation;
+}
+
+async function reconcileRequestedActivation(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  builderSlug: string,
+  lease: BuilderActivationLease,
+): Promise<void> {
+  const sourceGatewayId = nonEmptyString(lease.raw.sourceGatewayId);
+  const sourceAssignmentEpoch = Number.isSafeInteger(lease.raw.sourceAssignmentEpoch)
+    ? lease.raw.sourceAssignmentEpoch as number
+    : null;
+  const entitlementTier = nonEmptyString(lease.raw.entitlementTier) as BuilderTierName | null;
+  const sizingTier = nonEmptyString(lease.raw.sizingTier) as SizingTier | null;
+  if (
+    !sourceGatewayId ||
+    sourceAssignmentEpoch === null ||
+    !entitlementTier ||
+    !sizingTier
+  ) {
+    context.result.blocked += 1;
+    return;
+  }
+  await context.deps.allocateDisposableGateway({
+    uid: user.uid,
+    builderSlug,
+    leaseId: lease.leaseId,
+    generation: lease.generation,
+    sourceGatewayId,
+    sourceAssignmentEpoch,
+    entitlementTier,
+    sizingTier,
+  });
+}
+
+async function reconcileProvisioningActivation(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  builderSlug: string,
+  current: string | null,
+  lease: BuilderActivationLease,
+): Promise<void> {
+  const targetGatewayId = lease.targetGatewayId;
+  const target = targetGatewayId ? context.gateways.get(targetGatewayId) : null;
+  if (!target || !disposableTargetMatchesLease(target, user, lease)) {
+    context.result.blocked += 1;
+    return;
+  }
+  if (current === targetGatewayId) {
+    await context.deps.advanceActivationLease({
+      uid: user.uid,
+      leaseId: lease.leaseId,
+      generation: lease.generation,
+      fromStatus: "provisioning",
+      toStatus: "active",
+    });
+    return;
+  }
+  if (!target.ready) return;
+  const active = context.migrations.get(user.uid);
+  if (active) {
+    if (active.toGatewayId !== targetGatewayId) {
+      context.result.blocked += 1;
+      return;
+    }
+    context.result.adopted += 1;
+    await context.deps.advanceActivationLease({
+      uid: user.uid,
+      leaseId: lease.leaseId,
+      generation: lease.generation,
+      fromStatus: "provisioning",
+      toStatus: "activating",
+      operationId: active.id,
+    });
+    return;
+  }
+  const operationId = await context.deps.enqueueMigration({
+    uid: user.uid,
+    builderSlug,
+    fromGatewayId: current ?? context.state.defaultGatewayId,
+    toGatewayId: targetGatewayId!,
+    source: "builder-activation-lease",
+    operationId: `builder-activate-${targetGatewayId}`,
+  });
+  context.result.enqueued += 1;
+  await context.deps.advanceActivationLease({
+    uid: user.uid,
+    leaseId: lease.leaseId,
+    generation: lease.generation,
+    fromStatus: "provisioning",
+    toStatus: "activating",
+    operationId,
+  });
+}
+
+async function reconcileActivatingLease(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  current: string | null,
+  lease: BuilderActivationLease,
+): Promise<void> {
+  if (current !== lease.targetGatewayId) return;
+  await context.deps.advanceActivationLease({
+    uid: user.uid,
+    leaseId: lease.leaseId,
+    generation: lease.generation,
+    fromStatus: "activating",
+    toStatus: "active",
+  });
+}
+
+async function reconcileActivationLease(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  builderSlug: string,
+  current: string | null,
+): Promise<boolean> {
+  const lease = builderActivationLease(user.data);
+  if (!lease) return false;
+  if (lease.status === "requested") {
+    await reconcileRequestedActivation(context, user, builderSlug, lease);
+    return true;
+  }
+  if (lease.status === "provisioning") {
+    await reconcileProvisioningActivation(context, user, builderSlug, current, lease);
+    return true;
+  }
+  if (lease.status === "activating") {
+    await reconcileActivatingLease(context, user, current, lease);
+    return true;
+  }
+  if (lease.status === "active" && lease.targetGatewayId === current) return true;
+  return false;
+}
+
 async function reconcileEligibleBuilder(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
   builderSlug: string,
 ): Promise<void> {
   const current = currentGatewayId(user.data);
+  if (await reconcileActivationLease(context, user, builderSlug, current)) return;
   const entitledOwned = resolveLiveActivationTargetGatewayId({
     userData: user.data,
     now: new Date(context.deps.now()),
@@ -241,8 +455,10 @@ function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration |
 
 interface FirestorePlacementPolicyInput {
   db: Firestore;
+  namespace: string;
   now(): number;
   log(message: string): void;
+  ensureAuthSecret(input: { namespace: string; gatewayId: string }): Promise<unknown>;
 }
 
 async function readPlacementPolicySnapshot(db: Firestore): Promise<PlacementPolicySnapshot> {
@@ -267,6 +483,7 @@ async function readPlacementPolicySnapshot(db: Firestore): Promise<PlacementPoli
       ownerUid: root.ownerUid,
       desiredStatus: root.desiredStatus,
       disposable: root.allocation?.kind === "disposable-builder",
+      allocation: root.allocation ?? null,
       ready: isGatewayRuntimeDoc(runtime) &&
         runtime.gatewayId === doc.id &&
         runtime.lifecycle === "serving" &&
@@ -317,9 +534,11 @@ async function enqueuePlacementMigration(
   input: FirestorePlacementPolicyInput,
   request: EnqueuePlacementMigrationInput,
 ): Promise<string> {
-  const ref = input.db.collection(GLM_OPERATIONS_COLLECTION).doc();
+  const ref = request.operationId
+    ? input.db.collection(GLM_OPERATIONS_COLLECTION).doc(request.operationId)
+    : input.db.collection(GLM_OPERATIONS_COLLECTION).doc();
   const now = input.now();
-  await ref.set({
+  const operation = {
     kind: "migrate-customer",
     status: "pending",
     createdBy: PLACEMENT_POLICY_ACTOR,
@@ -336,6 +555,35 @@ async function enqueuePlacementMigration(
     steps: [],
     gatewayId: request.toGatewayId,
     inputUid: request.uid,
+  };
+  if (!request.operationId) {
+    await ref.set(operation);
+    return ref.id;
+  }
+  await input.db.runTransaction(async (transaction) => {
+    const existing = await transaction.get(ref);
+    if (existing.exists) {
+      const data = existing.data() as Record<string, unknown>;
+      const operationInput = record(data.input);
+      if (
+        data.kind !== "migrate-customer" ||
+        operationInput?.uid !== request.uid ||
+        operationInput.fromGatewayId !== request.fromGatewayId ||
+        operationInput.toGatewayId !== request.toGatewayId ||
+        operationInput.source !== request.source
+      ) {
+        throw new Error(`migration operation ${ref.id} does not match activation demand`);
+      }
+      if (
+        data.status !== "pending" &&
+        data.status !== "running" &&
+        data.status !== "succeeded"
+      ) {
+        throw new Error(`migration operation ${ref.id} ended with status ${String(data.status)}`);
+      }
+      return;
+    }
+    transaction.create(ref, operation);
   });
   return ref.id;
 }
@@ -394,6 +642,8 @@ export function createFirestorePlacementPolicyReconcilerDeps(
     log: input.log,
     readSnapshot: () => readPlacementPolicySnapshot(input.db),
     assignInitialPlacement: (request) => assignInitialPlacementFirestore(input, request),
+    allocateDisposableGateway: (request) => allocateDisposableGatewayFirestore(input, request),
+    advanceActivationLease: (request) => advanceActivationLeaseFirestore(input, request),
     enqueueMigration: (request) => enqueuePlacementMigration(input, request),
     retireOwnedGateway: (request) => retireOwnedGatewayFirestore(input, request),
   };
