@@ -273,7 +273,6 @@ const OPERATOR_READY_REFRESH_MS_DEFAULT = 60_000;
 const MAINTENANCE_GATE_POLL_MS = 5_000;
 
 const GATEWAY_CHART = process.env.GATEWAY_CHART ?? "/charts/octogee-gateway";
-const ORCHESTRATOR_CONFIG_DOC_PATH = "config/orchestrator";
 const NAMESPACE = (function () {
   const namespace = process.env.K8S_NAMESPACE;
   if (!namespace) {

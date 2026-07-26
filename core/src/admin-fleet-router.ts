@@ -10,7 +10,6 @@ import {
   FieldValue,
   type DocumentReference,
   type Firestore,
-  type Transaction,
 } from "firebase-admin/firestore";
 import {
   GLM_GATEWAYS_COLLECTION,
@@ -68,7 +67,6 @@ import {
   writeInitialGatewayRelease,
   type GatewayArtifact,
   type GatewayMutableConfig,
-  type InitialGatewayReleaseArgs,
 } from "./gateway-live-release.js";
 import { projectReleaseHistory } from "./gateway-release-history.js";
 import {
@@ -78,7 +76,6 @@ import {
 } from "@octogee/shared/types/orchestrator-placement";
 import {
   SIZING_TIERS,
-  isSizingTier,
   resolveSizingTier,
   type SizingTier,
 } from "@octogee/shared/types/sizing";
@@ -2720,15 +2717,6 @@ function sameArtifact(left: GatewayArtifact, right: GatewayArtifact): boolean {
   );
 }
 
-class InitialGatewayReleaseRequestError extends Error {
-  constructor(
-    readonly status: number,
-    readonly body: Record<string, unknown>,
-  ) {
-    super(typeof body.error === "string" ? body.error : "initial gateway release rejected");
-  }
-}
-
 async function appendGatewayRelease(
   db: Firestore,
   args: {
@@ -3466,28 +3454,6 @@ async function resolveDedicatedGatewayOwner(opts: {
       ownerUid: body.ownerUid,
       builderSlug,
     },
-  };
-}
-
-function addGatewayOperationRecord(opts: {
-  createdBy: string;
-  now: number;
-  input: Record<string, unknown>;
-}): Record<string, unknown> {
-  const gatewayId =
-    typeof opts.input.gatewayId === "string" ? opts.input.gatewayId : null;
-  const inputUid = typeof opts.input.uid === "string" ? opts.input.uid : null;
-  return {
-    kind: "add-gateway",
-    status: "pending",
-    createdBy: opts.createdBy,
-    createdAt: opts.now,
-    startedAt: null,
-    completedAt: null,
-    input: opts.input,
-    steps: [],
-    ...(gatewayId !== null ? { gatewayId } : {}),
-    ...(inputUid !== null ? { inputUid } : {}),
   };
 }
 

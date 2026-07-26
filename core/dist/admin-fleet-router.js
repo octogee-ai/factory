@@ -1780,15 +1780,6 @@ function sameArtifact(left, right) {
     return (left.imageRepository === right.imageRepository &&
         left.imageTag === right.imageTag);
 }
-class InitialGatewayReleaseRequestError extends Error {
-    status;
-    body;
-    constructor(status, body) {
-        super(typeof body.error === "string" ? body.error : "initial gateway release rejected");
-        this.status = status;
-        this.body = body;
-    }
-}
 async function appendGatewayRelease(db, args) {
     const gwRef = db.collection(GATEWAYS_COLLECTION).doc(args.gateway.gatewayId);
     const operationRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
@@ -2373,22 +2364,6 @@ async function resolveDedicatedGatewayOwner(opts) {
             ownerUid: body.ownerUid,
             builderSlug,
         },
-    };
-}
-function addGatewayOperationRecord(opts) {
-    const gatewayId = typeof opts.input.gatewayId === "string" ? opts.input.gatewayId : null;
-    const inputUid = typeof opts.input.uid === "string" ? opts.input.uid : null;
-    return {
-        kind: "add-gateway",
-        status: "pending",
-        createdBy: opts.createdBy,
-        createdAt: opts.now,
-        startedAt: null,
-        completedAt: null,
-        input: opts.input,
-        steps: [],
-        ...(gatewayId !== null ? { gatewayId } : {}),
-        ...(inputUid !== null ? { inputUid } : {}),
     };
 }
 export function buildBuilderCandidates(opts) {

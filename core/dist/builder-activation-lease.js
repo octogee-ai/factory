@@ -103,6 +103,7 @@ export async function requestBuilderActivationLease(input) {
     const observedAt = input.observedAt;
     const userRef = input.db.doc(`users/${input.uid}`);
     const assignmentRef = input.db.doc(`gateways/${reportingGatewayId}/assignments/${input.uid}`);
+    // eslint-disable-next-line complexity
     return input.db.runTransaction(async (transaction) => {
         const [userSnapshot, assignmentSnapshot] = await Promise.all([
             transaction.get(userRef),

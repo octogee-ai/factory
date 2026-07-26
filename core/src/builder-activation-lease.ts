@@ -165,6 +165,7 @@ export async function requestBuilderActivationLease(
     `gateways/${reportingGatewayId}/assignments/${input.uid}`,
   );
 
+  // eslint-disable-next-line complexity
   return input.db.runTransaction(async (transaction) => {
     const [userSnapshot, assignmentSnapshot] = await Promise.all([
       transaction.get(userRef),
