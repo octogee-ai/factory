@@ -96,6 +96,13 @@ export interface GatewayEdgeImage {
   imageTag: string;
 }
 
+export interface GatewayProfileImages {
+  operator: {
+    imageRepository: string;
+    imageTag: string;
+  };
+}
+
 export interface W9TestPublisherLiveExperiment {
   kind: "w9-agent-conversation";
   mode: "publisher-live";
@@ -110,6 +117,8 @@ export interface W9TestPublisherLiveExperiment {
 }
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
+const DIGEST_BOUND_IMAGE_TAG_PATTERN =
+  /^[a-z0-9][a-z0-9._-]*@sha256:[a-f0-9]{64}$/;
 const DIGEST_BOUND_IMAGE_REFERENCE_PATTERN =
   /^[a-z0-9][a-z0-9./_-]*:[a-z0-9][a-z0-9._-]*@sha256:[a-f0-9]{64}$/;
 
@@ -139,6 +148,7 @@ export function isW9TestPublisherLiveExperiment(
 export interface ReleasePayload {
   imageRepository: string;
   imageTag: string;
+  profileImages?: GatewayProfileImages;
   gatewayEdgeImage?: GatewayEdgeImage;
   testExperiment?: W9TestPublisherLiveExperiment;
 }
@@ -146,6 +156,7 @@ export interface ReleasePayload {
 const RELEASE_PAYLOAD_FIELD_NAMES = new Set<string>([
   "imageRepository",
   "imageTag",
+  "profileImages",
   "gatewayEdgeImage",
   "testExperiment",
 ]);
@@ -162,6 +173,12 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 export function isReleasePayload(value: unknown): value is ReleasePayload {
   if (!isPlainRecord(value)) return false;
   if (!hasReleasePayloadShape(value) || !hasReleasePayloadIdentity(value)) return false;
+  if (
+    value.profileImages !== undefined &&
+    !isGatewayProfileImages(value.profileImages, value.imageRepository, value.imageTag)
+  ) {
+    return false;
+  }
   if (value.testExperiment === undefined) {
     return (
       !isW9CandidateImageTag(value.imageTag) &&
@@ -174,6 +191,26 @@ export function isReleasePayload(value: unknown): value is ReleasePayload {
     isW9CandidateImageTag(value.imageTag) &&
     isW9TestPublisherLiveExperiment(value.testExperiment) &&
     isW9GatewayEdgeImage(value.gatewayEdgeImage, value.imageTag, value.imageRepository)
+  );
+}
+
+function isGatewayProfileImages(
+  value: unknown,
+  gatewayImageRepository: string,
+  gatewayImageTag: string,
+): value is GatewayProfileImages {
+  if (!isPlainRecord(value) || Object.keys(value).length !== 1) return false;
+  const operator = value.operator;
+  if (!isPlainRecord(operator) || Object.keys(operator).length !== 2) return false;
+  const gatewayPackageSuffix = "/octogee-gateway";
+  const expectedRepository = gatewayImageRepository.endsWith(gatewayPackageSuffix)
+    ? `${gatewayImageRepository.slice(0, -gatewayPackageSuffix.length)}/octogee-gateway-operator`
+    : "";
+  return (
+    operator.imageRepository === expectedRepository &&
+    typeof operator.imageTag === "string" &&
+    DIGEST_BOUND_IMAGE_TAG_PATTERN.test(operator.imageTag) &&
+    operator.imageTag.split("@", 1)[0] === gatewayImageTag.split("@", 1)[0]
   );
 }
 

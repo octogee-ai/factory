@@ -299,6 +299,7 @@ export type {
   GatewayIdleSleepState,
   GatewayDoc,
   ReleasePayload,
+  GatewayProfileImages,
   ReleaseDoc,
   AssignmentSource,
   AssignmentDoc,

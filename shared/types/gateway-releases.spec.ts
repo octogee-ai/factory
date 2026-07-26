@@ -94,6 +94,40 @@ describe("isReleasePayload", () => {
     })).toBe(false);
   });
 
+  it("accepts an operator profile image only from its paired package and release tag", () => {
+    const payload = samplePayload({
+      imageTag: `abc1234@sha256:${"a".repeat(64)}`,
+      profileImages: {
+        operator: {
+          imageRepository:
+            "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator",
+          imageTag: `abc1234@sha256:${"c".repeat(64)}`,
+        },
+      },
+    });
+
+    expect(isReleasePayload(payload)).toBe(true);
+    expect(isReleasePayload({
+      ...payload,
+      profileImages: {
+        operator: {
+          ...payload.profileImages!.operator,
+          imageRepository:
+            "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+        },
+      },
+    })).toBe(false);
+    expect(isReleasePayload({
+      ...payload,
+      profileImages: {
+        operator: {
+          ...payload.profileImages!.operator,
+          imageTag: `def5678@sha256:${"c".repeat(64)}`,
+        },
+      },
+    })).toBe(false);
+  });
+
   it("accepts publisher-live only as the immutable TEST W9 candidate contract", () => {
     const candidate = {
       ...samplePayload(),
