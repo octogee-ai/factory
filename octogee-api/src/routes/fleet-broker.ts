@@ -685,24 +685,17 @@ export async function findAssignedUserByAgentId(
   return null;
 }
 
-async function findLateParkedRunDuplicate(
-  db: Firestore,
-  gatewayId: string,
-  agentId: string,
-  eventKey: string,
-): Promise<Record<string, unknown> | null> {
-  const gateway = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-  if (!gateway.exists) return null;
-  const gatewayData = gateway.data() as Record<string, unknown> | undefined;
-  const allocation = gatewayData?.allocation;
-  if (
-    !allocation ||
-    typeof allocation !== "object" ||
-    Array.isArray(allocation)
-  ) {
-    return null;
-  }
-  const allocated = allocation as Record<string, unknown>;
+type LateDuplicateAllocation = {
+  ownerUid: string;
+  leaseId: unknown;
+  generation: unknown;
+};
+
+function lateDuplicateAllocation(
+  gatewayData: Record<string, unknown> | undefined,
+): LateDuplicateAllocation | null {
+  const allocated = recordBodyValue(gatewayData?.allocation);
+  if (!allocated) return null;
   const ownerUid = typeof allocated.claimedByUid === "string"
     ? allocated.claimedByUid
     : "";
@@ -713,20 +706,24 @@ async function findLateParkedRunDuplicate(
   ) {
     return null;
   }
-  const user = await db.collection("users").doc(ownerUid).get();
-  const userData = user.exists
-    ? user.data() as Record<string, unknown> | undefined
-    : undefined;
-  if (!userData || !agentBelongsToAssignedWorkspace(userData, agentId)) {
-    return null;
-  }
-  const lease = readPath(userData, "provisioning.openclaw.activationLease");
-  if (!lease || typeof lease !== "object" || Array.isArray(lease)) return null;
-  const parked = lease as Record<string, unknown>;
+  return {
+    ownerUid,
+    leaseId: allocated.leaseId,
+    generation: allocated.generation,
+  };
+}
+
+function parkedRunDuplicate(
+  leaseValue: unknown,
+  allocation: LateDuplicateAllocation,
+  eventKey: string,
+): Record<string, unknown> | null {
+  const parked = recordBodyValue(leaseValue);
   if (
+    !parked ||
     parked.status !== "parked" ||
-    parked.leaseId !== allocated.leaseId ||
-    parked.generation !== allocated.generation ||
+    parked.leaseId !== allocation.leaseId ||
+    parked.generation !== allocation.generation ||
     (parked.eventKey !== eventKey && parked.lastEventKey !== eventKey) ||
     typeof parked.leaseId !== "string" ||
     !Number.isSafeInteger(parked.generation)
@@ -739,6 +736,31 @@ async function findLateParkedRunDuplicate(
     generation: parked.generation,
     duplicate: true,
   };
+}
+
+async function findLateParkedRunDuplicate(
+  db: Firestore,
+  gatewayId: string,
+  agentId: string,
+  eventKey: string,
+): Promise<Record<string, unknown> | null> {
+  const gateway = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+  if (!gateway.exists) return null;
+  const gatewayData = gateway.data() as Record<string, unknown> | undefined;
+  const allocation = lateDuplicateAllocation(gatewayData);
+  if (!allocation) return null;
+  const user = await db.collection("users").doc(allocation.ownerUid).get();
+  const userData = user.exists
+    ? user.data() as Record<string, unknown> | undefined
+    : undefined;
+  if (!userData || !agentBelongsToAssignedWorkspace(userData, agentId)) {
+    return null;
+  }
+  return parkedRunDuplicate(
+    readPath(userData, "provisioning.openclaw.activationLease"),
+    allocation,
+    eventKey,
+  );
 }
 
 async function findUsersByAgentId(
@@ -1580,17 +1602,11 @@ function installProvisioningRoutes(
   });
 }
 
-function installGatewayOpsRoutes(
+function installRunActivationRoute(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,
 ): void {
-  const {
-    db,
-    recordUsageEvent,
-    createBlobSignedUrl,
-    requestBuilderActivation,
-    now,
-  } = deps;
+  const { db, requestBuilderActivation, now } = deps;
 
   router.post("/activity/run-start", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -1649,6 +1665,19 @@ function installGatewayOpsRoutes(
       res.status(result.statusCode).json(result.body);
     });
   });
+}
+
+function installGatewayOpsRoutes(
+  router: Router,
+  deps: ResolvedFleetBrokerRouteDeps,
+): void {
+  const {
+    db,
+    recordUsageEvent,
+    createBlobSignedUrl,
+  } = deps;
+
+  installRunActivationRoute(router, deps);
 
   router.post("/system-config-status", async (req, res) => {
     const bound = boundGateway(req, res);

@@ -666,6 +666,27 @@ async function requestActivationAfterAppend(
   }
 }
 
+function assertActivityAcknowledgement(
+  result: Awaited<ReturnType<ActivitySink["append"]>>,
+  envelope: AgentActivityEnvelopeV1,
+  binding: Readonly<ActiveActivityRunBinding>,
+): void {
+  const receiptMatches =
+    result.receipt.eventKey === envelope.eventKey &&
+    result.receipt.activityChannelId === binding.activityChannelId &&
+    Boolean(result.receipt.activityRootPostId);
+  const turnStartedReceiptMatches = envelope.type !== "turn.started" || (
+    result.postIds.length === 1 &&
+    result.receipt.postId === result.postIds[0] &&
+    result.receipt.activityRootPostId === result.postIds[0]
+  );
+  if (!receiptMatches || !turnStartedReceiptMatches) {
+    throw new ActivitySinkIntegrityError(
+      "Activity acknowledgement failed exact root/channel verification",
+    );
+  }
+}
+
 export async function processActivityIntake(
   request: ActivityIntakeRequest,
   deps: ActivityIntakeDeps,
@@ -701,18 +722,7 @@ export async function processActivityIntake(
     if (envelope.type === "turn.started") {
       await requestActivationAfterAppend(deps, frozenBinding);
     }
-    if (
-      result.receipt.eventKey !== envelope.eventKey ||
-      result.receipt.activityChannelId !== frozenBinding.activityChannelId ||
-      !result.receipt.activityRootPostId ||
-      (envelope.type === "turn.started" && (
-        result.postIds.length !== 1 ||
-        result.receipt.postId !== result.postIds[0] ||
-        result.receipt.activityRootPostId !== result.postIds[0]
-      ))
-    ) {
-      throw new ActivitySinkIntegrityError("Activity acknowledgement failed exact root/channel verification");
-    }
+    assertActivityAcknowledgement(result, envelope, frozenBinding);
     return {
       status: result.outcome === "persisted" ? 201 : 200,
       body: {

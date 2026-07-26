@@ -807,6 +807,15 @@ const BUILDER_RUNTIME_STATUSES = new Set([
     "failed",
 ]);
 const BUILDER_RUNTIME_STALE_AFTER_MS = 10 * 60_000;
+const BUILDER_RUNTIME_STATUS_FIELDS = {
+    requested: "requestedAt",
+    provisioning: "provisionedAt",
+    activating: "activatingAt",
+    active: "activeAt",
+    returning: "returningAt",
+    retiring: "returningAt",
+    failed: "failedAt",
+};
 function activationLeaseFromUser(data) {
     const provisioning = isPlainRecord(data.provisioning)
         ? data.provisioning
@@ -820,29 +829,21 @@ function activationLeaseFromUser(data) {
     return openclaw && lease ? { openclaw, lease } : null;
 }
 function runtimeStatusAt(lease, lifecycle) {
-    const field = lifecycle === "requested"
-        ? "requestedAt"
-        : lifecycle === "provisioning"
-            ? "provisionedAt"
-            : lifecycle === "activating"
-                ? "activatingAt"
-                : lifecycle === "active"
-                    ? "activeAt"
-                    : lifecycle === "failed"
-                        ? "failedAt"
-                        : "returningAt";
+    const field = BUILDER_RUNTIME_STATUS_FIELDS[lifecycle];
     return toMillis(lease[field]) ?? toMillis(lease.requestedAt);
 }
 function runtimeWakeDurationMs(lease, leaseStatus, requestedAt, now) {
     if (requestedAt === null)
         return null;
-    const completedAt = leaseStatus === "active" ||
+    let completedAt = null;
+    if (leaseStatus === "active" ||
         leaseStatus === "returning" ||
-        leaseStatus === "parked"
-        ? toMillis(lease.activeAt)
-        : leaseStatus === "failed"
-            ? toMillis(lease.failedAt)
-            : null;
+        leaseStatus === "parked") {
+        completedAt = toMillis(lease.activeAt);
+    }
+    else if (leaseStatus === "failed") {
+        completedAt = toMillis(lease.failedAt);
+    }
     return Math.max(0, (completedAt ?? now) - requestedAt);
 }
 function projectOperationSteps(operation) {
@@ -857,98 +858,148 @@ function projectOperationSteps(operation) {
         })
         : [];
 }
-export function projectBuilderRuntime(userDoc, gatewaysById, operationsById, now) {
+function builderRuntimeLeaseContext(userDoc) {
     const data = userDoc.data();
     const resolved = activationLeaseFromUser(data);
     if (!resolved)
         return null;
     const { openclaw, lease } = resolved;
-    const leaseStatus = typeof lease.status === "string" ? lease.status : "";
     if (typeof lease.leaseId !== "string" ||
         !Number.isSafeInteger(lease.generation)) {
         return null;
     }
+    return {
+        data,
+        openclaw,
+        lease,
+        leaseId: lease.leaseId,
+        generation: lease.generation,
+        leaseStatus: typeof lease.status === "string" ? lease.status : "",
+    };
+}
+function builderRuntimeRetirementContext(uid, lease, gatewaysById, operationsById) {
     const targetGatewayId = asStringOrNull(lease.targetGatewayId);
     const target = targetGatewayId ? gatewaysById.get(targetGatewayId) : undefined;
     const retirementClaim = isPlainRecord(target?.retirementClaim)
         ? target.retirementClaim
         : null;
-    const retirementOperationId = targetGatewayId
-        ? asStringOrNull(retirementClaim?.operationId) ??
-            `placement-retire-${userDoc.id}-${targetGatewayId}`
-        : null;
-    const retirementOperation = retirementOperationId
-        ? operationsById.get(retirementOperationId)
-        : undefined;
-    const retirementStarted = target?.desiredStatus === "retired";
-    const retirementComplete = retirementOperation?.status === "succeeded";
-    if (!BUILDER_RUNTIME_STATUSES.has(leaseStatus) &&
-        !(leaseStatus === "parked" &&
-            retirementStarted &&
-            !retirementComplete)) {
-        return null;
+    let operationId = null;
+    if (targetGatewayId) {
+        operationId =
+            asStringOrNull(retirementClaim?.operationId) ??
+                `placement-retire-${uid}-${targetGatewayId}`;
     }
-    const retirementFailed = retirementOperation?.status === "failed";
+    const operation = operationId ? operationsById.get(operationId) : undefined;
+    return {
+        targetGatewayId,
+        target,
+        operationId,
+        operation,
+        started: target?.desiredStatus === "retired",
+        complete: operation?.status === "succeeded",
+        failed: operation?.status === "failed",
+    };
+}
+function builderRuntimeLifecycle(leaseStatus, retirement) {
+    const visible = BUILDER_RUNTIME_STATUSES.has(leaseStatus) ||
+        (leaseStatus === "parked" &&
+            retirement.started &&
+            !retirement.complete);
+    if (!visible)
+        return null;
+    if (retirement.failed || leaseStatus === "failed")
+        return "failed";
+    if (retirement.started)
+        return "retiring";
+    return leaseStatus;
+}
+function builderRuntimePhase(leaseStatus, lifecycle, retirementStarted) {
+    if (leaseStatus === "failed")
+        return "activation";
+    if (retirementStarted)
+        return "retirement";
+    if (lifecycle === "returning")
+        return "return";
+    if (lifecycle === "active")
+        return "runtime";
+    return "activation";
+}
+function builderRuntimeOperationId(phase, lease, retirementOperationId) {
+    if (phase === "retirement")
+        return retirementOperationId;
+    if (phase === "return")
+        return asStringOrNull(lease.returnOperationId);
+    return asStringOrNull(lease.activationOperationId);
+}
+function builderRuntimeSlug(uid, data, openclaw, lease) {
+    const leaseSlug = asStringOrNull(lease.builderSlug);
+    if (leaseSlug)
+        return leaseSlug;
+    const openclawSlug = asStringOrNull(openclaw.slug);
+    if (openclawSlug)
+        return openclawSlug;
+    return asStringOrNull(data.username) ?? uid;
+}
+function builderRuntimeIsStale(leaseStatus, wakeDurationMs) {
+    const preCutover = leaseStatus === "requested" ||
+        leaseStatus === "provisioning" ||
+        leaseStatus === "activating";
+    return preCutover &&
+        wakeDurationMs !== null &&
+        wakeDurationMs > BUILDER_RUNTIME_STALE_AFTER_MS;
+}
+function builderRuntimeTerminationAvailable(input) {
+    return input.targetGatewayId !== null &&
+        input.currentGatewayId !== input.targetGatewayId &&
+        input.target?.desiredStatus !== "retired" &&
+        (input.leaseFailed || input.stale);
+}
+function isoFromMillis(value) {
+    return value === null ? null : new Date(value).toISOString();
+}
+export function projectBuilderRuntime(userDoc, gatewaysById, operationsById, now) {
+    const leaseContext = builderRuntimeLeaseContext(userDoc);
+    if (!leaseContext)
+        return null;
+    const { data, openclaw, lease, leaseId, generation, leaseStatus } = leaseContext;
+    const retirement = builderRuntimeRetirementContext(userDoc.id, lease, gatewaysById, operationsById);
+    const { targetGatewayId } = retirement;
+    const lifecycle = builderRuntimeLifecycle(leaseStatus, retirement);
+    if (!lifecycle)
+        return null;
     const leaseFailed = leaseStatus === "failed";
-    const lifecycle = retirementFailed || leaseFailed
-        ? "failed"
-        : retirementStarted
-            ? "retiring"
-            : leaseStatus;
-    const phase = leaseFailed
-        ? "activation"
-        : retirementStarted
-            ? "retirement"
-            : lifecycle === "returning"
-                ? "return"
-                : lifecycle === "active"
-                    ? "runtime"
-                    : "activation";
-    const activationOperationId = asStringOrNull(lease.activationOperationId);
-    const returnOperationId = asStringOrNull(lease.returnOperationId);
-    const operationId = phase === "retirement"
-        ? retirementOperationId
-        : phase === "return"
-            ? returnOperationId
-            : activationOperationId;
+    const phase = builderRuntimePhase(leaseStatus, lifecycle, retirement.started);
+    const operationId = builderRuntimeOperationId(phase, lease, retirement.operationId);
     const operation = operationId ? operationsById.get(operationId) : undefined;
     const operationSteps = projectOperationSteps(operation);
-    const cleanupOperationId = retirementStarted
-        ? retirementOperationId
+    const cleanupOperationId = retirement.started
+        ? retirement.operationId
         : null;
     const cleanupOperation = cleanupOperationId
-        ? retirementOperation
+        ? retirement.operation
         : undefined;
     const lastError = isPlainRecord(lease.lastError) ? lease.lastError : null;
     const requestedAt = toMillis(lease.requestedAt);
     const statusAt = runtimeStatusAt(lease, lifecycle);
     const statusAgeMs = ageMsOrNull(statusAt, now);
     const wakeDurationMs = runtimeWakeDurationMs(lease, leaseStatus, requestedAt, now);
-    const preCutover = leaseStatus === "requested" ||
-        leaseStatus === "provisioning" ||
-        leaseStatus === "activating";
     const currentGatewayId = asStringOrNull(openclaw.gatewayId);
-    const stale = preCutover &&
-        wakeDurationMs !== null &&
-        wakeDurationMs > BUILDER_RUNTIME_STALE_AFTER_MS;
+    const stale = builderRuntimeIsStale(leaseStatus, wakeDurationMs);
     return {
         uid: userDoc.id,
-        builderSlug: asStringOrNull(lease.builderSlug) ??
-            asStringOrNull(openclaw.slug) ??
-            asStringOrNull(data.username) ??
-            userDoc.id,
+        builderSlug: builderRuntimeSlug(userDoc.id, data, openclaw, lease),
         lifecycle,
         phase,
-        leaseId: lease.leaseId,
-        generation: lease.generation,
+        leaseId,
+        generation,
         cause: asStringOrNull(lease.cause),
         currentGatewayId,
         sourceGatewayId: asStringOrNull(lease.sourceGatewayId),
         targetGatewayId,
         sizingTier: asStringOrNull(lease.sizingTier),
-        requestedAt: requestedAt === null ? null : new Date(requestedAt).toISOString(),
+        requestedAt: isoFromMillis(requestedAt),
         wakeDurationMs,
-        statusAt: statusAt === null ? null : new Date(statusAt).toISOString(),
+        statusAt: isoFromMillis(statusAt),
         statusAgeMs,
         stale,
         operationId,
@@ -960,10 +1011,13 @@ export function projectBuilderRuntime(userDoc, gatewaysById, operationsById, now
         cleanupError: asStringOrNull(cleanupOperation?.error),
         error: asStringOrNull(operation?.error) ??
             asStringOrNull(lastError?.message),
-        terminationAvailable: targetGatewayId !== null &&
-            currentGatewayId !== targetGatewayId &&
-            target?.desiredStatus !== "retired" &&
-            (leaseFailed || stale),
+        terminationAvailable: builderRuntimeTerminationAvailable({
+            targetGatewayId,
+            currentGatewayId,
+            target: retirement.target,
+            leaseFailed,
+            stale,
+        }),
         retryAvailable: false,
         targetPodStatus: null,
         targetPodCount: null,
@@ -1052,6 +1106,7 @@ function rollupFleetStats(gateways) {
 const ERR_GATEWAY_NOT_FOUND = "gateway not found";
 const ERR_GATEWAY_OPERATION_IN_FLIGHT = "another operation is already pending or running for this gateway";
 const ERR_OWNER_USER_NOT_FOUND = "owner user not found";
+const ERR_USER_NOT_FOUND = "user not found";
 const OP_KIND_MIGRATE_CUSTOMER = "migrate-customer";
 const GATEWAY_IMAGE_REPO_PREFIXES = [...new Set(["prod", "test", "build-week"].flatMap((environment) => deploymentTargetsForEnvironment(environment).map((target) => `${target.artifactRegistryRepository}/`)))];
 const BUILDS_SERVICE_ALLOWLIST = new Set([
@@ -2536,6 +2591,114 @@ async function claimCustomerDeletion(opts) {
         };
     });
 }
+function activationLeaseForTermination(data, leaseId, generation) {
+    const resolved = activationLeaseFromUser(data);
+    if (!resolved ||
+        resolved.lease.leaseId !== leaseId ||
+        resolved.lease.generation !== generation) {
+        return null;
+    }
+    return resolved;
+}
+function sharedAssignmentServesBuilder(input) {
+    return input.exists &&
+        input.assignment?.uid === input.uid &&
+        input.assignment.gatewayId === input.gatewayId &&
+        input.assignment.state === "serving" &&
+        Number.isSafeInteger(input.assignment.epoch);
+}
+function disposableRuntimeMatchesTermination(input) {
+    const allocation = isPlainRecord(input.target?.allocation)
+        ? input.target.allocation
+        : null;
+    return input.exists &&
+        input.target?.ownerUid === input.uid &&
+        allocation?.kind === "disposable-builder" &&
+        allocation.claimedByUid === input.uid &&
+        allocation.leaseId === input.leaseId &&
+        allocation.generation === input.generation;
+}
+function terminationStatusAt(lease) {
+    if (lease.status === "activating")
+        return toMillis(lease.activatingAt);
+    return toMillis(lease.provisionedAt ?? lease.requestedAt);
+}
+function runtimeTerminationCanStart(lease, now) {
+    const statusAt = terminationStatusAt(lease);
+    const stale = statusAt !== null &&
+        now - statusAt > BUILDER_RUNTIME_STALE_AFTER_MS;
+    return lease.status === "failed" || stale;
+}
+async function requestActivationLeaseTermination(db, transaction, input) {
+    const userRef = db.collection("users").doc(input.uid);
+    const assignmentRef = db.doc(`gateways/${input.defaultGatewayId}/assignments/${input.uid}`);
+    const [userSnapshot, assignmentSnapshot] = await Promise.all([
+        transaction.get(userRef),
+        transaction.get(assignmentRef),
+    ]);
+    if (!userSnapshot.exists)
+        return { kind: "not-found" };
+    const data = userSnapshot.data();
+    const resolved = activationLeaseForTermination(data, input.leaseId, input.generation);
+    if (!resolved) {
+        return { kind: "conflict", reason: "lease generation changed" };
+    }
+    const { lease, openclaw } = resolved;
+    const targetGatewayId = asStringOrNull(lease.targetGatewayId);
+    if (!targetGatewayId ||
+        asStringOrNull(openclaw.gatewayId) !== input.defaultGatewayId) {
+        return {
+            kind: "conflict",
+            reason: "Builder is not authoritative on the shared gateway",
+        };
+    }
+    const assignment = assignmentSnapshot.exists
+        ? assignmentSnapshot.data()
+        : undefined;
+    if (!sharedAssignmentServesBuilder({
+        exists: assignmentSnapshot.exists,
+        assignment,
+        uid: input.uid,
+        gatewayId: input.defaultGatewayId,
+    })) {
+        return {
+            kind: "conflict",
+            reason: "canonical shared assignment is not serving",
+        };
+    }
+    if (lease.status === "returning" &&
+        toMillis(lease.operatorTerminateRequestedAt) !== null) {
+        return { kind: "adopted" };
+    }
+    const targetSnapshot = await transaction.get(db.collection(GATEWAYS_COLLECTION).doc(targetGatewayId));
+    const target = targetSnapshot.data();
+    if (!disposableRuntimeMatchesTermination({
+        exists: targetSnapshot.exists,
+        target,
+        uid: input.uid,
+        leaseId: input.leaseId,
+        generation: input.generation,
+    })) {
+        return {
+            kind: "conflict",
+            reason: "disposable runtime ownership changed",
+        };
+    }
+    if (!runtimeTerminationCanStart(lease, input.requestedAt)) {
+        return {
+            kind: "conflict",
+            reason: "runtime is neither failed nor stale",
+        };
+    }
+    transaction.update(userRef, {
+        "provisioning.openclaw.activationLease.status": "returning",
+        "provisioning.openclaw.activationLease.returnRequestedAt": input.requestedAt,
+        "provisioning.openclaw.activationLease.returnRequestedBy": input.requestedBy,
+        "provisioning.openclaw.activationLease.operatorTerminateRequestedAt": input.requestedAt,
+        "provisioning.openclaw.activationLease.operatorTerminateRequestedBy": input.requestedBy,
+    });
+    return { kind: "requested" };
+}
 // eslint-disable-next-line max-lines-per-function -- factory mounts ~15 admin routes; splitting it would scatter the contract across files for no readability gain
 export function addAdminFleetRoutes(router, deps) {
     const { db, logger } = deps;
@@ -2988,7 +3151,7 @@ export function addAdminFleetRoutes(router, deps) {
             }
             const userSnap = await db.collection("users").doc(uid).get();
             if (!userSnap.exists) {
-                res.status(404).json({ error: "user not found", uid });
+                res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
                 return;
             }
             const userData = (userSnap.data() ?? {});
@@ -3083,6 +3246,8 @@ export function addAdminFleetRoutes(router, deps) {
             }
             const uid = req.params.uid;
             const actor = req;
+            const leaseId = body.leaseId;
+            const generation = body.generation;
             const now = Date.now();
             const config = await db.doc("config/orchestrator").get();
             const defaultGatewayId = asStringOrNull(config.data()?.defaultGatewayId);
@@ -3090,85 +3255,16 @@ export function addAdminFleetRoutes(router, deps) {
                 res.status(409).json({ error: "default gateway is unavailable" });
                 return;
             }
-            const userRef = db.collection("users").doc(uid);
-            const assignmentRef = db.doc(`gateways/${defaultGatewayId}/assignments/${uid}`);
-            const outcome = await db.runTransaction(async (transaction) => {
-                const [userSnapshot, assignmentSnapshot] = await Promise.all([
-                    transaction.get(userRef),
-                    transaction.get(assignmentRef),
-                ]);
-                if (!userSnapshot.exists)
-                    return { kind: "not-found" };
-                const data = userSnapshot.data();
-                const resolved = activationLeaseFromUser(data);
-                const lease = resolved?.lease;
-                if (!lease ||
-                    lease.leaseId !== body.leaseId ||
-                    lease.generation !== body.generation) {
-                    return { kind: "conflict", reason: "lease generation changed" };
-                }
-                const targetGatewayId = asStringOrNull(lease.targetGatewayId);
-                if (!targetGatewayId ||
-                    asStringOrNull(resolved?.openclaw.gatewayId) !== defaultGatewayId) {
-                    return {
-                        kind: "conflict",
-                        reason: "Builder is not authoritative on the shared gateway",
-                    };
-                }
-                const assignment = assignmentSnapshot.exists
-                    ? assignmentSnapshot.data()
-                    : undefined;
-                if (!assignmentSnapshot.exists ||
-                    assignment?.uid !== uid ||
-                    assignment.gatewayId !== defaultGatewayId ||
-                    assignment.state !== "serving" ||
-                    !Number.isSafeInteger(assignment.epoch)) {
-                    return {
-                        kind: "conflict",
-                        reason: "canonical shared assignment is not serving",
-                    };
-                }
-                if (lease.status === "returning" &&
-                    toMillis(lease.operatorTerminateRequestedAt) !== null) {
-                    return { kind: "adopted" };
-                }
-                const targetRef = db.collection(GATEWAYS_COLLECTION).doc(targetGatewayId);
-                const targetSnapshot = await transaction.get(targetRef);
-                const target = targetSnapshot.data();
-                const allocation = isPlainRecord(target?.allocation) ? target.allocation : null;
-                if (!targetSnapshot.exists ||
-                    target?.ownerUid !== uid ||
-                    allocation?.kind !== "disposable-builder" ||
-                    allocation.claimedByUid !== uid ||
-                    allocation.leaseId !== body.leaseId ||
-                    allocation.generation !== body.generation) {
-                    return {
-                        kind: "conflict",
-                        reason: "disposable runtime ownership changed",
-                    };
-                }
-                const statusAt = toMillis(lease.status === "activating"
-                    ? lease.activatingAt
-                    : lease.provisionedAt ?? lease.requestedAt);
-                const stale = statusAt !== null &&
-                    now - statusAt > BUILDER_RUNTIME_STALE_AFTER_MS;
-                if (lease.status !== "failed" && !stale) {
-                    return {
-                        kind: "conflict",
-                        reason: "runtime is neither failed nor stale",
-                    };
-                }
-                transaction.update(userRef, {
-                    "provisioning.openclaw.activationLease.status": "returning",
-                    "provisioning.openclaw.activationLease.returnRequestedAt": now,
-                    "provisioning.openclaw.activationLease.returnRequestedBy": actor.uid ?? "unknown",
-                    "provisioning.openclaw.activationLease.operatorTerminateRequestedAt": now,
-                    "provisioning.openclaw.activationLease.operatorTerminateRequestedBy": actor.uid ?? "unknown",
-                });
-                return { kind: "requested" };
-            });
+            const outcome = await db.runTransaction((transaction) => requestActivationLeaseTermination(db, transaction, {
+                uid,
+                leaseId,
+                generation,
+                defaultGatewayId,
+                requestedAt: now,
+                requestedBy: actor.uid ?? "unknown",
+            }));
             if (outcome.kind === "not-found") {
-                res.status(404).json({ error: "user not found", uid });
+                res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
                 return;
             }
             if (outcome.kind === "conflict") {
@@ -3177,8 +3273,8 @@ export function addAdminFleetRoutes(router, deps) {
             }
             res.status(outcome.kind === "adopted" ? 200 : 202).json({
                 status: "termination-requested",
-                leaseId: body.leaseId,
-                generation: body.generation,
+                leaseId,
+                generation,
                 ...(outcome.kind === "adopted" ? { adopted: true } : {}),
             });
         }
@@ -3227,7 +3323,7 @@ export function addAdminFleetRoutes(router, deps) {
                 return { kind: "requested" };
             });
             if (outcome.kind === "not-found") {
-                res.status(404).json({ error: "user not found", uid });
+                res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
                 return;
             }
             if (outcome.kind === "conflict") {
@@ -3256,7 +3352,7 @@ export function addAdminFleetRoutes(router, deps) {
             const now = Date.now();
             const userSnap = await db.collection("users").doc(uid).get();
             if (!userSnap.exists) {
-                res.status(404).json({ error: "user not found", uid });
+                res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
                 return;
             }
             const reportingGatewayId = readUserGatewayId(userSnap.data());
@@ -4019,7 +4115,7 @@ export function addAdminFleetRoutes(router, deps) {
                 const userRef = db.collection("users").doc(uid);
                 const userSnap = await txn.get(userRef);
                 if (!userSnap.exists) {
-                    return { status: 404, body: { error: "user not found", uid } };
+                    return { status: 404, body: { error: ERR_USER_NOT_FOUND, uid } };
                 }
                 const currentGatewayId = readUserGatewayId(userSnap.data());
                 if (!currentGatewayId) {

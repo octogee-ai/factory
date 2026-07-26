@@ -150,6 +150,139 @@ function parkedDuplicateBody(
   };
 }
 
+type ActivationDemandEligibility =
+  | { result: BuilderActivationLeaseResult }
+  | {
+      entitlementTier: keyof typeof BUILDER_TIERS;
+      sizingTier: string;
+      slug: string;
+    };
+
+function activationDemandEligibility(
+  userData: Record<string, unknown>,
+  cause: BuilderRuntimeDemandCause,
+  now: number,
+): ActivationDemandEligibility {
+  if (!accountAllowsInteractiveAccess(userData)) {
+    return {
+      result: {
+        statusCode: 403,
+        body: {
+          code: "builder-runtime-not-interactive",
+          error: "account does not allow interactive runtime access",
+        },
+      },
+    };
+  }
+  const entitlementTier = resolveBuilderTier(userData, new Date(now));
+  if (!entitlementTier) {
+    return {
+      result: {
+        statusCode: 403,
+        body: {
+          code: "builder-runtime-not-entitled",
+          error: "Builder runtime entitlement is required",
+        },
+      },
+    };
+  }
+  if (cause === "shell" && !BUILDER_TIERS[entitlementTier].builderShell) {
+    return {
+      result: {
+        statusCode: 403,
+        body: {
+          code: "gateway-shells-locked",
+          error: "Gateway shell access is locked until the tier enables it",
+        },
+      },
+    };
+  }
+  const sizingTier = BUILDER_TIERS[entitlementTier].instance;
+  if (!sizingTier) {
+    return {
+      result: {
+        statusCode: 409,
+        body: {
+          code: "builder-runtime-manual-size-required",
+          error: "Builder entitlement requires an explicit operator size",
+          entitlementTier,
+        },
+      },
+    };
+  }
+  const slug = builderSlug(userData);
+  if (!slug) {
+    return {
+      result: {
+        statusCode: 409,
+        body: {
+          code: "builder-runtime-slug-missing",
+          error: "Builder runtime identity is missing a slug",
+        },
+      },
+    };
+  }
+  return { entitlementTier, sizingTier, slug };
+}
+
+function parkedDuplicateForEvent(
+  lease: Record<string, unknown> | null,
+  eventKey: string,
+): BuilderActivationLeaseResult | null {
+  if (!lease) return null;
+  if (lease.eventKey !== eventKey && lease.lastEventKey !== eventKey) return null;
+  return parkedDuplicateBody(lease);
+}
+
+function returningLeaseWithPendingDemand(input: {
+  lease: Record<string, unknown> | null;
+  eventKey: string;
+  cause: BuilderRuntimeDemandCause;
+  observedAt: number;
+  sourceGatewayId: string;
+  sourceAssignmentEpoch: number;
+}): Record<string, unknown> | null {
+  const { lease } = input;
+  if (
+    lease?.status !== "returning" ||
+    !nonEmptyString(lease.leaseId) ||
+    !positiveInteger(lease.generation)
+  ) {
+    return null;
+  }
+  const priorPending = record(lease.pendingDemand);
+  const priorObservedAt = typeof priorPending?.observedAt === "number"
+    ? priorPending.observedAt
+    : -1;
+  const pendingDemand = priorObservedAt > input.observedAt
+    ? priorPending
+    : {
+        eventKey: input.eventKey,
+        cause: input.cause,
+        observedAt: input.observedAt,
+        sourceGatewayId: input.sourceGatewayId,
+        sourceAssignmentEpoch: input.sourceAssignmentEpoch,
+      };
+  return { ...lease, pendingDemand };
+}
+
+function adoptedActivationLease(
+  lease: Record<string, unknown> | null,
+  eventKey: string,
+  observedAt: number,
+): Record<string, unknown> | null {
+  if (!existingLeaseCanAdopt(lease)) return null;
+  return {
+    ...lease!,
+    status: lease!.status,
+    lastActiveAt: Math.max(
+      typeof lease?.lastActiveAt === "number" ? lease.lastActiveAt : 0,
+      observedAt,
+    ),
+    lastEventKey: eventKey,
+  };
+}
+
 export async function requestBuilderActivationLease(
   input: BuilderRuntimeDemandRequest,
 ): Promise<BuilderActivationLeaseResult> {
@@ -165,7 +298,6 @@ export async function requestBuilderActivationLease(
     `gateways/${reportingGatewayId}/assignments/${input.uid}`,
   );
 
-  // eslint-disable-next-line complexity
   return input.db.runTransaction(async (transaction) => {
     const [userSnapshot, assignmentSnapshot] = await Promise.all([
       transaction.get(userRef),
@@ -198,108 +330,43 @@ export async function requestBuilderActivationLease(
         },
       };
     }
-    if (!accountAllowsInteractiveAccess(userData)) {
-      return {
-        statusCode: 403,
-        body: {
-          code: "builder-runtime-not-interactive",
-          error: "account does not allow interactive runtime access",
-        },
-      };
-    }
-    const entitlementTier = resolveBuilderTier(userData, new Date(input.now ?? Date.now()));
-    if (!entitlementTier) {
-      return {
-        statusCode: 403,
-        body: {
-          code: "builder-runtime-not-entitled",
-          error: "Builder runtime entitlement is required",
-        },
-      };
-    }
-    if (cause === "shell" && !BUILDER_TIERS[entitlementTier].builderShell) {
-      return {
-        statusCode: 403,
-        body: {
-          code: "gateway-shells-locked",
-          error: "Gateway shell access is locked until the tier enables it",
-        },
-      };
-    }
-    const sizingTier = BUILDER_TIERS[entitlementTier].instance;
-    if (!sizingTier) {
-      return {
-        statusCode: 409,
-        body: {
-          code: "builder-runtime-manual-size-required",
-          error: "Builder entitlement requires an explicit operator size",
-          entitlementTier,
-        },
-      };
-    }
-    const slug = builderSlug(userData);
-    if (!slug) {
-      return {
-        statusCode: 409,
-        body: {
-          code: "builder-runtime-slug-missing",
-          error: "Builder runtime identity is missing a slug",
-        },
-      };
-    }
+    const eligibility = activationDemandEligibility(
+      userData,
+      cause,
+      input.now ?? Date.now(),
+    );
+    if ("result" in eligibility) return eligibility.result;
+    const { entitlementTier, sizingTier, slug } = eligibility;
     const existing = userLease(userData);
-    if (
-      existing?.eventKey === eventKey ||
-      existing?.lastEventKey === eventKey
-    ) {
-      const duplicate = parkedDuplicateBody(existing);
-      if (duplicate) return duplicate;
-    }
-    if (
-      existing?.status === "returning" &&
-      nonEmptyString(existing.leaseId) &&
-      positiveInteger(existing.generation)
-    ) {
-      const priorPending = record(existing.pendingDemand);
-      const priorObservedAt = typeof priorPending?.observedAt === "number"
-        ? priorPending.observedAt
-        : -1;
-      const pendingDemand = priorObservedAt > observedAt
-        ? priorPending
-        : {
-            eventKey,
-            cause,
-            observedAt,
-            sourceGatewayId: reportingGatewayId,
-            sourceAssignmentEpoch: assignmentEpoch,
-          };
-      const next = { ...existing, pendingDemand };
+    const duplicate = parkedDuplicateForEvent(existing, eventKey);
+    if (duplicate) return duplicate;
+    const returningLease = returningLeaseWithPendingDemand({
+      lease: existing,
+      eventKey,
+      cause,
+      observedAt,
+      sourceGatewayId: reportingGatewayId,
+      sourceAssignmentEpoch: assignmentEpoch,
+    });
+    if (returningLease) {
       transaction.update(userRef, {
-        "provisioning.openclaw.activationLease": next,
+        "provisioning.openclaw.activationLease": returningLease,
       });
       return demandBody({
-        lease: next,
+        lease: returningLease,
         status: "returning",
         sizingTier,
         pending: true,
       });
     }
-    if (existingLeaseCanAdopt(existing)) {
-      const next = {
-        ...existing!,
-        status: existing!.status,
-        lastActiveAt: Math.max(
-          typeof existing?.lastActiveAt === "number" ? existing.lastActiveAt : 0,
-          observedAt,
-        ),
-        lastEventKey: eventKey,
-      };
+    const adoptedLease = adoptedActivationLease(existing, eventKey, observedAt);
+    if (adoptedLease) {
       transaction.update(userRef, {
-        "provisioning.openclaw.activationLease": next,
+        "provisioning.openclaw.activationLease": adoptedLease,
       });
       return demandBody({
-        lease: next,
-        status: String(next.status),
+        lease: adoptedLease,
+        status: String(adoptedLease.status),
         sizingTier,
         adopted: true,
       });
