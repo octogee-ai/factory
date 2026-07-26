@@ -239,6 +239,7 @@ import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
 import { startStuckOpReaper } from "./stuck-op-reaper.js";
 import { startHelmRecoverySweeper } from "./helm-recovery-sweeper.js";
 import { resumeOrphanedRunningOps } from "./resume-orphaned-ops.js";
+import { completeHealthyBootstrapAddGatewayOperations } from "./bootstrap-add-gateway-recovery.js";
 import {
   ACTIVATION_LEASE_SWEEP_MS_DEFAULT,
   startBuilderActivationLeaseSweeper,
@@ -2076,6 +2077,18 @@ async function main(): Promise<void> {
   if (await controllerWorkFrozen(deps, "orphan-op resume")) {
     holdFrozenController(maintenanceGate, log);
     return;
+  }
+
+  try {
+    await completeHealthyBootstrapAddGatewayOperations({
+      db,
+      log,
+      now: () => Date.now(),
+    });
+  } catch (err) {
+    log(
+      `[glm-controller] ⚠ bootstrap add-gateway recovery failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 
   // Resume any op the previous instance left `running` when it exited mid-op (a
