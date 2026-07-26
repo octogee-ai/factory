@@ -4,7 +4,6 @@ import {
   GatewayRetirementConflictError,
   claimGatewayRetirementAtomic,
 } from "@octogee/core/gateway-retirement-claim";
-import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
   GLM_GATEWAYS_COLLECTION,
