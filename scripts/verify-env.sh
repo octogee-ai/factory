@@ -279,7 +279,7 @@ if [[ "${MM_READY:-0}" -ge 1 ]]; then
   MM_PORT_FORWARD_PID=$!
   MM_LOCAL_PORT=""
   for _ in $(seq 1 10); do
-    MM_LOCAL_PORT=$(sed -nE 's/.*127\\.0\\.0\\.1:([0-9]+).*/\1/p' "$MM_PORT_FORWARD_LOG" | head -1)
+    MM_LOCAL_PORT=$(sed -nE 's/.*127\.0\.0\.1:([0-9]+).*/\1/p' "$MM_PORT_FORWARD_LOG" | head -1)
     [[ -n "$MM_LOCAL_PORT" ]] && break
     sleep 1
   done
