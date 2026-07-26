@@ -59,7 +59,7 @@ export interface PlacementPolicyMigration {
   fromGatewayId: string;
   toGatewayId: string;
   source: "continuous-placement-policy" | "builder-activation-lease";
-  status: "pending" | "running" | "failed" | "rolled-back";
+  status: "pending" | "running" | "succeeded" | "failed" | "rolled-back";
   error?: string;
 }
 
@@ -578,6 +578,17 @@ async function reconcileProvisioningActivation(
     });
     return;
   }
+  if (target.desiredStatus === "retired") {
+    await context.deps.failActivationLease({
+      uid: user.uid,
+      leaseId: lease.leaseId,
+      generation: lease.generation,
+      targetGatewayId: target.gatewayId,
+      operationId: `placement-retire-${user.uid}-${target.gatewayId}`,
+      message: "disposable gateway retired before activation cutover completed",
+    });
+    return;
+  }
   const authorized = accountAllowsInteractiveAccess(user.data) &&
     resolveBuilderTier(user.data, new Date(context.deps.now())) !== null;
   if (!authorized) {
@@ -847,6 +858,35 @@ async function reconcileActiveLease(
 ): Promise<void> {
   const targetGatewayId = lease.targetGatewayId;
   const target = targetGatewayId ? context.gateways.get(targetGatewayId) : null;
+  const returnOperationId = targetGatewayId
+    ? `builder-return-${targetGatewayId}`
+    : null;
+  const completedReturn = returnOperationId
+    ? context.operations.get(returnOperationId)
+    : undefined;
+  if (
+    current === context.state.defaultGatewayId &&
+    target &&
+    completedReturn?.status === "succeeded" &&
+    disposableTargetIdentityMatchesLease(target, user, lease) &&
+    activationMigrationMatches(completedReturn, {
+      id: returnOperationId!,
+      uid: user.uid,
+      builderSlug,
+      fromGatewayId: target.gatewayId,
+      toGatewayId: context.state.defaultGatewayId,
+    })
+  ) {
+    await context.deps.advanceActivationLease({
+      uid: user.uid,
+      leaseId: lease.leaseId,
+      generation: lease.generation,
+      fromStatus: "active",
+      toStatus: "returning",
+      operationId: completedReturn.id,
+    });
+    return;
+  }
   if (
     current !== targetGatewayId ||
     !target ||
@@ -1226,6 +1266,7 @@ function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration |
   if (
     status !== "pending" &&
     status !== "running" &&
+    status !== "succeeded" &&
     status !== "failed" &&
     status !== "rolled-back"
   ) {
@@ -1312,6 +1353,23 @@ async function readPlacementPolicySnapshot(
     ]);
   const defaultGatewayId = nonEmptyString(configSnap.data()?.defaultGatewayId);
   if (!defaultGatewayId) throw new Error("config/orchestrator.defaultGatewayId is missing");
+  const completedReturnRefs = usersSnap.docs.flatMap((doc) => {
+    const userData = doc.data() as Record<string, unknown>;
+    const lease = builderActivationLease(userData);
+    return (
+      lease?.status === "active" &&
+      lease.targetGatewayId &&
+      currentGatewayId(userData) === defaultGatewayId
+    )
+      ? [
+          db.collection(GLM_OPERATIONS_COLLECTION)
+            .doc(`builder-return-${lease.targetGatewayId}`),
+        ]
+      : [];
+  });
+  const completedReturnSnapshots = completedReturnRefs.length > 0
+    ? await db.getAll(...completedReturnRefs)
+    : [];
   const admission = placementPolicyAdmission(
     configSnap.data()?.disposableGatewayPlacementAdmission,
   );
@@ -1363,7 +1421,12 @@ async function readPlacementPolicySnapshot(
     }))],
     users: usersSnap.docs.map((doc) => ({ uid: doc.id, data: doc.data() as Record<string, unknown> })),
     gateways,
-    activeMigrations: opsSnap.docs.flatMap((doc) => activeMigration(doc) ?? []),
+    activeMigrations: [
+      ...opsSnap.docs,
+      ...completedReturnSnapshots.filter(
+        (snapshot) => snapshot.exists && snapshot.data()?.status === "succeeded",
+      ),
+    ].flatMap((doc) => activeMigration(doc as QueryDocumentSnapshot) ?? []),
   };
 }
 
