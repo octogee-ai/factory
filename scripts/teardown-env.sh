@@ -20,7 +20,8 @@ set -euo pipefail
 # --full: also drops the per-env Cloud SQL databases, wipes Firebase Storage
 #         and Firestore collections, deletes per-env Cloud Functions (chat
 #         proxy preserved), Firebase Auth users, durable application PVCs,
-#         and dynamic per-gateway K8s ServiceAccounts/auth/model-key secrets.
+#         dynamic per-gateway K8s ServiceAccounts/auth/model-key secrets, and
+#         Gitea API token material invalidated by the database reset.
 #         Still preserves: platform/static K8s secrets and namespace.
 #
 # Does NOT delete (ever): GCP projects, GKE clusters, AR repos,
@@ -53,6 +54,7 @@ FORCE=false
 FULL=false
 PROXY_PID=""
 PRIVATE_SQL_OWNER_RESET_DONE=false
+GATEWAY_RUNTIME_CLEANUP_DONE=false
 
 for arg in "$@"; do
   case $arg in
@@ -68,7 +70,8 @@ for arg in "$@"; do
       echo "  --full     Also drops Cloud SQL DBs + wipes Firebase Storage, Firestore + Cloud"
       echo "             Functions + Auth users + deletes durable PVCs."
       echo "             Still preserves platform/static K8s secrets, Secret Manager infra entries,"
-      echo "             and namespace; removes dynamic per-gateway K8s identities/secrets."
+      echo "             and namespace; removes dynamic per-gateway identities/secrets and"
+      echo "             database-bound Gitea API token material."
       echo ""
       echo "  To rotate a secret: scripts/rotate-secret.sh"
       exit 0
@@ -99,6 +102,7 @@ K8S_CONTEXT="$TARGET_KUBE_CONTEXT"
 K8S_NAMESPACE="$TARGET_NAMESPACE"
 REGION="$TARGET_REGION"
 TARGET_ARG=" --deployment-target=$TARGET_ID"
+GITEA_API_TOKEN_SM_KEY="gitea-api-token-${TARGET_SECRET_NAME_SUFFIX}"
 
 case "$ENV" in
   prod)
@@ -168,11 +172,12 @@ if $FULL; then
   echo -e "  ${RED}  + Firebase Auth users (all)${NC}"
   echo -e "  ${RED}  + Secret Manager: byok-* (per-customer BYOK keys orphaned by Firestore wipe)${NC}"
   echo -e "  ${RED}  + Dynamic gateway K8s ServiceAccounts + auth/model-key secrets${NC}"
+  echo -e "  ${RED}  + Gitea API token material (K8s + Secret Manager; invalid after DB reset)${NC}"
 fi
 echo ""
 echo "  Will preserve:"
 if $FULL; then
-  echo "    • Platform/static K8s secrets in $K8S_NAMESPACE (rotate via scripts/rotate-secret.sh)"
+  echo "    • Platform/static K8s secrets in $K8S_NAMESPACE except database-bound gitea-token"
 else
   echo "    • All K8s secrets in $K8S_NAMESPACE (rotate via scripts/rotate-secret.sh)"
 fi
@@ -491,13 +496,55 @@ YAML
   printf '%s' "$observed_owner"
 }
 
+remove_gitea_database_credentials() {
+  local inspection secret_manager_stderr
+
+  kubectl delete secret gitea-token -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
+    --ignore-not-found=true --wait=true >/dev/null \
+    || die "could not delete database-bound Kubernetes secret gitea-token"
+  inspection=$(kubectl get secret gitea-token -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
+    --ignore-not-found -o name) \
+    || die "could not verify database-bound Kubernetes secret gitea-token removal"
+  [[ -z "$inspection" ]] \
+    || die "database-bound Kubernetes secret gitea-token remains after cleanup"
+
+  secret_manager_stderr=$(mktemp)
+  if gcloud secrets describe "$GITEA_API_TOKEN_SM_KEY" --project=octogee \
+      --format='value(name)' >/dev/null 2>"$secret_manager_stderr"; then
+    gcloud secrets delete "$GITEA_API_TOKEN_SM_KEY" --project=octogee --quiet \
+      || die "could not delete database-bound Secret Manager token $GITEA_API_TOKEN_SM_KEY"
+  elif ! grep -qE "NOT_FOUND|was not found|does not exist" "$secret_manager_stderr"; then
+    sed 's/^/      /' "$secret_manager_stderr" >&2
+    rm -f "$secret_manager_stderr"
+    die "could not inspect database-bound Secret Manager token $GITEA_API_TOKEN_SM_KEY"
+  fi
+
+  if gcloud secrets describe "$GITEA_API_TOKEN_SM_KEY" --project=octogee \
+      --format='value(name)' >/dev/null 2>"$secret_manager_stderr"; then
+    rm -f "$secret_manager_stderr"
+    die "database-bound Secret Manager token $GITEA_API_TOKEN_SM_KEY remains after cleanup"
+  elif ! grep -qE "NOT_FOUND|was not found|does not exist" "$secret_manager_stderr"; then
+    sed 's/^/      /' "$secret_manager_stderr" >&2
+    rm -f "$secret_manager_stderr"
+    die "could not verify database-bound Secret Manager token $GITEA_API_TOKEN_SM_KEY removal"
+  fi
+  rm -f "$secret_manager_stderr"
+  ok "Database-bound Gitea token material confirmed absent"
+}
+
 reset_private_cloud_sql_databases() {
   local dbname owner secret_name secret_key observed_owner exists_rc
   quiesce_private_sql_writers
   for dbname in "$MM_DB_NAME" "$GITEA_DB_NAME"; do
     case "$dbname" in
       "$MM_DB_NAME") owner=mattermost; secret_name=mattermost-cloud-sql; secret_key=password ;;
-      "$GITEA_DB_NAME") owner=gitea; secret_name=gitea-credentials; secret_key=db-password ;;
+      "$GITEA_DB_NAME")
+        info "Deleting Gitea token material invalidated by the database reset..."
+        remove_gitea_database_credentials
+        owner=gitea
+        secret_name=gitea-credentials
+        secret_key=db-password
+        ;;
       *) die "no private Cloud SQL owner reset credential is configured for $dbname" ;;
     esac
     if database_exists "$dbname"; then
@@ -518,18 +565,6 @@ reset_private_cloud_sql_databases() {
     verify_database_through_api "$dbname"
   done
 }
-
-if $FULL; then
-  instance_ip_types="$(gcloud sql instances describe "$TARGET_CLOUD_SQL_INSTANCE" \
-    --project="$TARGET_CLOUD_SQL_PROJECT" --format='value(ipAddresses.type)')" \
-    || die "Cloud SQL instance inspection failed; refusing to classify a transport/config failure as a credential failure"
-  if [[ "$instance_ip_types" != *"PRIMARY"* ]]; then
-    info "Cloud SQL has no public IP; resetting application-owned databases through exact-target in-cluster credentials..."
-    reset_private_cloud_sql_databases
-    PRIVATE_SQL_OWNER_RESET_DONE=true
-    ok "Private Cloud SQL owner reset completed before Helm uninstall"
-  fi
-fi
 
 verify_durable_pvcs_absent() {
   local pvc
@@ -713,9 +748,35 @@ uninstall_per_instance_gateways() {
   fi
 }
 
+prepare_gateway_runtime_for_database_reset() {
+  info "Quiescing glm-controller before per-instance Helm removal..."
+  quiesce_gateway_controller
+  if $FORCE && [[ "$ENV" == "test" ]]; then
+    uninstall_per_instance_gateways 1m --no-hooks
+  else
+    uninstall_per_instance_gateways 2m
+  fi
+  info "Deleting dynamic gateway runtime identities retained outside Helm..."
+  cleanup_dynamic_gateway_runtime_identities
+  GATEWAY_RUNTIME_CLEANUP_DONE=true
+}
+
+if $FULL; then
+  instance_ip_types="$(gcloud sql instances describe "$TARGET_CLOUD_SQL_INSTANCE" \
+    --project="$TARGET_CLOUD_SQL_PROJECT" --format='value(ipAddresses.type)')" \
+    || die "Cloud SQL instance inspection failed; refusing to classify a transport/config failure as a credential failure"
+  if [[ "$instance_ip_types" != *"PRIMARY"* ]]; then
+    prepare_gateway_runtime_for_database_reset
+    info "Cloud SQL has no public IP; resetting application-owned databases through exact-target in-cluster credentials..."
+    reset_private_cloud_sql_databases
+    PRIVATE_SQL_OWNER_RESET_DONE=true
+    ok "Private Cloud SQL owner reset completed before Helm uninstall"
+  fi
+fi
+
 # ── 1. Helm uninstall + resource cleanup ─────────────────────────────────
 echo ""
-if $FULL; then
+if $FULL && ! $GATEWAY_RUNTIME_CLEANUP_DONE; then
   info "Quiescing glm-controller before per-instance Helm removal..."
   quiesce_gateway_controller
 fi
@@ -723,7 +784,9 @@ if $FORCE && [[ "$ENV" == "test" ]]; then
   # Fast path for test --yes: force-delete gateway/app resources. --full
   # has already requested deletion of the durable PVCs in step 1a.
   info "Fast teardown (test + --yes)..."
-  uninstall_per_instance_gateways 1m --no-hooks
+  if ! $GATEWAY_RUNTIME_CLEANUP_DONE; then
+    uninstall_per_instance_gateways 1m --no-hooks
+  fi
   helm uninstall octogee -n "$K8S_NAMESPACE" \
     --kube-context "$K8S_CONTEXT" --no-hooks --timeout=1m 2>/dev/null || true
   kubectl delete deploy,statefulset,job --all -n "$K8S_NAMESPACE" --force --grace-period=0 2>/dev/null || true
@@ -735,7 +798,9 @@ if $FORCE && [[ "$ENV" == "test" ]]; then
   fi
   FAST_DONE=true
 else
-  uninstall_per_instance_gateways 2m
+  if ! $GATEWAY_RUNTIME_CLEANUP_DONE; then
+    uninstall_per_instance_gateways 2m
+  fi
   info "Uninstalling Helm release 'octogee'..."
   if helm status octogee -n "$K8S_NAMESPACE" \
       --kube-context "$K8S_CONTEXT" >/dev/null 2>&1; then
@@ -763,8 +828,10 @@ fi
 
 if $FULL; then
   echo ""
-  info "Deleting dynamic gateway runtime identities retained outside Helm..."
-  cleanup_dynamic_gateway_runtime_identities
+  if ! $GATEWAY_RUNTIME_CLEANUP_DONE; then
+    info "Deleting dynamic gateway runtime identities retained outside Helm..."
+    cleanup_dynamic_gateway_runtime_identities
+  fi
   verify_durable_pvcs_absent
 fi
 
@@ -921,6 +988,8 @@ if $FULL; then
   if [[ "$instance_ip_types" != *"PRIMARY"* ]]; then
     info "Cloud SQL has no public IP; resetting databases through the Cloud SQL Admin API..."
     reset_database_through_api "$MM_DB_NAME"
+    info "Deleting Gitea token material invalidated by the database reset..."
+    remove_gitea_database_credentials
     reset_database_through_api "$GITEA_DB_NAME"
     echo ""
     echo -e "  ${BOLD}Cloud SQL reset complete:${NC}"
@@ -1041,6 +1110,8 @@ if $FULL; then
   }
 
     drop_and_verify mattermost "$MM_DB_PASS" "$MM_DB_NAME"
+    info "Deleting Gitea token material invalidated by the database reset..."
+    remove_gitea_database_credentials
     drop_and_verify gitea      "$GITEA_DB_PASS" "$GITEA_DB_NAME"
 
     kill "$PROXY_PID" 2>/dev/null || true
