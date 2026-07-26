@@ -30,6 +30,7 @@ import {
   advanceActivationLeaseFirestore,
   allocateDisposableGatewayFirestore,
   completeActivationLeaseFirestore,
+  failActivationLeaseFirestore,
   readBuilderActivityFirestore,
 } from "./disposable-gateway-lifecycle.js";
 
@@ -45,6 +46,8 @@ export interface PlacementPolicyMigration {
   id: string;
   uid: string;
   toGatewayId: string;
+  status: "pending" | "running" | "failed" | "rolled-back";
+  error?: string;
 }
 
 export interface PlacementPolicySnapshot {
@@ -91,6 +94,15 @@ export interface CompleteActivationLeaseInput {
   targetGatewayId: string;
 }
 
+export interface FailActivationLeaseInput {
+  uid: string;
+  leaseId: string;
+  generation: number;
+  targetGatewayId: string;
+  operationId: string;
+  message: string;
+}
+
 export interface BuilderRuntimeActivity {
   lastActiveAt: number | null;
   liveRun: boolean;
@@ -103,6 +115,8 @@ export interface RetireOwnedGatewayInput {
   gatewayId: string;
   leaseId?: string;
   generation?: number;
+  telemetryFenceOperationId?: string;
+  telemetryFenceStatus?: "succeeded" | "terminal-failure";
 }
 
 export interface AssignInitialPlacementInput {
@@ -120,6 +134,7 @@ export interface PlacementPolicyReconcilerDeps {
   allocateDisposableGateway(input: AllocateDisposableGatewayInput): Promise<string>;
   advanceActivationLease(input: AdvanceActivationLeaseInput): Promise<void>;
   completeActivationLease(input: CompleteActivationLeaseInput): Promise<void>;
+  failActivationLease(input: FailActivationLeaseInput): Promise<void>;
   readBuilderActivity(input: {
     uid: string;
     builderSlug: string;
@@ -205,6 +220,7 @@ interface PlacementPolicyReconcileContext {
   state: PlacementPolicySnapshot;
   gateways: Map<string, ContinuousPlacementOwnedGateway>;
   migrations: Map<string, PlacementPolicyMigration>;
+  operations: Map<string, PlacementPolicyMigration>;
   result: PlacementPolicyReconcileResult;
 }
 
@@ -325,7 +341,12 @@ async function reconcileProvisioningActivation(
 ): Promise<void> {
   const targetGatewayId = lease.targetGatewayId;
   const target = targetGatewayId ? context.gateways.get(targetGatewayId) : null;
-  if (!target || !disposableTargetMatchesLease(target, user, lease)) {
+  if (!target || !disposableTargetIdentityMatchesLease(target, user, lease)) {
+    context.result.blocked += 1;
+    return;
+  }
+  if (await cleanupFailedActivation(context, user, builderSlug, lease, target)) return;
+  if (target.desiredStatus !== "running") {
     context.result.blocked += 1;
     return;
   }
@@ -379,9 +400,17 @@ async function reconcileProvisioningActivation(
 async function reconcileActivatingLease(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
+  builderSlug: string,
   current: string | null,
   lease: BuilderActivationLease,
 ): Promise<void> {
+  const targetGatewayId = lease.targetGatewayId;
+  const target = targetGatewayId ? context.gateways.get(targetGatewayId) : null;
+  if (!target || !disposableTargetIdentityMatchesLease(target, user, lease)) {
+    context.result.blocked += 1;
+    return;
+  }
+  if (await cleanupFailedActivation(context, user, builderSlug, lease, target)) return;
   if (current !== lease.targetGatewayId) return;
   await context.deps.advanceActivationLease({
     uid: user.uid,
@@ -390,6 +419,45 @@ async function reconcileActivatingLease(
     fromStatus: "activating",
     toStatus: "active",
   });
+}
+
+async function cleanupFailedActivation(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  builderSlug: string,
+  lease: BuilderActivationLease,
+  target: ContinuousPlacementOwnedGateway,
+): Promise<boolean> {
+  const operationId = `builder-activate-${target.gatewayId}`;
+  const operation = context.operations.get(operationId);
+  if (!operation || (operation.status !== "failed" && operation.status !== "rolled-back")) {
+    return false;
+  }
+  if (target.desiredStatus !== "retired") {
+    const retired = await context.deps.retireOwnedGateway({
+      uid: user.uid,
+      builderSlug,
+      gatewayId: target.gatewayId,
+      leaseId: lease.leaseId,
+      generation: lease.generation,
+      telemetryFenceOperationId: operationId,
+      telemetryFenceStatus: "terminal-failure",
+    });
+    if (!retired) {
+      context.result.blocked += 1;
+      return true;
+    }
+    context.result.retired += 1;
+  }
+  await context.deps.failActivationLease({
+    uid: user.uid,
+    leaseId: lease.leaseId,
+    generation: lease.generation,
+    targetGatewayId: target.gatewayId,
+    operationId,
+    message: operation.error ?? `activation migration ${operation.status}`,
+  });
+  return true;
 }
 
 async function queueLeaseReturn(
@@ -534,6 +602,8 @@ async function reconcileReturningLease(
     gatewayId: targetGatewayId,
     leaseId: lease.leaseId,
     generation: lease.generation,
+    telemetryFenceOperationId: `builder-return-${targetGatewayId}`,
+    telemetryFenceStatus: "succeeded",
   });
   if (!retired) {
     context.result.blocked += 1;
@@ -565,7 +635,7 @@ async function reconcileActivationLease(
     return true;
   }
   if (lease.status === "activating") {
-    await reconcileActivatingLease(context, user, current, lease);
+    await reconcileActivatingLease(context, user, builderSlug, current, lease);
     return true;
   }
   if (lease.status === "active") {
@@ -634,7 +704,12 @@ export async function reconcilePlacementPolicyOnce(
   const state = await deps.readSnapshot();
   if (!state.defaultGatewayId) throw new Error("placement policy default gateway is missing");
   const gateways = new Map(state.gateways.map((item) => [item.gatewayId, item]));
-  const migrations = new Map(state.activeMigrations.map((item) => [item.uid, item]));
+  const migrations = new Map(
+    state.activeMigrations
+      .filter((item) => item.status === "pending" || item.status === "running")
+      .map((item) => [item.uid, item]),
+  );
+  const operations = new Map(state.activeMigrations.map((item) => [item.id, item]));
   const result: PlacementPolicyReconcileResult = {
     assigned: 0,
     enqueued: 0,
@@ -643,7 +718,7 @@ export async function reconcilePlacementPolicyOnce(
     blocked: 0,
   };
 
-  const context = { deps, state, gateways, migrations, result };
+  const context = { deps, state, gateways, migrations, operations, result };
   for (const user of [...state.users].sort((a, b) => a.uid.localeCompare(b.uid))) {
     await reconcilePlacementUser(context, user);
   }
@@ -661,7 +736,24 @@ function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration |
   if (!input || typeof input !== "object" || Array.isArray(input)) return null;
   const uid = nonEmptyString((input as Record<string, unknown>).uid) ?? nonEmptyString(data.inputUid);
   const toGatewayId = nonEmptyString((input as Record<string, unknown>).toGatewayId);
-  return uid && toGatewayId ? { id: doc.id, uid, toGatewayId } : null;
+  const status = data.status;
+  if (
+    status !== "pending" &&
+    status !== "running" &&
+    status !== "failed" &&
+    status !== "rolled-back"
+  ) {
+    return null;
+  }
+  return uid && toGatewayId
+    ? {
+        id: doc.id,
+        uid,
+        toGatewayId,
+        status,
+        ...(typeof data.error === "string" ? { error: data.error } : {}),
+      }
+    : null;
 }
 
 interface FirestorePlacementPolicyInput {
@@ -683,7 +775,9 @@ async function readPlacementPolicySnapshot(
       db.collection("users").get(),
       db.collection(GATEWAYS_COLLECTION).get(),
       db.collection(GLM_GATEWAYS_COLLECTION).get(),
-      db.collection(GLM_OPERATIONS_COLLECTION).where("status", "in", ["pending", "running"]).get(),
+      db.collection(GLM_OPERATIONS_COLLECTION)
+        .where("status", "in", ["pending", "running", "failed", "rolled-back"])
+        .get(),
     ]);
   const defaultGatewayId = nonEmptyString(configSnap.data()?.defaultGatewayId);
   if (!defaultGatewayId) throw new Error("config/orchestrator.defaultGatewayId is missing");
@@ -815,14 +909,18 @@ async function retireOwnedGatewayFirestore(
   const operationId = `placement-retire-${request.uid}-${request.gatewayId}`;
   const now = input.now();
   let telemetryObservedAfter: number | undefined;
-  if (request.leaseId !== undefined) {
-    const returnOperationId = `builder-return-${request.gatewayId}`;
+  if (request.telemetryFenceOperationId !== undefined) {
+    const returnOperationId = request.telemetryFenceOperationId;
     const returnSnapshot = await input.db
       .collection(GLM_OPERATIONS_COLLECTION)
       .doc(returnOperationId)
       .get();
     const completedAt = millis(returnSnapshot.data()?.completedAt);
-    if (!returnSnapshot.exists || returnSnapshot.data()?.status !== "succeeded" || completedAt === null) {
+    const terminalStatus = returnSnapshot.data()?.status;
+    const expectedStatusMatches = request.telemetryFenceStatus === "terminal-failure"
+      ? terminalStatus === "failed" || terminalStatus === "rolled-back"
+      : terminalStatus === "succeeded";
+    if (!returnSnapshot.exists || !expectedStatusMatches || completedAt === null) {
       input.log(
         `[placement-policy] retirement blocked for ${request.gatewayId}: return operation ${returnOperationId} is incomplete`,
       );
@@ -895,6 +993,7 @@ export function createFirestorePlacementPolicyReconcilerDeps(
     allocateDisposableGateway: (request) => allocateDisposableGatewayFirestore(input, request),
     advanceActivationLease: (request) => advanceActivationLeaseFirestore(input, request),
     completeActivationLease: (request) => completeActivationLeaseFirestore(input, request),
+    failActivationLease: (request) => failActivationLeaseFirestore(input, request),
     readBuilderActivity: (request) => readBuilderActivityFirestore(input, request),
     enqueueMigration: (request) => enqueuePlacementMigration(input, request),
     retireOwnedGateway: (request) => retireOwnedGatewayFirestore(input, request),
