@@ -162,11 +162,16 @@ export declare function projectBuilderRuntime(userDoc: FirestoreDocLike, gateway
     targetPodStatus: GatewayPodDiagnosticsStatus | null;
     targetPodCount: number | null;
 } | null;
-export declare function projectDisposableFleetCapacity(gateways: ReadonlyArray<ReturnType<typeof projectGatewaySummary>>): {
+export declare function projectDisposableFleetCapacity(gateways: ReadonlyArray<ReturnType<typeof projectGatewaySummary>>, builderRuntimes?: ReadonlyArray<NonNullable<ReturnType<typeof projectBuilderRuntime>>>, parkedBuilders?: number): {
     disposableInstances: number;
     stagedInstances: 0;
     namedReservations: 0;
     byTier: Record<string, number>;
+    parkedBuilders: number;
+    byLifecycle: Record<AdminBuilderRuntimeLifecycle | "parked", number>;
+    failedBuilders: number;
+    staleActivations: number;
+    oldestActivationAgeMs: number | null;
 };
 interface RolloutBodyError {
     status: number;

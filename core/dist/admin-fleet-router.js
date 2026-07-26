@@ -969,17 +969,40 @@ export function projectBuilderRuntime(userDoc, gatewaysById, operationsById, now
         targetPodCount: null,
     };
 }
-export function projectDisposableFleetCapacity(gateways) {
+export function projectDisposableFleetCapacity(gateways, builderRuntimes = [], parkedBuilders = 0) {
     const disposables = gateways.filter((gateway) => gateway.disposableRuntime !== null);
     const byTier = {};
+    const byLifecycle = {
+        requested: 0,
+        provisioning: 0,
+        activating: 0,
+        active: 0,
+        returning: 0,
+        retiring: 0,
+        failed: 0,
+        parked: parkedBuilders,
+    };
     for (const gateway of disposables) {
         byTier[gateway.sizing.tier] = (byTier[gateway.sizing.tier] ?? 0) + 1;
     }
+    for (const runtime of builderRuntimes) {
+        byLifecycle[runtime.lifecycle] += 1;
+    }
+    const activationAges = builderRuntimes.flatMap((runtime) => (runtime.lifecycle === "requested" ||
+        runtime.lifecycle === "provisioning" ||
+        runtime.lifecycle === "activating") && runtime.wakeDurationMs !== null
+        ? [runtime.wakeDurationMs]
+        : []);
     return {
         disposableInstances: disposables.length,
         stagedInstances: 0,
         namedReservations: 0,
         byTier,
+        parkedBuilders,
+        byLifecycle,
+        failedBuilders: byLifecycle.failed,
+        staleActivations: builderRuntimes.filter((runtime) => runtime.stale).length,
+        oldestActivationAgeMs: activationAges.length === 0 ? null : Math.max(...activationAges),
     };
 }
 function rollupFleetStats(gateways) {
@@ -2604,11 +2627,12 @@ export function addAdminFleetRoutes(router, deps) {
     });
     router.get("/gateways", async (_req, res, next) => {
         try {
-            const [gwSnap, glmSnap, usersSnap, operationsSnap, settings] = await Promise.all([
+            const [gwSnap, glmSnap, usersSnap, operationsSnap, configSnap, settings] = await Promise.all([
                 db.collection("gateways").get(),
                 db.collection(GLM_GATEWAYS_COLLECTION).get(),
                 db.collection("users").get(),
                 db.collection(GLM_OPERATIONS_COLLECTION).get(),
+                db.doc("config/orchestrator").get(),
                 readFleetRuntimeSettings(),
             ]);
             const glmByGatewayId = indexAdminGatewayRuntimeDocs({
@@ -2627,6 +2651,19 @@ export function addAdminFleetRoutes(router, deps) {
                         runtime.cleanupOperationStatus !== "succeeded"))
                 ? [runtime.targetGatewayId]
                 : []));
+            for (const [gatewayId, gateway] of glmByGatewayId) {
+                const retirementClaim = isPlainRecord(gateway.retirementClaim)
+                    ? gateway.retirementClaim
+                    : null;
+                const operationId = asStringOrNull(retirementClaim?.operationId) ??
+                    `placement-retire-${asStringOrNull(gateway.ownerUid) ?? "unknown"}-${gatewayId}`;
+                const cleanupStatus = operationsById.get(operationId)?.status;
+                if (projectDesiredStatus(gateway) === "retired" &&
+                    projectDisposableRuntime(gateway) !== null &&
+                    cleanupStatus !== "succeeded") {
+                    visibleRetiredGatewayIds.add(gatewayId);
+                }
+            }
             const gatewayIds = new Set(glmByGatewayId.keys());
             const gatewayInputs = [...gatewayIds].flatMap((gatewayId) => {
                 const glmDoc = glmByGatewayId.get(gatewayId);
@@ -2659,15 +2696,22 @@ export function addAdminFleetRoutes(router, deps) {
                     targetPodStatus,
                     targetPodCount,
                     retryAvailable: runtime.lifecycle === "failed" &&
+                        runtime.cleanupOperationStatus === "succeeded" &&
                         target?.desiredStatus === "retired" &&
                         targetPodStatus === "missing" &&
                         targetPodCount === 0,
                 };
             });
+            const defaultGatewayId = asStringOrNull(configSnap.data()?.defaultGatewayId);
+            const parkedBuilders = usersSnap.docs.filter((doc) => {
+                const resolved = activationLeaseFromUser(doc.data());
+                return (resolved?.lease.status === "parked" &&
+                    asStringOrNull(resolved.openclaw.gatewayId) === defaultGatewayId);
+            }).length;
             res.json({
                 gateways,
                 builderRuntimes: builderRuntimeViews,
-                disposableCapacity: projectDisposableFleetCapacity(gateways),
+                disposableCapacity: projectDisposableFleetCapacity(gateways, builderRuntimeViews, parkedBuilders),
                 stats: rollupFleetStats(gateways),
                 settings,
                 namespace: resolveFleetNamespace(),
@@ -3072,8 +3116,12 @@ export function addAdminFleetRoutes(router, deps) {
                 return;
             }
             const userRef = db.collection("users").doc(uid);
+            const assignmentRef = db.doc(`gateways/${defaultGatewayId}/assignments/${uid}`);
             const outcome = await db.runTransaction(async (transaction) => {
-                const userSnapshot = await transaction.get(userRef);
+                const [userSnapshot, assignmentSnapshot] = await Promise.all([
+                    transaction.get(userRef),
+                    transaction.get(assignmentRef),
+                ]);
                 if (!userSnapshot.exists)
                     return { kind: "not-found" };
                 const data = userSnapshot.data();
@@ -3084,10 +3132,6 @@ export function addAdminFleetRoutes(router, deps) {
                     lease.generation !== body.generation) {
                     return { kind: "conflict", reason: "lease generation changed" };
                 }
-                if (lease.status === "returning" &&
-                    toMillis(lease.operatorTerminateRequestedAt) !== null) {
-                    return { kind: "adopted" };
-                }
                 const targetGatewayId = asStringOrNull(lease.targetGatewayId);
                 if (!targetGatewayId ||
                     asStringOrNull(resolved?.openclaw.gatewayId) !== defaultGatewayId) {
@@ -3095,6 +3139,23 @@ export function addAdminFleetRoutes(router, deps) {
                         kind: "conflict",
                         reason: "Builder is not authoritative on the shared gateway",
                     };
+                }
+                const assignment = assignmentSnapshot.exists
+                    ? assignmentSnapshot.data()
+                    : undefined;
+                if (!assignmentSnapshot.exists ||
+                    assignment?.uid !== uid ||
+                    assignment.gatewayId !== defaultGatewayId ||
+                    assignment.state !== "serving" ||
+                    !Number.isSafeInteger(assignment.epoch)) {
+                    return {
+                        kind: "conflict",
+                        reason: "canonical shared assignment is not serving",
+                    };
+                }
+                if (lease.status === "returning" &&
+                    toMillis(lease.operatorTerminateRequestedAt) !== null) {
+                    return { kind: "adopted" };
                 }
                 const targetRef = db.collection(GATEWAYS_COLLECTION).doc(targetGatewayId);
                 const targetSnapshot = await transaction.get(targetRef);
