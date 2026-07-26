@@ -76,6 +76,22 @@ function demandBody(input) {
         },
     };
 }
+function parkedDuplicateBody(lease) {
+    if (lease.status !== "parked" ||
+        !nonEmptyString(lease.leaseId) ||
+        !positiveInteger(lease.generation)) {
+        return null;
+    }
+    return {
+        statusCode: 200,
+        body: {
+            status: "parked",
+            leaseId: lease.leaseId,
+            generation: lease.generation,
+            duplicate: true,
+        },
+    };
+}
 export async function requestBuilderActivationLease(input) {
     const invalid = invalidRequest(input);
     if (invalid)
@@ -138,6 +154,15 @@ export async function requestBuilderActivationLease(input) {
                 },
             };
         }
+        if (cause === "shell" && !BUILDER_TIERS[entitlementTier].builderShell) {
+            return {
+                statusCode: 403,
+                body: {
+                    code: "gateway-shells-locked",
+                    error: "Gateway shell access is locked until the tier enables it",
+                },
+            };
+        }
         const sizingTier = BUILDER_TIERS[entitlementTier].instance;
         if (!sizingTier) {
             return {
@@ -160,6 +185,12 @@ export async function requestBuilderActivationLease(input) {
             };
         }
         const existing = userLease(userData);
+        if (existing?.eventKey === eventKey ||
+            existing?.lastEventKey === eventKey) {
+            const duplicate = parkedDuplicateBody(existing);
+            if (duplicate)
+                return duplicate;
+        }
         if (existing?.status === "returning" &&
             nonEmptyString(existing.leaseId) &&
             positiveInteger(existing.generation)) {
