@@ -104,7 +104,7 @@ export function assessReleaseConvergence(
   const failures: string[] = [];
   assessDefaultPointer(snapshot, baseline, failures);
   const activeGateways = assessFleet(snapshot, failures);
-  assessRolloutOperations(snapshot, failures);
+  assessRolloutOperations(snapshot, activeGateways, failures);
   const defaultGateway = assessDefaultGateway(snapshot, activeGateways, failures);
   assessDefaultRuntime(snapshot, defaultGateway, failures);
   assessDefaultDeployment(snapshot, baseline, failures);
@@ -149,9 +149,12 @@ function assessFleet(
 
 function assessRolloutOperations(
   snapshot: ReleaseConvergenceSnapshot,
+  activeGateways: readonly ReleaseConvergenceGateway[],
   failures: string[],
 ): void {
+  const activeGatewayIds = new Set(activeGateways.map((gateway) => gateway.gatewayId));
   for (const operation of snapshot.rolloutOperations) {
+    if (!activeGatewayIds.has(operation.gatewayId)) continue;
     if (!artifactTagMatchesExpected(operation.imageTag, snapshot.expectedImageTag)) continue;
     if (operation.status === "succeeded") continue;
     const suffix = operation.status === "failed" && operation.error
@@ -162,6 +165,18 @@ function assessRolloutOperations(
       `rollout ${operation.id} for ${operation.gatewayId} ${status}${suffix}`,
     );
   }
+}
+
+export function hasBlockingRolloutFailure(snapshot: ReleaseConvergenceSnapshot): boolean {
+  const activeGatewayIds = new Set(
+    snapshot.gateways
+      .filter((gateway) => gateway.desiredStatus !== "retired")
+      .map((gateway) => gateway.gatewayId),
+  );
+  return snapshot.rolloutOperations.some((operation) =>
+    activeGatewayIds.has(operation.gatewayId) &&
+    artifactTagMatchesExpected(operation.imageTag, snapshot.expectedImageTag) &&
+    (operation.status === "failed" || operation.status === "rolled-back"));
 }
 
 function assessDefaultGateway(

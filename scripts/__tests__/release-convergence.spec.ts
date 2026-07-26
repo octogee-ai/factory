@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   assessReleaseConvergence,
+  hasBlockingRolloutFailure,
   type ReleaseConvergenceSnapshot,
 } from "../lib/release-convergence.js";
 
@@ -170,6 +171,36 @@ describe("assessReleaseConvergence", () => {
     }).failures).toContain(
       "rollout roll-shared for shared-blue failed: readiness timeout",
     );
+    expect(hasBlockingRolloutFailure(value)).toBe(true);
+  });
+
+  it("ignores a failed tagged rollout superseded by gateway retirement", () => {
+    const value = snapshot({
+      gateways: [
+        snapshot().gateways[0]!,
+        {
+          ...snapshot().gateways[1]!,
+          desiredStatus: "retired",
+        },
+      ],
+      rolloutOperations: [
+        snapshot().rolloutOperations[0]!,
+        {
+          id: "roll-retired-builder",
+          gatewayId: "builder-chris",
+          imageTag: "abc1234-oc2026.7.1",
+          status: "failed",
+          error: "readiness timeout",
+        },
+      ],
+    });
+
+    expect(assessReleaseConvergence(value, {
+      configuredDefaultGatewayId: "shared-blue",
+      predecessorPodUids: [],
+      capturedAt: 1,
+    })).toEqual({ converged: true, failures: [] });
+    expect(hasBlockingRolloutFailure(value)).toBe(false);
   });
 
   it("rejects a default-pointer change during release", () => {

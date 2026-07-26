@@ -21,6 +21,7 @@ import {
 } from "@octogee/shared/types/glm";
 import {
   assessReleaseConvergence,
+  hasBlockingRolloutFailure,
   type ReleaseConvergenceBaseline,
   type ReleaseConvergenceDeployment,
   type ReleaseConvergenceGateway,
@@ -367,10 +368,7 @@ async function run(): Promise<void> {
       process.stdout.write(
         `Waiting for release convergence (${Math.ceil((deadline - Date.now()) / 60_000)}m remain): ${failures.join("; ")}\n`,
       );
-      if (observed.snapshot.rolloutOperations.some(
-        (operation) => operation.imageTag === options.expectedImageTag &&
-          (operation.status === "failed" || operation.status === "rolled-back"),
-      )) break;
+      if (hasBlockingRolloutFailure(observed.snapshot)) break;
     } catch (error) {
       failures = [error instanceof Error ? error.message : String(error)];
       process.stdout.write(`Waiting for release convergence: ${failures[0]}\n`);
