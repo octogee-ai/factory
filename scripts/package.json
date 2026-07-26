@@ -8,6 +8,7 @@
   "scripts": {
     "provision": "tsx entrypoints/fleet-controller.ts",
     "fleet": "tsx ops/fleet.ts",
+    "classify-disposable-gateways": "tsx ops/classify-disposable-gateways.ts",
     "backfill-gateway-field": "tsx ops/backfill-gateway-field.ts",
     "backfill-gateway-mutable-config": "tsx ops/backfill-gateway-mutable-config.ts",
     "verify:openclaw-candidate": "tsx ops/verify-openclaw-candidate.ts",
