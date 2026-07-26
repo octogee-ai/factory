@@ -107,6 +107,7 @@ glm-controller:
   kmsKeyName: "__KMS_KEY_NAME__"
   bootstrapDefaultGateway:
     imageRepository: __AR_REPOSITORY__/octogee-gateway
+    gatewayEdgeImageRepository: __AR_REPOSITORY__/gateway-edge
 
 llmBroker:
   image:

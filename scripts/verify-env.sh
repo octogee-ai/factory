@@ -32,6 +32,8 @@ source "$SCRIPT_DIR/lib/deployment-target.sh"
 source "$SCRIPT_DIR/lib/ready-assigned-gateway-probe.sh"
 # shellcheck source=scripts/lib/iap-endpoint-health.sh
 source "$SCRIPT_DIR/lib/iap-endpoint-health.sh"
+# shellcheck source=scripts/lib/gateway-image-bundle.sh
+source "$SCRIPT_DIR/lib/gateway-image-bundle.sh"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'
@@ -783,8 +785,8 @@ header "8. chat (gateway-edge sidecar + octogee-api)"
 #   - does NOT still carry a chat-proxy sidecar (the fold deleted it — a
 #     lingering one means the pod is a stale pre-#1124 image that never
 #     rolled, the exact failure mode that stalled gw-test/gw-prod),
-#   - gateway + gateway-edge share the same image SHA (a mismatch = a
-#     partial/stuck roll).
+#   - gateway + gateway-edge carry the same immutable build tag while each
+#     package keeps its own digest (a tag mismatch = a partial/stuck roll).
 # No running gateways is a WARN, not a failure — the fleet can legitimately
 # be scaled to zero (e.g. an idle TEST env).
 GW_PODS=$(kubectl get pods -l app=octogee-gateway -n "$NAMESPACE" -o json 2>/dev/null)
@@ -797,8 +799,6 @@ else
     CONTAINERS=$(kubectl get pod "$POD" -n "$NAMESPACE" -o jsonpath='{range .spec.containers[*]}{.name}{" "}{end}' 2>/dev/null)
     GE_IMG=$(kubectl get pod "$POD" -n "$NAMESPACE" -o jsonpath='{.spec.containers[?(@.name=="gateway-edge")].image}' 2>/dev/null)
     GW_IMG=$(kubectl get pod "$POD" -n "$NAMESPACE" -o jsonpath='{.spec.containers[?(@.name=="gateway")].image}' 2>/dev/null)
-    GE_SHA="${GE_IMG##*:}"; GE_SHA="${GE_SHA%%-*}"
-    GW_SHA="${GW_IMG##*:}"; GW_SHA="${GW_SHA%%-*}"
     if [[ -z "$GE_IMG" ]]; then
       fail "$POD: no gateway-edge container — stale pre-fold pod, needs a Cowboy roll"
     else
@@ -809,8 +809,10 @@ else
     else
       pass "$POD: chat-proxy sidecar gone (folded into gateway-edge)"
     fi
-    if [[ -n "$GE_SHA" && -n "$GW_SHA" && "$GE_SHA" != "$GW_SHA" ]]; then
-      warn "$POD: image SHA drift — gateway=$GW_SHA gateway-edge=$GE_SHA (partial/stuck roll)"
+    if BUNDLE_RESULT=$(octogee_gateway_image_bundle_identity "$GW_IMG" "$GE_IMG" 2>&1); then
+      pass "$POD: immutable gateway bundle $BUNDLE_RESULT (independent package digests)"
+    else
+      warn "$POD: $BUNDLE_RESULT"
     fi
   done <<< "$GW_POD_NAMES"
 fi

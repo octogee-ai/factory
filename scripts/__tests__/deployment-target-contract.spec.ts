@@ -463,14 +463,20 @@ describe("deployment target consumers", () => {
     expect(controller).not.toContain('process.env.K8S_NAMESPACE ?? "octogee"');
   });
 
-  it("seeds a fresh default gateway from the immutable platform release tag", () => {
+  it("seeds a fresh default gateway from separate immutable gateway and gateway-edge receipts", () => {
     const workflow = source(".github/workflows/build-and-deploy.yml");
 
     expect(workflow).toContain(
-      "--set glm-controller.bootstrapDefaultGateway.imageTag=${GLM_TAG}",
+      "--set-string glm-controller.bootstrapDefaultGateway.imageTag=${GLM_TAG}@${GATEWAY_DIGEST}",
     );
     expect(workflow).toContain(
       "--set glm-controller.bootstrapDefaultGateway.imageRepository=${{ steps.target.outputs.artifact_registry_repository }}/octogee-gateway",
+    );
+    expect(workflow).toContain(
+      "--set glm-controller.bootstrapDefaultGateway.gatewayEdgeImageRepository=${{ steps.target.outputs.artifact_registry_repository }}/gateway-edge",
+    );
+    expect(workflow).toContain(
+      "--set-string glm-controller.bootstrapDefaultGateway.gatewayEdgeImageTag=${GLM_TAG}@${ROUTER_DIGEST}",
     );
   });
 
@@ -481,7 +487,13 @@ describe("deployment target consumers", () => {
       "BOOTSTRAP_GATEWAY_IMAGE=<tested release SHA>@sha256:<octogee-gateway digest from release receipt>",
     );
     expect(teardown).toContain(
+      "BOOTSTRAP_GATEWAY_EDGE_IMAGE=<tested release SHA>@sha256:<gateway-edge digest from release receipt>",
+    );
+    expect(teardown).toContain(
       "glm-controller.bootstrapDefaultGateway.imageTag=\\$BOOTSTRAP_GATEWAY_IMAGE",
+    );
+    expect(teardown).toContain(
+      "glm-controller.bootstrapDefaultGateway.gatewayEdgeImageTag=\\$BOOTSTRAP_GATEWAY_EDGE_IMAGE",
     );
     expect(teardown).not.toContain("BOOTSTRAP_GATEWAY_TAG=");
     expect(teardown).not.toContain(

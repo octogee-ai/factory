@@ -460,7 +460,13 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
       "BOOTSTRAP_GATEWAY_IMAGE=<tested release SHA>@sha256:<octogee-gateway digest from release receipt>",
     );
     expect(result.stdout).toContain(
+      "BOOTSTRAP_GATEWAY_EDGE_IMAGE=<tested release SHA>@sha256:<gateway-edge digest from release receipt>",
+    );
+    expect(result.stdout).toContain(
       "glm-controller.bootstrapDefaultGateway.imageTag=$BOOTSTRAP_GATEWAY_IMAGE",
+    );
+    expect(result.stdout).toContain(
+      "glm-controller.bootstrapDefaultGateway.gatewayEdgeImageTag=$BOOTSTRAP_GATEWAY_EDGE_IMAGE",
     );
   });
 

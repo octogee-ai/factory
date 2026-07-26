@@ -110,6 +110,11 @@ describe("durable default gateway bootstrap", () => {
       "us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway",
     );
     vi.stubEnv("BOOTSTRAP_IMAGE_TAG", "753c212");
+    vi.stubEnv(
+      "BOOTSTRAP_GATEWAY_EDGE_IMAGE_REPOSITORY",
+      "us-west1-docker.pkg.dev/octogee/octogee/gateway-edge",
+    );
+    vi.stubEnv("BOOTSTRAP_GATEWAY_EDGE_IMAGE_TAG", "753c212@sha256:" + "b".repeat(64));
     const deps = controllerDeps();
 
     await bootstrapDefaultGateway(deps);
@@ -131,6 +136,11 @@ describe("durable default gateway bootstrap", () => {
         imageRepository:
           "us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway",
         imageTag: "753c212",
+        gatewayEdgeImage: {
+          imageRepository:
+            "us-west1-docker.pkg.dev/octogee/octogee/gateway-edge",
+          imageTag: "753c212@sha256:" + "b".repeat(64),
+        },
       },
     });
     expect(
@@ -146,6 +156,41 @@ describe("durable default gateway bootstrap", () => {
         gatewayClass: "shared",
       },
     });
+  });
+
+  it("fails closed before creating credentials when the immutable gateway-edge reference is missing", async () => {
+    vi.stubEnv("BOOTSTRAP_DEFAULT_GATEWAY", "true");
+    vi.stubEnv(
+      "BOOTSTRAP_IMAGE_REPOSITORY",
+      "us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+    );
+    vi.stubEnv("BOOTSTRAP_IMAGE_TAG", "753c212@sha256:" + "a".repeat(64));
+    const deps = controllerDeps();
+
+    await expect(bootstrapDefaultGateway(deps)).rejects.toThrow(
+      "BOOTSTRAP_GATEWAY_EDGE_IMAGE_REPOSITORY is required when default gateway bootstrap is enabled",
+    );
+
+    expect(deps.ensureGatewayAuthSecret).not.toHaveBeenCalled();
+    expect(deps.store.size).toBe(0);
+  });
+
+  it("fails closed when the gateway-edge repository is not paired with the gateway image", async () => {
+    vi.stubEnv("BOOTSTRAP_DEFAULT_GATEWAY", "true");
+    vi.stubEnv(
+      "BOOTSTRAP_IMAGE_REPOSITORY",
+      "us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+    );
+    vi.stubEnv("BOOTSTRAP_IMAGE_TAG", "753c212@sha256:" + "a".repeat(64));
+    vi.stubEnv(
+      "BOOTSTRAP_GATEWAY_EDGE_IMAGE_REPOSITORY",
+      "us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+    );
+    vi.stubEnv("BOOTSTRAP_GATEWAY_EDGE_IMAGE_TAG", "753c212@sha256:" + "b".repeat(64));
+    const deps = controllerDeps();
+
+    await expect(bootstrapDefaultGateway(deps)).rejects.toThrow(/paired immutable gateway-edge image/);
+    expect(deps.ensureGatewayAuthSecret).not.toHaveBeenCalled();
   });
 
   it("leaves an existing durable default untouched", async () => {

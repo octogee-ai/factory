@@ -21,7 +21,7 @@ import {
   type GatewayLifecycleStatus,
   type ReleaseDoc,
   type ReleasePayload,
-  type W9GatewayEdgeImage,
+  type GatewayEdgeImage,
   type W9TestPublisherLiveExperiment,
 } from "@octogee/shared/types/gateway-releases";
 
@@ -95,7 +95,7 @@ export function configuredBuilderCredentialBootstrapAllowed(
 export interface GatewayArtifact {
   imageRepository: string;
   imageTag: string;
-  gatewayEdgeImage?: W9GatewayEdgeImage;
+  gatewayEdgeImage?: GatewayEdgeImage;
   testExperiment?: W9TestPublisherLiveExperiment;
 }
 

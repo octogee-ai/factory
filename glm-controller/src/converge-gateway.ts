@@ -272,12 +272,16 @@ export function gatewayUpsertOptsFromRelease(input: {
   valuesFile?: string;
   chartFingerprint?: string;
   kmsKeyName?: string;
-  defaultGatewayEdgeImageRepository?: string;
   deploymentTargetId?: string;
   deploymentProjectId?: string;
   gatewayServiceAccount?: string;
 }): GatewayUpsertOpts {
   const { gateway, artifact } = input;
+  if (!artifact.gatewayEdgeImage) {
+    throw new Error(
+      `gateway ${gateway.gatewayId} release is missing its immutable gateway-edge image reference`,
+    );
+  }
   const gatewayClass = resolveGatewayClass(classKnobs(gateway));
   const experiment = w9TestExperimentForNamespace({
     namespace: input.namespace,
@@ -291,7 +295,9 @@ export function gatewayUpsertOptsFromRelease(input: {
     imageRepository: imageRepositoryFor(gateway, artifact),
     imageTag: artifact.imageTag,
     gatewayEdgeImageRepository:
-      experiment.gatewayEdgeImageRepository ?? input.defaultGatewayEdgeImageRepository,
+      experiment.gatewayEdgeImageRepository ?? artifact.gatewayEdgeImage.imageRepository,
+    gatewayEdgeImageTag:
+      experiment.gatewayEdgeImageTag ?? artifact.gatewayEdgeImage.imageTag,
     ...experiment,
     serviceAccountName: gatewayServiceAccountName(gateway),
     serviceAccount: gateway.serviceAccount ?? undefined,

@@ -13,6 +13,7 @@ import {
 import type { ReleasePayload } from "@octogee/shared/types/gateway-releases";
 
 const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
+const EDGE_REPO = "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge";
 
 function gateway(overrides: Partial<DurableGateway> = {}): DurableGateway {
   return {
@@ -45,7 +46,12 @@ function gateway(overrides: Partial<DurableGateway> = {}): DurableGateway {
 }
 
 function artifact(overrides: Partial<ReleasePayload> = {}): ReleasePayload {
-  return { imageRepository: REPO, imageTag: "def5678", ...overrides };
+  return {
+    imageRepository: REPO,
+    imageTag: "def5678",
+    gatewayEdgeImage: { imageRepository: EDGE_REPO, imageTag: "def5678" },
+    ...overrides,
+  };
 }
 
 describe("planGatewayConvergence", () => {
@@ -221,7 +227,6 @@ describe("gatewayUpsertOptsFromRelease", () => {
       replicas: 1,
       chartPath: "/charts/octogee-gateway",
       kmsKeyName: "projects/octogee-test/locations/us-central1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest",
-      defaultGatewayEdgeImageRepository: "us-west1-docker.pkg.dev/octogee/octogee/gateway-edge",
       deploymentTargetId: "test-west",
       deploymentProjectId: "octogee-data-test",
       gatewayServiceAccount: "octogee-gateway@octogee-data-test.iam.gserviceaccount.com",
@@ -234,7 +239,8 @@ describe("gatewayUpsertOptsFromRelease", () => {
       replicas: 1,
       rollStrategy: "surge",
       kmsKeyName: "projects/octogee-test/locations/us-central1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest",
-      gatewayEdgeImageRepository: "us-west1-docker.pkg.dev/octogee/octogee/gateway-edge",
+      gatewayEdgeImageRepository: EDGE_REPO,
+      gatewayEdgeImageTag: "def5678",
       deploymentTargetId: "test-west",
       deploymentProjectId: "octogee-data-test",
       gatewayServiceAccount: "octogee-gateway@octogee-data-test.iam.gserviceaccount.com",
@@ -242,6 +248,16 @@ describe("gatewayUpsertOptsFromRelease", () => {
       deploymentIntentFingerprint: expect.any(String),
     });
     expect(opts).not.toHaveProperty("revisionId");
+  });
+
+  it("refuses a release that does not carry an immutable gateway-edge reference", () => {
+    expect(() => gatewayUpsertOptsFromRelease({
+      namespace: "octogee-test",
+      gateway: gateway(),
+      artifact: artifact({ gatewayEdgeImage: undefined }),
+      replicas: 1,
+      chartPath: "/charts/octogee-gateway",
+    })).toThrow(/missing its immutable gateway-edge image reference/);
   });
 
   it("fingerprints chart, config, and sidecar values as part of the rendered intent", () => {

@@ -148,6 +148,10 @@ spec:
               value: {{ required "glm-controller.bootstrapDefaultGateway.imageRepository is required" (.Values.bootstrapDefaultGateway).imageRepository | quote }}
             - name: BOOTSTRAP_IMAGE_TAG
               value: {{ (.Values.bootstrapDefaultGateway).imageTag | default "latest" | quote }}
+            - name: BOOTSTRAP_GATEWAY_EDGE_IMAGE_REPOSITORY
+              value: {{ (.Values.bootstrapDefaultGateway).gatewayEdgeImageRepository | default "" | quote }}
+            - name: BOOTSTRAP_GATEWAY_EDGE_IMAGE_TAG
+              value: {{ (.Values.bootstrapDefaultGateway).gatewayEdgeImageTag | default "" | quote }}
           ports:
             - containerPort: {{ .Values.http.port }}
               name: http

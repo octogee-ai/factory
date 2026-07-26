@@ -49,11 +49,24 @@ export function isReleasePayload(value) {
     if (!hasReleasePayloadShape(value) || !hasReleasePayloadIdentity(value))
         return false;
     if (value.testExperiment === undefined) {
-        return !isW9CandidateImageTag(value.imageTag) && value.gatewayEdgeImage === undefined;
+        return (!isW9CandidateImageTag(value.imageTag) &&
+            (value.gatewayEdgeImage === undefined ||
+                (isGatewayEdgeImage(value.gatewayEdgeImage, value.imageRepository) &&
+                    !isW9CandidateImageTag(value.gatewayEdgeImage.imageTag))));
     }
     return (isW9CandidateImageTag(value.imageTag) &&
         isW9TestPublisherLiveExperiment(value.testExperiment) &&
         isW9GatewayEdgeImage(value.gatewayEdgeImage, value.imageTag, value.imageRepository));
+}
+export function isGatewayEdgeImage(value, gatewayImageRepository) {
+    const gatewayPackageSuffix = "/octogee-gateway";
+    const expectedRepository = gatewayImageRepository.endsWith(gatewayPackageSuffix)
+        ? `${gatewayImageRepository.slice(0, -gatewayPackageSuffix.length)}/gateway-edge`
+        : "";
+    return (isPlainRecord(value) &&
+        value.imageRepository === expectedRepository &&
+        typeof value.imageTag === "string" &&
+        IMAGE_TAG_PATTERN.test(value.imageTag));
 }
 export function upgradeReleasePayloadSchema(payload, persistedPayloadHash) {
     if (typeof persistedPayloadHash !== "string" ||

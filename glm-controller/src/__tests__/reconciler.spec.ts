@@ -128,6 +128,10 @@ function releaseArtifact(
     payload: {
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag,
+      gatewayEdgeImage: {
+        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
+        imageTag,
+      },
       ...extra,
     },
   };
@@ -253,9 +257,10 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
     );
   });
 
-  it("pins desired+live release artifacts with the derived gateway-edge sidecar", async () => {
+  it("pins desired+live release artifacts with the recorded gateway-edge sidecar", async () => {
     const callbacks: SnapshotCallbacks = {};
     const reconcileImagePins = vi.fn(async () => {});
+    const log = vi.fn();
     const stop = startReconciler({
       db: makeDb({
         roots: { default: durableRoot({ desiredRelease: 3, liveRelease: 2, latestRelease: 3 }) },
@@ -271,13 +276,13 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
       helm: {} as never,
       handlers: {} as never,
       reconcileImagePins,
-      log: vi.fn(),
+      log,
     });
 
     await runTick(callbacks);
     stop();
 
-    expect(reconcileImagePins).toHaveBeenCalledTimes(1);
+    expect(reconcileImagePins.mock.calls).toHaveLength(1);
     const [, artifacts] = reconcileImagePins.mock.calls[0] as [
       string,
       Array<{ imageRepository: string; imageTag: string }>,
@@ -295,6 +300,7 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
     const gatewayId = "builder-alice";
     const callbacks: SnapshotCallbacks = {};
     const reconcileImagePins = vi.fn(async () => {});
+    const log = vi.fn();
     const operatorRoot = buildOwnedTrialGateway({
       uid: "uid-alice",
       slug: "alice",
@@ -328,7 +334,7 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
       helm: {} as never,
       handlers: {} as never,
       reconcileImagePins,
-      log: vi.fn(),
+      log,
     });
 
     await runTick(callbacks);

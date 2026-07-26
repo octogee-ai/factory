@@ -57,6 +57,7 @@ import {
 import { createGatewayRuntimeConfigPreparer } from "./gateway-runtime-config.js";
 import {
   isGatewayDesiredDoc,
+  isGatewayEdgeImage,
   isGatewayRuntimeDoc,
   projectGatewayDesiredRootForGateway,
   GATEWAY_RELEASES_SUBCOLLECTION,
@@ -175,6 +176,7 @@ import {
   gatewayAuthorizationFromRootDocument,
   readGatewayArtifact,
   writeInitialGatewayRelease,
+  type GatewayArtifact,
 } from "@octogee/core/gateway-live-release";
 import { getStorage } from "firebase-admin/storage";
 import { getAuth } from "firebase-admin/auth";
@@ -763,13 +765,12 @@ async function readDurableReleaseArtifacts(
         }),
         imageTag: artifact.imageTag,
       });
-      // The chart always renders the gateway-edge sidecar (tag defaults to the
-      // gateway imageTag), so its image must be pinned even when the release
-      // payload carries no explicit gatewayEdgeImage.
-      const gatewayEdgeImage = artifact.gatewayEdgeImage ?? {
-        imageRepository: `${ENVIRONMENT_SETTINGS.artifactRegistryRepository}/gateway-edge`,
-        imageTag: artifact.imageTag,
-      };
+      if (!artifact.gatewayEdgeImage) {
+        throw new Error(
+          `gateway ${gateway.gatewayId} release ${release} is missing its immutable gateway-edge image reference`,
+        );
+      }
+      const gatewayEdgeImage = artifact.gatewayEdgeImage;
       artifacts.push({
         imageRepository: gatewayEdgeImage.imageRepository,
         imageTag: gatewayEdgeImage.imageTag,
@@ -1034,8 +1035,6 @@ async function prepareDesiredGatewayIntent(input: {
     valuesFile: GATEWAY_VALUES_FILE,
     chartFingerprint: passDeps.chartFingerprint,
     kmsKeyName: ENVIRONMENT_SETTINGS.kmsKeyName,
-    defaultGatewayEdgeImageRepository:
-      `${ENVIRONMENT_SETTINGS.artifactRegistryRepository}/gateway-edge`,
     deploymentTargetId: ENVIRONMENT_SETTINGS.targetId,
     deploymentProjectId: ENVIRONMENT_SETTINGS.firebaseProjectId,
     gatewayServiceAccount:
@@ -2132,6 +2131,37 @@ export async function bootstrapGlmGateways(deps: ControllerDeps): Promise<void> 
   deps.log("[glm-controller] legacy Helm bootstrap disabled; durable roots and revisions own recovery");
 }
 
+function bootstrapGatewayArtifactFromEnvironment(): GatewayArtifact {
+  const imageRepository = process.env.BOOTSTRAP_IMAGE_REPOSITORY?.trim();
+  if (!imageRepository) {
+    throw new Error("BOOTSTRAP_IMAGE_REPOSITORY is required when default gateway bootstrap is enabled");
+  }
+  const imageTag = process.env.BOOTSTRAP_IMAGE_TAG?.trim();
+  if (!imageTag || !isGatewayImageTag(imageTag)) {
+    throw new Error("BOOTSTRAP_IMAGE_TAG must be an immutable gateway image tag");
+  }
+  const gatewayEdgeImageRepository = process.env.BOOTSTRAP_GATEWAY_EDGE_IMAGE_REPOSITORY?.trim();
+  if (!gatewayEdgeImageRepository) {
+    throw new Error(
+      "BOOTSTRAP_GATEWAY_EDGE_IMAGE_REPOSITORY is required when default gateway bootstrap is enabled",
+    );
+  }
+  const gatewayEdgeImageTag = process.env.BOOTSTRAP_GATEWAY_EDGE_IMAGE_TAG?.trim();
+  if (!gatewayEdgeImageTag || !isGatewayImageTag(gatewayEdgeImageTag)) {
+    throw new Error("BOOTSTRAP_GATEWAY_EDGE_IMAGE_TAG must be an immutable gateway-edge image tag");
+  }
+  const gatewayEdgeImage = {
+    imageRepository: gatewayEdgeImageRepository,
+    imageTag: gatewayEdgeImageTag,
+  };
+  if (!isGatewayEdgeImage(gatewayEdgeImage, imageRepository)) {
+    throw new Error(
+      "BOOTSTRAP_GATEWAY_EDGE_IMAGE_REPOSITORY and BOOTSTRAP_GATEWAY_EDGE_IMAGE_TAG must identify the paired immutable gateway-edge image",
+    );
+  }
+  return { imageRepository, imageTag, gatewayEdgeImage };
+}
+
 export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<void> {
   if (await controllerWorkFrozen(deps, "default gateway bootstrap")) return;
   if (process.env.BOOTSTRAP_DEFAULT_GATEWAY !== "true") {
@@ -2168,14 +2198,8 @@ export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<voi
     return;
   }
 
-  const imageRepository = process.env.BOOTSTRAP_IMAGE_REPOSITORY?.trim();
-  if (!imageRepository) {
-    throw new Error("BOOTSTRAP_IMAGE_REPOSITORY is required when default gateway bootstrap is enabled");
-  }
-  const imageTag = process.env.BOOTSTRAP_IMAGE_TAG?.trim();
-  if (!imageTag || !isGatewayImageTag(imageTag)) {
-    throw new Error("BOOTSTRAP_IMAGE_TAG must be an immutable gateway image tag");
-  }
+  const artifact = bootstrapGatewayArtifactFromEnvironment();
+  const imageTag = artifact.imageTag;
 
   await deps.ensureGatewayAuthSecret({
     namespace: NAMESPACE,
@@ -2207,7 +2231,7 @@ export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<voi
         modelBrokerLimits: null,
         preemption: null,
       },
-      artifact: { imageRepository, imageTag },
+      artifact,
       writeAdditional: (transaction) => {
         transaction.set(operationRef, {
           kind: "add-gateway",

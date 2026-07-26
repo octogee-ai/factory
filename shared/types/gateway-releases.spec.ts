@@ -75,6 +75,25 @@ describe("isReleasePayload", () => {
     expect(isReleasePayload({ ...samplePayload(), imageTag: "latest" })).toBe(false);
   });
 
+  it("accepts a separately digest-pinned gateway-edge image only from the paired package", () => {
+    const payload = samplePayload({
+      imageTag: `abc1234@sha256:${"a".repeat(64)}`,
+      gatewayEdgeImage: {
+        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
+        imageTag: `abc1234@sha256:${"b".repeat(64)}`,
+      },
+    });
+
+    expect(isReleasePayload(payload)).toBe(true);
+    expect(isReleasePayload({
+      ...payload,
+      gatewayEdgeImage: {
+        ...payload.gatewayEdgeImage!,
+        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+      },
+    })).toBe(false);
+  });
+
   it("accepts publisher-live only as the immutable TEST W9 candidate contract", () => {
     const candidate = {
       ...samplePayload(),

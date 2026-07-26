@@ -50,6 +50,10 @@ export interface W9GatewayEdgeImage {
     imageRepository: string;
     imageTag: string;
 }
+export interface GatewayEdgeImage {
+    imageRepository: string;
+    imageTag: string;
+}
 export interface W9TestPublisherLiveExperiment {
     kind: "w9-agent-conversation";
     mode: "publisher-live";
@@ -66,10 +70,11 @@ export declare function isW9TestPublisherLiveExperiment(value: unknown): value i
 export interface ReleasePayload {
     imageRepository: string;
     imageTag: string;
-    gatewayEdgeImage?: W9GatewayEdgeImage;
+    gatewayEdgeImage?: GatewayEdgeImage;
     testExperiment?: W9TestPublisherLiveExperiment;
 }
 export declare function isReleasePayload(value: unknown): value is ReleasePayload;
+export declare function isGatewayEdgeImage(value: unknown, gatewayImageRepository: string): value is GatewayEdgeImage;
 export type ReleasePayloadSchemaUpgrade = {
     status: "current";
     payload: ReleasePayload;
