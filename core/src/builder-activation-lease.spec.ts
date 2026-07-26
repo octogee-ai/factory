@@ -268,6 +268,18 @@ describe("requestBuilderActivationLease", () => {
     });
   });
 
+  it("does not activate shell-less Builder tiers for a shell request", async () => {
+    const { db } = state();
+
+    await expect(request(db, {
+      cause: "shell",
+      eventKey: "shell:req-1",
+    })).resolves.toMatchObject({
+      statusCode: 403,
+      body: { code: "gateway-shells-locked" },
+    });
+  });
+
   it("rejects demand after interactive account access is lost", async () => {
     const { db } = state(activeTrial({
       accountLifecycle: { status: "suspended" },

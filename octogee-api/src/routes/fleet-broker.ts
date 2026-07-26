@@ -685,6 +685,62 @@ export async function findAssignedUserByAgentId(
   return null;
 }
 
+async function findLateParkedRunDuplicate(
+  db: Firestore,
+  gatewayId: string,
+  agentId: string,
+  eventKey: string,
+): Promise<Record<string, unknown> | null> {
+  const gateway = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+  if (!gateway.exists) return null;
+  const gatewayData = gateway.data() as Record<string, unknown> | undefined;
+  const allocation = gatewayData?.allocation;
+  if (
+    !allocation ||
+    typeof allocation !== "object" ||
+    Array.isArray(allocation)
+  ) {
+    return null;
+  }
+  const allocated = allocation as Record<string, unknown>;
+  const ownerUid = typeof allocated.claimedByUid === "string"
+    ? allocated.claimedByUid
+    : "";
+  if (
+    allocated.kind !== "disposable-builder" ||
+    !ownerUid ||
+    gatewayData?.ownerUid !== ownerUid
+  ) {
+    return null;
+  }
+  const user = await db.collection("users").doc(ownerUid).get();
+  const userData = user.exists
+    ? user.data() as Record<string, unknown> | undefined
+    : undefined;
+  if (!userData || !agentBelongsToAssignedWorkspace(userData, agentId)) {
+    return null;
+  }
+  const lease = readPath(userData, "provisioning.openclaw.activationLease");
+  if (!lease || typeof lease !== "object" || Array.isArray(lease)) return null;
+  const parked = lease as Record<string, unknown>;
+  if (
+    parked.status !== "parked" ||
+    parked.leaseId !== allocated.leaseId ||
+    parked.generation !== allocated.generation ||
+    (parked.eventKey !== eventKey && parked.lastEventKey !== eventKey) ||
+    typeof parked.leaseId !== "string" ||
+    !Number.isSafeInteger(parked.generation)
+  ) {
+    return null;
+  }
+  return {
+    status: "parked",
+    leaseId: parked.leaseId,
+    generation: parked.generation,
+    duplicate: true,
+  };
+}
+
 async function findUsersByAgentId(
   db: Firestore,
   agentId: string,
@@ -1557,6 +1613,16 @@ function installGatewayOpsRoutes(
       agentId,
     );
     if (!assigned) {
+      const duplicate = await findLateParkedRunDuplicate(
+        db,
+        bound.gatewayId,
+        agentId,
+        `run-start:${runId}`,
+      );
+      if (duplicate) {
+        res.status(200).json(duplicate);
+        return;
+      }
       res.status(403).json(FORBIDDEN);
       return;
     }

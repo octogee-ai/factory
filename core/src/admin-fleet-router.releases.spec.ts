@@ -1318,6 +1318,32 @@ describe("DELETE /gateways/:id — retirement claim", () => {
     expect(store.get("gateways/assn")?.desiredStatus).toBe("running");
     expect(opsIn(store, "retire-gateway")).toHaveLength(0);
   });
+
+  it("leaves disposable termination exclusively to the Builder runtime lifecycle", async () => {
+    const seed = seedServingGateway("run-alice", sharedPayload(), readyHeartbeat(), {
+      profile: "operator",
+      gatewayClass: "operator",
+      imageProfile: "operator",
+      ownerUid: "uid-alice",
+      builderSlug: "alice",
+      operatorAccess: { shellsEnabled: true },
+      allocation: {
+        kind: "disposable-builder",
+        schemaVersion: 1,
+        leaseId: "lease-1",
+        generation: 3,
+        claimedByUid: "uid-alice",
+      },
+    });
+    const { app, store } = mkApp(seed);
+
+    const response = await request(app).delete("/gateways/run-alice").send({});
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toMatch(/Builder runtime lifecycle/i);
+    expect(store.get("gateways/run-alice")?.desiredStatus).toBe("running");
+    expect(opsIn(store, "retire-gateway")).toHaveLength(0);
+  });
 });
 
 // P1-2: a payload-affecting PATCH on a new-schema gateway must not silently

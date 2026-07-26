@@ -565,7 +565,8 @@ async function reconcileActiveLease(
     await queueLeaseReturn(context, user, builderSlug, lease);
     return;
   }
-  if (context.state.idleMs <= 0) return;
+  const returnRequested = millis(lease.raw.returnRequestedAt) !== null;
+  if (!returnRequested && context.state.idleMs <= 0) return;
   const activity = await context.deps.readBuilderActivity({
     uid: user.uid,
     builderSlug,
@@ -576,8 +577,10 @@ async function reconcileActiveLease(
   if (
     activity.liveRun ||
     activity.liveShell ||
-    activity.lastActiveAt === null ||
-    context.deps.now() - activity.lastActiveAt < context.state.idleMs
+    (!returnRequested && (
+      activity.lastActiveAt === null ||
+      context.deps.now() - activity.lastActiveAt < context.state.idleMs
+    ))
   ) {
     return;
   }

@@ -216,6 +216,15 @@ export async function requestBuilderActivationLease(
         },
       };
     }
+    if (cause === "shell" && !BUILDER_TIERS[entitlementTier].builderShell) {
+      return {
+        statusCode: 403,
+        body: {
+          code: "gateway-shells-locked",
+          error: "Gateway shell access is locked until the tier enables it",
+        },
+      };
+    }
     const sizingTier = BUILDER_TIERS[entitlementTier].instance;
     if (!sizingTier) {
       return {

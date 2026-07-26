@@ -5,6 +5,8 @@ import type { Firestore } from "firebase-admin/firestore";
 
 import {
   addAdminFleetRoutes,
+  projectBuilderRuntime,
+  projectDisposableFleetCapacity,
   projectGatewayReservation,
   projectGatewaySummary,
   resolveFleetDeploymentSettings,
@@ -95,6 +97,325 @@ describe("projectGatewaySummary — gateway identity projection", () => {
     );
     expect(summary.gateway).toBe("jack");
   });
+
+  it("marks an allocated Operator gateway as one disposable Builder generation", () => {
+    const summary = projectGatewaySummary(
+      { id: "run-alice-12345678", data: () => ({ gatewayId: "run-alice-12345678" }) },
+      {
+        gatewayId: "run-alice-12345678",
+        gatewayClass: "operator",
+        ownerUid: "uid-alice",
+        allocation: {
+          kind: "disposable-builder",
+          schemaVersion: 1,
+          leaseId: "lease-1",
+          generation: 3,
+          claimedByUid: "uid-alice",
+        },
+      },
+      Date.now(),
+    );
+
+    expect(summary.disposableRuntime).toEqual({
+      ownerUid: "uid-alice",
+      leaseId: "lease-1",
+      generation: 3,
+    });
+  });
+});
+
+describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
+  const now = 1_722_000_900_000;
+
+  function user(activationLease: Record<string, unknown>) {
+    return {
+      id: "uid-alice",
+      data: () => ({
+        username: "alice",
+        provisioning: {
+          openclaw: {
+            gatewayId: "shared-blue",
+            slug: "alice",
+            activationLease,
+          },
+        },
+      }),
+    };
+  }
+
+  it("projects requestedAt as the wake duration origin", () => {
+    expect(projectBuilderRuntime(
+      user({
+        leaseId: "lease-1",
+        generation: 1,
+        status: "requested",
+        cause: "run-start",
+        requestedAt: now - 90_000,
+        sourceGatewayId: "shared-blue",
+        sizingTier: "xs",
+      }),
+      new Map(),
+      new Map(),
+      now,
+    )).toMatchObject({
+      uid: "uid-alice",
+      builderSlug: "alice",
+      lifecycle: "requested",
+      wakeDurationMs: 90_000,
+      currentGatewayId: "shared-blue",
+      sourceGatewayId: "shared-blue",
+      targetGatewayId: null,
+      sizingTier: "xs",
+    });
+  });
+
+  it("keeps stale provisioning visible with the exact disposable target", () => {
+    expect(projectBuilderRuntime(
+      user({
+        leaseId: "lease-1",
+        generation: 1,
+        status: "provisioning",
+        cause: "scheduled",
+        requestedAt: now - 20 * 60_000,
+        provisionedAt: now - 60_000,
+        sourceGatewayId: "shared-blue",
+        targetGatewayId: "run-alice-12345678",
+        sizingTier: "s",
+      }),
+      new Map(),
+      new Map(),
+      now,
+    )).toMatchObject({
+      lifecycle: "provisioning",
+      stale: true,
+      targetGatewayId: "run-alice-12345678",
+      wakeDurationMs: 20 * 60_000,
+    });
+  });
+
+  it("freezes wake duration at cutover and never marks an active runtime stale", () => {
+    expect(projectBuilderRuntime(
+      user({
+        leaseId: "lease-1",
+        generation: 1,
+        status: "active",
+        cause: "ticket",
+        requestedAt: now - 20 * 60_000,
+        activeAt: now - 19 * 60_000,
+        sourceGatewayId: "shared-blue",
+        targetGatewayId: "run-alice-12345678",
+        sizingTier: "xs",
+      }),
+      new Map(),
+      new Map(),
+      now,
+    )).toMatchObject({
+      lifecycle: "active",
+      wakeDurationMs: 60_000,
+      stale: false,
+    });
+  });
+
+  it.each([
+    ["running", "retiring", null],
+    ["failed", "failed", "helm uninstall timed out"],
+  ] as const)(
+    "projects a %s teardown receipt as %s",
+    (operationStatus, lifecycle, error) => {
+      const targetGatewayId = "run-alice-12345678";
+      const operationId = `placement-retire-uid-alice-${targetGatewayId}`;
+      const projected = projectBuilderRuntime(
+        user({
+          leaseId: "lease-1",
+          generation: 1,
+          status: "returning",
+          requestedAt: now - 300_000,
+          returningAt: now - 30_000,
+          sourceGatewayId: "shared-blue",
+          targetGatewayId,
+          sizingTier: "xs",
+        }),
+        new Map([[targetGatewayId, {
+          gatewayId: targetGatewayId,
+          desiredStatus: "retired",
+        }]]),
+        new Map([[operationId, {
+          status: operationStatus,
+          ...(error ? { error } : {}),
+        }]]),
+        now,
+      );
+
+      expect(projected).toMatchObject({
+        lifecycle,
+        phase: "retirement",
+        operationId,
+        error,
+      });
+    },
+  );
+
+  it("keeps a failed activation visible after its target cleanup is retired", () => {
+    const targetGatewayId = "run-alice-12345678";
+    const activationOperationId = `builder-activate-${targetGatewayId}`;
+    const cleanupOperationId = `placement-retire-uid-alice-${targetGatewayId}`;
+    const projected = projectBuilderRuntime(
+      user({
+        leaseId: "lease-1",
+        generation: 1,
+        status: "failed",
+        requestedAt: now - 300_000,
+        failedAt: now - 10_000,
+        sourceGatewayId: "shared-blue",
+        targetGatewayId,
+        sizingTier: "xs",
+        activationOperationId,
+        lastError: {
+          message: "restore target failed",
+          operationId: activationOperationId,
+        },
+      }),
+      new Map([[targetGatewayId, {
+        gatewayId: targetGatewayId,
+        desiredStatus: "retired",
+        retirementClaim: { operationId: cleanupOperationId },
+      }]]),
+      new Map([
+        [activationOperationId, {
+          status: "failed",
+          error: "restore target failed",
+          steps: [
+            { name: "restore-target", status: "failed" },
+            { name: "cutover", status: "pending" },
+            { secret: "drop-me" },
+          ],
+        }],
+        [cleanupOperationId, {
+          status: "running",
+          steps: [{ name: "helm-uninstall", status: "running" }],
+        }],
+      ]),
+      now,
+    );
+
+    expect(projected).toMatchObject({
+      lifecycle: "failed",
+      phase: "activation",
+      operationId: activationOperationId,
+      operationStatus: "failed",
+      operationSteps: [
+        { name: "restore-target", status: "failed" },
+        { name: "cutover", status: "pending" },
+      ],
+      cleanupOperationId,
+      cleanupOperationStatus: "running",
+      cleanupOperationSteps: [
+        { name: "helm-uninstall", status: "running" },
+      ],
+      cleanupError: null,
+      error: "restore target failed",
+    });
+  });
+
+  it("omits parked leases after teardown receipts have completed", () => {
+    expect(projectBuilderRuntime(
+      user({
+        leaseId: "lease-1",
+        generation: 1,
+        status: "parked",
+        requestedAt: now - 300_000,
+      }),
+      new Map(),
+      new Map(),
+      now,
+    )).toBeNull();
+  });
+
+  it("keeps a parked lease visible until its disposable teardown completes", () => {
+    const targetGatewayId = "run-alice-12345678";
+    const operationId = `placement-retire-uid-alice-${targetGatewayId}`;
+    expect(projectBuilderRuntime(
+      user({
+        leaseId: "lease-1",
+        generation: 1,
+        status: "parked",
+        requestedAt: now - 300_000,
+        activeAt: now - 240_000,
+        sourceGatewayId: "shared-blue",
+        targetGatewayId,
+      }),
+      new Map([[targetGatewayId, {
+        gatewayId: targetGatewayId,
+        desiredStatus: "retired",
+        retirementClaim: { operationId },
+      }]]),
+      new Map([[operationId, { status: "running" }]]),
+      now,
+    )).toMatchObject({
+      lifecycle: "retiring",
+      phase: "retirement",
+      operationId,
+      operationStatus: "running",
+    });
+  });
+
+  it("omits a parked lease after its disposable teardown succeeds", () => {
+    const targetGatewayId = "run-alice-12345678";
+    const operationId = `placement-retire-uid-alice-${targetGatewayId}`;
+    expect(projectBuilderRuntime(
+      user({
+        leaseId: "lease-1",
+        generation: 1,
+        status: "parked",
+        requestedAt: now - 300_000,
+        sourceGatewayId: "shared-blue",
+        targetGatewayId,
+      }),
+      new Map([[targetGatewayId, {
+        gatewayId: targetGatewayId,
+        desiredStatus: "retired",
+        retirementClaim: { operationId },
+      }]]),
+      new Map([[operationId, { status: "succeeded" }]]),
+      now,
+    )).toBeNull();
+  });
+});
+
+describe("projectDisposableFleetCapacity", () => {
+  it("counts only allocated disposable pods without inventing node disk allocation", () => {
+    const gateways = [
+      projectGatewaySummary(
+        { id: "shared-blue", data: () => ({ gatewayId: "shared-blue" }) },
+        { gatewayId: "shared-blue", gatewayClass: "shared" },
+        Date.now(),
+      ),
+      projectGatewaySummary(
+        { id: "run-alice", data: () => ({ gatewayId: "run-alice" }) },
+        {
+          gatewayId: "run-alice",
+          gatewayClass: "operator",
+          sizingTier: "xs",
+          ownerUid: "uid-alice",
+          allocation: {
+            kind: "disposable-builder",
+            schemaVersion: 1,
+            leaseId: "lease-1",
+            generation: 1,
+            claimedByUid: "uid-alice",
+          },
+        },
+        Date.now(),
+      ),
+    ];
+
+    expect(projectDisposableFleetCapacity(gateways)).toEqual({
+      disposableInstances: 1,
+      stagedInstances: 0,
+      namedReservations: 0,
+      byTier: { xs: 1 },
+    });
+  });
 });
 
 function valueAtPath(data: Record<string, unknown>, path: string): unknown {
@@ -108,6 +429,24 @@ function valueAtPath(data: Record<string, unknown>, path: string): unknown {
 
 function docsFrom(records: Record<string, Record<string, unknown>>) {
   return Object.entries(records).map(([id, data]) => ({ id, data: () => data }));
+}
+
+function applyDottedPatch(
+  target: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): void {
+  for (const [path, value] of Object.entries(patch)) {
+    const parts = path.split(".");
+    let cursor = target;
+    for (const part of parts.slice(0, -1)) {
+      const current = cursor[part];
+      if (!current || typeof current !== "object" || Array.isArray(current)) {
+        cursor[part] = {};
+      }
+      cursor = cursor[part] as Record<string, unknown>;
+    }
+    cursor[parts.at(-1)!] = value;
+  }
 }
 
 function mkCollection(
@@ -152,6 +491,10 @@ function mkCollection(
       })),
       delete: vi.fn(async () => {
         delete records[id];
+      }),
+      update: vi.fn(async (patch: Record<string, unknown>) => {
+        if (!records[id]) throw new Error(`missing record ${id}`);
+        applyDottedPatch(records[id], patch);
       }),
     })),
   });
@@ -201,14 +544,23 @@ function mkAdminFleetRouteApp(opts: {
     runTransaction: vi.fn(async (body: (transaction: {
       get: (ref: { get: () => Promise<unknown> }) => Promise<unknown>;
       delete: (ref: { delete: () => Promise<void> }) => void;
+      update: (
+        ref: { update: (patch: Record<string, unknown>) => Promise<void> },
+        patch: Record<string, unknown>,
+      ) => void;
     }) => Promise<unknown>) => {
       const pendingDeletes: Array<() => Promise<void>> = [];
+      const pendingUpdates: Array<() => Promise<void>> = [];
       const result = await body({
         get: (ref) => ref.get(),
         delete: (ref) => {
           pendingDeletes.push(() => ref.delete());
         },
+        update: (ref, patch) => {
+          pendingUpdates.push(() => ref.update(patch));
+        },
       });
+      for (const update of pendingUpdates) await update();
       for (const remove of pendingDeletes) await remove();
       return result;
     }),
@@ -287,6 +639,180 @@ function durableGatewayRoot(
 }
 
 describe("fleet gateway projection", () => {
+  it("keeps disposable retirement intent and Builder lifecycle in the Fleet response", async () => {
+    const targetGatewayId = "run-alice-12345678";
+    const retirementOperationId = `placement-retire-uid-alice-${targetGatewayId}`;
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "shared-blue" },
+      users: {
+        "uid-alice": {
+          username: "alice",
+          provisioning: {
+            openclaw: {
+              slug: "alice",
+              gatewayId: "shared-blue",
+              activationLease: {
+                leaseId: "lease-1",
+                generation: 1,
+                status: "parked",
+                cause: "run-start",
+                requestedAt: Date.now() - 120_000,
+                activeAt: Date.now() - 90_000,
+                sourceGatewayId: "shared-blue",
+                targetGatewayId,
+                sizingTier: "xs",
+              },
+            },
+          },
+        },
+      },
+      gateways: {
+        "shared-blue": durableGatewayRoot("shared-blue"),
+        [targetGatewayId]: durableGatewayRoot(targetGatewayId, {
+          desiredStatus: "retired",
+          profile: "operator",
+          gatewayClass: "operator",
+          imageProfile: "operator",
+          sizingTier: "xs",
+          ownerUid: "uid-alice",
+          builderSlug: "alice",
+          allocation: {
+            kind: "disposable-builder",
+            schemaVersion: 1,
+            leaseId: "lease-1",
+            generation: 1,
+            claimedByUid: "uid-alice",
+          },
+        }),
+      },
+      operations: {
+        [retirementOperationId]: {
+          kind: "retire-gateway",
+          status: "running",
+          input: { gatewayId: targetGatewayId },
+        },
+      },
+    });
+
+    const fleet = await request(app).get("/gateways").expect(200);
+
+    expect(fleet.body.builderRuntimes).toEqual([
+      expect.objectContaining({
+        uid: "uid-alice",
+        builderSlug: "alice",
+        lifecycle: "retiring",
+        phase: "retirement",
+        targetGatewayId,
+        operationId: retirementOperationId,
+        operationStatus: "running",
+      }),
+    ]);
+    expect(fleet.body.gateways).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          gatewayId: targetGatewayId,
+          desiredStatus: "retired",
+          disposableRuntime: {
+            ownerUid: "uid-alice",
+            leaseId: "lease-1",
+            generation: 1,
+          },
+        }),
+      ]),
+    );
+    expect(fleet.body.disposableCapacity).toEqual({
+      disposableInstances: 1,
+      stagedInstances: 0,
+      namedReservations: 0,
+      byTier: { xs: 1 },
+    });
+  });
+
+  it("keeps a failed activation target in Fleet until its cleanup operation succeeds", async () => {
+    const targetGatewayId = "run-alice-failed";
+    const activationOperationId = "builder-activate-run-alice-failed";
+    const cleanupOperationId = "placement-retire-uid-alice-run-alice-failed";
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "shared-blue" },
+      users: {
+        "uid-alice": {
+          username: "alice",
+          provisioning: {
+            openclaw: {
+              slug: "alice",
+              gatewayId: "shared-blue",
+              activationLease: {
+                leaseId: "lease-1",
+                generation: 1,
+                status: "failed",
+                requestedAt: Date.now() - 120_000,
+                failedAt: Date.now() - 30_000,
+                sourceGatewayId: "shared-blue",
+                targetGatewayId,
+                sizingTier: "xs",
+                activationOperationId,
+                lastError: { message: "restore failed" },
+              },
+            },
+          },
+        },
+      },
+      gateways: {
+        "shared-blue": durableGatewayRoot("shared-blue"),
+        [targetGatewayId]: durableGatewayRoot(targetGatewayId, {
+          desiredStatus: "retired",
+          profile: "operator",
+          gatewayClass: "operator",
+          imageProfile: "operator",
+          sizingTier: "xs",
+          ownerUid: "uid-alice",
+          builderSlug: "alice",
+          allocation: {
+            kind: "disposable-builder",
+            schemaVersion: 1,
+            leaseId: "lease-1",
+            generation: 1,
+            claimedByUid: "uid-alice",
+          },
+          retirementClaim: { operationId: cleanupOperationId },
+        }),
+      },
+      operations: {
+        [activationOperationId]: {
+          kind: "migrate-customer",
+          status: "failed",
+          error: "restore failed",
+        },
+        [cleanupOperationId]: {
+          kind: "retire-gateway",
+          status: "running",
+          input: { gatewayId: targetGatewayId },
+        },
+      },
+    });
+
+    const fleet = await request(app).get("/gateways").expect(200);
+
+    expect(fleet.body.builderRuntimes).toEqual([
+      expect.objectContaining({
+        lifecycle: "failed",
+        phase: "activation",
+        operationId: activationOperationId,
+        cleanupOperationId,
+        cleanupOperationStatus: "running",
+      }),
+    ]);
+    expect(fleet.body.gateways).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          gatewayId: targetGatewayId,
+          desiredStatus: "retired",
+        }),
+      ]),
+    );
+    expect(fleet.body.disposableCapacity.disposableInstances).toBe(1);
+  });
+
   it("does not revive stale bare runtime state when an existing root is malformed", async () => {
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "default" },
@@ -503,6 +1029,102 @@ describe("fleet gateway projection", () => {
       ready: 1,
       paused: 1,
       unreachable: 0,
+    });
+  });
+});
+
+describe("manual disposable runtime return", () => {
+  it("records an idempotent return request against the exact active lease generation", async () => {
+    const { app, state } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "shared-blue" },
+      users: {
+        "uid-alice": {
+          username: "alice",
+          provisioning: {
+            openclaw: {
+              gatewayId: "run-alice",
+              slug: "alice",
+              activationLease: {
+                leaseId: "lease-1",
+                generation: 3,
+                status: "active",
+                targetGatewayId: "run-alice",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await request(app)
+      .post("/customers/uid-alice/activation-lease/return")
+      .send({ leaseId: "lease-1", generation: 3 })
+      .expect(202);
+    const duplicate = await request(app)
+      .post("/customers/uid-alice/activation-lease/return")
+      .send({ leaseId: "lease-1", generation: 3 })
+      .expect(200);
+
+    expect(duplicate.body).toMatchObject({
+      status: "return-requested",
+      leaseId: "lease-1",
+      generation: 3,
+      adopted: true,
+    });
+    expect(state.users["uid-alice"]).toMatchObject({
+      provisioning: {
+        openclaw: {
+          activationLease: {
+            returnRequestedBy: "unknown",
+            returnRequestedAt: expect.any(Number),
+          },
+        },
+      },
+    });
+  });
+
+  it("rejects stale generations and caller-selected target gateways", async () => {
+    const { app, state } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "shared-blue" },
+      users: {
+        "uid-alice": {
+          username: "alice",
+          provisioning: {
+            openclaw: {
+              gatewayId: "run-alice",
+              activationLease: {
+                leaseId: "lease-1",
+                generation: 3,
+                status: "active",
+                targetGatewayId: "run-alice",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await request(app)
+      .post("/customers/uid-alice/activation-lease/return")
+      .send({ leaseId: "lease-1", generation: 2 })
+      .expect(409);
+    await request(app)
+      .post("/customers/uid-alice/activation-lease/return")
+      .send({
+        leaseId: "lease-1",
+        generation: 3,
+        targetGatewayId: "forged",
+      })
+      .expect(400);
+
+    expect(state.users["uid-alice"]).not.toMatchObject({
+      provisioning: {
+        openclaw: {
+          activationLease: {
+            returnRequestedAt: expect.any(Number),
+          },
+        },
+      },
     });
   });
 });
