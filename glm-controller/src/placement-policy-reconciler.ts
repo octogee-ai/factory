@@ -43,6 +43,7 @@ export interface PlacementPolicyAdmission {
   reportId: string;
   classifiedAt: number;
   legacyGatewayIds: string[];
+  staticGatewayIds: string[];
 }
 
 export interface PlacementPolicySnapshot {
@@ -269,12 +270,16 @@ export async function reconcilePlacementPolicyOnce(
     )
     .map((gateway) => gateway.gatewayId)
     .sort();
+  const approvedStaticGatewayIds = new Set(state.admission.staticGatewayIds);
+  const unapprovedNamedGatewayIds = retainedNamedGatewayIds.filter(
+    (gatewayId) => !approvedStaticGatewayIds.has(gatewayId),
+  );
   if (
     state.admission.legacyGatewayIds.length > 0 ||
-    retainedNamedGatewayIds.length > 0
+    unapprovedNamedGatewayIds.length > 0
   ) {
     deps.log(
-      `[placement-policy] disabled: retained named gateways ${retainedNamedGatewayIds.join(",")}`,
+      `[placement-policy] disabled: retained named gateways ${unapprovedNamedGatewayIds.join(",")}`,
     );
     return result;
   }
@@ -334,7 +339,10 @@ function placementPolicyAdmission(value: unknown): PlacementPolicyAdmission | nu
     raw.classifiedAt <= 0 ||
     !Array.isArray(raw.legacyGatewayIds) ||
     raw.legacyGatewayIds.some((gatewayId) => !nonEmptyString(gatewayId)) ||
-    new Set(raw.legacyGatewayIds).size !== raw.legacyGatewayIds.length
+    new Set(raw.legacyGatewayIds).size !== raw.legacyGatewayIds.length ||
+    !Array.isArray(raw.staticGatewayIds) ||
+    raw.staticGatewayIds.some((gatewayId) => !nonEmptyString(gatewayId)) ||
+    new Set(raw.staticGatewayIds).size !== raw.staticGatewayIds.length
   ) {
     return null;
   }
@@ -343,6 +351,7 @@ function placementPolicyAdmission(value: unknown): PlacementPolicyAdmission | nu
     reportId,
     classifiedAt: raw.classifiedAt,
     legacyGatewayIds: [...raw.legacyGatewayIds].sort() as string[],
+    staticGatewayIds: [...raw.staticGatewayIds].sort() as string[],
   };
 }
 
