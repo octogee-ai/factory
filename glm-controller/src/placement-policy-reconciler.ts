@@ -149,6 +149,7 @@ export interface RetireOwnedGatewayInput {
   telemetryFenceOperationId?: string;
   telemetryFenceStatus?: "succeeded" | "terminal-failure";
   authoritativeGatewayId?: string;
+  authoritativeLeaseStatus?: "provisioning" | "activating" | "returning";
   zeroWorkloadRecoveryOperationId?: string;
 }
 
@@ -436,6 +437,10 @@ async function recoverAndRetireUnreachableTarget(
     leaseId: lease.leaseId,
     generation: lease.generation,
     authoritativeGatewayId: context.state.defaultGatewayId,
+    authoritativeLeaseStatus:
+      lease.status === "activating" ? "activating"
+      : lease.status === "returning" ? "returning"
+      : "provisioning",
     zeroWorkloadRecoveryOperationId: recovery.operationId,
   });
   if (!retired) {
@@ -583,6 +588,7 @@ async function reconcileProvisioningActivation(
           leaseId: lease.leaseId,
           generation: lease.generation,
           authoritativeGatewayId: context.state.defaultGatewayId,
+          authoritativeLeaseStatus: "provisioning",
         })
       : Boolean(await recoverAndRetireUnreachableTarget(
           context,
@@ -735,7 +741,9 @@ async function cleanupFailedActivation(
     return false;
   }
   if (target.desiredStatus !== "retired") {
-    const retired = current === context.state.defaultGatewayId && !target.ready
+    const recoveredRetirement =
+      current === context.state.defaultGatewayId && !target.ready;
+    const retired = recoveredRetirement
       ? Boolean(await recoverAndRetireUnreachableTarget(
           context,
           user,
@@ -761,7 +769,7 @@ async function cleanupFailedActivation(
       });
       return true;
     }
-    context.result.retired += 1;
+    if (!recoveredRetirement) context.result.retired += 1;
   }
   await context.deps.failActivationLease({
     uid: user.uid,
@@ -1680,21 +1688,19 @@ async function retireOwnedGatewayFirestore(
             transaction.get(assignmentRef),
           ]);
           const userData = userSnapshot.data() as Record<string, unknown> | undefined;
-          const openclaw = record(record(userData?.provisioning)?.openclaw);
-          const lease = record(openclaw?.activationLease);
           const assignment = assignmentSnapshot.data() as Record<string, unknown> | undefined;
-          if (
-            !userSnapshot.exists ||
-            openclaw?.gatewayId !== request.authoritativeGatewayId ||
-            lease?.leaseId !== request.leaseId ||
-            lease?.generation !== request.generation ||
-            lease?.status !== "returning" ||
-            lease?.targetGatewayId !== request.gatewayId ||
-            !assignmentSnapshot.exists ||
-            assignment?.uid !== request.uid ||
-            assignment.gatewayId !== request.authoritativeGatewayId ||
-            assignment.state !== "serving"
-          ) {
+          if (!retirementAuthorityFenceAllows({
+            uid: request.uid,
+            authoritativeGatewayId: request.authoritativeGatewayId,
+            targetGatewayId: request.gatewayId,
+            leaseId: request.leaseId,
+            generation: request.generation,
+            expectedLeaseStatus: request.authoritativeLeaseStatus ?? "returning",
+            userExists: userSnapshot.exists,
+            userData,
+            assignmentExists: assignmentSnapshot.exists,
+            assignmentData: assignment,
+          })) {
             throw new GatewayRetirementConflictError(
               `Builder ${request.uid} is no longer authoritatively returned to ${request.authoritativeGatewayId}`,
             );
@@ -1733,6 +1739,32 @@ async function retireOwnedGatewayFirestore(
     input.log(`[placement-policy] retirement blocked for ${request.gatewayId}: ${error.message}`);
     return false;
   }
+}
+
+export function retirementAuthorityFenceAllows(input: {
+  uid: string;
+  authoritativeGatewayId: string;
+  targetGatewayId: string;
+  leaseId: string | undefined;
+  generation: number | undefined;
+  expectedLeaseStatus: "provisioning" | "activating" | "returning";
+  userExists: boolean;
+  userData: Record<string, unknown> | undefined;
+  assignmentExists: boolean;
+  assignmentData: Record<string, unknown> | undefined;
+}): boolean {
+  const openclaw = record(record(input.userData?.provisioning)?.openclaw);
+  const lease = record(openclaw?.activationLease);
+  return input.userExists &&
+    openclaw?.gatewayId === input.authoritativeGatewayId &&
+    lease?.leaseId === input.leaseId &&
+    lease?.generation === input.generation &&
+    lease?.status === input.expectedLeaseStatus &&
+    lease?.targetGatewayId === input.targetGatewayId &&
+    input.assignmentExists &&
+    input.assignmentData?.uid === input.uid &&
+    input.assignmentData.gatewayId === input.authoritativeGatewayId &&
+    input.assignmentData.state === "serving";
 }
 
 export function createFirestorePlacementPolicyReconcilerDeps(

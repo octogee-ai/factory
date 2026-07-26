@@ -115,6 +115,9 @@ async function assertCustomerMigrationV2FenceCurrent(input) {
         targetRoot,
         sourceRoot: sourceRootSnap.exists ? sourceRootSnap.data() : undefined,
     });
+    const targetAssignment = targetAssignmentSnap.exists ? targetAssignmentSnap.data() : undefined;
+    if (customerMigrationAlreadyCommitted(prior, targetAssignment, fence))
+        return true;
     assertBuilderActivationCutoverAuthorized({
         operation,
         user: userSnap.exists ? userSnap.data() : undefined,
@@ -122,9 +125,6 @@ async function assertCustomerMigrationV2FenceCurrent(input) {
         fence,
         nowMs,
     });
-    const targetAssignment = targetAssignmentSnap.exists ? targetAssignmentSnap.data() : undefined;
-    if (customerMigrationAlreadyCommitted(prior, targetAssignment, fence))
-        return true;
     assertCustomerMigrationSourceAssignmentExact(prior, fence);
     return false;
 }
