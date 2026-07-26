@@ -28,6 +28,9 @@ const patchMocks = vi.hoisted(() => ({
 const modelCredentialMocks = vi.hoisted(() => ({
   syncModelCredentialsForCustomer: vi.fn(async () => undefined),
 }));
+const brokerCatalogMocks = vi.hoisted(() => ({
+  materializeBrokerProfilesForAgents: vi.fn(() => 1),
+}));
 const contextFileConvergenceMocks = vi.hoisted(() => ({
   reassertConvergedContextFilesForSlug: vi.fn(() => []),
 }));
@@ -57,6 +60,13 @@ vi.mock("../lib/model-credential-sync-runtime.js", async (importOriginal) => {
   return {
     ...actual,
     syncModelCredentialsForCustomer: modelCredentialMocks.syncModelCredentialsForCustomer,
+  };
+});
+vi.mock("../lib/agent-model-token-materializer.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/agent-model-token-materializer.js")>();
+  return {
+    ...actual,
+    materializeBrokerProfilesForAgents: brokerCatalogMocks.materializeBrokerProfilesForAgents,
   };
 });
 vi.mock("../lib/context-file-convergence.js", async (importOriginal) => {
@@ -354,6 +364,7 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
 describe("buildBrokeredLifecycleAdapter add config patch", () => {
   beforeEach(() => {
     patchMocks.applyConfigPatch.mockClear();
+    brokerCatalogMocks.materializeBrokerProfilesForAgents.mockClear();
     vi.stubEnv("OPENAI_EMBEDDINGS_ENABLED", "true");
     vi.stubEnv("OPENAI_EMBEDDINGS_MODEL", "text-embedding-3-small");
   });
@@ -432,6 +443,53 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(args.buildReplacePaths?.(current)).toEqual(
       customerConfigFullAgentListReplacePaths(current, "alice"),
     );
+  });
+
+  it("materializes the first shared coach broker catalog before its config hot-reload", async () => {
+    const events: string[] = [];
+    brokerCatalogMocks.materializeBrokerProfilesForAgents.mockImplementationOnce(() => {
+      events.push("materialize");
+      return 1;
+    });
+    patchMocks.applyConfigPatch.mockImplementationOnce(async () => {
+      events.push("config-patch");
+      return { mode: "rpc" as const, attempts: 1 };
+    });
+    vi.stubEnv("OPENROUTER_BASE_URL", "http://llm-broker:3010/v1");
+    vi.stubEnv("PLATFORM_OPENAI_BASE_URL", "http://llm-broker:3010/v1");
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
+    });
+    const snapshot: FleetBrokerUserSnapshot = {
+      uid: "uid-first",
+      slug: "first",
+      tier: "standard",
+      gatewayId: "default",
+      status: "provisioning",
+      agentIds: [],
+      repoUrl: "",
+      mattermostUserId: "mm-first",
+      customerMmUserId: "mm-first",
+      greetingPosted: false,
+      channels: [],
+      projects: [],
+      ownerName: "First",
+      coachToken: "pat-first",
+      coachMmUserId: "mm-first-coach",
+    };
+
+    await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-first" });
+
+    expect(brokerCatalogMocks.materializeBrokerProfilesForAgents).toHaveBeenCalledWith(
+      ["octogee-first-coach"],
+      expect.objectContaining({
+        openRouter: expect.objectContaining({ baseUrl: "http://llm-broker:3010/v1" }),
+        openAi: expect.objectContaining({ baseUrl: "http://llm-broker:3010/v1" }),
+      }),
+    );
+    expect(events).toEqual(["materialize", "config-patch"]);
   });
 
   it("receipts the post-provision snapshot whose Mattermost identity was applied", async () => {

@@ -78,6 +78,11 @@ import {
   refreshModelCredentialRuntimeSessions,
   syncModelCredentialsForCustomer,
 } from "./model-credential-sync-runtime.js";
+import {
+  materializeBrokerProfilesForAgents,
+  openAiCatalogInputForBaseUrl,
+  openRouterCatalogInputForBaseUrl,
+} from "./agent-model-token-materializer.js";
 import { blobSyncForSlug } from "./blob-sync.js";
 import { createBrokeredBlobStore } from "./blob-sync-broker.js";
 import {
@@ -253,6 +258,27 @@ function coachToken(
   return brokerSnapshot?.coachToken ?? null;
 }
 
+function materializeCoachBrokerProfiles(
+  agentId: string,
+  slug: string,
+  logFn: (message: string) => void,
+): void {
+  const openRouterBaseUrl = process.env.OPENROUTER_BASE_URL?.trim();
+  const platformOpenAiBaseUrl = process.env.PLATFORM_OPENAI_BASE_URL?.trim();
+  const materialized = materializeBrokerProfilesForAgents([agentId], {
+    logFn,
+    ...(openRouterBaseUrl
+      ? { openRouter: openRouterCatalogInputForBaseUrl(openRouterBaseUrl) }
+      : {}),
+    ...(platformOpenAiBaseUrl
+      ? { openAi: openAiCatalogInputForBaseUrl(platformOpenAiBaseUrl) }
+      : {}),
+  });
+  if (materialized > 0) {
+    logFn(`[add:${slug}] broker model profiles materialized before config hot-reload`);
+  }
+}
+
 async function applyAddCustomerConfigPatch(
   ctx: BrokerCtx,
   snapshot: UserSnapshot,
@@ -287,6 +313,7 @@ async function applyAddCustomerConfigPatch(
   const agentId = `octogee-${snapshot.slug}-coach`;
   const agentDir = path.join(AGENTS_DIR, agentId, "agent");
   await fsp.mkdir(agentDir, { recursive: true });
+  materializeCoachBrokerProfiles(agentId, snapshot.slug, ctx.log);
   const agentEntry = buildCustomerAgent({
     uid: snapshot.uid,
     slug: snapshot.slug,
