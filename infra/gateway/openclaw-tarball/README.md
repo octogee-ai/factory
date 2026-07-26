@@ -135,6 +135,35 @@ git cherry-pick $(git log --format=%H ${PREV_TAG}..octogee/gateway-scaling-patch
 upstream changed something underneath the patch; resolve, `git add`,
 `git cherry-pick --continue`.
 
+> ⚠ **When upstream splits a file, this step is a PORT, not a replay.**
+> If upstream moved a function out of the file our patch modifies, the
+> cherry-pick will happily reintroduce the pre-split original on top of the
+> split tree — and the *feature* commits often do it without ever conflicting,
+> because the conflict surfaces only in a later adapt commit. The result builds
+> and looks green while the fork's wiring sits in a file nothing calls.
+>
+> Two signals, both cheap:
+>
+> ```bash
+> # 1. Did a file our stack patches shrink dramatically upstream?
+> git show ${NEW_TAG}:<file> | wc -l   # vs the same file at ${PREV_TAG}
+>
+> # 2. After the pick, does the fork's net delta still touch the same files?
+> BR=octogee/gateway-scaling-patches-${PREV_TAG}
+> git diff --name-only ${PREV_TAG} $BR | sort > /tmp/old-files
+> git diff --name-only ${NEW_TAG} HEAD | sort > /tmp/new-files
+> comm -23 /tmp/old-files /tmp/new-files   # in OLD not NEW = moved or LOST
+> ```
+>
+> Anything in that last list is a patch you must re-place by hand. Resolve the
+> conflict to **HEAD** (never reintroduce upstream-deleted code), finish the
+> pick, then author one `fix(recut): port …` commit that puts the fork's hunks
+> in their new homes. Prefer a **fork-owned module** for the relocated logic and
+> leave upstream files with the smallest possible hook — that is what keeps
+> the next roll cheap. Worked example: the 2026.7.2-beta.5 re-cut, where
+> upstream took `extensions/mattermost/.../monitor.ts` from 2105 lines to a 360-line
+> orchestrator (see `roll-notes/2026.7.2-beta.5.md` → "Recut").
+
 ### Step 5 — Audit upstream relevance
 
 You need to know two things per patch: did upstream touch the same file,
@@ -383,6 +412,26 @@ commit** (amend the stack). Do not pack a tarball over a red Step 6b.
 > Full `pnpm test` is not required per-cycle (it's ~10+ min and upstream
 > `main` CI can be red independent of us) — but run it for each
 > current-runtime update as the extra safety net.
+>
+> ⚠ **The env-var ratchet is the fork's one authorized `pnpm check` failure.**
+> `scripts/check-env-var-count.mjs` compares `config/env-var-count-budget.txt`
+> against **`origin/main`** and rejects any raise, so our +2 (the sidecar
+> broadcast override and the backend device token) fails it permanently — it
+> is the only red Step 6b may end on. Everything else is ours to fix.
+>
+> But the number still has to be exact. Upstream lowers its own budget when it
+> cleans up names, and if ours stays put the *count* assertion goes slack
+> without failing loudly (it never runs — the raise check throws first). Each
+> cycle, confirm the budget equals upstream's current value + 2:
+>
+> ```bash
+> git show ${NEW_TAG}:config/env-var-count-budget.txt   # upstream's baseline
+> node scripts/check-env-var-count.mjs --base HEAD   # asserts count==budget
+> ```
+>
+> The second command skips the raise check and proves the pin matches reality;
+> it must print `OPENCLAW_* count N/N`. On the 2026.7.2-beta.5 re-cut upstream
+> had dropped 530 → 520 while we carried 532, leaving ten names of slack.
 
 ### Step 7 — Pack the tarball
 
@@ -1052,6 +1101,10 @@ Reassess next OC upgrade."*). Update it every cycle.
 
 Executed roll records:
 
+- [OpenClaw 2026.7.2-beta.5 build notes](roll-notes/2026.7.2-beta.5.md) —
+  preview restored bases-only, then **re-cut** when upstream re-tagged beta.5:
+  the port across upstream's Mattermost monitor split, the Step 5 audit, and
+  the env-var ratchet re-lower.
 - [OpenClaw 2026.7.2-beta.3 preview build notes](roll-notes/2026.7.2-beta.3.md) — upstreamed
   patch retirements, beta.3 coexist re-cut, verification, artifacts, and held-preview builds.
 - [OpenClaw 2026.7.2-beta.2 preview build notes](roll-notes/2026.7.2-beta.2.md) — exact
