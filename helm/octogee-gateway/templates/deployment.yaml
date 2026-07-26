@@ -76,8 +76,10 @@ spec:
         gateway-image: {{ $gatewayImageLabel | quote }}
     spec:
       terminationGracePeriodSeconds: {{ .Values.preStopFlush.terminationGracePeriodSeconds | default 30 }}
+      {{- if not (has $gatewayClass (.Values.availability.protectedClasses | default list)) }}
       nodeSelector:
         cloud.google.com/gke-spot: "true"
+      {{- end }}
       serviceAccountName: {{ include "octogee-gateway.serviceAccountName" . }}
       {{- if eq $gatewayClass "builder" }}
       runtimeClassName: gvisor

@@ -167,6 +167,7 @@ export interface GatewayUpsertOpts {
   gatewayClass?: HelmInstanceValue["gatewayClass"];
   imageProfile?: HelmInstanceValue["imageProfile"];
   sizingTier?: HelmInstanceValue["sizingTier"];
+  availabilityProtected?: true;
   replicas?: number;
   gcpProject?: string;
   kmsKeyName?: string;
@@ -310,6 +311,9 @@ export function gatewayUpsertOptsFromRelease(input: {
     gatewayClass,
     imageProfile: resolveGatewayImageProfile(classKnobs(gateway)),
     sizingTier: gateway.sizingTier ?? undefined,
+    ...(deploymentEnvironmentForNamespace(input.namespace) === "prod" && gatewayClass === "shared"
+      ? { availabilityProtected: true as const }
+      : {}),
     replicas: input.replicas,
     gcpProject: gateway.gcpProject ?? undefined,
     kmsKeyName: input.kmsKeyName,
