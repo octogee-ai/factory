@@ -76,7 +76,10 @@ spec:
         gateway-image: {{ $gatewayImageLabel | quote }}
     spec:
       terminationGracePeriodSeconds: {{ .Values.preStopFlush.terminationGracePeriodSeconds | default 30 }}
-      {{- if not (has $gatewayClass (.Values.availability.protectedClasses | default list)) }}
+      {{- if has $gatewayClass (.Values.availability.protectedClasses | default list) }}
+      nodeSelector: {}
+      tolerations: []
+      {{- else }}
       nodeSelector:
         cloud.google.com/gke-spot: "true"
       {{- end }}
