@@ -627,6 +627,45 @@ function mapSinkError(error: unknown): never {
   throw error;
 }
 
+function activationErrorStatus(error: unknown): number | null {
+  if (!error || typeof error !== "object") return null;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" && Number.isInteger(status)
+    ? status
+    : null;
+}
+
+async function requestActivationAfterAppend(
+  deps: ActivityIntakeDeps,
+  binding: ActiveActivityRunBinding,
+): Promise<void> {
+  if (!deps.requestBuilderActivation) return;
+  try {
+    await deps.requestBuilderActivation({
+      agentId: binding.agentId,
+      runId: binding.runId,
+    });
+  } catch (error) {
+    const status = activationErrorStatus(error);
+    if (status !== null && status >= 400 && status < 500) {
+      deps.log?.("builder_activation", {
+        outcome: "rejected",
+        status,
+        agentId: binding.agentId,
+        runId: binding.runId,
+      });
+      return;
+    }
+    deps.log?.("builder_activation", {
+      outcome: "unavailable",
+      status,
+      agentId: binding.agentId,
+      runId: binding.runId,
+    });
+    throw new ActivityIntakeError(503, "activation_unavailable", true);
+  }
+}
+
 export async function processActivityIntake(
   request: ActivityIntakeRequest,
   deps: ActivityIntakeDeps,
@@ -660,10 +699,7 @@ export async function processActivityIntake(
       itemId: envelope.ref.itemId,
     });
     if (envelope.type === "turn.started") {
-      await deps.requestBuilderActivation?.({
-        agentId: frozenBinding.agentId,
-        runId: frozenBinding.runId,
-      });
+      await requestActivationAfterAppend(deps, frozenBinding);
     }
     if (
       result.receipt.eventKey !== envelope.eventKey ||

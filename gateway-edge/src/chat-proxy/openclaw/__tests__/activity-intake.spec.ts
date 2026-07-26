@@ -172,6 +172,72 @@ describe("normalized Activity intake", () => {
     },
   );
 
+  it.each([400, 403, 409])(
+    "keeps a persisted Activity acknowledgement successful when activation is rejected with %s",
+    async (status) => {
+      const envelope = startedEnvelope("human");
+      const log = vi.fn();
+      const result = await processActivityIntake(
+        { remoteAddress: "127.0.0.1", envelope },
+        {
+          registry: { readiness: () => "ready", resolve: vi.fn(async () => binding) },
+          sinkFor: vi.fn(() => ({
+            append: vi.fn(async () => ({
+              outcome: "persisted" as const,
+              postIds: ["activity-root-1"],
+              receipt: {
+                eventKey: envelope.eventKey,
+                postId: "activity-root-1",
+                activityChannelId: "activity-1",
+                activityRootPostId: "activity-root-1",
+              },
+            })),
+          })),
+          requestBuilderActivation: vi.fn(async () => {
+            throw Object.assign(new Error("activation rejected"), { status });
+          }),
+          log,
+        },
+      );
+
+      expect(result.status).toBe(201);
+      expect(log).toHaveBeenCalledWith("builder_activation", expect.objectContaining({
+        outcome: "rejected",
+        status,
+        runId: "run-1",
+      }));
+    },
+  );
+
+  it("returns a retryable intake failure when activation infrastructure is unavailable", async () => {
+    const envelope = startedEnvelope("human");
+    await expect(processActivityIntake(
+      { remoteAddress: "127.0.0.1", envelope },
+      {
+        registry: { readiness: () => "ready", resolve: vi.fn(async () => binding) },
+        sinkFor: vi.fn(() => ({
+          append: vi.fn(async () => ({
+            outcome: "persisted" as const,
+            postIds: ["activity-root-1"],
+            receipt: {
+              eventKey: envelope.eventKey,
+              postId: "activity-root-1",
+              activityChannelId: "activity-1",
+              activityRootPostId: "activity-root-1",
+            },
+          })),
+        })),
+        requestBuilderActivation: vi.fn(async () => {
+          throw Object.assign(new Error("broker unavailable"), { status: 503 });
+        }),
+      },
+    )).rejects.toMatchObject({
+      status: 503,
+      code: "activation_unavailable",
+      retryable: true,
+    });
+  });
+
   it("returns the same authoritative Activity sibling on a duplicate acknowledgement", async () => {
     const result = await processActivityIntake(
       { remoteAddress: "127.0.0.1", envelope: validEnvelope() },
