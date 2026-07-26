@@ -107,12 +107,11 @@ describe("snapshotConfigFingerprint", () => {
     expect(
       snapshotConfigFingerprint(snap({
         trialGrant: {
-          schemaVersion: 2,
+          schemaVersion: 3,
           offerId: "builder-signup",
           offerVersion: 1,
           personalTier: "personal",
           builderTier: "hobby",
-          gatewayId: "trial-op-000001",
           configHash: "config-a",
           claimedAt: { _seconds: 1_783_500_000 },
           endsAt: { _seconds: 1_784_104_800 },

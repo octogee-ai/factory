@@ -3,10 +3,6 @@ import {
   snapshotHasReconcileRelevantChange,
   startReconciler,
 } from "../index";
-import {
-  buildOwnedTrialGateway,
-} from "../trial-gateway-provisioner.js";
-import { DEFAULT_PLATFORM_TRIAL_CONFIG } from "@octogee/shared/types/platform-config";
 
 function durableRoot(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -301,21 +297,28 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
     const callbacks: SnapshotCallbacks = {};
     const reconcileImagePins = vi.fn(async () => {});
     const log = vi.fn();
-    const operatorRoot = buildOwnedTrialGateway({
-      uid: "uid-alice",
-      slug: "alice",
+    const operatorRoot = durableRoot({
       gatewayId,
-      source: {
-        gatewayId: "default",
-        release: 2,
-        payload: {
-          imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-          imageTag: "abc1234",
-        },
+      profile: "operator",
+      gatewayClass: "operator",
+      imageProfile: "operator",
+      sizingTier: "xs",
+      serviceAccountName: "octogee-gw-builder-alice",
+      serviceAccount: { create: false },
+      operatorAccess: {
+        shellsEnabled: false,
+        controlUiEnabled: false,
       },
-      config: DEFAULT_PLATFORM_TRIAL_CONFIG,
-      now: 1,
-    }).root;
+      ownerUid: "uid-alice",
+      builderSlug: "alice",
+      allocation: {
+        kind: "disposable-builder",
+        schemaVersion: 1,
+        leaseId: "lease-one",
+        generation: 1,
+        claimedByUid: "uid-alice",
+      },
+    });
     const stop = startReconciler({
       db: makeDb({
         roots: {

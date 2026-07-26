@@ -315,7 +315,7 @@ describe("admin platform-trial-config", () => {
     setCalls.length = 0;
   });
 
-  it("GET returns the strict defaults, concrete plan choices, and provisioning health", async () => {
+  it("GET returns strict location-free defaults and concrete plan choices", async () => {
     platformDocs["platformConfig/trial"] = {
       schemaVersion: 2,
       offerId: "builder-signup",
@@ -324,38 +324,6 @@ describe("admin platform-trial-config", () => {
       defaultPersonalTier: "personal",
       defaultBuilderTier: "hobby",
     };
-    queryDocs["trialGatewayClaims:status:waiting"] = [
-      {
-        id: "waiting-user",
-        data: {
-          uid: "waiting-user",
-          slug: "waiting-builder",
-          requestedAt: 90,
-          status: "waiting",
-          lastError: { at: 102, code: "release_source_unavailable", message: "source unavailable" },
-        },
-      },
-      {
-        id: "waiting-user-2",
-        data: { uid: "waiting-user-2", slug: "waiting-builder-2", requestedAt: 100, status: "waiting" },
-      },
-    ];
-    queryDocs["trialGatewayClaims:status:claimed"] = [
-      { id: "claimed-user", data: { status: "claimed" } },
-    ];
-    queryDocs["trialGatewayClaims:status:failed"] = [
-      {
-        id: "failed-user",
-        data: {
-          uid: "failed-user",
-          slug: "failed-builder",
-          status: "failed",
-          requestedAt: 80,
-          lastError: { at: 101, code: "trial_config_missing", message: "trial config unavailable" },
-        },
-      },
-    ];
-
     const res = await request(app).get("/api/admin/platform-trial-config");
 
     expect(res.status).toBe(200);
@@ -374,28 +342,8 @@ describe("admin platform-trial-config", () => {
       sizingTier: "m",
     });
     expect(res.body.builderPlans.map((plan: { name: string }) => plan.name)).not.toContain("enterprise");
-    expect(res.body.provisioning).toMatchObject({
-      waitingClaims: 2,
-      provisionedCount: 1,
-      failedClaims: 1,
-      oldestQueuedBuilderUid: "waiting-user",
-      oldestQueuedClaimError: {
-        at: 102,
-        code: "release_source_unavailable",
-        message: "source unavailable",
-      },
-      oldestFailedBuilderUid: "failed-user",
-      oldestFailedClaimError: {
-        at: 101,
-        code: "trial_config_missing",
-        message: "trial config unavailable",
-      },
-    });
-    expect(aggregateCalls).toEqual([
-      "trialGatewayClaims:status:waiting",
-      "trialGatewayClaims:status:claimed",
-      "trialGatewayClaims:status:failed",
-    ]);
+    expect(res.body).not.toHaveProperty("provisioning");
+    expect(aggregateCalls).toEqual([]);
   });
 
   it("GET reports missing configuration instead of silently granting a compiled tier", async () => {

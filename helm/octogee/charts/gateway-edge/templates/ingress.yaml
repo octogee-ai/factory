@@ -167,20 +167,6 @@ spec:
                 name: {{ $glm }}
                 port:
                   name: http
-          - path: /api/admin/operator-gateway-reservations/*
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $glm }}
-                port:
-                  name: http
-          - path: /api/admin/operator-gateway-reservations
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $glm }}
-                port:
-                  name: http
           - path: /api/admin/customer-distribution
             pathType: ImplementationSpecific
             backend:

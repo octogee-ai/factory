@@ -13,7 +13,6 @@ import {
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
-  OPERATOR_GATEWAY_RESERVATIONS_COLLECTION,
 } from "@octogee/shared/types/glm";
 import {
   addAdminCustomerRoutes,
@@ -74,8 +73,6 @@ export interface HttpServerDeps {
   ) => Promise<Record<string, GatewayPodDiagnostics>>;
   suspendAuthUser: (uid: string) => Promise<void>;
   revokeConnectorGrantsForUser: (uid: string) => Promise<void>;
-  dedicatedGatewayIdleDefaultMs?: number;
-  dedicatedGatewayIdleSweepMs?: number;
 }
 
 function adaptLogger(log: (msg: string) => void): FleetLogger {
@@ -152,7 +149,6 @@ function addAdminFleetEventRoute(router: Router, deps: HttpServerDeps): void {
     watch("config");
     watch(GLM_GATEWAYS_COLLECTION);
     watch(GLM_OPERATIONS_COLLECTION);
-    watch(OPERATOR_GATEWAY_RESERVATIONS_COLLECTION);
 
     req.on("close", close);
   });
@@ -210,8 +206,6 @@ export function createHttpServer(deps: HttpServerDeps): Express {
     readGatewayPodDiagnosticsBatch: deps.readGatewayPodDiagnosticsBatch,
     suspendAuthUser: deps.suspendAuthUser,
     revokeConnectorGrantsForUser: deps.revokeConnectorGrantsForUser,
-    dedicatedGatewayIdleDefaultMs: deps.dedicatedGatewayIdleDefaultMs,
-    dedicatedGatewayIdleSweepMs: deps.dedicatedGatewayIdleSweepMs,
   });
   app.use("/api/admin", adminRouter);
 

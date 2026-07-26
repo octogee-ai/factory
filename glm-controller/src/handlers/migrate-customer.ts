@@ -424,8 +424,7 @@ interface MigrateCustomerInput {
 
 function isControllerConvergenceSource(source: unknown): boolean {
   return source === "builder-activation-lease" ||
-    source === "continuous-placement-policy" ||
-    source === "operator-gateway-reservation";
+    source === "continuous-placement-policy";
 }
 
 function reportedStatusToStepStatus(reported: ReportedStep["status"]): StepStatus {

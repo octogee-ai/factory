@@ -190,10 +190,6 @@
       "types": "./dist/types/sizing.d.ts",
       "default": "./dist/types/sizing.js"
     },
-    "./types/trial-gateway": {
-      "types": "./dist/types/trial-gateway.d.ts",
-      "default": "./dist/types/trial-gateway.js"
-    },
     "./types/social": {
       "types": "./dist/types/social.d.ts",
       "default": "./dist/types/social.js"
@@ -330,9 +326,6 @@
       ],
       "types/sizing": [
         "dist/types/sizing.d.ts"
-      ],
-      "types/trial-gateway": [
-        "dist/types/trial-gateway.d.ts"
       ],
       "types/social": [
         "dist/types/social.d.ts"

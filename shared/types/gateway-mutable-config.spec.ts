@@ -98,23 +98,32 @@ describe("gateway mutable config", () => {
     expect(isGatewayMutableConfig(validConfig({ ownerUid: null, builderSlug: "owner" }))).toBe(false);
   });
 
-  it("requires owned trial allocations to carry a matching claim identity", () => {
+  it("requires disposable allocations to carry the matching owner and lease generation", () => {
     expect(isGatewayMutableConfig(validConfig({
       allocation: {
-        kind: "trial",
-        state: "claimed",
-        configHash: "0123456789abcdef",
-        claimedAt: { seconds: 1, nanoseconds: 0 },
+        kind: "disposable-builder",
+        schemaVersion: 1,
+        leaseId: "lease-one",
+        generation: 1,
         claimedByUid: "uid-owner",
       },
     }))).toBe(true);
     expect(isGatewayMutableConfig(validConfig({
       allocation: {
-        kind: "trial",
-        state: "claimed",
-        configHash: "0123456789abcdef",
-        claimedAt: 1,
+        kind: "disposable-builder",
+        schemaVersion: 1,
+        leaseId: "lease-one",
+        generation: 1,
         claimedByUid: "uid-other",
+      },
+    }))).toBe(false);
+    expect(isGatewayMutableConfig(validConfig({
+      allocation: {
+        kind: "disposable-builder",
+        schemaVersion: 1,
+        leaseId: "lease-one",
+        generation: 0,
+        claimedByUid: "uid-owner",
       },
     }))).toBe(false);
   });

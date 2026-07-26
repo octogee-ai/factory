@@ -82,12 +82,11 @@ const ON = {
 };
 
 const LIVE_SIGNUP_OFFER = {
-  schemaVersion: 2 as const,
+  schemaVersion: 3 as const,
   offerId: "builder-signup",
   offerVersion: 1,
   personalTier: "personal" as const,
   builderTier: "hobby" as const,
-  gatewayId: "trial-op-000001",
   configHash: "config-a",
   claimedAt: new Date(),
   endsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
@@ -188,12 +187,11 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
       byotActive: false,
       tier: "trial",
       trialGrant: {
-        schemaVersion: 2,
+        schemaVersion: 3,
         offerId: "builder-pro-preview",
         offerVersion: 1,
         personalTier: "personal_pro",
         builderTier: "pro",
-        gatewayId: "builder-tester-70",
         configHash: "trial-config",
         claimedAt: new Date(),
         endsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),

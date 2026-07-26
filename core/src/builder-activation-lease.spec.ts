@@ -1,467 +1,243 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import {
-  activationLeaseMissCanMintTicket,
-  findPendingMigrationToGateway,
-  requestBuilderActivationLease,
-  resolveBuilderActivationPlan,
-  type FirestoreDocLike,
-} from "./builder-activation-lease.js";
+import { requestBuilderActivationLease } from "./builder-activation-lease.js";
 
-function doc(id: string, data: Record<string, unknown>): FirestoreDocLike {
-  return { id, data: () => data };
-}
+type Data = Record<string, unknown>;
 
-function durableGateway(
-  id: string,
-  overrides: Record<string, unknown> = {},
-): FirestoreDocLike {
-  return doc(id, {
-    gatewayId: id,
-    createdAt: 1,
-    createdBy: "test",
-    updatedAt: 1,
-    updatedBy: "test",
-    latestRelease: 1,
-    desiredRelease: 1,
-    liveRelease: null,
-    liveRevisionId: null,
-    trafficRevisionId: null,
-    desiredStatus: "running",
-    roll: null,
-    configSchemaVersion: 1,
-    profile: null,
-    gatewayClass: "builder",
-    imageProfile: "standard",
-    sizingTier: null,
-    gcpProject: null,
-    gatewayContainerSecurityContext: null,
-    serviceAccountName: null,
-    serviceAccount: null,
-    operatorAccess: null,
-    ownerUid: "u-1",
-    builderSlug: "mira",
-    openclawOverrides: null,
-    modelBrokerLimits: null,
-    preemption: null,
-    ...overrides,
-  });
-}
-
-const builderGateway = durableGateway("gw-builder");
-
-function plan(overrides: Partial<Parameters<typeof resolveBuilderActivationPlan>[0]> = {}) {
-  return resolveBuilderActivationPlan({
-    uid: "u-1",
-    builderSlug: "mira",
-    currentGatewayId: "gw-shared",
-    gateways: [builderGateway],
-    gatewayHeartbeats: new Map([["gw-builder", { status: "ready" }]]),
-    pendingOps: [],
-    ...overrides,
-  });
-}
-
-describe("findPendingMigrationToGateway", () => {
-  it("matches a pending migration for the requested user and gateway regardless of controller source", () => {
-    expect(
-      findPendingMigrationToGateway(
-        [
-          doc("wrong-source", {
-            kind: "migrate-customer",
-            input: { uid: "u-1", toGatewayId: "gw-builder", source: "manual" },
-          }),
-          doc("op-1", {
-            kind: "migrate-customer",
-            input: {
-              uid: "u-1",
-              toGatewayId: "gw-builder",
-              source: "builder-activation-lease",
-            },
-          }),
-        ],
-        "u-1",
-        "gw-builder",
-      ),
-    ).toEqual({ id: "wrong-source", kind: "migrate-customer" });
-  });
-});
-
-describe("resolveBuilderActivationPlan", () => {
-  it("adopts a same-target migration from the placement policy", () => {
-    expect(plan({
-      pendingOps: [doc("placement-op", {
-        kind: "migrate-customer",
-        input: {
-          uid: "u-1",
-          toGatewayId: "gw-builder",
-          source: "continuous-placement-policy",
-        },
-      })],
-    })).toEqual({
-      error: {
-        status: 409,
-        body: expect.objectContaining({
-          code: "builder-activation-already-running",
-          operationId: "placement-op",
-        }),
-      },
-    });
-  });
-
-  it("rejects users with no current assignment before inspecting candidate gateways", () => {
-    expect(plan({ currentGatewayId: null })).toEqual({
-      error: {
-        status: 409,
-        body: {
-          code: "no-current-gateway-assignment",
-          error: "user has no current gateway assignment; assign before activation",
-          uid: "u-1",
-        },
-      },
-    });
-  });
-
-  it("rejects owned gateways whose builder slug belongs to a different builder", () => {
-    expect(
-      plan({
-        gateways: [
-          durableGateway("gw-other", { builderSlug: "other" }),
-        ],
-      }),
-    ).toEqual({
-      error: {
-        status: 409,
-        body: {
-          code: "owned-activation-gateway-slug-mismatch",
-          error: "owned activation gateway builderSlug does not match user slug",
-          uid: "u-1",
-          builderSlug: "mira",
-          gatewayIds: ["gw-other"],
-        },
-      },
-    });
-  });
-
-  it("returns already-active when the current dedicated gateway is ready", () => {
-    expect(plan({ currentGatewayId: "gw-builder" })).toEqual({
-      ok: { action: "already-active", target: expect.objectContaining({ gatewayId: "gw-builder" }) },
-    });
-  });
-
-  it("wakes the target instead of migrating when the dedicated gateway is not ready", () => {
-    expect(
-      plan({
-        gatewayHeartbeats: new Map([["gw-builder", { status: "starting" }]]),
-      }),
-    ).toEqual({
-      ok: {
-        action: "wake",
-        status: "starting",
-        target: expect.objectContaining({ gatewayId: "gw-builder" }),
-      },
-    });
-  });
-
-  it("rejects duplicate activation when a matching migration operation is already pending", () => {
-    expect(
-      plan({
-        pendingOps: [
-          doc("op-existing", {
-            kind: "migrate-customer",
-            input: {
-              uid: "u-1",
-              toGatewayId: "gw-builder",
-              source: "builder-activation-lease",
-            },
-          }),
-        ],
-      }),
-    ).toEqual({
-      error: {
-        status: 409,
-        body: {
-          code: "builder-activation-already-running",
-          error: "builder activation is already running",
-          uid: "u-1",
-          gatewayId: "gw-builder",
-          operationId: "op-existing",
-          kind: "migrate-customer",
-        },
-      },
-    });
-  });
-
-  it("plans migration when a different current gateway is assigned and the dedicated target is ready", () => {
-    expect(plan()).toEqual({
-      ok: { action: "migrate", target: expect.objectContaining({ gatewayId: "gw-builder" }) },
-    });
-  });
-
-  it("ignores a bare gateway-shaped doc even when it claims owned builder policy", () => {
-    expect(
-      plan({
-        gateways: [
-          doc("legacy", {
-            gatewayId: "legacy",
-            ownerUid: "u-1",
-            gatewayClass: "builder",
-            desiredStatus: "running",
-            builderSlug: "mira",
-          }),
-        ],
-      }),
-    ).toEqual({
-      error: {
-        status: 404,
-        body: expect.objectContaining({ code: "no-owned-dedicated-activation-gateway" }),
-      },
-    });
-  });
-});
-
-describe("activationLeaseMissCanMintTicket", () => {
-  it.each([
-    "no-current-gateway-assignment",
-    "no-owned-dedicated-activation-gateway",
-    "multiple-owned-activation-gateways",
-    "no-resolvable-builder-slug",
-  ])("allows ticket minting for %s", (code) => {
-    expect(activationLeaseMissCanMintTicket({ statusCode: 409, body: { code } })).toBe(true);
-  });
-
-  it("keeps runtime activation conflicts from minting a ticket", () => {
-    expect(
-      activationLeaseMissCanMintTicket({
-        statusCode: 409,
-        body: { code: "builder-activation-already-running" },
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("requestBuilderActivationLease — durable root policy + revision telemetry", () => {
-  function fakeDb(state: {
-    users: Record<string, Record<string, unknown>>;
-    glmGateways: Record<string, Record<string, unknown>>;
-    gateways?: Record<string, Record<string, unknown>>;
-    beforeTransaction?: () => void;
-  }) {
-    const accessed = new Set<string>();
-    const updates: Array<{ id: string; patch: Record<string, unknown> }> = [];
-    const db = {
-      async runTransaction<T>(fn: (txn: {
-        get: (ref: { get: () => Promise<unknown> }) => Promise<unknown>;
-        set: (ref: { set: (data: Record<string, unknown>) => Promise<void> }, data: Record<string, unknown>) => void;
-        update: (ref: { update: (patch: Record<string, unknown>) => Promise<void> }, patch: Record<string, unknown>) => void;
-      }) => Promise<T>): Promise<T> {
-        state.beforeTransaction?.();
-        const writes: Array<() => Promise<void>> = [];
-        const result = await fn({
-          get: (ref) => ref.get(),
-          set: (ref, data) => writes.push(() => ref.set(data)),
-          update: (ref, patch) => writes.push(() => ref.update(patch)),
-        });
-        for (const write of writes) await write();
-        return result;
-      },
-      doc(path: string) {
-        const [name, id] = path.split("/");
-        const data = (state as Record<string, Record<string, Record<string, unknown>>>)[name]?.[id];
-        return {
-          get: async () => ({ exists: data !== undefined, data: () => data }),
-        };
-      },
-      collection(name: string) {
-        accessed.add(name);
-        return {
-          doc: (id?: string) => ({
-            id: id ?? "op-1",
-            get: async () => ({
-              exists: !!(state as Record<string, Record<string, unknown>>)[name]?.[id ?? ""],
-              data: () => (state as Record<string, Record<string, unknown>>)[name]?.[id ?? ""],
-            }),
-            update: async (patch: Record<string, unknown>) => {
-              updates.push({ id: id ?? "", patch });
-            },
-            set: async (data: Record<string, unknown>) => {
-              const collection = (state as Record<string, Record<string, Record<string, unknown>>>)[name];
-              if (collection) collection[id ?? ""] = data;
-            },
-          }),
-          get: async () => ({
-            docs: Object.entries(
-              (state as Record<string, Record<string, Record<string, unknown>>>)[name] ?? {},
-            ).map(([id, data]) => ({ id, data: () => data })),
-          }),
-          where: () => ({ get: async () => ({ docs: [] }) }),
-        };
-      },
-    };
-    return { db, accessed, updates };
+function setPath(target: Data, path: string, value: unknown): void {
+  const parts = path.split(".");
+  let cursor = target;
+  for (const part of parts.slice(0, -1)) {
+    const next = cursor[part];
+    if (!next || typeof next !== "object" || Array.isArray(next)) cursor[part] = {};
+    cursor = cursor[part] as Data;
   }
+  cursor[parts.at(-1)!] = value;
+}
+
+function fakeDb(seed: Record<string, Data>) {
+  const docs = structuredClone(seed);
+  const db = {
+    doc(path: string) {
+      return { path };
+    },
+    async runTransaction<T>(fn: (transaction: {
+      get(ref: { path: string }): Promise<{ exists: boolean; data(): Data | undefined }>;
+      update(ref: { path: string }, patch: Data): void;
+    }) => Promise<T>): Promise<T> {
+      const writes: Array<() => void> = [];
+      const result = await fn({
+        get: async (ref) => ({
+          exists: docs[ref.path] !== undefined,
+          data: () => docs[ref.path],
+        }),
+        update: (ref, patch) => {
+          writes.push(() => {
+            const target = docs[ref.path];
+            if (!target) throw new Error(`missing ${ref.path}`);
+            for (const [path, value] of Object.entries(patch)) setPath(target, path, value);
+          });
+        },
+      });
+      for (const write of writes) write();
+      return result;
+    },
+  };
+  return { db, docs };
+}
+
+function activeTrial(overrides: Data = {}): Data {
+  return {
+    username: "alice",
+    onboardingStep: "complete",
+    provisioning: {
+      status: "complete",
+      openclaw: { gatewayId: "shared-blue", slug: "alice" },
+    },
+    trialGrant: {
+      schemaVersion: 3,
+      offerId: "builder-signup",
+      offerVersion: 1,
+      personalTier: "personal",
+      builderTier: "hobby",
+      configHash: "config-a",
+      claimedAt: 1_000,
+      endsAt: 999_999,
+    },
+    ...overrides,
+  };
+}
+
+function state(user: Data = activeTrial(), assignment: Data = {}) {
+  return fakeDb({
+    "users/uid-alice": user,
+    "gateways/shared-blue/assignments/uid-alice": {
+      uid: "uid-alice",
+      slug: "alice",
+      gatewayId: "shared-blue",
+      state: "serving",
+      epoch: 4,
+      ...assignment,
+    },
+  });
+}
+
+function request(
+  db: unknown,
+  overrides: Partial<Parameters<typeof requestBuilderActivationLease>[0]> = {},
+) {
+  return requestBuilderActivationLease({
+    db: db as never,
+    uid: "uid-alice",
+    reportingGatewayId: "shared-blue",
+    assignmentEpoch: 4,
+    eventKey: "ticket:req-1",
+    cause: "ticket",
+    observedAt: 5_000,
+    createdBy: "gateway-edge:shared-blue",
+    leaseIdFactory: () => "lease-one",
+    now: 5_000,
+    ...overrides,
+  });
+}
+
+describe("requestBuilderActivationLease", () => {
+  it("records one targetless, explicitly sized demand against the serving assignment", async () => {
+    const { db, docs } = state();
+
+    await expect(request(db)).resolves.toMatchObject({
+      statusCode: 202,
+      body: {
+        status: "requested",
+        leaseId: "lease-one",
+        generation: 1,
+        sizingTier: "xs",
+      },
+    });
+
+    expect(docs["users/uid-alice"]).toMatchObject({
+      provisioning: {
+        openclaw: {
+          activationLease: {
+            leaseId: "lease-one",
+            generation: 1,
+            status: "requested",
+            sourceGatewayId: "shared-blue",
+            sourceAssignmentEpoch: 4,
+            eventKey: "ticket:req-1",
+            cause: "ticket",
+            entitlementTier: "hobby",
+            sizingTier: "xs",
+          },
+        },
+      },
+    });
+    expect(
+      (docs["users/uid-alice"].provisioning as Data).openclaw,
+    ).not.toHaveProperty("targetGatewayId");
+  });
+
+  it("adopts duplicate demand without minting another lease generation", async () => {
+    const { db } = state();
+    const idFactory = vi.fn(() => "lease-one");
+
+    const first = await request(db, { leaseIdFactory: idFactory });
+    const second = await request(db, { leaseIdFactory: idFactory });
+
+    expect(first.body.leaseId).toBe("lease-one");
+    expect(second.body).toMatchObject({ leaseId: "lease-one", adopted: true });
+    expect(idFactory).toHaveBeenCalledTimes(1);
+  });
 
   it.each([
-    { action: "wake", currentGatewayId: "gw-builder", heartbeatStatus: "starting" },
-    { action: "migrate", currentGatewayId: "gw-shared", heartbeatStatus: "ready" },
-  ])("does not $action a gateway claimed for retirement after activation planning", async ({
-    currentGatewayId,
-    heartbeatStatus,
-  }) => {
-    const gateway = durableGateway("gw-builder", {
-      liveRelease: 1,
-      liveRevisionId: "gw-builder-r1",
-      trafficRevisionId: "gw-builder-r1",
-    }).data();
-    const state = {
-      users: {
-        "u-1": {
-          username: "mira",
-          provisioning: { openclaw: { gatewayId: currentGatewayId } },
-        },
+    ["mirror changed", activeTrial({
+      provisioning: {
+        status: "complete",
+        openclaw: { gatewayId: "other", slug: "alice" },
       },
-      gateways: { "gw-builder": gateway },
-      glmGateways: {
-        "gw-builder-r1": {
-          docKind: "revision",
-          revisionId: "gw-builder-r1",
-          gateway: "gw-builder",
-          release: 1,
-          lifecycle: "serving",
-          heartbeat: { status: heartbeatStatus },
-        },
-      },
-      glmOperations: {},
-      beforeTransaction: () => {
-        state.gateways["gw-builder"] = {
-          ...state.gateways["gw-builder"],
-          desiredStatus: "retired",
-          retirementClaim: { claimId: "retire-1" },
-        };
-      },
-    };
-    const { db, updates } = fakeDb(state);
+    }), {}],
+    ["epoch changed", activeTrial(), { epoch: 5 }],
+    ["assignment quiescing", activeTrial(), { state: "quiescing" }],
+  ])("rejects a stale source fence when %s", async (_label, user, assignment) => {
+    const { db, docs } = state(user, assignment);
 
-    const result = await requestBuilderActivationLease({
-      db: db as never,
-      uid: "u-1",
-      createdBy: "u-1",
-      workspaceSlugsForUser: () => ["mira"],
-      now: 1_000,
-    });
-
-    expect(result).toMatchObject({
+    await expect(request(db)).resolves.toMatchObject({
       statusCode: 409,
-      body: { code: "activation-gateway-retiring", gatewayId: "gw-builder" },
+      body: { code: "builder-runtime-assignment-stale" },
     });
-    expect(state.gateways["gw-builder"].desiredStatus).toBe("retired");
-    expect(updates).toHaveLength(0);
-    expect(state.glmOperations).toEqual({});
+    expect(
+      ((docs["users/uid-alice"].provisioning as Data).openclaw as Data).activationLease,
+    ).toBeUndefined();
   });
 
-  it("uses durable root ownership/class and the live revision heartbeat", async () => {
-    const { db, accessed } = fakeDb({
-      users: {
-        "u-1": {
-          username: "mira",
-          provisioning: { openclaw: { gatewayId: "gw-builder" } },
-        },
-      },
-      gateways: {
-        "gw-builder": {
-          gatewayId: "gw-builder",
-          createdAt: 1,
-          createdBy: "test",
-          updatedAt: 1,
-          updatedBy: "test",
-          latestRelease: 2,
-          desiredRelease: 2,
-          ownerUid: "u-1",
-          gatewayClass: "builder",
-          configSchemaVersion: 1,
-          profile: null,
-          imageProfile: "standard",
-          sizingTier: null,
-          gcpProject: null,
-          gatewayContainerSecurityContext: null,
-          serviceAccountName: null,
-          serviceAccount: null,
-          operatorAccess: null,
-          desiredStatus: "running",
-          builderSlug: "mira",
-          coOwnerUids: [],
-          liveRelease: 2,
-          openclawOverrides: null,
-          modelBrokerLimits: null,
-          preemption: null,
-        },
-      },
-      glmGateways: {
-        "gw-builder": {
-          docKind: "runtime",
-          gatewayId: "gw-builder",
-          release: 2,
-          lifecycle: "serving",
-          heartbeat: { status: "ready" },
+  it("preserves demand accepted while a return is already fenced", async () => {
+    const returning = activeTrial({
+      provisioning: {
+        status: "complete",
+        openclaw: {
+          gatewayId: "shared-blue",
+          slug: "alice",
+          activationLease: {
+            leaseId: "lease-old",
+            generation: 7,
+            status: "returning",
+            targetGatewayId: "run-alice-old",
+            blockedByOperationId: "return-op",
+          },
         },
       },
     });
+    const { db, docs } = state(returning);
 
-    const result = await requestBuilderActivationLease({
-      db: db as never,
-      uid: "u-1",
-      createdBy: "u-1",
-      workspaceSlugsForUser: () => ["mira"],
-      now: 1_000,
+    await expect(request(db)).resolves.toMatchObject({
+      statusCode: 202,
+      body: { status: "returning", pending: true, leaseId: "lease-old" },
     });
-
-    // Root config + live revision heartbeat "ready" + current gateway == target ⇒ already-active (200).
-    expect(result.statusCode).toBe(200);
-    expect(result.body).toMatchObject({ alreadyActive: true, gatewayId: "gw-builder" });
-    expect(accessed.has("gateways")).toBe(true);
+    expect(docs["users/uid-alice"]).toMatchObject({
+      provisioning: {
+        openclaw: {
+          activationLease: {
+            leaseId: "lease-old",
+            generation: 7,
+            targetGatewayId: "run-alice-old",
+            pendingDemand: {
+              eventKey: "ticket:req-1",
+              observedAt: 5_000,
+              sourceGatewayId: "shared-blue",
+              sourceAssignmentEpoch: 4,
+            },
+          },
+        },
+      },
+    });
   });
 
-  it("fails closed when only a legacy gateway doc claims an owned ready target", async () => {
-    const { db } = fakeDb({
-      users: {
-        "u-1": {
-          username: "mira",
-          provisioning: { openclaw: { gatewayId: "gw-shared" } },
-        },
-      },
-      gateways: {
-        legacy: {
-          gatewayId: "legacy",
-          ownerUid: "u-1",
-          gatewayClass: "builder",
-          desiredStatus: "running",
-          builderSlug: "mira",
-          liveRevisionId: "legacy-r1",
-          liveRelease: 1,
-        },
-      },
-      glmGateways: {
-        "legacy-r1": {
-          docKind: "revision",
-          revisionId: "legacy-r1",
-          gateway: "legacy",
-          release: 1,
-          heartbeat: { status: "ready" },
-        },
-      },
+  it("fails visibly when the Builder is unauthorized or requires manual sizing", async () => {
+    const unauthorized = state({ ...activeTrial(), trialGrant: undefined });
+    await expect(request(unauthorized.db)).resolves.toMatchObject({
+      statusCode: 403,
+      body: { code: "builder-runtime-not-entitled" },
     });
 
-    const result = await requestBuilderActivationLease({
-      db: db as never,
-      uid: "u-1",
-      createdBy: "u-1",
-      workspaceSlugsForUser: () => ["mira"],
-      now: 1_000,
+    const enterprise = state({
+      ...activeTrial(),
+      trialGrant: undefined,
+      builderSubscription: { tier: "enterprise", status: "active" },
     });
+    await expect(request(enterprise.db)).resolves.toMatchObject({
+      statusCode: 409,
+      body: { code: "builder-runtime-manual-size-required" },
+    });
+  });
 
-    expect(result).toMatchObject({
-      statusCode: 404,
-      body: { code: "no-owned-dedicated-activation-gateway" },
+  it("rejects demand after interactive account access is lost", async () => {
+    const { db } = state(activeTrial({
+      accountLifecycle: { status: "suspended" },
+    }));
+
+    await expect(request(db)).resolves.toMatchObject({
+      statusCode: 403,
+      body: { code: "builder-runtime-not-interactive" },
     });
   });
 });

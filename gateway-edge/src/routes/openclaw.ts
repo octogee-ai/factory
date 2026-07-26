@@ -1,12 +1,14 @@
 import { Router, Request, Response, NextFunction } from "express";
+import { randomUUID } from "node:crypto";
 import { requireAuth } from "../middleware/auth.js";
+import { logger } from "../middleware/logging.js";
 import { db } from "../lib/db.js";
 import { mintTicket } from "../lib/gateway-ticket.js";
+import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
+import { resolveBuilderTier } from "@octogee/shared/types/billing";
+import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
-import {
-  activationLeaseMissCanMintTicket,
-  requestBuilderActivationLease,
-} from "@octogee/core/builder-activation-lease";
+import { requestBuilderActivationLease } from "@octogee/core/builder-activation-lease";
 
 const router = Router();
 
@@ -29,52 +31,72 @@ export function resolveActivityHistoryTarget(
   return activityChannelId ? { activityChannelId, historyMode: "channel" } : null;
 }
 
-function workspaceSlugsForUser(data: { username?: string | null }): string[] {
-  return typeof data.username === "string" && data.username.length > 0
-    ? [data.username]
-    : [];
+function activationGatewayId(
+  userData: Record<string, unknown> | undefined,
+): string | null {
+  if (!userData || !accountAllowsInteractiveAccess(userData)) return null;
+  const builderTier = resolveBuilderTier(userData);
+  if (!builderTier || BUILDER_TIERS[builderTier].instance === null) return null;
+  const provisioning = userData.provisioning as
+    | { openclaw?: { gatewayId?: unknown; slug?: unknown } }
+    | undefined;
+  const hasSlug =
+    typeof provisioning?.openclaw?.slug === "string" ||
+    typeof userData.username === "string";
+  return hasSlug && isValidGatewayId(provisioning?.openclaw?.gatewayId)
+    ? provisioning.openclaw.gatewayId
+    : null;
 }
 
 async function maybeRequestActivationBeforeTicket(
   uid: string,
   userData: Record<string, unknown> | undefined,
-): Promise<{ statusCode: number; body: Record<string, unknown> } | null> {
-  const provisioning = userData?.provisioning as
-    | { openclaw?: { gatewayId?: unknown; slug?: unknown } }
-    | undefined;
-  const hasGateway = isValidGatewayId(provisioning?.openclaw?.gatewayId);
-  const hasSlug =
-    typeof provisioning?.openclaw?.slug === "string" ||
-    typeof userData?.username === "string";
-  if (!hasGateway || !hasSlug) return null;
-  const result = await requestBuilderActivationLease({
-    db,
-    uid,
-    createdBy: `openclaw-ticket:${uid}`,
-    reason: "openclaw-ticket",
-    workspaceSlugsForUser,
-  });
-  if (result.statusCode === 202) {
-    return {
-      statusCode: 202,
-      body: { ...result.body, openclawTicketDeferred: true },
-    };
+): Promise<void> {
+  const reportingGatewayId = activationGatewayId(userData);
+  if (!reportingGatewayId) return;
+  try {
+    const assignmentSnap = await db.doc(
+      `gateways/${reportingGatewayId}/assignments/${uid}`,
+    ).get();
+    const assignmentData = assignmentSnap.exists
+      ? assignmentSnap.data() as Record<string, unknown>
+      : undefined;
+    const observedAt = Date.now();
+    const result = await requestBuilderActivationLease({
+      db,
+      uid,
+      reportingGatewayId,
+      assignmentEpoch:
+        typeof assignmentData?.epoch === "number"
+          ? assignmentData.epoch
+          : undefined,
+      eventKey: `ticket:${randomUUID()}`,
+      cause: "ticket",
+      observedAt,
+      createdBy: `openclaw-ticket:${uid}`,
+    });
+    if (result.statusCode !== 200 && result.statusCode !== 202) {
+      logger.warn("[openclaw-ticket] disposable activation rejected", {
+        uid,
+        reportingGatewayId,
+        statusCode: result.statusCode,
+        code: result.body.code,
+      });
+    }
+  } catch (error) {
+    logger.warn("[openclaw-ticket] disposable activation unavailable", {
+      uid,
+      reportingGatewayId,
+      error,
+    });
   }
-  if (result.statusCode === 200 || activationLeaseMissCanMintTicket(result)) {
-    return null;
-  }
-  return result;
 }
 
 router.post("/ticket", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;
 
-    const activation = await maybeRequestActivationBeforeTicket(uid, req.user);
-    if (activation) {
-      res.status(activation.statusCode).json(activation.body);
-      return;
-    }
+    await maybeRequestActivationBeforeTicket(uid, req.user);
 
     const provisioning = req.user?.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined;
     const rawGatewayId = provisioning?.openclaw?.gatewayId;

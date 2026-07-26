@@ -5,9 +5,6 @@ import type { Firestore } from "firebase-admin/firestore";
 
 import {
   addAdminFleetRoutes,
-  DEDICATED_GATEWAY_IDLE_DEFAULT_MS,
-  parseDedicatedGatewayIdlePatch,
-  projectDedicatedGatewayIdleSettings,
   projectGatewayReservation,
   projectGatewaySummary,
   resolveFleetDeploymentSettings,
@@ -100,44 +97,6 @@ describe("projectGatewaySummary — gateway identity projection", () => {
   });
 });
 
-describe("dedicated gateway idle settings", () => {
-  it("uses the 30 minute default when no runtime override exists", () => {
-    expect(projectDedicatedGatewayIdleSettings({}, undefined, 60_000)).toEqual({
-      configuredMs: null,
-      defaultMs: DEDICATED_GATEWAY_IDLE_DEFAULT_MS,
-      effectiveMs: DEDICATED_GATEWAY_IDLE_DEFAULT_MS,
-      sweepMs: 60_000,
-      disabled: false,
-    });
-  });
-
-  it("projects 0ms as the operator-controlled never setting", () => {
-    expect(projectDedicatedGatewayIdleSettings({ dedicatedGatewayIdleMs: 0 }, 86_400_000, 60_000))
-      .toMatchObject({
-        configuredMs: 0,
-        defaultMs: 86_400_000,
-        effectiveMs: 0,
-        disabled: true,
-      });
-  });
-
-  it("accepts non-negative integer patches and rejects invalid values", () => {
-    expect(parseDedicatedGatewayIdlePatch({ dedicatedGatewayIdleMs: 0 })).toEqual({ ok: 0 });
-    expect(parseDedicatedGatewayIdlePatch({ dedicatedGatewayIdleMs: 1_800_000 })).toEqual({
-      ok: 1_800_000,
-    });
-    expect(parseDedicatedGatewayIdlePatch({ dedicatedGatewayIdleMs: null })).toEqual({
-      ok: null,
-    });
-    expect(parseDedicatedGatewayIdlePatch({ dedicatedGatewayIdleMs: -1 })).toMatchObject({
-      error: { status: 400 },
-    });
-    expect(parseDedicatedGatewayIdlePatch({ dedicatedGatewayIdleMs: 1.5 })).toMatchObject({
-      error: { status: 400 },
-    });
-  });
-});
-
 function valueAtPath(data: Record<string, unknown>, path: string): unknown {
   let cursor: unknown = data;
   for (const part of path.split(".")) {
@@ -205,7 +164,6 @@ function mkAdminFleetRouteApp(opts: {
   glmGateways?: Record<string, Record<string, unknown>>;
   gateways?: Record<string, Record<string, unknown>>;
   operations?: Record<string, Record<string, unknown>>;
-  reservations?: Record<string, Record<string, unknown>>;
   // gateways/{gatewayId}/assignments/{uid} durable roster docs (PR7).
   assignments?: Record<string, Record<string, Record<string, unknown>>>;
 }) {
@@ -213,7 +171,6 @@ function mkAdminFleetRouteApp(opts: {
     config: { ...opts.config },
     users: { ...opts.users },
     operations: { ...(opts.operations ?? {}) },
-    reservations: { ...(opts.reservations ?? {}) },
   };
   let operationId = 0;
   const assignmentDocs = Object.values(opts.assignments ?? {}).flatMap((byUid) =>
@@ -238,9 +195,6 @@ function mkAdminFleetRouteApp(opts: {
       if (name === "gateways") return mkCollection(opts.gateways ?? {});
       if (name === GLM_OPERATIONS_COLLECTION) {
         return mkCollection(state.operations, () => `operation-${++operationId}`);
-      }
-      if (name === "operatorGatewayReservations") {
-        return mkCollection(state.reservations);
       }
       return mkCollection({});
     }),
@@ -277,87 +231,22 @@ function mkAdminFleetRouteApp(opts: {
     suspendAuthUser: vi.fn(async () => undefined),
     revokeConnectorGrantsForUser: vi.fn(async () => undefined),
   });
+  app.use((error: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    res.status(500).json({ error: error.message });
+  });
   return { app, state };
 }
 
-describe("operator reservation orphan cleanup", () => {
-  const reservation = {
-    uid: "uid-orphan",
-    builderSlug: "orphan",
-    requestedSizingTier: "m",
-    status: "requested",
-    billingStatus: "active",
-    requestedAt: 1_000,
-    updatedAt: 2_000,
-  };
-
-  it("marks a reservation without an owner user as orphaned and not fulfillable", async () => {
-    const { app } = mkAdminFleetRouteApp({
-      config: {},
-      users: {},
-      reservations: { "uid-orphan": reservation },
-    });
-
-    const response = await request(app)
-      .get("/operator-gateway-reservations")
-      .expect(200);
-
-    expect(response.body.reservations).toEqual([
-      expect.objectContaining({
-        uid: "uid-orphan",
-        ownerExists: false,
-        readyToFulfill: false,
-        fulfillBlockedReason: "owner user is missing",
-      }),
-    ]);
-  });
-
-  it("uses the reservation document id as the cleanup identity", async () => {
-    const { app } = mkAdminFleetRouteApp({
-      config: {},
-      users: {},
-      reservations: {
-        "uid-orphan": { ...reservation, uid: "uid-from-malformed-payload" },
-      },
-    });
-
-    const response = await request(app)
-      .get("/operator-gateway-reservations")
-      .expect(200);
-
-    expect(response.body.reservations[0]).toMatchObject({
-      uid: "uid-orphan",
-      ownerExists: false,
-      readyToFulfill: false,
-      fulfillBlockedReason: "reservation uid mismatch",
-    });
-  });
-
-  it("deletes a reservation only when its owner user is absent", async () => {
-    const { app, state } = mkAdminFleetRouteApp({
-      config: {},
-      users: {},
-      reservations: { "uid-orphan": reservation },
-    });
-
-    await request(app)
-      .delete("/operator-gateway-reservations/uid-orphan")
-      .expect(200, { status: "deleted", uid: "uid-orphan" });
-    expect(state.reservations).toEqual({});
-  });
-
-  it("refuses to delete a reservation while its owner user exists", async () => {
-    const { app, state } = mkAdminFleetRouteApp({
-      config: {},
-      users: { "uid-orphan": { username: "still-here" } },
-      reservations: { "uid-orphan": reservation },
-    });
-
-    const response = await request(app)
-      .delete("/operator-gateway-reservations/uid-orphan")
-      .expect(409);
-    expect(response.body.error).toMatch(/owner user still exists/i);
-    expect(state.reservations).toHaveProperty("uid-orphan");
+describe("retired operator reservation routes", () => {
+  it.each([
+    ["get", "/operator-gateway-reservations"],
+    ["delete", "/operator-gateway-reservations/uid-orphan"],
+    ["post", "/operator-gateway-reservations/uid-orphan/activate"],
+    ["post", "/operator-gateway-reservations/uid-orphan/fulfill"],
+    ["patch", "/fleet-settings"],
+  ] as const)("returns 404 for %s %s", async (method, path) => {
+    const { app } = mkAdminFleetRouteApp({ config: {}, users: {} });
+    await request(app)[method](path).send({}).expect(404);
   });
 });
 
@@ -927,7 +816,10 @@ describe("onboarding placement (post-cohorts)", () => {
               slug: "ceckert",
               gatewayId: "bender-blue",
               activationLease: {
-                gatewayId: "bender-blue",
+                leaseId: "lease-one",
+                generation: 1,
+                status: "active",
+                targetGatewayId: "bender-blue",
                 requestedAt: 1_000,
                 activeAt: 2_000,
               },
@@ -946,18 +838,6 @@ describe("onboarding placement (post-cohorts)", () => {
           // Readiness/mounted telemetry relocated to glmGateways/{id}.heartbeat
           // (cutover step 2); the flat gateways/{id} writer is contracted.
           heartbeat: { status: "ready", mountedCustomers: ["ceckert"] },
-        },
-      },
-      reservations: {
-        "uid-ceckert": {
-          uid: "uid-ceckert",
-          builderSlug: "ceckert",
-          requestedSizingTier: "m",
-          status: "fulfilled",
-          billingStatus: "active",
-          requestedAt: 1_000,
-          updatedAt: 2_000,
-          gatewayId: "bender-blue",
         },
       },
     });

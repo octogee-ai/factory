@@ -34,11 +34,6 @@ import {
   resolveOpsAgentModel,
 } from "@octogee/shared/types/platform-config";
 import {
-  TRIAL_GATEWAY_CLAIMS_COLLECTION,
-  isTrialGatewayClaim,
-  type TrialGatewayClaimError,
-} from "@octogee/shared/types/trial-gateway";
-import {
   platformConnectDoc,
   readPlatformConnectConfig,
 } from "../lib/platform-connect-config.js";
@@ -238,78 +233,9 @@ router.put("/platform-connect-config", async (req, res) => {
 const platformTrialDoc = () =>
   db.collection(PLATFORM_CONFIG_COLLECTION).doc(PLATFORM_TRIAL_CONFIG_DOC);
 
-function failedClaimHealth(
-  doc: { id: string; data(): unknown } | undefined,
-): { builderUid: string | null; lastError: TrialGatewayClaimError | null } {
-  if (!doc) return { builderUid: null, lastError: null };
-  const claim = doc.data();
-  if (!isTrialGatewayClaim(claim) || claim.status !== "failed") {
-    logger.error("[admin] oldest failed trial gateway claim is invalid", {
-      builderUid: doc.id,
-    });
-    return {
-      builderUid: doc.id,
-      lastError: {
-        at: Date.now(),
-        code: "trial_claim_invalid",
-        message: `trialGatewayClaims/${doc.id} is invalid`,
-      },
-    };
-  }
-  return { builderUid: doc.id, lastError: claim.lastError as TrialGatewayClaimError };
-}
-
-function queuedClaimError(
-  doc: { id: string; data(): unknown } | undefined,
-): TrialGatewayClaimError | null {
-  if (!doc) return null;
-  const claim = doc.data();
-  if (!isTrialGatewayClaim(claim) || claim.status !== "waiting") {
-    logger.error("[admin] oldest waiting trial gateway claim is invalid", {
-      builderUid: doc.id,
-    });
-    return {
-      at: Date.now(),
-      code: "trial_claim_invalid",
-      message: `trialGatewayClaims/${doc.id} is invalid`,
-    };
-  }
-  return claim.lastError ?? null;
-}
-
-async function readTrialProvisioningHealth() {
-  const claims = db.collection(TRIAL_GATEWAY_CLAIMS_COLLECTION);
-  const [
-    waitingCountSnap,
-    claimedCountSnap,
-    failedCountSnap,
-    oldestWaitingSnap,
-    oldestFailedSnap,
-  ] = await Promise.all([
-    claims.where("status", "==", "waiting").count().get(),
-    claims.where("status", "==", "claimed").count().get(),
-    claims.where("status", "==", "failed").count().get(),
-    claims.where("status", "==", "waiting").orderBy("requestedAt", "asc").limit(1).get(),
-    claims.where("status", "==", "failed").orderBy("requestedAt", "asc").limit(1).get(),
-  ]);
-  const failed = failedClaimHealth(oldestFailedSnap.docs[0]);
-  return {
-    waitingClaims: waitingCountSnap.data().count,
-    provisionedCount: claimedCountSnap.data().count,
-    failedClaims: failedCountSnap.data().count,
-    oldestQueuedBuilderUid: oldestWaitingSnap.docs[0]?.id ?? null,
-    oldestQueuedClaimError: queuedClaimError(oldestWaitingSnap.docs[0]),
-    oldestFailedBuilderUid: failed.builderUid,
-    oldestFailedClaimError: failed.lastError,
-  };
-}
-
 router.get("/platform-trial-config", async (_req, res) => {
   try {
-    const [configSnap, provisioning] = await Promise.all([
-      platformTrialDoc().get(),
-      readTrialProvisioningHealth(),
-    ]);
+    const configSnap = await platformTrialDoc().get();
     const config = parsePlatformTrialConfig(configSnap.data());
     if (!config) {
       logger.error("[admin] trial config is missing or invalid", {
@@ -329,7 +255,6 @@ router.get("/platform-trial-config", async (_req, res) => {
         displayName: BUILDER_TIERS[name as keyof typeof BUILDER_TIERS].displayName,
         sizingTier: BUILDER_TIERS[name as keyof typeof BUILDER_TIERS].instance,
       })),
-      provisioning,
     });
   } catch (err) {
     logger.error("[admin] platform-trial-config read failed", { err });

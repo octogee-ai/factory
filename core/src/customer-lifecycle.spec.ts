@@ -383,12 +383,11 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
   it("forwards the trial grant to the reassert so its configured plans survive the mount boundary", async () => {
     const claimedSeconds = Math.floor(Date.now() / 1000) - 2 * 86_400;
     const trialGrant = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       offerId: "builder-signup",
       offerVersion: 1,
       personalTier: "personal",
       builderTier: "hobby",
-      gatewayId: "trial-op-000001",
       configHash: "config-a",
       claimedAt: { _seconds: claimedSeconds, _nanoseconds: 0 },
       endsAt: { _seconds: claimedSeconds + 7 * 86_400, _nanoseconds: 0 },

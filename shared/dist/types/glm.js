@@ -1,26 +1,6 @@
 export const GATEWAY_PROFILES = ["standard", "operator"];
 export const GATEWAY_CLASSES = ["shared", "builder", "operator"];
 export const GATEWAY_IMAGE_PROFILES = ["standard", "operator"];
-export const OPERATOR_GATEWAY_RESERVATION_STATUSES = [
-    "reserved",
-    "provisioning",
-    "active",
-    "suspended",
-    "released",
-];
-export const OPERATOR_GATEWAY_RESERVATION_BILLING_STATUSES = [
-    "manual",
-    "pending",
-    "active",
-];
-export const OPERATOR_GATEWAY_RESERVATIONS_COLLECTION = "operatorGatewayReservations";
-export const OPERATOR_GATEWAY_RESERVATION_REQUEST_STATUSES = [
-    "billing_pending",
-    "requested",
-    "provisioning",
-    "fulfilled",
-    "cancelled",
-];
 export const OPERATOR_GATEWAY_LOCKED_ACCESS = {
     shellsEnabled: false,
     controlUiEnabled: false,
