@@ -101,7 +101,7 @@ describe("OpenClaw runtime broker env", () => {
       sizingTier: "xs",
     });
     expect(calls).toEqual([{
-      url: "http://octogee-api:3001/internal/openclaw/activity/run-start",
+      url: "http://octogee-api:3001/internal/fleet/activity/run-start",
       body: {
         gatewayId: "shared-blue",
         agentId: "agent-alice",

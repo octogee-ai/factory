@@ -991,14 +991,19 @@ async function reconcileReturningLease(
     });
     return;
   }
+  const operatorTermination = millis(lease.raw.operatorTerminateRequestedAt) !== null;
   const retired = await context.deps.retireOwnedGateway({
     uid: user.uid,
     builderSlug,
     gatewayId: targetGatewayId,
     leaseId: lease.leaseId,
     generation: lease.generation,
-    telemetryFenceOperationId: `builder-return-${targetGatewayId}`,
-    telemetryFenceStatus: "succeeded",
+    ...(operatorTermination
+      ? {}
+      : {
+          telemetryFenceOperationId: `builder-return-${targetGatewayId}`,
+          telemetryFenceStatus: "succeeded" as const,
+        }),
     authoritativeGatewayId: context.state.defaultGatewayId,
   });
   if (!retired) {

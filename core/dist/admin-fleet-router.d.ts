@@ -157,6 +157,10 @@ export declare function projectBuilderRuntime(userDoc: FirestoreDocLike, gateway
     }>;
     cleanupError: string | null;
     error: string | null;
+    terminationAvailable: boolean;
+    retryAvailable: boolean;
+    targetPodStatus: GatewayPodDiagnosticsStatus | null;
+    targetPodCount: number | null;
 } | null;
 export declare function projectDisposableFleetCapacity(gateways: ReadonlyArray<ReturnType<typeof projectGatewaySummary>>): {
     disposableInstances: number;

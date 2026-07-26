@@ -380,7 +380,7 @@ export function createOpenClawRuntimeBroker(opts: {
     },
     async requestBuilderRunActivation(input): Promise<Record<string, unknown>> {
       const body = await postJson(
-        "/internal/openclaw/activity/run-start",
+        "/internal/fleet/activity/run-start",
         input,
         new Set([200, 202]),
       );
