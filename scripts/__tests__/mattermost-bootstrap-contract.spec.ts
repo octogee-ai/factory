@@ -29,9 +29,18 @@ describe("Mattermost fresh-database bootstrap contract", () => {
   it("fails instead of treating an existing admin with a failed login as a fresh database", () => {
     const setup = read("scripts/setup-mattermost.sh");
 
-    expect(setup).toContain('mmctl --local user get "$MM_ADMIN_USER"');
+    expect(setup).toContain('mmctl --local user search "$MM_ADMIN_USER"');
     expect(setup).toContain('Admin exists but API login failed');
     expect(setup).toContain('Fresh Mattermost admin is not present; creating it through mmctl --local');
+  });
+
+  it("probes admin existence with an mmctl subcommand that actually exists", () => {
+    const setup = read("scripts/setup-mattermost.sh");
+
+    // `mmctl user get` is not a subcommand: mmctl prints the `user` help and exits 0,
+    // so the probe reported "admin exists" unconditionally and the fresh-bootstrap
+    // branch below it was unreachable. `user search` exits 1 and prints "not found".
+    expect(setup).not.toMatch(/mmctl --local user get\b/u);
   });
 
   it("requires the cached PAT to resolve to the exact system administrator", () => {
