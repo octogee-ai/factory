@@ -216,12 +216,47 @@ function applyPlatformModelAllowlist(config: OpenClawConfig, env: NodeJS.Process
   return changed;
 }
 
+export function applyOpenClawBeta5CompatibilityPatch(
+  config: OpenClawConfig,
+  logFn: (msg: string) => void = () => {},
+): boolean {
+  let changed = false;
+  const meta = objectProperty(config, "meta");
+  if (meta && Reflect.has(meta, "lastTouchedAt")) {
+    Reflect.deleteProperty(meta, "lastTouchedAt");
+    changed = true;
+    logFn("removed meta.lastTouchedAt (unsupported by OpenClaw 2026.7.2-beta.5)");
+  }
+
+  const commands = objectProperty(config, "commands");
+  if (commands && Reflect.has(commands, "ownerDisplay")) {
+    Reflect.deleteProperty(commands, "ownerDisplay");
+    changed = true;
+    logFn("removed commands.ownerDisplay (unsupported by OpenClaw 2026.7.2-beta.5)");
+  }
+
+  const providers = objectProperty(objectProperty(config, "secrets"), "providers");
+  if (!providers) return changed;
+  for (const [providerName, provider] of Object.entries(providers)) {
+    if (!isPlainObject(provider)) continue;
+    if (Reflect.has(provider, "allowInsecurePath")) {
+      Reflect.deleteProperty(provider, "allowInsecurePath");
+      changed = true;
+      logFn(
+        `removed secrets.providers.${providerName}.allowInsecurePath (unsupported by OpenClaw 2026.7.2-beta.5)`,
+      );
+    }
+  }
+  return changed;
+}
+
 export function applyPreBootPatches(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   logFn: (msg: string) => void = () => {},
 ): boolean {
   return [
+    applyOpenClawBeta5CompatibilityPatch(config, logFn),
     applyToolsProfilePatch(config, logFn),
     applyMattermostPreBootPatches(config, env, logFn),
     applyOpenClawConversationExperiment(config, env.OCTOGEE_ACTIVITY_BRIDGE_MODE),

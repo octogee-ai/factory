@@ -436,16 +436,16 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   while true; do
     REPAIR_OK=true
     log "Pre-boot: repairing and validating durable OpenClaw config..."
+    if ! "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts; then
+      log "Pre-boot: env/runtime reconciliation failed; retrying"
+      REPAIR_OK=false
+    fi
     if ! run_openclaw_doctor; then
       log "Pre-boot: OpenClaw Doctor failed; retrying"
       REPAIR_OK=false
     fi
     if [ -f "$CLASS_POLICY" ] && ! node "$CLASS_POLICY"; then
       log "Pre-boot: gateway class policy failed; retrying"
-      REPAIR_OK=false
-    fi
-    if ! "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts; then
-      log "Pre-boot: env/runtime reconciliation failed; retrying"
       REPAIR_OK=false
     fi
     if ! "$TSX" /octogee/scripts/entrypoints/system-config-checkpoint.ts; then

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   applyAnthropicBaseUrlPatch,
+  applyOpenClawBeta5CompatibilityPatch,
   applyGatewayRootConfig,
   applyPreBootPatches,
   applyGatewayOverrides,
@@ -36,6 +37,46 @@ describe("applyPreBootPatches — platform model catalog", () => {
       "platform-openrouter/minimax/minimax-m3": {},
       "platform-openrouter/deepseek/deepseek-v4-pro": {},
       "platform-openai/gpt-5.4-mini": {},
+    });
+  });
+});
+
+describe("applyOpenClawBeta5CompatibilityPatch", () => {
+  it("removes beta.5-rejected legacy fields while preserving executable secret providers", () => {
+    const config: any = {
+      meta: { lastTouchedVersion: "2026.4.14", lastTouchedAt: "2026-04-17T01:04:39.966Z" },
+      commands: { native: "auto", ownerDisplay: "raw" },
+      secrets: {
+        providers: {
+          "gcp-secret-manager": {
+            source: "exec",
+            command: "/usr/local/bin/node",
+            args: ["/octogee/scripts/secret-resolver.mjs"],
+            passEnv: ["HOME"],
+            jsonOnly: true,
+            timeoutMs: 5000,
+            allowInsecurePath: true,
+          },
+        },
+      },
+    };
+
+    expect(applyOpenClawBeta5CompatibilityPatch(config)).toBe(true);
+    expect(config).toEqual({
+      meta: { lastTouchedVersion: "2026.4.14" },
+      commands: { native: "auto" },
+      secrets: {
+        providers: {
+          "gcp-secret-manager": {
+            source: "exec",
+            command: "/usr/local/bin/node",
+            args: ["/octogee/scripts/secret-resolver.mjs"],
+            passEnv: ["HOME"],
+            jsonOnly: true,
+            timeoutMs: 5000,
+          },
+        },
+      },
     });
   });
 });
