@@ -17,4 +17,3 @@ export interface BuilderRuntimeDemandRequest {
     leaseIdFactory?: () => string;
 }
 export declare function requestBuilderActivationLease(input: BuilderRuntimeDemandRequest): Promise<BuilderActivationLeaseResult>;
-export declare function activationLeaseMissCanMintTicket(result: BuilderActivationLeaseResult): boolean;

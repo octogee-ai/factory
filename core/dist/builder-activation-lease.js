@@ -226,6 +226,3 @@ export async function requestBuilderActivationLease(input) {
         return demandBody({ lease: next, status: "requested", sizingTier });
     });
 }
-export function activationLeaseMissCanMintTicket(result) {
-    return result.statusCode === 200 || result.statusCode === 202;
-}

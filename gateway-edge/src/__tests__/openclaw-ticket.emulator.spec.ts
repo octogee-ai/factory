@@ -143,7 +143,36 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
     expect(ops.empty).toBe(true);
   });
 
-  it("rejects demand from a non-serving assignment fence", async () => {
+  it.each([
+    ["a Personal user", { subscription: { tier: "personal", status: "active" } }],
+    ["an Enterprise Builder", { builderSubscription: { tier: "enterprise", status: "active" } }],
+  ])("mints the current shared ticket for %s when disposable activation is unavailable", async (
+    _label,
+    entitlement,
+  ) => {
+    await db.doc("users/caller-uid").set({
+      username: "alice",
+      ...entitlement,
+      provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
+    });
+    await db.doc("gateways/default/assignments/caller-uid").set({
+      uid: "caller-uid",
+      gatewayId: "default",
+      state: "serving",
+      epoch: 7,
+    });
+
+    const token = await getActiveIdToken("caller-uid");
+    const res = await request(buildApp())
+      .post("/api/openclaw/ticket")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.gatewayId).toBe("default");
+    expect(res.body.wsTicket).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("mints against the current user pointer while its assignment is returning", async () => {
     await db.doc("users/caller-uid").set({
       username: "alice",
       builderSubscription: { tier: "pro", status: "active" },
@@ -161,12 +190,8 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
       .post("/api/openclaw/ticket")
       .set("Authorization", `Bearer ${token}`);
 
-    expect(res.status).toBe(409);
-    expect(res.body).toMatchObject({
-      code: "builder-runtime-assignment-stale",
-      reportingGatewayId: "default",
-      assignmentEpoch: 7,
-    });
-    expect(res.body.wsTicket).toBeUndefined();
+    expect(res.status).toBe(200);
+    expect(res.body.gatewayId).toBe("default");
+    expect(res.body.wsTicket).toMatch(/^[0-9a-f-]{36}$/);
   });
 });
