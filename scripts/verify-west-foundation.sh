@@ -206,11 +206,17 @@ if [[ ! -f "${DEPLOYMENT_TARGETS}" ]]; then
   echo "Deployment target contract is unavailable: ${DEPLOYMENT_TARGETS}" >&2
   exit 1
 fi
-PAGED_LOCATIONS="$(jq -r '[.targets[] | select(.lifecycle != "frozen") | .region] | unique | join("|")' "${DEPLOYMENT_TARGETS}")"
-PAGED_CLUSTERS="$(jq -r '[.targets[] | select(.lifecycle != "frozen") | .clusterName] | unique | join("|")' "${DEPLOYMENT_TARGETS}")"
+PAGED_LOCATIONS="$(jq -r '
+  [.activeTargets.prod, .activeTargets.test] as $targetIds |
+  [$targetIds[] as $targetId | .targets[$targetId].region] | unique | join("|")
+' "${DEPLOYMENT_TARGETS}")"
+PAGED_CLUSTERS="$(jq -r '
+  [.activeTargets.prod, .activeTargets.test] as $targetIds |
+  [$targetIds[] as $targetId | .targets[$targetId].clusterName] | unique | join("|")
+' "${DEPLOYMENT_TARGETS}")"
 UNPAGED_NAMESPACES="$(jq -r '[.targets[] | select(.lifecycle == "frozen") | .namespace] | unique | join("|")' "${DEPLOYMENT_TARGETS}")"
 if [[ -z "${PAGED_LOCATIONS}" || -z "${PAGED_CLUSTERS}" ]]; then
-  echo "No non-frozen deployment target to page for; refusing to verify an empty alert scope" >&2
+  echo "No active PROD/TEST deployment target to page for; refusing to verify an empty alert scope" >&2
   exit 1
 fi
 UNPAGED_NAMESPACE_MATCHER=""

@@ -14,7 +14,10 @@ interface DeploymentTarget {
   namespace: string;
 }
 
-type Contract = { targets: Record<string, DeploymentTarget> };
+type Contract = {
+  activeTargets: { prod: string; test: string };
+  targets: Record<string, DeploymentTarget>;
+};
 
 const repoContract = JSON.parse(
   readFileSync(path.join(repoRoot, "core/src/deployment-targets.json"), "utf8"),
@@ -22,14 +25,21 @@ const repoContract = JSON.parse(
 
 const queryFor = (contract: Contract, severity: string): string => {
   const targets = Object.values(contract.targets);
+  const activeTargets = [
+    contract.targets[contract.activeTargets.prod],
+    contract.targets[contract.activeTargets.test],
+  ];
   const set = (
-    predicate: (target: DeploymentTarget) => boolean,
+    selectedTargets: DeploymentTarget[],
     field: (target: DeploymentTarget) => string,
-  ): string => [...new Set(targets.filter(predicate).map(field))].sort().join("|");
+  ): string => [...new Set(selectedTargets.map(field))].sort().join("|");
 
-  const locations = set((t) => t.lifecycle !== "frozen", (t) => t.region);
-  const clusters = set((t) => t.lifecycle !== "frozen", (t) => t.clusterName);
-  const unpaged = set((t) => t.lifecycle === "frozen", (t) => t.namespace);
+  const locations = set(activeTargets, (t) => t.region);
+  const clusters = set(activeTargets, (t) => t.clusterName);
+  const unpaged = set(
+    targets.filter((target) => target.lifecycle === "frozen"),
+    (t) => t.namespace,
+  );
   const matcher = unpaged.length > 0 ? `, namespace!~"${unpaged}"` : "";
 
   return `max by (alertname, severity, location, namespace, gateway_id) (ALERTS{project_id="octogee", location=~"${locations}", cluster=~"${clusters}", alertstate="firing", severity="${severity}"${matcher}})`;
@@ -48,6 +58,10 @@ const target = (
 });
 
 const nothingFrozenContract: Contract = {
+  activeTargets: {
+    prod: "prod-central",
+    test: "test-central",
+  },
   targets: {
     "prod-central": target("active", "octogee"),
     "test-central": target("active", "octogee-test"),
@@ -329,8 +343,9 @@ describe("WEST foundation runtime verifier", () => {
     expect(result.stderr).toContain("WEST workload alert-policy invariants failed");
   });
 
-  it("expects the query built from the non-frozen deployment targets", () => {
-    expect(workloadQuery("critical")).toContain('location=~"us-central1|us-west1"');
+  it("expects the query built from active PROD and TEST mappings", () => {
+    expect(workloadQuery("critical")).toContain('location=~"us-central1"');
+    expect(workloadQuery("critical")).not.toContain('location=~"us-central1|us-west1"');
     expect(workloadQuery("critical")).toContain('namespace!~"octogee-build-week"');
 
     const result = runVerifier();
