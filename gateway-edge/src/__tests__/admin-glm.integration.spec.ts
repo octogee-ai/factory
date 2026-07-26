@@ -447,7 +447,6 @@ function seedDurableGateway(
     gatewayClass: "shared",
     imageProfile: "standard",
     sizingTier: null,
-    computeClass: null,
     gcpProject: null,
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
@@ -1549,7 +1548,6 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     expect(bender.storage).toMatchObject({ mode: "emptyDir", pvcName: null });
     expect(bender.reservation).toMatchObject({
       type: "spot",
-      computeClass: "octogee-gateway-spot",
     });
     expect(bender.sizing.monthlyCostUsd.compute).toBeLessThan(
       bender.sizing.monthlyCostUsd.onDemandCompute,
@@ -1557,7 +1555,7 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     expect(res.body.stats.fleetCost.savingsUsd).toBeGreaterThan(0);
   });
 
-  it("keeps on-demand pricing when a gateway is explicitly on the on-demand compute class", async () => {
+  it("stays Spot-priced even when the durable root holds a residual computeClass", async () => {
     seedDurableGateway("dedicated", {
       heartbeat: { status: "ready", mountedCustomers: [] },
       root: { sizingTier: "m", computeClass: "octogee-gateway" },
@@ -1566,14 +1564,10 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     const res = await request(app).get("/api/admin/gateways");
     const dedicated = res.body.gateways.find((g: any) => g.gatewayId === "dedicated");
     expect(dedicated.storage).toMatchObject({ mode: "emptyDir", pvcName: null });
-    expect(dedicated.reservation).toMatchObject({
-      type: "on-demand",
-      computeClass: "octogee-gateway",
-    });
-    expect(dedicated.sizing.monthlyCostUsd.compute).toBe(
+    expect(dedicated.reservation).toEqual({ type: "spot", priceMultiplier: 0.3 });
+    expect(dedicated.sizing.monthlyCostUsd.compute).toBeLessThan(
       dedicated.sizing.monthlyCostUsd.onDemandCompute,
     );
-    expect(dedicated.sizing.monthlyCostUsd.savings).toBe(0);
   });
 
   it("defaults shared gateways to Spot pricing", async () => {
@@ -1586,7 +1580,6 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     const shared = res.body.gateways.find((g: any) => g.gatewayId === "shared");
     expect(shared.reservation).toMatchObject({
       type: "spot",
-      computeClass: "octogee-gateway-spot",
     });
     expect(shared.sizing.monthlyCostUsd.compute).toBeLessThan(
       shared.sizing.monthlyCostUsd.onDemandCompute,

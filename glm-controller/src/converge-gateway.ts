@@ -160,7 +160,6 @@ export interface GatewayUpsertOpts {
   serviceAccount?: HelmInstanceValue["serviceAccount"];
   gatewayContainerSecurityContext?: Record<string, unknown>;
   operatorAccess?: HelmInstanceValue["operatorAccess"];
-  computeClassOverride?: string;
   chartPath: string;
   valuesFile?: string;
   chartFingerprint?: string;
@@ -298,7 +297,6 @@ export function gatewayUpsertOptsFromRelease(input: {
     serviceAccount: gateway.serviceAccount ?? undefined,
     gatewayContainerSecurityContext: gateway.gatewayContainerSecurityContext ?? undefined,
     operatorAccess: gatewayOperatorAccess(gateway, gatewayClass),
-    computeClassOverride: gateway.computeClass ?? undefined,
     chartPath: input.chartPath,
     valuesFile: input.valuesFile,
     chartFingerprint: input.chartFingerprint,

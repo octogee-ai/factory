@@ -59,8 +59,6 @@ interface DeploymentTargetDocument {
     mattermostOrigin: string;
     previewOrigin: string;
     gatewayValuesFile: string;
-    computeClass: string;
-    platformComputeClass?: string;
     pinEnvironment: string;
 }
 interface DeploymentTargetsDocument {
@@ -112,8 +110,6 @@ export interface DeploymentEnvironmentSettings {
     mattermostOrigin: string;
     previewOrigin: string;
     gatewayValuesFile: string;
-    computeClass: string;
-    platformComputeClass?: string;
     pinEnvironment: string;
 }
 export declare function validateDeploymentTargetsDocument(document: unknown): asserts document is DeploymentTargetsDocument;

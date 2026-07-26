@@ -24,7 +24,6 @@ export function renderDeploymentTargetHelmValues(
   return `global:
   deploymentTargetId: ${quoted(settings.targetId)}
   deploymentProjectId: ${quoted(dataProject)}
-  platformComputeClass: ${quoted(settings.platformComputeClass ?? "")}
 networkPolicy:
   enforceDefaultDeny: ${networkBoundary !== undefined}
   controlPlaneCidr: ${quoted(networkBoundary?.controlPlaneCidr ?? "")}

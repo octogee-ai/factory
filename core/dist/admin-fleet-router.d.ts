@@ -119,9 +119,8 @@ type ProjectedGatewayStorage = {
     accessModes: string[];
 };
 declare function projectGatewayStorage(_gatewayId: string, _glmDoc: GlmDoc | undefined): ProjectedGatewayStorage;
-export declare function projectGatewayReservation(glmDoc: GlmDoc | undefined): {
+export declare function projectGatewayReservation(_glmDoc: GlmDoc | undefined): {
     type: GatewayPricingMode;
-    computeClass: string;
     priceMultiplier: number;
 };
 export declare function projectGatewaySummary(doc: FirestoreDocLike, glmDoc: GlmDoc | undefined, now: number): {

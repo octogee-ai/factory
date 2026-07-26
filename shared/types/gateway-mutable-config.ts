@@ -40,7 +40,6 @@ export interface GatewayMutableConfig {
   gatewayClass: GatewayClass;
   imageProfile: GatewayImageProfile;
   sizingTier: SizingTier | null;
-  computeClass: string | null;
   gcpProject: string | null;
   gatewayContainerSecurityContext: Record<string, unknown> | null;
   serviceAccountName: string | null;
@@ -60,10 +59,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
-}
-
-function isNullableNonEmptyString(value: unknown): value is string | null {
-  return value === null || (typeof value === "string" && value.length > 0);
 }
 
 function isNullableServiceAccountName(value: unknown): value is string | null {
@@ -192,7 +187,6 @@ export function isGatewayMutableConfig(value: unknown): value is GatewayMutableC
     isGatewayClass(value.gatewayClass) &&
     isGatewayProfile(value.imageProfile) &&
     isNullableSizingTier(value.sizingTier) &&
-    isNullableNonEmptyString(value.computeClass) &&
     isNullableString(value.gcpProject) &&
     isNullableRecord(value.gatewayContainerSecurityContext) &&
     isNullableServiceAccountName(value.serviceAccountName) &&

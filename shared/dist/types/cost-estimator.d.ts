@@ -1,6 +1,6 @@
 import { type SizingTier } from "./sizing.js";
-export declare const C2D_AUTOPILOT_VCPU_USD_PER_HR = 0.0335;
-export declare const C2D_AUTOPILOT_GIB_USD_PER_HR = 0.00408;
+export declare const AUTOPILOT_GENERAL_PURPOSE_VCPU_USD_PER_HR = 0.0445;
+export declare const AUTOPILOT_GENERAL_PURPOSE_GIB_USD_PER_HR = 0.0049225;
 export declare const HOURS_PER_MONTH = 730;
 export declare const SPOT_PRICE_MULTIPLIER = 0.3;
 export type GatewayPricingMode = "on-demand" | "spot";

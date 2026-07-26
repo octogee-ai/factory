@@ -16,28 +16,32 @@ import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
 } from "@octogee/shared/types/glm";
+import { SPOT_PRICE_MULTIPLIER } from "@octogee/shared/types/cost-estimator";
 
-// The Fleet card's reservation/cost derives from this projection. It must match
-// the helm posture (#1932: all classes ride Spot by default) — a prod operator
-// gateway with no per-gateway override is on Spot, not on-demand.
-describe("projectGatewayReservation — Spot is the default for every class", () => {
+// The Fleet card's reservation/cost derives from this projection. Gateway pods
+// carry only `cloud.google.com/gke-spot` now — no compute class, and no
+// on-demand fallback rung — so the projection is Spot for every class.
+describe("projectGatewayReservation — Spot with no fallback rung", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it.each([
-    ["PROD", "octogee", "octogee-gateway-spot"],
-    ["TEST", "octogee-test", "octogee-gateway-test-spot"],
-    ["Build Week", "octogee-build-week", "octogee-gateway-build-week-spot"],
-  ])("%s operator gateways use the environment spot class", (_label, namespace, computeClass) => {
+    ["PROD", "octogee"],
+    ["TEST", "octogee-test"],
+    ["Build Week", "octogee-build-week"],
+  ])("%s gateways are Spot-priced and expose no compute class", (_label, namespace) => {
     vi.stubEnv("K8S_NAMESPACE", namespace);
     const r = projectGatewayReservation({ profile: "operator", gatewayClass: "operator" });
-    expect(r.type).toBe("spot");
-    expect(r.computeClass).toBe(computeClass);
+    expect(r).toEqual({ type: "spot", priceMultiplier: SPOT_PRICE_MULTIPLIER });
+    expect(r).not.toHaveProperty("computeClass");
   });
 
-  it("an explicit on-demand scheduling override still wins", () => {
+  it("ignores a residual computeClass or scheduling field on the glm doc", () => {
     vi.stubEnv("K8S_NAMESPACE", "octogee");
-    const r = projectGatewayReservation({ profile: "operator", scheduling: "on-demand" });
-    expect(r.type).toBe("on-demand");
+    const r = projectGatewayReservation({
+      profile: "operator",
+      scheduling: "on-demand",
+    });
+    expect(r).toEqual({ type: "spot", priceMultiplier: SPOT_PRICE_MULTIPLIER });
   });
 
 });
@@ -379,7 +383,6 @@ function durableGatewayRoot(
     gatewayClass: "shared",
     imageProfile: "standard",
     sizingTier: null,
-    computeClass: null,
     gcpProject: null,
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,

@@ -40,7 +40,7 @@ export { TRIAL_GATEWAY_ALLOCATION_STATES, TRIAL_GATEWAY_CLAIMS_COLLECTION, isTim
 export type { SizingTier, SizingTierPreset, TierResources, TierNodeRuntime, TierCapacity, TierResolvedFrom, ResolveSizingTierInput, ResolvedSizingTier, } from './sizing.js';
 export { SIZING_TIERS, TIER_PRESETS, GATEWAY_CLASS_DEFAULT_TIER, PROFILE_DEFAULT_TIER, FALLBACK_DEFAULT_TIER, resolveSizingTier, } from './sizing.js';
 export type { GatewayMonthlyCost, FleetMonthlyCost } from './cost-estimator.js';
-export { C2D_AUTOPILOT_VCPU_USD_PER_HR, C2D_AUTOPILOT_GIB_USD_PER_HR, HOURS_PER_MONTH, estimateGatewayMonthlyCost, estimateFleetMonthlyCost, } from './cost-estimator.js';
+export { AUTOPILOT_GENERAL_PURPOSE_VCPU_USD_PER_HR, AUTOPILOT_GENERAL_PURPOSE_GIB_USD_PER_HR, HOURS_PER_MONTH, estimateGatewayMonthlyCost, estimateFleetMonthlyCost, } from './cost-estimator.js';
 export { OPENCLAW_PROTOCOL_VERSION } from './openclaw-wire.js';
 export { builderGatewayIdForSlug } from './builder-gateway-id.js';
 export type { DeviceIdentity, DeviceAuthPayloadV3Params, SignedDevicePayload, SignConnectDeviceParams, } from './device-identity.js';

@@ -24,7 +24,6 @@ function durableRoot(overrides: Record<string, unknown> = {}): Record<string, un
     gatewayClass: "shared",
     imageProfile: "standard",
     sizingTier: "m",
-    computeClass: "test-spot",
     gcpProject: null,
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
