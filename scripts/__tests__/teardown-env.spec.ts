@@ -28,6 +28,7 @@ type TeardownOptions = {
   functionDeleteFailure?: boolean;
   functions?: Array<{ name: string; generation: "GEN_1" | "GEN_2" }>;
   functionInventory?: string;
+  giteaWorkloadName?: "gitea" | "octogee-gitea";
   full?: boolean;
   gatewayRuntimeFailure?:
     | "serviceaccount-inspect"
@@ -51,6 +52,7 @@ function runPrivateCentralTeardown(options: TeardownOptions = {}) {
   const log = path.join(temp, "calls.log");
   const describeCount = path.join(temp, "describe-count");
   const deletedPvcs = path.join(temp, "deleted-pvcs");
+  const quiescedSqlWriters = path.join(temp, "quiesced-sql-writers");
   const deletedGatewayResources = path.join(temp, "deleted-gateway-resources");
   const uninstalledGatewayReleases = path.join(temp, "uninstalled-gateway-releases");
   const helmListCount = path.join(temp, "helm-list-count");
@@ -60,6 +62,7 @@ function runPrivateCentralTeardown(options: TeardownOptions = {}) {
   writeFileSync(log, "");
   writeFileSync(describeCount, "0");
   writeFileSync(deletedPvcs, "");
+  writeFileSync(quiescedSqlWriters, "");
   writeFileSync(deletedGatewayResources, "");
   writeFileSync(uninstalledGatewayReleases, "");
   writeFileSync(helmListCount, "0");
@@ -179,8 +182,12 @@ case "$1 $2" in
       fi
     done
     ;;
-  "get deployment/mattermost") printf 'deployment.apps/mattermost\\n' ;;
-  "get deployment/gitea") printf 'deployment.apps/gitea\\n' ;;
+  "get deployment,statefulset")
+    case "$*" in
+      *"app=mattermost"*) printf 'deployment.apps/mattermost\\n' ;;
+      *"app.kubernetes.io/name=gitea"*) printf 'deployment.apps/%s\\n' "$FAKE_GITEA_WORKLOAD_NAME" ;;
+    esac
+    ;;
   "get deployment/glm-controller")
     [[ "$FAKE_GATEWAY_CONTROLLER_FAILURE" != "inspect" ]] || {
       printf 'glm-controller deployment is forbidden\\n' >&2
@@ -193,14 +200,22 @@ case "$1 $2" in
       printf 'glm-controller pods are forbidden\\n' >&2
       exit 1
     fi
+    if [[ "$*" == *"app.kubernetes.io/name=gitea"* ]] \\
+      && ! grep -Fxq "deployment/$FAKE_GITEA_WORKLOAD_NAME" "$FAKE_QUIESCED_SQL_WRITERS"; then
+      printf 'pod/%s-abc123\\n' "$FAKE_GITEA_WORKLOAD_NAME"
+    fi
     ;;
   "get endpoints") printf '10.0.0.4\\n' ;;
-  "scale deployment"|"scale statefulset") ;;
   "scale deployment/glm-controller")
     [[ "$FAKE_GATEWAY_CONTROLLER_FAILURE" != "scale" ]] || {
       printf 'glm-controller scale is forbidden\\n' >&2
       exit 1
     }
+    ;;
+  "scale deployment/"*|"scale statefulset/"*)
+    if [[ "$2" == "deployment/$FAKE_GITEA_WORKLOAD_NAME" ]]; then
+      printf '%s\\n' "$2" >> "$FAKE_QUIESCED_SQL_WRITERS"
+    fi
     ;;
   "apply -f") cat >> "$FAKE_SQL_OWNER_MANIFEST" ;;
   "logs job/"*)
@@ -257,6 +272,11 @@ case "$1 $2" in
     printf 'deleted:%s\\n' "$pvc" >> "$FAKE_DELETED_PVCS"
     ;;
   "wait --for=delete")
+    if [[ "$*" == *"app.kubernetes.io/name=gitea"* ]] \\
+      && ! grep -Fxq "deployment/$FAKE_GITEA_WORKLOAD_NAME" "$FAKE_QUIESCED_SQL_WRITERS"; then
+      printf 'gitea pod still running\\n' >&2
+      exit 1
+    fi
     if [[ "$FAKE_PVC_FAILURE" == "finalize" && "$3" == "pvc/mattermost-data" ]]; then
       printf 'timed out waiting for PVC deletion\\n' >&2
       exit 1
@@ -337,6 +357,7 @@ esac
       FAKE_DATABASE_FAILURE: options.databaseFailure ?? "",
       FAKE_DESCRIBE_COUNT: describeCount,
       FAKE_DELETED_PVCS: deletedPvcs,
+      FAKE_QUIESCED_SQL_WRITERS: quiescedSqlWriters,
       FAKE_DELETED_GATEWAY_RESOURCES: deletedGatewayResources,
       FAKE_GATEWAY_RUNTIME_FAILURE: options.gatewayRuntimeFailure ?? "",
       FAKE_GATEWAY_HELM_FAILURE: options.gatewayHelmFailure ?? "",
@@ -359,6 +380,7 @@ esac
       FAKE_FUNCTION_DELETE_FAILURE: options.functionDeleteFailure ? "true" : "false",
       FAKE_FUNCTION_INVENTORY: options.functionInventory
         ?? `${(options.functions ?? []).map(({ name, generation }) => `${name},${generation}`).join("\n")}${options.functions?.length ? "\n" : ""}`,
+      FAKE_GITEA_WORKLOAD_NAME: options.giteaWorkloadName ?? "octogee-gitea",
       SA_KEY_PATH: options.missingServiceAccount ? path.join(temp, "missing-service-account.json") : serviceAccount,
     },
     input: options.interactiveInput,
@@ -373,6 +395,43 @@ esac
 }
 
 describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => {
+  it("quiesces the exact target Gitea deployment before the private SQL owner reset", () => {
+    const result = runPrivateCentralTeardown({ giteaWorkloadName: "octogee-gitea" });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.calls).toContain(
+      "kubectl scale deployment/octogee-gitea -n octogee-test --context gke_octogee_us-central1_octogee-gateway --replicas=0",
+    );
+  });
+
+  it("uses one JSONPath escape per Workload Identity annotation dot", () => {
+    const source = readFileSync(teardown, "utf8");
+
+    expect(source).toContain("jsonpath='{.metadata.annotations.iam\\.gke\\.io/gcp-service-account}'");
+    expect(source).not.toContain("jsonpath='{.metadata.annotations.iam\\\\.gke\\\\.io/gcp-service-account}'");
+  });
+
+  it("feeds private owner SQL through stdin so psql expands database variables", () => {
+    const result = runPrivateCentralTeardown({ giteaWorkloadName: "octogee-gitea" });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.sqlOwnerManifest).toContain("-v database=\"$database\" <<'SQL'");
+    expect(result.sqlOwnerManifest).toContain('WHERE datname = :\'database\'');
+    expect(result.sqlOwnerManifest).toContain('CREATE DATABASE :"database";');
+    expect(result.sqlOwnerManifest).toContain('DROP DATABASE :"database";');
+    expect(result.sqlOwnerManifest).not.toContain("-v database='mattermost_test' -c");
+    expect(result.sqlOwnerManifest).not.toContain("-v database='gitea_test' -c");
+  });
+
+  it("uses a native Cloud SQL proxy sidecar that terminates when the owner reset completes", () => {
+    const result = runPrivateCentralTeardown({ giteaWorkloadName: "octogee-gitea" });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.sqlOwnerManifest).toContain("initContainers:\n        - name: cloud-sql-proxy");
+    expect(result.sqlOwnerManifest).toContain("restartPolicy: Always");
+    expect(result.sqlOwnerManifest).toContain("containers:\n        - name: reset-owner");
+  });
+
   it("drops app-owned private databases through an exact-target in-cluster owner job before API recreation", () => {
     const result = runPrivateCentralTeardown();
 
@@ -389,7 +448,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
     expect(result.sqlOwnerManifest).toContain("cloud-sql-proxy");
     expect(result.sqlOwnerManifest).toContain("mattermost_test");
     expect(result.sqlOwnerManifest).toContain("gitea_test");
-    expect(result.sqlOwnerManifest).toContain('CREATE DATABASE :\\"database\\";');
+    expect(result.sqlOwnerManifest).toContain('CREATE DATABASE :"database";');
   });
 
   it("removes only exact-target dynamic gateway identities and secrets during a full reset", () => {

@@ -310,19 +310,29 @@ verify_database_through_api() {
 }
 
 quiesce_private_sql_writers() {
-  local resource pods
-  for resource in deployment/mattermost deployment/gitea statefulset/mattermost statefulset/gitea; do
-    if ! kubectl get "$resource" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
-        --ignore-not-found -o name >/dev/null; then
-      die "could not inspect SQL writer $resource before private Cloud SQL reset"
-    fi
-    if kubectl get "$resource" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
-        --ignore-not-found -o name | grep -q .; then
+  local writer selector resources resource pods
+  for writer_selector in \
+    'mattermost:app=mattermost' \
+    'gitea:app.kubernetes.io/name=gitea'; do
+    writer="${writer_selector%%:*}"
+    selector="${writer_selector#*:}"
+    resources=$(kubectl get deployment,statefulset -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
+      -l "$selector" -o name) \
+      || die "could not inspect SQL writer workloads ($selector) before private Cloud SQL reset"
+    [[ -n "$resources" ]] \
+      || die "no SQL writer workload matched $writer ($selector) before private Cloud SQL reset"
+    while IFS= read -r resource; do
+      [[ -n "$resource" ]] || continue
+      case "$resource" in
+        deployment.apps/*) resource="deployment/${resource#deployment.apps/}" ;;
+        deployment/*) ;;
+        statefulset.apps/*) resource="statefulset/${resource#statefulset.apps/}" ;;
+        statefulset/*) ;;
+        *) die "SQL writer workload has an unsupported resource reference: $resource" ;;
+      esac
       kubectl scale "$resource" -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" --replicas=0 \
         || die "could not quiesce SQL writer $resource before private Cloud SQL reset"
-    fi
-  done
-  for selector in 'app=mattermost' 'app.kubernetes.io/name=gitea'; do
+    done <<<"$resources"
     pods=$(kubectl get pods -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" -l "$selector" -o name) \
       || die "could not inspect SQL writer pods ($selector) before private Cloud SQL reset"
     if [[ -n "$pods" ]]; then
@@ -339,7 +349,7 @@ run_private_sql_owner_job() {
   job_name="octogee-sql-reset-${service}-${RANDOM}${RANDOM}"
 
   kubectl get serviceaccount octogee-api -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
-    -o jsonpath='{.metadata.annotations.iam\\.gke\\.io/gcp-service-account}' | grep -q . \
+    -o jsonpath='{.metadata.annotations.iam\.gke\.io/gcp-service-account}' | grep -q . \
     || die "target KSA octogee-api has no Workload Identity credential for private Cloud SQL reset"
 
   cat <<YAML | kubectl apply -f - --context "$K8S_CONTEXT" >/dev/null \
@@ -372,9 +382,10 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
-      containers:
+      initContainers:
         - name: cloud-sql-proxy
           image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.23.0@sha256:54e23cad9aeeedbf88ab75f993146631b878035f702b31c51885a932e0c7286c
+          restartPolicy: Always
           args:
             - --private-ip
             - --address=127.0.0.1
@@ -395,6 +406,7 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+      containers:
         - name: reset-owner
           image: postgres:16.14-alpine3.24@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
           command: ["/bin/sh", "-ceu"]
@@ -405,16 +417,28 @@ spec:
                 if [ "\$attempt" = 60 ]; then echo "Cloud SQL proxy did not become ready" >&2; exit 1; fi
                 sleep 1
               done
-              owner="\$(psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -At -v database='${dbname}' -c "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = :'database'")"
+              database='${dbname}'
+              owner="\$(psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -At -v database="\$database" <<'SQL'
+              SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = :'database';
+              SQL
+              )"
               case "\$owner" in
                 '')
-                  psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -v database='${dbname}' -c "CREATE DATABASE :\"database\";"
+                  psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -v database="\$database" <<'SQL'
+                  CREATE DATABASE :"database";
+                  SQL
                   owner='${owner}'
                   ;;
                 '${owner}')
-                  psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -v database='${dbname}' -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :'database' AND pid <> pg_backend_pid();"
-                  psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -v database='${dbname}' -c "DROP DATABASE :\"database\";"
-                  psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -v database='${dbname}' -c "CREATE DATABASE :\"database\";"
+                  psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -v database="\$database" <<'SQL'
+                  SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :'database' AND pid <> pg_backend_pid();
+                  SQL
+                  psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -v database="\$database" <<'SQL'
+                  DROP DATABASE :"database";
+                  SQL
+                  psql -X -q -h 127.0.0.1 -p 5432 -U "\$PGUSER" -d postgres -v ON_ERROR_STOP=1 -v database="\$database" <<'SQL'
+                  CREATE DATABASE :"database";
+                  SQL
                   ;;
                 cloudsqlsuperuser) ;;
                 *) echo "Unexpected owner for ${dbname}: \$owner" >&2; exit 1 ;;
