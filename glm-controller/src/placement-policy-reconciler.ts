@@ -260,25 +260,37 @@ export async function reconcilePlacementPolicyOnce(
     deps.log("[placement-policy] disabled: operator classification receipt is missing");
     return result;
   }
-  const classifiedLegacyGatewayIds = new Set(state.admission.legacyGatewayIds);
-  const unclassifiedLegacyGatewayIds = state.gateways
+  const retainedNamedGatewayIds = state.gateways
     .filter(
       (gateway) =>
-        gateway.ownerUid !== null &&
         gateway.gatewayClass !== "shared" &&
         gateway.disposable !== true &&
-        gateway.desiredStatus !== "retired" &&
-        !classifiedLegacyGatewayIds.has(gateway.gatewayId),
+        gateway.desiredStatus !== "retired",
     )
     .map((gateway) => gateway.gatewayId)
     .sort();
-  if (unclassifiedLegacyGatewayIds.length > 0) {
+  if (
+    state.admission.legacyGatewayIds.length > 0 ||
+    retainedNamedGatewayIds.length > 0
+  ) {
     deps.log(
-      `[placement-policy] disabled: unclassified legacy gateways ${unclassifiedLegacyGatewayIds.join(",")}`,
+      `[placement-policy] disabled: retained named gateways ${retainedNamedGatewayIds.join(",")}`,
     );
     return result;
   }
   const gateways = new Map(state.gateways.map((item) => [item.gatewayId, item]));
+  const unknownMirrorGatewayIds = state.users
+    .flatMap((user) => {
+      const gatewayId = currentGatewayId(user.data);
+      return gatewayId && !gateways.has(gatewayId) ? [gatewayId] : [];
+    })
+    .sort();
+  if (unknownMirrorGatewayIds.length > 0) {
+    deps.log(
+      `[placement-policy] disabled: user mirrors reference missing gateways ${[...new Set(unknownMirrorGatewayIds)].join(",")}`,
+    );
+    return result;
+  }
   const migrations = new Map(state.activeMigrations.map((item) => [item.uid, item]));
 
   const context = {
