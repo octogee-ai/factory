@@ -38,8 +38,16 @@ export interface PlacementPolicyMigration {
   toGatewayId: string;
 }
 
+export interface PlacementPolicyAdmission {
+  schemaVersion: 1;
+  reportId: string;
+  classifiedAt: number;
+  legacyGatewayIds: string[];
+}
+
 export interface PlacementPolicySnapshot {
   defaultGatewayId: string;
+  admission: PlacementPolicyAdmission | null;
   users: PlacementPolicyUser[];
   gateways: ContinuousPlacementOwnedGateway[];
   activeMigrations: PlacementPolicyMigration[];
@@ -102,6 +110,24 @@ interface PlacementPolicyReconcileContext {
   gateways: Map<string, ContinuousPlacementOwnedGateway>;
   migrations: Map<string, PlacementPolicyMigration>;
   result: PlacementPolicyReconcileResult;
+  mutations: number;
+  mutationLimitLogged: boolean;
+}
+
+const PLACEMENT_POLICY_MUTATION_LIMIT = 10;
+
+function claimMutation(context: PlacementPolicyReconcileContext): boolean {
+  if (context.mutations < PLACEMENT_POLICY_MUTATION_LIMIT) {
+    context.mutations += 1;
+    return true;
+  }
+  if (!context.mutationLimitLogged) {
+    context.deps.log(
+      `[placement-policy] mutation limit ${PLACEMENT_POLICY_MUTATION_LIMIT} reached`,
+    );
+    context.mutationLimitLogged = true;
+  }
+  return false;
 }
 
 async function retireUnentitledOwnedGateways(
@@ -116,6 +142,7 @@ async function retireUnentitledOwnedGateways(
       gateway.desiredStatus !== "retired",
   );
   for (const gateway of ownedGateways) {
+    if (!claimMutation(context)) return;
     const retired = await context.deps.retireOwnedGateway({
       uid: user.uid,
       builderSlug,
@@ -132,6 +159,7 @@ async function assignMissingPlacement(
   builderSlug: string,
   placement: ReturnType<typeof resolveContinuousBuilderPlacement>,
 ): Promise<void> {
+  if (!claimMutation(context)) return;
   const targetGateway = context.gateways.get(placement.targetGatewayId);
   if (!targetGateway) throw new Error(`placement target ${placement.targetGatewayId} is missing`);
   await context.deps.assignInitialPlacement({
@@ -161,6 +189,18 @@ async function reconcileEligibleBuilder(
   builderSlug: string,
 ): Promise<void> {
   const current = currentGatewayId(user.data);
+  const currentGateway = current ? context.gateways.get(current) : null;
+  if (
+    currentGateway &&
+    currentGateway.gatewayClass !== "shared" &&
+    currentGateway.disposable !== true
+  ) {
+    context.result.blocked += 1;
+    context.deps.log(
+      `[placement-policy] uid=${user.uid} legacy gateway ${currentGateway.gatewayId} requires operator migration`,
+    );
+    return;
+  }
   const entitledOwned = resolveLiveActivationTargetGatewayId({
     userData: user.data,
     now: new Date(context.deps.now()),
@@ -184,6 +224,7 @@ async function reconcileEligibleBuilder(
     return;
   }
   if (adoptActiveMigration(context, user.uid, placement.targetGatewayId)) return;
+  if (!claimMutation(context)) return;
   await context.deps.enqueueMigration({
     uid: user.uid,
     builderSlug,
@@ -208,8 +249,6 @@ export async function reconcilePlacementPolicyOnce(
 ): Promise<PlacementPolicyReconcileResult> {
   const state = await deps.readSnapshot();
   if (!state.defaultGatewayId) throw new Error("placement policy default gateway is missing");
-  const gateways = new Map(state.gateways.map((item) => [item.gatewayId, item]));
-  const migrations = new Map(state.activeMigrations.map((item) => [item.uid, item]));
   const result: PlacementPolicyReconcileResult = {
     assigned: 0,
     enqueued: 0,
@@ -217,8 +256,40 @@ export async function reconcilePlacementPolicyOnce(
     retired: 0,
     blocked: 0,
   };
+  if (!state.admission) {
+    deps.log("[placement-policy] disabled: operator classification receipt is missing");
+    return result;
+  }
+  const classifiedLegacyGatewayIds = new Set(state.admission.legacyGatewayIds);
+  const unclassifiedLegacyGatewayIds = state.gateways
+    .filter(
+      (gateway) =>
+        gateway.ownerUid !== null &&
+        gateway.gatewayClass !== "shared" &&
+        gateway.disposable !== true &&
+        gateway.desiredStatus !== "retired" &&
+        !classifiedLegacyGatewayIds.has(gateway.gatewayId),
+    )
+    .map((gateway) => gateway.gatewayId)
+    .sort();
+  if (unclassifiedLegacyGatewayIds.length > 0) {
+    deps.log(
+      `[placement-policy] disabled: unclassified legacy gateways ${unclassifiedLegacyGatewayIds.join(",")}`,
+    );
+    return result;
+  }
+  const gateways = new Map(state.gateways.map((item) => [item.gatewayId, item]));
+  const migrations = new Map(state.activeMigrations.map((item) => [item.uid, item]));
 
-  const context = { deps, state, gateways, migrations, result };
+  const context = {
+    deps,
+    state,
+    gateways,
+    migrations,
+    result,
+    mutations: 0,
+    mutationLimitLogged: false,
+  };
   for (const user of [...state.users].sort((a, b) => a.uid.localeCompare(b.uid))) {
     await reconcilePlacementUser(context, user);
   }
@@ -239,6 +310,30 @@ function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration |
   return uid && toGatewayId ? { id: doc.id, uid, toGatewayId } : null;
 }
 
+function placementPolicyAdmission(value: unknown): PlacementPolicyAdmission | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const reportId = nonEmptyString(raw.reportId);
+  if (
+    raw.schemaVersion !== 1 ||
+    !reportId ||
+    typeof raw.classifiedAt !== "number" ||
+    !Number.isFinite(raw.classifiedAt) ||
+    raw.classifiedAt <= 0 ||
+    !Array.isArray(raw.legacyGatewayIds) ||
+    raw.legacyGatewayIds.some((gatewayId) => !nonEmptyString(gatewayId)) ||
+    new Set(raw.legacyGatewayIds).size !== raw.legacyGatewayIds.length
+  ) {
+    return null;
+  }
+  return {
+    schemaVersion: 1,
+    reportId,
+    classifiedAt: raw.classifiedAt,
+    legacyGatewayIds: [...raw.legacyGatewayIds].sort() as string[],
+  };
+}
+
 interface FirestorePlacementPolicyInput {
   db: Firestore;
   now(): number;
@@ -256,6 +351,9 @@ async function readPlacementPolicySnapshot(db: Firestore): Promise<PlacementPoli
     ]);
   const defaultGatewayId = nonEmptyString(configSnap.data()?.defaultGatewayId);
   if (!defaultGatewayId) throw new Error("config/orchestrator.defaultGatewayId is missing");
+  const admission = placementPolicyAdmission(
+    configSnap.data()?.disposableGatewayPlacementAdmission,
+  );
   const runtimes = docsById(runtimeSnap.docs);
   const gateways = gatewaysSnap.docs.flatMap((doc) => {
     const root = projectGatewayDesiredRootForGateway(doc.data(), doc.id);
@@ -283,6 +381,7 @@ async function readPlacementPolicySnapshot(db: Firestore): Promise<PlacementPoli
   }
   return {
     defaultGatewayId,
+    admission,
     users: usersSnap.docs.map((doc) => ({ uid: doc.id, data: doc.data() as Record<string, unknown> })),
     gateways,
     activeMigrations: opsSnap.docs.flatMap((doc) => activeMigration(doc) ?? []),
