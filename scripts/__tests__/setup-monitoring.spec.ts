@@ -51,7 +51,6 @@ function createHarness(): {
   TARGET_REGION=us-west1
   TARGET_CLUSTER_PROJECT=octogee
   TARGET_KUBE_CONTEXT=gke_us-west1_octogee
-  TARGET_PLATFORM_COMPUTE_CLASS=octogee-platform-test-spot
 }
 `,
   );

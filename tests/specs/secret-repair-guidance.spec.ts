@@ -58,9 +58,9 @@ describe("secret repair guidance", () => {
   it("uses the rotated credential to bootstrap a fresh Mattermost admin", () => {
     const script = readFileSync(path.join(repoRoot, "scripts/setup-mattermost.sh"), "utf8");
 
-    expect(script).toContain('/mattermost/bin/mmctl --local user get "$MM_ADMIN_USER"');
+    expect(script).toContain('/mattermost/bin/mmctl --local user search "$MM_ADMIN_USER"');
     expect(script).toContain("Fresh Mattermost admin is not present");
-    expect(script.indexOf('mmctl --local user get "$MM_ADMIN_USER"')).toBeLessThan(
+    expect(script.indexOf('mmctl --local user search "$MM_ADMIN_USER"')).toBeLessThan(
       script.indexOf('mmctl --local user change-password "$MM_ADMIN_USER"'),
     );
   });

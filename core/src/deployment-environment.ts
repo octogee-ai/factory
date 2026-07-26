@@ -68,8 +68,6 @@ interface DeploymentTargetDocument {
   mattermostOrigin: string;
   previewOrigin: string;
   gatewayValuesFile: string;
-  computeClass: string;
-  platformComputeClass?: string;
   pinEnvironment: string;
 }
 
@@ -123,8 +121,6 @@ export interface DeploymentEnvironmentSettings {
   mattermostOrigin: string;
   previewOrigin: string;
   gatewayValuesFile: string;
-  computeClass: string;
-  platformComputeClass?: string;
   pinEnvironment: string;
 }
 
@@ -153,7 +149,6 @@ const TARGET_STRING_FIELDS = [
   "mattermostOrigin",
   "previewOrigin",
   "gatewayValuesFile",
-  "computeClass",
   "pinEnvironment",
 ] as const;
 const INGRESS_STRING_FIELDS = [
@@ -410,8 +405,6 @@ function settings(
     mattermostOrigin: target.mattermostOrigin,
     previewOrigin: target.previewOrigin,
     gatewayValuesFile: target.gatewayValuesFile,
-    computeClass: target.computeClass,
-    platformComputeClass: target.platformComputeClass,
     pinEnvironment: target.pinEnvironment,
   };
 }

@@ -43,7 +43,6 @@ describe("helm-runner helpers", () => {
       serviceAccount: { annotations: { "iam.gke.io/gcp-service-account": "gw@example.iam.gserviceaccount.com" } },
       gatewayContainerSecurityContext: { allowPrivilegeEscalation: false },
       operatorAccess: { enabled: true, audiences: ["octogee-api"] },
-      computeClassOverride: "octogee-gateway-spot",
       profile: "operator",
       gatewayClass: "operator",
       imageProfile: "operator",
@@ -54,7 +53,6 @@ describe("helm-runner helpers", () => {
       serviceAccount: { annotations: { "iam.gke.io/gcp-service-account": "gw@example.iam.gserviceaccount.com" } },
       gatewayContainerSecurityContext: { allowPrivilegeEscalation: false },
       operatorAccess: { enabled: true, audiences: ["octogee-api"] },
-      computeClassOverride: "octogee-gateway-spot",
       profile: "operator",
       gatewayClass: "operator",
       imageProfile: "operator",
@@ -72,6 +70,11 @@ describe("helm-runner helpers", () => {
       sizingTier: "tiny",
       replicas: 1.5,
     })).toEqual({});
+  });
+
+  it("drops a residual computeClassOverride left in a deployed release's values", () => {
+    const residue = { computeClassOverride: "octogee-gateway-spot" };
+    expect(readPersonalKnobs(residue)).toEqual({});
   });
 
   it("builds upgrade args with string, numeric, JSON, and values-file knobs", () => {
@@ -97,7 +100,6 @@ describe("helm-runner helpers", () => {
       serviceAccount: { annotations: { "iam.gke.io/gcp-service-account": "gw@example.iam.gserviceaccount.com" } },
       gatewayContainerSecurityContext: { allowPrivilegeEscalation: false },
       operatorAccess: { enabled: true },
-      computeClassOverride: "octogee-gateway-spot",
       gcpProject: "builder-bender",
       kmsKeyName: "projects/octogee-data-prod/locations/us-west1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest",
       deploymentTargetId: "prod-west",
@@ -327,7 +329,6 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
       enabled: true,
       image: { repository: REPO, tag: "def5678" },
       gatewayId: "canary",
-      computeClassOverride: "octogee-gateway-spot",
     });
   });
 
@@ -726,7 +727,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     expect(calls[0]).toContain("sizingTier=m");
   });
 
-  it("passes explicit compute-class override via --set-string", async () => {
+  it("never emits a compute-class override to the chart", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
     const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
@@ -736,13 +737,9 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
-      computeClassOverride: "octogee-gateway-spot",
     });
 
-    const idx = calls[0].findIndex(
-      (a, i) => a === "--set-string" && calls[0][i + 1] === "computeClassOverride=octogee-gateway-spot",
-    );
-    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(calls[0].some((a: string) => a.includes("computeClass"))).toBe(false);
   });
 
   it("omits --set sizingTier when undefined (chart falls back to profile default)", async () => {

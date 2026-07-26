@@ -57,7 +57,6 @@ async function seedDedicatedGateway({
     gatewayClass,
     imageProfile: isOperator ? "operator" : "standard",
     sizingTier: null,
-    computeClass: null,
     gcpProject: null,
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,

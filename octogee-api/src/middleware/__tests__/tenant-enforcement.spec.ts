@@ -182,7 +182,6 @@ function configuredBender(overrides: Record<string, unknown> = {}) {
     gatewayClass: "operator",
     imageProfile: "operator",
     sizingTier: null,
-    computeClass: null,
     gcpProject: null,
     gatewayContainerSecurityContext: null,
     serviceAccountName: "octogee-gw-bender",

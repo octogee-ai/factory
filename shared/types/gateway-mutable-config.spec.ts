@@ -16,7 +16,6 @@ function validConfig(
     gatewayClass: "operator",
     imageProfile: "operator",
     sizingTier: "l",
-    computeClass: null,
     gcpProject: null,
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
@@ -37,6 +36,23 @@ describe("gateway mutable config", () => {
     expect(isGatewayMutableConfig(validConfig({
       operatorAccess: { shellsEnabled: true, controlUiEnabled: true },
     }))).toBe(true);
+  });
+
+  it("accepts a durable root that carries no computeClass at all", () => {
+    const config = validConfig();
+    expect(Object.prototype.hasOwnProperty.call(config, "computeClass")).toBe(false);
+    expect(isGatewayMutableConfigForGateway(config, "owner")).toBe(true);
+  });
+
+  it("treats a residual computeClass from the retired ComputeClass era as inert", () => {
+    for (const residue of ["octogee-gateway-spot", "", 123, null]) {
+      expect(
+        isGatewayMutableConfigForGateway(
+          { ...validConfig(), computeClass: residue },
+          "owner",
+        ),
+      ).toBe(true);
+    }
   });
 
   it("rejects a non-boolean Control UI capability", () => {

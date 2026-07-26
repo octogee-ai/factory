@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  C2D_AUTOPILOT_VCPU_USD_PER_HR,
-  C2D_AUTOPILOT_GIB_USD_PER_HR,
+  AUTOPILOT_GENERAL_PURPOSE_VCPU_USD_PER_HR,
+  AUTOPILOT_GENERAL_PURPOSE_GIB_USD_PER_HR,
   HOURS_PER_MONTH,
   SPOT_PRICE_MULTIPLIER,
   estimateGatewayMonthlyCost,
@@ -10,12 +10,27 @@ import {
 import { TIER_PRESETS, SIZING_TIERS } from "./sizing.js";
 
 describe("estimateGatewayMonthlyCost", () => {
-  it("computes compute cost from request CPU + memory at c2d Autopilot rates", () => {
+  it("anchors to the published Autopilot general-purpose Pod rates", () => {
+    expect(AUTOPILOT_GENERAL_PURPOSE_VCPU_USD_PER_HR).toBe(0.0445);
+    expect(AUTOPILOT_GENERAL_PURPOSE_GIB_USD_PER_HR).toBe(0.0049225);
+    expect(HOURS_PER_MONTH).toBe(730);
+  });
+
+  it("prices the surviving xs/s/m/l ladder on the default general-purpose class", () => {
+    expect(SIZING_TIERS).toEqual(["xs", "s", "m", "l"]);
+    expect(
+      Object.fromEntries(
+        SIZING_TIERS.map((tier) => [tier, estimateGatewayMonthlyCost(tier).computeUsd]),
+      ),
+    ).toEqual({ xs: 23, s: 47, m: 94, l: 187 });
+  });
+
+  it("computes compute cost from request CPU + memory at general-purpose Autopilot rates", () => {
     // l: 4 vCPU / 16 GiB
     const result = estimateGatewayMonthlyCost("l");
     const expected = Math.round(
-      4 * C2D_AUTOPILOT_VCPU_USD_PER_HR * HOURS_PER_MONTH +
-        16 * C2D_AUTOPILOT_GIB_USD_PER_HR * HOURS_PER_MONTH,
+      4 * AUTOPILOT_GENERAL_PURPOSE_VCPU_USD_PER_HR * HOURS_PER_MONTH +
+        16 * AUTOPILOT_GENERAL_PURPOSE_GIB_USD_PER_HR * HOURS_PER_MONTH,
     );
     expect(result.computeUsd).toBe(expected);
   });
@@ -23,8 +38,8 @@ describe("estimateGatewayMonthlyCost", () => {
   it("derives perBuilderAtTarget and perBuilderAtTypical from raw compute and tier capacity", () => {
     const preset = TIER_PRESETS["l"];
     const rawCompute =
-      4 * C2D_AUTOPILOT_VCPU_USD_PER_HR * HOURS_PER_MONTH +
-      16 * C2D_AUTOPILOT_GIB_USD_PER_HR * HOURS_PER_MONTH;
+      4 * AUTOPILOT_GENERAL_PURPOSE_VCPU_USD_PER_HR * HOURS_PER_MONTH +
+      16 * AUTOPILOT_GENERAL_PURPOSE_GIB_USD_PER_HR * HOURS_PER_MONTH;
     const result = estimateGatewayMonthlyCost("l");
     expect(result.perBuilderAtTarget).toBe(Math.round(rawCompute / preset.capacity.targetActiveBuilders));
     expect(result.perBuilderAtTypical).toBe(Math.round(rawCompute / preset.capacity.typicalBuilders));
