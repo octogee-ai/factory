@@ -4,6 +4,9 @@ import { requireAuth } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";
 import { db } from "../lib/db.js";
 import { mintTicket } from "../lib/gateway-ticket.js";
+import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
+import { resolveBuilderTier } from "@octogee/shared/types/billing";
+import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { requestBuilderActivationLease } from "@octogee/core/builder-activation-lease";
 
@@ -32,6 +35,9 @@ async function maybeRequestActivationBeforeTicket(
   uid: string,
   userData: Record<string, unknown> | undefined,
 ): Promise<void> {
+  if (!userData || !accountAllowsInteractiveAccess(userData)) return;
+  const builderTier = resolveBuilderTier(userData);
+  if (!builderTier || BUILDER_TIERS[builderTier].instance === null) return;
   const provisioning = userData?.provisioning as
     | { openclaw?: { gatewayId?: unknown; slug?: unknown } }
     | undefined;
