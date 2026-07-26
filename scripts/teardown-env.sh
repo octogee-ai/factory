@@ -17,14 +17,14 @@ set -euo pipefail
 #   Preserves: all PVCs, K8s secrets, namespace, Secret Manager, Cloud SQL,
 #              Firestore, Functions, Auth.
 #
-# --full: also drops the per-env Cloud SQL databases, wipes Firestore
-#         collections, deletes per-env Cloud Functions (chat proxy
-#         preserved), Firebase Auth users, and durable application PVCs.
-#         Still preserves: K8s secrets, namespace, and Secret Manager.
+# --full: also drops the per-env Cloud SQL databases, wipes Firebase Storage
+#         and Firestore collections, deletes per-env Cloud Functions (chat
+#         proxy preserved), Firebase Auth users, and durable application PVCs.
+#         Still preserves: K8s secrets and namespace.
 #
 # Does NOT delete (ever): GCP projects, GKE clusters, AR repos,
 #   Firebase projects, GCP Service Accounts, IAM bindings,
-#   any K8s secret, any Secret Manager entry, the namespace itself.
+#   any K8s secret, any Secret Manager infra entry, the namespace itself.
 # To rotate a secret, use scripts/rotate-secret.sh.
 #
 # Usage:
@@ -62,10 +62,10 @@ for arg in "$@"; do
       echo "Usage: $0 [--env=prod|test] [--deployment-target=TARGET] [--force|--yes] [--full]"
       echo ""
       echo "  (default)  helm uninstall only — preserves PVCs, K8s secrets,"
-      echo "             namespace, Secret Manager, Cloud SQL, Firestore, Auth"
-      echo "  --full     Also drops Cloud SQL DBs + wipes Firestore + Cloud"
+      echo "             namespace, Secret Manager, Cloud SQL, Firebase Storage, Firestore, Auth"
+      echo "  --full     Also drops Cloud SQL DBs + wipes Firebase Storage, Firestore + Cloud"
       echo "             Functions + Auth users + deletes durable PVCs."
-      echo "             Still preserves K8s secrets, Secret Manager, and namespace."
+      echo "             Still preserves K8s secrets, Secret Manager infra entries, and namespace."
       echo ""
       echo "  To rotate a secret: scripts/rotate-secret.sh"
       exit 0
@@ -159,6 +159,7 @@ echo "    • Helm release 'octogee' (gateway, gateway-edge, chat-proxy, MM + Gi
 if $FULL; then
   echo -e "  ${RED}  + Cloud SQL DBs: $MM_DB_NAME, $GITEA_DB_NAME (DROP DATABASE)${NC}"
   echo -e "  ${RED}  + PVCs: mattermost-data, gitea-shared-storage (Helm-recreated on rebuild)${NC}"
+  echo -e "  ${RED}  + Firebase Storage objects (all)${NC}"
   echo -e "  ${RED}  + Firestore collections (all)${NC}"
   echo -e "  ${RED}  + Cloud Functions (chat proxy preserved)${NC}"
   echo -e "  ${RED}  + Firebase Auth users (all)${NC}"
@@ -171,7 +172,7 @@ if ! $FULL; then
   echo "    • All PVCs (mattermost-data, gitea-shared-storage)"
 fi
 echo "    • Namespace: $K8S_NAMESPACE"
-echo "    • Secret Manager: infra entries (DB passwords, API keys, tokens) — wipe via gcloud manually if needed"
+echo "    • Secret Manager: infra entries (DB passwords, API keys, tokens)"
 echo "    • Cloud SQL instance ($TARGET_CLOUD_SQL_INSTANCE)"
 echo "    • GCP projects, GKE cluster, AR repo"
 echo "    • Firebase project, IAM, Service Accounts"
@@ -205,6 +206,28 @@ kubectl config use-context "$K8S_CONTEXT" >/dev/null
 CURRENT_CTX=$(kubectl config current-context)
 [[ "$CURRENT_CTX" == "$K8S_CONTEXT" ]] || { echo -e "  ${RED}❌ Wrong context: $CURRENT_CTX${NC}"; exit 1; }
 ok "kubectl context: $CURRENT_CTX"
+
+if $FULL; then
+  SA_KEY="${SA_KEY_PATH:-$SA_KEY_DEFAULT}"
+  AUTH_SERVICE_ACCOUNT_PATH=""
+  if [[ -f "$SA_KEY" ]]; then
+    AUTH_SERVICE_ACCOUNT_PATH="$SA_KEY"
+  else
+    info "Service-account key not found at $SA_KEY; using application default credentials for Auth cleanup"
+  fi
+  run_auth_cleanup() {
+    local verify="$1"
+    (
+      cd "$SCRIPT_DIR"
+      if [[ -n "$AUTH_SERVICE_ACCOUNT_PATH" ]]; then
+        npx -y tsx ops/delete-firebase-auth-users.ts $verify --project="$FIREBASE_PROJECT" --service-account="$AUTH_SERVICE_ACCOUNT_PATH"
+      else
+        npx -y tsx ops/delete-firebase-auth-users.ts $verify --project="$FIREBASE_PROJECT"
+      fi
+    )
+  }
+  run_auth_cleanup --verify || die "Firebase Auth cleanup preflight failed for $FIREBASE_PROJECT"
+fi
 
 # ── 1a. Full: delete PVCs ────────────────────────────────────────────────
 # Pre-customer / F&F discipline: --full already drops Cloud SQL DBs and
@@ -628,73 +651,111 @@ fi
 # that owned the byok. The corresponding Secret Manager entry becomes an
 # orphan with no Firestore pointer. Wipe under --full to keep SM clean.
 #
-# Pre-launch caveat: slugs aren't env-prefixed (`byok-ceckert-anthropic`,
-# not `byok-test-ceckert-anthropic`). With only one customer (the operator)
-# that's harmless. Re-evaluate if TEST and PROD ever have customers with
-# colliding slugs.
 if $FULL; then
   echo ""
-  byok_count=$(gcloud secrets list --project=octogee --filter="name~^byok-" --format="value(name)" 2>/dev/null | wc -l | tr -d ' ')
+  BYOK_SECRETS="$(gcloud secrets list --project="$FIREBASE_PROJECT" --filter="name~^byok-" --format="value(name)")" \
+    || die "could not list BYOK secrets in $FIREBASE_PROJECT"
+  if [[ -n "$BYOK_SECRETS" ]]; then
+    byok_count=$(printf '%s\n' "$BYOK_SECRETS" | wc -l | tr -d ' ')
+  else
+    byok_count=0
+  fi
   if [[ "$byok_count" -gt 0 ]]; then
     if confirm "Delete $byok_count byok-* secret(s) in Secret Manager (customer BYOK keys)?"; then
-      gcloud secrets list --project=octogee --filter="name~^byok-" --format="value(name)" 2>/dev/null \
-        | while read -r sm; do
-            [[ -z "$sm" ]] && continue
-            gcloud secrets delete "$sm" --project=octogee --quiet >/dev/null 2>&1 \
-              && ok "Deleted byok secret: $sm" \
-              || warn "Could not delete $sm — continuing"
-          done
+      while read -r sm; do
+        [[ -z "$sm" ]] && continue
+        gcloud secrets delete "$sm" --project="$FIREBASE_PROJECT" --quiet >/dev/null \
+          || die "could not delete BYOK secret $sm in $FIREBASE_PROJECT"
+        ok "Deleted byok secret: $sm"
+      done <<< "$BYOK_SECRETS"
     else
-      info "Keeping byok-* secrets"
+      die "Full teardown cancelled; BYOK secrets remain in $FIREBASE_PROJECT"
     fi
   else
     info "No byok-* secrets to wipe"
   fi
 fi
 
-# ── 7. Full: Firestore ────────────────────────────────────────────────────
-if $FULL; then
-  echo ""
-  if confirm "Wipe ALL Firestore collections in '$FIREBASE_PROJECT'?"; then
-    firebase firestore:delete --all-collections --project "$FIREBASE_PROJECT" --force
-    ok "Firestore wiped"
-  else
-    info "Keeping Firestore data"
-  fi
-fi
-
-# ── 8. Full: Cloud Functions ──────────────────────────────────────────────
-# NOTE: Chat proxy is persistent infrastructure (like Cloud SQL) — NOT deleted here.
-# It lives as a Cloud Run service but is deployed/managed by setup-chat-proxy.sh,
-# not firebase deploy. Deleting it would break chat until manually redeployed.
+# ── 7. Full: Cloud Functions ──────────────────────────────────────────────
 if $FULL; then
   echo ""
   if confirm "Delete all Cloud Functions in '$FIREBASE_PROJECT'? (chat proxy preserved)"; then
-    FN_LIST=$(gcloud run services list \
-      --project="$FIREBASE_PROJECT" --region="$REGION" \
-      --format="value(name)" 2>/dev/null | grep -v "octogee-chat-proxy" || true)
-    # `grep -c .` returns non-zero on zero matches, which under `|| echo 0`
-    # concatenated a trailing "0\n0" and tripped [[ -gt ]] arithmetic.
-    # Empty-string check is unambiguous and avoids the chained-pipe surprise.
+    FN_LIST=$(gcloud functions list --regions="$REGION" \
+      --project="$FIREBASE_PROJECT" --format="csv[no-heading](name,environment)") \
+      || die "could not list Cloud Functions in $FIREBASE_PROJECT"
+    FILTERED_FN_LIST=""
+    while IFS=, read -r fn generation extra; do
+      [[ -z "$fn" ]] && continue
+      [[ -z "$extra" && ( "$generation" == "GEN_1" || "$generation" == "GEN_2" ) ]] \
+        || die "unexpected Cloud Function inventory row '$fn,$generation${extra:+,$extra}'"
+      [[ "$fn" == "octogee-chat-proxy" ]] && continue
+      FILTERED_FN_LIST+="$fn,$generation"$'\n'
+    done <<< "$FN_LIST"
+    FN_LIST="${FILTERED_FN_LIST%$'\n'}"
     if [[ -z "$FN_LIST" ]]; then
       FN_COUNT=0
     else
       FN_COUNT=$(printf '%s\n' "$FN_LIST" | wc -l | tr -d ' ')
     fi
     if [[ "$FN_COUNT" -gt 0 ]]; then
-      info "Deleting $FN_COUNT Cloud Run services (preserving chat proxy)..."
-      echo "$FN_LIST" | while read -r fn; do
+      info "Deleting $FN_COUNT Cloud Functions across Gen 1 and Gen 2 (preserving chat proxy)..."
+      while IFS=, read -r fn generation; do
         [[ -z "$fn" ]] && continue
-        gcloud run services delete "$fn" \
-          --project="$FIREBASE_PROJECT" --region="$REGION" --quiet 2>/dev/null &
-      done
-      wait
+        gcloud functions delete "$fn" --region="$REGION" \
+          --project="$FIREBASE_PROJECT" --quiet \
+          || die "could not delete $generation Cloud Function $fn in $FIREBASE_PROJECT"
+      done <<< "$FN_LIST"
       ok "Cloud Functions deleted (chat proxy preserved)"
     else
       info "No Cloud Functions found"
     fi
   else
-    info "Keeping Cloud Functions"
+    die "Full teardown cancelled; Cloud Functions remain in $FIREBASE_PROJECT"
+  fi
+fi
+
+# ── 8. Full: Firebase Storage + Firestore ──────────────────────────────────
+if $FULL; then
+  echo ""
+  if confirm "Wipe ALL Firebase Storage objects in '$FIREBASE_PROJECT'?"; then
+    FIREBASE_STORAGE_BUCKET="gs://${FIREBASE_PROJECT}.firebasestorage.app"
+    gcloud storage buckets describe "$FIREBASE_STORAGE_BUCKET" \
+      --project="$TARGET_STORAGE_PROJECT" >/dev/null \
+      || die "Firebase Storage bucket inspection failed for $FIREBASE_PROJECT"
+    list_storage_versions() {
+      local output
+      if output="$(gcloud storage ls --all-versions "$FIREBASE_STORAGE_BUCKET/**" --project="$TARGET_STORAGE_PROJECT" 2>&1)"; then
+        STORAGE_OBJECT_GENERATIONS="$output"
+        return 0
+      fi
+      if [[ "$output" == "ERROR: (gcloud.storage.ls) One or more URLs matched no objects." ]]; then
+        STORAGE_OBJECT_GENERATIONS=""
+        return 0
+      fi
+      [[ -n "$output" ]] && printf '%s\n' "$output" >&2
+      return 1
+    }
+    list_storage_versions || die "Firebase Storage listing failed for $FIREBASE_PROJECT"
+    if [[ -n "$STORAGE_OBJECT_GENERATIONS" ]]; then
+      gcloud storage rm --all-versions "$FIREBASE_STORAGE_BUCKET/**" --project="$TARGET_STORAGE_PROJECT" --quiet \
+        || die "Firebase Storage wipe failed for $FIREBASE_PROJECT"
+      list_storage_versions \
+        || die "Firebase Storage verification failed for $FIREBASE_PROJECT"
+      [[ -z "$STORAGE_OBJECT_GENERATIONS" ]] \
+        || die "Firebase Storage still contains object generations after wipe in $FIREBASE_PROJECT"
+      ok "Firebase Storage wiped"
+    else
+      info "Firebase Storage already empty"
+    fi
+  else
+    die "Full teardown cancelled; Firebase Storage objects remain in $FIREBASE_PROJECT"
+  fi
+
+  if confirm "Wipe ALL Firestore collections in '$FIREBASE_PROJECT'?"; then
+    firebase firestore:delete --all-collections --project "$FIREBASE_PROJECT" --force
+    ok "Firestore wiped"
+  else
+    die "Full teardown cancelled; Firestore data remains in $FIREBASE_PROJECT"
   fi
 fi
 
@@ -702,32 +763,10 @@ fi
 if $FULL; then
   echo ""
   if confirm "Delete all Firebase Auth users in '$FIREBASE_PROJECT'?"; then
-    SA_KEY="${SA_KEY_PATH:-$SA_KEY_DEFAULT}"
-    if [[ -f "$SA_KEY" ]]; then
-      cd "$REPO_DIR/functions"
-      # `-y` so a fresh shell doesn't hang on npx's "Ok to proceed? (y)"
-      # tsx-install prompt when running non-interactively.
-      npx -y tsx -e "
-import { cert, initializeApp } from 'firebase-admin/app';
-import { getAuth } from 'firebase-admin/auth';
-import * as fs from 'fs';
-const sa = JSON.parse(fs.readFileSync('$SA_KEY', 'utf8'));
-initializeApp({ credential: cert(sa as any), projectId: '$FIREBASE_PROJECT' });
-(async () => {
-  const auth = getAuth();
-  const list = await auth.listUsers(1000);
-  await Promise.all(list.users.map(u => auth.deleteUser(u.uid)));
-  console.log('Deleted ' + list.users.length + ' auth users');
-  process.exit(0);
-})();
-" 2>&1 | grep -v "DeprecationWarning\|punycode"
-      ok "Auth users deleted"
-      cd "$REPO_DIR"
-    else
-      warn "SA key not found at $SA_KEY — skipping Auth cleanup"
-    fi
+    run_auth_cleanup ""
+    ok "Auth users deleted"
   else
-    info "Keeping Auth users"
+    die "Full teardown cancelled; Firebase Auth users remain in $FIREBASE_PROJECT"
   fi
 fi
 

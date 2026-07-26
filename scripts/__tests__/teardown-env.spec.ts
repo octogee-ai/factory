@@ -17,6 +17,16 @@ type TeardownOptions = {
   publicIp?: boolean;
   pvcFailure?: "inspect" | "delete" | "finalize";
   secretFailure?: "absent" | "error";
+  storageFailure?: boolean;
+  storageListFailure?: boolean;
+  storageEmpty?: boolean;
+  storageResidual?: boolean;
+  missingServiceAccount?: boolean;
+  functionListFailure?: boolean;
+  functionDeleteFailure?: boolean;
+  functions?: Array<{ name: string; generation: "GEN_1" | "GEN_2" }>;
+  functionInventory?: string;
+  interactiveInput?: string;
 };
 
 function runPrivateWestTeardown(options: TeardownOptions = {}) {
@@ -24,9 +34,12 @@ function runPrivateWestTeardown(options: TeardownOptions = {}) {
   const log = path.join(temp, "calls.log");
   const describeCount = path.join(temp, "describe-count");
   const deletedPvcs = path.join(temp, "deleted-pvcs");
+  const storageRemoved = path.join(temp, "storage-removed");
+  const serviceAccount = path.join(temp, "service-account.json");
   writeFileSync(log, "");
   writeFileSync(describeCount, "0");
   writeFileSync(deletedPvcs, "");
+  writeFileSync(serviceAccount, '{"project_id":"octogee-data-test"}');
 
   executable(path.join(temp, "gcloud"), `#!/usr/bin/env bash
 set -euo pipefail
@@ -71,7 +84,37 @@ case "$1 $2 $3" in
       printf '%s\\n' "$4"
     fi
     ;;
-  "secrets list "*|"run services list "*) ;;
+  "secrets list "*) ;;
+  "functions list "*)
+    if [[ "$FAKE_FUNCTION_LIST_FAILURE" == "true" ]]; then
+      printf 'PERMISSION_DENIED\\n' >&2
+      exit 2
+    fi
+    printf '%b' "$FAKE_FUNCTION_INVENTORY"
+    ;;
+  "functions delete "*) [[ "$FAKE_FUNCTION_DELETE_FAILURE" != "true" ]] ;;
+  "storage buckets describe") ;;
+  "storage ls --all-versions")
+    if [[ "$FAKE_STORAGE_LIST_FAILURE" == "true" ]]; then
+      printf 'PERMISSION_DENIED\\n' >&2
+      exit 2
+    fi
+    if [[ "$FAKE_STORAGE_EMPTY" == "true" ]]; then
+      printf 'ERROR: (gcloud.storage.ls) One or more URLs matched no objects.\\n' >&2
+      exit 1
+    fi
+    if [[ "$FAKE_STORAGE_RESIDUAL" == "true" || ! -f "$FAKE_STORAGE_REMOVED" ]]; then
+      printf 'gs://octogee-data-test.firebasestorage.app/nested/object.txt#2\\n'
+      printf 'gs://octogee-data-test.firebasestorage.app/nested/object.txt#1\\n'
+    else
+      printf 'ERROR: (gcloud.storage.ls) One or more URLs matched no objects.\\n' >&2
+      exit 1
+    fi
+    ;;
+  "storage rm --all-versions")
+    [[ "$FAKE_STORAGE_FAILURE" != "true" ]] || exit 1
+    : > "$FAKE_STORAGE_REMOVED"
+    ;;
   *) printf 'unexpected gcloud call: %s\\n' "$*" >&2; exit 2 ;;
 esac
 `);
@@ -120,9 +163,12 @@ case "$1" in status) exit 1 ;; list) ;; *) ;; esac
   executable(path.join(temp, "lsof"), "#!/usr/bin/env bash\nset -euo pipefail\nexit 1\n");
   executable(path.join(temp, "nc"), "#!/usr/bin/env bash\nset -euo pipefail\n");
   executable(path.join(temp, "psql"), "#!/usr/bin/env bash\nset -euo pipefail\necho 'connection to server failed: Connection refused' >&2\nexit 1\n");
-  executable(path.join(temp, "firebase"), "#!/usr/bin/env bash\nset -euo pipefail\n");
+  executable(path.join(temp, "firebase"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'firebase %s\\n' \"$*\" >> \"$FAKE_CALL_LOG\"\n");
+  executable(path.join(temp, "npx"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'npx %s\\n' \"$*\" >> \"$FAKE_CALL_LOG\"\n");
 
-  const result = spawnSync("bash", [teardown, "--env=test", "--deployment-target=test-west", "--full", "--yes"], {
+  const args = [teardown, "--env=test", "--deployment-target=test-west", "--full"];
+  if (!options.interactiveInput) args.push("--yes");
+  const result = spawnSync("bash", args, {
     cwd: repoRoot,
     env: {
       ...process.env,
@@ -134,8 +180,18 @@ case "$1" in status) exit 1 ;; list) ;; *) ;; esac
       FAKE_PUBLIC_IP: options.publicIp ? "true" : "false",
       FAKE_PVC_FAILURE: options.pvcFailure ?? "",
       FAKE_SECRET_FAILURE: options.secretFailure ?? "",
-      SA_KEY_PATH: path.join(temp, "missing-service-account.json"),
+      FAKE_STORAGE_FAILURE: options.storageFailure ? "true" : "false",
+      FAKE_STORAGE_LIST_FAILURE: options.storageListFailure ? "true" : "false",
+      FAKE_STORAGE_EMPTY: options.storageEmpty ? "true" : "false",
+      FAKE_STORAGE_RESIDUAL: options.storageResidual ? "true" : "false",
+      FAKE_STORAGE_REMOVED: storageRemoved,
+      FAKE_FUNCTION_LIST_FAILURE: options.functionListFailure ? "true" : "false",
+      FAKE_FUNCTION_DELETE_FAILURE: options.functionDeleteFailure ? "true" : "false",
+      FAKE_FUNCTION_INVENTORY: options.functionInventory
+        ?? `${(options.functions ?? []).map(({ name, generation }) => `${name},${generation}`).join("\n")}${options.functions?.length ? "\n" : ""}`,
+      SA_KEY_PATH: options.missingServiceAccount ? path.join(temp, "missing-service-account.json") : serviceAccount,
     },
+    input: options.interactiveInput,
     encoding: "utf8",
   });
 
@@ -146,6 +202,146 @@ case "$1" in status) exit 1 ;; list) ;; *) ;; esac
 }
 
 describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => {
+  it("keeps TEST full-reset Secret Manager and Storage mutations inside the resolved data project", () => {
+    const source = readFileSync(teardown, "utf8");
+
+    expect(source).toContain('gcloud secrets list --project="$FIREBASE_PROJECT"');
+    expect(source).toContain('gcloud secrets delete "$sm" --project="$FIREBASE_PROJECT"');
+    expect(source).not.toContain('gcloud secrets list --project=octogee');
+    expect(source).toContain('FIREBASE_STORAGE_BUCKET="gs://${FIREBASE_PROJECT}.firebasestorage.app"');
+    expect(source).toContain(
+      'gcloud storage ls --all-versions "$FIREBASE_STORAGE_BUCKET/**" --project="$TARGET_STORAGE_PROJECT"',
+    );
+    expect(source).toContain(
+      'gcloud storage rm --all-versions "$FIREBASE_STORAGE_BUCKET/**" --project="$TARGET_STORAGE_PROJECT" --quiet',
+    );
+    expect(source).not.toContain("gcloud storage rm --recursive");
+    expect(source).not.toContain("gcloud storage objects list");
+  });
+
+  it("keeps the Auth preflight before data deletion", () => {
+    const source = readFileSync(teardown, "utf8");
+
+    expect(source).toContain("delete-firebase-auth-users.ts");
+    expect(source).toContain("run_auth_cleanup --verify");
+  });
+
+  it("uses ADC for the Auth preflight when the optional service-account key is absent", () => {
+    const result = runPrivateWestTeardown({ missingServiceAccount: true });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.calls.some((call) => call.startsWith("npx ") && call.includes("--verify") && !call.includes("--service-account"))).toBe(true);
+    expect(result.calls.some((call) => call.startsWith("sql databases"))).toBe(true);
+  });
+
+  it("fails before Firestore or Auth cleanup when the target Storage bucket cannot be wiped", () => {
+    const result = runPrivateWestTeardown({ storageFailure: true });
+
+    expect(result.status).toBe(1);
+    expect(`${result.stderr}\n${result.stdout}`).toContain("Firebase Storage wipe failed");
+    expect(result.calls).toContainEqual(
+      expect.stringContaining("storage rm --all-versions gs://octogee-data-test.firebasestorage.app/** --project=octogee-data-test --quiet"),
+    );
+    expect(result.calls.some((call) => call.startsWith("firebase firestore:delete"))).toBe(false);
+    expect(result.calls.some((call) => call.startsWith("npx ") && !call.includes("--verify"))).toBe(false);
+  });
+
+  it("allows an already-empty target Storage bucket to complete the reset", () => {
+    const result = runPrivateWestTeardown({ storageEmpty: true });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.calls.some((call) => call.startsWith("storage rm"))).toBe(false);
+    expect(result.stdout).toContain("Firebase Storage already empty");
+  });
+
+  it("fails closed when target Storage generations cannot be listed", () => {
+    const result = runPrivateWestTeardown({ storageListFailure: true });
+
+    expect(result.status).toBe(1);
+    expect(`${result.stderr}\n${result.stdout}`).toContain("Firebase Storage listing failed");
+    expect(`${result.stderr}\n${result.stdout}`).toContain("PERMISSION_DENIED");
+    expect(result.calls.some((call) => call.startsWith("storage rm"))).toBe(false);
+    expect(result.calls.some((call) => call.startsWith("firebase firestore:delete"))).toBe(false);
+  });
+
+  it("fails before Firestore or Auth cleanup when generations remain after Storage deletion", () => {
+    const result = runPrivateWestTeardown({ storageResidual: true });
+
+    expect(result.status).toBe(1);
+    expect(`${result.stderr}\n${result.stdout}`).toContain("Firebase Storage still contains object generations");
+    expect(result.calls.filter((call) => call.startsWith("storage ls --all-versions"))).toHaveLength(2);
+    expect(result.calls.some((call) => call.startsWith("firebase firestore:delete"))).toBe(false);
+    expect(result.calls.some((call) => call.startsWith("npx ") && !call.includes("--verify"))).toBe(false);
+  });
+
+  it("fails closed when Cloud Function discovery is unavailable", () => {
+    const result = runPrivateWestTeardown({ functionListFailure: true });
+
+    expect(result.status).toBe(1);
+    expect(`${result.stderr}\n${result.stdout}`).toContain("could not list Cloud Functions");
+    expect(result.calls.some((call) => call.startsWith("npx ") && !call.includes("--verify"))).toBe(false);
+  });
+
+  it("fails closed when Cloud Function inventory has an unknown generation", () => {
+    const result = runPrivateWestTeardown({ functionInventory: "mystery,GEN_3\n" });
+
+    expect(result.status).toBe(1);
+    expect(`${result.stderr}\n${result.stdout}`).toContain(
+      "unexpected Cloud Function inventory row 'mystery,GEN_3'",
+    );
+    expect(result.calls.some((call) => call.startsWith("functions delete"))).toBe(false);
+    expect(result.calls.some((call) => call.startsWith("storage "))).toBe(false);
+  });
+
+  it("waits for every Cloud Function deletion and stops on the first failure", () => {
+    const result = runPrivateWestTeardown({
+      functions: [
+        { name: "function-a", generation: "GEN_1" },
+        { name: "function-b", generation: "GEN_2" },
+      ],
+      functionDeleteFailure: true,
+    });
+
+    expect(result.status).toBe(1);
+    expect(`${result.stderr}\n${result.stdout}`).toContain("could not delete GEN_1 Cloud Function function-a");
+    expect(result.calls).toContainEqual(expect.stringContaining("functions delete function-a"));
+    expect(result.calls).not.toContainEqual(expect.stringContaining("functions delete function-b"));
+    expect(result.calls.some((call) => call.startsWith("npx ") && !call.includes("--verify"))).toBe(false);
+  });
+
+  it("quiesces Gen 1 and Gen 2 functions before wiping Firebase data and never deletes Cloud Run services", () => {
+    const result = runPrivateWestTeardown({
+      functions: [
+        { name: "legacyTrigger", generation: "GEN_1" },
+        { name: "onSignup", generation: "GEN_2" },
+        { name: "octogee-chat-proxy", generation: "GEN_2" },
+      ],
+    });
+    const functionList = result.calls.findIndex((call) => call.startsWith("functions list --regions=us-west1"));
+    const gen1Delete = result.calls.findIndex((call) => call.startsWith("functions delete legacyTrigger"));
+    const gen2Delete = result.calls.findIndex((call) => call.startsWith("functions delete onSignup"));
+    const storageWipe = result.calls.findIndex((call) => call.startsWith("storage rm"));
+    const firestoreWipe = result.calls.findIndex((call) => call.startsWith("firebase firestore:delete"));
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(functionList).toBeGreaterThanOrEqual(0);
+    expect(gen1Delete).toBeGreaterThan(functionList);
+    expect(gen2Delete).toBeGreaterThan(gen1Delete);
+    expect(storageWipe).toBeGreaterThan(gen2Delete);
+    expect(firestoreWipe).toBeGreaterThan(gen2Delete);
+    expect(result.calls.some((call) => call.startsWith("functions delete octogee-chat-proxy"))).toBe(false);
+    expect(result.calls.some((call) => call.startsWith("run services delete"))).toBe(false);
+  });
+
+  it("aborts an interactive full reset when a required wipe is declined", () => {
+    const result = runPrivateWestTeardown({ interactiveInput: "y\ny\nn\ny\ny\n" });
+
+    expect(result.status).toBe(1);
+    expect(`${result.stderr}\n${result.stdout}`).toContain("Full teardown cancelled; Firebase Storage objects remain");
+    expect(result.stdout).not.toContain("Teardown complete");
+    expect(result.calls.some((call) => call.startsWith("firebase firestore:delete"))).toBe(false);
+  });
+
   it("describes full teardown as deleting its durable PVCs", () => {
     const result = spawnSync("bash", [teardown, "--help"], {
       cwd: repoRoot,
