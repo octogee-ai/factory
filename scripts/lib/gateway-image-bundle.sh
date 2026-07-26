@@ -27,6 +27,17 @@ octogee_gateway_image_bundle_identity() {
   echo "$gateway_tag"
 }
 
+octogee_gateway_image_release_sha() {
+  local image="${1:-}"
+  local immutable_release_pattern='^.+:([a-f0-9]{7,40})-oc[a-z0-9._-]*@sha256:[a-f0-9]{64}$'
+
+  if [[ "$image" =~ $immutable_release_pattern ]]; then
+    echo "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  return 1
+}
+
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   octogee_gateway_image_bundle_identity "${1:-}" "${2:-}"
 fi

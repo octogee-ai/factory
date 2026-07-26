@@ -1,5 +1,3 @@
-import { gatewayHeartbeatMatchesImageTag } from "@octogee/shared/types/image-tag";
-
 export interface ReleaseConvergenceBaseline {
   configuredDefaultGatewayId: string;
   predecessorPodUids: string[];
@@ -92,6 +90,13 @@ function imageHasTag(image: string | undefined, expectedImageTag: string): boole
   return withoutDigest.endsWith(`:${expectedImageTag}`);
 }
 
+function artifactTagMatchesExpected(
+  artifactTag: string | null | undefined,
+  expectedImageTag: string,
+): boolean {
+  return artifactTag?.split("@", 1)[0] === expectedImageTag;
+}
+
 export function assessReleaseConvergence(
   snapshot: ReleaseConvergenceSnapshot,
   baseline: ReleaseConvergenceBaseline,
@@ -127,7 +132,7 @@ function assessFleet(
     (gateway) => gateway.desiredStatus !== "retired",
   );
   for (const gateway of activeGateways) {
-    if (gateway.desiredImageTag !== snapshot.expectedImageTag) {
+    if (!artifactTagMatchesExpected(gateway.desiredImageTag, snapshot.expectedImageTag)) {
       failures.push(
         `gateway ${gateway.gatewayId} desired release is not tagged ${snapshot.expectedImageTag}`,
       );
@@ -147,7 +152,7 @@ function assessRolloutOperations(
   failures: string[],
 ): void {
   for (const operation of snapshot.rolloutOperations) {
-    if (operation.imageTag !== snapshot.expectedImageTag) continue;
+    if (!artifactTagMatchesExpected(operation.imageTag, snapshot.expectedImageTag)) continue;
     if (operation.status === "succeeded") continue;
     const suffix = operation.status === "failed" && operation.error
       ? `: ${operation.error}`
@@ -209,10 +214,7 @@ function assessDefaultRuntime(
     if (runtime.heartbeatStatus !== "ready") {
       failures.push(`configured default heartbeat is ${runtime.heartbeatStatus}, not ready`);
     }
-    if (!gatewayHeartbeatMatchesImageTag(
-      runtime.heartbeatVersion,
-      snapshot.expectedImageTag,
-    )) {
+    if (!artifactTagMatchesExpected(runtime.heartbeatVersion, snapshot.expectedImageTag)) {
       failures.push(
         `configured default heartbeat is not tagged ${snapshot.expectedImageTag}`,
       );

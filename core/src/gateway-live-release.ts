@@ -21,6 +21,7 @@ import {
   type GatewayLifecycleStatus,
   type ReleaseDoc,
   type ReleasePayload,
+  type GatewayProfileImages,
   type GatewayEdgeImage,
   type W9TestPublisherLiveExperiment,
 } from "@octogee/shared/types/gateway-releases";
@@ -95,6 +96,7 @@ export function configuredBuilderCredentialBootstrapAllowed(
 export interface GatewayArtifact {
   imageRepository: string;
   imageTag: string;
+  profileImages?: GatewayProfileImages;
   gatewayEdgeImage?: GatewayEdgeImage;
   testExperiment?: W9TestPublisherLiveExperiment;
 }
@@ -195,6 +197,9 @@ export function gatewayArtifactFromReleasePayload(payload: ReleasePayload): Gate
   return {
     imageRepository: payload.imageRepository,
     imageTag: payload.imageTag,
+    ...(payload.profileImages === undefined
+      ? {}
+      : { profileImages: payload.profileImages }),
     ...(payload.gatewayEdgeImage === undefined
       ? {}
       : { gatewayEdgeImage: payload.gatewayEdgeImage }),

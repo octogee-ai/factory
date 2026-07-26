@@ -18,7 +18,6 @@ import { isW9CandidateImageTag } from "@octogee/shared/types/image-tag";
 import type { GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
 import type { W9TestPublisherLiveExperiment } from "@octogee/shared/types/gateway-releases";
 import { deploymentEnvironmentForNamespace } from "@octogee/core/deployment-environment";
-import { resolveGatewayImageRepository } from "./gateway-profiles.js";
 
 // The simple-roll convergence arm (GATEWAY-SIMPLE-ROLL-SPEC): every gateway has
 // ONE stable-name Helm release; a roll is a desiredRelease write that surfaces
@@ -56,11 +55,24 @@ function classKnobs(gateway: DurableGateway): {
   };
 }
 
-function imageRepositoryFor(gateway: DurableGateway, artifact: ReleasePayload): string {
-  return resolveGatewayImageRepository({
-    ...classKnobs(gateway),
-    imageRepository: artifact.imageRepository,
-  });
+function gatewayImageFor(
+  gateway: DurableGateway,
+  artifact: ReleasePayload,
+): { imageRepository: string; imageTag: string } {
+  const imageProfile = resolveGatewayImageProfile(classKnobs(gateway));
+  if (imageProfile === "standard") {
+    return {
+      imageRepository: artifact.imageRepository,
+      imageTag: artifact.imageTag,
+    };
+  }
+  const image = artifact.profileImages?.operator;
+  if (!image) {
+    throw new Error(
+      `gateway ${gateway.gatewayId} release is missing its immutable operator gateway image reference`,
+    );
+  }
+  return image;
 }
 
 export interface ObservedHelmInstance {
@@ -133,10 +145,11 @@ function gatewayDeploymentDrifted(
   replicas: number,
 ): boolean {
   const { gateway, helm } = input;
+  const image = gatewayImageFor(gateway, artifact);
   return (
     !helm ||
-    helm.imageTag !== artifact.imageTag ||
-    helm.imageRepository !== imageRepositoryFor(gateway, artifact) ||
+    helm.imageTag !== image.imageTag ||
+    helm.imageRepository !== image.imageRepository ||
     helm.replicas !== replicas ||
     helm.ownerUid !== (gateway.ownerUid ?? undefined) ||
     helm.builderSlug !== (gateway.builderSlug ?? undefined) ||
@@ -167,6 +180,7 @@ export interface GatewayUpsertOpts {
   gatewayClass?: HelmInstanceValue["gatewayClass"];
   imageProfile?: HelmInstanceValue["imageProfile"];
   sizingTier?: HelmInstanceValue["sizingTier"];
+  availabilityProtected?: true;
   replicas?: number;
   gcpProject?: string;
   kmsKeyName?: string;
@@ -283,6 +297,7 @@ export function gatewayUpsertOptsFromRelease(input: {
     );
   }
   const gatewayClass = resolveGatewayClass(classKnobs(gateway));
+  const gatewayImage = gatewayImageFor(gateway, artifact);
   const experiment = w9TestExperimentForNamespace({
     namespace: input.namespace,
     artifact,
@@ -292,8 +307,8 @@ export function gatewayUpsertOptsFromRelease(input: {
     gatewayId: gateway.gatewayId,
     ownerUid: gateway.ownerUid ?? undefined,
     builderSlug: gateway.builderSlug ?? undefined,
-    imageRepository: imageRepositoryFor(gateway, artifact),
-    imageTag: artifact.imageTag,
+    imageRepository: gatewayImage.imageRepository,
+    imageTag: gatewayImage.imageTag,
     gatewayEdgeImageRepository:
       experiment.gatewayEdgeImageRepository ?? artifact.gatewayEdgeImage.imageRepository,
     gatewayEdgeImageTag:
@@ -310,6 +325,9 @@ export function gatewayUpsertOptsFromRelease(input: {
     gatewayClass,
     imageProfile: resolveGatewayImageProfile(classKnobs(gateway)),
     sizingTier: gateway.sizingTier ?? undefined,
+    ...(deploymentEnvironmentForNamespace(input.namespace) === "prod" && gatewayClass === "shared"
+      ? { availabilityProtected: true as const }
+      : {}),
     replicas: input.replicas,
     gcpProject: gateway.gcpProject ?? undefined,
     kmsKeyName: input.kmsKeyName,
@@ -348,6 +366,7 @@ export function provisioningRuntimeDoc(input: {
   now: number;
 }): GatewayRuntimeDoc {
   const { gateway, artifact, existing } = input;
+  const gatewayImage = gatewayImageFor(gateway, artifact);
   return {
     docKind: "runtime",
     gatewayId: gateway.gatewayId,
@@ -361,8 +380,8 @@ export function provisioningRuntimeDoc(input: {
       gatewayServiceName: `octogee-gateway-${gateway.gatewayId}`,
       gatewayEdgeServiceName: `gateway-edge-${gateway.gatewayId}`,
       serviceAccountName: operatorGatewayServiceAccountName(gateway.gatewayId),
-      imageRepository: imageRepositoryFor(gateway, artifact),
-      imageTag: artifact.imageTag,
+      imageRepository: gatewayImage.imageRepository,
+      imageTag: gatewayImage.imageTag,
       replicas: gateway.desiredStatus === "paused" ? 0 : 1,
       availableReplicas: existing?.helm.availableReplicas ?? null,
       lastAppliedAt: input.now,

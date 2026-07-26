@@ -91,6 +91,9 @@ export function gatewayArtifactFromReleasePayload(payload) {
     return {
         imageRepository: payload.imageRepository,
         imageTag: payload.imageTag,
+        ...(payload.profileImages === undefined
+            ? {}
+            : { profileImages: payload.profileImages }),
         ...(payload.gatewayEdgeImage === undefined
             ? {}
             : { gatewayEdgeImage: payload.gatewayEdgeImage }),
