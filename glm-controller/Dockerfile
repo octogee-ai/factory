@@ -1,6 +1,10 @@
 FROM node:26-slim@sha256:715e55e4b84e4bb0ff48e49b398a848f08e55daed8eb6a0ea1839ae53bc57583
 ARG NPM_VERSION=12.0.1
-RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund
+RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund \
+    && npm_root="$(npm root --global)" \
+    && npm install --global brace-expansion@5.0.8 --ignore-scripts --no-audit --no-fund \
+    && rm -rf "$npm_root/npm/node_modules/brace-expansion" \
+    && mv "$npm_root/brace-expansion" "$npm_root/npm/node_modules/brace-expansion"
 
 # Helm is PINNED to one version across every path that runs `helm upgrade`
 # against the cluster — CI's azure/setup-helm (.github/workflows/build-and-deploy.yml)

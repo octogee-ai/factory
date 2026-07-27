@@ -192,7 +192,11 @@ RUN set -e; \
         || { echo "FATAL: @openclaw/mattermost missing from staged /opt tree"; exit 1; }; \
     fi
 
-RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund
+RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund \
+    && npm_root="$(npm root --global)" \
+    && npm install --global brace-expansion@5.0.8 --ignore-scripts --no-audit --no-fund \
+    && rm -rf "$npm_root/npm/node_modules/brace-expansion" \
+    && mv "$npm_root/brace-expansion" "$npm_root/npm/node_modules/brace-expansion"
 
 # ── npm cache ownership (prevent EACCES in agent exec calls) ─────────────────
 RUN mkdir -p /home/node/.npm && chown -R node:node /home/node/.npm
