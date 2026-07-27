@@ -440,6 +440,20 @@ describe("release status", () => {
       lifecycle: "serving",
     }],
     ["mismatched gateway identity", runtime("other")],
+    ["invalid Date heartbeat", runtime("default", {
+      heartbeat: {
+        status: "ready",
+        version: "abc1234-oc2026.7.1",
+        lastHeartbeatAt: new Date(Number.NaN),
+      },
+    })],
+    ["out-of-range numeric heartbeat", runtime("default", {
+      heartbeat: {
+        status: "ready",
+        version: "abc1234-oc2026.7.1",
+        lastHeartbeatAt: 8.64e15 + 1,
+      },
+    })],
   ])("reports %s runtime data as missing instead of crashing or trusting it", async (
     _caseName,
     malformedRuntime,

@@ -93,15 +93,22 @@ export function observeGatewayRelease(
 }
 
 function millis(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (value instanceof Date) return value.getTime();
+  const valid = (candidate: unknown): candidate is number =>
+    typeof candidate === "number" &&
+    Number.isFinite(candidate) &&
+    Math.abs(candidate) <= 8.64e15;
+  if (valid(value)) return value;
+  if (value instanceof Date) {
+    const result = value.getTime();
+    return valid(result) ? result : null;
+  }
   if (
     value &&
     typeof value === "object" &&
     typeof (value as { toMillis?: unknown }).toMillis === "function"
   ) {
     const result = (value as { toMillis: () => unknown }).toMillis();
-    return typeof result === "number" && Number.isFinite(result) ? result : null;
+    return valid(result) ? result : null;
   }
   return null;
 }
