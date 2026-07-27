@@ -380,6 +380,38 @@ describe("deployment target consumers", () => {
     expect(workflow).not.toContain("steps.target.outputs.region == 'us-west1'");
   });
 
+  it("owns the shared Central snapshot schedule and grants its reconciler only the required Compute permissions", () => {
+    const controlPlane = source("terraform/environments/control-plane/main.tf");
+    const ownership = JSON.parse(
+      source("terraform/environments/control-plane/ownership.json"),
+    ) as { requiredServices: string[] };
+
+    expect(ownership.requiredServices).toContain("compute.googleapis.com");
+    expect(controlPlane).toContain(
+      'resource "google_compute_resource_policy" "central_pvc_snapshots"',
+    );
+    expect(controlPlane).toContain('name    = "octogee-central-pvc-daily"');
+    expect(controlPlane).toContain("days_in_cycle = 1");
+    expect(controlPlane).toContain('start_time    = "08:00"');
+    expect(controlPlane).toContain("max_retention_days    = 14");
+    expect(controlPlane).toContain(
+      'on_source_disk_delete = "APPLY_RETENTION_POLICY"',
+    );
+    expect(controlPlane).toContain("storage_locations = [var.region]");
+    expect(controlPlane).toContain('role_id     = "octogeeCentralPvcSnapshots"');
+    for (const permission of [
+      "compute.disks.addResourcePolicies",
+      "compute.disks.get",
+      "compute.resourcePolicies.get",
+      "compute.resourcePolicies.use",
+    ]) {
+      expect(controlPlane).toContain(`"${permission}"`);
+    }
+    expect(controlPlane).toContain(
+      'member  = "serviceAccount:${google_service_account.github_actions.email}"',
+    );
+  });
+
   it("documents the automated Central and WEST snapshot and tested restore operator paths", () => {
     const handbook = source("docs/handbook/53-observability-and-data.md");
     const security = source("docs/operations/SECURITY.md");
