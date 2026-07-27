@@ -90,11 +90,11 @@ function imageHasTag(image: string | undefined, expectedImageTag: string): boole
   return withoutDigest.endsWith(`:${expectedImageTag}`);
 }
 
-function artifactTagMatchesExpected(
+export function imageTagMatchesArtifact(
   artifactTag: string | null | undefined,
   expectedImageTag: string,
 ): boolean {
-  return artifactTag?.split("@", 1)[0] === expectedImageTag;
+  return artifactTag?.split("@", 1)[0] === expectedImageTag.split("@", 1)[0];
 }
 
 export function assessReleaseConvergence(
@@ -132,7 +132,7 @@ function assessFleet(
     (gateway) => gateway.desiredStatus !== "retired",
   );
   for (const gateway of activeGateways) {
-    if (!artifactTagMatchesExpected(gateway.desiredImageTag, snapshot.expectedImageTag)) {
+    if (!imageTagMatchesArtifact(gateway.desiredImageTag, snapshot.expectedImageTag)) {
       failures.push(
         `gateway ${gateway.gatewayId} desired release is not tagged ${snapshot.expectedImageTag}`,
       );
@@ -155,7 +155,7 @@ function assessRolloutOperations(
   const activeGatewayIds = new Set(activeGateways.map((gateway) => gateway.gatewayId));
   for (const operation of snapshot.rolloutOperations) {
     if (!activeGatewayIds.has(operation.gatewayId)) continue;
-    if (!artifactTagMatchesExpected(operation.imageTag, snapshot.expectedImageTag)) continue;
+    if (!imageTagMatchesArtifact(operation.imageTag, snapshot.expectedImageTag)) continue;
     if (operation.status === "succeeded") continue;
     const suffix = operation.status === "failed" && operation.error
       ? `: ${operation.error}`
@@ -175,7 +175,7 @@ export function hasBlockingRolloutFailure(snapshot: ReleaseConvergenceSnapshot):
   );
   return snapshot.rolloutOperations.some((operation) =>
     activeGatewayIds.has(operation.gatewayId) &&
-    artifactTagMatchesExpected(operation.imageTag, snapshot.expectedImageTag) &&
+    imageTagMatchesArtifact(operation.imageTag, snapshot.expectedImageTag) &&
     (operation.status === "failed" || operation.status === "rolled-back"));
 }
 
@@ -229,7 +229,7 @@ function assessDefaultRuntime(
     if (runtime.heartbeatStatus !== "ready") {
       failures.push(`configured default heartbeat is ${runtime.heartbeatStatus}, not ready`);
     }
-    if (!artifactTagMatchesExpected(runtime.heartbeatVersion, snapshot.expectedImageTag)) {
+    if (!imageTagMatchesArtifact(runtime.heartbeatVersion, snapshot.expectedImageTag)) {
       failures.push(
         `configured default heartbeat is not tagged ${snapshot.expectedImageTag}`,
       );

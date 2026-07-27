@@ -22,6 +22,8 @@ import {
 import {
   buildFleetMigrateOperationInput,
   parseFleetArgs,
+  releaseStatusRows,
+  resolveFleetVerb,
   resolveFleetCredentialMode,
   resolveFleetDeploymentTarget,
 } from "../ops/fleet.js";
@@ -451,6 +453,52 @@ describe("fleet CLI args", () => {
       positional: ["ls", "customers"],
       flags: { gateway: "default" },
     });
+  });
+
+  it("accepts release status as an unforced read verb", () => {
+    const statusArgs = parseFleetArgs(["--env=test", "release", "status"]);
+
+    expect(statusArgs).toEqual({
+      env: "test",
+      positional: ["release", "status"],
+      flags: {},
+    });
+    expect(resolveFleetVerb(statusArgs)).toMatchObject({
+      verb: "release status",
+      writes: false,
+    });
+    expect(resolveFleetCredentialMode(statusArgs)).toBe("service-account-key");
+  });
+
+  it("renders the raw Cowboy lifecycle alongside release and heartbeat observations", () => {
+    expect(releaseStatusRows({
+      defaultGatewayId: "default",
+      defaultSelection: "selected",
+      gateways: [{
+        gatewayId: "default",
+        isDefault: true,
+        desiredStatus: "running",
+        desiredRelease: 4,
+        liveRelease: 3,
+        desiredImageTag: "abc1234-oc2026.7.1",
+        runtimeRelease: 3,
+        runtimeLifecycle: "reconciling",
+        heartbeatStatus: "ready",
+        heartbeatVersion: "abc1234-oc2026.7.1",
+        observation: "rolling",
+      }],
+    })).toEqual([{
+      gatewayId: "default",
+      default: "*",
+      desired: 4,
+      live: 3,
+      runtime: 3,
+      lifecycle: "reconciling",
+      heartbeat: "ready",
+      tag: "abc1234-oc2026.7.1",
+      version: "abc1234-oc2026.7.1",
+      status: "rolling",
+    }]);
   });
 
   it("uses application-default credentials for committed fleet write verbs", () => {
