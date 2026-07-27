@@ -1,5 +1,10 @@
 import type { SizingTier } from "./sizing.js";
 export type GatewayDesiredStatus = "running" | "paused" | "draining" | "retired";
+export declare const MANAGED_BY_VALUES: readonly ["cowboy", "operator"];
+export type ManagedBy = (typeof MANAGED_BY_VALUES)[number];
+export declare const DEFAULT_MANAGED_BY: ManagedBy;
+export declare function resolveManagedBy(value: unknown): ManagedBy;
+export declare function isOperatorManaged(value: unknown): boolean;
 export declare const GATEWAY_PROFILES: readonly ["standard", "operator"];
 export type GatewayProfile = (typeof GATEWAY_PROFILES)[number];
 export declare const GATEWAY_CLASSES: readonly ["shared", "builder", "operator"];
@@ -105,6 +110,9 @@ export declare function resolveUserGatewayShellState(data: {
 };
 export type OperationKind = "add-gateway" | "migrate-customer" | "retire-gateway" | "restart-gateway" | "recycle-gateway" | "rollout" | "deprovision-customer" | "suspend-customer" | "erase-customer";
 export type OperationStatus = "pending" | "running" | "succeeded" | "failed" | "rolled-back";
+export declare const OPERATION_ORIGINS: readonly ["automatic", "operator"];
+export type OperationOrigin = (typeof OPERATION_ORIGINS)[number];
+export declare function resolveOperationOrigin(value: unknown): OperationOrigin;
 export type StepStatus = "pending" | "running" | "done" | "failed" | "skipped";
 export interface OperationStep {
     name: string;
@@ -118,6 +126,7 @@ export interface Operation {
     kind: OperationKind;
     status: OperationStatus;
     createdBy: string;
+    origin?: OperationOrigin;
     createdAt: number;
     startedAt: number | null;
     completedAt: number | null;

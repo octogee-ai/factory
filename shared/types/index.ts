@@ -260,11 +260,13 @@ export type {
 
 export type {
   GatewayDesiredStatus,
+  ManagedBy,
   GatewayDesiredState,
   GatewayProfile,
   GatewayServiceAccountSpec,
   OperatorGatewayAccessSpec,
   OperationKind,
+  OperationOrigin,
   OperationStatus,
   StepStatus,
   OperationStep,
@@ -276,6 +278,9 @@ export type {
 } from './glm.js';
 export {
   GATEWAY_CLASSES,
+  DEFAULT_MANAGED_BY,
+  MANAGED_BY_VALUES,
+  OPERATION_ORIGINS,
   GATEWAY_IMAGE_PROFILES,
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
@@ -284,6 +289,7 @@ export {
   OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
   OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX,
   isGatewayClass,
+  isOperatorManaged,
   isGatewayClassShellAccessEnabled,
   isGatewayClassControlUiAccessEnabled,
   isGatewayProfile,
@@ -291,6 +297,8 @@ export {
   operatorGatewayServiceAccountName,
   resolveGatewayClass,
   resolveGatewayImageProfile,
+  resolveManagedBy,
+  resolveOperationOrigin,
 } from './glm.js';
 
 export type {

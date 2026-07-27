@@ -8,9 +8,13 @@ import {
   IMAGE_TAG_PATTERN,
   isW9CandidateImageTag,
 } from "./image-tag.js";
-import { GLM_GATEWAYS_COLLECTION } from "./glm.js";
+import {
+  GLM_GATEWAYS_COLLECTION,
+  isOperatorManaged,
+} from "./glm.js";
 import type {
   GatewayPreemptionHandoffSpec,
+  ManagedBy,
 } from "./glm.js";
 
 // Simple-roll model (GATEWAY-SIMPLE-ROLL-SPEC): durable identity
@@ -53,6 +57,7 @@ export interface GatewayDoc {
   desiredRelease: number;
   liveRelease: number | null;
   desiredStatus: GatewayLifecycleStatus;
+  managedBy?: ManagedBy;
   preemptionHandoff?: GatewayPreemptionHandoffSpec | null;
   retireAfter?: number | null;
   retirementVersion?: number;
@@ -513,6 +518,7 @@ export const GATEWAY_MUTABLE_FIELDS = [
   "preemption",
   "allocation",
   "desiredStatus",
+  "managedBy",
   "preemptionHandoff",
   "liveRelease",
   "retireAfter",
@@ -587,10 +593,13 @@ export interface CommitPlacementParams {
   updatedByOperationId?: string | null;
   assignmentWrite?: "upsert" | "create-if-missing";
   requireDurableGateway?: boolean;
+  automatic?: boolean;
 }
 
 export type PlacementRejectReason =
   | "gateway-root-invalid"
+  | "gateway-operator-managed"
+  | "builder-operator-managed"
   | "gateway-not-running"
   | "gateway-not-serving";
 
@@ -620,6 +629,16 @@ function placementRuntimeRejectReason(
   return data.lifecycle === "serving" ? null : "gateway-not-serving";
 }
 
+function builderIsOperatorManaged(data: Record<string, unknown> | undefined): boolean {
+  const provisioning = data?.provisioning;
+  if (!provisioning || typeof provisioning !== "object" || Array.isArray(provisioning)) {
+    return false;
+  }
+  const openclaw = (provisioning as Record<string, unknown>).openclaw;
+  if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) return false;
+  return isOperatorManaged((openclaw as Record<string, unknown>).managedBy);
+}
+
 async function preserveExistingAssignment(
   txn: PlacementTxn,
   assignmentRef: PlacementDocRef,
@@ -645,6 +664,12 @@ export async function commitPlacementAtomic(
   return db.runTransaction<CommitPlacementResult>(async (txn) => {
     const gatewaySnap = await txn.get(gatewayRef);
     const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
+    if (params.automatic) {
+      const userSnap = await txn.get(userRef);
+      if (builderIsOperatorManaged(userSnap.exists ? userSnap.data() : undefined)) {
+        return { kind: "rejected", reason: "builder-operator-managed" };
+      }
+    }
 
     if (!gatewaySnap.exists) {
       if (params.requireDurableGateway) {
@@ -655,6 +680,9 @@ export async function commitPlacementAtomic(
     }
     if (!isDurablePlacementRoot(gatewayData, params.gatewayId)) {
       return { kind: "rejected", reason: "gateway-root-invalid" };
+    }
+    if (params.automatic && isOperatorManaged(gatewayData.managedBy)) {
+      return { kind: "rejected", reason: "gateway-operator-managed" };
     }
     if (gatewayData.desiredStatus !== "running") {
       return { kind: "rejected", reason: "gateway-not-running" };

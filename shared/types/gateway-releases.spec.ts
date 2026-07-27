@@ -55,6 +55,11 @@ describe("glmGateways doc-kind discriminators", () => {
     expect(isGatewayDesiredDoc(runtimeDoc)).toBe(false);
     expect(isGatewayDesiredDoc(null)).toBe(false);
   });
+
+  it("classifies managedBy as a mutable durable gateway field", () => {
+    expect(GATEWAY_MUTABLE_FIELDS).toContain("managedBy");
+    expect(classifyGatewayField("managedBy")).toBe("gateway-mutable");
+  });
 });
 
 function samplePayload(overrides: Partial<ReleasePayload> = {}): ReleasePayload {
@@ -534,6 +539,32 @@ describe("commitPlacementAtomic", () => {
     expect(res).toEqual({ kind: "rejected", reason: "gateway-not-running" });
     expect(store.get("users/u1")).toEqual({ tier: "trial" });
     expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
+  });
+
+  it("rejects an automatic placement when its transaction reads an operator-managed target or builder", async () => {
+    const target = mkDb({
+      "users/u1": { tier: "trial" },
+      "gateways/default": backfilled({ managedBy: "operator" }),
+      "glmGateways/default": runtimeDoc(),
+    });
+    await expect(commitPlacementAtomic(target.db, {
+      uid: "u1", slug: "s1", gatewayId: "default", source: "repair", now: 100,
+      mirrorPatch: mirror, automatic: true,
+    })).resolves.toEqual({ kind: "rejected", reason: "gateway-operator-managed" });
+    expect(target.store.get("users/u1")).toEqual({ tier: "trial" });
+
+    const builder = mkDb({
+      "users/u1": { tier: "trial", provisioning: { openclaw: { managedBy: "operator" } } },
+      "gateways/default": backfilled(),
+      "glmGateways/default": runtimeDoc(),
+    });
+    await expect(commitPlacementAtomic(builder.db, {
+      uid: "u1", slug: "s1", gatewayId: "default", source: "repair", now: 100,
+      mirrorPatch: mirror, automatic: true,
+    })).resolves.toEqual({ kind: "rejected", reason: "builder-operator-managed" });
+    expect(builder.store.get("users/u1")).toEqual({
+      tier: "trial", provisioning: { openclaw: { managedBy: "operator" } },
+    });
   });
 
   it("steady gateway: writes mirror + assignment on the serving gateway (serving, epoch 0)", async () => {
