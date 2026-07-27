@@ -426,6 +426,37 @@ run_openclaw_doctor() {
   esac
 }
 
+run_session_sqlite_migration() {
+  case "${OPENCLAW_SESSION_SQLITE_MIGRATION_MODE:-auto}" in
+    auto)
+      case "${OPENCLAW_VERSION:-}" in
+        2026.7.[2-9]*|2026.7.[1-9][0-9]*|2026.[89].*|2026.[1-9][0-9].*|202[7-9].*) ;;
+        *) return 0 ;;
+      esac
+      ;;
+    run) ;;
+    skip)
+      log "Pre-boot: session SQLite migration skipped by OPENCLAW_SESSION_SQLITE_MIGRATION_MODE=skip"
+      return 0
+      ;;
+    *)
+      log "FATAL: invalid OPENCLAW_SESSION_SQLITE_MIGRATION_MODE=${OPENCLAW_SESSION_SQLITE_MIGRATION_MODE}; expected auto, run, or skip"
+      return 1
+      ;;
+  esac
+
+  log "Pre-boot: validating session SQLite migration inputs..."
+  if ! openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents --json; then
+    return 1
+  fi
+  log "Pre-boot: importing legacy session state into SQLite..."
+  if ! openclaw doctor --session-sqlite import --session-sqlite-all-agents --json; then
+    return 1
+  fi
+  log "Pre-boot: validating imported session SQLite state..."
+  openclaw doctor --session-sqlite validate --session-sqlite-all-agents --json
+}
+
 # ── Repair + accept the durable config (identity-pure, level-triggered) ─────
 # Doctor-repair, class policy, env reconciliation, and the durable checkpoint
 # (recovery + commit + push) retry as one unit until the accepted config is
@@ -438,6 +469,10 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
     log "Pre-boot: repairing and validating durable OpenClaw config..."
     if ! "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts; then
       log "Pre-boot: env/runtime reconciliation failed; retrying"
+      REPAIR_OK=false
+    fi
+    if ! run_session_sqlite_migration; then
+      log "Pre-boot: session SQLite migration failed; retrying"
       REPAIR_OK=false
     fi
     if ! run_openclaw_doctor; then
@@ -455,6 +490,11 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
     if [ "$REPAIR_OK" = "true" ]; then
       break
     fi
+    sleep 5
+  done
+else
+  while ! run_session_sqlite_migration; do
+    log "Pre-boot: session SQLite migration failed before shared Gateway startup; retrying"
     sleep 5
   done
 fi

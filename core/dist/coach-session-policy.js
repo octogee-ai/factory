@@ -20,6 +20,15 @@ function policyValue(value) {
 }
 function coachEntry(config, agentId) {
     const agents = record(config)?.agents;
+    const entries = record(agents)?.entries;
+    const keyedEntries = record(entries);
+    if (keyedEntries) {
+        const coach = record(keyedEntries[agentId]);
+        if (!coach) {
+            throw new Error(`coach runtime policy: coach ${agentId} missing from agents.entries`);
+        }
+        return coach;
+    }
     const list = record(agents)?.list;
     if (!Array.isArray(list)) {
         throw new Error(`coach runtime policy: agents.list missing for ${agentId}`);

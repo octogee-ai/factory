@@ -292,6 +292,54 @@ export function coachFullAgentList(
   });
 }
 
+export type CoachAgentPatch =
+  | { list: unknown[] }
+  | { entries: Record<string, Record<string, unknown>> };
+
+function keyedAgentEntries(current: unknown): Record<string, unknown> | null {
+  const entries = (current as { agents?: { entries?: unknown } } | undefined)?.agents?.entries;
+  return isAgentRecord(entries) ? entries as Record<string, unknown> : null;
+}
+
+export function coachAgentPatch(
+  current: unknown,
+  agentId: string,
+  model: CoachModelPatch["agents"]["list"][number]["model"] | null,
+  tools?: FreeTierCoachToolsBlock | null,
+): CoachAgentPatch {
+  const entries = keyedAgentEntries(current);
+  if (!entries) return { list: coachFullAgentList(current, agentId, model, tools) };
+
+  const currentEntry = entries[agentId];
+  if (!isAgentRecord(currentEntry)) return { entries: {} };
+  const [next] = coachFullAgentList(
+    { agents: { list: [{ ...(currentEntry as Record<string, unknown>), id: agentId }] } },
+    agentId,
+    model,
+    tools,
+  );
+  if (!isAgentRecord(next)) throw new Error(`coach patch: invalid agent entry for ${agentId}`);
+  const { id: _id, ...entry } = next as Record<string, unknown>;
+  return { entries: { [agentId]: entry } };
+}
+
+export function coachAgentExists(current: unknown, agentId: string): boolean {
+  const entries = keyedAgentEntries(current);
+  if (entries) return isAgentRecord(entries[agentId]);
+  const list = (current as { agents?: { list?: unknown } } | undefined)?.agents?.list;
+  return Array.isArray(list) && list.some((agent) => isAgentRecord(agent) && agent.id === agentId);
+}
+
+export function coachAgentPatchReplacePaths(current: unknown): string[] {
+  return keyedAgentEntries(current)
+    ? []
+    : [
+        "agents.list",
+        "agents.list[].model.fallbacks",
+        "agents.list[].tools.alsoAllow",
+      ];
+}
+
 export function deriveDesiredByotState(userData: {
   byotActive?: boolean;
   username?: string;

@@ -1,13 +1,13 @@
 import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
-import { applyByotState, byosCoachConfigPatch, coachFullAgentList, deriveDesiredByotState, FREE_TIER_COACH_TOOLS, isPlatformProviderRef, platformCoachModelInputForUser, STANDARD_CODEX_APP_SERVER, } from "./byot-sync.js";
+import { applyByotState, byosCoachConfigPatch, coachAgentExists, coachAgentPatch, coachAgentPatchReplacePaths, deriveDesiredByotState, FREE_TIER_COACH_TOOLS, isPlatformProviderRef, platformCoachModelInputForUser, STANDARD_CODEX_APP_SERVER, } from "./byot-sync.js";
 import { createGatewayRpc, OpenclawWireError } from "./gateway-rpc.js";
 import { fingerprintCoachRuntimePolicy, reconcileCoachRuntimeSessionPolicy, } from "./coach-session-policy.js";
 import { internalFetch } from "./internal-fetch.js";
 import { claudeCliRuntimeConfig, codexRuntimeConfig, isModelCredentialOauthProvider, } from "./model-credential-materializer.js";
 import { codexAuthJsonPath, restoreByosubCredentials, } from "./byosub-restore.js";
-import { applyConfigPatch, fullAgentListReplacePaths } from "./apply-config-patch.js";
+import { applyConfigPatch } from "./apply-config-patch.js";
 import { AGENTS_DIR, GATEWAY_CLASS, OPENCLAW_DIR, isOperatorGateway, isSharedGateway, log, readOpenClawConfig, usesLlmBrokerToken, } from "./config.js";
 import { openAiCatalogInputForBaseUrl, openRouterCatalogInputForBaseUrl, upsertAnthropicBrokerProfile, upsertOpenAiBrokerCatalog, upsertOpenRouterBrokerCatalog, } from "./agent-model-token-materializer.js";
 import { agentIdBelongsToSlug } from "@octogee/shared/types/agent-models";
@@ -51,28 +51,15 @@ export async function applyCoachModelPatch(input, deps) {
     const modelPrimary = typeof model === "string" ? model : model.primary;
     const modelFallbacks = typeof model === "string" ? [] : model.fallbacks;
     const applyConfigPatchFn = deps?.applyConfigPatch ?? applyConfigPatch;
-    // Ship the FULL agents.list (coach model updated, siblings preserved verbatim)
-    // WITH fullAgentListReplacePaths(). On a multi-agent gateway an id-less base
-    // agent disables id-keyed merge for agents.list, so the destructive-array guard
-    // falls back to arrayPreservesBaseEntries — a deep-equal base↔merged check that
-    // flags the coach entry we just re-modeled as "removed" even though no entry is
-    // dropped; "agents.list" confirms the wholesale replacement. On an all-id base
-    // the guard instead descends INTO the coach entry and names its shrunk arrays
-    // (model.fallbacks on the override → house-pin transition, tools.alsoAllow on a
-    // trim rewrite) as agents.list[].* paths needing their own confirmation — the
-    // per-entry wildcard half of the set. Rebuilt per attempt against the
-    // freshly-fetched config (hash-mismatch safe; see coachFullAgentList).
-    // tools convergence rides the same full-list patch: the free-tier trim when
-    // the entry carries it, an explicit strip (null) for every catalog-access
-    // input so an upgrade removes the trim on the next re-assert.
+    const { list: _coachPatchList, ...coachPatchAgents } = patch.agents;
     const buildPatch = (current) => ({
         ...patch,
-        agents: { ...patch.agents, list: coachFullAgentList(current, agentId, model, tools ?? null) },
+        agents: { ...coachPatchAgents, ...coachAgentPatch(current, agentId, model, tools ?? null) },
     });
     try {
         await applyConfigPatchFn({
             buildPatch,
-            buildReplacePaths: () => fullAgentListReplacePaths(),
+            buildReplacePaths: coachAgentPatchReplacePaths,
             logPrefix: `[byot-sync:${input.slug}]`,
         }, { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS });
         logFn(`[byot-sync] ${input.slug}: coach model → ${modelPrimary}${modelFallbacks.length ? ` (fallback ${modelFallbacks.join(", ")})` : ""}`);
@@ -98,18 +85,15 @@ export async function applyCoachToolsConvergence(slug, houseOnly, deps) {
     // path that exists to repair upgrade/lapse drift. Fail loudly instead; the
     // next sync/re-mount retries.
     const buildPatch = (current) => {
-        const list = current?.agents?.list;
-        const agents = Array.isArray(list) ? list : [];
-        const coachPresent = agents.some((a) => a !== null && typeof a === "object" && a.id === agentId);
-        if (!coachPresent) {
-            throw new Error(`coach entry ${agentId} missing from agents.list — nothing to converge (customer not mounted on this pod?)`);
+        if (!coachAgentExists(current, agentId)) {
+            throw new Error(`coach entry ${agentId} missing from agents.list/entries — nothing to converge (customer not mounted on this pod?)`);
         }
-        return { agents: { list: coachFullAgentList(current, agentId, null, tools) } };
+        return { agents: coachAgentPatch(current, agentId, null, tools) };
     };
     try {
         await applyConfigPatchFn({
             buildPatch,
-            buildReplacePaths: () => fullAgentListReplacePaths(),
+            buildReplacePaths: coachAgentPatchReplacePaths,
             logPrefix: `[coach-tools:${slug}]`,
         }, { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS });
         logFn(`[byot-sync] ${slug}: coach tools ${houseOnly ? "trimmed to the free-tier surface" : "converged to the inherited gateway surface"}`);
@@ -157,13 +141,13 @@ export async function applyAgentModelOverrides(slug, agentModels, opts, deps) {
                         },
                     }
                     : {}),
-                list: coachFullAgentList(current, agentId, model, toolsConvergence),
+                ...coachAgentPatch(current, agentId, model, toolsConvergence),
             },
         });
         try {
             await applyConfigPatchFn({
                 buildPatch,
-                buildReplacePaths: () => fullAgentListReplacePaths(),
+                buildReplacePaths: coachAgentPatchReplacePaths,
                 logPrefix: `[agent-models:${slug}]`,
             }, { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS });
             logFn(`[byot-sync] ${slug}: ${agentId} model → ${selection.primary}${selection.fallbacks.length ? ` (fallback ${selection.fallbacks.join(", ")})` : ""}`);

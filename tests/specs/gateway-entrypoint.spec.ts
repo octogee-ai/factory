@@ -188,6 +188,28 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(entrypoint).toMatch(/invalid OPENCLAW_DOCTOR_MODE/);
   });
 
+  it("runs beta session-SQLite migration and validation after durable state is restored but before Gateway owns the lock", () => {
+    const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
+    const migrationIdx = entrypoint.indexOf("run_session_sqlite_migration");
+    const gatewayIdx = entrypoint.indexOf("openclaw gateway run");
+    expect(migrationIdx).toBeGreaterThan(restoreIdx);
+    expect(migrationIdx).toBeLessThan(gatewayIdx);
+    const migrationBlock = entrypoint.slice(migrationIdx, entrypoint.indexOf("# ── Repair + accept", migrationIdx));
+    expect(migrationBlock).toContain("--session-sqlite dry-run --session-sqlite-all-agents --json");
+    expect(migrationBlock).toContain("--session-sqlite import --session-sqlite-all-agents --json");
+    expect(migrationBlock).toContain("--session-sqlite validate --session-sqlite-all-agents --json");
+    expect(migrationBlock).toContain("OPENCLAW_SESSION_SQLITE_MIGRATION_MODE");
+  });
+
+  it("makes a requested beta session-SQLite migration part of the retrying repair unit", () => {
+    const repairLoop = entrypoint.slice(
+      entrypoint.indexOf("OPENCLAW_SERVICE_REPAIR_POLICY=external"),
+      entrypoint.indexOf("# ── In-pod runners"),
+    );
+    expect(repairLoop).toContain("run_session_sqlite_migration");
+    expect(repairLoop).toMatch(/session SQLite migration failed; retrying/);
+  });
+
   it("hardens the active config unconditionally — no role-dependent permission arms", () => {
     const hardenBlock = entrypoint.slice(
       entrypoint.indexOf("# ── Harden file permissions"),
