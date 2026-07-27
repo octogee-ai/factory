@@ -34,6 +34,28 @@ describe("deployment target consumers", () => {
     expect(contents).not.toContain("us-west1");
   });
 
+  it("keeps active Central releases and gateway bootstrap image paths in Central Artifact Registry", () => {
+    const targets = JSON.parse(source("core/src/deployment-targets.json")) as {
+      activeTargets: Record<string, string>;
+      targets: Record<string, { artifactRegistry: { location: string } }>;
+    };
+
+    for (const environment of ["prod", "test"]) {
+      const targetId = targets.activeTargets[environment];
+      expect(targetId).toMatch(/-central$/);
+      expect(targets.targets[targetId]?.artifactRegistry.location).toBe("us-central1");
+    }
+
+    for (const valuesFile of [
+      "helm/octogee-gateway/values.prod.yaml",
+      "helm/octogee-gateway/values.test.yaml",
+    ]) {
+      const values = source(valuesFile);
+      expect(values, valuesFile).toContain("us-central1-docker.pkg.dev/octogee/octogee/");
+      expect(values, valuesFile).not.toContain("us-west1-docker.pkg.dev/octogee/octogee/");
+    }
+  });
+
   it("lets release workflows select a reviewed candidate target explicitly", () => {
     for (const workflow of [
       ".github/workflows/releasev2.yml",
