@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { CONFIG_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller";
-import { applyConfigPatch, customerConfigFullAgentListReplacePaths, } from "./apply-config-patch.js";
+import { applyConfigPatch, customerAgentRosterPatch, customerConfigAgentRosterReplacePaths, upsertAgentInFullAgentList, } from "./apply-config-patch.js";
 export const MIGRATION_ACTIVATION_DIR = ".octogee-migration-activation";
 export const MIGRATION_ACTIVATION_FILE = "activation.json";
 function isRecord(value) {
@@ -14,6 +14,18 @@ function activationAgentForTarget(manifestAgent, currentAgent) {
     if (!currentAgent || !hasOwn(currentAgent, "model"))
         return manifestAgent;
     return { ...manifestAgent, model: currentAgent.model };
+}
+function currentActivationAgent(current, agentId) {
+    const agents = current?.agents;
+    const entries = agents?.entries;
+    if (isRecord(entries)) {
+        const entry = entries[agentId];
+        return isRecord(entry) ? { ...entry, id: agentId } : undefined;
+    }
+    const list = agents?.list;
+    return Array.isArray(list)
+        ? list.find((entry) => isRecord(entry) && entry.id === agentId)
+        : undefined;
 }
 export function activationManifestTarPath(slug) {
     return path.join(MIGRATION_ACTIVATION_DIR, slug, MIGRATION_ACTIVATION_FILE);
@@ -69,7 +81,11 @@ export async function extractOpenClawActivationManifest(configPath, slug, opts =
     const parsed = JSON.parse(raw);
     const agentId = expectedAgentId(slug);
     const accountId = expectedAccountId(slug);
-    const agent = parsed.agents?.list?.find((entry) => isRecord(entry) && entry.id === agentId);
+    const entries = parsed.agents?.entries;
+    const keyedAgent = isRecord(entries) && isRecord(entries[agentId])
+        ? { ...entries[agentId], id: agentId }
+        : undefined;
+    const agent = keyedAgent ?? parsed.agents?.list?.find((entry) => isRecord(entry) && entry.id === agentId);
     const sourceAccount = parsed.channels?.mattermost?.accounts?.[accountId];
     const mattermostAccount = isRecord(sourceAccount) && opts.botToken
         ? { ...sourceAccount, botToken: opts.botToken }
@@ -106,18 +122,12 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
     await applyConfigPatch({
         buildPatch: (current) => {
             const cfg = current;
-            const currentAgents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
             const currentBindings = Array.isArray(cfg.bindings) ? cfg.bindings : [];
             const currentAccounts = cfg.channels?.mattermost?.accounts ?? {};
-            const currentAgent = currentAgents.find((entry) => isRecord(entry) && entry.id === manifest.agentId);
+            const currentAgent = currentActivationAgent(current, manifest.agentId);
             const agent = activationAgentForTarget(manifest.agent, currentAgent);
             return {
-                agents: {
-                    list: [
-                        ...currentAgents.filter((entry) => !(isRecord(entry) && entry.id === manifest.agentId)),
-                        agent,
-                    ],
-                },
+                agents: customerAgentRosterPatch(current, manifest.slug, upsertAgentInFullAgentList(current, manifest.agentId, agent)),
                 bindings: [
                     ...currentBindings.filter((binding) => !(isRecord(binding) && binding.agentId === manifest.agentId)),
                     ...manifest.bindings,
@@ -135,7 +145,7 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
         // Rebuilding the agent's bindings can shrink the array (stale entries dropped), and
         // importing over residue merges an account fragment whose arrays can shrink too — the
         // gateway's destructive-array guard requires both confirmed.
-        buildReplacePaths: (current) => customerConfigFullAgentListReplacePaths(current, manifest.slug),
+        buildReplacePaths: (current) => customerConfigAgentRosterReplacePaths(current, manifest.slug),
         logPrefix: `[import:${manifest.slug}]`,
     }, {
         rpc: opts.rpc,

@@ -3,7 +3,9 @@ import * as path from "node:path";
 import { CONFIG_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller";
 import {
   applyConfigPatch,
-  customerConfigFullAgentListReplacePaths,
+  customerAgentRosterPatch,
+  customerConfigAgentRosterReplacePaths,
+  upsertAgentInFullAgentList,
   type ConfigCache,
 } from "./apply-config-patch.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
@@ -35,6 +37,22 @@ function activationAgentForTarget(
 ): Record<string, unknown> {
   if (!currentAgent || !hasOwn(currentAgent, "model")) return manifestAgent;
   return { ...manifestAgent, model: currentAgent.model };
+}
+
+function currentActivationAgent(
+  current: unknown,
+  agentId: string,
+): Record<string, unknown> | undefined {
+  const agents = (current as { agents?: Record<string, unknown> } | undefined)?.agents;
+  const entries = agents?.entries;
+  if (isRecord(entries)) {
+    const entry = entries[agentId];
+    return isRecord(entry) ? { ...entry, id: agentId } : undefined;
+  }
+  const list = agents?.list;
+  return Array.isArray(list)
+    ? list.find((entry): entry is Record<string, unknown> => isRecord(entry) && entry.id === agentId)
+    : undefined;
 }
 
 export function activationManifestTarPath(slug: string): string {
@@ -101,13 +119,19 @@ export async function extractOpenClawActivationManifest(
 ): Promise<MigrationActivationManifest> {
   const raw = await fs.readFile(configPath, "utf-8");
   const parsed = JSON.parse(raw) as {
-    agents?: { list?: unknown[] };
+    agents?: { list?: unknown[]; entries?: Record<string, unknown> };
     channels?: { mattermost?: { accounts?: Record<string, unknown> } };
     bindings?: unknown[];
   };
   const agentId = expectedAgentId(slug);
   const accountId = expectedAccountId(slug);
-  const agent = parsed.agents?.list?.find((entry) => isRecord(entry) && entry.id === agentId);
+  const entries = parsed.agents?.entries;
+  const keyedAgent = isRecord(entries) && isRecord(entries[agentId])
+    ? { ...entries[agentId], id: agentId }
+    : undefined;
+  const agent = keyedAgent ?? parsed.agents?.list?.find(
+    (entry) => isRecord(entry) && entry.id === agentId,
+  );
   const sourceAccount = parsed.channels?.mattermost?.accounts?.[accountId];
   const mattermostAccount = isRecord(sourceAccount) && opts.botToken
     ? { ...sourceAccount, botToken: opts.botToken }
@@ -171,27 +195,19 @@ export async function applyOpenClawActivationManifest(
     {
       buildPatch: (current) => {
         const cfg = current as {
-          agents?: { list?: unknown[] };
           channels?: { mattermost?: { accounts?: Record<string, unknown> } };
           bindings?: unknown[];
         };
-        const currentAgents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
         const currentBindings = Array.isArray(cfg.bindings) ? cfg.bindings : [];
         const currentAccounts = cfg.channels?.mattermost?.accounts ?? {};
-        const currentAgent = currentAgents.find(
-          (entry): entry is Record<string, unknown> =>
-            isRecord(entry) && entry.id === manifest.agentId,
-        );
+        const currentAgent = currentActivationAgent(current, manifest.agentId);
         const agent = activationAgentForTarget(manifest.agent, currentAgent);
         return {
-          agents: {
-            list: [
-              ...currentAgents.filter(
-                (entry) => !(isRecord(entry) && entry.id === manifest.agentId),
-              ),
-              agent,
-            ],
-          },
+          agents: customerAgentRosterPatch(
+            current,
+            manifest.slug,
+            upsertAgentInFullAgentList(current, manifest.agentId, agent),
+          ),
           bindings: [
             ...currentBindings.filter(
               (binding) => !(isRecord(binding) && binding.agentId === manifest.agentId),
@@ -211,7 +227,7 @@ export async function applyOpenClawActivationManifest(
       // Rebuilding the agent's bindings can shrink the array (stale entries dropped), and
       // importing over residue merges an account fragment whose arrays can shrink too — the
       // gateway's destructive-array guard requires both confirmed.
-      buildReplacePaths: (current) => customerConfigFullAgentListReplacePaths(current, manifest.slug),
+      buildReplacePaths: (current) => customerConfigAgentRosterReplacePaths(current, manifest.slug),
       logPrefix: `[import:${manifest.slug}]`,
     },
     {

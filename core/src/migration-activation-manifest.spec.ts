@@ -71,6 +71,23 @@ describe("migration activation manifest", () => {
     });
   });
 
+  it("extracts a beta keyed source entry as the id-bearing migration manifest agent", async () => {
+    const dir = await mkTmp();
+    const configPath = path.join(dir, "openclaw.json");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        agents: { entries: { "octogee-alice-coach": { model: "custom-model" } } },
+        channels: { mattermost: { accounts: { "alice-coach": { botToken: "coach-pat" } } } },
+        bindings: [{ agentId: "octogee-alice-coach", match: { channel: "mattermost" } }],
+      }),
+    );
+
+    await expect(extractOpenClawActivationManifest(configPath, "alice")).resolves.toMatchObject({
+      agent: { id: "octogee-alice-coach", model: "custom-model" },
+    });
+  });
+
   it("round-trips through the tar-relative manifest path", async () => {
     const dir = await mkTmp();
     const source = await writeActivationManifest(dir, manifest());
@@ -134,6 +151,57 @@ describe("migration activation manifest", () => {
         "bindings",
       ],
     });
+  });
+
+  it("replays the finish-rsync activation manifest into beta keyed entries without sending agents.list", async () => {
+    const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
+      hash: "h2",
+      config: patch,
+    }));
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: {
+          agents: {
+            entries: {
+              "octogee-alice-coach": { model: "house" },
+              "octogee-bob-coach": { model: "other" },
+            },
+          },
+          channels: { mattermost: { accounts: {} } },
+          bindings: [{ agentId: "octogee-bob-coach", keep: true }],
+        },
+      })),
+      configPatch,
+      close: vi.fn(async () => undefined),
+    };
+
+    await applyOpenClawActivationManifest({
+      ...manifest(),
+      agent: {
+        id: "octogee-alice-coach",
+        model: "custom-model",
+        memorySearch: { provider: "openai-compatible" },
+      },
+    }, { rpc: rpc as never, log: vi.fn() });
+
+    const patch = configPatch.mock.calls[0][0] as {
+      agents: { entries: Record<string, Record<string, unknown>> };
+      bindings: Array<{ agentId: string; keep?: boolean }>;
+    };
+    expect(patch.agents.entries["octogee-alice-coach"]).toEqual({
+      model: "house",
+      memory: { search: { provider: "openai-compatible" } },
+    });
+    expect(patch.agents.entries["octogee-alice-coach"]).not.toHaveProperty("id");
+    expect(patch.agents.entries["octogee-alice-coach"]).not.toHaveProperty("memorySearch");
+    expect(patch.agents).not.toHaveProperty("list");
+    expect(patch.agents.entries).not.toHaveProperty("octogee-bob-coach");
+    expect(patch.bindings).toEqual([
+      { agentId: "octogee-bob-coach", keep: true },
+      { agentId: "octogee-alice-coach", match: { channel: "mattermost" } },
+    ]);
+    expect(configPatch.mock.calls[0][2]).toEqual({ replacePaths: ["bindings"] });
   });
 
   it("preserves the target gateway's current coach model when activation replays stale agent metadata", async () => {

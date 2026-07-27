@@ -219,8 +219,7 @@ function isPlainObject(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 export function upsertAgentInFullAgentList(current, agentId, agentEntry) {
-    const list = current?.agents?.list;
-    const currentAgents = Array.isArray(list) ? list : [];
+    const currentAgents = fullAgentListFromCurrent(current);
     return [
         ...currentAgents.filter((agent) => !(isPlainObject(agent) && agent.id === agentId)),
         agentEntry,

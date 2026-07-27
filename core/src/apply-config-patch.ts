@@ -400,8 +400,7 @@ export function upsertAgentInFullAgentList(
   agentId: string,
   agentEntry: unknown,
 ): unknown[] {
-  const list = (current as { agents?: { list?: unknown } } | undefined)?.agents?.list;
-  const currentAgents = Array.isArray(list) ? list : [];
+  const currentAgents = fullAgentListFromCurrent(current);
   return [
     ...currentAgents.filter(
       (agent) => !(isPlainObject(agent) && agent.id === agentId),
