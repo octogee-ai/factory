@@ -10,7 +10,8 @@ import {
 } from "../../shared/types/fleet-controller.js";
 import {
   applyConfigPatch,
-  customerConfigFullAgentListReplacePaths,
+  customerAgentRosterPatch,
+  customerConfigAgentRosterReplacePaths,
   filterOutCustomerBindings,
   replaceCustomerAgentsInFullAgentList,
   staleProjectAgentAccountNulls,
@@ -133,18 +134,25 @@ function buildRemoveCustomerPatchLocal(
   slug: string,
   agentId: string,
 ): {
-  agents: { list: unknown[] };
+  agents: ReturnType<typeof customerAgentRosterPatch>;
   bindings: unknown[];
   channels: { mattermost: { accounts: Record<string, null> } };
 } {
-  const agents = (current as { agents?: { list?: unknown } })?.agents?.list;
-  const currentAgents = Array.isArray(agents) ? agents : [];
   const bindings = (current as { bindings?: unknown })?.bindings;
   const currentBindings = Array.isArray(bindings) ? bindings : [];
+  const currentAccounts =
+    (current as { channels?: { mattermost?: { accounts?: Record<string, unknown> } } })
+      ?.channels?.mattermost?.accounts ?? {};
+  const accounts: Record<string, null> = { [`${slug}-coach`]: null };
+  for (const accountId of Object.keys(currentAccounts)) {
+    if (accountId.startsWith(`${slug}-proj-`)) accounts[accountId] = null;
+  }
   return {
-    agents: {
-      list: rebindPlatformEmbeddingRefs(
-        currentAgents.filter(
+    agents: customerAgentRosterPatch(
+      current,
+      slug,
+      rebindPlatformEmbeddingRefs(
+        replaceCustomerAgentsInFullAgentList(current, slug, []).filter(
           (agent) =>
             !(
               agent &&
@@ -153,16 +161,19 @@ function buildRemoveCustomerPatchLocal(
             ),
         ),
       ),
-    },
-    bindings: currentBindings.filter(
-      (binding) =>
-        !(
-          binding &&
-          typeof binding === "object" &&
-          (binding as { agentId?: unknown }).agentId === agentId
-        ),
     ),
-    channels: { mattermost: { accounts: { [`${slug}-coach`]: null } } },
+    bindings: filterOutCustomerBindings(
+      currentBindings.filter(
+        (binding) =>
+          !(
+            binding &&
+            typeof binding === "object" &&
+            (binding as { agentId?: unknown }).agentId === agentId
+          ),
+      ),
+      slug,
+    ),
+    channels: { mattermost: { accounts } },
   };
 }
 
@@ -363,14 +374,16 @@ async function applyAddCustomerConfigPatch(
           snapshot.slug,
         );
         return {
-          agents: {
-            list: rebindPlatformEmbeddingRefs(
+          agents: customerAgentRosterPatch(
+            current,
+            snapshot.slug,
+            rebindPlatformEmbeddingRefs(
               replaceCustomerAgentsInFullAgentList(current, snapshot.slug, [
                 agentEntry,
                 ...projectAgentEntries,
               ]),
             ),
-          },
+          ),
           bindings: [...existingBindings, ...bindings],
           channels: {
             mattermost: {
@@ -387,7 +400,7 @@ async function applyAddCustomerConfigPatch(
           },
         };
       },
-      buildReplacePaths: (current) => customerConfigFullAgentListReplacePaths(current, snapshot.slug),
+      buildReplacePaths: (current) => customerConfigAgentRosterReplacePaths(current, snapshot.slug),
       logPrefix: `[add:${snapshot.slug}]`,
     },
     {
@@ -413,7 +426,7 @@ async function applyRemoveCustomerConfigPatch(
   await applyConfigPatch(
     {
       buildPatch: (current) => buildRemoveCustomerPatchLocal(current, slug, agentId),
-      buildReplacePaths: (current) => customerConfigFullAgentListReplacePaths(current, slug),
+      buildReplacePaths: (current) => customerConfigAgentRosterReplacePaths(current, slug),
       logPrefix: `[remove:${slug}]`,
     },
     { rpc: ctx.rpc, cache: ctx.configCache, totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS },

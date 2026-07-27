@@ -43,6 +43,15 @@ describe("customerCoachWiredInOpenclawConfig", () => {
     expect(customerCoachWiredInOpenclawConfig(writeConfig(wiredConfig(["alice"])), "alice")).toBe(true);
   });
 
+  it("recognizes a beta keyed coach entry after Doctor migrates agents.list", () => {
+    const config = wiredConfig(["alice"]);
+    config.agents = {
+      list: [],
+      entries: { "octogee-alice-coach": {} },
+    } as typeof config.agents;
+    expect(customerCoachWiredInOpenclawConfig(writeConfig(config), "alice")).toBe(true);
+  });
+
   it("false when the binding is missing", () => {
     const c = wiredConfig(["alice"]);
     c.bindings = [];

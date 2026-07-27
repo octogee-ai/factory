@@ -226,6 +226,34 @@ export function upsertAgentInFullAgentList(current, agentId, agentEntry) {
         agentEntry,
     ];
 }
+function keyedAgentEntries(current) {
+    const entries = current?.agents?.entries;
+    return isPlainObject(entries) ? entries : null;
+}
+function fullAgentListFromCurrent(current) {
+    const entries = keyedAgentEntries(current);
+    if (entries) {
+        return Object.entries(entries).map(([id, entry]) => {
+            if (!isPlainObject(entry)) {
+                throw new Error(`agents.entries.${id} must be an object`);
+            }
+            return { ...entry, id };
+        });
+    }
+    const list = current?.agents?.list;
+    return Array.isArray(list) ? list : [];
+}
+function keyedEntryFromAgent(agent) {
+    if (!isPlainObject(agent) || typeof agent.id !== "string" || agent.id.length === 0) {
+        throw new Error("customer agent patch requires every agent to have a non-empty id");
+    }
+    const { id, memorySearch, ...entry } = agent;
+    if (isPlainObject(memorySearch)) {
+        const memory = isPlainObject(entry.memory) ? entry.memory : {};
+        entry.memory = { ...memory, search: memorySearch };
+    }
+    return [id, entry];
+}
 function isCustomerAgentId(value, slug) {
     if (typeof value !== "string")
         return false;
@@ -236,8 +264,7 @@ function isCustomerAgentId(value, slug) {
 // the customer's slice of the agent list must drop stale project agents too —
 // a per-id upsert would leave a retired project agent behind forever.
 export function replaceCustomerAgentsInFullAgentList(current, slug, agentEntries) {
-    const list = current?.agents?.list;
-    const currentAgents = Array.isArray(list) ? list : [];
+    const currentAgents = fullAgentListFromCurrent(current);
     const next = [];
     let inserted = false;
     for (const agent of currentAgents) {
@@ -254,6 +281,24 @@ export function replaceCustomerAgentsInFullAgentList(current, slug, agentEntries
     if (!inserted)
         next.push(...agentEntries);
     return next;
+}
+export function customerAgentRosterPatch(current, slug, agentEntries) {
+    const currentEntries = keyedAgentEntries(current);
+    if (!currentEntries)
+        return { list: [...agentEntries] };
+    const entries = {};
+    for (const [id] of Object.entries(currentEntries)) {
+        if (isCustomerAgentId(id, slug))
+            entries[id] = null;
+    }
+    for (const agent of agentEntries) {
+        const [id, entry] = keyedEntryFromAgent(agent);
+        if (isCustomerAgentId(id, slug) ||
+            JSON.stringify(currentEntries[id]) !== JSON.stringify(entry)) {
+            entries[id] = entry;
+        }
+    }
+    return { entries };
 }
 export function filterOutCustomerBindings(bindings, slug) {
     return bindings.filter((b) => !isCustomerAgentId(b?.agentId, slug));
@@ -340,4 +385,9 @@ export function customerConfigFullAgentListReplacePaths(current, slug) {
         ...fullAgentListReplacePaths(),
         ...customerConfigReplacePaths(current, slug),
     ];
+}
+export function customerConfigAgentRosterReplacePaths(current, slug) {
+    return keyedAgentEntries(current)
+        ? customerConfigReplacePaths(current, slug)
+        : customerConfigFullAgentListReplacePaths(current, slug);
 }

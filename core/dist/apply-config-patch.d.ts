@@ -38,6 +38,11 @@ export interface ApplyConfigPatchResult {
 export declare function applyConfigPatch(args: ApplyConfigPatchArgs, opts?: ApplyConfigPatchOptions): Promise<ApplyConfigPatchResult>;
 export declare function upsertAgentInFullAgentList(current: unknown, agentId: string, agentEntry: unknown): unknown[];
 export declare function replaceCustomerAgentsInFullAgentList(current: unknown, slug: string, agentEntries: readonly unknown[]): unknown[];
+export declare function customerAgentRosterPatch(current: unknown, slug: string, agentEntries: readonly unknown[]): {
+    list: unknown[];
+} | {
+    entries: Record<string, Record<string, unknown> | null>;
+};
 export declare function filterOutCustomerBindings<T extends {
     agentId?: unknown;
 }>(bindings: readonly T[], slug: string): T[];
@@ -69,3 +74,4 @@ export declare function fullAgentListReplacePaths(): string[];
  * `agents.list` is a complete replacement candidate, not a single-agent upsert.
  */
 export declare function customerConfigFullAgentListReplacePaths(current: unknown, slug: string): string[];
+export declare function customerConfigAgentRosterReplacePaths(current: unknown, slug: string): string[];

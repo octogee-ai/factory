@@ -46,6 +46,23 @@ describe("rebindPlatformEmbeddingRefs (redacted-array round-trip self-heal)", ()
     ]);
   });
 
+  it("rebinds the beta memory.search representation without reviving memorySearch", () => {
+    const corrupted = {
+      ...coach("octogee-livefixture-coach"),
+      memory: { search: platformRef("octogee-tester5-coach") },
+    };
+
+    const out = rebindPlatformEmbeddingRefs([corrupted]) as Array<{
+      memory: { search: { remote: { apiKey: { id: string } } } };
+      memorySearch?: unknown;
+    }>;
+
+    expect(out[0]?.memory.search.remote.apiKey.id).toBe(
+      platformOpenAiEmbeddingSecretId("octogee-livefixture-coach"),
+    );
+    expect(out[0]).not.toHaveProperty("memorySearch");
+  });
+
   it("keeps every coach bound to platformOpenAiEmbeddingSecretId(its own agent id) across a multi-coach list", () => {
     const list = [
       coach("octogee-alice-coach", platformRef("octogee-tester5-coach")),

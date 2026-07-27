@@ -59,6 +59,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function recordOrEmpty(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function selectMemorySearch(entry: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (isRecord(entry.memorySearch)) return entry.memorySearch;
+  if (isRecord(entry.memory) && isRecord(entry.memory.search)) return entry.memory.search;
+  return undefined;
+}
+
 // A platform embedding SecretRef is DERIVED from its agent id, never carried.
 // Two corruption vectors make carrying fatal: (1) a full agents.list rebuilt
 // from a shifted `current` hands one coach another coach's ref, and (2) —
@@ -70,32 +80,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // exec/gcp-secret-manager embedding refs on gateway pods — a future BYO
 // embedding ref must use a distinguishable source/provider shape. Non-platform
 // (BYO-shaped) ids pass through untouched.
+function rebindPlatformEmbeddingRef(entry: unknown): unknown {
+  if (!isRecord(entry) || typeof entry.id !== "string" || entry.id.length === 0) return entry;
+  const memorySearch = selectMemorySearch(entry);
+  if (!memorySearch) return entry;
+  const remote = memorySearch.remote;
+  if (!isRecord(remote)) return entry;
+  const apiKey = remote.apiKey;
+  if (!isRecord(apiKey) || typeof apiKey.id !== "string") return entry;
+  const platformShaped =
+    apiKey.id.startsWith("platform-openai-embedding-") ||
+    apiKey.id.startsWith(PLATFORM_EMBEDDING_SECRET_PREFIX) ||
+    (apiKey.id === OPENCLAW_REDACTED_SENTINEL &&
+      apiKey.source === "exec" &&
+      apiKey.provider === "gcp-secret-manager");
+  if (!platformShaped) return entry;
+  const expected = platformOpenAiEmbeddingSecretId(entry.id);
+  if (apiKey.id === expected) return entry;
+  const reboundSearch = {
+    ...memorySearch,
+    remote: { ...remote, apiKey: { ...apiKey, id: expected } },
+  };
+  if (isRecord(entry.memorySearch)) return { ...entry, memorySearch: reboundSearch };
+  return { ...entry, memory: { ...recordOrEmpty(entry.memory), search: reboundSearch } };
+}
+
 export function rebindPlatformEmbeddingRefs(agents: readonly unknown[]): unknown[] {
-  return agents.map((entry) => {
-    if (!isRecord(entry) || typeof entry.id !== "string" || entry.id.length === 0) return entry;
-    const memorySearch = entry.memorySearch;
-    if (!isRecord(memorySearch)) return entry;
-    const remote = memorySearch.remote;
-    if (!isRecord(remote)) return entry;
-    const apiKey = remote.apiKey;
-    if (!isRecord(apiKey) || typeof apiKey.id !== "string") return entry;
-    const platformShaped =
-      apiKey.id.startsWith("platform-openai-embedding-") ||
-      apiKey.id.startsWith(PLATFORM_EMBEDDING_SECRET_PREFIX) ||
-      (apiKey.id === OPENCLAW_REDACTED_SENTINEL &&
-        apiKey.source === "exec" &&
-        apiKey.provider === "gcp-secret-manager");
-    if (!platformShaped) return entry;
-    const expected = platformOpenAiEmbeddingSecretId(entry.id);
-    if (apiKey.id === expected) return entry;
-    return {
-      ...entry,
-      memorySearch: {
-        ...memorySearch,
-        remote: { ...remote, apiKey: { ...apiKey, id: expected } },
-      },
-    };
-  });
+  return agents.map(rebindPlatformEmbeddingRef);
 }
 
 export interface ProjectRestoreInput {

@@ -38,7 +38,7 @@ export function readOpenclawConfig(configPath) {
 }
 /**
  * True iff `slug`'s coach is fully wired in an already-parsed config: its coach
- * agent is in `agents.list`, its `{slug}-coach` Mattermost account exists, and
+ * agent is in `agents.list` or keyed `agents.entries`, its `{slug}-coach` Mattermost account exists, and
  * a Mattermost binding references both the coach agent and that account. Pure:
  * callers that check many slugs parse the config once (see readOpenclawConfig).
  */
@@ -48,10 +48,12 @@ export function coachWiredInParsedConfig(config, slug) {
     const agentId = customerCoachAgentId(slug);
     const accountId = `${slug}-coach`;
     const agents = config.agents?.list;
+    const entries = config.agents?.entries;
     const accounts = config.channels?.mattermost?.accounts;
     const bindings = config.bindings;
-    return Boolean(Array.isArray(agents) &&
-        agents.some((entry) => isRecord(entry) && entry.id === agentId) &&
+    return Boolean((isRecord(entries)
+        ? Object.prototype.hasOwnProperty.call(entries, agentId)
+        : Array.isArray(agents) && agents.some((entry) => isRecord(entry) && entry.id === agentId)) &&
         accounts &&
         Object.prototype.hasOwnProperty.call(accounts, accountId) &&
         Array.isArray(bindings) &&

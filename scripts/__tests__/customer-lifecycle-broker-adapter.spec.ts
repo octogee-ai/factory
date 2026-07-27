@@ -9,6 +9,7 @@ import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
 import {
   applyConfigPatch,
   customerConfigFullAgentListReplacePaths,
+  customerConfigReplacePaths,
 } from "../lib/apply-config-patch.js";
 import {
   platformOpenAiEmbeddingMemorySearch,
@@ -304,6 +305,60 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
     );
   });
 
+  it("null-deletes beta keyed customer entries without sending the retired agents.list key", async () => {
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
+    });
+
+    await adapter.applyRemoveCustomerConfigPatch("alice", "octogee-alice-coach");
+
+    const call = vi.mocked(applyConfigPatch).mock.calls.at(-1)!;
+    const args = call[0] as {
+      buildPatch: (current: unknown) => {
+        agents: { entries: Record<string, unknown> };
+        bindings: Array<{ agentId?: string }>;
+      };
+      buildReplacePaths?: (current: unknown) => string[];
+    };
+    const current = {
+      agents: {
+        entries: {
+          "octogee-ops-eggman": { model: "house" },
+          "octogee-alice-coach": { model: "house" },
+          "octogee-alice-proj-old-coach": { model: "house" },
+        },
+      },
+      bindings: [
+        { agentId: "octogee-ops-eggman" },
+        { agentId: "octogee-alice-coach" },
+        { agentId: "octogee-alice-proj-old-coach" },
+      ],
+      channels: {
+        mattermost: {
+          accounts: { "alice-coach": {}, "alice-proj-old": {}, "ops-coach": {} },
+        },
+      },
+    };
+
+    const patch = args.buildPatch(current);
+    expect(patch.agents).toEqual({
+      entries: {
+        "octogee-alice-coach": null,
+        "octogee-alice-proj-old-coach": null,
+      },
+    });
+    expect(patch.bindings).toEqual([{ agentId: "octogee-ops-eggman" }]);
+    expect(patch.channels.mattermost.accounts).toEqual({
+      "alice-coach": null,
+      "alice-proj-old": null,
+    });
+    expect(args.buildReplacePaths?.(current)).toEqual(
+      customerConfigReplacePaths(current, "alice"),
+    );
+  });
+
   it("self-heals a surviving coach's shifted platform embedding ref on removal — sequential removes leave no stale ref (r2 wedge)", async () => {
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),
@@ -442,6 +497,67 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     });
     expect(args.buildReplacePaths?.(current)).toEqual(
       customerConfigFullAgentListReplacePaths(current, "alice"),
+    );
+  });
+
+  it("patches beta keyed entries with id-free values and removes stale project entries", async () => {
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
+    });
+    const snapshot: FleetBrokerUserSnapshot = {
+      uid: "uid-alice",
+      slug: "alice",
+      tier: "standard",
+      gatewayId: "default",
+      status: "",
+      agentIds: [],
+      repoUrl: "",
+      mattermostUserId: "mm-alice",
+      customerMmUserId: "mm-alice",
+      greetingPosted: false,
+      channels: [],
+      projects: [],
+      ownerName: "Alice",
+      coachToken: "pat-1",
+      coachMmUserId: "mm-alice-coach",
+    };
+
+    await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" });
+
+    const call = vi.mocked(applyConfigPatch).mock.calls.at(-1)!;
+    const args = call[0] as {
+      buildPatch: (current: unknown) => {
+        agents: { entries: Record<string, Record<string, unknown> | null> };
+      };
+      buildReplacePaths?: (current: unknown) => string[];
+    };
+    const current = {
+      agents: {
+        entries: {
+          "octogee-ops-eggman": { model: "house" },
+          "octogee-alice-coach": { model: "stale" },
+          "octogee-alice-proj-old-coach": { model: "stale" },
+        },
+      },
+      bindings: [],
+      channels: { mattermost: { accounts: {} } },
+    };
+
+    const patch = args.buildPatch(current);
+    expect(patch.agents.entries["octogee-alice-proj-old-coach"]).toBeNull();
+    expect(patch.agents.entries["octogee-alice-coach"]).toMatchObject({
+      model: "platform-openrouter/z-ai/glm-5.2",
+      memory: {
+        search: platformOpenAiEmbeddingMemorySearch("octogee-alice-coach"),
+      },
+    });
+    expect(patch.agents.entries["octogee-alice-coach"]).not.toHaveProperty("id");
+    expect(patch.agents.entries["octogee-alice-coach"]).not.toHaveProperty("memorySearch");
+    expect(patch.agents.entries).not.toHaveProperty("octogee-ops-eggman");
+    expect(args.buildReplacePaths?.(current)).toEqual(
+      customerConfigReplacePaths(current, "alice"),
     );
   });
 

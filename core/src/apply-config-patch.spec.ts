@@ -5,6 +5,8 @@ import * as os from "os";
 import {
   applyConfigPatch,
   configPatchRetryPlan,
+  customerAgentRosterPatch,
+  customerConfigAgentRosterReplacePaths,
   customerConfigFullAgentListReplacePaths,
   customerConfigReplacePaths,
   filterOutCustomerBindings,
@@ -868,6 +870,49 @@ describe("replaceCustomerAgentsInFullAgentList", () => {
       "octogee-alice-coach",
       "octogee-bob-coach",
     ]);
+  });
+});
+
+describe("customerAgentRosterPatch", () => {
+  it("uses beta keyed entries, deletes retired customer keys, and translates memorySearch", () => {
+    const current = {
+      agents: {
+        entries: {
+          "octogee-alice-coach": { model: "old" },
+          "octogee-alice-proj-old-coach": { model: "old" },
+          "octogee-bob-coach": { model: "house" },
+        },
+      },
+    };
+    const patch = customerAgentRosterPatch(current, "alice", [
+      {
+        id: "octogee-alice-coach",
+        model: "new",
+        memorySearch: { provider: "openai-compatible" },
+      },
+      { id: "octogee-bob-coach", model: "house" },
+    ]);
+
+    expect(patch).toEqual({
+      entries: {
+        "octogee-alice-coach": {
+          model: "new",
+          memory: { search: { provider: "openai-compatible" } },
+        },
+        "octogee-alice-proj-old-coach": null,
+      },
+    });
+    expect(customerConfigAgentRosterReplacePaths(current, "alice")).toEqual(["bindings"]);
+  });
+
+  it("retains the stable list patch and destructive array guard confirmations", () => {
+    const current = { agents: { list: [{ id: "octogee-bob-coach" }] } };
+    expect(customerAgentRosterPatch(current, "alice", [{ id: "octogee-alice-coach" }])).toEqual({
+      list: [{ id: "octogee-alice-coach" }],
+    });
+    expect(customerConfigAgentRosterReplacePaths(current, "alice")).toEqual(
+      customerConfigFullAgentListReplacePaths(current, "alice"),
+    );
   });
 });
 

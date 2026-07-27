@@ -410,6 +410,37 @@ export function upsertAgentInFullAgentList(
   ];
 }
 
+function keyedAgentEntries(current: unknown): Record<string, unknown> | null {
+  const entries = (current as { agents?: { entries?: unknown } } | undefined)?.agents?.entries;
+  return isPlainObject(entries) ? entries : null;
+}
+
+function fullAgentListFromCurrent(current: unknown): unknown[] {
+  const entries = keyedAgentEntries(current);
+  if (entries) {
+    return Object.entries(entries).map(([id, entry]) => {
+      if (!isPlainObject(entry)) {
+        throw new Error(`agents.entries.${id} must be an object`);
+      }
+      return { ...entry, id };
+    });
+  }
+  const list = (current as { agents?: { list?: unknown } } | undefined)?.agents?.list;
+  return Array.isArray(list) ? list : [];
+}
+
+function keyedEntryFromAgent(agent: unknown): [string, Record<string, unknown>] {
+  if (!isPlainObject(agent) || typeof agent.id !== "string" || agent.id.length === 0) {
+    throw new Error("customer agent patch requires every agent to have a non-empty id");
+  }
+  const { id, memorySearch, ...entry } = agent;
+  if (isPlainObject(memorySearch)) {
+    const memory = isPlainObject(entry.memory) ? entry.memory : {};
+    entry.memory = { ...memory, search: memorySearch };
+  }
+  return [id, entry];
+}
+
 function isCustomerAgentId(value: unknown, slug: string): boolean {
   if (typeof value !== "string") return false;
   const parsed = parseAgentId(value);
@@ -424,8 +455,7 @@ export function replaceCustomerAgentsInFullAgentList(
   slug: string,
   agentEntries: readonly unknown[],
 ): unknown[] {
-  const list = (current as { agents?: { list?: unknown } } | undefined)?.agents?.list;
-  const currentAgents = Array.isArray(list) ? list : [];
+  const currentAgents = fullAgentListFromCurrent(current);
   const next: unknown[] = [];
   let inserted = false;
   for (const agent of currentAgents) {
@@ -441,6 +471,30 @@ export function replaceCustomerAgentsInFullAgentList(
   }
   if (!inserted) next.push(...agentEntries);
   return next;
+}
+
+export function customerAgentRosterPatch(
+  current: unknown,
+  slug: string,
+  agentEntries: readonly unknown[],
+): { list: unknown[] } | { entries: Record<string, Record<string, unknown> | null> } {
+  const currentEntries = keyedAgentEntries(current);
+  if (!currentEntries) return { list: [...agentEntries] };
+
+  const entries: Record<string, Record<string, unknown> | null> = {};
+  for (const [id] of Object.entries(currentEntries)) {
+    if (isCustomerAgentId(id, slug)) entries[id] = null;
+  }
+  for (const agent of agentEntries) {
+    const [id, entry] = keyedEntryFromAgent(agent);
+    if (
+      isCustomerAgentId(id, slug) ||
+      JSON.stringify(currentEntries[id]) !== JSON.stringify(entry)
+    ) {
+      entries[id] = entry;
+    }
+  }
+  return { entries };
 }
 
 export function filterOutCustomerBindings<T extends { agentId?: unknown }>(
@@ -541,4 +595,10 @@ export function customerConfigFullAgentListReplacePaths(current: unknown, slug: 
     ...fullAgentListReplacePaths(),
     ...customerConfigReplacePaths(current, slug),
   ];
+}
+
+export function customerConfigAgentRosterReplacePaths(current: unknown, slug: string): string[] {
+  return keyedAgentEntries(current)
+    ? customerConfigReplacePaths(current, slug)
+    : customerConfigFullAgentListReplacePaths(current, slug);
 }
