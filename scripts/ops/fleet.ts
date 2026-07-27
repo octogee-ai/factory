@@ -27,6 +27,7 @@ import {
   awaitOperation,
   type OperationsDb,
 } from "../lib/glm-operations.js";
+import { readReleaseStatus, type ReleaseStatusSnapshot } from "../lib/release-status.js";
 
 const COLOR_ENABLED =
   process.stdout.isTTY === true &&
@@ -119,6 +120,15 @@ const VERBS: readonly VerbHelp[] = [
     writes: false,
   },
   {
+    verb: "release status",
+    summary: "Show Cowboy's one-shot release convergence view.",
+    args: "",
+    description:
+      "Reads Firestore desired roots, selected immutable release payloads, and Cowboy runtime observations once. Reports desired/live/runtime release state and heartbeat status/version; it never waits for convergence or changes fleet state.",
+    examples: ["fleet --env=test release status"],
+    writes: false,
+  },
+  {
     verb: "add-customer",
     summary: "Override placement: assign customer to a specific gateway.",
     args: "<slug> --to=<gw-id> [--apply]",
@@ -161,13 +171,13 @@ export function resolveFleetDeploymentTarget(environment: "test" | "prod"): {
   };
 }
 
-function parsedVerb(args: ParsedFleetArgs): VerbHelp | null {
+export function resolveFleetVerb(args: ParsedFleetArgs): VerbHelp | null {
   const [verb, sub] = args.positional;
   return verbsByName.get(`${verb ?? ""} ${sub ?? ""}`.trim()) ?? verbsByName.get(verb ?? "") ?? null;
 }
 
 export function resolveFleetCredentialMode(args: ParsedFleetArgs): FleetCredentialMode {
-  const verb = parsedVerb(args);
+  const verb = resolveFleetVerb(args);
   return verb?.writes === true && args.flags.apply === true
     ? "application-default"
     : "service-account-key";
@@ -698,6 +708,37 @@ const pods = allGatewayPods();
   }))));
 }
 
+export function releaseStatusRows(status: ReleaseStatusSnapshot): Array<Record<string, string | number>> {
+  return status.gateways.map((gateway) => ({
+    gatewayId: gateway.gatewayId,
+    default: gateway.isDefault ? "*" : "",
+    desired: gateway.desiredRelease ?? "-",
+    live: gateway.liveRelease ?? "-",
+    runtime: gateway.runtimeRelease ?? "-",
+    lifecycle: gateway.runtimeLifecycle ?? "-",
+    heartbeat: gateway.heartbeatStatus ?? "-",
+    heartbeatAt: gateway.lastHeartbeatAt === null
+      ? "-"
+      : new Date(gateway.lastHeartbeatAt).toISOString(),
+    tag: gateway.desiredImageTag ?? "-",
+    version: gateway.heartbeatVersion ?? "-",
+    status: gateway.observation,
+  }));
+}
+
+async function releaseStatus(): Promise<void> {
+  const status = await readReleaseStatus(db);
+  const defaultLabel = status.defaultGatewayId || (
+    status.defaultSelection === "invalid" ? "(invalid)" : "(unconfigured)"
+  );
+  console.log(
+    bold("RELEASE STATUS") + dim(
+      `  default=${defaultLabel} (${status.defaultSelection})`,
+    ),
+  );
+  console.log(table(releaseStatusRows(status)));
+}
+
 async function addCustomer(slug: string, gatewayId: string, apply: boolean): Promise<void> {
   const user = await findUserBySlug(slug);
   if (!user) {
@@ -931,6 +972,8 @@ async function main(): Promise<void> {
         return missingArg("inspect gateway");
       }
       return inspectGateway(args.positional[2]);
+    case "release status":
+      return releaseStatus();
   }
 
   switch (verb) {
