@@ -38,3 +38,9 @@ variable "authorized_domains" {
   description = "Firebase Auth redirect domains for this target"
   type        = list(string)
 }
+
+variable "retirement_mode" {
+  description = "Explicitly allow destruction of an abandoned WEST candidate data project"
+  type        = bool
+  default     = false
+}

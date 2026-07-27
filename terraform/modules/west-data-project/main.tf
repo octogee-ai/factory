@@ -69,7 +69,7 @@ resource "google_project" "data" {
   org_id              = var.organization_id
   billing_account     = var.billing_account_id
   auto_create_network = false
-  deletion_policy     = "PREVENT"
+  deletion_policy     = var.retirement_mode ? "DELETE" : "PREVENT"
 
   labels = {
     deployment-target = var.deployment_target
@@ -98,7 +98,7 @@ resource "google_firebase_web_app" "platform" {
   project  = google_project.data.project_id
 
   display_name    = "Octogee ${var.deployment_target}"
-  deletion_policy = "PREVENT"
+  deletion_policy = var.retirement_mode ? "DELETE" : "PREVENT"
 
   depends_on = [google_firebase_project.data]
 }
@@ -125,8 +125,8 @@ resource "google_firestore_database" "default" {
   concurrency_mode                  = "OPTIMISTIC"
   app_engine_integration_mode       = "DISABLED"
   point_in_time_recovery_enablement = "POINT_IN_TIME_RECOVERY_ENABLED"
-  delete_protection_state           = "DELETE_PROTECTION_ENABLED"
-  deletion_policy                   = "ABANDON"
+  delete_protection_state           = var.retirement_mode ? "DELETE_PROTECTION_DISABLED" : "DELETE_PROTECTION_ENABLED"
+  deletion_policy                   = var.retirement_mode ? "DELETE" : "ABANDON"
 
   depends_on = [google_firebase_project.data]
 }
@@ -138,7 +138,7 @@ resource "google_firestore_field" "ttl" {
   database        = google_firestore_database.default.name
   collection      = each.value.collection
   field           = each.value.field
-  deletion_policy = "ABANDON"
+  deletion_policy = var.retirement_mode ? "DELETE" : "ABANDON"
 
   ttl_config {}
 
@@ -184,7 +184,7 @@ resource "google_storage_bucket" "firebase" {
   project                     = google_project.data.project_id
   name                        = "${var.project_id}.firebasestorage.app"
   location                    = var.region
-  force_destroy               = false
+  force_destroy               = var.retirement_mode
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
 
