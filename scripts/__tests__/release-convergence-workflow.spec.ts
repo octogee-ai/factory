@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -23,6 +23,10 @@ describe("tagged gateway release desired-state workflow", () => {
     expect(workflow).toMatch(
       /update-environment-desired-state:\n\s+needs: \[matrix-setup, alias-with-oc-version, promotion-authority\]/,
     );
+  });
+
+  it("does not retain the now-uninvoked convergence-baseline capture entrypoint", () => {
+    expect(existsSync(path.resolve(__dirname, "../ops/capture-release-convergence-baseline.ts"))).toBe(false);
   });
 });
 
