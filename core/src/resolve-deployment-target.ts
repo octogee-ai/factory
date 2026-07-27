@@ -134,6 +134,7 @@ export function formatDeploymentTargetOutput(
 
 export function runDeploymentTargetResolver(argv: readonly string[]): string {
   let format: DeploymentTargetOutputFormat = "github";
+  let rejectCandidateTarget = false;
   const selectorArguments: string[] = [];
   for (const argument of argv) {
     if (argument.startsWith("--format=")) {
@@ -142,12 +143,20 @@ export function runDeploymentTargetResolver(argv: readonly string[]): string {
         throw new Error(`Unknown output format: ${value}`);
       }
       format = value;
+    } else if (argument === "--reject-candidate-target") {
+      rejectCandidateTarget = true;
     } else {
       selectorArguments.push(argument);
     }
   }
+  const settings = resolveDeploymentTargetArguments(selectorArguments);
+  if (rejectCandidateTarget && settings.lifecycle === "candidate") {
+    throw new Error(
+      `Deployment target ${settings.targetId} is a candidate and cannot be used for release or build automation`,
+    );
+  }
   return formatDeploymentTargetOutput(
-    resolveDeploymentTargetArguments(selectorArguments),
+    settings,
     format,
   );
 }

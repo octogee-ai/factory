@@ -31,6 +31,19 @@ describe("deployment target resolver", () => {
     });
   });
 
+  it("rejects a retired candidate target when a release or build requires a non-candidate target", () => {
+    expect(() => runDeploymentTargetResolver([
+      "--target=test-west",
+      "--reject-candidate-target",
+    ])).toThrow("Deployment target test-west is a candidate and cannot be used for release or build automation");
+
+    expect(JSON.parse(runDeploymentTargetResolver([
+      "--environment=build-week",
+      "--reject-candidate-target",
+      "--format=json",
+    ]))).toMatchObject({ target_id: "build-week-central", lifecycle: "frozen" });
+  });
+
   it("requires exactly one target selector", () => {
     expect(() => resolveDeploymentTargetArguments([])).toThrow(
       "Exactly one of --environment or --target is required",

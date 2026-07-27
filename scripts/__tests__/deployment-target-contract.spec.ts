@@ -56,14 +56,20 @@ describe("deployment target consumers", () => {
     }
   });
 
-  it("lets release workflows select a reviewed candidate target explicitly", () => {
+  it("rejects retired candidate targets from release workflows while retaining an exact target handoff", () => {
+    const targetAction = source(".github/actions/resolve-deployment-target/action.yml");
+    expect(targetAction).toContain("--reject-candidate-target");
+    expect(targetAction).toContain("Candidate deployment targets cannot run release or build automation");
+
     for (const workflow of [
       ".github/workflows/releasev2.yml",
       ".github/workflows/build-and-deploy.yml",
       ".github/workflows/gateway-build-operator-base.yml",
       ".github/workflows/site.yml",
     ]) {
-      expect(source(workflow), workflow).toContain("deployment_target");
+      const contents = source(workflow);
+      expect(contents, workflow).toContain("deployment_target");
+      expect(contents, workflow).not.toContain("for example test-west");
     }
   });
 

@@ -107,6 +107,7 @@ export function formatDeploymentTargetOutput(settings, format) {
 }
 export function runDeploymentTargetResolver(argv) {
     let format = "github";
+    let rejectCandidateTarget = false;
     const selectorArguments = [];
     for (const argument of argv) {
         if (argument.startsWith("--format=")) {
@@ -116,11 +117,18 @@ export function runDeploymentTargetResolver(argv) {
             }
             format = value;
         }
+        else if (argument === "--reject-candidate-target") {
+            rejectCandidateTarget = true;
+        }
         else {
             selectorArguments.push(argument);
         }
     }
-    return formatDeploymentTargetOutput(resolveDeploymentTargetArguments(selectorArguments), format);
+    const settings = resolveDeploymentTargetArguments(selectorArguments);
+    if (rejectCandidateTarget && settings.lifecycle === "candidate") {
+        throw new Error(`Deployment target ${settings.targetId} is a candidate and cannot be used for release or build automation`);
+    }
+    return formatDeploymentTargetOutput(settings, format);
 }
 if (isDeploymentTargetResolverEntrypoint(import.meta.url, process.argv[1])) {
     try {
