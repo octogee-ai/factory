@@ -160,7 +160,7 @@ describe("listGatewayBuilds — Artifact Registry adapter", () => {
     await listGatewayBuilds({ service: "octogee-gateway" });
     const url = fetchMock.mock.calls[0][0] as string;
     expect(url).toContain(
-      "/v1/projects/octogee/locations/us-west1/repositories/octogee/dockerImages",
+      "/v1/projects/octogee/locations/us-central1/repositories/octogee/dockerImages",
     );
   });
 
