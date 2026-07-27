@@ -30,3 +30,14 @@ variable "additional_decrypter_sas" {
   type        = list(string)
   default     = []
 }
+
+variable "crypto_key_deletion_policy" {
+  description = "Terraform deletion policy for the credential key; normal environments must retain PREVENT"
+  type        = string
+  default     = "PREVENT"
+
+  validation {
+    condition     = contains(["PREVENT", "DELETE"], var.crypto_key_deletion_policy)
+    error_message = "crypto_key_deletion_policy must be PREVENT or DELETE."
+  }
+}

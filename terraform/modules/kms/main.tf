@@ -40,10 +40,7 @@ resource "google_kms_crypto_key" "creds_at_rest" {
   key_ring        = google_kms_key_ring.creds.id
   purpose         = "ENCRYPT_DECRYPT"
   rotation_period = "7776000s" # 90 days
-
-  lifecycle {
-    prevent_destroy = true
-  }
+  deletion_policy = var.crypto_key_deletion_policy
 }
 
 # Grant the workspace-api SA encrypt + decrypt on this key. Scoped to
