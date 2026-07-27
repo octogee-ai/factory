@@ -485,6 +485,7 @@ describe("fleet CLI args", () => {
         runtimeLifecycle: "reconciling",
         heartbeatStatus: "ready",
         heartbeatVersion: "abc1234-oc2026.7.1",
+        lastHeartbeatAt: 1_000,
         observation: "rolling",
       }],
     })).toEqual([{
@@ -495,6 +496,7 @@ describe("fleet CLI args", () => {
       runtime: 3,
       lifecycle: "reconciling",
       heartbeat: "ready",
+      heartbeatAt: "1970-01-01T00:00:01.000Z",
       tag: "abc1234-oc2026.7.1",
       version: "abc1234-oc2026.7.1",
       status: "rolling",

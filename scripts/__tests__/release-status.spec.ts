@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 
 import {
   observeGatewayRelease,
@@ -7,6 +8,8 @@ import {
 } from "../lib/release-status.js";
 
 type DocData = Record<string, unknown>;
+const NOW = 10_000_000;
+const FRESH_HEARTBEAT_AT = NOW - 1_000;
 
 function gatewayRoot(
   gatewayId: string,
@@ -53,6 +56,7 @@ function runtime(
     heartbeat: {
       status: "ready",
       version: "abc1234-oc2026.7.1",
+      lastHeartbeatAt: FRESH_HEARTBEAT_AT,
     },
     ...overrides,
   };
@@ -157,11 +161,12 @@ describe("release status", () => {
         heartbeat: {
           status: "ready",
           version: `abc1234-oc2026.7.1@sha256:${"a".repeat(64)}`,
+          lastHeartbeatAt: FRESH_HEARTBEAT_AT,
         },
       }),
     }, ["default"], readPaths);
 
-    await expect(readReleaseStatus(db as never)).resolves.toEqual({
+    await expect(readReleaseStatus(db as never, NOW)).resolves.toEqual({
       defaultGatewayId: "default",
       defaultSelection: "selected",
       gateways: [{
@@ -175,6 +180,7 @@ describe("release status", () => {
         runtimeLifecycle: "serving",
         heartbeatStatus: "ready",
         heartbeatVersion: `abc1234-oc2026.7.1@sha256:${"a".repeat(64)}`,
+        lastHeartbeatAt: FRESH_HEARTBEAT_AT,
         observation: "converged",
       }],
     });
@@ -230,7 +236,7 @@ describe("release status", () => {
       "glmGateways/default": runtime("default"),
     }, ["default"]);
 
-    await expect(readReleaseStatus(db as never)).resolves.toMatchObject({
+    await expect(readReleaseStatus(db as never, NOW)).resolves.toMatchObject({
       defaultGatewayId,
       defaultSelection,
       gateways: [{
@@ -253,10 +259,11 @@ describe("release status", () => {
         lifecycle: "serving",
         heartbeatStatus: "ready",
         heartbeatVersion: "abc1234-oc2026.7.1",
+        lastHeartbeatAt: FRESH_HEARTBEAT_AT,
       },
     };
 
-    expect(observeGatewayRelease(input)).toBe("rolling");
+    expect(observeGatewayRelease(input, NOW)).toBe("rolling");
   });
 
   it.each([
@@ -275,6 +282,7 @@ describe("release status", () => {
         lifecycle: "serving",
         heartbeatStatus: "ready",
         heartbeatVersion: "abc1234-oc2026.7.1",
+        lastHeartbeatAt: FRESH_HEARTBEAT_AT,
       },
     }],
     ["not-serving", {
@@ -284,6 +292,7 @@ describe("release status", () => {
         lifecycle: "provisioning",
         heartbeatStatus: "ready",
         heartbeatVersion: "abc1234-oc2026.7.1",
+        lastHeartbeatAt: FRESH_HEARTBEAT_AT,
       },
     }],
     ["unhealthy", {
@@ -293,6 +302,7 @@ describe("release status", () => {
         lifecycle: "serving",
         heartbeatStatus: "unreachable",
         heartbeatVersion: "abc1234-oc2026.7.1",
+        lastHeartbeatAt: FRESH_HEARTBEAT_AT,
       },
     }],
     ["paused", {
@@ -313,11 +323,12 @@ describe("release status", () => {
         lifecycle: "serving",
         heartbeatStatus: "ready",
         heartbeatVersion: "abc1234-oc2026.7.1",
+        lastHeartbeatAt: FRESH_HEARTBEAT_AT,
       },
       ...overrides,
     };
 
-    expect(observeGatewayRelease(input)).toBe(observation);
+    expect(observeGatewayRelease(input, NOW)).toBe(observation);
   });
 
   it("reports a heartbeat that is not serving the desired release tag", () => {
@@ -332,8 +343,9 @@ describe("release status", () => {
         lifecycle: "serving",
         heartbeatStatus: "ready",
         heartbeatVersion: "old-tag",
+        lastHeartbeatAt: FRESH_HEARTBEAT_AT,
       },
-    })).toBe("version-drift");
+    }, NOW)).toBe("version-drift");
   });
 
   it("recognizes the release tag when the desired payload is digest-pinned", () => {
@@ -348,8 +360,50 @@ describe("release status", () => {
         lifecycle: "serving",
         heartbeatStatus: "ready",
         heartbeatVersion: "abc1234-oc2026.7.1",
+        lastHeartbeatAt: FRESH_HEARTBEAT_AT,
       },
-    })).toBe("converged");
+    }, NOW)).toBe("converged");
+  });
+
+  it("reports an old ready heartbeat as stale instead of converged", () => {
+    expect(observeGatewayRelease({
+      gatewayId: "default",
+      desiredStatus: "running",
+      desiredRelease: 4,
+      liveRelease: 4,
+      desiredImageTag: "abc1234-oc2026.7.1",
+      runtime: {
+        release: 4,
+        lifecycle: "serving",
+        heartbeatStatus: "ready",
+        heartbeatVersion: "abc1234-oc2026.7.1",
+        lastHeartbeatAt: NOW - GATEWAY_UNREACHABLE_AFTER_MS - 1,
+      },
+    }, NOW)).toBe("heartbeat-stale");
+  });
+
+  it("accepts Cowboy's booting heartbeat and reports it as unhealthy", async () => {
+    const db = database({
+      "config/orchestrator": { defaultGatewayId: "default" },
+      "gateways/default": gatewayRoot("default"),
+      "gateways/default/releases/4": release("default", 4),
+      "glmGateways/default": runtime("default", {
+        heartbeat: {
+          status: "booting",
+          version: "abc1234-oc2026.7.1",
+          lastHeartbeatAt: FRESH_HEARTBEAT_AT,
+        },
+      }),
+    }, ["default"]);
+
+    await expect(readReleaseStatus(db as never, NOW)).resolves.toMatchObject({
+      gateways: [{
+        gatewayId: "default",
+        heartbeatStatus: "booting",
+        lastHeartbeatAt: FRESH_HEARTBEAT_AT,
+        observation: "unhealthy",
+      }],
+    });
   });
 
   it("surfaces malformed durable roots instead of silently omitting them", async () => {
@@ -358,7 +412,7 @@ describe("release status", () => {
       "gateways/default": { gatewayId: "default" },
     }, ["default"]);
 
-    await expect(readReleaseStatus(db as never)).resolves.toEqual({
+    await expect(readReleaseStatus(db as never, NOW)).resolves.toEqual({
       defaultGatewayId: "default",
       defaultSelection: "dangling",
       gateways: [{
@@ -372,6 +426,7 @@ describe("release status", () => {
         runtimeLifecycle: null,
         heartbeatStatus: null,
         heartbeatVersion: null,
+        lastHeartbeatAt: null,
         observation: "invalid-root",
       }],
     });
@@ -396,13 +451,14 @@ describe("release status", () => {
       "glmGateways/default": malformedRuntime,
     }, ["default"]);
 
-    await expect(readReleaseStatus(db as never)).resolves.toMatchObject({
+    await expect(readReleaseStatus(db as never, NOW)).resolves.toMatchObject({
       gateways: [{
         gatewayId: "default",
         runtimeRelease: null,
         runtimeLifecycle: null,
         heartbeatStatus: null,
         heartbeatVersion: null,
+        lastHeartbeatAt: null,
         observation: "missing-runtime",
       }],
     });

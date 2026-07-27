@@ -717,6 +717,9 @@ export function releaseStatusRows(status: ReleaseStatusSnapshot): Array<Record<s
     runtime: gateway.runtimeRelease ?? "-",
     lifecycle: gateway.runtimeLifecycle ?? "-",
     heartbeat: gateway.heartbeatStatus ?? "-",
+    heartbeatAt: gateway.lastHeartbeatAt === null
+      ? "-"
+      : new Date(gateway.lastHeartbeatAt).toISOString(),
     tag: gateway.desiredImageTag ?? "-",
     version: gateway.heartbeatVersion ?? "-",
     status: gateway.observation,

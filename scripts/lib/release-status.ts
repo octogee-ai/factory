@@ -1,5 +1,8 @@
 import type { Firestore } from "firebase-admin/firestore";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
+import {
+  GATEWAY_UNREACHABLE_AFTER_MS,
+  GATEWAYS_COLLECTION,
+} from "@octogee/shared/types/fleet-controller";
 import {
   GATEWAY_RELEASES_SUBCOLLECTION,
   isGatewayRuntimeDoc,
@@ -16,6 +19,7 @@ export type ReleaseStatusObservation =
   | "missing-release"
   | "missing-runtime"
   | "runtime-stale"
+  | "heartbeat-stale"
   | "not-serving"
   | "unhealthy"
   | "version-drift"
@@ -28,6 +32,7 @@ export interface ReleaseStatusRuntime {
   lifecycle: string;
   heartbeatStatus: string;
   heartbeatVersion: string | null;
+  lastHeartbeatAt: number;
 }
 
 export interface ReleaseStatusGatewayInput {
@@ -50,6 +55,7 @@ export interface ReleaseStatusGateway {
   runtimeLifecycle: string | null;
   heartbeatStatus: string | null;
   heartbeatVersion: string | null;
+  lastHeartbeatAt: number | null;
   observation: ReleaseStatusObservation;
 }
 
@@ -65,7 +71,10 @@ export type ReleaseStatusDefaultSelection =
   | "invalid"
   | "dangling";
 
-export function observeGatewayRelease(input: ReleaseStatusGatewayInput): ReleaseStatusObservation {
+export function observeGatewayRelease(
+  input: ReleaseStatusGatewayInput,
+  now = Date.now(),
+): ReleaseStatusObservation {
   if (input.desiredStatus === "retired") return "retired";
   if (input.desiredStatus === "paused") return "paused";
   if (!input.desiredImageTag) return "missing-release";
@@ -74,10 +83,27 @@ export function observeGatewayRelease(input: ReleaseStatusGatewayInput): Release
   if (input.runtime.release !== input.desiredRelease) return "runtime-stale";
   if (input.runtime.lifecycle !== "serving") return "not-serving";
   if (input.runtime.heartbeatStatus !== "ready") return "unhealthy";
+  if (now - input.runtime.lastHeartbeatAt > GATEWAY_UNREACHABLE_AFTER_MS) {
+    return "heartbeat-stale";
+  }
   if (!imageTagMatchesArtifact(input.runtime.heartbeatVersion, input.desiredImageTag)) {
     return "version-drift";
   }
   return "converged";
+}
+
+function millis(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (value instanceof Date) return value.getTime();
+  if (
+    value &&
+    typeof value === "object" &&
+    typeof (value as { toMillis?: unknown }).toMillis === "function"
+  ) {
+    const result = (value as { toMillis: () => unknown }).toMillis();
+    return typeof result === "number" && Number.isFinite(result) ? result : null;
+  }
+  return null;
 }
 
 function projectRuntime(value: unknown, gatewayId: string): ReleaseStatusRuntime | null {
@@ -85,20 +111,20 @@ function projectRuntime(value: unknown, gatewayId: string): ReleaseStatusRuntime
   const heartbeat = value.heartbeat as unknown;
   if (!heartbeat || typeof heartbeat !== "object") return null;
   const observation = heartbeat as Record<string, unknown>;
+  if (typeof observation.status !== "string" || observation.status.length === 0) return null;
   if (
-    observation.status !== "unknown" &&
-    observation.status !== "ready" &&
-    observation.status !== "unreachable" &&
-    observation.status !== "error"
-  ) {
-    return null;
-  }
-  if (observation.version !== null && typeof observation.version !== "string") return null;
+    observation.version !== undefined &&
+    observation.version !== null &&
+    typeof observation.version !== "string"
+  ) return null;
+  const lastHeartbeatAt = millis(observation.lastHeartbeatAt);
+  if (lastHeartbeatAt === null) return null;
   return {
     release: value.release,
     lifecycle: value.lifecycle,
     heartbeatStatus: observation.status,
-    heartbeatVersion: observation.version,
+    heartbeatVersion: typeof observation.version === "string" ? observation.version : null,
+    lastHeartbeatAt,
   };
 }
 
@@ -119,6 +145,7 @@ function invalidRoot(gatewayId: string, defaultGatewayId: string | null): Releas
     runtimeLifecycle: null,
     heartbeatStatus: null,
     heartbeatVersion: null,
+    lastHeartbeatAt: null,
     observation: "invalid-root",
   };
 }
@@ -142,6 +169,7 @@ function observeDefaultSelection(
 
 export async function readReleaseStatus(
   db: Pick<Firestore, "collection" | "doc">,
+  now = Date.now(),
 ): Promise<ReleaseStatusSnapshot> {
   const [defaultGatewayDocument, gatewayDocuments] = await Promise.all([
     db.doc("config/orchestrator").get(),
@@ -178,6 +206,7 @@ export async function readReleaseStatus(
       runtimeLifecycle: runtime?.lifecycle ?? null,
       heartbeatStatus: runtime?.heartbeatStatus ?? null,
       heartbeatVersion: runtime?.heartbeatVersion ?? null,
+      lastHeartbeatAt: runtime?.lastHeartbeatAt ?? null,
       observation: observeGatewayRelease({
         gatewayId,
         desiredStatus: root.desiredStatus,
@@ -185,7 +214,7 @@ export async function readReleaseStatus(
         liveRelease: root.liveRelease,
         desiredImageTag,
         runtime,
-      }),
+      }, now),
     } satisfies ReleaseStatusGateway;
   }));
   const invalidRoots = gatewayDocuments.docs
