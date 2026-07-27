@@ -98,6 +98,15 @@ describe("releasev2 digest manifest", () => {
     expect(existingPromotion).toContain("release-digest-manifest.mjs reference");
   });
 
+  it("supplies an inert command when creating containers from scratch manifest images", () => {
+    const containerCreates = workflow.match(/docker create [^\n]+/g) ?? [];
+
+    expect(containerCreates).toHaveLength(4);
+    for (const create of containerCreates) {
+      expect(create).toContain("/bin/true");
+    }
+  });
+
   it("creates a release alias with create-only semantics and accepts only an identical concurrent winner", () => {
     const existingPromotion = workflow.slice(
       workflow.indexOf("  promote-main-digests:"),
