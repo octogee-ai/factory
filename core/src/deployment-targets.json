@@ -19,7 +19,7 @@
       "namespace": "octogee",
       "artifactRegistry": {
         "projectId": "octogee",
-        "location": "us-west1",
+        "location": "us-central1",
         "repository": "octogee"
       },
       "cloudSql": {
@@ -122,7 +122,7 @@
       "namespace": "octogee-test",
       "artifactRegistry": {
         "projectId": "octogee",
-        "location": "us-west1",
+        "location": "us-central1",
         "repository": "octogee"
       },
       "cloudSql": {
