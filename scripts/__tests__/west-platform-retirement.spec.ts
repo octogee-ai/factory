@@ -54,4 +54,18 @@ describe("WEST platform retirement contract", () => {
     expect(main).toContain("retain_backups_on_delete    = !local.west_platform_deletion_permitted");
     expect(main).toContain("RETIRE-WEST-PLATFORM");
   });
+
+  it("generates an actual destroy plan and sends that exact saved plan to the retirement verifier", () => {
+    const retirement = read("terraform/environments/west-platform/RETIREMENT.md");
+
+    expect(retirement).toContain("terraform -chdir=terraform/environments/west-platform plan \\");
+    expect(retirement).toContain("  -destroy \\");
+    expect(retirement).toContain("  -out=west-retirement.tfplan");
+    expect(retirement).toContain(
+      "terraform -chdir=terraform/environments/west-platform show -json west-retirement.tfplan \\",
+    );
+    expect(retirement).toContain(
+      "| node ../../../scripts/ops/verify-west-platform-retirement.mjs --retirement",
+    );
+  });
 });
