@@ -397,7 +397,7 @@ describe("deployment target consumers", () => {
     expect(controlPlane).toContain(
       'on_source_disk_delete = "APPLY_RETENTION_POLICY"',
     );
-    expect(controlPlane).toContain("storage_locations = [var.region]");
+    expect(controlPlane).toContain('storage_locations = ["us-central1"]');
     expect(controlPlane).toContain('role_id     = "octogeeCentralPvcSnapshots"');
     for (const permission of [
       "compute.disks.addResourcePolicies",
