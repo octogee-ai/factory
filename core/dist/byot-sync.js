@@ -205,6 +205,39 @@ export function coachFullAgentList(current, agentId, model, tools) {
         return next;
     });
 }
+function keyedAgentEntries(current) {
+    const entries = current?.agents?.entries;
+    return isAgentRecord(entries) ? entries : null;
+}
+export function coachAgentPatch(current, agentId, model, tools) {
+    const entries = keyedAgentEntries(current);
+    if (!entries)
+        return { list: coachFullAgentList(current, agentId, model, tools) };
+    const currentEntry = entries[agentId];
+    if (!isAgentRecord(currentEntry))
+        return { entries: {} };
+    const [next] = coachFullAgentList({ agents: { list: [{ ...currentEntry, id: agentId }] } }, agentId, model, tools);
+    if (!isAgentRecord(next))
+        throw new Error(`coach patch: invalid agent entry for ${agentId}`);
+    const { id: _id, ...entry } = next;
+    return { entries: { [agentId]: entry } };
+}
+export function coachAgentExists(current, agentId) {
+    const entries = keyedAgentEntries(current);
+    if (entries)
+        return isAgentRecord(entries[agentId]);
+    const list = current?.agents?.list;
+    return Array.isArray(list) && list.some((agent) => isAgentRecord(agent) && agent.id === agentId);
+}
+export function coachAgentPatchReplacePaths(current) {
+    return keyedAgentEntries(current)
+        ? []
+        : [
+            "agents.list",
+            "agents.list[].model.fallbacks",
+            "agents.list[].tools.alsoAllow",
+        ];
+}
 export function deriveDesiredByotState(userData) {
     const status = userData.provisioning?.openclaw?.status;
     const slug = userData.username;

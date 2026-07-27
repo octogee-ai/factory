@@ -44,6 +44,14 @@ export declare const STANDARD_CODEX_APP_SERVER: CodexAppServerPatch;
 export declare function isPlatformProviderRef(ref: string): boolean;
 export declare function byosCoachConfigPatch(input: CoachModelInput | null): CoachModelPatch | null;
 export declare function coachFullAgentList(current: unknown, agentId: string, model: CoachModelPatch["agents"]["list"][number]["model"] | null, tools?: FreeTierCoachToolsBlock | null): unknown[];
+export type CoachAgentPatch = {
+    list: unknown[];
+} | {
+    entries: Record<string, Record<string, unknown>>;
+};
+export declare function coachAgentPatch(current: unknown, agentId: string, model: CoachModelPatch["agents"]["list"][number]["model"] | null, tools?: FreeTierCoachToolsBlock | null): CoachAgentPatch;
+export declare function coachAgentExists(current: unknown, agentId: string): boolean;
+export declare function coachAgentPatchReplacePaths(current: unknown): string[];
 export declare function deriveDesiredByotState(userData: {
     byotActive?: boolean;
     username?: string;
