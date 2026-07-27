@@ -8,7 +8,6 @@ import {
 } from "../ops/verify-west-ingress-plan.mjs";
 
 const names = [
-  "grafana-ip",
   "gitea-ip-west",
   "mattermost-ip-west",
   "preview-ip-west",
@@ -25,9 +24,9 @@ const address = (name: string): string =>
   `google_compute_global_address.west_ingress["${name}"]`;
 
 describe("WEST ingress reservation plan", () => {
-  it("accepts exactly six additive address creations", () => {
+  it("accepts exactly five additive WEST address creations", () => {
     expect(verifyWestIngressPlan({
-      summary: { create: 6, update: 0, delete: 0, replace: 0 },
+      summary: { create: 5, update: 0, delete: 0, replace: 0 },
       changes: names.map((name) => ({ address: address(name), actions: ["create"] })),
     })).toBe("create");
   });
@@ -59,7 +58,7 @@ describe("WEST ingress reservation plan", () => {
     expect(verifyWestIngressPlan({
       summary: { create: 1, update: 0, delete: 3, replace: 0 },
       changes: [
-        { address: address("grafana-ip"), actions: ["create"] },
+        { address: address("gitea-ip-west"), actions: ["create"] },
         ...retiredNames.map((name) => ({
           address: address(name),
           actions: ["delete"],
@@ -81,7 +80,7 @@ describe("WEST ingress reservation plan", () => {
     ["unexpected address", [...names.slice(1).map((name) => ({ address: address(name), actions: ["create"] })), { address: 'google_compute_global_address.west_ingress["other"]', actions: ["create"] }]],
   ])("rejects a %s", (_label, changes) => {
     expect(() => verifyWestIngressPlan({
-      summary: { create: 6, update: 0, delete: 0, replace: 0 },
+      summary: { create: 5, update: 0, delete: 0, replace: 0 },
       changes,
     })).toThrow("WEST ingress plan contains an undeclared address reconciliation");
   });
@@ -99,7 +98,7 @@ describe("WEST ingress reservation plan", () => {
     );
     outputs[names[0]] = outputs[names[1]];
     expect(() => verifyWestIngressAddresses(outputs)).toThrow(
-      "WEST ingress Terraform output must contain six unique public IPv4 addresses",
+      "WEST ingress Terraform output must contain five unique public IPv4 addresses",
     );
   });
 
