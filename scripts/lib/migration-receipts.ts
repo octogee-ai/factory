@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export const MIGRATION_RECEIPT_BUCKET = "gs://octogee-migration-receipts";
+export const MIGRATION_RECEIPT_BUCKET = "gs://octogee-central-migration-receipts";
+export const RETIRED_MIGRATION_RECEIPT_BUCKET = "gs://octogee-migration-receipts";
 export const TERRAFORM_STATE_BUCKET = "gs://octogee-terraform-state";
 export const MIGRATION_RECEIPT_OPERATOR_MEMBERS = [
   "user:christopher.k.eckert@squarepointconsulting.com",
@@ -105,7 +106,7 @@ function valueAt(recordValue: JsonRecord, ...keys: string[]): unknown {
 }
 
 function assertBucketConfiguration(bucket: JsonRecord): void {
-  if (bucket.location !== "US-WEST1") throw new Error("migration receipt bucket must be in US-WEST1");
+  if (bucket.location !== "US-CENTRAL1") throw new Error("migration receipt bucket must be in US-CENTRAL1");
   if (bucket.storageClass !== "STANDARD") throw new Error("migration receipt bucket must use STANDARD storage");
   if (valueAt(bucket, "iamConfiguration", "uniformBucketLevelAccess", "enabled") !== true) {
     throw new Error("migration receipt bucket must enforce uniform bucket-level access");
@@ -274,7 +275,8 @@ export function readImmutableMigrationReceipt(
   expected: JsonRecord,
   run: CommandRunner = runMigrationReceiptCommand,
 ): ImmutableMigrationReceipt & { receipt: JsonRecord } {
-  if (!uri.startsWith(`${MIGRATION_RECEIPT_BUCKET}/${RECEIPT_PREFIX}`)) {
+  if (![MIGRATION_RECEIPT_BUCKET, RETIRED_MIGRATION_RECEIPT_BUCKET]
+    .some((bucket) => uri.startsWith(`${bucket}/${RECEIPT_PREFIX}`))) {
     throw new Error("migration receipt must be in the immutable receipt bucket");
   }
   const generation = generationFor(uri, run);

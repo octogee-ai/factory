@@ -3,6 +3,7 @@ import {
   MIGRATION_RECEIPT_OPERATOR_MEMBERS,
   MIGRATION_RECEIPT_BUCKET_CONTROL_ROLE,
   MIGRATION_RECEIPT_BUCKET,
+  RETIRED_MIGRATION_RECEIPT_BUCKET,
   MIGRATION_RECEIPT_WORM_PROOF_PRINCIPAL,
   MigrationReceiptCollisionError,
   TERRAFORM_STATE_BUCKET,
@@ -16,7 +17,7 @@ import {
 
 describe("immutable migration receipts", () => {
   const receiptBucket = {
-    location: "US-WEST1",
+    location: "US-CENTRAL1",
     storageClass: "STANDARD",
     iamConfiguration: {
       uniformBucketLevelAccess: { enabled: true },
@@ -67,9 +68,9 @@ describe("immutable migration receipts", () => {
   }
 
   it("uses only the dedicated receipt bucket and path-safe object names", () => {
-    expect(MIGRATION_RECEIPT_BUCKET).toBe("gs://octogee-migration-receipts");
+    expect(MIGRATION_RECEIPT_BUCKET).toBe("gs://octogee-central-migration-receipts");
     expect(immutableMigrationReceiptUri("platform-builder-credential-reset/test.json"))
-      .toBe("gs://octogee-migration-receipts/receipts/platform-builder-credential-reset/test.json");
+      .toBe("gs://octogee-central-migration-receipts/receipts/platform-builder-credential-reset/test.json");
     expect(() => immutableMigrationReceiptUri("../state.tfstate")).toThrow(/path-safe/i);
   });
 
@@ -225,18 +226,18 @@ describe("immutable migration receipts", () => {
     );
 
     expect(receipt).toEqual({
-      uri: "gs://octogee-migration-receipts/receipts/platform-builder-credential-reset/test.json",
+      uri: "gs://octogee-central-migration-receipts/receipts/platform-builder-credential-reset/test.json",
       generation: "8675309",
     });
     expect(run).toHaveBeenCalledWith("gcloud", expect.arrayContaining([
       "storage", "cp", "--if-generation-match=0",
-      "gs://octogee-migration-receipts/receipts/platform-builder-credential-reset/test.json",
+      "gs://octogee-central-migration-receipts/receipts/platform-builder-credential-reset/test.json",
     ]));
     expect(run).toHaveBeenCalledWith("gcloud", [
       "storage",
       "objects",
       "describe",
-      "gs://octogee-migration-receipts/receipts/platform-builder-credential-reset/test.json",
+      "gs://octogee-central-migration-receipts/receipts/platform-builder-credential-reset/test.json",
       "--format=json",
       "--raw",
     ]);
@@ -260,7 +261,7 @@ describe("immutable migration receipts", () => {
       expect(error).toBeInstanceOf(MigrationReceiptCollisionError);
       expect(error).toMatchObject({
         code: "MIGRATION_RECEIPT_COLLISION",
-        uri: "gs://octogee-migration-receipts/receipts/platform-builder-credential-reset/test.json",
+        uri: "gs://octogee-central-migration-receipts/receipts/platform-builder-credential-reset/test.json",
       });
     }
 
@@ -275,7 +276,7 @@ describe("immutable migration receipts", () => {
   });
 
   it("reads the generation it described and validates exact receipt evidence", () => {
-    const uri = "gs://octogee-migration-receipts/receipts/platform-builder-credential-reset/test.json";
+    const uri = `${RETIRED_MIGRATION_RECEIPT_BUCKET}/receipts/platform-builder-credential-reset/test.json`;
     const run = vi.fn((_command: string, args: readonly string[]) => {
       if (args.includes("describe")) return JSON.stringify({ generation: "42" });
       return JSON.stringify({

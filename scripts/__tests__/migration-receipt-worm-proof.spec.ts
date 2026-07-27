@@ -43,7 +43,7 @@ function proofHarness(mutationDenial: "retention" | "permission" = "retention") 
         });
       }
       return JSON.stringify({
-        location: "US-WEST1",
+        location: "US-CENTRAL1",
         storageClass: "STANDARD",
         iamConfiguration: {
           uniformBucketLevelAccess: { enabled: true },

@@ -28,7 +28,7 @@ describe("platform migration writer receipt adapter", () => {
   it("writes and reads the quiescence receipt through create-only, generation-bound storage", () => {
     const uri = platformMigrationWriterReceiptUri(quiescenceReceipt);
     expect(uri).toBe(
-      `gs://octogee-migration-receipts/receipts/platform-migration-writer-quiescence/${migrationId}/test-west.json`,
+      `gs://octogee-central-migration-receipts/receipts/platform-migration-writer-quiescence/${migrationId}/test-west.json`,
     );
     const run = vi.fn((_command: string, args: readonly string[]) => {
       if (args.includes("describe")) return JSON.stringify({ generation: "7" });
@@ -46,9 +46,9 @@ describe("platform migration writer receipt adapter", () => {
 
   it("reads exact content and Firebase evidence from pinned generations in the dedicated bucket", () => {
     const contentUri =
-      `gs://octogee-migration-receipts/receipts/platform-content-migration/test-central-to-test-west/${migrationId}.json`;
+      `gs://octogee-central-migration-receipts/receipts/platform-content-migration/test-central-to-test-west/${migrationId}.json`;
     const firebaseUri =
-      `gs://octogee-migration-receipts/receipts/platform-firestore-auth-west-migration/${migrationId}-test-central-test-west-${revision}-complete.json`;
+      `gs://octogee-central-migration-receipts/receipts/platform-firestore-auth-west-migration/${migrationId}-test-central-test-west-${revision}-complete.json`;
     const content = {
       schemaVersion: 1,
       kind: "platform-content-migration-receipt",
