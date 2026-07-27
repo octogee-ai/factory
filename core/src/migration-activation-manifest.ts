@@ -34,9 +34,26 @@ function hasOwn(value: Record<string, unknown>, key: string): boolean {
 function activationAgentForTarget(
   manifestAgent: Record<string, unknown>,
   currentAgent: Record<string, unknown> | undefined,
+  targetUsesKeyedEntries: boolean,
 ): Record<string, unknown> {
-  if (!currentAgent || !hasOwn(currentAgent, "model")) return manifestAgent;
-  return { ...manifestAgent, model: currentAgent.model };
+  const agent = currentAgent && hasOwn(currentAgent, "model")
+    ? { ...manifestAgent, model: currentAgent.model }
+    : manifestAgent;
+  if (targetUsesKeyedEntries || !hasOwn(agent, "memory")) return agent;
+
+  const memory = agent.memory;
+  if (!isRecord(memory) || !isRecord(memory.search)) {
+    throw new Error("stable target cannot represent beta agent memory without memory.search");
+  }
+  const unsupportedMemoryFields = Object.keys(memory).filter((key) => key !== "search");
+  if (unsupportedMemoryFields.length > 0) {
+    throw new Error(
+      `stable target cannot represent beta agent memory fields: ${unsupportedMemoryFields.join(", ")}`,
+    );
+  }
+  const stableAgent = { ...agent };
+  delete stableAgent.memory;
+  return { ...stableAgent, memorySearch: memory.search };
 }
 
 function currentActivationAgent(
@@ -201,7 +218,8 @@ export async function applyOpenClawActivationManifest(
         const currentBindings = Array.isArray(cfg.bindings) ? cfg.bindings : [];
         const currentAccounts = cfg.channels?.mattermost?.accounts ?? {};
         const currentAgent = currentActivationAgent(current, manifest.agentId);
-        const agent = activationAgentForTarget(manifest.agent, currentAgent);
+        const agents = (current as { agents?: Record<string, unknown> } | undefined)?.agents;
+        const agent = activationAgentForTarget(manifest.agent, currentAgent, isRecord(agents?.entries));
         return {
           agents: customerAgentRosterPatch(
             current,

@@ -204,6 +204,86 @@ describe("migration activation manifest", () => {
     expect(configPatch.mock.calls[0][2]).toEqual({ replacePaths: ["bindings"] });
   });
 
+  it("downgrades a beta memory.search agent to stable memorySearch during activation", async () => {
+    const sourceDir = await mkTmp();
+    const sourceConfigPath = path.join(sourceDir, "openclaw.json");
+    await fs.writeFile(sourceConfigPath, JSON.stringify({
+      agents: {
+        list: [{
+          id: "octogee-alice-coach",
+          model: "beta-model",
+          memory: { search: { provider: "openai-compatible", model: "text-embedding-3-small" } },
+        }],
+      },
+      channels: { mattermost: { accounts: { "alice-coach": { botToken: "coach-pat" } } } },
+      bindings: [{ agentId: "octogee-alice-coach", match: { channel: "mattermost" } }],
+    }));
+    const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
+      hash: "h2",
+      config: patch,
+    }));
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: {
+          agents: { list: [{ id: "octogee-alice-coach", model: "house" }] },
+          channels: { mattermost: { accounts: {} } },
+          bindings: [],
+        },
+      })),
+      configPatch,
+      close: vi.fn(async () => undefined),
+    };
+
+    const betaManifest = await extractOpenClawActivationManifest(sourceConfigPath, "alice");
+    await applyOpenClawActivationManifest(betaManifest, { rpc: rpc as never, log: vi.fn() });
+
+    const patch = configPatch.mock.calls[0][0] as {
+      agents: { list: Array<Record<string, unknown>> };
+    };
+    expect(patch.agents.list).toEqual([
+      {
+        id: "octogee-alice-coach",
+        model: "house",
+        memorySearch: { provider: "openai-compatible", model: "text-embedding-3-small" },
+      },
+    ]);
+    expect(patch.agents.list[0]).not.toHaveProperty("memory");
+  });
+
+  it("refuses beta-only memory fields that stable agents cannot represent", async () => {
+    const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
+      hash: "h2",
+      config: patch,
+    }));
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: {
+          agents: { list: [{ id: "octogee-alice-coach", model: "house" }] },
+          channels: { mattermost: { accounts: {} } },
+          bindings: [],
+        },
+      })),
+      configPatch,
+      close: vi.fn(async () => undefined),
+    };
+
+    await expect(applyOpenClawActivationManifest({
+      ...manifest(),
+      agent: {
+        id: "octogee-alice-coach",
+        memory: {
+          search: { provider: "openai-compatible" },
+          consolidation: { enabled: true },
+        },
+      },
+    }, { rpc: rpc as never, log: vi.fn() })).rejects.toThrow(
+      /stable target cannot represent beta agent memory fields: consolidation/,
+    );
+    expect(configPatch).not.toHaveBeenCalled();
+  });
+
   it("preserves the target gateway's current coach model when activation replays stale agent metadata", async () => {
     const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
       hash: "h2",

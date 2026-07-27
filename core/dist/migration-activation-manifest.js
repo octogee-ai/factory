@@ -10,10 +10,23 @@ function isRecord(value) {
 function hasOwn(value, key) {
     return Object.prototype.hasOwnProperty.call(value, key);
 }
-function activationAgentForTarget(manifestAgent, currentAgent) {
-    if (!currentAgent || !hasOwn(currentAgent, "model"))
-        return manifestAgent;
-    return { ...manifestAgent, model: currentAgent.model };
+function activationAgentForTarget(manifestAgent, currentAgent, targetUsesKeyedEntries) {
+    const agent = currentAgent && hasOwn(currentAgent, "model")
+        ? { ...manifestAgent, model: currentAgent.model }
+        : manifestAgent;
+    if (targetUsesKeyedEntries || !hasOwn(agent, "memory"))
+        return agent;
+    const memory = agent.memory;
+    if (!isRecord(memory) || !isRecord(memory.search)) {
+        throw new Error("stable target cannot represent beta agent memory without memory.search");
+    }
+    const unsupportedMemoryFields = Object.keys(memory).filter((key) => key !== "search");
+    if (unsupportedMemoryFields.length > 0) {
+        throw new Error(`stable target cannot represent beta agent memory fields: ${unsupportedMemoryFields.join(", ")}`);
+    }
+    const stableAgent = { ...agent };
+    delete stableAgent.memory;
+    return { ...stableAgent, memorySearch: memory.search };
 }
 function currentActivationAgent(current, agentId) {
     const agents = current?.agents;
@@ -125,7 +138,8 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
             const currentBindings = Array.isArray(cfg.bindings) ? cfg.bindings : [];
             const currentAccounts = cfg.channels?.mattermost?.accounts ?? {};
             const currentAgent = currentActivationAgent(current, manifest.agentId);
-            const agent = activationAgentForTarget(manifest.agent, currentAgent);
+            const agents = current?.agents;
+            const agent = activationAgentForTarget(manifest.agent, currentAgent, isRecord(agents?.entries));
             return {
                 agents: customerAgentRosterPatch(current, manifest.slug, upsertAgentInFullAgentList(current, manifest.agentId, agent)),
                 bindings: [
