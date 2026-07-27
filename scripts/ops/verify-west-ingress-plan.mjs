@@ -4,7 +4,6 @@ import { isIPv4 } from "node:net";
 import { pathToFileURL } from "node:url";
 
 const INGRESS_NAMES = [
-  "grafana-ip",
   "gitea-ip-west",
   "mattermost-ip-west",
   "preview-ip-west",
@@ -102,7 +101,7 @@ export const verifyWestIngressPlan = (receipt) => {
 export const verifyWestIngressAddresses = (outputs) => {
   if (typeof outputs !== "object" || outputs === null || Array.isArray(outputs)) {
     throw new Error(
-      "WEST ingress Terraform output must contain six unique public IPv4 addresses",
+      "WEST ingress Terraform output must contain five unique public IPv4 addresses",
     );
   }
   const names = Object.keys(outputs).sort();
@@ -113,7 +112,7 @@ export const verifyWestIngressAddresses = (outputs) => {
     new Set(addresses).size !== INGRESS_NAMES.length
   ) {
     throw new Error(
-      "WEST ingress Terraform output must contain six unique public IPv4 addresses",
+      "WEST ingress Terraform output must contain five unique public IPv4 addresses",
     );
   }
   return outputs;
