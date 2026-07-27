@@ -50,7 +50,7 @@ describe("resolveFleetDeploymentSettings", () => {
   it("uses the active deployment target for the fleet namespace", () => {
     expect(resolveFleetDeploymentSettings("octogee-test")).toMatchObject({
       targetId: "test-central",
-      artifactRegistryRepository: "us-west1-docker.pkg.dev/octogee/octogee",
+      artifactRegistryRepository: "us-central1-docker.pkg.dev/octogee/octogee",
     });
   });
 
