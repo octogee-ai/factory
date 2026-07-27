@@ -110,7 +110,8 @@ describe("releasev2 digest manifest", () => {
 
     for (const promotion of [existingPromotion, builtPromotion]) {
       expect(promotion).not.toContain('2>/dev/null)"; then');
-      expect(promotion).toContain('release-digest-alias-target-describe.err');
+      expect(promotion).toContain("resolve-tag-digest.sh");
+      expect(promotion).toContain('if [ "$lookup_status" = "3" ]; then');
       expect(promotion).toContain("could not resolve immutable release alias ${target}");
       expect(promotion).toContain("gcloud artifacts tags create");
       expect(promotion).not.toContain("gcloud artifacts docker tags add");
@@ -177,9 +178,16 @@ describe("releasev2 digest manifest", () => {
       workflow.indexOf("  site:"),
     );
 
-    expect(writer).toContain("          import re");
-    expect(writer).toContain('if re.search(r"(NOT_FOUND|[[:space:]]404[[:space:]:])", result.stderr):');
+    expect(writer).toContain("resolve-tag-digest.sh");
+    expect(writer).toContain("if result.returncode == 3:");
     expect(writer).toContain("could not resolve SHA-addressed image");
+  });
+
+  it("uses structured tag lookup for absence and never parses gcloud error prose", () => {
+    expect(workflow).toContain("resolve-tag-digest.sh");
+    expect(workflow).not.toContain("NOT_FOUND");
+    expect(workflow).not.toContain("[[:space:]]404[[:space:]:]");
+    expect(workflow).toContain('if [ "$lookup_status" = "3" ]; then');
   });
 
   it("uses recorded manifest bytes instead of force-rebuilding an authoritative release", () => {
