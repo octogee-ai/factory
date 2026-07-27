@@ -10,61 +10,19 @@ const verifyEnv = readFileSync(
   path.resolve(__dirname, "../verify-env.sh"),
   "utf8",
 );
-const verifyRelease = readFileSync(
-  path.resolve(__dirname, "../ops/verify-release-convergence.ts"),
-  "utf8",
-);
+describe("tagged gateway release desired-state workflow", () => {
+  it("ends CI authority at the desired-state write", () => {
+    expect(workflow).toContain("update-environment-desired-state:");
+    expect(workflow).not.toContain("capture-release-convergence-baseline:");
+    expect(workflow).not.toContain("verify-release-convergence:");
+    expect(workflow).not.toContain("ops/capture-release-convergence-baseline.ts");
+    expect(workflow).not.toContain("ops/verify-release-convergence.ts");
+  });
 
-describe("tagged gateway release convergence workflow", () => {
-  it("captures the configured default baseline before desired state is promoted", () => {
-    expect(workflow).toContain("capture-release-convergence-baseline:");
+  it("promotes desired state directly after release authority", () => {
     expect(workflow).toMatch(
-      /update-environment-desired-state:\n\s+needs: \[[^\]]*capture-release-convergence-baseline[^\]]*\]/,
+      /update-environment-desired-state:\n\s+needs: \[matrix-setup, alias-with-oc-version, promotion-authority\]/,
     );
-    expect(workflow).toContain("ops/capture-release-convergence-baseline.ts");
-  });
-
-  it("checks the explicit bootstrap configuration before attempting a release baseline", () => {
-    const baselineJob = workflow.slice(
-      workflow.indexOf("capture-release-convergence-baseline:"),
-      workflow.indexOf("update-environment-desired-state:"),
-    );
-
-    expect(baselineJob).toContain("--check");
-    expect(baselineJob.indexOf("seed-orchestrator-config.ts")).toBeLessThan(
-      baselineJob.indexOf("capture-release-convergence-baseline.ts"),
-    );
-  });
-
-  it("blocks workflow success on a 45-minute convergence check", () => {
-    expect(workflow).toContain("verify-release-convergence:");
-    expect(workflow).toContain("timeout-minutes: 50");
-    expect(workflow).toContain("--timeout-ms=2700000");
-    expect(workflow).toContain("ops/verify-release-convergence.ts");
-  });
-
-  it("installs the GKE credential plugin before each convergence cluster selection", () => {
-    for (const [job, nextJob] of [
-      ["capture-release-convergence-baseline:", "update-environment-desired-state:"],
-      ["verify-release-convergence:", undefined],
-    ]) {
-      const jobSource = workflow.slice(
-        workflow.indexOf(job),
-        nextJob ? workflow.indexOf(nextJob) : workflow.length,
-      );
-
-      expect(jobSource.indexOf("Install gke-gcloud-auth-plugin")).toBeGreaterThan(-1);
-      expect(jobSource.indexOf("Install gke-gcloud-auth-plugin")).toBeLessThan(
-        jobSource.indexOf("Select cluster"),
-      );
-    }
-  });
-
-  it("surfaces convergence failures through GitHub Actions without retired Discord monitoring", () => {
-    expect(workflow).not.toContain("secret/discord-ops-webhook");
-    expect(workflow).not.toContain("DISCORD_OPS_WEBHOOK_URL");
-    expect(verifyRelease).not.toContain("DISCORD_OPS_WEBHOOK_URL");
-    expect(verifyRelease).not.toContain("deliverReleaseConvergenceAlert");
   });
 });
 
