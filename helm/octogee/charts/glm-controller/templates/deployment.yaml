@@ -151,6 +151,12 @@ spec:
           ports:
             - containerPort: {{ .Values.http.port }}
               name: http
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 60
           readinessProbe:
             httpGet:
               path: /healthz
