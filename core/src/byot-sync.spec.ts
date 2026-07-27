@@ -982,6 +982,42 @@ describe("applyCoachToolsConvergence — plan-gated tools reassert when no model
     ]);
   });
 
+  it("updates a beta keyed coach entry without sending the retired agents.list field", async () => {
+    const calls: object[] = [];
+    const paths: Array<string[] | undefined> = [];
+    const current = {
+      agents: {
+        entries: {
+          [id]: { model: "picked/model", tools: { fs: { workspaceOnly: true } } },
+          "octogee-zed-coach": { model: "z/y" },
+        },
+      },
+    };
+
+    await expect(applyCoachToolsConvergence("tester-70", true, {
+      applyConfigPatch: async (args) => {
+        calls.push(args.buildPatch(current));
+        paths.push(args.buildReplacePaths?.(current));
+        return { mode: "rpc", attempts: 1 };
+      },
+    })).resolves.toBe(true);
+
+    expect(paths).toEqual([[]]);
+    expect(calls).toEqual([
+      {
+        agents: {
+          entries: {
+            [id]: {
+              model: "picked/model",
+              tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+            },
+          },
+        },
+      },
+    ]);
+    expect(JSON.stringify(calls)).not.toContain('"list"');
+  });
+
   it("returns false and logs loudly when the coach entry is absent — never a silent success on the repair path", async () => {
     const logs: string[] = [];
     const r = await applyCoachToolsConvergence("tester-70", false, {
@@ -1053,6 +1089,47 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
         },
       },
     ]);
+  });
+
+  it("updates a beta keyed coach entry without writing the rejected agents.list field", async () => {
+    const calls: object[] = [];
+    const paths: Array<string[] | undefined> = [];
+    const current = {
+      agents: {
+        entries: {
+          "octogee-tester-70-coach": { name: "coach", model: "old", mmAccount: "a" },
+          "octogee-zed-coach": { model: "z/y" },
+        },
+      },
+    };
+
+    await expect(applyCoachModelPatch(
+      { slug: "tester-70", provider: "openai" },
+      {
+        applyConfigPatch: async (args) => {
+          calls.push(args.buildPatch(current));
+          paths.push(args.buildReplacePaths?.(current));
+          return { mode: "rpc", attempts: 1 };
+        },
+      },
+    )).resolves.toBe(true);
+
+    expect(paths).toEqual([[]]);
+    expect(calls).toEqual([
+      {
+        agents: {
+          defaults: { models: HOUSE_DEFAULTS },
+          entries: {
+            "octogee-tester-70-coach": {
+              name: "coach",
+              model: withFallback("openai/gpt-5"),
+              mmAccount: "a",
+            },
+          },
+        },
+      },
+    ]);
+    expect(JSON.stringify(calls)).not.toContain('"list"');
   });
 
   it("BYOK-override → house-pin transition (fallbacks [house] → []) confirms the per-entry shrink via agents.list[].model.fallbacks (incident 2026-07-09)", async () => {
@@ -2330,6 +2407,52 @@ describe("applyAgentModelOverrides — per-agent model picks (PWA catalog picker
         defaults: { models: { "platform-openai/gpt-5.4-mini": {} } },
       },
     });
+  });
+
+  it("updates a beta keyed project agent without writing agents.list", async () => {
+    const calls: object[] = [];
+    const paths: Array<string[] | undefined> = [];
+    const current = {
+      agents: {
+        entries: {
+          "octogee-tester-70-coach": { model: "old" },
+          "octogee-tester-70-proj-web-coach": { name: "web", model: "old" },
+        },
+      },
+    };
+    await expect(applyAgentModelOverrides(
+      "tester-70",
+      {
+        "octogee-tester-70-proj-web-coach": {
+          primary: "anthropic/claude-sonnet-4-6",
+          fallbacks: [],
+        },
+      },
+      { houseOnly: false },
+      {
+        applyConfigPatch: async (args) => {
+          calls.push(args.buildPatch(current));
+          paths.push(args.buildReplacePaths?.(current));
+          return { mode: "rpc", attempts: 1 };
+        },
+        logFn: () => {},
+      },
+    )).resolves.toBe(true);
+
+    expect(paths).toEqual([[]]);
+    expect(calls).toEqual([
+      {
+        agents: {
+          entries: {
+            "octogee-tester-70-proj-web-coach": {
+              name: "web",
+              model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+            },
+          },
+        },
+      },
+    ]);
+    expect(JSON.stringify(calls)).not.toContain('"list"');
   });
 
   it("ignores foreign agent ids (cross-tenant safety) and no-ops on empty input", async () => {

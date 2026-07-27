@@ -47,6 +47,22 @@ describe("coach runtime session policy", () => {
     );
   });
 
+  it("fingerprints a beta keyed coach entry after Doctor migrates agents.list", () => {
+    const keyed = config({
+      agents: {
+        entries: {
+          "octogee-alice-coach": {
+            model: "platform-openrouter/z-ai/glm-5.2",
+            tools: { fs: { workspaceOnly: true } },
+          },
+        },
+      },
+    });
+
+    expect(fingerprintCoachRuntimePolicy(keyed, "octogee-alice-coach"))
+      .toBe(fingerprintCoachRuntimePolicy(keyed, "octogee-alice-coach"));
+  });
+
   it("resets existing runtime sessions once before recording a previously-untracked policy", async () => {
     const dir = agentDir();
     const reset = vi.fn(async () => 2);
