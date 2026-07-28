@@ -3408,6 +3408,15 @@ function buildDurableGatewayPatch(args: {
   }
   const configPatch = mutableConfigPatchFromBody(args.body);
   const patch: Record<string, unknown> = { ...configPatch };
+  if (Object.prototype.hasOwnProperty.call(args.body, "managedBy")) {
+    const managedBy = args.body.managedBy;
+    if (managedBy !== "operator" && managedBy !== "cowboy") {
+      return {
+        error: { status: 400, body: { error: "managedBy must be operator or cowboy" } },
+      };
+    }
+    patch.managedBy = managedBy;
+  }
   if (args.body.desiredStatus !== undefined) {
     if (typeof args.body.desiredStatus !== "string") {
       return { error: { status: 400, body: { error: "desiredStatus must be a string" } } };
@@ -5574,6 +5583,7 @@ router.post(
           preActionStatus: {
             desiredStatus: root.desiredStatus,
             desiredRelease: root.desiredRelease,
+            managedBy: root.managedBy ?? "cowboy",
           },
           mutation: { kind: "patch-gateway", gatewayId: id, patch: built.ok.patch },
           classifyResult: (result) => result.ok
