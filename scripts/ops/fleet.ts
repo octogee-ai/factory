@@ -71,6 +71,7 @@ const cyan = (s: string) => `${c.cyan}${s}${c.reset}`;
 const CHECK = COLOR_ENABLED ? "✓" : "[ok]";
 const CROSS = COLOR_ENABLED ? "✗" : "[x]";
 const ARROW = COLOR_ENABLED ? "→" : "->";
+const GIT_EXECUTABLE = "/usr/bin/git";
 
 const VERSION = readVersion();
 
@@ -146,6 +147,30 @@ const VERBS: readonly VerbHelp[] = [
       "Reads Firestore desired roots, selected immutable release payloads, and Cowboy runtime observations once. Reports desired/live/runtime release state and heartbeat status/version; it never waits for convergence or changes fleet state.",
     examples: ["fleet --env=test release status"],
     writes: false,
+  },
+  {
+    verb: "release cut",
+    summary: "Cut a CENTRAL TEST gateway release from an exact digest manifest.",
+    args: "<version> [--sha=<sha>] [--idempotency-key=<key>] [--apply]",
+    description:
+      "Resolves an explicit source SHA (defaulting to the local HEAD), then sends one Admin API request. The server reads the exact CENTRAL digest manifest, verifies immutable aliases, records the TEST marker, cuts the desired release, and enqueues Cowboy. Dry-run by default; pass --apply to send the request.",
+    examples: [
+      "fleet --env=test release cut v0.4.0",
+      "fleet --env=test release cut v0.4.0 --sha=0123456789abcdef0123456789abcdef01234567 --apply",
+    ],
+    writes: true,
+  },
+  {
+    verb: "release promote",
+    summary: "Promote an identical CENTRAL TEST manifest to PROD.",
+    args: "<version> [--idempotency-key=<key>] [--apply]",
+    description:
+      "Sends one Admin API request. The server requires the durable CENTRAL TEST manifest record and promotes those exact bytes through the PROD desired-state release path. Dry-run by default; pass --apply to send the request.",
+    examples: [
+      "fleet --env=prod release promote v0.4.0",
+      "fleet --env=prod release promote v0.4.0 --apply",
+    ],
+    writes: true,
   },
   {
     verb: "gw ls",
@@ -319,7 +344,7 @@ export function resolveFleetVerb(args: ParsedFleetArgs): VerbHelp | null {
 export function resolveFleetCredentialMode(args: ParsedFleetArgs): FleetCredentialMode {
   const verb = resolveFleetVerb(args);
   if (verb?.writes !== true || args.flags.apply !== true) return "service-account-key";
-  return args.positional[0] === "gw" || args.positional[0] === "builder"
+  return args.positional[0] === "gw" || args.positional[0] === "builder" || args.positional[0] === "release"
     ? "service-account-key"
     : "application-default";
 }
@@ -398,10 +423,21 @@ const VALUE_FLAGS = new Set([
   "owner-uid",
   "builder-slug",
   "idempotency-key",
+  "sha",
 ]);
 
 export function parseFleetArgs(argv: readonly string[]): ParsedFleetArgs {
   const out: ParsedFleetArgs = { env: "", positional: [], flags: {} };
+  const seenFlags = new Set<string>();
+  const setFlag = (name: string, value: string | true) => {
+    if (seenFlags.has(name)) throw new Error(`duplicate --${name} flag`);
+    seenFlags.add(name);
+    if (name === "env") {
+      out.env = typeof value === "string" ? value as "test" | "prod" : "";
+      return;
+    }
+    out.flags[name] = value;
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (!a.startsWith("--")) {
@@ -412,19 +448,17 @@ export function parseFleetArgs(argv: readonly string[]): ParsedFleetArgs {
     if (eq > 0) {
       const k = a.slice(2, eq);
       const v = a.slice(eq + 1);
-      if (k === "env") out.env = v as "test" | "prod";
-      else out.flags[k] = v;
+      setFlag(k, v);
       continue;
     }
     const k = a.slice(2);
 
 if (VALUE_FLAGS.has(k) && i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
       const v = argv[++i];
-      if (k === "env") out.env = v as "test" | "prod";
-      else out.flags[k] = v;
+      setFlag(k, v);
       continue;
     }
-    out.flags[k] = true;
+    setFlag(k, true);
   }
   return out;
 }
@@ -592,6 +626,85 @@ export function resolveFleetGatewayMutation(args: ParsedFleetArgs): AdminFleetRe
   }
 }
 
+const SEMVER_NUMBER = "(?:0|[1-9]\\d*)";
+const SEMVER_PRERELEASE_IDENTIFIER = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
+const RELEASE_VERSION_PATTERN = new RegExp(
+  `^v${SEMVER_NUMBER}\\.${SEMVER_NUMBER}\\.${SEMVER_NUMBER}` +
+    `(?:-${SEMVER_PRERELEASE_IDENTIFIER}(?:\\.${SEMVER_PRERELEASE_IDENTIFIER})*)?$`,
+);
+const SOURCE_SHA_PATTERN = /^[a-f0-9]{40}$/;
+
+function releaseIdempotencyRequest(
+  request: Omit<AdminFleetRequest, "idempotencyKey">,
+  args: ParsedFleetArgs,
+  defaultIdempotencyKey: string,
+): AdminFleetRequest {
+  const idempotencyKey = stringFlag(args, "idempotency-key");
+  if (args.flags["idempotency-key"] !== undefined && !idempotencyKey) {
+    throw new Error("release mutation requires --idempotency-key=<key>");
+  }
+  return { ...request, idempotencyKey: idempotencyKey ?? defaultIdempotencyKey };
+}
+
+function requiredReleaseVersion(args: ParsedFleetArgs, command: string): string {
+  const version = args.positional[2];
+  if (!version || !RELEASE_VERSION_PATTERN.test(version)) {
+    throw new Error(`${command} requires a v-prefixed semantic version`);
+  }
+  if (args.positional.length !== 3) {
+    throw new Error(`${command} accepts exactly one <version>`);
+  }
+  return version;
+}
+
+function validateReleaseFlags(args: ParsedFleetArgs, command: string, allowed: readonly string[]): void {
+  const accepted = new Set(["apply", "idempotency-key", ...allowed]);
+  const unsupported = Object.keys(args.flags).filter((flag) => !accepted.has(flag));
+  if (unsupported.length > 0) {
+    throw new Error(`${command} does not accept --${unsupported.join(", --")}`);
+  }
+  if (args.flags.apply !== undefined && args.flags.apply !== true) {
+    throw new Error(`${command} accepts --apply without a value`);
+  }
+}
+
+export function resolveFleetReleaseMutation(
+  args: ParsedFleetArgs,
+  defaultSourceSha?: string,
+): AdminFleetRequest {
+  const action = args.positional[1];
+  if (action === "cut") {
+    if (args.env !== "test") throw new Error("release cut requires --env=test");
+    validateReleaseFlags(args, "release cut", ["sha"]);
+    const version = requiredReleaseVersion(args, "release cut");
+    const explicitSourceSha = stringFlag(args, "sha");
+    if (args.flags.sha !== undefined && !explicitSourceSha) {
+      throw new Error("release cut requires a full lowercase --sha");
+    }
+    const sourceSha = explicitSourceSha ?? defaultSourceSha;
+    if (!sourceSha || !SOURCE_SHA_PATTERN.test(sourceSha)) {
+      throw new Error(explicitSourceSha
+        ? "release cut requires a full lowercase --sha"
+        : "release cut requires a full lowercase source SHA");
+    }
+    return releaseIdempotencyRequest({
+      method: "POST",
+      path: "/api/admin/releases/cut",
+      body: { version, sourceSha },
+    }, args, `release-cut:${version}:${sourceSha}`);
+  }
+  if (action === "promote") {
+    if (args.env !== "prod") throw new Error("release promote requires --env=prod");
+    validateReleaseFlags(args, "release promote", []);
+    const version = requiredReleaseVersion(args, "release promote");
+    return releaseIdempotencyRequest({
+      method: "POST",
+      path: `/api/admin/releases/${encodeURIComponent(version)}/promote`,
+    }, args, `release-promote:${version}`);
+  }
+  throw new Error(`Unknown release mutation: release ${action ?? ""}`.trim());
+}
+
 export type FleetBuilderMutation =
   | {
       kind: "evict";
@@ -714,6 +827,14 @@ export async function executeFleetGatewayMutation(
   apply: boolean,
 ): Promise<{ applied: boolean; response: unknown }> {
   return executeFleetAdminMutation(client, request, apply);
+}
+
+export async function executeFleetReleaseMutation(
+  client: Pick<AdminFleetClient, "request">,
+  request: AdminFleetRequest,
+  apply: boolean,
+): Promise<{ applied: boolean; response: unknown }> {
+  return executeFleetGatewayMutation(client, request, apply);
 }
 
 export interface ForceRestartPod {
@@ -1534,6 +1655,33 @@ async function runFleetBuilderMutation(apply: boolean): Promise<void> {
   console.log(JSON.stringify(result.response, null, 2));
 }
 
+function currentSourceSha(): string {
+  const result = spawnSync(GIT_EXECUTABLE, ["rev-parse", "--verify", "HEAD"], {
+    encoding: "utf8",
+  });
+  const sourceSha = result.stdout.trim();
+  if (result.status !== 0 || !SOURCE_SHA_PATTERN.test(sourceSha)) {
+    throw new Error("release cut could not resolve a full lowercase source SHA from local HEAD");
+  }
+  return sourceSha;
+}
+
+async function runFleetReleaseMutation(apply: boolean): Promise<void> {
+  const sourceSha = args.positional[1] === "cut" && args.flags.sha === undefined
+    ? currentSourceSha()
+    : undefined;
+  const request = resolveFleetReleaseMutation(args, sourceSha);
+  console.log(bold(`RELEASE ${args.positional[1]?.toUpperCase() ?? ""} ${args.positional[2] ?? ""}`));
+  console.log(dim(`  ${request.method} ${request.path}`));
+  if (!apply) {
+    console.log(dim("--- DRY RUN (re-run with --apply to send the Admin API request) ---"));
+    return;
+  }
+  const result = await executeFleetReleaseMutation(fleetAdminClient(), request, true);
+  console.log(green(`${CHECK} Admin API release request accepted`));
+  console.log(JSON.stringify(result.response, null, 2));
+}
+
 async function runFleetGatewayRestart(): Promise<void> {
   const restart = resolveFleetGatewayRestart(args);
   if (!restart.force) return runFleetGatewayMutation(restart.apply);
@@ -1833,6 +1981,8 @@ async function main(): Promise<void> {
   }
 
   switch (verb) {
+    case "release":
+      return runFleetReleaseMutation(apply);
     case "gw":
       return runFleetGatewayMutation(apply);
     case "builder":

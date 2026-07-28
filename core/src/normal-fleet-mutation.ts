@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+  OperationAuditAliasOutcome,
   OperationAuditPartialOutcome,
   OperationAuditReleaseRolloutLinkage,
 } from "@octogee/shared/types/glm";
@@ -17,6 +18,11 @@ export const GLM_MAINTENANCE_DOC_PATH = "config/glmMaintenance";
 
 export interface NormalFleetMutationDb extends OperationsDb {
   doc(path: string): OperationsDocRef;
+}
+
+interface MaintenanceGateSnapshot {
+  exists: boolean;
+  data(): Record<string, unknown> | undefined;
 }
 
 export class FleetMutationFrozenError extends Error {
@@ -67,7 +73,7 @@ export async function assertNormalFleetMutationOpen(db: NormalFleetMutationDb): 
 }
 
 export function assertNormalFleetMutationSnapshotOpen(
-  snapshot: Awaited<ReturnType<OperationsDocRef["get"]>>,
+  snapshot: MaintenanceGateSnapshot,
 ): void {
   if (!snapshot.exists) return;
   const reason = maintenanceFreezeReason(snapshot.data());
@@ -77,18 +83,36 @@ export function assertNormalFleetMutationSnapshotOpen(
 }
 
 export type NormalFleetMutationResult =
-  | { outcome: "completed"; releaseRollout?: OperationAuditReleaseRolloutLinkage }
+  | {
+      outcome: "completed";
+      aliasOutcomes?: OperationAuditAliasOutcome[];
+      releaseRollout?: OperationAuditReleaseRolloutLinkage;
+    }
   | {
       outcome: "partial";
       partialOutcome: OperationAuditPartialOutcome;
+      aliasOutcomes?: OperationAuditAliasOutcome[];
       releaseRollout?: OperationAuditReleaseRolloutLinkage;
     }
   | {
       outcome: "failed";
       error: string;
       partialOutcome?: OperationAuditPartialOutcome;
+      aliasOutcomes?: OperationAuditAliasOutcome[];
       releaseRollout?: OperationAuditReleaseRolloutLinkage;
     };
+
+export class FleetMutationPartialError extends Error {
+  constructor(
+    message: string,
+    readonly partialOutcome: OperationAuditPartialOutcome,
+    readonly aliasOutcomes?: OperationAuditAliasOutcome[],
+    readonly releaseRollout?: OperationAuditReleaseRolloutLinkage,
+  ) {
+    super(message);
+    this.name = "FleetMutationPartialError";
+  }
+}
 
 export interface NormalFleetMutationInput<T> extends OperationAuditIntentInput {
   claimId?: string;
@@ -120,10 +144,16 @@ export async function runNormalFleetMutation<T>(
     outcome = classifyResult?.(result) ?? { outcome: "completed" };
   } catch (error) {
     try {
+      const partial = error instanceof FleetMutationPartialError ? error : null;
       await finishOperationAudit(db, audit.auditId, {
         expectedClaimId: claim.claimId,
         outcome: "failed",
         error: error instanceof Error ? error.message : String(error),
+        ...(partial ? {
+          partialOutcome: partial.partialOutcome,
+          ...(partial.aliasOutcomes ? { aliasOutcomes: partial.aliasOutcomes } : {}),
+          ...(partial.releaseRollout ? { releaseRollout: partial.releaseRollout } : {}),
+        } : {}),
       });
     } catch (completionError) {
       throw new AggregateError(
