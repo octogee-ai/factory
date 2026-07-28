@@ -231,7 +231,10 @@ function buildDb(store: FakeStore) {
           data: Record<string, unknown>,
         ) => void;
         create: (
-          ref: { set: (data: Record<string, unknown>) => Promise<void> },
+          ref: {
+            get: () => Promise<{ exists: boolean }>;
+            set: (data: Record<string, unknown>) => Promise<void>;
+          },
           data: Record<string, unknown>,
         ) => void;
       }) => Promise<T>,
@@ -252,10 +255,18 @@ function buildDb(store: FakeStore) {
           queued.push(() => ref.set(data));
         },
         create: (
-          ref: { set: (data: Record<string, unknown>) => Promise<void> },
+          ref: {
+            get: () => Promise<{ exists: boolean }>;
+            set: (data: Record<string, unknown>) => Promise<void>;
+          },
           data: Record<string, unknown>,
         ) => {
-          queued.push(() => ref.set(data));
+          queued.push(async () => {
+            if ((await ref.get()).exists) {
+              throw new Error("fake transaction create requires a missing document");
+            }
+            await ref.set(data);
+          });
         },
       };
       const result = await fn(txn);
