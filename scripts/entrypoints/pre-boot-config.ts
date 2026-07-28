@@ -216,6 +216,20 @@ function applyPlatformModelAllowlist(config: OpenClawConfig, env: NodeJS.Process
   return changed;
 }
 
+function isLegacyGcpSecretResolverProvider(
+  providerName: string,
+  provider: Record<string, unknown>,
+): boolean {
+  return (
+    providerName === "gcp-secret-manager" &&
+    provider.source === "exec" &&
+    provider.command === "/usr/local/bin/node" &&
+    Array.isArray(provider.args) &&
+    provider.args.length === 1 &&
+    provider.args[0] === "/octogee/scripts/secret-resolver.mjs"
+  );
+}
+
 export function applyOpenClawBeta5CompatibilityPatch(
   config: OpenClawConfig,
   logFn: (msg: string) => void = () => {},
@@ -239,14 +253,7 @@ export function applyOpenClawBeta5CompatibilityPatch(
   if (!providers) return changed;
   for (const [providerName, provider] of Object.entries(providers)) {
     if (!isPlainObject(provider)) continue;
-    if (
-      providerName === "gcp-secret-manager" &&
-      provider.source === "exec" &&
-      provider.command === "/usr/local/bin/node" &&
-      Array.isArray(provider.args) &&
-      provider.args.length === 1 &&
-      provider.args[0] === "/octogee/scripts/secret-resolver.mjs"
-    ) {
+    if (isLegacyGcpSecretResolverProvider(providerName, provider)) {
       provider.command = "/octogee/scripts/secret-resolver.mjs";
       Reflect.deleteProperty(provider, "args");
       changed = true;
