@@ -230,6 +230,13 @@ function buildDb(store: FakeStore) {
           ref: { set: (data: Record<string, unknown>) => Promise<void> },
           data: Record<string, unknown>,
         ) => void;
+        create: (
+          ref: {
+            get: () => Promise<{ exists: boolean }>;
+            set: (data: Record<string, unknown>) => Promise<void>;
+          },
+          data: Record<string, unknown>,
+        ) => void;
       }) => Promise<T>,
     ): Promise<T> => {
       const queued: Array<() => Promise<void>> = [];
@@ -246,6 +253,20 @@ function buildDb(store: FakeStore) {
           data: Record<string, unknown>,
         ) => {
           queued.push(() => ref.set(data));
+        },
+        create: (
+          ref: {
+            get: () => Promise<{ exists: boolean }>;
+            set: (data: Record<string, unknown>) => Promise<void>;
+          },
+          data: Record<string, unknown>,
+        ) => {
+          queued.push(async () => {
+            if ((await ref.get()).exists) {
+              throw new Error("fake transaction create requires a missing document");
+            }
+            await ref.set(data);
+          });
         },
       };
       const result = await fn(txn);
@@ -319,6 +340,12 @@ function buildDb(store: FakeStore) {
             }
             if (name === "glmGateways" && store.glmGateways[docId]) {
               applyPatch(store.glmGateways[docId], patch);
+              return;
+            }
+            if (name === "glmOperations") {
+              const operation = store.glmOperations.find((candidate) => candidate.id === docId);
+              if (!operation) throw new Error(`missing fake operation ${docId}`);
+              applyPatch(operation.data, patch);
             }
           },
           set: async (data: Record<string, unknown>) => {
@@ -850,7 +877,18 @@ describe("createHttpServer — admin gateway routes", () => {
       sizingTier: "m",
       status: "requested",
     });
-    expect(store.glmOperations).toHaveLength(0);
+    expect(store.glmOperations).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({
+          recordType: "audit",
+          status: "completed",
+          mutation: {
+            kind: "request-activation-lease",
+            uid: "uid-alice",
+          },
+        }),
+      }),
+    ]);
     expect(store.users["uid-alice"].provisioning).toMatchObject({
       openclaw: {
         activationLease: {
@@ -892,7 +930,18 @@ describe("createHttpServer — admin gateway routes", () => {
       status: "requested",
     });
     expect(store.gateways["gw-alice"].desiredStatus).toBe("paused");
-    expect(store.glmOperations).toHaveLength(0);
+    expect(store.glmOperations).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({
+          recordType: "audit",
+          status: "completed",
+          mutation: {
+            kind: "request-activation-lease",
+            uid: "uid-alice",
+          },
+        }),
+      }),
+    ]);
   });
 
 it("mounts addAdminCustomerRoutes and returns 404 for unknown customer (factory wired)", async () => {

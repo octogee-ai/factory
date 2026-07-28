@@ -145,6 +145,7 @@ function makeDb(
   async function runTransaction<T>(
     body: (txn: {
       get: (ref: { get: () => Promise<unknown> }) => Promise<unknown>;
+      create: (ref: { set: (d: unknown, o?: unknown) => Promise<void> }, data: unknown) => void;
       set: (ref: { set: (d: unknown, o?: unknown) => Promise<void> }, data: unknown, opts?: unknown) => void;
       update: (ref: { update: (d: unknown) => Promise<void> }, data: unknown) => void;
     }) => Promise<T>,
@@ -160,6 +161,11 @@ function makeDb(
       const writes: Array<() => Promise<void>> = [];
       const txn = {
         get: (ref: { get: () => Promise<unknown> }) => ref.get(),
+        create: (ref: { set: (d: unknown, o?: unknown) => Promise<void> }, data: unknown) => {
+          writes.push(async () => {
+            await ref.set(data);
+          });
+        },
         set: (ref: { set: (d: unknown, o?: unknown) => Promise<void> }, data: unknown, opts?: unknown) => {
           writes.push(() => ref.set(data, opts));
         },
@@ -232,6 +238,13 @@ function opsIn(store: Map<string, Record<string, unknown>>, kind: string) {
     .filter((d) => d.kind === kind);
 }
 
+function auditsIn(store: Map<string, Record<string, unknown>>) {
+  return [...store.entries()]
+    .filter(([path]) => path.startsWith(`${GLM_OPERATIONS_COLLECTION}/`))
+    .map(([, data]) => data)
+    .filter((data) => data.recordType === "audit");
+}
+
 // Seeds a gateway already on the durable root + immutable release schema.
 function seedNewSchemaGateway(
   id: string,
@@ -282,6 +295,40 @@ function seedNewSchemaGateway(
     },
   };
 }
+
+describe("normal fleet mutation admission", () => {
+  it("rejects a frozen gateway restart before it creates an audit or operation", async () => {
+    const seed = {
+      ...seedNewSchemaGateway("beta", sharedPayload()),
+      "config/glmMaintenance": { mode: "frozen", reason: "incident" },
+    };
+    const { app, store } = mkApp(seed);
+
+    await request(app).post("/gateways/beta/restart").expect(409).expect({
+      error: "maintenance freeze blocks fleet mutation: incident",
+    });
+
+    expect(auditsIn(store)).toHaveLength(0);
+    expect(opsIn(store, "restart-gateway")).toHaveLength(0);
+  });
+
+  it("journals a gateway restart with its pre-action state", async () => {
+    const { app, store } = mkApp(seedNewSchemaGateway("beta", sharedPayload()));
+
+    await request(app).post("/gateways/beta/restart").expect(202);
+
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      actor: "unknown",
+      forced: false,
+      what: "restart gateway",
+      why: "Admin fleet request",
+      target: { gatewayId: "beta" },
+      preActionStatus: { desiredStatus: "running", desiredRelease: 1 },
+      mutation: { kind: "restart-gateway", gatewayId: "beta" },
+    }));
+  });
+});
 
 function sharedPayload(overrides: Partial<ReleasePayload> = {}): ReleasePayload {
   return {
@@ -392,6 +439,31 @@ describe("POST /gateways — creates only the durable root and immutable release
     expect(rel?.payloadHash).toBe(releasePayloadHash(rel?.payload as ReleasePayload));
 
     expect(opsIn(store, "add-gateway")).toHaveLength(1);
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      what: "add gateway",
+      target: { gatewayId: "alpha" },
+    }));
+  });
+
+  it("records a failed audit when gateway secret provisioning fails", async () => {
+    const { app, store } = mkApp({}, {
+      provisionGatewayAuthSecret: async () => {
+        throw new Error("secret manager unavailable");
+      },
+    });
+
+    await request(app)
+      .post("/gateways")
+      .send({ gatewayId: "alpha", imageRepository: REPO, imageTag: "abc1234" })
+      .expect(502);
+
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "failed",
+      what: "add gateway",
+      error: "secret manager unavailable",
+    }));
+    expect(store.get("gateways/alpha")).toBeUndefined();
   });
 
   it("does not leave a bare desired doc when durable-root creation fails atomically", async () => {

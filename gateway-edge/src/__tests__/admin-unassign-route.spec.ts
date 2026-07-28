@@ -29,6 +29,9 @@ vi.mock("../lib/db", () => {
       update: async (data: StoredDoc) => {
         state.store[path] = { ...(state.store[path] ?? {}), ...data };
       },
+      set: async (data: StoredDoc) => {
+        state.store[path] = data;
+      },
       delete: async () => {
         delete state.store[path];
       },
@@ -82,6 +85,10 @@ vi.mock("../lib/db", () => {
         update: (ref: any, data: StoredDoc) =>
           pending.push(() => {
             state.store[ref.__path] = { ...(state.store[ref.__path] ?? {}), ...data };
+          }),
+        create: (ref: any, data: StoredDoc) =>
+          pending.push(() => {
+            state.store[ref.__path] = data;
           }),
         set: (ref: any, data: StoredDoc) =>
           pending.push(() => {

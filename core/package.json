@@ -17,6 +17,14 @@
       "types": "./dist/admin-fleet-router.d.ts",
       "default": "./dist/admin-fleet-router.js"
     },
+    "./normal-fleet-mutation": {
+      "types": "./dist/normal-fleet-mutation.d.ts",
+      "default": "./dist/normal-fleet-mutation.js"
+    },
+    "./operation-audit": {
+      "types": "./dist/operation-audit.d.ts",
+      "default": "./dist/operation-audit.js"
+    },
     "./admin-shape": {
       "types": "./dist/admin-shape.d.ts",
       "default": "./dist/admin-shape.js"
@@ -357,6 +365,12 @@
       ],
       "admin-fleet-router": [
         "dist/admin-fleet-router.d.ts"
+      ],
+      "normal-fleet-mutation": [
+        "dist/normal-fleet-mutation.d.ts"
+      ],
+      "operation-audit": [
+        "dist/operation-audit.d.ts"
       ],
       "admin-shape": [
         "dist/admin-shape.d.ts"
