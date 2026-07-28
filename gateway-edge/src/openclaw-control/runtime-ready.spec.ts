@@ -40,7 +40,7 @@ function revision(now: number): RevisionFixture {
         runtimeHealthCheckedAt: new Date(now - 500).toISOString(),
         observedAt: { toMillis: () => now - 250 },
         openclawVersion: "2026.7.1",
-        openclawForkSha: "5e38a689",
+        openclawForkSha: "8969b0a3",
         dashboardControlState: "ready",
         dashboardControlProtocol: { protocol: "openclaw-dashboard-bridge", version: 1 },
         dashboardControlObservedAt: new Date(now - 100).toISOString(),
