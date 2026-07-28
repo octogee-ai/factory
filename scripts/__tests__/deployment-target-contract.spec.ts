@@ -412,20 +412,21 @@ describe("deployment target consumers", () => {
     );
   });
 
-  it("documents the automated Central and WEST snapshot and tested restore operator paths", () => {
+  it("documents Central snapshots and retired West recovery proofs", () => {
     const handbook = source("docs/handbook/53-observability-and-data.md");
     const security = source("docs/operations/SECURITY.md");
 
     expect(handbook).toContain("reconcile-pvc-snapshot-schedules.sh");
     expect(handbook).toContain("octogee-central-pvc-daily");
-    expect(handbook).toContain("prove-west-pvc-restore.sh");
-    expect(handbook).toContain("prove-west-cloud-sql-recovery.sh");
-    expect(handbook).toContain("--confirm=octogee/test-west/cloud-sql/gitea");
+    expect(handbook).toContain("Retired WEST recovery proofs");
+    expect(handbook).not.toContain("./scripts/ops/prove-west-pvc-restore.sh");
+    expect(handbook).not.toContain("./scripts/ops/prove-west-cloud-sql-recovery.sh");
     expect(handbook).toContain("14-day retention");
     expect(handbook).toContain("applies that retention window after source-disk deletion");
     expect(handbook).not.toContain("Not yet automated (TODO):** daily scheduled snapshots");
     expect(security).toContain("octogee-west-pvc-daily");
-    expect(security).toContain("prove-west-pvc-restore.sh");
+    expect(security).toContain("Retired WEST recovery proof");
+    expect(security).not.toContain("scripts/ops/prove-west-pvc-restore.sh");
     expect(security).not.toContain("Current:** Manual snapshots for durable PVCs only");
   });
 
