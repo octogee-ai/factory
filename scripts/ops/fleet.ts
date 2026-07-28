@@ -11,12 +11,24 @@ import {
   type GatewayStatus,
   GATEWAYS_COLLECTION,
 } from "../../shared/types/fleet-controller.js";
-import { isValidGatewayId, type GatewayProfile } from "../../shared/types/glm.js";
+import {
+  GLM_OPERATIONS_COLLECTION,
+  isValidGatewayId,
+  type GatewayProfile,
+} from "../../shared/types/glm.js";
+import { projectGatewayDesiredRootForGateway } from "../../shared/types/gateway-releases.js";
 import {
   readGatewayAuthorization,
   readGatewayRuntimeHeartbeat,
 } from "@octogee/core/gateway-live-release";
 import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
+import {
+  assertNormalFleetMutationSnapshotOpen,
+  GLM_MAINTENANCE_DOC_PATH,
+  runNormalFleetMutation,
+  type NormalFleetMutationDb,
+  type NormalFleetMutationInput,
+} from "@octogee/core/normal-fleet-mutation";
 import {
   type MigrationState,
   fullPlan,
@@ -196,6 +208,19 @@ const VERBS: readonly VerbHelp[] = [
     writes: true,
   },
   {
+    verb: "gw restart",
+    summary: "Restart a gateway through the Admin API, or force-delete its exact pod.",
+    args: "<gw-id> [--force] [--idempotency-key=<key>] [--apply]",
+    description:
+      "Normally uses POST /api/admin/gateways/:id/restart so maintenance and the operations journal match the Admin UI. With --force --apply, it journals a break-glass operation, hands the gateway to the operator lane, selects exactly one fresh gateway pod, verifies its UID again, and deletes only that pod without waiting. Dry-run by default.",
+    examples: [
+      "fleet --env=test gw restart canary",
+      "fleet --env=test gw restart canary --apply",
+      "fleet --env=test gw restart canary --force --apply",
+    ],
+    writes: true,
+  },
+  {
     verb: "gw override",
     summary: "Hand a gateway to the operator management lane.",
     args: "<gw-id> [--apply]",
@@ -276,6 +301,9 @@ export function resolveFleetDeploymentTarget(environment: "test" | "prod"): {
   kubeContext: string;
 } {
   const target = deploymentEnvironmentSettings(environment);
+  if (target.targetId !== `${environment}-central` || target.region !== "us-central1") {
+    throw new Error(`fleet only supports the active CENTRAL target for ${environment}`);
+  }
   return {
     projectId: target.firebaseProjectId,
     namespace: target.namespace,
@@ -426,6 +454,48 @@ function requiredGatewayId(args: ParsedFleetArgs, command: string): string {
   return gatewayId;
 }
 
+export interface FleetGatewayRestart {
+  gatewayId: string;
+  force: boolean;
+  apply: boolean;
+  idempotencyKey?: string;
+}
+
+export function resolveFleetGatewayRestart(args: ParsedFleetArgs): FleetGatewayRestart {
+  if (
+    args.positional.length !== 3 ||
+    args.positional[0] !== "gw" ||
+    args.positional[1] !== "restart"
+  ) {
+    throw new Error("gw restart requires exactly <gw-id> and no extra positional arguments");
+  }
+  const allowedFlags = new Set(["force", "apply", "idempotency-key"]);
+  for (const name of Object.keys(args.flags)) {
+    if (!allowedFlags.has(name)) {
+      throw new Error(`gw restart does not accept --${name}`);
+    }
+  }
+  if (args.flags.force !== undefined && args.flags.force !== true) {
+    throw new Error("gw restart --force must be a bare flag");
+  }
+  if (args.flags.apply !== undefined && args.flags.apply !== true) {
+    throw new Error("gw restart --apply must be a bare flag");
+  }
+  const idempotency = args.flags["idempotency-key"];
+  if (
+    idempotency !== undefined &&
+    (typeof idempotency !== "string" || idempotency.length === 0)
+  ) {
+    throw new Error("gw restart --idempotency-key requires a non-empty value");
+  }
+  return {
+    gatewayId: requiredGatewayId(args, "gw restart"),
+    force: args.flags.force === true,
+    apply: args.flags.apply === true,
+    ...(typeof idempotency === "string" ? { idempotencyKey: idempotency } : {}),
+  };
+}
+
 function canonicalGatewayRepository(args: ParsedFleetArgs, command: string): string {
   if (!args.env) throw new Error(`${command} requires --env=test|prod`);
   const canonical =
@@ -490,6 +560,16 @@ export function resolveFleetGatewayMutation(args: ParsedFleetArgs): AdminFleetRe
     case "retire": {
       const gatewayId = requiredGatewayId(args, "gw retire");
       return withIdempotency({ method: "DELETE", path: `/api/admin/gateways/${gatewayId}` });
+    }
+    case "restart": {
+      const restart = resolveFleetGatewayRestart(args);
+      if (restart.force) {
+        throw new Error("gw restart --force bypasses the Admin API");
+      }
+      return withIdempotency({
+        method: "POST",
+        path: `/api/admin/gateways/${restart.gatewayId}/restart`,
+      });
     }
     case "override": {
       const gatewayId = requiredGatewayId(args, "gw override");
@@ -636,6 +716,329 @@ export async function executeFleetGatewayMutation(
   return executeFleetAdminMutation(client, request, apply);
 }
 
+export interface ForceRestartPod {
+  name: string;
+  uid: string;
+}
+
+interface ForceRestartPodDocument {
+  metadata?: {
+    name?: unknown;
+    uid?: unknown;
+    deletionTimestamp?: unknown;
+  };
+}
+
+interface ForceRestartPodList {
+  items?: ForceRestartPodDocument[];
+}
+
+export interface FleetKubectlResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  error?: Error;
+}
+
+export type FleetKubectlRunner = (args: string[], input?: string) => FleetKubectlResult;
+
+export type ForcedGatewayRestartMutationRunner = <T>(
+  input: NormalFleetMutationInput<T>,
+) => Promise<T>;
+
+export interface ForcedGatewayRestartInput {
+  db: Firestore;
+  kubeContext: string;
+  namespace: string;
+  gatewayId: string;
+  idempotencyKey?: string;
+  now?: () => number;
+  runKubectl?: FleetKubectlRunner;
+  runMutation?: ForcedGatewayRestartMutationRunner;
+}
+
+function forceRestartKubectlFailure(
+  action: string,
+  result: FleetKubectlResult,
+): Error {
+  const detail = result.error?.message || result.stderr.trim() || result.stdout.trim();
+  return new Error(`kubectl ${action} failed${detail ? `: ${detail}` : ""}`);
+}
+
+function parseForceRestartJson(raw: string): ForceRestartPodList {
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("not an object");
+    }
+    return value as ForceRestartPodList;
+  } catch {
+    throw new Error("kubectl returned invalid pod JSON");
+  }
+}
+
+export function parseForceRestartPodList(raw: string, gatewayId: string): ForceRestartPod {
+  const parsed = parseForceRestartJson(raw);
+  if (!Array.isArray(parsed.items) || parsed.items.length !== 1) {
+    const count = Array.isArray(parsed.items) ? parsed.items.length : 0;
+    throw new Error(`force restart expected exactly one pod for ${gatewayId}, found ${count}`);
+  }
+  const metadata = parsed.items[0]?.metadata;
+  if (typeof metadata?.name !== "string" || metadata.name.length === 0) {
+    throw new Error(`force restart pod for ${gatewayId} is missing metadata.name`);
+  }
+  if (typeof metadata.uid !== "string" || metadata.uid.length === 0) {
+    throw new Error(`force restart pod for ${gatewayId} is missing metadata.uid`);
+  }
+  if (metadata.deletionTimestamp !== undefined && metadata.deletionTimestamp !== null) {
+    throw new Error(`force restart pod ${metadata.name} is already terminating`);
+  }
+  const expectedPrefix = `octogee-gateway-${gatewayId}-`;
+  if (!metadata.name.startsWith(expectedPrefix)) {
+    throw new Error(`force restart pod ${metadata.name} does not belong to ${gatewayId}`);
+  }
+  return { name: metadata.name, uid: metadata.uid };
+}
+
+function assertForceRestartPodUnchanged(
+  raw: string,
+  expected: ForceRestartPod,
+): void {
+  const metadata = (parseForceRestartJson(raw) as ForceRestartPodDocument).metadata;
+  if (metadata?.name !== expected.name) {
+    throw new Error(`force restart pod name changed from ${expected.name}`);
+  }
+  if (metadata.uid !== expected.uid) {
+    throw new Error(`force restart pod UID changed for ${expected.name}`);
+  }
+  if (metadata.deletionTimestamp !== undefined && metadata.deletionTimestamp !== null) {
+    throw new Error(`force restart pod ${expected.name} is already terminating`);
+  }
+}
+
+function localFleetKubectl(args: string[], input?: string): FleetKubectlResult {
+  const result = spawnSync(
+    // eslint-disable-next-line sonarjs/no-os-command-from-path
+    "kubectl",
+    args,
+    {
+      encoding: "utf-8",
+      input,
+      stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+    },
+  );
+  return {
+    status: result.status,
+    stdout: typeof result.stdout === "string" ? result.stdout : "",
+    stderr: typeof result.stderr === "string" ? result.stderr : "",
+    ...(result.error ? { error: result.error } : {}),
+  };
+}
+
+function runForceRestartKubectl(
+  runKubectl: FleetKubectlRunner,
+  action: string,
+  args: string[],
+  input?: string,
+): string {
+  const result = runKubectl(args, input);
+  if (result.error || result.status !== 0) throw forceRestartKubectlFailure(action, result);
+  return result.stdout;
+}
+
+async function markForcedGatewayRestartOperatorManaged(
+  db: Firestore,
+  gatewayId: string,
+  now: number,
+): Promise<void> {
+  const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+  await db.runTransaction(async (transaction) => {
+    const [maintenance, gateway] = await Promise.all([
+      transaction.get(db.doc(GLM_MAINTENANCE_DOC_PATH)),
+      transaction.get(gatewayRef),
+    ]);
+    assertNormalFleetMutationSnapshotOpen(maintenance as never);
+    const durableGateway = projectGatewayDesiredRootForGateway(
+      gateway.exists ? gateway.data() : undefined,
+      gatewayId,
+    );
+    if (!durableGateway) {
+      throw new Error(`gateway ${gatewayId} has no valid durable root configuration`);
+    }
+    if (durableGateway.desiredStatus === "retired") {
+      throw new Error(`cannot force restart a retired gateway: ${gatewayId}`);
+    }
+    transaction.update(gatewayRef, {
+      managedBy: "operator",
+      updatedAt: now,
+      updatedBy: "operator",
+    });
+  });
+}
+
+async function recordForcedGatewayRestartPod(
+  db: Firestore,
+  claim: { auditId: string; claimId: string },
+  gatewayId: string,
+  pod: ForceRestartPod,
+): Promise<void> {
+  const auditRef = db.collection(GLM_OPERATIONS_COLLECTION).doc(claim.auditId);
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(auditRef);
+    const data = snapshot.data() as Record<string, unknown> | undefined;
+    if (
+      !snapshot.exists ||
+      data?.status !== "in-progress" ||
+      data.actionClaimId !== claim.claimId ||
+      data.target === null ||
+      typeof data.target !== "object" ||
+      Array.isArray(data.target)
+    ) {
+      throw new Error(`force restart audit ${claim.auditId} is not owned by this action`);
+    }
+    transaction.update(auditRef, {
+      target: {
+        ...(data.target as Record<string, unknown>),
+        gatewayId,
+        podName: pod.name,
+        podUid: pod.uid,
+      },
+    });
+  });
+}
+
+async function assertForcedGatewayRestartDeleteFence(
+  db: Firestore,
+  claim: { auditId: string; claimId: string },
+  gatewayId: string,
+  pod: ForceRestartPod,
+): Promise<void> {
+  const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+  const auditRef = db.collection(GLM_OPERATIONS_COLLECTION).doc(claim.auditId);
+  await db.runTransaction(async (transaction) => {
+    const [maintenance, gateway, audit] = await Promise.all([
+      transaction.get(db.doc(GLM_MAINTENANCE_DOC_PATH)),
+      transaction.get(gatewayRef),
+      transaction.get(auditRef),
+    ]);
+    assertNormalFleetMutationSnapshotOpen(maintenance as never);
+    const durableGateway = projectGatewayDesiredRootForGateway(
+      gateway.exists ? gateway.data() : undefined,
+      gatewayId,
+    );
+    if (!durableGateway) {
+      throw new Error(`gateway ${gatewayId} has no valid durable root configuration`);
+    }
+    if (durableGateway.desiredStatus === "retired") {
+      throw new Error(`cannot force restart a retired gateway: ${gatewayId}`);
+    }
+    if (durableGateway.managedBy !== "operator") {
+      throw new Error(`gateway ${gatewayId} is no longer operator-managed`);
+    }
+    const data = audit.data() as Record<string, unknown> | undefined;
+    const target = data?.target;
+    const targetRecord = target !== null && typeof target === "object" && !Array.isArray(target)
+      ? target as Record<string, unknown>
+      : null;
+    const targetKeys = targetRecord ? Object.keys(targetRecord).sort() : [];
+    if (
+      !audit.exists ||
+      data?.status !== "in-progress" ||
+      data.actionClaimId !== claim.claimId ||
+      targetRecord === null ||
+      targetKeys.join(",") !== "gatewayId,podName,podUid" ||
+      targetRecord.gatewayId !== gatewayId ||
+      targetRecord.podName !== pod.name ||
+      targetRecord.podUid !== pod.uid
+    ) {
+      throw new Error(`force restart audit ${claim.auditId} is not owned by this action`);
+    }
+  });
+}
+
+function forceRestartKubectlArgs(input: {
+  kubeContext: string;
+  namespace: string;
+  gatewayId: string;
+}): string[] {
+  return [
+    "--context", input.kubeContext,
+    "-n", input.namespace,
+  ];
+}
+
+export async function runForcedGatewayRestart(
+  input: ForcedGatewayRestartInput,
+): Promise<{ auditId: string; podName: string; podUid: string }> {
+  const now = input.now ?? Date.now;
+  const runKubectl = input.runKubectl ?? localFleetKubectl;
+  const runMutation: ForcedGatewayRestartMutationRunner = input.runMutation ??
+    ((mutation) => runNormalFleetMutation(
+      input.db as unknown as NormalFleetMutationDb,
+      mutation,
+    ));
+  return runMutation({
+    actor: "operator",
+    forced: true,
+    what: "force restart gateway pod",
+    why: "operator requested break-glass pod restart",
+    target: { gatewayId: input.gatewayId },
+    preActionStatus: {},
+    mutation: {
+      kind: "restart-gateway",
+      gatewayId: input.gatewayId,
+      mode: "force-pod-delete",
+    },
+    ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+    action: async (claim) => {
+      await markForcedGatewayRestartOperatorManaged(input.db, input.gatewayId, now());
+      const base = forceRestartKubectlArgs(input);
+      const pod = parseForceRestartPodList(
+        runForceRestartKubectl(runKubectl, "list pods", [
+          ...base,
+          "get", "pods",
+          "-l", `app=octogee-gateway,gateway-instance=${input.gatewayId}`,
+          "-o", "json",
+        ]),
+        input.gatewayId,
+      );
+      await recordForcedGatewayRestartPod(input.db, claim, input.gatewayId, pod);
+      assertForceRestartPodUnchanged(
+        runForceRestartKubectl(runKubectl, "get pod", [
+          ...base,
+          "get", "pod", pod.name,
+          "-o", "json",
+        ]),
+        pod,
+      );
+      await assertForcedGatewayRestartDeleteFence(
+        input.db,
+        claim,
+        input.gatewayId,
+        pod,
+      );
+      runForceRestartKubectl(
+        runKubectl,
+        "delete pod",
+        [
+          ...base,
+          "delete",
+          `--raw=/api/v1/namespaces/${encodeURIComponent(input.namespace)}/pods/${
+            encodeURIComponent(pod.name)
+          }`,
+          "-f", "-",
+        ],
+        JSON.stringify({
+          apiVersion: "v1",
+          kind: "DeleteOptions",
+          preconditions: { uid: pod.uid },
+        }),
+      );
+      return { auditId: claim.auditId, podName: pod.name, podUid: pod.uid };
+    },
+  });
+}
+
 let args: ParsedFleetArgs = parseFleetArgs([]);
 let db: ReturnType<typeof getFirestore>;
 
@@ -677,6 +1080,10 @@ function initializeFleetCli(argv: string[]): void {
   if (args.env !== "test" && args.env !== "prod") {
     console.error(red(`--env must be 'test' or 'prod' (got: '${args.env}').`));
     process.exit(1);
+  }
+
+  if (args.positional[0] === "gw" && args.positional[1] === "restart") {
+    resolveFleetGatewayRestart(args);
   }
 
   const credentialMode = resolveFleetCredentialMode(args);
@@ -1127,6 +1534,28 @@ async function runFleetBuilderMutation(apply: boolean): Promise<void> {
   console.log(JSON.stringify(result.response, null, 2));
 }
 
+async function runFleetGatewayRestart(): Promise<void> {
+  const restart = resolveFleetGatewayRestart(args);
+  if (!restart.force) return runFleetGatewayMutation(restart.apply);
+  console.log(bold(`GW FORCE RESTART ${restart.gatewayId.toUpperCase()}`));
+  console.log(dim(`  delete exactly one pod selected by gateway-instance=${restart.gatewayId}`));
+  if (!restart.apply) {
+    console.log(dim("--- DRY RUN (re-run with --force --apply to journal and delete the exact pod) ---"));
+    return;
+  }
+  const result = await runForcedGatewayRestart({
+    db,
+    kubeContext: KUBE_CONTEXT,
+    namespace: KUBE_NS,
+    gatewayId: restart.gatewayId,
+    ...(restart.idempotencyKey
+      ? { idempotencyKey: restart.idempotencyKey }
+      : {}),
+  });
+  console.log(green(`${CHECK} Force restart requested`));
+  console.log(JSON.stringify(result, null, 2));
+}
+
 export function releaseStatusRows(status: ReleaseStatusSnapshot): Array<Record<string, string | number>> {
   return status.gateways.map((gateway) => ({
     gatewayId: gateway.gatewayId,
@@ -1399,6 +1828,8 @@ async function main(): Promise<void> {
       return inspectGateway(args.positional[2]);
     case "release status":
       return releaseStatus();
+    case "gw restart":
+      return runFleetGatewayRestart();
   }
 
   switch (verb) {
