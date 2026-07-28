@@ -34,13 +34,13 @@ describe("releasev2 digest manifest", () => {
       /resolve-release-digest-manifest:[\s\S]*?outputs:[\s\S]*?exists:/,
     );
     expect(workflow).toMatch(
-      /write-missing-release-digest-manifest:\n\s+needs: \[resolve, detect-release-scope, verify-prod-promotion, resolve-release-digest-manifest, gateway-artifacts, platform\]/,
+      /write-missing-release-digest-manifest:\n\s+needs: \[resolve, detect-release-scope, resolve-release-digest-manifest, gateway-artifacts, platform\]/,
     );
     expect(workflow).toMatch(
-      /promote-built-digests:\n\s+needs: \[resolve, detect-release-scope, verify-prod-promotion, resolve-release-digest-manifest, write-missing-release-digest-manifest\]/,
+      /promote-built-digests:\n\s+needs: \[resolve, detect-release-scope, resolve-release-digest-manifest, write-missing-release-digest-manifest\]/,
     );
     expect(workflow).toMatch(
-      /gateway:\n\s+needs: \[resolve, detect-release-scope, verify-prod-promotion, resolve-release-digest-manifest, promote-main-digests, gateway-artifacts, platform, write-missing-release-digest-manifest, promote-built-digests, platform-after-manifest\]/,
+      /gateway:\n\s+needs: \[resolve, detect-release-scope, resolve-release-digest-manifest, promote-main-digests, gateway-artifacts, platform, write-missing-release-digest-manifest, promote-built-digests, platform-after-manifest\]/,
     );
 
     const missingManifest = workflow.slice(
@@ -70,7 +70,7 @@ describe("releasev2 digest manifest", () => {
     expect(platformBuild).toContain("deploy: ${{ needs.resolve-release-digest-manifest.outputs.exists == 'true' && needs.resolve.outputs.deploy || 'false' }}");
     expect(missingPromotion).toContain("release-digest-manifest.mjs reference");
     expect(platformDeploy).toMatch(
-      /needs: \[resolve, detect-release-scope, verify-prod-promotion, resolve-release-digest-manifest, promote-built-digests\]/,
+      /needs: \[resolve, detect-release-scope, resolve-release-digest-manifest, promote-built-digests\]/,
     );
     expect(platformDeploy).toContain("deploy: ${{ 'true' }}");
   });
