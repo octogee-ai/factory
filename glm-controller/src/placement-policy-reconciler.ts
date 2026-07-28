@@ -1233,6 +1233,16 @@ async function reconcileEligibleBuilder(
     ownedGateway: entitledOwned ? context.gateways.get(entitledOwned) ?? null : null,
     now: new Date(context.deps.now()),
   });
+  await reconcileResolvedPlacement(context, user, builderSlug, current, placement);
+}
+
+async function reconcileResolvedPlacement(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  builderSlug: string,
+  current: string | null,
+  placement: ReturnType<typeof resolveContinuousBuilderPlacement>,
+): Promise<void> {
   const targetGateway = context.gateways.get(placement.targetGatewayId);
   if (isOperatorManaged(targetGateway?.managedBy)) {
     blockPlacement(context, {
@@ -1288,18 +1298,7 @@ export async function reconcilePlacementPolicyOnce(
     retired: 0,
     blocked: 0,
   };
-  if (deps.maintenanceGate) {
-    try {
-      const gate = await deps.maintenanceGate.state();
-      if (gate.frozen) {
-        deps.log(`[placement-policy] maintenance freeze blocks reconciliation${gate.reason ? `: ${gate.reason}` : ""}`);
-        return result;
-      }
-    } catch (error) {
-      deps.log(`[placement-policy] maintenance gate unreadable; blocking reconciliation: ${error instanceof Error ? error.message : String(error)}`);
-      return result;
-    }
-  }
+  if (await placementMaintenanceFrozen(deps)) return result;
   const state = await deps.readSnapshot();
   if (!state.defaultGatewayId) throw new Error("placement policy default gateway is missing");
   if (!state.admission) {
@@ -1369,6 +1368,23 @@ export async function reconcilePlacementPolicyOnce(
     }
   }
   return result;
+}
+
+async function placementMaintenanceFrozen(
+  deps: PlacementPolicyReconcilerDeps,
+): Promise<boolean> {
+  if (!deps.maintenanceGate) return false;
+  try {
+    const gate = await deps.maintenanceGate.state();
+    if (!gate.frozen) return false;
+    const reason = gate.reason ? `: ${gate.reason}` : "";
+    deps.log(`[placement-policy] maintenance freeze blocks reconciliation${reason}`);
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    deps.log(`[placement-policy] maintenance gate unreadable; blocking reconciliation: ${message}`);
+    return true;
+  }
 }
 
 function docsById(docs: QueryDocumentSnapshot[]): Map<string, Record<string, unknown>> {

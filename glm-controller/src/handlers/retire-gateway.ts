@@ -128,21 +128,13 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
     const mountedFailure = await assertNoMountedCustomers(deps, gatewayId);
     if (mountedFailure) return mountedFailure;
 
-    let verification: { ok: true } | { ok: false; error: string };
-    try {
-      verification = await deps.verifyRetirementClaim({
-        gatewayId,
-        operationId: op.id,
-        version: retirementClaimVersion,
-      });
-    } catch (error) {
-      return failure(
-        `gateway ${gatewayId} retirement claim unreadable: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-    if (!verification.ok) return failure(verification.error);
+    const claimFailure = await verifyRetirementClaim(
+      deps,
+      gatewayId,
+      op.id,
+      retirementClaimVersion,
+    );
+    if (claimFailure) return claimFailure;
 
     const automaticMutationGuard = resolveOperationOrigin(op.origin) === "automatic"
       ? deps.assertAutomaticRetirementMayMutate
@@ -165,14 +157,14 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
     // single stuck resource cannot strand the rest. Records are NOT removed
     // until all gating teardown succeeds, so a partial failure leaves the
     // operation re-drivable.
-    const teardownErrors = await teardownResources(
+    const teardownErrors = await teardownResources({
       ctx,
       deps,
       gatewayId,
       retainData,
       retainServiceAccount,
       automaticMutationGuard,
-    );
+    });
     if (teardownErrors.length > 0) {
       return failure(
         `teardown incomplete (records preserved for retry): ${teardownErrors.join("; ")}`,
@@ -193,6 +185,28 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
 
     return { steps: [], success: true };
   };
+}
+
+async function verifyRetirementClaim(
+  deps: RetireGatewayDeps,
+  gatewayId: string,
+  operationId: string,
+  version: number,
+): Promise<OperationResult | null> {
+  try {
+    const verification = await deps.verifyRetirementClaim({
+      gatewayId,
+      operationId,
+      version,
+    });
+    return verification.ok ? null : failure(verification.error);
+  } catch (error) {
+    return failure(
+      `gateway ${gatewayId} retirement claim unreadable: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
 }
 
 async function automaticRetirementFenceFailure(
@@ -220,14 +234,24 @@ async function assertNoMountedCustomers(
   );
 }
 
-async function teardownResources(
-  ctx: OperationContext,
-  deps: RetireGatewayDeps,
-  gatewayId: string,
-  retainData: boolean,
-  retainServiceAccount: boolean,
-  automaticMutationGuard?: (gatewayId: string) => Promise<void>,
-): Promise<string[]> {
+interface TeardownResourcesInput {
+  ctx: OperationContext;
+  deps: RetireGatewayDeps;
+  gatewayId: string;
+  retainData: boolean;
+  retainServiceAccount: boolean;
+  automaticMutationGuard?: (gatewayId: string) => Promise<void>;
+}
+
+async function teardownResources(input: TeardownResourcesInput): Promise<string[]> {
+  const {
+    ctx,
+    deps,
+    gatewayId,
+    retainData,
+    retainServiceAccount,
+    automaticMutationGuard,
+  } = input;
   const errors: string[] = [];
 
   if (retainData) {

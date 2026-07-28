@@ -893,7 +893,7 @@ async function convergeOneGateway(
   instances: HelmInstancesMap,
   runtimeById: Map<string, GatewayRuntimeDoc>,
 ): Promise<void> {
-  const { db, helm, log } = passDeps;
+  const { db } = passDeps;
   const instance = instances[gateway.gatewayId];
   const helmObserved = observedHelmInstance(instance);
   const artifact =
@@ -930,64 +930,93 @@ async function convergeOneGateway(
       return;
     case "hold-missing-release":
       throw new Error(action.error);
-    case "uninstall": {
-      if (!(await cowboyMayMutateGatewayNow(db, gateway.gatewayId))) return;
-      log(`[converge-gateway] ${gateway.gatewayId} retired — uninstalling stable release`);
-      await helm.removeInstance({ namespace: NAMESPACE, gatewayId: gateway.gatewayId });
-      if (!(await cowboyMayMutateGatewayNow(db, gateway.gatewayId))) return;
-      await db.collection(GLM_GATEWAYS_COLLECTION).doc(gateway.gatewayId).delete();
+    case "uninstall":
+      await uninstallGateway(passDeps, gateway);
       return;
-    }
-    case "upsert": {
-      if (!desiredOpts) throw new Error(`gateway ${gateway.gatewayId} has no deployable intent`);
-      if (!(await cowboyMayMutateGatewayNow(db, gateway.gatewayId))) return;
-      const opts = desiredOpts;
-      log(
-        `[converge-gateway] ${gateway.gatewayId} → release ${gateway.desiredRelease} ` +
-          `(${opts.imageTag}, replicas=${action.replicas})`,
-      );
-      await db
-        .collection(GLM_GATEWAYS_COLLECTION)
-        .doc(gateway.gatewayId)
-        .set(
-          provisioningRuntimeDoc({
-            gateway,
-            artifact: artifact as ReleasePayload,
-            existing: runtime ?? null,
-            now: Date.now(),
-          }) as unknown as Record<string, unknown>,
-          { merge: true },
-        );
-      if (!(await cowboyMayMutateGatewayNow(db, gateway.gatewayId))) return;
-      await helm.upsertInstance(opts);
-      return;
-    }
-    case "mark-live": {
-      log(
-        `[converge-gateway] ${gateway.gatewayId} release ${gateway.desiredRelease} is live`,
-      );
-      await db.runTransaction(async (txn) => {
-        const rootRef = db.collection(GATEWAYS_COLLECTION).doc(gateway.gatewayId);
-        const glmRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(gateway.gatewayId);
-        const rootSnap = await txn.get(rootRef);
-        const root = projectGatewayDesiredRootForGateway(
-          rootSnap.exists ? rootSnap.data() : undefined,
-          gateway.gatewayId,
-        );
-        if (!cowboyMayMarkGatewayLive(root, gateway.desiredRelease)) {
-          return;
-        }
-        txn.set(
-          rootRef,
-          { liveRelease: gateway.desiredRelease, updatedAt: Date.now(), updatedBy: "converge-gateway" },
-          { merge: true },
-        );
-        const runtimePatch = markLiveRuntimePatch(gateway);
-        if (runtimePatch) txn.set(glmRef, runtimePatch, { merge: true });
+    case "upsert":
+      await upsertGateway(passDeps, {
+        gateway,
+        artifact,
+        runtime,
+        desiredOpts,
+        replicas: action.replicas,
       });
       return;
-    }
+    case "mark-live":
+      await markGatewayLive(passDeps, gateway);
+      return;
   }
+}
+
+async function uninstallGateway(
+  passDeps: GatewayConvergencePassDeps,
+  gateway: DurableGateway,
+): Promise<void> {
+  const { db, helm, log } = passDeps;
+  if (!(await cowboyMayMutateGatewayNow(db, gateway.gatewayId))) return;
+  log(`[converge-gateway] ${gateway.gatewayId} retired — uninstalling stable release`);
+  await helm.removeInstance({ namespace: NAMESPACE, gatewayId: gateway.gatewayId });
+  if (!(await cowboyMayMutateGatewayNow(db, gateway.gatewayId))) return;
+  await db.collection(GLM_GATEWAYS_COLLECTION).doc(gateway.gatewayId).delete();
+}
+
+async function upsertGateway(
+  passDeps: GatewayConvergencePassDeps,
+  input: {
+    gateway: DurableGateway;
+    artifact: ReleasePayload | null;
+    runtime: GatewayRuntimeDoc | undefined;
+    desiredOpts: GatewayUpsertOpts | null;
+    replicas: number;
+  },
+): Promise<void> {
+  const { db, helm, log } = passDeps;
+  const { gateway, artifact, runtime, desiredOpts, replicas } = input;
+  if (!desiredOpts) throw new Error(`gateway ${gateway.gatewayId} has no deployable intent`);
+  if (!(await cowboyMayMutateGatewayNow(db, gateway.gatewayId))) return;
+  log(
+    `[converge-gateway] ${gateway.gatewayId} → release ${gateway.desiredRelease} ` +
+      `(${desiredOpts.imageTag}, replicas=${replicas})`,
+  );
+  await db
+    .collection(GLM_GATEWAYS_COLLECTION)
+    .doc(gateway.gatewayId)
+    .set(
+      provisioningRuntimeDoc({
+        gateway,
+        artifact: artifact as ReleasePayload,
+        existing: runtime ?? null,
+        now: Date.now(),
+      }) as unknown as Record<string, unknown>,
+      { merge: true },
+    );
+  if (!(await cowboyMayMutateGatewayNow(db, gateway.gatewayId))) return;
+  await helm.upsertInstance(desiredOpts);
+}
+
+async function markGatewayLive(
+  passDeps: GatewayConvergencePassDeps,
+  gateway: DurableGateway,
+): Promise<void> {
+  const { db, log } = passDeps;
+  log(`[converge-gateway] ${gateway.gatewayId} release ${gateway.desiredRelease} is live`);
+  await db.runTransaction(async (txn) => {
+    const rootRef = db.collection(GATEWAYS_COLLECTION).doc(gateway.gatewayId);
+    const glmRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(gateway.gatewayId);
+    const rootSnap = await txn.get(rootRef);
+    const root = projectGatewayDesiredRootForGateway(
+      rootSnap.exists ? rootSnap.data() : undefined,
+      gateway.gatewayId,
+    );
+    if (!cowboyMayMarkGatewayLive(root, gateway.desiredRelease)) return;
+    txn.set(
+      rootRef,
+      { liveRelease: gateway.desiredRelease, updatedAt: Date.now(), updatedBy: "converge-gateway" },
+      { merge: true },
+    );
+    const runtimePatch = markLiveRuntimePatch(gateway);
+    if (runtimePatch) txn.set(glmRef, runtimePatch, { merge: true });
+  });
 }
 
 function observedHelmInstance(
