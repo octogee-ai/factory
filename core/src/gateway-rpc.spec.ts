@@ -170,6 +170,39 @@ describe("gateway-rpc", () => {
   });
 
   describe("configPatch", () => {
+    it("authenticates the config-change connection with the configured token", async () => {
+      let captured: any = null;
+      server.setConnectHandler((params) => {
+        captured = params;
+        return {
+          ok: true,
+          payload: {
+            type: "hello-ok",
+            protocol: 4,
+            server: { version: "test", connId: "c1" },
+            features: { methods: [], events: [] },
+            snapshot: {},
+            policy: { maxPayload: 1024, maxBufferedBytes: 1024, tickIntervalMs: 1000 },
+          },
+        };
+      });
+      server.setHandler("config.patch", (_params, ws) => {
+        ws.send(JSON.stringify({
+          type: "event",
+          event: "config.changed",
+          payload: { hash: "authenticated-hash" },
+        }));
+        return {
+          ok: true,
+          payload: { ok: true, hash: "authenticated-hash", path: "/fake/openclaw.json" },
+        };
+      });
+
+      await client.configPatchAndWaitForChange({ bindings: [] }, "base-hash");
+
+      expect(captured?.auth).toEqual({ token: "test-token" });
+    });
+
     it("waits for the matching persisted-candidate config.changed before resolving", async () => {
       const events: string[] = [];
       server.setHandler("config.patch", (_params, ws) => {

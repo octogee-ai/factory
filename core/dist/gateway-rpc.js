@@ -159,7 +159,14 @@ function createDefaultConnectTraceHandler(traceVerbose, slowTraceMs, failureSamp
     };
 }
 async function patchConfigAndWaitForChange(connection, patch, baseHash, replacePaths) {
-    const ws = await openAndConnect(connection);
+    const ws = await openAndConnect({
+        url: connection.url,
+        ...connection.auth,
+        connectTimeoutMs: connection.connectTimeoutMs,
+        identity: connection.identity,
+        scopes: connection.scopes,
+        onConnectTrace: connection.onConnectTrace,
+    });
     const change = trackConfigChange(ws);
     const connectedCall = async (method, params) => await sendWsRequest({
         ws,
