@@ -9,6 +9,74 @@ import { log as defaultLog } from "./config.js";
 import { loadOrCreateDeviceIdentity, signConnectDevice, } from "./gateway-device-identity.js";
 export { OpenclawWireError, } from "@octogee/shared/types/openclaw-wire-core";
 const INVALID_RESPONSE = "invalid-response";
+function configChangedHash(data) {
+    let parsed;
+    try {
+        parsed = JSON.parse(typeof data === "string"
+            ? data
+            : data.toString("utf-8"));
+    }
+    catch {
+        return null;
+    }
+    if (!parsed ||
+        typeof parsed !== "object" ||
+        parsed.type !== "event" ||
+        parsed.event !== "config.changed") {
+        return null;
+    }
+    const hash = parsed.payload?.hash;
+    return typeof hash === "string" && hash.length > 0 ? hash : null;
+}
+function trackConfigChange(ws) {
+    const changedHashes = new Set();
+    const waiters = new Map();
+    const onMessage = (data) => {
+        const hash = configChangedHash(data);
+        if (!hash)
+            return;
+        changedHashes.add(hash);
+        for (const resolve of waiters.get(hash) ?? [])
+            resolve();
+        waiters.delete(hash);
+    };
+    ws.on("message", onMessage);
+    return {
+        waitFor(hash, timeoutMs) {
+            if (changedHashes.has(hash))
+                return Promise.resolve();
+            return new Promise((resolve, reject) => {
+                const timer = setTimeout(() => {
+                    cleanup();
+                    reject(new OpenclawWireError("timeout", `config.changed for persisted hash ${hash} timed out after ${timeoutMs}ms`));
+                }, timeoutMs);
+                const onClose = () => {
+                    cleanup();
+                    reject(new OpenclawWireError("connect-failed", `socket closed before config.changed published hash ${hash}`));
+                };
+                const accepted = () => {
+                    cleanup();
+                    resolve();
+                };
+                function cleanup() {
+                    clearTimeout(timer);
+                    ws.removeListener("close", onClose);
+                    waiters.get(hash)?.delete(accepted);
+                }
+                const hashWaiters = waiters.get(hash) ?? new Set();
+                hashWaiters.add(accepted);
+                waiters.set(hash, hashWaiters);
+                ws.on("close", onClose);
+                if (changedHashes.has(hash))
+                    accepted();
+            });
+        },
+        close() {
+            ws.removeListener("message", onMessage);
+            waiters.clear();
+        },
+    };
+}
 async function writeConfig(call, method, config, baseHash, replacePaths) {
     try {
         const payload = await call(method, {
@@ -131,6 +199,41 @@ export function createGatewayRpc(opts = {}) {
             catch { /* */ }
         }
     }
+    async function configPatchAndWaitForChange(patch, baseHash, replacePaths) {
+        const ws = await openAndConnect({
+            url,
+            ...auth,
+            connectTimeoutMs,
+            identity: resolveIdentity(),
+            scopes,
+            onConnectTrace,
+        });
+        const change = trackConfigChange(ws);
+        const connectedCall = async (method, params) => await sendWsRequest({
+            ws,
+            id: randomUUID(),
+            method,
+            params,
+            timeoutMs: callTimeoutMs,
+        });
+        try {
+            const result = await writeConfig(connectedCall, "config.patch", patch, baseHash, replacePaths);
+            if (result.noop === true)
+                return result;
+            if (!result.hash) {
+                throw new OpenclawWireError(INVALID_RESPONSE, "config.patch payload missing `hash` required for config.changed correlation");
+            }
+            await change.waitFor(result.hash, callTimeoutMs);
+            return result;
+        }
+        finally {
+            change.close();
+            try {
+                ws.close();
+            }
+            catch { /* */ }
+        }
+    }
     return {
         async configGet() {
             const payload = await call("config.get", {});
@@ -149,8 +252,29 @@ export function createGatewayRpc(opts = {}) {
         async configPatch(patch, baseHash, opts) {
             return await writeConfig(call, "config.patch", patch, baseHash, opts?.replacePaths);
         },
+        async configPatchAndWaitForChange(patch, baseHash, opts) {
+            return await configPatchAndWaitForChange(patch, baseHash, opts?.replacePaths);
+        },
         async channelsStatus() {
             return await call("channels.status", {});
+        },
+        async channelsStop(params) {
+            const payload = await call("channels.stop", params);
+            if (!payload ||
+                typeof payload !== "object" ||
+                payload.stopped !== true) {
+                throw new OpenclawWireError(INVALID_RESPONSE, "channels.stop payload missing `stopped: true`");
+            }
+            return payload;
+        },
+        async channelsStart(params) {
+            const payload = await call("channels.start", params);
+            if (!payload ||
+                typeof payload !== "object" ||
+                payload.started !== true) {
+                throw new OpenclawWireError(INVALID_RESPONSE, "channels.start payload missing `started: true`");
+            }
+            return payload;
         },
         async gatewayRestartRequest(params) {
             const payload = await call("gateway.restart.request", params);

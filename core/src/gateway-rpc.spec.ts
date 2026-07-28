@@ -20,7 +20,10 @@ function makeTestIdentity(): DeviceIdentity {
   return { deviceId, publicKeyPem, privateKeyPem };
 }
 
-type RpcHandler = (params: unknown) => { ok: true; payload: unknown } | { ok: false; error: { code: string; message: string } };
+type RpcHandler = (
+  params: unknown,
+  ws: WebSocket,
+) => { ok: true; payload: unknown } | { ok: false; error: { code: string; message: string } };
 
 interface MockServerHandle {
   port: number;
@@ -106,7 +109,7 @@ const nonce = crypto.randomBytes(12).toString("hex");
         );
         return;
       }
-      const out = handler(frame.params);
+      const out = handler(frame.params, ws);
       ws.send(
         JSON.stringify(
           out.ok
@@ -167,6 +170,99 @@ describe("gateway-rpc", () => {
   });
 
   describe("configPatch", () => {
+    it("waits for the matching persisted-candidate config.changed before resolving", async () => {
+      const events: string[] = [];
+      server.setHandler("config.patch", (_params, ws) => {
+        events.push("patch-response");
+        setTimeout(() => {
+          events.push("config-changed");
+          ws.send(JSON.stringify({
+            type: "event",
+            event: "config.changed",
+            payload: { hash: "accepted-hash" },
+          }));
+        }, 10);
+        return {
+          ok: true,
+          payload: { ok: true, hash: "accepted-hash", path: "/fake/openclaw.json" },
+        };
+      });
+
+      await client.configPatchAndWaitForChange({ bindings: [] }, "base-hash");
+
+      expect(events).toEqual(["patch-response", "config-changed"]);
+    });
+
+    it("captures config.changed that arrives before the patch response", async () => {
+      server.setHandler("config.patch", (_params, ws) => {
+        ws.send(JSON.stringify({
+          type: "event",
+          event: "config.changed",
+          payload: { hash: "early-hash" },
+        }));
+        return {
+          ok: true,
+          payload: { ok: true, hash: "early-hash", path: "/fake/openclaw.json" },
+        };
+      });
+
+      await expect(
+        client.configPatchAndWaitForChange({ bindings: [] }, "base-hash"),
+      ).resolves.toMatchObject({ hash: "early-hash" });
+    });
+
+    it("ignores unrelated config.changed events while waiting for its persisted hash", async () => {
+      const accepted: string[] = [];
+      server.setHandler("config.patch", (_params, ws) => {
+        ws.send(JSON.stringify({
+          type: "event",
+          event: "config.changed",
+          payload: { hash: "someone-else" },
+        }));
+        setTimeout(() => {
+          accepted.push("ours");
+          ws.send(JSON.stringify({
+            type: "event",
+            event: "config.changed",
+            payload: { hash: "our-hash" },
+          }));
+        }, 10);
+        return {
+          ok: true,
+          payload: { ok: true, hash: "our-hash", path: "/fake/openclaw.json" },
+        };
+      });
+
+      await client.configPatchAndWaitForChange({ bindings: [] }, "base-hash");
+
+      expect(accepted).toEqual(["ours"]);
+    });
+
+    it("returns a no-op patch without waiting for an acceptance event", async () => {
+      server.setHandler("config.patch", () => ({
+        ok: true,
+        payload: { ok: true, noop: true, path: "/fake/openclaw.json" },
+      }));
+
+      await expect(
+        client.configPatchAndWaitForChange({ bindings: [] }, "base-hash"),
+      ).resolves.toMatchObject({ noop: true });
+    });
+
+    it("rejects a changed patch without the acceptance hash", async () => {
+      server.setHandler("config.patch", () => ({
+        ok: true,
+        payload: { ok: true, path: "/fake/openclaw.json" },
+      }));
+
+      await expect(
+        client.configPatchAndWaitForChange({ bindings: [] }, "base-hash"),
+      ).rejects.toMatchObject({
+        code: "invalid-response",
+        message: expect.stringContaining("missing `hash`"),
+      });
+    });
+
     it("sends a JSON-RPC request with raw + baseHash and returns the server payload on success", async () => {
       let captured: any;
       server.setHandler("config.patch", (params) => {
@@ -297,6 +393,43 @@ describe("gateway-rpc", () => {
         skipDeferral: true,
       });
       expect(result).toEqual({ status: "requested" });
+    });
+  });
+
+  describe("channels lifecycle", () => {
+    it("stops and starts one Mattermost account through the channel RPC", async () => {
+      const calls: Array<{ method: string; params: unknown }> = [];
+      server.setHandler("channels.stop", (params) => {
+        calls.push({ method: "channels.stop", params });
+        return {
+          ok: true,
+          payload: { channel: "mattermost", accountId: "alice-coach", stopped: true },
+        };
+      });
+      server.setHandler("channels.start", (params) => {
+        calls.push({ method: "channels.start", params });
+        return {
+          ok: true,
+          payload: { channel: "mattermost", accountId: "alice-coach", started: true },
+        };
+      });
+
+      await expect(
+        client.channelsStop({ channel: "mattermost", accountId: "alice-coach" }),
+      ).resolves.toMatchObject({ stopped: true });
+      await expect(
+        client.channelsStart({ channel: "mattermost", accountId: "alice-coach" }),
+      ).resolves.toMatchObject({ started: true });
+      expect(calls).toEqual([
+        {
+          method: "channels.stop",
+          params: { channel: "mattermost", accountId: "alice-coach" },
+        },
+        {
+          method: "channels.start",
+          params: { channel: "mattermost", accountId: "alice-coach" },
+        },
+      ]);
     });
   });
 

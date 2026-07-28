@@ -208,6 +208,78 @@ const COMMIT_AND_PUSH_DEPS: CommitAndPushDeps = {
   acquireMutationLease: acquireWorkspaceMutationLeaseSync,
 };
 
+export type WorkspaceRemoteSyncState =
+  | "fast-forwarded"
+  | "up-to-date"
+  | "dirty"
+  | "no-upstream";
+
+export async function syncCleanWorkspaceToRemote(
+  customerDir: string,
+): Promise<
+  | { ok: true; result: { state: WorkspaceRemoteSyncState } }
+  | { ok: false; error: WorkspaceGitError }
+> {
+  const lease = acquireWorkspaceMutationLeaseSync({ workspaceDir: customerDir });
+  if (!lease) return { ok: false, error: { code: "WORKSPACE_BUSY", cwd: customerDir } };
+  try {
+    const statusResult = await gitStatus(customerDir);
+    if (!statusResult.ok) return statusResult;
+    if (statusResult.entries.length > 0) {
+      return { ok: true, result: { state: "dirty" } };
+    }
+
+    const branchResult = await runGit(customerDir, ["branch", "--show-current"]);
+    if (!branchResult.ok) return branchResult;
+    const branch = branchResult.stdout.trim();
+    if (!branch) {
+      return {
+        ok: false,
+        error: { code: "INTERNAL", message: "cannot sync a detached workspace HEAD" },
+      };
+    }
+
+    const upstreamResult = await readOriginUpstream(customerDir, branch);
+    if (!upstreamResult.ok) return upstreamResult;
+    if (!upstreamResult.branch) {
+      return { ok: true, result: { state: "no-upstream" } };
+    }
+
+    const headBefore = await runGit(customerDir, ["rev-parse", "HEAD"]);
+    if (!headBefore.ok) return headBefore;
+    const fetchResult = await runGit(
+      customerDir,
+      [
+        "fetch",
+        "--no-tags",
+        END_OF_OPTIONS,
+        "origin",
+        `+refs/heads/${upstreamResult.branch}:refs/remotes/origin/${upstreamResult.branch}`,
+      ],
+      { timeoutMs: GIT_PUSH_TIMEOUT_MS },
+    );
+    if (!fetchResult.ok) return fetchResult;
+    const mergeResult = await runGit(
+      customerDir,
+      ["merge", "--ff-only", END_OF_OPTIONS, `origin/${upstreamResult.branch}`],
+      { timeoutMs: GIT_COMMIT_TIMEOUT_MS },
+    );
+    if (!mergeResult.ok) return mergeResult;
+    const headAfter = await runGit(customerDir, ["rev-parse", "HEAD"]);
+    if (!headAfter.ok) return headAfter;
+    return {
+      ok: true,
+      result: {
+        state: headAfter.stdout.trim() === headBefore.stdout.trim()
+          ? "up-to-date"
+          : "fast-forwarded",
+      },
+    };
+  } finally {
+    lease.release();
+  }
+}
+
 /**
  * Commit local workspace changes and push them — the explicit "save now" an
  * exec-off agent triggers via `workspace_commit`. `gitCommit` reports `empty`

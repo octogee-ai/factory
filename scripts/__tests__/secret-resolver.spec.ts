@@ -57,6 +57,12 @@ function parseResponse(stdout: string): ResolverResponse {
 describe("secret-resolver — defense-in-depth", () => {
   let agentsDir: string;
 
+  it("uses an absolute Node interpreter when OpenClaw executes the resolver directly", () => {
+    expect(fs.readFileSync(RESOLVER, "utf8").split("\n")[0]).toBe(
+      "#!/usr/local/bin/node",
+    );
+  });
+
   beforeAll(() => {
     agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-resolver-test-"));
     fs.mkdirSync(path.join(agentsDir, "octogee-alice-coach", "agent"), { recursive: true });

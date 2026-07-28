@@ -239,6 +239,21 @@ export function applyOpenClawBeta5CompatibilityPatch(
   if (!providers) return changed;
   for (const [providerName, provider] of Object.entries(providers)) {
     if (!isPlainObject(provider)) continue;
+    if (
+      providerName === "gcp-secret-manager" &&
+      provider.source === "exec" &&
+      provider.command === "/usr/local/bin/node" &&
+      Array.isArray(provider.args) &&
+      provider.args.length === 1 &&
+      provider.args[0] === "/octogee/scripts/secret-resolver.mjs"
+    ) {
+      provider.command = "/octogee/scripts/secret-resolver.mjs";
+      Reflect.deleteProperty(provider, "args");
+      changed = true;
+      logFn(
+        "migrated secrets.providers.gcp-secret-manager to the node-owned resolver executable",
+      );
+    }
     if (Reflect.has(provider, "allowInsecurePath")) {
       Reflect.deleteProperty(provider, "allowInsecurePath");
       changed = true;

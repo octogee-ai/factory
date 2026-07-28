@@ -10,6 +10,12 @@ import {
 } from "./helpers.js";
 import { logger } from "../../middleware/logging.js";
 import { invalidateWorkspaceFileResponseCache } from "./file-response-cache.js";
+import {
+  resolveCustomerDir,
+  resolveProjectDir,
+  syncCleanWorkspaceToRemote,
+  type WorkspaceRemoteSyncState,
+} from "../../lib/workspace-git.js";
 
 const router = Router();
 
@@ -26,6 +32,49 @@ interface SavePayload {
   contentBase64: string;
   message: string;
   start: number;
+}
+
+export interface SavedGiteaCheckoutSyncDeps {
+  customersRoot: string;
+  resolveCustomerDir: typeof resolveCustomerDir;
+  resolveProjectDir: typeof resolveProjectDir;
+  syncCleanWorkspaceToRemote: typeof syncCleanWorkspaceToRemote;
+}
+
+const SAVED_GITEA_CHECKOUT_SYNC_DEPS: SavedGiteaCheckoutSyncDeps = {
+  customersRoot: process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers",
+  resolveCustomerDir,
+  resolveProjectDir,
+  syncCleanWorkspaceToRemote,
+};
+
+export async function syncSavedGiteaCheckout(
+  target: FileTarget,
+  deps: SavedGiteaCheckoutSyncDeps = SAVED_GITEA_CHECKOUT_SYNC_DEPS,
+): Promise<WorkspaceRemoteSyncState | "checkout-missing" | "sync-failed"> {
+  const dir = target.projectSlug
+    ? await deps.resolveProjectDir(deps.customersRoot, target.slug, target.projectSlug)
+    : await deps.resolveCustomerDir(deps.customersRoot, target.slug);
+  if (!dir) {
+    logger.warn(
+      `save gitea checkout missing repo=${target.org}/${target.repoName}`,
+    );
+    return "checkout-missing";
+  }
+  const result = await deps.syncCleanWorkspaceToRemote(dir);
+  if (!result.ok) {
+    logger.warn(
+      `save gitea checkout sync failed repo=${target.org}/${target.repoName} code=${result.error.code}`,
+    );
+    return "sync-failed";
+  }
+  const level = result.result.state === "dirty" || result.result.state === "no-upstream"
+    ? "warn"
+    : "info";
+  logger[level](
+    `save gitea checkout sync repo=${target.org}/${target.repoName} state=${result.result.state}`,
+  );
+  return result.result.state;
 }
 
 function commitMessage(path: string, authorName: string): string {
@@ -167,6 +216,9 @@ router.post("/save", withFileTarget(async (req, res, _next, target) => {
   }
 
   const result = await saveTarget(target, request, savePayload(req, target, request));
+  if (target.provider === "gitea") {
+    await syncSavedGiteaCheckout(target);
+  }
   invalidateWorkspaceFileResponseCache(target);
   res.json(result);
 }, { allowWorkspaceMembers: true, access: "write" }));

@@ -42,6 +42,21 @@ function readTemplate() {
 }
 
 describe("infra/gateway/openclaw.template.json — standard gateway exec-off posture", () => {
+  it("runs SecretRef resolution through a node-owned executable accepted by OpenClaw", () => {
+    const template = readTemplate();
+    const provider = template.secrets.providers["gcp-secret-manager"];
+    const dockerfile = readFileSync(path.join(repoRoot, "infra/gateway/Dockerfile"), "utf8");
+
+    expect(provider.command).toBe("/octogee/scripts/secret-resolver.mjs");
+    expect(provider.args).toBeUndefined();
+    expect(dockerfile).toContain(
+      "COPY --chown=node:node scripts/secret-resolver.mjs /octogee/scripts/",
+    );
+    expect(dockerfile).toContain(
+      "RUN chmod 755 /octogee/scripts/secret-resolver.mjs",
+    );
+  });
+
   it("denies exec/process/subagents/sessions_spawn for standard agents, exec/process for subagents", () => {
     const template = readTemplate();
 

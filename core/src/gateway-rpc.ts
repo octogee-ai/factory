@@ -73,6 +73,25 @@ export interface GatewayRestartRequestResult {
   [extra: string]: unknown;
 }
 
+export interface GatewayChannelOperationParams {
+  channel: string;
+  accountId: string;
+}
+
+export interface GatewayChannelStopResult {
+  channel: string;
+  accountId: string;
+  stopped: true;
+  [extra: string]: unknown;
+}
+
+export interface GatewayChannelStartResult {
+  channel: string;
+  accountId: string;
+  started: true;
+  [extra: string]: unknown;
+}
+
 export interface GatewaySessionSummary {
   key: string;
   agentId?: string;
@@ -133,7 +152,14 @@ export interface GatewayRpcClient {
     baseHash: string,
     opts?: { replacePaths?: readonly string[] },
   ): Promise<ConfigPatchResult>;
+  configPatchAndWaitForChange(
+    patch: object,
+    baseHash: string,
+    opts?: { replacePaths?: readonly string[] },
+  ): Promise<ConfigPatchResult>;
   channelsStatus(): Promise<unknown>;
+  channelsStop(params: GatewayChannelOperationParams): Promise<GatewayChannelStopResult>;
+  channelsStart(params: GatewayChannelOperationParams): Promise<GatewayChannelStartResult>;
   secretsReload(): Promise<SecretsReloadResult>;
   gatewayRestartRequest(params: { reason: string; skipDeferral?: boolean }): Promise<GatewayRestartRequestResult>;
   sessionsList(params: { agentId: string }): Promise<GatewaySessionsListResult>;
@@ -148,6 +174,88 @@ export interface GatewayRpcClient {
 }
 
 type GatewayRpcCall = (method: string, params: unknown) => Promise<unknown>;
+
+function configChangedHash(data: unknown): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(
+      typeof data === "string"
+        ? data
+        : (data as { toString: (encoding?: string) => string }).toString("utf-8"),
+    );
+  } catch {
+    return null;
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    (parsed as { type?: unknown }).type !== "event" ||
+    (parsed as { event?: unknown }).event !== "config.changed"
+  ) {
+    return null;
+  }
+  const hash = (parsed as { payload?: { hash?: unknown } }).payload?.hash;
+  return typeof hash === "string" && hash.length > 0 ? hash : null;
+}
+
+function trackConfigChange(ws: WebSocket): {
+  waitFor: (hash: string, timeoutMs: number) => Promise<void>;
+  close: () => void;
+} {
+  const changedHashes = new Set<string>();
+  const waiters = new Map<string, Set<() => void>>();
+  const onMessage = (data: unknown) => {
+    const hash = configChangedHash(data);
+    if (!hash) return;
+    changedHashes.add(hash);
+    for (const resolve of waiters.get(hash) ?? []) resolve();
+    waiters.delete(hash);
+  };
+  ws.on("message", onMessage);
+  return {
+    waitFor(hash, timeoutMs) {
+      if (changedHashes.has(hash)) return Promise.resolve();
+      return new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(
+            new OpenclawWireError(
+              "timeout",
+              `config.changed for persisted hash ${hash} timed out after ${timeoutMs}ms`,
+            ),
+          );
+        }, timeoutMs);
+        const onClose = () => {
+          cleanup();
+          reject(
+            new OpenclawWireError(
+              "connect-failed",
+              `socket closed before config.changed published hash ${hash}`,
+            ),
+          );
+        };
+        const accepted = () => {
+          cleanup();
+          resolve();
+        };
+        function cleanup() {
+          clearTimeout(timer);
+          ws.removeListener("close", onClose);
+          waiters.get(hash)?.delete(accepted);
+        }
+        const hashWaiters = waiters.get(hash) ?? new Set();
+        hashWaiters.add(accepted);
+        waiters.set(hash, hashWaiters);
+        ws.on("close", onClose);
+        if (changedHashes.has(hash)) accepted();
+      });
+    },
+    close() {
+      ws.removeListener("message", onMessage);
+      waiters.clear();
+    },
+  };
+}
 
 async function writeConfig(
   call: GatewayRpcCall,
@@ -283,6 +391,53 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
     }
   }
 
+  async function configPatchAndWaitForChange(
+    patch: object,
+    baseHash: string,
+    replacePaths?: readonly string[],
+  ): Promise<ConfigPatchResult> {
+    const ws = await openAndConnect({
+      url,
+      ...auth,
+      connectTimeoutMs,
+      identity: resolveIdentity(),
+      scopes,
+      onConnectTrace,
+    });
+    const change = trackConfigChange(ws);
+    const connectedCall: GatewayRpcCall = async (method, params) =>
+      await sendWsRequest({
+        ws,
+        id: randomUUID(),
+        method,
+        params,
+        timeoutMs: callTimeoutMs,
+      });
+    try {
+      const result = await writeConfig(
+        connectedCall,
+        "config.patch",
+        patch,
+        baseHash,
+        replacePaths,
+      );
+      if (result.noop === true) return result;
+      if (!result.hash) {
+        throw new OpenclawWireError(
+          INVALID_RESPONSE,
+          "config.patch payload missing `hash` required for config.changed correlation",
+        );
+      }
+      await change.waitFor(result.hash, callTimeoutMs);
+      return result;
+    } finally {
+      change.close();
+      try {
+        ws.close();
+      } catch { /* */ }
+    }
+  }
+
   return {
     async configGet() {
       const payload = await call("config.get", {});
@@ -304,8 +459,42 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       return await writeConfig(call, "config.patch", patch, baseHash, opts?.replacePaths);
     },
 
+    async configPatchAndWaitForChange(patch, baseHash, opts) {
+      return await configPatchAndWaitForChange(patch, baseHash, opts?.replacePaths);
+    },
+
     async channelsStatus() {
       return await call("channels.status", {});
+    },
+
+    async channelsStop(params) {
+      const payload = await call("channels.stop", params);
+      if (
+        !payload ||
+        typeof payload !== "object" ||
+        (payload as { stopped?: unknown }).stopped !== true
+      ) {
+        throw new OpenclawWireError(
+          INVALID_RESPONSE,
+          "channels.stop payload missing `stopped: true`",
+        );
+      }
+      return payload as GatewayChannelStopResult;
+    },
+
+    async channelsStart(params) {
+      const payload = await call("channels.start", params);
+      if (
+        !payload ||
+        typeof payload !== "object" ||
+        (payload as { started?: unknown }).started !== true
+      ) {
+        throw new OpenclawWireError(
+          INVALID_RESPONSE,
+          "channels.start payload missing `started: true`",
+        );
+      }
+      return payload as GatewayChannelStartResult;
     },
 
     async gatewayRestartRequest(params) {
