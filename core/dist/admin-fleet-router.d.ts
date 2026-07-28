@@ -206,6 +206,7 @@ export declare function validateRolloutBody(body: Partial<{
 } | {
     ok: RolloutBodyOk;
 };
+export declare function shapeOperationsHistoryRecord(id: string, data: Record<string, unknown>): Record<string, unknown>;
 export interface BuilderCandidate {
     uid: string;
     username: string;
