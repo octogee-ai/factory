@@ -113,6 +113,143 @@ export const OPERATION_ORIGINS = ["automatic", "operator"];
 export function resolveOperationOrigin(value) {
     return value === "automatic" ? "automatic" : "operator";
 }
+export const OPERATION_AUDIT_RECORD_TYPE = "audit";
+export const OPERATION_AUDIT_SCHEMA_VERSION = 1;
+export const OPERATION_AUDIT_LIFECYCLE_STAGES = [
+    "intent-recorded",
+    "action-started",
+    "action-completed",
+    "action-partial",
+    "action-failed",
+];
+function isAuditObject(value) {
+    if (value === null || typeof value !== "object" || Array.isArray(value))
+        return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+}
+function isNonEmptyAuditString(value) {
+    return typeof value === "string" && value.length > 0;
+}
+function isFiniteAuditNumber(value) {
+    return typeof value === "number" && Number.isFinite(value);
+}
+function isAuditAliasPlan(value) {
+    return Array.isArray(value) && value.every((entry) => isAuditObject(entry) &&
+        isNonEmptyAuditString(entry.alias) &&
+        isNonEmptyAuditString(entry.intendedTarget) &&
+        (entry.expectedTarget === undefined || entry.expectedTarget === null ||
+            typeof entry.expectedTarget === "string"));
+}
+function isAuditAliasOutcomes(value) {
+    const statuses = new Set([
+        "applied",
+        "already-applied",
+        "skipped",
+        "failed",
+    ]);
+    return Array.isArray(value) && value.every((entry) => isAuditObject(entry) &&
+        isNonEmptyAuditString(entry.alias) &&
+        typeof entry.status === "string" && statuses.has(entry.status) &&
+        (entry.observedTarget === undefined || entry.observedTarget === null ||
+            typeof entry.observedTarget === "string") &&
+        (entry.error === undefined || typeof entry.error === "string"));
+}
+function isAuditReleaseRollout(value) {
+    return isAuditObject(value) &&
+        (value.releaseId === undefined || isNonEmptyAuditString(value.releaseId)) &&
+        (value.releaseTag === undefined || isNonEmptyAuditString(value.releaseTag)) &&
+        (value.rolloutOperationId === undefined || isNonEmptyAuditString(value.rolloutOperationId));
+}
+function isAuditTestProvenance(value) {
+    return isAuditObject(value) && value.environment === "test" &&
+        (value.sourceCommit === undefined || isNonEmptyAuditString(value.sourceCommit)) &&
+        (value.verifiedBy === undefined || isNonEmptyAuditString(value.verifiedBy)) &&
+        (value.verifiedAt === undefined || isFiniteAuditNumber(value.verifiedAt));
+}
+function isAuditPartialOutcome(value) {
+    return isAuditObject(value) && isNonEmptyAuditString(value.summary) &&
+        (value.details === undefined || isAuditObject(value.details));
+}
+function hasAuditClaim(value) {
+    return isNonEmptyAuditString(value.actionClaimId) && isFiniteAuditNumber(value.actionStartedAt) &&
+        typeof value.actionRecoveryCount === "number" &&
+        Number.isInteger(value.actionRecoveryCount) && value.actionRecoveryCount >= 0;
+}
+function hasRecordedAuditState(value) {
+    return value.lifecycleStage === "intent-recorded" && value.completedAt === null &&
+        value.actionClaimId === undefined && value.actionStartedAt === undefined &&
+        value.outcome === undefined && value.partialOutcome === undefined && value.error === undefined;
+}
+function hasInProgressAuditState(value) {
+    return value.lifecycleStage === "action-started" && value.completedAt === null &&
+        hasAuditClaim(value) && value.outcome === undefined &&
+        value.partialOutcome === undefined && value.error === undefined;
+}
+function hasCompletedAuditState(value) {
+    if (!hasAuditClaim(value) || !isFiniteAuditNumber(value.completedAt))
+        return false;
+    if (value.error !== undefined)
+        return false;
+    if (value.lifecycleStage === "action-completed") {
+        return value.outcome === "completed" && value.partialOutcome === undefined;
+    }
+    return value.lifecycleStage === "action-partial" && value.outcome === "partial" &&
+        isAuditObject(value.partialOutcome) && isNonEmptyAuditString(value.partialOutcome.summary);
+}
+function hasFailedAuditState(value) {
+    return value.lifecycleStage === "action-failed" && value.outcome === "failed" &&
+        hasAuditClaim(value) && isFiniteAuditNumber(value.completedAt) &&
+        isNonEmptyAuditString(value.error);
+}
+function hasLegalAuditState(value) {
+    if (value.status === "recorded")
+        return hasRecordedAuditState(value);
+    if (value.status === "in-progress")
+        return hasInProgressAuditState(value);
+    if (value.status === "completed")
+        return hasCompletedAuditState(value);
+    return value.status === "failed" && hasFailedAuditState(value);
+}
+export function isOperationAuditRow(value) {
+    return (isAuditObject(value) && value.recordType === OPERATION_AUDIT_RECORD_TYPE);
+}
+function hasRequiredAuditRecordMetadata(value) {
+    return value.schemaVersion === OPERATION_AUDIT_SCHEMA_VERSION &&
+        isNonEmptyAuditString(value.idempotencyKey) &&
+        isNonEmptyAuditString(value.mutationFingerprint) &&
+        isAuditObject(value.mutation) &&
+        isNonEmptyAuditString(value.actor) &&
+        typeof value.forced === "boolean" &&
+        isNonEmptyAuditString(value.what) &&
+        isNonEmptyAuditString(value.why) &&
+        isAuditObject(value.target) &&
+        isAuditObject(value.preActionStatus) &&
+        isAuditAliasPlan(value.aliasPlan) &&
+        isFiniteAuditNumber(value.createdAt);
+}
+function isOptionalAuditField(value, validator) {
+    return value === undefined || validator(value);
+}
+function hasValidOptionalAuditRecordFields(value) {
+    return isOptionalAuditField(value.aliasOutcomes, isAuditAliasOutcomes) &&
+        isOptionalAuditField(value.releaseRollout, isAuditReleaseRollout) &&
+        isOptionalAuditField(value.testProvenance, isAuditTestProvenance) &&
+        isOptionalAuditField(value.partialOutcome, isAuditPartialOutcome);
+}
+function hasValidOptionalAuditRecoveryCount(value) {
+    return value.actionRecoveryCount === undefined ||
+        (typeof value.actionRecoveryCount === "number" &&
+            Number.isInteger(value.actionRecoveryCount) && value.actionRecoveryCount >= 0);
+}
+export function isOperationAuditRecord(value) {
+    if (!isOperationAuditRow(value))
+        return false;
+    return hasRequiredAuditRecordMetadata(value) &&
+        hasValidOptionalAuditRecordFields(value) &&
+        hasValidOptionalAuditRecoveryCount(value) &&
+        hasLegalAuditState(value);
+}
 export const GLM_GATEWAYS_COLLECTION = "glmGateways";
 export const GLM_OPERATIONS_COLLECTION = "glmOperations";
 export const GLM_MIGRATION_TRANSFER_TASKS_COLLECTION = "glmMigrationTransferTasks";
