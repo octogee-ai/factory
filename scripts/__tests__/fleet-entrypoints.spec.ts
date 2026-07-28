@@ -23,11 +23,14 @@ import {
   buildFleetMigrateOperationInput,
   executeFleetAdminMutation,
   executeFleetGatewayMutation,
+  parseForceRestartPodList,
   parseFleetArgs,
   releaseStatusRows,
   resolveFleetBuilderMutationRequest,
   resolveFleetBuilderMutation,
+  runForcedGatewayRestart,
   resolveFleetGatewayMutation,
+  resolveFleetGatewayRestart,
   resolveFleetVerb,
   resolveFleetCredentialMode,
   resolveFleetDeploymentTarget,
@@ -411,6 +414,373 @@ describe("assign-customer-gateway root config", () => {
         "default",
       ),
     ).resolves.toBeNull();
+  });
+});
+
+describe("fleet force gateway restart", () => {
+  function durableGatewayRoot(gatewayId = "canary") {
+    return {
+      gatewayId,
+      createdAt: 1,
+      createdBy: "test",
+      updatedAt: 1,
+      updatedBy: "test",
+      latestRelease: 1,
+      desiredRelease: 1,
+      liveRelease: 1,
+      desiredStatus: "running",
+      configSchemaVersion: 1,
+      profile: "standard",
+      gatewayClass: "shared",
+      imageProfile: "standard",
+      sizingTier: null,
+      gcpProject: null,
+      gatewayContainerSecurityContext: null,
+      serviceAccountName: null,
+      serviceAccount: null,
+      operatorAccess: null,
+      ownerUid: null,
+      builderSlug: null,
+      openclawOverrides: null,
+      modelBrokerLimits: null,
+      preemption: null,
+    };
+  }
+
+  function forceRestartHarness(overrides: {
+    maintenance?: Record<string, unknown>;
+    selector?: unknown;
+    reread?: unknown;
+    afterExactPodRead?: (documents: Map<string, Record<string, unknown>>) => void;
+    deleteResult?: { status: number | null; stdout: string; stderr: string };
+  } = {}) {
+    const documents = new Map<string, Record<string, unknown>>([
+      ["config/glmMaintenance", overrides.maintenance ?? { mode: "open" }],
+      ["gateways/canary", durableGatewayRoot()],
+      ["glmOperations/audit-force-restart", {
+        status: "in-progress",
+        actionClaimId: "claim-force-restart",
+        target: { gatewayId: "canary" },
+      }],
+    ]);
+    const writes: Array<{ path: string; data: Record<string, unknown> }> = [];
+    const ref = (path: string) => ({
+      id: path.split("/").at(-1)!,
+      path,
+      get: async () => ({
+        exists: documents.has(path),
+        id: path.split("/").at(-1)!,
+        data: () => documents.get(path),
+      }),
+    });
+    const db = {
+      doc: ref,
+      collection: (name: string) => ({ doc: (id: string) => ref(`${name}/${id}`) }),
+      runTransaction: async <T>(body: (transaction: {
+        get: (target: ReturnType<typeof ref>) => Promise<Awaited<ReturnType<typeof target.get>>>;
+        update: (target: ReturnType<typeof ref>, data: Record<string, unknown>) => void;
+      }) => Promise<T>) => body({
+        get: (target) => target.get(),
+        update: (target, data) => {
+          documents.set(target.path, { ...documents.get(target.path), ...data });
+          writes.push({ path: target.path, data });
+        },
+      }),
+    };
+    const selector = overrides.selector ?? {
+      items: [{ metadata: { name: "octogee-gateway-canary-a", uid: "pod-uid-1" } }],
+    };
+    const reread = overrides.reread ?? {
+      metadata: { name: "octogee-gateway-canary-a", uid: "pod-uid-1" },
+    };
+    const kubectl = vi.fn((argv: string[], input?: string) => {
+      if (argv.includes("pods")) return { status: 0, stdout: JSON.stringify(selector), stderr: "" };
+      if (argv.includes("get")) {
+        overrides.afterExactPodRead?.(documents);
+        return { status: 0, stdout: JSON.stringify(reread), stderr: "" };
+      }
+      if (argv.includes("delete")) {
+        expect(input).toBe(JSON.stringify({
+          apiVersion: "v1",
+          kind: "DeleteOptions",
+          preconditions: { uid: "pod-uid-1" },
+        }));
+        return overrides.deleteResult ??
+          { status: 0, stdout: "pod deleted", stderr: "" };
+      }
+      throw new Error(`unexpected kubectl args: ${argv.join(" ")}`);
+    });
+    const runMutation = vi.fn(async <T>(input: {
+      actor: string;
+      forced: boolean;
+      idempotencyKey?: string;
+      action: (claim: { auditId: string; claimId: string }) => Promise<T>;
+    }) => input.action({ auditId: "audit-force-restart", claimId: "claim-force-restart" }));
+    return { db, documents, writes, kubectl, runMutation };
+  }
+
+  it("maps a normal restart to the journaled Admin API route", () => {
+    expect(resolveFleetGatewayMutation(parseFleetArgs([
+      "--env=test", "gw", "restart", "canary", "--idempotency-key=restart-canary",
+    ]))).toEqual({
+      method: "POST",
+      path: "/api/admin/gateways/canary/restart",
+      idempotencyKey: "restart-canary",
+    });
+  });
+
+  it("accepts only the exact restart grammar", () => {
+    expect(resolveFleetGatewayRestart(parseFleetArgs([
+      "--env=test", "gw", "restart", "canary", "--force", "--apply",
+      "--idempotency-key=restart-canary",
+    ]))).toEqual({
+      gatewayId: "canary",
+      force: true,
+      apply: true,
+      idempotencyKey: "restart-canary",
+    });
+
+    for (const argv of [
+      ["--env=test", "gw", "restart", "canary", "unexpected"],
+      ["--env=test", "gw", "restart", "canary", "--unknown"],
+      ["--env=test", "gw", "restart", "canary", "--force=true"],
+      ["--env=test", "gw", "restart", "canary", "--apply=true"],
+      ["--env=test", "gw", "restart", "canary", "--idempotency-key"],
+      ["--env=test", "gw", "restart", "canary", "--idempotency-key="],
+    ]) {
+      expect(() => resolveFleetGatewayRestart(parseFleetArgs(argv))).toThrow();
+    }
+  });
+
+  it("requires exactly one fresh pod with a durable UID for a forced restart", () => {
+    expect(parseForceRestartPodList(JSON.stringify({
+      items: [{ metadata: { name: "octogee-gateway-canary-a", uid: "pod-uid-1" } }],
+    }), "canary")).toEqual({ name: "octogee-gateway-canary-a", uid: "pod-uid-1" });
+
+    expect(() => parseForceRestartPodList(JSON.stringify({ items: [] }), "canary"))
+      .toThrow("expected exactly one pod");
+    expect(() => parseForceRestartPodList(JSON.stringify({
+      items: [
+        { metadata: { name: "octogee-gateway-canary-a", uid: "pod-uid-1" } },
+        { metadata: { name: "octogee-gateway-canary-b", uid: "pod-uid-2" } },
+      ],
+    }), "canary")).toThrow("expected exactly one pod");
+    expect(() => parseForceRestartPodList(JSON.stringify({
+      items: [{ metadata: { name: "octogee-gateway-canary-a" } }],
+    }), "canary")).toThrow("missing metadata.uid");
+    expect(() => parseForceRestartPodList(JSON.stringify({
+      items: [{
+        metadata: {
+          name: "octogee-gateway-canary-a",
+          uid: "pod-uid-1",
+          deletionTimestamp: "2026-07-28T04:00:00Z",
+        },
+      }],
+    }), "canary")).toThrow("is already terminating");
+  });
+
+  it("journals and performs a forced restart against only the selected pod identity", async () => {
+    const { db, documents, writes, kubectl, runMutation } = forceRestartHarness();
+
+    await expect(runForcedGatewayRestart({
+      db: db as never,
+      kubeContext: "gke_octogee_us-central1_octogee-gateway",
+      namespace: "octogee-test",
+      gatewayId: "canary",
+      idempotencyKey: "restart-canary-force",
+      now: () => 1234,
+      runKubectl: kubectl,
+      runMutation,
+    })).resolves.toEqual({
+      auditId: "audit-force-restart",
+      podName: "octogee-gateway-canary-a",
+      podUid: "pod-uid-1",
+    });
+
+    expect(runMutation).toHaveBeenCalledWith(expect.objectContaining({
+      actor: "operator",
+      forced: true,
+      idempotencyKey: "restart-canary-force",
+      mutation: { kind: "restart-gateway", gatewayId: "canary", mode: "force-pod-delete" },
+    }));
+    expect(documents.get("gateways/canary")).toMatchObject({
+      managedBy: "operator",
+      updatedAt: 1234,
+      updatedBy: "operator",
+    });
+    expect(documents.get("glmOperations/audit-force-restart")?.target).toEqual({
+      gatewayId: "canary",
+      podName: "octogee-gateway-canary-a",
+      podUid: "pod-uid-1",
+    });
+    expect(writes.map((write) => write.path)).toEqual([
+      "gateways/canary",
+      "glmOperations/audit-force-restart",
+    ]);
+    expect(kubectl.mock.calls.map(([argv]) => argv)).toEqual([
+      [
+        "--context", "gke_octogee_us-central1_octogee-gateway",
+        "-n", "octogee-test",
+        "get", "pods",
+        "-l", "app=octogee-gateway,gateway-instance=canary",
+        "-o", "json",
+      ],
+      [
+        "--context", "gke_octogee_us-central1_octogee-gateway",
+        "-n", "octogee-test",
+        "get", "pod", "octogee-gateway-canary-a",
+        "-o", "json",
+      ],
+      [
+        "--context", "gke_octogee_us-central1_octogee-gateway",
+        "-n", "octogee-test",
+        "delete",
+        "--raw=/api/v1/namespaces/octogee-test/pods/octogee-gateway-canary-a",
+        "-f", "-",
+      ],
+    ]);
+  });
+
+  it("fails before delete when the exact pod name now has a different UID", async () => {
+    const { db, documents, kubectl, runMutation } = forceRestartHarness({
+      reread: { metadata: { name: "octogee-gateway-canary-a", uid: "pod-uid-2" } },
+    });
+
+    await expect(runForcedGatewayRestart({
+      db: db as never,
+      kubeContext: "gke_octogee_us-central1_octogee-gateway",
+      namespace: "octogee-test",
+      gatewayId: "canary",
+      now: () => 1234,
+      runKubectl: kubectl,
+      runMutation,
+    })).rejects.toThrow("pod UID changed");
+
+    expect(kubectl).toHaveBeenCalledTimes(2);
+    expect(documents.get("glmOperations/audit-force-restart")?.target).toEqual({
+      gatewayId: "canary",
+      podName: "octogee-gateway-canary-a",
+      podUid: "pod-uid-1",
+    });
+  });
+
+  it("rejects an exact pod that entered termination after selection", async () => {
+    const { db, kubectl, runMutation } = forceRestartHarness({
+      reread: {
+        metadata: {
+          name: "octogee-gateway-canary-a",
+          uid: "pod-uid-1",
+          deletionTimestamp: "2026-07-28T04:00:00Z",
+        },
+      },
+    });
+
+    await expect(runForcedGatewayRestart({
+      db: db as never,
+      kubeContext: "gke_octogee_us-central1_octogee-gateway",
+      namespace: "octogee-test",
+      gatewayId: "canary",
+      now: () => 1234,
+      runKubectl: kubectl,
+      runMutation,
+    })).rejects.toThrow("is already terminating");
+
+    expect(kubectl).toHaveBeenCalledTimes(2);
+  });
+
+  it("rechecks the maintenance gate in the forced lifecycle transaction", async () => {
+    const { db, documents, kubectl, runMutation } = forceRestartHarness({
+      maintenance: { mode: "frozen", reason: "operator freeze" },
+    });
+
+    await expect(runForcedGatewayRestart({
+      db: db as never,
+      kubeContext: "gke_octogee_us-central1_octogee-gateway",
+      namespace: "octogee-test",
+      gatewayId: "canary",
+      now: () => 1234,
+      runKubectl: kubectl,
+      runMutation,
+    })).rejects.toThrow("maintenance freeze blocks fleet mutation: operator freeze");
+
+    expect(kubectl).not.toHaveBeenCalled();
+    expect(documents.get("gateways/canary")?.managedBy).toBeUndefined();
+  });
+
+  it.each([
+    ["maintenance freeze", (documents: Map<string, Record<string, unknown>>) => {
+      documents.set("config/glmMaintenance", { mode: "frozen", reason: "late freeze" });
+    }, "maintenance freeze blocks fleet mutation: late freeze"],
+    ["gateway retirement", (documents: Map<string, Record<string, unknown>>) => {
+      documents.set("gateways/canary", {
+        ...documents.get("gateways/canary")!,
+        desiredStatus: "retired",
+      });
+    }, "cannot force restart a retired gateway: canary"],
+    ["operator ownership loss", (documents: Map<string, Record<string, unknown>>) => {
+      documents.set("gateways/canary", {
+        ...documents.get("gateways/canary")!,
+        managedBy: "cowboy",
+      });
+    }, "gateway canary is no longer operator-managed"],
+    ["audit target drift", (documents: Map<string, Record<string, unknown>>) => {
+      documents.set("glmOperations/audit-force-restart", {
+        ...documents.get("glmOperations/audit-force-restart")!,
+        target: { gatewayId: "canary", podName: "octogee-gateway-canary-a", podUid: "other-uid" },
+      });
+    }, "force restart audit audit-force-restart is not owned by this action"],
+    ["audit target expansion", (documents: Map<string, Record<string, unknown>>) => {
+      documents.set("glmOperations/audit-force-restart", {
+        ...documents.get("glmOperations/audit-force-restart")!,
+        target: {
+          gatewayId: "canary",
+          podName: "octogee-gateway-canary-a",
+          podUid: "pod-uid-1",
+          unexpected: true,
+        },
+      });
+    }, "force restart audit audit-force-restart is not owned by this action"],
+  ])("does not delete when %s lands after the UID re-read", async (_name, afterExactPodRead, error) => {
+    const { db, kubectl, runMutation } = forceRestartHarness({ afterExactPodRead });
+
+    await expect(runForcedGatewayRestart({
+      db: db as never,
+      kubeContext: "gke_octogee_us-central1_octogee-gateway",
+      namespace: "octogee-test",
+      gatewayId: "canary",
+      now: () => 1234,
+      runKubectl: kubectl,
+      runMutation,
+    })).rejects.toThrow(error);
+
+    expect(kubectl).toHaveBeenCalledTimes(2);
+  });
+
+  it("binds the delete to the audited UID when replacement lands after the final fence", async () => {
+    const { db, kubectl, runMutation } = forceRestartHarness({
+      deleteResult: {
+        status: 1,
+        stdout: "",
+        stderr: "409 Conflict: UID precondition failed",
+      },
+    });
+
+    await expect(runForcedGatewayRestart({
+      db: db as never,
+      kubeContext: "gke_octogee_us-central1_octogee-gateway",
+      namespace: "octogee-test",
+      gatewayId: "canary",
+      now: () => 1234,
+      runKubectl: kubectl,
+      runMutation,
+    })).rejects.toThrow("409 Conflict: UID precondition failed");
+
+    expect(kubectl).toHaveBeenCalledTimes(3);
+    expect(kubectl.mock.calls[2]?.[1]).toBe(JSON.stringify({
+      apiVersion: "v1",
+      kind: "DeleteOptions",
+      preconditions: { uid: "pod-uid-1" },
+    }));
   });
 });
 
