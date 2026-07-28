@@ -18,6 +18,11 @@ vi.mock("../lib/byosub-broker.js", () => ({
   readByosubFlow: (...a: unknown[]) => readByosubFlow(...a),
 }));
 
+const readGatewayAuthorization = vi.fn();
+vi.mock("@octogee/core/gateway-live-release", () => ({
+  readGatewayAuthorization: (...args: unknown[]) => readGatewayAuthorization(...args),
+}));
+
 const ssoStart = vi.fn();
 const ssoStatus = vi.fn();
 const ssoSubmit = vi.fn();
@@ -50,6 +55,10 @@ describe("byosub-auth sidecar router", () => {
     process.env.GATEWAY_ID = "bender";
     resolveByosubUserGateway.mockReset().mockResolvedValue({ slug: "tester5", gatewayId: "bender" });
     readByosubFlow.mockReset();
+    readGatewayAuthorization.mockReset().mockResolvedValue({
+      kind: "durable",
+      config: { gatewayClass: "builder" },
+    });
     ssoStart.mockReset();
     ssoStatus.mockReset();
     ssoSubmit.mockReset();
@@ -77,6 +86,20 @@ describe("byosub-auth sidecar router", () => {
     resolveByosubUserGateway.mockResolvedValue({ slug: "tester5", gatewayId: "other-gw" });
     const res = await request(app()).post("/byosub/connect").send({ provider: "anthropic" });
     expect(res.status).toBe(409);
+    expect(ssoStart).not.toHaveBeenCalled();
+    expect(brokerByosubFlow).not.toHaveBeenCalled();
+  });
+
+  it("connect: refuses the shared gateway before a subscription flow starts", async () => {
+    readGatewayAuthorization.mockResolvedValue({
+      kind: "durable",
+      config: { gatewayClass: "shared" },
+    });
+
+    const res = await request(app()).post("/byosub/connect").send({ provider: "anthropic" });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ code: "subscription-runtime-required" });
     expect(ssoStart).not.toHaveBeenCalled();
     expect(brokerByosubFlow).not.toHaveBeenCalled();
   });

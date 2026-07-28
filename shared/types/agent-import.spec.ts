@@ -378,6 +378,8 @@ describe("agent import transport contracts", () => {
     expect(classifyAgentImportArchivePath("git/shallow")).toBeNull();
     expect(classifyAgentImportArchivePath("git/config")).toBeNull();
     expect(classifyAgentImportArchivePath("workspace/.env")).toBeNull();
+    expect(classifyAgentImportArchivePath("workspace/openclaw-workspace-state.json")).toBeNull();
+    expect(classifyAgentImportArchivePath("workspace/.openclaw/workspace-state.json")).toBeNull();
     expect(classifyAgentImportArchivePath("workspace/credentials/provider.json")).toBeNull();
     expect(classifyAgentImportArchivePath("workspace/credentials.json")).toBeNull();
     expect(classifyAgentImportArchivePath("workspace/.npmrc")).toBeNull();

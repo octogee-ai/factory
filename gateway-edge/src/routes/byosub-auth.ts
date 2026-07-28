@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 
 import { requireAuthenticatedUid } from "../middleware/auth.js";
+import { db } from "../lib/db.js";
 import {
   coachAgentId,
   gatewayClaudeSsoClient,
@@ -20,6 +21,7 @@ import {
   type ModelCredentialOAuthProviderId,
   type ModelCredentialSubscriptionProviderId,
 } from "@octogee/shared/types/model-credentials";
+import { readGatewayAuthorization } from "@octogee/core/gateway-live-release";
 
 function subscriptionProviderIds(): ModelCredentialSubscriptionProviderId[] {
   return [...MODEL_CREDENTIAL_SUBSCRIPTION_PROVIDER_IDS];
@@ -45,6 +47,11 @@ function localGatewayId(): string | null {
 function flowIsMountedHere(flow: ByosubFlowRecord): boolean {
   const local = localGatewayId();
   return !!local && flow.gatewayId === local;
+}
+
+async function hasPrivateSubscriptionRuntime(gatewayId: string): Promise<boolean> {
+  const authorization = await readGatewayAuthorization(db, gatewayId);
+  return authorization?.kind === "durable" && authorization.config.gatewayClass !== "shared";
 }
 
 export function createByosubAuthRouter(): Router {
@@ -73,6 +80,13 @@ export function createByosubAuthRouter(): Router {
         const local = localGatewayId();
         if (!local || resolved.gatewayId !== local) {
           res.status(409).json({ error: "not_on_this_pod" });
+          return;
+        }
+        if (!await hasPrivateSubscriptionRuntime(resolved.gatewayId)) {
+          res.status(409).json({
+            code: "subscription-runtime-required",
+            error: "A private Builder runtime is required before connecting a personal subscription",
+          });
           return;
         }
         const agentId = coachAgentId(resolved.slug);

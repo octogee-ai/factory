@@ -726,6 +726,7 @@ const BLOCKED_WORKSPACE_SEGMENTS = new Set([
 ]);
 const SENSITIVE_WORKSPACE_DIRECTORY = /^(?:credentials?|secrets?|sessions?|auth[-_]?profiles?)$/;
 const OPENCLAW_CONFIG_BACKUP = /^openclaw\.json(?:[._-].+|~)$/;
+const RUNTIME_WORKSPACE_FILES = new Set(["openclaw-workspace-state.json"]);
 
 function hasControlCharacter(value: string): boolean {
   for (const character of value) {
@@ -762,6 +763,7 @@ function classifyWorkspaceArchivePath(relative: string[]): "workspace" | null {
     [".npmrc", ".pypirc", ".netrc", ".git-credentials", "application_default_credentials.json"].includes(leaf) ||
     lowered.some((segment, index) => segment === ".config" && lowered[index + 1] === "gcloud")
   ) return null;
+  if (relative.length === 1 && RUNTIME_WORKSPACE_FILES.has(leaf)) return null;
   if (relative.length === 1 && /^(credentials?|secrets?)([._-].*)?$/.test(leaf)) return null;
   if (/(^|[._-])(id_rsa|id_ed25519|private[-_.]?key)([._-]|$)/.test(leaf)) return null;
   return "workspace";

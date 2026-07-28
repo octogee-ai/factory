@@ -13,6 +13,7 @@ import {
   compareAgentImportWorkspaces as compareAgentImportWorkspacesWithPolicy,
   inspectAgentImportRepository,
   rollbackAgentImportRepository,
+  sanitizeAgentImportRepositoryHistory,
   scanAgentImportSecrets,
 } from "../lib/agent-import-git.js";
 
@@ -133,6 +134,68 @@ describe("inspectAgentImportRepository", () => {
         code: "unsafe_git_entry",
         message: expect.stringMatching(/\.env.*[0-9a-f]{40}/),
       });
+  });
+
+  it("rewrites blocked history before inspection so only durable workspace files reach destination refs", async () => {
+    const source = repo("agent-import-sanitize-history", {
+      "AGENTS.md": "# Agent instructions\n",
+      "SOUL.md": "# Soul\n",
+      "USER.md": "# User\n",
+      "MEMORY.md": "remember this\n",
+      ".openclaw/workspace-state.json": "{\"token\":\"must-not-survive\"}\n",
+      ".env": "API_KEY=must-not-survive\n",
+      "sessions/last.json": "{\"session\":\"must-not-survive\"}\n",
+    });
+    const blockedBlobs = [
+      git(source, "rev-parse", "HEAD:.openclaw/workspace-state.json"),
+      git(source, "rev-parse", "HEAD:.env"),
+      git(source, "rev-parse", "HEAD:sessions/last.json"),
+    ];
+    fs.rmSync(path.join(source, ".openclaw"), { recursive: true, force: true });
+    git(source, "add", "-A");
+    git(source, "commit", "-q", "-m", "remove runtime state");
+
+    const cloneRoot = temp("agent-import-sanitize-clone");
+    const clonedSource = path.join(cloneRoot, "source");
+    git(cloneRoot, "clone", "-q", source, clonedSource);
+    expect(git(clonedSource, "for-each-ref", "--format=%(refname)", "refs/remotes/origin")).toContain(
+      "refs/remotes/origin/HEAD",
+    );
+    const sourceHead = await sanitizeAgentImportRepositoryHistory(source, git(source, "rev-parse", "HEAD"));
+    const clonedHead = await sanitizeAgentImportRepositoryHistory(clonedSource, git(clonedSource, "rev-parse", "HEAD"));
+    expect(clonedHead).toBe(sourceHead);
+    expect(git(clonedSource, "for-each-ref", "--format=%(refname)", "refs"))
+      .toBe("refs/heads/octogee-import");
+    const inspected = await inspectAgentImportRepository(source, { scanSecrets: async () => [] });
+    expect(inspected.head).toBe(sourceHead);
+    expect(git(source, "log", "--all", "--", ".openclaw/workspace-state.json")).toBe("");
+    expect(git(source, "log", "--all", "--", ".env")).toBe("");
+    expect(git(source, "log", "--all", "--", "sessions/last.json")).toBe("");
+
+    const target = repo("agent-import-sanitize-target", { "README.md": "starter\n" });
+    const applied = await applyAgentImportRepository({
+      sourceDir: source,
+      sourceHead,
+      targetDir: target,
+      destinationHead: git(target, "rev-parse", "HEAD"),
+      importId: "import-sanitized-history",
+      slug: "jack",
+      storeBlob: vi.fn(),
+      cleanupBlobs: vi.fn(),
+      push: false,
+    });
+
+    for (const file of ["AGENTS.md", "SOUL.md", "USER.md", "MEMORY.md"]) {
+      expect(fs.existsSync(path.join(target, file))).toBe(true);
+    }
+    expect(fs.existsSync(path.join(target, ".openclaw", "workspace-state.json"))).toBe(false);
+    expect(fs.existsSync(path.join(target, ".env"))).toBe(false);
+    expect(fs.existsSync(path.join(target, "sessions", "last.json"))).toBe(false);
+    expect(git(target, "log", "--all", "--", ".openclaw/workspace-state.json")).toBe("");
+    const reachableObjects = git(target, "rev-list", "--objects", "--all");
+    for (const blockedBlob of blockedBlobs) expect(reachableObjects).not.toContain(blockedBlob);
+    expect(git(target, "rev-parse", `refs/octogee/imports/import-sanitized-history/source`)).toBe(sourceHead);
+    expect(git(target, "rev-list", "--parents", "-n", "1", applied.importCommit).split(" ")[2]).toBe(sourceHead);
   });
 
   it("rejects nested credential directories and OpenClaw config backups in history", async () => {

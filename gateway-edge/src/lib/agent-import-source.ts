@@ -10,7 +10,10 @@ import {
   validateAgentImportConfigArtifacts,
   type AgentImportConfigArtifacts,
 } from "@octogee/shared/types/agent-import";
-import { assertAgentImportRepositoryExpansionSafe } from "./agent-import-git.js";
+import {
+  assertAgentImportRepositoryExpansionSafe,
+  sanitizeAgentImportRepositoryHistory,
+} from "./agent-import-git.js";
 
 const OWNER_RE = /^[A-Za-z0-9-]{1,39}$/;
 const REPO_RE = /^[A-Za-z0-9._-]{1,100}$/;
@@ -152,11 +155,12 @@ export async function cloneGithubAgentImportSource(options: {
     }
     const sourceHead = await runGit(repoDir, ["rev-parse", "HEAD"]);
     if (!SHA_RE.test(sourceHead)) throw new AgentImportSourceError("git_source_invalid", "GitHub source has no commit");
-    await assertAgentImportRepositoryExpansionSafe(repoDir, sourceHead);
-    await runGit(repoDir, ["reset", "--hard", sourceHead]);
+    const sanitizedHead = await sanitizeAgentImportRepositoryHistory(repoDir, sourceHead);
+    await assertAgentImportRepositoryExpansionSafe(repoDir, sanitizedHead);
+    await runGit(repoDir, ["reset", "--hard", sanitizedHead]);
     return {
       repoDir,
-      sourceHead,
+      sourceHead: sanitizedHead,
       cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
     };
   } catch (error) {
@@ -239,6 +243,39 @@ function sanitizedPackedRefs(contents: Buffer): Buffer {
   return Buffer.from(retained.join("\n"), "utf8");
 }
 
+function validatedArchiveEntryMetadata(
+  entry: JSZip.JSZipObject,
+  limits: { maxEntryBytes: number; maxUnpackedBytes: number },
+  total: number,
+) {
+  const classification = classifyAgentImportArchivePath(entry.name);
+  if (zipEntryIsSymlink(entry)) {
+    throw new AgentImportSourceError("unsafe_archive_entry", `archive entry is not allowed: ${entry.name}`);
+  }
+  const declaredSize = (entry as unknown as { _data?: { uncompressedSize?: unknown } })._data?.uncompressedSize;
+  if (typeof declaredSize !== "number" || !Number.isSafeInteger(declaredSize) || declaredSize < 0) {
+    throw new AgentImportSourceError("invalid_archive", "agent import archive has invalid size metadata");
+  }
+  if (declaredSize > limits.maxEntryBytes || total + declaredSize > limits.maxUnpackedBytes) {
+    throw new AgentImportSourceError("archive_too_large", `archive entry exceeds its expansion limit: ${entry.name}`);
+  }
+  if (!classification && !entry.name.startsWith("workspace/")) {
+    throw new AgentImportSourceError("unsafe_archive_entry", `archive entry is not allowed: ${entry.name}`);
+  }
+  return { classification, declaredSize };
+}
+
+async function validatedArchiveEntryContents(
+  entry: JSZip.JSZipObject,
+  maxEntryBytes: number,
+): Promise<Buffer> {
+  const contents = await entry.async("nodebuffer");
+  if (contents.length > maxEntryBytes) {
+    throw new AgentImportSourceError("archive_too_large", `archive entry exceeds 32 MiB: ${entry.name}`);
+  }
+  return contents;
+}
+
 async function validatedArchiveEntries(
   buffer: Buffer,
   limits: { maxEntryBytes: number; maxUnpackedBytes: number },
@@ -259,20 +296,12 @@ async function validatedArchiveEntries(
   const result = new Map<string, Buffer>();
   let total = 0;
   for (const entry of files) {
-    if (!classifyAgentImportArchivePath(entry.name) || zipEntryIsSymlink(entry)) {
-      throw new AgentImportSourceError("unsafe_archive_entry", `archive entry is not allowed: ${entry.name}`);
+    const { classification, declaredSize } = validatedArchiveEntryMetadata(entry, limits, total);
+    if (!classification) {
+      total += declaredSize;
+      continue;
     }
-    const declaredSize = (entry as unknown as { _data?: { uncompressedSize?: unknown } })._data?.uncompressedSize;
-    if (typeof declaredSize !== "number" || !Number.isSafeInteger(declaredSize) || declaredSize < 0) {
-      throw new AgentImportSourceError("invalid_archive", "agent import archive has invalid size metadata");
-    }
-    if (declaredSize > limits.maxEntryBytes || total + declaredSize > limits.maxUnpackedBytes) {
-      throw new AgentImportSourceError("archive_too_large", `archive entry exceeds its expansion limit: ${entry.name}`);
-    }
-    const contents = await entry.async("nodebuffer");
-    if (contents.length > limits.maxEntryBytes) {
-      throw new AgentImportSourceError("archive_too_large", `archive entry exceeds 32 MiB: ${entry.name}`);
-    }
+    const contents = await validatedArchiveEntryContents(entry, limits.maxEntryBytes);
     total += contents.length;
     if (total > limits.maxUnpackedBytes) {
       throw new AgentImportSourceError("archive_too_large", "agent import archive exceeds 128 MiB unpacked");
@@ -319,8 +348,10 @@ async function commitCurrentTip(repoDir: string, message: string): Promise<strin
     const env = sourceGitEnvironment(process.env, {
       GIT_AUTHOR_NAME: "Octogee Agent Import",
       GIT_AUTHOR_EMAIL: "agent-import@octogee.invalid",
+      GIT_AUTHOR_DATE: "1970-01-01T00:00:00Z",
       GIT_COMMITTER_NAME: "Octogee Agent Import",
       GIT_COMMITTER_EMAIL: "agent-import@octogee.invalid",
+      GIT_COMMITTER_DATE: "1970-01-01T00:00:00Z",
     });
     await runGit(repoDir, ["commit", "--quiet", "-m", message], env);
   }
@@ -350,12 +381,13 @@ async function initializeLocalRepository(
   fs.mkdirSync(path.join(repoDir, ".git", "refs", "heads"), { recursive: true, mode: 0o700 });
   const committedHead = await runGit(repoDir, ["rev-parse", "HEAD"]);
   if (!SHA_RE.test(committedHead)) throw new AgentImportSourceError("git_source_invalid", "local Git HEAD is invalid");
-  await assertAgentImportRepositoryExpansionSafe(repoDir, committedHead, {
+  const sourceHead = await sanitizeAgentImportRepositoryHistory(repoDir, committedHead);
+  await assertAgentImportRepositoryExpansionSafe(repoDir, sourceHead, {
     ...(maxGitBlobBytes === undefined ? {} : { maxBlobBytes: maxGitBlobBytes }),
   });
-  await runGit(repoDir, ["fsck", "--strict", "--no-dangling"]);
-  const trackedExecutables = await executablePaths(repoDir, committedHead);
-  await runGit(repoDir, ["reset", "--hard", committedHead]);
+  await runGit(repoDir, ["fsck", "--strict"]);
+  const trackedExecutables = await executablePaths(repoDir, sourceHead);
+  await runGit(repoDir, ["reset", "--hard", sourceHead]);
   clearRepoWorktree(repoDir);
   return trackedExecutables;
 }

@@ -130,8 +130,13 @@ describe("gateway principal access", () => {
   });
 
   it("uses a stable collision-resistant document id", () => {
-    expect(gatewayAccessGrantId("bender", "helper")).toMatch(/^[a-f0-9]{64}$/u);
-    expect(gatewayAccessGrantId("ab", "c")).not.toBe(gatewayAccessGrantId("a", "bc"));
+    expect(gatewayAccessGrantId("bender", "alex", "helper")).toMatch(/^[a-f0-9]{64}$/u);
+    expect(gatewayAccessGrantId("ab", "c", "d")).not.toBe(
+      gatewayAccessGrantId("a", "bc", "d"),
+    );
+    expect(gatewayAccessGrantId("bender", "alex", "helper")).not.toBe(
+      gatewayAccessGrantId("bender", "other-workspace", "helper"),
+    );
   });
 
   it("publishes complete versioned preset copy without internal RPC names", () => {

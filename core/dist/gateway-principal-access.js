@@ -193,6 +193,12 @@ export function resolveGatewayPrincipalAccess(input) {
         expiresAt: grant.expiresAt,
     };
 }
-export function gatewayAccessGrantId(gatewayId, granteeUid) {
-    return createHash("sha256").update(gatewayId).update("\0").update(granteeUid).digest("hex");
+export function gatewayAccessGrantId(gatewayId, workspaceSlug, granteeUid) {
+    return createHash("sha256")
+        .update(gatewayId)
+        .update("\0")
+        .update(workspaceSlug)
+        .update("\0")
+        .update(granteeUid)
+        .digest("hex");
 }

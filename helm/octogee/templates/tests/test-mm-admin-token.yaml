@@ -30,14 +30,20 @@ spec:
         - sh
         - -ec
         - |
-          echo "=== Validating MM_ADMIN_TOKEN against Mattermost API ==="
+          echo "=== Validating tracked Mattermost admin PAT against API ==="
 
-          if [ -z "$MM_ADMIN_TOKEN" ] || [ -z "$MM_ADMIN_USER" ] || [ -z "$MM_ADMIN_USER_ID" ]; then
+          if [ -z "$MM_ADMIN_TOKEN" ] || [ -z "$MM_ADMIN_TOKEN_ID" ] || [ -z "$MM_ADMIN_TOKEN_FINGERPRINT" ] || [ -z "$MM_ADMIN_USER" ] || [ -z "$MM_ADMIN_USER_ID" ]; then
             echo "FAIL: Mattermost admin contract inputs are empty or not injected"
             exit 1
           fi
 
           echo "Admin contract inputs present"
+
+          TOKEN_FINGERPRINT=$(printf '%s' "$MM_ADMIN_TOKEN" | sha256sum | awk '{print $1}')
+          if [ "$TOKEN_FINGERPRINT" != "$MM_ADMIN_TOKEN_FINGERPRINT" ]; then
+            echo "FAIL: MM_ADMIN_TOKEN does not match its recorded PAT fingerprint"
+            exit 1
+          fi
 
           HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
             -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
@@ -55,7 +61,18 @@ spec:
               echo "FAIL: Admin token does not resolve to the configured system administrator"
               exit 1
             fi
-            echo "PASS: Admin token resolves to the configured system administrator"
+
+            MM_PAT=$(curl -s \
+              -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
+              "http://mattermost.{{ .Release.Namespace }}.svc.cluster.local:8065/api/v4/users/tokens/$MM_ADMIN_TOKEN_ID")
+            if ! printf '%s' "$MM_PAT" | grep -Fq "\"id\":\"$MM_ADMIN_TOKEN_ID\"" \
+              || ! printf '%s' "$MM_PAT" | grep -Fq "\"user_id\":\"$MM_ADMIN_USER_ID\"" \
+              || ! printf '%s' "$MM_PAT" | grep -Fq '"description":"octogee platform admin PAT"' \
+              || ! printf '%s' "$MM_PAT" | grep -Fq '"is_active":true'; then
+              echo "FAIL: Admin token does not match the tracked active platform PAT"
+              exit 1
+            fi
+            echo "PASS: Admin token resolves to the tracked active platform PAT"
             exit 0
           elif [ "$HTTP_CODE" = "401" ]; then
             echo "FAIL: Token is expired or revoked (401 Unauthorized)"
@@ -71,6 +88,16 @@ spec:
             secretKeyRef:
               name: {{ .Values.global.mattermost.adminSecret.name }}
               key: {{ .Values.global.mattermost.adminSecret.tokenKey | default "admin_token" }}
+        - name: MM_ADMIN_TOKEN_ID
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.global.mattermost.adminSecret.name }}
+              key: admin_token_id
+        - name: MM_ADMIN_TOKEN_FINGERPRINT
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.global.mattermost.adminSecret.name }}
+              key: admin_token_fingerprint
         - name: MM_ADMIN_USER
           valueFrom:
             secretKeyRef:

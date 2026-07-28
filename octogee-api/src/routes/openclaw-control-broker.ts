@@ -95,6 +95,7 @@ const ASSIGNMENT_MISSING = "assignment-missing";
 interface ControlSession {
   uid: string;
   gatewayId: string;
+  workspaceSlug: string;
   revisionId: string;
   brokerProfile: OpenClawBrokerProfile;
   permissionSetIds: GatewayPermissionSetId[];
@@ -196,62 +197,121 @@ function accessBindingMatches(
     access.permissionSetIds.every((id, index) => id === binding.permissionSetIds[index]);
 }
 
-async function storedPrincipalAccess(args: {
-  db: Firestore;
-  tx: Transaction;
-  root: unknown;
-  gatewayId: string;
-  uid: string;
-  now: number;
-}): Promise<GatewayPrincipalAccess | null> {
-  const authorization = gatewayAuthorizationFromRootDocument(args.root, args.gatewayId);
-  if (!authorization) return null;
-  const ownerUid = authorization.config.ownerUid;
-  const workspaceSlug = authorization.config.builderSlug;
-  if (ownerUid === args.uid) {
-    const owner = resolveGatewayPrincipalAccess({
-      gateway: { gatewayId: args.gatewayId, ownerUid, workspaceSlug },
-      uid: args.uid,
-      grant: null,
-      isWorkspaceMember: false,
-      now: args.now,
-    });
-    return owner.kind === "denied" ? null : owner;
+interface ScopedPrincipalAccess {
+  scope: { gatewayId: string; workspaceSlug: string; ownerUid: string };
+  principal: GatewayPrincipalAccess | null;
+  assignmentMissing: boolean;
+}
+
+type GatewayRootAuthorization = NonNullable<ReturnType<typeof gatewayAuthorizationFromRootDocument>>;
+
+async function storedOwnerScope(
+  args: {
+    db: Firestore;
+    tx: Transaction;
+    gatewayId: string;
+    workspaceSlug: string;
+  },
+  authorization: GatewayRootAuthorization,
+): Promise<{ scope: ScopedPrincipalAccess["scope"]; assignmentMissing: boolean } | null> {
+  const gatewayClass = resolveGatewayClass({
+    gatewayClass: authorization.config.gatewayClass,
+    profile: authorization.config.profile ?? undefined,
+    imageProfile: authorization.config.imageProfile,
+  });
+  if (gatewayClass !== "shared" && authorization.config.builderSlug !== args.workspaceSlug) {
+    return null;
   }
-  if (!workspaceSlug) return null;
+  const workspace = gatewayClass === "shared"
+    ? await args.tx.get(args.db.doc(`workspaces/${args.workspaceSlug}`))
+    : null;
+  const ownerUid = gatewayClass === "shared"
+    ? workspace?.data()?.ownerUid
+    : authorization.config.ownerUid;
+  if (typeof ownerUid !== "string" || !ownerUid) return null;
+  const scope = { gatewayId: args.gatewayId, workspaceSlug: args.workspaceSlug, ownerUid };
+  const owner = await args.tx.get(args.db.doc(`users/${ownerUid}`));
+  return {
+    scope,
+    assignmentMissing: !owner.exists || !userAssignmentMatchesGateway(
+      owner.data(),
+      args.gatewayId,
+      args.workspaceSlug,
+    ),
+  };
+}
+
+async function storedGranteePrincipal(
+  args: {
+    db: Firestore;
+    tx: Transaction;
+    uid: string;
+    now: number;
+  },
+  scope: ScopedPrincipalAccess["scope"],
+): Promise<GatewayPrincipalAccess> {
   const [grantSnap, memberSnap] = await Promise.all([
     args.tx.get(args.db.doc(
-      `${GATEWAY_ACCESS_GRANTS_COLLECTION}/${gatewayAccessGrantId(args.gatewayId, args.uid)}`,
+      `${GATEWAY_ACCESS_GRANTS_COLLECTION}/${gatewayAccessGrantId(
+        scope.gatewayId,
+        scope.workspaceSlug,
+        args.uid,
+      )}`,
     )),
-    args.tx.get(args.db.doc(`workspaces/${workspaceSlug}/members/${args.uid}`)),
+    args.tx.get(args.db.doc(`workspaces/${scope.workspaceSlug}/members/${args.uid}`)),
   ]);
-  const delegated = resolveGatewayPrincipalAccess({
-    gateway: { gatewayId: args.gatewayId, ownerUid, workspaceSlug },
+  return resolveGatewayPrincipalAccess({
+    gateway: scope,
     uid: args.uid,
     grant: grantSnap.exists ? grantSnap.data() : null,
     isWorkspaceMember: memberSnap.exists && isCanonicalWorkspaceMembership(memberSnap.data()),
     now: args.now,
   });
-  return delegated;
+}
+
+async function storedPrincipalAccess(args: {
+  db: Firestore;
+  tx: Transaction;
+  root: unknown;
+  gatewayId: string;
+  workspaceSlug: string;
+  uid: string;
+  now: number;
+}): Promise<ScopedPrincipalAccess | null> {
+  const authorization = gatewayAuthorizationFromRootDocument(args.root, args.gatewayId);
+  if (!authorization) return null;
+  const storedScope = await storedOwnerScope(args, authorization);
+  if (!storedScope) return null;
+  if (storedScope.assignmentMissing) {
+    return { scope: storedScope.scope, principal: null, assignmentMissing: true };
+  }
+  if (storedScope.scope.ownerUid === args.uid) {
+    const principal = resolveGatewayPrincipalAccess({
+      gateway: storedScope.scope,
+      uid: args.uid,
+      grant: null,
+      isWorkspaceMember: false,
+      now: args.now,
+    });
+    return principal.kind === "denied"
+      ? null
+      : { scope: storedScope.scope, principal, assignmentMissing: false };
+  }
+  const principal = await storedGranteePrincipal(args, storedScope.scope);
+  return { scope: storedScope.scope, principal, assignmentMissing: false };
 }
 
 function auditPrincipalDenial(args: {
   db: Firestore;
   tx: Transaction;
-  root: unknown;
-  gatewayId: string;
+  scope: { gatewayId: string; workspaceSlug: string; ownerUid: string };
   uid: string;
   principal: GatewayPrincipalAccess;
   now: number;
 }): void {
-  const authorization = gatewayAuthorizationFromRootDocument(args.root, args.gatewayId);
-  const ownerUid = authorization?.config.ownerUid;
-  const workspaceSlug = authorization?.config.builderSlug;
-  if (!ownerUid || !workspaceSlug || args.uid === ownerUid) return;
+  if (args.uid === args.scope.ownerUid) return;
   setGatewayAccessDenialAudit(args.db, args.tx, {
-    gatewayId: args.gatewayId,
-    workspaceSlug,
-    ownerUid,
+    ...args.scope,
     actorUid: args.uid,
     granteeUid: args.uid,
     reason: args.principal.kind === "denied" ? args.principal.reason : "binding_changed",
@@ -328,12 +388,14 @@ function parseSession(
   const item = record(value);
   if (!item) return null;
   const uid = boundedString(item.uid, 128);
+  const workspaceSlug = boundedString(item.workspaceSlug, 128);
   const profile = controlProfile(item.brokerProfile);
   const binding = profile
     ? controlSessionBinding(profile, item.permissionSetIds, item.grantRevision)
     : null;
   if (
     !uid ||
+    !workspaceSlug ||
     !profile ||
     !binding ||
     item.gatewayId !== gatewayId ||
@@ -347,6 +409,7 @@ function parseSession(
   return {
     uid,
     gatewayId,
+    workspaceSlug,
     revisionId,
     brokerProfile: profile,
     permissionSetIds: binding.ids,
@@ -429,21 +492,23 @@ async function sessionAccessInTransaction(args: {
   );
   if (!session) return { kind: "session-invalid" };
   const root = rootSnap.data();
-  const principal = await storedPrincipalAccess({
+  const stored = await storedPrincipalAccess({
     db: args.db,
     tx: args.tx,
     root,
     gatewayId: args.gatewayId,
+    workspaceSlug: session.workspaceSlug,
     uid: session.uid,
     now: args.now,
   });
-  if (!principal || principal.kind === "denied" || !accessBindingMatches(principal, session)) {
-    if (principal) {
+  if (stored?.assignmentMissing) return { kind: ASSIGNMENT_MISSING };
+  const principal = stored?.principal;
+  if (!stored || !principal || principal.kind === "denied" || !accessBindingMatches(principal, session)) {
+    if (stored && principal) {
       auditPrincipalDenial({
         db: args.db,
         tx: args.tx,
-        root,
-        gatewayId: args.gatewayId,
+        scope: stored.scope,
         uid: session.uid,
         principal,
         now: args.now,
@@ -453,16 +518,6 @@ async function sessionAccessInTransaction(args: {
   }
   const authorization = controlUiAuthorization(root, args.gatewayId, principal);
   if (!authorization) return { kind: CAPABILITY_DISABLED };
-  const ownerUid = authorization.config.ownerUid;
-  if (typeof ownerUid !== "string") return { kind: ASSIGNMENT_MISSING };
-  const ownerAssignmentSnap = await args.tx.get(args.db.doc(`users/${ownerUid}`));
-  if (!userAssignmentMatchesGateway(
-    ownerAssignmentSnap.exists ? ownerAssignmentSnap.data() : undefined,
-    args.gatewayId,
-    authorization.config.builderSlug,
-  )) {
-    return { kind: ASSIGNMENT_MISSING };
-  }
   if (!isLiveServingRevision(root, revisionSnap.data(), args.gatewayId, args.revisionId)) {
     return { kind: "not-ready" };
   }
@@ -742,15 +797,14 @@ function rejectRedeemPrincipal(args: {
   attempt: RedeemAttempt;
   inspected: RedeemableTicket;
   principal: GatewayPrincipalAccess | null;
-  root: unknown;
+  scope: { gatewayId: string; workspaceSlug: string; ownerUid: string } | null;
   tx: Transaction;
 }): RedeemResult {
-  if (args.principal) {
+  if (args.principal && args.scope) {
     auditPrincipalDenial({
       db: args.context.db,
       tx: args.tx,
-      root: args.root,
-      gatewayId: args.attempt.authenticated.bound.gatewayId,
+      scope: args.scope,
       uid: args.inspected.uid,
       principal: args.principal,
       now: args.attempt.attemptAt,
@@ -773,37 +827,33 @@ async function redeemPrincipalFailure(args: {
   tx: Transaction;
 }): Promise<RedeemResult | null> {
   const gatewayId = args.attempt.authenticated.bound.gatewayId;
-  const principal = await storedPrincipalAccess({
+  const stored = await storedPrincipalAccess({
     db: args.context.db,
     tx: args.tx,
     root: args.root,
     gatewayId,
+    workspaceSlug: args.inspected.workspaceSlug,
     uid: args.inspected.uid,
     now: args.attempt.attemptAt,
   });
+  if (stored?.assignmentMissing) {
+    setRedeemAudit(args.context, args.tx, {
+      ...args.attempt.baseAudit,
+      uid: args.inspected.uid,
+      outcome: "denied",
+      reason: "assignment_missing",
+    });
+    return { kind: ASSIGNMENT_MISSING };
+  }
+  const principal = stored?.principal ?? null;
   const authorization = principal && principal.kind !== "denied"
     ? controlUiAuthorization(args.root, gatewayId, principal)
     : null;
   if (!authorization || !principal || principal.kind === "denied" ||
     !accessBindingMatches(principal, args.inspected)) {
-    return rejectRedeemPrincipal({ ...args, principal });
+    return rejectRedeemPrincipal({ ...args, principal, scope: stored?.scope ?? null });
   }
-  const ownerUid = authorization.config.ownerUid;
-  const owner = typeof ownerUid === "string"
-    ? await args.tx.get(args.context.db.doc(`users/${ownerUid}`))
-    : null;
-  if (owner?.exists && userAssignmentMatchesGateway(
-    owner.data(),
-    gatewayId,
-    authorization.config.builderSlug,
-  )) return null;
-  setRedeemAudit(args.context, args.tx, {
-    ...args.attempt.baseAudit,
-    uid: args.inspected.uid,
-    outcome: "denied",
-    reason: "assignment_missing",
-  });
-  return { kind: ASSIGNMENT_MISSING };
+  return null;
 }
 
 function persistRedeemedSession(args: {
@@ -819,6 +869,7 @@ function persistRedeemedSession(args: {
   tx.set(documents.sessionRef, {
     uid: inspected.uid,
     gatewayId: attempt.authenticated.bound.gatewayId,
+    workspaceSlug: inspected.workspaceSlug,
     revisionId: attempt.authenticated.revisionId,
     brokerProfile: inspected.brokerProfile,
     permissionSetIds: inspected.permissionSetIds,

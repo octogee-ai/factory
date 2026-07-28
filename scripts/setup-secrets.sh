@@ -14,10 +14,9 @@ set -euo pipefail
 #                        empty mattermost-gateway + gitea-token shells, etc.).
 #                        Helm install can now schedule pods that mount these.
 #
-#   Phase 2 (post-bootstrap): re-reads .env after setup-mattermost.sh +
-#                        setup-gitea.sh have populated MM_TEAM_ID,
-#                        MM_ADMIN_PAT, GIT_API_TOKEN, etc., and re-materializes
-#                        mattermost-gateway + gitea-token with REAL values.
+#   Phase 2 (post-bootstrap): setup-mattermost.sh owns the complete
+#                        mattermost-gateway PAT contract; this script retains it
+#                        and materializes gitea-token plus the remaining values.
 #                        kubectl rollout restart afterwards picks them up.
 #
 # Reads from: .env.test / .env + Secret Manager (octogee project).
@@ -124,6 +123,8 @@ fi
 
 GITHUB_OAUTH_PEER_ENV_FILE=""
 case "$TARGET_ID" in
+  test-central) GITHUB_OAUTH_PEER_ENV_FILE="$REPO_DIR/.env" ;;
+  prod-central) GITHUB_OAUTH_PEER_ENV_FILE="$REPO_DIR/.env.test" ;;
   test-west) GITHUB_OAUTH_PEER_ENV_FILE="$REPO_DIR/.env.prod-west" ;;
   prod-west) GITHUB_OAUTH_PEER_ENV_FILE="$REPO_DIR/.env.test-west" ;;
 esac
@@ -299,21 +300,39 @@ ksecret mattermost-cloud-sql --from-literal=password="$MM_DB_PASSWORD"
 # ── 2. Mattermost gateway creds ───────────────────────────────────────────
 info "mattermost-gateway"
 set +u
-MM_ADMIN_USER="${MM_ADMIN_USER:-$(ksecret_key mattermost-gateway admin_user)}"
-MM_ADMIN_USER="${MM_ADMIN_USER:-octogee-admin}"
-MM_ADMIN_PASS="${MM_ADMIN_PASS:-$(ksecret_key mattermost-gateway admin_pass)}"
-MM_ADMIN_PAT="${MM_ADMIN_PAT:-$(ksecret_key mattermost-gateway admin_token)}"
-MM_TEAM_ID="${MM_TEAM_ID:-$(ksecret_key mattermost-gateway team_id)}"
-MM_ADMIN_USER_ID="${MM_ADMIN_USER_ID:-$(ksecret_key mattermost-gateway admin_user_id)}"
+if [[ "$SECRET_SETUP_PHASE" == "launch" ]]; then
+  MM_ADMIN_USER="$(ksecret_key mattermost-gateway admin_user)"
+  MM_ADMIN_PASS="$(ksecret_key mattermost-gateway admin_pass)"
+  MM_ADMIN_PAT="$(ksecret_key mattermost-gateway admin_token)"
+  MM_ADMIN_PAT_ID="$(ksecret_key mattermost-gateway admin_token_id)"
+  MM_ADMIN_PAT_FINGERPRINT="$(ksecret_key mattermost-gateway admin_token_fingerprint)"
+  MM_TEAM_ID="$(ksecret_key mattermost-gateway team_id)"
+  MM_ADMIN_USER_ID="$(ksecret_key mattermost-gateway admin_user_id)"
+else
+  MM_ADMIN_USER="${MM_ADMIN_USER:-$(ksecret_key mattermost-gateway admin_user)}"
+  MM_ADMIN_USER="${MM_ADMIN_USER:-octogee-admin}"
+  MM_ADMIN_PASS="${MM_ADMIN_PASS:-$(ksecret_key mattermost-gateway admin_pass)}"
+  MM_ADMIN_PAT="$(ksecret_key mattermost-gateway admin_token)"
+  MM_ADMIN_PAT_ID="$(ksecret_key mattermost-gateway admin_token_id)"
+  MM_ADMIN_PAT_FINGERPRINT="$(ksecret_key mattermost-gateway admin_token_fingerprint)"
+  MM_TEAM_ID="${MM_TEAM_ID:-$(ksecret_key mattermost-gateway team_id)}"
+  MM_ADMIN_USER_ID="${MM_ADMIN_USER_ID:-$(ksecret_key mattermost-gateway admin_user_id)}"
+fi
 set -u
-ksecret mattermost-gateway \
-  --from-literal=admin_user="$MM_ADMIN_USER" \
-  --from-literal=admin_pass="$MM_ADMIN_PASS" \
-  --from-literal=admin_token="$MM_ADMIN_PAT" \
-  --from-literal=team_id="$MM_TEAM_ID" \
-  --from-literal=admin_user_id="$MM_ADMIN_USER_ID"
+if [[ "$SECRET_SETUP_PHASE" == "bootstrap" ]]; then
+  ksecret mattermost-gateway \
+    --from-literal=admin_user="$MM_ADMIN_USER" \
+    --from-literal=admin_pass="$MM_ADMIN_PASS" \
+    --from-literal=admin_token="$MM_ADMIN_PAT" \
+    --from-literal=admin_token_id="$MM_ADMIN_PAT_ID" \
+    --from-literal=admin_token_fingerprint="$MM_ADMIN_PAT_FINGERPRINT" \
+    --from-literal=team_id="$MM_TEAM_ID" \
+    --from-literal=admin_user_id="$MM_ADMIN_USER_ID"
+else
+  ok "mattermost-gateway retained; setup-mattermost.sh owns the platform PAT"
+fi
 
-if [[ -z "$MM_ADMIN_PAT" || -z "$MM_TEAM_ID" || -z "$MM_ADMIN_USER_ID" ]]; then
+if [[ -z "$MM_ADMIN_PAT" || -z "$MM_ADMIN_PAT_ID" || -z "$MM_ADMIN_PAT_FINGERPRINT" || -z "$MM_TEAM_ID" || -z "$MM_ADMIN_USER_ID" ]]; then
   warn "mattermost-gateway contains blank bootstrap values. Run ./scripts/setup-mattermost.sh --env=$ENV$TARGET_ARG before trusting this environment."
 fi
 
@@ -1010,6 +1029,8 @@ COMPLETENESS_LABELS=(
   "mattermost-gateway / admin_user"
   "mattermost-gateway / admin_pass"
   "mattermost-gateway / admin_pat"
+  "mattermost-gateway / admin_pat_id"
+  "mattermost-gateway / admin_pat_fingerprint"
   "mattermost-gateway / admin_user_id"
   "mattermost-gateway / team_id"
   "gitea-token"
@@ -1036,7 +1057,7 @@ COMPLETENESS_LABELS=(
   "stripe-secrets / price_ids"
 )
 COMPLETENESS_VALUES=(
-  "${MM_ADMIN_USER:-}" "${MM_ADMIN_PASS:-}" "${MM_ADMIN_PAT:-}" "${MM_ADMIN_USER_ID:-}" "${MM_TEAM_ID:-}"
+  "${MM_ADMIN_USER:-}" "${MM_ADMIN_PASS:-}" "${MM_ADMIN_PAT:-}" "${MM_ADMIN_PAT_ID:-}" "${MM_ADMIN_PAT_FINGERPRINT:-}" "${MM_ADMIN_USER_ID:-}" "${MM_TEAM_ID:-}"
   "${GIT_API_TOKEN:-}" "${GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN:-}" "${OPS_AGENT_BEARER_TOKEN:-}"
   "${SOCIAL_NOTIFICATION_BEARER:-}" "${ANTHROPIC_API_KEY:-}" "${OPENROUTER_API_KEY:-}" "${OPENAI_API_KEY:-}"
   "${RESEND_API_KEY:-}" "${RESEND_FROM_EMAIL:-}" "${GITHUB_CLIENT_ID:-}" "${GITHUB_CLIENT_SECRET:-}"
@@ -1045,7 +1066,7 @@ COMPLETENESS_VALUES=(
   "${STRIPE_SECRET_KEY:-}" "${STRIPE_WEBHOOK_SECRET:-}" "${STRIPE_PRICE_IDS:-}"
 )
 COMPLETENESS_REQUIREMENTS=(
-  post-bootstrap post-bootstrap post-bootstrap post-bootstrap post-bootstrap post-bootstrap
+  post-bootstrap post-bootstrap post-bootstrap post-bootstrap post-bootstrap post-bootstrap post-bootstrap post-bootstrap
   launch launch launch launch launch optional launch launch
   "$(octogee_oauth_provider_requirement github)" "$(octogee_oauth_provider_requirement github)"
   "$(octogee_oauth_provider_requirement google)" "$(octogee_oauth_provider_requirement google)"

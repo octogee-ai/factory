@@ -47,3 +47,14 @@ github_oauth_configured_client_id() {
   fi
   read_env_file_value "$env_file" GITHUB_CLIENT_ID
 }
+
+github_oauth_env_file_for_target() {
+  local repo_dir="$1" target_id="$2"
+
+  case "$target_id" in
+    prod-central) printf '%s/.env\n' "$repo_dir" ;;
+    test-central) printf '%s/.env.test\n' "$repo_dir" ;;
+    build-week-central) printf '%s/.env.build-week\n' "$repo_dir" ;;
+    *) printf '%s/.env.%s\n' "$repo_dir" "$target_id" ;;
+  esac
+}

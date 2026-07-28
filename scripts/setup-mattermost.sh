@@ -25,6 +25,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 # shellcheck source=scripts/lib/deployment-target.sh
 source "$SCRIPT_DIR/lib/deployment-target.sh"
+# shellcheck source=scripts/lib/mattermost-admin-pat.sh
+source "$SCRIPT_DIR/lib/mattermost-admin-pat.sh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -200,9 +202,9 @@ import sys, json
 with open(sys.argv[1], encoding="utf-8") as source:
     tokens = json.load(source)
 for token in tokens:
-    if "gateway-edge" in token.get("description", ""):
+    if "gateway-edge" in token.get("description", "") or token.get("description") == sys.argv[2]:
         print(token["id"])
-' "$json_file" 2>/dev/null); then
+' "$json_file" "$MM_ADMIN_PLATFORM_PAT_DESCRIPTION" 2>/dev/null); then
     rm -f "$json_file"
     return 1
   fi
@@ -210,24 +212,20 @@ for token in tokens:
   printf '%s\n' "$value"
 }
 
-mm_pat_is_valid() {
-  local token="$1" expected_username="$2" expected_user_id="$3" response
-  [[ -n "$token" && -n "$expected_username" && -n "$expected_user_id" ]] || return 1
-  response=$(curl -s "http://localhost:8065/api/v4/users/me" \
-    -H "Authorization: Bearer $token" 2>/dev/null || true)
-  python3 -c '
-import json, sys
-try:
-    user = json.loads(sys.stdin.read())
-except json.JSONDecodeError:
-    raise SystemExit(1)
-roles = user.get("roles", "")
-raise SystemExit(not (
-    user.get("id") == sys.argv[1]
-    and user.get("username") == sys.argv[2]
-    and "system_admin" in roles.split()
-))
-' "$expected_user_id" "$expected_username" <<<"$response"
+set_admin_pat_from_response() {
+  local response="$1"
+  MM_ADMIN_PAT=$(mm_field "$response" token || true)
+  MM_ADMIN_PAT_ID=$(mm_field "$response" id || true)
+  if [[ -z "$MM_ADMIN_PAT" || -z "$MM_ADMIN_PAT_ID" ]]; then
+    MM_ADMIN_PAT_FINGERPRINT=""
+    warn "Mattermost did not return a complete platform admin PAT record"
+    return 1
+  fi
+  MM_ADMIN_PAT_FINGERPRINT=$(mm_admin_pat_fingerprint "$MM_ADMIN_PAT")
+  save_env "MM_ADMIN_PAT" "$MM_ADMIN_PAT"
+  save_env "MM_ADMIN_PAT_ID" "$MM_ADMIN_PAT_ID"
+  save_env "MM_ADMIN_PAT_FINGERPRINT" "$MM_ADMIN_PAT_FINGERPRINT"
+  ok "Platform admin PAT created"
 }
 
 ensure_mm_team() {
@@ -479,14 +477,19 @@ if [[ "$ADMIN_CHECK" == "200" ]]; then
 
   # ── Admin PAT: test cached value first, only rotate if it's broken ──────
   CACHED_ADMIN_PAT=$(ksecret_key mattermost-gateway admin_token)
+  CACHED_ADMIN_PAT_ID=$(ksecret_key mattermost-gateway admin_token_id)
+  CACHED_ADMIN_PAT_FINGERPRINT=$(ksecret_key mattermost-gateway admin_token_fingerprint)
   $ROTATE_PLATFORM_CREDENTIALS && CACHED_ADMIN_PAT=""
-  if mm_pat_is_valid "$CACHED_ADMIN_PAT" "$MM_ADMIN_USER" "$MM_ADMIN_USER_ID"; then
+  if mm_admin_pat_is_valid "$CACHED_ADMIN_PAT" "$MM_ADMIN_USER" "$MM_ADMIN_USER_ID" "$CACHED_ADMIN_PAT_ID" "$CACHED_ADMIN_PAT_FINGERPRINT" "http://localhost:8065"; then
     ok "Cached admin PAT still valid — skipping rotation"
     MM_ADMIN_PAT="$CACHED_ADMIN_PAT"
+    MM_ADMIN_PAT_ID="$CACHED_ADMIN_PAT_ID"
+    MM_ADMIN_PAT_FINGERPRINT="$CACHED_ADMIN_PAT_FINGERPRINT"
     save_env "MM_ADMIN_PAT" "$MM_ADMIN_PAT"
+    save_env "MM_ADMIN_PAT_ID" "$MM_ADMIN_PAT_ID"
+    save_env "MM_ADMIN_PAT_FINGERPRINT" "$MM_ADMIN_PAT_FINGERPRINT"
   else
-    info "Cached admin PAT missing or invalid — rotating"
-    # Revoke any stale gateway-edge-tagged PATs before minting a new one
+    info "Cached platform admin PAT missing, invalid, or unproven — rotating"
     EXISTING_PATS=$(\
       curl -s "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens" \
       -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null)
@@ -494,7 +497,7 @@ if [[ "$ADMIN_CHECK" == "200" ]]; then
     REVOKED=0
     for pat_id in $OLD_PAT_IDS; do
       \
-        curl -s -X POST "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens/revoke" \
+        curl -s -X POST "http://localhost:8065/api/v4/users/tokens/revoke" \
         -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
         -H "Content-Type: application/json" \
         -d "{\"token_id\":\"$pat_id\"}" >/dev/null 2>&1
@@ -506,13 +509,8 @@ if [[ "$ADMIN_CHECK" == "200" ]]; then
       curl -s -X POST "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens" \
       -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
       -H "Content-Type: application/json" \
-      -d '{"description":"gateway-edge admin token"}' 2>/dev/null)
-    MM_ADMIN_PAT=$(mm_field "$PAT_RESP" token || true)
-    if [[ -n "$MM_ADMIN_PAT" ]]; then
-      save_env "MM_ADMIN_PAT" "$MM_ADMIN_PAT"
-      ok "Admin PAT created"
-    else
-      warn "Failed to create admin PAT: $PAT_RESP"
+      -d "{\"description\":\"$MM_ADMIN_PLATFORM_PAT_DESCRIPTION\"}" 2>/dev/null)
+    if ! set_admin_pat_from_response "$PAT_RESP"; then
       warn "octogee-api Mattermost broker routes will fail without this!"
     fi
   fi
@@ -573,13 +571,9 @@ else
     curl -s -X POST "http://localhost:8065/api/v4/users/$MM_ADMIN_USER_ID/tokens" \
     -H "Authorization: Bearer $MM_ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
-    -d '{"description":"gateway-edge admin token"}' 2>/dev/null)
-  MM_ADMIN_PAT=$(mm_field "$PAT_RESP" token || true)
-  if [[ -n "$MM_ADMIN_PAT" ]]; then
-    save_env "MM_ADMIN_PAT" "$MM_ADMIN_PAT"
-    ok "Admin PAT created"
-  else
-    warn "Failed to create admin PAT — octogee-api Mattermost broker routes will fail!"
+    -d "{\"description\":\"$MM_ADMIN_PLATFORM_PAT_DESCRIPTION\"}" 2>/dev/null)
+  if ! set_admin_pat_from_response "$PAT_RESP"; then
+    warn "octogee-api Mattermost broker routes will fail without this!"
   fi
 
   info "All credentials saved to $ENV_FILE"
@@ -590,7 +584,7 @@ set +u
 info "Validating secret values before write..."
 
 WRITE_ERRORS=0
-for var_name in MM_ADMIN_USER MM_ADMIN_PASS MM_ADMIN_USER_ID MM_ADMIN_PAT MM_TEAM_ID; do
+for var_name in MM_ADMIN_USER MM_ADMIN_PASS MM_ADMIN_USER_ID MM_ADMIN_PAT MM_ADMIN_PAT_ID MM_ADMIN_PAT_FINGERPRINT MM_TEAM_ID; do
   val="${!var_name:-}"
   if [[ -z "$val" ]]; then
     warn "$var_name is empty — secret will be incomplete!"
@@ -609,6 +603,8 @@ kubectl create secret generic mattermost-gateway \
   --from-literal=admin_user="${MM_ADMIN_USER:-}" \
   --from-literal=admin_pass="${MM_ADMIN_PASS:-}" \
   --from-literal=admin_token="${MM_ADMIN_PAT:-}" \
+  --from-literal=admin_token_id="${MM_ADMIN_PAT_ID:-}" \
+  --from-literal=admin_token_fingerprint="${MM_ADMIN_PAT_FINGERPRINT:-}" \
   --from-literal=admin_user_id="${MM_ADMIN_USER_ID:-}" \
   --from-literal=team_id="${MM_TEAM_ID:-}" \
   --dry-run=client -o yaml | kubectl apply -f -
@@ -617,7 +613,7 @@ ok "mattermost-gateway K8s secret written (atomic apply)"
 # ── 9. Post-write verification ──────────────────────────────────────────
 info "Verifying written secret..."
 VERIFY_ERRORS=0
-for key in admin_user admin_pass admin_token admin_user_id team_id; do
+for key in admin_user admin_pass admin_token admin_token_id admin_token_fingerprint admin_user_id team_id; do
   VAL=$(kubectl get secret mattermost-gateway -n "$K8S_NAMESPACE" \
     -o jsonpath="{.data.$key}" 2>/dev/null | base64 -d 2>/dev/null || echo "")
   if [[ -z "$VAL" ]]; then
@@ -629,9 +625,9 @@ for key in admin_user admin_pass admin_token admin_user_id team_id; do
 done
 
 [[ "$VERIFY_ERRORS" -eq 0 ]] || fail "$VERIFY_ERRORS Mattermost gateway secret key(s) empty after write"
-mm_pat_is_valid "$MM_ADMIN_PAT" "$MM_ADMIN_USER" "$MM_ADMIN_USER_ID" \
-  || fail "PAT does not resolve to the active system administrator"
-ok "Mattermost gateway secret matches the active system administrator"
+mm_admin_pat_is_valid "$MM_ADMIN_PAT" "$MM_ADMIN_USER" "$MM_ADMIN_USER_ID" "$MM_ADMIN_PAT_ID" "$MM_ADMIN_PAT_FINGERPRINT" "http://localhost:8065" \
+  || fail "mattermost-gateway admin_token is not the tracked active platform PAT"
+ok "Mattermost gateway secret contains the tracked active platform PAT"
 set -u
 
 echo ""
@@ -640,6 +636,8 @@ status "MM_ADMIN_USER set" "${MM_ADMIN_USER:-}"
 status "MM_ADMIN_PASS set" "${MM_ADMIN_PASS:-}"
 status "MM_ADMIN_USER_ID set" "${MM_ADMIN_USER_ID:-}"
 status "MM_ADMIN_PAT set (required for octogee-api Mattermost broker)" "${MM_ADMIN_PAT:-}"
+status "MM_ADMIN_PAT_ID set" "${MM_ADMIN_PAT_ID:-}"
+status "MM_ADMIN_PAT_FINGERPRINT set" "${MM_ADMIN_PAT_FINGERPRINT:-}"
 status "MM_TEAM_ID set" "${MM_TEAM_ID:-}"
 
 echo ""

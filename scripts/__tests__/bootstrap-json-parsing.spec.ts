@@ -23,8 +23,10 @@ describe("environment bootstrap JSON parsing", () => {
 
   it("keeps the Mattermost refresh path idempotent after a partial bootstrap", () => {
     const source = script("setup-mattermost.sh");
+    const patHelper = script("lib/mattermost-admin-pat.sh");
 
-    expect(source).toMatch(/^mm_pat_is_valid\(\) \{/m);
+    expect(source).toContain('source "$SCRIPT_DIR/lib/mattermost-admin-pat.sh"');
+    expect(patHelper).toMatch(/^mm_admin_pat_is_valid\(\) \{/m);
     expect(source).toMatch(/^ensure_mm_team\(\) \{/m);
     expect(source.match(/^\s+ensure_mm_team$/gm)).toHaveLength(2);
   });

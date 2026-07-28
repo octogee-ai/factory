@@ -264,6 +264,16 @@ export function resolveGatewayPrincipalAccess(input: {
   };
 }
 
-export function gatewayAccessGrantId(gatewayId: string, granteeUid: string): string {
-  return createHash("sha256").update(gatewayId).update("\0").update(granteeUid).digest("hex");
+export function gatewayAccessGrantId(
+  gatewayId: string,
+  workspaceSlug: string,
+  granteeUid: string,
+): string {
+  return createHash("sha256")
+    .update(gatewayId)
+    .update("\0")
+    .update(workspaceSlug)
+    .update("\0")
+    .update(granteeUid)
+    .digest("hex");
 }

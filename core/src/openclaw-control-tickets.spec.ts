@@ -17,6 +17,7 @@ describe("OpenClaw Control tickets", () => {
     const minted = createOpenClawControlTicket({
       uid: "uid-owner",
       gatewayId: "bender",
+      workspaceSlug: "alex",
       revisionId: "bender-r7",
       brokerProfile: "delegated-config",
       permissionSetIds: ["trusted-helper.v1"],
@@ -30,6 +31,7 @@ describe("OpenClaw Control tickets", () => {
     expect(minted.document).toMatchObject({
       uid: "uid-owner",
       gatewayId: "bender",
+      workspaceSlug: "alex",
       revisionId: "bender-r7",
       brokerProfile: "delegated-config",
       permissionSetIds: ["trusted-helper.v1"],
@@ -43,6 +45,7 @@ describe("OpenClaw Control tickets", () => {
     const document = {
       uid: "uid-owner",
       gatewayId: "bender",
+      workspaceSlug: "alex",
       revisionId: "bender-r7",
       expiresAt: 20_000,
       brokerProfile: "delegated-config",
@@ -79,6 +82,7 @@ describe("OpenClaw Control tickets", () => {
     const document = {
       uid: "uid-owner",
       gatewayId: "bender",
+      workspaceSlug: "alex",
       revisionId: "bender-r7",
       expiresAt: 20_000,
       brokerProfile: "delegated-config",

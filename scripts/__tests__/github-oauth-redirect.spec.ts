@@ -70,7 +70,18 @@ describe("GitHub OAuth redirect preflight", () => {
     expect(result.status).toBe(0);
   });
 
-  it("wires the isolation check into secret materialization for WEST", () => {
+  it("maps central deployment targets to their primary environment files", () => {
+    const result = run([
+      `source ${JSON.stringify(helperPath)}`,
+      `test "$(github_oauth_env_file_for_target ${JSON.stringify(repoRoot)} test-central)" = ${JSON.stringify(path.join(repoRoot, ".env.test"))}`,
+      `test "$(github_oauth_env_file_for_target ${JSON.stringify(repoRoot)} prod-central)" = ${JSON.stringify(path.join(repoRoot, ".env"))}`,
+    ].join("\n"));
+
+    expect(result.status).toBe(0);
+  });
+
+  it("wires the isolation check into secret materialization for Central and WEST", () => {
     expect(readFileSync(setupSecretsPath, "utf8")).toContain("github_oauth_require_distinct_client_ids");
+    expect(readFileSync(setupSecretsPath, "utf8")).toContain("test-central");
   });
 });

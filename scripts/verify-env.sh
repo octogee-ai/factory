@@ -252,6 +252,8 @@ if [[ "${MM_READY:-0}" -ge 1 ]]; then
   MM_ADMIN_USER=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.admin_user}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
   MM_ADMIN_PASS=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.admin_pass}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
   MM_ADMIN_TOKEN=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.admin_token}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  MM_ADMIN_TOKEN_ID=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.admin_token_id}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  MM_ADMIN_TOKEN_FINGERPRINT=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.admin_token_fingerprint}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
   MM_ADMIN_USER_ID=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.admin_user_id}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
   MM_TEAM_ID=$(kubectl get secret mattermost-gateway -n "$NAMESPACE" -o jsonpath='{.data.team_id}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
   GITEA_TOKEN=$(kubectl get secret gitea-token -n "$NAMESPACE" -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
@@ -259,6 +261,8 @@ if [[ "${MM_READY:-0}" -ge 1 ]]; then
   status "mattermost-gateway admin_user present" "mattermost-gateway admin_user missing" "$MM_ADMIN_USER"
   status "mattermost-gateway admin_pass present" "mattermost-gateway admin_pass missing" "$MM_ADMIN_PASS"
   status "mattermost-gateway admin_token present" "mattermost-gateway admin_token missing (octogee-api Mattermost broker will fail)" "$MM_ADMIN_TOKEN"
+  status "mattermost-gateway admin_token_id present" "mattermost-gateway admin_token_id missing" "$MM_ADMIN_TOKEN_ID"
+  status "mattermost-gateway admin_token_fingerprint present" "mattermost-gateway admin_token_fingerprint missing" "$MM_ADMIN_TOKEN_FINGERPRINT"
   status "mattermost-gateway admin_user_id present" "mattermost-gateway admin_user_id missing" "$MM_ADMIN_USER_ID"
   status "mattermost-gateway team_id present" "mattermost-gateway team_id missing" "$MM_TEAM_ID"
   status "gitea-token present" "gitea-token missing" "$GITEA_TOKEN"
@@ -284,47 +288,63 @@ if [[ "${MM_READY:-0}" -ge 1 ]]; then
 
   set_section bootstrap
   header "Mattermost authenticated admin contract"
-  MM_PORT_FORWARD_LOG=$(mktemp)
-  kubectl port-forward --address 127.0.0.1 -n "$NAMESPACE" --context "$K8S_CONTEXT" \
-    svc/mattermost 0:8065 > "$MM_PORT_FORWARD_LOG" 2>&1 &
-  MM_PORT_FORWARD_PID=$!
-  MM_LOCAL_PORT=""
-  for _ in $(seq 1 10); do
-    MM_LOCAL_PORT=$(sed -nE 's/.*127\.0\.0\.1:([0-9]+).*/\1/p' "$MM_PORT_FORWARD_LOG" | head -1)
-    [[ -n "$MM_LOCAL_PORT" ]] && break
-    sleep 1
-  done
-  if [[ -z "$MM_LOCAL_PORT" ]]; then
-    fail "Mattermost authenticated admin contract could not establish a port-forward"
+  MM_ADMIN_TOKEN_ACTUAL_FINGERPRINT=$(printf '%s' "$MM_ADMIN_TOKEN" | openssl dgst -sha256 -r | awk '{print $1}')
+  if [[ -z "$MM_ADMIN_TOKEN_ID" || -z "$MM_ADMIN_TOKEN_FINGERPRINT" || "$MM_ADMIN_TOKEN_ACTUAL_FINGERPRINT" != "$MM_ADMIN_TOKEN_FINGERPRINT" ]]; then
+    fail "Mattermost authenticated admin contract failed: admin token does not match its tracked PAT fingerprint"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-mattermost.sh --env=$ENV$TARGET_ARG"
+    fi
   else
-    MM_ME_RESPONSE=$(curl -s --max-time 10 "http://127.0.0.1:$MM_LOCAL_PORT/api/v4/users/me" \
-      -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null || true)
-    if python3 -c '
+    MM_PORT_FORWARD_LOG=$(mktemp)
+    kubectl port-forward --address 127.0.0.1 -n "$NAMESPACE" --context "$K8S_CONTEXT" \
+      svc/mattermost 0:8065 > "$MM_PORT_FORWARD_LOG" 2>&1 &
+    MM_PORT_FORWARD_PID=$!
+    MM_LOCAL_PORT=""
+    for _ in $(seq 1 10); do
+      MM_LOCAL_PORT=$(sed -nE 's/.*127\.0\.0\.1:([0-9]+).*/\1/p' "$MM_PORT_FORWARD_LOG" | head -1)
+      [[ -n "$MM_LOCAL_PORT" ]] && break
+      sleep 1
+    done
+    if [[ -z "$MM_LOCAL_PORT" ]]; then
+      fail "Mattermost authenticated admin contract could not establish a port-forward"
+    else
+      MM_ME_RESPONSE=$(curl -s --max-time 10 "http://127.0.0.1:$MM_LOCAL_PORT/api/v4/users/me" \
+        -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null || true)
+      MM_PAT_RESPONSE=$(curl -s --max-time 10 "http://127.0.0.1:$MM_LOCAL_PORT/api/v4/users/tokens/$MM_ADMIN_TOKEN_ID" \
+        -H "Authorization: Bearer $MM_ADMIN_TOKEN" 2>/dev/null || true)
+      if python3 -c '
 import json, sys
 try:
-    user = json.loads(sys.stdin.read())
+    user, access_token = [json.loads(value) for value in sys.stdin.read().splitlines()]
 except json.JSONDecodeError:
+    raise SystemExit(1)
+except ValueError:
     raise SystemExit(1)
 roles = user.get("roles", "")
 raise SystemExit(not (
     user.get("id") == sys.argv[1]
     and user.get("username") == sys.argv[2]
     and "system_admin" in roles.split()
+    and access_token.get("id") == sys.argv[3]
+    and access_token.get("user_id") == sys.argv[1]
+    and access_token.get("description") == "octogee platform admin PAT"
+    and access_token.get("is_active") is True
 ))
-' "$MM_ADMIN_USER_ID" "$MM_ADMIN_USER" <<<"$MM_ME_RESPONSE"; then
-      pass "Mattermost authenticated admin contract verified"
-    else
-      fail "Mattermost authenticated admin contract failed: admin PAT does not resolve to the secret's system administrator"
-      if $FIX; then
-        echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-mattermost.sh --env=$ENV$TARGET_ARG"
+' "$MM_ADMIN_USER_ID" "$MM_ADMIN_USER" "$MM_ADMIN_TOKEN_ID" <<<"${MM_ME_RESPONSE}"$'\n'"${MM_PAT_RESPONSE}"; then
+        pass "Mattermost authenticated platform PAT contract verified"
+      else
+        fail "Mattermost authenticated admin contract failed: admin token is not the tracked active platform PAT"
+        if $FIX; then
+          echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-mattermost.sh --env=$ENV$TARGET_ARG"
+        fi
       fi
     fi
+    if kill -0 "$MM_PORT_FORWARD_PID" 2>/dev/null; then
+      kill "$MM_PORT_FORWARD_PID" 2>/dev/null || true
+      wait "$MM_PORT_FORWARD_PID" 2>/dev/null || true
+    fi
+    rm -f "$MM_PORT_FORWARD_LOG"
   fi
-  if kill -0 "$MM_PORT_FORWARD_PID" 2>/dev/null; then
-    kill "$MM_PORT_FORWARD_PID" 2>/dev/null || true
-    wait "$MM_PORT_FORWARD_PID" 2>/dev/null || true
-  fi
-  rm -f "$MM_PORT_FORWARD_LOG"
 else
   fail "Mattermost not ready (readyReplicas=${MM_READY:-0})"
   if $FIX; then

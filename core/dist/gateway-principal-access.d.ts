@@ -42,4 +42,4 @@ export declare function resolveGatewayPrincipalAccess(input: {
     isWorkspaceMember: boolean;
     now?: number;
 }): GatewayPrincipalAccess;
-export declare function gatewayAccessGrantId(gatewayId: string, granteeUid: string): string;
+export declare function gatewayAccessGrantId(gatewayId: string, workspaceSlug: string, granteeUid: string): string;

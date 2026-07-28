@@ -28,7 +28,7 @@ done
 [[ -n "$TARGET" ]] || { echo "Usage: $0 --target=TARGET" >&2; exit 2; }
 
 octogee_load_deployment_target "--target=$TARGET"
-ENV_FILE="$REPO_DIR/.env.$TARGET_ID"
+ENV_FILE="$(github_oauth_env_file_for_target "$REPO_DIR" "$TARGET_ID")"
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "Missing target env file: $ENV_FILE" >&2
   exit 1

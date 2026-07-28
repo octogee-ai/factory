@@ -5,6 +5,7 @@ export declare const OPENCLAW_CONTROL_TICKET_TTL_MS = 120000;
 export interface OpenClawControlTicketDocument {
     uid: string;
     gatewayId: string;
+    workspaceSlug: string;
     revisionId: string;
     brokerProfile: OpenClawBrokerProfile;
     permissionSetIds: GatewayPermissionSetId[];
@@ -16,6 +17,7 @@ export interface OpenClawControlTicketDocument {
 export interface OpenClawControlRedemption {
     uid: string;
     gatewayId: string;
+    workspaceSlug: string;
     revisionId: string;
     brokerProfile: OpenClawBrokerProfile;
     permissionSetIds: GatewayPermissionSetId[];
@@ -34,6 +36,7 @@ export declare function openClawControlTicketHash(ticket: string): string;
 export declare function createOpenClawControlTicket(args: {
     uid: string;
     gatewayId: string;
+    workspaceSlug: string;
     revisionId: string;
     brokerProfile: OpenClawBrokerProfile;
     permissionSetIds: GatewayPermissionSetId[];

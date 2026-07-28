@@ -43,13 +43,18 @@ describe("Mattermost fresh-database bootstrap contract", () => {
     expect(setup).not.toMatch(/mmctl --local user get\b/u);
   });
 
-  it("requires the cached PAT to resolve to the exact system administrator", () => {
+  it("requires the cached token to prove active platform PAT provenance", () => {
     const setup = read("scripts/setup-mattermost.sh");
+    const secrets = read("scripts/setup-secrets.sh");
+    const helper = read("scripts/lib/mattermost-admin-pat.sh");
 
-    expect(setup).toContain('mm_pat_is_valid "$CACHED_ADMIN_PAT" "$MM_ADMIN_USER" "$MM_ADMIN_USER_ID"');
-    expect(setup).toContain('roles.split()');
-    expect(setup).toContain('"system_admin" in roles.split()');
-    expect(setup).toContain('PAT does not resolve to the active system administrator');
+    expect(setup).toContain('mm_admin_pat_is_valid "$CACHED_ADMIN_PAT" "$MM_ADMIN_USER" "$MM_ADMIN_USER_ID" "$CACHED_ADMIN_PAT_ID" "$CACHED_ADMIN_PAT_FINGERPRINT"');
+    expect(setup).toContain('--from-literal=admin_token_id="${MM_ADMIN_PAT_ID:-}"');
+    expect(setup).toContain('--from-literal=admin_token_fingerprint="${MM_ADMIN_PAT_FINGERPRINT:-}"');
+    expect(helper).toContain('access_token.get("description") == sys.argv[3]');
+    expect(helper).toContain('access_token.get("is_active") is True');
+    expect(secrets).toContain('mattermost-gateway retained; setup-mattermost.sh owns the platform PAT');
+    expect(secrets).not.toContain('MM_ADMIN_PAT="${MM_ADMIN_PAT:-$(ksecret_key mattermost-gateway admin_token)}"');
   });
 
   it("blocks a release on Cloud SQL secret drift and bootstraps Mattermost after Helm", () => {
@@ -70,6 +75,8 @@ describe("Mattermost fresh-database bootstrap contract", () => {
     );
     expect(helmTest).toContain("MM_ADMIN_USER_ID");
     expect(helmTest).toContain("system_admin");
+    expect(helmTest).toContain("MM_ADMIN_TOKEN_FINGERPRINT");
+    expect(helmTest).toContain("octogee platform admin PAT");
   });
 
   it("grants CI read-only access to the Mattermost password without Cloud SQL mutation rights", () => {
@@ -123,6 +130,7 @@ describe("Mattermost fresh-database bootstrap contract", () => {
 
     expect(verify).toContain("Mattermost authenticated admin contract");
     expect(verify).toContain("/api/v4/users/me");
+    expect(verify).toContain("/api/v4/users/tokens/$MM_ADMIN_TOKEN_ID");
     expect(verify).toContain("mattermost-cloud-sql/password does not match Secret Manager");
   });
 });

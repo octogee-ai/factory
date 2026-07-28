@@ -15,6 +15,7 @@ export function createOpenClawControlTicket(args) {
         document: {
             uid: args.uid,
             gatewayId: args.gatewayId,
+            workspaceSlug: args.workspaceSlug,
             revisionId: args.revisionId,
             brokerProfile: args.brokerProfile,
             permissionSetIds: args.permissionSetIds,
@@ -30,6 +31,7 @@ export function redeemableOpenClawControlTicket(args) {
         ? {
             uid: inspected.uid,
             gatewayId: inspected.gatewayId,
+            workspaceSlug: inspected.workspaceSlug,
             revisionId: inspected.revisionId,
             brokerProfile: inspected.brokerProfile,
             permissionSetIds: inspected.permissionSetIds,
@@ -65,11 +67,12 @@ function ticketBinding(profile, rawPermissionSetIds, grantRevision) {
 function parseOpenClawControlTicket(document) {
     if (!document)
         return null;
-    const { uid, gatewayId, revisionId, brokerProfile: rawProfile, permissionSetIds: rawPermissionSetIds, grantRevision, expiresAt, redeemedAt, } = document;
+    const { uid, gatewayId, workspaceSlug, revisionId, brokerProfile: rawProfile, permissionSetIds: rawPermissionSetIds, grantRevision, expiresAt, redeemedAt, } = document;
     const profile = brokerProfile(rawProfile);
     const binding = profile ? ticketBinding(profile, rawPermissionSetIds, grantRevision) : null;
     if (!nonEmptyString(uid) ||
         !nonEmptyString(gatewayId) ||
+        !nonEmptyString(workspaceSlug) ||
         !nonEmptyString(revisionId) ||
         !finiteNumber(expiresAt) ||
         !profile ||
@@ -79,6 +82,7 @@ function parseOpenClawControlTicket(document) {
     return {
         uid,
         gatewayId,
+        workspaceSlug,
         revisionId,
         brokerProfile: profile,
         permissionSetIds: binding.ids,
@@ -109,6 +113,7 @@ export function inspectOpenClawControlTicket(args) {
         kind: "redeemable",
         uid: ticket.uid,
         gatewayId: args.gatewayId,
+        workspaceSlug: ticket.workspaceSlug,
         revisionId: args.revisionId,
         brokerProfile: ticket.brokerProfile,
         permissionSetIds: ticket.permissionSetIds,

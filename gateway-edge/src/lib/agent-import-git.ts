@@ -26,6 +26,11 @@ const EMPTY_REF = "0".repeat(40);
 const PLATFORM_MANAGED_WORKSPACE_DIRECTORIES = [".files", "projects"] as const;
 const OPENCLAW_RUNTIME_WORKSPACE_FILES = ["openclaw-workspace-state.json"] as const;
 const CONVERGED_CONTEXT_FILES = ["AGENTS.md", "TOOLS.md"] as const;
+const GIT_TREE_OUTPUT_MALFORMED = "git tree output is malformed";
+const SOURCE_HEAD_LABEL = "source head";
+const GIT_SOURCE_REF_CLEANUP = "git source ref cleanup";
+const DELETE_REF_ARGUMENT = "-d";
+const UPDATE_REF_COMMAND = "update-ref";
 
 export interface AgentImportSecretFinding {
   ruleId: string;
@@ -54,7 +59,7 @@ export interface AgentImportManifestEntry {
 function treeEntries(serialized: string): Map<string, string> {
   return new Map(serialized.split("\0").filter(Boolean).map((raw) => {
     const tab = raw.indexOf("\t");
-    if (tab < 0) throw new AgentImportGitError("invalid_git_tree", "git tree output is malformed");
+    if (tab < 0) throw new AgentImportGitError("invalid_git_tree", GIT_TREE_OUTPUT_MALFORMED);
     return [raw.slice(tab + 1), raw.slice(0, tab)];
   }));
 }
@@ -274,7 +279,7 @@ async function trackedTree(repoDir: string, head: string, commit = head): Promis
   let totalBytes = 0;
   for (const raw of serialized.split("\0").filter(Boolean)) {
     const tab = raw.indexOf("\t");
-    if (tab < 0) throw new AgentImportGitError("invalid_git_tree", "git tree output is malformed");
+    if (tab < 0) throw new AgentImportGitError("invalid_git_tree", GIT_TREE_OUTPUT_MALFORMED);
     const relative = raw.slice(tab + 1);
     if (classifyAgentImportArchivePath(`workspace/${relative}`) !== "workspace") {
       throw new AgentImportGitError("unsafe_git_entry", `source history contains blocked path ${relative} at ${commit}`);
@@ -323,15 +328,26 @@ function lfsCandidatesFromMetadata(
   metadataLines: string[],
   limits: RepositoryExpansionLimits,
 ): string[] {
+  assertObjectMetadataWithinLimits(metadataLines, limits);
+  return metadataLines.flatMap((line) => {
+    const [objectId, type, rawSize] = line.split(" ", 3);
+    const size = Number.parseInt(rawSize ?? "", 10);
+    return type === "blob" && size <= 1_024 ? [objectId!] : [];
+  });
+}
+
+function assertObjectMetadataWithinLimits(
+  metadataLines: string[],
+  limits: RepositoryExpansionLimits,
+): void {
   if (metadataLines.length > (limits.maxObjects ?? MAX_REACHABLE_OBJECTS)) {
     throw new AgentImportGitError("archive_too_large", "source repository has too many stored objects");
   }
   let storedObjectBytes = 0;
-  const lfsCandidates: string[] = [];
   const maxBlobBytes = limits.maxBlobBytes ?? MAX_BINARY_BYTES;
   const maxReachableBlobBytes = limits.maxReachableBlobBytes ?? MAX_REACHABLE_BLOB_BYTES;
   for (const line of metadataLines) {
-    const [objectId, type, rawSize] = line.split(" ", 3);
+    const [objectId, , rawSize] = line.split(" ", 3);
     const size = Number.parseInt(rawSize ?? "", 10);
     if (!SHA_RE.test(objectId ?? "") || !Number.isSafeInteger(size) || size < 0) {
       throw new AgentImportGitError("invalid_git_history", "source repository object metadata is invalid");
@@ -343,9 +359,30 @@ function lfsCandidatesFromMetadata(
     if (storedObjectBytes > maxReachableBlobBytes) {
       throw new AgentImportGitError("archive_too_large", "source repository object database expands beyond the import limit");
     }
-    if (type === "blob" && size <= 1_024) lfsCandidates.push(objectId!);
   }
-  return lfsCandidates;
+}
+
+async function reachableObjectMetadata(repoDir: string, head: string): Promise<string[]> {
+  const objects = await git(repoDir, ["rev-list", "--objects", head], undefined, "git reachable object listing");
+  const ids = [...new Set(objects.split(/\r?\n/).flatMap((line) => {
+    const id = line.split(" ", 1)[0];
+    return id && SHA_RE.test(id) ? [id] : [];
+  }))];
+  if (ids.length === 0) throw new AgentImportGitError("invalid_git_history", "source history has no objects");
+  const checked = await runChild(GIT_COMMAND, ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"], {
+    cwd: repoDir,
+    input: `${ids.join("\n")}\n`,
+    maxOutput: 32 * 1024 * 1024,
+  });
+  if (checked.error || checked.status !== 0) {
+    throw safeCommandError("git reachable object inspection", {
+      status: checked.status,
+      stdout: checked.stdout.toString("utf8"),
+      stderr: checked.stderr.toString("utf8"),
+      ...(checked.error ? { error: checked.error } : {}),
+    });
+  }
+  return checked.stdout.toString("utf8").trim().split(/\r?\n/).filter(Boolean);
 }
 
 async function assertNoLfsPointers(repoDir: string, lfsCandidates: string[]): Promise<void> {
@@ -389,8 +426,9 @@ export async function assertAgentImportRepositoryExpansionSafe(
   head: string,
   limits: RepositoryExpansionLimits = {},
 ): Promise<void> {
-  const sourceHead = requireSha(head, "source head");
-  const lfsCandidates = lfsCandidatesFromMetadata(await storedObjectMetadata(repoDir), limits);
+  const sourceHead = requireSha(head, SOURCE_HEAD_LABEL);
+  assertObjectMetadataWithinLimits(await storedObjectMetadata(repoDir), limits);
+  const lfsCandidates = lfsCandidatesFromMetadata(await reachableObjectMetadata(repoDir, sourceHead), limits);
   const tip = await trackedTree(repoDir, sourceHead);
   if (tip.totalBytes > (limits.maxTipBytes ?? MAX_REPOSITORY_TIP_BYTES)) {
     throw new AgentImportGitError("archive_too_large", "source repository tip exceeds the import limit");
@@ -537,7 +575,7 @@ export async function inspectAgentImportRepository(
     scanSecrets?: (repoDir: string) => Promise<AgentImportSecretFinding[]>;
   } = {},
 ): Promise<AgentImportRepositoryInspection> {
-  const head = requireSha(options.head ?? await git(repoDir, ["rev-parse", "HEAD"]), "source head");
+  const head = requireSha(options.head ?? await git(repoDir, ["rev-parse", "HEAD"]), SOURCE_HEAD_LABEL);
   await git(repoDir, ["cat-file", "-e", `${head}^{commit}`], undefined, "source commit lookup");
   await assertAgentImportRepositoryExpansionSafe(repoDir, head);
   await git(repoDir, ["fsck", "--strict", "--no-dangling"], undefined, "git fsck");
@@ -567,6 +605,179 @@ export async function inspectAgentImportRepository(
     workspaceDigest: `sha256:${createHash("sha256").update(head).update("\0").update(tree.serialized).digest("hex")}`,
     secretFindings,
   };
+}
+
+interface SanitizedHistoryEntry {
+  mode: "100644" | "100755";
+  objectId: string;
+  relative: string;
+}
+
+interface SanitizedHistoryCommit {
+  commit: string;
+  parents: string[];
+  entries: SanitizedHistoryEntry[];
+}
+
+function rawHistoryEntries(contents: Buffer, commit: string): {
+  entries: SanitizedHistoryEntry[];
+  removedBlockedPath: boolean;
+} {
+  const entries: SanitizedHistoryEntry[] = [];
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let removedBlockedPath = false;
+  let offset = 0;
+  while (offset < contents.length) {
+    const end = contents.indexOf(0, offset);
+    if (end < 0) throw new AgentImportGitError("invalid_git_tree", GIT_TREE_OUTPUT_MALFORMED);
+    const tab = contents.indexOf(0x09, offset);
+    if (tab < 0 || tab >= end) throw new AgentImportGitError("invalid_git_tree", GIT_TREE_OUTPUT_MALFORMED);
+    const header = contents.subarray(offset, tab).toString("ascii");
+    const match = /^(100644|100755|120000|160000) (blob|commit) ([0-9a-f]{40})$/.exec(header);
+    if (!match) throw new AgentImportGitError("invalid_git_tree", GIT_TREE_OUTPUT_MALFORMED);
+    let relative: string;
+    try {
+      relative = decoder.decode(contents.subarray(tab + 1, end));
+    } catch {
+      throw new AgentImportGitError("unsafe_git_entry", `source history contains an invalid path at ${commit}`);
+    }
+    const mode = match[1]!;
+    if ((mode !== "100644" && mode !== "100755") || match[2] !== "blob") {
+      throw new AgentImportGitError("unsafe_git_entry", `source history contains an unsafe path ${relative} at ${commit}`);
+    }
+    if (classifyAgentImportArchivePath(`workspace/${relative}`) !== "workspace") {
+      removedBlockedPath = true;
+    } else {
+      entries.push({ mode, objectId: match[3]!, relative });
+    }
+    offset = end + 1;
+  }
+  return { entries, removedBlockedPath };
+}
+
+async function historyEntriesForCommit(repoDir: string, commit: string): Promise<{
+  entries: SanitizedHistoryEntry[];
+  removedBlockedPath: boolean;
+}> {
+  const result = await runChild(GIT_COMMAND, ["ls-tree", "-r", "-z", commit], {
+    cwd: repoDir,
+    maxOutput: MAX_TREE_METADATA_OUTPUT,
+  });
+  if (result.error || result.status !== 0) {
+    throw safeCommandError("git history tree inspection", {
+      status: result.status,
+      stdout: result.stdout.toString("utf8"),
+      stderr: result.stderr.toString("utf8"),
+      ...(result.error ? { error: result.error } : {}),
+    });
+  }
+  return rawHistoryEntries(result.stdout, commit);
+}
+
+async function writeSanitizedHistoryTree(repoDir: string, entries: SanitizedHistoryEntry[]): Promise<string> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-agent-import-index-"));
+  const indexPath = path.join(root, "index");
+  const env = buildAgentImportGitEnvironment(process.env, { GIT_INDEX_FILE: indexPath });
+  try {
+    await git(repoDir, ["read-tree", "--empty"], env, "git empty index");
+    if (entries.length > 0) {
+      const indexInfo = Buffer.from(entries.map(({ mode, objectId, relative }) =>
+        `${mode} ${objectId}\t${relative}\0`
+      ).join(""), "utf8");
+      await command(GIT_COMMAND, ["update-index", "-z", "--index-info"], {
+        cwd: repoDir,
+        env,
+        input: indexInfo,
+        label: "git sanitized index",
+      });
+    }
+    return requireSha(await git(repoDir, ["write-tree"], env, "git sanitized tree"), "sanitized tree");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+async function commitSanitizedHistory(
+  repoDir: string,
+  tree: string,
+  parents: string[],
+): Promise<string> {
+  const env = buildAgentImportGitEnvironment(process.env, {
+    GIT_AUTHOR_NAME: "Octogee Agent Import",
+    GIT_AUTHOR_EMAIL: "agent-import@octogee.invalid",
+    GIT_AUTHOR_DATE: "1970-01-01T00:00:00Z",
+    GIT_COMMITTER_NAME: "Octogee Agent Import",
+    GIT_COMMITTER_EMAIL: "agent-import@octogee.invalid",
+    GIT_COMMITTER_DATE: "1970-01-01T00:00:00Z",
+  });
+  return requireSha(await command(
+    GIT_COMMAND,
+    ["commit-tree", tree, ...parents.flatMap((parent) => ["-p", parent])],
+    {
+      cwd: repoDir,
+      env,
+      input: "Sanitized agent import history\n",
+      label: "git sanitized history commit",
+    },
+  ), "sanitized history commit");
+}
+
+async function deleteSourceRef(repoDir: string, ref: string): Promise<void> {
+  const symbolic = await defaultRun(GIT_COMMAND, ["symbolic-ref", "-q", ref], { cwd: repoDir });
+  if (!symbolic.error && symbolic.status === 0) {
+    await git(repoDir, ["symbolic-ref", DELETE_REF_ARGUMENT, ref], undefined, GIT_SOURCE_REF_CLEANUP);
+    return;
+  }
+  if (symbolic.error || (symbolic.status !== 1 && symbolic.status !== 128)) {
+    throw safeCommandError("git symbolic source ref inspection", symbolic);
+  }
+  await git(repoDir, [UPDATE_REF_COMMAND, DELETE_REF_ARGUMENT, ref], undefined, GIT_SOURCE_REF_CLEANUP);
+}
+
+export async function sanitizeAgentImportRepositoryHistory(repoDir: string, head: string): Promise<string> {
+  const sourceHead = requireSha(head, SOURCE_HEAD_LABEL);
+  const lines = (await git(repoDir, ["rev-list", "--parents", "--topo-order", "--reverse", sourceHead]))
+    .split(/\r?\n/)
+    .filter(Boolean);
+  if (lines.length === 0 || lines.length > MAX_IMPORT_COMMITS) {
+    throw new AgentImportGitError("invalid_git_history", "source history has an unsupported commit count");
+  }
+  const history: SanitizedHistoryCommit[] = [];
+  let removedBlockedPath = false;
+  for (const line of lines) {
+    const [commit, ...parents] = line.split(" ");
+    const checkedCommit = requireSha(commit ?? "", "history commit");
+    const checkedParents = parents.map((parent) => requireSha(parent, "history parent"));
+    const tree = await historyEntriesForCommit(repoDir, checkedCommit);
+    history.push({ commit: checkedCommit, parents: checkedParents, entries: tree.entries });
+    removedBlockedPath ||= tree.removedBlockedPath;
+  }
+  if (!removedBlockedPath) return sourceHead;
+
+  const rewritten = new Map<string, string>();
+  for (const { commit, parents, entries } of history) {
+    const rewrittenParents = parents.map((parent) => {
+      const rewrittenParent = rewritten.get(parent);
+      if (!rewrittenParent) throw new AgentImportGitError("invalid_git_history", "source history parent is missing");
+      return rewrittenParent;
+    });
+    const tree = await writeSanitizedHistoryTree(repoDir, entries);
+    rewritten.set(commit, await commitSanitizedHistory(repoDir, tree, rewrittenParents));
+  }
+  const sanitizedHead = rewritten.get(sourceHead);
+  if (!sanitizedHead) throw new AgentImportGitError("invalid_git_history", "sanitized source head is missing");
+
+  const sanitizedRef = "refs/heads/octogee-import";
+  await git(repoDir, [UPDATE_REF_COMMAND, sanitizedRef, sanitizedHead], undefined, "git sanitized source ref");
+  await git(repoDir, ["symbolic-ref", "HEAD", sanitizedRef], undefined, "git sanitized source head");
+  const refs = (await git(repoDir, ["for-each-ref", "--format=%(refname)", "refs"]))
+    .split(/\r?\n/)
+    .filter(Boolean);
+  for (const ref of refs) {
+    if (ref !== sanitizedRef) await deleteSourceRef(repoDir, ref);
+  }
+  await git(repoDir, ["reset", "--hard", sanitizedHead], undefined, "git sanitized source checkout");
+  return sanitizedHead;
 }
 
 function readDirectory(sourceDir: string, destinationDir: string): void {
@@ -830,19 +1041,19 @@ function targetRefs(options: TargetUpdate): PublishedRef[] {
 }
 
 async function restoreTarget(options: TargetUpdate, refs: PublishedRef[]): Promise<void> {
-  await git(options.targetDir, ["update-ref", MAIN_REF, options.destinationHead, options.nextHead]);
+  await git(options.targetDir, [UPDATE_REF_COMMAND, MAIN_REF, options.destinationHead, options.nextHead]);
   await git(options.targetDir, ["read-tree", "-u", "-m", options.nextHead, options.destinationHead]);
   for (const { ref, expected } of refs.slice(1)) {
-    await git(options.targetDir, ["update-ref", "-d", ref, expected]);
+    await git(options.targetDir, [UPDATE_REF_COMMAND, DELETE_REF_ARGUMENT, ref, expected]);
   }
 }
 
 async function updateTarget(options: TargetUpdate): Promise<void> {
   const refs = targetRefs(options);
-  await git(options.targetDir, ["update-ref", MAIN_REF, options.nextHead, options.destinationHead]);
+  await git(options.targetDir, [UPDATE_REF_COMMAND, MAIN_REF, options.nextHead, options.destinationHead]);
   try {
     for (const { ref, expected } of refs.slice(1)) {
-      await git(options.targetDir, ["update-ref", ref, expected, EMPTY_REF]);
+      await git(options.targetDir, [UPDATE_REF_COMMAND, ref, expected, EMPTY_REF]);
     }
     await git(options.targetDir, ["read-tree", "-u", "-m", options.destinationHead, options.nextHead]);
     if (options.push) await publishRefs(options.targetDir, refs);
@@ -918,16 +1129,17 @@ async function resumeAgentImportRepository(
 export async function applyAgentImportRepository(
   options: ApplyAgentImportRepositoryOptions,
 ): Promise<{ importCommit: string; sourceRef: string }> {
-  const sourceHead = requireSha(options.sourceHead, "source head");
+  const sourceHead = requireSha(options.sourceHead, SOURCE_HEAD_LABEL);
   const destinationHead = requireSha(options.destinationHead, "destination head");
   const importId = checkedImportId(options.importId);
   const sourceRef = `refs/octogee/imports/${importId}/source`;
   const importRef = `refs/octogee/imports/${importId}/commit`;
   await ensureCleanDestination(options.targetDir);
-  if (requireSha(await git(options.sourceDir, ["rev-parse", "HEAD"]), "source head") !== sourceHead) {
+  if (requireSha(await git(options.sourceDir, ["rev-parse", "HEAD"]), SOURCE_HEAD_LABEL) !== sourceHead) {
     throw new AgentImportGitError("source_changed", "source workspace changed after preview");
   }
   await trackedTree(options.sourceDir, sourceHead);
+  await assertSafeHistoryTrees(options.sourceDir, sourceHead);
   const currentHead = await currentMainHead(options.targetDir);
   const resumed = await resumeAgentImportRepository(options, {
     sourceHead, destinationHead, importId, sourceRef, importRef, currentHead,

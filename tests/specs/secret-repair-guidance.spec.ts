@@ -19,20 +19,23 @@ describe("secret repair guidance", () => {
     expect(script).toContain('"approval-signing:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"');
   });
 
-  it("preserves materialized Mattermost credentials when local bootstrap inputs are absent", () => {
+  it("retains the tracked Mattermost PAT during launch", () => {
     const script = readFileSync(path.join(repoRoot, "scripts/setup-secrets.sh"), "utf8");
 
+    expect(script).toContain('if [[ "$SECRET_SETUP_PHASE" == "launch" ]]; then');
     for (const [variable, key] of [
-      ["MM_ADMIN_PASS", "admin_pass"],
       ["MM_ADMIN_PAT", "admin_token"],
-      ["MM_TEAM_ID", "team_id"],
-      ["MM_ADMIN_USER_ID", "admin_user_id"],
+      ["MM_ADMIN_PAT_ID", "admin_token_id"],
+      ["MM_ADMIN_PAT_FINGERPRINT", "admin_token_fingerprint"],
     ]) {
-      expect(script).toContain(`${variable}="\${${variable}:-$(ksecret_key mattermost-gateway ${key})}"`);
+      expect(script).toContain(`${variable}="$(ksecret_key mattermost-gateway ${key})"`);
     }
 
+    expect(script).toContain('if [[ "$SECRET_SETUP_PHASE" == "bootstrap" ]]; then');
+    expect(script).toContain('ok "mattermost-gateway retained; setup-mattermost.sh owns the platform PAT"');
     expect(script).toContain('--from-literal=admin_token="$MM_ADMIN_PAT"');
-    expect(script).not.toContain('--from-literal=admin_token="$MM_ADMIN_TOKEN"');
+    expect(script).toContain('--from-literal=admin_token_id="$MM_ADMIN_PAT_ID"');
+    expect(script).toContain('--from-literal=admin_token_fingerprint="$MM_ADMIN_PAT_FINGERPRINT"');
   });
 
   it("materializes approval-signing once and reuses the existing value", () => {

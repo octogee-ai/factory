@@ -125,7 +125,44 @@ describe("local agent import archive", () => {
     }
   });
 
-  it("rejects forbidden archive entries before writing them", async () => {
+  it("rewrites blocked runtime history while retaining the durable workspace tip", async () => {
+    const source = sourceRepo();
+    fs.mkdirSync(path.join(source, ".openclaw"));
+    fs.writeFileSync(path.join(source, ".openclaw", "workspace-state.json"), "token=must-not-survive\n");
+    git(source, "add", ".openclaw/workspace-state.json");
+    git(source, "commit", "-q", "-m", "runtime state");
+
+    const extracted = await extractLocalAgentImportArchive(await localArchive(source), { tmpRoot: temp("extract-root") });
+    try {
+      expect(fs.readFileSync(path.join(extracted.repoDir, "MEMORY.md"), "utf8"))
+        .toBe("new uncommitted memory\n");
+      expect(fs.readFileSync(path.join(extracted.repoDir, "SOUL.md"), "utf8")).toBe("I am Moof.\n");
+      expect(git(extracted.repoDir, "log", "--all", "--", ".openclaw/workspace-state.json")).toBe("");
+      expect(fs.existsSync(path.join(extracted.repoDir, ".openclaw", "workspace-state.json"))).toBe(false);
+    } finally {
+      extracted.cleanup();
+    }
+  });
+
+  it("reconstructs the same sanitized local head for preview and apply", async () => {
+    const source = sourceRepo();
+    fs.mkdirSync(path.join(source, ".openclaw"));
+    fs.writeFileSync(path.join(source, ".openclaw", "workspace-state.json"), "token=must-not-survive\n");
+    git(source, "add", ".openclaw/workspace-state.json");
+    git(source, "commit", "-q", "-m", "runtime state");
+    const archive = await localArchive(source);
+
+    const preview = await extractLocalAgentImportArchive(archive, { tmpRoot: temp("extract-preview") });
+    const apply = await extractLocalAgentImportArchive(archive, { tmpRoot: temp("extract-apply") });
+    try {
+      expect(apply.sourceHead).toBe(preview.sourceHead);
+    } finally {
+      preview.cleanup();
+      apply.cleanup();
+    }
+  });
+
+  it("drops forbidden archive entries while retaining safe workspace files", async () => {
     const zip = new JSZip();
     zip.file("manifest.json", JSON.stringify({ formatVersion: 1, sourceAgentId: "moof", hadGit: false, uncommittedFileCount: 0 }));
     const config = artifacts();
@@ -133,11 +170,18 @@ describe("local agent import archive", () => {
     zip.file("config-inventory.json", JSON.stringify(config.configInventory));
     zip.file("doctor-candidate.json", JSON.stringify(config.doctorCandidate));
     zip.file("workspace/.env", "API_KEY=nope");
+    zip.file("workspace/MEMORY.md", "durable memory\n");
 
-    await expect(extractLocalAgentImportArchive(
+    const extracted = await extractLocalAgentImportArchive(
       await zip.generateAsync({ type: "nodebuffer" }),
       { tmpRoot: temp("extract-root") },
-    )).rejects.toMatchObject({ code: "unsafe_archive_entry" });
+    );
+    try {
+      expect(fs.readFileSync(path.join(extracted.repoDir, "MEMORY.md"), "utf8")).toBe("durable memory\n");
+      expect(fs.existsSync(path.join(extracted.repoDir, ".env"))).toBe(false);
+    } finally {
+      extracted.cleanup();
+    }
   });
 
   it("rejects declared expansion limits before extracting ZIP entry contents", async () => {

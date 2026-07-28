@@ -48,9 +48,51 @@ import {
   type ModelCredentialOAuthProviderId,
 } from "@octogee/shared/types/model-credentials";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
+import { requestBuilderActivationLease } from "@octogee/core/builder-activation-lease";
+import { readGatewayAuthorization } from "@octogee/core/gateway-live-release";
 
 const router = Router();
 const BYOSUB_PROVIDER_ORDER: ByosubProvider[] = ["openai", "anthropic"];
+
+type SubscriptionRuntimeState = "ready" | "activating" | "shared" | "unavailable";
+
+function activationIsPending(userData: Record<string, unknown>): boolean {
+  const provisioning = userData.provisioning;
+  if (!provisioning || typeof provisioning !== "object" || Array.isArray(provisioning)) return false;
+  const openclaw = (provisioning as Record<string, unknown>).openclaw;
+  if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) return false;
+  const lease = (openclaw as Record<string, unknown>).activationLease;
+  if (!lease || typeof lease !== "object" || Array.isArray(lease)) return false;
+  const status = (lease as Record<string, unknown>).status;
+  return status === "requested" || status === "provisioning" || status === "activating" || status === "returning";
+}
+
+async function subscriptionRuntimeFor(
+  uid: string,
+  resolved: { gatewayId: string },
+): Promise<SubscriptionRuntimeState> {
+  const [authorization, userSnap] = await Promise.all([
+    readGatewayAuthorization(db, resolved.gatewayId),
+    db.collection("users").doc(uid).get(),
+  ]);
+  if (authorization?.kind !== "durable" || !userSnap.exists) return "unavailable";
+  if (authorization.config.gatewayClass !== "shared") return "ready";
+  return activationIsPending((userSnap.data() ?? {}) as Record<string, unknown>)
+    ? "activating"
+    : "shared";
+}
+
+async function hasReadySubscriptionRuntime(
+  uid: string,
+  resolved: { gatewayId: string },
+): Promise<boolean> {
+  return (await subscriptionRuntimeFor(uid, resolved)) === "ready";
+}
+
+async function hasPrivateSubscriptionGateway(gatewayId: string): Promise<boolean> {
+  const authorization = await readGatewayAuthorization(db, gatewayId);
+  return authorization?.kind === "durable" && authorization.config.gatewayClass !== "shared";
+}
 
 function providerEntryFromSubscriptionProvider(provider: unknown): ModelCredentialOAuthCatalogEntry | null {
   return typeof provider === "string"
@@ -191,16 +233,73 @@ router.get(
         res.json({ connected: false, providers: {} });
         return;
       }
-      const snap = await db
-        .collection("users")
-        .doc(req.uid!)
-        .collection("integrations")
-        .doc("byosub")
-        .get();
+      const [snap, runtime] = await Promise.all([
+        db
+          .collection("users")
+          .doc(req.uid!)
+          .collection("integrations")
+          .doc("byosub")
+          .get(),
+        subscriptionRuntimeFor(req.uid!, resolved),
+      ]);
 
       // gatewayId lets the client target the sidecar locality seam
       // (/api/g/<gatewayId>/byosub/*) for the connect/status/submit flow.
-      res.json({ ...userIntegrationConnectionView(snap.data()), gatewayId: resolved.gatewayId });
+      res.json({
+        ...userIntegrationConnectionView(snap.data()),
+        gatewayId: resolved.gatewayId,
+        runtime,
+      });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+router.post(
+  "/activate",
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const uid = req.uid!;
+      const resolved = await resolveUserGateway(uid);
+      if (!resolved) {
+        res.status(400).json({ error: "No provisioned workspace/gateway for this user" });
+        return;
+      }
+      const authorization = await readGatewayAuthorization(db, resolved.gatewayId);
+      if (authorization?.kind !== "durable") {
+        res.status(409).json({ error: "Assigned runtime is unavailable" });
+        return;
+      }
+      if (authorization.config.gatewayClass !== "shared") {
+        res.json({ status: "ready", gatewayId: resolved.gatewayId });
+        return;
+      }
+      const assignment = await db
+        .doc(`gateways/${resolved.gatewayId}/assignments/${uid}`)
+        .get();
+      const epoch = assignment.exists ? assignment.data()?.epoch : undefined;
+      const observedAt = Date.now();
+      const result = await requestBuilderActivationLease({
+        db,
+        uid,
+        reportingGatewayId: resolved.gatewayId,
+        assignmentEpoch: typeof epoch === "number" ? epoch : undefined,
+        eventKey: `subscription-connect:${randomUUID()}`,
+        cause: "manual",
+        observedAt,
+        createdBy: `subscription-connect:${uid}`,
+        now: observedAt,
+      });
+      if (result.statusCode >= 400) {
+        res.status(result.statusCode).json(result.body);
+        return;
+      }
+      res.status(result.statusCode).json({
+        status: "activating",
+        gatewayId: resolved.gatewayId,
+      });
     } catch (e) {
       next(e);
     }
@@ -648,6 +747,13 @@ router.post(
         res.status(400).json({ error: "No provisioned workspace/gateway for this user" });
         return;
       }
+      if (!await hasReadySubscriptionRuntime(uid, resolved)) {
+        res.status(409).json({
+          code: "subscription-runtime-required",
+          error: "A private Builder runtime is required before connecting a personal subscription",
+        });
+        return;
+      }
       const secretName = byosubSecretName(uid, entry.oauth.secretProvider);
       await writeSecret({
         name: secretName,
@@ -688,6 +794,17 @@ router.post(
       const flow = await readFlow(b.flowId);
       if (!flow) {
         res.status(400).json({ error: "unknown flow" });
+        return;
+      }
+      if (!requestGatewayMatchesBinding(req, flow.gatewayId)) {
+        res.status(403).json({ error: "forbidden" });
+        return;
+      }
+      if (!await hasPrivateSubscriptionGateway(flow.gatewayId)) {
+        res.status(409).json({
+          code: "subscription-runtime-required",
+          error: "A private Builder runtime is required before connecting a personal subscription",
+        });
         return;
       }
       const entry = oauthEntryFromFlow(flow);
