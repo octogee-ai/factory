@@ -147,7 +147,7 @@ function exactExceptions(
   );
 }
 
-function auditReference(
+function auditNpmReference(
   input: DependabotAuditInput,
   npmUpdates: DependabotUpdate[],
   reference: DependencyReferenceIdentity,
@@ -165,6 +165,21 @@ function auditReference(
   else if (matchingExceptions.length !== 1) {
     errors.push(`npm-lockfile ${reference.path}: no Dependabot entry or exact exception`);
   }
+}
+
+function auditDockerfileReference(
+  dockerUpdates: DependabotUpdate[],
+  reference: DependencyReferenceIdentity,
+  errors: string[],
+  managedReferences: DependencyReferenceIdentity[],
+): void {
+  const matchingUpdates = dockerUpdates.filter(
+    (update) => update.directory === dependencyDirectory(reference),
+  );
+  if (matchingUpdates.length > 1) {
+    errors.push(`${reference.path}: duplicate Dependabot Docker entries`);
+  }
+  if (matchingUpdates.length === 1) managedReferences.push(reference);
 }
 
 function auditIgnore(
@@ -198,13 +213,18 @@ export function auditDependabotCoverage(input: DependabotAuditInput): {
   const errors: string[] = [];
   const managedReferences: DependencyReferenceIdentity[] = [];
   const npmUpdates = input.updates.filter(({ ecosystem }) => ecosystem === "npm");
+  const dockerUpdates = input.updates.filter(({ ecosystem }) => ecosystem === "docker");
   const scheduleException = input.exceptions.some((exception) =>
     exception.kind === "coverage" && exception.manager === "dependabot" &&
     exception.policyGaps?.some((gap) => gap.includes("weekly")),
   );
   for (const reference of input.inventory.references.filter(({ referenceKind }) =>
     referenceKind === "npm" || referenceKind === "npm-lockfile")) {
-    auditReference(input, npmUpdates, reference, errors, managedReferences);
+    auditNpmReference(input, npmUpdates, reference, errors, managedReferences);
+  }
+  for (const reference of input.inventory.references.filter(({ referenceKind }) =>
+    referenceKind === "dockerfile")) {
+    auditDockerfileReference(dockerUpdates, reference, errors, managedReferences);
   }
   for (const update of npmUpdates) {
     if (update.interval !== "daily" && !scheduleException) {
