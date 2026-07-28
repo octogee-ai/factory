@@ -116,7 +116,7 @@ spec:
     - name: octogee.pods
       rules:
         - alert: PodCrashLooping
-          expr: rate(kube_pod_container_status_restarts_total{namespace=~"octogee|octogee-west|octogee-test|octogee-test-west"}[5m]) > 0
+          expr: rate(kube_pod_container_status_restarts_total{namespace=~"octogee|octogee-test"}[5m]) > 0
           for: 5m
           labels:
             severity: warning
@@ -124,7 +124,7 @@ spec:
             summary: "Pod {{ $labels.pod }} is crash-looping"
             description: "Container {{ $labels.container }} in {{ $labels.namespace }} is restarting frequently."
         - alert: PodOOMKilled
-          expr: kube_pod_container_status_last_terminated_reason{reason="OOMKilled", namespace=~"octogee|octogee-west|octogee-test|octogee-test-west"} == 1
+          expr: kube_pod_container_status_last_terminated_reason{reason="OOMKilled", namespace=~"octogee|octogee-test"} == 1
           for: 0m
           labels:
             severity: warning
@@ -133,8 +133,8 @@ spec:
             description: "Container {{ $labels.container }} was OOM-killed. Check memory limits."
         - alert: PVCNearFull
           expr: |
-            (kubelet_volume_stats_used_bytes{namespace=~"octogee|octogee-west|octogee-test|octogee-test-west"}
-            / kubelet_volume_stats_capacity_bytes{namespace=~"octogee|octogee-west|octogee-test|octogee-test-west"}) > 0.85
+            (kubelet_volume_stats_used_bytes{namespace=~"octogee|octogee-test"}
+            / kubelet_volume_stats_capacity_bytes{namespace=~"octogee|octogee-test"}) > 0.85
           for: 10m
           labels:
             severity: warning
@@ -142,7 +142,7 @@ spec:
             summary: "PVC {{ $labels.persistentvolumeclaim }} is {{ $value | humanizePercentage }} full"
             description: "PVC in {{ $labels.namespace }} is above 85% capacity. Expand or clean up."
         - alert: PodStuckPending
-          expr: kube_pod_status_phase{namespace=~"octogee|octogee-west|octogee-test|octogee-test-west", phase="Pending"} == 1
+          expr: kube_pod_status_phase{namespace=~"octogee|octogee-test", phase="Pending"} == 1
           for: 15m
           labels:
             severity: critical
@@ -178,7 +178,7 @@ spec:
     - name: octogee.activity-pairs
       rules:
         - alert: ActivityPairReconciliationFailures
-          expr: sum by (namespace) (increase(octogee_activity_pair_reconciliations_total{namespace=~"octogee|octogee-west|octogee-test|octogee-test-west",result="failure"}[15m])) >= 3
+          expr: sum by (namespace) (increase(octogee_activity_pair_reconciliations_total{namespace=~"octogee|octogee-test",result="failure"}[15m])) >= 3
           for: 5m
           labels:
             severity: critical
@@ -189,9 +189,9 @@ spec:
       rules:
         - alert: ResendBounceRateHigh
           expr: |
-            sum by (namespace) (rate(octogee_email_delivery_total{namespace=~"octogee|octogee-west|octogee-test|octogee-test-west",event="bounced"}[1h]))
+            sum by (namespace) (rate(octogee_email_delivery_total{namespace=~"octogee|octogee-test",event="bounced"}[1h]))
             /
-            clamp_min(sum by (namespace) (rate(octogee_email_sent_total{namespace=~"octogee|octogee-west|octogee-test|octogee-test-west",result="sent"}[1h])), 0.001)
+            clamp_min(sum by (namespace) (rate(octogee_email_sent_total{namespace=~"octogee|octogee-test",result="sent"}[1h])), 0.001)
             > 0.05
           for: 15m
           labels:
@@ -201,9 +201,9 @@ spec:
             description: "Bounces over the last 1h are >5% of sent volume in {{ $labels.namespace }}. Likely DKIM/DMARC drift, a bad address list, or a domain reputation issue. Check the Resend dashboard."
         - alert: ResendComplaintRateHigh
           expr: |
-            sum by (namespace) (rate(octogee_email_delivery_total{namespace=~"octogee|octogee-west|octogee-test|octogee-test-west",event="complained"}[1h]))
+            sum by (namespace) (rate(octogee_email_delivery_total{namespace=~"octogee|octogee-test",event="complained"}[1h]))
             /
-            clamp_min(sum by (namespace) (rate(octogee_email_sent_total{namespace=~"octogee|octogee-west|octogee-test|octogee-test-west",result="sent"}[1h])), 0.001)
+            clamp_min(sum by (namespace) (rate(octogee_email_sent_total{namespace=~"octogee|octogee-test",result="sent"}[1h])), 0.001)
             > 0.001
           for: 30m
           labels:
@@ -213,9 +213,9 @@ spec:
             description: "Complaint rate > 0.1% over 1h in {{ $labels.namespace }}. Mailbox providers will start filtering — review send list + unsubscribe path."
         - alert: ResendWebhookStale
           expr: |
-            (sum by (namespace) (rate(octogee_email_sent_total{namespace=~"octogee|octogee-west|octogee-test|octogee-test-west",result="sent"}[1h])) > 0.001)
+            (sum by (namespace) (rate(octogee_email_sent_total{namespace=~"octogee|octogee-test",result="sent"}[1h])) > 0.001)
             and
-            (sum by (namespace) (increase(octogee_email_delivery_total{namespace=~"octogee|octogee-west|octogee-test|octogee-test-west"}[1h])) == 0)
+            (sum by (namespace) (increase(octogee_email_delivery_total{namespace=~"octogee|octogee-test"}[1h])) == 0)
           for: 30m
           labels:
             severity: warning
@@ -225,7 +225,7 @@ spec:
     - name: octogee.cronjobs
       rules:
         - alert: ActivityPairAuditCronStale
-          expr: (time() - kube_cronjob_status_last_successful_time{namespace=~"octogee|octogee-west|octogee-test|octogee-test-west",cronjob="activity-pair-audit"} > 3600) or absent(kube_cronjob_status_last_successful_time{namespace=~"octogee|octogee-west|octogee-test|octogee-test-west",cronjob="activity-pair-audit"})
+          expr: (time() - kube_cronjob_status_last_successful_time{namespace=~"octogee|octogee-test",cronjob="activity-pair-audit"} > 3600) or absent(kube_cronjob_status_last_successful_time{namespace=~"octogee|octogee-test",cronjob="activity-pair-audit"})
           for: 15m
           labels:
             severity: critical
@@ -233,7 +233,7 @@ spec:
             summary: "Activity pair report has not completed cleanly in {{ $labels.namespace }}"
             description: "The report-only Activity pair inventory has not produced a drift-free success within one hour. Inspect the CronJob output; it never mutates pairs."
         - alert: DigestDailyCronStale
-          expr: (time() - kube_cronjob_status_last_successful_time{namespace=~"octogee|octogee-west",cronjob="notification-digest-daily"} > 90000) or absent(kube_cronjob_status_last_successful_time{namespace=~"octogee|octogee-west",cronjob="notification-digest-daily"})
+          expr: (time() - kube_cronjob_status_last_successful_time{namespace=~"octogee",cronjob="notification-digest-daily"} > 90000) or absent(kube_cronjob_status_last_successful_time{namespace=~"octogee",cronjob="notification-digest-daily"})
           for: 30m
           labels:
             severity: warning
@@ -241,7 +241,7 @@ spec:
             summary: "Daily digest cron hasn't succeeded in >25h"
             description: "notification-digest-daily (ns octogee) last succeeded >25h ago, or its metric is absent — Builders are not getting digest emails. Check `kubectl -n octogee get cronjob notification-digest-daily` and recent job logs."
         - alert: DigestWeeklyCronStale
-          expr: (time() - kube_cronjob_status_last_successful_time{namespace=~"octogee|octogee-west",cronjob="notification-digest-weekly"} > 691200) or absent(kube_cronjob_status_last_successful_time{namespace=~"octogee|octogee-west",cronjob="notification-digest-weekly"})
+          expr: (time() - kube_cronjob_status_last_successful_time{namespace=~"octogee",cronjob="notification-digest-weekly"} > 691200) or absent(kube_cronjob_status_last_successful_time{namespace=~"octogee",cronjob="notification-digest-weekly"})
           for: 30m
           labels:
             severity: warning
@@ -249,7 +249,7 @@ spec:
             summary: "Weekly digest cron hasn't succeeded in >8d"
             description: "notification-digest-weekly (ns octogee) last succeeded >8 days ago, or its metric is absent."
         - alert: TrialExpiryCronStale
-          expr: (time() - kube_cronjob_status_last_successful_time{namespace=~"octogee|octogee-west",cronjob="trial-expiry"} > 7200) or absent(kube_cronjob_status_last_successful_time{namespace=~"octogee|octogee-west",cronjob="trial-expiry"})
+          expr: (time() - kube_cronjob_status_last_successful_time{namespace=~"octogee",cronjob="trial-expiry"} > 7200) or absent(kube_cronjob_status_last_successful_time{namespace=~"octogee",cronjob="trial-expiry"})
           for: 30m
           labels:
             severity: warning

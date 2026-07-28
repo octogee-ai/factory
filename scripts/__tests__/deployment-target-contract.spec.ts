@@ -56,6 +56,34 @@ describe("deployment target consumers", () => {
     }
   });
 
+  it("keeps only Central release targets and no WEST release credential routes", () => {
+    const targets = JSON.parse(source("core/src/deployment-targets.json")) as {
+      activeTargets: Record<string, string>;
+      targets: Record<string, unknown>;
+    };
+
+    expect(targets.activeTargets).toEqual({
+      prod: "prod-central",
+      test: "test-central",
+      "build-week": "build-week-central",
+    });
+    expect(Object.keys(targets.targets).sort()).toEqual([
+      "build-week-central",
+      "prod-central",
+      "test-central",
+    ]);
+
+    for (const workflow of [
+      ".github/workflows/releasev2.yml",
+      ".github/workflows/gateway-build-operator-base.yml",
+      ".github/workflows/site.yml",
+    ]) {
+      const contents = source(workflow);
+      expect(contents, workflow).not.toMatch(/\b(?:test|prod)-west\b/);
+      expect(contents, workflow).not.toMatch(/(?:TEST|PROD)_WEST/);
+    }
+  });
+
   it("rejects retired candidate targets from release workflows while retaining an exact target handoff", () => {
     const targetAction = source(".github/actions/resolve-deployment-target/action.yml");
     expect(targetAction).toContain("--reject-candidate-target");
@@ -152,19 +180,23 @@ describe("deployment target consumers", () => {
     expect(script).toContain('octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"');
   });
 
-  it("selects public Firebase credentials by exact deployment target", () => {
+  it("selects public Firebase credentials by exact registered target", () => {
     const workflow = source(".github/workflows/site.yml");
     const gateway = source(".github/workflows/gateway-build-operator-base.yml");
 
     expect(workflow).toContain('case "${{ steps.target.outputs.target_id }}" in');
-    expect(workflow).toContain("PUBLIC_FIREBASE_API_KEY_TEST_WEST");
-    expect(workflow).toContain("PUBLIC_FIREBASE_API_KEY_PROD_WEST");
-    expect(workflow).toContain("PUBLIC_MM_TEAM_ID_TEST_WEST");
-    expect(workflow).toContain("PUBLIC_MM_TEAM_ID_PROD_WEST");
-    expect(workflow).toContain("FIREBASE_DEPLOYER_KEY_TEST_WEST");
-    expect(workflow).toContain("FIREBASE_DEPLOYER_KEY_PROD_WEST");
-    expect(gateway).toContain("FIREBASE_DEPLOYER_KEY_TEST_WEST");
-    expect(gateway).toContain("FIREBASE_DEPLOYER_KEY_PROD_WEST");
+    expect(workflow).toContain("PUBLIC_FIREBASE_API_KEY_TEST");
+    expect(workflow).toContain("PUBLIC_FIREBASE_API_KEY_BUILD_WEEK");
+    expect(workflow).toContain("PUBLIC_MM_TEAM_ID_TEST");
+    expect(workflow).toContain("PUBLIC_MM_TEAM_ID_BUILD_WEEK");
+    expect(workflow).toContain("FIREBASE_DEPLOYER_KEY_TEST");
+    expect(workflow).toContain("FIREBASE_DEPLOYER_KEY_BUILD_WEEK");
+    expect(gateway).toContain("FIREBASE_DEPLOYER_KEY_TEST");
+    expect(gateway).toContain("FIREBASE_DEPLOYER_KEY_BUILD_WEEK");
+    expect(workflow).toMatch(/prod-central\) FB_KEY="\$FB_KEY_PROD_CENTRAL"/);
+    expect(gateway).toMatch(/prod-central\) FB_KEY="\$FB_KEY_PROD_CENTRAL"/);
+    expect(workflow).not.toMatch(/(?:TEST|PROD)_WEST/);
+    expect(gateway).not.toMatch(/(?:TEST|PROD)_WEST/);
     expect(workflow).toContain(
       "for value_name in api_key app_id sender_id mm_team_id; do",
     );

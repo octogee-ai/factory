@@ -29,18 +29,18 @@ describe("deployment environment registry", () => {
     });
   });
 
-  it("keeps prod and test mappings stable and rejects custom namespaces", () => {
+  it("keeps Central prod and test mappings stable and rejects retired projects and custom namespaces", () => {
     expect(deploymentEnvironmentForNamespace("octogee")).toBe("prod");
     expect(deploymentEnvironmentForNamespace("octogee-test")).toBe("test");
     expect(deploymentEnvironmentForNamespace("feat-alice")).toBe("unknown");
     expect(deploymentEnvironmentForProject("octogee")).toBe("prod");
     expect(deploymentEnvironmentForProject("octogee-test")).toBe("test");
-    expect(deploymentEnvironmentForProject("octogee-data-prod")).toBe("prod");
-    expect(deploymentEnvironmentForProject("octogee-data-test")).toBe("test");
+    expect(deploymentEnvironmentForProject("octogee-data-prod")).toBe("unknown");
+    expect(deploymentEnvironmentForProject("octogee-data-test")).toBe("unknown");
     expect(deploymentEnvironmentForProject("local-dev")).toBe("unknown");
   });
 
-  it("makes central active while retaining west as the candidate rollback target", () => {
+  it("keeps CENTRAL as the only prod and test target", () => {
     expect(deploymentEnvironmentSettings("prod")).toMatchObject({
       targetId: "prod-central",
       lifecycle: "active",
@@ -108,16 +108,17 @@ describe("deployment environment registry", () => {
       previewStaticIpName: "preview-ip-test",
     });
 
-    expect(deploymentTargetSettings("prod-west")).toMatchObject({
-      lifecycle: "candidate",
-      region: "us-west1",
-      namespace: "octogee-west",
-    });
-    expect(deploymentTargetSettings("test-west")).toMatchObject({
-      lifecycle: "candidate",
-      region: "us-west1",
-      namespace: "octogee-test-west",
-    });
+    expect(deploymentTargetsForEnvironment("prod")).toEqual([
+      expect.objectContaining({ targetId: "prod-central", lifecycle: "active" }),
+    ]);
+    expect(deploymentTargetsForEnvironment("test")).toEqual([
+      expect.objectContaining({ targetId: "test-central", lifecycle: "active" }),
+    ]);
+    for (const targetId of ["prod-west", "test-west"]) {
+      expect(() => deploymentTargetSettings(targetId)).toThrow(
+        `Unknown deployment target: ${targetId}`,
+      );
+    }
   });
 
   it("rejects a target that reuses another ingress identity", () => {
@@ -128,16 +129,16 @@ describe("deployment environment registry", () => {
         };
       }>;
     };
-    candidate.targets["test-west"].ingress.edgeStaticIpName =
+    candidate.targets["build-week-central"].ingress.edgeStaticIpName =
       candidate.targets["test-central"].ingress.edgeStaticIpName;
 
     expect(() => validateDeploymentTargetsDocument(candidate)).toThrow(
-      "deployment target test-west ingress identity workspace-api-ip-test is already used",
+      "deployment target build-week-central ingress identity workspace-api-ip-test is already used",
     );
   });
 
   it("rejects a target that reuses another target role", () => {
-    const staticIpName = "gitea-ip-west";
+    const staticIpName = "gitea-ip-test";
     const candidate = structuredClone(deploymentTargetsDocument) as {
       targets: Record<string, {
         ingress: {
@@ -145,10 +146,10 @@ describe("deployment environment registry", () => {
         };
       }>;
     };
-    candidate.targets["test-west"].ingress.edgeStaticIpName = staticIpName;
+    candidate.targets["build-week-central"].ingress.edgeStaticIpName = staticIpName;
 
     expect(() => validateDeploymentTargetsDocument(candidate)).toThrow(
-      `deployment target test-west ingress identity ${staticIpName} is already used`,
+      `deployment target build-week-central ingress identity ${staticIpName} is already used`,
     );
   });
 
@@ -163,7 +164,7 @@ describe("deployment environment registry", () => {
         };
       }>;
     };
-    const ingress = candidate.targets["test-west"].ingress;
+    const ingress = candidate.targets["build-week-central"].ingress;
     ingress.mattermostStaticIpName = ingress.edgeStaticIpName;
     ingress.giteaStaticIpName = ingress.edgeStaticIpName;
     ingress.previewStaticIpName = ingress.edgeStaticIpName;
@@ -182,7 +183,7 @@ describe("deployment environment registry", () => {
         };
       }>;
     };
-    const ingress = candidate.targets["prod-west"].ingress;
+    const ingress = candidate.targets["prod-central"].ingress;
     ingress.giteaStaticIpName = ingress.edgeStaticIpName;
 
     expect(() => validateDeploymentTargetsDocument(candidate)).toThrow(
@@ -206,32 +207,34 @@ describe("deployment environment registry", () => {
     );
   });
 
-  it("lets a caller select an exact target independent of the active pointer", () => {
+  it("lets a caller select the exact active target for its namespace", () => {
     expect(deploymentSettingsForRuntime({
-      namespace: "octogee-test-west",
-      targetId: "test-west",
+      namespace: "octogee-test",
+      targetId: "test-central",
     })).toMatchObject({
-      targetId: "test-west",
-      firebaseProjectId: "octogee-data-test",
-      region: "us-west1",
+      targetId: "test-central",
+      firebaseProjectId: "octogee-test",
+      region: "us-central1",
     });
   });
 
   it("rejects a runtime target that belongs to another namespace", () => {
     expect(() => deploymentSettingsForRuntime({
-      namespace: "octogee-test-west",
-      targetId: "prod-west",
-    })).toThrow("Deployment target prod-west belongs to namespace octogee-west");
+      namespace: "octogee-test",
+      targetId: "prod-central",
+    })).toThrow("Deployment target prod-central belongs to namespace octogee");
   });
 
-  it("resolves Secret Manager placement from the exact Firebase project target", () => {
-    expect(deploymentTargetForFirebaseProject("octogee-data-prod")).toMatchObject({
-      targetId: "prod-west",
-      region: "us-west1",
+  it("does not resolve retired Firebase data projects", () => {
+    expect(deploymentTargetForFirebaseProject("octogee-test")).toMatchObject({
+      targetId: "test-central",
+      region: "us-central1",
     });
-    expect(() => deploymentTargetForFirebaseProject("outside-project")).toThrow(
-      "Unknown Firebase deployment project: outside-project",
-    );
+    for (const projectId of ["octogee-data-prod", "octogee-data-test", "outside-project"]) {
+      expect(() => deploymentTargetForFirebaseProject(projectId)).toThrow(
+        `Unknown Firebase deployment project: ${projectId}`,
+      );
+    }
   });
 
   it("publishes every browser origin used by CORS and redirects", () => {

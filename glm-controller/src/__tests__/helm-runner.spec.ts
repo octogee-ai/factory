@@ -101,10 +101,10 @@ describe("helm-runner helpers", () => {
       gatewayContainerSecurityContext: { allowPrivilegeEscalation: false },
       operatorAccess: { enabled: true },
       gcpProject: "builder-bender",
-      kmsKeyName: "projects/octogee-data-prod/locations/us-west1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest",
-      deploymentTargetId: "prod-west",
-      deploymentProjectId: "octogee-data-prod",
-      gatewayServiceAccount: "octogee-gateway@octogee-data-prod.iam.gserviceaccount.com",
+      kmsKeyName: "projects/octogee/locations/us-central1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest",
+      deploymentTargetId: "prod-central",
+      deploymentProjectId: "octogee",
+      gatewayServiceAccount: "octogee-gateway@octogee.iam.gserviceaccount.com",
       valuesFile: "/charts/octogee-gateway/values.prod.yaml",
     });
 
@@ -120,17 +120,17 @@ describe("helm-runner helpers", () => {
     );
     expect(stringPair("rollStrategy")).toBe("rollStrategy=surge");
     expect(stringPair("gatewayEdge.env.OCTOGEE_KMS_KEY_NAME")).toBe(
-      "gatewayEdge.env.OCTOGEE_KMS_KEY_NAME=projects/octogee-data-prod/locations/us-west1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest",
+      "gatewayEdge.env.OCTOGEE_KMS_KEY_NAME=projects/octogee/locations/us-central1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest",
     );
-    expect(stringPair("env.firebaseProjectId")).toBe("env.firebaseProjectId=octogee-data-prod");
+    expect(stringPair("env.firebaseProjectId")).toBe("env.firebaseProjectId=octogee");
     expect(stringPair("gatewayEdge.env.FIREBASE_PROJECT_ID")).toBe(
-      "gatewayEdge.env.FIREBASE_PROJECT_ID=octogee-data-prod",
+      "gatewayEdge.env.FIREBASE_PROJECT_ID=octogee",
     );
     expect(stringPair("gatewayEdge.env.DEPLOYMENT_TARGET_ID")).toBe(
-      "gatewayEdge.env.DEPLOYMENT_TARGET_ID=prod-west",
+      "gatewayEdge.env.DEPLOYMENT_TARGET_ID=prod-central",
     );
     expect(stringPair("gatewayEdge.env.GATEWAY_SERVICE_ACCOUNT")).toBe(
-      "gatewayEdge.env.GATEWAY_SERVICE_ACCOUNT=octogee-gateway@octogee-data-prod.iam.gserviceaccount.com",
+      "gatewayEdge.env.GATEWAY_SERVICE_ACCOUNT=octogee-gateway@octogee.iam.gserviceaccount.com",
     );
     expect(args).toContain("--set");
     expect(args).toContain("replicas=0");
@@ -151,7 +151,7 @@ describe("helm-runner helpers", () => {
     const args = buildUpgradeArgs({
       release: "octogee-gw-default",
       chartPath: "/charts/octogee-gateway",
-      namespace: "octogee-test-west",
+      namespace: "octogee-test",
       gatewayId: "default",
       imageTag: "abc1234",
       imageRepository: REPO,
@@ -160,11 +160,9 @@ describe("helm-runner helpers", () => {
     });
 
     expect(args).toContain(
-      "env.mmInternalUrl=http://mattermost.octogee-test-west.svc.cluster.local:8065",
-    );
-    expect(args).not.toContain(
       "env.mmInternalUrl=http://mattermost.octogee-test.svc.cluster.local:8065",
     );
+    expect(args).not.toContain("env.mmInternalUrl=http://mattermost.octogee.svc.cluster.local:8065");
   });
 
   it("passes protected availability as one class-scoped Helm value", () => {
@@ -288,9 +286,6 @@ describe("helm-runner helpers", () => {
 
     const args = buildUpgradeArgs({ ...base, namespace: "octogee-test" });
     expect(args).toContain("conversationExperiment.mode=publisher-live");
-    expect(buildUpgradeArgs({ ...base, namespace: "octogee-test-west" })).toContain(
-      "conversationExperiment.mode=publisher-live",
-    );
     expect(args).toContain(
       "gatewayEdge.image.repository=us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
     );
@@ -1491,7 +1486,7 @@ describe("createHelmSubprocessRunner — gateway ServiceAccount ownership", () =
     });
 
     await runner.upsertInstance({
-      namespace: "octogee-test-west",
+      namespace: "octogee-test",
       gatewayId: "builder-a",
       imageRepository: REPO,
       imageTag: "newtag",
@@ -1512,7 +1507,7 @@ describe("createHelmSubprocessRunner — gateway ServiceAccount ownership", () =
     });
 
     await runner.upsertInstance({
-      namespace: "octogee-test-west",
+      namespace: "octogee-test",
       gatewayId: "builder-a",
       imageRepository: REPO,
       imageTag: "newtag",
@@ -1568,22 +1563,22 @@ describe("createHelmSubprocessRunner — gateway ServiceAccount ownership", () =
 
     await expect(
       runner.upsertInstance({
-        namespace: "octogee-test-west",
+        namespace: "octogee-test",
         gatewayId: "default-green",
         imageRepository: REPO,
         imageTag: "newtag",
         chartPath: "/charts/octogee-gateway",
-        deploymentTargetId: "test-west",
+        deploymentTargetId: "test-central",
       }),
     ).rejects.toThrow(/Deployment not ready/);
 
     expect(order).toEqual(["ensure-ksa", "helm-upgrade", "ensure-ksa"]);
     expect(ensureServiceAccount).toHaveBeenLastCalledWith({
-      namespace: "octogee-test-west",
+      namespace: "octogee-test",
       serviceAccountName: "octogee-gw-default-green",
       identity: {
         gatewayId: "default-green",
-        deploymentTargetId: "test-west",
+        deploymentTargetId: "test-central",
         lifecycleIdentity: "gateway-default-green",
         releaseName: "octogee-gw-default-green",
       },
