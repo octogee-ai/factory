@@ -217,6 +217,30 @@ const VERBS: readonly VerbHelp[] = [
     writes: true,
   },
   {
+    verb: "builder evict",
+    summary: "Move a Builder to a gateway or park them through the Admin API.",
+    args: "<slug> (--to=<gw-id> | --park) [--idempotency-key=<key>] [--apply]",
+    description:
+      "Resolves the Builder slug to its UID, then asks the Admin API to set operator-owned placement desired state. A cross-gateway move uses the API's migration path; parking removes placement. Dry-run by default; pass --apply to send the request.",
+    examples: [
+      "fleet --env=test builder evict alice --to=canary",
+      "fleet --env=test builder evict alice --park --apply",
+    ],
+    writes: true,
+  },
+  {
+    verb: "builder place",
+    summary: "Return a Builder to Cowboy placement.",
+    args: "<slug> [--idempotency-key=<key>] [--apply]",
+    description:
+      "Resolves the Builder slug to its UID, then asks the Admin API to release the Builder from the operator management lane. Cowboy chooses the next placement; the CLI returns after the desired-state response and never waits for convergence. Dry-run by default; pass --apply to send the request.",
+    examples: [
+      "fleet --env=test builder place alice",
+      "fleet --env=test builder place alice --apply",
+    ],
+    writes: true,
+  },
+  {
     verb: "add-customer",
     summary: "Override placement: assign customer to a specific gateway.",
     args: "<slug> --to=<gw-id> [--apply]",
@@ -267,7 +291,9 @@ export function resolveFleetVerb(args: ParsedFleetArgs): VerbHelp | null {
 export function resolveFleetCredentialMode(args: ParsedFleetArgs): FleetCredentialMode {
   const verb = resolveFleetVerb(args);
   if (verb?.writes !== true || args.flags.apply !== true) return "service-account-key";
-  return args.positional[0] === "gw" ? "service-account-key" : "application-default";
+  return args.positional[0] === "gw" || args.positional[0] === "builder"
+    ? "service-account-key"
+    : "application-default";
 }
 
 function renderTopHelp(): string {
@@ -486,13 +512,128 @@ export function resolveFleetGatewayMutation(args: ParsedFleetArgs): AdminFleetRe
   }
 }
 
-export async function executeFleetGatewayMutation(
+export type FleetBuilderMutation =
+  | {
+      kind: "evict";
+      slug: string;
+      target: { kind: "gateway"; gatewayId: string } | { kind: "park" };
+    }
+  | { kind: "place"; slug: string };
+
+function requiredBuilderSlug(args: ParsedFleetArgs, command: string): string {
+  const slug = args.positional[2];
+  if (!slug) throw new Error(`${command} requires <slug>`);
+  if (args.positional.length !== 3) {
+    throw new Error(`${command} accepts exactly one <slug>`);
+  }
+  return slug;
+}
+
+function validateBuilderFlags(
+  args: ParsedFleetArgs,
+  command: string,
+  actionFlags: readonly string[],
+): void {
+  const allowed = new Set(["apply", "idempotency-key", ...actionFlags]);
+  const unsupported = Object.keys(args.flags).filter((flag) => !allowed.has(flag));
+  if (unsupported.length > 0) {
+    throw new Error(`${command} does not accept --${unsupported.join(", --")}`);
+  }
+  if (args.flags.apply !== undefined && args.flags.apply !== true) {
+    throw new Error(`${command} accepts --apply without a value`);
+  }
+  if (
+    args.flags["idempotency-key"] !== undefined &&
+    stringFlag(args, "idempotency-key") === undefined
+  ) {
+    throw new Error(`${command} requires --idempotency-key=<key>`);
+  }
+}
+
+function hasBuilderParkFlag(args: ParsedFleetArgs): boolean {
+  const park = args.flags.park;
+  if (park !== undefined && park !== true) {
+    throw new Error("builder evict accepts --park without a value");
+  }
+  return park === true;
+}
+
+function builderTargetGatewayId(args: ParsedFleetArgs): string | undefined {
+  const to = stringFlag(args, "to");
+  if (args.flags.to !== undefined && !to) {
+    throw new Error("builder evict requires --to=<gw-id>");
+  }
+  if (to && !isValidGatewayId(to)) {
+    throw new Error(`builder evict received an invalid gateway id: ${to}`);
+  }
+  return to;
+}
+
+export function resolveFleetBuilderMutation(args: ParsedFleetArgs): FleetBuilderMutation {
+  const action = args.positional[1];
+  switch (action) {
+    case "evict": {
+      const slug = requiredBuilderSlug(args, "builder evict");
+      validateBuilderFlags(args, "builder evict", ["to", "park"]);
+      const to = builderTargetGatewayId(args);
+      const park = hasBuilderParkFlag(args);
+      if (to && park) {
+        throw new Error("builder evict accepts exactly one of --to=<gw-id> or --park");
+      }
+      if (!to && !park) {
+        throw new Error("builder evict requires exactly one of --to=<gw-id> or --park");
+      }
+      return {
+        kind: "evict",
+        slug,
+        target: to ? { kind: "gateway", gatewayId: to } : { kind: "park" },
+      };
+    }
+    case "place": {
+      const slug = requiredBuilderSlug(args, "builder place");
+      if (args.flags.to !== undefined || args.flags.park !== undefined) {
+        throw new Error("builder place does not accept --to or --park");
+      }
+      validateBuilderFlags(args, "builder place", []);
+      return { kind: "place", slug };
+    }
+    default:
+      throw new Error(`Unknown Builder mutation: builder ${action ?? ""}`.trim());
+  }
+}
+
+export function resolveFleetBuilderMutationRequest(
+  mutation: FleetBuilderMutation,
+  uid: string,
+  idempotencyKey?: string,
+): AdminFleetRequest {
+  const request: AdminFleetRequest = {
+    method: "PATCH",
+    path: `/api/admin/customers/${encodeURIComponent(uid)}/placement`,
+    body: mutation.kind === "place"
+      ? { managedBy: "cowboy" }
+      : mutation.target.kind === "park"
+        ? { managedBy: "operator", gatewayId: null }
+        : { managedBy: "operator", gatewayId: mutation.target.gatewayId },
+  };
+  return idempotencyKey ? { ...request, idempotencyKey } : request;
+}
+
+export async function executeFleetAdminMutation(
   client: Pick<AdminFleetClient, "request">,
   request: AdminFleetRequest,
   apply: boolean,
 ): Promise<{ applied: boolean; response: unknown }> {
   if (!apply) return { applied: false, response: null };
   return { applied: true, response: await client.request(request) };
+}
+
+export async function executeFleetGatewayMutation(
+  client: Pick<AdminFleetClient, "request">,
+  request: AdminFleetRequest,
+  apply: boolean,
+): Promise<{ applied: boolean; response: unknown }> {
+  return executeFleetAdminMutation(client, request, apply);
 }
 
 let args: ParsedFleetArgs = parseFleetArgs([]);
@@ -962,6 +1103,30 @@ async function runFleetGatewayMutation(apply: boolean): Promise<void> {
   console.log(JSON.stringify(result.response, null, 2));
 }
 
+async function runFleetBuilderMutation(apply: boolean): Promise<void> {
+  const mutation = resolveFleetBuilderMutation(args);
+  const user = await findUserBySlug(mutation.slug);
+  if (!user) {
+    console.error(red(`${CROSS} No user found with slug or username '${mutation.slug}'.`));
+    process.exit(1);
+  }
+  const request = resolveFleetBuilderMutationRequest(
+    mutation,
+    user.uid,
+    stringFlag(args, "idempotency-key"),
+  );
+  console.log(bold(`BUILDER ${mutation.kind.toUpperCase()} ${mutation.slug}`));
+  console.log(dim(`  uid: ${user.uid}`));
+  console.log(dim(`  ${request.method} ${request.path}`));
+  if (!apply) {
+    console.log(dim("--- DRY RUN (re-run with --apply to send the Admin API request) ---"));
+    return;
+  }
+  const result = await executeFleetAdminMutation(fleetAdminClient(), request, true);
+  console.log(green(`${CHECK} Admin API desired state accepted`));
+  console.log(JSON.stringify(result.response, null, 2));
+}
+
 export function releaseStatusRows(status: ReleaseStatusSnapshot): Array<Record<string, string | number>> {
   return status.gateways.map((gateway) => ({
     gatewayId: gateway.gatewayId,
@@ -1239,6 +1404,8 @@ async function main(): Promise<void> {
   switch (verb) {
     case "gw":
       return runFleetGatewayMutation(apply);
+    case "builder":
+      return runFleetBuilderMutation(apply);
     case "add-customer": {
 
 const to = typeof args.flags.to === "string" ? args.flags.to : undefined;
