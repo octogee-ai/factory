@@ -15,6 +15,8 @@ import {
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
+  isOperationAuditRecord,
+  isOperationAuditRow,
   GATEWAY_CLASSES,
   GATEWAY_IMAGE_PROFILES,
   GATEWAY_PROFILES,
@@ -33,6 +35,7 @@ import {
   type GatewayImageProfile,
   type GatewayProfile,
   type GatewayServiceAccountSpec,
+  type OperationAuditDocument,
   type OperatorGatewayAccessSpec,
 } from "@octogee/shared/types/glm";
 import {
@@ -2480,6 +2483,98 @@ function shapeDrawerOperation(
   if (typeof data.error === "string") out.error = data.error;
   if (typeof data.rolledBack === "boolean") out.rolledBack = data.rolledBack;
   return out;
+}
+
+function shapeInvalidOperationAuditHistoryRecord(
+  id: string,
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    id,
+    recordType: "audit",
+    invalid: true,
+    schemaVersion: typeof data.schemaVersion === "number" ? data.schemaVersion : null,
+    status: "invalid",
+    lifecycleStage: "invalid",
+    createdAt: typeof data.createdAt === "number" && Number.isFinite(data.createdAt)
+      ? data.createdAt
+      : 0,
+    completedAt: null,
+    error: "Unsupported or malformed operation audit record",
+  };
+}
+
+function shapeAuditHistoryPreCreatedAtFields(
+  data: OperationAuditDocument,
+): Record<string, unknown> {
+  return {
+    ...(data.aliasOutcomes ? { aliasOutcomes: data.aliasOutcomes } : {}),
+    ...(data.releaseRollout ? { releaseRollout: data.releaseRollout } : {}),
+    ...(data.testProvenance ? { testProvenance: data.testProvenance } : {}),
+    ...(data.outcome ? { outcome: data.outcome } : {}),
+    ...(data.partialOutcome ? { partialOutcome: data.partialOutcome } : {}),
+  };
+}
+
+function shapeAuditHistoryActionFields(
+  data: OperationAuditDocument,
+): Record<string, unknown> {
+  return {
+    ...(data.actionClaimId ? { actionClaimId: data.actionClaimId } : {}),
+    ...(data.actionStartedAt !== undefined ? { actionStartedAt: data.actionStartedAt } : {}),
+    ...(data.actionRecoveryCount !== undefined
+      ? { actionRecoveryCount: data.actionRecoveryCount }
+      : {}),
+  };
+}
+
+function shapeAuditHistoryErrorField(
+  data: OperationAuditDocument,
+): Record<string, unknown> {
+  return {
+    ...(typeof data.error === "string" ? { error: data.error } : {}),
+  };
+}
+
+function shapeValidOperationAuditHistoryRecord(
+  id: string,
+  data: OperationAuditDocument,
+): Record<string, unknown> {
+  return {
+    id,
+    recordType: data.recordType,
+    schemaVersion: data.schemaVersion,
+    status: data.status,
+    lifecycleStage: data.lifecycleStage,
+    idempotencyKey: data.idempotencyKey,
+    mutationFingerprint: data.mutationFingerprint,
+    mutation: data.mutation,
+    actor: data.actor,
+    forced: data.forced,
+    what: data.what,
+    why: data.why,
+    target: data.target,
+    preActionStatus: data.preActionStatus,
+    aliasPlan: data.aliasPlan,
+    ...shapeAuditHistoryPreCreatedAtFields(data),
+    createdAt: data.createdAt,
+    ...shapeAuditHistoryActionFields(data),
+    completedAt: data.completedAt,
+    ...shapeAuditHistoryErrorField(data),
+  };
+}
+
+export function shapeOperationsHistoryRecord(
+  id: string,
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  if (isOperationAuditRow(data) && !isOperationAuditRecord(data)) {
+    return shapeInvalidOperationAuditHistoryRecord(id, data);
+  }
+  if (isOperationAuditRecord(data)) {
+    return shapeValidOperationAuditHistoryRecord(id, data);
+  }
+  return { id, ...data };
 }
 
 function serializeCustomerLookup(doc: CustomerLookupDoc): {
@@ -5758,10 +5853,9 @@ router.get(
           .orderBy("createdAt", "desc")
           .limit(limit)
           .get();
-        const operations = snap.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }));
+        const operations = snap.docs.map((doc) =>
+          shapeOperationsHistoryRecord(doc.id, doc.data() as Record<string, unknown>),
+        );
         res.json({ operations, generatedAt: new Date().toISOString() });
       } catch (e) {
         next(e);

@@ -11,6 +11,7 @@ interface FakeOpDoc {
     lastProgressAt?: number;
     output?: Record<string, unknown>;
     customerMigrationV2?: { phase: string };
+    recordType?: string;
   };
   updated?: Record<string, unknown>;
 }
@@ -48,6 +49,29 @@ function makeFakeDb(ops: FakeOpDoc[]) {
 const NOW = 1_700_000_000_000;
 
 describe("runStuckOpReaperTick", () => {
+  it("does not reap a stale running audit record", async () => {
+    const ops: FakeOpDoc[] = [
+      {
+        id: "audit-running",
+        data: {
+          recordType: "audit",
+          status: "running",
+          kind: "rollout",
+          startedAt: NOW - 60 * 60_000,
+        },
+      },
+    ];
+    const result = await runStuckOpReaperTick({
+      db: makeFakeDb(ops) as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+      log: vi.fn(),
+      now: () => NOW,
+      stalenessMs: 15 * 60_000,
+    });
+
+    expect(result).toEqual({ scanned: 1, reaped: 0 });
+    expect(ops[0].updated).toBeUndefined();
+  });
+
   it("flips status=failed on a `running` op older than stalenessMs", async () => {
     const ops: FakeOpDoc[] = [
       {

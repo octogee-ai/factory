@@ -10,12 +10,14 @@ import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
   isOperatorManaged,
+  isOperationAuditRow,
   operatorGatewayServiceAccountName,
   resolveOperationOrigin,
   resolveGatewayClass,
   isGatewayClass,
   isGatewayProfile,
   type HelmInstancesMap,
+  type OperationAuditRecord,
   type Operation,
 } from "@octogee/shared/types/glm";
 import {
@@ -1255,7 +1257,9 @@ export function startOperationWorker(deps: ControllerDeps): () => void {
       async (snap) => {
         for (const change of snap.docChanges()) {
           if (change.type !== "added") continue;
-          const op = { ...(change.doc.data() as Operation), id: change.doc.id };
+          const data = change.doc.data();
+          if (isOperationAuditRow(data)) continue;
+          const op = { ...(data as Operation), id: change.doc.id };
           await processOperation(op, change.doc.ref, deps);
         }
       },
@@ -1383,9 +1387,10 @@ async function attemptClaimOrQueueOperation(
       }
       const fresh = await txn.get(ref);
       if (!fresh.exists) return { outcome: "skipped" as const };
-      const data = fresh.data() as Operation | undefined;
-      if (!data) return { outcome: "skipped" as const };
-      const fenceReason = await automaticOperationFenceReason(txn, deps.db, data);
+      const data = fresh.data() as unknown;
+      if (!data || isOperationAuditRow(data)) return { outcome: "skipped" as const };
+      const freshOperation = data as Operation;
+      const fenceReason = await automaticOperationFenceReason(txn, deps.db, freshOperation);
       if (fenceReason) {
         failFencedOperation(txn, ref, fenceReason, Date.now());
         return { outcome: "fenced" as const };
@@ -1399,22 +1404,26 @@ async function attemptClaimOrQueueOperation(
           txn.get(operations.where("status", "==", "pending")),
         ]);
         runningOpsSameKind = runningSnap.docs.flatMap((d) => {
-          const runningData = d.data() as Operation;
-          return isSeriallyExclusiveKind(runningData.kind) ? [{
+          const runningData = d.data() as unknown;
+          if (isOperationAuditRow(runningData)) return [];
+          const runningOperation = runningData as Operation;
+          return isSeriallyExclusiveKind(runningOperation.kind) ? [{
             id: d.id,
-            kind: runningData.kind,
-            input: runningData.input,
-            customerMigrationV2: runningData.customerMigrationV2,
+            kind: runningOperation.kind,
+            input: runningOperation.input,
+            customerMigrationV2: runningOperation.customerMigrationV2,
           }] : [];
         });
         pendingOpsSameKind = pendingSnap.docs.flatMap((d) => {
-          const pendingData = d.data() as Operation;
-          return isSeriallyExclusiveKind(pendingData.kind) ? [{
+          const pendingData = d.data() as unknown;
+          if (isOperationAuditRow(pendingData)) return [];
+          const pendingOperation = pendingData as Operation;
+          return isSeriallyExclusiveKind(pendingOperation.kind) ? [{
             id: d.id,
-            kind: pendingData.kind,
-            input: pendingData.input,
-            createdAt: pendingData.createdAt,
-            customerMigrationV2: pendingData.customerMigrationV2,
+            kind: pendingOperation.kind,
+            input: pendingOperation.input,
+            createdAt: pendingOperation.createdAt,
+            customerMigrationV2: pendingOperation.customerMigrationV2,
           }] : [];
         });
       }
@@ -1423,11 +1432,11 @@ async function attemptClaimOrQueueOperation(
         op: {
           id: op.id,
           kind: op.kind,
-          status: data.status,
-          createdAt: data.createdAt,
-          nextAttemptAt: data.nextAttemptAt,
-          input: data.input,
-          customerMigrationV2: data.customerMigrationV2,
+          status: freshOperation.status,
+          createdAt: freshOperation.createdAt,
+          nextAttemptAt: freshOperation.nextAttemptAt,
+          input: freshOperation.input,
+          customerMigrationV2: freshOperation.customerMigrationV2,
         },
         now: Date.now(),
         runningOpsSameKind,
@@ -1436,7 +1445,7 @@ async function attemptClaimOrQueueOperation(
 
       if (decision.outcome === "skip") return { outcome: "skipped" as const };
       if (decision.outcome === "queue") {
-        if (data.waitingOn !== decision.waitingOn) {
+        if (freshOperation.waitingOn !== decision.waitingOn) {
           txn.update(ref, { waitingOn: decision.waitingOn });
         }
         return { outcome: "queued" as const };
@@ -1452,7 +1461,7 @@ async function attemptClaimOrQueueOperation(
       // The completion write derives attempts/attemptHistory from the op the
       // handler ran with — hand back the transaction's fresh read so a stale
       // worker snapshot can't reset the retry cap or drop history.
-      return { outcome: "claimed" as const, fresh: { ...data, id: op.id, startedAt: now } };
+      return { outcome: "claimed" as const, fresh: { ...freshOperation, id: op.id, startedAt: now } };
     });
   } catch (err) {
     deps.log(
@@ -1463,13 +1472,15 @@ async function attemptClaimOrQueueOperation(
 }
 
 export async function processOperation(
-  op: Operation,
+  op: Operation | OperationAuditRecord,
   ref: FirebaseFirestore.DocumentReference,
   deps: ControllerDeps,
 ): Promise<void> {
-  const claim = await attemptClaimOrQueueOperation(op, ref, deps);
+  if (isOperationAuditRow(op)) return;
+  const operation = op as Operation;
+  const claim = await attemptClaimOrQueueOperation(operation, ref, deps);
   if (claim.outcome === "queued") {
-    deps.log(`[glm-controller] op=${op.id} kind=${op.kind} queued — waiting on a conflicting op`);
+    deps.log(`[glm-controller] op=${operation.id} kind=${operation.kind} queued — waiting on a conflicting op`);
     return;
   }
   if (claim.outcome === "fenced") {
@@ -1478,7 +1489,7 @@ export async function processOperation(
   }
   if (claim.outcome !== "claimed" || !claim.fresh) return;
 
-  deps.log(`[glm-controller] claim op=${op.id} kind=${op.kind}`);
+  deps.log(`[glm-controller] claim op=${operation.id} kind=${operation.kind}`);
   await runClaimedOperation(claim.fresh, ref, deps);
 }
 
@@ -1494,7 +1505,11 @@ export async function drainPendingOperationsOnce(deps: ControllerDeps): Promise<
     .where("status", "==", "pending")
     .get();
   const ops = snap.docs
-    .map((doc) => ({ op: { ...(doc.data() as Operation), id: doc.id }, ref: doc.ref }))
+    .flatMap((doc) => {
+      const data = doc.data();
+      if (isOperationAuditRow(data)) return [];
+      return [{ op: { ...(data as Operation), id: doc.id }, ref: doc.ref }];
+    })
     .sort((a, b) => (a.op.createdAt ?? 0) - (b.op.createdAt ?? 0));
   for (const { op, ref } of ops) {
     await processOperation(op, ref, deps);
@@ -1539,15 +1554,17 @@ async function reAdoptAndRunOperation(
       }
       const fresh = await txn.get(ref);
       if (!fresh.exists) return null;
-      const data = fresh.data() as Operation | undefined;
-      if (data?.status !== "running") return null;
+      const data = fresh.data() as unknown;
+      if (!data || isOperationAuditRow(data)) return null;
+      const freshOperation = data as Operation;
+      if (freshOperation.status !== "running") return null;
       const now = Date.now();
       txn.update(ref, {
         startedAt: now,
         lastProgressAt: now,
-        resumeCount: (typeof data.resumeCount === "number" ? data.resumeCount : 0) + 1,
+        resumeCount: (typeof freshOperation.resumeCount === "number" ? freshOperation.resumeCount : 0) + 1,
       });
-      return { ...data, id: op.id, startedAt: now };
+      return { ...freshOperation, id: op.id, startedAt: now };
     });
   } catch (err) {
     deps.log(

@@ -10,6 +10,7 @@ import {
   projectGatewayReservation,
   projectGatewaySummary,
   resolveFleetDeploymentSettings,
+  shapeOperationsHistoryRecord,
   type GatewayPodDiagnostics,
 } from "./admin-fleet-router.js";
 import {
@@ -65,6 +66,75 @@ describe("resolveFleetDeploymentSettings", () => {
     expect(() => resolveFleetDeploymentSettings("feat-alice")).toThrow(
       "Unknown deployment environment for fleet namespace: feat-alice",
     );
+  });
+});
+
+describe("shapeOperationsHistoryRecord", () => {
+  it("preserves an audit union member without projecting it as a command", () => {
+    expect(shapeOperationsHistoryRecord("audit-1", {
+      recordType: "audit",
+      schemaVersion: 1,
+      status: "completed",
+      lifecycleStage: "action-completed",
+      idempotencyKey: "key",
+      mutationFingerprint: "fingerprint",
+      mutation: { action: "move-alias" },
+      actor: "fleet-cli:chris",
+      forced: true,
+      what: "move release alias",
+      why: "candidate verified in TEST",
+      target: { gatewayId: "bender" },
+      preActionStatus: { alias: "stable", target: "sha-old" },
+      aliasPlan: [],
+      createdAt: 1,
+      actionClaimId: "runner-1",
+      actionStartedAt: 1.5,
+      actionRecoveryCount: 0,
+      completedAt: 2,
+      outcome: "completed",
+    })).toEqual({
+      id: "audit-1",
+      recordType: "audit",
+      schemaVersion: 1,
+      status: "completed",
+      lifecycleStage: "action-completed",
+      idempotencyKey: "key",
+      mutationFingerprint: "fingerprint",
+      mutation: { action: "move-alias" },
+      actor: "fleet-cli:chris",
+      forced: true,
+      what: "move release alias",
+      why: "candidate verified in TEST",
+      target: { gatewayId: "bender" },
+      preActionStatus: { alias: "stable", target: "sha-old" },
+      aliasPlan: [],
+      createdAt: 1,
+      actionClaimId: "runner-1",
+      actionStartedAt: 1.5,
+      actionRecoveryCount: 0,
+      completedAt: 2,
+      outcome: "completed",
+    });
+  });
+
+  it("projects malformed and future audit rows as safe invalid history records", () => {
+    expect(shapeOperationsHistoryRecord("audit-future", {
+      recordType: "audit",
+      schemaVersion: 2,
+      status: "recorded",
+      lifecycleStage: "intent-recorded",
+      createdAt: 5,
+    })).toEqual({
+      id: "audit-future",
+      recordType: "audit",
+      invalid: true,
+      schemaVersion: 2,
+      status: "invalid",
+      lifecycleStage: "invalid",
+      createdAt: 5,
+      completedAt: null,
+      error: "Unsupported or malformed operation audit record",
+    });
   });
 });
 

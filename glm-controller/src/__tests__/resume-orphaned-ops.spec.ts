@@ -5,7 +5,7 @@ import { operationNeedsDurableCustomerMigrationV2Resume } from "../operation-ret
 
 interface FakeOpDoc {
   id: string;
-  data: Partial<Operation> & { status?: string; kind?: string };
+  data: Partial<Operation> & { status?: string; kind?: string; recordType?: string };
 }
 
 function makeFakeDb(ops: FakeOpDoc[]) {
@@ -28,6 +28,24 @@ function makeFakeDb(ops: FakeOpDoc[]) {
 const RESUMABLE = new Set(["rollout"]);
 
 describe("resumeOrphanedRunningOps", () => {
+  it("does not re-drive a running audit record", async () => {
+    const redrive = vi.fn(async () => undefined);
+    const result = await resumeOrphanedRunningOps({
+      db: makeFakeDb([
+        {
+          id: "audit-running",
+          data: { recordType: "audit", status: "running", kind: "rollout" },
+        },
+      ]) as never,
+      log: vi.fn(),
+      resumableKinds: RESUMABLE,
+      redrive,
+    });
+
+    expect(result).toEqual({ scanned: 1, resumed: 0 });
+    expect(redrive).not.toHaveBeenCalled();
+  });
+
   it("re-drives a running rollout op (orphaned by a restart)", async () => {
     const redrive = vi.fn(async () => undefined);
     const ops: FakeOpDoc[] = [
