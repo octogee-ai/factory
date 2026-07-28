@@ -155,7 +155,7 @@ vi.mock("../middleware/auth", () => ({
 }));
 
 import express from "express";
-import adminRouter from "../routes/admin.js";
+import adminRouter, { centralReleaseRouteDeps } from "../routes/admin.js";
 
 function buildApp() {
   const app = express();
@@ -163,6 +163,17 @@ function buildApp() {
   app.use("/api/admin", adminRouter);
   return app;
 }
+
+describe("CENTRAL release authority wiring", () => {
+  it("enables release authority only for the active CENTRAL TEST and PROD targets", () => {
+    expect(centralReleaseRouteDeps("test-central").releaseEnvironment).toBe("test");
+    expect(centralReleaseRouteDeps("test-central").releaseAuthority).toBeDefined();
+    expect(centralReleaseRouteDeps("prod-central").releaseEnvironment).toBe("prod");
+    expect(centralReleaseRouteDeps("prod-central").releaseAuthority).toBeDefined();
+    expect(centralReleaseRouteDeps("test-west")).toEqual({ releaseEnvironment: null });
+    expect(centralReleaseRouteDeps("build-week-central")).toEqual({ releaseEnvironment: null });
+  });
+});
 
 describe("GET /api/admin/gateways", () => {
   let app: express.Express;

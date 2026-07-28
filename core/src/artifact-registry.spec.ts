@@ -1,3 +1,4 @@
+import { gzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 let getAccessTokenCalls = 0;
@@ -14,7 +15,10 @@ vi.mock("google-auth-library", () => ({
   },
 }));
 
-import { listGatewayBuilds } from "./artifact-registry";
+import {
+  createCentralReleaseAuthority,
+  listGatewayBuilds,
+} from "./artifact-registry";
 
 const fetchMock = vi.fn<typeof fetch>();
 beforeEach(() => {
@@ -260,5 +264,119 @@ fetchMock.mockResolvedValueOnce(makeArResponse([]));
     await expect(listGatewayBuilds({ service: "octogee-gateway" })).rejects.toThrow(
       /artifact-registry/i,
     );
+  });
+});
+
+function tarFile(name: string, contents: string): Uint8Array {
+  const body = Buffer.from(contents);
+  const header = Buffer.alloc(512);
+  header.write(name, 0, "utf8");
+  header.write("0000644\0", 100, "ascii");
+  header.write("0000000\0", 108, "ascii");
+  header.write("0000000\0", 116, "ascii");
+  header.write(body.length.toString(8).padStart(11, "0") + "\0", 124, "ascii");
+  header.write("00000000000\0", 136, "ascii");
+  header[156] = "0".charCodeAt(0);
+  header.write("ustar\0", 257, "ascii");
+  header.write("00", 263, "ascii");
+  const length = Math.ceil(body.length / 512) * 512;
+  return gzipSync(Buffer.concat([header, body, Buffer.alloc(length - body.length), Buffer.alloc(1024)]));
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status });
+}
+
+describe("CENTRAL release authority — Artifact Registry adapter", () => {
+  const sourceSha = "a".repeat(40);
+  const manifestDigest = `sha256:${"b".repeat(64)}`;
+  const gatewayDigest = `sha256:${"c".repeat(64)}`;
+  const operatorDigest = `sha256:${"d".repeat(64)}`;
+  const edgeDigest = `sha256:${"e".repeat(64)}`;
+  const repository = "us-central1-docker.pkg.dev/octogee/octogee";
+
+  const manifest = {
+    schemaVersion: 1,
+    sourceSha,
+    openclawVersion: "2026.7.1",
+    repository,
+    surfaces: {
+      gateway: {
+        "gateway-edge": edgeDigest,
+        "octogee-gateway": gatewayDigest,
+        "octogee-gateway-operator": operatorDigest,
+      },
+      platform: {
+        "artifact-worker": `sha256:${"1".repeat(64)}`,
+        "glm-controller": `sha256:${"2".repeat(64)}`,
+        "octogee-api": `sha256:${"3".repeat(64)}`,
+        "octogee-ops-agent": `sha256:${"4".repeat(64)}`,
+      },
+    },
+  };
+
+  it("resolves the immutable manifest, builds the exact alias plan, and accepts a raced alias only after exact re-read", async () => {
+    const authority = createCentralReleaseAuthority({
+      project: "octogee",
+      location: "us-central1",
+      repository: "octogee",
+    });
+    const archive = tarFile("release-digest-manifest.json", JSON.stringify(manifest));
+    const aliases = [{
+      alias: `${repository}/octogee-gateway:aaaaaaa-oc2026.7.1`,
+      intendedTarget: `${repository}/octogee-gateway@${gatewayDigest}`,
+    }];
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({
+        version: `projects/octogee/locations/us-central1/repositories/octogee/packages/release-digest-manifest/versions/${manifestDigest}`,
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        schemaVersion: 2,
+        layers: [{ digest: `sha256:${"f".repeat(64)}` }],
+      }))
+      .mockResolvedValueOnce(new Response(archive))
+      .mockResolvedValueOnce(new Response("missing", { status: 404 }))
+      .mockResolvedValueOnce(new Response("already exists", { status: 409 }))
+      .mockResolvedValueOnce(jsonResponse({
+        version: `projects/octogee/locations/us-central1/repositories/octogee/packages/octogee-gateway/versions/${gatewayDigest}`,
+      }));
+
+    await expect(authority.resolveManifest(sourceSha)).resolves.toMatchObject({
+      sourceSha,
+      manifestDigest,
+      surfaces: { gateway: { "octogee-gateway": gatewayDigest } },
+    });
+    expect(authority.aliasesFor({ ...manifest, manifestDigest })).toHaveLength(10);
+    await expect(authority.ensureAliases(aliases)).resolves.toEqual([{
+      alias: aliases[0].alias,
+      status: "already-applied",
+      observedTarget: aliases[0].intendedTarget,
+    }]);
+
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(urls[0]).toContain("/packages/release-digest-manifest/tags/");
+    expect(urls[1]).toContain(`/v2/octogee/octogee/release-digest-manifest/manifests/${manifestDigest}`);
+    expect(urls[2]).toContain("/v2/octogee/octogee/release-digest-manifest/blobs/");
+    expect(urls[4]).toContain("tagId=aaaaaaa-oc2026.7.1");
+  });
+
+  it("rejects an alias race when the persisted target is not the manifest digest", async () => {
+    const authority = createCentralReleaseAuthority({
+      project: "octogee",
+      location: "us-central1",
+      repository: "octogee",
+    });
+    const alias = {
+      alias: `${repository}/octogee-gateway:aaaaaaa`,
+      intendedTarget: `${repository}/octogee-gateway@${gatewayDigest}`,
+    };
+    fetchMock
+      .mockResolvedValueOnce(new Response("missing", { status: 404 }))
+      .mockResolvedValueOnce(new Response("already exists", { status: 409 }))
+      .mockResolvedValueOnce(jsonResponse({
+        version: `projects/octogee/locations/us-central1/repositories/octogee/packages/octogee-gateway/versions/sha256:${"0".repeat(64)}`,
+      }));
+
+    await expect(authority.ensureAliases([alias])).rejects.toThrow("already points at a different digest");
   });
 });

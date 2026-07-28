@@ -53,6 +53,18 @@ export function assertNormalFleetMutationSnapshotOpen(snapshot) {
         throw new FleetMutationFrozenError(reason);
     }
 }
+export class FleetMutationPartialError extends Error {
+    partialOutcome;
+    aliasOutcomes;
+    releaseRollout;
+    constructor(message, partialOutcome, aliasOutcomes, releaseRollout) {
+        super(message);
+        this.partialOutcome = partialOutcome;
+        this.aliasOutcomes = aliasOutcomes;
+        this.releaseRollout = releaseRollout;
+        this.name = "FleetMutationPartialError";
+    }
+}
 export async function runNormalFleetMutation(db, input) {
     await assertNormalFleetMutationOpen(db);
     const { action, claimId, classifyResult, idempotencyKey, ...intent } = input;
@@ -75,10 +87,16 @@ export async function runNormalFleetMutation(db, input) {
     }
     catch (error) {
         try {
+            const partial = error instanceof FleetMutationPartialError ? error : null;
             await finishOperationAudit(db, audit.auditId, {
                 expectedClaimId: claim.claimId,
                 outcome: "failed",
                 error: error instanceof Error ? error.message : String(error),
+                ...(partial ? {
+                    partialOutcome: partial.partialOutcome,
+                    ...(partial.aliasOutcomes ? { aliasOutcomes: partial.aliasOutcomes } : {}),
+                    ...(partial.releaseRollout ? { releaseRollout: partial.releaseRollout } : {}),
+                } : {}),
             });
         }
         catch (completionError) {

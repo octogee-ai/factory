@@ -5,6 +5,7 @@ import { FieldValue } from "firebase-admin/firestore";
 import request from "supertest";
 
 import { addAdminFleetRoutes } from "./admin-fleet-router.js";
+import { ReleaseDigestAliasError } from "./artifact-registry.js";
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
@@ -50,6 +51,8 @@ interface TestRouterOptions {
   synchronizeFirstTwoReadsOf?: string;
   failTransactions?: boolean;
   beforeFirstTransaction?: (store: Map<string, Record<string, unknown>>) => void;
+  releaseEnvironment?: "test" | "prod" | null;
+  releaseAuthority?: Record<string, unknown>;
   provisionGatewayAuthSecret?: (input: {
     gatewayId: string;
     gatewayServiceAccount: string;
@@ -250,6 +253,8 @@ function mkApp(
       ? vi.fn((input) => opts.provisionGatewayAuthSecret!(input))
       : vi.fn(async () => ({})),
     listGatewayBuilds: vi.fn(async () => []),
+    releaseEnvironment: opts?.releaseEnvironment ?? "test",
+    releaseAuthority: opts?.releaseAuthority,
     suspendAuthUser: vi.fn(async () => undefined),
     revokeConnectorGrantsForUser: vi.fn(async () => undefined),
   });
@@ -351,6 +356,328 @@ describe("normal fleet mutation admission", () => {
       target: { gatewayId: "beta" },
       preActionStatus: { desiredStatus: "running", desiredRelease: 1 },
       mutation: { kind: "restart-gateway", gatewayId: "beta" },
+    }));
+  });
+});
+
+describe("POST /releases/cut and POST /releases/:version/promote", () => {
+  const sourceSha = "a".repeat(40);
+  const manifestDigest = `sha256:${"b".repeat(64)}`;
+  const gatewayDigest = `sha256:${"c".repeat(64)}`;
+  const operatorDigest = `sha256:${"d".repeat(64)}`;
+  const edgeDigest = `sha256:${"e".repeat(64)}`;
+
+  function releaseManifest(overrides: Partial<{
+    sourceSha: string;
+    manifestDigest: string;
+  }> = {}) {
+    return {
+      sourceSha: overrides.sourceSha ?? sourceSha,
+      manifestDigest: overrides.manifestDigest ?? manifestDigest,
+      openclawVersion: "2026.7.1",
+      repository: "us-central1-docker.pkg.dev/octogee/octogee",
+      surfaces: {
+        gateway: {
+          "gateway-edge": edgeDigest,
+          "octogee-gateway": gatewayDigest,
+          "octogee-gateway-operator": operatorDigest,
+        },
+        platform: {
+          "artifact-worker": `sha256:${"1".repeat(64)}`,
+          "glm-controller": `sha256:${"2".repeat(64)}`,
+          "octogee-api": `sha256:${"3".repeat(64)}`,
+          "octogee-ops-agent": `sha256:${"4".repeat(64)}`,
+        },
+      },
+    };
+  }
+
+  function releaseAuthority(manifest = releaseManifest()) {
+    return {
+      resolveManifest: vi.fn(async () => manifest),
+      resolveTestManifest: vi.fn(async () => manifest),
+      aliasesFor: vi.fn(() => [{
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway:aaaaaaa-oc2026.7.1",
+        intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway@${gatewayDigest}`,
+      }]),
+      testRecordAlias: vi.fn(() => ({
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/release-digest-manifest:test-v0.4.0",
+        intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/release-digest-manifest@${manifestDigest}`,
+      })),
+      ensureAliases: vi.fn(async (aliases: Array<{ alias: string; intendedTarget: string }>) =>
+        aliases.map((alias) => ({
+          alias: alias.alias,
+          status: "applied",
+          observedTarget: alias.intendedTarget,
+        })),
+      ),
+    };
+  }
+
+  it("cuts a CENTRAL TEST release from the exact manifest, journals aliases, and records TEST authority", async () => {
+    const authority = releaseAuthority();
+    const { app, store } = mkApp(seedNewSchemaGateway("default", sharedPayload()), {
+      releaseAuthority: authority,
+    });
+
+    const response = await request(app)
+      .post("/releases/cut")
+      .send({ version: "v0.4.0", sourceSha })
+      .expect(202);
+
+    expect(response.body).toMatchObject({
+      version: "v0.4.0",
+      sourceSha,
+      gatewayId: "default",
+      release: 2,
+    });
+    expect((store.get("gateways/default/releases/2")?.payload as ReleasePayload)).toEqual({
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+      imageTag: `aaaaaaa-oc2026.7.1@${gatewayDigest}`,
+      profileImages: {
+        operator: {
+          imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator",
+          imageTag: `aaaaaaa-oc2026.7.1@${operatorDigest}`,
+        },
+      },
+      gatewayEdgeImage: {
+        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
+        imageTag: `aaaaaaa-oc2026.7.1@${edgeDigest}`,
+      },
+    });
+    expect(opsIn(store, "rollout")).toHaveLength(1);
+    expect(authority.ensureAliases).toHaveBeenCalledTimes(2);
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      what: "cut CENTRAL TEST release",
+      testProvenance: expect.objectContaining({ environment: "test", sourceCommit: sourceSha }),
+    }));
+  });
+
+  it("rejects a conflicting durable TEST version before aliases or desired state change", async () => {
+    const conflictingSourceSha = "f".repeat(40);
+    const authority = releaseAuthority(releaseManifest({ sourceSha: conflictingSourceSha }));
+    const { app, store } = mkApp({
+      ...seedNewSchemaGateway("default", sharedPayload()),
+      "centralTestReleaseReservations/v0.4.0": {
+        version: "v0.4.0",
+        sourceSha,
+        manifestDigest,
+        gatewayId: "default",
+        release: 2,
+        rolloutOperationId: "rollout-existing",
+      },
+    }, { releaseAuthority: authority });
+
+    await request(app)
+      .post("/releases/cut")
+      .send({ version: "v0.4.0", sourceSha: conflictingSourceSha })
+      .expect(409)
+      .expect({ error: "CENTRAL TEST version v0.4.0 is already reserved for a different manifest" });
+
+    expect(authority.ensureAliases).not.toHaveBeenCalled();
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 1, desiredRelease: 1 });
+    expect(opsIn(store, "rollout")).toHaveLength(0);
+  });
+
+  it("reuses a matching durable TEST version without changing desired state", async () => {
+    const authority = releaseAuthority();
+    const { app, store } = mkApp({
+      ...seedNewSchemaGateway("default", sharedPayload()),
+      "centralTestReleaseReservations/v0.4.0": {
+        version: "v0.4.0",
+        sourceSha,
+        manifestDigest,
+        gatewayId: "default",
+        release: 2,
+        rolloutOperationId: "rollout-existing",
+      },
+    }, { releaseAuthority: authority });
+
+    const response = await request(app)
+      .post("/releases/cut")
+      .send({ version: "v0.4.0", sourceSha })
+      .expect(202);
+
+    expect(response.body).toMatchObject({ release: 2, operationId: "rollout-existing" });
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 1, desiredRelease: 1 });
+    expect(opsIn(store, "rollout")).toHaveLength(0);
+    expect(authority.ensureAliases).toHaveBeenCalledTimes(2);
+  });
+
+  it("serializes concurrent matching TEST cuts through one durable reservation", async () => {
+    const authority = releaseAuthority();
+    const { app, store } = mkApp(seedNewSchemaGateway("default", sharedPayload()), {
+      releaseAuthority: authority,
+      synchronizeFirstTwoReadsOf: "centralTestReleaseReservations/v0.4.0",
+    });
+
+    const [first, second] = await Promise.all([
+      request(app).post("/releases/cut").send({ version: "v0.4.0", sourceSha }),
+      request(app).post("/releases/cut").send({ version: "v0.4.0", sourceSha }),
+    ]);
+
+    expect(first.status).toBe(202);
+    expect(second.status).toBe(202);
+    expect([first.body.release, second.body.release]).toEqual([2, 2]);
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 2, desiredRelease: 2 });
+    expect(store.get("centralTestReleaseReservations/v0.4.0")).toMatchObject({
+      sourceSha,
+      manifestDigest,
+      release: 2,
+    });
+    expect(opsIn(store, "rollout")).toHaveLength(1);
+  });
+
+  it("journals aliases as partial when maintenance freezes before desired state append", async () => {
+    const authority = releaseAuthority();
+    const { app, store } = mkApp(seedNewSchemaGateway("default", sharedPayload()), {
+      releaseAuthority: authority,
+    });
+    authority.ensureAliases.mockImplementationOnce(async (aliases: Array<{ alias: string; intendedTarget: string }>) => {
+      store.set("config/glmMaintenance", { mode: "frozen", reason: "incident" });
+      return aliases.map((alias) => ({
+        alias: alias.alias,
+        status: "applied",
+        observedTarget: alias.intendedTarget,
+      }));
+    });
+
+    await request(app)
+      .post("/releases/cut")
+      .send({ version: "v0.4.0", sourceSha })
+      .expect(409)
+      .expect({ error: "maintenance freeze blocks fleet mutation: incident" });
+
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 1, desiredRelease: 1 });
+    expect(opsIn(store, "rollout")).toHaveLength(0);
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      lifecycleStage: "action-partial",
+      outcome: "partial",
+      aliasOutcomes: expect.arrayContaining([expect.objectContaining({ status: "applied" })]),
+      partialOutcome: expect.any(Object),
+    }));
+  });
+
+  it("journals completed aliases and rollout when the TEST authorization marker fails", async () => {
+    const authority = releaseAuthority();
+    const { app, store } = mkApp(seedNewSchemaGateway("default", sharedPayload()), {
+      releaseAuthority: authority,
+    });
+    authority.ensureAliases
+      .mockResolvedValueOnce([{
+        alias: "source-alias",
+        status: "applied",
+        observedTarget: "source-target",
+      }])
+      .mockRejectedValueOnce(new ReleaseDigestAliasError([{
+        alias: "test-record-alias",
+        status: "failed",
+        error: "marker collision",
+      }], new Error("marker collision")));
+
+    await request(app)
+      .post("/releases/cut")
+      .send({ version: "v0.4.0", sourceSha })
+      .expect(500);
+
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 2, desiredRelease: 2 });
+    expect(store.get("centralTestReleaseReservations/v0.4.0")).toMatchObject({ release: 2 });
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      lifecycleStage: "action-partial",
+      outcome: "partial",
+      aliasOutcomes: [
+        expect.objectContaining({ alias: "source-alias", status: "applied" }),
+        expect.objectContaining({ alias: "test-record-alias", status: "failed" }),
+      ],
+      releaseRollout: expect.objectContaining({ releaseId: "default/2" }),
+      partialOutcome: expect.objectContaining({
+        details: expect.objectContaining({ failedStep: "test-record" }),
+      }),
+    }));
+  });
+
+  it("retries a partial TEST marker with the deterministic cut key without another desired release", async () => {
+    const authority = releaseAuthority();
+    const { app, store } = mkApp(seedNewSchemaGateway("default", sharedPayload()), {
+      releaseAuthority: authority,
+    });
+    const idempotencyKey = `release-cut:v0.4.0:${sourceSha}`;
+    authority.ensureAliases
+      .mockResolvedValueOnce([{
+        alias: "source-alias",
+        status: "applied",
+        observedTarget: "source-target",
+      }])
+      .mockRejectedValueOnce(new ReleaseDigestAliasError([{
+        alias: "test-record-alias",
+        status: "failed",
+        error: "marker collision",
+      }], new Error("marker collision")))
+      .mockResolvedValueOnce([{
+        alias: "source-alias",
+        status: "already-applied",
+        observedTarget: "source-target",
+      }])
+      .mockResolvedValueOnce([{
+        alias: "test-record-alias",
+        status: "applied",
+        observedTarget: "test-record-target",
+      }]);
+
+    await request(app)
+      .post("/releases/cut")
+      .set("Idempotency-Key", idempotencyKey)
+      .send({ version: "v0.4.0", sourceSha })
+      .expect(500);
+
+    const retry = await request(app)
+      .post("/releases/cut")
+      .set("Idempotency-Key", idempotencyKey)
+      .send({ version: "v0.4.0", sourceSha })
+      .expect(202);
+
+    expect(retry.body).toEqual(expect.objectContaining({ release: 2 }));
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 2, desiredRelease: 2 });
+    expect(opsIn(store, "rollout")).toHaveLength(1);
+    expect(auditsIn(store)).toHaveLength(2);
+  });
+
+  it.each(["v01.2.3", "v1.02.3", "v1.2.03", "v1.2.3-01", "v1.2.3-alpha.01"])(
+    "rejects non-semver release version %s before CENTRAL authority calls",
+    async (version) => {
+      const authority = releaseAuthority();
+      const { app } = mkApp(seedNewSchemaGateway("default", sharedPayload()), {
+        releaseAuthority: authority,
+      });
+
+      await request(app)
+        .post("/releases/cut")
+        .send({ version, sourceSha })
+        .expect(400);
+
+      expect(authority.resolveManifest).not.toHaveBeenCalled();
+    },
+  );
+
+  it("requires an identical durable TEST manifest record before a CENTRAL PROD promotion", async () => {
+    const authority = releaseAuthority();
+    const { app, store } = mkApp(seedNewSchemaGateway("default", sharedPayload()), {
+      releaseEnvironment: "prod",
+      releaseAuthority: authority,
+    });
+
+    await request(app).post("/releases/v0.4.0/promote").send({}).expect(202);
+
+    expect(authority.resolveTestManifest).toHaveBeenCalledWith("v0.4.0");
+    expect((store.get("gateways/default/releases/2")?.payload as ReleasePayload).imageTag)
+      .toBe(`aaaaaaa-oc2026.7.1@${gatewayDigest}`);
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      what: "promote CENTRAL release",
+      testProvenance: expect.objectContaining({ environment: "test", sourceCommit: sourceSha }),
     }));
   });
 });

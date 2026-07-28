@@ -36,6 +36,8 @@ import {
   type GatewayImageProfile,
   type GatewayProfile,
   type GatewayServiceAccountSpec,
+  type OperationAuditAliasPlan,
+  type OperationAuditTestProvenance,
   type OperationAuditDocument,
   type OperatorGatewayAccessSpec,
 } from "@octogee/shared/types/glm";
@@ -106,14 +108,23 @@ import {
 } from "@octogee/shared/types/account-lifecycle";
 import { buildCustomerDeletionPlan } from "./customer-deletion-plan.js";
 import {
+  assertNormalFleetMutationOpen,
+  assertNormalFleetMutationSnapshotOpen,
   FleetMutationFrozenError,
   FleetMutationIdempotencyError,
+  GLM_MAINTENANCE_DOC_PATH,
   FleetMutationMaintenanceUnavailableError,
   runNormalFleetMutation,
   type NormalFleetMutationDb,
   type NormalFleetMutationResult,
 } from "./normal-fleet-mutation.js";
 import { OperationAuditIdempotencyConflictError } from "./operation-audit.js";
+import {
+  type CentralReleaseAuthority,
+  ReleaseDigestAliasError,
+  type ReleaseDigestAliasOutcome,
+  type ReleaseDigestManifest,
+} from "./artifact-registry.js";
 
 export interface FleetLogger {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -168,6 +179,8 @@ export interface FleetRouterDeps {
     service: string;
     limit: number;
   }) => Promise<unknown[]>;
+  releaseEnvironment?: "test" | "prod" | null;
+  releaseAuthority?: CentralReleaseAuthority;
   readGatewayPodDiagnostics?: (gatewayId: string) => Promise<GatewayPodDiagnostics>;
   readGatewayPodDiagnosticsBatch?: (
     gatewayIds: readonly string[],
@@ -2971,6 +2984,176 @@ function asReleaseArtifactPayload(artifact: GatewayArtifact): ReleasePayload {
   return { ...artifact } as ReleasePayload;
 }
 
+const CENTRAL_RELEASE_GATEWAY_ID = "default";
+const CENTRAL_TEST_RELEASE_RESERVATIONS_COLLECTION = "centralTestReleaseReservations";
+const SEMVER_NUMBER = "(?:0|[1-9]\\d*)";
+const SEMVER_PRERELEASE_IDENTIFIER = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
+const RELEASE_VERSION_PATTERN = new RegExp(
+  `^v${SEMVER_NUMBER}\\.${SEMVER_NUMBER}\\.${SEMVER_NUMBER}` +
+    `(?:-${SEMVER_PRERELEASE_IDENTIFIER}(?:\\.${SEMVER_PRERELEASE_IDENTIFIER})*)?$`,
+);
+
+type CentralTestReleaseReservation = {
+  version: string;
+  sourceSha: string;
+  manifestDigest: string;
+  gatewayId: string;
+  release: number;
+  rolloutOperationId: string | null;
+};
+
+type CentralTestReleaseReservationInput = Pick<
+  CentralTestReleaseReservation,
+  "version" | "sourceSha" | "manifestDigest"
+>;
+
+class CentralTestReleaseVersionConflictError extends Error {
+  constructor(readonly version: string) {
+    super(`CENTRAL TEST version ${version} is already reserved for a different manifest`);
+  }
+}
+
+function centralTestReleaseReservationFromData(
+  data: Record<string, unknown> | undefined,
+  version: string,
+): CentralTestReleaseReservation {
+  if (
+    data?.version !== version ||
+    typeof data.sourceSha !== "string" ||
+    typeof data.manifestDigest !== "string" ||
+    typeof data.gatewayId !== "string" ||
+    typeof data.release !== "number" ||
+    !Number.isSafeInteger(data.release) ||
+    (typeof data.rolloutOperationId !== "string" && data.rolloutOperationId !== null)
+  ) {
+    throw new Error(`CENTRAL TEST reservation ${version} is malformed`);
+  }
+  return {
+    version,
+    sourceSha: data.sourceSha,
+    manifestDigest: data.manifestDigest,
+    gatewayId: data.gatewayId,
+    release: data.release,
+    rolloutOperationId: data.rolloutOperationId,
+  };
+}
+
+function centralTestReservationMatches(
+  reservation: CentralTestReleaseReservation,
+  input: CentralTestReleaseReservationInput,
+): boolean {
+  return reservation.sourceSha === input.sourceSha &&
+    reservation.manifestDigest === input.manifestDigest;
+}
+
+async function readCentralTestReleaseReservation(
+  db: Firestore,
+  version: string,
+): Promise<CentralTestReleaseReservation | null> {
+  const snapshot = await db
+    .collection(CENTRAL_TEST_RELEASE_RESERVATIONS_COLLECTION)
+    .doc(version)
+    .get();
+  if (!snapshot.exists) return null;
+  return centralTestReleaseReservationFromData(snapshot.data(), version);
+}
+
+function releaseVersionFromBody(value: unknown): string | null {
+  return typeof value === "string" && RELEASE_VERSION_PATTERN.test(value) ? value : null;
+}
+
+function releaseSourceShaFromBody(value: unknown): string | null {
+  return typeof value === "string" && /^[a-f0-9]{40}$/.test(value) ? value : null;
+}
+
+function centralGatewayReleasePayload(manifest: ReleaseDigestManifest): ReleasePayload {
+  const shortSha = manifest.sourceSha.slice(0, 7);
+  const tag = `${shortSha}-oc${manifest.openclawVersion}`;
+  const payload: ReleasePayload = {
+    imageRepository: `${manifest.repository}/octogee-gateway`,
+    imageTag: `${tag}@${manifest.surfaces.gateway["octogee-gateway"]}`,
+    profileImages: {
+      operator: {
+        imageRepository: `${manifest.repository}/octogee-gateway-operator`,
+        imageTag: `${tag}@${manifest.surfaces.gateway["octogee-gateway-operator"]}`,
+      },
+    },
+    gatewayEdgeImage: {
+      imageRepository: `${manifest.repository}/gateway-edge`,
+      imageTag: `${tag}@${manifest.surfaces.gateway["gateway-edge"]}`,
+    },
+  };
+  if (!isReleasePayload(payload)) {
+    throw new Error("CENTRAL release manifest cannot produce a valid gateway release payload");
+  }
+  return payload;
+}
+
+function centralReleaseAliasPlans(input: {
+  authority: CentralReleaseAuthority;
+  manifest: ReleaseDigestManifest;
+  version: string;
+  includeTestRecord: boolean;
+}): OperationAuditAliasPlan[] {
+  const aliases = input.authority.aliasesFor(input.manifest);
+  if (input.includeTestRecord) {
+    aliases.push(input.authority.testRecordAlias(input.version, input.manifest));
+  }
+  return aliases;
+}
+
+type CentralReleaseMutationResult = {
+  appended?: { release: number; operationId: string | null; reused?: boolean };
+  aliasOutcomes: ReleaseDigestAliasOutcome[];
+  failure?: {
+    error: unknown;
+    failedStep: "aliases" | "maintenance" | "release" | "test-record";
+  };
+};
+
+function aliasOutcomesFromError(error: unknown): ReleaseDigestAliasOutcome[] {
+  return error instanceof ReleaseDigestAliasError ? error.aliasOutcomes : [];
+}
+
+function classifyCentralReleaseMutation(input: {
+  gatewayId: string;
+  imageTag: string;
+}): (result: CentralReleaseMutationResult) => NormalFleetMutationResult {
+  return (result) => {
+    const releaseRollout = result.appended
+      ? {
+          releaseId: `${input.gatewayId}/${result.appended.release}`,
+          releaseTag: input.imageTag,
+          ...(result.appended.operationId
+            ? { rolloutOperationId: result.appended.operationId }
+            : {}),
+        }
+      : undefined;
+    if (result.failure) {
+      return {
+        outcome: "partial",
+        aliasOutcomes: result.aliasOutcomes,
+        ...(releaseRollout ? { releaseRollout } : {}),
+        partialOutcome: {
+          summary: "CENTRAL release mutation partially completed",
+          details: {
+            failedStep: result.failure.failedStep,
+            error: result.failure.error instanceof Error
+              ? result.failure.error.message
+              : String(result.failure.error),
+          },
+        },
+      };
+    }
+    if (!result.appended) throw new Error("CENTRAL release mutation has no release result");
+    return {
+      outcome: "completed",
+      aliasOutcomes: result.aliasOutcomes,
+      ...(releaseRollout ? { releaseRollout } : {}),
+    };
+  };
+}
+
 function artifactFromRelease(release: ReleaseDoc): GatewayArtifact | null {
   if (!isReleasePayload(release.payload)) return null;
   return gatewayArtifactFromReleasePayload(release.payload);
@@ -3033,67 +3216,148 @@ function sameArtifact(left: GatewayArtifact, right: GatewayArtifact): boolean {
   );
 }
 
+type AppendGatewayReleaseArgs = {
+  gateway: GatewayDoc;
+  artifact: GatewayArtifact;
+  payload?: ReleasePayload;
+  createdBy: string;
+  now: number;
+  sourceRelease: number | null;
+  note: string | null;
+  centralTestReservation?: CentralTestReleaseReservationInput;
+  requireMaintenanceOpen?: boolean;
+};
+
+async function existingReservedGatewayRelease(
+  transaction: Transaction,
+  reservationRef: DocumentReference | null,
+  reservation: CentralTestReleaseReservationInput | undefined,
+): Promise<{ release: number; operationId: string | null; reused: true } | null> {
+  if (!reservationRef || !reservation) return null;
+  const snapshot = await transaction.get(reservationRef);
+  if (!snapshot.exists) return null;
+  const existing = centralTestReleaseReservationFromData(snapshot.data(), reservation.version);
+  if (!centralTestReservationMatches(existing, reservation)) {
+    throw new CentralTestReleaseVersionConflictError(reservation.version);
+  }
+  return {
+    release: existing.release,
+    operationId: existing.rolloutOperationId,
+    reused: true,
+  };
+}
+
+async function appendGatewayReleaseCurrentRoot(
+  transaction: Transaction,
+  db: Firestore,
+  gatewayRef: DocumentReference,
+  args: AppendGatewayReleaseArgs,
+): Promise<GatewayDoc> {
+  const snapshot = await transaction.get(gatewayRef);
+  const current = asDurableGatewayRoot(snapshot.data(), args.gateway.gatewayId);
+  if (!current) throw new InvalidGatewayRootError(args.gateway.gatewayId);
+  if (current.desiredStatus === "retired" || current.retirementClaim != null) {
+    throw new GatewayRetirementConflictError(
+      `gateway ${args.gateway.gatewayId} has a current retirement claim`,
+    );
+  }
+  if (current.latestRelease !== args.gateway.latestRelease) {
+    throw new StaleGatewayReleaseError(
+      args.gateway.gatewayId,
+      args.gateway.latestRelease,
+      current.latestRelease,
+    );
+  }
+  const activeOperations = await transaction.get(
+    db.collection(GLM_OPERATIONS_COLLECTION).where("status", "in", ["pending", "running"]),
+  );
+  const migrationConflict = findActiveGatewayMigration(
+    args.gateway.gatewayId,
+    activeOperations.docs.map((document) => {
+      const operation = document.data() as Record<string, unknown>;
+      return {
+        id: document.id,
+        kind: typeof operation.kind === "string" ? operation.kind : "",
+        status: typeof operation.status === "string" ? operation.status : "",
+        input: operation.input,
+        customerMigrationV2: operation.customerMigrationV2,
+      };
+    }),
+  );
+  if (migrationConflict) {
+    throw new GatewayMigrationInFlightError(args.gateway.gatewayId, migrationConflict.id);
+  }
+  return current;
+}
+
+async function assertGatewayReleaseIsNew(
+  transaction: Transaction,
+  gatewayRef: DocumentReference,
+  gatewayId: string,
+  release: number,
+): Promise<void> {
+  const releaseRef = gatewayRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc(String(release));
+  if (await transaction.get(releaseRef).then((snapshot) => snapshot.exists)) {
+    throw new Error(
+      `appendGatewayRelease: gateways/${gatewayId}/releases/${release} already exists — refusing to overwrite immutable history`,
+    );
+  }
+}
+
+function appendGatewayReleasePayload(args: AppendGatewayReleaseArgs): ReleasePayload {
+  const payload = args.payload ?? asReleaseArtifactPayload(args.artifact);
+  if (!isReleasePayload(payload)) {
+    throw new Error("appendGatewayRelease requires a valid immutable release payload");
+  }
+  return payload;
+}
+
+async function assertAppendGatewayReleaseMaintenance(
+  transaction: Transaction,
+  db: Firestore,
+  required: boolean | undefined,
+): Promise<void> {
+  if (!required) return;
+  const maintenanceSnapshot = await transaction.get(db.doc(GLM_MAINTENANCE_DOC_PATH));
+  assertNormalFleetMutationSnapshotOpen(maintenanceSnapshot);
+}
+
+function writeCentralTestReleaseReservation(
+  transaction: Transaction,
+  reservationRef: DocumentReference | null,
+  reservation: CentralTestReleaseReservationInput | undefined,
+  result: { gatewayId: string; release: number; operationId: string },
+): void {
+  if (!reservationRef || !reservation) return;
+  transaction.create(reservationRef, {
+    version: reservation.version,
+    sourceSha: reservation.sourceSha,
+    manifestDigest: reservation.manifestDigest,
+    gatewayId: result.gatewayId,
+    release: result.release,
+    rolloutOperationId: result.operationId,
+  });
+}
+
 async function appendGatewayRelease(
   db: Firestore,
-  args: {
-    gateway: GatewayDoc;
-    artifact: GatewayArtifact;
-    createdBy: string;
-    now: number;
-    sourceRelease: number | null;
-    note: string | null;
-  },
-): Promise<{ release: number; operationId: string | null }> {
+  args: AppendGatewayReleaseArgs,
+): Promise<{ release: number; operationId: string | null; reused?: boolean }> {
   const gwRef = db.collection(GATEWAYS_COLLECTION).doc(args.gateway.gatewayId);
   const operationRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
+  const reservationRef = args.centralTestReservation
+    ? db.collection(CENTRAL_TEST_RELEASE_RESERVATIONS_COLLECTION).doc(args.centralTestReservation.version)
+    : null;
   return db.runTransaction(async (txn) => {
-    const snap = await txn.get(gwRef);
-    const current = asDurableGatewayRoot(snap.data(), args.gateway.gatewayId);
-    if (!current) {
-      throw new InvalidGatewayRootError(args.gateway.gatewayId);
-    }
-    if (current.desiredStatus === "retired" || current.retirementClaim != null) {
-      throw new GatewayRetirementConflictError(
-        `gateway ${args.gateway.gatewayId} has a current retirement claim`,
-      );
-    }
-    if (current.latestRelease !== args.gateway.latestRelease) {
-      throw new StaleGatewayReleaseError(
-        args.gateway.gatewayId,
-        args.gateway.latestRelease,
-        current.latestRelease,
-      );
-    }
-    const activeOperations = await txn.get(
-      db
-        .collection(GLM_OPERATIONS_COLLECTION)
-        .where("status", "in", ["pending", "running"]),
-    );
-    const migrationConflict = findActiveGatewayMigration(
-      args.gateway.gatewayId,
-      activeOperations.docs.map((doc) => {
-        const operation = doc.data() as Record<string, unknown>;
-        return {
-          id: doc.id,
-          kind: typeof operation.kind === "string" ? operation.kind : "",
-          status: typeof operation.status === "string" ? operation.status : "",
-          input: operation.input,
-          customerMigrationV2: operation.customerMigrationV2,
-        };
-      }),
-    );
-    if (migrationConflict) {
-      throw new GatewayMigrationInFlightError(args.gateway.gatewayId, migrationConflict.id);
-    }
+    const existing = await existingReservedGatewayRelease(txn, reservationRef, args.centralTestReservation);
+    if (existing) return existing;
+    const current = await appendGatewayReleaseCurrentRoot(txn, db, gwRef, args);
     const release = current.latestRelease + 1;
     const relRef = gwRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc(String(release));
-    const relExisting = await txn.get(relRef);
-    if (relExisting.exists) {
-      throw new Error(
-        `appendGatewayRelease: gateways/${args.gateway.gatewayId}/releases/${release} already exists — refusing to overwrite immutable history`,
-      );
-    }
-    const payload = asReleaseArtifactPayload(args.artifact);
+    await assertGatewayReleaseIsNew(txn, gwRef, args.gateway.gatewayId, release);
+    const payload = appendGatewayReleasePayload(args);
+    const artifact = gatewayArtifactFromReleasePayload(payload);
+    await assertAppendGatewayReleaseMaintenance(txn, db, args.requireMaintenanceOpen);
     const releaseDoc: ReleaseDoc = {
       gatewayId: args.gateway.gatewayId,
       release,
@@ -3117,10 +3381,16 @@ async function appendGatewayRelease(
         {
           kind: "rollout",
           createdBy: args.createdBy,
-          input: rolloutOpInputFromArtifact(args.gateway.gatewayId, args.artifact),
+          input: rolloutOpInputFromArtifact(args.gateway.gatewayId, artifact),
         },
         args.now,
       ),
+    );
+    writeCentralTestReleaseReservation(
+      txn,
+      reservationRef,
+      args.centralTestReservation,
+      { gatewayId: args.gateway.gatewayId, release, operationId: operationRef.id },
     );
     return { release, operationId: operationRef.id };
   });
@@ -3146,6 +3416,10 @@ class InvalidGatewayRootError extends Error {
 }
 
 function respondReleaseWriteConflict(res: Response, error: unknown): boolean {
+  if (error instanceof CentralTestReleaseVersionConflictError) {
+    res.status(409).json({ error: error.message });
+    return true;
+  }
   if (error instanceof GatewayRetirementConflictError) {
     res.status(409).json({ error: error.message });
     return true;
@@ -3173,6 +3447,129 @@ function respondReleaseWriteConflict(res: Response, error: unknown): boolean {
     return true;
   }
   return false;
+}
+
+class CentralReleaseRequestError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: Record<string, unknown>,
+  ) {
+    super(typeof body.error === "string" ? body.error : "CENTRAL release request failed");
+  }
+}
+
+function rejectCentralReleaseRequest(status: number, body: Record<string, unknown>): never {
+  throw new CentralReleaseRequestError(status, body);
+}
+
+function centralReleaseAuthorityFor(
+  deps: FleetRouterDeps,
+  environment: "test" | "prod",
+): CentralReleaseAuthority {
+  if (deps.releaseEnvironment !== environment || !deps.releaseAuthority) {
+    rejectCentralReleaseRequest(404, {
+      error: `CENTRAL ${environment.toUpperCase()} release authority is unavailable`,
+    });
+  }
+  return deps.releaseAuthority;
+}
+
+function centralTestReleaseRequest(body: unknown): { version: string; sourceSha: string } {
+  if (
+    !isPlainRecord(body) ||
+    Object.keys(body).length !== 2 ||
+    !Object.prototype.hasOwnProperty.call(body, "version") ||
+    !Object.prototype.hasOwnProperty.call(body, "sourceSha")
+  ) {
+    rejectCentralReleaseRequest(400, { error: "release cut requires exactly version and sourceSha" });
+  }
+  const version = releaseVersionFromBody(body.version);
+  const sourceSha = releaseSourceShaFromBody(body.sourceSha);
+  if (!version || !sourceSha) {
+    rejectCentralReleaseRequest(400, {
+      error: "release cut requires a semantic version and full lowercase sourceSha",
+    });
+  }
+  return { version, sourceSha };
+}
+
+function centralPromotionRequest(version: unknown, body: unknown): string {
+  const parsedVersion = releaseVersionFromBody(version);
+  if (!parsedVersion) {
+    rejectCentralReleaseRequest(400, { error: "release promotion requires a v-prefixed semantic version" });
+  }
+  if (!isPlainRecord(body ?? {}) || Object.keys(body ?? {}).length !== 0) {
+    rejectCentralReleaseRequest(400, { error: "release promotion does not accept a request body" });
+  }
+  return parsedVersion;
+}
+
+async function centralManifestForSourceSha(
+  authority: CentralReleaseAuthority,
+  sourceSha: string,
+): Promise<ReleaseDigestManifest> {
+  const manifest = await authority.resolveManifest(sourceSha);
+  if (manifest.sourceSha !== sourceSha) {
+    rejectCentralReleaseRequest(409, {
+      error: "release manifest sourceSha does not match the requested SHA",
+    });
+  }
+  return manifest;
+}
+
+function assertCentralTestReleaseReservation(
+  existing: CentralTestReleaseReservation | null,
+  input: CentralTestReleaseReservationInput,
+): void {
+  if (existing && !centralTestReservationMatches(existing, input)) {
+    rejectCentralReleaseRequest(409, {
+      error: `CENTRAL TEST version ${input.version} is already reserved for a different manifest`,
+    });
+  }
+}
+
+async function centralReleaseGateway(
+  db: Firestore,
+  operation: "cut" | "promote",
+): Promise<GatewayDoc> {
+  const gateway = await readGatewayDoc(db, CENTRAL_RELEASE_GATEWAY_ID);
+  if (!gateway) {
+    rejectCentralReleaseRequest(404, {
+      error: ERR_GATEWAY_NOT_FOUND,
+      gatewayId: CENTRAL_RELEASE_GATEWAY_ID,
+    });
+  }
+  if (gateway.desiredStatus === "retired") {
+    rejectCentralReleaseRequest(409, {
+      error: `cannot ${operation} a release for a retired gateway`,
+      gatewayId: gateway.gatewayId,
+    });
+  }
+  return gateway;
+}
+
+async function assertNoCentralReleaseOperation(
+  db: Firestore,
+  gateway: GatewayDoc,
+  allowExistingReservation = false,
+): Promise<void> {
+  const conflict = await findConflictingGatewayOp(db, gateway.gatewayId);
+  if (conflict && !allowExistingReservation) {
+    rejectCentralReleaseRequest(409, {
+      error: ERR_GATEWAY_OPERATION_IN_FLIGHT,
+      gatewayId: gateway.gatewayId,
+      operationId: conflict.id,
+      kind: conflict.kind,
+    });
+  }
+}
+
+function respondCentralReleaseError(res: Response, error: unknown): boolean {
+  if (error instanceof CentralReleaseRequestError) {
+    res.status(error.status).json(error.body);
+    return true;
+  }
+  return respondReleaseWriteConflict(res, error);
 }
 
 function rolloutOpInputFromArtifact(
@@ -4556,6 +4953,8 @@ export function addAdminFleetRoutes(
     action: () => Promise<T>;
     classifyResult?: (result: T) => NormalFleetMutationResult;
     idempotencyScope?: string;
+    aliasPlan?: OperationAuditAliasPlan[];
+    testProvenance?: OperationAuditTestProvenance;
   }): Promise<T> {
     const actor = input.req as ActorRequest;
     const headerKey = input.req.get("Idempotency-Key")?.trim();
@@ -4569,6 +4968,8 @@ export function addAdminFleetRoutes(
       mutation: input.mutation,
       action: async () => input.action(),
       classifyResult: input.classifyResult,
+      ...(input.aliasPlan ? { aliasPlan: input.aliasPlan } : {}),
+      ...(input.testProvenance ? { testProvenance: input.testProvenance } : {}),
       ...(headerKey
         ? { idempotencyKey: `${headerKey}:${input.idempotencyScope ?? input.what}` }
       : {}),
@@ -6025,6 +6426,256 @@ router.post(
           .json({ gatewayId: id, operationId: recorded.operationId, ...(recorded.release ? { release: recorded.release } : {}) });
       } catch (e) {
         next(e);
+      }
+    },
+  );
+
+  router.post(
+    "/releases/cut",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const authority = centralReleaseAuthorityFor(deps, "test");
+        const { version, sourceSha } = centralTestReleaseRequest(req.body);
+        const manifest = await centralManifestForSourceSha(authority, sourceSha);
+        const existingReservation = await readCentralTestReleaseReservation(db, version);
+        assertCentralTestReleaseReservation(existingReservation, {
+          version,
+          sourceSha,
+          manifestDigest: manifest.manifestDigest,
+        });
+        const gateway = await centralReleaseGateway(db, "cut");
+        await assertNoCentralReleaseOperation(db, gateway, existingReservation !== null);
+        const payload = centralGatewayReleasePayload(manifest);
+        const aliasPlan = centralReleaseAliasPlans({
+          authority,
+          manifest,
+          version,
+          includeTestRecord: true,
+        });
+        const actor = req as ActorRequest;
+        const createdBy = actor.uid ?? "unknown";
+        const testProvenance: OperationAuditTestProvenance = {
+          environment: "test",
+          sourceCommit: sourceSha,
+          verifiedBy: createdBy,
+          verifiedAt: Date.now(),
+        };
+        let result: CentralReleaseMutationResult;
+        try {
+          result = await runAdminFleetMutation({
+            req,
+            what: "cut CENTRAL TEST release",
+            why: ADMIN_FLEET_REQUEST_REASON,
+            target: { gatewayId: gateway.gatewayId, version, sourceSha },
+            preActionStatus: {
+              latestRelease: gateway.latestRelease,
+              desiredRelease: gateway.desiredRelease,
+            },
+            mutation: {
+              kind: "cut-central-test-release",
+              gatewayId: gateway.gatewayId,
+              version,
+              sourceSha,
+              manifestDigest: manifest.manifestDigest,
+            },
+            aliasPlan,
+            testProvenance,
+            ...(existingReservation
+              ? { idempotencyScope: `cut-central-test-release:${version}:resume` }
+              : {}),
+            classifyResult: classifyCentralReleaseMutation({
+              gatewayId: gateway.gatewayId,
+              imageTag: payload.imageTag,
+            }),
+            action: async () => {
+              let aliasOutcomes: ReleaseDigestAliasOutcome[] = [];
+              try {
+                aliasOutcomes = await authority.ensureAliases(
+                  authority.aliasesFor(manifest),
+                );
+              } catch (error) {
+                return {
+                  aliasOutcomes: aliasOutcomesFromError(error),
+                  failure: { error, failedStep: "aliases" },
+                };
+              }
+              try {
+                await assertNormalFleetMutationOpen(db as unknown as NormalFleetMutationDb);
+              } catch (error) {
+                return {
+                  aliasOutcomes,
+                  failure: { error, failedStep: "maintenance" },
+                };
+              }
+              let appended: { release: number; operationId: string | null; reused?: boolean };
+              try {
+                appended = await appendGatewayRelease(db, {
+                  gateway,
+                  artifact: gatewayArtifactFromReleasePayload(payload),
+                  payload,
+                  createdBy,
+                  now: Date.now(),
+                  sourceRelease: gateway.latestRelease,
+                  note: `CENTRAL TEST ${version} ${sourceSha}`,
+                  centralTestReservation: { version, sourceSha, manifestDigest: manifest.manifestDigest },
+                  requireMaintenanceOpen: true,
+                });
+              } catch (error) {
+                return {
+                  aliasOutcomes,
+                  failure: { error, failedStep: "release" },
+                };
+              }
+              try {
+                const testRecordOutcomes = await authority.ensureAliases([
+                  authority.testRecordAlias(version, manifest),
+                ]);
+                return { appended, aliasOutcomes: [...aliasOutcomes, ...testRecordOutcomes] };
+              } catch (error) {
+                return {
+                  appended,
+                  aliasOutcomes: [...aliasOutcomes, ...aliasOutcomesFromError(error)],
+                  failure: { error, failedStep: "test-record" },
+                };
+              }
+            },
+          });
+        } catch (error) {
+          if (respondCentralReleaseError(res, error)) return;
+          throw error;
+        }
+        if (result.failure) {
+          if (respondCentralReleaseError(res, result.failure.error)) return;
+          throw result.failure.error;
+        }
+        if (!result.appended) throw new Error("CENTRAL TEST release mutation has no release result");
+        res.status(202).json({
+          version,
+          sourceSha,
+          gatewayId: gateway.gatewayId,
+          release: result.appended.release,
+          operationId: result.appended.operationId,
+        });
+      } catch (error) {
+        if (respondCentralReleaseError(res, error)) return;
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/releases/:version/promote",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const authority = centralReleaseAuthorityFor(deps, "prod");
+        const version = centralPromotionRequest(req.params.version, req.body);
+        const testManifest = await authority.resolveTestManifest(version);
+        const manifest = await authority.resolveManifest(testManifest.sourceSha);
+        if (manifest.manifestDigest !== testManifest.manifestDigest) {
+          rejectCentralReleaseRequest(409, {
+            error: "CENTRAL TEST record does not identify the exact release manifest",
+          });
+        }
+        const gateway = await centralReleaseGateway(db, "promote");
+        await assertNoCentralReleaseOperation(db, gateway);
+        const payload = centralGatewayReleasePayload(manifest);
+        const aliasPlan = centralReleaseAliasPlans({
+          authority,
+          manifest,
+          version,
+          includeTestRecord: false,
+        });
+        const actor = req as ActorRequest;
+        const createdBy = actor.uid ?? "unknown";
+        const testProvenance: OperationAuditTestProvenance = {
+          environment: "test",
+          sourceCommit: manifest.sourceSha,
+          verifiedBy: createdBy,
+          verifiedAt: Date.now(),
+        };
+        let result: CentralReleaseMutationResult;
+        try {
+          result = await runAdminFleetMutation({
+            req,
+            what: "promote CENTRAL release",
+            why: ADMIN_FLEET_REQUEST_REASON,
+            target: { gatewayId: gateway.gatewayId, version, sourceSha: manifest.sourceSha },
+            preActionStatus: {
+              latestRelease: gateway.latestRelease,
+              desiredRelease: gateway.desiredRelease,
+            },
+            mutation: {
+              kind: "promote-central-release",
+              gatewayId: gateway.gatewayId,
+              version,
+              sourceSha: manifest.sourceSha,
+              manifestDigest: manifest.manifestDigest,
+            },
+            aliasPlan,
+            testProvenance,
+            classifyResult: classifyCentralReleaseMutation({
+              gatewayId: gateway.gatewayId,
+              imageTag: payload.imageTag,
+            }),
+            action: async () => {
+              let aliasOutcomes: ReleaseDigestAliasOutcome[] = [];
+              try {
+                aliasOutcomes = await authority.ensureAliases(
+                  authority.aliasesFor(manifest),
+                );
+              } catch (error) {
+                return {
+                  aliasOutcomes: aliasOutcomesFromError(error),
+                  failure: { error, failedStep: "aliases" },
+                };
+              }
+              try {
+                await assertNormalFleetMutationOpen(db as unknown as NormalFleetMutationDb);
+              } catch (error) {
+                return {
+                  aliasOutcomes,
+                  failure: { error, failedStep: "maintenance" },
+                };
+              }
+              try {
+                const appended = await appendGatewayRelease(db, {
+                  gateway,
+                  artifact: gatewayArtifactFromReleasePayload(payload),
+                  payload,
+                  createdBy,
+                  now: Date.now(),
+                  sourceRelease: gateway.latestRelease,
+                  note: `CENTRAL PROD ${version} ${manifest.sourceSha}`,
+                  requireMaintenanceOpen: true,
+                });
+                return { appended, aliasOutcomes };
+              } catch (error) {
+                return {
+                  aliasOutcomes,
+                  failure: { error, failedStep: "release" },
+                };
+              }
+            },
+          });
+        } catch (error) {
+          if (respondCentralReleaseError(res, error)) return;
+          throw error;
+        }
+        if (result.failure) {
+          if (respondCentralReleaseError(res, result.failure.error)) return;
+          throw result.failure.error;
+        }
+        if (!result.appended) throw new Error("CENTRAL PROD release mutation has no release result");
+        res.status(202).json({
+          version,
+          sourceSha: manifest.sourceSha,
+          gatewayId: gateway.gatewayId,
+          release: result.appended.release,
+          operationId: result.appended.operationId,
+        });
+      } catch (error) {
+        if (respondCentralReleaseError(res, error)) return;
+        next(error);
       }
     },
   );

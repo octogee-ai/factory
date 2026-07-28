@@ -22,12 +22,14 @@ import {
 import {
   buildFleetMigrateOperationInput,
   executeFleetAdminMutation,
+  executeFleetReleaseMutation,
   executeFleetGatewayMutation,
   parseForceRestartPodList,
   parseFleetArgs,
   releaseStatusRows,
   resolveFleetBuilderMutationRequest,
   resolveFleetBuilderMutation,
+  resolveFleetReleaseMutation,
   runForcedGatewayRestart,
   resolveFleetGatewayMutation,
   resolveFleetGatewayRestart,
@@ -848,6 +850,94 @@ describe("fleet CLI args", () => {
       writes: false,
     });
     expect(resolveFleetCredentialMode(statusArgs)).toBe("service-account-key");
+  });
+
+  it("maps normal CENTRAL release commands to journaled Admin API requests with deterministic idempotency keys", () => {
+    const sourceSha = "a".repeat(40);
+    expect(resolveFleetReleaseMutation(
+      parseFleetArgs(["--env=test", "release", "cut", "v0.4.0"]),
+      sourceSha,
+    )).toEqual({
+      method: "POST",
+      path: "/api/admin/releases/cut",
+      body: { version: "v0.4.0", sourceSha },
+      idempotencyKey: `release-cut:v0.4.0:${sourceSha}`,
+    });
+    expect(resolveFleetReleaseMutation(
+      parseFleetArgs(["--env=prod", "release", "promote", "v0.4.0"]),
+    )).toEqual({
+      method: "POST",
+      path: "/api/admin/releases/v0.4.0/promote",
+      idempotencyKey: "release-promote:v0.4.0",
+    });
+  });
+
+  it("preserves an explicit release idempotency key over its deterministic default", () => {
+    expect(resolveFleetReleaseMutation(
+      parseFleetArgs([
+        "--env=test",
+        "release",
+        "cut",
+        "v0.4.0",
+        "--idempotency-key=operator-retry",
+      ]),
+      "a".repeat(40),
+    )).toMatchObject({ idempotencyKey: "operator-retry" });
+  });
+
+  it("rejects duplicate flags and non-semver release versions", () => {
+    expect(() => parseFleetArgs([
+      "--env=test",
+      "release",
+      "cut",
+      "v0.4.0",
+      "--sha=" + "a".repeat(40),
+      "--sha=" + "b".repeat(40),
+    ])).toThrow("duplicate --sha flag");
+    expect(() => parseFleetArgs([
+      "--env=test",
+      "--env=prod",
+      "release",
+      "cut",
+      "v0.4.0",
+    ])).toThrow("duplicate --env flag");
+    for (const version of ["v01.2.3", "v1.02.3", "v1.2.03", "v1.2.3-01", "v1.2.3-alpha.01"]) {
+      expect(() => resolveFleetReleaseMutation(
+        parseFleetArgs(["--env=test", "release", "cut", version]),
+        "a".repeat(40),
+      )).toThrow("release cut requires a v-prefixed semantic version");
+    }
+  });
+
+  it("keeps release mutations dry-run by default and sends exactly one Admin API request with --apply", async () => {
+    const request = vi.fn(async () => ({ release: 2 }));
+    const mutation = resolveFleetReleaseMutation(
+      parseFleetArgs(["--env=test", "release", "cut", "v0.4.0", "--sha", "a".repeat(40)]),
+    );
+
+    await expect(executeFleetReleaseMutation({ request }, mutation, false)).resolves.toEqual({
+      applied: false,
+      response: null,
+    });
+    expect(request).not.toHaveBeenCalled();
+    await expect(executeFleetReleaseMutation({ request }, mutation, true)).resolves.toEqual({
+      applied: true,
+      response: { release: 2 },
+    });
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("rejects release commands outside their CENTRAL environment and never derives a version from git tags", () => {
+    expect(() => resolveFleetReleaseMutation(
+      parseFleetArgs(["--env=prod", "release", "cut", "v0.4.0"]),
+      "a".repeat(40),
+    )).toThrow("release cut requires --env=test");
+    expect(() => resolveFleetReleaseMutation(
+      parseFleetArgs(["--env=test", "release", "promote", "v0.4.0"]),
+    )).toThrow("release promote requires --env=prod");
+    expect(() => resolveFleetReleaseMutation(
+      parseFleetArgs(["--env=test", "release", "cut", "v0.4.0", "--sha=deadbeef"]),
+    )).toThrow("release cut requires a full lowercase --sha");
   });
 
   it("renders the raw Cowboy lifecycle alongside release and heartbeat observations", () => {

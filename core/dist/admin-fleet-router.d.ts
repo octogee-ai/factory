@@ -3,6 +3,7 @@ import { type Firestore } from "firebase-admin/firestore";
 import { type GatewayClass, type GatewayImageProfile, type GatewayProfile } from "@octogee/shared/types/glm";
 import { type SizingTier } from "@octogee/shared/types/sizing";
 import { type GatewayPricingMode } from "@octogee/shared/types/cost-estimator";
+import { type CentralReleaseAuthority } from "./artifact-registry.js";
 export interface FleetLogger {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;
@@ -40,6 +41,8 @@ export interface FleetRouterDeps {
         service: string;
         limit: number;
     }) => Promise<unknown[]>;
+    releaseEnvironment?: "test" | "prod" | null;
+    releaseAuthority?: CentralReleaseAuthority;
     readGatewayPodDiagnostics?: (gatewayId: string) => Promise<GatewayPodDiagnostics>;
     readGatewayPodDiagnosticsBatch?: (gatewayIds: readonly string[]) => Promise<Record<string, GatewayPodDiagnostics>>;
     suspendAuthUser: (uid: string) => Promise<void>;
