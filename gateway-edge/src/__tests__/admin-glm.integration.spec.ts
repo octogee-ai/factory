@@ -12,6 +12,7 @@ interface FirestoreCall {
 }
 
 let transactionCommitFailures = 0;
+let nextOperationAddError: Error | null = null;
 
 const calls: FirestoreCall[] = [];
 let glmOperationsDocs: Array<{ id: string; data: Record<string, unknown> }> = [];
@@ -26,6 +27,12 @@ let gatewayAssignmentsDocs: Record<string, Record<string, unknown>> = {};
 let usersDocs: Record<string, Record<string, unknown>> = {};
 let workspacesDocs: Record<string, Record<string, unknown>> = {};
 let configDocs: Record<string, Record<string, unknown>> = {};
+
+function commandOperationCall() {
+  return calls.find(
+    (call) => call.collection === "glmOperations" && typeof call.data?.kind === "string",
+  );
+}
 
 function readNestedField(data: Record<string, unknown>, path: string): unknown {
   let cursor: unknown = data;
@@ -99,6 +106,10 @@ vi.mock("../lib/db", () => {
           const data = glmGatewaysDocs[docId];
           return { exists: data !== undefined, data: () => data };
         }
+        if (name === "glmOperations") {
+          const entry = glmOperationsDocs.find((candidate) => candidate.id === docId);
+          return { exists: entry !== undefined, data: () => entry?.data };
+        }
         if (name === "gateways") {
           const data = gatewaysDocs[docId];
           return { exists: data !== undefined, data: () => data };
@@ -133,6 +144,10 @@ vi.mock("../lib/db", () => {
         calls.push({ collection: name, op: "doc.update", docId, data });
         if (name === "glmGateways" && glmGatewaysDocs[docId]) {
           glmGatewaysDocs[docId] = { ...glmGatewaysDocs[docId], ...data };
+        }
+        if (name === "glmOperations") {
+          const entry = glmOperationsDocs.find((candidate) => candidate.id === docId);
+          if (entry) entry.data = { ...entry.data, ...data };
         }
         if (name === "users" && usersDocs[docId]) {
           usersDocs[docId] = { ...usersDocs[docId], ...data };
@@ -217,6 +232,11 @@ vi.mock("../lib/db", () => {
   function collection(name: string): any {
     return {
       add: async (data: Record<string, unknown>) => {
+        if (name === "glmOperations" && nextOperationAddError) {
+          const error = nextOperationAddError;
+          nextOperationAddError = null;
+          throw error;
+        }
         const id = `doc-${calls.length}`;
         calls.push({ collection: name, op: "add", docId: id, data });
         if (name === "glmOperations") glmOperationsDocs.unshift({ id, data });
@@ -304,6 +324,9 @@ function makeBatch() {
           update: (ref: any, data: Record<string, unknown>) => {
             pending.push(() => ref.update(data));
           },
+          create: (ref: any, data: Record<string, unknown>) => {
+            pending.push(() => ref.set(data));
+          },
           set: (ref: any, data: Record<string, unknown>, options?: Record<string, unknown>) => {
             pending.push(() => ref.set(data, options));
           },
@@ -334,6 +357,7 @@ function makeBatch() {
 
 const provisionerCalls: Array<{ gatewayId: string; gatewayServiceAccount: string }> = [];
 let provisionerNextError: Error | null = null;
+let provisionerConcurrentGatewayId: string | null = null;
 
 vi.mock("@octogee/core/secret-manager", () => ({
   provisionGatewayAuthSecret: async (params: {
@@ -346,6 +370,10 @@ vi.mock("@octogee/core/secret-manager", () => ({
       throw e;
     }
     provisionerCalls.push(params);
+    if (provisionerConcurrentGatewayId === params.gatewayId) {
+      gatewaysDocs[params.gatewayId] = { gatewayId: params.gatewayId };
+      provisionerConcurrentGatewayId = null;
+    }
     return { secretName: `projects/octogee-test/secrets/gateway-auth-token-${params.gatewayId}`, created: true };
   },
 }));
@@ -494,10 +522,12 @@ beforeEach(() => {
   configDocs = {};
   provisionerCalls.length = 0;
   provisionerNextError = null;
+  provisionerConcurrentGatewayId = null;
   builderCalls.length = 0;
   nextBuildsResult = [];
   nextBuildsError = null;
   transactionCommitFailures = 0;
+  nextOperationAddError = null;
   process.env.GATEWAY_SERVICE_ACCOUNT = "octogee-gateway@octogee-test.iam.gserviceaccount.com";
 });
 
@@ -632,7 +662,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     });
     expect(glmGatewaysDocs["created-canary"]).toBeUndefined();
 
-    const opWrite = calls.find((c) => c.collection === "glmOperations");
+    const opWrite = commandOperationCall();
     expect(opWrite?.data).toMatchObject({
       kind: "add-gateway",
       status: "pending",
@@ -655,6 +685,68 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       sourceRelease: null,
       payload: { imageTag: "abc1234" },
     });
+    expect(glmOperationsDocs.map((doc) => doc.data)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        recordType: "audit",
+        releaseRollout: {
+          releaseId: "created-canary/1",
+          releaseTag: "abc1234",
+          rolloutOperationId: res.body.operationId,
+        },
+      }),
+    ]));
+  });
+
+  it("records a partial audit when the initial release exists but the add operation cannot be enqueued", async () => {
+    nextOperationAddError = new Error("operation store unavailable");
+
+    await request(buildApp()).post("/api/admin/gateways").send({
+      gatewayId: "partial-canary",
+      imageRepository: GATEWAY_REPOSITORY,
+      imageTag: "abc1234",
+    }).expect(500);
+
+    expect(gatewaysDocs["partial-canary"]).toMatchObject({
+      gatewayId: "partial-canary",
+      latestRelease: 1,
+    });
+    expect(glmOperationsDocs.map((doc) => doc.data)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        recordType: "audit",
+        status: "completed",
+        lifecycleStage: "action-partial",
+        releaseRollout: {
+          releaseId: "partial-canary/1",
+          releaseTag: "abc1234",
+        },
+      }),
+    ]));
+  });
+
+  it("records a partial audit when secret provisioning wins but the initial release conflicts", async () => {
+    provisionerConcurrentGatewayId = "conflicted-canary";
+
+    await request(buildApp()).post("/api/admin/gateways").send({
+      gatewayId: "conflicted-canary",
+      imageRepository: GATEWAY_REPOSITORY,
+      imageTag: "abc1234",
+    }).expect(409);
+
+    expect(provisionerCalls).toHaveLength(1);
+    expect(glmOperationsDocs.map((doc) => doc.data)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        recordType: "audit",
+        status: "completed",
+        lifecycleStage: "action-partial",
+        partialOutcome: {
+          summary: "gateway auth secret was provisioned but its initial release was not created",
+          details: {
+            gatewayId: "conflicted-canary",
+            failedStep: "initial-release",
+          },
+        },
+      }),
+    ]));
   });
 
   it("rejects bodies missing required fields with 400", async () => {
@@ -745,7 +837,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     });
     expect(gwWrite?.data).not.toHaveProperty("operatorReservation");
 
-    const opWrite = calls.find((c) => c.collection === "glmOperations");
+    const opWrite = commandOperationCall();
     expect(opWrite?.data?.input).toMatchObject({
       gatewayId: "jack",
       profile: "operator",
@@ -789,7 +881,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     });
     expect(gwWrite?.data).not.toHaveProperty("operatorReservation");
 
-    const opWrite = calls.find((c) => c.collection === "glmOperations");
+    const opWrite = commandOperationCall();
     expect(opWrite?.data?.input).toMatchObject({
       gatewayId: "jack",
       gatewayClass: "builder",
@@ -1273,7 +1365,7 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
       retirementVersion: 1,
       retirementClaim: { operationId: res.body.operationId, version: 1 },
     });
-    const op = calls.find((c) => c.collection === "glmOperations");
+    const op = commandOperationCall();
     expect(op?.data).toMatchObject({
       kind: "retire-gateway",
       createdBy: "admin-user",
@@ -1288,7 +1380,7 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
     expect(res.status).toBe(202);
     expect(res.body.retainData).toBe(false);
     expect(res.body.retainServiceAccount).toBe(false);
-    const op = calls.find((c) => c.collection === "glmOperations");
+    const op = commandOperationCall();
     expect(op?.data.input).toMatchObject({ gatewayId: "canary" });
     expect(op?.data.input.retainData).toBeUndefined();
     expect(op?.data.input.retainServiceAccount).toBeUndefined();
@@ -1303,7 +1395,7 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
     expect(res.status).toBe(202);
     expect(res.body.retainData).toBe(true);
     expect(res.body.retainServiceAccount).toBe(true);
-    const op = calls.find((c) => c.collection === "glmOperations");
+    const op = commandOperationCall();
     expect(op?.data.input).toMatchObject({
       gatewayId: "canary",
       retainData: true,
@@ -1352,8 +1444,12 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
     const updateIdx = calls.findIndex(
       (c) => c.collection === "gateways" && c.op === "doc.set",
     );
-    const opIdx = calls.findIndex((c) => c.collection === "glmOperations");
-    const commitIdx = calls.findIndex((c) => c.op === "transaction.commit");
+    const opIdx = calls.findIndex(
+      (call) => call.collection === "glmOperations" && typeof call.data?.kind === "string",
+    );
+    const commitIdx = calls.findIndex(
+      (call, index) => index > opIdx && call.op === "transaction.commit",
+    );
     expect(updateIdx).toBeGreaterThanOrEqual(0);
     expect(opIdx).toBeGreaterThanOrEqual(0);
     expect(commitIdx).toBeGreaterThan(updateIdx);
@@ -1381,7 +1477,7 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
       .post("/api/admin/gateways/default/rollout")
       .send({ imageTag: "abcdef1" });
     expect(res.status).toBe(202);
-    const op = calls.find((c) => c.collection === "glmOperations");
+    const op = commandOperationCall();
     expect(op?.data).toMatchObject({
       kind: "rollout",
       input: { gatewayId: "default", imageTag: "abcdef1" },
@@ -1494,7 +1590,7 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
       .send({ imageTag: "1234567" });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/no-op|already on/i);
-    const op = calls.find((c) => c.collection === "glmOperations");
+    const op = commandOperationCall();
     expect(op).toBeUndefined();
   });
 
@@ -1508,7 +1604,7 @@ describe("POST /api/admin/gateways/:id/restart — rotate the pod via kubectl ro
       .post("/api/admin/gateways/bender/restart")
       .send({});
     expect(res.status).toBe(202);
-    const op = calls.find((c) => c.collection === "glmOperations");
+    const op = commandOperationCall();
     expect(op?.data).toMatchObject({
       kind: "restart-gateway",
       input: { gatewayId: "bender" },
@@ -1572,7 +1668,7 @@ describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
       .post("/api/admin/customers/uid-alice/migrate")
       .send({ to: "canary" });
     expect(res.status).toBe(202);
-    const op = calls.find((c) => c.collection === "glmOperations");
+    const op = commandOperationCall();
     expect(op?.data).toMatchObject({
       kind: "migrate-customer",
       status: "pending",
@@ -1718,6 +1814,18 @@ describe("POST /api/admin/customers/:uid/unassign — clear assignment, let reco
 });
 
 describe("POST /api/admin/rollouts — composite operation", () => {
+  it("rejects a frozen request before it records an audit or creates a rollout", async () => {
+    configDocs.glmMaintenance = { mode: "frozen", reason: "incident" };
+
+    const res = await request(buildApp()).post("/api/admin/rollouts").send({
+      gatewayId: "default",
+      imageTag: "def5678",
+    });
+
+    expect(res.status).toBe(409);
+    expect(glmOperationsDocs).toEqual([]);
+  });
+
   it("creates a rollout operation with the gateway + target image", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/rollouts").send({
@@ -1725,13 +1833,53 @@ describe("POST /api/admin/rollouts — composite operation", () => {
       imageTag: "def5678",
     });
     expect(res.status).toBe(202);
-    const op = calls.find((c) => c.collection === "glmOperations");
+    const op = commandOperationCall();
     expect(op?.data).toMatchObject({
       kind: "rollout",
       status: "pending",
       input: { gatewayId: "default", imageTag: "def5678" },
       createdBy: "admin-user",
     });
+  });
+
+  it("does not replay a completed Idempotency-Key", async () => {
+    const app = buildApp();
+    const requestBody = { gatewayId: "default", imageTag: "def5678" };
+
+    await request(app)
+      .post("/api/admin/rollouts")
+      .set("Idempotency-Key", "rollout-1")
+      .send(requestBody)
+      .expect(202);
+    const replay = await request(app)
+      .post("/api/admin/rollouts")
+      .set("Idempotency-Key", "rollout-1")
+      .send(requestBody)
+      .expect(409);
+
+    expect(replay.body).toMatchObject({ status: "completed", auditId: expect.any(String) });
+    expect(glmOperationsDocs.filter((doc) => doc.data.kind === "rollout")).toHaveLength(1);
+  });
+
+  it("rejects an Idempotency-Key reused for a different rollout", async () => {
+    const app = buildApp();
+
+    await request(app)
+      .post("/api/admin/rollouts")
+      .set("Idempotency-Key", "rollout-1")
+      .send({ gatewayId: "default", imageTag: "def5678" })
+      .expect(202);
+    const conflict = await request(app)
+      .post("/api/admin/rollouts")
+      .set("Idempotency-Key", "rollout-1")
+      .send({ gatewayId: "default", imageTag: "abc1234" })
+      .expect(409);
+
+    expect(conflict.body).toMatchObject({
+      error: expect.stringContaining("conflicts with its deterministic idempotency key"),
+      auditId: expect.any(String),
+    });
+    expect(glmOperationsDocs.filter((doc) => doc.data.kind === "rollout")).toHaveLength(1);
   });
 });
 
