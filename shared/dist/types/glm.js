@@ -1,3 +1,11 @@
+export const MANAGED_BY_VALUES = ["cowboy", "operator"];
+export const DEFAULT_MANAGED_BY = "cowboy";
+export function resolveManagedBy(value) {
+    return value === "operator" ? "operator" : DEFAULT_MANAGED_BY;
+}
+export function isOperatorManaged(value) {
+    return resolveManagedBy(value) === "operator";
+}
 export const GATEWAY_PROFILES = ["standard", "operator"];
 export const GATEWAY_CLASSES = ["shared", "builder", "operator"];
 export const GATEWAY_IMAGE_PROFILES = ["standard", "operator"];
@@ -100,6 +108,10 @@ export function resolveUserGatewayShellState(data, uid) {
         gatewayProfile: gatewayClass === "operator" ? "operator" : "standard",
         shellsEnabled: userOwns && isGatewayClassShellAccessEnabled(gatewayClass, data?.operatorAccess),
     };
+}
+export const OPERATION_ORIGINS = ["automatic", "operator"];
+export function resolveOperationOrigin(value) {
+    return value === "automatic" ? "automatic" : "operator";
 }
 export const GLM_GATEWAYS_COLLECTION = "glmGateways";
 export const GLM_OPERATIONS_COLLECTION = "glmOperations";

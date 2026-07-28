@@ -6,11 +6,13 @@ interface Root {
   ownerUid: string | null;
   gatewayClass: "shared" | "builder" | "operator";
   desiredStatus: "running" | "paused" | "retired";
+  managedBy?: "operator";
 }
 
 function harness(
   roots: Record<string, Root>,
   operations: Record<string, Record<string, unknown>> = {},
+  users: Record<string, Record<string, unknown>> = {},
 ) {
   const deleted: string[] = [];
   const gatewayRef = (id: string) => ({
@@ -23,7 +25,16 @@ function harness(
   });
   const db = {
     collection: (name: string) => ({
-      doc: (id: string) => name === "gateways" ? gatewayRef(id) : operationRef(id),
+      doc: (id: string) => {
+        if (name === "gateways") return gatewayRef(id);
+        if (name === "users") {
+          return {
+            path: `users/${id}`,
+            get: async () => ({ exists: users[id] !== undefined, data: () => users[id] }),
+          };
+        }
+        return operationRef(id);
+      },
       where: (_field: string, _op: string, uid: string) => ({
         get: async () => ({
           docs: name === "gateways"
@@ -65,13 +76,33 @@ describe("owned customer gateway retirement", () => {
     }));
   });
 
+  it("stamps customer-deletion retirement work as automatic", async () => {
+    const { db } = harness({
+      "builder-alice": { ownerUid: "uid-1", gatewayClass: "operator", desiredStatus: "running" },
+    });
+    const claimRetirement = vi.fn(async () => ({ version: 1 }));
+
+    await ensureOwnedDedicatedGatewaysRetired({
+      db: db as never,
+      uid: "uid-1",
+      deletionId: "delete-1",
+      now: 100,
+      claimRetirement: claimRetirement as never,
+    });
+
+    expect(claimRetirement).toHaveBeenCalledWith(expect.objectContaining({
+      operation: expect.objectContaining({ origin: "automatic" }),
+    }));
+  });
+
+
   it("deletes every durable gateway root only after its retirement operation succeeds", async () => {
     const operationId = "delete-retire-delete-1-builder-alice";
     const { db, deleted } = harness(
       {
         "builder-alice": { ownerUid: "uid-1", gatewayClass: "operator", desiredStatus: "retired" },
       },
-      { [operationId]: { status: "succeeded" } },
+      { [operationId]: { status: "succeeded", origin: "automatic" } },
     );
 
     await expect(ensureOwnedDedicatedGatewaysRetired({
@@ -86,6 +117,56 @@ describe("owned customer gateway retirement", () => {
       "gateways/builder-alice",
       `glmOperations/${operationId}`,
     ]);
+  });
+
+  it("leaves an automatic retirement's succeeded root and operation when ownership becomes operator-managed", async () => {
+    const operationId = "delete-retire-delete-1-builder-alice";
+    const { db, deleted } = harness(
+      {
+        "builder-alice": {
+          ownerUid: "uid-1",
+          gatewayClass: "operator",
+          desiredStatus: "retired",
+          managedBy: "operator",
+        },
+      },
+      { [operationId]: { status: "succeeded", origin: "automatic" } },
+    );
+
+    await expect(ensureOwnedDedicatedGatewaysRetired({
+      db: db as never,
+      uid: "uid-1",
+      deletionId: "delete-1",
+      now: 100,
+      claimRetirement: vi.fn() as never,
+    })).rejects.toThrow(/operator-managed/u);
+
+    expect(deleted).toEqual([]);
+  });
+
+  it("does not apply automatic cleanup ownership fences to a missing-origin retirement", async () => {
+    const operationId = "delete-retire-delete-1-builder-alice";
+    const { db, deleted } = harness(
+      {
+        "builder-alice": {
+          ownerUid: "uid-1",
+          gatewayClass: "operator",
+          desiredStatus: "retired",
+          managedBy: "operator",
+        },
+      },
+      { [operationId]: { status: "succeeded" } },
+    );
+
+    await expect(ensureOwnedDedicatedGatewaysRetired({
+      db: db as never,
+      uid: "uid-1",
+      deletionId: "delete-1",
+      now: 100,
+      claimRetirement: vi.fn() as never,
+    })).resolves.toBe("retired");
+
+    expect(deleted).toEqual(["gateways/builder-alice", `glmOperations/${operationId}`]);
   });
 
   it("leaves shared gateways alone even if malformed ownership data points at the customer", async () => {

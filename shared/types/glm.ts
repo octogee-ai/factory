@@ -2,6 +2,18 @@ import type { SizingTier } from "./sizing.js";
 
 export type GatewayDesiredStatus = "running" | "paused" | "draining" | "retired";
 
+export const MANAGED_BY_VALUES = ["cowboy", "operator"] as const;
+export type ManagedBy = (typeof MANAGED_BY_VALUES)[number];
+export const DEFAULT_MANAGED_BY: ManagedBy = "cowboy";
+
+export function resolveManagedBy(value: unknown): ManagedBy {
+  return value === "operator" ? "operator" : DEFAULT_MANAGED_BY;
+}
+
+export function isOperatorManaged(value: unknown): boolean {
+  return resolveManagedBy(value) === "operator";
+}
+
 export const GATEWAY_PROFILES = ["standard", "operator"] as const;
 export type GatewayProfile = (typeof GATEWAY_PROFILES)[number];
 
@@ -266,6 +278,13 @@ export type OperationStatus =
   | "failed"
   | "rolled-back";
 
+export const OPERATION_ORIGINS = ["automatic", "operator"] as const;
+export type OperationOrigin = (typeof OPERATION_ORIGINS)[number];
+
+export function resolveOperationOrigin(value: unknown): OperationOrigin {
+  return value === "automatic" ? "automatic" : "operator";
+}
+
 export type StepStatus = "pending" | "running" | "done" | "failed" | "skipped";
 
 export interface OperationStep {
@@ -281,6 +300,7 @@ export interface Operation {
   kind: OperationKind;
   status: OperationStatus;
   createdBy: string;
+  origin?: OperationOrigin;
   createdAt: number;
   startedAt: number | null;
   completedAt: number | null;

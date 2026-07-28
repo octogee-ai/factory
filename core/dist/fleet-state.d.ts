@@ -71,6 +71,7 @@ export interface CutoverCommitParams {
         targetRelease: number;
         targetRootFence: CustomerMigrationV2GatewayRootFence;
     };
+    automatic?: boolean;
 }
 export declare function commitCutoverAtomic(deps: FleetStateDeps, params: CutoverCommitParams): Promise<void>;
 export interface MarkAssignmentStateParams {
@@ -85,5 +86,6 @@ export interface MarkAssignmentStateParams {
         state: AssignmentState;
         updatedByOperationId: string | null;
     };
+    automatic?: boolean;
 }
 export declare function markAssignmentState(deps: FleetStateDeps, params: MarkAssignmentStateParams): Promise<void>;

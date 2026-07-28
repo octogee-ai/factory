@@ -1,5 +1,5 @@
 import { type GatewayMutableConfig } from "./gateway-mutable-config.js";
-import type { GatewayPreemptionHandoffSpec } from "./glm.js";
+import type { GatewayPreemptionHandoffSpec, ManagedBy } from "./glm.js";
 export declare const GATEWAY_RELEASES_SUBCOLLECTION = "releases";
 export declare const GATEWAY_ASSIGNMENTS_SUBCOLLECTION = "assignments";
 export type GatewayLifecycleStatus = "running" | "paused" | "retired";
@@ -26,6 +26,7 @@ export interface GatewayDoc {
     desiredRelease: number;
     liveRelease: number | null;
     desiredStatus: GatewayLifecycleStatus;
+    managedBy?: ManagedBy;
     preemptionHandoff?: GatewayPreemptionHandoffSpec | null;
     retireAfter?: number | null;
     retirementVersion?: number;
@@ -155,7 +156,7 @@ export declare function gatewayPodServiceName(id: string): string;
 export declare function releasePayloadHash(payload: ReleasePayload): string;
 export type GatewayFieldClassification = "release" | "gateway-mutable";
 export declare const RELEASE_FIELDS: readonly ["imageRepository", "imageTag", "testExperiment"];
-export declare const GATEWAY_MUTABLE_FIELDS: readonly ["profile", "gatewayClass", "imageProfile", "sizingTier", "gcpProject", "gatewayContainerSecurityContext", "serviceAccountName", "serviceAccount", "operatorAccess", "ownerUid", "builderSlug", "openclawOverrides", "modelBrokerLimits", "preemption", "allocation", "desiredStatus", "preemptionHandoff", "liveRelease", "retireAfter"];
+export declare const GATEWAY_MUTABLE_FIELDS: readonly ["profile", "gatewayClass", "imageProfile", "sizingTier", "gcpProject", "gatewayContainerSecurityContext", "serviceAccountName", "serviceAccount", "operatorAccess", "ownerUid", "builderSlug", "openclawOverrides", "modelBrokerLimits", "preemption", "allocation", "desiredStatus", "managedBy", "preemptionHandoff", "liveRelease", "retireAfter"];
 export declare function classifyGatewayField(field: string): GatewayFieldClassification;
 export interface PlacementDocSnap {
     exists: boolean;
@@ -194,8 +195,9 @@ export interface CommitPlacementParams {
     updatedByOperationId?: string | null;
     assignmentWrite?: "upsert" | "create-if-missing";
     requireDurableGateway?: boolean;
+    automatic?: boolean;
 }
-export type PlacementRejectReason = "gateway-root-invalid" | "gateway-not-running" | "gateway-not-serving";
+export type PlacementRejectReason = "gateway-root-invalid" | "gateway-operator-managed" | "builder-operator-managed" | "gateway-not-running" | "gateway-not-serving";
 export type CommitPlacementResult = {
     kind: "mirror-only";
 } | {

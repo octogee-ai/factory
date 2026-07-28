@@ -17,6 +17,7 @@ import {
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
+  isOperatorManaged,
   resolveUserGatewayShellState,
 } from "@octogee/shared/types/glm";
 import {
@@ -169,6 +170,7 @@ export interface AssignInitialPlacementInput {
 export interface PlacementPolicyReconcilerDeps {
   now(): number;
   log(message: string): void;
+  maintenanceGate?: { state(): Promise<{ frozen: boolean; reason: string | null }> };
   readSnapshot(): Promise<PlacementPolicySnapshot>;
   assignInitialPlacement(input: AssignInitialPlacementInput): Promise<void>;
   allocateDisposableGateway(input: AllocateDisposableGatewayInput): Promise<string>;
@@ -322,6 +324,7 @@ async function retireUnentitledOwnedGateways(
     (gateway) => gateway.ownerUid === user.uid &&
       gateway.gatewayClass !== "shared" &&
       gateway.disposable === true &&
+      !isOperatorManaged(gateway.managedBy) &&
       gateway.desiredStatus !== "retired",
   );
   for (const gateway of ownedGateways) {
@@ -1155,6 +1158,18 @@ async function reconcileActivationLease(
 ): Promise<boolean> {
   const lease = builderActivationLease(user.data);
   if (!lease) return false;
+  const target = lease.targetGatewayId
+    ? context.gateways.get(lease.targetGatewayId)
+    : null;
+  if (isOperatorManaged(target?.managedBy)) {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: "operator-managed-gateway",
+      reason: `gateway ${target!.gatewayId} is operator-managed`,
+    });
+    return true;
+  }
   if (lease.status === "requested") {
     await reconcileRequestedActivation(context, user, builderSlug, lease);
     return true;
@@ -1185,6 +1200,14 @@ async function reconcileEligibleBuilder(
 ): Promise<void> {
   const current = currentGatewayId(user.data);
   const currentGateway = current ? context.gateways.get(current) : null;
+  if (isOperatorManaged(currentGateway?.managedBy)) {
+    blockPlacement(context, {
+      uid: user.uid,
+      code: "operator-managed-gateway",
+      reason: `gateway ${currentGateway!.gatewayId} is operator-managed`,
+    });
+    return;
+  }
   if (
     currentGateway &&
     currentGateway.gatewayClass !== "shared" &&
@@ -1210,6 +1233,25 @@ async function reconcileEligibleBuilder(
     ownedGateway: entitledOwned ? context.gateways.get(entitledOwned) ?? null : null,
     now: new Date(context.deps.now()),
   });
+  await reconcileResolvedPlacement(context, user, builderSlug, current, placement);
+}
+
+async function reconcileResolvedPlacement(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  builderSlug: string,
+  current: string | null,
+  placement: ReturnType<typeof resolveContinuousBuilderPlacement>,
+): Promise<void> {
+  const targetGateway = context.gateways.get(placement.targetGatewayId);
+  if (isOperatorManaged(targetGateway?.managedBy)) {
+    blockPlacement(context, {
+      uid: user.uid,
+      code: "operator-managed-gateway",
+      reason: `gateway ${targetGateway!.gatewayId} is operator-managed`,
+    });
+    return;
+  }
   if (!current) {
     await assignMissingPlacement(context, user, builderSlug, placement);
     return;
@@ -1236,6 +1278,11 @@ async function reconcilePlacementUser(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
 ): Promise<void> {
+  const openclaw = record(record(user.data.provisioning)?.openclaw);
+  if (isOperatorManaged(openclaw?.managedBy)) {
+    context.deps.log(`[placement-policy] ${user.uid} is operator-managed — observing only`);
+    return;
+  }
   const eligibility = resolveOnboardingPlacementEligibility(user.data);
   if (!eligibility.eligible) return;
   await reconcileEligibleBuilder(context, user, eligibility.slug);
@@ -1244,8 +1291,6 @@ async function reconcilePlacementUser(
 export async function reconcilePlacementPolicyOnce(
   deps: PlacementPolicyReconcilerDeps,
 ): Promise<PlacementPolicyReconcileResult> {
-  const state = await deps.readSnapshot();
-  if (!state.defaultGatewayId) throw new Error("placement policy default gateway is missing");
   const result: PlacementPolicyReconcileResult = {
     assigned: 0,
     enqueued: 0,
@@ -1253,6 +1298,9 @@ export async function reconcilePlacementPolicyOnce(
     retired: 0,
     blocked: 0,
   };
+  if (await placementMaintenanceFrozen(deps)) return result;
+  const state = await deps.readSnapshot();
+  if (!state.defaultGatewayId) throw new Error("placement policy default gateway is missing");
   if (!state.admission) {
     deps.log("[placement-policy] disabled: operator classification receipt is missing");
     return result;
@@ -1320,6 +1368,23 @@ export async function reconcilePlacementPolicyOnce(
     }
   }
   return result;
+}
+
+async function placementMaintenanceFrozen(
+  deps: PlacementPolicyReconcilerDeps,
+): Promise<boolean> {
+  if (!deps.maintenanceGate) return false;
+  try {
+    const gate = await deps.maintenanceGate.state();
+    if (!gate.frozen) return false;
+    const reason = gate.reason ? `: ${gate.reason}` : "";
+    deps.log(`[placement-policy] maintenance freeze blocks reconciliation${reason}`);
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    deps.log(`[placement-policy] maintenance gate unreadable; blocking reconciliation: ${message}`);
+    return true;
+  }
 }
 
 function docsById(docs: QueryDocumentSnapshot[]): Map<string, Record<string, unknown>> {
@@ -1407,6 +1472,7 @@ interface FirestorePlacementPolicyInput {
   idleMs: number;
   now(): number;
   log(message: string): void;
+  maintenanceGate?: { state(): Promise<{ frozen: boolean; reason: string | null }> };
   ensureAuthSecret(input: { namespace: string; gatewayId: string }): Promise<unknown>;
   readGatewayPodDiagnostics(input: {
     namespace: string;
@@ -1473,6 +1539,7 @@ async function readPlacementPolicySnapshot(
       gatewayClass: root.gatewayClass,
       ownerUid: root.ownerUid,
       desiredStatus: root.desiredStatus,
+      managedBy: root.managedBy,
       disposable: root.allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND,
       allocation: root.allocation ?? null,
       ready: isGatewayRuntimeDoc(runtime) &&
@@ -1525,6 +1592,7 @@ async function assignInitialPlacementFirestore(
     source: "repair",
     now: input.now(),
     requireDurableGateway: true,
+    automatic: true,
     mirrorPatch: {
       "provisioning.openclaw.gatewayId": request.gatewayId,
       "provisioning.openclaw.gatewayProfile": shellState.gatewayProfile,
@@ -1548,6 +1616,7 @@ async function enqueuePlacementMigration(
   const operation = {
     kind: "migrate-customer",
     status: "pending",
+    origin: "automatic",
     createdBy: PLACEMENT_POLICY_ACTOR,
     createdAt: now,
     startedAt: null,
@@ -1563,10 +1632,6 @@ async function enqueuePlacementMigration(
     gatewayId: request.toGatewayId,
     inputUid: request.uid,
   };
-  if (!request.operationId) {
-    await ref.set(operation);
-    return ref.id;
-  }
   await input.db.runTransaction(async (transaction) => {
     const existing = await transaction.get(ref);
     if (existing.exists) {
@@ -1591,9 +1656,47 @@ async function enqueuePlacementMigration(
       }
       return;
     }
+    await assertAutomaticPlacementMutationAllowed({
+      db: input.db,
+      transaction,
+      uid: request.uid,
+      gatewayIds: [request.fromGatewayId, request.toGatewayId],
+      action: `migration ${ref.id}`,
+    });
     transaction.create(ref, operation);
   });
   return ref.id;
+}
+
+async function assertAutomaticPlacementMutationAllowed(input: {
+  db: Firestore;
+  transaction: Transaction;
+  uid: string;
+  gatewayIds: readonly string[];
+  action: string;
+}): Promise<void> {
+  const gatewayIds = [...new Set(input.gatewayIds)];
+  const [userSnapshot, ...gatewaySnapshots] = await Promise.all([
+    input.transaction.get(input.db.collection("users").doc(input.uid)),
+    ...gatewayIds.map((gatewayId) =>
+      input.transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(gatewayId))),
+  ]);
+  const user = userSnapshot.exists
+    ? userSnapshot.data() as Record<string, unknown> | undefined
+    : undefined;
+  if (isOperatorManaged(record(record(user?.provisioning)?.openclaw)?.managedBy)) {
+    throw new GatewayRetirementConflictError(
+      `${input.action} is fenced: builder ${input.uid} is operator-managed`,
+    );
+  }
+  for (let index = 0; index < gatewayIds.length; index += 1) {
+    const root = gatewaySnapshots[index];
+    if (root.exists && isOperatorManaged(root.data()?.managedBy)) {
+      throw new GatewayRetirementConflictError(
+        `${input.action} is fenced: gateway ${gatewayIds[index]} is operator-managed`,
+      );
+    }
+  }
 }
 
 function recoveryTargetMatchesRequest(
@@ -1602,6 +1705,7 @@ function recoveryTargetMatchesRequest(
 ): root is NonNullable<ReturnType<typeof projectGatewayDesiredRootForGateway>> {
   const allocation = root?.allocation;
   return root !== null &&
+    !isOperatorManaged(root.managedBy) &&
     root.ownerUid === request.uid &&
     root.gatewayClass !== "shared" &&
     root.desiredStatus !== "retired" &&
@@ -1683,6 +1787,11 @@ async function recoverUnreachableDisposableGatewayFirestore(
         `gateway ${request.gatewayId} no longer matches unreachable recovery demand`,
       );
     }
+    if (isOperatorManaged(record(record(userData?.provisioning)?.openclaw)?.managedBy)) {
+      throw new GatewayRetirementConflictError(
+        `Builder ${request.uid} is operator-managed`,
+      );
+    }
     const runtime = runtimeSnapshot.data() as Record<string, unknown> | undefined;
     if (recoveryTargetBecameReady({
       root,
@@ -1732,6 +1841,7 @@ async function recoverUnreachableDisposableGatewayFirestore(
       transaction.create(operationRef, {
         kind: "recover-unreachable-disposable",
         status: "pending",
+        origin: "automatic",
         createdBy: PLACEMENT_POLICY_ACTOR,
         createdAt: input.now(),
         startedAt: input.now(),
@@ -1925,6 +2035,7 @@ async function retireOwnedGatewayFirestore(
       operation: {
         kind: "retire-gateway",
         status: "pending",
+        origin: "automatic",
         createdBy: PLACEMENT_POLICY_ACTOR,
         createdAt: now,
         startedAt: null,
@@ -1943,6 +2054,13 @@ async function retireOwnedGatewayFirestore(
       ...(telemetryObservedAfter === undefined ? {} : { telemetryObservedAfter }),
       claimGuard: async ({ transaction, root }) => {
         const rootRecord = root as unknown as Record<string, unknown>;
+        await assertAutomaticPlacementMutationAllowed({
+          db: input.db,
+          transaction,
+          uid: request.uid,
+          gatewayIds: [request.gatewayId],
+          action: `retirement ${request.gatewayId}`,
+        });
         if (!retirementAllocationMatches(rootRecord, request)) {
           throw new GatewayRetirementConflictError(
             `gateway ${request.gatewayId} no longer matches disposable allocation for ${request.uid}`,
@@ -2018,6 +2136,7 @@ export function createFirestorePlacementPolicyReconcilerDeps(
   return {
     now: input.now,
     log: input.log,
+    maintenanceGate: input.maintenanceGate,
     readSnapshot: () => readPlacementPolicySnapshot(input.db, input.idleMs, input.now()),
     assignInitialPlacement: (request) => assignInitialPlacementFirestore(input, request),
     allocateDisposableGateway: (request) => allocateDisposableGatewayFirestore(input, request),
